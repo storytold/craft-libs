@@ -2,9 +2,9 @@
 //! (AES-256-CBC, SHA-256 start key, PBKDF2), opened with the right password, refused with a
 //! wrong one, and hostile encryption data never panics or hangs.
 
-use crate::odt::tests::{NS_T, package, zip_of};
-use crate::odt::{CryptError, decrypt, encrypt, export, import, is_encrypted};
-use wordcraft_doc::Document;
+use crate::text::tests::{NS_T, package, zip_of};
+use crate::text::{CryptError, decrypt, encrypt, export, import, is_encrypted};
+use craft_wordmodel::Document;
 
 fn secret_doc() -> Vec<u8> {
     let content = format!(
@@ -24,10 +24,10 @@ fn an_encrypted_package_opens_with_its_password_only() {
     let enc = encrypt(&plain, "pässword").unwrap();
     assert!(is_encrypted(&enc));
     // Nothing readable is left: the content is encrypted, the manifest says how.
-    let z = zip::ZipArchive::new(std::io::Cursor::new(&enc)).unwrap();
-    assert_eq!(z.file_names().next(), Some("mimetype"));
+    let z = crate::Package::open(&enc, &crate::Limits::DEFAULT).unwrap();
+    assert_eq!(z.names().next(), Some("mimetype"));
     assert!(!enc.windows(10).any(|w| w == b"Top secret"));
-    let manifest = crate::odt::tests::entry(&enc, "META-INF/manifest.xml");
+    let manifest = crate::text::tests::entry(&enc, "META-INF/manifest.xml");
     for want in [
         r#"<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml" manifest:size=""#,
         "http://www.w3.org/2001/04/xmlenc#aes256-cbc",
@@ -72,7 +72,7 @@ fn unsupported_and_hostile_encryption_is_refused() {
 #[test]
 fn a_package_declaring_too_many_entries_is_refused_before_it_is_decrypted() {
     // #3660: refused before `zip` reserves and parses them, on the password path too.
-    let bomb = wordcraft_doc::zip_guard::zip64_entry_count_sample(crate::MAX_ZIP_ENTRIES + 1);
+    let bomb = crate::zip_guard::zip64_entry_count_sample(crate::Limits::DEFAULT.max_entries + 1);
     assert!(!is_encrypted(&bomb));
     assert!(matches!(decrypt(&bomb, "x"), Err(CryptError::Unsupported(e)) if e.contains("declares")));
 }

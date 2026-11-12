@@ -4,12 +4,12 @@
 //! (`table:align`, `style:rel-width`) and its rows' heights (`style:row-height`,
 //! `style:min-row-height`), read into WordCraft's document and written back.
 
-use crate::odt::tests::{NS_T, content_of, package};
-use crate::odt::{export, import};
-use wordcraft_doc::Align;
-use wordcraft_doc::props::HeightRule;
+use crate::text::tests::{NS_T, content_of, package};
+use crate::text::{export, import};
+use craft_wordmodel::Align;
+use craft_wordmodel::props::HeightRule;
 
-fn doc(styles: &str, body: &str) -> wordcraft_doc::Document {
+fn doc(styles: &str, body: &str) -> craft_wordmodel::Document {
     let content = format!(
         r#"<office:document-content {NS_T}><office:automatic-styles>{styles}</office:automatic-styles><office:body><office:text>{body}</office:text></office:body></office:document-content>"#
     );
@@ -22,7 +22,7 @@ fn para_style(name: &str, para: &str, text: &str) -> String {
     )
 }
 
-fn paras(d: &wordcraft_doc::Document) -> Vec<&wordcraft_doc::props::ParaProps> {
+fn paras(d: &craft_wordmodel::Document) -> Vec<&craft_wordmodel::props::ParaProps> {
     d.body.iter().filter_map(|b| b.as_para()).map(|p| &p.props).collect()
 }
 
@@ -78,7 +78,7 @@ fn a_tables_alignment_width_and_row_heights_are_kept() {
     assert_eq!((t.props.align, t.props.width_pct), (Some(Align::Center), Some(50.0)));
     let heights: Vec<(Option<f32>, HeightRule)> = t.rows.iter().map(|r| (r.props.height, r.props.height_rule)).collect();
     assert_eq!(heights, [(Some(36.0), HeightRule::Exact), (Some(18.0), HeightRule::AtLeast), (None, HeightRule::Auto)]);
-    let c = content_of(&crate::odt::tests::export_model(&d).unwrap());
+    let c = content_of(&crate::text::tests::export_model(&d).unwrap());
     for want in [r#"style:rel-width="50%" table:align="center""#, r#"style:row-height="36pt""#, r#"style:min-row-height="18pt""#] {
         assert!(c.contains(want), "{want} in {c}");
     }
@@ -86,7 +86,7 @@ fn a_tables_alignment_width_and_row_heights_are_kept() {
     let plain = doc("", r#"<table:table><table:table-row><table:table-cell><text:p>x</text:p></table:table-cell></table:table-row></table:table>"#);
     let pt = plain.body.iter().find_map(|b| b.as_table()).unwrap();
     assert_eq!((pt.props.align, pt.props.width_pct), (None, Some(100.0)));
-    assert!(content_of(&crate::odt::tests::export_model(&plain).unwrap()).contains(r#"table:align="margins""#));
+    assert!(content_of(&crate::text::tests::export_model(&plain).unwrap()).contains(r#"table:align="margins""#));
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn columns_are_written_with_their_share_of_the_table() {
         styles,
         r#"<table:table><table:table-column table:style-name="A"/><table:table-column table:style-name="B"/><table:table-row><table:table-cell><text:p>a</text:p></table:table-cell><table:table-cell><text:p>b</text:p></table:table-cell></table:table-row></table:table>"#,
     );
-    let c = content_of(&crate::odt::tests::export_model(&d).unwrap());
+    let c = content_of(&crate::text::tests::export_model(&d).unwrap());
     assert!(c.contains(r#"style:column-width="72pt" style:rel-column-width="7200*""#) && c.contains(r#"style:rel-column-width="21600*""#), "{c}");
     // An aligned table keeps its widths: LibreOffice lays one out oddly with shares.
     let left = r#"<style:style style:name="T" style:family="table"><style:table-properties style:width="4in" table:align="left"/></style:style>"#;
@@ -106,7 +106,7 @@ fn columns_are_written_with_their_share_of_the_table() {
         &format!("{styles}{left}"),
         r#"<table:table table:style-name="T"><table:table-column table:style-name="A"/><table:table-column table:style-name="B"/><table:table-row><table:table-cell><text:p>a</text:p></table:table-cell><table:table-cell><text:p>b</text:p></table:table-cell></table:table-row></table:table>"#,
     );
-    let c = content_of(&crate::odt::tests::export_model(&d).unwrap());
+    let c = content_of(&crate::text::tests::export_model(&d).unwrap());
     assert!(c.contains(r#"table:align="left""#) && !c.contains("rel-column-width"), "{c}");
 }
 
@@ -133,14 +133,14 @@ fn a_tables_own_space_above_and_below_is_kept() {
         styles,
         r#"<table:table table:style-name="T"><table:table-row><table:table-cell><text:p>Cell</text:p></table:table-cell></table:table-row></table:table><text:p>After.</text:p>"#,
     );
-    let space = |d: &wordcraft_doc::Document| {
+    let space = |d: &craft_wordmodel::Document| {
         let t = d.body.iter().find_map(|b| b.as_table()).expect("a table");
         (t.props.space_before.map(|v| (v * 100.0).round() / 100.0), t.props.space_after.map(|v| (v * 100.0).round() / 100.0))
     };
     assert_eq!(space(&d), (Some(7.2), Some(8.5)));
-    let out = content_of(&crate::odt::tests::export_model(&d).unwrap());
+    let out = content_of(&crate::text::tests::export_model(&d).unwrap());
     assert!(out.contains(r#"fo:margin-top="7.2pt" fo:margin-bottom="8.5"#), "{out}");
-    assert_eq!(space(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()), (Some(7.2), Some(8.5)));
+    assert_eq!(space(&import(&crate::text::tests::export_model(&d).unwrap()).unwrap()), (Some(7.2), Some(8.5)));
 }
 
 #[test]
@@ -156,7 +156,7 @@ fn a_table_starting_a_page_starts_it() {
     assert_eq!(first.props.page_break_before, Some(true));
     // Nothing else starts a page.
     assert!(paras(&d).iter().all(|p| p.page_break_before != Some(true)));
-    let c = content_of(&crate::odt::tests::export_model(&d).unwrap());
+    let c = content_of(&crate::text::tests::export_model(&d).unwrap());
     assert_eq!(c.matches(r#"fo:break-before="page""#).count(), 2, "{c}");
 }
 
@@ -170,13 +170,13 @@ fn columns_stating_only_their_shares_keep_their_proportions() {
         )
     };
     let table = r#"<table:table><table:table-column table:style-name="A"/><table:table-column table:style-name="B"/><table:table-row><table:table-cell><text:p>a</text:p></table:table-cell><table:table-cell><text:p>b</text:p></table:table-cell></table:table-row></table:table>"#;
-    let grid = |d: &wordcraft_doc::Document| d.body.iter().find_map(|b| b.as_table()).map(|t| t.grid.clone()).unwrap_or_default();
+    let grid = |d: &craft_wordmodel::Document| d.body.iter().find_map(|b| b.as_table()).map(|t| t.grid.clone()).unwrap_or_default();
     let d = doc(&format!("{}{}", column("A", "1000*"), column("B", "3000*")), table);
     let g = grid(&d);
     assert_eq!(g.len(), 2, "{g:?}");
     assert!((g[1] / g[0] - 3.0).abs() < 0.01, "{g:?}");
     // Rewritten from the model, the proportions stay.
-    let back = import(&crate::odt::tests::export_model(&d).unwrap()).unwrap();
+    let back = import(&crate::text::tests::export_model(&d).unwrap()).unwrap();
     let g = grid(&back);
     assert!((g[1] / g[0] - 3.0).abs() < 0.01, "{g:?}");
     // A column without a share leaves the equal split, and junk shares are none.
@@ -210,7 +210,7 @@ fn columns_by_shares_divide_the_right_width() {
         let cells: String = names.iter().map(|_| "<table:table-cell><text:p>x</text:p></table:table-cell>").collect();
         format!(r#"<table:table table:style-name="T">{columns}<table:table-row>{cells}</table:table-row></table:table>"#)
     };
-    let grid = |d: &wordcraft_doc::Document| d.body.iter().find_map(|b| b.as_table()).map(|t| t.grid.clone()).unwrap_or_default();
+    let grid = |d: &craft_wordmodel::Document| d.body.iter().find_map(|b| b.as_table()).map(|t| t.grid.clone()).unwrap_or_default();
     let near = |got: &[f32], want: &[f32]| {
         assert!(got.len() == want.len() && got.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.5), "{got:?}, not {want:?}")
     };
@@ -225,7 +225,7 @@ fn columns_by_shares_divide_the_right_width() {
         &table(&["A", "B"]),
     );
     near(&grid(&d), &[144.0, 432.0]);
-    near(&grid(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()), &[144.0, 432.0]);
+    near(&grid(&import(&crate::text::tests::export_model(&d).unwrap()).unwrap()), &[144.0, 432.0]);
     // 72 pt stated, the other 300 by shares.
     let d = doc(
         &format!(
@@ -312,7 +312,7 @@ fn a_tables_and_rows_background_show_behind_their_cells() {
     // Table Properties › Background: it was dropped, on screen and in LibreOffice after a save.
     let styles = r##"<style:style style:name="T" style:family="table"><style:table-properties fo:background-color="#ddffdd"/></style:style><style:style style:name="R" style:family="table-row"><style:table-row-properties fo:background-color="#ffdddd"/></style:style><style:style style:name="C" style:family="table-cell"><style:table-cell-properties fo:background-color="#ddddff"/></style:style>"##;
     let table = r#"<table:table table:style-name="T"><table:table-row><table:table-cell><text:p>table</text:p></table:table-cell><table:table-cell table:style-name="C"><text:p>cell</text:p></table:table-cell></table:table-row><table:table-row table:style-name="R"><table:table-cell><text:p>row</text:p></table:table-cell><table:table-cell table:style-name="C"><text:p>cell</text:p></table:table-cell></table:table-row></table:table>"#;
-    let colours = |d: &wordcraft_doc::Document| {
+    let colours = |d: &craft_wordmodel::Document| {
         d.body
             .iter()
             .find_map(|b| b.as_table())
@@ -322,7 +322,7 @@ fn a_tables_and_rows_background_show_behind_their_cells() {
     let want = |t: &str, r: &str, c: &str| vec![Some(t.to_string()), Some(c.to_string()), Some(r.to_string()), Some(c.to_string())];
     let d = doc(styles, table);
     assert_eq!(colours(&d), want("ddffdd", "ffdddd", "ddddff"));
-    assert_eq!(colours(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()), want("ddffdd", "ffdddd", "ddddff"));
+    assert_eq!(colours(&import(&crate::text::tests::export_model(&d).unwrap()).unwrap()), want("ddffdd", "ffdddd", "ddddff"));
 }
 
 /// As LibreOffice shows them: a cell's own style, else its column's default cell style (a row's
@@ -344,7 +344,7 @@ fn a_cells_background_comes_from_its_column_then_row_then_table() {
     let table = format!(
         r#"<table:table table:style-name="T"><table:table-column table:default-cell-style-name="InColumn"/><table:table-column/><table:table-row table:style-name="R" table:default-cell-style-name="InRow">{c}{c}</table:table-row><table:table-row>{c}{c}</table:table-row><table:table-row table:style-name="Clear">{c}{c}</table:table-row></table:table>"#
     );
-    let colours = |d: &wordcraft_doc::Document| {
+    let colours = |d: &craft_wordmodel::Document| {
         d.body
             .iter()
             .find_map(|b| b.as_table())
@@ -355,7 +355,7 @@ fn a_cells_background_comes_from_its_column_then_row_then_table() {
     let want = vec![s("00ff00"), s("0000ff"), s("00ff00"), s("ffff00"), s("00ff00"), s("ffff00")];
     let d = doc(&styles, &table);
     assert_eq!(colours(&d), want);
-    assert_eq!(colours(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()), want);
+    assert_eq!(colours(&import(&crate::text::tests::export_model(&d).unwrap()).unwrap()), want);
 }
 
 /// A column default after a spanning cell belongs to the column the cell is in.
@@ -393,7 +393,7 @@ fn a_transparent_cell_style_stops_its_parents_colour() {
         );
         let d = doc(styles, &table);
         let t = d.body.iter().find_map(|b| b.as_table()).unwrap();
-        assert_eq!(t.rows[0].cells[0].props.shading, crate::model::parse_color("#0000ff"), "{column}{cell}");
+        assert_eq!(t.rows[0].cells[0].props.shading, craft_flow::parse_color("#0000ff"), "{column}{cell}");
     }
 }
 
@@ -408,7 +408,7 @@ fn a_row_that_keeps_together_says_so() {
         row("", "free"),
         row(r#" table:style-name="H""#, "kept and tall")
     );
-    let shape = |d: &wordcraft_doc::Document| {
+    let shape = |d: &craft_wordmodel::Document| {
         d.body
             .iter()
             .find_map(|b| b.as_table())
@@ -417,7 +417,7 @@ fn a_row_that_keeps_together_says_so() {
     };
     let d = doc(styles, &table);
     assert_eq!(shape(&d), [(true, None), (false, None), (true, Some(72.0))]);
-    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let saved = crate::text::tests::export_model(&d).unwrap();
     assert!(content_of(&saved).contains(r#"fo:keep-together="always""#));
     assert_eq!(shape(&import(&saved).unwrap()), [(true, None), (false, None), (true, Some(72.0))]);
 }
@@ -434,12 +434,12 @@ fn a_rows_keep_together_defaults_to_the_default_style() {
         row(r#" table:style-name="H""#),
         row(r#" table:style-name="F""#)
     );
-    let keeps = |d: &wordcraft_doc::Document| {
+    let keeps = |d: &craft_wordmodel::Document| {
         d.body.iter().find_map(|b| b.as_table()).map(|t| t.rows.iter().map(|r| r.props.cant_split).collect::<Vec<_>>()).unwrap_or_default()
     };
     let d = import(&package(&content, Some(styles))).unwrap();
     assert_eq!(keeps(&d), [true, true, false]);
-    assert_eq!(keeps(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()), [true, true, false]);
+    assert_eq!(keeps(&import(&crate::text::tests::export_model(&d).unwrap()).unwrap()), [true, true, false]);
 }
 
 /// A row free to break under a default row style that keeps rows together says so when written from
@@ -454,12 +454,12 @@ fn a_row_free_to_break_stays_so_over_the_default_style() {
         row("")
     );
     let mut d = import(&package(&content, Some(styles))).unwrap();
-    let keeps = |d: &wordcraft_doc::Document| {
+    let keeps = |d: &craft_wordmodel::Document| {
         d.body.iter().find_map(|b| b.as_table()).map(|t| t.rows.iter().map(|r| r.props.cant_split).collect::<Vec<_>>()).unwrap_or_default()
     };
     assert_eq!(keeps(&d), [false, true]);
-    if let Some(wordcraft_doc::Block::Table(t)) = d.body.get_mut(0).map(std::sync::Arc::make_mut)
-        && let Some(wordcraft_doc::Block::Para(p)) = t.rows[0].cells[0].blocks.get_mut(0).map(std::sync::Arc::make_mut)
+    if let Some(craft_wordmodel::Block::Table(t)) = d.body.get_mut(0).map(std::sync::Arc::make_mut)
+        && let Some(craft_wordmodel::Block::Para(p)) = t.rows[0].cells[0].blocks.get_mut(0).map(std::sync::Arc::make_mut)
     {
         p.text.push('!');
         if let Some(r) = p.runs.last_mut() {

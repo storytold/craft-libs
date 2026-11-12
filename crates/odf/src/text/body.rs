@@ -12,7 +12,7 @@ use super::{
 /// Most drawings waiting outside a paragraph.
 const MAX_LOOSE: usize = 10_000;
 
-pub(in crate::odt) mod drawing;
+pub(in crate::text) mod drawing;
 mod indexes;
 mod notes;
 mod tables;
@@ -32,7 +32,7 @@ const MAX_OPEN_MARKS: usize = 64;
 
 /// An open frame: its size, picture, alt text, equation, chart and other embedded object.
 type Frame =
-    (Option<f32>, Option<f32>, Option<Vec<u8>>, String, Option<(String, bool)>, Option<wordcraft_doc::chart::ChartSpec>, Option<model::OdfObject>);
+    (Option<f32>, Option<f32>, Option<Vec<u8>>, String, Option<(String, bool)>, Option<craft_wordmodel::chart::ChartSpec>, Option<model::OdfObject>);
 
 pub(super) struct Body<'a> {
     styles: &'a Styles,
@@ -40,14 +40,14 @@ pub(super) struct Body<'a> {
     /// The package's entry names and its manifest's media types, for embedded objects.
     pub(super) entries: &'a [String],
     /// The bibliography sources the citations carry.
-    pub(super) sources: Vec<wordcraft_doc::Source>,
+    pub(super) sources: Vec<craft_wordmodel::Source>,
     /// The paragraph before had a page break after it: the next one starts a page.
     break_next: bool,
     /// Shapes' ids (`xml:id`, `draw:id`) as WordCraft drawing ids, and where the shapes with one
     /// sit (kind, frame relative to its anchor, turn, placement, the paragraph they are in), for
     /// connectors glued to them.
     pub(super) conn_ids: HashMap<String, u32>,
-    pub(super) shape_places: HashMap<u32, (wordcraft_doc::para::ShapeKind, [f32; 4], wordcraft_doc::para::Float, usize)>,
+    pub(super) shape_places: HashMap<u32, (craft_wordmodel::para::ShapeKind, [f32; 4], craft_wordmodel::para::Float, usize)>,
     /// Paragraphs started so far: which paragraph a shape is in.
     pub(super) para_seq: usize,
     /// Index entries over text whose end hasn't come (in the paragraph being read): their id,
@@ -61,10 +61,10 @@ pub(super) struct Body<'a> {
     /// The form controls of `office:forms`, placed where a `draw:control` names them.
     forms: super::forms::FormsReader,
     /// A watermark found (in a header): see [`Self::start_shape`].
-    pub(super) watermark: Option<wordcraft_doc::Watermark>,
+    pub(super) watermark: Option<craft_wordmodel::Watermark>,
     /// The shape being read is a watermark's, if its geometry follows its text: its size, turn,
     /// colour and see-through, and whether its geometry is fontwork.
-    watermark_shape: Option<((f32, f32), f32, Option<wordcraft_doc::props::Rgb>, bool, bool)>,
+    watermark_shape: Option<((f32, f32), f32, Option<craft_wordmodel::props::Rgb>, bool, bool)>,
     pub(super) manifest: Option<&'a HashMap<String, String>>,
     containers: Vec<Vec<FBlock>>,
     /// Drawings anchored in the text but outside any paragraph (LibreOffice's page-anchored
@@ -168,7 +168,7 @@ pub(super) struct Body<'a> {
     /// The text field being read.
     field: Option<OpenField>,
     /// Where the frame being read floats.
-    frame_float: Option<wordcraft_doc::para::Float>,
+    frame_float: Option<craft_wordmodel::para::Float>,
     /// The content of the text box in the frame being read.
     frame_box: Option<Vec<FBlock>>,
     /// The look of the frame being read, should it hold a text box.
@@ -179,18 +179,18 @@ pub(super) struct Body<'a> {
     /// The open frame's name (`draw:name`), which a linked text box names.
     pub(super) frame_name: Option<String>,
     /// The kind of the drawing shape being read (its text is read as a text box's).
-    shape_kind: Option<wordcraft_doc::para::ShapeKind>,
+    shape_kind: Option<craft_wordmodel::para::ShapeKind>,
     /// A custom shape's mirroring (left to right, top to bottom), from its geometry.
     shape_flip: (bool, bool),
     /// A freeform shape's paths (a polygon's, polyline's, path's or regular polygon's).
-    shape_path: Option<std::sync::Arc<wordcraft_doc::freeform::Freeform>>,
+    shape_path: Option<std::sync::Arc<craft_wordmodel::freeform::Freeform>>,
     /// A custom shape's geometry being read, when its type has no WordCraft kind: drawn from its
     /// own path and equations.
     geometry: Option<Box<super::geometry::Pending>>,
     /// That geometry's markup as read (see `ShapeExtra::odf_geometry`): being read, then
     /// finished for the shape it ends in.
     geometry_xml: Option<String>,
-    pub(in crate::odt) shape_geometry: Option<std::sync::Arc<String>>,
+    pub(in crate::text) shape_geometry: Option<std::sync::Arc<String>>,
     /// The turn of a group's member being read, from its `draw:transform`.
     member_rot: Option<f32>,
     /// The depth of the `draw:g` group being read: its shapes are placed by it, not anchored.
@@ -453,7 +453,7 @@ impl<'a> Body<'a> {
 
     /// [`Body::feed`], `at` the event's markup in [`Body::raw`]: a body paragraph that comes out
     /// whole and refers to nothing outside itself keeps its markup (`Para::kept`), so a save
-    /// that doesn't change it writes it as it was (see `wordcraft_doc::kept`).
+    /// that doesn't change it writes it as it was (see `craft_wordmodel::kept`).
     pub(super) fn feed_at(&mut self, ev: Ev, at: (usize, usize)) {
         self.hide_read();
         self.hidden_section(&ev);
@@ -698,7 +698,8 @@ impl<'a> Body<'a> {
             }
             Ev::End(q) if q == "text:placeholder" && self.placeholder.is_some() => {
                 if let Some((text, fmt, kind, about)) = self.placeholder.take() {
-                    let mut control = wordcraft_doc::control::ContentControl::new(wordcraft_doc::control::ControlKind::Text { multi_line: false });
+                    let mut control =
+                        craft_wordmodel::control::ContentControl::new(craft_wordmodel::control::ControlKind::Text { multi_line: false });
                     control.placeholder_text.clone_from(&text);
                     control.showing_placeholder = true;
                     // Its element, so it is written back a placeholder of its type.
@@ -740,7 +741,7 @@ impl<'a> Body<'a> {
     }
 
     /// Whether the reader is in the text itself: not in a table, note, comment or frame.
-    pub(in crate::odt) fn at_body_level(&self) -> bool {
+    pub(in crate::text) fn at_body_level(&self) -> bool {
         self.tables.is_empty() && self.cells.is_empty() && self.note.is_none() && self.frame.is_none() && self.containers.len() == 1
     }
 
@@ -801,7 +802,7 @@ impl Body<'_> {
     }
 
     /// The size of the text being read, points (its own, else the document's).
-    pub(in crate::odt) fn text_size(&self) -> f32 {
+    pub(in crate::text) fn text_size(&self) -> f32 {
         self.cur_fmt().size.or_else(|| self.styles.doc_size()).unwrap_or(12.0)
     }
 
@@ -897,7 +898,7 @@ impl Body<'_> {
         let mut p = Para { kind, align, page_break: pb, keep_next, spacing: look.spacing, ..Default::default() };
         // A paragraph starting a column (`fo:break-before="column"`): Word's column break first.
         if look.column_break && !pb {
-            p.inlines.push(Inline::Text(wordcraft_doc::para::COLUMN_BREAK.to_string(), model::Fmt::default()));
+            p.inlines.push(Inline::Text(craft_wordmodel::para::COLUMN_BREAK.to_string(), model::Fmt::default()));
         }
         p.borders = look.borders;
         if let Some(l) = level {
@@ -989,7 +990,7 @@ impl Body<'_> {
             && p.textless()
             && base != model::Fmt::default()
         {
-            p.mark = Some(Box::new(crate::model::char_props(&base)));
+            p.mark = Some(Box::new(craft_flow::char_props(&base)));
         }
         // A paragraph ending inside an open insertion has an inserted mark. (Paragraphs that
         // `place_deletion` splits off keep only the marks read inside their region.)
@@ -1305,7 +1306,7 @@ impl Body<'_> {
                 let cells = get(a, "table:default-cell-style-name").and_then(|s| self.styles.cell_background(s));
                 let n = get(a, "table:number-columns-repeated").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).max(1);
                 if let Some(t) = self.tables.last_mut() {
-                    let room = wordcraft_doc::table::MAX_COLS.saturating_sub(t.widths.len());
+                    let room = craft_wordmodel::table::MAX_COLS.saturating_sub(t.widths.len());
                     t.widths.extend(std::iter::repeat_n(w, n.min(room)));
                     t.shares.extend(std::iter::repeat_n(share, n.min(room)));
                     t.column_backgrounds.extend(std::iter::repeat_n(cells, n.min(room)));
@@ -1436,7 +1437,7 @@ impl Body<'_> {
             t.row_background = background;
             t.row.clear();
             t.hcover = 0;
-            if t.extra.heights.len() < wordcraft_doc::table::MAX_ROWS {
+            if t.extra.heights.len() < craft_wordmodel::table::MAX_ROWS {
                 t.extra.heights.truncate(t.rows.len());
                 t.extra.heights.push(height);
                 t.extra.keep_rows.truncate(t.rows.len());
@@ -1745,9 +1746,9 @@ impl Body<'_> {
         let data = (self.zip)(href.trim_start_matches("./"))?;
         let img = model::make_img(data, None, None, "")?;
         let repeat = match repeat.as_str() {
-            "no-repeat" => wordcraft_doc::props::PictureRepeat::None,
-            "stretch" => wordcraft_doc::props::PictureRepeat::Stretch,
-            _ => wordcraft_doc::props::PictureRepeat::Tile,
+            "no-repeat" => craft_wordmodel::props::PictureRepeat::None,
+            "stretch" => craft_wordmodel::props::PictureRepeat::Stretch,
+            _ => craft_wordmodel::props::PictureRepeat::Tile,
         };
         let mut align = [0.5, 0.5];
         for word in position.split_whitespace() {
@@ -1778,10 +1779,10 @@ impl Body<'_> {
         if let Some(g) = self.geometry.take()
             && let Some(f) = g.freeform()
         {
-            self.shape_kind = Some(wordcraft_doc::para::ShapeKind::Freeform);
+            self.shape_kind = Some(craft_wordmodel::para::ShapeKind::Freeform);
             self.shape_path = Some(std::sync::Arc::new(f));
             self.shape_geometry = keep(xml);
-        } else if self.shape_kind == Some(wordcraft_doc::para::ShapeKind::Rectangle) {
+        } else if self.shape_kind == Some(craft_wordmodel::para::ShapeKind::Rectangle) {
             // A preset WordCraft draws as a rectangle: its geometry kept as read.
             self.shape_geometry = keep(xml);
         }
@@ -1884,7 +1885,7 @@ impl Body<'_> {
             "table-row" => {
                 if let Some(t) = self.tables.last_mut() {
                     let r = std::mem::take(&mut t.row);
-                    if !r.is_empty() && t.rows.len() < wordcraft_doc::table::MAX_ROWS {
+                    if !r.is_empty() && t.rows.len() < craft_wordmodel::table::MAX_ROWS {
                         t.rows.push(r);
                     }
                 }

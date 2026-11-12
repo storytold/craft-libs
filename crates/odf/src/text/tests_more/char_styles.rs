@@ -1,9 +1,9 @@
 //! Custom character styles (ODF 1.3 §16.2 common `style:style` of family text): kept as document
 //! character styles, the text in them keeping the style; written back as common text styles.
 
-use crate::odt::tests::{NS_T, package};
-use crate::odt::{export, import};
-use wordcraft_doc::Document;
+use crate::text::tests::{NS_T, package};
+use crate::text::{export, import};
+use craft_wordmodel::Document;
 
 fn open() -> Document {
     let styles = format!(
@@ -67,7 +67,7 @@ fn what_a_character_style_turns_off_stays_off() {
     let shown: Vec<(bool, bool)> =
         p.runs.iter().map(|r| d.styles.resolve_char(p.props.style.as_deref(), &r.props)).map(|c| (c.bold, c.italic)).collect();
     assert_eq!(shown, [(true, true), (false, false)]);
-    let s = crate::odt::tests::entry(&export(&d).unwrap(), "styles.xml");
+    let s = crate::text::tests::entry(&export(&d).unwrap(), "styles.xml");
     let plain = s.split(r#"style:name="Plain""#).nth(1).and_then(|r| r.split("</style:style>").next()).unwrap_or("missing");
     assert!(plain.contains(r#"fo:font-weight="normal""#) && plain.contains(r#"fo:font-style="normal""#), "{plain}");
 }

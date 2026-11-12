@@ -1,10 +1,10 @@
 //! WordCraft's choices where the standard leaves something open (`docs/odf-interpretation.md`)
 //! fill in only what a file leaves unsaid: a value the file states is the file's.
 
-use crate::odt::import;
-use crate::odt::tests::NS_T;
-use wordcraft_doc::para::InlineObject;
-use wordcraft_doc::props::Rgb;
+use crate::text::import;
+use crate::text::tests::NS_T;
+use craft_wordmodel::para::InlineObject;
+use craft_wordmodel::props::Rgb;
 
 const NS_D: &str =
     r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0""#;
@@ -62,7 +62,7 @@ fn a_sections_column_balance_is_its_own_and_is_written() {
         let content = format!(
             r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="S" style:family="section"><style:section-properties {props}><style:columns fo:column-count="2" fo:column-gap="0.5cm"/></style:section-properties></style:style></office:automatic-styles><office:body><office:text><text:p>a</text:p><text:section text:name="S1" text:style-name="S"><text:p>b</text:p></text:section></office:text></office:body></office:document-content>"#
         );
-        crate::odt::tests::package(&content, None)
+        crate::text::tests::package(&content, None)
     };
     let balance = |props: &str| import(&doc(props)).unwrap().last_section.balance_columns;
     assert_eq!(balance(r#"text:dont-balance-text-columns="true""#), Some(false));
@@ -71,8 +71,8 @@ fn a_sections_column_balance_is_its_own_and_is_written() {
     // Written as WordCraft lays it out, so every reader balances it the same.
     for (props, written) in [("", "true"), (r#"text:dont-balance-text-columns="false""#, "false")] {
         let d = import(&doc(props)).unwrap();
-        let saved = crate::odt::export(&d).unwrap();
-        let content = crate::odt::tests::entry(&saved, "content.xml");
+        let saved = crate::text::export(&d).unwrap();
+        let content = crate::text::tests::entry(&saved, "content.xml");
         assert!(content.contains(&format!(r#"text:dont-balance-text-columns="{written}""#)), "{props}: {content}");
     }
 }
@@ -102,8 +102,8 @@ fn paragraph_spacing_adds_up_as_the_document_says_else_takes_the_larger() {
     assert!(!import(&with(None)).unwrap().settings.sum_paragraph_spacing);
     for (add, written) in [(Some(true), "true"), (None, "false")] {
         let d = import(&with(add)).unwrap();
-        let saved = crate::odt::export(&d).unwrap();
-        let settings = crate::odt::tests::entry(&saved, "settings.xml");
+        let saved = crate::text::export(&d).unwrap();
+        let settings = crate::text::tests::entry(&saved, "settings.xml");
         assert!(settings.contains(&format!(r#"config:name="AddParaTableSpacing" config:type="boolean">{written}<"#)), "{add:?}: {settings}");
         assert_eq!(settings.matches("\"AddParaTableSpacing\"").count(), 1);
         assert!(settings.contains("xmlns:ooo="), "LibreOffice reads the set only with its namespace");
@@ -123,7 +123,7 @@ fn widow_control_is_the_files_else_on() {
         let content = format!(
             "<office:document-content {NS_T}><office:body><office:text><text:p>a</text:p></office:text></office:body></office:document-content>"
         );
-        crate::odt::tests::package(&content, Some(&styles))
+        crate::text::tests::package(&content, Some(&styles))
     };
     let on = |bytes: &[u8]| import(bytes).unwrap().styles.resolve_para(&Default::default()).widow_control;
     let stated_off = r#"fo:widows="0" fo:orphans="0""#;
@@ -131,8 +131,8 @@ fn widow_control_is_the_files_else_on() {
     assert!(!on(&doc(stated_off)));
     assert!(on(&doc("")));
     for (default, written, widows) in [("", r#"fo:widows="2" fo:orphans="2""#, true), (stated_off, stated_off, false)] {
-        let saved = crate::odt::tests::export_model(&import(&doc(default)).unwrap()).unwrap();
-        let styles = crate::odt::tests::entry(&saved, "styles.xml");
+        let saved = crate::text::tests::export_model(&import(&doc(default)).unwrap()).unwrap();
+        let styles = crate::text::tests::entry(&saved, "styles.xml");
         assert!(styles.contains(written), "{default}: {styles}");
         assert_eq!(on(&saved), widows);
     }

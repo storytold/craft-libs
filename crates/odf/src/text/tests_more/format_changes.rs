@@ -3,10 +3,10 @@
 //! ODF records no old formatting, so the old is the text's own (accepting keeps it, rejecting
 //! changes nothing); WordCraft's formatting revisions are written as format changes.
 
-use crate::odt::tests::{NS_T, content_of, package};
-use crate::odt::{export, import};
-use wordcraft_doc::Document;
-use wordcraft_doc::RevisionKind;
+use crate::text::tests::{NS_T, content_of, package};
+use crate::text::{export, import};
+use craft_wordmodel::Document;
+use craft_wordmodel::RevisionKind;
 
 const NS_DC: &str = r#"xmlns:dc="http://purl.org/dc/elements/1.1/""#;
 

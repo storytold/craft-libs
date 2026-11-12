@@ -2,10 +2,10 @@
 //! Text): read from the file's own definitions on open, written from the document's on save, so
 //! headings look in each program as they did in the other.
 
-use crate::odt::tests::{NS_T, package};
-use crate::odt::{export, import};
-use wordcraft_doc::props::{CharProps, ParaProps, TextColor};
-use wordcraft_doc::{Document, Paragraph, Rgb, para_block};
+use crate::text::tests::{NS_T, package};
+use crate::text::{export, import};
+use craft_wordmodel::props::{CharProps, ParaProps, TextColor};
+use craft_wordmodel::{Document, Paragraph, Rgb, para_block};
 
 fn libreoffice_styles(heading1: &str) -> String {
     format!(
@@ -54,7 +54,7 @@ fn heading_styles_round_trip() {
     let mut d = Document::new();
     let mut p = Paragraph::new();
     p.text = "Head".into();
-    p.runs = vec![wordcraft_doc::para::Run { len: 4, props: Default::default() }];
+    p.runs = vec![craft_wordmodel::para::Run { len: 4, props: Default::default() }];
     p.props.style = Some("Heading2".into());
     d.body = vec![para_block(p)];
     let back = import(&export(&d).unwrap()).unwrap();

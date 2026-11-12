@@ -5,7 +5,7 @@ use super::{Attrs, Body, FBlock, FComment, Fmt, Frame, Inline, MAX_COMMENTS, MAX
 
 /// Make every comment range in `blocks` close: an end before its comment (or of no comment) is
 /// dropped, and a comment whose end never comes covers nothing. Replies have no range.
-pub(in crate::odt) fn balance_comments(blocks: &mut [FBlock]) {
+pub(in crate::text) fn balance_comments(blocks: &mut [FBlock]) {
     fn each_para(blocks: &mut [FBlock], depth: usize, f: &mut dyn FnMut(&mut Para)) {
         for b in blocks {
             match b {
@@ -52,72 +52,72 @@ pub(in crate::odt) fn balance_comments(blocks: &mut [FBlock]) {
 /// A comment being read (ODF 1.3 §14.1): what `office:annotation` and its `dc:creator`,
 /// `dc:date` and `meta:creator-initials` say.
 #[derive(Default)]
-pub(in crate::odt) struct CommentInfo {
+pub(in crate::text) struct CommentInfo {
     /// Its flow id.
-    pub(in crate::odt) id: u32,
+    pub(in crate::text) id: u32,
     /// Its `office:name`, which its `office:annotation-end` names.
-    pub(in crate::odt) named: bool,
+    pub(in crate::text) named: bool,
     /// The flow id of the comment it answers (`loext:parent-name`).
-    pub(in crate::odt) parent: Option<u32>,
-    pub(in crate::odt) resolved: bool,
-    pub(in crate::odt) author: String,
-    pub(in crate::odt) date: String,
-    pub(in crate::odt) initials: String,
+    pub(in crate::text) parent: Option<u32>,
+    pub(in crate::text) resolved: bool,
+    pub(in crate::text) author: String,
+    pub(in crate::text) date: String,
+    pub(in crate::text) initials: String,
     /// The child whose text is being read: 0 author, 1 date, 2 initials.
-    pub(in crate::odt) field: Option<u8>,
+    pub(in crate::text) field: Option<u8>,
 }
 
 /// A footnote, endnote or comment being read (ODF 1.3 §6.3, §14.1): what it is, and the
 /// reader state of the paragraph it sits in, put aside while its content is read into a
 /// container of its own.
-pub(in crate::odt) struct OpenNote {
+pub(in crate::text) struct OpenNote {
     /// The `text:note` or `office:annotation` element's depth.
-    pub(in crate::odt) depth: usize,
-    pub(in crate::odt) endnote: bool,
+    pub(in crate::text) depth: usize,
+    pub(in crate::text) endnote: bool,
     /// The citation's `text:label` (a custom mark).
-    pub(in crate::odt) custom: String,
+    pub(in crate::text) custom: String,
     /// Set for a comment.
-    pub(in crate::odt) comment: Option<CommentInfo>,
+    pub(in crate::text) comment: Option<CommentInfo>,
     /// Set for a text box: the frame it is in, put aside with its placement while its content is
     /// read (a frame inside it is a frame of its own).
-    pub(in crate::odt) text_box: Option<(Option<Frame>, Option<wordcraft_doc::para::Float>, model::BoxLook)>,
-    pub(in crate::odt) para: Option<Para>,
-    pub(in crate::odt) fmt: Vec<Fmt>,
-    pub(in crate::odt) xml_space_end: bool,
-    pub(in crate::odt) para_cont: bool,
-    pub(in crate::odt) lists: Vec<(Option<String>, bool)>,
-    pub(in crate::odt) item_used: Vec<bool>,
-    pub(in crate::odt) list_id: u32,
+    pub(in crate::text) text_box: Option<(Option<Frame>, Option<craft_wordmodel::para::Float>, model::BoxLook)>,
+    pub(in crate::text) para: Option<Para>,
+    pub(in crate::text) fmt: Vec<Fmt>,
+    pub(in crate::text) xml_space_end: bool,
+    pub(in crate::text) para_cont: bool,
+    pub(in crate::text) lists: Vec<(Option<String>, bool)>,
+    pub(in crate::text) item_used: Vec<bool>,
+    pub(in crate::text) list_id: u32,
     /// Stack heights when the note began: what the note opens and leaves open goes with it.
-    pub(in crate::odt) containers: usize,
-    pub(in crate::odt) tables: usize,
-    pub(in crate::odt) cells: usize,
-    pub(in crate::odt) lists_saved: usize,
+    pub(in crate::text) containers: usize,
+    pub(in crate::text) tables: usize,
+    pub(in crate::text) cells: usize,
+    pub(in crate::text) lists_saved: usize,
 }
 
 /// A text field being read ([`super::fields`]).
-pub(in crate::odt) struct OpenField {
+pub(in crate::text) struct OpenField {
     /// Its Word field code.
-    pub(in crate::odt) instr: String,
+    pub(in crate::text) instr: String,
     /// Its shown text so far.
-    pub(in crate::odt) result: String,
+    pub(in crate::text) result: String,
     /// Its element's name and depth.
-    pub(in crate::odt) name: String,
-    pub(in crate::odt) depth: usize,
+    pub(in crate::text) name: String,
+    pub(in crate::text) depth: usize,
     /// The formatting it is in.
-    pub(in crate::odt) fmt: Fmt,
+    pub(in crate::text) fmt: Fmt,
     /// A sequence's reference name: a bookmark over the caption's label and number, which
     /// references to it show.
-    pub(in crate::odt) anchor: Option<String>,
+    pub(in crate::text) anchor: Option<String>,
     /// Fixed without a value to be fixed at: a field while it shows nothing, else its text.
-    pub(in crate::odt) fixed: bool,
+    pub(in crate::text) fixed: bool,
 }
 
 impl Body<'_> {
     /// A note or its citation starting: true when handled. A note inside a note (allowed by the
     /// schema, never written by Word or LibreOffice), or one in deleted text or a frame, is left
     /// out with its content.
-    pub(in crate::odt) fn start_note_part(&mut self, q: &str, a: &Attrs) -> bool {
+    pub(in crate::text) fn start_note_part(&mut self, q: &str, a: &Attrs) -> bool {
         let free = self.note.is_none() && self.del.is_none() && !self.in_tc && self.frame.is_none();
         if let Some(c) = self.note.as_mut().and_then(|n| n.comment.as_mut()) {
             c.field = match q {
@@ -171,7 +171,7 @@ impl Body<'_> {
     }
 
     /// Begin reading a comment, as a note: its text in a container of its own.
-    pub(in crate::odt) fn start_comment(&mut self, a: &Attrs) {
+    pub(in crate::text) fn start_comment(&mut self, a: &Attrs) {
         let id = self.next_comment;
         self.next_comment = self.next_comment.saturating_add(1);
         let name = get(a, "office:name").filter(|n| !n.is_empty() && n.len() <= MAX_INFO_CHARS);
@@ -189,7 +189,7 @@ impl Body<'_> {
     }
 
     /// `inline` at the end of the paragraph being read (a new one if none is).
-    pub(in crate::odt) fn push_inline(&mut self, inline: Inline) {
+    pub(in crate::text) fn push_inline(&mut self, inline: Inline) {
         // A drawing in the text outside any paragraph waits for the next one.
         let drawing = matches!(inline, Inline::Image(_) | Inline::Shape { .. } | Inline::Chart(_) | Inline::Group { .. });
         if self.para.is_none() && drawing && self.at_body_level() && self.loose.len() < super::MAX_LOOSE {
@@ -206,7 +206,7 @@ impl Body<'_> {
 
     /// Begin reading a note: put the paragraph it is in aside and read its content into a
     /// container of its own, outside any list.
-    pub(in crate::odt) fn start_note(&mut self, a: &Attrs) {
+    pub(in crate::text) fn start_note(&mut self, a: &Attrs) {
         let note = OpenNote {
             depth: self.depth,
             endnote: get(a, "text:note-class").is_some_and(|c| c.trim() == "endnote"),
@@ -231,7 +231,7 @@ impl Body<'_> {
 
     /// End the note being read: its content becomes an [`Inline::Note`] in the paragraph put
     /// aside, which goes on. Tables and cells the note left open (malformed) are dropped.
-    pub(in crate::odt) fn end_note(&mut self) {
+    pub(in crate::text) fn end_note(&mut self) {
         self.end_para();
         let Some(n) = self.note.take() else { return };
         self.tables.truncate(n.tables);
@@ -289,7 +289,7 @@ impl Body<'_> {
 
     /// An element ending at the current depth, for an open note or field: true when that was all
     /// there was to it.
-    pub(in crate::odt) fn end_note_or_field(&mut self, q: &str) -> bool {
+    pub(in crate::text) fn end_note_or_field(&mut self, q: &str) -> bool {
         if let Some(c) = self.note.as_mut().and_then(|n| n.comment.as_mut())
             && c.field.is_some()
         {
@@ -304,7 +304,7 @@ impl Body<'_> {
             if q == "text:note" || q == "office:annotation" || q == "draw:text-box" {
                 return true;
             }
-            if self.shape_kind.is_some() && crate::odt::shapes::is_shape(q) {
+            if self.shape_kind.is_some() && crate::text::shapes::is_shape(q) {
                 // A drawing shape's own end: it goes into the paragraph, its text read.
                 self.end_frame();
                 return true;
@@ -324,7 +324,7 @@ impl Body<'_> {
     }
 
     /// Put the field read so far into the paragraph.
-    pub(in crate::odt) fn end_field(&mut self) {
+    pub(in crate::text) fn end_field(&mut self) {
         let Some(OpenField { instr, result, mut fmt, anchor, fixed, .. }) = self.field.take() else { return };
         fmt.ins = self.open_insertion();
         if self.para.is_none() {
@@ -334,7 +334,7 @@ impl Body<'_> {
             if let Some(name) = &anchor {
                 // From the start of the paragraph when only the label is before the number (a
                 // caption, "Figure 1"), else from the number.
-                let label = crate::odt::fields::sequence_name(&instr).unwrap_or("");
+                let label = crate::text::fields::sequence_name(&instr).unwrap_or("");
                 let before: String = p.inlines.iter().map(|i| if let Inline::Text(t, _) = i { t.as_str() } else { "\u{1}" }).collect();
                 let at = if before.trim() == label { 0 } else { p.inlines.len() };
                 p.inlines.insert(at, Inline::Anchor(name.clone()));
@@ -351,7 +351,7 @@ impl Body<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::odt::{Body, Pages, Styles, events};
+    use crate::text::{Body, Pages, Styles, events};
 
     /// The cell stacks after reading `xml`: (cells, formulas, cell tops).
     fn stacks_after(xml: &str) -> (usize, usize, usize) {

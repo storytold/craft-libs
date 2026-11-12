@@ -3,11 +3,11 @@
 //! turned down (`tb-rl`) or up opens as WordCraft's cell text direction and text box direction,
 //! and is written back the same way.
 
-use crate::odt::tests::{NS_T, content_of, package};
-use crate::odt::{export, import};
-use wordcraft_doc::Document;
-use wordcraft_doc::para::{InlineObject, ShapeKind};
-use wordcraft_doc::props::{TextDirection, TextVert};
+use crate::text::tests::{NS_T, content_of, package};
+use crate::text::{export, import};
+use craft_wordmodel::Document;
+use craft_wordmodel::para::{InlineObject, ShapeKind};
+use craft_wordmodel::props::{TextDirection, TextVert};
 
 const NS_D: &str = r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:loext="urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0""#;
 

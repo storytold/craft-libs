@@ -3,12 +3,12 @@
 //! (`local-table`, labels in the first row and column), each series pointing at its column, its
 //! colour the theme accent WordCraft draws it in.
 
-use wordcraft_doc::Rgb;
-use wordcraft_doc::chart::{ChartSpec, ChartType, LegendPos};
+use craft_wordmodel::Rgb;
+use craft_wordmodel::chart::{ChartSpec, ChartType, LegendPos};
 
 use super::drawing::{Place, placement};
 use super::{Writer, pt, x};
-use crate::model;
+use craft_flow as model;
 
 /// The table's column `i` (from 0) as a cell address names it: `A`, `B`… `Z`, `AA`…
 fn column(i: usize) -> String {
@@ -48,7 +48,7 @@ fn number(v: Option<f64>) -> String {
 }
 
 /// A chart sub-document's `content.xml` for `spec`, `w` × `h` points, series in `accents`.
-pub(in crate::odt) fn chart_xml(spec: &ChartSpec, w: f32, h: f32, accents: &[Rgb]) -> String {
+pub(in crate::text) fn chart_xml(spec: &ChartSpec, w: f32, h: f32, accents: &[Rgb]) -> String {
     let spec = spec.clone().sanitized();
     let (class, series_class) = match spec.kind {
         ChartType::Column | ChartType::ColumnStacked | ChartType::Bar | ChartType::BarStacked => ("bar", "bar"),
@@ -181,7 +181,7 @@ fn unchanged(o: &model::OdfObject, spec: &ChartSpec) -> bool {
 
 impl Writer {
     /// A chart: its frame here, placed as its float says, and its chart object in the package.
-    pub(in crate::odt) fn chart(&mut self, c: &model::Chart, place: Place<'_>, out: &mut String) {
+    pub(in crate::text) fn chart(&mut self, c: &model::Chart, place: Place<'_>, out: &mut String) {
         // Unchanged since it was read: the chart object as it was, with all its look.
         let kept = c.source.as_deref().filter(|o| unchanged(o, &c.spec));
         let (n, inner) = match kept {

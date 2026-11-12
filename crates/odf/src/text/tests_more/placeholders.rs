@@ -2,9 +2,9 @@
 //! templates use): opened as plain text content controls showing their placeholder, so a click
 //! selects one and typing replaces it, and written back as placeholders while they still show it.
 
-use crate::model::Inline;
-use crate::odt::tests::{NS_T, content_of, package, paras};
-use crate::odt::{export, import, parse};
+use crate::text::tests::{NS_T, content_of, package, paras};
+use crate::text::{export, import, parse};
+use craft_flow::Inline;
 
 fn doc(body: &str) -> Vec<u8> {
     package(
@@ -33,7 +33,7 @@ fn placeholders_open_as_controls_showing_them() {
     assert_eq!(controls(&bytes), [("<Honorific>".into(), true, "<Honorific>".into()), ("<Name>".into(), true, "<Name>".into())]);
     // The paragraph's own text around them.
     let d = import(&bytes).unwrap();
-    let text = d.body[0].as_para().unwrap().text.replace(wordcraft_doc::para::OBJ, "");
+    let text = d.body[0].as_para().unwrap().text.replace(craft_wordmodel::para::OBJ, "");
     assert_eq!(text, "Dear <Honorific><Name>,");
 }
 
@@ -68,7 +68,7 @@ fn a_placeholders_type_is_kept_and_typed_text_is_text() {
     let bytes = doc(
         r#"<text:p><text:placeholder text:placeholder-type="image" text:description="Your logo &amp; mark">&lt;Logo&gt;</text:placeholder> and <text:placeholder text:placeholder-type="nonsense">&lt;X&gt;</text:placeholder></text:p>"#,
     );
-    let c = content_of(&crate::odt::tests::export_model(&import(&bytes).unwrap()).unwrap());
+    let c = content_of(&crate::text::tests::export_model(&import(&bytes).unwrap()).unwrap());
     // Its description is the control's title, written back.
     assert!(
         c.contains(r#"<text:placeholder text:placeholder-type="image" text:description="Your logo &amp; mark">&lt;Logo&gt;</text:placeholder>"#),
@@ -78,7 +78,7 @@ fn a_placeholders_type_is_kept_and_typed_text_is_text() {
     // Something typed in its place is text.
     let mut flow = parse(&bytes).unwrap();
     for b in &mut flow.blocks {
-        if let crate::model::FBlock::Para(p) = b {
+        if let craft_flow::FBlock::Para(p) = b {
             for i in &mut p.inlines {
                 if let Inline::Control { control, text, .. } = i {
                     control.showing_placeholder = false;
@@ -87,6 +87,6 @@ fn a_placeholders_type_is_kept_and_typed_text_is_text() {
             }
         }
     }
-    let c = content_of(&crate::odt::tests::export_model(&crate::model::to_doc(&flow)).unwrap());
+    let c = content_of(&crate::text::tests::export_model(&craft_flow::to_doc(&flow)).unwrap());
     assert!(!c.contains("<text:placeholder") && c.contains(r#"Acme <text:s text:c="1"/>Ltd"#), "{c}");
 }

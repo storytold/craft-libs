@@ -5,39 +5,39 @@ use super::{Attrs, Body, FBlock, HashMap, Inline, MAX_OPEN_INSERTIONS, MAX_REGIO
 
 /// A `text:changed-region` read from `text:tracked-changes`.
 #[derive(Default)]
-pub(in crate::odt) struct Region {
-    pub(in crate::odt) kind: Option<RevisionKind>,
+pub(in crate::text) struct Region {
+    pub(in crate::text) kind: Option<RevisionKind>,
     /// Sequence number: tells regions by the same author at the same time apart.
-    pub(in crate::odt) id: u32,
-    pub(in crate::odt) author: String,
-    pub(in crate::odt) date: String,
+    pub(in crate::text) id: u32,
+    pub(in crate::text) author: String,
+    pub(in crate::text) date: String,
     /// A deletion's deleted paragraphs.
-    pub(in crate::odt) blocks: Vec<FBlock>,
+    pub(in crate::text) blocks: Vec<FBlock>,
 }
 
 impl Region {
-    pub(in crate::odt) fn mark(&self) -> RevMark {
+    pub(in crate::text) fn mark(&self) -> RevMark {
         RevMark { author: self.author.trim().to_string(), date: self.date.trim().to_string(), id: Some(self.id) }
     }
 }
 
 /// Reader state saved while a deletion's content is read into its own container.
-pub(in crate::odt) struct DelState {
-    pub(in crate::odt) containers: usize,
-    pub(in crate::odt) tables: usize,
-    pub(in crate::odt) cells: usize,
-    pub(in crate::odt) lists_saved: usize,
-    pub(in crate::odt) fmt: usize,
-    pub(in crate::odt) lists: Vec<(Option<String>, bool)>,
-    pub(in crate::odt) item_used: Vec<bool>,
+pub(in crate::text) struct DelState {
+    pub(in crate::text) containers: usize,
+    pub(in crate::text) tables: usize,
+    pub(in crate::text) cells: usize,
+    pub(in crate::text) lists_saved: usize,
+    pub(in crate::text) fmt: usize,
+    pub(in crate::text) lists: Vec<(Option<String>, bool)>,
+    pub(in crate::text) item_used: Vec<bool>,
     /// Insertions open inside the deleted content (text inserted, then deleted).
-    pub(in crate::odt) ins: Vec<(String, RevMark)>,
+    pub(in crate::text) ins: Vec<(String, RevMark)>,
 }
 
 /// A `text:change-start` (`start`) or `text:change-end` (attributes `a`) among the changes of
 /// `kind` open (insertions, or format changes): unknown ids, other kinds' marks, ends without a
 /// start and starts past [`MAX_OPEN_INSERTIONS`] are ignored.
-pub(in crate::odt) fn change_mark(regions: &HashMap<String, Region>, open: &mut Vec<(String, RevMark)>, kind: RevisionKind, start: bool, a: &Attrs) {
+pub(in crate::text) fn change_mark(regions: &HashMap<String, Region>, open: &mut Vec<(String, RevMark)>, kind: RevisionKind, start: bool, a: &Attrs) {
     let Some(id) = get(a, "text:change-id") else { return };
     if !start {
         if let Some(k) = open.iter().position(|(o, _)| o == id) {
@@ -55,7 +55,7 @@ pub(in crate::odt) fn change_mark(regions: &HashMap<String, Region>, open: &mut 
 
 impl Body<'_> {
     /// An element inside `text:tracked-changes`, outside deleted content.
-    pub(in crate::odt) fn tracked_start(&mut self, q: &str, a: &Attrs) {
+    pub(in crate::text) fn tracked_start(&mut self, q: &str, a: &Attrs) {
         match local(q) {
             "changed-region" if self.region.is_none() && self.region_count < MAX_REGIONS => {
                 // ODF 1.3 names it by `xml:id`; `text:id` is the older name, kept beside it.
@@ -93,7 +93,7 @@ impl Body<'_> {
     }
 
     /// End a deletion's content: its paragraphs go to the region being read.
-    pub(in crate::odt) fn close_deletion(&mut self) {
+    pub(in crate::text) fn close_deletion(&mut self) {
         if self.del.is_none() {
             return;
         }
@@ -123,7 +123,7 @@ impl Body<'_> {
     /// Put a deletion's paragraphs back at a `text:change` point, as deleted text. Inside a
     /// paragraph, each deleted paragraph mark splits it; between paragraphs, each deleted
     /// paragraph stands alone with its mark deleted.
-    pub(in crate::odt) fn place_deletion(&mut self, blocks: Vec<FBlock>, mark: RevMark) {
+    pub(in crate::text) fn place_deletion(&mut self, blocks: Vec<FBlock>, mark: RevMark) {
         let mut paras: Vec<Para> = Vec::new();
         for b in blocks {
             let FBlock::Para(mut p) = b else { continue };
@@ -182,7 +182,7 @@ impl Body<'_> {
         self.para = Some(rest);
     }
 
-    pub(in crate::odt) fn tracked_context(&mut self, q: &str, a: &Attrs) -> bool {
+    pub(in crate::text) fn tracked_context(&mut self, q: &str, a: &Attrs) -> bool {
         if !self.in_tc {
             return false;
         }

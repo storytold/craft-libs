@@ -4,12 +4,12 @@
 
 use super::writer::pt;
 use super::xml::{Attrs, get, length};
-use crate::model::parse_color;
+use craft_flow::parse_color;
+use craft_wordmodel::fill::{Fill, Gradient, GradientKind, PathShape};
+use craft_wordmodel::line_dash::{DASH_PERCENT, LineDash, MAX_DASH_STOPS};
+use craft_wordmodel::props::Rgb;
+use craft_wordmodel::wordart::GradStop;
 use std::sync::Arc;
-use wordcraft_doc::fill::{Fill, Gradient, GradientKind, PathShape};
-use wordcraft_doc::line_dash::{DASH_PERCENT, LineDash, MAX_DASH_STOPS};
-use wordcraft_doc::props::Rgb;
-use wordcraft_doc::wordart::GradStop;
 
 /// The arrowhead WordCraft writes (`draw:marker`, §16.39): a plain triangle pointing along the
 /// line, its tip at the line's end.

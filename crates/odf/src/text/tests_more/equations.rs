@@ -1,15 +1,15 @@
 //! Equations written as ODF formula objects (ODF 1.3 §10.4.3 `draw:object`, Part 2 packages: a
 //! formula sub-document holding MathML), read back by the reader that opens LibreOffice's.
 
-use crate::odt::{export, import};
-use wordcraft_doc::para::{InlineObject, OBJ};
-use wordcraft_doc::{Document, Paragraph, para_block};
+use crate::text::{export, import};
+use craft_wordmodel::para::{InlineObject, OBJ};
+use craft_wordmodel::{Document, Paragraph, para_block};
 
-fn eq_para(before: &str, linear: &str, display: bool) -> std::sync::Arc<wordcraft_doc::Block> {
+fn eq_para(before: &str, linear: &str, display: bool) -> std::sync::Arc<craft_wordmodel::Block> {
     let mut p = Paragraph::new();
     p.text = format!("{before}{OBJ}");
     p.objects.push(InlineObject::Equation { linear: linear.into(), display, math: Default::default() });
-    p.runs = vec![wordcraft_doc::para::Run { len: p.text.len(), props: Default::default() }];
+    p.runs = vec![craft_wordmodel::para::Run { len: p.text.len(), props: Default::default() }];
     para_block(p)
 }
 
@@ -28,11 +28,10 @@ fn equations_round_trip_as_formula_objects() {
     d.body = vec![eq_para("Inline ", "x^2+y^2", false), eq_para("", "a/b", true)];
     let bytes = export(&d).unwrap();
     // A formula sub-document per equation, declared in the manifest.
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
-    let names: Vec<String> = z.file_names().map(String::from).collect();
+    let mut z = crate::Package::open(bytes.as_slice(), &crate::Limits::DEFAULT).unwrap();
+    let names: Vec<String> = z.names().map(String::from).collect();
     assert!(names.iter().any(|n| n == "Object 1/content.xml") && names.iter().any(|n| n == "Object 2/content.xml"), "{names:?}");
-    let mut manifest = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("META-INF/manifest.xml").unwrap(), &mut manifest).unwrap();
+    let manifest = String::from_utf8(z.read("META-INF/manifest.xml").unwrap().unwrap()).unwrap();
     assert!(
         manifest
             .contains(r#"manifest:full-path="Object 1/" manifest:version="1.3" manifest:media-type="application/vnd.oasis.opendocument.formula""#),
@@ -40,8 +39,7 @@ fn equations_round_trip_as_formula_objects() {
     );
     // A formula document's content.xml has a `math:math` root (ODF 1.3 Part 3 §2.2.9 B), not an
     // `office:document-content` (the schema's start pattern doesn't cover it; the spec does).
-    let mut object = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("Object 1/content.xml").unwrap(), &mut object).unwrap();
+    let object = String::from_utf8(z.read("Object 1/content.xml").unwrap().unwrap()).unwrap();
     let root = object.trim_start_matches(|c| c != '>').get(1..).unwrap_or("").trim_start();
     assert!(root.starts_with("<math ") && root.contains(r#"xmlns="http://www.w3.org/1998/Math/MathML""#), "{object}");
     let back = import(&bytes).unwrap();
@@ -52,7 +50,7 @@ fn equations_round_trip_as_formula_objects() {
 
 #[test]
 fn a_formula_wrapped_in_office_math_still_reads() {
-    use crate::odt::tests::{NS_T, zip_of};
+    use crate::text::tests::{NS_T, zip_of};
     let content = format!(
         r#"<office:document-content {NS_T} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:xlink="http://www.w3.org/1999/xlink"><office:body><office:text><text:p><draw:frame text:anchor-type="as-char"><draw:object xlink:href="./Object 1"/></draw:frame></text:p></office:text></office:body></office:document-content>"#
     );

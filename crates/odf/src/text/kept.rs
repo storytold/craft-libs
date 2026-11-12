@@ -1,4 +1,4 @@
-//! Markup kept from the file an ODT document was opened from (see `wordcraft_doc::kept`): the
+//! Markup kept from the file an ODT document was opened from (see `craft_wordmodel::kept`): the
 //! definitions kept paragraphs refer to, read here, and written back with them.
 //!
 //! A kept paragraph names its automatic styles (`P12`, `T5`), and through them common styles,
@@ -206,7 +206,7 @@ pub(super) fn defined(xml: &str, def: &str) -> bool {
 
 /// An attribute's value as it reads, however XML spells it (`O'Brien`, `O&apos;Brien`).
 pub(super) fn attr_text(raw: &str) -> std::borrow::Cow<'_, str> {
-    quick_xml::escape::unescape(raw).unwrap_or(std::borrow::Cow::Borrowed(raw))
+    std::borrow::Cow::Owned(craft_xml::unescape(raw))
 }
 
 /// Attribute `name`'s value as `tag` (a start tag) writes it, spaced and quoted however XML allows.

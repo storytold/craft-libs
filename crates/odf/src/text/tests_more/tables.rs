@@ -2,10 +2,10 @@
 //! LibreOffice gives each shared edge to one cell only (left and bottom, the first row's top, the
 //! last column's right); WordCraft's cells each have all four sides.
 
-use crate::odt::tests::{NS_T, package};
-use crate::odt::{export, import};
-use wordcraft_doc::props::{Border, BorderStyle, Borders, CellProps};
-use wordcraft_doc::{Block, Document, Rgb};
+use crate::text::tests::{NS_T, package};
+use crate::text::{export, import};
+use craft_wordmodel::props::{Border, BorderStyle, Borders, CellProps};
+use craft_wordmodel::{Block, Document, Rgb};
 
 const LO_TABLE: &str = r##"<style:style style:name="A1" style:family="table-cell"><style:table-cell-properties fo:padding="0.1cm" fo:border-left="0.5pt solid #000000" fo:border-right="none" fo:border-top="0.5pt solid #000000" fo:border-bottom="0.5pt solid #000000"/></style:style><style:style style:name="B1" style:family="table-cell"><style:table-cell-properties fo:padding="0.1cm" fo:border="0.5pt solid #000000"/></style:style><style:style style:name="A2" style:family="table-cell"><style:table-cell-properties fo:padding-left="2pt" fo:padding-right="3pt" fo:padding-top="0pt" fo:padding-bottom="1pt" fo:border-left="0.5pt solid #000000" fo:border-right="none" fo:border-top="none" fo:border-bottom="2pt double #ff0000"/></style:style><style:style style:name="B2" style:family="table-cell"><style:table-cell-properties fo:border-left="0.5pt solid #000000" fo:border-right="0.5pt solid #000000" fo:border-top="none" fo:border-bottom="0.5pt dashed #000000"/></style:style>"##;
 
@@ -96,19 +96,19 @@ fn only_rows_set_to_repeat_are_written_as_header_rows() {
     // LibreOffice's agendas: a table without repeated rows came back with its first row
     // repeating on the next page, because a table style's header row (on by default in Word's
     // table look) was taken for Repeat as header row.
-    let mut d = wordcraft_doc::Document::from_text("");
-    let mut t = wordcraft_doc::Table::new(3, 2, 400.0);
+    let mut d = craft_wordmodel::Document::from_text("");
+    let mut t = craft_wordmodel::Table::new(3, 2, 400.0);
     assert!(t.props.look.header_row);
-    d.body.push(std::sync::Arc::new(wordcraft_doc::Block::Table(t.clone())));
-    let out = crate::odt::tests::content_of(&crate::odt::export(&d).unwrap());
+    d.body.push(std::sync::Arc::new(craft_wordmodel::Block::Table(t.clone())));
+    let out = crate::text::tests::content_of(&crate::text::export(&d).unwrap());
     assert!(!out.contains("table-header-rows"), "{out}");
     // A row set to repeat is one.
     t.rows[0].props.header = true;
     d.body.pop();
-    d.body.push(std::sync::Arc::new(wordcraft_doc::Block::Table(t)));
-    let out = crate::odt::tests::content_of(&crate::odt::export(&d).unwrap());
+    d.body.push(std::sync::Arc::new(craft_wordmodel::Block::Table(t)));
+    let out = crate::text::tests::content_of(&crate::text::export(&d).unwrap());
     assert_eq!(out.matches("<table:table-header-rows>").count(), 1, "{out}");
-    let back = crate::odt::import(&crate::odt::export(&d).unwrap()).unwrap();
+    let back = crate::text::import(&crate::text::export(&d).unwrap()).unwrap();
     let t = back.body.iter().find_map(|b| b.as_table()).unwrap();
     assert_eq!(t.rows.iter().map(|r| r.props.header).collect::<Vec<_>>(), [true, false, false]);
 }
@@ -119,16 +119,16 @@ fn a_table_styles_look_is_written_into_its_cells() {
     // ODF has no table styles of that kind, so each cell gets what the style gives it, and
     // LibreOffice (and WordCraft, reopening it) draws the same table.
     let mut d = Document::new();
-    let mut t = wordcraft_doc::Table::new(3, 2, 288.0);
+    let mut t = craft_wordmodel::Table::new(3, 2, 288.0);
     t.props.style = Some("GridTable4AccentBlue".into());
     t.props.look.header_row = true;
     t.props.look.banded_rows = true;
     for (ri, row) in t.rows.iter_mut().enumerate() {
         for (ci, cell) in row.cells.iter_mut().enumerate() {
-            cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("r{ri}c{ci}"), Default::default()))];
+            cell.blocks = vec![craft_wordmodel::para_block(craft_wordmodel::Paragraph::with_text(&format!("r{ri}c{ci}"), Default::default()))];
         }
     }
-    d.body = vec![std::sync::Arc::new(Block::Table(t)), wordcraft_doc::para_block(wordcraft_doc::Paragraph::default())];
+    d.body = vec![std::sync::Arc::new(Block::Table(t)), craft_wordmodel::para_block(craft_wordmodel::Paragraph::default())];
     let st = d.styles.table_style("GridTable4AccentBlue").unwrap().parts;
     let back = import(&export(&d).unwrap()).unwrap();
     let c = cells(&back);
@@ -167,7 +167,7 @@ fn a_cells_background_picture_is_read_drawn_and_written() {
     std::io::Write::write_all(&mut z, &png).unwrap();
     let d = import(&z.finish().unwrap().into_inner()).unwrap();
     let pic = cells(&d)[0].picture.clone().expect("the cell's picture");
-    assert_eq!((pic.repeat, pic.align), (wordcraft_doc::props::PictureRepeat::None, [0.0, 0.0]));
+    assert_eq!((pic.repeat, pic.align), (craft_wordmodel::props::PictureRepeat::None, [0.0, 0.0]));
     assert_eq!(pic.size, [30.0, 6.0], "its own size: 40 × 8 pixels at 96 per inch");
     assert!(d.media.contains_key(&pic.media));
     // Written back with the picture in the package.

@@ -3,10 +3,10 @@
 use super::{Border, BorderStyle, Borders, FBlock, FTable, Rgb, VAlign, Writer, model, odf_border, pt, x};
 
 /// Word's default cell margins (top, left, bottom, right), points.
-pub(in crate::odt) const WORD_CELL_MARGINS: [f32; 4] = [0.0, 5.4, 0.0, 5.4];
+pub(in crate::text) const WORD_CELL_MARGINS: [f32; 4] = [0.0, 5.4, 0.0, 5.4];
 
 /// The cell of `row` that starts at grid column `g`.
-pub(in crate::odt) fn cell_starting_at(row: &[model::Cell], g: usize) -> Option<&model::Cell> {
+pub(in crate::text) fn cell_starting_at(row: &[model::Cell], g: usize) -> Option<&model::Cell> {
     let mut s = 0usize;
     row.iter().find(|x| {
         let here = s == g;
@@ -20,7 +20,7 @@ pub(in crate::odt) fn cell_starting_at(row: &[model::Cell], g: usize) -> Option<
 /// cells share is written once, as LibreOffice writes it (every cell its left and bottom, the
 /// first row its top, the last column its right), so lines don't double; a side the cell
 /// doesn't state gets the table's grid line, or none in a table without lines.
-pub(in crate::odt) fn cell_props(t: &FTable, ri: usize, g0: usize, c: &model::Cell, cols: usize) -> String {
+pub(in crate::text) fn cell_props(t: &FTable, ri: usize, g0: usize, c: &model::Cell, cols: usize) -> String {
     let grid = (!t.borderless).then_some(Border { style: BorderStyle::Single, width: 0.5, color: Some(Rgb(0, 0, 0)), space: 0.0 });
     let line = |c: &model::Cell, pick: fn(&Borders) -> Option<Border>| match c.borders.as_ref().and_then(pick) {
         Some(b) => Some(b).filter(|b| b.is_visible()),
@@ -67,16 +67,16 @@ pub(in crate::odt) fn cell_props(t: &FTable, ri: usize, g0: usize, c: &model::Ce
     });
     // Which way its text runs (§20.404; upward is LibreOffice's own `bt-lr`).
     p.push_str(match c.direction {
-        wordcraft_doc::props::TextDirection::Horizontal => "",
-        wordcraft_doc::props::TextDirection::Down => " style:writing-mode=\"tb-rl\"",
-        wordcraft_doc::props::TextDirection::Up => " loext:writing-mode=\"bt-lr\"",
+        craft_wordmodel::props::TextDirection::Horizontal => "",
+        craft_wordmodel::props::TextDirection::Down => " style:writing-mode=\"tb-rl\"",
+        craft_wordmodel::props::TextDirection::Up => " loext:writing-mode=\"bt-lr\"",
     });
     p
 }
 
 /// Separates a cell style's `style:table-cell-properties` attributes from its content (a
 /// background picture) in [`Writer::cell_style`]'s key.
-pub(in crate::odt) const CELL_CHILD: char = '\u{1}';
+pub(in crate::text) const CELL_CHILD: char = '\u{1}';
 
 impl Writer {
     /// A cell's background picture (§17.3 `style:background-image`), the picture written into
@@ -89,9 +89,9 @@ impl Writer {
             self.pictures.push((name.clone(), pic.img.data.clone(), super::mime_of(&pic.img.ext).to_string()));
         }
         let repeat = match pic.repeat {
-            wordcraft_doc::props::PictureRepeat::None => "no-repeat",
-            wordcraft_doc::props::PictureRepeat::Tile => "repeat",
-            wordcraft_doc::props::PictureRepeat::Stretch => "stretch",
+            craft_wordmodel::props::PictureRepeat::None => "no-repeat",
+            craft_wordmodel::props::PictureRepeat::Tile => "repeat",
+            craft_wordmodel::props::PictureRepeat::Stretch => "stretch",
         };
         let pos = |a: f32, words: [&'static str; 3]| {
             if a < 0.25 {
@@ -111,7 +111,7 @@ impl Writer {
     }
 
     /// The automatic style of a cell with `props` (its `style:table-cell-properties` attributes).
-    pub(in crate::odt) fn cell_style(&mut self, props: String) -> String {
+    pub(in crate::text) fn cell_style(&mut self, props: String) -> String {
         let k = match self.cell_styles.iter().position(|s| *s == props) {
             Some(k) => k,
             None => {
@@ -122,7 +122,7 @@ impl Writer {
         format!("{}Cell{}", self.prefix, k + 1)
     }
 
-    pub(in crate::odt) fn table(&mut self, t: &FTable, out: &mut String, depth: usize) {
+    pub(in crate::text) fn table(&mut self, t: &FTable, out: &mut String, depth: usize) {
         // As read, while it is what was read.
         if let Some(xml) = &t.kept
             && (self.master.is_none() || self.kept_pages)
@@ -206,14 +206,14 @@ impl Writer {
                 }
                 let st = self.cell_style(props);
                 // A formula field: the cell's formula, and the value it shows (§19.646, §19.388).
-                let formula = crate::odt::cell_formula::of_cell(&c.blocks)
-                    .and_then(|(instr, result)| Some((crate::odt::cell_formula::odf_of(instr, (ri, g - span), (t.rows.len(), cols))?, result)));
+                let formula = crate::text::cell_formula::of_cell(&c.blocks)
+                    .and_then(|(instr, result)| Some((crate::text::cell_formula::odf_of(instr, (ri, g - span), (t.rows.len(), cols))?, result)));
                 let value = match formula {
                     Some((f, result)) => match result.trim().parse::<f64>().ok().filter(|v| v.is_finite()) {
                         Some(v) => format!(" table:formula=\"{}\" office:value-type=\"float\" office:value=\"{v}\"", x(&f)),
                         None => format!(" table:formula=\"{}\"", x(&f)),
                     },
-                    None => match crate::odt::cell_formula::number_of(&c.blocks) {
+                    None => match crate::text::cell_formula::number_of(&c.blocks) {
                         // A number: formulas calculate with it.
                         Some(v) => format!(" office:value-type=\"float\" office:value=\"{v}\""),
                         None => " office:value-type=\"string\"".to_string(),

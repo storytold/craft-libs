@@ -5,10 +5,10 @@
 
 use std::sync::Arc;
 
-use crate::model::Inline;
-use crate::odt::parse;
-use crate::odt::tests::{NS_T, paras, zip_of};
-use wordcraft_doc::chart::{ChartSeries, ChartSpec, ChartType, LegendPos};
+use crate::text::parse;
+use crate::text::tests::{NS_T, paras, zip_of};
+use craft_flow::Inline;
+use craft_wordmodel::chart::{ChartSeries, ChartSpec, ChartType, LegendPos};
 
 const NS_C: &str = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:chart="urn:oasis:names:tc:opendocument:xmlns:chart:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink""#;
 
@@ -34,7 +34,7 @@ fn chart_xml(class: &str, plot: &str, ser: &str, inner: &str, series: &str) -> S
 
 /// What the document holding chart object `chart` (with a replacement picture) reads as: the
 /// paragraph's charts, and whether a picture was read instead.
-fn read(chart: &str) -> (Vec<crate::model::Chart>, bool) {
+fn read(chart: &str) -> (Vec<craft_flow::Chart>, bool) {
     let frame = r#"<draw:frame draw:name="Object1" text:anchor-type="as-char" svg:width="5.9055in" svg:height="2.9528in"><draw:object xlink:href="./Object 1" xlink:type="simple"/><draw:image xlink:href="./ObjectReplacements/Object 1"/></draw:frame>"#;
     let content = format!(
         r#"<office:document-content {NS_T} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink"><office:body><office:text><text:p>Before {frame}</text:p></office:text></office:body></office:document-content>"#
@@ -170,9 +170,9 @@ fn hostile_chart_tables_are_bounded() {
         r#"<office:document-content><office:body><office:chart><chart:chart chart:class="chart:line"><chart:plot-area><chart:axis chart:dimension="x"><chart:categories table:cell-range-address="t.A1:XFD1048576"/></chart:axis>{series}</chart:plot-area>{table}</chart:chart></office:chart></office:body></office:document-content>"#
     );
     let s = spec(&xml).expect("a chart");
-    assert!(s.series.len() <= wordcraft_doc::chart::MAX_SERIES);
-    assert!(s.series.iter().all(|x| x.values.len() <= wordcraft_doc::chart::MAX_POINTS));
-    assert!(s.categories.len() <= wordcraft_doc::chart::MAX_POINTS);
+    assert!(s.series.len() <= craft_wordmodel::chart::MAX_SERIES);
+    assert!(s.series.iter().all(|x| x.values.len() <= craft_wordmodel::chart::MAX_POINTS));
+    assert!(s.categories.len() <= craft_wordmodel::chart::MAX_POINTS);
 }
 
 #[test]
@@ -182,14 +182,14 @@ fn an_imported_chart_is_an_editable_chart_object() {
     let content = format!(
         r#"<office:document-content {NS_T} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink"><office:body><office:text><text:p>{frame}</text:p></office:text></office:body></office:document-content>"#
     );
-    let doc = crate::odt::import(&zip_of(&[("content.xml", content.as_bytes()), ("Object 1/content.xml", xml.as_bytes())])).unwrap();
-    let graphics: Vec<Arc<wordcraft_doc::graphic::Graphic>> = doc
+    let doc = crate::text::import(&zip_of(&[("content.xml", content.as_bytes()), ("Object 1/content.xml", xml.as_bytes())])).unwrap();
+    let graphics: Vec<Arc<craft_wordmodel::graphic::Graphic>> = doc
         .body
         .iter()
         .filter_map(|b| b.as_para())
         .flat_map(|p| p.objects_with_offsets())
         .filter_map(
-            |(_, o)| if let wordcraft_doc::para::InlineObject::Graphic { graphic, w, h, .. } = o { Some((graphic.clone(), *w, *h)) } else { None },
+            |(_, o)| if let craft_wordmodel::para::InlineObject::Graphic { graphic, w, h, .. } = o { Some((graphic.clone(), *w, *h)) } else { None },
         )
         .map(|(g, w, h)| {
             assert_eq!((w, h), (288.0, 144.0));
@@ -197,23 +197,23 @@ fn an_imported_chart_is_an_editable_chart_object() {
         })
         .collect();
     let g = graphics.first().expect("a chart object");
-    assert_eq!(g.kind, wordcraft_doc::graphic::GraphicKind::Chart);
+    assert_eq!(g.kind, craft_wordmodel::graphic::GraphicKind::Chart);
     assert_eq!(g.chart.as_ref().map(|c| c.kind), Some(ChartType::Line));
 }
 
 /// A document holding `spec` as a chart `w` × `h` points, after some text.
-fn doc_with(spec: ChartSpec, float: bool) -> wordcraft_doc::Document {
-    let flow = crate::model::Flow {
-        blocks: vec![crate::model::FBlock::Para(crate::model::Para {
+fn doc_with(spec: ChartSpec, float: bool) -> craft_wordmodel::Document {
+    let flow = craft_flow::Flow {
+        blocks: vec![craft_flow::FBlock::Para(craft_flow::Para {
             inlines: vec![
                 Inline::Text("See ".into(), Default::default()),
-                Inline::Chart(crate::model::Chart {
+                Inline::Chart(craft_flow::Chart {
                     spec: Arc::new(spec),
                     w: 300.0,
                     h: 180.0,
                     alt: "Sales chart".into(),
                     float: float.then(|| {
-                        Box::new(wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, x: 20.0, y: 10.0, ..Default::default() })
+                        Box::new(craft_wordmodel::para::Float { wrap: craft_wordmodel::para::Wrap::Square, x: 20.0, y: 10.0, ..Default::default() })
                     }),
                     source: None,
                 }),
@@ -222,11 +222,11 @@ fn doc_with(spec: ChartSpec, float: bool) -> wordcraft_doc::Document {
         })],
         ..Default::default()
     };
-    crate::model::to_doc(&flow)
+    craft_flow::to_doc(&flow)
 }
 
 /// The charts the saved document reads back as.
-fn reread(bytes: &[u8]) -> Vec<crate::model::Chart> {
+fn reread(bytes: &[u8]) -> Vec<craft_flow::Chart> {
     paras(&parse(bytes).unwrap())
         .into_iter()
         .flat_map(|p| p.inlines.clone())
@@ -246,15 +246,15 @@ fn every_chart_type_is_saved_as_a_chart_object_and_reads_back() {
         {
             *v = None;
         }
-        let bytes = crate::odt::export(&doc_with(spec.clone(), false)).unwrap();
+        let bytes = crate::text::export(&doc_with(spec.clone(), false)).unwrap();
         let back = reread(&bytes);
         assert_eq!(back.len(), 1, "{kind:?}");
         assert_eq!(*back[0].spec, spec.clone().sanitized(), "{kind:?}");
         assert_eq!((back[0].w, back[0].h, back[0].alt.as_str()), (300.0, 180.0, "Sales chart"), "{kind:?}");
         // The package lists the chart object.
-        let z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-        assert!(z.file_names().any(|n| n == "Object 1/content.xml"), "{kind:?}");
-        let manifest = crate::odt::tests::entry(&bytes, "META-INF/manifest.xml");
+        let z = crate::Package::open(&bytes, &crate::Limits::DEFAULT).unwrap();
+        assert!(z.names().any(|n| n == "Object 1/content.xml"), "{kind:?}");
+        let manifest = crate::text::tests::entry(&bytes, "META-INF/manifest.xml");
         assert!(
             manifest
                 .contains(r#"manifest:full-path="Object 1/" manifest:version="1.3" manifest:media-type="application/vnd.oasis.opendocument.chart""#)
@@ -264,26 +264,26 @@ fn every_chart_type_is_saved_as_a_chart_object_and_reads_back() {
 
 #[test]
 fn a_floating_chart_keeps_its_place_and_wrap() {
-    let bytes = crate::odt::export(&doc_with(ChartSpec::sample(ChartType::Column), true)).unwrap();
+    let bytes = crate::text::export(&doc_with(ChartSpec::sample(ChartType::Column), true)).unwrap();
     let back = reread(&bytes);
     let f = back.first().and_then(|c| c.float.as_deref()).expect("a floating chart");
-    assert_eq!((f.wrap, f.x.round(), f.y.round()), (wordcraft_doc::para::Wrap::Square, 20.0, 10.0));
+    assert_eq!((f.wrap, f.x.round(), f.y.round()), (craft_wordmodel::para::Wrap::Square, 20.0, 10.0));
 }
 
 #[test]
 fn a_flat_document_holds_its_chart_inline() {
-    let flat = crate::odt::export_flat(&doc_with(ChartSpec::sample(ChartType::Pie), false)).unwrap();
+    let flat = crate::text::export_flat(&doc_with(ChartSpec::sample(ChartType::Pie), false)).unwrap();
     let text = String::from_utf8(flat.clone()).unwrap();
     assert!(text.contains("<draw:object><office:document"), "{text}");
-    let back: Vec<crate::model::Chart> = crate::odt::import_flat(&flat)
+    let back: Vec<craft_flow::Chart> = crate::text::import_flat(&flat)
         .unwrap()
         .body
         .iter()
         .filter_map(|b| b.as_para())
         .flat_map(|p| p.objects.clone())
         .filter_map(|o| match o {
-            wordcraft_doc::para::InlineObject::Graphic { graphic, w, h, alt, .. } => {
-                graphic.chart.clone().map(|spec| crate::model::Chart { spec, w, h, alt, float: None, source: None })
+            craft_wordmodel::para::InlineObject::Graphic { graphic, w, h, alt, .. } => {
+                graphic.chart.clone().map(|spec| craft_flow::Chart { spec, w, h, alt, float: None, source: None })
             }
             _ => None,
         })
@@ -312,39 +312,33 @@ fn an_unchanged_chart_is_written_back_as_it_was_and_an_edited_one_anew() {
         r#"<office:document-content {NS_T} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink"><office:body><office:text><text:p>Before {frame}</text:p></office:text></office:body></office:document-content>"#
     );
     let picture: &[u8] = b"VCLMTF the chart as drawn";
-    let doc = crate::odt::import(&zip_of(&[
+    let doc = crate::text::import(&zip_of(&[
         ("content.xml", content.as_bytes()),
         ("Object 1/content.xml", original.as_bytes()),
         ("ObjectReplacements/Object 1", picture),
     ]))
     .unwrap();
     let replacement_of = |bytes: &[u8]| {
-        let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
-        let name = (0..z.len()).filter_map(|i| z.by_index(i).ok().map(|f| f.name().to_string())).find(|n| n.starts_with("ObjectReplacements/"))?;
-        let mut out = Vec::new();
-        std::io::Read::read_to_end(&mut z.by_name(&name).unwrap(), &mut out).unwrap();
-        Some(out)
+        let mut z = crate::Package::open(bytes, &crate::Limits::DEFAULT).unwrap();
+        let name = z.names().map(str::to_string).collect::<Vec<_>>().into_iter().find(|n| n.starts_with("ObjectReplacements/"))?;
+        z.read(&name).unwrap()
     };
-    let saved = crate::odt::export(&doc).unwrap();
+    let saved = crate::text::export(&doc).unwrap();
     assert_eq!(replacement_of(&saved).as_deref(), Some(picture));
-    assert!(crate::odt::tests::entry(&saved, "content.xml").contains(r#"<draw:image xlink:href="./ObjectReplacements/"#));
+    assert!(crate::text::tests::entry(&saved, "content.xml").contains(r#"<draw:image xlink:href="./ObjectReplacements/"#));
     let chart_of = |bytes: &[u8]| {
-        let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
-        let name = (0..z.len())
-            .filter_map(|i| z.by_index(i).ok().map(|f| f.name().to_string()))
-            .find(|n| n.ends_with("/content.xml") && n.starts_with("Object"))
-            .unwrap();
-        let mut out = String::new();
-        std::io::Read::read_to_string(&mut z.by_name(&name).unwrap(), &mut out).unwrap();
-        out
+        let mut z = crate::Package::open(bytes, &crate::Limits::DEFAULT).unwrap();
+        let name =
+            z.names().map(str::to_string).collect::<Vec<_>>().into_iter().find(|n| n.ends_with("/content.xml") && n.starts_with("Object")).unwrap();
+        String::from_utf8(z.read(&name).unwrap().unwrap()).unwrap()
     };
-    assert_eq!(chart_of(&crate::odt::export(&doc).unwrap()), original);
+    assert_eq!(chart_of(&crate::text::export(&doc).unwrap()), original);
     // Edited: a new title.
     let mut edited = doc.clone();
     for b in edited.body.iter_mut() {
-        if let wordcraft_doc::Block::Para(p) = Arc::make_mut(b) {
+        if let craft_wordmodel::Block::Para(p) = Arc::make_mut(b) {
             for o in &mut p.objects {
-                if let wordcraft_doc::para::InlineObject::Graphic { graphic, .. } = o {
+                if let craft_wordmodel::para::InlineObject::Graphic { graphic, .. } = o {
                     let g = Arc::make_mut(graphic);
                     let mut spec = (**g.chart.as_ref().unwrap()).clone();
                     spec.title = Some("Revenue".into());
@@ -353,7 +347,7 @@ fn an_unchanged_chart_is_written_back_as_it_was_and_an_edited_one_anew() {
             }
         }
     }
-    let saved = crate::odt::export(&edited).unwrap();
+    let saved = crate::text::export(&edited).unwrap();
     let out = chart_of(&saved);
     assert!(out.contains("Revenue") && !out.contains(r#"fo:font-size="18pt""#), "{out}");
     // The old picture would show the old chart.

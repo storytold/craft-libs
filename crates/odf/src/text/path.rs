@@ -2,7 +2,7 @@
 //! `draw:points`, `svg:d`, `svg:viewBox`): their points, in their view box's coordinates, into
 //! a WordCraft freeform (straight segments: curves and arcs are followed by short steps).
 
-use wordcraft_doc::freeform::{FreePath, Freeform, MAX_PATHS, MAX_POINTS};
+use craft_wordmodel::freeform::{FreePath, Freeform, MAX_PATHS, MAX_POINTS};
 
 /// Steps a curve or arc is followed by.
 const CURVE_STEPS: usize = 16;

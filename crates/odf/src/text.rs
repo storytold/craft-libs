@@ -1,6 +1,9 @@
-//! OpenDocument Text (`.odt`, ODF 1.3).
+// The code came from an app whose lints allow this.
+#![allow(clippy::type_complexity)]
+//! OpenDocument Text (`.odt`, ODF 1.3), feature `text`: documents read into and written from the
+//! craft-flow model and a craft-wordmodel `Document`.
 //!
-//! Both ways, through the flow model ([`crate::model`]) with what ODT keeps besides
+//! Both ways, through the flow model ([`craft_flow`]) with what ODT keeps besides
 //! ([`model::FlowOpts`]): paragraphs and headings with their spacing, indents, line spacing,
 //! contextual spacing, alignment, borders, background and tab stops; character formatting (the
 //! extras in [`model::Fmt::extra`] included); custom paragraph and character styles by name, and
@@ -26,24 +29,20 @@
 //! several paragraphs. Format changes are read as no change.
 
 use std::collections::HashMap;
-use std::io::{Cursor, Read, Write};
 use std::sync::Arc;
 
-use quick_xml::XmlVersion;
-use quick_xml::events::{BytesStart, Event};
-use wordcraft_doc::props::{Borders, VAlign};
-use wordcraft_doc::section::{Columns, SectionStart};
-use wordcraft_doc::{Align, Document, RevisionKind, Rgb, SectionProps};
+use craft_wordmodel::props::{Borders, VAlign};
+use craft_wordmodel::section::{Columns, SectionStart};
+use craft_wordmodel::{Align, Document, RevisionKind, Rgb, SectionProps};
 
-use crate::model::{self, Cell, FBlock, FComment, FTable, Flow, Fmt, Inline, Kind, ListInfo, Meta, Para, RevMark, make_img, mime_of};
+use craft_flow::{self as model, Cell, FBlock, FComment, FTable, Flow, Fmt, Inline, Kind, ListInfo, Meta, Para, RevMark, make_img, mime_of};
 
 mod body;
 mod cell_formula;
 mod chart;
-mod crypt;
 mod datastyle;
 mod fields;
-mod flat;
+mod flat_doc;
 mod forms;
 mod formula_size;
 mod frames;
@@ -61,9 +60,9 @@ mod styles;
 mod writer;
 mod xml;
 
+pub use crate::crypt::{CryptError, decrypt, encrypt, is_encrypted};
 use body::Body;
-pub use crypt::{CryptError, decrypt, encrypt, is_encrypted};
-pub use flat::{export_flat, import_flat, import_flat_on};
+pub use flat_doc::{export_flat, import_flat, import_flat_on};
 use import::Pages;
 #[cfg(test)]
 use import::{Pictures, apply_page_layout, read_entry, read_meta};

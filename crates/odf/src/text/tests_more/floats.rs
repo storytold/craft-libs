@@ -2,10 +2,10 @@
 //! `style:wrap`, `style:horizontal-pos/-rel`, `style:vertical-pos/-rel`): placed and wrapped as
 //! the file says, and written back the same way.
 
-use crate::odt::tests::{NS_T, zip_of};
-use crate::odt::{export, import};
-use wordcraft_doc::Document;
-use wordcraft_doc::para::{Anchor, Float, FloatAlign, InlineObject, Wrap, WrapText};
+use crate::text::tests::{NS_T, zip_of};
+use crate::text::{export, import};
+use craft_wordmodel::Document;
+use craft_wordmodel::para::{Anchor, Float, FloatAlign, InlineObject, Wrap, WrapText};
 
 const NS_D: &str = r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink""#;
 
@@ -14,7 +14,7 @@ fn open(graphic: &str, frame: &str) -> Document {
     let content = format!(
         r#"<office:document-content {NS_T} {NS_D}><office:automatic-styles><style:style style:name="fr1" style:family="graphic"><style:graphic-properties {graphic}/></style:style></office:automatic-styles><office:body><office:text><text:p><draw:frame draw:style-name="fr1" svg:width="2in" svg:height="1in" {frame}><draw:image xlink:href="Pictures/a.png"/></draw:frame>Text beside.</text:p></office:text></office:body></office:document-content>"#
     );
-    crate::odt::import(&zip_of(&[("content.xml", content.as_bytes()), ("Pictures/a.png", &png)])).unwrap()
+    crate::text::import(&zip_of(&[("content.xml", content.as_bytes()), ("Pictures/a.png", &png)])).unwrap()
 }
 
 fn float(d: &Document) -> Float {
@@ -75,7 +75,7 @@ fn an_inline_frame_placed_against_the_text_is_raised_from_its_size() {
         let doc = import(&zip_of(&[("content.xml", content.as_bytes()), ("Pictures/p.png", &pic)])).unwrap();
         let p = doc.body.iter().find_map(|b| b.as_para()).unwrap();
         let (off, _) = p.objects_with_offsets().next().unwrap();
-        p.props_at(off + wordcraft_doc::para::OBJ.len_utf8()).position.map_or(0.0, |v| (v * 10.0).round() / 10.0)
+        p.props_at(off + craft_wordmodel::para::OBJ.len_utf8()).position.map_or(0.0, |v| (v * 10.0).round() / 10.0)
     };
     // (0.891 - 0.216) / 2 × 12 − 36.
     assert_eq!(raise("middle", "text"), -32.0);
@@ -91,7 +91,7 @@ fn an_inline_picture_is_saved_standing_on_the_baseline() {
     // LibreOffice puts an in-line frame without placement at the line's top (measured): a
     // picture standing on the baseline, as in Word, says so.
     let d = float_doc_inline();
-    let out = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    let out = crate::text::tests::content_of(&crate::text::tests::export_model(&d).unwrap());
     assert!(out.contains(r#"style:vertical-pos="top" style:vertical-rel="baseline""#), "{out}");
 }
 
@@ -113,27 +113,27 @@ fn a_picture_alone_in_its_paragraph_keeps_its_raise_and_the_paragraphs_size() {
     };
     let content = format!(
         r#"<office:document-content {NS} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink"><office:automatic-styles><style:style style:name="P2" style:family="paragraph"><style:text-properties fo:font-size="9pt"/></style:style><style:style style:name="g1" style:family="graphic" style:parent-style-name="G"><style:graphic-properties style:vertical-pos="from-top"/></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="P2"><draw:frame draw:style-name="g1" text:anchor-type="as-char" svg:y="-0.2in" svg:width="6in" svg:height="0.05in"><draw:image xlink:href="Pictures/p.png"/></draw:frame></text:p></office:text></office:body></office:document-content>"#,
-        NS = crate::odt::tests::NS_T
+        NS = crate::text::tests::NS_T
     );
     let styles = format!(
         r#"<office:document-styles {NS} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"><office:styles><style:style style:name="G" style:family="graphic"><style:graphic-properties text:anchor-type="paragraph" style:vertical-pos="top" style:vertical-rel="paragraph"/></style:style></office:styles></office:document-styles>"#,
-        NS = crate::odt::tests::NS_T
+        NS = crate::text::tests::NS_T
     );
-    let pkg = crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/p.png", &pic)]);
+    let pkg = crate::text::tests::zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/p.png", &pic)]);
     let look = |doc: &Document| {
         let p = doc.body.iter().find_map(|b| b.as_para()).unwrap();
         let (off, _) = p.objects_with_offsets().next().unwrap();
-        let props = p.props_at(off + wordcraft_doc::para::OBJ.len_utf8());
+        let props = p.props_at(off + craft_wordmodel::para::OBJ.len_utf8());
         (props.position.map(|v| (v * 10.0).round() / 10.0), props.size, p.mark.size)
     };
-    let doc = crate::odt::import(&pkg).unwrap();
+    let doc = crate::text::import(&pkg).unwrap();
     assert_eq!(look(&doc), (None, Some(9.0), Some(9.0)));
     let baseline = styles.replace(r#"style:vertical-rel="paragraph""#, r#"style:vertical-rel="baseline""#);
-    let pkg = crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", baseline.as_bytes()), ("Pictures/p.png", &pic)]);
-    let doc = crate::odt::import(&pkg).unwrap();
+    let pkg = crate::text::tests::zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", baseline.as_bytes()), ("Pictures/p.png", &pic)]);
+    let doc = crate::text::import(&pkg).unwrap();
     assert_eq!(look(&doc), (Some(10.8), Some(9.0), Some(9.0)));
     // Saved, it says so in terms every reader takes the same way.
-    let again = crate::odt::import(&crate::odt::tests::export_model(&doc).unwrap()).unwrap();
+    let again = crate::text::import(&crate::text::tests::export_model(&doc).unwrap()).unwrap();
     assert_eq!(look(&again), (Some(10.8), Some(9.0), Some(9.0)));
 }
 
@@ -234,26 +234,26 @@ fn an_inline_frame_keeps_its_place_on_the_baseline() {
     ] {
         let content = format!(
             r#"<office:document-content {NS} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink"><office:automatic-styles><style:style style:name="g1" style:family="graphic"><style:graphic-properties style:vertical-pos="{vpos}"/></style:style></office:automatic-styles><office:body><office:text><text:p>Line <draw:frame draw:style-name="g1" text:anchor-type="as-char" svg:width="1in" svg:height="1in"{y}><draw:image xlink:href="Pictures/p.png"/></draw:frame> text</text:p></office:text></office:body></office:document-content>"#,
-            NS = crate::odt::tests::NS_T
+            NS = crate::text::tests::NS_T
         );
-        let pkg = crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("Pictures/p.png", &pic)]);
-        let doc = crate::odt::import(&pkg).unwrap();
+        let pkg = crate::text::tests::zip_of(&[("content.xml", content.as_bytes()), ("Pictures/p.png", &pic)]);
+        let doc = crate::text::import(&pkg).unwrap();
         let p = doc.body.iter().find_map(|b| b.as_para()).unwrap();
         let (off, _) = p.objects_with_offsets().next().unwrap();
-        let pos = p.props_at(off + wordcraft_doc::para::OBJ.len_utf8()).position.unwrap_or(0.0);
+        let pos = p.props_at(off + craft_wordmodel::para::OBJ.len_utf8()).position.unwrap_or(0.0);
         assert_eq!((pos * 10.0).round() / 10.0, want, "{vpos}{y}");
         // Saved: a lowered one says how far its top is from the baseline.
-        let saved = crate::odt::tests::content_of(&crate::odt::tests::export_model(&doc).unwrap());
+        let saved = crate::text::tests::content_of(&crate::text::tests::export_model(&doc).unwrap());
         if want != 0.0 {
             assert!(saved.contains(r#"style:vertical-pos="from-top" style:vertical-rel="baseline""#), "{saved}");
             let top = -(72.0 + want) + 0.0;
             assert!(saved.contains(&format!(r#"svg:y="{}pt""#, top)), "{vpos}{y}: {saved}");
         }
-        let again = crate::odt::import(&crate::odt::tests::export_model(&doc).unwrap()).unwrap();
+        let again = crate::text::import(&crate::text::tests::export_model(&doc).unwrap()).unwrap();
         let p2 = again.body.iter().find_map(|b| b.as_para()).unwrap();
         let (off2, _) = p2.objects_with_offsets().next().unwrap();
         assert_eq!(
-            p2.props_at(off2 + wordcraft_doc::para::OBJ.len_utf8()).position.map(|v| (v * 10.0).round() / 10.0),
+            p2.props_at(off2 + craft_wordmodel::para::OBJ.len_utf8()).position.map(|v| (v * 10.0).round() / 10.0),
             (want != 0.0).then_some(want)
         );
     }
@@ -271,21 +271,21 @@ fn a_cropped_picture_keeps_its_crop() {
     };
     let content = format!(
         r#"<office:document-content {NS} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink"><office:automatic-styles><style:style style:name="fr1" style:family="graphic"><style:graphic-properties fo:clip="rect(0in, 0in, 0.2602in, 0.5209in)"/></style:style></office:automatic-styles><office:body><office:text><text:p><draw:frame draw:style-name="fr1" text:anchor-type="as-char" svg:width="1.5in" svg:height="0.75in"><draw:image xlink:href="Pictures/q.png"/></draw:frame></text:p></office:text></office:body></office:document-content>"#,
-        NS = crate::odt::tests::NS_T
+        NS = crate::text::tests::NS_T
     );
-    let doc = crate::odt::import(&crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("Pictures/q.png", &png)])).unwrap();
+    let doc = crate::text::import(&crate::text::tests::zip_of(&[("content.xml", content.as_bytes()), ("Pictures/q.png", &png)])).unwrap();
     let crop = doc
         .body
         .iter()
         .find_map(|b| b.as_para())
-        .and_then(|p| p.objects.iter().find_map(|o| if let wordcraft_doc::para::InlineObject::Image { crop, .. } = o { Some(*crop) } else { None }))
+        .and_then(|p| p.objects.iter().find_map(|o| if let craft_wordmodel::para::InlineObject::Image { crop, .. } = o { Some(*crop) } else { None }))
         .unwrap();
     assert_eq!(crop.map(|c| (c * 100.0).round() / 100.0), [0.25, 0.0, 0.0, 0.25]);
-    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&doc).unwrap());
+    let c = crate::text::tests::content_of(&crate::text::tests::export_model(&doc).unwrap());
     // 0.2602 in is 18.73 pt, 0.5209 in 37.5 pt.
     assert!(c.contains(r#"fo:clip="rect(0pt, 0pt, 18.73pt, 37.5pt)""#), "{c}");
     // An absurd crop (nothing left) is none.
-    assert_eq!(crate::odt::body::drawing::crop_fractions([0.0, 100.0, 0.0, 100.0], &png), [0.0; 4]);
+    assert_eq!(crate::text::body::drawing::crop_fractions([0.0, 100.0, 0.0, 100.0], &png), [0.0; 4]);
 }
 
 #[test]
@@ -298,23 +298,23 @@ fn contour_wrapping_and_its_outline_are_kept() {
         img.write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
         b
     };
-    for (mode, want) in [("outside", wordcraft_doc::para::Wrap::Tight), ("full", wordcraft_doc::para::Wrap::Through)] {
+    for (mode, want) in [("outside", craft_wordmodel::para::Wrap::Tight), ("full", craft_wordmodel::para::Wrap::Through)] {
         let content = format!(
             r#"<office:document-content {NS} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink"><office:automatic-styles><style:style style:name="fr1" style:family="graphic"><style:graphic-properties style:wrap="parallel" style:wrap-contour="true" style:wrap-contour-mode="{mode}" style:horizontal-pos="left" style:horizontal-rel="paragraph"/></style:style></office:automatic-styles><office:body><office:text><text:p><draw:frame draw:style-name="fr1" text:anchor-type="paragraph" svg:width="1in" svg:height="1in"><draw:image xlink:href="Pictures/p.png"/><draw:contour-polygon svg:width="1in" svg:height="1in" svg:viewBox="0 0 1000 1000" draw:points="500,0 1000,1000 0,1000" draw:recreate-on-edit="false"/></draw:frame>Text around it.</text:p></office:text></office:body></office:document-content>"#,
-            NS = crate::odt::tests::NS_T
+            NS = crate::text::tests::NS_T
         );
-        let doc = crate::odt::import(&crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("Pictures/p.png", &png)])).unwrap();
+        let doc = crate::text::import(&crate::text::tests::zip_of(&[("content.xml", content.as_bytes()), ("Pictures/p.png", &png)])).unwrap();
         let float = |d: &Document| {
             d.body.iter().find_map(|b| b.as_para()).and_then(|p| p.objects.iter().find_map(|o| o.frame().map(|(_, _, f)| f.clone()))).unwrap()
         };
         let f = float(&doc);
         assert_eq!(f.wrap, want, "{mode}");
         assert_eq!(f.wrap_polygon.as_deref().map(|p| p.points.clone()), Some(vec![[10800, 0], [21600, 21600], [0, 21600]]), "{mode}");
-        let saved = crate::odt::tests::export_model(&doc).unwrap();
-        let c = crate::odt::tests::content_of(&saved);
+        let saved = crate::text::tests::export_model(&doc).unwrap();
+        let c = crate::text::tests::content_of(&saved);
         assert!(c.contains(&format!(r#"style:wrap-contour="true" style:wrap-contour-mode="{mode}""#)), "{c}");
         assert!(c.contains(r#"draw:points="10800,0 21600,21600 0,21600""#), "{c}");
-        let back = float(&crate::odt::import(&saved).unwrap());
+        let back = float(&crate::text::import(&saved).unwrap());
         assert_eq!((back.wrap, back.wrap_polygon), (f.wrap, f.wrap_polygon));
     }
 }
@@ -323,10 +323,10 @@ fn contour_wrapping_and_its_outline_are_kept() {
 fn a_contour_outside_its_view_box_is_worked_out_instead() {
     // Points far past the view box: not the frame's coordinates, so no polygon (the outline is
     // derived from the object), though the wrap stays a contour one.
-    let a: crate::odt::xml::Attrs = vec![("svg:viewBox".into(), "0 0 100 100".into()), ("draw:points".into(), "0,0 100,150 0,100".into())];
-    assert!(crate::odt::frames::contour_polygon(&a).is_none());
-    let a: crate::odt::xml::Attrs = vec![("svg:viewBox".into(), "0 0 100 100".into()), ("draw:points".into(), "0,0 100,100 0,100".into())];
-    assert!(crate::odt::frames::contour_polygon(&a).is_some());
+    let a: crate::text::xml::Attrs = vec![("svg:viewBox".into(), "0 0 100 100".into()), ("draw:points".into(), "0,0 100,150 0,100".into())];
+    assert!(crate::text::frames::contour_polygon(&a).is_none());
+    let a: crate::text::xml::Attrs = vec![("svg:viewBox".into(), "0 0 100 100".into()), ("draw:points".into(), "0,0 100,100 0,100".into())];
+    assert!(crate::text::frames::contour_polygon(&a).is_some());
 }
 
 #[test]
@@ -334,23 +334,23 @@ fn a_drawing_outside_any_paragraph_belongs_to_the_next_one() {
     // LibreOffice puts page-anchored frames before the first paragraph. They join it rather
     // than making a paragraph of their own, which would start the document on the default page
     // style instead of the one the first paragraph asks for.
-    let ns = crate::odt::tests::NS_T;
+    let ns = crate::text::tests::NS_T;
     let styles = format!(
         r#"<office:document-styles {ns}><office:styles><style:style style:name="Opening" style:family="paragraph" style:master-page-name="First"/></office:styles><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>Running head</text:p></style:header></style:master-page><style:master-page style:name="First" style:page-layout-name="pm1" style:next-style-name="Standard"/></office:master-styles></office:document-styles>"#
     );
     let content = format!(
         r#"<office:document-content {ns} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"><office:body><office:text><draw:frame text:anchor-type="page" text:anchor-page-number="1" svg:x="1in" svg:y="2in" svg:width="2in" svg:height="1in"><draw:text-box><text:p>Address</text:p></draw:text-box></draw:frame><text:p text:style-name="Opening">Dear reader,</text:p><text:p>Body.</text:p></office:text></office:body></office:document-content>"#
     );
-    let d = import(&crate::odt::tests::package(&content, Some(&styles))).unwrap();
-    let paras: Vec<&wordcraft_doc::Paragraph> = d.body.iter().filter_map(|b| b.as_para()).collect();
+    let d = import(&crate::text::tests::package(&content, Some(&styles))).unwrap();
+    let paras: Vec<&craft_wordmodel::Paragraph> = d.body.iter().filter_map(|b| b.as_para()).collect();
     assert_eq!(paras.len(), 2, "no paragraph of the frame's own");
-    assert_eq!(paras[0].text.replace(wordcraft_doc::para::OBJ, ""), "Dear reader,");
+    assert_eq!(paras[0].text.replace(craft_wordmodel::para::OBJ, ""), "Dear reader,");
     assert_eq!(paras[0].objects.len(), 1);
     // One section, starting on the first page style: a different first page without the head.
     assert!(d.last_section.title_page && d.last_section.headers.default.is_some());
     // Drawings with no paragraph after them still get one.
     let tail = content.replace(r#"<text:p text:style-name="Opening">Dear reader,</text:p><text:p>Body.</text:p>"#, "");
-    let d = import(&crate::odt::tests::package(&tail, Some(&styles))).unwrap();
+    let d = import(&crate::text::tests::package(&tail, Some(&styles))).unwrap();
     assert_eq!(d.body.iter().filter_map(|b| b.as_para()).map(|p| p.objects.len()).sum::<usize>(), 1);
 }
 
@@ -359,13 +359,13 @@ fn a_frame_keeps_its_place_in_the_stacking_order() {
     // §19.231 `draw:z-index`: 0 at the bottom; WordCraft's z counts from 1 (0 is unknown).
     let d = open(r#"style:wrap="run-through""#, r#"text:anchor-type="paragraph" draw:z-index="3""#);
     assert_eq!(float(&d).z, 4);
-    let saved = crate::odt::tests::export_model(&d).unwrap();
-    assert!(crate::odt::tests::entry(&saved, "content.xml").contains(r#"draw:z-index="3""#));
+    let saved = crate::text::tests::export_model(&d).unwrap();
+    assert!(crate::text::tests::entry(&saved, "content.xml").contains(r#"draw:z-index="3""#));
     assert_eq!(float(&import(&saved).unwrap()).z, 4);
     // Unknown (inserted in WordCraft): at the bottom, in document order.
     let d = open(r#"style:wrap="run-through""#, r#"text:anchor-type="paragraph""#);
     assert_eq!(float(&d).z, 0);
-    assert!(crate::odt::tests::entry(&crate::odt::tests::export_model(&d).unwrap(), "content.xml").contains(r#"draw:z-index="0""#));
+    assert!(crate::text::tests::entry(&crate::text::tests::export_model(&d).unwrap(), "content.xml").contains(r#"draw:z-index="0""#));
 }
 
 #[test]
@@ -376,20 +376,20 @@ fn a_frame_anchored_to_a_page_stays_on_that_page() {
         let content = format!(
             r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><draw:frame {attrs} svg:x="5cm" svg:y="5cm" svg:width="4cm" svg:height="2cm"><draw:text-box><text:p>On it</text:p></draw:text-box></draw:frame><text:p>One</text:p></office:text></office:body></office:document-content>"#
         );
-        import(&crate::odt::tests::package(&content, None)).unwrap()
+        import(&crate::text::tests::package(&content, None)).unwrap()
     };
     let d = frame(r#"text:anchor-type="page" text:anchor-page-number="3""#);
-    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    let c = crate::text::tests::content_of(&crate::text::tests::export_model(&d).unwrap());
     assert!(c.contains(r#"text:anchor-type="page" text:anchor-page-number="3""#), "{c}");
     let back =
-        crate::odt::tests::content_of(&crate::odt::tests::export_model(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()).unwrap());
+        crate::text::tests::content_of(&crate::text::tests::export_model(&import(&crate::text::tests::export_model(&d).unwrap()).unwrap()).unwrap());
     assert!(back.contains(r#"text:anchor-page-number="3""#), "again: {back}");
     // A frame anchored to its paragraph names no page, and junk is none.
-    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&frame(r#"text:anchor-type="paragraph""#)).unwrap());
+    let c = crate::text::tests::content_of(&crate::text::tests::export_model(&frame(r#"text:anchor-type="paragraph""#)).unwrap());
     assert!(!c.contains("anchor-page-number"), "{c}");
     for junk in ["-1", "abc", "", "99999999999999"] {
         let d = frame(&format!(r#"text:anchor-type="page" text:anchor-page-number="{junk}""#));
-        let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+        let c = crate::text::tests::content_of(&crate::text::tests::export_model(&d).unwrap());
         assert!(!c.contains("anchor-page-number"), "{junk}: {c}");
     }
 }
@@ -402,7 +402,7 @@ fn a_page_number_on_another_anchor_is_no_page_anchor() {
         let content = format!(
             r#"<office:document-content {NS_T} {NS_D}><office:automatic-styles>{styles}</office:automatic-styles><office:body><office:text>{body}</office:text></office:body></office:document-content>"#
         );
-        crate::odt::tests::content_of(&crate::odt::tests::export_model(&import(&crate::odt::tests::package(&content, None)).unwrap()).unwrap())
+        crate::text::tests::content_of(&crate::text::tests::export_model(&import(&crate::text::tests::package(&content, None)).unwrap()).unwrap())
     };
     let frame = |attrs: &str| {
         format!(
@@ -444,7 +444,7 @@ fn a_frame_offering_several_formats_shows_the_first_it_can_read() {
     let both = frame(&["Pictures/a.svm", "Pictures/a.png"]);
     let d = import(&zip_of(&[("content.xml", both.as_bytes()), ("Pictures/a.svm", &svm), ("Pictures/a.png", &png)])).unwrap();
     assert_eq!(pictures(&d), 1, "the PNG");
-    let back = import(&crate::odt::tests::export_model(&d).unwrap()).unwrap();
+    let back = import(&crate::text::tests::export_model(&d).unwrap()).unwrap();
     assert_eq!(pictures(&back), 1, "written from the model");
     // The first it can read, not the last.
     let order = frame(&["Pictures/a.png", "Pictures/b.png"]);

@@ -1,10 +1,10 @@
 //! Paragraph borders, their padding and background (ODF 1.3 §20.182 `fo:background-color`,
 //! §20.183 `fo:border*`, §20.217–20.221 `fo:padding*` on `style:paragraph-properties`).
 
-use crate::odt::tests::{NS_T, package};
-use crate::odt::{export, import};
-use wordcraft_doc::props::{Border, BorderStyle, Borders, ParaProps};
-use wordcraft_doc::{Document, Paragraph, Rgb, para_block};
+use crate::text::tests::{NS_T, package};
+use crate::text::{export, import};
+use craft_wordmodel::props::{Border, BorderStyle, Borders, ParaProps};
+use craft_wordmodel::{Document, Paragraph, Rgb, para_block};
 
 fn open(props: &str, text: &str) -> Document {
     let content = format!(
@@ -48,9 +48,9 @@ fn padding_without_a_border_keeps_its_room() {
     assert_eq!(d.styles.resolve_para(&p).padding, [36.0; 4]);
     assert!(d.settings.odf.is_some());
     // Written back as padding.
-    let out = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    let out = crate::text::tests::content_of(&crate::text::tests::export_model(&d).unwrap());
     assert!(out.contains(r#"fo:border-top="none" fo:padding-top="36pt""#), "{out}");
-    let back = crate::odt::import(&crate::odt::tests::export_model(&d).unwrap()).unwrap();
+    let back = crate::text::import(&crate::text::tests::export_model(&d).unwrap()).unwrap();
     assert_eq!(back.styles.resolve_para(&props(&back)).padding, [36.0; 4]);
 }
 
@@ -71,7 +71,7 @@ fn borders_and_background_round_trip() {
     };
     let mut p = Paragraph::new();
     p.text = "Boxed".into();
-    p.runs = vec![wordcraft_doc::para::Run { len: 5, props: Default::default() }];
+    p.runs = vec![craft_wordmodel::para::Run { len: 5, props: Default::default() }];
     p.props = want.clone();
     let mut d = Document::new();
     d.body = vec![para_block(p)];

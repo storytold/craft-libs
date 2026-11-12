@@ -1,11 +1,11 @@
 //! Ruby (ODF 1.3 §6.4 `text:ruby`: a base text with ruby text over it, furigana or pinyin) read as
 //! WordCraft's Phonetic Guide and written back as ODF ruby.
 
-use crate::odt::tests::{NS_T, content_of, package};
-use crate::odt::{export, import};
-use wordcraft_doc::para::InlineObject;
+use crate::text::tests::{NS_T, content_of, package};
+use crate::text::{export, import};
+use craft_wordmodel::para::InlineObject;
 
-fn open(p: &str) -> wordcraft_doc::Document {
+fn open(p: &str) -> craft_wordmodel::Document {
     let content = format!(
         r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="Ru1" style:family="ruby"><style:ruby-properties style:ruby-position="above" style:ruby-align="center"/></style:style></office:automatic-styles><office:body><office:text>{p}</office:text></office:body></office:document-content>"#
     );
@@ -13,14 +13,14 @@ fn open(p: &str) -> wordcraft_doc::Document {
 }
 
 /// Each ruby: (base, ruby text), and the paragraph's text.
-fn rubies(d: &wordcraft_doc::Document) -> (Vec<(String, String)>, String) {
+fn rubies(d: &craft_wordmodel::Document) -> (Vec<(String, String)>, String) {
     let p = d.body.iter().find_map(|b| b.as_para()).unwrap();
     let r = p
         .objects
         .iter()
         .filter_map(|o| if let InlineObject::Ruby { base, ruby, .. } = o { Some((base.clone(), ruby.clone())) } else { None })
         .collect();
-    (r, p.text.replace(wordcraft_doc::para::OBJ, "[R]"))
+    (r, p.text.replace(craft_wordmodel::para::OBJ, "[R]"))
 }
 
 #[test]

@@ -3,11 +3,11 @@
 //! page colour and borders, footnote and endnote numbering, and line numbering, read into the
 //! document's and its sections' settings and written back.
 
-use crate::odt::tests::{NS_T, package};
-use crate::odt::{export, import};
-use wordcraft_doc::Document;
-use wordcraft_doc::props::{BorderStyle, Rgb};
-use wordcraft_doc::section::{LineNumberRestart, NoteRestart, NumFormat};
+use crate::text::tests::{NS_T, package};
+use crate::text::{export, import};
+use craft_wordmodel::Document;
+use craft_wordmodel::props::{BorderStyle, Rgb};
+use craft_wordmodel::section::{LineNumberRestart, NoteRestart, NumFormat};
 
 fn open() -> Document {
     let styles = format!(
@@ -99,7 +99,7 @@ fn hostile_page_settings_do_not_panic() {
     );
     let d = import(&package(&content, Some(&styles))).unwrap();
     let s = settings(&d);
-    assert!(s.4.is_none_or(|n| n <= wordcraft_doc::section::MAX_NOTE_START), "{s:?}");
+    assert!(s.4.is_none_or(|n| n <= craft_wordmodel::section::MAX_NOTE_START), "{s:?}");
     assert!(s.7.as_ref().is_none_or(|l| l.0 >= 1 && l.1.is_finite() && l.1 <= 1584.0), "{s:?}");
     let _ = export(&d).unwrap();
 }
@@ -125,20 +125,20 @@ fn a_page_layout_without_a_size_is_the_default_pages_size() {
     // (the user's region's in WordCraft, as LibreOffice uses its own default).
     let styles = format!(
         r#"<office:document-styles {}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:margin-top="1in" fo:margin-bottom="1in" fo:margin-left="1.25in" fo:margin-right="1.25in"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>"#,
-        crate::odt::tests::NS_T
+        crate::text::tests::NS_T
     );
     let content = format!(
         "<office:document-content {}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>",
-        crate::odt::tests::NS_T
+        crate::text::tests::NS_T
     );
-    let bytes = crate::odt::tests::package(&content, Some(&styles));
-    let a4 = wordcraft_doc::SectionProps { page_w: 595.3, page_h: 841.9, ..Default::default() };
-    let d = crate::import_on("odt", &bytes, &a4).unwrap().unwrap();
+    let bytes = crate::text::tests::package(&content, Some(&styles));
+    let a4 = craft_wordmodel::SectionProps { page_w: 595.3, page_h: 841.9, ..Default::default() };
+    let d = crate::text::tests::import_on_ext("odt", &bytes, &a4).unwrap().unwrap();
     assert_eq!((d.last_section.page_w, d.last_section.page_h), (595.3, 841.9));
     assert_eq!((d.last_section.margin_top, d.last_section.margin_left), (72.0, 90.0));
     // A stated size is the file's.
     let sized = styles.replace(r#"<style:page-layout-properties "#, r#"<style:page-layout-properties fo:page-width="5in" fo:page-height="7in" "#);
-    let d = crate::import_on("odt", &crate::odt::tests::package(&content, Some(&sized)), &a4).unwrap().unwrap();
+    let d = crate::text::tests::import_on_ext("odt", &crate::text::tests::package(&content, Some(&sized)), &a4).unwrap().unwrap();
     assert_eq!((d.last_section.page_w, d.last_section.page_h), (360.0, 504.0));
 }
 
@@ -149,10 +149,10 @@ fn a_document_without_a_page_layout_has_the_default_paper_and_no_margins() {
     // It is laid out as an ODF document.
     let content = format!(
         "<office:document-content {}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>",
-        crate::odt::tests::NS_T
+        crate::text::tests::NS_T
     );
-    let a4 = wordcraft_doc::SectionProps { page_w: 595.3, page_h: 841.9, ..Default::default() };
-    let d = crate::import_on("odt", &crate::odt::tests::package(&content, None), &a4).unwrap().unwrap();
+    let a4 = craft_wordmodel::SectionProps { page_w: 595.3, page_h: 841.9, ..Default::default() };
+    let d = crate::text::tests::import_on_ext("odt", &crate::text::tests::package(&content, None), &a4).unwrap().unwrap();
     let s = &d.last_section;
     assert_eq!((s.page_w, s.page_h), (595.3, 841.9));
     assert_eq!([s.margin_top, s.margin_bottom, s.margin_left, s.margin_right], [0.0; 4], "{s:?}");
@@ -163,18 +163,18 @@ fn a_document_without_a_page_layout_has_the_default_paper_and_no_margins() {
 fn a_page_layout_stating_nothing_has_no_margins() {
     // LibreOffice's CV template: a page layout with no properties at all. Its margins are XSL's
     // initial value, 0.
-    let ns = crate::odt::tests::NS_T;
+    let ns = crate::text::tests::NS_T;
     let styles = format!(
         r#"<office:document-styles {ns}><office:automatic-styles><style:page-layout style:name="Mpm1"><style:header-style/><style:footer-style/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="Mpm1"/></office:master-styles></office:document-styles>"#
     );
     let content =
         format!("<office:document-content {ns}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>");
-    let d = crate::import("odt", &crate::odt::tests::package(&content, Some(&styles))).unwrap().unwrap();
+    let d = crate::text::tests::import_ext("odt", &crate::text::tests::package(&content, Some(&styles))).unwrap().unwrap();
     let s = &d.last_section;
     assert_eq!([s.margin_top, s.margin_bottom, s.margin_left, s.margin_right], [0.0; 4]);
     // One margin stated: that one is the file's.
     let one = styles.replace("<style:header-style/>", r#"<style:page-layout-properties fo:margin-left="1in"/><style:header-style/>"#);
-    let d = crate::import("odt", &crate::odt::tests::package(&content, Some(&one))).unwrap().unwrap();
+    let d = crate::text::tests::import_ext("odt", &crate::text::tests::package(&content, Some(&one))).unwrap().unwrap();
     assert_eq!((d.last_section.margin_left, d.last_section.margin_top), (72.0, 0.0));
 }
 
@@ -187,7 +187,7 @@ fn a_page_background_picture_is_read_and_written() {
         img.write_to(&mut out, image::ImageFormat::Png).unwrap();
         out.into_inner()
     };
-    let ns = crate::odt::tests::NS_T;
+    let ns = crate::text::tests::NS_T;
     let layout = |repeat: &str| {
         format!(
             r#"<office:document-styles {ns} xmlns:xlink="http://www.w3.org/1999/xlink"><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in"><style:background-image xlink:href="Pictures/map.png" style:position="center center" {repeat}/></style:page-layout-properties></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>"#
@@ -197,21 +197,21 @@ fn a_page_background_picture_is_read_and_written() {
         format!("<office:document-content {ns}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>");
     for (repeat, fill) in [(r#"style:repeat="no-repeat""#, "center"), (r#"style:repeat="stretch""#, "frame"), ("", "tile")] {
         let styles = layout(repeat);
-        let pkg = crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/map.png", &png)]);
-        let d = crate::odt::import(&pkg).unwrap();
+        let pkg = crate::text::tests::zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/map.png", &png)]);
+        let d = crate::text::import(&pkg).unwrap();
         let pic = d.settings.page_picture.as_ref().expect("a page picture");
         assert_eq!(pic.fill_type, fill);
         assert_eq!(d.media.get(&pic.media).map(|b| b.as_slice()), Some(png.as_slice()));
         // Written back in the page layout, the picture in the package.
-        let saved = crate::odt::export(&d).unwrap();
-        let s = crate::odt::tests::entry(&saved, "styles.xml");
+        let saved = crate::text::export(&d).unwrap();
+        let s = crate::text::tests::entry(&saved, "styles.xml");
         let want_repeat = match fill {
             "center" => "no-repeat",
             "frame" => "stretch",
             _ => "repeat",
         };
         assert!(s.contains(&format!(r#"style:repeat="{want_repeat}""#)) && s.contains("Pictures/page-background.png"), "{s}");
-        let again = crate::odt::import(&saved).unwrap();
+        let again = crate::text::import(&saved).unwrap();
         assert_eq!(again.settings.page_picture.as_ref().map(|p| p.fill_type.as_str()), Some(fill));
     }
 }
@@ -222,11 +222,11 @@ fn a_page_borders_padding_keeps_the_text_where_it_was() {
     // 45 pt of padding inside it (more than Word's 31 pt border spacing, which is measured
     // differently): the text stays 72 pt from the edge, written and read back.
     let mut d = Document::new();
-    d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("x", Default::default()))];
-    let edge = wordcraft_doc::props::Border { style: BorderStyle::Single, width: 3.0, color: Some(Rgb(0x2f, 0x55, 0x97)), space: 24.0 };
+    d.body = vec![craft_wordmodel::para_block(craft_wordmodel::Paragraph::with_text("x", Default::default()))];
+    let edge = craft_wordmodel::props::Border { style: BorderStyle::Single, width: 3.0, color: Some(Rgb(0x2f, 0x55, 0x97)), space: 24.0 };
     d.last_section.page_borders =
-        Some(wordcraft_doc::props::Borders { top: Some(edge), bottom: Some(edge), left: Some(edge), right: Some(edge), ..Default::default() });
-    let back = crate::odt::import(&crate::odt::export(&d).unwrap()).unwrap();
+        Some(craft_wordmodel::props::Borders { top: Some(edge), bottom: Some(edge), left: Some(edge), right: Some(edge), ..Default::default() });
+    let back = crate::text::import(&crate::text::export(&d).unwrap()).unwrap();
     let s = &back.last_section;
     for m in [s.margin_top, s.margin_bottom, s.margin_left, s.margin_right] {
         assert!((m - 72.0).abs() < 0.05, "{s:?}");

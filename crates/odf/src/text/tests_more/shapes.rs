@@ -2,11 +2,11 @@
 //! `draw:custom-shape` with its `draw:enhanced-geometry` type): opened as WordCraft shapes with
 //! their size, placement, fill, line and text, and written back as the same elements.
 
-use crate::odt::tests::{NS_T, content_of, package};
-use crate::odt::{export, import};
-use wordcraft_doc::para::{InlineObject, OBJ, ShapeKind, Wrap};
-use wordcraft_doc::props::Rgb;
-use wordcraft_doc::{Document, Paragraph, para_block};
+use crate::text::tests::{NS_T, content_of, package};
+use crate::text::{export, import};
+use craft_wordmodel::para::{InlineObject, OBJ, ShapeKind, Wrap};
+use craft_wordmodel::props::Rgb;
+use craft_wordmodel::{Document, Paragraph, para_block};
 
 const NS_D: &str =
     r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0""#;
@@ -93,7 +93,7 @@ fn shapes_open_with_their_kind_size_look_and_text() {
 #[test]
 fn shapes_round_trip() {
     let d = open();
-    let bytes = crate::odt::tests::export_model(&d).unwrap();
+    let bytes = crate::text::tests::export_model(&d).unwrap();
     let c = content_of(&bytes);
     for el in ["<draw:rect ", "<draw:ellipse ", "<draw:line ", r#"draw:type="round-rectangle""#, r#"draw:type="heart""#] {
         assert!(c.contains(el), "{el} in {c}");
@@ -129,7 +129,7 @@ fn every_wordcraft_shape_kind_is_written_and_read_back() {
             kind: k,
             w: 50.0,
             h: 40.0,
-            fill: Some(wordcraft_doc::fill::Fill::solid(Rgb(1, 2, 3))),
+            fill: Some(craft_wordmodel::fill::Fill::solid(Rgb(1, 2, 3))),
             stroke: Some(Rgb(4, 5, 6)),
             stroke_width: 1.5,
             float: Default::default(),
@@ -139,7 +139,7 @@ fn every_wordcraft_shape_kind_is_written_and_read_back() {
             extra: Default::default(),
         });
     }
-    p.runs = vec![wordcraft_doc::para::Run { len: p.text.len(), props: Default::default() }];
+    p.runs = vec![craft_wordmodel::para::Run { len: p.text.len(), props: Default::default() }];
     let mut d = Document::new();
     d.body = vec![para_block(p)];
     let back = import(&export(&d).unwrap()).unwrap();
@@ -175,7 +175,7 @@ fn a_shape_keeps_its_size_unless_it_grows_to_its_text() {
         d.body[0].as_para().unwrap().objects.iter().filter_map(|o| o.text_box()).map(|id| d.parts.get(&id).unwrap().body.auto_fit).collect()
     };
     assert_eq!(fits(&d), [false, true]);
-    let bytes = crate::odt::tests::export_model(&d).unwrap();
+    let bytes = crate::text::tests::export_model(&d).unwrap();
     // LibreOffice resizes a shape with text to it unless told not to.
     assert!(content_of(&bytes).contains(r#"draw:auto-grow-height="false" draw:auto-grow-width="false""#));
     assert_eq!(fits(&import(&bytes).unwrap()), [false, true]);

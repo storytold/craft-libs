@@ -1,10 +1,10 @@
 //! Text boxes (ODF 1.3 §10.4.3 `draw:frame` holding a `draw:text-box`): their text opens as a
 //! text box's story, in place and floating as the frame says, and is written back the same way.
 
-use crate::odt::tests::{NS_T, package};
-use crate::odt::{export, import};
-use wordcraft_doc::para::{InlineObject, OBJ, ShapeKind, Wrap};
-use wordcraft_doc::{Document, PartKind};
+use crate::text::tests::{NS_T, package};
+use crate::text::{export, import};
+use craft_wordmodel::para::{InlineObject, OBJ, ShapeKind, Wrap};
+use craft_wordmodel::{Document, PartKind};
 
 const NS_D: &str =
     r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0""#;
@@ -66,7 +66,7 @@ fn hostile_text_boxes_do_not_panic() {
 
 /// Each text box's look: (fill, outline colour and width, inner margins in points, grows to fit).
 #[allow(clippy::type_complexity)]
-fn looks(d: &Document) -> Vec<(Option<wordcraft_doc::props::Rgb>, Option<(wordcraft_doc::props::Rgb, f32)>, [f32; 4], bool)> {
+fn looks(d: &Document) -> Vec<(Option<craft_wordmodel::props::Rgb>, Option<(craft_wordmodel::props::Rgb, f32)>, [f32; 4], bool)> {
     let mut out = Vec::new();
     for b in d.body.iter() {
         let Some(p) = b.as_para() else { continue };
@@ -95,7 +95,7 @@ fn open_styled() -> Document {
 
 #[test]
 fn a_box_keeps_its_frame_look() {
-    use wordcraft_doc::props::Rgb;
+    use craft_wordmodel::props::Rgb;
     let d = open_styled();
     assert_eq!(
         looks(&d),
@@ -136,7 +136,7 @@ fn a_box_growing_from_nothing_stays_that_way() {
     let d = import(&package(&content, None)).unwrap();
     assert!(looks(&d)[0].3);
     assert_eq!(boxes(&d)[0].0, (72.0, 1.0));
-    let saved = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    let saved = crate::text::tests::content_of(&crate::text::tests::export_model(&d).unwrap());
     assert!(saved.contains(r#"<draw:text-box fo:min-height="1pt">"#) && !saved.contains("svg:height"), "{saved}");
 }
 
@@ -145,11 +145,11 @@ fn a_text_box_frame_derives_from_the_frame_style() {
     // LibreOffice draws a frame's border (`fo:border`) only when its style derives from the
     // Frame style; otherwise it outlines the box in its default shape line instead.
     let d = open(r#"text:anchor-type="paragraph" svg:width="2in""#, "<text:p>In the box.</text:p>");
-    let pkg = crate::odt::tests::export_model(&d).unwrap();
-    let content = crate::odt::tests::content_of(&pkg);
+    let pkg = crate::text::tests::export_model(&d).unwrap();
+    let content = crate::text::tests::content_of(&pkg);
     let style = content.split("<style:style ").find(|s| s.contains("fo:border")).unwrap_or_default();
     assert!(style.contains(r#"style:parent-style-name="Frame""#), "{content}");
-    assert!(crate::odt::tests::styles_of(&pkg).contains(r#"<style:style style:name="Frame" style:family="graphic"/>"#));
+    assert!(crate::text::tests::styles_of(&pkg).contains(r#"<style:style style:name="Frame" style:family="graphic"/>"#));
 }
 
 /// Each text box's story id and the box its text continues in.
@@ -180,8 +180,8 @@ fn linked_text_boxes_stay_linked() {
     let l = links(&d);
     assert_eq!(l.len(), 2);
     assert_eq!(l[0].1, Some(l[1].0), "{l:?}");
-    let saved = crate::odt::tests::export_model(&d).unwrap();
-    let c = crate::odt::tests::content_of(&saved);
+    let saved = crate::text::tests::export_model(&d).unwrap();
+    let c = crate::text::tests::content_of(&saved);
     assert!(c.contains(&format!(r#"draw:chain-next-name="Frame{}""#, l[1].0)), "{c}");
     let back = links(&import(&saved).unwrap());
     assert_eq!(back[0].1, Some(back[1].0));
@@ -207,7 +207,7 @@ fn a_picture_in_a_section_in_a_page_anchored_text_box_is_kept() {
     let content = format!(
         r#"<office:document-content {NS_T} {NS_D} xmlns:xlink="http://www.w3.org/1999/xlink"><office:automatic-styles><style:style style:name="fr4" style:family="graphic"><style:graphic-properties style:wrap="parallel" style:horizontal-pos="center" style:horizontal-rel="paragraph"/></style:style></office:automatic-styles><office:body><office:text>{boxes}<text:p>Fax.</text:p></office:text></office:body></office:document-content>"#
     );
-    let pkg = crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("Pictures/logo.png", &png)]);
+    let pkg = crate::text::tests::zip_of(&[("content.xml", content.as_bytes()), ("Pictures/logo.png", &png)]);
     let d = import(&pkg).unwrap();
     let pictures: usize = d
         .parts
@@ -220,9 +220,9 @@ fn a_picture_in_a_section_in_a_page_anchored_text_box_is_kept() {
     assert_eq!(pictures, 1, "the logo in its box");
     assert_eq!(boxes_of(&d), 2);
     // And saved in it: as read, and from the model.
-    let c = crate::odt::tests::content_of(&export(&d).unwrap());
+    let c = crate::text::tests::content_of(&export(&d).unwrap());
     assert_eq!(c.matches("<draw:image ").count(), 1, "{c}");
-    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    let c = crate::text::tests::content_of(&crate::text::tests::export_model(&d).unwrap());
     assert_eq!(c.matches("<draw:image ").count(), 1, "{c}");
     // Its frame's style derives from Graphics: LibreOffice shows a floating picture in a text box
     // only so.
@@ -260,7 +260,7 @@ fn a_windows_metafile_picture_is_kept() {
     let content = format!(
         r#"<office:document-content {NS_T} {NS_D} xmlns:xlink="http://www.w3.org/1999/xlink"><office:body><office:text><text:p><draw:frame text:anchor-type="as-char"><draw:image xlink:href="Pictures/logo.wmf"/></draw:frame> and <draw:frame text:anchor-type="as-char" svg:width="2in" svg:height="1in"><draw:image xlink:href="Pictures/logo.wmf"/></draw:frame></text:p></office:text></office:body></office:document-content>"#
     );
-    let pkg = crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("Pictures/logo.wmf", &wmf())]);
+    let pkg = crate::text::tests::zip_of(&[("content.xml", content.as_bytes()), ("Pictures/logo.wmf", &wmf())]);
     let d = import(&pkg).unwrap();
     let sizes: Vec<(f32, f32)> = d.body[0]
         .as_para()
@@ -273,7 +273,7 @@ fn a_windows_metafile_picture_is_kept() {
     assert_eq!(sizes, [(72.0, 36.0), (144.0, 72.0)]);
     // Saved with its own media type.
     let saved = export(&d).unwrap();
-    assert!(crate::odt::tests::entry(&saved, "META-INF/manifest.xml").contains("image/x-wmf"));
+    assert!(crate::text::tests::entry(&saved, "META-INF/manifest.xml").contains("image/x-wmf"));
     assert_eq!(import(&saved).unwrap().body[0].as_para().unwrap().objects.len(), 2);
 }
 
@@ -303,9 +303,9 @@ fn a_custom_style_only_in_a_text_box_is_kept() {
         d.styles.resolve_para(&p.props).align
     };
     let d = import(&package(&content, Some(&styles))).unwrap();
-    assert_eq!(centred(&d), wordcraft_doc::props::Align::Center);
+    assert_eq!(centred(&d), craft_wordmodel::props::Align::Center);
     let back = import(&export(&d).unwrap()).unwrap();
-    assert_eq!(centred(&back), wordcraft_doc::props::Align::Center);
+    assert_eq!(centred(&back), craft_wordmodel::props::Align::Center);
 }
 
 #[test]
@@ -321,7 +321,7 @@ fn a_frames_drawn_stroke_is_its_line_when_it_has_no_border() {
     let line = |d: &Document| looks(d).first().map(|l| l.1).expect("a box");
     let stroke = r##"draw:stroke="solid" svg:stroke-width="0cm" svg:stroke-color="#000000""##;
     // A 0 width draws at a hairline, 0.25 pt.
-    assert_eq!(line(&open_with(stroke)), Some((wordcraft_doc::props::Rgb::BLACK, 0.25)));
+    assert_eq!(line(&open_with(stroke)), Some((craft_wordmodel::props::Rgb::BLACK, 0.25)));
     assert_eq!(line(&open_with(&format!(r#"{stroke} fo:border="none""#))), None);
     assert_eq!(line(&open_with("")), None);
 }

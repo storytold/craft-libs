@@ -4,10 +4,10 @@
 //! fields around their entries, in the TOC styles), so Update Table works on them, and written
 //! back as ODF indexes LibreOffice updates.
 
-use crate::odt::tests::{NS_T, content_of, package, styles_of};
-use crate::odt::{export, import};
-use wordcraft_doc::para::{InlineObject, OBJ};
-use wordcraft_doc::{Document, Paragraph, para_block};
+use crate::text::tests::{NS_T, content_of, package, styles_of};
+use crate::text::{export, import};
+use craft_wordmodel::para::{InlineObject, OBJ};
+use craft_wordmodel::{Document, Paragraph, para_block};
 
 const NS_X: &str = r#"xmlns:xlink="http://www.w3.org/1999/xlink""#;
 
@@ -143,18 +143,18 @@ fn index_marks_are_xe_fields_and_written_back() {
     let body = r#"<text:p>Fruit <text:alphabetical-index-mark text:string-value="apple" text:key1="Fruit"/>is sweet; <text:alphabetical-index-mark-start text:id="m1"/>bananas<text:alphabetical-index-mark-end text:id="m1"/> too.</text:p><text:p><text:alphabetical-index-mark text:string-value="a &quot;quoted&quot; one: here"/></text:p>"#;
     let content =
         format!(r#"<office:document-content {NS_T}><office:body><office:text>{body}</office:text></office:body></office:document-content>"#);
-    let d = import(&crate::odt::tests::package(&content, None)).unwrap();
+    let d = import(&crate::text::tests::package(&content, None)).unwrap();
     let xe: Vec<String> = d
         .body
         .iter()
         .filter_map(|b| b.as_para())
         .flat_map(|p| p.objects.iter())
-        .filter_map(|o| if let wordcraft_doc::para::InlineObject::Field { instr, .. } = o { Some(instr.clone()) } else { None })
+        .filter_map(|o| if let craft_wordmodel::para::InlineObject::Field { instr, .. } = o { Some(instr.clone()) } else { None })
         .collect();
     assert_eq!(xe, [r#"XE "Fruit:apple""#, r#"XE "bananas""#, r#"XE "a quoted one here""#]);
     // The marked text stays text.
     assert!(d.body.iter().filter_map(|b| b.as_para()).any(|p| p.text.contains("bananas too.")));
-    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    let c = crate::text::tests::content_of(&crate::text::tests::export_model(&d).unwrap());
     assert!(c.contains(r#"<text:alphabetical-index-mark text:string-value="apple" text:key1="Fruit"/>"#), "{c}");
     assert!(c.contains(r#"<text:alphabetical-index-mark text:string-value="bananas"/>"#), "{c}");
 }

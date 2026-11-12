@@ -5,7 +5,7 @@ use super::{Align, Border, BorderStyle, Borders, Fmt, Kind, LineSpacing, Rgb, mo
 
 /// `style:text-properties` attributes for what only [`Fmt::extra`] holds (underline and strike
 /// are written with the rest); `size` is the text's size, which a raised position is a share of.
-pub(in crate::odt) fn extra_props(x: &wordcraft_doc::props::CharProps, size: Option<f32>) -> String {
+pub(in crate::text) fn extra_props(x: &craft_wordmodel::props::CharProps, size: Option<f32>) -> String {
     let mut p = String::new();
     let on = |v: Option<bool>| v == Some(true);
     if on(x.caps) {
@@ -31,7 +31,7 @@ pub(in crate::odt) fn extra_props(x: &wordcraft_doc::props::CharProps, size: Opt
         p.push_str(&format!(" style:text-scale=\"{}%\"", s.round()));
     }
     if let Some(m) = x.emphasis {
-        use wordcraft_doc::props::EmphasisMark as E;
+        use craft_wordmodel::props::EmphasisMark as E;
         p.push_str(match m {
             E::None => " style:text-emphasize=\"none\"",
             E::Dot => " style:text-emphasize=\"dot above\"",
@@ -64,8 +64,8 @@ pub(in crate::odt) fn extra_props(x: &wordcraft_doc::props::CharProps, size: Opt
 }
 
 /// `style:text-properties` attributes for character properties `cp` (a style's look).
-pub(in crate::odt) fn props_text(cp: &wordcraft_doc::props::CharProps) -> String {
-    use wordcraft_doc::props::{TextColor, Underline, VertAlign};
+pub(in crate::text) fn props_text(cp: &craft_wordmodel::props::CharProps) -> String {
+    use craft_wordmodel::props::{TextColor, Underline, VertAlign};
     let f = Fmt {
         bold: cp.bold == Some(true),
         italic: cp.italic == Some(true),
@@ -86,7 +86,7 @@ pub(in crate::odt) fn props_text(cp: &wordcraft_doc::props::CharProps) -> String
 }
 
 /// `fo:text-align` for `a` (ODF 1.3 §20.223).
-pub(in crate::odt) fn align_attr(a: Option<Align>) -> &'static str {
+pub(in crate::text) fn align_attr(a: Option<Align>) -> &'static str {
     match a {
         Some(Align::Center) => " fo:text-align=\"center\"",
         Some(Align::Right) => " fo:text-align=\"end\"",
@@ -98,7 +98,7 @@ pub(in crate::odt) fn align_attr(a: Option<Align>) -> &'static str {
 
 /// `fo:language`, `fo:script` and `fo:country` (with `suffix`: `-asian`, `-complex` on `style:`)
 /// for BCP 47 tag `tag`. A script is the four-letter subtag after the language.
-pub(in crate::odt) fn lang_attrs(tag: &str, suffix: &str) -> String {
+pub(in crate::text) fn lang_attrs(tag: &str, suffix: &str) -> String {
     let mut parts = tag.split(['-', '_']);
     let ok = |s: &&str| (1..=8).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric());
     let ns = if suffix.is_empty() { "fo" } else { "style" };
@@ -118,19 +118,19 @@ pub(in crate::odt) fn lang_attrs(tag: &str, suffix: &str) -> String {
 }
 
 /// Whether a language tag's subtag is a script (BCP 47: four letters).
-pub(in crate::odt) fn is_script(subtag: &str) -> bool {
+pub(in crate::text) fn is_script(subtag: &str) -> bool {
     subtag.len() == 4 && subtag.chars().all(|c| c.is_ascii_alphabetic())
 }
 
 /// The Asian and complex-script attributes of `x`: fonts, complex size, weight, posture and the
 /// two languages.
-pub(in crate::odt) fn script_attrs(x: &wordcraft_doc::props::CharProps) -> String {
+pub(in crate::text) fn script_attrs(x: &craft_wordmodel::props::CharProps) -> String {
     let mut p = String::new();
     if let Some(f) = x.font_ea.as_deref() {
-        p.push_str(&format!(" style:font-family-asian=\"'{}'\"", crate::odt::writer::x(&f.replace('\'', ""))));
+        p.push_str(&format!(" style:font-family-asian=\"'{}'\"", crate::text::writer::x(&f.replace('\'', ""))));
     }
     if let Some(f) = x.font_cs.as_deref() {
-        p.push_str(&format!(" style:font-family-complex=\"'{}'\"", crate::odt::writer::x(&f.replace('\'', ""))));
+        p.push_str(&format!(" style:font-family-complex=\"'{}'\"", crate::text::writer::x(&f.replace('\'', ""))));
     }
     if let Some(s) = x.size_cs.filter(|s| s.is_finite()) {
         p.push_str(&format!(" style:font-size-complex=\"{}\"", pt(s)));
@@ -150,14 +150,14 @@ pub(in crate::odt) fn script_attrs(x: &wordcraft_doc::props::CharProps) -> Strin
     p
 }
 
-pub(in crate::odt) fn text_props(f: &Fmt) -> String {
+pub(in crate::text) fn text_props(f: &Fmt) -> String {
     let mut p = String::new();
     // Complex-script weight and posture of their own are written with the other script extras.
-    let own_cs = |pick: fn(&wordcraft_doc::props::CharProps) -> Option<bool>| f.extra.as_deref().and_then(pick).is_some();
+    let own_cs = |pick: fn(&craft_wordmodel::props::CharProps) -> Option<bool>| f.extra.as_deref().and_then(pick).is_some();
     let extra = f.extra.as_deref();
     // What it turns off that its style, or the style that is based on, may turn on: said so, or
     // that bold, italic, underline or strike-through would show through.
-    let off = |pick: fn(&wordcraft_doc::props::CharProps) -> Option<bool>| extra.and_then(pick) == Some(false);
+    let off = |pick: fn(&craft_wordmodel::props::CharProps) -> Option<bool>| extra.and_then(pick) == Some(false);
     if f.bold {
         p.push_str(" fo:font-weight=\"bold\" style:font-weight-asian=\"bold\"");
         if !own_cs(|x| x.bold_cs) {
@@ -181,7 +181,7 @@ pub(in crate::odt) fn text_props(f: &Fmt) -> String {
         }
     }
     if f.underline {
-        use wordcraft_doc::props::Underline as U;
+        use craft_wordmodel::props::Underline as U;
         let (style, kind, width, mode) = match extra.and_then(|e| e.underline) {
             Some(U::Double) => ("solid", "double", "auto", ""),
             Some(U::Thick) => ("solid", "single", "bold", ""),
@@ -200,7 +200,7 @@ pub(in crate::odt) fn text_props(f: &Fmt) -> String {
             " style:text-underline-style=\"{style}\" style:text-underline-type=\"{kind}\" style:text-underline-width=\"{width}\" style:text-underline-color=\"{color}\"{mode}"
         ));
     }
-    if !f.underline && extra.is_some_and(|e| e.underline == Some(wordcraft_doc::props::Underline::None)) {
+    if !f.underline && extra.is_some_and(|e| e.underline == Some(craft_wordmodel::props::Underline::None)) {
         p.push_str(" style:text-underline-style=\"none\"");
     }
     if f.strike || extra.is_some_and(|e| e.double_strike == Some(true)) {
@@ -215,7 +215,7 @@ pub(in crate::odt) fn text_props(f: &Fmt) -> String {
         if (f.sup || f.sub) && e.position.is_some() {
             // One `style:text-position` only (a repeated attribute isn't well-formed XML):
             // superscript or subscript, written below, wins over a raised or lowered position.
-            let e = wordcraft_doc::props::CharProps { position: None, ..e.clone() };
+            let e = craft_wordmodel::props::CharProps { position: None, ..e.clone() };
             p.push_str(&extra_props(&e, f.size));
         } else {
             p.push_str(&extra_props(e, f.size));
@@ -255,7 +255,7 @@ pub(in crate::odt) fn text_props(f: &Fmt) -> String {
 
 /// `style:paragraph-properties` attributes for the spacing, indents and line spacing `sp` sets
 /// (ODF 1.3 §20.204–209, §20.225, §20.317).
-pub(in crate::odt) fn spacing_props(sp: &model::Spacing) -> String {
+pub(in crate::text) fn spacing_props(sp: &model::Spacing) -> String {
     let mut p = String::new();
     for (k, v) in [
         ("fo:margin-top", sp.before),
@@ -279,8 +279,8 @@ pub(in crate::odt) fn spacing_props(sp: &model::Spacing) -> String {
 
 /// `style:tab-stops` (ODF 1.3 §17.7) for `tabs`, measured from the margin (the package's
 /// settings say so); bar and clearing stops have no ODF form and are left out.
-pub(in crate::odt) fn tab_stops(tabs: &[wordcraft_doc::props::TabStop]) -> String {
-    use wordcraft_doc::props::{TabAlign, TabLeader};
+pub(in crate::text) fn tab_stops(tabs: &[craft_wordmodel::props::TabStop]) -> String {
+    use craft_wordmodel::props::{TabAlign, TabLeader};
     let mut s = String::from("<style:tab-stops>");
     for t in tabs.iter().filter(|t| t.pos.is_finite()) {
         let kind = match t.align {
@@ -306,7 +306,7 @@ pub(in crate::odt) fn tab_stops(tabs: &[wordcraft_doc::props::TabStop]) -> Strin
 /// An ODF style name (an XML NCName, ODF 1.3 §19.75) for document style id `id`: letters,
 /// digits and `-`, `.` kept, anything else as `_xHH_` (its code point in hex), and a leading
 /// digit, `-` or `.` escaped too.
-pub(in crate::odt) fn odf_name(id: &str) -> String {
+pub(in crate::text) fn odf_name(id: &str) -> String {
     if let Some((name, _)) = generated_style(id) {
         return name;
     }
@@ -323,7 +323,7 @@ pub(in crate::odt) fn odf_name(id: &str) -> String {
 }
 
 /// `fo:border-*` and `fo:padding-*` attributes for paragraph borders `b`, when a side shows.
-pub(in crate::odt) fn border_attrs(b: Option<Borders>) -> String {
+pub(in crate::text) fn border_attrs(b: Option<Borders>) -> String {
     let mut p = String::new();
     // A side without a line may still hold padding (read from ODF), which keeps its room.
     let padded = |l: &Border| !l.is_visible() && l.space.is_finite() && l.space > 0.0;
@@ -341,7 +341,7 @@ pub(in crate::odt) fn border_attrs(b: Option<Borders>) -> String {
 }
 
 /// An ODF border value (ODF 1.3 §20.183) for `b`; `none` for no line.
-pub(in crate::odt) fn odf_border(b: Option<Border>) -> String {
+pub(in crate::text) fn odf_border(b: Option<Border>) -> String {
     let Some(b) = b.filter(|b| b.is_visible() && b.width.is_finite()) else { return "none".into() };
     let style = match b.style {
         BorderStyle::Double | BorderStyle::Triple => "double",
@@ -354,7 +354,7 @@ pub(in crate::odt) fn odf_border(b: Option<Border>) -> String {
     format!("{} {style} #{color}", pt(b.width.clamp(0.05, 12.0)))
 }
 
-pub(in crate::odt) fn parent_style(k: Kind) -> &'static str {
+pub(in crate::text) fn parent_style(k: Kind) -> &'static str {
     match k {
         Kind::Heading(1) => "Heading_20_1",
         Kind::Heading(2) => "Heading_20_2",
@@ -372,7 +372,7 @@ pub(in crate::odt) fn parent_style(k: Kind) -> &'static str {
 /// The LibreOffice style (name and display name) standing for WordCraft's table of contents,
 /// table of figures and index heading styles, which LibreOffice's indexes are generated in:
 /// TOC 1–9 are Contents 1–9, TOC Heading is Contents Heading, Table of Figures is Figure Index 1.
-pub(in crate::odt) fn generated_style(id: &str) -> Option<(String, String)> {
+pub(in crate::text) fn generated_style(id: &str) -> Option<(String, String)> {
     let n = id.strip_prefix("TOC").and_then(|n| n.parse::<u8>().ok()).filter(|n| (1..=9).contains(n));
     Some(match (id, n) {
         (_, Some(n)) => (format!("Contents_20_{n}"), format!("Contents {n}")),
@@ -384,7 +384,7 @@ pub(in crate::odt) fn generated_style(id: &str) -> Option<(String, String)> {
 
 /// The WordCraft style (id and name) a LibreOffice index style `odt` stands for (the reverse
 /// of [`generated_style`]).
-pub(in crate::odt) fn generating_style(odt: &str) -> Option<(String, String)> {
+pub(in crate::text) fn generating_style(odt: &str) -> Option<(String, String)> {
     let n = odt.strip_prefix("Contents_20_").and_then(|n| n.parse::<u8>().ok()).filter(|n| (1..=10).contains(n));
     Some(match (odt, n) {
         (_, Some(n)) => (format!("TOC{}", n.min(9)), format!("TOC {}", n.min(9))),
@@ -405,7 +405,7 @@ mod tests {
                 sup,
                 sub,
                 size: Some(12.0),
-                extra: Some(Box::new(wordcraft_doc::props::CharProps { position: Some(3.0), ..Default::default() })),
+                extra: Some(Box::new(craft_wordmodel::props::CharProps { position: Some(3.0), ..Default::default() })),
                 ..Default::default()
             };
             let p = text_props(&f);
@@ -414,7 +414,7 @@ mod tests {
         // Without superscript or subscript the position is still written.
         let f = Fmt {
             size: Some(12.0),
-            extra: Some(Box::new(wordcraft_doc::props::CharProps { position: Some(3.0), ..Default::default() })),
+            extra: Some(Box::new(craft_wordmodel::props::CharProps { position: Some(3.0), ..Default::default() })),
             ..Default::default()
         };
         assert!(text_props(&f).contains("style:text-position=\"25% 100%\""), "{}", text_props(&f));

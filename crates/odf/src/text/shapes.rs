@@ -4,7 +4,7 @@
 //! geometry from its type alone, so only the type is written.
 
 use super::xml::{Attrs, get, length};
-use wordcraft_doc::para::ShapeKind;
+use craft_wordmodel::para::ShapeKind;
 
 /// Largest size or offset read, points (22 inches).
 const MAX_LEN: f32 = 1584.0;
@@ -89,7 +89,7 @@ pub(super) fn connector_type(kind: ShapeKind) -> &'static str {
 
 /// WordCraft's connection site of a `kind` shape for ODF glue point `g` (§9.2.19: a shape's
 /// default glue points are 0 top, 1 right, 2 bottom, 3 left; see
-/// [`wordcraft_doc::connector::sites`]). `None` for a glue point of its own (4 on) or a shape
+/// [`craft_wordmodel::connector::sites`]). `None` for a glue point of its own (4 on) or a shape
 /// without sides.
 pub(super) fn site_of_glue(kind: ShapeKind, g: u32) -> Option<u32> {
     let sides: [u32; 4] = match kind {
@@ -154,7 +154,7 @@ pub(super) fn geometry(kind: ShapeKind, a: &Attrs) -> (f32, f32, Option<f32>, Op
 
 /// The paths of a polygon, polyline, path or regular polygon `name` (local) with attributes
 /// `a`, `w` × `h` points: in its view box (§19.570 `svg:viewBox`; none: around its points).
-pub(super) fn freeform(name: &str, a: &Attrs, w: f32, h: f32) -> Option<wordcraft_doc::freeform::Freeform> {
+pub(super) fn freeform(name: &str, a: &Attrs, w: f32, h: f32) -> Option<craft_wordmodel::freeform::Freeform> {
     use super::path;
     let vb = path::view_box(get(a, "svg:viewBox"));
     match name {

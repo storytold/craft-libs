@@ -6,8 +6,8 @@ use super::{Borders, Cell, FTable};
 /// one of them only (the left cell's right side is `none`, the right cell's left side draws it),
 /// while WordCraft's cells each draw their own four sides. The cell below is the one in the next
 /// row starting at the same column.
-pub(in crate::odt) fn share_edges(rows: &mut [Vec<Cell>]) {
-    let visible = |b: Option<wordcraft_doc::props::Border>| b.filter(|b| b.is_visible());
+pub(in crate::text) fn share_edges(rows: &mut [Vec<Cell>]) {
+    let visible = |b: Option<craft_wordmodel::props::Border>| b.filter(|b| b.is_visible());
     for r in 0..rows.len() {
         let starts: Vec<usize> = rows
             .get(r)
@@ -66,26 +66,26 @@ pub(in crate::odt) fn share_edges(rows: &mut [Vec<Cell>]) {
     }
 }
 
-pub(in crate::odt) struct TableB {
-    pub(in crate::odt) rows: Vec<Vec<Cell>>,
-    pub(in crate::odt) row: Vec<Cell>,
+pub(in crate::text) struct TableB {
+    pub(in crate::text) rows: Vec<Vec<Cell>>,
+    pub(in crate::text) row: Vec<Cell>,
     /// Covered cells still owed to the previous cell's column span.
-    pub(in crate::odt) hcover: usize,
+    pub(in crate::text) hcover: usize,
     /// Widths in points of the `table:table-column`s so far, 0 where the style gives none.
-    pub(in crate::odt) widths: Vec<f32>,
+    pub(in crate::text) widths: Vec<f32>,
     /// Each column's share of the table (`style:rel-column-width`), 0 where the style gives none.
-    pub(in crate::odt) shares: Vec<f32>,
+    pub(in crate::text) shares: Vec<f32>,
     /// The table's width, points: what the shares divide.
-    pub(in crate::odt) room: Option<f32>,
+    pub(in crate::text) room: Option<f32>,
     /// It is in a cell, a frame or a column narrower than the page, whose width isn't known here.
-    pub(in crate::odt) contained: bool,
-    /// Its alignment and width, and each row's height so far (see [`crate::model::TableExtra`]).
-    pub(in crate::odt) extra: crate::model::TableExtra,
+    pub(in crate::text) contained: bool,
+    /// Its alignment and width, and each row's height so far (see [`craft_flow::TableExtra`]).
+    pub(in crate::text) extra: craft_flow::TableExtra,
     /// The background of each column's default cell style (`table:default-cell-style-name`).
-    pub(in crate::odt) column_backgrounds: Vec<Option<wordcraft_doc::props::Rgb>>,
+    pub(in crate::text) column_backgrounds: Vec<Option<craft_wordmodel::props::Rgb>>,
     /// The table's background, and the row's being read.
-    pub(in crate::odt) background: Option<wordcraft_doc::props::Rgb>,
-    pub(in crate::odt) row_background: Option<wordcraft_doc::props::Rgb>,
+    pub(in crate::text) background: Option<craft_wordmodel::props::Rgb>,
+    pub(in crate::text) row_background: Option<craft_wordmodel::props::Rgb>,
 }
 
 /// The narrowest column the document model keeps (a narrower one would lose the table its grid).
@@ -106,7 +106,7 @@ fn widths_of_shares(widths: &[f32], shares: &[f32], room: f32) -> Vec<f32> {
 }
 
 impl TableB {
-    pub(in crate::odt) fn finish(self) -> FTable {
+    pub(in crate::text) fn finish(self) -> FTable {
         // Columns stating their shares (LibreOffice's tables filling the margins, §20.334) divide
         // the table's width by them; a column with neither leaves the whole grid to the equal split.
         // An aligned table's shares go before the widths its columns state too, as LibreOffice

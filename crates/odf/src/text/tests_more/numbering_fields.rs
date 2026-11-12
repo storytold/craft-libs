@@ -3,10 +3,10 @@
 //! with a bookmark over the caption's label and number for references to it), chapter fields
 //! (`STYLEREF`), reference marks and references to them and to sequences (`REF`, `PAGEREF`).
 
-use crate::odt::tests::{NS_T, content_of, package};
-use crate::odt::{export, import};
-use wordcraft_doc::Document;
-use wordcraft_doc::para::{InlineObject, OBJ};
+use crate::text::tests::{NS_T, content_of, package};
+use crate::text::{export, import};
+use craft_wordmodel::Document;
+use craft_wordmodel::para::{InlineObject, OBJ};
 
 const NS_N: &str = r#"xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0""#;
 

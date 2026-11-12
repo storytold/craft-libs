@@ -2,15 +2,13 @@
 //! kept through a save; a document from elsewhere gets those LibreOffice uses for Word files, as
 //! WordCraft lays text out as Word does. Tabs are always written measured from the margin.
 
-use crate::odt::tests::{NS_T, package};
-use crate::odt::{export, import};
-use wordcraft_doc::Document;
+use crate::text::tests::{NS_T, package};
+use crate::text::{export, import};
+use craft_wordmodel::Document;
 
 fn settings_of(bytes: &[u8]) -> String {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut s = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("settings.xml").unwrap(), &mut s).unwrap();
-    s
+    let mut z = crate::Package::open(bytes, &crate::Limits::DEFAULT).unwrap();
+    String::from_utf8(z.read("settings.xml").unwrap().unwrap()).unwrap()
 }
 
 fn item(settings: &str, name: &str) -> Option<String> {

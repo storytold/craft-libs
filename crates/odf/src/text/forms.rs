@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use wordcraft_doc::control::{ContentControl, ControlKind, ListItem};
+use craft_wordmodel::control::{ContentControl, ControlKind, ListItem};
 
 use super::writer::x;
 use super::xml::{Attrs, get};
@@ -18,8 +18,8 @@ const MAX_ITEMS: usize = 1000;
 const MAX_VALUE: usize = 10_000;
 
 /// A radio button's symbols: a selected and an empty circle.
-pub(in crate::odt) const RADIO_ON: char = '\u{25C9}';
-pub(in crate::odt) const RADIO_OFF: char = '\u{25CB}';
+pub(in crate::text) const RADIO_ON: char = '\u{25C9}';
+pub(in crate::text) const RADIO_OFF: char = '\u{25CB}';
 
 /// Form controls WordCraft has no kind for, kept verbatim (see [`ContentControl::form_xml`]):
 /// every control of ODF 1.3 §13.5 but those it reads (text fields and areas, check boxes, option
@@ -47,7 +47,7 @@ const PREFIXES: [&str; 19] = [
 ];
 
 /// The `text:placeholder-type` (§19.851) of a placeholder: what it stands for.
-pub(in crate::odt) fn placeholder_type(t: Option<&str>) -> &'static str {
+pub(in crate::text) fn placeholder_type(t: Option<&str>) -> &'static str {
     match t.map(str::trim) {
         Some("table") => "table",
         Some("text-box") => "text-box",
@@ -59,17 +59,17 @@ pub(in crate::odt) fn placeholder_type(t: Option<&str>) -> &'static str {
 
 /// A placeholder's start tag, which a content control read from one keeps (in
 /// [`ContentControl::form_xml`]) to be written back as one.
-pub(in crate::odt) fn placeholder_start(kind: &str) -> String {
+pub(in crate::text) fn placeholder_start(kind: &str) -> String {
     format!("<text:placeholder text:placeholder-type=\"{kind}\">")
 }
 
 /// Whether control `c` was read from a placeholder.
-pub(in crate::odt) fn is_placeholder(c: &ContentControl) -> bool {
+pub(in crate::text) fn is_placeholder(c: &ContentControl) -> bool {
     c.form_xml.starts_with("<text:placeholder ")
 }
 
 /// A control read: its content control and the text it holds.
-pub(in crate::odt) type Read = (ContentControl, String);
+pub(in crate::text) type Read = (ContentControl, String);
 
 fn capped(s: &str) -> String {
     s.chars().take(MAX_VALUE).collect()
@@ -77,16 +77,16 @@ fn capped(s: &str) -> String {
 
 /// `office:forms`, read as it streams past.
 #[derive(Default)]
-pub(in crate::odt) struct FormsReader {
+pub(in crate::text) struct FormsReader {
     /// How deep inside `office:forms` the reader is (0: outside).
     depth: usize,
     /// The control being read: its id, control, selected entries.
     open: Option<(String, ContentControl, Vec<String>)>,
     /// The controls read, by `form:id` (or `xml:id`).
-    pub(in crate::odt) controls: HashMap<String, Read>,
+    pub(in crate::text) controls: HashMap<String, Read>,
     /// Hidden controls (§13.5.15 `form:hidden`: a name and a value the form sends, not shown),
     /// kept verbatim without their ids.
-    pub(in crate::odt) hidden: Vec<String>,
+    pub(in crate::text) hidden: Vec<String>,
     /// A control WordCraft has no kind for being kept: its id, name, label, its XML so far (its
     /// id left out) and how many of its elements are open.
     kept: Option<Kept>,
@@ -124,7 +124,7 @@ fn element_xml(q: &str, a: &Attrs) -> String {
 
 impl FormsReader {
     /// Element `q` starts: whether it is part of `office:forms` (and so read here).
-    pub(in crate::odt) fn start(&mut self, q: &str, a: &Attrs) -> bool {
+    pub(in crate::text) fn start(&mut self, q: &str, a: &Attrs) -> bool {
         if self.depth == 0 {
             if q != "office:forms" {
                 return false;
@@ -173,7 +173,7 @@ impl FormsReader {
                     get(a, "form:current-state").or_else(|| get(a, "form:state")) == Some("checked")
                 };
                 let (checked_char, unchecked_char) =
-                    if radio { (RADIO_ON, RADIO_OFF) } else { (wordcraft_doc::control::CHECKED, wordcraft_doc::control::UNCHECKED) };
+                    if radio { (RADIO_ON, RADIO_OFF) } else { (craft_wordmodel::control::CHECKED, craft_wordmodel::control::UNCHECKED) };
                 let symbol = if on { checked_char } else { unchecked_char };
                 let kind =
                     ControlKind::CheckBox { checked: on, checked_char, checked_font: String::new(), unchecked_char, unchecked_font: String::new() };
@@ -226,7 +226,7 @@ impl FormsReader {
     }
 
     /// Element `q` ends: whether it was part of `office:forms`.
-    pub(in crate::odt) fn end(&mut self, q: &str) -> bool {
+    pub(in crate::text) fn end(&mut self, q: &str) -> bool {
         if self.depth == 0 {
             return false;
         }
@@ -243,7 +243,7 @@ impl FormsReader {
                 } else if k.xml.len() <= MAX_KEPT && !k.foreign {
                     let mut c = ContentControl::new(ControlKind::Text { multi_line: false });
                     c.tag = k.name;
-                    c.lock = wordcraft_doc::control::ControlLock::ContentLocked;
+                    c.lock = craft_wordmodel::control::ControlLock::ContentLocked;
                     c.form_xml = k.xml;
                     self.controls.insert(k.id, (c, k.label));
                 }
@@ -287,7 +287,7 @@ fn value(c: &ContentControl, text: &str) -> String {
 
 /// A content control as a form control in `office:forms`, with id `id`: the element, and the
 /// size of its `draw:control` (points). `None` for kinds a form has no control for.
-pub(in crate::odt) fn form_xml(c: &ContentControl, text: &str, id: &str, n: usize) -> Option<(String, f32, f32)> {
+pub(in crate::text) fn form_xml(c: &ContentControl, text: &str, id: &str, n: usize) -> Option<(String, f32, f32)> {
     let size = |(xml, w, h): (String, f32, f32)| {
         let fit = |v: f32| if v.is_finite() { v.clamp(1.0, 1584.0) } else { 16.0 };
         match c.form_size {
@@ -385,7 +385,7 @@ pub(in crate::odt) fn form_xml(c: &ContentControl, text: &str, id: &str, n: usiz
 }
 
 /// The `office:forms` holding the controls `xml` (empty when there are none).
-pub(in crate::odt) fn forms_xml(xml: &[String], hidden: &[String]) -> String {
+pub(in crate::text) fn forms_xml(xml: &[String], hidden: &[String]) -> String {
     if xml.is_empty() && hidden.is_empty() {
         return String::new();
     }
@@ -406,4 +406,4 @@ pub(in crate::odt) fn forms_xml(xml: &[String], hidden: &[String]) -> String {
 
 /// `Document::passthrough` key of a document's hidden form controls (their XML, one after
 /// another), kept for the next save.
-pub(in crate::odt) const HIDDEN_PART: &str = "odf-hidden-controls";
+pub(in crate::text) const HIDDEN_PART: &str = "odf-hidden-controls";

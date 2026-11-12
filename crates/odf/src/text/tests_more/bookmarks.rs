@@ -2,10 +2,10 @@
 //! between its start and end, in one paragraph or across several, kept as a WordCraft bookmark
 //! over that text (what a reference to it shows) and written back the same way.
 
-use crate::odt::tests::{NS_T, content_of, package};
-use crate::odt::{export, import};
-use wordcraft_doc::Document;
-use wordcraft_doc::para::{InlineObject, OBJ};
+use crate::text::tests::{NS_T, content_of, package};
+use crate::text::{export, import};
+use craft_wordmodel::Document;
+use craft_wordmodel::para::{InlineObject, OBJ};
 
 /// Each bookmark: (name, the text it covers, paragraphs joined by '|').
 fn bookmarks(d: &Document) -> Vec<(String, String)> {

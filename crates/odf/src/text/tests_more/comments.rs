@@ -1,10 +1,10 @@
 //! Comments (ODF 1.3 §14.1 `office:annotation`, §14.2 `office:annotation-end`): read into the
 //! document's comments with their ranges, replies and resolved state, and written back.
 
-use crate::odt::tests::{NS_T, package};
-use crate::odt::{export, import};
-use wordcraft_doc::para::{InlineObject, OBJ};
-use wordcraft_doc::{Document, StoryRef};
+use crate::text::tests::{NS_T, package};
+use crate::text::{export, import};
+use craft_wordmodel::para::{InlineObject, OBJ};
+use craft_wordmodel::{Document, StoryRef};
 
 const NS_C: &str = r#"xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0" xmlns:loext="urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0""#;
 

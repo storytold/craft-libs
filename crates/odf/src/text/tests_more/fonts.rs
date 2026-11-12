@@ -1,8 +1,8 @@
 //! Font names (ODF 1.3 §16.23 `style:font-face`): `style:font-name` names a font face declared in
 //! `office:font-face-decls`, whose `svg:font-family` is the font.
 
-use crate::odt::import;
-use crate::odt::tests::{NS_T, package};
+use crate::text::import;
+use crate::text::tests::{NS_T, package};
 
 const NS_SVG: &str = r#"xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0""#;
 
@@ -52,16 +52,16 @@ fn hostile_font_faces_do_not_panic() {
 fn each_font_is_declared_with_its_kind() {
     // §16.21 `style:font-face`: a reader without the font picks a like one by its generic family
     // and pitch; each use names its declaration (`style:font-name`).
-    let mut d = wordcraft_doc::Document::new();
-    let mono = wordcraft_doc::props::CharProps { font: Some("Courier New".into()), ..Default::default() };
-    let serif = wordcraft_doc::props::CharProps { font: Some("Georgia".into()), ..Default::default() };
-    let mut p = wordcraft_doc::Paragraph::with_text("code", mono);
+    let mut d = craft_wordmodel::Document::new();
+    let mono = craft_wordmodel::props::CharProps { font: Some("Courier New".into()), ..Default::default() };
+    let serif = craft_wordmodel::props::CharProps { font: Some("Georgia".into()), ..Default::default() };
+    let mut p = craft_wordmodel::Paragraph::with_text("code", mono);
     let end = p.text.len();
     p.insert_text(end, " prose", &serif).unwrap();
-    d.body = vec![wordcraft_doc::para_block(p)];
-    let saved = crate::odt::export(&d).unwrap();
-    let content = crate::odt::tests::content_of(&saved);
-    let styles = crate::odt::tests::entry(&saved, "styles.xml");
+    d.body = vec![craft_wordmodel::para_block(p)];
+    let saved = crate::text::export(&d).unwrap();
+    let content = crate::text::tests::content_of(&saved);
+    let styles = crate::text::tests::entry(&saved, "styles.xml");
     assert!(content.contains(r#"<style:font-face style:name="Courier New" svg:font-family="'Courier New'" style:font-family-generic="modern" style:font-pitch="fixed"/>"#), "{content}");
     assert!(content.contains(r#"style:font-family-generic="roman""#));
     assert!(content.contains(r#"style:font-name="Georgia""#));
@@ -69,7 +69,7 @@ fn each_font_is_declared_with_its_kind() {
     assert!(content.find("<office:font-face-decls>") < content.find("<office:automatic-styles>"));
     assert!(styles.contains("<office:font-face-decls>") && styles.find("<office:font-face-decls>") < styles.find("<office:styles>"));
     // Read back the same.
-    let back = crate::odt::import(&saved).unwrap();
+    let back = crate::text::import(&saved).unwrap();
     let fonts: Vec<_> = back.body[0].as_para().unwrap().runs.iter().map(|r| r.props.font.clone()).collect();
     assert_eq!(fonts, [Some("Courier New".to_string()), Some("Georgia".to_string())]);
 }

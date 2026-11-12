@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use wordcraft_doc::chart::{ChartSeries, ChartSpec, ChartType, LegendPos, MAX_CELLS, MAX_POINTS, MAX_SERIES, MAX_TEXT};
+use craft_wordmodel::chart::{ChartSeries, ChartSpec, ChartType, LegendPos, MAX_CELLS, MAX_POINTS, MAX_SERIES, MAX_TEXT};
 
 use super::xml::Attrs;
 use super::{Ev, events, get};
@@ -293,7 +293,7 @@ fn cells_of(addr: &str) -> Vec<(usize, usize)> {
 }
 
 /// The chart a chart sub-document's `content.xml` holds, when WordCraft can edit it.
-pub(in crate::odt) fn read_chart(xml: &[u8]) -> Option<ChartSpec> {
+pub(in crate::text) fn read_chart(xml: &[u8]) -> Option<ChartSpec> {
     let mut r = Reader::default();
     let mut count = 0usize;
     let mut done = false;

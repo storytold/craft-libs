@@ -3,10 +3,10 @@
 //! as they are and written back with their manifest entries; the thumbnail and digital
 //! signatures, which describe the package as it was, are not.
 
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Write};
 
-use crate::odt::tests::NS_T;
-use crate::odt::{decrypt, encrypt, export, import};
+use crate::text::tests::NS_T;
+use crate::text::{decrypt, encrypt, export, import};
 
 const MODULE: &str = r#"<?xml version="1.0" encoding="UTF-8"?><script:module xmlns:script="http://openoffice.org/2000/script" script:name="Module1" script:language="StarBasic">Sub Hello
   MsgBox "Hi"
@@ -43,15 +43,9 @@ fn odt(extra: &[(&str, &[u8])]) -> Vec<u8> {
 
 /// Each file of package `bytes` with its contents.
 fn files(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
-    let mut z = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
-    let mut out = Vec::new();
-    for i in 0..z.len() {
-        let mut f = z.by_index(i).unwrap();
-        let mut b = Vec::new();
-        f.read_to_end(&mut b).unwrap();
-        out.push((f.name().to_string(), b));
-    }
-    out
+    let mut z = crate::Package::open(bytes, &crate::Limits::DEFAULT).unwrap();
+    let names: Vec<String> = z.names().map(str::to_string).collect();
+    names.into_iter().map(|n| (n.clone(), z.read(&n).unwrap().unwrap())).collect()
 }
 
 fn file<'a>(fs: &'a [(String, Vec<u8>)], name: &str) -> Option<&'a [u8]> {
@@ -110,18 +104,18 @@ fn parts_with_hostile_names_are_not_written() {
 fn who_changed_the_document_last_and_when_round_trip() {
     // meta.xml: the author (`meta:initial-creator`), who changed it last (`dc:creator`), when
     // (`dc:date`) and how often it was saved (`meta:editing-cycles`).
-    let mut d = wordcraft_doc::Document::new();
-    d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("x", Default::default()))];
+    let mut d = craft_wordmodel::Document::new();
+    d.body = vec![craft_wordmodel::para_block(craft_wordmodel::Paragraph::with_text("x", Default::default()))];
     d.core.creator = "Ada".into();
     d.core.last_modified_by = "Grace".into();
     d.core.created = "2026-01-02T03:04:05Z".into();
     d.core.modified = "2026-11-03T10:20:30Z".into();
     d.core.revision = 7;
-    let saved = crate::odt::export(&d).unwrap();
-    let meta = crate::odt::tests::entry(&saved, "meta.xml");
+    let saved = crate::text::export(&d).unwrap();
+    let meta = crate::text::tests::entry(&saved, "meta.xml");
     assert!(meta.contains("<meta:initial-creator>Ada</meta:initial-creator>") && meta.contains("<dc:creator>Grace</dc:creator>"), "{meta}");
     assert!(meta.contains("<dc:date>2026-11-03T10:20:30</dc:date>") && meta.contains("<meta:editing-cycles>7</meta:editing-cycles>"), "{meta}");
-    let back = crate::odt::import(&saved).unwrap();
+    let back = crate::text::import(&saved).unwrap();
     assert_eq!((back.core.last_modified_by.as_str(), back.core.modified.as_str(), back.core.revision), ("Grace", "2026-11-03T10:20:30Z", 7));
 }
 
@@ -131,7 +125,7 @@ fn every_file_written_has_its_manifest_entry() {
     // with no media type (LibreOffice's empty accelerator configuration) too: LibreOffice won't
     // open a package that lists one less.
     let saved = export(&import(&odt(&[("Configurations2/accelerator/current.xml", b"")])).unwrap()).unwrap();
-    let manifest = crate::odt::tests::entry(&saved, "META-INF/manifest.xml");
+    let manifest = crate::text::tests::entry(&saved, "META-INF/manifest.xml");
     for (name, _) in files(&saved) {
         if name == "mimetype" || name.starts_with("META-INF/") || name.ends_with('/') {
             continue;
@@ -144,9 +138,9 @@ fn every_file_written_has_its_manifest_entry() {
 #[test]
 fn a_damaged_media_type_isnt_shown_in_the_error() {
     // A package whose `mimetype` holds a picture: refused, saying so without the bytes.
-    let pkg = crate::odt::tests::zip_of(&[("mimetype", b"\x89PNG\r\n\x1a\n\x00\x00binary"), ("content.xml", b"<x/>")]);
+    let pkg = crate::text::tests::zip_of(&[("mimetype", b"\x89PNG\r\n\x1a\n\x00\x00binary"), ("content.xml", b"<x/>")]);
     let e = import(&pkg).unwrap_err();
     assert_eq!(e, "ODT: not a text document");
-    let pkg = crate::odt::tests::zip_of(&[("mimetype", b"application/vnd.oasis.opendocument.spreadsheet"), ("content.xml", b"<x/>")]);
+    let pkg = crate::text::tests::zip_of(&[("mimetype", b"application/vnd.oasis.opendocument.spreadsheet"), ("content.xml", b"<x/>")]);
     assert_eq!(import(&pkg).unwrap_err(), "ODT: not a text document (application/vnd.oasis.opendocument.spreadsheet)");
 }

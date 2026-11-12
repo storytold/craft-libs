@@ -6,7 +6,7 @@ use super::{FBlock, Inline, Rgb, Writer, mime_of, model, pt, x};
 /// A text box frame's graphic properties for `look`: its line (§20.183 `fo:border`), padding
 /// (§20.210 `fo:padding-*`) and fill, both ways (LibreOffice reads `draw:fill`, and fills a
 /// frame without it).
-pub(in crate::odt) fn box_look_attrs(look: &model::BoxLook, defs: &mut crate::odt::strokes::DrawDefs, prefix: &str) -> String {
+pub(in crate::text) fn box_look_attrs(look: &model::BoxLook, defs: &mut crate::text::strokes::DrawDefs, prefix: &str) -> String {
     let hex = |c: Rgb| format!("#{}", c.hex().to_ascii_lowercase());
     let mut a = match look.line {
         Some((c, w)) if w.is_finite() && w > 0.0 => format!(" fo:border=\"{} solid {}\"", pt(w.min(12.0)), hex(c)),
@@ -24,8 +24,8 @@ pub(in crate::odt) fn box_look_attrs(look: &model::BoxLook, defs: &mut crate::od
     // Which way its text runs (§20.404; upward is LibreOffice's own `bt-lr`; stacked letters
     // have no ODF form).
     a.push_str(match look.vert {
-        wordcraft_doc::props::TextVert::Vert => " style:writing-mode=\"tb-rl\"",
-        wordcraft_doc::props::TextVert::Vert270 => " loext:writing-mode=\"bt-lr\"",
+        craft_wordmodel::props::TextVert::Vert => " style:writing-mode=\"tb-rl\"",
+        craft_wordmodel::props::TextVert::Vert270 => " loext:writing-mode=\"bt-lr\"",
         _ => "",
     });
     a
@@ -34,13 +34,13 @@ pub(in crate::odt) fn box_look_attrs(look: &model::BoxLook, defs: &mut crate::od
 /// The graphic properties of fill `fill` (§20.118 `draw:fill`, §20.119 `draw:fill-color`,
 /// §20.120 `draw:fill-gradient-name`; a frame's `fo:background-color` too): a gradient by the
 /// name of its definition, with its main colour for readers that draw none.
-pub(in crate::odt) fn fill_attrs(
-    fill: Option<&wordcraft_doc::fill::Fill>,
+pub(in crate::text) fn fill_attrs(
+    fill: Option<&craft_wordmodel::fill::Fill>,
     frame: bool,
-    defs: &mut crate::odt::strokes::DrawDefs,
+    defs: &mut crate::text::strokes::DrawDefs,
     prefix: &str,
 ) -> String {
-    use wordcraft_doc::fill::Fill;
+    use craft_wordmodel::fill::Fill;
     let hex = |c: Rgb| format!("#{}", c.hex().to_ascii_lowercase());
     let background = |c: &str| if frame { format!(" fo:background-color=\"{c}\"") } else { String::new() };
     match fill {
@@ -61,34 +61,34 @@ pub(in crate::odt) fn fill_attrs(
 
 /// Where a frame or shape is written.
 #[derive(Clone, Copy)]
-pub(in crate::odt) enum Place<'a> {
+pub(in crate::text) enum Place<'a> {
     /// In the text: anchored and placed as its float says, in line without one.
-    Text(Option<&'a wordcraft_doc::para::Float>),
+    Text(Option<&'a craft_wordmodel::para::Float>),
     /// A member of a group, at (x, y) from where the group is anchored; its float turns or
     /// mirrors it.
-    Member(f32, f32, Option<&'a wordcraft_doc::para::Float>),
+    Member(f32, f32, Option<&'a craft_wordmodel::para::Float>),
 }
 
 impl<'a> Place<'a> {
     /// Its place in the stacking order (§19.231 `draw:z-index`, see `frames::z_of`).
-    pub(in crate::odt) fn z_index(self) -> u32 {
-        crate::odt::frames::z_index(self.float())
+    pub(in crate::text) fn z_index(self) -> u32 {
+        crate::text::frames::z_index(self.float())
     }
 
     /// What turns or mirrors the object, and places it in the text.
-    pub(in crate::odt) fn float(self) -> Option<&'a wordcraft_doc::para::Float> {
+    pub(in crate::text) fn float(self) -> Option<&'a craft_wordmodel::para::Float> {
         match self {
             Place::Text(f) | Place::Member(_, _, f) => f,
         }
     }
 
     /// Its top left corner (unturned) from where it is anchored, points.
-    pub(in crate::odt) fn origin(self) -> (f32, f32) {
+    pub(in crate::text) fn origin(self) -> (f32, f32) {
         let off = |v: f32, aligned: bool| if aligned || !v.is_finite() { 0.0 } else { v.clamp(-1584.0, 1584.0) };
         match self {
             Place::Member(x, y, _) => (off(x, false), off(y, false)),
             Place::Text(f) => f
-                .filter(|f| f.wrap != wordcraft_doc::para::Wrap::Inline)
+                .filter(|f| f.wrap != craft_wordmodel::para::Wrap::Inline)
                 .map_or((0.0, 0.0), |f| (off(f.x, f.h_align.is_some()), off(f.y, f.v_align.is_some()))),
         }
     }
@@ -109,16 +109,16 @@ fn clip_attr(img: &model::Img) -> String {
 /// How a frame or shape `w` × `h` at `place` is anchored and placed: its `text:anchor-type`
 /// attribute, its graphic style's placement and its `svg:x`/`svg:y` (or `draw:transform` when
 /// it is turned). A group's member has no anchor of its own: it is placed by its position alone.
-pub(in crate::odt) fn placement(place: Place<'_>, w: f32, h: f32) -> (String, String, String) {
+pub(in crate::text) fn placement(place: Place<'_>, w: f32, h: f32) -> (String, String, String) {
     let anchor = |a: &str| format!(" text:anchor-type=\"{a}\"");
     match place {
-        Place::Text(Some(f)) if f.wrap != wordcraft_doc::para::Wrap::Inline => {
-            let (a, props, xy) = crate::odt::frames::frame_of(f, w, h);
+        Place::Text(Some(f)) if f.wrap != craft_wordmodel::para::Wrap::Inline => {
+            let (a, props, xy) = crate::text::frames::frame_of(f, w, h);
             let page = if a == "page" && f.page > 0 { format!(" text:anchor-page-number=\"{}\"", f.page) } else { String::new() };
             (format!("{}{page}", anchor(a)), props, xy)
         }
         Place::Text(f) => {
-            let turn = f.filter(|f| crate::odt::frames::turned(f)).map(|f| crate::odt::frames::transform_attr(0.0, 0.0, w, h, f.rot));
+            let turn = f.filter(|f| crate::text::frames::turned(f)).map(|f| crate::text::frames::transform_attr(0.0, 0.0, w, h, f.rot));
             // Raised or lowered (its float's `y`, points up): its top that far from the baseline
             // (§20.387 `from-top`); else standing on it.
             match f.map(|f| f.y).filter(|r| r.is_finite() && *r != 0.0 && turn.is_none()) {
@@ -132,8 +132,8 @@ pub(in crate::odt) fn placement(place: Place<'_>, w: f32, h: f32) -> (String, St
         }
         Place::Member(_, _, f) => {
             let (x, y) = place.origin();
-            let xy = match f.filter(|f| crate::odt::frames::turned(f)) {
-                Some(f) => crate::odt::frames::transform_attr(x, y, w, h, f.rot),
+            let xy = match f.filter(|f| crate::text::frames::turned(f)) {
+                Some(f) => crate::text::frames::transform_attr(x, y, w, h, f.rot),
                 None => format!(" svg:x=\"{}\" svg:y=\"{}\"", pt(x), pt(y)),
             };
             (String::new(), String::new(), xy)
@@ -145,7 +145,7 @@ pub(in crate::odt) fn placement(place: Place<'_>, w: f32, h: f32) -> (String, St
 /// `svg:stroke-color`, `svg:stroke-width`), fill (§20.118 `draw:fill`, `draw:fill-color`),
 /// whether it grows to its text (§20.105 `draw:auto-grow-height`) and the padding around its
 /// text.
-pub(in crate::odt) fn shape_look_attrs(look: &model::BoxLook, defs: &mut crate::odt::strokes::DrawDefs, prefix: &str) -> String {
+pub(in crate::text) fn shape_look_attrs(look: &model::BoxLook, defs: &mut crate::text::strokes::DrawDefs, prefix: &str) -> String {
     let hex = |c: Rgb| format!("#{}", c.hex().to_ascii_lowercase());
     let mut a = match look.line {
         Some((c, w)) if w.is_finite() && w > 0.0 => {
@@ -159,7 +159,7 @@ pub(in crate::odt) fn shape_look_attrs(look: &model::BoxLook, defs: &mut crate::
             for (on, end) in [(look.arrows.0, "start"), (look.arrows.1, "end")] {
                 if on {
                     let marker = defs.arrow();
-                    a.push_str(&format!(" draw:marker-{end}=\"{marker}\" draw:marker-{end}-width=\"{}\"", crate::odt::strokes::arrow_width(w)));
+                    a.push_str(&format!(" draw:marker-{end}=\"{marker}\" draw:marker-{end}-width=\"{}\"", crate::text::strokes::arrow_width(w)));
                 }
             }
             a
@@ -185,10 +185,10 @@ pub(in crate::odt) fn shape_look_attrs(look: &model::BoxLook, defs: &mut crate::
 
 /// A text box's default inner margins (left, top, right, bottom), points: WordCraft's and
 /// Word's (0.1" and 0.05").
-pub(in crate::odt) const DEFAULT_BOX_INSET: [f32; 4] = [7.2, 3.6, 7.2, 3.6];
+pub(in crate::text) const DEFAULT_BOX_INSET: [f32; 4] = [7.2, 3.6, 7.2, 3.6];
 
 impl Writer {
-    pub(in crate::odt) fn picture(&mut self, img: &model::Img) -> String {
+    pub(in crate::text) fn picture(&mut self, img: &model::Img) -> String {
         let ext = if img.ext == "jpeg" { "jpg".to_string() } else { img.ext.clone() };
         // Not a name the file's own pictures, kept as read, have, nor one an earlier picture
         // took (after skipping a reserved name, the count is behind the names taken).
@@ -203,16 +203,16 @@ impl Writer {
     }
 
     /// A text box or another drawing shape at `place`.
-    pub(in crate::odt) fn drawing_shape(
+    pub(in crate::text) fn drawing_shape(
         &mut self,
-        kind: wordcraft_doc::para::ShapeKind,
+        kind: craft_wordmodel::para::ShapeKind,
         size: (f32, f32),
         place: Place<'_>,
-        (look, path): (&model::BoxLook, Option<&wordcraft_doc::freeform::Freeform>),
+        (look, path): (&model::BoxLook, Option<&craft_wordmodel::freeform::Freeform>),
         blocks: &[FBlock],
         out: &mut String,
     ) {
-        if kind == wordcraft_doc::para::ShapeKind::TextBox {
+        if kind == craft_wordmodel::para::ShapeKind::TextBox {
             self.text_box(size, place, look, blocks, out);
         } else {
             self.shape(kind, size, place, (look, path), blocks, out);
@@ -223,7 +223,7 @@ impl Writer {
     /// group's in a graphic style that places and wraps it.
     /// The next object's number and name (`Object 3`, `Object M3` in headers and footers).
     /// Not a name the file's own objects, kept as read, have (`Object wc1/content.xml`).
-    pub(in crate::odt) fn object_name(&mut self) -> (usize, String) {
+    pub(in crate::text) fn object_name(&mut self) -> (usize, String) {
         loop {
             self.object_names = self.object_names.saturating_add(1);
             let name = format!("Object {}{}", self.prefix, self.object_names);
@@ -253,7 +253,7 @@ impl Writer {
         // A picture shown that isn't the replacement (one WordCraft can't read) follows it; a
         // placeholder is WordCraft's own, not the file's.
         let other = o.replacement.as_ref().is_some_and(|r| r.as_slice() != img.data.as_slice());
-        if other && crate::odt::objects::placeholder(&o.mime).as_deref() != Some(img.data.as_slice()) {
+        if other && crate::text::objects::placeholder(&o.mime).as_deref() != Some(img.data.as_slice()) {
             let href = self.picture(img);
             inner.push_str(&format!("<draw:image xlink:href=\"{href}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/>"));
         }
@@ -262,7 +262,7 @@ impl Writer {
 
     /// Object `o` (a chart as read) in the package under the next object name, with its
     /// replacement picture when it had one: its number, name and the frame's content linking it.
-    pub(in crate::odt) fn kept_object_files(&mut self, o: &model::OdfObject) -> (usize, String, String) {
+    pub(in crate::text) fn kept_object_files(&mut self, o: &model::OdfObject) -> (usize, String, String) {
         let (n, name) = self.object_name();
         self.object_files(o, &name);
         let mut link = format!("<draw:object xlink:href=\"./{}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/>", x(&name));
@@ -300,11 +300,11 @@ impl Writer {
 
     /// A replacement picture `r` read with an object, at `path`.
     fn replacement(&mut self, path: &str, r: &std::sync::Arc<Vec<u8>>) {
-        let mime = crate::model::sniff_image(r).map(mime_of).unwrap_or("application/x-openoffice-gdimetafile;windows_formatname=\"GDIMetaFile\"");
+        let mime = craft_flow::sniff_image(r).map(mime_of).unwrap_or("application/x-openoffice-gdimetafile;windows_formatname=\"GDIMetaFile\"");
         self.pictures.push((path.to_string(), r.clone(), mime.to_string()));
     }
 
-    pub(in crate::odt) fn image(&mut self, img: &model::Img, place: Place<'_>, out: &mut String) {
+    pub(in crate::text) fn image(&mut self, img: &model::Img, place: Place<'_>, out: &mut String) {
         if let Some(o) = img.object.as_deref() {
             let inner = self.kept_object(o, img);
             return self.image_frame(img, place, &inner, out);
@@ -337,27 +337,27 @@ impl Writer {
         if let Some(p) = img
             .float
             .as_deref()
-            .filter(|f| matches!(f.wrap, wordcraft_doc::para::Wrap::Tight | wordcraft_doc::para::Wrap::Through))
+            .filter(|f| matches!(f.wrap, craft_wordmodel::para::Wrap::Tight | craft_wordmodel::para::Wrap::Through))
             .and_then(|f| f.wrap_polygon.as_deref())
         {
-            out.push_str(&crate::odt::frames::contour_xml(p, img.w, img.h));
+            out.push_str(&crate::text::frames::contour_xml(p, img.w, img.h));
         }
         out.push_str("</draw:frame>");
     }
 
     /// A group (ODF 1.3 §10.3.15 `draw:g`) of `size`: anchored and wrapping as its float says, in
     /// line without one; its members at their offsets from its corner.
-    pub(in crate::odt) fn group(
+    pub(in crate::text) fn group(
         &mut self,
         size: (f32, f32),
-        float: Option<&wordcraft_doc::para::Float>,
+        float: Option<&craft_wordmodel::para::Float>,
         members: &[model::Member],
         out: &mut String,
     ) {
         let reopen = self.open_ins.as_ref().map(|(m, _)| m.clone());
         self.close_ins(out);
         // The group isn't turned: its members are placed by their own positions.
-        let (anchor, props, _) = placement(Place::Text(float.filter(|f| f.wrap != wordcraft_doc::para::Wrap::Inline)), size.0, size.1);
+        let (anchor, props, _) = placement(Place::Text(float.filter(|f| f.wrap != craft_wordmodel::para::Wrap::Inline)), size.0, size.1);
         let style = self.graphic_style(props);
         self.boxes += 1;
         out.push_str(&format!("<draw:g draw:name=\"{}Group{}\" draw:style-name=\"{style}\"{anchor} draw:z-index=\"0\">", self.prefix, self.boxes));
@@ -371,7 +371,7 @@ impl Writer {
 
     /// A group's `members`, its corner at `at` from where it is anchored (a group in it `depth`
     /// deep).
-    pub(in crate::odt) fn members(&mut self, members: &[model::Member], at: (f32, f32), depth: usize, out: &mut String) {
+    pub(in crate::text) fn members(&mut self, members: &[model::Member], at: (f32, f32), depth: usize, out: &mut String) {
         for m in members {
             let (x, y) = (at.0 + m.x, at.1 + m.y);
             match &m.inline {
@@ -392,7 +392,7 @@ impl Writer {
 
     /// A text box (ODF 1.3 §10.4.3 `draw:text-box` in a `draw:frame`) of `size` (points): in line
     /// with the text, or anchored and placed as it floats, with its fill, line and padding.
-    pub(in crate::odt) fn text_box(&mut self, size: (f32, f32), place: Place<'_>, look: &model::BoxLook, blocks: &[FBlock], out: &mut String) {
+    pub(in crate::text) fn text_box(&mut self, size: (f32, f32), place: Place<'_>, look: &model::BoxLook, blocks: &[FBlock], out: &mut String) {
         let reopen = self.open_ins.as_ref().map(|(m, _)| m.clone());
         self.close_ins(out);
         let frame = box_look_attrs(look, &mut self.draw_defs, self.prefix);
@@ -433,12 +433,12 @@ impl Writer {
     /// A drawing shape (ODF 1.3 §10.3) of `size` (points): a rectangle, ellipse or line, or a
     /// custom shape of a predefined geometry, in line with the text or anchored and placed as it
     /// floats, with its fill, line and text.
-    pub(in crate::odt) fn shape(
+    pub(in crate::text) fn shape(
         &mut self,
-        kind: wordcraft_doc::para::ShapeKind,
+        kind: craft_wordmodel::para::ShapeKind,
         size: (f32, f32),
         place: Place<'_>,
-        (look, path): (&model::BoxLook, Option<&wordcraft_doc::freeform::Freeform>),
+        (look, path): (&model::BoxLook, Option<&craft_wordmodel::freeform::Freeform>),
         blocks: &[FBlock],
         out: &mut String,
     ) {
@@ -451,17 +451,16 @@ impl Writer {
         let body = self.story(blocks);
         self.boxes += 1;
         // A custom shape's geometry as read: written back whole, LibreOffice's own shape.
-        let kept = look
-            .geometry
-            .as_deref()
-            .filter(|_| (kind == wordcraft_doc::para::ShapeKind::Freeform && path.is_some()) || kind == wordcraft_doc::para::ShapeKind::Rectangle);
-        let (element, geometry) = match crate::odt::shapes::element_of(kind) {
+        let kept = look.geometry.as_deref().filter(|_| {
+            (kind == craft_wordmodel::para::ShapeKind::Freeform && path.is_some()) || kind == craft_wordmodel::para::ShapeKind::Rectangle
+        });
+        let (element, geometry) = match crate::text::shapes::element_of(kind) {
             _ if kept.is_some() => ("draw:custom-shape", None),
             // A freeform without paths has nothing to draw but its frame.
             ("draw:path", _) if path.is_none() => ("draw:rect", None),
             // Paths filled and unfilled: a custom shape, whose path says which is which
             // (LibreOffice fills no part of a path with an open part).
-            ("draw:path", _) if path.is_some_and(crate::odt::path::is_mixed) => ("draw:custom-shape", Some("non-primitive")),
+            ("draw:path", _) if path.is_some_and(crate::text::path::is_mixed) => ("draw:custom-shape", Some("non-primitive")),
             e => e,
         };
         let mut custom_path = String::new();
@@ -477,7 +476,7 @@ impl Writer {
                 let ((x1, x2), (y1, y2)) = (if fh { (x + w, x) } else { (x, x + w) }, if fv { (y + h, y) } else { (y, y + h) });
                 // Turned about its centre: its ends turned with it.
                 let (cx, cy) = (x + w / 2.0, y + h / 2.0);
-                let (sin, cos) = float.filter(|f| crate::odt::frames::turned(f)).map_or(0.0, |f| f.rot.to_radians()).sin_cos();
+                let (sin, cos) = float.filter(|f| crate::text::frames::turned(f)).map_or(0.0, |f| f.rot.to_radians()).sin_cos();
                 let turn = |px: f32, py: f32| (cx + (px - cx) * cos - (py - cy) * sin, cy + (px - cx) * sin + (py - cy) * cos);
                 let ((x1, y1), (x2, y2)) = (turn(x1, y1), turn(x2, y2));
                 format!(" svg:x1=\"{}\" svg:y1=\"{}\" svg:x2=\"{}\" svg:y2=\"{}\"", pt(x1), pt(y1), pt(x2), pt(y2))
@@ -488,11 +487,11 @@ impl Writer {
             if let Some(f) = path.filter(|_| element == "draw:path") {
                 // Its paths in a view box of hundredths of a point (whole numbers, §19.570).
                 let (vw, vh) = ((w * 100.0).round().max(1.0) as u32, (h * 100.0).round().max(1.0) as u32);
-                at.push_str(&format!(" svg:viewBox=\"0 0 {vw} {vh}\" svg:d=\"{}\"", crate::odt::path::path_data(f, vw, vh)));
+                at.push_str(&format!(" svg:viewBox=\"0 0 {vw} {vh}\" svg:d=\"{}\"", crate::text::path::path_data(f, vw, vh)));
             }
             if let Some(f) = path.filter(|_| geometry == Some("non-primitive")) {
                 let (vw, vh) = ((w * 100.0).round().max(1.0) as u32, (h * 100.0).round().max(1.0) as u32);
-                custom_path = format!(" svg:viewBox=\"0 0 {vw} {vh}\" draw:enhanced-path=\"{}\"", crate::odt::path::enhanced_path_data(f, vw, vh));
+                custom_path = format!(" svg:viewBox=\"0 0 {vw} {vh}\" draw:enhanced-path=\"{}\"", crate::text::path::enhanced_path_data(f, vw, vh));
             }
             at
         };
@@ -537,10 +536,10 @@ impl Writer {
     /// type and glued ends (§19.228–19.229), each end's site as the ODF glue point of the shape it
     /// is glued to (an end glued to a shape not written, or to a site ODF has no glue point for,
     /// is left unglued).
-    fn conn_attrs(&self, kind: wordcraft_doc::para::ShapeKind, look: &model::BoxLook) -> String {
+    fn conn_attrs(&self, kind: craft_wordmodel::para::ShapeKind, look: &model::BoxLook) -> String {
         let mut a = String::new();
         if kind.is_connector() {
-            a.push_str(&format!(" draw:type=\"{}\"", crate::odt::shapes::connector_type(kind)));
+            a.push_str(&format!(" draw:type=\"{}\"", crate::text::shapes::connector_type(kind)));
         }
         let Some(c) = look.conn.as_deref() else { return a };
         if c.id != 0 {
@@ -548,7 +547,8 @@ impl Writer {
         }
         if kind.is_connector() {
             for (which, end) in [("start", c.start), ("end", c.end)] {
-                let glue = end.and_then(|e| self.conn_kinds.get(&e.id).and_then(|k| crate::odt::shapes::glue_of_site(*k, e.site)).map(|g| (e.id, g)));
+                let glue =
+                    end.and_then(|e| self.conn_kinds.get(&e.id).and_then(|k| crate::text::shapes::glue_of_site(*k, e.site)).map(|g| (e.id, g)));
                 if let Some((id, g)) = glue {
                     a.push_str(&format!(" draw:{which}-shape=\"{}shape{id}\" draw:{which}-glue-point=\"{g}\"", self.prefix));
                 }
@@ -559,7 +559,7 @@ impl Writer {
 
     /// The paragraphs of a text box's or shape's text, written apart from the paragraph being
     /// written.
-    pub(in crate::odt) fn story(&mut self, blocks: &[FBlock]) -> String {
+    pub(in crate::text) fn story(&mut self, blocks: &[FBlock]) -> String {
         let saved = (std::mem::take(&mut self.cur_style), std::mem::take(&mut self.chain), self.part, self.note_parent.take());
         let mut body = String::new();
         self.story_blocks(blocks, &mut body, 1);
@@ -571,15 +571,15 @@ impl Writer {
     /// An equation as an embedded formula object (ODF 1.3 §10.4.3): a frame in line with the text
     /// pointing at a sub-document whose `content.xml` is the equation's MathML, its frame about
     /// the size the formula takes (LibreOffice scales the formula to the frame).
-    pub(in crate::odt) fn formula(&mut self, linear: &str, display: bool, out: &mut String) {
+    pub(in crate::text) fn formula(&mut self, linear: &str, display: bool, out: &mut String) {
         let (n, name) = self.object_name();
-        let mathml = crate::mathml::linear_to_mathml(linear, display);
+        let mathml = craft_math::mathml::linear_to_mathml(linear, display);
         self.objects.push((
             name.clone(),
             format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{mathml}\n"),
             "application/vnd.oasis.opendocument.formula",
         ));
-        let (w, h) = crate::odt::formula_size::size(linear);
+        let (w, h) = crate::text::formula_size::size(linear);
         // Centred on the line, as LibreOffice sets its own formulas.
         let style = self.graphic_style(" style:vertical-pos=\"middle\" style:vertical-rel=\"text\"".into());
         out.push_str(&format!(
@@ -593,7 +593,7 @@ impl Writer {
     }
 
     /// The automatic graphic style of a frame placed by `props`.
-    pub(in crate::odt) fn graphic_style(&mut self, props: String) -> String {
+    pub(in crate::text) fn graphic_style(&mut self, props: String) -> String {
         let k = match self.graphic_styles.iter().position(|s| *s == props) {
             Some(k) => k,
             None => {
@@ -606,7 +606,7 @@ impl Writer {
 }
 
 /// The name a watermark shape carries (Word's and LibreOffice's: how readers know it).
-pub(in crate::odt) const WATERMARK_NAME: &str = "PowerPlusWaterMarkObject";
+pub(in crate::text) const WATERMARK_NAME: &str = "PowerPlusWaterMarkObject";
 
 impl Writer {
     /// The document's watermark as LibreOffice and Word write one in a header: a fontwork shape
@@ -614,7 +614,7 @@ impl Writer {
     /// text, centred on a page whose text area is `area` (width, height; points), turned up 45°
     /// when diagonal, filled with its colour (half transparent when semitransparent). It doesn't
     /// grow to its text: its text is stretched to it.
-    pub(in crate::odt) fn watermark(&mut self, wm: &wordcraft_doc::Watermark, page: (f32, f32), area: (f32, f32)) -> String {
+    pub(in crate::text) fn watermark(&mut self, wm: &craft_wordmodel::Watermark, page: (f32, f32), area: (f32, f32)) -> String {
         let [w, h] = wm.frame(page.0, page.1);
         let opacity = if wm.semitransparent { " draw:opacity=\"50%\"" } else { "" };
         let style = self.graphic_style(format!(
@@ -623,8 +623,11 @@ impl Writer {
         ));
         let (aw, ah) = (if area.0.is_finite() { area.0 } else { w }, if area.1.is_finite() { area.1 } else { h });
         let (x0, y0) = ((aw - w) / 2.0, (ah - h) / 2.0);
-        let place =
-            if wm.diagonal { crate::odt::frames::transform_attr(x0, y0, w, h, 315.0) } else { format!(" svg:x=\"{}\" svg:y=\"{}\"", pt(x0), pt(y0)) };
+        let place = if wm.diagonal {
+            crate::text::frames::transform_attr(x0, y0, w, h, 315.0)
+        } else {
+            format!(" svg:x=\"{}\" svg:y=\"{}\"", pt(x0), pt(y0))
+        };
         let fmt = model::Fmt { font: Some(std::sync::Arc::from(wm.font.as_str())), color: Some(wm.color), ..model::Fmt::default() };
         let span =
             self.text_style(&fmt).map(|t| format!("<text:span text:style-name=\"{t}\">{}</text:span>", x(&wm.text))).unwrap_or_else(|| x(&wm.text));

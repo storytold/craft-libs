@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use wordcraft_doc::Document;
+use craft_wordmodel::Document;
 
 /// `Document::passthrough` key prefix of a kept part (its path follows), and the key of the list
 /// of kept paths with their media types (`path\tmedia type` lines; directories end in `/`).
@@ -80,12 +80,7 @@ impl Kept {
 
 /// Reads the parts of package `z` (entries `entries`) WordCraft doesn't read itself, with their
 /// media types from `manifest`.
-pub(super) fn read(
-    z: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>,
-    entries: &[String],
-    manifest: &std::collections::HashMap<String, String>,
-) -> Kept {
-    use std::io::Read;
+pub(super) fn read(z: &mut crate::Package<'_>, entries: &[String], manifest: &std::collections::HashMap<String, String>) -> Kept {
     let mut kept = Kept::default();
     let mut budget = MAX_BYTES;
     let mut dirs = std::collections::BTreeSet::new();
@@ -94,14 +89,10 @@ pub(super) fn read(
         if kept.files.len() >= MAX_PARTS || own(name, manifest) || !safe(name) {
             continue;
         }
-        let Ok(f) = z.by_name(name) else { continue };
-        if f.size() > budget {
+        if z.declared_size(name).is_none_or(|n| n > budget) {
             continue;
         }
-        let mut bytes = Vec::new();
-        if f.take(budget).read_to_end(&mut bytes).is_err() {
-            continue;
-        }
+        let Some(bytes) = z.read(name).ok().flatten().filter(|b| b.len() as u64 <= budget) else { continue };
         budget = budget.saturating_sub(bytes.len() as u64);
         let mime = manifest.get(name.as_str()).map_or("", String::as_str);
         kept.list.push_str(&format!("{name}\t{}\n", clean(mime)));

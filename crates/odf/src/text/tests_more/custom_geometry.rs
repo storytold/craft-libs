@@ -3,10 +3,10 @@
 //! values worked out from the shape's equations (§10.6.3 `draw:equation`) and adjustment values
 //! (`draw:modifiers`), as freeforms.
 
-use crate::odt::tests::{NS_T, package};
-use crate::odt::{export, import};
-use wordcraft_doc::Document;
-use wordcraft_doc::para::{InlineObject, ShapeKind};
+use crate::text::tests::{NS_T, package};
+use crate::text::{export, import};
+use craft_wordmodel::Document;
+use craft_wordmodel::para::{InlineObject, ShapeKind};
 
 const NS_D: &str =
     r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0""#;
@@ -163,7 +163,7 @@ fn a_freeform_with_open_and_closed_paths_is_saved_as_a_custom_shape() {
     let mut d = open(&shape(r#"draw:type="smiley" draw:enhanced-path="M 0 0 L 21600 0 21600 21600 Z N M 5000 15000 L 16000 15000 F N""#, ""));
     // As WordCraft's own freeform (the geometry read is written back whole otherwise).
     for b in d.body.iter_mut() {
-        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+        if let craft_wordmodel::Block::Para(p) = std::sync::Arc::make_mut(b) {
             for o in &mut p.objects {
                 if let InlineObject::Shape { extra, .. } = o {
                     extra.odf_geometry = None;
@@ -171,7 +171,7 @@ fn a_freeform_with_open_and_closed_paths_is_saved_as_a_custom_shape() {
             }
         }
     }
-    let c = crate::odt::tests::content_of(&export(&d).unwrap());
+    let c = crate::text::tests::content_of(&export(&d).unwrap());
     assert!(c.contains(r#"draw:type="non-primitive""#) && c.contains(" F N"), "{c}");
     assert!(!c.contains("<draw:path"), "{c}");
     let again = import(&export(&d).unwrap()).unwrap();
@@ -214,19 +214,19 @@ fn a_custom_shapes_geometry_is_written_back_as_it_was_read() {
     let cloud = r#"<draw:custom-shape text:anchor-type="paragraph" svg:width="1in" svg:height="1in"><draw:enhanced-geometry draw:type="cloud"/></draw:custom-shape>"#;
     let d = open(&format!("{hexagon}{cloud}"));
     assert_eq!(drawn(&d).iter().map(|s| s.0).collect::<Vec<_>>(), [ShapeKind::Freeform, ShapeKind::Rectangle]);
-    let out = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    let out = crate::text::tests::content_of(&crate::text::tests::export_model(&d).unwrap());
     assert!(out.contains(r#"draw:type="hexagon" draw:modifiers="5400""#) && out.contains(r#"draw:formula="right-$0""#), "{out}");
     assert!(out.contains(r#"<draw:handle draw:handle-position="$0 top"/>"#), "{out}");
     // Its mirroring is the shape's own, written once.
     assert_eq!(out.matches("draw:mirror-horizontal=\"true\"").count(), 1, "{out}");
     assert!(out.contains(r#"<draw:enhanced-geometry draw:type="cloud"></draw:enhanced-geometry>"#), "{out}");
     // Read back, it is the same shape again.
-    let back = import(&crate::odt::tests::export_model(&d).unwrap()).unwrap();
+    let back = import(&crate::text::tests::export_model(&d).unwrap()).unwrap();
     assert_eq!(drawn(&back), drawn(&d));
     // Made an ellipse: written as one.
     let mut changed = d.clone();
     for b in changed.body.iter_mut() {
-        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+        if let craft_wordmodel::Block::Para(p) = std::sync::Arc::make_mut(b) {
             for o in &mut p.objects {
                 if let InlineObject::Shape { kind, extra, .. } = o {
                     *kind = ShapeKind::Ellipse;
@@ -235,6 +235,6 @@ fn a_custom_shapes_geometry_is_written_back_as_it_was_read() {
             }
         }
     }
-    let out = crate::odt::tests::content_of(&crate::odt::tests::export_model(&changed).unwrap());
+    let out = crate::text::tests::content_of(&crate::text::tests::export_model(&changed).unwrap());
     assert!(!out.contains("hexagon") && !out.contains("cloud"), "{out}");
 }

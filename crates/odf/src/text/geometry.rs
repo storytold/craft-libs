@@ -10,8 +10,8 @@
 use std::collections::HashMap;
 
 use super::xml::{Attrs, get};
-use wordcraft_doc::freeform::Freeform;
-use wordcraft_doc::para::ShapeKind;
+use craft_wordmodel::freeform::Freeform;
+use craft_wordmodel::para::ShapeKind;
 
 /// Most equations read, most levels one may refer down through, most path tokens and points.
 const MAX_EQUATIONS: usize = 512;

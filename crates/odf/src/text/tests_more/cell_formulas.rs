@@ -3,10 +3,10 @@
 //! (`=SUM(A1:A3)`) showing the cell's value, so Update Field recalculates them, and formula
 //! fields in cells are written back as cell formulas.
 
-use crate::odt::cell_formula::{odf_of, word_of};
-use crate::odt::import;
-use crate::odt::tests::{NS_T, content_of, package};
-use wordcraft_doc::InlineObject;
+use crate::text::cell_formula::{odf_of, word_of};
+use crate::text::import;
+use crate::text::tests::{NS_T, content_of, package};
+use craft_wordmodel::InlineObject;
 
 #[test]
 fn libreoffice_formulas_say_what_word_formulas_do() {
@@ -59,14 +59,14 @@ const TABLE: &str = r#"<table:table table:name="T"><table:table-column table:num
 <table:table-row><table:table-cell table:formula="ooow:sum &lt;A1:A2&gt;" office:value-type="float" office:value="4"><text:p>4</text:p></table:table-cell><table:table-cell table:formula="ooow:&lt;Table9.B1&gt;" office:value-type="float" office:value="2.5"><text:p>2.5</text:p></table:table-cell></table:table-row>
 </table:table>"#;
 
-fn open() -> wordcraft_doc::Document {
+fn open() -> craft_wordmodel::Document {
     let content =
         format!(r#"<office:document-content {NS_T}><office:body><office:text>{TABLE}</office:text></office:body></office:document-content>"#);
     import(&package(&content, None)).unwrap()
 }
 
 /// The fields in the table's cells: (row, column, code, result).
-fn fields(d: &wordcraft_doc::Document) -> Vec<(usize, usize, String, String)> {
+fn fields(d: &craft_wordmodel::Document) -> Vec<(usize, usize, String, String)> {
     let mut out = Vec::new();
     let Some(t) = d.body.iter().find_map(|b| b.as_table()) else { return out };
     for (r, row) in t.rows.iter().enumerate() {
@@ -96,22 +96,22 @@ fn a_cell_formula_opens_as_a_formula_field_showing_its_value() {
 #[test]
 fn formula_fields_in_cells_are_written_as_cell_formulas() {
     let d = open();
-    let c = content_of(&crate::odt::tests::export_model(&d).unwrap());
+    let c = content_of(&crate::text::tests::export_model(&d).unwrap());
     assert!(c.contains(r#"table:formula="ooow:(sum &lt;A1:A2&gt;)" office:value-type="float" office:value="4""#), "{c}");
     // Read back, the same field.
-    let again = import(&crate::odt::tests::export_model(&d).unwrap()).unwrap();
+    let again = import(&crate::text::tests::export_model(&d).unwrap()).unwrap();
     assert_eq!(fields(&again), fields(&d));
 }
 
 #[test]
 fn cells_holding_numbers_are_written_as_numbers() {
-    let c = content_of(&crate::odt::tests::export_model(&open()).unwrap());
+    let c = content_of(&crate::text::tests::export_model(&open()).unwrap());
     assert!(c.contains(r#"office:value-type="float" office:value="2.5"><text:p"#), "{c}");
     // Text, numbers with more than a number in them and empty cells are text.
     let content = format!(
         r#"<office:document-content {NS_T}><office:body><office:text><table:table><table:table-row><table:table-cell><text:p>x</text:p></table:table-cell><table:table-cell><text:p>1,5</text:p></table:table-cell><table:table-cell><text:p>-</text:p></table:table-cell><table:table-cell><text:p>1.2.3</text:p></table:table-cell><table:table-cell><text:p/></table:table-cell><table:table-cell><text:p> -7 </text:p></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>"#
     );
-    let c = content_of(&crate::odt::tests::export_model(&import(&package(&content, None)).unwrap()).unwrap());
+    let c = content_of(&crate::text::tests::export_model(&import(&package(&content, None)).unwrap()).unwrap());
     assert_eq!(c.matches(r#"office:value-type="float""#).count(), 1, "{c}");
     assert!(c.contains(r#"office:value="-7""#), "{c}");
 }

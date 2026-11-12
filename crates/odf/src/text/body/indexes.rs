@@ -3,27 +3,27 @@
 //! as WordCraft inserts a table, or around the entries — so Update Table finds them.
 
 use super::{Attrs, Body, FBlock, Fmt, Inline, get};
-use crate::odt::writer::{IndexKind, index_instr};
+use crate::text::writer::{IndexKind, index_instr};
 
 /// An index being read.
-pub(in crate::odt) struct OpenIndex {
-    pub(in crate::odt) depth: usize,
+pub(in crate::text) struct OpenIndex {
+    pub(in crate::text) depth: usize,
     /// What it stands for; `None` for indexes Word has no field for (user and object indexes),
     /// read as their paragraphs.
-    pub(in crate::odt) kind: Option<IndexKind>,
+    pub(in crate::text) kind: Option<IndexKind>,
     /// Where its blocks start in the container it is in, and its title's (start, end) there.
-    pub(in crate::odt) start: usize,
-    pub(in crate::odt) title: (Option<usize>, Option<usize>),
+    pub(in crate::text) start: usize,
+    pub(in crate::text) title: (Option<usize>, Option<usize>),
 }
 
 /// Whether `name` (local, in the text namespace) is an index element.
-pub(in crate::odt) fn is_index(name: &str) -> bool {
+pub(in crate::text) fn is_index(name: &str) -> bool {
     matches!(name, "table-of-content" | "illustration-index" | "table-index" | "alphabetical-index" | "bibliography" | "user-index" | "object-index")
 }
 
 impl Body<'_> {
     /// An index element, its source or its title (`q`, attributes `a`); false for anything else.
-    pub(in crate::odt) fn start_index_part(&mut self, q: &str, a: &Attrs) -> bool {
+    pub(in crate::text) fn start_index_part(&mut self, q: &str, a: &Attrs) -> bool {
         let Some(name) = q.strip_prefix("text:") else { return false };
         if is_index(name) {
             // A table of contents or another index (§8), read as its entries and the field it
@@ -44,7 +44,7 @@ impl Body<'_> {
     }
 
     /// An index element begins: its blocks are read into the container it is in.
-    pub(in crate::odt) fn start_index(&mut self, name: &str) {
+    pub(in crate::text) fn start_index(&mut self, name: &str) {
         self.end_para();
         let kind = match name {
             "table-of-content" => Some(IndexKind::Contents(10)),
@@ -59,7 +59,7 @@ impl Body<'_> {
     }
 
     /// An index's source (what it is generated from): its outline levels or caption name.
-    pub(in crate::odt) fn index_source(&mut self, a: &Attrs) {
+    pub(in crate::text) fn index_source(&mut self, a: &Attrs) {
         let Some(ix) = &mut self.index else { return };
         match &mut ix.kind {
             Some(IndexKind::Contents(levels)) => {
@@ -77,7 +77,7 @@ impl Body<'_> {
     }
 
     /// An index title begins (`end` false) or ends.
-    pub(in crate::odt) fn index_title(&mut self, end: bool) {
+    pub(in crate::text) fn index_title(&mut self, end: bool) {
         self.end_para();
         let len = self.container().len();
         if let Some(ix) = &mut self.index {
@@ -91,7 +91,7 @@ impl Body<'_> {
 
     /// The index being read ends: its field goes into its title's first paragraph, or around
     /// its entries.
-    pub(in crate::odt) fn end_index(&mut self) {
+    pub(in crate::text) fn end_index(&mut self) {
         self.end_para();
         let Some(ix) = self.index.take() else { return };
         let Some(kind) = ix.kind else { return };

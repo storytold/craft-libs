@@ -1,10 +1,10 @@
 //! Heading numbering (ODF 1.3 §16.34 `text:outline-style`): the outline style's levels number the
 //! headings of those levels; WordCraft numbers them through the heading styles, as Word does.
 
-use crate::odt::tests::{NS_T, package};
-use crate::odt::{export, import};
-use wordcraft_doc::Document;
-use wordcraft_doc::section::NumFormat;
+use crate::text::tests::{NS_T, package};
+use crate::text::{export, import};
+use craft_wordmodel::Document;
+use craft_wordmodel::section::NumFormat;
 
 fn open(outline: &str) -> Document {
     let styles = format!(
@@ -60,7 +60,7 @@ fn heading_numbering_round_trips() {
 #[test]
 fn exported_heading_numbers_are_followed_by_a_tab() {
     // Without label alignment LibreOffice set the number against the heading's text.
-    let xml = crate::odt::tests::styles_of(&crate::odt::tests::export_model(&open(NUMBERED)).unwrap());
+    let xml = crate::text::tests::styles_of(&crate::text::tests::export_model(&open(NUMBERED)).unwrap());
     let outline = xml.split("<text:outline-style").nth(1).unwrap_or("");
     assert!(outline.contains(r#"text:label-followed-by="listtab""#), "{outline}");
     assert!(outline.contains(r#"text:list-level-position-and-space-mode="label-alignment""#));
@@ -69,7 +69,7 @@ fn exported_heading_numbers_are_followed_by_a_tab() {
 #[test]
 fn numbered_headings_are_not_written_as_list_items() {
     // The outline style numbers them; wrapped in a list they took that list's indents.
-    let xml = crate::odt::tests::content_of(&export(&open(NUMBERED)).unwrap());
+    let xml = crate::text::tests::content_of(&export(&open(NUMBERED)).unwrap());
     assert!(!xml.contains("<text:list"), "{xml}");
     assert!(xml.contains(r#"<text:h text:style-name="Heading_20_2" text:outline-level="2">One one</text:h>"#), "{xml}");
 }
@@ -78,11 +78,11 @@ fn numbered_headings_are_not_written_as_list_items() {
 fn unnumbered_heading_styles_are_detached_from_the_outline() {
     // LibreOffice gives a heading style the outline's numbering unless it names no list style;
     // an unnumbered level then still indented the heading.
-    let xml = crate::odt::tests::styles_of(&crate::odt::tests::export_model(&open("")).unwrap());
+    let xml = crate::text::tests::styles_of(&crate::text::tests::export_model(&open("")).unwrap());
     let h1 = xml.split("<style:style ").find(|s| s.starts_with(r#"style:name="Heading_20_1""#)).unwrap_or("");
     assert!(h1.contains(r#"style:list-style-name="""#), "{h1}");
     // A numbered level stays attached.
-    let xml = crate::odt::tests::styles_of(&crate::odt::tests::export_model(&open(NUMBERED)).unwrap());
+    let xml = crate::text::tests::styles_of(&crate::text::tests::export_model(&open(NUMBERED)).unwrap());
     let h1 = xml.split("<style:style ").find(|s| s.starts_with(r#"style:name="Heading_20_1""#)).unwrap_or("");
     assert!(!h1.contains("style:list-style-name"), "{h1}");
 }
@@ -106,8 +106,8 @@ fn a_heading_looks_as_its_style_and_has_the_level_its_element_gives() {
     assert_eq!(p.style.as_deref(), Some("Heading2"));
     assert!(p.outline_level.is_none() || p.outline_level == Some(1));
     assert_eq!(d.styles.resolve_char(p.style.as_deref(), &Default::default()).size, 18.0);
-    let saved = crate::odt::tests::export_model(&d).unwrap();
-    let c = crate::odt::tests::content_of(&saved);
+    let saved = crate::text::tests::export_model(&d).unwrap();
+    let c = crate::text::tests::content_of(&saved);
     assert!(c.contains(r#"text:outline-level="1">Clarifying"#) || c.contains(r#"text:outline-level="1"><"#), "{c}");
     let back = import(&saved).unwrap();
     assert_eq!((props(&back, 0).style.as_deref(), props(&back, 0).outline_level), (Some("Heading2"), Some(0)));
@@ -126,7 +126,7 @@ fn in_custom_style(styles: &str, body: &str) -> Document {
 const HEAD: &str = r#"<style:style style:name="Head" style:family="paragraph" style:parent-style-name="Standard" style:default-outline-level="1" style:class="text"><style:text-properties fo:font-size="26pt" fo:font-weight="bold"/></style:style>"#;
 
 fn saved_after_an_edit(d: &mut Document) -> Vec<u8> {
-    d.insert_text(&wordcraft_doc::Pos::body(0, 0), "Yearly ", &Default::default()).unwrap();
+    d.insert_text(&craft_wordmodel::Pos::body(0, 0), "Yearly ", &Default::default()).unwrap();
     export(d).unwrap()
 }
 
@@ -144,9 +144,9 @@ fn a_custom_style_with_an_outline_level_stays_the_paragraphs_style() {
 
     // Edited, it is written from the model, under its own name, at its level.
     let saved = saved_after_an_edit(&mut d);
-    let c = crate::odt::tests::content_of(&saved);
+    let c = crate::text::tests::content_of(&saved);
     assert!(c.contains(r#"<text:h text:style-name="Head" text:outline-level="1">Yearly Annual"#), "{c}");
-    let s = crate::odt::tests::styles_of(&saved);
+    let s = crate::text::tests::styles_of(&saved);
     let head = s.split("<style:style ").find(|x| x.starts_with(r#"style:name="Head""#)).unwrap_or("");
     assert!(head.contains(r#"style:default-outline-level="1""#) && head.contains(r#"fo:font-size="26pt""#), "{head}");
 
@@ -160,8 +160,8 @@ fn a_custom_style_with_an_outline_level_stays_the_paragraphs_style() {
 fn an_unedited_paragraph_in_such_a_style_is_written_as_read() {
     let body = r#"<text:p text:style-name="Head">Annual report edition</text:p>"#;
     let saved = export(&in_custom_style(HEAD, body)).unwrap();
-    assert!(crate::odt::tests::content_of(&saved).contains(body));
-    let s = crate::odt::tests::styles_of(&saved);
+    assert!(crate::text::tests::content_of(&saved).contains(body));
+    let s = crate::text::tests::styles_of(&saved);
     assert_eq!(s.matches(r#"style:name="Head""#).count(), 1, "{s}");
     assert!(s.contains(r#"style:default-outline-level="1""#), "{s}");
 }
@@ -176,8 +176,8 @@ fn every_level_of_such_a_style_is_written_as_it_is() {
     let d = in_custom_style(styles, body);
     let level = |d: &Document, i: usize| d.styles.resolve_para(&d.body[i].as_para().unwrap().props).outline_level;
     assert_eq!([level(&d, 0), level(&d, 1), level(&d, 2)], [Some(7), Some(2), Some(7)]);
-    let saved = crate::odt::tests::export_model(&d).unwrap();
-    let c = crate::odt::tests::content_of(&saved);
+    let saved = crate::text::tests::export_model(&d).unwrap();
+    let c = crate::text::tests::content_of(&saved);
     assert!(c.contains(r#"<text:h text:style-name="Deep" text:outline-level="8">deep"#), "{c}");
     assert!(c.contains(r#"<text:h text:style-name="Under" text:outline-level="3">under"#), "{c}");
     assert!(c.contains(r#"<text:h text:style-name="Child" text:outline-level="8">child"#), "{c}");
@@ -193,8 +193,8 @@ fn a_paragraphs_own_level_and_formatting_stay_over_such_a_style() {
     );
     let d = import(&package(&content, Some(&styles))).unwrap();
     let p = d.body[0].as_para().unwrap().props.clone();
-    assert_eq!((p.style.as_deref(), p.outline_level, p.align), (Some("Head"), Some(1), Some(wordcraft_doc::Align::Center)));
-    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    assert_eq!((p.style.as_deref(), p.outline_level, p.align), (Some("Head"), Some(1), Some(craft_wordmodel::Align::Center)));
+    let c = crate::text::tests::content_of(&crate::text::tests::export_model(&d).unwrap());
     assert!(c.contains(r#"text:outline-level="2">Moved"#), "{c}");
     assert!(c.contains(r#"style:parent-style-name="Head""#) && c.contains(r#"fo:text-align="center""#), "{c}");
 }
@@ -206,7 +206,7 @@ fn a_hostile_outline_level_on_a_custom_style_is_no_heading() {
         let d = in_custom_style(&styles, r#"<text:p text:style-name="Head">Plain</text:p>"#);
         let p = d.body[0].as_para().unwrap().props.clone();
         assert_eq!((p.style.as_deref(), d.styles.resolve_para(&p).outline_level), (Some("Head"), None), "{bad}");
-        let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+        let c = crate::text::tests::content_of(&crate::text::tests::export_model(&d).unwrap());
         assert!(c.contains(r#"<text:p text:style-name="Head">Plain"#), "{bad}: {c}");
     }
 }
@@ -223,18 +223,18 @@ fn such_a_style_is_numbered_with_its_level() {
     let num = |d: &Document, i: usize| d.styles.resolve_para(&d.body[i].as_para().unwrap().props).numbering;
     assert!(num(&d, 0).is_some());
     assert_eq!(num(&d, 0), num(&d, 1));
-    let saved = crate::odt::tests::export_model(&d).unwrap();
-    let c = crate::odt::tests::content_of(&saved);
+    let saved = crate::text::tests::export_model(&d).unwrap();
+    let c = crate::text::tests::content_of(&saved);
     assert!(!c.contains("<text:list"), "the outline numbers it: {c}");
     assert!(c.contains(r#"<text:h text:style-name="Head" text:outline-level="1">First"#), "{c}");
     // A numbered level stays attached to the outline; an unnumbered one doesn't take its indent.
     let head = |xml: String| xml.split("<style:style ").find(|x| x.starts_with(r#"style:name="Head""#)).map(String::from).unwrap_or_default();
-    assert!(!head(crate::odt::tests::styles_of(&saved)).contains("style:list-style-name"));
+    assert!(!head(crate::text::tests::styles_of(&saved)).contains("style:list-style-name"));
     let back = import(&saved).unwrap();
     assert!(num(&back, 0).is_some());
     assert_eq!(num(&back, 0), num(&back, 1));
     let plain = in_custom_style(HEAD, r#"<text:p text:style-name="Head">First</text:p>"#);
-    let s = crate::odt::tests::styles_of(&crate::odt::tests::export_model(&plain).unwrap());
+    let s = crate::text::tests::styles_of(&crate::text::tests::export_model(&plain).unwrap());
     assert!(head(s).contains(r#"style:list-style-name="""#));
 }
 
@@ -243,8 +243,8 @@ fn custom_styles_based_on_any_kinds_style_keep_their_name_when_edited() {
     // The kind's style took their place, without their own look.
     let styles = r##"<style:style style:name="Title" style:family="paragraph"/><style:style style:name="Quotations" style:family="paragraph"/><style:style style:name="Preformatted_20_Text" style:display-name="Preformatted Text" style:family="paragraph"/><style:style style:name="Heading_20_2" style:display-name="Heading 2" style:family="paragraph"/><style:style style:name="Banner" style:family="paragraph" style:parent-style-name="Title"><style:text-properties fo:color="#cc6600"/></style:style><style:style style:name="Aside" style:family="paragraph" style:parent-style-name="Quotations"/><style:style style:name="Listing" style:family="paragraph" style:parent-style-name="Preformatted_20_Text"/><style:style style:name="Plaque" style:family="paragraph" style:parent-style-name="Heading_20_2"/>"##;
     let body = r#"<text:p text:style-name="Banner">b</text:p><text:p text:style-name="Aside">a</text:p><text:p text:style-name="Listing">l</text:p><text:p text:style-name="Plaque">p</text:p>"#;
-    let saved = crate::odt::tests::export_model(&in_custom_style(styles, body)).unwrap();
-    let c = crate::odt::tests::content_of(&saved);
+    let saved = crate::text::tests::export_model(&in_custom_style(styles, body)).unwrap();
+    let c = crate::text::tests::content_of(&saved);
     for want in [
         r#"<text:p text:style-name="Banner">b"#,
         r#"<text:p text:style-name="Aside">a"#,
@@ -253,7 +253,7 @@ fn custom_styles_based_on_any_kinds_style_keep_their_name_when_edited() {
     ] {
         assert!(c.contains(want), "{want} in {c}");
     }
-    let s = crate::odt::tests::styles_of(&saved);
+    let s = crate::text::tests::styles_of(&saved);
     assert!(s.contains(r#"style:name="Banner" style:display-name="Banner" style:family="paragraph" style:parent-style-name="Title""#), "{s}");
 }
 
@@ -289,8 +289,8 @@ fn a_headings_own_outline_level_gives_its_number() {
     assert_eq!(nums.len(), 1, "one list with the headings': {nums:?}");
     // Written from the model the outline still numbers them, by the levels stated, and read back
     // they are as they were.
-    let saved = crate::odt::tests::export_model(&d).unwrap();
-    let c = crate::odt::tests::content_of(&saved);
+    let saved = crate::text::tests::export_model(&d).unwrap();
+    let c = crate::text::tests::content_of(&saved);
     assert!(!c.contains("<text:list"), "{c}");
     for (style, level) in [("Head", 2), ("Low", 1), ("Heading_20_1", 3)] {
         assert!(c.contains(&format!(r#"<text:h text:style-name="{style}" text:outline-level="{level}">{style} {level}"#)), "{c}");
@@ -321,7 +321,7 @@ fn a_title_based_style_with_an_outline_level_stays_a_heading() {
     let p = d.body[0].as_para().unwrap().props.clone();
     assert_eq!((p.style.as_deref(), d.styles.resolve_para(&p).outline_level), (Some("Banner"), Some(0)));
     let saved = saved_after_an_edit(&mut d);
-    let c = crate::odt::tests::content_of(&saved);
+    let c = crate::text::tests::content_of(&saved);
     assert!(c.contains(r#"<text:h text:style-name="Banner" text:outline-level="1">Yearly report"#), "{c}");
 }
 
@@ -337,8 +337,8 @@ fn a_style_at_an_unnumbered_level_has_no_number_from_its_parent() {
     let d = in_custom_style(&styles, body);
     let want = vec![Some(0), None, None, Some(2), Some(0)];
     assert_eq!(number_levels(&d), want);
-    let saved = crate::odt::tests::export_model(&d).unwrap();
-    let written = crate::odt::tests::styles_of(&saved);
+    let saved = crate::text::tests::export_model(&d).unwrap();
+    let written = crate::text::tests::styles_of(&saved);
     let child = written.split("<style:style ").find(|x| x.starts_with(r#"style:name="Child""#)).unwrap_or_default();
     assert!(child.contains(r#"style:list-style-name="""#), "LibreOffice gives it no number: {child}");
     assert_eq!(number_levels(&import(&saved).unwrap()), want);
@@ -348,23 +348,23 @@ fn a_style_at_an_unnumbered_level_has_no_number_from_its_parent() {
 /// number the outline itself gives a heading goes with the outline.
 #[test]
 fn a_heading_in_a_list_linked_to_a_style_stays_in_it() {
+    use craft_wordmodel::props::NumRef;
     use std::sync::Arc;
-    use wordcraft_doc::props::NumRef;
     let mut d = Document::new();
     let numbering = Arc::make_mut(&mut d.numbering);
-    let num = numbering.add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    let num = numbering.add_list(craft_wordmodel::numbering::ListKind::Numbered);
     let first = numbering.abstracts.last_mut().and_then(|a| a.levels.first_mut()).unwrap();
     first.style = Some("Heading1".into());
-    let mut p = wordcraft_doc::Paragraph::with_text("x", Default::default());
+    let mut p = craft_wordmodel::Paragraph::with_text("x", Default::default());
     p.props.style = Some("Heading2".into());
     p.props.numbering = Some(NumRef { num, level: 1 });
-    let has_list = |d: &Document| crate::odt::tests::content_of(&crate::odt::tests::export_model(d).unwrap()).contains("<text:list");
+    let has_list = |d: &Document| crate::text::tests::content_of(&crate::text::tests::export_model(d).unwrap()).contains("<text:list");
     // At a deeper level than the link, no level of its own stated.
-    d.body = vec![wordcraft_doc::para_block(p.clone())];
+    d.body = vec![craft_wordmodel::para_block(p.clone())];
     assert!(has_list(&d), "a list of its own");
     // At its own level too, but its heading style isn't numbered: the outline wouldn't number it.
     p.props.outline_level = Some(1);
-    d.body = vec![wordcraft_doc::para_block(p)];
+    d.body = vec![craft_wordmodel::para_block(p)];
     assert!(has_list(&d), "the outline has no number for it");
     // Its heading style numbered there by this list: the outline's number.
     Arc::make_mut(&mut d.styles).get_mut("Heading2").unwrap().para.numbering = Some(NumRef { num, level: 1 });
@@ -374,18 +374,18 @@ fn a_heading_in_a_list_linked_to_a_style_stays_in_it() {
 /// Past Heading 6 the outline written has no number to give, so a heading there keeps its list.
 #[test]
 fn a_heading_past_level_six_keeps_its_list() {
+    use craft_wordmodel::props::NumRef;
     use std::sync::Arc;
-    use wordcraft_doc::props::NumRef;
     let mut d = Document::new();
-    let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    let num = Arc::make_mut(&mut d.numbering).add_list(craft_wordmodel::numbering::ListKind::Numbered);
     Arc::make_mut(&mut d.styles).get_mut("Heading1").unwrap().para.numbering = Some(NumRef { num, level: 0 });
     for level in 6..=8 {
-        let mut p = wordcraft_doc::Paragraph::with_text("x", Default::default());
+        let mut p = craft_wordmodel::Paragraph::with_text("x", Default::default());
         p.props.style = Some("Heading6".into());
         p.props.outline_level = Some(level);
         p.props.numbering = Some(NumRef { num, level });
-        d.body = vec![wordcraft_doc::para_block(p)];
-        let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+        d.body = vec![craft_wordmodel::para_block(p)];
+        let c = crate::text::tests::content_of(&crate::text::tests::export_model(&d).unwrap());
         assert!(c.contains("<text:list"), "level {level}: {c}");
     }
 }
@@ -402,10 +402,10 @@ fn a_heading_past_level_six_numbered_by_its_style_keeps_its_list() {
         let body = format!(r#"<text:h text:style-name="Deep" text:outline-level="{level}">x</text:h>"#);
         let mut d = in_custom_style(&styles, &body);
         let check = |saved: &[u8], what: &str| {
-            let c = crate::odt::tests::content_of(saved);
+            let c = crate::text::tests::content_of(saved);
             assert!(c.contains("<text:list"), "level {level}, {what}: {c}");
         };
-        check(&crate::odt::tests::export_model(&d).unwrap(), "from the model");
+        check(&crate::text::tests::export_model(&d).unwrap(), "from the model");
         let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
         Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.italic = Some(true);
         let saved = export(&d).unwrap();
@@ -424,7 +424,7 @@ fn a_style_with_a_heading_numbered_by_its_own_level_stays_on_the_outline() {
     let styles = format!(
         r#"<style:style style:name="Low" style:family="paragraph" style:parent-style-name="Standard" style:default-outline-level="3"/><style:style style:name="Heading_20_3" style:display-name="Heading 3" style:family="paragraph" style:default-outline-level="3"/>{NUMBERED}"#
     );
-    let saved = |body: &str| crate::odt::tests::styles_of(&crate::odt::tests::export_model(&in_custom_style(&styles, body)).unwrap());
+    let saved = |body: &str| crate::text::tests::styles_of(&crate::text::tests::export_model(&in_custom_style(&styles, body)).unwrap());
     let style_of = |xml: &str, name: &str| {
         xml.split("<style:style ").find(|x| x.starts_with(&format!(r#"style:name="{name}""#))).map(String::from).unwrap_or_default()
     };

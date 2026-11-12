@@ -2,10 +2,10 @@
 //! paragraph styles and written back. A file whose `TabsRelativeToIndent` setting is on measures
 //! them from the paragraph's indent (LibreOffice's default); otherwise from the margin, as Word.
 
-use crate::odt::tests::{NS_T, package};
-use crate::odt::{export, import};
-use wordcraft_doc::props::{ParaProps, TabAlign, TabLeader, TabStop};
-use wordcraft_doc::{Document, Paragraph, para_block};
+use crate::text::tests::{NS_T, package};
+use crate::text::{export, import};
+use craft_wordmodel::props::{ParaProps, TabAlign, TabLeader, TabStop};
+use craft_wordmodel::{Document, Paragraph, para_block};
 
 const TABS: &str = r#"<style:tab-stops><style:tab-stop style:position="1in"/><style:tab-stop style:position="2in" style:type="center" style:leader-style="dotted" style:leader-text="."/><style:tab-stop style:position="3in" style:type="char" style:char="."/><style:tab-stop style:position="4in" style:type="right" style:leader-style="solid" style:leader-text="_"/><style:tab-stop style:position="5in" style:leader-text="-"/></style:tab-stops>"#;
 
@@ -85,7 +85,7 @@ fn tab_stops_round_trip() {
     ];
     let mut p = Paragraph::new();
     p.text = "a\tb".into();
-    p.runs = vec![wordcraft_doc::para::Run { len: 3, props: Default::default() }];
+    p.runs = vec![craft_wordmodel::para::Run { len: 3, props: Default::default() }];
     p.props = ParaProps { tabs: Some(want.clone()), indent_left: Some(18.0), ..Default::default() };
     let mut d = Document::new();
     d.body = vec![para_block(p)];
@@ -133,7 +133,7 @@ fn tabs_are_measured_from_the_indent_a_style_gives() {
     );
     // Measured from the indent, as the document says.
     let settings = settings_xml(true);
-    let d = import(&crate::odt::tests::zip_of(&[
+    let d = import(&crate::text::tests::zip_of(&[
         ("content.xml", content.as_bytes()),
         ("styles.xml", styles.as_bytes()),
         ("settings.xml", settings.as_bytes()),
@@ -152,7 +152,7 @@ fn tab_stops_and_other_paragraph_properties_together() {
     let mut p = Paragraph::with_text("a\tb", Default::default());
     p.props = ParaProps {
         tabs: Some(vec![TabStop { pos: 100.0, align: TabAlign::Left, leader: TabLeader::None }]),
-        shading: Some(wordcraft_doc::props::Rgb(200, 220, 240)),
+        shading: Some(craft_wordmodel::props::Rgb(200, 220, 240)),
         contextual_spacing: Some(true),
         ..Default::default()
     };
@@ -161,7 +161,7 @@ fn tab_stops_and_other_paragraph_properties_together() {
     let back = import(&export(&d).unwrap()).unwrap();
     let props = &back.body[0].as_para().unwrap().props;
     assert_eq!(props.tabs.as_ref().map(|t| t.iter().map(|t| t.pos).collect::<Vec<_>>()), Some(vec![100.0]));
-    assert_eq!((props.shading, props.contextual_spacing), (Some(wordcraft_doc::props::Rgb(200, 220, 240)), Some(true)));
+    assert_eq!((props.shading, props.contextual_spacing), (Some(craft_wordmodel::props::Rgb(200, 220, 240)), Some(true)));
 }
 
 #[test]
@@ -172,14 +172,14 @@ fn tabs_measured_from_the_indent_are_written_so() {
     let d = import(&with_settings(&content(r#"fo:margin-left="0.5in""#), Some(true))).unwrap();
     assert!(d.settings.odf.is_some_and(|o| o.tabs_from_indent));
     let saved = export(&d).unwrap();
-    let s = crate::odt::tests::entry(&saved, "settings.xml");
+    let s = crate::text::tests::entry(&saved, "settings.xml");
     assert!(s.contains(r#"config:name="TabsRelativeToIndent" config:type="boolean">true<"#), "{s}");
-    let c = crate::odt::tests::content_of(&saved);
+    let c = crate::text::tests::content_of(&saved);
     assert!(c.contains(r#"style:position="1in""#) || c.contains(r#"style:position="72pt""#), "{c}");
     let back = import(&saved).unwrap();
     assert_eq!(tabs(&back).first().map(|t| t.pos), Some(108.0));
     // One measuring them from the margin stays so.
     let d = import(&with_settings(&content(r#"fo:margin-left="0.5in""#), Some(false))).unwrap();
-    let s = crate::odt::tests::entry(&export(&d).unwrap(), "settings.xml");
+    let s = crate::text::tests::entry(&export(&d).unwrap(), "settings.xml");
     assert!(s.contains(r#"config:name="TabsRelativeToIndent" config:type="boolean">false<"#), "{s}");
 }

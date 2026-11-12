@@ -7,7 +7,7 @@ use super::{FBlock, Inline, Para, Writer, x};
 
 /// What a Word index field stands for in ODF.
 #[derive(Clone, Debug, PartialEq)]
-pub(in crate::odt) enum IndexKind {
+pub(in crate::text) enum IndexKind {
     /// A table of contents of headings down to this outline level (`TOC \o "1-n"`).
     Contents(u8),
     /// A table of figures (or of any captioned thing): `TOC \c "Figure"`.
@@ -30,7 +30,7 @@ fn switch_arg(instr: &str, sw: char) -> Option<String> {
 }
 
 /// The index field code `instr` is, if it is one.
-pub(in crate::odt) fn index_kind(instr: &str) -> Option<IndexKind> {
+pub(in crate::text) fn index_kind(instr: &str) -> Option<IndexKind> {
     let name = instr.split_whitespace().next()?.to_ascii_uppercase();
     match name.as_str() {
         "TOC" => match switch_arg(instr, 'c').or_else(|| switch_arg(instr, 'C')) {
@@ -49,7 +49,7 @@ pub(in crate::odt) fn index_kind(instr: &str) -> Option<IndexKind> {
 }
 
 /// The field code an ODF index stands for in Word (the reverse of [`index_kind`]).
-pub(in crate::odt) fn index_instr(kind: &IndexKind) -> String {
+pub(in crate::text) fn index_instr(kind: &IndexKind) -> String {
     match kind {
         IndexKind::Contents(n) => format!("TOC \\o \"1-{n}\" \\h \\z \\u"),
         IndexKind::Captions(c) => format!("TOC \\h \\z \\c \"{}\"", c.replace('"', "")),
@@ -68,7 +68,7 @@ fn is_entry(p: &Para) -> bool {
 /// An index starting at `blocks[i]`: how many blocks it takes, its kind, and whether its first
 /// block is its title. Either a paragraph holding an index field followed by its entries (as
 /// WordCraft inserts a table), or a field starting a paragraph and ending in a later one.
-pub(in crate::odt) fn index_at(blocks: &[FBlock], i: usize) -> Option<(usize, IndexKind, bool)> {
+pub(in crate::text) fn index_at(blocks: &[FBlock], i: usize) -> Option<(usize, IndexKind, bool)> {
     let Some(FBlock::Para(p)) = blocks.get(i) else { return None };
     // A heading holding the field, anywhere in it.
     if let Some(kind) = p.inlines.iter().find_map(|inl| match inl {
@@ -113,7 +113,7 @@ pub(in crate::odt) fn index_at(blocks: &[FBlock], i: usize) -> Option<(usize, In
 
 impl Writer {
     /// The index `blocks` of `kind` (its first block its title when `titled`).
-    pub(in crate::odt) fn index(&mut self, blocks: &[FBlock], kind: &IndexKind, titled: bool, out: &mut String) {
+    pub(in crate::text) fn index(&mut self, blocks: &[FBlock], kind: &IndexKind, titled: bool, out: &mut String) {
         self.indexes += 1;
         let n = self.indexes;
         let name = format!("{}Index{n}", self.prefix);

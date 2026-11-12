@@ -2,9 +2,9 @@
 //! `office:document` element, pictures inline as `office:binary-data`, formulas as
 //! `math:math` inside their object): opened and saved like a package.
 
-use crate::odt::{export_flat, import_flat};
-use wordcraft_doc::Document;
-use wordcraft_doc::para::InlineObject;
+use crate::text::{export_flat, import_flat};
+use craft_wordmodel::Document;
+use craft_wordmodel::para::InlineObject;
 
 /// A 1×1 PNG, base64.
 const PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -36,7 +36,7 @@ fn flat() -> String {
 #[allow(clippy::type_complexity)]
 fn summary(d: &Document) -> (String, f32, Vec<String>, Vec<String>, Option<String>, String, Vec<usize>, Vec<String>) {
     let paras: Vec<_> = d.body.iter().filter_map(|b| b.as_para()).collect();
-    let text = paras.iter().map(|p| p.text.replace(wordcraft_doc::para::OBJ, "#")).collect();
+    let text = paras.iter().map(|p| p.text.replace(craft_wordmodel::para::OBJ, "#")).collect();
     let bold = paras
         .iter()
         .flat_map(|p| p.run_ranges().filter(|(_, c)| c.bold == Some(true)).map(|(r, _)| p.text.get(r).unwrap_or("").to_string()).collect::<Vec<_>>())
@@ -88,7 +88,7 @@ fn a_flat_document_round_trips() {
     assert_eq!(xml.matches("<office:automatic-styles>").count(), 1, "one set of automatic styles");
     assert_eq!(summary(&import_flat(&bytes).unwrap()), summary(&d));
     // And by its extension.
-    assert_eq!(summary(&crate::import("fodt", &bytes).unwrap().unwrap()), summary(&d));
+    assert_eq!(summary(&crate::text::tests::import_ext("fodt", &bytes).unwrap().unwrap()), summary(&d));
 }
 
 #[test]
@@ -119,7 +119,7 @@ fn an_inline_sub_document_does_not_end_the_body() {
         r#"<?xml version="1.0"?><office:document xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"><office:body><office:text><text:p>Before{chart}</text:p><text:p>After the chart.</text:p></office:text></office:body></office:document>"#
     );
     let d = import_flat(xml.as_bytes()).unwrap();
-    let text: Vec<String> = d.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.replace(wordcraft_doc::para::OBJ, "")).collect();
+    let text: Vec<String> = d.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.replace(craft_wordmodel::para::OBJ, "")).collect();
     assert_eq!(text, ["Before", "After the chart."]);
     let deep = format!("<office:document><office:body>{}", "<office:body>".repeat(5000));
     let _ = import_flat(deep.as_bytes());
@@ -129,19 +129,19 @@ fn an_inline_sub_document_does_not_end_the_body() {
 fn a_template_is_saved_and_opened_as_one() {
     // An OpenDocument text template (`.ott`): the package with the template's media type, in
     // `mimetype` and as the manifest's root entry (ODF 1.3 Part 2 §3.3).
-    let d = crate::import("ott", &crate::odt::tests::package(&format!("<office:document-content {}><office:body><office:text><text:p>Template text.</text:p></office:text></office:body></office:document-content>", crate::odt::tests::NS_T), None))
+    let d = crate::text::tests::import_ext("ott", &crate::text::tests::package(&format!("<office:document-content {}><office:body><office:text><text:p>Template text.</text:p></office:text></office:body></office:document-content>", crate::text::tests::NS_T), None))
         .unwrap()
         .unwrap();
-    let bytes = crate::export("ott", &d).unwrap().unwrap();
-    assert_eq!(crate::odt::tests::entry(&bytes, "mimetype"), crate::odt::TEMPLATE_MIME);
+    let bytes = crate::text::tests::export_ext("ott", &d).unwrap().unwrap();
+    assert_eq!(crate::text::tests::entry(&bytes, "mimetype"), crate::text::TEMPLATE_MIME);
     assert!(
-        crate::odt::tests::entry(&bytes, "META-INF/manifest.xml")
+        crate::text::tests::entry(&bytes, "META-INF/manifest.xml")
             .contains(r#"manifest:full-path="/" manifest:version="1.3" manifest:media-type="application/vnd.oasis.opendocument.text-template""#)
     );
-    let back = crate::import("ott", &bytes).unwrap().unwrap();
+    let back = crate::text::tests::import_ext("ott", &bytes).unwrap().unwrap();
     assert_eq!(back.body[0].as_para().map(|p| p.text.as_str()), Some("Template text."));
     // A document is still a document.
-    assert_eq!(crate::odt::tests::entry(&crate::export("odt", &d).unwrap().unwrap(), "mimetype"), crate::odt::TEXT_MIME);
+    assert_eq!(crate::text::tests::entry(&crate::text::tests::export_ext("odt", &d).unwrap().unwrap(), "mimetype"), crate::text::TEXT_MIME);
 }
 
 #[test]
@@ -150,20 +150,20 @@ fn a_template_of_styles_only_opens_empty_with_its_styles() {
     use std::io::Write;
     let styles = format!(
         r#"<office:document-styles {}><office:styles><style:style style:name="Standard" style:family="paragraph"><style:text-properties style:font-name="DejaVu Serif"/></style:style></office:styles></office:document-styles>"#,
-        crate::odt::tests::NS_T
+        crate::text::tests::NS_T
     );
     let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    for (name, data) in [("mimetype", crate::odt::TEMPLATE_MIME), ("styles.xml", styles.as_str())] {
+    for (name, data) in [("mimetype", crate::text::TEMPLATE_MIME), ("styles.xml", styles.as_str())] {
         z.start_file(name, o).unwrap();
         z.write_all(data.as_bytes()).unwrap();
     }
-    let d = crate::import("ott", &z.finish().unwrap().into_inner()).unwrap().unwrap();
+    let d = crate::text::tests::import_ext("ott", &z.finish().unwrap().into_inner()).unwrap().unwrap();
     assert_eq!(d.body.len(), 1);
     assert_eq!(d.styles.default_chr.font.as_deref(), Some("DejaVu Serif"));
     // Without styles either, it isn't a document.
     let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     z.start_file("mimetype", o).unwrap();
-    z.write_all(crate::odt::TEXT_MIME.as_bytes()).unwrap();
-    assert!(crate::import("odt", &z.finish().unwrap().into_inner()).unwrap().is_err());
+    z.write_all(crate::text::TEXT_MIME.as_bytes()).unwrap();
+    assert!(crate::text::tests::import_ext("odt", &z.finish().unwrap().into_inner()).unwrap().is_err());
 }

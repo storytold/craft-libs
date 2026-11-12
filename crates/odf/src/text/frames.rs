@@ -7,12 +7,12 @@ use super::strokes::Defs;
 use super::styles::parse_border;
 use super::writer::pt;
 use super::xml::{Attrs, get, length};
-use crate::model::{BoxLook, parse_color};
-use wordcraft_doc::fill::Fill;
-use wordcraft_doc::line_dash::LineDash;
-use wordcraft_doc::para::{Anchor, Float, FloatAlign, ShapeKind, Wrap, WrapText};
-use wordcraft_doc::props::BorderStyle;
-use wordcraft_doc::props::Rgb;
+use craft_flow::{BoxLook, parse_color};
+use craft_wordmodel::fill::Fill;
+use craft_wordmodel::line_dash::LineDash;
+use craft_wordmodel::para::{Anchor, Float, FloatAlign, ShapeKind, Wrap, WrapText};
+use craft_wordmodel::props::BorderStyle;
+use craft_wordmodel::props::Rgb;
 
 /// Largest offset or distance read, points (22 inches).
 const MAX_LEN: f32 = 1584.0;
@@ -73,7 +73,7 @@ pub(super) struct Graphic {
     contour_mode: Option<String>,
     /// Which way a text box's text runs (§20.404 `style:writing-mode`; LibreOffice's upward
     /// `bt-lr` is its own `loext:writing-mode`).
-    vert: Option<wordcraft_doc::props::TextVert>,
+    vert: Option<craft_wordmodel::props::TextVert>,
     /// The anchor and position a style gives frames that state none (§20.299 `text:anchor-type`,
     /// `svg:x`, `svg:y` in `style:graphic-properties`: LibreOffice's label and Graphics styles).
     anchor: Option<String>,
@@ -97,13 +97,13 @@ fn clip_rect(v: &str) -> Option<[f32; 4]> {
 /// A frame's contour (§10.4.11 `draw:contour-polygon`: its `draw:points` in its `svg:viewBox`)
 /// as a wrap polygon in WordCraft's wrap space (21600 across the object each way). `None` without
 /// three usable points.
-pub(super) fn contour_polygon(a: &Attrs) -> Option<std::sync::Arc<wordcraft_doc::wrap::WrapPolygon>> {
+pub(super) fn contour_polygon(a: &Attrs) -> Option<std::sync::Arc<craft_wordmodel::wrap::WrapPolygon>> {
     let vb: Vec<f64> = get(a, "svg:viewBox")?.split(|c: char| c == ',' || c.is_whitespace()).filter_map(|v| v.parse().ok()).collect();
     let [x0, y0, vw, vh]: [f64; 4] = vb.try_into().ok()?;
     if !(vw.is_finite() && vh.is_finite() && vw > 0.0 && vh > 0.0 && x0.is_finite() && y0.is_finite()) {
         return None;
     }
-    let space = f64::from(wordcraft_doc::wrap::WRAP_SPACE);
+    let space = f64::from(craft_wordmodel::wrap::WRAP_SPACE);
     let nums: Vec<f64> = get(a, "draw:points")?.split(|c: char| c == ',' || c.is_whitespace()).filter_map(|v| v.parse().ok()).collect();
     // Points well outside the view box mean another coordinate system than the frame's (as
     // LibreOffice writes for some pictures): the outline is then worked out from the object.
@@ -116,16 +116,16 @@ pub(super) fn contour_polygon(a: &Attrs) -> Option<std::sync::Arc<wordcraft_doc:
         .as_chunks::<2>()
         .0
         .iter()
-        .take(wordcraft_doc::wrap::MAX_WRAP_POINTS)
+        .take(craft_wordmodel::wrap::MAX_WRAP_POINTS)
         .filter(|p| p.iter().all(|v| v.is_finite()))
         .map(|p| (((p[0] - x0) / vw * space).round() as i64, ((p[1] - y0) / vh * space).round() as i64));
-    wordcraft_doc::wrap::WrapPolygon::new(true, points).map(std::sync::Arc::new)
+    craft_wordmodel::wrap::WrapPolygon::new(true, points).map(std::sync::Arc::new)
 }
 
 /// A wrap polygon as a frame's `draw:contour-polygon`, the frame `w` × `h` points.
-pub(super) fn contour_xml(p: &wordcraft_doc::wrap::WrapPolygon, w: f32, h: f32) -> String {
+pub(super) fn contour_xml(p: &craft_wordmodel::wrap::WrapPolygon, w: f32, h: f32) -> String {
     let points: Vec<String> = p.points.iter().map(|[x, y]| format!("{x},{y}")).collect();
-    let s = wordcraft_doc::wrap::WRAP_SPACE;
+    let s = craft_wordmodel::wrap::WRAP_SPACE;
     format!(
         "<draw:contour-polygon svg:width=\"{}\" svg:height=\"{}\" svg:viewBox=\"0 0 {s} {s}\" draw:points=\"{}\" draw:recreate-on-edit=\"false\"/>",
         pt(w),
@@ -167,7 +167,7 @@ impl Graphic {
             clip: get(a, "fo:clip").and_then(clip_rect),
             wrap_contour: get(a, "style:wrap-contour").map(|v| v.trim() == "true"),
             vert: get(a, "loext:writing-mode").or_else(|| get(a, "style:writing-mode")).map(|m| {
-                use wordcraft_doc::props::{TextDirection, TextVert};
+                use craft_wordmodel::props::{TextDirection, TextVert};
                 match super::styles::writing_direction(m) {
                     TextDirection::Down => TextVert::Vert,
                     TextDirection::Up => TextVert::Vert270,

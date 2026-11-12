@@ -1,5 +1,5 @@
 use super::writer::{NS, Writer, align_attr, props_text, pt, spacing_props, x};
-use super::{Columns, Cursor, Document, FBlock, Meta, SectionProps, SectionStart, Write, model};
+use super::{Columns, Document, FBlock, Meta, SectionProps, SectionStart, model};
 
 /// `style:columns` (ODF 1.3 §17.12) of equal columns with their gap and, when on, the line between.
 fn columns_xml(c: &Columns) -> String {
@@ -41,8 +41,8 @@ fn kind_styles(doc: &Document, on_outline: &std::collections::BTreeSet<String>) 
             Some(_) => doc.styles.para_style_props(&id),
             // Preformatted text in a document without its style: monospaced, no spacing.
             None => (
-                wordcraft_doc::props::ParaProps { space_before: Some(0.0), space_after: Some(0.0), ..Default::default() },
-                wordcraft_doc::props::CharProps { font: Some(model::MONO_FONT.into()), size: Some(10.0), ..Default::default() },
+                craft_wordmodel::props::ParaProps { space_before: Some(0.0), space_after: Some(0.0), ..Default::default() },
+                craft_wordmodel::props::CharProps { font: Some(model::MONO_FONT.into()), size: Some(10.0), ..Default::default() },
             ),
         };
         let mut para = spacing_props(&model::Spacing {
@@ -74,10 +74,10 @@ fn kind_styles(doc: &Document, on_outline: &std::collections::BTreeSet<String>) 
 
 /// The styles of the headings in `blocks` (and their tables, to 16 levels deep) with a number by
 /// their own outline level.
-fn styles_numbered_by_own_level(blocks: &[std::sync::Arc<wordcraft_doc::Block>], depth: usize, out: &mut std::collections::BTreeSet<String>) {
+fn styles_numbered_by_own_level(blocks: &[std::sync::Arc<craft_wordmodel::Block>], depth: usize, out: &mut std::collections::BTreeSet<String>) {
     for b in blocks {
         match &**b {
-            wordcraft_doc::Block::Para(p) => {
+            craft_wordmodel::Block::Para(p) => {
                 if p.props.outline_level.is_some()
                     && p.props.numbering.is_some_and(|n| n.num != 0)
                     && let Some(s) = &p.props.style
@@ -85,25 +85,25 @@ fn styles_numbered_by_own_level(blocks: &[std::sync::Arc<wordcraft_doc::Block>],
                     out.insert(s.clone());
                 }
             }
-            wordcraft_doc::Block::Table(t) if depth < 16 => {
+            craft_wordmodel::Block::Table(t) if depth < 16 => {
                 for cell in t.rows.iter().flat_map(|r| r.cells.iter()) {
                     styles_numbered_by_own_level(&cell.blocks, depth + 1, out);
                 }
             }
-            wordcraft_doc::Block::Table(_) => {}
+            craft_wordmodel::Block::Table(_) => {}
         }
     }
 }
 
 /// A paragraph style's outline level `n` (`style:default-outline-level`), its properties being `pp`.
-fn outline_attrs(doc: &Document, n: u8, pp: &wordcraft_doc::props::ParaProps, on_outline: bool) -> String {
+fn outline_attrs(doc: &Document, n: u8, pp: &craft_wordmodel::props::ParaProps, on_outline: bool) -> String {
     // A level the outline doesn't number names no list style: LibreOffice would otherwise give
     // it the outline's (unnumbered) level, and its indent. Unless a heading in the style has a
     // number by its own level (`on_outline`), which that would take from it.
     let numbered = pp
         .numbering
         .and_then(|r| doc.numbering.level(r.num, r.level))
-        .is_some_and(|l| !matches!(l.format, wordcraft_doc::section::NumFormat::None | wordcraft_doc::section::NumFormat::Bullet));
+        .is_some_and(|l| !matches!(l.format, craft_wordmodel::section::NumFormat::None | craft_wordmodel::section::NumFormat::Bullet));
     let detach = if numbered || on_outline { "" } else { " style:list-style-name=\"\"" };
     format!(" style:default-outline-level=\"{n}\"{detach}")
 }
@@ -170,7 +170,7 @@ fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>, on_
                 // From the style's indent where the document measures them so (as they are read).
                 let indent = if model::tabs_from_indent(doc) { pp.indent_left.unwrap_or(0.0) } else { 0.0 };
                 let tabs: Vec<_> =
-                    tabs.iter().map(|t| wordcraft_doc::props::TabStop { pos: (t.pos - indent).clamp(-1584.0, 1584.0), ..*t }).collect();
+                    tabs.iter().map(|t| craft_wordmodel::props::TabStop { pos: (t.pos - indent).clamp(-1584.0, 1584.0), ..*t }).collect();
                 super::writer::tab_stops(&tabs)
             })
             .unwrap_or_default();
@@ -189,10 +189,10 @@ fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>, on_
 /// Paragraph style `id`'s own text formatting `chr`, with the complex-script size it takes when it
 /// states only a size: a parent's complex size where one sets it (the model takes it from there,
 /// and the writer would otherwise give it this style's size), else its own size.
-fn with_complex_size(doc: &Document, id: &str, chr: &wordcraft_doc::props::CharProps) -> wordcraft_doc::props::CharProps {
+fn with_complex_size(doc: &Document, id: &str, chr: &craft_wordmodel::props::CharProps) -> craft_wordmodel::props::CharProps {
     let mut chr = chr.clone();
     if chr.size.is_some() && chr.size_cs.is_none() {
-        let cs = doc.styles.resolve_char(Some(id), &wordcraft_doc::props::CharProps::default()).size_cs;
+        let cs = doc.styles.resolve_char(Some(id), &craft_wordmodel::props::CharProps::default()).size_cs;
         chr.size_cs = (chr.size != Some(cs)).then_some(cs);
     }
     chr
@@ -236,7 +236,7 @@ fn outline_style(doc: &Document) -> String {
             .and_then(|r| doc.numbering.level(r.num, r.level).cloned().map(|l| (r.level, l)));
         let (indent, hanging) = level.as_ref().map(|(_, l)| (l.indent, l.hanging)).unwrap_or((0.0, 0.0));
         let attrs = match level {
-            Some((lv, l)) if !matches!(l.format, wordcraft_doc::section::NumFormat::None | wordcraft_doc::section::NumFormat::Bullet) => {
+            Some((lv, l)) if !matches!(l.format, craft_wordmodel::section::NumFormat::None | craft_wordmodel::section::NumFormat::Bullet) => {
                 let label = model::Label::of_level(l.format, &l.text);
                 let mut a = format!(" style:num-format=\"{}\"", super::writer::odf_num_format(l.format));
                 for (k, v) in [("style:num-prefix", label.prefix.as_str()), ("style:num-suffix", label.suffix.as_str())] {
@@ -362,7 +362,7 @@ fn with_watermark(body: &str, shape: &str) -> String {
 /// `part_styles`.
 fn styles_xml(
     doc: &Document,
-    pages: &[(String, wordcraft_doc::SectionProps)],
+    pages: &[(String, craft_wordmodel::SectionProps)],
     parts: &[PageParts],
     part_styles: &str,
     named: &std::collections::BTreeSet<String>,
@@ -370,7 +370,7 @@ fn styles_xml(
     // WordCraft's page layouts take another prefix next to the file's own (see `super::kept`).
     let pm = if doc.kept.of("odt").is_some() { "wcpm" } else { "pm" };
     // The document defaults: Normal's font, spacing and indents, pair kerning and tab interval.
-    let body_font = doc.styles.default_chr.font.clone().unwrap_or_else(|| wordcraft_doc::styles::BODY_FONT.to_string());
+    let body_font = doc.styles.default_chr.font.clone().unwrap_or_else(|| craft_wordmodel::styles::BODY_FONT.to_string());
     let normal = doc.styles.resolve_para(&Default::default());
     let defaults = &model::Spacing {
         before: Some(normal.space_before),
@@ -398,7 +398,7 @@ fn styles_xml(
         size_cs = if doc.styles.default_chr.size_cs.is_none() { format!(" style:font-size-complex=\"{}\"", pt(size)) } else { String::new() },
         // The document's text colour (a colour, not automatic).
         color = match doc.styles.default_chr.color {
-            Some(wordcraft_doc::props::TextColor::Rgb(c)) => format!(" fo:color=\"#{}\"", c.hex().to_ascii_lowercase()),
+            Some(craft_wordmodel::props::TextColor::Rgb(c)) => format!(" fo:color=\"#{}\"", c.hex().to_ascii_lowercase()),
             _ => String::new(),
         },
         tab = pt(tab),
@@ -688,7 +688,7 @@ fn with_setting(own: &str, name: &str, on: bool, item: &str) -> Option<String> {
     Some(format!("{}{item}{}", own.get(..at).unwrap_or(""), own.get(at..).unwrap_or("")))
 }
 
-fn meta_xml(m: &Meta, core: &wordcraft_doc::CoreProps, props: &[wordcraft_doc::CustomProp]) -> String {
+fn meta_xml(m: &Meta, core: &craft_wordmodel::CoreProps, props: &[craft_wordmodel::CustomProp]) -> String {
     let mut s =
         format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-meta {NS}><office:meta><meta:generator>WordCraft</meta:generator>");
     if !m.title.is_empty() {
@@ -734,7 +734,7 @@ fn meta_xml(m: &Meta, core: &wordcraft_doc::CoreProps, props: &[wordcraft_doc::C
 }
 
 /// A custom property's ODF value type and value.
-fn odf_value(p: &wordcraft_doc::CustomProp) -> (&'static str, String) {
+fn odf_value(p: &craft_wordmodel::CustomProp) -> (&'static str, String) {
     let t = match p.kind.as_str() {
         "r4" | "r8" | "i1" | "i2" | "i4" | "i8" | "int" | "ui1" | "ui2" | "ui4" | "ui8" | "uint" | "decimal" | "cy" => "float",
         "bool" => "boolean",
@@ -746,7 +746,7 @@ fn odf_value(p: &wordcraft_doc::CustomProp) -> (&'static str, String) {
 }
 
 /// The document's user fields (§7.4.7 `text:user-field-decls`), declared at the start of the text.
-fn user_field_decls(props: &[wordcraft_doc::CustomProp]) -> String {
+fn user_field_decls(props: &[craft_wordmodel::CustomProp]) -> String {
     let decls: String = props
         .iter()
         .filter(|p| p.odf_user_field && p.kind != "raw")
@@ -787,8 +787,8 @@ fn flow_sections(blocks: &[FBlock], last: &SectionProps) -> Vec<(SectionProps, s
 
 /// Write an `.odt` package.
 /// The kinds of the shapes with drawing ids in `blocks` (paragraphs, tables, groups), by id.
-fn conn_kinds(blocks: &[FBlock]) -> super::HashMap<u32, wordcraft_doc::para::ShapeKind> {
-    fn walk(blocks: &[FBlock], depth: usize, out: &mut super::HashMap<u32, wordcraft_doc::para::ShapeKind>) {
+fn conn_kinds(blocks: &[FBlock]) -> super::HashMap<u32, craft_wordmodel::para::ShapeKind> {
+    fn walk(blocks: &[FBlock], depth: usize, out: &mut super::HashMap<u32, craft_wordmodel::para::ShapeKind>) {
         if depth > model::MAX_DEPTH {
             return;
         }
@@ -799,7 +799,7 @@ fn conn_kinds(blocks: &[FBlock]) -> super::HashMap<u32, wordcraft_doc::para::Sha
             }
         }
     }
-    fn inline(i: &super::Inline, depth: usize, out: &mut super::HashMap<u32, wordcraft_doc::para::ShapeKind>) {
+    fn inline(i: &super::Inline, depth: usize, out: &mut super::HashMap<u32, craft_wordmodel::para::ShapeKind>) {
         match i {
             super::Inline::Shape { kind, look, .. } => {
                 if let Some(c) = look.conn.as_deref().filter(|c| c.id != 0) {
@@ -817,7 +817,7 @@ fn conn_kinds(blocks: &[FBlock]) -> super::HashMap<u32, wordcraft_doc::para::Sha
 
 /// `styles` with the file's own style definitions while `doc`'s are as read (see
 /// `super::kept`), and the font faces they name added to those kept paragraphs need (`used`).
-fn styles_as_read(doc: &Document, kept: Option<&wordcraft_doc::kept::KeptXml>, styles: String, used: &mut super::kept::Needed) -> String {
+fn styles_as_read(doc: &Document, kept: Option<&craft_wordmodel::kept::KeptXml>, styles: String, used: &mut super::kept::Needed) -> String {
     let Some(k) = kept.filter(|k| k.styles_as_read(doc)) else { return styles };
     // With the font faces they name (any of the file's, by its names).
     for (key, d) in &k.defs {
@@ -832,7 +832,7 @@ fn styles_as_read(doc: &Document, kept: Option<&wordcraft_doc::kept::KeptXml>, s
 /// links to (`used`), written as read with them (added to `files` and `manifest` where no file
 /// `taken` has the path). A picture only an edited paragraph showed isn't written.
 fn with_kept_files(
-    kept: Option<&wordcraft_doc::kept::KeptXml>,
+    kept: Option<&craft_wordmodel::kept::KeptXml>,
     used: &std::collections::BTreeSet<String>,
     taken: &dyn Fn(&str) -> bool,
     files: &mut Vec<(String, std::sync::Arc<Vec<u8>>)>,
@@ -870,7 +870,7 @@ fn with_kept_files(
 /// `office:text`'s statement that the text holds the file's soft page breaks (§19.857
 /// `text:use-soft-page-breaks`), when the file said so and markup kept as read in `body` holds
 /// them.
-fn soft_page_breaks(kept: Option<&wordcraft_doc::kept::KeptXml>, body: &str) -> &'static str {
+fn soft_page_breaks(kept: Option<&craft_wordmodel::kept::KeptXml>, body: &str) -> &'static str {
     if kept.is_some_and(|k| k.defs.contains_key("soft-page-breaks")) && body.contains("<text:soft-page-break") {
         " text:use-soft-page-breaks=\"true\""
     } else {
@@ -1242,13 +1242,8 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     }
     manifest.push_str("</manifest:manifest>\n");
 
-    let err = |e: zip::result::ZipError| format!("ODT: {e}");
-    let ioerr = |e: std::io::Error| format!("ODT: {e}");
-    let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    let deflated = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    z.start_file("mimetype", stored).map_err(err)?;
-    z.write_all(mime.as_bytes()).map_err(ioerr)?;
+    let mut z = crate::PackageWriter::new(mime);
+    z.manifest_xml(manifest);
     // Each font declared, for readers without it (§16.21).
     let (content, styles) = (with_font_faces(&content), with_font_faces(&styles));
     // What the paragraphs written as read need, as read (see `super::kept`).
@@ -1260,30 +1255,25 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         None => styles,
     };
     let (content, styles) = with_kept_defs(content, styles, &w.kept_used, &w.kept_defs);
+    // The manifest lists every file already: the writer adds the files only.
     for (name, data) in [
-        ("META-INF/manifest.xml", manifest.as_bytes()),
         ("content.xml", content.as_bytes()),
         ("styles.xml", styles.as_bytes()),
         ("meta.xml", meta.as_bytes()),
         ("settings.xml", settings_xml(doc).as_bytes()),
     ] {
-        z.start_file(name, deflated).map_err(err)?;
-        z.write_all(data).map_err(ioerr)?;
+        z.file(name, "", data);
     }
     for (dir, xml, _) in &w.objects {
-        z.start_file(format!("{dir}/content.xml"), deflated).map_err(err)?;
-        z.write_all(xml.as_bytes()).map_err(ioerr)?;
+        z.file(&format!("{dir}/content.xml"), "", xml.as_bytes());
     }
     for (name, data, _) in &w.pictures {
-        z.start_file(name.as_str(), stored).map_err(err)?;
-        z.write_all(data).map_err(ioerr)?;
+        z.stored(name, "", data);
     }
     for (name, data) in &kept_files {
-        z.start_file(name.as_str(), deflated).map_err(err)?;
-        z.write_all(data).map_err(ioerr)?;
+        z.file(name, "", data);
     }
-    let cur = z.finish().map_err(err)?;
-    Ok(cur.into_inner())
+    z.finish().map_err(|e| format!("ODT: {e}"))
 }
 
 /// A page layout's page number format (§19.500 `style:num-format`), the document's page colour
@@ -1303,7 +1293,7 @@ fn page_look(doc: &Document, sec: &SectionProps) -> String {
 /// Page borders `b` as ODF writes them, and the margins (top, bottom, left, right) of the page
 /// they go round: each border at its distance from the edge (WordCraft's), which becomes the
 /// margin, with the rest of the way to the text as its padding.
-fn page_borders(b: Option<wordcraft_doc::props::Borders>, margins: [f32; 4]) -> (String, [f32; 4]) {
+fn page_borders(b: Option<craft_wordmodel::props::Borders>, margins: [f32; 4]) -> (String, [f32; 4]) {
     let Some(b) = b.filter(|b| b.any_visible()) else { return (String::new(), margins) };
     let mut out = margins;
     let mut attrs = String::new();
@@ -1322,7 +1312,7 @@ fn page_borders(b: Option<wordcraft_doc::props::Borders>, margins: [f32; 4]) -> 
 /// The footnotes' and endnotes' numbering (§16.29 `text:notes-configuration`): format, first
 /// number (ODF counts from 0), restart and, for footnotes, page foot or document end.
 fn notes_configuration(doc: &Document) -> String {
-    use wordcraft_doc::section::{NotePos, NoteRestart};
+    use craft_wordmodel::section::{NotePos, NoteRestart};
     let mut s = String::new();
     for (class, fmt, pr) in
         [("footnote", doc.settings.footnote_format, &doc.settings.footnote_pr), ("endnote", doc.settings.endnote_format, &doc.settings.endnote_pr)]
@@ -1355,8 +1345,8 @@ fn notes_configuration(doc: &Document) -> String {
 
 /// Line numbering (§16.30 `text:linenumbering-configuration`): every how many lines, how far
 /// from the text, restarting on each page or not.
-fn line_numbering_xml(l: &wordcraft_doc::section::LineNumbering) -> String {
-    let restart = l.restart == wordcraft_doc::section::LineNumberRestart::Page;
+fn line_numbering_xml(l: &craft_wordmodel::section::LineNumbering) -> String {
+    let restart = l.restart == craft_wordmodel::section::LineNumberRestart::Page;
     format!(
         "<text:linenumbering-configuration text:number-lines=\"true\" text:increment=\"{}\" text:offset=\"{}\" style:num-format=\"1\" text:number-position=\"left\" text:restart-on-page=\"{restart}\"/>",
         l.count_by.clamp(1, 100),
@@ -1376,12 +1366,12 @@ fn hidden_controls(doc: &Document) -> Vec<String> {
 /// The names SET fields in `doc` give values (each story, a bounded number): its variables.
 fn variables(doc: &Document) -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
-    let stories = std::iter::once(wordcraft_doc::StoryRef::Body).chain(doc.parts.keys().map(|k| wordcraft_doc::StoryRef::Part(*k)));
+    let stories = std::iter::once(craft_wordmodel::StoryRef::Body).chain(doc.parts.keys().map(|k| craft_wordmodel::StoryRef::Part(*k)));
     for story in stories {
         for path in doc.para_paths(story) {
             let Some(p) = doc.para(story, &path) else { continue };
             for o in &p.objects {
-                if let wordcraft_doc::InlineObject::Field { instr, .. } = o
+                if let craft_wordmodel::InlineObject::Field { instr, .. } = o
                     && let Some((name, _)) = super::fields::set_of(instr)
                     && out.len() < 10_000
                     && !name.contains(['"', '<', '&'])
@@ -1529,9 +1519,9 @@ mod setting_tests {
     /// distance, instead of panicking.
     #[test]
     fn a_page_border_round_a_hostile_margin_is_written_at_no_distance() {
-        let mut edge = wordcraft_doc::props::Border::single(1.0);
+        let mut edge = craft_wordmodel::props::Border::single(1.0);
         edge.space = 12.0;
-        let b = wordcraft_doc::props::Borders::all(edge);
+        let b = craft_wordmodel::props::Borders::all(edge);
         let (attrs, out) = super::page_borders(Some(b), [-10.0, f32::NAN, 36.0, 5.0]);
         assert!(attrs.contains("fo:border-top="), "{attrs}");
         assert_eq!(out[0], 0.0);

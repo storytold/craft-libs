@@ -4,9 +4,9 @@
 //! can't show that picture, LibreOffice's own metafile format), and saved back as the same object
 //! with its files, so LibreOffice opens them as before.
 
-use crate::model::Inline;
-use crate::odt::tests::{NS_T, entry, paras, zip_of};
-use crate::odt::{export, import, parse};
+use crate::text::tests::{NS_T, entry, paras, zip_of};
+use crate::text::{export, import, parse};
+use craft_flow::Inline;
 
 const NS_D: &str = r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink""#;
 
@@ -37,10 +37,10 @@ fn package() -> Vec<u8> {
 fn an_embedded_spreadsheet_is_kept_with_a_placeholder_picture() {
     let flow = parse(&package()).unwrap();
     let inlines: Vec<&Inline> = paras(&flow).into_iter().flat_map(|p| &p.inlines).collect();
-    let imgs: Vec<&crate::model::Img> = inlines.iter().filter_map(|i| if let Inline::Image(img) = i { Some(img) } else { None }).collect();
+    let imgs: Vec<&craft_flow::Img> = inlines.iter().filter_map(|i| if let Inline::Image(img) = i { Some(img) } else { None }).collect();
     assert_eq!(imgs.len(), 2, "both objects are shown");
     // A placeholder WordCraft can draw, at the frame's size.
-    assert!(imgs.iter().all(|i| crate::model::sniff_image(&i.data).is_some()));
+    assert!(imgs.iter().all(|i| craft_flow::sniff_image(&i.data).is_some()));
     assert_eq!((imgs[0].w, imgs[0].h), (216.0, 72.0));
     let sheet = imgs[0].object.as_deref().expect("the spreadsheet is kept");
     assert_eq!((sheet.mime.as_str(), sheet.ole), ("application/vnd.oasis.opendocument.spreadsheet", false));
@@ -57,9 +57,9 @@ fn an_embedded_spreadsheet_is_kept_with_a_placeholder_picture() {
 #[test]
 fn embedded_objects_are_saved_back_whole() {
     let doc = import(&package()).unwrap();
-    let saved = crate::odt::tests::export_model(&doc).unwrap();
-    let z = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
-    let names: Vec<&str> = z.file_names().collect();
+    let saved = crate::text::tests::export_model(&doc).unwrap();
+    let z = crate::Package::open(&saved, &crate::Limits::DEFAULT).unwrap();
+    let names: Vec<&str> = z.names().collect();
     for n in ["Object 1/content.xml", "Object 1/styles.xml", "Object 2", "ObjectReplacements/Object 1", "ObjectReplacements/Object 2"] {
         assert!(names.contains(&n), "{n} in {names:?}");
     }
@@ -85,7 +85,7 @@ fn embedded_objects_are_saved_back_whole() {
 #[test]
 fn a_docx_save_writes_the_objects_pictures_only() {
     let doc = import(&package()).unwrap();
-    let flow = crate::model::from_doc(&doc);
+    let flow = craft_flow::from_doc(&doc);
     // Formats without ODF objects (and so DOCX) get the picture alone.
     assert!(paras(&flow).into_iter().flat_map(|p| &p.inlines).all(|i| !matches!(i, Inline::Image(img) if img.object.is_some())));
     assert!(doc.passthrough.keys().any(|k| k.contains("Object") || k.starts_with("odf-object")));
@@ -105,7 +105,7 @@ fn hostile_objects_are_bounded() {
     }
     let refs: Vec<(&str, &[u8])> = files.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
     let flow = parse(&zip_of(&refs)).unwrap();
-    let objects: Vec<&crate::model::OdfObject> = paras(&flow)
+    let objects: Vec<&craft_flow::OdfObject> = paras(&flow)
         .into_iter()
         .flat_map(|p| &p.inlines)
         .filter_map(|i| if let Inline::Image(img) = i { img.object.as_deref() } else { None })
@@ -118,17 +118,17 @@ fn hostile_objects_are_bounded() {
 #[test]
 fn a_flat_document_holds_its_objects_and_their_pictures_inline() {
     let doc = import(&package()).unwrap();
-    let flat = crate::odt::export_flat(&doc).unwrap();
+    let flat = crate::text::export_flat(&doc).unwrap();
     let text = String::from_utf8(flat.clone()).unwrap();
     // No link is left pointing at a file a flat document doesn't have.
     assert!(!text.contains("xlink:href=\"./ObjectReplacements") && !text.contains("xlink:href=\"./Object"), "{text}");
     assert!(text.contains("<draw:object-ole><office:binary-data>"), "{text}");
     // Opened again: the OLE object's file is back, and both objects are still kept.
-    let again = crate::odt::import_flat(&flat).unwrap();
+    let again = crate::text::import_flat(&flat).unwrap();
     let saved = export(&again).unwrap();
-    let z = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
-    let names: Vec<&str> = z.file_names().collect();
-    let ole = crate::odt::tests::entry(&saved, "content.xml");
+    let z = crate::Package::open(&saved, &crate::Limits::DEFAULT).unwrap();
+    let names: Vec<&str> = z.names().collect();
+    let ole = crate::text::tests::entry(&saved, "content.xml");
     assert!(ole.contains("<draw:object-ole"), "{ole}");
     // Both objects with their pictures, each link to a file (or folder) the package has.
     assert_eq!(ole.matches("<draw:image ").count(), 2, "{ole}");
@@ -156,15 +156,15 @@ fn an_object_in_a_header_is_kept_too() {
     // Unedited: the header as read, and the object's files it names with it.
     let d = import(&pkg).unwrap();
     let saved = export(&d).unwrap();
-    let z = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
-    let names: Vec<&str> = z.file_names().collect();
+    let z = crate::Package::open(&saved, &crate::Limits::DEFAULT).unwrap();
+    let names: Vec<&str> = z.names().collect();
     assert!(names.contains(&"Object 1/content.xml") && names.contains(&"ObjectReplacements/Object 1"), "{names:?}");
     assert!(entry(&saved, "styles.xml").contains("<draw:object xlink:href=\"./Object 1\""));
     assert!(entry(&saved, "META-INF/manifest.xml").contains(r#"manifest:full-path="Object 1/""#));
     // Written from the model: WordCraft's own object, named its way.
-    let saved = crate::odt::tests::export_model(&d).unwrap();
-    let z = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
-    assert!(z.file_names().any(|n| n.ends_with("/content.xml") && n.starts_with("Object M")), "{:?}", z.file_names().collect::<Vec<_>>());
+    let saved = crate::text::tests::export_model(&d).unwrap();
+    let z = crate::Package::open(&saved, &crate::Limits::DEFAULT).unwrap();
+    assert!(z.names().any(|n| n.ends_with("/content.xml") && n.starts_with("Object M")), "{:?}", z.names().collect::<Vec<_>>());
     assert!(entry(&saved, "styles.xml").contains("<draw:object xlink:href=\"./Object M"));
 }
 
@@ -178,7 +178,7 @@ fn a_picture_keeps_the_size_its_frame_states_on_either_side() {
         out.into_inner()
     };
     let size = |w: Option<f32>, h: Option<f32>| {
-        let img = crate::odt::body::drawing::picture(png(200, 100), w, h, "").unwrap();
+        let img = crate::text::body::drawing::picture(png(200, 100), w, h, "").unwrap();
         (img.w, img.h)
     };
     let near = |got: (f32, f32), want: (f32, f32)| assert!((got.0 - want.0).abs() < 0.01 && (got.1 - want.1).abs() < 0.01, "{got:?}, not {want:?}");
@@ -196,7 +196,7 @@ fn a_picture_keeps_the_size_its_frame_states_on_either_side() {
     for junk in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -5.0] {
         near(size(Some(junk), Some(junk)), (150.0, 75.0));
     }
-    let wide = crate::odt::body::drawing::picture(png(1000, 500), None, None, "").unwrap();
+    let wide = crate::text::body::drawing::picture(png(1000, 500), None, None, "").unwrap();
     near((wide.w, wide.h), (468.0, 234.0));
 }
 
@@ -223,7 +223,7 @@ fn a_replacement_picture_before_its_object_is_kept() {
             .and_then(|o| o.replacement.clone())
     };
     assert_eq!(replacement(&bytes).as_deref().map(Vec::as_slice), Some(METAFILE));
-    let saved = crate::odt::tests::export_model(&import(&bytes).unwrap()).unwrap();
+    let saved = crate::text::tests::export_model(&import(&bytes).unwrap()).unwrap();
     assert_eq!(replacement(&saved).as_deref().map(Vec::as_slice), Some(METAFILE), "written from the model");
 }
 
@@ -260,7 +260,7 @@ fn a_readable_picture_after_an_unreadable_replacement_is_shown() {
             assert_eq!(img.object.unwrap().replacement.as_deref().map(Vec::as_slice), Some(METAFILE), "{what}: keeps the replacement");
         };
         check(&bytes, "read");
-        check(&crate::odt::tests::export_model(&import(&bytes).unwrap()).unwrap(), "written from the model");
+        check(&crate::text::tests::export_model(&import(&bytes).unwrap()).unwrap(), "written from the model");
     }
 }
 
@@ -277,6 +277,6 @@ fn the_placeholder_for_an_object_is_not_saved_as_its_picture() {
         ("Object 1/styles.xml", b"<office:document-styles/>"),
         ("ObjectReplacements/Object 1", METAFILE),
     ]);
-    let saved = crate::odt::tests::export_model(&import(&bytes).unwrap()).unwrap();
+    let saved = crate::text::tests::export_model(&import(&bytes).unwrap()).unwrap();
     assert_eq!(entry(&saved, "content.xml").matches("<draw:image ").count(), 1);
 }

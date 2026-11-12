@@ -3,10 +3,10 @@
 //! and circles (§10.3.8): opened as WordCraft freeforms (curves followed by short straight
 //! segments) and ellipses, and freeforms written back as paths.
 
-use crate::odt::tests::{NS_T, content_of, package};
-use crate::odt::{export, import};
-use wordcraft_doc::Document;
-use wordcraft_doc::para::{InlineObject, ShapeKind};
+use crate::text::tests::{NS_T, content_of, package};
+use crate::text::{export, import};
+use craft_wordmodel::Document;
+use craft_wordmodel::para::{InlineObject, ShapeKind};
 
 const NS_D: &str =
     r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0""#;
@@ -108,7 +108,7 @@ fn freeforms_round_trip_as_paths_or_custom_shapes() {
     let d = open(
         r#"<draw:polygon text:anchor-type="paragraph" svg:width="2in" svg:height="1in" svg:viewBox="0 0 2000 1000" draw:points="0,0 2000,0 1000,1000"/><draw:path svg:width="1in" svg:height="1in" svg:viewBox="0 0 100 100" svg:d="M0 0 H50 v50 l-50 0 Z m60 0 L100 100"/>"#,
     );
-    let bytes = crate::odt::tests::export_model(&d).unwrap();
+    let bytes = crate::text::tests::export_model(&d).unwrap();
     // The second, with a closed and an open path, as a custom shape (see `custom_geometry`).
     let c = content_of(&bytes);
     assert_eq!((c.matches("<draw:path ").count(), c.matches("<draw:custom-shape ").count()), (1, 1));
@@ -130,7 +130,7 @@ fn hostile_paths_do_not_panic() {
         let d = open(&el);
         for (_, _, paths) in drawn(&d) {
             for (pts, _) in paths {
-                assert!(pts.len() <= wordcraft_doc::freeform::MAX_POINTS && pts.iter().all(|(x, y)| x.is_finite() && y.is_finite()));
+                assert!(pts.len() <= craft_wordmodel::freeform::MAX_POINTS && pts.iter().all(|(x, y)| x.is_finite() && y.is_finite()));
             }
         }
         let _ = export(&d).unwrap();

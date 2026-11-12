@@ -8,8 +8,8 @@
 
 use std::collections::BTreeMap;
 
-use crate::odt::xml::{Ev, events};
-use crate::odt::{export, import};
+use crate::text::xml::{Ev, events};
+use crate::text::{export, import};
 
 /// What a save may lose, and why. Matched against the start of a loss (see [`inventory`]).
 const ALLOWED: &[(&str, &str)] = &[];
@@ -85,13 +85,11 @@ fn nameish(a: &str) -> bool {
 /// What a package holds, as counts: `el <q>`, `attr <el>@<a>`, `val <el>@<a>=<value>` (the
 /// values of formatting properties), and `word <w>`.
 fn inventory(bytes: &[u8]) -> BTreeMap<String, usize> {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+    let mut z = crate::Package::open(bytes, &crate::Limits::DEFAULT).unwrap();
     let mut inv = BTreeMap::new();
     let mut add = |k: String| *inv.entry(k).or_insert(0usize) += 1;
     for part in ["content.xml", "styles.xml", "meta.xml"] {
-        let mut xml = Vec::new();
-        let Ok(mut f) = z.by_name(part) else { continue };
-        std::io::Read::read_to_end(&mut f, &mut xml).unwrap();
+        let Some(xml) = z.read(part).unwrap() else { continue };
         let mut text = String::new();
         events(&xml, |ev| match ev {
             Ev::Start(q, a) => {
@@ -347,31 +345,15 @@ const SAMPLES: [Sample; 18] = [
 
 /// Whether `xml` is well-formed: every element closed, in order, once.
 fn well_formed(xml: &[u8]) -> bool {
-    let mut r = quick_xml::Reader::from_reader(xml);
-    r.config_mut().check_end_names = true;
-    let mut buf = Vec::new();
-    let mut depth = 0i64;
-    loop {
-        buf.clear();
-        match r.read_event_into(&mut buf) {
-            Ok(quick_xml::events::Event::Start(_)) => depth += 1,
-            Ok(quick_xml::events::Event::End(_)) => depth -= 1,
-            Ok(quick_xml::events::Event::Eof) => return depth == 0,
-            Ok(_) => {}
-            Err(_) => return false,
-        }
-        if depth < 0 {
-            return false;
-        }
-    }
+    let limits =
+        craft_xml::Limits { max_input: usize::MAX, max_depth: usize::MAX, max_nodes: usize::MAX, max_attrs: usize::MAX, max_attrs_total: usize::MAX };
+    craft_xml::Options::default().strict().with_limits(limits).parse(xml).is_ok()
 }
 
 fn parts_well_formed(bytes: &[u8]) -> Result<(), String> {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).map_err(|e| e.to_string())?;
+    let mut z = crate::Package::open(bytes, &crate::Limits::DEFAULT).map_err(|e| e.to_string())?;
     for part in ["content.xml", "styles.xml", "meta.xml", "settings.xml", "META-INF/manifest.xml"] {
-        let mut xml = Vec::new();
-        let mut f = z.by_name(part).map_err(|e| format!("{part}: {e}"))?;
-        std::io::Read::read_to_end(&mut f, &mut xml).map_err(|e| e.to_string())?;
+        let xml = z.read(part).map_err(|e| e.to_string())?.ok_or(format!("{part}: missing"))?;
         if !well_formed(&xml) {
             return Err(format!("{part} isn't well-formed:\n{}", String::from_utf8_lossy(&xml)));
         }
@@ -383,10 +365,10 @@ fn parts_well_formed(bytes: &[u8]) -> Result<(), String> {
 fn edits_leave_kept_markup_well_formed() {
     // Whatever is edited (a paragraph that opens a section deleted, text typed into each
     // paragraph, a style changed), what is written stays well-formed and reads back.
-    use wordcraft_doc::Pos;
+    use craft_wordmodel::Pos;
     for s in SAMPLES {
         let d = import(&package(&s)).unwrap();
-        let mut edits: Vec<wordcraft_doc::Document> = Vec::new();
+        let mut edits: Vec<craft_wordmodel::Document> = Vec::new();
         for i in 0..d.body.len() {
             let mut e = d.clone();
             if e.body.get(i).is_some_and(|b| b.as_para().is_some()) {
@@ -418,7 +400,7 @@ fn edits_leave_kept_markup_well_formed() {
 #[test]
 fn an_edited_index_is_written_from_the_model() {
     // Unedited, the index keeps its templates; once an entry changes, the edit is what's saved.
-    use wordcraft_doc::Pos;
+    use craft_wordmodel::Pos;
     let d = import(&package(&INDEXES)).unwrap();
     let c = content_of(&export(&d).unwrap());
     assert!(c.contains("text:combine-entries-with-pp=\"false\""), "{c}");
@@ -432,10 +414,8 @@ fn an_edited_index_is_written_from_the_model() {
 }
 
 fn content_of(bytes: &[u8]) -> String {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
-    let mut s = String::new();
-    std::io::Read::read_to_string(&mut z.by_name("content.xml").unwrap(), &mut s).unwrap();
-    s
+    let mut z = crate::Package::open(bytes, &crate::Limits::DEFAULT).unwrap();
+    String::from_utf8(z.read("content.xml").unwrap().unwrap()).unwrap()
 }
 
 /// The declarations at the start of the text are written in the schema's order: variables,
@@ -453,11 +433,11 @@ fn a_section_in_a_text_box_closes_in_it_whatever_is_edited() {
     // The paragraph closing the box's section edited (its wrapper gone): the section still
     // closes inside the box, before the box ends.
     let d = import(&package(&SECTIONS)).unwrap();
-    for (id, part) in d.parts.iter().filter(|(_, p)| p.kind == wordcraft_doc::PartKind::TextBox) {
+    for (id, part) in d.parts.iter().filter(|(_, p)| p.kind == craft_wordmodel::PartKind::TextBox) {
         for i in 0..part.blocks.len() {
             let mut e = d.clone();
             let Some(b) = e.parts.get_mut(id).and_then(|p| p.blocks.get_mut(i)) else { continue };
-            let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) else { continue };
+            let craft_wordmodel::Block::Para(p) = std::sync::Arc::make_mut(b) else { continue };
             // Restyled: no longer what was read.
             p.props.style = Some("Edited".into());
             p.touch();
@@ -476,18 +456,14 @@ fn a_picture_kept_as_read_is_written_with_its_paragraph_only() {
     // and the table showing it are gone, it isn't (a deleted picture stays deleted).
     let d = import(&package(&DRAWINGS)).unwrap();
     let files = |bytes: &[u8]| {
-        let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
-        let names: Vec<String> = (0..z.len()).filter_map(|i| z.by_index(i).ok().map(|f| f.name().to_string())).collect();
-        let dot = z.by_name("Pictures/dot.png").ok().map(|mut f| {
-            let mut v = Vec::new();
-            std::io::Read::read_to_end(&mut f, &mut v).unwrap();
-            v
-        });
+        let mut z = crate::Package::open(bytes, &crate::Limits::DEFAULT).unwrap();
+        let names: Vec<String> = z.names().map(str::to_string).collect::<Vec<_>>().into_iter().collect();
+        let dot = z.read("Pictures/dot.png").unwrap();
         (names, dot)
     };
     let saved = export(&d).unwrap();
     assert_eq!(files(&saved).1.as_deref(), Some(DOT));
-    assert!(crate::odt::tests::entry(&saved, "META-INF/manifest.xml").contains(r#"manifest:full-path="Pictures/dot.png""#));
+    assert!(crate::text::tests::entry(&saved, "META-INF/manifest.xml").contains(r#"manifest:full-path="Pictures/dot.png""#));
     let mut e = d.clone();
     e.body.retain(|b| b.as_para().is_none_or(|p| !p.text.starts_with("A picture")) && b.as_table().is_none());
     let saved = export(&e).unwrap();
@@ -507,8 +483,8 @@ fn markup_kept_as_read_never_links_to_a_picture_that_could_not_be_read() {
     let d = import(&bytes).unwrap();
     let saved = export(&d).unwrap();
     let c = content_of(&saved);
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(saved.clone())).unwrap();
-    assert!(!c.contains("Pictures/dot.png") || z.by_name("Pictures/dot.png").is_ok(), "{c}");
+    let z = crate::Package::open(&saved, &crate::Limits::DEFAULT).unwrap();
+    assert!(!c.contains("Pictures/dot.png") || z.contains("Pictures/dot.png"), "{c}");
     // The text round it stays.
     assert!(c.contains("A picture"), "{c}");
 }
@@ -516,14 +492,14 @@ fn markup_kept_as_read_never_links_to_a_picture_that_could_not_be_read() {
 #[test]
 fn a_paragraph_with_comments_is_written_as_read_while_they_are() {
     let d = import(&package(&COMMENTS)).unwrap();
-    let as_read = |d: &wordcraft_doc::Document| content_of(&export(d).unwrap()).contains(r#"wcx:mark="kept""#);
+    let as_read = |d: &craft_wordmodel::Document| content_of(&export(d).unwrap()).contains(r#"wcx:mark="kept""#);
     assert!(as_read(&d));
     // A comment's text edited, resolved, deleted with its reply, or answered: written from the
     // model, which has what changed.
-    let first = |d: &wordcraft_doc::Document| d.comments.iter().find(|(_, c)| c.author == "Ada Lovelace").map(|(id, c)| (*id, c.clone())).unwrap();
+    let first = |d: &craft_wordmodel::Document| d.comments.iter().find(|(_, c)| c.author == "Ada Lovelace").map(|(id, c)| (*id, c.clone())).unwrap();
     let mut e = d.clone();
     let (_, c) = first(&e);
-    if let Some(wordcraft_doc::Block::Para(p)) = e.parts.get_mut(&c.part).and_then(|p| p.blocks.first_mut()).map(std::sync::Arc::make_mut) {
+    if let Some(craft_wordmodel::Block::Para(p)) = e.parts.get_mut(&c.part).and_then(|p| p.blocks.first_mut()).map(std::sync::Arc::make_mut) {
         p.props.style = Some("Edited".into());
         p.touch();
     }
@@ -538,8 +514,8 @@ fn a_paragraph_with_comments_is_written_as_read_while_they_are() {
     let mut e = d.clone();
     let (id, c) = first(&e);
     let blocks = e.parts.get(&c.part).unwrap().blocks.clone();
-    let part = e.try_add_part(wordcraft_doc::PartKind::Comment, blocks).unwrap();
-    e.comments.insert(999, wordcraft_doc::Comment { author: "New".into(), parent: Some(id), part, ..Default::default() });
+    let part = e.try_add_part(craft_wordmodel::PartKind::Comment, blocks).unwrap();
+    e.comments.insert(999, craft_wordmodel::Comment { author: "New".into(), parent: Some(id), part, ..Default::default() });
     let c = content_of(&export(&e).unwrap());
     assert!(!c.contains(r#"wcx:mark="kept""#) && c.contains("<dc:creator>New</dc:creator>"), "{c}");
     // Every save stays well-formed and reads back with its comments.
@@ -574,7 +550,7 @@ fn a_change_accepted_is_written_from_the_model_the_others_as_read() {
     let d = import(&package(&CHANGES)).unwrap();
     let mut e = d.clone();
     let i = e.body.iter().position(|b| b.as_para().is_some_and(|p| p.text.starts_with("Some inserted"))).unwrap();
-    if let Some(wordcraft_doc::Block::Para(p)) = e.body.get_mut(i).map(std::sync::Arc::make_mut) {
+    if let Some(craft_wordmodel::Block::Para(p)) = e.body.get_mut(i).map(std::sync::Arc::make_mut) {
         for r in &mut p.runs {
             r.props.ins = None;
         }
@@ -591,7 +567,7 @@ fn a_change_accepted_is_written_from_the_model_the_others_as_read() {
     // A change made in WordCraft next to the file's: its own id.
     let mut e = d.clone();
     e.settings.track_changes = true;
-    if let Some(wordcraft_doc::Block::Para(p)) = e.body.get_mut(i).map(std::sync::Arc::make_mut) {
+    if let Some(craft_wordmodel::Block::Para(p)) = e.body.get_mut(i).map(std::sync::Arc::make_mut) {
         p.props.style = Some("Edited".into());
         p.touch();
     }
@@ -609,12 +585,12 @@ fn a_text_box_edited_is_written_from_the_model() {
         .parts
         .iter()
         .find(|(_, p)| {
-            p.kind == wordcraft_doc::PartKind::TextBox && p.blocks.iter().any(|b| b.as_para().is_some_and(|p| p.text.starts_with("Inside")))
+            p.kind == craft_wordmodel::PartKind::TextBox && p.blocks.iter().any(|b| b.as_para().is_some_and(|p| p.text.starts_with("Inside")))
         })
         .map(|(id, _)| *id)
         .unwrap();
     let mut blocks = e.parts.get(&id).unwrap().blocks.clone();
-    if let Some(wordcraft_doc::Block::Para(p)) = blocks.get_mut(1).map(std::sync::Arc::make_mut) {
+    if let Some(craft_wordmodel::Block::Para(p)) = blocks.get_mut(1).map(std::sync::Arc::make_mut) {
         p.props.style = Some("Edited".into());
         p.touch();
     }
@@ -645,7 +621,7 @@ fn a_bookmark_kept_at_one_end_is_written_once() {
     for start in ["From", "to there"] {
         let mut e = d.clone();
         let i = e.body.iter().position(|b| b.as_para().is_some_and(|p| p.text.starts_with(start))).unwrap();
-        if let Some(wordcraft_doc::Block::Para(p)) = e.body.get_mut(i).map(std::sync::Arc::make_mut) {
+        if let Some(craft_wordmodel::Block::Para(p)) = e.body.get_mut(i).map(std::sync::Arc::make_mut) {
             p.props.style = Some("Edited".into());
             p.touch();
         }
@@ -661,9 +637,9 @@ fn a_note_or_formula_edited_is_written_from_the_model() {
     let d = import(&package(&NOTES_AND_FORMULAS)).unwrap();
     let saved = export(&d).unwrap();
     assert!(content_of(&saved).contains(r#"wcx:note="kept""#));
-    let names = |b: &[u8]| zip::ZipArchive::new(std::io::Cursor::new(b.to_vec())).unwrap().file_names().map(String::from).collect::<Vec<_>>();
+    let names = |b: &[u8]| crate::Package::open(b, &crate::Limits::DEFAULT).unwrap().names().map(String::from).collect::<Vec<_>>();
     assert!(names(&saved).iter().any(|n| n == "Object 9/content.xml"), "{:?}", names(&saved));
-    let manifest = crate::odt::tests::entry(&saved, "META-INF/manifest.xml");
+    let manifest = crate::text::tests::entry(&saved, "META-INF/manifest.xml");
     assert!(
         manifest.contains(r#"manifest:full-path="Object 9/" manifest:media-type="application/vnd.oasis.opendocument.formula""#)
             && manifest.contains(r#"manifest:full-path="ObjectReplacements/Object 9""#),
@@ -671,9 +647,9 @@ fn a_note_or_formula_edited_is_written_from_the_model() {
     );
     // The note's text edited.
     let mut e = d.clone();
-    let id = e.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(id, _)| *id).unwrap();
+    let id = e.parts.iter().find(|(_, p)| p.kind == craft_wordmodel::PartKind::Footnote).map(|(id, _)| *id).unwrap();
     let mut blocks = e.parts.get(&id).unwrap().blocks.clone();
-    if let Some(wordcraft_doc::Block::Para(p)) = blocks.first_mut().map(std::sync::Arc::make_mut) {
+    if let Some(craft_wordmodel::Block::Para(p)) = blocks.first_mut().map(std::sync::Arc::make_mut) {
         p.props.style = Some("Edited".into());
         p.touch();
     }
@@ -685,9 +661,9 @@ fn a_note_or_formula_edited_is_written_from_the_model() {
     // The formula edited: written anew, and the old one's files aren't.
     let mut e = d.clone();
     for b in e.body.iter_mut() {
-        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+        if let craft_wordmodel::Block::Para(p) = std::sync::Arc::make_mut(b) {
             for o in &mut p.objects {
-                if let wordcraft_doc::para::InlineObject::Equation { linear, .. } = o {
+                if let craft_wordmodel::para::InlineObject::Equation { linear, .. } = o {
                     *linear = "y^3".into();
                 }
             }
@@ -710,7 +686,7 @@ fn a_list_kept_as_read_is_gone_on_with_and_an_edited_one_written_anew() {
     // An item edited: the list written from the model, its numbering going on still.
     let mut e = d.clone();
     let i = e.body.iter().position(|b| b.as_para().is_some_and(|p| p.text.starts_with("Second"))).unwrap();
-    if let Some(wordcraft_doc::Block::Para(p)) = e.body.get_mut(i).map(std::sync::Arc::make_mut) {
+    if let Some(craft_wordmodel::Block::Para(p)) = e.body.get_mut(i).map(std::sync::Arc::make_mut) {
         p.props.style = Some("Edited".into());
         p.touch();
     }
@@ -729,7 +705,7 @@ fn a_hidden_section_stays_hidden_however_it_is_written() {
     // written around its blocks; they are hidden text themselves.
     let content = r##"<office:automatic-styles><text:list-style style:name="L5"><text:list-level-style-bullet text:level="1" text:bullet-char="-"/></text:list-style></office:automatic-styles><office:body><office:text><text:p>Shown.</text:p><text:section text:name="Notes" text:display="none"><text:p>Hidden words.</text:p><text:list xml:id="l5" text:style-name="L5"><text:list-item><text:p>Hidden item.</text:p></text:list-item></text:list></text:section><text:p>Shown again.</text:p></office:text></office:body>"##;
     let d = import(&package(&Sample { name: "hidden", content, styles: "", meta: "" })).unwrap();
-    let hidden = |d: &wordcraft_doc::Document, start: &str| {
+    let hidden = |d: &craft_wordmodel::Document, start: &str| {
         let p = d.body.iter().filter_map(|b| b.as_para()).find(|p| p.text.starts_with(start)).unwrap();
         p.runs.iter().all(|r| r.props.hidden == Some(true))
     };
@@ -744,7 +720,7 @@ fn a_section_ending_in_a_list_closes_before_the_list_goes_on() {
     // section closes before it, so what follows isn't drawn into it (hidden with it).
     let content = r##"<office:automatic-styles><text:list-style style:name="L6"><text:list-level-style-number text:level="1" style:num-format="1"/></text:list-style></office:automatic-styles><office:body><office:text><text:section text:name="Hidden" text:display="none"><text:p>Hidden words.</text:p><text:list xml:id="l6" text:style-name="L6"><text:list-item><text:p>Hidden item.</text:p></text:list-item></text:list></text:section><text:list xml:id="l7" text:continue-list="l6" text:style-name="L6"><text:list-item><text:p>Shown item.</text:p></text:list-item></text:list><text:p>Shown after.</text:p></office:text></office:body>"##;
     let d = import(&package(&Sample { name: "list in section", content, styles: "", meta: "" })).unwrap();
-    let check = |d: &wordcraft_doc::Document, sectioned: bool| {
+    let check = |d: &craft_wordmodel::Document, sectioned: bool| {
         let saved = export(d).unwrap();
         assert!(parts_well_formed(&saved).is_ok());
         let c = content_of(&saved);
@@ -765,7 +741,7 @@ fn a_section_ending_in_a_list_closes_before_the_list_goes_on() {
     // as read), its text hidden still.
     let mut e = d.clone();
     for b in e.body.iter_mut() {
-        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+        if let craft_wordmodel::Block::Para(p) = std::sync::Arc::make_mut(b) {
             p.props.style = Some("Edited".into());
             p.touch();
         }
@@ -800,7 +776,7 @@ fn a_reference_mark_is_written_as_one_and_as_a_bookmark() {
     assert!(c.contains(r#"<text:reference-mark-start text:name="intro"/>the introduction<text:reference-mark-end text:name="intro"/>"#), "{c}");
     // Its paragraph edited, written from the model: both.
     let mut d = d;
-    if let Some(wordcraft_doc::Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
+    if let Some(craft_wordmodel::Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
         p.props.style = Some("Edited".into());
         p.touch();
     }
@@ -819,14 +795,14 @@ fn a_section_in_a_table_cell_is_kept_in_it() {
     // the cell, whatever in the cell is edited.
     let content = r##"<office:body><office:text><table:table table:name="Spec"><table:table-column table:number-columns-repeated="2"/><table:table-row><table:table-cell office:value-type="string"><text:p>Status</text:p></table:table-cell><table:table-cell office:value-type="string"><text:section text:name="Status" text:display="none"><text:p>Preliminary words.</text:p><text:p>Standard words.</text:p></text:section></table:table-cell></table:table-row></table:table><text:p>After the table.</text:p></office:text></office:body>"##;
     let d = import(&package(&Sample { name: "cell section", content, styles: "", meta: "" })).unwrap();
-    let edit = |d: &wordcraft_doc::Document, which: &str| {
+    let edit = |d: &craft_wordmodel::Document, which: &str| {
         let mut e = d.clone();
         for b in e.body.iter_mut() {
-            if let wordcraft_doc::Block::Table(t) = std::sync::Arc::make_mut(b) {
+            if let craft_wordmodel::Block::Table(t) = std::sync::Arc::make_mut(b) {
                 for r in &mut t.rows {
                     for c in &mut r.cells {
                         for b in c.blocks.iter_mut() {
-                            if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b)
+                            if let craft_wordmodel::Block::Para(p) = std::sync::Arc::make_mut(b)
                                 && p.text.starts_with(which)
                             {
                                 p.props.style = Some("Edited".into());
@@ -894,7 +870,7 @@ fn a_group_edited_anywhere_is_written_from_the_model_whole() {
     ] {
         let mut e = d.clone();
         let i = e.body.iter().position(|b| b.as_para().is_some_and(|p| p.text.starts_with(start))).unwrap();
-        if let Some(wordcraft_doc::Block::Para(p)) = e.body.get_mut(i).map(std::sync::Arc::make_mut) {
+        if let Some(craft_wordmodel::Block::Para(p)) = e.body.get_mut(i).map(std::sync::Arc::make_mut) {
             p.props.style = Some("Edited".into());
             p.touch();
         }

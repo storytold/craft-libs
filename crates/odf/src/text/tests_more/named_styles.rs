@@ -2,10 +2,10 @@
 //! document styles with their name, parent and own formatting, the paragraphs in them keeping
 //! the style rather than its formatting as direct formatting; written back as common styles.
 
-use crate::odt::tests::{NS_T, package};
-use crate::odt::{export, import};
-use wordcraft_doc::props::{LineSpacing, TextColor};
-use wordcraft_doc::{Document, Rgb};
+use crate::text::tests::{NS_T, package};
+use crate::text::{export, import};
+use craft_wordmodel::props::{LineSpacing, TextColor};
+use craft_wordmodel::{Document, Rgb};
 
 fn open() -> Document {
     let styles = format!(
@@ -42,7 +42,7 @@ fn paragraphs_keep_their_custom_style() {
     let (_, cp) = d.styles.para_style_props(&custom);
     assert_eq!((cp.bold, cp.color), (Some(true), Some(TextColor::Rgb(Rgb(0, 0, 0xaa)))));
     // The automatic style's own formatting is direct.
-    assert_eq!(d.body[2].as_para().unwrap().props.align, Some(wordcraft_doc::Align::Center));
+    assert_eq!(d.body[2].as_para().unwrap().props.align, Some(craft_wordmodel::Align::Center));
 }
 
 #[test]
@@ -80,7 +80,7 @@ fn hostile_style_chains_do_not_panic() {
 
 #[test]
 fn style_names_are_xml_names() {
-    use crate::odt::writer::odf_name;
+    use crate::text::writer::odf_name;
     assert_eq!(odf_name("MyCustom"), "MyCustom");
     assert_eq!(odf_name("My Style-2"), "My_x20_Style-2");
     assert_eq!(odf_name("1st"), "_x31_st");
@@ -98,7 +98,7 @@ fn no_style_is_written_twice() {
         r#"<office:document-content {NS_T}><office:body><office:text><text:p>x<text:note text:note-class="footnote"><text:note-citation>1</text:note-citation><text:note-body><text:p text:style-name="Footnote">n</text:p></text:note-body></text:note></text:p><text:p text:style-name="Standard_20_x">y</text:p></office:text></office:body></office:document-content>"#
     );
     let d = import(&package(&content, Some(&styles))).unwrap();
-    let xml = crate::odt::tests::styles_of(&export(&d).unwrap());
+    let xml = crate::text::tests::styles_of(&export(&d).unwrap());
     for name in ["Footnote", "Standard", "Endnote"] {
         let paragraph_styles = xml
             .split("<style:style ")
@@ -134,14 +134,14 @@ fn a_style_based_on_libreoffices_heading_keeps_it() {
     // their font and spacing; saving keeps it, and keeps them based on it.
     let styles = format!(
         r#"<office:document-styles {}><office:styles><style:style style:name="Heading" style:family="paragraph"><style:paragraph-properties fo:margin-top="0.17in"/><style:text-properties fo:font-size="14pt"/></style:style><style:style style:name="Plaque" style:family="paragraph" style:parent-style-name="Heading"><style:text-properties fo:font-weight="bold"/></style:style></office:styles></office:document-styles>"#,
-        crate::odt::tests::NS_T
+        crate::text::tests::NS_T
     );
     let content = format!(
         r#"<office:document-content {}><office:body><office:text><text:p text:style-name="Plaque">On the wall</text:p></office:text></office:body></office:document-content>"#,
-        crate::odt::tests::NS_T
+        crate::text::tests::NS_T
     );
-    let d = import(&crate::odt::tests::package(&content, Some(&styles))).unwrap();
-    let s = crate::odt::tests::styles_of(&crate::odt::tests::export_model(&d).unwrap());
+    let d = import(&crate::text::tests::package(&content, Some(&styles))).unwrap();
+    let s = crate::text::tests::styles_of(&crate::text::tests::export_model(&d).unwrap());
     assert!(
         s.contains(r#"style:name="Heading""#)
             && s.contains(r#"style:name="Plaque" style:display-name="Plaque" style:family="paragraph" style:parent-style-name="Heading""#),
@@ -159,7 +159,7 @@ fn what_a_style_turns_off_stays_off() {
         r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="Titles">T</text:p><text:p text:style-name="Date">D</text:p></office:text></office:body></office:document-content>"#
     );
     let saved = export(&import(&package(&content, Some(&styles))).unwrap()).unwrap();
-    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    let s = crate::text::tests::entry(&saved, "styles.xml");
     let date = s.split(r#"style:name="Date""#).nth(1).and_then(|r| r.split("</style:style>").next()).unwrap_or("missing");
     for want in [r#"fo:font-weight="normal""#, r#"fo:font-style="normal""#, r#"style:text-underline-style="none""#] {
         assert!(date.contains(want), "{want} in {date}");

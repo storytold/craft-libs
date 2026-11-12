@@ -6,10 +6,10 @@ use super::{Attrs, Body, Ev, FBlock, Inline, events, get, length, local, make_im
 /// An embedded ODF formula sub-document's `content.xml`, read for its `math:math` element
 /// (its root, ODF 1.3 Part 3 §2.2.9 B; some writers wrap it in an `office:math`, which isn't
 /// it): the first MathML element named `math` in document order, with its
-/// subtree, passed to [`crate::mathml::read`]. `None` when there's no such element, it holds
+/// subtree, passed to [`craft_math::mathml::read`]. `None` when there's no such element, it holds
 /// nothing, or the XML is malformed. Nesting and element count are bounded like other XML here.
-pub(in crate::odt) fn read_formula(xml: &[u8]) -> Option<(String, bool)> {
-    use crate::mathml::{El, Item, MAX_NODES, local};
+pub(in crate::text) fn read_formula(xml: &[u8]) -> Option<(String, bool)> {
+    use craft_math::mathml::{El, Item, MAX_NODES, local};
     let mut stack: Vec<El> = Vec::new();
     let mut math: Option<El> = None;
     let mut over = 0usize;
@@ -28,7 +28,7 @@ pub(in crate::odt) fn read_formula(xml: &[u8]) -> Option<(String, bool)> {
                 if stack.is_empty() && (local(&q) != "math" || q.starts_with("office:")) {
                     return;
                 }
-                if stack.len() < wordcraft_doc::math::MAX_DEPTH {
+                if stack.len() < craft_wordmodel::math::MAX_DEPTH {
                     stack.push(El { name: q, attrs: a, children: Vec::new() });
                 } else {
                     over += 1;
@@ -56,25 +56,25 @@ pub(in crate::odt) fn read_formula(xml: &[u8]) -> Option<(String, bool)> {
             }
         }
     });
-    crate::mathml::read(&math?)
+    craft_math::mathml::read(&math?)
 }
 
 /// A frame being read: its width and height, picture bytes, alt text and the equation read from
 /// an embedded formula object.
 /// A group being read (ODF 1.3 §10.3.15 `draw:g`): its anchor and page, its style, and its members
 /// so far.
-pub(in crate::odt) struct OpenGroup {
-    pub(in crate::odt) anchor: Option<String>,
+pub(in crate::text) struct OpenGroup {
+    pub(in crate::text) anchor: Option<String>,
     /// Its `text:anchor-page-number`.
-    pub(in crate::odt) page: Option<String>,
-    pub(in crate::odt) style: Option<String>,
-    pub(in crate::odt) members: Vec<model::Member>,
+    pub(in crate::text) page: Option<String>,
+    pub(in crate::text) style: Option<String>,
+    pub(in crate::text) members: Vec<model::Member>,
 }
 
 /// A picture's crop as fractions of its size (left, top, right, bottom) from its `fo:clip`
 /// (top, right, bottom, left, in lengths of its original size: its pixels at 96 per inch). No crop
 /// when the picture's size can't be read or the crop would leave nothing.
-pub(in crate::odt) fn crop_fractions([t, r, b, l]: [f32; 4], data: &[u8]) -> [f32; 4] {
+pub(in crate::text) fn crop_fractions([t, r, b, l]: [f32; 4], data: &[u8]) -> [f32; 4] {
     let Some((pw, ph)) = model::image_px(data).filter(|(w, h)| *w > 0 && *h > 0) else { return [0.0; 4] };
     let (w, h) = (pw as f32 * 0.75, ph as f32 * 0.75);
     let c = [l / w, t / h, r / w, b / h].map(|v| if v.is_finite() { v.clamp(0.0, 0.99) } else { 0.0 });
@@ -82,7 +82,7 @@ pub(in crate::odt) fn crop_fractions([t, r, b, l]: [f32; 4], data: &[u8]) -> [f3
 }
 
 /// Largest size or offset read in a group, points (22 inches).
-pub(in crate::odt) const MAX_LEN: f32 = 1584.0;
+pub(in crate::text) const MAX_LEN: f32 = 1584.0;
 
 /// Most shape ids connectors can glue to.
 const MAX_CONN_IDS: usize = 10_000;
@@ -90,7 +90,7 @@ const MAX_CONN_IDS: usize = 10_000;
 impl Body<'_> {
     /// End a frame or drawing shape: its picture, equation, text box or shape goes into the
     /// paragraph.
-    pub(in crate::odt) fn end_frame(&mut self) {
+    pub(in crate::text) fn end_frame(&mut self) {
         if let Some((w, h, img, alt, eq, chart, object)) = self.frame.take() {
             let boxed = self.frame_box.take();
             let mut float = self.frame_float.take();
@@ -103,8 +103,8 @@ impl Body<'_> {
                 f.flip_v ^= v;
             }
             // Kept when it floats, or turns or mirrors the object in line.
-            let float =
-                float.filter(|f| f.wrap != wordcraft_doc::para::Wrap::Inline || crate::odt::frames::turned(f) || f.flip_h || f.flip_v || f.y != 0.0);
+            let float = float
+                .filter(|f| f.wrap != craft_wordmodel::para::Wrap::Inline || crate::text::frames::turned(f) || f.flip_h || f.flip_v || f.y != 0.0);
             if let Some(blocks) = &boxed
                 && self.take_watermark(blocks)
             {
@@ -116,23 +116,23 @@ impl Body<'_> {
             let room = self.sec.text_width();
             let says = |v: Option<f32>| v.is_some_and(|v| v.is_finite() && v > 0.0);
             // (Still in line when raised, turned or mirrored.)
-            let in_line = float.as_ref().is_none_or(|f| f.wrap == wordcraft_doc::para::Wrap::Inline);
+            let in_line = float.as_ref().is_none_or(|f| f.wrap == craft_wordmodel::para::Wrap::Inline);
             let fit = (!says(w) && !says(h) && in_line && room.is_finite() && room > 0.0).then_some(room);
             let inline = match (boxed, eq) {
                 (Some(blocks), _) => {
                     let mut look = std::mem::take(&mut self.frame_look);
                     // Without a height it grows from nothing to its text.
-                    let kind = self.shape_kind.take().unwrap_or(wordcraft_doc::para::ShapeKind::TextBox);
+                    let kind = self.shape_kind.take().unwrap_or(craft_wordmodel::para::ShapeKind::TextBox);
                     // A custom shape's geometry as read, kept with the path worked out from it.
                     let geometry = self.shape_geometry.take();
-                    if kind == wordcraft_doc::para::ShapeKind::Freeform || kind == wordcraft_doc::para::ShapeKind::Rectangle {
+                    if kind == craft_wordmodel::para::ShapeKind::Freeform || kind == craft_wordmodel::para::ShapeKind::Rectangle {
                         look.geometry = geometry;
                     }
                     // A shape whose paragraphs are all empty (LibreOffice writes `<text:p/>` in
                     // each) holds no text.
                     let empty = blocks.iter().all(|b| matches!(b, FBlock::Para(p) if p.inlines.is_empty()));
-                    let blocks = if kind != wordcraft_doc::para::ShapeKind::TextBox && empty { Vec::new() } else { blocks };
-                    let path = self.shape_path.take().filter(|_| kind == wordcraft_doc::para::ShapeKind::Freeform);
+                    let blocks = if kind != craft_wordmodel::para::ShapeKind::TextBox && empty { Vec::new() } else { blocks };
+                    let path = self.shape_path.take().filter(|_| kind == craft_wordmodel::para::ShapeKind::Freeform);
                     let (w, h) = (w.unwrap_or(72.0), h.unwrap_or(1.0));
                     self.note_place(kind, (w, h), &look, float.as_ref());
                     Some(Inline::Shape { kind, w, h, float: float.map(Box::new), blocks, look, path })
@@ -154,7 +154,7 @@ impl Body<'_> {
                     }
                     let shown = img
                         .and_then(|data| picture(data, w, h, alt.trim()))
-                        .or_else(|| crate::odt::objects::placeholder(&o.mime).and_then(|p| make_img(p, w, h, alt.trim())));
+                        .or_else(|| crate::text::objects::placeholder(&o.mime).and_then(|p| make_img(p, w, h, alt.trim())));
                     shown.map(|mut img| {
                         fit_to(&mut img, fit);
                         img.float = float.map(Box::new);
@@ -174,7 +174,7 @@ impl Body<'_> {
             if let Some(inline) = inline {
                 // A group's member goes into the group, at its place in it.
                 if let Some(((x, y), g)) = self.member_at.take().zip(self.group.as_mut().filter(|_| self.note.is_none())) {
-                    if g.members.len() < wordcraft_doc::para::MAX_GROUP_CHILDREN {
+                    if g.members.len() < craft_wordmodel::para::MAX_GROUP_CHILDREN {
                         g.members.push(model::Member { x, y, inline });
                     }
                 } else {
@@ -206,8 +206,8 @@ impl Body<'_> {
             return false;
         }
         let turned = rot.rem_euclid(360.0);
-        let base = wordcraft_doc::Watermark::default();
-        self.watermark = Some(wordcraft_doc::Watermark {
+        let base = craft_wordmodel::Watermark::default();
+        self.watermark = Some(craft_wordmodel::Watermark {
             text,
             font: font.unwrap_or(base.font),
             color: color.unwrap_or(base.color),
@@ -236,20 +236,20 @@ impl Body<'_> {
         let id = get(a, "xml:id").or_else(|| get(a, "draw:id")).map(str::trim).filter(|n| !n.is_empty()).map_or(0, &mut id_of);
         let mut end = |shape: &str, glue: &str| {
             let target = get(a, shape).map(str::trim).filter(|n| !n.is_empty()).map(&mut id_of).filter(|id| *id != 0)?;
-            let site = get(a, glue).and_then(|g| g.trim().parse::<u32>().ok()).filter(|g| *g <= wordcraft_doc::connector::MAX_SITE)?;
-            Some(wordcraft_doc::connector::ConnEnd { id: target, site })
+            let site = get(a, glue).and_then(|g| g.trim().parse::<u32>().ok()).filter(|g| *g <= craft_wordmodel::connector::MAX_SITE)?;
+            Some(craft_wordmodel::connector::ConnEnd { id: target, site })
         };
         let (start, finish) = (end("draw:start-shape", "draw:start-glue-point"), end("draw:end-shape", "draw:end-glue-point"));
         (id != 0 || start.is_some() || finish.is_some()).then_some(model::Conn { id, start, end: finish })
     }
 
     /// Where a shape with a drawing id (`look`) sits, for connectors glued to it.
-    pub(in crate::odt) fn note_place(
+    pub(in crate::text) fn note_place(
         &mut self,
-        kind: wordcraft_doc::para::ShapeKind,
+        kind: craft_wordmodel::para::ShapeKind,
         (w, h): (f32, f32),
         look: &model::BoxLook,
-        float: Option<&wordcraft_doc::para::Float>,
+        float: Option<&craft_wordmodel::para::Float>,
     ) {
         let Some(c) = look.conn.as_deref().filter(|c| c.id != 0) else { return };
         if self.shape_places.len() >= MAX_CONN_IDS {
@@ -267,7 +267,7 @@ impl Body<'_> {
     /// or to a glue point of the shape's own, is unglued); and a connector glued at both ends to
     /// shapes anchored in this paragraph, placed alike, runs between their sites. (A connector's
     /// own coordinates are in LibreOffice's drawing layer, not its anchor's.)
-    pub(in crate::odt) fn glue_connectors(&self, p: &mut model::Para) {
+    pub(in crate::text) fn glue_connectors(&self, p: &mut model::Para) {
         for i in &mut p.inlines {
             self.glue_connector(i, 0);
         }
@@ -276,7 +276,7 @@ impl Body<'_> {
     /// Connector `i` of a paragraph or a group (`depth` deep in groups) glued to shapes (see
     /// [`Self::glue_connectors`]).
     fn glue_connector(&self, i: &mut Inline, depth: usize) {
-        use crate::odt::shapes::site_of_glue;
+        use crate::text::shapes::site_of_glue;
         if let Inline::Group { members, .. } = i {
             if depth < model::MAX_GROUP_DEPTH {
                 for m in members {
@@ -287,22 +287,22 @@ impl Body<'_> {
         }
         let Inline::Shape { kind, w, h, float, look, .. } = i else { return };
         let Some(c) = look.conn.as_deref_mut().filter(|_| kind.is_connector()) else { return };
-        let resolve = |e: Option<wordcraft_doc::connector::ConnEnd>| {
+        let resolve = |e: Option<craft_wordmodel::connector::ConnEnd>| {
             let e = e?;
             let place = self.shape_places.get(&e.id)?;
-            site_of_glue(place.0, e.site).map(|site| (wordcraft_doc::connector::ConnEnd { id: e.id, site }, place))
+            site_of_glue(place.0, e.site).map(|site| (craft_wordmodel::connector::ConnEnd { id: e.id, site }, place))
         };
         let (start, end) = (resolve(c.start), resolve(c.end));
         (c.start, c.end) = (start.map(|(e, _)| e), end.map(|(e, _)| e));
         let (Some((s, sp)), Some((e, ep)), Some(f)) = (start, end, float.as_deref_mut()) else { return };
-        let same = |pl: &(wordcraft_doc::para::ShapeKind, [f32; 4], wordcraft_doc::para::Float, usize)| {
+        let same = |pl: &(craft_wordmodel::para::ShapeKind, [f32; 4], craft_wordmodel::para::Float, usize)| {
             pl.3 == self.para_seq && pl.2.h_rel == f.h_rel && pl.2.v_rel == f.v_rel
         };
         if !(same(sp) && same(ep)) {
             return;
         }
-        let point = |pl: &(wordcraft_doc::para::ShapeKind, [f32; 4], wordcraft_doc::para::Float, usize), site| {
-            wordcraft_doc::connector::site_point(pl.0, pl.1, pl.2.spin(), site)
+        let point = |pl: &(craft_wordmodel::para::ShapeKind, [f32; 4], craft_wordmodel::para::Float, usize), site| {
+            craft_wordmodel::connector::site_point(pl.0, pl.1, pl.2.spin(), site)
         };
         let (Some((x1, y1)), Some((x2, y2))) = (point(sp, s.site), point(ep, e.site)) else { return };
         (f.x, f.y, f.flip_h, f.flip_v) = (x1.min(x2), y1.min(y2), x2 < x1, y2 < y1);
@@ -311,13 +311,13 @@ impl Body<'_> {
 
     /// A frame or shape `w` × `h` (attributes `a`) begins: in a group (not in a shape's text), where
     /// it sits in it, from its `svg:x`/`svg:y` or `draw:transform` (a line's from its ends, `line`).
-    pub(in crate::odt) fn member_start(&mut self, a: &Attrs, w: f32, h: f32, line: Option<(Option<f32>, Option<f32>)>) {
+    pub(in crate::text) fn member_start(&mut self, a: &Attrs, w: f32, h: f32, line: Option<(Option<f32>, Option<f32>)>) {
         self.member_rot = None;
         if self.group.is_none() || self.note.is_some() {
             return;
         }
         let len = |k: &str| get(a, k).and_then(length).filter(|v| v.is_finite()).map(|v| v.clamp(-MAX_LEN, MAX_LEN));
-        let at = match (line, get(a, "draw:transform").and_then(|t| crate::odt::frames::transform(t, w, h))) {
+        let at = match (line, get(a, "draw:transform").and_then(|t| crate::text::frames::transform(t, w, h))) {
             (Some((x, y)), _) => (x.unwrap_or(0.0), y.unwrap_or(0.0)),
             (None, Some((x, y, rot))) => {
                 self.member_rot = Some(rot);
@@ -330,7 +330,7 @@ impl Body<'_> {
 
     /// The group being read ends: its members, placed from the corner of the box around them,
     /// become one object anchored where the group is.
-    pub(in crate::odt) fn end_group(&mut self) {
+    pub(in crate::text) fn end_group(&mut self) {
         let Some(g) = self.group.take() else { return };
         let size = |i: &Inline| match i {
             Inline::Shape { w, h, .. } => (*w, *h),
@@ -351,31 +351,31 @@ impl Body<'_> {
         let members = g.members.into_iter().map(|m| model::Member { x: fin(m.x) - x0, y: fin(m.y) - y0, ..m }).collect();
         let graphic = self.styles.shape_graphic(g.style.as_deref());
         let mut float =
-            crate::odt::frames::float_of(g.anchor.as_deref(), Some(&crate::odt::writer::pt(x0)), Some(&crate::odt::writer::pt(y0)), &graphic);
-        float.page = crate::odt::frames::page_of(g.anchor.as_deref(), g.page.as_deref(), &graphic);
-        let float = (float.wrap != wordcraft_doc::para::Wrap::Inline).then(|| Box::new(float));
+            crate::text::frames::float_of(g.anchor.as_deref(), Some(&crate::text::writer::pt(x0)), Some(&crate::text::writer::pt(y0)), &graphic);
+        float.page = crate::text::frames::page_of(g.anchor.as_deref(), g.page.as_deref(), &graphic);
+        let float = (float.wrap != craft_wordmodel::para::Wrap::Inline).then(|| Box::new(float));
         let fit = |v: f32| if v.is_finite() { v.clamp(1.0, MAX_LEN) } else { 1.0 };
         self.push_inline(Inline::Group { w: fit(x1 - x0), h: fit(y1 - y0), float, members });
     }
 
     /// Begin a drawing shape (ODF 1.3 §10.3): its size, placement and look, and its text read
     /// as a text box's. A custom shape's kind comes from its geometry, read inside it.
-    pub(in crate::odt) fn start_shape(&mut self, q: &str, a: &Attrs) {
-        let mut kind = crate::odt::shapes::element_kind(local(q));
+    pub(in crate::text) fn start_shape(&mut self, q: &str, a: &Attrs) {
+        let mut kind = crate::text::shapes::element_kind(local(q));
         if kind.is_connector() {
-            kind = crate::odt::shapes::connector_kind(get(a, "draw:type"));
+            kind = crate::text::shapes::connector_kind(get(a, "draw:type"));
         }
         let g = self.styles.shape_graphic(get(a, "draw:style-name"));
-        let (w, h, x, y, (flip_h, flip_v)) = crate::odt::shapes::geometry(kind, a);
+        let (w, h, x, y, (flip_h, flip_v)) = crate::text::shapes::geometry(kind, a);
         let mut float = if kind.is_open() {
             // A line is placed by its ends.
-            let at = |v: Option<f32>| v.map(crate::odt::writer::pt);
-            let mut f = crate::odt::frames::float_of(get(a, "text:anchor-type"), at(x).as_deref(), at(y).as_deref(), &g);
-            f.z = crate::odt::frames::z_of(a);
-            f.page = crate::odt::frames::page_of(get(a, "text:anchor-type"), get(a, "text:anchor-page-number"), &g);
+            let at = |v: Option<f32>| v.map(crate::text::writer::pt);
+            let mut f = crate::text::frames::float_of(get(a, "text:anchor-type"), at(x).as_deref(), at(y).as_deref(), &g);
+            f.z = crate::text::frames::z_of(a);
+            f.page = crate::text::frames::page_of(get(a, "text:anchor-type"), get(a, "text:anchor-page-number"), &g);
             f
         } else {
-            crate::odt::frames::place(a, w, h, &g, self.text_size())
+            crate::text::frames::place(a, w, h, &g, self.text_size())
         };
         (float.flip_h, float.flip_v) = (flip_h, flip_v);
         self.shape_flip = (false, false);
@@ -386,11 +386,11 @@ impl Body<'_> {
         self.frame_look = g.shape_look(kind, &self.styles.defs);
         self.frame_look.conn = self.conn_of(a).map(Box::new);
         // Word's and LibreOffice's watermark: a shape of this name whose geometry follows its text.
-        self.watermark_shape = get(a, "draw:name").filter(|n| n.starts_with(crate::odt::writer::WATERMARK_NAME)).map(|_| {
+        self.watermark_shape = get(a, "draw:name").filter(|n| n.starts_with(crate::text::writer::WATERMARK_NAME)).map(|_| {
             let (color, see_through) = g.watermark_look();
             ((w, h), float.rot, color, see_through, false)
         });
-        self.shape_path = crate::odt::shapes::freeform(local(q), a, w, h).map(std::sync::Arc::new);
+        self.shape_path = crate::text::shapes::freeform(local(q), a, w, h).map(std::sync::Arc::new);
         self.shape_kind = Some(kind);
         let frame = (Some((Some(w), Some(h), None, String::new(), None, None, None)), Some(float), std::mem::take(&mut self.frame_look));
         self.start_note(a);
@@ -401,17 +401,17 @@ impl Body<'_> {
 }
 
 /// Whether WordCraft can show these bytes as a picture (see the function below).
-pub(in crate::odt) fn readable_picture(data: &[u8]) -> bool {
-    wordcraft_metafile::is_metafile(data) || model::sniff_image(data).is_some()
+pub(in crate::text) fn readable_picture(data: &[u8]) -> bool {
+    craft_metafile::is_metafile(data) || model::sniff_image(data).is_some()
 }
 
 /// A picture from a package's bytes: a raster image, or a Windows metafile (WMF, EMF: LibreOffice
 /// keeps clip art and logos so), sized `w` × `h` (points) when the frame says.
-pub(in crate::odt) fn picture(data: Vec<u8>, w: Option<f32>, h: Option<f32>, alt: &str) -> Option<model::Img> {
+pub(in crate::text) fn picture(data: Vec<u8>, w: Option<f32>, h: Option<f32>, alt: &str) -> Option<model::Img> {
     // What the frame states, if it could be a size (far past any page, kept from overflowing).
     let stated = |v: Option<f32>| v.filter(|v| v.is_finite() && *v > 0.0).map(|v| v.min(1e6));
     let (w, h) = (stated(w), stated(h));
-    let mut img = if wordcraft_metafile::is_metafile(&data) {
+    let mut img = if craft_metafile::is_metafile(&data) {
         // An EMF starts with its header record, type 1.
         let ext = if data.get(..4) == Some(&[1, 0, 0, 0]) { "emf" } else { "wmf" };
         // Its own size, when the frame gives none: a placeable WMF's or an EMF's frame, points.
@@ -450,7 +450,7 @@ fn fit_to(img: &mut model::Img, room: Option<f32>) {
 /// A picture's height for each point of its width, by its own size, before anything caps it (1
 /// when it doesn't say).
 fn height_per_width(data: &[u8]) -> f32 {
-    let own = if wordcraft_metafile::is_metafile(data) { metafile_size(data) } else { model::image_px(data).map(|(w, h)| (w as f32, h as f32)) };
+    let own = if craft_metafile::is_metafile(data) { metafile_size(data) } else { model::image_px(data).map(|(w, h)| (w as f32, h as f32)) };
     own.filter(|(w, h)| w.is_finite() && h.is_finite() && *w > 0.0 && *h > 0.0).map_or(1.0, |(w, h)| h / w)
 }
 

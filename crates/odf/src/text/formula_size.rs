@@ -2,7 +2,7 @@
 //! frame, so the frame should be about the size the formula takes. A box per node (width, height
 //! above and below the baseline, in ems of 12 pt text), sized by its structure.
 
-use wordcraft_doc::math::{MAX_DEPTH, MNode};
+use craft_wordmodel::math::{MAX_DEPTH, MNode};
 
 /// Width, ascent and descent, in ems.
 #[derive(Clone, Copy, Default)]
@@ -144,7 +144,7 @@ fn stack(rows: impl Iterator<Item = Box3>) -> Box3 {
 
 /// Width and height in points of the equation `linear` set in 12 pt text.
 pub(super) fn size(linear: &str) -> (f32, f32) {
-    let b = row(&wordcraft_doc::math::parse_linear(linear), 0);
+    let b = row(&craft_wordmodel::math::parse_linear(linear), 0);
     let fit = |v: f32| if v.is_finite() { v } else { 1.0 };
     ((fit(b.w) * 12.0 + 2.0).clamp(4.0, 1584.0), (fit(b.h()) * 12.0 + 2.0).clamp(8.0, 1584.0))
 }

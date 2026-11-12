@@ -1,10 +1,10 @@
 //! Form controls (ODF 1.3 §13): `office:forms` controls placed by `draw:control`, read as
 //! WordCraft content controls and written back as form controls LibreOffice shows.
 
-use crate::model::Inline;
-use crate::odt::tests::{NS_T, entry, package, paras};
-use crate::odt::{export, import, parse};
-use wordcraft_doc::control::{ControlKind, ListItem};
+use crate::text::tests::{NS_T, entry, package, paras};
+use crate::text::{export, import, parse};
+use craft_flow::Inline;
+use craft_wordmodel::control::{ControlKind, ListItem};
 
 const NS_F: &str = r#"xmlns:form="urn:oasis:names:tc:opendocument:xmlns:form:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0""#;
 
@@ -22,7 +22,7 @@ fn doc_xml() -> String {
 }
 
 /// Each paragraph's controls: (kind, tag, title, text, showing placeholder).
-fn controls(flow: &crate::model::Flow) -> Vec<(ControlKind, String, String, String, bool)> {
+fn controls(flow: &craft_flow::Flow) -> Vec<(ControlKind, String, String, String, bool)> {
     paras(flow)
         .into_iter()
         .flat_map(|p| &p.inlines)
@@ -131,9 +131,9 @@ fn buttons_are_kept() {
     );
     assert!(c.contains(r#"svg:width="72pt" svg:height="21.6pt" draw:control="control1""#), "{c}");
     // Made a check box, it is saved as one.
-    let mut c = wordcraft_doc::control::ContentControl::new(ControlKind::Text { multi_line: false });
+    let mut c = craft_wordmodel::control::ContentControl::new(ControlKind::Text { multi_line: false });
     c.form_xml = "<form:button form:name=\"Go\"></form:button>".into();
-    let kept = crate::odt::forms::form_xml(&c, "Go", "control1", 1).unwrap().0;
+    let kept = crate::text::forms::form_xml(&c, "Go", "control1", 1).unwrap().0;
     assert!(kept.starts_with(r#"<form:button xml:id="control1" form:id="control1" form:name="Go">"#), "{kept}");
     c.kind = ControlKind::CheckBox {
         checked: true,
@@ -142,7 +142,7 @@ fn buttons_are_kept() {
         unchecked_char: '\u{2610}',
         unchecked_font: String::new(),
     };
-    let made = crate::odt::forms::form_xml(&c, "\u{2612}", "control1", 1).unwrap().0;
+    let made = crate::text::forms::form_xml(&c, "\u{2612}", "control1", 1).unwrap().0;
     assert!(made.starts_with("<form:checkbox "), "{made}");
     // And again: still a button.
     let again = entry(&export(&import(&saved).unwrap()).unwrap(), "content.xml");
@@ -211,7 +211,7 @@ fn controls_keep_their_place_on_the_line_and_a_text_area_its_lines() {
         .iter()
         .filter_map(|b| b.as_para())
         .flat_map(|p| p.objects.iter())
-        .filter_map(|o| if let wordcraft_doc::para::InlineObject::ControlStart { control } = o { Some(control.form_raise) } else { None })
+        .filter_map(|o| if let craft_wordmodel::para::InlineObject::ControlStart { control } = o { Some(control.form_raise) } else { None })
         .collect();
     assert!(!raises.is_empty() && raises.iter().all(|r| r.is_some_and(|v| (v + 14.4).abs() < 0.01)), "{raises:?}");
     let out = entry(&export(&doc).unwrap(), "content.xml");

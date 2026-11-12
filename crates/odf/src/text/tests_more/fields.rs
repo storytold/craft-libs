@@ -1,10 +1,10 @@
 //! Text fields (ODF 1.3 §7): page number and count, dates and times, document information and
 //! bookmark references open as WordCraft fields and are written back as ODF fields.
 
-use crate::odt::tests::{NS_T, package};
-use crate::odt::{export, import};
-use wordcraft_doc::para::InlineObject;
-use wordcraft_doc::{Document, Paragraph, para_block};
+use crate::text::tests::{NS_T, package};
+use crate::text::{export, import};
+use craft_wordmodel::para::InlineObject;
+use craft_wordmodel::{Document, Paragraph, para_block};
 
 /// Every field in the body: (code, cached result).
 pub(super) fn fields(d: &Document) -> Vec<(String, String)> {
@@ -53,7 +53,7 @@ fn fields_open_as_fields_with_their_shown_text() {
     assert_eq!(got.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect::<Vec<_>>(), want);
     // The text around the fields stays where it was.
     let p0 = d.body[0].as_para().unwrap();
-    assert_eq!(p0.text.replace(wordcraft_doc::para::OBJ, "#"), "Page # of #.");
+    assert_eq!(p0.text.replace(craft_wordmodel::para::OBJ, "#"), "Page # of #.");
 }
 
 #[test]
@@ -65,7 +65,7 @@ fn a_fixed_date_is_a_locked_field_and_unknown_fields_are_plain_text() {
     assert!(locked);
     // Written back: with no picture to read its value under, as its text (a reader would show a
     // fixed date without a value as today's).
-    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    let c = crate::text::tests::content_of(&crate::text::tests::export_model(&d).unwrap());
     assert!(!c.contains("<text:date") && c.contains("1 May"), "{c}");
     // With a picture, fixed at the value it shows (§19.871).
     let n = r#"xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0""#;
@@ -76,7 +76,7 @@ fn a_fixed_date_is_a_locked_field_and_unknown_fields_are_plain_text() {
         None,
     ))
     .unwrap();
-    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    let c = crate::text::tests::content_of(&crate::text::tests::export_model(&d).unwrap());
     assert!(c.contains(r#"text:date-value="2026-05-01""#) && c.contains(">1 May 2026</text:date>"), "{c}");
     assert!(c.contains(r#"text:time-value="1899-12-30T14:30:00""#) && c.contains(">14:30</text:time>"), "{c}");
     assert_eq!(c.matches(r#"text:fixed="true""#).count(), 2, "{c}");
@@ -86,13 +86,13 @@ fn a_fixed_date_is_a_locked_field_and_unknown_fields_are_plain_text() {
     assert_eq!(fields(&d).len(), 1);
 }
 
-fn field_para(parts: &[(&str, Option<&str>)]) -> std::sync::Arc<wordcraft_doc::Block> {
+fn field_para(parts: &[(&str, Option<&str>)]) -> std::sync::Arc<craft_wordmodel::Block> {
     // Text pieces, and fields given as (code, Some(result)).
     let mut p = Paragraph::new();
     for (s, field) in parts {
         match field {
             Some(result) => {
-                p.text.push(wordcraft_doc::para::OBJ);
+                p.text.push(craft_wordmodel::para::OBJ);
                 p.objects.push(InlineObject::Field {
                     instr: s.to_string(),
                     result: result.to_string(),
@@ -105,7 +105,7 @@ fn field_para(parts: &[(&str, Option<&str>)]) -> std::sync::Arc<wordcraft_doc::B
             None => p.text.push_str(s),
         }
     }
-    p.runs = vec![wordcraft_doc::para::Run { len: p.text.len(), props: Default::default() }];
+    p.runs = vec![craft_wordmodel::para::Run { len: p.text.len(), props: Default::default() }];
     para_block(p)
 }
 
@@ -129,7 +129,7 @@ fn fields_round_trip() {
     let got: Vec<String> = fields(&back).into_iter().map(|(c, _)| c).collect();
     // The date keeps its picture (as a date style).
     assert_eq!(got, ["PAGE", "NUMPAGES", "DATE \\@ \"d MMMM yyyy\"", "TITLE", "PAGEREF intro \\h"]);
-    assert_eq!(back.body[0].as_para().unwrap().text.matches(wordcraft_doc::para::OBJ).count(), 5);
+    assert_eq!(back.body[0].as_para().unwrap().text.matches(craft_wordmodel::para::OBJ).count(), 5);
 }
 
 #[test]
@@ -172,7 +172,7 @@ fn an_element_inside_a_field_leaves_the_formatting_after_it_alone() {
 #[test]
 fn a_paragraph_ending_inside_a_field_still_ends() {
     let d = import(&body("<text:p>a<text:page-number>1</text:p><text:p>b</text:p>")).unwrap();
-    let texts: Vec<String> = d.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.replace(wordcraft_doc::para::OBJ, "#")).collect();
+    let texts: Vec<String> = d.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.replace(craft_wordmodel::para::OBJ, "#")).collect();
     assert_eq!(texts, ["a#", "b"]);
 }
 
@@ -185,8 +185,8 @@ fn custom_properties_and_user_fields_are_docproperty_fields() {
     let content = format!(
         r#"<office:document-content {NS_T}><office:body><office:text><text:user-field-decls><text:user-field-decl text:name="Owner" office:value-type="string" office:string-value="Ada"/></text:user-field-decls><text:p>For <text:user-defined text:name="Project">Kiln</text:user-defined> by <text:user-field-get text:name="Owner">Ada</text:user-field-get>.</text:p></office:text></office:body></office:document-content>"#
     );
-    let pkg = crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("meta.xml", meta.as_bytes())]);
-    let d = crate::odt::import(&pkg).unwrap();
+    let pkg = crate::text::tests::zip_of(&[("content.xml", content.as_bytes()), ("meta.xml", meta.as_bytes())]);
+    let d = crate::text::import(&pkg).unwrap();
     let props: Vec<(String, String, String)> = d.custom_props.iter().map(|p| (p.name.clone(), p.kind.clone(), p.value.clone())).collect();
     assert_eq!(
         props,
@@ -201,18 +201,18 @@ fn custom_properties_and_user_fields_are_docproperty_fields() {
         .iter()
         .filter_map(|b| b.as_para())
         .flat_map(|p| p.objects.iter())
-        .filter_map(|o| if let wordcraft_doc::para::InlineObject::Field { instr, .. } = o { Some(instr.clone()) } else { None })
+        .filter_map(|o| if let craft_wordmodel::para::InlineObject::Field { instr, .. } = o { Some(instr.clone()) } else { None })
         .collect();
     assert_eq!(instrs, [r#"DOCPROPERTY "Project""#, r#"DOCPROPERTY "Owner""#]);
     // Saved: the properties in `meta.xml` with `text:user-defined` fields, the user field as one.
-    let saved = crate::odt::export(&d).unwrap();
-    let m = crate::odt::tests::entry(&saved, "meta.xml");
+    let saved = crate::text::export(&d).unwrap();
+    let m = crate::text::tests::entry(&saved, "meta.xml");
     assert!(m.contains(r#"<meta:user-defined meta:name="Budget" meta:value-type="float">1200.5</meta:user-defined>"#), "{m}");
     assert!(!m.contains(r#"meta:name="Owner""#), "{m}");
-    let c = crate::odt::tests::content_of(&saved);
+    let c = crate::text::tests::content_of(&saved);
     assert!(c.contains(r#"<text:user-defined text:name="Project">Kiln</text:user-defined>"#), "{c}");
     assert!(c.contains(r#"<text:user-field-get text:name="Owner">Ada</text:user-field-get>"#), "{c}");
-    assert_eq!(crate::odt::import(&saved).unwrap().custom_props.len(), 3);
+    assert_eq!(crate::text::import(&saved).unwrap().custom_props.len(), 3);
 }
 
 #[test]
@@ -223,7 +223,7 @@ fn custom_date_properties_are_full_utc_dates() {
         ("2026-11-01T10:30:00Z", "filetime", "2026-11-01T10:30:00Z"),
         ("soon", "lpwstr", "soon"),
     ] {
-        let p = crate::odt::fields::custom_prop("When", Some("date"), v).unwrap();
+        let p = crate::text::fields::custom_prop("When", Some("date"), v).unwrap();
         assert_eq!((p.kind.as_str(), p.value.as_str()), (kind, want), "{v}");
     }
 }
@@ -249,7 +249,7 @@ fn bibliography_marks_are_citations_of_sources() {
         .filter_map(|o| if let InlineObject::Field { instr, result, .. } = o { Some((instr.clone(), result.clone())) } else { None })
         .collect();
     assert_eq!(fields, [("CITATION Smi20".to_string(), "[Smi20]".to_string()), ("CITATION Smi20".to_string(), "[Smi20]".to_string())]);
-    let c = crate::odt::tests::content_of(&export(&d).unwrap());
+    let c = crate::text::tests::content_of(&export(&d).unwrap());
     assert!(
         c.contains(r#"<text:bibliography-mark text:identifier="Smi20" text:bibliography-type="book" text:author="Smith, Jane" text:title="Kilns" text:year="2020" text:publisher="Clay Press">[Smi20]</text:bibliography-mark>"#),
         "{c}"
@@ -274,13 +274,13 @@ fn variables_open_as_set_and_ref_fields() {
     .collect();
     assert_eq!(fields(&d), want);
     // The text around them, as LibreOffice shows it.
-    assert_eq!(d.body[0].as_para().unwrap().text.replace(wordcraft_doc::para::OBJ, ""), "Set: . Hidden: . Get: . Number: .");
+    assert_eq!(d.body[0].as_para().unwrap().text.replace(craft_wordmodel::para::OBJ, ""), "Set: . Hidden: . Get: . Number: .");
 }
 
 #[test]
 fn variables_are_written_back_declared() {
     let d = import(&body(VARIABLES)).unwrap();
-    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    let c = crate::text::tests::content_of(&crate::text::tests::export_model(&d).unwrap());
     for want in [
         r#"<text:variable-decls><text:variable-decl office:value-type="string" text:name="n"/><text:variable-decl office:value-type="string" text:name="who"/></text:variable-decls>"#,
         r#"<text:variable-set text:name="who" text:display="none" office:value-type="string" office:string-value="Ada &quot;AL&quot;"/>"#,
@@ -288,7 +288,7 @@ fn variables_are_written_back_declared() {
     ] {
         assert!(c.contains(want), "{want} in {c}");
     }
-    assert_eq!(fields(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()), fields(&d));
+    assert_eq!(fields(&import(&crate::text::tests::export_model(&d).unwrap()).unwrap()), fields(&d));
 }
 
 #[test]
@@ -329,12 +329,12 @@ fn user_fields_stay_user_fields() {
     );
     let d = import(&package(&content, None)).unwrap();
     assert!(d.custom_props.iter().all(|p| p.odf_user_field), "{:?}", d.custom_props);
-    let saved = crate::odt::tests::export_model(&d).unwrap();
-    let c = crate::odt::tests::content_of(&saved);
+    let saved = crate::text::tests::export_model(&d).unwrap();
+    let c = crate::text::tests::content_of(&saved);
     assert!(c.contains(r#"<text:user-field-decl text:name="GroupField1" office:value-type="string" office:string-value="Group one"/>"#), "{c}");
     assert!(c.contains(r#"office:value-type="float" office:value="3""#), "{c}");
     assert!(c.contains(r#"<text:user-field-get text:name="GroupField1">Group one</text:user-field-get>"#), "{c}");
-    let meta = crate::odt::tests::entry(&saved, "meta.xml");
+    let meta = crate::text::tests::entry(&saved, "meta.xml");
     assert!(!meta.contains("GroupField1"), "not a document property too: {meta}");
     let back = import(&saved).unwrap();
     assert_eq!(back.custom_props, d.custom_props);
@@ -349,7 +349,7 @@ fn sender_fields_stay_fields() {
         fields(&d),
         [("SENDER firstname".into(), "Ada".into()), ("SENDER lastname".into(), "Lovelace".into()), ("SENDER email".into(), "ada@example.org".into())]
     );
-    let c = crate::odt::tests::content_of(&export(&d).unwrap());
+    let c = crate::text::tests::content_of(&export(&d).unwrap());
     assert!(
         c.contains("<text:sender-firstname>Ada</text:sender-firstname>") && c.contains("<text:sender-email>ada@example.org</text:sender-email>"),
         "{c}"
@@ -362,7 +362,7 @@ fn a_field_that_follows_the_document_says_so() {
     // fixed (an empty one stayed empty instead of showing the author), so WordCraft says it, as
     // LibreOffice does. Sender fields it writes without, and so does WordCraft.
     let d = import(&body(r#"<text:p><text:author-name text:fixed="false"/> <text:sender-firstname>Ann</text:sender-firstname></text:p>"#)).unwrap();
-    let c = crate::odt::tests::content_of(&export(&d).unwrap());
+    let c = crate::text::tests::content_of(&export(&d).unwrap());
     assert!(c.contains(r#"<text:author-name text:fixed="false""#), "{c}");
     assert!(c.contains("<text:sender-firstname>Ann</text:sender-firstname>"), "{c}");
 }

@@ -6,11 +6,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::model::OdfObject;
-use crate::model::odf_object::MAX_FILES;
+use craft_flow::OdfObject;
+use craft_flow::odf_object::MAX_FILES;
 
 /// The media type of an OLE object (§10.4.7; LibreOffice's manifest names it so).
-pub(in crate::odt) const OLE_MIME: &str = "application/vnd.sun.star.oleobject";
+pub(in crate::text) const OLE_MIME: &str = "application/vnd.sun.star.oleobject";
 
 /// The package path an object link names (`./Object 1` → `Object 1`), when it is one inside the
 /// package: not empty, not absolute, not leaving the package, not a URL.
@@ -39,7 +39,7 @@ fn guess_mime(content: &[u8]) -> &'static str {
 /// The object `href` links to (an OLE file when `ole`), its files read with `fetch` from the
 /// package's `entries`; its media type from the package `manifest` (path → media type) or its
 /// content. `None` when it has no files there.
-pub(in crate::odt) fn gather(
+pub(in crate::text) fn gather(
     href: &str,
     ole: bool,
     entries: &[String],
@@ -76,7 +76,7 @@ pub(in crate::odt) fn gather(
 }
 
 /// Each `manifest:file-entry`'s path and media type in a package's `META-INF/manifest.xml`.
-pub(in crate::odt) fn manifest(xml: &[u8]) -> HashMap<String, String> {
+pub(in crate::text) fn manifest(xml: &[u8]) -> HashMap<String, String> {
     let mut out = HashMap::new();
     super::events(xml, |ev| {
         if let super::Ev::Start(q, a) = ev
@@ -92,7 +92,7 @@ pub(in crate::odt) fn manifest(xml: &[u8]) -> HashMap<String, String> {
 
 /// A placeholder picture for an object whose own picture WordCraft can't show: a pale panel
 /// with a frame, ruled as a grid for a spreadsheet. Drawn here, in WordCraft's own greys.
-pub(in crate::odt) fn placeholder(mime: &str) -> Option<Vec<u8>> {
+pub(in crate::text) fn placeholder(mime: &str) -> Option<Vec<u8>> {
     let (w, h) = (120u32, 72u32);
     let grid = mime.ends_with("spreadsheet");
     let img = image::RgbImage::from_fn(w, h, |x, y| {

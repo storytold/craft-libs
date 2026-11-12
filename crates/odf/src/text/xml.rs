@@ -1,5 +1,3 @@
-use super::{BytesStart, Event, XmlVersion};
-
 /// Length → points.
 pub(super) fn length(v: &str) -> Option<f32> {
     let v = v.trim().to_ascii_lowercase();
@@ -23,17 +21,6 @@ pub(super) fn length(v: &str) -> Option<f32> {
 
 pub(super) type Attrs = Vec<(String, String)>;
 
-fn attrs_of(e: &BytesStart<'_>) -> Attrs {
-    let mut v = Vec::new();
-    for a in e.attributes().with_checks(false).flatten().take(128) {
-        let k = String::from_utf8_lossy(a.key.as_ref()).into_owned();
-        let val =
-            a.normalized_value(XmlVersion::Explicit1_0).map(|c| c.into_owned()).unwrap_or_else(|_| String::from_utf8_lossy(&a.value).into_owned());
-        v.push((k, val));
-    }
-    v
-}
-
 pub(super) fn get<'a>(a: &'a Attrs, k: &str) -> Option<&'a str> {
     a.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str())
 }
@@ -56,41 +43,24 @@ pub(super) fn events(xml: &[u8], mut f: impl FnMut(Ev)) {
 /// [`events`], each with the byte range of `xml` its markup takes (an empty element's start
 /// and end both take the whole element).
 pub(super) fn events_at(xml: &[u8], mut f: impl FnMut(Ev, (usize, usize))) {
-    let mut r = quick_xml::Reader::from_reader(xml);
-    let cfg = r.config_mut();
-    cfg.trim_text(false);
-    cfg.check_end_names = false;
-    cfg.allow_unmatched_ends = true;
-    let mut buf = Vec::new();
-    loop {
-        buf.clear();
-        let from = usize::try_from(r.buffer_position()).unwrap_or(usize::MAX);
-        let ev = r.read_event_into(&mut buf);
-        let at = (from, usize::try_from(r.buffer_position()).unwrap_or(usize::MAX));
+    // Names and attributes as written; no limit but the input's own size (each part is at most a
+    // package entry), and at most 128 attributes kept per element.
+    let limits =
+        craft_xml::Limits { max_input: usize::MAX, max_depth: usize::MAX, max_nodes: usize::MAX, max_attrs: usize::MAX, max_attrs_total: usize::MAX };
+    let opts = craft_xml::Options::default().with_limits(limits);
+    let mut events = opts.events(xml);
+    // Malformed XML ends the stream.
+    while let Ok(Some(ev)) = events.next() {
+        let span = events.span();
+        let at = (span.start, span.end);
         match ev {
-            Ok(Event::Start(e)) => f(Ev::Start(String::from_utf8_lossy(e.name().as_ref()).into_owned(), attrs_of(&e)), at),
-            Ok(Event::Empty(e)) => {
-                let n = String::from_utf8_lossy(e.name().as_ref()).into_owned();
-                f(Ev::Start(n.clone(), attrs_of(&e)), at);
-                f(Ev::End(n), at);
+            craft_xml::Event::Start { name, mut attrs } => {
+                attrs.truncate(128);
+                f(Ev::Start(name, attrs), at)
             }
-            Ok(Event::End(e)) => f(Ev::End(String::from_utf8_lossy(e.name().as_ref()).into_owned()), at),
-            Ok(Event::Text(t)) => f(Ev::Text(t.decode().map(|c| c.into_owned()).unwrap_or_default()), at),
-            Ok(Event::CData(t)) => f(Ev::Text(String::from_utf8_lossy(&t).into_owned()), at),
-            Ok(Event::GeneralRef(r)) => {
-                let name = String::from_utf8_lossy(&r).into_owned();
-                let s = match name.as_str() {
-                    "amp" => "&".to_string(),
-                    "lt" => "<".to_string(),
-                    "gt" => ">".to_string(),
-                    "quot" => "\"".to_string(),
-                    "apos" => "'".to_string(),
-                    _ => r.resolve_char_ref().ok().flatten().map(|c| c.to_string()).unwrap_or_default(),
-                };
-                f(Ev::Text(s), at);
-            }
-            Ok(Event::Eof) | Err(_) => break,
-            Ok(_) => {}
+            craft_xml::Event::End { name } => f(Ev::End(name), at),
+            craft_xml::Event::Text(t) | craft_xml::Event::CData(t) => f(Ev::Text(t), at),
+            _ => {}
         }
     }
 }

@@ -4,7 +4,7 @@
 use super::{FBlock, Fmt, Writer, model, x};
 
 /// The `office:name` of comment `id` written by a writer with names prefixed `prefix`.
-pub(in crate::odt) fn annotation_name(prefix: &str, id: u32) -> String {
+pub(in crate::text) fn annotation_name(prefix: &str, id: u32) -> String {
     format!("__Annotation__{prefix}{id}")
 }
 
@@ -12,7 +12,7 @@ impl Writer {
     /// A comment (ODF 1.3 §14.1): named, so its `office:annotation-end` closes its range, or for
     /// a reply naming the comment it answers (LibreOffice's `loext:parent-name`); its author,
     /// date, initials, resolved state (`loext:resolved`) and text.
-    pub(in crate::odt) fn comment(&mut self, id: u32, c: &model::FComment, out: &mut String) {
+    pub(in crate::text) fn comment(&mut self, id: u32, c: &model::FComment, out: &mut String) {
         let reopen = self.open_ins.as_ref().map(|(m, _)| m.clone());
         self.close_ins(out);
         let mut attrs = match c.parent {
@@ -49,7 +49,7 @@ impl Writer {
     /// meanwhile, and an insertion open around the note ends before it and goes on after it.
     /// A note whose reference has its own look `fmt`: in a span of it (the citation takes the
     /// text's formatting).
-    pub(in crate::odt) fn styled_note(&mut self, endnote: bool, custom: &str, blocks: &[FBlock], fmt: &Fmt, out: &mut String) {
+    pub(in crate::text) fn styled_note(&mut self, endnote: bool, custom: &str, blocks: &[FBlock], fmt: &Fmt, out: &mut String) {
         match self.text_style(&Fmt { link: None, ins: None, del: None, ..fmt.clone() }) {
             Some(n) => {
                 out.push_str(&format!("<text:span text:style-name=\"{n}\">"));
@@ -60,7 +60,7 @@ impl Writer {
         }
     }
 
-    pub(in crate::odt) fn note(&mut self, endnote: bool, custom: &str, blocks: &[FBlock], out: &mut String) {
+    pub(in crate::text) fn note(&mut self, endnote: bool, custom: &str, blocks: &[FBlock], out: &mut String) {
         let reopen = self.open_ins.as_ref().map(|(m, _)| m.clone());
         self.close_ins(out);
         self.notes += 1;
@@ -81,8 +81,8 @@ impl Writer {
         *nth = nth.saturating_add(1);
         let (fmt, start) = match self.note_numbers {
             Some(n) => n[usize::from(endnote)],
-            None if endnote => (wordcraft_doc::section::NumFormat::LowerRoman, 1),
-            None => (wordcraft_doc::section::NumFormat::Decimal, 1),
+            None if endnote => (craft_wordmodel::section::NumFormat::LowerRoman, 1),
+            None => (craft_wordmodel::section::NumFormat::Decimal, 1),
         };
         let number = fmt.format(start.max(1).saturating_add(*nth - 1));
         let (label, citation) = if custom.is_empty() { (String::new(), number) } else { (format!(" text:label=\"{}\"", x(custom)), x(custom)) };
