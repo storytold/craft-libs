@@ -33,9 +33,10 @@ impl ListRow<'_> {
                     icon.color.get_or_insert(cx.resolve(&cx.style.trailing_icon.color));
                     ui.draw().icon(shape, &icon);
                 }
-                TrailingItem::Hosted(show) => {
-                    if let Some(show) = show.take() {
-                        show(ui, at, Rect::from_center_size(slot.center(), Vec2::new(slot.width(), cx.style.sizes.row)));
+                TrailingItem::Hosted(hosted) => {
+                    if let Some(item) = hosted.item.take() {
+                        let height = hosted.size.map_or(cx.style.sizes.row, |size| size.ideal.y.min(cx.style.sizes.row));
+                        item.show(ui, at, Rect::from_center_size(slot.center(), Vec2::new(slot.width(), height)));
                     }
                 }
                 TrailingItem::Part { part, face, enabled, revealed, .. } => {

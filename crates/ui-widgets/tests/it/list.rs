@@ -155,3 +155,84 @@ fn a_click_on_the_selected_event_deselects_it() {
         "selected, then deselected: {changes:?}"
     );
 }
+
+/// A list of the three rows built by `row`, in `room`, and what it reported.
+fn rows_rig(room: Vec2, row: fn(usize) -> ListRow<'static>) -> (Fixture, Rc<RefCell<Vec<CollectionEvent<usize, RowEvent>>>>) {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let held = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key).with_text(|key| std::borrow::Cow::Borrowed(NAMES[*key]));
+        let out = List::new("Artboards").show_items(ui, &source, &mut |key, _| row(*key));
+        held.borrow_mut().extend(out.events);
+    });
+    fixture.room(room);
+    fixture.settle();
+    (fixture, seen)
+}
+
+/// A hosted component's slot is as wide as it measures; in a narrow list an optional one drops out, and a field
+/// narrows toward its least width so the row stays inside the list.
+#[trial]
+fn hosted_items_take_their_own_width_and_an_optional_one_drops_first() {
+    use craft_ui::buttons::Button;
+    use craft_ui::display::Badge;
+    let row = |key: usize| {
+        ListRow::new(NAMES[key])
+            .trailing_field(Button::new("Apply to every page"), |_| {})
+            .trailing_field(Button::new("OK"), |_| {})
+            .trailing_field(craft_ui::text::HexField::hex("Color", craft_ui::contract::Bind::given(craft_theme::Rgba::rgb(0, 0, 0))), |_| {})
+            .optional_field(Badge::new("Primary"), |_| {})
+    };
+    let (fixture, _) = rows_rig(Vec2::new(800.0, 200.0), row);
+    let short = fixture.by_label("OK").expect("the short button shows");
+    let long = fixture.by_label("Apply to every page").expect("the long button shows");
+    assert!(long.rect.width() > short.rect.width(), "the long label's button is wider: {:?} {:?}", long.rect, short.rect);
+    assert!(!long.rect.intersects(short.rect), "the slots do not overlap");
+    assert!(fixture.by_label("Primary").is_some(), "the optional badge shows in a wide list");
+    let wide_field = fixture.by_label("Color").expect("the field shows").rect;
+    let (narrow, _) = rows_rig(Vec2::new(360.0, 200.0), row);
+    assert!(narrow.by_label("Primary").is_none(), "the optional badge drops out in a narrow list");
+    assert!(narrow.by_label("OK").is_some(), "the required button stays");
+    let (field, row_rect) = (narrow.by_label("Color").expect("the field stays").rect, narrow.by_label(NAMES[0]).expect("the row shows").rect);
+    assert!(field.width() < wide_field.width(), "the field narrows: {field:?} from {wide_field:?}");
+    assert!(field.right() <= row_rect.right() + 0.5, "the row's items stay inside it: {field:?} in {row_rect:?}");
+}
+
+/// A double click on a row's leading text reports it with its count and does not activate the row; a click on a
+/// trailing part reports whether its row held the lead when the press began.
+#[trial]
+fn the_leading_text_takes_its_double_click_and_a_part_click_tells_whether_its_row_was_the_lead() {
+    use craft_ui::list::{TrailingFace, TrailingPart};
+    use craft_ui::primitives::IconSpec;
+    const NUMBERS: [&str; 3] = ["Options 1", "Options 2", "Options 3"];
+    let row = |key: usize| {
+        ListRow::new(NAMES[key]).lead_text((key + 1).to_string(), "000000").trailing_part(
+            TrailingPart::new(0),
+            TrailingFace::Icon(IconSpec::svg(craft_behavior::IconId::new("settings"))),
+            NUMBERS[key],
+        )
+    };
+    let (mut fixture, seen) = rows_rig(Vec2::new(320.0, 200.0), row);
+    let first = fixture.by_label(NAMES[0]).expect("the row has a node").rect;
+    let number = egui::Pos2::new(first.left() + 20.0, first.center().y);
+    fixture.click_at(number).click_at(number).settle();
+    {
+        let seen = seen.borrow();
+        assert!(seen.iter().any(|event| matches!(event, CollectionEvent::Item(0, RowEvent::LeadClicked { clicks: 2, .. }))), "{seen:?}");
+        assert!(!seen.iter().any(|event| matches!(event, CollectionEvent::Activate(_))), "no activation: {seen:?}");
+    }
+    let was_lead = |seen: &Rc<RefCell<Vec<CollectionEvent<usize, RowEvent>>>>| {
+        seen.borrow().iter().rev().find_map(|event| match event {
+            CollectionEvent::Item(2, RowEvent::Trailing { was_lead, .. }) => Some(*was_lead),
+            _ => None,
+        })
+    };
+    fixture.advance(1.0).idle(1);
+    let options = fixture.by_label(NUMBERS[2]).expect("the part has a node").center();
+    fixture.click_at(options).settle();
+    assert_eq!(was_lead(&seen), Some(false), "the first click lands on a row that was not the lead");
+    fixture.advance(1.0).idle(1);
+    fixture.click_at(options).settle();
+    assert_eq!(was_lead(&seen), Some(true), "the press moved the lead there, so the next click finds it the lead");
+}

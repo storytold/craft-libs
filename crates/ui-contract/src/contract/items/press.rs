@@ -156,10 +156,26 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             && let Some(at) = layout.hit(local(start.origin), offset).filter(|&at| self.source.enabled(at) && layout.shown(at))
             && (target.owner != cx.core.id || target.part.is_some_and(|part| part.key == SECTION))
         {
+            let key = self.source.key(at);
+            self.drags.part_press = Some((key.clone(), self.lead.key.as_ref() == Some(&key)));
             self.move_lead(at, LeadSource::Pointer);
             if props.focus_on_press && !target.sense.intersects(Sense::TAKE_FOCUS | Sense::KEEP_FOCUS) {
                 focus::request_now(&ctx, focus::FocusTarget::Id(cx.core.id));
             }
+        }
+        // While a part of an item holds the press, and in the pass it ends, the row reads it with whether it held the lead
+        // when the press began.
+        match outcome.phase {
+            Some(PressPhase::Down { .. } | PressPhase::Held { .. } | PressPhase::Release { .. })
+                if outcome.target.is_some_and(|target| target.part.is_some()) =>
+            {
+                if let Some((key, was_lead)) = self.drags.part_press.clone()
+                    && let Some(at) = self.index_of(&key)
+                {
+                    self.pressed = Some((at, RowPressed::Part { was_lead }));
+                }
+            }
+            _ => self.drags.part_press = None,
         }
         // A click on a row's thumbnail is also a click on the row: the item reports the thumbnail's click and an unmodified click picks
         // in the same pass.

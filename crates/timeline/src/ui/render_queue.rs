@@ -7,24 +7,18 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::time::Duration;
 
-use craft_behavior::{DisplayOrder, EditEvent, IconId, ItemSource, Selection, SelectionChange};
-use craft_theme::Variant;
-use craft_ui::buttons::Button;
+use craft_behavior::{DisplayOrder, EditEvent, ItemSource, Selection, SelectionChange};
+use craft_theme::{ControlSize, Variant};
+use craft_ui::buttons::{Button, ButtonOutput};
 use craft_ui::contract::{
     Bind, BodyCx, CollectionEvent, Held, NoValue, Outcome, Pattern, Props, ReorderMove, ReorderRule, SelectMode, Show as _, ShowCollection as _,
     ShowContainer as _, clicked,
 };
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
-use craft_ui::list::{List, ListRow, RowEvent, TrailingFace, TrailingPart};
-use craft_ui::primitives::IconSpec;
+use craft_ui::list::{List, ListRow};
 use craft_ui::runtime::env::{Env, Label};
 use egui::{Response, Ui};
-
-/// The pressable part that cancels or retries an item.
-const ACTION: TrailingPart = TrailingPart::new(0);
-/// The pressable part that removes an item.
-const REMOVE: TrailingPart = TrailingPart::new(1);
 
 craft_ui::words! {
     /// The queue's words, English by default (FilmCraft's).
@@ -191,9 +185,10 @@ pub fn format_eta(env: &Env, time: Duration) -> String {
     }
 }
 
-/// The row of `item`: "source \u{2192} file", the preset and status as its detail, the time left of an encoding
-/// item, and the row's action buttons.
-fn queue_row(env: &Env, words: &RenderQueueWords, item: &RenderQueueItem) -> ListRow<'static> {
+/// The row of `item`: "source \u{2192} file", the preset and status as its detail, an encoding item's progress bar
+/// under it with its time left at the end, and the row's buttons: Cancel or Retry, then Remove (disabled while
+/// encoding), whose clicks go to `events`.
+fn queue_row<'r>(env: &Env, words: &RenderQueueWords, item: &RenderQueueItem, events: &'r RefCell<Vec<RenderQueueEvent>>) -> ListRow<'r> {
     let format = env.format();
     let status = match &item.status {
         RenderStatus::Ready => words.ready.as_str().to_owned(),
@@ -205,19 +200,29 @@ fn queue_row(env: &Env, words: &RenderQueueWords, item: &RenderQueueItem) -> Lis
         RenderStatus::Failed(error) => words.failed.fill(&[("e", error)]),
         RenderStatus::Cancelled => words.cancelled.as_str().to_owned(),
     };
-    let mut row = ListRow::new(format!("{} \u{2192} {}", item.source, item.file)).detail(format!("{} \u{b7} {status}", item.preset));
-    if let RenderStatus::Encoding { remaining: Some(time), .. } = item.status {
-        row = row.optional(words.time_left.fill(&[("time", &format_eta(env, time))]));
-    }
-    if !item.status.is_encoding() {
-        row = row.trailing_part(REMOVE, TrailingFace::Icon(IconSpec::svg(IconId::new("trash"))), words.remove.clone());
-    }
-    match item.status {
-        RenderStatus::Ready | RenderStatus::Encoding { .. } => {
-            row.trailing_part(ACTION, TrailingFace::Icon(IconSpec::svg(IconId::new("close"))), words.cancel.clone())
+    let id = item.id;
+    let button = |text: &Label| Button::new(text.clone()).size(ControlSize::Sm);
+    let on_click = move |event: RenderQueueEvent| {
+        move |shown: ButtonOutput| {
+            if clicked(&shown) {
+                events.borrow_mut().push(event);
+            }
         }
-        _ => row.trailing_part(ACTION, TrailingFace::Icon(IconSpec::svg(IconId::new("refresh"))), words.retry.clone()),
+    };
+    let mut row = ListRow::new(format!("{} \u{2192} {}", item.source, item.file))
+        .detail(format!("{} \u{b7} {status}", item.preset))
+        .trailing_field(button(&words.remove).enabled(!item.status.is_encoding()), on_click(RenderQueueEvent::Remove(id)));
+    row = match item.status {
+        RenderStatus::Ready | RenderStatus::Encoding { .. } => row.trailing_field(button(&words.cancel), on_click(RenderQueueEvent::Cancel(id))),
+        _ => row.trailing_field(button(&words.retry), on_click(RenderQueueEvent::Retry(id))),
+    };
+    if let RenderStatus::Encoding { progress, remaining } = item.status {
+        row = row.progress(progress);
+        if let Some(time) = remaining {
+            row = row.optional(words.time_left.fill(&[("time", &format_eta(env, time))]));
+        }
     }
+    row
 }
 
 /// FilmCraft's export queue (Premiere's queue in Export mode): a `List` of the items, each row "source \u{2192}
@@ -269,7 +274,7 @@ impl<'a> RenderQueueList<'a> {
                     .selection(Bind::bound(&mut selected))
                     .show_items(ui, &source, &mut |key, _| {
                         let item = items.iter().find(|item| item.id == *key).expect("the list asks for its own keys");
-                        queue_row(&env, &words, item)
+                        queue_row(&env, &words, item, &events)
                     });
                 let mut out_events = events.borrow_mut();
                 for event in out.events {
@@ -279,15 +284,6 @@ impl<'a> RenderQueueList<'a> {
                         CollectionEvent::Delete(keys) => {
                             let removable = |key: &RenderItemId| items.iter().any(|item| item.id == *key && !item.status.is_encoding());
                             out_events.extend(keys.into_iter().filter(removable).map(RenderQueueEvent::Remove));
-                        }
-                        CollectionEvent::Item(key, RowEvent::Trailing { part, .. }) => {
-                            let item = items.iter().find(|item| item.id == key);
-                            match (part, item.map(|item| &item.status)) {
-                                (REMOVE, _) => out_events.push(RenderQueueEvent::Remove(key)),
-                                (ACTION, Some(RenderStatus::Ready | RenderStatus::Encoding { .. })) => out_events.push(RenderQueueEvent::Cancel(key)),
-                                (ACTION, Some(_)) => out_events.push(RenderQueueEvent::Retry(key)),
-                                _ => {}
-                            }
                         }
                         _ => {}
                     }

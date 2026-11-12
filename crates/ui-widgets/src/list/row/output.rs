@@ -41,6 +41,19 @@ pub enum RowEvent {
         part: TrailingPart,
         /// The modifiers held at the click; none for a key activation.
         mods: Mods,
+        /// The press count of the click, as [`ThumbClicked`](Self::ThumbClicked) counts it.
+        clicks: u32,
+        /// The row held the collection's lead when the press began (a press on a part moves the lead to its row);
+        /// true for a key activation.
+        was_lead: bool,
+    },
+    /// A click landed on the leading text ([`ListRow::lead_text`]); an unmodified click also picked the row.
+    #[non_exhaustive]
+    LeadClicked {
+        /// The modifiers held at the click.
+        mods: Mods,
+        /// The press count of the click, as [`ThumbClicked`](Self::ThumbClicked) counts it.
+        clicks: u32,
     },
 }
 

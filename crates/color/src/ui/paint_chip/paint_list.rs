@@ -2,18 +2,22 @@
 
 use craft_behavior::{Axis, EditEvent, IconId, Selection};
 use craft_behavior::{DisplayOrder, ItemSource, Mixed, SelectionChange};
+use craft_theme::Rgba;
 use craft_theme::Srgba;
 use craft_ui::buttons::Button;
 use craft_ui::contract::ShowContainer as _;
 use craft_ui::contract::{Bind, Outcome, Show as _, ShowCollection as _};
 use craft_ui::contract::{CollectionEvent, NoValue, Rename};
+use craft_ui::display::Badge;
 use craft_ui::layout_components::Stack;
 use craft_ui::list::{List, ListRow, RowEvent, ThumbAspect, ThumbSize, TrailingFace, TrailingPart};
 use craft_ui::primitives::{ContentPainterCx, IconSpec, PaintShape};
 use craft_ui::runtime::env::Label;
+use craft_ui::text::{HexField, NumberField};
 use egui::{Color32, Rect, Response, Ui};
+use std::cell::RefCell;
 
-use super::{Paint, PaintWords, paint_image, ramp_stops};
+use super::{Paint, PaintChip, PaintWords, paint_image, ramp_stops};
 
 /// How a paint is bound (FigCraft's colour style or variable).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -241,8 +245,9 @@ const ROW_CHIP: (u16, u16) = (3, 2);
 ///
 /// With [`options`](Self::options) a row also offers the binding's name with Bind and Detach ([`rows`](Self::rows)),
 /// "Select layers with this color" and Remove after the name, and Add under the rows. Each reports a
-/// [`PaintListEvent`]. The per-row chip edit, hex field and opacity field wait for a row slot that holds field
-/// controls.
+/// [`PaintListEvent`]. With `edit` a live [`PaintChip`] takes the thumbnail's place among the trailing items, and
+/// `hex` and `opacity` add a hex field and a percent field to each solid row; the binding shows as a badge by the
+/// name that drops out first in a narrow list.
 #[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
 pub struct PaintList<'a> {
     label: Label,
@@ -275,42 +280,87 @@ impl<'a> PaintList<'a> {
         let (paints, rows, options, label) = (self.paints, self.rows, self.options, self.label.clone());
         let mut output = None;
         let mut add = false;
+        let acted = RefCell::new(Vec::new());
         let shown = Stack::new().show(ui, |ui, cx| {
             let held = match selected_bind.reborrow().read(cx) {
                 Some(Mixed::Same(Some(row))) if row < paints.len() => Selection::single(row),
                 _ => Selection::default(),
             };
             let list = List::<usize>::new(label.clone()).selection(Bind::given(held)).can_rename(|_| true);
+            let first_solid = paints.iter().find_map(|(_, paint)| if let Paint::Solid(color) = paint { Some(*color) } else { None });
+            let fallback = self.fallback.or(first_solid).unwrap_or(Self::DEFAULT_SOLID);
+            let acted = &acted;
             output = Some(list.show_items(ui, &Paints(paints), &mut |row, _| {
-                let (name, paint) = &paints[*row];
-                let mut item =
-                    ListRow::new(name.clone()).thumb_aspect(ThumbSize::Small, ThumbAspect::new(ROW_CHIP.0, ROW_CHIP.1), move |painter, rect| {
+                let row = *row;
+                let (name, paint) = &paints[row];
+                let solid = match paint {
+                    Paint::Solid(color) => Some(*color),
+                    _ => None,
+                };
+                let mut item = ListRow::new(name.clone());
+                if let Some(color) = solid {
+                    item = item.accessible_name(format!("{name}, {}", color.to_rgba().to_hex()));
+                }
+                if !options.edit {
+                    item = item.thumb_aspect(ThumbSize::Small, ThumbAspect::new(ROW_CHIP.0, ROW_CHIP.1), move |painter, rect| {
                         paint_thumb(painter, rect, paint);
                     });
-                if let Some(link) = rows.get(*row).and_then(|data| data.link.as_ref()) {
-                    item = item.trailing(link.name.clone());
                 }
+                // The first item added is the outermost: Remove closes the row, the binding's badge sits by the name.
+                if options.remove {
+                    let label = Label::from(words.remove.fill(&[("name", name.as_str())]));
+                    item = item.trailing_part(REMOVE, TrailingFace::Icon(IconSpec::svg(IconId::new("minus"))), label);
+                }
+                if options.select_users {
+                    let label = Label::from(words.select_users.fill(&[("name", name.as_str())]));
+                    item = item.trailing_part(SELECT_USERS, TrailingFace::Icon(IconSpec::svg(IconId::new("layers"))), label);
+                }
+                let link = rows.get(row).and_then(|data| data.link.as_ref());
                 if options.bind {
-                    let (name, icon) = match rows.get(*row).and_then(|data| data.link.as_ref()) {
+                    let (label, icon) = match link {
                         Some(PaintLink { kind: PaintLinkKind::Style, .. }) => (words.detach_style.clone(), "unlink"),
                         Some(PaintLink { kind: PaintLinkKind::Variable, .. }) => (words.detach_variable.clone(), "unlink"),
                         None => (words.styles.clone(), "palette"),
                     };
-                    item = item.trailing_part(BIND, TrailingFace::Icon(IconSpec::svg(IconId::new(icon))), name);
+                    item = item.trailing_part(BIND, TrailingFace::Icon(IconSpec::svg(IconId::new(icon))), label);
                 }
-                if options.select_users {
-                    item = item.trailing_part(
-                        SELECT_USERS,
-                        TrailingFace::Icon(IconSpec::svg(IconId::new("layers"))),
-                        Label::from(words.select_users.fill(&[("name", name.as_str())])),
-                    );
+                // A row without a solid colour keeps the fields' room empty, so the buttons after them line up.
+                if options.opacity {
+                    let percent = solid.map_or(100.0, |color| f64::from(color.a) * 100.0);
+                    let field = NumberField::new(words.opacity.clone(), Bind::given(Some(percent))).range(0.0..=100.0).unit("%");
+                    item = match solid {
+                        Some(_) => item.trailing_field(field, move |shown| {
+                            for event in shown.edit.events.iter() {
+                                let event = event.clone().map(|percent| (percent.unwrap_or(100.0) / 100.0) as f32);
+                                acted.borrow_mut().push(PaintListEvent::Opacity { row, event });
+                            }
+                        }),
+                        None => item.trailing_space(field),
+                    };
                 }
-                if options.remove {
-                    item = item.trailing_part(
-                        REMOVE,
-                        TrailingFace::Icon(IconSpec::svg(IconId::new("minus"))),
-                        Label::from(words.remove.fill(&[("name", name.as_str())])),
-                    );
+                if options.hex {
+                    // The field shows no alpha digits: a typed colour keeps the row's alpha.
+                    let opaque = solid.map_or(Rgba::rgb(0, 0, 0), |color| Srgba { a: 1.0, ..color }.to_rgba());
+                    let field = HexField::hex(words.hex.clone(), Bind::given(opaque));
+                    item = match solid {
+                        Some(color) => item.trailing_field(field, move |shown| {
+                            if let Some(typed) = shown.events.landed() {
+                                acted.borrow_mut().push(PaintListEvent::Hex { row, color: Srgba { a: color.a, ..Srgba::from(*typed) } });
+                            }
+                        }),
+                        None => item.trailing_space(field),
+                    };
+                }
+                if options.edit {
+                    let chip = PaintChip::new(words.edit.clone(), Bind::given(paint.clone()), solid.unwrap_or(fallback));
+                    item = item.trailing_field(chip, move |shown| {
+                        for event in shown.edit.events.iter() {
+                            acted.borrow_mut().push(PaintListEvent::Edit { row, event: event.clone() });
+                        }
+                    });
+                }
+                if let Some(link) = link {
+                    item = item.optional_field(Badge::new(link.name.clone()), |_| {});
                 }
                 item
             }));
@@ -321,7 +371,7 @@ impl<'a> PaintList<'a> {
         // A parent's measuring run reuses what it measured and does not run the body.
         let Some(list) = output else { return PaintListOutput { response: shown.output, selected: None, events: Vec::new() } };
         let mut selected = None;
-        let mut events = Vec::new();
+        let mut events = acted.into_inner();
         for event in list.events {
             match event {
                 CollectionEvent::Selection(SelectionChange::Set(keys)) => selected = keys.last().copied().or(selected),

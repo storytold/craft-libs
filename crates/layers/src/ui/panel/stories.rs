@@ -8,7 +8,10 @@ use egui::Ui;
 use super::{LayersOutput, LayersPanel};
 use crate::ui::filter::{FilterBy, LayerFilter};
 use crate::ui::mock::FakeLayers;
-use crate::ui::tree::{LayerPart, LayerSelection};
+use crate::ui::tree::{LayerInfo, LayerPart, LayerSelection};
+use craft_behavior::IconId;
+use craft_ui::display::Icon;
+use craft_ui::primitives::IconSpec;
 
 /// The sample tree with the masked layer active and its mask targeted.
 fn selected() -> FakeLayers {
@@ -48,6 +51,15 @@ fn layers_panel_filtered(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tree = selected();
     let filter = data.value("filter", LayerFilter { by: FilterBy::Name, name: String::from("o"), ..LayerFilter::default() });
     let shown = LayersPanel::new(&tree).filter(Bind::bound(filter)).show(ui);
+    with_readout(data, shown)
+}
+
+/// Illustrator's target circle after each row's indicators: filled while the layer is shown.
+#[story(LayersPanel<'static, FakeLayers>, covers = [], drive = Drive::Never)]
+fn layers_panel_target_cell(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let tree = selected();
+    let target = |_: &u32, info: &LayerInfo| Icon::new(IconSpec::svg(IconId::new(if info.visible { "target" } else { "circle" })));
+    let shown = LayersPanel::new(&tree).trailing(target, |_, _| {}).show(ui);
     with_readout(data, shown)
 }
 

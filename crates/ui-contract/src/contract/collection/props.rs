@@ -544,7 +544,7 @@ impl CollectionProps {
     }
 }
 
-/// Where the collection holds a primary press on a row, within slop.
+/// Where the collection holds a primary press on a row, within slop, or the press a part of the row holds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RowPressed {
@@ -552,6 +552,12 @@ pub enum RowPressed {
     Row,
     /// On the cell of this toggle column, which the press flips.
     Cell(ColumnKey),
+    /// On a part of the item that took the press itself (a row's trailing button).
+    #[non_exhaustive]
+    Part {
+        /// The row held the lead when the press began: a press on a part moves the lead to its row.
+        was_lead: bool,
+    },
 }
 
 /// What an item reads of its place in the collection; the item step joins it to the item's flags at step 12.

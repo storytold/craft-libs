@@ -22,7 +22,7 @@ pub use menu::{LayersMenuAction, LayersPanelCommands, LayersPanelKeys, panel_row
 
 use std::cell::RefCell;
 
-use craft_ui::contract::{Bind, CommandSet as _, Commands as _, NoValue, Outcome, ShowContainer as _};
+use craft_ui::contract::{Bind, CommandSet as _, Commands as _, NoValue, Outcome, Show, ShowContainer as _};
 use craft_ui::layout_components::Stack;
 use craft_ui::list::ListWords;
 use craft_ui::primitives::textures::{ThumbSource, Thumbnails};
@@ -31,15 +31,16 @@ use craft_ui::runtime::memory::Remember as _;
 use egui::{Response, Ui};
 
 use body::{LayerRows, ToggleSweeps, reveal_plan, show_body, start_rename};
-use context::{PanelContext, ThumbHost};
+use context::{HostCell, PanelContext, ThumbHost, TrailingCell};
 use footer::show_footer;
 use menu::{OpenMenu, RowMenu, show_row_menus};
+use std::marker::PhantomData;
 
 use super::filter::{LayerFilter, LayerFilterBar};
 use super::options::LayersSettings;
 use super::rows::BlendRows;
 use super::thumbs::LayerThumb;
-use super::tree::{LayerRowKey, LayerTree};
+use super::tree::{LayerInfo, LayerRowKey, LayerTree};
 
 craft_ui::words! {
     /// The words of the Layers panel's rows, footer and menus. Patterns with `{row}`, `{layer}` and
@@ -160,6 +161,7 @@ pub struct LayersPanel<'a, T: LayerTree> {
     blend_rows: bool,
     filter_bar: bool,
     row_menu: Option<Box<RowMenu<'a, T::Id>>>,
+    trailing: Option<Box<dyn TrailingCell<T::Id> + 'a>>,
     reveal: Option<T::Id>,
     rename: Option<T::Id>,
 }
@@ -199,6 +201,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             blend_rows: true,
             filter_bar: true,
             row_menu: None,
+            trailing: None,
             reveal: None,
             rename: None,
         }
@@ -260,6 +263,14 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
         self
     }
 
+    /// The host's component at each layer row's trailing end, after the indicators and never dropped for the name
+    /// (Illustrator's target circle, a selection square): `build` makes the layer's component and `output` gets what
+    /// it reports, with the layer, in the pass it is shown.
+    pub fn trailing<C: Show + 'a>(mut self, build: impl Fn(&T::Id, &LayerInfo) -> C + 'a, output: impl FnMut(&T::Id, C::Output) + 'a) -> Self {
+        self.trailing = Some(Box::new(HostCell { build, output: RefCell::new(output), component: PhantomData }));
+        self
+    }
+
     /// Reveals `layer` this pass: its closed ancestors open ([`LayersEvent::Open`]) and its row
     /// scrolls into view when hidden. The active layer is revealed by itself when it changes.
     pub fn reveal(mut self, layer: T::Id) -> Self {
@@ -277,8 +288,20 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
     /// Draws the panel over the available rect: the filter bar and [`BlendRows`] in the header, the
     /// rows, the footer. Events are reported in that order.
     pub fn show(self, ui: &mut Ui) -> LayersOutput<T::Id> {
-        let LayersPanel { tree, settings, thumbnails, mut filter, lock_column, visibility_key, blend_rows, filter_bar, row_menu, reveal, rename } =
-            self;
+        let LayersPanel {
+            tree,
+            settings,
+            thumbnails,
+            mut filter,
+            lock_column,
+            visibility_key,
+            blend_rows,
+            filter_bar,
+            row_menu,
+            trailing,
+            reveal,
+            rename,
+        } = self;
         let env = Env::of(ui);
         let words = env.words::<LayersPanelWords>();
         let list_words = env.words::<ListWords>();
@@ -295,6 +318,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             list_words: &list_words,
             lock_column,
             visibility_key,
+            trailing: trailing.as_deref(),
         };
         let events = RefCell::new(Vec::new());
         let current = RefCell::new(LayerFilter::default());

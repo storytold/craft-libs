@@ -9,7 +9,7 @@ use crate::contract::{ColumnAlign, PartsCx, WordSetCx as _};
 use crate::list::toggle::ToggleState;
 use crate::list::words::ListWords;
 use crate::primitives::{HAlign, TextRun, Wrap};
-use crate::runtime::env::EnvView;
+use crate::runtime::env::{EnvView, Label};
 use crate::style::{StyleCx, TextLook};
 use craft_behavior::{ColumnKey, Flow};
 use craft_theme::TypeRole;
@@ -26,8 +26,6 @@ pub(super) struct Sizes {
     pad: f32,
     pub(super) gap: f32,
     trailing_pad: f32,
-    /// The width of a hosted field.
-    field: f32,
     pub(super) min_label: f32,
     thumbs: [f32; 3],
     thumb_pad: f32,
@@ -54,7 +52,6 @@ impl Sizes {
             pad: control.pad_x,
             gap: control.gap,
             trailing_pad: tokens.space.pad.regular,
-            field: tokens.size.length.short,
             min_label: MIN_LABEL_HEIGHTS * control.height,
             thumbs: [thumbs.sm, thumbs.md, thumbs.lg],
             thumb_pad: tokens.space.gap.stack,
@@ -103,6 +100,27 @@ impl ListRow<'_> {
     }
 }
 
+/// A trailing item's width where the row has room, the least it narrows to, and whether it drops out for room.
+#[derive(Clone, Copy)]
+pub(super) struct ItemWidth {
+    pub(super) width: f32,
+    pub(super) least: f32,
+    pub(super) optional: bool,
+}
+
+/// The measured widths a row is placed by.
+pub(super) struct Widths {
+    /// The trailing items' widths.
+    pub(super) items: Vec<ItemWidth>,
+    /// The leading text's slot.
+    pub(super) lead: Option<f32>,
+}
+
+/// The run of a leading text, without its colour.
+pub(super) fn lead_run(text: &Label) -> TextRun<'_> {
+    TextRun::new(text.as_str()).role(TypeRole::Caption)
+}
+
 /// The cells of a row that lead and trail its label band.
 struct Bands {
     lead: f32,
@@ -128,7 +146,10 @@ pub(super) struct Placed {
     pub(super) extras: Vec<(Rect, Option<Rect>)>,
     pub(super) label: Rect,
     pub(super) items: Vec<Option<Rect>>,
+    /// The row's least width: the label at its least, the required items at theirs.
     pub(super) min_width: f32,
+    /// The row's least width with the required items at their widths where the row has room.
+    pub(super) ideal_width: f32,
 }
 
 impl ListRow<'_> {
@@ -142,14 +163,16 @@ impl ListRow<'_> {
         self.first.is_some() && sizes.side(self.thumb) > 0.0
     }
 
-    /// The width of the leading part: every thumbnail and what is between them, or the icon; `None` for a row with
-    /// neither.
-    fn leading(&self, sizes: &Sizes) -> Option<f32> {
+    /// The width of the leading part: every thumbnail and what is between them, the leading text's slot, or the icon;
+    /// `None` for a row with none of them.
+    fn leading(&self, sizes: &Sizes, widths: &Widths) -> Option<f32> {
         let side = sizes.side(self.thumb);
         if self.shows_thumbs(sizes) {
             let first = self.thumb_aspect.of(side);
             let between = |extra: &Thumb<'_>| if extra.link.is_some() { sizes.icon } else { sizes.gap };
             Some(first + self.extras.iter().map(|extra| first + between(extra)).sum::<f32>())
+        } else if let Some(lead) = widths.lead {
+            Some(lead)
         } else {
             (self.icon.is_some() || self.lead_paint.is_some()).then_some(sizes.icon)
         }
@@ -218,14 +241,28 @@ impl ListRow<'_> {
         }
     }
 
-    /// The widths of the trailing items: as `text_width` measures a text, the icon side for the others.
-    pub(super) fn item_widths(&self, sizes: &Sizes, text_width: &dyn Fn(&TextRun<'_>) -> f32) -> Vec<(f32, bool)> {
+    /// The widths of the trailing items and the leading text's slot: as `text_width` measures a text, the icon side for
+    /// icons and parts, and a hosted component's measured width.
+    pub(super) fn widths(&self, sizes: &Sizes, text_width: &dyn Fn(&TextRun<'_>) -> f32) -> Widths {
         let width = |item: &TrailingItem| match item {
             TrailingItem::Text { text, .. } => text_width(&trailing_run(text)),
             TrailingItem::Icon { .. } | TrailingItem::Part { .. } => sizes.icon,
-            TrailingItem::Hosted(_) => sizes.field,
+            TrailingItem::Hosted(hosted) => hosted.size.map_or(0.0, |size| size.ideal.x),
         };
-        self.trailing.iter().map(|trailing| (width(&trailing.item), trailing.optional)).collect()
+        let least = |item: &TrailingItem, width: f32| match item {
+            TrailingItem::Hosted(hosted) => hosted.size.map_or(width, |size| size.least.min(width)),
+            _ => width,
+        };
+        let items = self
+            .trailing
+            .iter()
+            .map(|trailing| {
+                let width = width(&trailing.item);
+                ItemWidth { width, least: least(&trailing.item, width), optional: trailing.optional }
+            })
+            .collect();
+        let lead = self.lead_text.as_ref().map(|(_, widest)| text_width(&lead_run(widest)));
+        Widths { items, lead }
     }
 
     /// The indent a row asks for before it gives way to the label's least width.
@@ -289,22 +326,23 @@ impl ListRow<'_> {
         if self.muted.contains(column) { &style.cell_muted } else { &style.cell }
     }
 
-    pub(super) fn place(&self, sizes: &Sizes, items: &[(f32, bool)], rect: Rect, rtl: bool) -> Placed {
+    pub(super) fn place(&self, sizes: &Sizes, widths: &Widths, rect: Rect, rtl: bool) -> Placed {
         if !self.space_above {
-            return self.place_in(&self.cells, sizes, items, rect, rtl);
+            return self.place_in(&self.cells, sizes, widths, rect, rtl);
         }
         let below = |rect: Rect| Rect::from_min_max(Pos2::new(rect.left(), (rect.top() + sizes.gap_row).min(rect.bottom())), rect.max);
         let cells: Vec<_> = self.cells.iter().map(|(column, rect)| (column.clone(), below(*rect))).collect();
-        self.place_in(&cells, sizes, items, below(rect), rtl)
+        self.place_in(&cells, sizes, widths, below(rect), rtl)
     }
 
-    pub(super) fn place_in(&self, cells_of: &[(ColumnKey, Rect)], sizes: &Sizes, items: &[(f32, bool)], rect: Rect, rtl: bool) -> Placed {
+    pub(super) fn place_in(&self, cells_of: &[(ColumnKey, Rect)], sizes: &Sizes, widths: &Widths, rect: Rect, rtl: bool) -> Placed {
+        let items = &widths.items;
         let Bands { lead, trail, toggles: cells, texts } = self.bands(cells_of, rect, rtl);
         let flow = Flow::new(rect, rtl);
         let band_width = (rect.width() - lead - trail).max(0.0);
         let band = flow.span(lead, band_width);
         let inner = Flow::new(band, rtl);
-        let leading = self.leading(sizes);
+        let leading = self.leading(sizes, widths);
         let leading_width = leading.map_or(0.0, |side| side + sizes.gap);
         let disclosure = if self.group.is_some() { sizes.icon } else { 0.0 };
         let marker = if self.clipped { sizes.icon } else { 0.0 };
@@ -313,15 +351,21 @@ impl ListRow<'_> {
         let base = sizes.pad;
         let indent_full = self.indent_full(sizes);
         let end = band_width - sizes.trailing_pad;
-        let required: f32 = items.iter().filter(|(_, optional)| !optional).map(|(width, _)| width + sizes.gap).sum();
+        let required: f32 = items.iter().filter(|item| !item.optional).map(|item| item.width + sizes.gap).sum();
         let mut used = required;
-        let mut kept: Vec<bool> = items.iter().map(|(_, optional)| !optional).collect();
-        for (at, (width, optional)) in items.iter().enumerate() {
-            if *optional && end - (used + width + sizes.gap) - (base + indent_full + column + leading_width) >= sizes.min_label {
+        let mut kept: Vec<bool> = items.iter().map(|item| !item.optional).collect();
+        for (at, item) in items.iter().enumerate() {
+            if item.optional && end - (used + item.width + sizes.gap) - (base + indent_full + column + leading_width) >= sizes.min_label {
                 kept[at] = true;
-                used += width + sizes.gap;
+                used += item.width + sizes.gap;
             }
         }
+        // A row that lacks room for the label's least width narrows its hosted fields toward their least widths, each
+        // by the same share of what it can give.
+        let lack = (base + indent_full + column + leading_width + sizes.min_label - (end - used)).max(0.0);
+        let give: f32 = items.iter().zip(&kept).filter(|(_, kept)| **kept).map(|(item, _)| item.width - item.least).sum();
+        let share = if give > 0.0 { (lack / give).min(1.0) } else { 0.0 };
+        used -= give * share;
         let label_end = end - used;
         let overflow = (base + column + leading_width + sizes.min_label - label_end).max(0.0);
         let label_end = label_end + overflow;
@@ -330,11 +374,12 @@ impl ListRow<'_> {
         let items = items
             .iter()
             .zip(&kept)
-            .map(|((width, _), kept)| {
+            .map(|(item, kept)| {
                 kept.then(|| {
+                    let width = item.width - (item.width - item.least) * share;
                     let start = end - from_end - width + overflow;
                     from_end += width + sizes.gap;
-                    inner.span(start, *width)
+                    inner.span(start, width)
                 })
             })
             .collect();
@@ -365,7 +410,9 @@ impl ListRow<'_> {
         let toggles = cells.iter().map(|(at, cell, _)| (*at, *cell)).collect();
         let texts = texts.iter().map(|(at, position, cell, _)| (*at, *position, *cell)).collect();
         let dividers = cells.iter().filter(|(_, _, leading)| *leading).map(|(_, cell, _)| if rtl { cell.left() } else { cell.right() }).collect();
-        let min_width = lead + trail + base + column + leading_width + sizes.min_label + required + sizes.trailing_pad;
+        let least: f32 = widths.items.iter().filter(|item| !item.optional).map(|item| item.least + sizes.gap).sum();
+        let min_width = lead + trail + base + column + leading_width + sizes.min_label + least + sizes.trailing_pad;
+        let ideal_width = min_width - least + required;
         Placed {
             toggles,
             texts,
@@ -379,6 +426,7 @@ impl ListRow<'_> {
             label: inner.span(label_start, (label_end - label_start).max(0.0)),
             items,
             min_width,
+            ideal_width,
         }
     }
 }
@@ -398,7 +446,6 @@ pub fn placement_under_fixed_sizes(row: &ListRow<'_>, width: f32, rtl: bool) -> 
         pad: 6.0,
         gap: 4.0,
         trailing_pad: 8.0,
-        field: 64.0,
         min_label: 60.0,
         thumbs: [24.0, 32.0, 48.0],
         thumb_pad: 4.0,
@@ -410,8 +457,8 @@ pub fn placement_under_fixed_sizes(row: &ListRow<'_>, width: f32, rtl: bool) -> 
         cell_inset: 6.0,
         cell_pad: 4.0,
     };
-    let items = row.item_widths(&sizes, &|run| FIXED_ADVANCE * run.full_text().chars().count() as f32);
-    let placed = row.place(&sizes, &items, Rect::from_min_size(Pos2::ZERO, Vec2::new(width, sizes.row)), rtl);
+    let widths = row.widths(&sizes, &|run| FIXED_ADVANCE * run.full_text().chars().count() as f32);
+    let placed = row.place(&sizes, &widths, Rect::from_min_size(Pos2::ZERO, Vec2::new(width, sizes.row)), rtl);
     RowPlacement { label: placed.label, items: placed.items, disclosure: placed.disclosure, min_label: sizes.min_label }
 }
 

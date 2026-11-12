@@ -101,6 +101,8 @@ pub enum PageListEvent {
     Go(usize),
     /// Enter on the lead row, or a double-click on a row.
     Activate(usize),
+    /// A double-click on a row's number: fit that page or artboard in the window.
+    Fit(usize),
     /// A name typed in place (F2, a double-click on the name, the context menu's Rename): trimmed, never empty.
     /// With several rows picked the app gives the name to all of them numbered in list order as `{text}-1`,
     /// `{text}-2` (VectorCraft `artboards.rs:243`).
@@ -131,7 +133,8 @@ pub enum PageListEvent {
     /// Delete (the button, the Delete key, or rows dropped on it): the picked rows that aren't locked, or the
     /// dropped rows.
     Delete(Vec<usize>),
-    /// The options icon of a row.
+    /// The options icon of the active row, or a double-click on another row's (a single click on it makes the row
+    /// active, as a click on the row does).
     Options(usize),
     /// The app's menu is asked for.
     ContextMenu(ContextMenuRequest<usize>),
@@ -181,8 +184,9 @@ fn toggle_column(edit: &EditEvent<ToggleEdit<usize>>) -> Option<&ColumnKey> {
 
 /// The list, built per pass.
 ///
-/// - Rows are `ListRow`s: the name, an eye and a lock toggle column (sweepable), the options icon as a trailing
-///   part. The active row is the list's current item and its lead.
+/// - Rows are `ListRow`s: the number, the name, an eye and a lock toggle column (sweepable), the options icon as a
+///   trailing part. The active row is the list's current item and its lead. A double click on the number fits the
+///   row (`Fit`).
 /// - Pointer, keys, rename and drag are the table's: click activates and picks; Shift-click extends,
 ///   Cmd/Ctrl-click toggles; one Tab stop, up and down move the active row, F2 renames, Enter activates, Delete and
 ///   Backspace delete, Cmd/Ctrl+] and [ move the picked rows, the Menu key and Shift+F10 open the menu.
@@ -229,6 +233,8 @@ impl<'a> PageList<'a> {
         let events = RefCell::new(Vec::new());
         let list_id: RefCell<Option<Id>> = RefCell::new(None);
         let order: Vec<usize> = (0..rows.len()).collect();
+        let number = |row: usize| env.format().integer(row as u64 + 1);
+        let widest = number(rows.len().saturating_sub(1));
         let source = keyed(&order, |&row| row)
             .with_text(|&row| Cow::Owned(rows[row].name.clone()))
             .with_toggled(|&row, column| (*column == VISIBLE && !rows[row].hidden) || (*column == LOCKED && rows[row].locked));
@@ -276,6 +282,7 @@ impl<'a> PageList<'a> {
                         let options = IconSpec::svg(IconId::new("settings"));
                         ListRow::new(rows[row].name.clone())
                             .cells(icx.cells())
+                            .lead_text(number(row), widest.clone())
                             .toggle(ToggleCell::eye(VISIBLE, !rows[row].hidden).name(words.visibility.clone()))
                             .toggle(ToggleCell::lock(LOCKED, rows[row].locked).name(words.locking.clone()))
                             .trailing_part(OPTIONS, TrailingFace::Icon(options), words.options.clone())
@@ -312,7 +319,14 @@ impl<'a> PageList<'a> {
                                 events.push(PageListEvent::Delete(rows));
                             }
                         }
-                        CollectionEvent::Item(row, RowEvent::Trailing { part, .. }) if part == OPTIONS => events.push(PageListEvent::Options(row)),
+                        // The press moved the lead, which reported Go: a click opens the options when the row was
+                        // already active, or as the second click of a double click.
+                        CollectionEvent::Item(row, RowEvent::Trailing { part, clicks, was_lead, .. })
+                            if part == OPTIONS && (was_lead || clicks >= 2) =>
+                        {
+                            events.push(PageListEvent::Options(row));
+                        }
+                        CollectionEvent::Item(row, RowEvent::LeadClicked { clicks: 2.., .. }) => events.push(PageListEvent::Fit(row)),
                         _ => {}
                     }
                 }

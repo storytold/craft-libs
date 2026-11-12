@@ -3,7 +3,7 @@
 use super::ListRowStyleKey;
 use super::output::{RowEvent, RowOutput};
 use super::paint::draw_clip_arrow;
-use super::placement::Sizes;
+use super::placement::{Sizes, lead_run};
 use super::style::{FillKey, ListRowStyle, RowForm, fill_of, row_ink_of, selected_outline};
 use super::thumb::{RowThumb, target_at};
 use super::trailing::{TrailingFace, TrailingItem, TrailingPart};
@@ -39,6 +39,7 @@ pub(super) const TRAILING: PartKey = PartKey::new("trailing");
 const TRAILING_ICON: PartKey = PartKey::new("trailing-icon");
 const TRAILING_TEXT: PartKey = PartKey::new("trailing-text");
 pub(super) const THUMB: PartKey = PartKey::new("thumb");
+const LEAD: PartKey = PartKey::new("lead");
 
 /// The name a pattern with `{row}` gives for the row labelled `row`.
 pub(super) fn named(pattern: &Label, row: &str) -> String {
@@ -121,7 +122,8 @@ impl Component for ListRow<'_> {
         let room = cx.room.unwrap_or(0.0);
         let columns = self.toggles.iter().map(|toggle| &toggle.column).chain(self.texts.iter().map(|text| &text.column));
         let toggles: f32 = columns.filter_map(|key| self.cells.iter().find(|(column, _)| column == key)).map(|(_, cell)| cell.width()).sum();
-        let widths = self.item_widths(sizes, &|run| cx.layout_at(run, f32::INFINITY).size().x);
+        self.measure_hosted(cx);
+        let widths = self.widths(sizes, &|run| cx.layout_at(run, f32::INFINITY).size().x);
         let probe = self.place_in(&[], sizes, &widths, Rect::from_min_size(Pos2::ZERO, Vec2::new(room, height)), rtl);
         let probe_min = probe.min_width + toggles;
         let band = cx.room.map_or(f32::INFINITY, |_| (probe.label.width() - toggles).max(0.0));
@@ -151,7 +153,7 @@ impl Component for ListRow<'_> {
             Some(detail) => label.max(cx.layout(&TextRun::new(detail.as_str()).role(cx.style.detail.role)).size().x),
             None => label,
         };
-        Vec2::new(probe_min - sizes.min_label + label.max(sizes.min_label) + self.indent_full(sizes), height)
+        Vec2::new(probe.ideal_width + toggles - sizes.min_label + label.max(sizes.min_label) + self.indent_full(sizes), height)
     }
 
     fn sense(&self) -> Sense {
@@ -164,7 +166,8 @@ impl Component for ListRow<'_> {
             return;
         }
         self.adopt_toggle_columns(&cx.env, cx.resolved.id);
-        let widths = self.item_widths(&cx.style.sizes, &|run| cx.layout_at(run, f32::INFINITY).size().x);
+        self.measure_hosted(cx);
+        let widths = self.widths(&cx.style.sizes, &|run| cx.layout_at(run, f32::INFINITY).size().x);
         let placed = self.place(&cx.style.sizes, &widths, rect, cx.flow.is_rtl());
         for (at, cell) in &placed.toggles {
             let toggle = &self.toggles[*at];
@@ -264,6 +267,10 @@ impl Component for ListRow<'_> {
                 if self.drags.iter().any(|(held, _)| *held == target_at(at)) { Sense::CLICK | Sense::DRAG } else { Sense::CLICK } | Sense::PICKS_ITEM;
             cx.part(THUMB.at(at as u64), thumb).sense(sense).pointer_only("A thumbnail is a pointer target; the keys act on the row");
         }
+        if let (Some(slot), Some(_)) = (placed.icon, &self.lead_text) {
+            let rect = Rect::from_x_y_ranges(slot.x_range(), rect.y_range());
+            cx.part(LEAD, rect).sense(Sense::CLICK | Sense::PICKS_ITEM).pointer_only("The leading text is a pointer target; the keys act on the row");
+        }
     }
 
     fn flags(&self) -> Flags {
@@ -298,12 +305,15 @@ impl Component for ListRow<'_> {
                 crate::runtime::drag::start(&cx.ctx, cx.id, payload.clone(), None, preview);
                 self.event = Some(RowEvent::ThumbDrag(target));
             } else if let Some(source) = cx.part_activated(THUMB.at(at as u64)) {
-                let clicks = match (source, phase) {
-                    (FireSource::Pointer, PressPhase::Release { start, click: true, .. }) => start.clicks,
-                    _ => 1,
-                };
+                let clicks = part_clicks(source, phase);
                 self.event = Some(RowEvent::ThumbClicked { target, mods: part_mods(cx, THUMB.at(at as u64), source), clicks });
             }
+        }
+        if self.lead_text.is_some()
+            && let Some(source) = cx.part_activated(LEAD)
+        {
+            self.event =
+                Some(RowEvent::LeadClicked { mods: part_mods(cx, LEAD.into(), source), clicks: part_clicks(source, cx.part(LEAD).press.phase) });
         }
         for trailing in &self.trailing {
             let TrailingItem::Part { part, .. } = &trailing.item else { continue };
@@ -312,7 +322,13 @@ impl Component for ListRow<'_> {
                 if *part == TrailingPart::MENU {
                     self.menu = Some(cx.part(key).rect.left_bottom());
                 } else {
-                    self.event = Some(RowEvent::Trailing { part: *part, mods: part_mods(cx, key, source) });
+                    let clicks = part_clicks(source, cx.part(key).press.phase);
+                    let was_lead = match (source, &self.pressed) {
+                        (FireSource::Pointer, Some(RowPressed::Part { was_lead, .. })) => *was_lead,
+                        (FireSource::Pointer, _) => false,
+                        _ => true,
+                    };
+                    self.event = Some(RowEvent::Trailing { part: *part, mods: part_mods(cx, key, source), clicks, was_lead });
                 }
             }
         }
@@ -356,6 +372,9 @@ impl Component for ListRow<'_> {
             access.role(Role::TREE_ITEM);
         } else if self.option {
             access.role(Role::LIST_BOX_OPTION);
+        }
+        if self.progress.is_some() {
+            access.node(PROGRESS, Role::PROGRESS_INDICATOR).name = Name::Text(label.to_owned());
         }
         if let Some(open) = self.group {
             access.expanded(open);
@@ -420,7 +439,7 @@ impl Component for ListRow<'_> {
         let sizes = &style.sizes;
         let rtl = cx.env.direction().is_rtl();
         let rect = cx.rect;
-        let widths = self.item_widths(sizes, &|run| ui.draw().layout(run, f32::INFINITY).size().x);
+        let widths = self.widths(sizes, &|run| ui.draw().layout(run, f32::INFINITY).size().x);
         let placed = self.place(sizes, &widths, rect, rtl);
         self.label_rect = placed.label;
         {
@@ -434,10 +453,16 @@ impl Component for ListRow<'_> {
                 }
             }
         }
-        let lead_painted = self.lead_paint.is_some();
+        let lead_painted = self.lead_paint.is_some() || self.lead_text.is_some();
         self.paint_toggles(ui, cx, &placed);
         let ink = cx.resolve(&style.text.color);
-        if let (Some(slot), Some(paint)) = (placed.icon, self.lead_paint.take()) {
+        if let (Some(slot), Some((text, _))) = (placed.icon, &self.lead_text) {
+            let draw = ui.draw();
+            let run = lead_run(text).color(cx.resolve(&style.detail.color));
+            let shown = draw.layout(&run, slot.width());
+            let x = if rtl { slot.left() } else { slot.right() - shown.size().x };
+            draw.galley(Pos2::new(x, slot.center().y - shown.size().y / 2.0), &shown);
+        } else if let (Some(slot), Some(paint)) = (placed.icon, self.lead_paint.take()) {
             let _ = ui.child("lead", Rect::from_x_y_ranges(slot.x_range(), rect.y_range()), RowThumb::new(paint));
         }
         if let Some(open) = self.group
@@ -475,6 +500,14 @@ impl Component for ListRow<'_> {
     }
 }
 
+/// The press count of an activation: the click's count for a pointer click, 1 for a key or AccessKit activation.
+fn part_clicks(source: FireSource, phase: PressPhase) -> u32 {
+    match (source, phase) {
+        (FireSource::Pointer, PressPhase::Release { start, click: true, .. }) => start.clicks,
+        _ => 1,
+    }
+}
+
 /// The modifiers of an activation of `part`: those held at a click, none for a key or AccessKit activation.
 fn part_mods(cx: &Cx<'_, ListRow<'_>>, part: PartRef, source: FireSource) -> Mods {
     match source {
@@ -484,6 +517,18 @@ fn part_mods(cx: &Cx<'_, ListRow<'_>>, part: PartRef, source: FireSource) -> Mod
 }
 
 impl ListRow<'_> {
+    /// Measures each hosted trailing component not yet measured in this pass, for its slot.
+    fn measure_hosted(&mut self, cx: &MeasureCx<'_, Self>) {
+        for (at, trailing) in self.trailing.iter_mut().enumerate() {
+            if let TrailingItem::Hosted(hosted) = &mut trailing.item
+                && hosted.size.is_none()
+                && let Some(item) = hosted.item.as_mut()
+            {
+                hosted.size = Some(item.measure(cx, at));
+            }
+        }
+    }
+
     /// The name of the trailing part `part`: the one given, or "More ({row})" for the row's menu button.
     fn part_name(&self, part: TrailingPart, name: &Label, words: &ListWords, row: &str) -> Label {
         if part == TrailingPart::MENU { Label::from(named(&words.more, row)) } else { name.clone() }

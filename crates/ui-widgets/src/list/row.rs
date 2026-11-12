@@ -41,7 +41,7 @@ pub(crate) use thumb::RowThumb;
 pub(super) use thumb::Thumb;
 use thumb::ThumbPayload;
 pub use thumb::{ThumbAspect, ThumbPaint, ThumbSize, ThumbTarget};
-use trailing::HostedShow;
+use trailing::{Hosted, Hosting};
 pub(super) use trailing::{Trailing, TrailingItem};
 pub use trailing::{TrailingFace, TrailingPart};
 
@@ -199,6 +199,8 @@ pub struct ListRow<'a> {
     pub(super) lead_paint: Option<LeadPaintFn<'a>>,
     pub(super) thumb: ThumbSize,
     pub(super) thumb_aspect: ThumbAspect,
+    /// The leading text and the widest text its slot is sized for (`lead_text`).
+    pub(super) lead_text: Option<(Label, Label)>,
     pub(super) first: Option<ThumbPaint<'a>>,
     pub(super) extras: Vec<Thumb<'a>>,
     /// The thumbnail the row's editing is aimed at: framed with corner brackets whether or not the row is selected.
@@ -270,6 +272,7 @@ impl<'a> ListRow<'a> {
             thumb: ThumbSize::None,
             thumb_aspect: ThumbAspect::SQUARE,
             first: None,
+            lead_text: None,
             extras: Vec::new(),
             target: None,
             trailing: Vec::new(),
@@ -460,14 +463,42 @@ impl<'a> ListRow<'a> {
         self.trailing_part_revealed(TrailingPart::MENU, TrailingFace::Icon(IconSpec::svg(craft_behavior::IconId::new("more"))), Label::Empty)
     }
 
-    /// A component at the trailing end, in the width of a short field, that always shows: a field that edits a
-    /// value of the row. The row shows `field` in its slot and hands its output to `output` in the pass it is shown. The
-    /// field's stop joins the row's roving group like the row's focusable parts (Forward from the row enters it, Tab leaves the collection); it takes the keys it
-    /// declares.
+    /// A component at the trailing end, as wide as it measures, that always shows: a field that edits a value of the
+    /// row, or a button. The row shows `field` in its slot and hands its output to `output` in the pass it is shown.
+    /// The field's stop joins the row's roving group like the row's focusable parts (Forward from the row enters it,
+    /// Tab leaves the collection); it takes the keys it declares.
     #[must_use]
-    pub fn trailing_field<C: Show + 'a>(mut self, field: C, output: impl FnOnce(C::Output) + 'a) -> Self {
-        let show: HostedShow<'a> = Box::new(move |ui, at, rect| output(ui.child(("field", at), rect, field)));
-        self.trailing.push(Trailing { item: TrailingItem::Hosted(Some(show)), optional: false });
+    pub fn trailing_field<C: Show + 'a>(self, field: C, output: impl FnOnce(C::Output) + 'a) -> Self {
+        self.hosted(Hosting { component: field, output, shown: true }, false)
+    }
+
+    /// A component at the trailing end as [`trailing_field`](Self::trailing_field) adds one, that drops out when the
+    /// label would get narrower than its least width with it (a binding's badge).
+    #[must_use]
+    pub fn optional_field<C: Show + 'a>(self, field: C, output: impl FnOnce(C::Output) + 'a) -> Self {
+        self.hosted(Hosting { component: field, output, shown: true }, true)
+    }
+
+    /// Empty room at the trailing end, as wide as `component` measures: a row that lacks a field the other rows have
+    /// keeps the items after it in line with theirs. Nothing is shown.
+    #[must_use]
+    pub fn trailing_space<C: Show + 'a>(self, component: C) -> Self {
+        self.hosted(Hosting { component, output: |_| {}, shown: false }, false)
+    }
+
+    fn hosted(mut self, hosting: impl trailing::HostedItem + 'a, optional: bool) -> Self {
+        let item = Hosted { item: Some(Box::new(hosting)), size: None };
+        self.trailing.push(Trailing { item: TrailingItem::Hosted(item), optional });
+        self
+    }
+
+    /// A short text in the leading slot (a page number), in the detail's role and ink, at the slot's end so the labels
+    /// after it line up: the slot is as wide as `widest` measures. It takes the icon's place; thumbnails replace it.
+    /// A click on it picks the row as a click on the row does and reports [`RowEvent::LeadClicked`]; a double click
+    /// there does not activate the row.
+    #[must_use]
+    pub fn lead_text(mut self, text: impl Into<Label>, widest: impl Into<Label>) -> Self {
+        self.lead_text = Some((text.into(), widest.into()));
         self
     }
 

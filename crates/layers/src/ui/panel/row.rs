@@ -235,6 +235,9 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
     if let Some(warning) = info.warning.clone() {
         row = row.trailing_icon(IconSpec::svg(IconId::new("warning")), warning);
     }
+    if let Some(cell) = cx.trailing {
+        row = cell.add(row, id, &info);
+    }
     row.description(row_description(words, &info, active.then_some(cx.selection.target)))
 }
 
