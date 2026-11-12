@@ -386,8 +386,9 @@ impl R<'_> {
 
     fn clip(&mut self, c: &Obj, rate: (i64, i64), kind: CKind, master_key: Option<String>) -> CItem {
         let len = units_to_ticks(len_of(c), rate.0, rate.1);
-        let name = tagged_values(c, pid::COMPONENT_USER_COMMENTS).into_iter().find(|(k, _)| k == "Clip Name").map(|(_, v)| v).unwrap_or_default();
+        let tagged_name = tagged_values(c, pid::COMPONENT_USER_COMMENTS).into_iter().find(|(k, _)| k == "Clip Name").map(|(_, v)| v);
         let (Some(id), Some(slot)) = (c.mob_id(pid::SOURCE_ID), c.u32(pid::SOURCE_MOB_SLOT_ID)) else { return CItem::Filler(len) };
+        let name = tagged_name.or_else(|| self.mobs.get(&id).and_then(|mob| mob.string(pid::MOB_NAME))).unwrap_or_default();
         if id == [0; 32] {
             return CItem::Filler(len);
         }
