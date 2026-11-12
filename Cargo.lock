@@ -1805,6 +1805,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-sf2"
+version = "0.1.0"
+dependencies = [
+ "craft-sf2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-sheet"
 version = "0.1.0"
 
