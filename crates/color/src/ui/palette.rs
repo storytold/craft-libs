@@ -4,6 +4,7 @@
 use craft_behavior::{DisplayOrder, EditEvent, ItemSource, Metrics, Mixed, Selection, TileLayout};
 use craft_theme::Srgba;
 use craft_ui::choice::{Swatch, SwatchMetrics};
+use craft_ui::list::RowTest;
 use craft_ui::contract::{
     ActivateOn, Bind, BindMut, Collection, CollectionEvent, CollectionProps, Common, Component, ContainerProps, Cx, Held, NoValue, Outcome, Pattern,
     Props, Role, SelectMode, ShowCollection as _, ShowContainer as _, Sizing,
@@ -145,7 +146,8 @@ impl Outcome for SwatchTableOutput {
 }
 
 /// A table of touching colour cells, one per entry, wrapping to the width or to a fixed count per row. Entries are
-/// told apart by index, so duplicates select one cell.
+/// told apart by index, so duplicates select one cell. With [`span`](Self::span) and a count per row, the cells share
+/// the table's width edge to edge; [`marked`](Self::marked) cells draw the swatch mark.
 ///
 /// - A click or Space selects the cell; a double click or Enter reports `open` and the Enter is the table's, so a
 ///   dialog around it does not also answer OK.
@@ -168,6 +170,12 @@ pub struct SwatchTable<'a> {
     /// A fixed number of cells to a row instead of wrapping to the width.
     #[prop]
     per_row: Option<usize>,
+    /// With `per_row`, the cells of a row divide the table's width among them, at the cell height.
+    #[prop]
+    span: bool,
+    /// The cells that draw the swatch mark, by index.
+    #[prop(func = "Fn(&usize) -> bool")]
+    marked: Option<RowTest<'a, usize>>,
     /// Whether each cell's name is its tooltip.
     #[prop]
     tips: bool,
@@ -186,6 +194,8 @@ impl<'a> SwatchTable<'a> {
             swatches,
             selection: None,
             per_row: None,
+            span: false,
+            marked: None,
             tips: false,
             wells: false,
         }
@@ -200,12 +210,14 @@ impl<'a> SwatchTable<'a> {
     }
 
     /// Shows the table.
-    pub fn show_all(self, ui: &mut Ui) -> SwatchTableOutput {
+    pub fn show_all(mut self, ui: &mut Ui) -> SwatchTableOutput {
         let (swatches, tips, wells) = (self.swatches, self.tips, self.wells);
+        let marked = self.marked.take();
         self.show_items(ui, &SwatchRows::new(swatches), &mut |key, _| {
             let (name, color) = &swatches[*key];
             let cell = Swatch::new(name.clone(), *color).cell();
             let cell = if wells { cell.well() } else { cell };
+            let cell = if marked.as_ref().is_some_and(|test| test.passes(key)) { cell.marked() } else { cell };
             if tips { cell.tooltip(name.clone()) } else { cell }
         })
     }
@@ -261,10 +273,14 @@ impl Collection for SwatchTable<'_> {
     fn item_layout(&self, source: &dyn ItemSource<usize>, width: f32, cx: &StyleCx<'_>) -> TileLayout {
         let metrics = SwatchMetrics::of(cx);
         let cell = if self.wells { metrics.side } else { metrics.cell };
-        let layout = TileLayout::new(source, width, Vec2::splat(cell), 0.0);
         match self.per_row {
-            Some(columns) => layout.in_columns(columns),
-            None => layout,
+            Some(columns) => {
+                let columns = columns.max(1);
+                let spans = self.span && width.is_finite() && width > 0.0;
+                let tile = if spans { Vec2::new(width / columns as f32, cell) } else { Vec2::splat(cell) };
+                TileLayout::new(source, width, tile, 0.0).in_columns(columns)
+            }
+            None => TileLayout::new(source, width, Vec2::splat(cell), 0.0),
         }
     }
 }

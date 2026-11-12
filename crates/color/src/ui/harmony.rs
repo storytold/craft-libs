@@ -281,7 +281,8 @@ impl GuideCache {
 
 /// Color Guide: the base swatch (a click sets the base to the current colour) and the rule `Select`; the harmony strip
 /// (one cell per colour, tooltip the hex); the variation grid, one row per harmony colour from shades to tints (or
-/// cool to warm, muted to vivid); the grid's end labels. A click on any cell chooses its colour; Shift or Cmd selects
+/// cool to warm, muted to vivid), the harmony colour itself in the marked centre column; the grid's end labels. The
+/// strip's and the grid's cells share the panel's width. A click on any cell chooses its colour; Shift or Cmd selects
 /// several for Save Colors as Swatches.
 #[must_use = "show the panel with `show`"]
 #[derive(Pattern)]
@@ -330,16 +331,27 @@ impl<'a> HarmonyPanel<'a> {
             let strip: Vec<(Label, Srgba)> = guide.colors.iter().map(|c| (Label::from(c.to_hex()), *c)).collect();
             let mut strip_selection = Selection::default();
             let out =
-                SwatchTable::new(words.harmony.clone(), &strip).per_row(strip.len().max(1)).selection(Bind::bound(&mut strip_selection)).show_all(ui);
+                SwatchTable::new(words.harmony.clone(), &strip)
+                .per_row(strip.len().max(1))
+                .span(true)
+                .selection(Bind::bound(&mut strip_selection))
+                .show_all(ui);
             if let Some(i) = out.selected {
                 chosen = strip.get(i).map(|(_, c)| *c);
             }
 
-            let columns = guide.grid.first().map_or(1, Vec::len);
+            let columns = guide.grid.first().map_or(1, Vec::len).max(1);
+            let centre = guide.centre();
             let flat: Vec<(Label, Srgba)> = guide.grid.iter().flatten().map(|c| (Label::from(c.to_hex()), *c)).collect();
             let mut selection = if before_picked.guide == stamp { before_picked.selection.clone() } else { Selection::default() };
             let SwatchTableOutput { selected, chosen: cells, .. } =
-                SwatchTable::new(words.variations.clone(), &flat).multiple(true).per_row(columns).selection(Bind::bound(&mut selection)).show_all(ui);
+                SwatchTable::new(words.variations.clone(), &flat)
+                    .multiple(true)
+                    .per_row(columns)
+                    .span(true)
+                    .marked(move |&at| at % columns == centre)
+                    .selection(Bind::bound(&mut selection))
+                    .show_all(ui);
             if let Some(i) = selected
                 && cells.len() == 1
             {

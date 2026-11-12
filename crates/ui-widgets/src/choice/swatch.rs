@@ -56,6 +56,8 @@ pub struct SwatchStyle {
     edge: Stateful<StyleColor>,
     /// The ring inside the outline of a selected or checked well; clear while it is off.
     ring: Stateful<StyleColor>,
+    /// The thin edge just inside the outline of a marked well.
+    mark: StyleColor,
     /// The well of a mixed colour.
     mixed_fill: StyleColor,
     /// The dash on a mixed well.
@@ -124,7 +126,8 @@ impl<E> crate::contract::ItemOutput<E> for SwatchOutput {
 /// translucent) and whose colour value is the colour; a mixed well has the value "Mixed" and no colour value.
 /// `member` makes the swatch a member of the enclosing `RadioGroup`: a radio button, checked when the group holds its
 /// value, whose keys and focus are the group's. `cell` makes it a cell of a table of touching swatches, a list box
-/// option. The selected ring is `selected` or a checked radio.
+/// option. The selected ring is `selected` or a checked radio. `marked` draws a thin edge in the text colour just inside
+/// the outline: a cell that stands out from its row, such as the harmony colour among its variations.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(content_painter, probe(Swatch<u8>))]
 pub struct Swatch<T: Value + 'static = ()> {
@@ -144,6 +147,9 @@ pub struct Swatch<T: Value + 'static = ()> {
     /// Takes the width the layout offers, at the control height.
     #[prop(flag)]
     fill: bool,
+    /// A thin edge in the text colour just inside the outline.
+    #[prop(flag)]
+    marked: bool,
     /// The key of the `ColorRequest` a click files.
     #[prop(into)]
     picker: Option<String>,
@@ -161,6 +167,7 @@ impl Swatch<()> {
             cell: false,
             well: false,
             fill: false,
+            marked: false,
             picker: None,
             checked: false,
             activation: None,
@@ -179,6 +186,7 @@ impl<T: Value + 'static> Swatch<T> {
             cell: self.cell,
             well: self.well,
             fill: self.fill,
+            marked: self.marked,
             picker: self.picker,
             checked: false,
             activation: None,
@@ -208,6 +216,7 @@ impl<T: Value + 'static> Component for Swatch<T> {
             radius: if key.cell && !key.well { CornerRadius::ZERO } else { metrics.radius },
             edge: Stateful::new(rest).off(States::new(rest, rest, rest, disabled)),
             ring: Stateful::new(clear).on(States::new(accent, accent, accent, disabled)),
+            mark: cx.color(colors.text.normal),
             mixed_fill: cx.color(colors.surface.sunken),
             mixed_mark: cx.color(colors.text.muted),
             checker: [colors.overlay.checker_light, colors.overlay.checker_dark],
@@ -264,7 +273,7 @@ impl<T: Value + 'static> Component for Swatch<T> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        paint_face(&ui.draw(), cx.rect, cx.style, cx.state(), self.color);
+        paint_face(&ui.draw(), cx.rect, cx.style, cx.state(), self.color, self.marked);
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> SwatchOutput {
@@ -275,8 +284,8 @@ impl<T: Value + 'static> Component for Swatch<T> {
 }
 
 /// The one swatch face painter: the well of `color` in `well` (a checkerboard behind a translucent colour, the dash
-/// of a mixed one), then the outline ring and the selection ring, in `state`.
-fn paint_face(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, state: &StateSet, color: Mixed<Srgba>) {
+/// of a mixed one), then the outline ring, the mark when `marked`, and the selection ring, in `state`.
+fn paint_face(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, state: &StateSet, color: Mixed<Srgba>, marked: bool) {
     let shape = PaintShape::Rect(well, style.radius);
     match color.same() {
         None => {
@@ -291,6 +300,10 @@ fn paint_face(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, state: &StateSet
         }
     }
     draw.stroke(&shape, StrokeWidth::Thin, state.resolve(&style.edge));
+    if marked {
+        let inside = PaintShape::Rect(well.shrink(draw.width(StrokeWidth::Thin)), style.radius);
+        draw.stroke(&inside, StrokeWidth::Thin, style.mark);
+    }
     draw.stroke(&shape, StrokeWidth::Thick, state.resolve(&style.ring));
 }
 
@@ -323,6 +336,6 @@ impl SwatchFace {
         let style = resolve_style(&scope, key, cx.painter.ctx(), Swatch::<()>::style);
         let (flags, on) = if self.selected { (Flags::SELECTED, 1.0) } else { (Flags::empty(), 0.0) };
         let state = StateSet::new(State::Rest, flags, StateMix::new(0.0, 0.0, on));
-        cx.with_draw(|draw| paint_face(draw, rect, &style, &state, self.color));
+        cx.with_draw(|draw| paint_face(draw, rect, &style, &state, self.color, false));
     }
 }

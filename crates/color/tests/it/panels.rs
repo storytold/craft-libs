@@ -168,6 +168,27 @@ fn a_swatch_table_runs_as_many_components_for_many_cells_as_for_few() {
     assert_eq!(few, many, "the runs grow with the cells: {few} for 4 cells, {many} for 64");
 }
 
+/// A spanning table of 4 cells to a row: the cells of a row cover the table's width edge to edge, each next to the one
+/// before without overlap, and the second row starts under the first.
+#[trial]
+fn a_spanning_swatch_table_divides_its_width_among_a_rows_cells() {
+    let entries = table_entries(8);
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = SwatchTable::new("Color Table", &entries).per_row(4).span(true).show_all(ui);
+    });
+    fixture.room(Vec2::new(400.0, 200.0)).settle();
+    let table = fixture.by_role(Role::LIST_BOX).first().expect("the table").rect;
+    let cell = |i: usize| fixture.by_label(&format!("Index {i}")).unwrap_or_else(|| panic!("cell {i}")).rect;
+    let row: Vec<_> = (0..4).map(cell).collect();
+    assert!((row[0].left() - table.left()).abs() < 0.5, "the first cell starts at the table's edge: {row:?} in {table:?}");
+    assert!((row[3].right() - table.right()).abs() < 0.5, "the last cell ends at the table's edge: {row:?} in {table:?}");
+    for pair in row.windows(2) {
+        assert!(pair[1].left() >= pair[0].right() - 0.5 && pair[1].left() <= pair[0].right() + 0.5, "cells touch without overlap: {pair:?}");
+    }
+    assert!(row[0].width() > row[0].height(), "a spanning cell is wider than the square cell: {:?}", row[0]);
+    assert!(cell(4).top() >= row[0].bottom() - 0.5 && (cell(4).left() - row[0].left()).abs() < 0.5, "the fifth cell starts the second row");
+}
+
 /// A table's cell is a list box option named by its entry with the colour as its value; a click selects it, and the
 /// pointer's rest shows its name.
 #[trial]
