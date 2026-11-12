@@ -1134,11 +1134,12 @@ impl BodyHooks<'_> {
             ShowAt::Flow => at.ui.available_rect_before_wrap(),
         };
         let origin = available.min;
-        // Along an axis with no room limit the content grows away from its start edge: in a right-to-left
-        // layout that edge is the right one, so the measuring rect is as wide as a scrolling region and
-        // ends where the room does, as the real run's region does.
-        let rect = if self.room.x.is_infinite() && at.env.direction.is_rtl() && available.max.x.is_finite() {
-            Rect::from_min_max(Pos2::new(available.max.x - crate::contract::MAX_EXTENT, origin.y), Pos2::new(available.max.x, origin.y + self.room.y))
+        // The measuring rect starts at the room's start edge, where the real run places the container: in a
+        // right-to-left layout that is the right edge, and the rect ends there. Along an axis with no room limit it
+        // is as wide as a scrolling region, since egui lays nothing out leftwards from -inf.
+        let rect = if at.env.direction.is_rtl() && available.max.x.is_finite() {
+            let width = if self.room.x.is_finite() { self.room.x } else { crate::contract::MAX_EXTENT };
+            Rect::from_min_max(Pos2::new(available.max.x - width, origin.y), Pos2::new(available.max.x, origin.y + self.room.y))
         } else {
             Rect::from_min_size(origin, self.room)
         };
