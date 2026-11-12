@@ -109,6 +109,14 @@ engine_data::Value::{Dict, Array, String, RawString, Int, Real, Bool, Name}   //
 engine_data::first_style(&Value) -> TextStyle   // font, size, fill, justification, tracking, leading, faux styles, box text
 engine_data::minimal(text, font, size, rgb, justification) -> Vec<u8>
 
+// Layered TIFF (tags 37724 and 34377)
+tiff::ImageSourceData::from_bytes / to_bytes(ByteOrder) / into_psd(header, resources, image_data);  tiff::resources_from_bytes / resources_to_bytes
+tiff::layered::{TAG_IMAGE_SOURCE_DATA, TAG_IMAGE_RESOURCES, FILTER_MASK_DEFAULT}
+ImageSourceData::for_tiff(&mut PsdFile, ifd_alpha)   // Photoshop's conventions: Patt, FMsk, MTrn, LMsk, per-layer blocks
+ImageSourceData::drop_photoshop_padding()            // on open, so the padding does not pile up
+tiff::layered::ifd_channel_resources(&mut resources, IfdChannels { color, merged_alpha, write_alpha, extra, kept })
+tiff::layered::{interleaved_to_planar, planar_to_interleaved, swap_plane, strip_foreign_order_blocks, alpha_identifiers}
+
 // Builder
 PsdBuilder::new(w, h).color_mode(..).depth(8|16).version(..).compression(..).resolution(dpi).icc_profile(..)
 builder.push_layer(LayerSpec) / begin_group(GroupSpec) / end_group()? / composite(PixelData)
