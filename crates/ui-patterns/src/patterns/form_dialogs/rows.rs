@@ -17,7 +17,7 @@ use crate::pickers::{Select, UnitSelect};
 
 use crate::runtime::env::{Env, Label, UnitKind, Units, with_env};
 
-use crate::sections::Section;
+use crate::sections::{HeaderStrength, Section};
 use crate::text::{NumberField, TextField};
 
 use crate::value_drag::{AngleDial, PointPicker, SliderScale};
@@ -258,7 +258,7 @@ impl<'p> Pass<'p> {
             let end = tail.iter().position(is_section).unwrap_or(tail.len());
             let (body, after) = tail.split_at(end);
             if head.visible(&self.work) {
-                Section::fixed(plain(&head.label)).id_salt(head.key.as_str()).show(ui, |ui, _| {
+                group(plain(&head.label)).id_salt(head.key.as_str()).show(ui, |ui, _| {
                     for param in body {
                         self.row(ui, param);
                     }
@@ -401,7 +401,7 @@ impl<'p> Pass<'p> {
     /// A radio row is its own section: the title shows the row's name once, and the group it names follows.
     fn radio_options(&mut self, ui: &mut Ui, line: &Line<'_>, options: &[(String, Label)]) {
         let value = self.work.text(line.key).map(str::to_owned).or_else(|| line.param.kind.default_value().and_then(text_of)).unwrap_or_default();
-        Section::fixed(line.name.clone()).id_salt(line.key).show(ui, |ui, _| {
+        group(line.name.clone()).id_salt(line.key).show(ui, |ui, _| {
             let mut group = RadioGroup::new(line.name.clone(), Bind::given(value.clone())).enabled(line.enabled);
             if let Some(tip) = line.param.tooltip_text() {
                 group = group.tooltip(tip.clone());
@@ -636,6 +636,11 @@ fn text_of(value: FieldValue) -> Option<String> {
         FieldValue::Text(text) => Some(text),
         _ => None,
     }
+}
+
+/// The heading of a group of rows (a section, or a row of radio buttons): a quiet caption, with no rule.
+fn group<'a>(title: impl Into<Label>) -> Section<'a> {
+    Section::fixed(title).strength(HeaderStrength::Caption)
 }
 
 /// A row's label without a trailing colon: the form puts its own beside the control.
