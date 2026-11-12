@@ -83,8 +83,6 @@ struct Press {
 pub(crate) struct Shortcut {
     pub(crate) input: KeyInput,
     pub(crate) phase: FirePhase,
-    /// The press typed text in this pass.
-    typed: bool,
     /// The index of the press in `Batch::presses`.
     press: Option<usize>,
 }

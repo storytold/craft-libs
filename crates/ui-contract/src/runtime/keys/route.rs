@@ -183,37 +183,31 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
         .zip(consumed)
         .map(|(press, taken)| holds_press(owner, target, press, *taken == Taken::Yes, press.text.is_some_and(|at| taken_texts[at])))
         .collect();
-    let keys = if silent {
-        Vec::new()
-    } else {
-        batch
-            .shortcuts
-            .iter()
-            .filter(|shortcut| !(typing && shortcut.typed))
-            .filter(|shortcut| !shortcut.press.is_some_and(|at| held[at]))
-            .copied()
-            .collect()
-    };
+    let keys =
+        if silent { Vec::new() } else { batch.shortcuts.iter().filter(|shortcut| !shortcut.press.is_some_and(|at| held[at])).copied().collect() };
     (Shortcuts { keys, typing, dialog, layout: Layout::default() }, held)
 }
 
 /// Whether the focused stop `target`, whose keys `owner` owns, holds `press`: the press is its own and reaches neither
 /// egui's input, where the app reads its own keys, nor the app's shortcuts. A widget or popup holds the presses its
 /// routing `taken`, the keys its filter keeps from the key stage, and the presses whose text it took (`typed`: the
-/// type-ahead of a list). A menu or a recorder holds every press.
+/// type-ahead of a list). A text field holds the presses whose text it took, its typing; the egui text widget behind it
+/// reads the text, not the press. A menu or a recorder holds every press.
 fn holds_press(owner: KeyOwner, target: Option<&StopRec>, press: &Press, taken: bool, typed: bool) -> bool {
     let Some(keys) = target.map(|rec| &rec.stop.keys) else { return false };
     if keeps_every_key(owner) {
         return true;
     }
-    let widget = owner != KeyOwner::Blocked && matches!(keys.owner, OwnerClass::Widget | OwnerClass::Popup | OwnerClass::PassivePopup);
+    let open = owner != KeyOwner::Blocked;
+    let widget = open && matches!(keys.owner, OwnerClass::Widget | OwnerClass::Popup | OwnerClass::PassivePopup);
     let kept = match keys.keep {
         focus::KeepKeys::Tab => press.key == Key::Tab,
         focus::KeepKeys::InlineArrows => matches!(press.key, Key::Left | Key::Right),
         focus::KeepKeys::BlockArrows => matches!(press.key, Key::Left | Key::Right | Key::Up | Key::Down),
         _ => false,
     };
-    widget && (taken || typed || kept)
+    let text = open && keys.owner == OwnerClass::Text;
+    (widget && (taken || typed || kept)) || (text && typed)
 }
 
 /// `Menu` and `Recorder` keep every key (9.3): no press of theirs reaches egui's input or the app's shortcuts.

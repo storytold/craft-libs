@@ -36,3 +36,37 @@ fn clearing_a_search_field_with_a_draft_leaves_it_empty_after_blur() {
     fixture.idle(3);
     assert_eq!(*text.borrow(), "", "leaving the field commits nothing back");
 }
+
+/// A letter typed into a text field is the field's own: the field gets the text, the app reads no press of it, and
+/// `focus_holds` names the letter before it is typed.
+#[trial]
+fn a_letter_typed_into_a_field_is_its_own() {
+    let text = Rc::new(RefCell::new(String::new()));
+    let app_read = Rc::new(RefCell::new(Vec::new()));
+    let (shown, read) = (text.clone(), app_read.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        read.borrow_mut().extend(ui.input(|input| {
+            input
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    egui::Event::Key { key, pressed: true, .. } => Some(*key),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        }));
+        TextField::new("Name", Bind::bound(&mut *shown.borrow_mut())).show(ui);
+    });
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.settle();
+    assert!(
+        craft_ui::runtime::keys::focus_holds(fixture.ctx(), craft_keymap::Chord::plain(craft_keymap::Key::T)),
+        "the field names a letter as its own"
+    );
+    fixture.frame(vec![craft_ui::testing::input::key_press(Key::T, Modifiers::NONE), craft_ui::testing::input::text("t")]);
+    fixture.frame(vec![craft_ui::testing::focus::key_release(Key::T, Modifiers::NONE)]);
+    fixture.idle(2);
+    assert_eq!(*text.borrow(), "t", "the field gets the text");
+    assert!(!app_read.borrow().contains(&Key::T), "and the app reads no press of it");
+}

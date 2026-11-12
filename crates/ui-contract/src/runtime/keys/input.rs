@@ -96,14 +96,11 @@ impl Strip<'_> {
                 if key == Some(Key::Enter) {
                     batch.enter_down = Some(false);
                 }
-                batch.shortcuts.push(Shortcut { input, phase: FirePhase::Release, typed: false, press: None });
+                batch.shortcuts.push(Shortcut { input, phase: FirePhase::Release, press: None });
                 true
             }
             KeyEvent::Text(text) => {
                 alt.other_key = true;
-                if let Some(press) = batch.shortcuts.last_mut().filter(|shortcut| shortcut.phase == FirePhase::Press) {
-                    press.typed = true;
-                }
                 if let Some((input, pressed)) = batch.last_press.take() {
                     if let Some(press) = pressed.and_then(|at| batch.presses.get_mut(at)) {
                         press.text = Some(batch.texts.len());
@@ -142,7 +139,7 @@ impl Strip<'_> {
                     // A component that reads every chord gets the event as the chord's press, the way the key made it.
                     self.press(batch, key, &input, false);
                 } else if !sent {
-                    batch.shortcuts.push(Shortcut { input, phase: FirePhase::Press, typed: false, press: None });
+                    batch.shortcuts.push(Shortcut { input, phase: FirePhase::Press, press: None });
                 }
                 // The event stands for the chord, so the shortcut path is its only reader: egui does not copy or paste
                 // on top of the command.
@@ -211,7 +208,7 @@ impl Strip<'_> {
             // The canvas has Space (`runtime::sampler`): only the shortcut dispatcher reads it, so the dialog's
             // focused control does not activate.
             if !repeat {
-                batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, typed: false, press: None });
+                batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: None });
             }
             false
         } else if (self.foreign && (bare_tab || escape)) || canvas_tab || canvas_edit {
@@ -243,7 +240,7 @@ impl Strip<'_> {
         } else {
             batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None });
             if !repeat {
-                batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, typed: false, press: Some(batch.presses.len() - 1) });
+                batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1) });
             }
             true
         }
