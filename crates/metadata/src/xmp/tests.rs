@@ -456,11 +456,20 @@ fn lc_extras_and_crs_prefix() {
 
 #[test]
 fn gps_coords() {
-    assert_eq!(parse_gps_coord("45,30N"), Some(45.5));
-    assert_eq!(parse_gps_coord("45,30,36S"), Some(-45.51));
-    assert_eq!(parse_gps_coord("45X"), None);
-    assert_eq!(parse_gps_coord(""), None);
-    assert_eq!(parse_gps_coord("é"), None);
+    let lat = ['N', 'S'];
+    assert_eq!(parse_gps_coord("45,30N", lat), Some(45.5));
+    assert_eq!(parse_gps_coord("45,30,36S", lat), Some(-45.51));
+    assert_eq!(parse_gps_coord("45X", lat), None);
+    assert_eq!(parse_gps_coord("", lat), None);
+    assert_eq!(parse_gps_coord("é", lat), None);
+    assert_eq!(parse_gps_coord("-10,30N", lat), None, "the sign is the letter's");
+    assert_eq!(parse_gps_coord("10,-30N", lat), None);
+    assert_eq!(parse_gps_coord("10,30E", lat), None, "E is a longitude's");
+    assert_eq!(parse_gps_position("10,30E", "20,15N"), None);
+    assert_eq!(parse_gps_position("10,30N", "20,15W"), Some((10.5, -20.25)));
+    assert_eq!(parse_gps_position("95,0N", "20,0E"), None, "off the globe");
+    assert_eq!(parse_gps_position("10,0N", "180,0.1E"), None);
+    assert_eq!(parse_gps_position("90,0S", "180,0W"), Some((-90.0, -180.0)));
     assert_eq!(fmt_gps_coord(-45.51, 'N', 'S'), "45,30.600000S");
     assert_eq!(fmt_gps_coord(10.9999999999, 'N', 'S'), "11,0.000000N");
     assert_eq!(fmt_gps_coord(-0.9999999999, 'E', 'W'), "1,0.000000W");

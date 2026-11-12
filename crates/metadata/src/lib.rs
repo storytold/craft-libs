@@ -45,7 +45,9 @@ pub use geom::{Orientation, Point, Rect};
 pub use gpx::{GpxError, Match, TrackPoint, Tracklog, parse_gpx};
 pub use iptc::parse_iptc;
 pub use tags::{TagRow, file_tag_rows, tag_rows};
-pub use xmp::{CRS_NS, XmpData, XmpError, XmpNamespace, XmpValue, XmpWrite, parse_xmp, parse_xmp_with, write_xmp, write_xmp_with};
+pub use xmp::{
+    CRS_NS, XmpData, XmpError, XmpNamespace, XmpValue, XmpWrite, parse_gps_position, parse_xmp, parse_xmp_with, write_xmp, write_xmp_with,
+};
 pub use xmp_merge::{MergeRules, merge_xmp};
 
 use serde::{Deserialize, Serialize};

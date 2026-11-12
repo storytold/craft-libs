@@ -492,12 +492,24 @@ fn find_descriptions<'a>(n: &'a Node, out: &mut Vec<&'a Node>) {
     }
 }
 
-/// XMP GPS coordinate `DDD,MM,SSk` or `DDD,MM.mmk` (k = N/S/E/W) → signed degrees.
-fn parse_gps_coord(s: &str) -> Option<f64> {
+/// An `exif:GPSLatitude` / `exif:GPSLongitude` pair → (latitude, longitude) in signed degrees; `None`
+/// unless both parse and lie on the globe (|latitude| ≤ 90, |longitude| ≤ 180, as the Exif reader checks).
+pub fn parse_gps_position(lat: &str, lon: &str) -> Option<(f64, f64)> {
+    let (lat, lon) = (parse_gps_coord(lat, ['N', 'S'])?, parse_gps_coord(lon, ['E', 'W'])?);
+    ((-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon)).then_some((lat, lon))
+}
+
+/// XMP GPS coordinate `DDD,MM,SSk` or `DDD,MM.mmk` → signed degrees, k being `[positive, negative]` of
+/// its axis (N/S or E/W, either case). The sign comes only from the letter: a negative part
+/// (`-10,30N`) is malformed.
+fn parse_gps_coord(s: &str, [pos, neg]: [char; 2]) -> Option<f64> {
     let s = s.trim();
     let dir = s.chars().last()?;
     let body = &s[..s.len() - dir.len_utf8()];
     let parts: Vec<f64> = body.split(',').map(|p| p.trim().parse::<f64>().ok()).collect::<Option<_>>()?;
+    if parts.iter().any(|p| p.is_sign_negative()) {
+        return None;
+    }
     let v = match parts.as_slice() {
         [d] => *d,
         [d, m] if (0.0..60.0).contains(m) => d + m / 60.0,
@@ -505,8 +517,8 @@ fn parse_gps_coord(s: &str) -> Option<f64> {
         _ => return None,
     };
     let v = match dir.to_ascii_uppercase() {
-        'N' | 'E' => v,
-        'S' | 'W' => -v,
+        c if c == pos => v,
+        c if c == neg => -v,
         _ => return None,
     };
     v.is_finite().then_some(v)
@@ -860,11 +872,7 @@ pub fn parse_xmp_with(s: &str, extra: &[XmpNamespace]) -> Result<XmpData, XmpErr
             | (b("exif:Flash/exif:RedEyeMode") as u16) << 6;
         m.flash = Some(Flash { fired, raw });
     }
-    if let (Some(lat), Some(lon)) =
-        (first("exif:GPSLatitude").and_then(|s| parse_gps_coord(&s)), first("exif:GPSLongitude").and_then(|s| parse_gps_coord(&s)))
-        && (-90.0..=90.0).contains(&lat)
-        && (-180.0..=180.0).contains(&lon)
-    {
+    if let Some((lat, lon)) = first("exif:GPSLatitude").zip(first("exif:GPSLongitude")).and_then(|(la, lo)| parse_gps_position(&la, &lo)) {
         let altitude = num("exif:GPSAltitude").map(|a| if first("exif:GPSAltitudeRef").as_deref() == Some("1") { -a } else { a });
         m.gps = Some(Gps { latitude: lat, longitude: lon, altitude });
     }
