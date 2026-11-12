@@ -3,7 +3,8 @@
 This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and the
 changes listed under Local changes. `.cargo_vcs_info.json` names the commit it was packaged from,
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
-names, which is archived; its README says development moved off GitHub.
+names, which is archived; its README says development moved off GitHub. The local changes are in
+`src/generators.rs` and `src/sweep/sweep_line.rs`.
 
 Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
 file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
@@ -15,6 +16,7 @@ holds `upstream_revision`. `local_patches` describes each local change.
 
 | Change | Code comment label | Touches | Tests |
 |---|---|---|---|
+| The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out | `Craft patch (exited slots)` | `src/sweep/sweep_line.rs` | none (doc comment only) |
 | `checkerboard(0)` and `slanted_checkerboard(0)` return empty collections; the inner count was `n - 1`, which overflowed | `Craft patch (empty checkerboard)` | `src/generators.rs`, `scripts/test-pdf-backends.sh` | `checkerboards_of_size_zero_and_one` |
 
 Every change here updates this table and `SOURCE.json` in the same commit. To take a new linesweeper
