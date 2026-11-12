@@ -1,0 +1,17 @@
+[package]
+name = "craft-gpu"
+description = "Provider-neutral GPU traits, GpuJob envelope, and registry (no vendor IO)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

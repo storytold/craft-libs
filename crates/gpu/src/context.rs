@@ -1,0 +1,128 @@
+use crate::{DeviceCaps, GpuFault, HandleId};
+
+/// Where the context was created (main thread vs worker).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkerKind {
+    Main,
+    DedicatedWorker,
+    SharedWorker,
+}
+
+/// Opaque in-flight readback request handed out by [`GpuContext::request_read`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ReadRequest(pub u64);
+
+/// One completed (or failed) readback, delivered by [`GpuContext::poll_reads`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReadOutcome {
+    pub request: ReadRequest,
+    pub handle: HandleId,
+    pub result: Result<Vec<u8>, GpuFault>,
+}
+
+/// Device/queue abstraction implemented by `craft-gpu-wgpu` and `craft-gpu-null`.
+///
+/// ## Device loss
+///
+/// A context can lose its device at any time: a driver reset, OS-level eviction under memory
+/// pressure, or an explicit `device.destroy()`. Device loss surfaces as a fault and never panics. It arrives
+/// through [`GpuFault::DeviceLost`] from the next call that would otherwise touch the device.
+/// It also arrives through [`poll_reads`](Self::poll_reads), letting a host's event loop observe
+/// it even between buffer calls. Once a context has reported [`GpuFault::DeviceLost`], every
+/// [`DeviceCaps`] it reported before that point is stale. The consumer's recovery, per RFC-0022,
+/// is one of:
+///
+/// - fall back to the portable path (a [`DeviceCaps`]-gated path with no fast-path features, or a
+///   different, CPU-backed [`GpuContext`]) for the rest of the session, or
+/// - re-acquire a device, meaning construct a fresh [`GpuContext`], and re-probe
+///   [`caps`](Self::caps) before resuming GPU jobs.
+///
+/// No backend here supports continuing to dispatch jobs against a context that has already
+/// reported device loss, using caps read before the loss.
+///
+/// ## Readback
+///
+/// [`read_buffer`](Self::read_buffer) is a blocking convenience built on
+/// [`request_read`](Self::request_read) and [`poll_reads`](Self::poll_reads): those two are the
+/// primitives every backend implements directly, because WebGPU (and therefore native wgpu's
+/// `buffer.map_async`) can only map a buffer asynchronously. The completion is delivered the same
+/// way a `GpuJob` batch's outcome is delivered to a worker's host: queued, then collected on a
+/// later poll, analogous to `craft-worker-host`'s `HostMessage::GpuJobs` being answered later by
+/// `WorkerMessage::GpuBatchDone`.
+///
+/// Both bundled backends override `read_buffer`'s default body, since the default has nowhere
+/// to put completions belonging to other outstanding requests: the null context takes only its
+/// own completion, and the wgpu context re-queues the others while blocking efficiently on a
+/// native device. On `wasm32` the wgpu context's only backing today is the in-memory staging
+/// store, whose reads resolve synchronously and are served; only a read that did not resolve
+/// synchronously returns [`GpuFault::Operation`] there, the refusal a future real device backing
+/// will need, because a map on that target completes only via the browser's own event loop and
+/// blocking for it would freeze the one thread that loop runs on. Callers on such a backing
+/// drive `request_read` and `poll_reads` from the worker's own message loop. See
+/// `docs/gpu-backends.md` for which backend does which.
+pub trait GpuContext {
+    fn caps(&self) -> DeviceCaps;
+
+    fn worker_kind(&self) -> WorkerKind;
+
+    /// Register an opaque buffer blob; returns a handle for job graphs.
+    fn upload_buffer(&mut self, label: &str, bytes: &[u8]) -> Result<HandleId, GpuFault>;
+
+    fn buffer_len(&self, handle: HandleId) -> Result<usize, GpuFault>;
+
+    /// Queue an asynchronous readback of `handle`. Completion is delivered by
+    /// [`poll_reads`](Self::poll_reads).
+    fn request_read(&mut self, handle: HandleId) -> Result<ReadRequest, GpuFault>;
+
+    /// Drain every read completed (or failed) since the last call. Also where a device-lost
+    /// fault surfaces for callers that are polling rather than issuing buffer calls. A context
+    /// that resolves reads synchronously (the null context; native wgpu with no device) may
+    /// resolve a request on the very next call after [`request_read`](Self::request_read).
+    ///
+    /// This can only attach a device-lost fault to a read it has something to attach it to: when
+    /// nothing is outstanding, there is no [`ReadOutcome`] to fabricate one onto. A caller whose
+    /// event loop only polls, with no buffer calls and no outstanding read, uses
+    /// [`device_status`](Self::device_status) for that gap.
+    fn poll_reads(&mut self) -> Vec<ReadOutcome>;
+
+    /// Device loss observable independent of any specific read or buffer call, covering the gap
+    /// [`poll_reads`](Self::poll_reads) has when nothing is outstanding to attach the fault to.
+    /// The default is `Ok(())`: correct for any backend with no concept of device loss (the null
+    /// context; the staging/no-device path here). A backend that can lose a device overrides
+    /// this to report it.
+    fn device_status(&self) -> Result<(), GpuFault> {
+        Ok(())
+    }
+
+    /// Release a previously uploaded buffer's resources. A no-op, not an error, for a handle
+    /// that is already invalid or was already freed: callers are never required to track
+    /// whether they already freed one. A freed handle behaves as invalid afterward (the same
+    /// fault a never-issued handle would produce) from every other method on this trait.
+    ///
+    /// Without this, a backend's buffer table -- and the memory behind it -- can only ever grow
+    /// for the context's lifetime: every `upload_buffer`, and every output buffer a provider's
+    /// job creates, adds an entry nothing removes. Repeated jobs then retain GPU (or host, for
+    /// the null context) memory long after every caller is done with every handle it created.
+    fn free_buffer(&mut self, handle: HandleId);
+
+    /// Blocking convenience for callers that need bytes now, such as the CPU-stand-in providers
+    /// in `craft-gpu-providers`. The default drains [`request_read`](Self::request_read) and
+    /// [`poll_reads`](Self::poll_reads) in a loop; see the trait docs for which backends honestly
+    /// support blocking here and which override this to fail instead of hanging.
+    ///
+    /// The default body has nowhere to put completions that belong to other requests, so it
+    /// drops them: with the default body, never call this while another
+    /// [`request_read`](Self::request_read) is outstanding. A backend that stores completions
+    /// overrides this to put the other requests' outcomes back for the next
+    /// [`poll_reads`](Self::poll_reads); both bundled backends do.
+    fn read_buffer(&mut self, handle: HandleId) -> Result<Vec<u8>, GpuFault> {
+        let request = self.request_read(handle)?;
+        loop {
+            for outcome in self.poll_reads() {
+                if outcome.request == request {
+                    return outcome.result;
+                }
+            }
+        }
+    }
+}

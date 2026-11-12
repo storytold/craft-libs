@@ -1,0 +1,63 @@
+name: Web runtime
+
+on:
+  push:
+    branches: [main]
+    paths:
+      [
+        "crates/tier-store/**",
+        "crates/worker-host/**",
+        "crates/runtime/**",
+        "crates/gpu*/**",
+        "assets/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        ".github/workflows/web-runtime.yml",
+      ]
+  pull_request:
+    paths:
+      [
+        "crates/tier-store/**",
+        "crates/worker-host/**",
+        "crates/runtime/**",
+        "crates/gpu*/**",
+        "assets/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        ".github/workflows/web-runtime.yml",
+      ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
+  # run (main, manual) gets its own group: it is never cancelled or replaced while queued, so it
+  # always gets to save the cache.
+  group: shared-web-runtime-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    timeout-minutes: 30
+    name: Web runtime
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: web-runtime
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-tier-store -p craft-worker-host -p craft-runtime --all-targets --locked -- -D warnings
+      - run: cargo clippy -p craft-tier-store -p craft-worker-host -p craft-runtime --all-targets --all-features --locked -- -D warnings
+      - run: cargo test -p craft-tier-store -p craft-worker-host -p craft-runtime --locked
+      - run: cargo test -p craft-tier-store -p craft-worker-host -p craft-runtime --all-features --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node crates/worker-host/tests/js/review_repro.mjs
