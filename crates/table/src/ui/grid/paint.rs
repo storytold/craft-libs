@@ -2,13 +2,14 @@
 //! marks, the in-cell editor and the chrome that sits on the sheet.
 
 use craft_behavior::{CursorIcon, HitLevel, HitPriority, Metrics, PartKey, Positions, RowAt, ScrollPos, SelectionModel as _, Sense, TextPos};
+use craft_theme::ControlSize;
 use craft_ui::contract::{Access, Cx, Focus as _, Name, PaintUi, PartsCx, Remember as _, Role, Styled as _};
 use craft_ui::primitives::{
     Dashes, Draw, EditorLine, EditorPurpose, EditorRun, EditorState, HAlign, PaintShape, RectSide, RuleKind, StrokeWidth, TextRun,
 };
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::motion::Animate as _;
-use craft_ui::style::{Flags, State, StateMix, StateSet, Stateful, StyleCx, TypeRole};
+use craft_ui::style::{Flags, State, StateMix, StateSet, Stateful, StyleColor, StyleCx, TypeRole};
 use egui::{CornerRadius, Pos2, Rect, Vec2};
 
 use super::editor::{EditState, Mode};
@@ -42,7 +43,8 @@ pub(super) struct Frame {
 
 pub(super) fn style(cx: &StyleCx<'_>, key: CellGridStyleKey) -> CellGridStyle {
     let control = cx.control();
-    let sheet = SheetMetrics::new(control.height, cx.text_width(TypeRole::Label, "0"), control.pad_x);
+    // Headers are a small control high at every density, as a spreadsheet's are.
+    let sheet = SheetMetrics::new(cx.control_of(ControlSize::Sm).height, cx.text_width(TypeRole::Label, "0"), control.pad_x);
     let zoom = f32::from(key.percent) / 100.0;
     let bands = outline::bands(key.levels, key.headings, zoom, cx.tokens.size.icon.sm, cx.tokens.space.gap.tight);
     let c = &cx.tokens.color;
@@ -406,6 +408,23 @@ impl CellGrid<'_> {
         // The headers' edges toward the cells, across the corner too.
         draw.edge_rule(RuleKind::Edge, geometry.mirror_rect(top.union(corner)), RectSide::Bottom);
         draw.edge_rule(RuleKind::Edge, geometry.mirror_rect(left.union(corner)), RectSide::end(rtl));
+        Self::paint_corner_mark(draw, geometry.mirror_rect(corner), style.gap, rtl, cx.resolve_part(CORNER, &style.header_text));
+    }
+
+    /// The select-all mark: a right triangle in the end-bottom of the corner `corner`, `inset` in from its edges.
+    fn paint_corner_mark(draw: &Draw<'_>, corner: Rect, inset: f32, rtl: bool, color: StyleColor) {
+        let mark = corner.shrink(inset);
+        let side = mark.width().min(mark.height());
+        if side <= 0.0 {
+            return;
+        }
+        let (end, start) = if rtl { (mark.left(), mark.left() + side) } else { (mark.right(), mark.right() - side) };
+        // Clockwise on screen, as a filled polygon wants.
+        let mut points = vec![Pos2::new(end, mark.bottom() - side), Pos2::new(end, mark.bottom()), Pos2::new(start, mark.bottom())];
+        if rtl {
+            points.reverse();
+        }
+        draw.fill(&PaintShape::Polygon(points), color);
     }
 
     /// The open cell: its fill, edge, draft text and caret, and the editor part's report.
