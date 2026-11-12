@@ -56,6 +56,7 @@ mod features;
 pub mod ns;
 mod package;
 mod pivot;
+mod richdata;
 mod sheet;
 mod strings;
 mod styles;
@@ -82,6 +83,7 @@ pub use pivot::{
     CacheField, CacheItem, CacheRecord, CacheSource, CacheValue, DataField, FieldGroup, Location, PageField, PivotCacheDefinition, PivotField,
     PivotItem, PivotTableDefinition, PivotTableStyleInfo, RangePr, SharedItems, WorksheetSource, records_xml,
 };
+pub use richdata::{CellPicture, MAX_PICTURE, MAX_PICTURES_TOTAL, MAX_RECORDS};
 pub use sheet::{Cell, CellFormula, CellValue, Column, FormulaKind, Row, SheetPart, iso_date_serial};
 pub use strings::{PhoneticProps, PhoneticRun, StringItem, TextRun, decode_xstring, encode_xstring, rich_text, t_el};
 pub use styles::{
