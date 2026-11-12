@@ -133,7 +133,7 @@ impl CmykModel {
             (v + 4.0 * self.tvi[i] * v * (1.0 - v)).clamp(0.0, 1.0)
         });
         let mut s = [0.0; 3];
-        for m in 0..16 {
+        for (m, prim) in self.prim_n.iter().enumerate().take(16) {
             let mut w = 1.0;
             for (i, ai) in a.iter().enumerate() {
                 w *= if m & (1 << i) != 0 { *ai } else { 1.0 - ai };
@@ -141,7 +141,7 @@ impl CmykModel {
             if w == 0.0 {
                 continue;
             }
-            for (acc, p) in s.iter_mut().zip(&self.prim_n[m]) {
+            for (acc, p) in s.iter_mut().zip(prim) {
                 *acc += w * p;
             }
         }
