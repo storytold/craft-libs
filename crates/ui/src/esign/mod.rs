@@ -1016,7 +1016,8 @@ mod tests {
     #[test]
     fn refresh_status_caption_is_localized() {
         let labels = EsignLabels { refresh: "Actualizar estado".into(), ..EsignLabels::default() };
-        let mut dialog = EsignDialog { capabilities: Some(vec![EsignCapability::Envelopes]), labels, envelope: Some(envelope_stub()), ..Default::default() };
+        let mut dialog =
+            EsignDialog { capabilities: Some(vec![EsignCapability::Envelopes]), labels, envelope: Some(envelope_stub()), ..Default::default() };
         let ctx = Context::default();
         let mut full = ctx.run_ui(egui::RawInput::default(), |ui| dialog.ui(ui));
         full.textures_delta.clear();
