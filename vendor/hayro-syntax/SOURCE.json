@@ -98,7 +98,7 @@
       "path": "src/crypto/mod.rs",
       "source_sha256": "6fca01cee7e67f3aaf435101b7ea98fa4fe23f807eadeaec63ee1c2ece759189",
       "source_git_blob": "15371514c10dc993b335edfec19a3f989b497954",
-      "sha256": "6fca01cee7e67f3aaf435101b7ea98fa4fe23f807eadeaec63ee1c2ece759189"
+      "sha256": "9e0fc0edf48217b01acfcf7bcd3ebe0673f225f0c3857bf887efd0b0f31a74b2"
     },
     {
       "path": "src/crypto/rc4.rs",

@@ -5,19 +5,19 @@
 //! it are written as `\U+XXXX` (any character) or `\M+nXXXX` (a double-byte character of an East
 //! Asian code page) escapes, which [`crate::parse`] decodes after the bytes.
 //!
-//! The Windows, ISO and East Asian code pages are decoded with `encoding_rs`; DOS 437, 850 and
-//! 852 with the tables below, Korean Johab (`ANSI_1361`) by its definition in KS X 1001 annex 3,
-//! and the other DOS pages with those of `dos_tables.rs` (the upper
-//! halves of the IBM PC code pages; the lower halves are ASCII). Decoding never fails: a byte sequence that is invalid in the code page (a truncated
-//! double-byte character, an unassigned byte) becomes U+FFFD and the bytes after it decode
-//! normally, so line ends and the group structure survive.
+//! The Windows, ISO and East Asian code pages are decoded with `encoding_rs`; the DOS pages with
+//! `craft-codepage`'s tables (the upper halves of the IBM PC code pages; the lower halves are
+//! ASCII); Korean Johab (`ANSI_1361`) by its definition in KS X 1001 annex 3. Decoding never
+//! fails: a byte sequence that is invalid in the code page (a truncated double-byte character, an
+//! unassigned byte) becomes U+FFFD and the bytes after it decode normally, so line ends and the
+//! group structure survive.
 
 use std::borrow::Cow;
 
 use encoding_rs::Encoding;
 
 use crate::Version;
-use crate::dos_tables as dos;
+use craft_codepage::dos;
 
 /// How the bytes of a code page become text.
 #[derive(Clone, Copy, Debug)]
@@ -74,9 +74,9 @@ pub(crate) fn decoder(code_page: &str) -> Option<Decoder> {
         "ISO8859_15" | "ISO_8859_15" => e::ISO_8859_15,
         "DOS866" => e::IBM866,
         "MACINTOSH" | "MAC_ROMAN" => e::MACINTOSH,
-        "DOS437" => return Some(Decoder::Table(&DOS437)),
-        "DOS850" => return Some(Decoder::Table(&DOS850)),
-        "DOS852" => return Some(Decoder::Table(&DOS852)),
+        "DOS437" => return Some(Decoder::Table(&dos::DOS437)),
+        "DOS850" => return Some(Decoder::Table(&dos::DOS850)),
+        "DOS852" => return Some(Decoder::Table(&dos::DOS852)),
         "DOS720" => return Some(Decoder::Table(&dos::DOS720)),
         "DOS737" => return Some(Decoder::Table(&dos::DOS737)),
         "DOS775" => return Some(Decoder::Table(&dos::DOS775)),
@@ -351,7 +351,7 @@ pub(crate) fn decode_ascii_file(bytes: &[u8]) -> Cow<'_, str> {
         Some(name) => {
             let name = String::from_utf8_lossy(name);
             decoder(&name).unwrap_or_else(|| {
-                log::warn!("DXF: unknown code page `{name}`; reading the text as ANSI_1252");
+                log::warn!("DXF: unknown code page {}; reading the text as ANSI_1252", loggable(&name));
                 Decoder::Utf8
             })
         }
@@ -446,7 +446,7 @@ impl BinaryText {
             (3, Some(HeaderVar::CodePage)) => {
                 self.code_page = decoder(&s);
                 if self.code_page.is_none() {
-                    log::warn!("DXF: unknown code page `{}`; reading the text as ANSI_1252", s.trim());
+                    log::warn!("DXF: unknown code page {}; reading the text as ANSI_1252", loggable(s.trim()));
                 }
             }
             _ => {}
@@ -472,50 +472,28 @@ pub(crate) fn mif_char(n: char, bytes: [u8; 2]) -> Option<char> {
     it.next().filter(|_| it.next().is_none())
 }
 
-// Generated from the IBM PC code page definitions (bytes 0x80–0xFF in order).
-const DOS437: [char; 128] = [
-    '\u{00C7}', '\u{00FC}', '\u{00E9}', '\u{00E2}', '\u{00E4}', '\u{00E0}', '\u{00E5}', '\u{00E7}', '\u{00EA}', '\u{00EB}', '\u{00E8}', '\u{00EF}',
-    '\u{00EE}', '\u{00EC}', '\u{00C4}', '\u{00C5}', '\u{00C9}', '\u{00E6}', '\u{00C6}', '\u{00F4}', '\u{00F6}', '\u{00F2}', '\u{00FB}', '\u{00F9}',
-    '\u{00FF}', '\u{00D6}', '\u{00DC}', '\u{00A2}', '\u{00A3}', '\u{00A5}', '\u{20A7}', '\u{0192}', '\u{00E1}', '\u{00ED}', '\u{00F3}', '\u{00FA}',
-    '\u{00F1}', '\u{00D1}', '\u{00AA}', '\u{00BA}', '\u{00BF}', '\u{2310}', '\u{00AC}', '\u{00BD}', '\u{00BC}', '\u{00A1}', '\u{00AB}', '\u{00BB}',
-    '\u{2591}', '\u{2592}', '\u{2593}', '\u{2502}', '\u{2524}', '\u{2561}', '\u{2562}', '\u{2556}', '\u{2555}', '\u{2563}', '\u{2551}', '\u{2557}',
-    '\u{255D}', '\u{255C}', '\u{255B}', '\u{2510}', '\u{2514}', '\u{2534}', '\u{252C}', '\u{251C}', '\u{2500}', '\u{253C}', '\u{255E}', '\u{255F}',
-    '\u{255A}', '\u{2554}', '\u{2569}', '\u{2566}', '\u{2560}', '\u{2550}', '\u{256C}', '\u{2567}', '\u{2568}', '\u{2564}', '\u{2565}', '\u{2559}',
-    '\u{2558}', '\u{2552}', '\u{2553}', '\u{256B}', '\u{256A}', '\u{2518}', '\u{250C}', '\u{2588}', '\u{2584}', '\u{258C}', '\u{2590}', '\u{2580}',
-    '\u{03B1}', '\u{00DF}', '\u{0393}', '\u{03C0}', '\u{03A3}', '\u{03C3}', '\u{00B5}', '\u{03C4}', '\u{03A6}', '\u{0398}', '\u{03A9}', '\u{03B4}',
-    '\u{221E}', '\u{03C6}', '\u{03B5}', '\u{2229}', '\u{2261}', '\u{00B1}', '\u{2265}', '\u{2264}', '\u{2320}', '\u{2321}', '\u{00F7}', '\u{2248}',
-    '\u{00B0}', '\u{2219}', '\u{00B7}', '\u{221A}', '\u{207F}', '\u{00B2}', '\u{25A0}', '\u{00A0}',
-];
-const DOS850: [char; 128] = [
-    '\u{00C7}', '\u{00FC}', '\u{00E9}', '\u{00E2}', '\u{00E4}', '\u{00E0}', '\u{00E5}', '\u{00E7}', '\u{00EA}', '\u{00EB}', '\u{00E8}', '\u{00EF}',
-    '\u{00EE}', '\u{00EC}', '\u{00C4}', '\u{00C5}', '\u{00C9}', '\u{00E6}', '\u{00C6}', '\u{00F4}', '\u{00F6}', '\u{00F2}', '\u{00FB}', '\u{00F9}',
-    '\u{00FF}', '\u{00D6}', '\u{00DC}', '\u{00F8}', '\u{00A3}', '\u{00D8}', '\u{00D7}', '\u{0192}', '\u{00E1}', '\u{00ED}', '\u{00F3}', '\u{00FA}',
-    '\u{00F1}', '\u{00D1}', '\u{00AA}', '\u{00BA}', '\u{00BF}', '\u{00AE}', '\u{00AC}', '\u{00BD}', '\u{00BC}', '\u{00A1}', '\u{00AB}', '\u{00BB}',
-    '\u{2591}', '\u{2592}', '\u{2593}', '\u{2502}', '\u{2524}', '\u{00C1}', '\u{00C2}', '\u{00C0}', '\u{00A9}', '\u{2563}', '\u{2551}', '\u{2557}',
-    '\u{255D}', '\u{00A2}', '\u{00A5}', '\u{2510}', '\u{2514}', '\u{2534}', '\u{252C}', '\u{251C}', '\u{2500}', '\u{253C}', '\u{00E3}', '\u{00C3}',
-    '\u{255A}', '\u{2554}', '\u{2569}', '\u{2566}', '\u{2560}', '\u{2550}', '\u{256C}', '\u{00A4}', '\u{00F0}', '\u{00D0}', '\u{00CA}', '\u{00CB}',
-    '\u{00C8}', '\u{0131}', '\u{00CD}', '\u{00CE}', '\u{00CF}', '\u{2518}', '\u{250C}', '\u{2588}', '\u{2584}', '\u{00A6}', '\u{00CC}', '\u{2580}',
-    '\u{00D3}', '\u{00DF}', '\u{00D4}', '\u{00D2}', '\u{00F5}', '\u{00D5}', '\u{00B5}', '\u{00FE}', '\u{00DE}', '\u{00DA}', '\u{00DB}', '\u{00D9}',
-    '\u{00FD}', '\u{00DD}', '\u{00AF}', '\u{00B4}', '\u{00AD}', '\u{00B1}', '\u{2017}', '\u{00BE}', '\u{00B6}', '\u{00A7}', '\u{00F7}', '\u{00B8}',
-    '\u{00B0}', '\u{00A8}', '\u{00B7}', '\u{00B9}', '\u{00B3}', '\u{00B2}', '\u{25A0}', '\u{00A0}',
-];
-const DOS852: [char; 128] = [
-    '\u{00C7}', '\u{00FC}', '\u{00E9}', '\u{00E2}', '\u{00E4}', '\u{016F}', '\u{0107}', '\u{00E7}', '\u{0142}', '\u{00EB}', '\u{0150}', '\u{0151}',
-    '\u{00EE}', '\u{0179}', '\u{00C4}', '\u{0106}', '\u{00C9}', '\u{0139}', '\u{013A}', '\u{00F4}', '\u{00F6}', '\u{013D}', '\u{013E}', '\u{015A}',
-    '\u{015B}', '\u{00D6}', '\u{00DC}', '\u{0164}', '\u{0165}', '\u{0141}', '\u{00D7}', '\u{010D}', '\u{00E1}', '\u{00ED}', '\u{00F3}', '\u{00FA}',
-    '\u{0104}', '\u{0105}', '\u{017D}', '\u{017E}', '\u{0118}', '\u{0119}', '\u{00AC}', '\u{017A}', '\u{010C}', '\u{015F}', '\u{00AB}', '\u{00BB}',
-    '\u{2591}', '\u{2592}', '\u{2593}', '\u{2502}', '\u{2524}', '\u{00C1}', '\u{00C2}', '\u{011A}', '\u{015E}', '\u{2563}', '\u{2551}', '\u{2557}',
-    '\u{255D}', '\u{017B}', '\u{017C}', '\u{2510}', '\u{2514}', '\u{2534}', '\u{252C}', '\u{251C}', '\u{2500}', '\u{253C}', '\u{0102}', '\u{0103}',
-    '\u{255A}', '\u{2554}', '\u{2569}', '\u{2566}', '\u{2560}', '\u{2550}', '\u{256C}', '\u{00A4}', '\u{0111}', '\u{0110}', '\u{010E}', '\u{00CB}',
-    '\u{010F}', '\u{0147}', '\u{00CD}', '\u{00CE}', '\u{011B}', '\u{2518}', '\u{250C}', '\u{2588}', '\u{2584}', '\u{0162}', '\u{016E}', '\u{2580}',
-    '\u{00D3}', '\u{00DF}', '\u{00D4}', '\u{0143}', '\u{0144}', '\u{0148}', '\u{0160}', '\u{0161}', '\u{0154}', '\u{00DA}', '\u{0155}', '\u{0170}',
-    '\u{00FD}', '\u{00DD}', '\u{0163}', '\u{00B4}', '\u{00AD}', '\u{02DD}', '\u{02DB}', '\u{02C7}', '\u{02D8}', '\u{00A7}', '\u{00F7}', '\u{00B8}',
-    '\u{00B0}', '\u{00A8}', '\u{02D9}', '\u{0171}', '\u{0158}', '\u{0159}', '\u{25A0}', '\u{00A0}',
-];
+/// A name from the file for a log line: quoted, with line breaks and other control characters
+/// escaped, and cut at 64 characters, so a file can't forge log lines or fill the log.
+fn loggable(name: &str) -> String {
+    let mut shown: String = name.chars().take(64).collect();
+    if name.chars().nth(64).is_some() {
+        shown.push('…');
+    }
+    format!("{shown:?}")
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_code_page_name_is_escaped_and_cut_before_it_is_logged() {
+        assert_eq!(loggable("ANSI_1252"), "\"ANSI_1252\"");
+        let shown = loggable("x\r\n[ERROR] forged\u{1b}[31m");
+        assert!(!shown.contains(['\r', '\n', '\u{1b}']), "{shown}");
+        let long = loggable(&"a".repeat(10_000));
+        assert!(long.chars().count() <= 70, "{}", long.chars().count());
+    }
 
     #[test]
     fn code_page_names() {

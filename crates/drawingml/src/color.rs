@@ -1,0 +1,1162 @@
+//! Colour: sRGB colours, theme colour slots and DrawingML-style colour transforms
+//! (tint, shade, luminance modulation/offset, alpha…), so theme-relative colours resolve the way
+//! presentation files expect.
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+
+/// An sRGB colour with straight alpha, components 0–255.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Rgba {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+}
+
+impl Default for Rgba {
+    fn default() -> Self {
+        Rgba::BLACK
+    }
+}
+
+impl Rgba {
+    pub const BLACK: Rgba = Rgba::rgb(0, 0, 0);
+    pub const WHITE: Rgba = Rgba::rgb(255, 255, 255);
+    pub const TRANSPARENT: Rgba = Rgba { r: 0, g: 0, b: 0, a: 0 };
+
+    pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
+        Rgba { r, g, b, a: 255 }
+    }
+    // The name the apps already call, beside `rgb`.
+    #[allow(clippy::self_named_constructors)]
+    pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Rgba { r, g, b, a }
+    }
+    /// `RRGGBB` or `#RRGGBB` (also `RRGGBBAA`).
+    pub fn from_hex(s: &str) -> Option<Self> {
+        let s = s.trim();
+        let s = s.strip_prefix('#').unwrap_or(s);
+        if !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        let byte = |i: usize| s.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok());
+        match s.len() {
+            6 => Some(Rgba::rgb(byte(0)?, byte(2)?, byte(4)?)),
+            8 => Some(Rgba::rgba(byte(0)?, byte(2)?, byte(4)?, byte(6)?)),
+            3 => {
+                let n = |i: usize| s.get(i..i + 1).and_then(|h| u8::from_str_radix(h, 16).ok()).map(|v| v * 17);
+                Some(Rgba::rgb(n(0)?, n(1)?, n(2)?))
+            }
+            _ => None,
+        }
+    }
+    /// `RRGGBB` uppercase (no alpha).
+    pub fn hex(&self) -> String {
+        format!("{:02X}{:02X}{:02X}", self.r, self.g, self.b)
+    }
+    pub fn with_alpha(self, a: u8) -> Self {
+        Rgba { a, ..self }
+    }
+    pub fn to_f32(self) -> [f32; 4] {
+        [self.r as f32 / 255.0, self.g as f32 / 255.0, self.b as f32 / 255.0, self.a as f32 / 255.0]
+    }
+    pub fn from_f64(r: f64, g: f64, b: f64, a: f64) -> Self {
+        let c = |v: f64| if v.is_finite() { (v.clamp(0.0, 1.0) * 255.0).round() as u8 } else { 0 };
+        Rgba { r: c(r), g: c(g), b: c(b), a: c(a) }
+    }
+    /// Relative luminance (WCAG), 0–1.
+    pub fn luminance(self) -> f64 {
+        let lin = |c: u8| {
+            let v = c as f64 / 255.0;
+            if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * lin(self.r) + 0.7152 * lin(self.g) + 0.0722 * lin(self.b)
+    }
+    /// WCAG contrast ratio between two colours (1–21).
+    pub fn contrast(self, other: Rgba) -> f64 {
+        let (a, b) = (self.luminance(), other.luminance());
+        let (hi, lo) = if a > b { (a, b) } else { (b, a) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+    pub fn to_hsl(self) -> (f64, f64, f64) {
+        let r = self.r as f64 / 255.0;
+        let g = self.g as f64 / 255.0;
+        let b = self.b as f64 / 255.0;
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let l = (max + min) / 2.0;
+        if (max - min).abs() < 1e-12 {
+            return (0.0, 0.0, l);
+        }
+        let d = max - min;
+        let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+        let h = if (max - r).abs() < 1e-12 {
+            (g - b) / d + if g < b { 6.0 } else { 0.0 }
+        } else if (max - g).abs() < 1e-12 {
+            (b - r) / d + 2.0
+        } else {
+            (r - g) / d + 4.0
+        };
+        (h * 60.0, s, l)
+    }
+    pub fn from_hsl(h: f64, s: f64, l: f64, a: u8) -> Self {
+        let h = ((h % 360.0) + 360.0) % 360.0 / 360.0;
+        let s = s.clamp(0.0, 1.0);
+        let l = l.clamp(0.0, 1.0);
+        if s == 0.0 {
+            return Rgba::from_f64(l, l, l, a as f64 / 255.0);
+        }
+        let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+        let p = 2.0 * l - q;
+        let f = |t: f64| {
+            let t = if t < 0.0 {
+                t + 1.0
+            } else if t > 1.0 {
+                t - 1.0
+            } else {
+                t
+            };
+            if t < 1.0 / 6.0 {
+                p + (q - p) * 6.0 * t
+            } else if t < 0.5 {
+                q
+            } else if t < 2.0 / 3.0 {
+                p + (q - p) * (2.0 / 3.0 - t) * 6.0
+            } else {
+                p
+            }
+        };
+        Rgba::from_f64(f(h + 1.0 / 3.0), f(h), f(h - 1.0 / 3.0), a as f64 / 255.0)
+    }
+    /// Linear interpolation (straight alpha).
+    pub fn lerp(self, o: Rgba, t: f64) -> Rgba {
+        let t = if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 };
+        let m = |a: u8, b: u8| (a as f64 + (b as f64 - a as f64) * t).round().clamp(0.0, 255.0) as u8;
+        Rgba { r: m(self.r, o.r), g: m(self.g, o.g), b: m(self.b, o.b), a: m(self.a, o.a) }
+    }
+}
+
+/// The twelve theme colour slots, plus the mapped aliases (`bg1`, `tx1`…) and `phClr` (the
+/// placeholder colour a style matrix entry is applied with).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SchemeSlot {
+    Dk1,
+    Lt1,
+    Dk2,
+    Lt2,
+    Accent1,
+    Accent2,
+    Accent3,
+    Accent4,
+    Accent5,
+    Accent6,
+    Hlink,
+    FolHlink,
+    Bg1,
+    Tx1,
+    Bg2,
+    Tx2,
+    PhClr,
+}
+
+impl SchemeSlot {
+    pub const THEME: [SchemeSlot; 12] = [
+        SchemeSlot::Dk1,
+        SchemeSlot::Lt1,
+        SchemeSlot::Dk2,
+        SchemeSlot::Lt2,
+        SchemeSlot::Accent1,
+        SchemeSlot::Accent2,
+        SchemeSlot::Accent3,
+        SchemeSlot::Accent4,
+        SchemeSlot::Accent5,
+        SchemeSlot::Accent6,
+        SchemeSlot::Hlink,
+        SchemeSlot::FolHlink,
+    ];
+    pub fn xml_name(self) -> &'static str {
+        match self {
+            SchemeSlot::Dk1 => "dk1",
+            SchemeSlot::Lt1 => "lt1",
+            SchemeSlot::Dk2 => "dk2",
+            SchemeSlot::Lt2 => "lt2",
+            SchemeSlot::Accent1 => "accent1",
+            SchemeSlot::Accent2 => "accent2",
+            SchemeSlot::Accent3 => "accent3",
+            SchemeSlot::Accent4 => "accent4",
+            SchemeSlot::Accent5 => "accent5",
+            SchemeSlot::Accent6 => "accent6",
+            SchemeSlot::Hlink => "hlink",
+            SchemeSlot::FolHlink => "folHlink",
+            SchemeSlot::Bg1 => "bg1",
+            SchemeSlot::Tx1 => "tx1",
+            SchemeSlot::Bg2 => "bg2",
+            SchemeSlot::Tx2 => "tx2",
+            SchemeSlot::PhClr => "phClr",
+        }
+    }
+    pub fn from_xml(s: &str) -> Option<Self> {
+        Some(match s {
+            "dk1" => SchemeSlot::Dk1,
+            "lt1" => SchemeSlot::Lt1,
+            "dk2" => SchemeSlot::Dk2,
+            "lt2" => SchemeSlot::Lt2,
+            "accent1" => SchemeSlot::Accent1,
+            "accent2" => SchemeSlot::Accent2,
+            "accent3" => SchemeSlot::Accent3,
+            "accent4" => SchemeSlot::Accent4,
+            "accent5" => SchemeSlot::Accent5,
+            "accent6" => SchemeSlot::Accent6,
+            "hlink" => SchemeSlot::Hlink,
+            "folHlink" => SchemeSlot::FolHlink,
+            "bg1" => SchemeSlot::Bg1,
+            "tx1" => SchemeSlot::Tx1,
+            "bg2" => SchemeSlot::Bg2,
+            "tx2" => SchemeSlot::Tx2,
+            "phClr" => SchemeSlot::PhClr,
+            _ => return None,
+        })
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            SchemeSlot::Dk1 | SchemeSlot::Tx1 => "Text/Background - Dark 1",
+            SchemeSlot::Lt1 | SchemeSlot::Bg1 => "Text/Background - Light 1",
+            SchemeSlot::Dk2 | SchemeSlot::Tx2 => "Text/Background - Dark 2",
+            SchemeSlot::Lt2 | SchemeSlot::Bg2 => "Text/Background - Light 2",
+            SchemeSlot::Accent1 => "Accent 1",
+            SchemeSlot::Accent2 => "Accent 2",
+            SchemeSlot::Accent3 => "Accent 3",
+            SchemeSlot::Accent4 => "Accent 4",
+            SchemeSlot::Accent5 => "Accent 5",
+            SchemeSlot::Accent6 => "Accent 6",
+            SchemeSlot::Hlink => "Hyperlink",
+            SchemeSlot::FolHlink => "Followed Hyperlink",
+            SchemeSlot::PhClr => "Placeholder colour",
+        }
+    }
+}
+
+/// Rows of tints and shades computed under a colour of the colour galleries.
+pub const VARIANT_ROWS: usize = 5;
+/// The most rows an explicit `tints` list may hold.
+pub const MAX_TINT_ROWS: usize = 10;
+/// The most extra named colours a scheme holds: what `design.colors` and the dialog accept, and
+/// what a file carries in either direction.
+pub const MAX_EXTRA_COLORS: usize = 200;
+
+/// A named colour beyond the twelve slots (a brand palette entry). It is shown in the colour
+/// galleries after the theme colours and can be named wherever a scheme colour name is accepted;
+/// applying it stores its RGB, since files have no slot for it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtraColor {
+    pub name: String,
+    pub color: Rgba,
+    /// Explicit gallery rows under the colour (0 to [`MAX_TINT_ROWS`]; exactly these are shown)
+    /// in place of the computed tints and shades.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tints: Option<Vec<Rgba>>,
+}
+
+/// One cell under a gallery colour: the colour shown and how it is applied (`mods` on the slot
+/// when computed, the colour itself when it comes from an explicit `tints` override).
+#[derive(Clone, Debug, PartialEq)]
+pub struct GalleryVariant {
+    pub color: Rgba,
+    pub label: String,
+    pub mods: Option<Vec<ColorTransform>>,
+}
+
+/// A colour scheme: the twelve theme colours, plus any number of extra named colours and
+/// optional explicit tint rows (both extensions: a file keeps them in an `a:extLst` of the colour
+/// scheme that other applications ignore, see [`crate::theme::EXT_EXTRA_COLORS`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ColorScheme {
+    pub name: String,
+    pub colors: [Rgba; 12],
+    /// Named colours shown after the theme colours, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra: Vec<ExtraColor>,
+    /// Explicit gallery rows per theme slot (0 to [`MAX_TINT_ROWS`]; exactly these are shown),
+    /// replacing the computed tints and shades.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tints: BTreeMap<SchemeSlot, Vec<Rgba>>,
+    /// Whether a colour without an explicit list gets the computed tint and shade rows (the
+    /// default); `false` shows no rows under it.
+    #[serde(default = "crate::yes", skip_serializing_if = "Clone::clone")]
+    pub computed_tints: bool,
+}
+
+impl ColorScheme {
+    pub fn new(name: impl Into<String>, colors: [Rgba; 12]) -> Self {
+        ColorScheme { name: name.into(), colors, extra: Vec::new(), tints: BTreeMap::new(), computed_tints: true }
+    }
+    pub fn get(&self, slot: SchemeSlot) -> Rgba {
+        let i = match slot {
+            SchemeSlot::Dk1 | SchemeSlot::Tx1 => 0,
+            SchemeSlot::Lt1 | SchemeSlot::Bg1 => 1,
+            SchemeSlot::Dk2 | SchemeSlot::Tx2 => 2,
+            SchemeSlot::Lt2 | SchemeSlot::Bg2 => 3,
+            SchemeSlot::Accent1 => 4,
+            SchemeSlot::Accent2 => 5,
+            SchemeSlot::Accent3 => 6,
+            SchemeSlot::Accent4 => 7,
+            SchemeSlot::Accent5 => 8,
+            SchemeSlot::Accent6 => 9,
+            SchemeSlot::Hlink => 10,
+            SchemeSlot::FolHlink => 11,
+            SchemeSlot::PhClr => 4,
+        };
+        self.colors.get(i).copied().unwrap_or(Rgba::BLACK)
+    }
+    pub fn set(&mut self, slot: SchemeSlot, c: Rgba) {
+        if let Some(i) = SchemeSlot::THEME.iter().position(|s| *s == slot)
+            && let Some(v) = self.colors.get_mut(i)
+        {
+            *v = c;
+        }
+    }
+    /// The extra colour called `name` (case-insensitive, trimmed), if any.
+    pub fn extra_color(&self, name: &str) -> Option<&ExtraColor> {
+        let name = name.trim();
+        if name.is_empty() {
+            return None;
+        }
+        self.extra.iter().find(|e| e.name.trim().eq_ignore_ascii_case(name))
+    }
+    /// The gallery rows under theme colour `slot`: exactly its `tints` list where given, else the
+    /// computed tints and shades when `computed_tints`, else none.
+    pub fn slot_variants(&self, slot: SchemeSlot) -> Vec<GalleryVariant> {
+        variants_of(self.get(slot), self.tints.get(&slot).map(Vec::as_slice), self.computed_tints)
+    }
+    /// The gallery rows under extra colour `i` (as for a slot).
+    pub fn extra_variants(&self, i: usize) -> Vec<GalleryVariant> {
+        self.extra.get(i).map(|e| variants_of(e.color, e.tints.as_deref(), self.computed_tints)).unwrap_or_default()
+    }
+}
+
+/// The cells under `base`: exactly the explicit `tints` when there is a list (possibly none), the
+/// [`VARIANT_ROWS`] computed tints and shades when `computed`, nothing otherwise.
+pub fn variants_of(base: Rgba, tints: Option<&[Rgba]>, computed: bool) -> Vec<GalleryVariant> {
+    match tints {
+        Some(list) => list.iter().take(MAX_TINT_ROWS).map(|c| GalleryVariant { color: *c, label: format!("#{}", c.hex()), mods: None }).collect(),
+        None if computed => theme_variants(base)
+            .into_iter()
+            .map(|(mods, label)| GalleryVariant { color: apply(base, &mods), label: label.to_string(), mods: Some(mods) })
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+/// One colour transform, in file units (percentages ×1000, angles ×60000), applied in order.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "op", content = "val")]
+pub enum ColorTransform {
+    Tint(i32),
+    Shade(i32),
+    LumMod(i32),
+    LumOff(i32),
+    SatMod(i32),
+    SatOff(i32),
+    HueMod(i32),
+    HueOff(i32),
+    Alpha(i32),
+    AlphaMod(i32),
+    AlphaOff(i32),
+    Comp,
+    Inv,
+    Gray,
+    RedMod(i32),
+    GreenMod(i32),
+    BlueMod(i32),
+}
+
+impl ColorTransform {
+    pub fn xml_name(&self) -> &'static str {
+        match self {
+            ColorTransform::Tint(_) => "tint",
+            ColorTransform::Shade(_) => "shade",
+            ColorTransform::LumMod(_) => "lumMod",
+            ColorTransform::LumOff(_) => "lumOff",
+            ColorTransform::SatMod(_) => "satMod",
+            ColorTransform::SatOff(_) => "satOff",
+            ColorTransform::HueMod(_) => "hueMod",
+            ColorTransform::HueOff(_) => "hueOff",
+            ColorTransform::Alpha(_) => "alpha",
+            ColorTransform::AlphaMod(_) => "alphaMod",
+            ColorTransform::AlphaOff(_) => "alphaOff",
+            ColorTransform::Comp => "comp",
+            ColorTransform::Inv => "inv",
+            ColorTransform::Gray => "gray",
+            ColorTransform::RedMod(_) => "redMod",
+            ColorTransform::GreenMod(_) => "greenMod",
+            ColorTransform::BlueMod(_) => "blueMod",
+        }
+    }
+    pub fn value(&self) -> Option<i32> {
+        match *self {
+            ColorTransform::Tint(v)
+            | ColorTransform::Shade(v)
+            | ColorTransform::LumMod(v)
+            | ColorTransform::LumOff(v)
+            | ColorTransform::SatMod(v)
+            | ColorTransform::SatOff(v)
+            | ColorTransform::HueMod(v)
+            | ColorTransform::HueOff(v)
+            | ColorTransform::Alpha(v)
+            | ColorTransform::AlphaMod(v)
+            | ColorTransform::AlphaOff(v)
+            | ColorTransform::RedMod(v)
+            | ColorTransform::GreenMod(v)
+            | ColorTransform::BlueMod(v) => Some(v),
+            _ => None,
+        }
+    }
+    pub fn from_xml(name: &str, val: Option<i32>) -> Option<Self> {
+        let v = val.unwrap_or(0);
+        Some(match name {
+            "tint" => ColorTransform::Tint(v),
+            "shade" => ColorTransform::Shade(v),
+            "lumMod" => ColorTransform::LumMod(v),
+            "lumOff" => ColorTransform::LumOff(v),
+            "satMod" => ColorTransform::SatMod(v),
+            "satOff" => ColorTransform::SatOff(v),
+            "hueMod" => ColorTransform::HueMod(v),
+            "hueOff" => ColorTransform::HueOff(v),
+            "alpha" => ColorTransform::Alpha(v),
+            "alphaMod" => ColorTransform::AlphaMod(v),
+            "alphaOff" => ColorTransform::AlphaOff(v),
+            "comp" => ColorTransform::Comp,
+            "inv" => ColorTransform::Inv,
+            "gray" => ColorTransform::Gray,
+            "redMod" => ColorTransform::RedMod(v),
+            "greenMod" => ColorTransform::GreenMod(v),
+            "blueMod" => ColorTransform::BlueMod(v),
+            _ => return None,
+        })
+    }
+}
+
+/// Apply transforms to a base colour.
+pub fn apply(base: Rgba, transforms: &[ColorTransform]) -> Rgba {
+    let mut c = base;
+    for t in transforms {
+        c = apply_one(c, *t);
+    }
+    c
+}
+
+fn pct(v: i32) -> f64 {
+    v as f64 / 100_000.0
+}
+
+fn apply_one(c: Rgba, t: ColorTransform) -> Rgba {
+    match t {
+        // tint: towards white by (1 - value); shade: towards black by (1 - value). Office applies
+        // these in linear light, which keeps mid-tones from washing out.
+        ColorTransform::Tint(v) => {
+            let k = pct(v).clamp(0.0, 1.0);
+            map_linear(c, |x| x * k + (1.0 - k))
+        }
+        ColorTransform::Shade(v) => {
+            let k = pct(v).clamp(0.0, 1.0);
+            map_linear(c, |x| x * k)
+        }
+        ColorTransform::LumMod(v) => {
+            let (h, s, l) = c.to_hsl();
+            Rgba::from_hsl(h, s, l * pct(v), c.a)
+        }
+        ColorTransform::LumOff(v) => {
+            let (h, s, l) = c.to_hsl();
+            Rgba::from_hsl(h, s, l + pct(v), c.a)
+        }
+        ColorTransform::SatMod(v) => {
+            let (h, s, l) = c.to_hsl();
+            Rgba::from_hsl(h, s * pct(v), l, c.a)
+        }
+        ColorTransform::SatOff(v) => {
+            let (h, s, l) = c.to_hsl();
+            Rgba::from_hsl(h, s + pct(v), l, c.a)
+        }
+        ColorTransform::HueMod(v) => {
+            let (h, s, l) = c.to_hsl();
+            Rgba::from_hsl(h * pct(v), s, l, c.a)
+        }
+        ColorTransform::HueOff(v) => {
+            let (h, s, l) = c.to_hsl();
+            Rgba::from_hsl(h + v as f64 / 60_000.0, s, l, c.a)
+        }
+        ColorTransform::Alpha(v) => c.with_alpha((pct(v).clamp(0.0, 1.0) * 255.0).round() as u8),
+        ColorTransform::AlphaMod(v) => c.with_alpha((c.a as f64 * pct(v)).round().clamp(0.0, 255.0) as u8),
+        ColorTransform::AlphaOff(v) => c.with_alpha((c.a as f64 + pct(v) * 255.0).round().clamp(0.0, 255.0) as u8),
+        ColorTransform::Comp => {
+            let (h, s, l) = c.to_hsl();
+            Rgba::from_hsl(h + 180.0, s, l, c.a)
+        }
+        ColorTransform::Inv => Rgba { r: 255 - c.r, g: 255 - c.g, b: 255 - c.b, a: c.a },
+        ColorTransform::Gray => {
+            let y = (0.299 * c.r as f64 + 0.587 * c.g as f64 + 0.114 * c.b as f64).round().clamp(0.0, 255.0) as u8;
+            Rgba { r: y, g: y, b: y, a: c.a }
+        }
+        ColorTransform::RedMod(v) => Rgba { r: (c.r as f64 * pct(v)).round().clamp(0.0, 255.0) as u8, ..c },
+        ColorTransform::GreenMod(v) => Rgba { g: (c.g as f64 * pct(v)).round().clamp(0.0, 255.0) as u8, ..c },
+        ColorTransform::BlueMod(v) => Rgba { b: (c.b as f64 * pct(v)).round().clamp(0.0, 255.0) as u8, ..c },
+    }
+}
+
+fn to_lin(v: u8) -> f64 {
+    let v = v as f64 / 255.0;
+    if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+}
+fn from_lin(v: f64) -> f64 {
+    let v = v.clamp(0.0, 1.0);
+    if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }
+}
+fn map_linear(c: Rgba, f: impl Fn(f64) -> f64) -> Rgba {
+    Rgba::from_f64(from_lin(f(to_lin(c.r))), from_lin(f(to_lin(c.g))), from_lin(f(to_lin(c.b))), c.a as f64 / 255.0)
+}
+
+/// The colour-picker grid shown under each theme colour: lighter 80/60/40%, darker 25/50%
+/// (for dark colours: lighter 90/75/50/25/10%).
+pub fn theme_variants(c: Rgba) -> [(Vec<ColorTransform>, &'static str); 5] {
+    let (_, _, l) = c.to_hsl();
+    if l < 0.2 {
+        [
+            (vec![ColorTransform::LumMod(10000), ColorTransform::LumOff(90000)], "Lighter 90%"),
+            (vec![ColorTransform::LumMod(25000), ColorTransform::LumOff(75000)], "Lighter 75%"),
+            (vec![ColorTransform::LumMod(50000), ColorTransform::LumOff(50000)], "Lighter 50%"),
+            (vec![ColorTransform::LumMod(75000), ColorTransform::LumOff(25000)], "Lighter 25%"),
+            (vec![ColorTransform::LumMod(90000), ColorTransform::LumOff(10000)], "Lighter 10%"),
+        ]
+    } else if l > 0.8 {
+        [
+            (vec![ColorTransform::LumMod(95000)], "Darker 5%"),
+            (vec![ColorTransform::LumMod(85000)], "Darker 15%"),
+            (vec![ColorTransform::LumMod(75000)], "Darker 25%"),
+            (vec![ColorTransform::LumMod(65000)], "Darker 35%"),
+            (vec![ColorTransform::LumMod(50000)], "Darker 50%"),
+        ]
+    } else {
+        [
+            (vec![ColorTransform::LumMod(20000), ColorTransform::LumOff(80000)], "Lighter 80%"),
+            (vec![ColorTransform::LumMod(40000), ColorTransform::LumOff(60000)], "Lighter 60%"),
+            (vec![ColorTransform::LumMod(60000), ColorTransform::LumOff(40000)], "Lighter 40%"),
+            (vec![ColorTransform::LumMod(75000)], "Darker 25%"),
+            (vec![ColorTransform::LumMod(50000)], "Darker 50%"),
+        ]
+    }
+}
+
+/// Standard colours row of the colour picker.
+pub const STANDARD_COLORS: [(Rgba, &str); 10] = [
+    (Rgba::rgb(0xC0, 0x00, 0x00), "Dark Red"),
+    (Rgba::rgb(0xFF, 0x00, 0x00), "Red"),
+    (Rgba::rgb(0xFF, 0xC0, 0x00), "Orange"),
+    (Rgba::rgb(0xFF, 0xFF, 0x00), "Yellow"),
+    (Rgba::rgb(0x92, 0xD0, 0x50), "Light Green"),
+    (Rgba::rgb(0x00, 0xB0, 0x50), "Green"),
+    (Rgba::rgb(0x00, 0xB0, 0xF0), "Light Blue"),
+    (Rgba::rgb(0x00, 0x70, 0xC0), "Blue"),
+    (Rgba::rgb(0x00, 0x20, 0x60), "Dark Blue"),
+    (Rgba::rgb(0x70, 0x30, 0xA0), "Purple"),
+];
+
+/// A preset colour (`a:prstClr/@val`, `ST_PresetColorVal`): every name in [`PRESET_NAMES`], with
+/// the CSS colour of the same name. Case does not matter, and the `dk`, `lt` and `med`
+/// abbreviations are the `dark`, `light` and `medium` names (writers vary both).
+pub fn preset(name: &str) -> Option<Rgba> {
+    let mut lower = name.to_ascii_lowercase();
+    for (short, long) in [("dk", "dark"), ("lt", "light"), ("med", "medium")] {
+        if lower.starts_with(short) && !lower.starts_with(long) {
+            lower.replace_range(..short.len(), long);
+        }
+    }
+    let i = PRESET_RGB.binary_search_by(|(n, _)| (*n).cmp(lower.as_str())).ok()?;
+    PRESET_RGB.get(i).map(|(_, v)| rgb24(*v))
+}
+
+fn rgb24(v: u32) -> Rgba {
+    Rgba::rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
+}
+
+/// The preset colours by lower-case long name, sorted.
+const PRESET_RGB: [(&str, u32); 147] = [
+    ("aliceblue", 0xF0F8FF),
+    ("antiquewhite", 0xFAEBD7),
+    ("aqua", 0x00FFFF),
+    ("aquamarine", 0x7FFFD4),
+    ("azure", 0xF0FFFF),
+    ("beige", 0xF5F5DC),
+    ("bisque", 0xFFE4C4),
+    ("black", 0x000000),
+    ("blanchedalmond", 0xFFEBCD),
+    ("blue", 0x0000FF),
+    ("blueviolet", 0x8A2BE2),
+    ("brown", 0xA52A2A),
+    ("burlywood", 0xDEB887),
+    ("cadetblue", 0x5F9EA0),
+    ("chartreuse", 0x7FFF00),
+    ("chocolate", 0xD2691E),
+    ("coral", 0xFF7F50),
+    ("cornflowerblue", 0x6495ED),
+    ("cornsilk", 0xFFF8DC),
+    ("crimson", 0xDC143C),
+    ("cyan", 0x00FFFF),
+    ("darkblue", 0x00008B),
+    ("darkcyan", 0x008B8B),
+    ("darkgoldenrod", 0xB8860B),
+    ("darkgray", 0xA9A9A9),
+    ("darkgreen", 0x006400),
+    ("darkgrey", 0xA9A9A9),
+    ("darkkhaki", 0xBDB76B),
+    ("darkmagenta", 0x8B008B),
+    ("darkolivegreen", 0x556B2F),
+    ("darkorange", 0xFF8C00),
+    ("darkorchid", 0x9932CC),
+    ("darkred", 0x8B0000),
+    ("darksalmon", 0xE9967A),
+    ("darkseagreen", 0x8FBC8F),
+    ("darkslateblue", 0x483D8B),
+    ("darkslategray", 0x2F4F4F),
+    ("darkslategrey", 0x2F4F4F),
+    ("darkturquoise", 0x00CED1),
+    ("darkviolet", 0x9400D3),
+    ("deeppink", 0xFF1493),
+    ("deepskyblue", 0x00BFFF),
+    ("dimgray", 0x696969),
+    ("dimgrey", 0x696969),
+    ("dodgerblue", 0x1E90FF),
+    ("firebrick", 0xB22222),
+    ("floralwhite", 0xFFFAF0),
+    ("forestgreen", 0x228B22),
+    ("fuchsia", 0xFF00FF),
+    ("gainsboro", 0xDCDCDC),
+    ("ghostwhite", 0xF8F8FF),
+    ("gold", 0xFFD700),
+    ("goldenrod", 0xDAA520),
+    ("gray", 0x808080),
+    ("green", 0x008000),
+    ("greenyellow", 0xADFF2F),
+    ("grey", 0x808080),
+    ("honeydew", 0xF0FFF0),
+    ("hotpink", 0xFF69B4),
+    ("indianred", 0xCD5C5C),
+    ("indigo", 0x4B0082),
+    ("ivory", 0xFFFFF0),
+    ("khaki", 0xF0E68C),
+    ("lavender", 0xE6E6FA),
+    ("lavenderblush", 0xFFF0F5),
+    ("lawngreen", 0x7CFC00),
+    ("lemonchiffon", 0xFFFACD),
+    ("lightblue", 0xADD8E6),
+    ("lightcoral", 0xF08080),
+    ("lightcyan", 0xE0FFFF),
+    ("lightgoldenrodyellow", 0xFAFAD2),
+    ("lightgray", 0xD3D3D3),
+    ("lightgreen", 0x90EE90),
+    ("lightgrey", 0xD3D3D3),
+    ("lightpink", 0xFFB6C1),
+    ("lightsalmon", 0xFFA07A),
+    ("lightseagreen", 0x20B2AA),
+    ("lightskyblue", 0x87CEFA),
+    ("lightslategray", 0x778899),
+    ("lightslategrey", 0x778899),
+    ("lightsteelblue", 0xB0C4DE),
+    ("lightyellow", 0xFFFFE0),
+    ("lime", 0x00FF00),
+    ("limegreen", 0x32CD32),
+    ("linen", 0xFAF0E6),
+    ("magenta", 0xFF00FF),
+    ("maroon", 0x800000),
+    ("mediumaquamarine", 0x66CDAA),
+    ("mediumblue", 0x0000CD),
+    ("mediumorchid", 0xBA55D3),
+    ("mediumpurple", 0x9370DB),
+    ("mediumseagreen", 0x3CB371),
+    ("mediumslateblue", 0x7B68EE),
+    ("mediumspringgreen", 0x00FA9A),
+    ("mediumturquoise", 0x48D1CC),
+    ("mediumvioletred", 0xC71585),
+    ("midnightblue", 0x191970),
+    ("mintcream", 0xF5FFFA),
+    ("mistyrose", 0xFFE4E1),
+    ("moccasin", 0xFFE4B5),
+    ("navajowhite", 0xFFDEAD),
+    ("navy", 0x000080),
+    ("oldlace", 0xFDF5E6),
+    ("olive", 0x808000),
+    ("olivedrab", 0x6B8E23),
+    ("orange", 0xFFA500),
+    ("orangered", 0xFF4500),
+    ("orchid", 0xDA70D6),
+    ("palegoldenrod", 0xEEE8AA),
+    ("palegreen", 0x98FB98),
+    ("paleturquoise", 0xAFEEEE),
+    ("palevioletred", 0xDB7093),
+    ("papayawhip", 0xFFEFD5),
+    ("peachpuff", 0xFFDAB9),
+    ("peru", 0xCD853F),
+    ("pink", 0xFFC0CB),
+    ("plum", 0xDDA0DD),
+    ("powderblue", 0xB0E0E6),
+    ("purple", 0x800080),
+    ("red", 0xFF0000),
+    ("rosybrown", 0xBC8F8F),
+    ("royalblue", 0x4169E1),
+    ("saddlebrown", 0x8B4513),
+    ("salmon", 0xFA8072),
+    ("sandybrown", 0xF4A460),
+    ("seagreen", 0x2E8B57),
+    ("seashell", 0xFFF5EE),
+    ("sienna", 0xA0522D),
+    ("silver", 0xC0C0C0),
+    ("skyblue", 0x87CEEB),
+    ("slateblue", 0x6A5ACD),
+    ("slategray", 0x708090),
+    ("slategrey", 0x708090),
+    ("snow", 0xFFFAFA),
+    ("springgreen", 0x00FF7F),
+    ("steelblue", 0x4682B4),
+    ("tan", 0xD2B48C),
+    ("teal", 0x008080),
+    ("thistle", 0xD8BFD8),
+    ("tomato", 0xFF6347),
+    ("turquoise", 0x40E0D0),
+    ("violet", 0xEE82EE),
+    ("wheat", 0xF5DEB3),
+    ("white", 0xFFFFFF),
+    ("whitesmoke", 0xF5F5F5),
+    ("yellow", 0xFFFF00),
+    ("yellowgreen", 0x9ACD32),
+];
+
+/// A system colour (`a:sysClr/@val`) for a file that gives no `lastClr`: the usual light-theme
+/// value of the common names; `None` for the others.
+pub fn system(name: &str) -> Option<Rgba> {
+    let v = match name {
+        "windowText" | "btnText" | "menuText" | "captionText" | "infoText" => 0x000000,
+        "window" | "menu" | "highlightText" => 0xFFFFFF,
+        "btnFace" | "3dLight" => 0xF0F0F0,
+        "grayText" | "btnShadow" => 0xA0A0A0,
+        "highlight" => 0x0078D7,
+        _ => return None,
+    };
+    Some(rgb24(v))
+}
+
+/// Every preset colour name a file may write (`ST_PresetColorVal`, with the later editions' aliases).
+pub const PRESET_NAMES: [&str; 190] = [
+    "aliceBlue",
+    "antiqueWhite",
+    "aqua",
+    "aquamarine",
+    "azure",
+    "beige",
+    "bisque",
+    "black",
+    "blanchedAlmond",
+    "blue",
+    "blueViolet",
+    "brown",
+    "burlyWood",
+    "cadetBlue",
+    "chartreuse",
+    "chocolate",
+    "coral",
+    "cornflowerBlue",
+    "cornsilk",
+    "crimson",
+    "cyan",
+    "darkBlue",
+    "darkCyan",
+    "darkGoldenrod",
+    "darkGray",
+    "darkGrey",
+    "darkGreen",
+    "darkKhaki",
+    "darkMagenta",
+    "darkOliveGreen",
+    "darkOrange",
+    "darkOrchid",
+    "darkRed",
+    "darkSalmon",
+    "darkSeaGreen",
+    "darkSlateBlue",
+    "darkSlateGray",
+    "darkSlateGrey",
+    "darkTurquoise",
+    "darkViolet",
+    "dkBlue",
+    "dkCyan",
+    "dkGoldenrod",
+    "dkGray",
+    "dkGrey",
+    "dkGreen",
+    "dkKhaki",
+    "dkMagenta",
+    "dkOliveGreen",
+    "dkOrange",
+    "dkOrchid",
+    "dkRed",
+    "dkSalmon",
+    "dkSeaGreen",
+    "dkSlateBlue",
+    "dkSlateGray",
+    "dkSlateGrey",
+    "dkTurquoise",
+    "dkViolet",
+    "deepPink",
+    "deepSkyBlue",
+    "dimGray",
+    "dimGrey",
+    "dodgerBlue",
+    "firebrick",
+    "floralWhite",
+    "forestGreen",
+    "fuchsia",
+    "gainsboro",
+    "ghostWhite",
+    "gold",
+    "goldenrod",
+    "gray",
+    "grey",
+    "green",
+    "greenYellow",
+    "honeydew",
+    "hotPink",
+    "indianRed",
+    "indigo",
+    "ivory",
+    "khaki",
+    "lavender",
+    "lavenderBlush",
+    "lawnGreen",
+    "lemonChiffon",
+    "lightBlue",
+    "lightCoral",
+    "lightCyan",
+    "lightGoldenrodYellow",
+    "lightGray",
+    "lightGrey",
+    "lightGreen",
+    "lightPink",
+    "lightSalmon",
+    "lightSeaGreen",
+    "lightSkyBlue",
+    "lightSlateGray",
+    "lightSlateGrey",
+    "lightSteelBlue",
+    "lightYellow",
+    "ltBlue",
+    "ltCoral",
+    "ltCyan",
+    "ltGoldenrodYellow",
+    "ltGray",
+    "ltGrey",
+    "ltGreen",
+    "ltPink",
+    "ltSalmon",
+    "ltSeaGreen",
+    "ltSkyBlue",
+    "ltSlateGray",
+    "ltSlateGrey",
+    "ltSteelBlue",
+    "ltYellow",
+    "lime",
+    "limeGreen",
+    "linen",
+    "magenta",
+    "maroon",
+    "medAquamarine",
+    "medBlue",
+    "medOrchid",
+    "medPurple",
+    "medSeaGreen",
+    "medSlateBlue",
+    "medSpringGreen",
+    "medTurquoise",
+    "medVioletRed",
+    "mediumAquamarine",
+    "mediumBlue",
+    "mediumOrchid",
+    "mediumPurple",
+    "mediumSeaGreen",
+    "mediumSlateBlue",
+    "mediumSpringGreen",
+    "mediumTurquoise",
+    "mediumVioletRed",
+    "midnightBlue",
+    "mintCream",
+    "mistyRose",
+    "moccasin",
+    "navajoWhite",
+    "navy",
+    "oldLace",
+    "olive",
+    "oliveDrab",
+    "orange",
+    "orangeRed",
+    "orchid",
+    "paleGoldenrod",
+    "paleGreen",
+    "paleTurquoise",
+    "paleVioletRed",
+    "papayaWhip",
+    "peachPuff",
+    "peru",
+    "pink",
+    "plum",
+    "powderBlue",
+    "purple",
+    "red",
+    "rosyBrown",
+    "royalBlue",
+    "saddleBrown",
+    "salmon",
+    "sandyBrown",
+    "seaGreen",
+    "seaShell",
+    "sienna",
+    "silver",
+    "skyBlue",
+    "slateBlue",
+    "slateGray",
+    "slateGrey",
+    "snow",
+    "springGreen",
+    "steelBlue",
+    "tan",
+    "teal",
+    "thistle",
+    "tomato",
+    "turquoise",
+    "violet",
+    "wheat",
+    "white",
+    "whiteSmoke",
+    "yellow",
+    "yellowGreen",
+];
+
+/// Every system colour name a file may write (`ST_SystemColorVal`).
+pub const SYSTEM_NAMES: [&str; 30] = [
+    "scrollBar",
+    "background",
+    "activeCaption",
+    "inactiveCaption",
+    "menu",
+    "window",
+    "windowFrame",
+    "menuText",
+    "windowText",
+    "captionText",
+    "activeBorder",
+    "inactiveBorder",
+    "appWorkspace",
+    "highlight",
+    "highlightText",
+    "btnFace",
+    "btnShadow",
+    "grayText",
+    "btnText",
+    "inactiveCaptionText",
+    "btnHighlight",
+    "3dDkShadow",
+    "3dLight",
+    "infoText",
+    "infoBk",
+    "hotLight",
+    "gradientActiveCaption",
+    "gradientInactiveCaption",
+    "menuHighlight",
+    "menuBar",
+];
+
+/// Whether `name` is a preset colour name a file may write.
+pub fn is_preset_name(name: &str) -> bool {
+    PRESET_NAMES.contains(&name)
+}
+
+/// Whether `name` is a system colour name a file may write.
+pub fn is_system_name(name: &str) -> bool {
+    SYSTEM_NAMES.contains(&name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preset_colours_in_any_case_and_their_dk_lt_spellings() {
+        assert_eq!(preset("red"), Some(Rgba::rgb(255, 0, 0)));
+        assert_eq!(preset("Red"), preset("red"));
+        assert_eq!(preset("dkBlue"), Some(Rgba::rgb(0, 0, 0x8B)));
+        assert_eq!(preset("darkBlue"), preset("dkBlue"));
+        assert_eq!(preset("ltGrey"), Some(Rgba::rgb(0xD3, 0xD3, 0xD3)));
+        assert_eq!(preset("tomato"), Some(Rgba::rgb(0xFF, 0x63, 0x47)));
+        assert_eq!(preset("unknownColor"), None);
+    }
+
+    #[test]
+    fn from_hex_rejects_multiple_hashes() {
+        assert_eq!(Rgba::from_hex("##FF0000"), None);
+        assert_eq!(Rgba::from_hex("####FF0000"), None);
+        assert_eq!(Rgba::from_hex("#FF0000"), Some(Rgba::rgb(255, 0, 0)));
+        assert_eq!(Rgba::from_hex("FF0000"), Some(Rgba::rgb(255, 0, 0)));
+        assert_eq!(Rgba::from_hex("#FF000080"), Some(Rgba::rgba(255, 0, 0, 128)));
+    }
+
+    #[test]
+    fn from_hex_rejects_signs() {
+        assert_eq!(Rgba::from_hex("+12345"), None);
+        assert_eq!(Rgba::from_hex("#+1+2+3"), None);
+        assert_eq!(Rgba::from_hex("+1+2+3+4"), None);
+        assert_eq!(Rgba::from_hex("+12"), None);
+    }
+
+    #[test]
+    fn hex_roundtrip() {
+        assert_eq!(Rgba::from_hex("#156082"), Some(Rgba::rgb(0x15, 0x60, 0x82)));
+        assert_eq!(Rgba::rgb(0x15, 0x60, 0x82).hex(), "156082");
+        assert_eq!(Rgba::from_hex("fff"), Some(Rgba::WHITE));
+        assert_eq!(Rgba::from_hex("zz0000"), None);
+        assert_eq!(Rgba::from_hex("ééé"), None);
+        assert_eq!(Rgba::from_hex(""), None);
+    }
+
+    #[test]
+    fn hsl_roundtrip() {
+        for c in [Rgba::rgb(10, 200, 30), Rgba::rgb(255, 0, 0), Rgba::rgb(128, 128, 128), Rgba::rgb(21, 96, 130)] {
+            let (h, s, l) = c.to_hsl();
+            let d = Rgba::from_hsl(h, s, l, 255);
+            assert!(
+                (d.r as i32 - c.r as i32).abs() <= 1 && (d.g as i32 - c.g as i32).abs() <= 1 && (d.b as i32 - c.b as i32).abs() <= 1,
+                "{c:?} {d:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn transforms() {
+        let c = Rgba::rgb(0x40, 0x80, 0xC0);
+        assert_eq!(apply(c, &[ColorTransform::Alpha(50000)]).a, 128);
+        let lighter = apply(c, &[ColorTransform::LumMod(20000), ColorTransform::LumOff(80000)]);
+        assert!(lighter.luminance() > c.luminance());
+        let darker = apply(c, &[ColorTransform::LumMod(50000)]);
+        assert!(darker.luminance() < c.luminance());
+        assert_eq!(apply(Rgba::WHITE, &[ColorTransform::Shade(0)]), Rgba::BLACK);
+        assert_eq!(apply(Rgba::BLACK, &[ColorTransform::Tint(0)]), Rgba::WHITE);
+        assert_eq!(apply(c, &[ColorTransform::Inv]), Rgba::rgb(0xBF, 0x7F, 0x3F));
+        // hostile values never panic
+        let _ = apply(c, &[ColorTransform::LumMod(i32::MAX), ColorTransform::HueOff(i32::MIN), ColorTransform::AlphaMod(i32::MIN)]);
+    }
+
+    #[test]
+    fn contrast_ratio() {
+        assert!((Rgba::BLACK.contrast(Rgba::WHITE) - 21.0).abs() < 0.01);
+        assert!((Rgba::WHITE.contrast(Rgba::WHITE) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn scheme_slots() {
+        let mut s = ColorScheme::new("t", [Rgba::BLACK; 12]);
+        s.set(SchemeSlot::Accent3, Rgba::WHITE);
+        assert_eq!(s.get(SchemeSlot::Accent3), Rgba::WHITE);
+        assert_eq!(s.get(SchemeSlot::Tx1), Rgba::BLACK);
+        for slot in SchemeSlot::THEME {
+            assert_eq!(SchemeSlot::from_xml(slot.xml_name()), Some(slot));
+        }
+    }
+
+    #[test]
+    fn every_preset_name_has_a_colour_whatever_its_case_or_abbreviation() {
+        for name in PRESET_NAMES {
+            assert!(preset(name).is_some(), "{name}");
+        }
+        assert!(PRESET_RGB.windows(2).all(|w| w[0].0 < w[1].0));
+        assert_eq!(preset("Red"), Some(Rgba::rgb(255, 0, 0)));
+        assert_eq!(preset("dkBlue"), preset("darkBlue"));
+        assert_eq!(preset("darkBlue"), Some(Rgba::rgb(0, 0, 0x8B)));
+        assert_eq!(preset("ltGray"), Some(Rgba::rgb(0xD3, 0xD3, 0xD3)));
+        assert_eq!(preset("medSeaGreen"), Some(Rgba::rgb(0x3C, 0xB3, 0x71)));
+        assert_eq!(preset("green"), Some(Rgba::rgb(0, 0x80, 0)));
+        assert_eq!(preset("notAColor"), None);
+        assert_eq!(preset("dk"), None);
+    }
+
+    #[test]
+    fn common_system_colours_have_a_value_without_last_clr() {
+        assert_eq!(system("window"), Some(Rgba::WHITE));
+        assert_eq!(system("btnFace"), Some(Rgba::rgb(0xF0, 0xF0, 0xF0)));
+        assert_eq!(system("scrollBar"), None);
+    }
+
+    #[test]
+    fn variants_are_the_list_given_else_computed_else_none() {
+        let base = Rgba::rgb(0x4D, 0xA0, 0x60);
+        let computed = variants_of(base, None, true);
+        assert_eq!(computed.len(), VARIANT_ROWS);
+        assert!(computed.iter().all(|v| v.mods.is_some()));
+        assert_eq!(computed[0].label, "Lighter 80%");
+        assert!(variants_of(base, None, false).is_empty(), "no list and no computed rows: nothing");
+        let two = [Rgba::rgb(0xC7, 0xEB, 0xBA), Rgba::rgb(0x0D, 0x4A, 0x21)];
+        for computed in [true, false] {
+            let v = variants_of(base, Some(&two), computed);
+            assert_eq!(v.len(), 2, "exactly the list, no filling");
+            assert_eq!(v[0], GalleryVariant { color: two[0], label: "#C7EBBA".into(), mods: None });
+            assert_eq!(v[1].color, two[1]);
+            assert!(variants_of(base, Some(&[]), computed).is_empty(), "an empty list: no rows");
+        }
+        assert_eq!(variants_of(base, Some(&[Rgba::WHITE; 20]), true).len(), MAX_TINT_ROWS, "a long list is cut");
+        let mut s = ColorScheme::new("t", [base; 12]);
+        s.tints.insert(SchemeSlot::Accent5, two.to_vec());
+        s.tints.insert(SchemeSlot::Accent6, vec![]);
+        assert_eq!(s.slot_variants(SchemeSlot::Accent5).len(), 2);
+        assert!(s.slot_variants(SchemeSlot::Accent6).is_empty());
+        assert_eq!(s.slot_variants(SchemeSlot::Accent4), computed);
+        s.computed_tints = false;
+        assert_eq!(s.slot_variants(SchemeSlot::Accent5).len(), 2);
+        assert!(s.slot_variants(SchemeSlot::Accent4).is_empty());
+    }
+
+    #[test]
+    fn extra_colours_by_name() {
+        let mut s = ColorScheme::new("t", [Rgba::BLACK; 12]);
+        let sand = Rgba::rgb(0xEB, 0xE5, 0xE0);
+        s.extra.push(ExtraColor { name: "Sand".into(), color: sand, tints: Some(vec![Rgba::WHITE]) });
+        assert_eq!(s.extra_color("sand").map(|e| e.color), Some(sand));
+        assert_eq!(s.extra_color(" SAND ").map(|e| e.color), Some(sand));
+        assert_eq!(s.extra_color("Navy"), None);
+        assert_eq!(s.extra_color(""), None);
+        assert_eq!(s.extra_variants(0), vec![GalleryVariant { color: Rgba::WHITE, label: "#FFFFFF".into(), mods: None }]);
+        assert!(s.extra_variants(7).is_empty());
+        s.extra.push(ExtraColor { name: "Navy".into(), color: Rgba::rgb(0, 0, 0x61), tints: None });
+        assert_eq!(s.extra_variants(1).len(), VARIANT_ROWS);
+        s.computed_tints = false;
+        assert!(s.extra_variants(1).is_empty());
+        assert_eq!(s.extra_variants(0).len(), 1);
+    }
+
+    #[test]
+    fn scheme_json_keeps_extras_and_reads_old_files() {
+        let mut s = ColorScheme::new("KTH", [Rgba::WHITE; 12]);
+        s.extra.push(ExtraColor { name: "Sand".into(), color: Rgba::rgb(0xEB, 0xE5, 0xE0), tints: None });
+        s.tints.insert(SchemeSlot::Accent1, vec![Rgba::BLACK; VARIANT_ROWS]);
+        s.tints.insert(SchemeSlot::Accent2, vec![]);
+        s.computed_tints = false;
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"accent1\"") && json.contains("\"computedTints\":false"), "{json}");
+        assert_eq!(serde_json::from_str::<ColorScheme>(&json).unwrap(), s);
+        s.computed_tints = true;
+        assert!(!serde_json::to_string(&s).unwrap().contains("computedTints"), "the default is not written");
+        // A file written before the extension has neither key.
+        let plain = ColorScheme::new("t", [Rgba::BLACK; 12]);
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("extra") && !json.contains("tints"), "{json}");
+        assert_eq!(serde_json::from_str::<ColorScheme>(&json).unwrap(), plain);
+        assert!(plain.computed_tints);
+    }
+}
