@@ -14,6 +14,7 @@ are one crate.
 | `write_exif(&Metadata) -> Vec<u8>` | An Exif block for an exported file. |
 | `tags::tag_rows`, `tags::file_tag_rows` | Every tag with its name and value as text, maker notes included. |
 | `focus::read`, `focus::read_header` | Where the camera focused, from the maker note (Sony), on the upright photo. `read_header` reads only the first kilobytes of a file through a callback. |
+| `recipe_from_exif`, `recipe_from_bytes`, `read_recipe_file` | The Fujifilm in-camera recipe (film simulation, grain, colour chrome, tone, white balance shift and the rest) from the maker note of an Exif block, a whole TIFF, JPEG or RAF, or a file read only as far as its metadata. |
 | `parse_iptc(&[u8]) -> Metadata` | IIM record 2: title (2:5), keywords (2:25), by-line (2:80), copyright (2:116), caption (2:120), date and time created (2:55, 2:60). |
 | `parse_xmp(&str) -> Result<XmpData>` | `Metadata`, every property (`prefix:name`, structs flattened as `a:b/c:d`) and the structured values. `parse_xmp_with` also canonicalises the caller's own namespaces. |
 | `write_xmp(&Metadata) -> String` | A complete `<?xpacket?>` packet. `write_xmp_with` sets the toolkit name and adds simple properties in the caller's namespace. |
