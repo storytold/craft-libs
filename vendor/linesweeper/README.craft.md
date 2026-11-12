@@ -15,6 +15,7 @@ holds `upstream_revision`. `local_patches` describes each local change.
 
 | Change | Code comment label | Touches | Tests |
 |---|---|---|---|
+| The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out | `Craft patch (exited slots)` | `src/sweep/sweep_line.rs` | none |
 | When `b * b` or `a * c` would underflow or overflow, `quadratic_signs` multiplies the coefficients by one power of two before it computes the discriminant, so a cubic with very small or very large y coordinates is split where its y direction turns | `Craft patch (quadratic scale)` | `src/curve/mod.rs` | `curve::test::quadratic_signs_at_extreme_scales` |
 
 Every change here updates this table and `SOURCE.json` in the same commit.

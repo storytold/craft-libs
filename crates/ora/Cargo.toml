@@ -1,0 +1,21 @@
+[package]
+name = "craft-ora"
+description = "OpenRaster documents (.ora): the ZIP archive and the stack.xml layer tree, read with bounded sizes and written."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-xml = { workspace = true }
+thiserror = { workspace = true }
+craft-zip = { workspace = true }
+
+[dev-dependencies]
+# The tests build archives, hostile ones included, by hand.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+craft-zip = { workspace = true, features = ["test-support"] }
