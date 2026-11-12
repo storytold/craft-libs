@@ -53,6 +53,7 @@ const NAMESPACES: &[(&str, &str)] = &[
     ("aux", "http://ns.adobe.com/exif/1.0/aux/"),
     ("lr", "http://ns.adobe.com/lightroom/1.0/"),
     ("Iptc4xmpCore", "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/"),
+    ("Iptc4xmpExt", "http://iptc.org/std/Iptc4xmpExt/2008-02-29/"),
     // Read-only: develop settings written by other raw developers.
     ("crs", CRS_NS),
     // Read-only: face/pet/focus regions written by Lightroom, digiKam, Picasa and others (MWG Region
@@ -100,6 +101,94 @@ pub struct XmpData {
     /// The `x:xmptk` attribute of `x:xmpmeta` (older packets: `x:xaptk` of `x:xapmeta`), the name
     /// of the program that wrote the packet. [`write_xmp_with`] writes [`XmpWrite::toolkit`] there.
     pub toolkit: Option<String>,
+    /// True when the parsed tree, before flattening or merging repeated properties, names an Exif
+    /// GPS property anywhere or holds a place property (see `LOCATION_PROPERTIES`) with non-blank
+    /// text anywhere, including inside array items that [`XmpData::properties`] flattens to their
+    /// text and repeated structs that [`XmpData::values`] keeps only once.
+    pub names_location: bool,
+}
+
+/// Properties that name a place; a blank one is not a location.
+const LOCATION_PROPERTIES: [&str; 7] = [
+    "Iptc4xmpCore:Location",
+    "Iptc4xmpCore:CountryCode",
+    "photoshop:City",
+    "photoshop:State",
+    "photoshop:Country",
+    "Iptc4xmpExt:LocationShown",
+    "Iptc4xmpExt:LocationCreated",
+];
+
+impl XmpData {
+    /// Whether the XMP inventory names GPS or a non-empty place field. LocationShown and
+    /// LocationCreated are IPTC Extension structures; their flattened array entries can be empty
+    /// strings even when their struct children contain a city or coordinates, so inspect their
+    /// retained structured value and flattened child fields as well. Callers that must prove
+    /// absence must check [`Self::properties_truncated`] first.
+    pub fn has_location_metadata(&self) -> bool {
+        const IPTC_LOCATION_STRUCTS: [&str; 2] = ["Iptc4xmpExt:LocationShown", "Iptc4xmpExt:LocationCreated"];
+        // Every flattened child of one LocationShown/LocationCreated root shares its answer.
+        let mut checked_roots: BTreeMap<&str, bool> = BTreeMap::new();
+        if self.names_location {
+            return true;
+        }
+
+        for (key, values) in &self.properties {
+            let parts = key.split('/');
+            if parts.clone().any(is_gps_name) {
+                // Even an isolated/blank GPS property is not proof that GPS was removed.
+                return true;
+            }
+
+            let Some(location_part) = parts.clone().find(|part| LOCATION_PROPERTIES.contains(part)) else {
+                continue;
+            };
+
+            if values.iter().any(|value| !value.trim().is_empty()) {
+                return true;
+            }
+            if IPTC_LOCATION_STRUCTS.contains(&location_part) {
+                // The scope is the path up to the location field itself, so text elsewhere in an
+                // enclosing struct doesn't count as a place.
+                let scope_len =
+                    key.split('/').take_while(|part| *part != location_part).map(|part| part.len() + 1).sum::<usize>() + location_part.len();
+                let scope = key.get(..scope_len).unwrap_or(key);
+                let scope_has_text = *checked_roots.entry(scope).or_insert_with(|| self.location_scope_has_text(scope));
+                if scope_has_text {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Whether a LocationShown/LocationCreated field (a `/`-separated path from a top-level
+    /// property) holds text in its retained structured value or any flattened child. `values`
+    /// keeps the first text-bearing occurrence across RDF descriptions, while flattened child
+    /// properties retain every occurrence.
+    fn location_scope_has_text(&self, scope: &str) -> bool {
+        let mut parts = scope.split('/');
+        let structured = parts.next().and_then(|root| self.values.get(root)).and_then(|value| parts.try_fold(value, |value, part| value.field(part)));
+        if structured.is_some_and(value_has_text) {
+            return true;
+        }
+        let child_prefix = format!("{scope}/");
+        self.properties
+            .range::<str, _>((std::ops::Bound::Included(child_prefix.as_str()), std::ops::Bound::Unbounded))
+            .take_while(|(candidate, _)| candidate.starts_with(&child_prefix))
+            .any(|(_, nested_values)| nested_values.iter().any(|value| !value.trim().is_empty()))
+    }
+
+    /// The GUID of the JPEG Extended XMP continuation the packet announces
+    /// (`xmpNote:HasExtendedXMP`), matched by local name so an undeclared or foreign prefix can't
+    /// hide the announcement. `Some("")` when the announcement is blank.
+    pub fn extended_xmp_guid(&self) -> Option<&str> {
+        self.properties
+            .iter()
+            .find(|(key, _)| !key.contains('/') && key.rsplit([':', '}']).next() == Some("HasExtendedXMP"))
+            .map(|(_, values)| values.first().map_or("", |value| value.trim()))
+    }
 }
 
 impl XmpData {
@@ -145,15 +234,75 @@ impl XmpValue {
     }
 }
 
+/// Whether a structured value holds any non-blank text. A tree larger than the parser's node
+/// budget counts as text-bearing (the conservative answer for a privacy check): parsed trees are
+/// capped at MAX_NODES, so only a caller-built `XmpData` can reach it, and the walk stays bounded.
+fn value_has_text(value: &XmpValue) -> bool {
+    let mut pending = Vec::new();
+    if pending.try_reserve(1).is_err() {
+        return true;
+    }
+    pending.push(value);
+    let mut visited = 0usize;
+    while let Some(value) = pending.pop() {
+        visited = visited.saturating_add(1);
+        if visited > MAX_NODES {
+            return true;
+        }
+        let children = match value {
+            XmpValue::Text(text) if !text.trim().is_empty() => return true,
+            XmpValue::Text(_) => continue,
+            XmpValue::Array(items) => items.len(),
+            XmpValue::Struct(fields) => fields.len(),
+        };
+        if pending.len().saturating_add(children) > MAX_NODES || pending.try_reserve(children).is_err() {
+            return true;
+        }
+        match value {
+            XmpValue::Array(items) => pending.extend(items),
+            XmpValue::Struct(fields) => pending.extend(fields.values()),
+            XmpValue::Text(_) => {}
+        }
+    }
+    false
+}
+
+/// Insert a property into a struct or description map, keeping an earlier text-bearing value when
+/// the same name repeats with a blank one: an IPTC location struct repeated with an empty
+/// `rdf:li` must not hide the place an export's Remove Location has to refuse. `has_text`
+/// remembers each key's answer so every value is walked at most once.
+fn insert_keeping_text(map: &mut BTreeMap<String, XmpValue>, has_text: &mut BTreeMap<String, bool>, key: String, value: XmpValue) {
+    match map.entry(key) {
+        std::collections::btree_map::Entry::Vacant(slot) => {
+            slot.insert(value);
+        }
+        std::collections::btree_map::Entry::Occupied(mut slot) => {
+            let existing_has_text = match has_text.get(slot.key()) {
+                Some(known) => *known,
+                None => value_has_text(slot.get()),
+            };
+            if existing_has_text {
+                has_text.insert(slot.key().clone(), true);
+                return;
+            }
+            let new_has_text = value_has_text(&value);
+            has_text.insert(slot.key().clone(), new_has_text);
+            slot.insert(value);
+        }
+    }
+}
+
+/// A description or struct node as a map of its fields (attributes and child elements).
 fn node_struct(n: &Node) -> XmpValue {
     let mut m = BTreeMap::new();
+    let mut has_text = BTreeMap::new();
     for (k, v) in &n.attrs {
         if !is_rdf_meta_attr(k) {
-            m.insert(k.clone(), XmpValue::Text(v.clone()));
+            insert_keeping_text(&mut m, &mut has_text, k.clone(), XmpValue::Text(v.clone()));
         }
     }
     for c in &n.children {
-        m.insert(c.name.clone(), node_value(c));
+        insert_keeping_text(&mut m, &mut has_text, c.name.clone(), node_value(c));
     }
     XmpValue::Struct(m)
 }
@@ -412,7 +561,7 @@ fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<
             continue;
         }
         let key = format!("{prefix}{k}");
-        if take_property_key(&key, budget, truncated) {
+        if take_key_bytes(&key, budget, truncated) {
             props.entry(key).or_default().push(v.clone());
         }
     }
@@ -422,20 +571,15 @@ fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<
 }
 
 /// Charge one flattened key's length to the key budget; `false` when the budget is spent (the
-/// property is then left out, like other elements a limit has cut).
-fn take_key_bytes(key: &str, budget: &mut usize) -> bool {
+/// property is then left out, like other elements a limit has cut) and the map is marked partial.
+fn take_key_bytes(key: &str, budget: &mut usize, dropped: &mut bool) -> bool {
     let n = key.len();
     if *budget < n {
+        *dropped = true;
         return false;
     }
     *budget -= n;
     true
-}
-
-fn take_property_key(key: &str, budget: &mut usize, truncated: &mut bool) -> bool {
-    let keep = take_key_bytes(key, budget);
-    *truncated |= !keep;
-    keep
 }
 
 fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize, truncated: &mut bool) {
@@ -458,7 +602,7 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
         if arr.name == "rdf:Alt" {
             items.sort_by_key(|(default, _)| !*default);
         }
-        if take_property_key(&key, budget, truncated) {
+        if take_key_bytes(&key, budget, truncated) {
             props.entry(key).or_default().extend(items.into_iter().map(|(_, v)| v));
         }
         return;
@@ -467,7 +611,7 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
     // a struct's path is charged like a key before its fields copy it: that work too is bounded
     // by the budget, kept fields or not
     let is_struct = p.attr("rdf:parseType") == Some("Resource") || p.children.iter().any(|c| c.name == "rdf:Description");
-    if is_struct && !take_key_bytes(&key, budget) {
+    if is_struct && !take_key_bytes(&key, budget, truncated) {
         return;
     }
     if p.attr("rdf:parseType") == Some("Resource") {
@@ -483,14 +627,14 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
     if !field_attrs.is_empty() && p.children.is_empty() && p.text.trim().is_empty() {
         for (k, v) in field_attrs {
             let full = format!("{struct_prefix}{k}");
-            if take_property_key(&full, budget, truncated) {
+            if take_key_bytes(&full, budget, truncated) {
                 props.entry(full).or_default().push(v.clone());
             }
         }
         return;
     }
     let v = p.attr("rdf:resource").map(str::to_string).unwrap_or_else(|| p.text.trim().to_string());
-    if take_property_key(&key, budget, truncated) {
+    if take_key_bytes(&key, budget, truncated) {
         props.entry(key).or_default().push(v);
     }
 }
@@ -503,6 +647,68 @@ fn find_descriptions<'a>(n: &'a Node, out: &mut Vec<&'a Node>) {
     for c in &n.children {
         find_descriptions(c, out);
     }
+}
+
+/// Whether a canonical property name is an Exif GPS property.
+fn is_gps_name(name: &str) -> bool {
+    name.starts_with("exif:GPS") || name.starts_with("exifEX:GPS")
+}
+
+/// Whether the tree names an Exif GPS property anywhere or holds a place property with non-blank
+/// text anywhere. Each node is visited at most twice (a place's subtree is scanned once and not
+/// walked again), and the parser caps the tree at `MAX_NODES`.
+fn tree_names_location(root: &Node) -> bool {
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        if is_gps_name(&node.name) {
+            return true;
+        }
+        for (name, value) in &node.attrs {
+            if is_gps_name(name) || (LOCATION_PROPERTIES.contains(&name.as_str()) && !value.trim().is_empty()) {
+                return true;
+            }
+        }
+        if LOCATION_PROPERTIES.contains(&node.name.as_str()) {
+            if subtree_has_text(node) {
+                return true;
+            }
+            // A blank place may still enclose a GPS property.
+            if subtree_names_gps(node) {
+                return true;
+            }
+            continue;
+        }
+        pending.extend(&node.children);
+    }
+    false
+}
+
+/// Whether a node or any descendant holds non-blank text: element text, an `rdf:resource`, or a
+/// field attribute (RDF syntax attributes such as `rdf:parseType` and `xml:lang` don't count).
+fn subtree_has_text(root: &Node) -> bool {
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        if !node.text.trim().is_empty() {
+            return true;
+        }
+        if node.attrs.iter().any(|(name, value)| (name == "rdf:resource" || !is_rdf_meta_attr(name)) && !value.trim().is_empty()) {
+            return true;
+        }
+        pending.extend(&node.children);
+    }
+    false
+}
+
+/// Whether a node or any descendant is an Exif GPS property, as an element or an attribute.
+fn subtree_names_gps(root: &Node) -> bool {
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        if is_gps_name(&node.name) || node.attrs.iter().any(|(name, _)| is_gps_name(name)) {
+            return true;
+        }
+        pending.extend(&node.children);
+    }
+    false
 }
 
 /// An `exif:GPSLatitude` / `exif:GPSLongitude` pair → (latitude, longitude) in signed degrees; `None`
@@ -805,17 +1011,22 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
 pub fn parse_xmp_with(s: &str, extra: &[XmpNamespace]) -> Result<XmpData, XmpError> {
     let s = s.trim_start_matches('\u{feff}');
     let tree = parse_tree(s, extra)?;
+    let names_location = tree_names_location(&tree);
     let mut descs = Vec::new();
     find_descriptions(&tree, &mut descs);
     let mut props = BTreeMap::new();
     let mut values = BTreeMap::new();
     let mut properties_truncated = false;
+    let mut value_has_text_by_key = BTreeMap::new();
     // One budget for the whole document: several descriptions cannot each spend a fresh one.
     let mut key_budget = MAX_KEY_BYTES;
     for d in descs {
         collect_description(d, "", &mut props, &mut key_budget, &mut properties_truncated);
         if let XmpValue::Struct(m) = node_struct(d) {
-            values.extend(m);
+            // Later descriptions can repeat a property too; the same rule keeps an earlier place.
+            for (key, value) in m {
+                insert_keeping_text(&mut values, &mut value_has_text_by_key, key, value);
+            }
         }
     }
     let first = |k: &str| props.get(k).and_then(|v| v.first()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
@@ -896,7 +1107,7 @@ pub fn parse_xmp_with(s: &str, extra: &[XmpNamespace]) -> Result<XmpData, XmpErr
         .find(|n| n.name == "x:xmpmeta" || n.name == "x:xapmeta")
         .and_then(|n| n.attr("x:xmptk").or_else(|| n.attr("x:xaptk")))
         .map(str::to_string);
-    Ok(XmpData { metadata: m, properties: props, properties_truncated, values, toolkit })
+    Ok(XmpData { metadata: m, properties: props, properties_truncated, values, toolkit, names_location })
 }
 
 fn frac(v: f64) -> String {

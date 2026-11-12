@@ -25,6 +25,9 @@ pub struct Embedded {
     pub xmp: Option<String>,
     /// Extended XMP (JPEG only), reassembled.
     pub xmp_extended: Option<String>,
+    /// The GUID every Extended XMP segment carries, set only when all segments share it and
+    /// their chunks tile exactly the full length they declare (no gap, overlap or excess).
+    pub xmp_extended_guid: Option<String>,
     pub icc: Option<Vec<u8>>,
     /// IPTC-IIM stream.
     pub iptc: Option<Vec<u8>>,
@@ -60,6 +63,7 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
             exif: Some(bytes.to_vec()),
             xmp: ifd0.bytes(tags::XMP).map(|b| String::from_utf8_lossy(b).into_owned()),
             xmp_extended: None,
+            xmp_extended_guid: None,
             icc: ifd0.bytes(tags::ICC_PROFILE).map(|b| b.to_vec()),
             iptc: ifd0.value(tags::IPTC_NAA).map(|v| match v {
                 craft_tiff::Value::Byte(b) | craft_tiff::Value::Undefined(b) => b.clone(),
@@ -96,6 +100,8 @@ fn jpeg_segments_inner(b: &[u8], collect_all_xmp: bool) -> (Embedded, Vec<String
     let mut icc_total = None;
     let mut icc_invalid = false;
     let mut ext: Vec<(u32, Vec<u8>)> = Vec::new();
+    // GUID and declared full length of every Extended XMP segment, to verify they belong together
+    let mut ext_headers: Vec<(&[u8], u32)> = Vec::new();
     let mut i = 2usize;
     while i + 4 <= b.len() {
         if b[i] != 0xff {
@@ -138,7 +144,9 @@ fn jpeg_segments_inner(b: &[u8], collect_all_xmp: bool) -> (Embedded, Vec<String
                 // GUID (32) + full length (4) + offset (4) + data
                 let p = &payload[XMP_EXT_SIG.len()..];
                 if p.len() >= 40 {
+                    let full = u32::from_be_bytes([p[32], p[33], p[34], p[35]]);
                     let off = u32::from_be_bytes([p[36], p[37], p[38], p[39]]);
+                    ext_headers.push((&p[..32], full));
                     ext.push((off, p[40..].to_vec()));
                 }
             }
@@ -203,9 +211,27 @@ fn jpeg_segments_inner(b: &[u8], collect_all_xmp: bool) -> (Embedded, Vec<String
     }
     if !ext.is_empty() {
         ext.sort_by_key(|p| p.0);
+        out.xmp_extended_guid = verified_extension_guid(&ext_headers, &ext);
         out.xmp_extended = Some(String::from_utf8_lossy(&ext.into_iter().flat_map(|p| p.1).collect::<Vec<u8>>()).into_owned());
     }
     (out, xmp_packets)
+}
+
+/// The GUID shared by all Extended XMP segments when their offset-sorted chunks are contiguous from
+/// zero and add up to the full length every segment declares; `None` otherwise.
+fn verified_extension_guid(headers: &[(&[u8], u32)], chunks_by_offset: &[(u32, Vec<u8>)]) -> Option<String> {
+    let (&(guid, full), rest) = headers.split_first()?;
+    if rest.iter().any(|&(other_guid, other_full)| other_guid != guid || other_full != full) {
+        return None;
+    }
+    let mut next = 0u64;
+    for (offset, data) in chunks_by_offset {
+        if u64::from(*offset) != next {
+            return None;
+        }
+        next = next.checked_add(u64::try_from(data.len()).ok()?)?;
+    }
+    (next == u64::from(full)).then(|| String::from_utf8_lossy(guid).into_owned())
 }
 
 /// IPTC-IIM block (resource 0x0404) from a Photoshop image-resource stream (`8BIM` records).
@@ -595,6 +621,28 @@ mod tests {
             j.extend(seg(0xe1, &p));
         }
         assert_eq!(jpeg_segments(&j).xmp_extended.as_deref(), Some("helloworld"));
+        assert_eq!(jpeg_segments(&j).xmp_extended_guid, Some("A".repeat(32)));
+    }
+
+    /// A GUID mix, a short chunk set or a wrong declared length leaves the extension unverified.
+    #[test]
+    fn jpeg_extended_xmp_guid_needs_matching_segments_and_length() {
+        let build = |segments: &[(u8, u32, u32, &[u8])]| {
+            let mut j = vec![0xff, 0xd8];
+            for &(guid, full, off, part) in segments {
+                let mut p = XMP_EXT_SIG.to_vec();
+                p.extend_from_slice(&[guid; 32]);
+                p.extend_from_slice(&full.to_be_bytes());
+                p.extend_from_slice(&off.to_be_bytes());
+                p.extend_from_slice(part);
+                j.extend(seg(0xe1, &p));
+            }
+            jpeg_segments(&j).xmp_extended_guid
+        };
+        assert!(build(&[(b'A', 10, 0, b"hello"), (b'B', 10, 5, b"world")]).is_none(), "two GUIDs");
+        assert!(build(&[(b'A', 10, 0, b"hello")]).is_none(), "half the declared length");
+        assert!(build(&[(b'A', 9, 0, b"hello"), (b'A', 9, 5, b"world")]).is_none(), "longer than declared");
+        assert!(build(&[(b'A', 10, 0, b"hello"), (b'A', 10, 4, b"oworl")]).is_none(), "overlapping chunks");
     }
 
     #[test]
