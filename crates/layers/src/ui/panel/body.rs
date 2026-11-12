@@ -6,7 +6,7 @@ mod rows;
 
 use map::map_events;
 pub(in crate::ui::panel) use map::start_rename;
-pub(in crate::ui::panel) use rows::{LayerRows, ToggleSweeps, extra_parts, reveal_plan};
+pub(in crate::ui::panel) use rows::{LayerRows, ToggleSweeps, extra_parts, reveal_plan, thumb_click_replaces_select};
 use rows::{RevealPlan, list_selection};
 
 use craft_behavior::{ColumnWidth, IconId};
@@ -20,7 +20,7 @@ use egui::Ui;
 
 use super::Session;
 use super::context::PanelContext;
-use super::drag::{LayersDrag, accepts_drop, accepts_mask_drop, layer_drop};
+use super::drag::{LayersDrag, accepts_drop, accepts_part_drop, layer_drop};
 use super::events::{LayerDrop, LayerMove, LayersEvent};
 use super::row::{EYE, LOCK, NAME, build_row};
 use crate::ui::tree::{LayerRowKey, LayerTree};
@@ -85,7 +85,7 @@ pub(super) fn show_body<T: LayerTree>(
         })
         .drag_payload(|drag: &ListDrag<LayerRowKey<T::Id>>| Some(LayersDrag::of_rows(drag)))
         .takes_drop(DropKind::new(DropPlace::Onto, move |drag: &LayersDrag<T::Id>, at: &DropAt<LayerRowKey<T::Id>>| {
-            accepts_mask_drop(tree, list_id, drag, at)
+            accepts_part_drop(tree, list_id, drag, at)
         }));
     if let Some(key) = reveal_key {
         list = list.reveal(key);

@@ -2,6 +2,7 @@
 
 #[cfg(doc)]
 use super::ListRow;
+use super::RowDragSpot;
 use super::thumb::ThumbTarget;
 use super::trailing::TrailingPart;
 use crate::contract::{ItemOutput, NoValue, OpenChange, Outcome};
@@ -31,9 +32,9 @@ pub enum RowEvent {
         /// click, reported after the single click's own report. An activation by key or AccessKit counts 1.
         clicks: u32,
     },
-    /// A drag started on a thumbnail of a row with [`ListRow::thumb_drag`] for it: the thumbnail is dragged, not the
-    /// row, and the drag session runs with the payload given.
-    ThumbDrag(ThumbTarget),
+    /// A drag started on a part of a row with [`ListRow::part_drag`] for it: the part is dragged, not the row, and
+    /// the drag session runs with the payload given.
+    PartDrag(RowDragSpot),
     /// A trailing part ([`ListRow::trailing_part`]) was activated; the selection is unchanged.
     #[non_exhaustive]
     Trailing {

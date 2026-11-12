@@ -1,10 +1,11 @@
 //! One layer row: `LayerInfo` to `ListRow` (eye, thumbnails, kind icon, masks, brackets, trailing
 //! parts, sub-rows).
 
-use craft_behavior::{ColumnKey, IconId};
+use craft_behavior::{ColumnKey, Cursor, CursorBadge, CursorIcon, IconId, PaintedCursor};
+use craft_keymap::Mods;
 use craft_theme::{LabelColor, Rgba, Srgba};
 use craft_ui::contract::Props as _;
-use craft_ui::list::{ListRow, RowInk, ThumbSize, ThumbTarget, ToggleCell, TrailingFace, TrailingPart};
+use craft_ui::list::{ListRow, RowDragSpot, RowInk, ThumbSize, ThumbTarget, ToggleCell, TrailingFace, TrailingPart};
 use craft_ui::primitives::textures::{Priority, ThumbPaint as PicturePaint, ThumbRequest};
 use craft_ui::primitives::{ContentPainterCx, IconSpec};
 use craft_ui::runtime::env::Label;
@@ -13,7 +14,7 @@ use egui::emath::GuiRounding as _;
 use egui::{Color32, Rect, Stroke, pos2, vec2};
 
 use super::LayersPanelWords;
-use super::body::extra_parts;
+use super::body::{extra_parts, thumb_click_replaces_select};
 use super::context::{PanelContext, ThumbHost};
 use super::drag::LayersDrag;
 use crate::ui::thumbs::LayerThumb;
@@ -32,6 +33,8 @@ pub(super) const LOCK_PART: u16 = 0;
 pub(super) const FX_PART: u16 = 1;
 /// A Smart Filter's trailing Blending Options button.
 pub(super) const OPTIONS_PART: u16 = 2;
+/// The trailing `fx` badge: a drag handle that carries the layer's effects.
+pub(super) const FX_BADGE: u16 = 3;
 
 /// The cross over a disabled mask is a fixed data colour, like the label colours.
 const DISABLED_MASK: LabelColor = LabelColor::Red;
@@ -47,6 +50,24 @@ const TYPE_INK: Color32 = Color32::from_rgb(0x28, 0x28, 0x28);
 /// A data colour as the painter takes it.
 pub(super) fn paint_color(color: Rgba) -> Color32 {
     Color32::from(Srgba::from(color))
+}
+
+/// The cursor over a thumbnail a Cmd/Ctrl click with `mods` loads as a selection: the pointing hand, with the mark of
+/// the operation Shift and Alt pick (add, subtract, intersect).
+fn load_cursor(mods: Mods) -> Cursor {
+    let badge = match (mods.shift, mods.alt) {
+        (true, true) => CursorBadge::Intersect,
+        (true, false) => CursorBadge::Add,
+        (false, true) => CursorBadge::Subtract,
+        (false, false) => return Cursor::System(CursorIcon::PointingHand),
+    };
+    Cursor::Painted(PaintedCursor::badged(CursorIcon::PointingHand, badge))
+}
+
+/// `row` with the load cursor on its thumbnail `target` showing `part`, while Cmd/Ctrl is held and a click there loads
+/// a selection.
+fn with_load_cursor<'r>(row: ListRow<'r>, held: Mods, target: ThumbTarget, part: LayerPart, info: &LayerInfo) -> ListRow<'r> {
+    if held.cmd && thumb_click_replaces_select(part, held, info) { row.thumb_cursor(target, load_cursor(held)) } else { row }
 }
 
 /// `pattern` with `{row}` replaced by `row`.
@@ -243,6 +264,8 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
             }
         });
         let frame = info.kind == LayerKind::Frame;
+        let first = if frame { LayerPart::FrameShape } else { LayerPart::Pixels };
+        row = with_load_cursor(row, cx.held, ThumbTarget::First, first, &info);
         if frame {
             let layer = id.clone();
             row = row.extra_thumb(move |painter, rect| {
@@ -250,6 +273,7 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
                     paint_kind_tile(painter, rect, LayerKind::Frame);
                 }
             });
+            row = with_load_cursor(row, cx.held, ThumbTarget::Extra(0), LayerPart::FrameContent, &info);
         }
         let masks_from = usize::from(frame);
         for (at, mask) in info.masks.iter().enumerate() {
@@ -261,7 +285,9 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
             let word = if part == LayerPart::VectorMask { &words.vector_mask } else { &words.layer_mask };
             let pattern = if mask.linked { &words.unlink_mask } else { &words.link_mask };
             row = row.thumb_link(mask.linked, craft_i18n::fmt(pattern.as_str(), &[("mask", word.as_str()), ("layer", info.name.as_str())]));
-            row = row.thumb_drag(ThumbTarget::Extra(masks_from + at), LayersDrag::new(cx.list, vec![LayerRowKey::Mask(id.clone(), part)]));
+            let target = ThumbTarget::Extra(masks_from + at);
+            row = row.part_drag(RowDragSpot::Thumb(target), LayersDrag::new(cx.list, vec![LayerRowKey::Mask(id.clone(), part)]));
+            row = with_load_cursor(row, cx.held, target, part, &info);
         }
         if active {
             let extra = |part: LayerPart| extra_parts(&info).iter().position(|held| *held == part).map(ThumbTarget::Extra);
@@ -293,7 +319,11 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
         row = row.trailing_icon(IconSpec::svg(IconId::new("smart_filters")), words.smart_filters.clone());
     }
     if info.has_effects {
-        row = row.trailing_strong(words.fx.clone(), words.has_effects.clone());
+        // The badge drags every effect of the layer (Photoshop); a click on it is a click on the row.
+        let badge = TrailingPart::new(FX_BADGE);
+        row = row
+            .trailing_part(badge, TrailingFace::Strong(words.fx.clone()), words.has_effects.clone())
+            .part_drag(RowDragSpot::Trailing(badge), LayersDrag::new(cx.list, vec![LayerRowKey::Effects(id.clone(), None)]));
     }
     if info.linked {
         row = row.trailing_icon(IconSpec::svg(IconId::new("link")), words.linked.clone());
@@ -336,6 +366,7 @@ fn sub_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id, group: Sub
         if cx.selection.active.as_ref() == Some(id) && cx.selection.target == LayerPart::FilterMask {
             row = row.thumb_target(ThumbTarget::First);
         }
+        row = with_load_cursor(row, cx.held, ThumbTarget::First, LayerPart::FilterMask, &cx.tree.info(id));
     } else if let Some(icon) = sub.icon {
         row = row.icon(IconSpec::svg(icon));
     }

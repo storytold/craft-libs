@@ -34,6 +34,8 @@ pub enum TrailingFace {
         /// Whether the section is open.
         open: bool,
     },
+    /// A short text in the caption role's semibold face, as wide as it measures (a layer's `fx`).
+    Strong(Label),
 }
 
 impl TrailingFace {

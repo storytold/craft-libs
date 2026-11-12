@@ -14,6 +14,7 @@ use craft_theme::LabelColor;
 use craft_ui::contract::{Entry, ReorderMove};
 
 use super::filter::{EffectKind, LayerFilter, SmartSource};
+use super::panel::MenuTarget;
 
 /// The app's view of its layers, built per pass over its document (no copies of the layers).
 ///
@@ -92,6 +93,13 @@ pub trait LayerTree {
     fn accepts_mask_drop(&self, from: &Self::Id, part: LayerPart, to: &Self::Id) -> bool {
         let _ = from;
         !self.info(to).masks.iter().any(|mask| mask.part == part)
+    }
+
+    /// Whether the row menu opened at `target`, a layer row, ends with the Label Color submenu (the eye menu's
+    /// colours). By default the row's own menu has it and a thumbnail's menu, which is the host's own, has none;
+    /// PhotoCraft keeps it on the thumbnails of layers whose thumbnail opens the layer menu (type, shape, fill).
+    fn label_colors_in_menu(&self, target: &MenuTarget<Self::Id>) -> bool {
+        target.part.is_none()
     }
 
     /// The layer under the pointer on the canvas, drawn with the list's hover look.

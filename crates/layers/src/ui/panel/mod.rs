@@ -152,8 +152,10 @@ impl<Id> Default for Session<Id> {
 /// - **Pointer**: clicks select (Cmd/Ctrl toggles, Shift extends, the empty space clears), the eye
 ///   and lock columns sweep, Alt-click on an eye shows only that layer, the eye's right-click opens
 ///   its colour menu, a modified thumbnail click is a [`LayersEvent::ThumbClick`], double clicks
-///   rename or activate, rows drag to reorder (Alt copies) and onto the footer, and a mask thumbnail drags onto
-///   another layer's row to move the mask there (Alt copies).
+///   rename or activate, rows drag to reorder (Alt copies) and onto the footer, a mask thumbnail drags onto
+///   another layer's row to move the mask there and the `fx` badge to move every effect (Alt copies). The empty space's
+///   right-click opens the host's menu for no row ([`MenuTarget::row`] `None`). With Cmd/Ctrl held over a thumbnail
+///   that loads a selection, the cursor is the pointing hand with the operation's mark.
 /// - **Right to left**: the list and the footer mirror.
 #[must_use = "show the panel with `show`"]
 #[derive(craft_ui::contract::Pattern)]
@@ -169,7 +171,6 @@ pub struct LayersPanel<'a, T: LayerTree> {
     filter_bar: bool,
     find_name: bool,
     row_menu: Option<Box<RowMenu<'a, T::Id>>>,
-    row_label_colors: bool,
     trailing: Option<Box<dyn TrailingCell<T::Id> + 'a>>,
     reveal: Option<T::Id>,
     rename: Option<T::Id>,
@@ -214,7 +215,6 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             filter_bar: true,
             find_name: false,
             row_menu: None,
-            row_label_colors: true,
             trailing: None,
             reveal: None,
             rename: None,
@@ -284,14 +284,6 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
         self
     }
 
-    /// Ends the row menu of a layer row with the Label Color submenu (default on): the eye menu's colours, for the
-    /// selected layers when the menu acts on the selection; a pick is [`LayersEvent::LabelColor`]. A thumbnail's menu
-    /// and the effects and Smart Filter rows' menus have none.
-    pub fn row_label_colors(mut self, on: bool) -> Self {
-        self.row_label_colors = on;
-        self
-    }
-
     /// The host's component at each layer row's trailing end, after the indicators and never dropped for the name
     /// (Illustrator's target circle, a selection square): `build` makes the layer's component and `output` gets what
     /// it reports, with the layer, in the pass it is shown.
@@ -328,7 +320,6 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             filter_bar,
             find_name,
             row_menu,
-            row_label_colors,
             trailing,
             reveal,
             rename,
@@ -350,6 +341,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             lock_column,
             visibility_key,
             trailing: trailing.as_deref(),
+            held: craft_ui::runtime::pointer::frame(ui.ctx()).mods,
         };
         let events = RefCell::new(Vec::new());
         let current = RefCell::new(LayerFilter::default());
@@ -401,7 +393,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
                     start_rename(ui, list, layer);
                 }
                 let body = show_body(ui, &cx, &rows, session, &plan, rows.filtered, &unlock_label);
-                let menus = show_row_menus(ui, &cx, &body.response, row_menu.as_deref(), row_label_colors, session);
+                let menus = show_row_menus(ui, &cx, &body.response, row_menu.as_deref(), session);
                 let mut reported = body.events;
                 reported.extend(menus);
                 while let Some((key, _)) = stack.take_command::<LayersPanelKeys>() {

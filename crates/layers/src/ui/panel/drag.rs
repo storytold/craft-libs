@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use super::LayersPanelCommands;
 use super::events::{LayerDrop, LayerMove, LayerPosition, LayersEvent, MaskMove, RowTransfer, SubRowMove};
-use crate::ui::tree::{LayerKind, LayerPart, LayerRowKey, LayerTree, SubRowGroup};
+use crate::ui::tree::{LayerKind, LayerRowKey, LayerTree, SubRowGroup};
 
 /// What a drag from the Layers panel carries for the drop targets outside its rows: the footer buttons, the rows
 /// that take a mask, and the app's own targets (a document tab that copies the dragged layers into its document).
@@ -155,27 +155,41 @@ pub(super) fn accepts_drop<T: LayerTree>(
     }
 }
 
-/// The mask a drag of `list` carries and the layer row it is over, when that row is another layer's.
-fn mask_onto<'d, K: PartialEq>(list: egui::Id, drag: &'d LayersDrag<K>, at: &'d DropAt<LayerRowKey<K>>) -> Option<(&'d K, LayerPart, &'d K)> {
-    let (DropAt::Onto(LayerRowKey::Layer(to)), [LayerRowKey::Mask(from, part)]) = (at, drag.keys.as_slice()) else { return None };
-    (drag.list == list && to != from).then_some((from, *part, to))
+/// What a drag of the panel's own part (a mask thumbnail, the `fx` badge) means over the row `at`: the drop it makes
+/// there, `None` unless the row is another layer's and the drag started in `list`.
+fn part_drop<K: Clone + PartialEq>(list: egui::Id, drag: &LayersDrag<K>, at: &DropAt<LayerRowKey<K>>, copy: bool) -> Option<LayerDrop<K>> {
+    let DropAt::Onto(LayerRowKey::Layer(to)) = at else { return None };
+    if drag.list != list {
+        return None;
+    }
+    match drag.keys.as_slice() {
+        [LayerRowKey::Mask(from, part)] if from != to => Some(LayerDrop::Mask(MaskMove::new(from.clone(), *part, to.clone(), copy))),
+        [effects @ LayerRowKey::Effects(from, None)] if from != to => {
+            Some(LayerDrop::Transfer(RowTransfer { rows: vec![effects.clone()], to: to.clone(), copy }))
+        }
+        _ => None,
+    }
 }
 
-/// Whether the mask thumbnail a drag of the rows' list `list` carries may land on the row under the pointer.
-pub(super) fn accepts_mask_drop<T: LayerTree>(tree: &T, list: egui::Id, drag: &LayersDrag<T::Id>, at: &DropAt<LayerRowKey<T::Id>>) -> bool {
-    mask_onto(list, drag, at).is_some_and(|(from, part, to)| tree.accepts_mask_drop(from, part, to))
+/// Whether the row under the pointer takes a drag of the rows' list `list` that is not a row drag: a mask thumbnail
+/// where the tree takes the mask, the `fx` badge on any other layer.
+pub(super) fn accepts_part_drop<T: LayerTree>(tree: &T, list: egui::Id, drag: &LayersDrag<T::Id>, at: &DropAt<LayerRowKey<T::Id>>) -> bool {
+    match part_drop(list, drag, at, false) {
+        Some(LayerDrop::Mask(mv)) => tree.accepts_mask_drop(&mv.layer, mv.part, &mv.to),
+        Some(_) => true,
+        None => false,
+    }
 }
 
-/// The drop a mask thumbnail makes on the row it was released over, one `Set` named `label`.
-pub(super) fn mask_drop_event<K: Clone + PartialEq>(
+/// The drop a mask thumbnail or the `fx` badge makes on the row it was released over, one `Set` named `label`.
+pub(super) fn part_drop_event<K: Clone + PartialEq>(
     list: egui::Id,
     drag: &LayersDrag<K>,
     at: &DropAt<LayerRowKey<K>>,
     op: DropOperation,
     label: Arc<str>,
 ) -> Option<LayersEvent<K>> {
-    let (from, part, to) = mask_onto(list, drag, at)?;
-    let drop = LayerDrop::Mask(MaskMove::new(from.clone(), part, to.clone(), op == DropOperation::Copy));
+    let drop = part_drop(list, drag, at, op == DropOperation::Copy)?;
     Some(LayersEvent::Drop(EditEvent::set(Mixed::Mixed, drop, label, None)))
 }
 

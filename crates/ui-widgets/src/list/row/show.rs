@@ -7,7 +7,7 @@ use super::placement::{Sizes, lead_run};
 use super::style::{FillKey, ListRowStyle, RowForm, fill_of, row_ink_of, selected_outline};
 use super::thumb::{RowThumb, target_at};
 use super::trailing::{HostedSize, TrailingFace, TrailingItem, TrailingPart, below_key, cell_key, field_key};
-use super::{ListRow, RowInk};
+use super::{ListRow, RowDragSpot, RowInk};
 use crate::contract::{
     Access, Bind, Component, Cx, DragPreview, Focus as _, MeasureCx, Name, OpenChange, PaintUi, PartsCx, Pointer as _, Props as _, Role, RowPressed,
     Styled as _, WordSetCx as _,
@@ -257,13 +257,22 @@ impl Component for ListRow<'_> {
                 TrailingItem::Icon { name, .. } => {
                     cx.part(TRAILING_ICON.at(at as u64), shape).tooltip(name.clone());
                 }
-                TrailingItem::Part { part, name, enabled: true, .. } => {
-                    let name = self.part_name(*part, name, &cx.words::<ListWords>(), cx.resolved.label);
-                    cx.part(TRAILING.at(u64::from(part.0)), shape).sense(Sense::CLICK | Sense::FOCUS).focusable().tooltip(name);
-                    focusable = true;
-                }
-                TrailingItem::Part { part, name, enabled: false, .. } => {
-                    cx.part(TRAILING.at(u64::from(part.0)), shape).tooltip(name.clone());
+                TrailingItem::Part { part, face, name, enabled, .. } => {
+                    // A text face takes its whole slot; the other faces the icon square in it.
+                    let shape = if matches!(face, TrailingFace::Strong(_)) { *slot } else { shape };
+                    let key = TRAILING.at(u64::from(part.0));
+                    if self.drag_at(RowDragSpot::Trailing(*part)).is_some() {
+                        cx.part(key, shape)
+                            .sense(Sense::CLICK | Sense::DRAG | Sense::PICKS_ITEM)
+                            .pointer_only("A drag handle is a pointer target; a click on it is a click on the row")
+                            .tooltip(name.clone());
+                    } else if *enabled {
+                        let name = self.part_name(*part, name, &cx.words::<ListWords>(), cx.resolved.label);
+                        cx.part(key, shape).sense(Sense::CLICK | Sense::FOCUS).focusable().tooltip(name);
+                        focusable = true;
+                    } else {
+                        cx.part(key, shape).tooltip(name.clone());
+                    }
                 }
             }
         }
@@ -272,9 +281,13 @@ impl Component for ListRow<'_> {
         }
         let thumbs = placed.first.into_iter().chain(placed.extras.iter().map(|(thumb, _)| *thumb));
         for (at, thumb) in thumbs.enumerate() {
+            let target = target_at(at);
             let sense =
-                if self.drags.iter().any(|(held, _)| *held == target_at(at)) { Sense::CLICK | Sense::DRAG } else { Sense::CLICK } | Sense::PICKS_ITEM;
-            cx.part(THUMB.at(at as u64), thumb).sense(sense).pointer_only("A thumbnail is a pointer target; the keys act on the row");
+                if self.drag_at(RowDragSpot::Thumb(target)).is_some() { Sense::CLICK | Sense::DRAG } else { Sense::CLICK } | Sense::PICKS_ITEM;
+            let part = cx.part(THUMB.at(at as u64), thumb).sense(sense).pointer_only("A thumbnail is a pointer target; the keys act on the row");
+            if let Some((_, cursor)) = self.cursors.iter().find(|(held, _)| *held == target) {
+                part.cursor(cursor.clone());
+            }
         }
         if let (Some(slot), Some(_)) = (placed.icon, &self.lead_text) {
             let rect = Rect::from_x_y_ranges(slot.x_range(), rect.y_range());
@@ -318,11 +331,10 @@ impl Component for ListRow<'_> {
             let Some(result) = cx.part_if_declared(THUMB.at(at as u64)) else { continue };
             let target = target_at(at);
             let phase = result.press.phase;
-            let drag = self.drags.iter().find(|(held, _)| *held == target);
-            if let (PressPhase::DragStart { .. }, Some((_, payload))) = (phase, drag) {
+            if let (PressPhase::DragStart { .. }, Some(payload)) = (phase, self.drag_at(RowDragSpot::Thumb(target))) {
                 let preview = DragPreview::frame(self.thumb_size(&cx.style.sizes), None);
                 crate::runtime::drag::start(&cx.ctx, cx.id, payload.clone(), None, preview);
-                self.event = Some(RowEvent::ThumbDrag(target));
+                self.event = Some(RowEvent::PartDrag(RowDragSpot::Thumb(target)));
             } else if let Some(source) = cx.part_activated(THUMB.at(at as u64)) {
                 let clicks = part_clicks(source, phase);
                 self.event = Some(RowEvent::ThumbClicked { target, mods: part_mods(cx, THUMB.at(at as u64), source), clicks });
@@ -337,6 +349,17 @@ impl Component for ListRow<'_> {
         for trailing in &self.trailing {
             let TrailingItem::Part { part, .. } = &trailing.item else { continue };
             let key = TRAILING.at(u64::from(part.0));
+            if let Some(payload) = self.drag_at(RowDragSpot::Trailing(*part)) {
+                // A handle's click is the row's: only its drag is its own.
+                if let Some(result) = cx.part_if_declared(key)
+                    && matches!(result.press.phase, PressPhase::DragStart { .. })
+                {
+                    let preview = DragPreview::frame(result.rect.size(), None);
+                    crate::runtime::drag::start(&cx.ctx, cx.id, payload.clone(), None, preview);
+                    self.event = Some(RowEvent::PartDrag(RowDragSpot::Trailing(*part)));
+                }
+                continue;
+            }
             if let Some(source) = cx.part_activated(key) {
                 if *part == TrailingPart::MENU {
                     self.menu = Some(cx.part(key).rect);
@@ -370,8 +393,11 @@ impl Component for ListRow<'_> {
             (None, None) => Name::FromLabel,
         };
         access.name(name);
+        // A drag handle is no button: its name is part of the row's description, as a mark's is.
+        let handle = |part: &TrailingPart| self.drag_at(RowDragSpot::Trailing(*part)).is_some();
         let icons = self.trailing.iter().filter_map(|trailing| match &trailing.item {
             TrailingItem::Icon { name, .. } | TrailingItem::Text { name: Some(name), .. } => Some(name.as_str().to_owned()),
+            TrailingItem::Part { part, name, .. } if handle(part) => Some(name.as_str().to_owned()),
             _ => None,
         });
         let percent = self.progress.map(|fraction| cx.format().percent(f64::from(Progress::clamped(fraction)), 0));
@@ -437,6 +463,7 @@ impl Component for ListRow<'_> {
         for (at, trailing) in self.trailing.iter().enumerate() {
             match &trailing.item {
                 TrailingItem::Text { .. } | TrailingItem::Hosted(_) => {}
+                TrailingItem::Part { part, .. } if handle(part) => {}
                 TrailingItem::Icon { name, .. } => {
                     access.node(TRAILING_ICON.at(at as u64), Role::IMAGE).name = Name::Text(name.as_str().to_owned());
                 }

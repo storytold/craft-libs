@@ -4,7 +4,7 @@ use super::ListRow;
 use super::show::named;
 use super::style::ListRowStyle;
 use super::thumb::{Thumb, ThumbSize};
-use super::trailing::{TrailingItem, trailing_run};
+use super::trailing::{TrailingFace, TrailingItem, trailing_run};
 use crate::contract::{ColumnAlign, PartsCx, RowHeight, WordSetCx as _};
 use crate::layout::{ShrinkOrder, ShrinkUnit, shrink_widths};
 use crate::list::toggle::ToggleState;
@@ -270,6 +270,7 @@ impl ListRow<'_> {
     pub(super) fn widths(&self, sizes: &Sizes, text_width: &dyn Fn(&TextRun<'_>) -> f32) -> Widths {
         let width = |item: &TrailingItem| match item {
             TrailingItem::Text { text, strong, .. } => text_width(&trailing_run(text, *strong)),
+            TrailingItem::Part { face: TrailingFace::Strong(text), .. } => text_width(&trailing_run(text, true)),
             TrailingItem::Icon { .. } | TrailingItem::Part { .. } => sizes.icon,
             TrailingItem::Hosted(hosted) => hosted.size.map_or(0.0, |size| size.ideal.x),
         };

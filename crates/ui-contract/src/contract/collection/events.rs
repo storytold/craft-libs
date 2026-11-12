@@ -198,6 +198,14 @@ pub enum CollectionEvent<K, E> {
     /// A primary double click on the collection's empty space, below or between its items (FilmCraft's media bin
     /// imports).
     EmptyActivated,
+    /// A secondary click on the collection's empty space, below or between its items, or anywhere in an empty
+    /// collection: the app opens the collection's own menu (Photoshop's Layers panel: the thumbnail sizes). The
+    /// selection is unchanged.
+    #[non_exhaustive]
+    EmptyContextMenu {
+        /// Where the menu opens: the pointer, in screen space.
+        at: Pos2,
+    },
     /// Space on the lead of a collection whose Space previews (`SpaceAction::Preview`).
     Preview(K),
     /// The user asked for an item's context menu.

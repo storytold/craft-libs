@@ -53,6 +53,9 @@ impl ListRow<'_> {
                     match face {
                         TrailingFace::Icon(icon) => ui.face(key, IconButton::new(icon.clone()).focusable(false).enabled(*enabled)),
                         TrailingFace::Disclosure { open } => ui.face(key, Disclosure::new(Bind::given(*open)).node(false).enabled(*enabled)),
+                        TrailingFace::Strong(text) => {
+                            ui.draw().text(*slot, &trailing_run(text, true));
+                        }
                     }
                 }
             }

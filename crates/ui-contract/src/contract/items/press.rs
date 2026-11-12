@@ -268,11 +268,20 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         // it.
         let released = crate::runtime::pointer::frame(&ctx);
         let hover = crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id)).hover;
-        if released.release == Some(craft_behavior::PointerButton::Secondary)
+        let menu_at = if released.release == Some(craft_behavior::PointerButton::Secondary)
             && cx.core.response.hovered()
             && hover.is_none_or(|hit| hit.part.is_none() || !hit.sense.takes_press() || hit.sense.contains(Sense::PICKS_ITEM))
-            && let Some(pos) = released.pos.filter(|pos| rect.contains(xf.map_or(*pos, |map| map.to_layer(*pos))))
-            && let Some(at) = layout.hit(local(pos), offset)
+        {
+            released.pos.filter(|pos| rect.contains(xf.map_or(*pos, |map| map.to_layer(*pos))))
+        } else {
+            None
+        };
+        let menu_row = menu_at.map(|pos| (pos, layout.hit(local(pos), offset)));
+        // A secondary release on the empty space asks for the collection's own menu.
+        if let Some((pos, None)) = menu_row {
+            self.events.push(CollectionEvent::EmptyContextMenu { at: pos });
+        }
+        if let Some((pos, Some(at))) = menu_row
             && self.source.enabled(at)
         {
             if !self.holds(at) && self.toggle_cell(props, layout, at, offset, local(pos)).is_none() {

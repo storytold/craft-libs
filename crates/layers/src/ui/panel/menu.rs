@@ -189,24 +189,23 @@ enum RowPick {
 }
 
 /// The layers the row menu's Label Color submenu colours: every selected layer when the menu acts on the selection,
-/// else the row's layer. `None` where the submenu is not shown: on a thumbnail, whose menu is the host's own, and on
-/// effects and Smart Filter rows.
-fn label_rows<Id: Clone>(target: &MenuTarget<Id>, selected: &[Id]) -> Option<Vec<Id>> {
-    let LayerRowKey::Layer(layer) = &target.row else { return None };
-    if target.part.is_some() {
+/// else the row's layer. `None` where the submenu is not shown: on effects and Smart Filter rows, the empty space, and
+/// where the tree leaves it out ([`LayerTree::label_colors_in_menu`]).
+fn label_rows<T: LayerTree>(tree: &T, target: &MenuTarget<T::Id>, selected: &[T::Id]) -> Option<Vec<T::Id>> {
+    let Some(LayerRowKey::Layer(layer)) = &target.row else { return None };
+    if !tree.label_colors_in_menu(target) {
         return None;
     }
     Some(if target.on_selection { selected.to_vec() } else { vec![layer.clone()] })
 }
 
 /// Shows the menu the last context request chose, hanging from `opener` (the list). A right-click
-/// on a row opens it at the pointer. With `label_colors`, a layer row's menu ends with the Label Color submenu.
+/// on a row opens it at the pointer; a layer row's menu ends with the Label Color submenu where the tree asks for it.
 pub(super) fn show_row_menus<T: LayerTree>(
     ui: &mut Ui,
     cx: &PanelContext<'_, T>,
     opener: &Response,
     row_menu: Option<&RowMenu<'_, T::Id>>,
-    label_colors: bool,
     session: &Session<T::Id>,
 ) -> Vec<LayersEvent<T::Id>> {
     let words = cx.words;
@@ -214,7 +213,7 @@ pub(super) fn show_row_menus<T: LayerTree>(
         Some(OpenMenu::Row(target)) => {
             let Some(menu) = row_menu else { return Vec::new() };
             let entries = menu(&target);
-            let colored = if label_colors { label_rows(&target, &cx.selection.layers) } else { None };
+            let colored = label_rows(cx.tree, &target, &cx.selection.layers);
             let current = colored.as_deref().and_then(|rows| shared_label(cx.tree, rows));
             let shown = Menu::context(words.row_menu.clone(), opener).show(ui, |ui, _| {
                 let ran = entry_rows(ui, &entries).and_then(|at| entries.get(at)).and_then(Entry::value).cloned();

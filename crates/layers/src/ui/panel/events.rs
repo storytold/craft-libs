@@ -315,8 +315,9 @@ impl<Id> MaskMove<Id> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct MenuTarget<Id> {
-    /// The row.
-    pub row: LayerRowKey<Id>,
+    /// The row; `None` for the empty space below the rows, or the whole list when no row is shown (the host's
+    /// thumbnail size and clipping menu).
+    pub row: Option<LayerRowKey<Id>>,
     /// The thumbnail the press landed on, if known.
     pub part: Option<LayerPart>,
     /// The row is one of several selected rows: the command applies to all of them.

@@ -420,6 +420,8 @@ pub enum CollectionKind {
     Activate,
     /// A double click on the empty space.
     EmptyActivated,
+    /// A secondary click on the empty space.
+    EmptyContextMenu,
     /// Space previewed the lead.
     Preview,
     /// A context menu was asked for.
@@ -456,6 +458,7 @@ impl CollectionKind {
             CollectionEvent::LeadMoved { .. } => CollectionKind::LeadMoved,
             CollectionEvent::Activate(_) => CollectionKind::Activate,
             CollectionEvent::EmptyActivated => CollectionKind::EmptyActivated,
+            CollectionEvent::EmptyContextMenu { .. } => CollectionKind::EmptyContextMenu,
             CollectionEvent::Preview(_) => CollectionKind::Preview,
             CollectionEvent::ContextMenu(_) => CollectionKind::ContextMenu,
             CollectionEvent::CommandClick { .. } => CollectionKind::CommandClick,

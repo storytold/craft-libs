@@ -61,4 +61,6 @@ pub(super) struct PanelContext<'a, T: LayerTree> {
     pub(super) visibility_key: Option<craft_keymap::Chord>,
     /// The host's component at each layer row's trailing end.
     pub(super) trailing: Option<&'a (dyn TrailingCell<T::Id> + 'a)>,
+    /// The modifiers held this pass: the thumbnails' load cursor follows them.
+    pub(super) held: craft_keymap::Mods,
 }

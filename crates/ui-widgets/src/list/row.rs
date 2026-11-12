@@ -12,7 +12,7 @@ use super::words::ListWords;
 use crate::contract::{Common, OpenChange, RowHeight, RowPressed, RowState, Show};
 use crate::primitives::{ContentPainterCx, HAlign, IconSpec};
 use crate::runtime::env::Label;
-use craft_behavior::ColumnKey;
+use craft_behavior::{ColumnKey, Cursor};
 use craft_theme::variant::Tone;
 use craft_theme::{LabelColor, TypeRole};
 use egui::Rect;
@@ -44,6 +44,16 @@ pub use thumb::{ThumbAspect, ThumbPaint, ThumbSize, ThumbTarget, ThumbTargets};
 use trailing::Hosted;
 pub(super) use trailing::{Trailing, TrailingItem};
 pub use trailing::{TrailingFace, TrailingPart};
+
+/// Where on a row a drag of its own starts instead of the row's ([`ListRow::part_drag`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RowDragSpot {
+    /// A thumbnail.
+    Thumb(ThumbTarget),
+    /// A trailing part.
+    Trailing(TrailingPart),
+}
 
 /// The name of a label colour, or of no label, in the language of `words`.
 pub fn label_color_label(color: Option<LabelColor>, words: &ListWords) -> Label {
@@ -155,8 +165,10 @@ pub struct ListRow<'a> {
     pub(super) pressed: Option<RowPressed>,
     /// The collection asked for this row's menu and it is open, from its row state: a revealed part stays shown.
     pub(super) menu_open: bool,
-    /// The thumbnails that drag instead of the row, each with what starts its drag session.
-    pub(super) drags: Vec<(ThumbTarget, ThumbPayload)>,
+    /// The parts that drag instead of the row, each with what starts its drag session.
+    pub(super) drags: Vec<(RowDragSpot, ThumbPayload)>,
+    /// The cursors over thumbnails.
+    pub(super) cursors: Vec<(ThumbTarget, Cursor)>,
     /// The icon or thumbnails come before the disclosure column instead of after it.
     #[prop]
     pub(super) leading_first: bool,
@@ -270,6 +282,7 @@ impl<'a> ListRow<'a> {
             pressed: None,
             menu_open: false,
             drags: Vec::new(),
+            cursors: Vec::new(),
             leading_first: false,
             detail: None,
             lines: None,
@@ -564,12 +577,30 @@ impl<'a> ListRow<'a> {
         self
     }
 
-    /// A drag that starts on the thumbnail `target` drags `payload` through the drag session, with a ghost as large as
-    /// the thumbnail, and reports [`RowEvent::ThumbDrag`]; the row does not drag.
+    /// A drag that starts on `spot` drags `payload` through the drag session, with a ghost as large as the part, and
+    /// reports [`RowEvent::PartDrag`]; the row does not drag.
+    ///
+    /// A thumbnail keeps its click. A trailing part that drags is a handle on the row: a click on it is a click on the
+    /// row and reports no [`RowEvent::Trailing`], and it is no focus stop (a layer's `fx`, whose drag carries the
+    /// layer's effects).
     #[must_use]
-    pub fn thumb_drag<P: Clone + Send + Sync + 'static>(mut self, target: ThumbTarget, payload: P) -> Self {
-        self.drags.retain(|(held, _)| *held != target);
-        self.drags.push((target, Arc::new(payload)));
+    pub fn part_drag<P: Clone + Send + Sync + 'static>(mut self, spot: RowDragSpot, payload: P) -> Self {
+        self.drags.retain(|(held, _)| *held != spot);
+        self.drags.push((spot, Arc::new(payload)));
         self
+    }
+
+    /// The cursor while the pointer is over the thumbnail `target` (the load-selection hand while Cmd is held over a
+    /// layer's thumbnail).
+    #[must_use]
+    pub fn thumb_cursor(mut self, target: ThumbTarget, cursor: impl Into<Cursor>) -> Self {
+        self.cursors.retain(|(held, _)| *held != target);
+        self.cursors.push((target, cursor.into()));
+        self
+    }
+
+    /// The payload of the drag that starts on `spot`, if it drags.
+    pub(super) fn drag_at(&self, spot: RowDragSpot) -> Option<&ThumbPayload> {
+        self.drags.iter().find(|(held, _)| *held == spot).map(|(_, payload)| payload)
     }
 }

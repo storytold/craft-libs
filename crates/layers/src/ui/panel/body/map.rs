@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use super::super::Session;
 use super::super::context::PanelContext;
-use super::super::drag::{LayersDrag, drop_event, mask_drop_event};
+use super::super::drag::{LayersDrag, drop_event, part_drop_event};
 use super::super::events::{ActivateOn, LayerColumn, LayerSelect, LayerToggle, LayersEvent, MenuTarget};
 use super::super::menu::{OpenMenu, shared_label};
 use super::super::row::{EYE, FX_PART, LOCK_PART, NAME, OPTIONS_PART};
@@ -111,13 +111,16 @@ pub(super) fn map_events<T: LayerTree>(
                     // A right-click on a thumbnail opens the menu for what it shows (a mask).
                     let part =
                         request.part.and_then(ThumbTarget::of_part).map(|which| thumb_part(&request.key, &tree.info(request.key.layer()), which));
-                    session.menu = Some(OpenMenu::Row(MenuTarget { row: request.key.clone(), part, on_selection }));
+                    session.menu = Some(OpenMenu::Row(MenuTarget { row: Some(request.key.clone()), part, on_selection }));
                 }
+            }
+            CollectionEvent::EmptyContextMenu { .. } => {
+                session.menu = Some(OpenMenu::Row(MenuTarget { row: None, part: None, on_selection: false }));
             }
             CollectionEvent::Reorder(edit) => events.extend(drop_event(edit, order, parent_of, filtered)),
             CollectionEvent::Dropped { at, op, payload, .. } => {
                 if let Some(drag) = payload.get::<LayersDrag<T::Id>>() {
-                    events.extend(mask_drop_event(cx.list, drag, &at, op, Arc::from(cx.words.list.as_str())));
+                    events.extend(part_drop_event(cx.list, drag, &at, op, Arc::from(cx.words.list.as_str())));
                 }
             }
             CollectionEvent::Toggle(edit) => toggle_events(edit, &mut session.sweeps, &mut toggle_label, events),
