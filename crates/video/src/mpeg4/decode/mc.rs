@@ -302,11 +302,13 @@ pub(super) fn chroma_mv_1(mv: [i32; 2], quarter_sample: bool) -> [i32; 2] {
 /// Chrominance vector of four 8×8 luminance vectors (§7.6.3, Table 7-6 rounding).
 pub(super) fn chroma_mv_4(mvs: &[[i32; 2]; 4], quarter_sample: bool) -> [i32; 2] {
     const ROUND: [i32; 16] = [0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2];
+    // The sum is taken in `i64`: four extreme vectors exceed `i32`.
     std::array::from_fn(|c| {
-        let sum: i32 = mvs.iter().map(|m| if quarter_sample { m[c] / 2 } else { m[c] }).sum();
-        let a = sum.unsigned_abs() as i32;
-        let v = ROUND[(a & 15) as usize] + ((a >> 4) << 1);
-        if sum < 0 { -v } else { v }
+        let sum: i64 = mvs.iter().map(|m| i64::from(if quarter_sample { m[c] / 2 } else { m[c] })).sum();
+        let a = sum.unsigned_abs();
+        let v = i64::from(ROUND[(a & 15) as usize]) + ((a >> 4) << 1) as i64;
+        let v = if sum < 0 { -v } else { v };
+        v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
     })
 }
 

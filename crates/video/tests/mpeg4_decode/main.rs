@@ -750,3 +750,42 @@ fn a_new_layer_size_outputs_the_held_back_picture() {
     assert_eq!(sizes, [vec![(176, 144); 6], vec![(128, 96); 4]].concat());
     assert!(pics.iter().all(|p| (p.info.width, p.info.height) == (p.width, p.height)));
 }
+
+/// One call holding pictures of two sizes (a VOL change in the chunk): the larger pictures queued
+/// before the change count at their own size. 36 KiB holds two 64×64 pictures (6 KiB each) and
+/// thirteen 32×32 ones (1.5 KiB) beside three 32×32 picture buffers, exactly; a fourteenth would
+/// not fit.
+#[cfg(feature = "mpeg4-encode")]
+#[test]
+fn the_memory_budget_counts_queued_pictures_across_a_size_change() {
+    let budget = 36 * 1024;
+    let chunk = [encoded(64, 64, 2).concat(), encoded(32, 32, 14).concat()].concat();
+    let mut dec = Decoder::new();
+    dec.set_memory_budget(budget);
+    let pics = dec.decode(&chunk, 0).expect("the pictures within the budget");
+    let sizes: Vec<u32> = pics.iter().map(|p| p.width).collect();
+    assert_eq!(sizes, [vec![64; 2], vec![32; 13]].concat());
+    let queued: usize = pics.iter().map(|p| p.y.len() + p.u.len() + p.v.len()).sum();
+    assert!(queued as u64 + 3 * 1536 <= budget);
+    assert_eq!(dec.errors(), 1);
+}
+
+/// A same-size layer header that switches to `low_delay` releases the picture held back for
+/// reordering: the low-delay VOPs after it output only themselves.
+#[cfg(feature = "mpeg4-encode")]
+#[test]
+fn a_switch_to_low_delay_outputs_the_held_back_picture() {
+    let Some(ff) = ffmpeg() else { return };
+    let a = encode(&ff, "lowdelay-a", "176x144", 6, &["-qscale:v", "4", "-bf", "1"]);
+    let b = encoded(176, 144, 4);
+    let mut dec = Decoder::new();
+    let mut pics = Vec::new();
+    for (i, c) in chunks(&a).iter().copied().chain(b.iter().map(|p| &p[..])).enumerate() {
+        pics.extend(dec.decode(c, i as i64).expect("decode"));
+    }
+    pics.extend(dec.flush());
+    assert_eq!(dec.errors(), 0);
+    assert_eq!(pics.len(), 10, "every picture of both streams");
+    assert!(!pics[5].info.low_delay && pics[6].info.low_delay);
+    assert_eq!(pics.iter().map(|p| p.pts).collect::<Vec<_>>()[6..], [6, 7, 8, 9]);
+}

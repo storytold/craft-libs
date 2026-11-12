@@ -193,8 +193,12 @@ pub struct Decoder {
     last: Option<Ref>,
     /// A picture buffer no longer referenced, reused for the next VOP instead of allocating one.
     spare: Option<Frame>,
-    /// Pictures one `decode` call may return (see [`decode`](Self::decode)).
-    output_limit: usize,
+    /// Bytes of one picture buffer of the current VOL, 0 without one: the references, the spare
+    /// buffer and the picture being decoded take one each.
+    frame_bytes: u64,
+    /// Why the last VOL was refused, until a decodable one arrives: the error of the VOPs that
+    /// follow it, so `last_error` keeps naming the cause.
+    refused: Option<DecodeError>,
     time_base: i64,
     last_time_base: i64,
     last_non_b_time: i64,
@@ -248,7 +252,8 @@ impl Decoder {
             prev: None,
             last: None,
             spare: None,
-            output_limit: MAX_PICTURES_PER_CALL,
+            frame_bytes: 0,
+            refused: None,
             time_base: 0,
             last_time_base: 0,
             last_non_b_time: 0,
@@ -324,7 +329,8 @@ impl Decoder {
                     self.drop_references();
                     self.vol = None;
                     self.info = None;
-                    self.output_limit = MAX_PICTURES_PER_CALL;
+                    self.frame_bytes = 0;
+                    self.refused = Some(e.clone());
                     return Err(e);
                 }
                 set?;
@@ -355,15 +361,19 @@ impl Decoder {
         if !shape.fits(4, self.memory_budget) {
             return Err(DecodeError::TooLarge(vol.width, vol.height));
         }
-        if self.vol.as_ref().is_some_and(|v| (v.width, v.height) != (vol.width, vol.height)) {
-            // The picture held back for reordering is still owed to the caller.
+        let resized = self.vol.as_ref().is_some_and(|v| (v.width, v.height) != (vol.width, vol.height));
+        let to_low_delay = self.vol.as_ref().is_some_and(|v| !v.low_delay) && vol.low_delay;
+        if resized || to_low_delay {
+            // The picture held back for reordering is still owed to the caller, and from here on
+            // no later VOP releases it: the references are dropped, or a low-delay VOP outputs
+            // only itself.
             self.show_last();
+        }
+        if resized {
             self.drop_references();
         }
-        // Pictures queued in one call count against the budget too, beside the references, the
-        // spare buffer and the picture being decoded.
-        let pictures = shape.bytes().map_or(1, |b| self.memory_budget / b.max(1));
-        self.output_limit = usize::try_from(pictures.saturating_sub(3)).unwrap_or(usize::MAX).clamp(1, MAX_PICTURES_PER_CALL);
+        self.frame_bytes = shape.bytes().unwrap_or(u64::MAX);
+        self.refused = None;
         self.info = Some(Arc::new(self.stream_info(&vol)));
         self.vol = Some(vol);
         Ok(())
@@ -407,8 +417,7 @@ impl Decoder {
         let codes = start_codes(data);
         let mut err = None;
         for (k, &(pos, code)) in codes.iter().enumerate() {
-            // Each start code adds at most one picture.
-            if self.out.len() >= self.output_limit {
+            if !self.room_for_a_picture() {
                 let e = DecodeError::Invalid("too many pictures in one chunk");
                 self.errors += 1;
                 self.last_error = Some(e.clone());
@@ -429,6 +438,16 @@ impl Decoder {
             Some(e) if out.is_empty() => Err(e),
             _ => Ok(out),
         }
+    }
+
+    /// Whether one more picture may be queued in this call: at most 16, and the queued pictures
+    /// (counted at their own size, which a VOL change in the chunk may have made differ from the
+    /// current one) must fit in the memory budget beside the current VOL's picture buffers and
+    /// one more picture. Each start code adds at most one picture, so checking before each one
+    /// keeps the queue within both.
+    fn room_for_a_picture(&self) -> bool {
+        let queued = self.out.iter().fold(0u64, |n, p| n.saturating_add((p.y.len() + p.u.len() + p.v.len()) as u64));
+        self.out.len() < MAX_PICTURES_PER_CALL && queued.saturating_add(self.frame_bytes.saturating_mul(4)) <= self.memory_budget
     }
 
     /// Output the picture held back for reordering (end of stream).
@@ -505,7 +524,7 @@ impl Decoder {
 
     fn vop(&mut self, payload: &[u8], pts: i64) -> Result<()> {
         let Some(vol) = self.vol.clone() else {
-            return Err(DecodeError::Invalid("VOP before a video object layer header"));
+            return Err(self.refused.clone().unwrap_or(DecodeError::Invalid("VOP before a video object layer header")));
         };
         let vop = Vop::parse(payload, &vol)?;
         if !vop.coded {

@@ -30,18 +30,24 @@ pub(super) const ALT_HORIZONTAL: [usize; 64] = {
     t
 };
 
+/// Bound of a direct-mode vector component. Pictures are at most 8191 samples a side, so a
+/// component of 2^16 (half or quarter samples) already places the block wholly past the padded
+/// edge on that axis, where every read clamps to the same edge samples: bounding a larger one
+/// changes no prediction, and keeps the sums of later vector arithmetic far from overflow.
+const DIRECT_MV_BOUND: i64 = 1 << 16;
+
 /// The forward and backward direct-mode vector components (§7.6.9.5.2) of co-located component
 /// `v` with delta `d` and temporal distances `trb` and `trd`. Hostile time stamps make the
 /// products exceed `i32` (`v` reaches ±2048 and the distances ±2^20), so they are taken in `i64`;
-/// the results saturate. Where nothing overflows the values are those of `i32` arithmetic, as
-/// both divisions truncate toward zero.
+/// the results are bounded by [`DIRECT_MV_BOUND`]. Where nothing exceeds it the values are those
+/// of `i32` arithmetic, as both divisions truncate toward zero.
 pub(super) fn direct_scale(v: i32, d: i32, trb: i32, trd: i32) -> [i32; 2] {
     let (v, d, trb) = (i64::from(v), i64::from(d), i64::from(trb));
     let trd = if trd == 0 { 1 } else { i64::from(trd) };
     let f = v * trb / trd + d;
     let b = if d == 0 { v * (trb - trd) / trd } else { f - v };
-    let narrow = |x: i64| x.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
-    [narrow(f), narrow(b)]
+    let bound = |x: i64| x.clamp(-DIRECT_MV_BOUND, DIRECT_MV_BOUND) as i32;
+    [bound(f), bound(b)]
 }
 
 /// A decoded picture: luminance and both chrominance planes, sized to whole macroblocks.
