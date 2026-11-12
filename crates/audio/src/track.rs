@@ -316,7 +316,7 @@ impl TrackDecoder {
     /// its timing.
     pub fn decode(&mut self, packet: &[u8]) -> Result<AudioBuffer> {
         // A packet decoded only in part says nothing of how long packets are.
-        #[cfg_attr(not(feature = "ac3-decode"), allow(unused_mut))]
+        #[cfg_attr(not(any(feature = "ac3-decode", feature = "mpa-decode")), allow(unused_mut))]
         let mut partial = false;
         let channels = match &mut self.inner {
             #[cfg(feature = "aac-decode")]
@@ -352,8 +352,9 @@ impl TrackDecoder {
             }
             #[cfg(feature = "mpa-decode")]
             Inner::Mpa { dec, several } => {
-                let (out, first, count) = mpa_frames(packet, |f| dec.decode(f))?;
+                let (out, first, count, cut) = mpa_frames(packet, |f| dec.decode(f))?;
                 *several |= count > 1;
+                partial = cut;
                 if let Some(h) = first.filter(|_| self.last_frames == 0) {
                     self.sample_rate = h.sample_rate;
                     self.layout = mpa_layout(&h);
@@ -362,8 +363,9 @@ impl TrackDecoder {
             }
             #[cfg(feature = "mp3-decode")]
             Inner::Mp3 { dec, samples, several } => {
-                let (out, first, count) = mpa_frames(packet, |f| dec.decode(f))?;
+                let (out, first, count, cut) = mpa_frames(packet, |f| dec.decode(f))?;
                 *several |= count > 1;
+                partial = cut;
                 if let Some(h) = first {
                     *samples = h.samples();
                     if self.last_frames == 0 {
@@ -457,7 +459,12 @@ impl TrackDecoder {
             #[cfg(feature = "ac3-decode")]
             Inner::Ac3(..) => Some(ac3_packet_frames(data)),
             #[cfg(feature = "mpa-decode")]
-            Inner::Mpa { .. } => Some(mpa_packet_frames(data).1),
+            // a packet lost before any has decoded is a frame
+            Inner::Mpa { .. } => Some(match mpa_packet_frames(data) {
+                (0, _) if self.last_frames == 0 && self.codec == CodecId::Mp1 => 384,
+                (0, _) if self.last_frames == 0 => 1152,
+                (_, n) => n,
+            }),
             // a packet lost whole is as long as the last one, a frame at the start
             #[cfg(feature = "mp3-decode")]
             Inner::Mp3 { samples, .. } => Some(match mpa_packet_frames(data) {
@@ -622,10 +629,11 @@ fn reorder(mut channels: Vec<Vec<f32>>, order: Option<&[usize]>) -> Vec<Vec<f32>
 const MP3_PREROLL_FRAMES: usize = 257;
 
 /// The MPEG audio frames of a packet (an MP4 or Matroska packet may hold several), decoded by
-/// `decode`, the first frame's header and how many frames decoded. A frame after the first that
-/// fails ends the packet.
+/// `decode`, the first frame's header, how many frames decoded, and whether a frame after the
+/// first failed, which ends the packet (then it decoded only in part).
 #[cfg(feature = "mpa-decode")]
-fn mpa_frames(packet: &[u8], mut decode: impl FnMut(&[u8]) -> mpa::Result<mpa::Frame>) -> Result<(Vec<Vec<f32>>, Option<mpa::Header>, usize)> {
+#[allow(clippy::type_complexity)]
+fn mpa_frames(packet: &[u8], mut decode: impl FnMut(&[u8]) -> mpa::Result<mpa::Frame>) -> Result<(Vec<Vec<f32>>, Option<mpa::Header>, usize, bool)> {
     let mut out: Vec<Vec<f32>> = Vec::new();
     let mut first = None;
     let mut count = 0;
@@ -634,14 +642,14 @@ fn mpa_frames(packet: &[u8], mut decode: impl FnMut(&[u8]) -> mpa::Result<mpa::F
         let f = match decode(rest) {
             Ok(f) => f,
             Err(e) if out.is_empty() => return Err(e.into()),
-            Err(_) => break,
+            Err(_) => return Ok((out, first, count, true)),
         };
         p += f.header.frame_bytes.max(1);
         first.get_or_insert(f.header);
         count += 1;
         append(&mut out, f.channels)?;
     }
-    Ok((out, first, count))
+    Ok((out, first, count, false))
 }
 
 /// The MPEG audio frames a packet holds by their headers, and the samples per channel they
@@ -922,6 +930,11 @@ mod tests {
         assert_eq!(dec.conceal(Some(&[two.clone(), one.clone()].concat())).unwrap().frames(), 3456);
         // several frames in the lookahead say so before anything is decoded
         assert_eq!(TrackDecoder::new(&params, &[&one, &two]).unwrap().frames_per_packet(), None);
+        // a packet decoded only in part (its second frame is cut short) keeps the length of the
+        // last whole packet for the next lost one
+        let cut = [one.clone(), one[..100].to_vec()].concat();
+        assert_eq!(dec.decode(&cut).unwrap().frames(), 1152);
+        assert_eq!(dec.conceal(None).unwrap().frames(), 2304);
     }
 
     #[cfg(feature = "mpa-decode")]
@@ -936,6 +949,14 @@ mod tests {
         assert_eq!(dec.frames_per_packet(), None);
         assert_eq!(dec.conceal(Some(&two)).unwrap().frames(), 2304);
         assert_eq!(TrackDecoder::new(&params, &[&two]).unwrap().frames_per_packet(), None);
+        // a packet lost before any has decoded is a frame: 1152 samples, 384 for Layer I
+        let stereo = |codec| CodecParams::new(codec).with_sample_rate(48_000).with_channels(2);
+        assert_eq!(TrackDecoder::new(&stereo(CodecId::Mp2), &[]).unwrap().conceal(None).unwrap().frames(), 1152);
+        assert_eq!(TrackDecoder::new(&stereo(CodecId::Mp1), &[]).unwrap().conceal(None).unwrap().frames(), 384);
+        let mut dec = TrackDecoder::new(&params, &[&one]).unwrap();
+        dec.decode(&one).unwrap();
+        dec.reset();
+        assert_eq!(dec.conceal(None).unwrap().frames(), 1152, "after a seek");
     }
 
     #[test]
