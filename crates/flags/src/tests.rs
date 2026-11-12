@@ -122,12 +122,15 @@ mod file {
     fn set_refuses_to_write_what_could_not_be_read_back() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(FILE_NAME);
-        let mut text = String::from("[flags]\n");
-        while (text.len() as u64) < MAX_FILE_BYTES - 4 {
-            text.push_str("# padding\n");
-        }
+        // Readable (just under the limit), so the refusal comes from the size of what `set` would
+        // write, not from reading.
+        let mut text = String::from("[flags]\n# ");
+        let pad = MAX_FILE_BYTES as usize - 4 - text.len();
+        text.push_str(&"x".repeat(pad));
+        assert_eq!(text.len() as u64, MAX_FILE_BYTES - 4);
         std::fs::write(&path, &text).unwrap();
-        assert!(matches!(set(&path, "AI-MODELS", true), Err(FlagError::Unreadable(_))));
+        assert!(Flags::from_parts(Some(&text), None).problems.is_empty(), "the fixture itself reads");
+        assert!(matches!(set(&path, "AI-MODELS", true), Err(FlagError::Unreadable(e)) if e.contains("would grow")));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), text, "left as it was");
     }
 
