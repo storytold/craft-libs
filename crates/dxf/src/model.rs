@@ -20,6 +20,7 @@ pub mod aci;
 mod document;
 mod entity;
 mod hatch;
+pub mod mleader;
 pub mod objects;
 mod tables;
 pub mod text;
