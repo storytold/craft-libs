@@ -171,7 +171,14 @@ print or a proof. `Output::new(press, output, intent, bpc)` takes the press's CM
   output's black; absolute colorimetric keeps the press paper's tint;
 - each enabled spot plate combines over them, as in the preview, with its appearance converted
   into the output: a multiply in a gray or RGB output, a multiply of the complements in a CMYK
-  output, so inks add.
+  output, so inks add. The appearance is taken relative to the press paper's appearance in the
+  output, the tint the process plates have already printed: a spot whose alternate is no ink adds
+  nothing, and a spot at 100% prints the colour its alternate prints as process ink, within a
+  channel's 8-bit rounding. Absolute colorimetric therefore keeps the press paper's tint on the page
+  once, not once per spot. A `Lab` alternate's tint ramp runs from the paper to the solid, so under
+  absolute colorimetric it starts at the paper's own tint instead of the output's white. An ink
+  never brightens a pixel: where a spot's appearance is lighter than the paper's, the pixel is left
+  as it is, so such an appearance prints as nothing.
 
 A CMYK output re-separates through its own tables, so a black-only press colour comes back as
 the output's black generation, as it would on that printer.

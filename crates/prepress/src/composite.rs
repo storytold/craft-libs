@@ -32,19 +32,20 @@ fn to_srgb(cms: &dyn CmykConversion, cmyk: &[u8], rgb: &mut [u8]) {
 pub fn appearance(alternate: Alternate, cms: &dyn CmykConversion) -> Option<Vec<[u8; 3]>> {
     let mut rgb = vec![0_u8; 256 * 3];
     match alternate {
-        Alternate::Lab(lab) => lab_to_srgb8(&lab_ramp(lab), &mut rgb)?,
+        Alternate::Lab(lab) => lab_to_srgb8(&lab_ramp([100.0, 0.0, 0.0], lab), &mut rgb)?,
         Alternate::Cmyk(solid) => to_srgb(cms, &cmyk_ramp(solid), &mut rgb),
     }
     Some(rgb.as_chunks::<3>().0.to_vec())
 }
 
-/// A Lab spot alternate at each tint byte, three values per tint, from paper white (L\* 100)
-/// to the solid in a straight line.
-pub(crate) fn lab_ramp([l, a, b]: [f32; 3]) -> Vec<f32> {
+/// Lab colors from `from` to `to` at each tint byte, three values per tint, in a straight line:
+/// a spot's tint ramp, from the paper white the preview starts at (L\* 100) or the paper the
+/// output prints, to the solid.
+pub(crate) fn lab_ramp(from: [f32; 3], to: [f32; 3]) -> Vec<f32> {
     (0..=255_u8)
         .flat_map(|t| {
             let t = f32::from(t) / 255.0;
-            [100.0 + t * (l - 100.0), t * a, t * b]
+            std::array::from_fn::<f32, 3, _>(|i| from[i] + t * (to[i] - from[i]))
         })
         .collect()
 }
