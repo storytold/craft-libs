@@ -1960,7 +1960,6 @@ dependencies = [
 name = "craft-webp"
 version = "0.1.0"
 dependencies = [
- "craft-video",
  "image",
  "thiserror 2.0.21",
 ]
