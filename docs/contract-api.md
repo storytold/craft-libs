@@ -1879,7 +1879,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::Common`: `pub struct Common { pub label: Label, pub tooltip: Option<Tooltip>, pub description: Option<String>, pub selected: Option<bool> }`. What every component carries: the props the pipeline reads at step 1.
   - `pub const fn new() -> Common`. A `Common` with every prop unset, which the derive's constructors start from.
 - `craft_ui::contract::Component`: re-export of `craft_ui_macros::Component` (outside these crates).
-- `craft_ui::contract::ContainerProps`: `pub struct ContainerProps { pub mount: Mount, pub surface: Option<SurfaceKind>, pub pad: Pad, pub sizing: Sizing, pub room_height: Option<f32>, pub layout: BodyLayout, pub header: Option<HeaderRegion>, pub scroll: Option<Scroll>, pub footer: Option<FooterRegion>, pub end: Option<EndRegion>, pub help: Option<Label>, pub position: Option<SetPosition>, pub focus: FocusPolicy, pub collapse: Option<Collapse>, pub body_gap: Gap, pub least_width: Option<LeastWidth>, pub edge_rule: bool, pub child_size: Option<ControlSize>, pub arena: bool, pub scroll_owner: bool, pub gates: bool, pub transform: Option<CanvasTransform>, pub theme: Option<ThemeScope>, pub command_scope: Option<CommandScope>, pub live: Option<Politeness>, pub label: Option<SideLabel>, pub roving: Option<Roving>, pub save: Option<SaveKey>, pub outer_edit: bool, pub collection_body: bool, pub label_column: bool }`. What a container or collection adds to `Common`. A builder added here is added to the forwarder list in
+- `craft_ui::contract::ContainerProps`: `pub struct ContainerProps { pub mount: Mount, pub surface: Option<SurfaceKind>, pub pad: Pad, pub sizing: Sizing, pub room_height: Option<f32>, pub layout: BodyLayout, pub header: Option<HeaderRegion>, pub scroll: Option<Scroll>, pub footer: Option<FooterRegion>, pub end: Option<EndRegion>, pub help: Option<Label>, pub position: Option<SetPosition>, pub focus: FocusPolicy, pub collapse: Option<Collapse>, pub body_gap: Gap, pub least_width: Option<LeastWidth>, pub edge_rule: bool, pub child_size: Option<ControlSize>, pub arena: bool, pub scroll_owner: bool, pub gates: bool, pub transform: Option<CanvasTransform>, pub theme: Option<ThemeScope>, pub command_scope: Option<CommandScope>, pub live: Option<Politeness>, pub label: Option<SideLabel>, pub roving: Option<Roving>, pub save: Option<SaveKey>, pub outer_edit: bool, pub collection_body: bool, pub label_column: bool, pub labels: Option<LabelScheme> }`. What a container or collection adds to `Common`. A builder added here is added to the forwarder list in
   - `pub const fn new() -> Self`. Props with every field at its default.
   - `pub fn mount(mut self, mount: Mount) -> Self`. Where the container lives.
   - `pub const fn surface(mut self, surface: SurfaceKind) -> Self`. The surface the container paints.
@@ -1911,6 +1911,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn save(mut self, key: SaveKey) -> Self`. Saves placement, size and open state under `key`.
   - `pub const fn outer_edit(mut self, on: bool) -> Self`. One outer gesture over the body's fields, from open to close.
   - `pub const fn label_column(mut self, on: bool) -> Self`. The labelled rows of the body share the widest label as one column. A nested container with its own
+  - `pub const fn labels(mut self, scheme: LabelScheme) -> Self`. The labelled rows under the container show their labels in `scheme`: its regions, its body and every container
 - `craft_ui::contract::ContextMenuRequest`: `pub struct ContextMenuRequest<K> { pub key: K, pub at: Pos2, pub column: Option<ColumnKey>, pub part: Option<PartRef> }`. A request for the context menu of an item. Collections never open menus: the app does.
 - `craft_ui::contract::Cx`: `pub struct Cx<'a, C: Component> { pub core: CxCore<'a>, pub style: &'a C::Style, pub mixed: bool }`. What component code reads and calls. It derefs to [`CxCore`] for reading only.
   - `pub fn reset_part(&self) -> Option<PartRef>`. The part a reset aimed at, when it declared `own_reset`; `update` proposes the value with that part at its
@@ -2077,8 +2078,8 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `fn menu_request(&self) -> Option<egui::Rect>`. The item asks for its menu from one of its parts (a row's "More" button): the part's rect, in the item's layer.
   - `fn label_rect(&self) -> Option<egui::Rect>`. The rect of the item's label, where a rename editor goes; `None` puts it over the whole row.
 - `craft_ui::contract::Job`: re-export of `craft_ui::runtime::pending::Job`.
-- `craft_ui::contract::LabelAlign`: `pub enum LabelAlign { End, Start }`. Where a beside label sits in its column.
 - `craft_ui::contract::LabelKind`: `pub enum LabelKind { Text, Hidden, Glyph(GlyphLabel), Short(Label) }`. How a side label is shown.
+- `craft_ui::contract::LabelScheme`: `pub enum LabelScheme { Form, Inspector }`. How the labelled rows under a container show their labels: set once on the container (`ContainerProps::labels`),
 - `craft_ui::contract::Lazy`: `pub struct Lazy`. A child of a scroll area that runs only while it is in view. Out of view its content does not run: it takes the
   - `pub fn new(key: impl Hash, estimate: f32) -> Lazy`. The child keyed `key` in its scroll area. `estimate` is how long it is along the axes the area scrolls, an
   - `pub fn reveal(mut self, reveal: bool) -> Lazy`. When `reveal` holds, the scroll area glides until the child starts at the view's start (as far as the
@@ -2302,11 +2303,10 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const fn extent(mut self, extent: f32) -> Self`. The pane's size along its edge, exactly: the pane host shows it at this extent in every pass.
   - `pub const fn at(mut self, rect: Rect) -> Self`. The pane in `rect`, which the caller laid out for this pass. The pane takes no room from its siblings.
 - `craft_ui::contract::ShownRow`: `pub struct ShownRow<K> { pub key: K, pub rect: egui::Rect, pub cells: Vec<(ColumnKey, egui::Rect)>, pub openers: Vec<(crate::contract::ItemOpener, Response)> }`. The geometry of one row the collection showed this pass.
-- `craft_ui::contract::SideLabel`: `pub struct SideLabel { pub kind: LabelKind, pub layout: FieldLayout, pub align: LabelAlign, pub role: FieldLabelRole, pub scrub: bool, pub reset_dot: bool, pub icon: Option<IconSpec<'static>>, pub detail: Option<Label>, pub tooltip: Option<Tooltip> }`. What `ContainerProps.label` holds: how the label is shown and what it does. The text is `Common.label`.
+- `craft_ui::contract::SideLabel`: `pub struct SideLabel { pub kind: LabelKind, pub layout: FieldLayout, pub role: FieldLabelRole, pub scrub: bool, pub reset_dot: bool, pub icon: Option<IconSpec<'static>>, pub detail: Option<Label>, pub tooltip: Option<Tooltip> }`. What `ContainerProps.label` holds: how the label is shown and what it does. The text is `Common.label`.
   - `pub const fn new() -> Self`. A text label beside its control that names it.
   - `pub fn kind(mut self, kind: LabelKind) -> Self`. How the label is shown.
   - `pub const fn layout(mut self, layout: FieldLayout) -> Self`. Where the label sits.
-  - `pub const fn align(mut self, align: LabelAlign) -> Self`. Where a beside label sits in its column: against the control by default.
   - `pub const fn role(mut self, role: FieldLabelRole) -> Self`. Whether the label names or describes its control.
   - `pub const fn scrub(mut self, on: bool) -> Self`. Lets a drag on the label scrub the control's value.
   - `pub const fn reset_dot(mut self, on: bool) -> Self`. Shows a dot after the text while the control's value differs from its reset value; a click on it resets the value.
@@ -3505,7 +3505,7 @@ Decision records and findings: what each pipeline step did, kept in frames a tes
   - `pub fn looks(mut self, looks: impl Into<StyleReplacements>) -> Self`. Sets the app's style replacements.
   - `pub fn frame(mut self, decision: Decision) -> Self`. Sets the root window's decided frame (`craft_window::policy::decide_for`).
   - `pub fn frame_layers(mut self, painter: Option<fn(&Context)>) -> Self`. Sets the end hook's ghost-layer painter.
-- `craft_ui::runtime::install::install`: `pub fn install(ctx: &Context, spec: InstallSpec) -> Result<(), InstallError>`. Adds the runtime plugin to `ctx` and sets the egui options the runtime owns: focus on press is the
+- `craft_ui::runtime::install::install`: `pub fn install(ctx: &Context, spec: InstallSpec) -> Result<(), InstallError>`. Adds the runtime plugin to `ctx` and sets the egui options the runtime owns: interface scale is a command, and
 
 ## `craft_ui::runtime::keys`
 
