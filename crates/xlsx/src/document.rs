@@ -8,6 +8,7 @@ use craft_drawingml::chart::Chart;
 use crate::drawing::{Anchor, Drawing, Item, Placement};
 use crate::features::{Comments, NoteShape, Table, notes_vml};
 use crate::pivot::{PivotCacheDefinition, PivotTableDefinition};
+use crate::richdata::{CellPicture, metadata_parts};
 use crate::sheet::{CellValue, Row, SheetPart};
 use crate::strings::StringItem;
 use crate::styles::Styles;
@@ -198,6 +199,10 @@ pub struct Document {
     /// cache that did not read (OLAP data, relationships other than its records) is a kept part
     /// whose entry stays.
     pub pivot_caches: Vec<PivotCachePart>,
+    /// The pictures in cells, read from the metadata and rich-value parts: entry `vm - 1` for a
+    /// cell's `vm` (see [`Package::cell_pictures`]). Those parts stay kept parts, written as
+    /// read; this is not written. [`Document::add_cell_metadata`] makes new ones.
+    pub cell_pictures: Vec<Option<CellPicture>>,
     pub parts: Vec<KeptPart>,
     /// What reading skipped or repaired.
     pub warnings: Vec<String>,
@@ -216,6 +221,7 @@ impl Document {
         let workbook_rels = p.workbook_rels()?;
         let shared_strings = p.shared_strings()?;
         let styles = p.styles()?;
+        let cell_pictures = p.cell_pictures()?;
         let mut pivot_caches = Vec::new();
         for entry in &workbook.pivot_caches {
             let Some(rel) = workbook_rels.by_id(&entry.rel_id).filter(|r| !r.external && r.kind() == "pivotCacheDefinition") else { continue };
@@ -301,6 +307,7 @@ impl Document {
             styles,
             worksheets,
             pivot_caches,
+            cell_pictures,
             parts,
             warnings: p.warnings().to_vec(),
         })
@@ -362,6 +369,34 @@ impl Document {
         let rel = d.add_rel("image", &part);
         d.drawing.items.push(Item::Anchor(Anchor::picture(placement, id, &format!("Picture {}", id.saturating_sub(1)), descr, &rel)));
         self.parts.push(KeptPart { name: part, content_type: Some(ct.into()), bytes: image });
+        Ok(())
+    }
+
+    /// Adds the cell metadata part, and for `pictures` the rich-value parts and their images:
+    /// a cell shows picture `i` with `vm = i + 1`, and with `dynamic_arrays` a dynamic-array
+    /// formula is marked by `cm = 1`. Refused for a workbook that has cell metadata already,
+    /// and for a picture that is not a PNG or JPEG Excel shows in a cell
+    /// ([`CellPicture::image_type`]) or over the size limits.
+    pub fn add_cell_metadata(&mut self, pictures: &[CellPicture], dynamic_arrays: bool) -> Result<(), Error> {
+        if self.workbook_rels.list.iter().any(|r| r.kind() == "sheetMetadata") {
+            return Err(Error::Invalid("the workbook has cell metadata already".into()));
+        }
+        let mut taken = self.part_names();
+        let made = metadata_parts(pictures, dynamic_arrays, |stem, ext, numbered| {
+            // `xl/metadata.xml`, `xl/media/cellImage1.png`, as Excel names them.
+            let name = fresh(&taken, |n| if n == 1 && !numbered { format!("{stem}.{ext}") } else { format!("{stem}{n}.{ext}") });
+            taken.push(name.to_ascii_lowercase());
+            name
+        })?;
+        let book = if self.workbook_part.is_empty() { "xl/workbook.xml".to_string() } else { self.workbook_part.clone() };
+        for (ty, target) in made.workbook_rels {
+            let ids: Vec<String> = self.workbook_rels.list.iter().map(|r| r.id.to_ascii_lowercase()).collect();
+            let id = fresh(&ids, |n| format!("rId{n}"));
+            self.workbook_rels.list.push(Rel { id, ty: ty.into(), target_raw: relative(&book, &target), target, external: false });
+        }
+        for (name, ct, bytes) in made.parts {
+            self.parts.push(KeptPart { name, content_type: ct.map(str::to_string), bytes });
+        }
         Ok(())
     }
 

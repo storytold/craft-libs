@@ -73,6 +73,13 @@ values, and `records_xml` writes a records part. A `Document` holds caches as `P
 and a worksheet's tables as `PivotTablePart`s, regenerated with their relationships and
 `pivotCaches` entries; an OLAP cache (and a table on one) stays a kept part.
 
+Cell metadata: `Package::cell_pictures` (and `Document::cell_pictures`) follows a cell's `vm`
+through the value and future metadata to its `_localImage` rich value and image, as
+`CellPicture` (PNG or JPEG, alternative text). Every table is bounded (`MAX_RECORDS`, `MAX_PICTURE`,
+`MAX_PICTURES_TOTAL`); what does not resolve is `None` with a warning, and the cell keeps its saved
+value. `Document::add_cell_metadata` writes the metadata part, the rich-value parts and the images
+for new pictures (`vm = i + 1`) and the `XLDAPR` dynamic-array metadata (`cm = 1`).
+
 The parts this crate writes use the transitional namespaces; a strict file's kept parts stay as
 they were. A binary workbook is not written.
 
