@@ -5,7 +5,7 @@ use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers};
 
 #[trial]
-fn a_cjk_title_shows_its_english_letter_and_the_letter_opens_it() {
+fn a_cjk_title_shows_its_english_letter_and_alt_with_the_letter_opens_it() {
     let bar = from_items(&["文件"], &[Row::new(&["文件"], CommandRef::new("file.new"), "新建")]);
     let english = |labeled: Labeled<'_>| match labeled {
         Labeled::Title("文件") => Some("File".to_owned()),
@@ -17,9 +17,7 @@ fn a_cjk_title_shows_its_english_letter_and_the_letter_opens_it() {
     });
     fixture.settle();
     assert!(fixture.by_label("文件(F)").is_some(), "the title shows the English letter after it");
-    fixture.key(Key::F10, Modifiers::NONE);
+    fixture.key(Key::F, Modifiers::ALT);
     fixture.settle();
-    fixture.key(Key::F, Modifiers::NONE);
-    fixture.settle();
-    assert!(fixture.by_label("新建(N)").is_some(), "F opens the title's menu, whose row shows its own English letter");
+    assert!(fixture.by_label("新建(N)").is_some(), "Alt+F opens the title's menu, whose row shows its own English letter");
 }
