@@ -100,6 +100,13 @@ impl ListRow<'_> {
     pub fn row_height(cx: &StyleCx<'_>, thumb: ThumbSize, detail: bool) -> f32 {
         Sizes::of(cx, TypeRole::Body).height(thumb, detail)
     }
+
+    /// Where this row's disclosure lies when it fills `rect` under `style`, with texts `text_width` wide: the rect at
+    /// which a host that owns the disclosure part (`disclosure_by_host`) declares it. `None` for a row without one.
+    pub(crate) fn disclosure_at(&self, style: &ListRowStyle, rect: Rect, rtl: bool, text_width: &dyn Fn(&TextRun<'_>) -> f32) -> Option<Rect> {
+        let widths = self.widths(&style.sizes, text_width);
+        self.place(&style.sizes, &widths, rect, rtl).disclosure
+    }
 }
 
 /// A trailing item's width where the row has room, the least it narrows to, and whether it drops out for room.

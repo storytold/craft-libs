@@ -216,7 +216,7 @@ impl Component for ListRow<'_> {
                 cx.selectable_text(TEXT_CELL.at(*position as u64), &self.cell_run(cx.style, *at));
             }
         }
-        if let Some(disclosure) = placed.disclosure {
+        if let Some(disclosure) = placed.disclosure.filter(|_| !self.disclosure_by_host) {
             let words = cx.words::<ListWords>();
             let tip = if self.group == Some(true) { words.collapse_tip.clone() } else { words.expand_tip.clone() };
             cx.part(DISCLOSURE, disclosure).sense(Sense::CLICK).pointer_only("Left and Right open and close the row").tooltip(tip);
@@ -387,8 +387,10 @@ impl Component for ListRow<'_> {
         }
         if let Some(open) = self.group {
             access.expanded(open);
-            let pattern = if open { &words.collapse } else { &words.expand };
-            access.node(DISCLOSURE, Role::BUTTON).name = Name::Text(named(pattern, label));
+            if !self.disclosure_by_host {
+                let pattern = if open { &words.collapse } else { &words.expand };
+                access.node(DISCLOSURE, Role::BUTTON).name = Name::Text(named(pattern, label));
+            }
         }
         let selected =
             cx.resolved.selected == Some(true) || cx.env.facts_of(cx.resolved.id).is_some_and(|facts| facts.flags.contains(Flags::SELECTED));
@@ -476,6 +478,7 @@ impl Component for ListRow<'_> {
         }
         if let Some(open) = self.group
             && placed.disclosure.is_some()
+            && !self.disclosure_by_host
         {
             ui.face(DISCLOSURE, Disclosure::new(Bind::given(open)).node(false).triangle(true).label(cx.resolved.label.to_owned()));
         }

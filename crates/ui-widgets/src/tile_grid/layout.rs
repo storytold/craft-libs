@@ -4,7 +4,7 @@
 //! plus what the tile adds around it (`Around`), in every tiling.
 
 use crate::runtime::env::Label;
-use craft_behavior::{ItemLayout, ItemSource, NavShape, ScrollPos, SizeHint, TileLayout as EqualTiles};
+use craft_behavior::{IconId, ItemLayout, ItemSource, NavShape, ScrollPos, SizeHint, TileLayout as EqualTiles};
 use egui::{Pos2, Rect, Vec2, pos2, vec2};
 use std::ops::Range;
 use std::sync::Arc;
@@ -32,12 +32,16 @@ pub struct TileGroup<K> {
     pub detail: String,
     /// Whether the group shows its tiles; a closed group shows its header only.
     pub open: bool,
+    /// The header's level in a tree of groups (a folder in a folder), which indents the header, not its tiles.
+    pub depth: usize,
+    /// The glyph before the header's title (a folder).
+    pub icon: Option<IconId>,
 }
 
 impl<K> TileGroup<K> {
     /// An open group of `count` tiles from tile position `start`, titled `title`, whose header row is keyed `key`.
     pub fn new(key: K, start: usize, count: usize, title: impl Into<String>) -> Self {
-        TileGroup { key, start, count, title: title.into(), detail: String::new(), open: true }
+        TileGroup { key, start, count, title: title.into(), detail: String::new(), open: true, depth: 0, icon: None }
     }
 
     /// The detail at the header's trailing end.
@@ -51,6 +55,20 @@ impl<K> TileGroup<K> {
     #[must_use]
     pub fn open(mut self, open: bool) -> Self {
         self.open = open;
+        self
+    }
+
+    /// The header's level in a tree of groups; 0 is the top.
+    #[must_use]
+    pub fn depth(mut self, depth: usize) -> Self {
+        self.depth = depth;
+        self
+    }
+
+    /// The glyph before the header's title.
+    #[must_use]
+    pub fn icon(mut self, icon: IconId) -> Self {
+        self.icon = Some(icon);
         self
     }
 }

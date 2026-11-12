@@ -225,6 +225,9 @@ pub struct ListRow<'a> {
     /// The row is a tree group with children, `open` or closed: it shows the disclosure part.
     #[prop]
     pub(super) group: Option<bool>,
+    /// The host declares and paints the disclosure part of this group row (a face has no parts of its own): the row
+    /// keeps the disclosure column and paints no disclosure.
+    pub(super) disclosure_by_host: bool,
     /// The row is an option of a listbox, not an item of a list: inset and rounded, the chosen option outlined.
     #[style_key]
     #[prop(flag)]
@@ -292,6 +295,7 @@ impl<'a> ListRow<'a> {
             cell_fields: Vec::new(),
             depth: None,
             group: None,
+            disclosure_by_host: false,
             option: false,
             check: None,
             event: None,
@@ -315,6 +319,14 @@ impl<'a> ListRow<'a> {
     #[must_use]
     pub fn cells(mut self, cells: &[(ColumnKey, Rect)]) -> Self {
         self.cells = cells.to_vec();
+        self
+    }
+
+    /// The host declares and paints the disclosure part of this group row at [`ListRow::disclosure_at`]; the row keeps
+    /// the column. For a row the host paints as a face, which declares no parts.
+    #[must_use]
+    pub(crate) fn disclosure_by_host(mut self) -> Self {
+        self.disclosure_by_host = true;
         self
     }
 

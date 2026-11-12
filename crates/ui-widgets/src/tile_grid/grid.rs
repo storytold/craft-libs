@@ -14,13 +14,13 @@ use super::tile::AroundPicture;
 use super::{CaptionPlace, Tile, TilePartEvent, ZoomStep};
 use crate::contract::{
     Access, Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, ColumnKind, ColumnSpec, Common, Component,
-    ContainerProps, Cx, DropKind, EditResponse, Focus as _, ListDrag, NoValue, Notch, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role,
-    RowState, SelectMode, Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn,
+    ContainerProps, Cx, DropKind, EditResponse, Focus as _, ListDrag, Meta as _, NoValue, Notch, Outcome, PaintUi, PartsCx, Pointer as _, Props as _,
+    Role, RowState, SelectMode, Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn,
 };
 use crate::contract::{lead_position, section_part};
 use crate::controls::disclosure::Disclosure;
-use crate::list::{DropTest, ListRow, RowTest, ThumbSize};
-use crate::primitives::{PaintShape, RectSide};
+use crate::list::{DropTest, ListRow, ListRowStyle, RowTest, ThumbSize};
+use crate::primitives::{IconSpec, PaintShape, RectSide};
 use crate::runtime::access::Name;
 use crate::runtime::commands::FireSource;
 use crate::runtime::env::Label;
@@ -122,7 +122,7 @@ impl<K> Outcome for TileGridOutput<K> {
     }
 }
 
-/// The sizes of the grid and the look of the pinned group headers; the headers' own look is the heading row's.
+/// The look of the pinned group headers and of the headers themselves, which are heading rows.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct TileGridStyle {
@@ -130,9 +130,13 @@ pub struct TileGridStyle {
     metrics: Metrics,
     /// A header pinned over its group's tiles.
     pinned: StyleColor,
-    /// The side of the disclosure column and the space beside the header's content.
-    toggle: f32,
-    pad: f32,
+    /// The look of a group header: a heading row, which places the disclosure the grid declares.
+    header: ListRowStyle,
+}
+
+/// The sizes the grid lays its tiles out with.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct GridSizes {
     /// The picture side of a card at zoom 1 when a grid names no thumbnail size: the card thumbnail.
     card: f32,
     /// The picture side of a card at zoom 1 for each thumbnail size.
@@ -144,19 +148,14 @@ pub struct TileGridStyle {
     bare_spacing: ArrangeSpacing,
 }
 
-impl TileGridStyle {
-    fn build(cx: &StyleCx<'_>, card: bool) -> TileGridStyle {
-        let colors = &cx.tokens.color;
+impl GridSizes {
+    fn of(cx: &StyleCx<'_>, card: bool) -> GridSizes {
         let spacing = ArrangeSpacing::new(
             if card { cx.tokens.space.gap.section } else { cx.tokens.space.gap.stack },
             cx.tokens.space.gap.inline,
             cx.tokens.size.panel_header,
         );
-        TileGridStyle {
-            metrics: Metrics::new(),
-            pinned: cx.color(colors.surface.panel),
-            toggle: cx.tokens.size.icon.sm,
-            pad: cx.tokens.space.gap.inline,
+        GridSizes {
             card: cx.tokens.size.thumb.card,
             thumbs: [cx.tokens.size.thumb.sm, cx.tokens.size.thumb.md, cx.tokens.size.thumb.lg],
             around: Tile::around(cx, card),
@@ -241,7 +240,6 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     #[prop(flag)]
     detail_line: bool,
     /// Tiles are framed cards: the picture inset in a raised surface with the name and detail at the reading start.
-    #[style_key]
     #[prop(flag)]
     card: bool,
     /// The headers over runs of tiles, in display order.
@@ -291,6 +289,8 @@ struct Placed {
     group: usize,
     rect: Rect,
     pinned: bool,
+    /// The header has a disclosure part.
+    toggle: bool,
 }
 
 impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
@@ -394,7 +394,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
     /// The layout of this pass: `previous` when it was made from the same recipe, else a new arrangement. A card is
     /// the picture plus what the tile adds around it in every tiling.
     fn laid_out(&self, previous: Option<GridLayout>, source: &dyn ItemSource<K>, width: f32, item: Option<Vec2>, cx: &StyleCx<'_>) -> GridLayout {
-        let style = TileGridStyle::build(cx, self.card);
+        let style = GridSizes::of(cx, self.card);
         let spacing = style.spacing(self.caption);
         let around = style.around.get(self.caption, self.detail_line);
         // A card never outgrows the grid: in a column narrower than a card the card takes the column.
@@ -446,7 +446,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
 
     /// The side of a card's picture: the largest tile's (`item`, as the items step measured it) less what a tile adds
     /// around its picture, with `content_cells`; else the zoomed thumbnail side.
-    fn picture_side(&self, style: &TileGridStyle, item: Option<Vec2>, around: Around) -> f32 {
+    fn picture_side(&self, style: &GridSizes, item: Option<Vec2>, around: Around) -> f32 {
         match item.filter(|_| self.content_cells) {
             Some(item) => (item.x - around.size().x).max(1.0),
             None => style.picture_side(self.zoom, self.thumb_size),
@@ -477,10 +477,20 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
         }
     }
 
-    /// The disclosure column of the header in `rect`, at its reading start.
-    fn toggle_rect(rect: Rect, style: &TileGridStyle, rtl: bool) -> Rect {
-        let x = if rtl { rect.max.x - style.pad - style.toggle } else { rect.min.x + style.pad };
-        Rect::from_min_size(pos2(x, rect.min.y), vec2(style.toggle, rect.height()))
+    /// The header row of `group`: a heading at the group's depth, with its icon and its detail at the end, and a
+    /// disclosure column the grid owns when the groups open and close.
+    fn header_row(&self, group: &TileGroup<K>, state: RowState) -> ListRow<'static> {
+        let mut row = ListRow::new(group.title.clone()).heading().node(false).depth(group.depth).state(state);
+        if self.collapsible {
+            row = row.group(group.open).disclosure_by_host();
+        }
+        if let Some(icon) = &group.icon {
+            row = row.icon(IconSpec::svg(icon.clone()));
+        }
+        if !group.detail.is_empty() {
+            row = row.trailing(group.detail.clone());
+        }
+        row
     }
 }
 
@@ -490,8 +500,12 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
     type Style = TileGridStyle;
     type Output = TileGridOutput<K>;
 
-    fn style(cx: &StyleCx<'_>, key: TileGridStyleKey<K>) -> TileGridStyle {
-        TileGridStyle::build(cx, key.card)
+    fn style(cx: &StyleCx<'_>, _: TileGridStyleKey<K>) -> TileGridStyle {
+        TileGridStyle {
+            metrics: Metrics::new(),
+            pinned: cx.color(cx.tokens.color.surface.panel),
+            header: ListRow::style(cx, ListRow::new(Label::default()).heading().style_key()),
+        }
     }
 
     /// One pointer part per header in view, over the tiles, and a disclosure part in it when headers collapse; one
@@ -514,12 +528,14 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
             if !rect.intersects(clip) {
                 continue;
             }
-            self.placed.push(Placed { group, rect, pinned: held });
+            let column = self
+                .header_row(declared, RowState::default())
+                .disclosure_at(&cx.style.header, rect, rtl, &|run| cx.layout_at(run, f32::INFINITY).size().x);
+            self.placed.push(Placed { group, rect, pinned: held, toggle: column.is_some() });
             let priority = HitPriority::new(HitLevel::Edge, 0);
             let sense = Sense::CLICK | Sense::TAKE_FOCUS;
             cx.part(section_part(&declared.key), rect).sense(sense).priority(priority).over().pointer_only(HEADER_KEYS);
-            if self.collapsible {
-                let column = Self::toggle_rect(rect, cx.style, rtl);
+            if let Some(column) = column {
                 cx.part(TOGGLE.at(group as u64), column).sense(Sense::CLICK).priority(priority).over().pointer_only(HEADER_KEYS);
             }
         }
@@ -658,13 +674,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
                 draw.edge_rule(RuleKind::Divider, rect, RectSide::Bottom);
             }
             let lead = RowState { emphasized: lead == Some(Slot::Header(placed.group)), ..RowState::default() };
-            let mut heading = ListRow::new(group.title.clone()).heading().node(false).state(lead);
-            if !group.detail.is_empty() {
-                heading = heading.trailing(group.detail.clone());
-            }
-            ui.face(section_part(&group.key), heading);
-            if self.collapsible {
-                let disclosure = Disclosure::new(Bind::given(group.open)).node(false).label(group.title.clone());
+            ui.face(section_part(&group.key), self.header_row(group, lead));
+            if placed.toggle {
+                let disclosure = Disclosure::new(Bind::given(group.open)).node(false).triangle(true).label(group.title.clone());
                 ui.face(TOGGLE.at(placed.group as u64), disclosure);
             }
         }
@@ -792,7 +804,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
         if self.card_columns == 0 {
             return 0.0;
         }
-        let style = TileGridStyle::build(cx, self.card);
+        let style = GridSizes::of(cx, self.card);
         let aspect = if self.aspect.is_finite() && self.aspect > 0.0 { self.aspect } else { 1.0 };
         let around = style.around.get(self.caption, self.detail_line);
         let card = style.card(self.picture_side(&style, item, around), aspect, around).x;

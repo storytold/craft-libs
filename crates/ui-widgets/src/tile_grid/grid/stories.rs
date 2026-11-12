@@ -144,7 +144,7 @@ fn tile_grid_groups(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         TileGroup::new(GROUP_KEYS[1], 12, 8, "September 2026").detail("8 photos").open(open[1]),
         TileGroup::new(GROUP_KEYS[2], 20, 10, "August 2026").detail("10 photos").open(open[2]),
     ];
-    let out = grid(ui, data, TileGrid::new("Library").groups(&groups).collapsible(), 30, 2.0);
+    let out = grid(ui, data, TileGrid::new("Library").groups(&groups).collapsible(), 30, 1.0);
     let open = data.value("open", open);
     for event in &out.events {
         if let GridEvent::GroupOpen { group, open: wanted } = event {

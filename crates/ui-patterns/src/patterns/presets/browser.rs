@@ -28,7 +28,7 @@ use crate::layout_components::Stack;
 use crate::list::{List, ListRow, RowInk, RowTest, ThumbSize};
 use crate::menu::{Menu, MenuItem};
 use crate::notices::{Notice, NoticeLayout};
-use crate::primitives::ContentPainterCx;
+use crate::primitives::{ContentPainterCx, IconSpec};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::memory::Remember as _;
 use crate::text::TextField;
@@ -339,6 +339,11 @@ fn shown_rows<K: Clone + Eq + Hash>(
     out
 }
 
+/// The glyph of a group row in both views: an open or a closed folder.
+fn folder(open: bool) -> IconId {
+    IconId::new(if open { "folder_open" } else { "folder" })
+}
+
 /// The grid's tiles and group headers from the shown rows: each header covers the presets that follow it inside its
 /// group.
 struct Plan<K> {
@@ -353,7 +358,11 @@ fn grid_plan<K: Clone>(rows: &[PresetRow<K>], shown: &[usize], open: impl Fn(usi
     for &at in shown {
         let row = &rows[at];
         if row.is_group() {
-            let mut group = TileGroup::new(BrowserKey::Preset(row.key.clone()), plan.tiles.len(), 0, row.label.clone()).open(open(at));
+            let open = open(at);
+            let mut group = TileGroup::new(BrowserKey::Preset(row.key.clone()), plan.tiles.len(), 0, row.label.clone())
+                .open(open)
+                .depth(row.depth)
+                .icon(folder(open));
             if let Some(detail) = count(at) {
                 group = group.detail(detail);
             }
@@ -675,7 +684,12 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                     };
                     let row = &rows[at];
                     if row.is_group() {
-                        let mut line = ListRow::new(row.label.clone()).heading().depth(row.depth).group(icx.row.open).rule(ruled(icx.at));
+                        let mut line = ListRow::new(row.label.clone())
+                            .heading()
+                            .depth(row.depth)
+                            .group(icx.row.open)
+                            .icon(IconSpec::svg(folder(icx.row.open)))
+                            .rule(ruled(icx.at));
                         if let Some(detail) = counted(at) {
                             line = line.detail(detail);
                         }
