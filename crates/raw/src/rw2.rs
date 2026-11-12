@@ -458,7 +458,7 @@ fn code_table(pairs: &[(u32, u32)]) -> Result<Huffman> {
 }
 
 /// Decode one strip into its column range of each output row.
-fn decode_strip(s: &Strip, codes: &Huffman, mut rows: Vec<&mut [u16]>) -> Result<()> {
+fn decode_strip(s: &Strip, codes: &Huffman, max: i32, mut rows: Vec<&mut [u16]>) -> Result<()> {
     // the stream's bits are taken from each byte starting at bit 0: reversed, it is an ordinary MSB-first stream
     let reversed: Vec<u8> = s.data.iter().map(|b| b.reverse_bits()).collect();
     let mut bits = Bits::new(&reversed);
@@ -469,8 +469,12 @@ fn decode_strip(s: &Strip, codes: &Huffman, mut rows: Vec<&mut [u16]>) -> Result
             for (k, v) in cell.iter_mut().enumerate() {
                 let d = diff(&mut bits, codes).ok_or_else(|| RawError::Corrupt(format!("RW2 format 8: invalid code in row {}", 2 * pair)))?;
                 *v = v.saturating_add(d);
+                // a value outside the sample depth is a corrupt stream, not a sample to clamp
+                let sample = u16::try_from(*v).ok().filter(|_| *v <= max);
+                let sample =
+                    sample.ok_or_else(|| RawError::Corrupt(format!("RW2 format 8: sample {} outside the {max} range in row {}", *v, 2 * pair)))?;
                 if let Some(px) = rows.get_mut(2 * pair + k % 2).and_then(|r| r.get_mut(2 * cx + k / 2)) {
-                    *px = (*v).clamp(0, u16::MAX as i32) as u16;
+                    *px = sample;
                 }
             }
             if cx == 0 {
@@ -484,7 +488,9 @@ fn decode_strip(s: &Strip, codes: &Huffman, mut rows: Vec<&mut [u16]>) -> Result
     Ok(())
 }
 
-fn decode_strips(strips: &[Strip], codes: &Huffman, w: usize, out: &mut [u16]) -> Result<()> {
+/// `bits`: the sample depth; a decoded value above it (or below 0) makes the strip corrupt.
+fn decode_strips(strips: &[Strip], codes: &Huffman, w: usize, bits: u32, out: &mut [u16]) -> Result<()> {
+    let max = (1i32 << bits.clamp(1, 16)) - 1;
     let mut parts: Vec<Vec<&mut [u16]>> = strips.iter().map(|s| Vec::with_capacity(s.height)).collect();
     for (y, row) in out.chunks_mut(w).enumerate() {
         // the strips crossing this row, left to right, each take their columns off its front
@@ -503,7 +509,7 @@ fn decode_strips(strips: &[Strip], codes: &Huffman, w: usize, out: &mut [u16]) -
             x = s.left + s.width;
         }
     }
-    strips.par_iter().zip(parts).try_for_each(|(s, rows)| decode_strip(s, codes, rows))
+    strips.par_iter().zip(parts).try_for_each(|(s, rows)| decode_strip(s, codes, max, rows))
 }
 
 /// Replace samples of 0 inside `area` (mapped-out defects) by the mean of the non-zero samples of the same colour two
@@ -591,7 +597,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
             let (strips, codes) = format8(ifd0, tiff.order, bytes, w, h)?;
             if mode == Mode::Full {
                 data = vec![0u16; n];
-                decode_strips(&strips, &codes, w, &mut data)?;
+                decode_strips(&strips, &codes, w, bits, &mut data)?;
             }
         }
     }
@@ -1209,6 +1215,26 @@ mod tests {
         }
     }
 
+    /// A format-8 sample above the file's bit depth is a corrupt stream: refused, not clamped or kept. The top of
+    /// the range itself decodes.
+    #[test]
+    fn format8_samples_above_the_bit_depth_are_refused() {
+        let (w, h) = (64usize, 30usize);
+        for depth in [12u16, 14, 16] {
+            let top = ((1u32 << depth) - 1) as u16;
+            let mut px = image(w, h, 100, 4000);
+            px[5 * w + 9] = top;
+            let file = |px: &[u16]| format8_file(w, h, px, &[30, 34], &TABLE16, &|t| replace(t, BITS, Value::Short(vec![depth])));
+            let r = crate::decode(&file(&px)).unwrap_or_else(|e| panic!("{depth}-bit: {e}"));
+            assert_eq!(samples(&r)[5 * w + 9], top, "{depth}-bit");
+            if depth < 16 {
+                px[5 * w + 9] = top + 1;
+                let got = crate::decode(&file(&px));
+                assert!(matches!(&got, Err(RawError::Corrupt(m)) if m.contains("outside")), "{depth}-bit: {got:?}");
+            }
+        }
+    }
+
     #[test]
     fn format8_tiles_in_two_rows_round_trip() {
         // the DC-S1RM2 high-resolution mode: four columns by two rows of tiles, tag 0x0043 = 2
@@ -1245,6 +1271,7 @@ mod tests {
         decode_strip(
             &Strip { data: &data, left: 0, top: 0, width: 2, height: 2, bits: n },
             &code_table(&TABLE14).unwrap(),
+            16383,
             vec![&mut top, &mut bottom],
         )
         .unwrap();
