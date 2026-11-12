@@ -34,6 +34,9 @@ pub struct Stop {
     pub group: Option<Id>,
     /// The roving group of the innermost body the stop sits in, whether or not the stop joined it.
     pub body: Option<Id>,
+    /// The app's own egui widget (`focus::host_canvas`), which reads its keys from egui's input: the key stage leaves
+    /// the presses it routes to the stop there.
+    pub host: bool,
 }
 
 impl Stop {
@@ -51,6 +54,7 @@ impl Stop {
             name: None,
             group: None,
             body: None,
+            host: false,
         }
     }
 
@@ -105,6 +109,12 @@ impl Stop {
     /// Sits in the body of the roving group `group`, if any.
     pub fn in_body(mut self, group: Option<Id>) -> Self {
         self.body = group;
+        self
+    }
+
+    /// Marks the stop as the app's own egui widget.
+    pub fn host(mut self) -> Self {
+        self.host = true;
         self
     }
 

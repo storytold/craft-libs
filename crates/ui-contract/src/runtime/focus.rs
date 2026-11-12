@@ -199,7 +199,7 @@ pub(crate) fn register_stop(ctx: &Context, stop: Stop) {
 /// With the canvas focused, Tab it keeps stays in egui too, and its edit set arrives as `Intent::Edit`
 /// (`keys::intents_of`), as for any focused stop. Call it each pass the canvas shows.
 pub fn host_canvas(ctx: &Context, id: Id, keys: KeyUse) {
-    register_stop(ctx, Stop::new(id, keys.with_chrome_key(true)));
+    register_stop(ctx, Stop::new(id, keys.with_chrome_key(true)).host());
 }
 
 /// The keys of the document canvas `viewport` registered in its last pass (`KeyUse::chrome_key`), framework or the

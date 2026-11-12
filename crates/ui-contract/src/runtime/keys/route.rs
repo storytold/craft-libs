@@ -110,7 +110,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         push(&mut routed, focused, Intent::Edit(command), false);
     }
     let (shortcuts, held) = owned_shortcuts(ctx, target.as_ref(), &batch, &consumed);
-    withdraw_held(ctx, &batch, &held);
+    withdraw_held(ctx, target.as_ref(), &batch, &held);
     let pasted = batch.paste.as_deref().zip(focused).map(|(text, id)| (id, Arc::<str>::from(text)));
     let escapes = craft_behavior::focus::route_escapes(batch.escapes, press_captured);
     for _ in 0..escapes.to_components {
@@ -224,8 +224,12 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
 }
 
 /// Takes the presses the focused component holds out of the running pass's egui input, where the app reads its own
-/// keys: one press, one action. A held press whose release has not come yet leaves its release to the strip.
-fn withdraw_held(ctx: &Context, batch: &Batch, held: &[bool]) {
+/// keys: one press, one action. A held press whose release has not come yet leaves its release to the strip. The
+/// app's own widget (`Stop::host`) reads its keys from egui, so its presses stay.
+fn withdraw_held(ctx: &Context, target: Option<&StopRec>, batch: &Batch, held: &[bool]) {
+    if target.is_some_and(|rec| rec.stop.host) {
+        return;
+    }
     let presses: Vec<&Press> =
         batch.presses.iter().zip(held).filter(|(press, held)| **held && press.in_egui.is_some()).map(|(press, _)| press).collect();
     if presses.is_empty() {
