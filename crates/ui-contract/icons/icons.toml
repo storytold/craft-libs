@@ -1579,6 +1579,15 @@ phosphor = "arrow-counter-clockwise"
 carbon = "rotate--counterclockwise"
 tabler = "rotate"
 
+# Restores a default: a shortcut, a setting. Not a turn of the canvas, which is `rotate_ccw`.
+[[icon]]
+name = "reset"
+directional = false
+lucide = "rotate-ccw"
+phosphor = "arrow-counter-clockwise"
+carbon = "rotate--counterclockwise"
+tabler = "rotate"
+
 [[icon]]
 name = "arrow_left_fixed"
 directional = false

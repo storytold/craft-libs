@@ -23,9 +23,9 @@ use crate::shortcuts::view::{area_key, recording_text};
 
 const COMMAND: ColumnKey = ColumnKey::new("command");
 const SHORTCUT: ColumnKey = ColumnKey::new("shortcut");
-/// The command column is this many times as wide as the shortcut column.
-const COMMAND_SHARE: f32 = 2.0;
-const SHORTCUT_SHARE: f32 = 1.0;
+/// The most of the table the shortcut column takes; it is as wide as its widest row of chips with the add and restore
+/// buttons, and the command column takes the rest.
+const SHORTCUT_MOST: f32 = 0.4;
 const PATH_SEPARATOR: &str = " \u{203a} ";
 
 /// What a row reports besides what the collection reads from its pointer input.
@@ -298,25 +298,46 @@ impl Component for CommandRow<'_> {
         }
     }
 
+    /// The row's height, and the width its shortcut cell takes for the shortcut column.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         self.widths.clear();
-        if let Line::Row(line) = self.line {
-            for chip in &line.chips {
-                let width = cx.child(("chip", &chip.text), &mut Button::new(chip.text.clone()), Proposal::Ideal).x;
-                self.widths.insert((Shown::Chip, chip.text.clone()), width);
+        let (gap, height) = (cx.style.gap, cx.style.height);
+        match self.line {
+            Line::Row(line) => {
+                let mut cell = 0.0;
+                for chip in &line.chips {
+                    let width = cx.child(("chip", &chip.text), &mut Button::new(chip.text.clone()), Proposal::Ideal).x;
+                    self.widths.insert((Shown::Chip, chip.text.clone()), width);
+                    cell += width + gap;
+                }
+                if line.chips.is_empty() {
+                    cell += cx.child(("chip", "none"), &mut Button::new(self.env.words.none.as_str().to_owned()), Proposal::Ideal).x + gap;
+                }
+                for text in &line.unparsed {
+                    let width = cx.child(("unparsed", text), &mut unparsed_note(text, String::new()), Proposal::Ideal).x;
+                    self.widths.insert((Shown::Unparsed, text.clone()), width);
+                    cell += width + gap;
+                }
+                if let Some((Target::Cell { command, .. }, shown)) = &self.env.recording
+                    && *command == line.command
+                {
+                    let width = ChordRecorder::new(String::new(), true, shown.clone()).width(cx, ("record", &line.key));
+                    self.widths.insert((Shown::Recording, shown.clone()), width);
+                    cell += width + gap;
+                }
+                if self.env.editable {
+                    let add = if line.chips.len() < MAX_BINDINGS { height + gap } else { 0.0 };
+                    cell += add + height;
+                }
+                cx.cell_width(&SHORTCUT, cell);
             }
-            for text in &line.unparsed {
-                let width = cx.child(("unparsed", text), &mut unparsed_note(text, String::new()), Proposal::Ideal).x;
-                self.widths.insert((Shown::Unparsed, text.clone()), width);
+            Line::Fixed(fixed) => {
+                let keys = cx.layout(&TextRun::new(fixed.keys.as_str()).role(cx.style.label.role)).size().x;
+                cx.cell_width(&SHORTCUT, keys + 2.0 * cx.style.pad);
             }
-            if let Some((Target::Cell { command, .. }, shown)) = &self.env.recording
-                && *command == line.command
-            {
-                let width = ChordRecorder::new(String::new(), true, shown.clone()).width(cx, ("record", &line.key));
-                self.widths.insert((Shown::Recording, shown.clone()), width);
-            }
+            Line::Header { .. } => {}
         }
-        Vec2::new(0.0, cx.style.height)
+        Vec2::new(0.0, height)
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
@@ -397,6 +418,10 @@ impl CommandRow<'_> {
             _ => None,
         });
         let reset_at = (cell.width() - height).max(0.0);
+        let adding = matches!(&recording, Some((None, _)));
+        let adds = editable && line.chips.len() < MAX_BINDINGS && !adding;
+        // The add button keeps its place after the chips: they take the room before it and the reset button.
+        let chips_end = if adds { (reset_at - height - gap).max(0.0) } else { reset_at };
         let mut at = 0.0;
         let mut act = None;
         let mut cells: Vec<(Option<&Chip>, bool)> =
@@ -410,7 +435,7 @@ impl CommandRow<'_> {
                 _ => chip.map_or_else(String::new, |chip| chip.text.clone()),
             };
             let kind = if *recording_here { Shown::Recording } else { Shown::Chip };
-            let width = width_of(kind, &shown).min((reset_at - at).max(0.0));
+            let width = width_of(kind, &shown).min((chips_end - at).max(0.0));
             let rect = band(&flow, cell, at, width);
             at += width + gap;
             if *recording_here {
@@ -428,31 +453,30 @@ impl CommandRow<'_> {
             }
             let Some(chip) = chip else { continue };
             let name = words.label_chord.fill(&[("label", &line.label), ("chord", &chip.text)]);
-            let button = Button::new(chip.text.clone()).id_salt(("chip", line.key.as_str(), n)).label(name).enabled(editable);
+            let button = Button::new(name).painted(chip.text.clone()).id_salt(("chip", line.key.as_str(), n)).enabled(editable);
             if clicked(&ui.child(("chip", line.key.as_str(), n), rect, button)) {
                 act = Some(RowAct::Record(Some(n)));
             }
         }
         if cells.is_empty() {
-            let rect = band(&flow, cell, 0.0, reset_at.max(height));
+            let rect = band(&flow, cell, 0.0, chips_end.max(height));
             let none = words.none.as_str();
             let name = words.label_chord.fill(&[("label", &line.label), ("chord", none)]);
-            let button = Button::new(none.to_owned()).id_salt(("chip", line.key.as_str(), 0)).label(name).enabled(editable);
+            let button = Button::new(name).painted(none.to_owned()).id_salt(("chip", line.key.as_str(), 0)).enabled(editable);
             if clicked(&ui.child(("chip", line.key.as_str(), 0), rect, button)) {
                 act = Some(RowAct::Record(None));
             }
-            at = reset_at;
+            at = chips_end.max(height) + gap;
         }
         for (n, text) in line.unparsed.iter().enumerate() {
-            let width = width_of(Shown::Unparsed, text).min((reset_at - at).max(0.0));
+            let width = width_of(Shown::Unparsed, text).min((chips_end - at).max(0.0));
             let rect = band(&flow, cell, at, width);
             at += width + gap;
             let name = words.label_chord.fill(&[("label", &line.label), ("chord", text)]);
             let note = unparsed_note(text, name).tooltip(words.this_saved_text_is_not_a.as_str().to_owned());
             ui.child(("unparsed", line.key.as_str(), n), rect, note);
         }
-        let adding = matches!(&recording, Some((None, _)));
-        if editable && line.chips.len() < MAX_BINDINGS && !adding && at + height <= reset_at {
+        if adds && at + height <= reset_at {
             let rect = band(&flow, cell, at, height);
             let name = words.add_a_shortcut_to_label.fill(&[("label", &line.label)]);
             let add = IconButton::new(IconSpec::svg(craft_behavior::IconId::new("plus")))
@@ -466,7 +490,7 @@ impl CommandRow<'_> {
         if editable {
             let rect = band(&flow, cell, reset_at, height);
             let name = words.restore_the_default_for_label.fill(&[("label", &line.label)]);
-            let reset = IconButton::new(IconSpec::svg(craft_behavior::IconId::new("undo")))
+            let reset = IconButton::new(IconSpec::svg(craft_behavior::IconId::new("reset")))
                 .id_salt(("reset", line.key.as_str()))
                 .label(name.clone())
                 .tooltip(name)
@@ -494,8 +518,8 @@ pub(super) fn show(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut DialogS
     let start = state.recording.as_ref().is_some_and(|recording| !recording.started);
     let row_env = RowEnv { editable, recording: state.recording.as_ref().map(|recording| (&recording.target, shown.clone())), start, words };
     let columns = vec![
-        ColumnSpec::new(COMMAND, words.command.clone(), ColumnWidth::fill(COMMAND_SHARE)),
-        ColumnSpec::new(SHORTCUT, words.shortcut.clone(), ColumnWidth::fill(SHORTCUT_SHARE)),
+        ColumnSpec::new(COMMAND, words.command.clone(), ColumnWidth::fill(1.0)),
+        ColumnSpec::new(SHORTCUT, words.shortcut.clone(), ColumnWidth::Content).at_most(SHORTCUT_MOST),
     ];
     let mut selection = Selection::new(position.into_iter().collect(), position, position);
     let reveal = if state.reveal { position } else { None };
