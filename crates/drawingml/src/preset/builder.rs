@@ -1,5 +1,5 @@
 use super::catalog::{FillMode, Geometry, Handle, SubPath};
-use super::{BezPath, Point, Rect, Vec2};
+use super::{Arc, BezPath, Point, Rect, Vec2};
 
 // ---------- path builder ----------
 
@@ -37,37 +37,10 @@ impl Pb {
     pub(super) fn arc(&mut self, wr: f64, hr: f64, st: f64, sw: f64) -> &mut Self {
         let (s, e) = (st.to_radians(), (st + sw).to_radians());
         let c = Point::new(self.cur.x - wr * s.cos(), self.cur.y - hr * s.sin());
-        let (rx, ry) = (wr.abs(), hr.abs());
-        let sweep = e - s;
-        // Segments come from the same error tolerance `kurbo::Arc::to_cubic_beziers(0.05, …)` was
-        // given, but sized with exact arithmetic. That call reached its count through `powf`, and
-        // libm implementations disagree on its last bits, so its `ceil` could pick a different
-        // segment count on another platform: the same shape then had two outlines, which no
-        // cross-platform golden can pin. A quarter-turn cubic misses its circle by about 2.75e-4
-        // of the radius, and halving a segment's angle cuts that error by 2^6, so doubling until
-        // the bound holds keeps large shapes within the tolerance the small ones already met.
-        const TOLERANCE: f64 = 0.05;
-        const QUARTER_TURN_ERROR: f64 = 2.75e-4;
-        let mut cut = 1usize;
-        let mut error = QUARTER_TURN_ERROR * rx.max(ry);
-        while error > TOLERANCE && cut < 4096 {
-            cut *= 2;
-            error /= 64.0;
-        }
-        // The small offset keeps a quarter turn that came out of `to_radians` or `acos` a hair
-        // above the exact ratio from asking for a second segment.
-        let quarters = sweep.abs() / std::f64::consts::FRAC_PI_2;
-        let n = ((quarters - 1e-9).ceil().max(1.0) as usize) * cut;
-        let step = sweep / n as f64;
-        let arm = (4.0 / 3.0) * (step * 0.25).abs().tan() * sweep.signum();
-        let sample = |a: f64| (c.x + rx * a.cos(), c.y + ry * a.sin());
-        let tangent = |a: f64| (-rx * a.sin(), ry * a.cos());
-        for i in 0..n {
-            let (a0, a1) = (s + i as f64 * step, s + (i + 1) as f64 * step);
-            let ((x0, y0), (tx0, ty0)) = (sample(a0), tangent(a0));
-            let ((x3, y3), (tx1, ty1)) = (sample(a1), tangent(a1));
-            self.p.curve_to(Point::new(x0 + arm * tx0, y0 + arm * ty0), Point::new(x3 - arm * tx1, y3 - arm * ty1), Point::new(x3, y3));
-        }
+        let a = Arc::new(c, Vec2::new(wr.abs(), hr.abs()), s, e - s, 0.0);
+        a.to_cubic_beziers(0.05, |p1, p2, p| {
+            self.p.curve_to(p1, p2, p);
+        });
         self.cur = Point::new(c.x + wr * e.cos(), c.y + hr * e.sin());
         self
     }

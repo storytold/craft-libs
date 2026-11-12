@@ -804,10 +804,6 @@ mod tests {
     /// this refactor is proven output-identical: any changed outline fails here. pieWedge,
     /// curvedRightArrow and curvedDownArrow were taken again when [`digest_coord`] began printing
     /// their near-zero residues as `0.000`; their outlines are unchanged.
-    ///
-    /// Every digest was taken again once [`Pb::arc`] sized its cubics from the radius: a shape whose
-    /// arcs are large enough to need more than one cubic per quarter turn now gets them, so the
-    /// 0.05 tolerance small shapes met holds at every size.
     const GOLDEN: [(&str, u64); 38] = [
         ("lineInv", 0x4a58a16923e54a4f),
         ("nonIsoscelesTrapezoid", 0x79eca0b36812e282),
@@ -821,7 +817,7 @@ mod tests {
         ("curvedRightArrow", 0xf60d53e01a88930c),
         ("curvedLeftArrow", 0x82472848de4a9fec),
         ("curvedUpArrow", 0xcfbd88c1aea4bf9d),
-        ("curvedDownArrow", 0x1b1ac2f13de11b9),
+        ("curvedDownArrow", 0x01b1ac2f13de11b9),
         ("swooshArrow", 0x63ff193fdf1d0427),
         ("callout1", 0xe7e0410f96282e8d),
         ("callout2", 0xcaa7730106a9ee1b),

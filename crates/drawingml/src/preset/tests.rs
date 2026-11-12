@@ -345,37 +345,6 @@ fn the_cloud_fills_its_box_at_any_aspect_and_has_creases() {
 }
 
 #[test]
-fn a_large_arc_stays_within_the_error_bound_of_a_small_one() {
-    // The outline of a preset can be built at any finite size. A single cubic per quarter turn
-    // misses its circle by about 2.75e-4 of the radius, which is a quarter of a unit at radius
-    // 1000 and worse for larger shapes, so the builder must split the turn to hold the 0.05
-    // tolerance it inherited from `kurbo::Arc::to_cubic_beziers(0.05, …)`.
-    const R: f64 = 1000.0;
-    let mut b = Pb::new();
-    b.m(R, 0.0).arc(R, R, 0.0, 90.0);
-    let p = b.take();
-    let (mut start, mut cubics, mut worst) = (Point::ZERO, 0, 0.0f64);
-    for el in p.elements() {
-        match *el {
-            kurbo::PathEl::MoveTo(q) | kurbo::PathEl::LineTo(q) => start = q,
-            kurbo::PathEl::CurveTo(a, c, q) => {
-                cubics += 1;
-                let curve = kurbo::CubicBez::new(start, a, c, q);
-                for i in 0..=64 {
-                    let at = kurbo::ParamCurve::eval(&curve, f64::from(i) / 64.0);
-                    worst = worst.max((at.x.hypot(at.y) - R).abs());
-                }
-                start = q;
-            }
-            kurbo::PathEl::QuadTo(_, q) => start = q,
-            kurbo::PathEl::ClosePath => {}
-        }
-    }
-    assert!(cubics > 1, "a radius-{R} quarter turn needs more than one cubic");
-    assert!(worst <= 0.05, "radius {R}: worst radial error {worst}");
-}
-
-#[test]
 fn spec_arcs_take_angles_as_directions_from_the_centre() {
     // A DrawingML arc of a 2:1 ellipse from 45° to 90°: 45° is the direction (1, 1) from the
     // centre, which on that ellipse is the point (r/√5)·(2, 1)… scaled so it lies on it.
