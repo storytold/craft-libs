@@ -1227,6 +1227,8 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             return false;
         }
         super::hits::named(self.id, layout).contains_key(&focused)
+            || (super::flyout::<P>(ctx, self.id).is_some()
+                && super::chrome::RESIZE_HANDLES.iter().any(|name| self.id.with("flyout").with(name) == focused))
     }
 
     /// Raise a panel's floating window (or open its flyout) on this frame. Apply Activate
