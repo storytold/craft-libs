@@ -1350,10 +1350,8 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
             // A control painting text through its faces (a select, a segmented control) reports that baseline too.
             let core = e.core_ref();
             let baseline = core.paint.borrow().baseline;
-            if let Some(baseline) = baseline {
-                scope::record_baseline(&ctx, baseline);
-            } else if shape == ShapeKind::Leaf {
-                scope::record_centre(&ctx, core.rect.center().y);
+            if baseline.is_some() || shape == ShapeKind::Leaf {
+                scope::record_line(&ctx, core.rect, baseline);
             }
         }
         real_pass = real;

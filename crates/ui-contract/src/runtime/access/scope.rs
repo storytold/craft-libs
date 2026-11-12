@@ -135,7 +135,9 @@ struct Scope {
     /// The screen y of the top of the rect the label step placed the controls in; the recorded baseline and centre
     /// are stored measured from it.
     control_top: f32,
-    /// The screen y of the first baseline of the first control.
+    /// The screen y of the bottom of the first control that reported its line: the label's line is that control's.
+    first_bottom: Option<f32>,
+    /// The screen y of the first baseline of the first control on the first line.
     baseline: Option<f32>,
     /// The screen y of the centre line of the first control, for a control that paints no text.
     centre: Option<f32>,
@@ -195,6 +197,7 @@ pub(crate) fn begin(ctx: &Context, container: Id, owner: Id, kind: Kind) {
             nodes: Vec::new(),
             open: Vec::new(),
             control_top: 0.0,
+            first_bottom: None,
             baseline: None,
             centre: None,
             reset: None,
@@ -266,21 +269,23 @@ pub(crate) fn place_controls(ctx: &Context, container: Id, top: f32) {
     });
 }
 
-/// Records the screen y of a control's first baseline in the innermost label scope. The first control to report wins.
-pub(crate) fn record_baseline(ctx: &Context, baseline: f32) {
+/// Records the line of a control at `rect` in the innermost label scope: its first baseline, or for a control that
+/// paints no text its centre line. The label lines up with the first line of what it labels: a baseline counts from a
+/// control that starts above the bottom of the first control that reported, so text that wraps onto a later line (a
+/// note after a row of chips) does not move the label down; otherwise the label centres on the first control.
+pub(crate) fn record_line(ctx: &Context, rect: Rect, baseline: Option<f32>) {
     pass_state::with::<Stack, _>(ctx, |stack| {
         if let Some(scope) = stack.0.iter_mut().rev().find(|scope| matches!(scope.kind, Kind::Label(_))) {
-            scope.baseline.get_or_insert(baseline);
-        }
-    });
-}
-
-/// Records the screen y of the centre line of a control that paints no text (a box, a track) in the innermost label
-/// scope; the label centres on it. The first control to report wins.
-pub(crate) fn record_centre(ctx: &Context, centre: f32) {
-    pass_state::with::<Stack, _>(ctx, |stack| {
-        if let Some(scope) = stack.0.iter_mut().rev().find(|scope| matches!(scope.kind, Kind::Label(_))) {
-            scope.centre.get_or_insert(centre);
+            let first_bottom = *scope.first_bottom.get_or_insert(rect.bottom());
+            match baseline {
+                Some(baseline) if rect.top() < first_bottom => {
+                    scope.baseline.get_or_insert(baseline);
+                }
+                Some(_) => {}
+                None => {
+                    scope.centre.get_or_insert(rect.center().y);
+                }
+            }
         }
     });
 }

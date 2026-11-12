@@ -50,3 +50,37 @@ fn a_side_label_lines_up_with_the_text_of_a_piece_a_row_centres() {
     let (label, field) = (baseline_of(&fixture, "Quality"), baseline_of(&fixture, "80"));
     assert!((label - field).abs() <= SLACK, "the label lines up with the number of the field beside the check box: label {label}, field {field}");
 }
+
+/// A control whose text sits on a later line than its first piece (a note under a swatch, "Active" after a wrapped
+/// row of chips): the label stays level with the first line.
+#[trial]
+fn a_side_label_stays_on_the_first_line_of_its_control() {
+    use craft_theme::Srgba;
+    use craft_ui::choice::Swatch;
+    use craft_ui::display::Text;
+    use craft_ui::layout_components::Stack;
+    const GREY: Srgba = Srgba { r: 0.5, g: 0.5, b: 0.5, a: 1.0 };
+    let fixture = settled_in(|ui| {
+        Field::new("Light theme").show(ui, |ui, _| {
+            Stack::new().show(ui, |ui, _| {
+                Swatch::new("Light", GREY).show(ui);
+                Text::new("Active").show(ui);
+            });
+        });
+    });
+    let swatch = fixture.by_label("Light").expect("the swatch is shown").rect;
+    let label = fixture.texts().iter().find(|run| run.text == "Light theme").map(|run| run.rect).expect("the label is painted");
+    assert!(
+        label.center().y >= swatch.top() && label.center().y <= swatch.bottom(),
+        "the label sits level with the swatch, not with the note below it: label {label:?}, swatch {swatch:?}"
+    );
+}
+
+/// `body` in a field group, settled.
+fn settled_in(mut body: impl FnMut(&mut Ui) + 'static) -> Fixture {
+    let mut fixture = Fixture::new(move |ui| {
+        FieldGroup::new("Appearance").show(ui, |ui, _| body(ui));
+    });
+    fixture.settle();
+    fixture
+}
