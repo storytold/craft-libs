@@ -1763,6 +1763,7 @@ dependencies = [
 name = "craft-timeline"
 version = "0.1.0"
 dependencies = [
+ "craft-xml",
  "proptest",
  "serde",
 ]

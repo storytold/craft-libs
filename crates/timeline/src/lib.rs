@@ -13,6 +13,7 @@
 //!   builds a [`model::Project`] while reading.
 //! - [`ale`]: Avid Log Exchange clip logs.
 //! - [`edl`]: CMX 3600 edit decision lists.
+//! - [`fcp7`] (feature `xml`): Final Cut Pro 7 XML (`xmeml`).
 //! - [`Format`], [`detect_text`], [`decode_text`]: which interchange format a document is.
 //!
 //! No file I/O: documents are text or bytes, and media references are strings. Each format module
@@ -22,12 +23,16 @@
 pub mod ale;
 pub mod build;
 pub mod edl;
+#[cfg(feature = "xml")]
+pub mod fcp7;
 pub mod fx;
 pub mod model;
 pub mod path;
 pub mod rate;
 pub mod report;
 pub mod time;
+#[cfg(feature = "xml")]
+mod xml;
 
 pub use build::Imported;
 pub use report::{Level, Report, ReportEntry};
@@ -107,6 +112,13 @@ pub enum Error {
     Other(String),
 }
 
+impl Error {
+    #[cfg_attr(not(feature = "xml"), allow(dead_code))]
+    pub(crate) fn parse(format: Format, message: impl Into<String>) -> Error {
+        Error::Parse { format: format.name(), message: message.into() }
+    }
+}
+
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -145,6 +157,8 @@ pub struct ExportOptions<'a> {
     pub catalog: &'a dyn model::Catalog,
     /// See [`ImportOptions::namespace`].
     pub namespace: &'a str,
+    /// `xmeml` version attribute (4 or 5).
+    pub xmeml_version: u32,
 }
 
 /// Sniff which text format (EDL, xmeml, FCPXML, OTIO) a document is from its bytes, using the file
