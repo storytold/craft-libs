@@ -17,7 +17,7 @@ use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::{List, ListRow, RowEvent, TrailingFace, TrailingPart};
 use craft_ui::menu::Menu;
 use craft_ui::popover::Popover;
-use craft_ui::primitives::IconSpec;
+use craft_ui::primitives::{ContentPainterCx, IconSpec, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::TypeRole;
 use craft_ui::text::TextField;
@@ -211,9 +211,9 @@ fn details_form(ui: &mut Ui, words: &VersionsWords, salt: &str, title: &mut Stri
 }
 
 /// Figma's Version history panel: the branches above (create, open, review and merge, archive), then Current
-/// version, then the history newest first on a list with a dot per row, each named version with its title, date and
-/// author, its description wrapped under it, runs of two or more autosaves folded into a group that opens (a lone
-/// autosave is a row). A row's "…" opens its menu (Restore, Rename, Duplicate, Delete; Delete turns the row into the
+/// version, then the history newest first on a timeline (a line joins the rows' dots; the version on the canvas has
+/// the filled one), each named version with its title, date and author, its description wrapped under it, runs of two
+/// or more autosaves folded into a group that opens (a lone autosave is a row). A row's "…" opens its menu (Restore, Rename, Duplicate, Delete; Delete turns the row into the
 /// confirmation in place); F2 or Rename renames the title in place. Enter or a click previews. Save version opens an
 /// inline form (Title, Description; Enter saves, Escape cancels).
 #[derive(Pattern, Props)]
@@ -419,19 +419,27 @@ fn history(
         .selection(Bind::given(Selection::single(current)))
         .can_rename(|key| matches!(key, RowKey::Version(id) if find(*id).is_some_and(|version| !version.autosave)));
     let out = list.show_items(ui, &order, &mut |key, icx| {
-        let dot = IconSpec::from(IconId::new("circle"));
+        let mark = TimelineMark {
+            filled: match key {
+                RowKey::Current => previewing.is_none(),
+                RowKey::Version(id) => previewing == Some(*id),
+                RowKey::Group(_) => false,
+            },
+            first: icx.at == 0,
+            last: icx.at + 1 == order.0.len(),
+        };
         let text = order.0[icx.at].text.clone();
+        // Every row sits at depth 0 for the eye, so the dots stand in one column; the list reads the source's depth.
+        let row = move |label: Label| ListRow::new(label).depth(0).leading_first(true).lead_painter(move |cx, rect| paint_timeline(cx, rect, mark));
         match key {
-            RowKey::Current => ListRow::new(text).icon(dot),
-            RowKey::Group(_) => ListRow::new(text).depth(icx.depth).group(icx.row.open).icon(dot),
+            RowKey::Current => row(text.into()),
+            RowKey::Group(_) => row(text.into()).group(icx.row.open),
             RowKey::Version(id) => {
                 let Some(version) = find(*id) else { return ListRow::new(Label::Empty) };
                 if pending == Some(*id) {
                     let question = words.delete_confirm.fill(&[("title", text.as_str())]);
                     let (outcome_delete, outcome_cancel) = (&outcome, &outcome);
-                    return ListRow::new(question)
-                        .depth(icx.depth)
-                        .icon(dot)
+                    return row(question.into())
                         .trailing_field(Button::new(words.delete.clone()).variant(Variant::PRIMARY), move |button: ButtonOutput| {
                             if clicked(&button) {
                                 outcome_delete.set(Some(Confirmed::Delete));
@@ -446,11 +454,11 @@ fn history(
                 let date = age_text(&view, version.created, now);
                 let detail =
                     if version.author.is_empty() { date } else { words.detail.fill(&[("date", date.as_str()), ("author", version.author.as_str())]) };
-                let mut row = ListRow::new(text).depth(icx.depth).icon(dot).detail(detail);
+                let mut shown = row(text.into()).detail(detail);
                 if !version.description.is_empty() {
-                    row = row.lines(version.description.clone()).line_limit(DESCRIPTION_LINES);
+                    shown = shown.lines(version.description.clone()).line_limit(DESCRIPTION_LINES);
                 }
-                row.trailing_part(TrailingPart::new(0), TrailingFace::Icon(IconSpec::from(IconId::new("more"))), words.row_more.clone())
+                shown.trailing_part(TrailingPart::new(0), TrailingFace::Icon(IconSpec::from(IconId::new("more"))), words.row_more.clone())
             }
         }
     });
@@ -617,4 +625,38 @@ impl Outcome for VersionPreviewBannerOutput {
     fn response(&self) -> &Response {
         &self.response
     }
+}
+
+/// Where a history row stands on the timeline.
+#[derive(Clone, Copy)]
+struct TimelineMark {
+    /// The row is the version the canvas shows: its dot is filled.
+    filled: bool,
+    /// The first row: no line above its dot.
+    first: bool,
+    /// The last row: no line below its dot.
+    last: bool,
+}
+
+/// A history row's piece of the timeline in its lead slot `rect`: the line through the row, broken by the row's dot, a
+/// filled accent dot for the version on the canvas and an accent ring for the others.
+fn paint_timeline(cx: &ContentPainterCx<'_>, rect: Rect, mark: TimelineMark) {
+    let style = cx.style_cx();
+    let (accent, line) = (style.color(style.tokens.color.accent.solid), style.color(style.tokens.color.line.border));
+    let radius = style.tokens.shape.radius.sm;
+    let center = rect.center();
+    cx.with_draw(|draw| {
+        if !mark.first {
+            draw.stroke(&PaintShape::Path(vec![Pos2::new(center.x, rect.min.y), Pos2::new(center.x, center.y - radius)]), StrokeWidth::Thin, line);
+        }
+        if !mark.last {
+            draw.stroke(&PaintShape::Path(vec![Pos2::new(center.x, center.y + radius), Pos2::new(center.x, rect.max.y)]), StrokeWidth::Thin, line);
+        }
+        let dot = PaintShape::Circle(center, radius);
+        if mark.filled {
+            draw.fill(&dot, accent);
+        } else {
+            draw.stroke(&dot, StrokeWidth::Thin, accent);
+        }
+    });
 }
