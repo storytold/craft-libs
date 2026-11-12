@@ -1,0 +1,21 @@
+[package]
+name = "craft-kra"
+description = "Krita documents (.kra, .krz): the ZIP archive, the maindoc.xml node tree, and the tiled pixel files with their LZF compression, read with bounded sizes."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-xml = { workspace = true }
+thiserror = { workspace = true }
+craft-zip = { workspace = true }
+
+[dev-dependencies]
+# The tests build archives, hostile ones included, by hand.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+craft-zip = { workspace = true, features = ["test-support"] }

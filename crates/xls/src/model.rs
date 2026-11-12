@@ -2,98 +2,8 @@
 //! the format (widths and heights keep the file's units, formulas are text).
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
-/// A cell position, zero-based. Ordered by row, then column.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct CellRef {
-    pub row: u32,
-    pub col: u32,
-}
-
-impl CellRef {
-    pub const fn new(row: u32, col: u32) -> Self {
-        CellRef { row, col }
-    }
-
-    /// The A1 text (`B3`).
-    pub fn a1(self) -> String {
-        crate::expr::a1(self.row, self.col)
-    }
-}
-
-/// A rectangle of cells, both corners included; `first` is the top left one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Range {
-    pub first: CellRef,
-    pub last: CellRef,
-}
-
-impl Range {
-    /// The rectangle spanned by two corners, in any order.
-    pub fn new(a: CellRef, b: CellRef) -> Self {
-        Range { first: CellRef::new(a.row.min(b.row), a.col.min(b.col)), last: CellRef::new(a.row.max(b.row), a.col.max(b.col)) }
-    }
-
-    pub fn contains(&self, c: CellRef) -> bool {
-        (self.first.row..=self.last.row).contains(&c.row) && (self.first.col..=self.last.col).contains(&c.col)
-    }
-
-    pub fn is_single(&self) -> bool {
-        self.first == self.last
-    }
-}
-
-/// The error values a BIFF8 file stores ([MS-XLS] 2.5.10, BErr).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum CellError {
-    Null,
-    Div0,
-    Value,
-    Ref,
-    Name,
-    Num,
-    NA,
-    GettingData,
-}
-
-impl CellError {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            CellError::Null => "#NULL!",
-            CellError::Div0 => "#DIV/0!",
-            CellError::Value => "#VALUE!",
-            CellError::Ref => "#REF!",
-            CellError::Name => "#NAME?",
-            CellError::Num => "#NUM!",
-            CellError::NA => "#N/A",
-            CellError::GettingData => "#GETTING_DATA",
-        }
-    }
-}
-
-/// A cell's stored value (for a formula cell, its saved result).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub enum Value {
-    #[default]
-    Empty,
-    Number(f64),
-    Text(Arc<str>),
-    Bool(bool),
-    Error(CellError),
-}
-
-impl Value {
-    /// A number, or `#NUM!` when it is NaN or infinite (Excel never stores those). Negative zero
-    /// becomes zero.
-    pub fn number(v: f64) -> Value {
-        if v.is_finite() { Value::Number(if v == 0.0 { 0.0 } else { v }) } else { Value::Error(CellError::Num) }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        matches!(self, Value::Empty)
-    }
-}
+pub use craft_sheet::{BorderStyle, CellError, CellRef, HAlign, Pattern, Range, Script, Underline, VAlign, Value, Visibility};
 
 /// A cell's formula.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,15 +22,6 @@ pub struct Cell {
     /// [`Workbook::formats`]) and for a format index the file does not have.
     pub format: Option<u16>,
     pub formula: Option<Formula>,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Visibility {
-    #[default]
-    Visible,
-    Hidden,
-    /// Hidden, and not offered by Excel's Unhide dialog.
-    VeryHidden,
 }
 
 /// A column's ColInfo record ([MS-XLS] 2.4.53).
@@ -202,6 +103,75 @@ pub struct Sheet {
     pub print_area: Option<String>,
     /// The sheet's `Print_Titles` name as formula text (`Sheet1!$1:$2`).
     pub print_titles: Option<String>,
+    /// Data validation rules (Dv records), in file order.
+    pub validations: Vec<DataValidation>,
+}
+
+/// What a data validation rule allows ([MS-XLS] 2.4.95 `typOperator`'s sibling `valType`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ValidationType {
+    /// Any value; also the undefined types 8 to 15, which Excel opens as "any value".
+    #[default]
+    Any,
+    Whole,
+    Decimal,
+    List,
+    Date,
+    Time,
+    TextLength,
+    Custom,
+}
+
+/// How a rule compares the value with its formulas. Only whole, decimal, date, time and text
+/// length rules have one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ValidationOperator {
+    #[default]
+    Between,
+    NotBetween,
+    Equal,
+    NotEqual,
+    Greater,
+    Less,
+    GreaterOrEqual,
+    LessOrEqual,
+}
+
+/// The alert shown for a value the rule refuses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ErrorStyle {
+    #[default]
+    Stop,
+    Warning,
+    Information,
+}
+
+/// A data validation rule (Dv, [MS-XLS] 2.4.95), in the terms SpreadsheetML uses for the same
+/// rule (`dataValidation`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DataValidation {
+    /// The ranges it covers. A range over every BIFF8 row (column) is a whole column (row) of
+    /// the 1,048,576 × 16,384 grid, as SpreadsheetML stores it.
+    pub ranges: Vec<Range>,
+    pub kind: ValidationType,
+    /// `Between` for the types without an operator.
+    pub operator: ValidationOperator,
+    /// The first formula as A1 text without `=`, relative references from the top left cell of
+    /// all the ranges. A literal list is quoted, its items separated by commas and each `"`
+    /// doubled (`"Red,Green"`), as SpreadsheetML's `formula1`. Empty for "any value".
+    pub formula1: String,
+    /// The upper bound of `Between` and `NotBetween`.
+    pub formula2: Option<String>,
+    pub allow_blank: bool,
+    /// A list shows its drop-down arrow in the cell.
+    pub in_cell_dropdown: bool,
+    pub prompt_title: String,
+    pub prompt: String,
+    pub show_prompt: bool,
+    pub error_title: String,
+    pub error: String,
+    pub error_style: ErrorStyle,
+    pub show_error: bool,
 }
 
 /// A user-defined name.
@@ -224,24 +194,6 @@ pub enum Color {
     Rgb(u32),
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum Underline {
-    #[default]
-    None,
-    Single,
-    Double,
-    SingleAccounting,
-    DoubleAccounting,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum Script {
-    #[default]
-    Baseline,
-    Superscript,
-    Subscript,
-}
-
 /// A Font record ([MS-XLS] 2.4.122).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Font {
@@ -262,29 +214,6 @@ pub struct Font {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum HAlign {
-    #[default]
-    General,
-    Left,
-    Center,
-    Right,
-    Fill,
-    Justify,
-    CenterAcross,
-    Distributed,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum VAlign {
-    Top,
-    Center,
-    #[default]
-    Bottom,
-    Justify,
-    Distributed,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Alignment {
     pub h: HAlign,
     pub v: VAlign,
@@ -293,25 +222,6 @@ pub struct Alignment {
     pub rotation: i16,
     pub indent: u8,
     pub shrink: bool,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum BorderStyle {
-    #[default]
-    None,
-    Thin,
-    Medium,
-    Dashed,
-    Dotted,
-    Thick,
-    Double,
-    Hair,
-    MediumDashed,
-    DashDot,
-    MediumDashDot,
-    DashDotDot,
-    MediumDashDotDot,
-    SlantDashDot,
 }
 
 /// One border side. A side without a style has the automatic colour.
@@ -331,31 +241,6 @@ pub struct Borders {
     pub diag_down: BorderLine,
     /// The diagonal from the bottom left corner up.
     pub diag_up: BorderLine,
-}
-
-/// Fill patterns, named as SpreadsheetML names them.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum Pattern {
-    #[default]
-    None,
-    Solid,
-    Gray50,
-    Gray75,
-    Gray25,
-    DarkHorizontal,
-    DarkVertical,
-    DarkDown,
-    DarkUp,
-    DarkGrid,
-    DarkTrellis,
-    LightHorizontal,
-    LightVertical,
-    LightDown,
-    LightUp,
-    LightGrid,
-    LightTrellis,
-    Gray125,
-    Gray0625,
 }
 
 /// A cell's fill. Without a pattern both colours are automatic.

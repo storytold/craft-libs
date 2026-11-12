@@ -1,7 +1,8 @@
 # craft-captions
 
 Caption and subtitle files behind one neutral model: bytes in, a `Document` of `Cue`s out, and
-back. One module per format. Depends on `craft-xml` (TTML) and `thiserror`.
+back. One module per format. Depends on `craft-timeline` (exact time),
+`craft-xml` (TTML) and `thiserror`.
 
 ```rust
 use craft_captions::{Format, WriteOptions, detect, parse, write};
@@ -31,8 +32,9 @@ assert!(scc.starts_with(b"Scenarist_SCC V1.0"));
 
 `Tick` is an integer count of 1/254 016 000 000 s: a whole number of ticks per millisecond and
 per frame at every broadcast rate, so no format's times are rounded on the way in. `FrameRate`
-is an exact rational. There are no floating-point seconds anywhere. An application with its own
-time type converts at the boundary (`Tick(t).0` is the tick count).
+is an exact rational. Both are `craft-timeline`'s (`craft_timeline::time`), re-exported here as
+`craft_captions::time`, so a caller that already uses that crate passes its values straight in.
+No format computes with floating-point seconds.
 
 ## Limits
 
@@ -56,7 +58,12 @@ lists at most 20 characters per stream.
 
 All cue times are exact `Tick`s. Milliseconds convert exactly (1 ms = 254 016 000 ticks); SCC
 frames map through `FrameRate::FPS_29_97`. `Document::snap_to_frames` snaps cues to a frame grid and
-removes overlaps.
+removes overlaps. SCC and MCC time codes count from `Document::start_timecode`, a time code
+label read as a time (`label_time`), so the label carries across rates: 01:00:00:00 at 25 fps is
+written as 01:00:00;00 drop-frame or 01:00:00:00 non-drop (`label_frame`). Readers leave it at
+zero and keep the file's own time codes, noting the rate and drop-frame mode of its labels in
+`Document::labels`; `Document::count_from` then counts the cues back from a start time code, when
+every cue is at or after it.
 
 ### TTML tick timing
 
@@ -85,6 +92,17 @@ without defining it read the reference itself as the label, with underscores as 
 This mapping follows [W3C TTML1, third edition (2018), §§12.1.5–12.2.1](https://www.w3.org/TR/2018/REC-ttml1-20181108/#metadata-vocabulary-agent).
 The [April 2006 TTaf1 draft, §§7.2.1 and 12.1.5–12.2.1](https://www.w3.org/TR/2006/WD-ttaf1-dfxp-20060427/)
 defines its earlier metadata namespace and agent ID form.
+
+### TTML cue identifiers
+
+TTML and DFXP writers keep valid explicit cue IDs verbatim unless a style, region or earlier cue
+already uses them. Missing, invalid or repeated IDs receive deterministic replacements that also
+avoid valid IDs on later cues. Emitted cue, style, region and speaker IDs are unique across the
+document. Unicode spelling is preserved without normalization.
+
+Identifier validation follows the `NCName` production in [Namespaces in XML 1.0, third edition
+(2009), §3](https://www.w3.org/TR/2009/REC-xml-names-20091208/#NT-NCName), using the character
+ranges in [XML 1.0, fifth edition (2008), §2.3](https://www.w3.org/TR/2008/REC-xml-20081126/#NT-NameStartChar).
 
 ### SCC writer
 
