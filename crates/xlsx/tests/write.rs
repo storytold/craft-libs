@@ -30,11 +30,11 @@ fn excel_like() -> Vec<u8> {
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet {ns} xr:uid="{{00000000-0001-0000-0000-000000000000}}"><sheetPr><tabColor rgb="FFFF0000"/></sheetPr><dimension ref="A1:C3"/><sheetViews><sheetView tabSelected="1" workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15" x14ac:dyDescent="0.25"/><cols><col min="1" max="2" width="12.5" customWidth="1"/><col min="3" max="3" width="9" hidden="1" style="1"/></cols>
 <sheetData><row r="1" spans="1:3" x14ac:dyDescent="0.25"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" s="1"><v>0.1</v></c></row><row r="2" ht="30" customHeight="1"><c r="A2"><f>SUM(C1:C3)</f><v>0.30000000000000004</v></c><c r="B2" t="b"><v>1</v></c><c r="C2" s="1"><f t="shared" ref="C2:C3" si="0">C1*2</f><v>0.2</v></c></row><row r="3"><c r="A3" t="e"><v>#N/A</v></c><c r="B3" t="inlineStr"><is><t xml:space="preserve"> inline </t></is></c><c r="C3" s="1"><f t="shared" si="0"/><v>0.4</v></c></row></sheetData>
-<mergeCells count="1"><mergeCell ref="A5:B6"/></mergeCells><conditionalFormatting sqref="C1:C3"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>0.25</formula></cfRule></conditionalFormatting><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><drawing r:id="rId1"/>
+<mergeCells count="1"><mergeCell ref="A5:B6"/></mergeCells><conditionalFormatting sqref="C1:C3"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>0.25</formula></cfRule></conditionalFormatting><dataValidations count="1"><dataValidation type="list" allowBlank="1" showInputMessage="1" sqref="A1:A3 C:C" xr:uid="{{00000000-0002-0000-0000-000000000000}}"><formula1>"a,b"</formula1></dataValidation></dataValidations><hyperlinks><hyperlink ref="A1" r:id="rId2" tooltip="t"/><hyperlink ref="B1" location="Data!A1" display="here"/></hyperlinks><printOptions gridLines="1"/><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><pageSetup orientation="landscape" fitToWidth="1"/><headerFooter differentFirst="1"><oddHeader>&amp;C&amp;P</oddHeader><firstFooter xml:space="preserve"> x </firstFooter></headerFooter><rowBreaks count="1" manualBreakCount="1"><brk id="10" max="16383" man="1"/></rowBreaks><drawing r:id="rId1"/><legacyDrawing r:id="rId3"/>
 <extLst><ext uri="{{05C60535-1F16-4fd2-B633-F4F36F0B64E0}}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:sparklineGroups xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:sparklineGroup><x14:sparklines><x14:sparkline><xm:f>Data!C1:C3</xm:f><xm:sqref>D1</xm:sqref></x14:sparkline></x14:sparklines></x14:sparklineGroup></x14:sparklineGroups></ext></extLst></worksheet>"#
     );
     let sheet1_rels = format!(
-        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{RT}/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{RT}/drawing" Target="../drawings/drawing1.xml"/><Relationship Id="rId2" Type="{RT}/hyperlink" Target="https://example.com/a?b&amp;c" TargetMode="External"/><Relationship Id="rId3" Type="{RT}/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/><Relationship Id="rId4" Type="{RT}/comments" Target="../comments1.xml"/></Relationships>"#
     );
     let styles = format!(
         r#"<styleSheet {ns}><numFmts count="1"><numFmt numFmtId="164" formatCode="0.0%"/></numFmts><fonts count="2" x14ac:knownFonts="1"><font><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font><font><b/><i val="0"/><u val="double"/><vertAlign val="superscript"/><sz val="9.5"/><color rgb="FF0000FF" tint="-0.25"/><name val="Arial"/></font></fonts>
@@ -50,7 +50,7 @@ fn excel_like() -> Vec<u8> {
     let package_rels = format!(
         r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{RT}/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>"#
     );
-    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="bin" ContentType="application/vnd.ms-office.vbaProject"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.ms-excel.sheet.macroEnabled.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/chartsheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml"/><Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>"#;
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="bin" ContentType="application/vnd.ms-office.vbaProject"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.ms-excel.sheet.macroEnabled.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/chartsheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml"/><Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/><Override PartName="/xl/comments1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>"#;
     zip(&[
         ("[Content_Types].xml", types.as_bytes()),
         ("_rels/.rels", package_rels.as_bytes()),
@@ -66,9 +66,14 @@ fn excel_like() -> Vec<u8> {
         ("xl/styles.xml", styles.as_bytes()),
         ("xl/sharedStrings.xml", strings.as_bytes()),
         ("xl/calcChain.xml", b"<calcChain/>"),
+        ("xl/comments1.xml", COMMENTS.as_bytes()),
+        ("xl/drawings/vmlDrawing1.vml", VML.as_bytes()),
         ("xl/vbaProject.bin", &[0xD0, 0xCF, 0x11, 0xE0, 1, 2, 3]),
     ])
 }
+
+const COMMENTS: &str = "<comments xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><authors><author>Ann</author></authors><commentList><comment ref=\"B2\" authorId=\"0\" shapeId=\"0\"><text><r><rPr><b/></rPr><t>Ann:</t></r><r><t xml:space=\"preserve\">\nnote</t></r></text></comment><comment ref=\"bad\"/></commentList></comments>";
+const VML: &str = "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><o:shapelayout v:ext=\"edit\"><o:idmap v:ext=\"edit\" data=\"1\"/></o:shapelayout><v:shape id=\"_x0000_s1025\" style=\"position:absolute;width:120pt;height:60pt\"><x:ClientData ObjectType=\"Note\"><x:Anchor>2, 15, 0, 2, 4, 15, 4, 16</x:Anchor><x:Row>1</x:Row><x:Column>1</x:Column><x:Visible/></x:ClientData></v:shape></xml>";
 
 fn read(bytes: &[u8]) -> Document {
     Document::read(bytes, &Limits::default()).unwrap()
@@ -114,6 +119,12 @@ fn assert_same(a: &Document, b: &Document) {
         assert_eq!((&x.part.part, &x.part.columns, &x.part.merges), (&y.part.part, &y.part.columns, &y.part.merges));
         assert_eq!(String::from_utf8(x.part.to_xml(&x.rows)), String::from_utf8(y.part.to_xml(&y.rows)));
         assert_eq!(x.part.rels.list, y.part.rels.list);
+        assert_eq!(x.part.features, y.part.features);
+        assert_eq!(x.notes, y.notes);
+        assert_eq!(
+            x.comments.as_ref().map(|c| (&c.authors, &c.comments, c.to_xml())),
+            y.comments.as_ref().map(|c| (&c.authors, &c.comments, c.to_xml()))
+        );
     }
     let mut pa = a.parts.clone();
     let mut pb = b.parts.clone();
@@ -170,6 +181,36 @@ fn a_workbook_round_trips() {
 }
 
 #[test]
+fn features_are_read() {
+    let doc = read(&excel_like());
+    let ws = doc.worksheets[0].as_ref().unwrap();
+    let f = &ws.part.features;
+    assert_eq!(f.views[0].pane.as_ref().and_then(|p| p.state.as_deref()), Some("frozen"));
+    assert_eq!(f.views[0].tab_selected, Some(true));
+    let dv = &f.validations.as_ref().unwrap().items[0];
+    assert_eq!((dv.kind.as_deref(), dv.formula1.as_deref(), dv.sqref.len()), (Some("list"), Some("\"a,b\""), 2));
+    assert_eq!(dv.attrs, [("xr:uid".to_string(), "{00000000-0002-0000-0000-000000000000}".to_string())]);
+    assert_eq!(craft_xlsx::range_ref(&dv.sqref[1]), "C:C");
+    assert_eq!(f.conditional_formats[0].rules[0].formulas, ["0.25"]);
+    assert_eq!(f.hyperlinks[0].url.as_deref(), Some("https://example.com/a?b&c"));
+    assert_eq!((f.hyperlinks[1].location.as_deref(), f.hyperlinks[1].url.as_deref()), (Some("Data!A1"), None));
+    assert_eq!(f.print.options.as_ref().and_then(|o| o.grid_lines), Some(true));
+    assert_eq!(f.print.setup.as_ref().and_then(|s| s.orientation.as_deref()), Some("landscape"));
+    let hf = f.print.header_footer.as_ref().unwrap();
+    assert_eq!((hf.odd_header.as_deref(), hf.first_footer.as_deref(), hf.different_first), (Some("&C&P"), Some(" x "), Some(true)));
+    assert_eq!((f.print.row_breaks[0].id, f.print.row_breaks[0].man), (Some(10), Some(true)));
+    assert_eq!(f.legacy_drawing.as_deref(), Some("rId3"));
+    let comments = ws.comments.as_ref().unwrap();
+    assert_eq!(comments.comments.len(), 1);
+    assert_eq!((comments.author(&comments.comments[0]), &*comments.comments[0].text.text), (Some("Ann"), "Ann:\nnote"));
+    assert_eq!(
+        ws.notes,
+        [craft_xlsx::NoteShape { at: CellRef::new(1, 1), visible: true, anchor: Some([2, 15, 0, 2, 4, 15, 4, 16]), size_pt: Some((120.0, 60.0)) }]
+    );
+    assert!(doc.parts.iter().any(|p| p.name == "xl/drawings/vmlDrawing1.vml") && !doc.parts.iter().any(|p| p.name == "xl/comments1.xml"));
+}
+
+#[test]
 fn edits_are_written() {
     let mut doc = read(&excel_like());
     let ws = doc.worksheets[0].as_mut().unwrap();
@@ -194,6 +235,68 @@ fn edits_are_written() {
     assert!(!rels.list.iter().any(|r| r.target.contains("sheet2")));
     assert!(p.opc().read("xl/worksheets/sheet2.xml").unwrap().is_none());
     assert_eq!(rels.all("worksheet").count(), 1);
+}
+
+#[test]
+fn features_are_edited() {
+    let mut doc = read(&excel_like());
+    let ws = doc.worksheets[0].as_mut().unwrap();
+    let f = &mut ws.part.features;
+    f.hyperlinks[0].url = Some("https://example.org/".into());
+    f.conditional_formats.push(craft_xlsx::ConditionalFormatting {
+        sqref: vec![Range::parse("A1:A9").unwrap()],
+        rules: vec![craft_xlsx::CfRule { kind: Some("expression".into()), priority: Some(2), formulas: vec!["A1>1".into()], ..Default::default() }],
+        ..Default::default()
+    });
+    f.print.setup = None;
+    // A comment on a sheet without a VML drawing gets one, in a shape block no other drawing uses.
+    let empty = doc.worksheets[2].as_mut().unwrap();
+    empty.comments = Some(craft_xlsx::Comments {
+        authors: vec!["Bo".into()],
+        comments: vec![craft_xlsx::Comment { at: CellRef::new(0, 0), author_id: Some(0), text: StringItem::plain("hi"), ..Default::default() }],
+        ..Default::default()
+    });
+    let bytes = doc.write().unwrap();
+    let again = read(&bytes);
+    assert_same(&doc_after(&doc), &again);
+    let f = &again.worksheets[0].as_ref().unwrap().part.features;
+    assert_eq!(f.hyperlinks[0].url.as_deref(), Some("https://example.org/"));
+    assert_eq!(f.conditional_formats.len(), 2);
+    assert!(f.print.setup.is_none());
+    let sheet2 = again.worksheets[2].as_ref().unwrap();
+    assert_eq!(sheet2.comments.as_ref().map(|c| c.comments[0].text.text.to_string()), Some("hi".into()));
+    assert!(sheet2.part.features.legacy_drawing.is_some());
+    assert_eq!(sheet2.notes.iter().map(|n| (n.at, n.visible)).collect::<Vec<_>>(), [(CellRef::new(0, 0), false)]);
+    let vml = again.parts.iter().find(|p| p.name == "xl/drawings/vmlDrawing2.vml").unwrap();
+    assert!(String::from_utf8_lossy(&vml.bytes).contains(r#"data="2""#));
+    let sheet =
+        String::from_utf8(Package::open(&bytes, &Limits::default()).unwrap().opc().read("xl/worksheets/sheet1.xml").unwrap().unwrap()).unwrap();
+    let order = [
+        "<conditionalFormatting",
+        "<conditionalFormatting sqref=\"A1:A9\"",
+        "<dataValidations",
+        "<hyperlinks",
+        "<printOptions",
+        "<pageMargins",
+        "<headerFooter",
+    ];
+    let at: Vec<usize> = order.iter().map(|o| sheet.find(o).unwrap()).collect();
+    assert!(at.windows(2).all(|w| w[0] < w[1]), "{sheet}");
+    // Comments removed take their part and relationship with them.
+    let mut doc = again;
+    doc.worksheets[0].as_mut().unwrap().comments = None;
+    let bytes = doc.write().unwrap();
+    let mut p = Package::open(&bytes, &Limits::default()).unwrap();
+    assert!(p.opc().read("xl/comments1.xml").unwrap().is_none());
+    let wb = p.workbook().unwrap();
+    let part = p.sheet(&wb.sheets[0], |_| Ok(())).unwrap();
+    assert!(part.rels.first("comments").is_none());
+}
+
+/// The document as written: a link to a new URL has a relationship of its own, a new comments
+/// part a VML drawing.
+fn doc_after(doc: &Document) -> Document {
+    read(&doc.write().unwrap())
 }
 
 #[test]

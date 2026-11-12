@@ -35,6 +35,15 @@ from those fields, keeps the rest of each part's tree in place, and writes the k
 were. Part names and relationship ids are kept, so a file read and written without changes points
 where it did, and writing it twice gives the same bytes. The calculation chain is dropped (Excel
 rebuilds it). `XlsxKind` is the workbook part's content type (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`).
+Typed worksheet features (`SheetPart::features`), each mirroring its element with optional
+attributes and the unnamed ones kept: sheet views (panes, selections), print setup (options,
+margins, page setup, header and footer, page breaks), data validation (also read from the `x14`
+extension), conditional formats (colour scales, data bars, icon sets, rule extensions kept),
+hyperlinks (with their URLs), the legacy drawing. Comments (`Comments`, from the comments part)
+and the note shapes of the VML drawing (`NoteShape`). A sheet that gains comments and has no VML
+drawing gets one (`notes_vml`, in a shape block no kept drawing uses); an existing VML drawing is
+kept as read. Extensions in `extLst` are carried through unchanged.
+
 The parts this crate writes use the transitional namespaces; a strict file's kept parts stay as
 they were. A binary workbook is not written.
 

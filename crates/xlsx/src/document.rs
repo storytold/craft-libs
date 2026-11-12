@@ -3,6 +3,7 @@
 
 use craft_opc::{ContentTypes, PackageOut, RT_BASE, Rel, RelOut, Rels, RelsOut, relative, rels_path};
 
+use crate::features::{Comments, NoteShape, notes_vml};
 use crate::sheet::{CellValue, Row, SheetPart};
 use crate::strings::StringItem;
 use crate::styles::Styles;
@@ -12,6 +13,8 @@ use crate::{Error, Limits, Package};
 const CT_WORKSHEET: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
 const CT_STRINGS: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml";
 const CT_STYLES: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml";
+const CT_COMMENTS: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml";
+const CT_VML: &str = "application/vnd.openxmlformats-officedocument.vmlDrawing";
 /// The relationship type namespace of strict files: kept relationships are written with the
 /// transitional one, as the parts this crate writes are.
 const RT_STRICT: &str = "http://purl.oclc.org/ooxml/officeDocument/relationships/";
@@ -64,11 +67,16 @@ impl XlsxKind {
     }
 }
 
-/// One worksheet: its rows and the rest of its part.
+/// One worksheet: its rows, the rest of its part, and its comments.
 #[derive(Clone, Debug, Default)]
 pub struct Worksheet {
     pub rows: Vec<Row>,
     pub part: SheetPart,
+    /// The comments part, written from here. `None` removes it.
+    pub comments: Option<Comments>,
+    /// How the comments are shown, from the legacy VML drawing. The drawing itself is kept as
+    /// read; these are used only to draw the comments of a sheet that has no VML drawing.
+    pub notes: Vec<NoteShape>,
 }
 
 /// A part carried through unchanged: drawings, charts, the theme, document properties, a VBA
@@ -131,7 +139,11 @@ impl Document {
                 rows.push(row);
                 Ok(())
             }) {
-                Ok(part) => worksheets.push(Some(Worksheet { rows, part })),
+                Ok(part) => {
+                    let comments = p.comments(&part)?;
+                    let notes = if comments.is_some() { p.note_shapes(&part)? } else { Vec::new() };
+                    worksheets.push(Some(Worksheet { rows, part, comments, notes }));
+                }
                 Err(Error::TooLarge(m)) => return Err(Error::TooLarge(m)),
                 Err(e) => {
                     p.warn(format!("sheet \"{}\" kept unread: {e}", entry.name));
@@ -144,6 +156,9 @@ impl Document {
         for ws in worksheets.iter().flatten() {
             made.push(ws.part.part.clone());
             made.push(rels_path(&ws.part.part));
+            if ws.comments.is_some() {
+                made.extend(ws.part.rels.first("comments").filter(|r| !r.external).map(|r| r.target.clone()));
+            }
         }
         made.extend(workbook_rels.list.iter().filter(|r| !r.external && regenerated(r)).map(|r| r.target.clone()));
         let opc = p.opc();
@@ -223,11 +238,9 @@ impl Document {
             package.add("officeDocument", book_part, false);
             out.rels("", &package);
         }
+        let mut blocks = vml_blocks(&self.parts);
         for (name, ws) in &sheet_parts {
-            out.xml_part(name, CT_WORKSHEET, ws.part.to_xml(&ws.rows));
-            let mut sheet_rels = RelsOut::default();
-            sheet_rels.items.extend(ws.part.rels.list.iter().map(kept));
-            out.rels(name, &sheet_rels);
+            write_sheet(&mut out, name, ws, &mut taken, &mut blocks);
         }
         if let Some(name) = &strings {
             let count: usize =
@@ -250,6 +263,61 @@ impl Document {
         }
         Ok(out.finish()?)
     }
+}
+
+/// A worksheet, its relationships, and its comments with a VML drawing to show them when it has
+/// none. A hyperlink to a URL its relationship does not lead to gets a relationship of its own.
+fn write_sheet(out: &mut PackageOut, name: &str, ws: &Worksheet, taken: &mut Vec<String>, blocks: &mut Vec<u32>) {
+    let mut part = ws.part.clone();
+    let mut rels = RelsOut::default();
+    rels.items.extend(ws.part.rels.list.iter().filter(|r| ws.comments.is_some() || r.kind() != "comments").map(kept));
+    for h in &mut part.features.hyperlinks {
+        let Some(url) = &h.url else { continue };
+        let ok = h.rel_id.as_deref().and_then(|id| ws.part.rels.by_id(id)).is_some_and(|r| r.external && r.target == *url);
+        if !ok {
+            let id = fresh_id(&rels);
+            rels.items.push(RelOut { id: id.clone(), ty: format!("{RT_BASE}hyperlink"), target: url.clone(), external: true });
+            h.rel_id = Some(id);
+        }
+    }
+    if let Some(c) = &ws.comments {
+        let target = match ws.part.rels.first("comments").filter(|r| !r.external) {
+            Some(r) => r.target.clone(),
+            None => {
+                let target = fresh(taken, |n| format!("xl/comments{n}.xml"));
+                let id = fresh_id(&rels);
+                rels.items.push(RelOut { id, ty: format!("{RT_BASE}comments"), target: relative(name, &target), external: false });
+                target
+            }
+        };
+        taken.push(target.to_ascii_lowercase());
+        out.xml_part(&target, CT_COMMENTS, c.to_xml());
+        if !rels.items.iter().any(|r| r.ty.ends_with("/vmlDrawing")) && !c.comments.is_empty() {
+            let block = (1..).find(|b| !blocks.contains(b)).unwrap_or(1);
+            blocks.push(block);
+            let vml = fresh(taken, |n| format!("xl/drawings/vmlDrawing{n}.vml"));
+            taken.push(vml.to_ascii_lowercase());
+            let id = fresh_id(&rels);
+            rels.items.push(RelOut { id: id.clone(), ty: format!("{RT_BASE}vmlDrawing"), target: relative(name, &vml), external: false });
+            part.features.legacy_drawing = Some(id);
+            out.binary(&vml, CT_VML, notes_vml(&c.comments, &ws.notes, block));
+        }
+    }
+    out.xml_part(name, CT_WORKSHEET, part.to_xml(&ws.rows));
+    out.rels(name, &rels);
+}
+
+/// The shape-id blocks (`o:idmap`) the kept VML drawings use, so a new drawing takes another.
+fn vml_blocks(parts: &[KeptPart]) -> Vec<u32> {
+    let mut used = Vec::new();
+    for p in parts.iter().filter(|p| p.name.to_ascii_lowercase().ends_with(".vml")) {
+        let text = String::from_utf8_lossy(&p.bytes);
+        for (_, after) in text.match_indices("idmap").map(|(i, _)| text.split_at(i)) {
+            let data = after.split("data=\"").nth(1).and_then(|d| d.split('"').next()).unwrap_or("");
+            used.extend(data.split(',').filter_map(|n| n.trim().parse::<u32>().ok()));
+        }
+    }
+    used
 }
 
 /// A workbook relationship to a part that [`Document::write`] makes again (or drops).
