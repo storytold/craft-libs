@@ -183,6 +183,14 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
         self
     }
 
+    /// Enter accepts the highlighted completion, as Tab does. Without it Enter stays the field's own: it commits the
+    /// text as typed.
+    #[must_use]
+    pub fn complete_on_enter(mut self) -> Self {
+        self.options.complete_on_enter = true;
+        self
+    }
+
     /// `text` replaces the selection in this pass: at the caret it inserts. Set it for one pass only.
     #[must_use]
     pub fn replace_selection(mut self, text: impl Into<String>) -> Self {
@@ -299,7 +307,7 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
     /// The completion list under the field, over what the text adapter holds.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
         if self.options.complete.is_some() {
-            completions::show(ui, cx, &text_part::<C::Value>());
+            completions::show(ui, cx, &text_part::<C::Value>(), self.options.complete_on_enter);
         }
     }
 

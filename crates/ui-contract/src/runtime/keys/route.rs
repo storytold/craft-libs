@@ -266,6 +266,8 @@ struct Driven {
     ends: bool,
     /// Left and Right go to the list too (a tree): a text stop keeps them for its caret while it holds text.
     tree: bool,
+    /// Enter goes to the list; off, a text opener keeps it (its layer's `FocusPolicy::list_enter`).
+    enter: bool,
 }
 
 /// The collection a text stop inside an open `KeepAnchor` dropdown layer (a search field) or a text field that drives
@@ -289,10 +291,11 @@ fn list_of_field(ctx: &Context, rec: &StopRec) -> Option<Driven> {
             text: false,
             ends: drive.empty,
             tree: drive.empty && focus::registration::is_tree(ctx, drive.list),
+            enter: true,
         }),
         (None, Some((_, opener))) => {
-            let (layer, list) = focus::registration::dropdown_target(ctx, opener)?;
-            Some(Driven { layer: Some(layer), list, text: false, ends: true, tree: false })
+            let (layer, list, _) = focus::registration::dropdown_target(ctx, opener)?;
+            Some(Driven { layer: Some(layer), list, text: false, ends: true, tree: false, enter: true })
         }
         (None, None) => None,
     }
@@ -303,9 +306,9 @@ const LIST_KEYS: [Key; 8] = [Key::Up, Key::Down, Key::PageUp, Key::PageDown, Key
 
 impl Driven {
     fn of(ctx: &Context, opener: &StopRec) -> Option<Driven> {
-        let (layer, list) = focus::registration::dropdown_target(ctx, opener.stop.key())?;
+        let (layer, list, policy) = focus::registration::dropdown_target(ctx, opener.stop.key())?;
         let text = matches!(opener.stop.keys.owner, OwnerClass::Text);
-        Some(Driven { layer: Some(layer), list, text, ends: !text, tree: false })
+        Some(Driven { layer: Some(layer), list, text, ends: !text, tree: false, enter: !text || policy.list_enter })
     }
 
     /// The intent a claimed chord of the opener becomes for the list.
@@ -314,7 +317,7 @@ impl Driven {
     }
 
     /// The list intent of a plain key the focused stop hands on: vertical moves and Page keys, Home and End where
-    /// `ends` says, Left and Right of a tree, and Enter as the activation. A text opener's Tab accepts the lead too:
+    /// `ends` says, Left and Right of a tree, and Enter as the activation where `enter` says. A text opener's Tab accepts the lead too:
     /// there Tab is not the way to the next stop while the list is open.
     fn intent(self, key: Key) -> Option<Intent> {
         let moved = |mv| Some(Intent::Move(mv, MoveMods::PLAIN));
@@ -327,7 +330,7 @@ impl Driven {
             Key::End if self.ends => moved(NavMove::End),
             Key::Left if self.tree => moved(NavMove::Back),
             Key::Right if self.tree => moved(NavMove::Forward),
-            Key::Enter => Some(Intent::Activate),
+            Key::Enter if self.enter => Some(Intent::Activate),
             Key::Tab if self.text => Some(Intent::Activate),
             _ => None,
         }

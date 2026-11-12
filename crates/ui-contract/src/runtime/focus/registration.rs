@@ -1,7 +1,7 @@
 //! The registrations of the focus service: a stop and a roving group. The types are `pub` so the testing kit can
 //! name them; the module is crate-private, so no other path reaches them.
 
-use super::{Initial, KeyUse, Roving, StopKey, with};
+use super::{FocusPolicy, Initial, KeyUse, Roving, StopKey, with};
 use crate::runtime::egui::memory as store;
 use crate::runtime::memory::sub;
 use craft_behavior::{KeyRole, PartRef};
@@ -192,10 +192,10 @@ pub(crate) fn part_group(ctx: &Context, parts: Id) -> Option<Id> {
     (join.pass.saturating_add(1) >= crate::runtime::pointer::pass_of(ctx)).then_some(join.group)
 }
 
-/// The innermost open `KeepAnchor` layer opened from the stop `opener` and the collection its opener hands list
-/// keys to: the stop with the collection's key role that is registered inside the layer's focus scope. `None` while
-/// no such layer is open or it has no collection.
-pub(crate) fn dropdown_target(ctx: &Context, opener: StopKey) -> Option<(Id, Id)> {
+/// The innermost open `KeepAnchor` layer opened from the stop `opener`, the collection its opener hands list keys
+/// to (the stop with the collection's key role that is registered inside the layer's focus scope) and the layer's
+/// policy. `None` while no such layer is open or it has no collection.
+pub(crate) fn dropdown_target(ctx: &Context, opener: StopKey) -> Option<(Id, Id, FocusPolicy)> {
     with(ctx, |state| {
         let layer =
             *state.last_scope_order.iter().rev().find(|id| {
@@ -211,7 +211,8 @@ pub(crate) fn dropdown_target(ctx: &Context, opener: StopKey) -> Option<(Id, Id)
             }
             false
         };
-        state.last_stops.iter().find(|rec| rec.stop.role.type_ahead && inside(rec)).map(|rec| (layer, rec.stop.id))
+        let policy = state.last_scopes.get(&layer)?.policy;
+        state.last_stops.iter().find(|rec| rec.stop.role.type_ahead && inside(rec)).map(|rec| (layer, rec.stop.id, policy))
     })
 }
 

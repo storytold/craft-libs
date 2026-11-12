@@ -59,6 +59,8 @@ pub struct TextOptions {
     pub tab_inserts: bool,
     /// Candidates for the text before the caret.
     pub complete: Option<Arc<dyn Completer>>,
+    /// Enter accepts the highlighted candidate, as Tab does; off, Enter stays the field's own (a cell commits on it).
+    pub complete_on_enter: bool,
     /// Text that replaces the selection in the pass it is set (the caret inserts it).
     pub replace_selection: Option<String>,
     /// Typing one of these characters commits the draft, as Enter does without submitting; the character is not
@@ -102,6 +104,7 @@ impl Default for TextOptions {
             ink: None,
             tab_inserts: false,
             complete: None,
+            complete_on_enter: false,
             replace_selection: None,
             commit_on: &[],
             enabled: true,
@@ -152,14 +155,30 @@ pub struct Completion {
     pub label: Label,
     /// The text that replaces the range.
     pub insert: String,
-    /// A second line of the row.
-    pub detail: Option<Label>,
+    /// A short mark before the label (GridCraft's "ƒ" for a function).
+    pub mark: Option<Label>,
+    /// What the candidate is, shown under the list while its row is highlighted.
+    pub description: Option<Label>,
 }
 
 impl Completion {
     /// A candidate shown as `label` that inserts `insert`.
     pub fn new(label: impl Into<Label>, insert: impl Into<String>) -> Self {
-        Completion { label: label.into(), insert: insert.into(), detail: None }
+        Completion { label: label.into(), insert: insert.into(), mark: None, description: None }
+    }
+
+    /// Sets the mark before the label.
+    #[must_use]
+    pub fn mark(mut self, mark: impl Into<Label>) -> Self {
+        self.mark = Some(mark.into());
+        self
+    }
+
+    /// Sets the description shown while the candidate is highlighted.
+    #[must_use]
+    pub fn description(mut self, description: impl Into<Label>) -> Self {
+        self.description = Some(description.into());
+        self
     }
 }
 

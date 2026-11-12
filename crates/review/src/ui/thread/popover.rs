@@ -208,6 +208,7 @@ impl ThreadPopover<'_> {
                     .lines(COMPOSER_ROWS)
                     .placeholder(words.reply.clone())
                     .complete(MentionCompleter { people: people.to_vec(), me: me.to_owned() })
+                    .complete_on_enter()
                     .submits()
                     .default_stop()
                     .show(ui);

@@ -133,3 +133,34 @@ fn text_field_adorned(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .show(ui)
         .into()
 }
+
+/// Completes spreadsheet functions: each candidate marked "ƒ", with what it does under the list.
+struct Functions;
+
+impl Completer for Functions {
+    fn complete(&self, text: &str, caret: usize, out: &mut Vec<Completion>) -> Option<Range<usize>> {
+        const FUNCTIONS: [(&str, &str); 3] = [
+            ("SUM", "Adds the numbers in a range."),
+            ("SUMIF", "Adds the numbers in a range that meet a condition."),
+            ("SUBSTITUTE", "Replaces text in a string."),
+        ];
+        let before = text.get(..caret)?.trim_start_matches('=');
+        let start = caret - before.len();
+        let hits: Vec<_> = FUNCTIONS.into_iter().filter(|(name, _)| !before.is_empty() && name.starts_with(&before.to_uppercase())).collect();
+        out.extend(hits.iter().map(|(name, what)| Completion::new(*name, format!("{name}(")).mark("ƒ").description(*what)));
+        (!hits.is_empty()).then_some(start..caret)
+    }
+}
+
+/// Focuses the field and types the start of a function name, which opens the marked list.
+fn open_functions(fixture: &mut Fixture) {
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.type_text("=SU");
+    fixture.idle(4);
+}
+
+/// A formula cell: the marked list with the highlighted function's description; Enter commits the cell, Tab completes.
+#[story(TextField<'static, PlainText>, covers = [], drive = Drive::Custom(open_functions))]
+fn text_field_formula(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    TextField::new("Formula", Bind::given(String::new())).complete(Functions).show(ui).into()
+}

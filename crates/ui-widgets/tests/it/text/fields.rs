@@ -85,3 +85,75 @@ fn a_value_set_outside_ends_the_typing_run() {
     const SET: f64 = 7.0;
     assert_eq!(*value.borrow(), Some(SET), "Enter commits the value that was set, not the draft");
 }
+
+/// Enter on an open completion list commits the text as typed unless the field completes on Enter; Tab always takes
+/// the highlighted candidate.
+#[trial]
+fn enter_accepts_a_completion_only_where_the_field_completes_on_enter() {
+    for on_enter in [false, true] {
+        let mut rig = Rig::new("");
+        rig.focus();
+        let frame = |rig: &mut Rig, events: Vec<Event>| {
+            let (text, seen) = (&mut rig.text, &mut rig.seen);
+            rig.frames.frame(events, |ui| {
+                let field = TextField::new("Name", Bind::bound(&mut *text)).complete(Prefixes).id_salt("name");
+                let out = if on_enter { field.complete_on_enter() } else { field }.show(ui);
+                seen.rect = out.response.rect;
+                seen.id = out.response.id;
+            });
+        };
+        frame(&mut rig, vec![Event::Text("al".into())]);
+        for _ in 0..4 {
+            frame(&mut rig, vec![]);
+        }
+        frame(&mut rig, vec![key_press(Key::Enter, Modifiers::NONE)]);
+        for _ in 0..4 {
+            frame(&mut rig, vec![]);
+        }
+        let expected = if on_enter { "alpha" } else { "al" };
+        assert_eq!(rig.text, expected, "Enter with complete_on_enter {on_enter}");
+    }
+}
+
+/// Completes "sum" and "sumif", each marked, with a description.
+struct Marked;
+
+impl Completer for Marked {
+    fn complete(&self, text: &str, caret: usize, out: &mut Vec<Completion>) -> Option<Range<usize>> {
+        let before = text.get(..caret)?;
+        let hits: Vec<_> = [("sum", "Adds numbers."), ("sumif", "Adds numbers that meet a condition.")]
+            .into_iter()
+            .filter(|(word, _)| !before.is_empty() && word.starts_with(before))
+            .collect();
+        out.extend(hits.iter().map(|(word, what)| Completion::new(*word, *word).mark("ƒ").description(*what)));
+        (!hits.is_empty()).then_some(0..caret)
+    }
+}
+
+/// The list marks each candidate and describes the highlighted one: the description follows the highlight.
+#[trial]
+fn the_completion_list_describes_the_highlighted_candidate() {
+    let mut rig = Rig::new("");
+    rig.focus();
+    let shown_after = |rig: &mut Rig, events: Vec<Event>| {
+        let (text, seen) = (&mut rig.text, &mut rig.seen);
+        let mut show = |ui: &mut egui::Ui| {
+            let out = TextField::new("Name", Bind::bound(&mut *text)).complete(Marked).id_salt("name").show(ui);
+            seen.rect = out.response.rect;
+            seen.id = out.response.id;
+        };
+        rig.frames.frame(events, &mut show);
+        for _ in 0..4 {
+            rig.frames.frame(vec![], &mut show);
+        }
+        painted(&rig.frames.frame_shapes(&mut show))
+    };
+    let first = shown_after(&mut rig, vec![Event::Text("su".into())]);
+    assert!(first.iter().any(|t| t == "ƒ"), "each candidate shows its mark: {first:?}");
+    assert!(
+        first.iter().any(|t| t == "Adds numbers.") && !first.iter().any(|t| t == "Adds numbers that meet a condition."),
+        "the first candidate is described: {first:?}"
+    );
+    let second = shown_after(&mut rig, vec![key_press(Key::ArrowDown, Modifiers::NONE)]);
+    assert!(second.iter().any(|t| t == "Adds numbers that meet a condition."), "the description follows the highlight: {second:?}");
+}

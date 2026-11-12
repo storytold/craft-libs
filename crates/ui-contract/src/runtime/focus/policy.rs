@@ -50,6 +50,9 @@ pub struct FocusPolicy {
     pub cancel: CancelRule,
     /// Ctrl+Tab cycles pages.
     pub pages: bool,
+    /// In a `KeepAnchor` layer, Enter on a text opener activates the layer's list; off, the opener keeps Enter and
+    /// Tab alone takes the list's lead (a completion list that leaves Enter to the field's own commit).
+    pub list_enter: bool,
 }
 
 impl FocusPolicy {
@@ -62,6 +65,7 @@ impl FocusPolicy {
         enter: EnterRule::Pass,
         cancel: CancelRule::Ignore,
         pages: false,
+        list_enter: true,
     };
     /// A pane: an F6 stop.
     pub const PANE: FocusPolicy = FocusPolicy { kind: ScopeKind::Pane, ..FocusPolicy::NONE };
@@ -74,6 +78,7 @@ impl FocusPolicy {
         enter: EnterRule::Submit,
         cancel: CancelRule::Close,
         pages: false,
+        list_enter: true,
     };
     /// A popup: focus moves in, Escape closes and focus returns to the opener.
     pub const POPUP: FocusPolicy = FocusPolicy {
@@ -84,6 +89,7 @@ impl FocusPolicy {
         enter: EnterRule::Pass,
         cancel: CancelRule::Close,
         pages: false,
+        list_enter: true,
     };
     /// A menu: like a popup.
     pub const MENU: FocusPolicy = FocusPolicy { kind: ScopeKind::Menu, ..FocusPolicy::POPUP };
@@ -112,6 +118,12 @@ impl FocusPolicy {
     /// What Escape does.
     pub const fn cancel(mut self, cancel: CancelRule) -> Self {
         self.cancel = cancel;
+        self
+    }
+
+    /// Whether Enter on a text opener activates the layer's list.
+    pub const fn list_enter(mut self, on: bool) -> Self {
+        self.list_enter = on;
         self
     }
 
