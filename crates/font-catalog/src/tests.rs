@@ -556,3 +556,15 @@ fn repeated_name_records_are_bounded_before_pairing() {
     assert!(!face.keys.legacy.is_empty());
     assert_eq!(face.keys.legacy.len(), 256, "the pair budget counts distinct pairs");
 }
+
+/// A read stops at its cap, whatever the file has grown to since its size was checked.
+#[test]
+fn a_read_is_capped_where_the_file_has_grown() {
+    use crate::catalog::read_capped;
+    let path = std::env::temp_dir().join(format!("craft-font-catalog-cap-{}", std::process::id()));
+    std::fs::write(&path, b"0123456789").unwrap();
+    assert_eq!(read_capped(&path, 10).unwrap(), b"0123456789");
+    assert!(matches!(read_capped(&path, 9), Err(FontFileError::TooLarge { size: 10, max: 9 })));
+    assert!(matches!(read_capped(&path.with_extension("missing"), 9), Err(FontFileError::Io(_))));
+    let _ = std::fs::remove_file(&path);
+}

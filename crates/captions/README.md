@@ -58,7 +58,12 @@ lists at most 20 characters per stream.
 
 All cue times are exact `Tick`s. Milliseconds convert exactly (1 ms = 254 016 000 ticks); SCC
 frames map through `FrameRate::FPS_29_97`. `Document::snap_to_frames` snaps cues to a frame grid and
-removes overlaps.
+removes overlaps. SCC and MCC time codes count from `Document::start_timecode`, a time code
+label read as a time (`label_time`), so the label carries across rates: 01:00:00:00 at 25 fps is
+written as 01:00:00;00 drop-frame or 01:00:00:00 non-drop (`label_frame`). Readers leave it at
+zero and keep the file's own time codes, noting the rate and drop-frame mode of its labels in
+`Document::labels`; `Document::count_from` then counts the cues back from a start time code, when
+every cue is at or after it.
 
 ### TTML tick timing
 
