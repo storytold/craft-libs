@@ -109,19 +109,31 @@ ai-core = ["dep:craft-ai-core"]
 atomic = ["dep:craft-atomic"]
 
 audio = ["dep:craft-audio"]
+audio-aac-decode = ["audio", "craft-audio/aac-decode"]
+audio-aac-encode = ["audio", "craft-audio/aac-encode"]
+audio-ac3-decode = ["audio", "craft-audio/ac3-decode"]
+audio-ac3-encode = ["audio", "craft-audio/ac3-encode"]
+audio-alac-decode = ["audio", "craft-audio/alac-decode"]
+audio-alac-encode = ["audio", "craft-audio/alac-encode"]
 audio-decode = ["audio", "craft-audio/decode"]
 audio-decode-native = ["audio", "craft-audio/decode-native"]
+audio-eac3-encode = ["audio", "craft-audio/eac3-encode"]
 audio-encode = ["audio", "craft-audio/encode"]
 audio-flac-encode = ["audio", "craft-audio/flac-encode"]
 audio-lossless-encode = ["audio", "craft-audio/lossless-encode"]
+audio-mpa-decode = ["audio", "craft-audio/mpa-decode"]
+audio-opus-decode = ["audio", "craft-audio/opus-decode"]
 audio-pcm-encode = ["audio", "craft-audio/pcm-encode"]
 audio-peaks = ["audio", "craft-audio/peaks"]
+audio-rayon = ["audio", "craft-audio/rayon"]
 audio-serde = ["audio", "craft-audio/serde"]
 audio-symphonia = ["audio", "craft-audio/symphonia"]
 
 automation = ["dep:craft-automation", "keymap"]
 
 browse = ["dep:craft-browse"]
+
+cfb = ["dep:craft-cfb"]
 
 cms = ["dep:craft-cms"]
 
@@ -138,6 +150,8 @@ docpath = ["dep:craft-docpath"]
 
 draw = ["dep:craft-draw", "keymap", "color", "settings"]
 
+dxf = ["dep:craft-dxf"]
+
 ecproj-format = ["dep:craft-ecproj-format"]
 
 font-catalog = ["dep:craft-font-catalog"]
@@ -147,6 +161,11 @@ font-manager = ["dep:craft-font-manager"] # native only: needs craft-font-store'
 
 font-store = ["dep:craft-font-store"]
 font-store-bundled-index = ["font-store", "craft-font-store/bundled-index"]
+
+gcode = ["dep:craft-gcode"]
+
+heif = ["dep:craft-heif"]
+heif-testdata = ["heif", "craft-heif/testdata"]
 
 i18n-collate = ["craft-i18n/collate"]
 
@@ -167,6 +186,17 @@ media-ogg = ["media", "craft-media/ogg"]
 media-serde = ["media", "craft-media/serde"]
 
 menu = ["dep:craft-menu"]
+
+mesh = ["dep:craft-mesh"]
+mesh-gltf = ["mesh", "craft-mesh/gltf"]
+mesh-obj = ["mesh", "craft-mesh/obj"]
+mesh-ply = ["mesh", "craft-mesh/ply"]
+mesh-stl = ["mesh", "craft-mesh/stl"]
+
+metafile = ["dep:craft-metafile"]
+metafile-write = ["metafile", "craft-metafile/write"]
+
+mime = ["dep:craft-mime"]
 
 pages = ["dep:craft-pages"]
 
@@ -200,6 +230,10 @@ quit = ["dep:craft-quit"]
 review = ["dep:craft-review", "keymap"]
 
 settings = ["dep:craft-settings"]
+
+silhouette-studio = ["dep:craft-silhouette-studio"]
+
+svg-paths = ["dep:craft-svg-paths"]
 
 table = ["dep:craft-table", "keymap"]
 
@@ -267,6 +301,8 @@ text-ukrainian = ["text", "craft-text/ukrainian"]
 
 theme-store = ["dep:craft-theme-store"]
 
+tiff = ["dep:craft-tiff"]
+
 timeline = ["dep:craft-timeline", "keymap"]
 
 ui-app = ["ui", "craft-ui/app"]
@@ -275,9 +311,45 @@ ui-snapshot = ["ui", "craft-ui/snapshot"]
 ui-system_fonts = ["ui", "craft-ui/system_fonts"]
 ui-testing = ["ui", "craft-ui/testing"]
 
+ui-canvas = ["dep:craft-ui-canvas"]
+ui-canvas-testing = ["ui-canvas", "craft-ui-canvas/testing"]
+
+ui-contract = ["dep:craft-ui-contract"]
+ui-contract-color_fonts = ["ui-contract", "craft-ui-contract/color_fonts"]
+ui-contract-snapshot = ["ui-contract", "craft-ui-contract/snapshot"]
+ui-contract-system_fonts = ["ui-contract", "craft-ui-contract/system_fonts"]
+ui-contract-testing = ["ui-contract", "craft-ui-contract/testing"]
+
+ui-panels = ["dep:craft-ui-panels"]
+ui-panels-testing = ["ui-panels", "craft-ui-panels/testing"]
+
+ui-patterns = ["dep:craft-ui-patterns"]
+ui-patterns-testing = ["ui-patterns", "craft-ui-patterns/testing"]
+
+ui-shell = ["dep:craft-ui-shell"]
+ui-shell-app = ["ui-shell", "craft-ui-shell/app"]
+ui-shell-testing = ["ui-shell", "craft-ui-shell/testing"]
+
+ui-test-kit = ["dep:craft-ui-test-kit"]
+
+ui-widgets = ["dep:craft-ui-widgets"]
+ui-widgets-testing = ["ui-widgets", "craft-ui-widgets/testing"]
+
 update = ["dep:craft-update"] # native only: downloads and installs through getrandom without wasm support
 
 vectorcraft-format = ["dep:craft-vectorcraft-format"]
+
+video = ["dep:craft-video"]
+video-av1 = ["video", "craft-video/av1"]
+video-dnx = ["video", "craft-video/dnx"]
+video-h264 = ["video", "craft-video/h264"]
+video-hevc = ["video", "craft-video/hevc"]
+video-prores = ["video", "craft-video/prores"]
+video-threads = ["video", "craft-video/threads"]
+video-vp8 = ["video", "craft-video/vp8"]
+video-vp9 = ["video", "craft-video/vp9"]
+video-vp9-decode = ["video", "craft-video/vp9-decode"]
+video-vp9-encode = ["video", "craft-video/vp9-encode"]
 
 web-api = ["dep:craft-web-api"]
 
@@ -285,3 +357,5 @@ web-host = ["dep:craft-web-host"]
 
 window = ["dep:craft-window"]
 window-appkit = ["window", "craft-window/appkit"]
+
+xml = ["dep:craft-xml"]
