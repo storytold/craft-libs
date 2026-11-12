@@ -1,7 +1,7 @@
 //! Helpers the maker decoders share: the Exif CFA layout, and black and white levels measured from the samples
 //! for files that state none.
 
-use crate::{BlackLevel, Cfa, Rect};
+use crate::{BlackLevel, Cfa, LevelSource, Rect};
 use craft_tiff::Tiff;
 use std::ops::Range;
 
@@ -23,6 +23,17 @@ pub(crate) fn cfa_from_exif(tiff: &Tiff) -> Option<Cfa> {
 /// Black level per 2×2 CFA position (anchored at the active area origin) from masked sensor columns `cols` over
 /// rows `rows`. Falls back to 0 when the region is empty.
 pub(crate) fn black_from_columns(data: &[u16], width: usize, cols: Range<usize>, rows: Range<usize>, active: Rect) -> BlackLevel {
+    black_from_columns_sourced(data, width, cols, rows, active).0
+}
+
+/// [`black_from_columns`], saying whether it measured the masked samples or fell back to 0.
+pub(crate) fn black_from_columns_sourced(
+    data: &[u16],
+    width: usize,
+    cols: Range<usize>,
+    rows: Range<usize>,
+    active: Rect,
+) -> (BlackLevel, LevelSource) {
     let height = data.len() / width.max(1);
     let (mut sum, mut n) = ([0f64; 4], [0u64; 4]);
     for y in rows.start..rows.end.min(height) {
@@ -34,9 +45,16 @@ pub(crate) fn black_from_columns(data: &[u16], width: usize, cols: Range<usize>,
         }
     }
     if n.contains(&0) {
-        return BlackLevel::uniform(0.0);
+        return (BlackLevel::uniform(0.0), LevelSource::Fallback);
     }
-    BlackLevel { repeat_rows: 2, repeat_cols: 2, values: (0..4).map(|i| (sum[i] / n[i] as f64) as f32).collect(), delta_h: vec![], delta_v: vec![] }
+    let black = BlackLevel {
+        repeat_rows: 2,
+        repeat_cols: 2,
+        values: (0..4).map(|i| (sum[i] / n[i] as f64) as f32).collect(),
+        delta_h: vec![],
+        delta_v: vec![],
+    };
+    (black, LevelSource::MaskedPixels)
 }
 
 /// Samples of up to 512 evenly spaced rows of the active area, for [`white_from_data`]: the borders can hold
@@ -51,6 +69,11 @@ pub(crate) fn active_rows(data: &[u16], w: usize, a: Rect) -> Vec<u16> {
 /// otherwise the full `bits` range. A few stray samples above the plateau (hot pixels, e.g. on a Canon EOS 70D
 /// CR2) don't hide it.
 pub(crate) fn white_from_data(data: &[u16], bits: u32) -> f32 {
+    white_from_data_sourced(data, bits).0
+}
+
+/// [`white_from_data`], saying whether it found a plateau ([`LevelSource::Inferred`]) or returned the full range.
+pub(crate) fn white_from_data_sourced(data: &[u16], bits: u32) -> (f32, LevelSource) {
     let full_level = (1u32 << bits.clamp(1, 16)) - 1;
     let full = full_level as f32;
     let step = (data.len() / 2_000_000).max(1);
@@ -69,7 +92,7 @@ pub(crate) fn white_from_data(data: &[u16], bits: u32) -> f32 {
         above += n * step;
         (above > strays).then_some(v as u32)
     }) else {
-        return full;
+        return (full, LevelSource::Fallback);
     };
     let band = (mx / 256).max(1);
     let near = mx.saturating_sub(band);
@@ -81,9 +104,9 @@ pub(crate) fn white_from_data(data: &[u16], bits: u32) -> f32 {
     // a saturation plateau is a spike: many more samples in the top band than in the band just below it
     if mx as f32 > full * 0.5 && top * step >= min_plateau && top >= 4 * under + 4 {
         // plateau: use its lower edge so everything at saturation maps to ≥ 1.0
-        near as f32
+        (near as f32, LevelSource::Inferred)
     } else {
-        full
+        (full, LevelSource::Fallback)
     }
 }
 
@@ -268,6 +291,24 @@ pub(crate) mod tests {
         let b = black_from_columns(&data, 8, 0..4, 0..6, Rect::new(3, 1, 4, 5));
         assert_eq!(b.at(0, 0, 0, 1), 103.0);
         assert_eq!(black_from_columns(&data, 8, 0..0, 0..6, Rect::new(0, 0, 8, 6)), BlackLevel::uniform(0.0));
+    }
+
+    /// The sourced variants report how a level was found and return exactly what the plain ones do.
+    #[test]
+    fn level_sources_say_how_black_and_white_were_found() {
+        let data: Vec<u16> = (0..8 * 6).map(|i| if i % 8 < 4 { 100 } else { 5000 }).collect();
+        let active = Rect::new(4, 0, 4, 6);
+        let (b, src) = black_from_columns_sourced(&data, 8, 0..4, 0..6, active);
+        assert_eq!((b, src), (black_from_columns(&data, 8, 0..4, 0..6, active), LevelSource::MaskedPixels));
+        let (b, src) = black_from_columns_sourced(&data, 8, 0..0, 0..6, active);
+        assert_eq!((b, src), (BlackLevel::uniform(0.0), LevelSource::Fallback));
+
+        let mut d: Vec<u16> = (0..100_000).map(|i| (i % 10000) as u16).collect();
+        assert_eq!(white_from_data_sourced(&d, 14), (16383.0, LevelSource::Fallback));
+        assert_eq!(white_from_data_sourced(&[], 12), (4095.0, LevelSource::Fallback));
+        d.extend(std::iter::repeat_n(15000u16, 1000));
+        let (w, src) = white_from_data_sourced(&d, 14);
+        assert_eq!((w, src), (white_from_data(&d, 14), LevelSource::Inferred));
     }
 
     #[test]

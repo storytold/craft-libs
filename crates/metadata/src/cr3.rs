@@ -313,7 +313,15 @@ fn moov<'a>(bytes: &'a [u8], m: &BoxRef, out: &mut Cr3<'a>, budget: &mut usize) 
                         }
                         _ => continue,
                     };
-                    out.cmt[slot] = bytes.get(c.body..c.end);
+                    // a damaged CMTn gives way to a later readable one; the first readable one stays
+                    let readable = |b: Option<&[u8]>| b.is_some_and(|b| craft_tiff::Tiff::parse(b).is_ok());
+                    let body = bytes.get(c.body..c.end);
+                    if let Some(kept) = out.cmt.get_mut(slot)
+                        && !readable(*kept)
+                        && (kept.is_none() || readable(body))
+                    {
+                        *kept = body;
+                    }
                 }
             }
             b"trak" => {
@@ -571,6 +579,28 @@ mod tests {
         file.extend(bx(b"moov", &trak(craw(6000, 4000, &bx(b"free", &[])), 4096, 16)));
         file.resize(4112, 0);
         assert!(matches!(parse_cr3(&file).unwrap().tracks[0].kind, Cr3TrackKind::Raw { cmp1: None, .. }));
+    }
+
+    /// A damaged CMT2 before a readable one: the readable one is read, and a later one doesn't
+    /// replace it. A damaged CMT2 with nothing better stays (merged_exif then leaves it out).
+    #[test]
+    fn a_damaged_cmt_box_gives_way_to_a_later_readable_one() {
+        use craft_tiff::{Value, tags as t};
+        let file = |cmts: &[(&[u8; 4], Vec<u8>)]| {
+            let canon = uuid(&CANON_UUID, &cmts.iter().flat_map(|(k, b)| bx(k, b)).collect::<Vec<u8>>());
+            [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), bx(b"moov", &canon)].concat()
+        };
+        let cmt1 = tiff_with(t::MAKE, Value::Ascii("Canon".into()));
+        let damaged = b"II*\0\xff\xff\0\0".to_vec();
+        let iso = |v| tiff_with(t::ISO_SPEED, Value::Short(vec![v]));
+        let f = file(&[(b"CMT1", cmt1.clone()), (b"CMT2", damaged.clone()), (b"CMT2", iso(800)), (b"CMT2", iso(100))]);
+        let c = parse_cr3(&f).unwrap();
+        assert_eq!(c.cmt[1], Some(iso(800).as_slice()));
+        assert_eq!(crate::read_exif(&merged_exif(&c).unwrap()).iso, Some(800));
+        let only_damaged = file(&[(b"CMT1", cmt1), (b"CMT2", damaged.clone())]);
+        let c = parse_cr3(&only_damaged).unwrap();
+        assert_eq!(c.cmt[1], Some(damaged.as_slice()));
+        assert_eq!(crate::read_exif(&merged_exif(&c).unwrap()).make.as_deref(), Some("Canon"));
     }
 
     #[test]
