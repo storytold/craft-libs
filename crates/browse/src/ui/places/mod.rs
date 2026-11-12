@@ -23,7 +23,10 @@ use std::path::{Path, PathBuf};
 use craft_behavior::{DisplayOrder, IconId, ItemSource, Selection};
 use craft_host::target::{Os, Runtime};
 use craft_i18n::Format;
-use craft_ui::contract::{ActivateOn, Bind, CollectionEvent, Entry, NoValue, Outcome, Pattern, Props, Remember as _, SelectMode, Show as _};
+use craft_ui::contract::{
+    ActivateOn, Bind, CollectionEvent, DropAt, DropKind, DropPayload, DropPlace, Entry, NoValue, Outcome, Pattern, Props, Remember as _, SelectMode,
+    Show as _,
+};
 use craft_ui::contract::{ShowCollection as _, ShowContainer as _};
 use craft_ui::display::Divider;
 use craft_ui::layout_components::Stack;
@@ -57,6 +60,14 @@ pub enum PlacesEvent {
     /// A pick in the host's folder menu ([`PlacesTree::row_menu`]): its command on the folder `target`.
     /// The folder the menu was opened on, then the id of the picked command.
     Menu(PathBuf, String),
+    /// A drag released over a folder row that [`PlacesTree::accepts`] took.
+    #[non_exhaustive]
+    Dropped {
+        /// The row's folder.
+        place: PathBuf,
+        /// The drag's payload, read with `get::<P>()`.
+        payload: DropPayload,
+    },
 }
 
 impl PlacesSettings {
@@ -69,7 +80,7 @@ impl PlacesSettings {
             PlacesEvent::Restore(path) => self.restore(path),
             PlacesEvent::RestoreAll => self.restore_all(),
             PlacesEvent::ClearRecent => self.clear_recent(),
-            PlacesEvent::Open(_) | PlacesEvent::Reveal(_) | PlacesEvent::Menu(..) => false,
+            PlacesEvent::Open(_) | PlacesEvent::Reveal(_) | PlacesEvent::Menu(..) | PlacesEvent::Dropped { .. } => false,
         }
     }
 }
@@ -173,12 +184,23 @@ pub struct PlacesTree<'a> {
     /// The host's entries after the library's in a folder row's menu.
     #[prop(func = "Fn(&Path) -> Vec<Entry<String>>")]
     row_menu: Option<RowMenu<'a>>,
+    /// The drops the folder rows take.
+    drop: Option<DropKind<'a, RowKey>>,
 }
 
 impl<'a> PlacesTree<'a> {
     /// The tree of `places` named `label`, listing children through `cache`.
     pub fn new(label: impl Into<Label>, places: &'a Places, cache: &'a mut FolderCache) -> Self {
-        PlacesTree { label: label.into(), places, cache, current: None, row_menu: None }
+        PlacesTree { label: label.into(), places, cache, current: None, row_menu: None, drop: None }
+    }
+
+    /// A drag carrying a `P` drops onto a folder row where `accepts` passes for the folder and the payload: the row is
+    /// outlined while the drag is over it, and the release reports [`PlacesEvent::Dropped`].
+    #[must_use]
+    pub fn accepts<P: Send + Sync + 'static>(mut self, accepts: impl Fn(&Path, &P) -> bool + 'a) -> Self {
+        let onto = move |payload: &P, at: &DropAt<RowKey>| matches!(at, DropAt::Onto(RowKey::Folder(folder)) if accepts(&folder.path, payload));
+        self.drop = Some(DropKind::new(DropPlace::Onto, onto));
+        self
     }
 }
 
@@ -329,7 +351,7 @@ struct Surroundings<'a> {
 impl PlacesTree<'_> {
     /// Shows the tree and reports what happened.
     pub fn show(self, ui: &mut Ui) -> PlacesOutput {
-        let PlacesTree { label, places, cache, current, row_menu } = self;
+        let PlacesTree { label, places, cache, current, row_menu, drop } = self;
         let env = Env::of(ui);
         let words = env.words::<PlacesWords>();
         let around = {
@@ -389,6 +411,9 @@ impl PlacesTree<'_> {
             if let Some(key) = reveal_key {
                 list = list.reveal(key);
             }
+            if let Some(kind) = &drop {
+                list = list.takes_drop(kind.clone());
+            }
             let out = list.show_items(ui, &rows, &mut |key, _| {
                 let Some(row) = rows.at(key) else { return ListRow::spacer() };
                 match &row.content {
@@ -420,6 +445,9 @@ impl PlacesTree<'_> {
                         RowKey::Hidden => memory.menu = Some(Target::Hidden),
                         _ => {}
                     },
+                    CollectionEvent::Dropped { at: DropAt::Onto(RowKey::Folder(at)), payload, .. } => {
+                        events.push(PlacesEvent::Dropped { place: at.path, payload });
+                    }
                     _ => {}
                 }
             }

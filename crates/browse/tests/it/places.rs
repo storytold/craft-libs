@@ -5,10 +5,12 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use craft_behavior::keyed;
 use craft_browse::places::{FakeDirectories, FolderCache, Place, PlaceGroup, PlaceGroupKind, PlaceKind, Places, StandardFolder};
-use craft_browse::ui::places::PlacesTree;
+use craft_browse::ui::places::{PlacesEvent, PlacesTree};
 use craft_host::{ManualJobs, Wake};
-use craft_ui::contract::Role;
+use craft_ui::contract::{ListDrag, Role, ShowCollection as _};
+use craft_ui::list::{List, ListRow};
 use craft_ui::testing::access::name;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers};
@@ -111,4 +113,43 @@ fn the_disclosure_opens_and_closes_a_folder() {
     fixture.click(&collapse);
     settle(&mut fixture, &state);
     assert!(!shown(&fixture, "Docs"), "the triangle closes Home again: {:?}", rows(&fixture));
+}
+
+/// A row dragged from another list drops onto a folder row the host accepts, and only there.
+#[trial]
+fn a_dragged_row_drops_onto_a_folder_the_host_accepts() {
+    let jobs = Arc::new(ManualJobs::new());
+    let cache = FolderCache::new(Arc::new(fake()), jobs.clone(), Wake::new(|| {}));
+    let state = Rc::new(RefCell::new(Rig { places: home(), cache, jobs, current: Some(path("/home/u/Photos/2024/Trip")) }));
+    let dropped: Rc<RefCell<Vec<(PathBuf, Option<Vec<u32>>)>>> = Rc::default();
+    let (shown, seen) = (state.clone(), dropped.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let photos = [7u32];
+        let _ = List::<u32>::new("Photos").natural_height(true).drag_payload(|drag: &ListDrag<u32>| Some(drag.clone())).show_items(
+            ui,
+            &keyed(&photos, |n: &u32| *n),
+            &mut |_, _| ListRow::new("Photo 7"),
+        );
+        let mut rig = shown.borrow_mut();
+        let Rig { places, cache, current, .. } = &mut *rig;
+        let mut tree = PlacesTree::new("Places", places, cache).accepts(|folder, _: &ListDrag<u32>| folder.starts_with("/home/u/Photos"));
+        if let Some(current) = current.as_deref() {
+            tree = tree.current(current);
+        }
+        for event in tree.show(ui).events {
+            if let PlacesEvent::Dropped { place, payload, .. } = event {
+                seen.borrow_mut().push((place, payload.get::<ListDrag<u32>>().map(|drag| drag.keys.clone())));
+            }
+        }
+    });
+    settle(&mut fixture, &state);
+    let photo = fixture.by_label("Photo 7").expect("the photo row is shown").center();
+    for (folder, place) in [("Docs", None), ("2024", Some("/home/u/Photos/2024"))] {
+        let row = fixture.by_label(folder).unwrap_or_else(|| panic!("{folder} is shown: {:?}", rows(&fixture))).center();
+        fixture.drag_at(photo, row - photo);
+        assert_eq!(
+            dropped.borrow_mut().drain(..).collect::<Vec<_>>(),
+            place.map(|place| (path(place), Some(vec![7]))).into_iter().collect::<Vec<_>>()
+        );
+    }
 }

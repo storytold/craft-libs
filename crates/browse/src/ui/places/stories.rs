@@ -4,15 +4,75 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use craft_behavior::{Metrics, PressPhase, Sense};
 use craft_host::{ManualJobs, Wake};
-use craft_ui::contract::{Entry, Show as _, ShowContainer as _};
+use craft_ui::contract::{
+    Common, Component, Container, ContainerProps, Cx, DragPreview, Entry, ListDrag, Pad, Pointer as _, Role, Show as _, ShowContainer as _, Sizing,
+};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::Stack;
+use craft_ui::runtime::env::Label;
+use craft_ui::style::{ComponentStyle, StyleCx};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
-use egui::Ui;
+use egui::{Id, Response, Ui};
 
 use super::{PlacesEvent, PlacesTree};
 use crate::places::{FakeDirectories, FolderCache, PlaceGroupKind, Places, PlacesInput, PlacesSettings, StandardFolder, Volume};
+
+/// The style of the story's photo chip.
+#[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
+struct PhotoChipStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+}
+
+/// A photo the story drags onto the folders: its one child shows it, and a drag from it carries the photo as a row
+/// drag of another list would.
+#[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
+#[component(container, unregistered)]
+struct PhotoChip {
+    #[common]
+    common: Common,
+    #[container]
+    props: ContainerProps,
+    photo: ListDrag<u32>,
+    name: Label,
+}
+
+impl PhotoChip {
+    fn new(photo: ListDrag<u32>, name: impl Into<Label>) -> Self {
+        let props = ContainerProps::new().pad(Pad::None).sizing(Sizing::Content);
+        PhotoChip { common: Common::new(), props, photo, name: name.into() }
+    }
+}
+
+impl Component for PhotoChip {
+    const ROLE: Role = Role::None;
+    const PARTS: bool = false;
+    const STOPS: bool = false;
+    type Style = PhotoChipStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: PhotoChipStyleKey) -> PhotoChipStyle {
+        PhotoChipStyle::default()
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::DRAG
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if matches!(cx.press().phase, PressPhase::DragStart { .. }) {
+            cx.start_drag(self.photo.clone(), DragPreview::Badge(self.name.clone()));
+        }
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+impl Container for PhotoChip {}
 
 fn path(text: &str) -> PathBuf {
     PathBuf::from(text)
@@ -123,7 +183,10 @@ fn show_places(ui: &mut Ui, data: &mut StoryData, setup: Setup) -> StoryOutput {
         places
     };
     ui.horizontal_wrapped(|ui| {
-        Text::new("Photo 7").show(ui);
+        let photo = ListDrag::new(Id::NULL.with("places-story-photos"), vec![7u32], 7);
+        PhotoChip::new(photo, "Photo 7").show(ui, |ui, _| {
+            Text::new("Photo 7").show(ui);
+        });
         Text::new("Drag this photo onto a folder under Photos").shade(Shade::Muted).show(ui);
     });
     let mut out = None;
@@ -132,8 +195,9 @@ fn show_places(ui: &mut Ui, data: &mut StoryData, setup: Setup) -> StoryOutput {
         // The old story's tree box: 380 points tall however many rows it holds.
         let room = craft_ui::testing::stage_fitting(ui, |_| 380.0);
         Stack::new().fill().show_at(ui, room, |ui, _| {
-            let mut tree =
-                PlacesTree::new("Places", &places, &mut *cache).row_menu(|_| vec![Entry::new(String::from("folder.rename"), "Rename Folder…")]);
+            let mut tree = PlacesTree::new("Places", &places, &mut *cache)
+                .row_menu(|_| vec![Entry::new(String::from("folder.rename"), "Rename Folder…")])
+                .accepts(|folder, _: &ListDrag<u32>| folder.starts_with("/home/u/Photos"));
             if let Some(current) = current.as_deref() {
                 tree = tree.current(current);
             }

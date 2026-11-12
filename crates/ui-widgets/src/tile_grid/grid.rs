@@ -14,8 +14,8 @@ use super::tile::AroundPicture;
 use super::{CaptionPlace, Tile, TilePartEvent, ZoomStep};
 use crate::contract::{
     Access, Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, ColumnKind, ColumnSpec, Common, Component,
-    ContainerProps, Cx, DropKind, EditResponse, Focus as _, ListDrag, NoValue, Notch, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, RowState,
-    SelectMode, Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn,
+    ContainerProps, Cx, DropKind, EditResponse, Focus as _, ListDrag, NoValue, Notch, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role,
+    RowState, SelectMode, Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn,
 };
 use crate::contract::{lead_position, section_part};
 use crate::controls::disclosure::Disclosure;

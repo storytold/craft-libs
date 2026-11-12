@@ -2,6 +2,7 @@
 
 use std::any::{Any, TypeId};
 use std::fmt;
+use std::rc::Rc;
 use std::sync::Arc;
 
 /// Where a drop kind takes its drops.
@@ -46,11 +47,12 @@ impl<K> DropAt<K> {
     }
 }
 
-type Test<'a, K> = Box<dyn Fn(&dyn Any, &DropAt<K>) -> bool + 'a>;
+type Test<'a, K> = Rc<dyn Fn(&dyn Any, &DropAt<K>) -> bool + 'a>;
 
 /// A payload type a collection takes from a drag that did not start in it, at one place, where `accepts` passes. A
 /// drag carries its payload and, for a row drag of a collection with `drag_payload`, a second one: a kind takes either.
 /// The collection's own row drag is its reorder, never a drop kind. Files dragged in from the OS are a drag of `OsFiles`.
+#[derive(Clone)]
 pub struct DropKind<'a, K> {
     payload: TypeId,
     place: DropPlace,
@@ -63,7 +65,7 @@ impl<'a, K> DropKind<'a, K> {
         DropKind {
             payload: TypeId::of::<P>(),
             place,
-            accepts: Box::new(move |payload, at| payload.downcast_ref::<P>().is_some_and(|payload| accepts(payload, at))),
+            accepts: Rc::new(move |payload, at| payload.downcast_ref::<P>().is_some_and(|payload| accepts(payload, at))),
         }
     }
 
