@@ -11,6 +11,10 @@ struct Set {
     title: String,
     licence: String,
     stroke_width: Option<f64>,
+    /// A fill set's own drawings made with strokes, by file stem: their widths are rewritten as a stroke set's are.
+    drawings: BTreeSet<String>,
+    /// The drawings' own stroke width in view-box units.
+    drawing_stroke_width: Option<f64>,
     /// The base set: every icon has a file in it, and the other sets fall back to it.
     base: bool,
     /// The set `IconSet::default()` names.
@@ -83,10 +87,29 @@ fn sets(manifest: &Table) -> Vec<Set> {
                 "fill" => None,
                 other => panic!("icons/icons.toml: {what} has kind `{other}`, not `stroke` or `fill`"),
             };
+            let drawings: BTreeSet<String> = table
+                .get("stroke_drawings")
+                .and_then(Value::as_array)
+                .map(|list| {
+                    list.iter()
+                        .map(|file| {
+                            file.as_str().unwrap_or_else(|| panic!("icons/icons.toml: {what}'s `stroke_drawings` holds a non-string")).to_owned()
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let drawing_stroke_width = table.get("drawing_stroke_width").and_then(Value::as_float);
+            assert!(drawings.is_empty() || stroke_width.is_none(), "icons/icons.toml: {what} is a stroke set; its files are all stroke drawings");
+            assert!(
+                drawings.is_empty() == drawing_stroke_width.is_none(),
+                "icons/icons.toml: {what} has `stroke_drawings` without `drawing_stroke_width`, or the reverse"
+            );
             Set {
                 title: str_field(table, "title", &what).to_owned(),
                 licence: str_field(table, "licence", &what).to_owned(),
                 stroke_width,
+                drawings,
+                drawing_stroke_width,
                 base: table.get("base").and_then(Value::as_bool).unwrap_or(false),
                 default: table.get("default").and_then(Value::as_bool).unwrap_or(false),
                 id,
@@ -132,7 +155,8 @@ fn icons(manifest: &Table, sets: &[Set]) -> Vec<Entry> {
     entries
 }
 
-/// Every listed file exists, and every set folder holds only listed files and its licence.
+/// Every listed file exists, every set folder holds only listed files and its licence, and a fill set lists every file
+/// it holds that draws with strokes as a stroke drawing.
 fn check_files(dir: &Path, sets: &[Set], icons: &[Entry]) {
     for (index, set) in sets.iter().enumerate() {
         let folder = dir.join(&set.id);
@@ -147,6 +171,19 @@ fn check_files(dir: &Path, sets: &[Set], icons: &[Entry]) {
         for entry in entries {
             let file = entry.expect("read icon folder entry").file_name().to_string_lossy().into_owned();
             assert!(file == "LICENSE" || listed.contains(&file), "set `{}` holds {file}, which icons.toml does not list", set.id);
+            if set.stroke_width.is_none() && file != "LICENSE" {
+                let text = std::fs::read_to_string(folder.join(&file)).unwrap_or_else(|e| panic!("read {file}: {e}"));
+                let stem = file.trim_end_matches(".svg");
+                assert_eq!(
+                    text.contains("stroke=\"currentColor\""),
+                    set.drawings.contains(stem),
+                    "set `{}`: {file} draws with strokes exactly when `stroke_drawings` lists it",
+                    set.id
+                );
+            }
+        }
+        for drawing in &set.drawings {
+            assert!(listed.contains(&format!("{drawing}.svg")), "set `{}` lists the stroke drawing {drawing}, which no icon uses", set.id);
         }
         assert!(folder.join("LICENSE").is_file(), "set `{}` has no LICENSE file", set.id);
     }
@@ -196,23 +233,38 @@ fn generate(root: &str, sets: &[Set], icons: &[Entry]) -> String {
     );
     set_fn(&mut out, sets, "The folder name under `crates/ui-contract/icons/`.", "id", "&'static str", |s| format!("{:?}", s.id));
     set_fn(&mut out, sets, "The set's name for display.", "title", "&'static str", |s| format!("{:?}", s.title));
-    set_fn(&mut out, sets, "The set's own stroke width in view-box units; `None` for a set drawn with fills.", "stroke_width", "Option<f32>", |s| {
-        s.stroke_width.map_or("None".to_owned(), |w| format!("Some({w:?})"))
-    });
     out.push_str("}\n\n");
 
-    out.push_str("/// The SVG document of the icon at `index` in `NAMES` for `set`, and whether the set draws it from its own file.\n");
-    out.push_str("pub(super) const fn svg(index: usize, set: IconSet) -> (&'static [u8], bool) {\n    match set {\n");
+    let base_upper = base.id.to_ascii_uppercase();
+    out.push_str("/// The SVG document of the icon at `index` in `NAMES` for `set`: the set's own file, or the base set's.\n");
+    out.push_str("pub(super) const fn svg(index: usize, set: IconSet) -> &'static [u8] {\n    match set {\n");
     for set in sets {
         let upper = set.id.to_ascii_uppercase();
         if set.base {
-            let _ = writeln!(out, "        IconSet::{} => ({upper}[index], true),", camel(&set.id));
+            let _ = writeln!(out, "        IconSet::{} => {upper}[index],", camel(&set.id));
         } else {
             let _ = writeln!(
                 out,
-                "        IconSet::{} => match {upper}[index] {{\n            Some(bytes) => (bytes, true),\n            None => ({}[index], false),\n        }},",
-                camel(&set.id),
-                base.id.to_ascii_uppercase()
+                "        IconSet::{} => match {upper}[index] {{\n            Some(bytes) => bytes,\n            None => {base_upper}[index],\n        }},",
+                camel(&set.id)
+            );
+        }
+    }
+    out.push_str("    }\n}\n\n");
+
+    out.push_str(
+        "/// The own stroke width, in view-box units, of the document `svg` gives for the same icon and set; `None` for a document drawn with fills.\n",
+    );
+    out.push_str("pub(super) const fn stroke_width(index: usize, set: IconSet) -> Option<f32> {\n    match set {\n");
+    for set in sets {
+        let upper = set.id.to_ascii_uppercase();
+        if set.base {
+            let _ = writeln!(out, "        IconSet::{} => {upper}_STROKES[index],", camel(&set.id));
+        } else {
+            let _ = writeln!(
+                out,
+                "        IconSet::{} => match {upper}[index] {{\n            Some(_) => {upper}_STROKES[index],\n            None => {base_upper}_STROKES[index],\n        }},",
+                camel(&set.id)
             );
         }
     }
@@ -234,6 +286,14 @@ fn generate(root: &str, sets: &[Set], icons: &[Entry]) -> String {
                 }
                 (None, _) => out.push_str("    None,\n"),
             }
+        }
+        out.push_str("];\n");
+        let _ = writeln!(out, "\nconst {}_STROKES: [Option<f32>; {n}] = [", set.id.to_ascii_uppercase());
+        for icon in icons {
+            let width = icon.files[index]
+                .as_ref()
+                .and_then(|file| set.stroke_width.or_else(|| set.drawings.contains(file).then_some(set.drawing_stroke_width).flatten()));
+            let _ = writeln!(out, "    {},", width.map_or("None".to_owned(), |w| format!("Some({:?})", w as f32)));
         }
         out.push_str("];\n");
     }

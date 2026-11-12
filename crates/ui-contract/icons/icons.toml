@@ -10,6 +10,9 @@
 # `directional`: mirrored in a right-to-left interface (arrows of reading order, undo, redo).
 # `kind`: "stroke" sets get their stroke width rewritten to the suite's drawn width; "fill" sets
 # render as drawn. `stroke_width` is the set's own width in view-box units.
+# `stroke_drawings`: the suite's own drawings in a fill set that draw with strokes (ATTRIBUTION.md);
+# their widths are rewritten like a stroke set's, from `drawing_stroke_width`, their own width in
+# view-box units. A fill set's file with `stroke="currentColor"` must be listed.
 
 [[set]]
 id = "lucide"
@@ -25,6 +28,22 @@ title = "Phosphor (regular)"
 licence = "MIT"
 kind = "fill"
 base = true
+drawing_stroke_width = 16.0
+stroke_drawings = [
+    "adjustment-layer", "bandage-sparkle", "brush-replace", "clip-below", "clip-release", "convert-point",
+    "direct-select", "distribute-bottom", "distribute-hcenter", "distribute-horizontal", "distribute-left",
+    "distribute-right", "distribute-top", "distribute-vcenter", "distribute-vertical", "eraser-background",
+    "eraser-magic", "extract-clip", "font-similar", "fx", "gradient-angle", "gradient-diamond", "gradient-linear",
+    "gradient-radial", "gradient-reflected", "insert-clip", "key-auto-bezier", "key-bezier", "key-continuous-bezier",
+    "key-ease-in", "key-ease-out", "key-hold", "key-linear", "key-linear-filled", "keyframe-auto-bezier",
+    "keyframe-bezier", "keyframe-ease-in", "keyframe-ease-out", "keyframe-easy-ease", "keyframe-hold",
+    "keyframe-linear", "lasso", "lasso-magnetic", "lasso-select", "layer-mask", "lift-clip", "lollipop", "mark-in",
+    "mark-out", "marquee-column", "marquee-row", "overwrite-clip", "painting-symmetry", "pen-add-anchor",
+    "pen-curvature", "pen-delete-anchor", "pen-freeform", "quick-selection", "route-curved", "route-elbow",
+    "route-straight", "stroke-align-center", "stroke-align-inside", "stroke-align-outside", "stroke-cap-butt",
+    "stroke-cap-round", "stroke-cap-square", "stroke-join-bevel", "stroke-join-miter", "stroke-join-round",
+    "symmetry-diagonal", "symmetry-dual", "symmetry-horizontal", "symmetry-vertical", "sync-lock"
+]
 
 [[set]]
 id = "carbon"

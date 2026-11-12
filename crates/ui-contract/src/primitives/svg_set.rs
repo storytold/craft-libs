@@ -24,13 +24,11 @@ pub(crate) fn directional(index: usize) -> bool {
 
 /// The icon in white at `px` x `px` physical pixels, its alpha from the drawing; tinted when drawn.
 ///
-/// Stroke sets are drawn `stroke_px` physical pixels wide, fill sets as drawn. `mirrored` flips the drawing
-/// horizontally. A document that fails to parse gives a transparent image and a log line.
+/// A document drawn with strokes is drawn `stroke_px` physical pixels wide, one drawn with fills as drawn. `mirrored`
+/// flips the drawing horizontally. A document that fails to parse gives a transparent image and a log line.
 pub(crate) fn rasterise(index: usize, set: IconSet, px: u32, stroke_px: f32, mirrored: bool) -> ColorImage {
     let size = [px as usize; 2];
-    let (svg, own) = svg(index, set);
-    let drawn_in = if own { set } else { IconSet::BASE };
-    match draw(svg, drawn_in, px, stroke_px, mirrored) {
+    match draw(svg(index, set), stroke_width(index, set), px, stroke_px, mirrored) {
         Ok(pixmap) => ColorImage::new(size, pixmap.pixels().iter().map(|p| Color32::from_white_alpha(p.alpha())).collect()),
         Err(error) => {
             log::error!("icon {} in {}: {error}", NAMES[index], set.id());
@@ -39,11 +37,11 @@ pub(crate) fn rasterise(index: usize, set: IconSet, px: u32, stroke_px: f32, mir
     }
 }
 
-/// `set` is the set whose file `svg` is: strokes are rewritten only for a stroke set's own files.
-fn draw(svg: &[u8], set: IconSet, px: u32, stroke_px: f32, mirrored: bool) -> Result<tiny_skia::Pixmap, String> {
+/// `own` is the document's own stroke width in view-box units; a document without one is drawn as it is.
+fn draw(svg: &[u8], own: Option<f32>, px: u32, stroke_px: f32, mirrored: bool) -> Result<tiny_skia::Pixmap, String> {
     let mut tree = svg_tree::parse(svg)?;
     let view = tree.size();
-    if let Some(own) = set.stroke_width() {
+    if let Some(own) = own {
         // Every `stroke-width` scales by the same factor, so a set's thinner details stay thinner.
         let units = stroke_px * view.width() / px as f32;
         let text = std::str::from_utf8(svg).map_err(|e| e.to_string())?;

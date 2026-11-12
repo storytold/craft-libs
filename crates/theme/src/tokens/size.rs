@@ -388,7 +388,7 @@ pub struct HitSizes {
     pub target: f32,
 }
 
-/// Line widths, dash lengths and gaps, in points.
+/// Line widths, dash lengths and gaps in points, and the icon line as a share of the icon side.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct StrokeTokens {
     /// Hairline.
@@ -403,6 +403,9 @@ pub struct StrokeTokens {
     pub dash: f32,
     /// Gap between dashes.
     pub dash_gap: f32,
+    /// The line of a stroke-set icon, as a share of the icon's side rather than in points, so a small glyph keeps the
+    /// weight of a large one.
+    pub icon: f32,
 }
 
 /// Thumbnail sides, in logical pixels, for the three user settings.

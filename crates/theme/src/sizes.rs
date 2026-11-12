@@ -192,6 +192,7 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.stroke.heavy" Num 0.25..=8.0 => st.heavy;
         "base.stroke.dash" Num 1.0..=32.0 => st.dash;
         "base.stroke.dash_gap" Num 1.0..=32.0 => st.dash_gap;
+        "base.stroke.icon" Num 0.02..=0.2 => st.icon;
     }
     let t = &mut b.typography;
     leaves! { out;

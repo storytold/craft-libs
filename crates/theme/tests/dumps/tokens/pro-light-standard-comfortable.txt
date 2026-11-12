@@ -191,6 +191,7 @@ stroke.thick = 2
 stroke.heavy = 3
 stroke.dash = 4
 stroke.dash_gap = 3
+stroke.icon = 0.0729
 typography.caption.size = 11.5
 typography.caption.line_height = 16
 typography.caption.font = ui

@@ -230,8 +230,8 @@ fn svg(painter: &Painter, tokens: &UiTokens, square: Rect, index: usize, set: Ic
     let ctx = painter.ctx();
     let ppp = ctx.pixels_per_point();
     let px = (square.width() * ppp).round().max(1.0) as u32;
-    // Fill sets ignore the stroke, so all their requests share one entry.
-    let stroke_px = if set.stroke_width().is_some() { (stroke(tokens, square.width()) * ppp * 64.0).round() as u32 } else { 0 };
+    // A document drawn with fills ignores the stroke, so all its requests share one entry.
+    let stroke_px = if svg_set::stroke_width(index, set).is_some() { (stroke(tokens, square.width()) * ppp * 64.0).round() as u32 } else { 0 };
     let key = (index, set, px, stroke_px, mirrored);
     let texture = TextureCache::texture(ctx, key, || svg_set::rasterise(index, set, px, stroke_px as f32 / 64.0, mirrored));
     let side = px as f32 / ppp;
@@ -240,8 +240,7 @@ fn svg(painter: &Painter, tokens: &UiTokens, square: Rect, index: usize, set: Ic
     crate::runtime::egui::textures::paint(painter, texture, Rect::from_min_size(min, vec2(side, side)), uv, color, egui::CornerRadius::ZERO);
 }
 
-/// The stroke of a stroke-set icon `side` wide: `stroke.thin` below `size.icon.md`, `stroke.medium` from it up, so a
-/// glyph inside a control keeps about the share of its side that a standard icon's stroke has.
+/// The stroke of a stroke-set icon `side` wide: `stroke.icon` of its side, so every glyph has the same weight.
 fn stroke(tokens: &UiTokens, side: f32) -> f32 {
-    if side < tokens.size.icon.md { tokens.stroke.thin } else { tokens.stroke.medium }
+    tokens.stroke.icon * side
 }

@@ -77,10 +77,11 @@ fn shape_lines(out: &mut Lines, shape: &ShapeTokens) {
 }
 
 fn stroke_lines(out: &mut Lines, stroke: &StrokeTokens) {
-    let StrokeTokens { thin, medium, thick, heavy, dash, dash_gap } = stroke;
+    let StrokeTokens { thin, medium, thick, heavy, dash, dash_gap, icon } = stroke;
     for (k, v) in [("thin", thin), ("medium", medium), ("thick", thick), ("heavy", heavy), ("dash", dash), ("dash_gap", dash_gap)] {
         out.line(&format!("stroke.{k}"), len(*v));
     }
+    out.line("stroke.icon", decimals(*icon, 4));
 }
 
 fn space_lines(out: &mut Lines, space: &SpaceTokens) {
