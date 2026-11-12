@@ -92,6 +92,11 @@ required-features = ["h264-decode"]
 name = "h264_h264dec"
 required-features = ["h264-decode"]
 
+[[example]]
+name = "h264_h264enc_bench"
+required-features = ["h264-encode"]
+test = true
+
 [[test]]
 name = "hevc_decode"
 required-features = ["hevc-decode"]
