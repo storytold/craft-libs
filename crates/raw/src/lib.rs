@@ -32,6 +32,7 @@
 //! | `kodak` | Kodak DCS520C TIFF: two-component lossless JPEG with a response curve |
 //! | `nef` | Nikon NEF and NRW: uncompressed, packed, Nikon's Huffman coding (lossless and lossy, 12 and 14 bits), small raw |
 //! | `rw2` | Panasonic RW2, Leica RWL and the older Panasonic / Leica RAW: packed, formats 4 and 6, format 8 prefix-coded strips, 16-bit words |
+//! | `raf` | Fujifilm RAF: uncompressed Bayer and X-Trans, Fujifilm's lossless and lossy compression, lens corrections |
 //! | `pef` | Pentax PEF: uncompressed (packed or 16-bit words) and Pentax's Huffman coding (compression 65535) |
 //! | `srw` | Samsung SRW: the uncompressed variants (compression 32769 words, 32770 at 12 bits packed) |
 //! | `hasselblad` | Hasselblad 3FR and FFF (and other CFA TIFFs in the DNG layout without a DNG version): uncompressed and Hasselblad's lossless JPEG; implies `dng` |
@@ -89,6 +90,12 @@ pub mod opcodes;
 mod pef;
 mod preview;
 pub mod profile;
+#[cfg(feature = "raf")]
+mod raf;
+#[cfg(feature = "raf")]
+mod raf_lens;
+#[cfg(feature = "raf")]
+mod rafc;
 #[cfg(feature = "rw2")]
 mod rw2;
 #[cfg(feature = "dng")]
@@ -340,6 +347,7 @@ impl RawFormat {
             || (self == RawFormat::Cr2 && cfg!(feature = "cr2"))
             || (matches!(self, RawFormat::Nef | RawFormat::Nrw) && cfg!(feature = "nef"))
             || (self == RawFormat::Rw2 && cfg!(feature = "rw2"))
+            || (self == RawFormat::Raf && cfg!(feature = "raf"))
             || (self == RawFormat::Pef && cfg!(feature = "pef"))
             || (self == RawFormat::Srw && cfg!(feature = "srw"))
     }
@@ -628,6 +636,8 @@ fn decode_in(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawImage> {
         RawFormat::Nef | RawFormat::Nrw => nef::decode(bytes, mode, limits),
         #[cfg(feature = "rw2")]
         RawFormat::Rw2 => rw2::decode(bytes, mode, limits),
+        #[cfg(feature = "raf")]
+        RawFormat::Raf => raf::decode(bytes, mode, limits),
         #[cfg(feature = "pef")]
         RawFormat::Pef => pef::decode(bytes, mode, limits),
         #[cfg(feature = "srw")]
