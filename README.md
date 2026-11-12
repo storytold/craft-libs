@@ -143,6 +143,11 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   origin, to RGBA8, and a run-length writer whose packets end with their scan line. Bounded on
   hostile input.
 - [`craft-idml`](crates/idml/README.md): IDML (InDesign Markup Language) packages: the ZIP container read with bounded part sizes and lenient part names, `designmap.xml` with its includes in place, the `<Properties>` form on craft-xml elements, value codecs and the package writer; and InDesign Tagged Text, read and written.
+- [`craft-stream-codecs`](crates/stream-codecs/README.md): byte-stream and bi-level image codecs that
+  PDF, PostScript and TIFF share: LZW, ASCII85, ASCIIHex, RunLength, TIFF and PNG predictors,
+  CCITT Group 3 and 4 decoding and Group 4 encoding, lossless JBIG2 encoding. Every
+  decoder is bounded and returns its partial output on damage. From PdfCraft; a PDF filter chain
+  is built on it in `craft-pdf`.
 - [`craft-timeline`](crates/timeline/README.md): editorial timeline interchange: exact media time and SMPTE timecode, import/export reports, media path and `file://` URL handling, Avid Log Exchange (ALE) and CMX 3600 EDL documents, format detection. From FilmCraft.
 - [`craft-metadata`](crates/metadata/README.md): photo metadata, from LightCraft: EXIF (read and write,
   maker-note lens and focus point, every tag by name), IPTC-IIM, XMP packets (read, write, and a merge
