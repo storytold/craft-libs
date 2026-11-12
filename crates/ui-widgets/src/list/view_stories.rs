@@ -10,6 +10,7 @@ use crate::contract::{
     Bind, CollectionEvent, ColumnKind, ColumnSpec, Entry, Show as _, ShowCollection as _, ShowContainer as _, ToggleColumn, ToggleEdit,
     WordSetCx as _, request_rename,
 };
+use crate::layout_components::Stack;
 use crate::menu::Menu;
 use crate::popover::Popover;
 use crate::primitives::{ContentPainterCx, IconSpec};
@@ -499,9 +500,16 @@ fn findings(count: usize) -> Vec<Finding> {
         .collect()
 }
 
+/// The list under its summary line, as a host shows them.
 fn findings_list(ui: &mut Ui, findings: &[Finding]) -> StoryOutput {
     let source = Findings::new(findings);
-    FindingsList::new("Findings").show_items(ui, &source, &mut |key, icx| findings[*key as usize].row(&icx.words::<FindingsWords>())).into()
+    let mut shown = StoryOutput::default();
+    Stack::new().show(ui, |ui, _| {
+        FindingsSummary::new(findings).show(ui);
+        shown =
+            FindingsList::new("Findings").show_items(ui, &source, &mut |key, icx| findings[*key as usize].row(&icx.words::<FindingsWords>())).into();
+    });
+    shown
 }
 
 #[story(FindingsList<'static>, covers = [Default, Many], drive = Drive::Never)]
