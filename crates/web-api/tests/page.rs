@@ -2,7 +2,7 @@
 //! Node tests for the page part: a canned control channel that records what it is asked, and the
 //! `window.<app>` functions called the way a page calls them. No browser.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use serde_json::{Value, json};
@@ -158,4 +158,90 @@ async fn timeout_gives_an_error_saying_so() {
     };
     let message = String::from(err.unchecked_into::<js_sys::Error>().message());
     assert!(message.contains("vectorcraft did not answer engine.execute within 0.01 s"), "{message}");
+}
+
+thread_local! {
+    /// Set when the fake control channel's request future is dropped before it answered.
+    static RELEASED: Cell<bool> = const { Cell::new(false) };
+}
+
+struct ReleaseOnDrop;
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        RELEASED.with(|r| r.set(true));
+    }
+}
+
+#[wasm_bindgen_test]
+async fn a_timed_out_call_drops_the_apps_request_so_the_app_can_release_it() {
+    reset();
+    RELEASED.with(|r| r.set(false));
+    let never: Request = Rc::new(|_method: String, _params: Value| {
+        Box::pin(async {
+            let _release = ReleaseOnDrop;
+            let _ = JsFuture::from(js_sys::Promise::new(&mut |_, _| {})).await;
+            Value::Null
+        })
+    });
+    Rc::new(PageApi::new("vectorcraft", Methods::default(), never).with_timeout(10)).install().expect("install");
+    assert!(call("commands", &[]).await.is_err(), "the call times out");
+    assert!(RELEASED.with(Cell::get), "the request future was dropped when the call timed out");
+}
+
+#[wasm_bindgen_test]
+async fn an_answered_call_does_not_look_timed_out() {
+    reset();
+    RELEASED.with(|r| r.set(false));
+    let quick: Request = Rc::new(|_method: String, _params: Value| {
+        Box::pin(async {
+            let _release = ReleaseOnDrop;
+            json!({"ok": true, "result": {"fine": true}})
+        })
+    });
+    Rc::new(PageApi::new("vectorcraft", Methods::default(), quick).with_timeout(10)).install().expect("install");
+    let out = call("commands", &[]).await.expect("an answered call resolves");
+    assert_eq!(to_value(&out), json!({"fine": true}));
+}
+
+#[wasm_bindgen_test]
+async fn screenshot_carries_the_png_as_data_whatever_the_app_calls_it() {
+    reset();
+    let reply = json!({"ok": true, "result": {"base64": "UE5H", "width": 2}});
+    Rc::new(PageApi::new("vectorcraft", Methods::default(), canned_request(reply))).install().expect("install");
+    let out = call("screenshot", &[]).await.expect("screenshot");
+    assert_eq!(to_value(&out), json!({"base64": "UE5H", "width": 2, "data": "UE5H"}));
+}
+
+/// Start `window.vectorcraft.<name>(args…)` without awaiting it, so several calls can be in flight.
+fn start(name: &str, args: &[JsValue]) -> js_sys::Promise {
+    let api = api();
+    let f: js_sys::Function = js_sys::Reflect::get(&api, &JsValue::from_str(name)).expect(name).unchecked_into();
+    f.apply(&api, &args.iter().collect::<js_sys::Array>()).expect("call").unchecked_into()
+}
+
+fn message(err: JsValue) -> String {
+    String::from(err.unchecked_into::<js_sys::Error>().message())
+}
+
+#[wasm_bindgen_test]
+async fn a_call_beyond_the_in_flight_limit_is_refused_and_its_slot_comes_back() {
+    reset();
+    let never: Request = Rc::new(|_method: String, _params: Value| {
+        Box::pin(async {
+            let _ = JsFuture::from(js_sys::Promise::new(&mut |_, _| {})).await;
+            Value::Null
+        })
+    });
+    Rc::new(PageApi::new("vectorcraft", Methods::default(), never).with_timeout(50).with_max_in_flight(1)).install().expect("install");
+
+    let first = start("commands", &[]);
+    let second = start("commands", &[]);
+    let busy = JsFuture::from(second).await.expect_err("a second call while one waits is refused");
+    assert!(message(busy).contains("vectorcraft is busy: 1 calls are already waiting"), "the refusal says why");
+    let timed_out = JsFuture::from(first).await.expect_err("the first call times out");
+    assert!(message(timed_out).contains("did not answer"), "the first call was accepted and waited");
+
+    let again = call("commands", &[]).await.expect_err("a later call is accepted again");
+    assert!(message(again).contains("did not answer"), "its slot came back once the first call ended");
 }

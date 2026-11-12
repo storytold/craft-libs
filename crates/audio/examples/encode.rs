@@ -1,6 +1,6 @@
-//! Write a tone as WAV and FLAC, whole and streamed.
+//! Write a tone as WAV and FLAC, whole and streamed, and as AAC packets.
 //!
-//! `cargo run -p craft-audio --example encode --features lossless-encode -- out`
+//! `cargo run -p craft-audio --example encode --features lossless-encode,aac-encode -- out`
 
 use craft_audio::{AudioBuffer, BitDepth, ChannelLayout, EncodeFormat, EncodeOptions, FileEncoder, encode};
 
@@ -27,5 +27,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         enc.write(&[chunk, chunk], chunk.len())?;
     }
     enc.finish()?;
+
+    // AAC packets for an MP4 or Matroska muxer, with the configuration its sample entry needs.
+    let mut aac = craft_audio::aac::Encoder::new(craft_audio::aac::EncoderConfig::cbr(rate as u32, 2, 128_000))?;
+    let mut units = aac.encode(&[&tone, &tone]);
+    units.extend(aac.flush());
+    println!("{} AAC access units, AudioSpecificConfig {:02x?}, priming {}", units.len(), aac.audio_specific_config(), aac.priming_samples());
     Ok(())
 }

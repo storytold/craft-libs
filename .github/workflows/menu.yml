@@ -1,0 +1,39 @@
+name: Menu
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/menu/**", "crates/keymap/**", "crates/quit/**", "Cargo.toml", "Cargo.lock", ".github/workflows/menu.yml"]
+  pull_request:
+    paths: ["crates/menu/**", "crates/keymap/**", "crates/quit/**", "Cargo.toml", "Cargo.lock", ".github/workflows/menu.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: menu-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    timeout-minutes: 15
+    name: Menu (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+          targets: aarch64-apple-darwin, wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-menu-linux
+      - run: cargo fmt -p craft-menu --check
+      - run: cargo clippy -p craft-menu --all-targets --locked -- -D warnings
+      # The macOS backend type-checks from Linux; it needs no linker or SDK.
+      - run: cargo clippy -p craft-menu --lib --locked --target aarch64-apple-darwin -- -D warnings
+      - run: cargo clippy -p craft-menu --lib --locked --target wasm32-unknown-unknown -- -D warnings
+      - run: cargo test -p craft-menu --locked

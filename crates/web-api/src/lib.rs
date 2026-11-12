@@ -13,6 +13,7 @@
 //!   `screenshot(params)`; each function other than `request` is installed only when the app's
 //!   [`methods::Methods`] table provides its control method.
 //! - [`methods`] is the target-independent table naming the control method behind each function.
+//! - [`reply`] shapes replies without a browser: `screenshot()` carries an inline PNG as `data` in every app.
 //!
 //! The app hands the crate its request function (its control channel) and a [`methods::Methods`]
 //! table; the crate never knows the app's internals.
@@ -35,6 +36,7 @@
 //! ```
 
 pub mod methods;
+pub mod reply;
 
 #[cfg(target_arch = "wasm32")]
 pub mod page;

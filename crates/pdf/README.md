@@ -12,6 +12,9 @@ No feature is enabled by default.
 | `write` | Guarded Krilla authoring; no shared reader dependency |
 | `write-pdf` | `write` plus Krilla's embedded-PDF support |
 | `write-simple-text` | `write` plus Krilla's optional text shaper and `draw_text` |
+| `filters` | The `/Filter` chain for editing and writing PDF files: decode and encode, with limits and accounting. No reader or writer dependency |
+| `crypt` | The standard security handler: decrypt, encrypt and create encryption. No reader or writer dependency |
+| `cos` | `crypt` and `filters` plus the object layer: open, edit and save PDF files (incremental and full saves). No reader or writer dependency |
 
 ## Reading and rendering
 
@@ -23,6 +26,18 @@ Ordinary Flate/LZW/RunLength expansion defaults to 256 MiB per stream and can be
 including during initial xref reads, object streams, repair and fallback. Known-size image
 pixels and streaming page content have separate backend budgets. These controls do not bound
 total parser memory or execution time.
+
+`open_with_options_and_cancel` and `open_slice_with_options_and_cancel` additionally accept
+`&syntax::Cancellation`. It owns a `Send + Sync + 'static` callback, which runs on the opening
+thread. Capture shared state such as an `Arc<AtomicBool>` to request cancellation from a worker's
+caller. Each open latches a true result and returns `CancellableOpenError::Cancelled`; other
+failures wrap the existing `OpenError`. Existing opening APIs and their error types are unchanged.
+The returned PDF does not retain the callback or poll it during later reads.
+
+Opening checks cancellation during xref searches and recovery, byte and object scans, ordinary
+stream decoding and predictors, and initial page-tree traversal. The borrowed-input variant also
+checks while copying input. Cryptographic and image-codec calls run to completion between checkpoints.
+These are opening checkpoints; interpretation and rasterization have their own cancellation policy.
 
 For a bare Flate page, `Page::page_stream` materializes content under the ordinary limit,
 while `Page::content_reader` decodes incrementally under the separate streaming budget.
@@ -51,7 +66,7 @@ that all objects survived. Some tolerant whole-stream decoders can return an inc
 prefix without a failure status. Use fresh caches for checks, while retaining these limitations.
 Native unwinding panics become errors; discard partial devices, buffers, parsers and caches
 after backend failure. WASM aborts and process-wide allocation failure cannot be caught.
-Cancellation is polled between operators, so a decoder may finish before noticing it.
+During interpretation, cancellation is polled between operators, so a decoder may finish before noticing it.
 
 ## Backend provenance and consumer pins
 
@@ -88,13 +103,115 @@ stay outside this repository; dependency assets and licences are in the root att
 The Shared PDF workflow runs native and WebAssembly facade contracts, an independent
 `read-only-contract` consumer, and the transferred backend tests. The independent consumer
 keeps interpreter-bearing dev-dependencies out of the shipping `read` feature graph.
-Run `bash scripts/test-pdf-backends.sh` from the repository root to test all four vendored
-backends, the syntax doctest and the syntax-only configuration. The script uses temporary
+Run `bash scripts/test-pdf-backends.sh` from the repository root to test the vendored
+backends, the syntax doctest, syntax-only configuration and alternate `unsafe` codec implementation.
+The script uses temporary
 source copies and the complete local patch set, preserving the vendored lockfiles.
 Run `cargo test --manifest-path crates/pdf/read-only-contract/Cargo.toml --locked` for the
 read-only consumer, then repeat with `--target wasm32-unknown-unknown` and the test runner.
 These backend checks supplement the root workspace gates; excluded vendor crates are not
 covered by `cargo test --workspace` alone.
+
+## Object layer
+
+`cos` is an object layer for apps that edit PDF files (ISO 32000-2 §7). It parses the object
+graph lazily and tolerantly, keeps edits in a copy-on-write overlay, and writes the file back
+incrementally (the original bytes untouched) or as a full, garbage-collected rewrite. It uses
+`crypt` and `filters`; the reader (`read`) and writer (`write`) are separate and do not use it.
+
+```rust
+use craft_pdf::cos::{Document, ObjRef, Object, SaveOptions, write_full, write_incremental};
+
+let doc = Document::open(bytes)?;                              // Arc<Vec<u8>>
+let doc = Document::open_with_password(bytes, Some("owner"))?; // encrypted files
+let obj = doc.get(ObjRef::new(12, 0));                         // loaded on first use, cached
+let data = stream.decoded()?;                                  // filters applied on demand
+doc.set(r, Object::Dict(d));                                   // edits land in the overlay
+let r = doc.add(obj);
+let bytes = write_incremental(&doc, &SaveOptions::default())?; // append a revision
+let bytes = write_full(&doc, &SaveOptions::default())?;        // rewrite what the trailer reaches
+```
+
+- Reads every cross-reference form (tables, streams, hybrid `/XRefStm`) and object streams. A
+  file whose cross-reference data is wrong or missing is rebuilt by scanning for object headers,
+  and each repair is recorded (`repair_log`). Malformed input gives `CosError`, never a panic.
+- Encryption on open and save through `crypt`: revisions 2 to 6, crypt filters, `/EFF` and
+  `/EncryptMetadata`. `set_encryption` and `remove_encryption` change it.
+- `write_incremental` appends the edited objects with a cross-reference section in the style of
+  the file's last one, so earlier revisions and their signatures stay as they were; it falls back
+  to `write_full` when an edit cannot be appended. `write_full` renumbers what the trailer
+  reaches and, by default, packs objects into object streams. Both return the bytes.
+- `Document` is cheap to clone: the bytes, index and caches are shared, so a clone is a
+  snapshot for undo or a background job.
+- Images: `ImageBudget::decode` gives an image's samples after its filters, CCITT fax and JBIG2
+  included, all images of one operation spending from one allowance. DCT and JPX are not decoded
+  here.
+- Not here: streaming files larger than memory, linearized output.
+
+The code comes from PdfCraft's `pdfcraft-cos` crate (revision
+`1d2af9907ba772b368f6b54811359805fa5428e9`), unchanged apart from module paths and doc
+comments. Its test helpers come along: `src/cos/testkit.rs` (synthetic files, from
+`pdfcraft-testkit`) and `tests/cos/oracle.rs` (qpdf runs, from `pdfcraft-oracle`; a missing
+`qpdf` skips those tests, or fails them when `CRAFT_PDF_ORACLES_REQUIRED` is set). Tests:
+`cargo test -p craft-pdf --no-default-features --features cos`. Examples: `cos_info` and
+`cos_protect` (`--features cos`).
+
+## Stream filters
+
+`filters` is the `/Filter` chain of a PDF stream (ISO 32000-2 §7.4) for code that edits or
+writes PDF files. The reader decodes streams on its own and does not use it. The codecs are
+[`craft-stream-codecs`](../stream-codecs/README.md); this module adds Flate (flate2 with its
+zlib-rs backend), the chain and its accounting.
+
+- `decode(chain, data, max_output)` runs the general-purpose filters first to last (Flate,
+  LZW, ASCIIHex, ASCII85, RunLength, with the TIFF and PNG predictors). Image codecs, `Crypt`,
+  unknown filters and a chain longer than `MAX_CHAIN` (8) give `Unsupported`, so the caller
+  keeps such data encoded. `max_output` bounds every stage and gives `LimitExceeded`.
+- `decode_tolerant` returns what was decoded before damage, with `partial = true`, and runs the
+  rest of the chain on it.
+- `decode_counted`, `decode_tolerant_counted` and `decode_tolerant_counted_each` also return the
+  bytes every stage decoded, on success and on failure, for a caller charging a budget.
+- `decode_within`, `decode_tolerant_within` and `decode_image_tolerant_within` spend from a
+  caller-owned `work` allowance shared by a run of images, as `decode_ccitt_within` does; what
+  `work` cannot pay for gives `Spent`. Flate pays `FLATE_READ_WORK` steps a byte it reads.
+- `encode(filter, params, data)` writes Flate (zlib level 6), LZW, ASCIIHex, ASCII85 and
+  RunLength, with a predictor first for Flate and LZW. `encode_g4`, `encode_jbig2`,
+  `encode_jbig2_generic` and `encode_jbig2_shared` code 1-bit images.
+
+The code comes from PdfCraft's `pdfcraft-filters` crate (revision
+`80e26e674d1aa33078e83c8139875047f3289eb6`): its `lib.rs` and `flate.rs` here, its codecs in
+`craft-stream-codecs`. Tests: `cargo test -p craft-pdf --no-default-features --features filters`.
+A fuzz target is in `crates/pdf/fuzz` (`cargo +nightly fuzz run filters`, from `crates/pdf`).
+
+## Encryption
+
+`crypt` is the PDF standard security handler (ISO 32000-2 §7.6) for code that edits or writes
+PDF files. The reader decrypts on its own and does not use it. It covers revisions 2 to 6:
+40-bit and 128-bit RC4, AES-128 crypt filters, and AES-256 (R5 is read, R6 is read and written).
+
+- `SecurityHandler::open(dict, id0, password)` authenticates the owner password first, then the
+  user password. Passwords are tried as PDFDocEncoding and as typed (R2–R4), or in their
+  SASLprep form and as typed (R5/R6). `authenticate_owner` upgrades a user handler.
+  `without_key` is for a file opened without a password whose only encrypted data is behind
+  crypt filters authorised when an embedded file is opened; that data is left as stored.
+- `decrypt_string`, `encrypt_string`, `decrypt_stream` and `encrypt_stream` take the object
+  number and generation. `StreamKind` selects the crypt filter: `/StmF`, `/EFF` for embedded
+  files, or a stream's own `/Crypt` filter name. `encrypts_metadata` says whether the caller
+  passes `/Metadata` streams through at all. AES decryption is tolerant: a trailing partial
+  block is ignored and bad padding is left in.
+- `permissions()` gives the `/P` flags; for R5/R6 a permission counts only when `/Perms` grants
+  it too. Owners have every permission.
+- `create(&NewEncryption, id0)` builds the `/Encrypt` values for RC4-40, RC4-128, AES-128 or
+  AES-256. The caller supplies 32 bytes of entropy (`seed`), so the module needs no OS access
+  and builds for the web. `file_id` derives a file identifier from the same seed.
+- `EncryptDict` holds the dictionary's values. The caller reads them from, and writes them to,
+  its own object model; the module does not parse PDF syntax. Keys and prepared passwords are
+  zeroized when dropped.
+
+The code and its tests come from PdfCraft's `pdfcraft-crypt` crate (revision
+`2b65ab000bfe0997dec5fbed2769d3da3799355b`), unchanged apart from the module paths. Tests:
+`cargo test -p craft-pdf --no-default-features --features crypt`. `tests/crypt/qpdf_literals.rs`
+checks key derivation against values another implementation wrote; only the numbers are stored.
 
 ## Writing
 
