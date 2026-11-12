@@ -23,6 +23,44 @@ fn ellipse_points_lie_on_the_ellipse_whatever_the_conjugate_axes() {
 }
 
 #[trial]
+fn a_concave_polygon_fills_its_area_once_in_either_winding() {
+    use egui::{Color32, Pos2};
+
+    let cross = |a: Pos2, b: Pos2, c: Pos2| (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    let area = |ring: &[Pos2]| (0..ring.len()).map(|i| cross(Pos2::ZERO, ring[i], ring[(i + 1) % ring.len()])).sum::<f32>().abs() / 2.0;
+    // Even-odd ray cast to the right.
+    let inside = |ring: &[Pos2], p: Pos2| {
+        (0..ring.len()).fold(false, |odd, i| {
+            let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
+            if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) { !odd } else { odd }
+        })
+    };
+    let ell = vec![pos2(0.0, 0.0), pos2(40.0, 0.0), pos2(40.0, 10.0), pos2(10.0, 10.0), pos2(10.0, 30.0), pos2(0.0, 30.0)];
+    // A doughnut sector over 2 rad: the outer arc out, the inner arc back.
+    let on = |radius: f32, i: usize| {
+        let angle = 2.0 * i as f32 / 40.0;
+        pos2(60.0 + radius * angle.sin(), 60.0 - radius * angle.cos())
+    };
+    let sector: Vec<Pos2> = (0..=40).map(|i| on(50.0, i)).chain((0..=40).rev().map(|i| on(25.0, i))).collect();
+
+    for shape in [ell, sector] {
+        for ring in [shape.clone(), shape.iter().rev().copied().collect()] {
+            let mesh = craft_ui::primitives::fill_polygon(&ring, Color32::WHITE, 0.0);
+            let triangles: Vec<[Pos2; 3]> = mesh.indices.chunks(3).map(|t| [0, 1, 2].map(|k| mesh.vertices[t[k] as usize].pos)).collect();
+            let turns: Vec<f32> = triangles.iter().map(|&[a, b, c]| cross(a, b, c)).collect();
+            assert!(turns.iter().all(|t| *t > 0.0) || turns.iter().all(|t| *t < 0.0), "every triangle turns the same way");
+            let covered: f32 = turns.iter().map(|t| t.abs() / 2.0).sum();
+            let whole = area(&ring);
+            assert!((covered - whole).abs() < whole * 1e-3, "the triangles cover {covered}, the polygon {whole}");
+            for [a, b, c] in triangles {
+                let centroid = pos2((a.x + b.x + c.x) / 3.0, (a.y + b.y + c.y) / 3.0);
+                assert!(inside(&ring, centroid), "a triangle around {centroid:?} lies outside the polygon");
+            }
+        }
+    }
+}
+
+#[trial]
 fn a_rounded_ramp_keeps_inside_its_corners_and_a_square_one_fills_its_rect() {
     use craft_behavior::Axis;
     use craft_ui::style::DataColor;

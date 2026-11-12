@@ -14,8 +14,6 @@ const MIN_STROKE_ZOOM: f32 = 0.5;
 const WEDGE_STEP: f32 = 0.05;
 /// A wedge has between these many steps.
 const WEDGE_STEPS: (usize, usize) = (2, 400);
-/// Cross products smaller than this are collinear when testing a polygon for convexity.
-const COLLINEAR: f32 = 1e-3;
 
 /// Horizontal text anchor.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -258,11 +256,9 @@ impl ChartPrimitive {
 }
 
 /// Paints `primitives` with their origin at `origin`, scaled by `zoom`: rects (stroked inside), lines (dashed in the
-/// theme's dash pattern when asked), polygons (a convex one whole, else as the vertical strips of an area chart's
-/// polygon: its top edge along the first half of the points and its baseline back along the second half, exact for
-/// an area chart's "mountain" shape), wedges as one convex shape per step of 0.05 rad (2…400 steps), circles, and
-/// text anchored by its alignment. A document line width scales with `zoom`, never below half its width; a theme
-/// width stays as the theme gives it.
+/// theme's dash pattern when asked), polygons, wedges as one polygon whose arcs take a point per 0.05 rad (2…400
+/// steps), circles, and text anchored by its alignment. A document line width scales with `zoom`, never below half
+/// its width; a theme width stays as the theme gives it.
 pub fn paint_chart(draw: &Draw<'_>, origin: Pos2, primitives: &[ChartPrimitive], zoom: f32) {
     let at = |x: f32, y: f32| pos2(origin.x + x * zoom, origin.y + y * zoom);
     let line_width = |width: DataStrokeWidth| width.scaled(zoom.max(MIN_STROKE_ZOOM));
@@ -298,36 +294,24 @@ pub fn paint_chart(draw: &Draw<'_>, origin: Pos2, primitives: &[ChartPrimitive],
                 if points.len() < 3 {
                     continue;
                 }
-                if is_convex(&points) {
-                    draw.data_fill(&PaintShape::Polygon(points.clone()), *fill);
-                } else {
-                    for strip in area_strips(&points) {
-                        draw.data_fill(&PaintShape::Polygon(strip.to_vec()), *fill);
-                    }
-                }
-                outline(&PaintShape::Polygon(points), stroke);
+                let shape = PaintShape::Polygon(points);
+                draw.data_fill(&shape, *fill);
+                outline(&shape, stroke);
             }
             ChartPrimitive::Wedge { center_x, center_y, outer_radius, inner_radius, start_angle, end_angle, fill, stroke } => {
                 let centre = at(*center_x, *center_y);
                 let steps = (((end_angle - start_angle).abs() / WEDGE_STEP).ceil() as usize).clamp(WEDGE_STEPS.0, WEDGE_STEPS.1);
                 let on = |angle: f32, radius: f32| pos2(centre.x + radius * zoom * angle.sin(), centre.y - radius * zoom * angle.cos());
                 let angle = |i: usize| start_angle + (end_angle - start_angle) * i as f32 / steps as f32;
-                for i in 0..steps {
-                    let (a, b) = (angle(i), angle(i + 1));
-                    let step = if *inner_radius > 0.0 {
-                        vec![on(a, *outer_radius), on(b, *outer_radius), on(b, *inner_radius), on(a, *inner_radius)]
-                    } else {
-                        vec![on(a, *outer_radius), on(b, *outer_radius), centre]
-                    };
-                    draw.data_fill(&PaintShape::Polygon(step), *fill);
-                }
                 let mut edge: Vec<Pos2> = (0..=steps).map(|i| on(angle(i), *outer_radius)).collect();
                 if *inner_radius > 0.0 {
                     edge.extend((0..=steps).rev().map(|i| on(angle(i), *inner_radius)));
                 } else {
                     edge.push(centre);
                 }
-                outline(&PaintShape::Polygon(edge), stroke);
+                let shape = PaintShape::Polygon(edge);
+                draw.data_fill(&shape, *fill);
+                outline(&shape, stroke);
             }
             ChartPrimitive::Circle { center_x, center_y, radius, fill, stroke } => {
                 let shape = PaintShape::Circle(at(*center_x, *center_y), radius * zoom);
@@ -361,29 +345,4 @@ pub fn paint_chart(draw: &Draw<'_>, origin: Pos2, primitives: &[ChartPrimitive],
             }
         }
     }
-}
-
-/// Whether the closed path turns one way throughout.
-fn is_convex(points: &[Pos2]) -> bool {
-    let n = points.len();
-    let mut sign = 0.0f32;
-    for i in 0..n {
-        let (a, b, c) = (points[i], points[(i + 1) % n], points[(i + 2) % n]);
-        let cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
-        if cross.abs() > COLLINEAR {
-            if sign == 0.0 {
-                sign = cross.signum();
-            } else if cross.signum() != sign {
-                return false;
-            }
-        }
-    }
-    true
-}
-
-/// The vertical strips of an area chart's polygon, each a convex quad: the top edge runs along the first half of
-/// the points and the baseline back along the second half.
-fn area_strips(points: &[Pos2]) -> Vec<[Pos2; 4]> {
-    let n = points.len();
-    (0..(n / 2).saturating_sub(1)).map(|i| [points[i], points[i + 1], points[n - 2 - i], points[n - 1 - i]]).collect()
 }

@@ -138,6 +138,106 @@ fn checker_texture(ctx: &Context, light: Color32, dark: Color32) -> TextureId {
     TextureCache::texture_with(ctx, ("craft-ui-checker", light, dark), options, || ColorImage::new([2, 2], vec![light, dark, dark, light]))
 }
 
+/// A turn whose cross product is at most this (in square points) is straight: its vertex is cut away without a
+/// triangle.
+const FLAT_TURN: f32 = 1e-4;
+
+/// The closed polygon through `points` (convex or not; its edges must not cross) filled with `color`, as one mesh:
+/// the edge fades out over `feather` points as egui fades a convex fill (0 for a hard edge), and the inside is cut
+/// into triangles by ear clipping, so the parts of one shape meet without a seam. Either winding fills; a last point
+/// equal to the first is dropped. The one polygon fill: `Draw` fills every `PaintShape::Polygon` with it.
+pub fn fill_polygon(points: &[Pos2], color: Color32, feather: f32) -> Mesh {
+    let mut mesh = Mesh::default();
+    let mut ring = points.to_vec();
+    ring.dedup();
+    if ring.len() > 1 && ring.first() == ring.last() {
+        ring.pop();
+    }
+    let n = ring.len();
+    if n < 3 || color == Color32::TRANSPARENT || ring.iter().any(|p| !p.is_finite()) {
+        return mesh;
+    }
+    // Clockwise on screen (y down), the winding egui's fill and its edge normals expect.
+    let doubled_area: f32 = (0..n).map(|i| ring[i].x * ring[(i + 1) % n].y - ring[(i + 1) % n].x * ring[i].y).sum();
+    if doubled_area < 0.0 {
+        ring.reverse();
+    }
+    let triangles = ear_clip(&ring);
+    if feather > 0.0 {
+        // An opaque inner and a clear outer vertex per point, half the feather each side of the edge (egui's
+        // `fill_closed_path`), with the normals of egui's `Path::add_line_loop`.
+        let edge_normal = |i: usize| (ring[(i + 1) % n] - ring[i]).normalized().rot90();
+        for i in 0..n {
+            let (before, after) = (edge_normal((i + n - 1) % n), edge_normal(i));
+            let normal = (before + after) * 0.5;
+            let length_sq = normal.length_sq();
+            let normal = if length_sq > f32::EPSILON { normal / length_sq } else { after };
+            mesh.colored_vertex(ring[i] - normal * (0.5 * feather), color);
+            mesh.colored_vertex(ring[i] + normal * (0.5 * feather), Color32::TRANSPARENT);
+        }
+        for i in 0..n as u32 {
+            let before = (i + n as u32 - 1) % n as u32;
+            mesh.add_triangle(2 * i, 2 * before, 2 * before + 1);
+            mesh.add_triangle(2 * before + 1, 2 * i + 1, 2 * i);
+        }
+        for [a, b, c] in triangles {
+            mesh.add_triangle(2 * a, 2 * b, 2 * c);
+        }
+    } else {
+        for &point in &ring {
+            mesh.colored_vertex(point, color);
+        }
+        for [a, b, c] in triangles {
+            mesh.add_triangle(a, b, c);
+        }
+    }
+    mesh
+}
+
+/// The triangles that cover the clockwise (on screen) polygon `ring`, as indices into it: each turn is cut off as an
+/// ear when no reflex vertex lies inside it. Only reflex vertices can lie inside an ear, so a convex polygon takes
+/// one pass. A polygon whose edges cross still ends: when a whole round finds no ear, the next turn is cut anyway.
+fn ear_clip(ring: &[Pos2]) -> Vec<[u32; 3]> {
+    let n = ring.len();
+    let turn = |a: usize, b: usize, c: usize| {
+        let (a, b, c) = (ring[a], ring[b], ring[c]);
+        (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x)
+    };
+    let side = |a: Pos2, b: Pos2, p: Pos2| (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+    let inside = |p: Pos2, a: Pos2, b: Pos2, c: Pos2| side(a, b, p) > 0.0 && side(b, c, p) > 0.0 && side(c, a, p) > 0.0;
+    let mut prev: Vec<usize> = (0..n).map(|i| (i + n - 1) % n).collect();
+    let mut next: Vec<usize> = (0..n).map(|i| (i + 1) % n).collect();
+    let mut reflex: Vec<bool> = (0..n).map(|i| turn(prev[i], i, next[i]) < -FLAT_TURN).collect();
+    let reflex_at: Vec<usize> = (0..n).filter(|&i| reflex[i]).collect();
+    let mut removed = vec![false; n];
+    let mut triangles = Vec::with_capacity(n - 2);
+    let (mut at, mut left, mut misses) = (0, n, 0);
+    while left > 3 {
+        let (a, c) = (prev[at], next[at]);
+        let bend = turn(a, at, c);
+        let flat = bend.abs() <= FLAT_TURN;
+        let ear = flat
+            || bend > 0.0 && !reflex_at.iter().any(|&j| reflex[j] && !removed[j] && j != a && j != c && inside(ring[j], ring[a], ring[at], ring[c]));
+        if ear || misses > left {
+            if !flat {
+                triangles.push([a as u32, at as u32, c as u32]);
+            }
+            removed[at] = true;
+            (next[a], prev[c]) = (c, a);
+            for v in [a, c] {
+                reflex[v] = turn(prev[v], v, next[v]) < -FLAT_TURN;
+            }
+            (at, left, misses) = (c, left - 1, 0);
+        } else {
+            (at, misses) = (next[at], misses + 1);
+        }
+    }
+    if turn(prev[at], at, next[at]).abs() > FLAT_TURN {
+        triangles.push([prev[at] as u32, at as u32, next[at] as u32]);
+    }
+    triangles
+}
+
 /// The samples along each rounded corner of a ramp, so the strip's edge follows the arc.
 const ARC_STEPS: usize = 8;
 

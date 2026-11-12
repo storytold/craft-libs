@@ -21,7 +21,7 @@ pub enum PaintShape {
     Rect(Rect, CornerRadius),
     /// A circle.
     Circle(Pos2, f32),
-    /// A convex polygon.
+    /// A closed polygon, convex or not, whose edges don't cross.
     Polygon(Vec<Pos2>),
     /// An open path.
     Path(Vec<Pos2>),
@@ -493,7 +493,21 @@ impl<'a> Draw<'a> {
         let shape = match shape {
             PaintShape::Rect(rect, radius) => Shape::Rect(RectShape::new(*rect, *radius, fill_color, stroke, StrokeKind::Inside)),
             PaintShape::Circle(center, radius) => Shape::Circle(CircleShape { center: *center, radius: *radius, fill: fill_color, stroke }),
-            PaintShape::Polygon(points) => Shape::convex_polygon(points.clone(), fill_color, stroke),
+            PaintShape::Polygon(points) => {
+                if fill.is_some() {
+                    let feather = self.painter.ctx().tessellation_options(|options| {
+                        if options.feathering { options.feathering_size_in_pixels / self.painter.pixels_per_point() } else { 0.0 }
+                    });
+                    let mesh = super::kit::fill_polygon(points, fill_color, feather);
+                    if !mesh.is_empty() {
+                        self.painter.add(Shape::mesh(mesh));
+                    }
+                }
+                if stroke.is_empty() {
+                    return;
+                }
+                Shape::closed_line(points.clone(), stroke)
+            }
             PaintShape::Path(points) => Shape::line(points.clone(), stroke),
         };
         self.painter.add(shape);

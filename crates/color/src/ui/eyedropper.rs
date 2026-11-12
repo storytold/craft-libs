@@ -311,13 +311,11 @@ fn arc(center: Pos2, radius: f32, from: f32, to: f32) -> Vec<Pos2> {
         .collect()
 }
 
-/// A band of `color` between the radii `inner` and `outer` over the angles `from` to `to`, as convex quads.
+/// A band of `color` between the radii `inner` and `outer` over the angles `from` to `to`.
 fn band(draw: &Draw<'_>, center: Pos2, (inner, outer): (f32, f32), (from, to): (f32, f32), color: Srgba) {
-    let (near, far) = (arc(center, inner, from, to), arc(center, outer, from, to));
-    for at in 0..RING_SEGMENTS {
-        let quad = vec![near[at], far[at], far[at + 1], near[at + 1]];
-        draw.data_fill(&PaintShape::Polygon(quad), DataColor::new(Color32::from(color)));
-    }
+    let mut outline = arc(center, inner, from, to);
+    outline.extend(arc(center, outer, from, to).into_iter().rev());
+    draw.data_fill(&PaintShape::Polygon(outline), DataColor::new(Color32::from(color)));
 }
 
 impl CanvasTool for EyedropperTool<'_> {
