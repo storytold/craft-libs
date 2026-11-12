@@ -14,6 +14,7 @@ No feature is enabled by default.
 | `write-simple-text` | `write` plus Krilla's optional text shaper and `draw_text` |
 | `filters` | The `/Filter` chain for editing and writing PDF files: decode and encode, with limits and accounting. No reader or writer dependency |
 | `crypt` | The standard security handler: decrypt, encrypt and create encryption. No reader or writer dependency |
+| `cos` | `crypt` and `filters` plus the object layer: open, edit and save PDF files (incremental and full saves). No reader or writer dependency |
 
 ## Reading and rendering
 
@@ -110,6 +111,50 @@ Run `cargo test --manifest-path crates/pdf/read-only-contract/Cargo.toml --locke
 read-only consumer, then repeat with `--target wasm32-unknown-unknown` and the test runner.
 These backend checks supplement the root workspace gates; excluded vendor crates are not
 covered by `cargo test --workspace` alone.
+
+## Object layer
+
+`cos` is an object layer for apps that edit PDF files (ISO 32000-2 §7). It parses the object
+graph lazily and tolerantly, keeps edits in a copy-on-write overlay, and writes the file back
+incrementally (the original bytes untouched) or as a full, garbage-collected rewrite. It uses
+`crypt` and `filters`; the reader (`read`) and writer (`write`) are separate and do not use it.
+
+```rust
+use craft_pdf::cos::{Document, ObjRef, Object, SaveOptions, write_full, write_incremental};
+
+let doc = Document::open(bytes)?;                              // Arc<Vec<u8>>
+let doc = Document::open_with_password(bytes, Some("owner"))?; // encrypted files
+let obj = doc.get(ObjRef::new(12, 0));                         // loaded on first use, cached
+let data = stream.decoded()?;                                  // filters applied on demand
+doc.set(r, Object::Dict(d));                                   // edits land in the overlay
+let r = doc.add(obj);
+let bytes = write_incremental(&doc, &SaveOptions::default())?; // append a revision
+let bytes = write_full(&doc, &SaveOptions::default())?;        // rewrite what the trailer reaches
+```
+
+- Reads every cross-reference form (tables, streams, hybrid `/XRefStm`) and object streams. A
+  file whose cross-reference data is wrong or missing is rebuilt by scanning for object headers,
+  and each repair is recorded (`repair_log`). Malformed input gives `CosError`, never a panic.
+- Encryption on open and save through `crypt`: revisions 2 to 6, crypt filters, `/EFF` and
+  `/EncryptMetadata`. `set_encryption` and `remove_encryption` change it.
+- `write_incremental` appends the edited objects with a cross-reference section in the style of
+  the file's last one, so earlier revisions and their signatures stay as they were; it falls back
+  to `write_full` when an edit cannot be appended. `write_full` renumbers what the trailer
+  reaches and, by default, packs objects into object streams. Both return the bytes.
+- `Document` is cheap to clone: the bytes, index and caches are shared, so a clone is a
+  snapshot for undo or a background job.
+- Images: `ImageBudget::decode` gives an image's samples after its filters, CCITT fax and JBIG2
+  included, all images of one operation spending from one allowance. DCT and JPX are not decoded
+  here.
+- Not here: streaming files larger than memory, linearized output.
+
+The code comes from PdfCraft's `pdfcraft-cos` crate (revision
+`1d2af9907ba772b368f6b54811359805fa5428e9`), unchanged apart from module paths and doc
+comments. Its test helpers come along: `src/cos/testkit.rs` (synthetic files, from
+`pdfcraft-testkit`) and `tests/cos/oracle.rs` (qpdf runs, from `pdfcraft-oracle`; a missing
+`qpdf` skips those tests, or fails them when `CRAFT_PDF_ORACLES_REQUIRED` is set). Tests:
+`cargo test -p craft-pdf --no-default-features --features cos`. Examples: `cos_info` and
+`cos_protect` (`--features cos`).
 
 ## Stream filters
 

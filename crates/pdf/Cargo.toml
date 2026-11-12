@@ -19,6 +19,7 @@ write = ["dep:krilla", "dep:thiserror"]
 write-pdf = ["write", "krilla/pdf"]
 write-simple-text = ["write", "krilla/simple-text"]
 filters = ["dep:craft-stream-codecs", "dep:flate2", "dep:thiserror"]
+cos = ["crypt", "filters", "dep:chrono", "dep:js-sys", "dep:wasm-bindgen"]
 crypt = ["dep:aes", "dep:md-5", "dep:sha2", "dep:stringprep", "dep:zeroize", "dep:thiserror"]
 
 [dependencies]
@@ -37,8 +38,17 @@ md-5 = { version = "0.11", optional = true }
 sha2 = { version = "0.11", optional = true }
 stringprep = { version = "0.1", optional = true }
 zeroize = { version = "1", optional = true }
+# PDF date strings in the object layer (`cos`).
+chrono = { workspace = true, optional = true }
+
+# On the web, a rewrite's fresh file identifier (`cos`) takes its entropy from the browser
+# (`crypto.getRandomValues`); native builds compile neither.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { version = "0.3", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 hayro-syntax = "=0.7.2"
 hayro-interpret = { version = "=0.7.0", default-features = false }
 hayro-cmap = "=0.1.0"
@@ -50,3 +60,11 @@ proptest = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
+
+[[example]]
+name = "cos_info"
+required-features = ["cos"]
+
+[[example]]
+name = "cos_protect"
+required-features = ["cos"]
