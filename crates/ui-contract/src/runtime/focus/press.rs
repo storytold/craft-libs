@@ -65,9 +65,9 @@ impl State {
     /// text part to commit its draft when the press leaves it.
     pub(super) fn classify_press(&mut self, at: &PressAt) {
         let winner = at.winner.as_ref();
-        // A press on the widget that holds the focus (the text of a field in edit) is that widget's own: it keeps the
-        // focus and the draft.
-        let on_focused = at.target.is_some() && at.target == self.stop_of_focus().map(|rec| rec.stop.root);
+        // A press on the widget that holds egui focus (the text of a field in edit, or a host's own focused widget) is
+        // that widget's own: it keeps the focus and the draft.
+        let on_focused = at.target.is_some() && at.target == self.focus_now;
         let kind = if on_focused { PressFocus::Keep } else { classify_press(winner.map(|winner| winner.sense)) };
         let (owner, part) = winner.map_or((None, None), |winner| (Some(winner.owner), winner.part));
         let text_stop = self.stop_of_focus().filter(|stop| stop.stop.text).map(|stop| stop.stop.id);

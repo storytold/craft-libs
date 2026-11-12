@@ -336,6 +336,17 @@ pub(crate) fn focusable_widget(ui: &mut Ui, id: egui::Id) -> Rect {
     rect
 }
 
+/// A host's own single-line egui text field of `id` over `text`, as an app that keeps its own widgets beside the
+/// framework's draws it; returns its rect.
+pub(crate) fn host_field(ui: &mut Ui, id: egui::Id, text: &mut String) -> Rect {
+    ui.add(egui::TextEdit::singleline(text).id(id)).rect
+}
+
+/// Gives the host's own egui widget `id` key focus, as the host's code does.
+pub(crate) fn host_focus(ctx: &Context, id: egui::Id) {
+    ctx.memory_mut(|memory| memory.request_focus(id));
+}
+
 /// The egui layer `ui` paints on.
 pub(crate) fn layer_of(ui: &Ui) -> egui::LayerId {
     ui.layer_id()

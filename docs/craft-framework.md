@@ -154,7 +154,7 @@ An app with its own eframe `App` calls the hooks in `craft::ui::shell::embed`. `
 | F10, Alt+letter | Taken while a framework menu bar is registered: F10 focuses the bar, Alt+letter opens a menu (not on macOS). |
 | Edit chords | Taken while a framework editor is focused. |
 | Releases | The release of every key the runtime took is taken too. |
-| Focus surrender | Off: a click elsewhere does not drop egui focus. Framework components move focus on press themselves. |
+| Focus surrender | egui's own surrender is off; the runtime moves focus on press. A press a framework component takes moves focus to it; a press no component takes drops egui focus, unless it lands on the widget that holds egui focus (an app's own focused field keeps it). |
 | Zoom keys | egui's keyboard zoom is off. The interface scale is `RootEnv::scale`. |
 | Quit shortcuts | egui's quit shortcuts are cleared. Quit goes through the close path. |
 | Close path | The runtime's window host owns the root window's close request. `embed::logic` asks the app through its closure, then hands the close to the platform quit where there is one (macOS). |
