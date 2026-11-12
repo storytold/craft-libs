@@ -5,7 +5,9 @@ use std::fmt::Write as _;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use craft_xml::{Canonical, El, Options, esc_attr};
+use craft_xml::{Canonical, Doctype, El, Options, esc_attr};
+
+use crate::Error;
 
 /// The manifest's path in a package.
 pub const MANIFEST_PATH: &str = "META-INF/manifest.xml";
@@ -74,6 +76,29 @@ impl Manifest {
         let Some(root) = root.filter(|r| named(r, "manifest")) else { return Manifest::default() };
         let entries = root.elements().filter(|e| named(e, "file-entry")).take(MAX_ENTRIES).filter_map(file_entry).collect();
         Manifest { version: attr(&root, "version").map(str::to_string), entries }
+    }
+
+    /// Reads a manifest, refusing one a lenient read would repair: malformed or unbalanced
+    /// XML, a document type declaration (of any kind), an undefined entity, text or a second
+    /// element outside the root, a root that is not `manifest` in the manifest namespace, a
+    /// `file-entry` without a `full-path`, or more than [`MAX_ENTRIES`] entries. For a reader
+    /// that refuses a damaged package rather than open what it can.
+    pub fn parse_strict(xml: &[u8]) -> Result<Manifest, Error> {
+        let bad = |why: String| Error::Manifest(why);
+        let canonical = Canonical::new(&[("manifest", MANIFEST_NS)]);
+        let opts = Options { doctype: Doctype::Reject, ..Options::canonical(&canonical).strict() };
+        let root = opts.parse(xml).map_err(|e| bad(e.to_string()))?;
+        if root.name != "manifest:manifest" {
+            return Err(bad(format!("the root element is {}, not manifest:manifest", root.name)));
+        }
+        let mut entries = Vec::new();
+        for e in root.elements().filter(|e| e.name == "manifest:file-entry") {
+            if entries.len() == MAX_ENTRIES {
+                return Err(bad(format!("more than {MAX_ENTRIES} file entries")));
+            }
+            entries.push(file_entry(e).ok_or_else(|| bad("a file entry has no full-path".into()))?);
+        }
+        Ok(Manifest { version: attr(&root, "version").map(str::to_string), entries })
     }
 
     /// The entry for `path`.

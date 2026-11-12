@@ -14,13 +14,16 @@ are one crate.
 | `write_exif(&Metadata) -> Vec<u8>` | An Exif block for an exported file. |
 | `tags::tag_rows`, `tags::file_tag_rows` | Every tag with its name and value as text, maker notes included. |
 | `focus::read`, `focus::read_header` | Where the camera focused, from the maker note (Sony), on the upright photo. `read_header` reads only the first kilobytes of a file through a callback. |
+| `recipe_from_exif`, `recipe_from_bytes`, `read_recipe_file` | The Fujifilm in-camera recipe (film simulation, grain, colour chrome, tone, white balance shift and the rest) from the maker note of an Exif block, a whole TIFF, JPEG or RAF, or a file read only as far as its metadata. |
 | `parse_iptc(&[u8]) -> Metadata` | IIM record 2: title (2:5), keywords (2:25), by-line (2:80), copyright (2:116), caption (2:120), date and time created (2:55, 2:60). |
 | `parse_xmp(&str) -> Result<XmpData>` | `Metadata`, every property (`prefix:name`, structs flattened as `a:b/c:d`) and the structured values. `parse_xmp_with` also canonicalises the caller's own namespaces. |
 | `write_xmp(&Metadata) -> String` | A complete `<?xpacket?>` packet. `write_xmp_with` sets the toolkit name and adds simple properties in the caller's namespace. |
 | `merge_xmp(existing, fresh, MergeRules)` | Updates a packet another program wrote: owned properties are replaced, everything else stays byte for byte. |
 | `parse_gpx(&str) -> Result<Tracklog>` | GPX track points; `Tracklog::locate` gives the position at a capture time. |
-| `embedded(&[u8]) -> Embedded` | Sniffs JPEG, PNG, WebP, TIFF-based files, Fujifilm RAF and Canon CR3 and returns the Exif, XMP (and extended XMP), ICC and IPTC blocks. `jpeg_segments`, `png_chunks`, `webp_chunks` are the walkers. |
+| `embedded(&[u8]) -> Embedded` | Sniffs JPEG, PNG, WebP, TIFF-based files, Fujifilm RAF, Canon CR3 and JPEG XL containers and returns the Exif, XMP (and extended XMP), ICC and IPTC blocks. `jpeg_segments`, `png_chunks`, `webp_chunks` are the walkers. |
 | `cr3::parse_cr3` | The Canon CR3 container: `CMT1`…`CMT4`, the XMP `uuid` box, the thumbnail, the tracks. |
+| `jxl::metadata` | The `Exif` and `xml ` boxes of a JPEG XL container, plain or Brotli-wrapped in `brob`. |
+| `mpf::images`, `mpf::write` | The Multi-Picture Format index (CIPA DC-007) of a JPEG: the images stored after the primary one (a gain map, a preview), and writing an index plus appending the images. `mpf::markers` lists the marker segments before the first scan. |
 | `extract(&[u8]) -> Metadata` | All of it for a whole file. Precedence: EXIF, then IPTC fills gaps, then XMP overrides the user fields (rating, label, title, caption, artist, copyright, keywords, GPS) and fills the rest. `from_embedded` does the same for blocks already located. |
 
 HEIF, PSD and MRW files are read by `craft-heif`, `craft-psd` and `craft-raw`. Put the blocks they
@@ -47,7 +50,7 @@ A foreign namespace that uses a recognised prefix cannot supply recognised prope
 ## Limits
 
 XMP: 64 levels, 200 000 nodes, 1 MiB of flattened keys and 8 MiB of opaque names per packet
-(`XmpError::TooComplex`). GPX: 64 levels, 5 000 000 points. CR3: 4096 boxes. JPEG ICC is returned only when its APP2 chunks form a
+(`XmpError::TooComplex`). GPX: 64 levels, 5 000 000 points. MPF: 16 index entries. CR3 and JPEG XL: 4096 boxes; a `brob` box inflates to at most 32 MiB. JPEG ICC is returned only when its APP2 chunks form a
 complete, consistent, uniquely numbered sequence. TIFF limits are `craft-tiff`'s. No input panics:
 proptests feed random bytes to every container walker and random text to the XMP parser, and a sample
 JPEG is cut at every byte.
