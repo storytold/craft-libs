@@ -1,0 +1,27 @@
+[package]
+name = "craft-affinity"
+description = "Bounded reader for native Affinity documents (.af, .afdesign, .afphoto, .afpub): archive, object stream and a neutral document model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Synthetic-container builders for tests and fuzz seeds; not an Affinity exporter.
+synth = []
+
+[dependencies]
+crc32fast = "1.5"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# Originals embedded in a document: pixel layers read JPEG and PNG, overlays any format below.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "tiff", "bmp", "tga"] }
+ruzstd = { version = "0.9.1", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+proptest = { workspace = true }
+# The pinned public corpus is checked against its manifest before a test reads it.
+sha2 = { version = "0.10", default-features = false, features = ["std"] }
