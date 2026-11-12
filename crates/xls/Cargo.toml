@@ -12,4 +12,5 @@ workspace = true
 
 [dependencies]
 craft-cfb = { workspace = true }
+craft-sheet = { workspace = true }
 thiserror = { workspace = true }

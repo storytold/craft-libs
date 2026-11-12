@@ -12,6 +12,7 @@ No feature is enabled by default.
 | `write` | Guarded Krilla authoring; no shared reader dependency |
 | `write-pdf` | `write` plus Krilla's embedded-PDF support |
 | `write-simple-text` | `write` plus Krilla's optional text shaper and `draw_text` |
+| `crypt` | The standard security handler: decrypt, encrypt and create encryption. No reader or writer dependency |
 
 ## Reading and rendering
 
@@ -108,6 +109,36 @@ Run `cargo test --manifest-path crates/pdf/read-only-contract/Cargo.toml --locke
 read-only consumer, then repeat with `--target wasm32-unknown-unknown` and the test runner.
 These backend checks supplement the root workspace gates; excluded vendor crates are not
 covered by `cargo test --workspace` alone.
+
+## Encryption
+
+`crypt` is the PDF standard security handler (ISO 32000-2 §7.6) for code that edits or writes
+PDF files. The reader decrypts on its own and does not use it. It covers revisions 2 to 6:
+40-bit and 128-bit RC4, AES-128 crypt filters, and AES-256 (R5 is read, R6 is read and written).
+
+- `SecurityHandler::open(dict, id0, password)` authenticates the owner password first, then the
+  user password. Passwords are tried as PDFDocEncoding and as typed (R2–R4), or in their
+  SASLprep form and as typed (R5/R6). `authenticate_owner` upgrades a user handler.
+  `without_key` is for a file opened without a password whose only encrypted data is behind
+  crypt filters authorised when an embedded file is opened; that data is left as stored.
+- `decrypt_string`, `encrypt_string`, `decrypt_stream` and `encrypt_stream` take the object
+  number and generation. `StreamKind` selects the crypt filter: `/StmF`, `/EFF` for embedded
+  files, or a stream's own `/Crypt` filter name. `encrypts_metadata` says whether the caller
+  passes `/Metadata` streams through at all. AES decryption is tolerant: a trailing partial
+  block is ignored and bad padding is left in.
+- `permissions()` gives the `/P` flags; for R5/R6 a permission counts only when `/Perms` grants
+  it too. Owners have every permission.
+- `create(&NewEncryption, id0)` builds the `/Encrypt` values for RC4-40, RC4-128, AES-128 or
+  AES-256. The caller supplies 32 bytes of entropy (`seed`), so the module needs no OS access
+  and builds for the web. `file_id` derives a file identifier from the same seed.
+- `EncryptDict` holds the dictionary's values. The caller reads them from, and writes them to,
+  its own object model; the module does not parse PDF syntax. Keys and prepared passwords are
+  zeroized when dropped.
+
+The code and its tests come from PdfCraft's `pdfcraft-crypt` crate (revision
+`2b65ab000bfe0997dec5fbed2769d3da3799355b`), unchanged apart from the module paths. Tests:
+`cargo test -p craft-pdf --no-default-features --features crypt`. `tests/crypt/qpdf_literals.rs`
+checks key derivation against values another implementation wrote; only the numbers are stored.
 
 ## Writing
 
