@@ -91,9 +91,9 @@ fn content_generator(r: &mut Reader<'_>) -> Result<Adjustment> {
     let _version = r.u32()?;
     let d = Descriptor::read(r)?;
     Ok(Adjustment::BrightnessContrast {
-        brightness: d.number("Brgh").unwrap_or(0.0),
-        contrast: d.number("Cntr").unwrap_or(0.0),
-        legacy: d.boolean("useLegacy").unwrap_or(false),
+        brightness: d.get_number("Brgh").unwrap_or(0.0),
+        contrast: d.get_number("Cntr").unwrap_or(0.0),
+        legacy: d.get_bool("useLegacy").unwrap_or(false),
     })
 }
 
@@ -130,11 +130,11 @@ fn exposure(r: &mut Reader<'_>) -> Result<Adjustment> {
 }
 
 /// Reads the data of a `SoCo` block: the fill colour as RGB in 0..1 (see
-/// [`Descriptor::color`]), `None` for a colour model that is not RGB or gray.
+/// [`Descriptor::get_color`]), `None` for a colour model that is not RGB or gray.
 pub fn solid_color(data: &[u8]) -> Result<Option<[f64; 3]>> {
     let mut r = Reader::new(data);
     let _version = r.u32()?;
-    Ok(Descriptor::read(&mut r)?.color("Clr "))
+    Ok(Descriptor::read(&mut r)?.get_color("Clr "))
 }
 
 /// Reads the data of an `lfx2` block: the layer effects descriptor.
@@ -277,7 +277,7 @@ mod tests {
         lfx.extend(versioned(Descriptor::new("null").with("Scl ", Value::UnitFloat { unit: *b"#Prc", value: 100.0 })));
         let l = layer(vec![(*b"SoCo", soco.clone()), (*b"lfx2", lfx)]);
         assert_eq!(l.solid_color(), Some([1.0, 0.5, 0.0]));
-        assert_eq!(l.effects().unwrap().number("Scl "), Some(100.0));
+        assert_eq!(l.effects().unwrap().get_number("Scl "), Some(100.0));
         let float = Descriptor::new("RGBC")
             .with("redFloat", Value::Double(0.25))
             .with("greenFloat", Value::Double(0.5))

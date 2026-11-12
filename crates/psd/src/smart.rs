@@ -56,7 +56,7 @@ pub struct Warp {
 
 /// The eight numbers of a transform entry (`Trnf`, `nonAffineTransform`), when it has exactly eight.
 fn eight(d: &Descriptor, key: &str) -> Option<[f64; 8]> {
-    d.numbers(key).try_into().ok()
+    d.get_numbers(key).try_into().ok()
 }
 
 /// The corner quad (top-left, top-right, bottom-right, bottom-left) from x0 y0 … x3 y3.
@@ -68,26 +68,26 @@ impl Warp {
     /// Reads a `warp` descriptor; `None` for no warp (the identity, or a custom warp without a
     /// usable mesh).
     pub fn from_descriptor(d: &Descriptor) -> Option<Warp> {
-        let style = d.enumerated("warpStyle").map_or_else(|| "warpNone".to_string(), |id| String::from_utf8_lossy(id.as_bytes()).into_owned());
-        let side = |b: &Descriptor, k: &str| b.number(k).unwrap_or(0.0);
-        let bounds = d.object("bounds").map_or([0.0; 4], |b| [side(b, "Left"), side(b, "Top "), side(b, "Rght"), side(b, "Btom")]);
+        let style = d.get_enum("warpStyle").unwrap_or_else(|| "warpNone".to_string());
+        let side = |b: &Descriptor, k: &str| b.get_number(k).unwrap_or(0.0);
+        let bounds = d.get_object("bounds").map_or([0.0; 4], |b| [side(b, "Left"), side(b, "Top "), side(b, "Rght"), side(b, "Btom")]);
         let mut w = Warp {
-            bend: d.number("warpValue").unwrap_or(0.0),
-            horizontal: d.number("warpPerspective").unwrap_or(0.0),
-            vertical: d.number("warpPerspectiveOther").unwrap_or(0.0),
-            rotate_vertical: d.enumerated("warpRotate").is_some_and(|id| id.is("Vrtc")),
+            bend: d.get_number("warpValue").unwrap_or(0.0),
+            horizontal: d.get_number("warpPerspective").unwrap_or(0.0),
+            vertical: d.get_number("warpPerspectiveOther").unwrap_or(0.0),
+            rotate_vertical: d.get_enum("warpRotate").as_deref() == Some("Vrtc"),
             bounds,
             cols: 1,
             rows: 1,
             mesh: vec![],
             style,
         };
-        if let Some(env) = d.object("customEnvelopeWarp") {
-            let cols = env.numbers("quiltSliceX").len().saturating_sub(1).max(1);
-            let rows = env.numbers("quiltSliceY").len().saturating_sub(1).max(1);
+        if let Some(env) = d.get_object("customEnvelopeWarp") {
+            let cols = env.get_numbers("quiltSliceX").len().saturating_sub(1).max(1);
+            let rows = env.get_numbers("quiltSliceY").len().saturating_sub(1).max(1);
             if let Some(Value::ObjectArray(pts)) = env.get("meshPoints") {
-                let xs = pts.body.numbers("Hrzn");
-                let ys = pts.body.numbers("Vrtc");
+                let xs = pts.body.get_numbers("Hrzn");
+                let ys = pts.body.get_numbers("Vrtc");
                 let n = cols.checked_mul(3).zip(rows.checked_mul(3)).and_then(|(c, r)| (c + 1).checked_mul(r + 1));
                 if n.is_some_and(|n| xs.len() == n && ys.len() == n) {
                     w.cols = cols;
@@ -252,12 +252,12 @@ impl SmartObject {
         let _version = r.u32()?;
         let _descriptor_version = r.u32()?;
         let d = Descriptor::read(&mut r)?;
-        let uuid = d.text("Idnt").unwrap_or_default();
+        let uuid = d.get_text("Idnt").unwrap_or_default();
         let t = eight(&d, "Trnf").unwrap_or([0.0; 8]);
         // The non-affine transform when present (perspective), else the transform.
         let t = eight(&d, "nonAffineTransform").unwrap_or(t);
-        let size = d.object("Sz  ").and_then(|s| Some([s.number("Wdth")?, s.number("Hght")?]));
-        let warp = d.object("warp").and_then(Warp::from_descriptor);
+        let size = d.get_object("Sz  ").and_then(|s| Some([s.get_number("Wdth")?, s.get_number("Hght")?]));
+        let warp = d.get_object("warp").and_then(Warp::from_descriptor);
         Ok(SmartObject { uuid, quad: quad_from(t), size, warp })
     }
 

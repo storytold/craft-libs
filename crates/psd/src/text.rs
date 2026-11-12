@@ -45,13 +45,13 @@ impl TypeLayer {
         let _text_version = r.u16()?;
         let _descriptor_version = r.u32()?;
         let descriptor = Descriptor::read(&mut r)?;
-        let text = descriptor.text("Txt ").unwrap_or_default().replace("\r\n", "\n").replace('\r', "\n");
+        let text = descriptor.get_text("Txt ").unwrap_or_default().replace("\r\n", "\n").replace('\r', "\n");
         let text = text.strip_suffix('\n').map(str::to_string).unwrap_or(text);
-        let style = descriptor.raw_data("EngineData").map(|e| engine_data::first_style(&engine_data::parse_lossy(e))).unwrap_or_default();
+        let style = descriptor.get_raw_data("EngineData").map(|e| engine_data::first_style(&engine_data::parse_lossy(e))).unwrap_or_default();
         let bounds = descriptor
-            .object("bounds")
-            .or_else(|| descriptor.object("boundingBox"))
-            .and_then(|o| Some([o.number("Left")?, o.number("Top ")?, o.number("Rght")?, o.number("Btom")?]));
+            .get_object("bounds")
+            .or_else(|| descriptor.get_object("boundingBox"))
+            .and_then(|o| Some([o.get_number("Left")?, o.get_number("Top ")?, o.get_number("Rght")?, o.get_number("Btom")?]));
         Ok(TypeLayer { text, transform, style, bounds, descriptor })
     }
 }

@@ -43,6 +43,36 @@ impl Descriptor {
             _ => None,
         }
     }
+
+    /// The numbers at `key`: the values of a unit float array, or the numbers of a list (items
+    /// that are not numbers are left out). Empty when there is neither.
+    pub fn get_numbers(&self, key: &str) -> Vec<f64> {
+        match self.get(key) {
+            Some(Value::UnitFloats { values, .. }) => values.clone(),
+            Some(Value::List(l)) => l.iter().filter_map(Value::as_number).collect(),
+            _ => Vec::new(),
+        }
+    }
+    /// The raw data (`tdta`) at `key`.
+    pub fn get_raw_data(&self, key: &str) -> Option<&[u8]> {
+        match self.get(key)? {
+            Value::RawData(v) => Some(v),
+            _ => None,
+        }
+    }
+    /// The colour object at `key` as RGB in 0..1: an `RGBC` object with `Rd  ` / `Grn ` / `Bl  `
+    /// in 0..255 or with `redFloat` / `greenFloat` / `blueFloat` in 0..1, or a gray (`Gry `, in
+    /// percent of ink). Other colour models are `None`.
+    pub fn get_color(&self, key: &str) -> Option<[f64; 3]> {
+        let c = self.get_object(key)?;
+        if let (Some(r), Some(g), Some(b)) = (c.get_number("Rd  "), c.get_number("Grn "), c.get_number("Bl  ")) {
+            return Some([r / 255.0, g / 255.0, b / 255.0]);
+        }
+        if let (Some(r), Some(g), Some(b)) = (c.get_number("redFloat"), c.get_number("greenFloat"), c.get_number("blueFloat")) {
+            return Some([r, g, b]);
+        }
+        c.get_number("Gry ").map(|g| [1.0 - g / 100.0; 3])
+    }
 }
 
 #[cfg(test)]
