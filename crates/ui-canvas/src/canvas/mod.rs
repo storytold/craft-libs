@@ -52,7 +52,9 @@ mod raster;
 pub use raster::{DetailPlan, RasterDisplay, RasterDisplayOutput, RasterStyle, snap_to_texels};
 
 // l4d-space
+mod opacity_keys;
 mod snap;
+pub use opacity_keys::OpacityDigit;
 pub(crate) use rulers::LABEL_STEP_MIN;
 pub use rulers::{NUDGE, NUDGE_FAR};
 pub use snap::{Snap, canvas_snap, snap_suspended, snap_tolerance};

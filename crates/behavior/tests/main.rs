@@ -2,6 +2,7 @@
 
 mod canvas_view;
 mod cells;
+mod digit_keys;
 mod dock;
 mod dock_apply;
 mod fit;

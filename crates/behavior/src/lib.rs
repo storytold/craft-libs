@@ -12,6 +12,7 @@ pub mod codec;
 pub mod columns;
 pub mod command;
 pub mod cursor;
+pub mod digit_keys;
 pub mod divider;
 pub mod doc_key;
 pub mod dock;
@@ -70,6 +71,7 @@ pub use codec::{Caret, Codec, NotAValue, NumberCodec, PlainText, decimals_for_st
 pub use columns::{ColumnKey, ColumnWidth, GridSection, GridView};
 pub use command::{CommandFlags, pick_instance, resolve_flags};
 pub use cursor::{Cursor, CursorBadge, CursorIcon, CursorPriority, IconId, PaintedCursor};
+pub use digit_keys::{DigitEntry, DigitKeys};
 pub use doc_key::DocKey;
 pub use dock::DockSide;
 pub use edit_history::EditHistory;
