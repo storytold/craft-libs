@@ -24,6 +24,7 @@ pub mod cluster;
 pub mod collate;
 pub mod connector;
 pub mod control;
+pub mod edit;
 pub mod effects;
 pub mod eq;
 pub mod fields;
@@ -149,5 +150,7 @@ pub struct Document {
     pub missing_pictures: MissingPictures,
 }
 
+#[cfg(test)]
+mod test_log;
 #[cfg(test)]
 mod tests;

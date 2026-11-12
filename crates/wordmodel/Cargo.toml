@@ -15,7 +15,7 @@ workspace = true
 test-support = []
 
 [dependencies]
-base64 = "0.22"
+base64 = "0.23"
 log = "0.4"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }

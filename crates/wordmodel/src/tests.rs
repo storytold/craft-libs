@@ -1,6 +1,8 @@
 use super::*;
 use std::sync::Arc;
 
+mod note_conversion;
+
 #[test]
 fn new_document_is_valid() {
     let d = Document::new();
@@ -221,12 +223,220 @@ fn parts_and_lists_after_the_largest_ids_take_free_ones() {
 }
 
 #[test]
+fn clone_is_shallow() {
+    let d = Document::from_text("a\nb");
+    let mut e = d.clone();
+    assert!(Arc::ptr_eq(&d.body[0], &e.body[0]));
+    e.insert_text(&Pos::body(1, 0), "x", &CharProps::default()).unwrap();
+    assert!(Arc::ptr_eq(&d.body[0], &e.body[0]));
+    assert!(!Arc::ptr_eq(&d.body[1], &e.body[1]));
+    assert_eq!(d.plain_text(StoryRef::Body), "a\nb");
+}
+
+/// [`Document::same_content`] is what tells the engine that a command changed nothing: it
+/// must see every change, and it must not call two different documents the same.
+#[test]
+fn same_content_sees_every_change() {
+    let d = Document::from_text("Hello\nWorld");
+    assert!(d.same_content(&d.clone()), "a copy is the same document");
+    // The text changed.
+    let mut e = d.clone();
+    e.insert_text(&Pos::body(0, 0), "x", &CharProps::default()).unwrap();
+    assert!(!d.same_content(&e), "the text changed");
+    // The formatting changed.
+    let mut e = d.clone();
+    e.format_range(&Pos::body(0, 0), &Pos::body(0, 5), &|c| c.bold = Some(true)).unwrap();
+    assert!(!d.same_content(&e), "the formatting changed");
+    // The styles changed.
+    let mut e = d.clone();
+    Arc::make_mut(&mut e.styles).get_mut("Normal").unwrap().chr.bold = Some(true);
+    assert!(!d.same_content(&e), "a style changed");
+    // The lists changed.
+    let mut e = d.clone();
+    Arc::make_mut(&mut e.numbering).add_list(ListKind::Numbered);
+    assert!(!d.same_content(&e), "a list was added");
+    // The settings changed.
+    let mut e = d.clone();
+    e.settings.track_changes = true;
+    assert!(!d.same_content(&e), "a setting changed");
+    // The metadata changed.
+    let mut e = d.clone();
+    e.core.title = "Draft".into();
+    assert!(!d.same_content(&e), "the title changed");
+    // A part changed.
+    let mut e = d.clone();
+    e.add_part(PartKind::Header, vec![para_block(Paragraph::new())]);
+    assert!(!d.same_content(&e), "a part was added");
+    // A picture changed.
+    let mut e = d.clone();
+    e.media.insert("i.png".into(), Arc::new(vec![1, 2, 3]));
+    assert!(!d.same_content(&e), "a picture was added");
+    // A revision was recorded.
+    let mut e = d.clone();
+    e.revisions.push(Revision::new(RevisionKind::Insert, "Mira", "2026-10-23T00:00:00Z"));
+    assert!(!d.same_content(&e), "a revision was recorded");
+    // A comment was added.
+    let mut e = d.clone();
+    e.comments.insert(1, Comment { author: "Mira".into(), ..Default::default() });
+    assert!(!d.same_content(&e), "a comment was added");
+    // A paragraph that was marked as changed but holds the same content is the same.
+    let mut e = d.clone();
+    e.para_mut(StoryRef::Body, &Path::top(0)).unwrap().touch();
+    assert!(d.same_content(&e), "the paragraph only changed its counter");
+    // A table copied for an edit: the same until a cell's content changes.
+    let mut d = Document::from_text("Hello");
+    d.body.insert(0, Arc::new(Block::Table(Table::new(2, 2, 200.0))));
+    let mut e = d.clone();
+    Arc::make_mut(&mut e.body[0]);
+    assert!(!Arc::ptr_eq(&d.body[0], &e.body[0]));
+    assert!(d.same_content(&e), "the table was only copied");
+    let Block::Table(t) = Arc::make_mut(&mut e.body[0]) else { panic!("a table") };
+    t.rows[1].cells[1].blocks[0] = para_block(Paragraph::with_text("x", CharProps::default()));
+    assert!(!d.same_content(&e), "a cell's text changed");
+    // A building block was added.
+    let mut e = d.clone();
+    e.glossary.push(BuildingBlock { name: "Sign-off".into(), ..Default::default() });
+    assert!(!d.same_content(&e), "a building block was added");
+}
+
+#[test]
+fn json_round_trip() {
+    let mut d = Document::from_text("Hello\nWorld");
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, 5), &|c| c.bold = Some(true)).unwrap();
+    let j = serde_json::to_string(&d).unwrap();
+    let back: Document = serde_json::from_str(&j).unwrap();
+    assert_eq!(back.plain_text(StoryRef::Body), "Hello\nWorld");
+    assert_eq!(back.para(StoryRef::Body, &Path::top(0)).unwrap().runs[0].props.bold, Some(true));
+}
+
+#[test]
 fn ensure_nonempty_repairs() {
     let mut d = Document::new();
     d.body.clear();
     d.body.push(Arc::new(Block::Table(Table::new(1, 1, 100.0))));
     d.ensure_nonempty();
     assert!(matches!(d.body.last().map(|b| &**b), Some(Block::Para(_))));
+}
+
+#[test]
+fn text_box_anchor_finds_the_owning_shape() {
+    let mut d = Document::from_text("Before after");
+    let id = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Inside", CharProps::default()))]);
+    let shape = |story| InlineObject::Shape {
+        kind: para::ShapeKind::TextBox,
+        w: 144.0,
+        h: 72.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.75,
+        float: Default::default(),
+        story,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    // A plain shape before it doesn't count.
+    d.insert_object(&Pos::body(0, 0), shape(None), &CharProps::default()).unwrap();
+    let end = d.insert_object(&Pos::body(0, 10), shape(Some(id)), &CharProps::default()).unwrap();
+    assert_eq!(d.text_box_anchor(id), Some(end));
+    assert_eq!(d.text_box_anchor(id + 1), None);
+}
+
+#[test]
+fn word_count_including_notes_counts_used_boxes_and_notes_only() {
+    let mut d = Document::from_text("one two");
+    let shape = |story| InlineObject::Shape {
+        kind: para::ShapeKind::TextBox,
+        w: 144.0,
+        h: 72.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.75,
+        float: Default::default(),
+        story: Some(story),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let para_of = |t: &str| vec![para_block(Paragraph::with_text(t, CharProps::default()))];
+    let boxed = d.add_part(PartKind::TextBox, para_of("three four"));
+    let nested = d.add_part(PartKind::TextBox, para_of("five"));
+    let note = d.add_part(PartKind::Footnote, para_of("six seven"));
+    // Not counted: an orphaned box (deleted or cut), a header, a comment.
+    d.add_part(PartKind::TextBox, para_of("orphan words here"));
+    d.add_part(PartKind::Header, para_of("header words"));
+    d.add_part(PartKind::Comment, para_of("comment words"));
+    d.insert_object(&Pos::body(0, 3), shape(boxed), &CharProps::default()).unwrap();
+    d.insert_object(&Pos { story: StoryRef::Part(boxed), path: Path::top(0), off: 0 }, shape(nested), &CharProps::default()).unwrap();
+    d.insert_object(
+        &Pos::body(0, 0),
+        InlineObject::NoteRef { kind: para::NoteKind::Footnote, id: note, custom: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    // A box pointing at a header doesn't make the header count.
+    let hdr = d.parts.iter().find(|(_, p)| p.kind == PartKind::Header).map(|(k, _)| *k).unwrap();
+    d.insert_object(&Pos::body(0, 0), shape(hdr), &CharProps::default()).unwrap();
+    assert_eq!(d.word_count(), 2);
+    assert_eq!(d.word_count_including_notes(), 7);
+    assert_eq!(d.counted_stories(), vec![StoryRef::Body, StoryRef::Part(note), StoryRef::Part(boxed), StoryRef::Part(nested)]);
+}
+
+#[test]
+fn counted_stories_survive_self_nested_boxes() {
+    let mut d = Document::from_text("a");
+    let id = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("b", CharProps::default()))]);
+    let shape = InlineObject::Shape {
+        kind: para::ShapeKind::TextBox,
+        w: 10.0,
+        h: 10.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Default::default(),
+        story: Some(id),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    d.insert_object(&Pos::body(0, 0), shape.clone(), &CharProps::default()).unwrap();
+    d.insert_object(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 }, shape, &CharProps::default()).unwrap();
+    assert_eq!(d.word_count_including_notes(), 2);
+}
+
+#[test]
+fn prune_text_boxes_drops_only_unshown_ones() {
+    let shape = |story| InlineObject::Shape {
+        kind: para::ShapeKind::TextBox,
+        w: 50.0,
+        h: 20.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Default::default(),
+        story: Some(story),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let para_of = |t: &str| vec![para_block(Paragraph::with_text(t, CharProps::default()))];
+    let mut d = Document::from_text("body");
+    assert_eq!(d.prune_text_boxes(), 0, "nothing to do without text boxes");
+    let shown = d.add_part(PartKind::TextBox, para_of("shown"));
+    let nested = d.add_part(PartKind::TextBox, para_of("inside shown"));
+    let orphan = d.add_part(PartKind::TextBox, para_of("deleted box"));
+    let orphan_child = d.add_part(PartKind::TextBox, para_of("inside the deleted box"));
+    let hdr = d.add_part(PartKind::Header, para_of("header"));
+    let in_header = d.add_part(PartKind::TextBox, para_of("box in the header"));
+    d.insert_object(&Pos::body(0, 0), shape(shown), &CharProps::default()).unwrap();
+    let at = |id| Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 };
+    d.insert_object(&at(shown), shape(nested), &CharProps::default()).unwrap();
+    d.insert_object(&at(orphan), shape(orphan_child), &CharProps::default()).unwrap();
+    d.insert_object(&at(hdr), shape(in_header), &CharProps::default()).unwrap();
+    assert_eq!(d.prune_text_boxes(), 2);
+    let kept: Vec<u32> = d.parts.keys().copied().collect();
+    assert_eq!(kept, vec![shown, nested, hdr, in_header]);
+    assert_eq!(d.prune_text_boxes(), 0);
 }
 
 /// `blocks` in the only cell of `levels` tables, each nested in the next.
@@ -259,6 +469,25 @@ fn box_para(story: u32, id: u32) -> Blocks {
 }
 
 #[test]
+fn adopting_relinks_lists_in_deeply_nested_tables() {
+    // As #1339: a list paragraph 20 tables down takes the list it is brought in with.
+    let mut ours = Document::from_text("ours");
+    let our_list = Arc::make_mut(&mut ours.numbering).add_list(numbering::ListKind::Bullet);
+    let mut theirs = Document::from_text("theirs");
+    let list = Arc::make_mut(&mut theirs.numbering).add_list(numbering::ListKind::Bullet);
+    assert_eq!(list, our_list);
+    let mut p = Paragraph::with_text("item", CharProps::default());
+    p.props.numbering = Some(props::NumRef { num: list, level: 0 });
+    theirs.body = nested_tables(20, vec![para_block(p)]);
+    let mut nums = Vec::new();
+    for b in &ours.adopt(theirs).blocks {
+        edit::each_para(b, 0, &mut |p| nums.extend(p.props.numbering.map(|n| n.num)));
+    }
+    assert_eq!(nums.len(), 1);
+    assert_ne!(nums[0], our_list);
+}
+
+#[test]
 fn text_boxes_shown_from_deeply_nested_tables_are_kept() {
     // #1339: the paragraph walk stopped 16 tables down, so a box shown only from deeper was taken
     // for unshown and the next edit pruned its story.
@@ -283,6 +512,59 @@ fn text_boxes_shown_from_deeply_nested_tables_are_kept() {
     let part = StoryRef::Part;
     assert_eq!(d.counted_stories(), vec![StoryRef::Body, part(at_17), part(at_40), part(outer), part(inner)]);
     assert_eq!(d.next_shape_id(), 8);
+}
+
+#[test]
+fn a_deeply_nested_table_is_copied_with_its_text_boxes() {
+    // A copy takes the box 17 tables down along, so pasting it into another document shows its
+    // text, not the other document's box that happens to have the same id.
+    let para_of = |t: &str| vec![para_block(Paragraph::with_text(t, CharProps::default()))];
+    let mut d = Document::from_text("body");
+    let deep = d.add_part(PartKind::TextBox, para_of("deep box"));
+    d.body.extend(nested_tables(17, box_para(deep, 0)));
+    let frag = d.body_fragment();
+    assert_eq!(frag.parts.keys().copied().collect::<Vec<_>>(), vec![deep]);
+    let mut e = Document::new();
+    let own = e.add_part(PartKind::TextBox, para_of("its own box"));
+    assert_eq!(own, deep, "the same id in both documents");
+    e.body = box_para(own, 0);
+    let end = e.end_of(StoryRef::Body);
+    e.insert_fragment(&end, &frag).unwrap();
+    let mut shown = Vec::new();
+    e.objects_in_reading_order(&mut |o| shown.extend(o.text_box()));
+    let texts: Vec<String> = shown.iter().map(|id| e.plain_text(StoryRef::Part(*id))).collect();
+    assert_eq!(texts, vec!["its own box", "deep box"]);
+}
+
+#[test]
+fn notes_in_text_box_follow_nested_boxes_once() {
+    let shape = |story| InlineObject::Shape {
+        kind: para::ShapeKind::TextBox,
+        w: 50.0,
+        h: 20.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Default::default(),
+        story: Some(story),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let note = |id| InlineObject::NoteRef { kind: para::NoteKind::Footnote, id, custom: String::new() };
+    let mut d = Document::new();
+    let outer = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::new())]);
+    let inner = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::new())]);
+    let (n1, n2) = (d.add_part(PartKind::Footnote, Vec::new()), d.add_part(PartKind::Footnote, Vec::new()));
+    let at = |id| Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 };
+    // outer: [note n1][box inner][box outer (itself)]; inner: [note n2]
+    d.insert_object(&at(outer), shape(outer), &CharProps::default()).unwrap();
+    d.insert_object(&at(outer), shape(inner), &CharProps::default()).unwrap();
+    d.insert_object(&at(outer), note(n1), &CharProps::default()).unwrap();
+    d.insert_object(&at(inner), note(n2), &CharProps::default()).unwrap();
+    assert_eq!(d.notes_in_text_box(outer), vec![n1, n2]);
+    assert_eq!(d.notes_in_text_box(inner), vec![n2]);
+    assert!(d.notes_in_text_box(n1).is_empty(), "not a text box");
 }
 
 fn fs(instr: &str) -> InlineObject {
@@ -405,6 +687,20 @@ fn object_walks_are_linear_in_the_paragraph() {
     d.body = vec![Arc::new(Block::Para(para_of_objects(starts)))];
     let end = Pos::body(0, n as usize * w);
     assert_eq!(d.typing_pos(&end), end);
+    assert!(t.elapsed().as_secs_f32() < 10.0, "{:?}", t.elapsed());
+}
+
+#[test]
+fn deleting_across_many_lone_control_markers_is_not_quadratic() {
+    // A millisecond now; the old delete took 18 s at 1,500 markers and 114 s at 3,000.
+    let n = 3_000;
+    let starts: Vec<InlineObject> = (0..n).map(|_| InlineObject::ControlStart { control: Box::default() }).collect();
+    let mut d = Document::from_text("before\n\nafter");
+    d.body[1] = Arc::new(Block::Para(para_of_objects(starts)));
+    let t = std::time::Instant::now();
+    let at = d.delete_range(&Pos::body(0, 3), &Pos::body(2, 2)).unwrap();
+    assert_eq!(at, Pos::body(0, 3));
+    assert_eq!(d.plain_text(StoryRef::Body), "befter");
     assert!(t.elapsed().as_secs_f32() < 10.0, "{:?}", t.elapsed());
 }
 
