@@ -30,8 +30,9 @@ const MARKS: ColumnKey = ColumnKey::new("menu_marks");
 /// The column of a level's row icons, and the gap after it, after the mark column.
 const ICONS: ColumnKey = ColumnKey::new("menu_icons");
 
-/// The seconds the pointer rests on a row before the row opens its submenu, or closes the open submenu.
-const DWELL: f64 = 0.3;
+/// The seconds the pointer rests on a row it crossed on its way to another row's open submenu before the row takes
+/// over: opens its own submenu, or closes the open one. A row the pointer does not cross that way takes over at once.
+const AIM_REST: f64 = 0.3;
 
 /// `label` with a `&` marker before the first character that is `letter`, so the level's assignment honours a row's
 /// own mnemonic; a label without that letter is left as it is.
@@ -394,22 +395,23 @@ impl Component for MenuItem<'_> {
         let moving = ctx.input(|input| input.pointer.delta() != Vec2::ZERO);
         let hovered = cx.response.hovered();
         let focused = cx.is_focused();
-        let aimed = moving && level.aimed(cx.id);
+        // The pointer's last move headed for the open submenu of another row: this row is one it crosses on the way.
+        let heading = level.aimed(cx.id);
         let keyboard = level.keyboard();
-        let (waited, focus_gained, key_started) = {
+        let (rested, focus_gained, key_started) = {
             let rest = cx.memory::<Rest>();
             let gained = focused && !rest.focused;
             rest.focused = focused;
             let started = keyboard && !rest.keyboard;
             rest.keyboard = keyboard;
-            // The pointer heading for the open submenu does not count as resting on this row.
-            if hovered && !aimed {
+            if hovered && !moving {
                 (now - *rest.since.get_or_insert(now), gained, started)
             } else {
                 rest.since = None;
                 (0.0, gained, started)
             }
         };
+        let takes_over = hovered && (!heading || rested >= AIM_REST);
         // The focused row of a menu that the pointer opened is not active: the keyboard makes it so when focus lands on
         // it or the keyboard starts driving the menu.
         if enabled && ((hovered && moving) || (focused && keyboard && (focus_gained || key_started))) && level.activate_row(cx.id) {
@@ -417,14 +419,14 @@ impl Component for MenuItem<'_> {
         }
         // A disabled row is never active.
         self.active = enabled && level.is_active(cx.id);
-        if hovered && waited < DWELL {
+        // A crossed row waits for the rest to end.
+        if hovered && heading && rested < AIM_REST {
             frame::request_repaint(&ctx);
         }
         let typed = enabled && level.take_run(cx.id);
         let asked = enabled && (typed || cx.activation().is_some());
         if self.submenu {
-            let rested = enabled && hovered && waited >= DWELL;
-            self.opens = asked || (enabled && forward) || rested;
+            self.opens = asked || (enabled && forward) || (enabled && takes_over);
             if self.opens && level.open_submenu(cx.id) {
                 frame::request_repaint(&ctx);
             }
@@ -435,7 +437,7 @@ impl Component for MenuItem<'_> {
             }
             return;
         }
-        if hovered && waited >= DWELL && level.clear_submenu() {
+        if takes_over && level.clear_submenu() {
             frame::request_repaint(&ctx);
         }
         // The run closes the menus: focus leaves them first, so the command reaches the stop focus returns to.
@@ -554,7 +556,7 @@ impl Component for MenuItem<'_> {
     }
 }
 
-/// How long the pointer has rested on a row, and whether the row had the focus in the last pass.
+/// Since when the pointer has rested on a row without moving, and whether the row had the focus in the last pass.
 #[derive(Clone, Default)]
 struct Rest {
     since: Option<f64>,

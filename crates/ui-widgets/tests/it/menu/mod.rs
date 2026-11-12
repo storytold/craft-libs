@@ -10,6 +10,8 @@ mod openers;
 
 mod pick_focus;
 
+mod submenus;
+
 use craft_behavior::IconId;
 use craft_ui::contract::{Show as _, ShowContainer as _};
 use craft_ui::layout_components::Stack;
