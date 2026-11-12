@@ -4,6 +4,7 @@
 use craft_theme::variant::Tone;
 use craft_ui::contract::{Bind, CollectionEvent, Props as _, Show as _};
 use craft_ui::notices::{Notice, NoticeAction, ToastStack};
+use craft_ui::runtime::env::WindowKey;
 use craft_ui::runtime::toast;
 use craft_ui::table::{MetadataGroup, MetadataRow, MetadataTable};
 use craft_ui::testing::{Fixture, trial};
@@ -92,10 +93,12 @@ fn notice_title_and_message_select_and_copy_apart() {
 fn toast_text_selects_and_copies() {
     let mut fixture = Fixture::new(|ui| {
         let ctx = ui.ctx().clone();
-        if toast::cards(&ctx).is_empty() {
-            toast::post(&ctx, toast::Toast::new("poster.png was saved to Pictures.").tone(Tone::Good).title("Exported").timeout(None));
+        let window = WindowKey::new("toast-text");
+        if toast::cards(&ctx, &window).is_empty() {
+            let card = toast::Toast::new("poster.png was saved to Pictures.").tone(Tone::Good).title("Exported").timeout(None);
+            toast::post(&ctx, &window, card);
         }
-        ToastStack::show(ui);
+        ToastStack::show(ui, &window, ui.max_rect());
     });
     fixture.settle();
     fixture.key(Key::Tab, Modifiers::NONE);

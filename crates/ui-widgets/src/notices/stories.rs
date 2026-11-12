@@ -7,8 +7,9 @@ use super::{
 use crate::contract::{Politeness, Show as _};
 use crate::display::{Shade, Text};
 use crate::primitives::IconSpec;
+use crate::runtime::env::{Label, WindowKey};
 use crate::runtime::toast;
-use crate::testing::{Drive, StoryData, StoryOutput, story};
+use crate::testing::{Drive, StoryData, StoryOutput, stage, story};
 use craft_behavior::IconId;
 use craft_theme::variant::Tone;
 use egui::Ui;
@@ -91,23 +92,38 @@ fn settings_notices(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Text::new("Preferences").show(ui).into()
 }
 
+/// Three notices in the bottom corner of the story's stage: a neutral one, a warning with Don't Show Again and an
+/// error that stays. Notices that ended stay gone.
 #[story(NoticeCenter, covers = [], drive = Drive::Never)]
-fn notice_center(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+fn notice_center(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let ctx = ui.ctx().clone();
-    if toast::cards(&ctx).is_empty() {
-        let notice = PostedNotice::new("Exported").lines(vec!["poster.png".to_owned()]).tone(Tone::Good);
-        NoticeCenter::new().post(&ctx, &notice, &[]);
+    let window = WindowKey::new("notice-center-story");
+    if !std::mem::replace(data.value("posted", false), true) {
+        let center = NoticeCenter::new().window(window.clone());
+        let _ = center.post(&ctx, &PostedNotice::new("Pasted from the clipboard").sticky(), &[]);
+        let warning = PostedNotice::new("Profile mismatch").lines(vec!["The document uses its own profile.".to_owned()]).tone(Tone::Warn);
+        let _ = center.post(&ctx, &warning.dismiss_key("profile-mismatch".to_owned()).sticky(), &[]);
+        let error = PostedNotice::new("Couldn't save the document").lines(vec!["The disk is full.".to_owned()]).tone(Tone::Bad);
+        let _ = center.post(&ctx, &error.sticky(), &[]);
     }
-    NoticeCenter::new().show(ui);
-    Text::new("Notices").show(ui).into()
+    let area = stage(ui);
+    ToastStack::show(ui, &window, area);
+    NoticeCenter::new().window(window).show(ui).into()
 }
 
+/// A neutral toast, a warning with ten lines and an error in the bottom corner of the story's stage.
 #[story(ToastStack, covers = [], drive = Drive::Never)]
-fn toast_stack(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+fn toast_stack(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let ctx = ui.ctx().clone();
-    if toast::cards(&ctx).is_empty() {
-        toast::post(&ctx, toast::Toast::new("poster.png was saved to Pictures.").tone(Tone::Good).title("Exported"));
+    let window = WindowKey::new("toast-stack-story");
+    if !std::mem::replace(data.value("posted", false), true) {
+        let lines = (1..=10).map(|n| format!("Warning {n}"));
+        toast::post(&ctx, &window, toast::Toast::new(Label::Empty).title("Pasted from the clipboard").timeout(None));
+        toast::post(&ctx, &window, toast::Toast::new(Label::Empty).title("Opened with 10 warnings").lines(lines).tone(Tone::Warn).timeout(None));
+        let error = toast::Toast::new(Label::Empty).title("Couldn't save the document").lines(["The disk is full."]).tone(Tone::Bad);
+        toast::post(&ctx, &window, error.timeout(None));
     }
-    ToastStack::show(ui);
+    let area = stage(ui);
+    ToastStack::show(ui, &window, area);
     Text::new("Toasts").show(ui).into()
 }

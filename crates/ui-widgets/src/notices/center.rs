@@ -2,7 +2,7 @@
 //! `runtime::toast`, which `ToastStack` shows, and reports how each one ended.
 
 use crate::contract::{NoValue, Outcome, Politeness};
-use crate::runtime::env::{Label, WordSet};
+use crate::runtime::env::{Label, WindowKey, WordSet};
 use crate::runtime::memory::{unique, with_session};
 use crate::runtime::toast::{self, Toast, ToastAction, ToastEnd, ToastId};
 use crate::runtime::words::CommonWords;
@@ -87,11 +87,15 @@ fn posted_slot() -> egui::Id {
     unique("craft_ui.notice_center")
 }
 
-/// The app's way to post notices. It holds only its timeout: the queue, the timers, the cap of three cards, the
-/// hover pause and the announcement are the toast service's. A notice with a dismiss key shows a "Don't Show Again"
+/// The app's way to post notices to a window. It holds only the window and its timeout: the queue, the timers, the cap
+/// of three cards, the hover pause and the announcement are the toast service's. A body posts to its shell's window
+/// (`BodyCx::shell`). A notice with a dismiss key shows a "Don't Show Again"
 /// action; `show` reports how posted notices ended.
 #[derive(Clone, Debug, PartialEq, crate::contract::Pattern, crate::contract::Props)]
 pub struct NoticeCenter {
+    /// The window whose toasts show the notices.
+    #[prop]
+    window: WindowKey,
     /// Seconds before a notice hides, from the app's notification duration.
     #[prop(quantity = "seconds")]
     timeout: Option<f32>,
@@ -104,12 +108,12 @@ impl Default for NoticeCenter {
 }
 
 impl NoticeCenter {
-    /// A center whose notices hide after the toast service's default time.
+    /// A center for the app's first window whose notices hide after the toast service's default time.
     pub fn new() -> Self {
-        NoticeCenter { timeout: Some(toast::TIMEOUT) }
+        NoticeCenter { window: WindowKey::main(), timeout: Some(toast::TIMEOUT) }
     }
 
-    /// Posts `notice` to the running viewport; `None` when its dismiss key is in `silenced`.
+    /// Posts `notice` to the center's window in the running viewport; `None` when its dismiss key is in `silenced`.
     pub fn post(&self, ctx: &Context, notice: &PostedNotice, silenced: &[String]) -> Option<ToastId> {
         if notice.dismiss_key.as_ref().is_some_and(|key| silenced.contains(key)) {
             return None;
@@ -121,7 +125,7 @@ impl NoticeCenter {
         if notice.dismiss_key.is_some() {
             card = card.action(ToastAction::new(dont_show_again()));
         }
-        let id = toast::post(ctx, card);
+        let id = toast::post(ctx, &self.window, card);
         with_session(ctx, posted_slot(), |posted: &mut Posted| {
             posted.0.push((id, notice.dismiss_key.clone()));
             if posted.0.len() > TRACKED {

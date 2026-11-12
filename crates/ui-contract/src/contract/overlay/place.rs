@@ -15,8 +15,9 @@ pub enum Anchor {
     Point(Pos2),
     /// Where the pointer was when the overlay opened.
     Pointer,
-    /// A corner or edge of the viewport's safe rect, inset by the panel padding.
-    Viewport(Align2),
+    /// A corner or edge of a rect in the opener's layer space, inset by the panel padding and kept inside the safe
+    /// rect: the body a toast stack sits in.
+    Corner(Rect, Align2),
 }
 
 /// Where a floating layer sits.

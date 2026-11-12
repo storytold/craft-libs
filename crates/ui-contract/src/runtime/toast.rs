@@ -1,12 +1,13 @@
-//! The toast queue: one per viewport, filled from any code with a `Context`.
+//! The toast queues: one per window (`WindowKey`), filled from any code with a `Context`.
 //!
-//! The shell's `ToastHost` shows the queue and tells it which cards the pointer or focus holds. A card's timer runs
-//! only while nothing holds it. Each new toast is announced once, when it is first shown. At most `MAX_CARDS` cards
-//! are queued; a toast's end (an action taken, a dismissal, the timer) is read once with `end`.
+//! The window's shell shows its queue through `ToastHost`, at the end-bottom corner of its body, and tells it which
+//! cards the pointer or focus holds; an embedded shell shows its own queue inside its own body. A card's timer runs only
+//! while nothing holds it. Each new toast is announced once, when it is first shown. At most `MAX_CARDS` cards are
+//! queued per window; a toast's end (an action taken, a dismissal, the timer) is read once with `end`.
 
 use crate::runtime::access::{self, Politeness};
 use crate::runtime::egui::{pass, repaint};
-use crate::runtime::env::Label;
+use crate::runtime::env::{Label, WindowKey};
 use crate::runtime::frame::{self, PerViewport, Stored};
 use craft_theme::variant::Tone;
 use egui::{Context, ViewportId};
@@ -138,10 +139,12 @@ struct Live {
     held: bool,
 }
 
+/// The queues of one viewport's windows, with the ids, the timers' clock and the ends they share.
 #[derive(Default)]
 struct Queue {
     next: u64,
-    live: Vec<Live>,
+    /// Each window's cards, oldest first.
+    windows: Vec<(WindowKey, Vec<Live>)>,
     /// The pass time of the last end hook, to measure the timers' elapsed time.
     last_tick: Option<f64>,
     /// How toasts ended, until `end` reads them.
@@ -150,6 +153,23 @@ struct Queue {
 
 impl Stored for Queue {}
 
+impl Queue {
+    fn window(&mut self, window: &WindowKey) -> &mut Vec<Live> {
+        let at = match self.windows.iter().position(|(key, _)| key == window) {
+            Some(at) => at,
+            None => {
+                self.windows.push((window.clone(), Vec::new()));
+                self.windows.len() - 1
+            }
+        };
+        &mut self.windows[at].1
+    }
+
+    fn live(&mut self) -> impl Iterator<Item = &mut Live> {
+        self.windows.iter_mut().flat_map(|(_, live)| live.iter_mut())
+    }
+}
+
 fn record(ended: &mut Vec<(ToastId, ToastEnd)>, id: ToastId, end: ToastEnd) {
     ended.push((id, end));
     if ended.len() > ENDS_KEPT {
@@ -157,13 +177,14 @@ fn record(ended: &mut Vec<(ToastId, ToastEnd)>, id: ToastId, end: ToastEnd) {
     }
 }
 
-/// Posts `toast` to the running viewport.
-pub fn post(ctx: &Context, toast: Toast) -> ToastId {
-    post_to(ctx, pass::current_viewport(ctx), toast)
+/// Posts `toast` to the window `window` of the running viewport. A body posts to its shell's window
+/// (`BodyCx::shell`); code outside any body posts to the app's window, `WindowKey::main()` for the first.
+pub fn post(ctx: &Context, window: &WindowKey, toast: Toast) -> ToastId {
+    post_to(ctx, pass::current_viewport(ctx), window, toast)
 }
 
-/// Posts `toast` to `viewport`.
-pub fn post_to(ctx: &Context, viewport: ViewportId, toast: Toast) -> ToastId {
+/// Posts `toast` to the window `window` of `viewport`.
+pub fn post_to(ctx: &Context, viewport: ViewportId, window: &WindowKey, toast: Toast) -> ToastId {
     if !crate::runtime::measure::effect(ctx, "toast::post") {
         // No toast is numbered 0, so a later dismiss of this id removes nothing.
         return ToastId(0);
@@ -172,10 +193,11 @@ pub fn post_to(ctx: &Context, viewport: ViewportId, toast: Toast) -> ToastId {
         queue.next += 1;
         let id = ToastId(queue.next);
         let remaining = toast.timeout;
-        queue.live.push(Live { card: Card { id, toast }, shown: false, remaining, held: false });
-        while queue.live.len() > MAX_CARDS {
-            let at = queue.live.iter().position(|live| live.card.toast.actions.is_empty()).unwrap_or(0);
-            queue.live.remove(at);
+        let live = queue.window(window);
+        live.push(Live { card: Card { id, toast }, shown: false, remaining, held: false });
+        while live.len() > MAX_CARDS {
+            let at = live.iter().position(|live| live.card.toast.actions.is_empty()).unwrap_or(0);
+            live.remove(at);
         }
         id
     });
@@ -197,9 +219,12 @@ pub(crate) fn close(ctx: &Context, id: ToastId, end: ToastEnd) {
 fn remove(ctx: &Context, id: ToastId, end: Option<ToastEnd>) {
     for viewport in pass::live_viewports(ctx) {
         let removed = PerViewport::<Queue>::with(ctx, viewport, |queue| {
-            let before = queue.live.len();
-            queue.live.retain(|live| live.card.id != id);
-            let removed = queue.live.len() != before;
+            let mut removed = false;
+            for (_, live) in &mut queue.windows {
+                let before = live.len();
+                live.retain(|live| live.card.id != id);
+                removed |= live.len() != before;
+            }
             if let Some(end) = end.filter(|_| removed) {
                 record(&mut queue.ended, id, end);
             }
@@ -226,22 +251,25 @@ pub fn end(ctx: &Context, id: ToastId) -> Option<ToastEnd> {
 pub fn keep(ctx: &Context, id: ToastId) {
     for viewport in pass::live_viewports(ctx) {
         PerViewport::<Queue>::with(ctx, viewport, |queue| {
-            if let Some(live) = queue.live.iter_mut().find(|live| live.card.id == id) {
+            if let Some(live) = queue.live().find(|live| live.card.id == id) {
                 live.remaining = None;
             }
         });
     }
 }
 
-/// The cards of the running viewport, oldest first.
-pub fn cards(ctx: &Context) -> Vec<Card> {
-    PerViewport::<Queue>::with(ctx, pass::current_viewport(ctx), |queue| queue.live.iter().map(|live| live.card.clone()).collect())
+/// The cards of the window `window` in the running viewport, oldest first.
+pub fn cards(ctx: &Context, window: &WindowKey) -> Vec<Card> {
+    PerViewport::<Queue>::with(ctx, pass::current_viewport(ctx), |queue| {
+        let cards = queue.windows.iter().find(|(key, _)| key == window);
+        cards.map_or_else(Vec::new, |(_, live)| live.iter().map(|live| live.card.clone()).collect())
+    })
 }
 
 /// The host shows `id` in this pass; `held` says the pointer or focus is on it. The first show announces it.
 pub fn shown(ctx: &Context, id: ToastId, text: &str, held: bool) {
     let announce = PerViewport::<Queue>::with(ctx, pass::current_viewport(ctx), |queue| {
-        let live = queue.live.iter_mut().find(|live| live.card.id == id)?;
+        let live = queue.live().find(|live| live.card.id == id)?;
         live.held = held;
         let first = !live.shown;
         live.shown = true;
@@ -260,7 +288,7 @@ pub(crate) fn end_pass(ctx: &Context) {
     let wake = PerViewport::<Queue>::with(ctx, viewport, |queue| {
         let elapsed = queue.last_tick.map_or(0.0, |last| (now - last).max(0.0)) as f32;
         queue.last_tick = Some(now);
-        for live in &mut queue.live {
+        for live in queue.live() {
             if live.shown
                 && !live.held
                 && let Some(remaining) = &mut live.remaining
@@ -268,14 +296,17 @@ pub(crate) fn end_pass(ctx: &Context) {
                 *remaining -= elapsed;
             }
         }
-        for live in std::mem::take(&mut queue.live) {
-            if live.remaining.is_none_or(|remaining| remaining > 0.0) {
-                queue.live.push(live);
-            } else {
-                record(&mut queue.ended, live.card.id, ToastEnd::Expired);
+        for (_, live) in &mut queue.windows {
+            for card in std::mem::take(live) {
+                if card.remaining.is_none_or(|remaining| remaining > 0.0) {
+                    live.push(card);
+                } else {
+                    record(&mut queue.ended, card.card.id, ToastEnd::Expired);
+                }
             }
         }
-        queue.live.iter().filter(|live| live.shown && !live.held).filter_map(|live| live.remaining).reduce(f32::min)
+        queue.windows.retain(|(_, live)| !live.is_empty());
+        queue.live().filter(|live| live.shown && !live.held).filter_map(|live| live.remaining).reduce(f32::min)
     });
     if let Some(seconds) = wake {
         repaint::request_after(ctx, viewport, f64::from(seconds));

@@ -146,7 +146,7 @@ pub(crate) fn opener_floor(overlay: &Overlay) -> f32 {
     overlay.min_width.points(width)
 }
 
-/// The anchor a layer opened by `opener` hangs from: the opener's own, else the layer's `Pointer` or `Viewport`
+/// The anchor a layer opened by `opener` hangs from: the opener's own, else the layer's `Pointer` or `Corner`
 /// place, else the pointer for a context request a secondary release made, else the rect a key's context request
 /// named, else the opener's rect.
 pub(super) fn opener_anchor(opener: &Opener, opening: Opening, place: &Place) -> Anchor {
@@ -154,7 +154,7 @@ pub(super) fn opener_anchor(opener: &Opener, opening: Opening, place: &Place) ->
         return anchor.clone();
     }
     match (place, opening) {
-        (Place::Anchored { anchor: anchor @ (Anchor::Pointer | Anchor::Viewport(_)), .. }, _) => anchor.clone(),
+        (Place::Anchored { anchor: anchor @ (Anchor::Pointer | Anchor::Corner(..)), .. }, _) => anchor.clone(),
         (_, Opening::Pointer) => Anchor::Pointer,
         (_, Opening::At(rect)) => Anchor::Rect(rect),
         (_, Opening::Plain) => Anchor::Response,

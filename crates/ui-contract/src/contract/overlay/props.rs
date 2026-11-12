@@ -250,10 +250,10 @@ impl Overlay {
         overlay
     }
 
-    /// A toast stack: the viewport's bottom end corner. Tab reaches its cards, and focus returns from them to where it came
-    /// from when the last one ends.
-    pub fn toast() -> Overlay {
-        let place = Place::anchored(Anchor::Viewport(Align2::RIGHT_BOTTOM), Side::Above, Align::End);
+    /// A toast stack at `corner` of `body`, a rect in the opener's layer space: the end-bottom corner of a window's body.
+    /// Tab reaches its cards, and focus returns from them to where it came from when the last one ends.
+    pub fn toast(body: Rect, corner: Align2) -> Overlay {
+        let place = Place::anchored(Anchor::Corner(body, corner), Side::Above, Align::End);
         let mut overlay = Overlay::base(Rank::Toast, place, OverlayFit::ContentCapped(NOTE_SHARE), OwnerClass::Widget, FocusPolicy::TAB_LAYER);
         overlay.dismiss = Dismiss::new().outside(Outside::Keep);
         overlay

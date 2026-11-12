@@ -52,7 +52,7 @@ impl Gallery {
         let notes = self.persisted.notes().into_iter().chain(self.drop_note.take());
         for note in notes {
             if self.noted.insert(note.clone()) {
-                toast::post(ctx, Toast::new(note));
+                toast::post(ctx, &WindowKey::main(), Toast::new(note));
             }
         }
     }

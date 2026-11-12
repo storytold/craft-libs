@@ -18,20 +18,20 @@ pub(crate) fn resolve_anchor(ctx: &Context, id: Id, overlay: &Overlay, own: Rect
         let (opener, opening) = first.active(ctx, stored_opening(ctx, id));
         let to_screen = areas::layer_to_screen(ctx, opener.layer);
         return match opener_anchor(opener, opening, &overlay.place) {
-            Anchor::Rect(rect) => to_screen * rect,
+            Anchor::Rect(rect) | Anchor::Corner(rect, _) => to_screen * rect,
             Anchor::Point(at) => to_screen * Rect::from_min_max(at, at),
             _ => to_screen * opener.rect,
         };
     }
     match &overlay.place {
-        Place::Anchored { anchor: Anchor::Rect(rect), .. } => own_to_screen * *rect,
+        Place::Anchored { anchor: Anchor::Rect(rect) | Anchor::Corner(rect, _), .. } => own_to_screen * *rect,
         Place::Anchored { anchor: Anchor::Point(at), .. } => own_to_screen * Rect::from_min_max(*at, *at),
         _ => own_to_screen * own,
     }
 }
 
 /// The overlay with the place's anchor that of the opener that opened it, for the anchors the host reads from the
-/// place (`Pointer`, `Viewport`).
+/// place (`Pointer`, `Corner`).
 pub(super) fn opened_overlay(ctx: &Context, overlay: &Overlay, stored: Option<Opening>) -> Option<(Overlay, Opening)> {
     let first = overlay.opener.as_ref()?;
     let (opener, opening) = first.active(ctx, stored);
@@ -79,12 +79,12 @@ pub(super) fn anchor_rect(ctx: &Context, layer: &Layer<'_>, bounds: Rect, memory
 }
 
 /// The anchor rect of `overlay` in screen space, the one rule the host and the body's measuring run share: a
-/// `Viewport` anchor from the safe rect `bounds` less `inset`, a `Pointer` anchor from `pointer_at` (the pointer where
+/// `Corner` anchor from its rect as `resolved` gives it in screen space, within the safe rect `bounds`, less `inset`, a `Pointer` anchor from `pointer_at` (the pointer where
 /// the layer opened, taken from the pointer now when none is recorded), any other from `resolved`.
 fn resolved_anchor(ctx: &Context, overlay: &Overlay, resolved: Rect, bounds: Rect, inset: f32, pointer_at: &mut Option<Pos2>) -> Rect {
     let point = |at: Pos2| Rect::from_min_max(at, at);
     match &overlay.place {
-        Place::Anchored { anchor: Anchor::Viewport(at), .. } => point(at.pos_in_rect(&bounds.shrink(inset))),
+        Place::Anchored { anchor: Anchor::Corner(_, at), .. } => point(at.pos_in_rect(&resolved.intersect(bounds).shrink(inset))),
         Place::Anchored { anchor: Anchor::Pointer, .. } => {
             point(*pointer_at.get_or_insert_with(|| areas::pointer_pos(ctx).unwrap_or(bounds.center())))
         }

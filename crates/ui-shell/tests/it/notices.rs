@@ -1,7 +1,7 @@
-//! The notices family: the settings notices and the toast stack.
+//! The notices family: the settings notices and each window's toasts.
 
 use craft_theme::variant::Tone;
-use craft_ui::notices::{SaveResult, SettingsNoticeState, SettingsStatus, ToastStack};
+use craft_ui::notices::{SaveResult, SettingsNoticeState, SettingsStatus};
 use craft_ui::runtime::env::WindowKey;
 use craft_ui::runtime::toast::{self, Toast};
 use craft_ui::shell::AppShell;
@@ -29,19 +29,42 @@ fn repeated_save_failures_escalate_and_a_success_clears_them() {
     assert_eq!(status.tone(), Tone::Good);
 }
 
-/// A toast stack in a shell body shows once per pass although the body also runs for sizing; debug builds panic
-/// when its presence stage opens twice in a pass.
+/// A shell shows its window's toasts once per pass although its body also runs for sizing; debug builds panic when
+/// the toast layer's presence stage opens twice in a pass.
 #[trial]
-fn a_toast_stack_in_a_shell_body_opens_its_layer_once_per_pass() {
-    let mut fixture = Fixture::new(|ui| {
+fn a_shell_opens_its_toast_layer_once_per_pass() {
+    let window = WindowKey::new("toast-stack-shell");
+    let mut fixture = Fixture::new(move |ui| {
         let ctx = ui.ctx().clone();
-        if toast::cards(&ctx).is_empty() {
-            toast::post(&ctx, Toast::new("poster.png was saved to Pictures."));
+        if toast::cards(&ctx, &window).is_empty() {
+            toast::post(&ctx, &window, Toast::new("poster.png was saved to Pictures."));
         }
-        AppShell::embedded(WindowKey::new("toast-stack-shell")).body(|ui, _, _| ToastStack::show(ui)).show(ui, &mut ());
+        AppShell::embedded(window.clone()).body(|_, _, _| {}).show(ui, &mut ());
     });
     fixture.settle();
     assert!(!fixture.texts().is_empty(), "the toast card shows");
+}
+
+/// A toast posted to an embedded shell's window shows once, inside that shell's body, and not in the shell beside it.
+#[trial]
+fn a_toast_shows_in_the_body_of_its_own_window() {
+    let mut fixture = Fixture::new(|ui| {
+        let ctx = ui.ctx().clone();
+        let right = WindowKey::new("right-shell");
+        if toast::cards(&ctx, &right).is_empty() {
+            toast::post(&ctx, &right, Toast::new("poster.png was saved.").timeout(None));
+        }
+        ui.columns(2, |columns| {
+            AppShell::embedded(WindowKey::new("left-shell")).body(|_, _, _| {}).show(&mut columns[0], &mut ());
+            AppShell::embedded(right).body(|_, _, _| {}).show(&mut columns[1], &mut ());
+        });
+    });
+    fixture.room(egui::Vec2::new(800.0, 400.0));
+    fixture.settle();
+    let cards: Vec<egui::Rect> =
+        fixture.texts().iter().filter(|painted| painted.text == "poster.png was saved.").map(|painted| painted.rect).collect();
+    assert_eq!(cards.len(), 1, "one card, in one window");
+    assert!(cards[0].left() > fixture.shown().center().x, "the card sits in the right-hand shell");
 }
 
 /// Dismissing the focused toast hands the focus to the next card, and the last one back to where it came from.
@@ -54,15 +77,15 @@ fn a_dismissed_toast_hands_the_focus_on_and_the_last_returns_it() {
     let mut posted = false;
     let mut fixture = Fixture::new(move |ui| {
         let ctx = ui.ctx().clone();
+        let window = WindowKey::new("toast-focus-shell");
         if !posted {
-            toast::post(&ctx, Toast::new("poster.png was saved."));
-            toast::post(&ctx, Toast::new("flyer.png was saved."));
+            toast::post(&ctx, &window, Toast::new("poster.png was saved."));
+            toast::post(&ctx, &window, Toast::new("flyer.png was saved."));
             posted = true;
         }
-        AppShell::embedded(WindowKey::new("toast-focus-shell"))
+        AppShell::embedded(window)
             .body(|ui, _, _| {
                 Button::new("Before").show(ui);
-                ToastStack::show(ui);
             })
             .show(ui, &mut ());
     });
@@ -81,9 +104,10 @@ fn a_dismissed_toast_hands_the_focus_on_and_the_last_returns_it() {
     fixture.key(Key::Tab, Modifiers::NONE).idle(2);
     assert_eq!(focused_name(&fixture).as_deref(), Some("Dismiss"), "Tab reaches the first card's Dismiss");
     fixture.key(Key::Enter, Modifiers::NONE).idle(4);
-    assert_eq!(toast::cards(fixture.ctx()).len(), 1, "one card ended");
+    let window = WindowKey::new("toast-focus-shell");
+    assert_eq!(toast::cards(fixture.ctx(), &window).len(), 1, "one card ended");
     assert_eq!(focused_name(&fixture).as_deref(), Some("Dismiss"), "the focus moved to the other card's Dismiss");
     fixture.key(Key::Enter, Modifiers::NONE).idle(4);
-    assert!(toast::cards(fixture.ctx()).is_empty(), "both cards ended");
+    assert!(toast::cards(fixture.ctx(), &window).is_empty(), "both cards ended");
     assert_eq!(focused_name(&fixture).as_deref(), Some("Before"), "the focus is back where it came from");
 }

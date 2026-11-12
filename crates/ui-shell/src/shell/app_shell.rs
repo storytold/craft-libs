@@ -558,7 +558,9 @@ impl<'a, S> AppShell<'a, S> {
                 outer.note_dialog();
             }
 
-            ToastStack::show(ui);
+            // The window's toasts sit at the end-bottom corner of its body; an embedded shell's in the part of it in view.
+            let body = if embedded { regions.body.intersect(region) } else { regions.body };
+            ToastStack::show(ui, &window, body);
 
             let mut edges: Vec<(RevealEdge, Rect)> = regions
                 .slots
