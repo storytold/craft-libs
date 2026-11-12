@@ -14,10 +14,12 @@
 //! The file skeleton is VectorCraft's (`vectorcraft-cad`, `writer.rs`); the groups of each
 //! entity follow the DXF Reference, as CADCraft's `dxf_write` writes them.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::entity::{Attrib, Common, Dimension, Entity, EntityKind, Image, Insert, Leader, LwPolyline, Polyline, Spline, Text, Viewport};
 use super::hatch::{Hatch, HatchEdge, HatchPath};
+use super::mleader::{MLeader, MLeaderStyle};
+use super::table::{Table, TableStyle};
 use super::tables::{DimStyle, Layer, Linetype, TextStyle};
 use super::text::{MText, encode_contents, encode_line};
 use super::{Color, Lineweight, Point, Transparency, aci};
@@ -134,6 +136,8 @@ pub mod fixed {
 struct W {
     v: Format,
     t: Vec<Tag>,
+    /// Upper-case block name → its BLOCK_RECORD handle (an ACAD_TABLE's group 343).
+    blocks: HashMap<String, u64>,
 }
 
 impl W {
@@ -748,7 +752,7 @@ impl W {
     }
 
     /// The groups of an entity after its common properties; `false` for a kind that has none
-    /// here ([`EntityKind::MLeader`], [`EntityKind::Table`] and [`EntityKind::Other`]).
+    /// here ([`EntityKind::Other`]).
     fn geometry(&mut self, kind: &EntityKind, c: &Common) -> bool {
         match kind {
             EntityKind::Line { start, end } => {
@@ -884,9 +888,335 @@ impl W {
                 }
                 self.p(11, *direction);
             }
-            EntityKind::MLeader(_) | EntityKind::Table(_) | EntityKind::Other => return false,
+            EntityKind::MLeader(m) => self.mleader(m),
+            EntityKind::Table(t) => self.acad_table(t, c),
+            EntityKind::Other => return false,
         }
         true
+    }
+}
+
+impl W {
+    fn opt_p(&mut self, code: i32, p: Option<Point>) {
+        if let Some(p) = p {
+            self.p(code, p);
+        }
+    }
+    fn opt_f(&mut self, code: i32, v: Option<f64>) {
+        if let Some(v) = v {
+            self.f(code, v);
+        }
+    }
+    fn opt_i(&mut self, code: i32, v: Option<i64>) {
+        if let Some(v) = v {
+            self.i(code, v);
+        }
+    }
+    fn opt_h(&mut self, code: i32, v: Option<u64>) {
+        if let Some(v) = v {
+            self.h(code, v);
+        }
+    }
+
+    /// A MULTILEADER's groups after its common properties, in the order and with the fixed
+    /// values CADCraft's writer uses (`dxf_mleader.rs` `entity_tags`): the context block with its
+    /// roots and lines, then the entity's own overrides. A value the model does not have is not
+    /// written.
+    fn mleader(&mut self, m: &MLeader) {
+        // ByBlock and "no colour" as 32-bit colour values (0xC1000000, 0xC8000000).
+        const BYBLOCK: i64 = -1_056_964_608;
+        const NO_COLOR: i64 = -939_524_096;
+        let n = |v: usize| i64::try_from(v).unwrap_or(i64::MAX);
+        self.sub("AcDbMLeader");
+        self.i(270, 2);
+        self.s(300, "CONTEXT_DATA{");
+        self.f(40, 1.0);
+        self.opt_p(10, m.base);
+        self.opt_f(41, m.text_height);
+        self.opt_f(140, m.context_arrow_size);
+        self.opt_f(145, m.landing_gap);
+        self.opt_i(174, m.context_left_attachment);
+        self.opt_i(175, m.context_right_attachment);
+        // The horizontal alignment (176) is the text alignment (171) less one.
+        self.opt_i(176, m.text_alignment.map(|a| a - 1));
+        self.i(177, 1);
+        self.opt_i(290, m.has_text.map(i64::from));
+        if let Some(t) = &m.text {
+            self.s(304, encode_contents(t));
+            self.p(11, [0.0, 0.0, 1.0]);
+        }
+        self.opt_h(340, m.context_text_style);
+        self.opt_p(12, m.text_location);
+        self.opt_p(13, m.text_direction);
+        self.opt_f(42, m.text_rotation);
+        self.opt_f(43, m.text_width);
+        if m.text.is_some() {
+            self.f(44, 0.0);
+        }
+        self.opt_f(45, m.line_spacing);
+        self.opt_i(170, m.line_spacing_style);
+        if m.text.is_some() {
+            self.i(90, BYBLOCK);
+        }
+        self.opt_i(171, m.text_alignment);
+        if m.text.is_some() {
+            self.i(172, 1);
+            self.i(91, NO_COLOR);
+            self.f(141, 1.5);
+            for code in [92, 291, 292, 173, 293] {
+                self.i(code, 0);
+            }
+            self.f(142, 0.0);
+            self.f(143, 0.0);
+            self.i(294, 0);
+            self.i(295, 0);
+        }
+        self.opt_i(296, m.has_block.map(i64::from));
+        self.opt_h(341, m.context_block);
+        if m.context_block.is_some() {
+            self.p(14, [0.0, 0.0, 1.0]);
+        }
+        self.opt_p(15, m.block_location);
+        self.opt_p(16, m.context_block_scale);
+        self.opt_f(46, m.context_block_rotation);
+        if let Some(at) = m.block_location {
+            self.i(93, BYBLOCK);
+            // Block to world, row by row. shortcut: takes the block's base point as its origin,
+            // as CADCraft's blocks are; a caller with another base adjusts the location.
+            let [sx, sy, sz] = m.context_block_scale.unwrap_or([1.0; 3]);
+            let (sin, cos) = m.context_block_rotation.unwrap_or(0.0).sin_cos();
+            for v in [sx * cos, -sy * sin, 0.0, at[0], sx * sin, sy * cos, 0.0, at[1], 0.0, 0.0, sz, at[2], 0.0, 0.0, 0.0, 1.0] {
+                self.f(47, v);
+            }
+        }
+        self.p(110, [0.0, 0.0, m.base.map_or(0.0, |b| b[2])]);
+        self.p(111, [1.0, 0.0, 0.0]);
+        self.p(112, [0.0, 1.0, 0.0]);
+        self.i(297, 0);
+        for r in &m.roots {
+            self.s(302, "LEADER{");
+            self.i(290, 1);
+            self.i(291, 1);
+            self.opt_p(10, r.landing);
+            self.opt_p(11, r.direction);
+            self.i(90, 0);
+            self.opt_f(40, r.dogleg);
+            for (k, l) in r.lines.iter().enumerate() {
+                self.s(304, "LEADER_LINE{");
+                for v in l {
+                    self.p(10, *v);
+                }
+                self.i(91, n(k));
+                self.s(305, "}");
+            }
+            self.i(271, 0);
+            self.s(303, "}");
+        }
+        self.i(272, 9);
+        self.i(273, 9);
+        self.s(301, "}");
+        self.opt_h(340, m.style);
+        self.i(90, 0x1 | 0x10 | 0x40 | 0x80 | 0x200 | 0x400 | 0x800 | 0x1_0000 | 0x8_0000);
+        self.opt_i(170, m.leader_type);
+        self.i(91, BYBLOCK);
+        self.i(171, -2);
+        self.i(290, 1);
+        self.opt_i(291, m.dogleg_on.map(i64::from));
+        self.opt_f(41, m.dogleg);
+        self.opt_f(42, m.arrow_size);
+        self.opt_i(172, m.content_type);
+        self.opt_h(343, m.text_style);
+        self.opt_i(173, m.left_attachment);
+        self.opt_i(95, m.right_attachment);
+        self.i(174, 1);
+        self.i(175, m.text_alignment.map_or(0, |a| a - 1));
+        self.i(92, BYBLOCK);
+        self.i(292, 0);
+        self.opt_h(344, m.block);
+        if m.block.is_some() {
+            self.i(93, BYBLOCK);
+        }
+        self.opt_p(10, m.block_scale);
+        self.opt_f(43, m.block_rotation);
+        if m.block.is_some() {
+            self.i(176, 1);
+        }
+        for (k, (h, text)) in m.attribs.iter().enumerate() {
+            self.h(330, *h);
+            self.i(177, n(k));
+            self.f(44, 0.0);
+            self.s(302, text.as_str());
+        }
+        self.i(293, 0);
+        self.i(294, 0);
+        self.i(178, 0);
+        self.i(179, 1);
+        self.f(45, 1.0);
+        self.i(271, 0);
+        self.i(272, 9);
+        self.i(273, 9);
+    }
+
+    /// An ACAD_TABLE's groups after its common properties, as CADCraft's writer orders them
+    /// (`dxf_write/entity.rs`). Group 343 is the record of the table's block when the drawing
+    /// being written has a block of that name.
+    fn acad_table(&mut self, t: &Table, c: &Common) {
+        let n = |v: usize| i64::try_from(v).unwrap_or(i64::MAX);
+        self.sub("AcDbBlockReference");
+        if let Some(b) = &t.block {
+            self.s(2, b.as_str());
+        }
+        self.p(10, t.insert);
+        if c.extrusion != [0.0, 0.0, 1.0] {
+            self.p(210, c.extrusion);
+        }
+        self.sub("AcDbTable");
+        self.i(280, 0);
+        self.opt_h(342, t.style);
+        let record = t.block.as_ref().and_then(|b| self.blocks.get(&b.to_ascii_uppercase()).copied());
+        self.opt_h(343, record);
+        self.p(11, t.direction);
+        self.i(90, 0);
+        self.i(91, n(t.rows));
+        self.i(92, n(t.columns));
+        for code in [93, 94, 95, 96] {
+            self.i(code, 0);
+        }
+        for h in &t.row_heights {
+            self.f(141, *h);
+        }
+        for w in &t.column_widths {
+            self.f(142, *w);
+        }
+        for cell in &t.cells {
+            self.i(171, cell.cell_type);
+            self.i(172, 0);
+            self.i(173, i64::from(cell.merged));
+            self.i(174, 0);
+            // A cell without a span of its own is a single cell.
+            let (rs, cs) = cell.span.unwrap_or((1, 1));
+            self.i(175, i64::from(cs));
+            self.i(176, i64::from(rs));
+            self.i(91, 0);
+            self.i(178, 0);
+            self.f(145, 0.0);
+            self.opt_f(140, cell.text_height);
+            self.opt_i(170, cell.alignment);
+            if let Some(st) = &cell.text_style {
+                self.s(7, st.as_str());
+            }
+            self.opt_h(340, cell.block);
+            // Long text: code-2 chunks, the last part in code 1.
+            let mut chunks = string_groups(&cell.text);
+            let last = chunks.pop().unwrap_or_default();
+            for ch in chunks {
+                self.s(2, ch);
+            }
+            self.s(1, last);
+        }
+    }
+
+    /// A MLEADERSTYLE object, with the fixed values CADCraft's writer uses (`dxf_write/objects.rs`
+    /// `mleader_style_obj`).
+    fn mleader_style(&mut self, s: &MLeaderStyle, h: u64, dict: u64) {
+        const BYBLOCK: i64 = -1_056_964_608;
+        self.owned_object("MLEADERSTYLE", h, dict, "AcDbMLeaderStyle");
+        self.i(179, 2);
+        self.i(170, s.content_type);
+        self.i(171, 1);
+        self.i(172, 0);
+        self.i(90, 2);
+        self.f(40, 0.0);
+        self.f(41, 0.0);
+        self.i(173, s.leader_type);
+        self.i(91, BYBLOCK);
+        self.h(340, fixed::BYBLOCK_LTYPE);
+        self.i(92, -2);
+        self.i(290, 1);
+        self.f(42, s.landing_gap);
+        self.i(291, 1);
+        self.f(43, s.dogleg);
+        self.s(3, s.description.as_str());
+        self.f(44, s.arrow_size);
+        self.s(300, "");
+        self.opt_h(342, s.text_style);
+        self.i(174, 1);
+        self.i(178, 1);
+        self.i(175, 1);
+        self.i(176, 0);
+        self.i(93, BYBLOCK);
+        self.f(45, s.text_height);
+        self.i(292, 0);
+        self.i(297, 0);
+        self.f(46, 4.0);
+        self.opt_h(343, s.block);
+        self.i(94, BYBLOCK);
+        for code in [47, 49, 140] {
+            self.f(code, 1.0);
+        }
+        self.i(293, 1);
+        self.f(141, 0.0);
+        self.i(294, 1);
+        self.i(177, 0);
+        self.f(142, 1.0);
+        self.i(295, 0);
+        self.i(296, i64::from(s.annotative));
+        self.f(143, 0.125);
+        self.i(271, 0);
+        self.i(272, 9);
+        self.i(273, 9);
+    }
+
+    /// A TABLESTYLE object, as CADCraft's writer orders it (`dxf_write/objects.rs`
+    /// `table_style_obj`, `dxf_table.rs` `cell_type_tags`).
+    fn table_style(&mut self, s: &TableStyle, h: u64, dict: u64) {
+        let color = |c: Color| match c {
+            Color::ByLayer => 256,
+            Color::ByBlock => 0,
+            Color::Index(i) => i64::from(i),
+            Color::Rgb(rgb) => i64::from(aci::nearest(rgb, 1..=255)),
+        };
+        self.owned_object("TABLESTYLE", h, dict, "AcDbTableStyle");
+        self.s(3, s.description.as_str());
+        self.i(70, s.flow);
+        self.i(71, 0);
+        self.opt_f(40, s.margin_h);
+        self.opt_f(41, s.margin_v);
+        self.i(280, i64::from(s.title_suppressed));
+        self.i(281, i64::from(s.header_suppressed));
+        for ct in &s.cell_types {
+            self.s(7, ct.text_style.as_str());
+            self.opt_f(140, ct.text_height);
+            self.opt_i(170, ct.alignment);
+            self.opt_i(62, ct.text_color.map(color));
+            match ct.fill {
+                Some(f) => {
+                    self.i(63, color(f));
+                    self.i(283, 1);
+                }
+                None => self.i(283, 0),
+            }
+            for (k, b) in (0..).zip(&ct.borders) {
+                self.opt_i(274 + k, b.lineweight.map(Lineweight::to_dxf));
+            }
+            for (k, b) in (0..).zip(&ct.borders) {
+                self.opt_i(284 + k, b.visible.map(i64::from));
+            }
+            for (k, b) in (0..).zip(&ct.borders) {
+                self.opt_i(64 + k, b.color.map(color));
+            }
+        }
+    }
+
+    /// An object owned by a dictionary, with that dictionary as its reactor too.
+    fn owned_object(&mut self, kind: &str, h: u64, dict: u64, subclass: &str) {
+        self.s(0, kind);
+        self.h(5, h);
+        self.s(102, "{ACAD_REACTORS");
+        self.h(330, dict);
+        self.s(102, "}");
+        self.h(330, dict);
+        self.s(100, subclass);
     }
 }
 
@@ -904,7 +1234,7 @@ fn polyline_subclass(flags: i64) -> (&'static str, &'static str) {
 }
 
 /// The record type of an entity kind; `None` for one the writer leaves out.
-fn kind_name(kind: &EntityKind) -> Option<&'static str> {
+fn kind_name(kind: &EntityKind, format: Format) -> Option<&'static str> {
     Some(match kind {
         EntityKind::Line { .. } => "LINE",
         EntityKind::Point { .. } => "POINT",
@@ -932,6 +1262,9 @@ fn kind_name(kind: &EntityKind) -> Option<&'static str> {
         EntityKind::Image(_) => "IMAGE",
         EntityKind::Wipeout(_) => "WIPEOUT",
         EntityKind::Tolerance { .. } => "TOLERANCE",
+        // MULTILEADER came with the 2007 format, ACAD_TABLE with 2004.
+        EntityKind::MLeader(_) if format >= Format::R2007 => "MULTILEADER",
+        EntityKind::Table(_) if format >= Format::R2004 => "ACAD_TABLE",
         EntityKind::MLeader(_) | EntityKind::Table(_) | EntityKind::Other => return None,
     })
 }
@@ -1001,7 +1334,7 @@ impl Ids {
             }
             k => k,
         };
-        let Some(name) = kind_name(kind) else { return false };
+        let Some(name) = kind_name(kind, w.v) else { return false };
         let h = self.take(e.common.handle);
         w.common(name, &e.common, h, owner);
         w.geometry(kind, &e.common);
@@ -1051,9 +1384,9 @@ impl Ids {
 /// The tags of one entity (with its vertices or attributes and their SEQEND) for `format`, owned
 /// by `owner`: for a caller that writes its own file around them. Its handle is the entity's, or
 /// one from `next_handle`; followers get handles from `next_handle` too, which is moved past
-/// those used. Empty for [`EntityKind::MLeader`], [`EntityKind::Table`] and [`EntityKind::Other`].
+/// those used. Empty for [`EntityKind::Other`], and a MULTILEADER before 2007 or an ACAD_TABLE before 2004.
 pub fn entity_tags(e: &Entity, format: Format, owner: u64, next_handle: &mut u64) -> Vec<Tag> {
-    let mut w = W { v: format, t: Vec::new() };
+    let mut w = W { v: format, t: Vec::new(), blocks: HashMap::new() };
     let mut ids = Ids { used: HashSet::new(), next: *next_handle, floor: 0 };
     let written = ids.entity(&mut w, e, owner);
     *next_handle = ids.next.saturating_add(1);
@@ -1108,6 +1441,11 @@ pub struct Drawing<'a> {
     pub raw_classes: Vec<Tag>,
     pub raw_objects: Vec<Tag>,
     pub root_entries: Vec<(String, u64)>,
+    /// Multileader styles by name, in the `ACAD_MLEADERSTYLE` dictionary (2007 and later). A
+    /// MULTILEADER names its style by handle: give the style a handle and the entity the same.
+    pub mleader_styles: Vec<(String, MLeaderStyle)>,
+    /// Table styles by name, in the `ACAD_TABLESTYLE` dictionary (2004 and later).
+    pub table_styles: Vec<(String, TableStyle)>,
 }
 
 impl Default for Drawing<'_> {
@@ -1130,6 +1468,8 @@ impl Default for Drawing<'_> {
             raw_classes: Vec::new(),
             raw_objects: Vec::new(),
             root_entries: Vec::new(),
+            mleader_styles: Vec::new(),
+            table_styles: Vec::new(),
         }
     }
 }
@@ -1139,11 +1479,11 @@ const PAPER: &str = "*Paper_Space";
 
 impl Drawing<'_> {
     /// The whole file as tags, ending with `0 EOF`, and how many entities were left out
-    /// ([`EntityKind::MLeader`], [`EntityKind::Table`] and [`EntityKind::Other`], which it has no groups for: pass
+    /// ([`EntityKind::Other`], and a MULTILEADER before 2007 or an ACAD_TABLE before 2004, which it has no groups for: pass
     /// those in `raw_entities`).
     pub fn tags(&self) -> (Vec<Tag>, usize) {
         let v = self.format;
-        let mut w = W { v, t: Vec::new() };
+        let mut w = W { v, t: Vec::new(), blocks: HashMap::new() };
         let entities = self.entities.iter().chain(self.blocks.iter().flat_map(|b| &b.entities));
         let attribs = entities.clone().filter_map(|e| match &e.kind {
             EntityKind::Insert(i) => Some(i.attribs.iter().filter_map(|(c, _)| c.handle)),
@@ -1154,7 +1494,9 @@ impl Drawing<'_> {
             .filter_map(|e| e.common.handle)
             .chain(attribs.flatten())
             .chain(tables.flatten())
-            .chain(self.dim_styles.iter().filter_map(|d| d.handle));
+            .chain(self.dim_styles.iter().filter_map(|d| d.handle))
+            .chain(self.mleader_styles.iter().filter_map(|(_, s)| s.handle))
+            .chain(self.table_styles.iter().filter_map(|(_, s)| s.handle));
         let mut ids = Ids::new(given.chain(self.root_entries.iter().map(|(_, h)| *h)));
         // Table records first, so entities numbered after them never take a handle a record asks for.
         let layer_h: Vec<u64> = self.layers.iter().map(|l| ids.take(l.handle)).collect();
@@ -1162,9 +1504,16 @@ impl Drawing<'_> {
         let style_h: Vec<u64> = self.styles.iter().map(|s| ids.take(s.handle)).collect();
         let dim_h: Vec<u64> = self.dim_styles.iter().map(|d| ids.take(d.handle)).collect();
         let block_h: Vec<[u64; 3]> = self.blocks.iter().map(|_| [ids.take(None), ids.take(None), ids.take(None)]).collect();
+        // The style dictionaries and their styles, in the versions that have them.
+        let styles = |on: bool, handles: Vec<Option<u64>>, ids: &mut Ids| {
+            (on && !handles.is_empty()).then(|| (ids.take(None), handles.into_iter().map(|h| ids.take(h)).collect::<Vec<u64>>()))
+        };
+        let mleader_h = styles(v >= Format::R2007, self.mleader_styles.iter().map(|(_, s)| s.handle).collect(), &mut ids);
+        let table_h = styles(v >= Format::R2004, self.table_styles.iter().map(|(_, s)| s.handle).collect(), &mut ids);
 
         // The content first: the header's handle seed comes after every handle.
-        let mut body = W { v, t: Vec::new() };
+        let names = self.blocks.iter().zip(&block_h).map(|(b, h)| (b.name.to_ascii_uppercase(), h[0]));
+        let mut body = W { v, t: Vec::new(), blocks: names.collect() };
         let mut skipped = 0usize;
         if v.handles() {
             body.section("BLOCKS");
@@ -1196,12 +1545,26 @@ impl Drawing<'_> {
         body.t.extend(self.raw_entities.iter().cloned());
         body.end_section();
         if v.handles() {
-            self.objects(&mut body);
+            self.objects(&mut body, mleader_h.as_ref(), table_h.as_ref());
         }
 
         self.header(&mut w, ids.take(None));
         if v.handles() {
-            self.classes(&mut w);
+            let all = || self.entities.iter().chain(self.blocks.iter().flat_map(|b| &b.entities));
+            let mut classes = Vec::new();
+            if table_h.is_some() {
+                classes.push(("TABLESTYLE", "AcDbTableStyle", 4095, false));
+            }
+            if mleader_h.is_some() {
+                classes.push(("MLEADERSTYLE", "AcDbMLeaderStyle", 4095, false));
+            }
+            if v >= Format::R2004 && all().any(|e| matches!(e.kind, EntityKind::Table(_))) {
+                classes.push(("ACAD_TABLE", "AcDbTable", 1025, true));
+            }
+            if v >= Format::R2007 && all().any(|e| matches!(e.kind, EntityKind::MLeader(_))) {
+                classes.push(("MULTILEADER", "AcDbMLeader", 1025, true));
+            }
+            self.classes(&mut w, &classes);
         }
         w.section("TABLES");
         self.vport(&mut w);
@@ -1279,7 +1642,9 @@ impl Drawing<'_> {
         w.end_section();
     }
 
-    fn classes(&self, w: &mut W) {
+    /// The CLASSES section: the classes every R2000 file has, then `extra` (name, C++ class,
+    /// proxy flags, is an entity), then the caller's.
+    fn classes(&self, w: &mut W, extra: &[(&str, &str, i64, bool)]) {
         w.section("CLASSES");
         if self.format.r2000() {
             for (name, cpp) in
@@ -1296,6 +1661,18 @@ impl Drawing<'_> {
                 w.i(280, 0);
                 w.i(281, 0);
             }
+        }
+        for (name, cpp, flags, entity) in extra {
+            w.s(0, "CLASS");
+            w.s(1, *name);
+            w.s(2, *cpp);
+            w.s(3, "ObjectDBX Classes");
+            w.i(90, *flags);
+            if self.format.true_color() {
+                w.i(91, 0);
+            }
+            w.i(280, 0);
+            w.i(281, i64::from(*entity));
         }
         w.t.extend(self.raw_classes.iter().cloned());
         w.end_section();
@@ -1493,7 +1870,7 @@ impl Drawing<'_> {
         w.end_table();
     }
 
-    fn objects(&self, w: &mut W) {
+    fn objects(&self, w: &mut W, mleader_h: Option<&(u64, Vec<u64>)>, table_h: Option<&(u64, Vec<u64>)>) {
         let v = self.format;
         w.section("OBJECTS");
         let dict = |w: &mut W, h: u64, owner: u64, entries: &[(&str, u64)]| {
@@ -1507,6 +1884,12 @@ impl Drawing<'_> {
         let mut root = vec![("ACAD_GROUP", fixed::GROUPS)];
         if v.r2000() {
             root.extend([("ACAD_LAYOUT", fixed::LAYOUTS), ("ACAD_PLOTSTYLENAME", fixed::PLOT_STYLES)]);
+        }
+        if let Some((d, _)) = mleader_h {
+            root.push(("ACAD_MLEADERSTYLE", *d));
+        }
+        if let Some((d, _)) = table_h {
+            root.push(("ACAD_TABLESTYLE", *d));
         }
         root.extend(self.root_entries.iter().map(|(n, h)| (n.as_str(), *h)));
         dict(w, fixed::ROOT, 0, &root);
@@ -1525,6 +1908,20 @@ impl Drawing<'_> {
             w.h(330, fixed::PLOT_STYLES);
             self.layout(w, fixed::MODEL_LAYOUT, "Model", 0, fixed::MODEL_RECORD);
             self.layout(w, fixed::PAPER_LAYOUT, "Layout1", 1, fixed::PAPER_RECORD);
+        }
+        if let Some((d, handles)) = mleader_h {
+            let entries: Vec<(&str, u64)> = self.mleader_styles.iter().map(|(n, _)| n.as_str()).zip(handles.iter().copied()).collect();
+            dict(w, *d, fixed::ROOT, &entries);
+            for ((_, s), h) in self.mleader_styles.iter().zip(handles) {
+                w.mleader_style(s, *h, *d);
+            }
+        }
+        if let Some((d, handles)) = table_h {
+            let entries: Vec<(&str, u64)> = self.table_styles.iter().map(|(n, _)| n.as_str()).zip(handles.iter().copied()).collect();
+            dict(w, *d, fixed::ROOT, &entries);
+            for ((_, s), h) in self.table_styles.iter().zip(handles) {
+                w.table_style(s, *h, *d);
+            }
         }
         w.t.extend(self.raw_objects.iter().cloned());
         w.end_section();

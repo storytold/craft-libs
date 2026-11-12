@@ -17,9 +17,10 @@ use craft_xml::{El, Local, value};
 
 use crate::package::{Doc, Package};
 use crate::placeholder::{Owner, parents};
+use crate::text::TextBody;
 use crate::{
-    Background, CustomShow, Defaults, EmbeddedFont, Error, Geom, HeaderFooter, Layout, LayoutId, LayoutType, Master, MasterId, MediaId, MediaItem,
-    PhType, Presentation, Properties, Section, ShowSettings, Size, Slide, SlideId,
+    Background, Comment, CustomShow, Defaults, EmbeddedFont, Error, Geom, HeaderFooter, Layout, LayoutId, LayoutType, Master, MasterId, MediaId,
+    MediaItem, PhType, Presentation, Properties, Section, ShowSettings, Size, Slide, SlideId,
 };
 
 /// Import state shared by all parts.
@@ -419,7 +420,7 @@ pub(crate) fn import_with_chart_points(bytes: &[u8], defaults: &dyn Defaults, ch
 
     read_presentation_settings(&mut imp, &mut p, &pres_part, pres_el);
     let layout_by_part = read_masters(&mut imp, &mut p, &master_paths, &docs);
-    let file_slide_ids = read_slides(&mut imp, &mut p, &docs, &slide_ids, &layout_by_part);
+    let file_slide_ids = read_slides(&mut imp, &mut p, &pres_part, &docs, &slide_ids, &layout_by_part);
     read_sections(&mut p, &pres_part, pres_el, &file_slide_ids);
     p.tags = tags(&mut imp, &pres_part, pres_el);
     read_custom_shows(&mut p, &imp, &pres_part, pres_el);
@@ -578,10 +579,11 @@ fn read_masters(imp: &mut Imp, p: &mut Presentation, master_paths: &[String], do
     layout_by_part
 }
 
-/// Reads every registered slide. Returns the slide ids by file id.
+/// Reads every registered slide with its notes and comments. Returns the slide ids by file id.
 fn read_slides(
     imp: &mut Imp,
     p: &mut Presentation,
+    pres_part: &Part,
     docs: &HashMap<String, Doc>,
     slide_ids: &[(u32, String, SlideId)],
     layout_by_part: &HashMap<String, LayoutId>,
@@ -589,12 +591,19 @@ fn read_slides(
     let pkg = imp.pkg;
     let fallback_layout = p.masters.first().and_then(|m| m.layouts.first()).map(|l| l.id).unwrap_or_default();
     let mut file_slide_ids: HashMap<u32, SlideId> = HashMap::new();
+    // A notes or comments part belongs to one slide; one shared by many must not be read (and
+    // copied) once per slide that names it.
+    let mut owned_parts: HashSet<String> = HashSet::new();
     for (file_id, path, id) in slide_ids {
         let Some(doc) = docs.get(&craft_opc::normalize(path)) else { continue };
         let part = Part::new(pkg, path, doc);
         let layout =
             part.rels.first("slideLayout").and_then(|r| layout_by_part.get(&craft_opc::normalize(&r.target)).copied()).unwrap_or(fallback_layout);
-        let slide = read_slide(imp, &part, doc, *id, layout);
+        let mut slide = read_slide(imp, &part, doc, *id, layout);
+        if let Some(notes) = slide_notes(imp, &part, &mut owned_parts) {
+            slide.notes = notes;
+        }
+        read_slide_comments(pkg, pres_part, &part, &mut slide, &mut owned_parts);
         file_slide_ids.insert(*file_id, *id);
         p.slides.push(Arc::new(slide));
     }
@@ -602,6 +611,42 @@ fn read_slides(
 }
 
 /// The slide's notes text. A notes part is the notes of the first slide that names it.
+fn slide_notes(imp: &mut Imp, part: &Part, owned: &mut HashSet<String>) -> Option<TextBody> {
+    let n = part.rels.first("notesSlide")?;
+    if !owned.insert(craft_opc::normalize(&n.target)) {
+        log::warn!("pptx: notes part {} is named by more than one slide; kept on the first", n.target);
+        return None;
+    }
+    let pkg = imp.pkg;
+    let nd = load(pkg, &n.target)?;
+    let np = Part::new(pkg, &n.target, &nd);
+    Some(read_notes(imp, &np, &nd.root))
+}
+
+/// Comments. A modern part and the legacy part can describe the same threads (PowerPoint
+/// writes both): the modern one wins, its flattened legacy copy is skipped.
+/// Each comments part is read once, for the first slide that names it.
+fn read_slide_comments(pkg: &Package, pres_part: &Part, part: &Part, slide: &mut Slide, owned: &mut HashSet<String>) {
+    let mut parts: Vec<(Doc, bool, bool)> = vec![];
+    for c in part.rels.all("comments") {
+        // An already-owned part is not re-read, but its kind still decides modern precedence.
+        let fresh = owned.insert(craft_opc::normalize(&c.target));
+        if let Some(cd) = pkg.xml(&c.target) {
+            // The content type names the modern part; a package that types it only through a
+            // Default entry instead of an Override is still modern when its root is p188.
+            let modern = pkg.content_type(&c.target).as_deref() == Some(crate::write::CT_COMMENTS_MODERN) || cd.root.prefix() == "p188";
+            parts.push((cd, modern, fresh));
+        }
+    }
+    let has_modern = parts.iter().any(|(_, m, _)| *m);
+    for (cd, modern, fresh) in parts {
+        if !fresh || (has_modern && !modern) {
+            continue;
+        }
+        slide.comments.extend(read_comments(pkg, pres_part, &cd.root, modern));
+    }
+}
+
 /// Sections, and the extension elements the model does not understand (kept verbatim).
 fn read_sections(p: &mut Presentation, pres_part: &Part, pres_el: &El, file_slide_ids: &HashMap<u32, SlideId>) {
     let Some(ext) = pres_el.child(Local("extLst")) else { return };
@@ -1139,6 +1184,73 @@ fn read_slide(imp: &mut Imp, part: &Part, doc: &Doc, id: SlideId, layout: Layout
         s.raw_ext = Some(ext.elements().map(|e| part.keep(e)).collect());
     }
     s
+}
+
+fn read_notes(imp: &mut Imp, part: &Part, root: &El) -> TextBody {
+    let Some(tree) = root.path(&[Local("cSld"), Local("spTree")]) else { return TextBody::default() };
+    for sp in tree.children(Local("sp")) {
+        let ph = sp.path(&[Local("nvSpPr"), Local("nvPr"), Local("ph")]);
+        let is_body = ph.is_some_and(|ph| matches!(ph.attr_local("type"), Some("body") | None) && ph.attr_local("type") != Some("sldImg"));
+        if is_body && let Some(tx) = sp.child(Local("txBody")) {
+            let mut t = dml::text_body(&mut Src(imp, part), tx);
+            // Notes keep only content: drop body formatting from the notes master placeholder.
+            t.list_style = Default::default();
+            if t.is_empty() {
+                return TextBody::default();
+            }
+            return t;
+        }
+    }
+    TextBody::default()
+}
+
+fn read_comments(pkg: &Package, pres: &Part, root: &El, modern: bool) -> Vec<Comment> {
+    // Authors: legacy commentAuthors.xml (numeric ids) and modern authors.xml (GUIDs).
+    let mut authors: HashMap<String, (String, String)> = HashMap::new();
+    for kind in ["commentAuthors", "authors"] {
+        if let Some(r) = pres.rels.first(kind)
+            && let Some(d) = pkg.xml(&r.target)
+        {
+            for a in d.root.elements() {
+                if let Some(id) = a.attr_local("id") {
+                    authors
+                        .insert(id.to_string(), (a.attr_local("name").unwrap_or("").to_string(), a.attr_local("initials").unwrap_or("").to_string()));
+                }
+            }
+        }
+    }
+    // Legacy positions are 1/8 pt; the modern part's p188:pos is an a:CT_Point2D in EMU.
+    let scale = if modern { 12_700.0 } else { 8.0 };
+    fn one(e: &El, authors: &HashMap<String, (String, String)>, depth: usize, scale: f64) -> Comment {
+        let (author, initials) = e.attr_local("authorId").and_then(|a| authors.get(a).cloned()).unwrap_or_default();
+        let text = if let Some(t) = e.child(Local("text")) {
+            t.deep_text()
+        } else if let Some(tb) = e.child(Local("txBody")) {
+            tb.children(Local("p")).map(|p| p.deep_text()).collect::<Vec<_>>().join("\n")
+        } else {
+            String::new()
+        };
+        let pos = e.child(Local("pos"));
+        let replies = if depth < 4 {
+            e.child(Local("replyLst"))
+                .map(|l| l.children(Local("reply")).take(1000).map(|r| one(r, authors, depth + 1, scale)).collect())
+                .unwrap_or_default()
+        } else {
+            vec![]
+        };
+        Comment {
+            author,
+            initials,
+            text,
+            date: e.attr_local("dt").or(e.attr_local("created")).unwrap_or("").to_string(),
+            x: pos.and_then(|p| p.attr_local("x").and_then(value::to_f64)).unwrap_or(0.0) / scale,
+            y: pos.and_then(|p| p.attr_local("y").and_then(value::to_f64)).unwrap_or(0.0) / scale,
+            resolved: e.attr_local("status") == Some("resolved"),
+            replies,
+            shape: None,
+        }
+    }
+    root.children(Local("cm")).take(10_000).map(|c| one(c, &authors, 0, scale)).collect()
 }
 
 fn read_show(sp: &El, shows: &HashMap<String, String>) -> ShowSettings {
