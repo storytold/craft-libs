@@ -198,6 +198,11 @@ overflow-checks = false
 [profile.dev.package.craft-video]
 opt-level = 3
 
+# The develop pipeline's tests render hundreds of frames; LightCraft builds it at this level, so a debug build's
+# floats (constant-folded powf / exp2 / log2) also match the renders LightCraft's tests were written against.
+[profile.dev.package.craft-develop]
+opt-level = 1
+
 # The object-stream parser follows nesting 384 levels deep: unoptimised, its frames overflow the
 # 2 MiB stack of a test thread. The apps this reader came from build their crates at this level.
 [profile.dev.package.craft-affinity]
