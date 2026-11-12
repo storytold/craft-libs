@@ -13,9 +13,16 @@ workspace = true
 [features]
 # Serialize and Deserialize for the time, report and document types.
 serde = ["dep:serde"]
+# Final Cut Pro 7 XML (`fcp7`), read with craft-xml's bounded parser.
+xml = ["dep:craft-xml"]
 
 [dependencies]
 serde = { workspace = true, optional = true }
+craft-xml = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+
+[[test]]
+name = "it"
+required-features = ["xml"]

@@ -240,6 +240,9 @@ fn smallest_covering<'a>(found: &[&'a [u8]], largest: &[u8], min_edge: u32) -> O
 }
 
 fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
+    if bytes.starts_with(b"FUJIFILMCCD-RAW") {
+        return raf_jpeg(bytes).filter(|j| is_dct_jpeg(j)).map(|j| trim_eoi(j).to_vec());
+    }
     let format = crate::probe(bytes);
     if matches!(format, Some(crate::RawFormat::Crw | crate::RawFormat::Mrw | crate::RawFormat::X3f)) {
         return scan_for_jpeg(bytes);
@@ -264,6 +267,11 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
                 candidates(bytes, &pifd, mn.base, &mut found, &mut budget);
             }
         }
+    }
+    // Olympus: the CameraSettings preview
+    #[cfg(feature = "orf")]
+    if let Some(p) = crate::orf::preview(bytes) {
+        found.push(p);
     }
     bound_candidates(&mut found, bytes.len());
     let largest = found.iter().copied().filter(|s| is_dct_jpeg(s) || is_jxl(s)).max_by_key(|s| s.len());
@@ -298,6 +306,71 @@ fn bound_candidates(found: &mut Vec<&[u8]>, file_len: usize) {
         true
     });
 }
+
+/// Where a preview lives in a file, so a caller with a seekable file can read just that part of it.
+///
+/// Why it exists: a 56 MB Fuji RAF keeps its JPEG in the first 5.6 MB (measured: DSCF9492.RAF at
+/// 5.6 MB), so a grid thumbnail or a loupe preview has no reason to pull the remaining 50 MB —
+/// which on a network share is the difference between a moment and half a minute. A caller that has
+/// only bytes (`wasm`, tests) keeps using [`embedded_preview`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreviewRange {
+    /// Byte offset of the preview in the file.
+    pub offset: u64,
+    /// Bytes to read at [`Self::offset`]: the container's declared preview extent, which may carry
+    /// padding past the preview's end-of-image marker.
+    pub window_len: u64,
+}
+
+/// The preview's range in the file, when the file's header alone locates it.
+///
+/// `bytes` is the file's first [`PREVIEW_PREFIX`] bytes (more is fine). `None` means "read the file
+/// whole and call [`embedded_preview`]": the formats not covered here (a TIFF-based raw's pointer
+/// tag can sit in an IFD the prefix cuts short; CR3 scans box by box) and files whose pointer is
+/// damaged.
+///
+/// The caller reads `[range.offset, range.offset + range.window_len)` and passes those bytes to
+/// [`embedded_preview_from_range`], which returns exactly what [`embedded_preview`] returns for the
+/// whole file.
+///
+/// Pass a prefix that actually covers the pointer's range (read [`Self::offset`] +
+/// [`Self::window_len`] bytes, or start with [`PREVIEW_PREFIX`] and grow when it is not enough):
+/// `raf::header` clamps a slice to the buffer it was given, so a prefix that stops
+/// inside the declared extent yields a shorter `window_len` than the file really holds.
+pub fn bounded_preview(bytes: &[u8]) -> Option<PreviewRange> {
+    let jpeg = raf_jpeg(bytes)?;
+    let offset = (jpeg.as_ptr() as usize).checked_sub(bytes.as_ptr() as usize)?;
+    if offset.checked_add(jpeg.len())? > bytes.len() {
+        return None;
+    }
+    Some(PreviewRange { offset: offset as u64, window_len: jpeg.len() as u64 })
+}
+
+/// The camera JPEG a RAF's header points to (clamped to `bytes`); `None` for any other file.
+#[cfg(feature = "raf")]
+fn raf_jpeg(bytes: &[u8]) -> Option<&[u8]> {
+    bytes.starts_with(b"FUJIFILMCCD-RAW").then(|| crate::raf::header(bytes).ok()?.jpeg).flatten()
+}
+
+#[cfg(not(feature = "raf"))]
+fn raf_jpeg(_: &[u8]) -> Option<&[u8]> {
+    None
+}
+
+/// The preview inside `window`, which holds the file's bytes at `[range.offset, range.offset +
+/// range.window_len)`: the counterpart of [`bounded_preview`]. Padding past the end-of-image marker
+/// is dropped, exactly as [`embedded_preview`] drops it.
+pub fn embedded_preview_from_range(window: &[u8], range: PreviewRange) -> Option<Vec<u8>> {
+    let preview = window.get(..usize::try_from(range.window_len).ok()?)?;
+    if !is_dct_jpeg(preview) {
+        return None;
+    }
+    Some(trim_eoi(preview).to_vec())
+}
+
+/// How many bytes of a raw file are enough for [`bounded_preview`]: every covered format keeps its
+/// preview pointer in a fixed header, well inside this.
+pub const PREVIEW_PREFIX: usize = 4096;
 
 /// The end of the DCT JPEG whose SOI is at `soi` (exclusive index after its EOI) and its component count,
 /// walking the marker segments and the entropy-coded data. `None` when it is not a complete, displayable

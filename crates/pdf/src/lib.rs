@@ -6,6 +6,8 @@
 
 #[cfg(feature = "crypt")]
 pub mod crypt;
+#[cfg(feature = "filters")]
+pub mod filters;
 #[cfg(feature = "interpret")]
 pub use hayro_interpret as interpret;
 mod link;
