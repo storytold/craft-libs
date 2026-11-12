@@ -169,8 +169,9 @@ type Caption = (f32, String, Vec2);
 ///   them the start edge; with no selection they make one at the marker, else the middle. Levels are bin positions.
 /// - **Stale:** a warning icon at the top trailing corner with a tooltip; as a [`StaleMark::Button`] it is a button.
 /// - **AccessKit:** one image named by the label, valued by [`value`](Histogram::value); the stale mark and each
-///   marker caption are named nodes, and a selection is two sliders, its start and its end, beneath the plot's node,
-///   with Increment and Decrement.
+///   marker caption are named nodes. A selectable plot has two sliders beneath its node, the selection's start and
+///   its end, with Increment and Decrement; with no selection shown they have no value, and a step makes one as the
+///   arrows do.
 ///
 /// The plot is a Tab stop only with a [`selection`](Histogram::selection) or a stale button.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
@@ -341,9 +342,12 @@ impl Component for Histogram<'_> {
             } else {
                 cx.part(PLOT, rect);
             }
-            let current = cx.value().copied().flatten();
-            if let Some(band) = current.and_then(|range| selection_band(rect, bins, range)) {
-                let [start, end] = selection_edges(band, geometry.marker_width);
+            // The edges are parts whenever the plot is selectable: with no selection shown they stand over the plot,
+            // and their nodes offer the step that makes one.
+            if selectable {
+                let current = cx.value().copied().flatten();
+                let band = current.and_then(|range| selection_band(rect, bins, range));
+                let [start, end] = band.map_or([rect, rect], |band| selection_edges(band, geometry.marker_width));
                 cx.part(START, start);
                 cx.part(END, end);
             }
@@ -424,7 +428,6 @@ impl Component for Histogram<'_> {
             return;
         }
         let rtl = cx.flow.is_rtl();
-        let middle = self.marker.unwrap_or(last / 2.0).round();
         while let Some((mv, mods)) = cx.intents().take_move() {
             // The plot is physical: Right is toward the last bin whatever the reading direction.
             let reading = match mv {
@@ -432,28 +435,25 @@ impl Component for Histogram<'_> {
                 NavMove::Back => -1.0,
                 _ => continue,
             };
-            let step = if rtl { -reading } else { reading };
-            let range = Self::current(cx).unwrap_or(LevelRange::new(middle, middle));
-            let moved = |level: f32| (level + step).clamp(0.0, last);
-            let next = if mods.extend { LevelRange::new(moved(range.start), range.end) } else { LevelRange::new(range.start, moved(range.end)) };
-            cx.set(Some(next));
+            let by = if rtl { -reading } else { reading };
+            cx.set(Some(self.stepped(Self::current(cx), mods.extend, by, last)));
         }
-        // A screen reader steps or sets one edge; a start is held at the end and an end at the start.
+        // A screen reader steps an edge as the arrows do, or sets one; a start is held at the end and an end at the
+        // start.
         while let Some(request) = cx.intents().take_access() {
             let Some(target) = request.target.filter(|target| target.key == START || target.key == END) else { continue };
-            let Some(range) = Self::current(cx) else { continue };
-            let start = target.key == START;
-            let edge = if start { range.start } else { range.end };
-            let wanted = match request.action {
-                AccessAction::Increment => edge + 1.0,
-                AccessAction::Decrement => edge - 1.0,
+            let by = match request.action {
+                AccessAction::Increment => 1.0,
+                AccessAction::Decrement => -1.0,
                 _ => continue,
             };
-            cx.set(Some(Self::edge_to(range, start, wanted, last)));
+            cx.set(Some(self.stepped(Self::current(cx), target.key == START, by, last)));
         }
         for start in [true, false] {
-            if let (Some(value), Some(range)) = (cx.intents().take_set_value_at(if start { START } else { END }), Self::current(cx)) {
-                cx.set(Some(Self::edge_to(range, start, value as f32, last)));
+            if let Some(value) = cx.intents().take_set_value_at(if start { START } else { END }) {
+                let level = value as f32;
+                let range = Self::current(cx).unwrap_or(LevelRange::new(level, level));
+                cx.set(Some(Self::edge_to(range, start, level, last)));
             }
         }
     }
@@ -464,7 +464,8 @@ impl Component for Histogram<'_> {
         }
         let words = cx.words::<HistogramWords>();
         let label = cx.resolved.label;
-        if let Some(range) = Self::current(cx).filter(|_| self.bins() > 0) {
+        if self.selectable() {
+            let range = Self::current(cx);
             let last = self.bins() as f32 - 1.0;
             for (word, start) in [(&words.selection_start, true), (&words.selection_end, false)] {
                 let node = access.node(if start { START } else { END }, Role::SLIDER);
@@ -473,8 +474,15 @@ impl Component for Histogram<'_> {
                 } else {
                     Name::Joined(vec![label.to_owned(), word.as_str().to_owned()])
                 };
-                let (value, low, high) = if start { (range.start, 0.0, range.end) } else { (range.end, range.start, last) };
-                node.numeric = Some(Numeric::new(f64::from(value), f64::from(low)..=f64::from(high)).step(1.0));
+                // With no selection shown (none, or one that differs) the edge has no value; a step makes one.
+                let numeric = match range {
+                    Some(range) => {
+                        let (value, low, high) = if start { (range.start, 0.0, range.end) } else { (range.end, range.start, last) };
+                        Numeric::new(f64::from(value), f64::from(low)..=f64::from(high))
+                    }
+                    None => Numeric::empty(0.0..=f64::from(last)),
+                };
+                node.numeric = Some(numeric.step(1.0));
             }
         }
         for (i, (_, text, _)) in self.shaped.iter().enumerate() {
@@ -532,6 +540,15 @@ impl Component for Histogram<'_> {
 }
 
 impl Histogram<'_> {
+    /// The selection after a step of one edge by `by` levels, the start edge when `start`: with no selection shown,
+    /// the step starts from one at the marker, else the middle.
+    fn stepped(&self, current: Option<LevelRange>, start: bool, by: f32, last: f32) -> LevelRange {
+        let middle = self.marker.unwrap_or(last / 2.0).round();
+        let range = current.unwrap_or(LevelRange::new(middle, middle));
+        let moved = |level: f32| (level + by).clamp(0.0, last);
+        if start { LevelRange::new(moved(range.start), range.end) } else { LevelRange::new(range.start, moved(range.end)) }
+    }
+
     /// `range` with one edge moved to `wanted`, whole, within the plot; the start is held at the end and the end at the
     /// start.
     fn edge_to(range: LevelRange, start: bool, wanted: f32, last: f32) -> LevelRange {
