@@ -12,7 +12,7 @@ use crate::runtime::commands::{FireSource, ResolvedCommand};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::overlay::{Align, Side};
-use craft_behavior::{HitLevel, HitPriority, IconId, Metrics, PartKey, PressPhase, Sense, Value};
+use craft_behavior::{HitLevel, HitPriority, IconId, Metrics, PartKey, PointerButton, PressPhase, Sense, Value};
 use egui::{Rect, Response, Vec2};
 
 #[cfg(feature = "testing")]
@@ -94,8 +94,8 @@ struct Laid {
 
 /// One rail button that may stand for a group of tools. The face shows the tool `shown` with a mark at the corner
 /// when there is a flyout. A click, Enter or Space selects the shown tool and runs its command; holding the press,
-/// a right click or Alt+Down opens the flyout; a press on the corner mark opens it at once, and releasing over a
-/// row picks it. Rows are the tools' commands, the shown tool with the radio mark. A hold selects the shown tool
+/// dragging it away from the button, a right click or Alt+Down opens the flyout; a press on the corner mark opens it
+/// at once; after a press that opened it, releasing over a row picks it. Rows are the tools' commands, the shown tool with the radio mark. A hold selects the shown tool
 /// unless `hold_selects` is off, as for a command button.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(overlay, probe(FlyoutButton<'static, u8>))]
@@ -184,8 +184,9 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
         cx.face(self.face(&laid, cx.resolved.selected == Some(true)))
     }
 
+    /// A button that is edited is dragged; one with a flyout senses a drag away from it, which opens the flyout.
     fn sense(&self) -> Sense {
-        if self.edit.is_some() { Sense::CLICK | Sense::FOCUS | Sense::DRAG } else { Sense::CLICK | Sense::FOCUS }
+        if self.edit.is_some() || self.has_flyout() { Sense::CLICK | Sense::FOCUS | Sense::DRAG } else { Sense::CLICK | Sense::FOCUS }
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
@@ -224,6 +225,15 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
             let menu = cx.popup("menu");
             menu.trigger(Trigger::Hold, cx);
             menu.trigger(Trigger::Context, cx);
+            let away = match cx.press().phase {
+                PressPhase::DragStart { start, pos } | PressPhase::Drag { start, pos, .. } => {
+                    start.button == PointerButton::Primary && !cx.rect.contains(pos)
+                }
+                _ => false,
+            };
+            if away && !menu.is_open(cx) {
+                menu.open(cx);
+            }
             open = menu.is_open(cx);
         }
         let pressing = cx.press().phase.is_press();
