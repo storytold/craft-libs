@@ -668,6 +668,7 @@ fn usual_script(language: &str) -> Option<&'static str> {
         "az" | "bs" | "ha" | "ku" | "ms" | "uz" => "latn",
         "ks" | "sd" | "ug" => "arab",
         "pa" => "guru",
+        "mnw" => "mymr",
         _ => return None,
     })
 }
@@ -696,15 +697,26 @@ fn bare(code: &str) -> Locale {
 /// (zero, one, two, few, many, other): one `@plural` form each. The rules are looked up by
 /// language alone: CLDR's parent of `sr-Latn` and `zh-Hant` is the root, whose only category is
 /// `other`. CLDR's `pt` is Brazilian (0 is singular), so Portuguese other than `pt-br` takes
-/// `pt-PT`'s. `None` for a language CLDR has no plural rules for.
+/// `pt-PT`'s. Mon uses an explicit one-form override until CLDR supplies its rules.
+/// `None` for other languages CLDR has no plural rules for.
 fn plural_rules(code: &str) -> Option<(PluralRules, Vec<PluralCategory>)> {
     let id = IcuLocale::try_from_str(code).ok()?.id;
     let language = id.language.as_str();
-    if !data::PLURAL_LANGUAGES.contains(&language) {
+    if language != "mnw" && !data::PLURAL_LANGUAGES.contains(&language) {
         return None;
     }
     let brazil = id.region.is_some_and(|r| r.as_str() == "BR");
-    let locale = IcuLocale::try_from_str(if language == "pt" && !brazil { "pt-PT" } else { language }).ok()?;
+    // Mon count labels use one form, confirmed by native contributor @TaoMonLae
+    // (storytold/craft-i18n#263). CLDR has no mnw entry: reuse root's other-only
+    // rule without labeling Mon as Burmese or editing generated CLDR data.
+    let rule_locale = if language == "mnw" {
+        "und"
+    } else if language == "pt" && !brazil {
+        "pt-PT"
+    } else {
+        language
+    };
+    let locale = IcuLocale::try_from_str(rule_locale).ok()?;
     let rules = PluralRules::try_new_cardinal_with_buffer_provider(data::provider()?, (&locale).into()).ok()?;
     let mut categories = Vec::new();
     for n in 0..=1000_u32 {
@@ -1182,6 +1194,41 @@ mod tests {
             assert_eq!(plural_rules(locale).map(|(_, c)| c.len()), Some(n), "{locale}");
         }
         assert!(plural_rules("tlh").is_none(), "no CLDR rules");
+    }
+
+    #[test]
+    fn mon_counts_use_one_form() {
+        let (i, problems) = I18n::new(&[("mnw", "@plural\t{n} page|{n} pages\t{n} မုက်လိက်\n", "")], &["mnw"]);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(i.check_all().is_empty());
+        let mon = i.from_code("mnw").expect("Mon catalog");
+        for n in 0..=1000 {
+            assert_eq!(i.trn_plain(mon, n, "{n} page", "{n} pages"), format!("{n} မုက်လိက်"));
+        }
+        i.set_format(Format::from_tag("my-MM"));
+        for (n, want) in [(0, "၀ မုက်လိက်"), (1, "၁ မုက်လိက်"), (2, "၂ မုက်လိက်"), (5, "၅ မုက်လိက်")]
+        {
+            assert_eq!(i.trn(mon, n, "{n} page", "{n} pages"), want);
+        }
+        for tag in ["mnw", "mnw-MM", "mnw-TH", "mnw-Mymr-MM"] {
+            assert_eq!(plural_rules(tag).map(|(_, c)| c), Some(vec![PluralCategory::Other]), "{tag}");
+        }
+        let (invalid, _) = I18n::new(&[("mnw", "@plural\t{n} page|{n} pages\t{n} a|{n} b\n", "")], &["mnw"]);
+        assert!(!invalid.check_all().is_empty(), "two forms are rejected");
+    }
+
+    #[test]
+    fn mon_locale_matching_preserves_the_requested_script() {
+        let (i, _) = I18n::new(&[("mnw", "@id\tlanguage.name\tဘာသာမန်\n\tSave\tဂိုၚ်စွံ\n", "")], &["mnw"]);
+        for tag in ["mnw", "MNW", "mnw-MM", "mnw-TH", "mnw_MM.UTF-8", "mnw-Mymr-MM"] {
+            let mon = i.match_tag(tag).expect("Mon locale");
+            assert_eq!(i.code(mon), "mnw", "{tag}");
+            assert_eq!(i.t(mon, "Save"), "ဂိုၚ်စွံ");
+            assert!(!i.rtl(mon));
+        }
+        for tag in ["mn", "mon", "my", "mnw-Latn", "mnw_MM@latin"] {
+            assert_eq!(i.match_tag(tag), None, "{tag}");
+        }
     }
 
     #[test]

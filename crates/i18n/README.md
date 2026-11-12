@@ -73,7 +73,11 @@ The app keeps its `tl!` macro, its language setting (`"auto"` → `I18N.system_l
   never reach takes the `few` form if there is one (Russian and Ukrainian decimals, `1,5 файла`),
   else the last. Rules are per language, so `sr-latn` and `zh-hant` take `sr`'s and `zh`'s. CLDR's
   `pt` is Brazilian, so `pt` uses `pt-PT`'s rules (0 is plural) and `pt-br` `pt`'s. A language
-  CLDR has no plural rules for shows English forms.
+  CLDR has no plural rules for shows English forms, except Mon (`mnw`): an explicit
+  one-form (`other`) override uses the root rule. Native contributor @TaoMonLae confirmed
+  the same wording for 0, 1, 2 and 5 pages in storytold/craft-i18n#263. Mon uses Myanmar
+  script (`Mymr`), left to right; an explicit script subtag still wins. Number glyphs
+  continue to follow the separately selected formatting region, not the interface language.
 - **Names:** a language's name comes from the app catalog's `@id language.name` row, else the
   shared catalog's, else its code; English is "English".
 - **Scripts and direction:** for any language tag, `scripts` lists the ISO 15924 scripts its
