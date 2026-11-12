@@ -226,3 +226,42 @@ fn a_double_click_on_a_thumbnail_activates_it_once() {
     let named = take(&app);
     assert!(thumb_activations(&named).is_empty(), "a double click on the name is no thumbnail activation: {named:?}");
 }
+
+/// A double click whose two clicks arrive in one frame, on a Smart Filter row of a smart object that is not active,
+/// selects the row and then activates it, as two clicks in two frames do.
+#[trial]
+fn a_double_click_in_one_frame_selects_a_smart_filter_row_and_activates_it() {
+    let (mut fixture, app) = rig(tree());
+    take(&app);
+    let filter = node(&fixture, "Gaussian Blur").center();
+    fixture.frame(vec![pointer::moved(filter)]).idle(1);
+    fixture.frame(vec![pointer::press(filter), pointer::release(filter), pointer::press(filter), pointer::release(filter)]).settle();
+    let row = LayerRowKey::Filters(SMART, Some(0));
+    let events = take(&app);
+    let selected = events.iter().position(|event| matches!(event, LayersEvent::Select(select) if select.row.as_ref() == Some(&row)));
+    let activated = events.iter().position(|event| matches!(event, LayersEvent::Activate { row: on, on: ActivateOn::Row, .. } if *on == row));
+    assert!(selected.is_some() && activated.is_some() && selected < activated, "selected, then activated: {events:?}");
+}
+
+/// A Smart Filter row dragged onto another smart object's row moves the filter there, with the active layer changing to
+/// the filter's smart object when the press selects its row.
+#[trial]
+fn a_smart_filter_row_dragged_onto_another_smart_object_moves_there() {
+    let mut tree = tree();
+    let other = tree.add(None, LayerInfo::new("Other Smart Object", LayerKind::SmartObject), false);
+    let (mut fixture, app) = rig(tree);
+    take(&app);
+    let from = node(&fixture, "Gaussian Blur").center();
+    let onto = node(&fixture, "Other Smart Object").rect;
+    let to = egui::pos2(onto.center().x, onto.bottom() - onto.height() / 4.0);
+    fixture.drag_hold_at(from, to - from).release_at(to).idle(2);
+    let events = take(&app);
+    let transfers: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            LayersEvent::Drop(EditEvent::Set { after: LayerDrop::Transfer(t), .. }) => Some((t.rows.clone(), t.to, t.copy)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(transfers, [(vec![LayerRowKey::Filters(SMART, Some(0))], other, false)], "{events:?}");
+}

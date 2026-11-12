@@ -443,9 +443,24 @@ struct Open<T> {
     abandoned: bool,
     /// A pass reported the press: later passes within slop report `Held`, not `Down`.
     reported: bool,
-    /// Where the button went up, when it did in the pass the drag started. That pass reports `DragStart` and the
-    /// next one the release, so every part reads a drag's start before its end.
-    released_at: Option<Pos2>,
+    /// A pass reported the drag's start: later passes report `Drag`.
+    drag_reported: bool,
+    /// Where the button went up and whether that was a click, when it did in a pass that still owed the press's `Down`
+    /// or `DragStart`. That pass reports the owed phase and a later one the release, so every part reads a press's
+    /// phases in order, one per pass.
+    released_at: Option<(Pos2, bool)>,
+}
+
+impl<T> Open<T> {
+    /// A phase before the release is still to be reported.
+    fn owes_phase(&self) -> bool {
+        !self.reported || (self.dragging && !self.drag_reported)
+    }
+
+    /// A release now is a click.
+    fn clicks(&self) -> bool {
+        !self.dragging && !self.abandoned && self.sense.contains(Sense::CLICK)
+    }
 }
 
 /// The press lifecycle of one root: the press winner it picked, kept until release or cancel.
@@ -485,13 +500,13 @@ impl<T: Copy> PressMachine<T> {
     /// when no shape of this root takes the press.
     pub fn step(&mut self, input: PassInput<'_>, mut pick: impl FnMut(Pos2) -> Option<(T, Sense)>) -> PressStep<T> {
         let mut pos = input.pos;
-        let mut drag_started = false;
         let mut released: Option<(T, PressStart, Pos2, bool, bool)> = None;
         let mut cancelled: Option<(T, PressStart, PressCancel)> = None;
         if let Some(open) = self.open
-            && let Some(at) = open.released_at
+            && let Some((at, click)) = open.released_at
+            && !open.owes_phase()
         {
-            released = Some((open.target, open.start, at, true, false));
+            released = Some((open.target, open.start, at, open.dragging, click));
             self.open = None;
         }
         if let (Some(reason), Some(open)) = (input.cancel, self.open) {
@@ -503,13 +518,13 @@ impl<T: Copy> PressMachine<T> {
                 PointerEvent::Moved(at) => {
                     pos = at;
                     if let Some(open) = &mut self.open
+                        && open.released_at.is_none()
                         && !open.dragging
                         && !open.abandoned
                         && at.distance(open.start.origin) > input.slop
                     {
                         if open.sense.contains(Sense::DRAG) {
                             open.dragging = true;
-                            drag_started = true;
                         } else {
                             open.abandoned = true;
                         }
@@ -524,9 +539,9 @@ impl<T: Copy> PressMachine<T> {
                     pos = at;
                     // A release held for the next pass gives way to a new press; it ends in this pass.
                     if let Some(open) = self.open
-                        && let Some(up) = open.released_at
+                        && let Some((up, click)) = open.released_at
                     {
-                        released = Some((open.target, open.start, up, true, false));
+                        released = Some((open.target, open.start, up, open.dragging, click));
                         self.open = None;
                     }
                     // A middle or secondary press captures for a drag (a canvas pan, a drag with the secondary button) and
@@ -556,9 +571,9 @@ impl<T: Copy> PressMachine<T> {
                             dragging: false,
                             abandoned: false,
                             reported: false,
+                            drag_reported: false,
                             released_at: None,
                         });
-                    drag_started = false;
                 }
                 PointerEvent::Released { button, pos: at } => {
                     pos = at;
@@ -566,12 +581,11 @@ impl<T: Copy> PressMachine<T> {
                         continue;
                     }
                     if let Some(open) = &mut self.open
-                        && drag_started
+                        && open.owes_phase()
                     {
-                        open.released_at = Some(at);
+                        open.released_at = Some((at, open.clicks()));
                     } else if let Some(open) = self.open.take() {
-                        let click = !open.dragging && !open.abandoned && open.sense.contains(Sense::CLICK);
-                        released = Some((open.target, open.start, at, open.dragging, click));
+                        released = Some((open.target, open.start, at, open.dragging, open.clicks()));
                     }
                 }
             }
@@ -594,17 +608,18 @@ impl<T: Copy> PressMachine<T> {
             };
         }
         let Some(open) = self.open.as_mut() else { return PressStep::default() };
-        let phase = if drag_started {
+        let phase = if !open.reported {
+            PressPhase::Down { start: open.start }
+        } else if open.dragging && !open.drag_reported {
+            open.drag_reported = true;
             PressPhase::DragStart { start: open.start, pos }
         } else if open.dragging {
             PressPhase::Drag { start: open.start, pos, delta: input.delta }
-        } else if open.reported {
-            PressPhase::Held { start: open.start }
         } else {
-            PressPhase::Down { start: open.start }
+            PressPhase::Held { start: open.start }
         };
         open.reported = true;
-        PressStep { target: Some(open.target), phase: Some(phase), dragging: open.dragging, activated: None }
+        PressStep { target: Some(open.target), phase: Some(phase), dragging: open.drag_reported, activated: None }
     }
 }
 
@@ -638,5 +653,38 @@ mod tests {
         assert!(matches!(step.phase, Some(PressPhase::Held { .. })), "and stays open");
         let step = pass(&mut machine, &[PointerEvent::released(pos2(0.0, 0.0))], Sense::CLICK);
         assert_eq!(step.activated, Some(1));
+    }
+
+    /// The phases a sequence of passes reports, as `D`own, `H`eld, `S` (drag start), `G` (drag), `R`elease with `!` for an
+    /// activation, `-` for none.
+    fn phases(passes: &[&[PointerEvent]], sense: Sense) -> String {
+        let mut machine = PressMachine::new();
+        passes
+            .iter()
+            .map(|events| {
+                let step = pass(&mut machine, events, sense);
+                match step.phase {
+                    Some(PressPhase::Down { .. }) => "D",
+                    Some(PressPhase::Held { .. }) => "H",
+                    Some(PressPhase::DragStart { .. }) => "S",
+                    Some(PressPhase::Drag { .. }) => "G",
+                    Some(PressPhase::Release { .. }) if step.activated.is_some() => "R!",
+                    Some(PressPhase::Release { .. }) => "R",
+                    _ => "-",
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[test]
+    fn two_clicks_whose_passes_share_a_release_and_a_press_report_every_phase_in_order() {
+        let up = PointerEvent::released(pos2(0.0, 0.0));
+        let second = press(0.0, 1.1);
+        assert_eq!(phases(&[&[press(0.0, 1.0)], &[up, second], &[up], &[]], Sense::CLICK), "D R! D R!");
+        // The second press's drag starts in the pass that owes its Down, and the button goes up there too.
+        let far = PointerEvent::Moved(pos2(40.0, 0.0));
+        let passes: [&[PointerEvent]; 5] = [&[press(0.0, 1.0)], &[up, second], &[far, up], &[], &[]];
+        assert_eq!(phases(&passes, Sense::CLICK | Sense::DRAG), "D R! D S R");
     }
 }
