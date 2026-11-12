@@ -11,10 +11,13 @@ file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` dow
 hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
 holds `upstream_revision`. `local_patches` describes each local change.
 
+The two patched files are `src/sweep/sweep_line.rs` and `examples/visualize_op.rs`.
+
 ## Local changes
 
 | Change | Code comment label | Touches | Tests |
 |---|---|---|---|
+| The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out | `Craft patch (exited slots)` | `src/sweep/sweep_line.rs` | |
 | The `visualize_op` example draws its two input paths with `fill-rule="evenodd"`, the fill rule its operation uses | `Craft patch (example fill rule)` | `examples/visualize_op.rs` | `inputs_are_drawn_with_the_operation_fill_rule`, `svg_fill_rule_names` |
 
 Every change here updates this table and `SOURCE.json` in the same commit. To take a new linesweeper

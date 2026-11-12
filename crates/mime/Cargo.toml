@@ -1,0 +1,27 @@
+[package]
+name = "craft-mime"
+description = "Internet messages and MIME: RFC 5322 headers, RFC 2045-2049 parts, encoded words, RFC 2231 parameters, transfer encodings, mbox and multipart/related lookups, read and written."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The DOS code pages (IBM437, IBM850…), which the WHATWG standard leaves out.
+craft-codepage = { workspace = true }
+encoding_rs = { workspace = true }
+# Private: the weekday of a written date and whether a read date exists. Not in the public API.
+chrono = { workspace = true }
+# `detect`: the encoding unlabelled bytes look like (Firefox's detector). Apache-2.0 OR MIT.
+chardetng = { version = "1", optional = true }
+
+[features]
+# `detect`: is this text, and in which encoding, for bytes that name none.
+detect = ["dep:chardetng"]
+
+[dev-dependencies]
+proptest = { workspace = true }
