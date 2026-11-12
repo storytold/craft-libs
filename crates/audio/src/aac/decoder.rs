@@ -85,6 +85,9 @@ pub struct Decoder {
     sbr_seen: bool,
     /// The SBR decoder of each layout entry, when output is at twice the core rate.
     sbr_out: Option<Vec<sbr::Element>>,
+    /// The layout `sbr_out` was built for. Kept apart from `layout`, so that an access unit whose
+    /// new program config fails (and whose layout is put back) leaves the SBR history alone.
+    sbr_layout: Vec<(ElementType, u8)>,
 }
 
 impl Decoder {
@@ -121,6 +124,7 @@ impl Decoder {
             scratch: Scratch::new(),
             sbr_seen: false,
             sbr_out: None,
+            sbr_layout: Vec::new(),
         };
         d.set_layout(layout);
         Ok(d)
@@ -135,10 +139,6 @@ impl Decoder {
         }
         self.layout = layout;
         self.offsets = offsets;
-        // the SBR decoders' history belongs to the old element order: `apply_sbr` rebuilds them
-        if let Some(e) = self.sbr_out.as_mut() {
-            e.clear();
-        }
         self.channels = vec![ChannelState { overlap: vec![0.0; 1024], prev_shape: WindowShape::Sine }; n];
     }
 
@@ -214,10 +214,11 @@ impl Decoder {
         let Some(elements) = self.sbr_out.as_mut() else {
             return pcm;
         };
-        // a new layout (a program config element) starts the SBR decoders afresh
-        let fits = elements.len() == self.layout.len() && elements.iter().zip(&self.layout).all(|(e, l)| e.channels() == l.0.channels());
-        if !fits {
+        // a new layout (a program config element) starts the SBR decoders afresh: their history
+        // belongs to the old element order, even where the channel counts match
+        if elements.len() != self.layout.len() || self.sbr_layout != self.layout {
             *elements = self.layout.iter().map(|l| sbr::Element::new(l.0.channels(), rate)).collect();
+            self.sbr_layout.clone_from(&self.layout);
         }
         let mut out = Vec::with_capacity(pcm.len());
         for (i, e) in elements.iter_mut().enumerate() {
@@ -704,26 +705,7 @@ mod tests {
     /// its SBR fill element describes is there; with SBR off, the core alone (silence).
     #[test]
     fn sbr_fill_elements_rebuild_the_high_band() {
-        let payload = sbr::test_payload(44_100, |_| 40, |_| 0).unwrap();
-        let mut bw = BitWriter::new();
-        bw.write_bits(ID_SCE, 3);
-        bw.write_bits(0, 4);
-        bw.write_bits(0, 8 + 11 + 3); // global_gain, ics_info (max_sfb 0), no pulse/TNS/gain control
-        bw.write_bits(ID_FIL, 3);
-        let count = (4 + 8 * payload.len()).div_ceil(8);
-        if count < 15 {
-            bw.write_bits(count as u32, 4);
-        } else {
-            bw.write_bits(15, 4);
-            bw.write_bits((count - 14) as u32, 8);
-        }
-        bw.write_bits(EXT_SBR_DATA, 4);
-        for &b in &payload {
-            bw.write_bits(u32::from(b), 8);
-        }
-        bw.write_bits(0, 4);
-        bw.write_bits(ID_END, 3);
-        let au = bw.finish();
+        let au = sbr_au(0);
         // AAC-LC, 22.05 kHz, mono
         let asc = AudioSpecificConfig::lc(7, 1);
         let mut dec = Decoder::from_config(asc.clone()).unwrap();
@@ -740,11 +722,62 @@ mod tests {
         assert_eq!(out.len(), 4 * 2048);
         let rms = (out[2048..].iter().map(|s| s * s).sum::<f32>() / (out.len() - 2048) as f32).sqrt();
         assert!(rms > 1e-4, "{rms}");
-        // a new layout drops the SBR decoders (their history is the old element order's) and
-        // keeps SBR on
-        dec.set_layout(vec![(ElementType::Sce, 0)]);
-        assert_eq!(dec.sbr_out.as_ref().map(Vec::len), Some(0));
-        assert_eq!(dec.decode(&au).unwrap()[0].len(), 2048);
+    }
+
+    /// A program config that changes the layout restarts the SBR decoders, even where the
+    /// channel counts match, and one in an access unit that fails leaves their history alone: the
+    /// access units after it decode as if it had not been there.
+    #[test]
+    fn a_new_layout_restarts_sbr_and_a_failed_one_keeps_it() {
+        let au = sbr_au(0);
+        let one = ProgramConfig { front: vec![(false, 0)], ..Default::default() };
+        let six = ProgramConfig { front: vec![(false, 0), (true, 0)], back: vec![(true, 1)], lfe: vec![0], ..Default::default() };
+        let decoder = || {
+            let mut d = Decoder::from_config(AudioSpecificConfig { pce: Some(one.clone()), ..AudioSpecificConfig::lc(7, 0) }).unwrap();
+            d.set_sbr(true);
+            d
+        };
+        let (mut kept, mut failed) = (decoder(), decoder());
+        for _ in 0..3 {
+            assert_eq!(kept.decode(&au).unwrap(), failed.decode(&au).unwrap());
+        }
+        // the new layout's elements are missing from this access unit
+        assert!(failed.decode(&silent_au(Some(&six), &[(ID_SCE, 0)])).is_err());
+        for _ in 0..2 {
+            assert_eq!(kept.decode(&au).unwrap(), failed.decode(&au).unwrap());
+        }
+        // the same channel count under another tag is a new layout: the SBR decoder starts over,
+        // as in a decoder that had that layout from the start
+        let tag1 = ProgramConfig { front: vec![(false, 1)], ..Default::default() };
+        let mut fresh = Decoder::from_config(AudioSpecificConfig { pce: Some(tag1.clone()), ..AudioSpecificConfig::lc(7, 0) }).unwrap();
+        fresh.set_sbr(true);
+        kept.set_layout(tag1.layout());
+        assert_eq!(kept.decode(&sbr_au(1)).unwrap(), fresh.decode(&sbr_au(1)).unwrap());
+    }
+
+    /// One access unit of SCE `tag` with an SBR fill element of [`sbr::test_payload`] (44.1 kHz
+    /// output).
+    fn sbr_au(tag: u32) -> Vec<u8> {
+        let payload = sbr::test_payload(44_100, |_| 40, |_| 0).unwrap();
+        let mut bw = BitWriter::new();
+        bw.write_bits(ID_SCE, 3);
+        bw.write_bits(tag, 4);
+        bw.write_bits(0, 8 + 11 + 3); // global_gain, ics_info (max_sfb 0), no pulse/TNS/gain control
+        bw.write_bits(ID_FIL, 3);
+        let count = (4 + 8 * payload.len()).div_ceil(8);
+        if count < 15 {
+            bw.write_bits(count as u32, 4);
+        } else {
+            bw.write_bits(15, 4);
+            bw.write_bits((count - 14) as u32, 8);
+        }
+        bw.write_bits(EXT_SBR_DATA, 4);
+        for &b in &payload {
+            bw.write_bits(u32::from(b), 8);
+        }
+        bw.write_bits(0, 4);
+        bw.write_bits(ID_END, 3);
+        bw.finish()
     }
 
     /// An access unit whose elements are all empty: `elements` are (id, tag), then ID_END.
