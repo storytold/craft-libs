@@ -28,10 +28,9 @@ and the work is linear.
 
 ## Math
 
-`latex_to_linear` and `linear_to_latex` convert the math of a document to and from the linear
-format equations are kept in, as text, keeping the source's spacing. craft-math converts the same
-two syntaxes through its equation tree. These are two converters for one pair of syntaxes, and
-which one documents should use is an open question; this crate keeps WordCraft's choice.
+A document's math is converted to and from the linear format equations are kept in by
+`craft_math::latex_text` (re-exported here as `latex_to_linear` and `linear_to_latex`), which works
+on the text and keeps the source's spacing.
 
 Moved from WordCraft (`crates/formats/src/latex`, `07f97737`) with its tests and the LaTeX parts
 of its cross-format tests.

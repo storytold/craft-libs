@@ -1,4 +1,9 @@
-use super::limits::MAX_NEST;
+//! LaTeX math and the linear format converted as text, keeping the source's spacing: for LaTeX
+//! documents, whose math should read back as it was written. [`crate::math_latex`] converts the
+//! same two syntaxes through the equation tree.
+
+/// Nesting limit for groups and arguments (hostile input).
+const MAX_NEST: usize = 32;
 
 // ---------------------------------------------------------------------------------------------
 // Equations: WordCraft keeps them in the linear format (`x=(-b±√(b^2-4ac))/2a`).
@@ -564,4 +569,61 @@ fn math_seq(t: &[MTok], pos: &mut usize, depth: usize, in_opt: bool) -> String {
         *pos += 1;
     }
     o
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn math_conversions() {
+        for (tex, linear) in [
+            (r"\frac{1}{2}", "1/2"),
+            (r"x_{i}^{2}", "x_i^2"),
+            (r"x^{10}", "x^10"),
+            (r"e^{i\pi}", "e^(iπ)"),
+            (r"\sqrt[3]{x}", "√(3&x)"),
+            (r"\left( a \right)", "( a )"),
+            (r"\sin x + \text{if } y", "sin x + if y"),
+            (r"a \cdot b \times c \neq d", "a ⋅ b × c ≠ d"),
+            (r"a \bullet b", "a • b"),
+            (r"x \top y \bot z", "x ⊤ y ⊥ z"),
+            (r"f \colon X \to Y", "f : X → Y"),
+            (r"\hbar \hslash", "ℏ ℏ"),
+            (r"\bm{v}", "v"),
+            (r"\acute{x} \grave{y} \breve{z} \check{w}", "x́ ỳ z̆ w̌"),
+            (r"a \equiv b \pmod{m}", "a ≡ b (mod m)"),
+            (r"a \bmod b", "a mod b"),
+            (r"\unknowncmd", r"\unknowncmd"),
+        ] {
+            assert_eq!(latex_to_linear(tex), linear, "{tex}");
+        }
+        for (linear, tex) in [
+            ("x=(-b±√(b^2-4ac))/(2a)", r"x=\frac{-b\pm\sqrt{b^2-4ac}}{2a}"),
+            ("α ≤ β", r"\alpha \leq \beta"),
+            ("αβ", r"\alpha\beta"),
+            ("πr", r"\pi r"),
+            ("a • b", r"a \bullet b"),
+            ("x ⊤ y", r"x \top y"),
+            ("a_(i+1)", r"a_{i+1}"),
+            ("50% & #", r"50\% \& \#"),
+            ("√(3&x)", r"\sqrt[3]{x}"),
+        ] {
+            assert_eq!(linear_to_latex(linear), tex, "{linear}");
+        }
+    }
+
+    /// Unmatched and deeply nested groups convert in linear time; nothing the text says becomes a
+    /// TeX command (from WordCraft's cross-format tests).
+    #[test]
+    fn hostile_math_is_linear_and_carries_no_commands() {
+        assert_eq!(linear_to_latex(&"(".repeat(200_000)).len(), 200_000);
+        let nested = format!("{}x{}", "(".repeat(100_000), ")".repeat(100_000));
+        assert_eq!(linear_to_latex(&nested).len(), 200_001);
+        let tex = linear_to_latex("\\input secret.txt \\immediate\\write18");
+        assert!(!tex.contains("\\input") && !tex.contains("\\write") && tex.contains("\\backslash input"), "{tex}");
+        for linear in ["a^^5cinput", "x^(^^5cinput)"] {
+            assert!(!linear_to_latex(linear).contains("^^"), "{linear}");
+        }
+    }
 }

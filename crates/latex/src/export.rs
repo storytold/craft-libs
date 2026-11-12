@@ -1,5 +1,5 @@
-use super::math::linear_to_latex;
 use super::{Align, Cell, Document, FBlock, FTable, Fmt, Inline, Kind, Para, Rgb, model};
+use craft_math::latex_text::linear_to_latex;
 
 /// Text width of the exported article in points (`\linewidth` when reading widths).
 pub(super) const LINE_WIDTH: f32 = 345.0;

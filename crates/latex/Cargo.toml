@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 craft-flow = { workspace = true }
+craft-math = { workspace = true }
 # Text that names no encoding: BOM, UTF-16, UTF-8, else the legacy encoding it looks like.
 craft-mime = { workspace = true, features = ["detect"] }
 craft-wordmodel = { workspace = true }

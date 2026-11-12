@@ -68,6 +68,7 @@ craft-audio = { path = "crates/audio" }
 # No default features, so craft-audio's `encode` builds craft-media without `isobmff`.
 craft-latex = { path = "crates/latex" }
 craft-markdown = { path = "crates/markdown" }
+craft-math = { path = "crates/math" }
 craft-media = { path = "crates/media", default-features = false }
 craft-media-testkit = { path = "crates/media-testkit" }
 craft-midi = { path = "crates/midi" }

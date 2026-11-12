@@ -54,13 +54,27 @@ fn latex_export_carries_no_commands_from_the_document() {
     assert!(!out.contains("\\input") && !out.contains("^^"), "{out}");
 }
 
+/// The fastest of three reads of `src`.
+fn fastest(src: &str) -> Duration {
+    (0..3)
+        .map(|_| {
+            let started = Instant::now();
+            assert!(import(src.as_bytes()).body.len() <= 2);
+            started.elapsed()
+        })
+        .min()
+        .unwrap_or_default()
+}
+
+/// Labels in a row are read in linear time: four times as many take well under the sixteen times
+/// as long a quadratic read would (a ratio, so a busy machine does not fail it).
 #[test]
 fn latex_labels_in_a_row_are_read_in_linear_time() {
-    let started = Instant::now();
-    for src in ["\\label{a} ".repeat(100_000) + "x", "\\label{a}".repeat(100_000) + "x", "\\hypertarget{a}{} ".repeat(100_000)] {
-        assert!(import(src.as_bytes()).body.len() <= 2);
+    let cases: [fn(usize) -> String; 3] = [|n| "\\label{a} ".repeat(n) + "x", |n| "\\label{a}".repeat(n) + "x", |n| "\\hypertarget{a}{} ".repeat(n)];
+    for make in cases {
+        let (small, large) = (fastest(&make(25_000)), fastest(&make(100_000)));
+        assert!(large < small * 8 + Duration::from_millis(50), "{small:?} for 25,000, {large:?} for 100,000");
     }
-    assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
     let d = import("\\label{one}First \\label{two}second \\label{three}third.".as_bytes());
     let p = d.para_at(&craft_wordmodel::Pos::body(0, 0)).unwrap();
     let names: Vec<&str> = p

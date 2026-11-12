@@ -201,6 +201,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   README for formats and features.
 - [`craft-latex`](crates/latex/README.md): LaTeX documents read (the everyday subset) and written (a standalone article), to and from the craft-flow model.
 - [`craft-markdown`](crates/markdown/README.md): Markdown read and written (a CommonMark subset with GitHub tables and strikethrough), to and from the craft-flow model.
+- [`craft-math`](crates/math/README.md): equations as one tree (the Office Math object model) with its syntaxes, read and written: OMML, presentation MathML, LaTeX math and the UnicodeMath linear format.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
   (`isobmff`), Matroska/WebM (`matroska`) and MXF (`mxf`) demuxers and muxers, Ogg (`ogg`), AVI (`avi`) and
   MPEG-TS/PS (`mpegts`) demuxers, from FilmCraft, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and

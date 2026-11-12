@@ -241,44 +241,6 @@ fn fragments_without_a_document_environment() {
 }
 
 #[test]
-fn math_conversions() {
-    for (tex, linear) in [
-        (r"\frac{1}{2}", "1/2"),
-        (r"x_{i}^{2}", "x_i^2"),
-        (r"x^{10}", "x^10"),
-        (r"e^{i\pi}", "e^(iπ)"),
-        (r"\sqrt[3]{x}", "√(3&x)"),
-        (r"\left( a \right)", "( a )"),
-        (r"\sin x + \text{if } y", "sin x + if y"),
-        (r"a \cdot b \times c \neq d", "a ⋅ b × c ≠ d"),
-        (r"a \bullet b", "a • b"),
-        (r"x \top y \bot z", "x ⊤ y ⊥ z"),
-        (r"f \colon X \to Y", "f : X → Y"),
-        (r"\hbar \hslash", "ℏ ℏ"),
-        (r"\bm{v}", "v"),
-        (r"\acute{x} \grave{y} \breve{z} \check{w}", "x́ ỳ z̆ w̌"),
-        (r"a \equiv b \pmod{m}", "a ≡ b (mod m)"),
-        (r"a \bmod b", "a mod b"),
-        (r"\unknowncmd", r"\unknowncmd"),
-    ] {
-        assert_eq!(latex_to_linear(tex), linear, "{tex}");
-    }
-    for (linear, tex) in [
-        ("x=(-b±√(b^2-4ac))/(2a)", r"x=\frac{-b\pm\sqrt{b^2-4ac}}{2a}"),
-        ("α ≤ β", r"\alpha \leq \beta"),
-        ("αβ", r"\alpha\beta"),
-        ("πr", r"\pi r"),
-        ("a • b", r"a \bullet b"),
-        ("x ⊤ y", r"x \top y"),
-        ("a_(i+1)", r"a_{i+1}"),
-        ("50% & #", r"50\% \& \#"),
-        ("√(3&x)", r"\sqrt[3]{x}"),
-    ] {
-        assert_eq!(linear_to_latex(linear), tex, "{linear}");
-    }
-}
-
-#[test]
 fn equations_survive_a_round_trip() {
     let mut d = Document::new();
     let mut p = craft_wordmodel::Paragraph::with_text("Area ", Default::default());

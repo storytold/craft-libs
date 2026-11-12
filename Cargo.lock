@@ -1289,6 +1289,7 @@ version = "0.1.0"
 dependencies = [
  "craft-flow",
  "craft-markdown",
+ "craft-math",
  "craft-mime",
  "craft-wordmodel",
  "proptest",
@@ -1309,6 +1310,16 @@ dependencies = [
  "craft-flow",
  "craft-html",
  "craft-wordmodel",
+]
+
+[[package]]
+name = "craft-math"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
