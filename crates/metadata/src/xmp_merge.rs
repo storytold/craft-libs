@@ -465,21 +465,36 @@ mod tests {
     #[test]
     fn many_attributes_scan_in_linear_time() {
         // quick-xml's duplicate-name check compares each attribute with all earlier ones: 200 000 attributes on
-        // one description took over 20 s to scan, about 30 ms with the set
-        let n = 200_000;
-        let mut s = String::from(
-            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
-             <rdf:Description rdf:about=\"\" xmlns:foo=\"http://example.com/foo/\"",
-        );
-        for i in 0..n {
-            s.push_str(&format!(" foo:a{i}=\"{i}\""));
-        }
-        s.push_str("/></rdf:RDF></x:xmpmeta>");
-        let t = std::time::Instant::now();
-        let found = scan(&s, &[LC]).unwrap();
-        let took = t.elapsed();
-        assert_eq!(found.descs[0].attrs.len(), n + 2, "every attribute is read");
-        assert!(took < std::time::Duration::from_secs(5), "{n} attributes took {took:?}");
+        // one description took over 20 s to scan, about 30 ms with the set. Four times the attributes must take
+        // about four times as long, not sixteen. A ratio of best-of-three times holds on a loaded machine, where
+        // a fixed bound does not.
+        let packet = |n: usize| {
+            let mut s = String::from(
+                "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+                 <rdf:Description rdf:about=\"\" xmlns:foo=\"http://example.com/foo/\"",
+            );
+            for i in 0..n {
+                s.push_str(&format!(" foo:a{i}=\"{i}\""));
+            }
+            s.push_str("/></rdf:RDF></x:xmpmeta>");
+            s
+        };
+        let best = |n: usize| {
+            let s = packet(n);
+            (0..3)
+                .map(|_| {
+                    let t = std::time::Instant::now();
+                    let found = scan(&s, &[]).unwrap();
+                    let took = t.elapsed();
+                    assert_eq!(found.descs[0].attrs.len(), n + 2, "every attribute is read");
+                    took
+                })
+                .min()
+                .unwrap_or_default()
+        };
+        let (small, large) = (best(25_000), best(100_000));
+        let ratio = large.as_secs_f64() / small.as_secs_f64().max(1e-6);
+        assert!(ratio < 10.0, "4x the attributes took {ratio:.1}x as long ({small:?}, then {large:?})");
     }
 
     #[test]
