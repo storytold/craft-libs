@@ -1181,6 +1181,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ical"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "proptest",
+]
+
+[[package]]
 name = "craft-idml"
 version = "0.1.0"
 dependencies = [
