@@ -417,7 +417,7 @@ impl<'a, S: Sample> SliceDecoder<'a, S> {
         let round = 1i64 << (bd_shift - 1);
         let scale = (LEVEL_SCALE[(qp % 6) as usize] as i64) << (qp / 6);
         let matrix = match &self.pic.scaling {
-            Some(s) if !bypass && !(ts && n > 4) => {
+            Some(s) if !(bypass || (ts && n > 4)) => {
                 let size_id = (log2 - 2) as usize;
                 let matrix_id = if self.cu_intra { c } else { 3 + c };
                 Some((s.clone(), size_id * 6 + matrix_id))
