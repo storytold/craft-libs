@@ -249,7 +249,9 @@ fn decode_stripe(stripe: &Stripe<'_>, height: usize, bits: u32, xtrans: bool) ->
     let mut last_near = None;
     let mut reader = Bits::new(stripe.bytes);
     let n = height.checked_mul(stripe.width).filter(|&n| n <= crate::MAX_SAMPLES).ok_or(RawError::Limit("image too large"))?;
-    let mut output = Vec::with_capacity(n);
+    // a capacity hint only: the stripe's declared height is the file's word, so the reservation is capped at a sample
+    // per bit of the stripe's real bytes (all stripes reserve in parallel; a one-byte stripe must not take 2 GiB)
+    let mut output = Vec::with_capacity(n.min(stripe.bytes.len().saturating_mul(8)));
     for group in 0..height / 6 {
         let near = match stripe.quantizers {
             Some(q) => u32::from(*q.get(group).ok_or_else(|| corrupt("truncated quantizer table"))?),
@@ -370,6 +372,17 @@ mod tests {
     use super::*;
     use crate::Cfa;
     use proptest::prelude::*;
+
+    /// A one-byte stripe declaring the tallest height the header can carry fails as corrupt (its capacity hint is
+    /// capped at the stripe's bits, not the declared height × 768 samples).
+    #[test]
+    fn a_tiny_stripe_with_a_huge_height_is_corrupt() {
+        let stripe = Stripe { bytes: &[0], quantizers: None, width: BLOCK };
+        for xtrans in [false, true] {
+            let got = decode_stripe(&stripe, 65532, 14, xtrans);
+            assert!(matches!(got, Err(RawError::Corrupt(_))), "xtrans {xtrans}: {got:?}");
+        }
+    }
 
     /// Procedural zero residuals: no camera media or encoder dependency.
     fn zero_stream(bits: u32, xtrans: bool, quantizers: Option<&[u8]>) -> Vec<u8> {
