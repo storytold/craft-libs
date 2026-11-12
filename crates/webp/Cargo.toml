@@ -10,8 +10,13 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Lossy animations from RGBA frames through craft-video's VP8 key-frame encoder.
+vp8 = ["dep:craft-video"]
+
 [dependencies]
 thiserror = { workspace = true }
+craft-video = { workspace = true, optional = true, features = ["vp8-encode"] }
 
 [dev-dependencies]
 # Decodes the files the writer makes and writes still test files; not a product dependency.
