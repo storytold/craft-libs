@@ -1,7 +1,7 @@
 //! `Picture`: an image from pixels the caller makes, at the icon side or a thumbnail step.
 
 use super::display_sense;
-use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};
+use crate::contract::{Access, Common, Component, Cx, DisabledLook, MeasureCx, PaintUi, Props as _, Role};
 use crate::list::{ThumbAspect, ThumbSize};
 use crate::primitives::{Revision, TextureStore, TextureStoreOptions, fit_rect};
 use crate::runtime::env::Label;
@@ -67,6 +67,7 @@ impl<'a> Picture<'a> {
 }
 
 impl Component for Picture<'_> {
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const ROLE: Role = Role::IMAGE;
     const PARTS: bool = false;
     const ALT_ROLES: &'static [Role] = &[Role::None];

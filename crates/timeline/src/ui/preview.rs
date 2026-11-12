@@ -5,7 +5,7 @@ mod stories;
 
 use craft_behavior::{Axis, Metrics, Sense};
 use craft_theme::Stateful;
-use craft_ui::contract::{Access, Common, Component, Cx, Input, MeasureCx, Name, PaintUi, Props, Role, Styled as _};
+use craft_ui::contract::{Access, Common, Component, Cx, DisabledLook, Input, MeasureCx, Name, PaintUi, Props, Role, Styled as _};
 use craft_ui::primitives::{PaintShape, TextRun};
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, DataColor, StyleCx, TextLook, TypeRole};
@@ -83,6 +83,7 @@ impl FramePreview {
 }
 
 impl Component for FramePreview {
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const ROLE: Role = Role::IMAGE;
     const INPUT: Input = Input::Display;
     const PARTS: bool = false;

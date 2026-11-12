@@ -5,7 +5,7 @@ use std::ops::RangeInclusive;
 
 use craft_behavior::{Axis, Sense};
 use craft_theme::{Channel, ColorModel, Srgba};
-use craft_ui::contract::{Bind, Common, Component, Cx, EditResponse, MeasureCx, Role, Show as _};
+use craft_ui::contract::{Bind, Common, Component, Cx, DisabledLook, EditResponse, MeasureCx, Role, Show as _};
 use craft_ui::form::SliderField;
 use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::env::{Label, UnitKind};
@@ -89,6 +89,7 @@ impl TrackRamp {
 }
 
 impl Component for TrackRamp {
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const ROLE: Role = Role::IMAGE;
     const PARTS: bool = false;
     const STOPS: bool = false;

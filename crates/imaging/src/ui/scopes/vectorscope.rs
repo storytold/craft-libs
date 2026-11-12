@@ -2,7 +2,7 @@
 
 use super::words::ScopeWords;
 use craft_behavior::{Metrics, Sense};
-use craft_ui::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, WordSetCx as _};
+use craft_ui::contract::{Access, Common, Component, Cx, DisabledLook, MeasureCx, PaintUi, Props as _, Role, WordSetCx as _};
 use craft_ui::fonts::FontRef;
 use craft_ui::primitives::{DocRun, DocText, HAlign, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
@@ -166,6 +166,7 @@ impl<'a> VectorscopePlot<'a> {
 }
 
 impl Component for VectorscopePlot<'_> {
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const ROLE: Role = Role::IMAGE;
     const PARTS: bool = false;
     const STOPS: bool = false;

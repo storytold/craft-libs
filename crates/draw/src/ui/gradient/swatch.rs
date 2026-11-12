@@ -1,9 +1,8 @@
 //! [`GradientSwatch`]: a well that shows a gradient.
 
 use craft_behavior::{Axis, CursorIcon, CursorPriority, Metrics, Sense};
-use craft_theme::{Stateful, States};
 use craft_ui::choice::SwatchMetrics;
-use craft_ui::contract::{Access, Common, Component, Cx, MeasureCx, Outcome, PaintUi, Pointer as _, PopupKind, Props as _, Role, Styled as _};
+use craft_ui::contract::{Access, Common, Component, Cx, DisabledLook, MeasureCx, Outcome, PaintUi, Pointer as _, PopupKind, Props as _, Role};
 use craft_ui::style::{ComponentStyle, FocusLook, StyleColor, StyleCx};
 use egui::{CornerRadius, Response, Vec2};
 
@@ -27,7 +26,7 @@ pub struct GradientSwatchStyle {
     /// The well's corners.
     radius: CornerRadius,
     /// The ring on the well's outline, which separates the well from the panel.
-    edge: Stateful<StyleColor>,
+    edge: StyleColor,
 }
 
 /// What a gradient swatch reports.
@@ -55,7 +54,7 @@ impl Outcome for GradientSwatchOutput {
 /// swatch edits nothing; a click is the host's cue. The well has the gradient chip aspect
 /// (`GradientRamp::CHIP_ASPECT`); `fill` takes the wider width the layout offers (an options bar
 /// cell). AccessKit sees a button named by the label, with `has_popup` when the host opens a
-/// dialog on the click. A disabled swatch keeps its gradient and fades its ring.
+/// dialog on the click.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(content_painter)]
 pub struct GradientSwatch<'a> {
@@ -86,6 +85,7 @@ impl<'a> GradientSwatch<'a> {
 }
 
 impl Component for GradientSwatch<'_> {
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const ROLE: Role = Role::BUTTON;
     const PARTS: bool = false;
     const OVERLAYS: bool = false;
@@ -93,15 +93,8 @@ impl Component for GradientSwatch<'_> {
     type Output = GradientSwatchOutput;
 
     fn style(cx: &StyleCx<'_>, _: GradientSwatchStyleKey) -> GradientSwatchStyle {
-        let (radius, rest) = GradientRamp::chip_look(cx);
-        let disabled = cx.color(cx.tokens.color.text.disabled);
-        GradientSwatchStyle {
-            metrics: Metrics::new(),
-            focus: cx.focus_look(),
-            side: SwatchMetrics::of(cx).side,
-            radius,
-            edge: Stateful::new(rest).off(States::new(rest, rest, rest, disabled)),
-        }
+        let (radius, edge) = GradientRamp::chip_look(cx);
+        GradientSwatchStyle { metrics: Metrics::new(), focus: cx.focus_look(), side: SwatchMetrics::of(cx).side, radius, edge }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
@@ -138,7 +131,7 @@ impl Component for GradientSwatch<'_> {
         let default = default_sampler(self.rows);
         let sampler: &Sampler = self.sampler.unwrap_or(&default);
         let colors = GradientRamp::colors(self.stops, sampler);
-        GradientRamp::paint_chip(&ui.content_painter(cx), cx.rect, style.radius, &colors, cx.resolve(&style.edge));
+        GradientRamp::paint_chip(&ui.content_painter(cx), cx.rect, style.radius, &colors, style.edge);
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> GradientSwatchOutput {

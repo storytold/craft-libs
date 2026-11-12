@@ -13,8 +13,8 @@ use craft_keymap::{Chord, Key, Mods};
 use craft_ui::buttons::{IconButton, ToggleButton};
 use craft_ui::contract::Remember as _;
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _,
-    Props, Role, Styled as _, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, MeasureCx, Name, Outcome, PaintUi, PartsCx,
+    Pointer as _, Props, Role, Styled as _, WordSetCx as _,
 };
 use craft_ui::primitives::{Dashes, GridInk, GridLines, IconSpec, PaintShape, RuleKind, StrokeWidth, TextRun, TickRank};
 use craft_ui::runtime::env::Label;
@@ -697,6 +697,7 @@ fn applied(selection: &Selection<KeyframeId>, change: &SelectionChange<KeyframeI
 }
 
 impl Component for GraphEditor<'_> {
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const ROLE: Role = Role::GROUP;
     const OVERLAYS: bool = false;
     const KEYS: KeyUse = KeyUse::CANVAS.with_chrome_key(false).with_deletes().with_claims(&CLAIMED);

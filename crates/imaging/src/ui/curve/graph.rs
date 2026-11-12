@@ -7,8 +7,8 @@ use crate::ui::histogram::{ChannelColor, HistogramData, HistogramInks, Histogram
 use craft_behavior::{HitLevel, HitPriority, Input, Metrics, NavMove, PartKey, PointerButton, PressPhase, Sense};
 use craft_keymap::{Chord, Key, Mods};
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Outcome, PaintUi, PartsCx, Pointer as _,
-    Props as _, Remember as _, Role, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, MeasureCx, Outcome, PaintUi, PartsCx,
+    Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
 use craft_ui::primitives::{ContentPainterCx, Draw, PaintShape, StrokeWidth};
 use craft_ui::runtime::access::Name;
@@ -484,6 +484,7 @@ fn follow(rules: &CurveRules, map: Map, reach: f32, curve: &Curve, drag: &mut Dr
 }
 
 impl Component for CurveGraph<'_> {
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const ROLE: Role = Role::GROUP;
     const INPUT: Input = Input::Pointer;
     const OVERLAYS: bool = false;

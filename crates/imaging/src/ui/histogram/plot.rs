@@ -9,8 +9,8 @@ use super::words::HistogramWords;
 use craft_behavior::{AccessAction, CancelReason, CursorIcon, Flow, IconId, Intent, Metrics, NavMove, PartKey, PressPhase, Sense};
 use craft_theme::{Stateful, TypeRole};
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Numeric, Outcome, PaintUi, PartsCx,
-    Pointer as _, Props as _, Role, Styled as _, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Numeric, Outcome,
+    PaintUi, PartsCx, Pointer as _, Props as _, Role, Styled as _, WordSetCx as _,
 };
 use craft_ui::primitives::{IconSpec, TextRun};
 use craft_ui::runtime::env::Label;
@@ -291,6 +291,7 @@ impl<'a> Histogram<'a> {
 }
 
 impl Component for Histogram<'_> {
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const ROLE: Role = Role::IMAGE;
     const OVERLAYS: bool = false;
     const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_keep(KeepKeys::BlockArrows).with_activate(ActivateKeys::Neither).with_moves();

@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use craft_behavior::{Axis, Metrics, Sense};
-use craft_ui::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};
+use craft_ui::contract::{Common, Component, Cx, DisabledLook, MeasureCx, PaintUi, Props as _, Role};
 use craft_ui::primitives::{Revision, TextureStore, TextureStoreOptions};
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, StyleCx, SurfaceLook};
@@ -123,6 +123,7 @@ impl<'a> BrushStrokeStrip<'a> {
 }
 
 impl Component for BrushStrokeStrip<'_> {
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const ROLE: Role = Role::IMAGE;
     const OVERLAYS: bool = false;
     type Style = BrushStrokeStripStyle;

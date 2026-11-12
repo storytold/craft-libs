@@ -7,8 +7,8 @@ use craft_behavior::nav::{Arrows, NavShape, Roving};
 use craft_behavior::{CancelReason, HitShape, Metrics, NavMove, PartKey, PressPhase, Sense};
 use craft_theme::{ColorModel, HsbModel, ModelValues, Srgba};
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Numeric, Outcome, PaintUi, PartsCx,
-    Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Numeric, Outcome,
+    PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
 use craft_ui::primitives::{Marker, MarkerSize, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
@@ -200,6 +200,7 @@ impl<'a> ColorDisc<'a> {
 }
 
 impl Component for ColorDisc<'_> {
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_keep(KeepKeys::BlockArrows).with_activate(ActivateKeys::Neither);
     const SINGLE_VALUE: bool = true;
     const ROLE: Role = Role::GROUP;

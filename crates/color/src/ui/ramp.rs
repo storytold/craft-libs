@@ -5,8 +5,8 @@ use craft_behavior::{Axis, Metrics, NavMove, PartKey, PressPhase, Sense};
 use craft_theme::{Hsb, Srgba};
 use craft_ui::canvas::context_click;
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, Name, Outcome, PaintUi, PartsCx, Pointer as _,
-    Props as _, Remember as _, Role, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, Input, Name, Outcome, PaintUi, PartsCx,
+    Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
 use craft_ui::primitives::{Marker, PaintShape, StrokeWidth};
 use craft_ui::runtime::commands::FireSource;
@@ -343,6 +343,7 @@ fn moved(cursor: (usize, usize), mv: NavMove, far: bool) -> (usize, usize) {
 }
 
 impl Component for ColorRamp<'_> {
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const SINGLE_VALUE: bool = true;
     const ROLE: Role = Role::GROUP;
     const OVERLAYS: bool = false;

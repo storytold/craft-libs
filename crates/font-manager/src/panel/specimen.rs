@@ -1,7 +1,7 @@
 //! `FontSample`: text in a font face at the user's sample size, on one line at the reading start of its rect.
 
 use craft_behavior::Sense;
-use craft_ui::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};
+use craft_ui::contract::{Common, Component, Cx, DisabledLook, MeasureCx, PaintUi, Props as _, Role};
 use craft_ui::fonts::FontRef;
 use craft_ui::primitives::{DocRun, DocText};
 use craft_ui::runtime::env::Label;
@@ -69,6 +69,7 @@ impl<'a> FontSample<'a> {
 }
 
 impl Component for FontSample<'_> {
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const ROLE: Role = Role::LABEL;
     const PARTS: bool = false;
     const INPUT: craft_ui::contract::Input = craft_ui::contract::Input::Display;

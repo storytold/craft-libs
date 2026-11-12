@@ -5,8 +5,8 @@ use super::channels::{channel_step, finite, primary, settled, spoken};
 use craft_behavior::{HitLevel, HitPriority, HitShape, Metrics, NavMove, PartKey, PressPhase, Sense};
 use craft_theme::{ColorModel, HsbModel, ModelValues};
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Numeric, PaintUi, PartsCx,
-    Pointer as _, Props as _, Role, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Numeric, PaintUi,
+    PartsCx, Pointer as _, Props as _, Role, WordSetCx as _,
 };
 use craft_ui::primitives::{Marker, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
@@ -280,6 +280,7 @@ fn keyed(values: &ModelValues, part: WheelPart, mv: NavMove, far: bool) -> Optio
 }
 
 impl Component for ColorWheel<'_> {
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const SINGLE_VALUE: bool = true;
     const ROLE: Role = Role::GROUP;
     const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_keep(KeepKeys::BlockArrows).with_activate(ActivateKeys::Neither);

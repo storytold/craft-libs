@@ -1,7 +1,7 @@
 //! `ToneRamp`: a gradient bar through evenly spaced stops.
 
 use craft_behavior::{Axis, Input, Metrics, Sense};
-use craft_ui::contract::{Common, Component, Cx, MeasureCx, PaintUi, Role};
+use craft_ui::contract::{Common, Component, Cx, DisabledLook, MeasureCx, PaintUi, Role};
 use craft_ui::style::{ComponentStyle, DataColor, StyleCx};
 use egui::{Response, Vec2};
 
@@ -46,6 +46,7 @@ impl ToneRamp<'static> {
 }
 
 impl Component for ToneRamp<'_> {
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const ROLE: Role = Role::None;
     const INPUT: Input = Input::Display;
     const PARTS: bool = false;

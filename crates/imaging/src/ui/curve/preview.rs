@@ -4,7 +4,7 @@ use super::graph::{CurveSampler, Map, PlotLook, outputs, paint_line};
 use super::model::Curve;
 use crate::ui::histogram::ChannelColor;
 use craft_behavior::{Input, Metrics, Sense};
-use craft_ui::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};
+use craft_ui::contract::{Common, Component, Cx, DisabledLook, MeasureCx, PaintUi, Props as _, Role};
 use craft_ui::primitives::ContentPainterCx;
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, StyleCx};
@@ -61,6 +61,7 @@ impl CurvePreview<'static> {
 }
 
 impl Component for CurvePreview<'_> {
+    const DISABLED: DisabledLook = DisabledLook::Faded;
     const ROLE: Role = Role::IMAGE;
     const INPUT: Input = Input::Display;
     const PARTS: bool = false;
