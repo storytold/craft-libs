@@ -16,6 +16,8 @@ mod backend;
 #[cfg(test)]
 mod coderabbit_repro;
 #[cfg(test)]
+mod coderabbit_round2_repro;
+#[cfg(test)]
 mod review_repro;
 
 pub use backend::{Answer, EsignBackend, Replier, Request};
@@ -76,6 +78,8 @@ pub struct EsignLabels {
     pub remind: String,
     pub download: String,
     pub request: String,
+    /// Caption of the status panel's manual refresh action.
+    pub refresh: String,
 }
 
 impl Default for EsignLabels {
@@ -103,6 +107,7 @@ impl Default for EsignLabels {
             remind: "Remind".into(),
             download: "Download completed".into(),
             request: "Request signatures".into(),
+            refresh: "Refresh status".into(),
         }
     }
 }
@@ -163,6 +168,13 @@ pub struct EsignDialog {
     matches: Vec<Contact>,
     looking: bool,
     recipients: Vec<Recipient>,
+    /// How many recipients have ever been added for the document currently
+    /// open, used to label the next one. Monotonic, not derived from the
+    /// current recipient count or roles in use: a count- or scan-based label
+    /// is free to repeat once the recipient holding it is removed, and a
+    /// freed role can then bind a new recipient to an old recipient's
+    /// placements. Reset in [`Self::open`] alongside `recipients`.
+    next_role_number: u32,
     message: String,
     placements: Vec<FieldPlacement>,
     busy: bool,
@@ -213,6 +225,7 @@ impl Default for EsignDialog {
             matches: Vec::new(),
             looking: false,
             recipients: Vec::new(),
+            next_role_number: 0,
             message: String::new(),
             placements: Vec::new(),
             busy: false,
@@ -241,6 +254,17 @@ fn fresh_send_id() -> u64 {
     next.fetch_add(1, Ordering::Relaxed)
 }
 
+/// Whether the dialog stays open after one [`EsignDialog::show`] frame.
+///
+/// `window_open` is egui's own title-bar close control; `dialog_open` is
+/// whatever [`EsignDialog::ui`] already decided, such as a Close button.
+/// Either one closing the dialog must stick: a plain `window_open` would
+/// let the window's unchanged binding undo a Close button clicked inside
+/// the same frame.
+fn still_open(window_open: bool, dialog_open: bool) -> bool {
+    window_open && dialog_open
+}
+
 impl EsignDialog {
     pub fn new() -> EsignDialog {
         EsignDialog::default()
@@ -253,6 +277,21 @@ impl EsignDialog {
 
     pub fn set_backend(&mut self, backend: impl EsignBackend + 'static) {
         self.backend = Some(Box::new(backend));
+        self.reset_capabilities();
+    }
+
+    /// Probe the current backend again for capabilities and link state.
+    ///
+    /// `available()` never asks again once the service has reported
+    /// [`EsignCapability::Envelopes`]; the retry in [`Self::pump`] is for a
+    /// backend that is still unavailable, not for a `linked` value that is
+    /// stale after an out-of-band sign-in. Call this once that sign-in
+    /// completes on the backend already set, when replacing it with
+    /// [`Self::set_backend`] would be artificial. A reply still in flight
+    /// from the probe this replaces is dropped in [`Self::pump`] exactly as
+    /// one from a backend [`Self::set_backend`] already replaced is:
+    /// `caps_seq` is cleared here the same way.
+    pub fn reset_capabilities(&mut self) {
         self.capabilities = None;
         self.asked_caps_at = None;
         self.caps_seq = None;
@@ -275,6 +314,7 @@ impl EsignDialog {
         let revision_changed = self.document_etag != document_etag;
         if account_changed || document_changed || revision_changed {
             self.recipients.clear();
+            self.next_role_number = 0;
             self.message.clear();
             self.envelope = None;
             self.completed_bytes = None;
@@ -325,7 +365,9 @@ impl EsignDialog {
     }
 
     /// Submit a request through the host backend (for example after the app
-    /// encoded document bytes for a [`SendRequest`]).
+    /// encoded document bytes for a [`SendRequest`], or a status refresh the
+    /// host drives itself rather than through [`Self::status_panel`]'s own
+    /// button).
     ///
     /// Tags the reply with the context [`Self::queue_send`] captured when it
     /// built the [`SendRequest`] being submitted, not whatever context is
@@ -337,9 +379,16 @@ impl EsignDialog {
     /// finally called.
     pub fn submit_request(&mut self, request: Request) {
         let context = self.pending_send_context.take().unwrap_or_else(|| self.current_context());
+        // A public `Request::Status` submission is request-specific routing
+        // state too: without this, `pump`'s `status_seq` guard never sees
+        // this sequence and drops the reply that comes back for it.
+        let is_status = matches!(request, Request::Status { .. });
         let seq = self.submit(request);
         self.contexts.insert(seq, context);
         self.pending_op_seq = Some(seq);
+        if is_status {
+            self.status_seq = seq;
+        }
     }
 
     /// Completed document bytes after a successful download request.
@@ -545,7 +594,7 @@ impl EsignDialog {
         if self.recipients.iter().any(|r| r.email.eq_ignore_ascii_case(&email)) {
             return;
         }
-        let role = format!("Signer {}", self.recipients.len() + 1);
+        let role = self.next_role();
         self.recipients.push(Recipient { id: contact.id, name: contact.name, email, role, required: true, status: RecipientStatus::Pending });
         self.draft_idempotency_key = None;
         self.query.clear();
@@ -560,11 +609,18 @@ impl EsignDialog {
         if self.recipients.iter().any(|r| r.email.eq_ignore_ascii_case(&email)) {
             return;
         }
-        let role = format!("Signer {}", self.recipients.len() + 1);
+        let role = self.next_role();
         self.recipients.push(Recipient { id: email.clone(), name: email.clone(), email, role, required: true, status: RecipientStatus::Pending });
         self.draft_idempotency_key = None;
         self.query.clear();
         self.matches.clear();
+    }
+
+    /// A role label no recipient added for the document currently open has
+    /// held, including one since removed: see `next_role_number`'s doc.
+    fn next_role(&mut self) -> String {
+        self.next_role_number += 1;
+        format!("Signer {}", self.next_role_number)
     }
 
     fn queue_send(&mut self) {
@@ -617,7 +673,11 @@ impl EsignDialog {
         egui::Window::new(&labels.title).open(&mut open).resizable(true).default_width(420.0).show(ctx, |ui| {
             self.ui(ui);
         });
-        self.open = open;
+        // `open` reflects only the window's own title-bar close control;
+        // `self.ui` may already have set `self.open` to false from one of
+        // its own Close buttons. Either closing the dialog must stick, so
+        // reopening it takes a fresh `Self::open` call either way.
+        self.open = still_open(open, self.open);
     }
 
     fn ui(&mut self, ui: &mut Ui) {
@@ -695,6 +755,10 @@ impl EsignDialog {
         if let Some(i) = remove {
             self.recipients.remove(i);
             self.draft_idempotency_key = None;
+            // A placement keyed to the removed recipient's role would
+            // otherwise ride along in the next draft matching no recipient.
+            let live_roles: std::collections::HashSet<&str> = self.recipients.iter().map(|r| r.role.as_str()).collect();
+            self.placements.retain(|p| live_roles.contains(p.role.as_str()));
         }
 
         ui.add_space(6.0);
@@ -750,7 +814,7 @@ impl EsignDialog {
                 self.open = false;
             }
         });
-        if ui.button("Refresh status").clicked() {
+        if ui.button(&self.labels.refresh).clicked() {
             self.busy = true;
             let seq = self.submit_in_context(Request::Status { envelope: env.id.clone() });
             self.pending_op_seq = Some(seq);
@@ -905,5 +969,59 @@ mod tests {
         let a = send_key("doc-A");
         let b = send_key("doc-A");
         assert_ne!(a, b, "two fresh dialog instances for the same document produced the same idempotency key: {a}");
+    }
+
+    #[test]
+    fn recipient_roles_never_repeat_after_a_removal() {
+        let mut dialog = EsignDialog::default();
+        dialog.add_email("a@example.com".into());
+        dialog.add_email("b@example.com".into());
+        dialog.recipients.remove(0);
+        dialog.add_email("c@example.com".into());
+
+        let roles: Vec<&str> = dialog.recipients.iter().map(|r| r.role.as_str()).collect();
+        assert_eq!(roles.len(), 2, "{roles:?}");
+        assert_ne!(roles[0], roles[1], "B and C were both assigned the same role after A was removed: {roles:?}");
+    }
+
+    #[test]
+    fn still_open_requires_both_the_window_and_the_dialog_to_agree() {
+        // A Close button inside `ui` already set `self.open` to false; the
+        // window's own close control was not used.
+        assert!(!still_open(true, false), "an internal Close click was undone by the window's unchanged open binding");
+        // The title-bar close control was used; nothing inside set it false.
+        assert!(!still_open(false, true));
+        // Neither closed it.
+        assert!(still_open(true, true));
+    }
+
+    fn envelope_stub() -> Envelope {
+        Envelope {
+            id: "env-1".into(),
+            title: "Contract".into(),
+            message: None,
+            sender: ada(),
+            document_id: None,
+            document_etag: None,
+            content_sha256: String::new(),
+            recipients: Vec::new(),
+            placements: Vec::new(),
+            status: EnvelopeStatus::Sent,
+            expires: None,
+            created: None,
+            completed_at: None,
+        }
+    }
+
+    #[test]
+    fn refresh_status_caption_is_localized() {
+        let labels = EsignLabels { refresh: "Actualizar estado".into(), ..EsignLabels::default() };
+        let mut dialog = EsignDialog { capabilities: Some(vec![EsignCapability::Envelopes]), labels, envelope: Some(envelope_stub()), ..Default::default() };
+        let ctx = Context::default();
+        let mut full = ctx.run_ui(egui::RawInput::default(), |ui| dialog.ui(ui));
+        full.textures_delta.clear();
+        let shown = texts(&full.shapes);
+        assert!(shown.iter().any(|t| t == "Actualizar estado"), "refresh caption is not localized: {shown:?}");
+        assert!(!shown.iter().any(|t| t == "Refresh status"), "hardcoded English caption still shown: {shown:?}");
     }
 }
