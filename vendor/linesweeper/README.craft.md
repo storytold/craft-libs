@@ -5,6 +5,8 @@ changes listed under Local changes. `.cargo_vcs_info.json` names the commit it w
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
+The local changes patch two files: `src/sweep/sweep_line.rs` and `src/sweep/output_event.rs`.
+
 Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
 file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
@@ -15,6 +17,7 @@ holds `upstream_revision`. `local_patches` describes each local change.
 
 | Change | Code comment label | Touches | Tests |
 |---|---|---|---|
+| The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out | `Craft patch (exited slots)` | `src/sweep/sweep_line.rs` | none |
 | `OutputEvent`'s `Ord` breaks ties between events with the same horizontal range by segment and then by the other fields, so two events compare equal only when they are equal; the sweep line still sorts its events by horizontal range alone | `Craft patch (output event order)` | `src/sweep/output_event.rs`, `src/sweep/sweep_line.rs` | `events_on_different_segments_with_the_same_range_are_not_equal`, `events_differing_only_in_flags_are_not_equal` |
 
 Every change here updates this table and `SOURCE.json` in the same commit. To take a new linesweeper

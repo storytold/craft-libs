@@ -38,6 +38,8 @@ let head = Head::read(&text)?;
   flattened into it. `to_json()` gives the file's text indented with two spaces, and
   `to_json_compact()` gives it on one line. Neither checks the values: `serde_json` writes NaN and
   infinity as `null`, so the caller checks its values before saving.
+- `Head::read_from(reader)` applies the same header parsing to a `std::io::Read`, allowing a
+  caller to bound or interrupt input. File/network readers should be buffered.
 - `Head::read(text) -> Result<Head, ReadError>` reads `savedBy` and `schema` from one JSON
   object, and skips other members. `savedBy` is `None` when it is absent, is not a string, or
   appears more than once. Text that is not a JSON object, has no `schema` that is a `u32`, or has
