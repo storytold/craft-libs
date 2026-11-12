@@ -46,7 +46,7 @@ pub mod testing {
     pub use crate::canvas::testing::{
         canvas_story, tool_fixture,
         tool_fixture::ToolFixture,
-        tool_story::{StoryHost, ToolRun, ToolScript, ToolStory, tool_story},
+        tool_story::{StoryButton, StoryHost, ToolRun, ToolScript, ToolStory, story_tool, tool_story},
     };
     pub use craft_ui_panels::testing::*;
 

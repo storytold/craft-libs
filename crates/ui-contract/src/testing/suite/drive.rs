@@ -365,7 +365,8 @@ fn a_drive_ends_each_gesture_once(subject: &Subject) -> Result<(), String> {
         changed_any |= runs.changed;
         failures.extend(runs.failures);
     }
-    if !changed_any {
+    // That some story's drive changes the value is the type's to show, in its home package.
+    if !changed_any && subject.home {
         failures.push("no drive changed the value".to_owned());
     }
     if failures.is_empty() { Ok(()) } else { Err(failures.join("; ")) }

@@ -42,6 +42,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 struct Subject {
     probe: &'static Probe,
     stories: Vec<Story>,
+    /// The stories are the home package's, the one that registers the type. Stories another package declares for the
+    /// type run only the per-story cases there; the cases about the type as a whole (its required states, its
+    /// exemptions) run at home.
+    home: bool,
     /// Each story's [`Base`], built when a case first asks for it.
     bases: Vec<OnceCell<Base>>,
     /// The style sources the style cases measure, read once for all of them.
@@ -59,9 +63,9 @@ struct Base {
 }
 
 impl Subject {
-    fn new(probe: &'static Probe, stories: Vec<Story>) -> Self {
+    fn new(probe: &'static Probe, stories: Vec<Story>, home: bool) -> Self {
         let bases = stories.iter().map(|_| OnceCell::new()).collect();
-        Subject { probe, stories, bases, style_sources: OnceCell::new(), style_ctx: OnceCell::new() }
+        Subject { probe, stories, home, bases, style_sources: OnceCell::new(), style_ctx: OnceCell::new() }
     }
 
     /// The shared [`Base`] of `story`, which is one of `self.stories`.
@@ -166,11 +170,11 @@ fn panic_text(payload: Box<dyn std::any::Any + Send>) -> String {
 }
 
 /// The cases of `group` over the stories of the type `probe` describes, and with `check_exemptions` the check that
-/// each exemption names a known case.
-fn run_group(probe: &'static Probe, group: &'static Group, check_exemptions: bool, stories: Vec<Story>) -> Result<(), Failed> {
-    let subject = Subject::new(probe, stories);
+/// each exemption names a known case. `home`: the stories are the package's that registers the type ([`Subject::home`]).
+fn run_group(probe: &'static Probe, group: &'static Group, check_exemptions: bool, home: bool, stories: Vec<Story>) -> Result<(), Failed> {
+    let subject = Subject::new(probe, stories, home);
     let mut failures = Vec::new();
-    if check_exemptions {
+    if check_exemptions && home {
         for exemption in probe.exempt {
             if !states::exemption_is_known(exemption.case) {
                 failures.push(format!("the exemption names the unknown case `{}`", exemption.case));
@@ -190,8 +194,9 @@ fn run_group(probe: &'static Probe, group: &'static Group, check_exemptions: boo
     if failures.is_empty() { Ok(()) } else { Err(Failed::from(failures.join("\n"))) }
 }
 
-/// The trials of one package: a trial per registered type and group of cases, `suite::<type>::<group>`, and one per
-/// story naming a type that is not linked.
+/// The trials of one package: a trial per registered type and group of cases, `suite::<type>::<group>`; the same for
+/// each type another linked package registers and this package has stories of, over those stories and without the
+/// cases about the type as a whole ([`Subject::home`]); and one per story naming a type that is not linked.
 pub fn trials(package: &'static str, registered: &[&'static Registration]) -> Vec<Trial> {
     let library = package.replace('-', "_");
     let own: Vec<_> = stories().into_iter().filter(|entry| entry.crate_name == package && entry.crate_target == library).collect();
@@ -205,7 +210,7 @@ pub fn trials(package: &'static str, registered: &[&'static Registration]) -> Ve
         for (index, group) in GROUPS.iter().enumerate() {
             let stories = stories.clone();
             let name = format!("suite::{}::{}", probe.type_name(), group.name);
-            trials.push(Trial::test(name, move || run_group(probe, group, index == 0, stories)));
+            trials.push(Trial::test(name, move || run_group(probe, group, index == 0, true, stories)));
         }
     }
     let patterns: Vec<&'static PatternProbe> = registered.iter().copied().filter_map(Registration::pattern_probe).collect();
@@ -214,9 +219,28 @@ pub fn trials(package: &'static str, registered: &[&'static Registration]) -> Ve
         let name = pattern.type_name();
         trials.push(Trial::test(format!("suite::{name}"), move || pattern::run(name, &stories).map_err(Failed::from)));
     }
+    // Stories of a type another linked package registers run that type's cases here, as its visitors.
+    let linked = crate::contract::registrations();
+    let mut visited: Vec<&'static str> = Vec::new();
     for entry in &own {
         let name = (entry.type_name)();
-        if !probes.iter().any(|probe| probe.type_name() == name) && !patterns.iter().any(|pattern| pattern.type_name() == name) {
+        if probes.iter().any(|probe| probe.type_name() == name)
+            || patterns.iter().any(|pattern| pattern.type_name() == name)
+            || visited.contains(&name)
+        {
+            continue;
+        }
+        let stories: Vec<Story> = own.iter().filter(|entry| (entry.type_name)() == name).map(|entry| entry.story).collect();
+        if let Some(probe) = linked.iter().copied().find_map(|registration| registration.probe().filter(|probe| probe.type_name() == name)) {
+            visited.push(name);
+            for group in GROUPS {
+                let stories = stories.clone();
+                trials.push(Trial::test(format!("suite::{name}::{}", group.name), move || run_group(probe, group, false, false, stories)));
+            }
+        } else if linked.iter().any(|registration| registration.pattern_probe().is_some_and(|pattern| pattern.type_name() == name)) {
+            visited.push(name);
+            trials.push(Trial::test(format!("suite::{name}"), move || pattern::run(name, &stories).map_err(Failed::from)));
+        } else {
             let message = format!("the story `{}` shows `{name}`, which is not in the linked registrations", entry.story.name);
             trials.push(Trial::test(format!("suite::stories::{}", entry.story.name), move || Err(Failed::from(message))));
         }

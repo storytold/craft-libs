@@ -8,7 +8,7 @@ use craft_ui::canvas::RasterSource as _;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::runtime::env::Env;
 use craft_ui::testing::canvas_story::{OUTLINE, StoryDocument, StoryPicture, StoryShape, accent, on_picture, paint_shapes};
-use craft_ui::testing::{Drive, EditKind, Grip, StoryData, StoryOutput, ToolStory, story, tool_story};
+use craft_ui::testing::{Drive, EditKind, Grip, StoryButton, StoryData, StoryOutput, ToolStory, story, tool_story};
 use egui::{Color32, Ui, vec2};
 use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 
@@ -250,7 +250,7 @@ fn connector_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     tool_story(
         ui,
         data,
-        ToolStory::new("Document", &picture).buttons(&["Select Next"]),
+        ToolStory::new("Document", &picture).buttons(&[StoryButton::new("Select Next")]),
         ConnectorKept::default,
         Connectors::new(routing),
         body,

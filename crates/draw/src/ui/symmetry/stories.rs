@@ -10,7 +10,7 @@ use craft_behavior::{CanvasView, EditEvent};
 use craft_ui::canvas::Canvas;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::runtime::env::Env;
-use craft_ui::testing::{Drive, EditKind, Grip, StoryData, StoryOutput, ToolStory, story, tool_story};
+use craft_ui::testing::{Drive, EditKind, Grip, StoryButton, StoryData, StoryOutput, ToolStory, story, tool_story};
 use egui::Ui;
 
 craft_ui::words! {
@@ -161,7 +161,8 @@ fn transform_symmetry(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     };
     let start = || SymmetryKept { session: SymmetryTransform::begin(described), ended: None };
     let picture = SHOWN;
-    let story = ToolStory::new("Document", &picture).buttons(&["Apply", "Discard"]);
+    let buttons = [StoryButton::new("Apply"), StoryButton::new("Discard")];
+    let story = ToolStory::new("Document", &picture).buttons(&buttons);
     tool_story(ui, data, story, start, described, body, |run| {
         let (stored, kept) = (run.document, run.tool);
         let mut output = StoryOutput::default();

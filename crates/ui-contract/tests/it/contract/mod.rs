@@ -4,3 +4,4 @@ mod fixes;
 mod hit_order;
 mod pointer;
 mod style;
+mod visited_type;

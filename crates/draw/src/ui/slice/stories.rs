@@ -12,7 +12,7 @@ use craft_ui::canvas::{Canvas, RasterSource as _};
 use craft_ui::contract::{Entry, Show as _, ShowContainer as _};
 use craft_ui::runtime::env::{Env, UnitKind};
 use craft_ui::testing::canvas_story::StoryDocument;
-use craft_ui::testing::{Drive, EditKind, StoryData, StoryOutput, ToolStory, story, tool_story};
+use craft_ui::testing::{Drive, EditKind, StoryButton, StoryData, StoryOutput, ToolStory, story, tool_story};
 use egui::Ui;
 
 craft_ui::words! {
@@ -219,7 +219,7 @@ fn slice_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rules = *data.choice("rules", SliceRules::PHOTOSHOP, &[("Photoshop", SliceRules::PHOTOSHOP), ("Illustrator", SliceRules::ILLUSTRATOR)]);
     let locked = *data.value("locked", false);
     let settings = SliceToolSettings::new(Constraint::Free);
-    let labels: Vec<&'static str> = COMMANDS[..4].iter().map(|(label, _)| *label).chain([HIDE_AUTO]).collect();
+    let buttons: Vec<StoryButton> = COMMANDS[..4].iter().map(|(label, _)| *label).chain([HIDE_AUTO]).map(StoryButton::new).collect();
     let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, _: &mut SliceKept, slices: &Slices| {
         let overlay = SliceOverlay::new("Slices", &slices.items);
         let overlay = match slices.selected {
@@ -231,7 +231,7 @@ fn slice_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     };
     let first = Slices { items: sample_slices(), selected: None, hide_auto: false };
     let picture = StoryDocument::STANDARD;
-    tool_story(ui, data, ToolStory::new("Document", &picture).buttons(&labels), SliceKept::default, first, body, |run| {
+    tool_story(ui, data, ToolStory::new("Document", &picture).buttons(&buttons), SliceKept::default, first, body, |run| {
         let (slices, kept) = (run.document, run.tool);
         let mut tool_settings = settings;
         tool_settings.hide_auto = slices.hide_auto;

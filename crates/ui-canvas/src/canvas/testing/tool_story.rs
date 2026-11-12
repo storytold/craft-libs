@@ -3,7 +3,7 @@
 
 use crate::buttons::Button;
 use crate::canvas::{Canvas, CanvasOutput, CanvasTool, RasterSource, ToolHost, ToolHostResponse, ToolInput};
-use crate::contract::{BodyCx, Gap, Show as _, ShowContainer as _, clicked};
+use crate::contract::{BodyCx, Gap, Props as _, Show as _, ShowContainer as _, clicked};
 use crate::layout_components::{Row, Stack};
 use crate::runtime::{frame, pointer};
 use crate::testing::{StoryData, StoryOutput, stage};
@@ -24,7 +24,29 @@ pub struct ToolStory<'a> {
     /// The gesture the story's Play button sends.
     play: Option<ToolScript>,
     /// The story's own buttons under the canvas, after Play.
-    buttons: &'a [&'static str],
+    buttons: &'a [StoryButton],
+}
+
+/// A button of a tool story ([`ToolStory::buttons`]): its label, which [`ToolRun::pressed`] reports, and whether it
+/// takes a press in this pass (an app's Undo with nothing to undo does not).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StoryButton {
+    label: &'static str,
+    enabled: bool,
+}
+
+impl StoryButton {
+    /// An enabled button labelled `label`.
+    pub const fn new(label: &'static str) -> Self {
+        StoryButton { label, enabled: true }
+    }
+
+    /// The same button, enabled only when `on`.
+    #[must_use]
+    pub const fn enabled(mut self, on: bool) -> Self {
+        self.enabled = on;
+        self
+    }
 }
 
 /// How a tool story's view shows its picture.
@@ -75,11 +97,11 @@ impl<'a> ToolStory<'a> {
         self
     }
 
-    /// The same canvas with the story's own buttons `labels` in the row under it (an app's Apply, Undo); the one
-    /// pressed reaches `run` as [`ToolRun::pressed`].
+    /// The same canvas with the story's own buttons in the row under it (an app's Apply, Undo); the one pressed
+    /// reaches `run` as [`ToolRun::pressed`].
     #[must_use]
-    pub fn buttons(mut self, labels: &'a [&'static str]) -> Self {
-        self.buttons = labels;
+    pub fn buttons(mut self, buttons: &'a [StoryButton]) -> Self {
+        self.buttons = buttons;
         self
     }
 
@@ -218,6 +240,12 @@ impl StoryHost<'_> {
     }
 }
 
+/// The tool a tool story keeps, made by `tool` on first use: what [`tool_story`] runs. A story reads it before the
+/// pass to declare its buttons from the tool's state (an Undo with nothing to undo is disabled).
+pub fn story_tool<T: 'static>(data: &mut StoryData, tool: impl FnOnce() -> T) -> Rc<RefCell<T>> {
+    Rc::clone(data.note::<Option<Rc<RefCell<T>>>>("tool", None).get_or_insert_with(|| Rc::new(RefCell::new(tool()))))
+}
+
 /// Shows a tool live on the canvas `story` over the stage of `ui`. The tool `tool` makes is kept as a note of `data`
 /// (a note: Reset and the runner's drives compare values, and a tool's state in a gesture is no value); `document`
 /// is kept as the value `"document"`, so Reset puts it back. Each pass `body` shows the document's canvas controls at
@@ -234,7 +262,7 @@ pub fn tool_story<T: 'static, D: Value, R>(
     mut body: impl FnMut(&mut Ui, Rect, &CanvasView, &mut T, &D) -> R,
     run: impl FnOnce(ToolRun<'_, T, D, R>) -> StoryOutput,
 ) -> StoryOutput {
-    let kept = Rc::clone(data.note::<Option<Rc<RefCell<T>>>>("tool", None).get_or_insert_with(|| Rc::new(RefCell::new(tool()))));
+    let kept = story_tool(data, tool);
     let mut playing = *data.note::<Option<Playing>>("play", None);
     let document = data.value("document", document);
     let room = stage(ui);
@@ -250,23 +278,23 @@ pub fn tool_story<T: 'static, D: Value, R>(
         (shown, view)
     };
     let mut pressed = None;
-    let labels: Vec<&'static str> = story.play.as_ref().map(|_| "Play").into_iter().chain(story.buttons.iter().copied()).collect();
+    let buttons: Vec<StoryButton> = story.play.as_ref().map(|_| StoryButton::new("Play")).into_iter().chain(story.buttons.iter().copied()).collect();
     // The story's buttons stand in the stage's footer: a row as wide as the stage under the canvas, wrapping onto
     // more lines when they need more room.
-    let (shown, view) = if labels.is_empty() {
+    let (shown, view) = if buttons.is_empty() {
         canvas(ui, room)
     } else {
-        let buttons = |ui: &mut Ui, _: &mut BodyCx<'_>| {
+        let row = |ui: &mut Ui, _: &mut BodyCx<'_>| {
             Row::new().fill_width().wrap(true).show(ui, |ui, _| {
-                for &label in &labels {
-                    if clicked(&Button::new(label).show(ui)) {
-                        pressed = Some(label);
+                for button in &buttons {
+                    if clicked(&Button::new(button.label).enabled(button.enabled).show(ui)) {
+                        pressed = Some(button.label);
                     }
                 }
             });
         };
         // A measuring run of the stage runs no body: no canvas, so no tool runs either.
-        let stage = Stack::new().fill().footer(buttons).footer_gap(Gap::Stack).show_at(ui, room, |ui, stack| canvas(ui, stack.rect));
+        let stage = Stack::new().fill().footer(row).footer_gap(Gap::Stack).show_at(ui, room, |ui, stack| canvas(ui, stack.rect));
         let Some(shown) = stage.inner else { return StoryOutput::default() };
         shown
     };

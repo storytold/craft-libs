@@ -65,6 +65,9 @@ fn is_face_only(probe: &Probe) -> bool {
 }
 
 fn every_required_state_has_a_story(subject: &Subject) -> Result<(), String> {
+    if !subject.home {
+        return Ok(());
+    }
     if is_face_only(subject.probe) {
         return if subject.stories.is_empty() {
             Ok(())
