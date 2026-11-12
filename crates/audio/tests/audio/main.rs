@@ -6,6 +6,7 @@ mod flac_damage;
 mod float_headroom;
 mod malformed;
 mod mp4_length;
+mod raw_pcm;
 mod roundtrip;
 mod stream;
 mod wav_empty_data;

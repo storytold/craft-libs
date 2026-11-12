@@ -1,4 +1,4 @@
-//! Photoshop Actions files (`.atn`): one action set, its actions and their steps.
+//! Photoshop Actions files (`.atn`): action sets, their actions and their steps.
 //!
 //! Implemented clean-room from Adobe's "Photoshop File Formats" specification (the *Actions*
 //! and *Descriptor structure* sections) and observation of files Photoshop writes. No code was
@@ -6,7 +6,8 @@
 //! code-unit count + UTF-16BE, usually NUL-terminated) unless noted.
 //!
 //! ```text
-//! file   := version u32 (12 or 16), set name UnicodeString, expanded u8, count u32, count × action
+//! file   := version u32 (12 or 16), set (version 16 may hold further sets until EOF)
+//! set    := name UnicodeString, expanded u8, count u32, count × action
 //! action := function key u16 (0 = none, n = Fn), shift u8, command u8, colour u16,
 //!           name UnicodeString, expanded u8, count u32, count × item
 //! item   := expanded u8, enabled u8, with dialog u8, dialog options u8,
@@ -31,8 +32,9 @@
 //!
 //! [`parse`] never panics: every count is bounds-checked against the bytes left, descriptor
 //! nesting is bounded, and allocations are capped. [`write`] always produces version 16, so
-//! `parse(write(f)) == f` for files [`parse`] read, and `write(parse(b)) == b` for version 16 files
-//! Photoshop wrote; a version 12 file's legacy descriptors keep their meaning, not their layout.
+//! `parse(write(f)) == f` for sets [`parse`] read. The existing single-set API retains trailing-byte
+//! warnings. [`parse_sets`] and [`write_sets`] preserve complete version-16 multi-set files with
+//! one version header; a version-12 file's legacy descriptors keep their meaning, not their layout.
 
 use crate::codepage;
 use crate::descriptor::{Descriptor, UnicodeString};
@@ -40,6 +42,9 @@ use crate::error::{PsdError, Result};
 use crate::io::{Reader, WriteExt, decode_legacy_name};
 
 mod legacy;
+mod sets;
+
+pub use sets::{MAX_SETS, MAX_TOTAL_ACTIONS, MAX_TOTAL_ITEMS, parse_sets, parse_sets_with_encoding, parse_sets_with_spans, write_sets};
 
 /// The version written by this module (Photoshop 6 and every later release).
 pub const VERSION: u32 = 16;
@@ -47,6 +52,70 @@ pub const VERSION: u32 = 16;
 pub const MAX_ACTIONS: usize = 10_000;
 /// Most steps read from one action.
 pub const MAX_ITEMS: usize = 100_000;
+
+/// A complete version16 archive and byte provenance into its original input.
+/// Ranges address the caller's input, including original names/flags/descriptor encodings.
+/// No source bytes are copied or rewritten by this parser.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpannedAtnArchive {
+    /// Parsed sets in physical file order.
+    pub sets: Vec<AtnFile>,
+    /// Byte spans for the sets, in the same order.
+    pub spans: Vec<AtnSetSpan>,
+}
+
+/// One physical set, including its original header fields and action occurrences.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AtnSetSpan {
+    /// Half-open input range of the complete set, including its actions.
+    pub range: std::ops::Range<usize>,
+    /// Set header through the action count, before the first action.
+    pub header: std::ops::Range<usize>,
+    /// Length-prefixed Unicode set name bytes.
+    pub name: std::ops::Range<usize>,
+    /// Original expanded-flag byte.
+    pub expanded: std::ops::Range<usize>,
+    /// Original four-byte action count.
+    pub count: std::ops::Range<usize>,
+    /// Action spans in physical file order.
+    pub actions: Vec<AtnActionSpan>,
+}
+
+/// One physical action. Header ranges let a library edit one field without normalizing others.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AtnActionSpan {
+    /// Half-open input range of the complete action, including its steps.
+    pub range: std::ops::Range<usize>,
+    /// Action header through the step count, before the first step.
+    pub header: std::ops::Range<usize>,
+    /// Original function-key code bytes.
+    pub function_key: std::ops::Range<usize>,
+    /// Original Shift-modifier flag byte.
+    pub shift: std::ops::Range<usize>,
+    /// Original command-modifier flag byte.
+    pub command: std::ops::Range<usize>,
+    /// Original color-label code bytes.
+    pub color: std::ops::Range<usize>,
+    /// Length-prefixed Unicode action name bytes.
+    pub name: std::ops::Range<usize>,
+    /// Original expanded-flag byte.
+    pub expanded: std::ops::Range<usize>,
+    /// Original four-byte step count.
+    pub count: std::ops::Range<usize>,
+    /// Step spans in physical file order.
+    pub items: Vec<AtnItemSpan>,
+}
+
+/// One original event, even when it maps to several native command steps.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AtnItemSpan {
+    /// Half-open input range of the complete original step.
+    pub range: std::ops::Range<usize>,
+    /// Expanded, enabled, dialog, dialog-options bytes, in that order.
+    pub flags: std::ops::Range<usize>,
+    /// Descriptor body after its -1 flag; absent for a descriptor-free event.
+    pub descriptor: Option<std::ops::Range<usize>>,
+}
 
 /// A parsed action set.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -217,7 +286,8 @@ fn write_ascii(out: &mut Vec<u8>, s: &[u8]) -> Result<()> {
 }
 
 /// Read one step with the descriptor dialect selected by the file version.
-fn read_item(r: &mut Reader<'_>, legacy: bool) -> Result<AtnItem> {
+fn read_item(r: &mut Reader<'_>, legacy: bool, mut span: Option<&mut AtnItemSpan>) -> Result<AtnItem> {
+    let start = r.pos();
     let expanded = r.u8()? != 0;
     let enabled = r.u8()? != 0;
     let with_dialog = r.u8()? != 0;
@@ -230,29 +300,67 @@ fn read_item(r: &mut Reader<'_>, legacy: bool) -> Result<AtnItem> {
     let dictionary = read_ascii(r)?;
     let descriptor = match r.i32()? {
         0 => None,
-        -1 => Some(if legacy { legacy::read(r)? } else { Descriptor::read(r)? }),
+        -1 => {
+            let start = r.pos();
+            let descriptor = if legacy { legacy::read(r)? } else { Descriptor::read(r)? };
+            if let Some(span) = span.as_deref_mut() {
+                span.descriptor = Some(start..r.pos());
+            }
+            Some(descriptor)
+        }
         n => return Err(PsdError::invalid(format!("bad descriptor flag {n}"))),
     };
+    if let Some(span) = span {
+        span.range = start..r.pos();
+        span.flags = start..start.saturating_add(4);
+    }
     Ok(AtnItem { expanded, enabled, with_dialog, dialog_options, event, dictionary, descriptor })
 }
 
 /// Read an action and its steps using the file's descriptor dialect.
-fn read_action(r: &mut Reader<'_>, legacy: bool) -> Result<AtnAction> {
+fn read_action(r: &mut Reader<'_>, legacy: bool, budget: Option<&mut sets::Budget>, mut span: Option<&mut AtnActionSpan>) -> Result<AtnAction> {
+    let start = r.pos();
     let function_key = r.u16()?;
+    let shift_start = r.pos();
     let shift = r.u8()? != 0;
+    let command_start = r.pos();
     let command = r.u8()? != 0;
+    let color_start = r.pos();
     let color = r.u16()?;
+    let name_start = r.pos();
     let name = UnicodeString::read(r)?;
+    let expanded_start = r.pos();
     let expanded = r.u8()? != 0;
+    let count_start = r.pos();
     let n = r.u32()?;
+    if let Some(span) = span.as_deref_mut() {
+        span.header = start..r.pos();
+        span.function_key = start..shift_start;
+        span.shift = shift_start..command_start;
+        span.command = command_start..color_start;
+        span.color = color_start..name_start;
+        span.name = name_start..expanded_start;
+        span.expanded = expanded_start..count_start;
+        span.count = count_start..r.pos();
+    }
     // Each item needs at least its 4 flags, the event kind, two empty names and the descriptor flag.
     r.check_count(u64::from(n), 20)?;
     if n as usize > MAX_ITEMS {
         return Err(PsdError::LimitExceeded("too many steps in one action"));
     }
+    if let Some(budget) = budget {
+        budget.items(n as usize)?;
+    }
     let mut items = Vec::with_capacity((n as usize).min(1024));
     for _ in 0..n {
-        items.push(read_item(r, legacy)?);
+        let mut item_span = span.as_ref().map(|_| AtnItemSpan::default());
+        items.push(read_item(r, legacy, item_span.as_mut())?);
+        if let (Some(span), Some(item)) = (span.as_deref_mut(), item_span) {
+            span.items.push(item);
+        }
+    }
+    if let Some(span) = span {
+        span.range = start..r.pos();
     }
     Ok(AtnAction { function_key, shift, command, color, name, expanded, items })
 }
@@ -278,33 +386,74 @@ pub fn parse_with_encoding(data: &[u8], encoding: Option<&str>) -> Result<AtnFil
 
 fn parse_layout(data: &[u8]) -> Result<AtnFile> {
     let mut r = Reader::new(data);
+    let version = read_version(&mut r)?;
+    let mut file = read_set(&mut r, version == 12, None)?;
+    if !r.is_empty() {
+        file.warnings.push(format!("{} trailing bytes ignored", r.remaining()));
+    }
+    Ok(file)
+}
+
+fn read_version(r: &mut Reader<'_>) -> Result<u32> {
     let version = r.u32()?;
     if !matches!(version, 12 | VERSION) {
         return Err(PsdError::Unsupported(format!("actions file version {version} (supported versions: 12 and 16)")));
     }
-    let name = UnicodeString::read(&mut r)?;
+    Ok(version)
+}
+
+fn read_set(r: &mut Reader<'_>, legacy: bool, budget: Option<&mut sets::Budget>) -> Result<AtnFile> {
+    read_set_with_spans(r, legacy, budget, None)
+}
+
+fn read_set_with_spans(
+    r: &mut Reader<'_>,
+    legacy: bool,
+    mut budget: Option<&mut sets::Budget>,
+    mut span: Option<&mut AtnSetSpan>,
+) -> Result<AtnFile> {
+    let start = r.pos();
+    let name = UnicodeString::read(r)?;
+    let expanded_start = r.pos();
     let expanded = r.u8()? != 0;
+    let count_start = r.pos();
     let n = r.u32()?;
+    if let Some(span) = span.as_deref_mut() {
+        span.header = start..r.pos();
+        span.name = start..expanded_start;
+        span.expanded = expanded_start..count_start;
+        span.count = count_start..r.pos();
+    }
     // Each action needs at least its key, modifiers, colour, an empty name, the flag and a count.
     r.check_count(u64::from(n), 15)?;
     if n as usize > MAX_ACTIONS {
         return Err(PsdError::LimitExceeded("too many actions in one set"));
     }
+    if let Some(budget) = budget.as_deref_mut() {
+        budget.actions(n as usize)?;
+    }
     let mut actions = Vec::with_capacity((n as usize).min(256));
     for _ in 0..n {
-        actions.push(read_action(&mut r, version == 12)?);
+        let mut action_span = span.as_ref().map(|_| AtnActionSpan::default());
+        actions.push(read_action(r, legacy, budget.as_deref_mut(), action_span.as_mut())?);
+        if let (Some(span), Some(action)) = (span.as_deref_mut(), action_span) {
+            span.actions.push(action);
+        }
     }
-    let mut warnings = Vec::new();
-    if !r.is_empty() {
-        warnings.push(format!("{} trailing bytes ignored", r.remaining()));
+    if let Some(span) = span {
+        span.range = start..r.pos();
     }
-    Ok(AtnFile { name, expanded, actions, warnings, encoding: None })
+    Ok(AtnFile { name, expanded, actions, warnings: Vec::new(), encoding: None })
 }
 
 /// The encoding of `f`'s 8-bit names that are not ASCII or UTF-8, or `None` if no name shown
 /// from them needs one; adds a warning when the guess is uncertain.
 fn name_encoding(f: &AtnFile, warnings: &mut Vec<String>) -> Option<&'static encoding_rs::Encoding> {
-    let items = || f.actions.iter().flat_map(|a| &a.items);
+    name_encoding_sets(std::slice::from_ref(f), warnings)
+}
+
+fn name_encoding_sets(files: &[AtnFile], warnings: &mut Vec<String>) -> Option<&'static encoding_rs::Encoding> {
+    let items = || files.iter().flat_map(|file| &file.actions).flat_map(|action| &action.items);
     let legacy = |b: &[u8]| !b.is_ascii();
     // Steps that store their name as Unicode too: the encoding that turns one into the other.
     let pairs: Vec<(&[u8], String)> = items()
@@ -333,13 +482,26 @@ fn name_encoding(f: &AtnFile, warnings: &mut Vec<String>) -> Option<&'static enc
         return None;
     }
     // The set, action and class names are UTF-16: their script points at the writer's locale.
-    let mut hint = f.name.to_string_lossy();
-    for name in f.actions.iter().map(|a| a.name.to_string_lossy()).chain(items().filter_map(class_name)) {
-        if hint.len() > codepage::GUESS_SAMPLE {
-            break;
+    let mut hint = String::new();
+    for (index, file) in files.iter().enumerate() {
+        if index == 0 {
+            hint = file.name.to_string_lossy();
+        } else if hint.len() <= codepage::GUESS_SAMPLE {
+            hint.push('\n');
+            hint.push_str(&file.name.to_string_lossy());
         }
-        hint.push('\n');
-        hint.push_str(&name);
+        for name in file
+            .actions
+            .iter()
+            .map(|action| action.name.to_string_lossy())
+            .chain(file.actions.iter().flat_map(|action| &action.items).filter_map(class_name))
+        {
+            if hint.len() > codepage::GUESS_SAMPLE {
+                break;
+            }
+            hint.push('\n');
+            hint.push_str(&name);
+        }
     }
     let guess = codepage::guess(&orphans, &hint);
     if guess.uncertain {
@@ -385,7 +547,12 @@ fn count(n: usize, what: &'static str) -> Result<u32> {
 pub fn write(f: &AtnFile) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     out.put_u32(VERSION);
-    f.name.write(&mut out);
+    write_set(&mut out, f)?;
+    Ok(out)
+}
+
+fn write_set(out: &mut Vec<u8>, f: &AtnFile) -> Result<()> {
+    f.name.write(out);
     out.put_u8(u8::from(f.expanded));
     out.put_u32(count(f.actions.len(), "too many actions")?);
     for a in &f.actions {
@@ -393,14 +560,14 @@ pub fn write(f: &AtnFile) -> Result<Vec<u8>> {
         out.put_u8(u8::from(a.shift));
         out.put_u8(u8::from(a.command));
         out.put_u16(a.color);
-        a.name.write(&mut out);
+        a.name.write(out);
         out.put_u8(u8::from(a.expanded));
         out.put_u32(count(a.items.len(), "too many steps")?);
         for item in &a.items {
-            write_item(&mut out, item)?;
+            write_item(out, item)?;
         }
     }
-    Ok(out)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -862,5 +1029,87 @@ mod tests {
             }
             let _ = parse(&bytes);
         }
+    }
+
+    /// Independent wire input: duplicate raw UTF16 names, noncanonical true bytes, and a
+    /// descriptor boolean whose semantic value cannot preserve its original byte by itself.
+    fn spanned_wire_archive() -> Vec<u8> {
+        fn ascii(out: &mut Vec<u8>, bytes: &[u8]) {
+            out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+            out.extend_from_slice(bytes);
+        }
+        let mut out = 16u32.to_be_bytes().to_vec();
+        let raw_name = [0, 0, 0, 2, 0xd8, 0, 0, 0]; // unpaired high surrogate, then NUL
+        for _ in 0..2 {
+            out.extend_from_slice(&raw_name);
+            out.push(2); // expanded=true, retaining its original byte matters
+            out.extend_from_slice(&1u32.to_be_bytes());
+            out.extend_from_slice(&[0, 3, 2, 0, 0, 12]); // F3, Shift byte2, no Command, colour12
+            out.extend_from_slice(&raw_name);
+            out.push(2);
+            out.extend_from_slice(&2u32.to_be_bytes());
+            out.extend_from_slice(&[2, 2, 0, 3]);
+            out.extend_from_slice(b"longFltn");
+            ascii(&mut out, b"Flatten");
+            out.extend_from_slice(&0i32.to_be_bytes());
+            out.extend_from_slice(&[0, 1, 2, 2]);
+            out.extend_from_slice(b"TEXT");
+            ascii(&mut out, b"futureAction");
+            ascii(&mut out, b"Future");
+            out.extend_from_slice(&(-1i32).to_be_bytes());
+            out.extend_from_slice(&0u32.to_be_bytes()); // empty descriptor Unicode name
+            out.extend_from_slice(&0u32.to_be_bytes());
+            out.extend_from_slice(b"null");
+            out.extend_from_slice(&1u32.to_be_bytes());
+            out.extend_from_slice(&0u32.to_be_bytes());
+            out.extend_from_slice(b"flagbool");
+            out.push(2);
+        }
+        out
+    }
+
+    #[test]
+    fn archive_spans_retain_physical_occurrences_and_original_wire_fields() {
+        let bytes = spanned_wire_archive();
+        let archive = parse_sets_with_spans(&bytes).unwrap();
+        assert_eq!(archive.sets.len(), 2);
+        assert_eq!(archive.spans.len(), 2);
+        assert_eq!(archive.spans[0].range.start, 4);
+        assert_eq!(archive.spans[0].range.end, archive.spans[1].range.start);
+        assert_eq!(archive.spans[1].range.end, bytes.len());
+        let mut untouched = bytes[..4].to_vec();
+        for (file, set) in archive.sets.iter().zip(&archive.spans) {
+            assert_eq!(file.name.0, [0xd800, 0]);
+            assert_eq!(bytes[set.expanded.clone()], [2]);
+            assert_eq!(bytes[set.count.clone()], 1u32.to_be_bytes());
+            assert_eq!(set.header.end, set.actions[0].range.start);
+            let action = &set.actions[0];
+            assert_eq!(bytes[action.function_key.clone()], [0, 3]);
+            assert_eq!(bytes[action.shift.clone()], [2]);
+            assert_eq!(bytes[action.command.clone()], [0]);
+            assert_eq!(bytes[action.color.clone()], [0, 12]);
+            assert_eq!(bytes[action.expanded.clone()], [2]);
+            assert_eq!(bytes[action.count.clone()], 2u32.to_be_bytes());
+            assert_eq!(action.header.end, action.items[0].range.start);
+            assert_eq!(bytes[action.items[0].flags.clone()], [2, 2, 0, 3]);
+            assert_eq!(bytes[action.items[1].flags.clone()], [0, 1, 2, 2]);
+            assert_eq!(action.items[0].range.end, action.items[1].range.start);
+            assert_eq!(action.items[1].range.end, action.range.end);
+            assert_eq!(action.range.end, set.range.end);
+            assert_eq!(bytes[action.items[1].range.clone()].last(), Some(&2));
+            untouched.extend_from_slice(&bytes[set.range.clone()]);
+        }
+        assert_eq!(untouched, bytes, "no semantic writer generates the expected raw bytes");
+        assert_eq!(parse_sets(&bytes).unwrap(), archive.sets, "ordinary parsing keeps its semantic API");
+        assert_ne!(write_sets(&archive.sets).unwrap(), bytes, "typed boolean rewriting is not a raw library round trip");
+    }
+
+    #[test]
+    fn archive_spans_reject_partial_later_records_and_legacy_layout() {
+        let mut bytes = spanned_wire_archive();
+        bytes.pop(); // the second set's descriptor value is incomplete
+        assert!(parse_sets_with_spans(&bytes).is_err(), "no partial archive is admitted");
+        assert!(parse_sets_with_spans(&16u32.to_be_bytes()).is_err(), "a version prefix is not an invented empty ATN");
+        assert!(matches!(parse_sets_with_spans(&12u32.to_be_bytes()), Err(PsdError::Unsupported(_))));
     }
 }

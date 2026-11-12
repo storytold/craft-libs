@@ -338,4 +338,5 @@ pub(crate) const LINBITS: [u32; 32] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 pub(crate) const QUAD_A_CODES: [u8; 16] = [1, 5, 4, 5, 6, 5, 4, 4, 7, 3, 6, 0, 7, 2, 3, 1];
 pub(crate) const QUAD_A_LENS: [u8; 16] = [1, 4, 4, 5, 4, 6, 5, 6, 4, 5, 5, 6, 5, 6, 6, 6];
 /// Count1 table B: four bits, the inverted quadruple.
+#[cfg(feature = "mp3-encode")]
 pub(crate) const QUAD_B_CODES: [u8; 16] = [15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0];

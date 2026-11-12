@@ -407,7 +407,7 @@ impl InkColor {
 /// colorants.
 pub fn to_pdf_color(color: &InkColor, inks: &InkSet, cms: &dyn CmykConversion) -> Option<PdfColor> {
     let tints = match color {
-        InkColor::All(tint) => return Some(separation(SeparationColorant::AllColorants, *tint, cmyk::Color::new(255, 255, 255, 255))),
+        InkColor::All(tint) => return Some(registration(*tint)),
         InkColor::None => return Some(separation(SeparationColorant::NoColorant, 0.0, cmyk::Color::new(0, 0, 0, 0))),
         InkColor::Tints(tints) if tints.is_empty() => return None,
         InkColor::Tints(tints) => tints,
@@ -463,6 +463,11 @@ fn unit(v: f32) -> f32 {
 
 fn byte(v: f32) -> u8 {
     (unit(v) * 255.0).round() as u8
+}
+
+/// The registration color at `tint`: a `Separation /All` space, which marks every plate.
+pub(crate) fn registration(tint: f32) -> PdfColor {
+    separation(SeparationColorant::AllColorants, tint, cmyk::Color::new(255, 255, 255, 255))
 }
 
 fn separation(colorant: SeparationColorant, tint: f32, fallback: cmyk::Color) -> PdfColor {

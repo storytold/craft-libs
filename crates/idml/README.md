@@ -9,9 +9,10 @@ An IDML package is a ZIP whose first entry is an uncompressed `mimetype`, follow
 Implemented clean-room from the public IDML File Format Specification and from inspecting IDML
 packages exported from synthetic documents.
 
-This crate is the layer between the bytes and IDML's own element tree. What the elements mean
-(spreads, page items, stories, styles, swatches) is not modelled here yet: a caller walks the
-tree and maps it onto its own document.
+This crate is the layer between the bytes and IDML's own element tree, with a typed model of
+the layout, the stories and the resources (`model`): a caller reads it and maps it onto its own
+document. InCopy Markup (ICML), one
+story as one XML document, is read and written too (`icml`).
 
 ## Reading
 
@@ -53,7 +54,8 @@ for line in &doc.warnings { /* a part designmap.xml lists and the package lacks 
 | `xml.max_depth` | 256 | `Error::Part` |
 | `xml.max_nodes`, `xml.max_attrs_total` (one part) | 8,000,000 and 32,000,000 | `Error::Part` |
 
-Sizes are checked against what a part really expands to, not what the archive declares.
+The ZIP layer is craft-zip: the declared entry count is checked before the archive is indexed, and
+sizes are checked against what a part really expands to, not what the archive declares.
 
 ## Writing
 
@@ -77,6 +79,103 @@ assert!(craft_idml::is_idml(&bytes));
 
 Parts are written with an element that has only element children one child per line, and any
 other element on one line, so story text is never changed by indentation.
+
+## The layout model
+
+```rust
+# fn main() -> craft_idml::Result<()> {
+# let bytes: Vec<u8> = Vec::new();
+# if bytes.is_empty() { return Ok(()); }
+use craft_idml::model::{apply, spreads};
+
+let doc = craft_idml::Package::open(&bytes)?.document()?;
+for spread in spreads(&doc) {
+    for page in spread.pages() {
+        let _bounds = page.geometric_bounds();      // top left bottom right
+        let _parent = page.applied_master();
+    }
+    for (item, to_spread) in spread.all_items() {  // nested items too, with their transform
+        let outline = item.geometry();             // subpaths of anchor and direction points
+        if let Some([top, left, _, _]) = outline.bounds() {
+            let _corner = apply(&to_spread, [left, top]);
+        }
+        for graphic in item.graphics() {
+            let _file = graphic.link().and_then(|l| l.uri());
+            let _embedded = graphic.contents();
+        }
+    }
+}
+# Ok(()) }
+```
+
+- `Spread` (and parent spreads, `master`), `Page`, `Guide`, `PageItem` (`ItemKind`: text frames,
+  rectangles, ovals, polygons, lines, groups, buttons, EPS text, and other page item elements by
+  name), `Graphic` (`GraphicKind`: images, EPS, PDF, imported pages, WMF, PICT, SVG) and `Link`.
+  Children keep their document order: page items stack back to front.
+- Each node keeps its attributes and `<Properties>` as written (`Values`) and reads them through
+  accessors: `item_transform`, `geometric_bounds`, `applied_master`, `override_list`,
+  `parent_story`, `next_text_frame`, `graphic_bounds`, `contents`, and `num`, `boolean`,
+  `value` for any other property. Anything the model does not type is kept as XML where it
+  stood, without the part's indentation (`tidy`). `to_el` writes a node back: what is read and
+  written again reads the same.
+- `PathGeometry` (`geometry`, `set_geometry`) holds subpaths of points. A point without a usable
+  anchor is left out, a missing direction point is the anchor, and a subpath holding `NaN` or an
+  infinity is left out whole. At most `MAX_PATH_POINTS` (1,000,000) points are kept.
+- `Spread::all_items` walks nested groups without recursion, giving each item's transform into
+  spread coordinates (`concat` of the transforms on the way).
+
+## Stories
+
+```rust
+use craft_idml::model::{Ace, TextNode, stories};
+
+# fn main() -> Result<(), craft_xml::Error> {
+let part = craft_idml::parse_part(br#"<idPkg:Story><Story Self="u1"><ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Body">
+  <CharacterStyleRange PointSize="9"><Content>Page <?ACE 18?></Content><Br/></CharacterStyleRange>
+</ParagraphStyleRange></Story></idPkg:Story>"#)?;
+let story = stories(&part.elements().cloned().collect::<Vec<_>>()).remove(0);
+let body = story.paragraphs()[0];
+assert_eq!(body.paragraph_style(), Some("ParagraphStyle/Body"));
+assert_eq!(body.characters()[0].values.num("PointSize"), Some(9.0));
+assert_eq!(story.text(|a| (a == Ace::PageNumber).then_some('#')), "Page #\n");
+# Ok(()) }
+```
+
+- `Story`, its `TextNode`s in document order: paragraph and character ranges (`Range`),
+  `Content` (text, and the special characters InDesign writes as `<?ACE n?>`: `Ace`), `Br`,
+  containers of text (`HyperlinkTextSource`, `Change`, `XMLElement`, `CrossReferenceSource`,
+  `Footnote`, `Note`, `EndnoteRange`), `Table` (rows, columns, and `Cell`s holding text), and
+  page items anchored in the text (the layout model's `PageItem`).
+- `text` gives a story's, range's, cell's or note's text: content, `\n` for each break, and a
+  character for each special character the caller names. A footnote's, note's or table's text
+  is its own, not the text around it; a hyperlink's or a change's is.
+- Content keeps its whitespace exactly; elements the model does not type are kept as written.
+  Containers nest as deep as the XML reader allows (256), and text is gathered without
+  recursion.
+
+## Resources
+
+- `style_groups` gives the root style groups (`RootParagraphStyleGroup` and the character,
+  object, cell and table ones) as trees of `StyleGroup` and `Style`, written back exactly.
+  `StyleGroup::styles` lists every style with the names of the groups it is in; `Style` has
+  `based_on`, `next_style` and its other children (`other`: an object style's
+  `TextFramePreference`, its effect settings).
+- `swatches` gives `Color`, `Tint`, `Gradient` (with `stops`), `MixedInk`, `MixedInkGroup` and the
+  None `Swatch`: `spot`, `space`, `color_value`, `base_color`, `tint_value`, `radial`.
+- `stroke_styles` (dashed with `dash_array`, dotted, striped with `stripe_array`) and
+  `color_groups` (with `members`).
+- `preference` finds a preference element (`DocumentPreference`, `GridPreference`, …) and
+  `named` every element of a name (`Ink`, `Layer`, `Section`, `Condition`, `NumberingList`).
+
+## ICML
+
+`icml::is_icml` sniffs the `SnippetType="InCopyInterchange"` instruction in the first 4 KiB.
+`icml::read_icml` reads the file as a package part is read, at most `MAX_ICML_BYTES` (512 MiB);
+a root that is not `Document` or a file without a `Story` is refused, and a reference to a
+package part (an ICML file has none) is left out with a warning. `Icml::stories` gives its
+stories; which one to place (usually the first no text frame of the file holds) is the
+caller's choice. `icml::icml_xml` writes a `Document` with the two `<?aid?>` instructions that
+mark the file.
 
 ## Values
 

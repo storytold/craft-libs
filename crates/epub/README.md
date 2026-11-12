@@ -48,6 +48,7 @@ assert!(craft_epub::is_epub(&bytes));
   document `content.opf`, the navigation document `nav.xhtml`, and the resources in their order.
 - `Layout::PrePaginated` writes the fixed-layout metadata; `NavKind::PageList` makes the
   navigation a page list.
+- `Book::ncx` also writes `toc.ncx`, the EPUB 2 table of contents, for older reading systems.
 - Navigation entries nest by `level`. With no entries the navigation has one, to the first spine
   item, because an empty list is not valid.
 - Resource paths become percent-encoded hrefs. A resource marked `stored()` is not compressed
@@ -78,7 +79,12 @@ for path in &spine {
 
 - EPUB 2 and 3 packages. `Package` has the version, title, creators, language, identifier,
   modification date, fixed-layout flag, manifest, spine (with `linear`), the EPUB 2 NCX path, and
-  `nav()` and `cover_image()`. The navigation document and the NCX are not parsed.
+  `nav()` and `cover_image()`.
+- `Epub::toc()` gives the table of contents as entries with a label, the archive entry and
+  fragment they point at, and a level: from the EPUB 3 navigation document, else the EPUB 2 NCX
+  (`parse_nav`, `parse_ncx`). At most `MAX_TOC_ENTRIES` (100,000) entries.
+- `Epub::encryption()` lists what `META-INF/encryption.xml` says is encrypted, and tells font
+  obfuscation from DRM. This crate does not decrypt or de-obfuscate.
 - `container.xml` and the package document are read strictly: one that is cut off or whose tags
   don't match is an error, not half a book.
 - A missing entry is `Ok(None)`: a spine item whose file is gone is the caller's to skip.
@@ -94,7 +100,8 @@ for path in &spine {
 | `max_total_bytes` (all entries read from one package) | 256 MiB | `Error::TooLarge` |
 | `max_manifest`, `max_spine` | 10,000 each | further items are ignored |
 
-Sizes are checked against what an entry really expands to, not what the archive declares. The two
+The ZIP layer is craft-zip: the declared entry count is checked before the archive is indexed, and
+sizes are checked against what an entry really expands to, not what the archive declares. The two
 XML documents are read with craft-xml's limits (depth 256, 2,000,000 nodes) and `max_entry_bytes`.
 
 ## Where it came from

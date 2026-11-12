@@ -1,6 +1,6 @@
 [package]
 name = "craft-video"
-description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8, ProRes, H.264, HEVC, VP9, AV1."
+description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8, ProRes, H.264, HEVC, VP9, AV1, MPEG-4 Part 2."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -21,10 +21,15 @@ dnx = []
 apv = ["apv-decode", "apv-encode"]
 apv-decode = ["craft-media/bitstream"]
 apv-encode = ["craft-media/bitstream"]
-# VP8 (RFC 6386): decoder.
-vp8 = []
+# VP8 (RFC 6386): decoder and encoder; `vp8-decode` or `vp8-encode` for one of them.
+vp8 = ["vp8-decode", "vp8-encode"]
+vp8-decode = []
+vp8-encode = []
 # MPEG-2 video (ITU-T H.262) and MPEG-1 video (ISO/IEC 11172-2): decoder.
 mpeg2 = []
+# MPEG-4 Part 2 video (ISO/IEC 14496-2, the Xvid/DivX format): Simple profile encoder.
+mpeg4 = ["mpeg4-encode"]
+mpeg4-encode = ["craft-media/bitstream"]
 # Apple ProRes (SMPTE RDD 36): decoder and encoder.
 prores = ["craft-media/bitstream"]
 # H.264 / AVC: decoder and encoder; `h264-decode` or `h264-encode` for one of them.
@@ -64,15 +69,15 @@ required-features = ["apv"]
 
 [[test]]
 name = "vp8"
-required-features = ["vp8"]
+required-features = ["vp8-decode"]
 
 [[example]]
 name = "vp8_fuzz"
-required-features = ["vp8"]
+required-features = ["vp8-decode"]
 
 [[example]]
 name = "vp8_vp8dec"
-required-features = ["vp8"]
+required-features = ["vp8-decode"]
 
 [[test]]
 name = "av1_decode"
@@ -86,9 +91,18 @@ required-features = ["av1-decode"]
 name = "h264_decode"
 required-features = ["h264-decode"]
 
+[[test]]
+name = "h264_encode"
+required-features = ["h264-encode"]
+
 [[example]]
 name = "h264_h264dec"
 required-features = ["h264-decode"]
+
+[[example]]
+name = "h264_h264enc_bench"
+required-features = ["h264-encode"]
+test = true
 
 [[test]]
 name = "hevc_decode"
@@ -99,12 +113,20 @@ name = "hevc_hevcdec"
 required-features = ["hevc-decode"]
 
 [[test]]
+name = "vp8_encode"
+required-features = ["vp8"]
+
+[[test]]
 name = "vp9_decode"
 required-features = ["vp9-decode"]
 
 [[example]]
 name = "vp9_vp9dec"
 required-features = ["vp9-decode"]
+
+[[test]]
+name = "mpeg4_encode"
+required-features = ["mpeg4-encode"]
 
 [[test]]
 name = "mpeg2"

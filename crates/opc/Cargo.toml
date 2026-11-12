@@ -12,16 +12,15 @@ workspace = true
 
 [features]
 # `zip64_entry_count_sample`, the regression input for a reader's own entry-count test.
-test-support = []
+test-support = ["craft-zip/test-support"]
 
 [dependencies]
 craft-xml = { workspace = true }
 log = "0.4"
 thiserror = { workspace = true }
-# `deflate-flate2` with flate2's miniz_oxide backend (chosen below), as in craft-update: zip's own
-# `deflate` feature would switch a whole app's flate2 to zlib-rs.
-zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
-flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+craft-zip = { workspace = true }
 
 [dev-dependencies]
+craft-zip = { workspace = true, features = ["test-support"] }
+# The tests build hostile archives by hand.
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }

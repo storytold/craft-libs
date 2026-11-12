@@ -17,6 +17,56 @@ fn pat(depth: u16, alpha: bool) -> PsdPattern {
     }
 }
 
+/// Compare direct pattern serialization with staged bytes at supported depths.
+#[test]
+fn direct_writes_match_staged_bytes() {
+    for depth in [1, 8, 16, 32] {
+        for alpha in [false, true] {
+            let mut p = pat(depth, alpha);
+            if depth == 1 {
+                p.channels = vec![vec![0xA8; 3]; 3];
+                p.alpha = alpha.then(|| vec![0xF8; 3]);
+            }
+            p.id = "é".repeat(140);
+            let mut indexed = p.clone();
+            indexed.mode = 2;
+            indexed.channels.truncate(1);
+            indexed.palette = Some(vec![73; 17]);
+            let patterns = [p, indexed];
+            let mut block = Vec::new();
+            let mut file = b"8BPT\0\x01\0\0\0\x02".to_vec();
+            for p in &patterns {
+                let mut one = Vec::new();
+                staged_pattern(p, &mut one).unwrap();
+                block.extend_from_slice(&(one.len() as u32).to_be_bytes());
+                block.extend_from_slice(&one);
+                block.resize(block.len().next_multiple_of(4), 0);
+                file.extend_from_slice(&one);
+            }
+            assert_eq!(write_pattern_block(&patterns).unwrap(), block);
+            assert_eq!(write_pat_file(&patterns).unwrap(), file);
+        }
+    }
+}
+
+/// Verify borrowed raw pattern planes retain layout and length validation.
+#[test]
+fn raw_pattern_writes_still_validate_layout_and_plane_length() {
+    for depth in [1, 16, 32, 7] {
+        let p = pat(depth, false);
+        assert!(write_pattern_block(&[PsdPattern { channels: vec![vec![0; 2]], ..p.clone() }]).is_err());
+        assert!(write_pat_file(&[PsdPattern { channels: Vec::new(), alpha: Some(vec![0; 2]), ..p }]).is_err());
+    }
+}
+
+/// Verify matching plane lengths cannot bypass unsupported pattern-depth checks.
+#[test]
+fn writers_reject_unsupported_depth_with_matching_plane_lengths() {
+    let p = PsdPattern { depth: 7, channels: vec![vec![0; 15]; 3], alpha: Some(vec![0; 15]), ..pat(8, false) };
+    assert!(write_pattern_block(std::slice::from_ref(&p)).is_err());
+    assert!(write_pat_file(&[p]).is_err());
+}
+
 /// photocraft#9318 review: a name the reader refuses (more than 65,536 UTF-16 units with its NUL) is
 /// refused on write, so a saved library can't become a file that loads nothing.
 #[test]
@@ -349,4 +399,75 @@ fn zero_size_pattern_rectangles_are_rejected() {
     let vma = pattern_vma_rect_offset(4, &p);
     set_i32(&mut block, vma + 8, 0);
     assert!(parse_pattern_block(&block).is_err());
+}
+
+/// Serialize a pattern with the previous staged writer as a byte oracle.
+fn staged_pattern(p: &PsdPattern, out: &mut Vec<u8>) -> Result<()> {
+    if p.width > MAX_EDGE || p.height > MAX_EDGE || p.width > i16::MAX as u32 || p.height > i16::MAX as u32 {
+        return Err(PsdError::LimitExceeded("pattern size"));
+    }
+    out.extend_from_slice(&1u32.to_be_bytes());
+    out.extend_from_slice(&p.mode.to_be_bytes());
+    out.extend_from_slice(&(p.height as u16).to_be_bytes());
+    out.extend_from_slice(&(p.width as u16).to_be_bytes());
+    let units: Vec<u16> = p.name.encode_utf16().chain(std::iter::once(0)).collect();
+    // The reader refuses longer names (see `read_pattern`).
+    if units.len() > 65_536 {
+        return Err(PsdError::LimitExceeded("pattern name length"));
+    }
+    out.extend_from_slice(&(units.len() as u32).to_be_bytes());
+    for u in units {
+        out.extend_from_slice(&u.to_be_bytes());
+    }
+    let id = p.id.as_bytes();
+    let idl = id.len().min(255);
+    out.push(idl as u8);
+    out.extend_from_slice(&id[..idl]);
+    if p.mode == 2 {
+        let mut pal = p.palette.clone().unwrap_or_default();
+        pal.resize(768, 0);
+        out.extend_from_slice(&pal);
+    }
+    let rect = [0i32, 0, p.height as i32, p.width as i32];
+    let mut body = Vec::new();
+    for v in rect {
+        body.extend_from_slice(&v.to_be_bytes());
+    }
+    const SLOTS: u32 = 24;
+    body.extend_from_slice(&SLOTS.to_be_bytes());
+    let layout = PlaneLayout { planes: 1, width: p.width as usize, height: p.height as usize, depth: p.depth, version: Version::Psd };
+    let array = |plane: &[u8], body: &mut Vec<u8>| -> Result<()> {
+        let (comp, data) = if p.depth == 8 {
+            (1u8, encode_planes(Compression::Rle, plane, &layout)?)
+        } else {
+            (0u8, encode_planes(Compression::Raw, plane, &layout)?)
+        };
+        body.extend_from_slice(&1u32.to_be_bytes());
+        body.extend_from_slice(&((23 + data.len()) as u32).to_be_bytes());
+        body.extend_from_slice(&u32::from(p.depth).to_be_bytes());
+        for v in rect {
+            body.extend_from_slice(&v.to_be_bytes());
+        }
+        body.extend_from_slice(&p.depth.to_be_bytes());
+        body.push(comp);
+        body.extend_from_slice(&data);
+        Ok(())
+    };
+    let nc = p.channels.len().min(SLOTS as usize);
+    for c in &p.channels[..nc] {
+        array(c, &mut body)?;
+    }
+    for _ in nc..SLOTS as usize {
+        body.extend_from_slice(&0u32.to_be_bytes());
+    }
+    // User mask slot: unused; sheet mask slot: transparency, where Photoshop keeps it (photocraft#8054).
+    body.extend_from_slice(&0u32.to_be_bytes());
+    match &p.alpha {
+        Some(a) => array(a, &mut body)?,
+        None => body.extend_from_slice(&0u32.to_be_bytes()),
+    }
+    out.extend_from_slice(&3u32.to_be_bytes());
+    out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    out.extend_from_slice(&body);
+    Ok(())
 }

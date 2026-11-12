@@ -20,8 +20,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::Chunk;
 use crate::bytes::{array, be_f32, be_f64, be_i32, be_u16, be_u32, cstr, text, until_nul};
+use crate::index::Node;
 use crate::typed::{KeyList, Layer, Project, PropGroup, PropNode, Property};
 
 /// The parameter type, the `u32` at byte 12 of `pard`. The numbering matches the plug-in
@@ -132,7 +132,7 @@ pub enum LayerRef {
 #[derive(Debug, Clone)]
 pub struct Effect<'f, 'a> {
     match_name: String,
-    chunk: &'f Chunk<'a>,
+    chunk: Node<'f, 'a>,
 }
 
 /// Where the parameter definitions of an effect instance come from.
@@ -178,13 +178,13 @@ impl<'f, 'a> Effect<'f, 'a> {
     }
 
     /// The underlying `LIST sspc` chunk.
-    pub fn chunk(&self) -> &'f Chunk<'a> {
+    pub fn chunk(&self) -> Node<'f, 'a> {
         self.chunk
     }
 
     /// The instance name shown in the effect controls (`fnam`).
     pub fn name(&self) -> Option<String> {
-        self.chunk.child(b"fnam")?.children().iter().find(|c| c.is(b"Utf8"))?.bytes().map(text)
+        self.chunk.child(b"fnam")?.child(b"Utf8")?.bytes().map(text)
     }
 
     /// The name the user gave the instance: the `tdsn` of the instance's value group when it is
@@ -192,7 +192,7 @@ impl<'f, 'a> Effect<'f, 'a> {
     /// `None` while the instance shows the effect's name.
     pub fn user_name(&self) -> Option<String> {
         let values = self.chunk.child_list(b"tdgp")?;
-        let name = values.child(b"tdsn")?.children().iter().find(|c| c.is(b"Utf8"))?.bytes().map(text)?;
+        let name = values.child(b"tdsn")?.child(b"Utf8")?.bytes().map(text)?;
         (name != "-_0_/-" && !name.is_empty()).then_some(name)
     }
 
@@ -250,7 +250,7 @@ impl<'f, 'a> Effect<'f, 'a> {
     }
 
     /// The parameters described by `part` (a `LIST parT`) with the values of this instance.
-    fn params_from(&self, part: &'f Chunk<'a>, borrowed: bool) -> Vec<EffectParam<'f, 'a>> {
+    fn params_from(&self, part: Node<'f, 'a>, borrowed: bool) -> Vec<EffectParam<'f, 'a>> {
         let mut out: Vec<EffectParam<'f, 'a>> = Vec::new();
         // The stored values by match name: the first entry of a name, as `PropGroup::get` finds it
         // (a group of that name means no stored value). Indexed once: a lookup per parameter
@@ -271,8 +271,8 @@ impl<'f, 'a> Effect<'f, 'a> {
                 out.push(EffectParam {
                     index: out.len(),
                     match_name,
-                    kind: ParamKind::from_u32(be_u32(pard, 12).unwrap_or(u32::MAX)),
-                    name: cstr(pard, 16, 32).unwrap_or_default(),
+                    kind: Pard(pard).kind(),
+                    name: Pard(pard).name().unwrap_or_default(),
                     items: None,
                     borrowed_definition: borrowed,
                     pard,
@@ -280,7 +280,7 @@ impl<'f, 'a> Effect<'f, 'a> {
                 });
             } else if c.is(b"pdnm")
                 && let Some(last) = out.last_mut()
-                && let Some(u) = c.children().iter().find(|u| u.is(b"Utf8"))
+                && let Some(u) = c.child(b"Utf8")
                 && let Some(b) = u.bytes()
                 // An empty `pdnm` names nothing (some writers store one: the effect
                 // supplies its items).
@@ -293,8 +293,9 @@ impl<'f, 'a> Effect<'f, 'a> {
     }
 }
 
-fn has_pard(part: &Chunk<'_>) -> bool {
-    part.children().iter().any(|c| c.is(b"pard"))
+/// True when a `LIST parT` holds parameter definitions (a `pard`).
+fn has_pard(part: Node<'_, '_>) -> bool {
+    part.children().any(|c| c.is(b"pard"))
 }
 
 impl<'f, 'a> Project<'f, 'a> {
@@ -302,18 +303,18 @@ impl<'f, 'a> Project<'f, 'a> {
     /// name and the `LIST parT` of the copied instance, in file order (the stack order of the
     /// types, 365/366). The `EfDC` count before them is little-endian and is not needed to read
     /// them. A type whose copy has no definitions is left out.
-    pub fn effect_definitions(&self) -> Vec<(String, &'f Chunk<'a>)> {
-        let mut out: Vec<(String, &'f Chunk<'a>)> = Vec::new();
+    pub fn effect_definitions(&self) -> Vec<(String, Node<'f, 'a>)> {
+        let mut out: Vec<(String, Node<'f, 'a>)> = Vec::new();
         let Some(defs) = self.effect_defs else { return out };
         let mut seen: HashSet<String> = HashSet::new();
-        for df in defs.children().iter().filter(|c| c.is_list(b"EfDf")) {
+        for df in defs.children().filter(|c| c.is_list(b"EfDf")) {
             let mut name: Option<String> = None;
             for c in df.children() {
                 if c.is(b"tdmn") {
                     name = c.bytes().map(|b| text(until_nul(b)));
                 } else if c.is_list(b"sspc")
                     && let Some(n) = name.take()
-                    && let Some(part) = c.child_list(b"parT").filter(|p| has_pard(p))
+                    && let Some(part) = c.child_list(b"parT").filter(|p| has_pard(*p))
                     && seen.insert(n.clone())
                 {
                     out.push((n, part));
@@ -328,8 +329,8 @@ impl<'f, 'a> Project<'f, 'a> {
     /// For a type without a project-level copy it also keeps the own `parT` of the first instance
     /// in the file (items, layers and effects in file order) that has one.
     pub fn effect_definition_index(&self) -> EffectDefinitions<'f, 'a> {
-        let by_name: HashMap<String, &'f Chunk<'a>> = self.effect_definitions().into_iter().collect();
-        let mut instances: HashMap<String, &'f Chunk<'a>> = HashMap::new();
+        let by_name: HashMap<String, Node<'f, 'a>> = self.effect_definitions().into_iter().collect();
+        let mut instances: HashMap<String, Node<'f, 'a>> = HashMap::new();
         for item in self.all_items() {
             let Some(comp) = item.comp() else { continue };
             for layer in comp.layers() {
@@ -337,7 +338,7 @@ impl<'f, 'a> Project<'f, 'a> {
                     if by_name.contains_key(&fx.match_name) || instances.contains_key(&fx.match_name) {
                         continue;
                     }
-                    if let Some(part) = fx.chunk.child_list(b"parT").filter(|p| has_pard(p)) {
+                    if let Some(part) = fx.chunk.child_list(b"parT").filter(|p| has_pard(*p)) {
                         instances.insert(fx.match_name, part);
                     }
                 }
@@ -363,9 +364,9 @@ impl<'f, 'a> Project<'f, 'a> {
 #[derive(Debug, Clone, Default)]
 pub struct EffectDefinitions<'f, 'a> {
     /// The project-level copies (`EfdG`).
-    by_name: HashMap<String, &'f Chunk<'a>>,
+    by_name: HashMap<String, Node<'f, 'a>>,
     /// For a type without a project-level copy: the own `parT` of the first instance that has one.
-    instances: HashMap<String, &'f Chunk<'a>>,
+    instances: HashMap<String, Node<'f, 'a>>,
 }
 
 impl<'f, 'a> EffectDefinitions<'f, 'a> {
@@ -392,7 +393,7 @@ impl<'f, 'a> EffectDefinitions<'f, 'a> {
             return effect.params();
         }
         match self.by_name.get(effect.match_name()).or_else(|| self.instances.get(effect.match_name())) {
-            Some(part) => effect.params_from(part, true),
+            Some(part) => effect.params_from(*part, true),
             None => Vec::new(),
         }
     }
@@ -484,26 +485,7 @@ impl<'f, 'a> EffectParam<'f, 'a> {
     pub fn pard_default(&self) -> Option<ParamValue> {
         match self.kind {
             ParamKind::Popup if self.borrowed_definition => None,
-            ParamKind::FloatSlider => be_f64(self.pard, 56).map(ParamValue::Number),
-            ParamKind::FixedSlider | ParamKind::Angle => be_i32(self.pard, 56).map(|v| ParamValue::Number(f64::from(v) / 65536.0)),
-            ParamKind::IntSlider => be_i32(self.pard, 56).map(|v| ParamValue::Number(f64::from(v))),
-            ParamKind::Checkbox => be_u32(self.pard, 56).map(|v| ParamValue::Bool(v != 0)),
-            ParamKind::Popup => be_u32(self.pard, 56).map(ParamValue::Index),
-            ParamKind::Point => {
-                let p = [f64::from(be_i32(self.pard, 56)?) / 65536.0, f64::from(be_i32(self.pard, 60)?) / 65536.0];
-                // A fresh instance stores fractions of the layer (0.5, 0.5); After Effects' save of
-                // a project it opened stores percent (50, 50: the re-saves of read-back tests e1 and
-                // e2, where Gradient Ramp's Start and End and every other point default came back
-                // as 50 / 0 and 50 / 100). Point
-                // defaults lie inside the layer, so a component beyond 1 tells percent.
-                let percent = p.iter().any(|c| c.abs() > 1.0 + 1e-9);
-                Some(ParamValue::Point(if percent { p.map(|c| c / 100.0) } else { p }))
-            }
-            ParamKind::Color => {
-                let [a, r, g, b] = array::<4>(self.pard, 56)?.map(|c| f64::from(c) / 255.0);
-                Some(ParamValue::Argb([a, r, g, b]))
-            }
-            _ => None,
+            kind => Pard(self.pard).default(kind),
         }
     }
 
@@ -557,22 +539,14 @@ impl<'f, 'a> EffectParam<'f, 'a> {
     /// slider differs per parameter (Amount 37.5 % is stored 37.5, Blend 25 % is stored 0.25), so
     /// this is what tells a reader the scale. `None` for other types.
     pub fn valid_max(&self) -> Option<f64> {
-        match self.kind {
-            ParamKind::FixedSlider => be_i32(self.pard, 128).map(|v| f64::from(v) / 65536.0),
-            ParamKind::FloatSlider => be_f32(self.pard, 108).map(f64::from),
-            ParamKind::IntSlider => be_i32(self.pard, 128).map(f64::from),
-            _ => None,
-        }
+        Pard(self.pard).valid_max(self.kind)
     }
 
     /// The smallest valid value of a float slider, the `f32` at byte 104 of `pard` (Exposure
     /// -100, Offset -2, Gamma Correction 0.1: 389). `None` for other types (a fixed slider's
     /// minimum is not decoded).
     pub fn valid_min(&self) -> Option<f64> {
-        match self.kind {
-            ParamKind::FloatSlider => be_f32(self.pard, 104).map(f64::from),
-            _ => None,
-        }
+        Pard(self.pard).valid_min(self.kind)
     }
 
     /// The range of a float slider's slider (what the control's drag covers, inside the valid
@@ -581,7 +555,7 @@ impl<'f, 'a> EffectParam<'f, 'a> {
     /// for other types.
     pub fn slider_range(&self) -> Option<(f64, f64)> {
         match self.kind {
-            ParamKind::FloatSlider => Some((f64::from(be_f32(self.pard, 112)?), f64::from(be_f32(self.pard, 116)?))),
+            ParamKind::FloatSlider => Pard(self.pard).slider_range(self.kind),
             _ => None,
         }
     }
@@ -591,7 +565,7 @@ impl<'f, 'a> EffectParam<'f, 'a> {
         if self.kind != ParamKind::Popup {
             return None;
         }
-        be_u16(self.pard, 60)
+        Pard(self.pard).popup_item_count()
     }
 
     /// For a popup: the selected item index (1-based): the stored selection, else the default.
@@ -619,6 +593,93 @@ impl<'f, 'a> EffectParam<'f, 'a> {
     }
 }
 
+/// A parameter definition (`pard`, 148 bytes; aep-format.md 3.7): the one decoder of its fields.
+/// The import reads them through [`EffectParam`]; the export writes them from its effect table and
+/// its tests read them back through this.
+#[derive(Clone, Copy, Debug)]
+pub struct Pard<'f>(pub &'f [u8]);
+
+impl Pard<'_> {
+    /// The type code, the `u32` at byte 12.
+    pub fn code(self) -> Option<u32> {
+        be_u32(self.0, 12)
+    }
+
+    /// The parameter type (an unreadable code is [`ParamKind::Other`]).
+    pub fn kind(self) -> ParamKind {
+        ParamKind::from_u32(self.code().unwrap_or(u32::MAX))
+    }
+
+    /// The parameter name at byte 16 (32 bytes).
+    pub fn name(self) -> Option<String> {
+        cstr(self.0, 16, 32)
+    }
+
+    /// The default at byte 56 as a parameter of type `kind` reads it (see
+    /// [`EffectParam::pard_default`]).
+    pub fn default(self, kind: ParamKind) -> Option<ParamValue> {
+        let p = self.0;
+        match kind {
+            ParamKind::FloatSlider => be_f64(p, 56).map(ParamValue::Number),
+            ParamKind::FixedSlider | ParamKind::Angle => be_i32(p, 56).map(|v| ParamValue::Number(f64::from(v) / 65536.0)),
+            ParamKind::IntSlider => be_i32(p, 56).map(|v| ParamValue::Number(f64::from(v))),
+            ParamKind::Checkbox => be_u32(p, 56).map(|v| ParamValue::Bool(v != 0)),
+            ParamKind::Popup => be_u32(p, 56).map(ParamValue::Index),
+            ParamKind::Point => {
+                let pt = [f64::from(be_i32(p, 56)?) / 65536.0, f64::from(be_i32(p, 60)?) / 65536.0];
+                // A fresh instance stores fractions of the layer (0.5, 0.5); After Effects' save of
+                // a project it opened stores percent (50, 50: the re-saves of read-back tests e1 and
+                // e2, where Gradient Ramp's Start and End and every other point default came back
+                // as 50 / 0 and 50 / 100). Point
+                // defaults lie inside the layer, so a component beyond 1 tells percent.
+                let percent = pt.iter().any(|c| c.abs() > 1.0 + 1e-9);
+                Some(ParamValue::Point(if percent { pt.map(|c| c / 100.0) } else { pt }))
+            }
+            ParamKind::Color => {
+                let [a, r, g, b] = array::<4>(p, 56)?.map(|c| f64::from(c) / 255.0);
+                Some(ParamValue::Argb([a, r, g, b]))
+            }
+            _ => None,
+        }
+    }
+
+    /// The valid maximum of a slider (see [`EffectParam::valid_max`]).
+    pub fn valid_max(self, kind: ParamKind) -> Option<f64> {
+        match kind {
+            ParamKind::FixedSlider => be_i32(self.0, 128).map(|v| f64::from(v) / 65536.0),
+            ParamKind::FloatSlider => be_f32(self.0, 108).map(f64::from),
+            ParamKind::IntSlider => be_i32(self.0, 128).map(f64::from),
+            _ => None,
+        }
+    }
+
+    /// The valid minimum of a float slider (see [`EffectParam::valid_min`]).
+    pub fn valid_min(self, kind: ParamKind) -> Option<f64> {
+        match kind {
+            ParamKind::FloatSlider => be_f32(self.0, 104).map(f64::from),
+            _ => None,
+        }
+    }
+
+    /// A slider's range, the one its value records repeat as `tdum` / `tduM`: a float slider's
+    /// `f32` pair at 112 / 116, a fixed slider's 16.16 pair and an integer slider's `i32` pair at
+    /// 132 / 136.
+    pub fn slider_range(self, kind: ParamKind) -> Option<(f64, f64)> {
+        let p = self.0;
+        match kind {
+            ParamKind::FloatSlider => Some((f64::from(be_f32(p, 112)?), f64::from(be_f32(p, 116)?))),
+            ParamKind::FixedSlider => Some((f64::from(be_i32(p, 132)?) / 65536.0, f64::from(be_i32(p, 136)?) / 65536.0)),
+            ParamKind::IntSlider => Some((f64::from(be_i32(p, 132)?), f64::from(be_i32(p, 136)?))),
+            _ => None,
+        }
+    }
+
+    /// A popup's item count, the `u16` at byte 60.
+    pub fn popup_item_count(self) -> Option<u16> {
+        be_u16(self.0, 60)
+    }
+}
+
 impl<'f, 'a> Layer<'f, 'a> {
     /// The effects on the layer, in stack order (`ADBE Effect Parade`).
     pub fn effects(&self) -> Vec<Effect<'f, 'a>> {
@@ -638,6 +699,30 @@ impl<'f, 'a> Layer<'f, 'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Chunk;
+
+    #[test]
+    fn a_parameter_definition_reads_its_fields_and_nothing_from_a_cut_record() {
+        let mut b = vec![0u8; 148];
+        b[12..16].copy_from_slice(&7u32.to_be_bytes());
+        b[16..22].copy_from_slice(b"Amount");
+        b[56..64].copy_from_slice(&2.5f64.to_be_bytes());
+        let p = Pard(&b);
+        assert_eq!((p.code(), p.name().as_deref()), (Some(7), Some("Amount")));
+        assert_eq!(p.default(ParamKind::FloatSlider), Some(ParamValue::Number(2.5)));
+        // The same bytes as a checkbox and as a popup: the `u32` at 56, and the `u16` at 60.
+        b[56..60].copy_from_slice(&1u32.to_be_bytes());
+        b[60..62].copy_from_slice(&3u16.to_be_bytes());
+        let p = Pard(&b);
+        assert_eq!(p.default(ParamKind::Checkbox), Some(ParamValue::Bool(true)));
+        assert_eq!((p.default(ParamKind::Popup), p.popup_item_count()), (Some(ParamValue::Index(1)), Some(3)));
+        assert_eq!(p.default(ParamKind::IntSlider), Some(ParamValue::Number(1.0)));
+        // A record cut before a field has no value for it, and an unreadable code is `Other`.
+        let cut = Pard(&b[..12]);
+        assert_eq!((cut.code(), cut.kind(), cut.name(), cut.popup_item_count()), (None, ParamKind::Other(u32::MAX), None, None));
+        assert_eq!(cut.default(ParamKind::FloatSlider), None);
+        assert_eq!(Pard(&b[..58]).default(ParamKind::Checkbox), None);
+    }
 
     fn tdmn(name: &str) -> Chunk<'static> {
         let mut b = name.as_bytes().to_vec();
@@ -670,11 +755,11 @@ mod tests {
             ("A".to_string(), Chunk::list(*b"tdbs", vec![Chunk::data(*b"cdat", vec![0u8; 8])])),
         ];
         let chunk = instance(&names, &stored);
-        let fx = Effect { match_name: "X".into(), chunk: &chunk };
+        let fx = Effect { match_name: "X".into(), chunk: Node::from(&chunk) };
         let params = fx.params();
         assert_eq!(params.iter().map(|p| p.match_name.as_str()).collect::<Vec<_>>(), ["A", "B", "C"]);
         let first = params.first().and_then(|p| p.stored).expect("A stored");
-        assert!(first.chunk.children().is_empty(), "the first A (the second has a cdat)");
+        assert!(first.chunk.children().next().is_none(), "the first A (the second has a cdat)");
         assert!(params.get(1).is_some_and(|p| p.stored.is_none()), "a group of that name is no stored value");
         assert!(params.get(2).is_some_and(|p| p.stored.is_none()));
     }
@@ -687,7 +772,7 @@ mod tests {
         let names: Vec<String> = (0..n).map(|i| format!("P{i}")).collect();
         let stored: Vec<(String, Chunk<'static>)> = names.iter().map(|m| (m.clone(), tdbs())).collect();
         let chunk = instance(&names, &stored);
-        let fx = Effect { match_name: "X".into(), chunk: &chunk };
+        let fx = Effect { match_name: "X".into(), chunk: Node::from(&chunk) };
         let params = fx.params();
         assert_eq!(params.len(), n);
         assert!(params.iter().all(|p| p.stored.is_some()));
@@ -707,19 +792,19 @@ mod tests {
         }
         let efdg = Chunk::list(*b"EfdG", defs);
         let fold = Chunk::list(*b"Fold", Vec::new());
-        let project = Project { fold: &fold, effect_defs: Some(&efdg) };
+        let project = Project { fold: Node::from(&fold), effect_defs: Some(Node::from(&efdg)) };
         let all = project.effect_definitions();
         assert_eq!(all.len(), n);
         let index = project.effect_definition_index();
         let bare = Chunk::list(*b"sspc", vec![Chunk::list(*b"parT", Vec::new())]);
         for i in (0..n).step_by(50) {
-            let fx = Effect { match_name: format!("FX{i}"), chunk: &bare };
+            let fx = Effect { match_name: format!("FX{i}"), chunk: Node::from(&bare) };
             assert_eq!(index.source(&fx), DefinitionSource::Project);
             let params = index.params(&fx);
             assert_eq!(params.iter().map(|p| p.match_name.as_str()).collect::<Vec<_>>(), ["R0"], "the first copy's definitions");
             assert!(params.iter().all(|p| p.borrowed_definition));
         }
-        let unknown = Effect { match_name: "nope".into(), chunk: &bare };
+        let unknown = Effect { match_name: "nope".into(), chunk: Node::from(&bare) };
         assert_eq!(index.source(&unknown), DefinitionSource::Missing);
         assert!(index.params(&unknown).is_empty());
         assert_eq!(project.definition_source(&unknown), DefinitionSource::Missing);

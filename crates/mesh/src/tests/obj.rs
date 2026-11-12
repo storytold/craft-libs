@@ -126,6 +126,30 @@ fn objects_groups_quads_and_negative_indices() {
 }
 
 #[test]
+fn bare_usemtl_does_not_create_an_empty_named_material() {
+    for line in ["usemtl", "usemtl "] {
+        let src = format!("v 0 0 0\nv 1 0 0\nv 0 1 0\n{line}\nf 1 2 3\n");
+        let scene = read(src.as_bytes(), &Limits::default(), &mut |_| None).unwrap();
+        assert!(scene.materials.is_empty(), "{line:?}: {:?}", scene.materials);
+        assert_eq!(scene.meshes.iter().map(Mesh::triangle_count).sum::<usize>(), 1);
+        assert_eq!(scene.meshes[0].parts[0].material, None);
+        scene.validate().unwrap();
+    }
+}
+
+#[test]
+fn writing_a_bare_usemtl_preserves_a_material_reset() {
+    let src = b"v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\nusemtl Named\nf 1 2 3\nusemtl\nf 2 4 3\n";
+    let scene = read(src, &Limits::default(), &mut no_external).unwrap();
+    assert_eq!(scene.meshes[0].parts.iter().map(|p| p.material).collect::<Vec<_>>(), [Some(0), None]);
+
+    let text = write(&scene, None, &Limits::default()).unwrap();
+    assert!(text.contains("usemtl Named\n") && text.contains("usemtl\nf 2 4 3\n"), "{text}");
+    let roundtrip = read(text.as_bytes(), &Limits::default(), &mut no_external).unwrap();
+    assert_eq!(roundtrip.meshes[0].parts.iter().map(|p| p.material).collect::<Vec<_>>(), [Some(0), None]);
+}
+
+#[test]
 fn corner_normals_and_smoothing_groups() {
     let vertices = "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 -0.8660254037844386 0.5\n";
     let authored = format!("{vertices}vn 0 0 1\nvn 0 0.5 0.8660254037844386\nf 1//-2 2//-2 3//-2\nf 2//-1 1//-1 4//-1\n");

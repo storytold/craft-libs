@@ -33,15 +33,29 @@
 #[doc = include_str!("../README.md")]
 struct ReadmeExamples;
 
-mod guard;
 mod name;
 mod read;
 mod rels;
 mod write;
 
-pub use guard::check_entry_count;
 #[cfg(any(test, feature = "test-support"))]
-pub use guard::zip64_entry_count_sample;
+pub use craft_zip::zip64_entry_count_sample;
+
+/// Refuse `bytes` when the end record the `zip` crate would use declares more than
+/// `max_entries` entries, before anything is indexed ([`craft_zip::check_entry_count`]).
+pub fn check_entry_count(bytes: &[u8], max_entries: u64) -> Result<(), Error> {
+    craft_zip::check_entry_count(bytes, max_entries).map_err(zip_error)
+}
+
+fn zip_error(e: craft_zip::Error) -> Error {
+    match e {
+        craft_zip::Error::TooManyEntries { declared, limit } => Error::TooManyEntries { declared, limit },
+        craft_zip::Error::TooManyEndRecords(n) => Error::TooManyEndRecords(n),
+        craft_zip::Error::Write(m) => Error::Write(m),
+        craft_zip::Error::NotZip(m) => Error::Zip(m),
+        e => Error::Zip(e.to_string()),
+    }
+}
 pub use name::{dir_of, file_of, normalize, percent_decode, relative, rels_path, resolve, split_dir};
 pub use read::{LazyPackage, Package, declared_oversized};
 pub use rels::{ContentTypes, Rel, Rels, type_is};

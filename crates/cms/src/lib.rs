@@ -13,6 +13,7 @@
 //! * [`NamedColors`] reads a named-colour profile's spot colours and converts them into a
 //!   destination profile.
 //! * [`Lut3d`] samples a display transform into a 3D texture for the GPU canvas.
+//! * [`GpuMatrixShaper`] preserves near-black precision for separable RGB display transforms.
 //!
 //! Implemented from the public ICC.1:2010 (v4.3) and ICC.1:2001-04 (v2) specifications,
 //! CIE 15, and Adobe's published black point compensation paper.
@@ -22,6 +23,7 @@ pub mod builtin;
 pub mod clut;
 pub mod curve;
 pub mod gamut;
+mod gpu_matrix_shaper;
 pub mod lut3d;
 pub mod lutfile;
 pub mod math;
@@ -36,6 +38,7 @@ pub use builtin::Builtin;
 pub use clut::Clut;
 pub use curve::Curve;
 pub use gamut::GamutCheck;
+pub use gpu_matrix_shaper::GpuMatrixShaper;
 pub use lut3d::Lut3d;
 pub use named::{NamedColor, NamedColors};
 pub use profile::{ColorSpace, Pcs, Profile, ProfileClass};
