@@ -63,6 +63,14 @@ impl FieldStyle {
         FieldStyle { surface: cx.field(), metrics, glyph, button: cx.control_of(ControlSize::Sm).height }
     }
 
+    /// The style of a field whose `measure` gives its whole width (its widest value or time): the look, padding and
+    /// height of a field, with no field length to widen it and no shortest width.
+    #[must_use]
+    pub fn sized_by_content(mut self) -> FieldStyle {
+        self.metrics = self.metrics.min_size(Vec2::new(0.0, self.metrics.min_size.y)).ideal_width(0.0);
+        self
+    }
+
     /// The field's padding, gap and minimum size.
     pub fn metrics(&self) -> Metrics {
         self.metrics

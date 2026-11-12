@@ -181,7 +181,7 @@ impl Outcome for TimecodeFieldOutput {
     }
 }
 
-/// A time as text: Premiere's timecode field.
+/// A time as text: Premiere's timecode field, as wide as the widest time its display writes.
 ///
 /// - Click (or Tab) to type: the text is selected, and Left or Right on it start from its last digit; Enter or a click
 ///   away commits through [`parse_time`] relative to the current value; Esc cancels. A time that does not parse commits nothing and is reported on
@@ -242,8 +242,9 @@ impl Component for TimecodeField<'_> {
     type Style = FieldStyle;
     type Output = TimecodeFieldOutput;
 
+    /// A field as wide as its widest time, as its `measure` gives it.
     fn style(cx: &StyleCx<'_>, _: TimecodeFieldStyleKey) -> FieldStyle {
-        FieldStyle::at(cx)
+        FieldStyle::at(cx).sized_by_content()
     }
 
     /// A drag on the body scrubs a field that is not in edit.
