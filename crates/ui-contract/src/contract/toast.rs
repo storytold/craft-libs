@@ -92,12 +92,9 @@ fn corner(env: &Env) -> Align2 {
     if env.direction.is_rtl() { Align2::LEFT_BOTTOM } else { Align2::RIGHT_BOTTOM }
 }
 
-/// What the card announces when it first shows: the title and the message.
+/// What the card announces when it first shows: the title, the message and the lines, the empty ones left out.
 fn announcement(env: &Env, toast: &Toast) -> String {
     let view = env.view();
-    let message = view.resolve(&toast.message);
-    match &toast.title {
-        Some(title) => format!("{}, {}", view.resolve(title).as_str(), message.as_str()),
-        None => message.as_str().to_owned(),
-    }
+    let texts = toast.title.iter().chain(std::iter::once(&toast.message)).chain(&toast.lines);
+    texts.map(|text| view.resolve(text).as_str().to_owned()).filter(|text| !text.is_empty()).collect::<Vec<_>>().join(", ")
 }

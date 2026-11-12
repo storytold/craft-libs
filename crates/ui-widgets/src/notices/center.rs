@@ -22,7 +22,7 @@ pub struct PostedNotice {
     /// The title line.
     #[prop(into)]
     title: String,
-    /// The lines under the title.
+    /// The lines under the title, shown as bullet lines.
     #[prop(into)]
     lines: Vec<String>,
     /// The tone the notice reads in; a failure is announced at once.
@@ -116,12 +116,7 @@ impl NoticeCenter {
         }
         let politeness = if notice.tone == Tone::Bad { Politeness::Assertive } else { Politeness::Polite };
         let timeout = if notice.sticky { None } else { self.timeout };
-        let mut card = if notice.lines.is_empty() {
-            Toast::new(notice.title.clone())
-        } else {
-            let card = Toast::new(notice.lines.join("\n"));
-            if notice.title.is_empty() { card } else { card.title(notice.title.clone()) }
-        };
+        let mut card = Toast::new(Label::Empty).title(notice.title.clone()).lines(notice.lines.clone());
         card = card.tone(notice.tone).timeout(timeout).politeness(politeness);
         if notice.dismiss_key.is_some() {
             card = card.action(ToastAction::new(dont_show_again()));

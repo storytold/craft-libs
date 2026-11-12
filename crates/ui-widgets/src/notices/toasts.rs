@@ -14,7 +14,8 @@ impl ToastStack {
     /// Shows every queued toast of the running viewport through the toast host.
     pub fn show(ui: &Ui) {
         ToastHost::show(ui, &mut |ui, toast, salt| {
-            let mut notice = Notice::new(toast.tone, toast.message.clone()).layout(NoticeLayout::Card).dismiss().id_salt(salt);
+            let mut notice =
+                Notice::new(toast.tone, toast.message.clone()).layout(NoticeLayout::Card).lines(toast.lines.clone()).dismiss().id_salt(salt);
             if let Some(title) = &toast.title {
                 notice = notice.title(title.clone());
             }

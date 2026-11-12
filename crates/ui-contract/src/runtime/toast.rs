@@ -60,6 +60,8 @@ pub struct Toast {
     pub tone: Tone,
     /// A title above the message.
     pub title: Option<Label>,
+    /// Bullet lines under the message.
+    pub lines: Vec<Label>,
     /// The actions after the message, in reading order.
     pub actions: Vec<ToastAction>,
 }
@@ -73,6 +75,7 @@ impl Toast {
             politeness: Politeness::Polite,
             tone: Tone::Neutral,
             title: None,
+            lines: Vec::new(),
             actions: Vec::new(),
         }
     }
@@ -86,6 +89,12 @@ impl Toast {
     /// Sets the title above the message.
     pub fn title(mut self, title: impl Into<Label>) -> Self {
         self.title = Some(title.into());
+        self
+    }
+
+    /// Sets the bullet lines under the message.
+    pub fn lines<L: Into<Label>>(mut self, lines: impl IntoIterator<Item = L>) -> Self {
+        self.lines = lines.into_iter().map(Into::into).collect();
         self
     }
 

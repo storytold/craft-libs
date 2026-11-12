@@ -12,6 +12,7 @@ use crate::runtime::commands::CommandRef;
 use crate::runtime::env::{EnvView, Label};
 use crate::style::{ComponentStyle, IconLook, Insets, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens};
 use craft_behavior::{Flow, IconId, Intent, Metrics, NavShape, PartKey, Roving, Sense};
+use craft_i18n::Format;
 use craft_theme::{Rgba, Stateful, States, Variant, variant::Tone};
 use egui::{Align, Pos2, Rect, Response, Vec2};
 
@@ -99,6 +100,13 @@ const TITLE: PartKey = PartKey::new("title");
 /// The title's text and the message's: selection parts.
 const TITLE_TEXT: PartKey = PartKey::new("title_text");
 const MESSAGE: PartKey = PartKey::new("message");
+/// A bullet line's text, and the line that stands for the lines left out: selection parts.
+const LINE: PartKey = PartKey::new("line");
+const MORE: PartKey = PartKey::new("more");
+/// Most bullet lines a notice shows; the rest become one "…and n more" line.
+const MAX_LINES: usize = 8;
+/// The mark before each bullet line.
+const BULLET: &str = "\u{2022}";
 /// The heading level of the centred title: the empty state's top-level heading.
 const TITLE_LEVEL: usize = 1;
 const DISMISS_ICON: &str = "close";
@@ -121,6 +129,12 @@ pub struct NoticeStyle {
     /// The message's role and colour under a title.
     #[style(text)]
     detail: TextLook,
+    /// The bullet lines' role and colour.
+    #[style(text)]
+    line: TextLook,
+    /// The colour of the line that stands for the bullet lines left out.
+    #[style(text)]
+    more: TextLook,
     /// The icon's side and colour.
     #[style(icon)]
     icon: IconLook,
@@ -136,7 +150,8 @@ const READING_IN_BODY_SIZES: f32 = 38.5;
 
 /// A message in a tone. The tone picks the icon and the colours; the neutral tone reads muted and has no icon. The
 /// message is the label; a title above it is optional. Actions read as links (as buttons in the centred layout) and
-/// are reported in the output; with `dismiss` a close button is the last part. With `announce` set, the notice is a
+/// are reported in the output; with `dismiss` a close button is the last part. Bullet lines under the message (an
+/// inline or card notice's list of details) show up to eight, then one "…and n more" line. With `announce` set, the notice is a
 /// live region: its title and message are announced when it appears and whenever they change. The title and message wrap and can be selected and copied; Tab passes over them.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct Notice<'a> {
@@ -167,6 +182,7 @@ pub struct Notice<'a> {
     #[prop]
     announce: Option<Politeness>,
     actions: Vec<NoticeAction>,
+    lines: Vec<Label>,
     placed: Option<Placed>,
     taken: Option<usize>,
     dismissed: bool,
@@ -178,6 +194,9 @@ struct Placed {
     icon: Option<Rect>,
     title: Option<Rect>,
     message: Option<Rect>,
+    /// Each shown line's bullet and text, then the "…and n more" line.
+    lines: Vec<(Rect, Rect)>,
+    more: Option<Rect>,
     actions: Vec<Rect>,
     /// The actions' labels, with commands resolved.
     labels: Vec<Label>,
@@ -189,6 +208,10 @@ struct Plan {
     icon: Option<f32>,
     title: Option<Vec2>,
     message: Vec2,
+    /// The bullet's width, each shown line's height and the "…and n more" line's height.
+    bullet: f32,
+    lines: Vec<f32>,
+    more: Option<f32>,
     actions: Vec<Vec2>,
     dismiss: Option<Vec2>,
     /// The actions sit one under the other because they do not fit side by side.
@@ -202,6 +225,9 @@ struct Plan {
 struct Texts<'t> {
     title: Option<String>,
     message: &'t str,
+    /// The shown bullet lines, then the "…and n more" text when lines were left out.
+    lines: Vec<String>,
+    more: Option<String>,
 }
 
 impl<'a> Notice<'a> {
@@ -217,6 +243,7 @@ impl<'a> Notice<'a> {
             footer_actions: false,
             announce: None,
             actions: Vec::new(),
+            lines: Vec::new(),
             placed: None,
             taken: None,
             dismissed: false,
@@ -231,8 +258,19 @@ impl<'a> Notice<'a> {
         self
     }
 
-    fn texts<'t>(&self, env: &EnvView<'_>, message: &'t str) -> Texts<'t> {
-        Texts { title: self.title.as_ref().map(|title| env.resolve(title).as_str().to_owned()), message }
+    /// Bullet lines under the message, in an inline or card notice: up to eight show, then one "…and n more" line.
+    #[must_use]
+    pub fn lines<L: Into<Label>>(mut self, lines: impl IntoIterator<Item = L>) -> Self {
+        self.lines = lines.into_iter().map(Into::into).collect();
+        self
+    }
+
+    fn texts<'t>(&self, env: &EnvView<'_>, words: &NoticeWords, format: &Format, message: &'t str) -> Texts<'t> {
+        let shown = if self.row() { self.lines.len().min(MAX_LINES) } else { 0 };
+        let lines = self.lines[..shown].iter().map(|line| env.resolve(line).as_str().to_owned()).collect();
+        let left = if self.row() { self.lines.len() - shown } else { 0 };
+        let more = (left > 0).then(|| words.more.fill(&[("n", format.integer(left as u64).as_str())]));
+        Texts { title: self.title.as_ref().map(|title| env.resolve(title).as_str().to_owned()), message, lines, more }
     }
 
     fn icon_spec(&self) -> Option<IconSpec<'a>> {
@@ -302,7 +340,13 @@ impl<'a> Notice<'a> {
         let column = if width.is_finite() { (width - icon_width - dismiss_width).max(0.0) } else { f32::INFINITY };
         let run = |text: &str, role: TypeRole| cx.layout_at(&self.run(text, role), column).size();
         let title = texts.title.as_deref().map(|title| run(title, cx.style.title.role));
-        let message = run(texts.message, cx.style.message.role);
+        let message = if texts.message.is_empty() { Vec2::ZERO } else { run(texts.message, cx.style.message.role) };
+        let bullet = if texts.lines.is_empty() { 0.0 } else { cx.layout(&TextRun::new(BULLET).role(cx.style.line.role)).size().x + gap };
+        let line_column = (column - bullet).max(0.0);
+        let line_sizes: Vec<Vec2> = texts.lines.iter().map(|line| cx.layout_at(&self.run(line, cx.style.line.role), line_column).size()).collect();
+        let more = texts.more.as_deref().map(|more| run(more, cx.style.more.role));
+        let lines_width = line_sizes.iter().map(|size| size.x + bullet).fold(more.map_or(0.0, |size| size.x), f32::max);
+        let lines_height = line_sizes.iter().map(|size| size.y).sum::<f32>() + more.map_or(0.0, |size| size.y);
         let actions_width = actions.iter().map(|size| size.x).sum::<f32>() + gap * actions.len().saturating_sub(1) as f32;
         let stacked = !row && column.is_finite() && actions_width > column;
         let actions_height = if stacked {
@@ -310,8 +354,8 @@ impl<'a> Notice<'a> {
         } else {
             actions.iter().map(|size| size.y).fold(0.0, f32::max)
         };
-        let text_width = title.map_or(0.0, |size| size.x).max(message.x).max(actions_width);
-        let text_height = title.map_or(0.0, |size| size.y) + message.y;
+        let text_width = title.map_or(0.0, |size| size.x).max(message.x).max(actions_width).max(lines_width);
+        let text_height = title.map_or(0.0, |size| size.y) + message.y + lines_height;
         let with_actions = text_height + if actions.is_empty() { 0.0 } else { gap + actions_height };
         let (needs, height) = if row {
             (icon_width + text_width + dismiss_width, with_actions.max(icon.unwrap_or(0.0)).max(dismiss.map_or(0.0, |size| size.y)))
@@ -320,7 +364,8 @@ impl<'a> Notice<'a> {
             let shown: Vec<f32> = parts.into_iter().flatten().collect();
             (text_width.max(icon.unwrap_or(0.0)), shown.iter().sum::<f32>() + gap * shown.len().saturating_sub(1) as f32)
         };
-        Plan { icon, title, message, actions, dismiss, stacked, needs, height }
+        let lines = line_sizes.iter().map(|size| size.y).collect();
+        Plan { icon, title, message, bullet, lines, more: more.map(|size| size.y), actions, dismiss, stacked, needs, height }
     }
 }
 
@@ -338,6 +383,7 @@ impl Component for Notice<'_> {
         let tone = cx.tone(key.tone);
         let (normal, muted) = (cx.color(text.normal), cx.color(text.muted));
         let control = cx.control();
+        let faint = cx.color(text.faint);
         let (title, message, detail, surface, padding) = match key.layout {
             NoticeLayout::Inline => (
                 TextLook::new(TypeRole::BodyStrong, stateful(tone)),
@@ -364,12 +410,16 @@ impl Component for Notice<'_> {
                 Insets::horizontal(control.pad_x),
             ),
         };
+        let line = TextLook::new(message.role, stateful(muted));
+        let more = TextLook::new(message.role, stateful(faint));
         NoticeStyle {
             surface,
             metrics: Metrics::new().padding(padding).gap(control.gap),
             title,
             message,
             detail,
+            line,
+            more,
             icon: IconLook::new(control.icon, stateful(tone)),
             card_width: cx.tokens.size.length.field,
             reading_width: cx.tokens.typography.get(TypeRole::Body).size * READING_IN_BODY_SIZES,
@@ -377,7 +427,7 @@ impl Component for Notice<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        let texts = self.texts(&cx.env, cx.resolved.label);
+        let texts = self.texts(&cx.env, &cx.words::<NoticeWords>(), cx.format(), cx.resolved.label);
         let natural = self.plan(cx, &texts, f32::INFINITY).needs;
         let width = match (self.layout, cx.room) {
             (NoticeLayout::Card, Some(room)) => natural.min(cx.style.card_width).min(room),
@@ -396,7 +446,7 @@ impl Component for Notice<'_> {
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let rtl = cx.flow.is_rtl();
         let gap = cx.gap();
-        let texts = self.texts(&cx.env, cx.resolved.label);
+        let texts = self.texts(&cx.env, &cx.words::<NoticeWords>(), cx.format(), cx.resolved.label);
         let rect = if self.layout == NoticeLayout::Centred {
             let column = Vec2::new(self.wrap_width(cx, rect.width()), rect.height());
             Flow::new(rect, rtl).align(column, Align::Center, Align::Min)
@@ -423,8 +473,21 @@ impl Component for Notice<'_> {
                 placed.title = Some(Rect::from_min_size(Pos2::new(column.left(), y), Vec2::new(column.width(), size.y)));
                 y += size.y;
             }
-            placed.message = Some(Rect::from_min_size(Pos2::new(column.left(), y), Vec2::new(column.width(), plan.message.y)));
-            y += plan.message.y + gap;
+            if !texts.message.is_empty() {
+                placed.message = Some(Rect::from_min_size(Pos2::new(column.left(), y), Vec2::new(column.width(), plan.message.y)));
+                y += plan.message.y;
+            }
+            for height in &plan.lines {
+                let band = Flow::new(Rect::from_min_size(Pos2::new(column.left(), y), Vec2::new(column.width(), *height)), rtl);
+                let (bullet, text) = band.take_start(plan.bullet);
+                placed.lines.push((bullet, text.rect()));
+                y += height;
+            }
+            if let Some(height) = plan.more {
+                placed.more = Some(Rect::from_min_size(Pos2::new(column.left(), y), Vec2::new(column.width(), height)));
+                y += height;
+            }
+            y += gap;
             let mut line = Flow::new(Rect::from_min_size(Pos2::new(column.left(), y), Vec2::new(column.width(), (rect.bottom() - y).max(0.0))), rtl);
             for size in &plan.actions {
                 let (slot, rest) = line.take_start(size.x);
@@ -469,6 +532,12 @@ impl Component for Notice<'_> {
             let role = if self.title.is_some() { cx.style.detail.role } else { cx.style.message.role };
             cx.selectable_text(MESSAGE, &self.run(texts.message, role));
         }
+        for (at, line) in texts.lines.iter().enumerate() {
+            cx.selectable_text(LINE.at(at as u64), &self.run(line, cx.style.line.role));
+        }
+        if let Some(more) = &texts.more {
+            cx.selectable_text(MORE, &self.run(more, cx.style.more.role));
+        }
         let default = self.actions.iter().rposition(|action| action.default);
         for (at, rect) in placed.actions.iter().enumerate() {
             let part = cx.part(ACTION.at(at as u64), *rect).sense(Sense::CLICK | Sense::FOCUS).focusable();
@@ -511,7 +580,12 @@ impl Component for Notice<'_> {
                 access.live(politeness);
             }
         }
-        if let Some(title) = self.title.as_ref().map(|title| cx.env.resolve(title).as_str().to_owned()) {
+        let texts = self.texts(&cx.env, &cx.words::<NoticeWords>(), cx.format(), cx.resolved.label);
+        if !texts.lines.is_empty() || texts.message.is_empty() {
+            let parts = self.title.iter().map(|title| cx.env.resolve(title).as_str().to_owned());
+            let message = (!texts.message.is_empty()).then(|| texts.message.to_owned());
+            access.name(Name::Joined(parts.chain(message).chain(texts.lines.clone()).chain(texts.more.clone()).collect()));
+        } else if let Some(title) = self.title.as_ref().map(|title| cx.env.resolve(title).as_str().to_owned()) {
             if self.layout == NoticeLayout::Centred {
                 access.name(Name::Text(cx.resolved.label.to_owned()));
                 let node = access.node(TITLE, Role::HEADING);
@@ -551,6 +625,16 @@ impl Component for Notice<'_> {
         if let Some(message) = placed.message {
             let run = self.run(cx.resolved.label, look.role);
             ui.selectable_text(MESSAGE, message, &run.color(cx.resolve(&look.color)));
+        }
+        let texts = self.texts(&cx.env, &words, cx.format(), cx.resolved.label);
+        let (line, more) = (&cx.style.line, &cx.style.more);
+        for (at, ((bullet, rect), text)) in placed.lines.iter().zip(&texts.lines).enumerate() {
+            let ink = cx.resolve(&line.color);
+            ui.draw().text(*bullet, &TextRun::new(BULLET).role(line.role).color(ink));
+            ui.selectable_text(LINE.at(at as u64), *rect, &self.run(text, line.role).color(ink));
+        }
+        if let (Some(rect), Some(text)) = (placed.more, &texts.more) {
+            ui.selectable_text(MORE, rect, &self.run(text, more.role).color(cx.resolve(&more.color)));
         }
     }
 

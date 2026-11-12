@@ -5,6 +5,8 @@ craft_ui::words! {
     /// The "Don't Show Again" action is `common.dontShowAgain`.
     pub struct NoticeWords {
         dismiss: "notice.dismiss" = "Dismiss";
+        /// The line that stands for the bullet lines a notice leaves out: `{n}` is their number.
+        more: template "notice.more" = "\u{2026}and {n} more";
         app_fallback: "settingsNotices.appFallback" = "The app";
         saved: "settingsNotices.saved" = "Preferences saved";
         cant_save_title: "settingsNotices.cantSaveTitle" = "Preferences can't be saved";
