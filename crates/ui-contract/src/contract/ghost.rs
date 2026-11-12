@@ -9,7 +9,7 @@ use crate::runtime::drag::{self, DragPreview, DropMark};
 use crate::runtime::egui::areas;
 use crate::runtime::env::Env;
 use crate::runtime::{cursor, pointer};
-use crate::style::{Corners, Ink, SurfaceKind, rule_look};
+use crate::style::{Corners, Ink, RuleWidth, SurfaceKind, rule_look};
 use craft_behavior::Flow;
 use egui::{Context, CornerRadius, Pos2, Rect, Vec2};
 use std::cell::RefCell;
@@ -108,11 +108,13 @@ fn paint_badge(draw: &Draw<'_>, env: &Env, at: Pos2, text: &str) {
 /// any content. An area mark is the same band along the inside of its rect.
 fn paint_mark(painter: &egui::Painter, env: &Env, mark: DropMark) {
     let look = rule_look(&env.tokens, RuleKind::DropMark);
-    let halo = env.tokens.stroke.thin;
+    let ppp = painter.ctx().pixels_per_point();
+    let width = look.width.points(ppp);
+    let halo = RuleWidth::Points(env.tokens.stroke.thin).points(ppp);
     let segments: Vec<(Pos2, Pos2)> = match mark {
         DropMark::Line { from, to } => vec![(from, to)],
         DropMark::Into(rect) | DropMark::Split(rect) => {
-            let inside = rect.shrink(look.width / 2.0 + halo);
+            let inside = rect.shrink(width / 2.0 + halo);
             let corners = [inside.left_top(), inside.right_top(), inside.right_bottom(), inside.left_bottom()];
             (0..corners.len()).map(|at| (corners[at], corners[(at + 1) % corners.len()])).collect()
         }
@@ -121,9 +123,9 @@ fn paint_mark(painter: &egui::Painter, env: &Env, mark: DropMark) {
     // Every halo before any band, so the halo of one side never covers the band of the side before it.
     let panel = crate::style::rgba_color(env.tokens.color.surface.panel);
     for &segment in &segments {
-        painter.rect_filled(band(segment, look.width / 2.0 + halo), CornerRadius::ZERO, panel);
+        painter.rect_filled(band(segment, width / 2.0 + halo), CornerRadius::ZERO, panel);
     }
     for &segment in &segments {
-        painter.rect_filled(band(segment, look.width / 2.0), CornerRadius::ZERO, look.color);
+        painter.rect_filled(band(segment, width / 2.0), CornerRadius::ZERO, look.color);
     }
 }
