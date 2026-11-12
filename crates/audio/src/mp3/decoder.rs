@@ -421,9 +421,9 @@ fn scalefactors_lsf(r: &mut BitReader, g: &Granule, intensity_right: bool) -> Re
 }
 
 /// The Huffman-coded lines of a granule (§2.4.2.7 `huffmancodebits`) into `out`, reading up to
-/// bit `end` of the main data. Bits past `end` belong to the next granule: a damaged granule
-/// whose big values would run past it stops there, and a count1 quadruple that crosses it is
-/// dropped. Lines not coded stay 0.
+/// bit `end` of the main data. Bits past `end` belong to the next granule: in a damaged granule
+/// no big-value pair starts at or past it (a pair that starts before it is kept whole, as
+/// ffmpeg does), and a count1 quadruple that crosses it is dropped. Lines not coded stay 0.
 fn huffman(r: &mut BitReader, end: usize, g: &Granule, bands: &Bands, out: &mut [i32; LINES]) -> Result<()> {
     let big = (g.big_values * 2).min(LINES);
     // region boundaries: with window switching, region 1 starts at short band 3 (3 × 12 = 36
