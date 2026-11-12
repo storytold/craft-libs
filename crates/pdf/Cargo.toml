@@ -19,6 +19,7 @@ write = ["dep:krilla", "dep:thiserror"]
 write-pdf = ["write", "krilla/pdf"]
 write-simple-text = ["write", "krilla/simple-text"]
 filters = ["dep:craft-stream-codecs", "dep:flate2", "dep:thiserror"]
+crypt = ["dep:aes", "dep:md-5", "dep:sha2", "dep:stringprep", "dep:zeroize", "dep:thiserror"]
 
 [dependencies]
 hayro-syntax = { workspace = true, optional = true }
@@ -30,6 +31,12 @@ thiserror = { workspace = true, optional = true }
 # The filter chain (`filters`). flate2 with zlib-rs, the backend the chain's Flate prices were measured on.
 craft-stream-codecs = { workspace = true, optional = true }
 flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"], optional = true }
+# The standard security handler (`crypt`): pure Rust, MIT OR Apache-2.0, builds for wasm.
+aes = { version = "0.9", optional = true }
+md-5 = { version = "0.11", optional = true }
+sha2 = { version = "0.11", optional = true }
+stringprep = { version = "0.1", optional = true }
+zeroize = { version = "1", optional = true }
 
 [dev-dependencies]
 hayro-syntax = "=0.7.2"
