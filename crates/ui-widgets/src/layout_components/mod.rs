@@ -74,8 +74,16 @@ macro_rules! layout_component {
         }
 
         impl $(<$life>)? $name $(<$life>)? {
-            /// The spacing between the children.
+            /// The spacing between the children, and between a `Stack`'s header or footer and its body (unless
+            /// `Stack::footer_gap` set the footer's).
             pub fn gap(mut self, gap: Gap) -> Self {
+                let follows = Some(self.props.body_gap);
+                if let Some(header) = self.props.header.filter(|header| header.gap == follows) {
+                    self.props = self.props.header(header.gap(gap));
+                }
+                if let Some(footer) = self.props.footer.filter(|footer| footer.gap == follows) {
+                    self.props = self.props.footer(footer.gap(gap));
+                }
                 self.props = self.props.body_gap(gap);
                 self
             }
@@ -208,19 +216,22 @@ impl<'a> Stack<'a> {
         }
     }
 
-    /// The header's content: the closure fills a region above the body, outside its scroll.
+    /// The header's content: the closure fills a region above the body, outside its scroll. The header is the first
+    /// of the stack's rows: the stack's gap separates it from the body.
     #[must_use]
     pub fn header(mut self, content: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a) -> Self {
-        self.props = self.props.header(HeaderRegion::new());
+        let gap = self.props.body_gap;
+        self.props = self.props.header(HeaderRegion::new().gap(gap));
         self.header = Some(Box::new(content));
         self
     }
 
     /// The footer's content: the closure fills a region under the body, outside its scroll. The body takes the room
-    /// the footer leaves.
+    /// the footer leaves. The footer is the last of the stack's rows: the stack's gap separates it from the body.
     #[must_use]
     pub fn footer(mut self, content: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a) -> Self {
-        self.props = self.props.footer(FooterRegion::new());
+        let gap = self.props.body_gap;
+        self.props = self.props.footer(FooterRegion::new().gap(gap));
         self.footer = Some(Box::new(content));
         self
     }

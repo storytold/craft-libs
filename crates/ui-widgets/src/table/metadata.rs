@@ -4,8 +4,8 @@
 use super::Table;
 use super::words::MetadataWords;
 use crate::contract::{
-    Bind, CollectionEvent, CollectionResponse, ColumnSpec, NoValue, Outcome, Pad, Pattern, Props, Remember as _, RowHeight, SelectMode, Show as _,
-    ShowCollection as _, ShowContainer as _, Sizing, ToggleColumn,
+    Bind, CollectionEvent, CollectionResponse, ColumnSpec, Gap, NoValue, Outcome, Pad, Pattern, Props, Remember as _, RowHeight, SelectMode,
+    Show as _, ShowCollection as _, ShowContainer as _, Sizing, ToggleColumn,
 };
 use crate::layout_components::Stack;
 use crate::list::{ListRow, RowEvent, ToggleCell, ToggleState};
@@ -219,7 +219,8 @@ impl<'a> MetadataTable<'a> {
             _ => Vec::new(),
         });
         let checks = choose.is_some();
-        let mut stack = Stack::new().sizing(Sizing::Fill);
+        // The first group's row carries its own space above its name, so the filter sits on it with no gap.
+        let mut stack = Stack::new().sizing(Sizing::Fill).gap(Gap::None);
         if let Some(text) = filter.as_mut() {
             // The header runs before the body in each run and leaves the field's text in the stack's memory, so the rows
             // follow this pass's typing.
