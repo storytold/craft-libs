@@ -485,9 +485,10 @@ pub const STANDARD_COLORS: [(Rgba, &str); 10] = [
     (Rgba::rgb(0x70, 0x30, 0xA0), "Purple"),
 ];
 
-/// A few CSS-like preset colour names (`prstClr`).
+/// The common preset colour names (`prstClr`, ECMA-376 Part 1 §20.1.10.48), in any case, with
+/// their `dk`/`lt` spellings; other names are unknown (`None`).
 pub fn preset(name: &str) -> Option<Rgba> {
-    let c = match name {
+    let c = match name.to_ascii_lowercase().as_str() {
         "black" => (0, 0, 0),
         "white" => (255, 255, 255),
         "red" => (255, 0, 0),
@@ -499,17 +500,28 @@ pub fn preset(name: &str) -> Option<Rgba> {
         "magenta" | "fuchsia" => (255, 0, 255),
         "gray" | "grey" => (128, 128, 128),
         "silver" => (192, 192, 192),
+        "ltgray" | "ltgrey" | "lightgray" | "lightgrey" => (211, 211, 211),
+        "dkgray" | "dkgrey" | "darkgray" | "darkgrey" => (169, 169, 169),
         "maroon" => (128, 0, 0),
         "navy" => (0, 0, 128),
         "olive" => (128, 128, 0),
         "purple" => (128, 0, 128),
         "teal" => (0, 128, 128),
         "orange" => (255, 165, 0),
-        "pink" => (255, 192, 203),
         "brown" => (165, 42, 42),
+        "pink" => (255, 192, 203),
         "gold" => (255, 215, 0),
-        "ltGray" | "lightGray" => (211, 211, 211),
-        "dkGray" | "darkGray" => (169, 169, 169),
+        "darkblue" | "dkblue" => (0, 0, 139),
+        "darkred" | "dkred" => (139, 0, 0),
+        "darkgreen" | "dkgreen" => (0, 100, 0),
+        "lightblue" | "ltblue" => (173, 216, 230),
+        "coral" => (255, 127, 80),
+        "salmon" => (250, 128, 114),
+        "tomato" => (255, 99, 71),
+        "violet" => (238, 130, 238),
+        "indigo" => (75, 0, 130),
+        "beige" => (245, 245, 220),
+        "ivory" => (255, 255, 240),
         _ => return None,
     };
     Some(Rgba::rgb(c.0, c.1, c.2))

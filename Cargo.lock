@@ -994,6 +994,7 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "craft-cfb",
+ "craft-drawingml",
  "craft-offcrypto",
  "craft-opc",
  "craft-wordmodel",
