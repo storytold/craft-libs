@@ -99,6 +99,7 @@ pub fn write(doc: &Document) -> String {
         out.push_str(&format!("{}\n{} --> {}\n", n + 1, format_clock(c.start, ','), format_clock(c.end, ',')));
         // blank lines inside text would end the cue: drop them
         for l in c.text.lines().filter(|l| !l.trim().is_empty()) {
+            // stored entities stay as they are, so a literal bracket does not become a tag on reimport
             out.push_str(&escape(l));
             out.push('\n');
         }
@@ -114,6 +115,17 @@ mod tests {
 
     fn ms(v: i64) -> Tick {
         Tick(v * TICKS_PER_MS)
+    }
+
+    #[test]
+    fn entities_stay_distinct_from_style_tags_after_reimport() {
+        let mut d = Document::default();
+        d.cues.push(Cue { start: ms(1000), end: ms(2000), text: "1 &lt; 2 &amp; <i>x</i>".into(), ..Default::default() });
+        let encoded = write(&d);
+        assert_eq!(encoded, "1\n00:00:01,000 --> 00:00:02,000\n1 &lt; 2 &amp; <i>x</i>\n\n");
+        let decoded = parse(&encoded).unwrap();
+        assert_eq!(decoded.cues, d.cues);
+        assert_eq!(crate::plain_text(&decoded.cues[0].text), "1 < 2 & x");
     }
 
     #[test]

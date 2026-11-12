@@ -523,3 +523,29 @@ fn a_geometry_blob_round_trips_and_its_limits_hold() {
     assert_eq!(decode(&vec![0; path::MAX_COMMANDS]).map(|c| c.len()), Some(path::MAX_COMMANDS));
     assert_eq!(decode(&vec![0; path::MAX_COMMANDS + 1]), None);
 }
+
+/// A ZIP64 end record can declare millions of entries in a small file: refused on the raw bytes
+/// before the archive is indexed, and such a file is not taken for a `.fig`.
+#[test]
+fn an_archive_declaring_too_many_entries_is_refused_before_it_is_indexed() {
+    let bomb = craft_zip::zip64_entry_count_sample(MAX_ENTRIES + 1);
+    let e = Archive::open(&bomb).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(e.contains(&format!("declares {} entries", MAX_ENTRIES + 1)), "{e}");
+    assert!(!is_fig(&bomb));
+}
+
+/// Two entries of one name: `zip` keeps one, and which one the writer meant is not known.
+#[test]
+fn two_entries_of_one_name_are_refused() {
+    let zip = file(&[(1, image(1)), (2, image(2))]);
+    assert!(Archive::open(&zip).is_ok());
+    let (one, two) = (name(1), name(2));
+    let mut renamed = zip.clone();
+    let mut i = 0;
+    while let Some(at) = renamed[i..].windows(two.len()).position(|w| w == two.as_bytes()) {
+        renamed[i + at..i + at + two.len()].copy_from_slice(one.as_bytes());
+        i += at + two.len();
+    }
+    let e = Archive::open(&renamed).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(e.contains("two entries of the archive share a name"), "{e}");
+}
