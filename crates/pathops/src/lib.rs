@@ -38,6 +38,8 @@ mod offset;
 mod path;
 mod pathfinder;
 mod planar;
+#[cfg(test)]
+mod refusals;
 mod sweep_axis;
 #[cfg(test)]
 mod testutil;

@@ -317,42 +317,63 @@ mod tests {
     }
 
     /// The worst the comparisons can cost, more segments than a sweep admits to overlap (so made by hand, with no sweep): 2,200 bars of 4
-    /// segments make 8,800, every pair one to compare and none near. The answer is yes at the first comparison past the bound, in a fraction
-    /// of a second.
+    /// segments make 8,800, every pair one to compare and none near. The answer is yes at the first comparison past the bound: the pairs
+    /// looked at and the pairs compared are each counted, and stop one past [`MAX_CLOSE_COMPARED`].
     #[test]
-    #[ignore = "seconds: run with cargo test --release"]
-    fn the_worst_case_of_the_comparisons_is_bounded_in_time() {
+    fn the_worst_case_of_the_comparisons_is_bounded_by_its_count() {
         let segs = bar_segments(2200);
         assert_eq!(segs.len(), 8800);
         work::reset();
+        assert!(any_close(segs, 2e-6, MAX_CLOSE_COMPARED));
+        assert_eq!((work::take(Work::ClosePairs), work::take(Work::CloseCompared)), (MAX_CLOSE_COMPARED + 1, MAX_CLOSE_COMPARED + 1));
+    }
+
+    /// The same, in time, which is worth keeping once in a while and is not a test to run on every machine: the whole bound of comparisons
+    /// is a fraction of a second in a release build. A clock measures the machine's load as much as the work, so this test is ignored
+    /// (the count above holds the bound on every run): `cargo test --release -- --include-ignored` runs it.
+    #[test]
+    #[ignore = "wall-clock: run with cargo test --release -- --include-ignored"]
+    fn the_worst_case_of_the_comparisons_takes_under_a_second() {
+        let segs = bar_segments(2200);
         let started = std::time::Instant::now();
         assert!(any_close(segs, 2e-6, MAX_CLOSE_COMPARED));
         let took = started.elapsed().as_secs_f64();
-        assert_eq!((work::take(Work::ClosePairs), work::take(Work::CloseCompared)), (MAX_CLOSE_COMPARED + 1, MAX_CLOSE_COMPARED + 1));
         eprintln!("{MAX_CLOSE_COMPARED} comparisons took {took:.3} s");
         assert!(took < 1.0, "{took} s");
     }
 
     /// The worst the looking can cost: 140,000 lines 1,000,000 long and 5 apart, every pair overlapping on the side they are sorted on and none
-    /// meeting across: the 512 pairs for each of them are 71.7 million, and the answer is yes at the first pair past that.
+    /// meeting across: the 512 pairs for each of them are 71.7 million, and the answer is yes at the first pair past that. The pairs looked
+    /// at are counted, and so are the pairs compared (none).
     #[test]
-    #[ignore = "seconds: run with cargo test --release"]
-    fn the_worst_case_of_the_looking_is_bounded_in_time() {
+    fn the_worst_case_of_the_looking_is_bounded_by_its_count() {
         let segs: Vec<CloseSeg> =
             (0..140_000).map(|i| CloseSeg::new(Seg::line((0.0, i as f64 * 5.0).into(), (1e6, i as f64 * 5.0).into()), i, 0, 1)).collect();
         work::reset();
+        assert!(any_close(segs, 2e-6, MAX_CLOSE_COMPARED));
+        assert_eq!((work::take(Work::ClosePairs), work::take(Work::CloseCompared)), (140_000 * MAX_CLOSE_PAIRS + 1, 0));
+    }
+
+    /// The same, in time (a fraction of a second in a release build), as the wall-clock test of the comparisons: ignored, because a clock
+    /// measures the machine's load as much as the work.
+    #[test]
+    #[ignore = "wall-clock: run with cargo test --release -- --include-ignored"]
+    fn the_worst_case_of_the_looking_takes_under_a_second() {
+        let segs: Vec<CloseSeg> =
+            (0..140_000).map(|i| CloseSeg::new(Seg::line((0.0, i as f64 * 5.0).into(), (1e6, i as f64 * 5.0).into()), i, 0, 1)).collect();
         let started = std::time::Instant::now();
         assert!(any_close(segs, 2e-6, MAX_CLOSE_COMPARED));
         let took = started.elapsed().as_secs_f64();
-        assert_eq!((work::take(Work::ClosePairs), work::take(Work::CloseCompared)), (140_000 * MAX_CLOSE_PAIRS + 1, 0));
         eprintln!("{} pairs looked at took {took:.3} s", 140_000 * MAX_CLOSE_PAIRS);
         assert!(took < 1.0, "{took} s");
     }
 
     /// What one comparison can cost at the most: `hulls_apart` of two nested quarter circles, whose hulls no direction tells apart, reads all 16
     /// directions. The whole bound of comparisons at that cost is a fraction of a second (a check ends at the first such pair, which is close).
+    /// Nothing is counted for a comparison, so this one is a clock and no more: it is ignored, and runs in a release build with
+    /// `cargo test --release -- --include-ignored`.
     #[test]
-    #[ignore = "seconds: run with cargo test --release"]
+    #[ignore = "wall-clock: run with cargo test --release -- --include-ignored"]
     fn the_most_one_comparison_costs_keeps_the_check_under_a_second() {
         const K: f64 = 0.552_284_749_830_793_6;
         let arc = |r: f64| CubicBez::new((r, 0.0), (r, K * r), (K * r, r), (0.0, r));

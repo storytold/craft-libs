@@ -4,7 +4,6 @@
 //! not overlap. Curves were not counted at all.
 
 use craft_pathops::*;
-use std::time::{Duration, Instant};
 
 use crate::common::{
     arc_fan, arc_windows, cubic_circle, cubic_fan, fan_along_a_line, jittered_pencil, jittered_pies, nearly_parallel_lines, square_with_cut_sides,
@@ -13,13 +12,13 @@ use crate::common::{
 
 const NZ: FillRule = FillRule::NonZero;
 
-/// Every operation that sweeps `path` says it is too complex, and says so in milliseconds, not in the seconds of the sweep
-/// (a bound for a build for tests on a loaded machine, where the sweep that was admitted took 13 s in a release build).
+/// Every operation that sweeps `path` says it is too complex. That it says so before the sweep, and not after it (the sweep that was
+/// admitted took 13 s in a release build), is a matter of work done, and the crate's own tests count it, for these inputs (`refusals.rs`:
+/// no sweep is built, and at most the pairs of bounds the limit allows are walked). Nothing here is timed: a clock measures the machine's
+/// load (`wall_clock.rs` times the worst of them, in a test that is ignored by default).
 fn refused_at_once(path: &kurbo::BezPath, label: &str) {
-    let start = Instant::now();
     // `try_area` first and alone: where the limit is not there it is a sweep of seconds that answers, and it is said after one.
     assert_eq!(try_area(path, NZ).map(|_| ()), Err(PathOpsError::TooComplex), "{label}");
-    assert!(start.elapsed() < Duration::from_secs(60), "{label}: refused in {:?}", start.elapsed());
     let shapes = [Shape::new(path.clone(), NZ, 0)];
     let results = [
         try_unite_all_with(&[(path, NZ)], DEFAULT_PRECISION).map(|_| ()),
@@ -27,7 +26,6 @@ fn refused_at_once(path: &kurbo::BezPath, label: &str) {
         try_pathfinder_with(PathfinderOp::Intersect, &shapes, DEFAULT_PRECISION).map(|_| ()),
     ];
     assert_eq!(results, [Err(PathOpsError::TooComplex); 3], "{label}");
-    assert!(start.elapsed() < Duration::from_secs(60), "{label}: refused in {:?}", start.elapsed());
 }
 
 /// 206 stars of 201 points (each edge to the vertex nearly opposite, 19,899 crossings in each), each above and beside the last:
@@ -102,15 +100,13 @@ fn lines_nearly_parallel_that_cross_are_counted_and_refused_before_the_sweep() {
 }
 
 /// The same lines where they cross nowhere (the ends of one lie on one side of every other) are not counted: they are admitted,
-/// as they were, in milliseconds, and the area is the polygon's.
+/// as they were (no pair of them is walked: `budget.rs` counts it), and the area is the polygon's.
 #[test]
 fn lines_nearly_parallel_that_do_not_cross_stay_admitted() {
     for (n, l, d) in [(450, 1e10, 1.6), (450, 2e7, 10.0), (2_040, 1e10, 1.6)] {
         let path = nearly_parallel_lines(n, l, d, false, false);
-        let start = Instant::now();
         let area = try_area(&path, NZ).expect("a bundle of lines that cross nowhere");
-        assert!(area.is_finite() && area > 0.0, "{n} lines: {area}");
-        assert!(start.elapsed() < Duration::from_secs(20), "{n} lines {l} long: {:?}", start.elapsed());
+        assert!(area.is_finite() && area > 0.0, "{n} lines {l} long: {area}");
     }
 }
 
@@ -150,10 +146,8 @@ fn fans_of_segments_along_one_line_are_refused_before_the_sweep() {
 /// sides cut into many segments that meet end to end on one line (level, upright and diagonal).
 #[test]
 fn what_meets_at_an_end_on_one_line_without_overlapping_stays_admitted() {
-    let start = Instant::now();
     let level = try_area(&fan_along_a_line(250, 2), NZ).expect("a fan along one level");
     assert!(level.abs() < 1e-9, "{level}");
-    assert!(start.elapsed() < Duration::from_secs(20), "{:?}", start.elapsed());
     let square = try_area(&square_with_cut_sides(2_000), NZ).expect("a square whose sides are cut in 2,000");
     assert!((square - 1e4).abs() < 1e-6, "{square}");
     let strip = try_area(&strip_with_cut_sides(2_000), NZ).expect("a strip whose long sides are cut in 2,000");
@@ -184,9 +178,7 @@ fn curves_that_run_along_one_another_are_refused_before_the_sweep() {
 fn a_few_curves_that_run_along_one_another_are_made() {
     for (name, path) in [("100 straight cubics", cubic_fan(100)), ("150 pieces of an arc", arc_fan(150)), ("160 windows of an arc", arc_windows(160))]
     {
-        let start = Instant::now();
         assert!(try_area(&path, NZ).is_ok(), "{name}");
-        assert!(start.elapsed() < Duration::from_secs(60), "{name}: {:?}", start.elapsed());
     }
 }
 
@@ -239,8 +231,6 @@ fn stacks_of_fewer_copies_are_made() {
         ("200 copies of a segment", stacked_segments(1, 200)),
         ("6 stacks of 128 copies", stacked_segments(6, 128)),
     ] {
-        let start = Instant::now();
         assert!(try_area(&path, NZ).is_ok(), "{name}");
-        assert!(start.elapsed() < Duration::from_secs(60), "{name}: {:?}", start.elapsed());
     }
 }

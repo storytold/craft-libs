@@ -9,7 +9,6 @@
 #[cfg(target_os = "linux")]
 use std::process::Command;
 use std::sync::{Mutex, PoisonError};
-use std::time::{Duration, Instant};
 
 use craft_pathops::*;
 use kurbo::BezPath;
@@ -40,13 +39,13 @@ fn pricing_off() -> Limits {
     limits
 }
 
-/// `path` is refused by the meter, in the time of its budget and not in the minutes the sweep would take.
+/// `path` is refused by the meter. That it is refused where the dry sweep passes the budget, and not after the minutes that the sweep
+/// would take, is a matter of work done: the crate's own tests count it, for these inputs (`refusals.rs`). Nothing here is timed (a clock
+/// measures the machine's load; `wall_clock.rs` times the worst of them, in a test that is ignored by default).
 fn refused_by_the_meter(path: &BezPath, label: &str) {
     let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
-    let start = Instant::now();
     let result = with_limits(pricing_off(), || try_area(path, NZ));
     assert_eq!(result.map(|_| ()), Err(PathOpsError::TooComplex), "{label}");
-    assert!(start.elapsed() < Duration::from_secs(60), "{label}: refused in {:?}", start.elapsed());
 }
 
 /// Lines through one point or crossing along their length, which passed the count of crossings (the bundles of 450 lines under 1e-10 rad, a
@@ -189,16 +188,15 @@ fn the_budget_is_a_limit_that_can_be_set() {
 
 /// A planar map takes several times what its sweep does, in time and memory (the shape builder of a star of 501 points took 4.7 s and 1.3 GB
 /// where the sweep took 0.4 s, and one of 801 aborted under a limit of 3 GB, its sweep 1.5 s), so it is built for a quarter of the pieces a
-/// sweep is: the sweep of the star of 801 is made, its map is refused, in the time of the dry sweep and not of the map.
+/// sweep is: the sweep of the star of 801 is made, its map is refused, by the dry sweep and not after the map's own sweep (counted, in
+/// `refusals.rs`).
 #[test]
 fn a_planar_map_is_built_for_a_quarter_of_what_a_sweep_is_made_for() {
     let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
     let big = crate::common::star_at(801, 0.0, 0.0, 0.0);
     assert!(try_area(&big, NZ).is_ok(), "the sweep of a star of 801 points is made");
     let shapes = [Shape::new(big, NZ, 0)];
-    let start = Instant::now();
     assert_eq!(try_shape_builder(&shapes, false).map(|_| ()), Err(PathOpsError::TooComplex));
-    assert!(start.elapsed() < Duration::from_secs(20), "refused in {:?}", start.elapsed());
     let small = [Shape::new(crate::common::star_at(201, 0.0, 0.0, 0.0), NZ, 0)];
     assert!(try_shape_builder(&small, false).is_ok(), "the map of a star of 201 points is built");
 }
@@ -324,9 +322,7 @@ fn the_false_refusal_set_is_admitted() {
         ("2,048 pairs of circles of 1e5, 3 apart", circle_pairs(2_048, 1e5, 3.0)),
     ];
     for (name, path) in cases {
-        let start = Instant::now();
         assert!(try_area(&path, NZ).is_ok(), "{name}");
-        eprintln!("admitted: {name}: {:?}", start.elapsed());
     }
 }
 

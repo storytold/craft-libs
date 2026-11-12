@@ -1258,6 +1258,10 @@ mod tests {
             Q69.08365151786553,53.9608681393331 68.37499772324333,51.17242466680129 \
             Q74.4136309339628,75.13284223919301 71.3309887459222,73.69128869058812 Z";
         let path = BezPath::from_svg(OUTLINE).unwrap();
+        // A watchdog and no bound: nothing is asserted about how long the offset took (milliseconds: the test finishes in under a tenth
+        // of a second, and no count can see an endless loop in the sweep). The 30 seconds are there to end the test binary when the sweep
+        // is stuck and allocating, where the test would otherwise wait for ever; they are a factor of hundreds over what a loaded
+        // machine needs, and a machine that slow fails the test as it would fail anything.
         let (tx, rx) = std::sync::mpsc::channel();
         let input = path.clone();
         std::thread::spawn(move || tx.send(offset_path(&input, 1.8350459854022054, Join::Miter, 4.0)));

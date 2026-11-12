@@ -2320,9 +2320,8 @@ mod tests {
         let check = |n: usize| {
             let path = star(n);
             work::reset();
-            let start = std::time::Instant::now();
             let fits = sweep_fits([&path]);
-            (fits, work::take(Work::Crossings), start.elapsed())
+            (fits, work::take(Work::Crossings), work::take(Work::CrossingPairs))
         };
         // 1,001 edges fit: 500 thousand pairs of bounds, a thousand pieces on the line, 5.0e8 at most, which
         // is under the limit with no pair tested.
@@ -2332,14 +2331,14 @@ mod tests {
         // `n (k - 1)` places, one for each pair of edges that cross, and are over it.
         let (fits, crossed, _) = check(1501);
         assert!(!fits && crossed == 1501 * 749, "{crossed} crossings counted");
-        // So are 2,001 (4.0e9), found by testing the 2 million pairs, in well under a second in a release build
-        // (a bound of a minute here, where a build for tests is much slower, and the sweep takes minutes).
-        let (fits, crossed, took) = check(2001);
+        // So are 2,001 (4.0e9), found by testing the 2 million pairs (each walked once, and that is all the check does: no sweep is
+        // made, which takes minutes).
+        let (fits, crossed, pairs) = check(2001);
         assert!(!fits && crossed == 2001 * 999, "{crossed} crossings counted");
-        assert!(took < std::time::Duration::from_secs(60), "{took:?}");
+        assert_eq!(pairs, 2001 * 2000 / 2, "the pairs of bounds walked");
         // 3,001 are over the limit on pairs, which is counted first, and no pair is tested.
-        let (fits, crossed, took) = check(3001);
-        assert!(!fits && crossed == 0 && took < std::time::Duration::from_secs(60), "{crossed} crossings counted in {took:?}");
+        let (fits, crossed, pairs) = check(3001);
+        assert!(!fits && crossed == 0 && pairs == 0, "{crossed} crossings counted, {pairs} pairs walked");
         // Short polygons are not counted: their pairs of bounds are too few to reach the limit.
         assert_eq!(check(301).1, 0);
         // At the work it needs a star fits, and under it by one it does not: the crossings times the pieces on the line.
@@ -2370,9 +2369,8 @@ mod tests {
         let check = |stars: usize, bow: f64| {
             let path = stacked_stars(stars, 201, bow);
             work::reset();
-            let start = std::time::Instant::now();
             let fits = sweep_fits([&path]);
-            (fits, work::take(Work::Crossings) as u64, start.elapsed())
+            (fits, work::take(Work::Crossings) as u64, work::take(Work::CrossingPairs) as u64)
         };
         let path = stacked_stars(206, 201, 0.0);
         assert_eq!(path.elements().len(), 206 * 203);
@@ -2384,9 +2382,12 @@ mod tests {
         // Only the number of crossings refuses it, found by testing the 4.1 million pairs (milliseconds in a release build).
         let lifted = Limits { real_crossings: usize::MAX, ..Limits::default() };
         assert!(with_limits(lifted, || sweep_fits([&path])), "nothing else refuses it");
-        let (fits, crossed, took) = check(206, 0.0);
+        let (fits, crossed, pairs) = check(206, 0.0);
         assert!(!fits && crossed == 206 * per_star, "{crossed} crossings counted");
-        assert!(took < std::time::Duration::from_secs(60), "{took:?}");
+        assert!(
+            (4_100_000..=MAX_SEGMENT_PAIRS as u64).contains(&pairs),
+            "the 4.1 million pairs of bounds are each walked once, and that is all the check does: {pairs}"
+        );
         // The most that fits: 52 stars make 1,034,748 crossings, 53 make 1,054,647, against 1,048,576.
         assert_eq!(MAX_REAL_CROSSINGS, 1 << 20);
         // (52 make 1.05 million pairs of bounds, under the limit, so that none is tested.)
@@ -2593,9 +2594,9 @@ mod tests {
         for (l, dfac) in [(2e7, 1.6), (1e8, 1.6), (1e9, 1.6), (1e10, 1.6), (2e7, 10.0), (1e9, 10.0), (1e10, 10.0)] {
             let path = nearly_parallel_lines(450, l, dfac, false, true);
             work::reset();
-            let start = std::time::Instant::now();
             assert!(!sweep_fits([&path]), "{l:e} long, {dfac} tolerances apart");
-            assert!(start.elapsed() < std::time::Duration::from_secs(30), "{:?}", start.elapsed());
+            // The check walks each pair of the segments' bounds that overlap once, and makes no sweep.
+            assert_eq!(work::take(Work::CrossingPairs), 101_927, "{l:e} long, {dfac} tolerances apart: the pairs walked");
             // Only the work of the lines through a point refuses them.
             assert!(with_limits(lifted, || sweep_fits([&path])), "{l:e} long, {dfac} tolerances apart: nothing else refuses it");
         }
@@ -2628,10 +2629,9 @@ mod tests {
         for (n, l, spread) in [(2040usize, 1e10, true), (450, 1e10, false), (450, 2e7, false)] {
             let path = nearly_parallel_lines(n, l, 1.6, spread, false);
             work::reset();
-            let start = std::time::Instant::now();
             assert!(sweep_fits([&path]), "{n} lines {l:e} long, apart");
             assert_eq!(work::take(Work::Crossings), 0, "{n} lines {l:e} long, apart");
-            assert!(start.elapsed() < std::time::Duration::from_secs(30), "{:?}", start.elapsed());
+            assert_eq!(work::take(Work::CrossingPairs), 0, "{n} lines {l:e} long, apart: no pair is walked, they are not counted");
         }
     }
 
@@ -2851,19 +2851,20 @@ mod tests {
     fn curves_that_run_along_one_another_are_held_to_the_work_of_lines_on_one_line() {
         use crate::testutil::{arc_fan, arc_windows, cubic_fan};
         let lifted = Limits { crossing_work: usize::MAX, ..Limits::default() };
-        for (name, path, big) in [
-            ("straight cubics", cubic_fan(256), true),
-            ("straight cubics", cubic_fan(129), true),
-            ("pieces of an arc", arc_fan(256), true),
-            ("pieces of an arc", arc_fan(200), true),
-            ("windows of an arc", arc_windows(256), true),
-            ("straight cubics", cubic_fan(100), false),
-            ("pieces of an arc", arc_fan(150), false),
-            ("windows of an arc", arc_windows(160), false),
+        // The pairs of the curves' bounds the check walks (once each, and no sweep is made): none where the curves are few enough to pass.
+        for (name, path, big, pairs) in [
+            ("straight cubics", cubic_fan(256), true, 130_816),
+            ("straight cubics", cubic_fan(129), true, 33_153),
+            ("pieces of an arc", arc_fan(256), true, 32_640),
+            ("pieces of an arc", arc_fan(200), true, 19_900),
+            ("windows of an arc", arc_windows(256), true, 32_640),
+            ("straight cubics", cubic_fan(100), false, 0),
+            ("pieces of an arc", arc_fan(150), false, 0),
+            ("windows of an arc", arc_windows(160), false, 0),
         ] {
-            let start = std::time::Instant::now();
+            work::reset();
             assert_eq!(sweep_fits([&path]), !big, "{name}, {} segments", path.elements().len());
-            assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+            assert_eq!(work::take(Work::CrossingPairs), pairs, "{name}, {} segments: the pairs walked", path.elements().len());
             // Nothing but the work of what runs along one another refuses them.
             assert!(with_limits(lifted, || sweep_fits([&path])), "{name}: nothing else refuses them");
         }
@@ -3043,18 +3044,18 @@ mod tests {
         let work_of = |count: usize| {
             let path = stacked_pies(count, 256);
             work::reset();
-            let start = std::time::Instant::now();
             let fits = sweep_fits([&path]);
-            (fits, work::take(Work::PricedEnds) as u64, start.elapsed())
+            (fits, work::take(Work::PricedEnds) as u64, work::take(Work::CrossingPairs))
         };
         let (fits, one, _) = work_of(1);
         assert!(fits && (1_300_000_000..1_320_000_000).contains(&one), "{one}");
         let (fits, three, _) = work_of(3);
         assert!(fits && (3 * one..3 * one + 1_000_000).contains(&three), "{three}");
         for count in [4, 8, 30] {
-            let (fits, charged, took) = work_of(count);
+            let (fits, charged, pairs) = work_of(count);
             assert!(!fits && charged > MAX_ENDS_WORK as u64, "{count} pies: {charged}");
-            assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+            // Refused by the work of their ends, before any pair of bounds is walked.
+            assert_eq!(pairs, 0, "{count} pies: the pairs walked");
         }
         // The limit is what refuses them: lifted, 30 pies are not refused by anything else, and at the work of three they fit and
         // under it by one they do not.

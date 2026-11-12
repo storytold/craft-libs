@@ -2,7 +2,6 @@
 //! claim is true.
 
 use craft_pathops::*;
-use std::time::{Duration, Instant};
 
 use kurbo::{BezPath, Shape as _};
 
@@ -87,36 +86,29 @@ fn star(n: usize) -> BezPath {
 /// admitted a polygon every edge of which crosses nearly every other: `try_area`, `try_unite_all_with` and the
 /// Pathfinder took 19 s and 3.5 GB to make 2 million crossings. Every pair there crosses, where the count of
 /// the event limit is priced for a hatch, whose pairs of bounds that overlap cross a fifth of the time; the lines
-/// that cross are counted now (`MAX_CROSSED_WORK`). 2,001 and 3,001 edges are refused in milliseconds (the latter by
-/// the limit on pairs, as 4,001 were), 1,001 are made.
+/// that cross are counted now (`MAX_CROSSED_WORK`). 2,001 and 3,001 edges are refused before any sweep (the latter by
+/// the limit on pairs, as 4,001 were: `refusals.rs` and the tests of `budget.rs` count the pairs walked and the sweeps built, which are
+/// none), 1,001 are made.
 #[test]
-fn a_polygon_whose_edges_all_cross_one_another_is_refused_in_milliseconds_or_made_in_seconds() {
+fn a_polygon_whose_edges_all_cross_one_another_is_refused_before_any_sweep_or_made() {
     let refused = |n: usize| {
         let path = star(n);
         let shapes = [Shape::new(path.clone(), NZ, 0), Shape::new(path.clone(), NZ, 1)];
-        let start = Instant::now();
-        let results = [
+        [
             try_area(&path, NZ).map(|_| ()),
             try_unite_all_with(&[(&path, NZ)], DEFAULT_PRECISION).map(|_| ()),
             try_pathfinder_with(PathfinderOp::Intersect, &shapes[..1], DEFAULT_PRECISION).map(|_| ()),
             try_normalize(&path, NZ).map(|_| ()),
-        ];
-        (results, start.elapsed())
+        ]
     };
     for n in [2001, 3001, 4001] {
-        let (results, took) = refused(n);
-        assert_eq!(results, [Err(PathOpsError::TooComplex); 4], "{n} edges");
-        // Milliseconds in a release build; the bound is for a build for tests and a loaded machine, and the
-        // sweep that was admitted took a minute or more.
-        assert!(took < Duration::from_secs(60), "{n} edges: refused in {took:?}");
+        assert_eq!(refused(n), [Err(PathOpsError::TooComplex); 4], "{n} edges");
     }
     // 401 are made, at any build; 1,001 take 2.4 s in a release build and are made there.
     let sizes: &[usize] = if cfg!(debug_assertions) { &[401] } else { &[401, 1001] };
     for &n in sizes {
-        let start = Instant::now();
         let area = try_area(&star(n), NZ).unwrap_or_else(|e| panic!("{n} edges: {e:?}"));
         assert!(area > 0.0, "{n} edges: area {area}");
-        assert!(start.elapsed() < Duration::from_secs(60), "{n} edges: {:?}", start.elapsed());
     }
 }
 

@@ -13,7 +13,7 @@
 //!
 //! The sweep is run only for inputs of more than [`GATE_PIECES`] monotone pieces: the sweep's cost
 //! cannot be hidden from a count of the pieces it is given, and under the gate no input costs more than
-//! about half a second (the tests build the worst they know of and time it). Every input past the gate pays
+//! about half a second (the tests build the worst they know of and count what the dry sweep prices it at). Every input past the gate pays
 //! for the dry sweep, which costs a little less than the sweep it guards.
 //!
 //! # The units
@@ -852,8 +852,6 @@ mod tests {
     use kurbo::{BezPath, Point};
     use linesweeper::topology::Topology;
 
-    use std::time::{Duration, Instant};
-
     use super::*;
     use crate::boolean::eps_for;
     use crate::testutil::{
@@ -1598,7 +1596,7 @@ mod tests {
         let probed: Vec<(usize, u64, u64)> = [40usize, 80, 160]
             .iter()
             .map(|&k| {
-                let (counts, _) = counted(&curves_beside_a_crowd(1, 1e6, 1.9e-6, k));
+                let counts = counted(&curves_beside_a_crowd(1, 1e6, 1.9e-6, k));
                 assert!(counts.work() >= counts.probed * LOOKUP_WORK, "{counts:?}");
                 (k, counts.probed, counts.work())
             })
@@ -1668,11 +1666,11 @@ mod tests {
             ("a circle of 4,000 arcs", cubic_circle(4_000, 100.0, 0.0, 0.0)),
             ("a circle of 100,000 cubics", cubic_circle(100_000, 1_000.0, 0.0, 0.0)),
         ] {
-            let (counts, _) = counted(&path);
+            let counts = counted(&path);
             assert_eq!((counts.probed, counts.sampled, counts.compared), (0, 0, 0), "{name}: {counts:?}");
         }
         // Where some segment can pass it, they are read: the circles of a million.
-        let (counts, _) = counted(&circle_pairs(4, 1e6, 0.03));
+        let counts = counted(&circle_pairs(4, 1e6, 0.03));
         assert!(counts.probed > 0 && counts.sampled > 0 && counts.compared > 0);
     }
 
@@ -1870,75 +1868,82 @@ mod tests {
         best
     }
 
-    /// Under the gate nothing is swept by the meter, and the worst input known there takes a fraction of a second: each of the shapes
+    /// Under the gate nothing is swept by the meter, and the worst input known there is a fraction of a second of sweep: each of the shapes
     /// that cost the most for their pieces (fans and stacks of copies, pies, pencils and bundles of lines that cross along their length,
     /// stars whose every edge crosses every other, curves that run along one another), at the largest size that has no more pieces than
     /// the gate. They took 0.01 to 0.2 s in a release build.
+    ///
+    /// The test counts what each costs and does not time it (a clock measures the machine's load as much as the input: this test once failed,
+    /// on a loaded machine, for a sweep that had been fast). The price of its sweep is what the dry sweep counts for it, run to the end (in the
+    /// nanoseconds the budget is counted in, as a release build took them): at most about half a second, and within a tenth of what was
+    /// measured, so that a weight dropped from the price, or a gate raised so that larger inputs pass, is seen. The planar map of it is held to
+    /// the budgets of its own, the elements of paths it may wind points against ([`crate::Limits::fill_work`]) and the steps it may search for
+    /// a point inside each face ([`crate::Limits::search_work`]), and what it is charged for each is measured too.
     #[test]
     fn under_the_gate_the_worst_inputs_known_are_cheap() {
         type Make = Box<dyn Fn(usize) -> BezPath>;
-        let shapes: Vec<(&str, Make)> = vec![
-            ("fan of segments", Box::new(fan_along_a_line)),
-            ("fan of straight cubics", Box::new(cubic_fan)),
-            ("fan of arc pieces", Box::new(arc_fan)),
-            ("windows of an arc", Box::new(arc_windows)),
-            ("windows sharing a tenth", Box::new(windows_sharing_a_tenth)),
-            ("copies of a segment", Box::new(|n| stacked_segments(1, n))),
-            ("squares one on another", Box::new(|n| stacked_polygons(4, n))),
-            ("triangles one on another", Box::new(|n| stacked_polygons(3, n))),
-            ("copies of an arc", Box::new(stacked_arcs)),
-            ("squares an ulp apart", Box::new(|n| polygons_an_ulp_apart(4, n, 1e-4))),
-            ("long squares an ulp apart", Box::new(|n| polygons_an_ulp_apart(4, n, 100.0))),
-            ("squares a tolerance apart", Box::new(|n| polygons_a_few_tolerances_apart(4, n, 0.15, 1e-4))),
-            ("long squares a few tolerances apart", Box::new(|n| polygons_a_few_tolerances_apart(4, n, 2.0, 100.0))),
-            ("pie", Box::new(|n| stacked_pies(1, n))),
-            ("wheel", Box::new(wheel)),
-            ("pie, apexes moved", Box::new(|n| jittered_pies(1, n, 1e-5))),
-            ("pencil, lines moved", Box::new(|n| jittered_pencil(n, 100.0, 1e-5))),
-            ("lines through a point", Box::new(|n| nearly_parallel_lines(n, 1e8, 1.6, false, true))),
-            ("lines crossing along their length", Box::new(|n| nearly_parallel_lines(n, 1e8, 1.6, true, true))),
-            ("star of lines", Box::new(|n| star(2 * n + 1))),
-            ("star of bowed cubics", Box::new(|n| bowed_star(2 * n + 1, 3.0, 0.0, 0.0))),
-            ("diagonals", Box::new(diagonals)),
+        // What the gate's price is: "no input costs more than about half a second", in nanoseconds.
+        const HALF_A_SECOND: u64 = 500_000_000;
+        // Within a tenth, and a few counts over for the small ones.
+        let near = |got: u64, measured: u64| got >= measured - measured / 10 && got <= measured + measured / 10 + 8;
+        // The shape, the price of its sweep, and what its map is charged for winding and for searching, as measured.
+        let shapes: Vec<(&str, Make, u64, u64, u64)> = vec![
+            ("fan of segments", Box::new(fan_along_a_line), 142_255_614, 0, 0),
+            ("fan of straight cubics", Box::new(cubic_fan), 161_830_986, 0, 0),
+            ("fan of arc pieces", Box::new(arc_fan), 390_558_667, 12_628, 2_402),
+            ("windows of an arc", Box::new(arc_windows), 74_189_372, 422_716, 74_854),
+            ("windows sharing a tenth", Box::new(windows_sharing_a_tenth), 126_630_940, 8_568, 2_849),
+            ("copies of a segment", Box::new(|n| stacked_segments(1, n)), 192_256_634, 0, 0),
+            ("squares one on another", Box::new(|n| stacked_polygons(4, n)), 21_523_200, 288, 36),
+            ("triangles one on another", Box::new(|n| stacked_polygons(3, n)), 41_316_945, 320, 27),
+            ("copies of an arc", Box::new(stacked_arcs), 24_533_119, 256, 220),
+            ("squares an ulp apart", Box::new(|n| polygons_an_ulp_apart(4, n, 1e-4)), 38_955_000, 0, 0),
+            ("long squares an ulp apart", Box::new(|n| polygons_an_ulp_apart(4, n, 100.0)), 38_958_600, 288, 36),
+            ("squares a tolerance apart", Box::new(|n| polygons_a_few_tolerances_apart(4, n, 0.15, 1e-4)), 37_128_000, 0, 0),
+            ("long squares a few tolerances apart", Box::new(|n| polygons_a_few_tolerances_apart(4, n, 2.0, 100.0)), 28_646_800, 288, 36),
+            ("pie", Box::new(|n| stacked_pies(1, n)), 11_804_600, 910, 1_728),
+            ("wheel", Box::new(wheel), 11_169_600, 1_310, 1_728),
+            ("pie, apexes moved", Box::new(|n| jittered_pies(1, n, 1e-5)), 48_044_200, 585, 1_656),
+            ("pencil, lines moved", Box::new(|n| jittered_pencil(n, 100.0, 1e-5)), 158_843_400, 36_472, 6_075),
+            ("lines through a point", Box::new(|n| nearly_parallel_lines(n, 1e8, 1.6, false, true)), 41_011_513, 0, 0),
+            ("lines crossing along their length", Box::new(|n| nearly_parallel_lines(n, 1e8, 1.6, true, true)), 18_752_200, 0, 0),
+            ("star of lines", Box::new(|n| star(2 * n + 1)), 77_093_500, 2_064_521, 386_775),
+            ("star of bowed cubics", Box::new(|n| bowed_star(2 * n + 1, 3.0, 0.0, 0.0)), 170_947_645, 2_387_242, 671_599),
+            ("diagonals", Box::new(diagonals), 8_690_400, 554_340, 82_980),
         ];
-        let mut worst = (Duration::ZERO, "");
-        for (name, make) in &shapes {
+        let budget = limits().sweep_work as u64;
+        for (name, make, price, winding, searching) in &shapes {
             let (n, path) = largest_under_the_gate(make);
             let pieces = pieces_of(&path);
             assert!(pieces <= GATE_PIECES, "{name}");
+            // The price of its sweep: what the dry sweep counts for it, which nothing under the gate asks.
+            let priced = counted(&path).work();
+            assert!(near(priced, *price), "{name} {n}: the sweep is priced at {priced}, measured {price}");
+            assert!(priced <= HALF_A_SECOND, "{name} {n}: {priced}");
+            assert!(priced <= budget / MAP_FACTOR, "{name} {n}: {priced} is under the budget of a map as well");
             work::reset();
-            let start = Instant::now();
             let result = crate::try_area(&path, FillRule::NonZero);
-            let took = start.elapsed();
             assert!(result.is_ok(), "{name} {n}: {result:?}");
             assert_eq!(work::take(Work::MeteredSweeps), 0, "{name}: under the gate it is not metered");
+            assert_eq!(work::take(Work::Sweeps), 1, "{name}: one sweep");
             // And the planar map of it, which takes several times the sweep.
             let shapes = [crate::Shape::new(path.clone(), FillRule::NonZero, 0)];
-            let start = Instant::now();
+            work::reset();
             let map = crate::try_shape_builder(&shapes, false);
-            let map_took = start.elapsed();
             assert!(map.is_ok(), "{name} {n}: {:?}", map.map(|_| ()));
-            eprintln!("under the gate: {name} {n}: {pieces} pieces, {took:?}, its planar map {map_took:?}");
-            assert!(took < Duration::from_secs(3), "{name} {n}: {took:?}");
-            // The map is the crate's own code, which a build for tests does not optimise (the sweep it rests on is).
-            let map_limit = if cfg!(debug_assertions) { Duration::from_secs(30) } else { Duration::from_secs(2) };
-            assert!(map_took < map_limit, "{name} {n}: its map {map_took:?}");
-            for t in [took, map_took] {
-                if t > worst.0 {
-                    worst = (t, name);
-                }
-            }
+            let (wound, searched) = (work::take(Work::FillElements) as u64, work::take(Work::SearchSteps) as u64);
+            assert!(near(wound, *winding), "{name} {n}: its map is charged {wound} for winding, measured {winding}");
+            assert!(near(searched, *searching), "{name} {n}: its map is charged {searched} for searching, measured {searching}");
+            assert!(wound <= limits().fill_work as u64 && searched <= limits().search_work as u64, "{name} {n}: {wound}, {searched}");
         }
-        eprintln!("under the gate, the worst of {}: {} {:?}", shapes.len(), worst.1, worst.0);
     }
-    /// The work the dry sweep counts for `path` at its own tolerance, to the end (no budget), and the counts.
-    fn counted(path: &BezPath) -> (Counts, Duration) {
+
+    /// What the dry sweep counts for `path` at its own tolerance, to the end (no budget).
+    fn counted(path: &BezPath) -> Counts {
         let paths = [closed(path)];
         let eps = eps_for(paths.iter()).expect("finite");
         let segments = segments_of(paths.iter()).expect("segments");
-        let start = Instant::now();
-        let counts = dry_sweep(&segments, eps, u64::MAX).expect("no budget");
-        (counts, start.elapsed())
+        dry_sweep(&segments, eps, u64::MAX).expect("no budget")
     }
 
     /// The inputs that must be made are under the budget, and what the dry sweep counts for each is reported: rings, S-strokes, a hatch of
@@ -1968,9 +1973,9 @@ mod tests {
         ];
         let mut star_work = 0;
         for (name, path) in set {
-            let (counts, took) = counted(&path);
+            let counts = counted(&path);
             let work = counts.work();
-            eprintln!("admitted: {name}: work {work} ({:.0}% of the budget), {took:.2?}, {counts:?}", work as f64 / budget as f64 * 100.0);
+            eprintln!("admitted: {name}: work {work} ({:.0}% of the budget), {counts:?}", work as f64 / budget as f64 * 100.0);
             assert!(work <= budget, "{name}: {work} against {budget}");
             if name.starts_with("star") {
                 star_work = work;
@@ -1979,7 +1984,7 @@ mod tests {
         // The star is what the budget is: the work of the most it admits is within a tenth of the budget.
         assert!(star_work > budget / 10 * 9, "the star's work {star_work} is the budget's size");
         // One of 1,501 points, which no limit admits, is over it.
-        assert!(counted(&star(1_501)).0.work() > budget);
+        assert!(counted(&star(1_501)).work() > budget);
     }
 
     /// The new holes were not seen by the pricing: it admits them (220 small squares, each a unit in the last place from the last, took 6.2
@@ -2011,7 +2016,7 @@ mod tests {
     /// of curves, took 2.4 s of sweep beside the 1.3 s that a million pieces of lines crossing as much take.
     #[test]
     fn loops_of_one_cubic_each_are_charged_for_their_curves() {
-        let (counts, _) = counted(&groups_of_loops(100, 50));
+        let counts = counted(&groups_of_loops(100, 50));
         assert!(counts.curved > 400_000, "{counts:?}");
         let budget = crate::budget::MAX_SWEEP_WORK as u64;
         assert!(counts.work() > budget / 2 && counts.work() < budget, "{}", counts.work());
@@ -2021,7 +2026,7 @@ mod tests {
     /// what starts there: 5,500 of them, of 22,000 pieces, took 1.4 s of sweep.
     #[test]
     fn a_row_of_dots_is_charged_for_the_square_of_what_starts_at_one_height() {
-        let (counts, _) = counted(&row_of_lenses(3_000));
+        let counts = counted(&row_of_lenses(3_000));
         assert!(counts.batch >= 100_000_000, "{counts:?}");
         assert!(counts.work() > 300_000_000, "{}", counts.work());
     }
@@ -2043,9 +2048,9 @@ mod tests {
     /// clusters of the two segments of each (out and back), lines 3 tolerances apart of the six of the three within 8.
     #[test]
     fn a_cluster_is_the_segments_within_eight_tolerances_across() {
-        let (apart, _) = counted(&lines_apart(20.0));
+        let apart = counted(&lines_apart(20.0));
         assert!(apart.tangle <= apart.pieces * 9, "{apart:?}");
-        let (near, _) = counted(&lines_apart(3.0));
+        let near = counted(&lines_apart(3.0));
         assert!(near.tangle >= near.pieces * 25, "{near:?}");
     }
 
@@ -2053,7 +2058,7 @@ mod tests {
     /// from the middle vertex, where one segment ends and one begins, with three.
     #[test]
     fn the_counts_of_a_triangle_are_what_the_sweep_does_to_it() {
-        let (counts, _) = counted(&polyline(&[(0.0, 0.0), (2.0, 1.0), (1.0, 3.0)], true));
+        let counts = counted(&polyline(&[(0.0, 0.0), (2.0, 1.0), (1.0, 3.0)], true));
         assert_eq!((counts.segments, counts.pieces, counts.curved, counts.ranges), (3, 3, 0, 3), "{counts:?}");
         assert_eq!(counts.scan, 2 * 2 + 3, "{counts:?}");
     }
