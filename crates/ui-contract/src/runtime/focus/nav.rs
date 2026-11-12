@@ -200,6 +200,20 @@ impl State {
         false
     }
 
+    /// The stop that opened the innermost scope around `scope` that keeps the focus on its anchor (`Initial::KeepAnchor`,
+    /// a dropdown's layer); `None` outside every such scope.
+    fn anchored_layer(&self, scope: Option<Id>) -> Option<StopKey> {
+        let mut at = scope;
+        while let Some(id) = at {
+            let rec = self.last_scopes.get(&id)?;
+            if rec.policy.initial == Initial::KeepAnchor {
+                return rec.opener;
+            }
+            at = rec.parent;
+        }
+        None
+    }
+
     /// The arrival member of a roving group of last pass: its selected member, else the first.
     fn arrival(&self, group: &super::Group) -> Option<StopRec> {
         self.last().arrival(group)
@@ -248,12 +262,15 @@ impl State {
     }
 
     pub(super) fn tab(&mut self, forward: bool, all_controls: bool) -> Vec<Act> {
-        // A child of a collection row tabs on from its collection: the row groups are no Tab entries.
+        // A child of a collection row tabs on from its collection: the row groups are no Tab entries. The content of a
+        // layer that keeps the focus on its anchor (a dropdown) is no Tab entry either: Tab goes on from the anchor.
         let current = self.stop_of_focus().map(|rec| {
             let owner = rec.stop.group.and_then(|group| self.group(group)).filter(|group| group.row).and_then(|group| self.row_owner(&group));
-            owner.unwrap_or(rec)
+            let rec = owner.unwrap_or(rec);
+            self.anchored_layer(rec.scope).and_then(|opener| self.find_stop(opener)).unwrap_or(rec)
         });
-        let entries = self.entries(self.trap_of(current.as_ref()), all_controls);
+        let mut entries = self.entries(self.trap_of(current.as_ref()), all_controls);
+        entries.retain(|entry| self.anchored_layer(entry.arrival().scope).is_none());
         let Some(next) = cycle(&entries, current.as_ref(), forward) else { return Vec::new() };
         let arrival = entries[next].arrival().clone();
         self.focus_stop(arrival)
@@ -520,6 +537,7 @@ pub(super) fn begin(state: &mut State, input: BeginIn) -> (Vec<Act>, Vec<String>
     }
     for forward in input.nav.tabs {
         let moved = state.tab(forward, input.tab_all_controls);
+        state.press.by_keys |= !moved.is_empty();
         if let Some(from) = input.focused.filter(|_| !moved.is_empty()) {
             state.press.tabbed_from = Some((from, forward));
         }
@@ -527,6 +545,7 @@ pub(super) fn begin(state: &mut State, input: BeginIn) -> (Vec<Act>, Vec<String>
     }
     for forward in input.nav.panes {
         let (moved, said) = state.pane(forward, input.tab_all_controls);
+        state.press.by_keys |= !moved.is_empty();
         acts.extend(moved);
         announcements.extend(said);
     }

@@ -183,7 +183,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     }
     let name = words.list.clone();
     let mut stars: Vec<(String, bool)> = Vec::new();
-    let events = ui.show(popup, Overlay::dropdown().dismiss(Dismiss::new()), |ui, _| {
+    let events = ui.show(popup, Overlay::dropdown().dismiss(Dismiss::new().focus_left(true)), |ui, _| {
         let mut events = Vec::new();
         Stack::new().show(ui, |ui, _| {
             if let Some(filters) = filters.as_mut() {

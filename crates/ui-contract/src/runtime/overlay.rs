@@ -95,8 +95,8 @@ pub enum CloseReason {
     Escape,
     /// A press landed outside the layer and its anchor.
     Outside,
-    /// Focus left the layer.
-    FocusLeft,
+    /// Focus left the layer, or the anchor of a layer that keeps the focus on its anchor; the move says what moved it.
+    FocusLeft(crate::runtime::focus::FocusMove),
     /// A component inside was activated.
     Activated,
     /// Enter was pressed inside.

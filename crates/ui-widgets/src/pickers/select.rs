@@ -18,7 +18,8 @@ use crate::contract::{
 use crate::list::{List, ListRow};
 use crate::menu::Menu;
 use crate::runtime::env::Label;
-use crate::runtime::focus::{self, FocusTarget};
+use crate::runtime::focus::{self, FocusMove, FocusTarget};
+use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, Ink, StyleCx, SurfaceLook, TextLook, TypeRole};
 use crate::text::TextField;
 use craft_behavior::nav::{StepResult, ValueAxes, ValueSteps};
@@ -295,6 +296,16 @@ impl<T: Value + 'static> Component for Select<'_, T> {
             cx.propose(value.clone());
             cx.commit();
             popup.close(cx);
+        }
+        // Tab and Shift+Tab choose the row the keys reached and move on; Escape and any other focus move put the value
+        // back. A press outside cancels in `update` once the list has closed.
+        if matches!(cx.gesture(), Some(GesturePhase::Begin | GesturePhase::Update)) {
+            match ui.closing(popup) {
+                Some(CloseReason::FocusLeft(FocusMove::Keys)) => cx.commit(),
+                Some(CloseReason::FocusLeft(_)) => cx.cancel(CancelReason::Blur),
+                Some(CloseReason::Escape) => cx.cancel(CancelReason::Escape),
+                _ => {}
+            }
         }
     }
 

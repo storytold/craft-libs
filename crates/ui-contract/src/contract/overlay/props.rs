@@ -184,11 +184,11 @@ impl Overlay {
     }
 
     /// A dropdown list: from its content, at least as wide as its anchor and capped, focus stays on the anchor. It
-    /// closes when a row is activated.
+    /// closes when a row is activated or the focus leaves the anchor.
     pub fn dropdown() -> Overlay {
         let focus = FocusPolicy::POPUP.trap(false).restore(false).initial(Initial::KeepAnchor);
         let mut overlay = Overlay::base(Rank::Popup, Overlay::below(), OverlayFit::ContentCapped(DROPDOWN_SHARE), OwnerClass::PassivePopup, focus);
-        overlay.dismiss = Dismiss::new().on_activate(true);
+        overlay.dismiss = Dismiss::new().on_activate(true).focus_left(true);
         overlay.min_width = MinWidth::Anchor;
         overlay.popup = PopupKind::Listbox;
         overlay

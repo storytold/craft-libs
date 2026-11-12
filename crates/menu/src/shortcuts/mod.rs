@@ -554,7 +554,7 @@ fn frame(ui: &mut Ui, env: &mut Env<'_>, state: &mut DialogState) -> ShortcutsOu
     }
     match closed {
         Some(CloseReason::Escape) => state.escape(env),
-        Some(CloseReason::Requested | CloseReason::Outside | CloseReason::FocusLeft) => state.cancel(env),
+        Some(CloseReason::Requested | CloseReason::Outside | CloseReason::FocusLeft(_)) => state.cancel(env),
         _ => {}
     }
     state.sync_set(env);

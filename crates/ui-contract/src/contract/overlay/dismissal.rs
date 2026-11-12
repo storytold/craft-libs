@@ -59,7 +59,7 @@ pub(super) fn dismissal(
         && inside == Some(false)
         && overlay::is_open(ctx, layer.id)
     {
-        return Some(CloseReason::FocusLeft);
+        return Some(CloseReason::FocusLeft(focus::move_this_pass(ctx)));
     }
     if let Some(timeout) = dismiss.timeout {
         let now = frame::clock(ctx);

@@ -289,7 +289,7 @@ impl<K: Value + Eq + Hash + 'static> Component for TreePicker<'_, K> {
         let reasons: Vec<Option<Label>> = entries.iter().map(|entry| entry.blocked.as_ref().map(|reason| cx.env.resolve(reason))).collect();
         let name = cx.label();
         // Folders open and close inside the popup, so activating one must not close it: a pick closes it below.
-        let overlay = Overlay::dropdown().dismiss(Dismiss::new());
+        let overlay = Overlay::dropdown().dismiss(Dismiss::new().focus_left(true));
         let events = ui.show(popup, overlay, |ui, _| {
             let fresh = Popup::opening(popup, cx);
             if fresh {

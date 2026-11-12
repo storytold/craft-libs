@@ -53,6 +53,12 @@ impl<'a> OverlayUi<'a> {
         OverlayUi { ctx, owner: id, anchor, to_screen, resolved, env, open, closed: Vec::new(), parts }
     }
 
+    /// Why `popup` closes at the end of this pass, as its `show` decided (its dismissal, or a close its body asked for);
+    /// `None` while it stays open. The component that opened it reads this to settle what the popup was proposing.
+    pub fn closing(&self, popup: PopupHandle) -> Option<CloseReason> {
+        self.closed.iter().find(|(id, _)| *id == popup.id).map(|(_, reason)| *reason)
+    }
+
     /// The anchor at the rect of the toggling part `part` of the owner. The layer's placement mirrors the side and
     /// alignment of an anchor in a right-to-left layout, so the same call serves both directions.
     pub fn anchor_part(&self, part: impl Into<PartRef>) -> Anchor {

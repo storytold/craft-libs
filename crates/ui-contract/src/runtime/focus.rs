@@ -545,6 +545,21 @@ pub(crate) fn commit_now(ctx: &Context) -> Option<Id> {
     with(ctx, |state| state.press.commit_now)
 }
 
+/// What moved the key focus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FocusMove {
+    /// Keyboard navigation: Tab, Shift+Tab or F6.
+    Keys,
+    /// A press elsewhere, or code.
+    Other,
+}
+
+/// What moved the focus in this pass: `Keys` when Tab, Shift+Tab or F6 moved it.
+pub(crate) fn move_this_pass(ctx: &Context) -> FocusMove {
+    if with(ctx, |state| state.press.by_keys) { FocusMove::Keys } else { FocusMove::Other }
+}
+
 /// Whether a Tab (`Some(true)`) or Shift+Tab (`Some(false)`) moved focus off the widget `widget` in this pass.
 pub(crate) fn tabbed_off(ctx: &Context, widget: Id) -> Option<bool> {
     with(ctx, |state| state.press.tabbed_from.filter(|(from, _)| *from == widget).map(|(_, forward)| forward))

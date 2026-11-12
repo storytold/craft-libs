@@ -45,6 +45,8 @@ pub(crate) struct PressState {
     pub(super) commit_now: Option<Id>,
     /// The widget a Tab or Shift+Tab moved focus off this pass, and whether the move was forward.
     pub(super) tabbed_from: Option<(Id, bool)>,
+    /// Tab, Shift+Tab or F6 moved focus this pass.
+    pub(super) by_keys: bool,
     focus_at_begin: Option<Id>,
 }
 
@@ -53,6 +55,7 @@ impl PressState {
         self.plan = None;
         self.commit_now = None;
         self.tabbed_from = None;
+        self.by_keys = false;
         self.focus_at_begin = focused;
     }
 }
