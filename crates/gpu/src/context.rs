@@ -25,10 +25,10 @@ pub struct ReadOutcome {
 /// ## Device loss
 ///
 /// A context can lose its device at any time: a driver reset, OS-level eviction under memory
-/// pressure, or an explicit `device.destroy()`. Device loss is a fault, not a panic. It surfaces
-/// through [`GpuFault::DeviceLost`] from the next call that would otherwise touch the device, and
-/// also through [`poll_reads`](Self::poll_reads), so a host's event loop can observe it even
-/// between buffer calls. Once a context has reported [`GpuFault::DeviceLost`], every
+/// pressure, or an explicit `device.destroy()`. Device loss surfaces as a fault and never panics. It arrives
+/// through [`GpuFault::DeviceLost`] from the next call that would otherwise touch the device.
+/// It also arrives through [`poll_reads`](Self::poll_reads), letting a host's event loop observe
+/// it even between buffer calls. Once a context has reported [`GpuFault::DeviceLost`], every
 /// [`DeviceCaps`] it reported before that point is stale. The consumer's recovery, per RFC-0022,
 /// is one of:
 ///
@@ -50,13 +50,16 @@ pub struct ReadOutcome {
 /// later poll, analogous to `craft-worker-host`'s `HostMessage::GpuJobs` being answered later by
 /// `WorkerMessage::GpuBatchDone`.
 ///
-/// A backend that can honestly block (the null context, which never has anything to wait for;
-/// native wgpu driving `Device::poll` itself) uses `read_buffer`'s default body. A backend that
-/// cannot honestly block without freezing its single thread (WebGPU on `wasm32`, where a map
-/// completes only via the browser's own event loop) overrides `read_buffer` to return
-/// [`GpuFault::Operation`] instead of deadlocking; callers there must drive `request_read` and
-/// `poll_reads` from the worker's own message loop. See `docs/gpu-backends.md` for which backend
-/// does which.
+/// Both bundled backends override `read_buffer`'s default body, since the default has nowhere
+/// to put completions belonging to other outstanding requests: the null context takes only its
+/// own completion, and the wgpu context re-queues the others while blocking efficiently on a
+/// native device. On `wasm32` the wgpu context's only backing today is the in-memory staging
+/// store, whose reads resolve synchronously and are served; only a read that did not resolve
+/// synchronously returns [`GpuFault::Operation`] there, the refusal a future real device backing
+/// will need, because a map on that target completes only via the browser's own event loop and
+/// blocking for it would freeze the one thread that loop runs on. Callers on such a backing
+/// drive `request_read` and `poll_reads` from the worker's own message loop. See
+/// `docs/gpu-backends.md` for which backend does which.
 pub trait GpuContext {
     fn caps(&self) -> DeviceCaps;
 
