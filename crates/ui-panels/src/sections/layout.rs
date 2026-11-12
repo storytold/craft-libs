@@ -76,6 +76,20 @@ pub enum SectionEvent {
     Pinned(SectionKey),
     /// The section was released from the top.
     Unpinned(SectionKey),
+    /// The arrangement went back to the usual one: the registered sections in `order`, shown, open and not pinned.
+    #[non_exhaustive]
+    Reset {
+        /// The registered sections, in registration order.
+        order: Vec<SectionKey>,
+    },
+    /// The button `id` in the header of `key` was pressed. Not a change to the arrangement: the host acts on it.
+    #[non_exhaustive]
+    Button {
+        /// The section whose header holds the button.
+        key: SectionKey,
+        /// The button's id.
+        id: &'static str,
+    },
 }
 
 impl SectionEvent {
@@ -87,6 +101,11 @@ impl SectionEvent {
     /// `key` folded (`folded`) or unfolded.
     pub fn folded(key: SectionKey, folded: bool) -> Self {
         SectionEvent::Folded { key, folded }
+    }
+
+    /// Back to the usual arrangement of `order`, the registered sections.
+    pub fn reset(order: impl IntoIterator<Item = SectionKey>) -> Self {
+        SectionEvent::Reset { order: order.into_iter().collect() }
     }
 }
 
@@ -263,7 +282,20 @@ impl SectionLayout {
             SectionEvent::Folded { key, folded } => self.set_folded(key, *folded),
             SectionEvent::Pinned(key) => self.set_pinned(key, true),
             SectionEvent::Unpinned(key) => self.set_pinned(key, false),
+            SectionEvent::Reset { order } => {
+                let usual = SectionLayout::new(order.iter().cloned());
+                let changed = *self != usual;
+                *self = usual;
+                changed
+            }
+            SectionEvent::Button { .. } => false,
         }
+    }
+
+    /// Whether the layout is the usual arrangement of `registered`: in that order, every section shown, open and not
+    /// pinned.
+    pub fn is_default(&self, registered: &[SectionKey]) -> bool {
+        *self == SectionLayout::new(registered.iter().cloned())
     }
 
     /// `Moved { key, before }` when it changes the shown order.
