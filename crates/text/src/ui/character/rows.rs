@@ -80,7 +80,7 @@ impl Lengths<'_> {
         let shown = Field::new(label.clone()).side(mark(glyph, hint, FieldLayout::Inside)).show(ui, |ui, _| {
             let field = NumberField::new(label.clone(), Bind::given(value)).range(range.clone()).presets(presets).scrub_by_label();
             let field = if percent {
-                field.unit_kind(UnitKind::Percent).unit(units.symbol(UnitKind::Percent)).step(UnitKind::Percent.step())
+                field.unit_kind(UnitKind::Percent).step(UnitKind::Percent.step())
             } else {
                 field.codec(NumberCodec::new(units.reader(None), 0))
             };

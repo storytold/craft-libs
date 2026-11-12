@@ -273,6 +273,15 @@ impl Units {
         self.template(kind).replace("{n}", "").trim().to_owned()
     }
 
+    /// What follows a number of `kind` in the user's language: the symbol with the space the language puts before
+    /// it (` mm`, `%`, `°`). A language that writes the unit before the number gives the bare symbol.
+    pub fn suffix(&self, kind: UnitKind) -> String {
+        match self.template(kind).split_once("{n}") {
+            Some((_, after)) if !after.trim().is_empty() => after.trim_end().to_owned(),
+            _ => self.symbol(kind),
+        }
+    }
+
     /// The digits after the decimal mark `n` needs within `decimals`: the fewest that show it as it rounds at the most.
     fn digits(n: f64, decimals: &RangeInclusive<usize>) -> usize {
         let (least, most) = (*decimals.start(), *decimals.end());

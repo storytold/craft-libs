@@ -4,7 +4,7 @@ use super::{NumberField, NumberPick};
 use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Validity};
 use crate::contract::{LabelAlign, SideLabel};
 use crate::form::{Field, FieldGroup};
-use crate::runtime::env::Message;
+use crate::runtime::env::{Env, Message, UnitKind};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::{Mixed, NumberCodec, Reader};
 use craft_theme::ControlSize;
@@ -43,13 +43,22 @@ fn refuse_all(_: &Option<f64>) -> Validity<Option<f64>> {
 #[story(NumberField<'static>, covers = [Default], drive = Drive::Type("42"))]
 fn number_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let size = *data.choice("control_size", ControlSize::Md, &[("Sm", ControlSize::Sm), ("Md", ControlSize::Md)]);
+    let units = Env::of(ui).view().units();
     let out = FieldGroup::new("Number field states").show(ui, |ui, _| {
         let first = row("Plain").show(ui, |ui, _| NumberField::new("Plain", Bind::bound(data.value("plain", Some(42.0)))).size(size).show(ui).edit);
         row("With unit").show(ui, |ui, _| {
-            NumberField::new("Gap", Bind::bound(data.value("gap", Some(SIZE)))).range(RANGE).step(0.5).unit("mm").size(size).show(ui);
+            NumberField::new("Gap", Bind::bound(data.value("gap", Some(SIZE))))
+                .range(RANGE)
+                .step(0.5)
+                .unit(units.suffix(UnitKind::Millimetres))
+                .size(size)
+                .show(ui);
         });
         row("Mixed").show(ui, |ui, _| {
-            NumberField::new("Mixed size", Bind::bound_mixed(data.value("mixed", Mixed::<Option<f64>>::Mixed))).unit("pt").size(size).show(ui);
+            NumberField::new("Mixed size", Bind::bound_mixed(data.value("mixed", Mixed::<Option<f64>>::Mixed)))
+                .unit(units.suffix(UnitKind::Points))
+                .size(size)
+                .show(ui);
         });
         row("Invalid").show(ui, |ui, _| {
             NumberField::new("Columns", Bind::bound(data.value("invalid", Some(7.0))).check(refuse_all)).range(COLUMNS).size(size).show(ui);
@@ -71,7 +80,13 @@ fn number_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 .show(ui);
         });
         row("Disabled").show(ui, |ui, _| {
-            NumberField::new("Disabled", Bind::bound(&mut Some(64.0))).range(RANGE).step(0.5).unit("px").enabled(false).size(size).show(ui);
+            NumberField::new("Disabled", Bind::bound(&mut Some(64.0)))
+                .range(RANGE)
+                .step(0.5)
+                .unit(units.suffix(UnitKind::Pixels))
+                .enabled(false)
+                .size(size)
+                .show(ui);
         });
         row("Not a number").show(ui, |ui, _| {
             // Held outside the story data: NaN is never equal to itself, so the suite would read it as changed.

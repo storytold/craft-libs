@@ -181,7 +181,7 @@ impl Measure<'_> {
         let places = *ruler.decimals().end();
         let high = self.units.from_pixels(MAX_LAYOUT_PX, ruler, extent).filter(|v| v.is_finite()).unwrap_or(MAX_LAYOUT_PX).max(0.0);
         let codec = NumberCodec::new(self.units.reader(self.numbers, extent), places);
-        let field = NumberField::new(label, Bind::given(shown)).codec(codec).range(0.0..=high).step(ruler.step()).unit(self.numbers.symbol(ruler));
+        let field = NumberField::new(label, Bind::given(shown)).codec(codec).range(0.0..=high).step(ruler.step()).unit(self.numbers.suffix(ruler));
         let field = field.show(ui);
         self.note(&field);
         let typed = field.value().copied()?;

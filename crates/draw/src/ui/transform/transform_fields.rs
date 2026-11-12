@@ -379,7 +379,7 @@ impl Cells<'_> {
         let basis = pass.bases.0[field as usize].map_or(pass.before, |(_, row)| row);
         let current = conversion.shown(&basis.state, basis.skew_v, field);
         let codec = conversion.codec(&self.units, field);
-        let unit = Label::from(self.units.symbol(kind));
+        let unit = Label::from(self.units.suffix(kind));
         let percent = kind == UnitKind::Percent;
         let menu = self.size_units.filter(|_| matches!(field, TransformField::W | TransformField::H));
         let mut events = EditEvents::new();

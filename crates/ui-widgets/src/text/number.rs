@@ -207,8 +207,8 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         Rule::new(range.as_ref(), self.step)
     }
 
-    /// Reads what the field keeps from the env: a length field's scale from stored to shown, and the symbol of its unit
-    /// kind after the number unless the field sets a unit.
+    /// Reads what the field keeps from the env: a length field's scale from stored to shown, and its unit kind's suffix
+    /// (the symbol with the space the language puts before it) after the number unless the field sets a unit.
     fn settle_lengths(&mut self, units: &Units) {
         if let Some(lengths) = self.lengths {
             self.scale = units.length_scale(lengths).unwrap_or(1.0);
@@ -216,7 +216,20 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         if self.unit.is_none()
             && let Some(kind) = self.unit_kind
         {
-            self.unit = Some(units.symbol(kind).into());
+            self.unit = Some(units.suffix(kind).into());
+        }
+    }
+
+    /// The unit's rect: against the end of the shown number, which sits centred in `text`, and no further out than
+    /// `reserved`, the room `place` keeps for it at the end of the field.
+    fn unit_at(reserved: Rect, text: Rect, number_width: f32, rtl: bool) -> Rect {
+        let width = reserved.width();
+        if rtl {
+            let end = (text.center().x - number_width / 2.0).max(reserved.max.x);
+            Rect::from_min_max(egui::pos2(end - width, reserved.min.y), egui::pos2(end, reserved.max.y))
+        } else {
+            let start = (text.center().x + number_width / 2.0).min(reserved.min.x);
+            Rect::from_min_max(egui::pos2(start, reserved.min.y), egui::pos2(start + width, reserved.max.y))
         }
     }
 
@@ -526,7 +539,10 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             && cx.value().is_some_and(|value| !non_finite(Some(value)))
             && let (Some(unit), Some(at)) = (self.trailing.first(), placed.trailing.first())
         {
-            unit.paint(ui, *at, cx.resolve(&cx.style.unit.color));
+            // The unit reads as part of the number ("100%", "12 px"), so it follows the number's shown text.
+            let number =
+                cx.text(&text_part::<V>()).and_then(|outcome| outcome.layout.as_ref()).map_or(placed.text.width(), |layout| layout.galley.size().x);
+            unit.paint(ui, Self::unit_at(*at, placed.text, number, rtl), cx.resolve(&cx.style.unit.color));
         }
         if let (Some(glyph), Some(at)) = (self.leading.first(), placed.leading.first()) {
             glyph.paint(ui, *at, cx.resolve(&cx.style.handle));
