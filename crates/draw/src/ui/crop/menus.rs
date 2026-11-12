@@ -72,31 +72,24 @@ impl Outcome for CropOverlayMenuOutput {
 /// text O) and Cycle Orientation (Shift+O; enabled for an overlay with more than one orientation: Triangle, Golden
 /// Spiral). A row edits the settings and closes the menu.
 #[must_use = "show the menu with `show`"]
-#[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
+#[derive(craft_ui::contract::Pattern)]
 pub struct CropOverlayMenu<'a> {
     settings: &'a mut CropSettings,
-    /// The menu starts open.
-    #[prop(flag)]
-    opened: bool,
 }
 
 impl<'a> CropOverlayMenu<'a> {
     /// A menu that edits `settings` in place.
     pub fn new(settings: &'a mut CropSettings) -> Self {
-        Self { settings, opened: false }
+        Self { settings }
     }
 
     /// Shows the button, and the menu while it is open.
     pub fn show(self, ui: &mut Ui) -> CropOverlayMenuOutput {
-        let Self { settings, opened } = self;
+        let Self { settings } = self;
         let words = Env::of(ui).words::<CropBarWords>();
         let before = settings.clone();
         let shown = Row::new().show(ui, |ui, cx| {
-            let appeared = cx.appeared();
             let open = &mut cx.memory::<Open>().0;
-            if appeared && opened {
-                *open = true;
-            }
             let opener = IconButton::new(IconId::new("grid")).label(words.overlay.clone()).popup(PopupKind::Menu).show(ui).response;
             if clicked(&opener) {
                 *open = !*open;
@@ -166,12 +159,9 @@ struct Open(bool);
 /// 100 %) and Auto Adjust Opacity. The colour rows, Opacity and Auto Adjust Opacity are disabled with the shield off.
 /// The popover stays open on clicks inside and closes on a click outside, Escape or the button.
 #[must_use = "show the menu with `show`"]
-#[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
+#[derive(craft_ui::contract::Pattern)]
 pub struct CropOptionsMenu<'a> {
     settings: &'a mut CropSettings,
-    /// The popover starts open.
-    #[prop(flag)]
-    opened: bool,
 }
 
 impl<'a> CropOptionsMenu<'a> {
@@ -180,22 +170,18 @@ impl<'a> CropOptionsMenu<'a> {
 
     /// A menu that edits `settings` in place.
     pub fn new(settings: &'a mut CropSettings) -> Self {
-        Self { settings, opened: false }
+        Self { settings }
     }
 
     /// Shows the button, and the popover while it is open.
     pub fn show(self, ui: &mut Ui) -> CropOptionsMenuOutput {
-        let Self { settings, opened } = self;
+        let Self { settings } = self;
         let env = Env::of(ui);
         let words = env.words::<CropBarWords>();
         let before = settings.clone();
         let mut pick = false;
         let shown = Row::new().show(ui, |ui, cx| {
-            let appeared = cx.appeared();
             let open = &mut cx.memory::<Open>().0;
-            if appeared && opened {
-                *open = true;
-            }
             let button =
                 IconButton::new(IconId::new("settings")).label(words.options.clone()).popup(PopupKind::Dialog).expanded(*open).show(ui).response;
             if clicked(&button) {
