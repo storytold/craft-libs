@@ -1,0 +1,24 @@
+[package]
+name = "craft-exr"
+description = "OpenEXR for the Craft apps: channel and layer naming, colour channel selection, Cryptomatte, and (feature `decode`) bounded part listing, flat decoding and writing on top of the exr crate."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Reading and writing pixels through the `exr` crate (BSD-3-Clause). The naming and Cryptomatte
+# modules need none of it.
+decode = ["dep:exr", "dep:half", "dep:thiserror", "dep:flate2"]
+
+[dependencies]
+serde_json = { workspace = true }
+exr = { version = "1.73", default-features = false, optional = true }
+half = { version = "2", optional = true }
+thiserror = { workspace = true, optional = true }
+# zlib for deep ZIPS chunks, which the `exr` crate does not read.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"], optional = true }

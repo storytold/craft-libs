@@ -9,6 +9,7 @@
 //! | `ready` | app → host | `version`, `appVersion?`, `file?` (`true`: it reads a `File`/`Blob` in slices) |
 //! | `host` | host → app | `version`, `handoff?` (`true`: the host routes hand-offs) |
 //! | `open` | host → app | `name`, and `bytes` or `file` + `size` |
+//! | `attach-pdf` | host → app | `name`, `bytes`, `page` (from 1), `insertion` ([x,y,z]), `width`, `height` in drawing units |
 //! | `save` | app → host | `name`, `bytes`, `id?`, `saveAs?` |
 //! | `saved` | host → app | `id` |
 //! | `dirty` | app → host | `dirty` |
@@ -81,6 +82,7 @@ pub enum Outgoing {
 pub enum Incoming {
     Host,
     Open,
+    AttachPdf,
     Saved,
     HandoffDone,
 }
@@ -98,12 +100,13 @@ impl Outgoing {
 }
 
 impl Incoming {
-    pub const ALL: [Self; 4] = [Self::Host, Self::Open, Self::Saved, Self::HandoffDone];
+    pub const ALL: [Self; 5] = [Self::Host, Self::Open, Self::AttachPdf, Self::Saved, Self::HandoffDone];
 
     pub const fn kind(self) -> &'static str {
         match self {
             Self::Host => "host",
             Self::Open => "open",
+            Self::AttachPdf => "attach-pdf",
             Self::Saved => "saved",
             Self::HandoffDone => "handoff-done",
         }

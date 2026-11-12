@@ -114,3 +114,29 @@ fn encoder_describes_its_track() {
     assert_eq!((params.width, params.height), (Some(1920), Some(1080)));
     assert!(params.extradata.is_empty());
 }
+
+/// filmcraft #4101: scan-line offsets that repeat or do not increase let one coded row stand in
+/// for every row, so a small payload could fill a whole raster.
+#[test]
+fn repeated_or_decreasing_scan_line_offsets_are_refused() {
+    let mut enc = Encoder::new(Profile::Hq, 256, 128).unwrap();
+    let good = enc.encode(&picture(256, 128, ChromaFormat::Yuv422, 8, 2)).unwrap();
+    assert!(decode_frame(&good).is_ok());
+    let rows = probe(&good).unwrap().mb_rows as usize;
+    assert!(rows > 2);
+    let at = |s: usize| craft_video::dnx::header::SCAN_INDEX_OFFSET + 4 * s;
+    let get = |d: &[u8], s: usize| <[u8; 4]>::try_from(&d[at(s)..at(s) + 4]).unwrap();
+    // every row pointing at the first row's data
+    let mut repeated = good.clone();
+    for s in 1..rows {
+        let first = get(&good, 0);
+        repeated[at(s)..at(s) + 4].copy_from_slice(&first);
+    }
+    assert!(decode_frame(&repeated).is_err());
+    // two rows swapped
+    let mut swapped = good.clone();
+    let (a, b) = (get(&good, 1), get(&good, 2));
+    swapped[at(1)..at(1) + 4].copy_from_slice(&b);
+    swapped[at(2)..at(2) + 4].copy_from_slice(&a);
+    assert!(decode_frame(&swapped).is_err());
+}

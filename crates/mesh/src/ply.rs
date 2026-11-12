@@ -4,8 +4,11 @@
 //! then the elements' rows in ASCII or binary (little- or big-endian). [`read`] takes the
 //! `vertex` element (`x`, `y`, `z` of any numeric type; `nx`, `ny`, `nz`; `s`/`t`, `u`/`v` or
 //! `texture_u`/`texture_v`; `red`, `green`, `blue` and `alpha`) and the `face` element's
-//! `vertex_indices` list, polygons kept whole. Every other element and property is passed
-//! over. A file without faces is a point cloud: a mesh with positions and no parts.
+//! `vertex_indices` list, polygons kept whole, with its `texcoord` list (a `u v` per corner,
+//! which then is the UV set instead of the vertices' own). A `comment TextureFile <name>` line
+//! gives the mesh a material whose base colour texture is that file: named in [`Image::uri`]
+//! and [`Scene::external`], never opened. Every other element and property is passed over. A
+//! file without faces is a point cloud: a mesh with positions and no parts.
 //!
 //! Positions are kept as stored, so the indices of a point cloud stay the file's; a face that
 //! names a vertex that is not there, or one whose position is not finite, is left out and
@@ -15,7 +18,7 @@
 //! file (every scalar property as a column, `edge` elements, thinning a large cloud): they
 //! read the same header and rows with the same checks.
 
-use crate::{Corner, Limits, Mesh, Part, Result, Scene, count_warning, malformed, too_large};
+use crate::{Corner, Image, Limits, Material, Mesh, Part, Result, Scene, TextureRef, count_warning, malformed, too_large};
 
 const KIND: &str = "PLY";
 /// Largest header read (bytes).
@@ -427,14 +430,18 @@ fn vertices(e: &Element, rows: &mut Rows<'_>, mesh: &mut Mesh, limits: &Limits) 
 
 struct Faces {
     part: Part,
+    /// A UV per face corner, from the faces' `texcoord` lists.
+    uvs: Vec<[f32; 2]>,
     triangles: usize,
     bad: usize,
 }
 
 fn faces(e: &Element, list: usize, rows: &mut Rows<'_>, vertex_count: u64, out: &mut Faces, limits: &Limits) -> Result<()> {
     rows.check(e)?;
-    let mut face: Vec<f64> = Vec::new();
+    let texcoord = e.properties.iter().position(|p| p.name == "texcoord" && matches!(p.kind, Kind::List(..)));
+    let (mut face, mut coords): (Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new());
     for _ in 0..e.count {
+        coords.clear();
         for (i, p) in e.properties.iter().enumerate() {
             match p.kind {
                 Kind::Scalar(t) => rows.skip(t, 1)?,
@@ -443,6 +450,12 @@ fn faces(e: &Element, list: usize, rows: &mut Rows<'_>, vertex_count: u64, out: 
                     face.clear();
                     for _ in 0..n {
                         face.push(rows.value(t)?);
+                    }
+                }
+                // `u v` per corner.
+                Kind::List(c, t) if Some(i) == texcoord => {
+                    for _ in 0..rows.count(c, limits.max_face_corners.saturating_mul(2))? {
+                        coords.push(rows.value(t)?);
                     }
                 }
                 Kind::List(c, t) => {
@@ -455,10 +468,21 @@ fn faces(e: &Element, list: usize, rows: &mut Rows<'_>, vertex_count: u64, out: 
             .iter()
             .map(|v| (*v >= 0.0 && *v < vertex_count as f64 && v.fract() == 0.0).then(|| u32::try_from(*v as u64).ok().map(Corner::at)).flatten())
             .collect();
-        let Some(corners) = corners.filter(|c| c.len() >= 3) else {
+        let Some(mut corners) = corners.filter(|c| c.len() >= 3) else {
             out.bad += 1;
             continue;
         };
+        // Coordinates that do not match the corners are passed over.
+        if coords.len() == corners.len() * 2 {
+            if out.uvs.len().saturating_add(corners.len()) > limits.max_vertices {
+                return Err(too_large(KIND, format!("more than {} texture coordinates", limits.max_vertices)));
+            }
+            for (corner, uv) in corners.iter_mut().zip(coords.as_chunks::<2>().0) {
+                corner.uv = out.uvs.len() as u32;
+                // The origin is at the bottom left.
+                out.uvs.push([uv[0] as f32, 1.0 - uv[1] as f32]);
+            }
+        }
         out.triangles = out.triangles.saturating_add(corners.len() - 2);
         if out.triangles > limits.max_triangles {
             return Err(too_large(KIND, format!("more than {} triangles", limits.max_triangles)));
@@ -476,7 +500,7 @@ pub fn read(bytes: &[u8], limits: &Limits) -> Result<Scene> {
     let vertex_count = h.elements.iter().find(|e| e.name == "vertex").ok_or_else(|| malformed(KIND, "no `vertex` element"))?.count;
     let mut rows = Rows::new(&h, bytes);
     let mut mesh = Mesh::default();
-    let mut out = Faces { part: Part::default(), triangles: 0, bad: 0 };
+    let mut out = Faces { part: Part::default(), uvs: Vec::new(), triangles: 0, bad: 0 };
     let (mut seen_vertices, mut seen_faces) = (false, false);
     for e in &h.elements {
         let list = e.properties.iter().position(|p| matches!(p.name.as_str(), "vertex_indices" | "vertex_index") && matches!(p.kind, Kind::List(..)));
@@ -514,16 +538,34 @@ pub fn read(bytes: &[u8], limits: &Limits) -> Result<Scene> {
     if !mesh.normals.is_empty() {
         part.corners.iter_mut().for_each(|c| c.normal = c.position);
     }
-    if !mesh.uv_sets.is_empty() {
+    if !out.uvs.is_empty() {
+        // Per-corner coordinates replace the vertices' own.
+        mesh.uv_sets = vec![std::mem::take(&mut out.uvs)];
+    } else if !mesh.uv_sets.is_empty() {
         part.corners.iter_mut().for_each(|c| c.uv = c.position);
     }
     if part.face_sizes.iter().all(|n| *n == 3) {
         part.face_sizes.clear();
     }
+    // `comment TextureFile <name>` (MeshLab and others): the image the UVs are for.
+    let texture = h.comments.iter().find_map(|c| {
+        let (key, name) = c.split_once(char::is_whitespace)?;
+        (key.eq_ignore_ascii_case("TextureFile") && !name.trim().is_empty()).then(|| name.trim().to_string())
+    });
+    let textured = texture.is_some() && !part.corners.is_empty();
+    if textured {
+        part.material = Some(0);
+    }
     if !part.corners.is_empty() {
         mesh.parts.push(part);
     }
     let mut scene = Scene::from_meshes(vec![mesh], Vec::new());
+    if let Some(name) = texture.filter(|_| textured) {
+        let texture = TextureRef { image: 0, ..TextureRef::default() };
+        scene.materials.push(Material { base_color_texture: Some(texture), ..Material::plain("", [1.0; 4]) });
+        scene.images.push(Image { uri: Some(name.clone()), ..Image::default() });
+        scene.external.push(name);
+    }
     count_warning(&mut scene.warnings, out.bad, "face(s) could not be read and were left out");
     Ok(scene)
 }

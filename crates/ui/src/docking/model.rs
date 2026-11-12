@@ -472,6 +472,12 @@ pub enum Action<P> {
         panel: P,
         width: Option<f32>,
     },
+    /// Offset of the flyout's top from its icons' top, for the dock group holding `panel`;
+    /// `None` aligns the flyout with its icons.
+    MoveFlyoutTop {
+        panel: P,
+        offset: Option<f32>,
+    },
     ResizeIconic {
         panel: P,
         width: Option<f32>,
@@ -583,6 +589,11 @@ fn valid_monitor(monitor: Option<&Monitor>, monitor_size: Option<[f32; 2]>) -> b
 
 pub(super) fn valid_width(width: f32) -> bool {
     width.is_finite() && width > 0.0 && width <= MAX_EXTENT
+}
+
+/// A flyout's top offset from its icons: finite and within the largest extent either way.
+pub(super) fn valid_offset(offset: f32) -> bool {
+    offset.is_finite() && offset.abs() <= MAX_EXTENT
 }
 
 fn valid_size(size: SplitSize) -> bool {
@@ -752,7 +763,13 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         };
         let own = groups.get(group).ok_or(DockError::MissingPanel)?;
         let mut location = group_location(&own.panels, panel).ok_or(DockError::MissingPanel)?;
-        location.group = Some(GroupLocation { minimized: own.minimized, height: own.height, flyout_width: own.flyout_width, column });
+        location.group = Some(GroupLocation {
+            minimized: own.minimized,
+            height: own.height,
+            flyout_width: own.flyout_width,
+            flyout_offset: own.flyout_offset,
+            column,
+        });
         if location.anchor.is_some() {
             return Ok(location);
         }
@@ -817,6 +834,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         if state.is_some_and(|s| {
             !valid_height(s.height)
                 || s.flyout_width.is_some_and(|w| !valid_width(w))
+                || s.flyout_offset.is_some_and(|o| !valid_offset(o))
                 || s.column.is_some_and(|c| !valid_width(c.width) || c.iconic_width.is_some_and(|w| !valid_width(w)))
         }) {
             return Err(DockError::InvalidGeometry);
@@ -829,6 +847,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 minimized: state.is_some_and(|s| s.minimized),
                 height: state.and_then(|s| s.height),
                 flyout_width: state.and_then(|s| s.flyout_width),
+                flyout_offset: state.and_then(|s| s.flyout_offset),
             };
             let column = state.and_then(|s| s.column);
             Moving {
@@ -1232,6 +1251,15 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 group.flyout_width = width;
                 Ok(())
             }
+            Action::MoveFlyoutTop { panel, offset } => {
+                if offset.is_some_and(|o| !valid_offset(o)) {
+                    return Err(DockError::InvalidGeometry);
+                }
+                let place = self.place(&panel).ok_or(DockError::MissingPanel)?;
+                let group = self.group_mut(&place).ok_or(DockError::InvalidPlacement)?;
+                group.flyout_offset = offset;
+                Ok(())
+            }
             Action::SetIconic { panel, iconic } => {
                 self.column_of(&panel)?.iconic = iconic;
                 Ok(())
@@ -1418,7 +1446,11 @@ fn check_leaf<'a, P: Eq + Hash>(node: &'a Node<P>, seen: &mut HashSet<&'a P>) ->
 
 /// Validate group dimensions and nonempty membership, then check the active tab and uniqueness.
 fn check_group<'a, P: Eq + Hash>(group: &'a Group<P>, seen: &mut HashSet<&'a P>) -> Result<(), DockError> {
-    if group.panels.is_empty() || !valid_height(group.height) || group.flyout_width.is_some_and(|w| !valid_width(w)) {
+    if group.panels.is_empty()
+        || !valid_height(group.height)
+        || group.flyout_width.is_some_and(|w| !valid_width(w))
+        || group.flyout_offset.is_some_and(|o| !valid_offset(o))
+    {
         return Err(DockError::InvalidGeometry);
     }
     check_tabs(&group.panels, group.active, seen)
