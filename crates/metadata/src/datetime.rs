@@ -159,8 +159,13 @@ impl DateTime {
                 None => (t, None),
             };
             let mut cp = clock.split(':');
-            dt.hour = num(cp.next()?)?.try_into().ok()?;
-            dt.minute = num(cp.next()?)?.try_into().ok()?;
+            let hour = cp.next()?;
+            let minute = cp.next()?;
+            if hour.len() != 2 || minute.len() != 2 {
+                return None;
+            }
+            dt.hour = num(hour)?.try_into().ok()?;
+            dt.minute = num(minute)?.try_into().ok()?;
             if let Some(sec) = cp.next() {
                 let (whole, fraction) = match sec.split_once('.') {
                     Some((whole, fraction)) => {
@@ -363,6 +368,13 @@ mod tests {
             "2026-01-01T12:34:56:99Z",
             "2026-01-01T12::34Z",
         ] {
+            assert!(DateTime::parse_iso(value).is_none(), "accepted malformed timestamp {value:?}");
+        }
+    }
+
+    #[test]
+    fn iso_rejects_single_digit_clock_fields() {
+        for value in ["2024-06-01T1:02:03Z", "2024-06-01T01:2:03Z"] {
             assert!(DateTime::parse_iso(value).is_none(), "accepted malformed timestamp {value:?}");
         }
     }
