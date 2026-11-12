@@ -714,7 +714,9 @@ pub fn write_xmp_with(meta: &Metadata, with: &XmpWrite) -> String {
     push("xmp:CreatorTool", meta.software.clone());
     push("xmp:Rating", meta.rating.map(|v| v.to_string()));
     push("xmp:Label", meta.label.clone());
-    push("exif:DateTimeOriginal", meta.capture_time.map(|d| d.to_iso()));
+    // a year or a month alone goes in `photoshop:DateCreated` only, as Lightroom writes it: Exif's
+    // date can't say it
+    push("exif:DateTimeOriginal", meta.capture_time.filter(DateTime::is_full).map(|d| d.to_iso()));
     push("photoshop:DateCreated", meta.capture_time.map(|d| d.to_iso()));
     push("exif:ExposureTime", meta.exposure_time.map(frac));
     push("exif:FNumber", meta.f_number.map(frac));

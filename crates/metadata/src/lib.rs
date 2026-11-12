@@ -32,7 +32,7 @@ mod xmp;
 mod xmp_merge;
 
 pub use container::{Embedded, embedded, jpeg_segments, png_chunks, webp_chunks};
-pub use datetime::DateTime;
+pub use datetime::{DatePrecision, DateTime};
 pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, try_read_exif_with, write_exif};
 pub use focus::FocusPoint;
 pub use geom::{Orientation, Point, Rect};

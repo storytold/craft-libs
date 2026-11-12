@@ -965,7 +965,8 @@ pub fn write_exif(meta: &Metadata) -> Vec<u8> {
         (t::ARTIST, ascii(&meta.artist)),
         (t::COPYRIGHT, ascii(&meta.copyright)),
         (t::IMAGE_DESCRIPTION, ascii(&meta.caption)),
-        (t::DATE_TIME, meta.capture_time.map(|d| Value::Ascii(d.to_exif()))),
+        // Exif's date can't say a year or a month alone (an XMP date can)
+        (t::DATE_TIME, meta.capture_time.filter(DateTime::is_full).map(|d| Value::Ascii(d.to_exif()))),
         (t::ORIENTATION, meta.orientation.map(|o| Value::Short(vec![o.to_exif()]))),
     ] {
         if let Some(v) = v {
@@ -979,7 +980,7 @@ pub fn write_exif(meta: &Metadata) -> Vec<u8> {
     ex.set(t::EXIF_VERSION, Value::Undefined(b"0232".to_vec()));
     let r = |v: Option<f64>| v.filter(|v| v.is_finite() && *v > 0.0).map(|v| Value::Rational(vec![rational(v)]));
     for (tag, v) in [
-        (t::DATE_TIME_ORIGINAL, meta.capture_time.map(|d| Value::Ascii(d.to_exif()))),
+        (t::DATE_TIME_ORIGINAL, meta.capture_time.filter(DateTime::is_full).map(|d| Value::Ascii(d.to_exif()))),
         (t::EXPOSURE_TIME, reciprocal(meta.exposure_time).or_else(|| r(meta.exposure_time))),
         (t::F_NUMBER, r(meta.f_number)),
         (t::FOCAL_LENGTH, r(meta.focal_length)),
