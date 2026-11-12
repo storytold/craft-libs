@@ -4,7 +4,8 @@
 use craft_behavior::kurbo;
 use craft_pages::layout::{Fit, LayoutOptions};
 use craft_pages::ui::fixtures::{DemoPages, PAPER};
-use craft_pages::ui::{PagePreview, PageView, PageViewState};
+use craft_pages::ui::{PagePreview, PageView, PageViewState, ReadingState, ReadingView};
+use craft_ui::contract::Show as _;
 
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, pos2, vec2};
@@ -201,4 +202,33 @@ fn zoom_keys_under_an_open_preview_leave_the_view_alone() {
         fixture.settle();
         assert_eq!(state.borrow().zoom, before, "{key:?} with {modifiers:?} under the preview");
     }
+}
+
+/// A wheel step of `lines` with `modifiers` held, near the top of the room, where a reading view is.
+fn wheel_with(fixture: &mut Fixture, lines: f32, modifiers: Modifiers) {
+    fixture.frame(vec![egui::Event::PointerMoved(pos2(450.0, 40.0))]);
+    fixture.frame(vec![egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: vec2(0.0, lines),
+        modifiers,
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+    }]);
+    fixture.idle(1);
+}
+
+#[trial]
+fn the_reading_view_turns_on_the_wheel_but_leaves_cmd_or_ctrl_with_the_wheel_to_the_app_zoom() {
+    let state = Rc::new(RefCell::new(ReadingState::default()));
+    let kept = Rc::clone(&state);
+    let pages = DemoPages::new(6);
+    let mut fixture = Fixture::new(move |ui| {
+        ReadingView::new("Document", &pages, &mut kept.borrow_mut(), PAPER).show(ui);
+    });
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    wheel_with(&mut fixture, -1.0, Modifiers::COMMAND);
+    assert_eq!(state.borrow().column, 0, "Cmd or Ctrl with the wheel turns no column");
+    wheel_with(&mut fixture, -1.0, Modifiers::NONE);
+    assert!(state.borrow().column > 0, "the wheel alone turns");
 }
