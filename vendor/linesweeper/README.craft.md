@@ -13,8 +13,11 @@ holds `upstream_revision`. `local_patches` describes each local change.
 
 ## Local changes
 
+The patched files are `src/sweep/sweep_line.rs`, `src/curve/mod.rs` and `Cargo.toml`.
+
 | Change | Code comment label | Touches | Tests |
 |---|---|---|---|
+| The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out | `Craft patch (exited slots)` | `src/sweep/sweep_line.rs` | none (doc comment only) |
 | `CurveOrder` records `Metrics` entries only with the new `metrics` feature, which is off by default; without it `metrics.entries` stays empty. The `curve_metrics` example requires the feature | `Craft patch (metrics opt-in)` | `src/curve/mod.rs`, `Cargo.toml` | `curve::test::crossing_cubics_metrics_follow_the_feature`, `curve::test::crossing_cubics_order_does_not_depend_on_metrics`, `curve::test::crossing_cubics_metrics_record_the_recursion_depth`, `curve::test::curve_order_no_overlap` |
 
 Every change here updates this table and `SOURCE.json` in the same commit.
