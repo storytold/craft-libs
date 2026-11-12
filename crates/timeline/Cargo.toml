@@ -15,18 +15,14 @@ workspace = true
 serde = ["dep:serde"]
 # Final Cut Pro 7 XML (`fcp7`), read with craft-xml's bounded parser.
 xml = ["dep:craft-xml"]
-# OpenTimelineIO JSON (`otio`), with serde_json.
-otio = ["dep:serde_json"]
 
 [dependencies]
 serde = { workspace = true, optional = true }
 craft-xml = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
-serde_json = { workspace = true }
 
 [[test]]
 name = "it"
-required-features = ["xml", "otio"]
+required-features = ["xml"]

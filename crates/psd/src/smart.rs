@@ -16,6 +16,7 @@
 //! The blocks themselves stay raw in the model ([`crate::TaggedBlock`]) and write back
 //! unchanged; these are read-only views. Came from EffectCraft's `effectcraft-psd`.
 
+use std::borrow::Cow;
 use std::ops::Range;
 
 use crate::descriptor::{Descriptor, UnicodeString, Value};
@@ -23,7 +24,6 @@ use crate::error::{PsdError, Result};
 use crate::file::PsdFile;
 use crate::io::{Reader, read_pascal};
 use crate::layer::LayerRecord;
-use crate::tagged::TaggedBlock;
 
 /// The most pixels a baked smart object may have: 2^24 (256 MiB as float RGBA). The size comes
 /// from the file's transform, which is untrusted.
@@ -458,19 +458,29 @@ fn linked_file(item: &[u8], at: usize) -> Result<LinkedFile> {
 }
 
 impl PsdFile {
-    /// Every linked file of the document's linked layer blocks, each with the block that holds
-    /// it ([`LinkedFile::data`] is a range of that block's data).
-    pub fn linked_files(&self) -> Vec<(&TaggedBlock, LinkedFile)> {
-        self.global_blocks
-            .iter()
-            .filter(|b| is_linked_layer_key(&b.key))
-            .flat_map(|b| linked_files(&b.data).into_iter().map(move |f| (b, f)))
-            .collect()
+    /// Every linked file of the document's linked layer blocks, each with the index of the
+    /// global block that holds it ([`LinkedFile::data`] is a range of that block's data). A
+    /// block left in the source ([`crate::TaggedBlock::stored`]) is read for it.
+    pub fn linked_files(&self) -> Result<Vec<(usize, LinkedFile)>> {
+        let mut out = Vec::new();
+        for (i, b) in self.global_blocks.iter().enumerate().filter(|(_, b)| is_linked_layer_key(&b.key)) {
+            out.extend(linked_files(&b.encoded()?).into_iter().map(|f| (i, f)));
+        }
+        Ok(out)
     }
 
-    /// The embedded bytes of the linked file `uuid`, when the document embeds it.
-    pub fn linked_data(&self, uuid: &str) -> Option<&[u8]> {
-        self.linked_files().into_iter().find_map(|(b, f)| if f.uuid == uuid { b.data.get(f.data?) } else { None })
+    /// The embedded bytes of the linked file `uuid`, when the document embeds it: borrowed from
+    /// a block in memory, read from the source for a block left there.
+    pub fn linked_data(&self, uuid: &str) -> Result<Option<Cow<'_, [u8]>>> {
+        for b in self.global_blocks.iter().filter(|b| is_linked_layer_key(&b.key)) {
+            let data = b.encoded()?;
+            let Some(range) = linked_files(&data).into_iter().find(|f| f.uuid == uuid).and_then(|f| f.data) else { continue };
+            return Ok(match data {
+                Cow::Borrowed(d) => d.get(range).map(Cow::Borrowed),
+                Cow::Owned(d) => d.get(range).map(|e| Cow::Owned(e.to_vec())),
+            });
+        }
+        Ok(None)
     }
 }
 
@@ -479,6 +489,7 @@ mod tests {
     use super::*;
     use crate::descriptor::{Id, ObjectArray};
     use crate::io::{WriteExt, write_pascal};
+    use crate::tagged::TaggedBlock;
 
     fn so(quad: [[f64; 2]; 4], warp: Option<Warp>) -> SmartObject {
         SmartObject { uuid: "x".into(), quad, size: None, warp }
@@ -651,15 +662,27 @@ mod tests {
     #[test]
     fn a_document_finds_the_embedded_bytes_of_a_smart_object() {
         let mut file = crate::testgen::small(crate::Version::Psd, crate::Compression::Raw);
+        let first = file.global_blocks.len();
         file.global_blocks.push(TaggedBlock::new(*b"lnk2", linked_record(b"liFD", "uuid-1", "a.png", b"PNGf", b"PNGDATA")));
         file.global_blocks.push(TaggedBlock::new(*b"lnkE", linked_record(b"liFE", "uuid-2", "b.psd", b"8BPS", b"")));
-        assert_eq!(file.linked_files().len(), 2);
-        assert_eq!(file.linked_data("uuid-1"), Some(b"PNGDATA".as_slice()));
-        assert_eq!(file.linked_data("uuid-2"), None);
-        assert_eq!(file.linked_data("nope"), None);
+        let embedded = |f: &PsdFile, uuid: &str| f.linked_data(uuid).unwrap().map(Cow::into_owned);
+        assert_eq!(
+            file.linked_files().unwrap().iter().map(|(i, f)| (*i, f.uuid.as_str())).collect::<Vec<_>>(),
+            [(first, "uuid-1"), (first + 1, "uuid-2")]
+        );
+        assert_eq!(embedded(&file, "uuid-1").as_deref(), Some(b"PNGDATA".as_slice()));
+        assert_eq!(embedded(&file, "uuid-2"), None);
+        assert_eq!(embedded(&file, "nope"), None);
         // The blocks are untouched: the file still writes and reads back.
         let again = PsdFile::from_bytes(&file.to_bytes().unwrap()).unwrap();
-        assert_eq!(again.linked_data("uuid-1"), Some(b"PNGDATA".as_slice()));
+        assert_eq!(embedded(&again, "uuid-1").as_deref(), Some(b"PNGDATA".as_slice()));
+        // With the linked-file blocks left in the source, the same files and bytes are found.
+        let bytes = file.to_bytes().unwrap();
+        let (deferred, _) =
+            PsdFile::from_source_deferring(crate::Source::new(bytes), |key, _| is_linked_layer_key(key), |_| Ok(false), |_| false).unwrap();
+        assert!(deferred.global_blocks.iter().filter(|b| is_linked_layer_key(&b.key)).all(|b| b.data.is_empty() && b.stored.is_some()));
+        assert_eq!(deferred.linked_files().unwrap(), file.linked_files().unwrap());
+        assert_eq!(embedded(&deferred, "uuid-1").as_deref(), Some(b"PNGDATA".as_slice()));
     }
 
     #[test]

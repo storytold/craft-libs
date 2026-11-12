@@ -11,7 +11,7 @@ use craft_timeline::model::{
     TransitionId, VideoStreamInfo,
 };
 use craft_timeline::time::{FrameRate, TICKS_PER_SECOND, Tick, TimeRange};
-use craft_timeline::{Error, ExportOptions, Format, ImportOptions, Imported, Report, fcp7, fcpxml, otio};
+use craft_timeline::{Error, ExportOptions, Format, ImportOptions, Imported, Report, fcp7, fcpxml};
 
 /// [`Standard`] and a few effects an application adds: a blur, a grade, two transitions.
 pub struct TestCatalog;
@@ -31,7 +31,6 @@ fn extra() -> Vec<EffectDef> {
         def("lumetri", "Lumetri Color", EffectKind::Video, "Color Correction", vec![float("exposure", "Exposure", 0.0)]),
         def("dip_to_white", "Dip to White", EffectKind::VideoTransition, "Dissolve", vec![]),
         def("push", "Push", EffectKind::VideoTransition, "Slide", vec![]),
-        def("iris_round", "Iris Round", EffectKind::VideoTransition, "Iris", vec![]),
     ]
 }
 
@@ -50,7 +49,7 @@ impl Catalog for TestCatalog {
 pub const NS: &str = "testapp";
 
 pub fn iopts(base_dir: Option<&str>) -> ImportOptions<'_> {
-    ImportOptions { base_dir, name: None, catalog: &TestCatalog, namespace: NS }
+    ImportOptions { base_dir, catalog: &TestCatalog, namespace: NS }
 }
 
 pub fn xopts() -> ExportOptions<'static> {
@@ -308,7 +307,6 @@ pub fn import(bytes: &[u8], format: Format, base_dir: Option<&str>) -> Result<(I
     let imported = match format {
         Format::Fcp7Xml => fcp7::import(&text, &opts, &mut report),
         Format::Fcpxml => fcpxml::import(&text, &opts, &mut report),
-        Format::Otio => otio::import(&text, &opts, &mut report),
         _ => Err(Error::Other(format!("{} is not read here", format.name()))),
     }?;
     Ok((imported, report))
@@ -320,7 +318,6 @@ pub fn export(p: &Project, seq: ItemId, format: Format, opts: &ExportOptions) ->
     let text = match format {
         Format::Fcp7Xml => fcp7::export(p, seq, opts, &mut report),
         Format::Fcpxml => fcpxml::export(p, seq, opts, &mut report),
-        Format::Otio => otio::export(p, seq, opts, &mut report),
         _ => Err(Error::Other(format!("{} is not written here", format.name()))),
     }?;
     Ok((text.into_bytes(), report))
