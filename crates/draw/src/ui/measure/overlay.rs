@@ -6,6 +6,7 @@ use super::words::RulerWords;
 use craft_behavior::geometry::turn_to_45;
 use craft_behavior::kurbo::{Point, Vec2 as DocVec};
 use craft_behavior::{Granularity, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape, PartKey, PointerButton, PressPhase, Roving, Sense};
+use craft_theme::{Stateful, States};
 use craft_ui::canvas::{CanvasSpace, NUDGE, NUDGE_FAR, canvas_space};
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Name, PaintUi, PartsCx, Pointer as _, Props as _,
@@ -14,19 +15,24 @@ use craft_ui::contract::{
 use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::env::{Label, Units};
 use craft_ui::runtime::focus::KeyUse;
-use craft_ui::style::{ComponentStyle, HandleLook, StyleCx};
-use egui::{CornerRadius, Rect, Vec2};
+use craft_ui::style::{ComponentStyle, StyleColor, StyleCx};
+use egui::{Rect, Vec2};
 
 /// The part of one point of the line: `POINT.at(RulerPart::index)`.
 pub(super) const POINT: PartKey = PartKey::new("point");
 
-/// The style of the Ruler overlay.
+/// The style of the Ruler overlay: a cross at each point in the look of the line (a thin line over a thick halo).
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct RulerOverlayStyle {
     #[style(metrics)]
     metrics: Metrics,
-    handle: HandleLook,
+    /// The length of each arm of a cross, from its point.
+    arm: f32,
+    /// The cross's line per state: the line's colour at rest, the accent while hovered or dragged.
+    line: Stateful<StyleColor>,
+    /// The halo under the cross, so it reads on any image.
+    halo: StyleColor,
     /// A press within this many screen points of a point grabs it.
     reach: f32,
 }
@@ -43,7 +49,7 @@ struct Grab(Option<RulerPart>);
 ///   vertex (the ends swap first when the far end was pressed). Escape puts the line back.
 /// - **Keyboard:** the points are one Tab stop; Page Up and Page Down pick a point, the arrows move it 1 unit and
 ///   Shift 10, Delete and Backspace clear the line.
-/// - It paints the handles only; the app shows the line and the arm with `StraightLinePreview`
+/// - It paints a cross at each point, in the line's look; the app shows the line and the arm with `StraightLinePreview`
 ///   ([`RulerPass::show_line`](super::RulerPass::show_line)).
 /// - **AccessKit:** the group's value reads "Length L, angle A°" in the ruler's units; each point is named and valued
 ///   "x, y" in the ruler's units.
@@ -82,8 +88,18 @@ impl Component for RulerOverlay<'_> {
     type Output = EditResponse<Option<RulerLine>>;
 
     fn style(cx: &StyleCx<'_>, _: RulerOverlayStyleKey) -> RulerOverlayStyle {
-        let handle = cx.handle();
-        RulerOverlayStyle { metrics: Metrics::new().min_size(Vec2::splat(handle.side)), handle, reach: cx.tokens.size.hit.target }
+        let (overlay, accent) = (&cx.tokens.color.overlay, &cx.tokens.color.accent);
+        let rest = cx.color(overlay.stroke);
+        let line =
+            Stateful::new(rest).off(States::new(rest, cx.color(accent.hover), cx.color(accent.pressed), cx.color(cx.tokens.color.text.disabled)));
+        let arm = cx.tokens.size.handle.sm;
+        RulerOverlayStyle {
+            metrics: Metrics::new().min_size(Vec2::splat(2.0 * arm)),
+            arm,
+            line,
+            halo: cx.color(overlay.halo),
+            reach: cx.tokens.size.hit.target,
+        }
     }
 
     fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
@@ -172,14 +188,20 @@ impl Component for RulerOverlay<'_> {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let (Some(space), Some(line)) = (canvas_space(&cx.env), cx.value().copied().flatten()) else { return };
         let draw = ui.draw();
-        let look = &cx.style.handle;
+        let style = &cx.style;
         for part in [RulerPart::Start, RulerPart::End, RulerPart::Protractor] {
             let Some(at) = line.point(part) else { continue };
-            let square = PaintShape::Rect(Rect::from_center_size(space.view.to_screen(at), Vec2::splat(look.side)), CornerRadius::ZERO);
+            let centre = space.view.to_screen(at);
+            let arms = [Vec2::new(style.arm, 0.0), Vec2::new(0.0, style.arm)].map(|arm| PaintShape::Path(vec![centre - arm, centre + arm]));
             // A point the pass's edit just added has no part yet; it shows as the control at rest.
             let at_rest = cx.part_if_declared(POINT.at(part.key())).is_none();
-            draw.fill(&square, if at_rest { cx.resolve(&look.fill) } else { cx.resolve_part(POINT.at(part.key()), &look.fill) });
-            draw.stroke(&square, StrokeWidth::Thin, look.stroke);
+            let ink = if at_rest { cx.resolve(&style.line) } else { cx.resolve_part(POINT.at(part.key()), &style.line) };
+            for arm in &arms {
+                draw.stroke(arm, StrokeWidth::Thick, style.halo);
+            }
+            for arm in &arms {
+                draw.stroke(arm, StrokeWidth::Thin, ink);
+            }
         }
     }
 
