@@ -1,13 +1,13 @@
 //! Stories of the brush overlays: each control on a canvas with a view, as a freehand tool shows it, and a brush run
 //! live by the tool story host: its cursor follows the story's tip and cursor preferences, and Ctrl + Alt + drag or
-//! Alt + right-drag resizes it with the falloff preview.
+//! Alt + right-drag resizes it with the falloff preview; Play runs either drag.
 
 use super::{
     BrushCursor, BrushCursorOptions, BrushDimensions, BrushResize, BrushResizeOptions, BrushTip, BrushTipOutline, FalloffPreview, PaintingCursor,
     TipCell, TipFalloff, TipPose, TipRings,
 };
 use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas_view, story_view};
-use crate::canvas::testing::tool_story::{ToolStory, tool_story};
+use crate::canvas::testing::tool_story::{ToolScript, ToolStory, tool_story};
 use crate::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
 use crate::canvas_controls::CanvasControlWords;
 use crate::contract::Show as _;
@@ -232,8 +232,16 @@ fn brush(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let flip = *data.value("flip", false);
     let aspect = *data.ranged("aspect", 1.0_f64, 0.5..=2.0);
     let words = Env::of(ui).words::<BrushStoryWords>();
+    let drags = [("Ctrl + Alt + drag", PointerButton::Primary), ("Alt + right-drag", PointerButton::Secondary)];
+    let button = *data.choice("play", PointerButton::Primary, &drags);
+    let seconds = *data.ranged("play seconds", 2.0_f64, 0.5..=10.0);
     let document = StoryDocument::STANDARD;
-    let story = ToolStory::new("Document", &document).turned(rotation, flip, aspect);
+    let held = if button == PointerButton::Primary { Mods { ctrl: true, ..Mods::ALT } } else { Mods::ALT };
+    let (from, rect) = (document.centre(), document.rect());
+    // The old story's drag: right and down by a share of the document.
+    let to = from + Vec2::new(rect.width() * 0.15, rect.height() * 0.15);
+    let script = ToolScript::new(seconds).stroke(button, &[from, to], held, held);
+    let story = ToolStory::new("Document", &document).turned(rotation, flip, aspect).play(script);
     let body = |ui: &mut Ui, at: Rect, _: &CanvasView, brush: &mut StoryBrush, dimensions: &BrushDimensions| {
         let edge = falloff(*dimensions);
         if let Some(preview) = brush.resize.preview(&edge) {

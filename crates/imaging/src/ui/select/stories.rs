@@ -3,13 +3,16 @@
 //! committed, combined in order by their operations (so Shift adds and Alt subtracts) and moved by the selection
 //! drags, which the selection overlay shows. It starts as a rectangle round the picture's house, so the first press
 //! inside it drags it. The Magnetic Lasso's tracer follows the house's outline where its contrast is strong enough.
+//! Each story's Play sends the gesture of the old gallery's story: a marquee drawn, dragged or clicked, and outlines
+//! round the house.
 
 use craft_behavior::geometry::{Constraint, SelectionOperation};
 use craft_behavior::kurbo::{Point, Rect, Vec2};
-use craft_behavior::{CanvasView, EditEvent};
+use craft_behavior::{CanvasView, EditEvent, PointerButton};
+use craft_keymap::Mods;
 use craft_ui::canvas::RasterSource as _;
 use craft_ui::runtime::env::Env;
-use craft_ui::testing::{Drive, StoryData, StoryHost, StoryOutput, ToolStory, story, tool_story};
+use craft_ui::testing::{Drive, StoryData, StoryHost, StoryOutput, ToolScript, ToolStory, story, tool_story};
 use egui::Ui;
 
 use super::{
@@ -308,15 +311,69 @@ fn status(words: &SelectToolStoryWords, phase: SelectPhase, last: Option<Last>) 
     craft_i18n::fmt(words.status.as_str(), &[("phase", phase.as_str()), ("event", event.as_str())])
 }
 
+/// How far outside the house the scripted pointer runs, as a share of the picture's width.
+const GROW: f64 = 0.004;
+/// How many points the scripted freehand, polygon and magnetic outlines have.
+const FREEHAND_POINTS: usize = 24;
+const POLYGON_POINTS: usize = 8;
+const MAGNETIC_POINTS: usize = 16;
+/// The Lasso's Alt clicks take every this many of the outline's points.
+const STRAIGHT_STRIDE: usize = 3;
+/// The scripted Magnetic Lasso pointer's distance from the edge, as a share of the Width option.
+const OFF_EDGE: f64 = 0.5;
+/// The halvings that find the house's edge along a ray.
+const BISECTIONS: usize = 32;
+
+/// `n` points round the house's outline from the top, each `grow` document pixels outside it.
+fn outline_points(image: &MockImage, n: usize, grow: f64) -> Vec<Point> {
+    let b = image.subject_bounds();
+    let centre = Point::new(f64::from(b.x0 + b.x1) / 2.0, f64::from(b.y0 + b.y1) / 2.0);
+    let far = f64::from(b.x1 - b.x0).hypot(f64::from(b.y1 - b.y0));
+    (0..n)
+        .map(|k| {
+            let angle = k as f64 / n as f64 * std::f64::consts::TAU - std::f64::consts::FRAC_PI_2;
+            let direction = Vec2::new(angle.cos(), angle.sin());
+            let (mut inside, mut outside) = (0.0, far);
+            for _ in 0..BISECTIONS {
+                let mid = (inside + outside) / 2.0;
+                let p = centre + direction * mid;
+                if image.subject_distance(p.x, p.y) < 0.0 {
+                    inside = mid;
+                } else {
+                    outside = mid;
+                }
+            }
+            centre + direction * (outside + grow)
+        })
+        .collect()
+}
+
+/// The picture's width, for the scripts' shares of it.
+fn picture_width(image: &MockImage) -> f64 {
+    f64::from(image.size().width)
+}
+
+/// How long Play takes, a story value.
+fn seconds(data: &mut StoryData) -> f64 {
+    *data.ranged("play seconds", 2.0_f64, 0.5..=10.0)
+}
+
 /// Runs the tool `init` makes, set up each pass by `options`, live over the mock picture, with the story selection
-/// drawn by the overlay.
-fn on_canvas<T: Shown>(ui: &mut Ui, data: &mut StoryData, init: impl FnOnce() -> T, options: impl FnOnce(&mut T)) -> StoryOutput {
+/// drawn by the overlay; Play sends the gesture `play` makes from the picture.
+fn on_canvas<T: Shown>(
+    ui: &mut Ui,
+    data: &mut StoryData,
+    init: impl FnOnce() -> T,
+    options: impl FnOnce(&mut T),
+    play: impl FnOnce(&MockImage) -> ToolScript,
+) -> StoryOutput {
     let image = MockImage::default();
+    let script = play(&image);
     let words = Env::of(ui).words::<SelectToolStoryWords>();
     let overlay = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, _: &mut Kept<T>, selection: &Selection| {
         let _ = SelectionOverlay::new(words.selection.clone(), selection).show_at(ui, at);
     };
-    let story = ToolStory::new("Document", &image).fit();
+    let story = ToolStory::new("Document", &image).fit().play(script);
     tool_story(
         ui,
         data,
@@ -346,6 +403,11 @@ fn marquee(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let kind = *data.choice("kind", MarqueeKind::Rectangle, &kinds);
     let styles = [("Normal", Constraint::Free), ("Fixed Ratio", Constraint::Ratio(4.0, 3.0)), ("Fixed Size", Constraint::Size(400.0, 300.0))];
     let style = *data.choice("style", Constraint::Free, &styles);
+    let plays = [("Draw", MarqueePlay::Draw), ("Drag Inside", MarqueePlay::DragInside), ("Click", MarqueePlay::Click)];
+    let play = *data.choice("play", MarqueePlay::Draw, &plays);
+    // Shift and Alt count when they come after the press.
+    let held = Mods { shift: *data.value("play with shift", false), alt: *data.value("play with alt", false), ..Mods::NONE };
+    let seconds = seconds(data);
     on_canvas(
         ui,
         data,
@@ -353,17 +415,71 @@ fn marquee(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         |tool| {
             tool.kind(kind).constraint(style);
         },
+        |image| {
+            let size = image.size();
+            let at = |x: f64, y: f64| Point::new(x * f64::from(size.width), y * f64::from(size.height));
+            let script = ToolScript::new(seconds);
+            match play {
+                MarqueePlay::Draw => script.stroke(PointerButton::Primary, &[at(0.2, 0.25), at(0.8, 0.85)], Mods::NONE, held),
+                MarqueePlay::DragInside => script.stroke(PointerButton::Primary, &[at(0.5, 0.5), at(0.65, 0.4)], Mods::NONE, Mods::NONE),
+                MarqueePlay::Click => script.click(at(0.15, 0.15), Mods::NONE),
+            }
+        },
     )
+}
+
+/// What the marquee story's Play does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum MarqueePlay {
+    Draw,
+    DragInside,
+    Click,
 }
 
 #[story(SelectionOverlay<'static>, covers = [], drive = Drive::Never)]
 fn lasso(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    on_canvas(ui, data, LassoTool::new, |_| {})
+    let straight = *data.value("play with alt segments", false);
+    let seconds = seconds(data);
+    on_canvas(
+        ui,
+        data,
+        LassoTool::new,
+        |_| {},
+        |image| {
+            let points = outline_points(image, FREEHAND_POINTS, picture_width(image) * GROW);
+            let script = ToolScript::new(seconds).press(PointerButton::Primary, points[0], Mods::NONE);
+            if !straight {
+                return script.moves(&points[1..], Mods::NONE).moves(&points[..1], Mods::NONE).release(points[0], Mods::NONE);
+            }
+            // Freehand for the first quarter, then Alt latches: each click is a straight segment, and letting Alt go with
+            // the button up closes.
+            let quarter = points.len() / 4;
+            let script =
+                script.moves(&points[1..=quarter], Mods::NONE).moves(&points[quarter..=quarter], Mods::ALT).release(points[quarter], Mods::ALT);
+            points[quarter + 1..]
+                .iter()
+                .step_by(STRAIGHT_STRIDE)
+                .fold(script, |script, &p| script.click(p, Mods::ALT))
+                .moves(&points[..1], Mods::NONE)
+        },
+    )
 }
 
 #[story(SelectionOverlay<'static>, covers = [], drive = Drive::Never)]
 fn polygonal_lasso(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    on_canvas(ui, data, PolygonLassoTool::new, |_| {})
+    let held = Mods { shift: *data.value("play with shift", false), ..Mods::NONE };
+    let seconds = seconds(data);
+    on_canvas(
+        ui,
+        data,
+        PolygonLassoTool::new,
+        |_| {},
+        |image| {
+            let points = outline_points(image, POLYGON_POINTS, picture_width(image) * GROW);
+            // The last click lands on the first point and closes the outline.
+            points.iter().chain(&points[..1]).fold(ToolScript::new(seconds), |script, &p| script.click(p, held))
+        },
+    )
 }
 
 #[story(SelectionOverlay<'static>, covers = [], drive = Drive::Never)]
@@ -371,6 +487,7 @@ fn magnetic_lasso(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let width = *data.ranged("width", 10.0_f32, 1.0..=256.0);
     let contrast = *data.ranged("contrast", 10.0_f32, 1.0..=100.0);
     let frequency = *data.ranged("frequency", 57.0_f32, 0.0..=100.0);
+    let seconds = seconds(data);
     on_canvas(
         ui,
         data,
@@ -380,6 +497,12 @@ fn magnetic_lasso(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             settings.width = width;
             settings.contrast = contrast;
             settings.frequency = frequency;
+        },
+        |image| {
+            // The pointer runs beside the edge, within Width of it, and a click on the first point closes the outline
+            // along the edges.
+            let points = outline_points(image, MAGNETIC_POINTS, f64::from(width) * OFF_EDGE);
+            ToolScript::new(seconds).stroke(PointerButton::Primary, &points, Mods::NONE, Mods::NONE).click(points[0], Mods::NONE)
         },
     )
 }

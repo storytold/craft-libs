@@ -227,6 +227,15 @@ impl<'a> Stack<'a> {
         self.props = self.props.footer(FooterRegion::new().place(FooterPlace::EndTop));
         self
     }
+
+    /// The space `gap` between the body and the footer's content. Set it after [`footer`](Stack::footer).
+    #[must_use]
+    pub fn footer_gap(mut self, gap: Gap) -> Self {
+        if let Some(footer) = self.props.footer {
+            self.props = self.props.footer(footer.gap(gap));
+        }
+        self
+    }
 }
 
 impl Default for Stack<'_> {
