@@ -80,7 +80,17 @@ pub struct Span<'a> {
 impl<'a> Span<'a> {
     /// A plain span.
     pub fn new(text: impl Into<Cow<'a, str>>) -> Self {
-        Span { text: text.into(), italic: false, tabular: false, mono: false, muted: false, shortcut: false, highlight: false, underline: false, strong: false }
+        Span {
+            text: text.into(),
+            italic: false,
+            tabular: false,
+            mono: false,
+            muted: false,
+            shortcut: false,
+            highlight: false,
+            underline: false,
+            strong: false,
+        }
     }
 
     /// Italic.

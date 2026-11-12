@@ -4,12 +4,12 @@
 use craft_behavior::{DisplayOrder, EditEvent, ItemSource, Metrics, Mixed, Selection, TileLayout};
 use craft_theme::Srgba;
 use craft_ui::choice::{Swatch, SwatchMetrics};
-use craft_ui::list::RowTest;
 use craft_ui::contract::{
     ActivateOn, Bind, BindMut, Collection, CollectionEvent, CollectionProps, Common, Component, ContainerProps, Cx, Held, NoValue, Outcome, Pattern,
     Props, Role, SelectMode, ShowCollection as _, ShowContainer as _, Sizing,
 };
 use craft_ui::layout_components::Stack;
+use craft_ui::list::RowTest;
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, StyleCx};
 use egui::{Response, Ui, Vec2};

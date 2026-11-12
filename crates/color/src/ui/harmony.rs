@@ -330,8 +330,7 @@ impl<'a> HarmonyPanel<'a> {
 
             let strip: Vec<(Label, Srgba)> = guide.colors.iter().map(|c| (Label::from(c.to_hex()), *c)).collect();
             let mut strip_selection = Selection::default();
-            let out =
-                SwatchTable::new(words.harmony.clone(), &strip)
+            let out = SwatchTable::new(words.harmony.clone(), &strip)
                 .per_row(strip.len().max(1))
                 .span(true)
                 .selection(Bind::bound(&mut strip_selection))
@@ -344,14 +343,13 @@ impl<'a> HarmonyPanel<'a> {
             let centre = guide.centre();
             let flat: Vec<(Label, Srgba)> = guide.grid.iter().flatten().map(|c| (Label::from(c.to_hex()), *c)).collect();
             let mut selection = if before_picked.guide == stamp { before_picked.selection.clone() } else { Selection::default() };
-            let SwatchTableOutput { selected, chosen: cells, .. } =
-                SwatchTable::new(words.variations.clone(), &flat)
-                    .multiple(true)
-                    .per_row(columns)
-                    .span(true)
-                    .marked(move |&at| at % columns == centre)
-                    .selection(Bind::bound(&mut selection))
-                    .show_all(ui);
+            let SwatchTableOutput { selected, chosen: cells, .. } = SwatchTable::new(words.variations.clone(), &flat)
+                .multiple(true)
+                .per_row(columns)
+                .span(true)
+                .marked(move |&at| at % columns == centre)
+                .selection(Bind::bound(&mut selection))
+                .show_all(ui);
             if let Some(i) = selected
                 && cells.len() == 1
             {
