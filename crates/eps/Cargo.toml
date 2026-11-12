@@ -1,0 +1,13 @@
+[package]
+name = "craft-eps"
+description = "Encapsulated PostScript files as a container: the binary preview header (read and write), the DSC header comments and bounding boxes, the EPSI preview, ASCII85 data, and telling EPS, PostScript and Illustrator files apart. No PostScript interpreter."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
