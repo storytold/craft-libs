@@ -5,7 +5,7 @@ The host messages between a Craft app's web build and the page that hosts it, as
 The crate has two parts:
 
 - **The contract** (all targets): the message kinds and their `<app>:<kind>` types, the contract version, how the hosting mode is read from the URL and the canvas, and the clean-up of file names a host passes in. Pure, tested natively.
-- **The bridge** (`web`, wasm32 only): `Host::connect(app, canvas)` finds the host, `listen` hears its messages, and `post_ready`, `post_save`, `post_dirty`, `post_failed` and `post_handoff` answer it. Only the same-origin parent window is heard and answered; with a parent on another origin the app runs as if unframed.
+- **The bridge** (`web`, wasm32 only): `Host::connect(app, canvas)` finds the host, `listen` hears its messages, and `post_ready`, `post_save`, `post_dirty`, `post_failed`, `post_handoff`, `post_session_state`, `post_presence` and `post_commit` answer it. Only the same-origin parent window is heard and answered; with a parent on another origin the app runs as if unframed.
 
 ## Messages
 
@@ -20,6 +20,13 @@ The crate has two parts:
 | `failed` | app → host | `error`, `id?` | a document or a save could not be taken |
 | `handoff` | app → host | `name`, and `bytes` or `file` + `size` | this file belongs to another app |
 | `handoff-done` | host → app | `name`, `app` | the host gave it to the app that edits it |
+| `session` | host → app | `sessionId`, `wsUrl`, `token`, `role?` | open a collaboration session; without this message the app stays single-user |
+| `session-state` | app → host | `status`, `participants` | the sync indicator and who is in the session |
+| `presence` | app → host | `participants` | who is in the session, for the cabinet's participant list |
+| `commit` | app → host | `sessionId`, `bytes?` | ask the cabinet to commit the session |
+| `committed` | host → app | `version`, `etag` | the commit is stored as this version |
+
+A participant is an object with `clientId`, `role` and `color?` (a CSS colour); an empty list is `[]`, not a missing field.
 
 With `?host=parent` a message is an object with `type` (`pdfcraft:open`) and the fields, sent with same-origin `postMessage`; `bytes` go as a transferred `ArrayBuffer`. With `data-host="page"` it is a `CustomEvent` of that type on the canvas, with the fields in `detail`.
 
@@ -30,6 +37,7 @@ Compatibility with the bridges shipped before this crate:
 - `size` beside `file` is for hosts and older bridges; this crate takes a `Blob`'s length from the `Blob` itself.
 - A page host may dispatch an event while the app's handler runs (a `saved` answering the `save` it just posted). The bridge holds it and calls the handler again once the running call returns, so messages arrive one at a time and in order.
 - `version` is `"1"`. The earlier bridges put the app's own release in it (`"0.14.0"`), so a host treats a `version` it doesn't know as `"1"`. The crate sends the release as `appVersion`.
+- The collaboration kinds share that version. A host that predates them never sends `session`, and the app stays in single-user mode. `session` is the only place the token travels: an app must not put it in the socket URL, a log, an error or a DOM attribute. A session without a `role` is a `viewer`, because the server decides anyway and the app must not open an editor it was not given.
 
 ## Use in an app's web shell
 
