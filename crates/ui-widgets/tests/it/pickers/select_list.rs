@@ -78,3 +78,33 @@ fn tab_in_the_open_list_chooses_the_row_the_keys_reached_and_moves_on() {
     assert_eq!(value(&mut fixture), 2, "and keeps the row the keys reached");
     assert_ne!(fixture.focused_stop(), on_select, "and the focus moved on");
 }
+
+/// A select over two groups under headings: Shapes (One, Two) and Lines (Three).
+fn grouped(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries = [Entry::heading("Shapes"), Entry::new(1u8, "One"), Entry::new(2u8, "Two"), Entry::heading("Lines"), Entry::new(3u8, "Three")];
+    Select::new("Pick", Bind::bound(data.value("value", 1u8)), &entries).show(ui).into()
+}
+
+#[trial]
+fn a_heading_in_the_list_takes_no_pick_and_the_keys_and_type_ahead_pass_over_it() {
+    let mut fixture = Fixture::story(&Story::new("select_grouped", grouped));
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    fixture.settle();
+    let heading = fixture.by_label("Lines").expect("the heading shows in the open list");
+    fixture.click(&heading);
+    fixture.settle();
+    assert!(list_open(&mut fixture), "a click on a heading leaves the list open");
+    assert_eq!(value(&mut fixture), 1, "and picks nothing");
+    fixture.key(Key::ArrowDown, Modifiers::NONE);
+    fixture.key(Key::ArrowDown, Modifiers::NONE);
+    fixture.settle();
+    assert_eq!(value(&mut fixture), 3, "Down from the last row of a group lands on the first row of the next");
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.settle();
+    fixture.type_text("l");
+    fixture.settle();
+    assert!(!list_open(&mut fixture), "a heading's caption is no type-ahead match");
+    assert_eq!(value(&mut fixture), 1, "and the value stays");
+}

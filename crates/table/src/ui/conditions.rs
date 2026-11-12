@@ -367,11 +367,15 @@ impl Rows<'_> {
     fn pick_field(&self, ui: &mut Ui, rule: &mut Condition, path: &[usize]) {
         let mut entries = Vec::new();
         let mut heading: Option<String> = None;
-        for (at, (id, label, group)) in self.fields.fields().into_iter().enumerate() {
-            if at > 0 && group != heading {
-                entries.push(Entry::separator());
+        // Each group of fields under its name; a rule before fields of no group.
+        for (id, label, group) in self.fields.fields() {
+            if group != heading {
+                entries.push(match &group {
+                    Some(name) => Entry::heading(name.clone()),
+                    None => Entry::separator(),
+                });
+                heading = group;
             }
-            heading = group;
             entries.push(Entry::new(id, label));
         }
         let mut field = rule.field.clone();

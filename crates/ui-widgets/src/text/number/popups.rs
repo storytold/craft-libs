@@ -34,6 +34,8 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
                 .show_items(ui, &source, &mut |at, _| {
                     if rows[*at].is_separator() {
                         ListRow::spacer()
+                    } else if rows[*at].is_heading() {
+                        ListRow::heading(labels[*at].clone())
                     } else {
                         ListRow::new(labels[*at].clone()).enabled(rows[*at].is_enabled()).option().check(marked == Some(*at))
                     }
@@ -97,7 +99,7 @@ impl DisplayOrder<usize> for Presets<'_> {
     }
 
     fn is_section(&self, at: usize) -> bool {
-        self.rows[at].is_separator()
+        !self.rows[at].is_item()
     }
 
     fn text(&self, at: usize) -> Option<Cow<'_, str>> {

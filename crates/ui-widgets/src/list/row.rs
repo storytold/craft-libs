@@ -178,6 +178,7 @@ pub struct ListRow<'a> {
     #[prop(into)]
     pub(super) accessible_name: Option<String>,
     pub(super) spacer: bool,
+    pub(super) heading: bool,
     pub(super) cells: Vec<(ColumnKey, Rect)>,
     /// Each column's alignment and whether its figures are tabular, from `columns(..)`.
     pub(super) aligns: Vec<(ColumnKey, HAlign, bool)>,
@@ -270,6 +271,7 @@ impl<'a> ListRow<'a> {
             progress: None,
             accessible_name: None,
             spacer: false,
+            heading: false,
             cells: Vec::new(),
             aligns: Vec::new(),
             muted: Vec::new(),
@@ -307,6 +309,15 @@ impl<'a> ListRow<'a> {
     pub fn spacer() -> Self {
         let mut row = Self::new(Label::Empty);
         row.spacer = true;
+        row
+    }
+
+    /// A caption over the rows after it (a group's name in a picker's list): `label` in the caption role and
+    /// `text.muted` at the row's start, a row high. Like a spacer it senses nothing and takes no lead; its AccessKit
+    /// node is a heading. Mark its position `ItemSource::is_section` so keys and clicks skip it.
+    pub fn heading(label: impl Into<Label>) -> Self {
+        let mut row = Self::new(label);
+        row.heading = true;
         row
     }
 

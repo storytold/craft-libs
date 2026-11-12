@@ -8,7 +8,8 @@ use craft_theme::Srgba;
 /// The label of a separator, which has none.
 static NO_LABEL: Label = Label::Empty;
 
-/// A row of entries: an item that reports its value when picked, or a separator between groups of items.
+/// A row of entries: an item that reports its value when picked, a heading over a group of items, or a separator
+/// between groups of items.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry<T> {
     row: Row<T>,
@@ -17,6 +18,7 @@ pub struct Entry<T> {
 #[derive(Clone, Debug, PartialEq)]
 enum Row<T> {
     Item(Item<T>),
+    Heading(Label),
     Separator,
 }
 
@@ -42,6 +44,12 @@ impl<T> Entry<T> {
         Entry { row: Row::Separator }
     }
 
+    /// A caption over the entries after it, up to the next heading or separator, that names their group for assistive
+    /// technology too. Like a separator it takes no pick and no lead, and steps and type-ahead pass over it.
+    pub fn heading(label: impl Into<Label>) -> Self {
+        Entry { row: Row::Heading(label.into()) }
+    }
+
     /// An icon before the label. A separator has none.
     #[must_use]
     pub fn icon(mut self, icon: impl Into<IconSpec<'static>>) -> Self {
@@ -55,6 +63,13 @@ impl<T> Entry<T> {
     #[must_use]
     pub fn swatch(self, color: Srgba) -> Self {
         self.icon(IconSpec::swatch(color))
+    }
+
+    /// The empty swatch of a colour the theme decides, in the icon's place, so the label lines up with the labels of
+    /// entries that have swatches. A separator has none.
+    #[must_use]
+    pub fn empty_swatch(self) -> Self {
+        self.icon(IconSpec::empty_swatch())
     }
 
     /// Whether the entry can be picked; a disabled entry shows dimmed and never takes the lead.
@@ -97,18 +112,19 @@ impl<T> Entry<T> {
         self
     }
 
-    /// The value a pick reports; `None` for a separator.
+    /// The value a pick reports; `None` for a heading or a separator.
     pub fn value(&self) -> Option<&T> {
         match &self.row {
             Row::Item(item) => Some(&item.value),
-            Row::Separator => None,
+            Row::Heading(_) | Row::Separator => None,
         }
     }
 
-    /// The label; empty for a separator.
+    /// The label: a heading's caption; empty for a separator.
     pub fn label(&self) -> &Label {
         match &self.row {
             Row::Item(item) => &item.label,
+            Row::Heading(label) => label,
             Row::Separator => &NO_LABEL,
         }
     }
@@ -117,7 +133,7 @@ impl<T> Entry<T> {
     pub fn icon_spec(&self) -> Option<&IconSpec<'static>> {
         match &self.row {
             Row::Item(item) => item.icon.as_ref(),
-            Row::Separator => None,
+            Row::Heading(_) | Row::Separator => None,
         }
     }
 
@@ -147,6 +163,16 @@ impl<T> Entry<T> {
     /// Whether the entry is a separator.
     pub fn is_separator(&self) -> bool {
         matches!(self.row, Row::Separator)
+    }
+
+    /// Whether the entry is a heading.
+    pub fn is_heading(&self) -> bool {
+        matches!(self.row, Row::Heading(_))
+    }
+
+    /// Whether the entry is an item, which reports a value: neither a heading nor a separator.
+    pub fn is_item(&self) -> bool {
+        matches!(self.row, Row::Item(_))
     }
 }
 

@@ -90,7 +90,7 @@ impl<'a> ComboBox<'a> {
     /// Whether any option's label matches `query`.
     fn matches_any(&self, cx: &Cx<'_, Self>, query: &str) -> bool {
         let matcher = Matcher::new(&cx.env.folder(), query);
-        self.options.iter().filter(|option| !option.is_separator()).any(|option| matcher.score(cx.env.resolve(option.label()).as_str()).is_some())
+        self.options.iter().filter(|option| option.is_item()).any(|option| matcher.score(cx.env.resolve(option.label()).as_str()).is_some())
     }
 
     /// The option whose text steps from the field's text in the direction of the move, over the stepped options.

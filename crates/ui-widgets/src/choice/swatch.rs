@@ -7,7 +7,7 @@ use crate::contract::{
     Access, Activation, Common, Component, Cx, DisabledLook, GroupHandle, MeasureCx, Meta as _, Outcome, PaintUi, Pointer as _, Props as _, Role,
     Styled as _, WordSetCx as _,
 };
-use crate::primitives::{Checker, ContentPainterCx, Draw, PaintShape, StrokeWidth, glyph};
+use crate::primitives::{ContentPainterCx, Draw, PaintShape, StrokeWidth};
 use crate::runtime::requests::ColorRequest;
 use crate::style::{ComponentStyle, DataColor, Flags, FocusLook, State, StateMix, StateSet, StyleColor, StyleCx, UiTokens, resolve_style};
 use craft_behavior::{Metrics, Mixed, Sense, Value};
@@ -58,10 +58,6 @@ pub struct SwatchStyle {
     ring: Stateful<StyleColor>,
     /// The thin edge just inside the outline of a marked well.
     mark: StyleColor,
-    /// The well of a mixed colour.
-    mixed_fill: StyleColor,
-    /// The dash on a mixed well.
-    mixed_mark: StyleColor,
     /// The checkerboard behind a translucent colour: the colours of its corners and its other cells.
     checker: [Rgba; 2],
     /// The mixed well's colour, which `inner_edge` contrasts with.
@@ -217,8 +213,6 @@ impl<T: Value + 'static> Component for Swatch<T> {
             edge: Stateful::new(rest),
             ring: Stateful::new(clear).on(States::new(accent, accent, accent, accent)),
             mark: cx.color(colors.text.normal),
-            mixed_fill: cx.color(colors.surface.sunken),
-            mixed_mark: cx.color(colors.text.muted),
             checker: [colors.overlay.checker_light, colors.overlay.checker_dark],
             mixed_rgba: colors.surface.sunken,
         }
@@ -287,18 +281,7 @@ impl<T: Value + 'static> Component for Swatch<T> {
 /// of a mixed one), then the outline ring, the mark when `marked`, and the selection ring, in `state`.
 fn paint_face(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, state: &StateSet, color: Mixed<Srgba>, marked: bool) {
     let shape = PaintShape::Rect(well, style.radius);
-    match color.same() {
-        None => {
-            draw.fill(&shape, style.mixed_fill);
-            draw.stroke(&glyph::dash(well), StrokeWidth::Medium, style.mixed_mark);
-        }
-        Some(color) => {
-            if color.a < 1.0 {
-                draw.checker(&Checker::new(), well, style.radius);
-            }
-            draw.data_fill(&shape, DataColor::new(Color32::from(*color)));
-        }
-    }
+    draw.swatch_well(well, style.radius, color.same().copied());
     draw.stroke(&shape, StrokeWidth::Thin, state.resolve(&style.edge));
     if marked {
         let inside = PaintShape::Rect(well.shrink(draw.width(StrokeWidth::Thin)), style.radius);

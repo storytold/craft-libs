@@ -19,12 +19,12 @@ impl<'a, T> EntryRows<'a, T> {
         EntryRows { entries, labels }
     }
 
-    /// The row of the entry at `at`: its label and icon as an option, checked when it is the `chosen` entry, a spacer
-    /// for a separator, the host's dress over the rest.
+    /// The row of the entry at `at`: its label and icon as an option, checked when it is the `chosen` entry, a caption
+    /// for a heading, a spacer for a separator, the host's dress over the rest.
     pub(super) fn row<'r>(&self, at: usize, chosen: Option<usize>, dress: Option<&RowDress<'r, T>>) -> ListRow<'r> {
         let entry = &self.entries[at];
         let Some(value) = entry.value() else {
-            return ListRow::spacer();
+            return if entry.is_heading() { ListRow::heading(self.labels[at].clone()) } else { ListRow::spacer() };
         };
         let row = ListRow::new(self.labels[at].clone()).option().check(chosen == Some(at)).enabled(entry.is_enabled());
         let row = match entry.icon_spec() {
@@ -56,7 +56,7 @@ impl<T> DisplayOrder<usize> for EntryRows<'_, T> {
     }
 
     fn is_section(&self, at: usize) -> bool {
-        self.entries[at].is_separator()
+        !self.entries[at].is_item()
     }
 
     fn enabled(&self, at: usize) -> bool {
@@ -64,7 +64,7 @@ impl<T> DisplayOrder<usize> for EntryRows<'_, T> {
     }
 
     fn text(&self, at: usize) -> Option<Cow<'_, str>> {
-        (!self.entries[at].is_separator()).then(|| Cow::Borrowed(self.labels[at].as_str()))
+        self.entries[at].is_item().then(|| Cow::Borrowed(self.labels[at].as_str()))
     }
 }
 

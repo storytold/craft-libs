@@ -153,7 +153,7 @@ impl<T: Value + 'static> Component for Select<'_, T> {
     /// The widest face of an entry, the placeholder and the mixed word, so the field keeps its size whichever is shown.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let mixed = cx.words::<PickerWords>().mixed.clone();
-        let entries = self.entries.iter().filter(|entry| !entry.is_separator()).map(Entry::label);
+        let entries = self.entries.iter().filter(|entry| entry.is_item()).map(Entry::label);
         let texts = entries.chain(self.placeholder.as_ref()).chain(std::iter::once(&mixed));
         texts.map(|text| cx.face(SelectFace::new(cx.env.resolve(text)))).fold(Vec2::ZERO, Vec2::max)
     }
@@ -185,7 +185,9 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         }
         let held = self.position(cx.value());
         while let Some(text) = cx.intents().take_text() {
-            let labels: Vec<Label> = self.entries.iter().map(|entry| cx.env.resolve(entry.label())).collect();
+            // Type-ahead passes over headings: their captions name no entry.
+            let labels: Vec<Label> =
+                self.entries.iter().map(|entry| if entry.is_item() { cx.env.resolve(entry.label()) } else { Label::Empty }).collect();
             let typed = text.to_lowercase();
             let found = TypeAhead::pick(&typed, held, labels.len(), |at| Cow::Borrowed(labels[at].as_str()));
             if let Some(value) = found.filter(|&at| self.entries[at].is_enabled()).and_then(|at| self.entries[at].value()) {

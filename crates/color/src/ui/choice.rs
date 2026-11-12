@@ -138,9 +138,10 @@ impl<'a> ColorChoice<'a> {
             ChosenColor::Custom => None,
         };
         let start = self.custom.or(chosen_color).unwrap_or(Srgba::rgb(0.0, 0.0, 0.0));
+        // A colour the theme decides keeps its swatch's place as the empty swatch, so the labels line up.
         let swatch = |entry: Entry<Row>, color: Option<Srgba>| match color {
             Some(color) => entry.swatch(color),
-            None => entry,
+            None => entry.empty_swatch(),
         };
         let mut entries: Vec<Entry<Row>> =
             self.named.iter().map(|named| swatch(Entry::new(Row::Named(named.id.clone()), named.label.clone()), named.color)).collect();

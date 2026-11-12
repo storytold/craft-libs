@@ -8,6 +8,7 @@ use super::text::{TextEnv, TextLayout, TextRun};
 use crate::fonts::stack_facts;
 use crate::style::{Corners, DataColor, Ink, StyleColor, SurfaceKind, SurfaceStyle, TypeRole, UiTokens, ink_color, rule_look, surface_style};
 use craft_i18n::Direction;
+use craft_theme::Srgba;
 use egui::epaint::{CircleShape, RectShape};
 use egui::{Color32, CornerRadius, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, TextureId, Vec2};
 use std::cell::RefCell;
@@ -275,10 +276,10 @@ impl<'a> Draw<'a> {
     pub fn icon(&self, rect: Rect, icon: &super::IconSpec<'_>) {
         if let super::IconSource::Swatch(color) = &icon.source {
             let side = rect.width().min(rect.height());
-            let shape = PaintShape::Rect(Rect::from_center_size(rect.center(), Vec2::splat(side)), CornerRadius::ZERO);
+            let well = Rect::from_center_size(rect.center(), Vec2::splat(side));
             let edge = icon.color.map_or_else(|| ink_color(self.env.tokens, icon.ink), StyleColor::egui);
-            self.data_fill(&shape, DataColor::new(Color32::from(*color)));
-            self.paint(&shape, None, Some(Stroke::new(self.width(StrokeWidth::Thin), edge)));
+            self.swatch_well(well, CornerRadius::ZERO, *color);
+            self.paint(&PaintShape::Rect(well, CornerRadius::ZERO), None, Some(Stroke::new(self.width(StrokeWidth::Thin), edge)));
             return;
         }
         if let super::IconSource::Initial(letter) = icon.source {
@@ -388,6 +389,27 @@ impl<'a> Draw<'a> {
             self.data_fill(&PaintShape::Rect(rect, radius), DataColor::new(Color32::TRANSPARENT));
         } else {
             self.painter.add(checker.shape(self.painter.ctx(), self.env.tokens, super::CheckerArea::Rect(rect, radius), rect.min));
+        }
+    }
+
+    /// Paints the well of a colour swatch over `well` with corners `radius`: the colour, over a checkerboard where it is
+    /// translucent, or for `None` (no colour of its own, or a mixed one) the empty well, `surface.sunken` with a
+    /// `text.muted` dash. `Swatch` and swatch icons paint their wells with it and add their own edges.
+    pub fn swatch_well(&self, well: Rect, radius: CornerRadius, color: Option<Srgba>) {
+        let shape = PaintShape::Rect(well, radius);
+        match color {
+            None => {
+                let colors = &self.env.tokens.color;
+                self.paint(&shape, Some(crate::style::rgba_color(colors.surface.sunken)), None);
+                let dash = Stroke::new(self.width(StrokeWidth::Medium), crate::style::rgba_color(colors.text.muted));
+                self.paint(&super::glyph::dash(well), None, Some(dash));
+            }
+            Some(color) => {
+                if color.a < 1.0 {
+                    self.checker(&super::Checker::new(), well, radius);
+                }
+                self.data_fill(&shape, DataColor::new(Color32::from(color)));
+            }
         }
     }
 

@@ -159,6 +159,7 @@ pub struct MenuItem<'a> {
     common: Common,
     command_ref: Option<CommandRef>,
     submenu: bool,
+    heading: bool,
     /// An icon before the label.
     #[prop(into)]
     icon: Option<IconSpec<'a>>,
@@ -201,6 +202,7 @@ impl<'a> MenuItem<'a> {
             common: Common::new(),
             command_ref: None,
             submenu: false,
+            heading: false,
             icon: None,
             check: None,
             radio_mark: None,
@@ -230,6 +232,17 @@ impl<'a> MenuItem<'a> {
     /// A row that opens a submenu, with an arrow at its end.
     pub fn submenu(label: impl Into<Label>) -> Self {
         MenuItem { submenu: true, ..MenuItem::new(label) }
+    }
+
+    /// A caption over the rows after it, in the detail's look, its text starting where the row labels start. It is no
+    /// row: it senses nothing, takes no focus and no mnemonic, and its AccessKit node is a heading.
+    pub fn heading(label: impl Into<Label>) -> Self {
+        MenuItem { heading: true, ..MenuItem::new(label) }
+    }
+
+    /// The look of the label: a heading's is the detail's.
+    fn label_look<'s>(&self, style: &'s MenuItemStyle) -> &'s TextLook {
+        if self.heading { &style.detail } else { &style.text }
     }
 
     /// The icon a bound command names, when it names one with a static name.
@@ -314,7 +327,7 @@ impl<'a> MenuItem<'a> {
 
 impl Component for MenuItem<'_> {
     const ROLE: Role = Role::MENU_ITEM;
-    const ALT_ROLES: &'static [Role] = &[Role::MENU_ITEM_CHECK_BOX, Role::MENU_ITEM_RADIO];
+    const ALT_ROLES: &'static [Role] = &[Role::MENU_ITEM_CHECK_BOX, Role::MENU_ITEM_RADIO, Role::HEADING];
     const OVERLAYS: bool = false;
     const KEYS: crate::runtime::focus::KeyUse = crate::runtime::focus::KeyUse::of(crate::contract::Input::Pointer).with_moves();
     type Style = MenuItemStyle;
@@ -354,11 +367,13 @@ impl Component for MenuItem<'_> {
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let level = cx.env.get::<MenuLevel>();
         // The measuring run of the menu body registers the rows, so the real run's letters come from this pass's rows.
-        self.register(cx.ui.ctx(), &level, cx.id, cx.resolved.label, cx.resolved.enabled);
+        if !self.heading {
+            self.register(cx.ui.ctx(), &level, cx.id, cx.resolved.label, cx.resolved.enabled);
+        }
         let columns = self.columns(cx, &level);
         let detail = self.detail_size(cx);
         let text = mnemonic::marked(cx.resolved.label).0;
-        let run = TextRun::new(text.as_str()).role(cx.style.text.role);
+        let run = TextRun::new(text.as_str()).role(self.label_look(cx.style).role);
         let label = if text.is_empty() { Vec2::ZERO } else { cx.layout_at(&run, f32::INFINITY).size() };
         let gap = cx.gap();
         let step = |width: f32, gap: f32| if width > 0.0 { width + gap } else { 0.0 };
@@ -376,14 +391,14 @@ impl Component for MenuItem<'_> {
     }
 
     fn sense(&self) -> Sense {
-        Sense::CLICK | Sense::FOCUS
+        if self.heading { Sense::empty() } else { Sense::CLICK | Sense::FOCUS }
     }
 
     /// The shortcut's slot, which paints as the face of a `Kbd`.
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let level = cx.env.get::<MenuLevel>();
         let columns = self.columns(cx, &level);
-        if columns.trail == 0.0 || self.submenu {
+        if columns.trail == 0.0 || self.submenu || self.heading {
             return;
         }
         let rtl = cx.flow.is_rtl();
@@ -394,6 +409,9 @@ impl Component for MenuItem<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if self.heading {
+            return;
+        }
         cx.join_roving();
         let ctx = cx.core.ctx.clone();
         let level = cx.env.get::<MenuLevel>();
@@ -526,7 +544,8 @@ impl Component for MenuItem<'_> {
             draw.icon(centred(slot), &icon);
         }
         let mnemonic = if level.keyboard() || cx.modifiers().alt { level.mnemonic_of(cx.id).map(|(_, at)| at) } else { None };
-        let run = TextRun::mnemonic(text.as_str(), mnemonic).elide().role(cx.style.text.role).color(cx.resolve(&cx.style.text.color));
+        let look = self.label_look(cx.style);
+        let run = TextRun::mnemonic(text.as_str(), mnemonic).elide().role(look.role).color(cx.resolve(&look.color));
         let layout = draw.layout(&run, placed.label.width());
         let size = layout.size();
         let x = if rtl { placed.label.max.x - size.x } else { placed.label.min.x };
@@ -552,6 +571,10 @@ impl Component for MenuItem<'_> {
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let level = cx.env.get::<MenuLevel>();
         access.name(Name::Text(mnemonic::marked(cx.resolved.label).0));
+        if self.heading {
+            access.role(Role::HEADING);
+            return;
+        }
         match self.mark(cx.command.as_deref(), &level) {
             Some(Mark::Radio(_)) => {
                 access.role(Role::MENU_ITEM_RADIO);

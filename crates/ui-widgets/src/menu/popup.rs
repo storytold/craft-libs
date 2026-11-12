@@ -89,7 +89,8 @@ pub fn layer(submenu: bool) -> Overlay {
     base.dismiss(Dismiss::new().outside(Outside::Absorb).on_activate(true)).focus(FocusPolicy::MENU.initial(Initial::Default))
 }
 
-/// Shows one row per entry, a rule for a separator, and returns the index of the entry that ran. In a value menu
+/// Shows one row per entry, a caption for a heading, a rule for a separator, and returns the index of the entry that
+/// ran. In a value menu
 /// ([`Menu::values`]) every row is a radio item and the checked entry carries the mark; elsewhere a checked entry
 /// carries a check mark.
 #[doc(hidden)]
@@ -99,6 +100,10 @@ pub fn entry_rows<T>(ui: &mut Ui, entries: &[Entry<T>]) -> Option<usize> {
     for (at, entry) in entries.iter().enumerate() {
         if entry.is_separator() {
             Divider::horizontal().show(ui);
+            continue;
+        }
+        if entry.is_heading() {
+            MenuItem::heading(entry.label().clone()).show(ui);
             continue;
         }
         let mut row = MenuItem::new(entry.label().clone()).enabled(entry.is_enabled()).entry_checked(entry.is_checked());

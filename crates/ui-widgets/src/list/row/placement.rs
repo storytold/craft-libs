@@ -24,7 +24,7 @@ const MIN_LABEL_HEIGHTS: f32 = 3.0;
 pub(super) struct Sizes {
     pub(super) row: f32,
     pub(super) icon: f32,
-    pad: f32,
+    pub(super) pad: f32,
     pub(super) gap: f32,
     trailing_pad: f32,
     pub(super) min_label: f32,
