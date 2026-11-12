@@ -53,7 +53,8 @@ for line in &doc.warnings { /* a part designmap.xml lists and the package lacks 
 | `xml.max_depth` | 256 | `Error::Part` |
 | `xml.max_nodes`, `xml.max_attrs_total` (one part) | 8,000,000 and 32,000,000 | `Error::Part` |
 
-Sizes are checked against what a part really expands to, not what the archive declares.
+The ZIP layer is craft-zip: the declared entry count is checked before the archive is indexed, and
+sizes are checked against what a part really expands to, not what the archive declares.
 
 ## Writing
 
