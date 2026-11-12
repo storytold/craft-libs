@@ -25,8 +25,8 @@ impl ListRow<'_> {
             let Some(slot) = slot else { continue };
             let shape = Rect::from_center_size(slot.center(), side);
             match &mut trailing.item {
-                TrailingItem::Text { text, .. } => {
-                    ui.draw().text(*slot, &trailing_run(text));
+                TrailingItem::Text { text, strong, .. } => {
+                    ui.draw().text(*slot, &trailing_run(text, *strong));
                 }
                 TrailingItem::Icon { icon, .. } => {
                     let mut icon = icon.clone();

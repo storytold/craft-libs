@@ -90,8 +90,9 @@ pub(in crate::list) struct Hosted<'a> {
 
 /// What a trailing item is.
 pub(in crate::list) enum TrailingItem<'a> {
-    /// A caption-role text as wide as it measures; a short mark carries the `name` it stands for, its tooltip.
-    Text { text: Label, name: Option<Label> },
+    /// A caption-role text as wide as it measures, semibold when `strong`; a short mark carries the `name` it stands
+    /// for, its tooltip.
+    Text { text: Label, name: Option<Label>, strong: bool },
     /// An icon of the row's icon size, named for the screen reader and the tooltip.
     Icon { icon: IconSpec<'static>, name: Label },
     /// A pressable face of the row's icon size; a `revealed` one shows only on a hovered or selected row, while it has
@@ -109,6 +110,7 @@ pub(in crate::list) struct Trailing<'a> {
 }
 
 /// The run of a trailing text.
-pub(super) fn trailing_run(text: &Label) -> TextRun<'_> {
-    TextRun::spans(vec![Span::new(text.as_str()).muted()]).role(TypeRole::Caption)
+pub(super) fn trailing_run(text: &Label, strong: bool) -> TextRun<'_> {
+    let span = Span::new(text.as_str()).muted();
+    TextRun::spans(vec![if strong { span.strong() } else { span }]).role(TypeRole::Caption)
 }

@@ -73,12 +73,14 @@ pub struct Span<'a> {
     pub highlight: bool,
     /// Underlined in the span's colour, `stroke.thin` wide, along the bottom of the line box.
     pub underline: bool,
+    /// The role's semibold face, at the role's size.
+    pub strong: bool,
 }
 
 impl<'a> Span<'a> {
     /// A plain span.
     pub fn new(text: impl Into<Cow<'a, str>>) -> Self {
-        Span { text: text.into(), italic: false, tabular: false, mono: false, muted: false, shortcut: false, highlight: false, underline: false }
+        Span { text: text.into(), italic: false, tabular: false, mono: false, muted: false, shortcut: false, highlight: false, underline: false, strong: false }
     }
 
     /// Italic.
@@ -120,6 +122,12 @@ impl<'a> Span<'a> {
     /// Underlined: a link, or the mnemonic letter of a menu title.
     pub fn underline(mut self) -> Self {
         self.underline = true;
+        self
+    }
+
+    /// The role's semibold face: a short mark that stands out among the row's other text, such as a layer's `fx`.
+    pub fn strong(mut self) -> Self {
+        self.strong = true;
         self
     }
 }
@@ -318,7 +326,7 @@ impl TextRun<'_> {
                 base
             };
             let background = if span.highlight { to_color(env.tokens.color.state.r#match) } else { Color32::TRANSPARENT };
-            let mut format = span_format(env.tokens, env.fonts, self.role, span.mono, color, span.italic, background);
+            let mut format = span_format(env.tokens, env.fonts, self.role, span, color, background);
             if span.underline {
                 format.underline = egui::Stroke::new(env.tokens.stroke.thin, color);
             }

@@ -248,7 +248,7 @@ impl ListRow<'_> {
     /// icons and parts, and a hosted component's measured width.
     pub(super) fn widths(&self, sizes: &Sizes, text_width: &dyn Fn(&TextRun<'_>) -> f32) -> Widths {
         let width = |item: &TrailingItem| match item {
-            TrailingItem::Text { text, .. } => text_width(&trailing_run(text)),
+            TrailingItem::Text { text, strong, .. } => text_width(&trailing_run(text, *strong)),
             TrailingItem::Icon { .. } | TrailingItem::Part { .. } => sizes.icon,
             TrailingItem::Hosted(hosted) => hosted.size.map_or(0.0, |size| size.ideal.x),
         };

@@ -57,8 +57,15 @@ impl UiTokens {
     /// stack of `facts` has one, and in the proportional family otherwise, so text never lands in a family with no
     /// faces.
     pub(crate) fn font(&self, facts: StackFacts, role: TypeRole, mono: bool) -> FontId {
+        self.font_weighted(facts, role, mono, false)
+    }
+
+    /// The font of `role` as [`Self::font`] gives it, in the semibold slot when `strong` and the run is not mono: a
+    /// strong span keeps its role's size.
+    pub(crate) fn font_weighted(&self, facts: StackFacts, role: TypeRole, mono: bool, strong: bool) -> FontId {
         let style = if mono { self.typography.mono } else { self.typography.get(role) };
-        let family = match style.font {
+        let slot = if strong && style.font == craft_theme::FontSlot::Ui { craft_theme::FontSlot::UiSemibold } else { style.font };
+        let family = match slot {
             craft_theme::FontSlot::Mono => FontFamily::Monospace,
             craft_theme::FontSlot::Ui => FontFamily::Proportional,
             craft_theme::FontSlot::UiSemibold => {

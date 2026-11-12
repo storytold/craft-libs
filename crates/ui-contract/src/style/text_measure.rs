@@ -4,6 +4,7 @@
 
 use super::tokens::UiTokens;
 use crate::fonts::StackFacts;
+use crate::primitives::Span;
 use crate::runtime::egui::text_layout;
 use craft_i18n::Direction;
 use craft_theme::TypeRole;
@@ -11,17 +12,12 @@ use egui::epaint::text::TextDirection;
 use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{Align, Color32, Context};
 
-/// The format of a span in `role`: its font at the role's size, with the optical size axis where the face has one.
-pub(crate) fn span_format(
-    tokens: &UiTokens,
-    fonts: StackFacts,
-    role: TypeRole,
-    mono: bool,
-    color: Color32,
-    italics: bool,
-    background: Color32,
-) -> TextFormat {
-    let mut format = TextFormat { font_id: tokens.font(fonts, role, mono), color, italics, background, ..TextFormat::default() };
+/// The format of `span` in `role`: its font at the role's size (mono, semibold or italic as the span is), with the
+/// optical size axis where the face has one. The span's text and colour flags are not read.
+pub(crate) fn span_format(tokens: &UiTokens, fonts: StackFacts, role: TypeRole, span: &Span<'_>, color: Color32, background: Color32) -> TextFormat {
+    let (mono, italics) = (span.mono, span.italic);
+    let font_id = tokens.font_weighted(fonts, role, mono, span.strong);
+    let mut format = TextFormat { font_id, color, italics, background, ..TextFormat::default() };
     if let Some(size) = tokens.optical_size(fonts, role, mono) {
         format.coords.push(*b"opsz", size);
     }
@@ -45,6 +41,6 @@ pub(crate) fn paragraph_job(direction: Direction, ltr: bool, wrap: TextWrapping)
 pub(crate) fn line_width(ctx: &Context, tokens: &UiTokens, fonts: StackFacts, direction: Direction, role: TypeRole, text: &str) -> f32 {
     let wrap = TextWrapping { max_width: f32::INFINITY, max_rows: usize::MAX, break_anywhere: false, ..TextWrapping::default() };
     let mut job = paragraph_job(direction, false, wrap);
-    job.append(text, 0.0, span_format(tokens, fonts, role, false, Color32::PLACEHOLDER, false, Color32::TRANSPARENT));
+    job.append(text, 0.0, span_format(tokens, fonts, role, &Span::new(""), Color32::PLACEHOLDER, Color32::TRANSPARENT));
     text_layout::layout(ctx, job).size().x
 }
