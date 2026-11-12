@@ -5,7 +5,7 @@ use craft_behavior::kurbo;
 use craft_pages::layout::{Fit, LayoutOptions};
 use craft_pages::ui::fixtures::{DemoPages, PAPER};
 use craft_pages::ui::{PagePreview, PageView, PageViewState, ReadingState, ReadingView};
-use craft_ui::contract::Show as _;
+use craft_ui::contract::{Role, Show as _};
 
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, pos2, vec2};
@@ -92,7 +92,7 @@ fn wheel_gathered_past_the_bottom_is_forgotten_by_a_pass_without_wheel_input() {
 }
 
 #[trial]
-fn the_preview_steps_with_the_arrow_and_page_keys_from_a_footer_button() {
+fn the_preview_steps_with_the_arrow_and_page_keys_from_a_button_of_its_row() {
     let at = Rc::new(RefCell::new(1_usize));
     let kept = Rc::clone(&at);
     let pages = DemoPages::new(5);
@@ -104,7 +104,7 @@ fn the_preview_steps_with_the_arrow_and_page_keys_from_a_footer_button() {
     fixture.settle();
     fixture.key(Key::Tab, Modifiers::NONE);
     let button = fixture.focused_stop();
-    assert!(button.is_some(), "Tab focuses a footer button");
+    assert!(button.is_some(), "Tab focuses a button of the row");
     fixture.key(Key::ArrowRight, Modifiers::NONE);
     assert_eq!(*at.borrow(), 2, "Right steps forward");
     fixture.key(Key::PageDown, Modifiers::NONE);
@@ -112,6 +112,36 @@ fn the_preview_steps_with_the_arrow_and_page_keys_from_a_footer_button() {
     fixture.key(Key::ArrowLeft, Modifiers::NONE);
     assert_eq!(*at.borrow(), 2, "Left steps back");
     assert_eq!(fixture.focused_stop(), button, "the keys leave the focus where it was");
+}
+
+/// The page's picture in a preview shown in a room of `room`, and whether Close was reported.
+fn preview_in(room: egui::Vec2, close: bool) -> (egui::Rect, bool) {
+    let closed = Rc::new(RefCell::new(false));
+    let seen = Rc::clone(&closed);
+    let pages = DemoPages::new(3);
+    let mut at = 0_usize;
+    let mut fixture = Fixture::new(move |ui| {
+        if PagePreview::new(&pages, &[0, 1, 2], &mut at, PAPER).show(ui).closed {
+            *seen.borrow_mut() = true;
+        }
+    });
+    fixture.room(room);
+    fixture.settle();
+    let picture = fixture.by_role(Role::IMAGE).first().expect("the page's picture is shown").rect;
+    if close {
+        let button = fixture.by_label("Close").expect("the row has Close");
+        fixture.click(&button).settle();
+    }
+    let closed = *closed.borrow();
+    (picture, closed)
+}
+
+#[trial]
+fn the_preview_page_grows_with_the_window_and_close_reports_closed() {
+    let (small, _) = preview_in(vec2(600.0, 400.0), false);
+    let (large, closed) = preview_in(vec2(1200.0, 900.0), true);
+    assert!(large.height() > small.height() * 1.5, "the page takes the window: {small:?} then {large:?}");
+    assert!(closed, "Close reports closed");
 }
 
 /// Tabs to the view's canvas.
