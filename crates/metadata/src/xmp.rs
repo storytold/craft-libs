@@ -442,9 +442,8 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
         return;
     }
     if p.attr("rdf:parseType") == Some("Resource") {
-        for c in &p.children {
-            collect_property(c, &struct_prefix, props, budget);
-        }
+        // a Resource struct carries fields as attributes as well as child elements, like a nested Description
+        collect_description(p, &struct_prefix, props, budget);
         return;
     }
     if let Some(d) = p.children.iter().find(|c| c.name == "rdf:Description") {
