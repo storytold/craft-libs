@@ -192,10 +192,12 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
 /// egui's input, where the app reads its own keys, nor the app's shortcuts. A widget or popup holds the presses its
 /// routing `taken`, the keys its filter keeps from the key stage, and the presses whose text it took (`typed`: the
 /// type-ahead of a list). A text field holds the presses whose text it took, its typing; the egui text widget behind it
-/// reads the text, not the press. A menu or a recorder holds every press.
+/// reads the text, not the press, and the editing keys, which stay in egui's input. A menu or a recorder holds every
+/// press, except that a text field in a menu (a menu's search field) keeps the text field's rule.
 fn holds_press(owner: KeyOwner, target: Option<&StopRec>, press: &Press, taken: bool, typed: bool) -> bool {
     let Some(keys) = target.map(|rec| &rec.stop.keys) else { return false };
-    if keeps_every_key(owner) {
+    let text = keys.owner == OwnerClass::Text;
+    if keeps_every_key(owner) && !text {
         return true;
     }
     let open = owner != KeyOwner::Blocked;
@@ -206,8 +208,7 @@ fn holds_press(owner: KeyOwner, target: Option<&StopRec>, press: &Press, taken: 
         focus::KeepKeys::BlockArrows => matches!(press.key, Key::Left | Key::Right | Key::Up | Key::Down),
         _ => false,
     };
-    let text = open && keys.owner == OwnerClass::Text;
-    (widget && (taken || typed || kept)) || (text && typed)
+    (widget && (taken || typed || kept)) || (open && text && typed)
 }
 
 /// `Menu` and `Recorder` keep every key (9.3): no press of theirs reaches egui's input or the app's shortcuts.

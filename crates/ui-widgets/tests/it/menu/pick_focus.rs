@@ -159,3 +159,24 @@ fn opening_help_focuses_its_search_and_down_then_enter_runs_the_first_match() {
     assert!(fixture.by_label("About").is_none(), "and the menu closes");
     assert_eq!(fixture.focused_stop().map(|(id, _)| id), target.get(), "with the focus back on the stop that held it");
 }
+
+/// The Help search edits as any text field does inside the open menu: Backspace removes a letter, and Left moves the
+/// caret, so the next letter lands before the last one.
+#[trial]
+fn the_help_search_takes_its_editing_keys() {
+    let (mut fixture, _, _) = scoped_rig();
+    let help = fixture.by_label("Help").expect("the Help title");
+    fixture.click(&help);
+    fixture.settle();
+    fixture.type_text("tog");
+    fixture.settle();
+    let field_reads = |fixture: &Fixture, text: &str| fixture.texts().iter().any(|run| run.text == text);
+    fixture.key(egui::Key::Backspace, egui::Modifiers::NONE);
+    fixture.settle();
+    assert!(field_reads(&fixture, "to"), "Backspace removes the last letter");
+    fixture.key(egui::Key::ArrowLeft, egui::Modifiers::NONE);
+    fixture.settle();
+    fixture.type_text("x");
+    fixture.settle();
+    assert!(field_reads(&fixture, "txo"), "Left moves the caret before the last letter");
+}
