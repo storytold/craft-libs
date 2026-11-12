@@ -15,6 +15,7 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 
 | File | Change |
 |---|---|
+| `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
 | `src/topology.rs` | With `Correctness::GoodEnough`, `Topology::contours` builds paths only for the output segments on the boundary of the result instead of for every output segment, which it then did not read. The contours it returns are unchanged. The `contour_positions_cover_only_boundary_segments` and `contours_match_contours_from_all_positions` tests cover the change. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
