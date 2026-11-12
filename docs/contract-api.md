@@ -1270,7 +1270,7 @@ The one-press-per-pass rule: a pass carries at most one press, as its last point
 - `craft_behavior::overlay::Align`: `pub enum Align { Start, Center, End }`. How the overlay lines up with the anchor along the edge it hangs from.
 - `craft_behavior::overlay::MinWidth`: `pub enum MinWidth { None, Anchor, Points(f32) }`. The narrowest an overlay may be.
   - `pub fn points(self, anchor_width: f32) -> f32`. The width in points, given the anchor's width.
-- `craft_behavior::overlay::PlaceRequest`: `pub struct PlaceRequest { pub anchor: Rect, pub size: Vec2, pub side: Side, pub align: Align, pub rtl: bool, pub gap: f32, pub min_width: MinWidth, pub bounds: Rect, pub kept: Option<Side> }`. What `place` reads.
+- `craft_behavior::overlay::PlaceRequest`: `pub struct PlaceRequest { pub anchor: Rect, pub size: Vec2, pub side: Side, pub align: Align, pub rtl: bool, pub gap: f32, pub min_width: MinWidth, pub bounds: Rect, pub kept: Option<Side>, pub flips_across: bool }`. What `place` reads.
   - `pub const fn new(anchor: Rect, size: Vec2, bounds: Rect) -> Self`. A request for `size` around `anchor` inside `bounds`: below, aligned to the start, no gap, free width.
   - `pub const fn size(mut self, size: Vec2) -> Self`. Sets the content size.
   - `pub const fn side(mut self, side: Side) -> Self`. Sets the preferred side.
@@ -1279,6 +1279,7 @@ The one-press-per-pass rule: a pass carries at most one press, as its last point
   - `pub const fn gap(mut self, gap: f32) -> Self`. Sets the gap.
   - `pub const fn min_width(mut self, min_width: MinWidth) -> Self`. Sets the narrowest width.
   - `pub const fn kept(mut self, side: Option<Side>) -> Self`. Keeps `side` instead of flipping.
+  - `pub const fn flips_across(mut self, on: bool) -> Self`. Lines up with the anchor's other end, beside it, when that fits and the aligned end does not.
 - `craft_behavior::overlay::Placement`: `pub struct Placement { pub rect: Rect, pub side: Side }`. Where `place` put the overlay.
 - `craft_behavior::overlay::Side`: `pub enum Side { Below, Above, Start, End }`. The side of the anchor an overlay prefers. `Start` and `End` follow the reading direction.
 - `craft_behavior::overlay::place`: `pub fn place(request: &PlaceRequest) -> Placement`. Places an overlay: the preferred side unless the other has more room and the content does not fit, shifted to
@@ -2156,7 +2157,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn popover() -> Overlay`. A popover: a popup anchored below, taking focus in. It closes when the focus moves out of it.
   - `pub fn dropdown() -> Overlay`. A dropdown list: from its content, at least as wide as its anchor and capped, focus stays on the anchor. It
   - `pub fn menu() -> Overlay`. A menu: a popup the arrow keys move through. A press outside closes it and goes no further.
-  - `pub fn submenu() -> Overlay`. A submenu: beside its parent entry.
+  - `pub fn submenu() -> Overlay`. A submenu: beside its parent entry, opening upward from a low entry when it fits there and not below.
   - `pub fn tooltip() -> Overlay`. A tooltip: below the control, no focus, never takes input.
   - `pub fn dialog() -> Overlay`. A dialog: modal, floating, movable and resizable. `.modeless()` gives rank `Window`.
   - `pub fn modal() -> Overlay`. A modal: centred, content capped.
@@ -2187,6 +2188,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::OverlayUi`: `pub struct OverlayUi<'a> { pub closed: Vec<(Id, CloseReason)> }`. What the `overlay` hook gets: one call per anchored popup of this component, built at step 10 with the open state
   - `pub fn closing(&self, popup: PopupHandle) -> Option<CloseReason>`. Why `popup` closes at the end of this pass, as its `show` decided (its dismissal, or a close its body asked for);
   - `pub fn anchor_part(&self, part: impl Into<PartRef>) -> Anchor`. The anchor at the rect of the toggling part `part` of the owner. The layer's placement mirrors the side and
+  - `pub fn contain_popups_below(&mut self)`. Keeps the popups this component shows from here on, and every popup opened from them, below the component:
   - `pub fn show<R>(&mut self, popup: PopupHandle, overlay: Overlay, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Option<R>`. Shows the popup while its handle is open, on a popup surface, inside `POPUP_PAD`; the content is a body closure.
 - `craft_ui::contract::Overlays`: `pub trait Overlays`. The `Cx` trait that registers popups.
   - `fn popup(&mut self, name: &'static str) -> PopupHandle`. Registers the popup `name` of this component for this pass and returns its handle. A component registers every
@@ -2303,7 +2305,9 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `fn keep_view_open(&mut self, canvas: Id)`. Keeps the view of `canvas` (the canvas component's id) usable under the modal layer: the wheel scrolls and
 - `craft_ui::contract::Savable`: re-export of `craft_ui::runtime::memory::Savable`.
 - `craft_ui::contract::SaveKey`: re-export of `craft_ui::runtime::memory::SaveKey`.
-- `craft_ui::contract::Scroll`: `pub struct Scroll { pub axes: ScrollAxes, pub anchor: ScrollAnchor, pub notch: Notch }`. A scrolling body.
+- `craft_ui::contract::Scroll`: `pub struct Scroll { pub axes: ScrollAxes, pub anchor: ScrollAnchor, pub notch: Notch, pub indicator: ScrollIndicator }`. A scrolling body.
+  - `pub const fn strips(mut self) -> Scroll`. Shows the overflow along y as scroll strips instead of a bar.
+  - `pub const fn has_strips(&self) -> bool`. Whether the overflow along y shows as scroll strips.
   - `pub const fn vertical() -> Scroll`. Scrolls along y.
   - `pub const fn horizontal() -> Scroll`. Scrolls along x.
   - `pub const fn both() -> Scroll`. Scrolls along both axes.
@@ -2313,6 +2317,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const fn vertical_on(&self) -> bool`. Whether the y axis scrolls.
 - `craft_ui::contract::ScrollAnchor`: `pub enum ScrollAnchor { Start, End }`. Which end of the content a scroll region stays at when the content grows.
 - `craft_ui::contract::ScrollAxes`: `pub enum ScrollAxes { Vertical, Horizontal, Both }`. The axes a body scrolls on.
+- `craft_ui::contract::ScrollIndicator`: `pub enum ScrollIndicator { Bar, Strips }`. How a scrolling body shows that its content overflows.
 - `craft_ui::contract::Scrub`: `pub struct Scrub<V>`. How a drag changes a control's value: the drag maths over the control's number, and the sources a drag starts on
   - `pub fn new(drag: ValueDrag, read: impl Fn(&V) -> f64 + Send + Sync + 'static, write: impl Fn(f64) -> V + Send + Sync + 'static) -> Self`. A scrub by `drag`, reading the number a value holds with `read` and making a value of a number with `write`.
   - `pub fn by_label(mut self) -> Self`. A drag on the control's side label scrubs, with or without the focus in the control; the label senses the
@@ -2427,7 +2432,7 @@ Chapter 15: the `Overlay` data, its presets, popup handles, `OverlayUi` and the 
   - `pub fn popover() -> Overlay`. A popover: a popup anchored below, taking focus in. It closes when the focus moves out of it.
   - `pub fn dropdown() -> Overlay`. A dropdown list: from its content, at least as wide as its anchor and capped, focus stays on the anchor. It
   - `pub fn menu() -> Overlay`. A menu: a popup the arrow keys move through. A press outside closes it and goes no further.
-  - `pub fn submenu() -> Overlay`. A submenu: beside its parent entry.
+  - `pub fn submenu() -> Overlay`. A submenu: beside its parent entry, opening upward from a low entry when it fits there and not below.
   - `pub fn tooltip() -> Overlay`. A tooltip: below the control, no focus, never takes input.
   - `pub fn dialog() -> Overlay`. A dialog: modal, floating, movable and resizable. `.modeless()` gives rank `Window`.
   - `pub fn modal() -> Overlay`. A modal: centred, content capped.
@@ -2459,11 +2464,13 @@ Chapter 15: the `Overlay` data, its presets, popup handles, `OverlayUi` and the 
 - `craft_ui::contract::overlay::OverlayUi`: `pub struct OverlayUi<'a> { pub closed: Vec<(Id, CloseReason)> }`. What the `overlay` hook gets: one call per anchored popup of this component, built at step 10 with the open state
   - `pub fn closing(&self, popup: PopupHandle) -> Option<CloseReason>`. Why `popup` closes at the end of this pass, as its `show` decided (its dismissal, or a close its body asked for);
   - `pub fn anchor_part(&self, part: impl Into<PartRef>) -> Anchor`. The anchor at the rect of the toggling part `part` of the owner. The layer's placement mirrors the side and
+  - `pub fn contain_popups_below(&mut self)`. Keeps the popups this component shows from here on, and every popup opened from them, below the component:
   - `pub fn show<R>(&mut self, popup: PopupHandle, overlay: Overlay, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Option<R>`. Shows the popup while its handle is open, on a popup surface, inside `POPUP_PAD`; the content is a body closure.
 - `craft_ui::contract::overlay::Overlays`: `pub trait Overlays`. The `Cx` trait that registers popups.
   - `fn popup(&mut self, name: &'static str) -> PopupHandle`. Registers the popup `name` of this component for this pass and returns its handle. A component registers every
-- `craft_ui::contract::overlay::Place`: `pub enum Place { Anchored { anchor: Anchor, side: Side, align: Align }, Float(FloatPlace) }`. Where an egui layer sits.
+- `craft_ui::contract::overlay::Place`: `pub enum Place { Anchored { anchor: Anchor, side: Side, align: Align, flips_across: bool }, Float(FloatPlace) }`. Where an egui layer sits.
   - `pub const fn anchored(anchor: Anchor, side: Side, align: Align) -> Self`. An anchored place.
+  - `pub const fn flipping_across(self) -> Self`. The place, beside its anchor, lining up with the anchor's other end when that fits and the aligned end does not.
 - `craft_ui::contract::overlay::PlacementChange`: `pub struct PlacementChange { pub rect: Rect, pub phase: GesturePhase, pub pointer: Option<Pos2>, pub kind: PlacementKind }`. A move or resize of a layer the user made, or of the OS window a viewport mount shows in, reported to
 - `craft_ui::contract::overlay::PlacementKind`: `pub enum PlacementKind { Move, Size(ResizeEdge), Keyboard }`. What kind of gesture a `PlacementChange` reports.
 - `craft_ui::contract::overlay::Popup`: `pub struct Popup`. The open state of a container's layer that has an opener and no binding, driven from the opener's side.
@@ -2481,6 +2488,7 @@ Chapter 15: the `Overlay` data, its presets, popup handles, `OverlayUi` and the 
   - `pub fn changed<C: Component>(self, cx: &mut Cx<'_, C>) -> bool`. Whether a toggle, `open` or `close` queued in this pass leaves the popup's open state different from the
   - `pub fn bind_open<C: Component>(self, cx: &mut Cx<'_, C>, mut open: BindMut<'_, bool>) -> bool`. Binds the popup's open state to `open`: call it in `update`, after the toggles and closes the component
   - `pub fn is_open<C: Component>(self, cx: &mut Cx<'_, C>) -> bool`. Whether the popup is open in this pass: valid from step 8, with the changes queued so far applied.
+- `craft_ui::contract::overlay::PopupRegion`: `pub struct PopupRegion(pub Option<Rect>)`. The screen rect the popups opened in an env are contained in, and the popups opened from those: the menus of a menu
 - `craft_ui::contract::overlay::Resize`: `pub struct Resize { pub grips: bool }`. How the user may resize a layer.
   - `pub const NONE: Resize`. The layer keeps its size.
   - `pub const GRIPS: Resize`. Grips on every edge and corner.
@@ -2742,6 +2750,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn edge(look: &RuleLook, rect: Rect, side: RectSide, pixels_per_point: f32) -> Vec<Shape>`. The line along the `side` edge of `rect`, on the physical pixels just inside it: a row's bottom rule or a
 - `craft_ui::primitives::RuleKind`: `pub enum RuleKind { Divider, Edge, Grid, DropMark }`. Which rule a look is for.
 - `craft_ui::primitives::ScrollBar`: `pub struct ScrollBar`. The scroll bar painter.
+  - `pub fn strip_arrow(strip: Rect, back: bool, color: Color32) -> Shape`. The filled arrow of a scroll strip, centred in `strip`: pointing up for the strip before the view (`back`),
   - `pub fn thumb(min_thumb: f32, track: Rect, axis: Axis, rtl: bool, span: &ScrollSpan) -> Rect`. The thumb inside `track`, a bar along `axis`, for `span`: its length is the shown share of the track, at least
   - `pub fn shapes(look: &ScrollBarLook, track: Rect, axis: Axis, rtl: bool, span: &ScrollSpan, state: &StateSet, pixels_per_point: f32,) -> Vec<Shape>`. The shapes of the bar in `track` along `axis` for `span`, in `state`: the track, a docked bar's rule along the
 - `craft_ui::primitives::Span`: `pub struct Span<'a> { pub text: Cow<'a, str>, pub italic: bool, pub tabular: bool, pub mono: bool, pub muted: bool, pub shortcut: bool, pub highlight: bool, pub underline: bool, pub strong: bool }`. One styled stretch of a run.
