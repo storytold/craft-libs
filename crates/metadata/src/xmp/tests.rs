@@ -21,6 +21,7 @@ fn full() -> Metadata {
         // roundtrip fixture must leave this empty or `roundtrip_all_fields` can't round-trip it.
         regions: Vec::new(),
         focus: None,
+        fuji_recipe: None,
         make: Some("Maker & Sons".into()),
         model: Some("X <1>".into()),
         serial_number: Some("SN1".into()),
@@ -628,4 +629,29 @@ fn the_callers_namespace_is_written_and_read_only_when_passed() {
     // properties without a namespace to put them in are not written
     let orphan = write_xmp_with(&Metadata::default(), &XmpWrite { properties: &[("flag", "pick")], ..Default::default() });
     assert_eq!(orphan, plain);
+}
+
+#[test]
+fn resource_struct_attributes_and_elements_flatten_like_description_fields() {
+    let forms = [
+        r#"<c:Parameters rdf:parseType="Resource" c:ConvertToGrayscale="True"><c:Version>1</c:Version></c:Parameters>"#,
+        r#"<c:Parameters><rdf:Description c:ConvertToGrayscale="True"><c:Version>1</c:Version></rdf:Description></c:Parameters>"#,
+        r#"<c:Parameters rdf:parseType="Resource"><c:ConvertToGrayscale>True</c:ConvertToGrayscale><c:Version>1</c:Version></c:Parameters>"#,
+        r#"<c:Parameters rdf:parseType="Resource" c:ConvertToGrayscale="True" c:Version="1"/>"#,
+    ];
+    let mut previous = None;
+    for form in forms {
+        let xml = format!(
+            r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:c="http://ns.adobe.com/camera-raw-settings/1.0/"><c:Look rdf:parseType="Resource">{form}</c:Look></rdf:Description>"#
+        );
+        let packet = parse_xmp(&xml).unwrap();
+        assert_eq!(packet.properties["crs:Look/crs:Parameters/crs:ConvertToGrayscale"], vec!["True"]);
+        assert_eq!(packet.properties["crs:Look/crs:Parameters/crs:Version"], vec!["1"]);
+        assert!(packet.properties.keys().all(|key| !key.contains("rdf:")));
+        if let Some((properties, values)) = previous {
+            assert_eq!(packet.properties, properties);
+            assert_eq!(packet.values, values);
+        }
+        previous = Some((packet.properties, packet.values));
+    }
 }

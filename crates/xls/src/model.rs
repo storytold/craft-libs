@@ -103,6 +103,75 @@ pub struct Sheet {
     pub print_area: Option<String>,
     /// The sheet's `Print_Titles` name as formula text (`Sheet1!$1:$2`).
     pub print_titles: Option<String>,
+    /// Data validation rules (Dv records), in file order.
+    pub validations: Vec<DataValidation>,
+}
+
+/// What a data validation rule allows ([MS-XLS] 2.4.95 `typOperator`'s sibling `valType`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ValidationType {
+    /// Any value; also the undefined types 8 to 15, which Excel opens as "any value".
+    #[default]
+    Any,
+    Whole,
+    Decimal,
+    List,
+    Date,
+    Time,
+    TextLength,
+    Custom,
+}
+
+/// How a rule compares the value with its formulas. Only whole, decimal, date, time and text
+/// length rules have one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ValidationOperator {
+    #[default]
+    Between,
+    NotBetween,
+    Equal,
+    NotEqual,
+    Greater,
+    Less,
+    GreaterOrEqual,
+    LessOrEqual,
+}
+
+/// The alert shown for a value the rule refuses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ErrorStyle {
+    #[default]
+    Stop,
+    Warning,
+    Information,
+}
+
+/// A data validation rule (Dv, [MS-XLS] 2.4.95), in the terms SpreadsheetML uses for the same
+/// rule (`dataValidation`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DataValidation {
+    /// The ranges it covers. A range over every BIFF8 row (column) is a whole column (row) of
+    /// the 1,048,576 × 16,384 grid, as SpreadsheetML stores it.
+    pub ranges: Vec<Range>,
+    pub kind: ValidationType,
+    /// `Between` for the types without an operator.
+    pub operator: ValidationOperator,
+    /// The first formula as A1 text without `=`, relative references from the top left cell of
+    /// all the ranges. A literal list is quoted, its items separated by commas and each `"`
+    /// doubled (`"Red,Green"`), as SpreadsheetML's `formula1`. Empty for "any value".
+    pub formula1: String,
+    /// The upper bound of `Between` and `NotBetween`.
+    pub formula2: Option<String>,
+    pub allow_blank: bool,
+    /// A list shows its drop-down arrow in the cell.
+    pub in_cell_dropdown: bool,
+    pub prompt_title: String,
+    pub prompt: String,
+    pub show_prompt: bool,
+    pub error_title: String,
+    pub error: String,
+    pub error_style: ErrorStyle,
+    pub show_error: bool,
 }
 
 /// A user-defined name.

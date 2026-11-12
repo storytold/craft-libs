@@ -11,7 +11,9 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+craft-figma-rest = { workspace = true }
 craft-kiwi = { workspace = true }
+kurbo = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 craft-zip = { workspace = true }

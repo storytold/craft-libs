@@ -13,6 +13,9 @@
 //!   builds a [`model::Project`] while reading.
 //! - [`ale`]: Avid Log Exchange clip logs.
 //! - [`edl`]: CMX 3600 edit decision lists.
+//! - [`fcp7`] (feature `xml`): Final Cut Pro 7 XML (`xmeml`).
+//! - [`fcpxml`] (feature `xml`): FCPXML 1.9–1.11.
+//! - [`otio`] (feature `otio`): OpenTimelineIO JSON.
 //! - [`Format`], [`detect_text`], [`decode_text`]: which interchange format a document is.
 //!
 //! No file I/O: documents are text or bytes, and media references are strings. Each format module
@@ -22,12 +25,20 @@
 pub mod ale;
 pub mod build;
 pub mod edl;
+#[cfg(feature = "xml")]
+pub mod fcp7;
+#[cfg(feature = "xml")]
+pub mod fcpxml;
 pub mod fx;
 pub mod model;
+#[cfg(feature = "otio")]
+pub mod otio;
 pub mod path;
 pub mod rate;
 pub mod report;
 pub mod time;
+#[cfg(feature = "xml")]
+mod xml;
 
 pub use build::Imported;
 pub use report::{Level, Report, ReportEntry};
@@ -107,6 +118,13 @@ pub enum Error {
     Other(String),
 }
 
+impl Error {
+    #[cfg_attr(not(any(feature = "xml", feature = "otio")), allow(dead_code))]
+    pub(crate) fn parse(format: Format, message: impl Into<String>) -> Error {
+        Error::Parse { format: format.name(), message: message.into() }
+    }
+}
+
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -127,6 +145,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct ImportOptions<'a> {
     /// Directory relative media paths are resolved against (normally the document's directory).
     pub base_dir: Option<&'a str>,
+    /// Name for a timeline the document leaves unnamed.
+    pub name: Option<&'a str>,
     /// The application's effects and generators (see [`model::Catalog`]; [`fx::Standard`] knows
     /// only what the formats name themselves).
     pub catalog: &'a dyn model::Catalog,
@@ -145,6 +165,29 @@ pub struct ExportOptions<'a> {
     pub catalog: &'a dyn model::Catalog,
     /// See [`ImportOptions::namespace`].
     pub namespace: &'a str,
+    /// `xmeml` version attribute (4 or 5).
+    pub xmeml_version: u32,
+    pub fcpxml_version: FcpxmlVersion,
+}
+
+/// FCPXML document version to write.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum FcpxmlVersion {
+    V1_9,
+    #[default]
+    V1_10,
+    V1_11,
+}
+
+impl FcpxmlVersion {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FcpxmlVersion::V1_9 => "1.9",
+            FcpxmlVersion::V1_10 => "1.10",
+            FcpxmlVersion::V1_11 => "1.11",
+        }
+    }
 }
 
 /// Sniff which text format (EDL, xmeml, FCPXML, OTIO) a document is from its bytes, using the file

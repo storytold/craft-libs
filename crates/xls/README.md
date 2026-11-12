@@ -29,8 +29,12 @@ No third-party implementation was consulted.
 - Merged cells, ColInfo and Row records (width in 1/256 character, height in twips, hidden,
   outline, default format), the default row height, the Window2 display flags.
 - Defined names with their scope, print areas and print titles.
+- Data validation (DVal and Dv records): type, operator, formulas as text (relative references
+  from the top left cell of the rule's ranges, a literal list as `"a,b"`), messages, alert style
+  and flags, in SpreadsheetML's terms. Exactly the DVal's count of rules is read, as Excel does;
+  a rule Excel would refuse is skipped with a warning, and at most 65,536 are kept per sheet.
 
-Not read: charts, pictures, comments, conditional formats, data validation, hyperlinks,
+Not read: charts, pictures, comments, conditional formats, hyperlinks,
 PivotTables, macros. Each is named once in `Read::warnings`. Encrypted workbooks
 (`Error::Encrypted`) and BIFF5 and older (`Error::Biff5`) are refused. There is no writer
 (`craft_xls::testing` builds small fixtures for tests).
