@@ -3,8 +3,8 @@
 use super::words::SectionWords;
 use crate::buttons::{Button, IconButton};
 use crate::contract::{
-    Access, BodyLayout, Common, Component, Container, ContainerProps, Cx, DropMark, DropOperation, DropTarget, NoValue, Outcome, Pad, Pointer as _,
-    PopupKind, Props as _, Role, RowAlign, Show as _, ShowContainer as _, Sizing, TooltipSpec, WordSetCx as _,
+    Access, BodyLayout, Common, Component, Container, ContainerProps, Cx, DropMark, DropOperation, DropTarget, NoValue, Outcome, Pad, PaintUi,
+    Pointer as _, PopupKind, Props as _, Role, RowAlign, Show as _, ShowContainer as _, Sizing, TooltipSpec, WordSetCx as _,
 };
 use crate::layout_components::Row;
 use crate::primitives::IconSpec;
@@ -12,8 +12,8 @@ use crate::runtime::access::Name;
 use crate::runtime::env::{Env, EnvValue, Label};
 use crate::runtime::focus;
 use crate::runtime::keys;
-use crate::style::{ComponentStyle, StyleCx};
-use craft_behavior::{Metrics, OwnerClass, Sense};
+use crate::style::{ComponentStyle, RuleKind, StyleCx};
+use craft_behavior::{Insets, Metrics, OwnerClass, Sense};
 use craft_host::target::Os;
 use craft_keymap::{Chord, Key};
 use craft_theme::{
@@ -28,12 +28,15 @@ use std::sync::Arc;
 #[cfg(feature = "testing")]
 mod stories;
 
-/// The style of a footer bar: no look of its own.
+/// The style of a footer bar. A bar of panel actions sits under a divider rule along its top edge, with the control
+/// padding above and under its buttons; other bars have no look of their own.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct FooterBarStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// Draws the rule along the top edge.
+    rule: bool,
 }
 
 /// A footer region's content: its body is the caller's closure, and each member is its own Tab stop, in display order.
@@ -45,6 +48,9 @@ pub struct FooterBar {
     #[container]
     props: ContainerProps,
     content: Content,
+    /// A bar of panel actions: it draws the rule that separates a panel's footer from its body.
+    #[style_key]
+    actions: bool,
     /// Whether an Enter that the focused part left untaken, pressed with the focus inside the open layer, activates the
     /// default button (the first enabled `Accept` one) like a click on it.
     #[prop(name = "enter_activates")]
@@ -542,6 +548,7 @@ impl FooterBar {
             common: Common::new(),
             props: ContainerProps::new().sizing(Sizing::FillWidth).layout(BodyLayout::row().align(RowAlign::End)),
             content: Content::Body,
+            actions: false,
             enter: false,
             column: false,
             start: 0,
@@ -559,7 +566,7 @@ impl FooterBar {
 
     /// A footer bar of icon actions, in the given order. Show it with `show_footer`.
     pub fn actions(actions: impl IntoIterator<Item = FooterAction>) -> Self {
-        FooterBar { content: Content::Actions(actions.into_iter().collect()), ..FooterBar::body() }
+        FooterBar { content: Content::Actions(actions.into_iter().collect()), actions: true, ..FooterBar::body() }
     }
 
     /// The first `count` actions sit at the start edge and the rest at the end edge, the room left between the two
@@ -698,8 +705,18 @@ impl Component for FooterBar {
     type Style = FooterBarStyle;
     type Output = Response;
 
-    fn style(_: &StyleCx<'_>, _: FooterBarStyleKey) -> FooterBarStyle {
-        FooterBarStyle::default()
+    fn style(cx: &StyleCx<'_>, key: FooterBarStyleKey) -> FooterBarStyle {
+        if key.actions {
+            FooterBarStyle { metrics: Metrics::new().padding(Insets::vertical(cx.tokens.space.pad.control)), rule: true }
+        } else {
+            FooterBarStyle::default()
+        }
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if cx.style.rule {
+            ui.draw().rule(RuleKind::Divider, cx.rect.left_top(), cx.rect.right_top());
+        }
     }
 
     fn sense(&self) -> Sense {

@@ -68,7 +68,7 @@ type FooterFn<'a> = Box<dyn FnMut(&mut Ui, &mut BodyCx<'_>) + 'a>;
 /// - Body: scrolls vertically; the panel fills the width and height offered.
 /// - Selected: `selected(true)` draws an accent ring inside the panel's edge, so a host can mark the picked panel.
 /// - Framed: `framed()` outlines the panel's edge in the border line colour.
-/// - Footer: the closure given to `footer` fills a footer bar under the body, separated by a rule.
+/// - Footer: the closure given to `footer` fills a footer bar under the body; a bar of panel actions draws the rule above it.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container)]
 pub struct Panel<'a> {
@@ -188,10 +188,11 @@ impl<'a> Panel<'a> {
         self
     }
 
-    /// The footer's content: the closure fills a footer bar under the body.
+    /// The footer's content: the closure fills a footer bar under the body. A bar of panel actions
+    /// (`FooterBar::actions`) draws the rule above it.
     #[must_use]
     pub fn footer(mut self, content: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a) -> Self {
-        self.props = self.props.footer(FooterRegion::new().rule(true));
+        self.props = self.props.footer(FooterRegion::new());
         self.footer = Some(Box::new(content));
         self
     }
