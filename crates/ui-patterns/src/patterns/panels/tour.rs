@@ -1,18 +1,21 @@
 //! `Tour` (24.4): a guided walk through the interface, one step at a time, a card beside the part it explains.
 
 use super::words::PanelWords;
+use crate::buttons::{Button, IconButton};
 use crate::contract::overlay::{Anchor, Dismiss, FloatPlace, Outside, OverlayFit, Place, ViewportShare};
-use crate::contract::{Bind, Overlay, Pattern, Props, Show as _, ShowContainer as _};
-use crate::display::Text;
-use crate::layout_components::Stack;
-use crate::notices::{Notice, NoticeAction, NoticeLayout};
+use crate::contract::{Bind, Gap, Overlay, Pattern, Props, RowAlign, Show as _, ShowContainer as _, clicked};
+use crate::display::{Shade, TargetMark, Text};
+use crate::layout_components::{Row, Stack};
 use crate::popover::Popover;
 use crate::runtime::commands::{CommandSet as _, Commands as _};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::focus::Initial;
+use crate::sections::{DialogRole, FooterBar, FooterButton};
+use crate::style::TypeRole;
 use craft_behavior::overlay::{Align, Side};
-use craft_behavior::{EditEvent, Mixed};
-use craft_theme::variant::Tone;
+use craft_behavior::{EditEvent, IconId, Mixed};
+use craft_theme::ControlSize;
+use craft_theme::variant::Variant;
 use egui::{Rect, Ui};
 use std::sync::Arc;
 
@@ -85,15 +88,16 @@ pub struct TourOutput {
     pub event: Option<TourEvent>,
 }
 
-/// A guided tour of the interface: a card with the step's heading and text, Skip, Back and Next (Done on the last
-/// step) and the step count, beside the part the step points at. The rest of the window stays usable and undimmed:
-/// only the card takes presses, and a press outside it leaves the tour running.
+/// A guided tour of the interface: a card with the step count and a close button, the step's heading and text, Skip,
+/// Back and Next (Done on the last step), beside the part the step points at, which a pulsing ring marks. The rest of
+/// the window stays usable and undimmed: only the card takes presses, and a press outside it leaves the tour running.
 ///
 /// - Show it while the tour runs; the app stops showing it on `Finished` and `Skipped`.
 /// - The index binding holds the step; Next and Back change it and report the event. An index past the last step
 ///   shows the last step.
+/// - Skip and the close button leave the tour on every step; Back is off on the first.
 /// - Keys: Next has the focus when the step opens, so Enter goes on; Right and Left step forward and back (mirrored
-///   in a right-to-left interface); Escape skips; Tab reaches Back and Skip.
+///   in a right-to-left interface); Escape skips; Tab reaches the other buttons.
 #[derive(Pattern, Props)]
 pub struct Tour<'a> {
     label: Label,
@@ -114,13 +118,16 @@ impl<'a> Tour<'a> {
         let env = Env::of(ui);
         let words = env.words::<PanelWords>();
         let mut event: Option<TourEvent> = None;
-        // The tour's root container holds no content; the step's card is the popover it opens.
+        // The tour's root container holds the step's mark; the step's card is the popover it opens.
         Stack::new().show(ui, |ui, root| {
             let held = index.reborrow().read(root).and_then(|held| held.same().copied()).unwrap_or(0);
             let at = held.min(last);
             let step = &steps[at];
             let count = words.tour_count.fill(&[("n", &env.format().integer(at as u64 + 1)), ("total", &env.format().integer(steps.len() as u64))]);
-            let layer = layer(step.target);
+            let layer = layer(step.target.map(|target| target.expand(env.tokens.space.pad.regular)));
+            if let Some(target) = step.target {
+                TargetMark::new(target).id_salt("mark").show_mark(ui);
+            }
             let mut taken: Option<TourEvent> = None;
             let forward = if at < last { TourEvent::Next } else { TourEvent::Finished };
             let shown = Popover::new(step.title.clone(), Bind::given(true))
@@ -135,26 +142,31 @@ impl<'a> Tour<'a> {
                             TourCommands::Back => taken,
                         };
                     }
-                    Stack::new().show(ui, |ui, _| {
-                        let mut notice =
-                            Notice::new(Tone::Neutral, step.text.clone()).title(step.title.clone()).layout(NoticeLayout::Inline).footer_actions();
-                        // Reading order: Skip, Back, Next; the indices below follow it.
-                        let mut order = Vec::with_capacity(3);
-                        if at < last {
-                            notice = notice.action(NoticeAction::new(words.tour_skip.clone()));
-                            order.push(TourEvent::Skipped);
-                        }
-                        if at > 0 {
-                            notice = notice.action(NoticeAction::new(words.tour_back.clone()));
-                            order.push(TourEvent::Back);
-                        }
-                        notice = notice
-                            .action(NoticeAction::new(if at < last { words.tour_next.clone() } else { words.tour_done.clone() }).default_action());
-                        order.push(forward);
-                        if let Some(event) = notice.show(ui).action.and_then(|at| order.get(at).copied()) {
-                            taken = Some(event);
-                        }
-                        Text::new(count.clone()).show(ui);
+                    Stack::new().gap(Gap::Row).show(ui, |ui, _| {
+                        Row::new().align(RowAlign::SpaceBetween).fill_width().show(ui, |ui, _| {
+                            Text::new(count.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+                            let close = IconButton::new(IconId::new("close")).size(ControlSize::Sm).label(words.tour_skip.clone()).id_salt("close");
+                            if clicked(&close.show(ui)) {
+                                taken = Some(TourEvent::Skipped);
+                            }
+                        });
+                        Text::new(step.title.clone()).role(TypeRole::Title).show(ui);
+                        Text::new(step.text.clone()).show(ui);
+                        Row::new().align(RowAlign::SpaceBetween).fill_width().show(ui, |ui, _| {
+                            if clicked(&Button::new(words.tour_skip.clone()).variant(Variant::GHOST).id_salt("skip").show(ui)) {
+                                taken = Some(TourEvent::Skipped);
+                            }
+                            let next = if at < last { words.tour_next.clone() } else { words.tour_done.clone() };
+                            // The given order is the events' order; the footer shows them in the platform's order.
+                            let picks = [TourEvent::Back, forward];
+                            let buttons = [
+                                FooterButton::new(words.tour_back.clone(), DialogRole::Other).enabled(at > 0),
+                                FooterButton::new(next, DialogRole::Accept),
+                            ];
+                            if let Some(event) = FooterBar::buttons(buttons).show_footer(ui).picked.and_then(|at| picks.get(at).copied()) {
+                                taken = Some(event);
+                            }
+                        });
                     });
                     let moved = match taken {
                         Some(TourEvent::Next) => Some(at + 1),
@@ -172,13 +184,13 @@ impl<'a> Tour<'a> {
     }
 }
 
-/// The card's layer: a popup beside `target`, else in the middle of the window. It blocks nothing and dims nothing; a
-/// press outside leaves it open.
-fn layer(target: Option<Rect>) -> Overlay {
+/// The card's layer: a popup beside `anchor` (the step's target with a panel's padding around it, clear of its mark),
+/// else in the middle of the window. It blocks nothing and dims nothing; a press outside leaves it open.
+fn layer(anchor: Option<Rect>) -> Overlay {
     let mut overlay = Overlay::popover().dismiss(Dismiss::new().outside(Outside::Keep));
     overlay.fit = OverlayFit::ContentCapped(CARD_SHARE);
-    overlay.place = match target {
-        Some(target) => Place::anchored(Anchor::Rect(target), Side::End, Align::Center),
+    overlay.place = match anchor {
+        Some(anchor) => Place::anchored(Anchor::Rect(anchor), Side::End, Align::Center),
         None => Place::Float(FloatPlace::centred()),
     };
     overlay

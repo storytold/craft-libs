@@ -13,7 +13,7 @@ craft_ui::words! {
         tour_back: "tour.back" = "Back";
         tour_next: "tour.next" = "Next";
         tour_done: "tour.done" = "Done";
-        tour_skip: "tour.skip" = "Skip";
+        tour_skip: "tour.skip" = "Skip Tour";
         tour_count: template "tour.count" = "{n} of {total}";
     }
 }
