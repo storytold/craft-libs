@@ -12,7 +12,7 @@ use crate::runtime::env::{Env, EnvValue, Label};
 use crate::runtime::focus;
 use crate::runtime::keys;
 use crate::style::{ComponentStyle, StyleCx};
-use craft_behavior::{Metrics, NavShape, OwnerClass, Roving, Sense};
+use craft_behavior::{Metrics, OwnerClass, Sense};
 use craft_host::target::Os;
 use craft_keymap::{Chord, Key};
 use craft_theme::{
@@ -35,7 +35,7 @@ pub struct FooterBarStyle {
     metrics: Metrics,
 }
 
-/// A footer region's content: its body is the caller's closure, and its members are one roving group.
+/// A footer region's content: its body is the caller's closure, and each member is its own Tab stop, in display order.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container)]
 pub struct FooterBar {
@@ -537,7 +537,7 @@ impl FooterBar {
     pub fn body() -> Self {
         FooterBar {
             common: Common::new(),
-            props: ContainerProps::new().sizing(Sizing::FillWidth).roving(Roving::new(NavShape::Flat)).layout(BodyLayout::row().align(RowAlign::End)),
+            props: ContainerProps::new().sizing(Sizing::FillWidth).layout(BodyLayout::row().align(RowAlign::End)),
             content: Content::Body,
             enter: false,
             column: false,

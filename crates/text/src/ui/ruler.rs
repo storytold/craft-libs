@@ -15,7 +15,7 @@
 //! ```
 
 use super::length::DocUnit;
-use craft_behavior::{Axis, GesturePhase, HitLevel, HitPriority, Metrics, Sense};
+use craft_behavior::{Axis, GesturePhase, HitLevel, HitPriority, Metrics, NavShape, Roving, Sense};
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Input, MeasureCx, Name, Numeric, Outcome, PaintUi, PartsCx, Props as _,
     Role, WordSetCx as _,
@@ -309,10 +309,10 @@ pub struct TextRulerStyle {
 ///   reader's Increment, Decrement and SetValue report a lone [`GesturePhase::Commit`].
 /// - Right-to-left paragraphs mirror the ruler: positions run from the right edge, and the stops' feet point the other
 ///   way.
-/// - Keys: each marker and stop is a Tab stop. Page Down and Page Up move to the next or previous marker or stop, the
-///   arrows nudge the focused one by the snap step (Shift larger, Alt finer), Delete and Backspace clear a stop and
-///   focus the one before it. Each key is one edit. Each marker and stop is a slider named by its kind, with its value
-///   in the unit; Increment, Decrement and SetValue act on it.
+/// - Keys: the markers, stops and column borders are one Tab stop. Page Down and Page Up move to the next or previous
+///   one, the arrows nudge the focused one by the snap step (Shift larger, Alt finer), Delete and Backspace clear a
+///   stop and focus the one before it. Each key is one edit. Each marker and stop is a slider named by its kind, with
+///   its value in the unit; Increment, Decrement and SetValue act on it.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(content_painter)]
 pub struct TextRuler<'a> {
@@ -475,6 +475,7 @@ impl Component for TextRuler<'_> {
                 .priority(handle)
                 .cursor(craft_behavior::CursorIcon::ResizeHorizontal)
                 .focusable()
+                .nudges()
                 .focus_shape(FocusShape::Rect)
                 .value_part();
             if matches!(item, Item::Stop(at) if self.selected == Some(at)) {
@@ -488,9 +489,11 @@ impl Component for TextRuler<'_> {
                 .priority(handle)
                 .cursor(craft_behavior::CursorIcon::ResizeHorizontal)
                 .focusable()
+                .nudges()
                 .focus_shape(FocusShape::Rect)
                 .value_part();
         }
+        cx.roving(Roving::new(NavShape::Flat).page(Some(1)).home_end(false));
         if self.kind.is_some() {
             cx.part(SELECTOR, layout.corner)
                 .sense(Sense::CLICK | Sense::CONTEXT_CLICK)

@@ -119,15 +119,3 @@ pub(super) fn moved(values: &RulerValues, item: Item, to: f32, width: f32) -> (R
     }
     (next, item)
 }
-
-/// The item after (or before) `picked` in `items`, staying at the ends.
-pub(super) fn pick(items: &[Item], picked: Option<Item>, forward: bool) -> Option<Item> {
-    let at = picked.and_then(|picked| items.iter().position(|item| *item == picked));
-    let to = match (at, forward) {
-        (None, true) => 0,
-        (None, false) => items.len().saturating_sub(1),
-        (Some(at), true) => (at + 1).min(items.len().saturating_sub(1)),
-        (Some(at), false) => at.saturating_sub(1),
-    };
-    items.get(to).copied()
-}

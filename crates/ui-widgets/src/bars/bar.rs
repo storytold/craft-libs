@@ -73,13 +73,13 @@ impl Outcome for BarOutput {
     }
 }
 
-/// A bar over a chrome surface whose body holds the members in reading order at the small control size. They are
-/// one roving group. The bar is as tall as its tallest member plus the control padding, and takes the width it is
-/// offered. A bar of one row lays its body out as a row; a bar of several rows as a stack whose rows the caller makes
-/// with `Row`. A row too long for the bar first narrows its selects and elidable text, then scrolls, so a member past
-/// the edge is reached by Tab and revealed. A rule between groups of members is a `Divider::vertical()`. A bar with
-/// `commit_cancel` ends with a cancel and a commit button in its end region, outside the scroll; they run
-/// `BarCommands`.
+/// A bar over a chrome surface whose body holds the members in reading order at the small control size. They are one
+/// roving group unless the bar is made of [`tab_stops`](Bar::tab_stops). The bar is as tall as its tallest member plus
+/// the control padding, and takes the width it is offered. A bar of one row lays its body out as a row; a bar of
+/// several rows as a stack whose rows the caller makes with `Row`. A row too long for the bar first narrows its selects
+/// and elidable text, then scrolls, so a member past the edge is reached by Tab and revealed. A rule between groups of
+/// members is a `Divider::vertical()`. A bar with `commit_cancel` ends with a cancel and a commit button in its end
+/// region, outside the scroll; they run `BarCommands`.
 #[derive(crate::contract::Component)]
 #[component(container)]
 pub struct Bar<'a> {
@@ -124,6 +124,14 @@ impl<'a> Bar<'a> {
         if rows.get() > 1 {
             self.props = self.props.layout(BodyLayout::stack());
         }
+        self
+    }
+
+    /// Makes each member its own Tab stop, in reading order, as media controls are; the arrows no longer move between
+    /// them.
+    #[must_use]
+    pub fn tab_stops(mut self) -> Self {
+        self.props.roving = None;
         self
     }
 

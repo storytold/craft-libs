@@ -1,7 +1,7 @@
 //! One pass of the ruler's input: the gestures on the items, the strip and the column borders, keys and the
 //! screen reader's requests.
 
-use super::items::{COLUMN, Item, STRIP, moved, pick, place, without};
+use super::items::{COLUMN, Item, STRIP, moved, place, without};
 use super::{ColumnBorder, ColumnDrag, RulerValues, SAME_POSITION, TabLeader, TabStop, TextRuler, dropped_off, snap_stop};
 use crate::ui::length::{DocUnit, shown};
 use craft_behavior::{CancelReason, GesturePhase, Granularity, Intent, NavMove, PointerButton, PressPhase, RulerUnits, Ticks};
@@ -64,10 +64,9 @@ fn snap_within(position: f32, step: f32, bounds: (f32, f32), free: bool) -> f32 
 }
 
 /// The moves and nudges taken from the focused part this pass: how far they move it, in points (positive: further
-/// from the start edge), and the Page Down and Page Up moves, which pick the next or previous item.
-fn take_steps(cx: &mut Cx<'_, TextRuler<'_>>, g: &super::Geometry, step: f32) -> (f32, Vec<NavMove>) {
+/// from the start edge).
+fn take_steps(cx: &mut Cx<'_, TextRuler<'_>>, g: &super::Geometry, step: f32) -> f32 {
     let mut by = 0.0;
-    let mut pages = Vec::new();
     while let Some((mv, mods)) = cx.intents().take_move() {
         let size = if mods.fine {
             SAME_POSITION
@@ -77,7 +76,6 @@ fn take_steps(cx: &mut Cx<'_, TextRuler<'_>>, g: &super::Geometry, step: f32) ->
             step
         };
         match mv {
-            NavMove::PageDown | NavMove::PageUp => pages.push(mv),
             NavMove::Forward | NavMove::Up => by += size * g.sign(),
             NavMove::Back | NavMove::Down => by -= size * g.sign(),
             _ => {}
@@ -93,7 +91,7 @@ fn take_steps(cx: &mut Cx<'_, TextRuler<'_>>, g: &super::Geometry, step: f32) ->
         };
         by += direction.x * size * g.sign();
     }
-    (by, pages)
+    by
 }
 
 impl TextRuler<'_> {
@@ -295,8 +293,7 @@ impl TextRuler<'_> {
         cx.focus_part(COLUMN.at(index as u64));
     }
 
-    /// Keys on the focused item: Page Down and Page Up move to the next and previous item, the arrows nudge it, Delete
-    /// and Backspace clear a stop; a screen reader's SetValue sets an item's position.
+    /// Keys on the focused item: the arrows nudge it, Delete and Backspace clear a stop; a screen reader's SetValue sets an item's position.
     fn run_keys(&mut self, cx: &mut Cx<'_, Self>, g: &super::Geometry, step: f32, held: &mut Held) {
         if cx.gesture().is_some() {
             return;
@@ -318,7 +315,7 @@ impl TextRuler<'_> {
         }
         let Some(part) = cx.active_part() else { return };
         if part.key == COLUMN {
-            let (by, _) = take_steps(cx, g, step);
+            let by = take_steps(cx, g, step);
             if let (Some(index), true) = (part.index, by != 0.0)
                 && let Some(position) = self.columns.get(index as usize).copied()
             {
@@ -327,12 +324,7 @@ impl TextRuler<'_> {
             return;
         }
         let Some(item) = Item::of_part(part) else { return };
-        let (by, pages) = take_steps(cx, g, step);
-        for mv in pages {
-            if let Some(next) = pick(&Item::all(&values), Some(item), mv == NavMove::PageDown) {
-                cx.focus_part(next.part());
-            }
-        }
+        let by = take_steps(cx, g, step);
         if by != 0.0 {
             let (value, now) = moved(&values, item, item.position(&values, g.width) + by, g.width);
             cx.set(value);

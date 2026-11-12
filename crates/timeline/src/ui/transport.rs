@@ -325,11 +325,11 @@ impl Outcome for MediaControlsOutput {
     }
 }
 
-/// PowerPoint's media controls under a video or sound on a slide: play or pause, back and forward a quarter second,
-/// a seek track with the trim marks, and the time (`1:05.25` style in the mono role, digits through the units). The
-/// controls are a named toolbar `Bar`, so a press on them never reaches the canvas under them. The seek track is a
-/// `Slider` (one Tab stop; Left and Right a quarter second, Home and End) reporting an `EditEvent<f64>` gesture in
-/// seconds.
+/// PowerPoint's media controls under a video or sound on a slide: play or pause, back and forward a quarter second, a
+/// seek track with the trim marks, and the time (`1:05.25` style in the mono role, digits through the units). The
+/// controls are a named toolbar `Bar`, so a press on them never reaches the canvas under them; each button is its own
+/// Tab stop, in reading order. The seek track is a `Slider` (one Tab stop; Left and Right a quarter second, Home and
+/// End) reporting an `EditEvent<f64>` gesture in seconds.
 #[derive(Pattern, Props)]
 pub struct MediaControls {
     label: Label,
@@ -358,7 +358,7 @@ impl MediaControls {
         let playable = duration.is_finite() && duration > 0.0;
         let position = if position.is_finite() { position.clamp(0.0, if playable { duration } else { 0.0 }) } else { 0.0 };
         let (mut toggle, mut nudge, mut seek) = (false, None, EditEvents::new());
-        let shown = Bar::new(label, BarKind::Tool).show(ui, |ui, _| {
+        let shown = Bar::new(label, BarKind::Tool).tab_stops().show(ui, |ui, _| {
             let play = IconId::new(if playing { "pause" } else { "play" });
             toggle = clicked(&IconButton::new(play).label(words.play_pause_media.clone()).show(ui));
             if clicked(&IconButton::new(IconId::new("chevron_left")).label(words.back_quarter.clone()).show(ui)) {

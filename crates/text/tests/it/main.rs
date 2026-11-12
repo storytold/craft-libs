@@ -2,4 +2,5 @@
 
 mod editor;
 mod notes;
+mod ruler;
 mod tabs;
