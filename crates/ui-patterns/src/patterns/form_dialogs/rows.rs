@@ -397,10 +397,15 @@ impl<'p> Pass<'p> {
         });
     }
 
+    /// A radio row is its own section: the title shows the row's name once, and the group it names follows.
     fn radio_options(&mut self, ui: &mut Ui, line: &Line<'_>, options: &[(String, Label)]) {
         let value = self.work.text(line.key).map(str::to_owned).or_else(|| line.param.kind.default_value().and_then(text_of)).unwrap_or_default();
-        line.show(ui, |ui| {
-            let group = RadioGroup::new(line.name.clone(), Bind::given(value.clone())).enabled(line.enabled).show(ui, |ui, _| {
+        Section::fixed(line.name.clone()).id_salt(line.key).show(ui, |ui, _| {
+            let mut group = RadioGroup::new(line.name.clone(), Bind::given(value.clone())).enabled(line.enabled);
+            if let Some(tip) = line.param.tooltip_text() {
+                group = group.tooltip(tip.clone());
+            }
+            let group = group.show(ui, |ui, _| {
                 Stack::new().show(ui, |ui, _| {
                     for (id, label) in options {
                         Radio::new(id.clone()).label(label.clone()).show(ui);

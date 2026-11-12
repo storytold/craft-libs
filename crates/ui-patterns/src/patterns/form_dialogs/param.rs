@@ -70,7 +70,8 @@ pub enum ParamKind {
         /// The id selected when nothing is remembered; `None` selects the first option.
         default: Option<String>,
     },
-    /// A group of radio buttons over `(id, label)` options; the field holds the id.
+    /// A group of radio buttons over `(id, label)` options; the field holds the id. The row is its own section, titled
+    /// by the parameter's label, so it needs no `Param::section` before it.
     #[non_exhaustive]
     Radio {
         /// The `(id, label)` pairs in list order.
@@ -167,7 +168,7 @@ impl ParamKind {
         ParamKind::Choice { options, default }
     }
 
-    /// A group of radio buttons over `(id, label)` options.
+    /// A group of radio buttons over `(id, label)` options, in a section of its own titled by the parameter's label.
     pub fn radio(options: Vec<(String, Label)>, default: Option<String>) -> Self {
         ParamKind::Radio { options, default }
     }

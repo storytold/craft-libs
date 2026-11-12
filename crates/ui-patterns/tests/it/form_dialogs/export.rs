@@ -112,3 +112,17 @@ fn the_output_file_name_browses_on_a_click_and_edits_the_template_on_alt_click()
     assert!(path.borrow().contains("_v2"), "Enter commits the typed template, got {}", path.borrow());
     assert!(!fixture.by_role(Role::LINK).is_empty(), "the committed template shows as the link");
 }
+
+/// A radio row is its own section: Targa Options shows "Resolution" once, as the title of the group it names.
+#[trial]
+fn a_radio_row_shows_its_name_once_as_the_title_of_its_group() {
+    let mut fixture = Fixture::new(|ui| {
+        FormatOptionsDialog::new(ExportOptionsKind::Targa).opened(Bind::given(true)).show(ui);
+    });
+    fixture.settle();
+    let shown = fixture.texts().iter().filter(|run| run.text.trim_end_matches(':') == "Resolution").count();
+    assert_eq!(shown, 1, "the name shows once");
+    let groups = fixture.by_role(Role::RADIO_GROUP);
+    let [group] = groups.as_slice() else { panic!("one radio group") };
+    assert_eq!(fixture.tree().name_of(group.node), Some("Resolution"), "the group is named by the title");
+}

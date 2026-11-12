@@ -360,17 +360,14 @@ fn params(words: &FormatOptionsWords, start: FormatOptions) -> Vec<Param> {
             Param::new(DISCARD, words.discard_layers.clone(), ParamKind::bool(options.discard_layers)),
             Param::new(DONT_SHOW, words.dont_show.clone(), ParamKind::bool(options.dont_show_again)),
         ],
-        FormatOptions::Targa(options) => vec![
-            Param::section(words.resolution.clone()),
-            Param::new(
-                BITS,
-                words.resolution.clone(),
-                ParamKind::radio(
-                    vec![(TARGA_BITS.to_string(), words.bits_24.clone()), (TARGA_ALPHA_BITS.to_string(), words.bits_32.clone())],
-                    Some(options.bits.to_string()),
-                ),
+        FormatOptions::Targa(options) => vec![Param::new(
+            BITS,
+            words.resolution.clone(),
+            ParamKind::radio(
+                vec![(TARGA_BITS.to_string(), words.bits_24.clone()), (TARGA_ALPHA_BITS.to_string(), words.bits_32.clone())],
+                Some(options.bits.to_string()),
             ),
-        ],
+        )],
         FormatOptions::Dds(options) => vec![
             Param::new(
                 COMPRESSION,
