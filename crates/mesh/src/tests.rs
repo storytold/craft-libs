@@ -2,6 +2,8 @@
 
 use super::*;
 
+#[cfg(feature = "fbx")]
+mod fbx;
 #[cfg(feature = "gltf")]
 mod gltf;
 #[cfg(feature = "obj")]
@@ -10,6 +12,8 @@ mod obj;
 mod ply;
 #[cfg(feature = "stl")]
 mod stl;
+#[cfg(feature = "threemf")]
+mod threemf;
 
 /// Every truncation of `good` and two mutations of every byte go through `read`: it may refuse
 /// them, it must not panic, and what it accepts must be a valid scene.
@@ -68,6 +72,9 @@ fn validate_catches_what_writers_cannot_take() {
     let mut m = tri_mesh();
     m.colors = vec![[1.0; 4]];
     assert!(m.validate().is_err());
+    let mut m = tri_mesh();
+    m.parts[0].has_tangents = true;
+    assert!(m.validate().is_err(), "a part names tangents without a per-position array");
     let mut s = Scene::from_meshes(vec![tri_mesh()], vec![]);
     s.validate().unwrap();
     s.meshes[0].parts[0].material = Some(0);

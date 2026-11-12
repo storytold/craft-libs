@@ -153,6 +153,7 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
         ifd.set(t::BLACK_LEVEL_DELTA_V, Value::SRational(b.delta_v.iter().map(|&v| srational(v as f64)).collect()));
     }
     let white: Vec<u32> = (0..cpp).map(|s| raw.white_at(s).round().clamp(0.0, u32::MAX as f32) as u32).collect();
+    let max_white = white.iter().copied().max().unwrap_or(0);
     if matches!(raw.data, RawData::F32(_)) {
         ifd.set(t::WHITE_LEVEL, rat_vec(&(0..cpp).map(|s| raw.white_at(s) as f64).collect::<Vec<_>>()));
     } else {
@@ -216,8 +217,9 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
             ifd.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![bytes] });
         }
         (RawData::U16(v), _) => {
-            let maxv = v.iter().copied().max().unwrap_or(0);
-            let bits = (16 - maxv.leading_zeros()).max(raw.bits.min(16)).max(2) as u8;
+            // Dark frames may never reach the sensor's white level, which must still fit.
+            let maxv = u32::from(v.iter().copied().max().unwrap_or(0)).max(max_white);
+            let bits = (32 - maxv.leading_zeros()).max(raw.bits).clamp(2, 16) as u8;
             ifd.set(
                 t::BITS_PER_SAMPLE,
                 Value::Short(vec![if matches!(opts.compression, DngCompression::Uncompressed) { 16 } else { bits as u16 }; cpp]),
@@ -458,11 +460,16 @@ mod tests {
             opcodes: OpcodeLists::default(),
             camera: Default::default(),
             cinema: Default::default(),
+            lens_metadata: Default::default(),
+            level_sources: Default::default(),
         };
         let opts = |tile: u32| DngWriteOptions { compression: DngCompression::Deflate { tile, half: false }, ..DngWriteOptions::default() };
         let hostile = write_dng(&raw, &opts(u32::MAX)).expect("the clamped tile writes");
         assert_eq!(hostile, write_dng(&raw, &opts(2048)).expect("the cap itself writes"), "u32::MAX is clamped to the cap");
         assert_ne!(hostile, write_dng(&raw, &opts(256)).expect("a normal tile writes"), "the clamp is not a no-op");
         assert_eq!(crate::probe(&hostile), Some(RawFormat::Dng), "the clamped output is still a DNG");
+        // the writer's own padded tile (2048 × 2048 around an 8 × 8 image) reads back
+        let back = crate::decode(&hostile).expect("a tile this writer pads to decodes");
+        assert_eq!((back.width, back.height), (w, h));
     }
 }

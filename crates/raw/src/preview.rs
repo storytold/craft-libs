@@ -22,7 +22,7 @@ pub enum PreviewColorSpace {
 /// the Exif and DCF specifications), not for a DNG. This is a fallback only: a JPEG's own ICC/EXIF colour
 /// declaration takes precedence.
 pub fn embedded_preview_color_space(bytes: &[u8]) -> Option<PreviewColorSpace> {
-    let tiff = Tiff::parse(bytes).ok()?;
+    let Ok(tiff) = Tiff::parse(bytes) else { return cr3_color_space(bytes) };
     let make = tiff.ifds.first()?.string(t::MAKE).unwrap_or_default();
     let exif = tiff.exif()?;
     if make.to_ascii_uppercase().starts_with("NIKON")
@@ -48,6 +48,24 @@ pub fn embedded_preview_color_space(bytes: &[u8]) -> Option<PreviewColorSpace> {
     }
 }
 
+/// A CR3 keeps its EXIF and maker note in `CMT2`/`CMT3` TIFF blocks and its JPEGs carry no EXIF; a body shot in
+/// Adobe RGB writes ColorSpace Uncalibrated (0xFFFF) with no Interoperability IFD (storytold/lightcraft#2654), so the Canon
+/// maker note says which, else an EXIF ColorSpace of sRGB is taken.
+#[cfg(feature = "cr3")]
+fn cr3_color_space(bytes: &[u8]) -> Option<PreviewColorSpace> {
+    let cr3 = craft_metadata::cr3::parse_cr3(bytes)?;
+    let first = |i: usize| cr3.cmt[i].and_then(|b| Tiff::parse(b).ok()).and_then(|t| t.ifds.into_iter().next());
+    if let Some(space) = first(2).and_then(|mn| canon_color_space(&mn)) {
+        return Some(space);
+    }
+    (first(1)?.u16(0xA001)? == 1).then_some(PreviewColorSpace::Srgb)
+}
+
+#[cfg(not(feature = "cr3"))]
+fn cr3_color_space(_: &[u8]) -> Option<PreviewColorSpace> {
+    None
+}
+
 fn canon_color_space(note: &Ifd) -> Option<PreviewColorSpace> {
     match note.u16(0x00b4)? {
         1 => Some(PreviewColorSpace::Srgb),
@@ -66,13 +84,35 @@ fn nikon_color_space(bytes: &[u8], tiff: &Tiff, exif: &Ifd, make: &str) -> Optio
     }
 }
 
+/// Whether the camera optimised its embedded JPEG's dynamic range with local tone mapping that the raw data doesn't
+/// carry: Sony's Dynamic Range Optimizer (maker note `0xb025`). Such a JPEG is brighter in its darker regions than
+/// the raw developed with the camera's global tone curve. `Some(false)` when the file says it was off, `None` when
+/// it doesn't say (other makers, notes without the tag, undocumented values).
+#[cfg(feature = "arw")]
+pub fn embedded_preview_dynamic_range_optimized(bytes: &[u8]) -> Option<bool> {
+    let tiff = Tiff::parse(bytes).ok()?;
+    let make = tiff.ifds.first()?.string(t::MAKE)?;
+    if !make.trim().to_ascii_uppercase().starts_with("SONY") {
+        return None;
+    }
+    let e = tiff.exif()?.get(t::MAKER_NOTE)?;
+    let mn = makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make)?;
+    crate::arw::dynamic_range_optimizer(&mn)
+}
+
 /// The first frame (SOF) marker of a JPEG and its position, from the marker segments before the first scan.
 fn first_frame(b: &[u8]) -> Option<(u8, usize)> {
+    first_frame_within(b, &mut { usize::MAX })
+}
+
+/// [`first_frame`] charging `work` one per step (a segment, or a fill byte); `None` too when it runs out.
+fn first_frame_within(b: &[u8], work: &mut usize) -> Option<(u8, usize)> {
     if b.len() < 4 || !b.starts_with(&[0xff, 0xd8]) {
         return None;
     }
     let mut i = 2usize;
     while i.checked_add(4)? <= b.len() {
+        *work = work.checked_sub(1)?;
         if *b.get(i)? != 0xff {
             return None;
         }
@@ -234,7 +274,28 @@ fn smallest_covering<'a>(found: &[&'a [u8]], largest: &[u8], min_edge: u32) -> O
 }
 
 fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
+    if bytes.starts_with(b"FUJIFILMCCD-RAW") {
+        return raf_jpeg(bytes).filter(|j| is_dct_jpeg(j)).map(|j| trim_eoi(j).to_vec());
+    }
     let format = crate::probe(bytes);
+    #[cfg(feature = "cr3")]
+    if format == Some(crate::RawFormat::Cr3) {
+        // a Canon CR3 keeps its full-size JPEG beside a 1620 px `PRVW` (and a 160 px `THMB`): a
+        // thumbnail decodes the small copy, not 45 MP of JPEG (about 150 ms a photo, the grid's
+        // "popcorn" on a folder of R5 / R5 C raws)
+        // (without a JPEG track, the largest box is the picture's shape: the boxes alone may hold several)
+        if let Some(min) = min_edge {
+            let mut found = cr3_preview_box_list(bytes);
+            let full = cr3_full_jpeg(bytes);
+            found.extend(full);
+            if let Some(largest) = full.or_else(|| largest_by_pixels(&found))
+                && let Some(j) = smallest_covering(&found, largest, min)
+            {
+                return Some(trim_eoi(j).to_vec());
+            }
+        }
+        return cr3_preview(bytes).map(|j| trim_eoi(j).to_vec());
+    }
     if matches!(format, Some(crate::RawFormat::Crw | crate::RawFormat::Mrw | crate::RawFormat::X3f)) {
         return scan_for_jpeg(bytes);
     }
@@ -259,6 +320,12 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
             }
         }
     }
+    // Olympus: the CameraSettings preview
+    #[cfg(feature = "orf")]
+    if let Some(p) = crate::orf::preview(bytes) {
+        found.push(p);
+    }
+    bound_candidates(&mut found, bytes.len());
     let largest = found.iter().copied().filter(|s| is_dct_jpeg(s) || is_jxl(s)).max_by_key(|s| s.len());
     let best = min_edge
         .zip(largest)
@@ -272,6 +339,90 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
     let best = best.or_else(|| (format == Some(crate::RawFormat::CfaTiff)).then(|| crate::hasselblad::rgb_preview(&tiff, bytes)).flatten());
     best
 }
+
+/// Drops candidate ranges that repeat an earlier one, that are not a displayable JPEG or JPEG XL, and valid ones
+/// past a shared budget of [`scan_budget`] bytes: a range is charged only once it validates, so invalid ranges
+/// covering most of the file cannot use up the budget before a valid preview. The header walks that validate
+/// (or reject) the ranges share a second budget of the same size, charged for every walk, so many ranges
+/// that start a JPEG header and run through fill bytes cannot each cost a walk of their length.
+fn bound_candidates(found: &mut Vec<&[u8]>, file_len: usize) {
+    let mut seen = std::collections::HashSet::new();
+    let mut left = scan_budget(file_len);
+    let mut work = scan_budget(file_len);
+    found.retain(|s| {
+        let mut dct = || first_frame_within(s, &mut work).is_some_and(|(m, _)| matches!(m, 0xc0..=0xc2));
+        if !seen.insert((s.as_ptr() as usize, s.len())) || !(dct() || is_jxl(s)) || s.len() > left {
+            return false;
+        }
+        left -= s.len();
+        true
+    });
+}
+
+/// Where a preview lives in a file, so a caller with a seekable file can read just that part of it.
+///
+/// Why it exists: a 56 MB Fuji RAF keeps its JPEG in the first 5.6 MB (measured: DSCF9492.RAF at
+/// 5.6 MB), so a grid thumbnail or a loupe preview has no reason to pull the remaining 50 MB —
+/// which on a network share is the difference between a moment and half a minute. A caller that has
+/// only bytes (`wasm`, tests) keeps using [`embedded_preview`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreviewRange {
+    /// Byte offset of the preview in the file.
+    pub offset: u64,
+    /// Bytes to read at [`Self::offset`]: the container's declared preview extent, which may carry
+    /// padding past the preview's end-of-image marker.
+    pub window_len: u64,
+}
+
+/// The preview's range in the file, when the file's header alone locates it.
+///
+/// `bytes` is the file's first [`PREVIEW_PREFIX`] bytes (more is fine). `None` means "read the file
+/// whole and call [`embedded_preview`]": the formats not covered here (a TIFF-based raw's pointer
+/// tag can sit in an IFD the prefix cuts short; CR3 scans box by box) and files whose pointer is
+/// damaged.
+///
+/// The caller reads `[range.offset, range.offset + range.window_len)` and passes those bytes to
+/// [`embedded_preview_from_range`], which returns exactly what [`embedded_preview`] returns for the
+/// whole file.
+///
+/// Pass a prefix that actually covers the pointer's range (read [`Self::offset`] +
+/// [`Self::window_len`] bytes, or start with [`PREVIEW_PREFIX`] and grow when it is not enough):
+/// `raf::header` clamps a slice to the buffer it was given, so a prefix that stops
+/// inside the declared extent yields a shorter `window_len` than the file really holds.
+pub fn bounded_preview(bytes: &[u8]) -> Option<PreviewRange> {
+    let jpeg = raf_jpeg(bytes)?;
+    let offset = (jpeg.as_ptr() as usize).checked_sub(bytes.as_ptr() as usize)?;
+    if offset.checked_add(jpeg.len())? > bytes.len() {
+        return None;
+    }
+    Some(PreviewRange { offset: offset as u64, window_len: jpeg.len() as u64 })
+}
+
+/// The camera JPEG a RAF's header points to (clamped to `bytes`); `None` for any other file.
+#[cfg(feature = "raf")]
+fn raf_jpeg(bytes: &[u8]) -> Option<&[u8]> {
+    bytes.starts_with(b"FUJIFILMCCD-RAW").then(|| crate::raf::header(bytes).ok()?.jpeg).flatten()
+}
+
+#[cfg(not(feature = "raf"))]
+fn raf_jpeg(_: &[u8]) -> Option<&[u8]> {
+    None
+}
+
+/// The preview inside `window`, which holds the file's bytes at `[range.offset, range.offset +
+/// range.window_len)`: the counterpart of [`bounded_preview`]. Padding past the end-of-image marker
+/// is dropped, exactly as [`embedded_preview`] drops it.
+pub fn embedded_preview_from_range(window: &[u8], range: PreviewRange) -> Option<Vec<u8>> {
+    let preview = window.get(..usize::try_from(range.window_len).ok()?)?;
+    if !is_dct_jpeg(preview) {
+        return None;
+    }
+    Some(trim_eoi(preview).to_vec())
+}
+
+/// How many bytes of a raw file are enough for [`bounded_preview`]: every covered format keeps its
+/// preview pointer in a fixed header, well inside this.
+pub const PREVIEW_PREFIX: usize = 4096;
 
 /// The end of the DCT JPEG whose SOI is at `soi` (exclusive index after its EOI) and its component count,
 /// walking the marker segments and the entropy-coded data. `None` when it is not a complete, displayable
@@ -406,6 +557,135 @@ fn scan_with_budget(data: &[u8], budget: usize) -> (Option<Vec<u8>>, u64) {
     (jpeg, walked)
 }
 
+/// Canon CR3: the full-size JPEG track (see `craft_metadata::cr3`), else the `PRVW` / `THMB` boxes.
+#[cfg(feature = "cr3")]
+fn cr3_preview(bytes: &[u8]) -> Option<&[u8]> {
+    cr3_full_jpeg(bytes).or_else(|| cr3_preview_boxes(bytes))
+}
+
+/// A CR3's full-size JPEG track, when it holds a DCT JPEG.
+#[cfg(feature = "cr3")]
+fn cr3_full_jpeg(bytes: &[u8]) -> Option<&[u8]> {
+    let full = craft_metadata::cr3::parse_cr3(bytes)
+        .and_then(|c| c.tracks.iter().find(|t| t.kind == craft_metadata::cr3::Cr3TrackKind::Jpeg).and_then(|t| t.data));
+    full.and_then(|(at, len)| bytes.get(at..at.checked_add(len)?)).filter(|j| is_dct_jpeg(j))
+}
+
+/// Marker-walk budget of the CR3 fallback: candidates can overlap (each claiming the rest of the file) and
+/// [`is_dct_jpeg`] walks each marker by marker, so walking every candidate would be quadratic in file size.
+/// The `THMB`/`PRVW` previews this finds are far below the cap together; once it is spent the scan stops.
+#[cfg(feature = "cr3")]
+const CR3_MAX_WALK: usize = 8 << 20;
+
+/// Canon CR3 (ISO base media file): the `PRVW` box (Laurent Clévy's CR3 notes; layout confirmed on a CC0
+/// sample) is `u32 size, "PRVW", u32 0, u16 ?, u16 width, u16 height, u16 ?, u32 jpeg length, JPEG`; the smaller
+/// `THMB` box has the same shape. Returns the larger valid one.
+#[cfg(feature = "cr3")]
+fn cr3_preview_boxes(bytes: &[u8]) -> Option<&[u8]> {
+    largest_by_pixels(&cr3_preview_box_list(bytes))
+}
+
+/// Of `found`, the JPEG with the longest edge in pixels (a smaller picture can take more bytes); the
+/// first of equals. CodeRabbit on #3077.
+#[cfg(feature = "cr3")]
+fn largest_by_pixels<'a>(found: &[&'a [u8]]) -> Option<&'a [u8]> {
+    let long = |j: &[u8]| jpeg_frame(j).map_or(0, |(w, h, _)| w.max(h));
+    found.iter().copied().rev().max_by_key(|j| long(j))
+}
+
+/// The valid JPEGs of a CR3's `PRVW` and `THMB` boxes, every one: a file may carry more than one
+/// `PRVW`, and the smallest that covers a size is picked from them all.
+#[cfg(feature = "cr3")]
+fn cr3_preview_box_list(bytes: &[u8]) -> Vec<&[u8]> {
+    let mut out: Vec<&[u8]> = Vec::new();
+    let mut walked = 0usize;
+    // the boxes sit outside the media data: only the rest of the file is searched (the media data
+    // is most of the file, and a thumbnail is asked for every photo in view)
+    let file = bytes;
+    // (every top-level `mdat` is left out, not only the first: a PRVW-shaped JPEG in media data is not a
+    // preview; CodeRabbit on #3583)
+    let media = cr3_media_data(file);
+    let whole_file = media.is_empty();
+    let mut regions: Vec<&[u8]> = Vec::new();
+    let mut from = 0usize;
+    for (start, end) in media {
+        if start >= from {
+            regions.extend(file.get(from..start));
+        }
+        from = from.max(end);
+    }
+    regions.extend(file.get(from..));
+    for tag in [b"PRVW", b"THMB"] {
+        // the whole file searched (its media data not found): the first valid box of a kind only, as
+        // the declared one comes before the media data and a later look-alike must not win
+        let mut taken = false;
+        for &bytes in &regions {
+            if whole_file && taken {
+                break;
+            }
+            let mut from = 0;
+            while let Some(i) = bytes.get(from..).and_then(|s| s.windows(4).position(|w| w == tag)).map(|p| p + from) {
+                from = i + 4;
+                let Some(start) = i.checked_sub(4) else { continue };
+                // (the sizes are the file's: checked, a 32-bit build must not wrap them)
+                let be32 = |at: usize| bytes.get(at..at.checked_add(4)?).map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]) as usize);
+                let (Some(size), Some(len)) = (be32(start), start.checked_add(20).and_then(be32)) else { continue };
+                let (Some(j), Some(box_end)) = (start.checked_add(24), start.checked_add(size.max(24))) else { continue };
+                let Some(end) = j.checked_add(len).filter(|e| len >= 4 && *e <= box_end && *e <= bytes.len()) else { continue };
+                let Some(jpeg) = bytes.get(j..end) else { continue };
+                // One that doesn't fit the budget left is skipped; a smaller one later may still fit.
+                if walked.saturating_add(jpeg.len()) > CR3_MAX_WALK {
+                    continue;
+                }
+                walked = walked.saturating_add(jpeg.len());
+                if is_dct_jpeg(jpeg) {
+                    out.push(jpeg);
+                    taken = true;
+                    if whole_file {
+                        break;
+                    }
+                    // (past it: a tag inside its JPEG is not another box)
+                    from = end;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Where a CR3's top-level `mdat` boxes lie (`start..end` each, `end` clamped to the file, in file
+/// order): the media data, most of the file. Empty when there is none, or the boxes stop making sense
+/// before the first. The metadata and the small previews are in the other top-level boxes.
+#[cfg(feature = "cr3")]
+fn cr3_media_data(bytes: &[u8]) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let _ = cr3_media_walk(bytes, &mut out);
+    out
+}
+
+/// [`cr3_media_data`]'s walk of the top-level boxes; `None` where they stop making sense.
+#[cfg(feature = "cr3")]
+fn cr3_media_walk(bytes: &[u8], out: &mut Vec<(usize, usize)>) -> Option<()> {
+    let be32 = |at: usize| bytes.get(at..at.checked_add(4)?).map(|s| u64::from(u32::from_be_bytes([s[0], s[1], s[2], s[3]])));
+    let be64 = |at: usize| bytes.get(at..at.checked_add(8)?).map(|s| u64::from_be_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]));
+    let mut at = 0usize;
+    for _ in 0..64 {
+        let size = be32(at)?;
+        let len = match size {
+            // (a box running to the end of the file)
+            0 => u64::try_from(bytes.len().saturating_sub(at)).unwrap_or(u64::MAX),
+            1 => be64(at.checked_add(8)?)?,
+            n => n,
+        };
+        let next = usize::try_from(len).ok().filter(|l| *l >= 8).and_then(|l| at.checked_add(l));
+        if bytes.get(at.checked_add(4)?..at.checked_add(8)?) == Some(b"mdat".as_slice()) {
+            out.push((at, next.unwrap_or(bytes.len()).min(bytes.len())));
+        }
+        at = next.filter(|n| *n < bytes.len())?;
+    }
+    None
+}
+
 fn trim_eoi(s: &[u8]) -> &[u8] {
     let end = s.windows(2).rposition(|w| w == [0xff, 0xd9]).map(|p| p + 2).unwrap_or(s.len());
     &s[..end]
@@ -413,3 +693,52 @@ fn trim_eoi(s: &[u8]) -> &[u8] {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod bound_tests {
+    #[test]
+    fn repeated_and_over_budget_candidates_are_dropped() {
+        let mut data = vec![0u8; 4 << 20];
+        // a valid JPEG header every 16 bytes, so each range below validates
+        for i in 0..64 {
+            data[i * 16..i * 16 + 15].copy_from_slice(&[0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]);
+        }
+        let mut found: Vec<&[u8]> = vec![&data[..], &data[..], &data[..]];
+        super::bound_candidates(&mut found, data.len());
+        assert_eq!(found.len(), 1);
+        // overlapping but unequal ranges stop at the shared budget (8 x the file, at least 1 MiB)
+        let mut found: Vec<&[u8]> = (0..64).map(|i| &data[i * 16..]).collect();
+        super::bound_candidates(&mut found, data.len());
+        assert!(found.len() <= 8 && found.iter().map(|s| s.len()).sum::<usize>() <= 8 * data.len());
+    }
+
+    #[test]
+    fn invalid_ranges_do_not_use_up_the_budget_before_a_valid_preview() {
+        let mut data = vec![0u8; 2 << 20];
+        let jpeg = [0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0];
+        data[1 << 20..(1 << 20) + jpeg.len()].copy_from_slice(&jpeg);
+        // 40 distinct invalid ranges of nearly the whole file (far past the 8 x budget), then the valid one
+        let mut found: Vec<&[u8]> = (0..40).map(|i| &data[i..1 << 20]).collect();
+        found.push(&data[1 << 20..]);
+        super::bound_candidates(&mut found, data.len());
+        assert_eq!(found.len(), 1);
+        assert!(found[0].starts_with(&[0xff, 0xd8]));
+    }
+
+    #[test]
+    fn header_walks_of_many_fill_byte_ranges_share_a_budget() {
+        // a JPEG header followed by 100 000 fill bytes and no frame: each walk would run to the end
+        let mut data = vec![0xffu8; 100_100];
+        data[..2].copy_from_slice(&[0xff, 0xd8]);
+        let valid = [0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0];
+        // 50 distinct such ranges (5 M steps against the 1 MiB budget), then a valid header
+        let mut found: Vec<&[u8]> = (0..50).map(|i| &data[..100_000 + i]).collect();
+        found.push(&valid);
+        super::bound_candidates(&mut found, data.len());
+        assert!(found.is_empty(), "the walks stop at the shared budget, so the later header is not reached");
+        // the same header with no hostile ranges before it is kept
+        let mut found: Vec<&[u8]> = vec![&valid];
+        super::bound_candidates(&mut found, data.len());
+        assert_eq!(found.len(), 1);
+    }
+}
