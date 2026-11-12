@@ -130,6 +130,40 @@ use craft::color::ui::{ColorPicker, SwatchPalette};
 
 The facade's rules and features are in [3.3](#33-the-craft-facade).
 
+An app that has no eframe `App` of its own implements `ShellApp` and starts with `shell::app::run` (`start_web` on the web), which installs the runtime and drives every frame. Both need the facade's `ui-app` feature.
+
+#### Host the runtime from your own eframe `App`
+
+An app with its own eframe `App` calls the hooks in `craft::ui::shell::embed`. `app::run`'s driver calls the same hooks, so both kinds of app run the same code.
+
+| When | eframe method | Call |
+| --- | --- | --- |
+| Once, when the app is created | with the `CreationContext` | `embed::install(ctx, InstallSpec, &UiFonts)`: the runtime, then the app's fonts. Returns the font `Stack`. |
+| Each frame | `raw_input_hook` | `embed::before_input(ctx, \|output\| { ...; input })`: the closure receives the `FrameOutput` of the frame before (fired commands, announcements, chrome toggles) and returns the `FrameInput` for this frame (`RootEnv`, command states, the `Host`). |
+| Each frame | `logic`, after the app's own logic | `embed::logic(ctx, \|\| decision)`: the root window's close path. The closure runs only when the root window was asked to close, and returns `CloseDecision::Close` or `Hold`. |
+| Each pass | `ui`, before the app's UI | `embed::before_ui(ctx, frame)`: hands the runtime the native window on Windows, and fits the root window to its monitor once. Needs `ui-app`. |
+| Each pass | `ui`, last | Optional: `ui::runtime::keys::with_window_intents(ctx, rtl, \|intents\| ...)` reads the keys no component took (below). |
+
+`install` takes over these parts of the context for the whole window, not only for framework components:
+
+| What | Effect on the app's own egui code |
+| --- | --- |
+| Tab | Bare Tab moves framework focus and never reaches egui, unless the focused framework stop keeps Tab. With `RootEnv::tab_toggles_chrome`, Tab with nothing focused toggles the chrome and arrives in `FrameOutput::chrome_toggles`. |
+| F6 | F6 and Shift+F6 move between panes and never reach egui. |
+| Escape | Plain Escape (Alt and Shift may be held) never reaches egui. It goes to the focused framework stop and its scopes; with no framework stop focused, it goes to the window as `Intent::Cancel`. |
+| F10, Alt+letter | Taken while a framework menu bar is registered: F10 focuses the bar, Alt+letter opens a menu (not on macOS). |
+| Edit chords | Taken while a framework editor is focused. |
+| Releases | The release of every key the runtime took is taken too. |
+| Focus surrender | Off: a click elsewhere does not drop egui focus. Framework components move focus on press themselves. |
+| Zoom keys | egui's keyboard zoom is off. The interface scale is `RootEnv::scale`. |
+| Quit shortcuts | egui's quit shortcuts are cleared. Quit goes through the close path. |
+| Close path | The runtime's window host owns the root window's close request. `embed::logic` asks the app through its closure, then hands the close to the platform quit where there is one (macOS). |
+| Input pacing | One press per pass: extra presses in one frame wait for the next passes. A press outside an open framework menu closes the menu and goes no further. After an OS resize of the window, the held pointer is released. |
+
+The window's keys are the ones the runtime routes to no component: an Escape or a plain Enter while no framework stop is focused, and the arrows' nudge. `with_window_intents` offers them to its closure while nothing has framework focus. The closure takes what it handles (`Intents::take(Intent::Cancel)`) and returns whether it took anything; the rest stays for later readers. A framework scope that ran earlier in the pass takes them first (an open dialog takes the Escape that closes it), so the app reads them last in its UI to see what no component took. App code that read `Key::Escape`, `Key::Tab`, F6 or F10 from egui reads these intents and `FrameOutput::chrome_toggles` instead.
+
+Framework dialogs the app keeps as values run on a `DialogHost`: the app calls `run(ui)` once per pass after its own UI and reads results with `take`.
+
 ### 2.3 Build, test and render a component
 
 Inside `craft-libs`, every local cargo command goes through `tools/cl`, which gives every build the same feature set so the framework is built once per target directory ([development.md](development.md)):

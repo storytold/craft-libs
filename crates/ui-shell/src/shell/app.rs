@@ -1,18 +1,17 @@
 //! `app::run`, the eframe entry point, and `native_options`: the root window opens where it was and the runtime is
 //! installed on eframe's context. Behind the `app` feature because eframe is a heavy, platform-specific dependency.
 //!
-//! Apps with their own eframe or wgpu setup call `runtime::install` and `runtime::frame::set_input` themselves.
+//! Apps with their own eframe `App` call the hooks of [`embed`] instead, as `run`'s driver does.
 
+use super::embed::{self, CloseDecision};
 use crate::runtime::InstallSpec;
-use crate::runtime::frame::{FrameInput, FrameOutput, request_repaint_after, set_input, take_output};
-use crate::runtime::windows::{self, WindowAction, WindowHost};
+use crate::runtime::frame::{FrameInput, FrameOutput, request_repaint_after};
 use craft_behavior::placement::Defaults;
-use craft_host::target::{Backend, Os, ShellInfo, WindowState};
-use craft_window::desktop::fits;
+use craft_host::target::{Backend, ShellInfo};
 use craft_window::policy::Decision;
 use craft_window::restore::Store;
 use craft_window::system::{SystemWindows, WindowSystem};
-use egui::{Context, Ui, ViewportId};
+use egui::{Context, Ui};
 use std::sync::{Arc, Mutex};
 use web_time::Instant;
 
@@ -76,18 +75,6 @@ impl AppSpec {
     }
 }
 
-/// What the app decides when the root window is asked to close.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum CloseDecision {
-    /// The window may close; the platform quit takes it from there.
-    #[default]
-    Close,
-    /// The window stays open, brought forward, while the app asks (for example about unsaved documents) and closes
-    /// it with `WindowAction::Close` once the answer allows.
-    Hold,
-}
-
 /// The app `run` drives.
 pub trait ShellApp {
     /// What the runtime reads before each pass.
@@ -115,39 +102,18 @@ pub trait ShellApp {
     fn output(&mut self, _output: FrameOutput) {}
 }
 
-/// eframe's `App` over a `ShellApp`: inputs go in before the pass and outputs come out at the start of the next
-/// frame. `logic` carries the close path, which must run while the window is hidden.
+/// eframe's `App` over a `ShellApp`: an app with its own eframe `App`, calling the hooks of [`embed`] as every such
+/// app does.
 struct Driver<A> {
     app: A,
-    /// Whether the first fit of the root window to its monitor has run.
-    fitted: bool,
-}
-
-/// Maximizes the root window, once its monitor is known, when it is larger than the monitor's usable area (Photoshop
-/// opens maximized on a small display). Never on macOS, which keeps new windows inside the screen's visible frame
-/// itself, and never for a window that is already maximized or in full screen. Returns whether the monitor was
-/// known, which is when the fit has run.
-fn fit_first(ctx: &Context) -> bool {
-    let host = WindowHost::of(ctx);
-    let monitor = ctx.input(|input| input.viewport().monitor_size);
-    let (Some(facts), Some(monitor)) = (host.facts(ViewportId::ROOT), monitor) else { return false };
-    let outer = facts.outer.unwrap_or(facts.inner);
-    if windows::os_of(ctx) != Os::Mac
-        && facts.state == WindowState::Normal
-        && monitor.is_finite()
-        && outer.is_finite()
-        && !fits(outer.size(), monitor)
-    {
-        host.act(ViewportId::ROOT, WindowAction::SetMaximized(true));
-    }
-    true
 }
 
 impl<A: ShellApp> eframe::App for Driver<A> {
     fn raw_input_hook(&mut self, ctx: &Context, _: &mut crate::runtime::egui::input::RawInput) {
-        let output = take_output(ctx);
-        self.app.output(output);
-        set_input(ctx, self.app.frame_input());
+        embed::before_input(ctx, |output| {
+            self.app.output(output);
+            self.app.frame_input()
+        });
     }
 
     fn logic(&mut self, ctx: &Context, _: &mut eframe::Frame) {
@@ -156,21 +122,11 @@ impl<A: ShellApp> eframe::App for Driver<A> {
         if let Some(due) = self.app.tick(now) {
             request_repaint_after(ctx, due.saturating_duration_since(now).as_secs_f64());
         }
-        if windows::root_close_requested(ctx) && self.app.close_requested() == CloseDecision::Hold {
-            windows::hold_close(ctx);
-        }
-        windows::logic(ctx);
+        embed::logic(ctx, || self.app.close_requested());
     }
 
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
-        #[cfg(windows)]
-        windows::route_root(ui.ctx(), || craft_window::native::NativeWindow::of_handle(&*frame));
-        #[cfg(not(windows))]
-        let _ = frame;
-        // The monitor is known only once the window exists, so the fit runs from the first passes, and once.
-        if !self.fitted {
-            self.fitted = fit_first(ui.ctx());
-        }
+        embed::before_ui(ui.ctx(), frame);
         self.app.ui(ui);
     }
 }
@@ -213,10 +169,10 @@ fn create<A: ShellApp + 'static>(
         if let Some(decision) = spec.frame {
             install = install.frame(decision);
         }
-        crate::install(&cc.egui_ctx, install).map_err(|error| format!("the runtime could not be installed: {error}"))?;
         // The suite's interface face; an app that installs its own fonts in `make` replaces it.
-        crate::fonts::UiFonts::new(&crate::fonts::I18nScripts).install(&cc.egui_ctx);
-        Ok(Box::new(Driver { app: make(&cc.egui_ctx), fitted: false }))
+        let fonts = crate::fonts::UiFonts::new(&crate::fonts::I18nScripts);
+        embed::install(&cc.egui_ctx, install, &fonts).map_err(|error| format!("the runtime could not be installed: {error}"))?;
+        Ok(Box::new(Driver { app: make(&cc.egui_ctx) }))
     }
 }
 

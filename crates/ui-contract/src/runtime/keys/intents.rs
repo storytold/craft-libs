@@ -263,9 +263,14 @@ pub fn intents_of(ctx: &Context, id: Option<Id>, rtl: bool) -> Intents {
     }
 }
 
-/// Offers the window's unfocused intents to `take` while nothing in the window has focus, and writes back what it
-/// left untaken. `take` returns whether it took any. `false` when something is focused or nothing was taken.
-#[doc(hidden)]
+/// Offers the window's unfocused intents to `take` while nothing in the window has framework focus, and writes back
+/// what it left untaken. `take` returns whether it took any. `false` when something is focused or nothing was taken.
+///
+/// The window's intents are the keys the runtime routes to no component this pass: an Escape (`Intent::Cancel`)
+/// or a plain Enter (`Intent::Submit`) while no framework stop is focused, and the arrows' nudge. A component or a
+/// scope that runs earlier in the pass takes them first (an open dialog takes the Escape that closes it), so an app
+/// that hosts the runtime reads them last in its UI to see what no component took. `rtl` reads horizontal moves in
+/// the window's direction.
 pub fn with_window_intents(ctx: &Context, rtl: bool, take: impl FnOnce(&mut Intents) -> bool) -> bool {
     if focus::focused_rec(ctx).is_some() {
         return false;

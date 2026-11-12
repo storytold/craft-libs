@@ -34,7 +34,6 @@ pub use intents::intents_of;
 pub use intents::settle;
 #[doc(hidden)]
 pub use intents::take_submit;
-#[doc(hidden)]
 pub use intents::with_window_intents;
 pub(crate) use intents::{
     Lent, context_part, context_request, give_back, lend, lent_taken, request_context, route_whole_reset, scope_escape, take_cancel,

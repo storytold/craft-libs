@@ -1,7 +1,8 @@
-//! `AppShell` and its presets, `TitleBar`, captions, `ToastHost` and `app::run`.
+//! `AppShell` and its presets, `TitleBar`, captions, `ToastHost`, `app::run` and the `embed` hooks.
 
 #[cfg(feature = "app")]
 pub mod app;
+pub mod embed;
 pub mod title_bar;
 mod words;
 
