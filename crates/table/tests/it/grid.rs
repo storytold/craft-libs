@@ -304,6 +304,10 @@ impl GridModel for Merged {
         self.sheet.columns()
     }
 
+    fn last_used(&self) -> CellAt<u32> {
+        self.sheet.last_used()
+    }
+
     fn frozen(&self) -> (u32, u32) {
         (1, 1)
     }
