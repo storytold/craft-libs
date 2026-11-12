@@ -13,7 +13,7 @@ MHTML web archives and mbox files.
   content so the same input gives the same bytes.
 - **The pieces**, for callers that work below the tree: `split_headers`, `write_field`,
   `parse_params`, `decode_words` / `encode_words`, `transfer::{base64, base64_decode, qp_encode,
-  qp_decode}`, `charset::{decode, guess}`, `parse_address_list` / `format_address_list`,
+  qp_decode}`, `charset::{decode, guess, is_known}`, with the `detect` feature `detect::{is_text, decode, legacy, legacy_label}` for bytes that name no character set, `parse_address_list` / `format_address_list`,
   `parse_date` / `format_date`, `split_multipart`, `mbox_messages` / `write_mbox_message`, and
   `Resources` / `start_part` / `resolve_location` for `multipart/related`.
 

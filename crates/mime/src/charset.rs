@@ -43,6 +43,12 @@ fn encoding(label: &str) -> Option<&'static Encoding> {
     Encoding::for_label_no_replacement(label.as_bytes())
 }
 
+/// Does [`decode`] know the character set `label` names? An unknown one is read as UTF-8; a
+/// caller with a better fallback (detection, a container's own default) asks first.
+pub fn is_known(label: &str) -> bool {
+    encoding(&label.trim().trim_matches(['"', '\'']).trim().to_ascii_lowercase()).is_some()
+}
+
 /// Text from bytes that don't say what they are: UTF-8 when they are valid UTF-8, else Windows-1252.
 pub fn guess(bytes: &[u8]) -> String {
     match std::str::from_utf8(bytes) {
@@ -96,6 +102,16 @@ mod tests {
         assert_eq!(decode(b"na\xEFve", "us-ascii"), "naïve");
         assert_eq!(guess(b"\xE2\x82\xAC"), "€");
         assert_eq!(guess(b"\xE2\x82"), "\u{e2}\u{201a}");
+    }
+
+    #[test]
+    fn known_and_unknown_names() {
+        for known in ["utf-8", " GBK ", "\"Shift_JIS\"", "latin-9", "cp-1250", "windows-1251", "koi8-r", "utf-16le"] {
+            assert!(is_known(known), "{known}");
+        }
+        for unknown in ["", "x-unknown", "iso-2022-kr", "hz-gb-2312", "utf-99"] {
+            assert!(!is_known(unknown), "{unknown}");
+        }
     }
 
     #[test]
