@@ -1,14 +1,15 @@
 //! `TreePicker`: a field that shows the picked item's path and opens a tree of folders and items.
 //!
-//! The closed field is a `SelectFace`. The popup is the dropdown preset holding one tree option list: folders open and
-//! close with Left, Right, Enter and a click, an item is picked with Enter or a click, and type-ahead jumps to a row
-//! by its name.
+//! The closed field is a `SelectFace`. The popup is the dropdown preset holding a search field over one tree option
+//! list: folders open and close with Left, Right, Enter and a click, and an item is picked with Enter or a click.
+//! Typing lists the items whose path holds every typed word instead of the tree.
 
 #[cfg(feature = "testing")]
 mod stories;
 
 use super::SelectFace;
 use super::face::toggle_on_key;
+use super::search;
 use super::words::PickerWords;
 use crate::contract::overlay::{Dismiss, Popup};
 use crate::contract::{
@@ -21,6 +22,7 @@ use crate::runtime::env::{EnvView, Label};
 use crate::runtime::words::CommonWords;
 use crate::style::{ComponentStyle, FocusLook, StyleCx, SurfaceLook};
 use craft_behavior::{DisplayOrder, HitLevel, HitPriority, ItemSource, Metrics, PartKey, Selection, Sense, Value};
+use craft_i18n::Folder;
 use egui::{Rect, Vec2};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -134,6 +136,29 @@ impl<'a, K: Hash + Eq + Clone> Tree<'a, K> {
         std::iter::successors(self.parents[at], |&parent| self.parents[parent]).take(self.entries.len())
     }
 
+    /// The names from the top folder down to entry `at`, as `name` gives them, joined with `separator`.
+    fn path(&self, at: usize, separator: &str, name: impl Fn(usize) -> Label) -> String {
+        let mut names: Vec<Label> = std::iter::once(at).chain(self.ancestors(at)).map(name).collect();
+        names.reverse();
+        names.iter().map(Label::as_str).collect::<Vec<_>>().join(separator)
+    }
+
+    /// The items (not folders) whose path, joined with `separator`, holds every word of `query`, folded by `folder`:
+    /// those whose own name starts with the whole query first, then the rest, each in tree order.
+    fn search(&self, labels: &[Label], separator: &str, query: &str, folder: &Folder) -> Vec<usize> {
+        let whole = folder.key(query.trim());
+        let words: Vec<&str> = whole.split_whitespace().collect();
+        let (mut first, mut rest) = (Vec::new(), Vec::new());
+        for at in (0..self.entries.len()).filter(|&at| !self.entries[at].folder) {
+            let path = folder.key(&self.path(at, separator, |at| labels[at].clone()));
+            if words.iter().all(|word| path.contains(word)) {
+                if folder.key(labels[at].as_str()).starts_with(&whole) { first.push(at) } else { rest.push(at) }
+            }
+        }
+        first.extend(rest);
+        first
+    }
+
     /// The folders holding the entry with `key`, open.
     fn opened_for(&self, key: Option<&K>) -> OpenSet<K> {
         let mut open = OpenSet::new();
@@ -199,6 +224,33 @@ impl<K: Clone + Hash + Eq> DisplayOrder<K> for Rows<'_, '_, K> {
 
 impl<K: Clone + Hash + Eq> ItemSource<K> for Rows<'_, '_, K> {}
 
+/// The items a query found, in the order `Tree::search` gives, as a flat collection source.
+struct Results<'a, 'k, K> {
+    tree: &'k Tree<'a, K>,
+    labels: &'k [Label],
+    found: &'k [usize],
+}
+
+impl<K: Clone + Hash + Eq> DisplayOrder<K> for Results<'_, '_, K> {
+    fn len(&self) -> usize {
+        self.found.len()
+    }
+
+    fn key(&self, at: usize) -> K {
+        self.tree.entries[self.found[at]].key().clone()
+    }
+
+    fn enabled(&self, at: usize) -> bool {
+        self.tree.entries[self.found[at]].enabled
+    }
+
+    fn text(&self, at: usize) -> Option<Cow<'_, str>> {
+        Some(Cow::Borrowed(self.labels[self.found[at]].as_str()))
+    }
+}
+
+impl<K: Clone + Hash + Eq> ItemSource<K> for Results<'_, '_, K> {}
+
 /// A field that opens a tree of items and folders and sets the binding to the picked item's key. The field shows the
 /// item's path, folder names joined by the path separator, the placeholder while nothing is picked, or the mixed word.
 #[derive(crate::contract::Component, crate::contract::Props)]
@@ -223,9 +275,7 @@ impl<'a, K: Value + Eq + Hash + 'static> TreePicker<'a, K> {
     fn path(&self, key: &K, separator: &str, env: &EnvView<'_>) -> Option<String> {
         let tree = Tree::of(self.entries);
         let at = tree.position(key)?;
-        let mut names: Vec<Label> = std::iter::once(at).chain(tree.ancestors(at)).map(|at| env.resolve(self.entries[at].name())).collect();
-        names.reverse();
-        Some(names.iter().map(Label::as_str).collect::<Vec<_>>().join(separator))
+        Some(tree.path(at, separator, |at| env.resolve(self.entries[at].name())))
     }
 
     /// What the field shows: the picked item's path; else, in the muted look, the mixed word for a mixed value or the
@@ -277,9 +327,10 @@ impl<K: Value + Eq + Hash + 'static> Component for TreePicker<'_, K> {
         toggle_on_key(cx, popup);
     }
 
-    /// The popup: the tree with the folders closed except those holding the picked item, which is selected and in
-    /// view. A click or Enter on a folder opens or closes it; on an item it sets the binding and closes the popup. A
-    /// blocked item takes neither.
+    /// The popup: a search field over the tree. With nothing typed, the tree shows with the folders closed except
+    /// those holding the picked item, which is selected and in view. A click or Enter on a folder opens or closes it;
+    /// on an item it sets the binding and closes the popup. A blocked item takes neither. Typing lists the items found
+    /// (`Tree::search`), each with its path as the detail line, the first one ready for Enter.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
         let popup = cx.popup("tree");
         let entries = self.entries;
@@ -288,35 +339,57 @@ impl<K: Value + Eq + Hash + 'static> Component for TreePicker<'_, K> {
         let labels: Vec<Label> = entries.iter().map(|entry| cx.env.resolve(entry.name())).collect();
         let reasons: Vec<Option<Label>> = entries.iter().map(|entry| entry.blocked.as_ref().map(|reason| cx.env.resolve(reason))).collect();
         let name = cx.label();
+        let separator = cx.words::<CommonWords>().path_separator.clone();
+        let no_matches = cx.words::<PickerWords>().no_matches.clone();
+        let folder = cx.env.folder();
+        let row = |at: usize, open: Option<bool>| {
+            let entry = &entries[at];
+            let mut row = ListRow::new(labels[at].clone()).option().check(chosen.as_ref() == Some(entry.key()));
+            if let Some(open) = open {
+                row = row.group(open);
+            }
+            if let Some(icon) = entry.icon.as_ref() {
+                row = row.icon(icon.clone());
+            }
+            match &reasons[at] {
+                Some(reason) => row.enabled(false).ink(RowInk::Dimmed).tooltip(reason.clone()),
+                None => row,
+            }
+        };
         // Folders open and close inside the popup, so activating one must not close it: a pick closes it below.
-        let overlay = Overlay::dropdown().dismiss(Dismiss::new().focus_left(true));
-        let events = ui.show(popup, overlay, |ui, _| {
+        let overlay = Overlay::dropdown().dismiss(Dismiss::new());
+        let events = ui.show(popup, overlay, |ui, body| {
             let fresh = Popup::opening(popup, cx);
+            let list_id = ui.scope_id().with("tree");
+            let query = search::show(ui, body, popup, cx, &name, list_id);
             if fresh {
                 cx.memory::<Browsing<K>>().open = tree.opened_for(chosen.as_ref());
+            }
+            if !query.trim().is_empty() {
+                let found = tree.search(&labels, separator.as_str(), &query, &folder);
+                let results = Results { tree: &tree, labels: &labels, found: &found };
+                return List::<K>::options(name.clone())
+                    .id(list_id)
+                    .empty(no_matches.clone())
+                    .rows_stamp(search::stamp(&query))
+                    .show_items(ui, &results, &mut |key, _| {
+                        let Some(at) = tree.position(key) else { return ListRow::spacer() };
+                        row(at, None).detail(tree.path(at, separator.as_str(), |at| labels[at].clone()))
+                    })
+                    .events;
             }
             let open = cx.memory::<Browsing<K>>().open.clone();
             let (shown, depth) = tree.visible(&open);
             let rows = Rows { tree: &tree, labels: &labels, shown: &shown, depth: &depth, open: &open };
             let selection = chosen.clone().map_or_else(Selection::default, Selection::single);
-            let mut list = List::<K>::options(name.clone()).allow_empty(false).tree(true).selection(Bind::given(selection));
+            let mut list = List::<K>::options(name.clone()).id(list_id).allow_empty(false).tree(true).selection(Bind::given(selection));
             if let Some(key) = chosen.clone().filter(|_| fresh) {
                 list = list.reveal(key);
             }
             list.show_items(ui, &rows, &mut |key, _| {
                 let Some(at) = tree.position(key) else { return ListRow::spacer() };
-                let entry = &entries[at];
-                let mut row = ListRow::new(labels[at].clone()).option().check(chosen.as_ref() == Some(key)).depth(depth[at]);
-                if entry.folder {
-                    row = row.group(open.is_open(key));
-                }
-                if let Some(icon) = entry.icon.as_ref() {
-                    row = row.icon(icon.clone());
-                }
-                match &reasons[at] {
-                    Some(reason) => row.enabled(false).ink(RowInk::Dimmed).tooltip(reason.clone()),
-                    None => row,
-                }
+                let folder = entries[at].folder.then(|| open.is_open(key));
+                row(at, folder).depth(depth[at])
             })
             .events
         });

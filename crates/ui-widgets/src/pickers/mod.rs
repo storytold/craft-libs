@@ -6,6 +6,7 @@ mod dress;
 mod face;
 mod icon_picker;
 mod rows;
+mod search;
 mod select;
 mod tree_picker;
 mod unit_select;

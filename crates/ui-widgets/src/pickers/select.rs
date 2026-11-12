@@ -7,21 +7,21 @@
 use super::dress::RowDress;
 use super::face::{SelectFace, toggle_on_key};
 use super::rows::EntryRows;
+use super::search;
 use super::words::PickerWords;
 use crate::buttons::IconButton;
 use crate::contract::overlay::{Popup, Trigger};
 use crate::contract::{
     Access, Bind, BindMut, BodyCx, CollectionEvent, Common, Component, Cx, Edit as _, EditResponse, Entry, Focus as _, LeadOnOpen, LeadSource,
-    MeasureCx, Numeric, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Remember as _, Role, Show as _,
+    MeasureCx, Numeric, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Role, Show as _,
     ShowCollection as _, ShowContainer as _, WordSetCx as _, step_stop, step_stops,
 };
 use crate::list::{List, ListRow};
 use crate::menu::Menu;
 use crate::runtime::env::Label;
-use crate::runtime::focus::{self, FocusMove, FocusTarget};
+use crate::runtime::focus::FocusMove;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, Ink, StyleCx, SurfaceLook, TextLook, TypeRole};
-use crate::text::TextField;
 use craft_behavior::nav::{StepResult, ValueAxes, ValueSteps};
 use craft_behavior::{
     CancelReason, GesturePhase, HitLevel, HitPriority, IconId, Metrics, NavMove, PartKey, Selection, Sense, TypeAhead, Value, wheel_step,
@@ -239,24 +239,12 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         let (searchable, dress) = (self.searchable, self.decorate.as_ref());
         let mut header_menu = self.header_menu.as_mut();
         let events = ui.show(popup, Overlay::dropdown(), |ui, body| {
+            let list = ui.scope_id().with("options");
             let mut query = String::new();
             if searchable || header_menu.is_some() {
                 ui.horizontal(|ui| {
                     if searchable {
-                        let typed = body.memory::<Query>();
-                        if Popup::opening(popup, cx) {
-                            *typed = Query::default();
-                        }
-                        let field = TextField::search(search_name(&words, &name), Bind::bound(&mut typed.text)).show(ui);
-                        query.clone_from(&typed.text);
-                        // The dropdown leaves the key focus on the select; the filter field takes it once the layer has
-                        // recorded the select as its opener, so typing reaches the field.
-                        let taken = &mut body.memory::<Query>().focused;
-                        if field.response.has_focus() {
-                            *taken = true;
-                        } else if !*taken && !Popup::opening(popup, cx) {
-                            focus::request(ui.ctx(), FocusTarget::Id(field.response.id));
-                        }
+                        query = search::show(ui, body, popup, cx, &name, list);
                     }
                     if let Some(rows) = header_menu.as_mut() {
                         let more = IconButton::new(IconId::new(HEADER_MENU_ICON)).popup(PopupKind::Menu).label(words.header_menu.clone()).show(ui);
@@ -273,6 +261,7 @@ impl<T: Value + 'static> Component for Select<'_, T> {
             // While a query narrows the list the lead starts nowhere, so Down lands on the first match and Enter picks it.
             let lead = if query.trim().is_empty() { LeadOnOpen::First } else { LeadOnOpen::Selected };
             List::options(name.clone())
+                .id(list)
                 .empty(words.no_matches.clone())
                 .selection(Bind::given(selection))
                 .lead_on_open(lead)
@@ -325,16 +314,4 @@ impl<T: Value + 'static> Component for Select<'_, T> {
     fn finish(self, cx: Cx<'_, Self>) -> EditResponse<T> {
         cx.edit_response()
     }
-}
-
-/// The filter text of a searchable select's open list, and whether its field has taken the key focus yet.
-#[derive(Clone, Default)]
-struct Query {
-    text: String,
-    focused: bool,
-}
-
-/// The filter field's accessible name: the select's own name leads, so the field reads as part of it.
-fn search_name(words: &PickerWords, select: &Label) -> Label {
-    if select.as_str().is_empty() { words.search.clone() } else { Label::from(format!("{} {}", select.as_str(), words.search.as_str())) }
 }
