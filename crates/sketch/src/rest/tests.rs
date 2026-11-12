@@ -127,20 +127,24 @@ fn text_stored_the_old_way_marks_the_file_too_old() {
 
 #[test]
 fn deep_nesting_stops_with_a_warning() {
-    // 210 masters, each holding an instance of the next: expanded, the layers nest past 200. The
-    // mapping recurses once per level; an unoptimised build takes more than the 2 MiB of a test
-    // thread for that (an optimised one maps 400 levels in it), so this runs on 8 MiB, a native
-    // main thread's default.
+    // Five masters, each 50 groups deep with an instance of the next at the bottom: no page is
+    // nested deeper than its JSON may be, but expanded, the layers nest past 200. The mapping
+    // recurses once per level; an unoptimised build takes more than the 2 MiB of a test thread
+    // for that (an optimised one maps 400 levels in it), so this runs on 8 MiB, a native main
+    // thread's default.
     let run = || {
-        let n = 210;
+        let n = 5;
         let masters: Vec<Value> = (0..n)
             .map(|i| {
-                let inner = if i < n - 1 {
-                    vec![instance(&format!("I{i}"), &format!("S{}", i + 1), 0.0, 0.0, 1.0, 1.0, &[])]
+                let mut inner = if i < n - 1 {
+                    instance(&format!("I{i}"), &format!("S{}", i + 1), 0.0, 0.0, 1.0, 1.0, &[])
                 } else {
-                    vec![rect("R", 0.0, 0.0, 1.0, 1.0)]
+                    rect("R", 0.0, 0.0, 1.0, 1.0)
                 };
-                master(&format!("M{i}"), &format!("S{i}"), "Nest", 1.0, 1.0, inner)
+                for d in 0..50 {
+                    inner = group(&format!("G{i}_{d}"), 0.0, 0.0, 1.0, 1.0, vec![inner]);
+                }
+                master(&format!("M{i}"), &format!("S{i}"), "Nest", 1.0, 1.0, vec![inner])
             })
             .collect();
         let top = instance("TOP", "S0", 0.0, 0.0, 1.0, 1.0, &[]);
