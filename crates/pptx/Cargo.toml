@@ -15,3 +15,7 @@ craft-drawingml = { workspace = true }
 kurbo = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
+craft-opc = { workspace = true }
+craft-xml = { workspace = true }
+log = "0.4"
+thiserror = { workspace = true }

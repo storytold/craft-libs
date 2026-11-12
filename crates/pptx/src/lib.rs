@@ -12,7 +12,12 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod anim;
+mod package;
 pub mod placeholder;
+mod read;
+
+pub use package::{LIMITS, MAX_ENTRIES, MAX_INFLATE_WORK, MAX_PART, MAX_TOTAL, MAX_XML_PART};
+pub use read::MAX_TAG_BYTES;
 
 use std::sync::Arc;
 
@@ -28,6 +33,110 @@ pub use kurbo::{Rect, Size};
 use serde::{Deserialize, Serialize};
 
 pub use anim::{AnimClass, AnimStart, Animation, Transition};
+
+/// Extension URI of the PowerPoint 2010 section list in `presentation.xml`.
+pub(crate) const SECTION_EXT_URI: &str = "{521415D9-36F7-43E2-AB2F-B90AF26B5E84}";
+
+/// Why a package could not be read or written.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("not a PPTX file: {0}")]
+    NotPptx(String),
+    #[error("unsupported: {0}")]
+    Unsupported(String),
+    #[error("write failed: {0}")]
+    Write(String),
+    #[error("malformed XML: {0}")]
+    Xml(String),
+}
+
+/// What the caller supplies where a file leaves something out: the reader asks for a master when a
+/// file has none it can read, and for the theme of a master that names none.
+pub trait Defaults {
+    /// A slide master for slides of `size`, with at least one layout. Its ids (master, layouts,
+    /// shapes) are above `after`; returns the master and the largest id it used.
+    fn master(&self, size: Size, after: u32) -> (Master, u32);
+    /// The theme of a master whose file names none.
+    fn theme(&self) -> Theme {
+        Theme::default()
+    }
+}
+
+/// [`Defaults`] with nothing of an application's: a master with one blank layout and the plain
+/// [`Theme::default`].
+pub struct Plain;
+
+impl Defaults for Plain {
+    fn master(&self, _size: Size, after: u32) -> (Master, u32) {
+        let (master, layout) = (after.saturating_add(1), after.saturating_add(2));
+        let blank = Layout { id: LayoutId(layout), name: "Blank".into(), kind: LayoutType::Blank, show_master_shapes: true, ..Default::default() };
+        (Master { id: MasterId(master), name: "Office Theme".into(), theme: self.theme(), layouts: vec![blank], ..Default::default() }, layout)
+    }
+}
+
+/// Does this look like an OOXML package (a ZIP with `[Content_Types].xml`)?
+///
+/// The part is looked up in the archive's central directory, not in the leading bytes: writers may
+/// store it anywhere in the archive (recent PowerPoint builds put it last, megabytes in).
+pub fn sniff(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"PK") && craft_opc::LazyPackage::open(bytes, &LIMITS).is_ok_and(|p| p.has("[Content_Types].xml"))
+}
+
+/// Reads a `.pptx` / `.potx` / `.ppsx` package leniently: unknown parts are skipped, malformed
+/// parts are logged and left out, and every size and depth is bounded. `defaults` fills in what
+/// the file leaves out.
+pub fn import(bytes: &[u8], defaults: &dyn Defaults) -> Result<Presentation, Error> {
+    read::import(bytes, defaults)
+}
+
+/// [`import`], plus the part names of slides the file lists but that could not be read and were
+/// left out.
+pub fn import_checked(bytes: &[u8], defaults: &dyn Defaults) -> Result<(Presentation, Vec<String>), Error> {
+    read::import_checked(bytes, defaults)
+}
+
+/// [`import`] with a lower presentation-wide chart point budget, so tests reach the over-budget
+/// path without a multi-million-point chart.
+#[doc(hidden)]
+pub fn import_with_chart_budget(bytes: &[u8], defaults: &dyn Defaults, points: usize) -> Result<Presentation, Error> {
+    read::import_with_chart_points(bytes, defaults, points).map(|(p, _)| p)
+}
+
+/// The theme of a `.thmx` file, or of a `.pptx` / `.potx`'s first master, with its media.
+pub fn import_theme(bytes: &[u8]) -> Result<(Theme, Vec<MediaItem>), Error> {
+    read::import_theme(bytes)
+}
+
+/// Content type for a file name's extension.
+pub(crate) fn mime_for(name: &str) -> &'static str {
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" | "jpe" => "image/jpeg",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "tif" | "tiff" => "image/tiff",
+        "svg" => "image/svg+xml",
+        "emf" => "image/x-emf",
+        "wmf" => "image/x-wmf",
+        "webp" => "image/webp",
+        "mp4" | "m4v" => "video/mp4",
+        "mov" => "video/quicktime",
+        "wmv" => "video/x-ms-wmv",
+        "avi" => "video/x-msvideo",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "m4a" => "audio/mp4",
+        "wma" => "audio/x-ms-wma",
+        "ogg" => "audio/ogg",
+        "flac" => "audio/flac",
+        "glb" => "model/gltf-binary",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "fntdata" => "application/x-fontdata",
+        _ => "application/octet-stream",
+    }
+}
 
 macro_rules! id_type {
     ($(#[$doc:meta])* $name:ident) => {
