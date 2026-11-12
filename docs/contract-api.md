@@ -1689,6 +1689,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `const SINGLE_VALUE: bool`. Whether the component edits one value that several selected things cannot disagree on (a colour picker's
   - `const BINDS_VIEW: bool`. Whether the binding is the component's view of what it shows (a time area's scroll and zoom, a navigator's
   - `const DISABLED: DisabledLook`. How a disabled instance looks: token states (the default), or its enabled look faded.
+  - `const RULE: bool`. Whether the component is a rule between groups of members (a divider). In a bar's line a rule shows only when
   - `type Style`. The style type.
   - `type Output`. `Response`, `EditResponse<T>` or a richer type.
   - `fn shows_label(&self) -> bool`. Whether this instance paints its label as visible text; `SHOWS_LABEL` unless an instance prop decides, as
