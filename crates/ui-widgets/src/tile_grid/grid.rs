@@ -60,8 +60,8 @@ pub enum RatingKeys {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum GridEvent<K> {
-    /// A tile's stars were clicked (that tile), or a rating key was pressed (the selected tiles, or the lead when none
-    /// is selected): the rating, 0 clears. The one route to a rating; the tile's own `TilePartEvent::Rate` does not
+    /// A tile's stars were clicked (the selected tiles when the tile is one of them, else that tile), or a rating key was
+    /// pressed (the selected tiles, or the lead when none is selected): the rating, 0 clears. The one route to a rating; the tile's own `TilePartEvent::Rate` does not
     /// reach the collection's events.
     #[non_exhaustive]
     Rate {
@@ -673,7 +673,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
     /// collection's events on a header row are the group events instead: Enter picks the group, the context-menu
     /// key asks for its menu, Left and Right open and close it, and the lead on it is not reported. A tail row keeps its
     /// Enter and the lead on it, and adds its click as `CollectionEvent::Activate`; it has no menu.
-    fn finish(self, mut cx: Cx<'_, Self>) -> TileGridOutput<K> {
+    fn finish(mut self, mut cx: Cx<'_, Self>) -> TileGridOutput<K> {
+        let selected = self.rated(&cx);
         let mut response = cx.collection_response();
         let mut events = self.events;
         let mods = crate::runtime::pointer::frame(&cx.core.ctx).mods;
@@ -701,7 +702,11 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
                 continue;
             }
             match event {
-                CollectionEvent::Item(key, TilePartEvent::Rate(rating)) => events.push(GridEvent::Rate { keys: vec![key], rating }),
+                CollectionEvent::Item(key, TilePartEvent::Rate(rating)) => {
+                    // Stars on a selected tile rate the whole selection.
+                    let keys = if selected.contains(&key) { selected.clone() } else { vec![key] };
+                    events.push(GridEvent::Rate { keys, rating });
+                }
                 CollectionEvent::Toggle(edit) if self.checks => {
                     // The check column does not sweep, so each flip arrives whole as a `Set`.
                     if let Some(SweepStep::Flip(toggle)) = SweepApply::default().feed(&edit) {

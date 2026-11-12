@@ -704,7 +704,7 @@ impl Component for Tile<'_> {
             && match self.bar {
                 BadgeVisibility::Always => true,
                 BadgeVisibility::Never => false,
-                _ => cx.hovered() || self.has_bar_values(),
+                _ => cx.hovered() || cx.resolved.selected == Some(true) || self.has_bar_values(),
             };
         let mut placed = self.place(&sizes, cx.content_rect, rtl, bar_shown, &faces, &pill_widths);
         let _ = cx.part(PICTURE, placed.picture).sense(Sense::HOVER);

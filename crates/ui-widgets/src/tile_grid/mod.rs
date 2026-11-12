@@ -128,7 +128,7 @@ pub enum TileStatus {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum BadgeVisibility {
-    /// While the pointer is over the tile, or when a rating, flag or label is set.
+    /// While the pointer is over the tile, while it is selected, or when a rating, flag or label is set.
     #[default]
     Auto,
     /// Always.

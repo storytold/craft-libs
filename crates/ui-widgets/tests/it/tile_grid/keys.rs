@@ -134,3 +134,32 @@ fn a_wheel_notch_scrolls_a_third_of_the_view() {
     let share = moved / view.get().height();
     assert!((0.3..0.37).contains(&share), "one notch scrolls a third of the view: {moved} of {}", view.get().height());
 }
+
+/// Stars clicked on a selected tile rate every selected tile; on a tile outside the selection they rate that tile
+/// alone. A selected tile shows its badge bar, so its stars can be clicked without hovering it first.
+#[trial]
+fn stars_on_a_selected_tile_rate_the_selection() {
+    let seen = Rc::new(RefCell::new(Seen::default()));
+    let held = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1, 2, 3];
+        let source = keyed(&keys, |key: &usize| *key);
+        let out = TileGrid::new("Library").show_items(ui, &source, &mut |key, _| Tile::new(NAMES[*key]).rating(0));
+        held.borrow_mut().grid.extend(out.events);
+    });
+    fixture.room(Vec2::new(600.0, 400.0));
+    fixture.settle();
+    for (name, mods) in [("Tile 1", Modifiers::NONE), ("Tile 2", Modifiers::SHIFT)] {
+        let tile = fixture.by_label(name).expect("the tile has a node");
+        fixture.hold(mods).click(&tile).hold(Modifiers::NONE).settle();
+    }
+    let stars = fixture.by_label("Rating of Tile 2").expect("a selected tile shows its stars");
+    fixture.click(&stars).settle();
+    let tile = fixture.by_label("Tile 4").expect("the tile has a node");
+    fixture.frame(vec![pointer::moved(tile.rect.center())]).settle();
+    let stars = fixture.by_label("Rating of Tile 4").expect("the hovered tile shows its stars");
+    fixture.click(&stars).settle();
+    let rated: Vec<Vec<usize>> =
+        seen.borrow().grid.iter().filter_map(|event| if let GridEvent::Rate { keys, .. } = event { Some(keys.clone()) } else { None }).collect();
+    assert_eq!(rated, [vec![0, 1], vec![3]], "the selection is rated together, an unselected tile alone");
+}
