@@ -6,7 +6,7 @@ mod stories;
 use craft_behavior::{EditEvent, EditEvents, IconId};
 use craft_theme::ControlSize;
 use craft_ui::buttons::ToggleButton;
-use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Props as _, RowAlign, Show as _, ShowContainer as _, SideLabel, TooltipSpec};
+use craft_ui::contract::{Bind, Entry, Gap, NoValue, Outcome, Props as _, RowAlign, Show as _, ShowContainer as _, SideLabel, Sizing, TooltipSpec};
 use craft_ui::display::{Shade, Text};
 use craft_ui::form::Field;
 use craft_ui::layout_components::{Row, Stack};
@@ -138,8 +138,9 @@ impl<'a> BlendRows<'a> {
 
         let mut events = Vec::new();
         let block = Stack::new().fill_width().show(ui, |ui, _| {
-            // Opacity ends the blend row and Fill ends the lock row, as in Photoshop.
-            Row::new().fill_width().align(RowAlign::SpaceBetween).show(ui, |ui, _| {
+            // Opacity ends the blend row and Fill ends the lock row, as in Photoshop, so the two fields share one
+            // column. A section gap keeps each caption with its field rather than with the group before it.
+            Row::new().fill_width().align(RowAlign::SpaceBetween).gap(Gap::Section).show(ui, |ui, _| {
                 let blend_name = words.blend_mode.clone();
                 let picked = Select::new(blend_name.clone(), Bind::given(props.blend_key.clone()), blend_modes)
                     .preview()
@@ -154,7 +155,7 @@ impl<'a> BlendRows<'a> {
             if !locks {
                 return;
             }
-            Row::new().fill_width().align(RowAlign::SpaceBetween).show(ui, |ui, _| {
+            Row::new().fill_width().align(RowAlign::SpaceBetween).gap(Gap::Section).show(ui, |ui, _| {
                 Row::new().show(ui, |ui, _| {
                     Text::new(words.lock.clone()).shade(Shade::Muted).show(ui);
                     let names = [&words.lock_transparency, &words.lock_pixels, &words.lock_position, &words.lock_artboard, &words.lock_all];
@@ -193,7 +194,7 @@ impl<'a> BlendRows<'a> {
 /// A 0 to 100 % field with its pop-up slider and a caption that scrubs it; returns its edits.
 fn percent_field(ui: &mut Ui, caption: &Label, value: f64, enabled: bool, reason: &Label) -> EditEvents<f64> {
     let mut edit = EditEvents::new();
-    Field::new(caption.clone()).side(SideLabel::new().scrub(true)).show(ui, |ui, _| {
+    Field::new(caption.clone()).side(SideLabel::new().scrub(true)).sizing(Sizing::Content).show(ui, |ui, _| {
         let field = NumberField::new(caption.clone(), Bind::given(Some(value)))
             .range(0.0..=100.0)
             .unit_kind(UnitKind::Percent)
