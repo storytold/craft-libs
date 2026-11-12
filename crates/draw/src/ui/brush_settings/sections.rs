@@ -1,6 +1,6 @@
 //! The Brush Settings section list ([`BrushSectionList`]).
 
-use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, Mixed, Selection, SelectionChange, Value};
+use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, Mixed, Selection, SelectionChange, SizeHint, Value};
 use craft_keymap::{Chord, Key, Mods};
 use craft_ui::contract::{
     ActivateOn, Bind, CollectionEvent, ColumnKind, ColumnSpec, Outcome, Props as _, Remember as _, SelectMode, ShowCollection as _,
@@ -143,7 +143,7 @@ impl<K> Outcome for BrushSectionListOutput<K> {
 enum Slot<K> {
     /// The "Brushes" link row.
     Link,
-    /// Empty room (a spacer row, so keys and clicks skip it), counted from 0.
+    /// Empty room (a spacer row, so keys and clicks skip it) as tall as its gap, counted from 0.
     Gap(u8),
     /// The section with this key.
     Section(K),
@@ -153,30 +153,35 @@ enum Slot<K> {
 struct Rows<'a, K> {
     sections: &'a [BrushSection<K>],
     slots: Vec<Slot<K>>,
+    /// The height of each gap, by its number.
+    gaps: Vec<f32>,
 }
 
 impl<'a, K: Clone + Eq> Rows<'a, K> {
-    /// The link row and its gap, then the sections with a gap after the first row and one before the first switch
-    /// row.
-    fn new(sections: &'a [BrushSection<K>], link_row: bool) -> Self {
+    /// The link row and a gap of `gap`, then the sections with a gap of `gap` after the first row and one of
+    /// `switch_gap` before the first switch row.
+    fn new(sections: &'a [BrushSection<K>], link_row: bool, gap: f32, switch_gap: f32) -> Self {
         let mut slots = Vec::new();
-        let mut gaps = 0..;
-        let mut gap = |slots: &mut Vec<Slot<K>>| slots.push(Slot::Gap(gaps.next().unwrap_or_default()));
+        let mut gaps = Vec::new();
+        let mut room = |slots: &mut Vec<Slot<K>>, height: f32| {
+            slots.push(Slot::Gap(u8::try_from(gaps.len()).unwrap_or(u8::MAX)));
+            gaps.push(height);
+        };
         if link_row {
             slots.push(Slot::Link);
-            gap(&mut slots);
+            room(&mut slots, gap);
         }
         let first_switch = sections.iter().position(|section| section.kind == BrushSectionKind::Switch);
         for (at, section) in sections.iter().enumerate() {
             if first_switch == Some(at) && at > 0 {
-                gap(&mut slots);
+                room(&mut slots, switch_gap);
             }
             slots.push(Slot::Section(section.key.clone()));
             if at == 0 && sections.len() > 1 && first_switch != Some(1) {
-                gap(&mut slots);
+                room(&mut slots, gap);
             }
         }
-        Rows { sections, slots }
+        Rows { sections, slots, gaps }
     }
 
     fn section(&self, key: &K) -> Option<&'a BrushSection<K>> {
@@ -206,6 +211,13 @@ impl<K: Clone + Eq> DisplayOrder<Slot<K>> for Rows<'_, K> {
 }
 
 impl<K: Clone + Eq> ItemSource<Slot<K>> for Rows<'_, K> {
+    fn size_hint(&self, at: usize) -> SizeHint {
+        match self.slots[at] {
+            Slot::Gap(n) => self.gaps.get(usize::from(n)).map_or(SizeHint::Auto, |height| SizeHint::Height(*height)),
+            _ => SizeHint::Auto,
+        }
+    }
+
     fn toggled(&self, at: usize, column: &ColumnKey) -> bool {
         let Slot::Section(key) = &self.slots[at] else { return false };
         let Some(section) = self.section(key) else { return false };
@@ -217,9 +229,9 @@ impl<K: Clone + Eq> ItemSource<Slot<K>> for Rows<'_, K> {
 /// their enable boxes and locks, and after a gap the switch rows. A `Table` of `ListRow`s with an
 /// enable box column at the reading start and a lock column at the reading end.
 ///
-/// - **Look.** Rows are the list's own; Brush Tip Shape is in the strong weight; a spacer row follows the first
-///   row and precedes the first switch row, taking room and having no AccessKit node. The link row has the brush
-///   icon.
+/// - **Look.** Rows are the list's own; Brush Tip Shape is in the strong weight; a `gap.inline` follows the link
+///   row and the first row, and a `gap.stack` precedes the first switch row: spacer rows that take that room and
+///   have no AccessKit node. The link row has the brush icon.
 /// - **Pointer.** A click on a pane row reports `Select` and, if its box is clear, `Enable { on: true }`; the box
 ///   toggles only the flag; the lock toggles only the lock; a click on a switch row toggles it (`Switch`). A press on the row (not its lock)
 ///   shows the box pressed.
@@ -254,8 +266,9 @@ impl<'a, K: Value + Eq + Hash> BrushSectionList<'a, K> {
     /// Shows the list.
     pub fn show(self, ui: &mut Ui) -> BrushSectionListOutput<K> {
         let BrushSectionList { label, sections, mut shown, link_row } = self;
-        let words = Env::of(ui).words::<BrushSettingsWords>();
-        let rows = Rows::new(sections, link_row);
+        let env = Env::of(ui);
+        let words = env.words::<BrushSettingsWords>();
+        let rows = Rows::new(sections, link_row, env.tokens.space.gap.inline, env.tokens.space.gap.stack);
         let enable_name = Label::from(words.enable.fill(&[("name", "{row}")]));
         let lock_name = Label::from(words.lock.fill(&[("name", "{row}")]));
         let switch_name = Label::from("{row}".to_owned());
