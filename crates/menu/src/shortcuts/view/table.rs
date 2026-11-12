@@ -212,7 +212,7 @@ impl Component for ShortcutTable<'_> {
                 let state = RowState { emphasized: lead == Some(header.at), ..RowState::default() };
                 ui.face(HEADER.at(header.at as u64), header_row(name, !*collapsed).state(state));
                 if header.disclosure {
-                    let disclosure = Disclosure::new(Bind::given(!*collapsed)).node(false).triangle(true).label(name.clone());
+                    let disclosure = Disclosure::new(Bind::given(!*collapsed)).node(false).label(name.clone());
                     ui.face(HEADER_DISCLOSURE.at(header.at as u64), disclosure);
                 }
             }
