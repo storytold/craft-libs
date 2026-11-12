@@ -86,7 +86,11 @@ impl ListRow<'_> {
                     };
                     if let Some(id) = shown {
                         let spec = IconSpec::svg(id.clone());
-                        let spec = if toggle.fill.is_some() { spec.ink(Ink::OnDark) } else { spec.color(glyph_ink(cx, part)) };
+                        let spec = if toggle.fill.is_some() {
+                            spec.ink(Ink::OnDark)
+                        } else {
+                            spec.color(glyph_ink(cx, part, toggle.state == ToggleState::On))
+                        };
                         ui.draw().icon(Rect::from_center_size(cell.center(), Vec2::splat(icon)), &spec);
                     }
                 }
@@ -134,7 +138,7 @@ impl ListRow<'_> {
             let (Some(slot), Some((linked, _))) = (link, &self.extras[at].link) else { continue };
             let id = IconId::new(if *linked { "link" } else { "unlink" });
             let side = Rect::from_center_size(slot.center(), Vec2::splat(style.sizes.icon));
-            let color = glyph_ink(cx, LINK.at(at as u64));
+            let color = glyph_ink(cx, LINK.at(at as u64), *linked);
             ui.draw().icon(side, &IconSpec::svg(id).color(color));
         }
     }
@@ -262,10 +266,12 @@ impl ListRow<'_> {
     }
 }
 
-/// The ink of a toggle or link glyph: its own part's hover and press, over the row's selection and lead.
-fn glyph_ink(cx: &Cx<'_, ListRow<'_>>, part: PartRef) -> StyleColor {
+/// The ink of a toggle or link glyph that is `on` or not: its own part's hover and press, over the row's selection and
+/// lead.
+fn glyph_ink(cx: &Cx<'_, ListRow<'_>>, part: PartRef, on: bool) -> StyleColor {
     let (row, cell) = (cx.state(), cx.part_state(part));
-    StateSet::new(cell.state, row.flags, StateMix::new(cell.t.hover, cell.t.press, row.t.on)).resolve(&cx.style.toggle.color)
+    let look = if on { &cx.style.toggle } else { &cx.style.toggle_off };
+    StateSet::new(cell.state, row.flags, StateMix::new(cell.t.hover, cell.t.press, row.t.on)).resolve(&look.color)
 }
 
 /// The down-right clipping mark: a stem down from the top, then a leg toward the reading end with an arrowhead.

@@ -25,9 +25,14 @@ pub struct ListRowStyle {
     /// The row's trailing icons.
     #[style(icon)]
     pub(super) trailing_icon: IconLook,
-    /// The glyph of a toggle cell and of the link between thumbnails: quiet at rest, the normal ink under the pointer.
+    /// The glyph of a toggle cell that is on and of a link between thumbnails that links: `text.muted` at rest, the
+    /// normal ink under the pointer.
     #[style(icon)]
     pub(super) toggle: IconLook,
+    /// The glyph of a toggle cell that is off or mixed and of a link that does not link: `text.faint` at rest, the
+    /// normal ink under the pointer.
+    #[style(icon)]
+    pub(super) toggle_off: IconLook,
     /// The detail line.
     #[style(text)]
     pub(super) detail: TextLook,
@@ -208,11 +213,13 @@ impl RowStyleCx for StyleCx<'_> {
     }
 }
 
-/// The ink of a row's toggle and link glyphs: `row_ink_of` on `text.muted`, whose off states are the quiet ink's, so
-/// the glyph reads in `text.normal` under the pointer and while pressed. The flag rules keep every fill's paired ink.
-pub(super) fn quiet_row_ink(cx: &StyleCx<'_>, form: RowForm) -> Stateful<StyleColor> {
-    let mut ink = row_ink_of(cx, cx.color(cx.tokens.color.text.muted), form);
-    ink.off = cx.quiet_ink().off;
+/// The ink of a row's toggle and link glyphs: `row_ink_of` on `rest`, whose off states are the quiet ink's with `rest`
+/// at rest, so the glyph reads in `text.normal` under the pointer and while pressed. The flag rules keep every fill's
+/// paired ink.
+pub(super) fn quiet_row_ink(cx: &StyleCx<'_>, form: RowForm, rest: Rgba) -> Stateful<StyleColor> {
+    let rest = cx.color(rest);
+    let mut ink = row_ink_of(cx, rest, form);
+    ink.off = States { rest, ..cx.quiet_ink().off };
     ink
 }
 
