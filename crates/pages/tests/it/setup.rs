@@ -1,4 +1,4 @@
-//! The column bar: a divider drag and the columns beyond it.
+//! The column bar: a divider drag moves the two columns it divides.
 
 use craft_pages::ui::ColumnBar;
 use craft_ui::contract::{Bind, Show as _};
@@ -19,7 +19,7 @@ fn close(a: f64, b: f64) -> bool {
 }
 
 #[trial]
-fn a_divider_pushes_the_columns_beyond_it() {
+fn a_divider_moves_only_the_two_columns_it_divides() {
     let widths = Rc::new(RefCell::new(vec![EQUAL; COLUMNS]));
     let seen = Rc::clone(&widths);
     let mut fixture = Fixture::new(move |ui| {
@@ -33,5 +33,6 @@ fn a_divider_pushes_the_columns_beyond_it() {
     let widths = widths.borrow();
     assert!(close(widths.iter().sum::<f64>(), EQUAL * COLUMNS as f64), "the total stays: {widths:?}");
     assert!(close(widths[0], EQUAL), "the column before the divider's pair is untouched: {widths:?}");
-    assert!(widths[1] > EQUAL && widths[2] < EQUAL && widths[3] < EQUAL, "the columns beyond give way: {widths:?}");
+    assert!(widths[1] > EQUAL && widths[2] < EQUAL, "the divided pair shares the change: {widths:?}");
+    assert!(close(widths[3], EQUAL), "the column past the pair is untouched: {widths:?}");
 }

@@ -250,7 +250,7 @@ impl Plan {
     fn move_divider(&mut self, index: usize, delta: f32) {
         let row = self.row();
         let at: f32 = row.iter().take(index + 1).map(|segment| segment.extent).sum();
-        let sizes = push::resize(&row, index, at + delta);
+        let sizes = push::resize(&row, index, at + delta, push::Give::Neighbours);
         for (group, next) in self.open.clone().into_iter().zip(sizes) {
             self.heights[group] = next;
         }
@@ -271,7 +271,7 @@ impl Plan {
             .enumerate()
             .filter_map(|(index, pair)| {
                 let at = self.groups.get(pair[0])?.bottom();
-                let (lo, hi) = push::travel(&row, index);
+                let (lo, hi) = push::travel(&row, index, push::Give::Neighbours);
                 Some((pair[0] as u64, index, Divider::new(Axis::Y, at, rect, (at + lo, at + hi), reach)))
             })
             .collect()

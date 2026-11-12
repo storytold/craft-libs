@@ -10,7 +10,7 @@ use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::{DataColor, TypeRole};
-use craft_ui::value_drag::{Order, Thumb, ThumbRow, TrackFace};
+use craft_ui::value_drag::{Neighbours, Order, Thumb, ThumbRow, TrackFace};
 use egui::{Color32, Ui};
 
 use crate::layer_style::BlendIfRange;
@@ -64,7 +64,7 @@ impl BlendIfRange {
 /// bar mirrors with the row, like every thumb row.
 ///
 /// - Pointer: a press picks the nearest handle; a drag moves its pair, keeping the spread, or with Alt the half alone.
-///   A drag stops at the other pair. One gesture per drag; Esc cancels.
+///   A handle pushes the handles it runs into along, so the order holds. One gesture per drag; Esc cancels.
 /// - Keys: the four handles are Tab stops in order. Arrows, Page keys, Home, End and the wheel move one half.
 /// - AccessKit: each handle is a slider named by [`BlendIfWords::handle`] ("Black low, This Layer").
 #[must_use = "show the bar with `show`"]
@@ -119,6 +119,7 @@ impl<'a> BlendIfBar<'a> {
             let shown = ThumbRow::new(Bind::bound(&mut row), LEVELS)
                 .step(1.0)
                 .thumbs(thumbs)
+                .neighbours(Neighbours::Push)
                 .track_face(TrackFace::new(ToneRamp::new(&ramp)))
                 .label(label.clone())
                 .show(ui)

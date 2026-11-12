@@ -12,6 +12,6 @@ pub use angle_dial::{AngleDial, AngleDialStyle, AngleOrientation};
 pub use point_picker::{Backdrop, PointPicker, PointPickerStyle, PointPickerWords};
 pub use range_slider::{RangeSlider, RangeSliderStyle};
 pub use slider::{Slider, SliderStyle, SliderThumb};
-pub use thumb_row::{Anchor, Follow, Order, RowOp, RowRules, Thumb, ThumbHold, ThumbOp, ThumbRow, ThumbRowOutput, ThumbRowStyle};
+pub use thumb_row::{Anchor, Follow, Neighbours, Order, RowOp, RowRules, Thumb, ThumbHold, ThumbOp, ThumbRow, ThumbRowOutput, ThumbRowStyle};
 pub use track::{SliderScale, TrackFace};
 pub use words::ValueDragWords;

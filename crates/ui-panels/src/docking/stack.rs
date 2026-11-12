@@ -164,7 +164,7 @@ impl StackSections {
             .enumerate()
             .map(|(index, pair)| {
                 let at = rect.top() + heights.iter().take(pair[0] + 1).sum::<f32>();
-                let (lo, hi) = push::travel(&row, index);
+                let (lo, hi) = push::travel(&row, index, push::Give::Neighbours);
                 (pair[0] as u64, index, Divider::new(Axis::Y, at, rect, (at + lo, at + hi), sizes.reach))
             })
             .collect();
@@ -174,7 +174,7 @@ impl StackSections {
     /// Moves the divider after the `index`-th open section by `delta` points.
     fn move_divider(&mut self, open: &[usize], row: &[Segment], index: usize, delta: f32, strip: f32) {
         let at: f32 = row.iter().take(index + 1).map(|segment| segment.extent).sum();
-        for ((section, next), segment) in open.iter().zip(push::resize(row, index, at + delta)).zip(row) {
+        for ((section, next), segment) in open.iter().zip(push::resize(row, index, at + delta, push::Give::Neighbours)).zip(row) {
             if next != segment.extent {
                 self.resized.push((*section, next - strip));
             }

@@ -3,7 +3,7 @@
 use craft_behavior::{Mixed, MoveMods, NavMove};
 use craft_ui::contract::Bind;
 use craft_ui::testing::trial;
-use craft_ui::value_drag::{Anchor, RowOp, Thumb, ThumbOp, ThumbRow};
+use craft_ui::value_drag::{Anchor, Neighbours, Order, RowOp, Thumb, ThumbOp, ThumbRow};
 
 fn forward(thumb: usize) -> RowOp {
     RowOp::new(thumb, ThumbOp::Move(NavMove::Forward, MoveMods::PLAIN))
@@ -21,4 +21,26 @@ fn an_anchored_row_keeps_its_span_and_order() {
     assert_eq!(rules.apply(&forward(3), &at), at);
     // A middle thumb stops at the next one.
     assert_eq!(rules.apply(&RowOp::new(1, ThumbOp::Set(70.0)), &at), Mixed::each([340.0, 50.0, 50.0, 80.0]));
+}
+
+/// Two split pairs ordered black below white, as a Blend If bar's handles: in a row that pushes, setting the black
+/// high half past the white pair pushes the white pair along and the order holds; in a row that stops, the half stops
+/// at the white pair.
+#[trial]
+fn a_pushing_row_moves_the_thumbs_ahead_and_a_stopping_row_stops_at_them() {
+    let ordered = |below, above| Order::between(below, above, 0.0);
+    let thumbs = || {
+        [
+            Thumb::new("black low").split().order(ordered(None, Some(2))),
+            Thumb::new("black high").order(ordered(Some(0), Some(2))),
+            Thumb::new("white low").split().order(ordered(Some(1), None)),
+            Thumb::new("white high").order(ordered(Some(1), None)),
+        ]
+    };
+    let at = Mixed::each([10.0, 20.0, 100.0, 120.0]);
+    let set = RowOp::new(1, ThumbOp::Set(150.0));
+    let pushing = ThumbRow::new(Bind::given(at), 0.0..=255.0).step(1.0).thumbs(thumbs()).neighbours(Neighbours::Push);
+    assert_eq!(pushing.rules().apply(&set, &at), Mixed::each([10.0, 150.0, 150.0, 150.0]));
+    let stopping = ThumbRow::new(Bind::given(at), 0.0..=255.0).step(1.0).thumbs(thumbs());
+    assert_eq!(stopping.rules().apply(&set, &at), Mixed::each([10.0, 100.0, 100.0, 120.0]));
 }

@@ -64,8 +64,8 @@ pub struct ThumbRowStyle {
 pub enum Order {
     /// Anywhere in its range: it passes the other thumbs.
     Free,
-    /// At least `gap` above the value of thumb `below` and below that of thumb `above`. A drag stops there; it does
-    /// not push the other thumb.
+    /// At least `gap` above the value of thumb `below` and below that of thumb `above`. A move stops there, or pushes
+    /// the other thumb along, as the row's [`Neighbours`] say.
     #[non_exhaustive]
     Between {
         /// The thumb whose value this one stays above, if any.
@@ -82,6 +82,17 @@ impl Order {
     pub const fn between(below: Option<usize>, above: Option<usize>, gap: f64) -> Self {
         Order::Between { below, above, gap }
     }
+}
+
+/// What a thumb does when a move takes it into a thumb it is ordered with ([`Order::Between`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Neighbours {
+    /// It stops there.
+    #[default]
+    Stop,
+    /// It pushes the other thumb along, and that one the next, up to the end of the range: a Blend If bar's handles.
+    Push,
 }
 
 /// Where a thumb sits that a function of the row's values places (a levels gamma thumb, between the black and the
@@ -264,6 +275,7 @@ pub struct RowRules<'r, const N: usize> {
     /// The period values wrap at.
     wrap: Option<f64>,
     anchored: Option<Anchor>,
+    push: bool,
 }
 
 impl<const N: usize> RowRules<'_, N> {
@@ -306,6 +318,10 @@ impl<const N: usize> RowRules<'_, N> {
         }
         let scale = self.scale_of(i);
         let open = if self.wrap.is_some() { (f64::NEG_INFINITY, f64::INFINITY) } else { (scale.min, scale.max) };
+        if self.push && self.wrap.is_none() {
+            let (lowest, highest) = self.push_room();
+            return (lowest[i], highest[i]);
+        }
         let Order::Between { below, above, gap } = self.thumbs[i].order else { return open };
         let side = |j: Option<usize>, gap: f64, end: f64| {
             j.and_then(|j| values.get(j)).map_or(end, |v| {
@@ -314,6 +330,77 @@ impl<const N: usize> RowRules<'_, N> {
         };
         let (lo, hi) = (side(below, gap, open.0), side(above, -gap, open.1));
         (lo.min(hi), hi)
+    }
+
+    /// The order the row keeps as pairs `(a, b, gap)`, thumb `a` at least `gap` below thumb `b`: each thumb's
+    /// `Order::Between`, and each split thumb's low half below its high half.
+    fn orders(&self) -> Vec<(usize, usize, f64)> {
+        let mut orders = Vec::new();
+        for (i, thumb) in self.thumbs.iter().enumerate() {
+            if let Order::Between { below, above, gap } = thumb.order {
+                orders.extend(below.filter(|k| *k < N).map(|k| (k, i, gap)));
+                orders.extend(above.filter(|k| *k < N).map(|k| (i, k, gap)));
+            }
+            if thumb.split && i + 1 < N {
+                orders.push((i, i + 1, 0.0));
+            }
+        }
+        orders
+    }
+
+    /// The lowest and the highest value each thumb can take in a row that pushes: the range's ends, less the gaps of
+    /// the thumbs it would push ahead of it.
+    fn push_room(&self) -> ([f64; N], [f64; N]) {
+        let mut lowest: [f64; N] = std::array::from_fn(|i| self.scale_of(i).min);
+        let mut highest: [f64; N] = std::array::from_fn(|i| self.scale_of(i).max);
+        let orders = self.orders();
+        for _ in 0..N {
+            for &(a, b, gap) in &orders {
+                lowest[b] = lowest[b].max(lowest[a] + gap);
+                highest[a] = highest[a].min(highest[b] - gap);
+            }
+        }
+        (lowest, highest)
+    }
+
+    /// `to` with the thumbs a move of the thumbs in `moved` ran into pushed along, in the direction of the move, so
+    /// every order holds again; `from` is where the moved thumbs were. A row that stops changes nothing.
+    fn pushed(&self, from: &[f64; N], to: &mut [f64; N], moved: &[usize]) {
+        if !self.push || self.wrap.is_some() {
+            return;
+        }
+        let rising = moved.first().is_some_and(|&m| to[m] > from[m]);
+        let orders = self.orders();
+        for _ in 0..N * N {
+            let mut changed = false;
+            for &(a, b, gap) in &orders {
+                if to[a] + gap <= to[b] {
+                    continue;
+                }
+                let (fixed_a, fixed_b) = (moved.contains(&a), moved.contains(&b));
+                if fixed_a && fixed_b {
+                    continue;
+                }
+                if fixed_a || (!fixed_b && rising) {
+                    to[b] = self.scale_of(b).snap(to[a] + gap);
+                } else {
+                    to[a] = self.scale_of(a).snap(to[b] - gap);
+                }
+                changed = true;
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+
+    /// `row` with the thumbs in `moved` set to `to`'s values and the thumbs they ran into pushed along; the others
+    /// keep `row`'s values, mixed or not.
+    fn with_moved(&self, row: &[Mixed<f64>; N], to: [f64; N], moved: &[usize]) -> [Mixed<f64>; N] {
+        let from = self.placed(row);
+        let mut to = to;
+        self.pushed(&from, &mut to, moved);
+        std::array::from_fn(|k| if moved.contains(&k) || to[k] != from[k] { Mixed::Same(to[k]) } else { row[k] })
     }
 
     /// How far past the first thumb each thumb is, going round from it in index order: the distance from the thumb
@@ -359,7 +446,8 @@ impl<const N: usize> RowRules<'_, N> {
     /// split thumb between its partner and the end.
     fn bounds(&self, values: &[f64; N], i: usize) -> (f64, f64) {
         let (mut lo, mut hi) = self.order_bounds(values, i);
-        match self.partner(i) {
+        // In a row that pushes, a half pushes its partner instead of stopping at it.
+        match self.partner(i).filter(|_| !self.push) {
             Some(j) if j > i => {
                 hi = hi.min(values[j]);
                 lo = lo.min(hi);
@@ -395,9 +483,9 @@ impl<const N: usize> RowRules<'_, N> {
     pub fn apply(&self, op: &RowOp, row: &[Mixed<f64>; N]) -> [Mixed<f64>; N] {
         let values = self.placed(row);
         let i = op.thumb;
-        let mut out = *row;
-        out[i] = Mixed::Same(if self.wrap.is_some() { self.apply_wrapped(&op.op, &values, i) } else { self.apply_plain(&op.op, &values, i) });
-        out
+        let mut to = values;
+        to[i] = if self.wrap.is_some() { self.apply_wrapped(&op.op, &values, i) } else { self.apply_plain(&op.op, &values, i) };
+        self.with_moved(row, to, &[i])
     }
 
     /// What `op` does to the step maths: a move or a wheel event gives the new value from `steps`.
@@ -494,7 +582,7 @@ impl<'r, const N: usize> Layout<'r, N> {
     /// keeping the spread, unless the press moves it alone. `click` is a release that was not a drag: Alt does not
     /// scale it.
     fn moved(&self, anchor: &[Mixed<f64>; N], press: Press, state: &PressState, click: bool) -> [Mixed<f64>; N] {
-        let mut out = *anchor;
+        let out = *anchor;
         let Some((origin, pos)) = track::pointer(state) else { return out };
         let Some(i) = press.thumb(origin.x, pos.x) else { return out };
         if press.grabs() && pos.x == origin.x {
@@ -523,12 +611,14 @@ impl<'r, const N: usize> Layout<'r, N> {
             let (lo, hi) = ((lo_i - from[i]).max(lo_j - from[j]), (hi_i - from[i]).min(hi_j - from[j]));
             let lo = lo.min(hi);
             let moved = rules.scale_of(i).snap(from[i] + (value - from[i]).clamp(lo, hi)).clamp(from[i] + lo, from[i] + hi);
-            out[i] = Mixed::Same(moved);
-            out[j] = Mixed::Same(from[j] + (moved - from[i]));
-            return out;
+            let mut to = from;
+            to[i] = moved;
+            to[j] = from[j] + (moved - from[i]);
+            return rules.with_moved(anchor, to, &[i, j]);
         }
-        out[i] = Mixed::Same(rules.settle(i, value, rules.bounds(&from, i)));
-        out
+        let mut to = from;
+        to[i] = rules.settle(i, value, rules.bounds(&from, i));
+        rules.with_moved(anchor, to, &[i])
     }
 }
 
@@ -643,6 +733,9 @@ pub struct ThumbRow<'a, const N: usize> {
     /// thumb of an anchored row has no meaning and stays `Free`.
     #[prop]
     anchor: Option<Anchor>,
+    /// What a thumb does when a move takes it into a thumb it is ordered with: stop (the default) or push it along.
+    #[prop]
+    neighbours: Neighbours,
     /// Paints a groove above the thumbs with `face`, a component shown as the look of the track (a colour gradient);
     /// the thumbs point up at it.
     #[prop]
@@ -679,6 +772,7 @@ impl<'a, const N: usize> ThumbRow<'a, N> {
             step: None,
             wrap: false,
             anchor: None,
+            neighbours: Neighbours::Stop,
             track_face: None,
         }
     }
@@ -688,7 +782,7 @@ impl<'a, const N: usize> ThumbRow<'a, N> {
         let scale = Scale::new(&self.range, self.step, SliderScale::Linear);
         let wrap = (self.wrap || self.anchor.is_some()).then_some(scale.span()).filter(|period| *period > 0.0);
         let anchored = self.anchor.filter(|a| wrap.is_some() && a.first < N);
-        RowRules { thumbs: &self.thumbs, scale, wrap, anchored }
+        RowRules { thumbs: &self.thumbs, scale, wrap, anchored, push: self.neighbours == Neighbours::Push }
     }
 
     fn halves(&self, rules: &RowRules<'_, N>, shown: &[f64; N]) -> [Option<Half>; N] {

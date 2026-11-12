@@ -1,11 +1,11 @@
 //! `ColumnBar`: a bar split into column shares with draggable dividers, as PdfCraft's Create Table of Fields sets its
-//! column widths. A divider pushes its neighbours (`craft_behavior::divider`): the columns on the far side give way in
-//! turn down to their least share.
+//! column widths. A divider moves only the two columns it divides (`craft_behavior::divider`, `Give::Pair`); each keeps
+//! its least share, and the other columns keep theirs.
 
 #[cfg(feature = "screen-testing")]
 mod stories;
 
-use craft_behavior::divider::{Segment, resize, travel};
+use craft_behavior::divider::{Give, Segment, resize, travel};
 use craft_behavior::{Axis, Metrics, PartKey};
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Outcome, PaintUi, PartsCx, Pointer as _, Props,
@@ -23,7 +23,8 @@ const DIVIDER: PartKey = PartKey::new("divider");
 /// Column `i`: `COLUMN.at(i)`, which names the column on hover.
 const COLUMN: PartKey = PartKey::new("column");
 
-/// The smallest share a column keeps when a divider pushes it.
+/// The smallest share a column keeps when a divider moves, or a quarter of what the two columns have between them when
+/// that is less, so narrow columns can still be resized.
 pub const MIN_SHARE: f64 = 0.04;
 
 /// The share an arrow key moves the focused divider by (PdfCraft: 0.01); Shift moves it by ten times that.
@@ -127,17 +128,20 @@ impl<'a> ColumnBar<'a> {
     }
 }
 
-/// The columns as segments of the bar `width` wide, each keeping [`MIN_SHARE`].
-fn row(shares: &[f64], width: f32) -> Vec<Segment> {
-    shares.iter().map(|share| Segment::unbounded(*share as f32 * width, MIN_SHARE as f32 * width)).collect()
+/// The columns as segments of the bar `width` wide, for the divider after column `at`: its two columns each keep
+/// [`MIN_SHARE`], or a quarter of their pair when that is less.
+fn row(shares: &[f64], at: usize, width: f32) -> Vec<Segment> {
+    let pair = shares.get(at..at + 2).map_or(0.0, |pair| pair.iter().sum::<f64>());
+    let least = MIN_SHARE.min(pair / 4.0) as f32 * width;
+    shares.iter().map(|share| Segment::unbounded(*share as f32 * width, least)).collect()
 }
 
 /// `widths` after the divider after column `at` moves to `target` from the bar's reading start, in the unit of the
 /// widths.
-fn pushed(widths: &[f64], at: usize, target: f32, width: f32) -> Vec<f64> {
+fn resized(widths: &[f64], at: usize, target: f32, width: f32) -> Vec<f64> {
     let total: f64 = widths.iter().sum();
-    let current = row(&shares(widths), width);
-    let extents = resize(&current, at, target);
+    let current = row(&shares(widths), at, width);
+    let extents = resize(&current, at, target, Give::Pair);
     // The widths round-trip through f32 extents, so a divider already at `target` would otherwise come back a few ulps
     // off; it keeps its widths exactly.
     let slack = width * f32::EPSILON * 4.0;
@@ -157,11 +161,10 @@ fn position(shares: &[f64], at: usize, width: f32) -> f32 {
 /// neighbouring column is narrower), moving as far as the columns beyond let it.
 fn dividers(shares: &[f64], rect: Rect, reach: f32) -> Vec<(u64, Divider)> {
     let width = rect.width();
-    let segments = row(shares, width);
     (0..shares.len().saturating_sub(1))
         .map(|at| {
             let x = rect.left() + position(shares, at, width);
-            let (lo, hi) = travel(&segments, at);
+            let (lo, hi) = travel(&row(shares, at, width), at, Give::Pair);
             let reach = reach.min(shares[at].min(shares[at + 1]) as f32 * width);
             (at as u64, Divider::new(Axis::X, x, rect, (x + lo, x + hi), reach))
         })
@@ -233,18 +236,18 @@ impl Component for ColumnBar<'_> {
             }
             match divider::pointer(cx, DIVIDER, *at, divider) {
                 Some(Drag::Start) => cx.begin(),
-                Some(Drag::To(x)) => cx.propose(pushed(&widths, *at as usize, x - rect.left(), width)),
+                Some(Drag::To(x)) => cx.propose(resized(&widths, *at as usize, x - rect.left(), width)),
                 Some(Drag::Release) => cx.commit(),
                 _ => {}
             }
             if let Some(percent) = cx.intents().take_set_value_at(part) {
                 let start = if *at > 0 { position(&shares, *at as usize - 1, width) } else { 0.0 };
-                cx.set(pushed(&widths, *at as usize, start + (percent / 100.0) as f32 * width, width));
+                cx.set(resized(&widths, *at as usize, start + (percent / 100.0) as f32 * width, width));
             }
         }
         let step = KEY_STEP as f32 * width;
         if let Some((at, x)) = divider::keys(cx, DIVIDER, &dividers, step, step * JUMP) {
-            cx.set(pushed(&widths, at as usize, x - rect.left(), width));
+            cx.set(resized(&widths, at as usize, x - rect.left(), width));
         }
     }
 

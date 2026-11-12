@@ -1,8 +1,7 @@
-//! The push-neighbours resize of a row of segments separated by dividers.
+//! The resize of a row of segments separated by dividers.
 //!
 //! Dragging the divider after segment `i` toward one side makes the segment before it (toward the start) or after it
-//! grow, and the segments on the other side give way: the one touching the divider gives way down to its minimum,
-//! then the next one, and so on. The row's total stays the same.
+//! grow, and the segments on the other side give way, as [`Give`] says. The row's total stays the same.
 
 /// One segment of a row: its extent along the row and its limits.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -28,10 +27,31 @@ impl Segment {
     }
 }
 
+/// Which segments give way when a divider moves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Give {
+    /// Every segment on the far side, in turn: the one touching the divider down to its minimum, then the next one.
+    Neighbours,
+    /// Only the two segments the divider separates; the others keep their extents.
+    Pair,
+}
+
+impl Give {
+    /// The segments of `row` the divider after `row[index]` moves, and the index of that divider among them.
+    fn segments(self, row: &[Segment], index: usize) -> (&[Segment], usize, usize) {
+        match self {
+            Give::Neighbours => (row, index, 0),
+            Give::Pair => (row.get(index..(index + 2).min(row.len())).unwrap_or(&[]), 0, index),
+        }
+    }
+}
+
 /// How far the divider after `row[index]` can move: `(lo, hi)`, with `lo <= 0 <= hi`. Toward the start the segments
-/// before it give way down to their minimums and the segment after it grows to its maximum at most; toward the end it
-/// is the other way round.
-pub fn travel(row: &[Segment], index: usize) -> (f32, f32) {
+/// before it that `give` lets give way go down to their minimums and the segment after it grows to its maximum at
+/// most; toward the end it is the other way round.
+pub fn travel(row: &[Segment], index: usize, give: Give) -> (f32, f32) {
+    let (row, index, _) = give.segments(row, index);
     let room = |items: &[Segment]| items.iter().map(|item| (item.extent - item.min).max(0.0)).sum::<f32>();
     let grow = |item: Option<&Segment>| item.map_or(0.0, |item| (item.max - item.extent).max(0.0));
     let (before, after) = row.split_at((index + 1).min(row.len()));
@@ -41,9 +61,20 @@ pub fn travel(row: &[Segment], index: usize) -> (f32, f32) {
 /// The extents of `row` after the divider after `row[index]` moves to `target`, a distance from the row's start, clamped
 /// to its [`travel`]. The extents depend on the row as it stands and on the target alone, so a drag that goes past a
 /// limit and back puts the divider under the pointer again.
-pub fn resize(row: &[Segment], index: usize, target: f32) -> Vec<f32> {
+pub fn resize(row: &[Segment], index: usize, target: f32, give: Give) -> Vec<f32> {
+    let mut extents: Vec<f32> = row.iter().map(|item| item.extent).collect();
+    let (part, at_index, offset) = give.segments(row, index);
+    let before: f32 = row.iter().take(offset).map(|item| item.extent).sum();
+    for (k, extent) in pushed(part, at_index, target - before).into_iter().enumerate() {
+        extents[offset + k] = extent;
+    }
+    extents
+}
+
+/// [`resize`] of every segment of `row`, the divider after `row[index]` moved to `target`.
+fn pushed(row: &[Segment], index: usize, target: f32) -> Vec<f32> {
     let at: f32 = row.iter().take(index + 1).map(|item| item.extent).sum();
-    let (lo, hi) = travel(row, index);
+    let (lo, hi) = travel(row, index, Give::Neighbours);
     let delta = if target.is_finite() { (target - at).clamp(lo, hi) } else { 0.0 };
     let mut extents: Vec<f32> = row.iter().map(|item| item.extent).collect();
     let (grows, givers): (usize, Vec<usize>) =
@@ -72,6 +103,13 @@ mod tests {
     #[test]
     fn the_segments_past_the_divider_give_way_in_turn() {
         // The divider after the first segment moves 80 points toward the end: the second gives 60, the third 20.
-        assert_eq!(resize(&row(), 0, 180.0), vec![180.0, 40.0, 80.0]);
+        assert_eq!(resize(&row(), 0, 180.0, Give::Neighbours), vec![180.0, 40.0, 80.0]);
+    }
+
+    #[test]
+    fn a_pair_divider_moves_only_the_two_segments_it_separates() {
+        // The same drag stops where the second segment reaches its minimum; the third keeps its extent.
+        assert_eq!(resize(&row(), 0, 180.0, Give::Pair), vec![160.0, 40.0, 100.0]);
+        assert_eq!(travel(&row(), 1, Give::Pair), (-60.0, 60.0));
     }
 }
