@@ -166,7 +166,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             && cx.core.intents.take(Intent::ContextMenu)
         {
             let rect = self.screen(layout, at.rect, row, at.offset, at.rtl);
-            crate::runtime::keys::request_context(&cx.core.ctx, cx.core.id, rect);
+            crate::runtime::keys::request_context(&cx.core.ctx, cx.core.id, rect, None);
             let place = self.on_screen(rect.left_bottom());
             self.ask_menu(ContextMenuRequest { key: self.source.key(row), at: place, column: None, part: None });
         }

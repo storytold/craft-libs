@@ -430,17 +430,22 @@ pub(crate) fn scope_escape(ctx: &Context, rule: CancelRule, press_captured: bool
     Some(escape_step(facts, rule))
 }
 
-/// Records that `id` asked for a context menu in this pass, to open at `rect`: a secondary-button release on it, or
-/// a `ContextMenu` intent it did not take (9.2 rule 3).
-pub(crate) fn request_context(ctx: &Context, id: Id, rect: egui::Rect) {
+/// Records that `id` asked for a context menu in this pass, to open at `rect`, at its part `part` when the request
+/// was made at one: a secondary-button release on it, or a `ContextMenu` intent it did not take (9.2 rule 3).
+pub(crate) fn request_context(ctx: &Context, id: Id, rect: egui::Rect, part: Option<PartRef>) {
     current(ctx, |stage| {
-        if !stage.contexts.iter().any(|(owner, _)| *owner == id) {
-            stage.contexts.push((id, rect));
+        if !stage.contexts.iter().any(|(owner, ..)| *owner == id) {
+            stage.contexts.push((id, rect, part));
         }
     });
 }
 
 /// The rect `id`'s context request of this pass opens at, when it made one. A `Trigger::Context` opener reads it.
 pub(crate) fn context_request(ctx: &Context, id: Id) -> Option<egui::Rect> {
-    current(ctx, |stage| stage.contexts.iter().find(|(owner, _)| *owner == id).map(|(_, rect)| *rect))
+    current(ctx, |stage| stage.contexts.iter().find(|(owner, ..)| *owner == id).map(|(_, rect, _)| *rect))
+}
+
+/// The part of `id` its context request of this pass was made at, when it made one at a part.
+pub(crate) fn context_part(ctx: &Context, id: Id) -> Option<PartRef> {
+    current(ctx, |stage| stage.contexts.iter().find(|(owner, ..)| *owner == id).and_then(|(.., part)| *part))
 }

@@ -611,7 +611,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                     self.events.push(CollectionEvent::Open(OpenChange { key: key.clone(), open: ask.open, all: ask.all }));
                 }
                 if let Some(rect) = out.menu_request() {
-                    crate::runtime::keys::request_context(&ctx, id, rect);
+                    crate::runtime::keys::request_context(&ctx, id, rect, None);
                     self.ask_menu(ContextMenuRequest { key: key.clone(), at: self.on_screen(rect.left_bottom()), column: None, part: None });
                 }
                 if let Some(event) = out.into_event() {

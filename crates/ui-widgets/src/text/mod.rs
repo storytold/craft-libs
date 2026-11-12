@@ -13,7 +13,7 @@ mod words;
 
 pub use adorn::{Adornment, Placed, place, reserve};
 pub use alt_text::{AltText, AltTextField, AltTextFieldStyle, AltTextWords};
-pub use chips::{ChipCodec, ChipField, ChipFieldStyle, ChipWords};
+pub use chips::{ChipCodec, ChipField, ChipFieldOutput, ChipFieldStyle, ChipWords, PartialChips};
 pub use hex::{HexCodec, HexField};
 pub use linked::{LinkMode, LinkedFields, LinkedFieldsStyle, LinkedLayout, LinkedOutput, LinkedWords, follow_equal, follow_ratio, link_toggle};
 pub use number::{NamedOr, NumberField, NumberName, NumberOutput, NumberPick, NumberStepper, NumberStyle, NumberValue};

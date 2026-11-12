@@ -37,7 +37,8 @@ pub use intents::take_submit;
 #[doc(hidden)]
 pub use intents::with_window_intents;
 pub(crate) use intents::{
-    Lent, context_request, give_back, lend, lent_taken, request_context, route_whole_reset, scope_escape, take_cancel, take_window_cancel,
+    Lent, context_part, context_request, give_back, lend, lent_taken, request_context, route_whole_reset, scope_escape, take_cancel,
+    take_window_cancel,
 };
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
 pub(crate) use route::{activated_member, begin, layout_of, pasted_text, queue_edit, take_shortcuts};
@@ -190,7 +191,7 @@ pub(crate) struct Stage {
     /// Edit commands fired from the queue for the focused component.
     queued_edits: Vec<EditCommand>,
     /// The components that asked for a context menu in this pass, with the rect it opens at.
-    contexts: Vec<(Id, egui::Rect)>,
+    contexts: Vec<(Id, egui::Rect, Option<PartRef>)>,
     /// Components with an open edit run this pass: Escape cancels the run before it leaves a row's child.
     open_edits: Vec<Id>,
     last_open_edits: Vec<Id>,

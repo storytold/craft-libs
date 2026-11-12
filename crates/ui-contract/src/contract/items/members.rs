@@ -87,7 +87,7 @@ impl<'r, C: Collection> ItemsHooks<'_, 'r, C> {
                 self.events.push(CollectionEvent::Open(OpenChange { key: key.clone(), open: ask.open, all: ask.all }));
             }
             if let Some(rect) = output.menu_request() {
-                crate::runtime::keys::request_context(ctx, id, rect);
+                crate::runtime::keys::request_context(ctx, id, rect, None);
                 self.ask_menu(ContextMenuRequest { key: key.clone(), at: self.on_screen(rect.left_bottom()), column: None, part: None });
             }
             if let Some(event) = output.into_event() {

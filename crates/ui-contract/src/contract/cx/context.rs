@@ -241,6 +241,13 @@ impl<C: Component> Cx<'_, C> {
         }
     }
 
+    /// The part this pass's context request was made at: the part under the pointer for a secondary click, the
+    /// active part for the Menu key or Shift+F10; `None` without a request or when it was made at the component
+    /// itself. The request is recorded after `update`, so `finish` reads it.
+    pub fn context_part(&self) -> Option<PartRef> {
+        crate::runtime::keys::context_part(&self.core.ctx, self.core.id)
+    }
+
     /// Names the member of this container's roving group (`ContainerProps.roving`) that Tab arrives at; the
     /// first member when none is named.
     pub fn roving_arrival(&mut self, member: Id) {

@@ -1,4 +1,5 @@
-//! `ChipField`: a list of text chips in lines, each removable, with a draft text part after the last chip.
+//! `ChipField`: a list of text chips in lines, each removable, with a draft text part after the last chip, "+N more"
+//! where a line limit stops the list, and Clear All.
 
 #[cfg(feature = "testing")]
 mod stories;
@@ -6,16 +7,17 @@ mod stories;
 use super::{FieldStyle, text_part};
 use crate::buttons::IconButton;
 use crate::contract::{
-    Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, PaintUi, PartsCx, Pointer as _, Props as _, Role,
-    WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Entry, Focus as _, MeasureCx, Name, Outcome, OverlayUi, Overlays as _,
+    PaintUi, PartsCx, Pointer as _, Props as _, Role, WordSetCx as _,
 };
 use crate::display::Badge;
+use crate::menu::Menu;
 use crate::primitives::TextOptions;
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx, SurfaceLook};
 use craft_behavior::{Caret, Codec, Flow, Granularity, IconId, Intent, Metrics, NavShape, NotAValue, PartKey, Proposal, Roving, Sense};
 use craft_theme::Variant;
-use egui::{Rect, Vec2, pos2, vec2};
+use egui::{Rect, Response, Vec2, pos2, vec2};
 use std::borrow::Cow;
 
 /// The characters that end a chip in typed or pasted text.
@@ -25,6 +27,10 @@ const SEPARATORS: [char; 3] = [',', ';', '\n'];
 const CHIP: PartKey = PartKey::new("chip");
 /// A chip's remove part, at the end of the chip.
 const REMOVE: PartKey = PartKey::new("remove");
+/// The button after the shown chips that counts the hidden ones and opens their menu.
+const MORE: PartKey = PartKey::new("more");
+/// The button that removes every chip.
+const CLEAR: PartKey = PartKey::new("clear");
 
 /// The keyboard path of the remove parts.
 const REMOVE_BY_KEY: &str = "Delete or Backspace on the focused chip removes it";
@@ -34,6 +40,14 @@ craft_ui::words! {
     pub struct ChipWords {
         /// A chip's remove part: `{name}` the chip's text.
         remove: template "chipField.remove" = "Remove \u{201c}{name}\u{201d}";
+        /// The button for the chips past the line limit: `{n}` how many.
+        more: count "chipField.more" = "+{n} more" | "+{n} more";
+        /// The button that removes every chip.
+        clear_all: "chipField.clearAll" = "Clear All";
+        /// A partial chip's accessible name (the asterisk is only drawn): `{name}` the chip's text.
+        partial: template "chipField.partial" = "{name}, some of the selection";
+        /// The name of the menu of the chips past the line limit.
+        hidden: "chipField.hidden" = "More chips";
     }
 }
 
@@ -95,9 +109,25 @@ pub struct ChipFieldStyle {
     draft_min: f32,
 }
 
+/// Names the chips only some of the selection carries, by their text.
+pub struct PartialChips<'a>(Box<dyn Fn(&str) -> bool + 'a>);
+
+impl<'a> PartialChips<'a> {
+    /// The chips `partial` holds true for are partial.
+    pub fn new(partial: impl Fn(&str) -> bool + 'a) -> Self {
+        PartialChips(Box::new(partial))
+    }
+}
+
 /// A field of removable chips and a draft text part. Enter or leaving the field commits the draft as chips; the
 /// value is the list of chip texts.
+///
+/// A click on a chip, or Enter or Space on the focused one, reports it (`ChipFieldOutput::activated`); a secondary
+/// click on a chip, or the Menu key or Shift+F10 on the focused one, asks for its menu (`context_menu`), which the
+/// host opens with `Trigger::Context` on the field's response. A chip cut to its line shows its whole text as its
+/// tooltip.
 #[derive(crate::contract::Component, crate::contract::Props)]
+#[component(overlay)]
 pub struct ChipField<'a> {
     #[common]
     common: Common,
@@ -106,13 +136,79 @@ pub struct ChipField<'a> {
     /// Shown while the field has no chips and the draft is empty.
     #[prop(into)]
     placeholder: Option<Label>,
+    /// The chips only some of the selection carries: drawn muted with an asterisk after the text.
+    #[prop(func = "Fn(&str) -> bool")]
+    partial: Option<PartialChips<'a>>,
+    /// At most this many lines, the draft's included; the chips that don't fit go behind a "+N more" button at the
+    /// end of the last line, whose menu lists them, and choosing one there removes it.
+    #[prop]
+    max_lines: Option<usize>,
+    /// A Clear All button after the chips removes every chip.
+    #[prop(flag)]
+    clear_all: bool,
+    /// How many chips show this pass, the rest behind "+N more"; set by `parts`.
+    shown: Option<usize>,
+    /// The chip activated this pass.
+    activated: Option<usize>,
 }
 
 impl<'a> ChipField<'a> {
     /// A chip field named `label` over `value`.
     pub fn new(label: impl Into<Label>, value: Bind<'a, Vec<String>>) -> Self {
         let options = TextOptions { clear_on_escape: true, commit_on: &[',', ';'], ..TextOptions::default() };
-        ChipField { common: Common::new(), value, options, placeholder: None }.label(label)
+        ChipField {
+            common: Common::new(),
+            value,
+            options,
+            placeholder: None,
+            partial: None,
+            max_lines: None,
+            clear_all: false,
+            shown: None,
+            activated: None,
+        }
+        .label(label)
+    }
+
+    fn is_partial(&self, chip: &str) -> bool {
+        self.partial.as_ref().is_some_and(|partial| (partial.0)(chip))
+    }
+
+    /// What chip `chip` shows: its text, with an asterisk after a partial one's.
+    fn face_text(&self, chip: &str) -> String {
+        if self.is_partial(chip) { format!("{chip}*") } else { chip.to_owned() }
+    }
+}
+
+/// What a chip field reports: the edit of its value, and the chip activated or asked for its menu this pass.
+#[non_exhaustive]
+pub struct ChipFieldOutput {
+    /// The edit response of the chip list.
+    pub edit: EditResponse<Vec<String>>,
+    /// The chip clicked or activated with Enter or Space.
+    pub activated: Option<usize>,
+    /// The chip whose context menu was asked for; the host's `Trigger::Context` menu on the field opens at it.
+    pub context_menu: Option<usize>,
+}
+
+impl std::ops::Deref for ChipFieldOutput {
+    type Target = EditResponse<Vec<String>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.edit
+    }
+}
+
+impl Outcome for ChipFieldOutput {
+    type Value = Vec<String>;
+
+    fn response(&self) -> &Response {
+        &self.edit.response
+    }
+
+    #[cfg(feature = "testing")]
+    fn story_facts(&self) -> crate::testing::StoryOutput {
+        self.edit.story_facts()
     }
 }
 
@@ -151,15 +247,22 @@ fn place(widths: &[f32], room: f32, gap: f32, draft_min: f32) -> Placement {
     Placement { widths: clamped, cells, draft, lines: draft.0 + 1 }
 }
 
-/// The chips measured as faces, and where they sit.
+/// The chips measured as faces, and where they and the buttons sit.
 struct Arranged {
     /// The width of each chip's body face.
     bodies: Vec<f32>,
+    /// The width each shown chip wants, body and remove part.
+    wants: Vec<f32>,
     /// A chip's height, and the side of its remove part.
     side: f32,
     /// A line's height: a control, or a chip when that is taller.
     line: f32,
     gap: f32,
+    /// How many chips show; "+N more" counts the rest.
+    shown: usize,
+    /// Clear All follows the chips.
+    clear: bool,
+    /// The cells in reading order: the shown chips, "+N more" when chips are hidden, Clear All; then the draft.
     placement: Placement,
 }
 
@@ -168,33 +271,76 @@ impl Arranged {
         let lines = self.placement.lines;
         lines as f32 * self.line + (lines - 1) as f32 * self.gap
     }
+
+    /// The cell of "+N more", when chips are hidden.
+    fn more_cell(&self, chips: usize) -> Option<usize> {
+        (self.shown < chips).then_some(self.shown)
+    }
+
+    /// The cell of Clear All, when it shows.
+    fn clear_cell(&self, chips: usize) -> Option<usize> {
+        self.clear.then_some(self.shown + usize::from(self.shown < chips))
+    }
 }
 
-/// Measures the chips and flows them into `room` (`None`: one line).
-fn arrange(cx: &MeasureCx<'_, ChipField<'_>>, chips: &[String], room: Option<f32>) -> Arranged {
+/// Measures the chips and flows them into `room` (`None`: one line). With a line limit, as many chips show as leave
+/// room for "+N more" in the last line, the draft's line counted.
+fn arrange(cx: &MeasureCx<'_, ChipField<'_>>, field: &ChipField<'_>, chips: &[String], room: Option<f32>) -> Arranged {
     let metrics = &cx.style.metrics;
     let sizes: Vec<Vec2> =
-        chips.iter().enumerate().map(|(at, chip)| cx.child(("chip", at), &mut Badge::new(chip.clone()), Proposal::Ideal)).collect();
+        chips.iter().enumerate().map(|(at, chip)| cx.child(("chip", at), &mut Badge::new(field.face_text(chip)), Proposal::Ideal)).collect();
+    let words = cx.words::<ChipWords>();
+    let button = |key: &'static str, text: String| cx.child(key, &mut Badge::new(text), Proposal::Ideal).x;
+    // The widest count names every chip, so the button keeps its width whatever it counts.
+    let more = field.max_lines.map(|_| button("more", more_text(&words, chips.len(), &cx.format().integer(chips.len() as u64))));
+    let clear = (field.clear_all && !chips.is_empty()).then(|| button("clear", words.clear_all.as_str().to_owned()));
     let side = sizes.iter().map(|size| size.y).fold(0.0, f32::max);
     let gap = cx.gap();
     let draft_min = cx.style.draft_min;
-    let widths: Vec<f32> = sizes.iter().map(|size| size.x + side).collect();
-    let room = room.unwrap_or_else(|| widths.iter().sum::<f32>() + gap * widths.len() as f32 + draft_min);
+    let wants: Vec<f32> = sizes.iter().map(|size| size.x + side).collect();
+    let room = room.unwrap_or_else(|| wants.iter().chain(&clear).sum::<f32>() + gap * (wants.len() + 1) as f32 + draft_min);
+    let layout = |shown: usize| {
+        let mut cells = wants[..shown].to_vec();
+        cells.extend(more.filter(|_| shown < chips.len()));
+        cells.extend(clear);
+        place(&cells, room, gap, draft_min)
+    };
+    let mut shown = chips.len();
+    let mut placement = layout(shown);
+    if let Some(limit) = field.max_lines.map(|limit| limit.max(1)).filter(|&limit| placement.lines > limit) {
+        // The chips that fit `limit` lines, less as many as the button needs room for.
+        let alone = place(&wants, room, gap, draft_min);
+        shown = alone.cells.iter().take_while(|(line, _)| *line < limit).count();
+        loop {
+            placement = layout(shown);
+            if placement.lines <= limit || shown == 0 {
+                break;
+            }
+            shown -= 1;
+        }
+    }
     Arranged {
         bodies: sizes.iter().map(|size| size.x).collect(),
+        wants,
         side,
         line: metrics.min_size.y.max(side),
         gap,
-        placement: place(&widths, room, gap, draft_min),
+        shown,
+        clear: clear.is_some(),
+        placement,
     }
+}
+
+/// "+N more" for `hidden` chips, `integer` the count in the installed number format.
+fn more_text(words: &ChipWords, hidden: usize, integer: &str) -> String {
+    words.more.text(hidden as u64, integer)
 }
 
 impl Component for ChipField<'_> {
     const ROLE: Role = Role::TEXT_INPUT;
     const INPUT: crate::contract::Input = crate::contract::Input::Text;
-    const OVERLAYS: bool = false;
     type Style = ChipFieldStyle;
-    type Output = EditResponse<Vec<String>>;
+    type Output = ChipFieldOutput;
 
     fn style(cx: &StyleCx<'_>, _: ChipFieldStyleKey) -> ChipFieldStyle {
         let field = FieldStyle::at(cx);
@@ -207,31 +353,45 @@ impl Component for ChipField<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let chips = cx.value().map_or(&[][..], Vec::as_slice);
-        let arranged = arrange(cx, chips, cx.room);
+        let arranged = arrange(cx, self, chips, cx.room);
         let (_, start, width) = arranged.placement.draft;
         Vec2::new(cx.room.unwrap_or(start + width), arranged.height())
     }
 
-    /// The chips and their remove parts, then the draft; the chip bodies are one roving group.
+    /// The shown chips and their remove parts, "+N more", Clear All, then the draft; the chip bodies and the buttons
+    /// are one roving group.
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let Some(chips) = cx.value() else { return };
         let content = cx.content_rect;
-        let arranged = arrange(cx, chips, Some(content.width()));
+        let arranged = arrange(cx, self, chips, Some(content.width()));
+        self.shown = Some(arranged.shown);
         let rtl = cx.flow.is_rtl();
         let line_rect = |line: usize| {
             let top = content.min.y + line as f32 * (arranged.line + arranged.gap);
             Rect::from_min_size(pos2(content.min.x, top), vec2(content.width(), arranged.line))
         };
-        for (at, &(line, start)) in arranged.placement.cells.iter().enumerate() {
+        let cell_rect = |at: usize| {
+            let (line, start) = arranged.placement.cells[at];
             let cell = Flow::new(line_rect(line), rtl).span(start, arranged.placement.widths[at]);
-            let cell = Rect::from_center_size(cell.center(), vec2(cell.width(), arranged.side));
+            Rect::from_center_size(cell.center(), vec2(cell.width(), arranged.side))
+        };
+        for (at, chip) in chips.iter().enumerate().take(arranged.shown) {
+            let cell = cell_rect(at);
             let (body, remove) = Flow::new(cell, rtl).take_start(arranged.bodies[at].min(cell.width()));
-            let chip = cx.part(CHIP.at(at as u64), body).sense(Sense::CLICK | Sense::FOCUS).focusable();
+            let part = cx.part(CHIP.at(at as u64), body).sense(Sense::CLICK | Sense::FOCUS).focusable();
+            // A chip cut to its line shows its whole text as its tooltip.
+            let part = if arranged.placement.widths[at] < arranged.wants[at] { part.tooltip(Label::from(chip.clone())) } else { part };
             // The chip next to the draft is the group's arrival: Shift+Tab from the draft lands on it.
-            if at + 1 == chips.len() {
-                chip.selected();
+            if at + 1 == arranged.shown {
+                part.selected();
             }
             cx.part(REMOVE.at(at as u64), remove.rect()).sense(Sense::CLICK).over().pointer_only(REMOVE_BY_KEY);
+        }
+        if let Some(at) = arranged.more_cell(chips.len()) {
+            cx.part(MORE, cell_rect(at)).sense(Sense::CLICK | Sense::FOCUS).focusable().toggles("more");
+        }
+        if let Some(at) = arranged.clear_cell(chips.len()) {
+            cx.part(CLEAR, cell_rect(at)).sense(Sense::CLICK | Sense::FOCUS).focusable();
         }
         let (line, start, width) = arranged.placement.draft;
         let draft = Flow::new(line_rect(line), rtl).span(start, width);
@@ -248,15 +408,23 @@ impl Component for ChipField<'_> {
     }
 
     /// A remove part's click, or Delete or Backspace on a focused chip, removes the chip; Backspace in an empty draft
-    /// focuses the last chip. Delete in an empty draft does nothing.
+    /// focuses the last shown chip. Delete in an empty draft does nothing. Clear All removes every chip. A click on a
+    /// chip, or Enter or Space on the focused one, is reported.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        cx.popup("more");
         let Some(chips) = cx.value().cloned() else { return };
+        let shown = self.shown.unwrap_or(chips.len()).min(chips.len());
+        if cx.part_activated(CLEAR).is_some() {
+            cx.set(Vec::new());
+            return;
+        }
+        self.activated = (0..shown).find(|&at| cx.part_activated(CHIP.at(at as u64)).is_some());
         let draft_empty = cx.text(&text_part::<Vec<String>>()).is_none_or(|text| text.draft.as_deref().is_none_or(str::is_empty));
         let on_chip = cx.active_part().filter(|part| part.key == CHIP).and_then(|part| part.index);
         let in_draft = cx.is_focused() && cx.active_part().is_none();
         let backspace = Intent::delete(false, Granularity::Unit);
         let delete = Intent::delete(true, Granularity::Unit);
-        let mut removed = (0..chips.len()).find(|&at| {
+        let mut removed = (0..shown).find(|&at| {
             // Guard: a commit asks for a new pass, so no chip is undeclared; one that is stays out of this pass.
             cx.part_activated(REMOVE.at(at as u64)).is_some()
         });
@@ -265,18 +433,58 @@ impl Component for ChipField<'_> {
                 if cx.intents().take_exact(&backspace) || cx.intents().take_exact(&delete) {
                     removed = Some(at as usize);
                 }
-            } else if in_draft && draft_empty && !chips.is_empty() && cx.intents().take_exact(&backspace) {
-                cx.focus_part(CHIP.at(chips.len() as u64 - 1));
+            } else if in_draft && draft_empty && shown > 0 && cx.intents().take_exact(&backspace) {
+                cx.focus_part(CHIP.at(shown as u64 - 1));
             }
         }
-        if let Some(at) = removed.filter(|&at| at < chips.len()) {
+        if let Some(at) = removed.filter(|&at| at < shown) {
             // Next pass the chip after the removed one sits at `at`, where focus already is; with none, the draft.
-            if on_chip.is_some() && at + 1 == chips.len() {
+            if on_chip.is_some() && at + 1 == shown {
                 cx.focus_own();
             }
             let mut rest = chips;
             rest.remove(at);
             cx.set(rest);
+        }
+    }
+
+    /// The menu of the hidden chips: one row per chip, its whole text; choosing one removes it.
+    fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
+        let popup = cx.popup("more");
+        let chips = cx.value().cloned().unwrap_or_default();
+        let shown = self.shown.unwrap_or(chips.len()).min(chips.len());
+        if shown == chips.len() {
+            if popup.is_open(cx) {
+                popup.close(cx);
+            }
+            return;
+        }
+        let hidden: Vec<Entry<usize>> = (shown..chips.len()).map(|at| Entry::new(at, Label::from(chips[at].clone()))).collect();
+        let name = cx.words::<ChipWords>().hidden.clone();
+        let picked = ui.show(popup, crate::menu::layer(false), |ui, _| Menu::inline(name.clone()).pick(ui, &hidden).picked).flatten();
+        if let Some(at) = picked {
+            let mut rest = chips;
+            rest.remove(at);
+            cx.set(rest);
+        }
+    }
+
+    /// Each shown chip is a list item named by its text, a partial one with the partial word; the buttons are named
+    /// by their text.
+    fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
+        let Some(chips) = cx.value() else { return };
+        let words = cx.words::<ChipWords>();
+        let shown = self.shown.unwrap_or(chips.len()).min(chips.len());
+        for (at, chip) in chips.iter().enumerate().take(shown) {
+            let name = if self.is_partial(chip) { words.partial.fill(&[("name", chip.as_str())]) } else { chip.clone() };
+            access.node(CHIP.at(at as u64), Role::LIST_ITEM).name = Name::Text(name);
+        }
+        if shown < chips.len() {
+            let hidden = chips.len() - shown;
+            access.node(MORE, Role::BUTTON).name = Name::Text(more_text(&words, hidden, &cx.format().integer(hidden as u64)));
+        }
+        if cx.part_if_declared(CLEAR).is_some() {
+            access.node(CLEAR, Role::BUTTON).name = Name::Text(words.clear_all.as_str().to_owned());
         }
     }
 
@@ -287,7 +495,16 @@ impl Component for ChipField<'_> {
             if cx.part_if_declared(CHIP.at(at as u64)).is_none() {
                 continue;
             }
-            ui.face(CHIP.at(at as u64), Badge::new(chip.clone()).variant(Variant::SECONDARY));
+            let face = Badge::new(self.face_text(chip)).variant(Variant::SECONDARY);
+            ui.face(CHIP.at(at as u64), if self.is_partial(chip) { face.muted() } else { face });
+        }
+        let words = cx.words::<ChipWords>();
+        if cx.part_if_declared(MORE).is_some() {
+            let hidden = chips.len() - self.shown.unwrap_or(chips.len()).min(chips.len());
+            ui.face(MORE, Badge::new(more_text(&words, hidden, &cx.format().integer(hidden as u64))).variant(Variant::SECONDARY));
+        }
+        if cx.part_if_declared(CLEAR).is_some() {
+            ui.face(CLEAR, Badge::new(words.clear_all.clone()).variant(Variant::SECONDARY));
         }
     }
 
@@ -303,7 +520,9 @@ impl Component for ChipField<'_> {
         }
     }
 
-    fn finish(self, cx: Cx<'_, Self>) -> EditResponse<Vec<String>> {
-        cx.edit_response()
+    /// The chip the context request of this pass was made at is the one whose menu was asked for.
+    fn finish(self, cx: Cx<'_, Self>) -> ChipFieldOutput {
+        let context_menu = cx.context_part().filter(|part| part.key == CHIP).and_then(|part| part.index).map(|at| at as usize);
+        ChipFieldOutput { activated: self.activated, context_menu, edit: cx.edit_response() }
     }
 }

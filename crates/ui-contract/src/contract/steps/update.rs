@@ -90,14 +90,18 @@ fn double_click(core: &CxCore<'_>) -> Option<Option<PartRef>> {
 }
 
 /// Step 9, after `update`: a secondary release on the component, or a `ContextMenu` intent it did not take, records a
-/// context request that the overlay step and the popups shown after it read in this pass (9.2 rule 3).
+/// context request that the overlay step and the popups shown after it read in this pass (9.2 rule 3). The request
+/// is at the part under the pointer for a release, at the active part for the intent, else at the component.
 pub(crate) fn record_context(core: &CxCore<'_>) {
-    if core.intents.untaken(&Intent::ContextMenu)
-        || (core.response.hovered() && crate::runtime::pointer::frame(&core.ctx).release == Some(craft_behavior::PointerButton::Secondary))
-    {
-        let part = focus::active_part(&core.ctx, core.id).and_then(|part| core.results.get(&(part.key, part.index)));
-        keys::request_context(&core.ctx, core.id, part.map_or(core.rect, |part| part.rect));
-    }
+    let part = if core.intents.untaken(&Intent::ContextMenu) {
+        focus::active_part(&core.ctx, core.id)
+    } else if core.response.hovered() && crate::runtime::pointer::frame(&core.ctx).release == Some(craft_behavior::PointerButton::Secondary) {
+        core.results.iter().find(|(_, result)| result.hovered).map(|(&(key, index), _)| PartRef { key, index })
+    } else {
+        return;
+    };
+    let part = part.and_then(|part| core.results.get(&(part.key, part.index)).map(|result| (part, result.rect)));
+    keys::request_context(&core.ctx, core.id, part.map_or(core.rect, |(_, rect)| rect), part.map(|(part, _)| part));
 }
 
 /// Writes back what the component left untaken, and its state-dependent claims for the next frames.

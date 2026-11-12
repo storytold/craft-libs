@@ -1,7 +1,7 @@
 //! `Badge`: a small label in a tone, soft or solid, and the count form.
 
 use crate::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Styled as _};
-use crate::primitives::TextRun;
+use crate::primitives::{TextRun, Wrap};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx, SurfaceLook, TextLook, TypeRole};
 use craft_behavior::{Insets, Metrics, Sense};
@@ -45,22 +45,28 @@ pub struct BadgeStyle {
     /// The label.
     #[style(text)]
     text: TextLook,
+    /// The label of a muted badge: the variant's secondary ink.
+    #[style(text)]
+    muted: TextLook,
 }
 
 /// A small label in a tone: a soft tint by default, a solid fill with a solid variant, an edge without fill with the
 /// secondary variant (a chip). The tone is the variant
 /// (`Variant::look(Emphasis::Soft, Tone::Good)`); the text always says what the tone means. A count reads `99+`
-/// above `MAX_COUNT`.
-#[derive(crate::contract::Component)]
+/// above `MAX_COUNT`. A label longer than the badge's room is cut at its end.
+#[derive(crate::contract::Component, crate::contract::Props)]
 pub struct Badge {
     #[common]
     common: Common,
+    /// The label in the muted text colour: what only some of a selection carries (a partial chip).
+    #[prop(flag)]
+    muted: bool,
 }
 
 impl Badge {
     /// A neutral, soft badge showing `label`, which is also its accessible name.
     pub fn new(label: impl Into<Label>) -> Self {
-        Badge { common: Common::new() }.label(label)
+        Badge { common: Common::new(), muted: false }.label(label)
     }
 
     /// A count: `99+` above `MAX_COUNT`.
@@ -90,6 +96,7 @@ impl Component for Badge {
             surface,
             metrics: Metrics::new().padding(Insets::new(control.pad_x, control.pad_x, pad_y, pad_y)),
             text: TextLook::new(TypeRole::Caption, parts.text),
+            muted: TextLook::new(TypeRole::Caption, parts.muted),
         }
     }
 
@@ -103,7 +110,8 @@ impl Component for Badge {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let draw = ui.draw();
-        let run = TextRun::new(cx.resolved.label).role(cx.style.text.role).color(cx.resolve(&cx.style.text.color));
+        let text = if self.muted { &cx.style.muted } else { &cx.style.text };
+        let run = TextRun::new(cx.resolved.label).role(text.role).color(cx.resolve(&text.color)).wrap(Wrap::Elide);
         let layout = draw.layout(&run, cx.content_rect.width());
         draw.galley(cx.content_rect.center() - layout.size() / 2.0, &layout);
     }
