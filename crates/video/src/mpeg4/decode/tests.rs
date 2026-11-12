@@ -170,3 +170,23 @@ fn chroma_vector_of_four_extreme_vectors_does_not_overflow() {
         assert!(c[0] > 0 && c[1] < 0, "{c:?}");
     }
 }
+
+/// Direct mode's chrominance vector comes from the exact luminance vectors: bounding each first
+/// would let vectors of opposite signs cancel differently. Forward vectors 2^20, 2^20, -2^19 and
+/// -2^19 (co-located 1024, 1024, -512, -512 with TRB 1024 and TRD 1) sum to 2^20, a chrominance
+/// vector far past the picture (bounded to 2^16 for sampling); bounded first, they sum to 0.
+#[test]
+fn direct_chroma_vector_of_mixed_signs_uses_the_exact_vectors() {
+    use super::picture::direct_four;
+    let mvs = [[1024, 0], [1024, 0], [-512, 0], [-512, 0]];
+    let [(fwd, chroma), _] = direct_four(&mvs, [0, 0], 1024, 1, false);
+    assert_eq!(fwd, [[1 << 16, 0], [1 << 16, 0], [-(1 << 16), 0], [-(1 << 16), 0]]);
+    assert_eq!(chroma, [1 << 16, 0]);
+    // Ordinary vectors give what the four-vector rule gives.
+    let mvs = [[6, -3], [5, 2], [-4, 7], [3, 1]];
+    for q in [false, true] {
+        let [(fwd, chroma), (bwd, back)] = direct_four(&mvs, [1, -1], 1, 2, q);
+        assert_eq!(chroma, super::mc::chroma_mv_4(&fwd, q));
+        assert_eq!(back, super::mc::chroma_mv_4(&bwd, q));
+    }
+}

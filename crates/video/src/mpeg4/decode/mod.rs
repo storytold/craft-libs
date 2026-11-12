@@ -196,6 +196,10 @@ pub struct Decoder {
     /// Bytes of one picture buffer of the current VOL, 0 without one: the references, the spare
     /// buffer and the picture being decoded take one each.
     frame_bytes: u64,
+    /// The memory budget when the current VOL was accepted: a later
+    /// [`set_memory_budget`](Self::set_memory_budget) applies from the next VOL, so the current
+    /// layer keeps decoding and a smaller VOL that fits the new budget is still reached.
+    layer_budget: u64,
     /// Why the last VOL was refused, until a decodable one arrives: the error of the VOPs that
     /// follow it, so `last_error` keeps naming the cause.
     refused: Option<DecodeError>,
@@ -253,6 +257,7 @@ impl Decoder {
             last: None,
             spare: None,
             frame_bytes: 0,
+            layer_budget: 0,
             refused: None,
             time_base: 0,
             last_time_base: 0,
@@ -373,6 +378,7 @@ impl Decoder {
             self.drop_references();
         }
         self.frame_bytes = shape.bytes().unwrap_or(u64::MAX);
+        self.layer_budget = self.memory_budget;
         self.refused = None;
         self.info = Some(Arc::new(self.stream_info(&vol)));
         self.vol = Some(vol);
@@ -442,12 +448,12 @@ impl Decoder {
 
     /// Whether one more picture may be queued in this call: at most 16, and the queued pictures
     /// (counted at their own size, which a VOL change in the chunk may have made differ from the
-    /// current one) must fit in the memory budget beside the current VOL's picture buffers and
-    /// one more picture. Each start code adds at most one picture, so checking before each one
+    /// current one) must fit in the budget the current VOL was accepted with, beside its picture
+    /// buffers and one more picture. Each start code adds at most one picture, so checking before each one
     /// keeps the queue within both.
     fn room_for_a_picture(&self) -> bool {
         let queued = self.out.iter().fold(0u64, |n, p| n.saturating_add((p.y.len() + p.u.len() + p.v.len()) as u64));
-        self.out.len() < MAX_PICTURES_PER_CALL && queued.saturating_add(self.frame_bytes.saturating_mul(4)) <= self.memory_budget
+        self.out.len() < MAX_PICTURES_PER_CALL && queued.saturating_add(self.frame_bytes.saturating_mul(4)) <= self.layer_budget
     }
 
     /// Output the picture held back for reordering (end of stream).

@@ -301,14 +301,25 @@ pub(super) fn chroma_mv_1(mv: [i32; 2], quarter_sample: bool) -> [i32; 2] {
 
 /// Chrominance vector of four 8×8 luminance vectors (§7.6.3, Table 7-6 rounding).
 pub(super) fn chroma_mv_4(mvs: &[[i32; 2]; 4], quarter_sample: bool) -> [i32; 2] {
-    const ROUND: [i32; 16] = [0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2];
-    // The sum is taken in `i64`: four extreme vectors exceed `i32`.
+    chroma_mv_4_wide(&mvs.map(|m| m.map(i64::from)), quarter_sample)
+}
+
+/// Bound of a chrominance vector component (half samples): a chrominance plane is at most 4096
+/// samples a side, so a component of 2^16 already places the block wholly past its padded edge,
+/// where every read clamps to the same edge samples, and bounding a larger one changes nothing.
+const CHROMA_MV_BOUND: i64 = 1 << 16;
+
+/// [`chroma_mv_4`] of luminance vectors wider than `i32` (direct mode with hostile time
+/// stamps): the sum is exact, so components of opposite signs cancel as they should, and only
+/// the result is bounded for sampling.
+pub(super) fn chroma_mv_4_wide(mvs: &[[i64; 2]; 4], quarter_sample: bool) -> [i32; 2] {
+    const ROUND: [i64; 16] = [0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2];
     std::array::from_fn(|c| {
-        let sum: i64 = mvs.iter().map(|m| i64::from(if quarter_sample { m[c] / 2 } else { m[c] })).sum();
+        let sum: i64 = mvs.iter().fold(0i64, |s, m| s.saturating_add(if quarter_sample { m[c] / 2 } else { m[c] }));
         let a = sum.unsigned_abs();
-        let v = i64::from(ROUND[(a & 15) as usize]) + ((a >> 4) << 1) as i64;
+        let v = ROUND[(a & 15) as usize].saturating_add(i64::try_from((a >> 4) << 1).unwrap_or(i64::MAX));
         let v = if sum < 0 { -v } else { v };
-        v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+        v.clamp(-CHROMA_MV_BOUND, CHROMA_MV_BOUND) as i32
     })
 }
 
