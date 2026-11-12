@@ -30,6 +30,8 @@ pub mod ids {
     pub const XMP: u16 = 1060;
     /// Document timeline settings (versioned descriptor).
     pub const TIMELINE_INFO: u16 = 1075;
+    /// Selected layer ids (`u16` count followed by `u32` ids).
+    pub const LAYER_SELECTION_IDS: u16 = 1069;
 }
 
 /// One image resource block.
@@ -232,6 +234,21 @@ pub enum ResourceData<'a> {
     TimelineInfo(crate::VersionedDescriptor),
     /// A `mani` legacy animation resource in the plug-in resource id range (4000..=4999).
     Animation(crate::animation::AnimationResource<'a>),
+    /// 1069: selected layer ids, in their stored order. An empty list is explicit.
+    LayerSelectionIds(Vec<u32>),
+}
+
+/// Decodes resource 1069 after checking the complete count-derived payload before allocation.
+/// The format parser preserves zero IDs, duplicates and order for the document mapper to
+/// resolve; truncated data and trailing bytes are malformed rather than partial selections.
+fn layer_selection_ids(data: &[u8]) -> Result<Vec<u32>> {
+    let mut r = Reader::new(data);
+    let count = r.u16()?;
+    r.check_count(u64::from(count), 4)?;
+    if r.remaining() != usize::from(count) * 4 {
+        return Err(PsdError::invalid("layer selection ids length does not match its count"));
+    }
+    (0..count).map(|_| r.u32()).collect()
 }
 
 impl ImageResource {
@@ -264,6 +281,7 @@ impl ImageResource {
             ids::XMP => Ok(ResourceData::Xmp(d)),
             ids::TIMELINE_INFO => crate::animation::parse_descriptor(d).map(ResourceData::TimelineInfo),
             4000..=4999 if d.starts_with(b"mani") => crate::animation::AnimationResource::from_bytes(d).map(ResourceData::Animation),
+            ids::LAYER_SELECTION_IDS => layer_selection_ids(d).map(ResourceData::LayerSelectionIds),
             _ => return None,
         })
     }
@@ -432,6 +450,32 @@ mod tests {
         let r = ImageResource::new(ids::XMP, b"<x/>".to_vec());
         assert_eq!(r.xmp_str(), Some("<x/>"));
         assert_eq!(ImageResource::new(4242, vec![]).parsed(), None);
+    }
+
+    /// Parsing preserves the stored list exactly, including zero, duplicates and deselection.
+    #[test]
+    fn typed_layer_selection_ids_preserve_empty_order_and_duplicates() {
+        for ids in [vec![], vec![9], vec![u32::MAX, 0, 9, 9]] {
+            let mut data = (ids.len() as u16).to_be_bytes().to_vec();
+            data.extend(ids.iter().flat_map(|id| id.to_be_bytes()));
+            let r = ImageResource::new(ids::LAYER_SELECTION_IDS, data);
+            assert_eq!(r.parsed(), Some(Ok(ResourceData::LayerSelectionIds(ids))));
+            roundtrip(&[r]);
+        }
+    }
+
+    /// Declared lengths must match the entire payload, including at the maximum valid count.
+    #[test]
+    fn typed_layer_selection_ids_reject_mismatched_counts_and_truncation() {
+        for data in [vec![], vec![0], vec![0, 1], vec![0, 1, 0, 0, 0], vec![0, 0, 0], vec![0, 0, 0, 0, 0, 1], vec![255, 255]] {
+            let r = ImageResource::new(ids::LAYER_SELECTION_IDS, data);
+            assert!(matches!(r.parsed(), Some(Err(_))), "{:?}", r.data);
+        }
+        let mut data = u16::MAX.to_be_bytes().to_vec();
+        data.extend((0..u32::from(u16::MAX)).flat_map(u32::to_be_bytes));
+        let r = ImageResource::new(ids::LAYER_SELECTION_IDS, data);
+        let Some(Ok(ResourceData::LayerSelectionIds(ids))) = r.parsed() else { panic!("maximum count must parse") };
+        assert_eq!(ids.len(), usize::from(u16::MAX));
     }
 
     #[test]

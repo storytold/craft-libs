@@ -37,7 +37,8 @@ pub struct SheetEntry {
     /// `sheetId`, 0 when absent.
     pub sheet_id: u32,
     pub visibility: Visibility,
-    /// The relationship id (`r:id`), empty when absent.
+    /// The relationship id (`r:id`, or a plain `id` from a writer that left the namespace
+    /// out), empty when absent.
     pub rel_id: String,
     pub kind: SheetKind,
     /// The sheet's part, `None` when the relationship is missing or points outside the package.
@@ -76,7 +77,7 @@ impl Workbook {
         let mut wb = Workbook { date_1904: root.child("workbookPr").is_some_and(|p| p.flag("date1904", false)), ..Workbook::default() };
         if let Some(sheets) = root.child("sheets") {
             for s in sheets.children("sheet") {
-                let rel_id = s.attr("id").unwrap_or_default().to_string();
+                let rel_id = s.attr_or_plain("r:id").unwrap_or_default().to_string();
                 let rel = rels.by_id(&rel_id);
                 wb.sheets.push(SheetEntry {
                     name: s.attr("name").unwrap_or_default().to_string(),
