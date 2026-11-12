@@ -23,7 +23,7 @@ use std::collections::{BTreeSet, HashSet};
 
 use quick_xml::events::Event;
 
-use crate::xmp::{MAX_OPAQUE_NAME_BYTES, XmpError, XmpNamespace, canonical_name, parse_xmp_with, unescape_attr};
+use crate::xmp::{MAX_OPAQUE_NAME_BYTES, XmpError, XmpNamespace, canonical_name, check_scopes, parse_xmp_with, unescape_attr};
 
 /// Which properties [`merge_xmp`] takes from the fresh packet. Names are canonical
 /// `prefix:name` (prefixes as [`crate::parse_xmp`] reports them); `prefix:*` is a whole namespace.
@@ -77,6 +77,8 @@ struct Scan {
     descs: Vec<Desc>,
     /// Where the first `</rdf:RDF>` starts.
     rdf_close: Option<usize>,
+    /// The span of a self-closing `<rdf:RDF/>` (used only when there is no `</rdf:RDF>`).
+    rdf_empty: Option<(usize, usize)>,
 }
 
 enum Kind {
@@ -134,6 +136,7 @@ fn scan(s: &str, extra: &[XmpNamespace]) -> Result<Scan, XmpError> {
                     raw_attrs.push((k, v));
                 }
                 scopes.push(scope);
+                check_scopes(&scopes)?;
                 let raw_name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
                 let name = canonical_name(&raw_name, &scopes, extra, &mut opaque_budget)?;
                 let kind = match stack.last() {
@@ -150,6 +153,9 @@ fn scan(s: &str, extra: &[XmpNamespace]) -> Result<Scan, XmpError> {
                     _ => Kind::Other,
                 };
                 if empty {
+                    if matches!(kind, Kind::Rdf) {
+                        out.rdf_empty = out.rdf_empty.or(Some((before, after)));
+                    }
                     scopes.pop();
                     if let Kind::Prop { desc, start, name } = kind
                         && let Some(d) = out.descs.get_mut(desc)
@@ -215,7 +221,9 @@ pub fn merge_xmp(existing: &str, fresh: &str, rules: MergeRules) -> Result<Strin
     };
     parse_xmp_with(old, rules.namespaces)?;
     let ex = scan(old, rules.namespaces)?;
-    let rdf_close = ex.rdf_close.ok_or_else(|| XmpError::Xml("no rdf:RDF element".into()))?;
+    if ex.rdf_close.is_none() && ex.rdf_empty.is_none() {
+        return Err(XmpError::Xml("no rdf:RDF element".into()));
+    }
     let new = scan(fresh, rules.namespaces)?;
     let fresh_desc = new.descs.first().ok_or_else(|| XmpError::Xml("the new packet has no rdf:Description".into()))?;
     let fresh_names: BTreeSet<&str> = fresh_desc.props.iter().map(|p| p.name.as_str()).collect();
@@ -263,8 +271,16 @@ pub fn merge_xmp(existing: &str, fresh: &str, rules: MergeRules) -> Result<Strin
     }
     block.push_str("\n  </rdf:Description>");
     if written > 0 {
-        let at = old.get(..rdf_close).map_or(rdf_close, |h| h.trim_end().len());
-        edits.push((at, at, block));
+        if let Some(rdf_close) = ex.rdf_close {
+            let at = old.get(..rdf_close).map_or(rdf_close, |h| h.trim_end().len());
+            edits.push((at, at, block));
+        } else if let Some((s, e)) = ex.rdf_empty {
+            // a self-closing `<rdf:RDF .../>` is opened up around the new description
+            let tag = old.get(s..e).ok_or_else(|| XmpError::Xml("bad span".into()))?;
+            let open = tag.trim_end().strip_suffix("/>").ok_or_else(|| XmpError::Xml("bad rdf:RDF tag".into()))?;
+            let name = tag.get(1..).and_then(|t| t.split(|c: char| c.is_whitespace() || c == '/' || c == '>').next()).unwrap_or("rdf:RDF");
+            edits.push((s, e, format!("{open}>{block}\n</{name}>")));
+        }
     }
     edits.sort_by_key(|e| (e.0, e.1));
     // overlapping edits can't happen (properties sit inside their description, which is either
@@ -402,6 +418,16 @@ mod tests {
         assert!(!d.properties.contains_key("dc:subject"), "a cleared field is cleared");
         assert_eq!(again.matches("<rdf:Description").count(), 2, "{again}");
         assert_eq!(merge_xmp(&again, &fresh(1, &[]), RULES).unwrap(), again, "idempotent");
+    }
+
+    #[test]
+    fn a_self_closing_rdf_element_is_opened_not_replaced() {
+        let ex = "<!-- keep me --><x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><r:RDF xmlns:r=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"/></x:xmpmeta>";
+        let out = merge_xmp(ex, &fresh(3, &[]), RULES).unwrap();
+        assert!(out.starts_with("<!-- keep me --><x:xmpmeta"), "{out}");
+        assert!(out.contains("</r:RDF></x:xmpmeta>"), "{out}");
+        assert_eq!(parse_xmp(&out).unwrap().properties.get("xmp:Rating"), Some(&vec!["3".to_string()]));
+        assert!(merge_xmp("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>", &fresh(3, &[]), RULES).is_err(), "no RDF element at all");
     }
 
     #[test]

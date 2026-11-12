@@ -50,6 +50,7 @@
 //! ```
 
 mod document;
+mod features;
 pub mod ns;
 mod package;
 mod sheet;
@@ -66,6 +67,10 @@ pub use craft_sheet::{
     builtin_format, builtin_format_id, quote_sheet, sheet_needs_quotes,
 };
 pub use document::{Document, KeptPart, Worksheet, XlsxKind};
+pub use features::{
+    Break, CfRule, Cfvo, ColorScale, Comment, Comments, ConditionalFormatting, DataBar, DataValidation, DataValidations, Features, HeaderFooter,
+    Hyperlink, IconSet, NoteShape, PageMargins, PageSetup, Pane, Print, PrintOptions, Selection, SheetView, notes_vml, parse_sqref, range_ref,
+};
 pub use package::{Package, is_xlsb};
 pub use sheet::{Cell, CellFormula, CellValue, Column, FormulaKind, Row, SheetPart, iso_date_serial};
 pub use strings::{PhoneticProps, PhoneticRun, StringItem, TextRun, decode_xstring, encode_xstring, rich_text, t_el};
