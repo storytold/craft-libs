@@ -28,6 +28,7 @@ use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::table::Table;
 use egui::Ui;
 use std::borrow::Cow;
+use std::cell::RefCell;
 
 #[cfg(feature = "screen-testing")]
 mod stories;
@@ -82,7 +83,7 @@ const FALLBACK_INTERVAL: f32 = 36.0;
 /// The Tabs dialog.
 ///
 /// - The stops are a `Table` (columns Position, Alignment, Leader; one Tab stop with the list keys and single
-///   selection). The selected stop's fields sit under it: a position field in the unit, an alignment `Select` and a
+///   selection) whose rows edit their stops in place: a position field in the unit, an alignment `Select` and a
 ///   leader `Select` whose options read as Word's list does ("1 ……"). Editing the position keeps the rows in order
 ///   until the edit ends, then [`TabStopsDialog::normalize`] restores position order and merges stops moved onto one
 ///   another (the edited row wins).
@@ -100,7 +101,7 @@ pub struct TabStopsDialog {
     unit: DocUnit,
     /// The row and position an in-place position edit began from, for Escape.
     draft: Option<(usize, f32)>,
-    /// The selected stop's Position field takes the focus the next time it shows: Set moves into the new stop.
+    /// The selected row's Position field takes the focus the next time it shows: Set moves into the new stop.
     to_edit: bool,
 }
 
@@ -260,7 +261,7 @@ impl StackDialog for TabStopsDialog {
     }
 }
 
-/// A change made in the selected stop's fields.
+/// A change made in a stop's row.
 enum CellEdit {
     Position(EditEvent<Option<f64>>),
     Align(TabAlign),
@@ -272,7 +273,6 @@ impl TabStopsDialog {
         Stack::new().show(ui, |ui, _| {
             self.default_row(ui, words);
             self.table(ui, words, units);
-            self.fields(ui, words);
             self.buttons(ui, words);
             if !self.cleared.is_empty() {
                 let positions: Vec<String> = self.cleared.iter().map(|gone| self.text(units, *gone)).collect();
@@ -303,7 +303,8 @@ impl TabStopsDialog {
         }
     }
 
-    /// The stops table; a selection change moves the selected stop.
+    /// The stops table: each row edits its stop in place (a position field, an alignment and a leader `Select`); a
+    /// selection change moves the selected stop.
     fn table(&mut self, ui: &mut Ui, words: &TabStopsWords, units: &Units) {
         let columns = vec![
             ColumnSpec::new(POSITION, words.position_column.clone(), ColumnWidth::fill(1.0)),
@@ -313,53 +314,44 @@ impl TabStopsDialog {
         let texts: Vec<String> = self.stops.iter().map(|stop| self.text(units, stop.position)).collect();
         let selection = self.selected.map_or_else(Selection::default, Selection::single);
         let stops = self.stops.clone();
+        let unit = self.unit;
+        let aligns: Vec<Entry<TabAlign>> = TabAlign::ALL.into_iter().map(|align| Entry::new(align, align_text(words, align))).collect();
+        let leaders: Vec<Entry<TabLeader>> = TabLeader::ALL.into_iter().map(|leader| Entry::new(leader, leader_text(words, leader))).collect();
+        let range = -f64::from(MAX_POSITION)..=f64::from(MAX_POSITION);
+        let edits: RefCell<Vec<(usize, CellEdit)>> = RefCell::new(Vec::new());
+        let position_ids: RefCell<Vec<(usize, egui::Id)>> = RefCell::new(Vec::new());
         let out = Table::<usize>::new(words.title.clone(), columns.clone())
             .select(SelectMode::Single)
             .min_rows(1)
             .max_rows(6)
             .selection(Bind::given(selection))
             .show_items(ui, &Stops { stops: &stops, texts: &texts }, &mut |key, icx| {
-                let stop = &stops[*key];
-                ListRow::new(texts[*key].clone())
+                let (at, stop) = (*key, stops[*key]);
+                let (edits, position_ids) = (&edits, &position_ids);
+                let points = Mixed::Same(Some(f64::from(stop.position)));
+                let position = length_field(unit, words.position.clone(), points, range.clone());
+                let align = Select::new(words.alignment.clone(), Bind::given(stop.align), &aligns);
+                let leader = Select::new(words.leader.clone(), Bind::given(stop.leader), &leaders);
+                ListRow::new(texts[at].clone())
                     .cells(icx.cells())
                     .columns(&columns)
-                    .cell(ALIGNMENT, align_text(words, stop.align))
-                    .cell(LEADER, leader_text(words, stop.leader))
+                    .cell_field(POSITION, position, move |out| {
+                        position_ids.borrow_mut().push((at, out.response.id));
+                        edits.borrow_mut().extend(out.edit.events.into_iter().map(|event| (at, CellEdit::Position(event))));
+                    })
+                    .cell_field(ALIGNMENT, align, move |out| {
+                        edits.borrow_mut().extend(out.value().copied().map(|align| (at, CellEdit::Align(align))))
+                    })
+                    .cell_field(LEADER, leader, move |out| {
+                        edits.borrow_mut().extend(out.value().copied().map(|leader| (at, CellEdit::Leader(leader))));
+                    })
             });
-        for event in out.events {
-            if let CollectionEvent::Selection(change) = event {
-                match change {
-                    SelectionChange::Set(keys) => self.select(keys.last().copied()),
-                    SelectionChange::Clear => self.select(None),
-                    _ => {}
-                }
-            }
+        if self.to_edit
+            && let Some((_, id)) = position_ids.borrow().iter().find(|(at, _)| Some(*at) == self.selected)
+        {
+            self.to_edit = !focus::request(ui.ctx(), FocusTarget::Id(*id));
         }
-    }
-
-    /// The selected stop's position, alignment and leader.
-    fn fields(&mut self, ui: &mut Ui, words: &TabStopsWords) {
-        let Some((at, stop)) = self.selected.and_then(|at| self.stops.get(at).map(|stop| (at, *stop))) else { return };
-        let unit = self.unit;
-        let aligns: Vec<Entry<TabAlign>> = TabAlign::ALL.into_iter().map(|align| Entry::new(align, align_text(words, align))).collect();
-        let leaders: Vec<Entry<TabLeader>> = TabLeader::ALL.into_iter().map(|leader| Entry::new(leader, leader_text(words, leader))).collect();
-        let mut edits = Vec::new();
-        let to_edit = &mut self.to_edit;
-        Row::new().show(ui, |ui, _| {
-            let range = -f64::from(MAX_POSITION)..=f64::from(MAX_POSITION);
-            let field = Field::new(words.position.clone())
-                .show(ui, |ui, _| length_field(unit, words.position.clone(), Mixed::Same(Some(f64::from(stop.position))), range.clone()).show(ui))
-                .inner;
-            if let Some(field) = field.as_ref().filter(|_| *to_edit) {
-                *to_edit = !focus::request(ui.ctx(), FocusTarget::Id(field.response.id));
-            }
-            edits.extend(field.into_iter().flat_map(|field| field.edit.events).map(CellEdit::Position));
-            let align = Select::new(words.alignment.clone(), Bind::given(stop.align), &aligns).show(ui);
-            edits.extend(align.value().copied().map(CellEdit::Align));
-            let leader = Select::new(words.leader.clone(), Bind::given(stop.leader), &leaders).show(ui);
-            edits.extend(leader.value().copied().map(CellEdit::Leader));
-        });
-        for edit in edits {
+        for (at, edit) in edits.into_inner() {
             match edit {
                 CellEdit::Position(event) => {
                     let event = event.map(|points| points.map(|p| p as f32));
@@ -367,6 +359,15 @@ impl TabStopsDialog {
                 }
                 CellEdit::Align(align) => self.stops[at].align = align,
                 CellEdit::Leader(leader) => self.stops[at].leader = leader,
+            }
+        }
+        for event in out.events {
+            if let CollectionEvent::Selection(change) = event {
+                match change {
+                    SelectionChange::Set(keys) => self.select(keys.last().copied()),
+                    SelectionChange::Clear => self.select(None),
+                    _ => {}
+                }
             }
         }
     }

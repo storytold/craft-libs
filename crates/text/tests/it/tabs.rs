@@ -1,4 +1,4 @@
-//! The Tabs dialog's focus: it opens on the default interval, and Set moves into the new stop.
+//! The Tabs dialog's focus: it opens on the default interval, and Set moves into the new stop's row.
 
 use craft_text::ui::tabs_dialog::TabStopsDialog;
 use craft_ui::dialog::{DialogStack, StackDialog as _};
@@ -25,4 +25,10 @@ fn the_dialog_opens_on_the_default_interval_and_set_moves_into_the_new_stop() {
     let set = fixture.by_label("Set").expect("Set is shown");
     fixture.click(&set).idle(4);
     assert_eq!(focused(&fixture, &labels), Some("Tab stop position:"), "Set moves the focus into the new stop's position");
+    let set = fixture.by_label("Set").expect("Set is shown");
+    fixture.click(&set).idle(4);
+    let key = craft_ui::testing::access::focused_key(fixture.tree());
+    assert_eq!(fixture.tree().name_of(key), Some("Tab stop position:"), "a second Set moves into a position field too");
+    let value = fixture.tree().value_of(key).unwrap_or_default();
+    assert!(value.contains("72"), "the focus is in the new row's field, at 72 pt: {value:?}");
 }
