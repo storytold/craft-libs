@@ -341,20 +341,28 @@ pub(super) fn long_collection_builds_rows_within_the_room_only(subject: &Subject
     Ok(())
 }
 
-/// One wheel step moves the rows and the frame it happens in shows rows over the whole viewport.
+/// One wheel step moves the rows and the frame it happens in shows rows over the whole viewport. The rows that
+/// meet the viewport are the ones shown: a kept row (the lead, the anchor) stays built out of view.
 pub(super) fn scroll_shows_rows_in_the_same_frame(subject: &Subject) -> Result<(), String> {
     if !is_items(subject) {
         return Ok(());
     }
+    let in_view = |fixture: &Fixture, container: &Target| {
+        let mut shown = rows(fixture, container.node);
+        shown.retain(|row| row.rect.intersects(container.rect));
+        shown
+    };
     for story in &subject.stories {
-        let Some((mut fixture, container, shown)) = with_rows(story, 3) else { continue };
-        let Some((_, size)) = position_in_set(&fixture, shown[0].node) else { continue };
+        let Some((mut fixture, container, _)) = with_rows(story, 3) else { continue };
+        let shown = in_view(&fixture, &container);
+        let Some(first) = shown.first() else { continue };
+        let Some((_, size)) = position_in_set(&fixture, first.node) else { continue };
         if shown.len() >= size {
             continue;
         }
         fixture.frame(vec![crate::testing::pointer::moved(container.rect.center())]);
         fixture.frame(vec![crate::testing::pointer::wheel(-3.0 * shown[0].rect.height())]);
-        let now = rows(&fixture, container.node);
+        let now = in_view(&fixture, &container);
         let (Some(top), Some(bottom)) = (now.first(), now.last()) else {
             return Err(format!("{}: no row is shown in the frame of the scroll", story.name));
         };
