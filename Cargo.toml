@@ -96,6 +96,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+unused_workspace_dependencies = "allow"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(craft_pdf_unicode_fixtures)"] }
 
 [workspace.lints.clippy]
