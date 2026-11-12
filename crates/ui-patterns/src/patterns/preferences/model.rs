@@ -76,41 +76,21 @@ impl<'a> PageSpec<'a> {
     }
 }
 
-/// How a group lays out its rows.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Columns {
-    /// Labels in a column, controls beside them.
-    #[default]
-    Labelled,
-    /// Check boxes start at the group's left edge, under the label column; the other rows keep their labels in it.
-    /// Without this, a check box sits in the control column.
-    Checks,
-}
-
-/// A group of rows: a titled box, or the page itself when untitled.
+/// A group of rows: a titled box, or the page itself when untitled. Its rows share one label column; a check box row
+/// starts in the control column when the group has rows labelled beside their controls, else at the row's start.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct GroupSpec<'a> {
     /// The translated title of the box; `None` for the page's untitled group.
     pub title: Option<&'a str>,
-    /// How the rows are laid out.
-    pub columns: Columns,
     /// The group's rows, in order.
     pub rows: Vec<RowSpec<'a>>,
 }
 
 impl<'a> GroupSpec<'a> {
-    /// A group with [`Columns::Labelled`] layout.
+    /// A group titled `title` holding `rows`.
     pub fn new(title: Option<&'a str>, rows: Vec<RowSpec<'a>>) -> Self {
-        Self { title, columns: Columns::Labelled, rows }
-    }
-
-    /// Switches the group to [`Columns::Checks`] layout.
-    #[must_use]
-    pub fn checks(mut self) -> Self {
-        self.columns = Columns::Checks;
-        self
+        Self { title, rows }
     }
 }
 
