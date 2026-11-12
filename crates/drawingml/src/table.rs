@@ -647,3 +647,5 @@ mod tests {
         assert_eq!(t.cell(0, 0).map(|c| (c.grid_span, c.row_span)), Some((1, 1)));
     }
 }
+
+pub mod styles;

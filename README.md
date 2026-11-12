@@ -79,7 +79,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-dxf`](crates/dxf/src/lib.rs): DXF tag reader and writer, from CADCraft: ASCII and
   binary DXF as (group code, value) tags, split into sections and entities, with pre-2007 code
   pages and version detection, and written back; and `model`, the drawing above the tags (header
-  variables, tables, blocks, layouts, entities), merged from CADCraft's and VectorCraft's readers. Bounded
+  variables, tables, blocks, layouts, entities) and its writer (R12 to 2018), merged from CADCraft's and VectorCraft's readers. Bounded
   on hostile input. Mapping the model onto a document stays in each app.
 - [`craft-ecproj-format`](crates/ecproj-format/README.md): the envelope of EffectCraft `.ecproj`
   project files: `savedBy`, the schema version and its check, and the file object with the
@@ -89,9 +89,18 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   and message, images, and the vector network and geometry blobs. Bounded on hostile input.
   Carved from FigCraft.
 - [`craft-epub`](crates/epub/README.md): EPUB packages: the OCF ZIP container, the package document (metadata, manifest, spine) and the navigation document, written as EPUB 3 (reflowable and fixed layout) and read (EPUB 2 and 3) with bounded entry sizes. Content documents are the caller's.
+- [`craft-figma-rest`](crates/figma-rest/README.md): typed model of the Figma REST API file JSON
+  (document tree, paints, effects, text styles, layout, component metadata), read and written with
+  serde without losing fields it has no name for. The neutral model the `.fig` and `.sketch`
+  readers map onto, with their extensions documented.
+- [`craft-ews`](crates/ews/README.md): the SOAP layer of Exchange Web Services, from MailCraft, without
+  sockets: the request envelope and an escaping element builder, and the answer envelope, faults
+  and response messages with their codes, read with `craft-xml`. The operations and everything
+  over HTTP stay in each app.
 - [`craft-exr`](crates/exr/src/lib.rs): OpenEXR pieces shared by PhotoCraft and EffectCraft: layer
   and channel names, the channels that make a colour picture, and Cryptomatte IDs, metadata keys,
-  manifests and rank channels. Takes names and attribute text; decoding is not part of it yet.
+  manifests and rank channels. The optional `decode` feature adds bounded part listing, flat
+  decoding (scan lines, tiles, every compression of the `exr` crate) and writing.
 - [`craft-font-catalog`](crates/font-catalog/README.md): the installed fonts on every platform
   (font folders, fontconfig and Flatpak host folders, CoreText, DirectWrite, the font store),
   lookup by family, style, localized, legacy, full and PostScript names, family loads shared
@@ -172,6 +181,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   primitives (`.abr`, `.asl`, `.aco`, `.act`, `.ase`, `.grd`, `.pat`, `.atn`, `.csh`, `.shc`) and
   the Photoshop blocks of a layered TIFF. Bounded and panic-free on hostile input. Compositing
   and the mapping onto a document stay in each app.
+- [`craft-jmap`](crates/jmap/README.md): the JMAP protocol core (RFC 8620), from MailCraft, without
+  sockets: session, requests of method calls with back-references, responses, ids, address
+  templates, credentials and the judgement of HTTP answers, over any HTTP implementation. Bounded
+  on hostile answers; what a program asks and makes of the answers stays in it.
 - [`craft-jpeg`](crates/jpeg/README.md): clean-room decoder for 12-bit and arithmetic-coded
   JPEG (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), from PhotoCraft, and a frame probe for routing.
   Metadata stays in each app.
@@ -289,7 +302,14 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   `window.<app>` shape (`request`, `execute`, `commands`, `docInspect`, `uiInspect`, `screenshot`) over the app's
   JSON control channel.
 - [`craft-web-host`](crates/web-host/README.md): the host messages between a Craft app's web build and the page that hosts it (`?host=parent` or `data-host="page"`): one contract and one bridge for every app.
+- [`craft-webp`](crates/webp/src/lib.rs): the WebP container, from EffectCraft (reader) and
+  PhotoCraft (writer): canvas size, alpha and every animation frame's timing from the chunk
+  headers without decoding, and the RIFF container around an encoded VP8 frame with alpha, ICC,
+  EXIF and XMP chunks. The VP8 and VP8L codecs are not part of it.
 - [`craft-xls`](crates/xls/README.md): clean-room Excel 97-2003 workbook (`.xls`, BIFF8) reader: worksheets, cell values, formulas as A1 text (shared and array formulas included), cell formats with resolved palette colours, merged cells, column and row records, defined names, print areas and calculation settings, with limits on records, cells and text.
+- [`craft-wordmodel`](crates/wordmodel/README.md): a word-processing document model (stories, paragraphs,
+  runs, tables, sections, styles, numbering, fields, notes, comments, revisions, drawings, math): what the
+  text-format crates read into and write from. WordCraft's model without its editing code.
 - [`craft-xlsx`](crates/xlsx/README.md): Excel workbooks (`.xlsx`, `.xlsm`, SpreadsheetML, transitional and strict) and binary workbooks (`.xlsb`) on `craft-opc`: the workbook part, shared strings, the styles tables and worksheet rows streamed one at a time, with limits on the package, the XML and the binary records.
 - [`craft-ora`](crates/ora/README.md): OpenRaster documents (`.ora`): the ZIP archive and the `stack.xml` layer tree as written, read with bounded sizes and written. From PhotoCraft.
 - [`craft-y4m`](crates/y4m/src/lib.rs): YUV4MPEG2 (`.y4m`) reader, from FilmCraft: the stream

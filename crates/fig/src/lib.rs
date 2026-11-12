@@ -25,12 +25,13 @@ mod canvas;
 mod images;
 pub mod network;
 pub mod path;
+pub mod rest;
 #[cfg(test)]
 mod tests;
 
 pub use craft_kiwi as kiwi;
 
-pub use archive::{Archive, Limits, Package, is_fig, write_archive};
+pub use archive::{Archive, Limits, MAX_ENTRIES, Package, is_fig, write_archive};
 pub use canvas::{
     DESIGN_HEADER, JAM_HEADER, MAX_CANVAS, MAX_CHUNK, MAX_CHUNKS, MAX_SCHEMA, VERSION, chunks, decode_canvas, encode_canvas, inflate, value_budget,
 };

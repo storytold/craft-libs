@@ -3309,6 +3309,16 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn a_custom_flatpak_identity_is_used_for_the_restart() {
+        let app = App { bundle_id_override: Some("ai.artcraft.app"), ..App::new("artcraft", "ArtCraft", "Create", "storytold/artcraft") };
+        let cmd = flatpak_restart_command(&app, "exec \"$@\"", "123");
+        let args: Vec<_> = cmd.get_args().map(|v| v.to_string_lossy().into_owned()).collect();
+        assert_eq!(args.last().map(String::as_str), Some("ai.artcraft.app"));
+        assert!(!args.iter().any(|arg| arg == "ai.storyteller.artcraft"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn flatpak_restart_unsets_persistent_pretend_version_overrides() {
         for app in &crate::suite::SUITE {
             let cmd = flatpak_restart_command(app, "exec \"$@\"", "123");

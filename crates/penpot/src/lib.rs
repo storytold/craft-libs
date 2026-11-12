@@ -31,10 +31,8 @@ mod model_tests;
 mod tests;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{self, Cursor, Read, Write};
 
 use serde_json::Value;
-use zip::ZipArchive;
 
 /// Largest JSON member read.
 pub const MAX_JSON: u64 = 16 * 1024 * 1024;
@@ -89,23 +87,9 @@ fn safe_name(name: &str) -> bool {
     !(name.starts_with('/') || name.contains('\\') || name.split('/').any(|part| part == "." || part == "..") || name.chars().any(char::is_control))
 }
 
-/// The number of members the archive's end-of-central-directory record declares (the ZIP64 record
-/// when the classic one is saturated). `None` when no record is found.
-/// shortcut: reads the two records by hand; goes away with the shared bounded ZIP reader (#126).
-fn declared_entries(bytes: &[u8]) -> Option<u64> {
-    let eocd = bytes.windows(4).rposition(|w| w == b"PK\x05\x06")?;
-    let count = u16::from_le_bytes(bytes.get(eocd + 10..eocd + 12)?.try_into().ok()?);
-    if count != u16::MAX {
-        return Some(u64::from(count));
-    }
-    let zip64 = bytes.get(..eocd)?.windows(4).rposition(|w| w == b"PK\x06\x06")?;
-    Some(u64::from_le_bytes(bytes.get(zip64 + 32..zip64 + 40)?.try_into().ok()?))
-}
-
-/// Counts actual ZIP output and JSON structure throughout one archive, independently of member
-/// header sizes and the serialized size of dense arrays and objects.
+/// Whether one archive's byte budget (counted by the archive, of bytes actually read) has run out,
+/// and its JSON structure budget, independent of the serialized size of dense arrays and objects.
 struct Budget {
-    remaining: u64,
     exceeded: bool,
     json_values: usize,
     json_exceeded: bool,
@@ -153,35 +137,6 @@ impl Budget {
     }
 }
 
-/// Charges every byte read to the archive's [`Budget`].
-struct BudgetReader<'a, R> {
-    inner: R,
-    budget: &'a mut Budget,
-}
-
-impl<R: Read> Read for BudgetReader<'_, R> {
-    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
-        if out.is_empty() {
-            return Ok(0);
-        }
-        if self.budget.remaining == 0 {
-            // Distinguish exact-budget EOF from data past the limit.
-            let mut probe = [0_u8; 1];
-            return match self.inner.read(&mut probe)? {
-                0 => Ok(0),
-                _ => {
-                    self.budget.exceeded = true;
-                    Err(io::Error::other("Penpot decompression budget exhausted"))
-                }
-            };
-        }
-        let limit = out.len().min(usize::try_from(self.budget.remaining).unwrap_or(usize::MAX));
-        let read = self.inner.read(out.get_mut(..limit).unwrap_or_default())?;
-        self.budget.remaining -= read as u64;
-        Ok(read)
-    }
-}
-
 /// One entry of the manifest's `files`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FileEntry {
@@ -192,7 +147,8 @@ pub struct FileEntry {
 
 /// An opened Penpot export.
 pub struct Archive<'b> {
-    zip: ZipArchive<Cursor<&'b [u8]>>,
+    /// Counts the bytes read against [`MAX_DECOMPRESSED`].
+    zip: craft_zip::Archive<'b>,
     /// Member names in archive order.
     names: Vec<String>,
     budget: Budget,
@@ -209,37 +165,30 @@ impl<'b> Archive<'b> {
         if bytes.len() > MAX_ARCHIVE {
             return Err(corrupt("archive exceeds 512 MiB"));
         }
-        let mut zip = ZipArchive::new(Cursor::new(bytes)).map_err(|e| corrupt(format!("invalid ZIP: {e}")))?;
-        if zip.len() > MAX_ENTRIES {
-            return Err(corrupt("too many ZIP members"));
-        }
-        // The ZIP reader keeps one member per name, so two members of one name never reach the
-        // loop below: the directory's own count tells them.
-        if declared_entries(bytes) != Some(zip.len() as u64) {
+        let mut zip = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: MAX_ENTRIES as u64, max_total_bytes: MAX_DECOMPRESSED })
+            .map_err(|e| match e {
+                craft_zip::Error::TooManyEntries { .. } | craft_zip::Error::TooManyEndRecords(_) => corrupt("too many ZIP members"),
+                e => corrupt(format!("invalid ZIP: {e}")),
+            })?;
+        // The ZIP reader keeps one member per name: reject duplicates instead of guessing which
+        // version is real.
+        if zip.has_duplicate_names() {
             return Err(corrupt("duplicate ZIP member names"));
         }
         // Reject oversized logical archives before decoding any JSON. This guards against ZIP bombs
         // whose compressed size is innocuous but whose advertised uncompressed size is enormous.
+        let names: Vec<String> = zip.names().map(|n| n.into_owned()).collect();
         let mut expanded = 0_u64;
-        let mut seen = BTreeSet::new();
-        let mut names = Vec::with_capacity(zip.len());
-        for index in 0..zip.len() {
-            let member = zip.by_index(index).map_err(|e| corrupt(e.to_string()))?;
-            let name = member.name().map_err(|e| corrupt(e.to_string()))?.into_owned();
-            // Reject duplicates and traversal instead of guessing which version is real.
-            if !seen.insert(name.clone()) {
-                return Err(corrupt(format!("duplicate ZIP member: {}", name.chars().take(200).collect::<String>())));
-            }
-            if !safe_name(&name) {
+        for name in &names {
+            if !safe_name(name) {
                 return Err(corrupt("unsafe ZIP member path"));
             }
-            expanded = expanded.saturating_add(member.size());
+            expanded = expanded.saturating_add(zip.declared_size(name).unwrap_or(0));
             if expanded > MAX_DECOMPRESSED {
                 return Err(corrupt("ZIP contents exceed 1 GiB"));
             }
-            names.push(name);
         }
-        let budget = Budget { remaining: MAX_DECOMPRESSED, exceeded: false, json_values: MAX_JSON_VALUES, json_exceeded: false };
+        let budget = Budget { exceeded: false, json_values: MAX_JSON_VALUES, json_exceeded: false };
         let mut archive = Archive { zip, names, budget, manifest: Value::Null, files: Vec::new() };
         let manifest = archive.json("manifest.json")?;
         if manifest.get("type").and_then(Value::as_str) != Some(MANIFEST_TYPE) {
@@ -271,12 +220,12 @@ impl<'b> Archive<'b> {
 
     /// Bytes this archive may still unpack.
     pub fn bytes_left(&self) -> u64 {
-        self.budget.remaining
+        self.zip.budget().remaining()
     }
 
     /// Whether the archive has member `path`.
     pub fn has(&self, path: &str) -> bool {
-        self.zip.index_for_name(path).is_some()
+        self.zip.contains(path)
     }
 
     /// Every member name, in archive order.
@@ -317,41 +266,46 @@ impl<'b> Archive<'b> {
     /// Member `path` read whole when it is at most `declared_max` bytes by its header and at most
     /// `max` bytes read.
     fn read(&mut self, path: &str, declared_max: u64, max: u64, too_large: impl Fn() -> String) -> Result<Vec<u8>, Error> {
-        let entry = self.zip.by_name(path).map_err(|e| corrupt(format!("{path}: {e}")))?;
-        if entry.size() > declared_max {
+        self.budget.check()?;
+        let declared = self.zip.declared_size(path).ok_or_else(|| corrupt(format!("{path}: not in the archive")))?;
+        if declared > declared_max {
             return Err(corrupt(too_large()));
         }
-        let mut data = Vec::new();
-        BudgetReader { inner: entry, budget: &mut self.budget }
-            .take(max.saturating_add(1))
-            .read_to_end(&mut data)
-            .map_err(|e| corrupt(e.to_string()))?;
-        if data.len() as u64 > max {
-            return Err(corrupt(too_large()));
+        self.read_charged(path, declared, max, || corrupt(too_large()))
+    }
+
+    /// Member `path` (declaring `declared` bytes) up to `max` bytes. Running out of the archive's
+    /// byte budget fails every later [`Archive::check`]; a read that fails otherwise is charged
+    /// its declared size (the read stops one byte past it), so it is never free to repeat.
+    fn read_charged(&mut self, path: &str, declared: u64, max: u64, too_large: impl Fn() -> Error) -> Result<Vec<u8>, Error> {
+        match self.zip.read(path, max) {
+            Ok(Some(data)) => Ok(data),
+            Ok(None) => Err(corrupt(format!("{path}: not in the archive"))),
+            Err(craft_zip::Error::EntryTooLarge { .. }) => Err(too_large()),
+            Err(craft_zip::Error::BudgetSpent { .. }) => {
+                self.budget.exceeded = true;
+                Err(corrupt("Penpot decompression budget exhausted"))
+            }
+            Err(e) => {
+                let charge = declared.min(self.zip.budget().remaining());
+                let _ = self.zip.budget_mut().charge(charge);
+                Err(corrupt(e.to_string()))
+            }
         }
-        Ok(data)
     }
 
     /// Shape JSON member `path`, within [`MAX_JSON`] and what is left of `page_budget` (bytes of
     /// shape JSON for its page, counted down).
     pub fn shape_json(&mut self, path: &str, page_budget: &mut u64) -> Result<Value, Error> {
-        let declared = self.zip.by_name(path).map_err(|e| corrupt(format!("{path}: {e}")))?.size();
+        self.budget.check()?;
+        let declared = self.zip.declared_size(path).ok_or_else(|| corrupt(format!("{path}: not in the archive")))?;
         if declared > MAX_JSON {
             return Err(corrupt(format!("JSON member too large: {path}")));
         }
         if declared > *page_budget {
             return Err(corrupt("page shapes exceed byte budget"));
         }
-        let entry = self.zip.by_name(path).map_err(|e| corrupt(format!("{path}: {e}")))?;
-        let mut data = Vec::new();
-        let max_read = (MAX_JSON + 1).min(page_budget.saturating_add(1));
-        BudgetReader { inner: entry, budget: &mut self.budget }.take(max_read).read_to_end(&mut data).map_err(|e| corrupt(e.to_string()))?;
-        if data.len() as u64 > MAX_JSON {
-            return Err(corrupt(format!("JSON member too large: {path}")));
-        }
-        if data.len() as u64 > *page_budget {
-            return Err(corrupt("page shapes exceed byte budget"));
-        }
+        let data = self.read_charged(path, declared, MAX_JSON.min(*page_budget), || corrupt(format!("JSON member too large: {path}")))?;
         *page_budget -= data.len() as u64;
         self.budget.parse_json(&data, path)
     }
@@ -412,12 +366,10 @@ impl<'b> Archive<'b> {
             self.names.iter().filter(|n| n.starts_with("objects/") || n.starts_with("fonts/") || n.starts_with("assets/fonts/")).cloned().collect();
         let mut count = 0;
         for name in names {
-            let Ok(member) = self.zip.by_name(&name) else { continue };
-            let mut header = [0; 4];
-            if (BudgetReader { inner: member, budget: &mut self.budget }).read_exact(&mut header).is_ok()
-                && (matches!(&header, b"OTTO" | b"true" | b"ttcf" | b"wOFF" | b"wOF2") || header == [0, 1, 0, 0])
-            {
-                count += 1;
+            match self.zip.read_head(&name, 4) {
+                Ok(Some(header)) if matches!(header.as_slice(), b"OTTO" | b"true" | b"ttcf" | b"wOFF" | b"wOF2" | [0, 1, 0, 0]) => count += 1,
+                Err(craft_zip::Error::BudgetSpent { .. }) => self.budget.exceeded = true,
+                _ => {}
             }
         }
         count
@@ -433,20 +385,13 @@ pub fn manifest(generated_by: &str, files: &[(&str, &str, Value)]) -> Value {
 /// A Penpot archive of `members` (path, bytes), deflated, in the order given. Paths must be safe
 /// and distinct, as [`Archive::open`] requires of what it reads.
 pub fn write_archive<'a>(members: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> Result<Vec<u8>, Error> {
-    let io = |e: &dyn std::fmt::Display| Error::Io(e.to_string());
-    let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated).compression_level(Some(3));
-    let mut buf = Cursor::new(Vec::new());
-    {
-        let mut z = zip::ZipWriter::new(&mut buf);
-        let mut seen = BTreeSet::new();
-        for (path, bytes) in members {
-            if path.is_empty() || !safe_name(path) || !seen.insert(path) {
-                return Err(Error::Io(format!("unsafe or repeated member path: {}", path.chars().take(200).collect::<String>())));
-            }
-            z.start_file(path, options).map_err(|e| io(&e))?;
-            z.write_all(bytes).map_err(|e| io(&e))?;
+    let mut z = craft_zip::Writer::new();
+    let mut seen = BTreeSet::new();
+    for (path, bytes) in members {
+        if path.is_empty() || !safe_name(path) || !seen.insert(path) {
+            return Err(Error::Io(format!("unsafe or repeated member path: {}", path.chars().take(200).collect::<String>())));
         }
-        z.finish().map_err(|e| io(&e))?;
+        z.add(path, bytes, craft_zip::Compression::Level(3)).map_err(|e| Error::Io(e.to_string()))?;
     }
-    Ok(buf.into_inner())
+    z.finish().map_err(|e| Error::Io(e.to_string()))
 }

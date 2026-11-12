@@ -155,7 +155,7 @@ fn percent_decode(s: &str) -> String {
 
 /// Both required documents must be well formed: a lenient read would take a container or package
 /// document cut off after its useful content for a complete one, and give half a book.
-fn parse_xml(part: &str, xml: &[u8], limits: &Limits) -> Result<El, Error> {
+pub(crate) fn parse_xml(part: &str, xml: &[u8], limits: &Limits) -> Result<El, Error> {
     let xml_limits = craft_xml::Limits { max_input: usize::try_from(limits.max_entry_bytes).unwrap_or(usize::MAX), ..craft_xml::Limits::DEFAULT };
     Options::local().strict().with_limits(xml_limits).parse(xml).map_err(|e| Error::Part { part: part.to_string(), msg: e.to_string() })
 }
@@ -285,6 +285,37 @@ impl<'a> Epub<'a> {
     pub fn read_href(&mut self, from: &str, href: &str) -> Result<Option<Vec<u8>>, Error> {
         let path = resolve(dir_of(from), href);
         if path.is_empty() { Ok(None) } else { self.read(&path) }
+    }
+
+    /// The table of contents: the EPUB 3 navigation document's `toc`, else the EPUB 2 NCX.
+    /// Empty when the package has neither, or the one it names is missing.
+    pub fn toc(&mut self) -> Result<Vec<crate::TocEntry>, Error> {
+        let nav = self.package.nav().map(|i| i.path.clone());
+        if let Some(path) = nav
+            && let Some(xml) = self.read(&path)?
+        {
+            let toc = crate::parse_nav(&xml, &path)?;
+            if !toc.is_empty() {
+                return Ok(toc);
+            }
+        }
+        match self.package.ncx.clone() {
+            Some(path) => match self.read(&path)? {
+                Some(xml) => crate::parse_ncx(&xml, &path),
+                None => Ok(Vec::new()),
+            },
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// What `META-INF/encryption.xml` says is encrypted; empty when the package has none. A
+    /// resource listed here cannot be used as it is read: fonts are usually only obfuscated
+    /// ([`crate::Encrypted::is_font_obfuscation`]), anything else is DRM.
+    pub fn encryption(&mut self) -> Result<Vec<crate::Encrypted>, Error> {
+        match self.read("META-INF/encryption.xml")? {
+            Some(xml) => crate::parse_encryption(&xml),
+            None => Ok(Vec::new()),
+        }
     }
 
     /// Bytes the entries still to be read may expand to.
