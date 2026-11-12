@@ -15,6 +15,7 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 
 | File | Change |
 |---|---|
+| `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
 | `src/topology.rs` | `Topology` stores each side of an output segment's winding numbers behind an `Arc`, and the sweep gives a segment's clockwise side and the previous segment's counter-clockwise side the same `Arc`. Before, every segment held its own copy of both sides, so a winding number type that allocates (one entry per covering input) stored each value twice. For 500 squares that all cross each other, with a winding number type like `craft-prepress`'s, building the `Topology` peaked at 2,769.4 MB and now peaks at 2,102.5 MB, and `craft_prepress::flatten::geom::regions` peaked at 3,535.2 MB and now peaks at 2,842.1 MB, with the same regions. `winding_clockwise`, `winding_counter_clockwise` and `HalfSegmentWindingNumbers` do not change. A `Topology<W>` is now `Send` and `Sync` only when `W` is both `Send` and `Sync`. Code comments label the changes `Craft patch (winding storage)`. The `neighboring_segments_share_winding_numbers` test checks the sharing, and `staggered_squares_winding_numbers_count_the_covering_squares` checks the areas covered by each number of squares. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
