@@ -5,7 +5,7 @@
 use crate::runtime::commands::FirePhase;
 use crate::runtime::egui::input::Action;
 use crate::runtime::frame::PerViewport;
-use craft_behavior::{EditCommand, Intent, PartRef};
+use craft_behavior::EditCommand;
 use craft_keymap::{Chord, Key, KeyInput, Layout, Mods};
 use egui::{Context, Id, Vec2, ViewportId};
 use std::collections::HashMap;
@@ -24,6 +24,8 @@ pub use claims::claim;
 pub(crate) use claims::hold_escape;
 #[doc(hidden)]
 pub use claims::take_claimed;
+/// The types `Intents` reads and returns, for an app that reads the window's intents (`with_window_intents`).
+pub use craft_behavior::{AccessRequest, Intent, MoveMods, NavMove, PartRef};
 #[doc(hidden)]
 pub use input::down;
 pub(crate) use input::{input_hook, queue_nav, take_menu_keys, take_nav};
