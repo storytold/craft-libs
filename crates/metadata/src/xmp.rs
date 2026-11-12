@@ -54,6 +54,7 @@ const NAMESPACES: &[(&str, &str)] = &[
     ("lr", "http://ns.adobe.com/lightroom/1.0/"),
     ("Iptc4xmpCore", "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/"),
     ("Iptc4xmpExt", "http://iptc.org/std/Iptc4xmpExt/2008-02-29/"),
+    ("xmpNote", "http://ns.adobe.com/xmp/note/"),
     // Read-only: develop settings written by other raw developers.
     ("crs", CRS_NS),
     // Read-only: face/pet/focus regions written by Lightroom, digiKam, Picasa and others (MWG Region
@@ -1035,6 +1036,18 @@ pub fn parse_xmp_with(s: &str, extra: &[XmpNamespace]) -> Result<XmpData, XmpErr
             }
         }
     }
+    let m = project(&props, &values);
+    let toolkit = tree
+        .children
+        .iter()
+        .find(|n| n.name == "x:xmpmeta" || n.name == "x:xapmeta")
+        .and_then(|n| n.attr("x:xmptk").or_else(|| n.attr("x:xaptk")))
+        .map(str::to_string);
+    Ok(XmpData { metadata: m, properties: props, properties_truncated, values, toolkit, names_location })
+}
+
+/// The typed [`Metadata`] the flattened `props` and structured `values` of a packet state.
+fn project(props: &BTreeMap<String, Vec<String>>, values: &BTreeMap<String, XmpValue>) -> Metadata {
     let first = |k: &str| props.get(k).and_then(|v| v.first()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let num = |k: &str| first(k).and_then(|s| parse_number(&s));
     let mut m = Metadata {
@@ -1107,13 +1120,67 @@ pub fn parse_xmp_with(s: &str, extra: &[XmpNamespace]) -> Result<XmpData, XmpErr
         m.gps = Some(Gps { latitude: lat, longitude: lon, altitude });
     }
     m.regions = values.get("mwg-rs:Regions").map(parse_regions).unwrap_or_default();
-    let toolkit = tree
-        .children
-        .iter()
-        .find(|n| n.name == "x:xmpmeta" || n.name == "x:xapmeta")
-        .and_then(|n| n.attr("x:xmptk").or_else(|| n.attr("x:xaptk")))
-        .map(str::to_string);
-    Ok(XmpData { metadata: m, properties: props, properties_truncated, values, toolkit, names_location })
+    m
+}
+
+/// A standard JPEG XMP packet and its Extended XMP continuation, read as one (Adobe XMP
+/// Specification Part 3, 1.1.3.1): properties of the standard packet win, arrays and structs
+/// stated in both are combined, and the `xmpNote:HasExtendedXMP` link itself is left out.
+pub fn parse_xmp_pair(standard: &str, extended: &str, extra: &[XmpNamespace]) -> Result<XmpData, XmpError> {
+    let ext = parse_xmp_with(extended, extra)?;
+    let std = parse_xmp_with(standard, extra)?;
+    let mut properties = ext.properties;
+    properties.extend(std.properties);
+    let mut values = ext.values;
+    for (key, preferred) in std.values {
+        match values.get_mut(&key) {
+            Some(fallback) => *fallback = merge_xmp_value(&preferred, fallback),
+            None => {
+                values.insert(key, preferred);
+            }
+        }
+    }
+    properties.remove("xmpNote:HasExtendedXMP");
+    values.remove("xmpNote:HasExtendedXMP");
+    let metadata = project(&properties, &values);
+    Ok(XmpData {
+        metadata,
+        properties,
+        properties_truncated: std.properties_truncated || ext.properties_truncated,
+        values,
+        toolkit: std.toolkit,
+        names_location: std.names_location || ext.names_location,
+    })
+}
+
+/// `preferred` with what `fallback` adds: array items appended, struct fields merged.
+fn merge_xmp_value(preferred: &XmpValue, fallback: &XmpValue) -> XmpValue {
+    match (preferred, fallback) {
+        (XmpValue::Array(preferred), XmpValue::Array(fallback)) => XmpValue::Array(preferred.iter().chain(fallback).cloned().collect()),
+        (XmpValue::Struct(preferred), XmpValue::Struct(fallback)) => {
+            let mut merged = fallback.clone();
+            for (key, value) in preferred {
+                let combined = merged.get(key).map_or_else(|| value.clone(), |fallback| merge_xmp_value(value, fallback));
+                merged.insert(key.clone(), combined);
+            }
+            XmpValue::Struct(merged)
+        }
+        _ => preferred.clone(),
+    }
+}
+
+/// The GUID a standard packet's `xmpNote:HasExtendedXMP` names, upper-cased; `Ok(None)` without
+/// one. Only the XMP Note namespace counts (a foreign `HasExtendedXMP` is not a link), and the
+/// property must occur once, as 32 hexadecimal digits.
+pub fn extended_xmp_reference(data: &XmpData) -> Result<Option<String>, String> {
+    let Some(values) = data.properties.get("xmpNote:HasExtendedXMP") else { return Ok(None) };
+    let [value] = values.as_slice() else {
+        return Err("XMP HasExtendedXMP reference must occur exactly once".into());
+    };
+    if value.len() != 32 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("XMP HasExtendedXMP reference must be 32 hexadecimal characters".into());
+    }
+    Ok(Some(value.to_ascii_uppercase()))
 }
 
 fn frac(v: f64) -> String {
@@ -1189,9 +1256,13 @@ pub fn write_xmp_with(meta: &Metadata, with: &XmpWrite) -> String {
     x.push_str(&format!("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"{}\">\n", escape(xml_safe(with.toolkit))));
     x.push_str(" <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n");
     x.push_str("  <rdf:Description rdf:about=\"\"");
-    // the caller's namespace takes the place of `crs`, which is read only
+    // the caller's namespace takes the place of `crs`, which is read only, as is `xmpNote`
     let own = with.namespace.map(|n| (n.prefix, n.uri));
-    for (p, u) in NAMESPACES.iter().skip(2).filter_map(|&ns| if ns.0 == "crs" { own } else { Some(ns) }) {
+    for (p, u) in NAMESPACES.iter().skip(2).filter_map(|&ns| match ns.0 {
+        "crs" => own,
+        "xmpNote" => None,
+        _ => Some(ns),
+    }) {
         x.push_str(&format!("\n    xmlns:{p}=\"{}\"", escape(xml_safe(u))));
     }
     x.push_str(">\n");
