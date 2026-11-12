@@ -29,6 +29,8 @@ author, source and license. Library code and original assets are under the repos
 | `crates/crw/src/tables.rs`, `crates/crw/clean-room/logs/table_sel*.json` | craft-crw contributors (derived in LightCraft, 2026-10, by known-plaintext alignment of the sample files' entropy streams; `crates/crw/clean-room/02-crw-format.md`) | this repository | MIT OR Apache-2.0 |
 | `crates/crw/clean-room/logs/private-corpus.tsv` (file names, sizes and SHA-256 of the maintainer's own EOS D60 files; no image content) | craft-crw contributors (LightCraft derivation record) | this repository | MIT OR Apache-2.0 |
 | `crates/prc/src/acof/table.rs` (the rows of the PRC `Double` prefix-code table, reformatted as Rust tuples) | Kristof Ralovich (prc-rs); the table is defined by ISO 14739-1 | [ralovich/prc-rs@287b671](https://github.com/ralovich/prc-rs/blob/287b671bb5b31b05efb5ec1b98f7c359b9e4dd7d/src/double.rs), through [PdfCraft `crates/prc`](https://github.com/storytold/pdfcraft/tree/80e26e674d1aa33078e83c8139875047f3289eb6/crates/prc) | MIT (`licenses/prc-rs/LICENSE.txt`; the notice is also in the file header) |
+| `crates/math/tests/corpus/equations.tsv`, `crates/math/tests/corpus/latex.tsv` (unmodified) | shuff57 (equaSHion) | [storytold/craft-libs#29](https://github.com/storytold/craft-libs/pull/29) at `7a6ef6b9`, `corpus/` | MIT OR Apache-2.0 |
+| `crates/math/tests/corpus/omml/*.xml` (unmodified) | WordCraft and DeckCraft contributors, collected by shuff57 (equaSHion) | [storytold/craft-libs#29](https://github.com/storytold/craft-libs/pull/29) at `7a6ef6b9`, `corpus/omml/` | MIT OR Apache-2.0 |
 
 Original assets are covered by the repository licence.
 
