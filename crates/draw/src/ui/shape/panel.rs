@@ -58,7 +58,7 @@ pub struct ShapePanelOutput {
 ///   ellipse or polygon; a rect's "Corner radius" (0 to 100,000, sets all four) then Top Left, Top Right, Bottom
 ///   Left, Bottom Right rows (PhotoCraft's row order, mapped to the radii order TL, TR, BR, BL); a polygon's Corner
 ///   radius, Sides (3 to 100) and Star ratio (1 to 100 %, stored 0.01 to 1); a line's Weight (1 to 10,000).
-/// - A locked layer ([`ShapeAppearance::locked`]) makes the whole panel read-only.
+/// - A locked layer ([`ShapeAppearance::locked`]) disables the whole panel.
 /// - Keyboard: every field and chip is a Tab stop in reading order; sections fold with their title rows. Right to
 ///   left the rows mirror; the corner names stay.
 #[must_use = "show the panel with `show`"]
@@ -147,7 +147,7 @@ impl<'a> ShapePanel<'a> {
             });
         };
         if appearance.locked {
-            with_env(ui, |scope| scope.read_only = Some(true), body);
+            with_env(ui, |scope| scope.enabled = Some(false), body);
         } else {
             body(ui);
         }
