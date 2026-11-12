@@ -772,10 +772,13 @@ mod tests {
                     let reference: Vec<Opcode> = distortion(model, &TELE, Rect::new(0, 0, 32, 24), crop).into_iter().collect();
                     assert_eq!(img.opcodes.list3, reference, "{case}");
                     // DNG export keeps the warp and invents no Sony record
-                    let dng = crate::write_dng(&img, &Default::default()).unwrap();
-                    let back = crate::decode(&dng).unwrap();
-                    assert_eq!(back.opcodes.list3, img.opcodes.list3, "{case}");
-                    assert_eq!(back.lens_metadata, LensMetadata::default(), "{case}");
+                    #[cfg(feature = "dng")]
+                    {
+                        let dng = crate::write_dng(&img, &Default::default()).unwrap();
+                        let back = crate::decode(&dng).unwrap();
+                        assert_eq!(back.opcodes.list3, img.opcodes.list3, "{case}");
+                        assert_eq!(back.lens_metadata, LensMetadata::default(), "{case}");
+                    }
                 }
             }
         }
@@ -1511,8 +1514,11 @@ mod tests {
                     if let Some(Opcode::WarpRectilinear { center, .. }) = full.opcodes.list3.first() {
                         assert!((center[0] - 16.5 / 31.0).abs() < 1e-12 && (center[1] - 11.5 / 23.0).abs() < 1e-12, "{center:?}");
                     }
-                    let dng = crate::write_dng(&full, &Default::default()).unwrap();
-                    assert_eq!(crate::decode(&dng).unwrap().opcodes.list3, full.opcodes.list3);
+                    #[cfg(feature = "dng")]
+                    {
+                        let dng = crate::write_dng(&full, &Default::default()).unwrap();
+                        assert_eq!(crate::decode(&dng).unwrap().opcodes.list3, full.opcodes.list3);
+                    }
                 }
             }
         }
