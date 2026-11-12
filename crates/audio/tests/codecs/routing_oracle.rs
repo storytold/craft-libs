@@ -669,10 +669,14 @@ fn adts_with_a_program_config_element_decodes() {
     assert_eq!(bytes[3] >> 6 | (bytes[2] & 1) << 2, 0, "the fixture signals its layout in a PCE");
     let (info, buf) = decode(&bytes, None).unwrap();
     assert_eq!((info.container, info.codec, buf.channels.len()), (c.container, c.codec, c.channels));
-    assert_eq!(info.layout, c.layout);
+    // A program config element that lists a centre, a front pair and then the elements of 5.1 has
+    // 5.1's speakers, in WAV order like ffmpeg's decode; any other list keeps the decoded order,
+    // which ffmpeg versions write differently.
+    let ordered = info.layout.is_ordered();
+    assert_eq!(info.layout, if ordered { ChannelLayout::SURROUND_5_1_SIDE } else { c.layout });
     assert_eq!(buf.frames(), reference(&ff, &path).len() / c.channels);
-    // A program config's channels come in its own order, and which order ffmpeg writes differs by
-    // version: each of ours must match a different one of ffmpeg's.
+    // Each of our channels must match a different one of ffmpeg's: the same one when the layout is
+    // ordered.
     let refr = reference(&ff, &path);
     let mut matched = Vec::new();
     for plane in &buf.channels {
@@ -686,7 +690,9 @@ fn adts_with_a_program_config_element_decodes() {
         assert!(s >= c.min_snr, "channel {} matches ffmpeg's {best} at only {s:.1} dB", matched.len());
         matched.push(best);
     }
-    matched.sort_unstable();
+    if !ordered {
+        matched.sort_unstable();
+    }
     assert_eq!(matched, (0..c.channels).collect::<Vec<_>>());
 }
 

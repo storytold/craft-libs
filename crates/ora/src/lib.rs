@@ -16,8 +16,6 @@
 #[cfg(test)]
 mod tests;
 
-use std::io::{Cursor, Read, Write};
-
 use craft_xml::El;
 
 /// Why an OpenRaster document was not read or written.
@@ -51,6 +49,8 @@ pub const MAX_NODES: usize = 8192;
 pub const MAX_STACK_XML: usize = 16 << 20;
 /// Largest layer image file a reader should ask [`Archive::entry`] for.
 pub const MAX_ENTRY: usize = 512 << 20;
+/// Most entries the archive may declare; checked before the archive is indexed.
+pub const MAX_ENTRIES: u64 = 100_000;
 /// Deepest element nesting of `stack.xml`.
 pub const MAX_XML_DEPTH: usize = 512;
 
@@ -78,19 +78,7 @@ pub const SVG_COMPOSITE_OPS: [&str; 15] = [
 /// bytes, which is how OpenRaster (and Krita, OpenDocument, EPUB) mark their archives so the
 /// type is readable without unzipping.
 pub fn zip_mimetype(bytes: &[u8]) -> Option<&[u8]> {
-    let u16_at = |o: usize| bytes.get(o..o + 2).and_then(|s| <[u8; 2]>::try_from(s).ok()).map(u16::from_le_bytes);
-    let u32_at = |o: usize| bytes.get(o..o + 4).and_then(|s| <[u8; 4]>::try_from(s).ok()).map(u32::from_le_bytes);
-    if u32_at(0)? != 0x0403_4b50 || u16_at(8)? != 0 {
-        return None;
-    }
-    let size = usize::try_from(u32_at(18)?).ok()?;
-    let name_len = usize::from(u16_at(26)?);
-    let extra_len = usize::from(u16_at(28)?);
-    if bytes.get(30..30 + name_len)? != b"mimetype" || size > 256 {
-        return None;
-    }
-    let start = 30 + name_len + extra_len;
-    bytes.get(start..start.checked_add(size)?)
+    craft_zip::stored_mimetype(bytes)
 }
 
 /// `true` for an OpenRaster archive (by its `mimetype` entry).
@@ -333,14 +321,19 @@ fn push_props(xml: &mut String, p: &Props) {
 
 /// An open OpenRaster archive: the parsed `stack.xml` and access to the archive's entries.
 pub struct Archive<'a> {
-    zip: zip::ZipArchive<Cursor<&'a [u8]>>,
+    zip: craft_zip::Archive<'a>,
     image: Image,
 }
 
 impl<'a> Archive<'a> {
     /// Opens the archive, checks its `mimetype` and reads `stack.xml`.
     pub fn open(bytes: &'a [u8]) -> Result<Archive<'a>> {
-        let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| invalid(e.to_string()))?;
+        let mut zip =
+            craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: MAX_ENTRIES, max_total_bytes: u64::MAX }).map_err(zip_error)?;
+        // `zip` keeps one entry of a repeated name; which one the writer meant is not known.
+        if zip.has_duplicate_names() {
+            return Err(invalid("two entries of the archive share a name"));
+        }
         let mime = read(&mut zip, "mimetype", 256)?.ok_or_else(|| invalid("the archive has no mimetype"))?;
         if mime.trim_ascii() != MIMETYPE {
             return Err(invalid("the archive's mimetype is not image/openraster"));
@@ -362,26 +355,29 @@ impl<'a> Archive<'a> {
     }
 }
 
-fn read(zip: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str, max: usize) -> Result<Option<Vec<u8>>> {
-    let Some(index) = zip.index_for_name(name) else { return Ok(None) };
-    let file = zip.by_index(index).map_err(|e| invalid(format!("{name}: {e}")))?;
-    let too_large = || invalid(format!("{name}: larger than {max} bytes"));
-    if file.size() > max as u64 {
-        return Err(too_large());
+fn read(zip: &mut craft_zip::Archive<'_>, name: &str, max: usize) -> Result<Option<Vec<u8>>> {
+    zip.read(name, max as u64).map_err(zip_error)
+}
+
+fn write_error(e: craft_zip::Error) -> Error {
+    match e {
+        craft_zip::Error::Write(m) => Error::Write(m),
+        e => Error::Write(e.to_string()),
     }
-    // The declared size is the archive's claim; the read is what is bounded.
-    let mut out = Vec::new();
-    file.take(max as u64 + 1).read_to_end(&mut out).map_err(|e| invalid(format!("{name}: {e}")))?;
-    if out.len() > max {
-        return Err(too_large());
+}
+
+fn zip_error(e: craft_zip::Error) -> Error {
+    match e {
+        craft_zip::Error::NotZip(m) => invalid(m),
+        craft_zip::Error::EntryTooLarge { name, limit } => invalid(format!("{name}: larger than {limit} bytes")),
+        e => invalid(e.to_string()),
     }
-    Ok(Some(out))
 }
 
 /// Writes an OpenRaster archive. Entries are stored (PNG is already compressed), in the order
 /// they are added, after the `mimetype`.
 pub struct Writer {
-    zip: zip::ZipWriter<Cursor<Vec<u8>>>,
+    zip: craft_zip::Writer,
     failed: Option<Error>,
 }
 
@@ -395,7 +391,7 @@ impl Writer {
     /// An archive holding the `mimetype`: it must be the first entry, stored, so the type is
     /// readable at a fixed offset.
     pub fn new() -> Writer {
-        let mut w = Writer { zip: zip::ZipWriter::new(Cursor::new(Vec::new())), failed: None };
+        let mut w = Writer { zip: craft_zip::Writer::new(), failed: None };
         w.failed = w.add("mimetype", MIMETYPE).err();
         w
     }
@@ -404,10 +400,7 @@ impl Writer {
     /// (the whole image, which the specification requires) or `Thumbnails/thumbnail.png` (at
     /// most 256 pixels a side, also required).
     pub fn add(&mut self, name: &str, data: &[u8]) -> Result<()> {
-        let stored =
-            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored).large_file(data.len() > u32::MAX as usize);
-        self.zip.start_file(name, stored).map_err(|e| Error::Write(format!("{name}: {e}")))?;
-        self.zip.write_all(data).map_err(|e| Error::Write(format!("{name}: {e}")))
+        self.zip.add(name, data, craft_zip::Compression::Stored).map_err(write_error)
     }
 
     /// Adds `stack.xml` for `image`.
@@ -420,6 +413,6 @@ impl Writer {
         if let Some(e) = self.failed {
             return Err(e);
         }
-        self.zip.finish().map(Cursor::into_inner).map_err(|e| Error::Write(e.to_string()))
+        self.zip.finish().map_err(write_error)
     }
 }

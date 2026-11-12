@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{Cursor, Write};
 
 use super::tiles::{Space, TileFile, lzf_decompress};
 use super::*;
@@ -373,4 +373,29 @@ fn the_mimetype_is_read_from_a_leading_stored_entry_only() {
     assert!(!is_kra(b"\x89PNG\r\n\x1a\n") && !is_kra(&bytes[..20]));
     assert_eq!(Space::from_name("RGBA"), Some(Space::Rgba8));
     assert_eq!(Space::from_name("RGBAF32"), None);
+}
+
+/// A ZIP64 end record can declare millions of entries in a small file: refused on the raw bytes
+/// before the archive is indexed.
+#[test]
+fn an_archive_declaring_too_many_entries_is_refused_before_it_is_indexed() {
+    let bomb = craft_zip::zip64_entry_count_sample(MAX_ENTRIES + 1);
+    assert_eq!(
+        Archive::open(&bomb).err(),
+        Some(Error::Invalid(format!("the archive declares {} entries, more than {MAX_ENTRIES}", MAX_ENTRIES + 1)))
+    );
+}
+
+/// Two entries of one name: `zip` keeps one, and which one the writer meant is not known.
+#[test]
+fn two_entries_of_one_name_are_refused() {
+    let bytes = archive(&maindoc("RGBA", ""), &[("dupA", vec![1]), ("dupB", vec![2])]);
+    assert!(Archive::open(&bytes).is_ok());
+    let mut renamed = bytes.clone();
+    let mut i = 0;
+    while let Some(at) = renamed[i..].windows(4).position(|w| w == b"dupB") {
+        renamed[i + at + 3] = b'A';
+        i += at + 4;
+    }
+    assert_eq!(Archive::open(&renamed).err(), Some(Error::Invalid("two entries of the archive share a name".into())));
 }

@@ -13,8 +13,9 @@ workspace = true
 [dependencies]
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-# `deflate-flate2` with flate2's default miniz_oxide backend, as craft-update pins it (zip's own
-# `deflate` feature would switch a whole app's flate2 to zlib-rs). A shared bounded ZIP reader is
-# planned (#126); until it lands this crate reads through `zip` directly.
+craft-zip = { workspace = true }
+
+[dev-dependencies]
+# The tests build archives, hostile ones included, by hand.
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
-flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+craft-zip = { workspace = true, features = ["test-support"] }
