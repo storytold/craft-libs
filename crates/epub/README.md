@@ -94,7 +94,8 @@ for path in &spine {
 | `max_total_bytes` (all entries read from one package) | 256 MiB | `Error::TooLarge` |
 | `max_manifest`, `max_spine` | 10,000 each | further items are ignored |
 
-Sizes are checked against what an entry really expands to, not what the archive declares. The two
+The ZIP layer is craft-zip: the declared entry count is checked before the archive is indexed, and
+sizes are checked against what an entry really expands to, not what the archive declares. The two
 XML documents are read with craft-xml's limits (depth 256, 2,000,000 nodes) and `max_entry_bytes`.
 
 ## Where it came from

@@ -449,3 +449,25 @@ fn open_does_not_read_through_big_pictures() {
     let read = src.bytes.get();
     assert!(read * 5 < f.len() as u64, "open read {read} of {} bytes", f.len());
 }
+
+/// An interlaced picture is described as two fields: the SeparateFields layout, a field's height,
+/// the field that comes first; the reader gives the frame its full height back. A progressive
+/// picture's descriptor does not change.
+#[test]
+fn interlaced_pictures_are_described_as_two_fields() {
+    let written = |interlaced: bool, bottom_field_first: bool| {
+        let mut cfg = WriterConfig::new(Pattern::OpAtom, Rational::new(25, 1), PackageIds::from_seed("i", "I"));
+        let mut pic = PictureDesc::new(PictureCoding::ProRes { profile: 3 }, 1920, 1080);
+        (pic.interlaced, pic.bottom_field_first) = (interlaced, bottom_field_first);
+        cfg.picture = Some(pic);
+        let mut w = MxfWriter::new(Cursor::new(Vec::new()), cfg).unwrap();
+        w.push_picture(&prores_like(0), FrameInfo::intra()).unwrap();
+        let f = w.finish().unwrap().into_inner();
+        open(&f).unwrap().tracks[0].picture.clone().unwrap()
+    };
+    let p = written(true, false);
+    assert_eq!((p.frame_layout, p.field_dominance, p.stored_height, p.frame_height(), p.frame_width()), (1, 1, 540, 1080, 1920));
+    assert_eq!(written(true, true).field_dominance, 2);
+    let p = written(false, true);
+    assert_eq!((p.frame_layout, p.field_dominance, p.stored_height, p.frame_height()), (0, 0, 1080, 1080));
+}
