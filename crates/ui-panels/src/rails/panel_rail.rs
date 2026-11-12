@@ -46,6 +46,9 @@ pub struct PanelRailOutput<P> {
     pub response: Response,
     /// The panel the user asked to open or close this pass. Its command has run.
     pub request: Option<PanelRailRequest<P>>,
+    /// Each icon's response, in order, so the host can hang a context menu on an icon or start a dock drag from it.
+    /// The rail does neither.
+    pub items: Vec<(P, Response)>,
 }
 
 impl<P: Value> Outcome for PanelRailOutput<P> {
@@ -61,7 +64,7 @@ type FooterFn<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 /// The rail of icons that open panels, as a side panel at one edge of the window, with a rule along the edge that faces
 /// the canvas (the inner edge of its pane). A panel is a toggle command: its
 /// label, icon, chord and enabled state come from the command, the icon shows the on look while the command is
-/// checked (the panel is open), and the command's `marked` state and `hint` tell that the closed panel has content
+/// checked (the panel is open), and the command's `marked` state and `hint` mark a closed panel that has content
 /// to show. A click runs the command and reports the request that matches the panel's state. The icons are one
 /// roving group: Up and Down move between them, Enter and Space toggle. The host's footer stays in view under the
 /// icons, which scroll when the window is short.
@@ -98,7 +101,9 @@ impl<'a, P: Value + 'static> PanelRail<'a, P> {
         self.footer = Some(Box::new(footer));
         let panels = self.panels;
         let mut request = None;
+        let mut items = Vec::new();
         let shown = self.show(ui, |ui, _| {
+            items.clear();
             let ctx = ui.ctx().clone();
             for (at, panel) in panels.iter().enumerate() {
                 let open = commands::resolve(&ctx, panel.command.clone()).checked.unwrap_or(false);
@@ -106,9 +111,10 @@ impl<'a, P: Value + 'static> PanelRail<'a, P> {
                 if button.select.is_some() {
                     request = Some(if open { PanelRailRequest::Close(panel.id.clone()) } else { PanelRailRequest::Open(panel.id.clone()) });
                 }
+                items.push((panel.id.clone(), button.response));
             }
         });
-        PanelRailOutput { request, ..shown.output }
+        PanelRailOutput { request, items, ..shown.output }
     }
 }
 
@@ -136,7 +142,7 @@ impl<P: Value + 'static> Component for PanelRail<'_, P> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> PanelRailOutput<P> {
-        PanelRailOutput { response: cx.response.clone(), request: None }
+        PanelRailOutput { response: cx.response.clone(), request: None, items: Vec::new() }
     }
 }
 

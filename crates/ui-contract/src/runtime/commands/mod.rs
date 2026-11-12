@@ -139,7 +139,7 @@ impl CommandState {
     }
 
     /// Whether the command's content has something to show, such as comments on a panel. A rail marks the command's
-    /// button; the marker's description is the command's `hint`.
+    /// button while the command is not checked (the panel is closed); the marker's description is the command's `hint`.
     #[must_use]
     pub fn marked(mut self, marked: bool) -> Self {
         self.marked = marked;
