@@ -1,11 +1,13 @@
 //! Stories of the menu bar, the edit menu and the panel menu.
 
 use super::{MenuBar, MenuHelp, MenuTitle};
-use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use crate::buttons::IconButton;
+use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Trigger};
 use crate::display::Divider;
 use crate::menu::{EditMenu, GroupItem, HelpEntry, Menu, MenuItem, PanelMenu, PanelRow};
 use crate::runtime::commands::EditCommands;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
+use craft_behavior::IconId;
 use craft_theme::ControlSize;
 use egui::Ui;
 use std::sync::LazyLock;
@@ -104,5 +106,16 @@ fn panel_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         ];
         PanelMenu::new(host, group)
     };
-    StoryOutput::from(Menu::new("Panel menu").open(Bind::bound(data.value("open", true))).show(ui, |ui, _| panel().show(ui)).output)
+    let opener = IconButton::new(IconId::new("more")).label("Panel menu").show(ui);
+    let mut picked = None;
+    let shown = Menu::new("Panel menu")
+        .open(Bind::bound(data.value("open", false)))
+        .opened_by(&opener, Trigger::Click)
+        .show(ui, |ui, _| picked = panel().show(ui).picked);
+    let chosen = data.note("chosen", None::<GroupItem>);
+    if picked.is_some() {
+        *chosen = picked;
+    }
+    let readout = chosen.map_or_else(|| "Nothing chosen".to_owned(), |item| format!("Chosen: {item:?}"));
+    StoryOutput::from(shown.output).readout(readout)
 }
