@@ -37,8 +37,11 @@ session passes `Backend::X11`. The Wayland registry is probed (500 ms at most) o
 reads the platform once and calls it.
 
 With the `egui` feature this crate also draws the window buttons and the resize edges
-([below](#window-buttons-and-resize-edges)), so they look and behave the same in every app; where
-they sit in the header bar stays with each app, whose title bars differ.
+([below](#window-buttons-and-resize-edges)), in one style for now: Adwaita's, which matches
+`Integrated(Adwaita)`. The buttons don't read `Captions::family` yet, so for the Breeze, Windows and
+Generic families the app still draws its own buttons (or uses Adwaita's until those styles land).
+The resize edges and the move/resize hand-over don't depend on the family. Where the buttons sit in
+the header bar stays with each app, whose title bars differ.
 
 ### Override
 
@@ -64,8 +67,9 @@ if let Frame::Integrated(captions) = &decision.frame {
 }
 ```
 
-This crate decides *whether* and *where*; [`controls`](#window-buttons-and-resize-edges) draws the
-buttons, and each app places them in its header bar.
+This crate decides *whether* and *where*. For `CaptionFamily::Adwaita`,
+[`controls`](#window-buttons-and-resize-edges) draws the buttons; for the other families drawing
+them stays with each app for now. Each app places them in its header bar.
 
 ## Older API
 
