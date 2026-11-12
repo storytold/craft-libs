@@ -47,4 +47,7 @@ Transitions (`p:transition`, with the PowerPoint 2010 and later effects) and ani
 (`p:timing`, flattened into `anim::Animation` on reading and built back into the timing tree on
 writing, with media volume and playback settings) are read and written.
 
-Not read or written yet (later changes): speaker notes, comments.
+Speaker notes (`p:notes`, text with its formatting) and comments are read and written. Comments
+go out twice, as PowerPoint writes them: the modern threaded part (`p188:`, with replies and the
+resolved state) and the flattened legacy part with its authors; on reading, a slide's modern part
+wins over its legacy copy.
