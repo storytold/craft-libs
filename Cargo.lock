@@ -974,6 +974,9 @@ dependencies = [
 [[package]]
 name = "craft-cfb"
 version = "0.1.0"
+dependencies = [
+ "craft-media-testkit",
+]
 
 [[package]]
 name = "craft-cms"
