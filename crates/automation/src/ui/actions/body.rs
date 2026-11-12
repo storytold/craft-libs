@@ -5,8 +5,8 @@ use craft_behavior::{ColumnWidth, EditEvent, IconId, Mixed, Selection};
 use craft_theme::variant::Tone;
 use craft_ui::buttons::Button;
 use craft_ui::contract::{
-    Bind, CollectionEvent, ColumnKey, ColumnKind, ColumnSpec, ListDrag, OpenChange, Outcome as _, Pad, Props as _, ReorderMove, ReorderRule, Scroll,
-    SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing, SpaceAction, ToggleColumn, ToggleEdit, request_rename,
+    Bind, CollectionEvent, ColumnKey, ColumnSpec, ListDrag, OpenChange, Outcome as _, Pad, Props as _, ReorderMove, ReorderRule, Scroll, SelectMode,
+    Show as _, ShowCollection as _, ShowContainer as _, Sizing, SpaceAction, ToggleColumn, ToggleEdit, request_rename,
 };
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
@@ -154,10 +154,8 @@ fn show_tree(ui: &mut Ui, body: &Body<'_>, state: &mut ActionsPanelState, sessio
         request_rename(ui.ctx(), list_id, &ActionSelection::Action(index));
     }
     let columns = vec![
-        ColumnSpec::new(INCLUDE_COLUMN, Label::Empty, ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())),
-        ColumnSpec::new(DIALOG_COLUMN, Label::Empty, ColumnWidth::Controls(1.0))
-            .kind(ColumnKind::Toggle(ToggleColumn::sweepable()))
-            .icon(IconId::new("note")),
+        ColumnSpec::toggle(INCLUDE_COLUMN, Label::Empty, ToggleColumn::sweepable()),
+        ColumnSpec::toggle(DIALOG_COLUMN, Label::Empty, ToggleColumn::sweepable()).icon(IconId::new("note")),
         ColumnSpec::new(NAME_COLUMN, Label::Empty, ColumnWidth::fill(1.0)),
     ];
     let mut widget = List::new(words.name.clone())

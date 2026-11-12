@@ -3,8 +3,8 @@
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, Mixed, Selection, SelectionChange, SizeHint, Value};
 use craft_keymap::{Chord, Key, Mods};
 use craft_ui::contract::{
-    ActivateOn, Bind, CollectionEvent, ColumnKind, ColumnSpec, Outcome, Props as _, Remember as _, SelectMode, ShowCollection as _,
-    ShowContainer as _, Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn, ToggleEdit,
+    ActivateOn, Bind, CollectionEvent, ColumnSpec, Outcome, Props as _, Remember as _, SelectMode, ShowCollection as _, ShowContainer as _, Sizing,
+    SpaceAction, SweepApply, SweepStep, ToggleColumn, ToggleEdit,
 };
 use craft_ui::layout_components::Stack;
 use craft_ui::list::{ListRow, ToggleCell, ToggleState};
@@ -273,13 +273,10 @@ impl<'a, K: Value + Eq + Hash> BrushSectionList<'a, K> {
         let lock_name = Label::from(words.lock.fill(&[("name", "{row}")]));
         let switch_name = Label::from("{row}".to_owned());
         let columns = || {
-            let toggle = ColumnKind::Toggle(ToggleColumn::default());
             vec![
-                ColumnSpec::new(CHECK, Label::Empty, ColumnWidth::Controls(1.0)).kind(toggle),
+                ColumnSpec::toggle(CHECK, Label::Empty, ToggleColumn::default()),
                 ColumnSpec::new(NAME, Label::Empty, ColumnWidth::Content),
-                ColumnSpec::new(LOCK, Label::Empty, ColumnWidth::Controls(1.0))
-                    .kind(ColumnKind::Toggle(ToggleColumn::default().key(Chord::new(Mods::SHIFT, Key::Space))))
-                    .icon(IconId::new("lock")),
+                ColumnSpec::toggle(LOCK, Label::Empty, ToggleColumn::default().key(Chord::new(Mods::SHIFT, Key::Space))).icon(IconId::new("lock")),
             ]
         };
         let shown_stack = Stack::new().show(ui, |ui, cx| {

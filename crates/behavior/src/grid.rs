@@ -5,8 +5,8 @@ use crate::flow::Flow;
 use emath::{Pos2, Rect, Vec2};
 
 /// The width of each column in `room`: `Fixed` is the app's width, `Content` the widest child of last pass
-/// (`content[i]`, zero when unknown), and `Fill` columns share what is left by weight. `Controls` widths take
-/// no room until `ColumnWidth::in_unit` resolves them.
+/// (`content[i]`, zero when unknown), and `Fill` columns share what is left by weight. `Controls` and `Toggle`
+/// widths take no room until their owner resolves them.
 pub fn resolve_columns(columns: &[ColumnWidth], content: &[f32], room: f32, gap: f32) -> Vec<f32> {
     let known = |i: usize| content.get(i).copied().unwrap_or(0.0);
     let mut widths: Vec<f32> = columns
@@ -14,7 +14,7 @@ pub fn resolve_columns(columns: &[ColumnWidth], content: &[f32], room: f32, gap:
         .enumerate()
         .map(|(i, column)| match column {
             ColumnWidth::Fixed(width) => *width,
-            ColumnWidth::Fill { .. } | ColumnWidth::Controls(_) => 0.0,
+            ColumnWidth::Fill { .. } | ColumnWidth::Controls(_) | ColumnWidth::Toggle => 0.0,
             _ => known(i),
         })
         .collect();

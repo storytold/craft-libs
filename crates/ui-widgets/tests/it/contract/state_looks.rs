@@ -66,7 +66,7 @@ fn pressing_a_check_box_changes_its_fill_whether_off_or_on() {
 #[trial]
 fn a_row_press_shows_on_the_check_cell_that_follows_it_and_a_cell_press_on_its_own_cell() {
     use craft_behavior::{ColumnKey, ColumnWidth, keyed};
-    use craft_ui::contract::{ColumnKind, ColumnSpec, ShowCollection as _, ToggleColumn};
+    use craft_ui::contract::{ColumnSpec, ShowCollection as _, ToggleColumn};
     use craft_ui::list::{ListRow, ToggleCell, ToggleState};
     use craft_ui::table::Table;
     const CHECK: ColumnKey = ColumnKey::new("check");
@@ -77,9 +77,9 @@ fn a_row_press_shows_on_the_check_cell_that_follows_it_and_a_cell_press_on_its_o
         let region = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 80.0));
         in_region(ui, region, |ui| {
             let columns = vec![
-                ColumnSpec::new(CHECK, "", ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(ToggleColumn::default())),
+                ColumnSpec::toggle(CHECK, "", ToggleColumn::default()),
                 ColumnSpec::new(NAME, "", ColumnWidth::fill(1.0)),
-                ColumnSpec::new(LOCK, "", ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(ToggleColumn::default())),
+                ColumnSpec::toggle(LOCK, "", ToggleColumn::default()),
             ];
             let order = [0usize];
             let source = keyed(&order, |&row| row);

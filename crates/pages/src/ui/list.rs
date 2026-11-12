@@ -25,8 +25,8 @@ mod stories;
 
 use craft_behavior::{ColumnKey, ColumnWidth, EditEvent, IconId, Mixed, Selection, SelectionChange, keyed};
 use craft_ui::contract::{
-    Bind, CollectionEvent, ColumnKind, ColumnSpec, ContextMenuRequest, ListDrag, NoValue, Outcome, ReorderMove, ReorderRule, SelectMode,
-    ShowCollection as _, ShowContainer as _, SweepApply, SweepStep, ToggleColumn, ToggleEdit, request_rename,
+    Bind, CollectionEvent, ColumnSpec, ContextMenuRequest, ListDrag, NoValue, Outcome, ReorderMove, ReorderRule, SelectMode, ShowCollection as _,
+    ShowContainer as _, SweepApply, SweepStep, ToggleColumn, ToggleEdit, request_rename,
 };
 use craft_ui::list::{ListRow, RowEvent, ToggleCell, TrailingFace, TrailingPart};
 use craft_ui::primitives::IconSpec;
@@ -230,8 +230,8 @@ impl<'a> PageList<'a> {
         // With several rows picked the field opens empty, so the typed name goes to all of them.
         let several = (picked.items.len() > 1).then(|| picked.items.clone());
         let columns = vec![
-            ColumnSpec::new(VISIBLE, words.visible.clone(), ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())),
-            ColumnSpec::new(LOCKED, words.lock.clone(), ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())),
+            ColumnSpec::toggle(VISIBLE, words.visible.clone(), ToggleColumn::sweepable()),
+            ColumnSpec::toggle(LOCKED, words.lock.clone(), ToggleColumn::sweepable()),
             ColumnSpec::new(NAME, words.name.clone(), ColumnWidth::fill(1.0)),
         ];
         let events = RefCell::new(Vec::new());

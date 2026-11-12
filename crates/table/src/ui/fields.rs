@@ -8,8 +8,8 @@ use std::sync::Arc;
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, EditEvent, IconId, ItemSource, Mixed};
 use craft_ui::buttons::Button;
 use craft_ui::contract::{
-    CollectionEvent, ColumnKind, ColumnSpec, DropAt, DropKind, DropPlace, ListDrag, Pattern, Props as _, Remember, ReorderMove, ReorderRule,
-    RowAlign, Show as _, ShowCollection as _, ShowContainer as _, SweepApply, SweepStep, ToggleColumn, Trigger, clicked,
+    CollectionEvent, ColumnSpec, DropAt, DropKind, DropPlace, ListDrag, Pattern, Props as _, Remember, ReorderMove, ReorderRule, RowAlign, Show as _,
+    ShowCollection as _, ShowContainer as _, SweepApply, SweepStep, ToggleColumn, Trigger, clicked,
 };
 use craft_ui::display::{Divider, Shade, Text};
 use craft_ui::layout_components::{Grid, Row, Stack};
@@ -493,7 +493,7 @@ impl Model<'_> {
     /// The checklist of source fields.
     fn checklist(&self, ui: &mut Ui, cx: &mut impl Remember, edits: &Edits) {
         let source = Checklist { fields: self.fields, ticked: self.fields.iter().map(|field| self.ticked(&field.name)).collect() };
-        let columns = vec![ColumnSpec::new(CHECK, Label::Empty, ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(ToggleColumn::sweepable()))];
+        let columns = vec![ColumnSpec::toggle(CHECK, Label::Empty, ToggleColumn::sweepable())];
         let separator = self.words.samples_separator.as_str();
         let out =
             List::<String>::new(self.words.choose.clone()).max_rows(8).columns(columns).header(false).show_items(ui, &source, &mut |key, icx| {

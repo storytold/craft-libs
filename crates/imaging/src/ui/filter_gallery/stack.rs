@@ -4,8 +4,8 @@ use std::borrow::Cow;
 
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, EditEvent, IconId, ItemSource, Selection};
 use craft_ui::contract::{
-    CollectionEvent, ColumnKind, ColumnSpec, NoValue, Outcome, Remember as _, ReorderMove, ReorderRule, SelectMode, ShowCollection as _,
-    ShowContainer as _, SweepApply, SweepStep, ToggleColumn,
+    CollectionEvent, ColumnSpec, NoValue, Outcome, Remember as _, ReorderMove, ReorderRule, SelectMode, ShowCollection as _, ShowContainer as _,
+    SweepApply, SweepStep, ToggleColumn,
 };
 use craft_ui::layout_components::Stack;
 use craft_ui::list::{List, ListRow, RowInk, ToggleCell};
@@ -108,7 +108,7 @@ impl<'a> EffectStack<'a> {
         let layers = Layers { effects, index };
         let mut selection = Selection::single(current);
         let columns = vec![
-            ColumnSpec::new(EYE, words.visibility_of.clone(), ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())),
+            ColumnSpec::toggle(EYE, words.visibility_of.clone(), ToggleColumn::sweepable()),
             ColumnSpec::new(NAME, words.filter.clone(), ColumnWidth::fill(1.0)),
         ];
         let mut change = None;

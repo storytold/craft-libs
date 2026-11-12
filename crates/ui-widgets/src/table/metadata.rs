@@ -4,8 +4,8 @@
 use super::Table;
 use super::words::MetadataWords;
 use crate::contract::{
-    Bind, CollectionEvent, CollectionResponse, ColumnKind, ColumnSpec, NoValue, Outcome, Pad, Pattern, Props, Remember as _, RowHeight, SelectMode,
-    Show as _, ShowCollection as _, ShowContainer as _, Sizing, ToggleColumn,
+    Bind, CollectionEvent, CollectionResponse, ColumnSpec, NoValue, Outcome, Pad, Pattern, Props, Remember as _, RowHeight, SelectMode, Show as _,
+    ShowCollection as _, ShowContainer as _, Sizing, ToggleColumn,
 };
 use crate::layout_components::Stack;
 use crate::list::{ListRow, RowEvent, ToggleCell, ToggleState};
@@ -262,10 +262,7 @@ impl<'a> MetadataTable<'a> {
                 ColumnSpec::new(VALUE, words.value.clone(), ColumnWidth::fill(1.0)),
             ];
             if checks {
-                columns.insert(
-                    0,
-                    ColumnSpec::new(SHOW, words.show.clone(), ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())),
-                );
+                columns.insert(0, ColumnSpec::toggle(SHOW, words.show.clone(), ToggleColumn::sweepable()));
             }
             let source = Fields { keys, entries, chosen: held.as_deref() };
             let table = Table::<FieldKey>::new(label.clone(), columns)

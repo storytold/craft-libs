@@ -116,6 +116,11 @@ impl ColumnSpec {
         }
     }
 
+    /// A toggle column as wide as a toggle cell, with a header; the other settings off.
+    pub fn toggle(key: ColumnKey, header: impl Into<Label>, toggle: ToggleColumn) -> Self {
+        ColumnSpec::new(key, header, ColumnWidth::Toggle).kind(ColumnKind::Toggle(toggle))
+    }
+
     /// Activating the header sorts.
     #[must_use]
     pub fn sortable(mut self) -> Self {

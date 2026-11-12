@@ -57,6 +57,9 @@ pub enum ColumnWidth {
     /// This many control heights; the owner that knows the control height resolves it with
     /// [`ColumnWidth::in_unit`] before the widths are computed.
     Controls(f32),
+    /// As wide as a toggle cell: a control and the inline gap. The owner that knows the control size resolves it
+    /// before the widths are computed.
+    Toggle,
     /// A share of the remaining width, by weight.
     #[non_exhaustive]
     Fill {

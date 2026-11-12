@@ -160,6 +160,8 @@ pub(super) struct Header {
     on: bool,
     /// The control height, the unit of `ColumnWidth::Controls`.
     unit: f32,
+    /// The width of a toggle column (`ColumnWidth::Toggle`): a control and the inline gap.
+    toggle: f32,
     cells: Vec<Cell>,
     events: Vec<ColumnEvent>,
     /// A header menu asked for in this pass.
@@ -199,6 +201,7 @@ impl Header {
     pub(super) fn measure(&mut self, scx: &StyleCx<'_>) {
         let control = scx.control();
         self.unit = control.height;
+        self.toggle = control.height + control.gap;
         // The row shows only when the props ask for it and some column has a header to show (17.3).
         self.height = if !self.on || self.specs.iter().all(|spec| spec.header.as_str().is_empty()) {
             0.0
@@ -211,7 +214,8 @@ impl Header {
     }
 
     fn width_of(&self, spec: &ColumnSpec) -> ColumnWidth {
-        match spec.width.in_unit(self.unit) {
+        let width = if spec.width == ColumnWidth::Toggle { ColumnWidth::Fixed(self.toggle) } else { spec.width.in_unit(self.unit) };
+        match width {
             fixed @ ColumnWidth::Fixed(_) => fixed,
             _ => self.memory.widths.iter().find(|(key, _)| *key == spec.key).map_or(spec.width, |(_, width)| ColumnWidth::Fixed(*width)),
         }
@@ -453,7 +457,10 @@ impl Header {
         if (width - shown).abs() <= f32::EPSILON {
             return;
         }
-        let owned_by_app = self.specs.iter().any(|spec| spec.key == *key && matches!(spec.width, ColumnWidth::Fixed(_) | ColumnWidth::Controls(_)));
+        let owned_by_app = self
+            .specs
+            .iter()
+            .any(|spec| spec.key == *key && matches!(spec.width, ColumnWidth::Fixed(_) | ColumnWidth::Controls(_) | ColumnWidth::Toggle));
         if !owned_by_app {
             match self.memory.widths.iter_mut().find(|(held, _)| held == key) {
                 Some((_, held)) => *held = width,

@@ -8,8 +8,8 @@ use std::hash::Hash;
 use craft_behavior::geometry::selection_op::SelectionOperation;
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, EditEvent, IconId, ItemSource, Selection, SelectionChange};
 use craft_ui::contract::{
-    Bind, CollectionEvent, ColumnKind, ColumnSpec, ListDrag, Props as _, ReorderRule, ShowCollection as _, ShowContainer as _, SweepApply,
-    ToggleColumn, request_rename,
+    Bind, CollectionEvent, ColumnSpec, ListDrag, Props as _, ReorderRule, ShowCollection as _, ShowContainer as _, SweepApply, ToggleColumn,
+    request_rename,
 };
 use craft_ui::layout_components::Stack;
 use craft_ui::list::{List, RowEvent, ThumbSize};
@@ -176,9 +176,7 @@ impl<'a, K: Clone + Eq + Hash + Debug + Send + Sync + 'static> ChannelsPanel<'a,
                 let payload_kinds = kinds.clone();
                 let kind_of = |key: &K| kinds.iter().find(|(k, _)| k == key).map(|(_, kind)| *kind);
                 let columns = vec![
-                    ColumnSpec::new(EYE, Label::Empty, ColumnWidth::Controls(1.0))
-                        .kind(ColumnKind::Toggle(ToggleColumn::sweepable()))
-                        .icon(IconId::new("eye")),
+                    ColumnSpec::toggle(EYE, Label::Empty, ToggleColumn::sweepable()).icon(IconId::new("eye")),
                     ColumnSpec::new(NAME, Label::Empty, ColumnWidth::fill(1.0)),
                 ];
                 let out = List::new(words.list.clone())

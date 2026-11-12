@@ -12,8 +12,7 @@ use rows::{RevealPlan, list_selection};
 use craft_behavior::{ColumnWidth, IconId};
 use craft_keymap::Mods;
 use craft_ui::contract::{
-    Bind, CollectionEvent, ColumnKind, ColumnSpec, DropAt, DropKind, DropPlace, ListDrag, PendingDrop, Props as _, ReorderRule, ShowCollection as _,
-    ToggleColumn,
+    Bind, CollectionEvent, ColumnSpec, DropAt, DropKind, DropPlace, ListDrag, PendingDrop, Props as _, ReorderRule, ShowCollection as _, ToggleColumn,
 };
 use craft_ui::list::List;
 use craft_ui::runtime::env::Label;
@@ -58,13 +57,9 @@ pub(super) fn show_body<T: LayerTree>(
     });
 
     let eye = cx.visibility_key.map_or(ToggleColumn::sweepable(), |key| ToggleColumn::sweepable().key(key));
-    let mut columns = vec![ColumnSpec::new(EYE, Label::Empty, ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(eye)).icon(IconId::new("eye"))];
+    let mut columns = vec![ColumnSpec::toggle(EYE, Label::Empty, eye).icon(IconId::new("eye"))];
     if cx.lock_column {
-        columns.push(
-            ColumnSpec::new(LOCK, Label::Empty, ColumnWidth::Controls(1.0))
-                .kind(ColumnKind::Toggle(ToggleColumn::sweepable()))
-                .icon(IconId::new("lock")),
-        );
+        columns.push(ColumnSpec::toggle(LOCK, Label::Empty, ToggleColumn::sweepable()).icon(IconId::new("lock")));
     }
     columns.push(ColumnSpec::new(NAME, Label::Empty, ColumnWidth::fill(1.0)));
     let parent_of = |id: &T::Id| tree.parent(id);

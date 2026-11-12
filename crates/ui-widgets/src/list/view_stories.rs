@@ -7,8 +7,8 @@ use super::{
 };
 use crate::buttons::Button;
 use crate::contract::{
-    Bind, CollectionEvent, ColumnKind, ColumnSpec, Entry, Show as _, ShowCollection as _, ShowContainer as _, ToggleColumn, ToggleEdit,
-    WordSetCx as _, request_rename,
+    Bind, CollectionEvent, ColumnSpec, Entry, Show as _, ShowCollection as _, ShowContainer as _, ToggleColumn, ToggleEdit, WordSetCx as _,
+    request_rename,
 };
 use crate::layout_components::Stack;
 use crate::menu::Menu;
@@ -114,9 +114,7 @@ impl ItemSource<usize> for EyedNames<'_> {
 #[story(List<'static, usize>, covers = [Default, Many], drive = Drive::Never)]
 fn list_many(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let columns = vec![
-        ColumnSpec::new(EYE, Label::Empty, ColumnWidth::Controls(1.0))
-            .kind(ColumnKind::Toggle(ToggleColumn::sweepable().key(Chord::new(Mods::CMD, Key::Comma))))
-            .icon(IconId::new("eye")),
+        ColumnSpec::toggle(EYE, Label::Empty, ToggleColumn::sweepable().key(Chord::new(Mods::CMD, Key::Comma))).icon(IconId::new("eye")),
         ColumnSpec::new(NAME, Label::Empty, ColumnWidth::fill(1.0)),
     ];
     let LayerRows { names, visible, selection, last } = data.value("rows", LayerRows::new(40));
@@ -219,8 +217,8 @@ fn set_toggle(layers: &mut [Layer], cell: &ToggleEdit<usize>) {
 #[story(List<'static, usize>, covers = [], drive = Drive::Never, group = "Layers", title = "Layers")]
 fn list_layers(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let columns = vec![
-        ColumnSpec::new(EYE, Label::Empty, ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())).icon(IconId::new("eye")),
-        ColumnSpec::new(LOCK, Label::Empty, ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())).icon(IconId::new("lock")),
+        ColumnSpec::toggle(EYE, Label::Empty, ToggleColumn::sweepable()).icon(IconId::new("eye")),
+        ColumnSpec::toggle(LOCK, Label::Empty, ToggleColumn::sweepable()).icon(IconId::new("lock")),
         ColumnSpec::new(NAME, Label::Empty, ColumnWidth::fill(1.0)),
     ];
     let rows = data.value("layers", layers()).clone();

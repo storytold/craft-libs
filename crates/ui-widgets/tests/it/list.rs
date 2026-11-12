@@ -484,7 +484,7 @@ fn a_cell_field_stands_in_its_cell_takes_the_click_and_reports_its_edit() {
 #[trial]
 fn a_rows_label_takes_the_empty_toggle_columns_next_to_it() {
     use craft_behavior::{ColumnKey, ColumnWidth};
-    use craft_ui::contract::{ColumnKind, ColumnSpec, ToggleColumn};
+    use craft_ui::contract::{ColumnSpec, ToggleColumn};
     use craft_ui::list::{ToggleCell, ToggleState};
     use std::cell::Cell;
     const INCLUDE: ColumnKey = ColumnKey::new("include");
@@ -494,7 +494,7 @@ fn a_rows_label_takes_the_empty_toggle_columns_next_to_it() {
     let ends = Rc::new(Cell::new((0.0_f32, 0.0_f32)));
     let held = ends.clone();
     let mut fixture = Fixture::new(move |ui| {
-        let toggle = |key| ColumnSpec::new(key, "", ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(ToggleColumn::default()));
+        let toggle = |key| ColumnSpec::toggle(key, "", ToggleColumn::default());
         let columns = vec![toggle(INCLUDE), toggle(DIALOG), ColumnSpec::new(NAME, "", ColumnWidth::fill(1.0))];
         let keys = [0_usize, 1, 2];
         let source = keyed(&keys, |key: &usize| *key);
@@ -526,6 +526,34 @@ fn a_rows_label_takes_the_empty_toggle_columns_next_to_it() {
     assert!(start("Set") < include, "a row without toggles starts its label in the first toggle column");
     assert!(start("Action") > include && start("Action") < dialog, "a row with the first toggle starts its label in the second column");
     assert!(start("Step") > dialog, "a row with both toggles starts its label past them");
+}
+
+/// A toggle column holds one control-high toggle with room on each side: wider than its control-high row, narrower
+/// than two toggles.
+#[trial]
+fn a_toggle_column_holds_one_toggle_with_room_on_each_side() {
+    use craft_behavior::{ColumnKey, ColumnWidth};
+    use craft_ui::contract::{ColumnSpec, ToggleColumn};
+    use craft_ui::list::ToggleCell;
+    use std::cell::Cell;
+    const EYE: ColumnKey = ColumnKey::new("eye");
+    const NAME: ColumnKey = ColumnKey::new("name");
+    let eye = Rc::new(Cell::new(egui::Rect::NOTHING));
+    let held = eye.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let columns = vec![ColumnSpec::toggle(EYE, "", ToggleColumn::sweepable()), ColumnSpec::new(NAME, "", ColumnWidth::fill(1.0))];
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key);
+        let _ = List::new("Layers").columns(columns).show_items(ui, &source, &mut |key, icx| {
+            held.set(icx.cell(&EYE).unwrap_or(egui::Rect::NOTHING));
+            ListRow::new(NAMES[*key]).cells(icx.cells()).toggle(ToggleCell::eye(EYE, true))
+        });
+    });
+    fixture.room(Vec2::new(300.0, 200.0));
+    fixture.settle();
+    let cell = eye.get();
+    assert!(cell.width() > cell.height(), "the toggle column is wider than its control-high row: {cell:?}");
+    assert!(cell.width() < 2.0 * cell.height(), "the toggle column holds one toggle: {cell:?}");
 }
 
 /// Every filled rect among `shapes`, nested lists included.
