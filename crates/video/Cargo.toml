@@ -88,6 +88,10 @@ required-features = ["av1-decode"]
 name = "h264_decode"
 required-features = ["h264-decode"]
 
+[[test]]
+name = "h264_encode"
+required-features = ["h264-encode"]
+
 [[example]]
 name = "h264_h264dec"
 required-features = ["h264-decode"]

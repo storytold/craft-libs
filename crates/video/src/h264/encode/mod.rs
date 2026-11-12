@@ -191,6 +191,9 @@ pub struct EncoderConfig {
     /// Every picture is an IDR (an all-intra intermediate): `keyint` and `bframes` are ignored, no
     /// reference frames are kept, and High 10 streams are signalled as High 10 Intra.
     pub intra_only: bool,
+    /// The program and version the identification SEI of the first picture names (`craft-h264enc`
+    /// and this crate's version by default): an application sets its own.
+    pub writer: String,
 }
 
 impl EncoderConfig {
@@ -219,6 +222,7 @@ impl EncoderConfig {
             level: None,
             bit_depth: 8,
             intra_only: false,
+            writer: format!("craft-h264enc {}", env!("CARGO_PKG_VERSION")),
         }
     }
 }
@@ -1098,7 +1102,7 @@ impl<P: Pixel> Core<P> {
         }
         if !self.sei_sent {
             self.sei_sent = true;
-            let text = format!("craft-h264enc {} - clean-room H.264 encoder - options: {}", env!("CARGO_PKG_VERSION"), self.options());
+            let text = format!("{} - clean-room H.264 encoder - options: {}", self.cfg.writer, self.options());
             nals.push(nal::nal(0, NAL_SEI, &nal::sei_user_data_rbsp(&text)));
         }
         if idr && (self.cfg.mastering_display.is_some() || self.cfg.content_light.is_some()) {
