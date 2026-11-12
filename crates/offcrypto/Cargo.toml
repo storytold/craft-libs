@@ -1,0 +1,27 @@
+[package]
+name = "craft-offcrypto"
+description = "Clean-room Office document cryptography ([MS-OFFCRYPTO]): password-encrypted OOXML packages (agile and standard encryption) and the password hashes of document and sheet protection."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-cfb = { workspace = true }
+craft-xml = { workspace = true }
+thiserror = { workspace = true }
+base64 = "0.23"
+aes = "0.9"
+sha1 = "0.11"
+sha2 = "0.11"
+hmac = "0.13"
+getrandom = "0.3"
+zeroize = "1"
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+# The browser's `crypto.getRandomValues` for the salts and keys of encrypted saves.
+getrandom = { version = "0.3", features = ["wasm_js"] }

@@ -5,16 +5,19 @@ changes listed under Local changes. `.cargo_vcs_info.json` names the commit it w
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
-Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
-file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
-(`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
-hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
-holds `upstream_revision`. `local_patches` describes each local change.
+Every file here except this one, `SOURCE.json` and the patched files under Local changes
+(`src/sweep/sweep_line.rs`, `examples/boolean_op.rs`, `examples/visualize_op.rs` and
+`examples/winding-numbers.rs`) is byte for byte the file in the `.crate` archive. `SOURCE.json`
+records the hash of the `.crate` download (`source_archive_sha256`) and, for every file kept, the hash
+in the package (`source_sha256`) and the hash here (`sha256`). `upstream_repository` is null because
+no public repository this copy can name holds `upstream_revision`. `local_patches` describes each
+local change.
 
 ## Local changes
 
 | Change | Code comment label | Touches | Tests |
 |---|---|---|---|
+| The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out | `Craft patch (exited slots)` | `src/sweep/sweep_line.rs` | |
 | The SVG stroke width is the larger of the bounding box's width and height divided by 512 | `Craft patch (example stroke width)` | `examples/boolean_op.rs`, `examples/visualize_op.rs`, `examples/winding-numbers.rs` | `stroke_width_follows_the_larger_side` in `examples/visualize_op.rs` |
 
 Every change here updates this table and `SOURCE.json` in the same commit.

@@ -1,0 +1,19 @@
+[package]
+name = "craft-math"
+description = "Equations as one tree (the Office Math object model) with its syntaxes: OMML, MathML, LaTeX math and the UnicodeMath linear format, read and written."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-xml = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+proptest = { workspace = true }
