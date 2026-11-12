@@ -1,4 +1,24 @@
-use craft_pcraft_format::{Error, Limits, MAX_DEPTH, MAX_GROUP_DEPTH, MAX_MANIFEST_ITEMS, check_manifest, manifest_depth, parse_manifest};
+use craft_pcraft_format::{
+    Error, Limits, MAX_DEPTH, MAX_GROUP_DEPTH, MAX_MANIFEST_ITEMS, check_manifest, check_manifest_with_cancel, manifest_depth, parse_manifest,
+};
+
+#[test]
+fn cancellation_stops_manifest_validation_after_it_starts() {
+    let polls = std::cell::Cell::new(0);
+    let cancelled = || {
+        polls.set(polls.get() + 1);
+        polls.get() >= 3
+    };
+    let json = format!(r#"{{"padding":"{}"}}"#, "x".repeat(256 * 1024));
+    assert!(matches!(check_manifest_with_cancel(json.as_bytes(), &Limits::default(), &cancelled), Err(Error::Cancelled)));
+    assert_eq!(polls.get(), 3);
+    for limits in [Limits::default(), small(1, 1)] {
+        assert_eq!(
+            check_manifest_with_cancel(json.as_bytes(), &limits, &|| false).map_err(|e| e.to_string()),
+            check_manifest(json.as_bytes(), &limits).map_err(|e| e.to_string())
+        );
+    }
+}
 
 fn nested(depth: usize) -> Vec<u8> {
     let mut json = "[".repeat(depth).into_bytes();
