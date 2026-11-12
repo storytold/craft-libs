@@ -39,14 +39,16 @@ fn show_panel(ui: &mut Ui, data: &mut StoryData, editing: bool) -> StoryOutput {
         .into()
 }
 
+/// The panel while text is edited, so a double-click inserts a glyph.
 #[story(GlyphsPanel<'static>, covers = [Default, Many], drive = Drive::Never)]
 fn glyphs_panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    show_panel(ui, data, false)
+    show_panel(ui, data, true)
 }
 
+/// The panel with no text being edited: it says how to insert glyphs.
 #[story(GlyphsPanel<'static>, covers = [], drive = Drive::Never)]
-fn glyphs_panel_editing(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    show_panel(ui, data, true)
+fn glyphs_panel_not_editing(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    show_panel(ui, data, false)
 }
 
 /// Glyphs of the shipped faces, drawn by skrifa's outlines.
