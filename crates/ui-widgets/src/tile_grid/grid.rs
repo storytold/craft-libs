@@ -14,12 +14,12 @@ use super::tile::AroundPicture;
 use super::{CaptionPlace, Tile, TilePartEvent, ZoomStep};
 use crate::contract::{
     Access, Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, ColumnKind, ColumnSpec, Common, Component,
-    ContainerProps, Cx, EditResponse, Focus as _, ListDrag, NoValue, Notch, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, RowState,
+    ContainerProps, Cx, DropKind, EditResponse, Focus as _, ListDrag, NoValue, Notch, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, RowState,
     SelectMode, Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn,
 };
 use crate::contract::{lead_position, section_part};
 use crate::controls::disclosure::Disclosure;
-use crate::list::{DropTest, ListRow, RowTest, SourceTest, ThumbSize};
+use crate::list::{DropTest, ListRow, RowTest, ThumbSize};
 use crate::primitives::PaintShape;
 use crate::runtime::access::Name;
 use crate::runtime::commands::FireSource;
@@ -29,7 +29,7 @@ use craft_behavior::{
     ColumnKey, ColumnWidth, HitLevel, HitPriority, Intent, ItemSource, Metrics, Mixed, PartKey, PointerButton, PressPhase, Selection, Sense,
 };
 use craft_keymap::{Chord, Key, Mods};
-use egui::{CornerRadius, Id, Pos2, Rect, Response, Ui, pos2, vec2};
+use egui::{CornerRadius, Pos2, Rect, Response, Ui, pos2, vec2};
 use std::cell::RefCell;
 use std::hash::Hash;
 
@@ -255,10 +255,9 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// Which tiles may be dragged.
     #[prop(func = "Fn(&K) -> bool")]
     can_drag: Option<RowTest<'a, K>>,
-    /// Which collections a drag may come from: the test gets the id of the collection the drag started in.
-    #[prop(func = "Fn(Id) -> bool")]
-    accept_from: Option<SourceTest<'a>>,
-    /// Where a drag may land: the test gets the drag, the tile under the pointer and the position before which the
+    /// What the grid takes from drags that did not start in it, in order.
+    drops: Vec<DropKind<'a, K>>,
+    /// Where the grid's own drag may land: the test gets the drag, the tile under the pointer and the position before which the
     /// dragged tiles would go.
     #[prop(func = "Fn(&ListDrag<K>, Option<&K>, usize) -> bool")]
     accepts: Option<DropTest<'a, K>>,
@@ -312,7 +311,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
             checks: false,
             can_rename: None,
             can_drag: None,
-            accept_from: None,
+            drops: Vec::new(),
             accepts: None,
             takes_files: false,
             laid: RefCell::new(None),
@@ -356,6 +355,13 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
     #[must_use]
     pub fn drag_payload<P: Send + Sync + 'static>(mut self, map: impl Fn(&ListDrag<K>) -> Option<P> + Send + Sync + 'static) -> Self {
         self.items = self.items.drag_payload(map);
+        self
+    }
+
+    /// Takes the drops of `kind` from drags that did not start in the grid; kinds given earlier come first.
+    #[must_use]
+    pub fn takes_drop(mut self, kind: DropKind<'a, K>) -> Self {
+        self.drops.push(kind);
         self
     }
 
@@ -776,8 +782,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
         self.can_drag.as_ref().is_none_or(|test| test.passes(key))
     }
 
-    fn accept_from(&self, from: Id) -> bool {
-        self.accept_from.as_ref().is_none_or(|test| test.passes(from))
+    fn drops(&self) -> &[DropKind<'_, K>] {
+        &self.drops
     }
 
     /// No drop lands on a tail row or after one; the app's test decides the rest.

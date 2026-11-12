@@ -10,11 +10,13 @@ mod stories;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use craft_behavior::{GesturePhase, ItemSource, Metrics, Selection};
 use craft_ui::contract::{
-    Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, DropMark, DropTarget,
-    EditResponse, ListDrag, NoValue, Outcome, PartsCx, Pointer as _, Props as _, Role, RowState, SelectMode, Show as _, Sizing,
+    Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, DropAt, DropKind,
+    DropMark, DropPlace, DropTarget, EditResponse, ListDrag, NoValue, Outcome, PartsCx, Pointer as _, Props as _, Role, RowState, SelectMode,
+    Show as _, Sizing,
 };
 use craft_ui::primitives::textures::TextureKey;
 use craft_ui::runtime::env::Label;
@@ -45,20 +47,6 @@ impl<K> FreeformCard<K> {
     pub fn in_stack(mut self, stack: u32) -> Self {
         self.stack = Some(stack);
         self
-    }
-}
-
-/// Which cards take a drop of a foreign drag: the test `FreeBin::drop_into` is given.
-pub struct TakesDrop<'a, K>(Box<dyn Fn(&K) -> bool + 'a>);
-
-impl<'a, K> TakesDrop<'a, K> {
-    /// The test that runs `test`.
-    pub fn new(test: impl Fn(&K) -> bool + 'a) -> Self {
-        TakesDrop(Box::new(test))
-    }
-
-    fn passes(&self, key: &K) -> bool {
-        (self.0)(key)
     }
 }
 
@@ -149,8 +137,9 @@ pub struct FreeBin<'a, K: TextureKey + 'static> {
     #[prop]
     moving: Option<FreeBinMove<K>>,
     /// Which cards take a drop of a foreign drag.
-    #[prop(func = "Fn(&K) -> bool")]
-    drop_into: Option<TakesDrop<'a, K>>,
+    drop_into: Option<Rc<dyn Fn(&K) -> bool + 'a>>,
+    /// The drop onto the cards `drop_into` takes.
+    drops: Vec<DropKind<'a, K>>,
     cards: &'a [FreeformCard<K>],
     /// The cards of this pass in display order with their places before any drag.
     slots: RefCell<Vec<Slot<K>>>,
@@ -175,12 +164,24 @@ impl<'a, K: TextureKey> FreeBin<'a, K> {
             flow_all: false,
             moving: None,
             drop_into: None,
+            drops: Vec::new(),
             cards,
             slots: RefCell::new(Vec::new()),
             takers: Vec::new(),
             background: None,
         }
         .label(label)
+    }
+
+    /// The cards that take a drop of a foreign drag: it lands in the card, and a release off them lands on the
+    /// background.
+    #[must_use]
+    pub fn drop_into(mut self, takes: impl Fn(&K) -> bool + 'a) -> Self {
+        let takes: Rc<dyn Fn(&K) -> bool + 'a> = Rc::new(takes);
+        let onto = Rc::clone(&takes);
+        self.drops = vec![DropKind::new(DropPlace::Onto, move |_: &ListDrag<K>, at: &DropAt<K>| matches!(at, DropAt::Onto(card) if onto(card)))];
+        self.drop_into = Some(takes);
+        self
     }
 
     /// The layout of this pass: every card at its stored place, else in the next cell of the flow, shifted by the drag
@@ -308,7 +309,7 @@ impl<K: TextureKey> Component for FreeBin<'_, K> {
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         self.takers.clear();
         let Some(test) = &self.drop_into else { return };
-        for slot in self.slots.borrow().iter().filter(|slot| test.passes(&slot.key)) {
+        for slot in self.slots.borrow().iter().filter(|slot| test(&slot.key)) {
             if let Some(rect) = cx.rect_of(&slot.key) {
                 self.takers.push(rect);
             }
@@ -387,8 +388,8 @@ impl<K: TextureKey> Collection for FreeBin<'_, K> {
         tile.caption(CaptionPlace::Below).renaming(row.renaming)
     }
 
-    fn accepts(&self, _: &ListDrag<K>, over: Option<&K>, _: usize) -> bool {
-        over.is_none_or(|over| self.drop_into.as_ref().is_some_and(|test| test.passes(over)))
+    fn drops(&self) -> &[DropKind<'_, K>] {
+        &self.drops
     }
 
     fn rename_editor(&mut self, ui: &mut Ui, draft: Bind<'_, String>, label: Rect, name: &str) -> Option<EditResponse<String>> {

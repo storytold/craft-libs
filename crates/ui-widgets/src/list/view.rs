@@ -3,17 +3,17 @@
 //! drag with drop marks, rename lifecycle and the context-menu request. The list adds the item layout and the editor
 //! the rename lifecycle shows.
 
-use super::predicate::{DropTest, RowTest, RowText, SourceTest};
+use super::predicate::{DropTest, RowTest, RowText};
 use super::{ListRow, RowEvent};
 use crate::contract::{
-    Access, ActivateOn, Bind, BindMut, Collection, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, EditResponse,
-    LeadOnOpen, ListDrag, Props as _, Role, RowState, SelectMode, Sizing,
+    Access, ActivateOn, Bind, BindMut, Collection, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, DropKind,
+    EditResponse, LeadOnOpen, ListDrag, Props as _, Role, RowState, SelectMode, Sizing,
 };
 use crate::runtime::env::{Env, Label};
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{ColumnKey, DisplayOrder, ItemSource, Metrics, Selection, SizeHint, SpanLayout};
 use craft_i18n::matcher::Matcher;
-use egui::{Id, Rect, Ui};
+use egui::{Rect, Ui};
 use std::borrow::Cow;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -60,10 +60,9 @@ pub struct List<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// Which rows may be dragged.
     #[prop(func = "Fn(&K) -> bool")]
     can_drag: Option<RowTest<'a, K>>,
-    /// Which collections a drag may come from: the test gets the id of the list the drag started in.
-    #[prop(func = "Fn(Id) -> bool")]
-    accept_from: Option<SourceTest<'a>>,
-    /// Where a drag may land: the test gets the drag, the row under the pointer and the position before which the
+    /// What the list takes from drags that did not start in it, in order.
+    drops: Vec<DropKind<'a, K>>,
+    /// Where the list's own drag may land: the test gets the drag, the row under the pointer and the position before which the
     /// dragged rows would go. A refused spot shows no drop mark.
     #[prop(func = "Fn(&ListDrag<K>, Option<&K>, usize) -> bool")]
     accepts: Option<DropTest<'a, K>>,
@@ -97,7 +96,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
             can_rename: None,
             rename_draft: None,
             can_drag: None,
-            accept_from: None,
+            drops: Vec::new(),
             accepts: None,
             takes_files: false,
             listbox: false,
@@ -142,6 +141,13 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
     #[must_use]
     pub fn drag_payload<P: Send + Sync + 'static>(mut self, map: impl Fn(&ListDrag<K>) -> Option<P> + Send + Sync + 'static) -> Self {
         self.items = self.items.drag_payload(map);
+        self
+    }
+
+    /// Takes the drops of `kind` from drags that did not start in the list; kinds given earlier come first.
+    #[must_use]
+    pub fn takes_drop(mut self, kind: DropKind<'a, K>) -> Self {
+        self.drops.push(kind);
         self
     }
 }
@@ -226,8 +232,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for List<'_, K> {
         self.can_drag.as_ref().is_none_or(|test| test.passes(key))
     }
 
-    fn accept_from(&self, from: Id) -> bool {
-        self.accept_from.as_ref().is_none_or(|test| test.passes(from))
+    fn drops(&self) -> &[DropKind<'_, K>] {
+        &self.drops
     }
 
     fn accepts(&self, drag: &ListDrag<K>, over: Option<&K>, insert: usize) -> bool {

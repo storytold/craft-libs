@@ -6,7 +6,9 @@ use super::members::Member;
 use super::{Held, ITEM_NODE, ItemsHooks, LastLayout, Lead, Placement, Renaming, Rows, SCROLL, Scrolled, View, key_hash, section_part};
 use super::{request, rows};
 use crate::contract::ValueOf;
-use crate::contract::collection::{CollectionEvent, ContextMenuRequest, Gestures, ItemsOut, OpenChange, PendingDrop, Rename, RowState, ShownRow};
+use crate::contract::collection::{
+    CollectionEvent, ContextMenuRequest, DropAt, Gestures, ItemsOut, OpenChange, PendingDrop, Rename, RowState, ShownRow,
+};
 use crate::contract::cx::{BodyCx, Pointer as _};
 use crate::contract::run::{Measuring, ShapeHooks, ShowAt};
 use crate::contract::steps::ShapeKind;
@@ -469,7 +471,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                         run.is_multiple_of(2) && !self.source.is_section(at)
                     },
                     dragging: self.drags.grabbed.as_ref() == Some(&key),
-                    drop_target: matches!(&self.drags.pending, Some(PendingDrop::Items { key: Some(over), .. }) if *over == key),
+                    drop_target: matches!(&self.drags.pending, Some(PendingDrop::Drop(DropAt::Onto(over))) if *over == key),
                     current: current.as_ref() == Some(&key),
                     open: self.source.has_children(at) && self.source.open(at),
                     hovered: hover_at.is_some_and(|pos| row.contains(pos)),

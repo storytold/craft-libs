@@ -8,8 +8,8 @@ use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, EditEvent, GesturePha
 use craft_i18n::Collator;
 use craft_theme::variant::Tone;
 use craft_ui::contract::{
-    CollectionEvent, ColumnSort, ColumnSpec, ListDrag, OpenChange, Props as _, Rename, ReorderMove, ReorderRule, SelectMode, ShowCollection as _,
-    request_rename,
+    CollectionEvent, ColumnSort, ColumnSpec, DropAt, DropKind, DropPlace, ListDrag, OpenChange, Props as _, Rename, ReorderMove, ReorderRule,
+    SelectMode, ShowCollection as _, request_rename,
 };
 use craft_ui::list::{ListRow, ThumbAspect, ThumbSize};
 use craft_ui::primitives::IconSpec;
@@ -109,11 +109,14 @@ where
     }
 
     let accepts = |drag: &ListDrag<K>, over: Option<&K>, _insert: usize| {
-        if drag.list == id && user_order {
-            return true;
-        }
         // Over an empty bin the drop goes into the bin shown.
-        over.is_none_or(|over| model.is_bin(over) && !inside_any(model, over, &drag.keys))
+        user_order || over.is_none_or(|over| model.is_bin(over) && !inside_any(model, over, &drag.keys))
+    };
+    // A drag from elsewhere drops into a bin, or into the bin shown when the view is empty.
+    let into_bin = |drag: &ListDrag<K>, at: &DropAt<K>| match at {
+        DropAt::Onto(bin) => model.is_bin(bin) && !inside_any(model, bin, &drag.keys),
+        DropAt::Gap { key, .. } => key.is_none(),
+        _ => false,
     };
     let stamp = stamp_of(state.shown.as_ref(), &state.search, sort.as_ref());
     let empty = if searching { words.no_matches.clone() } else { words.empty.clone() };
@@ -129,7 +132,9 @@ where
         .rows_stamp(stamp)
         .empty(empty)
         .reorder(ReorderRule::new().into_groups())
-        .accepts(accepts);
+        .accepts(accepts)
+        .takes_drop(DropKind::new(DropPlace::Onto, into_bin))
+        .takes_drop(DropKind::new(DropPlace::Between, into_bin));
     let out = table.show_items(ui, &rows, &mut |key, icx| {
         let row = &rows.0[icx.at];
         let item = item_of(model, key);
@@ -180,9 +185,9 @@ where
             }
             CollectionEvent::Open(change) => events.push(BinEvent::Open(change)),
             CollectionEvent::Reorder(edit) => events.extend(reorder_event(model, state.shown.as_ref(), searching, user_order, edit)),
-            CollectionEvent::Dropped { key, keys, .. } => {
-                let into = key.or_else(|| state.shown.clone());
-                if let Some(items) = drop_items(model, into.as_ref(), &keys) {
+            CollectionEvent::Dropped { at, payload, .. } => {
+                let into = at.key().cloned().or_else(|| state.shown.clone());
+                if let Some(items) = payload.get::<ListDrag<K>>().and_then(|drag| drop_items(model, into.as_ref(), &drag.keys)) {
                     events.push(BinEvent::Drop { items, into });
                 }
             }

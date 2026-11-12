@@ -6,7 +6,9 @@
 mod stories;
 
 use super::{Tab, TabStrip};
-use crate::contract::{CollectionEvent, ContextMenuRequest, ReorderRule, ShowCollection as _, ShowContainer as _};
+use crate::contract::{
+    CollectionEvent, ContextMenuRequest, DropAt, DropKind, DropPlace, ListDrag, ReorderRule, ShowCollection as _, ShowContainer as _,
+};
 use crate::layout_components::Row;
 use crate::runtime::env::Label;
 use craft_behavior::{EditEvent, SelectionChange, keyed};
@@ -157,7 +159,7 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
     pub fn show(self, ui: &mut Ui) -> DocumentTabsOutput<D> {
         let DocumentTabs { label, tabs, selected, reorderable, tear_off, leading, trailing } = self;
         let source = keyed(tabs, |tab: &DocumentTab<D>| tab.id.clone()).with_text(|tab| Cow::Borrowed(tab.label.as_str()));
-        let mut strip = TabStrip::new(label);
+        let mut strip = TabStrip::new(label).takes_drop(DropKind::new(DropPlace::Between, |_: &ListDrag<D>, _| true));
         if tear_off {
             strip = strip.tear_off();
         }
@@ -211,7 +213,11 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
                         });
                     }
                 }
-                CollectionEvent::Dropped { key: Some(key), keys, .. } => events.push(DocumentTabsEvent::DroppedInto { documents: keys, over: key }),
+                CollectionEvent::Dropped { at: DropAt::Gap { key: Some(over), .. }, payload, .. } => {
+                    if let Some(drag) = payload.get::<ListDrag<D>>() {
+                        events.push(DocumentTabsEvent::DroppedInto { documents: drag.keys.clone(), over });
+                    }
+                }
                 _ => {}
             }
         }

@@ -2,6 +2,7 @@
 //! collections written on the contract only.
 
 mod drag;
+mod drops;
 mod keys;
 pub(crate) mod kit;
 mod list;

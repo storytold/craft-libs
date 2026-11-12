@@ -1,5 +1,6 @@
 //! A collection's output: `CollectionResponse`, the rows it showed and the gestures it allows.
 
+use super::drops::DropAt;
 use super::events::{CollectionEvent, ReorderMove};
 use super::props::{CollectionProps, SelectMode};
 use craft_behavior::ColumnKey;
@@ -38,14 +39,8 @@ pub struct CollectionResponse<K, E> {
 pub enum PendingDrop<K> {
     /// The collection's own items move: the move `CollectionEvent::Reorder` would carry.
     Reorder(ReorderMove<K>),
-    /// Items dragged from another collection land before `insert`, over `key` (none over an empty collection), as
-    /// `CollectionEvent::Dropped` would report.
-    Items {
-        /// The item under the pointer.
-        key: Option<K>,
-        /// The position of the display order the items land before.
-        insert: usize,
-    },
+    /// A drop kind takes the payload at the place, as `CollectionEvent::Dropped` would report.
+    Drop(DropAt<K>),
     /// Files from the OS land before `insert`, as `CollectionEvent::FilesDropped` would report.
     Files {
         /// The position of the display order the files land before.

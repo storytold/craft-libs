@@ -8,6 +8,8 @@ use crate::runtime::egui::areas;
 use crate::runtime::{cursor, frame, pointer, wheel};
 use craft_behavior::{Cursor, CursorPriority, DropOperation, PartKey, PartRef, PressCancel, PressState, Wheel};
 use egui::{Id, Pos2};
+use std::any::{Any, TypeId};
+use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -123,12 +125,44 @@ impl Pointer for CxCore<'_> {
     }
 
     fn dragging<P: Send + Sync + 'static>(&self) -> Option<(Arc<P>, Pos2)> {
-        let (payload, at) = drag::dragging::<P>(&self.ctx)?;
-        Some((payload, areas::layer_map(&self.ctx, self.response.layer_id).map_or(at, |map| map.to_layer(at))))
+        let (payload, at) = self.dragging_of(TypeId::of::<P>())?;
+        Some((payload.downcast::<P>().ok()?, at))
     }
 
     fn drop_target<P: Send + Sync + 'static, T: DropTarget<P>>(&mut self, target: &T) -> Option<T::Drop> {
-        let (payload, at) = self.dragging::<P>()?;
+        self.drop_target_of(TypeId::of::<P>(), &Typed(target, PhantomData))
+    }
+
+    fn window_drop_target<P: Send + Sync + 'static, T: WindowDropTarget<P>>(&mut self, target: &T) -> Option<T::Drop> {
+        let payload = drag::active::<P>(&self.ctx).filter(|_| !drag::moves_viewport(&self.ctx))?;
+        let op = drag::current_operation(&self.ctx);
+        let drop = target.accept(&payload, op)?;
+        let ordinal = drag::next_ordinal(&self.ctx, self.id);
+        drag::register(&self.ctx, self.id, self.response.layer_id, target.mark(&drop), true);
+        drag::take_drop(&self.ctx, self.id, ordinal, op, TypeId::of::<P>()).then_some(drop)
+    }
+
+    fn drag_ended<P: Send + Sync + 'static>(&self) -> Option<DropOperation> {
+        drag::ended::<P>(&self.ctx, self.id)
+    }
+
+    fn scroll_moved(&self, key: PartKey) -> Option<Range<f64>> {
+        let moves = self.scroll_moves.iter().find(|moved| moved.key == key)?;
+        moves.pressed.clone().or_else(|| moves.clicked.clone().filter(|_| self.intents.access_click(key.into())))
+    }
+}
+
+impl CxCore<'_> {
+    /// The active drag payload whose type is `payload` and the pointer in this component's egui layer space.
+    pub(crate) fn dragging_of(&self, payload: TypeId) -> Option<(Arc<dyn Any + Send + Sync>, Pos2)> {
+        let (payload, at) = drag::dragging_of(&self.ctx, payload)?;
+        Some((payload, areas::layer_map(&self.ctx, self.response.layer_id).map_or(at, |map| map.to_layer(at))))
+    }
+
+    /// `Pointer::drop_target` for the payload whose type is `payload_type`, chosen at run time: a collection takes the
+    /// payload types its drop kinds name.
+    pub(crate) fn drop_target_of<T: DropTarget<dyn Any + Send + Sync>>(&mut self, payload_type: TypeId, target: &T) -> Option<T::Drop> {
+        let (payload, at) = self.dragging_of(payload_type)?;
         // Only where the pointer is over this component's visible shapes on its own layer: not under a layer above, not
         // in a clipped-out part. The layer a dragged container moves is not above anything: the pointer is over what
         // lies under it.
@@ -141,28 +175,25 @@ impl Pointer for CxCore<'_> {
             return None;
         }
         let op = drag::current_operation(&self.ctx);
-        let drop = target.accept(&payload, at, op)?;
+        let drop = target.accept(&*payload, at, op)?;
         let ordinal = drag::next_ordinal(&self.ctx, self.id);
         drag::register(&self.ctx, self.id, self.response.layer_id, target.mark(&drop), false);
-        drag::take_drop::<P>(&self.ctx, self.id, ordinal, op).then_some(drop)
+        drag::take_drop(&self.ctx, self.id, ordinal, op, payload_type).then_some(drop)
+    }
+}
+
+/// A target of payload type `P` seen through the payload's erased type.
+struct Typed<'t, P, T>(&'t T, PhantomData<fn(&P)>);
+
+impl<P: 'static, T: DropTarget<P>> DropTarget<dyn Any + Send + Sync> for Typed<'_, P, T> {
+    type Drop = T::Drop;
+
+    fn accept(&self, payload: &(dyn Any + Send + Sync), at: Pos2, op: DropOperation) -> Option<T::Drop> {
+        self.0.accept(payload.downcast_ref::<P>()?, at, op)
     }
 
-    fn window_drop_target<P: Send + Sync + 'static, T: WindowDropTarget<P>>(&mut self, target: &T) -> Option<T::Drop> {
-        let payload = drag::active::<P>(&self.ctx).filter(|_| !drag::moves_viewport(&self.ctx))?;
-        let op = drag::current_operation(&self.ctx);
-        let drop = target.accept(&payload, op)?;
-        let ordinal = drag::next_ordinal(&self.ctx, self.id);
-        drag::register(&self.ctx, self.id, self.response.layer_id, target.mark(&drop), true);
-        drag::take_drop::<P>(&self.ctx, self.id, ordinal, op).then_some(drop)
-    }
-
-    fn drag_ended<P: Send + Sync + 'static>(&self) -> Option<DropOperation> {
-        drag::ended::<P>(&self.ctx, self.id)
-    }
-
-    fn scroll_moved(&self, key: PartKey) -> Option<Range<f64>> {
-        let moves = self.scroll_moves.iter().find(|moved| moved.key == key)?;
-        moves.pressed.clone().or_else(|| moves.clicked.clone().filter(|_| self.intents.access_click(key.into())))
+    fn mark(&self, drop: &T::Drop) -> drag::DropMark {
+        self.0.mark(drop)
     }
 }
 

@@ -5,7 +5,9 @@ use std::hash::{Hash, Hasher};
 
 use craft_behavior::{DisplayOrder, ItemSource};
 use craft_i18n::Collator;
-use craft_ui::contract::{CollectionEvent, ColumnSort, ListDrag, Props as _, ReorderRule, SelectMode, ShowCollection as _, request_rename};
+use craft_ui::contract::{
+    CollectionEvent, ColumnSort, DropAt, DropKind, DropPlace, ListDrag, Props as _, ReorderRule, SelectMode, ShowCollection as _, request_rename,
+};
 use craft_ui::list::ThumbAspect;
 use craft_ui::primitives::ContentPainterCx;
 use craft_ui::primitives::textures::{Priority, TextureKey, ThumbPaint, ThumbRequest, ThumbSource, Thumbnails};
@@ -154,12 +156,12 @@ where
     if let Some(key) = rename {
         request_rename(ui.ctx(), id, &key);
     }
-    let accepts = |drag: &ListDrag<K>, over: Option<&K>, _insert: usize| {
-        if drag.list == id {
-            return user_order;
-        }
-        // Over an empty bin the drop goes into the bin shown.
-        over.is_none_or(|over| model.is_bin(over) && !inside_any(model, over, &drag.keys))
+    let accepts = |_: &ListDrag<K>, _: Option<&K>, _: usize| user_order;
+    // A drag from elsewhere drops into a bin, or into the bin shown when the view is empty.
+    let into_bin = |drag: &ListDrag<K>, at: &DropAt<K>| match at {
+        DropAt::Onto(bin) => model.is_bin(bin) && !inside_any(model, bin, &drag.keys),
+        DropAt::Gap { key, .. } => key.is_none(),
+        _ => false,
     };
     let facts = TileFacts { model, thumbnails, hover_scrub, scrub: scrub.as_ref() };
     let empty = if searching { words.no_matches.clone() } else { words.empty.clone() };
@@ -176,7 +178,9 @@ where
         .rows_stamp(stamp_of(state.shown.as_ref(), &state.search, state.settings.icon_sort.as_ref()))
         .empty(empty)
         .reorder(ReorderRule::new())
-        .accepts(accepts);
+        .accepts(accepts)
+        .takes_drop(DropKind::new(DropPlace::Onto, into_bin))
+        .takes_drop(DropKind::new(DropPlace::Between, into_bin));
     let out = grid.show_items(ui, &cards, &mut |key, _| tile_of(&facts, key));
 
     let mut events: Vec<BinEvent<K>> = Vec::new();
@@ -190,9 +194,9 @@ where
             CollectionEvent::ContextMenu(request) => events.push(BinEvent::ContextMenu(request)),
             CollectionEvent::Delete(keys) => events.push(BinEvent::Remove(keys)),
             CollectionEvent::Reorder(edit) => events.extend(reorder_event(model, state.shown.as_ref(), searching, user_order, edit)),
-            CollectionEvent::Dropped { key, keys, .. } => {
-                let into = key.or_else(|| state.shown.clone());
-                if let Some(items) = drop_items(model, into.as_ref(), &keys) {
+            CollectionEvent::Dropped { at, payload, .. } => {
+                let into = at.key().cloned().or_else(|| state.shown.clone());
+                if let Some(items) = payload.get::<ListDrag<K>>().and_then(|drag| drop_items(model, into.as_ref(), &drag.keys)) {
                     events.push(BinEvent::Drop { items, into });
                 }
             }

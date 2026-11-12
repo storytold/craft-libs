@@ -104,7 +104,7 @@ pub struct OsFiles {
 }
 
 /// What a component registers with `Pointer::drop_target`.
-pub trait DropTarget<P> {
+pub trait DropTarget<P: ?Sized> {
     /// What a drop on this target carries to the component's caller.
     type Drop;
 
@@ -265,8 +265,17 @@ pub fn amend<P: Clone + Send + Sync + 'static>(ctx: &Context, change: impl FnOnc
 
 /// The active drag payload of type `P`, from any viewport. For code without a `Cx`.
 pub fn active<P: Send + Sync + 'static>(ctx: &Context) -> Option<Arc<P>> {
-    let (payload, also) = board(ctx, |board| board.session.as_ref().map(|session| (session.payload.clone(), session.also.clone())))?;
-    payload.downcast::<P>().ok().or_else(|| also?.downcast::<P>().ok())
+    active_of(ctx, TypeId::of::<P>())?.downcast::<P>().ok()
+}
+
+/// The active drag payload whose type is `payload`: the session's own payload, else its `also`. For a target that
+/// picks the payload types it takes at run time.
+pub(crate) fn active_of(ctx: &Context, payload: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
+    let (own, also) = board(ctx, |board| board.session.as_ref().map(|session| (session.payload.clone(), session.also.clone())))?;
+    if Any::type_id(&*own) == payload {
+        return Some(own);
+    }
+    also.filter(|also| Any::type_id(&**also) == payload)
 }
 
 /// How many sessions have started on this context.
@@ -375,9 +384,9 @@ pub fn cross_window_pointer(ctx: &Context, viewport: ViewportId) -> Option<Pos2>
     (source != viewport).then(|| WindowHost::of(ctx).pointer_in(viewport)).flatten()
 }
 
-/// The running session's payload of type `P` and the pointer in screen space.
-pub(crate) fn dragging<P: Send + Sync + 'static>(ctx: &Context) -> Option<(Arc<P>, Pos2)> {
-    let payload = active::<P>(ctx)?;
+/// The running session's payload whose type is `payload` and the pointer in screen space.
+pub(crate) fn dragging_of(ctx: &Context, payload: TypeId) -> Option<(Arc<dyn Any + Send + Sync>, Pos2)> {
+    let payload = active_of(ctx, payload)?;
     Some((payload, pointer::frame(ctx).pos?))
 }
 
@@ -463,9 +472,10 @@ fn released(ctx: &Context) -> bool {
         || board(ctx, |board| board.session.as_ref().is_some_and(|session| session.released.is_some() && session.viewport != viewport))
 }
 
-/// Takes the drop for `owner`'s `ordinal`th target when it won last pass and the session's button was released in this
-/// one: the drop ends the session's chance of another target taking it, and the source reads `op` in the next frame.
-pub(crate) fn take_drop<P: 'static>(ctx: &Context, owner: Id, ordinal: u32, op: DropOperation) -> bool {
+/// Takes the drop of the payload whose type is `payload` for `owner`'s `ordinal`th target when it won last pass and the
+/// session's button was released in this one: the drop ends the session's chance of another target taking it, and the
+/// source reads `op` in the next frame.
+pub(crate) fn take_drop(ctx: &Context, owner: Id, ordinal: u32, op: DropOperation, payload: TypeId) -> bool {
     let won = PerViewport::<Targets>::with(ctx, pass::current_viewport(ctx), |targets| targets.winner == Some((owner, ordinal)));
     if !won || !released(ctx) {
         return false;
@@ -477,7 +487,7 @@ pub(crate) fn take_drop<P: 'static>(ctx: &Context, owner: Id, ordinal: u32, op: 
             return false;
         }
         session.taken = true;
-        board.ended = Some(Ended { source: session.source, payload: TypeId::of::<P>(), op, frame });
+        board.ended = Some(Ended { source: session.source, payload, op, frame });
         true
     })
 }

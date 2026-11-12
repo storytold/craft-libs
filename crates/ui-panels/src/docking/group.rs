@@ -453,7 +453,6 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
                 .shown(active)
                 .tear_off()
                 .natural_height(true)
-                .accept_from(|_| false)
                 .drag_payload(move |drag: &ListDrag<PanelKey>| Some(PanelDrag { panel: drag.grabbed, from, source: Some(size), started }))
                 .show_items(ui, &source, &mut |key, _| {
                     let panel = panels.iter().find(|panel| &panel.key == key);

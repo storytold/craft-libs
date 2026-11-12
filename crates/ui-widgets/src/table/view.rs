@@ -4,14 +4,14 @@
 //! it shows.
 
 use crate::contract::{
-    Bind, BindMut, Collection, CollectionProps, CollectionResponse, ColumnSpec, Common, Component, ContainerProps, Cx, EditResponse, ListDrag,
-    Props as _, Role, SelectMode, Sizing,
+    Bind, BindMut, Collection, CollectionProps, CollectionResponse, ColumnSpec, Common, Component, ContainerProps, Cx, DropKind, EditResponse,
+    ListDrag, Props as _, Role, SelectMode, Sizing,
 };
-use crate::list::{DropTest, ListRow, RowEvent, RowTest, RowText, SourceTest};
+use crate::list::{DropTest, ListRow, RowEvent, RowTest, RowText};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{ItemSource, Metrics, Selection, SpanLayout};
-use egui::{Id, Rect, Ui};
+use egui::{Rect, Ui};
 use std::hash::Hash;
 
 /// The style of the table: it has no look of its own beyond its container's surface.
@@ -57,10 +57,9 @@ pub struct Table<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// Which rows may be dragged.
     #[prop(func = "Fn(&K) -> bool")]
     can_drag: Option<RowTest<'a, K>>,
-    /// Which collections a drag may come from: the test gets the id of the table the drag started in.
-    #[prop(func = "Fn(Id) -> bool")]
-    accept_from: Option<SourceTest<'a>>,
-    /// Where a drag may land: the test gets the drag, the row under the pointer and the position before which the
+    /// What the table takes from drags that did not start in it, in order.
+    drops: Vec<DropKind<'a, K>>,
+    /// Where the table's own drag may land: the test gets the drag, the row under the pointer and the position before which the
     /// dragged rows would go. A refused spot shows no drop mark.
     #[prop(func = "Fn(&ListDrag<K>, Option<&K>, usize) -> bool")]
     accepts: Option<DropTest<'a, K>>,
@@ -82,11 +81,18 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Table<'a, K> {
             can_rename: None,
             rename_draft: None,
             can_drag: None,
-            accept_from: None,
+            drops: Vec::new(),
             accepts: None,
             takes_files: false,
         }
         .label(label)
+    }
+
+    /// Takes the drops of `kind` from drags that did not start in the table; kinds given earlier come first.
+    #[must_use]
+    pub fn takes_drop(mut self, kind: DropKind<'a, K>) -> Self {
+        self.drops.push(kind);
+        self
     }
 }
 
@@ -142,8 +148,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for Table<'_, K> {
         self.can_drag.as_ref().is_none_or(|test| test.passes(key))
     }
 
-    fn accept_from(&self, from: Id) -> bool {
-        self.accept_from.as_ref().is_none_or(|test| test.passes(from))
+    fn drops(&self) -> &[DropKind<'_, K>] {
+        &self.drops
     }
 
     fn accepts(&self, drag: &ListDrag<K>, over: Option<&K>, insert: usize) -> bool {

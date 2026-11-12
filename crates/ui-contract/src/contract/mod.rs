@@ -49,8 +49,8 @@ pub use body::REORDER_BAND;
 pub use body::pad_of;
 pub use collection::{
     ActivateOn, CollectionEvent, CollectionProps, CollectionResponse, ColumnAlign, ColumnEvent, ColumnKind, ColumnSort, ColumnSpec,
-    ContextMenuRequest, DragPayload, HeaderMenuRequest, ItemKeys, LeadOnOpen, LeadSource, ListDrag, OpenChange, PendingDrop, Rename, ReorderMove,
-    ReorderRule, RowPressed, RowState, SelectMode, ShownRow, SpaceAction, ToggleColumn, ToggleEdit,
+    ContextMenuRequest, DragPayload, DropAt, DropKind, DropPayload, DropPlace, HeaderMenuRequest, ItemKeys, LeadOnOpen, LeadSource, ListDrag,
+    OpenChange, PendingDrop, Rename, ReorderMove, ReorderRule, RowPressed, RowState, SelectMode, ShownRow, SpaceAction, ToggleColumn, ToggleEdit,
 };
 #[doc(hidden)]
 pub use container::InBar;
@@ -567,15 +567,16 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
         true
     }
 
-    /// Whether a drag from the collection `from` may drop here.
-    fn accept_from(&self, _from: Id) -> bool {
+    /// Whether the collection's own dragged items may land before `insert` (a position of the display order, `over` is
+    /// the item the pointer is on, none over an empty collection). A refused spot shows no drop mark.
+    fn accepts(&self, _drag: &ListDrag<Self::Key>, _over: Option<&Self::Key>, _insert: usize) -> bool {
         true
     }
 
-    /// Whether the dragged items may land before `insert` (a position of the display order, `over` is the item the
-    /// pointer is on, none over an empty collection). A refused spot shows no drop mark.
-    fn accepts(&self, _drag: &ListDrag<Self::Key>, _over: Option<&Self::Key>, _insert: usize) -> bool {
-        true
+    /// What the collection takes from drags that did not start in it, in order: the first kind that takes the drag's
+    /// payload at the place under the pointer gets the drop, reported as `CollectionEvent::Dropped`. None by default.
+    fn drops(&self) -> &[DropKind<'_, Self::Key>] {
+        &[]
     }
 
     /// Whether the collection takes files dragged in from the OS: a drop reports `CollectionEvent::FilesDropped` at the

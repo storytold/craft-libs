@@ -2,7 +2,8 @@
 
 use craft_behavior::{DisplayOrder, ItemSource, Selection, SpanLayout};
 use craft_ui::contract::{
-    Bind, BindMut, Collection, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, ItemOutput, Outcome, Role, SelectMode,
+    Bind, BindMut, Collection, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, DropKind, ItemOutput, ListDrag, Outcome,
+    Role, SelectMode,
 };
 use craft_ui::style::StyleCx;
 use craft_ui_test_kit::contract::PlainStyle;
@@ -166,6 +167,7 @@ pub struct List<'a> {
     selection: Option<Bind<'a, Selection<usize>>>,
     tree: bool,
     on_empty: Option<&'a Cell<Rect>>,
+    drops: Vec<DropKind<'a, usize>>,
 }
 
 impl<'a> List<'a> {
@@ -177,7 +179,20 @@ impl<'a> List<'a> {
             selection: None,
             tree: false,
             on_empty: None,
+            drops: Vec::new(),
         }
+    }
+
+    /// A row drag also carries `map` of it.
+    pub fn drag_payload<P: Send + Sync + 'static>(mut self, map: impl Fn(&ListDrag<usize>) -> Option<P> + Send + Sync + 'static) -> Self {
+        self.items = self.items.drag_payload(map);
+        self
+    }
+
+    /// Takes the drops of `kind` from drags that did not start in the list.
+    pub fn takes_drop(mut self, kind: DropKind<'a, usize>) -> Self {
+        self.drops.push(kind);
+        self
     }
 
     pub fn reorder(mut self) -> Self {
@@ -274,6 +289,10 @@ impl Collection for List<'_> {
     fn item_layout(&self, source: &dyn ItemSource<usize>, width: f32, _: &StyleCx<'_>) -> SpanLayout {
         let layout = SpanLayout::new(source, width, ROW_H);
         if self.tree { layout.tree() } else { layout }
+    }
+
+    fn drops(&self) -> &[DropKind<'_, usize>] {
+        &self.drops
     }
 
     fn empty(&mut self, _ui: &mut Ui, cx: &mut craft_ui::contract::BodyCx<'_>) {

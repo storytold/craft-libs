@@ -1,5 +1,6 @@
 //! What a collection reports: renames, reorders, drags, toggles, opens, menu requests and column events.
 
+use super::drops::{DropAt, DropPayload};
 use super::props::LeadSource;
 use crate::runtime::drag::OsFile;
 use craft_behavior::{ColumnKey, DropOperation, EditEvent, PartRef, SelectionChange};
@@ -196,17 +197,15 @@ pub enum CollectionEvent<K, E> {
     Reorder(EditEvent<ReorderMove<K>>),
     /// The selected items of a free layout moved by an offset.
     Move(EditEvent<Vec2>),
-    /// A drop from another collection onto an item, between items, or into an empty collection.
+    /// A drop a drop kind took (`Collection::drops`): a payload from a drag that did not start in the collection.
     #[non_exhaustive]
     Dropped {
-        /// The item dropped on; `None` for an empty collection.
-        key: Option<K>,
-        /// The position of the display order the items land before; the source's length drops them after the last item.
-        insert: usize,
+        /// Where it landed.
+        at: DropAt<K>,
         /// What the drop does: move or copy.
         op: DropOperation,
-        /// The dragged items in display order, from the drag session's payload.
-        keys: Vec<K>,
+        /// The payload the kind took, read with `get::<P>()`.
+        payload: DropPayload,
     },
     /// Ctrl or Cmd with the wheel over a collection that `zooms`: the zoom factor of the pass and the pointer it is
     /// about, in screen points.

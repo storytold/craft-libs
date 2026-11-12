@@ -15,10 +15,10 @@ use super::{Tab, TabPartEvent};
 use crate::buttons::IconButton;
 use crate::contract::{
     Access, Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, ContainerProps, ContextMenuRequest,
-    Cx, DropMark, Entry, ListDrag, Name, NoValue, Outcome, OverlayUi, Overlays as _, PartsCx, Pointer as _, Props as _, Role, RowState, SelectMode,
-    Sizing, WindowDropTarget, WordSetCx as _,
+    Cx, DropKind, DropMark, Entry, ListDrag, Name, NoValue, Outcome, OverlayUi, Overlays as _, PartsCx, Pointer as _, Props as _, Role, RowState,
+    SelectMode, Sizing, WindowDropTarget, WordSetCx as _,
 };
-use crate::list::{DropTest, RowTest, SourceTest};
+use crate::list::{DropTest, RowTest};
 use crate::menu::Menu;
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
@@ -279,10 +279,9 @@ pub struct TabStrip<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + '
     /// Which tabs may be dragged.
     #[prop(func = "Fn(&K) -> bool")]
     can_drag: Option<RowTest<'a, K>>,
-    /// Which collections a drag may come from: the test gets the id of the collection the drag started in.
-    #[prop(func = "Fn(Id) -> bool")]
-    accept_from: Option<SourceTest<'a>>,
-    /// Where a drag may land: the test gets the drag, the tab under the pointer and the position before which the
+    /// What the strip takes from drags that did not start in it, in order.
+    drops: Vec<DropKind<'a, K>>,
+    /// Where the strip's own drag may land: the test gets the drag, the tab under the pointer and the position before which the
     /// dragged tabs would go.
     #[prop(func = "Fn(&ListDrag<K>, Option<&K>, usize) -> bool")]
     accepts: Option<DropTest<'a, K>>,
@@ -309,7 +308,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
             shown: None,
             tear_off: false,
             can_drag: None,
-            accept_from: None,
+            drops: Vec::new(),
             accepts: None,
             held: Bind::kept(),
             report: Arc::new(Mutex::new(Report::default())),
@@ -328,6 +327,13 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
     #[must_use]
     pub fn drag_payload<P: Send + Sync + 'static>(mut self, map: impl Fn(&ListDrag<K>) -> Option<P> + Send + Sync + 'static) -> Self {
         self.items = self.items.drag_payload(map);
+        self
+    }
+
+    /// Takes the drops of `kind` from drags that did not start in the strip; kinds given earlier come first.
+    #[must_use]
+    pub fn takes_drop(mut self, kind: DropKind<'a, K>) -> Self {
+        self.drops.push(kind);
         self
     }
 
@@ -507,8 +513,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Collection 
         self.can_drag.as_ref().is_none_or(|test| test.passes(key))
     }
 
-    fn accept_from(&self, from: Id) -> bool {
-        self.accept_from.as_ref().is_none_or(|test| test.passes(from))
+    fn drops(&self) -> &[DropKind<'_, K>] {
+        &self.drops
     }
 
     fn accepts(&self, drag: &ListDrag<K>, over: Option<&K>, insert: usize) -> bool {

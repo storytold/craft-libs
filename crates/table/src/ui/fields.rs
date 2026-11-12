@@ -8,8 +8,8 @@ use std::sync::Arc;
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, EditEvent, IconId, ItemSource, Mixed};
 use craft_ui::buttons::Button;
 use craft_ui::contract::{
-    CollectionEvent, ColumnKind, ColumnSpec, Pattern, Props as _, Remember, ReorderMove, ReorderRule, Show as _, ShowCollection as _,
-    ShowContainer as _, SweepApply, SweepStep, ToggleColumn, Trigger, clicked,
+    CollectionEvent, ColumnKind, ColumnSpec, DropAt, DropKind, DropPlace, ListDrag, Pattern, Props as _, Remember, ReorderMove, ReorderRule,
+    Show as _, ShowCollection as _, ShowContainer as _, SweepApply, SweepStep, ToggleColumn, Trigger, clicked,
 };
 use craft_ui::display::{Divider, Shade, Text};
 use craft_ui::list::{List, ListRow, ToggleCell, ToggleState};
@@ -528,8 +528,9 @@ impl Model<'_> {
                 .empty(self.words.drop_here.clone())
                 .reorder(ReorderRule::new())
                 .deletable(true)
-                .accept_from(move |from| others.contains(&from))
-                .accepts(move |drag, _, _| values_here || !drag.keys.contains(&Slot::Values))
+                .takes_drop(DropKind::new(DropPlace::Between, move |drag: &ListDrag<Slot>, _| {
+                    others.contains(&drag.list) && (values_here || !drag.keys.contains(&Slot::Values))
+                }))
                 .show_items(ui, &source, &mut |key, _| match key {
                     Slot::Field(field) => ListRow::new(field.clone()),
                     Slot::Values => ListRow::new(self.words.values_field.clone()),
@@ -537,7 +538,11 @@ impl Model<'_> {
             for event in out.events {
                 match event {
                     CollectionEvent::Reorder(change) => edits.borrow_mut().extend(self.reordered(&slots, area, change)),
-                    CollectionEvent::Dropped { keys, insert, .. } => edits.borrow_mut().push(self.dropped(&slots, area, insert, &keys)),
+                    CollectionEvent::Dropped { at: DropAt::Gap { insert, .. }, payload, .. } => {
+                        if let Some(drag) = payload.get::<ListDrag<Slot>>() {
+                            edits.borrow_mut().push(self.dropped(&slots, area, insert, &drag.keys));
+                        }
+                    }
                     CollectionEvent::ContextMenu(request) => cx.keep::<OpenMenu>().target = Some(request.key),
                     CollectionEvent::Delete(keys) => {
                         let removed =
