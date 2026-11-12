@@ -2,13 +2,16 @@
 //! JPEG, layered TIFF, Targa and DDS are one form over four parameter lists; OK and Cancel, Enter and Escape come from
 //! `ParamDialog`, and Cancel abandons the save.
 
-use crate::contract::{Bind, Entry, NoValue, Outcome, Show as _};
+use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
 use crate::display::Text;
+use crate::form::Field;
+use crate::layout_components::{Row, Stack};
 use crate::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamResult};
 use crate::pickers::Select;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
-use crate::value_drag::SliderScale;
+use crate::text::NumberField;
+use crate::value_drag::Slider;
 use egui::{Response, Ui};
 use serde::{Deserialize, Serialize};
 
@@ -339,7 +342,7 @@ impl<'a> FormatOptionsDialog<'a> {
             dialog = dialog.opened(open);
         }
         let shown = dialog.show(ui);
-        let result = shown.result.as_ref().map(|result| answer(kind, result));
+        let result = shown.result.as_ref().map(|result| answer(start, result));
         FormatOptionsOutput { response: shown.response, closed: shown.closed, result }
     }
 }
@@ -393,10 +396,12 @@ fn params(words: &FormatOptionsWords, start: FormatOptions) -> Vec<Param> {
     }
 }
 
-/// The JPEG rows: the quality field and slider with the preset list beside them, then the encoding.
+/// The JPEG rows: the quality field with the preset list beside it and the slider across the form under them, then
+/// the encoding.
 fn jpeg_params(words: &FormatOptionsWords, options: JpegOptions) -> Vec<Param> {
     let presets: Vec<(u8, Label)> = JpegPreset::ALL.into_iter().map(|preset| (preset.quality(), preset.label(words))).collect();
-    let preset_name = words.preset.clone();
+    let (quality_name, preset_name) = (words.quality.clone(), words.preset.clone());
+    let start = options.quality;
     let formats = JpegFormat::ALL
         .into_iter()
         .map(|format| {
@@ -410,30 +415,59 @@ fn jpeg_params(words: &FormatOptionsWords, options: JpegOptions) -> Vec<Param> {
         .collect();
     vec![
         Param::section(words.image_options.clone()),
-        Param::new(QUALITY, words.quality.clone(), ParamKind::range(0.0, f64::from(MAX_QUALITY), f64::from(options.quality), SliderScale::Linear))
-            .decimals(0),
-        Param::custom("preset", preset_name.clone(), move |ui, fields, _| preset_row(ui, fields, &preset_name, &presets)),
+        Param::custom(QUALITY, words.quality.clone(), move |ui, fields, _| quality_rows(ui, fields, &quality_name, &preset_name, &presets, start))
+            .full_width(),
         Param::section(words.format_options.clone()),
-        Param::new(FORMAT, words.format_options.clone(), ParamKind::choice(formats, Some(options.format.id().to_owned()))),
+        Param::new(FORMAT, words.format_options.clone(), ParamKind::radio(formats, Some(options.format.id().to_owned()))),
     ]
 }
 
-/// The preset list: it shows the preset the quality falls in; only a pick changes the quality.
-fn preset_row(ui: &mut Ui, fields: &mut DialogFields, name: &Label, presets: &[(u8, Label)]) -> Response {
-    let quality = fields.int(QUALITY).map_or(DEFAULT_QUALITY, |quality| quality.clamp(0, i64::from(MAX_QUALITY)) as u8);
-    let current = jpeg_quality_preset(quality).quality();
-    let entries: Vec<Entry<u8>> = presets.iter().map(|(value, label)| Entry::new(*value, label.clone())).collect();
-    let shown = Select::new(name.clone(), Bind::given(current), &entries).show(ui);
-    if let Some(picked) = shown.value() {
-        fields.set(QUALITY, FieldValue::Int(i64::from(*picked)));
-    }
-    shown.response
+/// The quality in `fields`, else `start`, the quality the dialog opened with.
+fn quality_of(fields: &DialogFields, start: u8) -> u8 {
+    fields.int(QUALITY).map_or(start, |quality| quality.clamp(0, i64::from(MAX_QUALITY)) as u8)
 }
 
-/// The options a dialog of `kind` confirmed.
-fn answer(kind: ExportOptionsKind, result: &ParamResult) -> FormatOptions {
+/// The quality rows: the field named `name` and the preset list on one line, the slider across the form under them.
+/// The list shows the preset the quality falls in; only a pick changes the quality.
+fn quality_rows(ui: &mut Ui, fields: &mut DialogFields, name: &Label, preset: &Label, presets: &[(u8, Label)], start: u8) -> Response {
+    let quality = quality_of(fields, start);
+    let max = f64::from(MAX_QUALITY);
+    let current = jpeg_quality_preset(quality).quality();
+    let entries: Vec<Entry<u8>> = presets.iter().map(|(value, label)| Entry::new(*value, label.clone())).collect();
+    let mut set = None;
+    let shown = Stack::new().fill_width().show(ui, |ui, _| {
+        Field::new(name.clone()).id_salt("quality").show(ui, |ui, _| {
+            Row::new().show(ui, |ui, _| {
+                let typed = NumberField::new(name.clone(), Bind::given(Some(f64::from(quality))))
+                    .range(0.0..=max)
+                    .step(1.0)
+                    .fixed_decimals(0)
+                    .commit_decimals(0)
+                    .id_salt("field")
+                    .show(ui);
+                if let Some(Some(value)) = typed.edit.value() {
+                    set = Some(value.round() as u8);
+                }
+                if let Some(picked) = Select::new(preset.clone(), Bind::given(current), &entries).id_salt("preset").show(ui).value() {
+                    set = Some(*picked);
+                }
+            });
+        });
+        let slid = Slider::new(Bind::given(f64::from(quality)), 0.0..=max).step(1.0).label(name.clone()).id_salt("slider").show(ui);
+        if let Some(value) = slid.value() {
+            set = Some(value.round() as u8);
+        }
+    });
+    if let Some(quality) = set {
+        fields.set(QUALITY, FieldValue::Int(i64::from(quality.min(MAX_QUALITY))));
+    }
+    shown.output
+}
+
+/// The options a dialog that opened with `start` confirmed.
+fn answer(start: FormatOptions, result: &ParamResult) -> FormatOptions {
     let fields = &result.fields;
-    match kind {
+    match start.kind() {
         ExportOptionsKind::Tiff => FormatOptions::Tiff(TiffOptions {
             discard_layers: fields.bool(DISCARD).unwrap_or_default(),
             dont_show_again: fields.bool(DONT_SHOW).unwrap_or_default(),
@@ -446,7 +480,7 @@ fn answer(kind: ExportOptionsKind, result: &ParamResult) -> FormatOptions {
             mipmaps: fields.bool(MIPMAPS).unwrap_or_default(),
         }),
         _ => {
-            let quality = fields.int(QUALITY).map_or(DEFAULT_QUALITY, |quality| quality.clamp(0, i64::from(MAX_QUALITY)) as u8);
+            let quality = quality_of(fields, if let FormatOptions::Jpeg(options) = start { options.quality } else { DEFAULT_QUALITY });
             let format = fields.text(FORMAT).map(JpegFormat::from_id).unwrap_or_default();
             FormatOptions::Jpeg(JpegOptions { quality, format })
         }
