@@ -73,7 +73,7 @@ pub fn options_bar(ui: &mut Ui, viewer: &mut Viewer) {
     let mut more = None;
     let Viewer { env, more_open, variants, preview, workspace: shown, .. } = viewer;
     Bar::new("Appearance", BarKind::Options)
-        .trailing(|ui| {
+        .trailing(|ui, _| {
             IconButton::command(IconId::new("undo"), GalleryCommands::ResetLayout).show(ui);
             choose(ui, "Workspace", shown, &workspaces);
         })

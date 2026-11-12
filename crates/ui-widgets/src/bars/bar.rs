@@ -6,6 +6,7 @@ use crate::contract::{
     Access, BodyCx, BodyLayout, Common, Component, Container, ContainerProps, Cx, EndRegion, Gap, InBar, NoValue, Outcome, Pad, Politeness,
     Props as _, Role, Scroll, Show as _, ShowContainer as _, Sizing, WordSetCx as _,
 };
+use crate::layout::RowAlign;
 use crate::layout_components::Row;
 use crate::runtime::access::Name;
 use crate::runtime::commands::{CommandSet as _, Commands as _};
@@ -17,7 +18,7 @@ use egui::{Response, Ui};
 use std::num::NonZeroU8;
 
 /// The trailing group's content.
-type TrailingFn<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
+type TrailingFn<'a> = Box<dyn FnMut(&mut Ui, &mut BodyCx<'_>) + 'a>;
 
 /// What a bar is for; it picks the bar's role, spacing and name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -129,6 +130,14 @@ impl<'a> Bar<'a> {
         self
     }
 
+    /// Places the members of a bar of one row along it by `align` (`Start` by default): a transport bar centres its
+    /// buttons in the room its end region leaves.
+    #[must_use]
+    pub fn align(mut self, align: RowAlign) -> Self {
+        self.props.layout = self.props.layout.clone().align(align);
+        self
+    }
+
     /// Makes each member its own Tab stop, in reading order, as media controls are; the arrows no longer move between
     /// them.
     #[must_use]
@@ -147,9 +156,10 @@ impl<'a> Bar<'a> {
     }
 
     /// Ends the bar with a group of controls that stays at the reading end, outside the scroll, while the members
-    /// before it scroll. The group sits after the cancel and commit buttons.
+    /// before it scroll. The group sits after the cancel and commit buttons and gets the bar's body context, so it can
+    /// read and write the state the body reads. In a measuring run it runs before the body.
     #[must_use]
-    pub fn trailing(mut self, group: impl FnMut(&mut Ui) + 'a) -> Self {
+    pub fn trailing(mut self, group: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a) -> Self {
         self.trailing = Some(Box::new(group));
         self.props = self.props.end(EndRegion::new().gap(Gap::Stack));
         self
@@ -215,7 +225,7 @@ impl Component for Bar<'_> {
 impl Container for Bar<'_> {
     /// The cancel button and the commit button, then the trailing group, on one row as the body's members are, so a
     /// rule in the group is as tall as the row.
-    fn end(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
+    fn end(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         let (commit_cancel, trailing) = (&self.commit_cancel, &mut self.trailing);
         Row::new().show(ui, |ui, _| {
             if let Some((commit, cancel)) = commit_cancel {
@@ -223,7 +233,7 @@ impl Container for Bar<'_> {
                 IconButton::command(IconId::new("check"), BarCommands::Commit).label(commit.clone()).show(ui);
             }
             if let Some(group) = trailing {
-                group(ui);
+                group(ui, cx);
             }
         });
     }

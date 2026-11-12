@@ -7,14 +7,16 @@ use craft_behavior::{EditEvents, IconId};
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::{Button, IconButton, ToggleButton};
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Held, NoValue, Outcome, Pattern, PopupKind, Props, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, BodyCx, Held, NoValue, Outcome, Pattern, PopupKind, Props, Show as _, ShowContainer as _, clicked};
 use craft_ui::display::{Divider, Text};
+use craft_ui::layout::RowAlign;
 use craft_ui::popover::Popover;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::memory::Remember as _;
 use craft_ui::style::TypeRole;
 use craft_ui::value_drag::Slider;
 use egui::{Response, Ui};
+use std::cell::RefCell;
 
 /// How far the arrows and the seek keys move the position, in seconds.
 const NUDGE: f64 = 0.25;
@@ -214,9 +216,9 @@ impl Outcome for TransportBarOutput {
 #[derive(Clone, Debug, Default)]
 struct EditorOpen(bool);
 
-/// A monitor's transport row (Premiere's, as FilmCraft draws it): a tool `Bar` of icon buttons, Pause in place of
-/// Play while playing, Loop pressed while on, and with `editable` a "+" button editor at the end (a popover with a
-/// checkbox per button and Reset).
+/// A monitor's transport row (Premiere's, as FilmCraft draws it): a tool `Bar` of icon buttons centred in the room the
+/// editor leaves, Pause in place of Play while playing, Loop pressed while on, and with `editable` a "+" button editor
+/// at the end edge (a popover with a checkbox per button and Reset).
 ///
 /// - Keyboard and AccessKit are the bar's: buttons named by their tooltips, Space and Enter press. The keys in the
 ///   tooltips (Space, I, O, Left, Right) are the app's shortcuts, not handled here.
@@ -250,12 +252,47 @@ impl<'a> TransportBar<'a> {
     pub fn show(self, ui: &mut Ui) -> TransportBarOutput {
         let TransportBar { label, buttons, settings, playing, looping, editable } = self;
         let words = Env::of(ui).words::<TransportWords>();
-        let mut held = settings.map(Held::new);
+        // The editor in the end region writes the settings the body reads; in a measuring run it runs first.
+        let held = RefCell::new(settings.map(Held::new));
+        let editor = editable && held.borrow().is_some();
         let (mut pressed, mut changed) = (None, false);
-        let shown = Bar::new(label.clone(), BarKind::Tool).show(ui, |ui, cx| {
-            let before = held.as_mut().and_then(|held| held.read(cx)).unwrap_or_default();
+        let trailing = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
+            let mut held = held.borrow_mut();
+            let Some(held) = held.as_mut() else { return };
+            let before = held.read(cx).unwrap_or_default();
             let mut next = before.clone();
-            for button in buttons.iter().filter(|button| !before.hidden.contains(button)) {
+            let opener = IconButton::new(IconId::new("plus")).label(words.button_editor.clone()).popup(PopupKind::Dialog).show(ui);
+            let mut open = cx.keep::<EditorOpen>().0;
+            if clicked(&opener) {
+                open = !open;
+            }
+            Popover::new(words.button_editor.clone(), Bind::bound(&mut open)).opened_by(&opener).show(ui, |ui, _| {
+                for button in buttons {
+                    let mut visible = !next.hidden.contains(button);
+                    let edit = Checkbox::new(Bind::bound(&mut visible)).label(button.label(&words).to_owned()).show(ui);
+                    if !edit.events.is_empty() {
+                        next.hidden.retain(|hidden| hidden != button);
+                        if !visible {
+                            next.hidden.push(button.clone());
+                        }
+                    }
+                }
+                Divider::horizontal().show(ui);
+                if clicked(&Button::new(words.reset.clone()).show(ui)) {
+                    next.hidden.clear();
+                }
+            });
+            cx.keep::<EditorOpen>().0 = open;
+            if next != before {
+                changed = true;
+                held.write(cx, &before, next, label.as_str());
+            }
+        };
+        let bar = Bar::new(label.clone(), BarKind::Tool).align(RowAlign::Center);
+        let bar = if editor { bar.trailing(trailing) } else { bar };
+        let shown = bar.show(ui, |ui, cx| {
+            let shown = held.borrow_mut().as_mut().and_then(|held| held.read(cx)).unwrap_or_default();
+            for button in buttons.iter().filter(|button| !shown.hidden.contains(button)) {
                 let name = button.label(&words).to_owned();
                 if *button == TransportButton::Loop {
                     let mut on = looping;
@@ -265,36 +302,6 @@ impl<'a> TransportBar<'a> {
                     }
                 } else if clicked(&IconButton::new(button.icon(playing)).label(name).show(ui)) {
                     pressed = Some(button.clone());
-                }
-            }
-            if editable && held.is_some() {
-                let opener = IconButton::new(IconId::new("plus")).label(words.button_editor.clone()).popup(PopupKind::Dialog).show(ui);
-                let mut open = cx.keep::<EditorOpen>().0;
-                if clicked(&opener) {
-                    open = !open;
-                }
-                Popover::new(words.button_editor.clone(), Bind::bound(&mut open)).opened_by(&opener).show(ui, |ui, _| {
-                    for button in buttons {
-                        let mut visible = !next.hidden.contains(button);
-                        let edit = Checkbox::new(Bind::bound(&mut visible)).label(button.label(&words).to_owned()).show(ui);
-                        if !edit.events.is_empty() {
-                            next.hidden.retain(|hidden| hidden != button);
-                            if !visible {
-                                next.hidden.push(button.clone());
-                            }
-                        }
-                    }
-                    Divider::horizontal().show(ui);
-                    if clicked(&Button::new(words.reset.clone()).show(ui)) {
-                        next.hidden.clear();
-                    }
-                });
-                cx.keep::<EditorOpen>().0 = open;
-            }
-            if next != before {
-                changed = true;
-                if let Some(held) = held.as_mut() {
-                    held.write(cx, &before, next, label.as_str());
                 }
             }
         });

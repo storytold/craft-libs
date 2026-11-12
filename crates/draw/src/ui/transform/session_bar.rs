@@ -10,7 +10,7 @@ use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::IconButton;
 use craft_ui::canvas::RulerText;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Entry, Outcome, Props as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, BodyCx, Entry, Outcome, Props as _, Show as _, ShowContainer as _, clicked};
 use craft_ui::display::Divider;
 use craft_ui::runtime::env::{Env, Label, UnitKind};
 use egui::{Response, Ui};
@@ -170,7 +170,7 @@ impl<'a, W: TransformWarp> TransformBar<'a, W> {
         let mut unit_picked = None;
         let mut switched = false;
         // Reset warp and the mode switch stay in view after commit and cancel while the fields scroll.
-        let trailing = |ui: &mut Ui| {
+        let trailing = |ui: &mut Ui, _: &mut BodyCx<'_>| {
             if warping {
                 let reset = IconButton::new(IconId::new("undo")).label(words.reset_warp.clone()).show(ui);
                 reset_warp = clicked(&reset);

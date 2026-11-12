@@ -293,7 +293,7 @@ fn status_bar(ui: &mut Ui, state: &mut MockState) {
     let layer_count = words.layer_count.text(layers, &env.format().integer(layers));
     let mut chosen = None;
     let _ = Bar::new("Status", BarKind::Status)
-        .trailing(|ui| {
+        .trailing(|ui, _| {
             Link::new(words.cpu_rendering.clone()).tone(Tone::Warn).show(ui);
         })
         .show(ui, |ui, _| {

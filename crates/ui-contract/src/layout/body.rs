@@ -832,9 +832,11 @@ pub(crate) fn run_body_measured<R>(
                 RowAlign::Start | RowAlign::SpaceBetween => None,
                 RowAlign::Center | RowAlign::End => {
                     let last = this_pass(&ctx, sizing, id);
-                    // Without a measuring run the block is placed as `Start`.
-                    last.filter(|last| last.x > 0.0 && last.x < room.width()).map(|last| {
-                        let spare = room.width() - last.x;
+                    // In a body that scrolls along x the band is the width its view shows, not the scroll region.
+                    let band = if Env::of(ui).unbounded.0 { shrink_room(ui) } else { room.width() };
+                    // Without a measuring run, or in a band without an end, the block is placed as `Start`.
+                    last.filter(|last| band.is_finite() && last.x > 0.0 && last.x < band).map(|last| {
+                        let spare = band - last.x;
                         let lead = if *align == RowAlign::Center { spare / 2.0 } else { spare };
                         Flow::new(room, rtl).take_start(lead).1.rect()
                     })

@@ -176,7 +176,7 @@ fn status_fixture(message: &'static str, cancelled: Rc<Cell<bool>>, seen: Rc<Cel
     Fixture::new(move |ui| {
         let (mut progress, mut link) = (Rect::NOTHING, Rect::NOTHING);
         let shown = Bar::new("Status", BarKind::Status)
-            .trailing(|ui| {
+            .trailing(|ui, _| {
                 let output = StatusProgress::new("Blur", Some(0.45)).cancel("Cancel").show(ui);
                 if output.cancelled {
                     cancelled.set(true);
@@ -238,7 +238,7 @@ fn readout_texts(width: f32) -> Vec<(String, bool)> {
         let canvas = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(800.0, 600.0));
         let view = CanvasView::new(canvas, Point::new(1000.0, 750.0), 0.6667);
         Bar::new("Status", BarKind::Status)
-            .trailing(|ui| {
+            .trailing(|ui, _| {
                 Link::new("CPU Rendering").tone(Tone::Warn).show(ui);
             })
             .show(ui, |ui, _| {

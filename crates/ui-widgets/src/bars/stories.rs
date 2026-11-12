@@ -77,7 +77,7 @@ fn bar_captioned(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let themes = [Entry::new(0u8, "ArtCraft"), Entry::new(1, "Paper")];
     let modes = [Entry::new(0u8, "Light"), Entry::new(1, "Dark"), Entry::new(2, "System")];
     Bar::new("Appearance", BarKind::Options)
-        .trailing(|ui| {
+        .trailing(|ui, _| {
             Field::new("Workspace").sizing(Sizing::Content).show(ui, |ui, _| Segmented::new("Workspace", Bind::given(0u8), &modes).show(ui));
         })
         .show(ui, |ui, _| {
@@ -96,7 +96,7 @@ fn status_bar(ui: &mut Ui, data: &mut StoryData, message: StatusMessage, width: 
     let shown = crate::testing::memory::scoped(ui, |ui| {
         ui.set_max_width(width.min(ui.available_width()));
         Bar::new("Status", BarKind::Status)
-            .trailing(|ui| {
+            .trailing(|ui, _| {
                 Link::new("CPU Rendering").tone(Tone::Warn).show(ui);
             })
             .show(ui, |ui, _| {
@@ -133,7 +133,7 @@ fn status_progress(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     crate::testing::memory::scoped(ui, |ui| {
         ui.set_max_width(STATUS_WIDTH.min(ui.available_width()));
         Bar::new("Status", BarKind::Status)
-            .trailing(|ui| {
+            .trailing(|ui, _| {
                 StatusProgress::new("Blur", Some(0.45)).cancel("Cancel").show(ui);
             })
             .show(ui, |_, _| {})
