@@ -239,7 +239,7 @@ struct Geometry {
 
 impl Geometry {
     fn new(rect: Rect, rows: StopRows, midpoints: bool, opacity_midpoints: bool, style: &GradientBarStyle) -> Self {
-        let top = Self::top(rows, midpoints, style);
+        let top = Self::top(rows, midpoints, opacity_midpoints, style);
         let ramp = Rect::from_min_size(
             pos2(rect.left() + style.inset, rect.top() + top),
             vec2((rect.width() - 2.0 * style.inset).max(1.0), style.ramp_height),
@@ -258,18 +258,31 @@ impl Geometry {
         }
     }
 
-    /// The height above the ramp.
-    fn top(rows: StopRows, midpoints: bool, style: &GradientBarStyle) -> f32 {
-        match rows {
-            StopRows::Split => style.pointer + style.marker + 1.0,
-            _ if midpoints => 3.0 * style.diamond + 1.0,
-            _ => 1.0,
-        }
+    /// The room a midpoint diamond takes from the ramp's edge: its centre is two radii out.
+    fn diamond_room(style: &GradientBarStyle) -> f32 {
+        3.0 * style.diamond
+    }
+
+    /// The height above the ramp: the opacity markers of a split bar, and the diamonds of the row above the ramp (the
+    /// opacity row of a split bar, else the colour row).
+    fn top(rows: StopRows, midpoints: bool, opacity_midpoints: bool, style: &GradientBarStyle) -> f32 {
+        let (markers, diamonds) = match rows {
+            StopRows::Split => (style.pointer + style.marker, midpoints && opacity_midpoints),
+            _ => (0.0, midpoints),
+        };
+        let diamonds = if diamonds { Self::diamond_room(style) } else { 0.0 };
+        markers.max(diamonds) + 1.0
+    }
+
+    /// The height under the ramp: the colour markers, and in a split bar the colour row's diamonds.
+    fn bottom(rows: StopRows, midpoints: bool, style: &GradientBarStyle) -> f32 {
+        let diamonds = if midpoints && rows == StopRows::Split { Self::diamond_room(style) } else { 0.0 };
+        (style.pointer + style.marker).max(diamonds) + 1.0
     }
 
     /// The height of the bar.
-    fn height(rows: StopRows, midpoints: bool, style: &GradientBarStyle) -> f32 {
-        Self::top(rows, midpoints, style) + style.ramp_height + style.pointer + style.marker + 1.0
+    fn height(rows: StopRows, midpoints: bool, opacity_midpoints: bool, style: &GradientBarStyle) -> f32 {
+        Self::top(rows, midpoints, opacity_midpoints, style) + style.ramp_height + Self::bottom(rows, midpoints, style)
     }
 
     /// The rows the bar shows, top first.
@@ -697,7 +710,7 @@ impl<P: Clone + Send + Sync + 'static> Component for GradientBar<'_, P> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let width = cx.room.filter(|room| room.is_finite()).unwrap_or(cx.style.length);
-        Vec2::new(width, Geometry::height(self.rows(), self.midpoints, cx.style))
+        Vec2::new(width, Geometry::height(self.rows(), self.midpoints, self.opacity_midpoints, cx.style))
     }
 
     fn fills(&self) -> Option<Axis> {

@@ -116,3 +116,13 @@ fn a_drag_past_a_neighbour_is_one_gesture_and_the_selection_follows_the_stop() {
     assert_eq!(events.iter().filter(|e| **e == "begin").count(), 1, "one gesture");
     assert!(matches!(events.last(), Some(&"commit") | Some(&"set")), "{events:?}");
 }
+
+#[trial]
+fn a_split_bar_holds_its_midpoint_diamonds_inside_its_rect() {
+    let rig = rig(red_to_blue(), StopRules::default(), false);
+    let bar = rig.marker("Gradient").rect;
+    for name in ["Midpoint 1", "Opacity midpoint 1"] {
+        let diamond = rig.marker(name).rect;
+        assert!(bar.contains_rect(diamond), "{name} {diamond:?} lies inside the bar {bar:?}");
+    }
+}
