@@ -76,6 +76,10 @@ pub enum Error {
     /// A flat document that is no `office:document`, or not UTF-8.
     #[error("not a flat OpenDocument file ({0})")]
     Flat(&'static str),
+    /// A manifest that [`Manifest::parse_strict`] refuses: malformed XML, a document type
+    /// declaration, a root that is no `manifest:manifest`, or more entries than it reads.
+    #[error("the package's manifest is not valid ({0})")]
+    Manifest(String),
 }
 
 impl Error {

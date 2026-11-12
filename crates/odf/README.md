@@ -7,7 +7,7 @@ this crate reads and writes that container and nothing inside it.
 | Module | What it does |
 | --- | --- |
 | `Package`, `PackageWriter` | The ZIP container: the `mimetype` file, the manifest, the files, within `Limits`. |
-| `Manifest` | `META-INF/manifest.xml`: each file's media type, and how an encrypted file is encrypted. Read by namespace, whatever prefix the file uses. |
+| `Manifest` | `META-INF/manifest.xml`: each file's media type, and how an encrypted file is encrypted. Read by namespace, whatever prefix the file uses; `parse_strict` / `Package::manifest_strict` refuse a damaged one instead of reading what they can. |
 | `crypt` | Password-protected packages: AES-256-CBC, SHA-256 start key, PBKDF2 (HMAC-SHA-1), SHA-256 or SHA-1 checksums. A package in, a package out. |
 | `flat` | Flat single-file documents (`.fodt`, `.fods`, `.fodp`, `.fodg`): one `office:document` taken apart into a package's files, and a package put together into one. |
 | `zip_guard` | Refuses a ZIP whose end record declares too many entries, before `zip` reserves room for them. |
