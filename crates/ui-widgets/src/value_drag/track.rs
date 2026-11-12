@@ -255,6 +255,16 @@ pub(crate) fn paint_marks(draw: &Draw<'_>, look: &TrackLook, marks: &Marks, scal
     }
 }
 
+/// The two ends of a trimmed span (`start`, `end`), each a line `height` high across the middle of the track in
+/// `color`. An end outside the scale's range is not drawn.
+pub(crate) fn paint_trim(draw: &Draw<'_>, (start, end): (f64, f64), scale: &Scale, along: Along, height: f32, color: StyleColor) {
+    let middle = along.area.center().y;
+    for value in [start, end].into_iter().filter(|value| (scale.min..=scale.max).contains(value)) {
+        let x = along.x(scale.position(value));
+        draw.stroke(&PaintShape::Path(vec![Pos2::new(x, middle - height / 2.0), Pos2::new(x, middle + height / 2.0)]), StrokeWidth::Thin, color);
+    }
+}
+
 /// The part of the groove painted in `color`, from `from` to `to` along the reading direction, measured from the start edge.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Fill {

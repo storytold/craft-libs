@@ -11,7 +11,7 @@ use crate::contract::{
 };
 use crate::runtime::env::Label;
 use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
-use crate::style::{ComponentStyle, FocusLook, StyleCx, SurfaceStyle, TextLook, TrackLook};
+use crate::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, SurfaceStyle, TextLook, TrackLook};
 use craft_behavior::{Flow, HitLevel, HitPriority, Metrics, PartKey, PressPhase, Proposal, Sense};
 use craft_theme::Stateful;
 use egui::{Pos2, Rect, Vec2};
@@ -46,6 +46,8 @@ pub struct SliderStyle {
     thumb: Vec2,
     /// The length a slider asks for along its axis.
     length: f32,
+    /// The lines at the ends of a trimmed span.
+    trim: StyleColor,
 }
 
 /// The running drag: where the thumb was along the track when it began, and what the press moves.
@@ -93,6 +95,11 @@ pub struct Slider<'a> {
     /// drawn over it.
     #[prop]
     track_face: Option<TrackFace<'a>>,
+    /// The kept part of the range, its ends drawn across the track ([`Slider::trim`]).
+    trim: Option<(f64, f64)>,
+    /// Takes the width its row offers past its length: a seek track along the rest of a bar.
+    #[prop]
+    fill_width: bool,
 }
 
 /// The shape of a slider's thumb.
@@ -125,6 +132,8 @@ impl<'a> Slider<'a> {
             wheel_step: None,
             value_text: None,
             track_face: None,
+            trim: None,
+            fill_width: false,
         }
     }
 
@@ -139,6 +148,14 @@ impl<'a> Slider<'a> {
     /// slider is taller by one caption line. The captions are drawing only: assistive technology gets the value.
     pub fn marks_labelled<L: Into<Label>>(mut self, marks: impl IntoIterator<Item = (f64, L)>) -> Self {
         self.marks.set_labelled(marks);
+        self
+    }
+
+    /// The kept part of the range, from `start` to `end`: a trimmed clip's In and Out on a seek track. Each end is a
+    /// line across the track, a thumb high, in the warning colour; the thumb does not snap to them. An end outside
+    /// the range is not drawn.
+    pub fn trim(mut self, start: f64, end: f64) -> Self {
+        self.trim = Some((start, end));
         self
     }
 
@@ -173,7 +190,12 @@ impl Component for Slider<'_> {
             ring: ThumbRing::new(cx),
             thumb: track::knob_size(cx),
             length,
+            trim: cx.color(cx.tokens.color.status.warn.fg),
         }
+    }
+
+    fn fills(&self) -> Option<craft_behavior::Axis> {
+        self.fill_width.then_some(craft_behavior::Axis::X)
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
@@ -316,6 +338,9 @@ impl Component for Slider<'_> {
         }
         let ink = MarkInk { marks: cx.resolve(&style.track.mark_color), labels: cx.resolve(&style.mark_text.color), role: style.mark_text.role };
         track::paint_marks(&draw, &style.track, &self.marks, &scale, along, cx.rect, &ink);
+        if let Some(span) = self.trim {
+            track::paint_trim(&draw, span, &scale, along, style.thumb.y, style.trim);
+        }
         // A press anywhere on the slider moves the thumb, so hovering anywhere on it lights the thumb.
         let running = cx.gesture().and_then(|_| cx.recall::<Held>().press);
         let hovered = [Self::THUMB, TRACK].into_iter().find_map(|part| cx.hover_pos(part)).and_then(|at| along.pick(false).press(&[centre.x], at.x));

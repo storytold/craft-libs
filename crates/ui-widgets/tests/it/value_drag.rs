@@ -24,12 +24,13 @@ struct Slide {
     range: std::ops::RangeInclusive<f64>,
     step: Option<f64>,
     wheel_step: Option<f64>,
+    trim: Option<(f64, f64)>,
     events: RefCell<Vec<EditEvent<f64>>>,
 }
 
 impl Slide {
     fn new(value: f64) -> Self {
-        Slide { value: RefCell::new(value), range: 0.0..=100.0, step: None, wheel_step: None, events: RefCell::default() }
+        Slide { value: RefCell::new(value), range: 0.0..=100.0, step: None, wheel_step: None, trim: None, events: RefCell::default() }
     }
 
     fn show(&self, ui: &mut Ui) {
@@ -40,6 +41,9 @@ impl Slide {
         }
         if let Some(step) = self.wheel_step {
             slider = slider.wheel_step(step);
+        }
+        if let Some((start, end)) = self.trim {
+            slider = slider.trim(start, end);
         }
         self.events.borrow_mut().extend(slider.show_at(ui, FIELD).events);
     }
@@ -65,7 +69,11 @@ fn drag(frames: &mut Frames, from: Pos2, travel: f32, show: &mut impl FnMut(&mut
 
 /// The value after grabbing the slider's thumb `offset` from its centre and dragging `travel`.
 fn dragged_from(offset: f32, travel: f32) -> f64 {
-    let slide = Slide::new(START);
+    dragged(&Slide::new(START), offset, travel)
+}
+
+/// `slide`'s value after grabbing its thumb `offset` from its centre and dragging `travel`.
+fn dragged(slide: &Slide, offset: f32, travel: f32) -> f64 {
     let mut frames = Frames::new();
     let mut show = |ui: &mut Ui| slide.show(ui);
     frames.idle(3, &mut show);
@@ -88,6 +96,16 @@ fn a_grabbed_slider_thumb_moves_by_the_pointer_travel_and_a_click_on_it_changes_
     frames.idle(3, &mut show);
     pointer::click(&mut frames, FIELD.center() + Vec2::new(3.0, 0.0), &mut show);
     assert_eq!(slide.value(), START, "a click on the thumb leaves the value");
+}
+
+/// A trimmed span's ends are drawn across the track, not stops: a drag that ends beside one lands where the drag
+/// puts it.
+#[trial]
+fn a_drag_that_ends_beside_a_trim_end_does_not_snap_to_it() {
+    let free = dragged_from(0.0, 10.0);
+    let trimmed = Slide { trim: Some((0.0, free + 0.5)), ..Slide::new(START) };
+    let landed = dragged(&trimmed, 0.0, 10.0);
+    assert!((landed - free).abs() < 1e-3, "the drag landed at {landed}, as without the trim ({free}), not on its end");
 }
 
 /// A leaf with parts shown at a rect that is empty, not a number, infinite, over the extent cap, or one point wide

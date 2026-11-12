@@ -333,9 +333,9 @@ impl Outcome for MediaControlsOutput {
 }
 
 /// PowerPoint's media controls under a video or sound on a slide: play or pause, back and forward a quarter second, a
-/// seek track with the trim marks, and the time (`1:05.25` style in the mono role, digits through the units). The
-/// controls are a named toolbar `Bar`, so a press on them never reaches the canvas under them; each button is its own
-/// Tab stop, in reading order. The seek track is a `Slider` (one Tab stop; Left and Right a quarter second, Home and
+/// seek track along the rest of the bar with the trim ends across it, and the time (`1:05.25` style in the mono
+/// role, digits through the units). The controls are a named toolbar `Bar`, so a press on them never reaches the
+/// canvas under them; each button is its own Tab stop, in reading order. The seek track is a `Slider` (one Tab stop; Left and Right a quarter second, Home and
 /// End) reporting an `EditEvent<f64>` gesture in seconds.
 #[derive(Pattern, Props)]
 pub struct MediaControls {
@@ -375,8 +375,11 @@ impl MediaControls {
                 nudge = Some(NUDGE);
             }
             let range = if playable { 0.0..=duration } else { 0.0..=1.0 };
-            let marks: Vec<f64> = trim.filter(|_| playable).map(|(start, end)| [start, end]).into_iter().flatten().collect();
-            let edit = Slider::new(Bind::given(position), range).step(NUDGE).marks(&marks).enabled(playable).label(words.seek.clone()).show(ui);
+            let mut slider = Slider::new(Bind::given(position), range).step(NUDGE).fill_width(true).enabled(playable).label(words.seek.clone());
+            if let Some((start, end)) = trim.filter(|_| playable) {
+                slider = slider.trim(start, end);
+            }
+            let edit = slider.show(ui);
             seek = edit.events;
             Text::new(clock(&units, position)).role(TypeRole::Mono).show(ui);
         });
