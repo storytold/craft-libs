@@ -1,0 +1,75 @@
+[package]
+name = "craft-raw"
+description = "Camera raw files, the file-format layer: container parsing, decompression and the sensor data out as a neutral raw image with its levels, crop, orientation, colour tags and embedded previews. DNG (read and write), Hasselblad 3FR/FFF, MRW, ERF, MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2, Fujifilm RAF, Olympus ORF (uncompressed), Sony ARW, Canon CR3 and Canon CRW so far."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["dng", "jxl", "crw", "hasselblad", "mrw", "erf", "mef", "kodak", "pef", "srw", "cr2", "nef", "rw2", "raf", "orf", "arw", "cr3"]
+## Adobe DNG, reading and writing: uncompressed, lossless JPEG, lossy JPEG, Deflate.
+dng = ["dep:miniz_oxide", "dep:zune-jpeg", "dep:zune-core"]
+## JPEG XL compressed DNGs (DNG 1.7, compression 52546) via jxl-oxide (pure Rust, MIT OR Apache-2.0).
+jxl = ["dng", "dep:jxl-oxide"]
+## Hasselblad 3FR / FFF: the DNG-layout reader plus the embedded 3FR header and the RGB preview.
+hasselblad = ["dng"]
+## Minolta / Konica Minolta MRW.
+mrw = []
+## Epson ERF.
+erf = []
+## Mamiya MEF.
+mef = []
+## Kodak DCS520C raw TIFF.
+kodak = []
+## Pentax PEF: uncompressed and Pentax's Huffman coding.
+pef = []
+## Samsung SRW: the uncompressed variants.
+srw = []
+## Canon CR2: sliced lossless JPEG, and sRAW / mRAW (subsampled YCbCr) as linear RGB.
+cr2 = []
+## Nikon NEF and NRW: uncompressed, packed, Nikon's Huffman coding (lossless and lossy), small raw.
+nef = []
+## Panasonic RW2, Leica RWL and the older Panasonic / Leica RAW: every raw format (packed, 4, 6, 8 and 16-bit words).
+rw2 = []
+## Fujifilm RAF: uncompressed Bayer and X-Trans, lossless and lossy compressed, in-file lens corrections.
+raf = []
+## Olympus / OM System ORF: the uncompressed layouts. Compressed ORF is refused (its embedded preview still reads).
+orf = []
+## Sony ARW, SR2 and SRF: uncompressed, ARW2 (cRAW), lossless JPEG tiles, ARW6 (Compressed RAW 2, RDD 34 LLVC), the encrypted SR2SubIFD, in-file lens corrections.
+arw = []
+## Canon CR3: CRX lossless Bayer and C-RAW, through craft-metadata's CR3 container parser.
+cr3 = ["dep:craft-metadata"]
+## Canon CRW (CIFF) through craft-crw, the one CRW decoder.
+crw = ["dep:craft-crw", "dep:chrono"]
+
+[dependencies]
+craft-tiff = { workspace = true }
+craft-crw = { workspace = true, optional = true }
+# The CR3 container (ISO base media boxes, CMT1-4, tracks, CMP1 / CDI1): the one CR3 parser.
+craft-metadata = { workspace = true, optional = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+rayon = { workspace = true }
+# The plausibility check of a CRW's capture time (AGENTS.md: time goes through chrono).
+chrono = { workspace = true, optional = true }
+# Deflate DNG tiles (Adobe compression 8).
+miniz_oxide = { version = "0.9", optional = true }
+# Lossy DNG tiles (compression 34892): 8-bit baseline JPEG. craft-jpeg covers the JPEG processes baseline
+# decoders do not, and sends baseline frames to one; this is that one.
+zune-jpeg = { version = "0.5", default-features = false, features = ["std", "x86", "neon"], optional = true }
+zune-core = { version = "0.5", default-features = false, features = ["std"], optional = true }
+jxl-oxide = { version = "0.12", default-features = false, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+# The SHA-256 of the SR2 keystream known answer.
+sha2 = { version = "0.10", default-features = false, features = ["std"] }
+# Encodes the lossy-JPEG tiles of the tests.
+jpeg-encoder = { version = "0.7", default-features = false, features = ["std"] }
+# Lossless JPEG XL encoder for the JPEG XL DNG tests.
+zune-jpegxl = { version = "0.5", default-features = false, features = ["std"] }

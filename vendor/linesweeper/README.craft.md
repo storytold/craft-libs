@@ -6,7 +6,8 @@ local patches listed below. `.cargo_vcs_info.json` names the commit it was packa
 names, which is archived; its README says development moved off GitHub.
 
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
-in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
+in the `.crate` archive. The patched files are `src/sweep/sweep_line.rs` and `src/topology.rs`.
+`SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
 hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
 holds `upstream_revision`. `local_patches` describes each local patch.
@@ -15,6 +16,7 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 
 | File | Change |
 |---|---|
+| `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
 | `src/topology.rs` | `Topology::merge_coincident` compares a segment with its nearest west neighbor that an earlier merge did not delete. Before, it used the west neighbor recorded when the segment was created, so a run of three or more coincident segments merged only in pairs: four copies of one square, two in each direction, left 4 segments and 2 zero-area contours instead of none. The `merge_coincident_runs_longer_than_two` test covers that input and three copies, which leave the square once. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:

@@ -36,6 +36,9 @@ impl Plate {
     }
 }
 
+/// The most pixels a plate may hold (one byte each): A2 at 1200 dpi, with room to spare.
+const MAX_PLATE_PIXELS: usize = 1 << 30;
+
 const WIDTH: u16 = 256;
 const HEIGHT: u16 = 257;
 const BITS_PER_SAMPLE: u16 = 258;
@@ -88,8 +91,9 @@ pub fn read(data: &[u8]) -> Result<Plate, Error> {
     };
     let rows_per_strip = one(ROWS_PER_STRIP, Some(height))?.clamp(1, height.max(1));
     let offsets = get(STRIP_OFFSETS)?.ok_or_else(|| bad("missing strip offsets"))?;
-    let size = width.checked_mul(height).ok_or_else(|| bad("plate too large"))?;
-    let mut ink = Vec::with_capacity(size);
+    let size = width.checked_mul(height).filter(|size| *size <= MAX_PLATE_PIXELS).ok_or_else(|| bad("plate too large"))?;
+    let mut ink = Vec::new();
+    ink.try_reserve_exact(size).map_err(|_| bad("plate too large"))?;
     for (strip, offset) in offsets.iter().enumerate() {
         let rows = rows_per_strip.min(height.saturating_sub(strip * rows_per_strip));
         let bytes = data.get(*offset..offset.saturating_add(rows * width)).ok_or_else(|| bad("strip outside the file"))?;
@@ -215,5 +219,7 @@ mod tests {
         // Compression (the fourth entry's value) set to PackBits.
         packed[8 + 2 + 12 * 3 + 8] = 5;
         assert!(read(&packed).unwrap_err().to_string().contains("uncompressed"));
+        // 65535 × 65535 bytes asks for more than the plate budget: refused before any allocation.
+        assert!(read(&encode(u16::MAX, u16::MAX, &[], 1, false)).unwrap_err().to_string().contains("too large"));
     }
 }
