@@ -748,7 +748,7 @@ impl W {
     }
 
     /// The groups of an entity after its common properties; `false` for a kind that has none
-    /// here ([`EntityKind::Other`]).
+    /// here ([`EntityKind::MLeader`] and [`EntityKind::Other`]).
     fn geometry(&mut self, kind: &EntityKind, c: &Common) -> bool {
         match kind {
             EntityKind::Line { start, end } => {
@@ -809,6 +809,37 @@ impl W {
                 self.i(290, i64::from(h.ccw));
                 self.i(280, h.constrain);
             }
+            EntityKind::MLine(m) => {
+                let n = |v: usize| i64::try_from(v).unwrap_or(0);
+                self.sub("AcDbMline");
+                self.s(2, m.style.as_str());
+                self.h(340, m.style_handle.unwrap_or(0));
+                self.f(40, m.scale);
+                self.i(70, m.justification);
+                self.i(71, m.flags);
+                self.i(72, n(m.vertices.len()));
+                self.i(73, m.elements);
+                self.p(10, m.start);
+                if c.extrusion != [0.0, 0.0, 1.0] {
+                    self.p(210, c.extrusion);
+                }
+                for v in &m.vertices {
+                    self.p(11, v.location);
+                    self.p(12, v.direction);
+                    self.p(13, v.miter);
+                    for (k, params) in v.element_params.iter().enumerate() {
+                        self.i(74, n(params.len()));
+                        for x in params {
+                            self.f(41, *x);
+                        }
+                        let fill = v.fill_params.get(k).map_or(&[][..], Vec::as_slice);
+                        self.i(75, n(fill.len()));
+                        for x in fill {
+                            self.f(42, *x);
+                        }
+                    }
+                }
+            }
             EntityKind::Ray { base, direction } | EntityKind::XLine { base, direction } => {
                 self.sub(if matches!(kind, EntityKind::Ray { .. }) { "AcDbRay" } else { "AcDbXline" });
                 self.p(10, *base);
@@ -853,7 +884,7 @@ impl W {
                 }
                 self.p(11, *direction);
             }
-            EntityKind::Other => return false,
+            EntityKind::MLeader(_) | EntityKind::Other => return false,
         }
         true
     }
@@ -872,7 +903,7 @@ fn polyline_subclass(flags: i64) -> (&'static str, &'static str) {
     }
 }
 
-/// The record type of an entity kind; `None` for [`EntityKind::Other`].
+/// The record type of an entity kind; `None` for one the writer leaves out.
 fn kind_name(kind: &EntityKind) -> Option<&'static str> {
     Some(match kind {
         EntityKind::Line { .. } => "LINE",
@@ -884,6 +915,7 @@ fn kind_name(kind: &EntityKind) -> Option<&'static str> {
         EntityKind::Polyline(_) => "POLYLINE",
         EntityKind::Spline(_) => "SPLINE",
         EntityKind::Helix(_) => "HELIX",
+        EntityKind::MLine(_) => "MLINE",
         EntityKind::Ray { .. } => "RAY",
         EntityKind::XLine { .. } => "XLINE",
         EntityKind::Text(_) => "TEXT",
@@ -900,7 +932,7 @@ fn kind_name(kind: &EntityKind) -> Option<&'static str> {
         EntityKind::Image(_) => "IMAGE",
         EntityKind::Wipeout(_) => "WIPEOUT",
         EntityKind::Tolerance { .. } => "TOLERANCE",
-        EntityKind::Other => return None,
+        EntityKind::MLeader(_) | EntityKind::Other => return None,
     })
 }
 
@@ -1019,7 +1051,7 @@ impl Ids {
 /// The tags of one entity (with its vertices or attributes and their SEQEND) for `format`, owned
 /// by `owner`: for a caller that writes its own file around them. Its handle is the entity's, or
 /// one from `next_handle`; followers get handles from `next_handle` too, which is moved past
-/// those used. Empty for [`EntityKind::Other`].
+/// those used. Empty for [`EntityKind::MLeader`] and [`EntityKind::Other`].
 pub fn entity_tags(e: &Entity, format: Format, owner: u64, next_handle: &mut u64) -> Vec<Tag> {
     let mut w = W { v: format, t: Vec::new() };
     let mut ids = Ids { used: HashSet::new(), next: *next_handle, floor: 0 };
@@ -1107,7 +1139,8 @@ const PAPER: &str = "*Paper_Space";
 
 impl Drawing<'_> {
     /// The whole file as tags, ending with `0 EOF`, and how many entities were left out
-    /// ([`EntityKind::Other`], which has no groups to write: pass those in `raw_entities`).
+    /// ([`EntityKind::MLeader`] and [`EntityKind::Other`], which it has no groups for: pass
+    /// those in `raw_entities`).
     pub fn tags(&self) -> (Vec<Tag>, usize) {
         let v = self.format;
         let mut w = W { v, t: Vec::new() };

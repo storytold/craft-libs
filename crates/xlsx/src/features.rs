@@ -649,6 +649,8 @@ pub struct Features {
     pub hyperlinks: Vec<Hyperlink>,
     /// `legacyDrawing/@r:id`: the VML part the sheet's notes and form controls are drawn in.
     pub legacy_drawing: Option<String>,
+    /// `drawing/@r:id`: the drawing part (shapes, pictures, charts).
+    pub drawing: Option<String>,
 }
 
 impl Features {
@@ -674,6 +676,7 @@ impl Features {
                 .map(|h| h.children("hyperlink").filter_map(|e| Hyperlink::read(e, rels)).collect())
                 .unwrap_or_default(),
             legacy_drawing: root.child("legacyDrawing").and_then(|l| l.attr_or_plain("r:id")).map(str::to_string),
+            drawing: root.child("drawing").and_then(|l| l.attr_or_plain("r:id")).map(str::to_string),
         }
     }
 
@@ -709,6 +712,7 @@ impl Features {
             ("rowBreaks", Vec::from_iter(breaks_el("rowBreaks", &p.row_breaks))),
             ("colBreaks", Vec::from_iter(breaks_el("colBreaks", &p.col_breaks))),
             ("legacyDrawing", Vec::from_iter(self.legacy_drawing.as_ref().map(|id| El::new("legacyDrawing").with_attr("r:id", id)))),
+            ("drawing", Vec::from_iter(self.drawing.as_ref().map(|id| El::new("drawing").with_attr("r:id", id)))),
         ]
     }
 }
