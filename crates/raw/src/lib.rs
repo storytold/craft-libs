@@ -662,6 +662,8 @@ fn decode_in(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawImage> {
 }
 
 fn decode_format(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawImage> {
+    // (unused when every format feature is off)
+    let _ = (mode, limits);
     match probe(bytes).ok_or(RawError::NotRaw)? {
         #[cfg(feature = "dng")]
         RawFormat::Dng => dng::decode(bytes, mode, limits),
