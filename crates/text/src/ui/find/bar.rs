@@ -7,7 +7,7 @@ use craft_ui::display::Text;
 use craft_ui::layout_components::Row;
 use craft_ui::menu::Menu;
 use craft_ui::runtime::access::PopupKind;
-use craft_ui::runtime::env::Env;
+use craft_ui::runtime::env::{Env, Units};
 use craft_ui::runtime::focus::{self, FocusTarget};
 use craft_ui::text::TextField;
 use egui::{Response, Ui};
@@ -118,7 +118,8 @@ impl<'a> FindBar<'a> {
     /// Paints the bar and returns what the user asked for.
     pub fn show(self, ui: &mut Ui) -> FindBarOutput {
         let FindBar { query, options, matches, progress, state } = self;
-        let words = Env::of(ui).words::<FindLabels>();
+        let env = Env::of(ui);
+        let (words, units) = (env.words::<FindLabels>(), env.units());
         let mut state = state;
         let opened = state.as_deref().is_some_and(|state| state.opened);
         let mut out = FindBarOutput { search: false, stepped: false, closed: false, response: ui.response() };
@@ -148,7 +149,7 @@ impl<'a> FindBar<'a> {
             if cx.take_cancel() {
                 out.closed = true;
             }
-            let text = count_text(&words, query.trim().is_empty(), matches, progress);
+            let text = count_text(&words, &units, query.trim().is_empty(), matches, progress);
             if !text.is_empty() {
                 Text::new(text).show(ui);
             }
@@ -188,22 +189,21 @@ impl<'a> FindBar<'a> {
 }
 
 /// The bar's count: nothing for an empty query, "Searching… s/p" while pages are being read and nothing is found yet,
-/// "No matches", else "c of n" with a "+" while pages are still being read or a page hit its match limit.
-fn count_text(words: &FindLabels, empty_query: bool, matches: &FindMatches, progress: Option<(usize, usize)>) -> String {
+/// "No matches", else "c of n" with a "+" while pages are still being read or a page hit its match limit. The numbers
+/// are in the user's digits and groups.
+fn count_text(words: &FindLabels, units: &Units, empty_query: bool, matches: &FindMatches, progress: Option<(usize, usize)>) -> String {
     if empty_query {
         return String::new();
     }
+    let number = |n: usize| units.number(n as f64, 0..=0);
     let reading = progress.filter(|(searched, pages)| searched < pages);
     if matches.is_empty() {
         return match reading {
-            Some((searched, pages)) => words.searching.fill(&[("s", &searched.to_string()), ("p", &pages.to_string())]),
+            Some((searched, pages)) => words.searching.fill(&[("s", &number(searched)), ("p", &number(pages))]),
             None => words.no_matches.as_str().to_owned(),
         };
     }
     let current = matches.current().map_or(0, |c| c + 1);
     let more = if reading.is_some() || matches.limit_reached() { "+" } else { "" };
-    {
-        let (current, total) = (current.to_string(), matches.len().to_string());
-        words.count.fill(&[("c", current.as_str()), ("n", total.as_str()), ("more", more)])
-    }
+    words.count.fill(&[("c", &number(current)), ("n", &number(matches.len())), ("more", more)])
 }
