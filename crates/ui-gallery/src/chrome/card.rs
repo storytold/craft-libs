@@ -14,6 +14,7 @@ use craft_ui::contract::Show as _;
 use craft_ui::contract::{CommandSet, Commands as _, Gap, Pad, Props as _, ShowContainer as _, Sizing, StoryLayout, Surface, ThemeScope};
 use craft_ui::display::{InspectLayers, InspectOverlay, Shade, Text};
 use craft_ui::layout_components::{Grid, Stack};
+use craft_ui::runtime::env::Env;
 use craft_ui::runtime::env::with_env;
 use craft_ui::runtime::inspect::{self, Recorded};
 use craft_ui::runtime::layout_memory;
@@ -121,9 +122,6 @@ pub struct CardEvents {
     pub rect: Option<Rect>,
 }
 
-/// The narrowest a column of stories may be, as the old gallery's story grids kept their cases.
-const STORY_MIN_WIDTH: f32 = 240.0;
-
 /// The column lists of story grids, by count.
 static COLUMNS: [ColumnWidth; 4] = [ColumnWidth::fill(1.0); 4];
 
@@ -197,7 +195,10 @@ impl Card<'_> {
             }
             StoryLayout::Columns(most) => {
                 let gap = Gap::Item.points(ui);
-                let fit = ((ui.available_width() + gap) / (STORY_MIN_WIDTH + gap)).floor() as usize;
+                // The narrowest a column of stories may be is the least story width, as the old gallery's grids kept
+                // their cases.
+                let least = Env::of(ui).tokens.size.story.width_min;
+                let fit = ((ui.available_width() + gap) / (least + gap)).floor() as usize;
                 let columns = fit.clamp(1, usize::from(most).clamp(1, COLUMNS.len()));
                 Grid::new(&COLUMNS[..columns]).gap(Gap::Item).fill_width().show(ui, |ui, _| {
                     for story in self.stories {

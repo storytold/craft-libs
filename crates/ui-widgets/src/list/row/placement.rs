@@ -30,7 +30,7 @@ pub(super) struct Sizes {
     pub(super) min_label: f32,
     thumbs: [f32; 3],
     thumb_pad: f32,
-    /// The least height of a row with a thumbnail: `size.thumb_row`.
+    /// The least height of a row with a thumbnail.
     thumb_row: f32,
     pub(super) tight: f32,
     /// The room `space_above` adds: `space.gap.row`.
@@ -56,7 +56,8 @@ impl Sizes {
             min_label: MIN_LABEL_HEIGHTS * control.height,
             thumbs: [thumbs.sm, thumbs.md, thumbs.lg],
             thumb_pad: tokens.space.gap.stack,
-            thumb_row: tokens.size.thumb_row,
+            // A standard control and the panel padding, as the old `thumb_row_min`.
+            thumb_row: tokens.size.control.md + tokens.space.pad.regular,
             tight: tokens.space.gap.tight,
             gap_row: tokens.space.gap.row,
             label_line: tokens.typography.get(role).line_height,
@@ -76,7 +77,7 @@ impl Sizes {
     }
 
     /// The height of a row with a thumbnail of `thumb` and, if `detail`, a detail line: the control height, the
-    /// thumbnail with its padding (at least `size.thumb_row`), or the two lines of text, whichever is tallest.
+    /// thumbnail with its padding (at least `thumb_row`), or the two lines of text, whichever is tallest.
     pub(super) fn height(&self, thumb: ThumbSize, detail: bool) -> f32 {
         let base = match self.side(thumb) {
             0.0 => self.row,

@@ -6,10 +6,10 @@
 use std::fmt::Write as _;
 
 use crate::{
-    BarSizes, CanvasSizes, ColorToken, ControlSizes, DockColumnSizes, Easing, Edge, Elevation, ElevationTokens, FloatSizes, FontSlot, Gaps,
-    HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, Motion, MotionTokens, Pads, PaneSizes, PlotSizes, RadiusSet, RailSizes,
-    RampSizes, Rgba, RowStyle, RulerSizes, RulerTickSizes, ShapeTokens, SizeTokens, SpaceTokens, StrokeTokens, ThumbSizes, Tokens, TypeStyle,
-    TypeTokens, WindowSizes,
+    BarSizes, ColorToken, ControlSizes, DockColumnSizes, Easing, Edge, Elevation, ElevationTokens, FloatSizes, FontSlot, Gaps, HandleSizes, HitSizes,
+    IconSizes, Insets, KnobShape, LengthSizes, Motion, MotionTokens, Pads, PaneSizes, PlotSizes, RadiusSet, RailSizes, RampSizes, Rgba, RowStyle,
+    RulerSizes, RulerTickSizes, ShapeTokens, SizeTokens, SpaceTokens, StorySizes, StrokeTokens, ThumbSizes, Tokens, TypeStyle, TypeTokens,
+    WindowSizes,
 };
 
 /// The text of every token, one `key = value` line each, in a fixed order.
@@ -116,7 +116,6 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
         popup_min,
         scroll_fade,
         thumb: thumbs,
-        thumb_row,
         handle,
         hit,
         checker,
@@ -130,7 +129,7 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
         pane,
         ruler,
         dock,
-        canvas,
+        story,
     } = size;
     let ControlSizes { sm, md } = control;
     out.line("size.control.sm", len(*sm));
@@ -156,7 +155,6 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     out.line("size.thumb.md", len(*md));
     out.line("size.thumb.lg", len(*lg));
     out.line("size.thumb.card", len(*card));
-    out.line("size.thumb_row", len(*thumb_row));
     let HandleSizes { sm, md, ring } = handle;
     out.line("size.handle.sm", len(*sm));
     out.line("size.handle.md", len(*md));
@@ -191,10 +189,10 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     out.line("size.ruler.tick.mid", len(*mid));
     let DockColumnSizes { column } = dock;
     out.line("size.dock.column", len(*column));
-    let CanvasSizes { stage_height, stage_width_min, stage_width_max } = canvas;
-    out.line("size.canvas.stage_height", len(*stage_height));
-    out.line("size.canvas.stage_width_min", len(*stage_width_min));
-    out.line("size.canvas.stage_width_max", len(*stage_width_max));
+    let StorySizes { height, width_min, width_max } = story;
+    out.line("size.story.height", len(*height));
+    out.line("size.story.width_min", len(*width_min));
+    out.line("size.story.width_max", len(*width_max));
 }
 
 fn slot(s: FontSlot) -> &'static str {

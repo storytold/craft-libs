@@ -116,7 +116,6 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.size.thumb.md" Num 12.0..=96.0 => s.thumb.md;
         "base.size.thumb.lg" Num 12.0..=96.0 => s.thumb.lg;
         "base.size.thumb.card" Num 48.0..=512.0 => s.thumb.card;
-        "base.size.thumb_row" Num 16.0..=96.0 => s.thumb_row;
         "base.size.handle.sm" Num 2.0..=32.0 => s.handle.sm;
         "base.size.handle.md" Num 2.0..=32.0 => s.handle.md;
         "base.size.handle.ring" Num 2.0..=64.0 => s.handle.ring;
@@ -139,9 +138,9 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.size.window.cascade" Num 8.0..=96.0 => s.window.cascade;
         "base.size.pane.least" Num 16.0..=128.0 => s.pane.least;
         "base.size.ruler.tick.mid" Num 1.0..=32.0 => s.ruler.tick.mid;
-        "base.size.canvas.stage_height" Num 120.0..=1024.0 => s.canvas.stage_height;
-        "base.size.canvas.stage_width_min" Num 120.0..=1024.0 => s.canvas.stage_width_min;
-        "base.size.canvas.stage_width_max" Num 120.0..=2048.0 => s.canvas.stage_width_max;
+        "base.size.story.height" Num 120.0..=1024.0 => s.story.height;
+        "base.size.story.width_min" Num 120.0..=1024.0 => s.story.width_min;
+        "base.size.story.width_max" Num 120.0..=2048.0 => s.story.width_max;
         "base.size.dock.column" Num 120.0..=640.0 => s.dock.column;
     }
     let sp = &mut b.space;

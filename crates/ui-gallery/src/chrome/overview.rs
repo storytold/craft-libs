@@ -7,26 +7,25 @@ use super::variants;
 use crate::viewer::{Catalog, ComponentInfo, PanelId, TreeKey, by_level, entry_of};
 use craft_behavior::{ColumnWidth, Selection};
 use craft_theme::variant::Tone;
+use craft_theme::{Tokens, TypeRole};
 use craft_ui::contract::{Bind, BodyCx, Entry, Gap, Lazy, Pad, Props as _, Scroll, Show as _, ShowContainer as _, StoryLayout};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::notices::Notice;
 use craft_ui::pickers::Select;
-use craft_ui::runtime::env::WindowKey;
+use craft_ui::runtime::env::{Env, WindowKey};
 use craft_ui::shell::AppShell;
 use craft_ui::style::SurfaceKind;
 use craft_ui::testing::StoryRegistration;
 use egui::Ui;
 
-/// The narrowest a card may be before the cards go to one column: a dock panel of the apps is about this wide, and a
-/// story drawn in less is no longer what the apps show.
-const CARD_MIN_WIDTH: f32 = 290.0;
+/// A card's story row before it ran, in standard control heights (120 at a 24 control).
+const STORY_ROW_IN_CONTROLS: f32 = 5.0;
 
-/// A card's height before it ran, for the rows out of view (`Lazy`'s estimate is the tallest of the row's): its header
-/// band, and a story row as tall as a story of one control under its caption. Rows in view run, so the guess only
-/// places the rows past them until those scroll in.
-const HEADER_GUESS: f32 = 48.0;
-const STORY_ROW_GUESS: f32 = 120.0;
+/// The narrowest a card may be before the cards go to one column: a story at its least width inside the card's padding.
+fn card_min_width(tokens: &Tokens) -> f32 {
+    tokens.size.story.width_min + 2.0 * tokens.space.pad.regular
+}
 
 const ONE: &[ColumnWidth] = &[ColumnWidth::fill(1.0)];
 const TWO: &[ColumnWidth] = &[ColumnWidth::fill(1.0); 2];
@@ -78,13 +77,18 @@ pub struct Spec {
 }
 
 impl Spec {
-    /// The card's height before it ran, from its story rows: one per story, or per row of columns.
-    fn estimate(&self) -> f32 {
+    /// The card's height before it ran, for the rows out of view (`Lazy`'s estimate is the tallest of the row's): its
+    /// header band (a title and a caption line in the card's padding), and a story row per story, or per row of
+    /// columns. Rows in view run, so the guess only places the rows past them until those scroll in.
+    fn estimate(&self, tokens: &Tokens) -> f32 {
+        let type_ = &tokens.typography;
+        let header = type_.get(TypeRole::Title).line_height + type_.get(TypeRole::Caption).line_height + 2.0 * tokens.space.pad.regular;
+        let row = tokens.size.control.md * STORY_ROW_IN_CONTROLS;
         let per_row = match self.layout {
             StoryLayout::Columns(most) => usize::from(most.max(1)),
             _ => 1,
         };
-        HEADER_GUESS + self.stories.len().div_ceil(per_row) as f32 * STORY_ROW_GUESS
+        header + self.stories.len().div_ceil(per_row) as f32 * row
     }
 
     /// The stories as the card takes them.
@@ -157,7 +161,8 @@ pub(super) fn grid(
     reveal: Option<&'static str>,
 ) -> Vec<Reported> {
     let mut reported = Vec::new();
-    let columns = if one_column || ui.available_width() < 2.0 * CARD_MIN_WIDTH { 1 } else { 2 };
+    let tokens = Env::of(ui).tokens.clone();
+    let columns = if one_column || ui.available_width() < 2.0 * card_min_width(&tokens) { 1 } else { 2 };
     let generation = p.generation;
     // A story that fills takes its content height, at most the view's, as on the old gallery's tiles.
     let room = ui.available_height();
@@ -167,14 +172,14 @@ pub(super) fn grid(
             // A row out of view does not run. Keyed by its cards: a change of the column count regroups the rows into
             // new ones, which take their estimate until they run.
             let keys: Vec<&str> = chunk.iter().map(|spec| spec.key.as_str()).collect();
-            let estimate = chunk.iter().map(Spec::estimate).fold(0.0, f32::max);
+            let estimate = chunk.iter().map(|spec| spec.estimate(&tokens)).fold(0.0, f32::max);
             let revealed = chunk.iter().any(|spec| reveal == Some(spec.type_name));
             Lazy::new((generation, columns, keys), estimate).reveal(revealed).show(ui, |ui| {
                 Grid::new(if columns == 1 { ONE } else { TWO }).gap(Gap::CardColumn).fill_width().show(ui, |ui, _| {
                     for (at, spec) in chunk.iter().enumerate() {
                         // A settled card repaints its last run; a card that does not run reports nothing, as it took
                         // no press and ran no command.
-                        Lazy::new((generation, spec.key.as_str()), spec.estimate()).settles(true).show(ui, |ui| {
+                        Lazy::new((generation, spec.key.as_str()), spec.estimate(&tokens)).settles(true).show(ui, |ui| {
                             let stories = spec.card_stories();
                             let mut card = spec.card(&stories, format!("{}-{generation}", spec.key), room);
                             card.inspect = p.inspect.of(tab, spec.selected);

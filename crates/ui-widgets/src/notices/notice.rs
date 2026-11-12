@@ -134,8 +134,9 @@ pub struct NoticeStyle {
     reading_width: f32,
 }
 
-/// The widest column of a centred notice: the empty states' column in the source apps.
-const READING_WIDTH: f32 = 460.0;
+/// The widest column of a centred notice, in body text sizes: about 460 at the 12 point body, the empty states'
+/// column in the source apps.
+const READING_IN_BODY_SIZES: f32 = 38.5;
 
 /// A message in a tone. The tone picks the icon and the colours; the neutral tone reads muted and has no icon. The
 /// message is the label; a title above it is optional. Actions read as links (as buttons in the centred layout) and
@@ -357,7 +358,7 @@ impl Component for Notice<'_> {
             detail,
             icon: IconLook::new(control.icon, stateful(tone)),
             card_width: cx.tokens.size.length.field,
-            reading_width: READING_WIDTH,
+            reading_width: cx.tokens.typography.get(TypeRole::Body).size * READING_IN_BODY_SIZES,
         }
     }
 

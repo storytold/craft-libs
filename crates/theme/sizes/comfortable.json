@@ -22,11 +22,6 @@
         "tab": 30.0,
         "title": 38.0
       },
-      "canvas": {
-        "stage_height": 450.0,
-        "stage_width_max": 900.0,
-        "stage_width_min": 300.0
-      },
       "checker": 4.0,
       "control": {
         "md": 30.0,
@@ -89,13 +84,17 @@
         }
       },
       "scroll_fade": 20.0,
+      "story": {
+        "height": 450.0,
+        "width_max": 900.0,
+        "width_min": 300.0
+      },
       "thumb": {
         "card": 160.0,
         "lg": 48.0,
         "md": 34.0,
         "sm": 18.0
       },
-      "thumb_row": 42.0,
       "window": {
         "cascade": 38.0
       }

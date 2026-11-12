@@ -206,8 +206,6 @@ pub struct SizeTokens {
     pub scroll_fade: f32,
     /// Thumbnail sides.
     pub thumb: ThumbSizes,
-    /// The least height of a list row that shows a thumbnail.
-    pub thumb_row: f32,
     /// Canvas drag handles.
     pub handle: HandleSizes,
     /// Pointer tolerance.
@@ -235,19 +233,19 @@ pub struct SizeTokens {
     pub dock: DockColumnSizes,
     /// The rulers of a canvas.
     pub ruler: RulerSizes,
-    /// The controls drawn over a canvas.
-    pub canvas: CanvasSizes,
+    /// The stage a story draws on.
+    pub story: StorySizes,
 }
 
-/// The sizes of the controls drawn over a canvas, in logical pixels.
+/// The stage a story draws on, in logical pixels: a story of a canvas control, and each column of a story grid.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct CanvasSizes {
+pub struct StorySizes {
     /// The height of the stage a story of a canvas control shows its canvas on.
-    pub stage_height: f32,
-    /// The least width of that stage.
-    pub stage_width_min: f32,
+    pub height: f32,
+    /// The least width of a story: of that stage, and of a column of a story grid.
+    pub width_min: f32,
     /// The greatest width of that stage.
-    pub stage_width_max: f32,
+    pub width_max: f32,
 }
 
 /// The sizes of a canvas ruler, in logical pixels.
