@@ -150,6 +150,7 @@ pub(super) const SURFACES: &[(&str, &str, Surface)] = &[
 /// in a grid of cases, or as the rows of a form. Sorted by crate target, name and group.
 pub(super) const STORY_LAYOUTS: &[(&str, &str, &str, StoryLayout)] = &[
     ("craft_imaging", "PerspectiveWarp", "Planes", Columns(2)),
+    ("craft_ui", "Rating", "Sizes", FormRows),
     ("craft_ui", "Slider", "Disabled", FormRows),
     ("craft_ui", "Slider", "Right to left", FormRows),
     ("craft_ui", "Slider", "Step", FormRows),
