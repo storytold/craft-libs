@@ -194,7 +194,7 @@ mod tests {
     fn switching_selection_cancels_the_old_read_and_discards_its_late_answer() {
         let (started, ready) = mpsc::channel();
         let (stopped, cancelled) = mpsc::channel();
-        let (finished, done) = mpsc::channel();
+        let (woke, delivered) = mpsc::channel();
         let released = Arc::new(AtomicBool::new(false));
         let release = released.clone();
         let source: DuplexSource = Arc::new(move |printer, cancel| {
@@ -210,17 +210,22 @@ mod tests {
             while !release.load(Ordering::Acquire) && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(1));
             }
-            finished.send(()).unwrap();
             Some(false)
         });
         let mut session = DuplexSession::default();
-        session.select(Some("Slow"), &source, Arc::new(|| {}));
+        session.select(
+            Some("Slow"),
+            &source,
+            Arc::new(move || {
+                let _ = woke.send(());
+            }),
+        );
         ready.recv_timeout(Duration::from_secs(5)).unwrap();
         session.select(Some("Office"), &source, Arc::new(|| {}));
         assert!(cancelled.recv_timeout(Duration::from_secs(5)).unwrap());
         settle(&mut session, "Office");
         released.store(true, Ordering::Release);
-        done.recv_timeout(Duration::from_secs(5)).unwrap();
+        delivered.recv_timeout(Duration::from_secs(5)).unwrap();
         session.poll();
         assert_eq!(session.answer("Office"), Some(&Some(true)));
         assert_eq!(session.answer("Slow"), None);
