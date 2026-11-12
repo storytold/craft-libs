@@ -29,7 +29,7 @@ use craft_behavior::{
     ColumnKey, ColumnWidth, HitLevel, HitPriority, Intent, ItemSource, Metrics, Mixed, PartKey, PointerButton, PressPhase, Selection, Sense,
 };
 use craft_keymap::{Chord, Key, Mods};
-use egui::{CornerRadius, Id, Pos2, Rect, Response, Ui, Vec2, pos2, vec2};
+use egui::{CornerRadius, Pos2, Rect, Response, Ui, Vec2, pos2, vec2};
 use std::cell::RefCell;
 use std::hash::Hash;
 
