@@ -4,6 +4,8 @@
 //! commands are the app's; the panel reports what the user asked for.
 
 use craft_behavior::{IconId, Selection, SelectionChange, keyed};
+use craft_theme::variant::Tone;
+use craft_ui::bars::StatusMessage;
 use craft_ui::contract::{
     ActivateOn, Bind, CollectionEvent, CommandSet, Commands as _, ListDrag, NoValue, Outcome, Props as _, Remember as _, RowAlign, SelectMode,
     ShowCollection as _, ShowContainer as _,
@@ -152,7 +154,7 @@ pub struct TextStylesPanelOutput {
     /// What the user asked for this pass.
     pub action: Option<TextStyleAction>,
     /// A warning for the status bar ("Select text to apply a character style").
-    pub status: Option<Label>,
+    pub status: Option<StatusMessage>,
 }
 
 impl Outcome for TextStylesPanelOutput {
@@ -421,6 +423,10 @@ impl<'a> TextStylesPanel<'a> {
                     }
                 }
             });
-        TextStylesPanelOutput { response: shown.output.response, action: action.get(), status: hint.get().then(|| words.select_text.clone()) }
+        TextStylesPanelOutput {
+            response: shown.output.response,
+            action: action.get(),
+            status: hint.get().then(|| StatusMessage::new(words.select_text.clone()).tone(Tone::Warn)),
+        }
     }
 }

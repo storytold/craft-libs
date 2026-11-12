@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use craft_behavior::geometry::quad::Homography;
 use craft_behavior::kurbo::Rect;
 use craft_behavior::{CancelReason, EditEvent, GestureId};
+use craft_ui::bars::StatusMessage;
 
 use super::planes::{TornPlane, VanishingPlane, VanishingScene};
 use super::{VanishingPointEvent, VanishingPointSource};
@@ -243,8 +244,8 @@ pub struct VanishingPointEditor {
     pub(super) pointer: Option<[f64; 2]>,
     pub(super) events: Vec<VanishingPointEvent>,
     pub(super) limits: StampLimits,
-    /// The message of the last refused Stamp press, for the app's status line.
-    pub(super) status: Option<String>,
+    /// The message of the last refused Stamp press, for the app's status bar.
+    pub(super) status: Option<StatusMessage>,
 }
 
 impl VanishingPointEditor {
@@ -264,8 +265,8 @@ impl VanishingPointEditor {
     }
 
     /// The message of a refused Stamp press (no clone source, too many strokes), translated, for the app's status
-    /// line; `None` when there is none since the last call.
-    pub fn take_status(&mut self) -> Option<String> {
+    /// bar; `None` when there is none since the last call.
+    pub fn take_status(&mut self) -> Option<StatusMessage> {
         self.status.take()
     }
 

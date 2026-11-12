@@ -4,11 +4,11 @@ use craft_behavior::EditEvent;
 use craft_cms::convert::CmykConverter;
 use craft_theme::Srgba;
 use craft_theme::variant::Tone;
+use craft_ui::bars::StatusMessage;
 use craft_ui::contract::CommandSet;
 use craft_ui::menu::PanelRow;
 use craft_ui::patterns::presets::{PresetCommands, PresetEvent, PresetExport, PresetFileRequest, PresetFiles, PresetFooterEvent};
 use craft_ui::runtime::commands::{CommandRef, CommandState};
-use craft_ui::runtime::toast::Toast;
 
 use super::{SwatchAt, SwatchKey, SwatchLibrary, SwatchesState, SwatchesWords};
 use crate::palette::{SwatchColor, SwatchFormat, SwatchReport};
@@ -19,14 +19,14 @@ const PICK_PURPOSE: &str = "swatches";
 /// What [`SwatchesPanel::apply_file`] did.
 #[derive(Debug)]
 #[non_exhaustive]
-#[must_use = "the host saves a changed library and posts the toast"]
+#[must_use = "the host saves a changed library and shows the status message"]
 pub struct SwatchesFileOutput {
     /// The library changed: the app saves it.
     pub changed: bool,
     /// The notes of the swatch file that was read or written, once the panel has handled it.
     pub report: Option<SwatchReport>,
-    /// The toast for the notes that lost something or for a failure.
-    pub toast: Option<Toast>,
+    /// The status message for the notes that lost something or for a failure.
+    pub status: Option<StatusMessage>,
 }
 
 /// The commands of the Swatches panel menu, in Photoshop's words.
@@ -79,8 +79,8 @@ pub struct SwatchesMenuOutput {
     pub changed: bool,
     /// The file dialog the command asks the host for; the host answers with [`SwatchesPanel::apply_file`].
     pub file: Option<PresetFileRequest>,
-    /// A toast for a command that failed before it asked for a file.
-    pub toast: Option<Toast>,
+    /// The status message for a command that failed before it asked for a file.
+    pub status: Option<StatusMessage>,
 }
 
 /// The Swatches panel menu: the rows for the dock's panel menu, the states the host publishes, and the carrying out
@@ -127,7 +127,7 @@ impl SwatchesMenu {
         foreground: Srgba,
         words: &SwatchesWords,
     ) -> SwatchesMenuOutput {
-        let mut output = SwatchesMenuOutput { changed: false, file: None, toast: None };
+        let mut output = SwatchesMenuOutput { changed: false, file: None, status: None };
         let readable: Vec<&str> = SwatchFormat::ALL.iter().filter(|f| f.can_read()).map(|f| f.extension()).collect();
         let import = || PresetFiles::<SwatchKey>::new(PICK_PURPOSE, words.file.as_str(), &readable).replace(true);
         match command {
@@ -161,7 +161,7 @@ impl SwatchesMenu {
         output
     }
 
-    /// The file request that writes the library as `format`; a library the format cannot hold is a toast.
+    /// The file request that writes the library as `format`; a library the format cannot hold is a status message.
     fn export(library: &SwatchLibrary, state: &mut SwatchesState, format: SwatchFormat, words: &SwatchesWords, output: &mut SwatchesMenuOutput) {
         match crate::palette::write_swatches(&library.groups, format) {
             Ok((bytes, report)) => {
@@ -171,7 +171,7 @@ impl SwatchesMenu {
                 output.file = files.request(PresetCommands::Save, None);
                 state.export_notes = Some(report);
             }
-            Err(error) => output.toast = Some(Toast::new(words.export_failed.fill(&[("reason", &error.to_string())])).tone(Tone::Bad)),
+            Err(error) => output.status = Some(StatusMessage::new(words.export_failed.fill(&[("reason", &error.to_string())])).tone(Tone::Bad)),
         }
     }
 }

@@ -6,6 +6,9 @@ use craft_behavior::geometry::quad::Homography;
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{EditEvent, GestureId, Mixed};
 use craft_keymap::Mods;
+use craft_theme::variant::Tone;
+use craft_ui::bars::StatusMessage;
+use craft_ui::runtime::env::Label;
 
 use super::{DragStart, PlaneEdit, StampStroke, VanishingDrag, VanishingPointEditor, VanishingPointSession, VanishingPointSettings};
 use super::{VanishingPointEvent, VanishingTool};
@@ -285,22 +288,23 @@ impl Work<'_> {
     }
 
     /// Stamp's press: Alt sets the source, otherwise a stroke starts. `Err` is the message of a refused press.
-    fn stamp_press(&mut self, p: [f64; 2], mods: Mods, words: &VanishingPointWords) -> Result<Pressed, String> {
+    fn stamp_press(&mut self, p: [f64; 2], mods: Mods, words: &VanishingPointWords) -> Result<Pressed, StatusMessage> {
+        let refused = |text: &Label| StatusMessage::new(text.clone()).tone(Tone::Warn);
         if mods.alt {
             if !self.on_plane(p) {
-                return Err(words.stamp_no_source.as_str().to_owned());
+                return Err(refused(&words.stamp_no_source));
             }
             self.session.source = Some(p);
             self.session.aligned_from = None;
             return Ok(Pressed::Done);
         }
-        let Some(source) = self.session.source else { return Err(words.stamp_no_source.as_str().to_owned()) };
+        let Some(source) = self.session.source else { return Err(refused(&words.stamp_no_source)) };
         if !self.on_plane(p) {
             return Ok(Pressed::Done);
         }
         let dabs: usize = self.session.strokes.iter().map(|s| s.points.len()).sum();
         if self.session.strokes.len() >= self.editor.limits.strokes || dabs >= self.editor.limits.dabs {
-            return Err(words.stamp_too_many.as_str().to_owned());
+            return Err(refused(&words.stamp_too_many));
         }
         let aligned = self.session.aligned_from.filter(|_| self.settings.stamp.aligned);
         let src = match aligned {

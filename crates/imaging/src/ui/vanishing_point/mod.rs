@@ -48,6 +48,7 @@ use egui::{Color32, Id, Response, Ui};
 
 use craft_behavior::edit_history::Step;
 use craft_behavior::{CancelReason, EditEvent, EditHistory, Mixed};
+use craft_ui::bars::StatusMessage;
 use craft_ui::canvas::{HandTool, NavigationOptions, PickStep, RasterSource, ToolHost, ViewCommands, ZoomTool, tool_pick};
 use craft_ui::contract::{Bind, Job, NoValue, Outcome, Pending, Remember as _, Show as _, ShowContainer as _};
 use craft_ui::dialog::{FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowStatus, FullWindowTitle, FullWindowView, RasterOverlay};
@@ -177,8 +178,8 @@ pub struct VanishingPointOutput {
     pub events: Vec<VanishingPointEvent>,
     /// The bar changed a setting (the app stores the settings).
     pub settings_changed: bool,
-    /// The message of a refused Stamp press, translated, for the app's status line.
-    pub status: Option<String>,
+    /// The message of a refused Stamp press, translated, for the app's status bar.
+    pub status: Option<StatusMessage>,
     /// OK (`Accept`) or Cancel, once chosen.
     pub closed: Option<DialogRole>,
     /// The dialog's response: its rect is the workspace's.

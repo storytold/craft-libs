@@ -12,7 +12,7 @@
 //! pick.tick(ctx, window_generation);
 //! ScreenColorPicker::new(&mut pick, "PhotoCraft").show(ui);
 //! if let Some(color) = pick.take("fill") { /* the picked colour */ }
-//! if let Some(toast) = pick.take_notice(&words) { /* a capture failure */ }
+//! if let Some(message) = pick.take_status(&words) { /* a capture failure, for the status bar */ }
 //! ```
 
 use std::hash::{Hash, Hasher};
@@ -24,9 +24,9 @@ use craft_host::target::Caps;
 use craft_platform::screen::{self, Capture, CaptureHandle, ScreenError, ScreenImage};
 use craft_theme::Srgba;
 use craft_theme::variant::Tone;
+use craft_ui::bars::StatusMessage;
 use craft_ui::contract::{Pattern, Props as _, Show as _, ShowContainer as _};
 use craft_ui::runtime::env::{Env, Label};
-use craft_ui::runtime::toast::Toast;
 use craft_ui::runtime::windows::{ScreenshotSlot, WindowHost};
 use egui::{Color32, Context, Pos2, Rect, Ui, ViewportId, pos2, vec2};
 
@@ -103,7 +103,7 @@ impl CaptureSource for StillCapture {
     }
 }
 
-/// Why a pick ended without a colour; worded when the app takes the notice.
+/// Why a pick ended without a colour; worded when the app takes the status message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Failure {
     NothingCaptured,
@@ -393,8 +393,8 @@ impl ScreenPick {
         if self.completed.as_ref().is_some_and(|(id, _)| *id == key) { self.completed.take().map(|(_, color)| color) } else { None }
     }
 
-    /// A capture failure, once, as a toast worded with `words`.
-    pub fn take_notice(&mut self, words: &ScreenPickerWords) -> Option<Toast> {
+    /// A capture failure, once, as a status message worded with `words`.
+    pub fn take_status(&mut self, words: &ScreenPickerWords) -> Option<StatusMessage> {
         let text = match self.notice.take()? {
             Failure::NothingCaptured => words.nothing_captured.clone(),
             Failure::InvalidCapture => words.invalid_capture.clone(),
@@ -403,7 +403,7 @@ impl ScreenPick {
             Failure::Unsupported => words.unsupported.clone(),
             Failure::Failed(reason) => Label::from(words.failed.fill(&[("reason", reason.as_str())])),
         };
-        Some(Toast::new(text).tone(Tone::Bad))
+        Some(StatusMessage::new(text).tone(Tone::Bad))
     }
 
     /// The profile of the monitor the app's own windows show on: a frame sampled during a held drag converts from it

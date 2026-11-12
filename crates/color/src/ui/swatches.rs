@@ -28,13 +28,13 @@ craft_ui::words! {
         swatch_n: template "swatches.swatchN" = "Color Swatch {n}";
         /// The name of the file filter of the swatch pickers, and of an exported file.
         file: "swatches.file" = "Swatches";
-        /// The start of the toast after an import that changed something; the notes follow.
+        /// The start of the status message after an import that changed something; the notes follow.
         notice_import: "swatches.noticeImport" = "Swatches imported with changes";
-        /// The start of the toast after an export that changed something.
+        /// The start of the status message after an export that changed something.
         notice_export: "swatches.noticeExport" = "Swatches exported with changes";
-        /// The toast when a swatch file could not be imported; `{reason}` says why.
+        /// The status message when a swatch file could not be imported; `{reason}` says why.
         import_failed: template "swatches.importFailed" = "Swatches could not be imported: {reason}";
-        /// The toast when swatches could not be exported; `{reason}` says why.
+        /// The status message when swatches could not be exported; `{reason}` says why.
         export_failed: template "swatches.exportFailed" = "Swatches could not be exported: {reason}";
         groups_flattened: "swatches.groupsFlattened" = "The format has no groups; the swatches were written as one list.";
         book_read: count "swatches.bookRead" = "{n} color-book color was read as black." | "{n} color-book colors were read as black.";

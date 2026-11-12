@@ -6,13 +6,13 @@ use craft_cms::convert::CmykConverter;
 use craft_i18n::Format;
 use craft_theme::Srgba;
 use craft_theme::variant::Tone;
+use craft_ui::bars::StatusMessage;
 use craft_ui::choice::SwatchFace;
 use craft_ui::contract::{Bind, Held, NoValue, Outcome, Pattern, ShowContainer as _, request_rename};
 use craft_ui::layout_components::Stack;
 use craft_ui::patterns::presets::{PresetBrowser, PresetFileEvent, PresetFooterOptions, PresetReorder, PresetRow, PresetWords, ThumbInfo};
 use craft_ui::primitives::ContentPainterCx;
 use craft_ui::runtime::env::{Count, Env};
-use craft_ui::runtime::toast::Toast;
 use egui::{Rect, Response, Ui};
 
 use super::library::value_text;
@@ -167,7 +167,7 @@ impl<'a> SwatchesPanel<'a> {
 
     /// Carries out the host's answer to a file request of the panel menu: Import and Replace read the file into
     /// `library`, a finished export reports the notes it kept, and a failure says why. Returns what changed and the
-    /// toast the host posts, if any.
+    /// status message the host shows, if any.
     pub fn apply_file(
         library: &mut SwatchLibrary,
         state: &mut SwatchesState,
@@ -176,28 +176,28 @@ impl<'a> SwatchesPanel<'a> {
         presets: &PresetWords,
         format: &Format,
     ) -> SwatchesFileOutput {
-        let mut output = SwatchesFileOutput { changed: false, report: None, toast: None };
+        let mut output = SwatchesFileOutput { changed: false, report: None, status: None };
         match event {
             PresetFileEvent::Loaded { file_name, bytes, replace, .. } => match crate::palette::read_swatches(bytes, file_name) {
                 Ok((groups, report)) => {
                     library.import(groups, *replace);
                     output.changed = true;
-                    output.toast = Self::notes_toast(&report, false, words, format);
+                    output.status = Self::notes_status(&report, false, words, format);
                     output.report = Some(report);
                 }
                 Err(error) => {
-                    output.toast = Some(Toast::new(words.import_failed.fill(&[("reason", &error.to_string())])).tone(Tone::Bad));
+                    output.status = Some(StatusMessage::new(words.import_failed.fill(&[("reason", &error.to_string())])).tone(Tone::Bad));
                 }
             },
             PresetFileEvent::Saved { .. } => {
                 if let Some(report) = state.export_notes.take() {
-                    output.toast = Self::notes_toast(&report, true, words, format);
+                    output.status = Self::notes_status(&report, true, words, format);
                     output.report = Some(report);
                 }
             }
             PresetFileEvent::Failed { .. } => {
                 state.export_notes = None;
-                output.toast = Some(Toast::new(event.status(presets)).tone(Tone::Bad));
+                output.status = Some(StatusMessage::new(event.status(presets)).tone(Tone::Bad));
             }
             _ => {}
         }
@@ -224,14 +224,14 @@ impl<'a> SwatchesPanel<'a> {
             .collect()
     }
 
-    /// The toast for the notes of an import (or, with `writing`, an export): the title and the notes in one line, as
+    /// The status message for the notes of an import (or, with `writing`, an export): the title and the notes in one line, as
     /// a warning; `None` when there is nothing to say.
-    fn notes_toast(report: &SwatchReport, writing: bool, words: &SwatchesWords, format: &Format) -> Option<Toast> {
+    fn notes_status(report: &SwatchReport, writing: bool, words: &SwatchesWords, format: &Format) -> Option<StatusMessage> {
         let lines = Self::note_lines(report, writing, words, format);
         if lines.is_empty() {
             return None;
         }
         let title = if writing { &words.notice_export } else { &words.notice_import };
-        Some(Toast::new(format!("{}: {}", title.as_str(), lines.join(" "))).tone(Tone::Warn))
+        Some(StatusMessage::new(format!("{}: {}", title.as_str(), lines.join(" "))).tone(Tone::Warn))
     }
 }
