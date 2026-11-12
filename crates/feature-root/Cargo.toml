@@ -42,7 +42,7 @@ craft-pages = { workspace = true, features = ["screen-testing"] }
 craft-print = { workspace = true, features = ["screen-testing"] }
 craft-review = { workspace = true, features = ["screen-testing"] }
 craft-table = { workspace = true, features = ["screen-testing"] }
-craft-text = { workspace = true, features = ["screen-testing"] }
+craft-text = { workspace = true, features = ["screen-testing", "find"] }
 craft-theme-store = { workspace = true, features = ["screen-testing"] }
 craft-timeline = { workspace = true, features = ["screen-testing"] }
 
