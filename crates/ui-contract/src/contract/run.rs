@@ -143,6 +143,12 @@ pub(crate) trait ShapeHooks<C: Component> {
         true
     }
 
+    /// Whether the root is one member of a bar's line, shown whole or not at all: a leaf is; a body is when it has a
+    /// side label (a captioned field), and otherwise only lays out the members it holds.
+    fn member(&self, _comp: &C) -> bool {
+        true
+    }
+
     /// Whether the root fills the width alone: a root that fills both axes takes the room of a `Content` grid column
     /// and sets its width.
     fn fills_width_only(&self, comp: &C) -> bool {
@@ -552,6 +558,7 @@ pub(crate) trait ErasedPass<'a> {
     fn sized(&self, ui: &Ui, id: Id, size: Vec2) -> Vec2;
     fn fills_width(&self) -> bool;
     fn on_line(&self) -> bool;
+    fn member(&self) -> bool;
     fn fills_width_only(&self) -> bool;
     fn arena(&self) -> bool;
     fn key_role(&self) -> KeyRole;
@@ -842,6 +849,13 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
         return;
     }
     p.real = true;
+    // A member of a bar's line that its view shows only in part is not shown until a scroll brings it in whole: it
+    // keeps its stop, so Tab reaches it and the reveal scrolls it in.
+    let shown_clip = ui.clip_rect();
+    let cut = p.p.member() && cut_by_bar_view(env, rect);
+    if cut {
+        ui.set_clip_rect(Rect::NOTHING);
+    }
     let inspected = p.trace.recording() && inspect::open_element(ui, id, facts.name);
     let e = &mut *p.p;
     // 7 parts
@@ -1133,6 +1147,21 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
         let core = e.core_ref();
         inspect::close_element(&ctx, id, core.rect, core.content_rect);
     }
+    if cut {
+        ui.set_clip_rect(shown_clip);
+    }
+}
+
+/// Whether `rect`, in the scrolling body of a bar, lies partly outside the body's view along x. A member wider than the
+/// view shows in part, since no scroll shows it whole.
+fn cut_by_bar_view(env: &Env, rect: Rect) -> bool {
+    if !env.values.get::<crate::contract::InBar>().0 {
+        return false;
+    }
+    let Some(view) = env.lazy.filter(|view| view.axes.0) else { return false };
+    // Half a point: less than a pixel shows at any scale the box runs.
+    let outside = rect.min.x < view.rect.min.x - 0.5 || rect.max.x > view.rect.max.x + 0.5;
+    outside && rect.width() <= view.rect.width() + 0.5
 }
 
 /// Step 5's size for `input`: what the component measures plus `extent`, padded and bounded by its style.

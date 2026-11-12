@@ -503,6 +503,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         matches!(comp.props(Internal::new()).layout, layout::BodyLayout::Row { wrap: false, .. })
     }
 
+    fn member(&self, comp: &C) -> bool {
+        comp.props(Internal::new()).label.is_some()
+    }
+
     /// The slots of the container's own header parts this pass, for `PartsCx::header_slot`.
     fn geometry(
         &mut self,

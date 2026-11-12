@@ -122,3 +122,45 @@ fn a_member_that_fills_takes_the_room_its_bar_leaves() {
     );
     assert!(wide.2.width() - narrow.2.width() >= grown, "the search field grew from {:?} to {:?} in a 300 pt wider bar", narrow.2, wide.2);
 }
+
+/// An options bar `width` wide with eight buttons, and the clicks each button reported.
+fn buttons(width: f32) -> (Fixture, Rc<Cell<[u32; 8]>>) {
+    let clicks = Rc::new(Cell::new([0u32; 8]));
+    let seen = Rc::clone(&clicks);
+    let mut fixture = Fixture::new(move |ui| {
+        Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+            for at in 0..8 {
+                if Button::new(format!("Button {at}")).show(ui).clicked() {
+                    let mut counts = seen.get();
+                    counts[at] += 1;
+                    seen.set(counts);
+                }
+            }
+        });
+    });
+    fixture.room(Vec2::new(width, 80.0)).settle();
+    (fixture, clicks)
+}
+
+#[trial]
+fn a_member_the_bar_shows_in_part_is_not_shown_until_it_is_whole() {
+    let mut checked = 0;
+    for width in (200..=420).step_by(9) {
+        let width = width as f32;
+        let (fixture, _) = buttons(width);
+        // A button that starts well inside the bar and ends past it.
+        let straddles = (0..8).find_map(|at| {
+            let rect = fixture.by_label(&format!("Button {at}"))?.rect;
+            (rect.min.x + 2.0 < width - 20.0 && rect.max.x > width).then_some((at, rect))
+        });
+        let Some((at, rect)) = straddles else { continue };
+        let (mut fixture, clicks) = buttons(width);
+        fixture.click_at(egui::pos2(rect.min.x + 2.0, rect.center().y));
+        assert_eq!(clicks.get()[at], 0, "at {width}: Button {at} at {rect:?}, shown in part, took a click");
+        let first = fixture.by_label("Button 0").expect("the first button");
+        fixture.click(&first);
+        assert_eq!(clicks.get()[0], 1, "at {width}: the first button, shown whole, took no click");
+        checked += 1;
+    }
+    assert!(checked > 0, "no width put a button across the bar's end");
+}

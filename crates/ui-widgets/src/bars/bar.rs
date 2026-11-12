@@ -78,10 +78,13 @@ impl Outcome for BarOutput {
 /// size, an options or status bar's at the small one. They are one roving group unless the bar is made of
 /// [`tab_stops`](Bar::tab_stops). The bar is as tall as its tallest member plus the control padding, and takes the
 /// width it is offered. A bar of one row lays its body out as a row; a bar of several rows as a stack whose rows the
-/// caller makes with `Row`. A row too long for the bar first narrows its selects and elidable text, the last first,
-/// then scrolls, so a member past the edge is reached by Tab and revealed. A rule between groups of members is a
-/// `Divider::vertical()`. A bar with `commit_cancel` ends with a cancel and a commit button in its end region, outside
-/// the scroll and `space.gap.stack` from the body; they run `BarCommands`.
+/// caller makes with `Row`. A member that fills (a `Slider::fill_width`, a fill-width `Row`) takes the room the view
+/// leaves. A row too long for the bar first narrows its selects and elidable text, the last first, then scrolls, so a
+/// member past the edge is reached by Tab and revealed. A member the view shows only in part (a control, or a captioned
+/// field with its caption) is not shown until a scroll brings it in whole. Under right-to-left the bar is the mirror of
+/// left-to-right. A rule between groups of members is a `Divider::vertical()`. A bar with `commit_cancel` ends with a
+/// cancel and a commit button in its end region, outside the scroll, `space.gap.stack` from the body and on the
+/// members' line; they run `BarCommands`.
 #[derive(crate::contract::Component)]
 #[component(container)]
 pub struct Bar<'a> {

@@ -383,6 +383,10 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
         self.hooks.on_line(self.comp)
     }
 
+    fn member(&self) -> bool {
+        self.hooks.member(self.comp)
+    }
+
     fn fills_width_only(&self) -> bool {
         self.hooks.fills_width_only(self.comp)
     }
