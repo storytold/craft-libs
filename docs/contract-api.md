@@ -1879,7 +1879,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::Common`: `pub struct Common { pub label: Label, pub tooltip: Option<Tooltip>, pub description: Option<String>, pub selected: Option<bool> }`. What every component carries: the props the pipeline reads at step 1.
   - `pub const fn new() -> Common`. A `Common` with every prop unset, which the derive's constructors start from.
 - `craft_ui::contract::Component`: re-export of `craft_ui_macros::Component` (outside these crates).
-- `craft_ui::contract::ContainerProps`: `pub struct ContainerProps { pub mount: Mount, pub surface: Option<SurfaceKind>, pub pad: Pad, pub sizing: Sizing, pub room_height: Option<f32>, pub layout: BodyLayout, pub header: Option<HeaderRegion>, pub scroll: Option<Scroll>, pub footer: Option<FooterRegion>, pub end: Option<EndRegion>, pub help: Option<Label>, pub position: Option<SetPosition>, pub focus: FocusPolicy, pub collapse: Option<Collapse>, pub body_gap: Gap, pub least_width: Option<LeastWidth>, pub edge_rule: bool, pub child_size: Option<ControlSize>, pub arena: bool, pub scroll_owner: bool, pub gates: bool, pub transform: Option<CanvasTransform>, pub theme: Option<ThemeScope>, pub command_scope: Option<CommandScope>, pub live: Option<Politeness>, pub label: Option<SideLabel>, pub roving: Option<Roving>, pub save: Option<SaveKey>, pub outer_edit: bool, pub collection_body: bool, pub label_column: bool, pub labels: Option<LabelScheme> }`. What a container or collection adds to `Common`. A builder added here is added to the forwarder list in
+- `craft_ui::contract::ContainerProps`: `pub struct ContainerProps { pub mount: Mount, pub surface: Option<SurfaceKind>, pub pad: Pad, pub sizing: Sizing, pub room_height: Option<f32>, pub layout: BodyLayout, pub header: Option<HeaderRegion>, pub scroll: Option<Scroll>, pub footer: Option<FooterRegion>, pub end: Option<EndRegion>, pub help: Option<Label>, pub position: Option<SetPosition>, pub focus: FocusPolicy, pub collapse: Option<Collapse>, pub body_gap: Gap, pub least_width: Option<LeastWidth>, pub edge_rule: bool, pub child_size: Option<ControlSize>, pub child_glyphs: Option<GlyphRole>, pub arena: bool, pub scroll_owner: bool, pub gates: bool, pub transform: Option<CanvasTransform>, pub theme: Option<ThemeScope>, pub command_scope: Option<CommandScope>, pub live: Option<Politeness>, pub label: Option<SideLabel>, pub roving: Option<Roving>, pub save: Option<SaveKey>, pub outer_edit: bool, pub collection_body: bool, pub label_column: bool, pub labels: Option<LabelScheme> }`. What a container or collection adds to `Common`. A builder added here is added to the forwarder list in
   - `pub const fn new() -> Self`. Props with every field at its default.
   - `pub fn mount(mut self, mount: Mount) -> Self`. Where the container lives.
   - `pub const fn surface(mut self, surface: SurfaceKind) -> Self`. The surface the container paints.
@@ -1900,6 +1900,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const fn least_width(mut self, least: LeastWidth) -> Self`. The least width of the content, from a size role.
   - `pub const fn edge_rule(mut self, on: bool) -> Self`. Draws a divider along the inner edge of the edge pane the container sits in.
   - `pub const fn child_size(mut self, size: ControlSize) -> Self`. A scope size for the body.
+  - `pub const fn child_glyphs(mut self, role: GlyphRole) -> Self`. A scope glyph role for the body: a rail's buttons show its icons at the rail's side and ink.
   - `pub const fn arena(mut self, on: bool) -> Self`. Makes the container an arena root.
   - `pub const fn scroll_owner(mut self, on: bool) -> Self`. Makes the container its body's scroll owner with a view of its own (`ContainerProps::scroll_owner`).
   - `pub const fn transform(mut self, transform: CanvasTransform) -> Self`. Shows the body through `transform` on its own egui layer.
@@ -3246,7 +3247,7 @@ One-shot screenshot slots and the facts a screenshot is measured against.
   - `pub fn collator(&self) -> Arc<Collator>`. Orders text in the scope's language, with runs of digits by value (`Layer 2` before `Layer 10`).
 - `craft_ui::runtime::env::EnvCapture`: `pub struct EnvCapture`. The inherited group of an env, captured to open a popup or viewport: the layer-local fields are reset.
 - `craft_ui::runtime::env::Inherited`: `pub struct Inherited { pub tokens: Arc<UiTokens>, pub os: Os, pub active: bool, pub words: Arc<Words>, pub line_ratio: f32, pub motion: MotionPolicy, pub scale: Scale, pub values: AppValues }`. The values of an env that a scope rarely changes: the resolved tokens, the platform, the language and the app's
-- `craft_ui::runtime::env::Scoped`: `pub struct Scoped { pub ink: Ink, pub key: EnvKey, pub size: ControlSize, pub enabled: bool, pub read_only: bool, pub wheel: WheelScope, pub direction: Direction, pub text_direction: Direction, pub ids_stable: bool, pub arena: Option<ArenaId>, pub transform: Option<CanvasTransform> }`. The values of an env.
+- `craft_ui::runtime::env::Scoped`: `pub struct Scoped { pub ink: Ink, pub key: EnvKey, pub size: ControlSize, pub glyphs: GlyphRole, pub enabled: bool, pub read_only: bool, pub wheel: WheelScope, pub direction: Direction, pub text_direction: Direction, pub ids_stable: bool, pub arena: Option<ArenaId>, pub transform: Option<CanvasTransform> }`. The values of an env.
 - `craft_ui::runtime::env::AgeStyle`: re-export of `craft_i18n::AgeStyle` (outside these crates).
 - `craft_ui::runtime::env::AppValues`: `pub struct AppValues`. The app values a root, a scope or a component's `content_env` carries: one entry per `EnvValue` type, the
   - `pub fn set<T: EnvValue>(&mut self, value: T) -> &mut Self`. Sets the value of type `T`.
@@ -3775,6 +3776,7 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
 - `craft_ui::style::Flags`: re-export of `craft_theme::Flags` (outside these crates).
 - `craft_ui::style::FocusLook`: `pub struct FocusLook { pub stroke: Stroke, pub offset: f32 }`. A component's focus ring.
   - `pub const fn new(stroke: Stroke, offset: f32) -> Self`. A focus look.
+- `craft_ui::style::GlyphRole`: `pub enum GlyphRole { Control, Tool, ToolRail, PanelRail }`. How the icon-only buttons of a scope show their glyph, set by the container that holds them
 - `craft_ui::style::HandleLook`: `pub struct HandleLook { pub side: f32, pub fill: Stateful<StyleColor>, pub stroke: StyleColor, pub stroke_width: f32 }`. A canvas handle's fills and stroke.
 - `craft_ui::style::IconLook`: `pub struct IconLook { pub side: f32, pub color: Stateful<StyleColor>, pub ground: Option<Stateful<StyleColor>> }`. A component's icon.
   - `pub fn new(side: f32, color: Stateful<StyleColor>) -> Self`. An icon look.
@@ -3819,6 +3821,7 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
   - `pub fn ink(&self, ink: Ink) -> StyleColor`. The colour text and icons on a surface read in.
   - `pub fn control(&self) -> ControlMetrics`. The height, icon side, padding, gap and field widths of a control at the ambient size.
   - `pub fn glyph(&self) -> f32`. The side of a mark inside a control at the ambient size (`size.icon.glyph_sm`, `glyph_md`): an icon-only
+  - `pub fn glyph_role(&self) -> GlyphRole`. How the icon-only buttons of the scope show their glyph.
   - `pub fn control_of(&self, size: ControlSize) -> ControlMetrics`. `control` at `size`, whatever the ambient size: the part of a control that keeps its own size (a field's
   - `pub fn segment_control(&self) -> ControlMetrics`. `control`, with the side padding of a segment of a segmented control: `space.pad.control` at the small size
   - `pub fn text_width(&self, role: craft_theme::TypeRole, text: &str) -> f32`. The width of `text` set in the face of `role`: the sizes that follow the text (a row header's digit) read it
@@ -3888,6 +3891,7 @@ The fixture, the suite runner and the story helpers.
 - `craft_ui::testing::Room`: re-export of `craft_ui::testing::fixture::Room`.
 - `craft_ui::testing::Target`: re-export of `craft_ui::testing::fixture::Target`.
 - `craft_ui::testing::forget_measurements`: re-export of `craft_ui::runtime::layout_memory::forget_kept`.
+- `craft_ui::testing::in_edge_pane`: `pub fn in_edge_pane<R>(ui: &mut Ui, edge: PaneEdge, story: impl FnOnce(&mut Ui) -> R) -> R`. Runs `story` as the content of an edge pane at `edge`, as a rail or panel docked at that edge of an app window
 - `craft_ui::testing::install_spec`: re-export of `craft_ui::testing::windows::install_spec`.
 - `craft_ui::testing::is_measuring`: re-export of `craft_ui::runtime::measure::active` (defined outside these crates).
 - `craft_ui::testing::last_pass_measuring_runs`: re-export of `craft_ui::runtime::measure::last_pass_body_runs` (defined outside these crates).
