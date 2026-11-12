@@ -32,19 +32,35 @@ pub struct PageApi {
     /// Each control request gets a timeout: if the app does not answer within this many
     /// milliseconds, the error says so (a hidden tab answers when it is shown again).
     timeout_ms: f64,
+    /// Calls waiting for their reply right now.
+    in_flight: Cell<usize>,
+    /// The most calls that may wait at once; one more is refused with a `busy` error.
+    max_in_flight: usize,
 }
+
+/// How many calls may wait for the app at once by default, as many as the desktop control server
+/// queues.
+const DEFAULT_MAX_IN_FLIGHT: usize = 64;
 
 impl PageApi {
     /// `app` is the global name to install (`"vectorcraft"` → `window.vectorcraft`); `methods` is
     /// the control method behind each function ([`Methods::default`] is the desktop control-server
     /// method names).
     pub fn new(app: &str, methods: Methods, request: Request) -> Self {
-        Self { app: app.to_string(), methods, request, timeout_ms: 30_000.0 }
+        Self { app: app.to_string(), methods, request, timeout_ms: 30_000.0, in_flight: Cell::new(0), max_in_flight: DEFAULT_MAX_IN_FLIGHT }
     }
 
     /// Set the timeout for every control request, in milliseconds (default 30 s).
     pub fn with_timeout(mut self, timeout_ms: u32) -> Self {
         self.timeout_ms = timeout_ms as f64;
+        self
+    }
+
+    /// Set how many calls may wait for the app at once (default 64). A call made while that many are
+    /// waiting is refused with a `busy` error before it reaches the app, so a page script that calls
+    /// in a loop without awaiting cannot grow the app's queue without bound.
+    pub fn with_max_in_flight(mut self, max: usize) -> Self {
+        self.max_in_flight = max;
         self
     }
 
@@ -76,7 +92,7 @@ impl PageApi {
             "request",
             Closure::<dyn FnMut(String, JsValue) -> js_sys::Promise>::new(move |method: String, params: JsValue| {
                 let page = page.clone();
-                future_to_promise(async move { request_promise_outcome(&page.call(&method, from_js(&params)).await) })
+                future_to_promise(async move { request_promise_outcome(&page.call(&method, || from_js(&params)).await) })
             })
             .into_js_value(),
         )?;
@@ -88,7 +104,7 @@ impl PageApi {
                 Closure::<dyn FnMut(String, JsValue) -> js_sys::Promise>::new(move |command: String, params: JsValue| {
                     let page = page.clone();
                     future_to_promise(async move {
-                        let params = json!({"command": command, "params": from_js(&params)});
+                        let params = || json!({"command": command, "params": from_js(&params)});
                         request_promise_outcome(&page.call(method, params).await)
                     })
                 })
@@ -102,7 +118,7 @@ impl PageApi {
                 "commands",
                 Closure::<dyn FnMut() -> js_sys::Promise>::new(move || {
                     let page = page.clone();
-                    future_to_promise(async move { request_promise_outcome(&page.call(method, json!({})).await) })
+                    future_to_promise(async move { request_promise_outcome(&page.call(method, || json!({})).await) })
                 })
                 .into_js_value(),
             )?;
@@ -115,7 +131,7 @@ impl PageApi {
                     name,
                     Closure::<dyn FnMut(JsValue) -> js_sys::Promise>::new(move |params: JsValue| {
                         let page = page.clone();
-                        future_to_promise(async move { request_promise_outcome(&page.call(method, from_js(&params)).await) })
+                        future_to_promise(async move { request_promise_outcome(&page.call(method, || from_js(&params)).await) })
                     })
                     .into_js_value(),
                 )?;
@@ -128,7 +144,7 @@ impl PageApi {
                 "screenshot",
                 Closure::<dyn FnMut(JsValue) -> js_sys::Promise>::new(move |params: JsValue| {
                     let page = page.clone();
-                    let params = screenshot_params(from_js(&params));
+                    let params = move || screenshot_params(from_js(&params));
                     future_to_promise(async move { request_promise_outcome(&screenshot_data(page.call(method, params).await)) })
                 })
                 .into_js_value(),
@@ -142,10 +158,18 @@ impl PageApi {
     /// with the page's timeout. If the app does not answer within the timeout, the error says so
     /// (a hidden tab answers when it is shown again) and the app's request future is dropped: an app
     /// that releases a request when its future goes away never runs, late, a call the page was told
-    /// had failed.
-    async fn call(&self, method: &str, params: Value) -> Value {
+    /// had failed. `params` is built after the in-flight check, so a call that is turned away costs no conversion.
+    async fn call(&self, method: &str, params: impl FnOnce() -> Value) -> Value {
+        if self.in_flight.get() >= self.max_in_flight {
+            return json!({
+                "ok": false,
+                "error": format!("{} is busy: {} calls are already waiting for an answer", self.app, self.max_in_flight),
+            });
+        }
+        self.in_flight.set(self.in_flight.get() + 1);
+        let _slot = InFlight(&self.in_flight);
         let timeout = Timeout::new(self.timeout_ms);
-        let mut work = (self.request)(method.to_string(), params);
+        let mut work = (self.request)(method.to_string(), params()); // params are built only once a slot is held
         let reply = std::future::poll_fn(|cx| {
             if let Poll::Ready(reply) = work.as_mut().poll(cx) {
                 return Poll::Ready(Some(reply));
@@ -168,6 +192,16 @@ impl PageApi {
                 ),
             })
         })
+    }
+}
+
+/// One waiting call's place in the in-flight count, given back when the call ends (answered, timed out
+/// or dropped).
+struct InFlight<'a>(&'a Cell<usize>);
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() - 1);
     }
 }
 
