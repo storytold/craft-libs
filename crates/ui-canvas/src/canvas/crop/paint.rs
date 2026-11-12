@@ -35,7 +35,7 @@ pub(super) fn paint(ui: &mut PaintUi<'_>, cx: &Cx<'_, CropOverlay<'_>>, scene: &
     if let Some(Drag { kind: Kind::Line { from, to }, .. }) = scene.drag {
         let line = PaintShape::Path(vec![*from, *to]);
         draw.stroke(&line, StrokeWidth::Thick, style.halo);
-        draw.stroke(&line, StrokeWidth::Medium, style.line);
+        draw.stroke(&line, StrokeWidth::Medium, style.straighten);
         let _ = STRAIGHTEN_MIN;
         return;
     }

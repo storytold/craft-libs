@@ -52,7 +52,7 @@ pub struct PerspectiveCropStyle {
     halo: StyleColor,
     /// The outline of a quad that cannot be committed.
     invalid: StyleColor,
-    /// A perspective grid line.
+    /// A perspective grid line: the white of the handles on the document, faded towards the canvas.
     grid: StyleColor,
     /// Reach of a corner in screen points.
     reach: f32,
@@ -244,7 +244,7 @@ impl Component for PerspectiveCropQuad<'_> {
             line,
             halo: cx.color(tokens.color.overlay.halo),
             invalid: cx.tone(Tone::Bad),
-            grid: craft_theme::Mix::mix(line, canvas, GRID_FADE),
+            grid: craft_theme::Mix::mix(cx.color(tokens.color.overlay.handle_fill), canvas, GRID_FADE),
             reach: tokens.size.hit.target,
             grid_step: tokens.size.handle.md * GRID_CELL,
         }

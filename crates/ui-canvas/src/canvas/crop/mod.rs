@@ -50,8 +50,10 @@ const SWAP: Chord = Chord::plain(Key::X);
 pub struct CropStyle {
     #[style(metrics)]
     metrics: Metrics,
-    /// The frame line, corner brackets and edge bars.
+    /// The frame line, corner brackets and edge bars: the white of the handles on the document.
     line: StyleColor,
+    /// The Straighten line while it is drawn.
+    straighten: StyleColor,
     /// Under the line, the brackets and the Straighten line.
     halo: StyleColor,
     /// The composition guide lines.
@@ -438,12 +440,14 @@ impl Component for CropOverlay<'_> {
 
     fn style(cx: &StyleCx<'_>, _: CropOverlayStyleKey) -> CropStyle {
         let tokens = cx.tokens;
-        let (canvas, line) = (cx.color(tokens.color.surface.canvas), cx.color(tokens.color.overlay.line));
+        let overlay = &tokens.color.overlay;
+        let (canvas, line) = (cx.color(tokens.color.surface.canvas), cx.color(overlay.handle_fill));
         let reach = tokens.size.hit.target;
         CropStyle {
             metrics: Metrics::new().min_size(Vec2::splat(reach)),
             line,
-            halo: cx.color(tokens.color.overlay.halo),
+            straighten: cx.color(overlay.stroke),
+            halo: cx.color(overlay.halo),
             guide: craft_theme::Mix::mix(line, canvas, GUIDE_FADE),
             canvas,
             invalid: cx.tone(craft_theme::variant::Tone::Bad),
