@@ -65,8 +65,6 @@ pub struct Section<'a> {
     #[prop]
     open: Option<Bind<'a, bool>>,
     collapsible: bool,
-    /// The header's weight: `Section` by default, `Caption` for a quiet heading.
-    #[prop]
     strength: HeaderStrength,
     /// The rows of the menu the header's Menu action, a right click, the Menu key and Shift+F10 open.
     #[prop(func = "FnMut(&mut Ui, &mut BodyCx<'_>)")]
@@ -158,6 +156,15 @@ impl<'a> Section<'a> {
     fn update_header(&mut self, change: impl FnOnce(HeaderRegion) -> HeaderRegion) {
         let header = change(self.props.header.unwrap_or_default());
         self.props.header = Some(header);
+    }
+
+    /// The header's weight: `Section` by default, under a rule; `Caption` for a quiet heading over a group of
+    /// controls, with no rule.
+    #[must_use]
+    pub fn strength(mut self, strength: HeaderStrength) -> Self {
+        self.strength = strength;
+        self.update_header(|header| header.rule_above(strength != HeaderStrength::Caption));
+        self
     }
 
     /// The action parts at the end of the header, in reading order.

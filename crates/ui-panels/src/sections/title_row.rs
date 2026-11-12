@@ -18,7 +18,6 @@ use crate::style::{ComponentStyle, IconLook, Ink, StyleCx, TextLook, TypeRole};
 use craft_behavior::{CursorIcon, Flow, IconId, Metrics, Mixed, NavShape, PartKey, Roving, Sense};
 use craft_theme::{ControlSize, Stateful, States};
 use egui::{Id, Rect, Response, Ui, Vec2};
-use std::borrow::Cow;
 
 #[cfg(feature = "testing")]
 mod stories;
@@ -35,7 +34,7 @@ pub enum HeaderStrength {
     Section,
     /// A large heading: the heading role.
     Heading,
-    /// A quiet heading: the caption role, faint, in capitals.
+    /// A quiet heading over a group of controls: label text, faint, as written, with no rule.
     Caption,
 }
 
@@ -270,11 +269,6 @@ impl<'a> TitleRow<'a> {
         if matches!(self.lead, Lead::Disclosure(_)) { icon } else { row }
     }
 
-    /// The title as it shows: a caption reads in capitals.
-    fn title_text<'t>(&self, label: &'t str) -> Cow<'t, str> {
-        if self.strength == HeaderStrength::Caption { Cow::Owned(label.to_uppercase()) } else { Cow::Borrowed(label) }
-    }
-
     /// Divides the room left between the lead and the actions: the icon, then the title, then the subtitle when
     /// both texts fit whole.
     fn place(&self, mut band: Flow, cx: &PartsCx<'_, Self>) -> Placed {
@@ -300,7 +294,7 @@ impl<'a> TitleRow<'a> {
         }
         let role = cx.style.text.role;
         let subtitle = self.subtitle.as_ref().and_then(|subtitle| {
-            let title = cx.layout_at(&TextRun::new(self.title_text(cx.resolved.label)).role(role), f32::INFINITY).galley.size().x;
+            let title = cx.layout_at(&TextRun::new(cx.resolved.label).role(role), f32::INFINITY).galley.size().x;
             let width = cx.layout_at(&subtitle_run(subtitle.as_str(), role), f32::INFINITY).galley.size().x;
             (title + cx.gap() + width <= band.rect().width()).then_some(title)
         });
@@ -327,7 +321,7 @@ impl Component for TitleRow<'_> {
             HeaderStrength::Strong => (cx.tokens.size.panel_header, TypeRole::Title, text.normal),
             HeaderStrength::Section => (cx.tokens.size.panel_header, TypeRole::BodyStrong, text.normal),
             HeaderStrength::Heading => (cx.tokens.size.panel_header, TypeRole::Heading, text.normal),
-            HeaderStrength::Caption => (cx.control().height, TypeRole::Caption, text.faint),
+            HeaderStrength::Caption => (cx.control().height, TypeRole::Label, text.faint),
         };
         let (shade, ink, disabled) = (cx.color(shade), cx.ink(Ink::OnPanel), cx.color(text.disabled));
         TitleRowStyle {
@@ -341,7 +335,7 @@ impl Component for TitleRow<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let role = cx.style.text.role;
-        let title = cx.layout(&TextRun::new(self.title_text(cx.resolved.label)).role(role)).galley.size();
+        let title = cx.layout(&TextRun::new(cx.resolved.label).role(role)).galley.size();
         let subtitle = self.subtitle.as_ref().map(|subtitle| cx.layout(&subtitle_run(subtitle.as_str(), role)).galley.size().x);
         let parts =
             usize::from(self.has_lead()) + usize::from(self.icon.is_some()) + usize::from(self.handle) + self.commands.len() + self.actions.len();
@@ -393,7 +387,7 @@ impl Component for TitleRow<'_> {
         cx.roving(Roving::new(NavShape::Flat));
         let band = flow.rect();
         let placed = self.place(flow, cx);
-        let title = TextRun::new(self.title_text(cx.resolved.label)).role(cx.style.text.role).elide();
+        let title = TextRun::new(cx.resolved.label).role(cx.style.text.role).elide();
         let elided = cx.layout_at(&title, placed.title.width()).elided;
         let tooltip = cx.resolved.label.to_owned();
         let part = if matches!(self.lead, Lead::Disclosure(_)) {
@@ -474,7 +468,7 @@ impl Component for TitleRow<'_> {
             }
             ui.draw().icon(rect, icon);
         }
-        let mut title = TextRun::new(self.title_text(cx.resolved.label)).role(role).elide();
+        let mut title = TextRun::new(cx.resolved.label).role(role).elide();
         if self.strength == HeaderStrength::Caption {
             title = title.color(cx.resolve(&cx.style.text.color));
         }
