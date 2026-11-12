@@ -1711,6 +1711,7 @@ dependencies = [
  "encoding_rs",
  "flate2",
  "proptest",
+ "rayon",
  "serde",
  "thiserror 2.0.21",
 ]
