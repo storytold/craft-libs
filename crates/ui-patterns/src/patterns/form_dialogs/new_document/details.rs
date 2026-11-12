@@ -3,7 +3,7 @@
 use super::presets::{BackgroundContents, BitDepth, ColorMode, DocumentOptions, MAX_NAME, MAX_SAVED, Orientation, RESOLUTION_UNITS, SIZE_UNITS};
 use super::{NewDocumentWords, Read, Session, background_rgb, depth_label, mode_label};
 use crate::buttons::Button;
-use crate::choice::{Checkbox, Segmented};
+use crate::choice::{Checkbox, Segmented, Swatch};
 use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Validity, clicked};
 use crate::display::{Shade, Text};
 use crate::form::{Field, FieldGroup};
@@ -210,12 +210,10 @@ pub(super) fn show(ui: &mut Ui, session: &mut Session, values: &mut DocumentOpti
                     Some(BackgroundKind::Custom) => right.request_color = true,
                     None => {}
                 }
-                let swatch = match background_rgb(values.background, setup.background) {
-                    Some(rgb) => Label::from(Srgba::from_rgb_array(rgb).to_hex()),
-                    None => words.transparent.clone(),
-                };
-                let button = Button::new(swatch).id_salt("choose").tooltip(words.custom_swatch.clone()).show(ui);
-                if clicked(&button) {
+                // A transparent background shows as a clear well over the checkerboard.
+                let color = background_rgb(values.background, setup.background).map_or(Srgba::new(0.0, 0.0, 0.0, 0.0), Srgba::from_rgb_array);
+                // A click asks for a colour again, also while the choice is Custom.
+                if Swatch::new(words.custom_swatch.clone(), color).id_salt("choose").show(ui).clicked {
                     right.request_color = true;
                 }
             });

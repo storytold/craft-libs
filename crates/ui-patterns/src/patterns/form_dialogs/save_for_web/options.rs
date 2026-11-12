@@ -7,9 +7,8 @@ use super::{
 };
 use crate::runtime::requests::ColorRequest;
 
-use crate::buttons::Button;
-use crate::choice::Checkbox;
-use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, clicked};
+use crate::choice::{Checkbox, Swatch};
+use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 
 use crate::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
 
@@ -227,8 +226,9 @@ fn matte_row(ui: &mut Ui, words: &SaveForWebWords, options: &mut SaveForWebOptio
     let color = Rgba([r, g, b, OPAQUE]);
     row(ui, &words.matte, "matte", |ui| {
         Row::new().show(ui, |ui, _| {
-            if clicked(&Button::new(Label::from(color.to_hex())).id_salt("choose").show(ui)) {
-                *ask = Some(ColorRequest::new(MATTE_COLOR_KEY, Srgba::from(color)).title(words.matte.clone()));
+            let swatch = Swatch::new(words.matte.clone(), Srgba::from(color)).picker(MATTE_COLOR_KEY).id_salt("choose").show(ui);
+            if let Some(request) = swatch.pick_color {
+                *ask = Some(request);
             }
             if let Some(Rgba([r, g, b, _])) = HexField::hex(words.matte_hex.clone(), Bind::given(color)).id_salt("hex").show(ui).value().cloned() {
                 options.matte = [r, g, b];

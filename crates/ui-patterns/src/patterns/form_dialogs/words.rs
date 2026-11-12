@@ -14,6 +14,5 @@ craft_ui::words! {
         point_y: template "param.pointY" = "{name} Y";
         grid_cell: template "param.gridCell" = "{name} {row}, {column}";
         choose_color: "param.chooseColor" = "Choose…";
-        color_unset: "param.colorUnset" = "Not set";
     }
 }

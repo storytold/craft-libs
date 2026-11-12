@@ -6,7 +6,7 @@ use crate::runtime::requests::{ColorRequest, EyedropperRequest, PathRequest};
 use super::param::{CustomContext, Param, ParamKind, fill_defaults, rounded};
 use super::words::ParamWords;
 use crate::buttons::{Button, ToggleButton};
-use crate::choice::{Checkbox, Radio, RadioGroup};
+use crate::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Remember as _, Sampler as _, Show as _, ShowContainer as _, clicked};
 use crate::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
 
@@ -433,7 +433,8 @@ impl<'p> Pass<'p> {
         });
     }
 
-    /// A colour row: a button that asks the host's picker, and the eyedropper toggle when the row has one.
+    /// A colour row: a swatch that asks the host's picker (mixed while the row has no colour), and the eyedropper
+    /// toggle when the row has one.
     fn color(&mut self, ui: &mut Ui, line: &Line<'_>) {
         let color = self.work.color(line.key);
         let option = line.param.option();
@@ -445,12 +446,12 @@ impl<'p> Pass<'p> {
             }
         }
         let armed = self.memo.armed.as_deref() == Some(line.key);
-        let shown = color.map_or_else(|| self.words.color_unset.clone(), |rgb| Label::from(Srgba::from_rgb_array(rgb).to_hex()));
+        let shown = color.map_or(Mixed::Mixed, |rgb| Mixed::Same(Srgba::from_rgb_array(rgb)));
         line.show(ui, |ui| {
             beside(ui, |ui| {
-                if clicked(&Button::new(shown.clone()).id_salt("choose").show(ui)) {
-                    let current = Srgba::from_rgb_array(color.unwrap_or([0.0; 3]));
-                    self.color = Some(ColorRequest::new(line.key, current).title(line.name.clone()));
+                let swatch = Swatch::new(line.name.clone(), shown).picker(line.key).id_salt("choose").show(ui);
+                if let Some(request) = swatch.pick_color {
+                    self.color = Some(request);
                 }
                 if option.eyedropper() {
                     let toggle = ToggleButton::new(self.words.eyedropper.clone(), Bind::given(armed))
