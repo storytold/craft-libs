@@ -81,6 +81,7 @@ pass_state! {
         root_tokens: crate::runtime::env::tokens::RootTokenCache,
         styles: crate::style::cache::StyleCache,
         style_groups: crate::style::cx::GroupCache,
+        #[cfg(feature = "testing")]
         elisions: crate::runtime::egui::painted::Elisions,
         tooltip_grace: crate::contract::tooltip::Grace,
         gestures: crate::runtime::edit::Gestures,

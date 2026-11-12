@@ -9,7 +9,6 @@ mod text;
 #[cfg(feature = "testing")]
 mod tree;
 
-#[cfg(feature = "testing")]
 use crate::runtime::pass_state;
 use egui::FullOutput;
 use egui::{Context, Id, ViewportId};

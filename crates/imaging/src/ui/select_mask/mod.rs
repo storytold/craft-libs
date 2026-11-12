@@ -36,6 +36,7 @@ mod commands;
 mod edits;
 mod panel;
 mod session;
+#[cfg(feature = "screen-testing")]
 pub(crate) mod stories;
 mod tools;
 mod words;

@@ -44,6 +44,7 @@ mod canvas;
 mod commands;
 mod panel;
 mod session;
+#[cfg(feature = "screen-testing")]
 pub(crate) mod stories;
 mod tools;
 mod words;
