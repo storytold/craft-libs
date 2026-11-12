@@ -5,16 +5,16 @@ use super::view_words::FindingsWords;
 use super::words::ListWords;
 use super::{ListRow, RowEvent};
 use crate::contract::{
-    Bind, BindMut, BodyCx, Collection, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, MeasureCx, PaintUi, Props as _,
-    Role, SelectMode, Show as _, Sizing, Styled as _, WordSetCx as _,
+    ActivateOn, Bind, BindMut, BodyCx, Collection, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, MeasureCx, PaintUi,
+    Props as _, Role, SelectMode, Show as _, Sizing, Styled as _, WordSetCx as _,
 };
 use crate::notices::{Notice, NoticeLayout};
-use crate::primitives::{IconSpec, TextRun};
+use crate::primitives::{IconSpec, TextRun, glyph};
 use crate::style::{ComponentStyle, IconLook, Stateful, StyleCx, SurfaceKind, TextLook, TypeRole};
 use craft_behavior::{DisplayOrder, Flow, IconId, Insets, ItemSource, Metrics, Selection, Sense, SpanLayout};
 use craft_i18n::Format;
 use craft_theme::variant::Tone;
-use egui::{Rect, Response, Ui, Vec2};
+use egui::{Response, Ui, Vec2};
 use std::borrow::Cow;
 
 /// How serious a finding is. The glyph's shape differs per severity as well as its colour.
@@ -146,7 +146,8 @@ pub struct FindingsListStyle {
     metrics: Metrics,
 }
 
-/// The list of findings: one selected finding, Enter activates, and an empty list says so.
+/// The list of findings: one selected finding, a click or Enter activates it (the app goes to what it is about), and an
+/// empty list says so.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(collection)]
 pub struct FindingsList<'a> {
@@ -166,7 +167,7 @@ impl<'a> FindingsList<'a> {
         FindingsList {
             common: Common::new(),
             props: ContainerProps::new().surface(SurfaceKind::Sunken).sizing(Sizing::Fill),
-            items: CollectionProps::new().select(SelectMode::Single),
+            items: CollectionProps::new().select(SelectMode::Single).activate(ActivateOn::Click),
             selection: None,
         }
         .label(label)
@@ -225,15 +226,15 @@ pub struct FindingsSummaryStyle {
     metrics: Metrics,
     #[style(text)]
     text: TextLook,
-    /// The icon when there are no errors.
+    /// The status dot when there are no errors.
     #[style(icon)]
     good: IconLook,
-    /// The icon when there are errors.
+    /// The status dot when there are errors.
     #[style(icon)]
     bad: IconLook,
 }
 
-/// The line over a list of findings: an icon that says whether there are errors, then the counts.
+/// The line over a list of findings: a status dot that says whether there are errors, then the counts.
 #[derive(crate::contract::Component)]
 pub struct FindingsSummary<'a> {
     #[common]
@@ -253,10 +254,6 @@ impl<'a> FindingsSummary<'a> {
 
     fn has_errors(&self) -> bool {
         self.findings.iter().any(|finding| finding.severity == Severity::Error)
-    }
-
-    fn icon(&self) -> IconId {
-        if self.has_errors() { Severity::Error.icon() } else { IconId::new("success") }
     }
 }
 
@@ -289,11 +286,11 @@ impl Component for FindingsSummary<'_> {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let rtl = cx.env.direction().is_rtl();
-        let (glyph, rest) = Flow::new(cx.content_rect, rtl).take_start(cx.style.good.side);
+        let (mark, rest) = Flow::new(cx.content_rect, rtl).take_start(cx.style.good.side);
         let (_, rest) = rest.take_start(cx.style.metrics.gap);
         let draw = ui.draw();
         let look = if self.has_errors() { &cx.style.bad } else { &cx.style.good };
-        draw.icon(Rect::from_center_size(glyph.center(), Vec2::splat(look.side)), &IconSpec::svg(self.icon()).color(cx.resolve(&look.color)));
+        draw.fill(&glyph::dot(mark.center(), look.side), cx.resolve(&look.color));
         let words = cx.words::<FindingsWords>();
         draw.text(rest.rect(), &TextRun::new(self.text(&words, cx.format())).color(cx.resolve(&cx.style.text.color)).elide());
     }

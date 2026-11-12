@@ -156,6 +156,25 @@ fn a_click_on_the_selected_event_deselects_it() {
     );
 }
 
+/// A single click on a finding activates it, so the app goes to what it is about.
+#[trial]
+fn a_click_on_a_finding_activates_it() {
+    use craft_ui::contract::WordSetCx as _;
+    use craft_ui::list::{Finding, Findings, FindingsList, FindingsWords, Severity};
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let held = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let findings: Vec<Finding> = NAMES.iter().enumerate().map(|(at, name)| Finding::new(at as u64, Severity::Warning, *name)).collect();
+        let source = Findings::new(&findings);
+        let out = FindingsList::new("Findings").show_items(ui, &source, &mut |key, icx| findings[*key as usize].row(&icx.words::<FindingsWords>()));
+        held.borrow_mut().extend(out.events);
+    });
+    fixture.settle();
+    let row = fixture.by_label("Artboard 2, Warning").expect("the second finding");
+    fixture.click(&row).settle();
+    assert!(seen.borrow().iter().any(|event| matches!(event, CollectionEvent::Activate(1))), "one click activates the finding");
+}
+
 /// A list of the three rows built by `row`, in `room`, and what it reported.
 fn rows_rig(room: Vec2, row: fn(usize) -> ListRow<'static>) -> (Fixture, Rc<RefCell<Vec<CollectionEvent<usize, RowEvent>>>>) {
     let seen = Rc::new(RefCell::new(Vec::new()));
