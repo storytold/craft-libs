@@ -96,16 +96,17 @@ impl ListRow<'_> {
 
     pub(super) fn paint_thumbs(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed, ink: StyleColor) {
         let style = cx.style;
+        let frame = style.thumb_frame_width;
         let outset = style.sizes.tight;
         let arm = style.sizes.gap;
         let rects: Vec<Rect> = placed.first.into_iter().chain(placed.extras.iter().map(|(thumb, _)| *thumb)).collect();
         let mut paints = self.first.take().into_iter().map(Some).chain(self.extras.iter_mut().map(|extra| extra.paint.take()));
         for (at, thumb) in rects.iter().enumerate() {
             if let Some(Some(paint)) = paints.next() {
-                let _ = ui.child(("thumb", at), *thumb, RowThumb::new(paint));
+                let _ = ui.child(("thumb", at), thumb.shrink(frame), RowThumb::new(paint));
             }
-            let shape = PaintShape::Rect(*thumb, style.thumb_radius);
-            ui.draw().stroke(&shape, StrokeWidth::Thin, style.thumb_edge);
+            // The frame is the slot's square edge, and the picture fills the slot inside it.
+            ui.draw().stroke(&PaintShape::Rect(*thumb, CornerRadius::ZERO), StrokeWidth::Thin, style.thumb_frame);
         }
         // Adjacent targets are one target together (a frame and its content): one set of brackets frames them all.
         let mut at = 0;

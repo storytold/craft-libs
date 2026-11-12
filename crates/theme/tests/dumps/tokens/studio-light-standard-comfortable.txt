@@ -21,6 +21,7 @@ line.divider = #e2e2e8ff
 line.border = #dedee4ff
 line.control_edge = #d6d6dcff
 line.knob_edge = #60606aff
+line.frame = #d6d6dcff
 line.mark = #7d7d80ff
 line.focus = #897af4ff
 accent.solid = #6c5ce7ff

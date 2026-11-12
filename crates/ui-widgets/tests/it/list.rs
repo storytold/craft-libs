@@ -892,3 +892,37 @@ fn a_sections_disclosure_and_a_rows_trailing_disclosure_paint_the_same_triangle(
     assert_eq!((section.len(), row.len()), (1, 1), "each paints one filled triangle: {section:?} {row:?}");
     assert!((section[0] - row[0]).length() < 0.01, "the two triangles are the same size: {section:?} {row:?}");
 }
+
+/// A thumbnail is square and framed around its picture: the frame is a square-cornered rect whose inside the picture
+/// fills, so nothing of the picture shows past the frame, and the row holds the frame.
+#[trial]
+fn a_thumbnails_frame_is_square_and_lies_outside_its_picture() {
+    use craft_ui::list::ThumbSize;
+    use std::cell::Cell;
+    let picture = Rc::new(Cell::new(egui::Rect::NOTHING));
+    let painted = picture.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key);
+        let _ = List::new("Layers").show_items(ui, &source, &mut |key, _| {
+            let painted = painted.clone();
+            ListRow::new(NAMES[*key]).thumb(ThumbSize::Medium, move |_, rect| painted.set(rect))
+        });
+    });
+    fixture.room(Vec2::new(300.0, 200.0));
+    fixture.settle();
+    let shapes = fixture.frame_shapes();
+    let picture = picture.get();
+    let row = fixture.by_label(NAMES[0]).expect("the row").rect;
+    let frame = shapes
+        .iter()
+        .find_map(|shape| match shape {
+            egui::Shape::Rect(rect) if !rect.stroke.is_empty() && rect.rect.contains_rect(picture) && rect.rect != picture => Some(rect.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("a frame paints around the picture {picture:?}"));
+    assert_eq!(frame.corner_radius, egui::CornerRadius::ZERO, "the frame is square");
+    let inner = frame.rect.shrink(frame.stroke.width);
+    assert!(inner.contains_rect(picture) && picture.contains_rect(inner.shrink(0.01)), "the picture fills the frame's inside: {frame:?} {picture:?}");
+    assert!(row.contains_rect(frame.rect), "the row holds the frame: {row:?} {frame:?}");
+}

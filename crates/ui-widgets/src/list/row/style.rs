@@ -4,7 +4,6 @@ use super::placement::Sizes;
 use crate::style::{ComponentStyle, Flags, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook};
 use craft_behavior::Metrics;
 use craft_theme::{Contrast, Rgba, Stateful, States, contrast_ratio, identifiable_outline, over};
-use egui::CornerRadius;
 
 /// Least contrast ratio of a selected fill on the panel for it to identify the row alone: standard, high.
 const OUTLINE_MIN: (f64, f64) = (3.0, 4.5);
@@ -38,8 +37,9 @@ pub struct ListRowStyle {
     /// A text cell of a column that reads muted.
     #[style(text)]
     pub(super) cell_muted: TextLook,
-    pub(super) thumb_edge: StyleColor,
-    pub(super) thumb_radius: CornerRadius,
+    /// The frame at the edge of each thumbnail's slot, around its picture: `line.frame`, `stroke.thin` wide.
+    pub(super) thumb_frame: StyleColor,
+    pub(super) thumb_frame_width: f32,
     pub(super) sizes: Sizes,
     pub(super) dividers: bool,
 }

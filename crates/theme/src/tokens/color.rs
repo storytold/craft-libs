@@ -110,6 +110,8 @@ pub struct LineColors {
     /// The outline of a `surface.knob` face; clear where the face stands out on its own (dark
     /// mode).
     pub knob_edge: Rgba,
+    /// The frame around a picture (a layer or channel thumbnail): near black in dark mode, a mid grey in light mode.
+    pub frame: Rgba,
     /// Marks that carry meaning and sit on control surfaces: slider marks and ticks, the ring
     /// around a badge dot. Holds the non-text minimum on them.
     pub mark: Rgba,
@@ -316,7 +318,7 @@ impl ColorTokens {
                 shadow: c,
             },
             text: TextColors { normal: c, muted: c, faint: c, disabled: c, on_accent: c, on_strong: c, on_status: c, on_selected: c },
-            line: LineColors { divider: c, border: c, control_edge: c, knob_edge: c, mark: c, focus: c },
+            line: LineColors { divider: c, border: c, control_edge: c, knob_edge: c, frame: c, mark: c, focus: c },
             accent: AccentColors {
                 solid: c,
                 hover: c,
@@ -457,6 +459,8 @@ color_tokens! {
     LineControlEdge = "line.control_edge" => line.control_edge;
     /// `line.knob_edge`
     LineKnobEdge = "line.knob_edge" => line.knob_edge;
+    /// `line.frame`
+    LineFrame = "line.frame" => line.frame;
     /// `line.mark`
     LineMark = "line.mark" => line.mark;
     /// `line.focus`

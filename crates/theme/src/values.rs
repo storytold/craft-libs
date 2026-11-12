@@ -206,6 +206,15 @@ pub(super) fn source(token: ColorToken, mode: Mode) -> ColorSource {
                 Same(T::TextMuted)
             }
         }
+        // A picture's frame: the darkest step on the curve in dark mode, whatever panel the theme pins
+        // (PhotoCraft's near-black thumbnail frame); the control edge's mid grey in light mode.
+        T::LineFrame => {
+            if dark {
+                Neutral(1)
+            } else {
+                Same(T::LineControlEdge)
+            }
+        }
         // The contrast pass moves it to the non-text minimum on the control surfaces.
         T::LineMark => Neutral(8),
         T::LineFocus => Accent(9),

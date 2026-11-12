@@ -108,8 +108,8 @@ impl Component for ListRow<'_> {
             detail: TextLook::new(TypeRole::Caption, ink(text.faint)),
             cell: TextLook::new(role, ink(base)),
             cell_muted: TextLook::new(role, ink(muted)),
-            thumb_edge: c(colors.line.border),
-            thumb_radius: UiTokens::corner(tokens.shape.radius.sm),
+            thumb_frame: c(colors.line.frame),
+            thumb_frame_width: tokens.stroke.thin,
             sizes,
             dividers: tokens.shape.rows == RowStyle::Divided,
         }
