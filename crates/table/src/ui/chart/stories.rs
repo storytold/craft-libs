@@ -6,6 +6,7 @@
 
 use super::{ChartPrimitive, HAlign, VAlign, paint_chart};
 use craft_ui::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Show as _};
+use craft_ui::primitives::StrokeWidth;
 use craft_ui::style::{ComponentStyle, DataColor, StyleCx};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, stage_width, story};
 use egui::{Response, Ui, Vec2, vec2};
@@ -21,8 +22,6 @@ pub struct ChartSheetStyle {
     axis: DataColor,
     /// The line between two wedges.
     gap: DataColor,
-    /// The width of axes, gridlines and wedge gaps.
-    line: f32,
 }
 
 /// A chart's primitives in the sheet's colours at a size.
@@ -53,7 +52,6 @@ impl Component for ChartSheet<'_> {
             series: [color.accent.solid, color.status.good.solid, color.status.warn.solid, color.status.bad.solid].map(data),
             axis: data(color.line.border),
             gap: data(color.surface.raised),
-            line: cx.tokens.stroke.thin,
         }
     }
 
@@ -94,9 +92,9 @@ fn column_chart(style: &ChartSheetStyle, size: Vec2) -> Vec<ChartPrimitive> {
     let mut out = vec![ChartPrimitive::text(size.x / 2.0, top / 2.0, "Sales by region").anchored(HAlign::Center, VAlign::Center).bold()];
     for step in 1..=3 {
         let y = bottom - (bottom - top) * step as f32 / 4.0;
-        out.push(ChartPrimitive::line(vec![[left, y], [right, y]], style.axis, style.line).dashed());
+        out.push(ChartPrimitive::line(vec![[left, y], [right, y]], style.axis, StrokeWidth::Hairline).dashed());
     }
-    out.push(ChartPrimitive::line(vec![[left, top], [left, bottom], [right, bottom]], style.axis, style.line));
+    out.push(ChartPrimitive::line(vec![[left, top], [left, bottom], [right, bottom]], style.axis, StrokeWidth::Hairline));
     let max = values.iter().copied().fold(f32::MIN, f32::max);
     let slot = (right - left) / values.len() as f32;
     for (at, (value, region)) in values.iter().zip(regions).enumerate() {
@@ -119,7 +117,7 @@ fn doughnut_chart(style: &ChartSheetStyle, size: Vec2) -> Vec<ChartPrimitive> {
     let mut from = 0.0;
     for (share, fill) in shares.iter().zip(style.series) {
         let to = from + std::f32::consts::TAU * share / total;
-        out.push(ChartPrimitive::wedge(centre, (outer * 0.55, outer), (from, to), fill).stroked(style.gap, style.line));
+        out.push(ChartPrimitive::wedge(centre, (outer * 0.55, outer), (from, to), fill).stroked(style.gap, StrokeWidth::Hairline));
         from = to;
     }
     out

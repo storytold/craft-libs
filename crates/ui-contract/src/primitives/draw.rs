@@ -86,6 +86,17 @@ impl From<StrokeWidth> for DataStrokeWidth {
     }
 }
 
+impl DataStrokeWidth {
+    /// The width with a document width multiplied by `scale` (a view's zoom); a theme width stays as the theme names
+    /// it.
+    pub fn scaled(self, scale: f32) -> Self {
+        match self {
+            DataStrokeWidth::Data(DataWidth(points)) => DataStrokeWidth::Data(DataWidth(points * scale)),
+            named @ DataStrokeWidth::Named(_) => named,
+        }
+    }
+}
+
 impl From<DataWidth> for DataStrokeWidth {
     fn from(width: DataWidth) -> Self {
         DataStrokeWidth::Data(width)
@@ -439,6 +450,12 @@ impl<'a> Draw<'a> {
     pub fn dashed(&self, path: &[Pos2], pattern: Dashes, width: impl Into<DataStrokeWidth>, color: impl Into<StrokeColor>) {
         let line = self.line(width.into(), color.into());
         self.painter.extend(super::kit::dashed(path, pattern, line.width, line.color));
+    }
+
+    /// The theme's dash pattern: `stroke.dash` dashes with `stroke.dash_gap` gaps.
+    pub fn dashes(&self) -> Dashes {
+        let stroke = &self.env.tokens.stroke;
+        Dashes::new(stroke.dash, stroke.dash_gap)
     }
 
     /// The width in points and colour a stroke of `width` and `color` paints with.

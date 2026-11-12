@@ -1,13 +1,15 @@
 //! A chart drawn from a primitive list.
 
 use craft_theme::TypeRole;
-use craft_ui::primitives::{Draw, PaintShape, TextRun};
+use craft_ui::primitives::{DataStrokeWidth, Draw, PaintShape, TextRun};
 use craft_ui::style::{DataColor, StyleColor};
 use egui::{CornerRadius, Pos2, Rect, pos2, vec2};
 
 #[cfg(feature = "screen-testing")]
 mod stories;
 
+/// A document line width never shrinks below this share of its width at 100 % zoom (a zoom floor, not a size).
+const MIN_STROKE_ZOOM: f32 = 0.5;
 /// One wedge step spans this many radians.
 const WEDGE_STEP: f32 = 0.05;
 /// A wedge has between these many steps.
@@ -44,9 +46,8 @@ pub enum VAlign {
 /// A drawing primitive in chart coordinates (origin top-left, y down, points). The app's chart engine produces the
 /// list; the library paints it.
 ///
-/// Lines and outlines (`Line`, and every `stroke`) need a data-colour stroke at a data width, which `Draw` does not
-/// offer; they paint nothing. Text takes its size from the body and strong body roles and is not rotated: a text
-/// with a `rotation` other than zero paints nothing.
+/// Widths are a theme's named width or a document width (`DataStrokeWidth`). Text takes its size from the body and
+/// strong body roles and is not rotated: a text with a `rotation` other than zero paints nothing.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum ChartPrimitive {
@@ -64,7 +65,7 @@ pub enum ChartPrimitive {
         /// Fill colour; `None` for no fill.
         fill: Option<DataColor>,
         /// Stroke colour and width; `None` for no stroke.
-        stroke: Option<(DataColor, f32)>,
+        stroke: Option<(DataColor, DataStrokeWidth)>,
         /// Corner radius.
         radius: f32,
     },
@@ -76,7 +77,7 @@ pub enum ChartPrimitive {
         /// Stroke colour.
         color: DataColor,
         /// Stroke width.
-        width: f32,
+        width: DataStrokeWidth,
         /// Draw dashed.
         dash: bool,
     },
@@ -88,7 +89,7 @@ pub enum ChartPrimitive {
         /// Fill colour.
         fill: DataColor,
         /// Stroke colour and width; `None` for no stroke.
-        stroke: Option<(DataColor, f32)>,
+        stroke: Option<(DataColor, DataStrokeWidth)>,
     },
     /// A pie or doughnut sector: centre, radii, angles in radians (0 at 12 o'clock, clockwise).
     #[non_exhaustive]
@@ -108,7 +109,7 @@ pub enum ChartPrimitive {
         /// Fill colour.
         fill: DataColor,
         /// Stroke colour and width; `None` for no stroke.
-        stroke: Option<(DataColor, f32)>,
+        stroke: Option<(DataColor, DataStrokeWidth)>,
     },
     /// A circle.
     #[non_exhaustive]
@@ -122,7 +123,7 @@ pub enum ChartPrimitive {
         /// Fill colour; `None` for no fill.
         fill: Option<DataColor>,
         /// Stroke colour and width; `None` for no stroke.
-        stroke: Option<(DataColor, f32)>,
+        stroke: Option<(DataColor, DataStrokeWidth)>,
     },
     /// Text anchored at `(x, y)` by `align` / `valign`, rotated by `rotation` radians about the anchor.
     #[non_exhaustive]
@@ -153,8 +154,8 @@ impl ChartPrimitive {
     }
 
     /// A solid polyline through `points`.
-    pub fn line(points: Vec<[f32; 2]>, color: DataColor, width: f32) -> Self {
-        ChartPrimitive::Line { points, color, width, dash: false }
+    pub fn line(points: Vec<[f32; 2]>, color: DataColor, width: impl Into<DataStrokeWidth>) -> Self {
+        ChartPrimitive::Line { points, color, width: width.into(), dash: false }
     }
 
     /// A polygon through `points` filled with `fill`.
@@ -190,12 +191,12 @@ impl ChartPrimitive {
 
     /// Outlines a rect, polygon, wedge or circle.
     #[must_use]
-    pub fn stroked(mut self, color: DataColor, width: f32) -> Self {
+    pub fn stroked(mut self, color: DataColor, width: impl Into<DataStrokeWidth>) -> Self {
         match &mut self {
             ChartPrimitive::Rect { stroke, .. }
             | ChartPrimitive::Polygon { stroke, .. }
             | ChartPrimitive::Wedge { stroke, .. }
-            | ChartPrimitive::Circle { stroke, .. } => *stroke = Some((color, width)),
+            | ChartPrimitive::Circle { stroke, .. } => *stroke = Some((color, width.into())),
             ChartPrimitive::Line { .. } | ChartPrimitive::Text { .. } => {}
         }
         self
@@ -256,36 +257,57 @@ impl ChartPrimitive {
     }
 }
 
-/// Paints `primitives` with their origin at `origin`, scaled by `zoom`: rects, polygons (a convex one whole, else
-/// as the vertical strips of an area chart's polygon: its top edge along the first half of the points and its
-/// baseline back along the second half, exact for an area chart's "mountain" shape), wedges as one convex shape per
-/// step of 0.05 rad (2…400 steps), circles, and text anchored by its alignment.
+/// Paints `primitives` with their origin at `origin`, scaled by `zoom`: rects (stroked inside), lines (dashed in the
+/// theme's dash pattern when asked), polygons (a convex one whole, else as the vertical strips of an area chart's
+/// polygon: its top edge along the first half of the points and its baseline back along the second half, exact for
+/// an area chart's "mountain" shape), wedges as one convex shape per step of 0.05 rad (2…400 steps), circles, and
+/// text anchored by its alignment. A document line width scales with `zoom`, never below half its width; a theme
+/// width stays as the theme gives it.
 pub fn paint_chart(draw: &Draw<'_>, origin: Pos2, primitives: &[ChartPrimitive], zoom: f32) {
     let at = |x: f32, y: f32| pos2(origin.x + x * zoom, origin.y + y * zoom);
+    let line_width = |width: DataStrokeWidth| width.scaled(zoom.max(MIN_STROKE_ZOOM));
+    let outline = |shape: &PaintShape, stroke: &Option<(DataColor, DataStrokeWidth)>| {
+        if let Some((color, line)) = stroke {
+            draw.stroke(shape, line_width(*line), *color);
+        }
+    };
     for primitive in primitives {
         match primitive {
-            ChartPrimitive::Rect { x, y, width, height, fill, radius, .. } => {
+            ChartPrimitive::Rect { x, y, width, height, fill, stroke, radius } => {
                 let rect = Rect::from_min_size(at(*x, *y), vec2(width * zoom, height * zoom));
+                let corners = CornerRadius::same((radius * zoom).round().clamp(0.0, 255.0) as u8);
+                let shape = PaintShape::Rect(rect, corners);
                 if let Some(fill) = fill {
-                    let corners = CornerRadius::same((radius * zoom).round().clamp(0.0, 255.0) as u8);
-                    draw.data_fill(&PaintShape::Rect(rect, corners), *fill);
+                    draw.data_fill(&shape, *fill);
+                }
+                outline(&shape, stroke);
+            }
+            ChartPrimitive::Line { points, color, width, dash } => {
+                let points: Vec<Pos2> = points.iter().map(|q| at(q[0], q[1])).collect();
+                if points.len() < 2 {
+                    continue;
+                }
+                if *dash {
+                    draw.dashed(&points, draw.dashes(), line_width(*width), *color);
+                } else {
+                    draw.stroke(&PaintShape::Path(points), line_width(*width), *color);
                 }
             }
-            ChartPrimitive::Line { .. } => {}
-            ChartPrimitive::Polygon { points, fill, .. } => {
+            ChartPrimitive::Polygon { points, fill, stroke } => {
                 let points: Vec<Pos2> = points.iter().map(|q| at(q[0], q[1])).collect();
                 if points.len() < 3 {
                     continue;
                 }
                 if is_convex(&points) {
-                    draw.data_fill(&PaintShape::Polygon(points), *fill);
+                    draw.data_fill(&PaintShape::Polygon(points.clone()), *fill);
                 } else {
                     for strip in area_strips(&points) {
                         draw.data_fill(&PaintShape::Polygon(strip.to_vec()), *fill);
                     }
                 }
+                outline(&PaintShape::Polygon(points), stroke);
             }
-            ChartPrimitive::Wedge { center_x, center_y, outer_radius, inner_radius, start_angle, end_angle, fill, .. } => {
+            ChartPrimitive::Wedge { center_x, center_y, outer_radius, inner_radius, start_angle, end_angle, fill, stroke } => {
                 let centre = at(*center_x, *center_y);
                 let steps = (((end_angle - start_angle).abs() / WEDGE_STEP).ceil() as usize).clamp(WEDGE_STEPS.0, WEDGE_STEPS.1);
                 let on = |angle: f32, radius: f32| pos2(centre.x + radius * zoom * angle.sin(), centre.y - radius * zoom * angle.cos());
@@ -299,11 +321,20 @@ pub fn paint_chart(draw: &Draw<'_>, origin: Pos2, primitives: &[ChartPrimitive],
                     };
                     draw.data_fill(&PaintShape::Polygon(step), *fill);
                 }
-            }
-            ChartPrimitive::Circle { center_x, center_y, radius, fill, .. } => {
-                if let Some(fill) = fill {
-                    draw.data_fill(&PaintShape::Circle(at(*center_x, *center_y), radius * zoom), *fill);
+                let mut edge: Vec<Pos2> = (0..=steps).map(|i| on(angle(i), *outer_radius)).collect();
+                if *inner_radius > 0.0 {
+                    edge.extend((0..=steps).rev().map(|i| on(angle(i), *inner_radius)));
+                } else {
+                    edge.push(centre);
                 }
+                outline(&PaintShape::Polygon(edge), stroke);
+            }
+            ChartPrimitive::Circle { center_x, center_y, radius, fill, stroke } => {
+                let shape = PaintShape::Circle(at(*center_x, *center_y), radius * zoom);
+                if let Some(fill) = fill {
+                    draw.data_fill(&shape, *fill);
+                }
+                outline(&shape, stroke);
             }
             ChartPrimitive::Text { x, y, text, color, bold, align, valign, rotation } => {
                 if *rotation != 0.0 {
