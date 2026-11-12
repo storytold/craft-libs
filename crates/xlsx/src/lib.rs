@@ -51,9 +51,11 @@
 
 mod document;
 mod drawing;
+#[macro_use]
 mod features;
 pub mod ns;
 mod package;
+mod pivot;
 mod sheet;
 mod strings;
 mod styles;
@@ -68,7 +70,7 @@ pub use craft_sheet::{
     BorderStyle, CellError, CellRef, DEFAULT_PALETTE, HAlign, MAX_COLS, MAX_ROWS, Pattern, Range, Script, Underline, VAlign, Value, Visibility,
     builtin_format, builtin_format_id, quote_sheet, sheet_needs_quotes,
 };
-pub use document::{Document, DrawingPart, KeptPart, TablePart, Worksheet, XlsxKind};
+pub use document::{Document, DrawingPart, KeptPart, PivotCachePart, PivotTablePart, TablePart, Worksheet, XlsxKind};
 pub use drawing::{Anchor, Drawing, Item, Marker, ObjectKind, Placement};
 pub use features::{
     Break, CfRule, Cfvo, ColorScale, Comment, Comments, ConditionalFormatting, DataBar, DataValidation, DataValidations, Features, HeaderFooter,
@@ -76,12 +78,16 @@ pub use features::{
     notes_vml, parse_sqref, range_ref,
 };
 pub use package::{Package, is_xlsb};
+pub use pivot::{
+    CacheField, CacheItem, CacheRecord, CacheSource, CacheValue, DataField, FieldGroup, Location, PageField, PivotCacheDefinition, PivotField,
+    PivotItem, PivotTableDefinition, PivotTableStyleInfo, RangePr, SharedItems, WorksheetSource, records_xml,
+};
 pub use sheet::{Cell, CellFormula, CellValue, Column, FormulaKind, Row, SheetPart, iso_date_serial};
 pub use strings::{PhoneticProps, PhoneticRun, StringItem, TextRun, decode_xstring, encode_xstring, rich_text, t_el};
 pub use styles::{
     Alignment, Border, BorderEdge, CellStyle, Color, ColorSource, Dxf, Fill, Font, FontScheme, GradientFill, PatternFill, Protection, Styles, Xf,
 };
-pub use workbook::{DefinedName, SheetEntry, SheetKind, Workbook};
+pub use workbook::{DefinedName, PivotCacheEntry, SheetEntry, SheetKind, Workbook};
 pub use write::num;
 
 /// Why a workbook could not be read.

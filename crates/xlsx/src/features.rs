@@ -14,7 +14,7 @@ use crate::styles::Color;
 use crate::write::num;
 
 /// An attribute value type.
-trait Attr: Sized {
+pub(crate) trait Attr: Sized {
     fn parse(s: &str) -> Option<Self>;
     fn spell(&self) -> String;
 }
@@ -62,7 +62,7 @@ impl Attr for String {
 
 /// The attributes of `e` not in `named`. A container's `count` (written from the items) and
 /// the `ref` and `sqref` each type reads into a field of its own are left out.
-fn rest(e: &El, named: &[&str]) -> Vec<(String, String)> {
+pub(crate) fn rest(e: &El, named: &[&str]) -> Vec<(String, String)> {
     e.attrs.iter().filter(|(k, _)| !matches!(k.as_str(), "count" | "ref" | "sqref") && !named.contains(&k.as_str())).cloned().collect()
 }
 
@@ -120,7 +120,7 @@ fn sqref(ranges: &[Range]) -> String {
     ranges.iter().map(range_ref).collect::<Vec<_>>().join(" ")
 }
 
-fn kids(e: &El, except: &[&str]) -> Vec<El> {
+pub(crate) fn kids(e: &El, except: &[&str]) -> Vec<El> {
     e.elements().filter(|c| !except.contains(&c.name.as_str())).cloned().collect()
 }
 

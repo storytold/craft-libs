@@ -64,6 +64,15 @@ worksheet holds them as `TablePart`s, regenerated on writing with their relation
 reserved before new parts are named, so a new part never takes a name another sheet's part
 keeps.
 
+PivotTables: `Workbook::pivot_caches` lists the caches by id; `Package::pivot_cache` reads a cache
+definition (`PivotCacheDefinition`: source, fields with shared items and grouping),
+`Package::pivot_records` streams its records, and `Package::pivot_tables` reads a sheet's
+PivotTables (`PivotTableDefinition`: location, fields and items, axes, page and data fields,
+style) with the cache each uses. `SharedItems::describe` gives the flags Excel writes for a field's
+values, and `records_xml` writes a records part. A `Document` holds caches as `PivotCachePart`s
+and a worksheet's tables as `PivotTablePart`s, regenerated with their relationships and
+`pivotCaches` entries; an OLAP cache (and a table on one) stays a kept part.
+
 The parts this crate writes use the transitional namespaces; a strict file's kept parts stay as
 they were. A binary workbook is not written.
 

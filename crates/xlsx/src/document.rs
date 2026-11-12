@@ -7,10 +7,11 @@ use craft_drawingml::chart::Chart;
 
 use crate::drawing::{Anchor, Drawing, Item, Placement};
 use crate::features::{Comments, NoteShape, Table, notes_vml};
+use crate::pivot::{PivotCacheDefinition, PivotTableDefinition};
 use crate::sheet::{CellValue, Row, SheetPart};
 use crate::strings::StringItem;
 use crate::styles::Styles;
-use crate::workbook::{SheetKind, Workbook};
+use crate::workbook::{PivotCacheEntry, SheetKind, Workbook};
 use crate::{Error, Limits, Package};
 
 const CT_WORKSHEET: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
@@ -22,6 +23,9 @@ const CT_TABLE: &str = "application/vnd.openxmlformats-officedocument.spreadshee
 const CT_DRAWING: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
 const CT_CHART: &str = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
 const CT_CHARTEX: &str = "application/vnd.ms-office.chartex+xml";
+const CT_PIVOT_TABLE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml";
+const CT_PIVOT_CACHE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml";
+const CT_PIVOT_RECORDS: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml";
 const RT_CHARTEX: &str = "http://schemas.microsoft.com/office/2014/relationships/chartEx";
 /// The relationship type namespace of strict files: kept relationships are written with the
 /// transitional one, as the parts this crate writes are.
@@ -89,6 +93,33 @@ pub struct Worksheet {
     pub drawing: Option<DrawingPart>,
     /// The table parts, written from here, in the order of the sheet's `tableParts`.
     pub tables: Vec<TablePart>,
+    /// The PivotTable parts, written from here. A PivotTable that did not read, or whose cache
+    /// did not, is a kept part.
+    pub pivot_tables: Vec<PivotTablePart>,
+}
+
+/// A PivotTable part. It is related to the cache of [`Document::pivot_caches`] its `cache_id`
+/// names.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PivotTablePart {
+    /// The part's name; a new name is chosen on writing when empty.
+    pub part: String,
+    pub table: PivotTableDefinition,
+}
+
+/// A pivot cache: its definition part and its records.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PivotCachePart {
+    /// The definition part's name; a new name is chosen on writing when empty.
+    pub part: String,
+    /// The id the workbook and its PivotTables know the cache by.
+    pub cache_id: u32,
+    pub definition: PivotCacheDefinition,
+    /// The records part's name; a new name is chosen on writing when empty.
+    pub records_part: String,
+    /// The records part as written ([`crate::records_xml`] makes one); `None` for a cache saved
+    /// without records (`saveData="0"`).
+    pub records: Option<Vec<u8>>,
 }
 
 /// A table part. Its relationships (a query table) are kept parts.
@@ -163,6 +194,10 @@ pub struct Document {
     /// One per [`Workbook::sheets`] entry: the worksheet, or `None` for a sheet kept as its
     /// parts (a chart sheet, a macro sheet, a worksheet whose part could not be read).
     pub worksheets: Vec<Option<Worksheet>>,
+    /// The pivot caches, written from here with their entries in [`Workbook::pivot_caches`]. A
+    /// cache that did not read (OLAP data, relationships other than its records) is a kept part
+    /// whose entry stays.
+    pub pivot_caches: Vec<PivotCachePart>,
     pub parts: Vec<KeptPart>,
     /// What reading skipped or repaired.
     pub warnings: Vec<String>,
@@ -181,6 +216,18 @@ impl Document {
         let workbook_rels = p.workbook_rels()?;
         let shared_strings = p.shared_strings()?;
         let styles = p.styles()?;
+        let mut pivot_caches = Vec::new();
+        for entry in &workbook.pivot_caches {
+            let Some(rel) = workbook_rels.by_id(&entry.rel_id).filter(|r| !r.external && r.kind() == "pivotCacheDefinition") else { continue };
+            let rels = p.opc().rels(&rel.target)?;
+            if rels.list.iter().any(|r| r.kind() != "pivotCacheRecords" || r.external) {
+                continue;
+            }
+            let Some(definition) = p.pivot_cache(&rel.target)? else { continue };
+            let records_part = rels.first("pivotCacheRecords").map(|r| r.target.clone()).unwrap_or_default();
+            let records = if records_part.is_empty() { None } else { p.opc().read(&records_part)? };
+            pivot_caches.push(PivotCachePart { part: rel.target.clone(), cache_id: entry.cache_id, definition, records_part, records });
+        }
         let mut worksheets = Vec::with_capacity(workbook.sheets.len());
         for entry in &workbook.sheets {
             if entry.kind != SheetKind::Worksheet || entry.part.is_none() {
@@ -197,7 +244,16 @@ impl Document {
                     let notes = if comments.is_some() { p.note_shapes(&part)? } else { Vec::new() };
                     let drawing = p.drawing(&part)?.map(|(name, drawing, rels)| DrawingPart { part: name, drawing, rels: rels.list });
                     let tables = p.tables(&part)?.into_iter().map(|(part, table)| TablePart { part, table }).collect();
-                    worksheets.push(Some(Worksheet { rows, part, comments, notes, drawing, tables }));
+                    let mut pivot_tables = Vec::new();
+                    for (name, table, cache) in p.pivot_tables(&workbook, &part)? {
+                        // Typed only when its cache is, by the same id, and it relates to nothing else.
+                        let typed = pivot_caches.iter().any(|c| Some(&c.part) == cache.as_ref() && Some(c.cache_id) == table.cache_id);
+                        let rels = p.opc().rels(&name)?;
+                        if typed && rels.list.iter().all(|r| r.kind() == "pivotCacheDefinition" && !r.external) {
+                            pivot_tables.push(PivotTablePart { part: name, table });
+                        }
+                    }
+                    worksheets.push(Some(Worksheet { rows, part, comments, notes, drawing, tables, pivot_tables }));
                 }
                 Err(Error::TooLarge(m)) => return Err(Error::TooLarge(m)),
                 Err(e) => {
@@ -219,6 +275,10 @@ impl Document {
                 made.push(rels_path(&d.part));
             }
             made.extend(ws.tables.iter().map(|t| t.part.clone()));
+            made.extend(ws.pivot_tables.iter().flat_map(|t| [t.part.clone(), rels_path(&t.part)]));
+        }
+        for c in &pivot_caches {
+            made.extend([c.part.clone(), rels_path(&c.part), c.records_part.clone()]);
         }
         made.extend(workbook_rels.list.iter().filter(|r| !r.external && regenerated(r)).map(|r| r.target.clone()));
         let opc = p.opc();
@@ -232,7 +292,18 @@ impl Document {
             parts.push(KeptPart { content_type: types.of(&name).map(str::to_string), name, bytes });
         }
         let kind = types.of(&workbook_part).and_then(XlsxKind::of_content_type).unwrap_or_default();
-        Ok(Document { kind, workbook_part, workbook, workbook_rels, shared_strings, styles, worksheets, parts, warnings: p.warnings().to_vec() })
+        Ok(Document {
+            kind,
+            workbook_part,
+            workbook,
+            workbook_rels,
+            shared_strings,
+            styles,
+            worksheets,
+            pivot_caches,
+            parts,
+            warnings: p.warnings().to_vec(),
+        })
     }
 
     /// Adds a chart to worksheet `sheet` (an index into [`Workbook::sheets`]): a new chart part
@@ -318,7 +389,14 @@ impl Document {
         // A worksheet's relationship is kept only for a sheet kept as its parts: the others are
         // made again, and one whose sheet was removed goes with it.
         let unread = |r: &Rel| self.workbook.sheets.iter().zip(&self.worksheets).any(|(e, ws)| ws.is_none() && e.rel_id == r.id);
-        for r in self.workbook_rels.list.iter().filter(|r| !regenerated(r) && (r.kind() != "worksheet" || unread(r))) {
+        let kept_part = |r: &Rel| self.parts.iter().any(|p| p.name.eq_ignore_ascii_case(&r.target));
+        let keep = |r: &&Rel| match r.kind() {
+            "worksheet" => unread(r),
+            // A cache this writes is related again; one removed goes with its relationship.
+            "pivotCacheDefinition" => r.external || kept_part(r),
+            _ => !regenerated(r),
+        };
+        for r in self.workbook_rels.list.iter().filter(keep) {
             rels.items.push(kept(r));
         }
         let mut workbook = self.workbook.clone();
@@ -329,7 +407,11 @@ impl Document {
         for ws in self.worksheets.iter().flatten() {
             let comments = ws.comments.as_ref().and(ws.part.rels.first("comments")).map(|r| r.target.clone());
             let own = [ws.part.part.clone()].into_iter().chain(comments).chain(ws.drawing.iter().map(|d| d.part.clone()));
-            taken.extend(own.chain(ws.tables.iter().map(|t| t.part.clone())).filter(|n| !n.is_empty()).map(|n| n.to_ascii_lowercase()));
+            let own = own.chain(ws.tables.iter().map(|t| t.part.clone())).chain(ws.pivot_tables.iter().map(|t| t.part.clone()));
+            taken.extend(own.filter(|n| !n.is_empty()).map(|n| n.to_ascii_lowercase()));
+        }
+        for c in &self.pivot_caches {
+            taken.extend([&c.part, &c.records_part].into_iter().filter(|n| !n.is_empty()).map(|n| n.to_ascii_lowercase()));
         }
         for (i, (entry, ws)) in workbook.sheets.iter_mut().zip(&self.worksheets).enumerate() {
             let Some(ws) = ws else {
@@ -354,6 +436,52 @@ impl Document {
             });
             sheet_parts.push((name, ws));
         }
+        // Pivot caches: each written cache related again (with the id it had), and the entries of
+        // kept caches whose relationship stays.
+        let mut caches: Vec<(u32, String)> = Vec::new();
+        let mut entries: Vec<PivotCacheEntry> = Vec::new();
+        for c in &self.pivot_caches {
+            if caches.iter().any(|(id, _)| *id == c.cache_id) {
+                return Err(Error::Invalid(format!("two pivot caches have the id {}", c.cache_id)));
+            }
+            let name = if c.part.is_empty() { fresh(&taken, |n| format!("xl/pivotCache/pivotCacheDefinition{n}.xml")) } else { c.part.clone() };
+            taken.push(name.to_ascii_lowercase());
+            let old = self
+                .workbook_rels
+                .list
+                .iter()
+                .find(|r| r.kind() == "pivotCacheDefinition" && r.target.eq_ignore_ascii_case(&name) && !rels.items.iter().any(|o| o.id == r.id));
+            let id = old.map_or_else(|| fresh_id(&rels), |r| r.id.clone());
+            rels.items.push(RelOut {
+                id: id.clone(),
+                ty: format!("{RT_BASE}pivotCacheDefinition"),
+                target: relative(book_part, &name),
+                external: false,
+            });
+            entries.push(PivotCacheEntry { cache_id: c.cache_id, rel_id: id });
+            let mut crels = RelsOut::default();
+            let records_rel = c.records.as_ref().map(|bytes| {
+                let rec = if c.records_part.is_empty() {
+                    fresh(&taken, |n| format!("xl/pivotCache/pivotCacheRecords{n}.xml"))
+                } else {
+                    c.records_part.clone()
+                };
+                taken.push(rec.to_ascii_lowercase());
+                out.binary(&rec, CT_PIVOT_RECORDS, bytes.clone());
+                crels.add("pivotCacheRecords", &relative(&name, &rec), false)
+            });
+            out.xml_part(&name, CT_PIVOT_CACHE, c.definition.to_xml(records_rel.as_deref()));
+            out.rels(&name, &crels);
+            caches.push((c.cache_id, name));
+        }
+        for e in &self.workbook.pivot_caches {
+            let target = rels.items.iter().find(|r| r.id == e.rel_id).and_then(|_| self.workbook_rels.by_id(&e.rel_id));
+            if let Some(r) = target.filter(|_| !caches.iter().any(|(id, _)| *id == e.cache_id)) {
+                caches.push((e.cache_id, r.target.clone()));
+                entries.push(e.clone());
+            }
+        }
+        workbook.pivot_caches = entries;
         let mut add = |kind: &str, default: &str, taken: &mut Vec<String>| {
             let old = self.workbook_rels.list.iter().find(|r| r.kind() == kind && !r.external).map(|r| r.target.clone());
             let name = old.filter(|n| !taken.contains(&n.to_ascii_lowercase())).unwrap_or_else(|| default.to_string());
@@ -379,7 +507,7 @@ impl Document {
         let mut blocks = vml_blocks(&self.parts);
         let kept_names: Vec<String> = self.parts.iter().map(|p| p.name.to_ascii_lowercase()).collect();
         for (name, ws) in &sheet_parts {
-            write_sheet(&mut out, name, ws, &kept_names, &mut taken, &mut blocks);
+            write_sheet(&mut out, name, ws, &kept_names, &mut taken, &mut blocks, &caches)?;
         }
         if let Some(name) = &strings {
             let count: usize =
@@ -406,7 +534,15 @@ impl Document {
 
 /// A worksheet, its relationships, and its comments with a VML drawing to show them when it has
 /// none. A hyperlink to a URL its relationship does not lead to gets a relationship of its own.
-fn write_sheet(out: &mut PackageOut, name: &str, ws: &Worksheet, kept_names: &[String], taken: &mut Vec<String>, blocks: &mut Vec<u32>) {
+fn write_sheet(
+    out: &mut PackageOut,
+    name: &str,
+    ws: &Worksheet,
+    kept_names: &[String],
+    taken: &mut Vec<String>,
+    blocks: &mut Vec<u32>,
+    caches: &[(u32, String)],
+) -> Result<(), Error> {
     let mut part = ws.part.clone();
     let mut rels = RelsOut::default();
     let kept_part = |r: &Rel| kept_names.contains(&r.target.to_ascii_lowercase());
@@ -415,6 +551,7 @@ fn write_sheet(out: &mut PackageOut, name: &str, ws: &Worksheet, kept_names: &[S
         "comments" => ws.comments.is_some(),
         "drawing" => ws.drawing.as_ref().map_or(kept_part(r), |d| d.part.eq_ignore_ascii_case(&r.target)),
         "table" => ws.tables.iter().any(|t| t.part.eq_ignore_ascii_case(&r.target)) || kept_part(r),
+        "pivotTable" => ws.pivot_tables.iter().any(|t| t.part.eq_ignore_ascii_case(&r.target)) || kept_part(r),
         _ => true,
     };
     rels.items.extend(ws.part.rels.list.iter().filter(stays).map(kept));
@@ -496,8 +633,25 @@ fn write_sheet(out: &mut PackageOut, name: &str, ws: &Worksheet, kept_names: &[S
         part.features.table_parts.iter().filter(|id| !table_ids.contains(id) && rels.items.iter().any(|r| r.id == **id && r.ty.ends_with("/table")));
     table_ids.extend(kept_tables.cloned().collect::<Vec<_>>());
     part.features.table_parts = table_ids;
+    for t in &ws.pivot_tables {
+        let cache = t.table.cache_id.and_then(|id| caches.iter().find(|(c, _)| *c == id));
+        let Some((_, cache)) = cache else {
+            return Err(Error::Invalid(format!("PivotTable {:?} names no pivot cache of the workbook", t.table.name.as_deref().unwrap_or(""))));
+        };
+        let target = if t.part.is_empty() { fresh(taken, |n| format!("xl/pivotTables/pivotTable{n}.xml")) } else { t.part.clone() };
+        taken.push(target.to_ascii_lowercase());
+        if !ws.part.rels.list.iter().any(|r| r.kind() == "pivotTable" && r.target.eq_ignore_ascii_case(&target)) {
+            let id = fresh_id(&rels);
+            rels.items.push(RelOut { id, ty: format!("{RT_BASE}pivotTable"), target: relative(name, &target), external: false });
+        }
+        out.xml_part(&target, CT_PIVOT_TABLE, t.table.to_xml());
+        let mut trels = RelsOut::default();
+        trels.add("pivotCacheDefinition", &relative(&target, cache), false);
+        out.rels(&target, &trels);
+    }
     out.xml_part(name, CT_WORKSHEET, part.to_xml(&ws.rows));
     out.rels(name, &rels);
+    Ok(())
 }
 
 /// The shape-id blocks (`o:idmap`) the kept VML drawings use, so a new drawing takes another.
