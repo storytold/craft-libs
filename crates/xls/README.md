@@ -3,7 +3,8 @@
 A clean-room reader for Excel 97-2003 workbooks (`.xls`, BIFF8). It turns the bytes of a file
 into a `Workbook` that keeps the file's own terms: cells, formulas as text, the format table,
 column and row records. Mapping that onto an application's document is the caller's work.
-No `unsafe`; the only dependencies are `craft-cfb` (the compound file container) and `thiserror`.
+No `unsafe`; the only dependencies are `craft-cfb` (the compound file container), `craft-sheet` (cell
+positions, values and tables shared with the other spreadsheet formats) and `thiserror`.
 No third-party implementation was consulted.
 
 | Document | Used for |

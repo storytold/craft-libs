@@ -7,6 +7,7 @@
 
 use crate::decode::CombinationOperator;
 use crate::error::{OverflowError, Result, bail};
+use alloc::vec;
 use alloc::vec::Vec;
 
 // To guard better against malicious files, we limit bitmap dimensions
@@ -29,6 +30,12 @@ pub(crate) const MAX_GRID_CELLS: u64 = 1 << 25;
 /// bounded how many there are: 1,140 bytes of generic regions took over 40 s, a 795-byte PDF's one
 /// halftone 265 s, and a 923-byte PDF's regions would have taken days.
 pub(crate) const MAX_WORK: u64 = 4 * MAX_PIXELS;
+
+/// PdfCraft patch: the work of reading one integer of an item, what an arithmetic-coded one takes
+/// at worst in decisions (see [`MAX_WORK`]), so that a decision costs no more than a pixel. An item
+/// with no pixels still reads its integers: charged a step each, a 22,515-byte PDF of refined text
+/// instances of no size stayed inside `MAX_WORK` and took 730 s.
+pub(crate) const INTEGER_WORK: u64 = 38;
 
 /// PdfCraft patch: the work of a line of a Huffman table built for symbols, about 50 ns (see
 /// [`MAX_WORK`]).
@@ -63,10 +70,10 @@ pub(crate) const BITMAP_WORDS: usize = size_of::<Bitmap>() / size_of::<Word>();
 /// output from the page header in between, and a 743-byte PDF's Indexed image asked for 137 GB.
 pub(crate) fn check_page_size(width: u32, height: u32) -> Result<()> {
     if width > MAX_DIMENSION || height > MAX_DIMENSION {
-        return Err(OverflowError::BitmapDimension.into());
+        return Err(OverflowError::BitmapLimit.into());
     }
     if u64::from(width) * u64::from(height) > MAX_PIXELS {
-        return Err(OverflowError::BitmapDimension.into());
+        return Err(OverflowError::BitmapLimit.into());
     }
     Ok(())
 }
@@ -86,6 +93,11 @@ pub(crate) struct Bitmap {
     pub(crate) stride: u32,
     /// Packed pixel data, one bit per pixel, row-major order.
     /// Each row is padded to a word boundary.
+    ///
+    /// PdfCraft patch: the padding is 0s, as pixels past the edge are (6.2.5.2, 6.3.5.2). Generic
+    /// and refinement decoding read the rows above their own pixels a word at a time, padding
+    /// included, and a refinement reads its reference the same way: whatever writes whole words
+    /// keeps the padding 0 (see `clear_padding`).
     pub(crate) data: Vec<Word>,
     /// "This four-byte field gives the horizontal offset in pixels of the bitmap
     /// encoded in this segment relative to the page bitmap." (7.4.1.3)
@@ -93,14 +105,6 @@ pub(crate) struct Bitmap {
     /// "This four-byte field gives the vertical offset in pixels of the bitmap
     /// encoded in this segment relative to the page bitmap." (7.4.1.4)
     pub(crate) y_location: u32,
-}
-
-/// PdfCraft patch: fallible replacement for `vec![word; len]` / `resize`.
-fn fill_words(data: &mut Vec<Word>, len: usize, word: Word) -> Result<()> {
-    data.try_reserve_exact(len)
-        .map_err(|_| OverflowError::BitmapDimension)?;
-    data.resize(len, word);
-    Ok(())
 }
 
 impl Bitmap {
@@ -125,26 +129,47 @@ impl Bitmap {
         default_pixel: bool,
     ) -> Result<Self> {
         if width > MAX_DIMENSION || height > MAX_DIMENSION {
-            bail!(OverflowError::BitmapDimension);
+            bail!(OverflowError::BitmapLimit);
         }
         // PdfCraft patch: see `MAX_PIXELS`.
         if u64::from(width) * u64::from(height) > MAX_PIXELS {
-            bail!(OverflowError::BitmapDimension);
+            bail!(OverflowError::BitmapLimit);
         }
 
         let stride = width.div_ceil(WORD_BITS);
         let default_word: Word = if default_pixel { !0 } else { 0 };
-        // PdfCraft patch: reserve fallibly so hostile dimensions error instead of aborting.
-        let mut data = Vec::new();
-        fill_words(&mut data, stride as usize * height as usize, default_word)?;
-        Ok(Self {
+        let data = vec![default_word; stride as usize * height as usize];
+        let mut bitmap = Self {
             width,
             height,
             stride,
             data,
             x_location,
             y_location,
-        })
+        };
+        if default_pixel {
+            bitmap.clear_padding();
+        }
+        Ok(bitmap)
+    }
+
+    /// PdfCraft patch: clear the bits past `width` in each row's last word. "All pixels lying
+    /// outside the bounds of the actual bitmap or the reference bitmap have the value 0" (6.3.5.2),
+    /// and a refinement reads its reference a word at a time, those bits included: filled whole
+    /// with a default pixel of 1, they read as 1s, so a refinement of the page, or of an
+    /// intermediate text or halftone region, decoded to other pixels than were coded.
+    fn clear_padding(&mut self) {
+        let trailing = self.width % WORD_BITS;
+        // A width of 0 has no words to clear, and `chunks_exact_mut` would take a stride of 0.
+        if trailing == 0 {
+            return;
+        }
+        let mask: Word = !0 << (WORD_BITS - trailing);
+        for row in self.data.chunks_exact_mut(self.stride as usize) {
+            if let Some(last) = row.last_mut() {
+                *last &= mask;
+            }
+        }
     }
 
     pub(crate) fn reinitialize(
@@ -157,15 +182,17 @@ impl Bitmap {
 
         let stride = width.div_ceil(WORD_BITS);
         let default_word: Word = if default_pixel { !0 } else { 0 };
-        // Allocate first so a failed reservation leaves the bitmap untouched.
-        let mut data = Vec::new();
-        fill_words(&mut data, stride as usize * height as usize, default_word)?;
         self.width = width;
         self.height = height;
         self.stride = stride;
         self.x_location = 0;
         self.y_location = 0;
-        self.data = data;
+        self.data.clear();
+        self.data
+            .resize(stride as usize * height as usize, default_word);
+        if default_pixel {
+            self.clear_padding();
+        }
 
         Ok(())
     }
@@ -192,6 +219,17 @@ impl Bitmap {
         let word_idx = (y * self.stride + x / WORD_BITS) as usize;
         let bit_pos = WORD_SHIFT - (x % WORD_BITS);
         self.data[word_idx] |= (value as Word) << bit_pos;
+    }
+
+    /// PdfCraft patch: combine a decoded region into this page at the region's own location.
+    ///
+    /// "Unless otherwise specified, all multi-bit values shall be treated as unsigned values"
+    /// (5.4.4), and a region's location (7.4.1.3, 7.4.1.4) is not specified otherwise. One past
+    /// `i32::MAX` is past any page. Cast to a signed coordinate it read as left of the page or above
+    /// it, and one within a region's size of 2^32 came back onto it.
+    pub(crate) fn combine_region(&mut self, region: &Self, operator: CombinationOperator) {
+        let signed = |location: u32| i32::try_from(location).unwrap_or(i32::MAX);
+        self.combine(region, signed(region.x_location), signed(region.y_location), operator);
     }
 
     /// Combine another bitmap into this one at a specific location.
@@ -280,15 +318,74 @@ impl Bitmap {
 
         self.data[(row * self.stride + word_idx) as usize]
     }
+
+    /// PdfCraft patch: the `width` × `height` area of this bitmap at `x`, `y`, as a bitmap there.
+    /// It is what a refinement of the page refines: "a bitmap containing the current contents of
+    /// the page buffer, restricted to the area of the page buffer specified by this segment's
+    /// region segment information field" (7.4.7.4). Off this bitmap the area is 0, past its width
+    /// too whatever the padding of its rows holds, and outside the area the refinement reads 0
+    /// (6.3.5.2), where reading the page itself took in the pixels around the area.
+    pub(crate) fn area(&self, x: u32, y: u32, width: u32, height: u32) -> Result<Self> {
+        let mut area = Self::new_with(width, height, x, y, false)?;
+        for row in 0..height {
+            let Some(from_row) = y.checked_add(row).filter(|r| *r < self.height) else {
+                continue;
+            };
+            for word in 0..area.stride {
+                // The first column of this word of the area, in this bitmap; past its width,
+                // or past where a column can be, the rest of the row is 0.
+                let Some(from) = x.checked_add(word * WORD_BITS).filter(|c| *c < self.width) else {
+                    break;
+                };
+                let (index, shift) = (from / WORD_BITS, from % WORD_BITS);
+                let mut bits = self.get_word(from_row, index) << shift;
+                if shift > 0 {
+                    bits |= self.get_word(from_row, index + 1) >> (WORD_BITS - shift);
+                }
+                // Both are above 0: `from` is inside this bitmap, and `word` inside the area.
+                let ours = self.width - from;
+                let theirs = width - word * WORD_BITS;
+                let kept = ours.min(theirs);
+                if kept < WORD_BITS {
+                    bits &= !0 << (WORD_BITS - kept);
+                }
+                if let Some(slot) = area.data.get_mut((row * area.stride + word) as usize) {
+                    *slot = bits;
+                }
+            }
+        }
+        Ok(area)
+    }
 }
 
 #[cfg(test)]
-mod tests {
+mod pdfcraft_limit_tests {
     use super::*;
+    use crate::error::DecodeError;
 
+    /// PdfCraft patch: a bitmap past the bound on a side or on pixels is refused by a limit.
     #[test]
-    fn failed_reservation_is_an_error() {
-        let mut data = Vec::new();
-        assert!(fill_words(&mut data, usize::MAX / 2, 0).is_err());
+    fn a_bitmap_past_its_bounds_is_refused_by_a_limit() {
+        let limit = Err(DecodeError::Overflow(OverflowError::BitmapLimit));
+        assert_eq!(
+            Bitmap::new(MAX_DIMENSION + 1, 1).map(|_| ()),
+            limit,
+            "a side"
+        );
+        assert_eq!(
+            Bitmap::new(1, MAX_DIMENSION + 1).map(|_| ()),
+            limit,
+            "the other"
+        );
+        // 2^28 + 2^14 pixels, each side within its bound.
+        assert_eq!(
+            Bitmap::new(1 << 14, (1 << 14) + 1).map(|_| ()),
+            limit,
+            "the pixels"
+        );
+        assert!(
+            Bitmap::new(1 << 14, 1 << 14).is_ok(),
+            "2^28 pixels are within it"
+        );
     }
 }
