@@ -261,8 +261,11 @@ fn read_exif_finds_it_through_the_maker_note_and_orientation() {
     // EXIF 8: sensor x becomes 1 - upright y
     let (cx, cy) = f.center();
     assert!((cy - (1.0 - 3226.0 / 8640.0)).abs() < 1e-9 && (cx - 1980.0 / 5760.0).abs() < 1e-9, "{cx} {cy}");
-    // an unconfirmed body or another maker: nothing
-    assert!(crate::read_exif(&sony_file("SONY", "ILCE-7M4", 1, &alpha1_entries())).focus.is_none());
+    // a body checked on public samples reads the same layout
+    let f = crate::read_exif(&sony_file("SONY", "ZV-E10", 1, &alpha1_entries())).focus.expect("ZV-E10 focus point");
+    assert!((f.center().0 - 3226.0 / 8640.0).abs() < 1e-9, "{:?}", f.center());
+    // a body left out (its 0x201b is not the focus mode) or another maker: nothing
+    assert!(crate::read_exif(&sony_file("SONY", "DSC-RX100M4", 1, &alpha1_entries())).focus.is_none());
     assert!(crate::read_exif(&sony_file("Canon", "ILCE-1", 1, &alpha1_entries())).focus.is_none());
 }
 
@@ -339,7 +342,7 @@ fn header_read_matches_the_whole_file_and_reads_little() {
     assert_eq!(r.focus, whole);
     assert!(r.bytes_read <= HEADER_PREFIX);
     // unsupported bodies agree too (no point either way)
-    let other = sony_file("SONY", "ILCE-7M4", 1, &alpha1_entries());
+    let other = sony_file("SONY", "DSC-RX100M4", 1, &alpha1_entries());
     assert_eq!(read(&other).focus, None);
 }
 
@@ -396,8 +399,10 @@ fn the_synthetic_arw_is_laid_out_as_described() {
 
 #[test]
 fn cameras_that_can_have_a_point() {
-    assert!(camera_supported("SONY ILCE-1") && camera_supported("Sony ILCE-7SM3 "));
-    for c in ["SONY ILCE-7M4", "Canon EOS R5", "", "SONY", "ILCE-1", "SON"] {
+    for c in ["SONY ILCE-1", "Sony ILCE-7SM3 ", "SONY ILCE-1M2", "SONY ILCE-7M4", "SONY ZV-E10", "SONY DSC-RX100M7"] {
+        assert!(camera_supported(c), "{c}");
+    }
+    for c in ["SONY ILCE-7M2", "SONY DSC-RX100M4", "SONY NEX-7", "Canon EOS R5", "", "SONY", "ILCE-1", "SON", "SONY ILCE-1M"] {
         assert!(!camera_supported(c), "{c}");
     }
 }

@@ -36,7 +36,7 @@ pub mod tags;
 mod xmp;
 mod xmp_merge;
 
-pub use container::{Embedded, embedded, jpeg_segments, png_chunks, webp_chunks};
+pub use container::{Embedded, embedded, jpeg_segments, jpeg_segments_with_all_xmp, png_chunks, webp_chunks};
 pub use datetime::{DatePrecision, DateTime};
 pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, try_read_exif_with, write_exif};
 pub use focus::FocusPoint;
@@ -45,7 +45,9 @@ pub use geom::{Orientation, Point, Rect};
 pub use gpx::{GpxError, Match, TrackPoint, Tracklog, parse_gpx};
 pub use iptc::parse_iptc;
 pub use tags::{TagRow, file_tag_rows, tag_rows};
-pub use xmp::{CRS_NS, XmpData, XmpError, XmpNamespace, XmpValue, XmpWrite, parse_xmp, parse_xmp_with, write_xmp, write_xmp_with};
+pub use xmp::{
+    CRS_NS, XmpData, XmpError, XmpNamespace, XmpValue, XmpWrite, parse_gps_position, parse_xmp, parse_xmp_with, write_xmp, write_xmp_with,
+};
 pub use xmp_merge::{MergeRules, merge_xmp};
 
 use serde::{Deserialize, Serialize};
@@ -383,6 +385,20 @@ pub fn lens_spec_name(spec: [f64; 4]) -> Option<String> {
     Some(format!("{focal} mm f/{aperture}"))
 }
 
+/// Whether `s` has the `<focal> mm f/<aperture>` shape written by [`lens_spec_name`].
+pub fn is_lens_spec_name(s: &str) -> bool {
+    let Some((focal, aperture)) = s.trim().split_once(" mm f/") else { return false };
+    let is_num_or_range = |part: &str| {
+        let mut pieces = part.split('-');
+        let Some(first) = pieces.next() else { return false };
+        let second = pieces.next();
+        pieces.next().is_none()
+            && first.parse::<f64>().is_ok_and(|v| v.is_finite() && v > 0.0)
+            && second.is_none_or(|b| b.parse::<f64>().is_ok_and(|v| v.is_finite() && v > 0.0))
+    };
+    is_num_or_range(focal) && is_num_or_range(aperture)
+}
+
 /// Lenient number parsing used by XMP/IPTC: `"28/10"`, `"2.8"`, `"+0.7"`.
 pub(crate) fn parse_number(s: &str) -> Option<f64> {
     let s = s.trim();
@@ -406,6 +422,62 @@ mod tests {
         assert_eq!(lens_spec_name([0.0, 0.0, 0.0, 0.0]), None);
         assert_eq!(lens_spec_name([200.0, 80.0, 2.8, 2.8]), None);
         assert_eq!(lens_spec_name([f64::NAN, 50.0, 1.8, 1.8]), None);
+    }
+
+    #[test]
+    fn lens_spec_names_are_recognised() {
+        for spec in [[50.0, 50.0, 1.8, 1.8], [18.0, 135.0, 3.5, 5.6]] {
+            assert!(is_lens_spec_name(&lens_spec_name(spec).unwrap()));
+        }
+        assert!(is_lens_spec_name(" 24.0-70.0 mm f/2.8 "));
+        for not in ["EF 50mm f/1.8", "50 mm f/", "0 mm f/2.8", "50-60-70 mm f/2.8", "nan mm f/2", "50 mm f/1.8-"] {
+            assert!(!is_lens_spec_name(not), "{not}");
+        }
+    }
+
+    #[test]
+    fn from_embedded_preserves_exif_iptc_xmp_precedence() {
+        let exif = Metadata {
+            make: Some("Example".into()),
+            model: Some("Camera".into()),
+            lens_model: Some("35mm F2".into()),
+            artist: Some("EXIF artist".into()),
+            orientation: Some(Orientation::from_exif(6)),
+            exposure_time: Some(1.0 / 125.0),
+            ..Default::default()
+        };
+        let packet = write_xmp(&Metadata {
+            artist: Some("XMP artist".into()),
+            caption: Some("XMP caption".into()),
+            rating: Some(4),
+            keywords: vec!["xmp-keyword".into()],
+            ..Default::default()
+        });
+        let mut iptc = Vec::new();
+        for (dataset, value) in [(5u8, "IPTC title"), (120u8, "IPTC caption")] {
+            iptc.extend_from_slice(&[0x1c, 2, dataset]);
+            iptc.extend_from_slice(&u16::try_from(value.len()).unwrap().to_be_bytes());
+            iptc.extend_from_slice(value.as_bytes());
+        }
+        let blocks = Embedded { exif: Some(write_exif(&exif)), iptc: Some(iptc), xmp: Some(packet.clone()), ..Default::default() };
+        let parsed = from_embedded(&blocks);
+        assert_eq!(parsed.make, exif.make);
+        assert_eq!(parsed.model, exif.model);
+        assert_eq!(parsed.lens_model, exif.lens_model);
+        assert_eq!(parsed.orientation, exif.orientation);
+        assert_eq!(parsed.exposure_time, exif.exposure_time);
+        assert_eq!(parsed.title.as_deref(), Some("IPTC title"));
+        assert_eq!(parsed.caption.as_deref(), Some("XMP caption"));
+        assert_eq!(parsed.artist.as_deref(), Some("XMP artist"));
+        assert_eq!(parsed.rating, Some(4));
+        assert_eq!(parsed.keywords, vec!["xmp-keyword"]);
+        assert_eq!(blocks.xmp.as_deref(), Some(packet.as_str()));
+    }
+
+    #[test]
+    fn from_embedded_ignores_damaged_blocks() {
+        let blocks = Embedded { exif: Some(vec![1, 2, 3]), iptc: Some(vec![0x1c, 2]), xmp: Some("<broken".into()), ..Default::default() };
+        assert_eq!(from_embedded(&blocks), Metadata::default());
     }
 
     #[test]
