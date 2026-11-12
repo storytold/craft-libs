@@ -16,6 +16,9 @@ pub fn decode(bytes: &[u8], label: &str) -> String {
     if matches!(label.as_str(), "" | "us-ascii" | "ascii" | "ansi_x3.4-1968" | "iso646-us") {
         return guess(bytes);
     }
+    if let Some(table) = dos(&label) {
+        return dos_decode(bytes, table);
+    }
     let encoding = encoding(&label).unwrap_or(UTF_8);
     // ASCII reads the same in every set that keeps it; UTF-16 and ISO-2022-JP don't.
     if bytes.is_ascii() && encoding.is_ascii_compatible() {
@@ -27,6 +30,26 @@ pub fn decode(bytes: &[u8], label: &str) -> String {
     }
     // Elsewhere a byte order mark is text like any other (the reader drops one that opens a body).
     encoding.decode_without_bom_handling(bytes).0.into_owned()
+}
+
+/// The DOS code page a name means (`IBM850`, `cp437`, `437`, `ibm-857`), for the pages the
+/// WHATWG standard leaves out (IBM866 is in it): its upper half, and whether 0x25 is U+066A
+/// (DOS 864).
+fn dos(label: &str) -> Option<(&'static [char; 128], bool)> {
+    let number = ["ibm-", "ibm", "cp-", "cp"].iter().find_map(|p| label.strip_prefix(p)).unwrap_or(label);
+    let page: u16 = number.parse().ok().filter(|p| *p != 866)?;
+    craft_codepage::dos_upper(page).map(|t| (t, page == 864))
+}
+
+fn dos_decode(bytes: &[u8], (table, arabic_percent): (&[char; 128], bool)) -> String {
+    bytes
+        .iter()
+        .map(|&b| match b {
+            b'%' if arabic_percent => '\u{066A}',
+            0..0x80 => char::from(b),
+            _ => table.get(usize::from(b - 0x80)).copied().unwrap_or('\u{FFFD}'),
+        })
+        .collect()
 }
 
 /// The character set a name means: the standard's own names, and a few more that mail uses.
@@ -200,6 +223,27 @@ mod tests {
         assert_eq!(decode(b"h\0i\0", "utf-16le"), "hi");
         assert_eq!(decode(b"\xFE\xFF\0h\0i", "utf-16"), "hi");
         assert_eq!(decode(b"\xA4", "latin9"), "€");
+    }
+
+    #[test]
+    fn dos_code_pages_by_their_ibm_names() {
+        assert_eq!(decode(b"Gr\x94\xE1e \x9B", "IBM437"), "Größe ¢");
+        assert_eq!(decode(b"Gr\x94\xE1e \x9B", "cp850"), "Größe ø");
+        assert_eq!(decode(b"\xBD\xA2\x88w", "ibm-852"), "Żółw");
+        assert_eq!(decode(b"\x8D\x98\xA6\x9F", "857"), "ıİĞş");
+        assert_eq!(decode(b"50%\x80", "IBM864"), "50\u{066A}\u{00B0}");
+        assert_eq!(decode(b"50%", "cp437"), "50%");
+        // IBM866 is the standard's own.
+        assert_eq!(decode(b"\x91\xAB\xAE\xA9", "IBM866"), "Слой");
+        // Names that are no DOS page still read as UTF-8 (lossy).
+        for label in ["ibm999", "cp", "ibm", "cp-1", "4370"] {
+            assert_eq!(decode(b"\x94", label), "\u{FFFD}", "{label}");
+        }
+        // Every byte gives a character, unassigned ones U+FFFD.
+        let all: Vec<u8> = (0..=255).collect();
+        for label in ["ibm437", "cp720", "ibm737", "cp775", "855", "IBM869"] {
+            assert_eq!(decode(&all, label).chars().count(), 256, "{label}");
+        }
     }
 
     proptest::proptest! {

@@ -932,6 +932,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-codepage"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+]
+
+[[package]]
 name = "craft-crw"
 version = "0.1.0"
 dependencies = [
@@ -1002,6 +1009,7 @@ dependencies = [
 name = "craft-dxf"
 version = "0.1.0"
 dependencies = [
+ "craft-codepage",
  "encoding_rs",
  "log",
  "thiserror 2.0.21",
@@ -1300,6 +1308,7 @@ name = "craft-mime"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "craft-codepage",
  "encoding_rs",
  "proptest",
 ]
@@ -1538,6 +1547,7 @@ dependencies = [
 name = "craft-rtf"
 version = "0.1.0"
 dependencies = [
+ "craft-codepage",
  "encoding_rs",
 ]
 

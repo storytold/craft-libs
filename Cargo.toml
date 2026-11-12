@@ -29,6 +29,7 @@ craft-aaf = { path = "crates/aaf" }
 craft-atomic = { path = "crates/atomic" }
 craft-captions = { path = "crates/captions" }
 craft-cfb = { path = "crates/cfb" }
+craft-codepage = { path = "crates/codepage" }
 craft-cms = { path = "crates/cms" }
 craft-crw = { path = "crates/crw" }
 craft-csv = { path = "crates/csv" }
