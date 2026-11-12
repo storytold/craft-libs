@@ -498,3 +498,12 @@ fn unnamed_source_clip_uses_the_referenced_master_name() {
         .unwrap();
     assert_eq!(clip.name, "Master edit");
 }
+
+#[test]
+fn relative_media_locator_round_trips_escaped_characters() {
+    let mut doc = document();
+    doc.sources[0].path = Some("Audio Files/100%20 #1.wav".into());
+    let bytes = written(&doc, false);
+    let got = read_clean(&bytes);
+    assert!(got.sources.iter().any(|s| s.path.as_deref() == Some("Audio Files/100%20 #1.wav")));
+}

@@ -527,7 +527,7 @@ impl R<'_> {
             DataKind::Sound => CKind::Sound,
             _ => kind,
         };
-        let path = d.objs(pid::LOCATOR).iter().find_map(|l| l.string(pid::URL_STRING)).map(|u| craft_timeline::path::file_url_to_path(&u));
+        let path = d.objs(pid::LOCATOR).iter().find_map(|l| l.string(pid::URL_STRING)).map(|u| locator_path(&u));
         let file_rate = rate_of(d, pid::SAMPLE_RATE).unwrap_or(rate);
         let length = d
             .i64(pid::FILE_LENGTH)
@@ -721,4 +721,21 @@ fn markers_of(seg: &Obj, rate: (i64, i64)) -> Vec<CMarker> {
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn locator_path(url: &str) -> String {
+    if url.contains("://") { craft_timeline::path::file_url_to_path(url) } else { craft_timeline::path::decode_uri_path(url) }
+}
+
+#[cfg(test)]
+mod locator_tests {
+    use super::locator_path;
+
+    #[test]
+    fn decodes_relative_locator_escapes_without_losing_remote_authorities() {
+        assert_eq!(locator_path("Audio%20Files/Di%C3%A1logo%20%231.wav"), "Audio Files/Diálogo #1.wav");
+        assert_eq!(locator_path("file:///tmp/a%20b.wav"), "/tmp/a b.wav");
+        assert_eq!(locator_path("file://server/share/a.wav"), "//server/share/a.wav");
+        assert_eq!(locator_path("https://example.com/a%20b.wav"), "https://example.com/a%20b.wav");
+    }
 }
