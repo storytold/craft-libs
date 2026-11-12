@@ -6,6 +6,8 @@
 //! 3DFACE, MTEXT, LEADER and DIMENSION definition points are world coordinates. Angles are in
 //! degrees, except an ELLIPSE's parameters, which the format stores in radians.
 
+use std::borrow::Cow;
+
 use super::document::{EntityRecord, Record};
 use super::hatch::Hatch;
 use super::text::{MText, decode_line, split_embedded};
@@ -39,21 +41,40 @@ pub struct Common {
     pub plot_style: Option<u64>,
 }
 
+/// The AcDbEntity group codes a writer can put after the entity's own subclass marker instead
+/// (DXF Reference, Common Group Codes for Entities): paper space, layout, layer, linetype,
+/// material, colour, lineweight, linetype scale, visibility, true colour, colour name,
+/// transparency, plot style and shadow mode.
+const ENTITY_CODES: [i32; 14] = [67, 410, 8, 6, 347, 62, 370, 48, 60, 420, 430, 440, 390, 284];
+
 /// The groups of the AcDbEntity subclass: the record up to the entity's own subclass marker (all
 /// of it in files without markers, and in records with no AcDbEntity marker, whose layer and
 /// colour may follow the entity's marker), or up to an embedded object (101). Later groups reuse
 /// the codes: an MTEXT's column width is 48. Markers inside an application-defined group do not
 /// count.
-fn entity_groups(tags: &[Tag]) -> &[Tag] {
+///
+/// Some writers leave the AcDbEntity subclass without a layer and put its groups right after the
+/// entity's own marker. Every entity has a layer, so its absence marks that layout, and the run
+/// of [`ENTITY_CODES`] that starts after the marker is read too. The run ends at the first other
+/// code, so the entity's own groups that reuse a code are not taken for it. Only such a record
+/// pays for the copy.
+fn entity_groups(tags: &[Tag]) -> Cow<'_, [Tag]> {
     let is_entity = |t: &Tag| t.str_ref().is_some_and(|s| s == "AcDbEntity");
     let marked = outside_app(tags).any(|(_, t)| t.code == 100 && is_entity(t));
     let end = outside_app(tags).find(|(_, t)| (marked && t.code == 100 && !is_entity(t)) || t.code == 101).map_or(tags.len(), |(i, _)| i);
-    tags.get(..end).unwrap_or(tags)
+    let groups = tags.get(..end).unwrap_or(tags);
+    let after_own_marker = marked && tags.get(end).is_some_and(|t| t.code == 100);
+    if !after_own_marker || outside_app(groups).any(|(_, t)| t.code == 8) {
+        return Cow::Borrowed(groups);
+    }
+    let run = tags.get(end + 1..).unwrap_or_default().iter().take_while(|t| ENTITY_CODES.contains(&t.code));
+    Cow::Owned(groups.iter().chain(run).cloned().collect())
 }
 
 impl Common {
     pub fn read(tags: &[Tag]) -> Common {
-        let (all, e) = (Groups(tags), Groups(entity_groups(tags)));
+        let own = entity_groups(tags);
+        let (all, e) = (Groups(tags), Groups(&own));
         Common {
             handle: e.handle(5),
             owner: outside_app(tags).find(|(_, t)| t.code == 330).and_then(|(_, t)| parse_handle(&t.str())),
@@ -201,6 +222,42 @@ pub struct Helix {
     pub constrain: i64,
 }
 
+/// A vertex of an MLINE.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct MLineVertex {
+    /// Groups 11/21/31.
+    pub location: Point,
+    /// Groups 12/22/32: the direction of the segment that starts here.
+    pub direction: Point,
+    /// Groups 13/23/33: the miter direction.
+    pub miter: Point,
+    /// Per element of the style: its 74 count of 41 parameters (the distance from the vertex
+    /// along the miter, then the pairs that start and end its breaks).
+    pub element_params: Vec<Vec<f64>>,
+    /// Per element: its 75 count of 42 area fill parameters.
+    pub fill_params: Vec<Vec<f64>>,
+}
+
+/// An MLINE: parallel lines drawn by an MLINESTYLE.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MLine {
+    /// Group 2: the style's name.
+    pub style: String,
+    /// Group 340: the MLINESTYLE.
+    pub style_handle: Option<u64>,
+    /// Group 40.
+    pub scale: f64,
+    /// Group 70: 0 top, 1 zero (centred), 2 bottom.
+    pub justification: i64,
+    /// Group 71: 1 has vertices, 2 closed, 4 start caps suppressed, 8 end caps suppressed.
+    pub flags: i64,
+    /// Group 73: the number of elements of the style, as the entity states it.
+    pub elements: i64,
+    /// Groups 10/20/30.
+    pub start: Point,
+    pub vertices: Vec<MLineVertex>,
+}
+
 /// TEXT, and the text of an ATTRIB or ATTDEF.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Text {
@@ -223,12 +280,22 @@ pub struct Text {
     pub generation: i64,
     /// Group 72: 0 left, 1 centre, 2 right, 3 aligned, 4 middle, 5 fit.
     pub halign: i64,
-    /// Group 73 (74 in an ATTRIB or ATTDEF): 0 baseline, 1 bottom, 2 middle, 3 top.
+    /// Group 73 (74 in an ATTRIB or ATTDEF, whose 73 is the field length): 0 baseline, 1 bottom,
+    /// 2 middle, 3 top.
     pub valign: i64,
 }
 
 impl Text {
+    /// The typed form of TEXT groups.
     pub fn read(g: &Groups<'_>) -> Text {
+        Self::read_as(g, false)
+    }
+
+    /// A TEXT, or (with `attribute`) the text of an ATTRIB or ATTDEF. The vertical alignment is
+    /// group 73 for TEXT and group 74 for attributes, whose group 73 is the field length: a
+    /// writer that emits the field length would otherwise turn every attribute into baseline
+    /// text.
+    pub fn read_as(g: &Groups<'_>, attribute: bool) -> Text {
         Text {
             insert: g.point(10),
             align: g.point_opt(11),
@@ -240,7 +307,7 @@ impl Text {
             style: g.name(7).unwrap_or_else(|| "Standard".into()),
             generation: g.i_or(71, 0),
             halign: g.i_or(72, 0),
-            valign: g.i(73).or_else(|| g.i(74)).unwrap_or(0),
+            valign: g.i_or(if attribute { 74 } else { 73 }, 0),
         }
     }
 }
@@ -270,9 +337,17 @@ impl Attrib {
         let sub = own.iter().position(|t| t.code == 100 && t.str_ref().is_some_and(|s| s.trim().starts_with("AcDbAttribute"))).unwrap_or(0);
         let rest = own.get(sub..).unwrap_or_default();
         let lock_position = rest.iter().position(|t| t.code == 2).is_some_and(|at| rest.iter().skip(at + 1).any(|t| t.code == 280 && t.i64() != 0));
+        // The text is described by the groups up to the attribute's own subclass, and from there
+        // by all but the field length (73) and a multiline attribute's header (71, 72 and the
+        // point 11): there 72 isn't the justification nor 11 the alignment point, and a
+        // left-justified attribute writes no 72 of its own, so the multiline one was read as
+        // centred.
+        let at = own.iter().position(|t| t.code == 100 && t.str_ref().is_some_and(|s| s.trim().starts_with("AcDbAttribute"))).unwrap_or(own.len());
+        let (head, tail) = own.split_at(at);
+        let text_groups: Vec<Tag> = head.iter().chain(tail.iter().filter(|t| !matches!(t.code, 71 | 72 | 73 | 11 | 21 | 31))).cloned().collect();
         Attrib {
             tag: g.s(2).unwrap_or_default(),
-            text: Text::read(&g),
+            text: Text::read_as(&Groups(&text_groups), true),
             prompt: if kind == "ATTDEF" { decode_line(&g.s(3).unwrap_or_default()) } else { String::new() },
             flags: g.i_or(70, 0),
             lock_position,
@@ -454,6 +529,7 @@ pub enum EntityKind {
     Polyline(Polyline),
     Spline(Spline),
     Helix(Helix),
+    MLine(MLine),
     Ray {
         base: Point,
         direction: Point,
@@ -545,6 +621,50 @@ fn polyline(g: &Groups<'_>, followers: &[Record<'_>]) -> Polyline {
         m: g.i_or(71, 0),
         n: g.i_or(72, 0),
         smooth: g.i_or(75, 0),
+        vertices,
+    }
+}
+
+fn mline(tags: &[Tag], g: &Groups<'_>) -> MLine {
+    let mut vertices: Vec<MLineVertex> = Vec::new();
+    // Which list the 41s or 42s go to: the last one a 74 or 75 started.
+    let mut fill = false;
+    for t in tags {
+        if t.code == 11 {
+            vertices.push(MLineVertex { location: [t.f64(), 0.0, 0.0], ..MLineVertex::default() });
+            continue;
+        }
+        let Some(v) = vertices.last_mut() else { continue };
+        let axis = match t.code / 10 {
+            1 => 0,
+            2 => 1,
+            _ => 2,
+        };
+        match t.code {
+            21 | 31 => v.location[axis] = t.f64(),
+            12 | 22 | 32 => v.direction[axis] = t.f64(),
+            13 | 23 | 33 => v.miter[axis] = t.f64(),
+            74 => {
+                v.element_params.push(Vec::new());
+                fill = false;
+            }
+            75 => {
+                v.fill_params.push(Vec::new());
+                fill = true;
+            }
+            41 if !fill => v.element_params.last_mut().into_iter().for_each(|l| l.push(t.f64())),
+            42 if fill => v.fill_params.last_mut().into_iter().for_each(|l| l.push(t.f64())),
+            _ => {}
+        }
+    }
+    MLine {
+        style: g.s(2).unwrap_or_default(),
+        style_handle: g.handle(340).filter(|h| *h != 0),
+        scale: g.f_or(40, 1.0),
+        justification: g.i_or(70, 0),
+        flags: g.i_or(71, 1),
+        elements: g.i_or(73, 0),
+        start: g.point(10),
         vertices,
     }
 }
@@ -671,6 +791,11 @@ impl Entity {
                     ccw: h.i_or(290, 1) != 0,
                     constrain: h.i_or(280, 2),
                 })
+            }
+            "MLINE" => {
+                let own = g.subclass("AcDbMline");
+                let own = if own.0.is_empty() { g } else { own };
+                EntityKind::MLine(mline(own.0, &own))
             }
             "RAY" => EntityKind::Ray { base: line(&g).0, direction: line(&g).1 },
             "XLINE" => EntityKind::XLine { base: line(&g).0, direction: line(&g).1 },

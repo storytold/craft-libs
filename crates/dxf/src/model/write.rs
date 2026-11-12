@@ -809,6 +809,37 @@ impl W {
                 self.i(290, i64::from(h.ccw));
                 self.i(280, h.constrain);
             }
+            EntityKind::MLine(m) => {
+                let n = |v: usize| i64::try_from(v).unwrap_or(0);
+                self.sub("AcDbMline");
+                self.s(2, m.style.as_str());
+                self.h(340, m.style_handle.unwrap_or(0));
+                self.f(40, m.scale);
+                self.i(70, m.justification);
+                self.i(71, m.flags);
+                self.i(72, n(m.vertices.len()));
+                self.i(73, m.elements);
+                self.p(10, m.start);
+                if c.extrusion != [0.0, 0.0, 1.0] {
+                    self.p(210, c.extrusion);
+                }
+                for v in &m.vertices {
+                    self.p(11, v.location);
+                    self.p(12, v.direction);
+                    self.p(13, v.miter);
+                    for (k, params) in v.element_params.iter().enumerate() {
+                        self.i(74, n(params.len()));
+                        for x in params {
+                            self.f(41, *x);
+                        }
+                        let fill = v.fill_params.get(k).map_or(&[][..], Vec::as_slice);
+                        self.i(75, n(fill.len()));
+                        for x in fill {
+                            self.f(42, *x);
+                        }
+                    }
+                }
+            }
             EntityKind::Ray { base, direction } | EntityKind::XLine { base, direction } => {
                 self.sub(if matches!(kind, EntityKind::Ray { .. }) { "AcDbRay" } else { "AcDbXline" });
                 self.p(10, *base);
@@ -884,6 +915,7 @@ fn kind_name(kind: &EntityKind) -> Option<&'static str> {
         EntityKind::Polyline(_) => "POLYLINE",
         EntityKind::Spline(_) => "SPLINE",
         EntityKind::Helix(_) => "HELIX",
+        EntityKind::MLine(_) => "MLINE",
         EntityKind::Ray { .. } => "RAY",
         EntityKind::XLine { .. } => "XLINE",
         EntityKind::Text(_) => "TEXT",
