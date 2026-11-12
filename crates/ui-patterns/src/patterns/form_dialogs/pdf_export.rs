@@ -16,6 +16,7 @@ use crate::contract::{
     ActivateOn, Bind, CollectionEvent, Entry, NoValue, Outcome, Props as _, Remember as _, Scroll, SelectMode, Show as _, ShowCollection as _,
     ShowContainer as _, Sizing,
 };
+use crate::display::Text;
 use crate::form::{Field, FieldGroup};
 use crate::layout_components::{Row, Stack};
 use crate::list::{List, ListRow};
@@ -24,6 +25,7 @@ use crate::patterns::presets::{NamedPresetEvent, NamedPresetRow, PickerField, Pr
 use crate::pickers::Select;
 use crate::runtime::env::{Env, Label, UnitKind};
 use crate::runtime::overlay::CloseReason;
+use crate::style::TypeRole;
 use craft_behavior::{DisplayOrder, ItemSource, Selection, SelectionChange};
 use craft_pdf::settings::{ColorMode, Compatibility, PdfPreset, PdfSettings, ProfileCatalog, Standard, builtin_presets, default_preset_name};
 use craft_theme::variant::Tone;
@@ -452,6 +454,7 @@ impl<'a> PdfExportDialog<'a> {
                     }
                 }
                 Stack::new().fill().scroll(Scroll::vertical()).label(section.title(&words).clone()).show(ui, |ui, _| {
+                    Text::new(section.title(&words).clone()).role(TypeRole::Title).show(ui);
                     Sections {
                         words: &words,
                         units: &units,
