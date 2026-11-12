@@ -164,7 +164,7 @@ fn chosen_settings(device: &PrinterDevice, job: &Job) -> Result<Option<PrintTick
 
 /// The settings [`crate::driver_settings_dialog`] opens the driver's dialog on, for the queue
 /// named `printer`: the job's earlier choices in that dialog, without what the job decides,
-/// when they are for this printer and the driver still reads them, else the settings the driver
+/// when they are for this printer and the driver still reads and merges them, else the settings the driver
 /// gives a new job, with the job's copies and collation merged in, validated by the driver and
 /// converted to its DEVMODE.
 pub(crate) fn settings_seed(job: &Job, printer: &str) -> Result<crate::Seed, Error> {
@@ -176,19 +176,28 @@ pub(crate) fn settings_seed(job: &Job, printer: &str) -> Result<crate::Seed, Err
     let chosen = earlier.ok().flatten();
     let options = ticket::dialog_xml(job)?;
     let unreadable = |e: &dyn std::fmt::Display| spool_error(format!("the printer driver's settings could not be read: {e}"));
-    let _provider = print_ticket_provider();
-    let seed = {
-        let mut builder = PrintTicketBuilder::new(&device).map_err(|e| unreadable(&e))?;
-        if let Some(chosen) = chosen {
-            builder.merge(chosen).map_err(|e| unreadable(&e))?;
-        }
-        builder.merge(PrintTicket::from_xml(options)).map_err(|e| unreadable(&e))?;
-        builder.build().map_err(|e| unreadable(&e))?
+    let seed = |chosen: Option<PrintTicket>| -> Result<rgb::DevMode, Error> {
+        let _provider = print_ticket_provider();
+        let seed = {
+            let mut builder = PrintTicketBuilder::new(&device).map_err(|e| unreadable(&e))?;
+            if let Some(chosen) = chosen {
+                builder.merge(chosen).map_err(|e| unreadable(&e))?;
+            }
+            builder.merge(PrintTicket::from_xml(options.clone())).map_err(|e| unreadable(&e))?;
+            builder.build().map_err(|e| unreadable(&e))?
+        };
+        let bytes = seed.to_dev_mode(&device).map_err(|e| unreadable(&e))?;
+        let whole = crate::whole_dev_mode(bytes).ok_or_else(|| unreadable(&"the driver's settings are shorter than they say"))?;
+        rgb::DevMode::from_bytes(whole).map_err(|e| unreadable(&e))
     };
-    let bytes = seed.to_dev_mode(&device).map_err(|e| unreadable(&e))?;
-    let whole = crate::whole_dev_mode(bytes).ok_or_else(|| unreadable(&"the driver's settings are shorter than they say"))?;
-    let dev_mode = rgb::DevMode::from_bytes(whole).map_err(|e| unreadable(&e))?;
-    Ok(crate::Seed { dev_mode, replaces_unreadable })
+    // Earlier settings the driver reads but then refuses to merge or convert back are left out
+    // the same way; an error with the job's own options alone is returned.
+    let had_earlier = chosen.is_some();
+    match seed(chosen) {
+        Ok(dev_mode) => Ok(crate::Seed { dev_mode, replaces_unreadable }),
+        Err(_) if had_earlier => Ok(crate::Seed { dev_mode: seed(None)?, replaces_unreadable: true }),
+        Err(e) => Err(e),
+    }
 }
 
 fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape: bool) -> Result<(PrintTicket, (u32, u32)), Error> {
