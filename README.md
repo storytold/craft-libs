@@ -92,6 +92,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-exr`](crates/exr/src/lib.rs): OpenEXR pieces shared by PhotoCraft and EffectCraft: layer
   and channel names, the channels that make a colour picture, and Cryptomatte IDs, metadata keys,
   manifests and rank channels. Takes names and attribute text; decoding is not part of it yet.
+- [`craft-flow`](crates/flow/README.md): the flow model every text format maps to (paragraphs with a kind, lists and formatted spans; tables; pictures, fields, notes, equations), converted to and from a craft-wordmodel `Document`.
 - [`craft-font-catalog`](crates/font-catalog/README.md): the installed fonts on every platform
   (font folders, fontconfig and Flatpak host folders, CoreText, DirectWrite, the font store),
   lookup by family, style, localized, legacy, full and PostScript names, family loads shared
