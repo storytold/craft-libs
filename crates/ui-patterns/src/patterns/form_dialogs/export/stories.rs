@@ -14,23 +14,47 @@ use egui::load::SizedTexture;
 use egui::{Color32, ColorImage, Ui, Vec2};
 
 /// The document's size in pixels.
-const DOCUMENT: PixelSize = PixelSize::new(1200, 800);
-/// The preview picture's size in points at zoom 1.
-const PICTURE: [usize; 2] = [360, 240];
+const DOCUMENT: PixelSize = PixelSize::new(4000, 3000);
+/// The preview picture's size in points at zoom 1: the document fitted to a 512 px proxy.
+const PICTURE: [usize; 2] = [512, 384];
 /// The size estimate of the preview, in bytes.
-const ESTIMATE: u64 = 1_258_291;
+const ESTIMATE: u64 = 3_565_158;
+
+/// A sky, a sun and hills.
+fn landscape() -> ColorImage {
+    let [width, height] = PICTURE;
+    let (sun_x, sun_y, sun_r) = (width as f32 * 0.7, height as f32 * 0.38, height as f32 * 0.14);
+    let mut pixels = Vec::with_capacity(width * height);
+    for y in 0..height {
+        let t = y as f32 / height as f32;
+        for x in 0..width {
+            let (mut r, mut g, mut b) = (40.0 + 210.0 * t, 90.0 + 80.0 * t, 160.0 - 50.0 * t);
+            let (dx, dy) = (x as f32 - sun_x, y as f32 - sun_y);
+            if dx * dx + dy * dy < sun_r * sun_r {
+                (r, g, b) = (255.0, 232.0, 150.0);
+            }
+            let ridge = height as f32 * (0.68 + 0.08 * (x as f32 / width as f32 * 9.0).sin());
+            if y as f32 > ridge {
+                let shade = 0.55 + 0.25 * ((y as f32 - ridge) / height as f32);
+                (r, g, b) = (40.0 * shade, 90.0 * shade, 60.0 * shade);
+            }
+            pixels.push(Color32::from_rgb(r as u8, g as u8, b as u8));
+        }
+    }
+    ColorImage::new(PICTURE, pixels)
+}
 
 fn picture(ui: &Ui) -> SizedTexture {
-    let id = TextureCache::texture(ui.ctx(), "form-dialogs-export-story", || ColorImage::filled(PICTURE, Color32::from_rgb(0x6f, 0x8a, 0x4d)));
+    let id = TextureCache::texture(ui.ctx(), "form-dialogs-export-story", landscape);
     SizedTexture::new(id, Vec2::new(PICTURE[0] as f32, PICTURE[1] as f32))
 }
 
-const FORMATS: [(&str, &str); 6] = [("Png", "png"), ("Jpg", "jpg"), ("Webp", "webp"), ("Tiff", "tiff"), ("Tga", "tga"), ("Ico", "ico")];
+const FORMATS: [(&str, &str); 6] = [("Png", "png"), ("Jpg", "jpg"), ("Webp", "webp"), ("Tiff", "tif"), ("Tga", "tga"), ("Ico", "ico")];
 
 /// The dialog over the options the story keeps; the `format` value replaces the options' format when it changes, so a
 /// pick inside the dialog stays until the value changes.
 fn export_dialog(ui: &mut Ui, data: &mut StoryData, preview_ready: bool) -> StoryOutput {
-    let format = (*data.choice("format", "png", &FORMATS)).to_owned();
+    let format = (*data.choice("format", "jpg", &FORMATS)).to_owned();
     let ready = *data.value("preview_ready", preview_ready);
     let exact = *data.value("exact_size", false);
     let (options, applied) = data.value("export_options", (ExportOptions::default(), "png".to_owned()));
