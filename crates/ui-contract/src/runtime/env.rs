@@ -133,7 +133,7 @@ pub struct Scoped {
     pub(crate) offered: Option<f32>,
     /// The innermost scrolling body that encloses the scope: a collection under it owns no scroll of its own, and
     /// page and end moves a component leaves untaken go to it.
-    pub(crate) scroll_owner: Option<Id>,
+    pub(crate) scroll_owner: Option<ScrollOwner>,
     /// The axes (horizontal, vertical) the innermost scrolling body scrolls on: the room along them is unbounded, so
     /// a child that fills there takes its content size.
     pub(crate) unbounded: (bool, bool),
@@ -245,7 +245,22 @@ pub struct ItemFacts {
     pub menu_open: bool,
 }
 
+/// The innermost body that owns the scroll of a scope (`Scoped::scroll_owner`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ScrollOwner {
+    pub(crate) id: Id,
+    /// The owner shows its body through a view of its own (a canvas with a view, `ContainerProps::scroll_owner`),
+    /// not through a scroll region: a stop in the body is on a document, with its key role.
+    pub(crate) view: bool,
+}
+
 impl Scoped {
+    /// Whether the scope is the body of a container with a view of its own, as the innermost scroll owner: its stops
+    /// take the document key role (`KeyRole::document`).
+    pub(crate) fn in_view_body(&self) -> bool {
+        self.scroll_owner.is_some_and(|owner| owner.view)
+    }
+
     /// The height, icon side, padding and gap of a control of `size`, with the line ratio of this scope.
     pub(crate) fn control(&self, size: craft_theme::ControlSize) -> craft_behavior::ControlMetrics {
         crate::style::control_metrics(&self.tokens, size, self.line_ratio)

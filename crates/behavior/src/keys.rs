@@ -26,8 +26,8 @@ pub struct KeyRole {
     /// The component reads arrow nudges: arrows are not moves. One that deletes (a canvas control) takes only the
     /// plain Delete and Backspace; with a modifier held they are the app's.
     pub nudge: bool,
-    /// A document canvas or a control on one (`KeyUse.chrome_key`): Page Up and Page Down with Cmd (Ctrl off macOS)
-    /// scroll it sideways, as Photoshop's do, instead of switching pages.
+    /// A canvas with a view or a stop in its body: Page Up and Page Down with Cmd (Ctrl off macOS) scroll the view
+    /// sideways, as Photoshop's do, instead of switching pages.
     pub document: bool,
     /// Typed letters reach the component as `Intent::Text` (type-ahead).
     pub type_ahead: bool,

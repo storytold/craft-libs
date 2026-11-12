@@ -269,7 +269,8 @@ pub struct KeyUse {
     /// shortcut never shares them. A control that does not (a button) leaves them to the commands around the focus.
     pub moves: bool,
     /// The component is a document canvas: a window that registers one this pass shows a document, and a bare Tab
-    /// toggles that window's panels with nothing focused or the canvas focused (`window.togglePanels`).
+    /// toggles that window's panels with nothing focused or the canvas focused (`window.togglePanels`). The page keys'
+    /// document role comes from the canvas's view instead (`ContainerProps::scroll_owner`), for its body's stops too.
     pub chrome_key: bool,
     /// The arrows are nudges for the component's content (a canvas tool or control), not moves: they arrive as
     /// `Intents::take_nudge`.

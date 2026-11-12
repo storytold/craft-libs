@@ -40,7 +40,7 @@ impl<'a> EnvView<'a> {
 
     /// The innermost scrolling body around the component.
     pub(crate) fn scroll_owner(&self) -> Option<Id> {
-        self.scoped.scroll_owner
+        self.scoped.scroll_owner.map(|owner| owner.id)
     }
 
     /// The view of the innermost scroll area around the scope.

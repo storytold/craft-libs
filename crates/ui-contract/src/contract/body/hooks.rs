@@ -112,7 +112,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
     }
 
     fn key_role(&self, comp: &C) -> KeyRole {
-        KeyRole::new().reorderable(comp.props(Internal::new()).header.is_some_and(|header| header.band == DragBand::Reorder))
+        let props = comp.props(Internal::new());
+        KeyRole::new().reorderable(props.header.is_some_and(|header| header.band == DragBand::Reorder)).document(props.scroll_owner)
     }
 
     fn position(&self, comp: &C) -> Option<SetPosition> {

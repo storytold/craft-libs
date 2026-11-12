@@ -673,7 +673,9 @@ fn stops_step(at: StopsStep<'_>, e: &mut dyn ErasedPass<'_>, facts: &TypeFacts, 
     let resettable = !facts.text() && resets;
     let text = holder_widget.is_some();
     let keys = text_keys.unwrap_or_else(|| e.keys());
-    let role = e.key_role().nudge(keys.nudge).document(keys.chrome_key);
+    // A stop in the body of a canvas with a view is on a document; the canvas's own role says it itself.
+    let role = e.key_role().nudge(keys.nudge);
+    let role = role.document(role.document || env.in_view_body());
     let role = role.type_ahead(role.type_ahead || keys.type_ahead);
     // A bound component that keeps the arrows reads them as value steps; a text value sets `steps_value` in its text options.
     let arrows = keys.keep == crate::runtime::focus::KeepKeys::BlockArrows;

@@ -351,7 +351,8 @@ impl<'a> Guides<'a> {
             let step = if mods.shift { self.big_step } else { self.step };
             position += place::nudge_sign(&space.view, guide.along, direction) * step;
         }
-        while let Some((mv, _)) = cx.intents().take_move() {
+        // Only the steps along the guide; the page and end moves go on to the canvas, which pages its view.
+        while let Some((mv, _)) = cx.intents().take_move_where(|mv, _| matches!(mv, NavMove::Forward | NavMove::Back)) {
             match mv {
                 NavMove::Forward => position += self.step,
                 NavMove::Back => position -= self.step,

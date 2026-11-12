@@ -4,7 +4,7 @@ use super::BodyHooks;
 use super::reorder::REORDER_SCOPE;
 use crate::contract::{Container, ContainerProps, Cx, DragBand, Mount, PaneEdge, Scroll, Sizing};
 use crate::runtime::commands::{self, CommandSet as _, WindowCommand};
-use crate::runtime::env::{AppValues, ArenaId, Scoped};
+use crate::runtime::env::{AppValues, ArenaId, Scoped, ScrollOwner};
 use crate::style::{ComponentStyle as _, SurfaceKind};
 use craft_i18n::Direction;
 use egui::{Context, Id, Vec2};
@@ -106,7 +106,7 @@ impl BodyHooks<'_> {
             (offered - label_width).max(0.0)
         });
         if scroll.is_some() || props.scroll_owner {
-            scoped.scroll_owner = Some(id);
+            scoped.scroll_owner = Some(ScrollOwner { id, view: scroll.is_none() });
         }
         match scroll {
             Some(scroll) => scoped.unbounded = (scroll.horizontal_on(), scroll.vertical_on()),

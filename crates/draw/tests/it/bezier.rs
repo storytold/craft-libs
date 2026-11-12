@@ -1,6 +1,6 @@
 //! `BezierOverlay`: the pure path operations, and the overlay's pointer, keyboard and tools through the public API.
 
-use craft_behavior::kurbo::{ParamCurve as _, Point, Vec2};
+use craft_behavior::kurbo::{ParamCurve as _, Point, Size, Vec2};
 use craft_behavior::{CanvasView, EditEvent};
 use craft_draw::ui::{
     AnchorsShown, BezierHit, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleSide, HandlesShown, Knot, KnotRef, PathEdit, PathSelection,
@@ -156,6 +156,8 @@ struct State {
     segment_mark: SegmentMark,
     rotation: f64,
     flip: bool,
+    /// The canvas shows a document and keeps the view it reports, so page keys move it.
+    pans: bool,
     view: Option<CanvasView>,
     id: Id,
     seen: Vec<Seen>,
@@ -204,6 +206,10 @@ fn kind(event: &EditEvent<Vec<EditPath>>) -> Seen {
 }
 
 fn harness(paths: Vec<EditPath>) -> Harness {
+    harness_with(paths, false)
+}
+
+fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
     let state = Rc::new(RefCell::new(State {
         paths,
         selection: PathSelection::default(),
@@ -214,6 +220,7 @@ fn harness(paths: Vec<EditPath>) -> Harness {
         segment_mark: SegmentMark::HandlesOnly,
         rotation: 0.0,
         flip: false,
+        pans,
         view: None,
         id: Id::NULL,
         seen: Vec::new(),
@@ -229,10 +236,20 @@ fn harness(paths: Vec<EditPath>) -> Harness {
         let mut held = shown.borrow_mut();
         let st = &mut *held;
         let room = ui.available_rect_before_wrap();
-        let view = CanvasView::new(room, p(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0).rotation(st.rotation).flip_x(st.flip);
+        let view = match st.view.filter(|_| st.pans) {
+            Some(mut kept) => {
+                kept.rect = room;
+                kept
+            }
+            None => {
+                CanvasView::new(room, p(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0).rotation(st.rotation).flip_x(st.flip)
+            }
+        };
         st.view = Some(view);
         let selection = st.selection.clone();
-        let canvas = Canvas::new("Document").view(view).show(ui, |ui, body| {
+        let canvas = Canvas::new("Document").view(view);
+        let canvas = if st.pans { canvas.document(Size::new(4000.0, 4000.0)) } else { canvas };
+        let canvas = canvas.show(ui, |ui, body| {
             // The guides lie under the paths: a stack position hides the levels of the ones below it.
             if !st.guides.is_empty() {
                 Guides::new("Guides", Bind::bound(&mut st.guides)).interactive(true).show_at(ui, body.rect);
@@ -246,6 +263,9 @@ fn harness(paths: Vec<EditPath>) -> Harness {
         });
         if canvas.output.click_at().is_some() {
             st.tool_clicks += 1;
+        }
+        if st.pans {
+            st.view = canvas.output.view.or(st.view);
         }
         let Some(output) = canvas.inner else { return };
         st.id = output.edit.response.id;
@@ -357,6 +377,24 @@ fn hit_test_matches_the_overlays_press_priority() {
 // ---- the anchor tools and the Curvature tool ----
 
 // Arrows, select all and Escape belong to Direct, Convert and Curvature; Add, Delete and Auto Add/Delete have none.
+
+#[trial]
+fn cmd_or_ctrl_with_page_down_on_a_focused_anchor_scrolls_the_canvas_and_picks_no_part() {
+    let mut h = harness_with(vec![path_a(), path_b()], true);
+    // The canvas, then the overlay; Home picks the first anchor of path 1.
+    h.fixture
+        .key(egui::Key::Tab, egui::Modifiers::NONE)
+        .key(egui::Key::Tab, egui::Modifiers::NONE)
+        .key(egui::Key::Home, egui::Modifiers::NONE)
+        .settle();
+    let picked = h.state.borrow().selection.clone();
+    assert!(!picked.anchors.is_empty(), "Home picks an anchor");
+    let before = h.state.borrow().view.expect("the canvas showed").center;
+    h.fixture.key(egui::Key::PageDown, egui::Modifiers::COMMAND).settle();
+    let after = h.state.borrow().view.expect("the canvas showed").center;
+    assert!(after.x > before.x && after.y == before.y, "the overlay leaves Cmd/Ctrl+Page Down to the canvas: {before:?} -> {after:?}");
+    assert_eq!(h.state.borrow().selection, picked, "the page key picks no part");
+}
 
 #[trial]
 fn insert_on_a_picked_anchor_adds_one_halfway_along_the_segment_leaving_it() {
