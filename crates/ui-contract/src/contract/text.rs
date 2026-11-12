@@ -419,11 +419,6 @@ pub(crate) fn run<C: Component>(
             now,
         },
     );
-    // While the text widget takes the pointer it lies over the root and egui hands it the presses there: it stands for
-    // the root, so the focus service resolves such a press among the root's shapes and the field keeps its focus.
-    if pointer && focusable {
-        crate::runtime::pointer::record_widgets(&ctx, ui.layer_id(), id, &[widget], true);
-    }
     // Focus that moved to another part of the component leaves the text part like a focus loss: the draft commits.
     let left_for_part = out.focused && cx.active_part().is_some();
     if left_for_part {

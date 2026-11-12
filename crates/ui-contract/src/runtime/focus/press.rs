@@ -15,13 +15,16 @@ pub(crate) struct PressAt {
     winner: Option<Winner<Id>>,
     /// The arena root the winner belongs to.
     root: Option<Id>,
+    /// The egui widget that takes the press.
+    target: Option<Id>,
 }
 
 pub(crate) fn press_at(ctx: &Context) -> Option<PressAt> {
     // A press the modal's canvas took moves no key focus: the dialog keeps it.
     egui_focus::primary_press_origin(ctx).filter(|pos| !sampler::admitted_press(ctx, *pos)).map(|pos| {
-        let (winner, root) = pointer::press_winner(ctx, pos, pointer::pass_pointer(ctx).press_targets).unzip();
-        PressAt { winner, root }
+        let targets = pointer::pass_pointer(ctx).press_targets;
+        let (winner, root) = pointer::press_winner(ctx, pos, targets).unzip();
+        PressAt { winner, root, target: targets.click }
     })
 }
 
@@ -59,7 +62,10 @@ impl State {
     /// text part to commit its draft when the press leaves it.
     pub(super) fn classify_press(&mut self, at: &PressAt) {
         let winner = at.winner.as_ref();
-        let kind = classify_press(winner.map(|winner| winner.sense));
+        // A press on the widget that holds the focus (the text of a field in edit) is that widget's own: it keeps the
+        // focus and the draft.
+        let on_focused = at.target.is_some() && at.target == self.stop_of_focus().map(|rec| rec.stop.root);
+        let kind = if on_focused { PressFocus::Keep } else { classify_press(winner.map(|winner| winner.sense)) };
         let (owner, part) = winner.map_or((None, None), |winner| (Some(winner.owner), winner.part));
         let text_stop = self.stop_of_focus().filter(|stop| stop.stop.text).map(|stop| stop.stop.id);
         let was_text = text_stop.is_some() && kind.commits_draft();
