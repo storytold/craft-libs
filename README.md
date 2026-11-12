@@ -241,6 +241,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   header fields, MIME parts and multiparts, encoded-words, RFC 2231 parameters, base64 and
   quoted-printable, character sets, address lists, dates, mbox files and the `multipart/related`
   lookups of MHT web archives. What a message means (body, attachments, flags) stays in each app.
+- [`craft-openpgp`](crates/openpgp/README.md): OpenPGP as mail carries it: PGP/MIME and cleartext
+  Digital signatures checked, attached Public keys and `Autocrypt:` headers read, a secret key
+  file inspected without using it. Built on rPGP; no I/O, and every size and count is capped.
 - [`craft-odf`](crates/odf/README.md): OpenDocument packages (ODF 1.3 Part 2), read and written: the ZIP container with its `mimetype` and manifest within limits, password protection (AES-256-CBC with PBKDF2, as LibreOffice writes it) and flat single-file documents. With the `text` feature, OpenDocument Text documents read into and written from the craft-flow model.
 - [`craft-prc`](crates/prc/README.md): a reader for PRC (ISO 14739-1), the 3D model format of PDF 3D
   annotations: container, bit-level primitives, schema, tessellations and the product tree as

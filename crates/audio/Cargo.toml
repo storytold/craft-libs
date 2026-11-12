@@ -1,6 +1,6 @@
 [package]
 name = "craft-audio"
-description = "Audio file I/O and codecs: WAV/AIFF read and write, FLAC encoder, AAC and ALAC decoders and encoders, AC-3/E-AC-3 decoder and encoder, MP3 encoder, Opus and MP1/MP2 decoders."
+description = "Audio file I/O and codecs: WAV/AIFF read and write, FLAC encoder, AAC and ALAC decoders and encoders, AC-3/E-AC-3 decoder and encoder, MP3 decoder and encoder, Opus and MP1/MP2 decoders."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,12 +14,12 @@ all-features = true
 workspace = true
 
 [features]
-# Probe and decode files: WAV and AIFF natively; AAC, ALAC, Opus, AC-3/E-AC-3, MP1/MP2 and PCM
-# through craft-media's demuxers and this crate's decoders; MP3, FLAC, Vorbis, CAF, ADPCM, A-law
-# and µ-law through symphonia.
+# Probe and decode files: WAV and AIFF natively; AAC, ALAC, Opus, AC-3/E-AC-3, MP1/MP2/MP3 and
+# PCM through craft-media's demuxers and this crate's decoders; FLAC, Vorbis, CAF, ADPCM, A-law,
+# µ-law and free-format MP3 through symphonia.
 decode = ["decode-native", "symphonia"]
 # `decode` without symphonia: only the formats with a native decoder (others are Unsupported).
-decode-native = ["aac-decode", "alac-decode", "opus-decode", "ac3-decode", "mpa-decode", "craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:log"]
+decode-native = ["aac-decode", "alac-decode", "opus-decode", "ac3-decode", "mpa-decode", "mp3-decode", "craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:log"]
 # The symphonia fallback for the formats with no native decoder yet.
 symphonia = ["decode-native", "dep:symphonia"]
 # Every encoder: the lossless file writers and the AAC, ALAC, AC-3/E-AC-3 and MP3 encoders.
@@ -36,6 +36,8 @@ aac-encode = ["craft-media/bitstream"]
 opus-decode = []
 ac3-decode = ["craft-media/bitstream"]
 mpa-decode = ["craft-media/bitstream"]
+# MPEG-1/2 Layer III (MP3) decoder (`mp3::Decoder`).
+mp3-decode = ["mpa-decode"]
 # ALAC packet decoder and encoder (`alac`), ported from Apple's reference implementation.
 alac-decode = []
 alac-encode = []
