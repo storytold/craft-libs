@@ -236,6 +236,13 @@ impl Reader<'_> {
 
     fn use_material(&mut self, name: &str) -> Result<()> {
         self.slot = None;
+        if name.trim().is_empty() {
+            // A bare `usemtl` selects no named material. In particular, do not create a
+            // material with an empty name: callers can map the missing material to their own
+            // default, and writers need not emit a meaningless empty material name.
+            self.material = None;
+            return Ok(());
+        }
         self.material = match self.material_ids.get(name) {
             Some(i) => Some(*i),
             None if self.scene.materials.len() >= self.limits.max_materials => {
@@ -518,6 +525,7 @@ pub fn write(scene: &Scene, mtllib: Option<&str>, limits: &Limits) -> Result<Str
     // OBJ indices run on across objects.
     let (mut vbase, mut tbase, mut nbase) = (1u64, 1u64, 1u64);
     let mut smoothing = 0;
+    let mut current_material: Option<Option<usize>> = None;
     for (index, world) in scene.instances(limits)? {
         let Some(mesh) = scene.meshes.get(index) else { continue };
         mesh.validate()?;
@@ -546,8 +554,17 @@ pub fn write(scene: &Scene, mtllib: Option<&str>, limits: &Limits) -> Result<Str
             if !part.name.trim().is_empty() {
                 let _ = writeln!(text, "g {}", part.name.trim().replace(|c: char| c.is_control(), " "));
             }
-            if let Some(m) = part.material.and_then(|m| materials.get(m)) {
-                let _ = writeln!(text, "usemtl {m}");
+            if current_material != Some(part.material) {
+                match part.material.and_then(|m| materials.get(m)) {
+                    Some(m) => {
+                        let _ = writeln!(text, "usemtl {m}");
+                    }
+                    None if current_material.is_some() => {
+                        let _ = writeln!(text, "usemtl");
+                    }
+                    None => {}
+                }
+                current_material = Some(part.material);
             }
             if part.smoothing != smoothing {
                 smoothing = part.smoothing;
