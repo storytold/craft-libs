@@ -3,7 +3,9 @@
 use std::borrow::Cow;
 
 use craft_behavior::{ColumnKey, DisplayOrder, IconId, ItemSource};
+use craft_theme::ControlSize;
 use craft_theme::variant::Tone;
+use craft_ui::contract::Props as _;
 use craft_ui::list::{ListRow, RowInk, ToggleCell, ToggleFace, ToggleState};
 use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::Label;
@@ -174,7 +176,7 @@ fn include_state(include: ActionInclude) -> ToggleState {
 /// - an action: the play glyph, its name, the include cell unless it has no steps, the trailing
 ///   text (the shortcut and the step count, or "2/3 steps" when some are off), and while it is
 ///   recorded into a dot that names the recording;
-/// - a step: the host's label, dimmed when switched off, the include and dialog cells.
+/// - a step: the host's label, dimmed when switched off, the include and dialog cells, a small control high.
 pub(super) fn build_row(body: &Body<'_>, state: &ActionsPanelState, key: &ActionSelection) -> ListRow<'static> {
     let Body { list, host, words, env, .. } = *body;
     let digits = |n: usize| env.format().integer(n as u64);
@@ -183,7 +185,7 @@ pub(super) fn build_row(body: &Body<'_>, state: &ActionsPanelState, key: &Action
             let count = list.actions().iter().filter(|action| action.set.as_deref() == Some(name.as_str())).count();
             let open = set_open(list, state, host, name);
             let icon = IconId::new(if open { "folder_open" } else { "folder" });
-            ListRow::new(name.clone()).heading().icon(IconSpec::svg(icon)).trailing(words.action_count.text(count as u64, &digits(count)))
+            ListRow::new(name.clone()).icon(IconSpec::svg(icon)).optional(words.action_count.text(count as u64, &digits(count)))
         }
         ActionSelection::Action(index) => {
             let Some(action) = list.action(*index) else { return ListRow::new(Label::Empty) };
@@ -208,13 +210,14 @@ pub(super) fn build_row(body: &Body<'_>, state: &ActionsPanelState, key: &Action
             match action.steps.get(*step) {
                 Some(recorded) => {
                     let label = host.map_or_else(|| recorded.command.clone(), |host| host.step_label(recorded));
-                    ListRow::new(label).ink(if action.step_enabled(*step) { RowInk::Muted } else { RowInk::Dimmed })
+                    let ink = if action.step_enabled(*step) { RowInk::Normal } else { RowInk::Dimmed };
+                    ListRow::new(label).ink(ink).size(ControlSize::Sm)
                 }
                 None => {
                     let pending = host.and_then(|host| host.pending_steps(*index).get(*step - action.steps.len()));
                     let label =
                         pending.map_or_else(String::new, |pending| host.map_or_else(|| pending.command.clone(), |host| host.step_label(pending)));
-                    ListRow::new(label).ink(RowInk::Muted)
+                    ListRow::new(label).size(ControlSize::Sm)
                 }
             }
         }

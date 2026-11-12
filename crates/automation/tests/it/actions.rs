@@ -127,3 +127,14 @@ fn actions_panel_space_flips_the_include_check_of_the_focused_row() {
     });
     assert!(flipped, "Space flips the row's include cell");
 }
+
+/// A step row is a small control high, shorter than its action's row; a set row is a plain row as high as an action's.
+#[trial]
+fn actions_panel_step_rows_are_shorter_than_action_rows() {
+    let mut shown = app(two_sets());
+    shown.state.expanded.insert("Loose".into());
+    let (fixture, _) = rig(shown);
+    let (action, step, set) = (node(&fixture, "Loose").rect, node(&fixture, "Run a").rect, node(&fixture, "Alpha").rect);
+    assert!(step.height() < action.height(), "the step row ({step:?}) is shorter than the action row ({action:?})");
+    assert_eq!(set.height(), action.height(), "a set row is as high as an action row");
+}
