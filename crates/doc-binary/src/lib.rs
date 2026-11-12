@@ -1,12 +1,18 @@
-//! WordCraft reader for the Word 97-2003 binary file format (`.doc`, [MS-DOC]).
+//! Reader for the Word 97-2003 binary file format (`.doc`, [MS-DOC]), WordCraft's.
 //!
-//! [`read`] turns the bytes of a `.doc` file into a [`wordcraft_doc::Document`]. There is no
+//! [`read`] turns the bytes of a `.doc` file into a [`craft_wordmodel::Document`]. There is no
 //! writer: saving always goes through the other formats. The reader is written from the public
 //! specification ([MS-DOC], Word (.doc) Binary File Format, Microsoft Open Specifications) and,
-//! like every WordCraft parser, is lenient by design (unknown structures are skipped, bad numbers
+//! like the other Craft parsers, is lenient by design (unknown structures are skipped, bad numbers
 //! fall back to defaults) and bounded (stream sizes, piece counts and property counts are
 //! capped), so hostile input yields an error or a best-effort document, never a panic.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+// The code came from an app whose lints allow this.
+#![allow(clippy::type_complexity)]
+
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeExamples;
 
 mod crypt;
 mod drawing;
@@ -24,19 +30,18 @@ mod sprm;
 mod stsh;
 mod table;
 
-use std::io::{Read, Seek};
 use std::sync::Arc;
 
-use wordcraft_doc::link::hyperlink_target;
-use wordcraft_doc::para::InlineObject;
-use wordcraft_doc::para::NoteKind;
-use wordcraft_doc::para::Paragraph;
-use wordcraft_doc::para::Run;
-use wordcraft_doc::props::CharProps;
-use wordcraft_doc::props::NumRef;
-use wordcraft_doc::section::HeaderSet;
-use wordcraft_doc::styles::StyleSheet;
-use wordcraft_doc::{Document, PartKind};
+use craft_wordmodel::link::hyperlink_target;
+use craft_wordmodel::para::InlineObject;
+use craft_wordmodel::para::NoteKind;
+use craft_wordmodel::para::Paragraph;
+use craft_wordmodel::para::Run;
+use craft_wordmodel::props::CharProps;
+use craft_wordmodel::props::NumRef;
+use craft_wordmodel::section::HeaderSet;
+use craft_wordmodel::styles::StyleSheet;
+use craft_wordmodel::{Document, PartKind};
 
 use fkp::Bins;
 use piece::{PieceTable, PrmRef};
@@ -183,14 +188,15 @@ pub enum DocbinError {
 /// Is this `.doc` password-protected (XOR obfuscation, RC4 or RC4 CryptoAPI)? False for
 /// anything that is not a readable Word 97-2003 file.
 pub fn is_encrypted(bytes: &[u8]) -> bool {
-    let Ok(mut comp) = open_container(bytes) else { return false };
-    stream(&mut comp, "WordDocument").is_some_and(|w| fib::peek_encryption(&w).is_some())
+    let Ok(comp) = open_container(bytes) else { return false };
+    stream(&comp, "WordDocument").ok().flatten().is_some_and(|w| fib::peek_encryption(&w).is_some())
 }
 
-/// Open the compound file around a `.doc`, after [`wordcraft_doc::cfb_guard::check`].
-fn open_container(bytes: &[u8]) -> Result<cfb::CompoundFile<std::io::Cursor<&[u8]>>, DocbinError> {
-    wordcraft_doc::cfb_guard::check(bytes).map_err(DocbinError::Container)?;
-    cfb::CompoundFile::open(std::io::Cursor::new(bytes)).map_err(|e| DocbinError::Container(e.to_string()))
+/// Open the compound file around a `.doc` with `craft-cfb`, which bounds the directory and the
+/// streams it reads.
+fn open_container(bytes: &[u8]) -> Result<craft_cfb::CompoundFile<'_>, DocbinError> {
+    craft_cfb::CompoundFile::open_with(bytes, craft_cfb::Limits { max_stream_size: MAX_STREAM, ..craft_cfb::Limits::default() })
+        .map_err(|e| DocbinError::Container(e.to_string()))
 }
 
 /// Read a `.doc` (Word 97-2003 binary) file into a [`Document`]. A password-protected file
@@ -209,8 +215,8 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
 /// [`read_with_password`] with the paragraph cap as a parameter, so tests need not build a
 /// file of [`MAX_PARAGRAPHS`] marks.
 fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> Result<Document, DocbinError> {
-    let mut comp = open_container(bytes)?;
-    let mut word = stream(&mut comp, "WordDocument").ok_or_else(|| DocbinError::NotWord("no WordDocument stream".into()))?;
+    let comp = open_container(bytes)?;
+    let mut word = stream(&comp, "WordDocument")?.ok_or_else(|| DocbinError::NotWord("no WordDocument stream".into()))?;
     if word.len() as u64 > MAX_STREAM {
         return Err(DocbinError::Limit(format!("WordDocument stream is {} bytes", word.len())));
     }
@@ -220,11 +226,14 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     let which = if let Some(e) = enc { e.which_tbl_stm } else { fib::Fib::parse(&word)?.which_tbl_stm };
     let named = if which { "1Table" } else { "0Table" };
     let other = if which { "0Table" } else { "1Table" };
-    let mut table = stream(&mut comp, named).or_else(|| stream(&mut comp, other)).unwrap_or_default();
+    let mut table = match stream(&comp, named)? {
+        Some(t) => t,
+        None => stream(&comp, other)?.unwrap_or_default(),
+    };
     if table.len() as u64 > MAX_STREAM {
         return Err(DocbinError::Limit(format!("Table stream is {} bytes", table.len())));
     }
-    let mut data = stream(&mut comp, "Data").unwrap_or_default();
+    let mut data = stream(&comp, "Data")?.unwrap_or_default();
     if data.len() as u64 > MAX_STREAM {
         return Err(DocbinError::Limit(format!("Data stream is {} bytes", data.len())));
     }
@@ -263,7 +272,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     // Word opens Word 97-2003 files in compatibility mode 11 (Word 2003); the model's default
     // 15 would apply Word 2013+ justification and line-breaking rules to them.
     doc.settings.compat_mode = 11;
-    if let Some(core) = metadata::read(&mut comp) {
+    if let Some(core) = metadata::read(&comp) {
         doc.core = core;
     }
     doc.body.clear();
@@ -428,7 +437,13 @@ fn paragraph_limit(max_paragraphs: usize) -> DocbinError {
 
 /// Walks one story into blocks. A walk that spent the shared paragraph budget is refused before
 /// its partial list is assembled, so a flood does not build blocks it will throw away.
-fn story_blocks(ctx: &WalkCtx<'_>, a: u32, b: u32, pics: &mut media::Pictures, max_paragraphs: usize) -> Result<wordcraft_doc::Blocks, DocbinError> {
+fn story_blocks(
+    ctx: &WalkCtx<'_>,
+    a: u32,
+    b: u32,
+    pics: &mut media::Pictures,
+    max_paragraphs: usize,
+) -> Result<craft_wordmodel::Blocks, DocbinError> {
     let paras = walk(ctx, a, b, pics);
     if ctx.paragraphs.exceeded.get() {
         return Err(paragraph_limit(max_paragraphs));
@@ -451,7 +466,7 @@ fn header_story_blocks(
     b: u32,
     pics: &mut media::Pictures,
     max_paragraphs: usize,
-) -> Result<wordcraft_doc::Blocks, DocbinError> {
+) -> Result<craft_wordmodel::Blocks, DocbinError> {
     let mut paras = walk(ctx, a, b, pics);
     if ctx.paragraphs.exceeded.get() {
         return Err(paragraph_limit(max_paragraphs));
@@ -533,7 +548,7 @@ impl ParaBudget {
 struct ParaBuild {
     text: String,
     runs: Vec<Run>,
-    props: wordcraft_doc::props::ParaProps,
+    props: craft_wordmodel::props::ParaProps,
     mark: CharProps,
     /// Which resolved formatting ([`FmtState::generation`]) the last character came from, while
     /// the last run is still the one it extended: the same generation means equal properties.
@@ -1022,14 +1037,14 @@ fn char_props(grpprl: &[u8], fonts: &[String], base: &CharProps) -> CharProps {
     p
 }
 
-/// Read a root-level stream fully, or `None` if it is absent.
-fn stream<F: Read + Seek>(comp: &mut cfb::CompoundFile<F>, name: &str) -> Option<Vec<u8>> {
-    let mut s = comp.open_stream(format!("/{name}")).ok()?;
-    let mut v = Vec::new();
-    // Read with a cap one byte above the limit so oversized streams are still caught by the
-    // caller instead of exhausting memory here.
-    s.by_ref().take(MAX_STREAM + 1).read_to_end(&mut v).ok()?;
-    Some(v)
+/// Read a root-level stream fully; `None` if it is absent or cannot be read. A stream larger than
+/// [`MAX_STREAM`] is [`DocbinError::Limit`], and nothing is allocated for it.
+fn stream(comp: &craft_cfb::CompoundFile<'_>, name: &str) -> Result<Option<Vec<u8>>, DocbinError> {
+    match comp.read_path_capped(name, MAX_STREAM) {
+        Ok(v) => Ok(Some(v)),
+        Err(craft_cfb::Error::LimitExceeded(e)) => Err(DocbinError::Limit(format!("{name} stream: {e}"))),
+        Err(_) => Ok(None),
+    }
 }
 
 #[cfg(test)]

@@ -127,7 +127,7 @@ fn sttb_strings(table: &[u8], fc: u32, lcb: u32) -> Option<Vec<String>> {
         let s: String = if extended {
             chars.as_chunks::<2>().0.iter().take(40).map(|c| char::from_u32(u16::from_le_bytes(*c) as u32).unwrap_or('\u{FFFD}')).collect()
         } else {
-            chars.iter().take(40).map(|&c| wordcraft_doc::encoding::cp1252(c)).collect()
+            chars.iter().take(40).map(|&c| craft_codepage::cp1252(c)).collect()
         };
         out.push(s);
     }

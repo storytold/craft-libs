@@ -165,7 +165,7 @@ pub(crate) fn fonts(table: &[u8], fc: u32, lcb: u32) -> Vec<String> {
             s
         } else {
             // An 8-bit name reads as garbage through UTF-16; fall back to Windows-1252.
-            tail.iter().take_while(|&&b| b != 0).take(64).map(|&b| wordcraft_doc::encoding::cp1252(b)).collect()
+            tail.iter().take_while(|&&b| b != 0).take(64).map(|&b| craft_codepage::cp1252(b)).collect()
         }
     };
     // STTB header: [fExtend 0xFFFF] cData(2) cbExtra(2); each entry is followed by cbExtra

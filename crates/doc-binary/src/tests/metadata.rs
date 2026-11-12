@@ -31,7 +31,7 @@ fn summary(cp: u16, values: &[(u32, u32, Vec<u8>)]) -> Vec<u8> {
     header
 }
 
-fn open_with_metadata(bytes: &[u8], template: bool) -> wordcraft_doc::Document {
+fn open_with_metadata(bytes: &[u8], template: bool) -> craft_wordmodel::Document {
     let file = text_doc(&[Piece { compressed: false, text: "Body stays readable\r".into() }], &[], 0);
     let mut cfb = cfb::CompoundFile::open(Cursor::new(file)).unwrap();
     cfb.create_stream("/\u{5}SummaryInformation").unwrap().write_all(bytes).unwrap();

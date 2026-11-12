@@ -1,25 +1,14 @@
 //! Optional document text properties from [MS-OLEPS] §2.21 and §2.25.1.
 //! Broken metadata must not prevent opening the document or allocate from unchecked sizes.
 
-use std::io::{Read, Seek};
-
-use wordcraft_doc::CoreProps;
+use craft_wordmodel::CoreProps;
 
 const MAX_STREAM: u64 = 2 << 20;
 const MAX_STRING: usize = 64 << 10;
 const SUMMARY_FMTID: &[u8] = &[0xe0, 0x85, 0x9f, 0xf2, 0xf9, 0x4f, 0x68, 0x10, 0xab, 0x91, 0x08, 0x00, 0x2b, 0x27, 0xb3, 0xd9];
 
-pub(crate) fn read<F: Read + Seek>(comp: &mut cfb::CompoundFile<F>) -> Option<CoreProps> {
-    let stream = comp.open_stream("/\u{5}SummaryInformation").ok()?;
-    if stream.len() > MAX_STREAM {
-        return None;
-    }
-    let mut bytes = Vec::new();
-    stream.take(MAX_STREAM + 1).read_to_end(&mut bytes).ok()?;
-    if bytes.len() as u64 > MAX_STREAM {
-        return None;
-    }
-    parse(&bytes)
+pub(crate) fn read(comp: &craft_cfb::CompoundFile<'_>) -> Option<CoreProps> {
+    parse(&comp.read_path_capped("\u{5}SummaryInformation", MAX_STREAM).ok()?)
 }
 
 fn u32_at(bytes: &[u8], offset: usize) -> Option<u32> {
@@ -152,8 +141,8 @@ fn text(value: &[u8], codepage: u16) -> Option<String> {
         let bytes = bytes.split(|b| *b == 0).next().unwrap_or_default();
         if codepage == 65001 {
             Some(String::from_utf8_lossy(bytes).into_owned())
-        } else if wordcraft_doc::encoding::SINGLE_BYTE_CODE_PAGES.contains(&codepage) {
-            Some(bytes.iter().map(|b| wordcraft_doc::encoding::windows_byte(codepage, *b)).collect())
+        } else if craft_codepage::SINGLE_BYTE_CODE_PAGES.contains(&codepage) {
+            Some(bytes.iter().map(|b| craft_codepage::windows_byte(codepage, *b)).collect())
         } else {
             None
         }

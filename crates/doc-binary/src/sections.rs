@@ -1,8 +1,8 @@
 //! Sections and headers/footers: `PlcfSed` → `Sed` → `Sepx` (grpprls of section sprms) and
 //! the `Plcfhdd` stories of the header subdocument ([MS-DOC] §2.8.25, §2.9.244).
 
-use wordcraft_doc::section::NumFormat;
-use wordcraft_doc::section::{Columns, SectionProps, SectionStart};
+use craft_wordmodel::section::NumFormat;
+use craft_wordmodel::section::{Columns, SectionProps, SectionStart};
 
 use crate::fib::{Fib, pair};
 use crate::sprm::{self, Prl};

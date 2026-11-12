@@ -2,9 +2,9 @@
 //! instances with LFOLVL overrides) resolved into the numbering model
 //! ([MS-DOC] §2.8.1 "Determining List Formatting of a Paragraph", §2.9).
 
-use wordcraft_doc::numbering::{AbstractNum, Level, LevelSuffix, Num, Numbering};
-use wordcraft_doc::props::{Align, CharProps, ParaProps};
-use wordcraft_doc::section::NumFormat;
+use craft_wordmodel::numbering::{AbstractNum, Level, LevelSuffix, Num, Numbering};
+use craft_wordmodel::props::{Align, CharProps, ParaProps};
+use craft_wordmodel::section::NumFormat;
 
 use crate::fib::{Fib, pair};
 use crate::fmt;

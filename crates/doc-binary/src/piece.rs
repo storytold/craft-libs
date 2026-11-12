@@ -1,7 +1,7 @@
 //! The piece table ([MS-DOC] `Clx`/`Pcdt`/`PlcPcd`): where every character position lives in
 //! the WordDocument stream, and how it is encoded.
 
-use wordcraft_doc::encoding::cp1252;
+use craft_codepage::cp1252;
 
 use crate::DocbinError;
 
