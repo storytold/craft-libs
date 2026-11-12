@@ -89,6 +89,8 @@ pub enum DocumentTabsEvent<D> {
     },
     /// The tab's context menu is asked for.
     ContextMenu(ContextMenuRequest<D>),
+    /// The strip's empty room after the tabs was double-clicked: the host opens a new document there.
+    EmptyDoubleClick,
 }
 
 /// What `DocumentTabs::show` returns.
@@ -225,6 +227,9 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
         events.extend(shown.menu.map(DocumentTabsEvent::ContextMenu));
         events.extend(shown.picked.map(DocumentTabsEvent::Picked));
         events.extend(shown.torn_off.map(|torn| DocumentTabsEvent::TornOff { documents: torn.keys, at: torn.pointer }));
+        if shown.empty_double {
+            events.push(DocumentTabsEvent::EmptyDoubleClick);
+        }
         DocumentTabsOutput { response, events }
     }
 }

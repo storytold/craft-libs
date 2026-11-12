@@ -64,3 +64,28 @@ fn the_close_button_and_its_node_close_a_tab() {
     fixture.access(AccessActionKind::Click, &first).idle(1);
     assert_eq!(closed.borrow().clone(), vec![1, 0], "an AccessKit Click on the close node closes its tab");
 }
+
+/// A double click on the empty room after the last document tab asks for a new document; a double click on a tab
+/// activates it and asks for none.
+#[trial]
+fn a_double_click_on_the_empty_strip_asks_for_a_new_document() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs, DocumentTabsEvent};
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let held = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let tabs = [DocumentTab::new(0_usize, "One"), DocumentTab::new(1, "Two")];
+        let out = DocumentTabs::new("Documents", &tabs).selected(0).show(ui);
+        held.borrow_mut().extend(out.events);
+    });
+    fixture.room(egui::Vec2::new(640.0, 120.0)).settle();
+    let last = fixture.by_label("Two").expect("the tab's node").rect;
+    let empty = egui::Pos2::new(last.right() + 60.0, last.center().y);
+    fixture.click_at(empty).click_at(empty).settle();
+    assert!(seen.borrow().contains(&DocumentTabsEvent::EmptyDoubleClick), "{:?}", seen.borrow());
+    seen.borrow_mut().clear();
+    fixture.advance(1.0).idle(1);
+    fixture.click_at(last.center()).click_at(last.center()).settle();
+    let seen = seen.borrow();
+    assert!(seen.contains(&DocumentTabsEvent::Activated(1)), "{seen:?}");
+    assert!(!seen.contains(&DocumentTabsEvent::EmptyDoubleClick), "{seen:?}");
+}
