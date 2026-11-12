@@ -406,9 +406,10 @@ impl<'a> Notice<'a> {
         }
         let message = if texts.message.is_empty() { Vec2::ZERO } else { run(texts.message, cx.style.message.role) };
         let bullet = if texts.lines.is_empty() { 0.0 } else { cx.layout(&TextRun::new(BULLET).role(cx.style.line.role)).size().x + gap };
-        let line_column = (column - bullet).max(0.0);
+        // The bullet lines run under the icon and the dismiss button as well, across the whole width.
+        let line_column = if width.is_finite() { (width - bullet).max(0.0) } else { f32::INFINITY };
         let line_sizes: Vec<Vec2> = texts.lines.iter().map(|line| cx.layout_at(&self.run(line, cx.style.line.role), line_column).size()).collect();
-        let more = texts.more.as_deref().map(|more| run(more, cx.style.more.role));
+        let more = texts.more.as_deref().map(|more| cx.layout_at(&self.run(more, cx.style.more.role), width).size());
         let lines_width = line_sizes.iter().map(|size| size.x + bullet).fold(more.map_or(0.0, |size| size.x), f32::max);
         let lines_height = line_sizes.iter().map(|size| size.y).sum::<f32>() + more.map_or(0.0, |size| size.y);
         let actions_width = actions.iter().map(|size| size.x).sum::<f32>() + gap * actions.len().saturating_sub(1) as f32;
@@ -419,11 +420,14 @@ impl<'a> Notice<'a> {
             actions.iter().map(|size| size.y).fold(0.0, f32::max)
         };
         let content_width = self.content_sizes.iter().map(|size| size.x).fold(0.0, f32::max);
-        let text_width = title.map_or(0.0, |size| size.x).max(message.x).max(actions_width).max(lines_width).max(content_width);
-        let text_height = title.map_or(0.0, |size| size.y) + message.y + lines_height;
-        let with_actions = text_height + if actions.is_empty() { 0.0 } else { gap + actions_height };
+        let text_width = title.map_or(0.0, |size| size.x).max(message.x).max(actions_width).max(content_width);
+        let head = title.map_or(0.0, |size| size.y) + message.y;
+        let beside = icon.unwrap_or(0.0).max(dismiss.map_or(0.0, |size| size.y));
+        // Lines start under the row of the icon, the text and the dismiss button.
+        let head = if line_sizes.is_empty() && more.is_none() { head } else { head.max(beside) };
+        let with_actions = head + lines_height + if actions.is_empty() { 0.0 } else { gap + actions_height };
         let (needs, height) = if row {
-            (icon_width + text_width + dismiss_width, with_actions.max(icon.unwrap_or(0.0)).max(dismiss.map_or(0.0, |size| size.y)))
+            ((icon_width + text_width + dismiss_width).max(lines_width), with_actions.max(beside))
         } else {
             let parts = [icon, title.map(|size| size.y), Some(message.y), (!actions.is_empty()).then_some(actions_height)];
             let shown: Vec<f32> = parts.into_iter().flatten().chain(self.content_sizes.iter().map(|size| size.y)).collect();
@@ -516,12 +520,12 @@ impl Component for Notice<'_> {
 
     fn parts(&mut self, _rect: Rect, cx: &mut PartsCx<'_, Self>) {
         self.measure_content(cx);
+        // The elements sit inside the padding: a card's content is inset from its surface's edge.
+        let rect = cx.content_rect;
         let rtl = cx.flow.is_rtl();
         let gap = cx.gap();
         let texts = self.texts(&cx.env, &cx.words::<NoticeWords>(), cx.format(), cx.resolved.label);
         let rect = if self.layout == NoticeLayout::Centred {
-        // The elements sit inside the padding: a card's content is inset from its surface's edge.
-        let rect = cx.content_rect;
             let column = Vec2::new(self.wrap_width(cx, rect.width()), rect.height());
             Flow::new(rect, rtl).align(column, Align::Center, Align::Min)
         } else {
@@ -551,14 +555,18 @@ impl Component for Notice<'_> {
                 placed.message = Some(Rect::from_min_size(Pos2::new(column.left(), y), Vec2::new(column.width(), plan.message.y)));
                 y += plan.message.y;
             }
+            if !plan.lines.is_empty() || plan.more.is_some() {
+                let beside = plan.icon.unwrap_or(0.0).max(plan.dismiss.map_or(0.0, |size| size.y));
+                y = y.max(rect.top() + beside);
+            }
             for height in &plan.lines {
-                let band = Flow::new(Rect::from_min_size(Pos2::new(column.left(), y), Vec2::new(column.width(), *height)), rtl);
+                let band = Flow::new(Rect::from_min_size(Pos2::new(rect.left(), y), Vec2::new(rect.width(), *height)), rtl);
                 let (bullet, text) = band.take_start(plan.bullet);
                 placed.lines.push((bullet, text.rect()));
                 y += height;
             }
             if let Some(height) = plan.more {
-                placed.more = Some(Rect::from_min_size(Pos2::new(column.left(), y), Vec2::new(column.width(), height)));
+                placed.more = Some(Rect::from_min_size(Pos2::new(rect.left(), y), Vec2::new(rect.width(), height)));
                 y += height;
             }
             y += gap;
