@@ -17,7 +17,7 @@ Every set folder's files come from the npm package of the version in the table (
 
 - `bandage-sparkle`, `brush-replace`, `clip-below`, `clip-release`, `convert-point`, `direct-select`, `eraser-background`, `eraser-magic`, `font-similar`
 - `distribute-*`, `symmetry-*`, `painting-symmetry` (the symmetry glyphs follow PhotoCraft's axis icons)
-- `lasso`, `lasso-magnetic`, `lasso-select`, `layer-mask`, `lollipop`, `marquee-column`, `marquee-row`, `pen-add-anchor`, `pen-curvature`, `pen-delete-anchor`, `pen-freeform`, `quick-selection` (the pen nib and the quick-selection brush follow Lucide's `pen-tool` and `paintbrush`, ISC)
+- `lasso`, `lasso-magnetic`, `lasso-select`, `adjustment-layer`, `layer-mask`, `lollipop`, `marquee-column`, `marquee-row`, `pen-add-anchor`, `pen-curvature`, `pen-delete-anchor`, `pen-freeform`, `quick-selection` (the pen nib and the quick-selection brush follow Lucide's `pen-tool` and `paintbrush`, ISC)
 - `gradient-linear`, `gradient-radial`, `gradient-angle`, `gradient-reflected`, `gradient-diamond`, `fx` (the layer-style button)
 - `stroke-align-*`, `stroke-cap-*`, `stroke-join-*`, `route-straight`, `route-elbow`, `route-curved` (the stroke editor's and connector bar's segments; the other packs have no matching glyph and draw these)
 - `sync-lock`, `mark-in`, `mark-out`, `insert-clip`, `overwrite-clip`, `lift-clip`, `extract-clip` (the timeline's lock and edit glyphs, after Premiere Pro's), `keyframe-linear`, `keyframe-bezier`, `keyframe-auto-bezier`, `keyframe-hold`, `keyframe-ease-in`, `keyframe-ease-out` (keyframe nodes after After Effects' shapes: diamond, square for Bezier, circle for Auto Bezier)

@@ -325,7 +325,7 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
             .part_drag(RowDragSpot::Trailing(badge), LayersDrag::new(cx.list, vec![LayerRowKey::Effects(id.clone(), None)]));
     }
     if info.linked {
-        row = row.trailing_icon(IconSpec::svg(IconId::new("link")), words.linked.clone());
+        row = row.trailing_icon(IconSpec::svg(IconId::new("link_layers")), words.linked.clone());
     }
     if let Some(label) = info.blend_label.clone() {
         row = row.optional(label);

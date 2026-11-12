@@ -264,6 +264,14 @@ carbon = "link"
 tabler = "link"
 
 [[icon]]
+name = "link_layers"
+directional = false
+lucide = "link-2"
+phosphor = "link-simple-horizontal"
+carbon = "link"
+tabler = "link"
+
+[[icon]]
 name = "unlink"
 directional = false
 lucide = "unlink"
@@ -438,8 +446,7 @@ tabler = "alert-circle"
 [[icon]]
 name = "adjustment_layer"
 directional = false
-lucide = "contrast"
-phosphor = "circle-half"
+phosphor = "adjustment-layer"  # drawn in Phosphor's style: a half-filled ring, after PhotoCraft's
 carbon = "contrast"
 tabler = "contrast-2"
 
@@ -726,10 +733,10 @@ tabler = "folder"
 [[icon]]
 name = "new_folder"
 directional = false
-lucide = "folder-plus"
-phosphor = "folder-plus"
-carbon = "folder--add"
-tabler = "folder-plus"
+lucide = "folder"
+phosphor = "folder"
+carbon = "folder"
+tabler = "folder"
 
 [[icon]]
 name = "gauge"

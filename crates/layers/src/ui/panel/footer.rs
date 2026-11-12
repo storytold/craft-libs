@@ -113,7 +113,7 @@ pub(super) fn show_footer<T: LayerTree>(ui: &mut Ui, cx: &PanelContext<'_, T>, w
         FooterAction::new(icon("adjustment_layer"), words.add_adjustment.clone()).popup(PopupKind::Menu),
         FooterAction::new(icon("layer_mask"), mask_name).enabled(state.mask_label.is_some()),
         FooterAction::new(icon("fx"), words.add_style.clone()).popup(PopupKind::Menu),
-        FooterAction::new(icon("link"), words.link_layers.clone()).enabled(state.link_enabled),
+        FooterAction::new(icon("link_layers"), words.link_layers.clone()).enabled(state.link_enabled),
     ];
     let out = FooterBar::actions(actions).show_footer(ui);
 
