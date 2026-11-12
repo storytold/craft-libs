@@ -2,7 +2,7 @@
 //! the pattern there, and the first field never clears.
 
 use craft_draw::ui::stroke::{StrokeEditor, StrokeSections, StrokeStyle};
-use craft_ui::contract::{Bind, Show as _};
+use craft_ui::contract::Bind;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers};
 use std::cell::RefCell;
