@@ -1,9 +1,10 @@
 //! The panel's commands and keys, its panel-menu rows, the row menu and the eye's label-colour menu.
 
-use craft_theme::{LabelColor, Srgba};
-use craft_ui::contract::{CommandSet, Entry};
+use craft_theme::LabelColor;
+use craft_ui::contract::{CommandSet, Entry, Show as _, ShowContainer as _};
+use craft_ui::display::Divider;
 use craft_ui::list::{ListWords, label_color_label};
-use craft_ui::menu::{Menu, PanelRow};
+use craft_ui::menu::{Menu, MenuItem, PanelRow};
 use craft_ui::runtime::commands::CommandRef;
 use egui::{Response, Ui};
 use std::sync::Arc;
@@ -157,14 +158,20 @@ pub(super) enum OpenMenu<Id> {
 /// The host's menu for a row: its entries for where it was opened.
 pub(super) type RowMenu<'a, Id> = dyn Fn(&MenuTarget<Id>) -> Vec<Entry<String>> + 'a;
 
-fn eye_entries(words: &ListWords, current: Option<LabelColor>) -> Vec<Entry<Option<LabelColor>>> {
-    let mut entries = vec![Entry::new(None, label_color_label(None, words)).checked(current.is_none()), Entry::separator()];
-    for color in LabelColor::ALL {
-        let entry =
-            Entry::new(Some(color), label_color_label(Some(color), words)).checked(current == Some(color)).swatch(Srgba::from(color.swatch()));
-        entries.push(entry);
+/// The label colour rows of the eye column's menu: None, a rule, then each colour on its own tint, the current one
+/// checked. Returns the colour a row picked.
+fn eye_rows(ui: &mut Ui, words: &ListWords, current: Option<LabelColor>) -> Option<Option<LabelColor>> {
+    let mut picked = None;
+    if MenuItem::new(label_color_label(None, words)).check(current.is_none()).show(ui).ran {
+        picked = Some(None);
     }
-    entries
+    Divider::horizontal().show(ui);
+    for color in LabelColor::ALL {
+        if MenuItem::new(label_color_label(Some(color), words)).check(current == Some(color)).tint(color.swatch()).show(ui).ran {
+            picked = Some(Some(color));
+        }
+    }
+    picked
 }
 
 /// Shows the menu the last context request chose, hanging from `opener` (the list). A right-click
@@ -185,8 +192,7 @@ pub(super) fn show_row_menus<T: LayerTree>(
             picked.map(|command| LayersEvent::Menu { target, command }).into_iter().collect()
         }
         Some(OpenMenu::Eye { rows, current }) => {
-            let entries = eye_entries(cx.list_words, current);
-            let picked = Menu::context(words.label_color_menu.clone(), opener).pick(ui, &entries).picked;
+            let picked = Menu::context(words.label_color_menu.clone(), opener).show(ui, |ui, _| eye_rows(ui, cx.list_words, current)).inner.flatten();
             picked.map(|color| LayersEvent::LabelColor { rows, color }).into_iter().collect()
         }
         None => Vec::new(),

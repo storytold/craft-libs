@@ -9,7 +9,6 @@ use craft_keymap::{CommandRef, Platform, mnemonic};
 use craft_ui::contract::{Props as _, Show as _};
 use craft_ui::display::Divider;
 use craft_ui::menu::{Menu, MenuItem};
-use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::commands;
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::windows::{WindowAction, WindowHost};
@@ -188,7 +187,7 @@ fn command_row<'a>(ui: &Ui, item: &Item, label: String, shortcut: Option<String>
         row = row.shortcut(shortcut);
     }
     if let Some(tint) = item.tint {
-        row = row.icon(IconSpec::swatch(tint));
+        row = row.tint(tint);
     }
     if let Some(tooltip) = &item.tooltip {
         row = row.tooltip(tooltip.clone());

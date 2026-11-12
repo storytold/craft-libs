@@ -10,6 +10,8 @@ mod openers;
 
 mod pick_focus;
 
+mod rows;
+
 mod submenus;
 
 use craft_behavior::IconId;

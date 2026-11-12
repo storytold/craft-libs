@@ -4,10 +4,8 @@
 use craft_behavior::geometry::selection_op::SelectionOperation;
 use craft_behavior::{EditEvent, Mixed};
 use craft_keymap::Mods;
-use craft_theme::Srgba;
 use craft_ui::contract::{CommandSet, Props as _, ReorderMove, ShowContainer as _};
 use craft_ui::menu::{Menu, MenuItem, PanelRow};
-use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::commands::CommandRef;
 use craft_ui::runtime::env::{Env, Label};
 use egui::{Response, Ui};
@@ -425,8 +423,7 @@ pub(super) fn show_row_menu<K>(ui: &mut Ui, opener: &Response, row: &ChannelRow<
                         for preset in OverlayPreset::ALL {
                             let [r, g, b] = preset.rgb();
                             let command = ChannelsCommands::of_preset(preset);
-                            let item =
-                                MenuItem::new(label_of(command, kind, words)).icon(IconSpec::swatch(Srgba::from(craft_theme::Rgba::rgb(r, g, b))));
+                            let item = MenuItem::new(label_of(command, kind, words)).tint(craft_theme::Rgba::rgb(r, g, b));
                             if item.show(ui).ran {
                                 ran = Some(command);
                             }

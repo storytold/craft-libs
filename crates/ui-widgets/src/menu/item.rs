@@ -15,7 +15,7 @@ use crate::runtime::frame;
 use crate::style::{ComponentStyle, Flags, IconLook, StyleCx, SurfaceLook, TextLook, TypeRole};
 use craft_behavior::{ColumnKey, Flow, IconId, Insets, Metrics, NavMove, PartKey, Sense};
 use craft_keymap::mnemonic;
-use craft_theme::{Rgba, States};
+use craft_theme::{Contrast, MenuTint, Rgba, States};
 use egui::{Context, Id, Rect, Response, Vec2, pos2};
 use std::borrow::Cow;
 
@@ -66,7 +66,7 @@ pub struct MenuItemStyle {
     /// The row's icon, the check and radio marks and the submenu arrow.
     #[style(icon)]
     icon: IconLook,
-    /// The detail after the label, in `text.muted`.
+    /// The detail line under the label, in `text.muted`.
     #[style(text)]
     detail: TextLook,
     /// The least space between the label and the shortcut: `space.gap.section`.
@@ -121,21 +121,25 @@ impl Outcome for MenuItemOutput {
 struct Columns {
     mark: f32,
     icon: f32,
-    detail: f32,
     trail: f32,
 }
 
-/// Where the parts of a row lie.
+/// Where the parts of a row's label line lie.
 struct Placed {
     mark: Rect,
     icon: Rect,
     label: Rect,
-    detail: Rect,
     trail: Rect,
 }
 
-/// A row of a menu: a label, an optional icon, a check or radio mark, shortcut text and a detail. A row bound to a
-/// command takes its label, shortcut, enabled and checked state from the command and fires it as a menu row.
+/// The label line of a row's content `area`: all of it but the detail line of height `detail` under it.
+fn label_line(area: Rect, detail: f32) -> Rect {
+    Rect::from_min_max(area.min, pos2(area.max.x, (area.max.y - detail).max(area.min.y)))
+}
+
+/// A row of a menu: a label, an optional icon, a check or radio mark, shortcut text and a detail line under the label.
+/// A row bound to a command takes its label, shortcut, enabled and checked state from the command and fires it as a
+/// menu row.
 ///
 /// - Running a row (click, Enter or Space, its mnemonic letter) closes the whole chain of menus it sits in and
 ///   returns focus to where it was before the menus opened (before a menu bar took it, or the Help search field),
@@ -146,6 +150,9 @@ struct Placed {
 /// - The mnemonic is the `&` letter of the label, else the first letter no earlier row of the level uses. The
 ///   underline sits under that letter while Alt is held or the keyboard drives the menu, never on macOS.
 /// - The pointer moves the level's active row; the row under it paints with the shared row fill.
+/// - A [`tint`](MenuItem::tint) (a user label colour) fills the row behind its content at a strength the theme keeps
+///   the text readable on (`MenuTint`); the active, open and disabled looks win over it. The row keeps its text, so the
+///   colour is never the only cue.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct MenuItem<'a> {
     #[common]
@@ -164,9 +171,14 @@ pub struct MenuItem<'a> {
     /// The letter that runs the row, in place of the level's own pick.
     #[prop]
     mnemonic: Option<char>,
-    /// A muted text after the label.
+    /// A muted second line under the label, in the caption role: the row is a line taller and as wide as the longer
+    /// line. It is the row's accessible description unless the row has a tooltip.
     #[prop(into)]
     detail: Option<Label>,
+    /// A user label colour behind the row.
+    #[style_key]
+    #[prop(into)]
+    tint: Option<Rgba>,
     /// Shortcut text at the end of the row, written by the caller; a command row shows its chord.
     #[prop(into)]
     shortcut: Option<Label>,
@@ -194,6 +206,7 @@ impl<'a> MenuItem<'a> {
             radio_mark: None,
             mnemonic: None,
             detail: None,
+            tint: None,
             shortcut: None,
             keep_open: false,
             entry: None,
@@ -257,13 +270,13 @@ impl<'a> MenuItem<'a> {
         }
     }
 
-    fn place(&self, columns: &Columns, area: Rect, rtl: bool, gap: f32, trail_gap: f32) -> Placed {
+    /// The parts of the label line `line`.
+    fn place(&self, columns: &Columns, line: Rect, rtl: bool, trail_gap: f32) -> Placed {
         let step = |width: f32, gap: f32| if width > 0.0 { width + gap } else { 0.0 };
-        let (mark, flow) = Flow::new(area, rtl).take_start(columns.mark);
+        let (mark, flow) = Flow::new(line, rtl).take_start(columns.mark);
         let (icon, flow) = flow.take_start(columns.icon);
         let (trail, flow) = flow.take_end(step(columns.trail, trail_gap));
-        let (detail, flow) = flow.take_end(step(columns.detail, gap));
-        Placed { mark, icon, label: flow.rect(), detail, trail }
+        Placed { mark, icon, label: flow.rect(), trail }
     }
 
     fn register(&self, ctx: &Context, level: &MenuLevel, id: Id, label: &str, enabled: bool) {
@@ -286,12 +299,16 @@ impl<'a> MenuItem<'a> {
         let side = cx.icon();
         let command = cx.command();
         let (mark, icon) = self.lead_columns(cx.ui.ctx(), side, cx.gap(), command, level);
-        let detail = self.detail.as_ref().map_or(0.0, |detail| {
-            let detail = cx.env.resolve(detail);
-            cx.layout_at(&TextRun::new(detail.as_str()).role(cx.style.detail.role), f32::INFINITY).size().x
-        });
         let trail = if self.submenu { side } else { self.keys(command).map_or(0.0, |keys| cx.face(keys).x) };
-        Columns { mark, icon, detail, trail }
+        Columns { mark, icon, trail }
+    }
+
+    /// The size of the detail line; zero without one.
+    fn detail_size(&self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        self.detail.as_ref().map_or(Vec2::ZERO, |detail| {
+            let detail = cx.env.resolve(detail);
+            cx.layout_at(&TextRun::new(detail.as_str()).role(cx.style.detail.role), f32::INFINITY).size()
+        })
     }
 }
 
@@ -303,14 +320,18 @@ impl Component for MenuItem<'_> {
     type Style = MenuItemStyle;
     type Output = MenuItemOutput;
 
-    fn style(cx: &StyleCx<'_>, _: MenuItemStyleKey) -> MenuItemStyle {
+    fn style(cx: &StyleCx<'_>, key: MenuItemStyleKey) -> MenuItemStyle {
         let tokens = cx.tokens;
         let text = &tokens.color.text;
         let c = |rgba: Rgba| cx.color(rgba);
-        // A checked row shows its mark, not a selection fill.
+        // A label colour over the popup card, with the text inks moved until they read on it.
+        let tint = key.tint.map(|color| MenuTint::derive(color, tokens.color.surface.panel, &tokens.color, cx.contrast() == Contrast::High));
+        let (normal, muted) = tint.map_or((text.normal, text.muted), |tint| (tint.text, tint.shortcut));
+        // A checked row shows its mark, not a selection fill; a disabled row drops the tint.
         let clear = c(Rgba::TRANSPARENT);
+        let rest = tint.map_or(clear, |tint| c(tint.fill));
         let mut surface = cx.command_row_look();
-        surface.fill = surface.fill.on(States::new(clear, clear, clear, clear));
+        surface.fill = surface.fill.off(States::new(rest, rest, rest, clear)).on(States::new(rest, rest, rest, clear));
         let ink = |base: Rgba| {
             let disabled = c(text.disabled);
             cx.command_row_ink(base).on(States::new(c(base), c(base), c(base), disabled)).off(States::new(c(base), c(base), c(base), disabled))
@@ -322,9 +343,9 @@ impl Component for MenuItem<'_> {
         MenuItemStyle {
             surface,
             metrics,
-            text: TextLook::new(TypeRole::Body, ink(text.normal)),
-            icon: IconLook::new(control.icon, ink(text.normal)),
-            detail: TextLook::new(TypeRole::Caption, ink(text.muted)),
+            text: TextLook::new(TypeRole::Body, ink(normal)),
+            icon: IconLook::new(control.icon, ink(normal)),
+            detail: TextLook::new(TypeRole::Caption, ink(muted)),
             shortcut_gap: tokens.space.gap.section,
             submenu_gap: tokens.space.gap.tight,
         }
@@ -335,18 +356,19 @@ impl Component for MenuItem<'_> {
         // The measuring run of the menu body registers the rows, so the real run's letters come from this pass's rows.
         self.register(cx.ui.ctx(), &level, cx.id, cx.resolved.label, cx.resolved.enabled);
         let columns = self.columns(cx, &level);
+        let detail = self.detail_size(cx);
         let text = mnemonic::marked(cx.resolved.label).0;
         let run = TextRun::new(text.as_str()).role(cx.style.text.role);
         let label = if text.is_empty() { Vec2::ZERO } else { cx.layout_at(&run, f32::INFINITY).size() };
         let gap = cx.gap();
         let step = |width: f32, gap: f32| if width > 0.0 { width + gap } else { 0.0 };
-        let rest = label.x + step(columns.detail, gap) + step(columns.trail, cx.style.shortcut_gap.max(gap));
+        let rest = label.x.max(detail.x) + step(columns.trail, cx.style.shortcut_gap.max(gap));
         let padding = cx.style.metrics.padding;
         // A row measured before the level's widest mark or icon read narrower columns: the body's group adds the
         // widest columns to what the rows reach past them.
         crate::layout::report_beyond(cx.ui.ctx(), &[MARKS, ICONS], padding.start + padding.end + rest);
         let width = columns.mark + columns.icon + rest;
-        Vec2::new(cx.room.map_or(width, |room| width.min(room)), label.y.max(cx.icon()))
+        Vec2::new(cx.room.map_or(width, |room| width.min(room)), label.y.max(cx.icon()) + detail.y)
     }
 
     fn fills(&self) -> Option<craft_behavior::Axis> {
@@ -365,7 +387,8 @@ impl Component for MenuItem<'_> {
             return;
         }
         let rtl = cx.flow.is_rtl();
-        let placed = self.place(&columns, cx.content_rect, rtl, cx.gap(), cx.style.shortcut_gap.max(cx.gap()));
+        let line = label_line(cx.content_rect, self.detail_size(cx).y);
+        let placed = self.place(&columns, line, rtl, cx.style.shortcut_gap.max(cx.gap()));
         let (rect, _) = Flow::new(placed.trail, rtl).take_end(columns.trail);
         cx.part(SHORTCUT, rect);
     }
@@ -480,10 +503,11 @@ impl Component for MenuItem<'_> {
         let detail = self.detail.as_ref().map(|detail| cx.env.resolve(detail));
         let detail_run =
             detail.as_ref().map(|detail| TextRun::new(detail.as_str()).role(cx.style.detail.role).color(cx.resolve(&cx.style.detail.color)));
-        let detail_width = detail_run.as_ref().map_or(0.0, |run| draw.layout(run, f32::INFINITY).size().x);
+        let detail_height = detail_run.as_ref().map_or(0.0, |run| draw.layout(run, f32::INFINITY).size().y);
         let trail = if self.submenu { side } else { cx.part_if_declared(SHORTCUT).map_or(0.0, |part| part.rect.width()) };
-        let columns = Columns { mark: mark_column, icon: icon_column, detail: detail_width, trail };
-        let placed = self.place(&columns, cx.content_rect, rtl, gap, cx.style.shortcut_gap.max(gap));
+        let columns = Columns { mark: mark_column, icon: icon_column, trail };
+        let line = label_line(cx.content_rect, detail_height);
+        let placed = self.place(&columns, line, rtl, cx.style.shortcut_gap.max(gap));
         let ink = cx.resolve(&cx.style.icon.color);
         let centred = |slot: Rect| Rect::from_center_size(slot.center(), Vec2::splat(side));
         if columns.mark > 0.0 {
@@ -508,11 +532,12 @@ impl Component for MenuItem<'_> {
         let x = if rtl { placed.label.max.x - size.x } else { placed.label.min.x };
         let y = placed.label.center().y - size.y / 2.0;
         draw.galley(pos2(x, y), &layout);
+        // The detail starts where the label starts, under the label line.
         if let Some(run) = &detail_run {
-            let layout = draw.layout(run, f32::INFINITY);
+            let layout = draw.layout(&run.clone().elide(), placed.label.width());
             let size = layout.size();
-            let x = if rtl { placed.detail.min.x } else { placed.detail.max.x - size.x };
-            draw.galley(pos2(x, placed.detail.center().y - size.y / 2.0), &layout);
+            let x = if rtl { placed.label.max.x - size.x } else { placed.label.min.x };
+            draw.galley(pos2(x, line.max.y), &layout);
         }
         if self.submenu {
             let slot = Flow::new(placed.trail, rtl).take_end(side).0;
@@ -544,6 +569,11 @@ impl Component for MenuItem<'_> {
         }
         if let Some(text) = &self.shortcut {
             access.shortcut(cx.env.resolve(text).as_str().to_owned());
+        }
+        if cx.resolved.tooltip.is_none()
+            && let Some(detail) = &self.detail
+        {
+            access.description(cx.env.resolve(detail).as_str().to_owned());
         }
     }
 
