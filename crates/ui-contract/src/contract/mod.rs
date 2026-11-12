@@ -292,6 +292,7 @@ pub trait Pattern {}
 /// How a component that is not enabled looks (`Component::DISABLED`). Either way it takes no input, its access node
 /// is disabled and the children it shows inherit the disabled state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DisabledLook {
     /// The style's Disabled state: `text.disabled` ink, the theme's disabled fills. Controls whose look is chrome
     /// (buttons, fields, sliders) take it.
