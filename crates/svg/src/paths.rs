@@ -72,7 +72,15 @@ pub struct Shape<K> {
     pub stroke: Option<String>,
     /// The regions the shape is clipped by, as indices into [`Imported::clips`], outermost first.
     pub clips: Vec<usize>,
+    /// The name of the innermost Inkscape layer the element is in: a `<g>` with
+    /// `inkscape:groupmode="layer"`, named by its `inkscape:label`, else its `id`, else empty.
+    /// `None` outside any layer. At most [`MAX_LAYER_NAME`] characters.
+    pub layer: Option<String>,
 }
+
+/// Most characters of a layer name kept in [`Shape::layer`].
+pub const MAX_LAYER_NAME: usize = 256;
+const INKSCAPE_NS: &str = "http://www.inkscape.org/namespaces/inkscape";
 
 /// What [`import`] read. Shapes may lie outside the `width_mm` × `height_mm` viewport.
 #[derive(Debug, Clone, PartialEq)]
@@ -102,6 +110,8 @@ struct ImportState<K> {
     inherited_style: std::collections::HashMap<String, String>,
     /// Active `clip-path` regions (indices into the context's list), outermost first.
     clips: Vec<usize>,
+    /// The innermost Inkscape layer's name ([`Shape::layer`]).
+    layer: Option<std::rc::Rc<str>>,
 }
 
 impl<K: Kind> Default for ImportState<K> {
@@ -113,6 +123,7 @@ impl<K: Kind> Default for ImportState<K> {
             visibility_hidden: false,
             inherited_style: std::collections::HashMap::new(),
             clips: Vec::new(),
+            layer: None,
         }
     }
 }
@@ -127,7 +138,7 @@ const MAX_SVG_CLIP_PIECES: usize = 100_000;
 const MAX_SVG_SEGMENTS: usize = 4_000_000;
 /// Selector tests across the whole document: rules × elements styled, plus each parent, ancestor or
 /// sibling a combinator walks.
-const MAX_CSS_SELECTOR_CHECKS: usize = 5_000_000;
+pub(crate) const MAX_CSS_SELECTOR_CHECKS: usize = 5_000_000;
 
 /// Reads the drawable geometry of an SVG document, in document order.
 ///
@@ -299,6 +310,10 @@ fn import_node<'a, 'input, K: Kind>(
         let local = parse_transform(transform).map_err(|e| svg_error(context.path_name, &format!("<{}> transform: {e}", tag)))?;
         state.transform = compose(inherited.transform, local);
     }
+    if tag == "g" && node.attribute((INKSCAPE_NS, "groupmode")) == Some("layer") {
+        let name = node.attribute((INKSCAPE_NS, "label")).or_else(|| node.attribute("id")).unwrap_or("");
+        state.layer = Some(name.chars().take(MAX_LAYER_NAME).collect::<String>().into());
+    }
     context.charge_cascade()?;
     let style = computed_style(node, &state.inherited_style, &context.css_rules, K::PROPERTIES, &mut context.selector_checks);
     context.check_selector_budget()?;
@@ -406,6 +421,7 @@ fn import_node<'a, 'input, K: Kind>(
             label: label(node),
             stroke: stroke_paint(&style),
             clips: state.clips.clone(),
+            layer: state.layer.as_deref().map(str::to_string),
         });
     }
     for child in node.children().filter(|n| n.is_element()) {
@@ -849,7 +865,7 @@ type CssPriority = (bool, u32, u32, u32, usize);
 type CascadeWinners = std::collections::HashMap<String, (CssPriority, String)>;
 
 #[derive(Clone)]
-struct CssRule {
+pub(crate) struct CssRule {
     selectors: Vec<SimpleSelector>,
     declarations: StyleMap,
     important: std::collections::HashSet<String>,
@@ -985,7 +1001,12 @@ impl SimpleSelector {
 /// CSS block at-rules whose content never styles geometry; skipped without a warning.
 const QUIET_AT_RULES: &[&str] = &["font-face", "keyframes", "-webkit-keyframes", "page", "counter-style", "charset", "namespace"];
 
-fn parse_stylesheets(root: roxmltree::Node<'_, '_>, extra: &[&str], path_name: &str, warnings: &mut Vec<String>) -> Result<Vec<CssRule>, Error> {
+pub(crate) fn parse_stylesheets(
+    root: roxmltree::Node<'_, '_>,
+    extra: &[&str],
+    path_name: &str,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<CssRule>, Error> {
     let mut rules = Vec::new();
     let mut dropped = 0usize;
     let mut warn = |message: String| push_warning(warnings, &mut dropped, message);
@@ -1292,7 +1313,7 @@ fn parse_declarations(raw: &str, extra: &[&str], path_name: &str) -> Result<(Sty
     Ok((declarations, important))
 }
 
-fn computed_style(node: roxmltree::Node<'_, '_>, inherited: &StyleMap, rules: &[CssRule], extra: &[&str], checks: &mut usize) -> StyleMap {
+pub(crate) fn computed_style(node: roxmltree::Node<'_, '_>, inherited: &StyleMap, rules: &[CssRule], extra: &[&str], checks: &mut usize) -> StyleMap {
     let mut result = inherited.clone();
     result.remove("display");
     let mut winners = CascadeWinners::new();
@@ -2080,5 +2101,30 @@ mod tests {
         // A short run of siblings still matches.
         let got = read(r#"<svg><style>a ~ path{data-kind:engrave}</style><a/><path d="M0 0L1 1"/></svg>"#);
         assert_eq!(got.shapes[0].kind, Tag::Engrave);
+    }
+
+    #[test]
+    fn inkscape_layers_name_the_shapes_inside_them() {
+        let read = read(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape">
+                 <path d="M0 0L1 1"/>
+                 <g inkscape:groupmode="layer" inkscape:label="Cut &amp; score" id="layer1">
+                   <path d="M0 0L1 1"/>
+                   <g><path d="M0 0L1 1"/></g>
+                   <g inkscape:groupmode="layer" id="layer2"><path d="M0 0L1 1"/></g>
+                   <g inkscape:groupmode="layer"><path d="M0 0L1 1"/></g>
+                 </g>
+                 <g inkscape:label="not a layer"><path d="M0 0L1 1"/></g>
+                 <g groupmode="layer" label="no namespace"><path d="M0 0L1 1"/></g>
+               </svg>"#,
+        );
+        let layers: Vec<Option<&str>> = read.shapes.iter().map(|s| s.layer.as_deref()).collect();
+        assert_eq!(layers, [None, Some("Cut & score"), Some("Cut & score"), Some("layer2"), Some(""), None, None]);
+        // A long name is cut, by characters.
+        let long = format!(
+            r#"<svg xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"><g inkscape:groupmode="layer" inkscape:label="{}"><path d="M0 0L1 1"/></g></svg>"#,
+            "é".repeat(MAX_LAYER_NAME + 50)
+        );
+        assert_eq!(import::<Tag>(&long, "test.svg").unwrap().shapes[0].layer.as_ref().map(|n| n.chars().count()), Some(MAX_LAYER_NAME));
     }
 }

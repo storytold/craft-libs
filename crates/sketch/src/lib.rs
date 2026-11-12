@@ -23,7 +23,6 @@ mod tests;
 
 use std::cell::Cell;
 use std::collections::{BTreeSet, HashSet};
-use std::io::{Cursor, Read};
 
 use serde_json::{Value, json};
 
@@ -48,6 +47,8 @@ pub const MAX_JSON_TOTAL: u64 = 2 * 1024 * 1024 * 1024;
 pub const MAX_JSON_TOTAL: u64 = 512 * 1024 * 1024;
 /// Most pages read from one file.
 pub const MAX_PAGES: usize = 1000;
+/// Most entries the archive may declare; checked before the archive is indexed.
+pub const MAX_ENTRIES: u64 = 100_000;
 /// The SQLite header: what Sketch wrote before version 43.
 const SQLITE: &[u8] = b"SQLite format 3\0";
 
@@ -92,10 +93,7 @@ impl Default for Limits {
 /// Whether `bytes` look like a `.sketch` file: a zip holding `document.json` and `meta.json`, or
 /// the SQLite database Sketch wrote before version 43 (so that it gets the "too old" message).
 pub fn is_sketch(bytes: &[u8]) -> bool {
-    bytes.starts_with(SQLITE)
-        || (bytes.starts_with(b"PK")
-            && zip::ZipArchive::new(Cursor::new(bytes))
-                .is_ok_and(|z| z.index_for_name("document.json").is_some() && z.index_for_name("meta.json").is_some()))
+    bytes.starts_with(SQLITE) || (bytes.starts_with(b"PK") && open_zip(bytes).is_ok_and(|z| z.contains("document.json") && z.contains("meta.json")))
 }
 
 /// The parts of a `.sketch` archive: the document, the pages in document order and the images.
@@ -111,7 +109,7 @@ pub struct Archive<'b> {
     pub pages: Vec<(String, Value)>,
     /// Problems met while reading (pages skipped, a newer format than tested).
     pub warnings: Vec<String>,
-    zip: zip::ZipArchive<Cursor<&'b [u8]>>,
+    zip: craft_zip::Archive<'b>,
     limits: Limits,
     /// Image bytes read so far.
     image_total: Cell<u64>,
@@ -127,7 +125,11 @@ impl<'b> Archive<'b> {
         if bytes.starts_with(SQLITE) {
             return Err(Error::TooOld);
         }
-        let mut z = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| corrupt(e.to_string()))?;
+        let mut z = open_zip(bytes).map_err(|e| corrupt(e.to_string()))?;
+        // `zip` keeps one entry of a repeated name; which one the writer meant is not known.
+        if z.has_duplicate_names() {
+            return Err(corrupt("two entries of the archive share a name"));
+        }
         let mut total = 0u64;
         let meta = json_member(&mut z, "meta.json", MAX_JSON_MEMBER, &mut total)?;
         if !meta.is_object() {
@@ -148,9 +150,8 @@ impl<'b> Archive<'b> {
                 let why = other.err().map_or_else(|| "not an object".to_string(), |e| e.to_string());
                 warnings.push(format!("the document's shared styles and library symbols were skipped: {why}"));
                 let pages: Vec<Value> = z
-                    .file_names()
+                    .names()
                     .filter_map(|n| {
-                        let n = n.ok()?;
                         let id = n.strip_prefix("pages/")?.strip_suffix(".json")?;
                         Some(json!({"_ref": format!("pages/{id}")}))
                     })
@@ -218,28 +219,34 @@ pub fn embedded_font_families(document: &Value) -> Vec<String> {
 /// Member `name`, refused before unpacking when it would be larger than `limit`, than
 /// [`MAX_RATIO`] times what it takes in the archive (past a floor), or than what is left of
 /// `max_total` (`total`: read so far, counted up).
-fn capped_member(z: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str, limit: u64, total: &mut u64, max_total: u64) -> Result<Vec<u8>, Error> {
-    let f = z.by_name(name).map_err(|e| corrupt(format!("{name}: {e}")))?;
-    let (size, packed) = (f.size(), f.compressed_size());
+fn capped_member(z: &mut craft_zip::Archive<'_>, name: &str, limit: u64, total: &mut u64, max_total: u64) -> Result<Vec<u8>, Error> {
+    let not_found = || corrupt(format!("{name}: not in the archive"));
+    let (size, packed) = (z.declared_size(name).ok_or_else(not_found)?, z.compressed_size(name).ok_or_else(not_found)?);
     let allowed = limit.min(packed.saturating_mul(MAX_RATIO).max(MIN_ALLOWANCE)).min(max_total.saturating_sub(*total));
     if size > allowed {
         return Err(corrupt(format!("{name} is too large")));
     }
-    let mut data = Vec::new();
-    let read = f.take(allowed.saturating_add(1)).read_to_end(&mut data);
     // A failed read (a bad checksum at the end, say) unpacked all the same: charged in full, so
-    // a page list naming the member again can't repeat it within the budget.
-    let result = match read {
-        Err(e) => Err(corrupt(format!("{name}: {e}"))),
-        Ok(_) if data.len() as u64 > allowed => Err(corrupt(format!("{name} is too large"))),
-        Ok(_) => Ok(data),
+    // a page list naming the member again can't repeat it within the budget. The read stops one
+    // byte past the declared size, so the declared size is what it cost.
+    let result = match z.read(name, allowed) {
+        Ok(Some(data)) => Ok(data),
+        Ok(None) => Err(not_found()),
+        Err(craft_zip::Error::EntryTooLarge { .. }) => Err(corrupt(format!("{name} is too large"))),
+        Err(e) => Err(corrupt(e.to_string())),
     };
     *total = total.saturating_add(result.as_ref().map_or(size, |d| d.len() as u64));
     result
 }
 
+/// The archive, its declared entry count checked before it is indexed. Every budget is this
+/// crate's own ([`Limits`], [`MAX_JSON_TOTAL`]), so the archive's total is not used.
+fn open_zip(bytes: &[u8]) -> Result<craft_zip::Archive<'_>, craft_zip::Error> {
+    craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: MAX_ENTRIES, max_total_bytes: u64::MAX })
+}
+
 /// JSON member `name`, read by [`capped_member`] within the file's [`MAX_JSON_TOTAL`].
-fn json_member(z: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str, limit: u64, total: &mut u64) -> Result<Value, Error> {
+fn json_member(z: &mut craft_zip::Archive<'_>, name: &str, limit: u64, total: &mut u64) -> Result<Value, Error> {
     let data = capped_member(z, name, limit, total, MAX_JSON_TOTAL)?;
     serde_json::from_slice(&data).map_err(|e| corrupt(format!("{name}: {e}")))
 }
