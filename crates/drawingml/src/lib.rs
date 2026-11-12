@@ -56,6 +56,10 @@ pub(crate) fn yes() -> bool {
     true
 }
 
+pub(crate) fn some_yes() -> Option<bool> {
+    Some(true)
+}
+
 macro_rules! id_type {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
