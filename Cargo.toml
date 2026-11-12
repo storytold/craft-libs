@@ -17,6 +17,7 @@ craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
 craft-ai-core = { path = "crates/ai-core" }
 craft-pdf = { path = "crates/pdf", version = "=0.1.0" }
+craft-pdn = { path = "crates/pdn" }
 craft-plate-test = { path = "crates/plate-test" }
 krilla = { version = "=0.8.2", default-features = false, features = ["raster-images"] }
 hayro = { version = "=0.7.1", default-features = false }
