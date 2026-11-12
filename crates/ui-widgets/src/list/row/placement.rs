@@ -294,20 +294,37 @@ impl ListRow<'_> {
         cells_of.iter().map(|(key, _)| key).find(|key| !claimed(key))
     }
 
-    /// The offsets from the reading start of the row of the label column's near edge and of what lies past its
-    /// far edge, and the toggle cells and text cells with whether each leads. A cell leads when it displays before
-    /// the label column. A row without columns keeps the whole width for the label band; a row whose columns are all
-    /// claimed has an empty label band and every cell leads.
+    /// The positions in `cells_of` of the label column and of the first and last column the label band spans: its
+    /// own and every toggle column between it and the nearest cell the row fills on each side. A row lays out only
+    /// the toggle columns it fills, as a heading row without toggles starts at the row's start.
+    pub(super) fn label_span(&self, cells_of: &[(ColumnKey, Rect)]) -> Option<(usize, usize, usize)> {
+        let label = self.label_column(cells_of)?;
+        let at = cells_of.iter().position(|(key, _)| key == label)?;
+        let open = |position: &usize| {
+            let key = &cells_of[*position].0;
+            self.toggle_columns.contains(key) && !self.toggles.iter().any(|toggle| toggle.column == *key)
+        };
+        let first = (0..at).rev().take_while(open).last().unwrap_or(at);
+        let last = (at + 1..cells_of.len()).take_while(open).last().unwrap_or(at);
+        Some((at, first, last))
+    }
+
+    /// The offsets from the reading start of the row of the label band's near edge and of what lies past its far
+    /// edge (the band spans the columns of `label_span`), and the toggle cells and text cells with whether each
+    /// leads. A cell leads when it displays before the label column. A row without columns keeps the whole width for
+    /// the label band; a row whose columns are all claimed has an empty label band and every cell leads.
     fn bands(&self, cells_of: &[(ColumnKey, Rect)], rect: Rect, rtl: bool) -> Bands {
         let start = if rtl { rect.right() } else { rect.left() };
         let span = |cell: Rect| {
             let (a, b) = (if rtl { start - cell.left() } else { cell.left() - start }, if rtl { start - cell.right() } else { cell.right() - start });
             (a.min(b), a.max(b))
         };
-        let label_at = self.label_column(cells_of).and_then(|label| cells_of.iter().position(|(key, _)| key == label));
-        let (lead, trail) = match label_at {
-            Some(at) => {
-                let (near, far) = span(cells_of[at].1);
+        let label = self.label_span(cells_of);
+        let label_at = label.map(|(at, ..)| at);
+        let (lead, trail) = match label {
+            Some((_, first, last)) => {
+                let spans = cells_of[first..=last].iter().map(|(_, cell)| span(*cell));
+                let (near, far) = spans.fold((f32::INFINITY, f32::NEG_INFINITY), |(near, far), (a, b)| (near.min(a), far.max(b)));
                 (near, (rect.width() - far).max(0.0))
             }
             None if cells_of.is_empty() => (0.0, 0.0),

@@ -428,3 +428,53 @@ fn a_cell_field_stands_in_its_cell_takes_the_click_and_reports_its_edit() {
     fixture.key(Key::A, Modifiers::COMMAND).type_text("12").key(Key::Enter, Modifiers::NONE).settle();
     assert_eq!(*typed.borrow(), Some(12.0), "the field's edit reaches the output");
 }
+
+/// A row's label band takes the toggle columns it leaves empty next to it, up to the nearest toggle it fills: a row
+/// without toggles starts its label at the row's start, a row with the first toggle only starts it inside the second
+/// column, and a row with both starts it past them.
+#[trial]
+fn a_rows_label_takes_the_empty_toggle_columns_next_to_it() {
+    use craft_behavior::{ColumnKey, ColumnWidth};
+    use craft_ui::contract::{ColumnKind, ColumnSpec, ToggleColumn};
+    use craft_ui::list::{ToggleCell, ToggleState};
+    use std::cell::Cell;
+    const INCLUDE: ColumnKey = ColumnKey::new("include");
+    const DIALOG: ColumnKey = ColumnKey::new("dialog");
+    const NAME: ColumnKey = ColumnKey::new("name");
+    const LABELS: [&str; 3] = ["Set", "Action", "Step"];
+    let ends = Rc::new(Cell::new((0.0_f32, 0.0_f32)));
+    let held = ends.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let toggle = |key| ColumnSpec::new(key, "", ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(ToggleColumn::default()));
+        let columns = vec![toggle(INCLUDE), toggle(DIALOG), ColumnSpec::new(NAME, "", ColumnWidth::fill(1.0))];
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let _ = List::new("Actions").columns(columns).show_items(ui, &source, &mut |key, icx| {
+            let end = |column| icx.cell(&column).map_or(0.0, |cell| cell.right());
+            held.set((end(INCLUDE), end(DIALOG)));
+            let check = |column| ToggleCell::check(column, ToggleState::On, "Include {row}");
+            let row = ListRow::new(LABELS[*key]).cells(icx.cells());
+            match key {
+                0 => row,
+                1 => row.toggle(check(INCLUDE)),
+                _ => row.toggle(check(INCLUDE)).toggle(check(DIALOG)),
+            }
+        });
+    });
+    fixture.room(Vec2::new(300.0, 200.0));
+    fixture.settle();
+    let shapes = fixture.frame_shapes();
+    let start = |label: &str| {
+        shapes
+            .iter()
+            .find_map(|shape| match shape {
+                egui::Shape::Text(text) if text.galley.job.text == label => Some(text.pos.x),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{label} paints"))
+    };
+    let (include, dialog) = ends.get();
+    assert!(start("Set") < include, "a row without toggles starts its label in the first toggle column");
+    assert!(start("Action") > include && start("Action") < dialog, "a row with the first toggle starts its label in the second column");
+    assert!(start("Step") > dialog, "a row with both toggles starts its label past them");
+}

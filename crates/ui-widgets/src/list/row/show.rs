@@ -536,11 +536,12 @@ fn part_mods(cx: &Cx<'_, ListRow<'_>>, part: PartRef, source: FireSource) -> Mod
 
 impl ListRow<'_> {
     /// Reports the width of the row's content in each of its columns (`MeasureCx::cell_width`): `own` for the label
-    /// column, which holds everything but the toggle and text cells, and a text cell's line with its insets. A toggle
-    /// cell's column has its own width.
+    /// column, which holds everything but the toggle and text cells, less the empty toggle columns its band spans,
+    /// and a text cell's line with its insets. A toggle cell's column has its own width.
     fn report_cell_widths(&self, cx: &MeasureCx<'_, Self>, own: f32) {
-        if let Some(column) = self.label_column(&self.cells) {
-            cx.cell_width(column, own);
+        if let Some((at, first, last)) = self.label_span(&self.cells) {
+            let spanned: f32 = (first..=last).filter(|position| *position != at).map(|position| self.cells[position].1.width()).sum();
+            cx.cell_width(&self.cells[at].0, (own - spanned).max(0.0));
         }
         let inset = 2.0 * cx.style.sizes.cell_inset;
         for text in &self.texts {
