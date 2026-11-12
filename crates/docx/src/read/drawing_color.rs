@@ -80,26 +80,23 @@ pub(crate) fn color_alpha(e: &El, theme: &[Rgb], ph: Option<(Rgb, f32)>) -> Opti
         _ => return None,
     };
     let val = |m: &El| m.attr("val").and_then(int).map_or(0.0, |v| (v as f64 / 100_000.0).clamp(-10.0, 10.0));
-    let mut rgb = base;
+    // The colour transforms in document order, applied by `craft-drawingml`. Opacity is kept
+    // here, in percent, so it is not rounded to 8 bits.
+    let mut transforms = Vec::new();
     for m in c.els() {
-        rgb = match m.name.as_str() {
-            n @ ("a:lumMod" | "a:lumOff" | "a:tint" | "a:shade" | "a:satMod") => modified(rgb, n.trim_start_matches("a:"), val(m)),
-            "a:alpha" => {
-                opacity = val(m) as f32 * 100.0;
-                rgb
+        let local = m.name.strip_prefix("a:").unwrap_or(&m.name);
+        match local {
+            "alpha" => opacity = val(m) as f32 * 100.0,
+            "alphaMod" => opacity *= val(m) as f32,
+            "alphaOff" => opacity += val(m) as f32 * 100.0,
+            _ => {
+                let v = m.attr("val").and_then(int).map(|v| v.clamp(-1_000_000, 1_000_000) as i32);
+                transforms.extend(craft_drawingml::color::ColorTransform::from_xml(local, v));
             }
-            "a:alphaMod" => {
-                opacity *= val(m) as f32;
-                rgb
-            }
-            "a:alphaOff" => {
-                opacity += val(m) as f32 * 100.0;
-                rgb
-            }
-            _ => rgb,
-        };
+        }
     }
-    Some((rgb, (100.0 - opacity).clamp(0.0, 100.0)))
+    let c = craft_drawingml::color::apply(craft_drawingml::color::Rgba::rgb(base.0, base.1, base.2), &transforms);
+    Some((Rgb(c.r, c.g, c.b), (100.0 - opacity).clamp(0.0, 100.0)))
 }
 
 /// Fill element `e` (`a:solidFill`, `a:gradFill`; a pattern as its foreground colour) as a
@@ -147,46 +144,9 @@ pub(crate) fn fill(e: &El, theme: &[Rgb], ph: Option<(Rgb, f32)>) -> Option<Fill
     }
 }
 
-/// A preset colour (`a:prstClr/@val`, ECMA-376 Part 1 §20.1.10.48): the common ones; others are
-/// unknown (`None`).
+/// A preset colour (`a:prstClr/@val`, ECMA-376 Part 1 §20.1.10.48): `craft-drawingml`'s.
 pub(crate) fn preset_color(name: &str) -> Option<Rgb> {
-    let lower = name.to_ascii_lowercase();
-    Some(match lower.as_str() {
-        "black" => Rgb(0, 0, 0),
-        "white" => Rgb(0xFF, 0xFF, 0xFF),
-        "red" => Rgb(0xFF, 0, 0),
-        "green" => Rgb(0, 0x80, 0),
-        "lime" => Rgb(0, 0xFF, 0),
-        "blue" => Rgb(0, 0, 0xFF),
-        "yellow" => Rgb(0xFF, 0xFF, 0),
-        "cyan" | "aqua" => Rgb(0, 0xFF, 0xFF),
-        "magenta" | "fuchsia" => Rgb(0xFF, 0, 0xFF),
-        "gray" | "grey" => Rgb(0x80, 0x80, 0x80),
-        "silver" => Rgb(0xC0, 0xC0, 0xC0),
-        "ltgray" | "ltgrey" | "lightgray" | "lightgrey" => Rgb(0xD3, 0xD3, 0xD3),
-        "dkgray" | "dkgrey" | "darkgray" | "darkgrey" => Rgb(0xA9, 0xA9, 0xA9),
-        "maroon" => Rgb(0x80, 0, 0),
-        "navy" => Rgb(0, 0, 0x80),
-        "olive" => Rgb(0x80, 0x80, 0),
-        "purple" => Rgb(0x80, 0, 0x80),
-        "teal" => Rgb(0, 0x80, 0x80),
-        "orange" => Rgb(0xFF, 0xA5, 0),
-        "brown" => Rgb(0xA5, 0x2A, 0x2A),
-        "pink" => Rgb(0xFF, 0xC0, 0xCB),
-        "gold" => Rgb(0xFF, 0xD7, 0),
-        "darkblue" | "dkblue" => Rgb(0, 0, 0x8B),
-        "darkred" | "dkred" => Rgb(0x8B, 0, 0),
-        "darkgreen" | "dkgreen" => Rgb(0, 0x64, 0),
-        "lightblue" | "ltblue" => Rgb(0xAD, 0xD8, 0xE6),
-        "coral" => Rgb(0xFF, 0x7F, 0x50),
-        "salmon" => Rgb(0xFA, 0x80, 0x72),
-        "tomato" => Rgb(0xFF, 0x63, 0x47),
-        "violet" => Rgb(0xEE, 0x82, 0xEE),
-        "indigo" => Rgb(0x4B, 0, 0x82),
-        "beige" => Rgb(0xF5, 0xF5, 0xDC),
-        "ivory" => Rgb(0xFF, 0xFF, 0xF0),
-        _ => return None,
-    })
+    craft_drawingml::color::preset(name).map(|c| Rgb(c.r, c.g, c.b))
 }
 
 /// A system colour without its `lastClr`: the usual light-theme values of the common ones.
@@ -230,11 +190,6 @@ pub(crate) fn lum(c: Rgb, f: impl Fn(f64) -> f64) -> Rgb {
     adjust_lum(c, f)
 }
 
-/// `c` with the DrawingML colour modifier `name` at `v` (see [`Rgb::modified`]).
-fn modified(c: Rgb, name: &str, v: f64) -> Rgb {
-    c.modified(name, v)
-}
-
 /// `c` with its HSL luminance changed by `f`.
 pub(crate) fn adjust_lum(c: Rgb, f: impl Fn(f64) -> f64) -> Rgb {
     c.with_lum(f)
@@ -266,12 +221,15 @@ mod tests {
         assert_eq!(fill_colour(&el("a:ln", "", "<a:noFill/>"), &theme), None);
     }
 
+    /// Tint and shade mix in linear light (as `craft-drawingml` does, and LibreOffice): half-way
+    /// from black to white is linear 0.5, sRGB 188; WordCraft's own copy mixed sRGB bytes (128).
     #[test]
     fn tint_and_shade_move_towards_white_and_black() {
         let theme = THEME_COLORS.to_vec();
-        let near = |c: Option<Rgb>| c.is_some_and(|Rgb(r, g, b)| [r, g, b].iter().all(|x| x.abs_diff(128) <= 1));
-        assert!(near(color(&el("a:srgbClr", r#"val="000000""#, r#"<a:tint val="50000"/>"#), &theme)));
-        assert!(near(color(&el("a:srgbClr", r#"val="FFFFFF""#, r#"<a:shade val="50000"/>"#), &theme)));
+        let near = |c: Option<Rgb>, want: u8| c.is_some_and(|Rgb(r, g, b)| [r, g, b].iter().all(|x| x.abs_diff(want) <= 1));
+        assert!(near(color(&el("a:srgbClr", r#"val="000000""#, r#"<a:tint val="50000"/>"#), &theme), 188));
+        assert!(near(color(&el("a:srgbClr", r#"val="FFFFFF""#, r#"<a:shade val="50000"/>"#), &theme), 188));
+        assert!(near(color(&el("a:srgbClr", r#"val="FFFFFF""#, r#"<a:shade val="100000"/>"#), &theme), 255));
     }
 
     #[test]

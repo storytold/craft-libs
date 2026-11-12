@@ -1065,6 +1065,8 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "craft-cfb",
+ "craft-drawingml",
+ "craft-math",
  "craft-offcrypto",
  "craft-opc",
  "craft-wordmodel",
@@ -2033,6 +2035,7 @@ name = "craft-wordmodel"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "craft-math",
  "log",
  "proptest",
  "serde",
