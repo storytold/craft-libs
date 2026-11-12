@@ -161,3 +161,22 @@ fn actions_panel_button_mode_buttons_span_the_body_and_a_click_plays_once() {
     let plays: Vec<_> = take(&shared).into_iter().filter(|event| matches!(event, ActionsEvent::Play { .. })).collect();
     assert!(matches!(plays.as_slice(), [ActionsEvent::Play { action: 1, from: 0 }]), "one Play of First: {plays:?}");
 }
+
+/// A disabled panel reports nothing for a click on a row or a footer button.
+#[trial]
+fn actions_panel_disabled_reports_nothing() {
+    let shared = Rc::new(RefCell::new(app(two_sets())));
+    let shown = Rc::clone(&shared);
+    let mut fixture = Fixture::new(move |ui| {
+        let App { state, list, host, events } = &mut *shown.borrow_mut();
+        events.extend(ActionsPanel::new(state, list).host(&*host).enabled(false).show(ui).events);
+    });
+    fixture.room(PANEL);
+    fixture.settle();
+    for name in ["Loose", "Create new set"] {
+        let at = node(&fixture, name).center();
+        click(&mut fixture, at);
+    }
+    assert_eq!(take(&shared), [], "a disabled panel reports no event");
+    assert_eq!(shared.borrow().state.selected, None, "a click selects no row");
+}

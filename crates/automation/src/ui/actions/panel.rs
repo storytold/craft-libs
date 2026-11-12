@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 
 use craft_keymap::{Chord, Key, Mods, Platform};
-use craft_ui::contract::{NoValue, Outcome, ShowContainer as _, SweepApply};
+use craft_ui::contract::{NoValue, Outcome, Props as _, ShowContainer as _, SweepApply};
 use craft_ui::layout_components::Stack;
 use craft_ui::list::ListWords;
 use craft_ui::runtime::env::Env;
@@ -331,8 +331,9 @@ impl Default for Session {
 ///   an action or toggles a set, Space toggles the include cell, F2 renames, Delete deletes the
 ///   selection (not an action while recording), Cmd/Ctrl+] and [ move the row, Shift to the ends. The footer
 ///   buttons are Tab stops after the list. Edits are refused while [`ActionsHost::playing`].
-/// - **Button Mode**: each action is a button in its colour, set names between; a click plays it
-///   once. Button Mode is off while recording.
+/// - **Button Mode**: each action is a full-width button in its colour with its name at the reading start, set names
+///   between; a click plays it once. Button Mode is off while recording.
+/// - **Enabled**: `enabled(false)` disables the rows, the cells, the buttons and the footer.
 /// - **Empty**: a centred notice with the Record glyph.
 #[must_use = "show the panel with `show`"]
 #[derive(craft_ui::contract::Pattern)]
@@ -341,12 +342,13 @@ pub struct ActionsPanel<'a> {
     list: &'a ActionList,
     host: Option<&'a dyn ActionsHost>,
     rename: Option<usize>,
+    enabled: bool,
 }
 
 impl<'a> ActionsPanel<'a> {
     /// A panel over `list` with `state`.
     pub fn new(state: &'a mut ActionsPanelState, list: &'a ActionList) -> Self {
-        Self { state, list, host: None, rename: None }
+        Self { state, list, host: None, rename: None, enabled: true }
     }
 
     /// The app's side; without one, steps show their command ids and nothing records or plays.
@@ -362,10 +364,16 @@ impl<'a> ActionsPanel<'a> {
         self
     }
 
+    /// Whether the panel takes input (default true).
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
     /// Draws the tree (or the buttons) and the footer, and reports this pass's events in order:
     /// the list's, the cells', the context menu's, the footer's.
     pub fn show(self, ui: &mut Ui) -> ActionsPanelOutput {
-        let ActionsPanel { state, list, host, rename } = self;
+        let ActionsPanel { state, list, host, rename, enabled } = self;
         let env = Env::of(ui);
         let words = env.words::<ActionsWords>();
         let list_words = env.words::<ListWords>();
@@ -377,6 +385,7 @@ impl<'a> ActionsPanel<'a> {
 
         let shown = Stack::new()
             .fill()
+            .enabled(enabled)
             .footer(|ui, _| {
                 let mut state = state.borrow_mut();
                 events.borrow_mut().extend(show_footer(ui, &body, &mut state));
