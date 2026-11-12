@@ -47,6 +47,13 @@ impl ComparePair {
         let right = Rect::from_min_size(pos2(inner.max.x - side, inner.min.y), vec2(side, inner.height()));
         if self.rtl { [right, left] } else { [left, right] }
     }
+
+    /// The rule between the panes: a segment in the middle of the gap, as tall as the panes. The caller shows a
+    /// vertical divider there.
+    pub fn divider(&self, area: Rect) -> Rect {
+        let inner = area.shrink(self.space.margin);
+        Rect::from_center_size(inner.center(), vec2(self.space.gap, inner.height()))
+    }
 }
 
 /// How many columns show `n` survey tiles largest in `area`, for pictures `aspect` (width over height) wide: the

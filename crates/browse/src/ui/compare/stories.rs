@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 
 use craft_theme::Srgba;
-use craft_ui::contract::{Bind, ShowContainer as _};
+use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::display::Divider;
 use craft_ui::layout_components::Row;
 use craft_ui::patterns::form_dialogs::PreviewView;
 use craft_ui::primitives::textures::Revision;
@@ -71,7 +72,9 @@ fn compare_pair(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let output = filling(ui, |ui, area| {
         let mut active = *data.value("active", 0usize);
         let view = data.value("view", PreviewView::fitting());
-        let [left, right] = ComparePair::new(space).rtl(rtl).rects(area);
+        let pair = ComparePair::new(space).rtl(rtl);
+        let [left, right] = pair.rects(area);
+        Divider::vertical().show_at(ui, pair.divider(area));
         let select =
             CompareTile::new(labels[0], Bind::bound(view), image(1)).caption(caption(labels[0], "IMG_0001.jpg")).active(active == 0).place(ui, left);
         if select.clicked {
