@@ -89,7 +89,7 @@ pub(super) fn build_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, key: &Lay
 fn kind_icon(kind: LayerKind) -> Option<IconId> {
     Some(IconId::new(match kind {
         LayerKind::Group => "folder",
-        LayerKind::Adjustment => "contrast",
+        LayerKind::Adjustment => "adjustment_layer",
         LayerKind::Fill => "paint_bucket",
         LayerKind::Text => "text",
         LayerKind::Shape => "rectangle",
