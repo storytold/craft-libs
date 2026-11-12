@@ -21,7 +21,7 @@ use craft_ui::patterns::form_dialogs::{
 use craft_ui::rails::ToolRail;
 use craft_ui::runtime::commands::{CommandRef, Commands as _, EditCommands};
 use craft_ui::runtime::env::{Label, WindowKey};
-use craft_ui::shell::{AppShell, AppShellOutput, CaptionFamily, Captions, Frame, ShellDialogsCx as _, Title, TitleBar};
+use craft_ui::shell::{AppShell, AppShellOutput, CaptionFamily, Captions, Frame, ScreenMode, ShellDialogsCx as _, Title, TitleBar};
 use craft_window::Layout;
 use egui::Ui;
 
@@ -41,24 +41,33 @@ const BLUR_MEMORY: SaveKey = SaveKey::new("craft_ui_gallery.gaussianBlur");
 /// - Menus: every row is an app command with its chord; the body takes them.
 /// - Dialogs: Layer, Delete, Layer and Filter, Gaussian Blur open on the window's dialog host; Image, Image Size
 ///   shows its dialog over the document's size.
-/// - Screen modes: the shell's own commands (F) and the reveal keys act inside the window's region.
+/// - Screen modes: the shell's own commands (F) and the reveal keys act inside the window's region; the
+///   [`screen_mode`](Self::screen_mode) binding holds the mode.
 #[derive(craft_ui::contract::Pattern)]
 pub struct EditorMock<'a> {
     label: Label,
     state: &'a mut MockState,
+    screen_mode: Bind<'a, ScreenMode>,
 }
 
 impl<'a> EditorMock<'a> {
     /// A mock editor named `label` over `state`.
     pub fn new(label: impl Into<Label>, state: &'a mut MockState) -> Self {
-        EditorMock { label: label.into(), state }
+        EditorMock { label: label.into(), state, screen_mode: Bind::kept() }
+    }
+
+    /// The window's screen mode; without a binding the window keeps it, starting at `Standard`.
+    pub fn screen_mode(mut self, mode: Bind<'a, ScreenMode>) -> Self {
+        self.screen_mode = mode;
+        self
     }
 
     /// Shows the window in the room offered. Each instance keeps its screen mode, Tab toggle and dialogs apart.
     pub fn show(self, ui: &mut Ui) -> AppShellOutput {
-        let EditorMock { label, state } = self;
+        let EditorMock { label, state, screen_mode } = self;
         let window = WindowKey::new(format!("mock-{:x}-{}", ui.scope_id().value(), label.as_str()));
         AppShell::embedded(window)
+            .screen_mode(screen_mode)
             .title_bar_if(true, |ui, _, state: &mut MockState| title_bar(ui, state))
             .options_bar(true, |ui, _, state: &mut MockState| options_bar(ui, state))
             .tools(true, |ui, _, state: &mut MockState| tool_rail(ui, state))

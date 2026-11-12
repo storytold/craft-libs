@@ -5,7 +5,9 @@ use super::panels::show_layers;
 use super::tools::MoveTool;
 use super::{EditorMock, MockState};
 use craft_behavior::geometry::Directions;
+use craft_ui::contract::Bind;
 use craft_ui::runtime::env::Env;
+use craft_ui::shell::ScreenMode;
 use craft_ui::testing::canvas_story::StoryDocument;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, ToolStory, story, tool_story};
 use egui::Ui;
@@ -38,6 +40,16 @@ const ZOOM: f64 = 50.0;
 fn editor_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let state = data.value("mock", MockState::default());
     EditorMock::new("Editor", state).show(ui).into()
+}
+
+/// The window in full screen: the body only. F cycles the screen modes, Tab and the edges reveal the bars.
+#[story(EditorMock<'static>, covers = [], drive = Drive::Never)]
+fn editor_window_full_screen(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut mode = *data.value("mode", ScreenMode::FullScreen);
+    let state = data.value("mock", MockState::default());
+    let shown = EditorMock::new("Editor", state).screen_mode(Bind::bound(&mut mode)).show(ui);
+    *data.value("mode", ScreenMode::FullScreen) = mode;
+    shown.into()
 }
 
 #[story(MoveTool<'static>, covers = [], drive = Drive::Never)]
