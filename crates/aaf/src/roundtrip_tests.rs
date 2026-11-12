@@ -93,7 +93,15 @@ fn aaf_round_trips_the_edit_at_every_rate() {
             // what was read, written again, reads as the same edit (mob ids, and so source keys, are new;
             // a writer generates fresh format identifiers and never preserves `aaf_mob_id`)
             let again = read_clean(&aaf_bytes(&back, small), true);
-            let no_ids = |c: &[Composition]| c.iter().cloned().map(|mut c| { c.aaf_mob_id = None; c }).collect::<Vec<_>>();
+            let no_ids = |c: &[Composition]| {
+                c.iter()
+                    .cloned()
+                    .map(|mut c| {
+                        c.aaf_mob_id = None;
+                        c
+                    })
+                    .collect::<Vec<_>>()
+            };
             assert_eq!((shape(&again), no_ids(&again.compositions)), (shape(&back), no_ids(&back.compositions)), "{rate}");
         }
     }
