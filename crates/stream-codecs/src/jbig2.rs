@@ -5,11 +5,10 @@
 //! region), 7.2 (segment headers), 7.4.1, 7.4.6 and 7.4.8 (the segments) and D.3 (the embedded
 //! organisation PDF uses). Decoding is in [`decode`].
 
+mod decode;
 mod symbols;
 
-/// The largest image the encoders take, in pixels: the largest JBIG2 page `hayro-jbig2` decodes
-/// (it decodes a page whole, and takes 20,000 × 10,000), so what they store reads back.
-pub const MAX_JBIG2_PIXELS: u64 = 1 << 28;
+pub use decode::{MAX_JBIG2_PIXELS, decode_jbig2_within};
 
 use crate::CodecError;
 use crate::mq::{Context, MqEncoder};

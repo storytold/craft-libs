@@ -14,6 +14,12 @@ This is the part layer. `Package::open` opens the container through `craft-opc` 
 | `sheet(entry, each)` | each `Row` of `Cell`s to a callback, then a `SheetPart`: the rest of the worksheet as a tree, its relationships, columns and merged cells |
 | `opc()`, `read_xml()`, `optional_xml()`, `rels()` | any other part |
 
+Every part is read with fixed prefixes (`ns::CANONICAL`): the SpreadsheetML main namespace
+(transitional or strict) unprefixed, the others by `ns::NAMESPACES` (`r:id`, `mc:AlternateContent`,
+`x14:sparklineGroups`, `xm:sqref`), and the prefixes in `mc:Ignorable` and `mc:Choice/@Requires`
+rewritten to match. A tree kept from a part goes back out with `ns::declare`, which declares what
+it uses. A name in a namespace that is not listed reads as `?:name` and is not written.
+
 A cell keeps the file's terms: a shared-string index, a format index, the formula text as the
 file spells it, value and cell metadata indexes. `CellValue::resolve` gives the value it shows.
 Shared formulas are not expanded and formulas are not parsed: that needs a formula grammar.

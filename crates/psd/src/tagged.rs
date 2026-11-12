@@ -319,7 +319,7 @@ impl TaggedBlock {
                     r.skip(pad as usize)?;
                 }
             }
-            b"FEid" | b"FXid" => {
+            b"FEid" | b"FXid" | b"FELS" => {
                 crate::filter_effects::FilterEffects::parse(d).map_err(|e| PsdError::invalid(format!("{}: {e}", self.key_str())))?;
                 return Ok(());
             }
