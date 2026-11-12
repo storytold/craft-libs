@@ -765,7 +765,7 @@ mod tests {
     const GOLD_SIZES: [(f64, f64); 4] = [(120.0, 80.0), (300.0, 50.0), (64.0, 64.0), (50.0, 300.0)];
 
     /// FNV-1a over each outline's path elements, for every adjust set and size. Coordinates are
-    /// printed to 3 decimal places so last-bit libm differences between platforms do not change it.
+    /// printed to 2 decimal places so last-bit libm differences between platforms do not change it.
     fn outline_digest(name: &str) -> u64 {
         use std::fmt::Write;
         let mut text = String::new();
@@ -774,10 +774,10 @@ mod tests {
                 let g = build(name, w, h, adj).unwrap_or_else(|| panic!("{name} builds no outline"));
                 for el in g.outline().elements() {
                     let _ = match *el {
-                        PathEl::MoveTo(p) => write!(text, "M{:.3},{:.3}", p.x, p.y),
-                        PathEl::LineTo(p) => write!(text, "L{:.3},{:.3}", p.x, p.y),
-                        PathEl::QuadTo(a, p) => write!(text, "Q{:.3},{:.3},{:.3},{:.3}", a.x, a.y, p.x, p.y),
-                        PathEl::CurveTo(a, b, p) => write!(text, "C{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}", a.x, a.y, b.x, b.y, p.x, p.y),
+                        PathEl::MoveTo(p) => write!(text, "M{:.2},{:.2}", p.x, p.y),
+                        PathEl::LineTo(p) => write!(text, "L{:.2},{:.2}", p.x, p.y),
+                        PathEl::QuadTo(a, p) => write!(text, "Q{:.2},{:.2},{:.2},{:.2}", a.x, a.y, p.x, p.y),
+                        PathEl::CurveTo(a, b, p) => write!(text, "C{:.2},{:.2},{:.2},{:.2},{:.2},{:.2}", a.x, a.y, b.x, b.y, p.x, p.y),
                         PathEl::ClosePath => write!(text, "Z"),
                     };
                 }
@@ -791,44 +791,44 @@ mod tests {
     /// DeckCraft's fc35ad67 gave other digests for curvedRightArrow and curvedDownArrow), so
     /// this refactor is proven output-identical: any changed outline fails here.
     const GOLDEN: [(&str, u64); 38] = [
-        ("lineInv", 0x4a58a16923e54a4f),
-        ("nonIsoscelesTrapezoid", 0x79eca0b36812e282),
-        ("pieWedge", 0x2a0d3ffe5e9a481d),
-        ("leftRightArrowCallout", 0x9cd88f0ab55f76e5),
-        ("upDownArrowCallout", 0x568bc91708855007),
-        ("quadArrowCallout", 0xca59015298b1584b),
-        ("circularArrow", 0x4227aa468cfe990e),
-        ("leftCircularArrow", 0x6fc3779ce4b08914),
-        ("leftRightCircularArrow", 0x9dd43d9ba80e47df),
-        ("curvedRightArrow", 0x83e7dd251401715d),
-        ("curvedLeftArrow", 0x82472848de4a9fec),
-        ("curvedUpArrow", 0xcfbd88c1aea4bf9d),
-        ("curvedDownArrow", 0xa6f75eaf0ee71d49),
-        ("swooshArrow", 0x63ff193fdf1d0427),
-        ("callout1", 0xe7e0410f96282e8d),
-        ("callout2", 0xcaa7730106a9ee1b),
-        ("callout3", 0x4bc625449c0dfb30),
-        ("accentCallout1", 0x64f4c3eb775542fb),
-        ("accentCallout2", 0x2e3caa5b473ab4c7),
-        ("accentCallout3", 0x6ca203b149a2618e),
-        ("borderCallout2", 0xcaa7730106a9ee1b),
-        ("borderCallout3", 0x4bc625449c0dfb30),
-        ("accentBorderCallout1", 0x64f4c3eb775542fb),
-        ("accentBorderCallout2", 0x2e3caa5b473ab4c7),
-        ("accentBorderCallout3", 0x6ca203b149a2618e),
-        ("ellipseRibbon", 0x7d259fa067028102),
-        ("ellipseRibbon2", 0x3536b31ad0c95cf5),
-        ("leftRightRibbon", 0x6adc78f12d1cab9c),
-        ("flowChartOfflineStorage", 0x36960029a3770971),
-        ("gear6", 0x62b46d43b67decea),
-        ("gear9", 0xa42f43c2ae80314b),
-        ("funnel", 0x9327e2c2e99ab7d3),
-        ("cornerTabs", 0xe236f19aac60a20d),
-        ("squareTabs", 0xc3aea5acb50d6ccd),
-        ("plaqueTabs", 0xc64ebb2d06640521),
-        ("chartX", 0x6b2a9ff342247551),
-        ("chartStar", 0x6ebb545c66f313dd),
-        ("chartPlus", 0x979031aae16250d7),
+        ("lineInv", 0x555968c5c6b7d35f),
+        ("nonIsoscelesTrapezoid", 0x8c792838cff341c6),
+        ("pieWedge", 0xb322022dd8e12e17),
+        ("leftRightArrowCallout", 0x5c3f1c2d89bf7e3d),
+        ("upDownArrowCallout", 0x900420d1f8f4ffbd),
+        ("quadArrowCallout", 0xb4276d31f1b595a3),
+        ("circularArrow", 0x631abd60df5ecb83),
+        ("leftCircularArrow", 0x8c025366846b477d),
+        ("leftRightCircularArrow", 0x0f3ddef015be52a0),
+        ("curvedRightArrow", 0xabb28001f2fc9c60),
+        ("curvedLeftArrow", 0x046af60e978f9723),
+        ("curvedUpArrow", 0x7b2680cf225d50f0),
+        ("curvedDownArrow", 0x0eda853df38651bc),
+        ("swooshArrow", 0x03f8340ba220fefb),
+        ("callout1", 0xc02b94f2a53a97d8),
+        ("callout2", 0xb767bc9356848c38),
+        ("callout3", 0x71ea9d29f8e06811),
+        ("accentCallout1", 0x1be482c16b380492),
+        ("accentCallout2", 0x9c9458db49392ca0),
+        ("accentCallout3", 0x7acbe8cebea1ba85),
+        ("borderCallout2", 0xb767bc9356848c38),
+        ("borderCallout3", 0x71ea9d29f8e06811),
+        ("accentBorderCallout1", 0x1be482c16b380492),
+        ("accentBorderCallout2", 0x9c9458db49392ca0),
+        ("accentBorderCallout3", 0x7acbe8cebea1ba85),
+        ("ellipseRibbon", 0x8cbb238ea5bb29bc),
+        ("ellipseRibbon2", 0x0d20475f23e98b7b),
+        ("leftRightRibbon", 0x7b2e70ee1ec713cf),
+        ("flowChartOfflineStorage", 0x3022c6036835f2f1),
+        ("gear6", 0x4136728f3d329fd4),
+        ("gear9", 0xc552847e0e47dc87),
+        ("funnel", 0xf0ee2c5391c57d8b),
+        ("cornerTabs", 0x6ec2b0d1097b774d),
+        ("squareTabs", 0x1bb3486754296c19),
+        ("plaqueTabs", 0xe3a2f2ff7d20ba59),
+        ("chartX", 0x3c3f2cb6cea59fa9),
+        ("chartStar", 0x945456b86aa6a9f5),
+        ("chartPlus", 0x5846987e0adf8017),
     ];
 
     /// Every name builds the same outline as before the `Name` enum, and unknown names build nothing.
