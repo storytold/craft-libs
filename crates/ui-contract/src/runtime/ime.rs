@@ -1,5 +1,6 @@
 //! The IME engine (18.4): who owns the IME this frame, the composing flag, preedit and commit delivery, and the
-//! caret rect for the OS. It is the one writer of `PlatformOutput.ime`.
+//! caret rect for the OS. While a framework editor owns the IME, the engine is the one reader of the IME events and
+//! the one writer of `PlatformOutput.ime`; otherwise both stay with egui and the app's own widgets.
 
 use crate::runtime::egui::ime as os;
 use crate::runtime::egui::pass;
@@ -51,11 +52,14 @@ fn current<R>(ctx: &Context, f: impl FnOnce(&mut Engine) -> R) -> R {
     with(ctx, pass::current_viewport(ctx), f)
 }
 
-/// The input hook: takes every IME event out of raw input and removes the keys that would end the composition.
+/// The input hook: takes the IME events out of raw input while a framework editor owns the IME, or while the reset
+/// the engine asked for is pending (the late events of the interrupted composition, and the OS's answer), and removes
+/// the keys that would end the composition.
 pub(crate) fn input_hook(ctx: &Context, events: &mut Vec<Event>, viewport: ViewportId) {
-    let taken = os::take_events(events);
     with(ctx, viewport, |engine| {
-        engine.queue.extend(taken);
+        if engine.owner.is_some() || engine.stale {
+            engine.queue.extend(os::take_events(events));
+        }
         let guarded = engine.composing || engine.guard > 0;
         if guarded {
             events.retain(|event| {
@@ -168,7 +172,8 @@ pub(crate) fn note_caret(ctx: &Context, owner: Id, field: Rect, caret: Rect, pas
     current(ctx, |engine| engine.caret = Some((owner, field, caret, password)));
 }
 
-/// The end hook: writes the pass's IME output.
+/// The end hook: writes the pass's IME output while a framework editor owns the IME or an interrupt is due. Otherwise
+/// the output is egui's: an app's own `TextEdit` or IME reader writes it.
 pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
     let (owner, interrupt, caret, generation) = with(ctx, viewport, |engine| {
@@ -177,6 +182,9 @@ pub(crate) fn end_pass(ctx: &Context) {
         }
         (engine.owner, engine.interrupt.take(), engine.caret.take(), engine.generation)
     });
+    if owner.is_none() && interrupt.is_none() {
+        return;
+    }
     os::clear(ctx);
     match (caret, interrupt, owner) {
         (Some((id, field, caret, password)), interrupt, _) if Some(id) == owner => {

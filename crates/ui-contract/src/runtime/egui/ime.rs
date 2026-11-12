@@ -66,7 +66,7 @@ pub(crate) fn write(ctx: &Context, viewport: ViewportId, out: Output) {
     });
 }
 
-/// Drops what `TextEdit` wrote: the engine is the one writer.
+/// Drops what `TextEdit` wrote in a pass whose IME output the engine writes.
 pub(crate) fn clear(ctx: &Context) {
     ctx.output_mut(|output| output.ime = None);
 }

@@ -153,6 +153,7 @@ An app with its own eframe `App` calls the hooks in `craft::ui::shell::embed`. `
 | Escape | Plain Escape (Alt and Shift may be held) never reaches egui. It goes to the focused framework stop and its scopes; with no framework stop focused, it goes to the window as `Intent::Cancel`. |
 | F10, Alt+letter | Taken while a framework menu bar is registered: F10 focuses the bar, Alt+letter opens a menu (not on macOS). |
 | Edit chords | Taken while a framework editor is focused. |
+| IME | Taken while a framework editor owns the IME: its events and `PlatformOutput.ime` are the runtime's. Otherwise they stay egui's, for the app's own `TextEdit` or IME code. |
 | Releases | The release of every key the runtime took is taken too. |
 | Focus surrender | egui's own surrender is off; the runtime moves focus on press. A press a framework component takes moves focus to it; a press no component takes drops egui focus, unless it lands on the widget that holds egui focus (an app's own focused field keeps it). |
 | Zoom keys | egui's keyboard zoom is off. The interface scale is `RootEnv::scale`. |

@@ -6,7 +6,7 @@ use crate::testing::focus::{Stop, egui_focused, named_id, register_stop, widget}
 use crate::testing::pointer::{moved, press, release};
 use crate::testing::{Frames, trial};
 use craft_behavior::Input;
-use egui::{Id, Rect, Ui};
+use egui::{Event, Id, ImeEvent, Rect, Ui};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -51,4 +51,17 @@ fn a_press_on_the_focused_egui_field_keeps_its_focus() {
     frames.frame(vec![moved(outside)], &mut show);
     frames.frame(vec![press(outside)], &mut show);
     assert_eq!(egui_focused(&frames.ctx), None, "a press no widget takes surrenders the focus");
+}
+
+#[trial]
+fn a_focused_egui_field_takes_the_ime() {
+    let (host, mut show) = host_window();
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    fixture::host_focus(&frames.ctx, field());
+    frames.frame(Vec::new(), &mut show);
+    frames.frame(vec![Event::Ime(ImeEvent::Preedit { text: "世".to_owned(), active_range_chars: None })], &mut show);
+    assert_eq!(frames.ime().map(|ime| ime.owner), Some(field()), "the field writes the pass's IME output");
+    frames.frame(vec![Event::Ime(ImeEvent::Commit("世".to_owned()))], &mut show);
+    assert_eq!(host.borrow().text, "世", "the commit reaches the field");
 }
