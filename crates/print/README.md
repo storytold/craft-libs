@@ -56,12 +56,14 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
   into the XPS print API (the `winprint` crate), and copies, collation, duplex, colour, paper,
   orientation and "no scaling" travel in a PrintTicket that the driver validates first; a
   driver that would change the paper, orientation or scaling is refused before anything is
-  sent. Paper is the driver's own option for the sheet's size (to 0.25 mm), preferring the one
+  sent. A driver that offers no PageScaling feature at all (Zebra's ZDesigner label drivers)
+  is not asked for one and not held to its answer: asked for None, it answers CustomSquare.
+  Paper is the driver's own option for the sheet's size (to 0.25 mm), preferring the one
   named like the standard size ("ARCH D" over a custom 24 × 36 in entry). Windows' ticket merge
   renames a driver's vendor namespace prefix (`brpsk` to `ns0000`) once the ticket uses one of
-  its names, and a Brother driver then fails every page with `0x80040003`; the validated ticket
-  is given the prefixes of the driver's own default ticket back (`ticket::respell`). This backend
-  comes from storytold/pdfcraft#599 and #1132.
+  its names, and a Brother driver then fails every page with `0x80040003`; the ticket printed
+  with is given the prefixes of the driver's own default ticket back (`ticket::respell`). This
+  backend comes from storytold/pdfcraft#599 and #1132.
   A job has one ticket, so one paper and orientation. Sheets of the other orientation are
   turned back with `/Rotate`, so portrait and landscape sheets still print as one job. Exact
   size refuses sheets of different sizes and paper the driver lacks. Shrink-to-fit uses the
@@ -85,6 +87,20 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
   preferences (`rundll32 printui.dll`, the one process this crate starts, and only when asked).
 - **Browser/other targets:** discovery is empty and submission reports an unsupported
   platform; callers can offer PDF export instead.
+
+The paper a job comes out on is checked on the DEVMODE winprint prints with (the ticket
+converted on the user's own settings, then settled by the driver), not only on the merged
+ticket, which Windows builds on the printer's Printing Defaults: a label driver's one
+"User defined" stock is whatever each dialog says, and when a user's Printing Preferences
+and the printer's Printing Defaults disagree the merged ticket names the defaults' size
+while the job prints on the preferences'. When the driver settles on the paper asked for,
+the ticket asked for, laid over the user's settings, is printed with. Every ticket and capabilities request starts from the signed-in user's own settings
+(winprint's `PrintTicket::user_default`, their Printing Preferences), not the printer's
+Printing Defaults, which Windows' Print Ticket calls fall back to: on a Zebra ZD500 the
+defaults held another stock, another darkness and tear-off where the user had set cutting,
+and the driver's private settings ride in the ticket (`PageDevmodeSnapshot`). A sheet is turned (landscape) only when its shape differs from the
+paper's as the driver feeds it: a wide sheet on upright office paper is, a wide sheet on a
+label stock that is itself wider than tall is not.
 
 Windows jobs briefly use a file in a private temporary folder (random name, this user's only),
 named after the job's title because the spooler shows it as the document name; the folder is
