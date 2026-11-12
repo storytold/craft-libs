@@ -178,7 +178,7 @@ fn node_fields(el: &El, is_mask: bool) -> Result<Node> {
     let read = matches!(node_type.as_str(), "paintlayer" | "grouplayer" | "transparencymask");
     let lenient = |v: Result<f64>, default: f64| if read { v } else { Ok(v.unwrap_or(default)) };
     let (x, y) = if is_mask && !read { (offset(el, "x").unwrap_or(0), offset(el, "y").unwrap_or(0)) } else { (offset(el, "x")?, offset(el, "y")?) };
-    let mut out = Node {
+    let out = Node {
         node_type,
         name: owned("name"),
         visible: attr(el, "visible") != Some("0"),
