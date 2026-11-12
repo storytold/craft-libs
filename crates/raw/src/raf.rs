@@ -370,6 +370,31 @@ pub(super) mod tests {
         out
     }
 
+    /// The embedded JPEG's Exif block gives orientation, make and model: found after other segments, and not
+    /// past the start of scan, a truncated segment or a missing SOI.
+    #[test]
+    fn orientation_and_camera_come_from_the_jpeg_exif() {
+        use craft_tiff::{IfdBuilder, TiffWriter, Value, tags as t};
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii("FUJIFILM".into()));
+        ifd0.set(t::MODEL, Value::Ascii("X-T4".into()));
+        ifd0.set(t::ORIENTATION, Value::Short(vec![6]));
+        let exif = [&b"Exif\0\0"[..], &TiffWriter::new(ByteOrder::Big, false).write(&[ifd0]).unwrap()].concat();
+        let segment = |marker: u8, body: &[u8]| [&[0xff, marker][..], &((body.len() + 2) as u16).to_be_bytes(), body].concat();
+        let jpeg = |parts: &[Vec<u8>]| [&[0xff, 0xd8][..], &parts.concat(), &[0xff, 0xd9]].concat();
+        let app0 = segment(0xe0, b"JFIF\0\x01\x01\0\0\x01\0\x01\0\0");
+        let decoded = |j: &[u8]| crate::decode(&raf(4, 4, 16, pack(&[1000; 16], 16), None, j)).unwrap();
+        let r = decoded(&jpeg(&[app0.clone(), segment(0xe1, &exif)]));
+        assert_eq!(r.orientation, Orientation::Rotate90);
+        assert_eq!((r.camera.make.as_deref(), r.camera.model.as_deref()), (Some("FUJIFILM"), Some("X-T4")));
+        // after the start of scan, or cut short: not read; the header's camera name stands in for the model
+        for j in [jpeg(&[segment(0xda, &[0; 4]), segment(0xe1, &exif)]), jpeg(&[app0])[..8].to_vec(), exif.clone()] {
+            let r = decoded(&j);
+            assert_eq!(r.orientation, Orientation::Normal);
+            assert_eq!((r.camera.make, r.camera.model.as_deref()), (None, Some("TEST")));
+        }
+    }
+
     fn pack(px: &[u16], bits: u32) -> Vec<u8> {
         match bits {
             16 => px.iter().flat_map(|v| v.to_le_bytes()).collect(),
