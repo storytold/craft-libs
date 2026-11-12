@@ -23,6 +23,8 @@ A standalone reader and writer for Adobe Photoshop **PSD** (version 1) and **PSB
 PsdFile::from_bytes(&[u8]) -> Result<PsdFile>
 PsdFile::from_bytes_and_merged(&[u8], want) -> Result<(PsdFile, Option<Result<Vec<u8>>>)>
                                             // + decode_merged() when want(&file): ZIP inflated once
+PsdFile::from_bytes_salvaging(&[u8]) -> Result<(PsdFile, Option<PsdError>)>  // damaged layers: flattened, with the skipped error
+PsdFile::composite_f32() / layer_f32(i, canvas) -> Result<FloatImage>   // straight RGBA f32, every mode and depth, within a budget
 PsdFile::from_source(Source) -> Result<PsdFile>   // channel data and merged image left in the source
 PsdFile::from_source_and_merged_recovering(Source, want, recover)
 PsdFile::to_bytes(&self) -> Result<Vec<u8>>
@@ -108,6 +110,14 @@ engine_data::parse(&[u8]) -> Result<Value, ParseError>;  parse_lossy(&[u8]) -> V
 engine_data::Value::{Dict, Array, String, RawString, Int, Real, Bool, Name}   // RawString is written back as the same bytes
 engine_data::first_style(&Value) -> TextStyle   // font, size, fill, justification, tracking, leading, faux styles, box text
 engine_data::minimal(text, font, size, rgb, justification) -> Vec<u8>
+
+// Layered TIFF (tags 37724 and 34377)
+tiff::ImageSourceData::from_bytes / to_bytes(ByteOrder) / into_psd(header, resources, image_data);  tiff::resources_from_bytes / resources_to_bytes
+tiff::layered::{TAG_IMAGE_SOURCE_DATA, TAG_IMAGE_RESOURCES, FILTER_MASK_DEFAULT}
+ImageSourceData::for_tiff(&mut PsdFile, ifd_alpha)   // Photoshop's conventions: Patt, FMsk, MTrn, LMsk, per-layer blocks
+ImageSourceData::drop_photoshop_padding()            // on open, so the padding does not pile up
+tiff::layered::ifd_channel_resources(&mut resources, IfdChannels { color, merged_alpha, write_alpha, extra, kept })
+tiff::layered::{interleaved_to_planar, planar_to_interleaved, swap_plane, strip_foreign_order_blocks, alpha_identifiers}
 
 // Builder
 PsdBuilder::new(w, h).color_mode(..).depth(8|16).version(..).compression(..).resolution(dpi).icc_profile(..)
