@@ -101,6 +101,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(craft_pdf_unicode_fixtures
 [workspace.lints.clippy]
 cognitive_complexity = "deny"
 too_many_arguments = "deny"
+unused_workspace_dependencies = "allow"
 wildcard_imports = "deny"
 dbg_macro = "warn"
 todo = "warn"
