@@ -45,17 +45,6 @@ pub(crate) fn request_repaint_of(ctx: &Context, viewport: ViewportId) {
     ctx.request_repaint_of(viewport);
 }
 
-/// H2: a click is a release within `slop`, whatever its duration, so egui's click and the press lifecycle agree.
-pub(crate) fn set_click_options(ctx: &Context, slop: f32) {
-    let (dist, duration) = ctx.options(|options| (options.input_options.max_click_dist, options.input_options.max_click_duration));
-    if dist != slop || duration != f64::INFINITY {
-        ctx.options_mut(|options| {
-            options.input_options.max_click_dist = slop;
-            options.input_options.max_click_duration = f64::INFINITY;
-        });
-    }
-}
-
 /// The options the runtime owns at install: interface scale and quit are commands, so egui's own shortcuts go.
 pub(crate) fn clear_shortcuts(ctx: &Context) {
     ctx.options_mut(|options| {
@@ -195,8 +184,6 @@ pub(crate) struct PointerRead {
     pub zoom: f32,
     /// The two-finger gesture: translation, zoom, rotation and centre.
     pub multi_touch: Option<(Vec2, f32, f32, Pos2)>,
-    /// egui's longest movement that still makes a click.
-    pub slop: f32,
 }
 
 const ALL_BUTTONS: [egui::PointerButton; 5] = [
@@ -217,14 +204,8 @@ fn button_of(button: egui::PointerButton) -> PointerButton {
     }
 }
 
-/// How far a press may move and still be a click, in points.
-pub(crate) fn slop(ctx: &Context) -> f32 {
-    ctx.options(|options| options.input_options.max_click_dist)
-}
-
 /// Converts the running pass's pointer input.
 pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
-    let slop = slop(ctx);
     let os = crate::runtime::windows::os_of(ctx);
     ctx.input(|input| {
         let mut events = Vec::new();
@@ -297,7 +278,6 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
             stirred,
             zoom: input.zoom_delta(),
             multi_touch,
-            slop,
         }
     })
 }

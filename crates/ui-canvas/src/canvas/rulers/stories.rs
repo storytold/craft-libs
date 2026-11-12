@@ -27,7 +27,7 @@ fn pixels() -> RulerText {
 fn drag_corner(fixture: &mut Fixture) {
     let Some(id) = fixture.root_id() else { return };
     let Some(corner) = fixture.part(id, CORNER) else { return };
-    let travel = DRAG_THRESHOLDS * crate::testing::input::max_click_dist(fixture.ctx());
+    let travel = DRAG_THRESHOLDS * crate::testing::input::slop(fixture.ctx());
     fixture.drag(&corner, Vec2::splat(travel));
 }
 

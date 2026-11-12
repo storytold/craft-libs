@@ -28,12 +28,7 @@ pub fn allow_zoom_keys(ctx: &Context) {
     fixture::allow_zoom_keys(ctx);
 }
 
-/// egui's longest movement that still counts as a click.
-pub fn max_click_dist(ctx: &Context) -> f32 {
-    fixture::max_click_dist(ctx)
-}
-
-/// Sets egui's longest press that still counts as a click.
-pub fn set_max_click_duration(ctx: &Context, seconds: f64) {
-    fixture::set_max_click_duration(ctx, seconds);
+/// How far a press may move and still be a click, in points: the framework's slop.
+pub fn slop(ctx: &Context) -> f32 {
+    crate::runtime::frame::slop(ctx)
 }

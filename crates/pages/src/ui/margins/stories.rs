@@ -19,7 +19,7 @@ const DRAG_THRESHOLDS: f32 = 12.0;
 
 fn drag_left_edge(fixture: &mut Fixture) {
     let Some(target) = fixture.by_label("Left Margin") else { return };
-    let travel = DRAG_THRESHOLDS * craft_ui::testing::input::max_click_dist(fixture.ctx());
+    let travel = DRAG_THRESHOLDS * craft_ui::testing::input::slop(fixture.ctx());
     fixture.drag(&target, Vec2::new(travel, 0.0));
 }
 

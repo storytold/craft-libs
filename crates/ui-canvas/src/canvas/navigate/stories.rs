@@ -31,7 +31,7 @@ fn in_corner(ui: &mut Ui, rotation: f64, mut compass: impl FnMut(&mut Ui, egui::
 fn drag_rim(fixture: &mut Fixture) {
     let Some(id) = fixture.root_id() else { return };
     let Some(rim) = fixture.part(id, RIM) else { return };
-    let travel = 2.0 * crate::testing::input::max_click_dist(fixture.ctx());
+    let travel = 2.0 * crate::testing::input::slop(fixture.ctx());
     fixture.drag(&rim, Vec2::new(travel, 0.0));
 }
 

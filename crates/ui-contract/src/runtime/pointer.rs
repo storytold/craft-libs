@@ -125,7 +125,7 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes) {
         let mut events = read.events.clone();
         for event in &mut events {
             if let PointerEvent::Pressed { button: PointerButton::Primary, pos, time, clicks, .. } = event {
-                *clicks = count_clicks(memory.last_press, *pos, *time, read.slop);
+                *clicks = count_clicks(memory.last_press, *pos, *time, hit.slop);
                 memory.last_press = Some((*pos, *time, *clicks));
             }
         }
@@ -153,7 +153,7 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes) {
         multi_touch: read.multi_touch.map(|(translation, zoom, rotation, center)| MultiTouch::new(translation, zoom, rotation, center)),
         scroll,
         zoom: wheel_zoom,
-        slop: read.slop,
+        slop: hit.slop,
         target: hit.target,
     };
     let pass_pointer = PassPointer {

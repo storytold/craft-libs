@@ -64,7 +64,7 @@ fn polygon(points: &[Point]) -> BezPath {
 fn drag_top_left(fixture: &mut Fixture) {
     let Some(id) = fixture.root_id() else { return };
     let Some(grip) = fixture.part(id, FRAME.at(BoxPart::Corner(0).index())) else { return };
-    let travel = 2.0 * crate::testing::input::max_click_dist(fixture.ctx());
+    let travel = 2.0 * crate::testing::input::slop(fixture.ctx());
     fixture.drag(&grip, Vec2::new(travel, 0.0));
 }
 

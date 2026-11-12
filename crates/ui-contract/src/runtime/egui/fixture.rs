@@ -241,14 +241,18 @@ pub(crate) fn allow_zoom_keys(ctx: &Context) {
     ctx.options_mut(|options| options.zoom_with_keyboard = true);
 }
 
-/// egui's longest movement that still counts as a click.
-pub(crate) fn max_click_dist(ctx: &Context) -> f32 {
-    ctx.options(|options| options.input_options.max_click_dist)
+/// Sets egui's click options, as an app does for its own widgets: the longest movement and the longest press that
+/// still count as a click.
+pub(crate) fn set_click_options(ctx: &Context, distance: f32, seconds: f64) {
+    ctx.options_mut(|options| {
+        options.input_options.max_click_dist = distance;
+        options.input_options.max_click_duration = seconds;
+    });
 }
 
-/// Sets egui's longest press that still counts as a click.
-pub(crate) fn set_max_click_duration(ctx: &Context, seconds: f64) {
-    ctx.options_mut(|options| options.input_options.max_click_duration = seconds);
+/// egui's click options: the longest movement and the longest press that still count as a click.
+pub(crate) fn click_options(ctx: &Context) -> (f32, f64) {
+    ctx.options(|options| (options.input_options.max_click_dist, options.input_options.max_click_duration))
 }
 
 /// A fresh context with no plugin and AccessKit on.
@@ -347,9 +351,10 @@ pub(crate) fn host_focus(ctx: &Context, id: egui::Id) {
     ctx.memory_mut(|memory| memory.request_focus(id));
 }
 
-/// A host's own clickable egui widget `id` at `rect`, a focus stop for egui's own focus moves.
-pub(crate) fn host_button(ui: &Ui, id: egui::Id, rect: Rect) {
-    ui.interact(rect, id, egui::Sense::click());
+/// A host's own clickable egui widget `id` at `rect`, a focus stop for egui's own focus moves; returns whether egui
+/// reports a click on it, by egui's click options.
+pub(crate) fn host_button(ui: &Ui, id: egui::Id, rect: Rect) -> bool {
+    ui.interact(rect, id, egui::Sense::click()).clicked()
 }
 
 /// A host's own egui drag area `id` at `rect`; returns whether egui reports it dragged and whether its drag stopped
@@ -580,14 +585,9 @@ pub(crate) fn raw_widget(ui: &mut Ui, rect: egui::Rect) {
     ui.interact(rect, crate::runtime::egui::memory::unique("raw_widget"), egui::Sense::click());
 }
 
-/// Whether the `Response` reports a click.
+/// Whether a component's `Response` reports a click, by pointer or by keyboard activation.
 pub(crate) fn clicked(response: &egui::Response) -> bool {
-    response.clicked()
-}
-
-/// Whether the `Response` reports a primary-button pointer click.
-pub(crate) fn clicked_by_primary(response: &egui::Response) -> bool {
-    response.clicked_by(egui::PointerButton::Primary)
+    super::response::clicked(response)
 }
 
 /// The widget id egui's hit test chose as the click target at the latest pointer position.

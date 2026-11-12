@@ -8,10 +8,11 @@ use crate::runtime::focus::{FocusTarget, KeepKeys, KeyUse, host_canvas, request}
 use crate::runtime::frame::{ChromeToggle, take_output};
 use crate::runtime::keys::with_window_intents;
 use crate::testing::focus::{Stop, egui_focused, named_id, register_stop, widget};
-use crate::testing::input::{key_press, key_reached};
+use crate::testing::input::{key_press, key_reached, slop};
 use crate::testing::pointer::{self, moved, press, release};
+use crate::testing::sensing::{self, ProbeRoot};
 use crate::testing::{Frames, trial};
-use craft_behavior::{Input, Intent};
+use craft_behavior::{Input, Intent, Sense};
 use egui::{Event, Id, ImeEvent, Key, Modifiers, Pos2, Rect, Ui, ViewportId};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -218,6 +219,52 @@ fn escape_ends_an_egui_drag_on_a_host_widget() {
     frames.frame(vec![moved(far - egui::vec2(rect.width() / 3.0, 0.0))], &mut show);
     assert!(!drag.borrow().0, "the held button does not restart the drag");
     frames.frame(vec![release(far)], &mut show);
+}
+
+/// A press at `at`, held `held` seconds and released `by` points to the right: whether the host's egui button and the
+/// framework root reported a click.
+fn click_gesture(frames: &mut Frames, show: &mut impl FnMut(&mut Ui), clicks: &RefCell<(bool, bool)>, at: Pos2, by: f32, held: f64) -> (bool, bool) {
+    *clicks.borrow_mut() = (false, false);
+    let to = at + egui::vec2(by, 0.0);
+    frames.frame(vec![moved(at)], &mut *show);
+    frames.frame(vec![press(at)], &mut *show);
+    frames.advance(held);
+    frames.frame(vec![moved(to)], &mut *show);
+    frames.frame(vec![release(to)], &mut *show);
+    frames.frame(Vec::new(), &mut *show);
+    *clicks.borrow()
+}
+
+#[trial]
+fn the_app_keeps_its_click_options_and_a_framework_root_clicks_by_its_own() {
+    let host_rect = Rect::from_min_size(Pos2::new(300.0, 300.0), egui::vec2(160.0, 40.0));
+    let probe_rect = Rect::from_min_size(Pos2::new(300.0, 400.0), egui::vec2(160.0, 40.0));
+    let clicks = Rc::new(RefCell::new((false, false)));
+    let shared = Rc::clone(&clicks);
+    let mut show = move |ui: &mut Ui| {
+        let host = fixture::host_button(ui, named_id("host button"), host_rect);
+        let reports = sensing::show(ui, &[ProbeRoot::new("probe", probe_rect, Sense::CLICK)]);
+        let mut seen = shared.borrow_mut();
+        seen.0 |= host;
+        seen.1 |= reports.first().is_some_and(|report| report.root.clicked);
+    };
+    let mut frames = Frames::new();
+    let reach = slop(&frames.ctx);
+    // The app's own rule for its widgets: a longer reach than the framework's slop and a short press.
+    let (distance, seconds) = (4.0 * reach, 0.3);
+    fixture::set_click_options(&frames.ctx, distance, seconds);
+    frames.frame(Vec::new(), &mut show);
+    assert_eq!(fixture::click_options(&frames.ctx), (distance, seconds), "the runtime leaves the app's click options alone");
+
+    let long = 2.0 * seconds;
+    assert_eq!(click_gesture(&mut frames, &mut show, &clicks, host_rect.center(), 0.0, 0.0), (true, false), "a quick press clicks the host button");
+    assert_eq!(click_gesture(&mut frames, &mut show, &clicks, probe_rect.center(), 0.0, 0.0), (false, true), "a quick press clicks the root");
+    assert!(!click_gesture(&mut frames, &mut show, &clicks, host_rect.center(), 0.0, long).0, "a long press is no click by the app's rule");
+    assert!(click_gesture(&mut frames, &mut show, &clicks, probe_rect.center(), 0.0, long).1, "the root clicks whatever the press's duration");
+    let between = 2.0 * reach;
+    assert!(click_gesture(&mut frames, &mut show, &clicks, host_rect.center(), between, 0.0).0, "the app's reach is its own");
+    assert!(!click_gesture(&mut frames, &mut show, &clicks, probe_rect.center(), between, 0.0).1, "the root's reach is the framework's slop");
+    assert_eq!(fixture::click_options(&frames.ctx), (distance, seconds), "and stays so");
 }
 
 #[trial]

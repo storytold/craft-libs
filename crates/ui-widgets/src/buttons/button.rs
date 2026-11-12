@@ -95,6 +95,12 @@ impl ButtonOutput {
         };
         ButtonOutput { response: cx.response.clone(), clicks, mods }
     }
+
+    /// Whether the button was clicked this pass, by pointer or by key, by the framework's click rule. It stands in
+    /// for egui's `Response::clicked`, which also needs a click by egui's input options, which are the app's.
+    pub fn clicked(&self) -> bool {
+        crate::contract::clicked(&self.response)
+    }
 }
 
 impl Deref for ButtonOutput {

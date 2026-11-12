@@ -348,10 +348,12 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     |hit: Option<crate::primitives::sensing::Hit>| hit.is_some_and(|hit| hit.owner == opener.item && hit.part == Some(opener.part));
                 let view = response::MemberView {
                     hovered: on_part(outcome.hover),
-                    pressed: on_part(outcome.target) && outcome.phase.is_some(),
-                    clicked: on_part(outcome.activated),
+                    press: response::PressView {
+                        pressed: on_part(outcome.target) && outcome.phase.is_some_and(|phase| phase.button_down()),
+                        clicked: on_part(outcome.activated),
+                        ..response::PressView::default()
+                    },
                     pointer: ctx.pointer_latest_pos(),
-                    ..response::MemberView::default()
                 };
                 let response = response::member(ui, opener_id(opener.item, opener.part), rect, enabled, view);
                 Some((opener, response))

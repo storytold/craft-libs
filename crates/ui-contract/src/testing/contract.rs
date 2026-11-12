@@ -39,11 +39,6 @@ pub fn clicked(response: &egui::Response) -> bool {
     crate::runtime::egui::fixture::clicked(response)
 }
 
-/// Whether `response` reports a primary-button pointer click.
-pub fn clicked_by_primary(response: &egui::Response) -> bool {
-    crate::runtime::egui::fixture::clicked_by_primary(response)
-}
-
 /// Places a clickable egui widget in `rect` by hand, the way a bypass of the components does.
 pub fn raw_widget(ui: &mut egui::Ui, rect: egui::Rect) {
     crate::runtime::egui::fixture::raw_widget(ui, rect);

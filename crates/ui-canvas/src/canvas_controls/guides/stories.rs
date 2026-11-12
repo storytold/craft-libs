@@ -26,7 +26,7 @@ fn guides() -> Vec<Guide> {
 fn drag_first(fixture: &mut Fixture) {
     let Some(id) = fixture.root_id() else { return };
     let Some(line) = fixture.part(id, GuideKey::new(1).part(GUIDE)) else { return };
-    let travel = 2.0 * crate::testing::input::max_click_dist(fixture.ctx());
+    let travel = 2.0 * crate::testing::input::slop(fixture.ctx());
     fixture.drag(&line, Vec2::new(travel, 0.0));
 }
 

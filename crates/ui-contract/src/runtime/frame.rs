@@ -314,6 +314,12 @@ fn frame_hit(ctx: &Context) -> HitSizes {
     pass_state::with::<FrameState, _>(ctx, |state| state.hit.as_ref().map(|(_, hit)| *hit)).unwrap_or_else(|| resolved_hit(&AppSizes::default()))
 }
 
+/// How far a press may move and still be a click, in points: the app's hit tolerances (`HitSizes::slop`). egui's own
+/// click options stay the app's.
+pub(crate) fn slop(ctx: &Context) -> f32 {
+    frame_hit(ctx).slop
+}
+
 /// Called by `install`: the passes the context ran before the plugin existed have no hooks to wait for.
 pub(crate) fn seed_hooked_passes(ctx: &Context) {
     let root_passes = pass::pass_nr(ctx, ViewportId::ROOT);
@@ -514,8 +520,6 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
     // H0: one press per pass.
     let frame = pass::frame_nr(ctx, viewport);
     let held_back = PerViewport::<ViewportRecord>::with(ctx, viewport, |record| raw_input::hold_back_presses(input, frame, &mut record.held));
-    // H2: click options.
-    raw_input::set_click_options(ctx, frame_hit(ctx).slop);
     // H3: the key stage strips what the runtime owns; egui decides on a repaint from the events left.
     ime::input_hook(ctx, &mut input.events, viewport);
     let stripped = keys::input_hook(ctx, input);

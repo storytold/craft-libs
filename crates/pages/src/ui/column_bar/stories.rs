@@ -8,7 +8,7 @@ use egui::Ui;
 
 fn drag_first_divider(fixture: &mut Fixture) {
     let Some(divider) = fixture.by_label("Column 1 width") else { return };
-    let travel = 2.0 * craft_ui::testing::input::max_click_dist(fixture.ctx());
+    let travel = 2.0 * craft_ui::testing::input::slop(fixture.ctx());
     fixture.drag(&divider, egui::Vec2::new(travel, 0.0));
 }
 

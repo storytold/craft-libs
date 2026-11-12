@@ -33,7 +33,7 @@ fn slop_separates_click_from_drag(subject: &Subject) -> Result<(), String> {
     let probe = subject.probe;
     for story in &subject.stories {
         let (fixture, plan) = subject.base(story).parts();
-        let slop = input::max_click_dist(fixture.ctx());
+        let slop = input::slop(fixture.ctx());
         match plan {
             Plan::Activate if !probe.carries_value() && fixture.tree().declares_key(root_target(fixture).node, Declared::Click) => {
                 let part = fixture.click_part().zip(fixture.root_id());
@@ -123,7 +123,7 @@ fn parts_take_presses_in_their_hit_areas(subject: &Subject) -> Result<(), String
             let off_middle = Pos2::new(grip.rect.center().x + 0.25 * grip.rect.width(), grip.rect.center().y);
             let mut fixture = input_fixture(story);
             let before = fixture.data().snapshot();
-            let travel = 2.0 * input::max_click_dist(fixture.ctx());
+            let travel = 2.0 * input::slop(fixture.ctx());
             // A refused value is moved while the pointer drags and put back at the release, so it is read before the release.
             let refused = story.covers.contains(&Required::Invalid);
             let moved_live = Cell::new(false);

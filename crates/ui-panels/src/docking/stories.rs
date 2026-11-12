@@ -54,7 +54,7 @@ fn dock(ui: &mut Ui, bind: Bind<'_, Layout<usize>>, shown: &Layout<usize>) -> St
 fn drag_handle(fixture: &mut Fixture) {
     let Some(id) = fixture.root_id() else { return };
     let Some(grip) = fixture.part(id, HANDLE.at(0)) else { return };
-    let travel = 2.0 * crate::testing::input::max_click_dist(fixture.ctx());
+    let travel = 2.0 * crate::testing::input::slop(fixture.ctx());
     fixture.drag(&grip, Vec2::new(travel, 0.0));
 }
 

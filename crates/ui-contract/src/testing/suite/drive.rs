@@ -161,7 +161,7 @@ fn step(fixture: &mut Fixture, variant: usize, target: &Target) {
 
 /// A drag from `from` by twice the slop along `toward`, ended by a release or, with `escape`, by Escape before it.
 fn drag(fixture: &mut Fixture, from: Pos2, toward: Vec2, escape: bool) {
-    let by = 2.0 * crate::testing::input::max_click_dist(fixture.ctx()) * toward;
+    let by = 2.0 * crate::testing::input::slop(fixture.ctx()) * toward;
     if !escape {
         fixture.drag_at(from, by);
         return;

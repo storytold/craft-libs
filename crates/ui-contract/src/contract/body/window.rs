@@ -434,7 +434,7 @@ impl BodyHooks<'_> {
         };
         let Some(to) = to.filter(|to| *to != moving.at.min) else { return };
         if !moving.begun {
-            if to.distance(moving.start.min) <= input::slop(&ctx) {
+            if to.distance(moving.start.min) <= crate::runtime::frame::slop(&ctx) {
                 return;
             }
             moving.begun = true;

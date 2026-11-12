@@ -7,7 +7,7 @@
 
 use crate::runtime::egui::areas::{self, Layer, LayerMap};
 use crate::runtime::egui::pass;
-use crate::runtime::egui::response::{self, MemberView};
+use crate::runtime::egui::response::{self, MemberView, PressView};
 use crate::runtime::env::ArenaId;
 use crate::runtime::frame::PerViewport;
 use crate::runtime::memory::sub;
@@ -476,14 +476,11 @@ pub(crate) fn sense_root(ui: &Ui, spec: RootSpec<'_>) -> RootResult {
     let response = response::widget(ui, spec.id, Rect::from_min_max(shown.min, shown.max.max(shown.min)), sense);
     // Each edge or handle part that reaches outside the root rect gets its own widget, resolved as the root.
     let mut widgets = vec![spec.id, sub(spec.id, "transform")];
-    for part in spec.own.iter().filter(|part| !part.over && part.priority.level >= HitLevel::Edge) {
-        let bounds = part.shape.bounds();
-        if !spec.rect.contains_rect(bounds) {
-            let id = sub(spec.id, ("edge", part.key, part.index));
-            response::widget(ui, id, bounds.intersect(clip), part.sense);
-            crate::runtime::egui::access::hide(ctx, id);
-            widgets.push(id);
-        }
+    for part in spec.own.iter().filter(|part| !part.over && own_widget(spec.rect, part)) {
+        let id = sub(spec.id, ("edge", part.key, part.index));
+        response::widget(ui, id, part.shape.bounds().intersect(clip), part.sense);
+        crate::runtime::egui::access::hide(ctx, id);
+        widgets.push(id);
     }
     widgets.extend(over_parts(spec.own).map(|part| over_widget(spec.id, part)));
     let background = (!spec.own_sense.is_empty())
@@ -507,7 +504,12 @@ pub(crate) fn sense_root(ui: &Ui, spec: RootSpec<'_>) -> RootResult {
     pointer::record_shapes_in(ctx, read.viewport, layer, spec.id, own_shapes(spec.own, spec.id, read.target()).chain(background));
     let mut response = response;
     let outcome = outcome_in(ctx, &read, arena, layer, spec.enabled, sense);
-    response::keep_press_flags(&mut response, outcome.target.is_some_and(|target| target.owner == spec.id));
+    // The root's response reports the presses on its own widget: a part with a widget of its own reports in its
+    // part result, as a member does in its response.
+    let on_root = |hit: &Hit| {
+        hit.owner == spec.id && hit.part.is_none_or(|part| !spec.own.iter().any(|decl| decl.part_ref() == part && own_widget(spec.rect, decl)))
+    };
+    response::press_flags(&mut response, press_view(&outcome, on_root, on_root));
     let (activation, activated_member) = match outcome.activated {
         Some(hit) if hit.owner == spec.id => (true, None),
         // A press on a member's part is the part's activation; it does not pick the member.
@@ -529,6 +531,12 @@ pub(crate) fn sense_root(ui: &Ui, spec: RootSpec<'_>) -> RootResult {
 /// The `over` parts that take a press: above the body's members and nested roots (8.3).
 fn over_parts(own: &[PartDecl]) -> impl Iterator<Item = &PartDecl> {
     own.iter().filter(|part| part.over && part.sense.takes_press())
+}
+
+/// Whether a root's own `part` has an egui widget beside the root's: an `over` part that takes a press, or an edge
+/// or handle part that reaches outside the root's `rect`.
+fn own_widget(rect: Rect, part: &PartDecl) -> bool {
+    if part.over { part.sense.takes_press() } else { part.priority.level >= HitLevel::Edge && !rect.contains_rect(part.shape.bounds()) }
 }
 
 fn over_widget(root: Id, part: &PartDecl) -> Id {
@@ -660,22 +668,29 @@ pub(crate) fn sense_members(ui: &Ui, arena: ArenaId, specs: &[MemberSpec<'_>]) -
                 response: response::member(ui, spec.id, spec.rect, spec.enabled, view),
                 parts: part_results_in(&outcome, &known, (mods, sample, pointer_pos), spec.id, spec.parts),
                 press: shape_press_in(&outcome, mods, sample, spec.id),
-                activated: view.clicked,
+                activated: view.press.clicked,
             }
         })
         .collect()
 }
 
 fn member_view(outcome: &Outcome, id: Id, local: bool, pointer_pos: Option<Pos2>) -> MemberView {
-    let phase = outcome.target.filter(|target| target.owner == id).and(outcome.phase);
     MemberView {
         hovered: outcome.hover.is_some_and(|hit| hit.owner == id),
-        pressed: phase.is_some(),
+        press: press_view(outcome, |hit| hit.owner == id, |hit| hit.owner == id && hit.part.is_none()),
+        pointer: pointer_pos.map(|at| if local { outcome.xf.map_or(at, |map| map.to_layer(at)) } else { at }),
+    }
+}
+
+/// The press flags of the shapes `holds` takes, with the click of the shapes `clicks` takes.
+fn press_view(outcome: &Outcome, holds: impl Fn(&Hit) -> bool, clicks: impl Fn(&Hit) -> bool) -> PressView {
+    let phase = outcome.target.filter(|target| holds(target)).and(outcome.phase);
+    PressView {
+        pressed: phase.is_some_and(|phase| phase.button_down()),
         drag_started: matches!(phase, Some(PressPhase::DragStart { .. })),
         dragged: phase.is_some_and(|phase| phase.is_drag()),
         drag_stopped: matches!(phase, Some(PressPhase::Release { click: false, .. })),
-        clicked: outcome.activated.is_some_and(|hit| hit.owner == id && hit.part.is_none()),
-        pointer: pointer_pos.map(|at| if local { outcome.xf.map_or(at, |map| map.to_layer(at)) } else { at }),
+        clicked: outcome.activated.is_some_and(|hit| clicks(&hit)),
     }
 }
 

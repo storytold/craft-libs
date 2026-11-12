@@ -4,9 +4,10 @@ use craft_behavior::Sense;
 use egui::response::Flags;
 use egui::{Id, LayerId, Pos2, Rect, Response, Ui, Vec2};
 
-/// Whether the `Response` reports a click.
+/// Whether a component's `Response` reports a click: a primary pointer click by the press lifecycle, or a key or
+/// AccessKit activation. egui's own click options play no part.
 pub(crate) fn clicked(response: &Response) -> bool {
-    response.clicked()
+    response.flags.intersects(Flags::CLICKED | Flags::FAKE_PRIMARY_CLICKED)
 }
 
 /// Whether the press path released a pointer click on the component of `response`: a root's own widget or a
@@ -53,17 +54,24 @@ pub(crate) fn is_pressed(response: &Response) -> bool {
     response.is_pointer_button_down_on()
 }
 
-/// What a member's `Response` reports, from the arena's resolution.
+/// What the press lifecycle says of one component's shapes in a pass, for its `Response`.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct MemberView {
-    pub hovered: bool,
-    /// The member holds the open press.
+pub(crate) struct PressView {
+    /// The component holds the open press and the button is down.
     pub pressed: bool,
     pub drag_started: bool,
     pub dragged: bool,
     /// The press ended without a click.
     pub drag_stopped: bool,
+    /// A primary click.
     pub clicked: bool,
+}
+
+/// What a member's `Response` reports, from the arena's resolution.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct MemberView {
+    pub hovered: bool,
+    pub press: PressView,
     /// The pointer position in the member's layer space.
     pub pointer: Option<Pos2>,
 }
@@ -76,28 +84,15 @@ pub(crate) fn member(ui: &Ui, id: Id, rect: Rect, enabled: bool, view: MemberVie
 fn member_on(ctx: &egui::Context, layer_id: LayerId, clip: Rect, id: Id, rect: Rect, enabled: bool, view: MemberView) -> Response {
     let mut flags = Flags::empty();
     let hovered = enabled && view.hovered;
-    let mine = enabled && view.pressed;
+    // egui gives the interaction position through the pass the press ends in.
+    let mine = enabled && (view.press.pressed || view.press.drag_stopped || view.press.clicked);
     if enabled {
         flags |= Flags::ENABLED;
     }
     if hovered {
         flags |= Flags::CONTAINS_POINTER | Flags::HOVERED;
     }
-    if mine {
-        flags |= Flags::IS_POINTER_BUTTON_DOWN_ON;
-        if view.drag_started {
-            flags |= Flags::DRAG_STARTED | Flags::DRAGGED;
-        } else if view.dragged {
-            flags |= Flags::DRAGGED;
-        }
-        if view.drag_stopped {
-            flags |= Flags::DRAG_STOPPED;
-        }
-    }
-    if enabled && view.clicked {
-        flags |= Flags::CLICKED | Flags::HOVERED;
-    }
-    Response {
+    let mut response = Response {
         ctx: ctx.clone(),
         layer_id,
         id,
@@ -107,23 +102,40 @@ fn member_on(ctx: &egui::Context, layer_id: LayerId, clip: Rect, id: Id, rect: R
         interact_pointer_pos_or_nan: if hovered || mine { view.pointer.unwrap_or(Pos2::NAN) } else { Pos2::NAN },
         intrinsic_size_or_nan: Vec2::NAN,
         flags,
-    }
+    };
+    press_flags(&mut response, view.press);
+    response
 }
 
-/// Removes egui's click and drag flags from the root's `Response` unless the root's own shapes won the press:
-/// a press on a member belongs to the member, and a press the press-target rule refused belongs to the widget
-/// egui chose.
-pub(crate) fn keep_press_flags(response: &mut Response, own: bool) {
-    if !own {
-        response.flags.remove(
-            Flags::CLICKED
-                | Flags::FAKE_PRIMARY_CLICKED
-                | Flags::LONG_TOUCHED
-                | Flags::DRAG_STARTED
-                | Flags::DRAGGED
-                | Flags::DRAG_STOPPED
-                | Flags::IS_POINTER_BUTTON_DOWN_ON,
-        );
+/// Sets the press flags of a component's `Response` from the press lifecycle, in place of egui's: a component clicks
+/// and drags by the framework's rule (a release within the slop, whatever its duration), whatever click options the
+/// app gives egui. A key or AccessKit click is step 17's (`rewrite_clicks`). A disabled response reports none.
+pub(crate) fn press_flags(response: &mut Response, view: PressView) {
+    response.flags.remove(
+        Flags::CLICKED
+            | Flags::FAKE_PRIMARY_CLICKED
+            | Flags::LONG_TOUCHED
+            | Flags::DRAG_STARTED
+            | Flags::DRAGGED
+            | Flags::DRAG_STOPPED
+            | Flags::IS_POINTER_BUTTON_DOWN_ON,
+    );
+    if !response.flags.contains(Flags::ENABLED) {
+        return;
+    }
+    if view.pressed {
+        response.flags |= Flags::IS_POINTER_BUTTON_DOWN_ON;
+        if view.drag_started {
+            response.flags |= Flags::DRAG_STARTED | Flags::DRAGGED;
+        } else if view.dragged {
+            response.flags |= Flags::DRAGGED;
+        }
+        if view.drag_stopped {
+            response.flags |= Flags::DRAG_STOPPED;
+        }
+    }
+    if view.clicked {
+        response.flags |= Flags::CLICKED | Flags::HOVERED;
     }
 }
 
