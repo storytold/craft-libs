@@ -514,12 +514,14 @@ impl Component for Notice<'_> {
         Sense::HOVER
     }
 
-    fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
+    fn parts(&mut self, _rect: Rect, cx: &mut PartsCx<'_, Self>) {
         self.measure_content(cx);
         let rtl = cx.flow.is_rtl();
         let gap = cx.gap();
         let texts = self.texts(&cx.env, &cx.words::<NoticeWords>(), cx.format(), cx.resolved.label);
         let rect = if self.layout == NoticeLayout::Centred {
+        // The elements sit inside the padding: a card's content is inset from its surface's edge.
+        let rect = cx.content_rect;
             let column = Vec2::new(self.wrap_width(cx, rect.width()), rect.height());
             Flow::new(rect, rtl).align(column, Align::Center, Align::Min)
         } else {
