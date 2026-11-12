@@ -6,13 +6,15 @@ mod stories;
 
 use craft_behavior::nav::LARGE_STEPS;
 use craft_behavior::{Caret, Codec, IconId, NavMove, NotAValue, PartKey, Sense, ValueDrag};
+use craft_theme::ControlSize;
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::{
     Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Held, Input, MeasureCx, NoValue, Outcome, PartsCx, Props, Role, Scrub,
     Show as _, ShowContainer as _, clicked,
 };
 use craft_ui::display::Divider;
-use craft_ui::layout_components::Stack;
+use craft_ui::layout::RowAlign;
+use craft_ui::layout_components::{Row, Stack};
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::primitives::{TextKey, TextOptions, TextRun};
 use craft_ui::runtime::env::{Env, Label};
@@ -466,7 +468,7 @@ fn row_menu(ui: &mut Ui, words: &TimecodeWords, row: &TimecodeRow, removable: bo
 /// Premiere's Timecode panel: each row's time centred over its caption ("Current Time \u{b7} Program"), the first row
 /// in the accent ink. The app gives each row's text. Rows are read-only readouts, each one Tab stop; a secondary click,
 /// the Menu key or Shift+F10 on a row opens its menu (kind, source, display with "Sequence Display" to follow the
-/// sequence again, Remove Row); "+" adds a row.
+/// sequence again, Remove Row); a small "+" at the end edge under the rows adds a row.
 #[derive(craft_ui::contract::Pattern)]
 pub struct TimecodePanel<'a> {
     label: Label,
@@ -487,7 +489,7 @@ impl<'a> TimecodePanel<'a> {
         let name = label.as_str().to_owned();
         let mut changed = false;
         let mut held = Held::new(settings);
-        let shown = Stack::new().label(label.clone()).show(ui, |ui, root| {
+        let shown = Stack::new().fill_width().label(label.clone()).show(ui, |ui, root| {
             let before = held.read(root).unwrap_or_default();
             let mut next = before.clone();
             let texts: Vec<RowText> = before
@@ -517,8 +519,11 @@ impl<'a> TimecodePanel<'a> {
                     }
                 }
             }
-            let add = IconButton::new(IconId::new("plus")).label(words.add_row.clone()).show(ui);
-            if clicked(&add) {
+            let add = Row::new()
+                .fill_width()
+                .align(RowAlign::End)
+                .show(ui, |ui, _| IconButton::new(IconId::new("plus")).label(words.add_row.clone()).size(ControlSize::Sm).show(ui).response);
+            if add.inner.as_ref().is_some_and(clicked) {
                 let from = next.rows.last().copied().unwrap_or_default();
                 next.rows.push(TimecodeRow { kind: TimecodeRowKind::Duration, ..from });
             }
