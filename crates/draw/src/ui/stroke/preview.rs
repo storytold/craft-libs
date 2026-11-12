@@ -1,7 +1,7 @@
 //! [`StrokePreview`]: a stroke style drawn as a line sample with the content painter.
 
-use craft_ui::primitives::{ContentPainterCx, PaintShape};
-use egui::{Pos2, Rect, Shape, Stroke};
+use craft_ui::primitives::{ContentPainterCx, PaintShape, StrokeWidth};
+use egui::{Pos2, Rect, Shape, Stroke, Vec2};
 use kurbo::{BezPath, PathEl, Point};
 
 use super::StrokeStyle;
@@ -162,6 +162,21 @@ impl<'a> StrokePreview<'a> {
                 faded.add(Shape::convex_polygon(points, ink, Stroke::NONE));
             }
         }
+    }
+
+    /// The sample of no stroke in `rect`: a faint line through the centre, crossed by a slash in the failure colour
+    /// from the bottom of the rect to its top, half the height wide.
+    pub fn paint_off(cx: &ContentPainterCx, rect: Rect) {
+        let style = cx.style_cx();
+        let c = &style.tokens.color;
+        let (line, slash) = (style.color(c.text.faint), style.color(c.status.bad.fg));
+        let half = rect.height() / 2.0;
+        let center = rect.center();
+        cx.with_draw(|draw| {
+            draw.stroke(&PaintShape::Path(vec![rect.left_center(), rect.right_center()]), StrokeWidth::Thin, line);
+            let across = vec![center + Vec2::new(-half / 2.0, half), center + Vec2::new(half / 2.0, -half)];
+            draw.stroke(&PaintShape::Path(across), StrokeWidth::Medium, slash);
+        });
     }
 }
 

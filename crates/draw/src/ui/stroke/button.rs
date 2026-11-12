@@ -1,6 +1,6 @@
 //! [`StrokeButton`]: the field that shows the stroke's style and opens the editor in a popover.
 
-use craft_behavior::{EditEvent, HitLevel, HitPriority, PartKey, Sense};
+use craft_behavior::{EditEvent, HitLevel, HitPriority, Mixed, PartKey, Sense};
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx,
     Props as _, Role, Show as _, WordSetCx as _,
@@ -35,9 +35,26 @@ pub struct StrokeButtonStyle {
     focus: FocusLook,
 }
 
-/// What the popover was opened with, so a change of target closes it.
+/// What the popover was opened with: the target, and the value it opened with or its editor last reported. A change
+/// of either from outside closes it.
 #[derive(Clone, Debug, Default, PartialEq)]
-struct Opened(Option<Option<u64>>);
+struct Opened(Option<Seen>);
+
+#[derive(Clone, Debug, PartialEq)]
+struct Seen {
+    target: Option<u64>,
+    value: Option<StrokeStyle>,
+}
+
+/// Whether `held` is `seen` but for the width: the width is the host's own (the editor never edits it), so a width
+/// change leaves the popover open.
+fn same_but_width(held: Option<&StrokeStyle>, seen: Option<&StrokeStyle>) -> bool {
+    match (held, seen) {
+        (Some(held), Some(seen)) => StrokeStyle { width: held.width, ..seen.clone() } == *held,
+        (None, None) => true,
+        _ => false,
+    }
+}
 
 /// The stroke style's field in an options bar or the shape Properties (PhotoCraft's `shape_stroke_ui::button`) and the
 /// [`StrokeEditor`] in a popover under it.
@@ -47,7 +64,8 @@ struct Opened(Option<Option<u64>>);
 ///   Options", with the style's name as its value.
 /// - A click, Enter or Space opens the popover below the field and focus moves into it; Escape closes it and returns
 ///   focus to the field; a press outside closes it and reaches nothing under it. It closes when the
-///   [`target`](Self::target) changes and when the field is disabled.
+///   [`target`](Self::target) changes, when the value changes from outside (Undo, another control; the width aside)
+///   and when the field is disabled.
 /// - `open` is bound to the popover: the button writes whether it is open, and a change of the bound value opens or
 ///   closes it.
 /// - The editor opens from the value, or from [`StrokeStyle::default`] when the value fails
@@ -110,13 +128,11 @@ impl<'a> StrokeButton<'a> {
     /// The face of a field showing `text`, with the sample of `style` when the shape has a stroke. The measured
     /// candidates and the painted face are both built here.
     fn face_of(&self, text: Label, style: Option<StrokeStyle>) -> SelectFace<'static> {
-        let face = SelectFace::new(text);
-        match style.filter(|_| self.stroked) {
-            Some(style) => {
-                face.thumb(ThumbAspect::new(SAMPLE_ASPECT.0, SAMPLE_ASPECT.1), move |cx, rect| StrokePreview::sized(&style, rect).paint(cx, rect))
-            }
-            None => face.placeholder(),
-        }
+        let style = style.filter(|_| self.stroked);
+        SelectFace::new(text).thumb(ThumbAspect::new(SAMPLE_ASPECT.0, SAMPLE_ASPECT.1), move |cx, rect| match style {
+            Some(style) => StrokePreview::sized(&style, rect).paint(cx, rect),
+            None => StrokePreview::paint_off(cx, rect),
+        })
     }
 }
 
@@ -159,18 +175,19 @@ impl Component for StrokeButton<'_> {
         Some(self.value.reborrow())
     }
 
-    /// Enter and Space toggle the popover (a click does through the face's `toggles`). A change of target closes it.
-    /// `open` is bound to the popover.
+    /// Enter and Space toggle the popover (a click does through the face's `toggles`). A change of target, or of the
+    /// value from outside, closes it. `open` is bound to the popover.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let popup = cx.popup("editor");
         toggle_on_key(cx, popup);
         let is_open = popup.is_open(cx);
         if is_open {
+            let held = cx.value().cloned();
             let opened = cx.memory::<Opened>().clone();
             match opened.0 {
-                Some(target) if target != self.target => popup.close(cx),
+                Some(seen) if seen.target != self.target || !same_but_width(held.as_ref(), seen.value.as_ref()) => popup.close(cx),
                 Some(_) => {}
-                None => *cx.memory::<Opened>() = Opened(Some(self.target)),
+                None => *cx.memory::<Opened>() = Opened(Some(Seen { target: self.target, value: held })),
             }
         } else {
             *cx.memory::<Opened>() = Opened(None);
@@ -190,6 +207,21 @@ impl Component for StrokeButton<'_> {
         });
         let Some(out) = out else { return };
         for event in out.events {
+            // What the editor reports is what the host holds next: recorded, so it does not count as a change from
+            // outside.
+            let reported = match &event {
+                EditEvent::Set { after, .. } | EditEvent::Update { value: after, .. } | EditEvent::Commit { after, .. } => Some(Some(after.clone())),
+                EditEvent::Cancel { before: Some(before), .. } => Some(match before {
+                    Mixed::Same(before) => Some(before.clone()),
+                    Mixed::Mixed => None,
+                }),
+                _ => None,
+            };
+            if let Some(value) = reported
+                && let Some(seen) = cx.memory::<Opened>().0.as_mut()
+            {
+                seen.value = value;
+            }
             match event {
                 EditEvent::Set { after, .. } => cx.set(after),
                 EditEvent::Begin { .. } => cx.begin(),

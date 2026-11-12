@@ -26,6 +26,9 @@ mod perspective_crop;
 // draw-bars
 mod measure;
 
+// draw-stroke
+mod stroke_button;
+
 // draw-transform-a
 mod transform_box;
 mod transform_session;
