@@ -319,3 +319,6 @@ const MAX_START_SECONDS: i64 = 10_000_000;
 fn clamp_i64(value: i128) -> i64 {
     value.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
 }
+
+#[cfg(test)]
+mod tests;

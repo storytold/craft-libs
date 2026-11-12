@@ -81,6 +81,23 @@ impl FrameRate {
         FrameRate::new((fps * 1000.0).round() as i64, 1000)
     }
 
+    /// The [`COMMON`](Self::COMMON) rate nearest `fps` when it is within `tolerance` of it, as a
+    /// fraction of the rate (`0.005` is half a percent), else [`from_f64`](Self::from_f64). A
+    /// container that reports its rate from timestamps rounded to a coarse unit lands slightly off
+    /// a standard rate: at 90 kHz, whole milliseconds leave a 30 fps clip's average at 30.02 or
+    /// 29.95.
+    // filmcraft: crates/time/src/lib.rs:217 (#1700).
+    pub fn from_f64_within(fps: f64, tolerance: f64) -> Self {
+        let mut best: Option<(f64, FrameRate)> = None;
+        for r in Self::COMMON {
+            let off = (r.as_f64() - fps).abs();
+            if off <= tolerance * r.as_f64() && best.is_none_or(|(closest, _)| off < closest) {
+                best = Some((off, r));
+            }
+        }
+        best.map_or_else(|| Self::from_f64(fps), |(_, r)| r)
+    }
+
     /// This rate when both parts are positive, else the default.
     pub fn sane(self) -> FrameRate {
         if self.num > 0 && self.den > 0 { self } else { FrameRate::default() }
@@ -170,6 +187,19 @@ impl FrameRate {
             return numbers.number(self.num as f64, 0..=0);
         }
         numbers.number(self.as_f64(), 0..=3)
+    }
+}
+
+/// The rate as documents and diagnostics write it: `24`, `23.976`, `29.97` (ASCII digits, up to
+/// three decimals, no unit). Text a person reads in the UI comes from `label`, in the locale's
+/// digits, with the unit as the UI's word.
+impl std::fmt::Display for FrameRate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.den == 1 {
+            return write!(f, "{}", self.num);
+        }
+        let s = format!("{:.3}", self.as_f64());
+        f.write_str(s.trim_end_matches('0').trim_end_matches('.'))
     }
 }
 

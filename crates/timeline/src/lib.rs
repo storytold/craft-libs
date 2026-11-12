@@ -28,7 +28,7 @@ pub use markers::{Marker, MarkerColor, MarkerId};
 pub use model::{ClipId, ClipInfo, TimelineModel, TrackId, TrackInfo, TrackKind};
 pub use rates::{FrameRate, PixelAspect, SampleRate};
 pub use time::{TICKS_PER_SECOND, Tick, TimeRange, TimeView};
-pub use timecode::{TimeDisplay, TimeFormat, TimecodeError, TimecodeFields, format_time, parse_time};
+pub use timecode::{TimeDisplay, TimeFormat, TimecodeError, TimecodeFields, format_time, parse_frames, parse_time};
 
 #[cfg(test)]
 mod cache_tests;

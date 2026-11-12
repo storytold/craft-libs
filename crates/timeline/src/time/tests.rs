@@ -1,7 +1,13 @@
 use super::*;
+use crate::rates::{FrameRate, SampleRate};
+use crate::timecode::{
+    TimeDisplay, TimeFormat, TimecodeFields, fields_to_frames, format_feet_frames, format_time, format_timecode_frames, frames_to_fields,
+    parse_frames,
+};
+use craft_ui::testing::trial;
 use proptest::prelude::*;
 
-#[test]
+#[trial]
 fn empty_time_ranges_never_overlap() {
     let clip = TimeRange::new(Tick(0), Tick(10));
     for duration in [0, -1, -5] {
@@ -13,7 +19,7 @@ fn empty_time_ranges_never_overlap() {
     }
 }
 
-#[test]
+#[trial]
 fn time_range_overlap_respects_half_open_boundaries() {
     let clip = TimeRange::new(Tick(0), Tick(10));
     for (start, duration, expected) in [(-5, 5, false), (10, 5, false), (-5, 6, true), (9, 5, true), (2, 3, true)] {
@@ -23,9 +29,9 @@ fn time_range_overlap_respects_half_open_boundaries() {
     }
 }
 
-#[test]
+#[trial]
 fn seconds_display_has_no_negative_zero() {
-    let f = |t: i64| format_time(Tick(t), FrameRate::default(), false, TimeDisplay::Seconds, 48000);
+    let f = |t: i64| format_time(Tick(t), &TimeFormat::timecode(FrameRate::default()).drop_frame(false).display(TimeDisplay::Seconds));
     assert_eq!(f(-1), "0.000");
     assert_eq!(f(-2), "0.000");
     assert_eq!(f(-(TICKS_PER_SECOND / 2500)), "0.000");
@@ -33,10 +39,10 @@ fn seconds_display_has_no_negative_zero() {
     assert_eq!(f(-TICKS_PER_SECOND / 1000), "-0.001");
 }
 
-#[test]
+#[trial]
 fn audio_samples_negative_time_has_leading_minus() {
     let r = FrameRate::new(30000, 1001);
-    let f = |t| format_time(Tick(t), r, false, TimeDisplay::AudioSamples, 48000);
+    let f = |t| format_time(Tick(t), &TimeFormat::timecode(r).drop_frame(false).display(TimeDisplay::AudioSamples));
     assert_eq!(f(-TICKS_PER_SECOND), "-00:00:01:00000");
     assert_eq!(f(-(TICKS_PER_SECOND + TICKS_PER_SECOND / 2)), "-00:00:01:24000");
 }
@@ -44,7 +50,7 @@ fn audio_samples_negative_time_has_leading_minus() {
 /// Damaged files and projects can carry zero / negative rates and timebases, and users or
 /// agents can type huge timecodes: these used to panic (division by zero, overflow,
 /// crossed `clamp` bounds).
-#[test]
+#[trial]
 fn hostile_rates_and_timecodes_never_panic() {
     let zero = FrameRate { num: 0, den: 0 };
     for r in [
@@ -60,7 +66,7 @@ fn hostile_rates_and_timecodes_never_panic() {
         assert!(r.frame_duration() > Tick::ZERO);
         assert!(r.timecode_base() >= 1);
         let _ = r.snap_nearest(Tick(12345));
-        let _ = format_time(Tick(TICKS_PER_SECOND), r, true, TimeDisplay::Timecode, 48_000);
+        let _ = format_time(Tick(TICKS_PER_SECOND), &TimeFormat::timecode(r).drop_frame(true).display(TimeDisplay::Timecode));
     }
     assert_eq!(Tick::from_rational(100, 1, 0), Tick::ZERO);
     assert_eq!(Tick::from_units(100, 0), Tick::ZERO);
@@ -75,12 +81,12 @@ fn hostile_rates_and_timecodes_never_panic() {
     assert_eq!(Tick(5).clamp(Tick(10), Tick(0)), Tick(0));
     let _ = format_timecode_frames(i64::MIN, FrameRate::FPS_29_97, true);
     for tc in ["99999999999:99:99:99", "9223372036854775807", "+9223372036854775807", "99999999999;59;59;29"] {
-        let _ = parse_timecode(tc, FrameRate::FPS_29_97, true, i64::MAX);
-        let _ = parse_timecode(tc, FrameRate::FPS_25, false, i64::MIN);
+        let _ = parse_frames(tc, &TimeFormat::timecode(FrameRate::FPS_29_97).drop_frame(true), i64::MAX);
+        let _ = parse_frames(tc, &TimeFormat::timecode(FrameRate::FPS_25).drop_frame(false), i64::MIN);
     }
 }
 
-#[test]
+#[trial]
 fn boundary_rates_saturate_without_wrapping_and_keep_representable_values_exact() {
     let slow = FrameRate { num: 1, den: i64::MAX };
     assert_eq!(slow.frame_duration(), Tick(i64::MAX));
@@ -109,7 +115,7 @@ fn boundary_rates_saturate_without_wrapping_and_keep_representable_values_exact(
     assert_eq!(FrameRate::new(i64::MIN, 1), FrameRate { num: i64::MIN, den: 1 });
 }
 
-#[test]
+#[trial]
 fn scalar_time_conversions_saturate_at_storage_limits() {
     assert_eq!(Tick::from_units(i64::MAX, 1), Tick(i64::MAX));
     assert_eq!(Tick::from_units(i64::MIN, 1), Tick(i64::MIN));
@@ -125,22 +131,27 @@ fn scalar_time_conversions_saturate_at_storage_limits() {
     assert_eq!(Tick(i64::MIN).abs(), Tick(i64::MAX));
 }
 
-#[test]
+/// The fields with every count negated (the sign flag cleared).
+fn negated(f: TimecodeFields) -> TimecodeFields {
+    TimecodeFields { negative: false, hours: -f.hours, minutes: -f.minutes, seconds: -f.seconds, frames: -f.frames }
+}
+
+#[trial]
 fn drop_frame_fields_keep_cancelling_terms_wide_at_storage_limits() {
     for rate in [FrameRate::FPS_29_97, FrameRate::FPS_59_94, FrameRate::FPS_119_88] {
         for frame in [0, 1, 999_999, i64::MAX - 1, i64::MAX] {
-            let (negative, h, m, s, f) = frames_to_fields(frame, rate, true);
-            assert!(!negative);
-            assert_eq!(fields_to_frames(h, m, s, f, rate, true), frame, "{rate}: {frame}");
-            assert_eq!(fields_to_frames(-h, -m, -s, -f, rate, true), -frame);
+            let fields = frames_to_fields(frame, rate, true);
+            assert!(!fields.negative);
+            assert_eq!(fields_to_frames(fields, rate, true), frame, "{rate}: {frame}");
+            assert_eq!(fields_to_frames(negated(fields), rate, true), -frame);
         }
-        let (negative, h, m, s, f) = frames_to_fields(i64::MIN, rate, true);
-        assert!(negative);
-        assert_eq!(fields_to_frames(-h, -m, -s, -f, rate, true), i64::MIN);
+        let fields = frames_to_fields(i64::MIN, rate, true);
+        assert!(fields.negative);
+        assert_eq!(fields_to_frames(negated(fields), rate, true), i64::MIN);
     }
 }
 
-#[test]
+#[trial]
 fn tick_arithmetic_saturates_only_outside_storage_limits() {
     let values = [i64::MIN, i64::MIN + 1, Tick::MIN.0, -1, 0, 1, Tick::MAX.0, i64::MAX - 1, i64::MAX];
     for a in values {
@@ -168,7 +179,7 @@ fn tick_arithmetic_saturates_only_outside_storage_limits() {
     assert_eq!(ordinary.end(), Tick::MAX);
 }
 
-#[test]
+#[trial]
 fn numeric_limits_are_total_across_frame_conversion_and_display() {
     let values = [i64::MIN, -i64::MAX, -1, 0, 1, TICKS_PER_SECOND, i64::MAX];
     for num in values {
@@ -184,27 +195,27 @@ fn numeric_limits_are_total_across_frame_conversion_and_display() {
                 let _ = r.snap(tick);
                 let _ = r.snap_nearest(tick);
                 for display in TimeDisplay::ALL {
-                    let _ = format_time(tick, r, true, display, 48_000);
+                    let _ = format_time(tick, &TimeFormat::timecode(r).drop_frame(true).display(display));
                 }
-                let (_, h, m, sec, f) = frames_to_fields(value, r, true);
-                let _ = fields_to_frames(h, m, sec, f, r, true);
+                let _ = fields_to_frames(frames_to_fields(value, r, true), r, true);
             }
         }
     }
 }
 
-#[test]
+#[trial]
 fn every_common_rate_is_exact() {
     for r in FrameRate::COMMON {
         let d = r.frame_duration();
         assert_eq!(d.0 as i128 * r.num as i128, TICKS_PER_SECOND as i128 * r.den as i128, "{r}");
     }
-    for sr in SAMPLE_RATES.iter().chain(&[8000, 11025, 16000, 22050, 176_400]) {
+    let menus = SampleRate::COMMON.into_iter().chain(SampleRate::VIDEO).map(|r| i64::from(r.hz()));
+    for sr in menus.chain([8000, 11025, 16000, 22050, 176_400]) {
         assert_eq!(TICKS_PER_SECOND % sr, 0, "{sr}");
     }
 }
 
-#[test]
+#[trial]
 fn drop_frame_known_values() {
     let r = FrameRate::FPS_29_97;
     assert_eq!(format_timecode_frames(0, r, true), "00;00;00;00");
@@ -217,45 +228,49 @@ fn drop_frame_known_values() {
     assert_eq!(format_timecode_frames(3600, r60, true), "00;01;00;04");
 }
 
-#[test]
+#[trial]
 fn parse_forms() {
     let r = FrameRate::FPS_25;
-    assert_eq!(parse_timecode("00:00:10:00", r, false, 0).unwrap(), 250);
-    assert_eq!(parse_timecode("1000", r, false, 0).unwrap(), 250);
-    assert_eq!(parse_timecode("1.00", r, false, 0).unwrap(), 25);
-    assert_eq!(parse_timecode("+15", r, false, 100).unwrap(), 115);
-    assert_eq!(parse_timecode("-1.00", r, false, 100).unwrap(), 75);
-    assert_eq!(parse_timecode("00;01;00;02", FrameRate::FPS_29_97, true, 0).unwrap(), 1800);
-    assert!(parse_timecode("abc", r, false, 0).is_err());
+    assert_eq!(parse_frames("00:00:10:00", &TimeFormat::timecode(r).drop_frame(false), 0).unwrap(), 250);
+    assert_eq!(parse_frames("1000", &TimeFormat::timecode(r).drop_frame(false), 0).unwrap(), 250);
+    assert_eq!(parse_frames("1.00", &TimeFormat::timecode(r).drop_frame(false), 0).unwrap(), 25);
+    assert_eq!(parse_frames("+15", &TimeFormat::timecode(r).drop_frame(false), 100).unwrap(), 115);
+    assert_eq!(parse_frames("-1.00", &TimeFormat::timecode(r).drop_frame(false), 100).unwrap(), 75);
+    assert_eq!(parse_frames("00;01;00;02", &TimeFormat::timecode(FrameRate::FPS_29_97).drop_frame(true), 0).unwrap(), 1800);
+    assert!(parse_frames("abc", &TimeFormat::timecode(r).drop_frame(false), 0).is_err());
 }
 
 /// Overflowing fields carry into the next one before drop-frame counting, so `01;00;00;30` is the
 /// frame `01;00;01;00` names rather than a non-drop count; non-drop overflow is counted as before.
-#[test]
+#[trial]
 fn overflowing_drop_frame_fields_carry_before_counting() {
     let df = FrameRate::FPS_29_97;
     // (typed, the label it reads as)
     let cases = [("01;00;00;30", "01;00;01;00"), ("00;09;59;45", "00;10;00;15"), ("00;00;90;00", "00;01;30;00"), ("01;75;00;02", "02;15;00;02")];
     for (typed, label) in cases {
-        let f = parse_timecode(typed, df, true, 0).unwrap();
-        assert_eq!((f, format_timecode_frames(f, df, true)), (parse_timecode(label, df, true, 0).unwrap(), label.to_string()), "{typed}");
+        let f = parse_frames(typed, &TimeFormat::timecode(df).drop_frame(true), 0).unwrap();
+        assert_eq!(
+            (f, format_timecode_frames(f, df, true)),
+            (parse_frames(label, &TimeFormat::timecode(df).drop_frame(true), 0).unwrap(), label.to_string()),
+            "{typed}"
+        );
     }
-    assert_eq!(parse_timecode("00:00:00:90", FrameRate::FPS_25, false, 0).unwrap(), 90);
-    assert_eq!(parse_timecode("00:00:00:90", df, false, 0).unwrap(), 90);
+    assert_eq!(parse_frames("00:00:00:90", &TimeFormat::timecode(FrameRate::FPS_25).drop_frame(false), 0).unwrap(), 90);
+    assert_eq!(parse_frames("00:00:00:90", &TimeFormat::timecode(df).drop_frame(false), 0).unwrap(), 90);
 }
 
-#[test]
+#[trial]
 fn signed_field_rejected() {
     let r = FrameRate::FPS_25;
-    assert!(parse_timecode("00:00:-5:00", r, false, 0).is_err());
-    assert!(parse_timecode("00:+1:00:00", r, false, 0).is_err());
-    assert_eq!(parse_timecode("00:00:10:00", r, false, 0).unwrap(), 250);
+    assert!(parse_frames("00:00:-5:00", &TimeFormat::timecode(r).drop_frame(false), 0).is_err());
+    assert!(parse_frames("00:+1:00:00", &TimeFormat::timecode(r).drop_frame(false), 0).is_err());
+    assert_eq!(parse_frames("00:00:10:00", &TimeFormat::timecode(r).drop_frame(false), 0).unwrap(), 250);
 }
 
-#[test]
+#[trial]
 fn feet_frames_roll_over_at_the_foot() {
     let r = FrameRate::FPS_24;
-    let f = |frame: i64, d| format_time(r.tick_of(frame), r, false, d, 48000);
+    let f = |frame: i64, d| format_time(r.tick_of(frame), &TimeFormat::timecode(r).drop_frame(false).display(d));
     for (frame, ft35, ft16) in
         [(0, "0+00", "0+00"), (15, "0+15", "0+15"), (16, "1+00", "0+16"), (39, "2+07", "0+39"), (40, "2+08", "1+00"), (41, "2+09", "1+01")]
     {
@@ -276,7 +291,7 @@ fn feet_frames_roll_over_at_the_foot() {
     assert_eq!(format_feet_frames(5, 0), "5+00", "a zero foot never divides by zero");
 }
 
-#[test]
+#[trial]
 fn feet_frames_follow_the_frame_not_the_rate() {
     // 1 s of film is the rate's frame count whatever the rate
     for (r, frames) in [(FrameRate::FPS_23_976, 24), (FrameRate::FPS_24, 24), (FrameRate::FPS_25, 25), (FrameRate::FPS_30, 30)] {
@@ -284,19 +299,31 @@ fn feet_frames_follow_the_frame_not_the_rate() {
         // 23.976 fps is 24 frames in 1.001 s: one second is frame 23 (floor)
         let want = r.frame_at(one_second);
         assert!((frames - 1..=frames).contains(&want), "{r:?}");
-        assert_eq!(format_time(one_second, r, false, TimeDisplay::Frames, 48000), want.to_string());
-        assert_eq!(format_time(one_second, r, false, TimeDisplay::Feet35, 48000), format!("{}+{:02}", want / 16, want % 16));
-        assert_eq!(format_time(one_second, r, false, TimeDisplay::Feet16, 48000), format!("{}+{:02}", want / 40, want % 40));
+        assert_eq!(format_time(one_second, &TimeFormat::timecode(r).drop_frame(false).display(TimeDisplay::Frames)), want.to_string());
+        assert_eq!(
+            format_time(one_second, &TimeFormat::timecode(r).drop_frame(false).display(TimeDisplay::Feet35)),
+            format!("{}+{:02}", want / 16, want % 16)
+        );
+        assert_eq!(
+            format_time(one_second, &TimeFormat::timecode(r).drop_frame(false).display(TimeDisplay::Feet16)),
+            format!("{}+{:02}", want / 40, want % 40)
+        );
     }
     // drop-frame only changes timecode
     let r = FrameRate::FPS_29_97;
     let t = r.tick_of(1800);
-    assert_eq!(format_time(t, r, true, TimeDisplay::Frames, 48000), format_time(t, r, false, TimeDisplay::Frames, 48000));
-    assert_eq!(format_time(t, r, true, TimeDisplay::Feet35, 48000), "112+08");
-    assert_ne!(format_time(t, r, true, TimeDisplay::Timecode, 48000), format_time(t, r, false, TimeDisplay::Timecode, 48000));
+    assert_eq!(
+        format_time(t, &TimeFormat::timecode(r).drop_frame(true).display(TimeDisplay::Frames)),
+        format_time(t, &TimeFormat::timecode(r).drop_frame(false).display(TimeDisplay::Frames))
+    );
+    assert_eq!(format_time(t, &TimeFormat::timecode(r).drop_frame(true).display(TimeDisplay::Feet35)), "112+08");
+    assert_ne!(
+        format_time(t, &TimeFormat::timecode(r).drop_frame(true).display(TimeDisplay::Timecode)),
+        format_time(t, &TimeFormat::timecode(r).drop_frame(false).display(TimeDisplay::Timecode))
+    );
 }
 
-#[test]
+#[trial]
 fn display_ids_round_trip() {
     for d in TimeDisplay::ALL {
         assert_eq!(TimeDisplay::from_id(d.id()), Some(d));
@@ -308,10 +335,10 @@ fn display_ids_round_trip() {
     assert_eq!(TimeDisplay::Frames.frames_per_foot(), None);
 }
 
-#[test]
+#[trial]
 fn feet_frames_and_frames_parse_back() {
     let r = FrameRate::FPS_24;
-    let p = |s: &str, d, cur| parse_time_display(s, r, false, d, cur);
+    let p = |s: &str, d, cur| parse_frames(s, &TimeFormat::timecode(r).display(d), cur);
     assert_eq!(p("2+08", TimeDisplay::Feet35, 0), Ok(40));
     assert_eq!(p("1+00", TimeDisplay::Feet16, 0), Ok(40));
     assert_eq!(p("0+15", TimeDisplay::Feet35, 0), Ok(15));
@@ -334,23 +361,26 @@ fn feet_frames_and_frames_parse_back() {
     // formatting and parsing agree for every format, around the foot boundaries
     for d in [TimeDisplay::Feet35, TimeDisplay::Feet16, TimeDisplay::Frames] {
         for frame in [0, 1, 15, 16, 17, 39, 40, 41, 1000, 864_000] {
-            let text = format_time(r.tick_of(frame), r, false, d, 48000);
+            let text = format_time(r.tick_of(frame), &TimeFormat::timecode(r).drop_frame(false).display(d));
             assert_eq!(p(&text, d, 0), Ok(frame), "{d:?} {text}");
         }
     }
 }
 
-#[test]
+#[trial]
 fn display_modes() {
     let r = FrameRate::FPS_24;
     let t = r.tick_of(40);
-    assert_eq!(format_time(t, r, false, TimeDisplay::Feet35, 48000), "2+08");
-    assert_eq!(format_time(t, r, false, TimeDisplay::Feet16, 48000), "1+00");
-    assert_eq!(format_time(t, r, false, TimeDisplay::Frames, 48000), "40");
-    assert_eq!(format_time(Tick::from_units(48_001, 48_000), r, false, TimeDisplay::AudioSamples, 48000), "00:00:01:00001");
+    assert_eq!(format_time(t, &TimeFormat::timecode(r).drop_frame(false).display(TimeDisplay::Feet35)), "2+08");
+    assert_eq!(format_time(t, &TimeFormat::timecode(r).drop_frame(false).display(TimeDisplay::Feet16)), "1+00");
+    assert_eq!(format_time(t, &TimeFormat::timecode(r).drop_frame(false).display(TimeDisplay::Frames)), "40");
+    assert_eq!(
+        format_time(Tick::from_units(48_001, 48_000), &TimeFormat::timecode(r).drop_frame(false).display(TimeDisplay::AudioSamples)),
+        "00:00:01:00001"
+    );
 }
 
-#[test]
+#[trial]
 fn rational_conversions() {
     // 90 kHz MPEG timebase
     let t = Tick::from_rational(90_000, 1, 90_000);
@@ -370,10 +400,10 @@ fn rational_conversions() {
     assert_eq!(FrameRate::FPS_30.tick_of(2).to_rational_round(-1, -1000), 67);
     assert_eq!(FrameRate::FPS_29_97.tick_of(15).to_rational_round(-1, -1000), 501);
     assert_eq!(FrameRate::from_f64(29.97), FrameRate::FPS_29_97);
-    assert_eq!(FrameRate::FPS_23_976.label(), "23.976");
+    assert_eq!(FrameRate::FPS_23_976.to_string(), "23.976");
 }
 
-#[test]
+#[trial]
 fn exotic_frame_rate_roundtrip() {
     // Issue #301: 37.516 fps footage.  The frame duration is
     // 254_016_000_000 * 250 / 9379 = 6_770_871_094.999… ticks — not an
@@ -435,7 +465,7 @@ fn exotic_frame_rate_roundtrip() {
     }
 }
 
-#[test]
+#[trial]
 fn exotic_frame_rate_durations() {
     // frame_duration uses floor (not round) so that `end - frame_duration()`
     // lands on the previous frame, not two frames back, for exotic rates.
@@ -453,7 +483,7 @@ fn exotic_frame_rate_durations() {
 }
 
 proptest! {
-    #[test]
+    #[trial]
     fn extreme_frame_math_stays_monotonic(num in 1i64..=i64::MAX, den in 1i64..=i64::MAX, a in any::<i64>(), b in any::<i64>()) {
         let r = FrameRate { num, den };
         let (lo, hi) = (a.min(b), a.max(b));
@@ -465,14 +495,14 @@ proptest! {
         prop_assert_eq!(r.snap_nearest(snapped), snapped);
     }
 
-    #[test]
+    #[trial]
     fn frame_tick_roundtrip(f in -1_000_000i64..10_000_000, ri in 0usize..11) {
         let r = FrameRate::COMMON[ri];
         prop_assert_eq!(r.frame_at(r.tick_of(f)), f);
         prop_assert_eq!(r.frame_at(r.tick_of(f) + r.frame_duration() - Tick(1)), f);
     }
 
-    #[test]
+    #[trial]
     fn exotic_frame_tick_roundtrip(f in -100_000i64..100_000, num in 1u64..200_000, den in 1u64..2_000) {
         // Skip rates that divide evenly (those are covered by COMMON above).
         let r = FrameRate::new(num as i64, den as i64);
@@ -482,28 +512,28 @@ proptest! {
         prop_assert_eq!(r.frame_at(r.tick_of(f)), f, "rate={}/{}, f={}", r.num, r.den, f);
     }
 
-    #[test]
+    #[trial]
     fn drop_frame_bijection(f in 0i64..(24 * 107_892)) {
         let r = FrameRate::FPS_29_97;
-        let (_, h, m, s, fr) = frames_to_fields(f, r, true);
+        let fields = frames_to_fields(f, r, true);
         // dropped labels never appear
-        prop_assert!(!(s == 0 && fr < 2 && m % 10 != 0));
-        prop_assert_eq!(fields_to_frames(h, m, s, fr, r, true), f);
+        prop_assert!(!(fields.seconds == 0 && fields.frames < 2 && fields.minutes % 10 != 0));
+        prop_assert_eq!(fields_to_frames(fields, r, true), f);
         let txt = format_timecode_frames(f, r, true);
-        prop_assert_eq!(parse_timecode(&txt, r, true, 0).unwrap(), f);
+        prop_assert_eq!(parse_frames(&txt, &TimeFormat::timecode(r).drop_frame(true), 0).unwrap(), f);
     }
 
-    #[test]
+    #[trial]
     fn ndf_parse_roundtrip(f in 0i64..10_000_000, ri in 0usize..11) {
         let r = FrameRate::COMMON[ri];
         let txt = format_timecode_frames(f, r, false);
-        prop_assert_eq!(parse_timecode(&txt, r, false, 0).unwrap(), f);
+        prop_assert_eq!(parse_frames(&txt, &TimeFormat::timecode(r).drop_frame(false), 0).unwrap(), f);
     }
 }
 
 /// At 11 fps a frame is not a whole number of ticks, so the ticks from one boundary to the next
 /// can read as zero frames; counting between frame indices gives one.
-#[test]
+#[trial]
 fn frames_between_counts_boundaries_at_fractional_tick_rates() {
     let r = FrameRate::new(11, 1);
     for f in 0..1000 {
