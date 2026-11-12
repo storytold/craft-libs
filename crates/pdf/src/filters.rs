@@ -5,9 +5,9 @@
 //! TIFF/PNG predictors, `ASCIIHexDecode`, `ASCII85Decode`, `RunLengthDecode`).
 //! Image codecs (`DCTDecode`, `JPXDecode`, `JBIG2Decode`, `CCITTFaxDecode`),
 //! `Crypt` and unknown filters are reported as [`FilterError::Unsupported`] so
-//! callers keep such data encoded. CCITT fax images decode on their own
-//! ([`decode_ccitt_within`]), spending from an allowance the caller shares across a run of
-//! images.
+//! callers keep such data encoded. CCITT fax and JBIG2 images decode on their own
+//! ([`decode_ccitt_within`], [`decode_jbig2_within`]), each spending from an allowance the
+//! caller shares across a run of images.
 //!
 //! The codecs themselves are `craft-stream-codecs`, re-exported here; this module adds Flate,
 //! the chain (stage order, limits across stages, strict and tolerant decoding) and its
@@ -24,7 +24,7 @@ use std::borrow::Cow;
 
 pub use craft_stream_codecs::{
     CcittParams, CodecError as FilterError, MAX_CCITT_COLUMNS, MAX_G4_COLUMNS, MAX_JBIG2_COLUMNS, MAX_JBIG2_PIXELS, Params, SharedJbig2,
-    decode_ccitt_within, encode_g4, encode_jbig2, encode_jbig2_generic, encode_jbig2_shared,
+    decode_ccitt_within, decode_jbig2_within, encode_g4, encode_jbig2, encode_jbig2_generic, encode_jbig2_shared,
 };
 use craft_stream_codecs::{Failure, Step, pay};
 use craft_stream_codecs::{ascii85, asciihex, lzw, predictor, runlength};
