@@ -63,6 +63,12 @@ impl FilterBy {
         FilterBy::Artboard,
         FilterBy::Group,
     ];
+
+    /// The type the filter uses when `by` is not among `offered`: `by` itself when offered, else the
+    /// first offered type in [`ALL`](Self::ALL) order, or `by` when nothing is offered.
+    pub(crate) fn among(self, offered: &[FilterBy]) -> FilterBy {
+        if offered.contains(&self) { self } else { Self::ALL.into_iter().find(|by| offered.contains(by)).unwrap_or(self) }
+    }
 }
 
 /// A layer kind the Kind filter toggles.
@@ -584,6 +590,8 @@ pub struct LayerFilterBar<'a> {
     /// text selected, so typing replaces it.
     #[prop]
     focus_name: bool,
+    /// The filter types the type select offers, in [`FilterBy::ALL`] order.
+    types: Vec<FilterBy>,
 }
 
 /// What [`LayerFilterBar::show`] returns.
@@ -617,29 +625,45 @@ struct FindName {
 impl<'a> LayerFilterBar<'a> {
     /// The bar editing `filter`.
     pub fn new(filter: Bind<'a, LayerFilter>) -> Self {
-        Self { filter, blend_modes: &[], focus_name: false }
+        Self { filter, blend_modes: &[], focus_name: false, types: FilterBy::ALL.to_vec() }
+    }
+
+    /// The filter types the type select offers (default: all of [`FilterBy::ALL`]), listed in the
+    /// order `FilterBy` declares them whatever the order given. A filter whose type is not offered
+    /// shows and uses the first offered type, and reports that type as an edit. An empty list
+    /// draws no bar.
+    pub fn filter_types(mut self, types: impl Into<Vec<FilterBy>>) -> Self {
+        let given = types.into();
+        self.types = FilterBy::ALL.into_iter().filter(|by| given.contains(by)).collect();
+        self
     }
 
     /// Draws the bar on one row of the available width.
     pub fn show(self, ui: &mut Ui) -> LayerFilterOutput {
-        let Self { mut filter, blend_modes, focus_name } = self;
+        let Self { mut filter, blend_modes, focus_name, types: offered } = self;
+        if offered.is_empty() {
+            return LayerFilterOutput { response: ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover()), changed: false, edit: None };
+        }
         let words = Env::of(ui).words::<LayerFilterWords>();
         let size = ControlSize::Sm;
         let mut edit = None;
         let row = Row::new().show(ui, |ui, cx| {
             let select_name = std::mem::replace(&mut cx.memory::<FindName>().select, focus_name);
             let Some(Mixed::Same(current)) = filter.reborrow().read(cx) else { return };
+            let stored = current;
+            let mut current = stored.clone();
+            current.by = current.by.among(&offered);
             let mut next = current.clone();
             if focus_name {
-                next.by = FilterBy::Name;
+                next.by = FilterBy::Name.among(&offered);
             }
-            let types: Vec<Entry<FilterBy>> = FilterBy::ALL.into_iter().map(|by| Entry::new(by, type_label(by, &words).clone())).collect();
+            let types: Vec<Entry<FilterBy>> = offered.iter().copied().map(|by| Entry::new(by, type_label(by, &words).clone())).collect();
             let picked = Select::new(words.filter_type.clone(), Bind::given(next.by), &types).size(size).show(ui);
             if let Some(by) = picked.value() {
                 next.by = *by;
             }
             // Controls follow the type picked before this pass; a find shows the Name field at once.
-            let shown = if focus_name { FilterBy::Name } else { current.by };
+            let shown = if focus_name { next.by } else { current.by };
             match shown {
                 FilterBy::Kind => {
                     let kinds = [
@@ -710,9 +734,9 @@ impl<'a> LayerFilterBar<'a> {
                 // The selected layers pick the artboards; Group lists every group.
                 FilterBy::Artboard | FilterBy::Group => {}
             }
-            if next != current {
+            if next != stored {
                 let name: std::sync::Arc<str> = std::sync::Arc::from(words.filter_type.as_str());
-                let event = EditEvent::set(Mixed::Same(current), next, name, None);
+                let event = EditEvent::set(Mixed::Same(stored), next, name, None);
                 filter.reborrow().write(cx, &event);
                 edit = Some(event);
             }

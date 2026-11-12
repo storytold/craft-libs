@@ -38,7 +38,7 @@ use footer::show_footer;
 use menu::{OpenMenu, RowMenu, show_row_menus};
 use std::marker::PhantomData;
 
-use super::filter::{LayerFilter, LayerFilterBar};
+use super::filter::{FilterBy, LayerFilter, LayerFilterBar};
 use super::options::LayersSettings;
 use super::rows::BlendRows;
 use super::thumbs::LayerThumb;
@@ -169,6 +169,7 @@ pub struct LayersPanel<'a, T: LayerTree> {
     visibility_key: Option<craft_keymap::Chord>,
     blend_rows: bool,
     filter_bar: bool,
+    filter_types: Vec<FilterBy>,
     find_name: bool,
     row_menu: Option<Box<RowMenu<'a, T::Id>>>,
     trailing: Option<Box<dyn TrailingCell<T::Id> + 'a>>,
@@ -213,6 +214,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             visibility_key: None,
             blend_rows: true,
             filter_bar: true,
+            filter_types: FilterBy::ALL.to_vec(),
             find_name: false,
             row_menu: None,
             trailing: None,
@@ -269,6 +271,14 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
         self
     }
 
+    /// The filter types the filter bar offers (default: all of [`FilterBy::ALL`]), listed in the order `FilterBy` declares
+    /// them. A filter whose type is not offered falls back to the first offered type: the bar shows it, the rows are
+    /// listed as if it were chosen, and the correction is a [`LayersEvent::Filter`]. An empty list draws no bar.
+    pub fn filter_types(mut self, types: impl Into<Vec<FilterBy>>) -> Self {
+        self.filter_types = types.into();
+        self
+    }
+
     /// Find Layers (PhotoCraft's Select › Find Layers): this pass the filter bar switches to Name and its field takes
     /// the focus with its text selected, so typing replaces it. A hidden filter bar stays hidden and takes no focus.
     pub fn focus_filter_name(mut self) -> Self {
@@ -318,6 +328,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             visibility_key,
             blend_rows,
             filter_bar,
+            filter_types,
             find_name,
             row_menu,
             trailing,
@@ -358,20 +369,32 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
                     }
                 };
                 let before = held(&mut filter, stack);
-                if filter_bar && settings.show_filters {
+                if filter_bar && settings.show_filters && !filter_types.is_empty() {
                     let modes = tree.blend_modes(false, &before.mode);
                     match filter.as_mut() {
                         Some(bind) => {
-                            let out = LayerFilterBar::new(bind.reborrowed()).blend_modes(&modes).focus_name(find_name).show(ui);
+                            let out = LayerFilterBar::new(bind.reborrowed())
+                                .filter_types(filter_types.as_slice())
+                                .blend_modes(&modes)
+                                .focus_name(find_name)
+                                .show(ui);
                             events.borrow_mut().extend(out.edit.map(LayersEvent::Filter));
                         }
                         None => {
                             let own = &mut stack.memory::<Session<T::Id>>().filter;
-                            let _ = LayerFilterBar::new(Bind::bound(own)).blend_modes(&modes).focus_name(find_name).show(ui);
+                            let _ = LayerFilterBar::new(Bind::bound(own))
+                                .filter_types(filter_types.as_slice())
+                                .blend_modes(&modes)
+                                .focus_name(find_name)
+                                .show(ui);
                         }
                     }
                 }
-                *current.borrow_mut() = held(&mut filter, stack);
+                let mut listed = held(&mut filter, stack);
+                if !filter_types.is_empty() {
+                    listed.by = listed.by.among(&filter_types);
+                }
+                *current.borrow_mut() = listed;
                 if blend_rows {
                     let properties = tree.properties();
                     let modes =

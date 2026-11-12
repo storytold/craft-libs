@@ -124,3 +124,31 @@ fn find_layers_puts_the_caret_in_the_name_field_with_its_text_selected() {
     assert_eq!(rig.filter.borrow().name, "pine", "the typed text replaces the old");
     assert_eq!(rig.rows(), ["Pine"]);
 }
+
+/// A panel offering Kind and Name lists only those two in the type select, and a filter set to Artboard falls back to
+/// Kind, reported as a filter event so the app stores it.
+#[trial]
+fn the_type_select_lists_only_the_offered_types() {
+    let tree = Rc::new(RefCell::new(FakeLayers::boards()));
+    let mut start = LayerFilter::default();
+    start.by = FilterBy::Artboard;
+    let filter = Rc::new(RefCell::new(start));
+    let (shown, by) = (Rc::clone(&tree), Rc::clone(&filter));
+    let mut fixture = Fixture::new(move |ui| {
+        let tree = shown.borrow();
+        let mut filter = by.borrow_mut();
+        let _ = LayersPanel::new(&*tree).filter(Bind::bound(&mut *filter)).filter_types([FilterBy::Name, FilterBy::Kind]).show(ui);
+    });
+    fixture.room(ONE_PANEL);
+    fixture.settle();
+    assert_eq!(filter.borrow().by, FilterBy::Kind, "the stored type falls back to the first offered");
+    let select = fixture.by_label("Filter type").expect("the type select is shown");
+    fixture.click(&select);
+    fixture.idle(3);
+    assert!(fixture.by_label("Name").is_some(), "Name is offered");
+    for hidden in ["Mode", "Effect", "Artboard", "Group"] {
+        assert!(fixture.by_label(hidden).is_none(), "{hidden} is not offered");
+    }
+    let rows = BOARDS.iter().filter(|label| fixture.by_label(label).is_some()).count();
+    assert_eq!(rows, BOARDS.len(), "the fallback Kind filter is empty, so every layer is listed");
+}

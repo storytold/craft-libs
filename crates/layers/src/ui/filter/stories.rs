@@ -36,6 +36,16 @@ fn by_name(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     show(ui, filter)
 }
 
+/// An app that offers three of the nine types.
+#[story(LayerFilterBar<'static>, covers = [], drive = Drive::Never, group = "Types", title = "Offering Kind, Name and Mode")]
+fn offered_types(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let filter = data.value("filter", LayerFilter { by: FilterBy::Mode, mode: String::from("multiply"), ..LayerFilter::default() });
+    let tree = FakeLayers::fifty();
+    let modes = tree.blend_modes(false, "normal");
+    let bar = LayerFilterBar::new(Bind::bound(filter)).filter_types([FilterBy::Kind, FilterBy::Name, FilterBy::Mode]).blend_modes(&modes);
+    StoryOutput::from(bar.show(ui))
+}
+
 #[story(LayerFilterBar<'static>, covers = [], drive = Drive::Never, group = "Types", title = "Filter by Effect")]
 fn by_effect(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let filter = data.value("filter", LayerFilter { by: FilterBy::Effect, effect: EffectKind::Stroke, ..LayerFilter::default() });
