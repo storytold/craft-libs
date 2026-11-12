@@ -131,7 +131,6 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         self.anchor_at_read = self.anchor;
         self.offset_at_read = self.offset;
         self.offset_x_at_read = self.offset_x;
-        let view = self.last.view.map_or(0.0, |view| view[3] - view[1]);
         if self.scrolls {
             let quiet = stage.is_peek() || crate::runtime::measure::active(&ctx);
             let taken = if self.own_wheel {
@@ -159,7 +158,6 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 self.offset += f64::from(by.y);
                 self.pass_on = (!quiet).then_some(shown);
             }
-            self.offset = self.offset.clamp(0.0, f64::from((self.last.extent - view).max(0.0)));
         }
     }
 
@@ -786,11 +784,6 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         }));
         cx.core.visible_rows = self.visible.clone();
         cx.core.gestures = Gestures::of(comp.items());
-    }
-
-    fn record(&mut self, stage: &mut MemoryStage, _: &Context, id: Id) {
-        let view = stage.shown::<View>(sub(id, "view"));
-        view.extent = self.content.y;
     }
 }
 

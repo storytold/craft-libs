@@ -161,7 +161,21 @@ fn a_reveal_that_keeps_the_groups_shows_the_closed_groups_row() {
     assert!(rig.fixture.by_label("Inner").is_none(), "Inner stays hidden");
 }
 
-/// Each document keeps its own scroll position: a short document shown between doesn't move the tall one's.
+/// How long a document stays out of view in the switch trials: past the time after which the runtime evicts what a
+/// list keeps only while it is shown.
+const AWAY: f64 = 1.0;
+
+impl Rig {
+    /// Shows the document at `doc` for a while, as an app does when the user switches to it.
+    fn switch_to(&mut self, doc: usize) {
+        self.shown.set(doc);
+        self.fixture.settle();
+        self.fixture.advance(AWAY).idle(4);
+    }
+}
+
+/// Each document keeps its own scroll position: a short document shown between, whose rows fit and whose offset stays
+/// at 0, doesn't move the tall one's, however long it shows.
 #[trial]
 fn each_document_keeps_its_scroll_position() {
     let (tree, Tall { inner, .. }) = tall();
@@ -172,11 +186,30 @@ fn each_document_keeps_its_scroll_position() {
     let at = rig.row("Inner");
     assert!(rig.in_view("Inner"), "the tall document is scrolled to Inner");
     for _ in 0..3 {
-        rig.shown.set(1);
-        rig.fixture.settle();
+        rig.switch_to(1);
         assert!(rig.in_view("Short Top"), "the short document shows from its top");
-        rig.shown.set(0);
-        rig.fixture.settle();
+        rig.switch_to(0);
+        assert_eq!(rig.row("Inner"), at, "the tall document shows again where it was left");
+    }
+}
+
+/// The same with the short document shown first: the tall one, scrolled after it, keeps its place across switches and
+/// the short one keeps showing from its top.
+#[trial]
+fn a_document_scrolled_after_a_short_one_keeps_its_place() {
+    let (tree, Tall { inner, .. }) = tall();
+    let mut rig = rig(vec![tree, short()]);
+    rig.switch_to(1);
+    assert!(rig.in_view("Short Top"), "the short document shows from its top");
+    rig.switch_to(0);
+    rig.select(inner);
+    rig.reveal(inner, Groups::Open);
+    rig.fixture.settle();
+    let at = rig.row("Inner");
+    for _ in 0..3 {
+        rig.switch_to(1);
+        assert!(rig.in_view("Short Top"), "the short document shows from its top");
+        rig.switch_to(0);
         assert_eq!(rig.row("Inner"), at, "the tall document shows again where it was left");
     }
 }

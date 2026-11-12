@@ -81,7 +81,6 @@ struct Scrolled {
 
 #[derive(Clone, Default)]
 struct View {
-    extent: f32,
     view: Option<[f32; 4]>,
 }
 
