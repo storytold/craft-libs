@@ -1693,6 +1693,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `fn shows_label(&self) -> bool`. Whether this instance paints its label as visible text; `SHOWS_LABEL` unless an instance prop decides, as
   - `fn paint_outset(_tokens: &crate::style::UiTokens) -> f32`. How far the component paints outside its rect by design, in points (a graph node's ports sit on its edge).
   - `fn style(cx: &StyleCx<'_>, key: Self::StyleKey) -> Self::Style`. Pure function of the resolved context and the key.
+  - `fn padding(&self, _rect: Rect, style: &Self::Style) -> craft_behavior::Insets`. The insets from `rect` to the content rect where the component is shown: the style's padding. A component
   - `fn measure(&mut self, _cx: &MeasureCx<'_, Self>) -> Vec2`. Content size only; the pipeline adds padding and minimum size.
   - `fn fills(&self) -> Option<craft_behavior::Axis>`. The axis along which the component takes all the room the flow offers when that is more than it measured,
   - `fn cut_first(&self) -> bool`. Whether the content is made to be cut where it does not fit: an elided line or a path. In a row too short for
@@ -2215,6 +2216,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn header_part(&mut self, edge: crate::contract::HeaderEdge, part: impl Into<PartRef>, shape: impl Into<HitShape>) -> PartBuilder<'_>`. Declares a part in the header slot at `edge`. Its stop sits where the part sits: at the start edge before the
   - `pub fn rect_of(&self, key: &C::Key) -> Option<Rect>`. The rect of the item `key` this pass, in the coordinates the item step lays rows out in (a transformed
   - `pub fn offset(&self) -> craft_behavior::ScrollPos`. How far the rows are scrolled this pass.
+  - `pub fn rows_view(&self) -> Option<Rect>`. Where the rows show this pass, less the scroll bar while it shows. Content the collection shows over its rows
   - `pub fn hovered(&self) -> bool`. Last pass's pointer-over state of this component, so `parts` can register hover-revealed parts.
   - `pub fn focus_visible(&self) -> bool`. Last pass's focus-visible state of this component.
   - `pub fn part(&mut self, part: impl Into<PartRef>, shape: impl Into<HitShape>) -> PartBuilder<'_>`. Declares a part; a repeated part is named with its index: `cx.part(POINT.at(id), shape)`.
@@ -2589,7 +2591,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub const fn elide(mut self) -> Self`. Cuts the text to one row with an ellipsis at the end.
   - `pub fn full_text(&self) -> String`. The text of every run, joined.
 - `craft_ui::primitives::Draw`: `pub struct Draw<'a>`. The content-paint API `PaintUi::draw` gives.
-  - `pub fn text(&self, rect: Rect, run: &TextRun<'_>) -> TextLayout`. Lays `run` out in `rect`'s width and paints it at the reading start of `rect`. A single line is centred
+  - `pub fn text(&self, rect: Rect, run: &TextRun<'_>) -> TextLayout`. Lays `run` out in `rect`'s width and paints it placed in `rect`'s width by the run's alignment (Start at the
   - `pub fn text_on_centre_line(&self, rect: Rect, run: &TextRun<'_>) -> TextLayout`. Paints a one-line `run` as `text` does, with the middle of its lowercase letters (the x-height) on the middle
   - `pub fn doc(&self, rect: Rect, text: &DocText<'_>) -> TextLayout`. Lays `text` out in `rect`'s width and paints it top aligned, its block placed in `rect` by `text.align` (Start
   - `pub fn layout(&self, run: &TextRun<'_>, max_width: f32) -> TextLayout`. Lays `run` out in `max_width` without painting it: the one text layout path for painters that measure before
@@ -2755,7 +2757,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn role(mut self, role: TypeRole) -> Self`. Sets the type role.
   - `pub fn color(mut self, color: StyleColor) -> Self`. Sets the colour.
   - `pub fn wrap(mut self, wrap: Wrap) -> Self`. Sets how the run fits its room.
-  - `pub fn align(mut self, align: HAlign) -> Self`. Sets where the lines sit within the run's width.
+  - `pub fn align(mut self, align: HAlign) -> Self`. Sets where the lines sit within the run's width, and where `Draw::text` places the run in its rect.
   - `pub fn rotated(mut self, radians: f32) -> Self`. Sets the angle the run is painted at, in radians clockwise about the top-left corner of its layout.
   - `pub fn elide(self) -> Self`. Cuts the run with an ellipsis at the end.
   - `pub fn full_text(&self) -> String`. The text of every span, joined.
