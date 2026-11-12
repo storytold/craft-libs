@@ -787,7 +787,8 @@ mod tests {
         text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
     }
 
-    /// Digests of every name's outlines as the string dispatch on `main` (fc35ad67) built them, so
+    /// Digests of every name's outlines as the string dispatch built them (craft-libs 2b35d243;
+    /// DeckCraft's fc35ad67 gave other digests for curvedRightArrow and curvedDownArrow), so
     /// this refactor is proven output-identical: any changed outline fails here.
     const GOLDEN: [(&str, u64); 38] = [
         ("lineInv", 0xfaffc13f44a93375),
@@ -799,10 +800,10 @@ mod tests {
         ("circularArrow", 0x2dddaea620df13d1),
         ("leftCircularArrow", 0x65ff0bf526b9a076),
         ("leftRightCircularArrow", 0x986c81c2a50ea9b9),
-        ("curvedRightArrow", 0xb0a5dc797a9f4d7e),
+        ("curvedRightArrow", 0xad9a599cf4033315),
         ("curvedLeftArrow", 0x83fbcb519025edc5),
         ("curvedUpArrow", 0x04beb7a91bee8639),
-        ("curvedDownArrow", 0x722b0ba43cf669f1),
+        ("curvedDownArrow", 0x0a521ebab5b5dfa1),
         ("swooshArrow", 0xf6712de3201f217a),
         ("callout1", 0x069eafd1a6d4007f),
         ("callout2", 0xd65e3684f4a492da),
