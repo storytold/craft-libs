@@ -236,3 +236,54 @@ fn the_leading_text_takes_its_double_click_and_a_part_click_tells_whether_its_ro
     fixture.click_at(options).settle();
     assert_eq!(was_lead(&seen), Some(true), "the press moved the lead there, so the next click finds it the lead");
 }
+
+/// A click on a row's "More" button opens the host's context menu at the button; the button stays shown while the
+/// menu is open with the pointer away from the row; the menu's Rename opens that row's rename field.
+#[trial]
+fn the_row_menu_opens_the_host_menu_keeps_its_button_and_renames_the_row() {
+    use craft_ui::contract::{Entry, Role};
+    use craft_ui::menu::Menu;
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let held = seen.clone();
+    let menu_row = Rc::new(RefCell::new(None::<usize>));
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key).with_text(|key| std::borrow::Cow::Borrowed(NAMES[*key]));
+        let out = List::new("Artboards").rename(true).row_menu().show_items(ui, &source, &mut |key, _| ListRow::new(NAMES[*key]));
+        for event in &out.events {
+            if let CollectionEvent::ContextMenu(request) = event {
+                *menu_row.borrow_mut() = Some(request.key);
+            }
+        }
+        let row = *menu_row.borrow();
+        if let Some(row) = row {
+            let entries = [Entry::new(String::from("rename"), "Rename"), Entry::new(String::from("delete"), "Delete")];
+            let menu = Menu::context("Artboard", &out.response).pick(ui, &entries);
+            if menu.picked.as_deref() == Some("rename") {
+                request_rename(ui.ctx(), out.response.id, &row);
+            }
+            if menu.closed.is_some() {
+                *menu_row.borrow_mut() = None;
+            }
+        }
+        held.borrow_mut().extend(out.events);
+    });
+    fixture.room(Vec2::new(300.0, 200.0));
+    fixture.settle();
+    let button = fixture.by_label(&format!("More ({})", NAMES[0])).expect("the row has its menu button").center();
+    fixture.click_at(button).settle();
+    assert!(!fixture.by_role(Role::MENU).is_empty(), "the host's menu opens from the button");
+    let away = fixture.by_label(NAMES[2]).expect("the last row shows").rect.center_bottom() + Vec2::new(0.0, 40.0);
+    fixture.frame(vec![craft_ui::testing::pointer::moved(away)]);
+    let shapes = fixture.frame_shapes();
+    assert!(drawn_at(&shapes, button) > 0, "the button stays shown while its menu is open");
+    let rename = fixture.by_label("Rename").expect("the menu has Rename");
+    fixture.click(&rename).settle();
+    assert!(
+        seen.borrow()
+            .iter()
+            .any(|event| matches!(event, CollectionEvent::Rename(EditEvent::Begin { before: Mixed::Same(rename), .. }) if rename.key == 0)),
+        "Rename opens the row's rename field: {:?}",
+        seen.borrow()
+    );
+}

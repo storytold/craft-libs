@@ -187,6 +187,7 @@ impl ListRow<'_> {
             if self.pressed.is_none() {
                 self.pressed.clone_from(&facts.pressed);
             }
+            self.menu_open |= facts.menu_open;
         }
     }
 

@@ -541,6 +541,7 @@ where
         toggles: Vec::new(),
         toggle_keys: Vec::new(),
         pressed: None,
+        menu_open: false,
     };
     let installed = crate::runtime::env::Env::install_for(
         ui,

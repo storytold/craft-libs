@@ -168,7 +168,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             let rect = self.screen(layout, at.rect, row, at.offset, at.rtl);
             crate::runtime::keys::request_context(&cx.core.ctx, cx.core.id, rect);
             let place = self.on_screen(rect.left_bottom());
-            self.events.push(CollectionEvent::ContextMenu(ContextMenuRequest { key: self.source.key(row), at: place, column: None, part: None }));
+            self.ask_menu(ContextMenuRequest { key: self.source.key(row), at: place, column: None, part: None });
         }
     }
 

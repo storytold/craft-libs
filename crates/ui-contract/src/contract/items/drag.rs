@@ -169,6 +169,9 @@ pub(super) struct Drags<K> {
     pub(super) slow: Option<SlowClick<K>>,
     /// The row a press an item part won landed on, and whether the row held the lead when the press began.
     pub(super) part_press: Option<(K, bool)>,
+    /// The row the collection last asked a menu for: it shows as the menu's row while a menu hung from the collection
+    /// is open.
+    pub(super) menu: Option<K>,
 }
 
 /// A press that opens a rename when it ends as a click on the item's label and no second press follows within the
@@ -198,6 +201,7 @@ impl<K> Default for Drags<K> {
             marquee: None,
             slow: None,
             part_press: None,
+            menu: None,
         }
     }
 }

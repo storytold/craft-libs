@@ -150,6 +150,8 @@ pub struct ListRow<'a> {
     pub(super) renaming: bool,
     /// Where the collection holds a press on the row, from its row state: the toggle cell it acts on shows it.
     pub(super) pressed: Option<RowPressed>,
+    /// The collection asked for this row's menu and it is open, from its row state: a revealed part stays shown.
+    pub(super) menu_open: bool,
     /// The thumbnails that drag instead of the row, each with what starts its drag session.
     pub(super) drags: Vec<(ThumbTarget, ThumbPayload)>,
     /// The icon or thumbnails come before the disclosure column instead of after it.
@@ -197,10 +199,10 @@ pub struct ListRow<'a> {
     /// replaces the row's icon; thumbnails replace it in turn.
     #[prop(boxed = "FnOnce(&ContentPainterCx, Rect) + 'a", name = "lead_painter")]
     pub(super) lead_paint: Option<LeadPaintFn<'a>>,
-    pub(super) thumb: ThumbSize,
-    pub(super) thumb_aspect: ThumbAspect,
     /// The leading text and the widest text its slot is sized for (`lead_text`).
     pub(super) lead_text: Option<(Label, Label)>,
+    pub(super) thumb: ThumbSize,
+    pub(super) thumb_aspect: ThumbAspect,
     pub(super) first: Option<ThumbPaint<'a>>,
     pub(super) extras: Vec<Thumb<'a>>,
     /// The thumbnail the row's editing is aimed at: framed with corner brackets whether or not the row is selected.
@@ -224,8 +226,8 @@ pub struct ListRow<'a> {
     pub(super) check: Option<bool>,
     pub(super) event: Option<RowEvent>,
     pub(super) open: Option<OpenChange<()>>,
-    /// The row's menu button was clicked: where the menu hangs.
-    pub(super) menu: Option<egui::Pos2>,
+    /// The row's menu button was clicked: its rect, where the menu hangs.
+    pub(super) menu: Option<Rect>,
     pub(super) label_rect: Rect,
 }
 
@@ -251,6 +253,7 @@ impl<'a> ListRow<'a> {
             rule: false,
             renaming: false,
             pressed: None,
+            menu_open: false,
             drags: Vec::new(),
             leading_first: false,
             detail: None,
@@ -269,10 +272,10 @@ impl<'a> ListRow<'a> {
             texts: Vec::new(),
             icon: None,
             lead_paint: None,
+            lead_text: None,
             thumb: ThumbSize::None,
             thumb_aspect: ThumbAspect::SQUARE,
             first: None,
-            lead_text: None,
             extras: Vec::new(),
             target: None,
             trailing: Vec::new(),
@@ -310,6 +313,7 @@ impl<'a> ListRow<'a> {
     pub fn state(mut self, row: RowState) -> Self {
         self.renaming = row.renaming;
         self.pressed = row.pressed;
+        self.menu_open |= row.menu_open;
         self.striped = row.striped;
         self.highlight |= row.emphasized;
         self

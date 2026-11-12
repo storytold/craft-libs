@@ -5,9 +5,10 @@ use super::{
     EventLevel, EventList, EventLog, EventLogState, Finding, Findings, FindingsList, FindingsSummary, List, ListRow, LogEvent, Severity, UndoList,
     UndoMark, UndoRows,
 };
-use crate::contract::{Bind, Show as _, ShowCollection as _, WordSetCx as _};
+use crate::contract::{Bind, CollectionEvent, Entry, Show as _, ShowCollection as _, WordSetCx as _, request_rename};
+use crate::menu::Menu;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
-use craft_behavior::{DisplayOrder, ItemSource};
+use craft_behavior::{DisplayOrder, ItemSource, Selection};
 use egui::Ui;
 
 /// A list of names keyed by position.
@@ -45,6 +46,39 @@ fn list(ui: &mut Ui, count: usize) -> StoryOutput {
 #[story(List<'static, usize>, covers = [Default, Many], drive = Drive::Never)]
 fn list_many(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     list(ui, 40)
+}
+
+/// Rows with the "More" button of `row_menu`, shown on the hovered and the selected row: a click on it opens the host's
+/// row menu, whose Rename opens the row's rename field.
+#[story(List<'static, usize>, covers = [], drive = Drive::Never)]
+fn list_row_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let names = names(4);
+    let out = List::<usize>::new("Layers")
+        .rename(true)
+        .row_menu()
+        .selection(Bind::bound(data.value("selection", Selection::single(1_usize))))
+        .show_items(ui, &Names(&names), &mut |key, _| ListRow::new(names[*key].clone()));
+    let menu_row = data.value("menu", None::<usize>);
+    for event in &out.events {
+        if let CollectionEvent::ContextMenu(request) = event {
+            *menu_row = Some(request.key);
+        }
+    }
+    if let Some(row) = *menu_row {
+        let entries = [
+            Entry::new(String::from("rename"), "Rename"),
+            Entry::new(String::from("duplicate"), "Duplicate"),
+            Entry::new(String::from("delete"), "Delete"),
+        ];
+        let menu = Menu::context("Layer", &out.response).pick(ui, &entries);
+        if menu.picked.as_deref() == Some("rename") {
+            request_rename(ui.ctx(), out.response.id, &row);
+        }
+        if menu.closed.is_some() {
+            *menu_row = None;
+        }
+    }
+    out.into()
 }
 
 #[story(List<'static, usize>, covers = [One], drive = Drive::Never)]

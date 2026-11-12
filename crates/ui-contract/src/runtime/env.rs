@@ -240,6 +240,9 @@ pub struct ItemFacts {
     /// Where the collection holds a press on the row (`RowState::pressed`).
     #[doc(hidden)]
     pub pressed: Option<crate::contract::RowPressed>,
+    /// The row's menu is open (`RowState::menu_open`).
+    #[doc(hidden)]
+    pub menu_open: bool,
 }
 
 impl Scoped {

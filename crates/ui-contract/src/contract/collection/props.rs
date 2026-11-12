@@ -585,4 +585,7 @@ pub struct RowState {
     pub hovered: bool,
     /// The collection holds a press on the row, which the item shows on the part it acts on.
     pub pressed: Option<RowPressed>,
+    /// The collection asked for this row's menu and a menu hung from the collection is open: the row keeps its menu
+    /// button shown.
+    pub menu_open: bool,
 }

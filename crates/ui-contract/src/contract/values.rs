@@ -535,9 +535,10 @@ pub trait ItemOutput<E>: Outcome {
         None
     }
 
-    /// The item asks for its menu from one of its parts (a row's "More" button): where the menu hangs, in the item's
-    /// layer. The collection reports it as `CollectionEvent::ContextMenu`, as it does a secondary click on the row.
-    fn menu_request(&self) -> Option<egui::Pos2> {
+    /// The item asks for its menu from one of its parts (a row's "More" button): the part's rect, in the item's layer.
+    /// The collection makes the context request a `Trigger::Context` opener reads at that rect and reports
+    /// `CollectionEvent::ContextMenu` at its bottom start corner, as it does for the Menu key.
+    fn menu_request(&self) -> Option<egui::Rect> {
         None
     }
 

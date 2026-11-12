@@ -44,6 +44,7 @@ impl ListRow<'_> {
                     let shown = !*revealed
                         || cx.response.hovered()
                         || selected
+                        || self.menu_open
                         || cx.part_state(key).flags.contains(Flags::FOCUSED)
                         || item_part_open(&cx.ctx, cx.id, key);
                     if !shown {

@@ -86,13 +86,9 @@ impl<'r, C: Collection> ItemsHooks<'_, 'r, C> {
             if let Some(ask) = output.open_request() {
                 self.events.push(CollectionEvent::Open(OpenChange { key: key.clone(), open: ask.open, all: ask.all }));
             }
-            if let Some(at) = output.menu_request() {
-                self.events.push(CollectionEvent::ContextMenu(ContextMenuRequest {
-                    key: key.clone(),
-                    at: self.on_screen(at),
-                    column: None,
-                    part: None,
-                }));
+            if let Some(rect) = output.menu_request() {
+                crate::runtime::keys::request_context(ctx, id, rect);
+                self.ask_menu(ContextMenuRequest { key: key.clone(), at: self.on_screen(rect.left_bottom()), column: None, part: None });
             }
             if let Some(event) = output.into_event() {
                 self.events.push(CollectionEvent::Item(key.clone(), event));

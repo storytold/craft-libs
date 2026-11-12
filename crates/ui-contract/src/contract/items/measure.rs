@@ -113,6 +113,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
                 toggles: toggles.clone(),
                 toggle_keys: Vec::new(),
                 pressed: None,
+                menu_open: false,
             };
             let installed = Env::install_for(
                 ui,

@@ -320,7 +320,7 @@ impl Component for ListRow<'_> {
             let key = TRAILING.at(u64::from(part.0));
             if let Some(source) = cx.part_activated(key) {
                 if *part == TrailingPart::MENU {
-                    self.menu = Some(cx.part(key).rect.left_bottom());
+                    self.menu = Some(cx.part(key).rect);
                 } else {
                     let clicks = part_clicks(source, cx.part(key).press.phase);
                     let was_lead = match (source, &self.pressed) {

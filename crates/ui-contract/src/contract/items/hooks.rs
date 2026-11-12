@@ -440,6 +440,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         // The pointer counts as over a row only while the sensing pass puts it on this collection, so a popup or another
         // widget above it takes the hover as it does for the rows' parts.
         let hover_at = crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id)).hover.and(ctx.pointer_latest_pos());
+        let menu_open = self.drags.menu.is_some() && crate::contract::overlay::container_open::opened_from(&ctx, cx.core.id);
         let place_rows = |ui: &mut Ui| {
             // The items of a collection whose items are members of its run share one `Ui` under the collection's env.
             let members_ui = C::MEMBERS.then(|| {
@@ -473,6 +474,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                     open: self.source.has_children(at) && self.source.open(at),
                     hovered: hover_at.is_some_and(|pos| row.contains(pos)),
                     pressed: self.pressed.as_ref().filter(|(held, _)| *held == at).map(|(_, pressed)| pressed.clone()),
+                    menu_open: self.drags.menu.as_ref() == Some(&key) && menu_open,
                     ..RowState::default()
                 };
                 let mut flags = crate::style::Flags::empty();
@@ -551,6 +553,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                                     toggles: toggle_keys,
                                     toggle_keys: self.header.toggle_keys(),
                                     pressed: state.pressed.clone(),
+                                    menu_open: state.menu_open,
                                 }));
                             }),
                         );
@@ -601,13 +604,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 if let Some(ask) = out.open_request() {
                     self.events.push(CollectionEvent::Open(OpenChange { key: key.clone(), open: ask.open, all: ask.all }));
                 }
-                if let Some(at) = out.menu_request() {
-                    self.events.push(CollectionEvent::ContextMenu(ContextMenuRequest {
-                        key: key.clone(),
-                        at: self.on_screen(at),
-                        column: None,
-                        part: None,
-                    }));
+                if let Some(rect) = out.menu_request() {
+                    crate::runtime::keys::request_context(&ctx, id, rect);
+                    self.ask_menu(ContextMenuRequest { key: key.clone(), at: self.on_screen(rect.left_bottom()), column: None, part: None });
                 }
                 if let Some(event) = out.into_event() {
                     self.events.push(CollectionEvent::Item(key.clone(), event));
