@@ -25,6 +25,7 @@ mod canvas;
 mod images;
 pub mod network;
 pub mod path;
+pub mod rest;
 #[cfg(test)]
 mod tests;
 

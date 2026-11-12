@@ -10,16 +10,7 @@ repository.workspace = true
 [lints]
 workspace = true
 
-[features]
-# `outlook`: compressed RTF ([MS-OXRTFCP]) and the text or encapsulated HTML ([MS-OXRTFEX]) of a
-# mail item's body.
-outlook = ["dep:craft-mime"]
-
 [dependencies]
-# Character sets by Windows code page number, for the `outlook` module.
-craft-mime = { workspace = true, optional = true }
+craft-codepage = { workspace = true }
 # The East Asian multibyte code pages (932, 936, 949, 950).
 encoding_rs = { workspace = true }
-
-[dev-dependencies]
-proptest = { workspace = true }
