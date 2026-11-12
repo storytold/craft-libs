@@ -18,9 +18,9 @@ app reads or writes them.
   channel pressure, polyphonic pressure or program change.
 - `Sequence`: the notes and channel events of one track, with sorting, range queries and
   duplicate removal.
-- `Smf`: the file: its format, its tracks (`SmfTrack`: a name, an instrument name and a
-  `Sequence`), the file-wide tempo, meter, marker and key-signature lists, and `end`, the last
-  tick any track reaches (its End of Track). `Smf::default()` is an empty format-1 file.
+- `Smf`: the file: its format, its tracks (`SmfTrack`: a name and a `Sequence`) and the
+  file-wide tempo, meter, marker and key-signature lists. `Smf::default()` is an empty format-1
+  file.
 
 All ticks are at `PPQ` (960) per quarter note, whatever the file's division. The `serde` feature
 derives `Serialize` and `Deserialize` on `Note`, `CtrlEvent`, `CtrlKind` and `Sequence`.
@@ -47,8 +47,9 @@ without running status, a system real-time status in a track) is a `MidiError`, 
 
 ## Reading a damaged file
 
-`read_smf_lenient(bytes)` returns the `Smf` and a list of warnings (at most `MAX_WARNINGS`, 32)
-instead of failing on damage after the header. Only a file that is not a Standard MIDI File
+`read_smf_lenient(bytes)` returns a `LenientRead`: the `Smf`, a list of warnings (at most
+`MAX_WARNINGS`, 32), the Instrument Name of each track and `end`, the last tick any track
+reaches (its End of Track). It does not fail on damage after the header. Only a file that is not a Standard MIDI File
 (no `MThd`, a header cut short, an unusable division) is an error. Otherwise:
 
 - a header length beyond the file is ignored; an unknown format is read as format 1;
@@ -67,8 +68,7 @@ rules come from LoopCraft's reader.
 ## Writing
 
 `write_smf(&smf)` writes format 1 at 960 ticks per quarter note: a conductor track with tempos,
-meters, key signatures and markers, then one track per `SmfTrack` (with its name and instrument
-name when not empty). When `smf.format` is 0 it writes format 0: all of that in one track. Negative ticks are clamped to
+meters, key signatures and markers, then one track per `SmfTrack`. When `smf.format` is 0 it writes format 0: all of that in one track. Negative ticks are clamped to
 0 and data bytes to their MIDI ranges; a note-on velocity of 0 is written as 1. Notes of one
 pitch that overlap are trimmed so that the file reads back with the same starts, and of two that
 start together the longer is written. An invalid tempo, a meter denominator that is not a power

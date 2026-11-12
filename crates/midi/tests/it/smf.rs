@@ -62,14 +62,13 @@ fn round_trip() {
     let smf = Smf {
         format: 1,
         tracks: vec![
-            SmfTrack { name: "Piano".into(), instrument: String::new(), sequence: seq.clone() },
-            SmfTrack { name: "Bass ♪".into(), instrument: String::new(), sequence: Sequence { notes: vec![note(36, 100, 50)], ctrls: vec![] } },
+            SmfTrack { name: "Piano".into(), sequence: seq.clone() },
+            SmfTrack { name: "Bass ♪".into(), sequence: Sequence { notes: vec![note(36, 100, 50)], ctrls: vec![] } },
         ],
         tempos: vec![(0, 120.0), (3840, 90.0)],
         meters: vec![(0, 4, 4), (3840, 6, 8)],
         markers: vec![(0, "Intro".into()), (7680, "Verse".into())],
         key_sigs: vec![(0, -3, true), (3840, 2, false)],
-        end: 0,
     };
     let bytes = write_smf(&smf).unwrap();
     let back = read_smf(&bytes).unwrap();
@@ -119,11 +118,7 @@ fn write_rejects_bad_values() {
     let bad_meter = Smf { meters: vec![(0, 4, 3)], ..Default::default() };
     assert!(write_smf(&bad_meter).is_err());
     let huge_gap = Smf {
-        tracks: vec![SmfTrack {
-            name: String::new(),
-            instrument: String::new(),
-            sequence: Sequence { notes: vec![note(60, 0x1000_0000, 10)], ctrls: vec![] },
-        }],
+        tracks: vec![SmfTrack { name: String::new(), sequence: Sequence { notes: vec![note(60, 0x1000_0000, 10)], ctrls: vec![] } }],
         ..Default::default()
     };
     assert!(write_smf(&huge_gap).is_err());
@@ -348,7 +343,7 @@ proptest! {
             ctrls: vec![],
         };
         seq.remove_duplicates();
-        let smf = Smf { format: 1, tracks: vec![SmfTrack { name: "t".into(), instrument: String::new(), sequence: seq.clone() }], ..Default::default() };
+        let smf = Smf { format: 1, tracks: vec![SmfTrack { name: "t".into(), sequence: seq.clone() }], ..Default::default() };
         let back = read_smf(&write_smf(&smf).unwrap()).unwrap();
         // Overlapping same-pitch notes may re-pair, but count and starts survive.
         let got = back.tracks.first().map(|t| t.sequence.notes.clone()).unwrap_or_default();
@@ -370,7 +365,7 @@ fn writer_clamps_out_of_range_data_bytes() {
         seq.notes.push(Note { pitch: raw, velocity: 100, release_velocity: raw, channel: 0, start: 0, length: 960 });
         seq.ctrls.push(CtrlEvent { tick: 0, channel: 0, kind: CtrlKind::Cc(raw), value: 64 });
         seq.ctrls.push(CtrlEvent { tick: 0, channel: 0, kind: CtrlKind::PolyPressure(raw), value: 64 });
-        let smf = Smf { tracks: vec![SmfTrack { name: String::new(), instrument: String::new(), sequence: seq }], ..Smf::default() };
+        let smf = Smf { tracks: vec![SmfTrack { name: String::new(), sequence: seq }], ..Smf::default() };
         let back = read_smf(&write_smf(&smf).unwrap()).unwrap();
         let s = &back.tracks.last().unwrap().sequence;
         assert_eq!((s.notes[0].pitch, s.notes[0].release_velocity), (127, 127), "input {raw}");

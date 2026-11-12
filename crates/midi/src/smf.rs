@@ -18,8 +18,6 @@ const DEFAULT_RELEASE: u8 = 64;
 pub struct SmfTrack {
     /// Name from the first Sequence/Track Name meta event (empty if none).
     pub name: String,
-    /// Name from the first Instrument Name meta event (empty if none); written when not empty.
-    pub instrument: String,
     pub sequence: Sequence,
 }
 
@@ -38,15 +36,12 @@ pub struct Smf {
     pub markers: Vec<(i64, String)>,
     /// `(tick, sharps (+) / flats (-) -7..=7, is_minor)`.
     pub key_sigs: Vec<(i64, i8, bool)>,
-    /// The last tick any track reaches: its End of Track, or where its events stop. Set by the
-    /// readers; [`write_smf`] does not use it.
-    pub end: i64,
 }
 
 /// An empty format-1 file.
 impl Default for Smf {
     fn default() -> Self {
-        Smf { format: 1, tracks: Vec::new(), tempos: Vec::new(), meters: Vec::new(), markers: Vec::new(), key_sigs: Vec::new(), end: 0 }
+        Smf { format: 1, tracks: Vec::new(), tempos: Vec::new(), meters: Vec::new(), markers: Vec::new(), key_sigs: Vec::new() }
     }
 }
 
@@ -174,7 +169,7 @@ struct Globals {
 ///   chunk, VLQ longer than 4 bytes, data byte without running status, ...) returns an error.
 ///   [`read_smf_lenient`] reads such files as far as they make sense instead.
 pub fn read_smf(bytes: &[u8]) -> Result<Smf, MidiError> {
-    read(bytes, None)
+    read(bytes, None).map(|(smf, _)| smf)
 }
 
 /// The most warnings [`read_smf_lenient`] gives for one file.
@@ -197,10 +192,29 @@ pub const MAX_WARNINGS: usize = 32;
 /// - past [`MAX_TRACKS`] tracks the rest is left out;
 /// - lyrics are counted in a warning (they are not kept); a format-2 file gets a warning that its
 ///   tracks are read side by side.
-pub fn read_smf_lenient(bytes: &[u8]) -> Result<(Smf, Vec<String>), MidiError> {
+pub fn read_smf_lenient(bytes: &[u8]) -> Result<LenientRead, MidiError> {
     let mut warnings = Vec::new();
-    let smf = read(bytes, Some(&mut warnings))?;
-    Ok((smf, warnings))
+    let (smf, extra) = read(bytes, Some(&mut warnings))?;
+    Ok(LenientRead { smf, warnings, instruments: extra.instruments, end: extra.end })
+}
+
+/// What [`read_smf_lenient`] makes of a file.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct LenientRead {
+    pub smf: Smf,
+    /// What could not be read, in words; empty for a sound file.
+    pub warnings: Vec<String>,
+    /// The Instrument Name meta event of each of `smf.tracks` (empty where there is none).
+    pub instruments: Vec<String>,
+    /// The last tick any track reaches: its End of Track, or where its events stop.
+    pub end: i64,
+}
+
+/// What the reader finds beyond [`Smf`]: instrument names per kept track, and the end tick.
+struct Extra {
+    instruments: Vec<String>,
+    end: i64,
 }
 
 fn warn(warnings: &mut Option<&mut Vec<String>>, what: String) {
@@ -212,7 +226,7 @@ fn warn(warnings: &mut Option<&mut Vec<String>>, what: String) {
 }
 
 /// Strict (`warnings` is `None`): any damage is an error. Lenient: damage is a warning.
-fn read(bytes: &[u8], mut warnings: Option<&mut Vec<String>>) -> Result<Smf, MidiError> {
+fn read(bytes: &[u8], mut warnings: Option<&mut Vec<String>>) -> Result<(Smf, Extra), MidiError> {
     let lenient = warnings.is_some();
     let mut cur = Cursor { data: bytes, pos: 0, base: 0 };
     if cur.bytes(4).map_err(|_| MidiError::NotSmf)? != b"MThd" {
@@ -245,7 +259,7 @@ fn read(bytes: &[u8], mut warnings: Option<&mut Vec<String>>) -> Result<Smf, Mid
     let conv = TickConv::from_division(division, 12)?;
 
     let mut globals = Globals { tempos: Vec::new(), meters: Vec::new(), markers: Vec::new(), key_sigs: Vec::new() };
-    let mut tracks = Vec::new();
+    let (mut tracks, mut instruments) = (Vec::new(), Vec::new());
     let mut event_budget = MAX_EVENTS;
     let (mut end, mut seen, mut lyrics) = (0i64, 0usize, 0usize);
 
@@ -322,6 +336,7 @@ fn read(bytes: &[u8], mut warnings: Option<&mut Vec<String>>) -> Result<Smf, Mid
             }
         }
         tracks.push(read.track);
+        instruments.push(read.instrument);
     }
     if lyrics > 0 {
         warn(&mut warnings, format!("{lyrics} lyrics were left out"));
@@ -337,6 +352,7 @@ fn read(bytes: &[u8], mut warnings: Option<&mut Vec<String>>) -> Result<Smf, Mid
         && tracks.first().is_some_and(|t| t.sequence.notes.is_empty() && t.sequence.ctrls.is_empty() && (tracks.len() > 1 || t.name.is_empty()))
     {
         tracks.remove(0);
+        instruments.remove(0);
     }
 
     // Keep global lists ordered by tick (stable: file order within a tick).
@@ -345,7 +361,10 @@ fn read(bytes: &[u8], mut warnings: Option<&mut Vec<String>>) -> Result<Smf, Mid
     globals.markers.sort_by_key(|t| t.0);
     globals.key_sigs.sort_by_key(|t| t.0);
 
-    Ok(Smf { format, tracks, tempos: globals.tempos, meters: globals.meters, markers: globals.markers, key_sigs: globals.key_sigs, end })
+    Ok((
+        Smf { format, tracks, tempos: globals.tempos, meters: globals.meters, markers: globals.markers, key_sigs: globals.key_sigs },
+        Extra { instruments, end },
+    ))
 }
 
 /// Why a track's events stopped, in words for a warning.
@@ -376,6 +395,7 @@ fn close_note(open: &mut OpenNotes, notes: &mut Vec<Note>, channel: u8, pitch: u
 /// What [`read_track`] made of a track chunk: the track (its notes closed), and how its events ended.
 struct TrackRead {
     track: SmfTrack,
+    instrument: String,
     /// The tick the track's events reach (its End of Track, or where they stopped).
     end: i64,
     /// Whether an End of Track ended it, and the bytes up to and including it.
@@ -411,12 +431,12 @@ fn read_track(body: &[u8], base: usize, conv: TickConv, g: &mut Globals, budget:
         }
     }
     seq.sort();
-    let track = SmfTrack { name: name.unwrap_or_default(), instrument: instrument.unwrap_or_default(), sequence: seq };
+    let track = SmfTrack { name: name.unwrap_or_default(), sequence: seq };
     let (ended, stop) = match result {
         Ok(ended) => (ended, None),
         Err(e) => (false, Some(e)),
     };
-    TrackRead { track, end: tick, ended, used: cur.pos, stop, lyrics }
+    TrackRead { track, instrument: instrument.unwrap_or_default(), end: tick, ended, used: cur.pos, stop, lyrics }
 }
 
 /// Reads a track's events; `Ok(true)` when an End of Track ends them, `Ok(false)` when the data does.
@@ -681,8 +701,7 @@ fn trim_overlaps(notes: &[Note], ends: &mut [u64], dropped: &mut [bool]) {
 /// when [`Smf::format`] is 0.
 ///
 /// Track 1 is a conductor track holding tempos, meters, key signatures and markers; every
-/// [`SmfTrack`] follows as its own track, with its name and instrument name when they are not
-/// empty. Format 0 is one track holding all of that. Negative ticks are clamped to 0, data values are
+/// [`SmfTrack`] follows as its own track, with its name when it is not empty. Format 0 is one track holding all of that. Negative ticks are clamped to 0, data values are
 /// clamped to their MIDI ranges, and note-on velocity 0 is written as 1 (0 would mean
 /// note-off). At each tick note-offs are written before controllers, then note-ons.
 ///
@@ -713,9 +732,6 @@ pub fn write_smf(smf: &Smf) -> Result<Vec<u8>, MidiError> {
         let mut ev = Vec::new();
         if !track.name.is_empty() {
             ev.push(WEvent { tick: 0, order: 0, bytes: meta(0x03, track.name.as_bytes())? });
-        }
-        if !track.instrument.is_empty() {
-            ev.push(WEvent { tick: 0, order: 0, bytes: meta(0x04, track.instrument.as_bytes())? });
         }
         let notes = &track.sequence.notes;
         let mut ends: Vec<u64> = notes.iter().map(|n| clamp_tick(n.end()).max(clamp_tick(n.start).saturating_add(1))).collect();
@@ -805,14 +821,12 @@ mod tests {
             format: 1,
             tracks: vec![SmfTrack {
                 name: String::new(),
-                instrument: String::new(),
                 sequence: Sequence { notes: vec![mk(0, 1000), mk(100, 200), mk(1000, 100), mk(2000, 500), mk(2000, 900)], ..Sequence::default() },
             }],
             tempos: vec![],
             meters: vec![],
             markers: vec![],
             key_sigs: vec![],
-            end: 0,
         };
         let back = read_smf(&write_smf(&smf).unwrap()).unwrap();
         let mut got: Vec<(i64, i64)> = back.tracks.iter().flat_map(|t| t.sequence.notes.iter().map(|n| (n.start, n.length))).collect();
