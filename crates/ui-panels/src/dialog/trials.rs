@@ -170,3 +170,24 @@ fn a_dialog_opens_on_its_first_field_else_its_default_button() {
     assert_eq!(focus_on_open(false, true), Some("OK"), "without a field the default button takes it");
     assert_eq!(focus_on_open(false, false), None, "without either nothing takes it");
 }
+
+/// A progress overlay shows a spinner beside its message on its card, is named by the message, and its Cancel makes
+/// Escape close it.
+#[trial]
+fn a_progress_overlay_shows_a_spinner_and_its_message_and_escape_cancels_it() {
+    let open = std::rc::Rc::new(Cell::new(true));
+    let seen = std::rc::Rc::clone(&open);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = seen.get();
+        BlockingOverlay::new("Working").opened(Bind::bound(&mut now)).message("Exporting 24 pages").cancel("Stop").show(ui, |_, _| {});
+        seen.set(now);
+    });
+    fixture.settle();
+    let spinner = std::any::type_name::<crate::display::Spinner>();
+    assert!(!fixture.styles_of(spinner).is_empty(), "the card shows a spinner");
+    assert!(fixture.texts().iter().any(|run| run.text == "Exporting 24 pages"), "the card shows the message");
+    assert!(fixture.by_label("Exporting 24 pages").is_some(), "the message names the overlay");
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.settle();
+    assert!(!open.get(), "Escape closed the overlay that has a Cancel button");
+}

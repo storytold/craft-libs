@@ -2,8 +2,11 @@
 
 use super::frame::{self, DialogOutput, FOOTER};
 use crate::contract::{
-    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Pad, Pointer as _, Props as _, Role, SaveKey,
+    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, HeaderRegion, Mount, Overlay, Pad, Pointer as _, Props as _, Role,
+    SaveKey, Show as _, ShowContainer as _,
 };
+use crate::display::{Spinner, Text};
+use crate::layout_components::Row;
 use crate::runtime::env::Label;
 use crate::runtime::focus::{FocusPolicy, Initial};
 use crate::runtime::overlay::{Backdrop, CloseReason, Rank};
@@ -23,11 +26,12 @@ pub struct BlockingOverlayStyle {
 /// A modal layer that takes the window's input while it is shown, with the wait cursor. Its label is the accessible
 /// name. Without a card the layer has no look at all; with one, the body sits on the dialog surface, centred.
 ///
+/// - Progress: [`message`](BlockingOverlay::message) shows a spinner and the message over the body, on the card.
 /// - Open state: bound with [`opened`](BlockingOverlay::opened), else a session slot that starts open. Show it
 ///   every pass the work lasts, or bind the state to the work.
 /// - Cancel: Escape closes it when [`cancellable`](BlockingOverlay::cancellable) says so, and a footer button
 ///   named by [`cancel`](BlockingOverlay::cancel) closes it as `CloseReason::Requested`; the open state then reads
-///   `false`.
+///   `false`. A Cancel button also shows the card and lets Escape close it.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container)]
 pub struct BlockingOverlay<'a> {
@@ -42,6 +46,7 @@ pub struct BlockingOverlay<'a> {
     #[prop]
     cursor: CursorIcon,
     cancel: Option<Label>,
+    message: Option<Label>,
     closed: Option<CloseReason>,
     picked: Option<usize>,
 }
@@ -53,7 +58,17 @@ impl<'a> BlockingOverlay<'a> {
         overlay.rank = Rank::modal(Backdrop::None);
         overlay.focus = FocusPolicy::DIALOG.initial(Initial::Keep).cancel(CancelRule::Ignore);
         let props = ContainerProps::new().mount(Mount::Layer(overlay));
-        BlockingOverlay { common: Common::new(), props, open: None, cursor: CursorIcon::Wait, cancel: None, closed: None, picked: None }.label(name)
+        BlockingOverlay {
+            common: Common::new(),
+            props,
+            open: None,
+            cursor: CursorIcon::Wait,
+            cancel: None,
+            message: None,
+            closed: None,
+            picked: None,
+        }
+        .label(name)
     }
 
     fn with_overlay(mut self, change: impl FnOnce(&mut Overlay)) -> Self {
@@ -83,12 +98,22 @@ impl<'a> BlockingOverlay<'a> {
         self.with_overlay(|overlay| overlay.focus = overlay.focus.cancel(if on { CancelRule::Close } else { CancelRule::Ignore }))
     }
 
-    /// A footer with a Cancel button named `label`; a click closes the overlay as `CloseReason::Requested`.
+    /// A spinner and `message` over the body, on the card; the message also names the overlay.
+    #[must_use]
+    pub fn message(mut self, message: impl Into<Label>) -> Self {
+        let message = message.into();
+        self.props = self.props.header(HeaderRegion::new());
+        self.message = Some(message.clone());
+        self.card(true).label(message)
+    }
+
+    /// A footer with a Cancel button named `label`, on the card. A click closes the overlay as
+    /// `CloseReason::Requested`, Escape as `CloseReason::Escape`.
     #[must_use]
     pub fn cancel(mut self, label: impl Into<Label>) -> Self {
         self.props = self.props.footer(FOOTER);
         self.cancel = Some(label.into());
-        self
+        self.card(true).cancellable(true)
     }
 
     /// Saves the open state under `key`.
@@ -128,6 +153,15 @@ impl Component for BlockingOverlay<'_> {
 impl Container for BlockingOverlay<'_> {
     fn open(&mut self) -> Option<BindMut<'_, bool>> {
         self.open.as_mut().map(Bind::reborrow)
+    }
+
+    /// The spinner and the message.
+    fn header(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        let Some(message) = self.message.clone() else { return };
+        Row::new().show(ui, |ui, _| {
+            Spinner::new().show(ui);
+            Text::new(message).show(ui);
+        });
     }
 
     fn footer(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {

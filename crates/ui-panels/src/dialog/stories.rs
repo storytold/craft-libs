@@ -137,15 +137,9 @@ fn dialog_frame_with_footer(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn blocking_overlay(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let scrim = *data.value("scrim", true);
     let card = *data.value("wait card", true);
-    let mut checks = *data.value("checks", [true, false]);
-    let shown: StoryOutput = BlockingOverlay::new("Exporting")
-        .opened(Bind::bound(data.value("open", true)))
-        .card(card)
-        .scrim(scrim)
-        .show(ui, |ui, _| body(ui, &mut checks))
-        .into();
-    *data.value("checks", [true, false]) = checks;
-    shown
+    let overlay = BlockingOverlay::new("Exporting").scrim(scrim);
+    let overlay = if card { overlay.message("Exporting 24 pages…").cancel("Cancel") } else { overlay };
+    overlay.opened(Bind::bound(data.value("open", true))).show(ui, |_, _| {}).into()
 }
 
 #[story(ModalDragStrip, covers = [Default], drive = Drive::Never)]
