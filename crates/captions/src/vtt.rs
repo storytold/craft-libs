@@ -208,7 +208,7 @@ pub fn write(doc: &Document) -> String {
 mod tests {
     use super::*;
     use crate::TICKS_PER_MS;
-    use crate::time::Tick;
+    use crate::Tick;
 
     const SAMPLE: &str = "WEBVTT - with header\nKind: captions\n\nSTYLE\n::cue { color: yellow }\n\nNOTE a comment\nspanning lines\n\nintro\n00:01.000 --> 00:00:03.500 line:90% align:start\n<v.loud Ann Smith>Hello there\nsecond line\n\n00:00:04.000 --> 00:00:05.000\n<i>plain</i> &amp; tags\n";
 
