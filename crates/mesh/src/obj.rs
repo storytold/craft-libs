@@ -525,6 +525,7 @@ pub fn write(scene: &Scene, mtllib: Option<&str>, limits: &Limits) -> Result<Str
     // OBJ indices run on across objects.
     let (mut vbase, mut tbase, mut nbase) = (1u64, 1u64, 1u64);
     let mut smoothing = 0;
+    let mut current_material: Option<Option<usize>> = None;
     for (index, world) in scene.instances(limits)? {
         let Some(mesh) = scene.meshes.get(index) else { continue };
         mesh.validate()?;
@@ -553,8 +554,17 @@ pub fn write(scene: &Scene, mtllib: Option<&str>, limits: &Limits) -> Result<Str
             if !part.name.trim().is_empty() {
                 let _ = writeln!(text, "g {}", part.name.trim().replace(|c: char| c.is_control(), " "));
             }
-            if let Some(m) = part.material.and_then(|m| materials.get(m)) {
-                let _ = writeln!(text, "usemtl {m}");
+            if current_material != Some(part.material) {
+                match part.material.and_then(|m| materials.get(m)) {
+                    Some(m) => {
+                        let _ = writeln!(text, "usemtl {m}");
+                    }
+                    None if current_material.is_some() => {
+                        let _ = writeln!(text, "usemtl");
+                    }
+                    None => {}
+                }
+                current_material = Some(part.material);
             }
             if part.smoothing != smoothing {
                 smoothing = part.smoothing;
