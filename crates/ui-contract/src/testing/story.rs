@@ -192,11 +192,22 @@ impl StoryRegistration {
 
 inventory::collect!(StoryRegistration);
 
-/// Every story linked into the running binary, by type name, then in the order they are declared in.
+/// Every story linked into the running binary, by type name; of each type, the stories of the package that registers
+/// it first, then those other packages declare; each in the order they are declared in.
 #[doc(hidden)]
 pub fn stories() -> Vec<&'static StoryRegistration> {
+    let homes: HashMap<&str, &str> = crate::contract::registrations()
+        .into_iter()
+        .filter_map(|registration| {
+            let name = registration.probe().map(|probe| probe.type_name()).or_else(|| registration.pattern_probe().map(|probe| probe.type_name()))?;
+            Some((name, registration.crate_name()))
+        })
+        .collect();
     let mut all: Vec<_> = inventory::iter::<StoryRegistration>().collect();
-    all.sort_by_key(|entry| ((entry.type_name)(), entry.file, entry.line));
+    all.sort_by_key(|entry| {
+        let name = (entry.type_name)();
+        (name, homes.get(name) != Some(&entry.crate_name), entry.file, entry.line)
+    });
     all
 }
 

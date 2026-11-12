@@ -1,9 +1,10 @@
 //! A package's stories of a type another package registers run that type's per-story cases in the package's suite;
-//! the cases about the type as a whole (its required states) stay with the package that registers it.
+//! the cases about the type as a whole (its required states) stay with the package that registers it. The type's own
+//! stories list before the visitor's.
 
 use craft_ui::contract::{Common, Component, Cx, MeasureCx, Props as _, Role, Show as _};
 use craft_ui::style::StyleCx;
-use craft_ui::testing::{Story, StoryData, StoryOutput, StoryRegistration, trial};
+use craft_ui::testing::{Required, Story, StoryData, StoryOutput, StoryRegistration, trial};
 use craft_ui_test_kit::contract::PlainStyle;
 use egui::{Ui, Vec2};
 
@@ -39,9 +40,28 @@ fn plain_box(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Visited { common: Common::new() }.label("Box").show(ui).into()
 }
 
-// The visitor's story covers no state: a Default story is the registering package's to have.
+// The visitor's story covers no state: a Default story is the registering package's to have. Its file sorts before
+// the home story's.
 craft_ui::testing::__private::inventory::submit! {
-    StoryRegistration::new(VISITOR, "craft_ui_visitor", std::any::type_name::<Visited>, Story::new("plain_box", plain_box))
+    StoryRegistration::new(VISITOR, "craft_ui_visitor", std::any::type_name::<Visited>, Story::new("plain_box", plain_box)).at("a.rs", 1)
+}
+
+craft_ui::testing::__private::inventory::submit! {
+    StoryRegistration::new(
+        env!("CARGO_PKG_NAME"),
+        "craft_ui_contract",
+        std::any::type_name::<Visited>,
+        Story::new("home_box", plain_box).covers(&[Required::Default]),
+    )
+    .at("z.rs", 1)
+}
+
+#[trial]
+fn a_types_own_stories_list_before_another_packages() {
+    let visited = std::any::type_name::<Visited>();
+    let names: Vec<&str> =
+        craft_ui::testing::stories().into_iter().filter(|entry| (entry.type_name)() == visited).map(|entry| entry.story.name).collect();
+    assert_eq!(names, ["home_box", "plain_box"], "the registering package's story comes first");
 }
 
 #[trial]

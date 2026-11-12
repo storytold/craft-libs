@@ -69,7 +69,7 @@ fn drag_top_left(fixture: &mut Fixture) {
 }
 
 #[story(CropOverlay<'static>, covers = [Default], drive = Drive::Custom(drag_top_left))]
-fn crop_rect(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+fn upright(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rect = data.value("crop", crop());
     on_canvas(ui, |ui, at| CropOverlay::new("Crop", Bind::bound(&mut *rect)).show_at(ui, at))
 }
