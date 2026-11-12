@@ -95,6 +95,7 @@ craft-text = { path = "crates/text" }
 craft-tga = { path = "crates/tga" }
 craft-timeline = { path = "crates/timeline" }
 craft-tiff = { path = "crates/tiff" }
+craft-metadata = { path = "crates/metadata" }
 craft-ui = { path = "crates/ui" }
 craft-update = { path = "crates/update" }
 craft-vcard = { path = "crates/vcard" }
