@@ -7,7 +7,7 @@ use craft_drawingml::chart::Chart;
 use craft_drawingml::theme::Theme;
 
 use crate::drawing::Drawing;
-use crate::features::{Comments, NoteShape};
+use crate::features::{Comments, NoteShape, Table};
 use crate::sheet::{Row, RowReader, SheetPart};
 use crate::strings::StringItem;
 use crate::styles::Styles;
@@ -282,6 +282,22 @@ impl<'a> Package<'a> {
         let Some(root) = self.optional_xml(&part)? else { return Ok(None) };
         let rels = self.rels(&part)?;
         Ok(Some((part, Drawing::read(&root), rels)))
+    }
+
+    /// The tables of a worksheet read by [`Package::sheet`], in the order of its `tableParts`,
+    /// each with its part name. A table part that does not read is skipped with a warning.
+    pub fn tables(&mut self, sheet: &SheetPart) -> Result<Vec<(String, Table)>, Error> {
+        let mut out = Vec::new();
+        for id in &sheet.features.table_parts {
+            let Some(rel) = sheet.rels.by_id(id).filter(|r| !r.external) else { continue };
+            let part = rel.target.clone();
+            match self.optional_xml(&part)?.map(|t| Table::read(&t)) {
+                Some(Some(t)) => out.push((part, t)),
+                Some(None) => self.warn(format!("skipped {part}: the table has no range")),
+                None => {}
+            }
+        }
+        Ok(out)
     }
 
     /// A chart part (`c:chartSpace`, or `cx:chartSpace` of an Office 2016 chart) through

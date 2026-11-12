@@ -31,11 +31,11 @@ fn excel_like() -> Vec<u8> {
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet {ns} xr:uid="{{00000000-0001-0000-0000-000000000000}}"><sheetPr><tabColor rgb="FFFF0000"/></sheetPr><dimension ref="A1:C3"/><sheetViews><sheetView tabSelected="1" workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15" x14ac:dyDescent="0.25"/><cols><col min="1" max="2" width="12.5" customWidth="1"/><col min="3" max="3" width="9" hidden="1" style="1"/></cols>
 <sheetData><row r="1" spans="1:3" x14ac:dyDescent="0.25"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" s="1"><v>0.1</v></c></row><row r="2" ht="30" customHeight="1"><c r="A2"><f>SUM(C1:C3)</f><v>0.30000000000000004</v></c><c r="B2" t="b"><v>1</v></c><c r="C2" s="1"><f t="shared" ref="C2:C3" si="0">C1*2</f><v>0.2</v></c></row><row r="3"><c r="A3" t="e"><v>#N/A</v></c><c r="B3" t="inlineStr"><is><t xml:space="preserve"> inline </t></is></c><c r="C3" s="1"><f t="shared" si="0"/><v>0.4</v></c></row></sheetData>
-<mergeCells count="1"><mergeCell ref="A5:B6"/></mergeCells><conditionalFormatting sqref="C1:C3"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>0.25</formula></cfRule></conditionalFormatting><dataValidations count="1"><dataValidation type="list" allowBlank="1" showInputMessage="1" sqref="A1:A3 C:C" xr:uid="{{00000000-0002-0000-0000-000000000000}}"><formula1>"a,b"</formula1></dataValidation></dataValidations><hyperlinks><hyperlink ref="A1" r:id="rId2" tooltip="t"/><hyperlink ref="B1" location="Data!A1" display="here"/></hyperlinks><printOptions gridLines="1"/><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><pageSetup orientation="landscape" fitToWidth="1"/><headerFooter differentFirst="1"><oddHeader>&amp;C&amp;P</oddHeader><firstFooter xml:space="preserve"> x </firstFooter></headerFooter><rowBreaks count="1" manualBreakCount="1"><brk id="10" max="16383" man="1"/></rowBreaks><drawing r:id="rId1"/><legacyDrawing r:id="rId3"/>
+<mergeCells count="1"><mergeCell ref="A5:B6"/></mergeCells><conditionalFormatting sqref="C1:C3"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>0.25</formula></cfRule></conditionalFormatting><dataValidations count="1"><dataValidation type="list" allowBlank="1" showInputMessage="1" sqref="A1:A3 C:C" xr:uid="{{00000000-0002-0000-0000-000000000000}}"><formula1>"a,b"</formula1></dataValidation></dataValidations><hyperlinks><hyperlink ref="A1" r:id="rId2" tooltip="t"/><hyperlink ref="B1" location="Data!A1" display="here"/></hyperlinks><printOptions gridLines="1"/><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><pageSetup orientation="landscape" fitToWidth="1"/><headerFooter differentFirst="1"><oddHeader>&amp;C&amp;P</oddHeader><firstFooter xml:space="preserve"> x </firstFooter></headerFooter><rowBreaks count="1" manualBreakCount="1"><brk id="10" max="16383" man="1"/></rowBreaks><drawing r:id="rId1"/><legacyDrawing r:id="rId3"/><tableParts count="1"><tablePart r:id="rId5"/></tableParts>
 <extLst><ext uri="{{05C60535-1F16-4fd2-B633-F4F36F0B64E0}}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:sparklineGroups xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:sparklineGroup><x14:sparklines><x14:sparkline><xm:f>Data!C1:C3</xm:f><xm:sqref>D1</xm:sqref></x14:sparkline></x14:sparklines></x14:sparklineGroup></x14:sparklineGroups></ext></extLst></worksheet>"#
     );
     let sheet1_rels = format!(
-        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{RT}/drawing" Target="../drawings/drawing1.xml"/><Relationship Id="rId2" Type="{RT}/hyperlink" Target="https://example.com/a?b&amp;c" TargetMode="External"/><Relationship Id="rId3" Type="{RT}/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/><Relationship Id="rId4" Type="{RT}/comments" Target="../comments1.xml"/></Relationships>"#
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{RT}/drawing" Target="../drawings/drawing1.xml"/><Relationship Id="rId2" Type="{RT}/hyperlink" Target="https://example.com/a?b&amp;c" TargetMode="External"/><Relationship Id="rId3" Type="{RT}/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/><Relationship Id="rId4" Type="{RT}/comments" Target="../comments1.xml"/><Relationship Id="rId5" Type="{RT}/table" Target="../tables/table1.xml"/></Relationships>"#
     );
     let styles = format!(
         r#"<styleSheet {ns}><numFmts count="1"><numFmt numFmtId="164" formatCode="0.0%"/></numFmts><fonts count="2" x14ac:knownFonts="1"><font><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font><font><b/><i val="0"/><u val="double"/><vertAlign val="superscript"/><sz val="9.5"/><color rgb="FF0000FF" tint="-0.25"/><name val="Arial"/></font></fonts>
@@ -51,7 +51,7 @@ fn excel_like() -> Vec<u8> {
     let package_rels = format!(
         r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{RT}/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>"#
     );
-    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="bin" ContentType="application/vnd.ms-office.vbaProject"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.ms-excel.sheet.macroEnabled.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/chartsheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml"/><Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/><Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/><Override PartName="/xl/comments1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>"#;
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="bin" ContentType="application/vnd.ms-office.vbaProject"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.ms-excel.sheet.macroEnabled.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/chartsheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml"/><Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/><Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/><Override PartName="/xl/tables/table1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/><Override PartName="/xl/comments1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>"#;
     zip(&[
         ("[Content_Types].xml", types.as_bytes()),
         ("_rels/.rels", package_rels.as_bytes()),
@@ -71,6 +71,7 @@ fn excel_like() -> Vec<u8> {
         ("xl/sharedStrings.xml", strings.as_bytes()),
         ("xl/calcChain.xml", b"<calcChain/>"),
         ("xl/comments1.xml", COMMENTS.as_bytes()),
+        ("xl/tables/table1.xml", TABLE.as_bytes()),
         ("xl/drawings/vmlDrawing1.vml", VML.as_bytes()),
         ("xl/vbaProject.bin", &[0xD0, 0xCF, 0x11, 0xE0, 1, 2, 3]),
     ])
@@ -82,6 +83,8 @@ const VML: &str = "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:
 const DRAWING: &str = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><xdr:twoCellAnchor><xdr:from><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>9</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>15</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"><a:extLst><a:ext uri="{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}"><a16:creationId xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" id="{A}"/></a:ext></a:extLst></xdr:cNvPr><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor><xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>20</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="952500" cy="476250"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="3" name="Picture 2" descr="logo"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>"#;
 const DRAWING_RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/></Relationships>"#;
 const CHART: &str = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>S1</c:v></c:tx><c:cat><c:strRef><c:f>Data!$A$1:$A$2</c:f><c:strCache><c:ptCount val="2"/><c:pt idx="0"><c:v>a</c:v></c:pt><c:pt idx="1"><c:v>b</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:f>Data!$C$1:$C$2</c:f><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#;
+
+const TABLE: &str = r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision" id="1" xr:uid="{T}" name="Prices" displayName="Prices" ref="A1:C4" totalsRowCount="1"><autoFilter ref="A1:C3"/><tableColumns count="3"><tableColumn id="1" name="Name" totalsRowLabel="Total"/><tableColumn id="2" name="Flag"/><tableColumn id="3" name="Value" totalsRowFunction="sum" dataDxfId="0"><calculatedColumnFormula>Prices[[#This Row],[Flag]]*2</calculatedColumnFormula></tableColumn></tableColumns><tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/></table>"#;
 
 fn read(bytes: &[u8]) -> Document {
     Document::read(bytes, &Limits::default()).unwrap()
@@ -130,6 +133,7 @@ fn assert_same(a: &Document, b: &Document) {
         assert_eq!(x.part.features, y.part.features);
         assert_eq!(x.notes, y.notes);
         assert_eq!(x.drawing, y.drawing);
+        assert_eq!(x.tables, y.tables);
         assert_eq!(
             x.comments.as_ref().map(|c| (&c.authors, &c.comments, c.to_xml())),
             y.comments.as_ref().map(|c| (&c.authors, &c.comments, c.to_xml()))
@@ -371,6 +375,58 @@ fn charts_and_pictures() {
     let wb = p.workbook().unwrap();
     let sheet = p.sheet(&wb.sheets[2], |_| Ok(())).unwrap();
     assert!(sheet.rels.first("drawing").is_none() && sheet.features.drawing.is_none());
+}
+
+#[test]
+fn tables() {
+    let mut doc = read(&excel_like());
+    let ws = doc.worksheets[0].clone().unwrap();
+    assert_eq!(ws.part.features.table_parts, ["rId5"]);
+    let t = &ws.tables[0];
+    assert_eq!(
+        (t.part.as_str(), t.table.name.as_deref(), t.table.range.a1(), t.table.totals_row_count),
+        ("xl/tables/table1.xml", Some("Prices"), "A1:C4".to_string(), Some(1))
+    );
+    assert_eq!(t.table.attrs, [("xr:uid".to_string(), "{T}".to_string())]);
+    let value = &t.table.columns[2];
+    assert_eq!(
+        (value.totals_row_function.as_deref(), value.data_dxf_id, value.calculated_formula.clone()),
+        (Some("sum"), Some(0), Some(("Prices[[#This Row],[Flag]]*2".to_string(), false)))
+    );
+    assert_eq!(t.table.style.as_ref().and_then(|s| s.show_row_stripes), Some(true));
+    assert!(t.table.auto_filter.is_some());
+    assert!(!doc.parts.iter().any(|p| p.name.contains("tables/")));
+
+    // A new table on the third sheet takes a name no other table has.
+    let mut new = t.table.clone();
+    new.id = Some(2);
+    new.name = Some("Other".into());
+    new.display_name = Some("Other".into());
+    doc.worksheets[2].as_mut().unwrap().tables.push(craft_xlsx::TablePart { part: String::new(), table: new });
+    let again = read(&doc.write().unwrap());
+    assert_same(&doc_after(&doc), &again);
+    let t2 = again.worksheets[2].clone().unwrap().tables.remove(0);
+    assert_eq!((t2.part.as_str(), t2.table.name.as_deref()), ("xl/tables/table2.xml", Some("Other")));
+    assert_eq!(again.worksheets[0].as_ref().unwrap().tables[0].table, t.table);
+
+    // A table removed takes its relationship and its tableParts entry with it.
+    let mut doc = again;
+    doc.worksheets[0].as_mut().unwrap().tables.clear();
+    let bytes = doc.write().unwrap();
+    let mut p = Package::open(&bytes, &Limits::default()).unwrap();
+    let wb = p.workbook().unwrap();
+    let sheet = p.sheet(&wb.sheets[0], |_| Ok(())).unwrap();
+    assert!(sheet.rels.first("table").is_none() && sheet.features.table_parts.is_empty() && sheet.root.child("tableParts").is_none());
+    assert!(p.opc().read("xl/tables/table1.xml").unwrap().is_none());
+
+    // A new part on an earlier sheet never takes the name a later sheet's part keeps.
+    let mut doc = read(&excel_like());
+    let kept = doc.worksheets[0].as_mut().unwrap().tables.remove(0);
+    doc.worksheets[2].as_mut().unwrap().tables.push(kept);
+    doc.worksheets[0].as_mut().unwrap().tables.push(craft_xlsx::TablePart { part: String::new(), table: t2.table.clone() });
+    let again = read(&doc.write().unwrap());
+    let names = |i: usize| again.worksheets[i].as_ref().unwrap().tables.iter().map(|t| t.part.clone()).collect::<Vec<_>>();
+    assert_eq!((names(0), names(2)), (vec!["xl/tables/table2.xml".to_string()], vec!["xl/tables/table1.xml".to_string()]));
 }
 
 #[test]
