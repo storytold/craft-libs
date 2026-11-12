@@ -137,9 +137,17 @@ pub(crate) fn counting_fills(ui: &Ui, axis: Axis) -> bool {
 struct Reported {
     leaf: Id,
     took: f32,
-    ideal: f32,
-    least: f32,
+    widths: ShrinkUnit,
     body: bool,
+}
+
+/// The widths of a unit of a row that shrinks to fit: the width it asks for and the least it narrows to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShrinkUnit {
+    /// The width the unit takes where the row has room.
+    pub ideal: f32,
+    /// The least width the unit narrows to.
+    pub least: f32,
 }
 
 /// The units each `Row` body counting this pass reported, in order, by body id.
@@ -152,7 +160,7 @@ pub(crate) struct LeastReports(HashMap<Id, HashMap<Id, f32>>);
 
 /// Reports the widths of the unit `leaf` of the row `row` that counts them: a leaf's least, or `None` for a body.
 pub(crate) fn report_shrink(ctx: &egui::Context, row: Id, leaf: Id, took: f32, ideal: f32, least: Option<f32>) {
-    let leaf = Reported { leaf, took, ideal, least: least.unwrap_or(ideal).min(ideal), body: least.is_none() };
+    let leaf = Reported { leaf, took, widths: ShrinkUnit { ideal, least: least.unwrap_or(ideal).min(ideal) }, body: least.is_none() };
     pass_state::with::<ShrinkReports, _>(ctx, |reports| reports.0.entry(row).or_default().push(leaf));
 }
 
@@ -179,13 +187,13 @@ fn shrink_key(row: Id, leaf: Id) -> Id {
 /// that from each, so all reach their least together. A row that fits gives each unit its ideal, and so does a row
 /// that does not fit even with every unit at its least: it overflows (or its body scrolls) at its natural widths,
 /// instead of cutting its units to their least and overflowing all the same.
-fn shrink_widths(leaves: &[Reported], fixed: f32, room: f32) -> Vec<f32> {
-    let short = fixed + leaves.iter().map(|leaf| leaf.ideal).sum::<f32>() - room;
-    let slack: f32 = leaves.iter().map(|leaf| leaf.ideal - leaf.least).sum();
+pub fn shrink_widths(units: &[ShrinkUnit], fixed: f32, room: f32) -> Vec<f32> {
+    let short = fixed + units.iter().map(|unit| unit.ideal).sum::<f32>() - room;
+    let slack: f32 = units.iter().map(|unit| unit.ideal - unit.least).sum();
     // Half a point: less than a pixel shows at any scale the box runs.
     let fits_at_least = short - slack < 0.5;
     let share = if short > 0.0 && slack > 0.0 && fits_at_least { (short / slack).min(1.0) } else { 0.0 };
-    leaves.iter().map(|leaf| leaf.ideal - (leaf.ideal - leaf.least) * share).collect()
+    units.iter().map(|unit| unit.ideal - (unit.ideal - unit.least) * share).collect()
 }
 
 /// Runs `body`, the children of the unwrapped `Row` body `id`, in `ui`, the block they are placed in, with the row's
@@ -225,7 +233,8 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
     let room = shrink_room(ui);
     // Records the width each unit gets, and returns whether one took another width in the first sweep.
     let settle = |leaves: &[Reported], fixed: f32| {
-        let widths = if room.is_finite() { shrink_widths(leaves, fixed, room) } else { leaves.iter().map(|leaf| leaf.ideal).collect() };
+        let units: Vec<ShrinkUnit> = leaves.iter().map(|leaf| leaf.widths).collect();
+        let widths = if room.is_finite() { shrink_widths(&units, fixed, room) } else { units.iter().map(|unit| unit.ideal).collect() };
         let mut again = false;
         for (leaf, width) in leaves.iter().zip(widths) {
             layout_memory::emit_record(&ctx, shrink_key(id, leaf.leaf), layout_memory::Measured::new(Vec2::new(room, 0.0), Vec2::new(width, 0.0)));
@@ -241,7 +250,7 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         let leaves = pass_state::with::<ShrinkReports, _>(&ctx, |reports| reports.0.remove(&id)).unwrap_or_default();
         let rect = first.min_rect();
         let fixed = rect.width() - leaves.iter().map(|leaf| leaf.took).sum::<f32>();
-        let short = fixed + leaves.iter().map(|leaf| leaf.ideal).sum::<f32>() - room >= 0.5;
+        let short = fixed + leaves.iter().map(|leaf| leaf.widths.ideal).sum::<f32>() - room >= 0.5;
         let probe = room.is_finite() && short && leaves.iter().any(|leaf| leaf.body);
         let again = !probe && settle(&leaves, fixed);
         ((inner, rect, leaves, fixed, probe, again), probe || again)
@@ -261,7 +270,7 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         let leasts = pass_state::with::<LeastReports, _>(&ctx, |reports| reports.0.remove(&id)).unwrap_or_default();
         for leaf in leaves.iter_mut().filter(|leaf| leaf.body) {
             if let Some(least) = leasts.get(&leaf.leaf) {
-                leaf.least = least.min(leaf.ideal);
+                leaf.widths.least = least.min(leaf.widths.ideal);
             }
         }
         settle(&leaves, fixed);

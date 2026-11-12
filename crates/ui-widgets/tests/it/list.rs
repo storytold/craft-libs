@@ -199,6 +199,28 @@ fn hosted_items_take_their_own_width_and_an_optional_one_drops_first() {
     assert!(field.right() <= row_rect.right() + 0.5, "the row's items stay inside it: {field:?} in {row_rect:?}");
 }
 
+/// A tree row narrows its hosted field and its indent together, so a deep row whose field fits at its least narrows
+/// it instead of keeping it whole; a row too narrow for even its field's least keeps the field at its own width.
+#[trial]
+fn a_deep_rows_field_and_indent_narrow_together_and_a_row_too_narrow_for_its_least_keeps_the_field_whole() {
+    let row = |key: usize| {
+        ListRow::new(NAMES[key])
+            .depth(8)
+            .trailing_field(craft_ui::text::HexField::hex("Color", craft_ui::contract::Bind::given(craft_theme::Rgba::rgb(0, 0, 0))), |_| {})
+    };
+    let field_at = |width: f32| {
+        let (fixture, _) = rows_rig(Vec2::new(width, 200.0), row);
+        (fixture.by_label("Color").expect("the field shows").rect, fixture.by_label(NAMES[0]).expect("the row shows").rect)
+    };
+    let (wide, _) = field_at(800.0);
+    // The full indent and the field's least do not fit 160 pt; the field's least does, once the indent gives way.
+    let (deep, row_rect) = field_at(160.0);
+    assert!(deep.width() < wide.width(), "the field narrows: {deep:?} from {wide:?}");
+    assert!(deep.right() <= row_rect.right() + 0.5, "the field stays inside its row: {deep:?} in {row_rect:?}");
+    let (short, _) = field_at(100.0);
+    assert!((short.width() - wide.width()).abs() < 0.5, "a row too narrow for the field's least keeps it whole: {short:?} from {wide:?}");
+}
+
 /// A double click on a row's leading text reports it with its count and does not activate the row; a click on a
 /// trailing part reports whether its row held the lead when the press began.
 #[trial]

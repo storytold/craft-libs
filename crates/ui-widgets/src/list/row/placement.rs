@@ -6,6 +6,7 @@ use super::style::ListRowStyle;
 use super::thumb::{Thumb, ThumbSize};
 use super::trailing::{TrailingItem, trailing_run};
 use crate::contract::{ColumnAlign, PartsCx, WordSetCx as _};
+use crate::layout::{ShrinkUnit, shrink_widths};
 use crate::list::toggle::ToggleState;
 use crate::list::words::ListWords;
 use crate::primitives::{HAlign, TextRun, Wrap};
@@ -361,23 +362,30 @@ impl ListRow<'_> {
                 used += item.width + sizes.gap;
             }
         }
-        // A row that lacks room for the label's least width narrows its hosted fields toward their least widths, each
-        // by the same share of what it can give.
-        let lack = (base + indent_full + column + leading_width + sizes.min_label - (end - used)).max(0.0);
-        let give: f32 = items.iter().zip(&kept).filter(|(_, kept)| **kept).map(|(item, _)| item.width - item.least).sum();
-        let share = if give > 0.0 { (lack / give).min(1.0) } else { 0.0 };
-        used -= give * share;
+        // A row that lacks room for the label's least width narrows its kept items and its indent by the shrink rule of
+        // every row: each toward its least (the indent's is none) by the same share of what it can give.
+        let units: Vec<ShrinkUnit> = items
+            .iter()
+            .zip(&kept)
+            .filter(|(_, kept)| **kept)
+            .map(|(item, _)| ShrinkUnit { ideal: item.width, least: item.least })
+            .chain(std::iter::once(ShrinkUnit { ideal: indent_full, least: 0.0 }))
+            .collect();
+        let gaps = kept.iter().filter(|kept| **kept).count() as f32 * sizes.gap;
+        let mut given = shrink_widths(&units, base + column + leading_width + sizes.min_label + gaps, end);
+        let indent_given = given.pop().unwrap_or(0.0);
+        let used = gaps + given.iter().sum::<f32>();
         let label_end = end - used;
         let overflow = (base + column + leading_width + sizes.min_label - label_end).max(0.0);
         let label_end = label_end + overflow;
-        let indent = indent_full.min((label_end - base - column - leading_width - sizes.min_label).max(0.0));
+        let indent = indent_given.min((label_end - base - column - leading_width - sizes.min_label).max(0.0));
         let mut from_end = 0.0;
-        let items = items
+        let mut given = given.into_iter();
+        let items = kept
             .iter()
-            .zip(&kept)
-            .map(|(item, kept)| {
+            .map(|kept| {
                 kept.then(|| {
-                    let width = item.width - (item.width - item.least) * share;
+                    let width = given.next().unwrap_or(0.0);
                     let start = end - from_end - width + overflow;
                     from_end += width + sizes.gap;
                     inner.span(start, width)
