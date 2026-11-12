@@ -302,6 +302,9 @@ fn phry_round_trips_through_the_writer() {
 fn sample_budget_covers_2_gib_packs_on_64_bit() {
     let want = if cfg!(target_pointer_width = "64") { 2 << 30 } else { 512 << 20 };
     assert_eq!(MAX_TOTAL_BYTES, want);
+    // The pack of photocraft#5949 (1 077 579 672 sample bytes) fits.
     #[cfg(target_pointer_width = "64")]
-    assert!(MAX_TOTAL_BYTES > 1_077_579_672);
+    const {
+        assert!(MAX_TOTAL_BYTES > 1_077_579_672)
+    };
 }
