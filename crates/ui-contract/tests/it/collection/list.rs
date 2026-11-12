@@ -303,20 +303,27 @@ fn a_text_after_a_release_takes_no_press_with_it() {
     assert!(saw.borrow().contains(&Key::F5), "and the app reads the press that typed nothing");
 }
 
-/// A list without type-ahead leaves typed letters to the app's tool keys: the lead stays where it is.
+/// A list without type-ahead leaves typed letters to the app's tool keys: the lead stays where it is, and the letter's
+/// press reaches the app.
 #[trial]
 fn a_list_without_type_ahead_leaves_typed_letters_alone() {
     let words = Words::flat(&labels());
     let seen = Seen::default();
+    let saw = RefCell::new(Vec::new());
     let mut frames = Frames::new();
-    let mut show = |ui: &mut Ui| show_words(ui, List::new(SelectMode::Single), &words, &seen);
+    let mut show = |ui: &mut Ui| {
+        app_read(ui, &saw);
+        show_words(ui, List::new(SelectMode::Single), &words, &seen);
+    };
     frames.idle(2, &mut show);
     focus_list(&mut frames, &seen, &mut show);
     press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
     let before = seen.leads();
-    frames.frame(vec![Event::Text("c".into())], &mut show);
+    assert!(!keys::focus_holds(&frames.ctx, Chord::plain(craft_keymap::Key::C)), "the list names no letter as its own");
+    frames.frame(vec![input::key_press(Key::C, Modifiers::NONE), Event::Text("c".into())], &mut show);
     frames.idle(1, &mut show);
     assert_eq!(seen.leads(), before, "a typed letter moves no lead");
+    assert!(saw.borrow().contains(&Key::C), "and its press reaches the app");
 }
 
 /// The stacking keys move the selected rows as a block: Cmd+] one place toward the top, Shift+Cmd+[ to the bottom.
