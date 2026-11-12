@@ -12,6 +12,13 @@ pub fn stage(ui: &mut Ui) -> Rect {
     stage_fitting(ui, |_| height)
 }
 
+/// The height of the room `ui` offers a story whose root has no content height and fills it (a window, a full-window
+/// canvas): the room its card's view gives, or the stage height where the room is unbounded.
+pub fn room_height(ui: &Ui) -> f32 {
+    let room = flow_room(ui).y;
+    if room.is_finite() { room } else { Env::of(ui).tokens.tokens().size.story.height }
+}
+
 /// Allocates a stage as wide as [`stage`]'s and as tall as the story's content at that width, which `height` gives,
 /// and returns its rect: the stage of a canvas whose document is only as tall as its content (a text being edited).
 pub fn stage_fitting(ui: &mut Ui, height: impl FnOnce(f32) -> f32) -> Rect {

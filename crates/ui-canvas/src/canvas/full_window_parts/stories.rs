@@ -4,6 +4,7 @@ use super::{FullWindowCanvas, FullWindowSide, FullWindowStatus, FullWindowTitle,
 use crate::canvas::{PixelRect, RasterSource};
 use crate::contract::{Bind, Show as _, ShowContainer as _};
 use crate::display::Text;
+use crate::layout_components::Stack;
 use crate::primitives::{Checker, Revision};
 use crate::runtime::pending::Pending;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
@@ -117,5 +118,13 @@ fn canvas(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         let layer = RasterOverlay::new(&MASK);
         canvas = canvas.overlay(if tint { layer.tint(Color32::from_rgb(0xc0, 0x40, 0x40)) } else { layer });
     }
-    canvas.show(ui).into()
+    // The canvas has no content height: it fills a stage as tall as the room the story is offered.
+    let height = crate::testing::room_height(ui);
+    let room = crate::testing::stage_fitting(ui, |_| height);
+    let mut canvas = Some(canvas);
+    let mut out = None;
+    Stack::new().fill().show_at(ui, room, |ui, _| {
+        out = canvas.take().map(|canvas| canvas.show(ui));
+    });
+    out.map(StoryOutput::from).unwrap_or_default()
 }
