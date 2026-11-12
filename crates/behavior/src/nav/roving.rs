@@ -53,6 +53,8 @@ pub enum Arrows {
     Horizontal,
     /// Up and Down only: Left and Right reach the focused member, as a menu moves to its neighbour with them.
     Vertical,
+    /// None: every arrow reaches the focused member, as each marker of a colour disc moves with them.
+    None,
 }
 
 impl Roving {
@@ -136,8 +138,8 @@ impl Roving {
         match mv {
             NavMove::PageUp | NavMove::PageDown => self.page.is_some() && !mods.lead,
             NavMove::Start | NavMove::End => self.home_end,
-            NavMove::Back | NavMove::Forward => !matches!(self.arrows, Arrows::Vertical),
-            NavMove::Up | NavMove::Down => !matches!(self.arrows, Arrows::Horizontal),
+            NavMove::Back | NavMove::Forward => matches!(self.arrows, Arrows::All | Arrows::Horizontal),
+            NavMove::Up | NavMove::Down => matches!(self.arrows, Arrows::All | Arrows::Vertical),
         }
     }
 }

@@ -1,9 +1,13 @@
 //! The colour area, strip, ramp, disc and wheel: the colour maths and the edits they report.
 
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
 use craft_color::AreaMode;
-use craft_color::ui::{ColorArea, WheelGeometry, hue_at, triangle_corners, triangle_point, triangle_sv};
+use craft_color::ui::{ColorArea, ColorDisc, DiscMove, WheelGeometry, hue_at, triangle_corners, triangle_point, triangle_sv};
 use craft_theme::{ColorModel, HsbModel, ModelValues, Srgba};
 use craft_ui::contract::{Bind, Show as _};
+use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
 use egui::{Key, Modifiers, Pos2, Rect, Ui, pos2, vec2};
 
@@ -48,4 +52,70 @@ fn each_key_on_a_web_safe_area_reaches_another_colour() {
         fixture.idle(2);
         assert_ne!(color(&fixture), before, "{key:?} reaches another colour");
     }
+}
+
+/// A disc of three markers whose host selects the marker the disc reports as pressed.
+struct DiscRig {
+    fixture: Fixture,
+    pressed: Rc<RefCell<Vec<usize>>>,
+    moved: Rc<Cell<Option<DiscMove>>>,
+}
+
+impl DiscRig {
+    fn new(chosen: usize) -> Self {
+        let markers = [Srgba::rgb(0.9, 0.2, 0.2), Srgba::rgb(0.2, 0.9, 0.2), Srgba::rgb(0.2, 0.2, 0.9)];
+        let (chosen, pressed, moved) = (Rc::new(Cell::new(chosen)), Rc::new(RefCell::new(Vec::new())), Rc::new(Cell::new(None)));
+        let (p, m) = (pressed.clone(), moved.clone());
+        let mut fixture = Fixture::new(move |ui| {
+            let out = ColorDisc::new("Harmony", &markers, Bind::given(DiscMove::new(0, 0.0, 0.0))).chosen(chosen.get()).show(ui);
+            if let Some(moved) = out.edit.value() {
+                m.set(Some(*moved));
+            }
+            if let Some(index) = out.pressed {
+                p.borrow_mut().push(index);
+                chosen.set(index);
+            }
+        });
+        fixture.room(vec2(320.0, 240.0));
+        fixture.settle();
+        DiscRig { fixture, pressed, moved }
+    }
+
+    fn focused(&self) -> Option<String> {
+        let tree = self.fixture.tree();
+        tree.name_of(craft_ui::testing::access::focused_key(tree)).map(str::to_owned)
+    }
+
+    fn marker(&self, n: usize) -> craft_ui::testing::Target {
+        self.fixture.by_label(&format!("Color {n}")).unwrap_or_else(|| panic!("marker {n}"))
+    }
+}
+
+/// The markers are one roving group: Tab lands on the chosen marker, a press on another focuses it in the press pass
+/// and reports it, assistive focus on a marker reports it too, and the arrows move the focused marker.
+#[trial]
+fn the_disc_markers_take_focus_from_tab_a_press_and_assistive_technology() {
+    let mut rig = DiscRig::new(1);
+    rig.fixture.key(Key::Tab, Modifiers::NONE);
+    rig.fixture.idle(2);
+    assert_eq!(rig.focused().as_deref(), Some("Color 2"), "Tab lands on the chosen marker");
+    assert!(rig.pressed.borrow().is_empty(), "focus on the chosen marker reports nothing");
+
+    let third = rig.marker(3).center();
+    rig.fixture.drag_hold_at(third, egui::Vec2::ZERO);
+    assert_eq!(rig.pressed.borrow().last(), Some(&2), "the press reports the marker it grabbed");
+    assert_eq!(rig.focused().as_deref(), Some("Color 3"), "and focuses it before the release");
+    rig.fixture.release_at(third);
+    rig.fixture.idle(2);
+
+    let first = rig.marker(1);
+    rig.fixture.access(AccessActionKind::Focus, &first);
+    rig.fixture.idle(2);
+    assert_eq!(rig.focused().as_deref(), Some("Color 1"));
+    assert_eq!(rig.pressed.borrow().last(), Some(&0), "assistive focus on a marker reports it for the host to select");
+
+    rig.fixture.key(Key::ArrowRight, Modifiers::NONE);
+    rig.fixture.idle(2);
+    assert_eq!(rig.moved.get().map(|moved| moved.marker), Some(0), "the arrows move the focused marker");
+    assert_eq!(rig.focused().as_deref(), Some("Color 1"), "and leave focus on it");
 }

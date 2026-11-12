@@ -3,7 +3,8 @@
 
 use super::channels::{finite, primary};
 use super::wheel::{hue_at, hue_direction, vertex};
-use craft_behavior::{AccessAction, CancelReason, HitShape, Metrics, NavMove, PartKey, PressPhase, Sense};
+use craft_behavior::nav::{Arrows, NavShape, Roving};
+use craft_behavior::{CancelReason, HitShape, Metrics, NavMove, PartKey, PressPhase, Sense};
 use craft_theme::{ColorModel, Flags, HsbModel, ModelValues, Resolve as _, Srgba, State, StateMix, Stateful};
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Numeric, Outcome, PaintUi, PartsCx,
@@ -20,7 +21,7 @@ mod stories;
 
 /// The disc: a press on it grabs the nearest marker within reach.
 const DISC: PartKey = PartKey::new("disc");
-/// A marker: `MARKER.at(i)`; the selected one is the disc's Tab stop.
+/// A marker: `MARKER.at(i)`, a member of the markers' roving group; Tab lands on the selected one.
 const MARKER: PartKey = PartKey::new("marker");
 
 /// Share of `overlay.handle_fill` the marker spokes draw at, so the disc shows through.
@@ -95,7 +96,8 @@ pub struct ColorDiscStyle {
 pub struct ColorDiscOutput {
     /// This pass's edit, carrying the moved marker.
     pub edit: EditResponse<DiscMove>,
-    /// The marker a press grabbed: the host selects it.
+    /// The marker a press grabbed, or the marker focus is on when it is not the selected one (assistive technology
+    /// moved focus there): the host selects it.
     pub pressed: Option<usize>,
     /// The marker a press grabbed and a drag is moving, also on the pass the drag ends.
     pub grabbed: Option<usize>,
@@ -129,12 +131,13 @@ struct Grab {
 ///   A drag moves the grabbed marker's hue (the pointer's angle, whole degrees) and saturation (its distance over the
 ///   radius, whole percents, at most 1), one gesture; the marker's brightness stays, the host's slider sets it. A
 ///   click is one `Set`. A colour of the host's that is not what the drag reported cancels the drag.
-/// - Keys: one Tab stop, the selected marker (the first without a selection). Left and Right change the hue by 1
-///   degree, Up and Down the saturation by 1 percent; Shift steps ten; each key is a `Set`. During a drag keys change
-///   nothing. Esc during a drag cancels it.
-/// - AccessKit: a `Group` named `label` holding a `Slider` per marker (the hue, 0 to 360, step 1, increment, decrement
-///   and set value), named by [`names`](ColorDisc::names) or "Color N", with the value text "Hue 120 degrees,
-///   saturation 80 %".
+/// - Keys: the markers are one Tab stop, which lands on the selected marker (the first without a selection); a press
+///   that grabs a marker focuses it. Left and Right change the focused marker's hue by 1 degree, Up and Down its
+///   saturation by 1 percent; Shift steps ten; each key is a `Set`. During a drag keys change nothing. Esc during a
+///   drag cancels it.
+/// - AccessKit: a `Group` named `label` holding a focusable `Slider` per marker (the hue, 0 to 360, step 1, increment,
+///   decrement and set value), named by [`names`](ColorDisc::names) or "Color N", with the value text "Hue 120
+///   degrees, saturation 80 %". Focus on a marker reports it as [`pressed`](ColorDiscOutput::pressed).
 /// - Right to left nothing mirrors: red stays at 3 o'clock.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(content_painter)]
@@ -143,7 +146,7 @@ pub struct ColorDisc<'a> {
     common: Common,
     markers: &'a [Srgba],
     drag: Bind<'a, DiscMove>,
-    /// The marker drawn larger and reached by Tab; the host owns it.
+    /// The marker drawn larger and where Tab lands; the host owns it.
     #[prop]
     chosen: Option<usize>,
     /// The brightness the disc is drawn at, 0 to 1; never below a floor.
@@ -174,7 +177,7 @@ impl<'a> ColorDisc<'a> {
         center + hue_direction(hue) * (radius * saturation.clamp(0.0, 1.0))
     }
 
-    /// The marker with the Tab stop: the selected one, else the first.
+    /// The marker Tab lands on: the selected one, else the first.
     fn stop(&self) -> usize {
         self.chosen.filter(|selected| *selected < self.markers.len()).unwrap_or(0)
     }
@@ -192,6 +195,10 @@ impl<'a> ColorDisc<'a> {
     fn resting(&self, index: usize) -> DiscMove {
         let [hue, saturation, _] = self.hsb(index);
         DiscMove::new(index, hue, saturation)
+    }
+    /// The marker focus is on.
+    fn focused(&self, cx: &Cx<'_, Self>) -> Option<usize> {
+        (0..self.markers.len()).find(|index| cx.active_part() == Some(MARKER.at(*index as u64)))
     }
 }
 
@@ -243,13 +250,14 @@ impl Component for ColorDisc<'_> {
             };
             let radius_of = marker_radius(cx.style, self.chosen == Some(index));
             let part = cx.part(MARKER.at(index as u64), HitShape::circle(Self::marker_pos(center, radius, at.hue, at.saturation), radius_of));
-            // A marker takes no press of its own (the disc grabs the nearest) and only the selected one is a Tab stop.
+            // A marker takes no press of its own: the disc grabs the nearest.
+            let part = part.focusable().focus_shape(FocusShape::Circle);
             if index == stop {
-                part.focusable().focus_shape(FocusShape::Circle);
-            } else {
-                part.keyboard_via(MARKER);
+                part.selected();
             }
         }
+        // The arrows move the focused marker, so the group takes none of them; Home and End do nothing.
+        cx.roving(Roving::new(NavShape::Flat).arrows(Arrows::None).home_end(false));
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, DiscMove>> {
@@ -260,7 +268,6 @@ impl Component for ColorDisc<'_> {
         let (center, radius) = Self::geometry(cx.rect, cx.style.inset);
         let grab_reach = cx.style.grab;
         let press = cx.part(DISC).press;
-        let stop = self.stop();
         if primary(&press) && matches!(press.phase, PressPhase::Down { .. }) {
             let origin = press.phase.start().map(|start| start.origin);
             let near = origin.and_then(|origin| {
@@ -272,8 +279,8 @@ impl Component for ColorDisc<'_> {
             });
             cx.memory::<Grab>().marker = near.map(|(index, _)| index);
             self.pressed = near.map(|(index, _)| index);
-            if near.is_some() && !self.markers.is_empty() {
-                cx.focus_part(MARKER.at(stop as u64));
+            if let Some((index, _)) = near {
+                cx.focus_part(MARKER.at(index as u64));
             }
         }
         let grabbed = cx.memory::<Grab>().marker;
@@ -326,10 +333,13 @@ impl Component for ColorDisc<'_> {
         if matches!(press.phase, PressPhase::Release { .. } | PressPhase::Cancel { .. }) {
             *cx.memory::<Grab>() = Grab::default();
         }
-        let mut now = self.resting(stop);
-        let on_stop = cx.active_part() == Some(MARKER.at(stop as u64));
+        let focused = self.focused(&*cx);
+        if self.pressed.is_none() && focused != Some(self.stop()) {
+            self.pressed = focused;
+        }
+        let mut now = self.resting(focused.unwrap_or(0));
         while let Some((mv, mods)) = cx.intents().take_move() {
-            if running || !on_stop || self.markers.is_empty() {
+            if running || focused.is_none() {
                 continue;
             }
             let by = if mods.extend { FAR } else { KEY_STEP };
@@ -348,19 +358,6 @@ impl Component for ColorDisc<'_> {
             if let Some(value) = cx.intents().take_set_value_at(MARKER.at(index as u64)).filter(|value| value.is_finite() && !running) {
                 let mut moved = cx.value().filter(|moved| moved.marker == index).copied().unwrap_or_else(|| self.resting(index));
                 moved.hue = value.round().rem_euclid(360.0) as f32;
-                cx.set(moved);
-            }
-        }
-        while let Some(request) = cx.intents().take_access() {
-            let Some(index) = (0..self.markers.len()).find(|index| request.target == Some(MARKER.at(*index as u64))) else { continue };
-            let step = match request.action {
-                AccessAction::Increment => KEY_STEP,
-                AccessAction::Decrement => -KEY_STEP,
-                _ => continue,
-            };
-            if !running {
-                let mut moved = cx.value().filter(|moved| moved.marker == index).copied().unwrap_or_else(|| self.resting(index));
-                moved.hue = (moved.hue + step).round().rem_euclid(360.0);
                 cx.set(moved);
             }
         }
