@@ -1,12 +1,13 @@
 //! `Link`: text in the accent colour, always underlined, that reports a click.
 
+use super::ButtonOutput;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Pointer as _, Role, Styled as _};
 use crate::primitives::{Span, TextLayout, TextRun, Wrap};
 use crate::style::{ComponentStyle, FocusLook, Stateful, StyleCx, TextLook, TypeRole};
 use craft_behavior::{Flow, Metrics, PointerButton, PressPhase, Sense};
 use craft_theme::variant::Tone;
 use craft_theme::{Contrast, States};
-use egui::{Pos2, Response, Vec2};
+use egui::{Pos2, Vec2};
 
 /// The style of a link.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -61,7 +62,7 @@ impl Component for Link {
     const PARTS: bool = false;
     const OVERLAYS: bool = false;
     type Style = LinkStyle;
-    type Output = Response;
+    type Output = ButtonOutput;
 
     fn style(cx: &StyleCx<'_>, key: LinkStyleKey) -> LinkStyle {
         let colors = &cx.tokens.color;
@@ -116,8 +117,8 @@ impl Component for Link {
         draw.galley(Pos2::new(line.left(), top), &layout);
     }
 
-    fn finish(self, cx: Cx<'_, Self>) -> Response {
-        cx.response.clone()
+    fn finish(self, cx: Cx<'_, Self>) -> ButtonOutput {
+        ButtonOutput::of(&cx, cx.activation().is_some())
     }
 }
 

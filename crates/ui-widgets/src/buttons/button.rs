@@ -8,6 +8,7 @@ use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, DataColor, FocusLook, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole};
 use craft_behavior::{Metrics, PartKey, PressPhase, Sense};
+use craft_keymap::Mods;
 use craft_theme::{
     Rgba, Stateful, Variant,
     variant::{Emphasis, Tone},
@@ -65,7 +66,7 @@ impl ButtonStyle {
     }
 }
 
-/// What a button reports: its response and the click count of this pass's activation.
+/// What a button reports: its response, and the click count and modifiers of this pass's activation.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ButtonOutput {
@@ -75,6 +76,9 @@ pub struct ButtonOutput {
     /// and so on (`craft_behavior::press::count_clicks`). An activation by key or AccessKit counts 1; 0 when the
     /// button was not activated.
     pub clicks: u32,
+    /// The modifiers held at the activation (with the click for a pointer one); none when the button was not
+    /// activated.
+    pub mods: Mods,
 }
 
 impl ButtonOutput {
@@ -85,7 +89,11 @@ impl ButtonOutput {
             (true, ..) => 1,
             (false, ..) => 0,
         };
-        ButtonOutput { response: cx.response.clone(), clicks }
+        let mods = match (activated, cx.activation()) {
+            (true, Some(activation)) => activation.mods,
+            _ => Mods::NONE,
+        };
+        ButtonOutput { response: cx.response.clone(), clicks, mods }
     }
 }
 

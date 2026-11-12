@@ -1,12 +1,13 @@
 //! The export dialogs' own logic: the settings a document can take and what Export As answers.
 
 use craft_behavior::PixelSize;
-use craft_ui::contract::Bind;
+use craft_ui::contract::{Bind, Role};
 use craft_ui::patterns::form_dialogs::{
     ExportAsDialog, ExportOptions, ExportOptionsKind, FormatOptions, FormatOptionsDialog, JpegOptions, OutputPathRow,
 };
 use craft_ui::runtime::requests::PathRequest;
 use craft_ui::testing::{Fixture, trial};
+use egui::{Key, Modifiers};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -77,3 +78,37 @@ fn jpeg_quality_answers_its_opening_value_and_a_preset_pick() {
     assert_eq!(answers.borrow().as_slice(), [FormatOptions::Jpeg(JpegOptions::new(10))], "picking Maximum sets the quality to 10");
 }
 
+#[trial]
+fn the_output_file_name_browses_on_a_click_and_edits_the_template_on_alt_click() {
+    let path = Rc::new(RefCell::new("render.mov".to_owned()));
+    let browsed = Rc::new(RefCell::new(0));
+    let (held, count) = (Rc::clone(&path), Rc::clone(&browsed));
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = OutputPathRow::new(Bind::bound(&mut *held.borrow_mut())).show(ui);
+        *count.borrow_mut() += usize::from(shown.browse.is_some());
+    });
+    fixture.idle(10);
+    let link = fixture.by_label("render.mov").expect("the file name is a link");
+    fixture.click(&link).idle(4);
+    assert_eq!(*browsed.borrow(), 1, "a click on the file name asks for the file dialog");
+
+    fixture.hold(Modifiers::ALT);
+    let link = fixture.by_label("render.mov").expect("the link stays after the click");
+    fixture.click(&link).idle(2);
+    fixture.hold(Modifiers::NONE).idle(4);
+    assert_eq!(*browsed.borrow(), 1, "Alt-click opens no file dialog");
+    assert!(fixture.by_role(Role::LINK).is_empty(), "Alt-click puts the template field in the link's place");
+    fixture.type_text("_v2").idle(2);
+    fixture.key(Key::Escape, Modifiers::NONE).idle(4);
+    assert_eq!(*path.borrow(), "render.mov", "Escape leaves the value as it was");
+    assert!(!fixture.by_role(Role::LINK).is_empty(), "Escape brings the link back");
+
+    fixture.hold(Modifiers::ALT);
+    let link = fixture.by_label("render.mov").expect("the link is back");
+    fixture.click(&link).idle(2);
+    fixture.hold(Modifiers::NONE).idle(4);
+    fixture.type_text("_v2").idle(2);
+    fixture.key(Key::Enter, Modifiers::NONE).idle(4);
+    assert!(path.borrow().contains("_v2"), "Enter commits the typed template, got {}", path.borrow());
+    assert!(!fixture.by_role(Role::LINK).is_empty(), "the committed template shows as the link");
+}
