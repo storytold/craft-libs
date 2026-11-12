@@ -2098,6 +2098,7 @@ dependencies = [
 name = "craft-xlsx"
 version = "0.1.0"
 dependencies = [
+ "craft-drawingml",
  "craft-opc",
  "craft-sheet",
  "craft-xml",
