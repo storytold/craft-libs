@@ -106,3 +106,12 @@ fn a_viewport_smaller_than_the_bar_still_yields_a_rect() {
     let r = anchor_rect(line(5.0, 10.0), tiny, BAR).unwrap_or(Rect::EVERYTHING);
     assert!(r.width() > 0.0 && r.min.x.is_finite() && r.min.y.is_finite());
 }
+
+#[test]
+fn a_smaller_gap_keeps_the_bar_clear_when_the_full_gap_fits_nowhere() {
+    let tight = Rect::from_min_size(pos2(100.0, 50.0), Vec2::new(1200.0, 148.0));
+    let sel = line(300.0, 114.0);
+    let bar = anchor_rect(sel, tight, BAR).unwrap();
+    assert!(bar.max.y <= sel.top() || bar.min.y >= sel.bottom(), "{bar:?} covers {sel:?}");
+    assert!(bar.min.y >= tight.top() && bar.max.y <= tight.bottom());
+}

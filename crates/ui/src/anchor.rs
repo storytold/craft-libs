@@ -67,6 +67,11 @@ pub fn anchor_rect(selection: Rect, viewport: Rect, bar: BarPlacement) -> Option
         above
     } else if fits(below) {
         below
+    } else if fits(selection.top() - h) {
+        // The full gap fits on neither side: a smaller one still clears the selection.
+        selection.top() - h
+    } else if fits(selection.bottom()) {
+        selection.bottom()
     } else {
         let desired = if above < viewport.top() { below } else { above };
         desired.clamp(viewport.top(), (viewport.bottom() - h).max(viewport.top()))
