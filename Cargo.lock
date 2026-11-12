@@ -1781,6 +1781,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "craft-crw",
+ "craft-metadata",
  "craft-tiff",
  "jpeg-encoder 0.7.1",
  "jxl-oxide",
