@@ -40,7 +40,7 @@ pub use kit::{
 };
 pub use marker::{Marker, MarkerSize};
 pub use reset_mark::ResetMark;
-pub use rule::{Rule, RuleKind};
+pub use rule::{RectSide, Rule, RuleKind};
 pub use scroll_bar::{HiddenContent, ScrollBar};
 pub use sensing::{PartResult, TextOutcome};
 pub use state_layer::{StateLayer, StateLayerKind};

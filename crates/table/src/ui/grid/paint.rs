@@ -3,7 +3,9 @@
 
 use craft_behavior::{CursorIcon, HitLevel, HitPriority, Metrics, PartKey, ScrollPos, Sense, TextPos};
 use craft_ui::contract::{Access, Cx, Focus as _, Name, PaintUi, PartsCx, Remember as _, Role, Styled as _};
-use craft_ui::primitives::{Dashes, Draw, EditorLine, EditorPurpose, EditorRun, EditorState, HAlign, PaintShape, RuleKind, StrokeWidth, TextRun};
+use craft_ui::primitives::{
+    Dashes, Draw, EditorLine, EditorPurpose, EditorRun, EditorState, HAlign, PaintShape, RectSide, RuleKind, StrokeWidth, TextRun,
+};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::motion::Animate as _;
 use craft_ui::style::{Flags, Stateful, StyleCx, TypeRole};
@@ -53,6 +55,7 @@ pub(super) fn style(cx: &StyleCx<'_>, key: CellGridStyleKey) -> CellGridStyle {
         header_text: Stateful::new(cx.color(c.text.muted)).when(Flags::SELECTED, cx.color(c.text.on_selected)),
         freeze_line: cx.color(c.line.border),
         accent: cx.color(c.accent.solid),
+        accent_bar: cx.tokens.stroke.thick,
         preview: cx.color(c.text.muted),
         selection: cx.color(c.state.text_selection),
         handle_fill: cx.color(c.accent.solid),
@@ -153,7 +156,7 @@ impl CellGrid<'_> {
 
     /// The fill handle's rect at the end-bottom corner of `outline` (screen coordinates).
     pub(super) fn handle_rect(geometry: &SheetGeometry, outline: Rect, size: f32) -> Rect {
-        let corner = if geometry.mirror_x(0.0) > 0.0 { outline.left_bottom() } else { outline.right_bottom() };
+        let corner = if geometry.right_to_left() { outline.left_bottom() } else { outline.right_bottom() };
         Rect::from_center_size(corner, Vec2::splat(size))
     }
 
@@ -163,7 +166,7 @@ impl CellGrid<'_> {
         let (columns, rows) = Self::visible_lines(&geometry);
         let sense = Sense::CLICK | Sense::DRAG | Sense::CONTEXT_CLICK | Sense::TAKE_FOCUS;
         let reach = craft_behavior::hit::LINE_REACH;
-        let rtl = geometry.mirror_x(0.0) > 0.0;
+        let rtl = geometry.right_to_left();
         let marks = Marks::of(&self.snapshot, geometry.rows().count(), geometry.columns().count());
         let flags = |held: Option<bool>| if held.is_some() { Flags::SELECTED } else { Flags::empty() };
         if self.headings {
@@ -332,8 +335,9 @@ impl CellGrid<'_> {
             draw.fill(&rect(geometry.mirror_rect(area)), plain);
         }
         let marks = Marks::of(selection, geometry.rows().count(), geometry.columns().count());
-        let rtl = geometry.mirror_x(0.0) > 0.0;
+        let rtl = geometry.right_to_left();
         let line = |from: Pos2, to: Pos2| draw.rule(RuleKind::Edge, from, to);
+        let bar = style.accent_bar;
         let look = |part: craft_behavior::PartRef| (cx.resolve_part(part, &style.header), cx.resolve_part(part, &style.header_text));
         for &column in &frame.columns {
             let at = Self::column_header(geometry, column);
@@ -342,10 +346,10 @@ impl CellGrid<'_> {
             draw.fill(&rect(at), fill);
             draw.text(at, &TextRun::new(self.model.column_label(column)).color(text).align(HAlign::Center).elide());
             if state.is_some() {
-                draw.stroke(&PaintShape::Path(vec![at.left_bottom(), at.right_bottom()]), StrokeWidth::Thick, style.accent);
+                draw.fill(&rect(Rect::from_x_y_ranges(at.x_range(), at.bottom() - bar..=at.bottom())), style.accent);
             }
+            draw.edge_rule(RuleKind::Edge, at, RectSide::end(rtl));
             let end = if rtl { at.left() } else { at.right() };
-            line(Pos2::new(end, at.top()), Pos2::new(end, at.bottom()));
             if column + 1 < geometry.columns().count() && !geometry.columns().shown(column + 1) {
                 let mark = if rtl { end - style.gap } else { end + style.gap };
                 line(Pos2::new(mark, at.top()), Pos2::new(mark, at.bottom()));
@@ -363,14 +367,17 @@ impl CellGrid<'_> {
                 draw.text(at, &number);
             }
             if state.is_some() {
-                let (from, to) = if rtl { (at.left_top(), at.left_bottom()) } else { (at.right_top(), at.right_bottom()) };
-                draw.stroke(&PaintShape::Path(vec![from, to]), StrokeWidth::Thick, style.accent);
+                let across = if rtl { at.left()..=at.left() + bar } else { at.right() - bar..=at.right() };
+                draw.fill(&rect(Rect::from_x_y_ranges(across, at.y_range())), style.accent);
             }
-            line(at.left_bottom(), at.right_bottom());
+            draw.edge_rule(RuleKind::Edge, at, RectSide::Bottom);
             if row + 1 < geometry.rows().count() && !geometry.rows().shown(row + 1) {
                 line(Pos2::new(at.left(), at.bottom() + style.gap), Pos2::new(at.right(), at.bottom() + style.gap));
             }
         }
+        // The headers' edges toward the cells, across the corner too.
+        draw.edge_rule(RuleKind::Edge, geometry.mirror_rect(top.union(corner)), RectSide::Bottom);
+        draw.edge_rule(RuleKind::Edge, geometry.mirror_rect(left.union(corner)), RectSide::end(rtl));
     }
 
     /// The open cell: its fill, edge, draft text and caret, and the editor part's report.
@@ -400,7 +407,7 @@ impl CellGrid<'_> {
     fn place_chrome(&mut self, ui: &mut PaintUi<'_>, frame: &Frame, style: &CellGridStyle, outline: Label) {
         let geometry = &frame.geometry;
         let (side, gap) = (style.side, style.gap);
-        let rtl = geometry.mirror_x(0.0) > 0.0;
+        let rtl = geometry.right_to_left();
         for filter in self.filters {
             if !frame.columns.contains(&filter.column) {
                 continue;

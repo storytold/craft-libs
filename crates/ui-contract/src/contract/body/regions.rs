@@ -4,7 +4,7 @@ use super::BodyHooks;
 use crate::contract::cx::BodyCx;
 use crate::contract::{Container, ContainerProps, FooterPlace, Gap, HeaderParts, LeastWidth, Pad, PaneEdge, Sizing};
 use crate::layout::ColumnGroup;
-use crate::primitives::Rule;
+use crate::primitives::{RectSide, Rule};
 use crate::runtime::access::{self};
 use crate::runtime::egui::{alloc, child, style};
 use crate::runtime::env::Env;
@@ -138,19 +138,16 @@ impl RegionFrame<'_> {
 /// edge toward the window's centre, mirrored for a start or end pane under right-to-left.
 pub(super) fn paint_edge_rule(ui: &mut Ui, props: &ContainerProps, env: &Env, rect: Rect) {
     let Some(edge) = env.pane_edge.filter(|_| props.edge_rule) else { return };
-    let rule = rule_look(&env.tokens, RuleKind::Divider);
-    let half = rule.width.points(ui.ctx().pixels_per_point()) / 2.0;
     let rtl = env.direction.is_rtl();
-    let (from, to) = match edge {
-        PaneEdge::Start if rtl => (Pos2::new(rect.min.x + half, rect.min.y), Pos2::new(rect.min.x + half, rect.max.y)),
-        PaneEdge::Start => (Pos2::new(rect.max.x - half, rect.min.y), Pos2::new(rect.max.x - half, rect.max.y)),
-        PaneEdge::End if rtl => (Pos2::new(rect.max.x - half, rect.min.y), Pos2::new(rect.max.x - half, rect.max.y)),
-        PaneEdge::End => (Pos2::new(rect.min.x + half, rect.min.y), Pos2::new(rect.min.x + half, rect.max.y)),
-        PaneEdge::Top => (Pos2::new(rect.min.x, rect.max.y - half), Pos2::new(rect.max.x, rect.max.y - half)),
-        PaneEdge::Bottom => (Pos2::new(rect.min.x, rect.min.y + half), Pos2::new(rect.max.x, rect.min.y + half)),
+    let side = match edge {
+        PaneEdge::Start => RectSide::end(rtl),
+        PaneEdge::End => RectSide::start(rtl),
+        PaneEdge::Top => RectSide::Bottom,
+        PaneEdge::Bottom => RectSide::Top,
         PaneEdge::Center => return,
     };
-    ui.painter().extend(Rule::shapes(&rule, from, to, ui.ctx().pixels_per_point()));
+    let rule = rule_look(&env.tokens, RuleKind::Divider);
+    ui.painter().extend(Rule::edge(&rule, rect, side, ui.ctx().pixels_per_point()));
 }
 
 /// The divider rules above and under the header, above the footer and beside the end region.
@@ -175,14 +172,13 @@ pub(super) fn paint_rules(ui: &mut Ui, props: &ContainerProps, env: &Env, inner:
     }
     // The end region's rule runs along its edge toward the body, beside a footer placed in it too.
     if props.end.is_some_and(|end| end.rule) && regions.end.width() > 0.0 {
-        let half = rule.width.points(ppp) / 2.0;
-        let x = if env.direction.is_rtl() { regions.end.max.x - half } else { regions.end.min.x + half };
         let (top, bottom) = if footer_in_end(props) {
             (regions.end.min.y.min(regions.footer.min.y), regions.end.max.y.max(regions.footer.max.y))
         } else {
             (regions.end.min.y, regions.end.max.y)
         };
-        ui.painter().extend(Rule::shapes(&rule, Pos2::new(x, top), Pos2::new(x, bottom), ppp));
+        let end = Rect::from_x_y_ranges(regions.end.x_range(), top..=bottom);
+        ui.painter().extend(Rule::edge(&rule, end, RectSide::start(env.direction.is_rtl()), ppp));
     }
 }
 

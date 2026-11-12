@@ -121,6 +121,8 @@ pub struct CellGridStyle {
     /// The line along the frozen panes' edge.
     pub(crate) freeze_line: StyleColor,
     pub(crate) accent: StyleColor,
+    /// The thickness of the accent bar on a selected line's header edge.
+    pub(crate) accent_bar: f32,
     pub(crate) preview: StyleColor,
     pub(crate) selection: StyleColor,
     pub(crate) handle_fill: StyleColor,

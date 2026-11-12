@@ -58,3 +58,36 @@ fn a_rounded_ramp_keeps_inside_its_corners_and_a_square_one_fills_its_rect() {
         }
     }
 }
+
+#[trial]
+fn an_edge_rule_lies_on_the_pixels_just_inside_its_side_at_any_scale() {
+    use craft_ui::primitives::{RectSide, Rule};
+    use craft_ui::style::{RuleLook, RuleWidth};
+    use egui::{Color32, Rect, Shape};
+
+    for ppp in [1.0, 1.5, 2.0] {
+        // Edges on physical pixel boundaries, as laid-out rows and cells have them.
+        let rect = Rect::from_min_max(pos2(30.0, 45.0), pos2(150.0, 90.0)) / ppp;
+        for width in [RuleWidth::Hairline, RuleWidth::Points(2.0)] {
+            let look = RuleLook { color: Color32::WHITE, width };
+            for side in [RectSide::Top, RectSide::Bottom, RectSide::Left, RectSide::Right] {
+                let shapes = Rule::edge(&look, rect, side, ppp);
+                let [Shape::LineSegment { points: [from, to], stroke }] = shapes.as_slice() else {
+                    panic!("one line segment for {side:?}");
+                };
+                let half = stroke.width / 2.0;
+                let horizontal = matches!(side, RectSide::Top | RectSide::Bottom);
+                let (at, low, high) = if horizontal { (from.y, rect.top(), rect.bottom()) } else { (from.x, rect.left(), rect.right()) };
+                assert!(at - half >= low - EPS && at + half <= high + EPS, "{side:?} at {ppp}x: the band {at}±{half} leaves the rect");
+                let edge = match side {
+                    RectSide::Top => at - half - low,
+                    RectSide::Left => at - half - low,
+                    _ => high - (at + half),
+                };
+                assert!(edge.abs() < EPS, "{side:?} at {ppp}x: the band does not touch its side");
+                let along = if horizontal { (from.x, to.x, rect.left(), rect.right()) } else { (from.y, to.y, rect.top(), rect.bottom()) };
+                assert!((along.0 - along.2).abs() < EPS && (along.1 - along.3).abs() < EPS, "{side:?} runs the whole side");
+            }
+        }
+    }
+}

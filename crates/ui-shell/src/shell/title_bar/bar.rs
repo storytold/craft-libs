@@ -11,7 +11,7 @@ use crate::contract::{
     PaintUi, Role, ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::layout::{Placed, arrange};
-use crate::primitives::RuleKind;
+use crate::primitives::{RectSide, RuleKind};
 use crate::runtime::access::Name;
 use crate::runtime::egui::pass;
 use crate::runtime::env::Env;
@@ -21,7 +21,7 @@ use crate::shell::{Caption, CaptionButton, CaptionIcons, Frame, ShellWords, Slot
 use crate::style::{StyleCx, SurfaceKind};
 use craft_behavior::Sense;
 use craft_host::target::{DoubleClick, WindowState};
-use egui::{Response, Ui, pos2};
+use egui::{Response, Ui};
 
 /// What a title bar reports: the caption clicked and whether the window was asked to close.
 #[derive(Debug)]
@@ -243,9 +243,7 @@ impl Component for TitleBar<'_> {
         if !self.separator {
             return;
         }
-        let draw = ui.draw();
-        let y = cx.rect.bottom() - draw.rule_width(RuleKind::Divider) / 2.0;
-        draw.rule(RuleKind::Divider, pos2(cx.rect.left(), y), pos2(cx.rect.right(), y));
+        ui.draw().edge_rule(RuleKind::Divider, cx.rect, RectSide::Bottom);
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> TitleBarOutput {

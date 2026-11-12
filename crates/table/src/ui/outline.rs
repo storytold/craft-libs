@@ -5,7 +5,7 @@ use craft_theme::{Stateful, TypeRole};
 use craft_ui::contract::{
     Access, Common, Component, Cx, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role, Styled as _, WordSetCx as _,
 };
-use craft_ui::primitives::{PaintShape, RuleKind, StrokeWidth, TextRun};
+use craft_ui::primitives::{PaintShape, RectSide, RuleKind, StrokeWidth, TextRun};
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, TextLook};
 use egui::{CornerRadius, Pos2, Rect, Response, Vec2, pos2, vec2};
@@ -343,15 +343,11 @@ impl Component for OutlineBand<'_> {
                 draw.fill(&PaintShape::Rect(geometry.mirror_rect(band), CornerRadius::ZERO), style.background);
             }
         }
-        let half = draw.rule_width(RuleKind::Edge) / 2.0;
-        let edge = |a: Pos2, b: Pos2| draw.rule(RuleKind::Edge, geometry.mirror_pos(a), geometry.mirror_pos(b));
         if frame.row_band.width() > 0.0 {
-            let band = frame.row_band;
-            edge(pos2(band.right() - half, band.top()), pos2(band.right() - half, band.bottom()));
+            draw.edge_rule(RuleKind::Edge, geometry.mirror_rect(frame.row_band), RectSide::end(geometry.right_to_left()));
         }
         if frame.column_band.height() > 0.0 {
-            let band = frame.column_band;
-            edge(pos2(band.left(), band.bottom() - half), pos2(band.right(), band.bottom() - half));
+            draw.edge_rule(RuleKind::Edge, geometry.mirror_rect(frame.column_band), RectSide::Bottom);
         }
         for bracket in &self.laid.brackets {
             draw.stroke(&line(bracket.line[0], bracket.line[1]), StrokeWidth::Thin, style.ink);

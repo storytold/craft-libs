@@ -1,6 +1,7 @@
 //! The family card and the collection of cards the panel lists.
 
 use super::*;
+use craft_ui::primitives::RectSide;
 
 /// What a family card asks the panel for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -164,7 +165,6 @@ struct Placed {
     meta: Option<Rect>,
     end: Vec<(End, Rect)>,
     sample: Rect,
-    rule: (Pos2, Pos2),
 }
 
 /// The sizes of the card's parts at one width.
@@ -371,7 +371,6 @@ impl Component for FamilyCard {
             meta,
             end,
             sample,
-            rule: (rect.left_bottom(), rect.right_bottom()),
         });
     }
 
@@ -385,7 +384,7 @@ impl Component for FamilyCard {
             if let Some(meta) = placed.meta {
                 draw.text(meta, &TextRun::new(self.data.meta.as_str()).role(style.meta.role).color(cx.resolve(&style.meta.color)).elide());
             }
-            draw.rule(RuleKind::Divider, placed.rule.0, placed.rule.1);
+            draw.edge_rule(RuleKind::Divider, cx.rect, RectSide::Bottom);
         }
         for (piece, rect) in &placed.end {
             let pressed = with_end!(self, words, *piece, |child| clicked(&ui.child(("end", *piece as u8), *rect, child)));

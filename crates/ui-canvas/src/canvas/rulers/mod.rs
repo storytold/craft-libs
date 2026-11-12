@@ -17,7 +17,7 @@ use crate::contract::{
     PaintUi, PartsCx, Pointer as _, Props as _, Role, Styled as _, WordSetCx as _,
 };
 use crate::menu::Menu;
-use crate::primitives::{PaintShape, StrokeWidth, TextRun, Tick, TickEdge, TickRank};
+use crate::primitives::{PaintShape, RectSide, StrokeWidth, TextRun, Tick, TickEdge, TickRank};
 use crate::runtime::env::{EnvView, Label, UnitKind};
 use crate::runtime::focus::KeyUse;
 use crate::runtime::memory::Remember as _;
@@ -558,8 +558,8 @@ impl Component for Rulers<'_> {
         }
 
         draw.fill(&rect(corner), style.fill);
-        draw.rule(RuleKind::Divider, Pos2::new(top.left(), top.bottom()), Pos2::new(top.right(), top.bottom()));
-        draw.rule(RuleKind::Divider, Pos2::new(left.right(), left.top()), Pos2::new(left.right(), left.bottom()));
+        draw.edge_rule(RuleKind::Divider, top, RectSide::Bottom);
+        draw.edge_rule(RuleKind::Divider, left, RectSide::Right);
     }
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {

@@ -2,7 +2,7 @@
 
 use craft_behavior::{ColumnKey, Metrics, PartKey, Sense};
 use craft_ui::contract::{Access, Component, Cx, MeasureCx, Name, PaintUi, PartsCx, Role, Styled as _};
-use craft_ui::primitives::{PaintShape, RuleKind};
+use craft_ui::primitives::{PaintShape, RectSide, RuleKind};
 use craft_ui::style::{ComponentStyle, Flags, Stateful, StyleColor, StyleCx};
 use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
 
@@ -114,9 +114,8 @@ impl Component for GridRow<'_> {
                 draw.fill(&PaintShape::Rect(shape, CornerRadius::ZERO), cx.style.background);
                 draw.fill(&PaintShape::Rect(shape, CornerRadius::ZERO), cx.resolve_part(PartKey::CELL.at(u64::from(column)), &cx.style.tint));
                 if gridlines {
-                    let (top, bottom) = if rtl { (shape.left_top(), shape.left_bottom()) } else { (shape.right_top(), shape.right_bottom()) };
-                    draw.rule(RuleKind::Grid, shape.left_bottom(), shape.right_bottom());
-                    draw.rule(RuleKind::Grid, top, bottom);
+                    draw.edge_rule(RuleKind::Divider, shape, RectSide::Bottom);
+                    draw.edge_rule(RuleKind::Divider, shape, RectSide::end(rtl));
                 }
             }
             self.model.paint_cell(ui, shape, cell, self.zoom);

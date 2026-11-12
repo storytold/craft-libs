@@ -16,7 +16,7 @@ use crate::controls::disclosure::Disclosure;
 use crate::display::Progress;
 use crate::list::toggle::{ToggleFace, ToggleState};
 use crate::list::words::ListWords;
-use crate::primitives::{RuleKind, StrokeWidth, TextRun, Wrap, glyph};
+use crate::primitives::{RectSide, RuleKind, StrokeWidth, TextRun, Wrap, glyph};
 use crate::runtime::commands::FireSource;
 use crate::runtime::env::{Label, WordTemplate};
 use crate::style::{Flags, IconLook, StyleCx, SurfaceLook, TextLook, UiTokens};
@@ -454,7 +454,7 @@ impl Component for ListRow<'_> {
         {
             let draw = ui.draw();
             if self.rule || (self.layer && style.dividers) {
-                draw.rule(RuleKind::Divider, Pos2::new(rect.left(), rect.bottom()), Pos2::new(rect.right(), rect.bottom()));
+                draw.edge_rule(RuleKind::Divider, rect, RectSide::Bottom);
             }
             if self.layer && style.dividers {
                 for x in &placed.dividers {

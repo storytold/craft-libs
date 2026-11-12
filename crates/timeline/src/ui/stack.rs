@@ -22,7 +22,7 @@ use craft_ui::contract::{
     ItemKeys, ItemOutput, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _, Props, Remember as _, Role, Scroll, ScrollAnchor, SelectMode,
     Sizing, Styled as _, ToggleColumn, WordSetCx as _,
 };
-use craft_ui::primitives::{IconSpec, PaintShape, RuleKind};
+use craft_ui::primitives::{IconSpec, PaintShape, RectSide, RuleKind};
 use craft_ui::runtime::commands::FireSource;
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, DataColor, IconLook, Stateful, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole, UiTokens};
@@ -604,8 +604,7 @@ impl Component for TrackRow<'_> {
         } else if let Some(strip) = self.cell(&STRIP).filter(|_| cx.part(LABEL).hovered) {
             draw.fill(&PaintShape::Rect(strip, CornerRadius::ZERO), style.hover);
         }
-        let y = headers.bottom() - draw.rule_width(RuleKind::Divider) / 2.0;
-        draw.rule(RuleKind::Divider, Pos2::new(headers.left(), y), Pos2::new(headers.right(), y));
+        draw.edge_rule(RuleKind::Divider, headers, RectSide::Bottom);
         if let Some(cell) = self.cell(&NAME) {
             let indent = f32::from(self.track.depth) * style.pad;
             let flow = craft_behavior::Flow::new(cell, rtl);

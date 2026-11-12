@@ -20,7 +20,7 @@ use crate::contract::{
 use crate::contract::{lead_position, section_part};
 use crate::controls::disclosure::Disclosure;
 use crate::list::{DropTest, ListRow, RowTest, ThumbSize};
-use crate::primitives::PaintShape;
+use crate::primitives::{PaintShape, RectSide};
 use crate::runtime::access::Name;
 use crate::runtime::commands::FireSource;
 use crate::runtime::env::Label;
@@ -646,7 +646,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
             if placed.pinned {
                 let draw = ui.draw();
                 draw.fill(&PaintShape::Rect(rect, CornerRadius::ZERO), style.pinned);
-                draw.rule(RuleKind::Divider, rect.left_bottom(), rect.right_bottom());
+                draw.edge_rule(RuleKind::Divider, rect, RectSide::Bottom);
             }
             let lead = RowState { emphasized: lead == Some(Slot::Header(placed.group)), ..RowState::default() };
             let mut heading = ListRow::new(group.title.clone()).heading().node(false).state(lead);

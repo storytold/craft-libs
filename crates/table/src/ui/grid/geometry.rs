@@ -169,6 +169,11 @@ impl SheetGeometry {
         Self { layout, cells, header, frozen_size }
     }
 
+    /// Whether the sheet is mirrored for a right-to-left script.
+    pub fn right_to_left(&self) -> bool {
+        self.layout.right_to_left
+    }
+
     /// The zoom the geometry was built at.
     pub fn zoom(&self) -> f32 {
         self.layout.zoom

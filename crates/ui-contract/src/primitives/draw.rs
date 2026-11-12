@@ -2,7 +2,7 @@
 
 use super::content::DocText;
 use super::record::PaintRecord;
-use super::rule::RuleKind;
+use super::rule::{RectSide, RuleKind};
 use super::surface::Surface;
 use super::text::{TextEnv, TextLayout, TextRun};
 use crate::fonts::stack_facts;
@@ -320,6 +320,13 @@ impl<'a> Draw<'a> {
     pub fn rule(&self, kind: RuleKind, from: Pos2, to: Pos2) {
         let look = rule_look(self.env.tokens, kind);
         self.painter.extend(super::rule::Rule::shapes(&look, from, to, self.painter.pixels_per_point()));
+    }
+
+    /// Paints the line of `kind` along the `side` edge of `rect`, on the physical pixels just inside it
+    /// (`Rule::edge`): a row's bottom rule, a cell's gridline, a strip's edge toward its neighbour.
+    pub fn edge_rule(&self, kind: RuleKind, rect: Rect, side: RectSide) {
+        let look = rule_look(self.env.tokens, kind);
+        self.painter.extend(super::rule::Rule::edge(&look, rect, side, self.painter.pixels_per_point()));
     }
 
     /// Paints the scroll bar in `track` along `axis` for `span`, in `state` (`ScrollBar::shapes`).

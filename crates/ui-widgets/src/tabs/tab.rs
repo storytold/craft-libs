@@ -13,7 +13,7 @@ use crate::contract::{
     Styled as _, WordSetCx as _,
 };
 use crate::display::Progress;
-use crate::primitives::{IconSpec, PaintShape, StrokeWidth, TextRun};
+use crate::primitives::{IconSpec, PaintShape, RectSide, StrokeWidth, TextRun};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, Corners, Flags, IconLook, RuleKind, StyleColor, StyleCx, SurfaceLook, TextLook, UiTokens};
 use craft_behavior::{Flow, IconId, Insets, Metrics, PartKey, PointerButton, PressPhase, Proposal, Sense};
@@ -408,8 +408,7 @@ impl Component for Tab<'_> {
         let selected = cx.resolved.selected == Some(true) || cx.state().flags.contains(Flags::SELECTED);
         let draw = ui.draw();
         if style.divider {
-            let x = cx.flow.end_x();
-            draw.rule(RuleKind::Divider, Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom()));
+            draw.edge_rule(RuleKind::Divider, rect, RectSide::end(cx.flow.is_rtl()));
         }
         if let (Some(color), true) = (style.indicator, selected) {
             let bar = Rect::from_min_size(rect.min, Vec2::new(rect.width(), sizes.indicator.min(rect.height())));
