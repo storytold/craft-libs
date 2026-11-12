@@ -1676,3 +1676,7 @@ mod chartex_tests {
         assert!(stats.iter().all(|s| s.len() == 2 && s.iter().all(Option::is_some)));
     }
 }
+
+pub mod chartex;
+pub mod read;
+pub mod write;
