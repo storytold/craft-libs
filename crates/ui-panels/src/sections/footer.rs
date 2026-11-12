@@ -6,6 +6,7 @@ use crate::contract::{
     Access, BodyLayout, Common, Component, Container, ContainerProps, Cx, DropMark, DropOperation, DropTarget, NoValue, Outcome, Pad, Pointer as _,
     PopupKind, Props as _, Role, RowAlign, Show as _, ShowContainer as _, Sizing, TooltipSpec, WordSetCx as _,
 };
+use crate::layout_components::Row;
 use crate::primitives::IconSpec;
 use crate::runtime::access::Name;
 use crate::runtime::env::{Env, EnvValue, Label};
@@ -50,6 +51,8 @@ pub struct FooterBar {
     enter: bool,
     /// The members stand in a column, each as wide as the widest.
     column: bool,
+    /// How many of the first actions sit at the start edge; the rest sit at the end edge.
+    start: usize,
 }
 
 /// The payload a dropped-on action reports, type-erased so actions of different payload types share one footer.
@@ -541,6 +544,7 @@ impl FooterBar {
             content: Content::Body,
             enter: false,
             column: false,
+            start: 0,
         }
     }
 
@@ -558,6 +562,16 @@ impl FooterBar {
         FooterBar { content: Content::Actions(actions.into_iter().collect()), ..FooterBar::body() }
     }
 
+    /// The first `count` actions sit at the start edge and the rest at the end edge, the room left between the two
+    /// groups (Clear Override and Redefine before a style panel's other actions). The indexes the output reports stay
+    /// those of the given order.
+    #[must_use]
+    pub fn at_start(mut self, count: usize) -> Self {
+        self.start = count;
+        self.props = self.props.layout(BodyLayout::row().align(RowAlign::SpaceBetween));
+        self
+    }
+
     /// A footer bar of dialog buttons, in the order of the platform's dialog convention. Show it with
     /// `show_footer`.
     pub fn buttons(buttons: impl IntoIterator<Item = FooterButton>) -> Self {
@@ -567,29 +581,18 @@ impl FooterBar {
     /// Shows the bar with the actions or buttons it was made with and reports what happened to them.
     pub fn show_footer(mut self, ui: &mut Ui) -> FooterOutput {
         let content = std::mem::take(&mut self.content);
-        let (enter, column) = (self.enter, self.column);
+        let (enter, column, start) = (self.enter, self.column, self.start);
         let shown = self.show(ui, |ui, _| match &content {
             Content::Body => Shown::default(),
             Content::Actions(actions) => {
                 let mut shown = Shown::default();
-                for (at, action) in actions.iter().enumerate() {
-                    let response = match &action.drops {
-                        Some(drops) => {
-                            let slot = drops(ui, action);
-                            if let Some(payload) = slot.dropped {
-                                shown.dropped = Some(FooterDrop { index: at, payload });
-                            }
-                            if slot.over {
-                                shown.drop_hint = action.drop_hint.clone().or(shown.drop_hint.take());
-                            }
-                            slot.response
-                        }
-                        None => action.icon_button(false).show(ui).response,
-                    };
-                    if crate::contract::clicked(&response) {
-                        shown.picked = Some(at);
-                    }
-                    shown.responses.push(response);
+                let start = start.min(actions.len());
+                if start == 0 {
+                    show_actions(ui, actions, 0, &mut shown);
+                } else {
+                    let (first, rest) = actions.split_at(start);
+                    Row::new().show(ui, |ui, _| show_actions(ui, first, 0, &mut shown));
+                    Row::new().show(ui, |ui, _| show_actions(ui, rest, start, &mut shown));
                 }
                 shown
             }
@@ -652,6 +655,30 @@ impl FooterBar {
             responses: inner.responses,
             mods,
         }
+    }
+}
+
+/// Shows `actions`, the first of them at index `from` of the bar's actions, and collects what happened to them.
+fn show_actions(ui: &mut Ui, actions: &[FooterAction], from: usize, shown: &mut Shown) {
+    for (at, action) in actions.iter().enumerate() {
+        let at = from + at;
+        let response = match &action.drops {
+            Some(drops) => {
+                let slot = drops(ui, action);
+                if let Some(payload) = slot.dropped {
+                    shown.dropped = Some(FooterDrop { index: at, payload });
+                }
+                if slot.over {
+                    shown.drop_hint = action.drop_hint.clone().or(shown.drop_hint.take());
+                }
+                slot.response
+            }
+            None => action.icon_button(false).show(ui).response,
+        };
+        if crate::contract::clicked(&response) {
+            shown.picked = Some(at);
+        }
+        shown.responses.push(response);
     }
 }
 

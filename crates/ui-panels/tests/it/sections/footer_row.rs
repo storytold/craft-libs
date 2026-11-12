@@ -1,5 +1,5 @@
 //! A footer row: a row of view modes, a thumbnail slider and a footer bar narrows its slider to leave the bar its
-//! actions.
+//! actions; a footer bar with a start group shows it at the start edge and the rest at the end edge.
 
 use craft_behavior::IconId;
 use craft_ui::choice::Segmented;
@@ -44,4 +44,33 @@ fn a_footer_row_narrows_its_slider_to_leave_the_footer_bar_its_actions() {
     assert!(last.max.x <= width + 0.5, "the last action ends at {} past a {width}-point row", last.max.x);
     assert!(slider.width() < wide.width() - 0.5, "the slider kept its width {} in a narrow row", slider.width());
     assert!(slider.max.x <= actions[0].min.x + 0.5, "the slider {slider:?} runs into the actions {actions:?}");
+}
+
+/// The rects of a footer bar's four actions whose first two sit at the start edge, in a bar `WIDE` points wide.
+fn split(direction: craft_ui::runtime::env::Direction) -> Vec<Rect> {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let actions = ["ban", "check", "copy", "trash"].map(|icon| FooterAction::new(IconId::new(icon), icon));
+        let bar = FooterBar::actions(actions).at_start(2).show_footer(ui);
+        *out.borrow_mut() = bar.responses.iter().map(|response| response.rect).collect();
+    });
+    fixture.direction(direction).room(Vec2::new(WIDE, 60.0)).settle();
+    seen.borrow().clone()
+}
+
+const WIDE: f32 = 400.0;
+
+/// The start group sits at the start edge and the rest at the end edge, the room left between them; right to left
+/// the groups trade sides.
+#[trial]
+fn the_start_and_end_groups_of_a_footer_bar_sit_at_their_edges() {
+    use craft_ui::runtime::env::Direction;
+    let ltr = split(Direction::Ltr);
+    assert_eq!(ltr.len(), 4);
+    let (pair, between) = (ltr[1].min.x - ltr[0].max.x, ltr[2].min.x - ltr[1].max.x);
+    assert!(between > pair + WIDE / 4.0, "the room lies between the groups: {ltr:?}");
+    assert!(ltr[0].min.x < WIDE / 4.0 && ltr[3].max.x > WIDE * 3.0 / 4.0, "the groups reach the edges: {ltr:?}");
+    let rtl = split(Direction::Rtl);
+    assert!(rtl[0].min.x > rtl[2].max.x, "right to left the start group sits at the right: {rtl:?}");
 }

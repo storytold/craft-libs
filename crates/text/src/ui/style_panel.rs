@@ -7,10 +7,9 @@ use craft_behavior::{IconId, Selection, SelectionChange, keyed};
 use craft_theme::variant::Tone;
 use craft_ui::bars::StatusMessage;
 use craft_ui::contract::{
-    ActivateOn, Bind, CollectionEvent, CommandSet, Commands as _, ListDrag, NoValue, Outcome, Props as _, Remember as _, RowAlign, SelectMode,
+    ActivateOn, Bind, CollectionEvent, CommandSet, Commands as _, ListDrag, NoValue, Outcome, Props as _, Remember as _, SelectMode,
     ShowCollection as _, ShowContainer as _,
 };
-use craft_ui::layout_components::Row;
 use craft_ui::list::{List, ListRow, RowInk};
 use craft_ui::menu::PanelRow;
 use craft_ui::runtime::commands::CommandState;
@@ -209,6 +208,9 @@ const FOOTER: [TextStyleCommand; 6] = [
     TextStyleCommand::Delete,
 ];
 
+/// How many of the footer's buttons sit at its start edge: Clear Override and Redefine.
+const START_ACTIONS: usize = 2;
+
 /// One styles panel, built per pass:
 ///
 /// ```ignore
@@ -227,8 +229,8 @@ const FOOTER: [TextStyleCommand; 6] = [
 /// - With [`highlighting`](Self::highlighting), Shift-click selects a range and Ctrl or Cmd-click adds or removes a
 ///   row without applying. A row dragged onto New or Delete carries every selected style when it is one of them,
 ///   else itself.
-/// - Footer: Clear Override, Redefine, Style Options, Duplicate, New and Delete, each doing nothing when its
-///   condition doesn't hold. The panel menu ([`TextStylesPanel::panel_rows`]) has the same commands under the same conditions.
+/// - Footer: Clear Override and Redefine at the start edge; Style Options, Duplicate, New and Delete at the end edge,
+///   each disabled while its condition doesn't hold. The panel menu ([`TextStylesPanel::panel_rows`]) has the same commands under the same conditions.
 #[must_use = "show the panel with `show`"]
 #[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
 pub struct TextStylesPanel<'a> {
@@ -326,8 +328,7 @@ impl<'a> TextStylesPanel<'a> {
                     _ => button,
                 }
             });
-            let shown = Row::new().fill().align(RowAlign::End).show(ui, |ui, _| FooterBar::actions(actions.clone()).show_footer(ui));
-            let Some(bar) = shown.inner else { return };
+            let bar = FooterBar::actions(actions).at_start(START_ACTIONS).show_footer(ui);
             if let Some(drop) = &bar.dropped
                 && let Some(drag) = drop.payload::<ListDrag<u64>>()
             {
