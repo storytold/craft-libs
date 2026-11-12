@@ -9,6 +9,7 @@ use craft_ui::contract::{
     Trigger,
 };
 use craft_ui::runtime::focus::Initial;
+use craft_ui::runtime::sampler;
 use craft_ui::style::StyleCx;
 use craft_ui::testing::focus::is_focused;
 use craft_ui::testing::input::key_press;
@@ -41,8 +42,8 @@ struct Took {
     zooms: u32,
 }
 
-/// The canvas: a surface that takes presses of any button, their drags and the wheel, and passes `outside` itself, as
-/// a tool host passes its running tool's gesture.
+/// The canvas: a surface that takes presses of any button, their drags and the wheel. `outside` is a gesture it passes
+/// as a control outside every modal body, as a picker armed in a panel does.
 #[derive(Component)]
 struct Surface<'a> {
     #[common]
@@ -161,8 +162,10 @@ struct Scene {
     armer_id: Cell<Id>,
     open: Cell<bool>,
     arm: Cell<Arm>,
-    /// The gesture the canvas passes itself, outside the dialog's body.
+    /// The gesture the canvas passes as a control, outside the dialog's body.
     outside: Cell<Option<CanvasGesture>>,
+    /// The gesture the canvas's host passes for its running tool.
+    tool: Cell<Option<CanvasGesture>>,
     dialog: Opened,
 }
 
@@ -175,6 +178,7 @@ impl Scene {
             open: Cell::new(false),
             arm: Cell::new(arm),
             outside: Cell::new(None),
+            tool: Cell::new(None),
             dialog: Opened::default(),
         }
     }
@@ -182,7 +186,11 @@ impl Scene {
     fn show(&self, ui: &mut Ui) {
         self.dialog.shown.set(false);
         let canvas = self.canvas.borrow().id.unwrap_or(Id::NULL);
-        Surface { common: Common::new(), took: &self.canvas, outside: self.outside.get() }.id_salt("canvas").show_at(ui, CANVAS);
+        let shown = Surface { common: Common::new(), took: &self.canvas, outside: self.outside.get() }.id_salt("canvas").show_at(ui, CANVAS);
+        // The canvas's host runs its tool after the canvas, as `ToolHost::run` does.
+        if let Some(gesture) = self.tool.get() {
+            sampler::pass_tool_gesture(ui.ctx(), shown.id, gesture);
+        }
         Dialog { common: Common::new(), scene: self, canvas }.id_salt("dialog").show_at(ui, OPENER);
     }
 
@@ -309,14 +317,14 @@ fn a_gesture_with_a_modifier_passes_only_with_the_modifier_held() {
     scene.assert_dialog_holds(&frames);
 }
 
-/// A gesture the canvas passes outside the dialog's body, as a tool host passes its running tool's gesture, belongs to
-/// the top modal: it reaches the canvas under the open dialog, and once the dialog closes it lapses with it, so the
-/// next dialog blocks the canvas while nothing passes the gesture again.
+/// The gesture the canvas's host passes for its running tool belongs to the top modal: it reaches the canvas under
+/// the open dialog, and once the dialog closes it lapses with it, so the next dialog blocks the canvas while the host
+/// passes nothing.
 #[trial]
-fn a_gesture_passed_outside_the_dialog_reaches_the_canvas_and_lapses_with_the_dialog() {
+fn a_tool_gesture_the_host_passes_reaches_the_canvas_and_lapses_with_the_dialog() {
     let mut frames = Frames::new();
     let scene = Scene::new(Arm::Nothing);
-    scene.outside.set(Some(CanvasGesture::PRIMARY));
+    scene.tool.set(Some(CanvasGesture::PRIMARY));
     scene.open_dialog(&mut frames);
     scene.drag(&mut frames, CANVAS.center(), Vec2::new(40.0, 10.0));
     assert!(scene.took(PointerButton::Primary) && scene.dragged_canvas(), "the press and its drag reached the canvas");
@@ -324,9 +332,22 @@ fn a_gesture_passed_outside_the_dialog_reaches_the_canvas_and_lapses_with_the_di
     scene.frame(&mut frames, vec![key_press(Key::Escape, Modifiers::NONE)]);
     scene.settle(&mut frames, 30);
     assert!(!scene.dialog.shown.get(), "Escape closes the dialog");
-    scene.outside.set(None);
+    scene.tool.set(None);
     scene.open_dialog(&mut frames);
     scene.forget_canvas();
     scene.drag(&mut frames, CANVAS.center(), Vec2::new(40.0, 10.0));
     assert!(!scene.took(PointerButton::Primary), "the registration lapsed with its dialog");
+}
+
+/// A picker armed in a panel, outside every modal body, passes no press under a modal that opens while it stays armed.
+#[trial]
+fn a_picker_armed_outside_the_dialog_passes_no_press_under_it() {
+    let mut frames = Frames::new();
+    let scene = Scene::new(Arm::Nothing);
+    scene.outside.set(Some(CanvasGesture::PRIMARY));
+    scene.open_dialog(&mut frames);
+    scene.forget_canvas();
+    scene.drag(&mut frames, CANVAS.center(), Vec2::new(40.0, 10.0));
+    assert!(!scene.took(PointerButton::Primary), "the panel's picker passed no press");
+    scene.assert_dialog_holds(&frames);
 }

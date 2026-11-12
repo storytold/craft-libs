@@ -94,8 +94,8 @@ impl Reach {
 struct Armed {
     canvas: Id,
     reach: Reach,
-    /// The modal layer the registering control belongs to; `None` for a control outside any modal layer.
-    modal: Option<Id>,
+    /// The modal layer the registration belongs to.
+    modal: Id,
 }
 
 /// The armed canvas in one viewport, and how far the modal lets input through.
@@ -163,20 +163,33 @@ struct Registry {
     over: bool,
 }
 
-/// Registers `canvas` with `reach` for the modal layer whose body is running; outside every modal body (the tool host
-/// that runs the canvas's tool), for the top modal layer, here or in another viewport. `Sampler::pass_canvas_gesture`
-/// and `Sampler::keep_view_open` (contract layer) call it.
-pub(crate) fn register(ctx: &Context, canvas: Id, reach: Reach) {
+/// Who a registration belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Owner {
+    /// A control: the modal layer whose body is running. Made outside every modal body, it is dropped, so a picker
+    /// armed in a panel passes no press under a modal that opens later.
+    Body,
+    /// The canvas's host, for the tool it runs: the modal layer whose body is running, else the top modal layer, here
+    /// or in another viewport.
+    Tool,
+}
+
+/// Registers `canvas` with `reach` for the modal layer `owner` names. `Sampler::pass_canvas_gesture` and
+/// `Sampler::keep_view_open` (contract layer) register as [`Owner::Body`], [`pass_tool_gesture`] as [`Owner::Tool`].
+pub(crate) fn register(ctx: &Context, canvas: Id, reach: Reach, owner: Owner) {
     if !crate::runtime::measure::effect(ctx, "sampler::register") {
         return;
     }
     let now = pass::root_frame_nr(ctx);
     let viewport = pass::current_viewport(ctx);
     let modal = overlay::modal_drawing(ctx).or_else(|| {
-        let shown = overlay::top_modal_in(ctx, viewport)
-            .or_else(|| overlay::modal_viewport(ctx, viewport).and_then(|other| overlay::top_modal_in(ctx, other)));
-        shown.map(|top| top.id)
+        let shown = (owner == Owner::Tool).then(|| {
+            overlay::top_modal_in(ctx, viewport)
+                .or_else(|| overlay::modal_viewport(ctx, viewport).and_then(|other| overlay::top_modal_in(ctx, other)))
+        });
+        shown.flatten().map(|top| top.id)
     });
+    let Some(modal) = modal else { return };
     Service::<Registry>::run(ctx, |registry| {
         let reach = match registry.made.take() {
             Some((made, held)) if made == now && held.canvas == canvas && held.modal == modal => held.reach.join(reach),
@@ -184,6 +197,13 @@ pub(crate) fn register(ctx: &Context, canvas: Id, reach: Reach) {
         };
         registry.made = Some((now, Armed { canvas, reach, modal }));
     });
+}
+
+/// The canvas host's entry (`ToolHost`): passes `gesture` on `canvas`, the canvas whose tool the host runs, through the
+/// modal layer that holds the canvas: the one whose body is running, else the top modal. The host calls it in every
+/// pass for the gestures its running tool takes; controls use `Sampler::pass_canvas_gesture`.
+pub fn pass_tool_gesture(ctx: &Context, canvas: Id, gesture: CanvasGesture) {
+    register(ctx, canvas, Reach::gesture(gesture), Owner::Tool);
 }
 
 /// The registration made in this root frame or the last: one per app, the latest wins.
@@ -196,7 +216,7 @@ fn armed(ctx: &Context) -> Option<Armed> {
 /// The layers over the canvas are left for the caller that can read them.
 fn open_hole(ctx: &Context) -> Option<Hole> {
     let armed = armed(ctx)?;
-    let modal = armed.modal?;
+    let modal = armed.modal;
     let (viewport, layer, rect) = pointer::root_bounds(ctx, armed.canvas)?;
     let held = overlay::is_top_modal(ctx, modal)
         && overlay::top_modal_in(ctx, viewport).is_none_or(|top| top.id == modal)
@@ -283,7 +303,7 @@ pub(crate) fn wheel_allowed(ctx: &Context, at: Pos2) -> bool {
 /// layer made the registration.
 pub(crate) fn through(ctx: &Context, viewport: ViewportId, modal: Id) -> Option<Rect> {
     let hole = open_hole(ctx)?;
-    (armed(ctx)?.modal == Some(modal) && hole.viewport == viewport).then_some(hole.rect)
+    (armed(ctx)?.modal == modal && hole.viewport == viewport).then_some(hole.rect)
 }
 
 /// The input hook's step for the canvas a modal keeps open, on the events of any viewport. It follows where the
