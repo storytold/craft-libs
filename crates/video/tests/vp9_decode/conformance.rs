@@ -191,3 +191,21 @@ fn keyframes_and_reset() {
         }
     }
 }
+
+/// A superframe whose later subframe fails outputs nothing: the repeat its first subframe queued
+/// (show_existing_frame of slot 0) is dropped, not handed out by a later flush.
+#[test]
+fn failed_superframe_drops_its_queued_repeats() {
+    let f = common::fixture("fade_intra_heavy");
+    let Some((ivf, _)) = common::ensure(f) else { return };
+    let data = std::fs::read(ivf).unwrap();
+    let chunks = common::ivf_frames(&data);
+    let mut dec = craft_video::vp9::decode::Decoder::with_threads(1);
+    dec.decode(chunks[0], 0).unwrap();
+    dec.flush();
+    // Profile 0 show_existing_frame of slot 0, then a frame with a bad frame marker; superframe
+    // index with one-byte sizes for two frames.
+    let sample = [0x88, 0x00, 0xc1, 1, 1, 0xc1];
+    assert!(dec.decode(&sample, 1).is_err());
+    assert!(dec.flush().is_empty());
+}

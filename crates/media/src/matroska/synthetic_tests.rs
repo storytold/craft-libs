@@ -10,6 +10,8 @@ use crate::matroska::mux::{el, el_float, el_str, el_uint};
 use crate::matroska::track::ContentEncoding;
 use crate::matroska::{ByteSource, Demuxer, MkvFile, OpenOptions, Packet, open_with};
 
+mod hostile;
+
 fn block(track: u8, rel: i16, flags: u8, data: &[u8]) -> Vec<u8> {
     let mut b = vec![0x80 | track];
     b.extend_from_slice(&rel.to_be_bytes());

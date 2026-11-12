@@ -7,6 +7,8 @@
 //!   maker-note IFDs ([`makernote`]).
 //! - [`image::ImageInfo`] describes the pixel layout of an IFD (strips or tiles, planar config,
 //!   compression, predictor) and enumerates its [`image::Chunk`]s.
+//! - [`ycbcr`] converts YCbCr samples to RGB (ReferenceBlackWhite, YCbCrCoefficients) and decodes
+//!   uncompressed and PackBits subsampled YCbCr images; [`packbits`] decompresses PackBits.
 //! - [`writer::TiffWriter`] writes IFD trees (with strips/tiles, `SubIFDs` and pointer IFDs) in
 //!   either byte order, classic or BigTIFF.
 //!
@@ -22,9 +24,11 @@
 
 pub mod image;
 pub mod makernote;
+pub mod packbits;
 mod reader;
 pub mod tags;
 pub mod writer;
+pub mod ycbcr;
 
 pub use reader::{DirectoryEntries, EntrySpan, ParseOptions, decode as decode_value, directory_entries, entry_span, parse_ifd_at};
 pub use writer::{IfdBuilder, ImageData, TiffWriter};

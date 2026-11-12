@@ -297,3 +297,14 @@ fn phry_round_trips_through_the_writer() {
     // Mismatched lengths are an error.
     assert!(write_v6_folders(2, &[], &[], &presets, &folders[..2], true).is_err());
 }
+
+#[test]
+fn sample_budget_covers_2_gib_packs_on_64_bit() {
+    let want = if cfg!(target_pointer_width = "64") { 2 << 30 } else { 512 << 20 };
+    assert_eq!(MAX_TOTAL_BYTES, want);
+    // The pack of photocraft#5949 (1 077 579 672 sample bytes) fits.
+    #[cfg(target_pointer_width = "64")]
+    const {
+        assert!(MAX_TOTAL_BYTES > 1_077_579_672)
+    };
+}

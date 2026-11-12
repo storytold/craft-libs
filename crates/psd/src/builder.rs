@@ -420,7 +420,7 @@ impl PsdBuilder {
         }
 
         let (w, h) = (self.width as usize, self.height as usize);
-        let n = w * h;
+        let n = w.checked_mul(h).ok_or(PsdError::LimitExceeded("image dimensions"))?;
         let (real, planes, with_alpha) = match &self.composite {
             Some(p) => {
                 self.check_pixels(p, n)?;
@@ -432,9 +432,19 @@ impl PsdBuilder {
                 (true, planes, with_alpha)
             }
             None => {
+                // Geometry first, so unsupported dimensions get the validation error, not an allocation.
+                Header::new(self.version, self.width, self.height, cc as u16, self.depth, self.color_mode).validate()?;
                 let bps = usize::from(self.depth / 8);
+                let len = n
+                    .checked_mul(bps)
+                    .and_then(|v| v.checked_mul(cc))
+                    .filter(|&v| v as u64 <= crate::compression::MAX_DECODED_BYTES)
+                    .ok_or(PsdError::LimitExceeded("default composite exceeds MAX_DECODED_BYTES"))?;
+                let mut plane = Vec::new();
+                plane.try_reserve_exact(len).map_err(|_| PsdError::LimitExceeded("default composite allocation"))?;
                 // White: 0xff in RGB/gray; no ink (stored inverted as 0xff) in CMYK.
-                (false, vec![0xff; n * bps * cc], false)
+                plane.resize(len, 0xff);
+                (false, plane, false)
             }
         };
         let channels = (cc + usize::from(with_alpha)) as u16;

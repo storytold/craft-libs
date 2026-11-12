@@ -6,12 +6,12 @@
 //! block per row on the reference data they read, so several pictures decode concurrently.
 
 use crate::hevc::decode::dpb::{Dpb, Output, OutputMeta, PocState, RefPicSet, build_ref_lists};
-use crate::hevc::decode::error::{Error, Result, ensure, invalid};
+use crate::hevc::decode::error::{Error, Result, ensure, invalid, unsupported};
 use crate::hevc::decode::params::{Layout, Pps, Sps, Vps};
 use crate::hevc::decode::picture::{Frame, FrameRef, Sample, stores_u8};
 use crate::hevc::decode::slice::{NalHeader, SliceHeader, nal_type};
 use crate::hevc::decode::slicedec::{Blk, F_INTRA, F_SKIP, PicState, SliceDecoder, SliceJob};
-use crate::hevc::decode::{ColorInfo, Picture};
+use crate::hevc::decode::{ChromaFormat, ColorInfo, Picture};
 use craft_media::bitstream::{annexb_nals, length_prefixed_nals, unescape_rbsp};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -443,10 +443,36 @@ impl Decoder {
             chroma_planes: if chroma == 0 { 0 } else { 2 },
             bytes_per_sample: 2,
         };
+        let frame_bytes = |f: &Frame| {
+            (f.width as u64)
+                .saturating_mul(f.height as u64)
+                .saturating_add((f.cwidth as u64).saturating_mul(f.cheight as u64).saturating_mul(2))
+                .saturating_mul(2)
+        };
+        // Output frames waiting to be returned stay allocated after they leave the DPB, at their
+        // own size: a resolution change in this call can leave pictures of the previous SPS.
+        let queued: u64 = self
+            .out_queue
+            .iter()
+            .filter(|o| !self.dpb.entries.iter().any(|e| Arc::ptr_eq(&e.frame, &o.frame)) && !self.in_flight.iter().any(|f| Arc::ptr_eq(f, &o.frame)))
+            .map(|o| frame_bytes(&o.frame))
+            .fold(0, u64::saturating_add);
+        // Frames the DPB holds now count at their own size too (an SPS change flushes them into the
+        // queue before the new pictures are made): the DPB part is the larger of its new slots and that.
+        let held: u64 = self.dpb.entries.iter().map(|e| frame_bytes(&e.frame)).fold(0, u64::saturating_add);
+        // A queued frame still being decoded is one of the in-flight pictures already reserved, so the
+        // queue and the in-flight reservation overlap: charge the larger, not both.
         let pictures = u64::from(sps.max_dec_pic_buffering) + 1 + self.max_in_flight as u64;
+        let slots = shape.store_bytes(u64::from(sps.max_dec_pic_buffering));
+        let flight = shape.store_bytes(self.max_in_flight as u64);
+        let total = shape
+            .store_bytes(1)
+            .zip(slots)
+            .zip(flight)
+            .map(|((one, slots), flight)| slots.max(held).saturating_add(one).saturating_add(flight).saturating_add(queued));
         ensure!(
-            shape.fits(pictures, self.memory_budget),
-            "{}x{} pictures with {pictures} in the decoder exceed the memory budget",
+            total.is_some_and(|b| b <= self.memory_budget),
+            "{}x{} pictures with {pictures} in the decoder and {queued} bytes queued exceed the memory budget",
             sps.width,
             sps.height
         );
@@ -464,6 +490,7 @@ impl Decoder {
             Some(a) => {
                 a.width != sps.width
                     || a.height != sps.height
+                    || a.chroma_format_idc != sps.chroma_format_idc
                     || a.bit_depth_luma != sps.bit_depth_luma
                     || a.bit_depth_chroma != sps.bit_depth_chroma
                     || a.log2_ctb != sps.log2_ctb
@@ -494,7 +521,10 @@ impl Decoder {
         let max_lsb = sps.max_poc_lsb();
         let poc = self.poc_state.compute(sh, max_lsb, irap_no_rasl);
         let (w, h) = (sps.width as usize, sps.height as usize);
-        let template = Frame::new(0, 0, w, h, sps.log2_ctb, sps.bit_depth_luma, sps.bit_depth_chroma);
+        let Some(chroma) = ChromaFormat::from_idc(sps.chroma_array_type()) else {
+            return unsupported(format!("chroma_format_idc {}", sps.chroma_format_idc));
+        };
+        let template = Frame::new(0, 0, w, h, chroma, sps.log2_ctb, sps.bit_depth_luma, sps.bit_depth_chroma);
         let next_id = &mut self.next_id;
         let gray_reference = &mut self.gray_reference;
         let mut missing = 0u64;
@@ -523,7 +553,7 @@ impl Decoder {
         let _ = scaling;
         let id = self.next_id;
         self.next_id += 1;
-        let frame = Arc::new(Frame::new(id, poc, w, h, sps.log2_ctb, sps.bit_depth_luma, sps.bit_depth_chroma));
+        let frame = Arc::new(Frame::new(id, poc, w, h, chroma, sps.log2_ctb, sps.bit_depth_luma, sps.bit_depth_chroma));
         let output = sh.pic_output && !(hdr.is_rasl() && self.skip_rasl);
         // Draft mode: a sub-layer non-reference picture of the highest sub-layer is never used
         // for prediction, so its in-loop filters can be left out without changing anything else.
@@ -669,7 +699,8 @@ fn output_meta(sps: &Sps, pts: i64, key: bool, draft: bool) -> OutputMeta {
 fn make_picture(o: &Output<FrameRef>) -> Picture {
     let (cx, cy, cw, ch) = o.meta.crop;
     let (cx, cy, cw, ch) = (cx as usize, cy as usize, cw as usize, ch as usize);
-    let (ccw, cch) = (cw.div_ceil(2), ch.div_ceil(2));
+    let chroma = o.frame.chroma;
+    let (ccw, cch) = (cw.div_ceil(chroma.sub_width()), ch.div_ceil(chroma.sub_height()));
     let bd = o.meta.bit_depth;
     let (y, u, v) = o.frame.cropped_planes((cx, cy, cw, ch), bd <= 8);
     Picture {
@@ -677,6 +708,7 @@ fn make_picture(o: &Output<FrameRef>) -> Picture {
         height: ch as u32,
         chroma_width: ccw as u32,
         chroma_height: cch as u32,
+        chroma,
         bit_depth: bd,
         y,
         u,
@@ -716,10 +748,36 @@ mod tests {
             draft: false,
         });
         for id in 0..(MAX_QUEUED_AFTER_ERROR as u32 * 4) {
-            let frame = Arc::new(Frame::new(id, id as i32, 16, 16, 4, 8, 8));
+            let frame = Arc::new(Frame::new(id, id as i32, 16, 16, ChromaFormat::C420, 4, 8, 8));
             decoder.out_queue.push_back(Output { frame, poc: id as i32, meta: meta.clone() });
         }
         decoder
+    }
+
+    #[test]
+    /// Output pictures queued after they left the DPB count against the memory budget.
+    fn queued_output_counts_against_the_memory_budget() {
+        let nal = crate::hevc::decode::synth_tests::sps(true);
+        let sps = Sps::parse(&unescape_rbsp(&nal[6..])).unwrap();
+        let mut decoder = Decoder::with_threads(1);
+        // 96x64 4:2:0 in 16-bit samples: the DPB, the current picture and threads + 2 in flight.
+        let one = (96 * 64 + 2 * 48 * 32) * 2;
+        decoder.set_memory_budget((u64::from(sps.max_dec_pic_buffering) + 1 + decoder.max_in_flight as u64) * one);
+        assert!(decoder.check_budget(&sps).is_ok());
+        let meta = Arc::new(OutputMeta {
+            pts: 0,
+            key: false,
+            crop: (0, 0, 16, 16),
+            full_range: false,
+            colour_primaries: 2,
+            transfer_characteristics: 2,
+            matrix_coefficients: 2,
+            sar: (1, 1),
+            bit_depth: 8,
+            draft: false,
+        });
+        decoder.out_queue.push_back(Output { frame: Arc::new(Frame::new(0, 0, 16, 16, ChromaFormat::C420, 4, 8, 8)), poc: 0, meta });
+        assert!(decoder.check_budget(&sps).is_err());
     }
 
     #[test]

@@ -252,3 +252,11 @@ fn a_package_document_past_the_entry_limit_is_refused() {
     let limits = Limits { max_entry_bytes: (xml.len() - 1) as u64, ..Limits::DEFAULT };
     assert!(matches!(parse_package(&xml, "", &limits), Err(Error::Part { .. })));
 }
+
+/// A ZIP64 end record can declare millions of entries in a small file; the count is refused on
+/// the raw bytes, before the archive is indexed.
+#[test]
+fn an_archive_declaring_too_many_entries_is_refused_before_it_is_indexed() {
+    let bomb = craft_zip::zip64_entry_count_sample(100_001);
+    assert_eq!(Epub::open(&bomb).err(), Some(Error::TooManyEntries { found: 100_001, limit: 100_000 }));
+}

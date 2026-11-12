@@ -268,6 +268,58 @@ const CASES: &[Case] = &[
         min_snr: 80.0,
     },
     Case {
+        name: "mp3.mp3",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "libmp3lame", "-b:a", "192k"],
+        container: Container::MpegAudio,
+        codec: CodecId::Mp3,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: Some(240_000),
+        min_snr: 100.0,
+    },
+    Case {
+        name: "mp3-lsf-mono.mp3",
+        surround: false,
+        mono: true,
+        rate: 24_000,
+        args: &["-c:a", "libmp3lame", "-b:a", "32k"],
+        container: Container::MpegAudio,
+        codec: CodecId::Mp3,
+        layout: ChannelLayout::MONO,
+        channels: 1,
+        frames: Some(120_000),
+        min_snr: 100.0,
+    },
+    Case {
+        name: "mp3.mkv",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "libmp3lame", "-b:a", "128k"],
+        container: Container::Matroska,
+        codec: CodecId::Mp3,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: Some(240_000),
+        min_snr: 100.0,
+    },
+    Case {
+        name: "mp3.mp4",
+        surround: false,
+        mono: false,
+        rate: 48_000,
+        args: &["-c:a", "libmp3lame", "-b:a", "128k"],
+        container: Container::Mp4,
+        codec: CodecId::Mp3,
+        layout: ChannelLayout::STEREO,
+        channels: 2,
+        frames: Some(240_000),
+        min_snr: 100.0,
+    },
+    Case {
         name: "pcm-s24be.mov",
         surround: false,
         mono: false,
@@ -342,6 +394,8 @@ fn reference_lead(name: &str) -> usize {
         "aac.mkv" => 1024,
         "eac3-5.1.mkv" => 256,
         "mp2.mkv" => 481,
+        // LAME's encoder delay and the decoder's, the Matroska CodecDelay
+        "mp3.mkv" => 1105,
         _ => 0,
     }
 }
@@ -493,7 +547,7 @@ fn track_decoder_on_demuxed_packets_matches_decode() {
     use craft_audio::TrackDecoder;
     use craft_media::isobmff;
     let ff = require_ffmpeg!();
-    for name in ["aac.m4a", "aac-5.1.m4a", "opus.mp4", "mp2.mp4", "pcm-s24be.mov"] {
+    for name in ["aac.m4a", "aac-5.1.m4a", "opus.mp4", "mp2.mp4", "mp3.mp4", "pcm-s24be.mov"] {
         let c = CASES.iter().find(|c| c.name == name).unwrap();
         let Some(path) = fixture(&ff, c) else { continue };
         let bytes = std::fs::read(&path).unwrap();
@@ -669,10 +723,14 @@ fn adts_with_a_program_config_element_decodes() {
     assert_eq!(bytes[3] >> 6 | (bytes[2] & 1) << 2, 0, "the fixture signals its layout in a PCE");
     let (info, buf) = decode(&bytes, None).unwrap();
     assert_eq!((info.container, info.codec, buf.channels.len()), (c.container, c.codec, c.channels));
-    assert_eq!(info.layout, c.layout);
+    // A program config element that lists a centre, a front pair and then the elements of 5.1 has
+    // 5.1's speakers, in WAV order like ffmpeg's decode; any other list keeps the decoded order,
+    // which ffmpeg versions write differently.
+    let ordered = info.layout.is_ordered();
+    assert_eq!(info.layout, if ordered { ChannelLayout::SURROUND_5_1_SIDE } else { c.layout });
     assert_eq!(buf.frames(), reference(&ff, &path).len() / c.channels);
-    // A program config's channels come in its own order, and which order ffmpeg writes differs by
-    // version: each of ours must match a different one of ffmpeg's.
+    // Each of our channels must match a different one of ffmpeg's: the same one when the layout is
+    // ordered.
     let refr = reference(&ff, &path);
     let mut matched = Vec::new();
     for plane in &buf.channels {
@@ -686,7 +744,9 @@ fn adts_with_a_program_config_element_decodes() {
         assert!(s >= c.min_snr, "channel {} matches ffmpeg's {best} at only {s:.1} dB", matched.len());
         matched.push(best);
     }
-    matched.sort_unstable();
+    if !ordered {
+        matched.sort_unstable();
+    }
     assert_eq!(matched, (0..c.channels).collect::<Vec<_>>());
 }
 

@@ -312,3 +312,20 @@ fn iter_layers_indices() {
     assert!(f.layer(3).is_none());
     assert_eq!(f.layer(0).unwrap().version(), Version::Psd);
 }
+
+#[test]
+fn a_huge_default_composite_is_an_error_not_an_allocation() {
+    // 300000 x 300000 x 3 bytes is 270 GB: refused before any buffer is made.
+    assert!(PsdBuilder::new(300_000, 300_000).build().is_err());
+    // Unsupported dimensions get the validation error.
+    assert!(PsdBuilder::new(u32::MAX, u32::MAX).build().is_err());
+    assert!(PsdBuilder::new(0, 5).build().is_err());
+}
+
+#[test]
+fn the_default_composite_follows_the_decoded_size_limit() {
+    // 40000 x 40000 CMYK at 16-bit is 12.8 GB: over the encoder's limit, refused before the buffer.
+    let e = PsdBuilder::new(40_000, 40_000).color_mode(ColorMode::Cmyk).depth(16).build().unwrap_err();
+    // The early refusal, not the encoder's later one.
+    assert!(matches!(e, PsdError::LimitExceeded("default composite exceeds MAX_DECODED_BYTES")), "{e:?}");
+}

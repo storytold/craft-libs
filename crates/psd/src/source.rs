@@ -84,6 +84,10 @@ const MAX_READ: usize = 64 << 20;
 pub struct FileSource {
     file: std::fs::File,
     len: u64,
+    /// Modification time when opened: a read after the file changed in place fails rather than
+    /// mixing old offsets with new bytes. (A save that replaces the file by renaming leaves this
+    /// open file, the old one, unchanged.)
+    modified: Option<std::time::SystemTime>,
 }
 
 #[cfg(any(unix, windows))]
@@ -95,8 +99,8 @@ impl FileSource {
 
     /// Wraps an open file.
     pub fn new(file: std::fs::File) -> std::io::Result<Self> {
-        let len = file.metadata()?.len();
-        Ok(FileSource { file, len })
+        let meta = file.metadata()?;
+        Ok(FileSource { file, len: meta.len(), modified: meta.modified().ok() })
     }
 
     /// The file.
@@ -117,6 +121,10 @@ impl ReadAt for FileSource {
         }
         let n = buf.len();
         let failed = |e: std::io::Error| PsdError::Read(format!("reading {n} bytes at offset {offset}: {e}"));
+        let meta = self.file.metadata().map_err(failed)?;
+        if meta.len() != self.len || meta.modified().ok() != self.modified {
+            return Err(PsdError::Read("the file changed after it was opened".into()));
+        }
         // Bounded reads, in chunks: some Windows file
         // systems reject a single read of gigabytes (photocraft#375).
         let mut done = 0usize;
@@ -206,6 +214,11 @@ pub struct Stored {
 }
 
 impl Stored {
+    /// Whether `other` is the same bytes of the same source (a clone of it).
+    pub fn same_range(&self, other: &Stored) -> bool {
+        std::ptr::addr_eq(Arc::as_ptr(&self.source.0), Arc::as_ptr(&other.source.0)) && self.offset == other.offset && self.len == other.len
+    }
+
     /// Reads the bytes.
     pub fn read(&self) -> Result<Vec<u8>> {
         self.source.read_vec(self.offset, self.len)
@@ -265,6 +278,9 @@ mod tests {
         f.read_at(2, &mut b).unwrap();
         assert_eq!(b, [7, 6, 5]);
         assert!(f.read_at(3, &mut b).is_err());
+        // Changed in place after opening: reads fail instead of returning other bytes.
+        std::fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(&[1]).unwrap();
+        assert!(f.read_at(0, &mut b).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

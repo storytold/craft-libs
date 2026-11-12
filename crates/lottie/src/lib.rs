@@ -1,16 +1,15 @@
-//! Lottie (Bodymovin) JSON: the wire layer.
+//! Lottie (Bodymovin) JSON.
 //!
-//! A Lottie document is JSON, and most of its difficulty is in a few encodings that every layer
-//! and shape reuses. This crate reads and writes those, on `serde_json` values, without a
-//! document model of its own:
-//!
-//! - [`parse_document`] and [`Header`]: the document and its size, frame rate and frame range;
-//! - [`read_prop`] / [`write_prop`]: an animatable property (`{a, k, x}`), its keyframes with the
-//!   legacy end values, hold keys and spatial tangents, and [`Tangents`], the ease of a segment
-//!   converted to and from speed and influence;
-//! - [`Bezier`]: a path (`{c, v, i, o}`); [`Gradient`]: the flat stop list of a gradient;
-//! - [`nums`], [`color`], [`hex_color`]: the tolerant value readers;
-//! - [`base64`] and [`image_mime`]: embedded image assets as `data:` URIs.
+//! - [`model`]: the document as the file has it ([`Animation`], [`Layer`], [`Shape`], ...), one
+//!   struct per object of the lottie-spec 1.0 object model. [`Animation::read`] reads it within
+//!   [`Limits`]; [`Animation::to_json`] writes it. Keys the model does not know are kept.
+//! - The encodings of the values the model leaves as JSON:
+//!   [`read_prop`] / [`write_prop`] for an animatable property (`{a, k, x}`), its keyframes with
+//!   the legacy end values, hold keys and spatial tangents, and [`Tangents`], the ease of a
+//!   segment converted to and from speed and influence; [`Bezier`] for a path (`{c, v, i, o}`);
+//!   [`Gradient`] for the flat stop list of a gradient; [`nums`], [`color`], [`hex_color`], the
+//!   tolerant value readers; [`base64`] and [`image_mime`] for embedded images as `data:` URIs.
+//! - [`parse_document`] and [`Header`] for a caller that only wants the JSON and its header.
 //!
 //! Implemented from the public Lottie format description (the lottie-spec 1.0 schema and the
 //! LottieFiles format documentation); no player or exporter source was used.
@@ -19,15 +18,19 @@
 //! application's work. dotLottie (`.lottie`) is a ZIP archive around the same JSON and is not
 //! read here.
 
+// The test documents are large `json!` literals.
+#![cfg_attr(test, recursion_limit = "512")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod base64;
 mod gradient;
+pub mod model;
 mod path;
 mod prop;
 mod value;
 
 pub use gradient::Gradient;
+pub use model::{Animated, Animation, Layer, LayerContent, Limits, Shape, ShapeKind};
 pub use path::Bezier;
 pub use prop::{Ease, Key, KeyOut, Prop, PropValue, Tangents, is_animated, read_prop, tangent, write_keys, write_prop};
 pub use serde_json::Value as Json;
@@ -38,6 +41,9 @@ pub use value::{color, hex_color, image_mime, nums, round6, to_hex};
 pub enum LottieError {
     #[error("not a Lottie document: {0}")]
     Parse(String),
+    /// A [`Limits`] value was passed.
+    #[error("the document has more than {limit} {what}")]
+    TooLarge { what: &'static str, limit: usize },
 }
 
 /// Parses the JSON of a Lottie document. Nesting is bounded by `serde_json` (128 levels).
@@ -75,5 +81,7 @@ impl<'a> Header<'a> {
     }
 }
 
+#[cfg(test)]
+mod model_tests;
 #[cfg(test)]
 mod tests;

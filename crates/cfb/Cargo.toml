@@ -11,3 +11,6 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+
+[dev-dependencies]
+craft-media-testkit = { workspace = true }
