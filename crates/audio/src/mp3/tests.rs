@@ -1,6 +1,7 @@
-use super::filterbank::Analysis;
-use super::tables::{alias_coefficients, synthesis_window};
 use super::*;
+use crate::mp3::filterbank::Analysis;
+use crate::mp3::tables::{alias_coefficients, synthesis_window};
+use crate::mp3::{huffman, huffman_tables};
 
 /// The decoder side of the hybrid filterbank (§2.4.3.4.10: alias butterflies, IMDCT with the
 /// normal window and overlap-add, frequency inversion, polyphase synthesis), for checking the

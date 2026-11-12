@@ -19,7 +19,7 @@
 // Index loops follow the specification's pseudo-code (FilmCraft allows this lint workspace-wide).
 #![allow(clippy::needless_range_loop)]
 
-mod tables;
+pub(crate) mod tables;
 
 use craft_media::bitstream::BitReader;
 use tables::AllocTable;
@@ -418,7 +418,7 @@ fn layer2(r: &mut BitReader, h: &Header, out: &mut Subbands) -> Result<()> {
 
 /// The synthesis subband filter (§2.4.3.2, Figure A.2) for one time slot: 32 subband samples in,
 /// 32 PCM samples out.
-fn synthesize(v: &mut [f32; 1024], pos: &mut usize, n: &[[f32; 36]; 32], d: &[f32; 512], s: &[f32; 32], out: &mut [f32; 32]) {
+pub(crate) fn synthesize(v: &mut [f32; 1024], pos: &mut usize, n: &[[f32; 36]; 32], d: &[f32; 512], s: &[f32; 32], out: &mut [f32; 32]) {
     // shift V by 64: move the ring's start back instead of copying 960 values
     *pos = (*pos + 1024 - 64) % 1024;
     let p = *pos;

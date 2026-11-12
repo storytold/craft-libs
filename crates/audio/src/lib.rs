@@ -8,9 +8,9 @@
 //! `wasm32-unknown-unknown`.
 //!
 //! - [`decode`], [`probe`], [`Decoder`] (streaming, seekable), [`tracks`], [`detect_container`]
-//!   (feature `decode`): WAV and AIFF are read natively; AAC, ALAC, Opus, AC-3/E-AC-3, MP1/MP2 and
-//!   PCM in MP4/MOV, Matroska/WebM, Ogg or raw streams go through craft-media's demuxers and
-//!   [`TrackDecoder`]; everything else (MP3, FLAC, Vorbis, CAF, ADPCM, A-law, µ-law) through
+//!   (feature `decode`): WAV and AIFF are read natively; AAC, ALAC, Opus, AC-3/E-AC-3,
+//!   MP1/MP2/MP3 and PCM in MP4/MOV, Matroska/WebM, Ogg or raw streams go through craft-media's
+//!   demuxers and [`TrackDecoder`]; everything else (FLAC, Vorbis, CAF, ADPCM, A-law, µ-law) through
 //!   `symphonia`, which is to be replaced by native decoders. Feature `decode-native` is the
 //!   same without symphonia.
 //! - [`TrackDecoder`] (any decoder feature): one track's packets from any demuxer to planar
@@ -25,7 +25,7 @@
 //! - [`peaks`] (feature `peaks`): min/max/RMS pyramid for waveform drawing.
 //! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`,
 //!   `aac-encode`), [`alac`] (`alac-decode`, `alac-encode`), [`opus`] (`opus-decode`), [`ac3`]
-//!   (`ac3-decode`), [`mpa`] (`mpa-decode`), [`mp3`] (`mp3-encode`: the Layer III encoder),
+//!   (`ac3-decode`), [`mpa`] (`mpa-decode`), [`mp3`] (`mp3-decode`, `mp3-encode`),
 //!   [`flac`] (`flac-encode`: the packet encoder).
 //!
 //! The shared types below build with no features.
@@ -38,7 +38,7 @@ pub mod ac3;
 pub mod alac;
 mod buffer;
 mod layout;
-#[cfg(feature = "mp3-encode")]
+#[cfg(any(feature = "mp3-encode", feature = "mp3-decode"))]
 pub mod mp3;
 #[cfg(feature = "mpa-decode")]
 pub mod mpa;
