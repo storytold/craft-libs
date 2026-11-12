@@ -2,15 +2,17 @@
 
 use super::FlyoutButton;
 use crate::contract::overlay::HOLD;
-use crate::contract::{Role, Show as _};
+use crate::contract::{Props as _, Role, Show as _};
 use crate::rails::tool::stories::{BRUSH, tools};
+use crate::style::GlyphRole;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::Ui;
 
 #[story(FlyoutButton<'static, u8>, covers = [Default], drive = Drive::Activate)]
 fn flyout_button(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let tools = tools(&[BRUSH, BRUSH + 1, BRUSH + 2]);
-    FlyoutButton::new(&tools, &BRUSH).show(ui).into()
+    // The button as a tool rail shows it, holding the current tool.
+    FlyoutButton::new(&tools, &BRUSH).glyphs(GlyphRole::ToolRail).selected(true).show(ui).into()
 }
 
 /// Holds the press on the button, which opens the flyout.

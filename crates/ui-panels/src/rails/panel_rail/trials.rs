@@ -71,3 +71,40 @@ fn a_marked_panel_icon_shows_its_mark_only_while_the_panel_is_closed_and_each_ic
     assert!(closed > open, "the mark shows while the panel is closed ({closed}) and not while open ({open})");
     assert_eq!(items, 3, "one response per icon");
 }
+
+/// The rails set the glyph role of their buttons: the tool rail's icons are larger than a lone icon button's and rest
+/// in a quieter ink than they show under the pointer; the panel rail's keep the lone button's side and rest quieter
+/// than it.
+#[trial]
+fn the_rails_show_their_buttons_icons_in_their_glyph_roles() {
+    use crate::buttons::IconButton;
+    use crate::contract::Props as _;
+    use crate::rails::{LastUsed, ToolRail, ToolSlot};
+    use craft_behavior::IconId;
+    let glyphs = |rail: Option<bool>| {
+        let mut fixture = Fixture::new(move |ui| {
+            let panels = tools(&[0, 1]);
+            match rail {
+                Some(true) => {
+                    let slots = vec![ToolSlot::new(0, panels.clone())];
+                    ToolRail::new("Tools", &slots, &0, &LastUsed::default()).show_rail(ui, |_, _| {});
+                }
+                Some(false) => {
+                    PanelRail::new("Panels", &panels).show_rail(ui, |_| {});
+                }
+                None => {
+                    IconButton::new(IconId::new("move")).label("Alone").show(ui);
+                }
+            }
+        });
+        fixture.settle();
+        let seen = fixture.styles_of(std::any::type_name::<IconButton<'static>>());
+        let glyph = seen.first().and_then(|seen| seen.looks.icons.first().cloned());
+        glyph.unwrap_or_else(|| panic!("an icon button showed ({rail:?})"))
+    };
+    let (alone, tool, panel) = (glyphs(None), glyphs(Some(true)), glyphs(Some(false)));
+    assert!(tool.side > alone.side, "a tool rail icon ({}) is larger than a lone one ({})", tool.side, alone.side);
+    assert!(tool.color.off.rest != tool.color.off.hover, "a tool rail icon rests quieter than under the pointer");
+    assert_eq!(panel.side, alone.side, "a panel rail icon keeps the control glyph");
+    assert!(panel.color.off.rest != alone.color.off.rest, "a panel rail icon rests quieter than a lone one");
+}

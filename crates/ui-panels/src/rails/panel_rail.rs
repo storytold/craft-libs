@@ -10,7 +10,7 @@ use crate::contract::{
 use crate::runtime::access::Name;
 use crate::runtime::commands;
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
+use crate::style::{ComponentStyle, GlyphRole, StyleCx, SurfaceKind};
 use craft_behavior::{Metrics, NavShape, Roving, Sense, Value};
 use craft_theme::ControlSize;
 use egui::{Response, Ui};
@@ -89,6 +89,7 @@ impl<'a, P: Value + 'static> PanelRail<'a, P> {
             .layout(BodyLayout::stack())
             .body_gap(Gap::Tight)
             .child_size(ControlSize::Md)
+            .child_glyphs(GlyphRole::PanelRail)
             .roving(Roving::new(NavShape::Flat))
             .scroll(Scroll::vertical())
             .footer(FooterRegion::new())

@@ -9,7 +9,7 @@ use crate::runtime::env::{EnvValue, Label};
 use crate::runtime::focus::FocusPolicy;
 use crate::runtime::memory::SaveKey;
 use crate::runtime::windows::WindowSpec;
-use crate::style::SurfaceKind;
+use crate::style::{GlyphRole, SurfaceKind};
 use craft_behavior::{CanvasTransform, Roving};
 use craft_theme::ControlSize;
 use egui::Rect;
@@ -654,6 +654,8 @@ pub struct ContainerProps {
     pub edge_rule: bool,
     /// A scope size for the body.
     pub child_size: Option<ControlSize>,
+    /// A scope glyph role for the body: how the icon-only buttons in it show their glyph.
+    pub child_glyphs: Option<GlyphRole>,
     /// The container is an arena root.
     pub arena: bool,
     /// The container is its body's scroll owner without a scroll region, as a canvas with a view of its own is: the
@@ -713,6 +715,7 @@ impl ContainerProps {
             && self.body_gap == other.body_gap
             && self.least_width == other.least_width
             && self.child_size == other.child_size
+            && self.child_glyphs == other.child_glyphs
             && self.transform == other.transform
             && self.theme == other.theme
             && self.label == other.label
@@ -742,6 +745,7 @@ impl ContainerProps {
             least_width: None,
             edge_rule: false,
             child_size: None,
+            child_glyphs: None,
             arena: false,
             scroll_owner: false,
             gates: false,
@@ -873,6 +877,12 @@ impl ContainerProps {
     /// A scope size for the body.
     pub const fn child_size(mut self, size: ControlSize) -> Self {
         self.child_size = Some(size);
+        self
+    }
+
+    /// A scope glyph role for the body: a rail's buttons show its icons at the rail's side and ink.
+    pub const fn child_glyphs(mut self, role: GlyphRole) -> Self {
+        self.child_glyphs = Some(role);
         self
     }
 

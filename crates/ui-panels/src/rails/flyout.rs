@@ -10,7 +10,7 @@ use crate::contract::{
 use crate::menu::{self, Menu, MenuItem};
 use crate::runtime::commands::{FireSource, ResolvedCommand};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, StyleCx};
+use crate::style::{ComponentStyle, GlyphRole, StyleCx};
 use craft_behavior::overlay::{Align, Side};
 use craft_behavior::{HitLevel, HitPriority, IconId, Metrics, PartKey, PointerButton, PressPhase, Sense, Value};
 use egui::{Rect, Response, Vec2};
@@ -32,6 +32,8 @@ pub struct FlyoutButtonStyle {
     metrics: Metrics,
     /// The side of the corner mark, which is also its inset from the face's corner.
     mark: f32,
+    /// The button's glyph role, which its face shows the icon in.
+    glyphs: GlyphRole,
 }
 
 /// A rail button that is dragged and takes drops while the toolbar is edited.
@@ -147,16 +149,17 @@ impl<'a, T: Value + 'static> FlyoutButton<'a, T> {
         self.tools.iter().position(|tool| tool.id == *self.shown).unwrap_or(0)
     }
 
-    /// The face the button shows: the shown tool's icon, in the look of its command (label, enabled state, marked dot).
+    /// The face the button shows: the shown tool's icon in the button's glyph role, in the look of its command (label,
+    /// enabled state, marked dot).
     /// The button itself runs the command, so the face only wears it, and the button's selected state with it.
-    fn face(&self, laid: &Laid, selected: bool) -> IconButton<'static> {
+    fn face(&self, laid: &Laid, selected: bool, glyphs: GlyphRole) -> IconButton<'static> {
         let resolved = laid.resolved.get(laid.shown).and_then(Option::as_ref);
         let icon = resolved.and_then(|resolved| resolved.icon.clone()).map_or_else(|| IconId::new("more"), IconId::from);
         let face = match self.tools.get(laid.shown) {
             Some(tool) => IconButton::command(icon, tool.command.clone()),
             None => IconButton::new(icon),
         };
-        let mut face = face.selected(selected);
+        let mut face = face.selected(selected).glyphs(glyphs);
         if self.has_flyout() {
             face = face.popup(PopupKind::Menu).popup_mark(true);
         }
@@ -176,12 +179,12 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
 
     fn style(cx: &StyleCx<'_>, _: FlyoutButtonStyleKey<T>) -> FlyoutButtonStyle {
         let side = cx.tokens.size.rail.button;
-        FlyoutButtonStyle { metrics: Metrics::new().min_size(Vec2::splat(side)), mark: cx.tokens.space.gap.tight }
+        FlyoutButtonStyle { metrics: Metrics::new().min_size(Vec2::splat(side)), mark: cx.tokens.space.gap.tight, glyphs: cx.glyph_role() }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let laid = self.resolve(cx);
-        cx.face(self.face(&laid, cx.resolved.selected == Some(true)))
+        cx.face(self.face(&laid, cx.resolved.selected == Some(true), cx.style.glyphs))
     }
 
     /// A button that is edited is dragged; one with a flyout senses a drag away from it, which opens the flyout.
@@ -316,7 +319,7 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let Some(laid) = &self.laid else { return };
-        let face = self.face(laid, cx.resolved.selected == Some(true));
+        let face = self.face(laid, cx.resolved.selected == Some(true), cx.style.glyphs);
         ui.face(FACE, face);
     }
 

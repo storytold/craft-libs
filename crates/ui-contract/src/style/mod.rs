@@ -19,7 +19,7 @@ pub use craft_theme::GroupValues;
 pub use craft_theme::{FlagMask, Flags, Mix, Resolve, State, StateMix, Stateful, States, TokenGroup, Tokens, TypeRole, Variant};
 pub use craft_ui_macros::{ComponentStyle, TokenGroup};
 pub(crate) use cx::control_metrics;
-pub use cx::{StyleCx, VariantParts};
+pub use cx::{GlyphRole, StyleCx, VariantParts};
 pub use key::{EnvKey, Ink, StyleKey};
 pub(crate) use look::StyleView;
 pub use look::{ComponentStyle, Corners, DataColor, FocusLook, IconLook, StyleColor, SurfaceKind, SurfaceLook, TextLook, TrackLook};

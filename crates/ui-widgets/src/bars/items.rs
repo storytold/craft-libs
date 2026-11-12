@@ -11,7 +11,7 @@ use crate::menu::{Menu, MenuItem};
 use crate::primitives::IconSpec;
 use crate::runtime::commands::{CommandRef, ResolvedCommand};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, StyleCx};
+use crate::style::{ComponentStyle, GlyphRole, StyleCx};
 use craft_behavior::fit::{FitItem, FitKeep, fit_items};
 use craft_behavior::{Axis, IconId, Metrics, NavShape, PartKey, PartRef, Proposal, Roving, Sense};
 use craft_theme::Variant;
@@ -100,6 +100,8 @@ pub struct BarItemsStyle {
     section_gap: f32,
     /// Between the groups of a vertical strip, which draws no rule: an item gap and `space.gap.stack`.
     stack_gap: f32,
+    /// The strip's glyph role, which its item faces show their icons in.
+    glyphs: GlyphRole,
 }
 
 /// An item whose command resolved this pass.
@@ -167,14 +169,15 @@ fn display_of(present: &Present) -> ItemDisplay {
     if present.item.display != ItemDisplay::Text && icon_of(&present.resolved).is_none() { ItemDisplay::Text } else { present.item.display }
 }
 
-/// The face of an item: an icon button, a toggle for a command with a checked state, or a text button.
-fn face_of(present: &Present) -> Face {
+/// The face of an item: an icon button, a toggle for a command with a checked state, or a text button. Icon-only faces
+/// take the strip's glyph role.
+fn face_of(present: &Present, glyphs: GlyphRole) -> Face {
     let (item, resolved) = (&present.item, &present.resolved);
     let icon = icon_of(resolved);
     let toggle = resolved.checked.is_some();
     match (display_of(present), icon) {
-        (ItemDisplay::Icon, Some(icon)) if toggle => Face::Toggle(ToggleButton::command(item.command.clone()).icon(icon).icon_only()),
-        (ItemDisplay::Icon, Some(icon)) => Face::Action(IconButton::command(icon, item.command.clone())),
+        (ItemDisplay::Icon, Some(icon)) if toggle => Face::Toggle(ToggleButton::command(item.command.clone()).icon(icon).icon_only().glyphs(glyphs)),
+        (ItemDisplay::Icon, Some(icon)) => Face::Action(IconButton::command(icon, item.command.clone()).glyphs(glyphs)),
         (ItemDisplay::IconText, Some(icon)) if toggle => Face::Toggle(ToggleButton::command(item.command.clone()).icon(icon)),
         (ItemDisplay::IconText, Some(icon)) => Face::Text(Button::command(item.command.clone()).variant(Variant::GHOST).icon(icon)),
         (_, _) if toggle => Face::Toggle(ToggleButton::command(item.command.clone())),
@@ -241,9 +244,9 @@ impl BarItems {
 
     fn sizes(&self, cx: &MeasureCx<'_, Self>, present: &[Present]) -> Sizes {
         let axis = self.axis;
-        let items = present.iter().map(|present| face_of(present).size(cx)).collect();
+        let items = present.iter().map(|present| face_of(present, cx.style.glyphs).size(cx)).collect();
         let rule = if axis == Axis::Y { cx.face(Divider::horizontal()).y } else { cx.face(Divider::vertical()).x };
-        let more = cx.face(IconButton::new(IconId::new("more")).label(cx.env.words::<BarWords>().items_more.clone()));
+        let more = cx.face(IconButton::new(IconId::new("more")).label(cx.env.words::<BarWords>().items_more.clone()).glyphs(cx.style.glyphs));
         Sizes { items, rule, more }
     }
 
@@ -295,7 +298,13 @@ impl Component for BarItems {
 
     fn style(cx: &StyleCx<'_>, _: BarItemsStyleKey) -> BarItemsStyle {
         let gap = cx.tokens.space.gap.inline;
-        BarItemsStyle { metrics: Metrics::new().gap(gap), joint: gap, section_gap: gap * 2.0, stack_gap: gap + cx.tokens.space.gap.stack }
+        BarItemsStyle {
+            metrics: Metrics::new().gap(gap),
+            joint: gap,
+            section_gap: gap * 2.0,
+            stack_gap: gap + cx.tokens.space.gap.stack,
+            glyphs: cx.glyph_role(),
+        }
     }
 
     /// The whole strip, or the room along the strip when that is shorter. Asked for the narrowest it takes (a
@@ -430,7 +439,7 @@ impl Component for BarItems {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let Some(laid) = &self.laid else { return };
         for &(index, _) in &laid.shown {
-            face_of(&laid.present[index]).paint(ui, ITEM.at(index as u64));
+            face_of(&laid.present[index], cx.style.glyphs).paint(ui, ITEM.at(index as u64));
         }
         for (at, rule) in laid.rules.iter().enumerate() {
             if self.axis == Axis::Y {
@@ -440,7 +449,7 @@ impl Component for BarItems {
             }
         }
         if laid.more.is_some() {
-            ui.face(MORE, IconButton::new(IconId::new("more")).label(cx.words::<BarWords>().items_more.clone()));
+            ui.face(MORE, IconButton::new(IconId::new("more")).label(cx.words::<BarWords>().items_more.clone()).glyphs(cx.style.glyphs));
         }
     }
 

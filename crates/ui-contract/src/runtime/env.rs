@@ -16,7 +16,7 @@ use crate::runtime::egui::memory::FastMap;
 use crate::runtime::egui::{pass, repaint, scale, stack, style};
 use crate::runtime::frame::PerViewport;
 use crate::runtime::windows;
-use crate::style::{EnvKey, Ink, SurfaceKind, UiTokens};
+use crate::style::{EnvKey, GlyphRole, Ink, SurfaceKind, UiTokens};
 use craft_behavior::{CanvasTransform, MotionMode};
 use craft_host::Host;
 use craft_host::target::{Os, ShellInfo};
@@ -78,6 +78,8 @@ pub struct Scoped {
     pub key: EnvKey,
     /// Ambient control size; the root default is `Md`.
     pub size: ControlSize,
+    /// How the icon-only buttons of the scope show their glyph; the root default and a layer's is `Control`.
+    pub glyphs: GlyphRole,
     /// AND of every scope and gate above.
     pub enabled: bool,
     /// OR of every scope above.
@@ -399,6 +401,7 @@ impl Env {
                 ink: Ink::default(),
                 surface: SurfaceKind::Background,
                 size: ControlSize::Md,
+                glyphs: GlyphRole::Control,
                 enabled: true,
                 read_only: false,
                 wheel: WheelScope::Plain,
@@ -476,6 +479,7 @@ impl Env {
             s.unbounded = (false, false);
             s.lazy = None;
             s.pane_edge = None;
+            s.glyphs = GlyphRole::Control;
             s.item = None;
             s.row = None;
             s.item_facts = None;

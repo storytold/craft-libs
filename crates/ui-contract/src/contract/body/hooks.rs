@@ -683,13 +683,16 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let enabled = gate.unwrap_or(true);
         // What the body and the end region share: gate, size, roving group and commands. The body adds its arena,
         // transform and scroll owner; the end region lies outside them.
-        let line_env = if enabled && props.child_size.is_none() && props.roving.is_none() {
+        let line_env = if enabled && props.child_size.is_none() && props.child_glyphs.is_none() && props.roving.is_none() {
             region_env.clone()
         } else {
             region_env.derive_local(|scoped| {
                 scoped.enabled &= enabled;
                 if let Some(size) = props.child_size {
                     scoped.size = size;
+                }
+                if let Some(role) = props.child_glyphs {
+                    scoped.glyphs = role;
                 }
                 if props.roving.is_some() {
                     scoped.roving = Some(crate::contract::steps::body_group(id));

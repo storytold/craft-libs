@@ -3,7 +3,7 @@
 
 use crate::contract::{Component, Cx, MeasureCx, PaintUi, Styled as _};
 use crate::primitives::{HAlign, IconSpec, TextRun};
-use crate::style::{FocusLook, IconLook, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens, VariantParts};
+use crate::style::{FocusLook, GlyphRole, IconLook, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens, VariantParts};
 use craft_behavior::{Flow, Insets, Metrics, Proposal};
 use craft_theme::{
     Stateful, States, Variant,
@@ -109,18 +109,30 @@ pub(super) fn on_surface(cx: &StyleCx<'_>, off: &VariantParts, on: &VariantParts
 pub(super) struct IconFace {
     pub surface: SurfaceLook,
     pub metrics: Metrics,
-    /// The glyph at the glyph side, in the on look's text colour while on.
+    /// The glyph at the side of the scope's glyph role, in the on look's text colour while on.
     pub glyph: IconLook,
 }
 
 /// The icon-only look of the instance's variant: a square of the control height with control corners, as a ghost
-/// button of the old look (a capsule would round the on plate), showing the on look while on.
+/// button of the old look (a capsule would round the on plate), showing the on look while on. The scope's glyph role
+/// sets the glyph's side and, in a rail, the quieter ink it rests in.
 pub(super) fn icon_face(cx: &StyleCx<'_>) -> IconFace {
     let (off, on) = (cx.variant_look(), on_parts(cx));
+    let (icon, text) = (&cx.tokens.size.icon, &cx.tokens.color.text);
+    let (side, rest) = match cx.glyph_role() {
+        GlyphRole::Tool => (icon.md, None),
+        GlyphRole::ToolRail => (icon.lg, Some(text.muted)),
+        GlyphRole::PanelRail => (cx.glyph(), Some(text.faint)),
+        _ => (cx.glyph(), None),
+    };
+    let mut ink = off.text.clone();
+    if let Some(rest) = rest {
+        ink.off.rest = cx.color(rest);
+    }
     IconFace {
         surface: on_surface(cx, &off, &on).radius(UiTokens::corner(cx.tokens.shape.radius.control)),
         metrics: Metrics::new().min_size(Vec2::splat(cx.control().height)),
-        glyph: IconLook::new(cx.glyph(), off.text.clone().on(on.text.off)),
+        glyph: IconLook::new(side, ink.on(on.text.off)),
     }
 }
 

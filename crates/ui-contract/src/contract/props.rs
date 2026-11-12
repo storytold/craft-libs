@@ -3,6 +3,7 @@
 use super::{IdSource, Internal, Meta, Sizing};
 use crate::runtime::commands::{CommandRef, CommandScope};
 use crate::runtime::env::Label;
+use crate::style::GlyphRole;
 use craft_behavior::DocKey;
 use craft_theme::{ControlSize, Variant};
 use egui::{AsIdSalt, Id, IdSalt};
@@ -17,6 +18,7 @@ pub struct Common {
     pub(crate) enabled: Option<bool>,
     pub(crate) read_only: Option<bool>,
     pub(crate) size: Option<ControlSize>,
+    pub(crate) glyphs: Option<GlyphRole>,
     pub(crate) variant: Option<Variant>,
     #[doc(hidden)]
     pub tooltip: Option<Tooltip>,
@@ -47,6 +49,7 @@ impl Common {
             enabled: None,
             read_only: None,
             size: None,
+            glyphs: None,
             variant: None,
             tooltip: None,
             description: None,
@@ -98,6 +101,13 @@ pub trait Props: Meta + Sized {
     /// The control size, over the scope's.
     fn size(mut self, size: ControlSize) -> Self {
         self.common_mut(Internal::new()).size = Some(size);
+        self
+    }
+
+    /// How the component's icon-only buttons show their glyph, over the scope's role. A composite passes it on to the
+    /// buttons it shows as faces.
+    fn glyphs(mut self, role: GlyphRole) -> Self {
+        self.common_mut(Internal::new()).glyphs = Some(role);
         self
     }
 

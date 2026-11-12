@@ -10,6 +10,7 @@ use std::sync::Arc;
 /// The `StyleCx` of the env the component shows in.
 pub(crate) fn style_cx<'a>(ctx: &'a Context, env: &'a Env, step: &EnvStep) -> StyleCx<'a> {
     StyleCx::new(ctx, &env.tokens, &env.values, step.size, step.requested, env.direction, env.scale, env.os, env.active, env.key, env.line_ratio)
+        .with_glyphs(step.glyphs)
 }
 
 /// Step 2, style: `&C::Style` from the cache, keyed `(TypeId of StyleKey, key, EnvKey, variant, size)`.

@@ -6,6 +6,7 @@ use super::items::{BarItem, BarItems, MoreMenu};
 use super::words::BarWords;
 use crate::contract::{NoValue, Outcome, Props as _, Show as _};
 use crate::runtime::env::Env;
+use crate::style::GlyphRole;
 use craft_behavior::fit::FitKeep;
 use egui::{Response, Ui};
 
@@ -114,7 +115,8 @@ impl Outcome for AlignBarOutput {
 }
 
 /// The align buttons, the optional distribute buttons and the menu button, shown as children of a `Bar`. The menu
-/// lists every command, the align commands, a rule, then the distribute commands.
+/// lists every command, the align commands, a rule, then the distribute commands. The buttons show their icons at the
+/// tool size (`GlyphRole::Tool`).
 #[derive(crate::contract::Pattern)]
 pub struct AlignBar {
     distribute: DistributeButtons,
@@ -139,7 +141,7 @@ impl AlignBar {
         let distribute_keep = if self.distribute == DistributeButtons::Row { FitKeep::Free } else { FitKeep::Menu };
         let align = AlignAction::ALIGN.into_iter().map(BarItem::new);
         let distribute = AlignAction::DISTRIBUTE.into_iter().map(|action| BarItem::new(action).section(1).keep(distribute_keep));
-        let response = BarItems::new(align.chain(distribute).collect()).label(name).more(MoreMenu::Every).show(ui);
+        let response = BarItems::new(align.chain(distribute).collect()).label(name).more(MoreMenu::Every).glyphs(GlyphRole::Tool).show(ui);
         AlignBarOutput { response }
     }
 }

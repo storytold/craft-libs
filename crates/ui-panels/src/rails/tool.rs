@@ -12,7 +12,7 @@ use crate::layout_components::{Row, Stack};
 use crate::runtime::access::Name;
 use crate::runtime::commands::Commands as _;
 use crate::runtime::env::{Env, Label};
-use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
+use crate::style::{ComponentStyle, GlyphRole, StyleCx, SurfaceKind};
 use craft_behavior::overlay::Side;
 use craft_behavior::{IconId, Metrics, NavShape, Roving, Sense, Value};
 use craft_theme::ControlSize;
@@ -151,6 +151,7 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
             .layout(BodyLayout::stack())
             .body_gap(Gap::Inline)
             .child_size(ControlSize::Md)
+            .child_glyphs(GlyphRole::ToolRail)
             .scroll(Scroll::vertical())
             .footer(FooterRegion::new());
         ToolRail {

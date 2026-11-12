@@ -21,6 +21,22 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// How the icon-only buttons of a scope show their glyph, set by the container that holds them
+/// (`ContainerProps::child_glyphs`) or on one component (`Props::glyphs`). Each role reads size tokens only.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum GlyphRole {
+    /// A glyph inside a control: `size.icon.glyph_sm` or `glyph_md` by the control size, in the variant's ink.
+    #[default]
+    Control,
+    /// A command strip of tool icons (align and distribute): `size.icon.md`, in the variant's ink.
+    Tool,
+    /// A tool rail: `size.icon.lg`, resting in `text.muted` and in the variant's ink under the pointer.
+    ToolRail,
+    /// A panel rail: the control glyph, resting in `text.faint` and in the variant's ink under the pointer.
+    PanelRail,
+}
+
 /// What `fn style` gets. Tokens are read here and nowhere else.
 #[derive(Clone, Copy)]
 #[non_exhaustive]
@@ -41,6 +57,8 @@ pub struct StyleCx<'a> {
     pub active: bool,
     /// The key of everything above that the style cache depends on.
     pub key: EnvKey,
+    /// The glyph role of the scope; the key folds it in when it is not `Control`.
+    glyphs: GlyphRole,
     /// The text colour of the part this component is shown as the face of.
     host: Option<&'a Stateful<StyleColor>>,
     /// The muted text colour of the host part, when the host has one.
@@ -126,13 +144,34 @@ impl<'a> StyleCx<'a> {
         key: EnvKey,
         line_ratio: f32,
     ) -> Self {
-        StyleCx { tokens, size, variant, direction, scale, os, active, key, host: None, host_muted: None, line_ratio, ctx, values }
+        StyleCx {
+            tokens,
+            size,
+            variant,
+            direction,
+            scale,
+            os,
+            active,
+            key,
+            glyphs: GlyphRole::Control,
+            host: None,
+            host_muted: None,
+            line_ratio,
+            ctx,
+            values,
+        }
     }
 
     /// The same context with another variant.
     #[doc(hidden)]
     pub fn with_variant(&self, variant: Variant) -> StyleCx<'a> {
         StyleCx { variant, ..*self }
+    }
+
+    /// The same context in a scope whose icon-only buttons show their glyph in `role`.
+    pub(crate) fn with_glyphs(&self, role: GlyphRole) -> StyleCx<'a> {
+        let key = if role == GlyphRole::Control { self.key } else { self.key.folded(role as u64 + 1) };
+        StyleCx { glyphs: role, key, ..*self }
     }
 
     /// The same context for a component shown as the face of a part whose text colour is `ink` and whose muted text
@@ -267,6 +306,11 @@ impl<'a> StyleCx<'a> {
     pub fn glyph(&self) -> f32 {
         let icon = &self.tokens.size.icon;
         BySize { sm: icon.glyph_sm, md: icon.glyph_md }.get(self.size)
+    }
+
+    /// How the icon-only buttons of the scope show their glyph.
+    pub fn glyph_role(&self) -> GlyphRole {
+        self.glyphs
     }
 
     /// `control` at `size`, whatever the ambient size: the part of a control that keeps its own size (a field's

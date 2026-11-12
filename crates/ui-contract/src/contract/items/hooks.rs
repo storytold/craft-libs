@@ -437,13 +437,16 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         if let Some(scope) = command_scope {
             crate::runtime::commands::register_instance(&ctx, scope, id);
         }
-        let child_size = comp.props(Internal::new()).child_size;
+        let (child_size, child_glyphs) = (comp.props(Internal::new()).child_size, comp.props(Internal::new()).child_glyphs);
         // The rows sit on the surface the collection paints, else on the one the collection sits on.
         let own = surface.or_else(|| cx.style.surface().and_then(|look| look.kind_in(&cx.core.state)));
         let base_env = env.derive(|scoped| {
             scoped.extend_values(values);
             scoped.arena = Some(ArenaId::new(id));
             scoped.size = child_size.unwrap_or(cx.core.resolved.size);
+            if let Some(role) = child_glyphs {
+                scoped.glyphs = role;
+            }
             scoped.surface = SurfaceKind::under(own, scoped.surface);
         });
         self.header.paint(ui, cx, env, id, rtl);
