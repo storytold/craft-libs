@@ -156,7 +156,7 @@ impl Component for ReferencePoint<'_> {
                 .radius(sunken.radius)
                 .border(edge, cx.tokens.stroke.thin),
             focus: cx.focus_look(),
-            cell: if key.compact { cx.tokens.size.icon.md / GRID as f32 } else { cx.tokens.size.control.sm },
+            cell: if key.compact { cx.tokens.size.icon.md / GRID as f32 } else { cx.tokens.size.control.md },
             dot: DOT,
             picked_dot: if key.compact { DOT } else { DOT * 2.0 },
             dot_radius: UiTokens::corner(cx.tokens.shape.radius.sm),

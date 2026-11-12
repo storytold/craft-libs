@@ -13,9 +13,11 @@ fn pick_top_left(fixture: &mut Fixture) {
     }
 }
 
+/// Canvas Size's picker, as the old gallery's card showed it: the canvas grows both ways, so every cell around the
+/// centre pick shows its arrow.
 #[story(ReferencePoint<'static>, covers = [Default], drive = Drive::Custom(pick_top_left))]
 fn reference_point(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    ReferencePoint::new("Reference point", Bind::bound(data.value("point", Anchor9::Centre))).show(ui).into()
+    ReferencePoint::new("Reference point", Bind::bound(data.value("point", Anchor9::Centre))).growth((1.0, 1.0)).show(ui).into()
 }
 
 #[story(ReferencePoint<'static>, covers = [Mixed], drive = Drive::Never)]
