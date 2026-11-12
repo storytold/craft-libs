@@ -1,4 +1,5 @@
-//! `Spinner`: the busy mark, an arc that turns once a period and stands still where motion is off. It shows in
+//! `Spinner`: the busy mark, an arc that turns once a period while its length breathes, and stands still where
+//! motion is off. It shows in
 //! the flow, or as the face of a part (`ui.face(part, Spinner::new())`) where a component takes a busy state.
 
 use crate::contract::{Access, Animate as _, Common, Component, Cx, MeasureCx, PaintUi, Role, Styled as _};
@@ -14,8 +15,11 @@ mod stories;
 
 /// How long the spinner takes for a turn, in seconds.
 const PERIOD: f64 = 1.0;
-/// The arc the spinner draws, in radians.
+/// The widest arc the spinner draws, in radians.
 const SWEEP: f32 = PI * 4.0 / 3.0;
+/// The period of the arc's breath: its end sweeps `SWEEP` times the sine of the time in seconds, as egui's stock
+/// spinner.
+const BREATH: f64 = std::f64::consts::TAU;
 /// The points of the arc.
 const POINTS: usize = 24;
 
@@ -120,9 +124,11 @@ impl Component for Spinner {
         let centre = cx.rect.center();
         let radius = (cx.style.arc.side / 2.0 - cx.style.inset).max(0.0);
         let start = cx.phase(PERIOD, None).map_or(0.0, |turn| turn * TAU);
+        // Still, the arc is at its widest.
+        let sweep = cx.phase(BREATH, None).map_or(SWEEP, |breath| SWEEP * (breath * TAU).sin());
         let points: Vec<Pos2> = (0..=POINTS)
             .map(|at| {
-                let angle = start + SWEEP * at as f32 / POINTS as f32;
+                let angle = start + sweep * at as f32 / POINTS as f32;
                 centre + radius * vec2(angle.cos(), angle.sin())
             })
             .collect();
