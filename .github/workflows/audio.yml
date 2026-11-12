@@ -1,0 +1,163 @@
+name: Shared audio
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/audio/**", "crates/media/**", "crates/media-testkit/**", "scripts/fetch-opus-vectors.sh", "Cargo.toml", "Cargo.lock", ".github/workflows/audio.yml"]
+  pull_request:
+    paths: ["crates/audio/**", "crates/media/**", "crates/media-testkit/**", "scripts/fetch-opus-vectors.sh", "Cargo.toml", "Cargo.lock", ".github/workflows/audio.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
+  # run (main, manual) gets its own group: it is never cancelled or replaced while queued, so it
+  # always gets to save the cache.
+  group: shared-audio-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    timeout-minutes: 15
+    name: Audio lint, feature sets, docs, WASM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+        with:
+          key: craft-audio-lint
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo fmt -p craft-audio --check
+      # Each feature on its own, so code that needs another feature fails here.
+      - name: Clippy, each feature alone
+        run: |
+          for f in "" decode decode-native symphonia encode lossless-encode pcm-encode flac-encode peaks aac-decode aac-encode "aac-encode,rayon" opus-decode ac3-decode mpa-decode serde; do
+            echo "::group::features: ${f:-none}"
+            cargo clippy -p craft-audio --all-targets --locked --no-default-features ${f:+--features "$f"} -- -D warnings
+            echo "::endgroup::"
+          done
+      - run: cargo clippy -p craft-audio --all-targets --locked --all-features -- -D warnings
+      # missing_docs is a warning in the crate; -D warnings makes it (and broken links) fail here.
+      - run: cargo doc -p craft-audio --all-features --no-deps --locked
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+      # Partial feature sets must document too (their links to other features are allowed to dangle).
+      - run: cargo doc -p craft-audio --no-default-features --features decode-native --no-deps --locked
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+      - run: cargo doc -p craft-audio --no-default-features --features lossless-encode --no-deps --locked
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+      - run: cargo check -p craft-audio --all-features --locked --target wasm32-unknown-unknown
+      - run: cargo check -p craft-audio --no-default-features --features lossless-encode --locked --target wasm32-unknown-unknown
+  msrv:
+    timeout-minutes: 10
+    name: Audio on the minimum Rust version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The workspace's rust-version.
+      - run: rustup toolchain install 1.95.0 --profile minimal
+      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+        with:
+          key: craft-audio-msrv
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo +1.95.0 check -p craft-audio -p craft-media --all-features --locked
+  features:
+    timeout-minutes: 10
+    name: Audio tests without symphonia and lossless-encode only
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+        with:
+          toolchain: stable
+      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+        with:
+          key: craft-audio-features
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo test -p craft-audio --no-default-features --features lossless-encode --locked
+      - run: cargo test -p craft-audio --no-default-features --features pcm-encode --locked --lib
+      - run: cargo test -p craft-audio --no-default-features --features flac-encode --locked --lib
+      - run: cargo test -p craft-audio --no-default-features --features decode-native --locked
+  test:
+    timeout-minutes: 20
+    name: Audio tests with ffmpeg oracles and the Opus conformance vectors
+    # Pinned for the ffmpeg its apt ships (8.0), so the files the oracle tests write do not change
+    # with the runner image.
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+        with:
+          toolchain: stable
+      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+        with:
+          key: craft-audio-test
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/media-fixtures/opus/vectors
+          # The archive's SHA-256 (scripts/fetch-opus-vectors.sh checks it).
+          key: opus-testvectors-rfc8251-6b26a22f
+      - name: Build tests while installing ffmpeg and fetching the Opus vectors
+        run: |
+          # The man-db index rebuild after dpkg is slow on hosted runners.
+          sudo rm -f /var/lib/man-db/auto-update
+          # A mirror can stall for most of the job's time limit, and the next try usually gets a good one.
+          install_ffmpeg() {
+            for attempt in 1 2 3; do
+              # timeout runs as root, so a stalled apt-get is killed too and frees the dpkg lock.
+              sudo timeout -k 10 180 sh -c 'apt-get update -qq && apt-get install -y -qq --no-install-recommends ffmpeg' && return 0
+              echo "apt: attempt $attempt failed with exit code $?"
+              sudo timeout -k 10 60 dpkg --configure -a || true
+            done
+            return 1
+          }
+          # The vectors are fetched after ffmpeg, so the two downloads do not slow each other.
+          {
+            install_ffmpeg > "$RUNNER_TEMP/apt.log" 2>&1 || exit 1
+            scripts/fetch-opus-vectors.sh "$RUNNER_TEMP/media-fixtures/opus/vectors" > "$RUNNER_TEMP/vectors.log" 2>&1 || exit 2
+          } &
+          fetch=$!
+          cargo test -p craft-audio --all-features --locked --no-run
+          wait "$fetch" || case $? in
+            1) cat "$RUNNER_TEMP/apt.log"; exit 1 ;;
+            *) cat "$RUNNER_TEMP/vectors.log"; exit 1 ;;
+          esac
+          ffmpeg -hide_banner -version | sed -n 1p
+      - run: cargo test -p craft-audio --all-features --locked
+        env:
+          CRAFT_MEDIA_REQUIRE_ORACLES: "1"
+          CRAFT_MEDIA_FIXTURES_DIR: ${{ runner.temp }}/media-fixtures

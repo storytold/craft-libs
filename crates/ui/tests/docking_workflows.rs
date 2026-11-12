@@ -40,6 +40,9 @@ struct Harness {
 }
 
 impl Harness {
+    /// Create a workflow harness with the requested theme, width and pixel scale,
+    /// zero animation and no cursor blink, and a canvas plus side tabs and floating
+    /// brushes layout, then settle it.
     fn new(dark: bool, width: f32, scale: f32) -> Self {
         let ctx = Context::default();
         ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
@@ -55,7 +58,7 @@ impl Harness {
                 first: Box::new(Node::Tabs { panels: vec![CANVAS], active: 0 }),
                 second: Box::new(Node::Tabs { panels: vec![LAYERS, PROPERTIES], active: 0 }),
             }),
-            floating: vec![Floating { panels: vec![BRUSHES], active: 0, rect: [38.0, 76.0, 210.0, 250.0] }],
+            floating: vec![Floating::single(vec![BRUSHES], 0, [38.0, 76.0, 210.0, 250.0])],
         };
         let mut harness = Self {
             ctx,
@@ -77,6 +80,9 @@ impl Harness {
         harness
     }
 
+    /// One 520 pt-high frame through the real wgpu test renderer. Applies returned actions with
+    /// canvas protection (round-tripping them through JSON when `serde` is enabled), validates the
+    /// layout, and records body ids and applied actions.
     fn step(&mut self, events: Vec<Event>) {
         self.frame += 1;
         let input = RawInput {
@@ -90,14 +96,14 @@ impl Harness {
         let mut actions = Vec::new();
         self.output = self.ctx.run_ui(input, |ui| {
             let style = DockStyle::from_ui(ui);
-            let out = DockArea::new(Id::new("workflow")).show(
+            let out = DockArea::new(Id::unique("workflow")).show(
                 ui,
                 &self.layout,
                 &style,
                 label,
                 |panel| if *panel == CANVAS { Permissions::PROTECTED } else { Permissions::default() },
                 |ui, panel| {
-                    self.body_ids.insert(*panel, ui.id());
+                    self.body_ids.insert(*panel, ui.scope_id());
                     if *panel == CANVAS {
                         let rect = ui.available_rect_before_wrap();
                         ui.painter().rect_filled(rect, 0.0, Color32::from_rgb(44, 53, 66));
@@ -174,14 +180,16 @@ impl Harness {
         self.layout.validate().unwrap();
     }
 
+    /// Run four empty workflow frames to settle sizing.
     fn settle(&mut self) {
         for _ in 0..4 {
             self.step(Vec::new());
         }
     }
 
+    /// The response rect of `panel`'s tab in the workflow dock.
     fn tab(&self, panel: u32) -> Rect {
-        self.ctx.read_response(Id::new("workflow").with(("tab", &panel))).unwrap().rect
+        self.ctx.read_response(Id::unique("workflow").with(("tab", &panel))).unwrap().rect
     }
 
     fn drag(&mut self, from: Pos2, to: Pos2) {
@@ -235,7 +243,7 @@ fn floating_brushes_merge_detach_and_redock_through_real_pointer_input() {
                 assert_eq!(h.body_ids[&BRUSHES], brush_id);
                 h.capture(&directory, "02-merged-main-tabs");
                 h.drag(h.tab(BRUSHES).center(), pos2((width - 240.0) * 0.5, 270.0));
-                assert!(h.layout.floating.iter().any(|g| g.panels.contains(&BRUSHES)), "{name}: {:?}", h.applied);
+                assert!(h.layout.floating.iter().any(|g| g.contains(&BRUSHES)), "{name}: {:?}", h.applied);
                 h.capture(&directory, "03-detached-again");
                 h.drag(h.tab(BRUSHES).center(), h.tab(LAYERS).left_center() + vec2(4.0, 0.0));
                 assert!(h.layout.floating.is_empty(), "{name}");
@@ -248,5 +256,191 @@ fn floating_brushes_merge_detach_and_redock_through_real_pointer_input() {
                 }
             }
         }
+    }
+}
+
+/// Each app's saved v1 layout goes through a docking session driven by real pointer input and a
+/// command, then writes and reads back unchanged.
+#[cfg(all(feature = "serde", feature = "testing"))]
+mod v1_fixtures {
+    use craft_ui::docking::{DockCommand, DockContent, Hit, Layout, Node, Permissions, ResizeEdge, Side, testing::DockDriver};
+    use egui::{Pos2, Rect, pos2};
+    use serde_json::{Value, json};
+
+    struct Content;
+
+    impl DockContent<String> for Content {
+        fn body(&mut self, ui: &mut egui::Ui, panel: &String) {
+            ui.label(panel.as_str());
+        }
+        fn logical_label(&self, panel: &String) -> String {
+            panel.clone()
+        }
+        fn permissions(&self, panel: &String) -> Permissions {
+            if panel == "canvas" { Permissions::PROTECTED } else { Permissions::default() }
+        }
+    }
+
+    type Driver = DockDriver<String, Content>;
+    type Columns = Vec<Vec<Vec<String>>>;
+
+    /// App, file contents and the JSON pointer to a saved layout.
+    const FIXTURES: [(&str, &str, &str); 10] = [
+        ("designcraft", include_str!("fixtures/v1/designcraft.json"), "/docking"),
+        ("designcraft", include_str!("fixtures/v1/designcraft.json"), "/customWorkspaces/0/docking"),
+        ("vectorcraft", include_str!("fixtures/v1/vectorcraft.json"), "/docking"),
+        ("lightcraft", include_str!("fixtures/v1/lightcraft.json"), "/docking/layout"),
+        ("pdfcraft", include_str!("fixtures/v1/pdfcraft.json"), "/docking/layout"),
+        ("cadcraft", include_str!("fixtures/v1/cadcraft.json"), "/workspace/docking/layout"),
+        ("soundcraft", include_str!("fixtures/v1/soundcraft.json"), "/docking/layout"),
+        ("soundcraft", include_str!("fixtures/v1/soundcraft.json"), "/mix_docking/layout"),
+        ("photocraft", include_str!("fixtures/v1/photocraft.json"), "/docking"),
+        ("photocraft", include_str!("fixtures/v1/photocraft.json"), "/panel_layout/docking"),
+    ];
+
+    /// The start dock's columns, each a list of groups.
+    fn start_columns(layout: &Layout<String>) -> Columns {
+        fn find(node: &Node<String>) -> Option<Columns> {
+            match node {
+                Node::Dock { side: Side::Start, columns } => {
+                    Some(columns.iter().map(|column| column.groups.iter().map(|group| group.panels.clone()).collect()).collect())
+                }
+                Node::Split { first, second, .. } => find(first).or_else(|| find(second)),
+                _ => None,
+            }
+        }
+        layout.root.as_ref().and_then(find).unwrap_or_default()
+    }
+
+    fn iconic(layout: &Layout<String>) -> bool {
+        fn find(node: &Node<String>) -> Option<bool> {
+            match node {
+                Node::Dock { side: Side::Start, columns } => columns.first().map(|column| column.iconic),
+                Node::Split { first, second, .. } => find(first).or_else(|| find(second)),
+                _ => None,
+            }
+        }
+        layout.root.as_ref().and_then(find).unwrap_or(false)
+    }
+
+    fn hit(d: &Driver, hit: Hit<String>) -> Rect {
+        d.hit(&hit).unwrap_or_else(|| panic!("{hit:?} in {:?}", d.hits()))
+    }
+
+    /// A point of `from` that no floating window above it covers, as drawn last frame.
+    fn grab(d: &Driver, from: &Hit<String>, panel: &String) -> Option<Pos2> {
+        let rect = d.hit(from)?;
+        let own = d.layout.floating.iter().position(|w| w.contains(panel));
+        let windows: Vec<Rect> = d
+            .layout
+            .floating
+            .iter()
+            .filter_map(|w| {
+                let first = w.panels().next()?.clone();
+                Some(Rect::from_min_max(d.hit(&Hit::Title(first.clone()))?.min, d.hit(&Hit::Resize(first, ResizeEdge::BottomRight))?.max))
+            })
+            .collect();
+        let covered = |p: Pos2| windows.iter().enumerate().any(|(i, w)| own.is_none_or(|own| i > own) && w.contains(p));
+        let mut x = rect.left() + 4.0;
+        while x < rect.right() {
+            let p = pos2(x, rect.center().y);
+            if !covered(p) {
+                return Some(p);
+            }
+            x += 4.0;
+        }
+        None
+    }
+
+    /// Drag from an uncovered point of `from` to `to`; something must change.
+    fn drag(d: &mut Driver, from: Hit<String>, to: Pos2, what: &str) {
+        let panel = match &from {
+            Hit::DragBar(p) | Hit::Title(p) => p.clone(),
+            other => panic!("{other:?}"),
+        };
+        let at = grab(d, &from, &panel).unwrap_or_else(|| panic!("{what}: {from:?} is covered"));
+        let out = d.drag(at, to);
+        assert!(out.error.is_none() && !out.actions.is_empty(), "{what}: {out:?}\n{:?}\n{:?}", d.layout, d.hits());
+        d.settle();
+    }
+
+    fn sorted(layout: &Layout<String>) -> Vec<String> {
+        let mut panels: Vec<String> = layout.panels().into_iter().cloned().collect();
+        panels.sort();
+        panels
+    }
+
+    #[test]
+    fn v1_layouts_dock_collapse_float_redock_and_reload() {
+        let mut seams = Vec::new();
+        for (app, text, pointer) in FIXTURES {
+            let at = format!("{app}{pointer}");
+            let file: Value = serde_json::from_str(text).unwrap();
+            let layout: Layout<String> = serde_json::from_value(file.pointer(pointer).unwrap().clone()).unwrap_or_else(|e| panic!("{at}: {e}"));
+            let panels = sorted(&layout);
+            let mut d = Driver::new(layout, Content);
+            let mut bars: Vec<String> = Vec::new();
+            for (h, _) in d.hits() {
+                if let Hit::DragBar(panel) = h
+                    && !bars.contains(&panel)
+                {
+                    bars.push(panel);
+                }
+            }
+            assert!(bars.len() >= 2, "{at}: two movable groups in {bars:?}");
+
+            // The first group's bar dropped on the window's start edge makes a dock.
+            drag(&mut d, Hit::DragBar(bars[0].clone()), pos2(2.0, 300.0), &format!("{at}: new dock"));
+            let columns = start_columns(&d.layout);
+            assert!(columns.len() == 1 && columns[0].len() == 1 && columns[0][0][0] == bars[0], "{at}: {columns:?}");
+
+            // The second group stacks below it, and a third goes into the seam between them.
+            let first = hit(&d, Hit::Tab(bars[0].clone()));
+            let bottom = d.area.bottom();
+            drag(&mut d, Hit::DragBar(bars[1].clone()), pos2(first.center().x, bottom - 10.0), &format!("{at}: stack below"));
+            let third = bars[2..].iter().find(|p| grab(&d, &Hit::DragBar((*p).clone()), p).is_some()).cloned();
+            if let Some(third) = &third {
+                seams.push(at.clone());
+                let second = hit(&d, Hit::Tab(bars[1].clone()));
+                drag(&mut d, Hit::DragBar(third.clone()), pos2(second.center().x, second.top() + 2.0), &format!("{at}: seam"));
+            }
+            let columns = start_columns(&d.layout);
+            let heads: Vec<&String> = columns[0].iter().map(|group| &group[0]).collect();
+            let expected: Vec<&String> = match &third {
+                Some(third) => vec![&bars[0], third, &bars[1]],
+                None => vec![&bars[0], &bars[1]],
+            };
+            assert_eq!((columns.len(), heads), (1, expected), "{at}");
+
+            // Collapse the column to icons and expand it again.
+            d.click(hit(&d, Hit::Collapse(bars[0].clone())).center());
+            d.settle();
+            assert!(iconic(&d.layout), "{at}: collapsed");
+            assert!(d.hit(&Hit::Icon(bars[0].clone())).is_some(), "{at}: icons");
+            d.click(hit(&d, Hit::Collapse(bars[0].clone())).center());
+            d.settle();
+            assert!(!iconic(&d.layout), "{at}: expanded");
+
+            // Float the column by command, then drag its window back to the start edge.
+            let float: DockCommand<String> =
+                serde_json::from_value(json!({"command": "window.panel.float", "panel": bars[0], "column": true})).unwrap();
+            let space = craft_ui::docking::float_space(&d.ctx, d.id).unwrap();
+            let actions =
+                float.to_actions_with(&craft_ui::docking::Workspace::new(d.layout.clone()), false, &space, |p| d.content.permissions(p)).unwrap();
+            d.layout.apply_all(actions, |p| d.content.permissions(p)).unwrap_or_else(|e| panic!("{at}: {e}"));
+            d.settle();
+            assert!(start_columns(&d.layout).is_empty(), "{at}: floated");
+            drag(&mut d, Hit::Title(bars[0].clone()), pos2(2.0, 300.0), &format!("{at}: dock back"));
+            assert_eq!(start_columns(&d.layout), columns, "{at}: docked back");
+
+            // Nothing was lost, and the layout reads back as written.
+            assert_eq!(sorted(&d.layout), panels, "{at}");
+            let written = serde_json::to_string(&d.layout).unwrap();
+            let read: Layout<String> = serde_json::from_str(&written).unwrap();
+            read.validate().unwrap_or_else(|e| panic!("{at}: {e}"));
+            assert_eq!(read, d.layout, "{at}");
+        }
+        // The fixtures with a third movable group, uncovered, try the seam.
+        assert_eq!(seams.len(), 6, "{seams:?}");
     }
 }

@@ -14,7 +14,7 @@ use pdf_writer::{Finish, Name, Ref, TextStr};
 use crate::chunk_container::ChunkContainer;
 use crate::color::Color;
 use crate::configure::{PdfVersion, ValidationError};
-use crate::error::KrillaResult;
+use crate::error::{KrillaError, KrillaResult};
 use crate::geom::{Quadrilateral, Rect};
 use crate::interactive::action::Action;
 use crate::interactive::destination::Destination;
@@ -70,15 +70,20 @@ impl Annotation {
         root_ref: Ref,
         page_height: f32,
     ) -> KrillaResult<()> {
+        let AnnotationType::Link(l) = &self.annotation_type;
+        // Checked before the object starts, so a refused annotation writes nothing.
+        let rect = l
+            .page_rect(page_height)
+            .ok_or(KrillaError::InvalidAnnotationGeometry(self.location))?;
+
         let chunk = &mut chunk_container.non_stream.annotations;
         let mut annotation = chunk
             .indirect(root_ref)
             .start::<pdf_writer::writers::Annotation>();
 
         self.annotation_type
-            .serialize_type(sc, &mut annotation, page_height)?;
+            .serialize_type(sc, &mut annotation, page_height, rect)?;
 
-        let AnnotationType::Link(l) = &self.annotation_type;
         // Only set the print flag when really necessary (only PDF/A). Don't
         // set it by default, so annotations with color borders will be shown
         // on a screen but not printed.
@@ -124,9 +129,10 @@ impl AnnotationType {
         sc: &mut SerializeContext,
         annotation: &mut pdf_writer::writers::Annotation,
         page_height: f32,
+        rect: Rect,
     ) -> KrillaResult<()> {
         match self {
-            AnnotationType::Link(l) => l.serialize_type(sc, annotation, page_height),
+            AnnotationType::Link(l) => l.serialize_type(sc, annotation, page_height, rect),
         }
     }
 }
@@ -157,7 +163,8 @@ impl LinkBorder {
 
 /// A link annotation.
 pub struct LinkAnnotation {
-    pub(crate) rect: Rect,
+    /// `None` when the quad points have no finite bounding box.
+    pub(crate) rect: Option<Rect>,
     pub(crate) quad_points: Option<Vec<Quadrilateral>>,
     pub(crate) target: Target,
     pub(crate) border: Option<LinkBorder>,
@@ -170,7 +177,7 @@ impl LinkAnnotation {
     /// `target`: The target of the link annotation.
     pub fn new(rect: Rect, target: Target) -> Self {
         Self {
-            rect,
+            rect: Some(rect),
             quad_points: None,
             target,
             border: None,
@@ -183,8 +190,16 @@ impl LinkAnnotation {
     /// `quad_points`: An array of quadrilaterals that define where the link
     /// annotation should be activated. This is useful if you for example have
     /// a link annotation that is broken to one or multiple lines.
+    ///
+    /// An empty list, or a point that isn't finite, makes [`Document::finish`] return
+    /// [`KrillaError::InvalidAnnotationGeometry`].
+    ///
+    /// [`Document::finish`]: crate::Document::finish
     pub fn new_with_quad_points(quad_points: Vec<Quadrilateral>, target: Target) -> Self {
-        assert!(!quad_points.is_empty());
+        let finite = quad_points
+            .iter()
+            .flat_map(|q| q.0)
+            .all(|p| p.x.is_finite() && p.y.is_finite());
 
         let mut min_x = f32::INFINITY;
         let mut min_y = f32::INFINITY;
@@ -202,13 +217,16 @@ impl LinkAnnotation {
         // that sometimes prevents the quadpoints from being used if the quad
         // points lie exactly on the bounding rectangle.
         const EPSILON: f32 = 0.001;
-        let rect = Rect::from_ltrb(
-            min_x - EPSILON,
-            min_y - EPSILON,
-            max_x + EPSILON,
-            max_y + EPSILON,
-        )
-        .unwrap();
+        let rect = finite
+            .then(|| {
+                Rect::from_ltrb(
+                    min_x - EPSILON,
+                    min_y - EPSILON,
+                    max_x + EPSILON,
+                    max_y + EPSILON,
+                )
+            })
+            .flatten();
 
         Self {
             rect,
@@ -227,19 +245,23 @@ impl LinkAnnotation {
         }
     }
 
+    /// The rect in PDF page coordinates, or `None` when there is no rect or it doesn't
+    /// map to finite coordinates. The quad points lie inside the rect, so they map to
+    /// finite coordinates whenever it does.
+    fn page_rect(&self, page_height: f32) -> Option<Rect> {
+        self.rect?.transform(page_root_transform(page_height))
+    }
+
     fn serialize_type(
         &self,
         sc: &mut SerializeContext,
         annotation: &mut pdf_writer::writers::Annotation,
         page_height: f32,
+        rect: Rect,
     ) -> KrillaResult<()> {
         annotation.subtype(pdf_writer::types::AnnotationType::Link);
 
-        let actual_rect = self
-            .rect
-            .transform(page_root_transform(page_height))
-            .unwrap();
-        annotation.rect(actual_rect.to_pdf_rect());
+        annotation.rect(rect.to_pdf_rect());
         annotation.border(
             0.0,
             0.0,

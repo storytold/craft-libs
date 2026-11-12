@@ -66,6 +66,55 @@ pub trait Device<'a> {
     fn actual_text(&mut self, _text: &[u8]) {}
     /// Called at the end of a marked content sequence (EMC).
     fn end_marked_content(&mut self) {}
+    /// PdfCraft patch (29): the page's annotations are about to be drawn (until
+    /// `end_annotations`), as page content finishes. Devices can use this to treat their
+    /// paints as annotation colours rather than document colours — the reading-colours
+    /// setting replaces document colours only, never the colours a comment was given.
+    fn begin_annotations(&mut self) {}
+    /// PdfCraft patch (29): the page's annotations are done; what follows is page content.
+    fn end_annotations(&mut self) {}
+    /// Knockout patch (pdfcraft #2974): the transparency group just pushed is a knockout group
+    /// (`/K true`): each of its elements composites with the group's initial backdrop, not with the
+    /// elements drawn before it in the group (ISO 32000-2, knockout groups), until the matching
+    /// `pop_transparency_group`.
+    fn set_knockout(&mut self) {}
+    /// Knockout patch (pdfcraft #2974): an element whose shape is `shape` (device space) is about
+    /// to be drawn into a transparency group of its own. In a knockout group (`set_knockout`) the
+    /// element replaces what the group drew under its shape, so a device clears that first; the
+    /// element's layer then composites over the cleared area as usual.
+    fn knockout_shape(&mut self, _shape: &BezPath) {}
+    /// Knockout patch (pdfcraft #2974): whether `knockout_shape` would clear anything now, that is
+    /// whether the innermost transparency group is a knockout group. Lets the interpreter skip work
+    /// it only needs for the clear.
+    fn in_knockout_group(&mut self) -> bool {
+        false
+    }
+    /// Knockout patch (pdfcraft #2974): `image`, an unmasked raster image, is about to be drawn
+    /// with `transform` in a knockout group. A device that will draw it (it isn't skipped and it
+    /// decodes) clears what the group drew under its placement rectangle first, so the image
+    /// replaces it. Decided by the device, at the size it draws the image, so the draw reuses that
+    /// decode.
+    fn knockout_image(&mut self, _image: &crate::RasterImage<'_>, _transform: Affine) {}
+    /// Knockout patch (pdfcraft #2974): whether a transparency group drawn now is an element of a
+    /// knockout group that the device wants cleared under the group's shape first. If so the
+    /// interpreter draws the group's content once between `begin_knockout_erase` and
+    /// `end_knockout_erase`, in which every paint clears what is under its shape instead of
+    /// painting, and then draws the group as usual, in a layer of its own.
+    fn knockout_erase_wanted(&mut self) -> bool {
+        false
+    }
+    /// Knockout patch (pdfcraft #2974): see `knockout_erase_wanted`.
+    fn begin_knockout_erase(&mut self) {}
+    /// Knockout patch (pdfcraft #2974): see `knockout_erase_wanted`.
+    fn end_knockout_erase(&mut self) {}
+    /// Craft patch (flatten): the overprint parameters for the paints that follow, until the
+    /// next call: `op` (`fill`, for fills, glyph fills and images), `OP` (`stroke`) and `OPM`
+    /// (`mode`, 0 or 1; ISO 32000-2 §8.6.7). Called where `set_blend_mode` is called for a
+    /// paint.
+    fn set_overprint(&mut self, _fill: bool, _stroke: bool, _mode: u8) {}
+    /// Craft patch (flatten): the transparency group just pushed is isolated (`/I true`), until
+    /// the matching `pop_transparency_group`.
+    fn set_isolated(&mut self) {}
 }
 
 /// A device that discards all drawing operations.

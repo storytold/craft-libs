@@ -343,6 +343,20 @@ impl Type0Font {
         }
     }
 
+    /// Craft patch (flatten): the face index of `font_data`.
+    pub(crate) fn font_index(&self) -> u32 {
+        match &self.font_type {
+            FontType::OpenType(t) => t.index(),
+            FontType::Cff(_) | FontType::Type1(_) => 0,
+        }
+    }
+
+    /// Craft patch (flatten): whether `font_data` comes from the file rather than the font
+    /// resolver.
+    pub(crate) fn is_embedded(&self) -> bool {
+        !self.fallback
+    }
+
     /// Get the PostScript name.
     pub(crate) fn postscript_name(&self) -> Option<&str> {
         self.postscript_name.as_deref()

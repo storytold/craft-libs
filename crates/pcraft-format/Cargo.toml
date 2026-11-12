@@ -1,0 +1,18 @@
+[package]
+name = "craft-pcraft-format"
+description = "The envelope of PhotoCraft's .pcraft bundle: the manifest with the document as a type parameter, tile references, entry paths, decode limits and the migration runner."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+# `unbounded_depth`: manifests nest deeper than serde_json's 128 levels; `parse_manifest` checks
+# the nesting against `Limits::max_depth` before parsing.
+serde_json = { workspace = true, features = ["unbounded_depth"] }
+thiserror = { workspace = true }

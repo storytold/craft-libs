@@ -1,0 +1,26 @@
+[package]
+name = "craft-dialogs"
+description = "Native file and message dialogs that never block the event loop: queued requests, shown at the end of the frame, answered on a later frame."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+# Versions the apps already pin (rfd 0.17.2, raw-window-handle 0.6.2), so adopting the crate adds
+# nothing new to their Cargo.lock. rfd without its `wayland` feature, which links libwayland-client
+# through pkg-config unless winit's `dlopen` is in the build too; the apps' own rfd keeps it on.
+[dependencies]
+raw-window-handle = "0.6.2"
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+
+# The free-standing Open and Folder panel (`beginWithCompletionHandler:`). rfd and winit already
+# use these.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = { version = "0.6.4", default-features = false, features = ["std"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSApplication", "NSOpenPanel", "NSPanel", "NSResponder", "NSSavePanel", "NSView", "NSWindow"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSString", "NSURL"] }
+
+[lints]
+workspace = true

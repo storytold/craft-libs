@@ -463,6 +463,27 @@ lists (hidden entries keep their keys and still count in conflicts).
 
 - `ui`: the Shortcuts dialog (see above). Implies `egui`.
 - `snapshot` (development): `tests/ui_snapshot.rs` writes PNGs of the dialog to
-  `CRAFT_KEYMAP_SNAPSHOT_DIR` for review. egui's default fonts lack ⇧ ⌥ ⌃ and the arrows; the
-  test adds the font in `CRAFT_KEYMAP_SNAPSHOT_FONT`, DejaVu Sans when it is installed, and BIZ
-  UDPGothic from a craft-fonts checkout in `CRAFT_FONTS_DIR` (⇧ ⌘ and arrows only).
+  `CRAFT_KEYMAP_SNAPSHOT_DIR` for review, using the same font input as the dialog tests.
+
+### Fonts for UI tests
+
+Apps own their runtime font setup, including coverage of the Mac key symbols displayed by the
+Shortcuts dialog. The library does not install or replace an app's fonts.
+
+UI tests need an absolute `CRAFT_FONTS_DIR` pointing to a checkout of
+[`craft-fonts`](https://github.com/storytold/craft-fonts) at
+`b076417b5880bd4154bd22f00695b1d28c6bea83`. For example, after preparing that checkout:
+
+```sh
+CRAFT_FONTS_DIR=/absolute/path/to/craft-fonts cargo test -p craft-keymap --features ui --locked
+```
+
+Dialog tests and requested snapshots share a helper that verifies the SHA256 of
+`fonts/noto-sans-symbols/NotoSansSymbols.ttf` and
+`fonts/noto-sans-symbols-2/NotoSansSymbols2-Regular.ttf`, then appends these and egui's bundled
+Hack as fallbacks before the first layout pass. It checks printable ASCII, the full key-symbol
+and dialog-icon repertoire, and the accented pseudolocale in both default font families.
+Missing inputs, changed bytes and missing glyphs fail the tests; no system font probing or tofu
+fallback is used. Linux, macOS and Windows keymap CI supply this exact checkout. The WASM
+compile-only job needs no runtime font files. Optional screenshots still require their output
+directory and a graphics adapter; they are review images, not golden comparisons.
