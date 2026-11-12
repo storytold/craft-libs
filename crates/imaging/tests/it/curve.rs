@@ -7,7 +7,7 @@ use craft_imaging::ui::curve::{Curve, CurveChannel, CurveEditor};
 use craft_theme::{Contrast, Mode};
 use craft_ui::contract::Bind;
 use craft_ui::testing::pointer::{moved, press, release};
-use craft_ui::testing::{Fixture, style, trial};
+use craft_ui::testing::{Fixture, Room, style, trial};
 use egui::{Pos2, Vec2, pos2, vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -136,4 +136,28 @@ fn a_point_dragged_off_the_graph_goes_and_comes_back_within_one_gesture() {
     rig.release_at([140.0, 140.0]);
     assert_eq!(rig.points(), vec![[0.0, 0.0], [140.0, 140.0], [255.0, 255.0]]);
     assert_eq!(rig.kinds().iter().filter(|k| **k == "begin").count(), 1);
+}
+
+/// Shown in a panel, the editor's rect holds the whole editor: the Input and Output fields and the hint lie under the
+/// graph and inside the area the editor took, not clipped below it.
+#[trial]
+fn the_fields_and_the_hint_show_under_the_graph_inside_the_editor() {
+    const HINT: &str = "Click to add a point";
+    let curve = Rc::new(RefCell::new(Curve::smooth(THREE.to_vec())));
+    let shared = curve.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut value = shared.borrow().clone();
+        let _ = CurveEditor::new("Curve", Bind::bound(&mut value)).hint(HINT).show(ui);
+    });
+    fixture.in_room(Room::Panel);
+    fixture.settle();
+    let shown = fixture.shown();
+    let corner = fixture.by_label("Point 1 of 3").expect("the first point").center();
+    let input = fixture.by_label("Input").expect("the Input field").rect;
+    let hint = fixture.texts().iter().find(|text| text.text == HINT).expect("the hint is painted").rect;
+    assert!(input.top() > corner.y, "the fields sit under the graph: {input:?}, point at {corner:?}");
+    assert!(hint.top() >= input.bottom(), "the hint sits under the fields: {hint:?}, {input:?}");
+    for (part, rect) in [("Input", input), ("hint", hint)] {
+        assert!(shown.contains_rect(rect), "{part} {rect:?} lies inside the editor's area {shown:?}");
+    }
 }
