@@ -5,7 +5,7 @@ so the crate builds for wasm32.
 
 | Format | Read | Write |
 |---|---|---|
-| Standard MIDI File (`.mid`, `.midi`), formats 0 and 1 | yes | format 1 |
+| Standard MIDI File (`.mid`, `.midi`), formats 0 and 1 | yes | format 0 or 1 |
 | Standard MIDI File, format 2 | best effort (all tracks share one timeline) | no |
 
 RIFF-wrapped MIDI (`.rmi`), System Exclusive dumps (`.syx`) and karaoke lyrics are not here; no
@@ -18,8 +18,9 @@ app reads or writes them.
   channel pressure, polyphonic pressure or program change.
 - `Sequence`: the notes and channel events of one track, with sorting, range queries and
   duplicate removal.
-- `Smf`: the file: its tracks (`SmfTrack`: a name and a `Sequence`) and the file-wide tempo,
-  meter, marker and key-signature lists.
+- `Smf`: the file: its format, its tracks (`SmfTrack`: a name, an instrument name and a
+  `Sequence`), the file-wide tempo, meter, marker and key-signature lists, and `end`, the last
+  tick any track reaches (its End of Track). `Smf::default()` is an empty format-1 file.
 
 All ticks are at `PPQ` (960) per quarter note, whatever the file's division. The `serde` feature
 derives `Serialize` and `Deserialize` on `Note`, `CtrlEvent`, `CtrlKind` and `Sequence`.
@@ -44,10 +45,30 @@ quantity is at most four bytes, and a file is refused beyond `MAX_TRACKS` (4096)
 `MAX_EVENTS` (5,000,000) events. Malformed structure (bad header, truncated chunk, a data byte
 without running status, a system real-time status in a track) is a `MidiError`, never a panic.
 
+## Reading a damaged file
+
+`read_smf_lenient(bytes)` returns the `Smf` and a list of warnings (at most `MAX_WARNINGS`, 32)
+instead of failing on damage after the header. Only a file that is not a Standard MIDI File
+(no `MThd`, a header cut short, an unusable division) is an error. Otherwise:
+
+- a header length beyond the file is ignored; an unknown format is read as format 1;
+- a track whose events stop making sense (cut short, a data byte without a status, a system
+  message, the event limit reached) keeps what came before, and its open notes end there; a
+  track without End of Track is kept with a warning;
+- a track length beyond the file reads the rest of it; a length that disagrees with the track's
+  End of Track is not believed, and the next chunk is looked for where the events ended;
+- bytes that are no chunk are skipped to the next `MTrk`; trailing bytes are ignored;
+- past `MAX_TRACKS` the rest is left out; lyrics are counted in a warning; a format-2 file is
+  read side by side, with a warning saying so.
+
+On a sound file both readers return the same `Smf` and the lenient one no warnings. The lenient
+rules come from LoopCraft's reader.
+
 ## Writing
 
 `write_smf(&smf)` writes format 1 at 960 ticks per quarter note: a conductor track with tempos,
-meters, key signatures and markers, then one track per `SmfTrack`. Negative ticks are clamped to
+meters, key signatures and markers, then one track per `SmfTrack` (with its name and instrument
+name when not empty). When `smf.format` is 0 it writes format 0: all of that in one track. Negative ticks are clamped to
 0 and data bytes to their MIDI ranges; a note-on velocity of 0 is written as 1. Notes of one
 pitch that overlap are trimmed so that the file reads back with the same starts, and of two that
 start together the longer is written. An invalid tempo, a meter denominator that is not a power
