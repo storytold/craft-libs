@@ -348,11 +348,11 @@ impl Component for LabelLeaf {
     }
 }
 
-/// The colon a beside text label draws after its name, unless the name ends in one. The label's node and the
+/// The colon a beside text label draws after its shown text, unless that text ends in one. The label's node and the
 /// control keep the name as given.
 pub(super) fn colon(env: &Env, input: &LabelIn<'_>) -> Option<String> {
-    let text = env.view().resolve(input.text);
-    let beside_text = input.side.layout == FieldLayout::Beside && input.side.kind == LabelKind::Text;
+    let text = env.view().resolve(input.side.kind.shown(input.text));
+    let beside_text = input.side.layout == FieldLayout::Beside && matches!(input.side.kind, LabelKind::Text | LabelKind::Short(_));
     if !beside_text || text.as_str().is_empty() || text.as_str().ends_with([':', '\u{ff1a}']) {
         return None;
     }

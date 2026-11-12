@@ -156,7 +156,7 @@ pub(crate) fn control_after(ui: &mut Ui, env: &Env, input: &LabelIn<'_>) -> Plac
     }
     let reset = scope::last_reset(&ctx, input.scope);
     let slot = if reset.is_some() && input.side.reset_dot { env.tokens.size.handle.sm } else { 0.0 };
-    let mut leaf = LabelLeaf::new(input.text.clone(), slot);
+    let mut leaf = LabelLeaf::new(input.side.kind.shown(input.text).clone(), slot);
     leaf.resettable = reset.is_some();
     leaf.colon = colon(env, input);
     match &input.side.kind {

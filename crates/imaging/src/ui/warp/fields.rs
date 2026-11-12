@@ -3,12 +3,12 @@
 
 use craft_behavior::{EditEvent, IconId};
 use craft_ui::buttons::ToggleButton;
-use craft_ui::contract::{Bind, Entry, FieldLayout, Props as _, Show as _, ShowContainer as _, Sizing};
+use craft_ui::contract::{Bind, Entry, FieldLayout, LabelKind, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
 use craft_ui::display::Divider;
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
-use craft_ui::runtime::env::{Env, UnitKind};
+use craft_ui::runtime::env::{Env, Label, UnitKind};
 use craft_ui::text::NumberField;
 use egui::Ui;
 
@@ -32,6 +32,10 @@ craft_ui::words! {
         bend: "warpFields.bend" = "Bend";
         horizontal: "warpFields.horizontal" = "Horizontal distortion";
         vertical: "warpFields.vertical" = "Vertical distortion";
+        /// The caption shown beside the Horizontal distortion field.
+        horizontal_caption: "warpFields.horizontalCaption" = "H";
+        /// The caption shown beside the Vertical distortion field.
+        vertical_caption: "warpFields.verticalCaption" = "V";
     }
 }
 
@@ -295,13 +299,17 @@ impl<'a> WarpFields<'a> {
                     edits.push(WarpFieldsEdit::orientation(!values.vertical));
                 }
                 type FieldEdit = fn(EditEvent<f64>) -> WarpFieldsEdit;
-                let fields: [(_, f64, FieldEdit); 3] = [
-                    (&words.bend, values.bend, WarpFieldsEdit::Bend),
-                    (&words.horizontal, values.horizontal, WarpFieldsEdit::Horizontal),
-                    (&words.vertical, values.vertical_distortion, WarpFieldsEdit::Vertical),
+                let fields: [(&Label, Option<&Label>, f64, FieldEdit); 3] = [
+                    (&words.bend, None, values.bend, WarpFieldsEdit::Bend),
+                    (&words.horizontal, Some(&words.horizontal_caption), values.horizontal, WarpFieldsEdit::Horizontal),
+                    (&words.vertical, Some(&words.vertical_caption), values.vertical_distortion, WarpFieldsEdit::Vertical),
                 ];
-                for (name, value, edit) in fields {
-                    Field::new(name.clone()).layout(caption).sizing(Sizing::Content).show(ui, |ui, _| {
+                for (name, short, value, edit) in fields {
+                    let mut field = Field::new(name.clone()).layout(caption).sizing(Sizing::Content);
+                    if let Some(short) = short {
+                        field = field.side(SideLabel::new().kind(LabelKind::Short(short.clone())));
+                    }
+                    field.show(ui, |ui, _| {
                         let field = NumberField::new(name.clone(), Bind::given(Some(value)))
                             .range(DISTORTION_RANGE)
                             .unit_kind(UnitKind::Percent)

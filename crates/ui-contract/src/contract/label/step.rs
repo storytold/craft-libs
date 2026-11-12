@@ -149,7 +149,7 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, trailing: Option<
         return Placed { label: Rect::NOTHING, control: hidden_control(&ctx, input, flow, gap), trailing: Rect::NOTHING };
     }
     let slot = if reset.is_some() && input.side.reset_dot { slot_side } else { 0.0 };
-    let mut leaf = LabelLeaf::new(input.text.clone(), slot);
+    let mut leaf = LabelLeaf::new(input.side.kind.shown(input.text).clone(), slot);
     leaf.scrub = input.enabled && (input.side.scrub || scope::last_scrub(&ctx, input.scope));
     leaf.resettable = reset.is_some();
     leaf.differs = reset.is_some_and(|fact| fact.differs);

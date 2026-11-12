@@ -20,6 +20,19 @@ pub enum LabelKind {
     /// An icon or a short text shown in place of the label; the text still names the control. Glyph labels share
     /// a column of their own, apart from the text labels'. The label's detail joins the description and is not shown.
     Glyph(GlyphLabel),
+    /// A shorter text shown in place of the label ("H" for "Horizontal distortion"), as a text label in every other
+    /// way: its column, colon, icon and detail. The label's text still names the control.
+    Short(Label),
+}
+
+impl LabelKind {
+    /// The text a visible text label shows: the short text of `Short`, else `text`.
+    pub(super) fn shown<'a>(&'a self, text: &'a Label) -> &'a Label {
+        match self {
+            LabelKind::Short(short) => short,
+            _ => text,
+        }
+    }
 }
 
 /// What a glyph label shows.
