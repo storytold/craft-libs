@@ -47,12 +47,29 @@ fn stored_opening(ctx: &Context, id: Id) -> Option<Opening> {
     MemoryStage::peek::<LayerMemory>(ctx, memory_slot(id)).opening
 }
 
-/// The region a modal or floating window layer opened in `env` is contained in: the region of the embedded shell it is
-/// opened in (`AppShell::embedded`), `None` for a window's own layers and for popups, toasts and tooltips, which may
-/// reach past it.
+/// The screen rect the popups opened in an env are contained in, and the popups opened from those: the menus of a menu
+/// bar stay below the bar ([`OverlayUi::contain_popups_below`](super::OverlayUi::contain_popups_below)). `None`, the
+/// root's, lets popups take the whole safe rect.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PopupRegion(pub Option<Rect>);
+
+impl crate::runtime::env::EnvValue for PopupRegion {
+    fn root() -> Self {
+        PopupRegion(None)
+    }
+}
+
+/// The region a layer opened in `env` is contained in: for a modal or floating window layer the region of the
+/// embedded shell it is opened in (`AppShell::embedded`), for a popup the env's [`PopupRegion`]; `None` for a window's
+/// own layers and for toasts and tooltips, which may reach past it.
 pub(crate) fn region_for(env: &Env, overlay: &Overlay) -> Option<Rect> {
-    let contained = overlay.rank.is_modal() || matches!(overlay.rank, crate::runtime::overlay::Rank::Window);
-    contained.then(|| env.get::<crate::runtime::env::ShellEntry>().0.and_then(|shell| shell.region())).flatten()
+    match overlay.rank {
+        crate::runtime::overlay::Rank::Popup => env.get::<PopupRegion>().0,
+        rank if rank.is_modal() || matches!(rank, crate::runtime::overlay::Rank::Window) => {
+            env.get::<crate::runtime::env::ShellEntry>().0.and_then(|shell| shell.region())
+        }
+        _ => None,
+    }
 }
 
 /// The screen rect a layer of `overlay` opened in `env` keeps inside: the safe rect, or the part of it a contained
@@ -108,9 +125,11 @@ fn resolved_anchor(ctx: &Context, overlay: &Overlay, resolved: Rect, bounds: Rec
 }
 
 /// The room a layer's body is measured in before the layer is placed: `content_room` for the anchor as the host
-/// resolves it in this pass. `id` is the layer, whose memory holds the pointer where it opened. `own` and `own_to_screen` are the owner's rect and its layer's map to screen space.
+/// resolves it in this pass, inside the screen rect the layer opened in `env` keeps inside.
+/// `id` is the layer, whose memory holds the pointer where it opened. `own` and `own_to_screen` are the owner's rect and its layer's map to screen space.
 pub(crate) fn measuring_room(
     ctx: &Context,
+    env: &Env,
     id: Id,
     overlay: &Overlay,
     own: Rect,
@@ -123,7 +142,7 @@ pub(crate) fn measuring_room(
     if !matches!(overlay.place, Place::Anchored { .. }) {
         return None;
     }
-    let bounds = areas::safe_rect(ctx);
+    let bounds = screen_for(ctx, env, overlay);
     let resolved = resolve_anchor(ctx, id, overlay, own, own_to_screen);
     let anchor = resolved_anchor(ctx, overlay, resolved, bounds, inset, &mut MemoryStage::peek::<LayerMemory>(ctx, memory_slot(id)).pointer_at);
     Some(content_room(overlay, bounds, kept_in(overlay, resolved, bounds, inset), anchor, rtl))

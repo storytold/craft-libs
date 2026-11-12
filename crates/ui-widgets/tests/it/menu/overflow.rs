@@ -160,3 +160,33 @@ fn a_menu_bar_menu_taller_than_the_window_stays_inside_and_the_wheel_reaches_its
     assert!(!last(&fixture));
     assert!(until(&mut fixture, 200, || vec![pointer::moved(rect.center()), pointer::wheel(-60.0)], last), "the wheel reaches the last row");
 }
+
+#[trial]
+fn no_menu_or_submenu_of_a_menu_bar_covers_the_bar() {
+    let mut fixture = Fixture::new(|ui| {
+        let titles = vec![MenuTitle::new("&File", |ui| {
+            for at in 0..8 {
+                MenuItem::new(row(at)).show(ui);
+            }
+            Menu::submenu_row(ui, "More", |ui, _| {
+                for at in 0..ROWS {
+                    MenuItem::new(format!("Sub {at}")).show(ui);
+                }
+            });
+        })];
+        MenuBar::new("Main menu", titles).show(ui);
+    });
+    fixture.settle();
+    let file = fixture.by_label("File").expect("the File title");
+    fixture.click(&file).settle();
+    let more = fixture.by_label("More").expect("the submenu row").center();
+    fixture.frame(vec![pointer::moved(more)]).settle();
+    assert!(fixture.by_label("Sub 0").is_some(), "the submenu is open");
+    let room = fixture.ctx().content_rect();
+    let menus = fixture.by_role(Role::MENU);
+    assert!(menus.len() >= 2, "the menu and its submenu: {menus:?}");
+    for menu in menus {
+        assert!(menu.rect.top() >= file.rect.bottom() - 0.5, "{:?} covers the bar ending at {}", menu.rect, file.rect.bottom());
+        assert!(room.contains_rect(menu.rect), "{:?} stays inside the window {room:?}", menu.rect);
+    }
+}

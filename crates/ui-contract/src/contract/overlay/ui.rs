@@ -2,7 +2,7 @@
 
 use super::host::{Layer, forget_layer, host};
 use super::place::Anchor;
-use super::placement::resolve_anchor;
+use super::placement::{PopupRegion, region_for, resolve_anchor};
 use super::popups::{PopupHandle, with_popups};
 use super::props::Overlay;
 use crate::contract::body::pad_of;
@@ -68,6 +68,18 @@ impl<'a> OverlayUi<'a> {
         Anchor::Rect(rect.unwrap_or(self.anchor))
     }
 
+    /// Keeps the popups this component shows from here on, and every popup opened from them, below the component:
+    /// inside the safe rect less the part above the component's bottom edge. A menu bar's menus and their submenus
+    /// never cover the bar.
+    pub fn contain_popups_below(&mut self) {
+        let safe = areas::safe_rect(self.ctx);
+        let top = (self.to_screen * self.anchor).bottom().clamp(safe.top(), safe.bottom());
+        let region = Rect::from_min_max(egui::pos2(safe.left(), top), safe.max);
+        self.env = self.env.derive(|scoped| {
+            scoped.inherited_mut().values.set(PopupRegion(Some(region)));
+        });
+    }
+
     /// Shows the popup while its handle is open, on a popup surface, inside `POPUP_PAD`; the content is a body closure.
     /// `None` while closed.
     pub fn show<R>(&mut self, popup: PopupHandle, overlay: Overlay, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Option<R> {
@@ -84,8 +96,8 @@ impl<'a> OverlayUi<'a> {
             return None;
         }
         let anchor = resolve_anchor(&ctx, popup.id, &overlay, self.anchor, self.to_screen);
-        let layer =
-            Layer { id: popup.id, owner, overlay: &overlay, anchor, env: &self.env, exiting: !open, fade: presence.t, size: None, region: None };
+        let region = region_for(&self.env, &overlay);
+        let layer = Layer { id: popup.id, owner, overlay: &overlay, anchor, env: &self.env, exiting: !open, fade: presence.t, size: None, region };
         let resolved = self.resolved;
         let mut result = None;
         let mut requested = false;

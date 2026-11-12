@@ -244,6 +244,7 @@ impl<'b> BodyHooks<'b> {
                 let rtl = Env::of(ui).direction.is_rtl();
                 match crate::contract::overlay::measuring_room(
                     ctx,
+                    &env,
                     id,
                     overlay,
                     own,
