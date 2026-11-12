@@ -53,6 +53,11 @@ const CANONICAL: craft_xml::Canonical<'static> = craft_xml::Canonical::new(&[
     ("ttm", NS_TTM),
     ("ttm10", NS_TTM_DRAFT),
     ("ttm04", NS_TTM_DRAFT_APRIL),
+    ("tts", NS_TTS),
+    ("tts10", "http://www.w3.org/2006/10/ttaf1#style"),
+    ("tts10s", "http://www.w3.org/2006/10/ttaf1#styling"),
+    ("tts04", "http://www.w3.org/2006/04/ttaf1#style"),
+    ("tts04s", "http://www.w3.org/2006/04/ttaf1#styling"),
 ]);
 
 /// The line (from 1) of the root element's start tag, for error messages.
@@ -567,92 +572,179 @@ struct Fmt {
     underline: bool,
 }
 
-fn style_of(n: &El, styles: &std::collections::HashMap<String, Fmt>, parent: Fmt) -> Fmt {
+/// An explicit `inherit` restores the parent value, even after earlier style references.
+#[derive(Clone, Copy)]
+enum FmtValue {
+    Set(bool),
+    Inherit,
+}
+
+impl FmtValue {
+    fn resolve(self, inherited: bool) -> bool {
+        match self {
+            Self::Set(value) => value,
+            Self::Inherit => inherited,
+        }
+    }
+}
+
+/// The style properties an element or a `<style>` sets; `None` leaves the inherited value.
+#[derive(Clone, Copy, Default)]
+struct FmtSpec {
+    italic: Option<FmtValue>,
+    bold: Option<FmtValue>,
+    underline: Option<FmtValue>,
+}
+
+impl FmtSpec {
+    fn apply(self, fmt: &mut Fmt, parent: Fmt) {
+        if let Some(v) = self.italic {
+            fmt.italic = v.resolve(parent.italic);
+        }
+        if let Some(v) = self.bold {
+            fmt.bold = v.resolve(parent.bold);
+        }
+        if let Some(v) = self.underline {
+            fmt.underline = v.resolve(parent.underline);
+        }
+    }
+}
+
+/// A styling attribute: from the TTML styling namespaces in a fixed order (whatever the order in
+/// the file), else unqualified for compatibility. Other namespaces are ignored.
+fn styling_attr<'a>(n: &'a El, name: &str) -> Option<&'a str> {
+    ["tts", "tts10", "tts10s", "tts04", "tts04s"].into_iter().find_map(|p| n.attr(&format!("{p}:{name}"))).or_else(|| n.attr(name))
+}
+
+/// Is this element in a TTML content namespace (or none)?
+fn content_element(n: &El, name: &str) -> bool {
+    local(&n.name) == name && matches!(prefix(&n.name), "" | "tt" | "tt10" | "tt04")
+}
+
+fn style_of(n: &El, styles: &HashMap<String, FmtSpec>, parent: Fmt) -> Fmt {
     let mut f = parent;
-    if let Some(refs) = attr(n, "style") {
+    if let Some(refs) = n.attr("style") {
         for r in refs.split_whitespace() {
             if let Some(s) = styles.get(r) {
-                f.italic |= s.italic;
-                f.bold |= s.bold;
-                f.underline |= s.underline;
+                s.apply(&mut f, parent);
             }
         }
     }
-    own_fmt(n, &mut f);
+    own_fmt(n).apply(&mut f, parent);
     f
 }
 
-fn own_fmt(n: &El, f: &mut Fmt) {
-    if let Some(v) = attr(n, "fontStyle") {
-        f.italic = v.trim() == "italic" || v.trim() == "oblique";
-    }
-    if let Some(v) = attr(n, "fontWeight") {
-        f.bold = v.trim() == "bold";
-    }
-    if let Some(v) = attr(n, "textDecoration") {
-        let v = v.trim();
-        if v.contains("noUnderline") || v == "none" {
-            f.underline = false;
-        } else if v.contains("underline") {
-            f.underline = true;
-        }
+fn own_fmt(n: &El) -> FmtSpec {
+    FmtSpec {
+        italic: styling_attr(n, "fontStyle").and_then(|v| match v.trim() {
+            "inherit" => Some(FmtValue::Inherit),
+            "italic" | "oblique" => Some(FmtValue::Set(true)),
+            "normal" | "reverseOblique" => Some(FmtValue::Set(false)),
+            _ => None,
+        }),
+        bold: styling_attr(n, "fontWeight").and_then(|v| match v.trim() {
+            "inherit" => Some(FmtValue::Inherit),
+            "bold" => Some(FmtValue::Set(true)),
+            "normal" => Some(FmtValue::Set(false)),
+            _ => None,
+        }),
+        underline: styling_attr(n, "textDecoration").and_then(|v| {
+            let v = v.trim();
+            if v == "inherit" {
+                Some(FmtValue::Inherit)
+            } else if v.contains("noUnderline") || v == "none" {
+                Some(FmtValue::Set(false))
+            } else if v.contains("underline") {
+                Some(FmtValue::Set(true))
+            } else {
+                None
+            }
+        }),
     }
 }
 
-/// Text being collected from a `<p>`: whitespace collapses to one space, which is written only
-/// before the next visible character or opening tag (never at a line start).
+/// Text being collected from a `<p>` or timed `<span>`. XML whitespace collapses to one space in
+/// the style of its first character, written only between visible text. Line breaks are kept,
+/// each in the style it was in, also at the start and end of a cue.
 struct Out {
     s: String,
-    pending: bool,
+    pending: Option<Fmt>,
+    has_text: bool,
+    breaks: Vec<Fmt>,
+    tags: Vec<&'static str>,
 }
 
 impl Out {
     fn flush(&mut self) {
-        if self.pending && !self.s.is_empty() && !self.s.ends_with('\n') {
+        if !self.breaks.is_empty() {
+            for fmt in std::mem::take(&mut self.breaks) {
+                self.set_fmt(fmt);
+                self.s.push('\n');
+            }
+        } else if self.has_text
+            && let Some(fmt) = self.pending
+        {
+            self.set_fmt(fmt);
             self.s.push(' ');
         }
-        self.pending = false;
+        self.pending = None;
+    }
+
+    /// Keep the common tag prefix open and close removed tags in reverse order to preserve nesting.
+    fn set_fmt(&mut self, fmt: Fmt) {
+        let tags = [(fmt.italic, "i"), (fmt.bold, "b"), (fmt.underline, "u")].into_iter().filter(|x| x.0).map(|x| x.1);
+        let common = self.tags.iter().copied().zip(tags.clone()).take_while(|(a, b)| a == b).count();
+        for t in self.tags.iter().skip(common).rev() {
+            self.s.push_str(&format!("</{t}>"));
+        }
+        self.tags.truncate(common);
+        for t in tags.skip(common) {
+            self.s.push_str(&format!("<{t}>"));
+            self.tags.push(t);
+        }
+    }
+
+    fn push_text(&mut self, ch: char) {
+        self.s.push(ch);
     }
 }
 
 /// Collect a `<p>`'s (or `<span>`'s) text with `<i>`/`<b>`/`<u>` tags, collapsing whitespace.
-fn collect(n: &El, styles: &std::collections::HashMap<String, Fmt>, fmt: Fmt, out: &mut Out) {
-    for c in &n.children {
-        if let Node::Text(text) | Node::CData(text) = c {
-            for ch in text.chars() {
-                if is_xml_space(ch) {
-                    out.pending = true;
-                } else {
-                    out.flush();
-                    out.s.push(ch);
-                }
-            }
-        } else if let Node::El(c) = c {
-            match local(&c.name) {
-                "br" => {
-                    out.pending = false;
-                    out.s.push('\n');
-                }
-                "span" => {
-                    let f = style_of(c, styles, fmt);
-                    let tags: Vec<&str> = [(f.italic && !fmt.italic, "i"), (f.bold && !fmt.bold, "b"), (f.underline && !fmt.underline, "u")]
-                        .into_iter()
-                        .filter(|x| x.0)
-                        .map(|x| x.1)
-                        .collect();
-                    if !tags.is_empty() {
+/// An explicit stack keeps nested inline content off the call stack.
+fn collect<'a>(n: &'a El, styles: &HashMap<String, FmtSpec>, fmt: Fmt, out: &mut Out) {
+    // a child `<span>` takes its own style on top of its parent's
+    let push_children = |pending: &mut Vec<(&'a Node, Fmt)>, e: &'a El, fmt: Fmt| {
+        for child in e.children.iter().rev() {
+            let child_fmt = match child {
+                Node::El(c) if local(&c.name) == "span" => style_of(c, styles, fmt),
+                _ => fmt,
+            };
+            pending.push((child, child_fmt));
+        }
+    };
+    let mut pending: Vec<(&Node, Fmt)> = Vec::new();
+    push_children(&mut pending, n, fmt);
+    while let Some((node, fmt)) = pending.pop() {
+        match node {
+            Node::Text(text) | Node::CData(text) => {
+                for ch in text.chars() {
+                    if is_xml_space(ch) {
+                        out.pending.get_or_insert(fmt);
+                    } else {
                         out.flush();
-                    }
-                    for t in &tags {
-                        out.s.push_str(&format!("<{t}>"));
-                    }
-                    collect(c, styles, f, out);
-                    for t in tags.iter().rev() {
-                        out.s.push_str(&format!("</{t}>"));
+                        out.set_fmt(fmt);
+                        out.push_text(ch);
+                        out.has_text = true;
                     }
                 }
-                _ => collect(c, styles, fmt, out),
             }
+            Node::El(e) if local(&e.name) == "br" => {
+                // a collapsible space next to a hard line break goes
+                out.pending = None;
+                out.breaks.push(fmt);
+            }
+            Node::El(e) => push_children(&mut pending, e, fmt),
+            _ => {}
         }
     }
 }
@@ -662,9 +754,18 @@ fn is_xml_space(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r')
 }
 
-fn clean(s: &str) -> String {
-    // `split` (not `lines`) keeps the empty edge lines produced by a leading or trailing `<br/>`.
-    s.split('\n').map(|l| l.trim_matches(is_xml_space)).collect::<Vec<_>>().join("\n")
+/// The cue text of `n` in style `fmt`: empty when it has no visible text (only spaces or breaks).
+fn cue_text(n: &El, styles: &HashMap<String, FmtSpec>, fmt: Fmt) -> String {
+    let mut o = Out { s: String::new(), pending: None, has_text: false, breaks: Vec::new(), tags: Vec::new() };
+    collect(n, styles, fmt, &mut o);
+    if !o.has_text {
+        return String::new();
+    }
+    // trailing breaks stay; a trailing space does not
+    o.pending = None;
+    o.flush();
+    o.set_fmt(Fmt::default());
+    o.s
 }
 
 pub fn parse(text: &str) -> Result<Document> {
@@ -684,12 +785,10 @@ pub fn parse(text: &str) -> Result<Document> {
     }
     let tm = timing(root, root_line(text))?;
     let speakers = speaker_names(root);
-    let mut styles = std::collections::HashMap::new();
-    for s in root.descendants().filter(|n| local(&n.name) == "style") {
-        if let Some(id) = attr(s, "id") {
-            let mut f = Fmt::default();
-            own_fmt(s, &mut f);
-            styles.insert(id.to_string(), f);
+    let mut styles = HashMap::new();
+    for s in root.descendants().filter(|n| content_element(n, "style")) {
+        if let Some(id) = s.attr("xml:id").or_else(|| s.attr("id")) {
+            styles.insert(id.to_string(), own_fmt(s));
         }
     }
     let mut warnings = Vec::new();
@@ -703,7 +802,15 @@ pub fn parse(text: &str) -> Result<Document> {
     }
     // the body is a time container like a div: its begin offsets, and its end clips, everything inside
     let t = times(body, Scope { begin: Tick::ZERO, end: None }, tm, &mut doc);
-    walk(body, Scope { begin: t.begin.unwrap_or(Tick::ZERO), end: t.end }, &tm, &styles, &speakers, Fmt::default(), &mut doc);
+    walk(
+        body,
+        Scope { begin: t.begin.unwrap_or(Tick::ZERO), end: t.end },
+        &tm,
+        &styles,
+        &speakers,
+        style_of(body, &styles, Fmt::default()),
+        &mut doc,
+    );
     doc.cues.sort_by_key(|c| (c.start, c.end));
     Ok(doc)
 }
@@ -772,7 +879,7 @@ fn times(n: &El, parent: Scope, tm: Timing, doc: &mut Document) -> Times {
     Times { begin, end, bad }
 }
 
-fn walk(n: &El, parent: Scope, tm: &Timing, styles: &HashMap<String, Fmt>, speakers: &HashMap<String, String>, fmt: Fmt, doc: &mut Document) {
+fn walk(n: &El, parent: Scope, tm: &Timing, styles: &HashMap<String, FmtSpec>, speakers: &HashMap<String, String>, fmt: Fmt, doc: &mut Document) {
     for c in n.elements() {
         let f = style_of(c, styles, fmt);
         match local(&c.name) {
@@ -793,17 +900,8 @@ fn walk(n: &El, parent: Scope, tm: &Timing, styles: &HashMap<String, Fmt>, speak
                 let whole = if has_timing(c) || spans.is_empty() { e } else { None };
                 match whole {
                     Some(e) => {
-                        let mut o = Out { s: String::new(), pending: false };
-                        let tags: Vec<&str> = [(f.italic, "i"), (f.bold, "b"), (f.underline, "u")].into_iter().filter(|x| x.0).map(|x| x.1).collect();
-                        for t in &tags {
-                            o.s.push_str(&format!("<{t}>"));
-                        }
-                        collect(c, styles, f, &mut o);
-                        for t in tags.iter().rev() {
-                            o.s.push_str(&format!("</{t}>"));
-                        }
-                        let text = clean(&o.s);
-                        if e > b && !text.trim_matches(is_xml_space).is_empty() {
+                        let text = cue_text(c, styles, f);
+                        if e > b && !text.is_empty() {
                             doc.cues.push(Cue { start: b, end: e, text, speaker: cue_speaker, id, ..Default::default() });
                         }
                     }
@@ -814,10 +912,8 @@ fn walk(n: &El, parent: Scope, tm: &Timing, styles: &HashMap<String, Fmt>, speak
                             let st = times(sp, scope, *tm, doc);
                             let sb = st.begin.unwrap_or(scope.begin);
                             if let (false, Some(se)) = (st.bad, st.end) {
-                                let mut o = Out { s: String::new(), pending: false };
-                                collect(sp, styles, style_of(sp, styles, f), &mut o);
-                                let text = clean(&o.s);
-                                if se > sb && !text.trim_matches(is_xml_space).is_empty() {
+                                let text = cue_text(sp, styles, style_of(sp, styles, f));
+                                if se > sb && !text.is_empty() {
                                     doc.cues.push(Cue {
                                         start: sb,
                                         end: se,
