@@ -196,7 +196,8 @@ fn last_event(data: &mut StoryData, out: &GridOutput) -> String {
 #[story(CellGrid<'static>, covers = [Default], drive = Drive::Never, title = "Sheet")]
 fn cell_grid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let model = StorySheet::sales(ui);
-    let ranges = vec![CellRange::cells(CellAt::new(2, 1), CellAt::new(5, 3)), CellRange::cells(CellAt::new(8, 4), CellAt::new(10, 6))];
+    // The range that holds the active cell comes last: it is the current range.
+    let ranges = vec![CellRange::cells(CellAt::new(8, 4), CellAt::new(10, 6)), CellRange::cells(CellAt::new(2, 1), CellAt::new(5, 3))];
     let selection = CellSelection::from_ranges(ranges, CellAt::new(2, 1)).unwrap_or_default();
     let mut state = data.value("state", GridState { selection, ..GridState::default() }).clone();
     let filters: Vec<ColumnFilter> = (0..SALES_COLUMNS)
