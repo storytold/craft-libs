@@ -1305,6 +1305,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-odf"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "base64 0.23.1",
+ "craft-xml",
+ "flate2",
+ "getrandom 0.3.4",
+ "hmac",
+ "sha1 0.11.0",
+ "sha2 0.11.1",
+ "thiserror 2.0.21",
+ "zeroize",
+ "zip",
+]
+
+[[package]]
 name = "craft-offcrypto"
 version = "0.1.0"
 dependencies = [
