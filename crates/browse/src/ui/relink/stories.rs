@@ -30,6 +30,9 @@ craft_ui::words! {
     pub struct LinkStoryWords {
         media_missing: "linkStory.mediaMissing" = "Media missing";
         clip_n: template "linkStory.clipN" = "Clip {n}";
+        /// `{path}` the lead link's stored path.
+        info_path: template "linkStory.infoPath" = "Path: {path}";
+        info_none: "linkStory.infoNone" = "No link selected";
     }
 }
 
@@ -72,12 +75,15 @@ fn list_story(ui: &mut Ui, data: &mut StoryData, links: &[Link<u32>], statuses: 
             settings: LinkListSettings { thumbnails: ThumbSize::Small, info_open: true, ..LinkListSettings::default() },
         },
     );
+    let words = Env::of(ui).words::<LinkStoryWords>();
+    let lead = state.selection.lead.and_then(|lead| links.iter().find(|link| link.key == lead));
+    let info = lead.map_or_else(|| words.info_none.as_str().to_owned(), |link| words.info_path.fill(&[("path", &link.stored)]));
     let thumbs = Thumbnails::<u32>::in_context(ui.ctx(), "craft-browse-link-list-story", ThumbnailOptions::new());
     let pictures = FakeThumbSource::<u32>::new().aspect(4, 3);
     LinkList::new("Links", links, statuses, Bind::bound(state))
         .thumbnails(&thumbs, &pictures)
-        .info(|ui| {
-            Text::new("/shoot/cover.psd").show(ui);
+        .info(move |ui| {
+            Text::new(info.clone()).show(ui);
         })
         .show(ui)
         .into()

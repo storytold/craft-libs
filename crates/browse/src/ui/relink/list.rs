@@ -177,8 +177,8 @@ type InfoFn<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 
 /// The Links panel: rows of the document's links with thumbnail, name, page and status.
 ///
-/// - **Rows.** `ListRow`s, striped: a thumbnail by `LinkListSettings::thumbnails`, the name, the
-///   page as the detail line and the status glyph at the end ([`StatusBadge::icon`]); filtered by
+/// - **Rows.** `ListRow`s, striped: a thumbnail by `LinkListSettings::thumbnails`, the name, and at the end of
+///   its line the page and the status glyph ([`StatusBadge::icon`]); filtered by
 ///   `filter` and sorted by `sort`. The row is named "name, Page n, status in words".
 /// - **Selection.** The collection's rules; [`LinkListEvent::Selection`] carries each change and
 ///   a double click reports `GoTo`. Delete does nothing: Break Link is a command, not a key.
@@ -459,9 +459,6 @@ fn link_row<'r, K: TextureKey + std::fmt::Debug>(inputs: &RowInputs<'_, 'r, K>, 
         name.push(status_words.as_str().to_owned());
     }
     let mut row = ListRow::new(link.name.clone()).striped(at % 2 == 1).accessible_name(name.join(", "));
-    if let Some(page) = page {
-        row = row.detail(page);
-    }
     if thumb_size != ThumbSize::None {
         let key = link.key.clone();
         let ctx = ctx.clone();
@@ -474,8 +471,12 @@ fn link_row<'r, K: TextureKey + std::fmt::Debug>(inputs: &RowInputs<'_, 'r, K>, 
             thumbnails.paint(cx, rect, &state, &ThumbPaint::default());
         });
     }
+    // The status glyph is the outermost trailing item, the page before it on the name's line.
     if let Some((icon, status_words)) = glyph {
         row = row.tooltip(status_words.clone()).trailing_icon(icon, status_words);
+    }
+    if let Some(page) = page {
+        row = row.trailing(page);
     }
     row
 }
