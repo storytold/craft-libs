@@ -23,9 +23,9 @@
 //!   carries a CDP with 20 cc_data triplets; empty frames are omitted. Each CDP contains field 1 CEA-608
 //!   pop-on data (the same schedule as [SCC](crate::scc)), a null field-2 pair, CEA-708
 //!   service 1 data and padding. The CEA-708 captions emulate pop-on with two windows: each
-//!   caption is defined (hidden) and loaded into one window while the other shows, then a
-//!   DisplayWindows / HideWindows pair switches them on the caption's first frame; HideWindows
-//!   clears it at its end.
+//!   caption goes into one window, deleted and defined anew first (hidden, empty, the pen at its
+//!   top left), while the other shows, then a DisplayWindows / HideWindows pair switches them on
+//!   the caption's first frame; HideWindows clears it at its end.
 //! - **Reading:** every CDP's `cc_data`; channel 1 CEA-608 field-1 data is decoded with the SCC
 //!   decoder when present, otherwise CEA-708 service 1 (windows, text, CR, clear / display /
 //!   hide / toggle / delete windows, DefineWindow visibility); a cue starts whenever the visible
@@ -240,15 +240,18 @@ pub fn shown_as_708(c: char) -> char {
     if char_atom(c).is_some() { c } else { '?' }
 }
 
-/// Atoms that define window `win` hidden and load `rows` into it.
+/// Atoms that make window `win` anew, hidden, and load `rows` into it.
 fn load_atoms(win: u8, rows: &[String]) -> Vec<Vec<u8>> {
     let rc = rows.len().clamp(1, 12) as u8 - 1;
     let cols = rows.iter().map(|r| r.chars().count()).max().unwrap_or(1).clamp(1, 42) as u8 - 1;
     let mut v = vec![
+        // DeleteWindows: the window holds the caption before last. Decoders differ on whether
+        // redefining it or ClearWindows moves the pen back (CCExtractor keeps it), but a new
+        // window starts empty with the pen at its top left, for the same bytes as ClearWindows.
+        vec![0x8c, 1 << win],
         // DefineWindow: hidden, row/column lock, relative position 90 % down / 50 % across,
         // anchored at its bottom centre, rows / columns, window style 1, pen style 1
         vec![0x98 + win, 0x18, 0x80 | 90, 50, 7 << 4 | rc, cols, 1 << 3 | 1],
-        vec![0x88, 1 << win], // ClearWindows
     ];
     for (i, r) in rows.iter().enumerate() {
         if i > 0 {
@@ -600,6 +603,7 @@ pub fn write_with(doc: &Document, drop_frame: bool, cea608: bool, cea708: bool, 
     let program = header_value(program);
     let f1 = if cea608 { scc::schedule(doc) } else { BTreeMap::new() };
     let dtv = if cea708 { schedule_708(doc) } else { BTreeMap::new() };
+    let origin = crate::label_frame(doc.start_timecode, RATE, drop_frame); // time codes count from the start time code
     let mut out = String::from("File Format=MacCaption_MCC V1.0\n\n");
     out.push_str("///////////////////////////////////////////////////////////////////////////////////\n");
     out.push_str(&format!("// Closed captions written by {program}: SMPTE ST 334-2 caption distribution packets\n"));
@@ -630,7 +634,7 @@ pub fn write_with(doc: &Document, drop_frame: bool, cea608: bool, cea708: bool, 
             f1: f1.next_if(|(frame, _)| *frame == f).map(|(_, pair)| pair),
             dtvcc: dtv.next_if(|(frame, _)| *frame == f).map(|(_, pairs)| pairs).unwrap_or_default(),
         };
-        let (_, hh, mm, ss, ff) = frames_to_fields(f, RATE, drop_frame);
+        let (_, hh, mm, ss, ff) = frames_to_fields(f.saturating_add(origin), RATE, drop_frame);
         let sep = if drop_frame { ';' } else { ':' };
         out.push_str(&format!("{hh:02}:{mm:02}:{ss:02}{sep}{ff:02}\t{}\n", compress(&build_cdp(seq, &data))));
         seq = seq.wrapping_add(1);
@@ -682,7 +686,9 @@ pub fn parse(text: &str) -> Result<Document> {
         let Some([h, m, s, f]) = parts.as_deref() else {
             return Err(Error::Syntax { line: n + 1, msg: format!("bad timecode \"{tc}\"") });
         };
-        let frame = fields_to_frames(*h, *m, *s, *f, rate.0, rate.1 || tc.contains(';'));
+        let drop_frame = rate.1 || tc.contains(';');
+        doc.labels.get_or_insert((rate.0, drop_frame));
+        let frame = fields_to_frames(*h, *m, *s, *f, rate.0, drop_frame);
         let Some(bytes) = expand(data) else {
             doc.warnings.push(format!("line {}: bad caption data", n + 1));
             continue;
@@ -788,6 +794,13 @@ mod tests {
         assert!(parse("garbage").is_err());
     }
 
+    /// Keep back-to-back captions with the same text separate on the CEA-608 path (the SCC decoder).
+    #[test]
+    fn identical_back_to_back_cues_stay_separate_on_608() {
+        let doc = Document { cues: vec![cue(90, 135, "Ht"), cue(135, 180, "Ht")], ..Default::default() };
+        assert_eq!(parse(&write_with(&doc, false, true, false, "test")).unwrap().cues, doc.cues);
+    }
+
     /// Reject malformed fields instead of silently dropping them from the timecode.
     #[test]
     fn rejects_timecodes_with_unparseable_extra_fields() {
@@ -827,6 +840,33 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Time codes count from the label of the document's start time code, drop-frame or not; the
+    /// packets do not change, and `Document::count_from` reads the cues back from it.
+    #[test]
+    fn time_codes_count_from_the_start_timecode() {
+        let doc = Document { cues: vec![cue(60, 120, "Caption")], ..Default::default() };
+        let hour = crate::time::Tick(3600 * crate::time::TICKS_PER_SECOND); // the label 01:00:00:00
+        let master = Document { start_timecode: hour, ..doc.clone() };
+        let lines = |text: &str| -> Vec<(i64, String)> {
+            text.lines().filter_map(|l| l.split_once('\t')).map(|(tc, data)| (scc::parse_timecode(tc).unwrap(), data.to_string())).collect()
+        };
+        for (drop_frame, origin) in [(true, 107_892), (false, 108_000)] {
+            let plain = lines(&write(&doc, drop_frame));
+            let shifted: Vec<_> = plain.iter().map(|(f, data)| (f + origin, data.clone())).collect();
+            let text = write(&master, drop_frame);
+            assert_eq!(lines(&text), shifted);
+            assert!(text.contains("\n01:00:0"), "{text}");
+            let mut back = parse(&text).unwrap();
+            assert_eq!(back.labels, Some((RATE, drop_frame)));
+            assert_eq!(back.cues[0].start, RATE.tick_of(origin + 60));
+            assert!(back.count_from(hour));
+            assert_eq!(back.cues, parse(&write(&doc, drop_frame)).unwrap().cues, "read back from the start time code");
+        }
+        let negative = Document { start_timecode: crate::time::Tick(-1), ..doc.clone() };
+        assert_eq!(lines(&write(&negative, true)), lines(&write(&doc, true)), "a negative start counts from zero");
+        assert!(write(&Document { start_timecode: crate::time::Tick(i64::MAX), ..doc }, true).contains('\t'));
     }
 
     /// Bound output for distant or long cues near the tick limit without changing their timing.
@@ -890,5 +930,93 @@ mod tests {
         assert!(decoder.truncated);
         assert!(decoder.cues.iter().map(|c| c.2.len()).sum::<usize>() <= MAX_708_TEXT_BYTES);
         assert!(decoder.open.is_none());
+    }
+
+    /// Start every CEA-708 caption at the top left of its window, also for a decoder that sets
+    /// the pen only when a window is created and moves it only on SetPenLocation, carriage return
+    /// and text. CCExtractor keeps the pen through ClearWindows and a redefined window, so the
+    /// third caption below once started at the end of the first one, past its smaller window.
+    #[test]
+    fn each_708_caption_starts_at_its_window_top_left() {
+        let doc = Document {
+            cues: vec![
+                cue(60, 120, "Por que você não admite que\nminha mão robótica te assusta?"),
+                cue(150, 200, "Você partiu meu coração!"),
+                cue(230, 250, "Eu sei."),
+                cue(260, 300, "Você me esqueceu na Terra."),
+            ],
+            ..Default::default()
+        };
+        // Service 1 bytes in order, out of the scheduled DTVCC packets.
+        let mut packets: Vec<Vec<u8>> = Vec::new();
+        for (start, a, b) in schedule_708(&doc).into_values().flatten() {
+            if start {
+                packets.push(Vec::new());
+            }
+            packets.last_mut().unwrap().extend([a, b]);
+        }
+        let mut s = Vec::new();
+        for p in &packets {
+            let mut body = &p[1..];
+            while let [h, rest @ ..] = body {
+                let n = (h & 0x1f) as usize;
+                if h >> 5 == 1 {
+                    s.extend_from_slice(&rest[..n]);
+                }
+                body = &rest[n..];
+            }
+        }
+        // Pen (row, column), size (rows, columns) and whether defined, per window; where each
+        // caption's text starts (its first character after a DefineWindow).
+        let (mut pen, mut size, mut defined, mut cur) = ([(0usize, 0usize); 8], [(0usize, 0usize); 8], [false; 8], 0usize);
+        let (mut starts, mut loaded, mut i) = (Vec::new(), false, 0);
+        while let Some(&c) = s.get(i) {
+            let mut text = false;
+            i += match c {
+                0x80..=0x87 => {
+                    cur = (c - 0x80) as usize;
+                    1
+                }
+                0x8c => {
+                    (0..8).filter(|w| s[i + 1] & 1 << w != 0).for_each(|w| defined[w] = false);
+                    2
+                }
+                0x88..=0x8b => 2,
+                0x92 => {
+                    pen[cur] = (s[i + 1] as usize, s[i + 2] as usize);
+                    3
+                }
+                0x98..=0x9f => {
+                    cur = (c - 0x98) as usize;
+                    if !std::mem::replace(&mut defined[cur], true) {
+                        pen[cur] = (0, 0);
+                    }
+                    size[cur] = ((s[i + 4] & 0x0f) as usize + 1, (s[i + 5] & 0x3f) as usize + 1);
+                    loaded = true;
+                    7
+                }
+                0x0d => {
+                    pen[cur] = (pen[cur].0 + 1, 0);
+                    1
+                }
+                0x10 => {
+                    text = true;
+                    2
+                }
+                0x20..=0x7f | 0xa0..=0xff => {
+                    text = true;
+                    1
+                }
+                _ => 1,
+            };
+            if text {
+                if std::mem::take(&mut loaded) {
+                    starts.push((cur, pen[cur]));
+                }
+                assert!(pen[cur].0 < size[cur].0 && pen[cur].1 < size[cur].1, "window {cur} {:?}: text at {:?}", size[cur], pen[cur]);
+                pen[cur].1 += 1;
+            }
+        }
+        assert_eq!(starts, [(0, (0, 0)), (1, (0, 0)), (0, (0, 0)), (1, (0, 0))]);
     }
 }
