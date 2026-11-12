@@ -417,7 +417,7 @@ fn paint_thumb(painter: &ContentPainterCx<'_>, rect: Rect, paint: &Paint) {
         Paint::Gradient(preview) => {
             painter.checker(rect);
             if !preview.stops.is_empty() {
-                painter.ramp(rect, &ramp_stops(preview, false), Axis::X);
+                painter.ramp(rect, egui::CornerRadius::ZERO, &ramp_stops(preview, false), Axis::X);
             }
         }
         Paint::Pattern(image) | Paint::Picture(image) => {

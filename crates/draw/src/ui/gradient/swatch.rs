@@ -139,7 +139,7 @@ impl Component for GradientSwatch<'_> {
         let default = default_sampler(self.rows);
         let sampler: &Sampler = self.sampler.unwrap_or(&default);
         let colors = GradientRamp::colors(self.stops, sampler);
-        GradientRamp::paint(&ui.content_painter(cx), cx.rect, &colors);
+        GradientRamp::paint(&ui.content_painter(cx), cx.rect, style.radius, &colors);
         ui.draw().stroke(&PaintShape::Rect(cx.rect, style.radius), StrokeWidth::Thin, cx.resolve(&style.edge));
     }
 

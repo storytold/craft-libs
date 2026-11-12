@@ -79,7 +79,7 @@ impl Component for ToneRamp<'_> {
         } else {
             (self.stops.iter().enumerate().map(|(k, color)| (at(k), *color)).collect(), Axis::X)
         };
-        ui.content_painter(cx).ramp(cx.rect, &stops, axis);
+        ui.content_painter(cx).ramp(cx.rect, egui::CornerRadius::ZERO, &stops, axis);
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> Response {

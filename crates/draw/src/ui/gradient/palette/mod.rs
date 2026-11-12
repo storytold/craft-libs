@@ -196,7 +196,7 @@ impl<'a> GradientPalette<'a> {
         let thumb =
             move |cx: &craft_ui::primitives::ContentPainterCx, rect: egui::Rect, info: craft_ui::patterns::presets::ThumbInfo<'_, GradientRef>| {
                 if let Some(stops) = stops_of(groups, recent, *info.key) {
-                    GradientRamp::paint(cx, rect, &GradientRamp::colors(stops, sampler));
+                    GradientRamp::paint(cx, rect, egui::CornerRadius::ZERO, &GradientRamp::colors(stops, sampler));
                 }
             };
         let mut browser = PresetBrowser::new(self.label, self.state, &rows).thumb(thumb);

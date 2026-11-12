@@ -14,7 +14,7 @@ use egui::{
     Color32, ColorImage, Context, CornerRadius, Mesh, Pos2, Rect, Shape, Stroke, TextureFilter, TextureId, TextureOptions, TextureWrapMode, Vec2,
     pos2, vec2,
 };
-use std::f32::consts::TAU;
+use std::f32::consts::{FRAC_PI_2, TAU};
 
 /// Which edge of a rect a tick row sits on, and so which way its marks point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,11 +138,16 @@ fn checker_texture(ctx: &Context, light: Color32, dark: Color32) -> TextureId {
     TextureCache::texture_with(ctx, ("craft-ui-checker", light, dark), options, || ColorImage::new([2, 2], vec![light, dark, dark, light]))
 }
 
-/// A colour ramp over `rect`: the strip shades from stop to stop along `axis` (`Axis::X` runs left to right, `Axis::Y`
-/// top to bottom). Each stop is its place along the strip, from 0 at the start to 1 at the end, and its colour. Stops
-/// are taken in order; a place outside 0 to 1 is clamped, and a ramp whose first stop is after 0 or whose last is
-/// before 1 holds that colour out to the edge. The colours blend as the renderer blends mesh vertices, in sRGB.
-pub fn ramp(rect: Rect, stops: &[(f32, DataColor)], axis: Axis) -> Vec<Shape> {
+/// The samples along each rounded corner of a ramp, so the strip's edge follows the arc.
+const ARC_STEPS: usize = 8;
+
+/// A colour ramp over `rect` with corners of `radius` (`CornerRadius::ZERO` for square ones): the strip shades from
+/// stop to stop along `axis` (`Axis::X` runs left to right, `Axis::Y` top to bottom). Each stop is its place along the
+/// strip, from 0 at the start to 1 at the end, and its colour. Stops are taken in order; a place outside 0 to 1 is
+/// clamped, and a ramp whose first stop is after 0 or whose last is before 1 holds that colour out to the edge. The
+/// colours blend as the renderer blends mesh vertices, in sRGB. A rounded ramp keeps inside the rounded outline, as a
+/// rounded rect of the same radius draws it.
+pub fn ramp(rect: Rect, radius: CornerRadius, stops: &[(f32, DataColor)], axis: Axis) -> Vec<Shape> {
     if !(rect.width() > 0.0 && rect.height() > 0.0) {
         return Vec::new();
     }
@@ -155,19 +160,72 @@ pub fn ramp(rect: Rect, stops: &[(f32, DataColor)], axis: Axis) -> Vec<Shape> {
         marks.push((1.0, last));
     }
     let vertical = axis == Axis::Y;
-    let (from, to) = if vertical { (rect.left_top(), rect.left_bottom()) } else { (rect.left_top(), rect.right_top()) };
-    let across = if vertical { vec2(rect.width(), 0.0) } else { vec2(0.0, rect.height()) };
+    // Along the strip from `s0` to `s1`, across it from `c0` to `c1`.
+    let (s0, s1, c0, c1) =
+        if vertical { (rect.top(), rect.bottom(), rect.left(), rect.right()) } else { (rect.left(), rect.right(), rect.top(), rect.bottom()) };
+    let length = s1 - s0;
+    let most = rect.width().min(rect.height()) / 2.0;
+    let r = |corner: u8| f32::from(corner).min(most);
+    // The corners at the start and the end of the strip, on its low and high side across.
+    let (start_lo, start_hi, end_lo, end_hi) =
+        if vertical { (r(radius.nw), r(radius.ne), r(radius.sw), r(radius.se)) } else { (r(radius.nw), r(radius.sw), r(radius.ne), r(radius.se)) };
+    // How far a corner of radius `r` pulls the edge in, `d` along the strip from its end.
+    let inset = |r: f32, d: f32| if d < r { r - (r * r - (r - d) * (r - d)).max(0.0).sqrt() } else { 0.0 };
+    let corners = [(start_lo, true), (start_hi, true), (end_lo, false), (end_hi, false)];
+    let columns = if corners.iter().all(|(r, _)| *r <= 0.0) { marks } else { rounded_columns(&marks, &corners, length) };
     let mut mesh = Mesh::default();
-    for (index, (at, color)) in marks.iter().enumerate() {
-        let on = from + (to - from) * *at;
-        mesh.colored_vertex(on, *color);
-        mesh.colored_vertex(on + across, *color);
+    for (index, (at, color)) in columns.iter().enumerate() {
+        let s = s0 + length * *at;
+        let (from_start, from_end) = (s - s0, s1 - s);
+        let lo = c0 + inset(start_lo, from_start).max(inset(end_lo, from_end));
+        let hi = c1 - inset(start_hi, from_start).max(inset(end_hi, from_end));
+        let point = |c: f32| if vertical { pos2(c, s) } else { pos2(s, c) };
+        mesh.colored_vertex(point(lo), *color);
+        mesh.colored_vertex(point(hi), *color);
         if let Some(base) = (index as u32).checked_sub(1).map(|previous| previous * 2) {
             mesh.add_triangle(base, base + 1, base + 2);
             mesh.add_triangle(base + 1, base + 3, base + 2);
         }
     }
     vec![Shape::mesh(mesh)]
+}
+
+/// The columns of a rounded ramp: the places of `marks` (sorted) and of samples along each corner of `corners` (its
+/// radius, and whether it is at the start of the strip), each with its colour.
+fn rounded_columns(marks: &[(f32, Color32)], corners: &[(f32, bool)], length: f32) -> Vec<(f32, Color32)> {
+    let mut places: Vec<f32> = marks.iter().map(|(at, _)| *at).collect();
+    for &(r, from_start) in corners {
+        if r > 0.0 {
+            for k in 0..=ARC_STEPS {
+                let d = r * (1.0 - (k as f32 / ARC_STEPS as f32 * FRAC_PI_2).cos());
+                places.push(if from_start { d / length } else { 1.0 - d / length });
+            }
+        }
+    }
+    places.retain(|at| at.is_finite());
+    places.iter_mut().for_each(|at| *at = at.clamp(0.0, 1.0));
+    places.sort_by(f32::total_cmp);
+    places.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+    // The colour at a place: the stops' colours blended straight between their places, as the mesh blends them.
+    let color_at = |at: f32| -> Color32 {
+        let next = marks.iter().position(|(place, _)| *place >= at).unwrap_or(marks.len() - 1);
+        let (b_at, b) = marks[next];
+        let Some(&(a_at, a)) = next.checked_sub(1).and_then(|previous| marks.get(previous)) else { return b };
+        let t = if b_at > a_at { ((at - a_at) / (b_at - a_at)).clamp(0.0, 1.0) } else { 1.0 };
+        let mix = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
+        Color32::from_rgba_premultiplied(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()), mix(a.a(), b.a()))
+    };
+    // Each mark keeps its own colour where two share a place (a hard step), so the marks' places come in pairs.
+    let mut columns: Vec<(f32, Color32)> = Vec::with_capacity(places.len() + marks.len());
+    for at in places {
+        let on_marks: Vec<Color32> = marks.iter().filter(|(place, _)| (*place - at).abs() < 1e-6).map(|(_, color)| *color).collect();
+        if on_marks.is_empty() {
+            columns.push((at, color_at(at)));
+        } else {
+            columns.extend(on_marks.into_iter().map(|color| (at, color)));
+        }
+    }
+    columns
 }
 
 /// Most lines a grid draws along one axis.
@@ -621,12 +679,12 @@ impl ContentPainterCx<'_> {
 
     /// Paints the theme's transparency checkerboard over `rect`.
     pub fn checker(&self, rect: Rect) {
-        self.checker_with(&Checker::new(), rect);
+        self.checker_with(&Checker::new(), rect, CornerRadius::ZERO);
     }
 
-    /// Paints a colour ramp over `rect` along `axis`; see [`ramp`].
-    pub fn ramp(&self, rect: Rect, stops: &[(f32, DataColor)], axis: Axis) {
-        self.painter.extend(ramp(rect, stops, axis));
+    /// Paints a colour ramp over `rect` with corners of `radius` along `axis`; see [`ramp`].
+    pub fn ramp(&self, rect: Rect, radius: CornerRadius, stops: &[(f32, DataColor)], axis: Axis) {
+        self.painter.extend(ramp(rect, radius, stops, axis));
     }
 
     /// Paints the well of a plot over `rect` and returns the rect inside its edge, where the plot draws.
@@ -657,9 +715,9 @@ impl ContentPainterCx<'_> {
         self.painter.extend(grid_lines(self.tokens, grid, ink, self.ppp()));
     }
 
-    /// Paints the checkerboard `checker` over `rect`.
-    pub fn checker_with(&self, checker: &Checker, rect: Rect) {
-        self.painter.add(checker.shape(self.painter.ctx(), self.tokens, CheckerArea::Rect(rect, CornerRadius::ZERO), rect.min));
+    /// Paints the checkerboard `checker` over `rect` with corners of `radius`.
+    pub fn checker_with(&self, checker: &Checker, rect: Rect, radius: CornerRadius) {
+        self.painter.add(checker.shape(self.painter.ctx(), self.tokens, CheckerArea::Rect(rect, radius), rect.min));
     }
 
     /// Paints tick marks on one edge of `rect`.

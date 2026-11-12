@@ -224,7 +224,7 @@ impl Component for ColorStrip<'_> {
                         (t, DataColor::new(self.color_at(&base, egui::lerp(max..=min, t)).into()))
                     })
                     .collect();
-                painter.ramp(rect, &stops, Axis::Y);
+                painter.ramp(rect, egui::CornerRadius::ZERO, &stops, Axis::Y);
             }
         }
         let draw = ui.draw();

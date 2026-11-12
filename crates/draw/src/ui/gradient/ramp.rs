@@ -4,7 +4,7 @@ use craft_behavior::Axis;
 use craft_theme::Srgba;
 use craft_ui::primitives::{Checker, ContentPainterCx};
 use craft_ui::style::DataColor;
-use egui::{Color32, Rect};
+use egui::{Color32, CornerRadius, Rect};
 
 use super::stops::Sampler;
 use super::value::{GradientStops, StopRow};
@@ -41,17 +41,17 @@ impl GradientRamp {
         at.into_iter().map(|x| (x, sampler(stops, x))).collect()
     }
 
-    /// Paints `colors` (location 0..=1, sorted) across `rect`, straight lines between them, over the
-    /// theme's checkerboard where a colour is translucent; the end colours continue to the rect's
-    /// ends.
-    pub fn paint(cx: &ContentPainterCx<'_>, rect: Rect, colors: &[(f32, Srgba)]) {
+    /// Paints `colors` (location 0..=1, sorted) across `rect` with corners of `radius`, straight lines
+    /// between them, over the theme's checkerboard where a colour is translucent; the end colours
+    /// continue to the rect's ends.
+    pub fn paint(cx: &ContentPainterCx<'_>, rect: Rect, radius: CornerRadius, colors: &[(f32, Srgba)]) {
         if colors.is_empty() || rect.width() <= 0.0 || rect.height() <= 0.0 {
             return;
         }
         if colors.iter().any(|(_, c)| c.a < 1.0) {
-            cx.checker_with(&Checker::new(), rect);
+            cx.checker_with(&Checker::new(), rect, radius);
         }
         let stops: Vec<(f32, DataColor)> = colors.iter().map(|&(at, c)| (at, DataColor::new(Color32::from(c)))).collect();
-        cx.ramp(rect, &stops, Axis::X);
+        cx.ramp(rect, radius, &stops, Axis::X);
     }
 }

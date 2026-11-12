@@ -807,7 +807,7 @@ impl<P: Clone + Send + Sync + 'static> Component for GradientBar<'_, P> {
         let geo = self.geometry(cx.rect, style);
         let default = default_sampler(self.rows());
         let sampler: &Sampler = self.sampler.unwrap_or(&default);
-        GradientRamp::paint(&ui.content_painter(cx), geo.ramp, &GradientRamp::colors(stops, sampler));
+        GradientRamp::paint(&ui.content_painter(cx), geo.ramp, egui::CornerRadius::ZERO, &GradientRamp::colors(stops, sampler));
         let dragging = cx.recall::<Held>().drag.is_some();
         let draw = ui.draw();
         draw.stroke(&PaintShape::Rect(geo.ramp, CornerRadius::ZERO), StrokeWidth::Thin, cx.resolve(&style.ramp_edge));

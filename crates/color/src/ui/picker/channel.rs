@@ -122,7 +122,7 @@ impl Component for TrackRamp {
         let last = self.stops.len().saturating_sub(1).max(1) as f32;
         let stops: Vec<(f32, DataColor)> =
             self.stops.iter().enumerate().map(|(i, color)| (i as f32 / last, DataColor::new(Color32::from(*color)))).collect();
-        painter.ramp(rect, &stops, Axis::X);
+        painter.ramp(rect, egui::CornerRadius::ZERO, &stops, Axis::X);
         ui.draw().stroke(&PaintShape::Rect(rect, CornerRadius::ZERO), StrokeWidth::Thin, cx.style.edge);
     }
 

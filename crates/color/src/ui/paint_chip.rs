@@ -490,7 +490,7 @@ impl Component for PaintChip<'_> {
             Paint::Gradient(preview) => {
                 painter.checker(well);
                 if !preview.stops.is_empty() {
-                    painter.ramp(well, &ramp_stops(preview, cx.flow.is_rtl()), Axis::X);
+                    painter.ramp(well, egui::CornerRadius::ZERO, &ramp_stops(preview, cx.flow.is_rtl()), Axis::X);
                 }
             }
             Paint::Pattern(image) | Paint::Picture(image) => {
