@@ -19,6 +19,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/.test-inputs/craft-fonts
     steps:
       - uses: actions/checkout@v4
       - name: Install software Vulkan renderer
@@ -33,6 +35,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: workspace
+      - name: Checkout the pinned craft-fonts inputs
+        uses: actions/checkout@v4
+        with:
+          repository: storytold/craft-fonts
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          path: .test-inputs/craft-fonts
+          persist-credentials: false
+      - name: Provision the licensed PDF test fonts
+        shell: bash
+        run: |
+          python scripts/test-fetch-pdf-test-fonts.py
+          python scripts/fetch-pdf-test-fonts.py "$RUNNER_TEMP/craft-pdf-test-fonts"
+          echo "CRAFT_PDF_TEST_FONT_DIR=$RUNNER_TEMP/craft-pdf-test-fonts" >> "$GITHUB_ENV"
       - name: Prepare the Windows test driver
         if: runner.os == 'Windows'
         shell: powershell
