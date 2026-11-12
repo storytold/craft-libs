@@ -15,6 +15,7 @@
 //! * [`Head`] reads only the header, colour mode data and image resources (size, ICC profile,
 //!   EXIF, XMP) from the start of a file, without the layers or pixels.
 //! * [`descriptor`] parses and writes ActionDescriptors.
+//! * [`engine_data`] parses and writes the text engine document of type layers.
 //!
 //! Implemented clean-room from Adobe's public "Photoshop File Formats
 //! Specification". Undocumented details that follow MIT-licensed psd-tools
@@ -55,6 +56,7 @@ mod codepage;
 pub mod compression;
 pub mod csh;
 pub mod descriptor;
+pub mod engine_data;
 pub mod error;
 pub mod file;
 pub mod filter_effects;

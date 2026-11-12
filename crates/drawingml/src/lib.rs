@@ -9,18 +9,56 @@
 //! - [`preset`]: outlines of the preset shapes (`a:prstGeom`), by their file names.
 //! - [`custgeom`]: custom geometry (`a:custGeom`), with the shape guide formulas.
 //! - [`warp`]: preset text warps (`a:prstTxWarp`).
+//! - The model, without readers and writers yet: [`style`] (colour references, fills, lines,
+//!   effects), [`text`] (text bodies, paragraphs, runs), [`table`], [`chart`] with [`numfmt`]
+//!   (number format codes) and [`diagram`] (SmartArt outlines). Media are named by [`MediaId`];
+//!   the bytes stay with the caller.
 //!
 //! Nothing here opens a package: readers take a [`craft_xml::El`] and writers a
 //! [`craft_xml::Writer`], so the same code serves a slide, a document or a worksheet drawing.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod chart;
 pub mod color;
 pub mod custgeom;
+pub mod diagram;
+pub mod numfmt;
 pub mod preset;
+pub mod style;
+pub mod table;
+pub mod text;
+mod trendline;
 pub mod warp;
 
 use kurbo::{Affine, Point, Rect, Vec2};
 use serde::{Deserialize, Serialize};
+
+pub(crate) fn yes() -> bool {
+    true
+}
+
+macro_rules! id_type {
+    ($(#[$doc:meta])* $name:ident) => {
+        $(#[$doc])*
+        #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(pub u32);
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+    };
+}
+id_type!(
+    /// A picture, sound or other embedded file, by the id its owner gave it. The bytes stay with
+    /// the owner (a package part in a file).
+    MediaId
+);
+id_type!(
+    /// The target of a link to a slide. Only presentations have them.
+    SlideId
+);
 
 /// EMU per point.
 pub const EMU_PER_PT: f64 = 12_700.0;
