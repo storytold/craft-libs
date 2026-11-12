@@ -119,6 +119,8 @@ pub struct RelinkOptions {
     ///
     /// Without jobs and without a host the dialog can't run a search: Search stays disabled.
     pub jobs: Option<Arc<dyn Jobs>>,
+    /// The table's column order, widths and sort to start with, as the host saved them from an earlier dialog.
+    pub layout: RelinkLayout,
 }
 
 impl RelinkOptions {
@@ -142,6 +144,62 @@ impl RelinkOptions {
         self.jobs = Some(jobs);
         self
     }
+
+    /// Starts the table with the column order, widths and sort of `layout`.
+    #[must_use]
+    pub fn layout(mut self, layout: RelinkLayout) -> Self {
+        self.layout = layout;
+        self
+    }
+}
+
+/// The dialog table's columns as the user left them: their order, the widths they were dragged to and the sort. A
+/// `craft_host::Section`: the host reads it with [`RelinkDialog::layout`] after any outcome (Done, Cancel, Escape),
+/// saves it, and gives it to the next dialog through [`RelinkOptions::layout`].
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+#[serde(default)]
+pub struct RelinkLayout {
+    /// The column keys in display order; empty for the default order.
+    pub order: Vec<ColumnKey>,
+    /// The widths the user dragged columns to.
+    pub widths: Vec<(ColumnKey, f32)>,
+    /// The sort; `None` keeps the rows in the document's order.
+    pub sort: Option<ColumnSort>,
+}
+
+impl craft_host::Section for RelinkLayout {
+    const KEY: &'static str = "relink_dialog";
+}
+
+impl RelinkLayout {
+    /// `columns` in this layout's order, a dragged column at its width.
+    fn apply(&self, mut columns: Vec<ColumnSpec>) -> Vec<ColumnSpec> {
+        columns.sort_by_key(|spec| self.order.iter().position(|key| *key == spec.key).unwrap_or(usize::MAX));
+        for spec in &mut columns {
+            if let Some((_, width)) = self.widths.iter().find(|(key, _)| *key == spec.key) {
+                spec.width = ColumnWidth::Fixed(*width);
+            }
+        }
+        columns
+    }
+
+    /// Takes in a change the table's header reported; `shown` are the column keys in the order shown this pass.
+    fn note(&mut self, change: ColumnEvent, shown: &[ColumnKey]) {
+        match change {
+            ColumnEvent::Sort { key, descending, .. } => self.sort = Some(ColumnSort::new(key, descending)),
+            ColumnEvent::Resized { key, width } => match self.widths.iter_mut().find(|(held, _)| *held == key) {
+                Some((_, held)) => *held = width,
+                None => self.widths.push((key, width)),
+            },
+            ColumnEvent::Moved { key, to, .. } => {
+                let mut order: Vec<ColumnKey> = shown.iter().filter(|held| **held != key).cloned().collect();
+                order.insert(to.min(order.len()), key);
+                self.order = order;
+            }
+            _ => {}
+        }
+    }
 }
 
 impl Default for RelinkOptions {
@@ -154,6 +212,7 @@ impl Default for RelinkOptions {
             folder: None,
             document: None,
             jobs: None,
+            layout: RelinkLayout::default(),
         }
     }
 }
@@ -321,7 +380,7 @@ struct Model<K> {
     runtime: Option<Runtime>,
     /// The host of the last pass, for the picks a cancel forgets.
     host: Option<Arc<Host>>,
-    sort: Option<ColumnSort>,
+    layout: RelinkLayout,
     row_sel: Selection<usize>,
     cand_sel: Selection<PathBuf>,
     /// The candidate selection was made by the dialog (the best one so far), not by the user.
@@ -347,6 +406,7 @@ impl<K: Clone + PartialEq + Send + Sync + 'static> RelinkDialog<K> {
     pub fn new(rows: Vec<RelinkRow<K>>, files: Arc<dyn LinkFiles>, options: RelinkOptions) -> Self {
         let folder = options.folder.as_ref().map(|f| f.display().to_string()).unwrap_or_default();
         let row_sel = if rows.is_empty() { Selection::default() } else { Selection::single(0) };
+        let layout = options.layout.clone();
         let model = Model {
             fates: vec![Fate::Missing; rows.len()],
             rows,
@@ -356,7 +416,7 @@ impl<K: Clone + PartialEq + Send + Sync + 'static> RelinkDialog<K> {
             preview: None,
             runtime: None,
             host: None,
-            sort: None,
+            layout,
             row_sel,
             cand_sel: Selection::default(),
             auto_selected: true,
@@ -380,6 +440,11 @@ impl<K: Clone + PartialEq + Send + Sync + 'static> RelinkDialog<K> {
     pub fn checker(mut self, checker: Arc<dyn CandidateChecker<K>>) -> Self {
         self.model.checker = Some(checker);
         self
+    }
+
+    /// The table's column order, widths and sort as the user left them, for the host to save after any outcome.
+    pub fn layout(&self) -> &RelinkLayout {
+        &self.model.layout
     }
 
     /// The source of the preview's picture of the selected candidate. Without one the preview
@@ -770,12 +835,12 @@ impl<K: Clone + PartialEq + Send + Sync + 'static> Model<K> {
     }
 
     fn table(&mut self, ui: &mut Ui, env: &Env, words: &RelinkWords) {
-        let columns = vec![
-            ColumnSpec::new(OWNER, words.owner.clone(), ColumnWidth::fill(1.0)).sortable(),
-            ColumnSpec::new(FILE_NAME, words.file_name.clone(), ColumnWidth::fill(1.0)).sortable(),
-            ColumnSpec::new(FILE_PATH, words.file_path.clone(), ColumnWidth::fill(2.0)).sortable(),
-            ColumnSpec::new(STATUS, words.status.clone(), ColumnWidth::fill(1.0)).sortable(),
-        ];
+        let columns = self.layout.apply(vec![
+            ColumnSpec::new(OWNER, words.owner.clone(), ColumnWidth::fill(1.0)).sortable().resizable().movable(),
+            ColumnSpec::new(FILE_NAME, words.file_name.clone(), ColumnWidth::fill(1.0)).sortable().resizable().movable(),
+            ColumnSpec::new(FILE_PATH, words.file_path.clone(), ColumnWidth::fill(2.0)).sortable().resizable().movable(),
+            ColumnSpec::new(STATUS, words.status.clone(), ColumnWidth::fill(1.0)).sortable().resizable().movable(),
+        ]);
         let collator = env.collator();
         let mut order = self.unresolved();
         let rows = &self.rows;
@@ -788,7 +853,7 @@ impl<K: Clone + PartialEq + Send + Sync + 'static> Model<K> {
                 _ => row.status.as_str(),
             }
         };
-        sort_rows(&mut order, self.sort.as_ref(), |&a, &b, column| collator.compare(text(a, column), text(b, column)));
+        sort_rows(&mut order, self.layout.sort.as_ref(), |&a, &b, column| collator.compare(text(a, column), text(b, column)));
         let source = MissingRows(order);
         let before = self.row_sel.lead;
         let mut selection = self.row_sel.clone();
@@ -796,7 +861,7 @@ impl<K: Clone + PartialEq + Send + Sync + 'static> Model<K> {
             .id_salt((KEY, "table"))
             .select(SelectMode::Single)
             .selection(Bind::bound(&mut selection))
-            .sort(self.sort.clone())
+            .sort(self.layout.sort.clone())
             .sizing(Sizing::Content)
             .show_items(ui, &source, &mut |&row, icx| {
                 let data = &rows[row];
@@ -807,9 +872,10 @@ impl<K: Clone + PartialEq + Send + Sync + 'static> Model<K> {
                     .cell(FILE_PATH, data.link.stored.clone())
                     .cell(STATUS, data.status.clone())
             });
+        let shown: Vec<ColumnKey> = columns.iter().map(|spec| spec.key.clone()).collect();
         for event in out.events {
-            if let CollectionEvent::Column(ColumnEvent::Sort { key, descending, .. }) = event {
-                self.sort = Some(ColumnSort::new(key, descending));
+            if let CollectionEvent::Column(change) = event {
+                self.layout.note(change, &shown);
             }
         }
         self.row_sel = selection;

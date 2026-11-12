@@ -11,6 +11,6 @@ Browsing for Craft apps: folders and volumes, linked files, file thumbnails, and
 | `ui::bin` | `MediaBin`: the project or media panel with List, Icon and Freeform views, search, sort, rename (`start_rename`), bin drops and a footer (`BinEvent::Footer` and `FooterDrop`), over the app's `BinModel`; the List view is a `craft_ui::list::Table`. |
 | `ui::places` | `PlacesTree`: the folder tree with lazy children, reveal of the browsed folder and the keep, hide and reveal menu, and the app's own rows through `row_menu` (`PlacesEvent::Menu`). |
 | `ui::compare` | `CompareTile`: one fitted image with zoom and pan shared across tiles and a caption strip; the two-pane and survey arrangements. |
-| `ui::relink` | `LinkList::new(id_salt, links, statuses, &mut LinkListState)` (the Links panel; its sort, filter and columns are `LinkListSettings`) and `RelinkDialog` (find missing files, match options, folder search, candidates; the table layout comes back in `RelinkOutcome::layout`). |
+| `ui::relink` | `LinkList::new(id_salt, links, statuses, &mut LinkListState)` (the Links panel; its sort, filter and columns are `LinkListSettings`) and `RelinkDialog` (find missing files, match options, folder search, candidates; its table layout, `RelinkLayout`, is read with `RelinkDialog::layout` after any outcome and given back through `RelinkOptions::layout`). |
 
 `places`, `links` and `thumbs` work without egui; the `ui` feature adds the widgets and root re-exports of each widget, its labels and its style.

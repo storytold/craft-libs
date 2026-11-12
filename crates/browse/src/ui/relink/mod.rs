@@ -22,5 +22,5 @@ mod list;
 mod stories;
 
 pub use badge::StatusBadge;
-pub use dialog::{CandidateChecker, RelinkCriterion, RelinkDialog, RelinkOptions, RelinkOutcome, RelinkRow, RelinkWords};
+pub use dialog::{CandidateChecker, RelinkCriterion, RelinkDialog, RelinkLayout, RelinkOptions, RelinkOutcome, RelinkRow, RelinkWords};
 pub use list::{LinkFilter, LinkList, LinkListEvent, LinkListOutput, LinkListSettings, LinkListState, LinkListWords, LinkSort};

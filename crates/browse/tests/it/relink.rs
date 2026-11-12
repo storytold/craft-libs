@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use craft_browse::ui::relink::{RelinkDialog, RelinkOptions, RelinkOutcome, RelinkRow};
+use craft_browse::ui::relink::{RelinkDialog, RelinkLayout, RelinkOptions, RelinkOutcome, RelinkRow};
 use craft_docpath::links::{FakeLinkFiles, Link, identity_of};
 use craft_host::{Jobs, ManualJobs};
 use craft_ui::dialog::{DialogResult, DialogStack, StackDialog as _};
@@ -113,4 +113,41 @@ fn relink_others_offers_the_rows_the_remap_fits() {
     assert!(!rig.present("Clip B"), "the row the remap fits is linked");
     assert!(rig.present("Clip C"), "the row that fails its check stays missing");
     assert_eq!(linked_keys(&rig.done()), (vec![1, 2], vec![]));
+}
+
+/// A dialog over two rows, Clip B first, started with `layout`: the fixture and the app it shows.
+fn layout_rig(layout: RelinkLayout) -> (Fixture, Rc<RefCell<App>>) {
+    let files = files(&[]);
+    let rows = vec![row(1, "Clip B", "C:\\shoot\\b.mov"), row(2, "Clip A", "C:\\shoot\\a.mov")];
+    let dialog = RelinkDialog::new(rows, files, RelinkOptions::default().layout(layout));
+    let mut stack = DialogStack::default();
+    stack.push(dialog.id(), None);
+    let app = Rc::new(RefCell::new(App { dialog, stack, result: None }));
+    let shown = Rc::clone(&app);
+    let mut fx = Fixture::new(move |ui| {
+        let mut app = shown.borrow_mut();
+        let App { dialog, stack, result } = &mut *app;
+        if let Some(answer) = dialog.show(ui, stack) {
+            *result = Some(answer);
+        }
+    });
+    fx.room(room_of(900.0, 900.0)).settle();
+    (fx, app)
+}
+
+/// The sort chosen in one dialog is in its layout after Cancel, and a dialog opened with that layout sorts by it.
+#[trial]
+fn the_table_layout_outlives_a_cancel_and_starts_the_next_dialog() {
+    let (mut fx, app) = layout_rig(RelinkLayout::default());
+    let header = fx.by_label("Clip Name").expect("the Clip Name header is shown");
+    fx.click(&header).settle();
+    let cancel = fx.by_label("Cancel").expect("the dialog has Cancel");
+    fx.click(&cancel).settle();
+    assert!(matches!(app.borrow().result, Some(DialogResult::Cancel)), "Cancel answers");
+    let layout = app.borrow().dialog.layout().clone();
+    assert!(layout.sort.is_some(), "the sort is kept: {layout:?}");
+
+    let (fx, _) = layout_rig(layout);
+    let top = |name: &str| fx.by_label(name).unwrap_or_else(|| panic!("{name} is shown")).rect.top();
+    assert!(top("Clip A") < top("Clip B"), "the second dialog sorts by the kept layout");
 }
