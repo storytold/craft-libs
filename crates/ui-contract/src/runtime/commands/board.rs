@@ -6,9 +6,10 @@ use super::{
     WindowShortcut, registry,
 };
 use crate::runtime::egui::{pass, repaint};
+use crate::runtime::focus::EditSet;
 use crate::runtime::pass_state;
-use crate::runtime::{focus, keys, sampler};
-use craft_behavior::{EditCommand, pick_instance, resolve_flags};
+use crate::runtime::{focus, keys, overlay, sampler};
+use craft_behavior::{EditCommand, KeyOwner, OwnerClass, pick_instance, resolve_flags};
 use craft_keymap::{
     Active, Chord, CommandDef, CommandKind, CommandRef, Keymap, Lookup, Matcher, ModalRule, Overrides, Platform, Press, Scopes, Trigger,
 };
@@ -73,31 +74,43 @@ pub(crate) struct Board {
     /// The focused component and its chain before the one in `chains`, per viewport: the stop a menu bar took the
     /// focus from, whose scopes a shortcut pressed on the bar matches in.
     before: HashMap<ViewportId, (Id, CommandChain)>,
-    /// The instances around the component that holds key focus, per viewport, as the viewport's begin hook read them.
-    focused: Vec<(ViewportId, Vec<Id>)>,
+    /// Where the commands of the running pass are judged from: the key focus and the modal layers.
+    here: Vantage,
     /// The chain of the last pass in which any component held key focus.
     last_focused: Vec<Id>,
     matcher: Matcher,
     held: Vec<Held>,
-    modal_open: bool,
     /// The top modal layer's root container of each viewport that has one.
     modal_roots: Vec<(ViewportId, Id)>,
-    /// The instances around the focus from the root of the modal layer the focus is in to the innermost: the instances
-    /// `ModalRule::Blocked` does not block for a source with no component of its own. Empty while the focus is outside
-    /// every modal layer.
-    inside_modal: Vec<Id>,
     /// The states published this pass, and the pass before, by an instance inside the top modal layer.
     modal_published: HashSet<StateKey>,
     modal_published_last: HashSet<StateKey>,
     /// The canvas a modal layer keeps open (`runtime::sampler`): its scope's commands reach it while the focus is in
     /// the dialog.
     held_open: Option<Id>,
-    /// A dialog owns the keys in the running pass.
-    dialog_keys: bool,
     /// Bound command ids that no set registers, already logged.
     unknown: HashSet<String>,
     /// The scope each child scope is declared inside: an instance of the child is also an instance of the parent.
     parents: HashMap<&'static str, &'static str>,
+}
+
+/// Where a resolution judges a command from: the modal facts and the focus. The board's own is the key focus of the
+/// running pass; a surface that closes before its command runs (the palette) judges from the window under it.
+#[derive(Clone, Default)]
+struct Vantage {
+    /// A modal layer blocks a window.
+    modal_open: bool,
+    /// A dialog owns the keys at the focus.
+    dialog_keys: bool,
+    /// The instances around the focus from the root of the modal layer the focus is in to the innermost: the instances
+    /// `ModalRule::Blocked` does not block for a source with no component of its own. Empty while the focus is outside
+    /// every modal layer.
+    inside_modal: Vec<Id>,
+    /// The instances around the focus, outermost first, per viewport.
+    focused: Vec<(ViewportId, Vec<Id>)>,
+    /// The edit commands the focused stop takes; `None` reads them from the stop that holds key focus when the
+    /// command resolves.
+    edits: Option<EditSet>,
 }
 
 fn with<R>(ctx: &Context, f: impl FnOnce(&mut Board) -> R) -> R {
@@ -168,9 +181,9 @@ impl Board {
     }
 
     /// The instance a source with no component of its own delivers `scope`'s commands to.
-    fn pick(&self, ctx: &Context, scope: &str) -> Option<Id> {
+    fn pick(&self, ctx: &Context, scope: &str, from: &Vantage) -> Option<Id> {
         // The held-open canvas ranks below every instance around the focus.
-        let focused: Vec<Id> = self.held_open.into_iter().chain(self.focused.iter().flat_map(|(_, chain)| chain.iter().copied())).collect();
+        let focused: Vec<Id> = self.held_open.into_iter().chain(from.focused.iter().flat_map(|(_, chain)| chain.iter().copied())).collect();
         pick_instance(&self.live_instances(ctx, scope), &focused, &self.last_focused)
     }
 
@@ -190,8 +203,8 @@ impl Board {
 
     /// The instances of `chain` (outermost first) inside the top modal layer: its root and the instances within it.
     /// Empty when the chain is outside every modal layer.
-    fn inside_modal_of(&self, chain: &[Id]) -> Vec<Id> {
-        chain.iter().position(|id| self.is_modal_root(*id)).map_or_else(Vec::new, |at| chain[at..].to_vec())
+    fn inside_modal_of(chain: &[Id], is_root: impl Fn(Id) -> bool) -> Vec<Id> {
+        chain.iter().position(|id| is_root(*id)).map_or_else(Vec::new, |at| chain[at..].to_vec())
     }
 
     fn is_modal_root(&self, id: Id) -> bool {
@@ -200,39 +213,38 @@ impl Board {
 
     /// Where `command` goes when a source with no component of its own fires it: `None` for an app-scope command,
     /// else the picked instance, which may not exist.
-    fn target_of(&self, ctx: &Context, command: &CommandRef) -> (bool, Option<Id>) {
+    fn target_of(&self, ctx: &Context, command: &CommandRef, from: &Vantage) -> (bool, Option<Id>) {
         let scope = self.scope_of(command);
         let app = is_app(scope);
-        (app, if app { None } else { self.pick(ctx, scope) })
+        (app, if app { None } else { self.pick(ctx, scope, from) })
     }
 
     /// Who answers for `command` ahead of the app: an instance inside the top modal layer that published its state,
     /// else the focused component when it takes the command as an edit (inside a modal layer, only when the focus
     /// is in it).
-    fn declaring(&self, ctx: &Context, command: &CommandRef, dialog_open: bool) -> Option<Declaration> {
+    fn declaring(&self, ctx: &Context, command: &CommandRef, from: &Vantage) -> Option<Declaration> {
+        let dialog_open = from.modal_open || from.dialog_keys;
         let number = *self.numbers.get(command.id.as_str())?;
         let published = self.modal_published.iter().chain(&self.modal_published_last).find(|(published, _)| *published == number);
         if let Some(id) = published.and_then(|(_, id)| *id).filter(|_| dialog_open) {
             return Some(Declaration::Instance(id));
         }
         let edit = self.registry.edit_of(&command.id)?;
-        let record = focus::record(ctx, pass::current_viewport(ctx));
-        let in_reach = !dialog_open || !self.inside_modal.is_empty();
-        (in_reach && record.keys.is_some_and(|keys| keys.edits.contains(edit))).then_some(Declaration::Focused)
+        let edits = from.edits.or_else(|| focus::record(ctx, pass::current_viewport(ctx)).keys.map(|keys| keys.edits));
+        let in_reach = !dialog_open || !from.inside_modal.is_empty();
+        (in_reach && edits.is_some_and(|edits| edits.contains(edit))).then_some(Declaration::Focused)
     }
 
-    /// `command` as seen by `instance`, or by the app for an app-scope command, before the gate. Also whether this is
-    /// the first time a command no set registers was asked for.
-    fn resolve(&mut self, ctx: &Context, command: &CommandRef, instance: Option<Id>, reach: Reach<'_>) -> (ResolvedCommand, bool) {
+    /// `command` as seen by `instance`, or by the app for an app-scope command, from `from`, before the gate.
+    fn resolve(&self, ctx: &Context, command: &CommandRef, instance: Option<Id>, reach: Reach<'_>, from: &Vantage) -> ResolvedCommand {
         let def = self.registry.get(&command.id);
-        let first_unknown = def.is_none() && self.unknown.insert(command.id.clone());
         let app = is_app(self.scope_of(command));
         let instance = if app { None } else { instance };
-        let dialog_open = self.modal_open || self.dialog_keys;
+        let dialog_open = from.modal_open || from.dialog_keys;
         // A command no set registers is never blocked.
         let rule = def.map(|def| def.modal);
         // The instance inside the top modal that declares the command, which then answers for it.
-        let declaring = (rule == Some(ModalRule::Declared)).then(|| self.declaring(ctx, command, dialog_open)).flatten();
+        let declaring = (rule == Some(ModalRule::Declared)).then(|| self.declaring(ctx, command, from)).flatten();
         // The declaring instance answers for the command: it is where the command is delivered. The focused component
         // answers for itself, so the app's state of the command does not apply.
         let instance = match declaring {
@@ -250,7 +262,7 @@ impl Board {
         let flags = resolve_flags(this.map(CommandState::flags), last.map(CommandState::flags));
         let reached = declaring.is_some()
             || instance.is_some_and(|id| match reach {
-                Reach::Focus => self.inside_modal.contains(&id),
+                Reach::Focus => from.inside_modal.contains(&id),
                 Reach::Chain(chain) => chain.ids().skip_while(|at| !self.is_modal_root(*at)).any(|at| at == id),
             });
         let modal = !dialog_open
@@ -258,14 +270,14 @@ impl Board {
                 None | Some(ModalRule::Always) => true,
                 // A modeless dialog that owns the keys has no modal root to reach into. The canvas a modal layer
                 // holds open is the one instance outside it that its view commands reach.
-                Some(ModalRule::InDialogs) => app || !self.modal_open || reached || instance.is_some_and(|id| Some(id) == self.held_open),
+                Some(ModalRule::InDialogs) => app || !from.modal_open || reached || instance.is_some_and(|id| Some(id) == self.held_open),
                 // `Blocked` and `Declared`.
                 Some(_) => reached,
             };
         let live = app || instance.is_some_and(|id| self.is_live(ctx, id));
         let chord =
             self.keymap.as_ref().and_then(|cache| cache.keymap.bindings(command).into_iter().find(|b| !b.trigger.double).map(|b| b.trigger.chord));
-        let resolved = ResolvedCommand {
+        ResolvedCommand {
             label: state.and_then(|s| s.title_ref().cloned()).unwrap_or_else(|| Arc::from(def.map_or(command.id.as_str(), |def| def.label.as_str()))),
             icon: def.and_then(|def| def.icon.clone()),
             chord,
@@ -276,8 +288,7 @@ impl Board {
             kind: def.map_or(CommandKind::Command, |def| def.kind.clone()),
             command: command.clone(),
             instance,
-        };
-        (resolved, first_unknown)
+        }
     }
 }
 
@@ -441,7 +452,7 @@ pub(crate) fn take_fired(ctx: &Context) -> Vec<Fired> {
 /// Whether the component that holds key focus sits inside the instance `id`.
 #[doc(hidden)]
 pub fn focus_within(ctx: &Context, id: Id) -> bool {
-    with(ctx, |board| board.focused.iter().any(|(_, chain)| chain.contains(&id)))
+    with(ctx, |board| board.here.focused.iter().any(|(_, chain)| chain.contains(&id)))
 }
 
 /// Records that the container `id` is an instance of `scope` in the running pass of its viewport.
@@ -474,7 +485,7 @@ pub(crate) fn note_focus(ctx: &Context, id: Id, chain: &CommandChain) {
 
 pub(crate) fn set_modal_open(ctx: &Context, open: bool, viewport: ViewportId, root: Option<Id>) {
     with(ctx, |board| {
-        board.modal_open = open;
+        board.here.modal_open = open;
         board.modal_roots.retain(|(of, _)| *of != viewport);
         board.modal_roots.extend(root.map(|root| (viewport, root)));
     });
@@ -496,10 +507,34 @@ enum Reach<'a> {
     Chain(&'a CommandChain),
 }
 
-/// `command` as seen by `instance` (`None` for the app), with the gate applied outside the board's lock.
-fn resolve_in(ctx: &Context, command: &CommandRef, instance: Option<Id>, reach: Reach<'_>) -> ResolvedCommand {
+/// The vantage of the window under the modal layer `layer`, as it is once the layer closes: the modal layers below it
+/// and in other viewports, and the stop focus returns to, with the instances around it and the edits it takes.
+fn beneath(ctx: &Context, layer: Id) -> Vantage {
+    let viewport = pass::current_viewport(ctx);
+    let (modal_open, root) = overlay::beneath(ctx, layer);
+    let stop = focus::return_stop(ctx, layer);
+    let dialog_keys = keys::owner_at(ctx, stop.as_ref().map(|(rec, _)| rec), stop.as_ref().map_or(&[][..], |(_, scopes)| scopes), Some(layer))
+        == KeyOwner::Class(OwnerClass::Dialog);
+    let edits = stop.as_ref().map_or(EditSet::NONE, |(rec, _)| rec.stop.keys.edits);
+    let returns = stop.map(|(rec, _)| rec.stop.key().0);
+    with(ctx, |board| {
+        let chain: Vec<Id> = returns
+            .and_then(|id| [board.chains.get(&viewport), board.before.get(&viewport)].into_iter().flatten().find(|(held, _)| *held == id))
+            .map(|(_, chain)| chain.ids().collect())
+            .unwrap_or_default();
+        // Nothing to return to inside a modal: the modal's root takes the commands, as in `begin`.
+        let chain = if chain.is_empty() && returns.is_none() { root.into_iter().collect() } else { chain };
+        let inside_modal = Board::inside_modal_of(&chain, |id| Some(id) == root);
+        Vantage { modal_open, dialog_keys, inside_modal, focused: vec![(viewport, chain)], edits: Some(edits) }
+    })
+}
+
+/// `command` as seen by `instance` (`None` for the app) from `from` (`None`: the key focus of the running pass), with
+/// the gate applied outside the board's lock.
+fn resolve_in(ctx: &Context, command: &CommandRef, instance: Option<Id>, reach: Reach<'_>, from: Option<&Vantage>) -> ResolvedCommand {
     let (mut resolved, first_unknown, gate) = with(ctx, |board| {
-        let (resolved, first_unknown) = board.resolve(ctx, command, instance, reach);
+        let first_unknown = board.registry.get(&command.id).is_none() && board.unknown.insert(command.id.clone());
+        let resolved = board.resolve(ctx, command, instance, reach, from.unwrap_or(&board.here));
         (resolved, first_unknown, board.gate.clone())
     });
     if first_unknown {
@@ -513,16 +548,27 @@ fn resolve_in(ctx: &Context, command: &CommandRef, instance: Option<Id>, reach: 
 
 /// `command` for a surface with no component of its own: against the instance that `fire` would target.
 pub(crate) fn resolve_global(ctx: &Context, command: &CommandRef) -> ResolvedCommand {
-    let (_, instance) = with(ctx, |board| board.target_of(ctx, command));
-    resolve_in(ctx, command, instance, Reach::Focus)
+    resolve_from(ctx, command, None)
+}
+
+/// `command` for a surface with no component of its own that closes before its command runs, from the window under
+/// the modal layer `layer` (`beneath`).
+pub(crate) fn resolve_beneath(ctx: &Context, layer: Id, command: &CommandRef) -> ResolvedCommand {
+    let from = beneath(ctx, layer);
+    resolve_from(ctx, command, Some(&from))
+}
+
+fn resolve_from(ctx: &Context, command: &CommandRef, from: Option<&Vantage>) -> ResolvedCommand {
+    let (_, instance) = with(ctx, |board| board.target_of(ctx, command, from.unwrap_or(&board.here)));
+    resolve_in(ctx, command, instance, Reach::Focus, from)
 }
 
 /// Step 1: the bound command of a component, resolved against its own instance. A component outside every instance
 /// of the command's scope (a Navigator's Zoom In beside the canvas) reaches the instance a menu row of the command
 /// reaches.
 pub(crate) fn resolve_bound(ctx: &Context, chain: &CommandChain, command: &CommandRef) -> ResolvedCommand {
-    let instance = with(ctx, |board| board.innermost(chain, board.scope_of(command)).or_else(|| board.target_of(ctx, command).1));
-    resolve_in(ctx, command, instance, Reach::Chain(chain))
+    let instance = with(ctx, |board| board.innermost(chain, board.scope_of(command)).or_else(|| board.target_of(ctx, command, &board.here).1));
+    resolve_in(ctx, command, instance, Reach::Chain(chain), None)
 }
 
 /// Step-1 resolution for a context in `chain`; `None` when the command's scope has no instance in the chain.
@@ -556,7 +602,7 @@ fn queue(ctx: &Context, fired: Fired) {
 pub(crate) fn fall_through(ctx: &Context, command: craft_behavior::EditCommand) {
     let Some(command) = EditCommands::of(command) else { return };
     let command = CommandRef::from(command);
-    let target = with(ctx, |board| board.resolve(ctx, &command, None, Reach::Focus).0.instance);
+    let target = with(ctx, |board| board.resolve(ctx, &command, None, Reach::Focus, &board.here).instance);
     let fired = Fired { command, target, source: FireSource::Key, phase: FirePhase::Press, cycle: false, alt_variant: false };
     with(ctx, |board| if fired.target.is_some() { board.queue.push(fired) } else { board.out.push(fired) });
     repaint::request_of(ctx, ViewportId::ROOT);
@@ -580,11 +626,22 @@ pub(crate) fn fire_resolved(ctx: &Context, command: &ResolvedCommand, source: Fi
 }
 
 pub(crate) fn fire_from(ctx: &Context, command: &CommandRef, source: FireSource) -> bool {
-    let (app, instance) = with(ctx, |board| board.target_of(ctx, command));
+    fire_in(ctx, command, source, None)
+}
+
+/// `fire_from` for a surface that closes before its command runs, from the window under the modal layer `layer`
+/// (`beneath`).
+pub(crate) fn fire_beneath(ctx: &Context, layer: Id, command: &CommandRef, source: FireSource) -> bool {
+    let from = beneath(ctx, layer);
+    fire_in(ctx, command, source, Some(&from))
+}
+
+fn fire_in(ctx: &Context, command: &CommandRef, source: FireSource, from: Option<&Vantage>) -> bool {
+    let (app, instance) = with(ctx, |board| board.target_of(ctx, command, from.unwrap_or(&board.here)));
     if !app && instance.is_none() {
         return false;
     }
-    let resolved = resolve_in(ctx, command, instance, Reach::Focus);
+    let resolved = resolve_in(ctx, command, instance, Reach::Focus, from);
     if !resolved.enabled {
         return false;
     }
@@ -697,12 +754,12 @@ pub(crate) fn begin(ctx: &Context) {
         if !chain.is_empty() {
             board.last_focused.clone_from(&chain);
         }
-        match board.focused.iter_mut().find(|(v, _)| *v == viewport) {
+        match board.here.focused.iter_mut().find(|(v, _)| *v == viewport) {
             Some(entry) => entry.1.clone_from(&chain),
-            None => board.focused.push((viewport, chain.clone())),
+            None => board.here.focused.push((viewport, chain.clone())),
         }
-        board.dialog_keys = shortcuts.dialog;
-        board.inside_modal = board.inside_modal_of(&chain);
+        board.here.dialog_keys = shortcuts.dialog;
+        board.here.inside_modal = Board::inside_modal_of(&chain, |id| board.is_modal_root(id));
         if shortcuts.keys.is_empty() {
             return None;
         }
@@ -743,8 +800,8 @@ pub(crate) fn begin(ctx: &Context) {
                 else {
                     continue;
                 };
-                let (app, instance) = with(ctx, |board| board.target_of(ctx, &hit.command));
-                let resolved = resolve_in(ctx, &hit.command, instance, Reach::Focus);
+                let (app, instance) = with(ctx, |board| board.target_of(ctx, &hit.command, &board.here));
+                let resolved = resolve_in(ctx, &hit.command, instance, Reach::Focus, None);
                 if !resolved.enabled {
                     continue;
                 }
@@ -789,6 +846,6 @@ pub(crate) fn end(ctx: &Context) {
         board.held.retain(|held| held.target.is_none_or(|id| ids.contains(&id)));
         board.chains.retain(|viewport, _| live.contains(viewport));
         board.before.retain(|viewport, _| live.contains(viewport));
-        board.focused.retain(|(viewport, _)| live.contains(viewport));
+        board.here.focused.retain(|(viewport, _)| live.contains(viewport));
     });
 }

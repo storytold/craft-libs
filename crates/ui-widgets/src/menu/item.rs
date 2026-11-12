@@ -345,10 +345,8 @@ impl Component for MenuItem<'_> {
         let rest = tint.map_or(clear, |tint| c(tint.fill));
         let mut surface = cx.command_row_look();
         surface.fill = surface.fill.off(States::new(rest, rest, rest, clear)).on(States::new(rest, rest, rest, clear));
-        let ink = |base: Rgba| {
-            let disabled = c(text.disabled);
-            cx.command_row_ink(base).on(States::new(c(base), c(base), c(base), disabled)).off(States::new(c(base), c(base), c(base), disabled))
-        };
+        // A checked row keeps its base ink: its mark shows the check.
+        let ink = |base: Rgba| cx.command_row_ink(base).on(States::new(c(base), c(base), c(base), c(text.disabled)));
         let control = cx.control();
         // A row's content sits `space.pad.regular` in from the popup's own padding, so a label starts clear of the edge.
         let mut metrics = control.metrics();
@@ -483,7 +481,7 @@ impl Component for MenuItem<'_> {
         }
         // The run closes the menus: focus leaves them first, so the command reaches the stop focus returns to.
         if asked && !self.keep_open {
-            crate::runtime::focus::return_from_menus(&ctx);
+            crate::runtime::focus::return_from_pick(&ctx, crate::runtime::focus::PickedIn::Menus);
         }
         // Every activation of a menu row reaches its command as `FireSource::Menu`, whether it was typed, clicked or keyed.
         // A typed letter also runs a row that has no command: the injected activation closes the menu.

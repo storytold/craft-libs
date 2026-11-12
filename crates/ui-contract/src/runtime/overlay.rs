@@ -694,16 +694,19 @@ pub(crate) enum LayerKeys {
 }
 
 /// The key ownership the layer stack gives the focus: blocked when a modal layer is stacked above the layer the
-/// focus is in (or above the window when it is in none), else that layer's key class.
-pub(crate) fn key_layer(ctx: &Context, scopes: &[Id]) -> LayerKeys {
+/// focus is in (or above the window when it is in none), else that layer's key class. With `below`, only the layers
+/// under the layer `below` count: the stack as it is once that layer closes.
+pub(crate) fn key_layer(ctx: &Context, scopes: &[Id], below: Option<Id>) -> LayerKeys {
     let viewport = pass::current_viewport(ctx);
     let stack = with_persist(ctx, viewport, |persist| persist.stack.clone());
+    let at = |id: Id| stack.iter().position(|layer| *layer == id);
+    let under = |id: Id| below.is_none_or(|top| id != top && at(top).is_none_or(|ceiling| at(id).is_none_or(|layer| layer < ceiling)));
     let (inside, modals) = with_pass(ctx, |pass| {
-        let inside = scopes.iter().find_map(|scope| pass.last.iter().find(|entry| entry.id == *scope && !entry.exiting).cloned());
-        let modals: Vec<Id> = pass.last.iter().filter(|entry| entry.blocks_window() && !entry.exiting).map(|entry| entry.id).collect();
+        let inside = scopes.iter().find_map(|scope| pass.last.iter().find(|entry| entry.id == *scope && !entry.exiting && under(entry.id)).cloned());
+        let modals: Vec<Id> =
+            pass.last.iter().filter(|entry| entry.blocks_window() && !entry.exiting && under(entry.id)).map(|entry| entry.id).collect();
         (inside, modals)
     });
-    let at = |id: Id| stack.iter().position(|layer| *layer == id);
     let floor = inside.as_ref().and_then(|entry| at(entry.id));
     let above = modals.iter().any(|modal| match (at(*modal), floor, &inside) {
         (_, _, Some(entry)) if entry.id == *modal => false,
@@ -715,6 +718,24 @@ pub(crate) fn key_layer(ctx: &Context, scopes: &[Id]) -> LayerKeys {
         return LayerKeys::Blocked;
     }
     inside.map_or(LayerKeys::Window, |entry| LayerKeys::Class(entry.keys))
+}
+
+/// The modal facts of the window under the layer `layer` of the running viewport, as they are once it closes: the
+/// top modal layer below it here, and whether that or a modal layer in another viewport blocks a window.
+pub(crate) fn beneath(ctx: &Context, layer: Id) -> (bool, Option<Id>) {
+    let viewport = pass::current_viewport(ctx);
+    let stack = with_persist(ctx, viewport, |persist| persist.stack.clone());
+    let at = |id: Id| stack.iter().position(|shown| *shown == id);
+    let ceiling = at(layer).unwrap_or(stack.len());
+    let root = with_pass(ctx, |pass| {
+        pass.last
+            .iter()
+            .filter(|entry| entry.blocks_window() && !entry.exiting && entry.id != layer)
+            .filter_map(|entry| at(entry.id).filter(|shown| *shown < ceiling).map(|shown| (shown, entry.id)))
+            .max_by_key(|(shown, _)| *shown)
+            .map(|(_, id)| id)
+    });
+    (root.is_some() || modal_in_other_viewports(ctx, viewport), root)
 }
 
 /// A viewport other than `viewport` that has a modal layer open: the window a blocked press raises.

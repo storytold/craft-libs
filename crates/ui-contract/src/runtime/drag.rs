@@ -512,7 +512,7 @@ pub(crate) fn end_pass(ctx: &Context) {
     // A modal holds input: targets on layers below it, and on the window, never accept.
     let scopes: Vec<Option<Id>> =
         PerViewport::<Targets>::with(ctx, viewport, |targets| targets.this.iter().map(|registration| registration.scope).collect());
-    let open: Vec<bool> = scopes.iter().map(|scope| overlay::key_layer(ctx, scope.as_slice()) != LayerKeys::Blocked).collect();
+    let open: Vec<bool> = scopes.iter().map(|scope| overlay::key_layer(ctx, scope.as_slice(), None) != LayerKeys::Blocked).collect();
     let winner = PerViewport::<Targets>::with(ctx, viewport, |targets| {
         // The topmost layer in the order the overlay host handed egui wins, then the target registered last: a target
         // shown later lies over an enclosing one.

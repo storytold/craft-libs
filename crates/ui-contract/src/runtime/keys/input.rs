@@ -377,7 +377,7 @@ pub(crate) fn take_nav(ctx: &Context) -> NavKeys {
     let enabled = Env::root_for(ctx, viewport).is_some_and(|env| env.tab_toggles_chrome);
     let focused = focus::focused_rec(ctx);
     let canvas = focus::canvas_keys(ctx, viewport).is_some();
-    let layer = overlay::key_layer(ctx, &focused.as_ref().map(|rec| focus::scope_chain(ctx, rec)).unwrap_or_default());
+    let layer = overlay::key_layer(ctx, &focused.as_ref().map(|rec| focus::scope_chain(ctx, rec)).unwrap_or_default(), None);
     let gate = tab_toggles_chrome(enabled, canvas, layer, focused.as_ref().map(|rec| &rec.stop.keys));
     for press in tabs {
         match gate.then(|| chrome_toggle_of(ctx, &press.input)).flatten() {

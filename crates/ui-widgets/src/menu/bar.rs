@@ -513,7 +513,7 @@ impl Component for MenuBar<'_> {
 
     /// The open title's menu below it: the caller's body, with the help search above it in the Help menu. The
     /// overflow menu lists each hidden title as a submenu. Running a row returns focus to the component that held
-    /// it when F10 or Alt took it for the bar, as any activation that closes the menus does (`focus::return_from_menus`).
+    /// it when F10 or Alt took it for the bar, as any activation that closes the menus does (`focus::return_from_pick`).
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
         let found = declared(cx);
         let slots = Self::slots(found);

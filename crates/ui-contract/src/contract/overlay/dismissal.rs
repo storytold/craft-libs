@@ -46,7 +46,7 @@ pub(super) fn dismissal(
     }
     if dismiss.on_activate && overlay::activated_inside(ctx, layer.id) {
         // An activation closes the menus as a row's run does, and focus leaves them the same way.
-        focus::return_from_menus(ctx);
+        focus::return_from_pick(ctx, focus::PickedIn::Menus);
         return Some(CloseReason::Activated);
     }
     if dismiss.enter && scope.is_some() && overlay::top(ctx) == Some(layer.id) && keys::take_submit(ctx) {

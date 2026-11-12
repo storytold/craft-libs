@@ -178,11 +178,12 @@ pub trait RowStyleCx {
     /// drew it. A face selects it with `SurfaceLook`'s fill from here and `command_row_ink` for its text and icons.
     fn command_row_look(&self) -> SurfaceLook;
 
-    /// The ink of a collection item's text or icon: `base`, and the theme's paired `text.on_selected` on the
-    /// selection fills.
+    /// The ink of a collection item's text or icon: `base`, the theme's paired `text.on_selected` on the selection
+    /// fills, and `text.disabled` on a disabled item.
     fn row_ink(&self, base: Rgba) -> Stateful<StyleColor>;
 
-    /// The ink of a menu or popup list row: `base`, and `text.on_accent` on the active row.
+    /// The ink of a menu or popup list row: `base`, `text.on_accent` on the active row, and `text.disabled` on a
+    /// disabled row.
     fn command_row_ink(&self, base: Rgba) -> Stateful<StyleColor>;
 }
 
@@ -204,11 +205,12 @@ impl RowStyleCx for StyleCx<'_> {
     }
 }
 
-/// `row_ink` for a base that is already a style colour (a tone).
+/// `row_ink` for a base that is already a style colour (a tone). A disabled row's ink is `text.disabled`.
 pub(super) fn row_ink_of(cx: &StyleCx<'_>, base: StyleColor, form: RowForm) -> Stateful<StyleColor> {
     let on_selected = cx.color(cx.tokens.color.text.on_selected);
     let on_accent = cx.color(cx.tokens.color.text.on_accent);
-    let mut ink = Stateful::new(base).on(States::new(on_selected, on_selected, on_selected, on_selected));
+    let disabled = cx.color(cx.tokens.color.text.disabled);
+    let mut ink = Stateful::new(base).off(States::new(base, base, base, disabled)).on(States::new(on_selected, on_selected, on_selected, disabled));
     for rule in flag_rules(form) {
         ink = ink.when(
             rule.flags,

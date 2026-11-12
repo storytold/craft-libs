@@ -1,7 +1,7 @@
 //! Focus movement: Tab and F6, roving groups, initial focus, restore, programmatic requests and focus after
 //! removal. Every movement reads last pass's registrations and returns the egui changes to apply.
 
-use super::{Act, BeginIn, FocusTarget, Initial, State, StopKey, StopRec};
+use super::{Act, BeginIn, FocusTarget, Initial, PickedIn, State, StopKey, StopRec};
 use crate::runtime::egui::focus as egui_focus;
 use crate::runtime::egui::memory::FastMap;
 use craft_behavior::focus::after_removal;
@@ -438,13 +438,16 @@ impl State {
         self.stops.iter().find(|rec| rec.stop.key() == opener).cloned()
     }
 
-    /// Where a menu pick returns focus before its command runs: the pick closes the chain of menus around the focused
-    /// stop, so focus goes to the opener of the outermost one, or to the stop a menu bar took focus from when that
-    /// opener is the bar. `None` when focus is in no menu.
-    pub(super) fn picked_focus(&mut self) -> Option<StopRec> {
+    /// Where a pick returns focus before its command runs: the pick closes the chain of menus around the focused stop,
+    /// or the layer it was picked in, so focus goes to the opener of the outermost scope that closes, or to the stop a
+    /// menu bar took focus from when that opener is the bar. `None` when focus is in nothing the pick closes.
+    pub(super) fn picked_focus(&mut self, picked: PickedIn) -> Option<StopRec> {
         let inside = self.stop_of_focus()?;
-        let menu = |id: Id| self.scopes.get(&id).or_else(|| self.last_scopes.get(&id)).is_some_and(|scope| scope.policy.kind == ScopeKind::Menu);
-        let mut opener = self.opener_back(inside.scope, menu)?;
+        let closes = |id: Id| match picked {
+            PickedIn::Menus => self.scopes.get(&id).or_else(|| self.last_scopes.get(&id)).is_some_and(|scope| scope.policy.kind == ScopeKind::Menu),
+            PickedIn::Layer(layer) => id == layer,
+        };
+        let mut opener = self.opener_back(inside.scope, closes)?;
         if let Some((bar, held)) = self.bar_return
             && opener.0 == bar
         {
@@ -452,6 +455,20 @@ impl State {
             opener = held;
         }
         self.find_stop(opener)
+    }
+
+    /// The stop focus returns to when the scope `scope` closes. A scope opened while nothing held focus records its own
+    /// first stop as its opener: that is no stop to return to.
+    pub(super) fn return_stop(&self, scope: Id) -> Option<StopRec> {
+        let rec = self.opener_back(Some(scope), |id| id == scope).and_then(|key| self.find_stop(key))?;
+        let mut at = rec.scope;
+        while let Some(id) = at {
+            if id == scope {
+                return None;
+            }
+            at = self.scopes.get(&id).or_else(|| self.last_scopes.get(&id)).and_then(|record| record.parent);
+        }
+        Some(rec)
     }
 
     /// Walking out from `from`, the opener focus returns to when the scopes `closes` names go away: the opener of the

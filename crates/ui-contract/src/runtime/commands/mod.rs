@@ -379,6 +379,34 @@ pub fn resolve(ctx: &Context, command: impl Into<CommandRef>) -> ResolvedCommand
     board::resolve_global(ctx, &command.into())
 }
 
+/// `command` as [`resolve`] shows it, from the window under the modal layer whose body is running, as that window is
+/// once the layer closes: for a surface that closes before its command runs (the command palette), whose own layer
+/// does not block the command. Outside a modal layer it is [`resolve`].
+#[doc(hidden)]
+pub fn resolve_beneath(ctx: &Context, command: impl Into<CommandRef>) -> ResolvedCommand {
+    match crate::runtime::overlay::modal_drawing(ctx) {
+        Some(layer) => board::resolve_beneath(ctx, layer, &command.into()),
+        None => resolve(ctx, command),
+    }
+}
+
+/// Fires `command` as [`fire`] does, from the window under the modal layer whose body is running, as
+/// [`resolve_beneath`] judges it, for a surface that closes that layer with the pick. Focus returns from the layer
+/// first, so the command reaches the stop focus returns to, as a menu pick's does.
+#[doc(hidden)]
+pub fn fire_beneath(ctx: &Context, command: impl Into<CommandRef>, source: FireSource) -> bool {
+    if !crate::runtime::measure::effect(ctx, "commands::fire") {
+        return false;
+    }
+    match crate::runtime::overlay::modal_drawing(ctx) {
+        Some(layer) => {
+            crate::runtime::focus::return_from_pick(ctx, crate::runtime::focus::PickedIn::Layer(layer));
+            board::fire_beneath(ctx, layer, &command.into(), source)
+        }
+        None => board::fire_from(ctx, &command.into(), source),
+    }
+}
+
 /// Declares that a modal layer is open in some viewport, so `ModalRule::Blocked` commands do not fire outside it;
 /// `root` is the top modal layer of `viewport`, if it has one.
 pub(crate) fn modal_root(ctx: &Context, viewport: ViewportId) -> Option<Id> {

@@ -146,9 +146,10 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         self.column_keys(cx, lead_at.filter(|_| !header_held));
         // The pass's `update_inputs` turned an `Activate` intent into the keyed activation.
         let activated = cx.core.intents.take(Intent::Activate) || cx.core.activation.is_some_and(|activation| activation.by_key);
+        // A disabled lead does not run, as a press on it does not.
         if activated
             && !header_held
-            && let Some(row) = lead_at
+            && let Some(row) = lead_at.filter(|&row| self.source.enabled(row))
         {
             // Where the arrows leave the selection, Enter picks the lead it activates.
             if !props.arrows_select && !self.holds(row) {

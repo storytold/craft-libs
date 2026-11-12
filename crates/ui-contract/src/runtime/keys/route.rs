@@ -167,19 +167,26 @@ pub(super) fn push(routed: &mut HashMap<Option<Id>, Routed>, target: Option<Id>,
     routed.entry(target).or_default().items.push(Item { intent, horizontal });
 }
 
+/// Who owns the keys at the stop `target`, whose scope chain is `scopes`: its own class and the class of the layer
+/// it is in, or `Blocked` under a modal layer. With `below`, only the layers under the layer `below` count.
+pub(crate) fn owner_at(ctx: &Context, target: Option<&StopRec>, scopes: &[Id], below: Option<Id>) -> KeyOwner {
+    let layer = overlay::key_layer(ctx, scopes, below);
+    let mut present: Vec<OwnerClass> = target.map(|rec| rec.stop.keys.owner).into_iter().collect();
+    if let overlay::LayerKeys::Class(class) = layer {
+        present.push(class);
+    }
+    key_owner(layer == overlay::LayerKeys::Blocked, &present)
+}
+
 /// The shortcut events the key owner leaves to the app (9.3). The owner is the focused component's class, or
 /// `Blocked` while a modal layer is stacked above the focus; inside a layer its `Overlay.keys` class ranks with
 /// the component's. `Menu` and `Recorder` keep every key; a `Widget` or popup keeps the keys
 /// it activates with, the keys of its intents and the keys its filter keeps from the key stage; a text field
 /// keeps the text its presses typed.
 fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consumed: &[Taken]) -> Shortcuts {
-    let layer = overlay::key_layer(ctx, &target.map(|rec| focus::scope_chain(ctx, rec)).unwrap_or_default());
+    let scopes = target.map(|rec| focus::scope_chain(ctx, rec)).unwrap_or_default();
+    let owner = owner_at(ctx, target, &scopes, None);
     let own = target.map(|rec| rec.stop.keys.owner);
-    let mut present: Vec<OwnerClass> = own.into_iter().collect();
-    if let overlay::LayerKeys::Class(class) = layer {
-        present.push(class);
-    }
-    let owner = key_owner(layer == overlay::LayerKeys::Blocked, &present);
     let kept = |keys: &focus::KeyUse, at: usize| {
         let key = batch.presses[at].key;
         match keys.keep {

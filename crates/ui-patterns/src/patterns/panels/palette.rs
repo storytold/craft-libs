@@ -2,13 +2,15 @@
 
 use super::words::PanelWords;
 use crate::contract::overlay::{OverlayFit, ViewportShare};
-use crate::contract::{Bind, CollectionEvent, Overlay, Pattern, Politeness, Props, Show as _, ShowCollection as _, ShowContainer as _, announce};
+use crate::contract::{
+    Bind, CollectionEvent, Overlay, Pattern, Politeness, Props, Show as _, ShowCollection as _, ShowContainer as _, Sizing, announce,
+};
 use crate::display::{Shade, Text};
 use crate::layout_components::Stack;
 use crate::list::{List, ListRow};
 use crate::menu::search::{HelpEntry, search_order};
 use crate::popover::Popover;
-use crate::runtime::commands::{self, CommandRef};
+use crate::runtime::commands::{self, CommandRef, FireSource};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::memory::Remember as _;
 use crate::runtime::overlay::CloseReason;
@@ -45,8 +47,7 @@ struct Session {
 pub struct PaletteOutput {
     /// The box's response.
     pub response: Response,
-    /// The command the user picked in this pass. The palette has closed; the app runs it (a modal layer blocks the
-    /// commands that must not run under one while it is open).
+    /// The command the user picked in this pass. The palette has closed and fired it as `FireSource::Palette`.
     pub picked: Option<CommandRef>,
     /// How the palette closed in this pass; `None` while it stays open.
     pub closed: Option<CloseReason>,
@@ -64,13 +65,15 @@ impl crate::contract::Outcome for PaletteOutput {
 ///
 /// - Entries: [`HelpEntry`]s, found by label, English label or menu path and ranked by [`search_order`]. A row is one
 ///   line: the label, the menu path (dropped when the label would get too narrow) and the command's chord at the end.
-///   A disabled command is listed and does not run.
+///   A command is enabled as the window under the palette has it: the palette closes before the command runs, so
+///   its own modal layer blocks none. A disabled command is listed and does not run.
 /// - Empty query: the commands last run, newest first (the `recents` binding), else the first entries.
 /// - Keys: the field keeps the focus; Up, Down, Page Up, Page Down move the active row (Up and Down wrap at the ends),
 ///   Enter picks it, Escape clears
 ///   the query and, on an empty query, closes the box; a press outside closes it. A caption under the list names the keys. The number of results is announced politely.
-/// - Picking: the output's `picked` names the command, the box closes and the command goes first in `recents`;
-///   [`CommandPalette::remember`] is the rule. Without a binding the palette keeps `recents` for the session.
+/// - Picking: the box closes, focus returns to where it was before the palette opened, the command fires as
+///   `FireSource::Palette` (the app receives it as it receives a menu's) and goes first in `recents`;
+///   [`CommandPalette::remember`] is the rule. The output's `picked` names it. Without a binding the palette keeps `recents` for the session.
 #[derive(Pattern, Props)]
 pub struct CommandPalette<'a> {
     label: Label,
@@ -138,6 +141,7 @@ impl<'a> CommandPalette<'a> {
                             .empty(words.palette_empty.clone())
                             .selection(Bind::bound(&mut state.selection))
                             .rows_stamp(stamp)
+                            .sizing(Sizing::Fill)
                             .show_items(ui, &source, &mut |key, _| rows[position(&listed, *key)].row())
                             .events;
                         for event in events {
@@ -153,6 +157,7 @@ impl<'a> CommandPalette<'a> {
                     });
                 if let Some(command) = &picked {
                     cx.request_close();
+                    commands::fire_beneath(&ctx, command.clone(), FireSource::Palette);
                     let before = recent.clone();
                     let mut after = recent;
                     Self::remember(&mut after, command.clone());
@@ -249,7 +254,7 @@ fn row_data(
     listed
         .iter()
         .map(|at| {
-            let resolved = commands::resolve(ctx, entries[*at].command().clone());
+            let resolved = commands::resolve_beneath(ctx, entries[*at].command().clone());
             RowData {
                 label: texts[*at][0].clone(),
                 path: Some(texts[*at][2].clone()).filter(|path| !path.is_empty()),

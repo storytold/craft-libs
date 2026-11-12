@@ -439,18 +439,35 @@ pub fn forget_bar_return(ctx: &Context) {
     with(ctx, |state| state.bar_return = None);
 }
 
-/// A menu row runs, or another activation closes the menus: in this pass, before a row's command fires, focus
-/// returns from the chain of menus that closes to the stop that held it before the outermost menu opened, or before
-/// a menu bar took it. The command then
-/// reaches that stop, as an Edit command picked from a menu reaches the text field it edits. Focus in no menu stays.
+/// What a pick closes before its command runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[doc(hidden)]
-pub fn return_from_menus(ctx: &Context) {
+pub enum PickedIn {
+    /// The chain of menus around the focused stop.
+    Menus,
+    /// The modal layer the pick was made in (the command palette).
+    Layer(Id),
+}
+
+/// A pick runs, or another activation closes the menus: in this pass, before the picked command fires, focus
+/// returns from what the pick closes to the stop that held it before the outermost menu or the layer opened, or before
+/// a menu bar took it. The command then reaches that stop, as an Edit command picked from a menu reaches the text
+/// field it edits. Focus in nothing the pick closes stays.
+#[doc(hidden)]
+pub fn return_from_pick(ctx: &Context, picked: PickedIn) {
     let focused = egui_focus::focused(ctx);
     let acts = with(ctx, |state| {
         state.focus_now = focused;
-        state.picked_focus().map(|rec| state.focus_stop(rec)).unwrap_or_default()
+        state.picked_focus(picked).map(|rec| state.focus_stop(rec)).unwrap_or_default()
     });
     apply(ctx, acts);
+}
+
+/// The stop focus returns to when the scope `scope` closes, and its scope chain, innermost first.
+pub(crate) fn return_stop(ctx: &Context, scope: Id) -> Option<(StopRec, Vec<Id>)> {
+    let rec = with(ctx, |state| state.return_stop(scope))?;
+    let chain = scope_chain(ctx, &rec);
+    Some((rec, chain))
 }
 
 /// Registers the component that `FocusTarget::Doc(key)` focuses.

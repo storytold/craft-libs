@@ -573,3 +573,34 @@ fn a_padded_table_draws_its_header_rows_and_empty_text_inside_the_pad() {
     assert!((start(empty, table) - start(bare_empty, bare) - pad).abs() <= 1.0, "the empty text starts the pad further in");
     assert!((header.top() - table.top() - (bare_header.top() - bare.top()) - pad).abs() <= 1.0, "the header starts the pad lower");
 }
+
+/// The ink of the text run `label` paints in `shapes`.
+fn ink_of(shapes: &[egui::Shape], label: &str) -> egui::Color32 {
+    shapes
+        .iter()
+        .find_map(|shape| match shape {
+            egui::Shape::Text(text) if text.galley.text() == label => {
+                let vertex = text.galley.rows.iter().flat_map(|row| row.row.visuals.mesh.vertices.iter()).map(|vertex| vertex.color).next();
+                Some(text.override_text_color.or(vertex.filter(|color| *color != egui::Color32::PLACEHOLDER)).unwrap_or(text.fallback_color))
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{label} paints no text"))
+}
+
+/// A disabled row's text takes the disabled ink, in a list row and an option row alike.
+#[trial]
+fn a_disabled_row_paints_its_text_in_the_disabled_ink() {
+    let scene = |ui: &mut egui::Ui| {
+        let rows = [ListRow::new("Alpha"), ListRow::new("Beta").enabled(false), ListRow::new("Gamma").option().enabled(false)];
+        for (at, row) in rows.into_iter().enumerate() {
+            ui.push_id(at, |ui| craft_ui::testing::show_as_only_item(ui, row));
+        }
+    };
+    let mut frames = craft_ui::testing::Frames::new();
+    frames.idle(4, scene);
+    let shapes = frames.frame_shapes(scene);
+    let (enabled, disabled, option) = (ink_of(&shapes, "Alpha"), ink_of(&shapes, "Beta"), ink_of(&shapes, "Gamma"));
+    assert_ne!(disabled, enabled, "a disabled row's text is not in the enabled ink");
+    assert_eq!(option, disabled, "an option row and a list row share the disabled ink");
+}
