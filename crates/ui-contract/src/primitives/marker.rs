@@ -21,23 +21,31 @@ pub struct Marker {
     at: Pos2,
     fill: Option<Color32>,
     size: MarkerSize,
+    /// A radius in place of the size's.
+    radius: Option<f32>,
     selected: bool,
 }
 
 impl Marker {
     /// A ring that shows the field under it.
     pub const fn hollow(at: Pos2) -> Self {
-        Marker { at, fill: None, size: MarkerSize::Regular, selected: false }
+        Marker { at, fill: None, size: MarkerSize::Regular, radius: None, selected: false }
     }
 
     /// A disc of `color`; a translucent colour sits on the look's backing.
     pub const fn filled(at: Pos2, color: Color32) -> Self {
-        Marker { at, fill: Some(color), size: MarkerSize::Regular, selected: false }
+        Marker { at, fill: Some(color), size: MarkerSize::Regular, radius: None, selected: false }
     }
 
     /// Drawn at `size`.
     pub const fn size(mut self, size: MarkerSize) -> Self {
         self.size = size;
+        self
+    }
+
+    /// Drawn at `radius` in place of its size's: a ring round a picked mark, such as a selected blur pin's ring.
+    pub const fn radius(mut self, radius: f32) -> Self {
+        self.radius = Some(radius);
         self
     }
 
@@ -59,7 +67,7 @@ impl Marker {
     }
 
     /// The radius of a marker of `size`, out to the inner edge of its ring.
-    pub fn radius(look: &MarkerLook, size: MarkerSize) -> f32 {
+    pub fn size_radius(look: &MarkerLook, size: MarkerSize) -> f32 {
         match size {
             MarkerSize::Regular => look.radius,
             MarkerSize::Large => look.large,
@@ -68,12 +76,12 @@ impl Marker {
 
     /// How far a marker of `size` reaches from its centre, halo included.
     pub fn reach(look: &MarkerLook, size: MarkerSize) -> f32 {
-        Self::radius(look, size) + look.ring_width + look.halo_width
+        Self::size_radius(look, size) + look.ring_width + look.halo_width
     }
 
     /// The shapes, bottom first.
     pub fn shapes(&self, look: &MarkerLook) -> Vec<Shape> {
-        let radius = Self::radius(look, self.size);
+        let radius = self.radius.unwrap_or_else(|| Self::size_radius(look, self.size));
         let mut shapes = Vec::with_capacity(4);
         if let Some(color) = self.fill {
             if !color.is_opaque() {

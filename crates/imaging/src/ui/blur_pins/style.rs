@@ -1,7 +1,7 @@
 //! [`BlurPinsStyle`]: the pins' marks, from tokens.
 
 use craft_behavior::Metrics;
-use craft_ui::style::{ComponentStyle, FocusLook, HandleLook, StyleColor, StyleCx};
+use craft_ui::style::{ComponentStyle, FocusLook, HandleLook, MarkerLook, StyleColor, StyleCx};
 
 use super::grab::PinReach;
 
@@ -18,7 +18,7 @@ const ROUND_CORNER: f32 = 1.0;
 pub struct BlurPinsStyle {
     #[style(metrics)]
     metrics: Metrics,
-    /// The handles' look; a pin's dot and a shape handle are half its side in radius.
+    /// The handles' look; a shape handle is half its side in radius.
     pub(super) handle: HandleLook,
     /// How near a press grabs each mark.
     pub(super) reach: PinReach,
@@ -31,10 +31,9 @@ pub struct BlurPinsStyle {
     pub(super) turn_extra: f32,
     /// The rounding handle's corner radius.
     pub(super) round_corner: f32,
-    /// The marks' line and fill.
-    pub(super) line: StyleColor,
-    /// The halo under the marks.
-    pub(super) halo: StyleColor,
+    /// The pins, the ring and the lines: the marker's ring over its halo; a handle is filled with the ring colour and
+    /// edged with the halo.
+    pub(super) marker: MarkerLook,
     /// The ring's amount arc.
     pub(super) amount: StyleColor,
     pub(super) focus: FocusLook,
@@ -55,8 +54,7 @@ impl BlurPinsStyle {
             feather_extra: FEATHER_EXTRA,
             turn_extra: TURN_EXTRA,
             round_corner: ROUND_CORNER,
-            line: cx.color(tokens.color.overlay.handle_fill),
-            halo: cx.color(tokens.color.surface.panel),
+            marker: cx.marker(),
             amount: cx.color(tokens.color.accent.solid),
             focus: cx.focus_look(),
         }

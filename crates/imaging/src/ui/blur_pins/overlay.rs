@@ -11,7 +11,7 @@ use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Name, Numeric, Outcome, PaintUi, PartsCx,
     Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
-use craft_ui::primitives::{ContentPainterCx, Draw, FocusKind, FocusRing, PaintShape, StrokeWidth};
+use craft_ui::primitives::{ContentPainterCx, Draw, FocusKind, FocusRing, Marker, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::KeyUse;
 use craft_ui::style::StyleCx;
@@ -458,7 +458,7 @@ impl Component for BlurPinsOverlay<'_> {
             if pins.selected == Some(index) {
                 selected(&scene, pin, centre);
             } else {
-                painter.outline(&PaintShape::Circle(centre, scene.dot));
+                draw.marker(&style.marker, &Marker::hollow(centre));
             }
             if focused == Some(index as u64) {
                 let footprint =
@@ -492,18 +492,23 @@ struct Scene<'a> {
     view: &'a CanvasView,
     pins: &'a BlurPins,
     style: &'a BlurPinsStyle,
-    /// A dot's and a handle's radius.
+    /// A shape handle's radius.
     dot: f32,
 }
 
 impl Scene<'_> {
-    /// A filled handle: the handle colour inside a halo-coloured edge.
+    /// A filled handle: the marker's ring colour inside an edge of its halo.
     fn handle(&self, shape: &PaintShape) {
-        self.draw.fill(shape, self.style.line);
-        self.draw.stroke(shape, StrokeWidth::Thin, self.style.halo);
+        self.draw.fill(shape, self.style.marker.ring);
+        self.draw.stroke(shape, StrokeWidth::Thin, self.style.marker.halo);
     }
 
-    /// `from` to `to` as dashes along the kit's halo-and-line outline.
+    /// A line or outline along `shape`: the marker's ring colour over the kit's halo.
+    fn line(&self, shape: PaintShape) {
+        self.painter.outline_in(&[shape], self.style.marker.ring.egui());
+    }
+
+    /// `from` to `to` as dashes of [`line`](Self::line).
     fn dashed(&self, from: Pos2, to: Pos2) {
         let length = (to - from).length();
         let (dash, period) = (self.style.dash.max(f32::EPSILON), (self.style.dash + self.style.dash_gap).max(f32::EPSILON));
@@ -511,7 +516,7 @@ impl Scene<'_> {
         let mut start = 0.0;
         while start < length {
             let end = (start + dash).min(length);
-            self.painter.outline(&PaintShape::Path(vec![from + along * start, from + along * end]));
+            self.line(PaintShape::Path(vec![from + along * start, from + along * end]));
             start += period;
         }
     }
@@ -536,7 +541,7 @@ fn clipped(a: Point, b: Point, bounds: [f64; 4]) -> Option<(Point, Point)> {
 /// The selected pin: its outline and handles (or Tilt-Shift's lines and dots), its ring with the amount as an arc
 /// from the top, and its dot filled.
 fn selected(scene: &Scene<'_>, pin: &BlurPin, centre: Pos2) {
-    let Scene { painter, draw, view, pins, style, dot } = *scene;
+    let Scene { draw, view, pins, style, dot, .. } = *scene;
     let screen = |p: Point| view.to_screen(p);
     if let Some(shape) = pin.iris {
         // Where the blur reaches its full amount (Iris) or where the spin ends.
@@ -549,7 +554,7 @@ fn selected(scene: &Scene<'_>, pin: &BlurPin, centre: Pos2) {
                 screen(iris_point(pins, pin, shape, r * cos, r * sin))
             })
             .collect();
-        painter.outline(&PaintShape::Path(outline));
+        scene.line(PaintShape::Path(outline));
         for (u, v) in AXIS_HANDLES {
             scene.handle(&PaintShape::Circle(screen(iris_point(pins, pin, shape, u, v)), dot));
         }
@@ -575,7 +580,7 @@ fn selected(scene: &Scene<'_>, pin: &BlurPin, centre: Pos2) {
                 if dash {
                     scene.dashed(screen(a), screen(z));
                 } else {
-                    painter.outline(&PaintShape::Path(vec![screen(a), screen(z)]));
+                    scene.line(PaintShape::Path(vec![screen(a), screen(z)]));
                 }
             }
         }
@@ -584,7 +589,7 @@ fn selected(scene: &Scene<'_>, pin: &BlurPin, centre: Pos2) {
         }
     }
     let ring = style.reach.ring;
-    painter.outline(&PaintShape::Circle(centre, ring));
+    draw.marker(&style.marker, &Marker::hollow(centre).radius(ring));
     let fraction = (pin.amount / pins.kind.max()).clamp(0.0, 1.0) as f32;
     if fraction > 0.0 {
         let steps = (fraction * ARC_SEGMENTS).ceil().max(1.0) as usize;
@@ -596,5 +601,5 @@ fn selected(scene: &Scene<'_>, pin: &BlurPin, centre: Pos2) {
             .collect();
         draw.stroke(&PaintShape::Path(arc), StrokeWidth::Thick, style.amount);
     }
-    scene.handle(&PaintShape::Circle(centre, dot));
+    draw.marker(&style.marker, &Marker::filled(centre, style.marker.ring.egui()));
 }

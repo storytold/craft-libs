@@ -12,10 +12,10 @@ use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Name, Numeric, Outcome, PaintUi, PartsCx,
     Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
-use craft_ui::primitives::{PaintShape, StrokeWidth};
+use craft_ui::primitives::{Marker, MarkerSize, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::{Label, Units, WordTemplate};
 use craft_ui::runtime::focus::{EditSet, KeyUse};
-use craft_ui::style::{ComponentStyle, DataColor, Flags, StyleColor, StyleCx};
+use craft_ui::style::{ComponentStyle, Flags, MarkerLook, StyleColor, StyleCx};
 use egui::{Color32, Pos2, Rect, Response, Vec2};
 
 use super::{Pin, PinEdit, PinMeshView, PinSolver, PinWarpSession};
@@ -36,7 +36,7 @@ pub(super) const PIN: PartKey = PartKey::new("pin");
 const MESH: PartKey = PartKey::new("mesh");
 
 /// Photoshop's pin yellow.
-const PIN_FILL: DataColor = DataColor::new(Color32::from_rgb(255, 214, 10));
+const PIN_FILL: Color32 = Color32::from_rgb(255, 214, 10);
 
 /// The commands of Puppet Warp (11). They are app commands: the app runs them with [`PinWarpCommands::apply`] while
 /// the session is open.
@@ -85,12 +85,10 @@ impl PinWarpCommands {
 pub struct PinWarpStyle {
     #[style(metrics)]
     metrics: Metrics,
-    /// A pin's disc diameter.
-    pin: f32,
-    /// A selected pin's core diameter.
+    /// A pin: a yellow marker, its ring in the selected colour while selected.
+    marker: MarkerLook,
+    /// A selected pin's core diameter, in the marker's halo colour.
     core: f32,
-    /// A pin's ring and a selected pin's core.
-    ring: StyleColor,
     /// The fixed-rotation ring and its line.
     turn: StyleColor,
     /// The radius of the fixed-rotation ring.
@@ -458,9 +456,8 @@ impl Component for PinWarp<'_> {
         let overlay = &tokens.color.overlay;
         PinWarpStyle {
             metrics: Metrics::new(),
-            pin: tokens.size.handle.md,
+            marker: cx.marker(),
             core: tokens.size.handle.sm,
-            ring: cx.color(overlay.handle_stroke),
             turn: cx.color(overlay.stroke),
             turn_ring: tokens.size.handle.ring,
             mesh: cx.color(overlay.line),
@@ -480,7 +477,7 @@ impl Component for PinWarp<'_> {
     /// The pins as handle-level drag parts in one roving group, and the mesh below them.
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let (Some(space), Some(pins)) = (canvas_space(&cx.env), cx.value()) else { return };
-        let radius = cx.style.pin / 2.0;
+        let radius = Marker::size_radius(&cx.style.marker, MarkerSize::Regular);
         let selected = self.selection();
         for (i, pin) in pins.iter().enumerate() {
             let part = cx
@@ -528,11 +525,10 @@ impl Component for PinWarp<'_> {
         for i in order {
             let pin = &pins[i];
             let center = space.view.to_screen(pin.at);
-            let disc = PaintShape::Circle(center, style.pin / 2.0);
-            draw.data_fill(&disc, PIN_FILL);
-            draw.stroke(&disc, StrokeWidth::Thin, style.ring);
-            if selected.contains(&i) {
-                draw.fill(&PaintShape::Circle(center, style.core / 2.0), style.ring);
+            let chosen = selected.contains(&i);
+            draw.marker(&style.marker, &Marker::filled(center, PIN_FILL).selected(chosen));
+            if chosen {
+                draw.fill(&PaintShape::Circle(center, style.core / 2.0), style.marker.halo);
                 if let Some(angle) = pin.angle {
                     let direction = space.view.map_vec(DocVec::from_angle(angle.to_radians()));
                     let direction = if direction.length() > 0.0 { direction.normalized() } else { Vec2::X };
