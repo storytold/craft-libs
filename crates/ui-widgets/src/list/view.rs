@@ -66,9 +66,6 @@ pub struct List<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// dragged rows would go. A refused spot shows no drop mark.
     #[prop(func = "Fn(&ListDrag<K>, Option<&K>, usize) -> bool")]
     accepts: Option<DropTest<'a, K>>,
-    /// Files dragged in from the OS may drop on the list; a drop reports `CollectionEvent::FilesDropped`.
-    #[prop]
-    takes_files: bool,
     /// The list is a listbox of options: the popup of a value picker.
     #[prop(flag)]
     listbox: bool,
@@ -98,7 +95,6 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
             can_drag: None,
             drops: Vec::new(),
             accepts: None,
-            takes_files: false,
             listbox: false,
             row_menu: false,
             filter: None,
@@ -238,10 +234,6 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for List<'_, K> {
 
     fn accepts(&self, drag: &ListDrag<K>, over: Option<&K>, insert: usize) -> bool {
         self.accepts.as_ref().is_none_or(|test| test.passes(drag, over, insert))
-    }
-
-    fn takes_files(&self) -> bool {
-        self.takes_files
     }
 
     fn rename_editor(&mut self, ui: &mut Ui, draft: Bind<'_, String>, label: Rect, name: &str) -> Option<EditResponse<String>> {

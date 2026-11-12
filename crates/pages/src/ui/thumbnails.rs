@@ -26,7 +26,8 @@ mod stories;
 use super::view::PageSource;
 use craft_behavior::{EditEvent, IconId, Selection, SelectionChange, keyed};
 use craft_ui::contract::{
-    Bind, CollectionEvent, ContextMenuRequest, NoValue, Outcome, PendingDrop, ReorderMove, ReorderRule, Show as _, ShowCollection as _,
+    Bind, CollectionEvent, ContextMenuRequest, DropAt, DropKind, DropPlace, NoValue, OsFiles, Outcome, PendingDrop, ReorderMove, ReorderRule,
+    Show as _, ShowCollection as _,
 };
 use craft_ui::list::ThumbAspect;
 use craft_ui::primitives::textures::{Priority, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails};
@@ -311,7 +312,7 @@ impl<'a> PageThumbnails<'a> {
                 .reorder(ReorderRule::new())
                 .accepts(move |_, _, insert| insert <= new_page)
                 .drag_count(words.count.counted())
-                .takes_files(true)
+                .takes_drop(DropKind::new(DropPlace::Between, |_: &OsFiles, _| true))
                 .deletable(true);
         }
         let ctx = ui.ctx().clone();
@@ -346,7 +347,7 @@ impl<'a> PageThumbnails<'a> {
         }
         let (drop_target, file_gap) = match shown.response.pending_drop {
             Some(PendingDrop::Reorder(mv)) => (Some(mv), None),
-            Some(PendingDrop::Files { insert }) => (None, Some(insert)),
+            Some(PendingDrop::Drop(DropAt::Gap { insert, .. })) => (None, Some(insert)),
             _ => (None, None),
         };
         for event in shown.response.events {
@@ -363,7 +364,7 @@ impl<'a> PageThumbnails<'a> {
                 }
                 CollectionEvent::Reorder(edit) if editable => events.push(ThumbnailEvent::Reorder(edit)),
                 CollectionEvent::ContextMenu(request) if request.key < count => events.push(ThumbnailEvent::ContextMenu(request)),
-                CollectionEvent::FilesDropped { insert, .. } if editable => events.push(ThumbnailEvent::FilesDropped { insert }),
+                CollectionEvent::Dropped { at: DropAt::Gap { insert, .. }, .. } if editable => events.push(ThumbnailEvent::FilesDropped { insert }),
                 CollectionEvent::Zoom { factor, .. } => {
                     if let Some(zoom) = zoom.as_deref_mut() {
                         *zoom = THUMBNAIL_ZOOM.step(*zoom, if factor > 1.0 { ZoomStep::In } else { ZoomStep::Out });

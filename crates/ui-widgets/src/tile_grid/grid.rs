@@ -261,9 +261,6 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// dragged tiles would go.
     #[prop(func = "Fn(&ListDrag<K>, Option<&K>, usize) -> bool")]
     accepts: Option<DropTest<'a, K>>,
-    /// Files dragged in from the OS may drop on the grid; a drop reports `CollectionEvent::FilesDropped`.
-    #[prop]
-    takes_files: bool,
     /// The layout of this pass, kept for the headers' parts and paint.
     laid: RefCell<Option<GridLayout>>,
     /// The headers this pass shows, in the grid's layer space: the group, its rect and whether it is pinned.
@@ -313,7 +310,6 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
             can_drag: None,
             drops: Vec::new(),
             accepts: None,
-            takes_files: false,
             laid: RefCell::new(None),
             placed: Vec::new(),
             placed_tail: Vec::new(),
@@ -791,10 +787,6 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
         let on_tail = over.is_some_and(|key| self.tail.iter().any(|row| row.key == *key));
         let past_tail = self.tail_from().is_some_and(|from| !self.tail.is_empty() && insert > from);
         !on_tail && !past_tail && self.accepts.as_ref().is_none_or(|test| test.passes(drag, over, insert))
-    }
-
-    fn takes_files(&self) -> bool {
-        self.takes_files
     }
 
     fn rename_editor(&mut self, ui: &mut Ui, draft: Bind<'_, String>, label: Rect, name: &str) -> Option<EditResponse<String>> {

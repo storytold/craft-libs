@@ -50,7 +50,7 @@ type Test<'a, K> = Box<dyn Fn(&dyn Any, &DropAt<K>) -> bool + 'a>;
 
 /// A payload type a collection takes from a drag that did not start in it, at one place, where `accepts` passes. A
 /// drag carries its payload and, for a row drag of a collection with `drag_payload`, a second one: a kind takes either.
-/// The collection's own row drag is its reorder, never a drop kind.
+/// The collection's own row drag is its reorder, never a drop kind. Files dragged in from the OS are a drag of `OsFiles`.
 pub struct DropKind<'a, K> {
     payload: TypeId,
     place: DropPlace,

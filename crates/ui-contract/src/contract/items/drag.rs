@@ -13,7 +13,7 @@ use crate::contract::collection::{
     CollectionEvent, CollectionProps, ColumnKind, DropAt, DropPayload, DropPlace, ListDrag, PendingDrop, ReorderMove, ToggleColumn, ToggleEdit,
 };
 use crate::contract::reorder;
-use crate::contract::{Collection, Cx, DragPreview, DropMark, DropTarget, OsFiles, Pointer as _};
+use crate::contract::{Collection, Cx, DragPreview, DropMark, DropTarget, Pointer as _};
 use crate::runtime::drag;
 use crate::runtime::env::Label;
 use craft_behavior::{
@@ -261,23 +261,6 @@ impl DropTarget<dyn Any + Send + Sync> for KindDrop {
 
     fn mark(&self, _: &DropOperation) -> DropMark {
         self.mark
-    }
-}
-
-/// Files from the OS dropped where the rows say an internal drag would.
-struct FileDrop {
-    spot: Option<Spot>,
-}
-
-impl DropTarget<OsFiles> for FileDrop {
-    type Drop = Spot;
-
-    fn accept(&self, _: &OsFiles, _: Pos2, _: DropOperation) -> Option<Spot> {
-        self.spot
-    }
-
-    fn mark(&self, drop: &Spot) -> DropMark {
-        drop.mark
     }
 }
 
@@ -618,20 +601,6 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         } else {
             self.drags.grabbed = None;
             self.kind_drop(comp, cx, layout, (rect, offset, rtl));
-        }
-        if comp.takes_files()
-            && let Some((files, at)) = cx.dragging::<OsFiles>()
-        {
-            let at = layer(at);
-            let spot = if self.source.is_empty() { self.empty_spot(rect, at) } else { self.spot(layout, rect, offset, rtl, None, at) };
-            let ordinal = drag::next_ordinal(&cx.core.ctx, cx.core.id);
-            if let Some(spot) = cx.drop_target::<OsFiles, _>(&FileDrop { spot }) {
-                self.events.push(CollectionEvent::FilesDropped { insert: spot.insert, files: files.files.clone() });
-            } else if let Some(spot) = spot
-                && drag::winning(&cx.core.ctx, cx.core.id, ordinal)
-            {
-                self.drags.pending = Some(PendingDrop::Files { insert: spot.insert });
-            }
         }
     }
 

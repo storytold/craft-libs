@@ -15,7 +15,7 @@ use std::sync::Arc;
 /// The header is a row of the grid's outline, as a tree's group row is: it holds the keyboard lead, opens and closes
 /// with Left and Right, reports Enter and the context-menu key, and is never selected. Its `key` names that row, so
 /// it differs from the key of every tile. Positions in the grid's events (`CollectionEvent::Reorder`,
-/// `FilesDropped`, the `accepts` test) count the headers as rows: the header of a group sits just before its first
+/// `Dropped`, the `accepts` test) count the headers as rows: the header of a group sits just before its first
 /// tile.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]

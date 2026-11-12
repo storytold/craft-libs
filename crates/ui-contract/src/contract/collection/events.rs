@@ -2,7 +2,6 @@
 
 use super::drops::{DropAt, DropPayload};
 use super::props::LeadSource;
-use crate::runtime::drag::OsFile;
 use craft_behavior::{ColumnKey, DropOperation, EditEvent, PartRef, SelectionChange};
 use egui::{Id, Pos2, Vec2};
 
@@ -215,14 +214,6 @@ pub enum CollectionEvent<K, E> {
         factor: f32,
         /// The pointer the zoom is about.
         about: Pos2,
-    },
-    /// Files from the OS dropped on a collection that takes them (`Collection::takes_files`).
-    #[non_exhaustive]
-    FilesDropped {
-        /// The position of the display order the files land before; the source's length drops them after the last item.
-        insert: usize,
-        /// The files, in the order the OS lists them.
-        files: Vec<OsFile>,
     },
     /// A rename started, committed or was cancelled.
     Rename(EditEvent<Rename<K>>),

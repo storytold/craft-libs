@@ -63,9 +63,6 @@ pub struct Table<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// dragged rows would go. A refused spot shows no drop mark.
     #[prop(func = "Fn(&ListDrag<K>, Option<&K>, usize) -> bool")]
     accepts: Option<DropTest<'a, K>>,
-    /// Files dragged in from the OS may drop on the table; a drop reports `CollectionEvent::FilesDropped`.
-    #[prop]
-    takes_files: bool,
 }
 
 impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Table<'a, K> {
@@ -83,7 +80,6 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Table<'a, K> {
             can_drag: None,
             drops: Vec::new(),
             accepts: None,
-            takes_files: false,
         }
         .label(label)
     }
@@ -154,10 +150,6 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for Table<'_, K> {
 
     fn accepts(&self, drag: &ListDrag<K>, over: Option<&K>, insert: usize) -> bool {
         self.accepts.as_ref().is_none_or(|test| test.passes(drag, over, insert))
-    }
-
-    fn takes_files(&self) -> bool {
-        self.takes_files
     }
 
     fn rename_editor(&mut self, ui: &mut Ui, draft: Bind<'_, String>, label: Rect, name: &str) -> Option<EditResponse<String>> {

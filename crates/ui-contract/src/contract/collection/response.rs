@@ -41,11 +41,6 @@ pub enum PendingDrop<K> {
     Reorder(ReorderMove<K>),
     /// A drop kind takes the payload at the place, as `CollectionEvent::Dropped` would report.
     Drop(DropAt<K>),
-    /// Files from the OS land before `insert`, as `CollectionEvent::FilesDropped` would report.
-    Files {
-        /// The position of the display order the files land before.
-        insert: usize,
-    },
 }
 
 impl<K, E> CollectionResponse<K, E> {

@@ -423,12 +423,10 @@ pub enum CollectionKind {
     Reorder(EditKind),
     /// The selected items of a free layout moved.
     Move(EditKind),
-    /// A drop onto an item.
+    /// A drop a drop kind took.
     Dropped,
     /// The wheel zoomed the collection.
     Zoom,
-    /// Files from the OS dropped on the collection.
-    FilesDropped,
     /// A rename started, committed or was cancelled.
     Rename(EditKind),
     /// A toggle column's cell flipped.
@@ -458,7 +456,6 @@ impl CollectionKind {
             CollectionEvent::Move(edit) => CollectionKind::Move(EditKind::of(edit)?),
             CollectionEvent::Dropped { .. } => CollectionKind::Dropped,
             CollectionEvent::Zoom { .. } => CollectionKind::Zoom,
-            CollectionEvent::FilesDropped { .. } => CollectionKind::FilesDropped,
             CollectionEvent::Rename(edit) => CollectionKind::Rename(EditKind::of(edit)?),
             CollectionEvent::Toggle(edit) => CollectionKind::Toggle(EditKind::of(edit)?),
             CollectionEvent::Column(_) => CollectionKind::Column,
