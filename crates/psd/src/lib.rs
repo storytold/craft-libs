@@ -12,6 +12,8 @@
 //!   both decoding and encoding.
 //! * [`PsdBuilder`] constructs new files from RGBA/gray/CMYK buffers; the
 //!   caller supplies the merged composite (this crate never composites).
+//! * [`Head`] reads only the header, colour mode data and image resources (size, ICC profile,
+//!   EXIF, XMP) from the start of a file, without the layers or pixels.
 //! * [`descriptor`] parses and writes ActionDescriptors.
 //! * [`engine_data`] parses and writes the text engine document of type layers.
 //! * [`text`], [`smart`] and [`adjust`] are read-only views of the blocks a viewer needs: a type
@@ -66,6 +68,7 @@ pub mod filter_effects;
 pub mod fixtures;
 pub mod grd;
 pub mod hdr;
+pub mod head;
 pub mod header;
 pub mod image_data;
 mod io;
@@ -96,6 +99,7 @@ pub use compression::{Compression, PlaneLayout};
 pub use descriptor::{Descriptor, VersionedDescriptor};
 pub use error::{PsdError, Result};
 pub use file::{GlobalLayerMask, LayerInfoPlacement, PsdFile};
+pub use head::Head;
 pub use header::{ColorMode, Header, Version};
 pub use image_data::ImageData;
 pub use layer::{BlendingRanges, ChannelData, LayerFlags, LayerInfo, LayerMask, LayerRecord, MaskData, MaskParameters, RealMask, Rect};

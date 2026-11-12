@@ -1,7 +1,6 @@
 //! The ZIP container: bounded part reads, lenient part names, designmap includes, and the writer.
 
 use std::collections::HashMap;
-use std::io::{Cursor, Read, Write};
 
 use craft_xml::El;
 
@@ -34,12 +33,10 @@ impl Default for Limits {
 /// An IDML package whose parts are decompressed only when asked for, within byte budgets that
 /// don't trust the sizes the archive claims.
 pub struct Package<'a> {
-    zip: zip::ZipArchive<Cursor<&'a [u8]>>,
+    zip: craft_zip::Archive<'a>,
     /// Normalised part name → entry name, first entry wins (zip order, so the choice is stable).
     lenient: HashMap<String, String>,
     limits: Limits,
-    /// Bytes the parts still to be read may expand to.
-    left: u64,
 }
 
 /// `designmap.xml` with the parts it includes.
@@ -63,46 +60,40 @@ impl<'a> Package<'a> {
         Self::open_with(bytes, Limits::DEFAULT)
     }
 
+    /// The declared entry count is checked against [`Limits::max_entries`] before the archive
+    /// is indexed.
     pub fn open_with(bytes: &'a [u8], limits: Limits) -> Result<Self> {
-        let zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| Error::NotIdml(e.to_string()))?;
-        if zip.len() > limits.max_entries {
-            return Err(Error::TooManyEntries { found: zip.len(), limit: limits.max_entries });
-        }
+        let zip =
+            craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: limits.max_entries as u64, max_total_bytes: limits.max_total_bytes })
+                .map_err(|e| match e {
+                    craft_zip::Error::TooManyEntries { declared, limit } => Error::TooManyEntries {
+                        found: usize::try_from(declared).unwrap_or(usize::MAX),
+                        limit: usize::try_from(limit).unwrap_or(usize::MAX),
+                    },
+                    e => Error::NotIdml(e.to_string()),
+                })?;
         let mut lenient: HashMap<String, String> = HashMap::new();
-        for i in 0..zip.len() {
-            let Some(Ok(name)) = zip.name_for_index(i) else { continue };
-            if name.ends_with('/') {
-                continue;
-            }
+        for name in zip.names().filter(|n| !n.ends_with('/')) {
             lenient.entry(normalize_part_name(&name)).or_insert_with(|| name.into_owned());
         }
-        Ok(Package { zip, lenient, limits, left: limits.max_total_bytes })
+        Ok(Package { zip, lenient, limits })
     }
 
     /// The bytes of part `name` (matched exactly, then leniently: writers differ in
     /// percent-encoding, case, path separators and a leading `./` or `/`), or `None` if the
     /// package has no such part.
     pub fn part(&mut self, name: &str) -> Result<Option<Vec<u8>>> {
-        let exact = self.zip.index_for_name(name).filter(|_| !name.ends_with('/'));
-        let Some(i) = exact.or_else(|| self.lenient.get(&normalize_part_name(name)).and_then(|n| self.zip.index_for_name(n))) else {
+        let exact = (self.zip.contains(name) && !name.ends_with('/')).then_some(name);
+        let Some(stored) = exact.or_else(|| self.lenient.get(&normalize_part_name(name)).map(String::as_str)) else {
             return Ok(None);
         };
-        let part = self.zip.name_for_index(i).and_then(|n| n.ok()).map_or_else(|| name.to_string(), |n| n.into_owned());
-        let f = self.zip.by_index(i).map_err(|e| Error::NotIdml(e.to_string()))?;
-        let limit = self.limits.max_part_bytes.min(self.left);
-        if f.size() > limit {
-            return Err(Error::TooLarge { part, limit });
-        }
-        let mut buf = Vec::new();
-        if let Err(e) = f.take(limit.saturating_add(1)).read_to_end(&mut buf) {
-            return Err(Error::Part { part, msg: e.to_string() });
-        }
-        let n = buf.len() as u64;
-        if n > limit {
-            return Err(Error::TooLarge { part, limit });
-        }
-        self.left = self.left.saturating_sub(n);
-        Ok(Some(buf))
+        let limit = self.limits.max_part_bytes.min(self.zip.budget().remaining());
+        let stored = stored.to_string();
+        self.zip.read(&stored, self.limits.max_part_bytes).map_err(|e| match e {
+            craft_zip::Error::EntryTooLarge { .. } | craft_zip::Error::BudgetSpent { .. } => Error::TooLarge { part: stored.clone(), limit },
+            craft_zip::Error::Entry { msg, .. } => Error::Part { part: stored.clone(), msg },
+            e => Error::NotIdml(e.to_string()),
+        })
     }
 
     /// Part `name` as an element tree ([`crate::parse_part`]).
@@ -114,7 +105,7 @@ impl<'a> Package<'a> {
 
     /// Bytes the parts still to be read may expand to.
     pub fn budget_left(&self) -> u64 {
-        self.left
+        self.zip.budget().remaining()
     }
 
     /// Reads `designmap.xml` and every part it includes.
@@ -173,19 +164,14 @@ fn normalize_part_name(name: &str) -> String {
 }
 
 /// Zips an IDML package: the stored `mimetype` first, then `parts` in order as (name, bytes).
+/// Equal parts give equal bytes.
 pub fn write_package<N: AsRef<str>, D: AsRef<[u8]>>(parts: &[(N, D)]) -> Result<Vec<u8>> {
-    use zip::write::SimpleFileOptions;
-    let fail = |e: &dyn std::fmt::Display| Error::Write(e.to_string());
-    let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    let stored = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    let deflated = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    w.start_file("mimetype", stored).map_err(|e| fail(&e))?;
-    w.write_all(MIMETYPE.as_bytes()).map_err(|e| fail(&e))?;
+    use craft_zip::Compression;
+    let fail = |e: craft_zip::Error| Error::Write(e.to_string());
+    let mut w = craft_zip::Writer::new();
+    w.add("mimetype", MIMETYPE.as_bytes(), Compression::Stored).map_err(fail)?;
     for (name, data) in parts {
-        let data = data.as_ref();
-        // More than 4 GiB needs the ZIP64 form.
-        w.start_file(name.as_ref(), deflated.large_file(data.len() >= u32::MAX as usize)).map_err(|e| fail(&e))?;
-        w.write_all(data).map_err(|e| fail(&e))?;
+        w.add(name.as_ref(), data.as_ref(), Compression::Deflated).map_err(fail)?;
     }
-    w.finish().map(Cursor::into_inner).map_err(|e| fail(&e))
+    w.finish().map_err(fail)
 }
