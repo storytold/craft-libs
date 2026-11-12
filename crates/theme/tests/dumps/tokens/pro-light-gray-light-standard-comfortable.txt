@@ -65,6 +65,7 @@ state.disabled_fill = #b8b8b8ff
 state.text_selection = #378ef046
 state.match = #f0dc005a
 state.match_current = #e8b0466e
+state.stripe = #c6c6c640
 overlay.stroke = #8abfffff
 overlay.line = #378ef0ff
 overlay.halo = #00000099

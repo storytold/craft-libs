@@ -188,6 +188,8 @@ pub struct StateColors {
     pub r#match: Rgba,
     /// The current find result: `status.warn.solid` at 43 %.
     pub match_current: Rgba,
+    /// Every second row of a striped list or table, under the hover and selected fills: `state.hover` at 25 %.
+    pub stripe: Rgba,
 }
 
 /// Canvas overlays: selection paths, handles, guides.
@@ -337,6 +339,7 @@ impl ColorTokens {
                 text_selection: c,
                 r#match: c,
                 match_current: c,
+                stripe: c,
             },
             overlay: OverlayColors {
                 stroke: c,
@@ -542,6 +545,8 @@ color_tokens! {
     StateMatch = "state.match" => state.r#match;
     /// `state.match_current`
     StateMatchCurrent = "state.match_current" => state.match_current;
+    /// `state.stripe`
+    StateStripe = "state.stripe" => state.stripe;
     /// `overlay.stroke`
     OverlayStroke = "overlay.stroke" => overlay.stroke;
     /// `overlay.line`

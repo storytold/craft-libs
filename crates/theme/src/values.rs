@@ -252,6 +252,7 @@ pub(super) fn source(token: ColorToken, mode: Mode) -> ColorSource {
         T::StateTextSelection => Faded(T::AccentSolid, 0x46),
         T::StateMatch => Faded(T::DataYellow, 0x5a),
         T::StateMatchCurrent => Faded(T::StatusWarnSolid, 0x6e),
+        T::StateStripe => Faded(T::StateHover, 0x40),
         T::OverlayStroke => Accent(9),
         T::OverlayLine => Same(T::AccentSolid),
         T::OverlayHalo => Fixed(Rgba::BLACK.with_alpha(alpha(0.6))),

@@ -853,7 +853,7 @@ Maintainer reference. The rule is in [5.4 Dimensions](#54-dimensions): component
 | Line | divider, border, control edge, knob edge, mark, focus |
 | Accent | solid, hover, pressed, strong (+ hover, pressed), soft, text |
 | Status | good, warn, bad, info, each with fg, bg, border, solid |
-| State | hover, pressed, selected, selected hover, disabled fill |
+| State | hover, pressed, selected, selected hover, disabled fill, stripe |
 | Canvas overlay | stroke, halo, handle, marquee, guide, grid |
 | Data | 8 series; histogram R, G, B, luma |
 
