@@ -163,8 +163,8 @@ impl Component for Slider<'_> {
         let control = cx.control();
         let length = cx.tokens.size.length.track;
         SliderStyle {
-            // Where a row shrinks it, the track narrows to a short field's length.
-            metrics: Metrics::new().min_size(Vec2::new(length, control.height)).least_width(cx.tokens.size.length.short),
+            // Where a row shrinks it, the track narrows down to a square of the control's height.
+            metrics: Metrics::new().min_size(Vec2::new(length, control.height)).least_width(control.height),
             focus: cx.focus_look(),
             mark_text: track::mark_text(cx),
             track: cx.track(),
