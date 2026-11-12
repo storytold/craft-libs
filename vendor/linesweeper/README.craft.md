@@ -16,6 +16,7 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 | File | Change |
 |---|---|
 | `src/order.rs`, `src/sweep/sweep_line.rs`, `src/position.rs` | `ComparisonCache` stores one `CurveOrder` per pair of segments instead of one for each direction, and flips it when the pair is looked up in the other order. `ComparisonCache::evict_ended` drops the pairs in which a segment ends above a given height, once the cache has doubled since its last scan. `Sweeper` calls it on both of its caches each time the sweep line moves down, and `compute_positions` calls it each time it takes the next height from its queue. Both caches used to keep every pair the sweep compared until the sweep ended, so a sweep of a 2,001-point star polygon held 4,001,998 cached orders (1,463 MiB). Code comments label the changes `Craft patch (comparison cache size)`. The `one_order_per_pair` and `reversed_lookup_flips_the_stored_order` tests check the stored and flipped orders, `ended_pairs_leave_the_comparison_cache` checks that a sweep of a tall band keeps fewer than a tenth of the pairs, and `evicting_comparisons_keeps_the_sweep_lines` and `evicting_comparisons_keeps_the_correct_positions` check that the sweep lines, output events and positions do not change. |
+| `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
