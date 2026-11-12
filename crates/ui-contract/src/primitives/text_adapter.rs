@@ -60,8 +60,6 @@ pub(crate) struct TextState {
     /// The pass time the caret last moved or text was typed, for the blink.
     pub caret_moved: f64,
     pub focused: bool,
-    /// The caret a click chose before the field took focus.
-    pub click_caret: Option<usize>,
     pub completions: completion::Completions,
 }
 
@@ -98,8 +96,6 @@ pub(crate) struct AdapterIn<'a> {
     pub focusable: bool,
     /// The widget takes the pointer (`text_edit::Edit::pointer`).
     pub pointer: bool,
-    /// Where a click that enters the field went down: the caret goes to the character there.
-    pub click: Option<Pos2>,
     pub rtl: bool,
     /// The text widget holds key focus.
     pub focused: bool,
@@ -118,8 +114,6 @@ pub(crate) struct AdapterOut {
     pub focused: bool,
     /// The screen y of the first row's baseline; `None` while the text is empty.
     pub baseline: Option<f32>,
-    /// The character `AdapterIn::click` fell at.
-    pub clicked_char: Option<usize>,
 }
 
 /// The rows of a laid-out text as AccessKit lines, with the byte where each starts in the text.
@@ -377,8 +371,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     }
     state.focused = shown.focused;
     let full = display;
-    let clicked_char = input.click.map(|pos| shown.char_at(pos));
     let layout = TextLayout::new(shown.galley, false, full);
     let baseline = (!layout.full.is_empty()).then(|| shown.galley_pos.y + layout.first_baseline);
-    AdapterOut { layout, focused: shown.focused, baseline, clicked_char }
+    AdapterOut { layout, focused: shown.focused, baseline }
 }

@@ -55,13 +55,6 @@ pub(crate) struct Shown {
     pub galley_pos: egui::Pos2,
 }
 
-impl Shown {
-    /// The character index a screen position falls at.
-    pub fn char_at(&self, pos: egui::Pos2) -> usize {
-        self.galley.cursor_from_pos(pos - self.galley_pos).index.0
-    }
-}
-
 /// Runs the widget at `edit.rect`.
 pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
     let Edit {

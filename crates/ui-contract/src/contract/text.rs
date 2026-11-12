@@ -370,8 +370,8 @@ pub(crate) fn run<C: Component>(
     let enabled = cx.core.resolved.enabled && decl.options.enabled;
     let focusable = super::steps::takes_focus(cx.core.resolved) && decl.options.enabled;
     // A component that senses a drag on its root scrubs its value by it: the field takes the pointer only once it is
-    // in edit, a press that begins in edit stays the text's (a drag selects), and a click that enters it puts the
-    // caret where it went down.
+    // in edit, a press that begins in edit stays the text's (a drag selects), and a click that enters it selects as
+    // focus does (`decl.caret`).
     let scrubs = cx.core.root_sense.contains(craft_behavior::Sense::DRAG);
     let mut in_edit_before = false;
     if scrubs {
@@ -389,10 +389,6 @@ pub(crate) fn run<C: Component>(
     }
     let pointer = !scrubs || in_edit_before || (focused && !cx.core.press.phase.is_drag());
     cx.core.text_takes_pointer = pointer;
-    let click = match cx.core.press.phase {
-        craft_behavior::PressPhase::Release { pos, click: true, .. } if scrubs && focusable => Some(pos),
-        _ => None,
-    };
     let read_only = cx.core.resolved.read_only || !enabled;
     let ink = decl.options.ink.map_or(ink, |own| crate::style::ink_color(&crate::runtime::env::Env::of(ui).tokens, own));
     let ink = if enabled { ink } else { crate::style::rgba_color(crate::runtime::env::Env::of(ui).tokens.color.text.disabled) };
@@ -413,7 +409,6 @@ pub(crate) fn run<C: Component>(
             enabled,
             focusable,
             pointer,
-            click,
             rtl,
             focused,
             ink,
@@ -424,26 +419,23 @@ pub(crate) fn run<C: Component>(
             now,
         },
     );
+    // While the text widget takes the pointer it lies over the root and egui hands it the presses there: it stands for
+    // the root, so the focus service resolves such a press among the root's shapes and the field keeps its focus.
+    if pointer && focusable {
+        crate::runtime::pointer::record_widgets(&ctx, ui.layer_id(), id, &[widget], true);
+    }
     // Focus that moved to another part of the component leaves the text part like a focus loss: the draft commits.
     let left_for_part = out.focused && cx.active_part().is_some();
     if left_for_part {
         state.focused = false;
     }
     let commit_now = step.commit_now || (was_focused && left_for_part);
-    if out.clicked_char.is_some() {
-        state.click_caret = out.clicked_char;
-    }
     if out.focused && !left_for_part && !was_focused {
         let len = decl.shown.chars().count();
-        match (state.click_caret.take(), decl.caret) {
-            (Some(at), _) => adapter::select(&ctx, widget, at, at),
-            (None, Caret::All) => adapter::select(&ctx, widget, 0, len),
-            (None, _) => adapter::select(&ctx, widget, len, len),
+        match decl.caret {
+            Caret::All => adapter::select(&ctx, widget, 0, len),
+            _ => adapter::select(&ctx, widget, len, len),
         }
-    } else if out.focused
-        && let Some(at) = state.click_caret.take()
-    {
-        adapter::select(&ctx, widget, at, at);
     }
     if decl.options.complete.is_some() {
         drive_completions(cx, &mut state);
