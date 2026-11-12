@@ -8,15 +8,24 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::formula::{Links, Mode, SupBook, Unsupported, Xti, cell_error, decode};
-use crate::model::{CalcMode, Cell, CellRef, Column, DefinedName, Formula, Range, Row, Sheet, Value, View, Visibility, Workbook};
+use crate::model::{
+    CalcMode, Cell, CellRef, Column, ConditionRule, ConditionalFormat, DefinedName, Formula, Note, Picture, Range, Row, Sheet, Value, View,
+    Visibility, Workbook,
+};
 use crate::records::{Cursor, Record, Records};
-use crate::{Error, Limits, Read, Warning, styles};
+use crate::{Error, Limits, Read, Warning, cond, drawing, notes, styles};
 
 const MAX_STRINGS: usize = 4_000_000;
 const MAX_SHEETS: usize = 4096;
 const MAX_NAMES: usize = 65_536;
 const MAX_XFS: usize = 65_536;
 const MAX_MERGES: usize = 100_000;
+/// Bytes of drawing records kept for the workbook's drawing group, and for one sheet.
+const MAX_DRAWING: usize = 256 << 20;
+/// Pictures placed on one sheet at most.
+const MAX_PICTURES: usize = 65_536;
+/// Comments kept on one sheet at most.
+const MAX_NOTES: usize = 65_536;
 /// The Workbook stream is read whole; larger ones are refused.
 const MAX_STREAM: u64 = 1 << 30;
 /// Distinct warnings kept.
@@ -160,6 +169,8 @@ struct Globals {
     date1904: bool,
     formats: HashMap<u16, String>,
     styles: styles::StyleRecords,
+    /// The workbook's pictures (the drawing group's BStore), `pib` 1 first.
+    blips: Vec<drawing::Blip>,
     sst: Vec<Arc<str>>,
     links: Links,
     names: Vec<Lbl>,
@@ -210,7 +221,9 @@ pub fn read_with(bytes: &[u8], limits: Limits) -> Result<Read, Error> {
         parsed.push((bs.visibility, st));
     }
     // Every sheet's mandatory text is charged by now; shared formulas take what is left.
+    let mut filtered = Vec::with_capacity(parsed.len());
     for (visibility, st) in parsed {
+        filtered.push(st.filtered);
         let mut sheet = finish_sheet(st, &mut budget, &mut report);
         sheet.visibility = visibility;
         // Every worksheet repeats the workbook's calculation settings; Excel applies the first.
@@ -223,7 +236,7 @@ pub fn read_with(bytes: &[u8], limits: Limits) -> Result<Read, Error> {
         return Err(invalid("the workbook has no worksheets"));
     }
     wb.active_sheet = g.active_tab.and_then(|t| model_index.get(usize::from(t)).copied().flatten());
-    defined_names(&g, &model_index, &mut wb, &mut report);
+    defined_names(&g, &model_index, &filtered, &mut wb, &mut report);
     Ok(Read { workbook: wb, warnings: report.warnings })
 }
 
@@ -248,6 +261,7 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut Report) -> Result<Gl
     }
     let mut g = Globals::default();
     let mut offsets = HashSet::new();
+    let mut dgg: Vec<u8> = Vec::new();
     while let Some(rec) = recs.next_record()? {
         budget.record()?;
         let mut c = Cursor::new(&rec.parts);
@@ -299,6 +313,8 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut Report) -> Result<Gl
             0x0031 => g.styles.font(&mut c),
             0x0092 => g.styles.palette(&mut c),
             0x0293 => g.styles.style(&mut c),
+            // MsoDrawingGroup: one buffer of drawing records, cut at MAX_DRAWING.
+            0x00EB if dgg.len() < MAX_DRAWING => dgg.extend(c.rest()),
             0x00FC => g.sst = shared_strings(&mut c, budget)?,
             0x01AE => {
                 let _ctab = c.u16()?;
@@ -340,6 +356,7 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut Report) -> Result<Gl
     // The same test `defined_names` applies, before any cell formula is decoded.
     let skipped = g.names.iter().map(|l| !l.rgce.is_empty() && decode(&l.rgce, &l.rgcb, CellRef::new(0, 0), Mode::Name, &g.links).is_err()).collect();
     g.links.skipped = skipped;
+    g.blips = drawing::blip_store(&dgg);
     Ok(g)
 }
 
@@ -441,6 +458,20 @@ struct SheetState<'g> {
     /// Dv records still to read: the last DVal's count, less those read since. Excel reads
     /// exactly that many after a DVal, and none without one.
     dv_left: u32,
+    /// The comment object the last Obj record described, waiting for its TxO.
+    note_object: Option<u16>,
+    /// Comment texts by object id.
+    note_texts: HashMap<u16, String>,
+    /// Note records: the cell, its comment object, the author and whether it shows.
+    notes: Vec<(CellRef, u16, String, bool)>,
+    /// The CondFmt whose CF rules follow: its bounding range's top left cell and its ranges.
+    cf: Option<(CellRef, Vec<Range>)>,
+    /// The workbook's colour table, for conditional formats.
+    palette: [u32; 64],
+    /// The sheet's MsoDrawing records, joined (shapes may run across them).
+    drawing: Vec<u8>,
+    /// The sheet has an AutoFilterInfo record: its filter is on.
+    filtered: bool,
 }
 
 impl SheetState<'_> {
@@ -594,6 +625,13 @@ fn worksheet<'g>(
         dropped: 0,
         unsupported: vec![],
         dv_left: 0,
+        note_object: None,
+        note_texts: HashMap::new(),
+        notes: vec![],
+        cf: None,
+        palette: g.styles.color_table(),
+        drawing: vec![],
+        filtered: false,
     };
     let mut depth = 1usize;
     while let Some(rec) = recs.next_record()? {
@@ -628,6 +666,22 @@ fn finish_sheet(mut st: SheetState<'_>, budget: &mut Budget, report: &mut Report
     let pending = std::mem::take(&mut st.pending);
     resolve_pending(&mut st, budget, &arrays, &shared, &pending);
     blank_array_followers(&mut st, &pending);
+    let mut skipped_pictures = false;
+    for shape in drawing::picture_shapes(&std::mem::take(&mut st.drawing)) {
+        let blip = usize::try_from(shape.pib).ok().and_then(|i| i.checked_sub(1)).and_then(|i| st.g.blips.get(i)).cloned().flatten();
+        match blip {
+            Some((data, mime)) if st.sheet.pictures.len() < MAX_PICTURES => st.sheet.pictures.push(Picture { anchor: shape.anchor, data, mime }),
+            _ => skipped_pictures = true,
+        }
+    }
+    if skipped_pictures {
+        report.warn(Warning::PicturesSkipped);
+    }
+    // A Note names its text's object, whose TxO came earlier in the substream.
+    for (cell, object, author, visible) in std::mem::take(&mut st.notes) {
+        let text = st.note_texts.get(&object).cloned().unwrap_or_default();
+        st.sheet.notes.push(Note { cell, author, text, visible });
+    }
     if st.dropped > 0 {
         report.warn(Warning::CellsOutsideGrid(st.dropped));
     }
@@ -799,9 +853,29 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
                 right_to_left: on(0x0040),
             });
         }
-        0x001C => report.warn(Warning::Comments),
-        0x00EC => report.warn(Warning::Drawings),
-        0x01B0 | 0x0879 => report.warn(Warning::ConditionalFormatting),
+        0x005D | 0x01B6 | 0x001C | 0x00EC => match object_record(rec, &mut c, st, budget, report) {
+            Err(Error::Invalid(_)) => {
+                if rec.id == 0x005D {
+                    st.note_object = None;
+                }
+                report.warn(Warning::DamagedObjects);
+            }
+            r => r?,
+        },
+        0x009D => st.filtered = true,
+        0x01B0 => match cond::condfmt(&mut c) {
+            Ok(cf) => st.cf = Some(cf),
+            Err(_) => {
+                st.cf = None;
+                report.warn(Warning::ConditionalFormattingSkipped);
+            }
+        },
+        0x01B1 => {
+            if conditional_format(&mut c, st).is_none() {
+                report.warn(Warning::ConditionalFormattingSkipped);
+            }
+        }
+        0x0879 => report.warn(Warning::ConditionalFormatting12),
         // A short DVal starts no rules.
         0x01B2 => st.dv_left = crate::dv::dval(&mut c).unwrap_or(0),
         0x01BE => {
@@ -827,6 +901,68 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
         _ => {}
     }
     Ok(())
+}
+
+/// The drawing-layer records of a sheet: comment objects (Obj, TxO, Note) and the drawing
+/// stream (MsoDrawing) that places pictures.
+fn object_record(rec: &Record<'_>, c: &mut Cursor<'_, '_>, st: &mut SheetState<'_>, budget: &mut Budget, report: &mut Report) -> Result<(), Error> {
+    match rec.id {
+        // Obj: FtCmo first (ft 0x15, cb, object type, id).
+        0x005D => {
+            let ft = c.u16()?;
+            c.u16()?;
+            let ot = c.u16()?;
+            let id = c.u16()?;
+            st.note_object = (ft == 0x15 && ot == notes::OT_NOTE).then_some(id);
+            if ft == 0x15 && ot == 5 {
+                report.warn(Warning::Charts);
+            }
+        }
+        // TxO: the text of the comment object just described.
+        0x01B6 => {
+            if let Some(id) = st.note_object.take() {
+                c.skip(10)?;
+                let cch = usize::from(c.u16()?);
+                let text = notes::txo_text(&rec.parts, cch);
+                budget.text(text.len())?;
+                st.note_texts.insert(id, text);
+            }
+        }
+        // Note: the cell, flags (0x0002: shown), the object id and the author.
+        0x001C => {
+            let (row, col, flags, object) = (c.u16()?, c.u16()?, c.u16()?, c.u16()?);
+            let author = c.string().unwrap_or_default();
+            budget.text(author.len())?;
+            if let Some(cell) = st.pos(row, col)
+                && st.notes.len() < MAX_NOTES
+            {
+                st.notes.push((cell, object, author, flags & 0x0002 != 0));
+            }
+        }
+        0x00EC if st.drawing.len() < MAX_DRAWING => st.drawing.extend(c.rest()),
+        _ => {}
+    }
+    Ok(())
+}
+
+/// One CF record of the current CondFmt; `None` when it is not kept.
+fn conditional_format(c: &mut Cursor<'_, '_>, st: &mut SheetState<'_>) -> Option<()> {
+    let g = st.g;
+    let rule = cond::cf(c, &st.palette, |ifmt| g.formats.get(&ifmt).cloned()).ok()?;
+    let (base, ranges) = st.cf.as_ref()?;
+    if ranges.is_empty() || st.sheet.conditional_formats.len() >= cond::MAX_RULES {
+        return None;
+    }
+    // The formulas are offsets from the top left cell of the CondFmt's bounding range.
+    let formula =
+        |rgce: &[u8]| (!rgce.is_empty()).then(|| decode(rgce, &[], *base, Mode::Cell, &g.links).ok().map(|e| crate::expr::print(&e))).flatten();
+    let rule_kind = match (rule.kind, rule.operator) {
+        (1, Some(operator)) => ConditionRule::CellIs { operator, formula1: formula(&rule.rgce1)?, formula2: formula(&rule.rgce2) },
+        (2, _) => ConditionRule::Expression { formula: formula(&rule.rgce1)? },
+        _ => return None,
+    };
+    st.sheet.conditional_formats.push(ConditionalFormat { ranges: ranges.clone(), rule: rule_kind, format: rule.format });
+    Some(())
 }
 
 /// MergeCells ([MS-XLS] 2.4.168).
@@ -892,7 +1028,7 @@ fn formula_cell(c: &mut Cursor<'_, '_>, st: &mut SheetState<'_>, budget: &mut Bu
     Ok(())
 }
 
-fn defined_names(g: &Globals, model_index: &[Option<usize>], wb: &mut Workbook, report: &mut Report) {
+fn defined_names(g: &Globals, model_index: &[Option<usize>], filtered: &[bool], wb: &mut Workbook, report: &mut Report) {
     let scope_of = |itab: u16| -> Option<Option<usize>> {
         if itab == 0 {
             return Some(None);
@@ -916,6 +1052,19 @@ fn defined_names(g: &Globals, model_index: &[Option<usize>], wb: &mut Workbook, 
                     sheet.print_area = Some(text);
                 } else {
                     sheet.print_titles = Some(text);
+                }
+            }
+            // _FilterDatabase: the AutoFilter's range, on a sheet whose filter is on.
+            Some(13) => {
+                let Some(si) = scope else { continue };
+                if !filtered.get(si).copied().unwrap_or(false) {
+                    continue;
+                }
+                let area = text.rsplit('!').next().unwrap_or("").replace('$', "");
+                if let (Some(range), Some(sheet)) = (Range::parse(&area), wb.sheets.get_mut(si))
+                    && sheet.autofilter.is_none()
+                {
+                    sheet.autofilter = Some(range);
                 }
             }
             Some(_) => {}

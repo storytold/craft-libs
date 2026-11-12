@@ -34,7 +34,22 @@ No third-party implementation was consulted.
   and flags, in SpreadsheetML's terms. Exactly the DVal's count of rules is read, as Excel does;
   a rule Excel would refuse is skipped with a warning, and at most 65,536 are kept per sheet.
 
-Not read: charts, pictures, comments, conditional formats, hyperlinks,
+- Cell comments: each Note's cell, author and visibility, with its text object's text (Obj,
+  TxO and its Continue records).
+- Conditional formats: CondFmt ranges with their "cell value is" and "formula is" CF rules,
+  formulas relative to the bounding range, and the DXFN as a `DifferentialFormat` whose unset
+  parts are `None`.
+- Pictures: the drawing group's BLIP store and each sheet's picture shapes with their client
+  anchors (cells and fractions): PNG, JPEG, EMF and WMF (inflated, a WMF given its placeable
+  header back), and DIB as BMP. Shapes that show one picture share its bytes.
+- The AutoFilter range (AutoFilterInfo with the `_FilterDatabase` name); not its criteria.
+
+Limits for these: 256 MiB of drawing records for the workbook and for each sheet, 4096 stored
+pictures, 256 MiB of inflated metafiles in all (64 MiB each), 65,536 pictures, comments and
+conditional formats per sheet. A damaged comment, object or conditional-format record is
+skipped with a warning.
+
+Not read: charts, other shapes, newer conditional formats (CF12), hyperlinks,
 PivotTables, macros. Each is named once in `Read::warnings`. Encrypted workbooks
 (`Error::Encrypted`) and BIFF5 and older (`Error::Biff5`) are refused. There is no writer
 (`craft_xls::testing` builds small fixtures for tests).

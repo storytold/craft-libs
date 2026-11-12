@@ -8,9 +8,11 @@
 //! (number formats, fonts, fills, borders, alignment, protection, with palette colours
 //! resolved), user-defined cell styles, merged cells, column and row records, sheet display
 //! flags, calculation settings, defined names, print areas and print titles, data validation
-//! rules, and the 1904 date flag. Widths and heights stay in the file's units.
+//! rules, cell comments, conditional formats ("cell value is" and "formula is"), pictures with
+//! their cell anchors, the AutoFilter range, and the 1904 date flag. Widths, heights and anchors
+//! stay in the file's units.
 //!
-//! Everything else (charts, pictures, comments, conditional formats, hyperlinks,
+//! Everything else (charts, other shapes, newer conditional formats, hyperlinks,
 //! PivotTables, macros) is skipped and named in [`Read::warnings`]. Encrypted workbooks and
 //! versions before BIFF8 are refused ([`Error::Encrypted`], [`Error::Biff5`]). A formula that
 //! cannot be put back into text (links to other workbooks, macro commands, unknown tokens)
@@ -30,11 +32,14 @@
 //! # }
 //! ```
 
+mod cond;
+mod drawing;
 mod dv;
 mod expr;
 mod formula;
 mod ftab;
 mod model;
+mod notes;
 mod read;
 mod records;
 mod styles;
@@ -43,9 +48,9 @@ pub mod testing;
 
 pub use craft_sheet::{DEFAULT_PALETTE, quote_sheet, sheet_needs_quotes};
 pub use model::{
-    Alignment, BorderLine, BorderStyle, Borders, Calc, CalcMode, Cell, CellError, CellFormat, CellRef, Color, Column, DataValidation, DefinedName,
-    ErrorStyle, Fill, Font, Formula, HAlign, Pattern, Range, Row, Script, Sheet, Underline, VAlign, ValidationOperator, ValidationType, Value, View,
-    Visibility, Workbook,
+    Alignment, BorderLine, BorderStyle, Borders, Calc, CalcMode, Cell, CellError, CellFormat, CellRef, ClientAnchor, Color, Column, ConditionRule,
+    ConditionalFormat, DataValidation, DefinedName, DifferentialFormat, DxfFill, ErrorStyle, Fill, Font, Formula, HAlign, Note, Operator, Pattern,
+    Picture, Range, Row, Script, Sheet, Underline, VAlign, ValidationType, Value, View, Visibility, Workbook,
 };
 pub use read::{is_xls, read, read_with};
 
@@ -87,12 +92,23 @@ pub enum Warning {
     MissingSharedString,
     #[error("what-if data tables were not read; their values were kept")]
     DataTable,
-    #[error("cell comments were not read")]
-    Comments,
-    #[error("pictures, charts and shapes were not read")]
-    Drawings,
-    #[error("conditional formatting was not read")]
-    ConditionalFormatting,
+    /// Some comment or drawing object records were shorter than they say and were skipped.
+    #[error("some comment or object records were damaged and skipped")]
+    DamagedObjects,
+    /// Charts embedded in a worksheet are not read.
+    #[error("charts were not read")]
+    Charts,
+    /// Pictures in a format that is not read (PICT, TIFF), damaged ones, ones past the limits,
+    /// and shapes that name a missing picture.
+    #[error("some pictures were damaged, in a format that is not read (PICT, TIFF), or past the limits, and were skipped")]
+    PicturesSkipped,
+    /// Some CF records could not be read: a rule type other than "cell value is" and "formula
+    /// is", a formula that could not be decoded, a damaged record, or more than the reader keeps.
+    #[error("some conditional formatting rules could not be read and were skipped")]
+    ConditionalFormattingSkipped,
+    /// CF12 records (Excel 2007 data bars, colour scales, icon sets) are not read.
+    #[error("newer conditional formats (data bars, colour scales, icon sets) were not read")]
+    ConditionalFormatting12,
     /// Some Dv records could not be read: Excel would refuse them (an unknown alert style or
     /// operator, a formula or range list past the record), no range was left, a formula could not
     /// be decoded, or the sheet had more rules than the reader keeps.
