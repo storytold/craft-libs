@@ -207,6 +207,8 @@ pub enum ActivateOn {
     Thumbnail(LayerPart),
     /// The rest of the row, or Enter.
     Row,
+    /// A Smart Filter's Blending Options button ([`SubRow::options`](crate::ui::tree::SubRow::options)).
+    Options,
 }
 
 /// Where a dropped layer lands relative to its target.

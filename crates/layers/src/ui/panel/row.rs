@@ -29,6 +29,8 @@ pub(super) const NAME: ColumnKey = ColumnKey::new("name");
 pub(super) const LOCK_PART: u16 = 0;
 /// The trailing effects disclosure.
 pub(super) const FX_PART: u16 = 1;
+/// A Smart Filter's trailing Blending Options button.
+pub(super) const OPTIONS_PART: u16 = 2;
 
 /// The cross over a disabled mask is a fixed data colour, like the label colours.
 const DISABLED_MASK: LabelColor = LabelColor::Red;
@@ -297,6 +299,10 @@ fn sub_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id, group: Sub
         }
     } else if let Some(icon) = sub.icon {
         row = row.icon(IconSpec::svg(icon));
+    }
+    if sub.options {
+        let face = TrailingFace::Icon(IconSpec::svg(IconId::new("adjustments")));
+        row = row.trailing_part(TrailingPart::new(OPTIONS_PART), face, named(&words.blending_options, &sub.label));
     }
     row
 }

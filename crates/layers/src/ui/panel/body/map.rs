@@ -13,7 +13,7 @@ use super::super::context::PanelContext;
 use super::super::drag::drop_event;
 use super::super::events::{ActivateOn, LayerColumn, LayerSelect, LayerToggle, LayersEvent, MenuTarget};
 use super::super::menu::OpenMenu;
-use super::super::row::{EYE, FX_PART, LOCK_PART, NAME};
+use super::super::row::{EYE, FX_PART, LOCK_PART, NAME, OPTIONS_PART};
 use super::rows::{ToggleSweeps, thumb_click_replaces_select, thumb_part};
 use crate::ui::tree::{LayerRowKey, LayerTree};
 
@@ -133,7 +133,7 @@ pub(super) fn map_events<T: LayerTree>(
                     events.push(LayersEvent::MaskLink { layer: row.layer().clone(), part: mask.part, linked });
                 }
             }
-            CollectionEvent::Item(row, RowEvent::Trailing { part, mods, .. }) => {
+            CollectionEvent::Item(row, RowEvent::Trailing { part, mods, clicks, .. }) => {
                 let layer = row.layer().clone();
                 match part {
                     part if part == craft_ui::list::TrailingPart::new(LOCK_PART) => {
@@ -142,6 +142,10 @@ pub(super) fn map_events<T: LayerTree>(
                     }
                     part if part == craft_ui::list::TrailingPart::new(FX_PART) => {
                         events.push(LayersEvent::FxOpen { open: !tree.effects_open(&layer), layer, all: mods.alt });
+                    }
+                    // The Blending Options open on a double click, as Photoshop's do.
+                    part if part == craft_ui::list::TrailingPart::new(OPTIONS_PART) && clicks == 2 => {
+                        events.push(LayersEvent::Activate { row, on: ActivateOn::Options });
                     }
                     _ => {}
                 }

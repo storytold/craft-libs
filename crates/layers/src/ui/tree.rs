@@ -407,12 +407,16 @@ pub struct SubRow {
     /// A Smart Filters header shows the shared filter-mask thumbnail (hidden at thumbnail size
     /// None).
     pub mask: bool,
+    /// A Smart Filter's Blending Options button at the row's end: a double click on it is
+    /// [`LayersEvent::Activate`](super::panel::LayersEvent::Activate) on
+    /// [`ActivateOn::Options`](super::panel::ActivateOn::Options).
+    pub options: bool,
 }
 
 impl SubRow {
-    /// An "on" row with an eye, no icon and no mask thumbnail, reading `label`.
+    /// An "on" row with an eye, no icon, no mask thumbnail and no options button, reading `label`.
     pub fn new(label: impl Into<String>) -> Self {
-        Self { label: label.into(), on: true, eye_shown: true, icon: None, mask: false }
+        Self { label: label.into(), on: true, eye_shown: true, icon: None, mask: false, options: false }
     }
 }
 

@@ -58,6 +58,7 @@ craft_ui::words! {
         smart_filters: "layersPanel.smartFilters" = "Smart Filters";
         effect_of: "layersPanel.effectOf" = "effect of {layer}";
         smart_filter_of: "layersPanel.smartFilterOf" = "Smart Filter of {layer}";
+        blending_options: "layersPanel.blendingOptions" = "Blending Options ({row})";
         kind_pixel: "layersPanel.kindPixel" = "pixel layer";
         kind_group: "layersPanel.kindGroup" = "group";
         kind_adjustment: "layersPanel.kindAdjustment" = "adjustment layer";
