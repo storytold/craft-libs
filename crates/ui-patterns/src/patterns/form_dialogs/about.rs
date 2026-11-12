@@ -11,8 +11,9 @@ pub use credits::{AboutInfo, AboutLink, Contributor, Credits, ModelCredit};
 
 use crate::buttons::{Button, IconButton, Link};
 use crate::choice::Segmented;
+use crate::contract::Gap;
 use crate::contract::{
-    Bind, CollectionEvent, ColumnEvent, ColumnSort, ColumnSpec, Entry, NoValue, Outcome, Props as _, Remember as _, SelectMode, Show as _,
+    Bind, CollectionEvent, ColumnEvent, ColumnSort, ColumnSpec, Entry, NoValue, Outcome, Props as _, Remember as _, Scroll, SelectMode, Show as _,
     ShowCollection as _, ShowContainer as _, clicked,
 };
 use crate::dialog::{Dialog, DialogOutput};
@@ -49,6 +50,9 @@ craft_ui::words! {
         real_name: "aboutDialog.realName" = "Real name";
         sort: "aboutDialog.sort" = "Sort";
         reverse: "aboutDialog.reverse" = "Reverse the order";
+        view: "aboutDialog.view" = "View";
+        grab_bag: "aboutDialog.grabBag" = "Grab bag";
+        table: "aboutDialog.table" = "Table";
         counts: template "aboutDialog.counts" = "Contributors: {contributors} · Commits: {commits}";
         no_contributors: "aboutDialog.noContributors" = "No contributor data was built into this copy.";
         no_models: "aboutDialog.noModels" = "No model credits were built into this copy.";
@@ -94,7 +98,7 @@ pub enum AboutTab {
     /// The application's name, blurb and links.
     #[default]
     About,
-    /// The contributors table.
+    /// The contributors, as a grab bag of links or a table.
     Contributors,
     /// The credited AI models.
     Models,
@@ -107,6 +111,8 @@ struct View {
     names: NameMode,
     sort: ContributorSort,
     descending: bool,
+    /// The contributors show as a table; the grab bag of name links otherwise.
+    table: bool,
 }
 
 /// The Models table's columns, the first of which holds the row label.
@@ -187,12 +193,14 @@ impl Outcome for AboutOutput {
 /// Help > About: tabs About, Contributors and Models over the app's [`AboutInfo`] and [`Credits`], with an OK button.
 ///
 /// - **About.** The blurb, the version, the community button and the link row centred, the built-with line faint.
-/// - **Contributors.** Show (Username, Display name, Real name) and Sort (the list, with a button to reverse) over a
-///   table of every figure; a header press sorts by its column. Activating a row (Enter or a double click) reports the
-///   contributor's profile URL as the link (nothing for one without a profile); the row's tooltip is the summary.
+/// - **Contributors.** Show (Username, Display name, Real name), Sort (the list, with a button to reverse) and View
+///   (Grab bag or Table). The grab bag flows the names as links: a click reports the contributor's profile URL as the
+///   link (nothing for one without a profile), and the link's tooltip is the summary. The table has every figure; a
+///   header press sorts by its column, activating a row (Enter or a double click) reports the profile URL, and the
+///   row's tooltip is the summary.
 /// - **Models.** A table of the credited models with their commits, share of all commits and lines.
 ///
-/// The tab, the name mode and the sort order are kept in the dialog's container while it is open. Links are reported
+/// The tab, the name mode, the sort order and the view are kept in the dialog's container while it is open. Links are reported
 /// in [`AboutOutput::link`] and never opened from here. Enter and Escape close the dialog.
 #[must_use = "show the dialog with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
@@ -317,6 +325,7 @@ impl Shown<'_> {
             Entry::new(NameMode::DisplayName, words.display_name.clone()),
             Entry::new(NameMode::RealName, words.real_name.clone()),
         ];
+        let views = [Entry::new(false, words.grab_bag.clone()), Entry::new(true, words.table.clone())];
         let sorts: Vec<Entry<ContributorSort>> = ContributorSort::ALL.iter().map(|key| Entry::new(*key, key.labels(words).0.clone())).collect();
         Stack::new().show(ui, |ui, _| {
             Row::new().wrap(true).show(ui, |ui, _| {
@@ -333,6 +342,8 @@ impl Shown<'_> {
                 if clicked(&IconButton::new(icon).label(words.reverse.clone()).show(ui)) {
                     work.descending = !work.descending;
                 }
+                Divider::vertical().show(ui);
+                Segmented::new(words.view.clone(), Bind::bound(&mut work.table), &views).show(ui);
             });
             let counts =
                 words.counts.fill(&[("contributors", &writer.count(list.len() as u64)), ("commits", &writer.count(self.credits.total_commits))]);
@@ -342,6 +353,23 @@ impl Shown<'_> {
                 return;
             }
             let order = sorted_indices(list, work.names, work.sort, !work.descending);
+            let mode = work.names;
+            if !work.table {
+                // Each name is one link; a link that does not fit moves whole to the next line.
+                Stack::new().scroll(Scroll::vertical()).fill().show(ui, |ui, _| {
+                    Row::new().wrap(true).gap(Gap::Section).show(ui, |ui, _| {
+                        for &at in &order {
+                            let contributor = &list[at];
+                            let name =
+                                Link::new(contributor.name(mode).into_owned()).tooltip(writer.summary(contributor)).id_salt(("name", at)).show(ui);
+                            if clicked(&name) {
+                                *link.borrow_mut() = contributor.profile.as_deref().map(str::to_owned);
+                            }
+                        }
+                    });
+                });
+                return;
+            }
             let columns: Vec<ColumnSpec> = ContributorSort::ALL
                 .iter()
                 .map(|key| {
@@ -356,7 +384,6 @@ impl Shown<'_> {
                     column
                 })
                 .collect();
-            let mode = work.names;
             let source = keyed(&order[..], |at: &usize| *at).with_text(|at| Cow::Owned(list[*at].name(mode).into_owned()));
             let by = if work.descending { ColumnSort::descending(work.sort.column()) } else { ColumnSort::ascending(work.sort.column()) };
             let out = Table::<usize>::new(words.contributors_tab.clone(), columns.clone()).select(SelectMode::Single).sort(Some(by)).show_items(
