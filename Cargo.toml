@@ -77,6 +77,7 @@ craft-math = { path = "crates/math" }
 craft-media = { path = "crates/media", default-features = false }
 craft-media-testkit = { path = "crates/media-testkit" }
 craft-midi = { path = "crates/midi" }
+craft-sf2 = { path = "crates/sf2" }
 craft-mime = { path = "crates/mime" }
 craft-odf = { path = "crates/odf" }
 craft-ods = { path = "crates/ods" }
