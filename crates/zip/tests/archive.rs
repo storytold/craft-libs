@@ -146,3 +146,14 @@ fn written_archives_pass_the_strict_preflight() {
     let directory = preflight(&bytes, Limits { max_entries: 10, max_central_directory_bytes: 1 << 16, max_name_bytes: 256 }).unwrap();
     assert_eq!(directory.entries, 2);
 }
+
+#[test]
+fn a_stored_mimetype_is_read_in_place() {
+    let bytes = archive(&[("mimetype", b"image/openraster", Compression::Stored), ("a", b"x", Compression::Deflated)]);
+    assert_eq!(craft_zip::stored_mimetype(&bytes), Some(&b"image/openraster"[..]));
+    assert_eq!(craft_zip::stored_mimetype(&archive(&[("mimetype", b"x", Compression::Deflated)])), None, "compressed");
+    assert_eq!(craft_zip::stored_mimetype(&archive(&[("a", b"x", Compression::Stored), ("mimetype", b"x", Compression::Stored)])), None, "not first");
+    assert_eq!(craft_zip::stored_mimetype(&archive(&[("mimetype", &[b'a'; 257], Compression::Stored)])), None, "too long");
+    assert_eq!(craft_zip::stored_mimetype(b"PK\x03\x04"), None);
+    assert_eq!(craft_zip::stored_mimetype(&[]), None);
+}
