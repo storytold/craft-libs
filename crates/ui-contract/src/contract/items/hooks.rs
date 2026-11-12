@@ -158,13 +158,13 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
 
     fn measured_extent(&mut self, comp: &mut C, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>) -> Vec2 {
         let id = cx.core.id;
-        self.record_widest(comp, at, id);
+        self.record_largest(comp, at, id);
         self.extent(comp, at.ui, at.at, id, at.scx)
     }
 
     fn pass_extent(&mut self, comp: &mut C, at: &Measuring<'_, '_>, _style: &C::Style, _shown: Option<Arc<ValueOf<C>>>) -> Vec2 {
         let id = at.resolved.id;
-        self.record_widest(comp, at, id);
+        self.record_largest(comp, at, id);
         self.extent(comp, at.ui, at.at, id, at.scx)
     }
 
@@ -179,6 +179,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         self.header.measure(scx);
         let bounded = room.x.is_finite();
         let mut widest = 0.0;
+        let item = comp.measures_items().then(|| layout_memory::measured(ui.ctx(), sub(id, "largest")).map(|measured| measured.took)).flatten();
         let width = match (bounded, self.content_sized(comp)) {
             (true, false) => room.x,
             // No rows: the empty state has no ideal width, so it takes the room, or none where the room is unbounded.
@@ -192,12 +193,12 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             // An unbounded room (a horizontally scrolling body) takes the widest row, as a content-sized collection does.
             (_, _) => {
                 let floor = overlay::drawing_parent(ui.ctx()).map_or(0.0, |layer| crate::contract::overlay::floor_width(ui.ctx(), layer));
-                widest = layout_memory::measured(ui.ctx(), sub(id, "widest")).map_or(0.0, |measured| measured.took.x);
-                widest.max(comp.ideal_width(scx)).max(floor).min(room.x)
+                widest = layout_memory::measured(ui.ctx(), sub(id, "largest")).map_or(0.0, |measured| measured.took.x);
+                widest.max(comp.ideal_width(item, scx)).max(floor).min(room.x)
             }
         };
         let previous = self.layout.take().or_else(|| self.previous.take()).map(|held| Arc::try_unwrap(held).unwrap_or_else(|held| (*held).clone()));
-        let mut layout = comp.item_layout_from(previous, self.source, width, scx);
+        let mut layout = comp.item_layout_from(previous, self.source, width, item, scx);
         if self.header.has_columns() {
             layout.set_columns(&if self.content_sized(comp) { self.header.columns_measured(width, widest) } else { self.header.columns(width) });
         }
@@ -227,7 +228,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             // Under a body sized from its content, a `Fill` collection offers its least width here too: the body
             // has no room of its own to hand it, and the layout above was made at the enclosing room.
             if self.from_content.0 && comp.props(Internal::new()).sizing == Sizing::Fill {
-                let wide = if self.header.has_columns() { self.header.least_width() } else { self.widest_in(comp, ui, id, room).min(room.x) };
+                let wide = if self.header.has_columns() { self.header.least_width() } else { self.largest_in(comp, ui, id, room).x.min(room.x) };
                 return Vec2::new(wide, height);
             }
             return Vec2::new(self.content.x, height);
@@ -243,7 +244,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 } else if self.header.has_columns() {
                     self.header.least_width()
                 } else {
-                    self.widest_in(comp, ui, id, room).min(room.x)
+                    self.largest_in(comp, ui, id, room).x.min(room.x)
                 };
                 Vec2::new(wide, if y || self.capped { height.min(room.y) } else { 0.0 })
             }

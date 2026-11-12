@@ -29,7 +29,7 @@ use craft_behavior::{
     ColumnKey, ColumnWidth, HitLevel, HitPriority, Intent, ItemSource, Metrics, Mixed, PartKey, PointerButton, PressPhase, Selection, Sense,
 };
 use craft_keymap::{Chord, Key, Mods};
-use egui::{CornerRadius, Pos2, Rect, Response, Ui, pos2, vec2};
+use egui::{CornerRadius, Id, Pos2, Rect, Response, Ui, Vec2, pos2, vec2};
 use std::cell::RefCell;
 use std::hash::Hash;
 
@@ -217,6 +217,10 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// The thumbnail size the zoom is a factor of; `None` is the card thumbnail.
     #[prop]
     thumb_size: Option<ThumbSize>,
+    /// Cards are as large as the largest tile measures (an icon tile measures its icon), instead of the zoomed
+    /// thumbnail side; `zoom` and `thumb_size` do not apply.
+    #[prop(flag)]
+    content_cells: bool,
     /// The columns of cards a grid that takes its width from its content asks for: its width holds this many cards and
     /// their gaps. 0 asks for none, so the content decides.
     #[prop]
@@ -296,6 +300,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
             aspect: 1.0,
             zoom: 1.0,
             thumb_size: None,
+            content_cells: false,
             card_columns: 0,
             caption: CaptionPlace::Below,
             detail_line: false,
@@ -379,12 +384,12 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
 
     /// The layout of this pass: `previous` when it was made from the same recipe, else a new arrangement. A card is
     /// the picture plus what the tile adds around it in every tiling.
-    fn laid_out(&self, previous: Option<GridLayout>, source: &dyn ItemSource<K>, width: f32, cx: &StyleCx<'_>) -> GridLayout {
+    fn laid_out(&self, previous: Option<GridLayout>, source: &dyn ItemSource<K>, width: f32, item: Option<Vec2>, cx: &StyleCx<'_>) -> GridLayout {
         let style = TileGridStyle::build(cx, self.card);
         let spacing = style.spacing;
         let around = style.around.get(self.caption, self.detail_line);
         // A card never outgrows the grid: in a column narrower than a card the card takes the column.
-        let mut side = style.picture_side(self.zoom, self.thumb_size).min(width - 2.0 * spacing.inset - around.size().x).max(1.0);
+        let mut side = self.picture_side(&style, item, around).min(width - 2.0 * spacing.inset - around.size().x).max(1.0);
         if self.fill_row && !self.justified {
             let (free, gap, card) = (width, spacing.gap, side + around.size().x);
             let columns = ((free + gap) / (card + gap)).floor().max(1.0);
@@ -428,6 +433,15 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
         };
         *self.laid.borrow_mut() = Some(layout.clone());
         layout
+    }
+
+    /// The side of a card's picture: the largest tile's (`item`, as the items step measured it) less what a tile adds
+    /// around its picture, with `content_cells`; else the zoomed thumbnail side.
+    fn picture_side(&self, style: &TileGridStyle, item: Option<Vec2>, around: Around) -> f32 {
+        match item.filter(|_| self.content_cells) {
+            Some(item) => (item.x - around.size().x).max(1.0),
+            None => style.picture_side(self.zoom, self.thumb_size),
+        }
     }
 
     /// The row that holds the lead while the grid has focus, when the grid has an arrangement.
@@ -744,24 +758,44 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
     }
 
     fn item_layout(&self, source: &dyn ItemSource<K>, width: f32, cx: &StyleCx<'_>) -> GridLayout {
-        self.laid_out(None, source, width, cx)
+        self.laid_out(None, source, width, None, cx)
+    }
+
+    fn measures_items(&self) -> bool {
+        self.content_cells
+    }
+
+    /// The caption place, the detail line and the card look, which `dress` gives every tile.
+    fn dress_inputs(&self) -> u64 {
+        use std::hash::{Hash as _, Hasher as _};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (self.caption, self.detail_line, self.card).hash(&mut hasher);
+        hasher.finish()
     }
 
     /// The last layout again while the width, the rows stamp and everything the arrangement reads are the same.
-    fn ideal_width(&self, cx: &StyleCx<'_>) -> f32 {
+    fn ideal_width(&self, item: Option<Vec2>, cx: &StyleCx<'_>) -> f32 {
         if self.card_columns == 0 {
             return 0.0;
         }
         let style = TileGridStyle::build(cx, self.card);
         let aspect = if self.aspect.is_finite() && self.aspect > 0.0 { self.aspect } else { 1.0 };
-        let card = style.card(style.picture_side(self.zoom, self.thumb_size), aspect, style.around.get(self.caption, self.detail_line)).x;
+        let around = style.around.get(self.caption, self.detail_line);
+        let card = style.card(self.picture_side(&style, item, around), aspect, around).x;
         let columns = self.card_columns as f32;
         // Half a point over, so the division that counts the columns back never rounds below `columns`.
         columns * card + (columns - 1.0) * style.spacing.gap + 2.0 * style.spacing.inset + 0.5
     }
 
-    fn item_layout_from(&self, previous: Option<GridLayout>, source: &dyn ItemSource<K>, width: f32, cx: &StyleCx<'_>) -> GridLayout {
-        self.laid_out(previous, source, width, cx)
+    fn item_layout_from(
+        &self,
+        previous: Option<GridLayout>,
+        source: &dyn ItemSource<K>,
+        width: f32,
+        item: Option<Vec2>,
+        cx: &StyleCx<'_>,
+    ) -> GridLayout {
+        self.laid_out(previous, source, width, item, cx)
     }
 
     /// Every tile gets the grid's caption place and detail line, the card look, and its row's rename state.

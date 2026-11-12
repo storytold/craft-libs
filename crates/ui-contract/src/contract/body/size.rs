@@ -39,9 +39,9 @@ impl PartialEq for MeasuredProps {
     }
 }
 
-/// What a body's measure reads of its env besides the room.
+/// What a measure reads of its env besides the room: a body's, and a collection's of its items.
 #[derive(Clone, PartialEq)]
-struct EnvFacts {
+pub(crate) struct EnvFacts {
     style: crate::style::EnvKey,
     words: u64,
     size: craft_theme::ControlSize,
@@ -56,6 +56,25 @@ struct EnvFacts {
     grid: Option<Id>,
 }
 
+impl EnvFacts {
+    pub(crate) fn of(env: &Env) -> EnvFacts {
+        EnvFacts {
+            style: env.key,
+            words: env.words.generation(),
+            size: env.size,
+            enabled: env.enabled,
+            text_direction: env.text_direction,
+            content: env.content,
+            content_column: env.content_column,
+            unbounded: env.unbounded,
+            row_room: env.row_room,
+            row_line: env.row_line,
+            offered: env.offered,
+            grid: env.grid,
+        }
+    }
+}
+
 impl<'b> BodyHooks<'b> {
     /// The inputs this body's measuring run measures under, once `measured_extent` has its room.
     pub(super) fn measure_key(&self, env: &Env, width: Option<f32>) -> MeasureKey {
@@ -66,20 +85,7 @@ impl<'b> BodyHooks<'b> {
             width,
             shows: (self.open, self.presence.t),
             extent: self.last_extent,
-            env: EnvFacts {
-                style: env.key,
-                words: env.words.generation(),
-                size: env.size,
-                enabled: env.enabled,
-                text_direction: env.text_direction,
-                content: env.content,
-                content_column: env.content_column,
-                unbounded: env.unbounded,
-                row_room: env.row_room,
-                row_line: env.row_line,
-                offered: env.offered,
-                grid: env.grid,
-            },
+            env: EnvFacts::of(env),
         }
     }
 

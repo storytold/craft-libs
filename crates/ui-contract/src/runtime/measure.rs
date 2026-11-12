@@ -42,7 +42,7 @@ pub(crate) struct TypeRuns {
     runs: Vec<(&'static str, u32)>,
 }
 
-/// The collections whose widest row was built and measured, with the pass that counted them.
+/// The collections whose rows were built and measured for the largest, with the pass that counted them.
 #[cfg(feature = "testing")]
 #[derive(Default)]
 struct WidestRuns {
@@ -207,7 +207,7 @@ pub fn last_pass_runs(ctx: &Context) -> Vec<(&'static str, u32)> {
     pass_state::with::<TypeRuns, _>(ctx, |log| if log.pass == last { log.runs.clone() } else { Vec::new() })
 }
 
-/// Counts a build and measure of the rows of the collection `id` for its widest row in this pass.
+/// Counts a build and measure of the rows of the collection `id` for the largest in this pass.
 #[cfg(feature = "testing")]
 pub(crate) fn count_widest(ctx: &Context, id: Id) {
     let pass = ctx.cumulative_pass_nr();
@@ -222,10 +222,11 @@ pub(crate) fn count_widest(ctx: &Context, id: Id) {
     });
 }
 
-/// The collections whose widest row was built and measured in the last pass that did so, and how many times each.
+/// The collections whose rows were built and measured for the largest in the last pass, and how many times each.
 #[cfg(feature = "testing")]
 pub fn widest_runs(ctx: &Context) -> Vec<(Id, u32)> {
-    store::with::<WidestRuns, _>(ctx, |log| log.runs.clone())
+    let last = ctx.cumulative_pass_nr().saturating_sub(1);
+    store::with::<WidestRuns, _>(ctx, |log| if log.pass == last { log.runs.clone() } else { Vec::new() })
 }
 
 /// Counts a sweep of the row `id` that asks its body units for their least widths in this pass.

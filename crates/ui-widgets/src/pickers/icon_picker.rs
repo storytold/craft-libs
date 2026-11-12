@@ -198,6 +198,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> IconPicker<'a, K> {
             .select(SelectMode::Single)
             .activate(ActivateOn::Click)
             .caption(CaptionPlace::None)
+            .content_cells()
             .groups(&shown_groups)
             .collapsible()
             .selection(Bind::given(selection))

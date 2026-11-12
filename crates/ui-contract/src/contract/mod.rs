@@ -519,20 +519,33 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
 
     /// The layout of `source` at `width`, given the layout of the last pass. An implementor may reuse `previous`
     /// when the width and the rows stamp are the same and the source's revision has not moved; the default builds
-    /// the layout anew.
+    /// the layout anew. `item` is the largest ideal size of the items when the collection `measures_items`.
     fn item_layout_from(
         &self,
         _previous: Option<Self::ItemLayout>,
         source: &dyn ItemSource<Self::Key>,
         width: f32,
+        _item: Option<Vec2>,
         cx: &StyleCx<'_>,
     ) -> Self::ItemLayout {
         self.item_layout(source, width, cx)
     }
 
+    /// Whether the layout sizes its items from their own measure: the items step measures every item at its ideal
+    /// size and hands the largest to `item_layout_from` and `ideal_width`. The measure is kept while the items' inputs
+    /// hold (the rows stamp or the source's revision, the item count, the room, the env and `dress_inputs`).
+    fn measures_items(&self) -> bool {
+        false
+    }
+
+    /// What `dress` reads of the collection, hashed: a kept measure of the items serves only while it is the same.
+    fn dress_inputs(&self) -> u64 {
+        0
+    }
+
     /// The width the collection asks for when it takes its width from its content, over its widest row: a grid of
-    /// cards asks for its declared number of columns. 0 asks for nothing.
-    fn ideal_width(&self, _cx: &StyleCx<'_>) -> f32 {
+    /// cards asks for its declared number of columns. 0 asks for nothing. `item` is as `item_layout_from` gets it.
+    fn ideal_width(&self, _item: Option<Vec2>, _cx: &StyleCx<'_>) -> f32 {
         0.0
     }
 

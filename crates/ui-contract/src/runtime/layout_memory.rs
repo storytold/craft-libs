@@ -671,7 +671,7 @@ pub(crate) fn draft<R>(ctx: &Context, run: impl FnOnce() -> R, keep: impl FnOnce
 }
 
 /// Runs `f` as content whose emits no enclosing transcript takes, and whose real run no enclosing body checks: a
-/// collection's rows and its widest-row probe (measured every pass by the collection), a layer's content, a lazy
+/// collection's rows and its largest-row probe (kept by its own transcript), a layer's content, a lazy
 /// child. `stops_changes`: a change the real run finds inside drops no kept transcript outside. Content whose extent
 /// in the body around it comes from its measure (a lazy child) lets the change through.
 pub(crate) fn boundary<R>(ctx: &Context, stops_changes: bool, f: impl FnOnce() -> R) -> R {

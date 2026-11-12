@@ -688,9 +688,13 @@ impl Component for Tile<'_> {
         let ratio = self.aspect.of(1.0);
         let caption = sizes.caption(self.caption, self.has_detail_line());
         let column = sizes.column(self.caption);
-        // The picture is a card of a grid at zoom 1: as wide as the thumbnail side, with what the density adds around
-        // it. A narrower room shrinks the picture to fit.
-        let side = if cx.proposal == Proposal::Min { sizes.thumbs[0] } else { sizes.thumbs[1] };
+        // An icon tile's picture is its icon. Any other picture is a card of a grid at zoom 1: as wide as the thumbnail
+        // side, with what the density adds around it. A narrower room shrinks the picture to fit.
+        let side = match (&self.icon, cx.proposal) {
+            (Some(_), _) => cx.style.face.side,
+            (None, Proposal::Min) => sizes.thumbs[0],
+            (None, _) => sizes.thumbs[1],
+        };
         let width = cx.room.map_or(side + column, |room| room.min(side + column));
         Vec2::new(width, ((width - column).max(0.0) / ratio) + caption)
     }

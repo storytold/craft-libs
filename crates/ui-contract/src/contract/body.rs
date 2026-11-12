@@ -22,6 +22,7 @@ mod regions;
 mod reorder;
 pub(crate) mod scroll;
 mod size;
+pub(crate) use size::EnvFacts;
 mod window;
 
 pub(crate) use open::unshown;
