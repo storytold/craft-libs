@@ -60,8 +60,8 @@ type FooterFn<'a> = Box<dyn FnMut(&mut Ui, &mut BodyCx<'_>) + 'a>;
 /// A panel of a workspace: scrolling body, optional footer, optional title row.
 ///
 /// - Title: names the panel for assistive technology. A docked panel shows no header, since its dock tab names it.
-/// - Header: [`titled`](Panel::titled) or [`band`](Panel::band) shows the title in a header, with the optional icon and
-///   subtitle, the commands in `commands` and the actions in `actions`; without a header these show nowhere. The Menu
+/// - Header: [`titled`](Panel::titled) or [`band`](Panel::band) shows the title in a header, with the optional icon,
+///   note and subtitle, the commands in `commands` and the actions in `actions`; without a header these show nowhere. The Menu
 ///   action opens the rows given to `menu` under the title row; Close asks the panel to close, which hides its body
 ///   until the host stops showing it (bind the state with `opened` to keep it); Float is reported in
 ///   `PanelOutput::action` for the host.
@@ -79,7 +79,10 @@ pub struct Panel<'a> {
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
     open: Option<Bind<'a, bool>>,
-    /// Text after the title in the header.
+    /// A note run on after the title in the header ("· note").
+    #[prop(into)]
+    note: Option<Label>,
+    /// Text at the end of the header's title band: the kind of what the title names.
     #[prop(into)]
     subtitle: Option<Label>,
     /// An icon before the title.
@@ -114,6 +117,7 @@ impl<'a> Panel<'a> {
             common: Common::new(),
             props,
             open: None,
+            note: None,
             subtitle: None,
             icon: None,
             menu: None,
@@ -243,6 +247,9 @@ impl Container for Panel<'_> {
 
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         let mut row = TitleRow::new(cx.label()).strength(self.strength).actions(self.actions.iter().copied()).commands(self.commands.iter().cloned());
+        if let Some(note) = self.note.clone() {
+            row = row.note(note);
+        }
         if let Some(subtitle) = self.subtitle.clone() {
             row = row.subtitle(subtitle);
         }

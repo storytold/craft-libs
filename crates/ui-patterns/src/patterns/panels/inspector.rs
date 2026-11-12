@@ -12,7 +12,7 @@ use egui::{AsIdSalt, IdSalt, Ui};
 #[cfg(feature = "testing")]
 mod stories;
 
-/// A properties panel: a `Panel` whose header names the target (icon, name and, after it, the kind), and whose body
+/// A properties panel: a `Panel` whose header names the target (icon and name, and the kind at the end), and whose body
 /// the caller fills with the target's controls, labelled as inspector rows (`LabelScheme::Inspector`).
 ///
 /// - Target: [`target`](Inspector::target) gives the key of what is inspected. Every control of the body gets its id
@@ -60,7 +60,7 @@ impl<'a> Inspector<'a> {
         self
     }
 
-    /// The target's kind, after its name; a header too narrow for both drops it first.
+    /// The target's kind, at the header's end in muted caption text; a header too narrow for both drops it first.
     #[must_use]
     pub fn kind(mut self, kind: impl Into<Label>) -> Self {
         self.kind = Some(kind.into());

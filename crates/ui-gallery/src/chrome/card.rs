@@ -149,7 +149,7 @@ impl Card<'_> {
             .strength(HeaderStrength::Heading)
             .pad(pad);
         if let Some(note) = self.note {
-            panel = panel.subtitle(format!("· {note}"));
+            panel = panel.note(note.to_owned());
         }
         let mut commands = Vec::new();
         if self.open {

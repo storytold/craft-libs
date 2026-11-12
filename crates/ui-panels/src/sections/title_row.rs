@@ -155,10 +155,11 @@ pub struct TitleRowStyle {
     action: f32,
 }
 
-/// An optional icon, a title with an optional subtitle, a lead (a disclosure bound to the container's open state, or
-/// a check box bound to its gate) and action parts. A row too narrow for the title and subtitle together drops the
-/// subtitle before it elides the title; an elided title shows whole in a tooltip. A click on the title band toggles a
-/// disclosure lead, as a click on the lead does.
+/// An optional icon, a title with an optional note run on after it ("· note", muted body text) and an optional
+/// subtitle at the band's end (muted caption text: the target's kind), a lead (a disclosure bound to the container's
+/// open state, or a check box bound to its gate) and action parts. A row too narrow for all its texts drops the
+/// subtitle, then the note, before it elides the title; an elided title shows whole in a tooltip. A click on the title
+/// band toggles a disclosure lead, as a click on the lead does.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct TitleRow<'a> {
     #[common]
@@ -170,7 +171,10 @@ pub struct TitleRow<'a> {
     /// The heading level AccessKit reports.
     #[prop]
     level: usize,
-    /// Text after the title.
+    /// A note run on after the title, as "· note" in muted body text: a story's name after its component's.
+    #[prop(into)]
+    note: Option<Label>,
+    /// Text at the end of the title band, in muted caption text: the kind of what the title names ("Pixel layer").
     #[prop(into)]
     subtitle: Option<Label>,
     /// An icon before the title, painted in the style's icon colour unless the spec names another.
@@ -199,12 +203,13 @@ pub struct TitleRow<'a> {
     placed: Option<Placed>,
 }
 
-/// Where the icon, title and subtitle sit in the row, decided with the final width in `parts`.
+/// Where the icon, title, note and subtitle sit in the row, decided with the final width in `parts`.
 #[derive(Clone, Copy)]
 struct Placed {
     icon: Option<Rect>,
     handle: Option<Rect>,
     title: Rect,
+    note: Option<Rect>,
     subtitle: Option<Rect>,
 }
 
@@ -216,6 +221,7 @@ impl<'a> TitleRow<'a> {
             common,
             strength: HeaderStrength::Normal,
             level: 2,
+            note: None,
             subtitle: None,
             icon: None,
             fill: true,
@@ -269,8 +275,8 @@ impl<'a> TitleRow<'a> {
         if matches!(self.lead, Lead::Disclosure(_)) { icon } else { row }
     }
 
-    /// Divides the room left between the lead and the actions: the icon, then the title, then the subtitle when
-    /// both texts fit whole.
+    /// Divides the room left between the lead and the actions: the icon, the title, the note after it and the subtitle
+    /// at the end. The subtitle shows when every text fits whole, the note when the title and the note do.
     fn place(&self, mut band: Flow, cx: &PartsCx<'_, Self>) -> Placed {
         // A disclosure's glyph sits a gap before the title, as a title's own icon does; the gap is part of the title band,
         // so a click beside the glyph toggles too.
@@ -292,20 +298,24 @@ impl<'a> TitleRow<'a> {
             icon = Some(slot);
             band = rest;
         }
-        let role = cx.style.text.role;
-        let subtitle = self.subtitle.as_ref().and_then(|subtitle| {
-            let title = cx.layout_at(&TextRun::new(cx.resolved.label).role(role), f32::INFINITY).galley.size().x;
-            let width = cx.layout_at(&subtitle_run(subtitle.as_str(), role), f32::INFINITY).galley.size().x;
-            (title + cx.gap() + width <= band.rect().width()).then_some(title)
-        });
-        match subtitle {
-            Some(title) => {
-                let (title, rest) = band.take_start(title);
-                let (_, rest) = rest.take_start(cx.gap());
-                Placed { icon, handle, title, subtitle: Some(rest.rect()) }
+        let width = |run: &TextRun<'_>| cx.layout_at(run, f32::INFINITY).galley.size().x;
+        let title = width(&TextRun::new(cx.resolved.label).role(cx.style.text.role));
+        let note = self.note.as_ref().map_or(0.0, |note| width(&note_run(note.as_str())) + cx.gap());
+        let mut subtitle = None;
+        if let Some(text) = &self.subtitle {
+            let side = width(&subtitle_run(text.as_str()));
+            if title + note + cx.gap() + side <= band.rect().width() {
+                let (slot, rest) = band.take_end(side);
+                subtitle = Some(slot);
+                band = rest.take_end(cx.gap()).1;
             }
-            None => Placed { icon, handle, title: band.rect(), subtitle: None },
         }
+        if self.note.is_some() && title + note <= band.rect().width() {
+            let (title, rest) = band.take_start(title);
+            let (_, rest) = rest.take_start(cx.gap());
+            return Placed { icon, handle, title, note: Some(rest.rect()), subtitle };
+        }
+        Placed { icon, handle, title: band.rect(), note: None, subtitle }
     }
 }
 
@@ -336,12 +346,14 @@ impl Component for TitleRow<'_> {
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let role = cx.style.text.role;
         let title = cx.layout(&TextRun::new(cx.resolved.label).role(role)).galley.size();
-        let subtitle = self.subtitle.as_ref().map(|subtitle| cx.layout(&subtitle_run(subtitle.as_str(), role)).galley.size().x);
+        let width = |run: &TextRun<'_>| cx.layout(run).galley.size().x + cx.gap();
+        let note = self.note.as_ref().map_or(0.0, |note| width(&note_run(note.as_str())));
+        let subtitle = self.subtitle.as_ref().map_or(0.0, |subtitle| width(&subtitle_run(subtitle.as_str())));
         let parts =
             usize::from(self.has_lead()) + usize::from(self.icon.is_some()) + usize::from(self.handle) + self.commands.len() + self.actions.len();
         // The parts are square on the row's height, which the height token can raise above the text's.
         let side = title.y.max(cx.style.metrics.min_size.y);
-        let text = title.x + subtitle.map_or(0.0, |width| width + cx.gap());
+        let text = title.x + note + subtitle;
         let lead = if self.has_lead() { self.lead_side(side, cx.style.disclosure) - side } else { 0.0 };
         let natural = text + side * parts as f32 + cx.gap() * parts as f32 + lead;
         // A row takes the room it is offered, a filling row all of it, and never more: the title elides to what is left.
@@ -473,8 +485,11 @@ impl Component for TitleRow<'_> {
             title = title.color(cx.resolve(&cx.style.text.color));
         }
         ui.draw().text_on_centre_line(placed.title, &title);
+        if let (Some(rect), Some(note)) = (placed.note, &self.note) {
+            ui.draw().text_on_centre_line(rect, &note_run(note.as_str()));
+        }
         if let (Some(rect), Some(subtitle)) = (placed.subtitle, &self.subtitle) {
-            ui.draw().text_on_centre_line(rect, &subtitle_run(subtitle.as_str(), role));
+            ui.draw().text_on_centre_line(rect, &subtitle_run(subtitle.as_str()));
         }
     }
 
@@ -487,6 +502,12 @@ impl Component for TitleRow<'_> {
     }
 }
 
-fn subtitle_run(subtitle: &str, role: TypeRole) -> TextRun<'_> {
-    TextRun::spans(vec![Span::new(subtitle).muted()]).role(role)
+/// The note after the title: "· note" in muted body text.
+fn note_run(note: &str) -> TextRun<'static> {
+    TextRun::spans(vec![Span::new(format!("\u{b7} {note}")).muted()]).role(TypeRole::Body)
+}
+
+/// The subtitle at the band's end, in muted caption text.
+fn subtitle_run(subtitle: &str) -> TextRun<'_> {
+    TextRun::spans(vec![Span::new(subtitle).muted()]).role(TypeRole::Caption)
 }
