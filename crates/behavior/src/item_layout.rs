@@ -378,7 +378,7 @@ impl SpanLayout {
     /// The columns with their widths, from the start edge.
     #[must_use]
     pub fn columns(mut self, columns: Vec<(ColumnKey, f32)>) -> Self {
-        self.columns = columns;
+        ItemLayout::set_columns(&mut self, &columns);
         self
     }
 
@@ -458,8 +458,10 @@ impl ItemLayout for SpanLayout {
         if self.tree { NavShape::Tree } else { NavShape::Flat }
     }
 
+    /// Rows are as wide as their columns where those together are wider than the rows: the collection scrolls sideways.
     fn set_columns(&mut self, columns: &[(ColumnKey, f32)]) {
         self.columns = columns.to_vec();
+        self.width = self.width.max(columns.iter().map(|(_, width)| width).sum());
     }
 
     fn cells(&self, at: usize, offset: ScrollPos, out: &mut Vec<(ColumnKey, Rect)>) {

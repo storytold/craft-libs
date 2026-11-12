@@ -212,3 +212,53 @@ fn ctrl_or_cmd_with_an_arrow_moves_the_focused_column() {
         assert_eq!(events.borrow().iter().filter(|event| matches!(event, ColumnEvent::Moved { .. })).count(), 1, "a plain arrow moves no column");
     }
 }
+
+/// A table wider than its room: a fill name column and four numeric columns.
+fn wide_table() -> Fixture {
+    let mut fixture = Fixture::new(|ui| {
+        let numeric = |key: &'static str, header: &'static str| ColumnSpec::new(ColumnKey::new(key), header, ColumnWidth::Controls(3.0)).numeric();
+        let columns = vec![
+            ColumnSpec::new(NAME, "Name", ColumnWidth::fill(1.0)),
+            numeric("pages", "Pages"),
+            numeric("size", "Size"),
+            numeric("age", "Age"),
+            numeric("count", "Count"),
+        ];
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key);
+        Table::<usize>::new("Files", columns).show_items(ui, &source, &mut |_, icx| {
+            ListRow::new(LONG).cells(icx.cells()).cell(ColumnKey::new("pages"), "12").cell(ColumnKey::new("count"), "7")
+        });
+    });
+    fixture.room(egui::Vec2::new(300.0, 200.0)).settle();
+    fixture
+}
+
+fn painted(fixture: &Fixture, text: &str) -> Rect {
+    fixture.texts().iter().find(|painted| painted.text == text).map(|painted| painted.rect).expect("the text was painted")
+}
+
+#[trial]
+fn columns_wider_than_the_table_keep_their_least_width_scroll_sideways_with_the_header_and_keep_their_text_in_their_cells() {
+    let mut fixture = wide_table();
+    let header = |fixture: &Fixture, label: &str| fixture.by_label(label).expect("the header cell's node").rect;
+    let table = fixture.by_role(Role::TABLE).first().expect("the table's node").rect;
+    let (name, pages, count) = (header(&fixture, "Name"), header(&fixture, "Pages"), header(&fixture, "Count"));
+    assert!(name.width() >= pages.width() * 2.0 / 3.0 - 0.5, "the fill column keeps the least column width: {name:?} beside {pages:?}");
+    assert!(count.right() > table.right(), "the columns run past the table: {count:?} in {table:?}");
+    let label = fixture.texts().iter().find(|painted| painted.text == LONG).cloned().expect("the label was painted");
+    assert!(label.elided && label.rect.right() <= name.right() + 0.5, "the label stays in its column: {:?} in {name:?}", label.rect);
+    let before = painted(&fixture, "7");
+    fixture.frame(vec![pointer::moved(table.center())]);
+    fixture.frame(vec![egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::Vec2::new(-40.0, 0.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+        source: egui::MouseWheelSource::Wheel,
+    }]);
+    fixture.settle();
+    let (moved_cell, moved_text) = (count.left() - header(&fixture, "Count").left(), before.left() - painted(&fixture, "7").left());
+    assert!(moved_cell > 1.0, "the wheel scrolls the columns sideways: {moved_cell}");
+    assert!((moved_cell - moved_text).abs() < 0.5, "the header scrolls with the rows: header {moved_cell}, row {moved_text}");
+}

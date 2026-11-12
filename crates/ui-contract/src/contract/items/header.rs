@@ -168,6 +168,8 @@ pub(super) struct Header {
     hideable: Vec<ColumnKey>,
     /// The empty header after the last column.
     room: Option<Rect>,
+    /// The header row in view: cells that scroll past it are clipped to it.
+    view: Option<Rect>,
     /// The narrowest a resized column gets, and the keyboard resize step.
     min: f32,
     step: f32,
@@ -216,10 +218,12 @@ impl Header {
     }
 
     /// The width of each column, in display order, in a row `room` wide: a `Content` column its widest cell (capped by
-    /// its `max_share` of `room`), and the `Fill` columns share what is left.
+    /// its `max_share` of `room`), and the `Fill` columns share what is left, none narrower than the least column
+    /// width: a fill column whose share would be less takes the least and the others share the rest. Columns wider
+    /// together than `room` run past it, and the collection scrolls sideways.
     fn widths(&self, room: f32) -> Vec<f32> {
         let content: Vec<f32> = self.content.iter().map(|wide| wide.max(self.min)).collect();
-        let kinds: Vec<ColumnWidth> = self
+        let mut kinds: Vec<ColumnWidth> = self
             .specs
             .iter()
             .zip(&content)
@@ -228,7 +232,19 @@ impl Header {
                 (kind, _) => kind,
             })
             .collect();
-        resolve_columns(&kinds, &content, room, 0.0)
+        loop {
+            let widths = resolve_columns(&kinds, &content, room, 0.0);
+            let mut floored = false;
+            for (kind, width) in kinds.iter_mut().zip(&widths) {
+                if matches!(kind, ColumnWidth::Fill { .. }) && *width < self.min {
+                    *kind = ColumnWidth::Fixed(self.min);
+                    floored = true;
+                }
+            }
+            if !floored {
+                return widths;
+            }
+        }
     }
 
     /// Reads the widest cell of each `Content` column the items' measure recorded in this pass under the collection `id`.
@@ -340,28 +356,37 @@ impl Header {
         self.specs.iter().map(|spec| spec.key.clone()).zip(self.widths(room)).collect()
     }
 
-    /// Step 7: one focusable part per column, a resize grip at the end edge of each resizable one, and the group.
-    pub(super) fn parts<C: Component>(&mut self, pcx: &mut PartsCx<'_, C>) {
+    /// Step 7: one focusable part per column, a resize grip at the end edge of each resizable one, and the group. The
+    /// cells scroll sideways with the rows, by `offset` from the reading start, and take the pointer only in view.
+    pub(super) fn parts<C: Component>(&mut self, pcx: &mut PartsCx<'_, C>, offset: f32) {
         self.cells.clear();
         if self.height <= 0.0 {
             return;
         }
         let area = pcx.content_rect;
-        let row = Rect::from_min_size(area.min, Vec2::new(area.width(), self.height));
+        let view = Rect::from_min_size(area.min, Vec2::new(area.width(), self.height));
+        self.view = Some(view);
         let grip = scroll_bar_look(pcx.tokens, ScrollBarKind::Overlay).thickness;
         let rtl = pcx.flow.is_rtl();
-        let mut flow = Flow::new(row, rtl);
         let widths = self.widths(area.width());
         let help = pcx.words::<HeaderWords>().tip.clone();
         for (at, (spec, width)) in self.specs.iter().zip(widths).enumerate() {
             let (rect, rest) = flow.take_start(width);
             flow = rest;
             let hash = hash_of(&spec.key);
+        let wide = widths.iter().sum::<f32>().max(area.width());
+        let left = if rtl { area.max.x + offset - wide } else { area.min.x - offset };
+        let mut flow = Flow::new(Rect::from_min_size(Pos2::new(left, area.min.y), Vec2::new(wide, self.height)), rtl);
+        // The part of `rect` in view: a cell scrolled out keeps its place in the header's roving group with no area.
+        let shown = |rect: Rect| {
+            let x = rect.min.x.clamp(view.min.x, view.max.x);
+            Rect::from_x_y_ranges(x..=rect.max.x.clamp(x, view.max.x), rect.y_range())
+        };
             let mut sense = Sense::CLICK | Sense::FOCUS;
             if spec.movable {
                 sense |= Sense::DRAG;
             }
-            pcx.part(HEADER.at(hash), rect)
+            pcx.part(HEADER.at(hash), shown(rect))
                 .sense(sense)
                 .focusable()
                 .priority(HitPriority::new(HitLevel::Body, 0))
@@ -373,7 +398,7 @@ impl Header {
                 } else {
                     Rect::from_min_max(Pos2::new(rect.max.x - grip, rect.min.y), rect.max)
                 };
-                pcx.part(GRIP.at(hash), edge)
+                pcx.part(GRIP.at(hash), shown(edge))
                     .sense(Sense::DRAG | Sense::CLICK)
                     .priority(HitPriority::new(HitLevel::Body, 1))
                     .cursor(CursorIcon::ResizeHorizontal)
@@ -381,7 +406,7 @@ impl Header {
             }
             self.cells.push(Cell { spec: at, rect, hash });
         }
-        let room = flow.rect();
+        let room = shown(flow.rect());
         self.room = (room.width() > 0.0).then_some(room);
         if let Some(room) = self.room {
             pcx.part(ROOM, room)
@@ -394,6 +419,11 @@ impl Header {
         if self.memory.resizing.is_none() {
             pcx.roving(Roving::new(NavShape::Flat).keeps_lead_moves());
         }
+    }
+
+    /// The header row in view, while the header shows.
+    pub(super) fn view(&self) -> Option<Rect> {
+        self.view.filter(|_| self.height > 0.0)
     }
 
     /// Whether `key` is the sorted column, and if so whether it sorts descending.
@@ -692,7 +722,7 @@ impl Header {
             let sort = self.sort_of(&spec.key);
             let builder = UiBuilder::new().max_rect(cell.rect).layout(child::column_layout(rtl)).scope_id(sub(id, ("header_cell", cell.hash)));
             let mut cell_ui = alloc::child(ui, builder);
-            cell_ui.set_clip_rect(cell.rect.intersect(ui.clip_rect()));
+            cell_ui.set_clip_rect(self.view.map_or(cell.rect, |view| cell.rect.intersect(view)).intersect(ui.clip_rect()));
             let installed = Env::install_for(&cell_ui, env.derive_local(|scoped| scoped.arena = None));
             let edge = spec
                 .resizable

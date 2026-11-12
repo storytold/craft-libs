@@ -412,7 +412,10 @@ impl ListRow<'_> {
         let indent_given = given.pop().unwrap_or(0.0);
         let used = gaps + given.iter().sum::<f32>();
         let label_end = end - used;
-        let overflow = (base + column + leading_width + sizes.min_label - label_end).max(0.0);
+        // A row without columns keeps its label's least width and runs past its end, where the collection clips it; a
+        // label column's cell is the label's hard end, so it elides there instead of running into the next column.
+        let in_cell = self.label_span(cells_of).is_some();
+        let overflow = if in_cell { 0.0 } else { (base + column + leading_width + sizes.min_label - label_end).max(0.0) };
         let label_end = label_end + overflow;
         let indent = indent_given.min((label_end - base - column - leading_width - sizes.min_label).max(0.0));
         let mut from_end = 0.0;

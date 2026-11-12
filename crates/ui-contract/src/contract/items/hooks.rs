@@ -288,7 +288,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
     }
 
     fn parts(&mut self, comp: &mut C, _: Rect, pcx: &mut PartsCx<'_, C>) {
-        self.header.parts(pcx);
+        self.header.parts(pcx, self.offset_x as f32);
         self.notch = comp.items().wheel_notch(pcx.tokens.typography.body.line_height);
         if !self.scrolls {
             return;
@@ -419,6 +419,11 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             let left = if rtl { rect.max.x + self.offset_x as f32 - size.x } else { rect.min.x - self.offset_x as f32 };
             let content = Rect::from_min_size(Pos2::new(left, rect.min.y - self.offset as f32), size);
             crate::runtime::egui::widgets::note_scroll_region(&ctx, rect.intersect(ui.clip_rect()), content);
+            // The header row scrolls sideways with the rows.
+            if let Some(header) = self.header.view() {
+                let row = Rect::from_x_y_ranges(content.x_range(), header.y_range());
+                crate::runtime::egui::widgets::note_scroll_region(&ctx, header.intersect(ui.clip_rect()), row);
+            }
         }
         let sheet = Self::selects_cells(comp);
         let columns: Vec<u64> = match layout.grid() {
