@@ -968,3 +968,21 @@ fn xmp_orientation_rejects_existing_invalid_values() {
         assert_eq!(parsed.properties["tiff:Orientation"], vec![value.to_string()], "{value}");
     }
 }
+
+/// References resolve, anything else (unknown, unterminated, or a `;` too far away to end one) stays as
+/// written, and a value that is nothing but `&` is handled in one pass.
+#[test]
+fn attribute_references_resolve_and_hostile_ones_stay_verbatim() {
+    assert_eq!(unescape_attr("a&amp;b&#65;&#x42;&lt;&gt;&quot;&apos;"), "a&bAB<>\"'");
+    assert_eq!(unescape_attr("&bogus; & &#xZZ; tail&"), "&bogus; & &#xZZ; tail&");
+    let far = format!("&{};", "x".repeat(40));
+    assert_eq!(unescape_attr(&far), far);
+    let many = "&".repeat(1 << 20);
+    assert_eq!(unescape_attr(&many), many);
+    // multi-byte text around a reference is never cut inside a character
+    assert_eq!(unescape_attr("é&amp;日&é;"), "é&日&é;");
+    // leading zeros are valid in numeric references, however many there are
+    assert_eq!(unescape_attr("&#00000000000000000065;&#x000000000000000042;"), "AB");
+    let zeros = format!("&#{};", "0".repeat(1 << 20));
+    assert_eq!(unescape_attr(&zeros), zeros);
+}
