@@ -77,6 +77,9 @@ fn only_a_tool_off_the_toolbar_drags() {
     let entry = stories().into_iter().find(|entry| entry.story.name == "toolbar_drawer").expect("the drawer story");
     let mut fixture = Fixture::story(&entry.story);
     fixture.settle();
+    let opener = fixture.by_label("Edit Toolbar").expect("the rail's Edit Toolbar button");
+    fixture.click(&opener).settle();
+    // Pencil is on the toolbar behind Brush, so its only button is the drawer's row.
     let drags = |fixture: &mut Fixture, label: &str| {
         let row = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} row"));
         let before = drag::started(fixture.ctx());
@@ -85,7 +88,7 @@ fn only_a_tool_off_the_toolbar_drags() {
         fixture.release_at(row.center() + Vec2::new(0.0, 30.0)).settle();
         started
     };
-    assert!(!drags(&mut fixture, "Brush"), "Brush is on the toolbar");
+    assert!(!drags(&mut fixture, "Pencil"), "Pencil is on the toolbar");
     assert!(drags(&mut fixture, "Eraser"), "Eraser is not");
 }
 

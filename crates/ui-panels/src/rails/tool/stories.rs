@@ -36,7 +36,7 @@ pub(crate) fn tools(ids: &[u8]) -> Vec<RailTool<u8>> {
     ids.iter().map(|id| RailTool::new(*id, ALL[usize::from(*id) % ALL.len()])).collect()
 }
 
-pub(crate) fn slots() -> Vec<ToolSlot<u8>> {
+fn slots() -> Vec<ToolSlot<u8>> {
     vec![ToolSlot::new(0, tools(&[0])), ToolSlot::new(1, tools(&[BRUSH, BRUSH + 1])), ToolSlot::new(2, tools(&[3])), ToolSlot::new(3, tools(&[4]))]
 }
 
