@@ -11,5 +11,6 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+craft-codepage = { workspace = true }
 # The East Asian multibyte code pages (932, 936, 949, 950).
 encoding_rs = { workspace = true }

@@ -13,9 +13,13 @@ MHTML web archives and mbox files.
   content so the same input gives the same bytes.
 - **The pieces**, for callers that work below the tree: `split_headers`, `write_field`,
   `parse_params`, `decode_words` / `encode_words`, `transfer::{base64, base64_decode, qp_encode,
-  qp_decode}`, `charset::{decode, guess}`, `parse_address_list` / `format_address_list`,
+  qp_decode}`, `charset::{decode, guess, is_known}`, with the `detect` feature `detect::{is_text, decode, legacy, legacy_label}` for bytes that name no character set, `parse_address_list` / `format_address_list`,
   `parse_date` / `format_date`, `split_multipart`, `mbox_messages` / `write_mbox_message`, and
   `Resources` / `start_part` / `resolve_location` for `multipart/related`.
+- **Beside MIME**, what the same callers need: `parse_mailto` reads a `mailto:` link (RFC 6068:
+  recipients, subject and body only, sizes capped, no line break into a header), `base64` is
+  strict RFC 4648 (both alphabets, padded or not, one spelling per value) for keys, tokens and
+  credentials, and `charset::code_page_label` names the character set of a Windows code page.
 
 Written from the public RFCs: 5322 (messages), 2045–2049 (MIME), 2047 (encoded-words), 2231
 (parameter values), 2387 and 2557 (`multipart/related`, MHTML), 4155 (mbox, `mboxrd` quoting).
@@ -89,10 +93,7 @@ always there as `headers.get("date")`.
 - S/MIME and PGP: detecting protected messages, canonical CRLF form, keeping the original
   bytes. `split_headers` and `split_multipart` give the raw slices those need.
 - File-name-to-media-type tables and default attachment names.
-- `mailto:` links (RFC 6068), which are not MIME.
 - For MHT: picking the page, reading its HTML, and the budget for pictures loaded.
-- Strict base64 (RFC 4648 with refusals, URL-safe alphabet) for keys and tokens. This crate has
-  the mail kind only: an encoder, and a decoder that skips whatever is not base64.
 
 ## Migration
 
@@ -113,7 +114,8 @@ No app uses this crate yet. These tables say what replaces what.
 | `parse::Walk` (the recursion over parts, depth and part caps) | `parse` / `parse_entity`, then a walk over `Part`s |
 | `parse::is_media_type`, content id and file name extraction | `Part::declared_media_type`, `content_id`, `file_name`, `disposition` |
 | `charset::decode`, `guess`, `unix_lines` (`mailcraft-charset`) | `charset::` the same names |
-| `mailcraft_charset::base64` (strict) | stays |
+| `mailcraft_charset::base64` (strict) | `base64::` the same names (`STANDARD`, `STANDARD_NO_PAD`, `URL_SAFE`, `URL_SAFE_NO_PAD`, `Config`, `DecodeError`) |
+| `mailcraft_pst::code_page_label` | `charset::code_page_label` |
 | `address::parse_list`, `format_address`, `format_list` | `parse_address_list`, `format_address`, `format_address_list`, on `Mailbox { name, email }` |
 | `mailcraft_time::parse_rfc5322`, `format_rfc5322` | `parse_date`, `format_date`, on `DateTime` |
 | `mbox::mbox_messages`, `parse_mbox` | `mbox_messages` gives each message's bytes; MailCraft parses them |
@@ -126,7 +128,8 @@ No app uses this crate yet. These tables say what replaces what.
 | `media::safe_media_type` | `safe_media_type` |
 | `media::media_type_for`, `default_name` | stay |
 | `parse::read_headers`, `write::write_header`, `calendar_form`, `body` | stay (model mapping) |
-| `protected`, `signed`, `rich`, `mailto` | stay |
+| `mailto::{Mailto, is_mailto, parse_mailto}` | the same names; `mailto::cut`, which `rich` borrows, stays |
+| `protected`, `signed`, `rich` | stay |
 
 ### WordCraft (`crates/formats/src/mht.rs`)
 
@@ -153,7 +156,9 @@ settable).
 | Part | Source |
 |---|---|
 | Headers, parameters, encoded-words, transfer encodings, address lists, multipart splitting, mbox, the writer's parts and boundaries, their tests | MailCraft `crates/mime` [a44a450](https://github.com/UCS-Care-Group/mailcraft/commit/a44a45013d1c6396229c40ab60172d1882b368d5) |
-| Character sets | MailCraft `crates/charset`, same commit |
+| Character sets, strict base64 | MailCraft `crates/charset`, same commit |
+| `mailto:` links | MailCraft `crates/mime` (`mailto.rs`), same commit |
+| Code page labels | MailCraft `crates/pst` (`codepage.rs`), same commit |
 | Date parsing and formatting | MailCraft `crates/time` (`text.rs`), same commit; the calendar arithmetic replaced by `chrono` |
 | `multipart/related` lookups, location resolving, comment-aware parameters, the MHT tests | WordCraft `crates/formats/src/mht.rs` [639b813](https://github.com/storytold/wordcraft/commit/639b8133ea31efb63aac381a7ced8b8aed32aa30) |
 

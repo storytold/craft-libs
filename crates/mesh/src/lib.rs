@@ -1,7 +1,8 @@
 //! 3D mesh file formats behind one neutral model.
 //!
 //! Each format is a module behind a Cargo feature of the same name: [`stl`], [`obj`] (with MTL),
-//! [`ply`], [`gltf`] (glTF 2.0 and GLB) and [`fbx`]. A reader turns bytes into a [`Scene`]; a writer turns
+//! [`ply`], [`gltf`] (glTF 2.0 and GLB), [`fbx`] and [`threemf`] (3MF). A reader turns bytes into a [`Scene`]; a
+//! writer turns
 //! a [`Scene`] into bytes. Mapping a [`Scene`] onto an application's own mesh, body or document
 //! types is the caller's business, as are computing missing normals, tangents and UVs, welding,
 //! unit scaling and turning a file's up axis.
@@ -24,11 +25,15 @@
 //! (an OBJ material library, a glTF buffer or image) is listed in [`Scene::external`] and asked
 //! of the caller's [`Resolver`], which may decline.
 //!
-//! Depends on no other Craft crate.
+//! Depends on no other Craft crate, except that `threemf` opens its package with `craft-opc`
+//! and reads its XML with `craft-xml`.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 // The helpers the formats share are not all used by every subset of them.
-#![cfg_attr(not(all(feature = "stl", feature = "obj", feature = "ply", feature = "gltf", feature = "fbx")), allow(dead_code, unused_imports))]
+#![cfg_attr(
+    not(all(feature = "stl", feature = "obj", feature = "ply", feature = "gltf", feature = "fbx", feature = "threemf")),
+    allow(dead_code, unused_imports)
+)]
 
 #[cfg(feature = "fbx")]
 pub mod fbx;
@@ -40,6 +45,8 @@ pub mod obj;
 pub mod ply;
 #[cfg(feature = "stl")]
 pub mod stl;
+#[cfg(feature = "threemf")]
+pub mod threemf;
 
 use std::collections::HashMap;
 use std::fmt;

@@ -278,8 +278,8 @@ fn psd_too_large_for_32bit_errors_on_write() {
 #[test]
 fn save_and_open() {
     let f = testgen::small(Version::Psd, Compression::Rle);
-    let dir = std::env::temp_dir().join(format!("craft-psd-test-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    // `create_dir` refuses a directory or symlink planted at the predictable name.
+    let dir = tempfile_dir("craft-psd-test");
     let p = dir.join("x.psd");
     f.save(&p).unwrap();
     let g = PsdFile::open(&p).unwrap().unwrap();
@@ -330,4 +330,23 @@ fn to_bytes_reserves_the_whole_output_up_front() {
         assert_eq!(p, f);
         assert_eq!(p.to_bytes().unwrap(), b);
     }
+}
+
+/// A new owner-only directory in the temp folder: created exclusively, so a directory or symlink
+/// planted at a predictable name is skipped, never written through.
+#[cfg(not(target_arch = "wasm32"))]
+fn tempfile_dir(tag: &str) -> std::path::PathBuf {
+    for n in 0.. {
+        let dir = std::env::temp_dir().join(format!("{tag}-{}-{n}", std::process::id()));
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        match builder.create(&dir) {
+            Ok(()) => return dir,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => panic!("{}: {e}", dir.display()),
+        }
+    }
+    unreachable!()
 }

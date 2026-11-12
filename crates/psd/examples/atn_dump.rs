@@ -7,6 +7,11 @@
 use craft_psd::atn;
 use craft_psd::descriptor::{Descriptor, ReferenceItem, Value};
 
+/// Escapes control characters so a file's names cannot drive the terminal.
+fn clean(s: &str) -> String {
+    s.chars().flat_map(char::escape_debug).collect()
+}
+
 fn summary(v: &Value) -> String {
     match v {
         Value::Integer(i) => i.to_string(),
@@ -50,7 +55,7 @@ fn main() {
         let bytes = match std::fs::read(&path) {
             Ok(b) => b,
             Err(e) => {
-                eprintln!("{path}: {e}");
+                eprintln!("{}: {e}", clean(&path));
                 failed = true;
                 continue;
             }
@@ -58,25 +63,26 @@ fn main() {
         match atn::parse(&bytes) {
             Ok(f) => {
                 println!(
-                    "== {path}: set {:?}, {} actions{}{}",
+                    "== {}: set {:?}, {} actions{}{}",
+                    clean(&path),
                     f.name.to_string_lossy(),
                     f.actions.len(),
-                    f.encoding.as_deref().map(|e| format!(", names in {e}")).unwrap_or_default(),
-                    if f.warnings.is_empty() { String::new() } else { format!(" ({})", f.warnings.join("; ")) }
+                    f.encoding.as_deref().map(|e| format!(", names in {}", clean(e))).unwrap_or_default(),
+                    if f.warnings.is_empty() { String::new() } else { format!(" ({})", clean(&f.warnings.join("; "))) }
                 );
                 for a in &f.actions {
                     println!("  action {:?} ({} steps)", a.name.to_string_lossy(), a.items.len());
                     for item in &a.items {
                         let flags = format!("{}{}", if item.enabled { "" } else { " off" }, if item.with_dialog { " dialog" } else { "" });
                         match &item.descriptor {
-                            Some(d) => println!("    {:<22} {:<28}{flags}  {}", item.event.id(), f.item_label(item), keys(d)),
-                            None => println!("    {:<22} {:<28}{flags}", item.event.id(), f.item_label(item)),
+                            Some(d) => println!("    {:<22} {:<28}{flags}  {}", clean(&item.event.id()), clean(&f.item_label(item)), clean(&keys(d))),
+                            None => println!("    {:<22} {:<28}{flags}", clean(&item.event.id()), clean(&f.item_label(item))),
                         }
                     }
                 }
             }
             Err(e) => {
-                println!("== {path}: {e}");
+                println!("== {}: {}", clean(&path), clean(&e.to_string()));
                 failed = true;
             }
         }
