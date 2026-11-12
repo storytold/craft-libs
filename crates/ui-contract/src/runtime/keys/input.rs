@@ -1,7 +1,7 @@
 //! The input hook's key steps (H3): what it strips from each raw key event and records.
 
 use super::route::layout_of;
-use super::{AltTrack, Batch, MenuKey, NavKeys, Press, Shortcut, TabPress, current, with};
+use super::{AltTrack, Batch, MenuKey, NavKeys, Press, Shortcut, Stage, TabPress, current, with};
 use crate::runtime::commands::{self, EditCommands, FirePhase, NavCommand, WindowShortcut};
 use crate::runtime::egui::input::{self as raw_input, KeyEvent, RawInput};
 use crate::runtime::env::Env;
@@ -56,12 +56,12 @@ impl Strip<'_> {
         match event {
             KeyEvent::Press { key, input, repeat } => {
                 alt.other_key = true;
-                batch.last_press = Some(input);
                 if key == Key::Enter {
                     batch.enter_down = Some(true);
                 }
                 let pushed = batch.presses.len();
                 let kept = self.press(batch, key, &input, repeat);
+                batch.last_press = Some((input, (batch.presses.len() > pushed).then_some(pushed)));
                 if kept {
                     if let Some(press) = batch.presses.get_mut(pushed) {
                         press.in_egui = Some(batch.egui_presses);
@@ -95,10 +95,13 @@ impl Strip<'_> {
                 if let Some(press) = batch.shortcuts.last_mut().filter(|shortcut| shortcut.phase == FirePhase::Press) {
                     press.typed = true;
                 }
-                if let Some(input) = batch.last_press.take().filter(|_| !alt.right)
-                    && let Some(physical) = input.physical
-                {
-                    batch.learned.push((physical, input.mods, text.clone()));
+                if let Some((input, pressed)) = batch.last_press.take() {
+                    if let Some(press) = pressed.and_then(|at| batch.presses.get_mut(at)) {
+                        press.text = Some(batch.texts.len());
+                    }
+                    if let Some(physical) = input.physical.filter(|_| !alt.right) {
+                        batch.learned.push((physical, input.mods, text.clone()));
+                    }
                 }
                 batch.texts.push(text);
                 true
@@ -214,7 +217,7 @@ impl Strip<'_> {
             batch.tabs.push(TabPress { input: *input, repeat });
             false
         } else if ctrl_tab {
-            batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None });
+            batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None });
             false
         } else if let Some(WindowShortcut::Pane { forward }) = window_shortcut {
             batch.nav.panes.push(forward);
@@ -229,13 +232,26 @@ impl Strip<'_> {
             batch.menu.push(MenuKey::Letter(key.name().chars().next().unwrap_or('A')));
             false
         } else {
-            batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None });
+            batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None });
             if !repeat {
                 batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, typed: false, press: Some(batch.presses.len() - 1) });
             }
             true
         }
     }
+}
+
+/// The chords the focused component of `record` claims: its stop's, its state-dependent ones (`keys::claim`), and a
+/// bare End where it declares `EndKey::EndMode`.
+pub(super) fn focused_claims(record: &focus::FocusedRecord, stage: &Stage) -> Vec<Chord> {
+    let mut claims = record.claims.clone();
+    claims.extend(stage.claims.iter().filter(|(owner, _)| Some(*owner) == record.focused).map(|(_, chord)| *chord));
+    // A bare End belongs to a stop that declares `EndKey::EndMode`: it reads the key as a claimed chord and toggles its
+    // mode, so no collection navigation or scroll owner takes it as a move to the end.
+    if record.keys.is_some_and(|keys| keys.end == EndKey::EndMode) {
+        claims.push(Chord::plain(Key::End));
+    }
+    claims
 }
 
 /// Whether a bare Tab press that a chrome command is bound to toggles the window's panels (spec 1.8) instead of
@@ -293,14 +309,8 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
     let no_stops = keys.is_none() && !record.foreign && focus::tab_from_nothing(ctx, viewport);
     let latin = input.latin_layout_chars.clone();
     let (batch, visible) = with(ctx, viewport, |stage| {
-        let mut claims = record.claims.clone();
-        claims.extend(stage.claims.iter().filter(|(owner, _)| Some(*owner) == record.focused).map(|(_, chord)| *chord));
+        let mut claims = focused_claims(&record, stage);
         claims.extend(stage.captures.iter().map(|(_, chord)| *chord));
-        // A bare End belongs to a stop that declares `EndKey::EndMode`: it reads the key as a claimed chord and toggles
-        // its mode, so no collection navigation or scroll owner takes it as a move to the end.
-        if keys.is_some_and(|keys| keys.end == EndKey::EndMode) {
-            claims.push(Chord::plain(Key::End));
-        }
         let edits = |command| keys.is_some_and(|keys| keys.edits.contains(command));
         stage.layout.set_latin(input.keyboard_layout_is_latin);
         let strip = Strip {

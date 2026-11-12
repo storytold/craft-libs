@@ -2,8 +2,10 @@
 
 use super::kit::{Count, Dismissed, List, ROW_H, Row, Words};
 use craft_behavior::{Selection, SelectionChange};
+use craft_keymap::{Chord, Mods};
 use craft_ui::contract::{Bind, CollectionEvent, CollectionResponse, Props as _, SelectMode, Show as _, ShowCollection as _};
 use craft_ui::runtime::focus::{FocusTarget, request};
+use craft_ui::runtime::keys;
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Frames, input, pointer, trial};
 use egui::{Event, Id, Key, Modifiers, Pos2, Rect, Ui, Vec2};
@@ -383,6 +385,9 @@ fn keys_the_list_takes_do_not_reach_the_app() {
     };
     frames.idle(2, &mut show);
     focus_list(&mut frames, &seen, &mut show);
+    let holds = |key| keys::focus_holds(&frames.ctx, Chord::new(Mods::CMD, key));
+    assert!(holds(craft_keymap::Key::CloseBracket), "the focused list names Cmd+] as its own");
+    assert!(!holds(craft_keymap::Key::E), "and leaves Cmd+E to the app");
     press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
     press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
     let reorders = |seen: &Seen| seen.events.borrow_mut().drain(..).filter(|event| matches!(event, CollectionEvent::Reorder(_))).count();

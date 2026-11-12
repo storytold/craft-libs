@@ -42,6 +42,7 @@ pub(crate) use intents::{
     take_window_cancel,
 };
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
+pub use route::focus_holds;
 pub(crate) use route::{activated_member, begin, layout_of, owner_at, pasted_text, queue_edit, take_shortcuts};
 
 /// A menu-bar key of an in-window bar (spec 9.7). F10 reaches the bar on every OS; Alt keys only off a Mac.
@@ -72,6 +73,8 @@ struct Press {
     in_egui: Option<usize>,
     /// The key the press's release names (the physical key, else the typed one), which the strip matches releases by.
     release: Option<Key>,
+    /// The place in `Batch::texts` of the text the press typed.
+    text: Option<usize>,
 }
 
 /// A key press, release or clipboard chord that the shortcut dispatcher may match, with the press that the
@@ -125,8 +128,8 @@ struct Batch {
     menu: Vec<MenuKey>,
     /// Whether the last Enter event of the pass was a press (`true`) or a release, `None` when there was none.
     enter_down: Option<bool>,
-    /// The latest key press of the pass, which a following text event was typed by.
-    last_press: Option<KeyInput>,
+    /// The latest key press of the pass, which a following text event was typed by, and its place in `presses`.
+    last_press: Option<(KeyInput, Option<usize>)>,
     /// What this pass's typed text taught: the physical key, the modifiers and the text.
     learned: Vec<(Key, Mods, String)>,
     /// The bare Tab presses the input hook took from egui: each toggles the window's panels or moves focus, which

@@ -27,6 +27,7 @@ fn rig(frames: &mut Frames, seen: &Cell<bool>, claimed: &Cell<bool>) {
     frames.idle(2, &mut show);
     request(&frames.ctx, FocusTarget::Id(named_id("canvas")));
     frames.idle(2, &mut show);
+    assert!(craft_ui::runtime::keys::focus_holds(&frames.ctx, CLAIMS[0]), "the focused stop names the chord it claims as its own");
     frames.frame(vec![key_press(Key::K, Modifiers::COMMAND)], &mut show);
     assert!(claimed.get(), "the shortcut took the press");
     frames.frame(vec![key_release(Key::K, Modifiers::COMMAND)], &mut show);

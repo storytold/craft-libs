@@ -1,11 +1,15 @@
 //! The open list of a Select is one gesture: the rows the keys reach are the value until Escape puts it back or Tab
-//! chooses it, and typing on the closed field opens the list on the first match.
+//! chooses it, and typing on the closed field opens the list on the first match. The keys the list takes are its own;
+//! an app shortcut it leaves runs and closes it.
 
 use craft_ui::buttons::Button;
+use craft_ui::contract::overlay::close_popups;
 use craft_ui::contract::{Bind, Entry, Role, Show as _};
 use craft_ui::pickers::Select;
+use craft_ui::testing::focus::key_release;
+use craft_ui::testing::input::{key_press, text};
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
-use egui::{Key, Modifiers, Ui};
+use egui::{Event, Key, Modifiers, Ui};
 
 /// A select over One to Four.
 fn select(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
@@ -106,5 +110,61 @@ fn a_heading_in_the_list_takes_no_pick_and_the_keys_and_type_ahead_pass_over_it(
     fixture.type_text("l");
     fixture.settle();
     assert!(!list_open(&mut fixture), "a heading's caption is no type-ahead match");
+    assert_eq!(value(&mut fixture), 1, "and the value stays");
+}
+
+/// The select in an app that reads its own shortcuts from egui's input before the select runs, as PhotoCraft does: the
+/// keys it reads are noted in `app_read`, and its Cmd+1 shortcut closes the open popups as it runs.
+fn select_in_app(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let pressed: Vec<(Key, Modifiers)> = ui.input(|input| {
+        input
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Key { key, pressed: true, modifiers, .. } => Some((*key, *modifiers)),
+                _ => None,
+            })
+            .collect()
+    });
+    if pressed.iter().any(|(key, modifiers)| *key == Key::Num1 && modifiers.command) {
+        close_popups(ui.ctx());
+    }
+    data.note("app_read", Vec::<Key>::new()).extend(pressed.iter().map(|(key, _)| *key));
+    select(ui, data)
+}
+
+/// The app's select, focused, with its list open.
+fn open_in_app() -> Fixture {
+    let mut fixture = Fixture::story(&Story::new("select_in_app", select_in_app));
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    fixture.settle();
+    assert!(list_open(&mut fixture), "Alt+Down opens the list");
+    fixture
+}
+
+fn app_read(fixture: &mut Fixture, key: Key) -> bool {
+    fixture.data().note("app_read", Vec::<Key>::new()).contains(&key)
+}
+
+#[trial]
+fn a_letter_typed_into_the_open_list_is_its_own_and_reaches_no_app_shortcut() {
+    let mut fixture = open_in_app();
+    fixture.frame(vec![key_press(Key::T, Modifiers::NONE), text("t")]);
+    fixture.frame(vec![key_release(Key::T, Modifiers::NONE)]);
+    fixture.settle();
+    assert_eq!(value(&mut fixture), 2, "the list's type-ahead takes the letter");
+    assert!(list_open(&mut fixture), "and the list stays open");
+    assert!(!app_read(&mut fixture, Key::T), "the app reads no press of the letter");
+}
+
+#[trial]
+fn an_app_shortcut_runs_with_the_list_open_and_closes_it_through_the_runtime() {
+    let mut fixture = open_in_app();
+    fixture.key(Key::Num1, Modifiers::COMMAND);
+    fixture.settle();
+    assert!(app_read(&mut fixture, Key::Num1), "the chord the list leaves reaches the app");
+    assert!(!list_open(&mut fixture), "the app's shortcut closes the list");
     assert_eq!(value(&mut fixture), 1, "and the value stays");
 }

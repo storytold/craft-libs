@@ -3,7 +3,7 @@
 //! One host (`host`) creates the egui layer through `runtime::egui::areas` and applies rank, backdrop, fit, scroll,
 //! dismissal and the focus scope. `OverlayUi::show` and the tooltip and toast hosts run it.
 
-pub use crate::runtime::overlay::{OpenFilter, any_open, family, is_open, request_close, top};
+pub use crate::runtime::overlay::{OpenFilter, any_open, close_popups, family, is_open, request_close, top};
 
 pub(crate) mod container_open;
 mod dismissal;

@@ -51,20 +51,24 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let mut consumed = vec![Taken::No; batch.presses.len()];
     let driven = target.as_ref().and_then(|rec| Driven::of(ctx, rec));
     let field_list = target.as_ref().filter(|_| driven.is_none()).and_then(|rec| list_of_field(ctx, rec));
+    // Whether a component took each text of the pass, as typing, type-ahead or digits.
+    let mut taken_texts = vec![false; batch.texts.len()];
     if let Some(rec) = &target {
         for (press, taken) in batch.presses.iter().zip(&mut consumed) {
             *taken = if stale_repeat(&mut stale, press) {
                 Taken::Yes
             } else {
-                route_press(ctx, os, rec, press, driven.or(field_list), &mut routed, &mut activated)
+                let route = press_route(ctx, os, rec, press, driven.or(field_list));
+                apply_press(ctx, rec, press, route, &mut routed, &mut activated)
             };
         }
-        for text in &batch.texts {
+        for (text, taken) in batch.texts.iter().zip(&mut taken_texts) {
             let digits;
             let text = if rec.stop.role.digits {
                 let (found, rest) = craft_behavior::keys::split_digits(text);
                 for digit in found {
                     push(&mut routed, Some(rec.stop.id), Intent::Digit(digit), false);
+                    *taken = true;
                 }
                 digits = rest;
                 &digits
@@ -82,7 +86,10 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
                 routed.entry(Some(rec.stop.id)).or_default().items.push(Item { intent: Intent::Text(Arc::from(text.as_str())), horizontal: false });
             } else if let Some(menu) = focus::menu_scope(ctx, rec).filter(|_| !text.trim().is_empty()) {
                 push(&mut routed, Some(menu), Intent::Text(Arc::from(text.as_str())), false);
+            } else {
+                continue;
             }
+            *taken = true;
         }
     } else {
         // With nothing focused, a plain Enter submits to the window, as an unfocused Escape cancels: a tool's pending
@@ -109,7 +116,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     for command in queued {
         push(&mut routed, focused, Intent::Edit(command), false);
     }
-    let (shortcuts, held) = owned_shortcuts(ctx, target.as_ref(), &batch, &consumed);
+    let (shortcuts, held) = owned_shortcuts(ctx, target.as_ref(), &batch, &consumed, &taken_texts);
     withdraw_held(ctx, target.as_ref(), &batch, &held);
     let pasted = batch.paste.as_deref().zip(focused).map(|(text, id)| (id, Arc::<str>::from(text)));
     let escapes = craft_behavior::focus::route_escapes(batch.escapes, press_captured);
@@ -179,36 +186,25 @@ pub(crate) fn owner_at(ctx: &Context, target: Option<&StopRec>, scopes: &[Id], b
     key_owner(layer == overlay::LayerKeys::Blocked, &present)
 }
 
-/// The shortcut events the key owner leaves to the app (9.3), and the presses the focused component holds. The owner
-/// is the focused component's class, or `Blocked` while a modal layer is stacked above the focus; inside a layer its
-/// `Overlay.keys` class ranks with the component's. `Menu` and `Recorder` keep every key; a `Widget` or popup holds
-/// the keys it activates with, the keys of its intents and the keys its filter keeps from the key stage; a text field
-/// keeps the text its presses typed.
-fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consumed: &[Taken]) -> (Shortcuts, Vec<bool>) {
+/// The shortcut events the key owner leaves to the app (9.3), and the presses the focused component holds
+/// (`holds_press`). The owner is the focused component's class, or `Blocked` while a modal layer is stacked above the
+/// focus; inside a layer its `Overlay.keys` class ranks with the component's. `Menu` and `Recorder` keep every key; a
+/// text field keeps the text its presses typed. `consumed` is what routing did with each press and `taken_texts` whether
+/// a component took each text of the pass.
+fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consumed: &[Taken], taken_texts: &[bool]) -> (Shortcuts, Vec<bool>) {
     let scopes = target.map(|rec| focus::scope_chain(ctx, rec)).unwrap_or_default();
     let owner = owner_at(ctx, target, &scopes, None);
     let own = target.map(|rec| rec.stop.keys.owner);
-    let kept = |keys: &focus::KeyUse, at: usize| {
-        let key = batch.presses[at].key;
-        match keys.keep {
-            focus::KeepKeys::Tab => key == Key::Tab,
-            focus::KeepKeys::InlineArrows => matches!(key, Key::Left | Key::Right),
-            focus::KeepKeys::BlockArrows => matches!(key, Key::Left | Key::Right | Key::Up | Key::Down),
-            _ => false,
-        }
-    };
-    let held_by = |keys: Option<&focus::KeyUse>, at: usize| {
-        let Some(keys) = keys else { return false };
-        consumed[at] == Taken::Yes || kept(keys, at)
-    };
     let silent = matches!(owner, KeyOwner::Class(OwnerClass::Menu | OwnerClass::Recorder));
     let dialog = owner == KeyOwner::Class(OwnerClass::Dialog);
     // The focused component keeps its own keys inside a dialog: a text field its typing, a widget its activation.
-    let blocked = owner == KeyOwner::Blocked;
-    let typing = !blocked && own == Some(OwnerClass::Text);
-    let widget = !blocked && matches!(own, Some(OwnerClass::Widget | OwnerClass::Popup | OwnerClass::PassivePopup));
-    let owner_keys = target.map(|rec| &rec.stop.keys);
-    let held: Vec<bool> = (0..batch.presses.len()).map(|at| widget && held_by(owner_keys, at)).collect();
+    let typing = owner != KeyOwner::Blocked && own == Some(OwnerClass::Text);
+    let held: Vec<bool> = batch
+        .presses
+        .iter()
+        .zip(consumed)
+        .map(|(press, taken)| holds_press(owner, target, press, *taken == Taken::Yes, press.text.is_some_and(|at| taken_texts[at])))
+        .collect();
     let keys = if silent {
         Vec::new()
     } else {
@@ -221,6 +217,40 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
             .collect()
     };
     (Shortcuts { keys, typing, dialog, layout: Layout::default() }, held)
+}
+
+/// Whether the focused stop `target`, whose keys `owner` owns, holds `press`: the press is its own and reaches neither
+/// egui's input, where the app reads its own keys, nor the app's shortcuts. A widget or popup holds the presses its
+/// routing `taken`, the keys its filter keeps from the key stage, and the presses whose text it took (`typed`: the
+/// type-ahead of a list).
+fn holds_press(owner: KeyOwner, target: Option<&StopRec>, press: &Press, taken: bool, typed: bool) -> bool {
+    let Some(keys) = target.map(|rec| &rec.stop.keys) else { return false };
+    let widget = owner != KeyOwner::Blocked && matches!(keys.owner, OwnerClass::Widget | OwnerClass::Popup | OwnerClass::PassivePopup);
+    let kept = match keys.keep {
+        focus::KeepKeys::Tab => press.key == Key::Tab,
+        focus::KeepKeys::InlineArrows => matches!(press.key, Key::Left | Key::Right),
+        focus::KeepKeys::BlockArrows => matches!(press.key, Key::Left | Key::Right | Key::Up | Key::Down),
+        _ => false,
+    };
+    widget && (taken || typed || kept)
+}
+
+/// Whether the focused component of the running viewport holds a press of `chord`: it claims the chord, or its
+/// routing takes the press and keeps it from the app as `owned_shortcuts` does. Such a press reaches neither egui's
+/// input nor the app's shortcuts, so an app command bound to the chord does not run while the component has the focus.
+/// Typed text is not a chord: the letters a list takes as type-ahead are held as they are typed.
+pub fn focus_holds(ctx: &Context, chord: Chord) -> bool {
+    let Some(rec) = focus::focused_rec(ctx) else { return false };
+    let viewport = crate::runtime::egui::pass::current_viewport(ctx);
+    let record = focus::record(ctx, viewport);
+    if current(ctx, |stage| super::input::focused_claims(&record, stage)).contains(&chord) {
+        return true;
+    }
+    let press = Press { key: chord.key, mods: chord.mods, repeat: false, in_egui: None, release: None, text: None };
+    let driven = Driven::of(ctx, &rec).or_else(|| list_of_field(ctx, &rec));
+    let taken = !matches!(press_route(ctx, crate::runtime::windows::os_of(ctx), &rec, &press, driven), PressRoute::Free);
+    let owner = owner_at(ctx, Some(&rec), &focus::scope_chain(ctx, &rec), None);
+    holds_press(owner, Some(&rec), &press, taken, false)
 }
 
 /// Takes the presses the focused component holds out of the running pass's egui input, where the app reads its own
@@ -373,93 +403,119 @@ impl Driven {
     }
 }
 
-/// One key press of the focused component: the table's row, else the activation keys, else a nudge. The list keys
-/// of the focused stop's `Driven` collection go to it first. Returns whether the component's
-/// intents took the press.
-fn route_press(
-    ctx: &Context,
-    os: Os,
-    rec: &StopRec,
-    press: &Press,
-    driven: Option<Driven>,
-    routed: &mut HashMap<Option<Id>, Routed>,
-    activated: &mut HashMap<Id, Id>,
-) -> Taken {
+/// Where one key press of the focused component goes, as `press_route` decides it; `apply_press` acts on it.
+enum PressRoute {
+    /// Nothing takes it: the press is a shortcut candidate.
+    Free,
+    /// The intent of a list key, for the focused stop's `Driven` collection.
+    List(Id, Intent),
+    /// The press as a chord, for a recorder.
+    Chord,
+    /// A move: out of a row to its collection, along the roving group around the stop, or to the stop itself.
+    Move(NavMove, MoveMods),
+    /// The stop's activation.
+    Activate,
+    /// A close of the dropdown layer whose opener has the focus.
+    Close(Id),
+    /// An intent of the stop.
+    Intent(Intent),
+    /// A nudge of the stop's content.
+    Nudge((Vec2, Mods)),
+}
+
+/// Where one key press of the focused component goes: the table's row, else the activation keys, else a nudge. The
+/// list keys of the focused stop's `Driven` collection go to it first. Reads state only, so a query can ask it.
+fn press_route(ctx: &Context, os: Os, rec: &StopRec, press: &Press, driven: Option<Driven>) -> PressRoute {
     let stop = &rec.stop;
-    let id = Some(stop.id);
-    let horizontal = matches!(press.key, Key::Left | Key::Right);
     let plain = press.mods.is_none();
     if let Some(driven) = driven
         && plain
         && let Some(intent) = driven.intent(press.key)
     {
-        push(routed, Some(driven.list), intent, false);
-        return Taken::Yes;
+        return PressRoute::List(driven.list, intent);
     }
     if matches!(stop.keys.owner, OwnerClass::Recorder) {
-        // A recorder reads every press as a chord, repeats excluded; no intent of the key table applies to it.
-        if !press.repeat {
-            routed.entry(id).or_default().chords.push(Chord { mods: press.mods, key: press.key });
-        }
-        return Taken::Yes;
+        // A recorder reads every press as a chord; no intent of the key table applies to it.
+        return PressRoute::Chord;
     }
+    let chord = Chord { mods: press.mods, key: press.key };
     match keys::intent(os, press.key, press.mods, stop.role) {
         Some(Intent::Move(mv, mods)) => {
             // Up, Down, Page, Home and End leave a row's children: the collection takes the move. A component stop keeps
             // its declared arrows from the roving group around it; a part stop belongs to the component's own group.
-            let vertical = matches!(mv, NavMove::Up | NavMove::Down | NavMove::PageUp | NavMove::PageDown | NavMove::Start | NavMove::End);
+            let leaves_row = is_vertical(mv) && focus::is_row_child(ctx, stop);
             let kept = stop.part.is_none() && stop.keys.keep.keeps_arrow(mv);
-            if let Some(owner) = vertical.then(|| focus::leave_row(ctx, rec.stop.key())).flatten() {
-                push(routed, Some(owner), Intent::Move(mv, mods), horizontal);
-            } else if !kept && !stop.role.moves && commands::binds_scoped(ctx, &Chord { mods: press.mods, key: press.key }) {
-                // A stop that does not act on its moves leaves a move key a scoped command around it binds to that
-                // command, ahead of its roving group and the scroll owner.
-                return Taken::No;
-            } else if kept || focus::roving_move(ctx, rec.stop.key(), mv, mods, horizontal).is_none() {
-                // Page, Home and End go to the scroll owner around the stop.
-                push(routed, id, Intent::Move(mv, mods), horizontal);
+            // A stop that does not act on its moves leaves a move key a scoped command around it binds to that
+            // command, ahead of its roving group and the scroll owner.
+            if !leaves_row && !kept && !stop.role.moves && commands::binds_scoped(ctx, &chord) {
+                PressRoute::Free
+            } else {
+                PressRoute::Move(mv, mods)
             }
         }
-        Some(Intent::Activate) => route_activate(ctx, rec, routed, activated),
+        Some(Intent::Activate) => PressRoute::Activate,
         // A collection that activates on Enter opens its lead with any modifier held (in a new tab or window, say); the
         // component reads the modifiers. Fields and dialogs keep SubmitForce.
         // A chord that a scoped command of the focused chain binds (Cmd+Enter of a panel's Load as Selection) is that
         // command's, not the stop's activation.
-        Some(Intent::SubmitForce)
-            if press.key == Key::Enter
-                && stop.role.space
-                && stop.keys.activate.enter()
-                && commands::binds_scoped(ctx, &Chord { mods: press.mods, key: press.key }) =>
-        {
-            return Taken::No;
-        }
         Some(Intent::SubmitForce) if press.key == Key::Enter && stop.role.space && stop.keys.activate.enter() => {
-            route_activate(ctx, rec, routed, activated)
+            if commands::binds_scoped(ctx, &chord) { PressRoute::Free } else { PressRoute::Activate }
         }
         Some(Intent::Close) => match driven {
-            Some(Driven { layer: Some(layer), .. }) => overlay::request_close(ctx, layer, overlay::CloseReason::Requested),
-            _ => push(routed, id, Intent::Close, false),
+            Some(Driven { layer: Some(layer), .. }) => PressRoute::Close(layer),
+            _ => PressRoute::Intent(Intent::Close),
         },
-        Some(intent) => push(routed, id, intent, false),
+        Some(intent) => PressRoute::Intent(intent),
         // Enter the key table leaves unbound activates a stop that takes Enter with any modifier held; the component
         // reads the modifiers (Alt+Enter adds the way Alt+click does); a chord a scoped command binds is that command's,
         // not an activation. Enter elsewhere submits with Alt and Shift held or not, which the component reads (a
         // polygonal lasso closes straight on Alt+Enter); Enter chords with Cmd or Ctrl the table leaves unbound are the
         // app's.
-        None if press.key == Key::Enter
-            && stop.keys.activate.enter()
-            && (plain || !commands::binds_scoped(ctx, &Chord { mods: press.mods, key: press.key })) =>
-        {
-            route_activate(ctx, rec, routed, activated)
+        None if press.key == Key::Enter && stop.keys.activate.enter() && (plain || !commands::binds_scoped(ctx, &chord)) => PressRoute::Activate,
+        None if press.key == Key::Enter && !press.mods.cmd && !press.mods.ctrl => PressRoute::Intent(Intent::Submit),
+        None if press.key == Key::Space && plain && stop.keys.activate.space() => PressRoute::Activate,
+        None if press.key == Key::Tab && plain && stop.keys.keep == focus::KeepKeys::Tab => PressRoute::Intent(Intent::Tab),
+        None if stop.role.nudge => nudge_of(press.key, press.mods).map_or(PressRoute::Free, PressRoute::Nudge),
+        None => PressRoute::Free,
+    }
+}
+
+fn is_vertical(mv: NavMove) -> bool {
+    matches!(mv, NavMove::Up | NavMove::Down | NavMove::PageUp | NavMove::PageDown | NavMove::Start | NavMove::End)
+}
+
+/// Acts on the route `press_route` gave `press` of the focused stop `rec`. Returns whether the component's intents
+/// took the press.
+fn apply_press(
+    ctx: &Context,
+    rec: &StopRec,
+    press: &Press,
+    route: PressRoute,
+    routed: &mut HashMap<Option<Id>, Routed>,
+    activated: &mut HashMap<Id, Id>,
+) -> Taken {
+    let stop = &rec.stop;
+    let id = Some(stop.id);
+    match route {
+        PressRoute::Free => return Taken::No,
+        PressRoute::List(list, intent) => push(routed, Some(list), intent, false),
+        // Repeats are no chords.
+        PressRoute::Chord if press.repeat => {}
+        PressRoute::Chord => routed.entry(id).or_default().chords.push(Chord { mods: press.mods, key: press.key }),
+        PressRoute::Move(mv, mods) => {
+            let horizontal = matches!(press.key, Key::Left | Key::Right);
+            let kept = stop.part.is_none() && stop.keys.keep.keeps_arrow(mv);
+            if let Some(owner) = is_vertical(mv).then(|| focus::leave_row(ctx, stop.key())).flatten() {
+                push(routed, Some(owner), Intent::Move(mv, mods), horizontal);
+            } else if kept || focus::roving_move(ctx, stop.key(), mv, mods, horizontal).is_none() {
+                // Page, Home and End go to the scroll owner around the stop.
+                push(routed, id, Intent::Move(mv, mods), horizontal);
+            }
         }
-        None if press.key == Key::Enter && !press.mods.cmd && !press.mods.ctrl => push(routed, id, Intent::Submit, false),
-        None if press.key == Key::Space && plain && stop.keys.activate.space() => route_activate(ctx, rec, routed, activated),
-        None if press.key == Key::Tab && plain && stop.keys.keep == focus::KeepKeys::Tab => push(routed, id, Intent::Tab, false),
-        None if stop.role.nudge => {
-            let Some(nudge) = nudge_of(press.key, press.mods) else { return Taken::No };
-            routed.entry(id).or_default().nudge = Some(nudge);
-        }
-        None => return Taken::No,
+        PressRoute::Activate => route_activate(ctx, rec, routed, activated),
+        PressRoute::Close(layer) => overlay::request_close(ctx, layer, overlay::CloseReason::Requested),
+        PressRoute::Intent(intent) => push(routed, id, intent, false),
+        PressRoute::Nudge(nudge) => routed.entry(id).or_default().nudge = Some(nudge),
     }
     Taken::Yes
 }
