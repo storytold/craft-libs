@@ -154,15 +154,24 @@ impl Component for Text {
             };
         }
         let role = cx.style.text.role;
+        // A line breaks between words, never inside one: a wrapped text is never narrower than its widest word.
+        let widest =
+            || cx.resolved.label.split_whitespace().map(|word| cx.layout_at(&self.run(role, word), f32::INFINITY).size().x).fold(0.0, f32::max);
         if cx.proposal == Proposal::Min && self.elide == Elide::Off {
-            // At its least a wrapped text is its widest word: a line breaks between words, never inside one.
-            let widest =
-                cx.resolved.label.split_whitespace().map(|word| cx.layout_at(&self.run(role, word), f32::INFINITY).size().x).fold(0.0, f32::max);
+            let widest = widest();
             return Vec2::new(widest, cx.layout_at(&self.run(role, cx.resolved.label), widest).size().y);
         }
         // At its least an elided line is the ellipsis.
         let band = if cx.proposal == Proposal::Min { 0.0 } else { wrap.unwrap_or(f32::INFINITY) };
-        let layout = cx.layout_at(&self.run(role, cx.resolved.label), band);
+        let mut layout = cx.layout_at(&self.run(role, cx.resolved.label), band);
+        // In a row the room is what the earlier siblings left, which can be less than a word; the row's shrink step
+        // then makes room for the word.
+        if self.elide == Elide::Off && layout.galley.rows.len() > 1 {
+            let widest = widest();
+            if widest > band {
+                layout = cx.layout_at(&self.run(role, cx.resolved.label), widest);
+            }
+        }
         // A cut line takes the whole room: its width must not follow where the last glyph happened to fit.
         match cx.room {
             Some(room) if layout.elided => Vec2::new(room, layout.size().y),
