@@ -46,9 +46,12 @@ jobs:
       - run: cargo test --workspace --locked
         env:
           CRAFT_PRINT_REQUIRE_QUEUE: ${{ runner.os == 'Windows' && '1' || '0' }}
-      - run: cargo test --workspace --all-features --locked
+      # craft-psd's `corpus` feature tests need a real-file corpus that this job does not fetch,
+      # so craft-psd runs with its other features.
+      - run: cargo test --workspace --all-features --locked --exclude craft-psd
         env:
           CRAFT_PRINT_REQUIRE_QUEUE: ${{ runner.os == 'Windows' && '1' || '0' }}
+      - run: cargo test -p craft-psd --features serde --locked
   msrv:
     name: Rust 1.95 (Linux libraries)
     runs-on: ubuntu-latest
