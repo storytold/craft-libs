@@ -474,6 +474,32 @@ fn audio_tracks_keep_their_names() {
 }
 
 #[test]
+fn unnamed_source_clip_uses_the_referenced_master_name() {
+    let mut doc = crate::testdoc::sound_only(None);
+    let name = doc.sources[0].name.clone();
+    for item in &mut doc.compositions[0].tracks[0].items {
+        if let CItem::Clip(clip) = item {
+            clip.name = name.clone();
+        }
+    }
+    let mut root = store::read(&written(&doc, false)).unwrap();
+    let content = strong_mut(strong_mut(&mut root, pid::ROOT_HEADER), pid::CONTENT);
+    let master = objs_mut(content, pid::MOBS).iter_mut().find(|m| m.class == cls::MASTER_MOB).unwrap();
+    master.set(pid::MOB_NAME, Value::Data(store::utf16z("Master edit")));
+    let bytes = store::write(&root, craft_cfb::Version::V4).unwrap();
+    let back = read_clean(&bytes);
+    let clip = back.compositions[0].tracks[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            CItem::Clip(c) => Some(c),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(clip.name, "Master edit");
+}
+
+#[test]
 fn sound_source_offsets_use_audio_sample_rate_on_disk() {
     let doc = crate::testdoc::sound_only(None);
     let bytes = written(&doc, false);
