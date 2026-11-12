@@ -1,13 +1,18 @@
 //! The revisions panel: a compared copy's changes to accept or reject.
 
-use craft_theme::variant::{Tone, Variant};
+use craft_behavior::{Metrics, Sense};
+use craft_theme::variant::Variant;
 use craft_ui::buttons::{Button, Link};
-use craft_ui::contract::{NoValue, Outcome, Pattern, Props, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{
+    Common, Component, Container, ContainerProps, Cx, MeasureCx, NoValue, Outcome, Pad, PaintUi, Pattern, Props, Role, RowAlign, Show as _,
+    ShowContainer as _, Sizing, clicked,
+};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
+use craft_ui::primitives::PaintShape;
 use craft_ui::runtime::env::{Env, Label};
-use craft_ui::style::TypeRole;
-use egui::{Response, Ui};
+use craft_ui::style::{ComponentStyle, StyleColor, StyleCx, SurfaceKind, TypeRole};
+use egui::{CornerRadius, Response, Ui, Vec2};
 
 use crate::revisions::{Revision, RevisionAction, RevisionKind};
 
@@ -38,8 +43,8 @@ craft_ui::words! {
 }
 
 /// A compare pane: "Compared with {name}" (and the by-position note), Accept All (n) and Reject All (n), then a
-/// card per change with its kind, the heading as a link (goes there), Accept and Reject, and up to eight detail
-/// lines with bullets. With no changes: "No differences left." and End Review. Every link and button is a Tab stop
+/// raised card per change with a bar in the kind's status colour (named by the kind), the heading as a link (goes
+/// there), Accept and Reject at the end edge, and up to eight detail lines with bullets. With no changes: "No differences left." and End Review. Every link and button is a Tab stop
 /// in reading order.
 #[derive(Pattern, Props)]
 pub struct RevisionsPanel<'a> {
@@ -86,23 +91,27 @@ impl<'a> RevisionsPanel<'a> {
                 }
             });
             for (index, revision) in revisions.iter().enumerate() {
-                let (tone, kind) = match revision.kind {
-                    RevisionKind::Inserted => (Tone::Good, &words.inserted),
-                    RevisionKind::Deleted => (Tone::Bad, &words.deleted),
-                    RevisionKind::Changed => (Tone::Info, &words.changed),
+                let kind = match revision.kind {
+                    RevisionKind::Inserted => &words.inserted,
+                    RevisionKind::Deleted => &words.deleted,
+                    RevisionKind::Changed => &words.changed,
                 };
-                Stack::new().show(ui, |ui, _| {
-                    Row::new().show(ui, |ui, _| {
-                        Text::new(kind.clone()).role(TypeRole::Caption).tone(tone).show(ui);
-                        if clicked(&Link::new(revision.heading.clone()).show(ui)) {
-                            actions.push(RevisionAction::Go(index));
-                        }
-                        if clicked(&Button::new(words.accept.clone()).variant(Variant::PRIMARY).show(ui)) {
-                            actions.push(RevisionAction::Accept(index));
-                        }
-                        if clicked(&Button::new(words.reject.clone()).show(ui)) {
-                            actions.push(RevisionAction::Reject(index));
-                        }
+                RevisionCard::new().show(ui, |ui, _| {
+                    Row::new().fill_width().align(RowAlign::SpaceBetween).show(ui, |ui, _| {
+                        Row::new().show(ui, |ui, _| {
+                            ChangeBar::new(kind.clone(), revision.kind).show(ui);
+                            if clicked(&Link::new(revision.heading.clone()).show(ui)) {
+                                actions.push(RevisionAction::Go(index));
+                            }
+                        });
+                        Row::new().show(ui, |ui, _| {
+                            if clicked(&Button::new(words.accept.clone()).variant(Variant::PRIMARY).show(ui)) {
+                                actions.push(RevisionAction::Accept(index));
+                            }
+                            if clicked(&Button::new(words.reject.clone()).show(ui)) {
+                                actions.push(RevisionAction::Reject(index));
+                            }
+                        });
                     });
                     for detail in revision.details.iter().take(DETAIL_LINES) {
                         Text::new(words.detail_line.fill(&[("detail", detail.as_str())])).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
@@ -130,5 +139,119 @@ impl Outcome for RevisionsPanelOutput {
 
     fn response(&self) -> &Response {
         &self.response
+    }
+}
+
+/// One change's card: a raised surface with control padding around its rows.
+#[derive(craft_ui::contract::Component)]
+#[component(container, unregistered)]
+struct RevisionCard {
+    #[common]
+    common: Common,
+    #[container]
+    props: ContainerProps,
+}
+
+impl RevisionCard {
+    fn new() -> Self {
+        RevisionCard { common: Common::new(), props: ContainerProps::new().surface(SurfaceKind::Raised).pad(Pad::Control).sizing(Sizing::FillWidth) }
+    }
+}
+
+/// The style of a revision card: the surface comes from the container.
+#[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+struct RevisionCardStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+}
+
+impl Component for RevisionCard {
+    const ROLE: Role = Role::GROUP;
+    const PARTS: bool = false;
+    const STOPS: bool = false;
+    type Style = RevisionCardStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: RevisionCardStyleKey) -> RevisionCardStyle {
+        RevisionCardStyle::default()
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+impl Container for RevisionCard {}
+
+/// The style of a change's bar.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+struct ChangeBarStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+    inserted: StyleColor,
+    deleted: StyleColor,
+    changed: StyleColor,
+    size: Vec2,
+}
+
+/// The bar at the start of a card in the status colour of its kind, named by the kind's word.
+#[derive(craft_ui::contract::Component)]
+#[component(unregistered)]
+struct ChangeBar {
+    #[common]
+    common: Common,
+    kind: RevisionKind,
+}
+
+impl ChangeBar {
+    fn new(name: Label, kind: RevisionKind) -> Self {
+        ChangeBar { common: Common::new(), kind }.label(name)
+    }
+}
+
+impl Component for ChangeBar {
+    const ROLE: Role = Role::IMAGE;
+    const PARTS: bool = false;
+    const OVERLAYS: bool = false;
+    const STOPS: bool = false;
+    type Style = ChangeBarStyle;
+    type Output = Response;
+
+    fn style(cx: &StyleCx<'_>, _: ChangeBarStyleKey) -> ChangeBarStyle {
+        ChangeBarStyle {
+            metrics: Metrics::new(),
+            inserted: cx.tone(craft_theme::variant::Tone::Good),
+            deleted: cx.tone(craft_theme::variant::Tone::Bad),
+            changed: cx.tone(craft_theme::variant::Tone::Info),
+            size: Vec2::new(cx.tokens.stroke.thick, cx.tokens.size.icon.sm),
+        }
+    }
+
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        cx.style.size
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let color = match self.kind {
+            RevisionKind::Inserted => cx.style.inserted,
+            RevisionKind::Deleted => cx.style.deleted,
+            RevisionKind::Changed => cx.style.changed,
+        };
+        let bar = egui::Rect::from_center_size(cx.content_rect.center(), cx.style.size.min(cx.content_rect.size()));
+        ui.draw().fill(&PaintShape::Rect(bar, CornerRadius::ZERO), color);
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
     }
 }
