@@ -210,7 +210,9 @@ impl PartialEq for Shared {
 
 #[story(Timeline<'static, super::EmptySequence>, covers = [Default, Many], drive = Drive::Never)]
 fn timeline_panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let width = f64::from(ui.available_width());
+    // The panel fills its dock pane: the story gives it the stage.
+    let room = craft_ui::testing::stage(ui);
+    let width = f64::from(room.width());
     let shared = data.value("sequence", Shared(Arc::new(Mutex::new(sample_sequence(width / SHOWN_SECONDS))))).clone();
     let mut sequence = shared.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let (header_width, divider) = (sequence.header_width, sequence.divider);
@@ -221,7 +223,7 @@ fn timeline_panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     if let Some(share) = divider {
         timeline = timeline.divider(share);
     }
-    let out = timeline.show(ui);
+    let out = timeline.show_at(ui, room);
     for edit in &out.edits {
         sequence.apply(edit);
     }

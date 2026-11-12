@@ -10,14 +10,12 @@ use craft_behavior::{Mixed, Selection};
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _, Validity};
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
-use egui::{Color32, Rect, Ui, Vec2};
+use egui::{Color32, Ui};
 
 /// Seconds between a curve's samples.
 const SAMPLE_STEP: f64 = 0.05;
 /// The seconds a Bezier key's handles reach to each side.
 const HANDLE_REACH: f64 = 0.8;
-/// The graph's height over its width.
-const GRAPH_ASPECT: f32 = 0.45;
 /// Points per second of the graph's time axis.
 const POINTS_PER_SECOND: f64 = 90.0;
 /// The sequence's end, in seconds.
@@ -98,16 +96,13 @@ impl Demo {
     }
 }
 
-/// Shows the editor over `range` inside a timeline view over `demo`'s view.
+/// Shows the editor over `range` in a strip view over `demo`'s view.
 fn shown(ui: &mut Ui, demo: &mut Demo, mut range: Bind<'_, GraphRange>) -> StoryOutput {
     let Demo { view, curves, selection } = demo;
     let (curves, selection) = (&*curves, &*selection);
     TimelineView::new("Time", Bind::bound(view), format(), secs(END_SECONDS))
-        .show(ui, |ui, _cx| {
-            let full = ui.available_rect_before_wrap();
-            let rect = Rect::from_min_size(full.min, Vec2::new(full.width(), full.width() * GRAPH_ASPECT));
-            GraphEditor::new("Graph", range.reborrowed(), curves, selection).playhead(secs(3.0)).show_at(ui, rect)
-        })
+        .strip()
+        .show(ui, |ui, _cx| GraphEditor::new("Graph", range.reborrowed(), curves, selection).playhead(secs(3.0)).show(ui))
         .inner
         .map(StoryOutput::from)
         .unwrap_or_default()

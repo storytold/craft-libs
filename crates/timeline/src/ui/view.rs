@@ -20,7 +20,7 @@ use craft_ui::runtime::commands::CommandState;
 use craft_ui::runtime::env::{AppValues, EnvValue, EnvView, Label};
 use craft_ui::runtime::focus::KeyUse;
 use craft_ui::runtime::motion::{Animate as _, spec};
-use craft_ui::style::{ComponentStyle, ScrollBarKind, ScrollBarLook, StyleColor, StyleCx, SurfaceKind};
+use craft_ui::style::{ComponentStyle, ScrollBarKind, ScrollBarLook, StyleColor, StyleCx};
 use egui::{CornerRadius, Pos2, Rect, Response};
 use std::cell::Cell;
 use std::ops::Deref;
@@ -203,6 +203,8 @@ pub struct TimelineViewStyle {
     /// The fill and the edge of a marquee.
     marquee_fill: StyleColor,
     marquee_edge: StyleColor,
+    /// The time area's fill: the sunken surface, square and with no edge, as the headers beside it sit on the panel.
+    well: StyleColor,
 }
 
 /// What the panel works out from its panes in a pass and the view draws over them in the same pass, after the body.
@@ -269,14 +271,14 @@ pub struct TimelineView<'a> {
     /// snap line and the marquee.
     #[prop(into)]
     overlay: Option<&'a Overlay>,
-    /// Whether the horizontal bar shows; a [`strip`](Self::strip) view has none.
-    bar: bool,
+    /// Whether the view draws its sunken time area and the horizontal bar; a [`strip`](Self::strip) view has neither.
+    full: bool,
 }
 
 impl<'a> TimelineView<'a> {
     /// A time area named `label` over `view`, for a sequence ending at `end` written in `format`.
     pub fn new(label: impl Into<Label>, view: Bind<'a, TimeView>, format: TimeFormat, end: Tick) -> Self {
-        let props = ContainerProps::new().surface(SurfaceKind::Sunken).sizing(Sizing::Fill).command_scope(TimeCommand::SCOPE);
+        let props = ContainerProps::new().sizing(Sizing::Fill).command_scope(TimeCommand::SCOPE);
         TimelineView {
             common: Common::new(),
             props,
@@ -293,18 +295,17 @@ impl<'a> TimelineView<'a> {
             context_menu: false,
             anim: Anim::default(),
             overlay: None,
-            bar: true,
+            full: true,
         }
         .label(label)
     }
 
     /// A view around one strip, a ruler or a lane on its own: as wide as its room and as tall as its content, with no
-    /// surface and no bar. The axis, the wheel and the keys are those of any view.
+    /// sunken time area and no bar. The axis, the wheel and the keys are those of any view.
     #[must_use]
     pub fn strip(mut self) -> Self {
-        self.props.surface = None;
         self.props.sizing = Sizing::FillWidth;
-        self.bar = false;
+        self.full = false;
         self
     }
 
@@ -459,6 +460,7 @@ impl Component for TimelineView<'_> {
             snap: cx.color(cx.tokens.color.overlay.line),
             marquee_fill: cx.color(cx.tokens.color.accent.soft),
             marquee_edge: cx.color(cx.tokens.color.accent.border),
+            well: cx.color(cx.tokens.color.surface.sunken),
         }
     }
 
@@ -472,7 +474,7 @@ impl Component for TimelineView<'_> {
 
     /// The bar along the bottom edge, from the end of the headers to the end edge.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        if !self.bar {
+        if !self.full {
             return;
         }
         let Some(view) = cx.value().copied() else { return };
@@ -535,10 +537,14 @@ impl Component for TimelineView<'_> {
         values.set(InTimeline(Some(TimeAxis { view: self.shown(cx), format: self.format, end: self.end })));
     }
 
+    /// The sunken time area under the panes, from the end of the headers to the end edge, and the bar over its bottom.
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        if !self.bar {
+        if !self.full {
             return;
         }
+        let span = cx.flow.span(self.inset(cx.style), self.width(cx.rect, cx.style));
+        let area = Rect::from_min_max(Pos2::new(span.left(), cx.rect.top()), Pos2::new(span.right(), cx.rect.bottom()));
+        ui.draw().fill(&PaintShape::Rect(area, CornerRadius::ZERO), cx.style.well);
         let Some(view) = cx.value().copied() else { return };
         let width = self.width(cx.rect, cx.style);
         if !(view.points_per_second > 0.0 && view.points_per_second.is_finite() && width > 0.0) {

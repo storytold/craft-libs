@@ -22,9 +22,9 @@ use craft_behavior::{
 };
 use craft_ui::buttons::{IconButton, ToggleButton};
 use craft_ui::contract::{
-    Bind, BodyLayout, CollectionEvent, CollectionResponse, ColumnEvent, Common, Component, Container, ContainerProps, Cx, EditResponse, NoValue,
-    Outcome, Pattern, Props, Remember as _, Role, Show as _, ShowCollection as _, ShowContainer as _, ShownRow, SizeLimits, Sizing, SweepApply,
-    SweepStep,
+    Bind, BodyCx, BodyLayout, CollectionEvent, CollectionResponse, ColumnEvent, Common, Component, Container, ContainerProps, Cx, EditResponse,
+    NoValue, Outcome, Pattern, Props, Remember as _, Role, Show as _, ShowCollection as _, ShowContainer as _, ShownRow, SizeLimits, Sizing,
+    SweepApply, SweepStep,
 };
 use craft_ui::display::Text;
 use craft_ui::docking::SplitArea;
@@ -478,8 +478,17 @@ fn label_menu(
 }
 
 impl<M: TimelineModel> Timeline<'_, M> {
-    /// Shows the panel and reports what the user did.
+    /// Shows the panel in the flow, filling the room it is given, and reports what the user did.
     pub fn show(self, ui: &mut Ui) -> TimelineOutput {
+        self.show_in(ui, None)
+    }
+
+    /// Shows the panel over `rect`, as a dock pane or a story stage gives it, and reports what the user did.
+    pub fn show_at(self, ui: &mut Ui, rect: Rect) -> TimelineOutput {
+        self.show_in(ui, Some(rect))
+    }
+
+    fn show_in(self, ui: &mut Ui, at: Option<Rect>) -> TimelineOutput {
         let Timeline { label, model, tool, snap, linked_selection, no_modifier_trims, follow, playing, header_width, divider, content } = self;
         let env = Env::of(ui);
         let words = env.words::<TimelineWords>();
@@ -540,7 +549,7 @@ impl<M: TimelineModel> Timeline<'_, M> {
                 Some(width) => area.header_width(width),
                 None => area,
             };
-            let shown = area.show(ui, |ui, cx| {
+            let body = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
                 TopStrip::new().show(ui, |ui, _| {
                     Stack::new().show(ui, |ui, _| {
                         let field = TimecodeField::new(words.panel.clone(), Bind::given(playhead), format).large().show(ui);
@@ -700,7 +709,11 @@ impl<M: TimelineModel> Timeline<'_, M> {
                     Text::new(words.empty.clone()).show(ui);
                 }
                 *cx.keep::<Memory>() = memory;
-            });
+            };
+            let shown = match at {
+                Some(rect) => area.show_at(ui, rect, body),
+                None => area.show(ui, body),
+            };
             edits.extend(timecode_edit.into_iter().map(TimelineEdit::Playhead));
             edits.extend(ruler_edits);
             shown.output

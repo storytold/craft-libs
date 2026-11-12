@@ -6,7 +6,7 @@ mod stories;
 
 use craft_behavior::kurbo;
 use craft_behavior::{
-    CursorIcon, Granularity, HitLevel, HitPriority, IconId, Intent, MarqueeSelect, Metrics, NavShape, PartKey, PressPhase, PressState, Roving,
+    Axis, CursorIcon, Granularity, HitLevel, HitPriority, IconId, Intent, MarqueeSelect, Metrics, NavShape, PartKey, PressPhase, PressState, Roving,
     Selection, SelectionChange, Sense,
 };
 use craft_keymap::{Chord, Key, Mods};
@@ -420,6 +420,8 @@ pub struct GraphEditorStyle {
     label: TextLook,
     /// The height of the bottom bar and the side of its buttons.
     button: f32,
+    /// The plot's height where the editor is shown in a flow rather than over a given rect.
+    plot: f32,
     /// The side of a key's square, and the diameter of a handle's dot.
     key_side: f32,
     /// A key's and a handle's pointer reach.
@@ -723,6 +725,7 @@ impl Component for GraphEditor<'_> {
             yellow: cx.color(c.data.yellow),
             label: TextLook::new(VALUE_ROLE, Stateful::new(cx.color(c.text.faint))),
             button: cx.control().height,
+            plot: tokens.size.plot.height,
             key_side: tokens.size.handle.sm,
             hit: tokens.size.hit.target,
             gap: tokens.space.gap.inline,
@@ -733,8 +736,13 @@ impl Component for GraphEditor<'_> {
         }
     }
 
+    fn fills(&self) -> Option<Axis> {
+        Some(Axis::X)
+    }
+
+    /// As wide as its room, a plot high over the bottom bar.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        Vec2::new(0.0, cx.style.button)
+        Vec2::new(0.0, cx.style.plot + cx.style.button)
     }
 
     fn sense(&self) -> Sense {
@@ -929,7 +937,9 @@ impl Component for GraphEditor<'_> {
         painter.grid_lines(&grid, &GridInk::new());
         for (y, text) in labels {
             let layout = draw.layout(&TextRun::new(text).role(style.label.role).color(color), f32::INFINITY);
-            draw.galley(Pos2::new(plot.left() + style.pad, y - layout.size().y), &layout);
+            // A label sits on its line, kept inside the plot: the top line's would stand above it.
+            let top = (y - layout.size().y).clamp(plot.top(), (plot.bottom() - layout.size().y).max(plot.top()));
+            draw.galley(Pos2::new(plot.left() + style.pad, top), &layout);
         }
 
         // The reference graph, faint and dashed, scaled to the plot.
