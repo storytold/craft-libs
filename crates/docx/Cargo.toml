@@ -11,6 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+craft-math = { workspace = true }
 craft-offcrypto = { workspace = true }
 craft-opc = { workspace = true }
 craft-wordmodel = { workspace = true }
