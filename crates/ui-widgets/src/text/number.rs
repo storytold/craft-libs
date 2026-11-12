@@ -71,6 +71,8 @@ pub struct NumberStyle {
     field: FieldStyle,
     /// The colour of the inside label's glyph, a scrub handle.
     handle: Stateful<StyleColor>,
+    /// The width of one number cell at the control's size (`size.length.number`), padding included.
+    cell: f32,
 }
 
 /// A number field: a text part over [`NumberCodec`]; empty text is `None`.
@@ -352,6 +354,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             metrics: field.clone().sized_by_content().metrics,
             unit: TextLook::new(TypeRole::Body, Stateful::new(faint).off(States::new(faint, faint, faint, cx.color(cx.tokens.color.text.disabled)))),
             handle: Stateful::new(muted).off(States::new(muted, muted, muted, cx.color(cx.tokens.color.text.disabled))),
+            cell: cx.control().number,
             field,
         }
     }
@@ -386,7 +389,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             return Vec2::new(width, text.y);
         }
         let field = cx.style.field.metrics();
-        let width = width.max(cx.tokens.size.length.number - field.padding.start - field.padding.end);
+        let width = width.max(cx.style.cell - field.padding.start - field.padding.end);
         Vec2::new(width, text.y)
     }
 

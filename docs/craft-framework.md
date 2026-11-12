@@ -983,13 +983,15 @@ A theme with its own shape replaces the radii or adds an offset to control, surf
 | `size.ramp.bar` | Gradient ramp drawn as a bar of its own |
 | `size.ramp.groove` | Gradient ramp drawn as the groove of a value track |
 | `size.rail.width`, `size.rail.button` | Tool rail and panel rail |
-| `size.length.field`, `size.length.track`, `size.length.short`, `size.length.number` | Text or value field, value track, short field, number field over a slider |
+| `size.length.field.sm`, `size.length.field.md` | Text or value field, one width per control size: a field in a small options bar is narrower than one in a dialog |
+| `size.length.number.sm`, `size.length.number.md` | Number field and the number cell over a slider, one width per control size |
+| `size.length.track`, `size.length.short` | Value track, short field |
 | `size.notice.width` | Width of a toast card where the room allows |
 | `size.story.height`, `size.story.width_min`, `size.story.width_max` | The stage a story of a canvas control draws its canvas on: its height and the range of its width; `width_min` is also the least width of a column of a story grid |
 | `size.thumb.card` | The picture side of a tile card at zoom 1 (tile grids, preset browsers, the start screen) |
 | `space.gap.*`, `space.pad.*` | Gaps between and padding inside components |
 
-Both size sets (`crates/theme/sizes/compact.json` and `comfortable.json`) hold every role above. NumberField is at least `size.length.number` wide; apps set other widths per field.
+Both size sets (`crates/theme/sizes/compact.json` and `comfortable.json`) hold every role above. NumberField is at least `size.length.number` at its control size wide; apps set other widths per field.
 
 ## Appendix B. Crate and module layout
 

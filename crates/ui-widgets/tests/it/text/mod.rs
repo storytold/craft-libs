@@ -9,3 +9,4 @@ mod number;
 mod number_length;
 mod selectable;
 mod text_field;
+mod widths;

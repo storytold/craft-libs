@@ -257,7 +257,7 @@ impl<'a> StyleCx<'a> {
         })
     }
 
-    /// The height, icon side, padding and gap of a control at the ambient size.
+    /// The height, icon side, padding, gap and field widths of a control at the ambient size.
     pub fn control(&self) -> ControlMetrics {
         self.control_of(self.size)
     }
@@ -416,7 +416,7 @@ impl<'a> StyleCx<'a> {
     }
 }
 
-/// The height, icon side, padding and gap of a control of `size`.
+/// The height, icon side, padding, gap and field widths of a control of `size`.
 ///
 /// The height is the size token, or more when the face that leads the interface stack sets taller rows than the
 /// token's type line: the control's vertical padding (the token height less the label role's line height, which
@@ -434,5 +434,7 @@ pub(crate) fn control_metrics(tokens: &UiTokens, size: ControlSize, line_ratio: 
         &BySize { sm: sizes.icon.sm, md: sizes.icon.md },
         &BySize { sm: pad, md: pad },
         &BySize { sm: gap, md: gap },
+        &BySize { sm: sizes.length.field.sm, md: sizes.length.field.md },
+        &BySize { sm: sizes.length.number.sm, md: sizes.length.number.md },
     )
 }

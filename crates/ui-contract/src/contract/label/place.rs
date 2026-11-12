@@ -81,7 +81,7 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
     }
     let baseline = leaf.baseline.get();
     if input.side.layout == FieldLayout::Line {
-        let (cell, rest) = flow.take_end(env.tokens.size.length.number);
+        let (cell, rest) = flow.take_end(env.control(input.size).number);
         let width = natural.x.min((rest.rect().width() - gap).max(0.0));
         let drop = (cell.height() - natural.y).max(0.0) / 2.0;
         let label = Flow::new(rest.rect(), rtl).align(Vec2::new(width, natural.y), Align::Min, Align::Min).translate(Vec2::new(0.0, drop));

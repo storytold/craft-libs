@@ -186,7 +186,7 @@ impl<K: Value + 'static> Component for BreadcrumbBar<'_, K> {
             gap,
             joint: icon + 2.0 * gap,
             ellipsis_pad: 2.0 * gap,
-            crumb_cap: cx.tokens.size.length.field,
+            crumb_cap: cx.control().field,
         }
     }
 

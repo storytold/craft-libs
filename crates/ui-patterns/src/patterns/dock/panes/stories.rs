@@ -50,7 +50,7 @@ impl PaneContent<u32> for Panes {
 #[story(PaneArea<'static, u32>, covers = [], drive = Drive::Never)]
 fn pane_area(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let size = &Env::of(ui).tokens.size;
-    let mut content = Panes { float: Vec2::new(size.float.width, size.float.height), side: size.length.field, layers: layer_names() };
+    let mut content = Panes { float: Vec2::new(size.float.width, size.float.height), side: size.length.field.md, layers: layer_names() };
     let open = [0_u32, 1];
     PaneArea::new("Panes", &open, &mut content)
         .show(ui, |ui, _| {
@@ -62,7 +62,7 @@ fn pane_area(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 fn spec(ui: &Ui, title: &str, collection_body: bool) -> PaneSpec {
     let size = &Env::of(ui).tokens.size;
     let mut spec =
-        PaneSpec::new(title.to_owned(), PaneState::docked(PaneEdge::Start, size.length.field), Vec2::new(size.float.width, size.float.height));
+        PaneSpec::new(title.to_owned(), PaneState::docked(PaneEdge::Start, size.length.field.md), Vec2::new(size.float.width, size.float.height));
     spec.collection_body = collection_body;
     spec
 }

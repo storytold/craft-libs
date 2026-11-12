@@ -100,7 +100,8 @@ impl Metrics {
     }
 }
 
-/// The sizes a control takes from its `ControlSize`: height, icon side, horizontal padding and gap.
+/// The sizes a control takes from its `ControlSize`: height, icon side, horizontal padding, gap and the widths of a
+/// field and a number field.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct ControlMetrics {
@@ -112,12 +113,31 @@ pub struct ControlMetrics {
     pub pad_x: f32,
     /// The gap between content parts.
     pub gap: f32,
+    /// The width of a text or value field where the room allows.
+    pub field: f32,
+    /// The width of a number field.
+    pub number: f32,
 }
 
 impl ControlMetrics {
-    /// The entries of the four tables at `size`.
-    pub fn at(size: ControlSize, height: &BySize<f32>, icon: &BySize<f32>, pad_x: &BySize<f32>, gap: &BySize<f32>) -> Self {
-        ControlMetrics { height: height.get(size), icon: icon.get(size), pad_x: pad_x.get(size), gap: gap.get(size) }
+    /// The entries of the six tables at `size`.
+    pub fn at(
+        size: ControlSize,
+        height: &BySize<f32>,
+        icon: &BySize<f32>,
+        pad_x: &BySize<f32>,
+        gap: &BySize<f32>,
+        field: &BySize<f32>,
+        number: &BySize<f32>,
+    ) -> Self {
+        ControlMetrics {
+            height: height.get(size),
+            icon: icon.get(size),
+            pad_x: pad_x.get(size),
+            gap: gap.get(size),
+            field: field.get(size),
+            number: number.get(size),
+        }
     }
 
     /// The `Metrics` of a control of this height: horizontal padding, the height as the least height, the gap.

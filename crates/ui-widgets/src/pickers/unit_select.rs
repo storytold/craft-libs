@@ -121,7 +121,8 @@ impl Component for UnitSelect<'_> {
     type Output = UnitSelectOutput;
 
     fn style(cx: &StyleCx<'_>, _: UnitSelectStyleKey) -> UnitSelectStyle {
-        UnitSelectStyle { metrics: Metrics::new().gap(cx.control().gap), number: cx.tokens.size.length.field }
+        let control = cx.control();
+        UnitSelectStyle { metrics: Metrics::new().gap(control.gap), number: control.field }
     }
 
     fn sense(&self) -> Sense {

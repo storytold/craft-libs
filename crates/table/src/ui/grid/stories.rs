@@ -83,7 +83,7 @@ impl StorySheet {
         }
         StorySheet {
             rows: LineIndex::new(&BTreeMap::new(), size.control.sm, SALES_ROWS),
-            columns: LineIndex::new(&BTreeMap::from([(WIDE_COLUMN, size.length.short)]), size.length.number, SALES_COLUMNS),
+            columns: LineIndex::new(&BTreeMap::from([(WIDE_COLUMN, size.length.short)]), size.length.number.md, SALES_COLUMNS),
             merges: Vec::new(),
             frozen: (1, 0),
             cells,
@@ -102,7 +102,7 @@ impl StorySheet {
             .collect::<Vec<_>>();
         let mut sheet = StorySheet {
             rows: LineIndex::new(&BTreeMap::new(), size.control.sm, rows),
-            columns: LineIndex::new(&hidden, size.length.number, SHEET_COLUMNS),
+            columns: LineIndex::new(&hidden, size.length.number.md, SHEET_COLUMNS),
             merges: if rows > 3 { vec![CellRange::cells(CellAt::new(2, 1), CellAt::new(3, 2))] } else { Vec::new() },
             frozen: (rows.min(1), 1),
             cells,

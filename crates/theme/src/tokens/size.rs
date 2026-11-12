@@ -139,7 +139,7 @@ pub struct Insets {
     pub screen: f32,
 }
 
-/// Control heights, in logical pixels.
+/// One length per control size, in logical pixels: control heights, field widths.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ControlSizes {
     /// Small controls.
@@ -314,14 +314,15 @@ pub struct PointerTipOffset {
 /// Lengths of controls that stretch along one axis, in logical pixels.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LengthSizes {
-    /// The width of a text or value field.
-    pub field: f32,
+    /// The width of a text or value field, one per control size: a field in a small options bar is narrower than one
+    /// in a dialog.
+    pub field: ControlSizes,
     /// The length of a value track (a slider, a range slider, a thumb row).
     pub track: f32,
     /// The width of a short field, such as a number beside a slider.
     pub short: f32,
-    /// The width of a number field over a slider.
-    pub number: f32,
+    /// The width of a number field over a slider, one per control size.
+    pub number: ControlSizes,
 }
 
 /// Thicknesses of gradient ramps, in logical pixels.

@@ -275,7 +275,7 @@ impl Scoped {
         self.scroll_owner.is_some_and(|owner| owner.view)
     }
 
-    /// The height, icon side, padding and gap of a control of `size`, with the line ratio of this scope.
+    /// The height, icon side, padding, gap and field widths of a control of `size`, with the line ratio of this scope.
     pub(crate) fn control(&self, size: craft_theme::ControlSize) -> craft_behavior::ControlMetrics {
         crate::style::control_metrics(&self.tokens, size, self.line_ratio)
     }

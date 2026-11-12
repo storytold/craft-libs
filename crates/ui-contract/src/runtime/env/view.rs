@@ -22,7 +22,7 @@ pub struct EnvView<'a> {
 }
 
 impl<'a> EnvView<'a> {
-    /// The height, icon side, padding and gap of a control of `size`.
+    /// The height, icon side, padding, gap and field widths of a control of `size`.
     pub(crate) fn control(&self, size: craft_theme::ControlSize) -> craft_behavior::ControlMetrics {
         self.scoped.control(size)
     }

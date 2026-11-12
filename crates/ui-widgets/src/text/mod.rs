@@ -34,8 +34,8 @@ use egui::Vec2;
 pub struct FieldStyle {
     #[style(surface)]
     surface: SurfaceLook,
-    /// Padding, the gap between adornments and the text, a control high, and `size.length.field` wide where the room
-    /// allows; a row that lacks room narrows it to `size.length.short`.
+    /// Padding, the gap between adornments and the text, a control high, and `size.length.field` at the control's size
+    /// wide where the room allows; a row that lacks room narrows it to `size.length.short`.
     #[style(metrics)]
     metrics: Metrics,
     /// A glyph adornment: its side and colour.
@@ -53,7 +53,7 @@ impl FieldStyle {
             .padding(Insets::horizontal(control.pad_x))
             .gap(control.gap)
             .min_size(Vec2::new(cx.tokens.size.length.short, control.height))
-            .ideal_width(cx.tokens.size.length.field)
+            .ideal_width(control.field)
             // Where a row shrinks it, a field narrows to its padding and one glyph; what it shows there (an
             // ellipsis, its adornments) its content measure adds.
             .least_width(2.0 * control.pad_x + control.icon);

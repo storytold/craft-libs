@@ -103,8 +103,8 @@ pub enum FieldLayout {
     /// After the control, as check box and radio labels sit: the control takes its narrowest width and the label
     /// follows it, on the end side under RTL. The row never stacks.
     After,
-    /// On one line: the label at the start and the control in a `size.length.number` cell at the end, as a number
-    /// field sits over its slider. The label elides before the cell. The row never stacks.
+    /// On one line: the label at the start and the control in a cell of `size.length.number` at the control's size at
+    /// the end, as a number field sits over its slider. The label elides before the cell. The row never stacks.
     Line,
     /// In the control's box at its start, in the slot a control that offers one shows it (a number field's leading
     /// adornment); the control takes the whole row. For a glyph label of a body that is one such control: the slot

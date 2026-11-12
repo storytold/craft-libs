@@ -227,10 +227,10 @@ impl Component for SliderField<'_> {
         let control = cx.control();
         SliderFieldStyle {
             metrics: Metrics::new().gap(control.gap),
-            field: cx.tokens.size.length.number,
+            field: control.number,
             inline_gap: cx.tokens.space.gap.section,
             row: control.height,
-            width: cx.tokens.size.length.field,
+            width: control.field,
         }
     }
 

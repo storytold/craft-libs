@@ -246,6 +246,8 @@ impl SizeSet {
             }
         };
         le("base.size.control.sm", s.control.sm, "at most base.size.control.md", s.control.md);
+        le("base.size.length.field.sm", s.length.field.sm, "at most base.size.length.field.md", s.length.field.md);
+        le("base.size.length.number.sm", s.length.number.sm, "at most base.size.length.number.md", s.length.number.md);
         le("base.size.icon.sm", s.icon.sm, "at most base.size.icon.md", s.icon.md);
         le("base.size.icon.md", s.icon.md, "at most base.size.icon.lg", s.icon.lg);
         le("base.size.icon.glyph_sm", s.icon.glyph_sm, "at most base.size.icon.sm", s.icon.sm);
