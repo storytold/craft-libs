@@ -144,3 +144,15 @@ fn compare_survey(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         outs.swap_remove(0).into()
     })
 }
+
+#[story(super::pill::RenderPill, covers = [Default], drive = Drive::Never)]
+fn render_pill_pending(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    use craft_ui::contract::Show as _;
+    StoryOutput::from(super::pill::RenderPill::pending("Rendering…").show(ui))
+}
+
+#[story(super::pill::RenderPill, covers = [], drive = Drive::Never)]
+fn render_pill_failed(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    use craft_ui::contract::Show as _;
+    StoryOutput::from(super::pill::RenderPill::failed("Render failed", Some("The renderer stopped".into())).show(ui))
+}

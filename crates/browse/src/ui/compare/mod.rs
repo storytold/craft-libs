@@ -13,6 +13,7 @@
 
 mod arrange;
 mod caption;
+mod pill;
 #[cfg(feature = "screen-testing")]
 mod stories;
 mod style;

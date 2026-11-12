@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use craft_behavior::CanvasTransform;
+use craft_behavior::{CanvasTransform, Proposal};
 use craft_ui::contract::{
     Bind, Common, Component, Container, ContainerProps, Cx, FooterRegion, Held, NoValue, Outcome, PaintUi, Props, Remember as _, Role, Show as _,
     ShowContainer as _, Sizing, clicked,
@@ -18,6 +18,7 @@ use craft_ui::style::StyleCx;
 use egui::load::SizedTexture;
 use egui::{ColorImage, CornerRadius, Rect, Response, Ui, Vec2, vec2};
 
+use super::pill::RenderPill;
 use super::{CompareCaption, CompareTileStyle, CompareWords};
 
 /// The picture a compare tile shows.
@@ -38,11 +39,10 @@ pub enum CompareImage<'a> {
 pub enum RenderState {
     /// The picture is current.
     Ready,
-    /// A render is running; `overdue` once it has taken longer than the host's wait, which replaces the picture with
-    /// the pane's pending line. Before that the last picture stays.
-    /// True once the render has taken longer than the host's wait.
+    /// A render is running: true once it has taken longer than the host's wait, which shows the "Rendering…" pill over
+    /// the picture.
     Pending(bool),
-    /// The render failed: the pane shows the message.
+    /// The render failed: the "Render failed" pill over the picture, with the message as its tooltip.
     Failed(String),
 }
 
@@ -87,8 +87,9 @@ struct Well(Option<Rect>);
 /// - **Picture.** The well is a `PreviewPane`: drag and the arrow keys pan, the wheel and pinch zoom. A double click
 ///   toggles Fit and 1:1 ([`CompareTile::toggle_zoom`]). `.survey(true)` shows the picture always fitted and adopts no
 ///   view change.
-/// - **Render state.** `Pending { overdue: true }` and `Failed` replace the picture with the pane's pending line and
-///   failed message; before the host's wait a pending render keeps the last picture.
+/// - **Render state.** The picture stays. An overdue render shows a "Rendering…" pill (scrim, spinner) and a failed
+///   one a "Render failed" pill (`status.bad.solid`) with the message as its tooltip, centred at the top of the visible
+///   picture. Before the host's wait a pending render shows nothing more.
 /// - **Marks.** The rejected veil (`surface.scrim`) and the active ring (`accent.solid`, with its halo) are painted
 ///   over the well from the tile's style.
 /// - **Access.** An image named by the caption read as text, with the pending or failed text as its description.
@@ -190,14 +191,15 @@ impl<'a> CompareTile<'a> {
         let label = self.label.clone();
         let state = self.state.clone();
         let survey = self.survey;
+        let (rendering, render_failed) = (words.rendering.clone(), words.render_failed.clone());
         let shown = self.label(name).show_at(ui, rect, |ui, cx| {
             let mut view = view.borrow_mut();
             let view = view.as_mut()?;
             let held = if survey { PreviewView::fixed() } else { view.read(cx).unwrap_or_else(PreviewView::fitting) };
             let preview = match (&state, picture) {
-                (RenderState::Failed(message), _) => PreviewState::Failed(Label::from(message.clone())),
-                (RenderState::Pending(true), _) | (_, None) => PreviewState::Pending(None),
                 (_, Some(texture)) => PreviewState::Ready(texture),
+                (RenderState::Failed(_), None) => PreviewState::Failed(Label::Empty),
+                (_, None) => PreviewState::Pending(None),
             };
             let mut pane = PreviewPane::state(label.clone(), preview, &held);
             if let Some(overlay) = &overlay {
@@ -209,7 +211,22 @@ impl<'a> CompareTile<'a> {
                 });
             }
             let out = pane.show(ui);
-            cx.memory::<Well>().0 = Some(out.response.rect);
+            let well = out.response.rect;
+            cx.memory::<Well>().0 = Some(well);
+            let pill = match &state {
+                RenderState::Pending(true) => Some(RenderPill::pending(rendering.clone())),
+                RenderState::Failed(message) => Some(RenderPill::failed(render_failed.clone(), Some(message.clone()).filter(|m| !m.is_empty()))),
+                RenderState::Ready | RenderState::Pending(false) => None,
+            };
+            if let Some(mut pill) = pill {
+                let transform = out.shown.transform;
+                let drawn = picture.map_or(well, |texture| Rect::from_center_size(well.center() + transform.offset, texture.size * transform.scale));
+                let visible = drawn.intersect(well);
+                let visible = if visible.is_positive() { visible } else { well };
+                let size = pill.measure_in(ui, Proposal::Ideal);
+                let top = visible.top() + Env::of(ui).tokens.space.gap.row;
+                pill.show_at(ui, Rect::from_min_size(egui::pos2(visible.center().x - size.x / 2.0, top), size));
+            }
             let double_clicked = !survey && out.double_clicked;
             let next = if survey {
                 None
