@@ -51,7 +51,8 @@ impl<'a> PickerHead<'a> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum PickerField {
-    /// The thumbnail alone; the name when the preset has none.
+    /// The thumbnail alone; the name when the preset has no thumbnail, and an empty thumbnail
+    /// with no preset or a mixed value.
     #[default]
     Thumbnail,
     /// The name alone.
@@ -281,25 +282,35 @@ impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
         }
     }
 
+    /// `face` with an empty thumbnail of the cell shape, and the name unless the field shows the thumbnail alone.
+    fn empty_thumb<'f>(&self, face: SelectFace<'f>) -> SelectFace<'f> {
+        self.captioned(face.thumb(self.cell_shape.aspect(), |_, _| {}).name(self.field != PickerField::Thumbnail))
+    }
+
     /// The face of a field showing `text`: with a `row`, its thumbnail and name as `field` says; without, the muted
-    /// look of a mixed value or a placeholder. The measured candidates and the painted face are both built here.
+    /// look of a mixed value or a placeholder, which a thumbnail-only field shows as an empty thumbnail. The measured
+    /// candidates and the painted face are both built here.
     fn face_of(&self, text: Label, row: Option<&PresetRow<K>>, paint: bool) -> SelectFace<'static> {
-        let Some(row) = row else { return SelectFace::new(text).placeholder() };
         let face = SelectFace::new(text);
-        match (&row.preview, self.field) {
-            (_, PickerField::Name) | (None, _) => face,
-            (Some(preview), field) => {
-                let draw = paint.then(|| preview.paint.clone());
-                let face = face
-                    .thumb(preview.aspect, move |cx, rect| {
-                        if let Some(draw) = &draw {
-                            draw(cx, rect);
-                        }
-                    })
-                    .name(field == PickerField::ThumbnailAndName);
-                self.captioned(face)
-            }
-        }
+        let face = match (row, self.field) {
+            (None, PickerField::Thumbnail) => self.empty_thumb(face.placeholder()),
+            (None, _) => face.placeholder(),
+            (Some(row), field) => match (&row.preview, field) {
+                (_, PickerField::Name) | (None, _) => face,
+                (Some(preview), field) => {
+                    let draw = paint.then(|| preview.paint.clone());
+                    let face = face
+                        .thumb(preview.aspect, move |cx, rect| {
+                            if let Some(draw) = &draw {
+                                draw(cx, rect);
+                            }
+                        })
+                        .name(field == PickerField::ThumbnailAndName);
+                    self.captioned(face)
+                }
+            },
+        };
+        face
     }
 }
 
@@ -320,13 +331,8 @@ impl<K: Value + Eq + Hash + 'static> Component for PresetPicker<'_, K> {
     /// preset, the mixed word and the placeholder, and an empty thumbnail face for the height.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let words = cx.words::<PresetWords>();
-        let aspect = self.cell_shape.aspect();
         let empty = SelectFace::new(Label::Empty);
-        let empty = if self.field == PickerField::Name {
-            empty
-        } else {
-            self.captioned(empty.thumb(aspect, |_, _| {}).name(self.field != PickerField::Thumbnail))
-        };
+        let empty = if self.field == PickerField::Name { empty } else { self.empty_thumb(empty) };
         let rows = self.rows.iter().filter(|row| !row.is_group());
         let faces = rows.map(|row| {
             let (text, _) = self.shown(Some(&Some(row.key.clone())), &words, &cx.env);

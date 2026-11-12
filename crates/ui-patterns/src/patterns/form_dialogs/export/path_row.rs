@@ -1,7 +1,7 @@
 //! `OutputPathRow`: where a render or an export goes, as a template list and the resulting file name as a link.
 
 use crate::buttons::Link;
-use crate::contract::{Bind, EditResponse, Entry, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
+use crate::contract::{Bind, EditResponse, Entry, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, Sizing, clicked};
 use crate::form::Field;
 use crate::layout_components::Row;
 use crate::pickers::Select;
@@ -105,7 +105,7 @@ impl<'a> OutputPathRow<'a> {
             Row::new().show(ui, |ui, _| {
                 if !entries.is_empty() {
                     let picked: EditResponse<String> =
-                        Select::new(words.templates.clone(), value.reborrowed(), &entries).id_salt("templates").show(ui);
+                        Select::new(words.templates.clone(), value.reborrowed(), &entries).id_salt("templates").sizing(Sizing::Content).show(ui);
                     edit.extend(picked.events);
                 }
                 editing = match std::mem::take(&mut editing) {

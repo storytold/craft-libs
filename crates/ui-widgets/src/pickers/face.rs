@@ -39,7 +39,7 @@ pub struct SelectFaceStyle {
 }
 
 /// The closed box of a picker: `text` elided to the room left of a trailing chevron. The box is as wide as the text
-/// and the chevron need, at least a field wide. A host shows it as the look of one of its parts with
+/// and the chevron need, at least a field wide; a thumbnail alone takes only its own width. A host shows it as the look of one of its parts with
 /// `ui.face(part, SelectFace::new(text))` over the field well it paints itself, and gives the box the width of its
 /// widest text so the width does not change with the pick. A thumbnail goes before the text, or alone.
 #[derive(crate::contract::Component, crate::contract::Props)]
@@ -57,8 +57,9 @@ pub struct SelectFace<'a> {
     /// A short line centred under the thumbnail (a brush's size); it shows only with a thumbnail.
     #[prop(into)]
     thumb_caption: Option<Label>,
-    /// Whether the text shows beside the thumbnail; `false` shows the thumbnail alone. The text is the face's
-    /// accessible name either way.
+    /// Whether the text shows beside the thumbnail; `false` shows the thumbnail alone, as wide as the thumbnail and
+    /// the chevron need. The text is the face's accessible name either way.
+    #[style_key]
     #[prop]
     name: bool,
 }
@@ -111,14 +112,17 @@ impl Component for SelectFace<'_> {
     type Style = SelectFaceStyle;
     type Output = Response;
 
-    fn style(cx: &StyleCx<'_>, _: SelectFaceStyleKey) -> SelectFaceStyle {
+    fn style(cx: &StyleCx<'_>, key: SelectFaceStyleKey) -> SelectFaceStyle {
         let field = FieldStyle::at(cx);
+        // A thumbnail alone keeps the field's padding and height, not the widths a field keeps for its text.
+        let metrics = field.metrics();
+        let metrics = if key.name { metrics } else { metrics.ideal_width(0.0).min_size(Vec2::new(0.0, metrics.min_size.y)) };
         let off = cx.color(cx.tokens.color.text.disabled);
         let (ink, muted) = (cx.ink(Ink::OnPanel), cx.color(cx.tokens.color.text.faint));
         let caption = cx.color(cx.tokens.color.text.muted);
         let ink = Stateful::new(ink).off(States::new(ink, ink, ink, off));
         SelectFaceStyle {
-            metrics: field.metrics(),
+            metrics,
             text: TextLook::new(TypeRole::Body, cx.host_ink(ink.clone())),
             placeholder: TextLook::new(TypeRole::Body, cx.host_muted_ink(Stateful::new(muted).off(States::new(muted, muted, muted, off)))),
             chevron: IconLook::new(field.glyph().side, cx.host_ink(ink)),
