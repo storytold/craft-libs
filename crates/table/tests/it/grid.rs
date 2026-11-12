@@ -9,7 +9,7 @@ use craft_table::ui::{
     CellAt, CellEdit, CellGrid, CellProblem, CellRange, ColumnFilter, GridEdit, GridModel, GridState, LineIndex, SHEET_COLUMNS, SHEET_ROWS,
     SheetGeometry,
 };
-use craft_ui::contract::{PaintUi, Props as _};
+use craft_ui::contract::PaintUi;
 use craft_ui::primitives::TextRun;
 use craft_ui::runtime::env::Label;
 use craft_ui::testing::focus::AccessActionKind;
@@ -359,7 +359,6 @@ fn a_merged_cell_paints_once_over_all_its_rows() {
 /// bar: a press on the track where the tag would reach still pages the rows.
 #[trial]
 fn chrome_sits_in_its_cells_and_clear_of_the_scroll_bar() {
-    const TAG: CellAt<u32> = CellAt::new(8, 3);
     let geometry = Rc::new(RefCell::new(None));
     let grid = Rc::new(Cell::new(None));
     let state = Rc::new(RefCell::new(GridState::new(a1(), 1.0)));
@@ -371,7 +370,7 @@ fn chrome_sits_in_its_cells_and_clear_of_the_scroll_bar() {
         let mut shown = shown_state.borrow().clone();
         let out = CellGrid::new("Sheet", &model, &mut shown)
             .filters(&filters)
-            .error_tag(CellProblem::new(TAG, "Number stored as text", &fixes))
+            .error_tag(CellProblem::new(CellAt::new(8, 3), "Number stored as text", &fixes))
             .show_sheet(ui);
         seen_grid.set(Some(out.collection.response.id));
         *seen_geometry.borrow_mut() = Some(out.geometry);
