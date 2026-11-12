@@ -15,6 +15,7 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 
 | File | Change |
 |---|---|
+| `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
 | `src/topology.rs` | `is_disjoint_tags` no longer calls `dbg!`, which printed two lines to stderr for every output segment on every call, in release builds too. It loops over `segment_indices()` instead of every winding entry, so it skips the segments that merging coincident segments deleted. The `disjoint_skips_merged_segments` test covers the second change. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
