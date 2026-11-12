@@ -244,7 +244,8 @@ fn a_double_click_in_one_frame_selects_a_smart_filter_row_and_activates_it() {
 }
 
 /// A Smart Filter row dragged onto another smart object's row moves the filter there, with the active layer changing to
-/// the filter's smart object when the press selects its row.
+/// the filter's smart object when the press selects its row. With the filter row selected beside its layer, a drag of
+/// the layer's row carries the layer alone.
 #[trial]
 fn a_smart_filter_row_dragged_onto_another_smart_object_moves_there() {
     let mut tree = tree();
@@ -264,4 +265,15 @@ fn a_smart_filter_row_dragged_onto_another_smart_object_moves_there() {
         })
         .collect();
     assert_eq!(transfers, [(vec![LayerRowKey::Filters(SMART, Some(0))], other, false)], "{events:?}");
+    let from = node(&fixture, "Smart Object").center();
+    fixture.drag_hold_at(from, to - from).release_at(to).idle(2);
+    let events = take(&app);
+    let moved: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            LayersEvent::Drop(EditEvent::Set { after: LayerDrop::Layers(mv), .. }) => Some(mv.layers.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(moved, [vec![SMART]], "{events:?}");
 }

@@ -175,8 +175,8 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
     }
 
-    /// Delete and Backspace at the lead of a `deletable` collection: the request names the selected items when the lead
-    /// is one of them, else the lead alone. The keys stay untaken (shortcut candidates) in a collection that is not
+    /// Delete and Backspace at the lead of a `deletable` collection: the request names the selected items of the lead's
+    /// kind (rows or sub-rows) when the lead is one of them, else the lead alone. The keys stay untaken (shortcut candidates) in a collection that is not
     /// `deletable`.
     pub(super) fn delete_key(&mut self, cx: &mut Cx<'_, C>, props: &CollectionProps, lead_at: Option<usize>) {
         if !props.deletable {
@@ -185,9 +185,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let forward = cx.core.intents.take_exact(&Intent::delete(true, Granularity::Unit));
         let back = cx.core.intents.take_exact(&Intent::delete(false, Granularity::Unit));
         let Some(row) = lead_at.filter(|_| forward || back) else { return };
-        let lead = self.source.key(row);
-        let keys = if self.holds(row) { self.selected_keys(&self.selection) } else { vec![lead] };
-        self.events.push(CollectionEvent::Delete(keys));
+        self.events.push(CollectionEvent::Delete(self.acted_on(row)));
     }
 
     /// Space on the lead row `row`, as `CollectionProps.space` says.

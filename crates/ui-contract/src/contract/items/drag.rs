@@ -408,7 +408,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     fn begin_row_drag(&mut self, cx: &mut Cx<'_, C>, props: &CollectionProps, at: usize) {
         let id = cx.core.id;
         let key = self.source.key(at);
-        let keys: Vec<C::Key> = if self.holds(at) { self.selected_keys(&self.selection) } else { vec![key.clone()] };
+        let keys = self.acted_on(at);
         let count = keys.len() as u64;
         let preview = match props.drag_count {
             Some(word) => DragPreview::Badge(Label::from(cx.env.counted(word, count))),
