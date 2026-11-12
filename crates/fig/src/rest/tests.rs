@@ -701,3 +701,52 @@ fn points_without_a_radius_of_their_own_take_the_layers() {
     let in_instance = &named(&out.json, "I")["children"][0];
     assert_eq!(radii(&in_instance["vectorNetworkRef"]), [7.0, 7.0, 7.0]);
 }
+
+/// 270 frames inside one another, or 270 mains each holding an instance of the next: past the
+/// nesting limit either way.
+fn nested(instances: bool) -> Kv<'static> {
+    let mut nodes = vec![node(0, None, "DOCUMENT", "D", vec![]), node(1, Some((0, "!")), "CANVAS", "P", vec![])];
+    let levels = 270;
+    if instances {
+        for i in 0..levels {
+            let id = 10 + 2 * i;
+            nodes.push(node(id, Some((1, "!")), "SYMBOL", "M", vec![("size", xy(1.0, 1.0))]));
+            if i + 1 < levels {
+                nodes.push(node(
+                    id + 1,
+                    Some((id, "!")),
+                    "INSTANCE",
+                    "I",
+                    vec![("size", xy(1.0, 1.0)), ("symbolData", o(vec![("symbolID", g(id + 2))]))],
+                ));
+            }
+        }
+        nodes.push(node(5, Some((1, "\"")), "INSTANCE", "Top", vec![("size", xy(1.0, 1.0)), ("symbolData", o(vec![("symbolID", g(10))]))]));
+    } else {
+        let mut parent = 1;
+        for i in 0..levels {
+            nodes.push(node(10 + i, Some((parent, "!")), "FRAME", "F", vec![("size", xy(1.0, 1.0))]));
+            parent = 10 + i;
+        }
+    }
+    o(vec![("nodeChanges", arr(nodes))])
+}
+
+#[test]
+fn deep_nesting_stops_at_the_limit_within_a_small_stack() {
+    // The walk recurses once per level, in small frames: past the limit of 256 it fits the 1 MiB
+    // stack of a WebAssembly build (an unoptimised build maps it on 512 KiB).
+    let run = || {
+        for instances in [false, true] {
+            let msg = nested(instances);
+            let out = mapped(&msg);
+            assert!(
+                out.warnings.iter().any(|w| w.starts_with(&format!("layers nested deeper than {MAX_DEPTH} levels were skipped"))),
+                "{:?}",
+                out.warnings
+            );
+            assert!(craft_figma_rest::check(&out.json, usize::MAX).is_ok());
+        }
+    };
+    std::thread::Builder::new().stack_size(1 << 20).spawn(run).unwrap().join().unwrap();
+}

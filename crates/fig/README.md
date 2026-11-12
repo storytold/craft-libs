@@ -113,7 +113,7 @@ let file = craft_figma_rest::File::from_value(mapped.json, usize::MAX)?;  // or 
   that wants them.
 - **Budgets.** At most `Options::max_nodes` layers are produced or scanned, instance expansion
   included (`rest::layer_budget` follows the compressed canvas: 8 bytes a layer, 200 000 to
-  2 000 000); nesting is followed 256 levels deep; conditional actions 16, expressions 32; grid
+  2 000 000); nesting is followed 256 levels deep (the walk recurses once per level in small frames: an unoptimised build maps past that limit on 512 KiB, half the 1 MiB stack of a WebAssembly build, and a test at the limit runs on a 1 MiB thread); conditional actions 16, expressions 32; grid
   tracks 1 000; region paint elements 200 000 per file; scale factors between 0.001 and 1000.
 
 The mapping was written in FigCraft (`crates/format/src/fig/map`) by its contributors, from the

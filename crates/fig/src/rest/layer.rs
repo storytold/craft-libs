@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use super::component::{Entry, Inst, OverrideRow, prop_ref};
 use super::connector::{ConnectorShape, connector_has_saved_label};
 use super::layout::{layout_grid, tracks};
@@ -64,20 +66,30 @@ impl Fit {
     }
 }
 
-struct LayerChildren<'s, 'a> {
-    id: &'s str,
-    inst: Option<&'s Inst<'a>>,
-    base: &'s Kv<'a>,
-    child_space: Affine,
-    view: &'s View<'a>,
-    object: &'s mut Obj,
-    ty: &'s str,
-    rest_id: &'s str,
-    connector_snapshot: bool,
-    connector_terminal: bool,
-    depth: usize,
-    included: Option<&'s BTreeSet<String>>,
-    slot_content: Option<String>,
+/// What a layer's children are mapped from: the ids of the layers, the instance they are
+/// expanded in, the view they see as their parent (`None`: the layer's own), their space and fit,
+/// and whether the caller's filter applies to them.
+struct Plan<'i, 'a> {
+    ids: Vec<String>,
+    inst: Option<Cow<'i, Inst<'a>>>,
+    view: Option<View<'a>>,
+    space: Affine,
+    fit: Option<Fit>,
+    filtered: bool,
+}
+
+/// A layer mapped but for its children ([`Mapper::layer_head`]).
+struct Head<'i, 'a> {
+    o: Obj,
+    view: View<'a>,
+    own: &'a str,
+    rest_id: String,
+    stand: Option<(&'static str, &'static str)>,
+    /// Children made before the mapped ones (a connector snapshot's).
+    kids: Vec<Value>,
+    /// Children that go before all others (a connector's line and label).
+    connector_kids: Vec<Value>,
+    plan: Option<Box<Plan<'i, 'a>>>,
 }
 
 impl<'a> Mapper<'a> {
@@ -98,6 +110,10 @@ impl<'a> Mapper<'a> {
 
     /// [`Self::layer`], keeping only the layers in `included` (all when `None`) below the
     /// top-level one: the cached library definitions of an internal canvas.
+    ///
+    /// The recursion through the layer tree runs through this function, which keeps its frame
+    /// small: the work on one layer is done in [`Self::layer_head`] and [`Self::layer_tail`], which
+    /// return before and after its children are mapped, so a deep file needs little stack per level.
     #[allow(clippy::too_many_arguments)] // as many as `layer` takes, plus the filter
     pub(super) fn layer_filtered(
         &mut self,
@@ -109,6 +125,31 @@ impl<'a> Mapper<'a> {
         depth: usize,
         included: Option<&BTreeSet<String>>,
     ) -> Option<Value> {
+        let mut head = self.layer_head(id, inst, space, parent, fit, depth, included)?;
+        if let Some(plan) = head.plan.take() {
+            let view = plan.view.as_ref().unwrap_or(&head.view);
+            for c in &plan.ids {
+                let filter = if plan.filtered { included } else { None };
+                let kid = self.layer_filtered(c, plan.inst.as_deref(), plan.space, Some(view), plan.fit, depth + 1, filter);
+                head.kids.extend(kid);
+            }
+        }
+        Some(self.layer_tail(head, depth))
+    }
+
+    /// A layer's own fields, and the plan its children are mapped by.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)] // as `layer_filtered`
+    fn layer_head<'i>(
+        &mut self,
+        id: &str,
+        inst: Option<&'i Inst<'a>>,
+        space: Affine,
+        parent: Option<&View<'a>>,
+        fit: Option<Fit>,
+        depth: usize,
+        included: Option<&BTreeSet<String>>,
+    ) -> Option<Box<Head<'i, 'a>>> {
         if included.is_some_and(|ids| !ids.contains(id)) {
             return None;
         }
@@ -246,21 +287,70 @@ impl<'a> Mapper<'a> {
             source.insert("slotOverride".into(), json!(true));
         }
         let child_space = if matches!(ty, "GROUP" | "BOOLEAN_OPERATION") { space * view.transform().unwrap_or_default() } else { Affine::IDENTITY };
-        let mut kids = self.map_layer_children(LayerChildren {
-            id,
-            inst,
-            base,
-            child_space,
-            view: &view,
-            object: &mut o,
-            ty,
-            rest_id: &rest_id,
-            connector_snapshot,
-            connector_terminal,
-            depth,
-            included,
-            slot_content,
-        });
+        let kids = if connector_snapshot && !connector_terminal { self.connector_snapshot_children(&view, &rest_id) } else { Vec::new() };
+        let plan = if connector_terminal {
+            // The saved vector is flattened into the connector node when no child slot remains.
+            None
+        } else if ty == "INSTANCE" {
+            self.instance(&mut o, &view, id, inst, &rest_id).map(|(sub, sym)| {
+                let was = base.get("symbolData").and_then(|s| s.get("symbolID")).and_then(guid);
+                // A layer that records no main (a frame turned into an instance) has no old look to replace.
+                if let Some(was) = was.filter(|w| *w != sym)
+                    && let Some(new_main) = self.nodes.get(&sym).copied()
+                {
+                    let old = self.nodes.get(&was).copied();
+                    self.swapped_look(&mut o, &view, base, old, new_main, sub.scale, ty);
+                }
+                let main = self.nodes.get(&sym).map(|m| View::of_scaled(m, sub.scale));
+                // A scaled main's size is the factor's product, rounded to a float: it matches an
+                // instance of that size without a fit that would round the layers again.
+                let near = |a: f64, b: f64| (a - b).abs() <= 1e-4 * a.abs().max(b.abs()).max(1.0);
+                let fit = match (main.as_ref().and_then(View::size), view.size()) {
+                    (Some(a), Some(b)) if sub.scale != 1.0 && near(a.0, b.0) && near(a.1, b.1) => None,
+                    (a, b) => Fit::frame(a, b),
+                };
+                // An instance that records no auto layout of its own has its main's.
+                let child_view = match main {
+                    Some(m) if view.get("stackMode").is_none() && m.get("stackMode").is_some() => {
+                        let layered = m.over(&view);
+                        self.auto_layout(&mut o, &layered);
+                        Some(layered)
+                    }
+                    _ => None,
+                };
+                // The main's branch can live outside the cached context being mapped.
+                Box::new(Plan { ids: self.children(&sym), inst: Some(Cow::Owned(sub)), view: child_view, space: child_space, fit, filtered: false })
+            })
+        } else if let Some(content) = slot_content {
+            let mut content_inst = inst.cloned();
+            if let Some(content_inst) = &mut content_inst {
+                content_inst.slot_content = true;
+            }
+            Some(Box::new(Plan {
+                ids: self.children(&content),
+                inst: content_inst.map(Cow::Owned),
+                view: None,
+                space: child_space,
+                fit: None,
+                filtered: true,
+            }))
+        } else {
+            // Inside an instance a layer's children are its main's: they follow it from the main's
+            // size to its own.
+            let fit = match (inst, ty) {
+                (None, _) => None,
+                (Some(i), "GROUP" | "BOOLEAN_OPERATION") => Fit::scale(View::of_scaled(base, i.scale).size(), view.size()),
+                (Some(i), _) => Fit::frame(View::of_scaled(base, i.scale).size(), view.size()),
+            };
+            Some(Box::new(Plan { ids: self.children(id), inst: inst.map(Cow::Borrowed), view: None, space: child_space, fit, filtered: true }))
+        };
+        Some(Box::new(Head { o, view, own, rest_id, stand, kids, connector_kids, plan }))
+    }
+
+    /// A layer with its mapped children ([`Self::layer_head`]).
+    #[inline(never)]
+    fn layer_tail(&mut self, head: Box<Head<'_, 'a>>, depth: usize) -> Value {
+        let Head { mut o, view, own, rest_id, stand, mut kids, connector_kids, .. } = *head;
         kids.splice(0..0, connector_kids);
         if stand.is_some_and(|s| s.0 == "FRAME") {
             if let Some(snapshot) = self.board_snapshot(&mut o, &view, own, &rest_id, depth) {
@@ -273,81 +363,7 @@ impl<'a> Mapper<'a> {
         if !kids.is_empty() {
             o.insert("children".into(), Value::Array(kids));
         }
-        Some(Value::Object(o))
-    }
-
-    fn map_layer_children(&mut self, context: LayerChildren<'_, 'a>) -> Vec<Value> {
-        let LayerChildren {
-            id,
-            inst,
-            base,
-            child_space,
-            view,
-            object: o,
-            ty,
-            rest_id,
-            connector_snapshot,
-            connector_terminal,
-            depth,
-            included,
-            slot_content,
-        } = context;
-        let mut kids = if connector_snapshot && !connector_terminal { self.connector_snapshot_children(view, rest_id) } else { Vec::new() };
-        if connector_terminal {
-            // The saved vector is flattened into the connector node when no child slot remains.
-        } else if ty == "INSTANCE" {
-            if let Some((sub, sym)) = self.instance(o, view, id, inst, rest_id) {
-                let was = base.get("symbolData").and_then(|s| s.get("symbolID")).and_then(guid);
-                // A layer that records no main (a frame turned into an instance) has no old look to replace.
-                if let Some(was) = was.filter(|w| *w != sym)
-                    && let Some(new_main) = self.nodes.get(&sym).copied()
-                {
-                    let old = self.nodes.get(&was).copied();
-                    self.swapped_look(o, view, base, old, new_main, sub.scale, ty);
-                }
-                let main = self.nodes.get(&sym).map(|m| View::of_scaled(m, sub.scale));
-                // A scaled main's size is the factor's product, rounded to a float: it matches an
-                // instance of that size without a fit that would round the layers again.
-                let near = |a: f64, b: f64| (a - b).abs() <= 1e-4 * a.abs().max(b.abs()).max(1.0);
-                let fit = match (main.as_ref().and_then(View::size), view.size()) {
-                    (Some(a), Some(b)) if sub.scale != 1.0 && near(a.0, b.0) && near(a.1, b.1) => None,
-                    (a, b) => Fit::frame(a, b),
-                };
-                // An instance that records no auto layout of its own has its main's.
-                let view = match main {
-                    Some(m) if view.get("stackMode").is_none() && m.get("stackMode").is_some() => {
-                        let layered = m.over(view);
-                        self.auto_layout(o, &layered);
-                        layered
-                    }
-                    _ => view.clone(),
-                };
-                for c in self.children(&sym) {
-                    // The main's branch can live outside the cached context being mapped.
-                    kids.extend(self.layer_filtered(&c, Some(&sub), child_space, Some(&view), fit, depth + 1, None));
-                }
-            }
-        } else if let Some(content) = slot_content {
-            let mut content_inst = inst.cloned();
-            if let Some(content_inst) = &mut content_inst {
-                content_inst.slot_content = true;
-            }
-            for c in self.children(&content) {
-                kids.extend(self.layer_filtered(&c, content_inst.as_ref(), child_space, Some(view), None, depth + 1, included));
-            }
-        } else {
-            // Inside an instance a layer's children are its main's: they follow it from the main's
-            // size to its own.
-            let fit = match (inst, ty) {
-                (None, _) => None,
-                (Some(i), "GROUP" | "BOOLEAN_OPERATION") => Fit::scale(View::of_scaled(base, i.scale).size(), view.size()),
-                (Some(i), _) => Fit::frame(View::of_scaled(base, i.scale).size(), view.size()),
-            };
-            for c in self.children(id) {
-                kids.extend(self.layer_filtered(&c, inst, child_space, Some(view), fit, depth + 1, included));
-            }
-        }
-        kids
+        Value::Object(o)
     }
 
     fn mapped_type<'s>(
