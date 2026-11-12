@@ -268,6 +268,11 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
             }
         }
     }
+    // Olympus: the CameraSettings preview
+    #[cfg(feature = "orf")]
+    if let Some(p) = crate::orf::preview(bytes) {
+        found.push(p);
+    }
     bound_candidates(&mut found, bytes.len());
     let largest = found.iter().copied().filter(|s| is_dct_jpeg(s) || is_jxl(s)).max_by_key(|s| s.len());
     let best = min_edge
