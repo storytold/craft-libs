@@ -37,6 +37,8 @@ struct Instance {
     viewport: ViewportId,
     /// The pass of its viewport that last registered it.
     stamp: u64,
+    /// The layer whose body it ran in, when it ran in one.
+    layer: Option<Id>,
 }
 
 struct KeymapCache {
@@ -508,7 +510,12 @@ pub fn focus_within(ctx: &Context, id: Id) -> bool {
 
 /// Records that the container `id` is an instance of `scope` in the running pass of its viewport.
 pub(crate) fn register_instance(ctx: &Context, scope: CommandScope, id: Id) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| register_instance(ctx, scope, id));
+    register_in(ctx, scope, id, overlay::drawing_parent(ctx));
+}
+
+/// `register_instance` in the layer `layer`, which a replay of the registration keeps.
+fn register_in(ctx: &Context, scope: CommandScope, id: Id, layer: Option<Id>) {
+    crate::runtime::replay::journal(ctx, || move |ctx: &Context| register_in(ctx, scope, id, layer));
     let viewport = pass::current_viewport(ctx);
     let stamp = pass::pass_nr(ctx, viewport);
     with(ctx, |board| match board.instances.iter_mut().find(|i| i.id == id) {
@@ -516,8 +523,9 @@ pub(crate) fn register_instance(ctx: &Context, scope: CommandScope, id: Id) {
             instance.scope = scope;
             instance.viewport = viewport;
             instance.stamp = stamp;
+            instance.layer = layer;
         }
-        None => board.instances.push(Instance { id, scope, viewport, stamp }),
+        None => board.instances.push(Instance { id, scope, viewport, stamp, layer }),
     });
 }
 
@@ -924,9 +932,18 @@ pub(crate) fn begin(ctx: &Context) {
     if returning.is_some() && pressed {
         focus::give_back_bar(ctx);
     }
-    // A command a key runs closes the open popups (menus, dropdowns, lists), as a menu pick does.
+    // A command a key runs closes the open popups (menus, dropdowns, lists), as a menu pick does, except the popup
+    // whose content declares the command's scope (a tour card's own arrows) and the popups it was opened from.
     if pressed {
-        overlay::close_popups(ctx);
+        let inside: Vec<Id> = with(ctx, |board| {
+            fired
+                .iter()
+                .filter(|fired| fired.phase == FirePhase::Press)
+                .filter_map(|fired| fired.target)
+                .filter_map(|target| board.instances.iter().find(|instance| instance.id == target)?.layer)
+                .collect()
+        });
+        overlay::close_popups_outside(ctx, &inside);
     }
     for fired in fired {
         queue(ctx, fired);

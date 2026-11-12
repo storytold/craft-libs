@@ -92,3 +92,17 @@ fn next_and_back_keep_the_card_and_skip_or_close_leave_on_every_step() {
         assert_eq!(events.borrow().as_slice(), [TourEvent::Skipped], "each leaves the tour on the last step");
     }
 }
+
+/// The tour's own key commands run from its card and keep it open: the arrows step.
+#[trial]
+fn the_arrow_keys_step_the_tour_and_keep_the_card() {
+    let index = Rc::new(Cell::new(0));
+    let events: Rc<RefCell<Vec<TourEvent>>> = Rc::default();
+    let mut fixture = three_steps(index.clone(), events.clone());
+    fixture.idle(10);
+    fixture.key(egui::Key::ArrowRight, egui::Modifiers::NONE);
+    fixture.idle(4);
+    assert_eq!(events.borrow().as_slice(), [TourEvent::Next], "Right is the tour's Next");
+    assert_eq!(index.get(), 1, "and moves on");
+    assert!(button(&fixture, "Next").is_some(), "the card stays");
+}

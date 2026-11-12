@@ -291,11 +291,25 @@ pub fn request_close(ctx: &Context, id: Id, why: CloseReason) {
 /// keys the runtime leaves in egui's input calls it when the shortcut runs. Either way the command closes the open
 /// popups as a menu pick does; modal layers, windows and toasts stay.
 pub fn close_popups(ctx: &Context) {
+    close_popups_outside(ctx, &[]);
+}
+
+/// `close_popups`, keeping the layers `inside` and the layers each was opened from.
+pub(crate) fn close_popups_outside(ctx: &Context, inside: &[Id]) {
     if !crate::runtime::measure::effect(ctx, "overlay::close_popups") {
         return;
     }
-    let popups: Vec<Id> =
-        with_pass(ctx, |pass| pass.last.iter().filter(|entry| entry.rank == Rank::Popup && !entry.exiting).map(|entry| entry.id).collect());
+    let popups: Vec<Id> = with_pass(ctx, |pass| {
+        let mut kept: Vec<Id> = Vec::new();
+        for &layer in inside {
+            let mut at = Some(layer);
+            while let Some(id) = at.filter(|id| !kept.contains(id)) {
+                kept.push(id);
+                at = pass.last.iter().find(|entry| entry.id == id).and_then(|entry| entry.parent);
+            }
+        }
+        pass.last.iter().filter(|entry| entry.rank == Rank::Popup && !entry.exiting && !kept.contains(&entry.id)).map(|entry| entry.id).collect()
+    });
     for id in popups {
         push_close(ctx, id, CloseReason::Requested, false);
     }
