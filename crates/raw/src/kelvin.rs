@@ -1,8 +1,10 @@
 //! A camera's white-balance presets at stated colour temperatures, as data.
 //!
 //! Some cameras record the multipliers they would apply for each of their white-balance presets, with the
-//! temperature the camera gives the preset (Canon CR2: the maker note's `ColorData`). For a raw without colour
-//! matrices they are the camera's own Kelvin scale. This crate reads and orders them; placing a white on the curve
+//! temperature the camera gives the preset (Canon CR2: the maker note's `ColorData`). Others record only the
+//! camera's neutral multipliers for CIE Illuminant A and D65 (Fujifilm RAF, raw IFD tag `0xf00c`):
+//! [`KelvinPresets::from_neutral_pair`] keeps that pair. For a raw without colour matrices they are the camera's own
+//! Kelvin scale. This crate reads and orders them; placing a white on the curve
 //! through them (temperature and tint) is the developer's arithmetic.
 
 use serde::{Deserialize, Serialize};
@@ -14,6 +16,9 @@ const MAX_POINTS: usize = 32;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct KelvinPresets {
     points: Vec<(f32, [f32; 3])>,
+    /// Multipliers (green = 1) for Illuminant A and D65, when that pair is all the file records.
+    #[serde(default)]
+    pair: Option<[[f32; 3]; 2]>,
 }
 
 fn usable(m: [f32; 3]) -> bool {
@@ -35,7 +40,7 @@ impl KelvinPresets {
                 let (a, b) = (log_point(w[0].1), log_point(w[1].1));
                 w[0].0 < w[1].0 && b[0] > a[0] && b[1] < a[1]
             });
-        ok.then(|| KelvinPresets { points: points.into_iter().map(|(k, m)| (k, [m[0] / m[1], 1.0, m[2] / m[1]])).collect() })
+        ok.then(|| KelvinPresets { points: points.into_iter().map(|(k, m)| (k, [m[0] / m[1], 1.0, m[2] / m[1]])).collect(), pair: None })
     }
 
     /// A curve from presets in any order, as a camera lists them by name (Canon's Daylight, Shade, Cloudy, …):
@@ -57,9 +62,27 @@ impl KelvinPresets {
         KelvinPresets::new(kept)
     }
 
-    /// The presets as (Kelvin, multipliers with green = 1), ascending in Kelvin.
+    /// The camera's neutral multipliers for Illuminant A and for D65; `None` unless both are positive and A is
+    /// the warmer (more blue gain, less red: red rising and blue falling from A to D65, as on every preset curve).
+    /// The temperatures belong to the illuminants, not the file, so placing points between them is the developer's
+    /// colour arithmetic; [`Self::points`] is then empty.
+    pub fn from_neutral_pair(a: [f32; 3], d65: [f32; 3]) -> Option<KelvinPresets> {
+        if !usable(a) || !usable(d65) {
+            return None;
+        }
+        let (pa, pd) = (log_point(a), log_point(d65));
+        let unit = |m: [f32; 3]| [m[0] / m[1], 1.0, m[2] / m[1]];
+        (pd[0] > pa[0] && pd[1] < pa[1]).then(|| KelvinPresets { points: Vec::new(), pair: Some([unit(a), unit(d65)]) })
+    }
+
+    /// The presets as (Kelvin, multipliers with green = 1), ascending in Kelvin. Empty for a neutral pair.
     pub fn points(&self) -> &[(f32, [f32; 3])] {
         &self.points
+    }
+
+    /// The Illuminant A and D65 multipliers (green = 1) of [`Self::from_neutral_pair`].
+    pub fn neutral_pair(&self) -> Option<[[f32; 3]; 2]> {
+        self.pair
     }
 }
 
@@ -109,5 +132,20 @@ mod tests {
         assert!(p.points().windows(2).all(|w| w[0].0 < w[1].0));
         assert_eq!(KelvinPresets::from_unordered([(5000.0, g(1400.0, 1400.0)), (6000.0, g(1500.0, 1300.0))]), None);
         assert_eq!(KelvinPresets::from_unordered(std::iter::empty()), None);
+    }
+
+    #[test]
+    fn a_neutral_pair_is_kept_as_stated() {
+        let p = KelvinPresets::from_neutral_pair([1.2, 0.8, 2.4], [2.0, 1.0, 1.5]).unwrap();
+        assert_eq!(p.neutral_pair(), Some([[1.5, 1.0, 3.0], [2.0, 1.0, 1.5]]));
+        assert!(p.points().is_empty());
+        assert_eq!(KelvinPresets::from_neutral_pair([2.0, 1.0, 1.5], [1.5, 1.0, 3.0]), None, "D65 warmer than A");
+        assert_eq!(KelvinPresets::from_neutral_pair([1.5, 1.0, 3.0], [1.5, 1.0, 3.0]), None, "one point twice");
+        assert_eq!(KelvinPresets::from_neutral_pair([0.0, 1.0, 3.0], [2.0, 1.0, 1.5]), None);
+        assert_eq!(KelvinPresets::from_neutral_pair([f32::NAN, 1.0, 3.0], [2.0, 1.0, 1.5]), None);
+        assert_eq!(
+            KelvinPresets::new([(2500.0, [1.0, 1.0, 3.2]), (4500.0, [1.8, 1.0, 1.9]), (8500.0, [2.8, 1.0, 1.2])]).unwrap().neutral_pair(),
+            None
+        );
     }
 }
