@@ -17,7 +17,8 @@ pub enum Trigger {
     /// pop-up buttons and dropdowns do, so a press held past the click time still opens it; the release that
     /// completes the click is part of that opening.
     Click,
-    /// A press on the opener toggles.
+    /// A primary press on the opener toggles, and a secondary click inside it toggles too, hanging the layer from the
+    /// opener as a press does (a pop-up menu button).
     Press,
     /// A context request (right click, the Menu key, AccessKit `ShowContextMenu`) opens.
     Context,
@@ -75,8 +76,10 @@ impl Opener {
             let by_pointer = inside && frame.release == Some(PointerButton::Secondary);
             // A root opener opens on the primary press inside it, as a pop-up button does, however long the press is
             // then held; a `Click` opener's release completes the click that press began.
+            let primary = pressed_on && frame.press.is_some_and(|press| press.button == PointerButton::Primary);
             let fired = match trigger {
-                Trigger::Click | Trigger::Press => pressed_on && frame.press.is_some_and(|press| press.button == PointerButton::Primary),
+                Trigger::Click => primary,
+                Trigger::Press => primary || by_pointer,
                 Trigger::Context => by_pointer || request.is_some(),
                 Trigger::Hover | Trigger::Hold | Trigger::Manual => false,
             };
@@ -120,6 +123,19 @@ impl Opener {
         let (opener, opening) = found.unwrap_or((self, self.opening));
         (opener, stored.unwrap_or(opening))
     }
+}
+
+/// Whether a secondary-button release lands inside `response`'s rect in this pass: the secondary click a
+/// `Trigger::Press` opener opens on.
+pub(super) fn secondary_release_in(response: &Response) -> bool {
+    pointer::with_pass_pointer(&response.ctx, |pass| {
+        pass.frame.as_ref().is_some_and(|frame| {
+            frame.release == Some(PointerButton::Secondary)
+                && frame.pos.is_some_and(|pos| {
+                    response.rect.contains(areas::layer_map(&response.ctx, response.layer_id).map_or(pos, |map| map.to_layer(pos)))
+                })
+        })
+    })
 }
 
 /// How an opener opened its layer: what decides where a `Trigger::Context` layer hangs.

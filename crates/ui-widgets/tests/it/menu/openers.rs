@@ -1,7 +1,7 @@
 //! A menu with several openers: a context menu over a popover.
 
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, Role, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Role, Show as _, ShowContainer as _, Trigger};
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::popover::Popover;
 use craft_ui::testing::{Fixture, pointer, trial};
@@ -49,4 +49,51 @@ fn a_menu_opened_from_a_popover_takes_a_click_on_its_row() {
     assert!(ran.get(), "the click ran the row");
     assert!(menu_rect(&fixture).is_none(), "the menu closed");
     assert!(fixture.by_label("Reset").is_some(), "the popover stays open");
+}
+
+/// Right-clicks at `at`: move, secondary press, secondary release.
+fn right_click(fixture: &mut Fixture, at: egui::Pos2) {
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.frame(vec![pointer::secondary(at, true)]);
+    fixture.frame(vec![pointer::secondary(at, false)]);
+    fixture.settle();
+}
+
+/// A secondary click on a press menu's button opens its menu, as a primary press does.
+#[trial]
+fn a_secondary_click_on_a_press_menu_button_opens_its_menu() {
+    let mut fixture = Fixture::new(|ui| {
+        let opener = Button::new("Layers").show(ui);
+        Menu::new("Layers menu").opened_by(&opener, Trigger::Press).show(ui, |ui, _| {
+            MenuItem::new("New layer").show(ui);
+        });
+    });
+    fixture.settle();
+    let at = fixture.by_label("Layers").expect("the button").center();
+    right_click(&mut fixture, at);
+    assert!(fixture.by_label("New layer").is_some(), "the secondary click opened the menu");
+    let menu = menu_rect(&fixture).expect("the menu is open");
+    let button = fixture.by_label("Layers").expect("the button").rect;
+    assert!(menu.min.y >= button.max.y - 1.0 || menu.max.y <= button.min.y + 1.0, "the menu hangs from the button, not the pointer");
+}
+
+/// A right-click elsewhere on the widget while its context menu is open moves the menu to the new point.
+#[trial]
+fn a_new_right_click_moves_an_open_context_menu_to_the_pointer() {
+    let mut fixture = Fixture::new(|ui| {
+        let target = Button::new("A wide target to right-click at either end").show(ui);
+        Menu::context("Target menu", &target).show(ui, |ui, _| {
+            MenuItem::new("Copy").show(ui);
+            MenuItem::new("Paste").show(ui);
+        });
+    });
+    fixture.settle();
+    let target = fixture.by_label("A wide target to right-click at either end").expect("the target").rect;
+    let (first, second) = (target.left_center() + egui::vec2(8.0, 0.0), target.right_center() - egui::vec2(8.0, 0.0));
+    right_click(&mut fixture, first);
+    let before = menu_rect(&fixture).expect("the first right-click opens the menu");
+    assert!((before.min.x - first.x).abs() < 8.0, "the menu opens at the pointer");
+    right_click(&mut fixture, second);
+    let after = menu_rect(&fixture).expect("the menu is open after the second right-click");
+    assert!(after.min.x > before.min.x + 40.0, "the menu moved to the second point: {before:?} then {after:?}");
 }

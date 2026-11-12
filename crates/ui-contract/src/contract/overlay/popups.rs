@@ -1,6 +1,6 @@
 //! Free-standing popups: their open slots and the pass's registry, handles, the `Overlays` trait and hover dwell.
 
-use super::opener::{Opening, Trigger};
+use super::opener::{Opening, Trigger, secondary_release_in};
 use crate::contract::cx::CxCore;
 use crate::contract::{BindMut, Component, Cx};
 use crate::runtime::access::PopupShown;
@@ -194,7 +194,10 @@ impl PopupHandle {
         let resting = core.response.hovered() || core.focus.visible;
         let toggled = match trigger {
             Trigger::Click => core.activation.is_some(),
-            Trigger::Press => matches!(core.press.phase, craft_behavior::PressPhase::Down { .. }),
+            Trigger::Press => {
+                matches!(core.press.phase, craft_behavior::PressPhase::Down { start, .. } if start.button == craft_behavior::PointerButton::Primary)
+                    || (core.response.enabled() && secondary_release_in(&core.response))
+            }
             Trigger::Context => core.intents.take(Intent::ContextMenu),
             Trigger::Hover => self.dwell(&ctx, core.memory, "dwell", resting, crate::contract::tooltip::DELAY),
             Trigger::Hold => self.dwell(&ctx, core.memory, "dwell", core.press.phase.is_press(), HOLD),
