@@ -27,7 +27,8 @@ fn presets_follow_preset_shape_definitions() {
                 bad.push(format!("{name}: adj{} default {a} (standard {b})", k + 1));
             }
         }
-        if have.len() > want.len() {
+        let count_mismatch = if name.contains("Connector") { have.len() != want.len() } else { have.len() > want.len() };
+        if count_mismatch {
             bad.push(format!("{name}: {} defaults (standard {})", have.len(), want.len()));
         }
         for ((w, h), r) in sizes.iter().zip(f[2].split(" ; ")) {

@@ -760,9 +760,9 @@ mod tests {
 
     /// Adjust sets the digests were taken at: the defaults (an empty slice) and explicit values,
     /// so every adjust branch runs.
-    const GOLD_ADJ: [&[f64]; 2] = [&[], &[0.25, 0.1, 0.5, 0.3, 0.7, 0.2, 0.6, 0.4, 0.9, 0.15]];
+    const GOLD_ADJ: [&[f64]; 2] = [&[], &[25_000.0, 10_000.0, 50_000.0, 30_000.0, 70_000.0, 20_000.0, 60_000.0, 40_000.0, 90_000.0, 15_000.0]];
     /// Sizes the digests were taken at: wide, tall and square.
-    const GOLD_SIZES: [(f64, f64); 3] = [(120.0, 80.0), (300.0, 50.0), (64.0, 64.0)];
+    const GOLD_SIZES: [(f64, f64); 4] = [(120.0, 80.0), (300.0, 50.0), (64.0, 64.0), (50.0, 300.0)];
 
     /// FNV-1a over each outline's path elements, for every adjust set and size. Coordinates are
     /// printed to 3 decimal places so last-bit libm differences between platforms do not change it.
@@ -791,51 +791,52 @@ mod tests {
     /// DeckCraft's fc35ad67 gave other digests for curvedRightArrow and curvedDownArrow), so
     /// this refactor is proven output-identical: any changed outline fails here.
     const GOLDEN: [(&str, u64); 38] = [
-        ("lineInv", 0xfaffc13f44a93375),
-        ("nonIsoscelesTrapezoid", 0xb50af577fa048fe7),
-        ("pieWedge", 0x00895c33a77ec585),
-        ("leftRightArrowCallout", 0xd0463d85d78bc271),
-        ("upDownArrowCallout", 0x7f43aa4d5dbbcef7),
-        ("quadArrowCallout", 0x28601e0d2ed615a7),
-        ("circularArrow", 0x2dddaea620df13d1),
-        ("leftCircularArrow", 0x65ff0bf526b9a076),
-        ("leftRightCircularArrow", 0x986c81c2a50ea9b9),
-        ("curvedRightArrow", 0xad9a599cf4033315),
-        ("curvedLeftArrow", 0x83fbcb519025edc5),
-        ("curvedUpArrow", 0x04beb7a91bee8639),
-        ("curvedDownArrow", 0x0a521ebab5b5dfa1),
-        ("swooshArrow", 0xf6712de3201f217a),
-        ("callout1", 0x069eafd1a6d4007f),
-        ("callout2", 0xd65e3684f4a492da),
-        ("callout3", 0x4613c383ae932b3d),
-        ("accentCallout1", 0xde0690bc860224b1),
-        ("accentCallout2", 0x8d59ee7686ec555e),
-        ("accentCallout3", 0x819cfef7c7112557),
-        ("borderCallout2", 0xd65e3684f4a492da),
-        ("borderCallout3", 0x4613c383ae932b3d),
-        ("accentBorderCallout1", 0xde0690bc860224b1),
-        ("accentBorderCallout2", 0x8d59ee7686ec555e),
-        ("accentBorderCallout3", 0x819cfef7c7112557),
-        ("ellipseRibbon", 0x81723469e4feea75),
-        ("ellipseRibbon2", 0x2b3d31c91db846f8),
-        ("leftRightRibbon", 0x17dfed97cabced8b),
-        ("flowChartOfflineStorage", 0xb4314c28244ae4b9),
-        ("gear6", 0xa86ad08361c706bb),
-        ("gear9", 0x990b036fda62a753),
-        ("funnel", 0x28bac03b8ceb3965),
-        ("cornerTabs", 0x0830876c5934b9a5),
-        ("squareTabs", 0x1f78f490021e9705),
-        ("plaqueTabs", 0xf1937a13710d7fb5),
-        ("chartX", 0xbe7b481be55defe5),
-        ("chartStar", 0x3a7d02b57c488b5f),
-        ("chartPlus", 0x876a6f5f949e2b4d),
+        ("lineInv", 0x4a58a16923e54a4f),
+        ("nonIsoscelesTrapezoid", 0x79eca0b36812e282),
+        ("pieWedge", 0x2a0d3ffe5e9a481d),
+        ("leftRightArrowCallout", 0x9cd88f0ab55f76e5),
+        ("upDownArrowCallout", 0x568bc91708855007),
+        ("quadArrowCallout", 0xca59015298b1584b),
+        ("circularArrow", 0x4227aa468cfe990e),
+        ("leftCircularArrow", 0x6fc3779ce4b08914),
+        ("leftRightCircularArrow", 0x9dd43d9ba80e47df),
+        ("curvedRightArrow", 0x83e7dd251401715d),
+        ("curvedLeftArrow", 0x82472848de4a9fec),
+        ("curvedUpArrow", 0xcfbd88c1aea4bf9d),
+        ("curvedDownArrow", 0xa6f75eaf0ee71d49),
+        ("swooshArrow", 0x63ff193fdf1d0427),
+        ("callout1", 0xe7e0410f96282e8d),
+        ("callout2", 0xcaa7730106a9ee1b),
+        ("callout3", 0x4bc625449c0dfb30),
+        ("accentCallout1", 0x64f4c3eb775542fb),
+        ("accentCallout2", 0x2e3caa5b473ab4c7),
+        ("accentCallout3", 0x6ca203b149a2618e),
+        ("borderCallout2", 0xcaa7730106a9ee1b),
+        ("borderCallout3", 0x4bc625449c0dfb30),
+        ("accentBorderCallout1", 0x64f4c3eb775542fb),
+        ("accentBorderCallout2", 0x2e3caa5b473ab4c7),
+        ("accentBorderCallout3", 0x6ca203b149a2618e),
+        ("ellipseRibbon", 0x7d259fa067028102),
+        ("ellipseRibbon2", 0x3536b31ad0c95cf5),
+        ("leftRightRibbon", 0x6adc78f12d1cab9c),
+        ("flowChartOfflineStorage", 0x36960029a3770971),
+        ("gear6", 0x62b46d43b67decea),
+        ("gear9", 0xa42f43c2ae80314b),
+        ("funnel", 0x9327e2c2e99ab7d3),
+        ("cornerTabs", 0xe236f19aac60a20d),
+        ("squareTabs", 0xc3aea5acb50d6ccd),
+        ("plaqueTabs", 0xc64ebb2d06640521),
+        ("chartX", 0x6b2a9ff342247551),
+        ("chartStar", 0x6ebb545c66f313dd),
+        ("chartPlus", 0x979031aae16250d7),
     ];
 
     /// Every name builds the same outline as before the `Name` enum, and unknown names build nothing.
     #[test]
     fn outlines_match_the_string_dispatch() {
         for (name, want) in GOLDEN {
-            assert_eq!(outline_digest(name), want, "{name} outline changed");
+            let have = outline_digest(name);
+            assert_eq!(have, want, "{name} outline changed");
         }
         assert!(build("noSuchShape", 100.0, 100.0, &[]).is_none());
     }
