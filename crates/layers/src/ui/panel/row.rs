@@ -321,7 +321,7 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
         // The badge drags every effect of the layer (Photoshop); a click on it is a click on the row.
         let badge = TrailingPart::new(FX_BADGE);
         row = row
-            .trailing_part(badge, TrailingFace::Strong(words.fx.clone()), words.has_effects.clone())
+            .trailing_part(badge, TrailingFace::Icon(IconSpec::svg(IconId::new("fx"))), words.has_effects.clone())
             .part_drag(RowDragSpot::Trailing(badge), LayersDrag::new(cx.list, vec![LayerRowKey::Effects(id.clone(), None)]));
     }
     if info.linked {

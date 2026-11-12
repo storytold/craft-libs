@@ -21,6 +21,8 @@ impl ListRow<'_> {
     pub(super) fn paint_trailing(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed) {
         let side = Vec2::splat(cx.style.sizes.icon);
         let selected = cx.resolved.selected == Some(true) || cx.env.facts_of(cx.id).is_some_and(|facts| facts.flags.contains(Flags::SELECTED));
+        let drags = &self.drags;
+        let handle = |part: &super::TrailingPart| drags.iter().any(|(spot, _)| *spot == super::RowDragSpot::Trailing(*part));
         for (at, (trailing, slot)) in self.trailing.iter_mut().zip(&placed.items).enumerate() {
             let Some(slot) = slot else { continue };
             let shape = Rect::from_center_size(slot.center(), side);
@@ -51,6 +53,12 @@ impl ListRow<'_> {
                         continue;
                     }
                     match face {
+                        // A drag handle is no button (`access` names it in the row's description): its icon is a mark.
+                        TrailingFace::Icon(icon) if handle(part) => {
+                            let mut icon = icon.clone();
+                            icon.color.get_or_insert(cx.resolve(&cx.style.trailing_icon.color));
+                            ui.draw().icon(shape, &icon);
+                        }
                         TrailingFace::Icon(icon) => ui.face(key, IconButton::new(icon.clone()).focusable(false).enabled(*enabled)),
                         TrailingFace::Disclosure { open } => ui.face(key, Disclosure::new(Bind::given(*open)).node(false).enabled(*enabled)),
                         TrailingFace::Strong(text) => {

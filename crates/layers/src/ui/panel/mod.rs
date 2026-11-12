@@ -80,7 +80,6 @@ craft_ui::words! {
         linked: "layersPanel.linked" = "linked";
         layer_mask: "layersPanel.layerMask" = "layer mask";
         vector_mask: "layersPanel.vectorMask" = "vector mask";
-        fx: "layersPanel.fx" = "fx";
         disabled_mask: "layersPanel.disabledMask" = "disabled mask";
         has_effects: "layersPanel.hasEffects" = "effects";
         has_smart_filters: "layersPanel.hasSmartFilters" = "Smart Filters";
