@@ -13,7 +13,7 @@ use crate::contract::cx::{BodyCx, Pointer as _};
 use crate::contract::run::{Measuring, ShapeHooks, ShowAt};
 use crate::contract::steps::ShapeKind;
 use crate::contract::{Bind, Collection, Cx, Internal, ItemCx, ItemOutput as _, PartsCx, Props, Show as _, Sizing};
-use crate::primitives::{HiddenContent, ScrollBar};
+use crate::primitives::{HiddenContent, ScrollBar, SurfaceSlot};
 use crate::runtime::access::{self, Role, SetPosition};
 use crate::runtime::egui::{alloc, areas, child, response};
 use crate::runtime::env::WheelScope;
@@ -405,6 +405,11 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let Some(mut layout) = self.layout.take() else { return };
         let (id, ctx) = (cx.core.id, cx.core.ctx.clone());
         let rect = self.rows_rect(cx);
+        // The surface the props name lies under the header and the rows, as a container's lies under its regions.
+        let surface = comp.props(Internal::new()).surface;
+        if let Some(kind) = surface {
+            SurfaceSlot::reserve(ui, false).paint(&env.tokens, kind, cx.core.rect, env.direction);
+        }
         let rtl = env.direction.is_rtl();
         let node = matches!(C::ROLE, Role::Node(_));
         let offset = ScrollPos { x: self.offset_x, y: self.offset };
@@ -713,7 +718,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         if self.scrolls {
             let look = scroll_bar_look(&env.tokens, ScrollBarKind::Overlay);
             // The rows blend into the surface the collection paints, else the one it sits on.
-            let own = cx.style.surface().and_then(|surface| surface.kind_in(&cx.core.state));
+            let own = surface.or_else(|| cx.style.surface().and_then(|look| look.kind_in(&cx.core.state)));
             let background = surface_style(&env.tokens, SurfaceKind::under(own, env.surface)).fill;
             let hidden = HiddenContent::new(self.content, rect.size(), Vec2::new(self.offset_x as f32, self.offset as f32), rtl);
             ui.painter().extend(ScrollBar::fades(&look, rect, hidden, background));

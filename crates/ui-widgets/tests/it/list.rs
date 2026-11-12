@@ -478,3 +478,42 @@ fn a_rows_label_takes_the_empty_toggle_columns_next_to_it() {
     assert!(start("Action") > include && start("Action") < dialog, "a row with the first toggle starts its label in the second column");
     assert!(start("Step") > dialog, "a row with both toggles starts its label past them");
 }
+
+/// Every filled rect among `shapes`, nested lists included.
+fn fills(shapes: &[egui::Shape], out: &mut Vec<(egui::Rect, egui::Color32)>) {
+    for shape in shapes {
+        match shape {
+            egui::Shape::Vec(inner) => fills(inner, out),
+            egui::Shape::Rect(rect) => out.push((rect.rect, rect.fill)),
+            _ => {}
+        }
+    }
+}
+
+/// A list whose props name a surface paints it under its rows, over the list's rect.
+#[trial]
+fn a_list_paints_the_surface_its_props_name() {
+    use craft_ui::runtime::env::Env;
+    use craft_ui::style::SurfaceKind;
+    use egui::{Color32, Rect};
+    use std::cell::Cell;
+    let shown = Rc::new(Cell::new((Rect::NOTHING, Color32::TRANSPARENT)));
+    let held = shown.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let [r, g, b, a] = Env::of(ui).tokens.tokens().color.surface.sunken.0;
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key).with_text(|key| std::borrow::Cow::Borrowed(NAMES[*key]));
+        let out =
+            List::new("Artboards").surface(SurfaceKind::Sunken).natural_height(true).show_items(ui, &source, &mut |key, _| ListRow::new(NAMES[*key]));
+        held.set((out.response.rect, Color32::from_rgba_unmultiplied(r, g, b, a)));
+    });
+    fixture.room(Vec2::new(300.0, 200.0));
+    fixture.settle();
+    let (list, sunken) = shown.get();
+    let mut seen = Vec::new();
+    fills(&fixture.frame_shapes(), &mut seen);
+    assert!(
+        seen.iter().any(|(rect, fill)| *fill == sunken && rect.contains_rect(list.shrink(1.0)) && list.expand(1.0).contains_rect(*rect)),
+        "a sunken fill covers the list {list:?}: {seen:?}"
+    );
+}
