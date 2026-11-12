@@ -21,7 +21,7 @@ base64 = "0.23"
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 log = "0.4"
 # The streaming readers of the Flat OPC file and of kept parts (not yet on craft-xml's pull reader).
-quick-xml = { version = "0.41", default-features = false }
+quick-xml = { version = "0.42", default-features = false }
 thiserror = { workspace = true }
 unicode-bidi = "0.3"
 zeroize = "1"
