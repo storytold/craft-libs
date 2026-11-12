@@ -112,6 +112,10 @@ pub trait Device<'a> {
     /// (`mode`, 0 or 1; ISO 32000-2 §8.6.7). Called where `set_blend_mode` is called for a
     /// paint.
     fn set_overprint(&mut self, _fill: bool, _stroke: bool, _mode: u8) {}
+    /// Craft patch (rendering intent): the rendering intent for the paints that follow, until
+    /// the next call (ISO 32000-2 §8.6.5.8): the graphics state's, or an image's own `/Intent`
+    /// for that image. Called after each `set_overprint`.
+    fn set_rendering_intent(&mut self, _intent: crate::color::RenderIntent) {}
     /// Craft patch (flatten): the transparency group just pushed is isolated (`/I true`), until
     /// the matching `pop_transparency_group`.
     fn set_isolated(&mut self) {}

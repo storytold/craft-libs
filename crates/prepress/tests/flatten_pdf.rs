@@ -3,6 +3,7 @@
 #![cfg(feature = "flatten")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use craft_cms::{Builtin, Intent, TransformOptions, builtin, cached};
 use craft_pdf::write::backend::blend::Overprint as KOverprint;
 use craft_pdf::write::backend::geom::PathBuilder;
 use craft_pdf::write::backend::page::PageSettings;
@@ -610,4 +611,93 @@ fn print_flagged_annotations_left_out_are_counted() {
     let (list, report) = read_page(&pdf, 0, &ReadOptions { annotations: true, ..ReadOptions::default() }).unwrap();
     assert!(!list.items.is_empty());
     assert_eq!(report.dropped_annotations, 0);
+}
+
+/// sRGB `rgb` in FOGRA39, the default fallback, with `intent`, converted by craft-cms itself.
+fn fogra39_with(intent: Intent, rgb: [f32; 3]) -> [f32; 4] {
+    let opts = TransformOptions { intent, bpc: false, precise_float: false };
+    let t = cached(builtin::srgb(), Builtin::CoatedFogra39.profile(), opts).unwrap();
+    let mut cmyk = [0.0; 4];
+    t.convert_f32(&rgb, 3, &mut cmyk, 4, false).unwrap();
+    cmyk.map(|v| v.clamp(0.0, 1.0))
+}
+
+fn fill_tints(list: &DisplayList) -> Vec<[f32; 4]> {
+    fill_items(list)
+        .into_iter()
+        .map(|(_, f)| {
+            let Paint::Solid(InkColor::Tints(tints)) = &f.paint else { panic!("{:?}", f.paint) };
+            Process::ALL.map(|p| tint(tints, ink(p)))
+        })
+        .collect()
+}
+
+fn near(a: [f32; 4], b: [f32; 4], tolerance: f32) -> bool {
+    a.iter().zip(b).all(|(a, b)| (a - b).abs() <= tolerance)
+}
+
+const BLUE: [f32; 3] = [0.0, 0.2, 1.0];
+
+#[test]
+fn fills_convert_with_the_rendering_intent_current_when_painted() {
+    let perceptual = fogra39_with(Intent::Perceptual, BLUE);
+    let relative = fogra39_with(Intent::RelativeColorimetric, BLUE);
+    let saturation = fogra39_with(Intent::Saturation, BLUE);
+    assert!(!near(perceptual, relative, 0.02), "the intents must differ for this test: {perceptual:?} {relative:?}");
+    let content = "0 0.2 1 rg 0 0 10 10 re f \
+        /Perceptual ri 20 0 10 10 re f \
+        q /Saturation ri 40 0 10 10 re f Q \
+        60 0 10 10 re f \
+        /GS1 gs 80 0 10 10 re f \
+        /Unknown ri 100 0 10 10 re f \
+        /GS2 gs 120 0 10 10 re f";
+    let resources = "/ExtGState << /GS1 << /RI /RelativeColorimetric >> /GS2 << /RI /Perceptual >> >>";
+    let (list, _) = read(&raw_pdf(content, resources, &[]));
+    let got = fill_tints(&list);
+    let want = [relative, perceptual, saturation, perceptual, relative, relative, perceptual];
+    assert_eq!(got.len(), want.len());
+    for (i, (got, want)) in got.iter().zip(want).enumerate() {
+        assert!(near(*got, want, 1e-4), "fill {i}: {got:?}, want {want:?}");
+    }
+}
+
+#[test]
+fn an_image_converts_with_its_own_intent() {
+    let perceptual = fogra39_with(Intent::Perceptual, BLUE);
+    let relative = fogra39_with(Intent::RelativeColorimetric, BLUE);
+    let objects = [
+        hex_image("/Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Intent /Perceptual", "0033FF"),
+        hex_image("/Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", "0033FF"),
+    ];
+    let content = "q 10 0 0 10 0 0 cm /Im1 Do Q q 10 0 0 10 20 0 cm /Im2 Do Q \
+        /Perceptual ri q 10 0 0 10 40 0 cm /Im2 Do Q \
+        /RelativeColorimetric ri 0 0.2 1 rg 60 0 10 10 re f";
+    let (list, _) = read(&raw_pdf(content, "/XObject << /Im1 5 0 R /Im2 6 0 R >>", &objects));
+    let samples: Vec<[f32; 4]> = images(&list)
+        .iter()
+        .map(|(_, im)| {
+            let t = tints_at(im, Point::new(im.transform.as_coeffs()[4] + 1.0, 5.0));
+            Process::ALL.map(|p| tint(&t, ink(p)))
+        })
+        .collect();
+    let want = [perceptual, relative, perceptual];
+    assert_eq!(samples.len(), want.len());
+    for (i, (got, want)) in samples.iter().zip(want).enumerate() {
+        assert!(near(*got, want, 1.0 / 255.0 + 1e-4), "image {i}: {got:?}, want {want:?}");
+    }
+    // The image's `/Intent` is its own: the next fill converts with the graphics state's.
+    assert!(near(fill_tints(&list)[0], relative, 1e-4));
+}
+
+#[test]
+fn a_shading_converts_with_the_rendering_intent() {
+    let perceptual = fogra39_with(Intent::Perceptual, BLUE);
+    let objects = ["<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [0 0.2 1] /C1 [0 0.2 1] /N 1 >> >>".to_string()];
+    let pdf = raw_pdf("/Perceptual ri q 0 0 100 100 re W n /Sh1 sh Q", "/Shading << /Sh1 5 0 R >>", &objects);
+    let (list, _) = read(&pdf);
+    let fills = fill_items(&list);
+    let Paint::Gradient { stops, .. } = &fills[0].1.paint else { panic!("{:?}", fills[0].1.paint) };
+    let t = stop_tints(stops, 0.5);
+    let got = Process::ALL.map(|p| tint(&t, ink(p)));
+    assert!(near(got, perceptual, 1e-4), "{got:?}, want {perceptual:?}");
 }

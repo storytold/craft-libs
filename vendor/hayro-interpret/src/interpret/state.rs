@@ -1,5 +1,5 @@
 use crate::StrokeProps;
-use crate::color::{AlphaColor, ColorComponents, ColorSpace};
+use crate::color::{AlphaColor, ColorComponents, ColorSpace, RenderIntent};
 use crate::context::Context;
 use crate::convert::{convert_line_cap, convert_line_join};
 use crate::font::{Font, UNITS_PER_EM};
@@ -286,6 +286,8 @@ pub(crate) struct GraphicsState<'a> {
     pub(crate) overprint_stroke: bool,
     pub(crate) overprint_fill: bool,
     pub(crate) overprint_mode: u8,
+    /// Craft patch (rendering intent): `ri`, or `/RI` in a graphics state parameter dictionary.
+    pub(crate) rendering_intent: RenderIntent,
 }
 
 impl Default for GraphicsState<'_> {
@@ -306,6 +308,7 @@ impl Default for GraphicsState<'_> {
             overprint_stroke: false,
             overprint_fill: false,
             overprint_mode: 0,
+            rendering_intent: RenderIntent::default(),
         }
     }
 }
@@ -440,6 +443,11 @@ pub(crate) fn handle_gs_single<'a>(
         "OPM" => {
             let mode = dict.get::<u8>(key)?;
             context.get_mut().graphics_state.overprint_mode = u8::from(mode == 1);
+        }
+        // Craft patch (rendering intent).
+        "RI" => {
+            context.get_mut().graphics_state.rendering_intent =
+                RenderIntent::from_name(&dict.get::<Name<'_>>(key)?);
         }
         "Type" => {}
         _ => {}

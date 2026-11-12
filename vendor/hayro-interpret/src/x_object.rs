@@ -347,6 +347,11 @@ pub(crate) fn draw_image_xobject<'a, 'b>(
     device.set_blend_mode(BlendMode::default());
     // Craft patch (flatten): tell the device the overprint parameters.
     set_overprint(context, device);
+    // Craft patch (rendering intent): an image's `/Intent` applies to it alone (ISO 32000-2
+    // §8.9.5, Table 87).
+    if let Some(intent) = x_object.stream.dict().get::<Name<'_>>(INTENT) {
+        device.set_rendering_intent(crate::color::RenderIntent::from_name(&intent));
+    }
     // PdfCraft patch (46): the group just pushed applies the fill opacity, so a stencil mask's
     // paint (the fill color) must not carry it again: at `ca 0.5` a mask was drawn at a
     // quarter of its opacity (#2975). The alpha is put back below: `restore_state` doesn't
