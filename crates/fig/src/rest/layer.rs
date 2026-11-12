@@ -216,7 +216,7 @@ impl<'a> Mapper<'a> {
         // A label without a snapshot: the connector becomes a frame holding its line and its label.
         let connector_label = own == "CONNECTOR" && !connector_snapshot && self.connector_label_fits(&view, depth);
         let ty = if connector_label { "FRAME" } else { Self::mapped_type(own, &view, connector_snapshot, connector_terminal, stand)? };
-        if let Some((_, what)) = stand.filter(|_| own != "TEXT_PATH") {
+        if let Some((_, what)) = stand.filter(|_| own != "TEXT_PATH" && !(self.board && own == "STICKY")) {
             self.warn(format!("{} layers import as {what}", own.to_ascii_lowercase().replace('_', " ")));
         }
         if connector_snapshot {
@@ -353,17 +353,98 @@ impl<'a> Mapper<'a> {
         let Head { mut o, view, own, rest_id, stand, mut kids, connector_kids, .. } = *head;
         kids.splice(0..0, connector_kids);
         if stand.is_some_and(|s| s.0 == "FRAME") {
-            if let Some(snapshot) = self.board_snapshot(&mut o, &view, own, &rest_id, depth) {
+            let native_sticky = self.board && own == "STICKY";
+            let native = if native_sticky { self.native_sticky(&mut o, &view, &rest_id, depth) } else { None };
+            if let Some(native) = native {
+                kids.splice(0..0, native);
+            } else if let Some(snapshot) = self.board_snapshot(&mut o, &view, own, &rest_id, depth) {
                 kids.splice(0..0, snapshot);
             } else {
                 kids.splice(0..0, self.shape_with_text(&mut o, &view, own, &rest_id));
                 kids.extend(self.inner_text(&o, &view, &rest_id, own == "STICKY"));
+            }
+            if native_sticky && !o.contains_key("board") {
+                self.warn("sticky layers import as frames with their text");
             }
         }
         if !kids.is_empty() {
             o.insert("children".into(), Value::Array(kids));
         }
         Value::Object(o)
+    }
+
+    fn native_sticky(&mut self, o: &mut Obj, v: &View<'a>, rest_id: &str, depth: usize) -> Option<Vec<Value>> {
+        if v.get("nodeGenerationData").is_none() || v.get("derivedImmutableFrameData").and_then(|d| num(d, "version")) != Some(1.0) {
+            return None;
+        }
+        let record = |id: u32| {
+            let (style, bounds) = (generated_record(v, "nodeGenerationData", id)?, generated_record(v, "derivedImmutableFrameData", id)?);
+            let view = View::of(style).with([(bounds, 1.0)]);
+            (valid_size(view.get("size")).is_some() && view.transform().is_some()).then_some(view)
+        };
+        let background = record(0)?;
+        let fills = background.list("fillPaints");
+        let solid = matches!(fills, [p] if p.get("type").and_then(Kv::str) == Some("SOLID") && p.get("visible").and_then(Kv::bool) != Some(false));
+        if !solid || !background.list("strokePaints").is_empty() {
+            return None;
+        }
+        let note = record(1).filter(|n| own_text(n).is_some())?;
+        let author = record(2).filter(|a| a.flag("visible") != Some(false) && own_text(a).is_some());
+        let wanted = 1 + usize::from(author.is_some());
+        if depth >= MAX_DEPTH || self.count.saturating_add(wanted) > self.budget() {
+            return None;
+        }
+        let (w, h) = v.size().or_else(|| o.get("size").and_then(|s| Some((s.get("x")?.as_f64()?, s.get("y")?.as_f64()?))))?;
+        let at = note.transform().unwrap_or_default().as_coeffs();
+        let pad = |x: f64| if x.is_finite() { x.clamp(0.0, (w.min(h) / 2.0).max(0.0)) } else { 0.0 };
+        let (pad_x, pad_y) = (pad(at[4]), pad(at[5]));
+        let paints: Vec<Value> = fills.iter().filter_map(|p| paint(p, &mut |m| self.warn(m))).collect();
+        o.insert("fills".into(), Value::Array(paints));
+        o.insert("strokes".into(), json!([]));
+        o.insert("clipsContent".into(), json!(false));
+        match background.len("cornerRadius") {
+            Some(r) => o.insert("cornerRadius".into(), json!(r)),
+            None => o.remove("cornerRadius"),
+        };
+        for (k, val) in [
+            ("layoutMode", json!("VERTICAL")),
+            ("primaryAxisAlignItems", json!("SPACE_BETWEEN")),
+            ("counterAxisAlignItems", json!("MIN")),
+            ("primaryAxisSizingMode", json!("AUTO")),
+            ("counterAxisSizingMode", json!("FIXED")),
+            ("minHeight", json!(h)),
+            ("itemSpacing", json!(8.0)),
+            ("paddingTop", json!(pad_y)),
+            ("paddingBottom", json!(pad_y)),
+            ("paddingLeft", json!(pad_x)),
+            ("paddingRight", json!(pad_x)),
+        ] {
+            o.insert(k.into(), val);
+        }
+        let mut kids = Vec::new();
+        let mut written = String::new();
+        for (local, view) in [(1, Some(note)), (2, author)] {
+            let Some(view) = view else { continue };
+            let chars = own_text(&view).unwrap_or_default();
+            let mut layer = Obj::new();
+            layer.insert("id".into(), json!(format!("{rest_id};generated{local}")));
+            layer.insert("type".into(), json!("TEXT"));
+            layer.insert("name".into(), json!(if local == 1 { chars.chars().take(40).collect::<String>() } else { "Author".to_string() }));
+            self.common(&mut layer, &view, "TEXT", Affine::IDENTITY, None);
+            self.text(&mut layer, &view);
+            if let Some(Value::Object(style)) = layer.get_mut("style") {
+                style.insert("textAutoResize".into(), json!("HEIGHT"));
+                style.insert("textAlignHorizontal".into(), json!("LEFT"));
+            }
+            layer.insert("layoutSizingHorizontal".into(), json!("FILL"));
+            if local == 2 {
+                written = chars.trim().to_string();
+            }
+            self.count += 1;
+            kids.push(Value::Object(layer));
+        }
+        o.insert("board".into(), json!({"type": "sticky", "author": written}));
+        Some(kids)
     }
 
     fn mapped_type<'s>(
