@@ -1,8 +1,9 @@
 //! `Snap`: a canvas's snapping of a coordinate the pointer sets.
 
 use crate::runtime::env::{AppValues, EnvValue, EnvView};
-use craft_behavior::Axis;
-use craft_keymap::Mods;
+use craft_behavior::geometry::SNAP_PX;
+use craft_behavior::{Axis, CanvasView};
+use craft_keymap::{Mods, Platform};
 use std::sync::Arc;
 
 /// A canvas's snapping of a coordinate the pointer sets (View > Snap To): the axis a guide at the coordinate would
@@ -37,6 +38,20 @@ impl std::fmt::Debug for Snap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Snap")
     }
+}
+
+/// Whether the modifiers held now turn snapping off: the Control key (Control without ⌘ on macOS, Ctrl elsewhere)
+/// suspends it while held, Photoshop's rule, unless the gesture reads that key itself (`tool_reads_control`: off macOS
+/// Ctrl on a transform box corner distorts). Every snapped drag applies it, whatever its targets are.
+pub fn snap_suspended(mods: Mods, os: Platform, tool_reads_control: bool) -> bool {
+    let control = if os.is_mac() { mods.ctrl && !mods.cmd } else { mods.cmd };
+    control && !tool_reads_control
+}
+
+/// How far, in document units under `view`, a dragged point still snaps to a target: [`SNAP_PX`] screen points, or
+/// `None` while [`snap_suspended`] holds.
+pub fn snap_tolerance(view: &CanvasView, mods: Mods, os: Platform, tool_reads_control: bool) -> Option<f64> {
+    (!snap_suspended(mods, os, tool_reads_control)).then(|| view.doc_len(SNAP_PX as f32))
 }
 
 #[derive(Clone, PartialEq)]

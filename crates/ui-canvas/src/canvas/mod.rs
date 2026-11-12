@@ -55,7 +55,7 @@ pub use raster::{DetailPlan, RasterDisplay, RasterDisplayOutput, RasterStyle, sn
 mod snap;
 pub(crate) use rulers::LABEL_STEP_MIN;
 pub use rulers::{NUDGE, NUDGE_FAR};
-pub use snap::{Snap, canvas_snap};
+pub use snap::{Snap, canvas_snap, snap_suspended, snap_tolerance};
 pub(crate) use space::context_menu;
 pub use space::{BackgroundPress, BodyKeys, CanvasRulers, context_click};
 // End of l4d-space.

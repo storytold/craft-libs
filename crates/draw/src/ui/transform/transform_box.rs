@@ -7,14 +7,13 @@ mod stories;
 
 use craft_behavior::geometry::SnapTargets;
 use craft_behavior::geometry::quad::{self, BoxDrag, BoxPart, BoxRules, BoxState, TransformMode};
-use craft_behavior::geometry::snap::SNAP_PX;
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2 as DocVec};
 use craft_behavior::{
     Axis, CanvasView, Cursor, CursorIcon, CursorPriority, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape, PaintedCursor, PartKey,
     PartRef, PointerButton, PressPhase, Roving, Sense, resize_cursor,
 };
-use craft_keymap::Mods;
-use craft_ui::canvas::{CanvasSpace, canvas_space, readout};
+use craft_keymap::{Mods, Platform};
+use craft_ui::canvas::{CanvasSpace, canvas_space, readout, snap_tolerance};
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _,
     Props as _, Remember as _, Role, Styled as _, WordSetCx as _,
@@ -230,10 +229,15 @@ impl<'a> TransformBox<'a> {
         quad::drag(state, state, part, at, at + by, Mods::NONE, &self.rules)
     }
 
-    /// The box the pointer at screen position `pos` gives a drag, snapped and rounded.
-    fn proposal(&self, space: &CanvasSpace, grip: &Grip, pos: Pos2, mods: Mods) -> BoxState {
+    /// The box the pointer at screen position `pos` gives a drag, snapped and rounded. The Control key suspends the
+    /// snapping unless it changes what the drag does (off macOS Ctrl is ⌘: a corner distorts, an edge skews).
+    fn proposal(&self, space: &CanvasSpace, grip: &Grip, pos: Pos2, mods: Mods, os: Platform) -> BoxState {
         let to = space.view.to_doc(pos);
-        let to = self.snap.map_or(to, |targets| targets.snap_point(to, space.view.doc_len(SNAP_PX as f32)).0);
+        let reads_control = self.rules.drag_kind(grip.part, mods) != self.rules.drag_kind(grip.part, Mods { cmd: false, ..mods });
+        let to = match (self.snap, snap_tolerance(&space.view, mods, os, reads_control)) {
+            (Some(targets), Some(tolerance)) => targets.snap_point(to, tolerance).0,
+            _ => to,
+        };
         let dragged = quad::drag(&grip.start, &grip.last, grip.part, grip.from, to, mods, &self.rules);
         if self.pixel_grid { on_pixel_grid(dragged) } else { dragged }
     }
@@ -340,7 +344,7 @@ impl<'a> TransformBox<'a> {
                     if !grip.began {
                         continue;
                     }
-                    let next = self.proposal(space, &grip, pos, mods);
+                    let next = self.proposal(space, &grip, pos, mods, cx.env.shell().os);
                     grip.last = next;
                     held = Some(grip);
                     cx.propose(next);

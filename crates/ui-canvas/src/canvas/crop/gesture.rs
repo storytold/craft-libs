@@ -3,10 +3,12 @@
 
 use craft_behavior::CanvasView;
 use craft_behavior::geometry::crop::{direction, drawn, image_turn, normalized_angle};
-use craft_behavior::geometry::{BoxPart, CropBox, SNAP_PX, SnapLine, SnapTargets, crop_view_about, screen_step};
+use craft_behavior::geometry::{BoxPart, CropBox, SnapLine, SnapTargets, crop_view_about, screen_step};
 use craft_behavior::kurbo::{Point, Rect, Vec2};
-use craft_keymap::Mods;
+use craft_keymap::{Mods, Platform};
 use egui::Pos2;
+
+use crate::canvas::snap_tolerance;
 
 /// What a drag does to the frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -48,6 +50,7 @@ pub(super) struct Rules<'a> {
     pub image: bool,
     pub auto_center: bool,
     pub snap: Option<&'a SnapTargets>,
+    pub os: Platform,
 }
 
 impl Rules<'_> {
@@ -101,9 +104,9 @@ impl Rules<'_> {
     }
 
     /// The screen point of `pos` after the snap targets: an end of the Straighten line.
-    pub fn snap_screen(&self, view: &CanvasView, pos: Pos2) -> Pos2 {
-        let Some(targets) = self.snap else { return pos };
-        let (point, _) = targets.snap_point(view.to_doc(pos), view.doc_len(SNAP_PX as f32));
+    pub fn snap_screen(&self, view: &CanvasView, pos: Pos2, mods: Mods) -> Pos2 {
+        let (Some(targets), Some(tolerance)) = (self.snap, snap_tolerance(view, mods, self.os, false)) else { return pos };
+        let (point, _) = targets.snap_point(view.to_doc(pos), tolerance);
         view.to_screen(point)
     }
 
@@ -111,8 +114,8 @@ impl Rules<'_> {
     /// image mode the point is in the view of the press, which the moving view never feeds back into: the correction
     /// is turned back into pointer travel.
     pub fn snapped(&self, drag: &Drag, view: &CanvasView, to: Point, mods: Mods, space: bool) -> (Point, Vec<SnapLine>) {
-        let Some(targets) = self.snap else { return (to, Vec::new()) };
-        let tolerance = drag.press_view.as_ref().unwrap_or(view).doc_len(SNAP_PX as f32);
+        let tolerance = snap_tolerance(drag.press_view.as_ref().unwrap_or(view), mods, self.os, false);
+        let (Some(targets), Some(tolerance)) = (self.snap, tolerance) else { return (to, Vec::new()) };
         let mut probe = drag.clone();
         let Some(candidate) = self.proposal(&mut probe, to, mods, space) else { return (to, Vec::new()) };
         let (by, lines, travel_per_unit) = match probe.kind {

@@ -252,6 +252,19 @@ fn a_quick_drag_in_one_frame_starts_at_the_press() {
     assert_eq!((events.first(), events.last()), (Some(&"begin"), Some(&"commit")), "{events:?}");
 }
 
+#[trial]
+fn the_control_key_held_during_a_resize_turns_snapping_off() {
+    for (held, right) in [(Modifiers::NONE, 310.0), (Modifiers::CTRL, 307.0)] {
+        let mut rig = Rig::new(CropBox::upright(RECT), {
+            let mut s = Setup::new();
+            s.snap_x = Some(310.0);
+            s
+        });
+        rig.drag(rig.at(300.0, 220.0), rig.at(307.0, 220.0), held);
+        assert!((rig.rect().x1 - right).abs() < 1e-6, "{held:?}: {:?}", rig.rect());
+    }
+}
+
 // Straighten.
 
 // Image mode.

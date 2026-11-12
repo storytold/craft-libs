@@ -13,7 +13,7 @@ use crate::style::StyleCx;
 use craft_behavior::kurbo::Point;
 use craft_behavior::{Axis, CancelReason, CanvasView, Cursor, CursorIcon, GestureId, PointerButton, PointerSample};
 use craft_i18n::{Digits, Format, Region};
-use craft_keymap::{Chord, Key, Mods};
+use craft_keymap::{Chord, Key, Mods, Platform};
 use egui::{Pos2, Rect, Vec2};
 use std::sync::{Arc, OnceLock};
 
@@ -388,8 +388,8 @@ impl<'a> ToolContext<'a> {
     }
 
     /// `point`, a document point under the pointer, moved to what the canvas snaps it to (View > Snap To) with the
-    /// modifiers held now; the point itself when the canvas has no snapping. The tool builds no snapping of its
-    /// own.
+    /// modifiers held now; the point itself when the canvas has no snapping or the Control key suspends it
+    /// ([`snap_suspended`](super::snap_suspended)). The tool builds no snapping of its own.
     pub fn snap(&self, point: Point) -> Point {
         Point::new(self.snap_along(Axis::Y, point.x), self.snap_along(Axis::X, point.y))
     }
@@ -397,7 +397,15 @@ impl<'a> ToolContext<'a> {
     /// The coordinate `position` across a guide that would run along `along`, snapped as [`snap`](Self::snap) does:
     /// an x coordinate is across `Axis::Y`.
     pub fn snap_along(&self, along: Axis, position: f64) -> f64 {
-        self.snap.map_or(position, |snap| snap.apply(along, position, self.mods))
+        match self.snap {
+            Some(snap) if !super::snap_suspended(self.mods, self.os(), false) => snap.apply(along, position, self.mods),
+            _ => position,
+        }
+    }
+
+    /// The OS the pass runs on: the env's; the build's for a context built without an env.
+    fn os(&self) -> Platform {
+        self.env.map_or_else(Platform::current, |env| env.os)
     }
 
     /// The scope's number format and unit words, to write the values of a readout in the document's units and the

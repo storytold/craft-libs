@@ -23,7 +23,7 @@ use craft_behavior::{
     Axis, CancelReason, CanvasView, CursorIcon, CursorPriority, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape, PaintedCursor, PartKey,
     PointerButton, PressPhase, Roving, Sense, resize_cursor,
 };
-use craft_keymap::{Chord, Key, Mods};
+use craft_keymap::{Chord, Key, Mods, Platform};
 use egui::{Pos2, Rect, Response, Vec2};
 use gesture::{Drag, Kind, Rules};
 
@@ -180,7 +180,7 @@ impl<'a> CropOverlay<'a> {
         .label(label)
     }
 
-    fn rules(&self) -> Rules<'a> {
+    fn rules(&self, os: Platform) -> Rules<'a> {
         Rules {
             ratio: self.ratio.filter(|k| k.is_finite() && *k > 0.0),
             bounds: self.bounds,
@@ -188,6 +188,7 @@ impl<'a> CropOverlay<'a> {
             image: self.image_mode,
             auto_center: self.auto_center,
             snap: self.snap,
+            os,
         }
     }
 
@@ -258,12 +259,12 @@ fn angle_row(cx: &Cx<'_, CropOverlay<'_>>, degrees: f64) -> Vec<(Label, String)>
 
 impl CropOverlay<'_> {
     /// Starts the drag of `grab` pressed at screen point `origin`.
-    fn begin(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, frame: &CropBox, grab: Grab, origin: Pos2) -> Drag {
+    fn begin(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, frame: &CropBox, grab: Grab, origin: Pos2, mods: Mods) -> Drag {
         let view = space.view;
         let from = view.to_doc(origin);
         let kind = match grab {
             Grab::Line => {
-                let from = self.rules().snap_screen(&view, origin);
+                let from = self.rules(cx.env.shell().os).snap_screen(&view, origin, mods);
                 Kind::Line { from, to: from }
             }
             Grab::Turn => Kind::Turn { grab: gesture::grab(frame, from) },
@@ -280,9 +281,9 @@ impl CropOverlay<'_> {
     /// One step of the drag with the pointer at screen point `pos`.
     fn step(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, drag: &mut Drag, pos: Pos2, mods: Mods) {
         let view = space.view;
-        let rules = self.rules();
+        let rules = self.rules(cx.env.shell().os);
         if let Kind::Line { from, to } = &mut drag.kind {
-            *to = rules.snap_screen(&view, pos);
+            *to = rules.snap_screen(&view, pos, mods);
             self.report.dragging = true;
             if let Some(degrees) = gesture::line_degrees(*from, *to) {
                 readout(cx, pos, &angle_row(cx, degrees));
@@ -355,7 +356,7 @@ impl CropOverlay<'_> {
         if cx.intents().take(Intent::Cancel) {
             self.report.discard = true;
         }
-        let rules = self.rules();
+        let rules = self.rules(cx.env.shell().os);
         let mut next = None;
         if let Some((direction, mods)) = cx.intents().take_nudge() {
             let step = if mods.shift { NUDGE_FAR } else { NUDGE };
@@ -548,7 +549,7 @@ impl Component for CropOverlay<'_> {
                     }
                 }
                 PressPhase::DragStart { start, pos, .. } if start.button == PointerButton::Primary => {
-                    let mut drag = self.begin(cx, &space, &frame, grab, start.origin);
+                    let mut drag = self.begin(cx, &space, &frame, grab, start.origin, mods);
                     self.step(cx, &space, &mut drag, pos, mods);
                     live.drag = Some(drag);
                 }

@@ -2,10 +2,11 @@
 //! keys, the readout and the overlay's edits.
 
 use craft_behavior::geometry::quad::{BoxPart, BoxRules, BoxState};
+use craft_behavior::geometry::{SnapKind, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{CanvasView, EditEvent};
 use craft_draw::ui::transform::{RotateZone, TransformBox};
-use craft_keymap::Mods;
+use craft_keymap::{Mods, Platform};
 use craft_ui::canvas::Canvas;
 use craft_ui::canvas::{Guide, GuideKey};
 use craft_ui::canvas_controls::Guides;
@@ -38,6 +39,7 @@ struct Config {
     rotation: f64,
     flip: bool,
     guides: bool,
+    snap: bool,
 }
 
 /// What the host keeps of the box and what the passes reported.
@@ -70,6 +72,7 @@ fn defaults() -> Config {
         rotation: 0.0,
         flip: false,
         guides: false,
+        snap: false,
     }
 }
 
@@ -91,6 +94,10 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
     }));
     let shown_host = Rc::clone(&host);
     let mut guides = vec![Guide::new(GuideKey::new(1), craft_behavior::Axis::Y, 300.0)];
+    let mut targets = SnapTargets::new();
+    for x in SNAP_XS {
+        targets.add(SnapTarget::new(craft_behavior::Axis::Y, x, SnapKind::Guide));
+    }
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let config = shown_config.borrow().clone();
@@ -116,6 +123,9 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
                 .pixel_grid(config.pixel_grid);
             if let Some(mods) = config.mods {
                 control = control.mods(mods);
+            }
+            if config.snap {
+                control = control.snap(&targets);
             }
             (control.show_at(ui, body.rect), guide_edits)
         });
@@ -175,6 +185,10 @@ impl Harness {
     }
 }
 
+/// The x of the vertical snap targets of a box with `Config::snap`: 10 units right of an inside point away from the
+/// reference point and of the right edge.
+const SNAP_XS: [f64; 2] = [160.0, 310.0];
+
 /// A screen displacement.
 fn by(x: f32, y: f32) -> Vec2 {
     Vec2::new(x, y)
@@ -208,4 +222,33 @@ fn a_release_with_the_pointer_gone_is_not_a_click_outside() {
     frame(&mut h, vec![pointer::release(at)]);
     frame(&mut h, Vec::new());
     assert_eq!(h.host.borrow().applied, 0);
+}
+
+#[trial]
+fn the_control_key_turns_snapping_off_unless_it_distorts_the_dragged_corner() {
+    // (os, the Control key there, the press point, whether Control changes that drag)
+    let cases = [
+        (Platform::Mac, Mods::CTRL, Point::new(150.0, 120.0), false),
+        (Platform::Windows, Mods::CMD, Point::new(150.0, 120.0), false),
+        (Platform::Windows, Mods::CMD, Point::new(300.0, 220.0), true),
+    ];
+    for (os, control, at, distorts) in cases {
+        for held in [None, Some(control)] {
+            let mut h = harness(BoxState::from_rect(RECT), |config| {
+                config.snap = true;
+                config.mods = held;
+            });
+            h.fixture.os(os);
+            let from = h.screen(at);
+            frame(&mut h, vec![pointer::moved(from)]);
+            frame(&mut h, vec![pointer::press(from)]);
+            frame(&mut h, vec![pointer::moved(from + by(4.0, 0.0))]);
+            frame(&mut h, vec![pointer::moved(from + by(7.0, 0.0))]);
+            frame(&mut h, vec![pointer::release(from + by(7.0, 0.0))]);
+            let moved = h.state().quad[2].x - RECT.x1;
+            let snaps = held.is_none() || distorts;
+            let expected = if snaps { 10.0 } else { 7.0 };
+            assert!((moved - expected).abs() < 1e-6, "{os:?} {held:?} at {at:?}: moved {moved}, expected {expected}");
+        }
+    }
 }
