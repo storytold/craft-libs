@@ -1,23 +1,24 @@
 # Local linesweeper 0.5.0 copy
 
 This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and the
-changes listed under Local changes. `.cargo_vcs_info.json` names the commit it was packaged from,
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
-Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
-file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
+Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
+in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
 hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
-holds `upstream_revision`. `local_patches` describes each local change.
+holds `upstream_revision`. `local_patches` describes each local patch.
 
-## Local changes
+## Local patches
 
-| Change | Code comment label | Touches | Tests |
-|---|---|---|---|
-| `Segments::add_bez_path` leaves the arena unchanged when a subpath is not closed, instead of keeping the segments it pushed before the open subpath, the last of them linked to an index past the end of the arena | `Craft patch (add_bez_path error)` | `src/segments.rs`, `src/lib.rs` | `tests::add_bez_path_error_leaves_segments_unchanged` |
+| File | Change |
+|---|---|
+| `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
+| `src/segments.rs`, `src/lib.rs` | `Segments::add_bez_path` leaves the arena unchanged when a subpath is not closed, instead of keeping the segments it pushed before the open subpath, the last of them linked to an index past the end of the arena. Code comments label the change `Craft patch (add_bez_path error)`. The test `tests::add_bez_path_error_leaves_segments_unchanged` in `src/lib.rs` covers it. |
 
-Every change here updates this table and `SOURCE.json` in the same commit.
+Every patch here updates this table and `SOURCE.json` in the same commit.
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 

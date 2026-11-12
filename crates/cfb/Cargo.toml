@@ -1,0 +1,16 @@
+[package]
+name = "craft-cfb"
+description = "Clean-room Compound File Binary ([MS-CFB], OLE structured storage) reader and writer: the container of legacy Office files, Outlook messages and AAF."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+craft-media-testkit = { workspace = true }

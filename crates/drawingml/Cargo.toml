@@ -1,0 +1,20 @@
+[package]
+name = "craft-drawingml"
+description = "DrawingML (ECMA-376 part 1, chapter 20) pieces shared by PPTX, DOCX and XLSX: EMU units and shape transforms, colours and colour transforms, preset shape geometry, custom geometry and text warps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-xml = { workspace = true }
+kurbo = { workspace = true }
+log = "0.4"
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
