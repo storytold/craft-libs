@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use super::es::Splitter;
 use super::pes;
-use super::{ByteSource, Codec, Error, File, Format, LpcmFormat, Result, Stream, StreamId, Unit, Unwrap, read_some};
+use super::{ByteSource, ClockRange, Codec, Error, File, Format, LpcmFormat, Result, Stream, StreamId, Unit, Unwrap, read_some};
 
 /// Sequential reader with a refillable window.
 struct Win<'a, S: ByteSource + ?Sized> {
@@ -15,6 +15,9 @@ struct Win<'a, S: ByteSource + ?Sized> {
     /// Bytes zero-filled by window refills (tests count them).
     #[cfg(test)]
     zero_filled: usize,
+    /// Window refills (tests count them).
+    #[cfg(test)]
+    refills: usize,
 }
 
 impl<'a, S: ByteSource + ?Sized> Win<'a, S> {
@@ -25,12 +28,20 @@ impl<'a, S: ByteSource + ?Sized> Win<'a, S> {
             start: 0,
             #[cfg(test)]
             zero_filled: 0,
+            #[cfg(test)]
+            refills: 0,
         }
     }
     /// The bytes [pos, pos + n) (fewer at the end of the file).
     fn get(&mut self, pos: u64, n: usize) -> Result<&[u8]> {
-        let have = pos >= self.start && pos + n as u64 <= self.start + self.buf.len() as u64;
+        let end = self.start + self.buf.len() as u64;
+        // a window that already reaches the end of the file holds all there is to read past `pos`
+        let have = pos >= self.start && (pos.saturating_add(n as u64) <= end || end >= self.src.len());
         if !have {
+            #[cfg(test)]
+            {
+                self.refills += 1;
+            }
             // never more than the file still holds past `pos`: `read_some` would not fill it, and
             // zeroing a megabyte for every packet near the end of the file is wasted work
             let remaining = self.src.len().saturating_sub(pos);
@@ -96,6 +107,20 @@ fn lpcm_format(h: &[u8]) -> Option<LpcmFormat> {
 struct EsState {
     stream: Stream,
     split: Splitter,
+    /// Progression is unwrapped per stream after its first timestamp is aligned to the program.
+    unwrap: Option<Unwrap>,
+}
+
+fn unwrap_time(epoch: &mut Unwrap, stream: &mut Option<Unwrap>, raw: i64) -> i64 {
+    if let Some(unwrap) = stream {
+        let value = unwrap.unwrap(raw);
+        epoch.observe(*unwrap);
+        value
+    } else {
+        let value = epoch.unwrap(raw);
+        *stream = Some(Unwrap::aligned(raw, value));
+        value
+    }
 }
 
 /// Length of the packet (pack header, system header, PES…) starting at `b` (which begins with a
@@ -131,8 +156,11 @@ pub(crate) fn scan<S: ByteSource + ?Sized>(src: &S, mpeg1: bool) -> Result<File>
     let mut streams: HashMap<(u8, Option<u8>), EsState> = HashMap::new();
     let mut order = Vec::new();
     let mut psm: HashMap<u8, u8> = HashMap::new();
-    let mut unwrap = Unwrap::default();
-    let mut scr: Option<(i64, i64)> = None;
+    let mut scr = ClockRange::default();
+    // Program-stream elementary streams share one clock epoch. The anchor follows the farthest
+    // progressed stream so a stream first seen after a wrap joins that epoch, while each stream
+    // keeps independent progression so its reordered timestamps cannot move another stream.
+    let mut timestamp_epoch = Unwrap::default();
     let mut resyncs = 0u64;
     while pos + 4 <= len {
         let head = win.get(pos, 32)?;
@@ -175,7 +203,7 @@ pub(crate) fn scan<S: ByteSource + ?Sized>(src: &S, mpeg1: bool) -> Result<File>
             } else {
                 pes::timestamp(&head[4..9]) * 300
             };
-            scr = Some(scr.map_or((v, v), |(a, b): (i64, i64)| (a.min(v), b.max(v))));
+            scr.push(v);
         } else if id == 0xBC {
             // program stream map: elementary stream id → stream_type
             let body = win.get(pos, plen)?;
@@ -222,10 +250,12 @@ pub(crate) fn scan<S: ByteSource + ?Sized>(src: &S, mpeg1: bool) -> Result<File>
                         pes_packets: 0,
                         skipped_bytes: 0,
                     };
-                    EsState { stream, split: Splitter::new(&codec) }
+                    EsState { stream, split: Splitter::new(&codec), unwrap: None }
                 });
                 e.stream.pes_packets += 1;
-                e.split.pes_start(h.pts.map(|t| unwrap.unwrap(t)), h.dts.map(|t| unwrap.unwrap(t)));
+                let pts = h.pts.map(|t| unwrap_time(&mut timestamp_epoch, &mut e.unwrap, t));
+                let dts = h.dts.map(|t| unwrap_time(&mut timestamp_epoch, &mut e.unwrap, t));
+                e.split.pes_start(pts, dts);
                 e.split.feed(pos, &payload[skip..]);
             }
         }
@@ -246,7 +276,7 @@ pub(crate) fn scan<S: ByteSource + ?Sized>(src: &S, mpeg1: bool) -> Result<File>
     if out.is_empty() {
         return Err(Error::Invalid("program stream without elementary streams".into()));
     }
-    Ok(File { format: Format::Ps { mpeg1 }, streams: out, program: None, pcr_range: scr, warnings })
+    Ok(File { format: Format::Ps { mpeg1 }, streams: out, program: None, pcr_range: scr.range(), warnings })
 }
 
 /// Collect unit `u` of stream `st`, starting at the PES packet at `u.pos`.
@@ -350,6 +380,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Dense recovery candidates near the end ask for more bytes than the file still holds: the
+    /// window that already reaches the end serves them, without a refill each.
+    #[test]
+    fn requests_past_the_end_reuse_a_window_that_reaches_it() {
+        let d = data(5000);
+        let mut w = Win::new(d.as_slice());
+        assert_eq!(w.get(4000, 32).unwrap(), &d[4000..4032]);
+        let first = w.refills;
+        for pos in 4000..4990 {
+            assert_eq!(w.get(pos, 4096).unwrap(), &d[pos as usize..], "pos {pos}");
+        }
+        assert_eq!(w.refills, first, "a refill per request");
     }
 
     #[test]

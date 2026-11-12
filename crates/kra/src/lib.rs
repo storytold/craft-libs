@@ -20,8 +20,6 @@
 mod tests;
 pub mod tiles;
 
-use std::io::{Cursor, Read};
-
 use craft_xml::El;
 use tiles::Space;
 
@@ -56,6 +54,8 @@ pub const MAX_NODES: usize = 8192;
 pub const MAX_MAINDOC: usize = 32 << 20;
 /// Largest pixel file, inflated.
 pub const MAX_LAYER_FILE: usize = 1 << 30;
+/// Most entries the archive may declare; checked before the archive is indexed.
+pub const MAX_ENTRIES: u64 = 100_000;
 /// Largest ICC profile.
 pub const MAX_ICC: usize = 16 << 20;
 /// Deepest element nesting of `maindoc.xml`.
@@ -65,19 +65,7 @@ pub const MAX_XML_DEPTH: usize = 512;
 /// bytes, which is how Krita (and OpenRaster, OpenDocument, EPUB) mark their archives so the
 /// type is readable without unzipping.
 pub fn zip_mimetype(bytes: &[u8]) -> Option<&[u8]> {
-    let u16_at = |o: usize| bytes.get(o..o + 2).and_then(|s| <[u8; 2]>::try_from(s).ok()).map(u16::from_le_bytes);
-    let u32_at = |o: usize| bytes.get(o..o + 4).and_then(|s| <[u8; 4]>::try_from(s).ok()).map(u32::from_le_bytes);
-    if u32_at(0)? != 0x0403_4b50 || u16_at(8)? != 0 {
-        return None;
-    }
-    let size = usize::try_from(u32_at(18)?).ok()?;
-    let name_len = usize::from(u16_at(26)?);
-    let extra_len = usize::from(u16_at(28)?);
-    if bytes.get(30..30 + name_len)? != b"mimetype" || size > 256 {
-        return None;
-    }
-    let start = 30 + name_len + extra_len;
-    bytes.get(start..start.checked_add(size)?)
+    craft_zip::stored_mimetype(bytes)
 }
 
 /// `true` for a Krita archive (by its `mimetype` entry).
@@ -262,14 +250,19 @@ impl Image {
 
 /// An open Krita archive: the parsed `maindoc.xml` and access to the archive's other entries.
 pub struct Archive<'a> {
-    zip: zip::ZipArchive<Cursor<&'a [u8]>>,
+    zip: craft_zip::Archive<'a>,
     image: Image,
 }
 
 impl<'a> Archive<'a> {
     /// Opens the archive, checks its `mimetype` and reads `maindoc.xml`.
     pub fn open(bytes: &'a [u8]) -> Result<Archive<'a>> {
-        let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| invalid(e.to_string()))?;
+        let mut zip =
+            craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: MAX_ENTRIES, max_total_bytes: u64::MAX }).map_err(zip_error)?;
+        // `zip` keeps one entry of a repeated name; which one the writer meant is not known.
+        if zip.has_duplicate_names() {
+            return Err(invalid("two entries of the archive share a name"));
+        }
         let mime = read(&mut zip, "mimetype", 256)?.ok_or_else(|| invalid("the archive has no mimetype"))?;
         if mime.trim_ascii() != MIMETYPE {
             return Err(invalid("the archive's mimetype is not application/x-krita"));
@@ -320,18 +313,14 @@ impl<'a> Archive<'a> {
     }
 }
 
-fn read(zip: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str, max: usize) -> Result<Option<Vec<u8>>> {
-    let Some(index) = zip.index_for_name(name) else { return Ok(None) };
-    let file = zip.by_index(index).map_err(|e| invalid(format!("{name}: {e}")))?;
-    let too_large = || invalid(format!("{name}: larger than {max} bytes"));
-    if file.size() > max as u64 {
-        return Err(too_large());
+fn read(zip: &mut craft_zip::Archive<'_>, name: &str, max: usize) -> Result<Option<Vec<u8>>> {
+    zip.read(name, max as u64).map_err(zip_error)
+}
+
+fn zip_error(e: craft_zip::Error) -> Error {
+    match e {
+        craft_zip::Error::NotZip(m) => invalid(m),
+        craft_zip::Error::EntryTooLarge { name, limit } => invalid(format!("{name}: larger than {limit} bytes")),
+        e => invalid(e.to_string()),
     }
-    // The declared size is the archive's claim; the read is what is bounded.
-    let mut out = Vec::new();
-    file.take(max as u64 + 1).read_to_end(&mut out).map_err(|e| invalid(format!("{name}: {e}")))?;
-    if out.len() > max {
-        return Err(too_large());
-    }
-    Ok(Some(out))
 }

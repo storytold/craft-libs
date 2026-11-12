@@ -7,6 +7,8 @@
 use crate::error::{PsdError, Result};
 use crate::io::{Reader, WriteExt, read_unicode_units, write_unicode_units};
 
+mod lookup;
+
 /// Maximum nesting depth accepted when parsing (fuzz safety).
 pub const MAX_DEPTH: usize = 64;
 
@@ -227,6 +229,18 @@ pub enum Value {
     RawData(Vec<u8>),
     /// `ObAr`: object array (best effort; see [`ObjectArray`]).
     ObjectArray(ObjectArray),
+}
+
+impl Value {
+    /// The value as a number: a double, a unit float, an integer or a large integer.
+    pub fn as_number(&self) -> Option<f64> {
+        match self {
+            Value::Double(v) | Value::UnitFloat { value: v, .. } => Some(*v),
+            Value::Integer(v) => Some(f64::from(*v)),
+            Value::LargeInteger(v) => Some(*v as f64),
+            _ => None,
+        }
+    }
 }
 
 /// `ObAr` object array. Undocumented in the Adobe spec; the layout follows
