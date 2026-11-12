@@ -1,0 +1,32 @@
+[package]
+name = "craft-psd"
+description = "Faithful, lossless reader and writer for Adobe Photoshop PSD and PSB files, and for the Photoshop resource files that share their primitives (ABR, ASL, ACO, ACT, ASE, GRD, PAT, ATN, CSH, SHC)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[features]
+# Real-file corpus tests (opt-in). Fail when the corpus is missing.
+corpus = []
+default = []
+serde = ["dep:serde"]
+testgen = []
+
+[dependencies]
+thiserror = { workspace = true }
+# zlib-rs is the backend the code was measured and byte-compared with in PhotoCraft.
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }
+encoding_rs = { workspace = true }
+serde = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+craft-psd = { path = ".", features = ["testgen"] }
+
+[lints]
+workspace = true

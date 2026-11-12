@@ -13,6 +13,13 @@ Prepress for the Craft apps: separations, ink limits and the ink manager.
   and the pixels and regions over a TAC limit.
 - `composite`: an sRGB preview of chosen plates.
 - `cms`: process color conversion into a CMYK printing condition through craft-cms.
+- `marks`: printer's marks for a page with a slug. `Marks::new(trim, bleed, &MarkOptions)` lays
+  out crop marks, bleed marks (when the bleed passes the trim), a registration target on each
+  side and process color bars along the top, and returns the sheet (the media box that holds
+  them) and where a page-information line fits. `Marks::draw` paints them with craft-pdf's
+  writer: lines in the registration color, so they print on every plate, and the bars in
+  DeviceCMYK. It tags nothing; in a tagged document, call it inside a page artifact. The text of
+  the information line is the app's.
 
 - `flatten` (feature `flatten`): the display list a transparency flattener reads and writes:
   fills, text runs, images and transparency groups in page space, with ink colors and overprint

@@ -98,7 +98,7 @@
       "path": "src/crypto/mod.rs",
       "source_sha256": "6fca01cee7e67f3aaf435101b7ea98fa4fe23f807eadeaec63ee1c2ece759189",
       "source_git_blob": "15371514c10dc993b335edfec19a3f989b497954",
-      "sha256": "6fca01cee7e67f3aaf435101b7ea98fa4fe23f807eadeaec63ee1c2ece759189"
+      "sha256": "9e0fc0edf48217b01acfcf7bcd3ebe0673f225f0c3857bf887efd0b0f31a74b2"
     },
     {
       "path": "src/crypto/rc4.rs",
@@ -278,7 +278,7 @@
       "path": "src/object/stream.rs",
       "source_sha256": "f5229eb2f52c9918830027c93112e042a9e97d34b5fec72f97dcc7de8c5410ac",
       "source_git_blob": "a80f0730cba317ed3771cee61d6a7ab18de296d7",
-      "sha256": "b482506cb41ea2496fd282f72f6e19e39113a23998a164194ee76051c504e915"
+      "sha256": "ce9b81f31963cd0474aba253d7c9937f78cd3a1034b6811ccf4cbdf68c3769b6"
     },
     {
       "path": "src/object/string.rs",
@@ -338,7 +338,7 @@
       "path": "src/xref.rs",
       "source_sha256": "51ffeeb7d4ac035bae2cd5ba9288c180088ae06cdcefe2b29dfeda560a793aa0",
       "source_git_blob": "20e33a410489d42e438a3f2b87d70c7bb8d66eae",
-      "sha256": "f47507871327f04cc1fa30ed731dacd093144de7049342f8d11c72b6d0eeed70"
+      "sha256": "920adb9a303f92f3fed721242e5d0976d36ebc2a3e16ef55e19e254a0d16d564"
     },
     {
       "path": "src/decode_limits_tests.rs",

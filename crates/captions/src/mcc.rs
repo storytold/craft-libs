@@ -1,0 +1,1131 @@
+//! MacCaption MCC (`.mcc`): closed-caption data as text, one line per frame carrying data, each line a
+//! SMPTE ST 334-2 caption distribution packet (CDP) carrying CEA-608 byte pairs and CEA-708
+//! (DTVCC) packets, written in hexadecimal with MacCaption's letter abbreviations.
+//!
+//! ```text
+//! File Format=MacCaption_MCC V1.0
+//! …
+//! Time Code Rate=30DF
+//!
+//! 00:00:01;00 T49S494F43ZZ72F4FC9420RFE...G7400Z4C
+//! ```
+//!
+//! - **Line:** `timecode<TAB>data`; data is ancillary DID/SDID `61 01`, a byte count, then the
+//!   CDP. Letters stand for byte runs: `G`–`O` = 1–9 × `FA 00 00`, `P` = `FB 80 80`,
+//!   `Q` = `FC 80 80`, `R` = `FD 80 80`, `S` = `96 69`, `T` = `61 01`, `U` = `E1 00 00 00`,
+//!   `Z` = `00`.
+//! - **CDP (SMPTE ST 334-2):** identifier `96 69`, length, frame-rate code, flags, sequence
+//!   counter, a `cc_data` section (`72`, `E0 | cc_count`, cc_count × (marker/valid/type, two
+//!   bytes)), optional time code / service info sections, footer `74`, the counter again and a
+//!   checksum that makes the packet's byte sum 0 mod 256. The ancillary packet then ends with one ST 291 checksum byte
+//!   (low 8 bits of DID + SDID + data count + CDP bytes).
+//! - **Writing** (29.97 fps, `30DF` or `30` timecode labels): each scheduled caption-data frame
+//!   carries a CDP with 20 cc_data triplets; empty frames are omitted. Each CDP contains field 1 CEA-608
+//!   pop-on data (the same schedule as [SCC](crate::scc)), a null field-2 pair, CEA-708
+//!   service 1 data and padding. The CEA-708 captions emulate pop-on with two windows: each
+//!   caption goes into one window, deleted and defined anew first (hidden, empty, the pen at its
+//!   top left), while the other shows, then a DisplayWindows / HideWindows pair switches them on
+//!   the caption's first frame; HideWindows clears it at its end.
+//! - **Reading:** every CDP's `cc_data`; channel 1 CEA-608 field-1 data is decoded with the SCC
+//!   decoder when present, otherwise CEA-708 service 1 (windows, text, CR, clear / display /
+//!   hide / toggle / delete windows, DefineWindow visibility); a cue starts whenever the visible
+//!   text changes. `Time Code Rate` 30DF / 30 → 29.97 fps, 60DF / 60 → 59.94, 24, 25, 50.
+
+use std::collections::BTreeMap;
+
+use crate::time::{FrameRate, fields_to_frames, frames_to_fields};
+
+use crate::cea608::with_parity;
+use crate::{Cue, Document, Error, Result, scc};
+
+/// MCC files written here are 29.97 fps.
+pub const RATE: FrameRate = FrameRate::FPS_29_97;
+const CC_COUNT: usize = 20;
+/// cc_data triplets per frame left for CEA-708 (after the two CEA-608 fields).
+const DTVCC_PAIRS: usize = CC_COUNT - 2;
+
+// ---------------------------------------------------------------------------------------------
+// Hex with MacCaption abbreviations
+// ---------------------------------------------------------------------------------------------
+
+const ABBREV: &[(char, &[u8])] = &[
+    ('P', &[0xfb, 0x80, 0x80]),
+    ('Q', &[0xfc, 0x80, 0x80]),
+    ('R', &[0xfd, 0x80, 0x80]),
+    ('S', &[0x96, 0x69]),
+    ('T', &[0x61, 0x01]),
+    ('U', &[0xe1, 0x00, 0x00, 0x00]),
+    ('Z', &[0x00]),
+];
+
+/// Bytes → MCC text (uppercase hex with abbreviations).
+pub fn compress(b: &[u8]) -> String {
+    let mut out = String::new();
+    let mut i = 0;
+    'outer: while i < b.len() {
+        let mut n = 0;
+        while n < 9 && b[i + 3 * n..].starts_with(&[0xfa, 0x00, 0x00]) {
+            n += 1;
+        }
+        if n > 0 {
+            out.push((b'G' + n as u8 - 1) as char);
+            i += 3 * n;
+            continue;
+        }
+        for (c, seq) in ABBREV {
+            if b[i..].starts_with(seq) {
+                out.push(*c);
+                i += seq.len();
+                continue 'outer;
+            }
+        }
+        out.push_str(&format!("{:02X}", b[i]));
+        i += 1;
+    }
+    out
+}
+
+/// MCC text → bytes (None if malformed).
+pub fn expand(s: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut hex: Option<u8> = None;
+    for c in s.chars().filter(|c| !c.is_whitespace()) {
+        if let Some(d) = c.to_digit(16) {
+            match hex.take() {
+                Some(h) => out.push(h << 4 | d as u8),
+                None => hex = Some(d as u8),
+            }
+            continue;
+        }
+        if hex.is_some() {
+            return None;
+        }
+        let c = c.to_ascii_uppercase();
+        match c {
+            'G'..='O' => {
+                for _ in 0..(c as u8 - b'G' + 1) {
+                    out.extend_from_slice(&[0xfa, 0x00, 0x00]);
+                }
+            }
+            _ => out.extend_from_slice(ABBREV.iter().find(|a| a.0 == c)?.1),
+        }
+    }
+    if hex.is_some() { None } else { Some(out) }
+}
+
+// ---------------------------------------------------------------------------------------------
+// CDP
+// ---------------------------------------------------------------------------------------------
+
+/// One frame's caption data: a field-1 CEA-608 pair (without parity) and DTVCC pairs
+/// `(start_of_packet, b1, b2)`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FrameData {
+    pub f1: Option<(u8, u8)>,
+    pub dtvcc: Vec<(bool, u8, u8)>,
+}
+
+fn rate_code(r: FrameRate) -> u8 {
+    match r {
+        FrameRate::FPS_23_976 => 1,
+        FrameRate::FPS_24 => 2,
+        FrameRate::FPS_25 => 3,
+        FrameRate::FPS_29_97 => 4,
+        FrameRate::FPS_30 => 5,
+        FrameRate::FPS_50 => 6,
+        FrameRate::FPS_59_94 => 7,
+        FrameRate::FPS_60 => 8,
+        _ => 4,
+    }
+}
+
+/// A CDP for one 29.97 fps frame, prefixed with the ancillary DID/SDID (`61 01`) and count.
+pub fn build_cdp(seq: u16, data: &FrameData) -> Vec<u8> {
+    let mut cc: Vec<u8> = Vec::with_capacity(CC_COUNT * 3);
+    match data.f1 {
+        Some((a, b)) => cc.extend_from_slice(&[0xfc, with_parity(a), with_parity(b)]),
+        None => cc.extend_from_slice(&[0xfc, 0x80, 0x80]),
+    }
+    cc.extend_from_slice(&[0xfd, 0x80, 0x80]);
+    for &(start, a, b) in data.dtvcc.iter().take(DTVCC_PAIRS) {
+        cc.extend_from_slice(&[if start { 0xff } else { 0xfe }, a, b]);
+    }
+    while cc.len() < CC_COUNT * 3 {
+        cc.extend_from_slice(&[0xfa, 0x00, 0x00]);
+    }
+    let len = 7 + 2 + cc.len() + 4;
+    let [s1, s0] = seq.to_be_bytes();
+    let mut cdp = vec![0x96, 0x69, len as u8, rate_code(RATE) << 4 | 0x0f, 0x43, s1, s0, 0x72, 0xe0 | CC_COUNT as u8];
+    cdp.extend_from_slice(&cc);
+    cdp.extend_from_slice(&[0x74, s1, s0]);
+    let sum: u32 = cdp.iter().map(|&b| b as u32).sum();
+    cdp.push(((256 - sum % 256) % 256) as u8);
+    let mut out = vec![0x61, 0x01, cdp.len() as u8];
+    out.extend(cdp);
+    // SMPTE ST 291 ancillary checksum: low 8 bits of the sum of DID, SDID, data count and the user data words.
+    let anc_sum: u32 = out.iter().map(|&b| b as u32).sum();
+    out.push((anc_sum & 0xff) as u8);
+    out
+}
+
+/// The cc_data triplets of one line's bytes (an ancillary packet with a CDP, or a bare CDP).
+pub fn cc_triplets(b: &[u8]) -> Option<Vec<[u8; 3]>> {
+    let cdp = if b.starts_with(&[0x61, 0x01]) { b.get(3..)? } else { b };
+    if !cdp.starts_with(&[0x96, 0x69]) {
+        return None;
+    }
+    let len = (*cdp.get(2)? as usize).min(cdp.len());
+    let cdp = &cdp[..len];
+    let mut i = 7;
+    let mut out = Vec::new();
+    while i < cdp.len() {
+        match cdp[i] {
+            0x71 => i += 5,
+            0x72 => {
+                let n = (*cdp.get(i + 1)? & 0x1f) as usize;
+                for k in 0..n {
+                    let at = i + 2 + 3 * k;
+                    out.push([*cdp.get(at)?, *cdp.get(at + 1)?, *cdp.get(at + 2)?]);
+                }
+                i += 2 + 3 * n;
+            }
+            0x73 => i += 2 + 7 * (*cdp.get(i + 1)? & 0x0f) as usize,
+            0x74 => break,
+            0x75..=0xef => i += 2 + *cdp.get(i + 1)? as usize,
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+// ---------------------------------------------------------------------------------------------
+// CEA-708 service data
+// ---------------------------------------------------------------------------------------------
+
+/// G2 characters we write / read (after EXT1).
+const G2: &[(u8, char)] = &[
+    (0x25, '…'),
+    (0x2a, 'Š'),
+    (0x2c, 'Œ'),
+    (0x31, '‘'),
+    (0x32, '’'),
+    (0x33, '“'),
+    (0x34, '”'),
+    (0x35, '•'),
+    (0x39, '™'),
+    (0x3a, 'š'),
+    (0x3c, 'œ'),
+    (0x3d, '℠'),
+    (0x3f, 'Ÿ'),
+    (0x76, '⅛'),
+    (0x77, '⅜'),
+    (0x78, '⅝'),
+    (0x79, '⅞'),
+];
+
+/// Service-data atoms (a command with its parameters, or one character) for a character, if
+/// CEA-708 has a code for it.
+fn char_atom(c: char) -> Option<Vec<u8>> {
+    Some(match c {
+        '♪' => vec![0x7f],
+        ' '..='~' => vec![c as u8],
+        '\u{a0}'..='\u{ff}' => vec![c as u32 as u8],
+        _ => vec![0x10, G2.iter().find(|g| g.1 == c)?.0],
+    })
+}
+
+/// What a CEA-708 decoder shows for `c`: `c`, or `?`, which the writer sends for a character
+/// with no code.
+pub fn shown_as_708(c: char) -> char {
+    if char_atom(c).is_some() { c } else { '?' }
+}
+
+/// Atoms that make window `win` anew, hidden, and load `rows` into it.
+fn load_atoms(win: u8, rows: &[String]) -> Vec<Vec<u8>> {
+    let rc = rows.len().clamp(1, 12) as u8 - 1;
+    let cols = rows.iter().map(|r| r.chars().count()).max().unwrap_or(1).clamp(1, 42) as u8 - 1;
+    let mut v = vec![
+        // DeleteWindows: the window holds the caption before last. Decoders differ on whether
+        // redefining it or ClearWindows moves the pen back (CCExtractor keeps it), but a new
+        // window starts empty with the pen at its top left, for the same bytes as ClearWindows.
+        vec![0x8c, 1 << win],
+        // DefineWindow: hidden, row/column lock, relative position 90 % down / 50 % across,
+        // anchored at its bottom centre, rows / columns, window style 1, pen style 1
+        vec![0x98 + win, 0x18, 0x80 | 90, 50, 7 << 4 | rc, cols, 1 << 3 | 1],
+    ];
+    for (i, r) in rows.iter().enumerate() {
+        if i > 0 {
+            v.push(vec![0x0d]);
+        }
+        v.extend(r.chars().map(|c| char_atom(c).unwrap_or_else(|| vec![b'?'])));
+    }
+    v
+}
+
+/// Pack atoms into DTVCC packets for service 1 (each ≤ 34 bytes, so one fits in a frame).
+fn packets(atoms: &[Vec<u8>], seq: &mut u8) -> Vec<Vec<u8>> {
+    let mut blocks: Vec<Vec<u8>> = Vec::new();
+    let mut cur: Vec<u8> = Vec::new();
+    for a in atoms {
+        if cur.len() + a.len() > 31 {
+            blocks.push(std::mem::take(&mut cur));
+        }
+        cur.extend_from_slice(a);
+    }
+    if !cur.is_empty() {
+        blocks.push(cur);
+    }
+    blocks
+        .into_iter()
+        .map(|b| {
+            let mut p = vec![0, 1 << 5 | b.len() as u8];
+            p.extend(b);
+            if p.len() % 2 == 1 {
+                p.push(0);
+            }
+            p[0] = (*seq & 3) << 6 | (p.len() / 2) as u8;
+            *seq = seq.wrapping_add(1);
+            p
+        })
+        .collect()
+}
+
+fn pairs_of(packet: &[u8]) -> Vec<(bool, u8, u8)> {
+    packet.chunks(2).enumerate().map(|(i, c)| (i == 0, c[0], *c.get(1).unwrap_or(&0))).collect()
+}
+
+/// Frames → DTVCC pairs, with per-frame capacity.
+struct Dtv {
+    frames: BTreeMap<i64, Vec<(bool, u8, u8)>>,
+}
+
+impl Dtv {
+    fn room(&self, f: i64) -> usize {
+        DTVCC_PAIRS - self.frames.get(&f).map_or(0, Vec::len)
+    }
+    /// Put a packet in the first frame ≥ `f` with room; returns that frame.
+    fn place(&mut self, mut f: i64, packet: &[u8]) -> i64 {
+        let pairs = pairs_of(packet);
+        while self.room(f) < pairs.len() {
+            f += 1;
+        }
+        self.frames.entry(f).or_default().extend(pairs);
+        f
+    }
+}
+
+/// The rows of the CEA-708 window a caption is loaded into.
+pub const WINDOW_ROWS: usize = 12;
+
+/// The rows the CEA-708 writer loads for caption `text`: the CEA-608 rows (plain text in 32-column
+/// rows), as many as the window holds. The rest is left out: past a window's last row, decoders
+/// differ (one scrolls the first rows away, another runs the text into the last row).
+pub fn window_rows(text: &str) -> Vec<String> {
+    let mut rows = scc::caption_rows(text);
+    rows.truncate(WINDOW_ROWS);
+    rows
+}
+
+/// Schedule CEA-708 service 1 pop-on captions (see the module docs).
+fn schedule_708(doc: &Document) -> BTreeMap<i64, Vec<(bool, u8, u8)>> {
+    let mut d = Dtv { frames: BTreeMap::new() };
+    let mut seq = 0u8;
+    let mut cursor = 0i64;
+    let mut cues: Vec<&Cue> = doc.cues.iter().filter(|c| c.end > c.start).collect();
+    cues.sort_by_key(|c| c.start);
+    for (i, c) in cues.iter().enumerate() {
+        let win = (i % 2) as u8;
+        let s = scc::frame_of(c.start).max(cursor);
+        let e = scc::frame_of(c.end);
+        let rows = window_rows(&c.text);
+        let load = packets(&load_atoms(win, &rows), &mut seq);
+        let mut f = (s - load.len() as i64).max(cursor);
+        let mut last = f;
+        for p in &load {
+            last = d.place(f, p);
+            f = last;
+        }
+        let show = packets(&[vec![0x8a, 1 << (1 - win)], vec![0x89, 1 << win]], &mut seq);
+        let shown = d.place(s.max(last), &show[0]);
+        cursor = shown + 1;
+        let next_start = cues.get(i + 1).map(|n| scc::frame_of(n.start));
+        if next_start != Some(e) {
+            let hide = packets(&[vec![0x8a, 1 << win]], &mut seq);
+            d.place(e.max(cursor), &hide[0]);
+        }
+    }
+    d.frames
+}
+
+/// CEA-708 decoder state for service 1.
+#[derive(Clone, Default)]
+struct Win {
+    defined: bool,
+    visible: bool,
+    rows: Vec<String>,
+    max_rows: usize,
+    max_cols: usize,
+}
+
+/// Total cue text one CEA-708 import may retain. Every packet can change the visible text and
+/// so retain another full snapshot of up to eight windows; without a cap a file can expand by a
+/// few hundred times into retained strings.
+const MAX_708_TEXT_BYTES: usize = 16 << 20;
+
+struct Dec708 {
+    win: [Win; 8],
+    cur: usize,
+    packet: Vec<u8>,
+    want: usize,
+    open: Option<(i64, String)>,
+    cues: Vec<(i64, i64, String)>,
+    /// Cue text bytes that may still be retained (see [`MAX_708_TEXT_BYTES`]).
+    budget: usize,
+    /// Set once the budget ran out; later packets are ignored.
+    truncated: bool,
+}
+
+impl Dec708 {
+    fn new() -> Self {
+        Dec708 {
+            win: Default::default(),
+            cur: 0,
+            packet: Vec::new(),
+            want: 0,
+            open: None,
+            cues: Vec::new(),
+            budget: MAX_708_TEXT_BYTES,
+            truncated: false,
+        }
+    }
+    fn visible_text(&self) -> String {
+        let mut lines = Vec::new();
+        for w in self.win.iter().filter(|w| w.defined && w.visible) {
+            lines.extend(w.rows.iter().map(|r| r.trim().to_string()).filter(|r| !r.is_empty()));
+        }
+        lines.join("\n")
+    }
+    fn sync(&mut self, f: i64) {
+        let now = self.visible_text();
+        // Check the open cue before the unchanged-text return, so an unchanged oversized cue still stops later packets.
+        if let Some((s, t)) = &self.open
+            && f > *s
+            && t.len() > self.budget
+        {
+            self.truncated = true;
+        }
+        if self.open.as_ref().map(|o| o.1.as_str()) == Some(now.as_str()) || (self.open.is_none() && now.is_empty()) {
+            return;
+        }
+        if let Some((s, t)) = self.open.take()
+            && f > s
+        {
+            self.retain(s, f, t);
+        }
+        if !now.is_empty() && !self.truncated {
+            self.open = Some((f, now));
+        }
+    }
+    /// Keep a finished cue unless that would exceed the text budget.
+    fn retain(&mut self, s: i64, e: i64, t: String) {
+        if self.truncated || t.len() > self.budget {
+            self.truncated = true;
+            return;
+        }
+        self.budget -= t.len();
+        self.cues.push((s, e, t));
+    }
+    fn pair(&mut self, f: i64, start: bool, a: u8, b: u8) {
+        if self.truncated {
+            return;
+        }
+        if start {
+            self.packet.clear();
+            let size = (a & 0x3f) as usize;
+            self.want = if size == 0 { 128 } else { size * 2 };
+        } else if self.want == 0 {
+            return;
+        }
+        self.packet.extend_from_slice(&[a, b]);
+        if self.packet.len() >= self.want {
+            let p = std::mem::take(&mut self.packet);
+            self.want = 0;
+            self.service_blocks(&p[1..]);
+            self.sync(f);
+        }
+    }
+    fn service_blocks(&mut self, mut b: &[u8]) {
+        while let Some(&h) = b.first() {
+            let (svc, len) = (h >> 5, (h & 0x1f) as usize);
+            if h == 0 {
+                break;
+            }
+            let (svc, skip) = if svc == 7 { (b.get(1).map_or(0, |x| x & 0x3f), 2) } else { (svc, 1) };
+            let data = b.get(skip..skip + len).unwrap_or(&[]);
+            if svc == 1 {
+                self.service_data(data);
+            }
+            b = b.get(skip + len..).unwrap_or(&[]);
+        }
+    }
+    fn w(&mut self) -> &mut Win {
+        &mut self.win[self.cur]
+    }
+    fn put(&mut self, c: char) {
+        let w = self.w();
+        match w.rows.last_mut() {
+            Some(row) if row.chars().count() < w.max_cols => row.push(c),
+            None if w.max_rows > 0 && w.max_cols > 0 => w.rows.push(c.to_string()),
+            _ => {}
+        }
+    }
+    fn bitmap(&mut self, m: u8, f: impl Fn(&mut Win)) {
+        for (i, w) in self.win.iter_mut().enumerate() {
+            if m & (1 << i) != 0 {
+                f(w);
+            }
+        }
+    }
+    fn service_data(&mut self, d: &[u8]) {
+        let mut i = 0;
+        let arg = |k: usize| d.get(k).copied().unwrap_or(0);
+        while i < d.len() {
+            let c = d[i];
+            i += 1;
+            match c {
+                0x03 | 0x00 => {}
+                0x08 => {
+                    if let Some(r) = self.w().rows.last_mut() {
+                        r.pop();
+                    }
+                }
+                0x0c => self.w().rows = vec![String::new()],
+                0x0d if self.w().rows.len() < self.w().max_rows => self.w().rows.push(String::new()),
+                0x0d => {}
+                0x0e => {
+                    if let Some(r) = self.w().rows.last_mut() {
+                        r.clear();
+                    }
+                }
+                0x10 => {
+                    let x = arg(i);
+                    i += 1;
+                    match x {
+                        0x00..=0x07 => {}
+                        0x08..=0x0f => i += 1,
+                        0x10..=0x17 => i += 2,
+                        0x18..=0x1f => i += 3,
+                        0x20 | 0x21 => self.put(' '),
+                        0x20..=0x7f => {
+                            if let Some((_, ch)) = G2.iter().find(|g| g.0 == x) {
+                                self.put(*ch);
+                            }
+                        }
+                        0x80..=0x87 => i += 4,
+                        0x88..=0x8f => i += 5,
+                        0x90..=0x9f => i += 1 + (arg(i) & 0x1f) as usize,
+                        _ => {}
+                    }
+                }
+                0x11..=0x17 => i += 1,
+                0x18..=0x1f => i += 2,
+                0x20..=0x7e => self.put(c as char),
+                0x7f => self.put('♪'),
+                0x80..=0x87 => self.cur = (c - 0x80) as usize,
+                0x88 => {
+                    self.bitmap(arg(i), |w| w.rows = vec![String::new()]);
+                    i += 1;
+                }
+                0x89 => {
+                    self.bitmap(arg(i), |w| w.visible = true);
+                    i += 1;
+                }
+                0x8a => {
+                    self.bitmap(arg(i), |w| w.visible = false);
+                    i += 1;
+                }
+                0x8b => {
+                    self.bitmap(arg(i), |w| w.visible = !w.visible);
+                    i += 1;
+                }
+                0x8c => {
+                    self.bitmap(arg(i), |w| *w = Win::default());
+                    i += 1;
+                }
+                0x8d => i += 1,
+                0x8e | 0x8f | 0x93..=0x96 => {}
+                0x90 | 0x92 => i += 2,
+                0x91 => i += 3,
+                0x97 => i += 4,
+                0x98..=0x9f => {
+                    let n = (c - 0x98) as usize;
+                    let vis = arg(i) & 0x20 != 0;
+                    let max_rows = (arg(i + 3) & 0x0f) as usize + 1;
+                    let max_cols = (arg(i + 4) & 0x3f) as usize + 1;
+                    let w = &mut self.win[n];
+                    if !w.defined {
+                        *w = Win { defined: true, visible: vis, rows: vec![String::new()], max_rows, max_cols };
+                    } else {
+                        w.visible = vis;
+                        w.max_rows = max_rows;
+                        w.max_cols = max_cols;
+                        w.rows.truncate(max_rows);
+                        for row in &mut w.rows {
+                            if let Some((at, _)) = row.char_indices().nth(max_cols) {
+                                row.truncate(at);
+                            }
+                        }
+                        if w.rows.is_empty() {
+                            w.rows.push(String::new());
+                        }
+                    }
+                    self.cur = n;
+                    i += 6;
+                }
+                0xa0..=0xff => self.put(c as char),
+                _ => {}
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// File
+// ---------------------------------------------------------------------------------------------
+
+/// The most frames [`write_padded`] fills: 24 hours of 29.97 fps drop-frame time code, as far
+/// as an MCC time code counts.
+pub const MAX_PADDED_FRAMES: i64 = 24 * 107_892;
+
+/// Write `doc` as MCC: CEA-608 field 1 and CEA-708 service 1 (see the module docs), with
+/// [`crate::PROGRAM`] as the creation program.
+pub fn write(doc: &Document, drop_frame: bool) -> String {
+    write_with(doc, drop_frame, true, true, crate::PROGRAM)
+}
+
+/// A program name as one header line: no control characters, at most 64 characters.
+fn header_value(program: &str) -> String {
+    program.chars().filter(|c| !c.is_control()).take(64).collect()
+}
+
+/// Write MCC with independently selected CEA-608 field 1 and CEA-708 service 1 streams.
+///
+/// Emit only scheduled data frames, preserving their timestamps and explicit erase/hide
+/// commands. Empty time spans add no packets; CDP counters advance per emitted packet and
+/// wrap at 16 bits. `drop_frame` selects 30DF rather than 30 timecode labels at 29.97 fps.
+/// An empty document or two disabled streams produces a header with no data lines.
+/// `program` is named as the file's creation program.
+pub fn write_with(doc: &Document, drop_frame: bool, cea608: bool, cea708: bool, program: &str) -> String {
+    write_padded(doc, drop_frame, cea608, cea708, 0, program)
+}
+
+/// [`write_with`], plus a packet with no caption data (CEA-608 nulls, CEA-708 padding) on every
+/// frame before `pad_frames` that has none, as SDI and frame-wrapped MXF carry one packet per
+/// video frame. Frames with caption data after `pad_frames` are written as usual. At most
+/// [`MAX_PADDED_FRAMES`] are filled.
+pub fn write_padded(doc: &Document, drop_frame: bool, cea608: bool, cea708: bool, pad_frames: i64, program: &str) -> String {
+    let mut out = Vec::new();
+    // writing into a Vec cannot fail, and the text is UTF-8 (ASCII but for the program name)
+    let _ = write_padded_to(&mut out, doc, drop_frame, cea608, cea708, pad_frames, program);
+    String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+}
+
+/// [`write_padded`] into `out` line by line, so a long padded export is never held in memory.
+pub fn write_padded_to(
+    out: &mut dyn std::io::Write,
+    doc: &Document,
+    drop_frame: bool,
+    cea608: bool,
+    cea708: bool,
+    pad_frames: i64,
+    program: &str,
+) -> std::io::Result<()> {
+    let program = header_value(program);
+    let pad = pad_frames.clamp(0, MAX_PADDED_FRAMES);
+    let f1 = if cea608 { scc::schedule(doc) } else { BTreeMap::new() };
+    let dtv = if cea708 { schedule_708(doc) } else { BTreeMap::new() };
+    let origin = crate::label_frame(doc.start_timecode, RATE, drop_frame); // time codes count from the start time code
+    out.write_all(b"File Format=MacCaption_MCC V1.0\n\n")?;
+    out.write_all(b"///////////////////////////////////////////////////////////////////////////////////\n")?;
+    writeln!(out, "// Closed captions written by {program}: SMPTE ST 334-2 caption distribution packets")?;
+    let frames: &[u8] = if pad > 0 {
+        b"// carrying CEA-608 field 1 and CEA-708 service 1 data; a packet on every frame.\n"
+    } else {
+        b"// carrying CEA-608 field 1 and CEA-708 service 1 data; empty frames omitted.\n"
+    };
+    out.write_all(frames)?;
+    out.write_all(b"///////////////////////////////////////////////////////////////////////////////////\n\n")?;
+    let n = doc.cues.len() as u64;
+    let h = doc
+        .cues
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325u64 ^ n, |h, c| (h ^ c.start.0 as u64 ^ (c.end.0 as u64).rotate_left(17)).wrapping_mul(0x100_0000_01b3));
+    writeln!(
+        out,
+        "UUID={:08X}-{:04X}-4{:03X}-8{:03X}-{:012X}",
+        h >> 32,
+        (h >> 16) & 0xffff,
+        h & 0xfff,
+        (h >> 20) & 0xfff,
+        h.rotate_left(29) & 0xffff_ffff_ffff
+    )?;
+    writeln!(out, "Creation Program={program}")?;
+    writeln!(out, "Time Code Rate={}\n", if drop_frame { "30DF" } else { "30" })?;
+    // Merge the sparse schedules without walking (or allocating for) input-derived time gaps.
+    // Erase/hide commands are scheduled data too, so omitting padding preserves cue end times.
+    // Padding walks only the frames before `pad`, which the caller chose and is capped.
+    let mut f1 = f1.into_iter().peekable();
+    let mut dtv = dtv.into_iter().peekable();
+    let mut seq = 0u16;
+    let mut unpadded = 0i64; // the first frame with no packet yet, while it is before `pad`
+    loop {
+        let data = f1.peek().map(|(f, _)| *f).into_iter().chain(dtv.peek().map(|(f, _)| *f)).min();
+        let Some(f) = data.into_iter().chain((unpadded < pad).then_some(unpadded)).min() else { break };
+        unpadded = unpadded.max(f.saturating_add(1));
+        let data = FrameData {
+            f1: f1.next_if(|(frame, _)| *frame == f).map(|(_, pair)| pair),
+            dtvcc: dtv.next_if(|(frame, _)| *frame == f).map(|(_, pairs)| pairs).unwrap_or_default(),
+        };
+        let (_, hh, mm, ss, ff) = frames_to_fields(f.saturating_add(origin), RATE, drop_frame);
+        let sep = if drop_frame { ';' } else { ':' };
+        writeln!(out, "{hh:02}:{mm:02}:{ss:02}{sep}{ff:02}\t{}", compress(&build_cdp(seq, &data)))?;
+        seq = seq.wrapping_add(1);
+    }
+    Ok(())
+}
+
+fn tc_rate(v: &str) -> Option<(FrameRate, bool)> {
+    Some(match v.trim().to_ascii_uppercase().as_str() {
+        "30DF" => (FrameRate::FPS_29_97, true),
+        "30" => (FrameRate::FPS_29_97, false),
+        "60DF" => (FrameRate::FPS_59_94, true),
+        "60" => (FrameRate::FPS_59_94, false),
+        "24" => (FrameRate::FPS_24, false),
+        "25" => (FrameRate::FPS_25, false),
+        "50" => (FrameRate::FPS_50, false),
+        _ => return None,
+    })
+}
+
+pub fn parse(text: &str) -> Result<Document> {
+    let mut lines = text.lines().enumerate();
+    match lines.by_ref().find(|(_, l)| !l.trim().is_empty()) {
+        Some((_, l)) if l.trim().starts_with("File Format=MacCaption_MCC") => {}
+        _ => return Err(Error::NotFormat("MacCaption MCC")),
+    }
+    let mut rate = (RATE, true);
+    let mut doc = Document::default();
+    let mut f1: Vec<(i64, u8, u8)> = Vec::new();
+    let mut dtv: Vec<(i64, bool, u8, u8)> = Vec::new();
+    let mut any608 = false;
+    for (n, l) in lines {
+        let l = l.trim_end();
+        if l.trim().is_empty() || l.starts_with("//") {
+            continue;
+        }
+        if let Some(v) = l.strip_prefix("Time Code Rate=") {
+            rate = tc_rate(v).ok_or_else(|| Error::Syntax { line: n + 1, msg: format!("unsupported time code rate \"{v}\"") })?;
+            continue;
+        }
+        if l.contains('=') {
+            continue; // other key=value header lines
+        }
+        let Some((tc, data)) = l.trim_start().split_once(['\t', ' ']) else {
+            continue;
+        };
+        let tc = tc.split('.').next().unwrap_or(tc);
+        let parts: Option<Vec<i64>> =
+            tc.split([':', ';']).map(|p| if !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) { p.parse().ok() } else { None }).collect();
+        let Some([h, m, s, f]) = parts.as_deref() else {
+            return Err(Error::Syntax { line: n + 1, msg: format!("bad timecode \"{tc}\"") });
+        };
+        let drop_frame = rate.1 || tc.contains(';');
+        doc.labels.get_or_insert((rate.0, drop_frame));
+        let frame = fields_to_frames(*h, *m, *s, *f, rate.0, drop_frame);
+        let Some(bytes) = expand(data) else {
+            doc.warnings.push(format!("line {}: bad caption data", n + 1));
+            continue;
+        };
+        let Some(trips) = cc_triplets(&bytes) else {
+            doc.warnings.push(format!("line {}: not a caption distribution packet", n + 1));
+            continue;
+        };
+        for [m0, a, b] in trips {
+            if m0 & 0x04 == 0 {
+                continue;
+            }
+            match m0 & 0x03 {
+                0 => {
+                    any608 |= a & 0x7f != 0 || b & 0x7f != 0;
+                    f1.push((frame, a, b));
+                }
+                1 => {}
+                t => dtv.push((frame, t == 3, a, b)),
+            }
+        }
+    }
+    if any608 {
+        doc.cues = scc::decode_pairs(f1, rate.0);
+    } else {
+        let mut d = Dec708::new();
+        let mut last = 0;
+        for (f, start, a, b) in dtv {
+            d.pair(f, start, a, b);
+            last = f + 1;
+        }
+        if let Some((s, t)) = d.open.take() {
+            d.retain(s, last.max(s + 1), t);
+        }
+        if d.truncated {
+            doc.warnings.push(format!("CEA-708 captions exceed {} MiB of text; the rest were not imported", MAX_708_TEXT_BYTES >> 20));
+        }
+        doc.cues =
+            d.cues.into_iter().map(|(s, e, text)| Cue { start: rate.0.tick_of(s), end: rate.0.tick_of(e), text, ..Default::default() }).collect();
+    }
+    Ok(doc)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a caption fixture from start/end frame indices on the MCC 29.97 fps grid.
+    fn cue(s: i64, e: i64, text: &str) -> Cue {
+        Cue { start: RATE.tick_of(s), end: RATE.tick_of(e), text: text.into(), ..Default::default() }
+    }
+
+    /// Check that MCC abbreviations round-trip bytes and reject an incomplete hex pair.
+    #[test]
+    fn abbreviations_round_trip() {
+        let b =
+            [0x61, 0x01, 0x49, 0x96, 0x69, 0xfa, 0, 0, 0xfa, 0, 0, 0xfc, 0x80, 0x80, 0x00, 0x12, 0xe1, 0, 0, 0, 0xfb, 0x80, 0x80, 0xfd, 0x80, 0x80];
+        let s = compress(&b);
+        assert_eq!(s, "T49SHQZ12UPR");
+        assert_eq!(expand(&s).unwrap(), b);
+        assert_eq!(expand("T52S5"), None);
+    }
+
+    /// Verify CDP framing, caption triplets, sequence fields, and both packet checksums.
+    #[test]
+    fn cdp_structure_and_checksum() {
+        let d = FrameData { f1: Some((0x14, 0x20)), dtvcc: vec![(true, 0x02, 0x21), (false, 0x89, 0x01)] };
+        let b = build_cdp(7, &d);
+        assert_eq!(&b[..3], &[0x61, 0x01, 73]);
+        // prefix (3) + CDP (73) + ancillary checksum byte (1)
+        assert_eq!(b.len(), 77);
+        let sum: u32 = b[..76].iter().map(|&x| x as u32).sum();
+        assert_eq!(b[76], (sum & 0xff) as u8, "ancillary checksum");
+        let cdp = &b[3..76];
+        assert_eq!(cdp.len(), 73);
+        assert_eq!(&cdp[..9], &[0x96, 0x69, 73, 0x4f, 0x43, 0, 7, 0x72, 0xf4]);
+        assert_eq!(cdp.iter().map(|&x| x as u32).sum::<u32>() % 256, 0, "checksum");
+        let t = cc_triplets(&b).unwrap();
+        assert_eq!(t.len(), 20);
+        assert_eq!(t[0], [0xfc, 0x94, 0x20]);
+        assert_eq!(t[2], [0xff, 0x02, 0x21]);
+        assert_eq!(t[19], [0xfa, 0, 0]);
+    }
+
+    /// Preserve caption text and timing through combined-stream and CEA-708-only exports.
+    #[test]
+    fn writes_and_reads_608_and_708() {
+        let doc = Document {
+            cues: vec![cue(60, 120, "Hello, world!"), cue(120, 200, "Second caption\nwith two lines"), cue(260, 300, "Café “q” ♪")],
+            ..Default::default()
+        };
+        let s = write(&doc, true);
+        assert!(s.starts_with("File Format=MacCaption_MCC V1.0\n"));
+        assert!(s.contains("Time Code Rate=30DF"));
+        let back = parse(&s).unwrap();
+        let got: Vec<(i64, i64, &str)> = back.cues.iter().map(|c| (RATE.frame_at(c.start), RATE.frame_at(c.end), c.text.as_str())).collect();
+        assert_eq!(got, vec![(60, 120, "Hello, world!"), (120, 200, "Second caption\nwith two lines"), (260, 300, "Café “q” ♪")]);
+        // 708 only
+        let s708 = write_with(&doc, false, false, true, "test");
+        let back = parse(&s708).unwrap();
+        let got: Vec<(i64, i64, &str)> = back.cues.iter().map(|c| (RATE.frame_at(c.start), RATE.frame_at(c.end), c.text.as_str())).collect();
+        assert_eq!(got, vec![(60, 120, "Hello, world!"), (120, 200, "Second caption\nwith two lines"), (260, 300, "Café “q” ♪")]);
+        assert!(parse("garbage").is_err());
+    }
+
+    /// Keep back-to-back captions with the same text separate on the CEA-608 path (the SCC decoder).
+    #[test]
+    fn identical_back_to_back_cues_stay_separate_on_608() {
+        let doc = Document { cues: vec![cue(90, 135, "Ht"), cue(135, 180, "Ht")], ..Default::default() };
+        assert_eq!(parse(&write_with(&doc, false, true, false, "test")).unwrap().cues, doc.cues);
+    }
+
+    /// Reject malformed fields instead of silently dropping them from the timecode.
+    /// Reject timecode fields carrying a sign instead of only ASCII digits.
+    #[test]
+    fn rejects_signed_timecode_fields() {
+        let doc = Document { cues: vec![cue(0, 60, "Caption")], ..Default::default() };
+        let text = write(&doc, false);
+        assert!(text.contains("00:00:00:00"));
+        assert!(parse(&text).is_ok());
+        for bad in ["00:00:+0:+0", "00:00:-0:-0", "00:00:00:-1", "00:00:00:+1"] {
+            let signed = text.replacen("00:00:00:00", bad, 1);
+            match parse(&signed) {
+                Err(Error::Syntax { msg, .. }) => assert!(msg.contains("bad timecode"), "{msg}"),
+                other => panic!("signed timecode {bad} accepted: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_timecodes_with_unparseable_extra_fields() {
+        let doc = Document { cues: vec![cue(60, 120, "Caption")], ..Default::default() };
+        let text = write(&doc, false);
+        assert_eq!(parse(&text).unwrap().cues, doc.cues);
+        let (line_index, line) = text.lines().enumerate().find(|(_, line)| line.contains('\t')).unwrap();
+        let (tc, data) = line.split_once('\t').unwrap();
+        for prefix in ["bad:", ":", "9223372036854775808:", "00:"] {
+            let malformed = text.replacen(line, &format!("{prefix}{tc}\t{data}"), 1);
+            assert!(
+                matches!(parse(&malformed), Err(Error::Syntax { line, .. }) if line == line_index + 1),
+                "accepted malformed timecode: {prefix}{tc}"
+            );
+        }
+    }
+
+    /// Keep separated short captions compact while preserving cues and valid CDP packets.
+    /// Exercise each stream combination with both drop-frame and non-drop timecode labels.
+    #[test]
+    fn export_size_depends_on_caption_data_not_empty_frames() {
+        // A small reproducer: the old writer emits thousands of padding-only lines.
+        let doc = Document { cues: vec![cue(60, 120, "First"), cue(3_600, 3_660, "Last")], ..Default::default() };
+        for drop_frame in [false, true] {
+            for (cea608, cea708) in [(true, true), (true, false), (false, true)] {
+                let text = std::panic::catch_unwind(|| write_with(&doc, drop_frame, cea608, cea708, "test")).unwrap();
+                let lines: Vec<_> = text.lines().filter_map(|line| line.split_once('\t')).collect();
+                assert!(lines.len() < 100, "{} lines for two short captions", lines.len());
+                assert!(text.len() < 16_384);
+                assert_eq!(parse(&text).unwrap().cues, doc.cues);
+                for (seq, (_, data)) in lines.iter().enumerate() {
+                    let bytes = expand(data).unwrap();
+                    assert_eq!(u16::from_be_bytes([bytes[8], bytes[9]]), seq as u16);
+                    assert_eq!(bytes[3..76].iter().map(|&b| b as u32).sum::<u32>() % 256, 0);
+                    let trips = cc_triplets(&bytes).unwrap();
+                    assert!(trips.iter().any(|&[m, a, b]| m & 4 != 0 && (m & 3 >= 2 || a & 0x7f != 0 || b & 0x7f != 0)));
+                }
+            }
+        }
+    }
+
+    /// Time codes count from the label of the document's start time code, drop-frame or not; the
+    /// packets do not change, and `Document::count_from` reads the cues back from it.
+    #[test]
+    fn time_codes_count_from_the_start_timecode() {
+        let doc = Document { cues: vec![cue(60, 120, "Caption")], ..Default::default() };
+        let hour = crate::time::Tick(3600 * crate::time::TICKS_PER_SECOND); // the label 01:00:00:00
+        let master = Document { start_timecode: hour, ..doc.clone() };
+        let lines = |text: &str| -> Vec<(i64, String)> {
+            text.lines().filter_map(|l| l.split_once('\t')).map(|(tc, data)| (scc::parse_timecode(tc).unwrap(), data.to_string())).collect()
+        };
+        for (drop_frame, origin) in [(true, 107_892), (false, 108_000)] {
+            let plain = lines(&write(&doc, drop_frame));
+            let shifted: Vec<_> = plain.iter().map(|(f, data)| (f + origin, data.clone())).collect();
+            let text = write(&master, drop_frame);
+            assert_eq!(lines(&text), shifted);
+            assert!(text.contains("\n01:00:0"), "{text}");
+            let mut back = parse(&text).unwrap();
+            assert_eq!(back.labels, Some((RATE, drop_frame)));
+            assert_eq!(back.cues[0].start, RATE.tick_of(origin + 60));
+            assert!(back.count_from(hour));
+            assert_eq!(back.cues, parse(&write(&doc, drop_frame)).unwrap().cues, "read back from the start time code");
+        }
+        let negative = Document { start_timecode: crate::time::Tick(-1), ..doc.clone() };
+        assert_eq!(lines(&write(&negative, true)), lines(&write(&doc, true)), "a negative start counts from zero");
+        assert!(write(&Document { start_timecode: crate::time::Tick(i64::MAX), ..doc }, true).contains('\t'));
+    }
+
+    /// Bound output for distant or long cues near the tick limit without changing their timing.
+    #[test]
+    fn distant_and_long_cues_round_trip_near_tick_limit() {
+        let last = RATE.frame_at(crate::Tick(i64::MAX)) - 10;
+        for cues in [vec![cue(60, 120, "First"), cue(last - 60, last, "Last")], vec![cue(60, last, "Long")]] {
+            let doc = Document { cues, ..Default::default() };
+            for drop_frame in [false, true] {
+                for (cea608, cea708) in [(true, true), (true, false), (false, true)] {
+                    let text = std::panic::catch_unwind(|| write_with(&doc, drop_frame, cea608, cea708, "test")).unwrap();
+                    assert!(text.len() < 16_384);
+                    assert_eq!(parse(&text).unwrap().cues, doc.cues);
+                }
+            }
+        }
+    }
+
+    /// Emit only the MCC header when the document is empty or both streams are disabled.
+    #[test]
+    fn empty_schedules_have_no_data_lines() {
+        let doc = Document { cues: vec![cue(60, 120, "Caption")], ..Default::default() };
+        assert!(!write_with(&doc, true, false, false, "test").contains('\t'));
+        assert!(!write(&Document::default(), true).contains('\t'));
+    }
+
+    /// With padding, every frame to the end has one packet in time code order, numbered and
+    /// checksummed, empty frames carry no caption data, and the captions read back unchanged.
+    #[test]
+    fn padded_export_has_a_packet_on_every_frame() {
+        let doc = Document { cues: vec![cue(60, 120, "First"), cue(300, 330, "Last")], ..Default::default() };
+        let empty = compress(&build_cdp(0, &FrameData::default()));
+        for drop_frame in [false, true] {
+            for (cea608, cea708) in [(true, true), (true, false), (false, true)] {
+                let text = write_padded(&doc, drop_frame, cea608, cea708, 2_000, "test");
+                assert!(text.contains("a packet on every frame"));
+                let lines: Vec<(&str, &str)> = text.lines().filter_map(|line| line.split_once('\t')).collect();
+                assert_eq!(lines.len(), 2_000);
+                for (f, (tc, data)) in lines.iter().enumerate() {
+                    let (_, hh, mm, ss, ff) = frames_to_fields(f as i64, RATE, drop_frame);
+                    let sep = if drop_frame { ';' } else { ':' };
+                    assert_eq!(*tc, format!("{hh:02}:{mm:02}:{ss:02}{sep}{ff:02}"));
+                    let bytes = expand(data).unwrap();
+                    assert_eq!(u16::from_be_bytes([bytes[8], bytes[9]]), f as u16);
+                    assert_eq!(bytes[3..76].iter().map(|&b| b as u32).sum::<u32>() % 256, 0);
+                }
+                // nothing is scheduled at frame 0 (the first load comes later), nor after the last erase
+                assert_eq!(lines[0].1, empty);
+                assert_eq!(lines[1_999].1, compress(&build_cdp(1_999, &FrameData::default())));
+                assert_eq!(parse(&text).unwrap().cues, doc.cues);
+            }
+        }
+        // caption data after the padded span is still written; no padding is the sparse writer
+        let sparse = write_with(&doc, true, true, true, "test");
+        let tcs = |text: &str| text.lines().filter_map(|line| line.split_once('\t')).map(|(tc, _)| tc.to_string()).collect::<Vec<_>>();
+        let first_unpadded = scc::format_timecode(200, true);
+        let later = |tcs: Vec<String>| tcs.into_iter().filter(|tc| *tc >= first_unpadded).collect::<Vec<_>>();
+        let short = tcs(&write_padded(&doc, true, true, true, 200, "test"));
+        assert!(!later(short.clone()).is_empty());
+        assert_eq!(short.len(), 200 + later(short.clone()).len());
+        assert_eq!(later(short), later(tcs(&sparse)));
+        for pad in [0, -5, i64::MIN] {
+            assert_eq!(write_padded(&doc, true, true, true, pad, "test"), sparse);
+        }
+    }
+
+    /// Prevent CEA-708 text and line breaks from overflowing a window's declared dimensions.
+    #[test]
+    fn decoder_keeps_708_text_within_declared_window_dimensions() {
+        let mut decoder = Dec708::new();
+        // Define window 0 with one row and one column, then try to overflow both.
+        decoder.service_data(&[0x98, 0, 0, 0, 0, 0, 0, b'A', b'B', 0x0d, b'C']);
+        assert_eq!(decoder.win[0].rows, ["A"]);
+    }
+
+    /// Bound the text a 708 import retains when every packet changes a large visible display.
+    #[test]
+    fn decoder_retains_a_bounded_amount_of_708_text() {
+        let mut decoder = Dec708::new();
+        // Eight visible windows of 16 rows x 64 columns, filled with text.
+        for n in 0..8u8 {
+            decoder.service_data(&[0x98 + n, 0x20, 0, 0, 0x0f, 0x3f, 0]);
+            for row in 0..16 {
+                decoder.service_data(&[b'x'; 64]);
+                if row < 15 {
+                    decoder.service_data(&[0x0d]);
+                }
+            }
+        }
+        let snapshot = decoder.visible_text().len();
+        assert!(snapshot > 8000, "{snapshot}");
+        // Toggle every window off and on: each "on" retains another full snapshot.
+        let mut frame = 0;
+        for _ in 0..(2 * MAX_708_TEXT_BYTES / snapshot) {
+            for cmd in [0x8a, 0x89] {
+                decoder.service_data(&[cmd, 0xff]);
+                frame += 1;
+                decoder.sync(frame);
+            }
+        }
+        assert!(decoder.truncated);
+        assert!(decoder.cues.iter().map(|c| c.2.len()).sum::<usize>() <= MAX_708_TEXT_BYTES);
+        assert!(decoder.open.is_none());
+    }
+
+    /// Start every CEA-708 caption at the top left of its window, also for a decoder that sets
+    /// the pen only when a window is created and moves it only on SetPenLocation, carriage return
+    /// and text. CCExtractor keeps the pen through ClearWindows and a redefined window, so the
+    /// third caption below once started at the end of the first one, past its smaller window.
+    #[test]
+    fn each_708_caption_starts_at_its_window_top_left() {
+        let doc = Document {
+            cues: vec![
+                cue(60, 120, "Por que você não admite que\nminha mão robótica te assusta?"),
+                cue(150, 200, "Você partiu meu coração!"),
+                cue(230, 250, "Eu sei."),
+                cue(260, 300, "Você me esqueceu na Terra."),
+            ],
+            ..Default::default()
+        };
+        // Service 1 bytes in order, out of the scheduled DTVCC packets.
+        let mut packets: Vec<Vec<u8>> = Vec::new();
+        for (start, a, b) in schedule_708(&doc).into_values().flatten() {
+            if start {
+                packets.push(Vec::new());
+            }
+            packets.last_mut().unwrap().extend([a, b]);
+        }
+        let mut s = Vec::new();
+        for p in &packets {
+            let mut body = &p[1..];
+            while let [h, rest @ ..] = body {
+                let n = (h & 0x1f) as usize;
+                if h >> 5 == 1 {
+                    s.extend_from_slice(&rest[..n]);
+                }
+                body = &rest[n..];
+            }
+        }
+        // Pen (row, column), size (rows, columns) and whether defined, per window; where each
+        // caption's text starts (its first character after a DefineWindow).
+        let (mut pen, mut size, mut defined, mut cur) = ([(0usize, 0usize); 8], [(0usize, 0usize); 8], [false; 8], 0usize);
+        let (mut starts, mut loaded, mut i) = (Vec::new(), false, 0);
+        while let Some(&c) = s.get(i) {
+            let mut text = false;
+            i += match c {
+                0x80..=0x87 => {
+                    cur = (c - 0x80) as usize;
+                    1
+                }
+                0x8c => {
+                    (0..8).filter(|w| s[i + 1] & 1 << w != 0).for_each(|w| defined[w] = false);
+                    2
+                }
+                0x88..=0x8b => 2,
+                0x92 => {
+                    pen[cur] = (s[i + 1] as usize, s[i + 2] as usize);
+                    3
+                }
+                0x98..=0x9f => {
+                    cur = (c - 0x98) as usize;
+                    if !std::mem::replace(&mut defined[cur], true) {
+                        pen[cur] = (0, 0);
+                    }
+                    size[cur] = ((s[i + 4] & 0x0f) as usize + 1, (s[i + 5] & 0x3f) as usize + 1);
+                    loaded = true;
+                    7
+                }
+                0x0d => {
+                    pen[cur] = (pen[cur].0 + 1, 0);
+                    1
+                }
+                0x10 => {
+                    text = true;
+                    2
+                }
+                0x20..=0x7f | 0xa0..=0xff => {
+                    text = true;
+                    1
+                }
+                _ => 1,
+            };
+            if text {
+                if std::mem::take(&mut loaded) {
+                    starts.push((cur, pen[cur]));
+                }
+                assert!(pen[cur].0 < size[cur].0 && pen[cur].1 < size[cur].1, "window {cur} {:?}: text at {:?}", size[cur], pen[cur]);
+                pen[cur].1 += 1;
+            }
+        }
+        assert_eq!(starts, [(0, (0, 0)), (1, (0, 0)), (0, (0, 0)), (1, (0, 0))]);
+    }
+}

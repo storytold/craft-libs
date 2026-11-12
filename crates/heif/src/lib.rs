@@ -20,20 +20,31 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(feature = "decode")]
 mod census;
+#[cfg(feature = "metadata")]
+pub mod items;
+#[cfg(feature = "decode")]
 mod orient;
 /// Lossless synthetic HEIF files for tests, here and in the crates above (feature `testdata`).
 #[cfg(any(test, feature = "testdata"))]
 #[doc(hidden)]
 pub mod testdata;
+#[cfg(feature = "decode")]
 mod vui;
+#[cfg(feature = "decode")]
 mod ycc;
 
+#[cfg(feature = "decode")]
 use std::borrow::Cow;
 
+#[cfg(feature = "decode")]
 use heic_rs::context::Context;
+#[cfg(feature = "decode")]
 use heic_rs::hevc::Frame;
+#[cfg(feature = "decode")]
 use heic_rs::props::ItemProps;
+#[cfg(feature = "decode")]
 use heic_rs::props::colr::Range;
 
 /// What a HEIF file declares, read from the container alone (no pixel is decoded).
@@ -132,12 +143,22 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// The primary image's EXIF and XMP packet, read from the box structure alone ([`items::read`]):
+/// what a build without the decoder (`--no-default-features --features metadata`) has.
+#[cfg(all(feature = "metadata", not(feature = "decode")))]
+pub fn read_metadata(bytes: &[u8]) -> Result<(Option<Vec<u8>>, Option<String>), Error> {
+    items::read(bytes)
+}
+
+#[cfg(any(feature = "decode", feature = "metadata"))]
 const SEQUENCE: &str = "this file holds an image sequence; only HEIF still images can be opened";
 
+#[cfg(feature = "decode")]
 /// heic-rs 0.1.1 reconstructs 4:2:0 and monochrome pictures exactly but fails on the 4:2:2 and
 /// 4:4:4 ones some cameras write (Canon and Sony "HIF"); those failures are reported as this.
 const CHROMA_422_444: &str = "4:2:2 and 4:4:4 HEIF images (as some Canon and Sony cameras write) can't be decoded yet";
 
+#[cfg(feature = "decode")]
 pub(crate) fn err(e: heic_rs::Error) -> Error {
     match e {
         heic_rs::Error::Unsupported(what) => Error::Unsupported(what),
@@ -148,6 +169,7 @@ pub(crate) fn err(e: heic_rs::Error) -> Error {
     }
 }
 
+#[cfg(feature = "decode")]
 /// Runs `f`, turning a heic-rs panic into an error. PhotoCraft's fuzzing found two
 /// out-of-range slices in heic-rs 0.1.1 on malformed files: in its box parser (`boxes.rs:130`)
 /// and during reconstruction (`hevc/decode/recon.rs:70`).
@@ -155,6 +177,7 @@ fn guarded<T>(f: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| Err(Error::Malformed("the HEIF decoder failed on this file".into())))
 }
 
+#[cfg(feature = "decode")]
 /// Reads the container's declared size, depth and alpha without decoding pixels, so callers can
 /// check their limits first. Also refuses a file cut short: every coded picture of the primary
 /// image must lie within `bytes`.
@@ -162,6 +185,7 @@ pub fn probe(bytes: &[u8]) -> Result<Info, Error> {
     guarded(|| probe_unguarded(bytes))
 }
 
+#[cfg(feature = "decode")]
 fn probe_unguarded(bytes: &[u8]) -> Result<Info, Error> {
     census::cap(bytes)?;
     // No `meta` box: no still image, only a `moov` image sequence (a video track).
@@ -227,12 +251,15 @@ fn probe_unguarded(bytes: &[u8]) -> Result<Info, Error> {
     })
 }
 
+#[cfg(feature = "decode")]
 /// Most extent visits heic-rs may spend reconstructing the primary image's coded items; real
 /// files need one per tile (plus a few for the rare derived item).
 const MAX_ITEM_VISITS: usize = 4096;
+#[cfg(feature = "decode")]
 /// Deepest chain of items built from items we follow (heic-rs refuses beyond eight itself).
 const MAX_ITEM_CHAIN: u32 = 8;
 
+#[cfg(feature = "decode")]
 /// Adds to `visits` the extents heic-rs would read to reconstruct `id`, following items built
 /// from other items, and fails once that passes [`MAX_ITEM_VISITS`] or the chain is too deep.
 fn item_visits(ctx: &Context<'_>, id: u32, depth: u32, visits: &mut usize) -> Result<(), Error> {
@@ -257,11 +284,28 @@ fn item_visits(ctx: &Context<'_>, id: u32, depth: u32, visits: &mut usize) -> Re
     Ok(())
 }
 
+#[cfg(feature = "decode")]
+/// The primary image's EXIF (a TIFF structure, as in [`Decoded::exif`]) and XMP packet, read
+/// from the container alone: no picture is decoded, so cataloguing a photo costs about a
+/// [`probe`]. `(None, None)` for a file that carries neither.
+pub fn read_metadata(bytes: &[u8]) -> Result<(Option<Vec<u8>>, Option<String>), Error> {
+    guarded(|| {
+        census::cap(bytes)?;
+        let ctx = Context::open(bytes).map_err(|e| match e {
+            heic_rs::Error::MissingBox("meta") => Error::Unsupported(SEQUENCE),
+            e => err(e),
+        })?;
+        Ok(metadata(&ctx))
+    })
+}
+
+#[cfg(feature = "decode")]
 /// Decodes the primary image, with its metadata.
 pub fn decode(bytes: &[u8], options: &Options) -> Result<Decoded, Error> {
     guarded(|| decode_unguarded(bytes, options))
 }
 
+#[cfg(feature = "decode")]
 /// Decodes the smallest thumbnail image the file carries whose long edge is at least
 /// `min_edge`, if any (iPhones store one of about 320 × 240). Transforms are applied as for the
 /// primary image; the metadata (and, when the thumbnail has no profile of its own, the ICC
@@ -329,6 +373,7 @@ pub fn decode_thumbnail(bytes: &[u8], min_edge: u32, options: &Options) -> Resul
     })
 }
 
+#[cfg(feature = "decode")]
 /// An item's ICC profile; a grid whose own properties carry none takes its first tile's (as on
 /// some iPhones).
 fn item_icc(ctx: &Context<'_>, id: u32) -> Option<Vec<u8>> {
@@ -340,6 +385,7 @@ fn item_icc(ctx: &Context<'_>, id: u32) -> Option<Vec<u8>> {
     icc.map(<[u8]>::to_vec)
 }
 
+#[cfg(feature = "decode")]
 fn decode_unguarded(bytes: &[u8], options: &Options) -> Result<Decoded, Error> {
     // Refuses sequences with a clear message before anything else is read.
     probe_unguarded(bytes)?;
@@ -351,6 +397,7 @@ fn decode_unguarded(bytes: &[u8], options: &Options) -> Result<Decoded, Error> {
     Ok(decoded)
 }
 
+#[cfg(feature = "decode")]
 /// Decodes one image item (a coded picture or a grid of them) to RGB(A), alpha included when
 /// `with_alpha` and the item has an alpha auxiliary image.
 fn decode_item(ctx: &Context<'_>, id: u32, options: &Options, with_alpha: bool) -> Result<Decoded, Error> {
@@ -385,25 +432,39 @@ fn decode_item(ctx: &Context<'_>, id: u32, options: &Options, with_alpha: bool) 
         }
         _ => return Err(Error::Limit(format!("the image canvas is {w}x{h}, beyond the {limit}-pixel limit"))),
     }
+    // The transforms apply to the picture at its declared size, so the `clap` parity that
+    // decides the upsampling is measured there, not on the coded picture.
+    let (dw, dh) = (cw as usize, ch as usize);
     let mode = match options.chroma {
         Chroma::Apple => ycc::Upsampling::Sited,
-        Chroma::Libheif if options.apply_transforms && orient::odd_crop(w, h, &p.transforms)? => ycc::Upsampling::Bilinear,
+        Chroma::Libheif if options.apply_transforms && orient::odd_crop(dw, dh, &p.transforms)? => ycc::Upsampling::Bilinear,
         Chroma::Libheif => ycc::Upsampling::Nearest,
     };
-    let mut data = ycc::to_rgb16(&planes, signal, alpha_id.is_some(), mode)
+    let data = ycc::to_rgb16(&planes, signal, alpha_id.is_some(), mode)
         .ok_or_else(|| Error::Malformed("the decoded pictures don't cover the image".into()))?;
-    if let Some(aux) = alpha_id {
-        let ap = ctx.props(aux).map_err(err)?;
-        let alpha = Coded::decode(ctx, aux, &ap, limit)?;
-        let alpha_planes = alpha.planes()?;
-        if alpha_planes.size() != (w, h) {
-            return Err(Error::Unsupported("an alpha image of a different size than the picture"));
-        }
-        ycc::put_alpha(&alpha_planes, &mut data).ok_or_else(|| Error::Malformed("the alpha image is incomplete".into()))?;
-    }
     let bit_depth = planes.bit_depth();
     let has_alpha = alpha_id.is_some();
     let mut img = orient::Pixels { width: w, height: h, ch: if has_alpha { 4 } else { 3 }, data };
+    // A coded picture is a whole number of coding blocks and may be larger than the image the
+    // container declares (Sony codes 1920 x 1080 as 1920 x 1088 and writes no SPS conformance
+    // window). Crop to `ispe` before the alpha merge and the transforms, both of which are
+    // defined on that size, so decoding agrees with [`probe`] instead of handing back the
+    // encoder's padding.
+    img = orient::to_declared(img, dw, dh)?;
+    if let Some(aux) = alpha_id {
+        let ap = ctx.props(aux).map_err(err)?;
+        // The alpha is a coded item of its own: it declares its own size and may pad it to whole
+        // coding blocks differently from the picture. What has to agree is what the two declare,
+        // not how either is coded; the padding comes off both the same way. Checked before the
+        // alpha is decoded, so a mismatch costs nothing.
+        if ctx.coded_size(aux, &ap).map_err(err)? != (cw, ch) {
+            return Err(Error::Unsupported("an alpha image of a different size than the picture"));
+        }
+        let alpha = Coded::decode(ctx, aux, &ap, limit)?;
+        let alpha_planes = alpha.planes()?;
+        // `put_alpha` refuses a plane that does not cover the declared size.
+        ycc::put_alpha(&alpha_planes, &mut img.data, dw).ok_or_else(|| Error::Malformed("the alpha image is incomplete".into()))?;
+    }
     if options.apply_transforms {
         img = orient::apply(img, &p.transforms)?;
     }
@@ -421,26 +482,33 @@ fn decode_item(ctx: &Context<'_>, id: u32, options: &Options, with_alpha: bool) 
     })
 }
 
+#[cfg(feature = "decode")]
 /// How many times `max_pixels` the coded pictures of one item may hold together: a grid's tiles
 /// cover its canvas rounded up to whole tiles, so legitimate grids sit near 1.
 const GRID_BUDGET: u64 = 2;
 
+#[cfg(feature = "decode")]
 /// The most transform properties (`clap`/`irot`/`imir`) one item may carry. Real files have at
 /// most one of each, so anything approaching this is a reordered or hostile association list.
 const MAX_TRANSFORMS: usize = 12;
 
+#[cfg(feature = "decode")]
 /// The most parameter sets one `hvcC` may carry: one per id H.265 allows (16 VPS, 16 SPS, 64 PPS).
 /// heic-rs 0.1.4 replaces a repeated id by scanning every set kept so far, so more sets (repeats,
 /// or ids past the standard's range) only make that collection quadratic.
 const MAX_PARAMETER_SETS: usize = 16 + 16 + 64;
+#[cfg(feature = "decode")]
 /// Highest `pps_pic_parameter_set_id` H.265 allows (7.4.3.3.1).
 const MAX_PPS_ID: u32 = 63;
+#[cfg(feature = "decode")]
 /// Most tile columns and rows a picture may have: H.265's level limits (Table A.8, levels 6 to
 /// 6.2). heic-rs 0.1.4 builds its tile tables by walking the tile boundaries for every coding tree
 /// block, so its work grows with blocks × tiles; these keep that a small multiple of the blocks.
 const MAX_TILE_COLS: u32 = 20;
+#[cfg(feature = "decode")]
 const MAX_TILE_ROWS: u32 = 22;
 
+#[cfg(feature = "decode")]
 /// Refuses parameter sets that would make heic-rs's set collection or tile tables cost far more
 /// than the picture: too many sets, a PPS id out of range, or more tiles than any level allows.
 fn check_parameter_sets(sets: &[&[u8]]) -> Result<(), Error> {
@@ -462,11 +530,13 @@ fn check_parameter_sets(sets: &[&[u8]]) -> Result<(), Error> {
     Ok(())
 }
 
+#[cfg(feature = "decode")]
 /// [`check_parameter_sets`] of a coded item's `hvcC`, if it has one.
 fn check_item_parameter_sets(p: &ItemProps<'_>) -> Result<(), Error> {
     p.hvcc.as_ref().map_or(Ok(()), |h| check_parameter_sets(&h.parameter_sets()))
 }
 
+#[cfg(feature = "decode")]
 /// The decoded pictures of an item: one, or a grid's tiles in `dimg` order.
 struct Coded<'a> {
     frames: Vec<Frame>,
@@ -478,6 +548,7 @@ struct Coded<'a> {
     chroma_format: u8,
 }
 
+#[cfg(feature = "decode")]
 impl<'a> Coded<'a> {
     fn decode(ctx: &Context<'a>, id: u32, p: &ItemProps<'a>, limit: u64) -> Result<Coded<'a>, Error> {
         let (grid, ids) = match ctx.grid(id).map_err(err)? {
@@ -551,6 +622,7 @@ impl<'a> Coded<'a> {
     }
 }
 
+#[cfg(feature = "decode")]
 /// The colour description in force: `nclx` on the item (or, for a grid without one, on its
 /// first tile), else the VUI of its (first) coded picture, else the H.265 defaults.
 fn colour(p: &ItemProps<'_>, coded: &ItemProps<'_>) -> Colour {
@@ -561,6 +633,7 @@ fn colour(p: &ItemProps<'_>, coded: &ItemProps<'_>) -> Colour {
     Colour { primaries: s.primaries.into(), transfer: s.transfer.into(), matrix: s.matrix.into(), full_range: s.full_range }
 }
 
+#[cfg(feature = "decode")]
 /// The primary image's EXIF (TIFF structure) and XMP packet. Metadata is a courtesy: a broken
 /// metadata item never fails a decode whose pixels came out fine.
 fn metadata(ctx: &Context<'_>) -> (Option<Vec<u8>>, Option<String>) {
@@ -578,11 +651,14 @@ fn metadata(ctx: &Context<'_>) -> (Option<Vec<u8>>, Option<String>) {
 }
 
 #[cfg(test)]
+#[cfg(feature = "decode")]
 mod tests_icc;
 #[cfg(test)]
+#[cfg(feature = "decode")]
 mod tests_synthetic;
 
 #[cfg(test)]
+#[cfg(feature = "decode")]
 mod tests {
     use super::*;
 
@@ -607,7 +683,7 @@ mod tests {
     fn image_sequence_is_unsupported_with_a_clear_message() {
         // An ftyp and nothing else: a HEIF image sequence would have a moov here instead of a meta.
         let bytes = b"\0\0\0\x18ftypmsf1\0\0\0\0msf1hevc";
-        for r in [probe(bytes).map(|_| ()), decode(bytes, &Options::default()).map(|_| ())] {
+        for r in [probe(bytes).map(|_| ()), decode(bytes, &Options::default()).map(|_| ()), read_metadata(bytes).map(|_| ())] {
             assert!(matches!(&r, Err(Error::Unsupported(m)) if m.contains("sequence")), "{r:?}");
         }
     }
@@ -618,6 +694,7 @@ mod tests {
             assert!(probe(bytes).is_err());
             assert!(decode(bytes, &Options::default()).is_err());
             assert!(decode_thumbnail(bytes, 1, &Options::default()).is_err());
+            assert!(read_metadata(bytes).is_err());
         }
     }
 

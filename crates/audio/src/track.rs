@@ -156,7 +156,8 @@ impl TrackDecoder {
                 let codec = if up.is_some() { CodecId::HeAac } else { CodecId::Aac };
                 // Only twice the core rate is upsampled to; any other signalled rate plays the core.
                 let out = if up.is_some() { out } else { dec.sample_rate() };
-                let cfg = dec.config().channel_config;
+                // a program config element that spells out a configuration has its speakers
+                let cfg = aac::speaker_config(dec.config());
                 let layout = aac_layout(cfg, dec.channels());
                 let order = layout.is_ordered().then(|| aac::wav_order(cfg)).flatten();
                 (Inner::Aac { dec: Box::new(dec), up, order, adts_format }, codec, out, layout, SampleFormat::Compressed)
@@ -1079,6 +1080,8 @@ mod tests {
         let mut dec = TrackDecoder::new(&aac_params(), &[&frame]).unwrap();
         assert_eq!(dec.channels(), 3);
         assert_eq!(dec.decode(&frame).unwrap().channels.len(), 3);
+        // its element lists a centre and a front pair, as configuration 3 does: L R C, in WAV order
+        assert_eq!(dec.layout(), ChannelLayout::SURROUND_3_0);
         // no program config element where one is needed
         let bare = aac::AdtsHeader::write(2, 3, 0, 1, 0x7FF).unwrap();
         let bare = [&bare[..], &[0xE0]].concat();

@@ -1,7 +1,7 @@
 # craft-audio
 
 Audio file I/O and codecs for the Craft apps. Native implementations: WAV and AIFF read/write,
-FLAC encoder, AAC and ALAC decoders/encoders, AC-3/E-AC-3 decoder/encoder, Opus and MP1/MP2 decoders.
+FLAC encoder, AAC and ALAC decoders/encoders, AC-3/E-AC-3 decoder/encoder, MP3 encoder, Opus and MP1/MP2 decoders.
 Formats without a native decoder are decoded by [symphonia](#symphonia), which is to be replaced
 by native decoders.
 
@@ -26,19 +26,20 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | Feature | Provides | Pulls in |
 |---|---|---|
 | `decode` | `decode`, `probe`, `Decoder`, `tracks`, `TrackDecoder`; every format in [Format support](#format-support) | `decode-native`, `symphonia` |
-| `decode-native` | the same, native formats only (others are `Unsupported`) | the five decoders below, craft-media `isobmff`/`matroska`/`ogg`, `log` |
+| `decode-native` | the same, native formats only (others are `Unsupported`); `wav_pcm`, `aiff_pcm` (a file's integer PCM bit for bit, as `RawPcm`) | the five decoders below, craft-media `isobmff`/`matroska`/`ogg`, `log` |
 | `symphonia` | the fallback for formats with no native decoder; turning it on is the same as `decode` | `decode-native`, symphonia |
-| `encode` | every encoder: the WAV, AIFF and FLAC file writers, and the AAC, ALAC and AC-3/E-AC-3 packet encoders | `lossless-encode`, `aac-encode`, `alac-encode`, `ac3-encode`, `eac3-encode` |
+| `encode` | every encoder: the WAV, AIFF and FLAC file writers, and the AAC, ALAC, AC-3/E-AC-3 and MP3 encoders | `lossless-encode`, `aac-encode`, `alac-encode`, `ac3-encode`, `eac3-encode`, `mp3-encode` |
 | `lossless-encode` | WAV, AIFF and FLAC writing | `pcm-encode`, `flac-encode` |
-| `pcm-encode` | `encode`, `FileEncoder` for WAV and AIFF; `wav_float_header` | none |
+| `pcm-encode` | `encode`, `FileEncoder` for WAV and AIFF; `wav_float_header`; `pcm_wav_file`, `pcm_wav_header`, `pcm_aiff_file`, `pcm_aiff_header` (minimal files around integer PCM bytes, for essence embedded in AAF / OMF) | none |
 | `flac-encode` | `encode`, `FileEncoder` for FLAC; `flac::Encoder`, the packet encoder for callers that mux FLAC themselves | craft-media `bitstream` |
-| `aac-decode`, `aac-encode` | `aac::Decoder`, `aac::Encoder` | craft-media `bitstream` |
+| `aac-decode`, `aac-encode` | `aac::Decoder`, `aac::Encoder`; with `aac-decode`, `aac::latm_config` / `latm_split` for LOAS / LATM frames (AAC in MPEG transport streams) | craft-media `bitstream` |
 | `alac-decode` | `alac::Decoder` | none |
 | `alac-encode` | `alac::Encoder` | none |
 | `opus-decode` | `opus::Decoder`/`StreamDecoder` | none |
 | `ac3-decode` | `ac3::Decoder`, `ac3::ProgrammeDecoder` | craft-media `bitstream` |
 | `ac3-encode`, `eac3-encode` | `ac3::encoder::Encoder` | craft-media `bitstream` |
 | `mpa-decode` | `mpa::Decoder` | craft-media `bitstream` |
+| `mp3-encode` | `mp3::Encoder` | craft-media `bitstream` |
 | `peaks` | `peaks::Peaks` | none |
 | `rayon` | parallel AAC encoding (with `aac-encode`) | `rayon` |
 | `serde` | `Serialize`/`Deserialize` on the shared types | `serde` |
@@ -116,7 +117,9 @@ let left: &[f32] = &buf.channels[0];
 ```
 
 `decode` returns `TooLarge` above 2³⁰ samples (4 GiB of `f32`). `info.damaged` counts packets
-that were damaged and replaced by silence of their length.
+that were damaged and replaced by silence of their length. A FLAC frame whose checksum fails is
+dropped by the demuxer; the jump in the timestamps shows it, and the lost frames are silence too (one
+count per run of them), so the audio after them stays in place.
 
 ### Choose a track
 
@@ -131,8 +134,13 @@ if let Some(second) = list.get(1) {
 ```
 
 A track index the file does not have is `Unsupported`. `DecodeOptions::with_max_samples` sets
-another size limit. `tracks_of` lists the tracks of a file read from a `ByteSource`;
-`detect_container` names a file's container from its first bytes.
+another size limit. The default is `DEFAULT_MAX_SAMPLES`, 2^30 samples (4 GiB of `f32`), which
+`decode` and `decode_with` can fill from a small compressed file because they keep the whole
+result. An app that opens files it did not write passes a limit it can hold (for example
+`DEFAULT_MAX_SAMPLES / 8`, or its longest supported clip), or streams with `Decoder`, which has no
+limit because it keeps nothing. `tracks_of` lists the tracks of a file read from a `ByteSource`;
+`detect_container` names a file's container from its first bytes. `DECODE_EXTENSIONS` lists the
+file extensions of the formats `decode` reads, for a file picker's filter.
 
 ### Stream and seek
 
@@ -224,7 +232,8 @@ enc.finish()?;
 `EncodeOptions::default()` is 24-bit WAV. `with_bwf` adds a BWF `bext` chunk and
 `with_force_rf64` writes RF64 below 4 GiB; both apply to WAV only. `encode_format_for("aiff")`
 maps an extension to an `EncodeFormat`, and `ENCODE_EXTENSIONS` lists the extensions the enabled
-features can write. `write` refuses a block without one slice per channel, or with a slice
+features can write. `EncodeFormat::ALL` lists the formats; `extension()` is the extension a new
+file gets and `mime_type()` its media type. `write` refuses a block without one slice per channel, or with a slice
 shorter than `frames`, and writes nothing. After a write fails for another reason, every later
 `write` and `finish` returns an error.
 
@@ -301,7 +310,7 @@ match craft_audio::decode(&bytes, None) {
 | HE-AAC v1/v2 | native, core only (see [Limits](#limits)) | — |
 | ALAC | native | native, packets (`alac::Encoder`; no file writer) |
 | MP1, MP2 (MPEG audio Layer I/II) | native | — |
-| MP3 (Layer III) | symphonia | — |
+| MP3 (Layer III) | symphonia | native, frames (`mp3::Encoder`; the frames in a row are an `.mp3` file) |
 | Opus | native | — |
 | AC-3, E-AC-3 | native | native packet encoder |
 | Vorbis, ADPCM, A-law, µ-law | symphonia | — |
@@ -406,7 +415,34 @@ Each codec module's rustdoc lists the coding tools it implements.
 | Opus (`opus`) | RFC 6716, 8251, 7845 | decoder: SILK, hybrid, CELT, all frame sizes, PLC and FEC, multistream (`Decoder`) and single stream (`StreamDecoder`), 8–48 kHz output | all 36 RFC 8251 conformance cases |
 | AC-3/E-AC-3 (`ac3`) | decoder: ATSC A/52:2012; encoder/programme API: ETSI TS 102 366 V1.4.1 | single-syncframe and complete-programme decoding; packet encoding through discrete 7.1 (see below) | decoder comparisons and encoder output through ffmpeg, CRC/channel/timing/bit-budget regressions; synthetic quality limitations below |
 | MP1/MP2 (`mpa`) | ISO/IEC 11172-3, 13818-3 | Layer I and II, MPEG-1/2/2.5, 8–48 kHz; also the Layer II rate/mode pairs the spec disallows (ffmpeg's default mono 384 kbit/s); no free format | ffmpeg-encoded streams, 73–84 dB SNR |
+| MP3 encoder (`mp3`) | ISO/IEC 11172-3, 13818-3 | Layer III, constant bit rate: 32–320 kbit/s at 32/44.1/48 kHz, 8–160 kbit/s at 16/22.05/24 kHz; mono, stereo, joint stereo (mid/side); bit reservoir; long blocks only; no Xing/Info tag, VBR, CRC or free format | ffmpeg decodes every Huffman code as intended; full encodes at every sampling frequency checked with ffprobe and by SNR of ffmpeg's decode |
 | ALAC (`alac`) | Apple's reference implementation | decode and encode, 1–8 channels, 16/20/24/32 bits (decode: any depth 1–32), fast mode, magic cookie in MP4/Matroska and CAF form | Apple's reference: same packets from the encoder, same samples from both decoders on 766 configurations; ffmpeg: bit-exact both ways |
+
+### MP3 encoding
+
+```rust
+use craft_audio::mp3::{Config, DELAY, Encoder};
+
+let mut enc = Encoder::new(Config::cbr(48_000, 2, 192))?;
+let mut mp3 = enc.encode(&[&left, &right]); // whole frames as they complete
+mp3.extend(enc.flush()); // pads with silence to the last input sample
+// a decoder's output lags the input by DELAY (1057) samples
+```
+
+`mp3::bitrates(rate)`, `nearest_bitrate(rate, kbps)` and `nearest_sample_rate(rate)` map arbitrary
+settings onto what a stream can carry; `Encoder::new` refuses anything else. Samples that are not
+finite count as silence and the rest are clamped to ±4, so no input makes an invalid frame.
+
+- Hybrid filterbank: the Annex C polyphase analysis filter, the normal-window MDCT and alias
+  reduction; reconstruction is checked against a reference of the normative decoder filterbank.
+- Psychoacoustic model: band energies spread across scalefactor bands, floored by the threshold in
+  quiet (full scale = 96 dB SPL); a low-pass by bit rate.
+- Quantization: the inner and outer loops with scalefactors, an exhaustive choice of the region
+  split and the Huffman table per region, and the bit reservoir (`main_data_begin`) bounded by the
+  decoder's 7680-bit input buffer.
+- Not yet: block switching (short blocks; transients pre-echo), `scfsi` and `preflag`, intensity
+  stereo, a tonality-aware model, VBR/ABR, the Xing/Info and LAME gapless tags (the delay is not
+  signalled), CRC, free format, and an `EncodeFormat` entry for `encode`/`FileEncoder`.
 
 ### AC-3 and E-AC-3 encoding
 
@@ -540,6 +576,7 @@ the full tests with ffmpeg and the vectors required.
 |---|---|
 | WAV, AIFF, `decode`/`probe`, peaks | SoundCraft `soundcraft-audio-io` [7dc56a4](https://github.com/storytold/soundcraft/commit/7dc56a4dbeebf57eacece09536726c57844fc59d) |
 | FLAC encoder, AAC, Opus decoder, AC-3, MP1/MP2, Ogg | FilmCraft [8fda2f2](https://github.com/storytold/filmcraft/commit/8fda2f232198c4c79ff9cfe5b6a347bb1375fa9e) |
+| MP3 encoder | FilmCraft `filmcraft-mp3enc` [4bec22b](https://github.com/storytold/filmcraft/commit/4bec22bd03bd1d995c9cf72e02a284f96d3d72cd) |
 | ALAC | Apple's reference implementation [macosforge/alac@c38887c](https://github.com/macosforge/alac/tree/c38887c5c5e64a4b31108733bd79ca9b2496d987/codec), Copyright © 2011 Apple Inc., Apache-2.0; ported to Rust and modified (see the `alac` module docs and [NOTICE](../../NOTICE)) |
 
 Where apps had overlapping implementations, the one that measured better was kept, with the
@@ -563,6 +600,10 @@ The codec modules' public items keep their names, so apps can re-export them
 - `AudioInfo` has `container`, `codec`, `layout` and `damaged` instead of SoundCraft's `format`.
   `detect_container` replaces `detect_format`. `probe` reports the layout instead of
   `wav_channel_mask`.
+- SoundCraft's `FileFormat` tables are `DECODE_EXTENSIONS` (was `readable_extensions`),
+  `ENCODE_EXTENSIONS` and `encode_format_for` (was `from_write_extension`), and
+  `EncodeFormat::ALL`, `extension()` and `mime_type()` (were `WRITE`, `default_extension` and
+  `mime_type`). `aifc` is a writable name here.
 - `EncodeOptions` is built with `EncodeOptions::new(format)` and `with_*` methods. It carries the
   speaker layout and RF64, which replace `encode_with_layout`, `encode_wav_rf64` and
   `FileEncoder::new`'s layout argument. `BwfInfo` and `aac::EncoderConfig` are built the same way

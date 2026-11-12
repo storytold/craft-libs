@@ -281,3 +281,39 @@ fn writer_places_meshes_keeps_colours_and_names_materials_apart() {
     scene.meshes[0].parts[0].corners[0].position = 9;
     assert!(write(&scene, None, &Limits::default()).is_err());
 }
+
+#[test]
+fn map_options_are_passed_over_by_their_argument_counts() {
+    // `-o` takes one to three numbers, so the name after it may hold spaces; the final token alone
+    // would be `checker.png`.
+    let mtl = "newmtl A\nmap_Kd -o 0.5 0.5 my checker.png\nmap_Bump -bm 0.3 -clamp on rough bump.png\nmap_Ke -s 2 2 2 -mm 0 1 glow.png\n\
+               newmtl B\nmap_Kd -o 1 wood.png\nmap_Bump -unknown 3 my bump.png\nmap_Ke -bm\n";
+    let (materials, images) = read_mtl(mtl.as_bytes(), &Limits::default()).unwrap();
+    let name = |t: Option<crate::TextureRef>| t.map(|t| images[t.image].uri.clone().unwrap());
+    assert_eq!(name(materials[0].base_color_texture).as_deref(), Some("my checker.png"));
+    assert_eq!(name(materials[0].normal_texture).as_deref(), Some("rough bump.png"));
+    assert_eq!(name(materials[0].emissive_texture).as_deref(), Some("glow.png"));
+    assert_eq!(name(materials[1].base_color_texture).as_deref(), Some("wood.png"));
+    // an option this reader does not know: the final token
+    assert_eq!(name(materials[1].normal_texture).as_deref(), Some("bump.png"));
+    // a lone token is the name, whatever it looks like
+    assert_eq!(name(materials[1].emissive_texture).as_deref(), Some("-bm"));
+}
+
+#[test]
+fn a_library_named_again_is_read_once() {
+    // Exporters repeat `mtllib` for every object. Each repeat used to read the library again:
+    // its materials and images twice, and its bytes counted against the limit once per line.
+    let mtl = "newmtl Red\nKd 1 0 0\nmap_Kd red.png\n";
+    let src = "mtllib m.mtl\no a\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl Red\nf 1 2 3\nmtllib m.mtl\no b\nusemtl Red\nf 1 2 3\nmtllib m.mtl\n";
+    let mut asked = 0;
+    let limits = Limits { max_data_bytes: mtl.len() * 2, ..Limits::default() };
+    let s = read(src.as_bytes(), &limits, &mut |_| {
+        asked += 1;
+        Some(mtl.as_bytes().to_vec())
+    })
+    .unwrap();
+    assert_eq!(asked, 1);
+    assert_eq!((s.materials.len(), s.images.len()), (1, 1));
+    assert_eq!(s.external, ["m.mtl", "red.png"]);
+}

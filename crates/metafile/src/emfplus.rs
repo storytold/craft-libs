@@ -1,8 +1,9 @@
 //! EMF+ (MS-EMFPLUS): GDI+ drawing records carried in EMF comment records.
 //!
-//! Most EMF+ files are *dual*: the same picture is also drawn with plain EMF records, which
-//! [`crate::emf`] already plays, so this reader ignores their EMF+ part. An *EMF+ only* file has
-//! nothing else to draw; for those this reader plays the records:
+//! Most EMF+ files are *dual*: the same picture is also drawn with plain EMF records as a
+//! fallback for GDI. Office draws metafiles with GDI+, which plays the EMF+ records and skips
+//! the plain ones (except after EmfPlusGetDC), and a fallback can be incomplete (a nested
+//! metafile it lacks), so this reader does the same. It plays the records:
 //! - brushes (solid, hatch, texture, linear and path gradients), pens, paths, images, fonts,
 //!   string formats and regions, including objects split across several records;
 //! - rectangles, polygons, lines, ellipses, paths and Béziers;
@@ -216,8 +217,10 @@ struct Saved {
 }
 
 pub(crate) struct Plus {
-    /// An EMF+ header said the file is EMF+ only, so these records are the picture.
-    active: bool,
+    /// An EMF+ header said the file is dual: its plain EMF records are only a GDI fallback.
+    dual: bool,
+    /// An EmfPlusGetDC record opened a window of plain EMF records, until the next EMF+ record.
+    gdi: bool,
     dpi: f64,
     world: Xform,
     page: f64,
@@ -234,7 +237,8 @@ pub(crate) struct Plus {
 impl Plus {
     pub fn new() -> Self {
         Plus {
-            active: false,
+            dual: false,
+            gdi: false,
             dpi: 96.0,
             world: IDENTITY,
             page: 1.0,
@@ -247,8 +251,15 @@ impl Plus {
         }
     }
 
+    /// Whether the plain EMF record that follows is drawn: always, except in a dual file outside
+    /// an EmfPlusGetDC window.
+    pub fn plays_gdi(&self) -> bool {
+        !self.dual || self.gdi
+    }
+
     /// Plays the EMF+ records of one EMR_COMMENT payload (after the identifier).
     pub fn comment(&mut self, cv: &mut Canvas, data: Bytes) {
+        self.gdi = false;
         let mut pos = 0usize;
         while !cv.full() {
             let Some(tail) = data.0.get(pos..) else { break };
@@ -261,6 +272,8 @@ impl Plus {
                 break;
             }
             let Some(rec) = tail.slice(12, dsize) else { break };
+            // Any EMF+ record ends a GetDC window; EmfPlusGetDC opens it again for its own.
+            self.gdi = false;
             let _ = self.record(cv, typ, flags, Bytes(rec));
             let Some(next) = pos.checked_add(size) else { break };
             pos = next;
@@ -278,23 +291,33 @@ impl Plus {
 
     fn record(&mut self, cv: &mut Canvas, typ: u16, flags: u16, r: Bytes) -> Option<()> {
         if typ == 0x4001 {
-            // Header: dual files also draw with EMF records, which win.
-            self.active = flags & 1 == 0;
+            self.dual = flags & 1 != 0;
             if let Some(d) = r.u32(8).map(f64::from).filter(|d| *d > 0.0 && *d < 100_000.0) {
                 self.dpi = d;
             }
             return Some(());
         }
-        if !self.active {
-            return None;
+        if typ == 0x4004 {
+            self.gdi = true;
+            return Some(());
         }
-        match typ {
-            0x4008 => self.object(flags, r),
+        let done = match typ {
+            0x4008 => self.object(flags, r, cv.used().saturating_add(self.clip_bytes())),
             0x4009 | 0x4013 | 0x401A..=0x401C | 0x4036 => self.record_image_text_region(cv, typ, flags, r),
             0x4025..=0x4035 => self.record_state(cv, typ, flags, r),
             0x4010..=0x4012 | 0x4016..=0x4019 => self.record_curve(cv, typ, flags, r),
             _ => self.record_shape(cv, typ, flags, r),
-        }
+        };
+        // What this player retains (objects, a continued object's pieces, the current and saved
+        // clips) shares the canvas's byte budget.
+        cv.hold(self.object_bytes.saturating_add(self.partial.as_ref().map_or(0, |p| p.data.len())).saturating_add(self.clip_bytes()));
+        done
+    }
+
+    /// Bytes of the current clip and of every saved one.
+    fn clip_bytes(&self) -> usize {
+        let area = |a: &Area| a.as_ref().map_or(0, |v| v.len().saturating_mul(std::mem::size_of::<P>()));
+        self.stack.iter().map(|s| area(&s.clip)).fold(area(&self.clip), usize::saturating_add)
     }
 
     /// Rectangle, polygon, ellipse and path records.
@@ -559,7 +582,7 @@ impl Plus {
         Some(())
     }
 
-    fn object(&mut self, flags: u16, r: Bytes) -> Option<()> {
+    fn object(&mut self, flags: u16, r: Bytes, canvas_used: usize) -> Option<()> {
         let id = usize::from(flags & 0xFF);
         let kind = (flags >> 8) & 0x7F;
         if flags & 0x8000 != 0 {
@@ -575,7 +598,7 @@ impl Plus {
             p.data.extend_from_slice(&chunk[..chunk.len().min(room)]);
             if p.data.len() >= p.total {
                 let obj = parse_object(p.kind, Bytes(&p.data));
-                self.store(p.id, obj);
+                self.store(p.id, obj, canvas_used);
             } else {
                 self.partial = Some(p);
             }
@@ -589,22 +612,23 @@ impl Plus {
             let room = p.total.saturating_sub(p.data.len());
             p.data.extend_from_slice(&r.0[..r.0.len().min(room)]);
             let obj = parse_object(kind, Bytes(&p.data));
-            self.store(id, obj);
+            self.store(id, obj, canvas_used);
             return Some(());
         }
         let obj = parse_object(kind, r);
-        self.store(id, obj);
+        self.store(id, obj, canvas_used);
         Some(())
     }
 
-    fn store(&mut self, id: usize, obj: Option<Obj>) {
+    /// `canvas_used` is what the canvas and the clips already retain: objects and items share one budget.
+    fn store(&mut self, id: usize, obj: Option<Obj>, canvas_used: usize) {
         let Some(slot) = self.objects.get_mut(id) else { return };
         if let Some(old) = slot.take() {
             self.object_bytes = self.object_bytes.saturating_sub(Self::obj_cost(&old));
         }
         if let Some(new_obj) = obj {
             let cost = Self::obj_cost(&new_obj);
-            if self.object_bytes.saturating_add(cost) <= crate::MAX_BYTES {
+            if self.object_bytes.saturating_add(cost).saturating_add(canvas_used) <= crate::MAX_BYTES {
                 self.object_bytes += cost;
                 *slot = Some(new_obj);
             }
@@ -615,7 +639,7 @@ impl Plus {
         match obj {
             Obj::Image(img) => match img.as_ref() {
                 ImageData::Bitmap(rgba) => rgba.px.len(),
-                ImageData::Meta(pic) => pic.items.len().saturating_mul(128),
+                ImageData::Meta(pic) => picture_cost(&pic.items),
             },
             Obj::Brush(Fill::Texture { img, .. }) => img.px.len(),
             Obj::Path(ops) => ops.len().saturating_mul(std::mem::size_of::<Op>()),
@@ -1290,6 +1314,33 @@ fn metafile(r: Bytes) -> Option<Picture> {
     pic.filter(|p| p.width > 0.0 && p.height > 0.0)
 }
 
+/// Bytes the items of a nested picture own: path segments, dashes, clip rectangles, pixels and
+/// text, with each shared pattern tile and clip path counted once.
+fn picture_cost(items: &[Item]) -> usize {
+    let segs = |s: &Vec<Seg>| s.len().saturating_mul(std::mem::size_of::<Seg>());
+    let region = |r: &Option<Vec<[f32; 4]>>| r.as_ref().map_or(0, |v| v.len().saturating_mul(16));
+    let mut tiles = std::collections::HashSet::new();
+    let mut clip_paths = std::collections::HashSet::new();
+    let mut total = 0usize;
+    for item in items {
+        let (own, r, clips) = match item {
+            Item::Path { segs: s, line, region: r, clips, .. } => (segs(s).saturating_add(line.dash.len().saturating_mul(4)), r, clips),
+            Item::Bitmap { rgba, region: r, clips, .. } => (rgba.len(), r, clips),
+            Item::Pattern { segs: s, tile, region: r, clips, .. } => {
+                let tile_bytes = if tiles.insert(Arc::as_ptr(tile)) { tile.rgba.len() } else { 0 };
+                (segs(s).saturating_add(tile_bytes), r, clips)
+            }
+            Item::Text(t) => {
+                let own = t.text.len().saturating_add(t.dx.len().saturating_mul(std::mem::size_of::<f32>())).saturating_add(t.font.family.len());
+                (own, &t.region, &t.clips)
+            }
+        };
+        let clip_bytes = clips.iter().filter(|c| clip_paths.insert(Arc::as_ptr(c))).map(|c| segs(&c.segs)).fold(0usize, usize::saturating_add);
+        total = total.saturating_add(128).saturating_add(own).saturating_add(region(r)).saturating_add(clip_bytes);
+    }
+    total
+}
+
 fn bitmap(r: Bytes) -> Option<Rgba> {
     let (w, h, stride) = (r.u32(8)? as i32, r.u32(12)? as i32, r.u32(16)? as i32);
     let format = r.u32(20)?;
@@ -1540,4 +1591,77 @@ fn wrap_line(line: &[u16], width: f64, em: f64) -> Vec<Vec<u16>> {
     cur.truncate(n);
     out.push(cur);
     out
+}
+
+#[cfg(test)]
+mod cost_tests {
+    use super::*;
+    use crate::{ClipPath, Tile};
+
+    #[test]
+    fn a_shared_pattern_tile_and_clip_path_are_charged_once() {
+        let tile = Arc::new(Tile { width: 512, height: 512, rgba: vec![0; 1 << 20], cell: [1.0, 1.0], origin: [0.0, 0.0] });
+        let clip = Arc::new(ClipPath { segs: vec![Seg::Close; 1 << 16], even_odd: false });
+        let item = || Item::Pattern {
+            segs: vec![Seg::Move(0.0, 0.0), Seg::Line(1.0, 1.0)],
+            even_odd: false,
+            tile: tile.clone(),
+            region: None,
+            clips: vec![clip.clone()],
+        };
+        let items: Vec<Item> = (0..257).map(|_| item()).collect();
+        let shared = (1 << 20) + (1 << 16) * std::mem::size_of::<Seg>();
+        let cost = picture_cost(&items);
+        assert!(cost >= shared && cost < shared + (1 << 20), "{cost}");
+    }
+
+    #[test]
+    fn a_nested_picture_is_charged_for_its_pixels() {
+        let bitmap = Item::Bitmap {
+            rect: [0.0; 4],
+            transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            width: 1024,
+            height: 1024,
+            rgba: vec![0; 4 << 20],
+            region: None,
+            clips: Vec::new(),
+        };
+        assert!(picture_cost(&[bitmap]) >= 4 << 20);
+    }
+
+    #[test]
+    fn an_object_is_not_stored_past_what_the_canvas_already_holds() {
+        let mut plus = Plus::new();
+        let path = || Some(Obj::Path(vec![Op::Z; 1000]));
+        plus.store(0, path(), crate::MAX_BYTES - 100);
+        assert!(plus.objects[0].is_none() && plus.object_bytes == 0);
+        plus.store(0, path(), 0);
+        assert!(plus.objects[0].is_some());
+    }
+
+    #[test]
+    fn pieces_of_a_continued_object_count_against_the_shared_budget() {
+        let (mut plus, mut cv) = (Plus::new(), Canvas::new());
+        // Image object (kind 5), id 0, continued: 1000 bytes announced, 100 delivered.
+        let mut rec = 1000u32.to_le_bytes().to_vec();
+        rec.extend([0u8; 100]);
+        plus.record(&mut cv, 0x4008, 0x8000 | (5 << 8), Bytes(&rec));
+        assert_eq!(cv.held(), 100);
+    }
+
+    #[test]
+    fn current_and_saved_clips_count_against_the_shared_budget() {
+        let (mut plus, mut cv) = (Plus::new(), Canvas::new());
+        let pts = vec![(0.0, 0.0); 1000];
+        plus.clip = Some(pts.clone());
+        plus.stack.push(Saved { id: 1, world: IDENTITY, page: 1.0, clip: Some(pts) });
+        // Any record refreshes the held count (an unknown record draws nothing).
+        plus.record(&mut cv, 0x40FF, 0, Bytes(&[]));
+        assert_eq!(cv.held(), 2 * 1000 * std::mem::size_of::<P>());
+        // Restoring the saved state releases the charge of what it dropped.
+        plus.stack.clear();
+        plus.clip = None;
+        plus.record(&mut cv, 0x40FF, 0, Bytes(&[]));
+        assert_eq!(cv.held(), 0);
+    }
 }
