@@ -11,7 +11,7 @@
 //! - [`warp`]: preset text warps (`a:prstTxWarp`).
 //! - The model, without readers and writers yet: [`style`] (colour references, fills, lines,
 //!   effects), [`text`] (text bodies, paragraphs, runs), [`table`], [`chart`] with [`numfmt`]
-//!   (number format codes) and [`diagram`] (SmartArt outlines). Media are named by [`MediaId`];
+//!   (number format codes), [`theme`] (colour, font and format schemes) and [`diagram`] (SmartArt outlines). Media are named by [`MediaId`];
 //!   the bytes stay with the caller.
 //!
 //! Nothing here opens a package: readers take a [`craft_xml::El`] and writers a
@@ -27,6 +27,7 @@ pub mod preset;
 pub mod style;
 pub mod table;
 pub mod text;
+pub mod theme;
 mod trendline;
 pub mod warp;
 
