@@ -228,6 +228,12 @@ impl<'a> LazyPackage<'a> {
         self.names.contains_key(&normalize(part))
     }
 
+    /// The stored spelling of part `name` (leading `/` ignored; case-insensitive), as
+    /// [`Package::canonical`] gives it: for a writer that keeps the package's part names.
+    pub fn canonical(&self, name: &str) -> Option<String> {
+        self.names.get(&normalize(name)).map(|n| n.trim_start_matches('/').replace('\\', "/"))
+    }
+
     /// Bytes charged to [`Limits::max_total`] so far. It is the whole of it once a read has
     /// failed: see [`LazyPackage::read_limited`].
     pub fn spent(&self) -> u64 {
