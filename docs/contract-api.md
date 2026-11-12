@@ -3369,7 +3369,6 @@ One-shot screenshot slots and the facts a screenshot is measured against.
   - `pub fn zoom_codec(&self) -> NumberCodec`. The codec of a zoom field in percent: the percent reader, up to two decimals (the zoom ladder has rungs such as
   - `pub fn points_per_inch(&self) -> f64`. How many points make an inch in the scope: the app's point-size preference.
   - `pub fn symbol(&self, kind: UnitKind) -> String`. The unit's spelling in the user's language without the number: `mm`, `px`.
-  - `pub fn suffix(&self, kind: UnitKind) -> String`. What follows a number of `kind` in the user's language: the symbol with the space the language puts before
   - `pub fn text(&self, kind: UnitKind, n: f64, decimals: RangeInclusive<usize>) -> String`. `n` of `kind` with between the least and most digits of `decimals` after the decimal mark, in the user's
   - `pub fn show(&self, kind: UnitKind, n: f64) -> String`. `n` of `kind` with its default digits ([`UnitKind::decimals`]).
   - `pub fn pixels(&self, n: f64) -> String`. `n` pixels: `12 px`.
@@ -3920,6 +3919,7 @@ The fixture, the suite runner and the story helpers.
 - `craft_ui::testing::measuring_run`: re-export of `craft_ui::runtime::measure::run` (defined outside these crates).
 - `craft_ui::testing::measuring_runs`: re-export of `craft_ui::runtime::measure::body_runs` (defined outside these crates).
 - `craft_ui::testing::room_height`: `pub fn room_height(ui: &Ui) -> f32`. The height of the room `ui` offers a story whose root has no content height and fills it (a window, a full-window
+- `craft_ui::testing::row_measures`: re-export of `craft_ui::runtime::measure::row_measures` (defined outside these crates).
 - `craft_ui::testing::shrink_least_runs`: re-export of `craft_ui::runtime::measure::least_runs` (defined outside these crates).
 - `craft_ui::testing::stage`: `pub fn stage(ui: &mut Ui) -> Rect`. Allocates the stage of a story of a canvas control or a root that fills both axes, and returns its rect: the width
 - `craft_ui::testing::stage_fitting`: `pub fn stage_fitting(ui: &mut Ui, height: impl FnOnce(f32) -> f32) -> Rect`. Allocates a stage as wide as [`stage`]'s and as tall as the story's content at that width, which `height` gives,
@@ -4290,6 +4290,7 @@ Pointer events and gestures for trials that drive frames themselves.
 - `craft_ui::testing::pointer::gone`: `pub fn gone() -> Event`. The pointer leaving the window.
 - `craft_ui::testing::pointer::middle`: `pub fn middle(pos: Pos2, pressed: bool) -> Event`. The middle button going down or up at `pos`.
 - `craft_ui::testing::pointer::moved`: `pub fn moved(pos: Pos2) -> Event`. The pointer moving to `pos`.
+- `craft_ui::testing::pointer::part_rect_of_node`: `pub fn part_rect_of_node(ctx: &egui::Context, node: accesskit::NodeId, part: impl Into<craft_behavior::PartRef>) -> Option<egui::Rect>`. The rect of the part `part` of the component whose AccessKit node is `node`, as the sensing step recorded it last
 - `craft_ui::testing::pointer::press`: `pub fn press(pos: Pos2) -> Event`. The primary button going down at `pos`.
 - `craft_ui::testing::pointer::press_captured`: `pub fn press_captured(ctx: &egui::Context) -> bool`. Whether an open press holds the pointer in the running viewport, as Escape reads it.
 - `craft_ui::testing::pointer::release`: `pub fn release(pos: Pos2) -> Event`. The primary button going up at `pos`.
