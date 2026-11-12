@@ -247,7 +247,7 @@ pub(super) fn is_char_format_word(w: &str) -> bool {
 
 /// The spacing and indents in points of the paragraph formatting `st`.
 fn spacing(st: &St) -> model::Spacing {
-    use wordcraft_doc::props::LineSpacing;
+    use craft_wordmodel::props::LineSpacing;
     let pt = |v: i32| (v as f32 / 20.0).clamp(-1584.0, 1584.0);
     let gap = |v: Option<i32>| v.map(|v| pt(v).max(0.0));
     let sl = st.sl;

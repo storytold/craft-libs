@@ -31,6 +31,8 @@ struct ReadmeExamples;
 
 pub mod codepage;
 mod date;
+#[cfg(feature = "doc")]
+pub mod doc;
 mod lex;
 mod model;
 #[cfg(feature = "outlook")]

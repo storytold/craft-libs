@@ -5,7 +5,7 @@ use std::sync::Arc;
 /// The encoding of an East Asian multibyte code page (932 Shift-JIS, 936 GBK, 949 UHC, 950 Big5),
 /// which [`Reader::finish_multibyte`] decodes a run with; `None` for the single-byte code pages.
 fn multibyte_encoding(code_page: u16) -> Option<&'static encoding_rs::Encoding> {
-    let label = wordcraft_doc::encoding::multibyte_encoding_name(code_page)?;
+    let label = crate::codepage::multibyte_encoding_name(code_page)?;
     encoding_rs::Encoding::for_label(label.as_bytes())
 }
 
@@ -44,7 +44,7 @@ impl Reader {
         let cp = self.code_page();
         let Some(encoding) = multibyte_encoding(cp) else {
             self.finish_multibyte();
-            let c = wordcraft_doc::encoding::code_page_byte(cp, b);
+            let c = crate::codepage::code_page_byte(cp, b);
             self.ch(c);
             return;
         };
@@ -123,7 +123,7 @@ impl Reader {
             self.finish_multibyte();
             let mut out = String::with_capacity(chunk.len());
             for b in chunk {
-                out.push(wordcraft_doc::encoding::code_page_byte(cp, *b));
+                out.push(crate::codepage::code_page_byte(cp, *b));
             }
             if !out.is_empty() {
                 self.text(&out);
@@ -163,7 +163,7 @@ impl Reader {
         let w = self.pict_w.map(|v| v * sx);
         let h = self.pict_h.map(|v| v * sy);
         // The control word only says "a metafile": the bytes decide what it is (#4259).
-        let img = if matches!(self.pict_kind, 3 | 4) && wordcraft_metafile::is_metafile(&data) {
+        let img = if matches!(self.pict_kind, 3 | 4) && craft_metafile::is_metafile(&data) {
             // An EMF starts with its header record, type 1.
             let ext = if data.get(..4) == Some(&[1, 0, 0, 0]) { "emf" } else { "wmf" };
             // `\picw`/`\pich` are in the units of the `\wmetafileN` mapping mode; 0.01 mm for the

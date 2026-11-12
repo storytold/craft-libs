@@ -284,7 +284,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 
 - [`craft-rtf`](crates/rtf/README.md): Rich Text Format: a tokenizer, text decoding in the file's code pages
   (`\uN`, `\'hh`, single-byte and East Asian multibyte pages), escaping and dates, and a reader and writer
-  for a small neutral model (paragraphs, character formatting, outline levels, tables).
+  for a small neutral model (paragraphs, character formatting, outline levels, tables). With the `doc` feature, RTF read into and written from `craft-wordmodel` (WordCraft's reader and writer).
 - [`craft-settings`](crates/settings/README.md): `config.toml` settings storage for every app: platform folders, portable mode and overrides, atomic saves while running, backup, damaged-file recovery and schema migrations. Policy in [docs/settings-storage.md](docs/settings-storage.md).
 - [`craft-sheet`](crates/sheet/README.md): spreadsheet vocabulary shared by `craft-xls`, `craft-xlsx` and `craft-ods`: cell positions and A1 text, cell values and error values, sheet-name quoting, Excel's built-in number formats and indexed colour palette. Not a file format; no dependencies.
 - [`craft-silhouette-studio`](crates/silhouette-studio/src/lib.rs): bounded, fail-closed reader for Silhouette Studio `.studio` and `.studio3` documents: outlines, line colours and page size in millimetres. Protected designs are refused.

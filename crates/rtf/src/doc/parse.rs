@@ -18,7 +18,7 @@ struct Parsed {
     flow: Flow,
     page: PageGeom,
     /// The last section's properties (the others are on the paragraphs that end them).
-    last_section: wordcraft_doc::SectionProps,
+    last_section: craft_wordmodel::SectionProps,
     default_font: Option<String>,
     /// Each section's headers and footers, in order, the last section's last.
     headers_footers: Vec<Vec<(HeaderFooter, Vec<FBlock>)>>,
@@ -307,10 +307,10 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     // Each section's own headers and footers; those it leaves out stay linked to the previous.
     let mut sets = Vec::with_capacity(headers_footers.len());
     for parts in &headers_footers {
-        let (mut headers, mut footers) = (wordcraft_doc::section::HeaderSet::default(), wordcraft_doc::section::HeaderSet::default());
+        let (mut headers, mut footers) = (craft_wordmodel::section::HeaderSet::default(), craft_wordmodel::section::HeaderSet::default());
         for (which, blocks) in parts {
             let blocks = model::part_blocks(&mut doc, blocks);
-            let id = doc.add_part(if which.footer { wordcraft_doc::PartKind::Footer } else { wordcraft_doc::PartKind::Header }, blocks);
+            let id = doc.add_part(if which.footer { craft_wordmodel::PartKind::Footer } else { craft_wordmodel::PartKind::Header }, blocks);
             let set = if which.footer { &mut footers } else { &mut headers };
             match which.pages {
                 HfPages::Default => set.default = Some(id),
@@ -322,9 +322,9 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     }
     let mut sets = sets.into_iter();
     for b in &mut doc.body {
-        if let wordcraft_doc::Block::Para(p) = &**b
+        if let craft_wordmodel::Block::Para(p) = &**b
             && p.section.is_some()
-            && let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b)
+            && let craft_wordmodel::Block::Para(p) = std::sync::Arc::make_mut(b)
             && let Some(s) = p.section.as_deref_mut()
             && let Some((h, f)) = sets.next()
         {
@@ -340,7 +340,7 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     let dp = &mut Arc::make_mut(&mut doc.styles).default_para;
     dp.space_before = Some(0.0);
     dp.space_after = Some(0.0);
-    dp.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+    dp.line_spacing = Some(craft_wordmodel::props::LineSpacing::Multiple(1.0));
     if default_font.is_some() {
         Arc::make_mut(&mut doc.styles).default_chr.font = default_font;
     }
@@ -350,8 +350,8 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
 /// Turn the place markers the reader left in the text into note references and comment ranges,
 /// and add the notes' and comments' stories to `doc`.
 fn place_notes_and_comments(doc: &mut Document, notes: Vec<NoteData>, comments: Vec<CommentData>) {
-    use wordcraft_doc::para::NoteKind;
-    use wordcraft_doc::{Comment, PartKind};
+    use craft_wordmodel::para::NoteKind;
+    use craft_wordmodel::{Comment, PartKind};
     if notes.is_empty() && comments.is_empty() {
         return;
     }
@@ -404,17 +404,17 @@ fn place_notes_and_comments(doc: &mut Document, notes: Vec<NoteData>, comments: 
 }
 
 struct Placer {
-    note_parts: Vec<(wordcraft_doc::para::NoteKind, u32)>,
+    note_parts: Vec<(craft_wordmodel::para::NoteKind, u32)>,
     by_rtf: HashMap<i64, u32>,
 }
 
 impl Placer {
-    fn ref_props(kind: wordcraft_doc::para::NoteKind) -> wordcraft_doc::CharProps {
-        let style = if kind == wordcraft_doc::para::NoteKind::Endnote { "EndnoteReference" } else { "FootnoteReference" };
-        wordcraft_doc::CharProps { style: Some(style.into()), ..Default::default() }
+    fn ref_props(kind: craft_wordmodel::para::NoteKind) -> craft_wordmodel::CharProps {
+        let style = if kind == craft_wordmodel::para::NoteKind::Endnote { "EndnoteReference" } else { "FootnoteReference" };
+        craft_wordmodel::CharProps { style: Some(style.into()), ..Default::default() }
     }
 
-    fn blocks(&self, bl: &mut Blocks, own: Option<(wordcraft_doc::para::NoteKind, u32)>, depth: usize) {
+    fn blocks(&self, bl: &mut Blocks, own: Option<(craft_wordmodel::para::NoteKind, u32)>, depth: usize) {
         for b in bl.iter_mut() {
             let needs = match &**b {
                 Block::Para(p) => p.text.contains(MARK_OPEN),
@@ -436,7 +436,7 @@ impl Placer {
         }
     }
 
-    fn para(&self, p: &mut Paragraph, own: Option<(wordcraft_doc::para::NoteKind, u32)>) {
+    fn para(&self, p: &mut Paragraph, own: Option<(craft_wordmodel::para::NoteKind, u32)>) {
         // Every pass removes one marker, so this ends; the bound is only a seat belt.
         for _ in 0..100_000 {
             let Some(a) = p.text.find(MARK_OPEN) else { return };

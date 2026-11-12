@@ -1,46 +1,14 @@
-use super::date::{iso_to_dttm, rtf_date};
 use super::state::{MARK_CLOSE, MARK_OPEN, MAX_NOTE_BLOCKS};
 use super::styles::{style_fmt, styled};
 use super::{
     Align, Arc, Block, Blocks, Document, FBlock, FTable, Fmt, HashSet, Inline, InlineObject, Kind, Meta, Para, Paragraph, RevMark, Rgb, VAlign, model,
 };
+use crate::date::{date_words as rtf_date, iso_to_dttm};
 
 // ---------------------------------------------------------------------------------------------
 // Export
 
-/// RTF-escape text (non-ASCII as `\uN?`).
-pub fn esc(s: &str) -> String {
-    let mut o = String::with_capacity(s.len() + 8);
-    for c in s.chars() {
-        match c {
-            '\\' => o.push_str("\\\\"),
-            '{' => o.push_str("\\{"),
-            '}' => o.push_str("\\}"),
-            '\t' => o.push_str("\\tab "),
-            '\n' => o.push_str("\\line "),
-            '\u{000C}' => o.push_str("\\page "),
-            '\u{000E}' => o.push_str("\\column "),
-            '\u{00A0}' => o.push_str("\\~"),
-            '\u{00AD}' => o.push_str("\\-"),
-            '\u{2011}' => o.push_str("\\_"),
-            c if c.is_ascii_control() => {}
-            c if c.is_ascii() => o.push(c),
-            c => {
-                let mut buf = [0u16; 2];
-                for u in c.encode_utf16(&mut buf) {
-                    o.push_str(&format!("\\u{}?", *u as i16));
-                }
-            }
-        }
-    }
-    o
-}
-
-/// [`esc`] for a `\fonttbl` name: `;` would end the entry, so it is written `\'3b`, and control
-/// characters, which `esc` writes as `\line` or `\tab`, are dropped.
-fn esc_font(name: &str) -> String {
-    esc(&name.replace(char::is_control, "")).replace(';', "\\'3b")
-}
+pub use crate::{esc, esc_font};
 
 pub(super) struct Tables {
     pub(super) fonts: Vec<String>,
@@ -102,7 +70,7 @@ pub(super) struct Writer {
     /// size, code font…): what a run's formatting without a direct value resolves to.
     pub(super) base: Fmt,
     /// The body's sections in order (the last is the document's); empty when it has just one.
-    pub(super) sections: Vec<wordcraft_doc::SectionProps>,
+    pub(super) sections: Vec<craft_wordmodel::SectionProps>,
     /// The section being written.
     pub(super) sect_i: usize,
 }
@@ -191,7 +159,7 @@ impl Marker<'_> {
                 InlineObject::NoteRef { id, kind, .. } => self.doc.parts.get(&id).map(|part| {
                     let mut blocks = Vec::new();
                     self.story(&part.blocks, id, 0, &mut blocks);
-                    self.token(Mark::Note { endnote: kind == wordcraft_doc::para::NoteKind::Endnote, blocks })
+                    self.token(Mark::Note { endnote: kind == craft_wordmodel::para::NoteKind::Endnote, blocks })
                 }),
                 InlineObject::CommentStart { id } if note.is_none() => Some(self.token(Mark::RangeStart(id))),
                 InlineObject::CommentEnd { id } if note.is_none() => {
@@ -201,7 +169,7 @@ impl Marker<'_> {
                 _ => None,
             };
             let Some(tok) = tok else { continue };
-            let end = off + wordcraft_doc::para::OBJ.len_utf8();
+            let end = off + craft_wordmodel::para::OBJ.len_utf8();
             let text = if tok.is_empty() { tok } else { format!("{MARK_OPEN}{tok}{MARK_CLOSE}") };
             if q.delete(off, end).is_err() {
                 continue;
@@ -223,8 +191,8 @@ impl Marker<'_> {
 }
 
 /// `\sectd` and a section's formatting, in the words the reader reads back.
-fn sect_words(s: &wordcraft_doc::SectionProps) -> String {
-    use wordcraft_doc::section::{NumFormat, SectionStart};
+fn sect_words(s: &craft_wordmodel::SectionProps) -> String {
+    use craft_wordmodel::section::{NumFormat, SectionStart};
     let tw = |v: f32| if v.is_finite() { ((v * 20.0).round() as i64).max(0) } else { 0 };
     let mut o = String::from("\\sectd");
     o.push_str(match s.start {
@@ -282,8 +250,8 @@ fn style_num(k: Kind) -> Option<u32> {
     }
 }
 
-fn rtf_border_style(s: wordcraft_doc::props::BorderStyle) -> &'static str {
-    use wordcraft_doc::props::BorderStyle;
+fn rtf_border_style(s: craft_wordmodel::props::BorderStyle) -> &'static str {
+    use craft_wordmodel::props::BorderStyle;
     match s {
         BorderStyle::None => "\\brdrnone",
         BorderStyle::Single => "\\brdrs",
@@ -307,7 +275,7 @@ fn rtf_border_style(s: wordcraft_doc::props::BorderStyle) -> &'static str {
 }
 
 impl Writer {
-    fn write_border(&mut self, prefix: &str, side: char, b: wordcraft_doc::props::Border, out: &mut String) {
+    fn write_border(&mut self, prefix: &str, side: char, b: craft_wordmodel::props::Border, out: &mut String) {
         out.push_str(&format!("\\{prefix}{side}"));
         out.push_str(rtf_border_style(b.style));
         let w = ((b.width * 20.0).round() as i64).clamp(1, 150);
@@ -324,7 +292,7 @@ impl Writer {
         }
     }
 
-    fn cell_borders(&mut self, borders: Option<&wordcraft_doc::props::Borders>, borderless: bool, out: &mut String) {
+    fn cell_borders(&mut self, borders: Option<&craft_wordmodel::props::Borders>, borderless: bool, out: &mut String) {
         if let Some(b) = borders {
             for (side, opt) in [('t', &b.top), ('l', &b.left), ('b', &b.bottom), ('r', &b.right)] {
                 if let Some(border) = opt.filter(|x| x.is_visible()) {
@@ -450,7 +418,7 @@ impl Writer {
         // A script, `file:`, UNC or other non-web target is written as plain text, as the HTML and
         // Markdown exporters do: Word follows a HYPERLINK field's target on click, and a UNC one
         // leaks the reader's NTLM credentials.
-        match f.link.as_deref().filter(|l| wordcraft_doc::link::is_safe_href(l)) {
+        match f.link.as_deref().filter(|l| craft_wordmodel::link::is_safe_href(l)) {
             Some(l) => {
                 // In a field's quotes `\\` is one backslash; a quote is stored as `%22`.
                 let target = l.replace('\\', "\\\\").replace('"', "%22");
@@ -576,11 +544,7 @@ impl Writer {
             _ => {
                 // Re-encode other formats as PNG, bounding the decode so a tiny file declaring
                 // huge dimensions can't exhaust memory on export.
-                let Some(dec) = model::decode_bounded(&img.data) else { return };
-                let mut buf = Vec::new();
-                if dec.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png).is_err() {
-                    return;
-                }
+                let Some(buf) = to_png(&img.data) else { return };
                 (buf, "\\pngblip")
             }
         };
@@ -893,7 +857,7 @@ pub fn export(doc: &Document) -> String {
     };
     let doc = marked.as_ref().unwrap_or(doc);
     let flow = model::from_doc_tracked(doc);
-    let base_font = doc.styles.default_chr.font.clone().unwrap_or_else(|| wordcraft_doc::styles::BODY_FONT.to_string());
+    let base_font = doc.styles.default_chr.font.clone().unwrap_or_else(|| craft_wordmodel::styles::BODY_FONT.to_string());
     let mut w = Writer {
         marks,
         t: Tables { fonts: vec![base_font], colors: Vec::new() },
@@ -905,7 +869,7 @@ pub fn export(doc: &Document) -> String {
     };
     let mut body = String::new();
     // Every section starts with its own `\sectd`; `\sect` breaks only where there are several.
-    let secs: Vec<wordcraft_doc::SectionProps> = doc.sections().into_iter().map(|(_, s)| s.clone()).collect();
+    let secs: Vec<craft_wordmodel::SectionProps> = doc.sections().into_iter().map(|(_, s)| s.clone()).collect();
     if let Some(first) = secs.first() {
         body.push_str(&sect_words(first));
     }
@@ -916,7 +880,7 @@ pub fn export(doc: &Document) -> String {
     export_with(&flow.meta, &w, &body, &doc.last_section)
 }
 
-fn export_with(m: &Meta, w: &Writer, body: &str, sec: &wordcraft_doc::SectionProps) -> String {
+fn export_with(m: &Meta, w: &Writer, body: &str, sec: &craft_wordmodel::SectionProps) -> String {
     let mut out = String::from("{\\rtf1\\ansi\\ansicpg1252\\deff0\\deflang1033\\uc1\n{\\fonttbl");
     for (i, f) in w.t.fonts.iter().enumerate() {
         let fam = if model::is_mono(f) { "\\fmodern" } else { "\\fswiss" };
@@ -981,4 +945,28 @@ fn export_with(m: &Meta, w: &Writer, body: &str, sec: &wordcraft_doc::SectionPro
     out.push_str(body);
     out.push_str("}\n");
     out
+}
+
+/// Most pixels a picture is decoded with to re-encode it as PNG.
+const MAX_PNG_PIXELS: u64 = 100_000_000;
+/// Most bytes the decoder may allocate for it.
+const MAX_PNG_DECODE_BYTES: u64 = 512 << 20;
+
+/// `data` (a GIF, BMP, TIFF, WebP… picture) as PNG. The decode is bounded, so a tiny file
+/// declaring huge dimensions cannot exhaust memory; `None` when it does not decode.
+fn to_png(data: &[u8]) -> Option<Vec<u8>> {
+    let (w, h) = model::image_px(data)?;
+    if u64::from(w).saturating_mul(u64::from(h)) > MAX_PNG_PIXELS {
+        return None;
+    }
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(w);
+    limits.max_image_height = Some(h);
+    limits.max_alloc = Some(MAX_PNG_DECODE_BYTES);
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format().ok()?;
+    reader.limits(limits);
+    let dec = reader.decode().ok()?;
+    let mut buf = Vec::new();
+    dec.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png).ok()?;
+    Some(buf)
 }

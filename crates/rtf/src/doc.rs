@@ -1,4 +1,7 @@
-//! Rich Text Format.
+//! Rich Text Format, read into and written from the word model (`craft_wordmodel::Document`)
+//! through the text formats' flow (`craft_flow`). Feature `doc`.
+//!
+//! WordCraft's RTF reader and writer.
 //!
 //! Export: font and colour tables, a small stylesheet (headings with outline levels, Title,
 //! Quote, Code), list tables (`\listtable` / `\listoverridetable` with `\listtext` labels for
@@ -28,12 +31,12 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use wordcraft_doc::props::VAlign;
-use wordcraft_doc::{Align, Block, Blocks, Document, InlineObject, Paragraph, Rgb};
+use craft_wordmodel::props::VAlign;
+use craft_wordmodel::{Align, Block, Blocks, Document, InlineObject, Paragraph, Rgb};
 
-use crate::model::{self, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, Meta, Para, RevMark, make_img};
+use craft_flow::{self as model, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, Meta, Para, RevMark, make_img};
 
-mod date;
+use crate::date;
 mod export;
 mod parse;
 mod reader;

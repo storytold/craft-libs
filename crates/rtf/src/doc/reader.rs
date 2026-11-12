@@ -1,4 +1,3 @@
-use super::date::{dttm_to_iso, iso_date};
 use super::parse::column_grid;
 use super::state::{
     CellDef, CommentData, Dest, HeaderFooter, MARK_CLOSE, MARK_OPEN, MAX_GROUPS, MAX_NOTE_BLOCKS, MAX_NOTES, MAX_REV_AUTHORS, MAX_SECTIONS, NoteData,
@@ -6,6 +5,7 @@ use super::state::{
 };
 use super::styles::{StyleDef, drop_style_formatting, style_fmt};
 use super::{Arc, Cell, FBlock, FTable, Fmt, HashMap, HashSet, Inline, Kind, Meta, Para, Rgb, model};
+use crate::date::{dttm_to_iso, iso_date};
 
 #[derive(Default)]
 pub(super) struct Reader {
@@ -135,7 +135,7 @@ impl Reader {
     }
 
     /// The border of the cell side being described, else of the paragraph side.
-    pub(super) fn cell_border_slot(&mut self) -> Option<&mut Option<wordcraft_doc::props::Border>> {
+    pub(super) fn cell_border_slot(&mut self) -> Option<&mut Option<craft_wordmodel::props::Border>> {
         let (b, side) = match self.cell_side {
             Some(c) => (&mut self.def_cur.borders, c),
             None => (&mut self.st.borders, self.st.border_side?),
@@ -280,7 +280,7 @@ impl Reader {
     /// A section formatting word: applied to the current section, unless it's inside a header
     /// or footer (whose `\sectd` isn't the body's). False when `w` isn't one.
     pub(super) fn section_word(&mut self, w: &str, p: Option<i32>) -> bool {
-        use wordcraft_doc::section::{NumFormat, SectionStart};
+        use craft_wordmodel::section::{NumFormat, SectionStart};
         let on = p != Some(0);
         let pv = p.unwrap_or(0);
         // Inside a header or footer the word is read into a scratch copy and dropped.
@@ -503,7 +503,7 @@ impl Reader {
             }
             out.push(c);
         }
-        if !out.is_empty() && self.table.len() < wordcraft_doc::table::MAX_ROWS {
+        if !out.is_empty() && self.table.len() < craft_wordmodel::table::MAX_ROWS {
             rights.truncate(out.len());
             self.table.push(out);
             self.table_rights.push(rights);
