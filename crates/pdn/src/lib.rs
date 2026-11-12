@@ -313,9 +313,13 @@ impl<'a> Document<'a> {
     /// [`Layer::surface`] names). Only one decoded surface is held at a time unless `each` keeps
     /// them. Data after the last block is an error.
     pub fn read_surfaces(&self, keep_going: &dyn Fn() -> bool, each: &mut dyn FnMut(usize, Surface)) -> Result<()> {
-        self.try_read_surfaces(keep_going, &mut |index, surface| {
+        self.try_read_surfaces(keep_going, &mut |index, surface| -> std::result::Result<(), std::convert::Infallible> {
             each(index, surface);
             Ok(())
+        })
+        .map_err(|error| match error {
+            ReadSurfacesError::Decode(error) => error,
+            ReadSurfacesError::Callback(never) => match never {},
         })
     }
 
