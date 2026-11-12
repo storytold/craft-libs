@@ -1,0 +1,1450 @@
+# Adobe Camera Raw / Lightroom supported cameras, parsed from helpx.adobe.com/camera-raw/desktop/dng-and-file-formats/camera-raw-plug-supported-cameras.html
+# (Wayback Machine capture 20261003133011; the live page refuses scripted requests). Facts only: maker, model, extension,
+# whether Adobe ships a Camera Matching profile, minimum Camera Raw version, and the year that ACR major version shipped (approximate date added).
+maker	camera	extensions	camera_matching	acr_version	year_added
+Apple	iPhone 17e Front Camera	DNG	No	18.3	2025
+Apple	iPhone 17e Rear Camera	DNG	No	18.3	2025
+Apple	iPhone 17 Front Camera	DNG	No	18.0	2025
+Apple	iPhone 17 Ultrawide Camera	DNG	No	18.0	2025
+Apple	iPhone 17 Wide Camera	DNG	No	18.0	2025
+Apple	iPhone 17 Pro Front Camera	DNG	No	18.0	2025
+Apple	iPhone 17 Pro Telephoto Camera	DNG	No	18.0	2025
+Apple	iPhone 17 Pro Ultrawide Camera	DNG	No	18.0	2025
+Apple	iPhone 17 Pro Wide Camera	DNG	No	18.0	2025
+Apple	iPhone 17 Pro Max Front Camera	DNG	No	18.0	2025
+Apple	iPhone 17 Pro Max Telephoto Camera	DNG	No	18.0	2025
+Apple	iPhone 17 Pro Max Ultrawide Camera	DNG	No	18.0	2025
+Apple	iPhone 17 Pro Max Wide Camera	DNG	No	18.0	2025
+Apple	iPhone Air Front Camera	DNG	No	18.0	2025
+Apple	iPhone Air Wide Camera	DNG	No	18.0	2025
+Apple	iPhone 16e Front Camera	DNG	No	17.3	2024
+Apple	iPhone 16e Wide Camera	DNG	No	17.3	2024
+Apple	iPhone 16 Front Camera	DNG	No	17.0	2024
+Apple	iPhone 16 Ultrawide Camera	DNG	No	17.0	2024
+Apple	iPhone 16 Wide Camera	DNG	No	17.0	2024
+Apple	iPhone 16 Plus Front Camera	DNG	No	17.0	2024
+Apple	iPhone 16 Plus Ultrawide Camera	DNG	No	17.0	2024
+Apple	iPhone 16 Plus Wide Camera	DNG	No	17.0	2024
+Apple	iPhone 16 Pro Front Camera	DNG	No	17.0	2024
+Apple	iPhone 16 Pro Telephoto Camera	DNG	No	17.0	2024
+Apple	iPhone 16 Pro Ultrawide Camera	DNG	No	17.0	2024
+Apple	iPhone 16 Pro Wide Camera	DNG	No	17.0	2024
+Apple	iPhone 16 Pro Max Front Camera	DNG	No	17.0	2024
+Apple	iPhone 16 Pro Max Telephoto Camera	DNG	No	17.0	2024
+Apple	iPhone 16 Pro Max Ultrawide Camera	DNG	No	17.0	2024
+Apple	iPhone 16 Pro Max WIde Camera	DNG	No	17.0	2024
+Apple	iPhone 15 Plus Ultrawide Camera	DNG	No	16.0	2023
+Apple	iPhone 15 Pro Telephoto Camera	DNG	Apple ProRAW	16.0	2023
+Apple	iPhone 15 Pro Front Camera	DNG	Apple ProRAW	16.0	2023
+Apple	iPhone 15 Pro Wide Camera	DNG	Apple ProRAW	16.0	2023
+Apple	iPhone 15 Pro Ultrawide Camera	DNG	Apple ProRAW	16.0	2023
+Apple	iPhone 15 Pro Max Front Camera	DNG	Apple ProRAW	16.0	2023
+Apple	iPhone 15 Pro Max Telephoto Camera	DNG	Apple ProRAW	16.0	2023
+Apple	iPhone 15 Pro Max Ultrawide Camera	DNG	Apple ProRAW	16.0	2023
+Apple	iPhone 15 Pro Max Wide Camera	DNG	Apple ProRAW	16.0	2023
+Apple	iPhone 14 Front Camera	DNG	No	15.0	2022
+Apple	iPhone 14 Ultrawide Camera	DNG	No	15.0	2022
+Apple	iPhone 14 Wide Camera	DNG	No	15.0	2022
+Apple	iPhone 14 Plus Front Camera	DNG	No	15.0	2022
+Apple	iPhone 14 Plus Ultrawide Camera	DNG	No	15.0	2022
+Apple	iPhone 14 Plus Wide Camera	DNG	No	15.0	2022
+Apple	iPhone 14 Pro Front Camera	DNG	Apple ProRAW	15.0	2022
+Apple	iPhone 14 Pro Telephoto Camera	DNG	Apple ProRAW	15.0	2022
+Apple	iPhone 14 Pro Ultrawide Camera	DNG	Apple ProRAW	15.0	2022
+Apple	iPhone 14 Pro Wide Camera	DNG	Apple ProRAW	15.0	2022
+Apple	iPhone 14 Pro Max Front Camera	DNG	Apple ProRAW	15.0	2022
+Apple	iPhone 14 Pro Max Telephoto Camera	DNG	Apple ProRAW	15.0	2022
+Apple	iPhone 14 Pro Max Ultrawide Camera	DNG	Apple ProRAW	15.0	2022
+Apple	iPhone 14 Pro Max Wide Camera	DNG	Apple ProRAW	15.0	2022
+Apple	iPhone 13 Front Camera	DNG	No	14.0	2021
+Apple	iPhone 13 Rear Ultrawide Camera	DNG	No	14.0	2021
+Apple	iPhone 13 Rear Wide Camera	DNG	No	14.0	2021
+Apple	iPhone 13 mini Front Camera	DNG	No	14.0	2021
+Apple	iPhone 13 mini Rear Ultrawide Camera	DNG	No	14.0	2021
+Apple	iPhone 13 mini Rear Wide Camera	DNG	No	14.0	2021
+Apple	iPhone 13 Pro Front Camera	DNG	Apple ProRAW	14.0	2021
+Apple	iPhone 13 Pro Rear Telephoto Camera	DNG	Apple ProRAW	14.0	2021
+Apple	iPhone 13 Pro Rear Ultrawide Camera	DNG	Apple ProRAW	14.0	2021
+Apple	iPhone 13 Pro Rear Wide Camera	DNG	Apple ProRAW	14.0	2021
+Apple	iPhone 13 Pro Max Front Camera	DNG	Apple ProRAW	14.0	2021
+Apple	iPhone 13 Pro Max Rear Telephoto Camera	DNG	Apple ProRAW	14.0	2021
+Apple	iPhone 13 Pro Max Rear Ultrawide Camera	DNG	Apple ProRAW	14.0	2021
+Apple	iPhone 13 Pro Max Rear Wide Camera	DNG	Apple ProRAW	14.0	2021
+Apple	iPhone 12 Rear Wide Camera	DNG	No	13.1	2020
+Apple	iPhone 12 Mini Rear Wide Camera	DNG	No	13.1	2020
+Apple	iPhone 12 Ultrawide camera	DNG	No	14.1	2021
+Apple	iPhone 12 Mini Ultrawide camera	DNG	No	14.1	2021
+Apple	iPhone 12 Pro Front Camera	DNG	No	13.1	2020
+Apple	iPhone 12 Pro Rear Wide Camera	DNG	Apple ProRAW	13.1	2020
+Apple	iPhone 12 Pro Rear Telephoto Camera	DNG	Apple ProRAW	13.1	2020
+Apple	iPhone 12 Pro Rear Ultra Wide Camera	DNG	Apple ProRAW	13.1	2020
+Apple	iPhone 12 Pro Max Front Camera	DNG	No	13.1	2020
+Apple	iPhone 12 Pro Max Rear Wide Camera	DNG	Apple ProRAW	13.1	2020
+Apple	iPhone 12 Pro Max Rear Telephoto Camera	DNG	Apple ProRAW	13.1	2020
+Apple	iPhone 12 Pro Max Rear Ultra Wide Camera	DNG	Apple ProRAW	13.1	2020
+Apple	iPhone 11	DNG	No	12.0	2019
+Apple	iPhone 11 Pro	DNG	No	12.0	2019
+Apple	iPhone 11 Pro Max	DNG	No	12.0	2019
+Apple	iPad Pro 9.7" (Wifi and Cellular)	DNG	No	9.7	2015
+Apple	iPad Pro 11-inch (2nd generation)	DNG	No	12.3	2019
+Apple	iPad Pro 11-inch (3rd generation)	DNG	No	13.4	2020
+Apple	iPad Pro 11-inch (4th generation) Wide Camera	DNG	No	15.1	2022
+Apple	iPad Pro 11-inch (2018 model)	DNG	No	11.1	2018
+Apple	iPad Pro 11-inch M4 (2024 version) Wide Camera	DNG	No	16.4	2023
+Apple	iPad Air 11-inch M2 (2024 version) Wide Camera	DNG	No	16.4	2023
+Apple	iPad Pro 12.9-inch (4th generation)	DNG	No	12.3	2019
+Apple	iPad Pro 12.9-inch (5th generation)	DNG	No	13.4	2020
+Apple	iPad Pro 12.9-inch (6th generation) Wide Camera	DNG	No	15.1	2022
+Apple	iPad Pro 12.9-inch (2018 model)	DNG	No	11.1	2018
+Apple	iPad Pro 13-inch M4 (2024 version) Wide Camera	DNG	No	16.4	2023
+Apple	iPad mini (6th Generation) Rear Camera	DNG	No	14.0	2021
+Apple	iPhone 6s	DNG	No	9.7	2015
+Apple	iPhone 6s Plus	DNG	No	9.7	2015
+Apple	iPhone 7	DNG	No	9.7	2015
+Apple	iPhone 7 Plus	DNG	No	9.7	2015
+Apple	iPhone 8	DNG	No	10.1	2017
+Apple	iPhone 8 Plus	DNG	No	10.1	2017
+Apple	iPhone SE (2020 version)	DNG	No	12.3	2019
+Apple	iPhone SE	DNG	No	9.7	2015
+Apple	iPhone X	DNG	No	10.1	2017
+Apple	iPhone XR	DNG	No	11.1	2018
+Apple	iPhone XS	DNG	No	11.1	2018
+Apple	iPhone XS Max	DNG	No	11.1	2018
+Apple	iPad Air (5th generation) Rear Camera	DNG	No	14.3	2021
+Apple	iPhone SE (3rd generation) Front Camera	DNG	No	14.3	2021
+Apple	iPhone SE (3rd generation) Rear Camera	DNG	No	14.3	2021
+Apple	iPad (10th Generation) Wide Camera	DNG	No	15.1	2022
+Apple	iPad mini (A17 Pro) Rear Camera	DNG	No	17.0.1	2024
+Canon	EOS-1D	TIF	Yes	1.0	2003
+Canon	EOS-1D C	CR2	Yes	7.4	2012
+Canon	EOS-1D Mark II	CR2	Yes	2.2	2003
+Canon	EOS-1D Mark II N	CR2	Yes	3.3	2005
+Canon	EOS-1D Mark III	CR2	Yes	4.1	2007
+Canon	EOS-1D Mark IV	CR2	Yes	5.6	2008
+Canon	EOS-1Ds	TIF	Yes	1.0	2003
+Canon	EOS-1Ds Mark II	CR2	Yes	3.0	2005
+Canon	EOS-1Ds Mark III	CR2	Yes	4.3	2007
+Canon	EOS-1D X	CR2	Yes	7.1	2012
+Canon	EOS-1D X Mark II	CR2	Yes	9.5	2015
+Canon	EOS-1D X Mark III	CR3	Yes	12.2	2019
+Canon	EOS 5D	CR2	Yes	3.3	2005
+Canon	EOS 5D Mark II	CR2	Yes	5.2	2008
+Canon	EOS-5D Mark III	CR2	Yes	7.1	2012
+Canon	EOS-5D Mark IV (** see note)	CR2	Yes	9.7	2015
+Canon	EOS 5DS	CR2	Yes	9.0	2015
+Canon	EOS 5DS R	CR2	Yes	9.0	2015
+Canon	EOS 6D	CR2	Yes	7.3	2012
+Canon	EOS 6D Mark II	CR2	Yes	9.12	2015
+Canon	EOS 7D	CR2	Yes	5.6	2008
+Canon	EOS 7D Mark II	CR2	Yes	8.7	2013
+Canon	EOS 10D	CRW	Yes	2.0	2003
+Canon	EOS 20D	CR2	Yes	2.4	2003
+Canon	EOS 20Da	CR2	Yes	3.3	2005
+Canon	EOS 30D	CR2	Yes	3.4	2005
+Canon	EOS 40D	CR2	Yes	4.2	2007
+Canon	EOS 50D	CR2	Yes	5.1	2008
+Canon	EOS 60D	CR2	Yes	6.2	2010
+Canon	EOS 60Da	CR2	Yes	7.1	2012
+Canon	EOS 70D	CR2	Yes	8.2	2013
+Canon	EOS 77D (EOS 9000D)	CR2	Yes	9.10	2015
+Canon	EOS 80D	CR2	Yes	9.5	2015
+Canon	EOS 90D	CR3	Yes	11.4	2018
+Canon	EOS 200D (EOS Kiss X9, EOS Rebel SL2)	CR2	Yes	9.12	2015
+Canon	EOS 250D (EOS Rebel SL3, EOS 200D II, EOS Kiss X10)	CR3	Yes	11.3	2018
+Canon	EOS D30	CRW	Yes	1.0	2003
+Canon	EOS D60	CRW	Yes	1.0	2003
+Canon	EOS 300D (EOS Digital Rebel, EOS Kiss Digital)	CRW	Yes	2.0	2003
+Canon	EOS 100D (EOS Digital Rebel SL1, EOS Kiss X7)	CR2	Yes	7.4	2012
+Canon	EOS 500D (EOS Digital Rebel T1i, EOS Kiss X3 Digital)	CR2	Yes	5.4	2008
+Canon	EOS 550D (EOS Digital Rebel T2i, EOS Kiss X4 Digital)	CR2	Yes	6.1	2010
+Canon	EOS 1100D (EOS Digital Rebel T3, EOS Kiss X50 Digital)	CR2	Yes	6.4	2010
+Canon	EOS 600D (EOS Digital Rebel T3i, EOS Kiss X5 Digital)	CR2	Yes	6.4	2010
+Canon	EOS 650D (EOS Digital Rebel T4i, EOS Kiss X4i)	CR2	Yes	7.1	2012
+Canon	EOS 700D (EOS Digital Rebel T5i, EOS Kiss X7i)	CR2	Yes	7.4	2012
+Canon	EOS 1200D (EOS Digital Rebel T5, EOS Kiss X70)	CR2	Yes	8.4	2013
+Canon	EOS 1300D (EOS Digital Rebel T6, EOS Kiss X80)	CR2	Yes	9.5	2015
+Canon	EOS 1500D (EOS Rebel T7, EOS Kiss X90, EOS 2000D)	CR2	Yes	10.3	2017
+Canon	EOS 3000D (EOS Rebel T100, EOS 4000D)	CR2	Yes	10.3	2017
+Canon	EOS 750D (EOS Digital Rebel T6i, EOS Kiss X8i)	CR2	Yes	9.0	2015
+Canon	EOS 760D (EOS Digital Rebel T6s, EOS Kiss 8000D)	CR2	Yes	9.0	2015
+Canon	EOS 800D (EOS Digital Rebel T7i, EOS Kiss X9i)	CR2	Yes	9.10	2015
+Canon	EOS 850D (EOS Kiss X10i, EOS Rebel T8i)	CR3	Yes	12.2.1	2019
+Canon	EOS 1000D (EOS Digital Rebel XS, EOS Kiss F)	CR2	Yes	5.1	2008
+Canon	EOS 450D (EOS Digital Rebel XSi, EOS Kiss Digital X2)	CR2	Yes	4.4	2007
+Canon	EOS 350D (EOS Digital Rebel XT, EOS Kiss Digital N)	CR2, CRW	Yes	3.1	2005
+Canon	EOS 400D (EOS Digital Rebel XTi, EOS Kiss Digital X)	CR2	Yes	3.6	2005
+Canon	EOS C50	CR3	Yes	18.0	2025
+Canon	EOS M	CR2	Yes	7.2	2012
+Canon	EOS M2	CR2	Yes	8.3	2013
+Canon	EOS M200	CR3	Yes	12.1	2019
+Canon	EOS M3	CR2	Yes	9.0	2015
+Canon	EOS M5	CR2	Yes	9.8	2015
+Canon	EOS M50 Mark II	CR3	Yes	13.1	2020
+Canon	EOS M6	CR2	Yes	9.10	2015
+Canon	EOS M6 Mark II	CR3	Yes	11.4	2018
+Canon	EOS M10	CR2	Yes	9.3	2015
+Canon	EOS M50 (EOS Kiss M)	CR3	Yes	10.3	2017
+Canon	EOS M100	CR2	Yes	10.1	2017
+Canon	EOS R (** see note)	CR3	Yes	11.0	2018
+Canon	EOS R1	CR3	Yes	16.5	2023
+Canon	EOS R3	CR3	Yes	14.0	2021
+Canon	EOS R5	CR3	Yes	12.4	2019
+Canon	EOS R5 C	CR3	Yes	14.3	2021
+Canon	EOS R5 Mark II	CR3	Yes	16.4	2023
+Canon	EOS R6	CR3	Yes	12.4	2019
+Canon	EOS R6 V	CR3	Yes	18.4	2025
+Canon	EOS R6 Mark II	CR3	Yes	15.0	2022
+Canon	EOS R6 Mark III	CR3	Yes	18.0	2025
+Canon	EOS R7	CR3	Yes	14.4	2021
+Canon	EOS R8 Mark II	CR3	Yes	18.5	2025
+Canon	EOS R10	CR3	Yes	14.4	2021
+Canon	EOS Ra	CR3	Yes	12.1	2019
+Canon	EOS RP	CR3	Yes	11.2.1	2018
+Canon	EOS R8	CR3	Yes	15.2	2022
+Canon	EOS R50	CR3	Yes	15.2	2022
+Canon	EOS R50 V	CR3	Yes	17.3	2024
+Canon	EOS R100	CR3	Yes	15.3	2022
+Canon	PowerShot 600	CRW	No	1.0	2003
+Canon	PowerShot A5	CRW	No	1.0	2003
+Canon	PowerShot A50	CRW	No	1.0	2003
+Canon	PowerShot G1	CRW	No	1.0	2003
+Canon	PowerShot G1 X	CR2	Yes	7.1	2012
+Canon	PowerShot G1 X Mark II	CR2	Yes	8.5	2013
+Canon	PowerShot G1 X Mark III	CR2	Yes	10.1	2017
+Canon	PowerShot G2	CRW	No	1.0	2003
+Canon	PowerShot G3	CRW	No	1.0	2003
+Canon	PowerShot G3 X	CR2	Yes	9.1.1	2015
+Canon	PowerShot G5	CRW	No	2.0	2003
+Canon	PowerShot G5 X	CR2	Yes	9.3	2015
+Canon	PowerShot G5 X Mark II	CR3	Yes	11.4	2018
+Canon	PowerShot G6	CRW	Yes	2.4	2003
+Canon	PowerShot G7 X	CR2	Yes	8.7	2013
+Canon	PowerShot G7 X Mark II	CR2	Yes	9.6	2015
+Canon	PowerShot G7 X Mark III	CR3	Yes	11.4	2018
+Canon	PowerShot G9	CR2	Yes	4.3	2007
+Canon	PowerShot G9X	CR2	Yes	9.3	2015
+Canon	PowerShot G9 X Mark II	CR2	Yes	9.9	2015
+Canon	PowerShot G10	CR2	Yes	5.2	2008
+Canon	PowerShot G11	CR2	Yes	5.6	2008
+Canon	PowerShot G12	CR2	Yes	6.3	2010
+Canon	PowerShot G15	CR2	Yes	7.3	2012
+Canon	PowerShot G16	CR2	Yes	8.2	2013
+Canon	PowerShot Pro 1	CRW	No	2.2	2003
+Canon	PowerShot Pro70	CRW	No	1.0	2003
+Canon	PowerShot Pro90 IS	CRW	No	1.0	2003
+Canon	PowerShot S30	CRW	No	1.0	2003
+Canon	PowerShot S40	CRW	No	1.0	2003
+Canon	PowerShot S45	CRW	No	1.0	2003
+Canon	PowerShot S50	CRW	No	2.0	2003
+Canon	PowerShot S60	CRW	No	2.3	2003
+Canon	PowerShot S90	CR2	Yes	5.6	2008
+Canon	PowerShot S95	CR2	Yes	6.3	2010
+Canon	PowerShot S70	CRW	No	2.4	2003
+Canon	PowerShot S100	CR2	Yes	6.6	2010
+Canon	PowerShot S100V	CR2	No	6.7	2010
+Canon	PowerShot S110	CR2	Yes	7.3	2012
+Canon	PowerShot S120	CR2	Yes	8.3	2013
+Canon	PowerShot SX1 IS	CR2	Yes	5.4	2008
+Canon	PowerShot SX50	CR2	Yes	7.3	2012
+Canon	PowerShot SX60 HS	CR2	Yes	8.7	2013
+Canon	PowerShot SX70 HS	CR3	Yes	11.1	2018
+Canon	PowerShot V1	CR3	Yes	17.2	2024
+Casio	EXILIM EX-10	DNG	No	8.3	2013
+Casio	EXILIM EX-100	DNG	No	8.4	2013
+Casio	EXILIM EX-100F	DNG	No	9.1.1	2015
+Casio	EXILIM EX-100PRO	DNG	No	8.7	2013
+Casio	EXILIM EX-FC300S	DNG	No	7.3	2012
+Casio	EXILIM EX-FH100	DNG	No	6.2	2010
+Casio	EXILIM EX-ZR700	DNG	No	7.4	2012
+Casio	EXILIM EX-ZR710	DNG	No	7.4	2012
+Casio	EXILIM EX-ZR750	DNG	No	7.4	2012
+Casio	EXILIM EX-ZR800	DNG	No	8.2	2013
+Casio	EXILIM EX-ZR850	DNG	No	8.4	2013
+Casio	EXILIM EX-ZR1000	DNG	No	7.3	2012
+Casio	EXILIM EX-ZR1100	DNG	No	8.2	2013
+Casio	EXILIM EX-ZR1200	DNG	No	8.2	2013
+Casio	EXILIM EX-ZR1300	DNG	No	8.5	2013
+Casio	EXILIM EX-ZR1500	DNG	No	8.5	2013
+Casio	EXILIM EX-ZR3000	DNG	No	9.1.1	2015
+Casio	EXILIM EX-ZR3100	DNG	No	9.5.1	2015
+Casio	EXILIM EX-ZR3200	DNG	No	9.9	2015
+Casio	EXILIM EX-ZR3500	DNG	No	9.0	2015
+Casio	EXILIM EX-ZR3600	DNG	No	9.5.1	2015
+Casio	EXILIM EX-ZR3700	DNG	No	9.9	2015
+Casio	EXILIM EX-ZR4000	DNG	No	9.7	2015
+Casio	EXILIM EX-ZR4100	DNG	No	10.0	2017
+Casio	EXILIM EX-ZR5000	DNG	No	9.7	2015
+Casio	EXILIM EX-ZR5100	DNG	No	10.0	2017
+Contax	N Digital	RAW	No	2.3	2003
+DJI	DJI Mavic 2 Pro (Hasselblad L1D-20c)	DNG	No	13.2	2020
+DJI	DJI AIR 2S	DNG	No	13.3	2020
+DJI	DJI Mini 2	DNG	No	13.3	2020
+DJI	DJI Air 3 Wide Camera	DNG	No	16.0.1	2023
+DJI	DJI Air 3 Telephoto Camera	DNG	No	16.0.1	2023
+DJI	DJI Mini 3 Pro	DNG	No	16.0.1	2023
+DJI	DJI Mini 4 Pro	DNG	No	16.0.1	2023
+DJI	DJI Mavic 3 Classic (Hasselblad L2D-20c)	DNG	No	16.0.1	2023
+DJI	DJI Mavic 3 Cine Super Telephoto Camera	DNG	No	16.0.1	2023
+DJI	DJI Mavic 3 Cine (Hasselblad L2D-20c)	DNG	No	16.0.1	2023
+DJI	DJI Mavic 3 Pro Super Telephoto Camera	DNG	No	16.0.1	2023
+DJI	DJI Mavic 3 Pro Telephoto Camera	DNG	No	16.0.1	2023
+DJI	DJI Mavic 3 Pro (Hasselblad L2D-20c)	DNG	No	16.0.1	2023
+DJI	DJI Mavic 3 (Hasselblad L2D-20c)	DNG	No	16.0.1	2023
+DJI	DJI Osmo Pocket 3 D	DNG	No	16.0.1	2023
+DJI	DJI Air 3S Telephoto Camera	DNG	No	17.1	2024
+DJI	DJI Air 3S Wide Camera	DNG	No	17.1	2024
+DJI	DJI Osmo Action 5 Pro	DNG	No	17.1	2024
+DJI	DJI Mavic 4 Pro (DJI FC9284)	DNG	No	18.4	2025
+DJI	DJI Mavic 4 Pro (DJI FC9287)	DNG	No	18.4	2025
+DJI	DJI Mavic 4 Pro (Hasselblad L3D-100c)	DNG	No	18.4	2025
+DxO	DxO ONE	DNG	No	9.2	2015
+Epson	R-D1	ERF	No	2.3	2003
+Epson	R-D1s	ERF	No	3.4	2005
+Epson	R-D1x	ERF	No	5.4	2008
+Fujifilm	GFX 50R	RAF	Yes	10.5	2017
+Fujifilm	GFX 50S	RAF	Yes	9.9	2015
+Fujifilm	GFX 50S II	RAF	Yes	13.4	2020
+Fujifilm	GFX 100	RAF	Yes	11.4	2018
+Fujifilm	GFX 100 II	RAF	Yes	15.5	2022
+Fujifilm	GFX 100 II IR	RAF	Yes	17.5	2024
+Fujifilm	GFX 100 IR	RAF	Yes	13.2	2020
+Fujifilm	GFX 100S	RAF	Yes	13.2	2020
+Fujifilm	GFX 100S II	RAF	Yes	16.2	2023
+Fujifilm	GFX 100RF (Final Support)	RAF	Yes	17.3	2024
+Fujifilm	FinePix E900	RAF	No	3.3	2005
+Fujifilm	FinePix F505 EXR	RAF	No	7.1	2012
+Fujifilm	FinePix F550 EXR	RAF	No	6.4	2010
+Fujifilm	FinePix F600 EXR	RAF	No	6.5	2010
+Fujifilm	FinePix F605 EXR	RAF	No	7.1	2012
+Fujifilm	FinePix F700	RAF	No	2.1	2003
+Fujifilm	FinePix F770 EXR	RAF	No	7.1	2012
+Fujifilm	FinePix F775 EXR	RAF	No	7.1	2012
+Fujifilm	FinePix F800 EXR	RAF	No	7.2	2012
+Fujifilm	FinePix F900 EXR	RAF	No	7.4	2012
+Fujifilm	FinePix HS10	RAF	No	6.2	2010
+Fujifilm	FinePix HS20 EXR	RAF	No	6.4	2010
+Fujifilm	FinePix HS22 EXR	RAF	No	8.2	2013
+Fujifilm	FinePix HS30 EXR	RAF	No	7.1	2012
+Fujifilm	FinePix HS33 EXR	RAF	No	7.1	2012
+Fujifilm	FinePix HS35 EXR	RAF	No	8.2	2013
+Fujifilm	FinePix HS50 EXR	RAF	No	7.4	2012
+Fujifilm	FinePix IS-1	RAF	No	4.2	2007
+Fujifilm	FinePix IS Pro	RAF	No	5.1	2008
+Fujifilm	FinePix S1	RAF	No	8.5	2013
+Fujifilm	FinePix S100fs	RAF	No	4.4	2007
+Fujifilm	FinePix S2 Pro	RAF	No	1.0	2003
+Fujifilm	FinePix S20 Pro	RAF	No	2.3	2003
+Fujifilm	FinePix S200 EXR	RAF	No	6.4	2010
+Fujifilm	FinePix S205 EXR	RAF	No	8.2	2013
+Fujifilm	FinePix S3 Pro	RAF	No	3.0	2005
+Fujifilm	FinePix S5 Pro	RAF	No	4.1	2007
+Fujifilm	FinePix S5000 Z	RAF	No	2.1	2003
+Fujifilm	FinePix S5200 (FinePix S5600)	RAF	No	3.3	2005
+Fujifilm	FinePix S6000fd (FinePix S6500fd)	RAF	No	3.6	2005
+Fujifilm	FinePix S7000 Z	RAF	No	2.1	2003
+Fujifilm	FinePix S9000 (FinePix S9500)	RAF	No	3.3	2005
+Fujifilm	FinePix S9100 (FinePix S9600)	RAF	No	3.6	2005
+Fujifilm	FinePix SL1000	RAF	No	7.4	2012
+Fujifilm	FinePix X10	RAF	Yes	6.6	2010
+Fujifilm	FinePix X100	RAF	Yes	6.4	2010
+Fujifilm	FinePix X-M1	RAF	Yes	8.2	2013
+Fujifilm	FinePix X-S1	RAF	Yes	7.0	2012
+Fujifilm	X100F	RAF	Yes	9.9	2015
+Fujifilm	X100S	RAF	Yes	7.4	2012
+Fujifilm	X100T	RAF	Yes	8.7	2013
+Fujifilm	X100V**	RAF	Yes	12.1	2019
+Fujifilm	X100VI	RAF	Yes	16.2	2023
+Fujifilm	X20	RAF	Yes	7.4	2012
+Fujifilm	X30	RAF	Yes	8.7	2013
+Fujifilm	X70	RAF	Yes	9.4	2015
+Fujifilm	X-A1	RAF	Yes	8.2	2013
+Fujifilm	X-A2	RAF	Yes	9.0	2015
+Fujifilm	X-A3	RAF	Yes	9.8	2015
+Fujifilm	X-A5	RAF	Yes	10.2	2017
+Fujifilm	X-A7	RAF	Yes	11.4.1	2018
+Fujifilm	X-A10	RAF	Yes	9.9	2015
+Fujifilm	X-A20	RAF	Yes	10.2	2017
+Fujifilm	X-E1	RAF	Yes	7.2	2012
+Fujifilm	X-E2	RAF	Yes	8.3	2013
+Fujifilm	X-E2S	RAF	Yes	9.4	2015
+Fujifilm	X-E3	RAF	Yes	10.0	2017
+Fujifilm	X-E4	RAF	Yes	13.2	2020
+Fujifilm	X-E5	RAF	Yes	17.4	2024
+Fujifilm	X-H1	RAF	Yes	10.2	2017
+Fujifilm	X-H2 IR	RAF	Yes	17.5	2024
+Fujifilm	X-H2S	RAF	Yes	14.4	2021
+Fujifilm	X-M5	RAF	Yes	17.0	2024
+Fujifilm	X-Pro1	RAF	Yes	7.1	2012
+Fujifilm	X-Pro2	RAF	Yes	9.4	2015
+Fujifilm	X-Pro3**	RAF	Yes	12.0	2019
+Fujifilm	X-S10	RAF	Yes	13.0	2020
+Fujifilm	X-S20	RAF	Yes	15.3	2022
+Fujifilm	X-T1	RAF	Yes	8.4	2013
+Fujifilm	X-T1 IR	RAF	Yes	9.3	2015
+Fujifilm	X-T2	RAF	Yes	9.6	2015
+Fujifilm	X-T3	RAF	Yes	11.0	2018
+Fujifilm	X-T4**	RAF	Yes	12.2	2019
+Fujifilm	X-T5	RAF	Yes	15.0	2022
+Fujifilm	X-T10	RAF	Yes	9.1	2015
+Fujifilm	X-T20	RAF	Yes	9.9	2015
+Fujifilm	X-T30	RAF	Yes	11.2	2018
+Fujifilm	X-T30 II	RAF	Yes	14.0	2021
+Fujifilm	X-T30 III	RAF	Yes	15.0	2022
+Fujifilm	X-T50	RAF	Yes	16.3	2023
+Fujifilm	X-T100	RAF	Yes	10.4	2017
+Fujifilm	X-T200	RAF	Yes	12.1	2019
+Fujifilm	XF1	RAF	Yes	7.2	2012
+Fujifilm	XF10	RAF	Yes	10.4	2017
+Fujifilm	XQ1	RAF	Yes	8.3	2013
+Fujifilm	XQ2	RAF	Yes	9.0	2015
+Fujifilm	X-H2	RAF	Yes	14.5	2021
+Google	Pixel	DNG	No	9.8	2015
+Google	Pixel XL	DNG	No	9.8	2015
+Google	Pixel 2	DNG	No	10.1	2017
+Google	Pixel 2 XL	DNG	No	10.1	2017
+Google	Pixel 3	DNG	No	11.1	2018
+Google	Pixel 3 Front Standard Camera	DNG	No	11.3	2018
+Google	Pixel 3 Front Wide Camera	DNG	No	11.3	2018
+Google	Pixel 3 XL	DNG	No	11.1	2018
+Google	Pixel 3 XL Front Standard Camera	DNG	No	11.3	2018
+Google	Pixel 3 XL Front Wide Camera	DNG	No	11.3	2018
+Google	Pixel 4	DNG	No	12.1	2019
+Google	Pixel 4 XL	DNG	No	12.1	2019
+Google	Pixel 5 Front Camera	DNG	No	13.1	2020
+Google	Pixel 5 Rear Main Camera	DNG	No	13.1	2020
+Google	Pixel 5 Rear Ultra Wide Camera	DNG	No	13.1	2020
+Google	Pixel 6 Front Camera	DNG	No	14.1	2021
+Google	Pixel 6 Rear Main Camera	DNG	No	14.1	2021
+Google	Pixel 6 Rear Ultrawide Camera	DNG	No	14.1	2021
+Google	Pixel 6 Pro Front Camera	DNG	No	14.1	2021
+Google	Pixel 6 Pro Rear Main Camera	DNG	No	14.1	2021
+Google	Pixel 6 Pro Rear Telephoto Camera	DNG	No	14.1	2021
+Google	Pixel 6 Pro Rear Ultrawide Camera	DNG	No	14.1	2021
+Google	Pixel 7 Front Camera	DNG	No	15.0	2022
+Google	Pixel 7 Ultrawide Camera	DNG	No	15.0	2022
+Google	Pixel 7 Wide Camera	DNG	No	15.0	2022
+Google	Pixel 7 Pro Front Camera	DNG	No	15.0	2022
+Google	Pixel 7 Pro Telephoto Camera	DNG	No	15.0	2022
+Google	Pixel 7 Pro Ultrawide Camera	DNG	No	15.0	2022
+Google	Pixel 7 Pro Wide Camera	DNG	No	15.0	2022
+Google	Pixel 4a Front Camera	DNG	No	15.3	2022
+Google	Pixel 4a Rear Wide Camera	DNG	No	15.3	2022
+Google	Pixel 5a Front Camera	DNG	No	15.3	2022
+Google	Pixel 5a Rear Main Camera	DNG	No	15.3	2022
+Google	Pixel 5a Rear Ultra Wide Camera	DNG	No	15.3	2022
+Google	Pixel 6a Front Camera	DNG	No	15.3	2022
+Google	Pixel 6a Rear Main Camera	DNG	No	15.3	2022
+Google	Pixel 6a Rear Ultrawide Camera	DNG	No	15.3	2022
+Google	Pixel 7a Front Camera	DNG	No	15.4.1	2022
+Google	Pixel 7a Ultrawide Camera	DNG	No	15.4.1	2022
+Google	Pixel 7a Wide Camera	DNG	No	15.4.1	2022
+Google	Pixel 8 Front Camera*	DNG	No	16.0.1	2023
+Google	Pixel 8 Ultrawide Camera*	DNG	No	16.0.1	2023
+Google	Pixel 8 Wide Camera*	DNG	No	16.0.1	2023
+Google	Pixel 8 Pro Front Camera*	DNG	No	16.0.1	2023
+Google	Pixel 8 Pro Telephoto Camera*	DNG	No	16.0.1	2023
+Google	Pixel 8 Pro Ultrawide Camera*	DNG	No	16.0.1	2023
+Google	Pixel 8 Pro Wide Camera*	DNG	No	16.0.1	2023
+Google	Pixel 8a Front Camera	DNG	No	16.4	2023
+Google	Pixel 8a Ultrawide Camera	DNG	No	16.4	2023
+Google	Pixel 8a Wide Camera	DNG	No	16.4	2023
+Google	Pixel 9 Front Camera	DNG	No	16.5	2023
+Google	Pixel 9 Ultrawide Camera	DNG	No	16.5	2023
+Google	Pixel 9 Wide Camera	DNG	No	16.5	2023
+Google	Pixel 9 Pro Front Camera	DNG	No	16.5	2023
+Google	Pixel 9 Pro Telephoto Camera	DNG	No	16.5	2023
+Google	Pixel 9 Pro Ultrawide Camera	DNG	No	16.5	2023
+Google	Pixel 9 Pro Wide Camera	DNG	No	16.5	2023
+Google	Pixel 9 Pro XL Front Camera	DNG	No	16.5	2023
+Google	Pixel Pixel 9 Pro XL Telephoto Camera	DNG	No	16.5	2023
+Google	Pixel Pixel 9 Pro XL Ultrawide Camera	DNG	No	16.5	2023
+Google	Pixel 9 Pro XL Wide Camera	DNG	No	16.5	2023
+Google	Pixel 9 Pro Fold Front Camera	DNG	No	16.5	2023
+Google	Pixel 9 Pro Fold Telephoto Camera	DNG	No	16.5	2023
+Google	Pixel 9 Pro Fold Ultrawide Camera	DNG	No	16.5	2023
+Google	Pixel 9 Pro Fold Wide Camera	DNG	No	16.5	2023
+Google	Pixel 9a Front Camera	DNG	Google Pixel	17.4	2024
+Google	Pixel 9a Ultrawide Camera	DNG	Google Pixel	17.4	2024
+Google	Pixel 9a Wide Camera	DNG	Google Pixel	17.4	2024
+Google	Pixel 10 Pro Front Camera	DNG	No	18.0	2025
+Google	Pixel 10 Pro Telephoto Camera	DNG	No	18.0	2025
+Google	Pixel 10 Pro Ultrawide Camera	DNG	No	18.0	2025
+Google	Pixel 10 Pro Wide Camera	DNG	No	18.0	2025
+Google	Pixel 10 Pro XL Front Camera	DNG	No	18.0	2025
+Google	Pixel 10 Pro XL Telephoto Camera	DNG	No	18.0	2025
+Google	Pixel 10 Pro XL Ultrawide Camera	DNG	No	18.0	2025
+Google	Pixel 10 Pro XL Wide Camera	DNG	No	18.0	2025
+Google	Pixel 10 Front Camera	DNG	Google Pixel	18.1.1	2025
+Google	Pixel 10 Telephoto Camera	DNG	Google Pixel	18.1.1	2025
+Google	Pixel 10 Ultrawide Camera	DNG	Google Pixel	18.1.1	2025
+Google	Pixel 10 Wide Camera	DNG	Google Pixel	18.1.1	2025
+Google	Pixel 10 Pro Fold Front Camera	DNG	Google Pixel	18.1.1	2025
+Google	Pixel 10 Pro Fold Telephoto Camera	DNG	Google Pixel	18.1.1	2025
+Google	Pixel 10 Pro Fold Ultrawide Camera	DNG	Google Pixel	18.1.1	2025
+Google	Pixel 10 Pro Fold Wide Camera	DNG	Google Pixel	18.1.1	2025
+Google	Pixel Fold Inner Camera	DNG	Google Pixel	15.5	2022
+Google	Pixel Fold Telephoto Camera	DNG	Google Pixel	15.5	2022
+Google	Pixel Fold Ultrawide Camera	DNG	Google Pixel	15.5	2022
+Google	Pixel Fold Wide Camera	DNG	Google Pixel	15.5	2022
+GoPro	FUSION	GPR	No	10.1	2017
+GoPro	HERO5 Black	GPR	No	9.7	2015
+GoPro	HERO6 Black	GPR	No	10.1	2017
+GoPro	HERO7 Black	GPR	No	11.1	2018
+GoPro	HERO10 Black	GPR	No	14.1	2021
+GoPro	HERO12 Black	GPR	No	17.0	2024
+GoPro	HERO13 Black	GPR	No	17.0	2024
+GoPro	MISSION 1	GPR	No	18.5	2025
+GoPro	MISSION 1 PRO	GPR	No	18.5	2025
+Hasselblad	503CWD	3FR	No	5.4	2008
+Hasselblad	A6D-100c	3FR	Yes	10.1	2017
+Hasselblad	CF-22	3FR	No	5.4	2008
+Hasselblad	CF-22MS	3FR	No	5.4	2008
+Hasselblad	CF-39	3FR	No	5.4	2008
+Hasselblad	CF-39MS	3FR	No	5.4	2008
+Hasselblad	CFH-22	3FR	No	5.4	2008
+Hasselblad	CFH-39	3FR	No	5.4	2008
+Hasselblad	CFV	3FR	No	5.4	2008
+Hasselblad	CFV-50c	3FR	No	5.4	2008
+Hasselblad	H2D	DNG	No	2.3	2003
+Hasselblad	H2D-22	3FR	No	5.4	2008
+Hasselblad	H2D-39	3FR	No	5.4	2008
+Hasselblad	H3D-22	3FR	No	5.4	2008
+Hasselblad	H3D-39	3FR	No	5.4	2008
+Hasselblad	H3DII-22	3FR	No	5.4	2008
+Hasselblad	H3DII-31	3FR	No	5.4	2008
+Hasselblad	H3DII-39	3FR	No	5.4	2008
+Hasselblad	H3DII-39MS	3FR	No	5.4	2008
+Hasselblad	H3DII-50	3FR	No	5.4	2008
+Hasselblad	H4D-40	3FR	No	6.4	2010
+Hasselblad	H4D-60	3FR	Yes	6.5	2010
+Hasselblad	H5D-40	3FR	No	7.4	2012
+Hasselblad	H5D-50	3FR	No	7.4	2012
+Hasselblad	H5D-50c	3FR, FFF (** see note)	Yes	8.4	2013
+Hasselblad	H5D-60	3FR	No	8.1	2013
+Hasselblad	H6D-100c	3FR	No	9.7	2015
+Hasselblad	HV	ARW	Yes	8.4	2013
+Hasselblad	Lunar	3FR	Yes	7.4	2012
+Hasselblad	Stellar II	3FR	Yes	9.0	2015
+Hasselblad	X1D	3FR	Yes	9.8	2015
+Hasselblad	X2D II 100C (**)	3FR	Yes	17.5	2024
+Hasselblad	X1D II 50C	3FR	Yes	11.4	2018
+Hasselblad	X2D 100C	3FR	Yes	14.3	2021
+Huawei	Honor 20 Pro Rear Main Camera	DNG	No	12.0	2019
+Huawei	Honor 20 Pro Rear Telephoto Camera	DNG	No	12.0	2019
+Huawei	Honor 20 Pro Rear Wide Camera	DNG	No	12.0	2019
+Huawei	Mate 10 Pro	DNG	No	12.0	2019
+Huawei	P30 Rear Main Camera	DNG	No	12.0	2019
+Huawei	P30 Rear Telephoto Camera	DNG	No	12.0	2019
+Huawei	P30 Rear Wide Camera	DNG	No	12.0	2019
+Huawei	P30 Pro Rear Main Camera	DNG	No	12.0	2019
+Huawei	P30 Pro Rear Telephoto Camera	DNG	No	12.0	2019
+Huawei	P30 Pro Rear Wide Camera	DNG	No	12.0	2019
+Huawei	P9 Lite	DNG	No	11.1	2018
+Insta360	Ace Pro 2	DNG	No	18.0	2025
+Insta360	GO Ultra	DNG	No	18.0	2025
+Kodak	DCS 14n	DCR	No	2.1	2003
+Kodak	DCS 720x	DCR	No	2.1	2003
+Kodak	DCS 760	DCR	No	2.1	2003
+Kodak	DCS Pro 14nx	DCR	No	2.2	2003
+Kodak	DCS Pro SLR/n	DCR	No	2.2	2003
+Kodak	EasyShare P712	DCR	No	3.5	2005
+Kodak	EasyShare P850	KDC	No	3.3	2005
+Kodak	EasyShare P880	KDC	No	3.3	2005
+Kodak	EasyShare Z1015 IS	KDC	No	5.1	2008
+Kodak	EasyShare Z980	KDC	No	5.4	2008
+Kodak	EasyShare Z981	RAW	No	6.1	2010
+Kodak	EasyShare Z990	RAW	No	6.4	2010
+Konica Minolta	Alpha-5 Digital (China)	MRW	No	3.2	2005
+Konica Minolta	Alpha Sweet Digital (Japan)	MRW	No	3.2	2005
+Konica Minolta	DiMAGE 5	MRW	No	1.0	2003
+Konica Minolta	DiMAGE 7	MRW	No	1.0	2003
+Konica Minolta	DiMAGE 7i	MRW	No	1.0	2003
+Konica Minolta	DiMAGE 7Hi	MRW	No	1.0	2003
+Konica Minolta	DiMAGE A1	MRW	No	2.0	2003
+Konica Minolta	DiMAGE A2	MRW	No	2.2	2003
+Konica Minolta	DiMAGE A200	MRW	No	2.4	2003
+Konica Minolta	Maxxum 5D Dynax 5D	MRW	No	3.2	2005
+Konica Minolta	Maxxum 7D Dynax 7D	MRW	No	2.4	2003
+Leaf	AFi II 6	MOS	No	5.1	2008
+Leaf	AFi II 7	MOS	No	5.1	2008
+Leaf	Aptus 17	MOS	No	4.2	2007
+Leaf	Aptus 22	MOS	No	3.2	2005
+Leaf	Aptus 54s	MOS	No	4.2	2007
+Leaf	Aptus 65	MOS	No	3.4	2005
+Leaf	Aptus 75	MOS	No	3.4	2005
+Leaf	Aptus 75s	MOS	No	4.2	2007
+Leaf	Aptus-II 5	MOS	No	5.6	2008
+Leaf	Aptus-II 6	MOS	No	5.1	2008
+Leaf	Aptus-II 7	MOS	No	5.1	2008
+Leaf	Aptus-II 8	MOS	No	6.1	2010
+Leaf	Aptus-II 10R	MOS	No	6.1	2010
+Leaf	Aptus-II 12	MOS	No	6.5	2010
+Leaf	Valeo 6	MOS	No	2.0	2003
+Leaf	Valeo 11	MOS	No	2.0	2003
+Leaf	Valeo 17	MOS	No	3.2	2005
+Leaf	Valeo 22	MOS	No	2.1	2003
+Leaf	Credo 40	IIQ	No	7.2	2012
+Leaf	Credo 50	IIQ	No	8.7	2013
+Leaf	Credo 60	IIQ	No	7.2	2012
+Leaf	Credo 80	IIQ	No	7.1	2012
+Leica	C (Typ 112)	RWL	No	8.2	2013
+Leica	CL	DNG	No	10.1	2017
+Leica	C-Lux	DNG	Yes	10.4	2017
+Leica	D-Lux 2	RAW	No	3.2	2005
+Leica	D-Lux 3	RAW	No	3.6	2005
+Leica	D-Lux 4	RWL	No	5.2	2008
+Leica	D-Lux 5	RWL	No	6.4	2010
+Leica	D-Lux 6	RWL	No	7.2	2012
+Leica	D-Lux 7	RWL	Yes	11.1	2018
+Leica	D-Lux (Typ 109)	RWL	No	8.7	2013
+Leica	D-Lux 8	DNG	No	16.4	2023
+Leica	D-Lux 8 "100 Years of Leica"	DNG	No	18.0	2025
+Leica	Digilux 2	RAW	No	2.1	2003
+Leica	Digilux 3	RAW	No	3.6	2005
+Leica	Digital-Modul-R	DNG	No	2.3	2003
+Leica	Leitz Phone 3	DNG	No	16.3	2023
+Leica	M8	DNG	Yes	2.3	2003
+Leica	M9	DNG	No	5.6	2008
+Leica	M10	DNG	No	9.8	2015
+Leica	M10-D	DNG	No	11.1	2018
+Leica	M10-P	DNG	No	11.1	2018
+Leica	M10-R	DNG	No	12.3	2019
+Leica	M11-D	DNG	No	16.3	2023
+Leica	M (Typ 262)	DNG	No	9.4	2015
+Leica	M-D (Typ 262)	DNG	No	9.6	2015
+Leica	M-E	DNG	No	7.3	2012
+Leica	M-EV1	DNG	No	17.5	2024
+Leica	M-P	DNG	No	8.7	2013
+Leica	M Monochrom	DNG	No	7.1	2012
+Leica	M Monochrom (Typ 246)	DNG	No	9.0	2015
+Leica	M10 Monochrom	DNG	No	12.2	2019
+Leica	M11	DNG	No	13.4	2020
+Leica	M11 MONOCHROM	DNG	No	15.0	2022
+Leica	M11-P	DNG	No	16.0	2023
+Leica	Q (Typ 116)	DNG	No	9.1.1	2015
+Leica	Q2	DNG	No	11.2	2018
+Leica	Q2 Monochrom	DNG	No	13.0	2020
+Leica	Q3	DNG	No	15.3	2022
+Leica	Q3 43	DNG	No	16.4	2023
+Leica	Q3 Monochrom	DNG	No	18.0	2025
+Leica	S2	DNG	No	6.2	2010
+Leica	S (Typ 007)	DNG	No	9.2	2015
+Leica	S3	DNG	No	12.2.1	2019
+Leica	SL (Typ 601)	DNG	No	9.3	2015
+Leica	SL2	DNG	No	12.1	2019
+Leica	SL2-S	DNG	No	13.0	2020
+Leica	SL3	DNG	No	16.2	2023
+Leica	SL3-P	DNG	No	18.2	2025
+Leica	SL3-S	DNG	No	17.0	2024
+Leica	T (Typ 701)	DNG	No	8.3	2013
+Leica	TL	DNG	No	9.8	2015
+Leica	TL2	DNG	No	9.12	2015
+Leica	V-LUX 1	RAW	No	3.6	2005
+Leica	V-LUX 2	RAW	No	6.4	2010
+Leica	V-LUX 3	RAW	No	6.6	2010
+Leica	V-LUX 4	RWL	No	7.2	2012
+Leica	V-LUX 5	RWL	Yes	11.4	2018
+Leica	V-LUX (Typ 114)	RWL	No	8.7	2013
+Leica	X2	RWL	No	7.1	2012
+Leica	X (Typ 113)	DNG	No	8.7	2013
+Leica	X-U (Typ 113)	DNG	No	9.4	2015
+LG	G7 ThinQ	DNG	No	11.1	2018
+LG	G8 ThinQ Front Camera	DNG	No	12.2	2019
+LG	G8 ThinQ Rear Main Camera	DNG	No	12.2	2019
+LG	G8 ThinQ Rear Wide Camera	DNG	No	12.2	2019
+LG	V40 ThinQ Front Standard Camera	DNG	No	11.3	2018
+LG	V40 ThinQ Rear Main Camera	DNG	No	11.3	2018
+LG	V40 ThinQ Rear Wide Camera	DNG	No	11.3	2018
+LG	V50s ThinQ Front Camera	DNG	No	12.2	2019
+LG	V50s ThinQ Rear Main Camera	DNG	No	12.2	2019
+LG	V50s ThinQ Rear Wide Camera	DNG	No	12.2	2019
+LG	V60 ThinQ Front Camera	DNG	No	13.1	2020
+LG	V60 ThinQ Rear Main Camera	DNG	No	13.1	2020
+LG	Velvet Front Camera	DNG	No	13.1	2020
+LG	Velvet Rear Main Camera	DNG	No	13.1	2020
+LG	Velvet Rear Wide Camera	DNG	No	13.1	2020
+LG	Wing Rear Main Camera	DNG	No	13.1	2020
+LG	Wing Front Camera	DNG	No	13.1	2020
+LG	Wing Rear Wide Camera	DNG	No	13.1	2020
+Light	L16	DNG	No	10.1	2017
+Mamiya	Mamiya DM22	MOS	No	5.6	2008
+Mamiya	Mamiya DM28	MOS	No	5.6	2008
+Mamiya	Mamiya DM33	MOS	No	5.6	2008
+Mamiya	Mamiya DM56	MOS	No	5.6	2008
+Mamiya	Mamiya M18	TIF, IIQ	No	5.6	2008
+Mamiya	Mamiya M22	TIF, IIQ	No	5.6	2008
+Mamiya	Mamiya M31	TIF, IIQ	No	5.6	2008
+Mamiya	Mamiya DM40	MOS	No	6.1	2010
+Mamiya	ZD	MEF, MFW	No	3.3	2005
+Motorola	Moto G Power (2021) Front Camera	DNG	No	14.0	2021
+Motorola	Moto G Power (2021) Rear Macro Camera	DNG	No	14.0	2021
+Motorola	Moto G Power (2021) Rear Wide Camera	DNG	No	14.0	2021
+Nikon	1 J1	NEF	Yes	6.6	2010
+Nikon	1 J2	NEF	Yes	7.2	2012
+Nikon	1 J3	NEF	Yes	7.4	2012
+Nikon	1 J4	NEF	Yes	8.5	2013
+Nikon	1 J5	NEF	Yes	9.1	2015
+Nikon	1 S1	NEF	Yes	7.4	2012
+Nikon	1 S2	NEF	No	8.5	2013
+Nikon	1 V1	NEF	Yes	6.6	2010
+Nikon	1 V2	NEF	Yes	7.3	2012
+Nikon	1 V3	NEF	Yes	8.5	2013
+Nikon	COOLPIX 5000	NEF	No	1.0	2003
+Nikon	COOLPIX 5400	NEF	No	2.3	2003
+Nikon	COOLPIX 5700	NEF	No	1.0	2003
+Nikon	COOLPIX 8400	NEF	No	3.2	2005
+Nikon	COOLPIX 8700	NEF	No	2.2	2003
+Nikon	COOLPIX 8800	NEF	No	3.2	2005
+Nikon	COOLPIX A	NEF	Yes	7.4	2012
+Nikon	COOLPIX A1000	NRW	No	11.2	2018
+Nikon	COOLPIX B700	NRW	Yes	9.6	2015
+Nikon	COOLPIX P330	NRW	No	7.4	2012
+Nikon	COOLPIX P340	NRW	No	8.4	2013
+Nikon	COOLPIX P1000	NRW	Yes	11.1	2018
+Nikon	COOLPIX P1100	NRW	Yes	17.2	2024
+Nikon	COOLPIX P6000	NRW	No	5.1	2008
+Nikon	COOLPIX P7000	NRW	No	6.3	2010
+Nikon	COOLPIX P7100	NRW	No	6.5	2010
+Nikon	COOLPIX P7700	NRW	No	7.2	2012
+Nikon	COOLPIX P7800	NRW	No	8.3	2013
+Nikon	COOLPIX P950	NEF	Yes	12.2	2019
+Nikon	D1	NEF	Yes	1.0	2003
+Nikon	D1H	NEF	Yes	1.0	2003
+Nikon	D1X	NEF	Yes	1.0	2003
+Nikon	D2H	NEF	Yes	2.1	2003
+Nikon	D2Hs	NEF	Yes	3.2	2005
+Nikon	D2X	NEF	Yes	3.1	2005
+Nikon	D2Xs	NEF	Yes	3.5	2005
+Nikon	D3	NEF	Yes	4.3	2007
+Nikon	D3s	NEF	Yes	5.6	2008
+Nikon	D3X	NEF	Yes	5.3	2008
+Nikon	D4	NEF	Yes	7.1	2012
+Nikon	D4S	NEF	Yes	8.4	2013
+Nikon	D5	NEF	Yes	9.5	2015
+Nikon	D40	NEF	Yes	3.7	2005
+Nikon	D40x	NEF	Yes	4.0	2007
+Nikon	D50	NEF	Yes	3.2	2005
+Nikon	D60	NEF	Yes	4.4	2007
+Nikon	D6	NEF	Yes	12.2.1	2019
+Nikon	D70	NEF	Yes	3.0	2005
+Nikon	D70S	NEF	Yes	3.2	2005
+Nikon	D80	NEF	Yes	3.6	2005
+Nikon	D90	NEF	Yes	5.1	2008
+Nikon	D100	NEF	Yes	1.0	2003
+Nikon	D200	NEF	Yes	3.3	2005
+Nikon	D300	NEF	Yes	4.3	2007
+Nikon	D300s	NEF	Yes	5.5	2008
+Nikon	D500	NEF	Yes	9.5	2015
+Nikon	D600	NEF	Yes	7.3	2012
+Nikon	D610	NEF	Yes	8.3	2013
+Nikon	D700	NEF	Yes	5.1	2008
+Nikon	D750	NEF	Yes	8.7	2013
+Nikon	D780	NEF	Yes	12.2	2019
+Nikon	D800	NEF	Yes	7.1	2012
+Nikon	D800E	NEF	Yes	7.1	2012
+Nikon	D810	NEF	Yes	8.6	2013
+Nikon	D810A	NEF	Yes	9.1	2015
+Nikon	D850	NEF	Yes	9.12.1	2015
+Nikon	D3000	NEF	Yes	5.5	2008
+Nikon	D3100	NEF	Yes	6.3	2010
+Nikon	D3200	NEF	Yes	7.1	2012
+Nikon	D3300	NEF	Yes	8.4	2013
+Nikon	D3400	NEF	Yes	9.7	2015
+Nikon	D3500	NEF	Yes	11.1	2018
+Nikon	D5000	NEF	Yes	5.4	2008
+Nikon	D5100	NEF	Yes	6.4	2010
+Nikon	D5200	NEF	Yes	7.3	2012
+Nikon	D5300	NEF	Yes	8.3	2013
+Nikon	D5500	NEF	Yes	9.0	2015
+Nikon	D5600	NEF	Yes	9.8	2015
+Nikon	D7000	NEF	Yes	6.3	2010
+Nikon	D7100	NEF	Yes	7.4	2012
+Nikon	D7200	NEF	Yes	9.0	2015
+Nikon	D7500	NEF	Yes	9.12	2015
+Nikon	Df	NEF	Yes	8.3	2013
+Nikon	Z 30	NEF	Yes	14.4	2021
+Nikon	Z 50	NEF	Yes	12.1	2019
+Nikon	Z 50 II	NEF	Yes	17.1	2024
+Nikon	Z 5	NEF	Yes	12.4	2019
+Nikon	Z 5 2	NEF	Yes	17.3	2024
+Nikon	Z 5 2C	NEF	Yes	18.5	2025
+Nikon	Z 6	NEF	Yes	11.1	2018
+Nikon	Z 6 II	NEF	Yes	13.1	2020
+Nikon	Z 6 III	NEF	Yes	16.3	2023
+Nikon	Z 7	NEF	Yes	11.0	2018
+Nikon	Z 7 II	NEF	Yes	13.1	2020
+Nikon	Z 8	NEF	Yes	15.3	2022
+Nikon	Z 9 (*See note)	NEF	Yes	14.0	2021
+Nikon	Z fc	NEF	Yes	13.4	2020
+Nikon	Z f	NEF	Yes	15.5	2022
+Nikon	ZR	NEF	Yes	17.5.1	2024
+Nokia	Lumia 1020	DNG	No	8.3	2013
+Nokia	HMD Global Nokia 9 PureView Front Camera	DNG	No	11.3	2018
+Nokia	HMD Global Nokia 9 PureView Rear Camera	DNG	No	11.3	2018
+OM Digital Solutions	OM System OM-1	ORF	Yes	14.2	2021
+OM Digital Solutions	OM System OM-5	ORF	Yes	15.0	2022
+OM Digital Solutions	OM System TG - 7	ORF	Yes	16.0	2023
+OM Digital Solutions	OM System OM-1 MARK II	ORF	Yes	16.2	2023
+OM Digital Solutions	OM System OM-3	ORF	Yes	17.2	2024
+OM Digital Solutions	OM-5 Mark II	ORF/ORI	Yes	17.4.1	2024
+OM Digital Solutions	OM-3 Astro	ORF/ORI	Yes	18.2	2025
+Olympus	AIR A01	ORF	Yes	9.1.1	2015
+Olympus	Camedia C-5050 Zoom	ORF	No	1.0	2003
+Olympus	Camedia C-5060 Zoom	ORF	No	2.1	2003
+Olympus	Camedia C-7070 Wide Zoom	ORF	No	3.1	2005
+Olympus	Camedia C-8080 Wide Zoom	ORF	No	2.2	2003
+Olympus	E-1	ORF	No	2.1	2003
+Olympus	E-3	ORF	No	4.3	2007
+Olympus	E-5	ORF	Yes	6.3	2010
+Olympus	E-10	ORF	No	1.0	2003
+Olympus	E-20	ORF	No	1.0	2003
+Olympus	E-30	ORF	No	5.3	2008
+Olympus	E-420	ORF	No	5.0	2008
+Olympus	E-450	ORF	No	5.4	2008
+Olympus	E-520	ORF	No	5.0	2008
+Olympus	E-600	ORF	No	6.1	2010
+Olympus	E-620	ORF	No	5.4	2008
+Olympus	EVOLT E-300	ORF	No	3.1	2005
+Olympus	EVOLT E-330	ORF	No	3.4	2005
+Olympus	EVOLT E-400	ORF	No	3.6	2005
+Olympus	EVOLT E-410	ORF	No	4.1	2007
+Olympus	EVOLT E-500	ORF	No	3.3	2005
+Olympus	EVOLT E-510	ORF	No	4.2	2007
+Olympus	OM-D E-M1	ORF	Yes	8.3	2013
+Olympus	OM-D E-M1X	ORF	Yes	11.2	2018
+Olympus	OM-D E-M1 Mark II	ORF	Yes	9.9	2015
+Olympus	OM-D E-M1 Mark III	ORF	Yes	12.2	2019
+Olympus	OM-D E-M5	ORF	Yes	7.1	2012
+Olympus	OM-D E-M5 Mark II	ORF	Yes	9.0	2015
+Olympus	OM-D E-M5 Mark III	ORF	Yes	12.0	2019
+Olympus	OM-D E-M10	ORF	Yes	8.5	2013
+Olympus	OM-D E-M10 Mark II	ORF	Yes	9.2	2015
+Olympus	OM-D E-M10 Mark III	ORF	Yes	10.0	2017
+Olympus	OM-D E-M10 Mark III S	ORF	Yes	12.4	2019
+Olympus	OM-D E-M10 Mark IV	ORF	Yes	12.4	2019
+Olympus	PEN E-P1	ORF	Yes	5.5	2008
+Olympus	PEN E-P2	ORF	Yes	5.6	2008
+Olympus	PEN E-P3	ORF	Yes	6.5	2010
+Olympus	PEN E-P5	ORF	Yes	8.1	2013
+Olympus	PEN E-P7	ORF	Yes	13.3	2020
+Olympus	PEN E-PL1	ORF	Yes	6.1	2010
+Olympus	PEN E-PL1s	ORF	Yes	6.4	2010
+Olympus	PEN E-PL10	ORF	Yes	12.0	2019
+Olympus	PEN E-PL2	ORF	Yes	6.4	2010
+Olympus	PEN E-PL3	ORF	Yes	6.5	2010
+Olympus	PEN E-PL6	ORF	Yes	8.1	2013
+Olympus	PEN E-PL5	ORF	Yes	7.3	2012
+Olympus	PEN E-PL7	ORF	Yes	8.7	2013
+Olympus	PEN E-PL8	ORF	Yes	9.8	2015
+Olympus	PEN E-PL9	ORF	Yes	10.2	2017
+Olympus	PEN E-PM1	ORF	Yes	6.5	2010
+Olympus	PEN E-PM2	ORF	Yes	7.3	2012
+Olympus	PEN-F	ORF	Yes	9.5	2015
+Olympus	SP-310	ORF	No	3.3	2005
+Olympus	SP-320	ORF	No	3.4	2005
+Olympus	SP-350	ORF	No	3.3	2005
+Olympus	SP-500 UZ	ORF	No	3.3	2005
+Olympus	SP-510 UZ	ORF	No	3.6	2005
+Olympus	SP-550 UZ	ORF	No	4.1	2007
+Olympus	SP-560 UZ	ORF	No	4.3	2007
+Olympus	SP-565 UZ	ORF	No	5.1	2008
+Olympus	SP-570 UZ	ORF	No	4.4	2007
+Olympus	Stylus 1	ORF	Yes	8.3	2013
+Olympus	Stylus 1s	ORF	Yes	8.7	2013
+Olympus	Stylus SH-2	ORF	Yes	9.0	2015
+Olympus	Stylus SH-3	ORF	Yes	9.5	2015
+Olympus	Stylus Tough TG-4	ORF	Yes	9.0	2015
+Olympus	Stylus Tough TG-5	ORF	Yes	9.12	2015
+Olympus	Stylus Tough TG-6	ORF	Yes	11.3	2018
+Olympus	Stylus XZ-2 iHS	ORF	Yes	7.3	2012
+Olympus	Stylus XZ-10	ORF	Yes	7.4	2012
+Olympus	XZ-1	ORF	Yes	6.4	2010
+OnePlus	7T Front Camera	DNG	No	12.2	2019
+OnePlus	7T Rear Main Camera	DNG	No	12.2	2019
+OnePlus	8 Front Camera	DNG	No	13.1	2020
+OnePlus	8 Rear Main Camera	DNG	No	13.1	2020
+OnePlus	8 Pro Front Camera	DNG	No	13.1	2020
+OnePlus	8 Pro Rear Main Camera	DNG	No	13.1	2020
+OnePlus	12 Telephoto Camera	DNG	No	16.1.1	2023
+OnePlus	12 Ultrawide Camera	DNG	No	16.1.1	2023
+OnePlus	12 Wide Camera	DNG	No	16.1.1	2023
+Oppo	Find X7 Telephoto Camera	DNG	No	16.1.1	2023
+Oppo	Find X7 Ultrawide Camera	DNG	No	16.1.1	2023
+Oppo	Find X7 Wide Camera	DNG	No	16.1.1	2023
+Oppo	Find X7 Ultra Super Telephoto Camera	DNG	No	16.1.1	2023
+Oppo	Find X7 Ultra Telephoto Camera	DNG	No	16.1.1	2023
+Oppo	Find X7 Ultra Ultrawide Camera	DNG	No	16.1.1	2023
+Oppo	Find X7 Ultra Wide Camera	DNG	No	16.1.1	2023
+Oppo	Find X8 Ultra Super Telephoto Camera	DNG	No	18.0	2025
+Oppo	Find X8 Ultra Telephoto Camera	DNG	No	18.0	2025
+Oppo	Find X8 Ultra Ultrawide Camera	DNG	No	18.0	2025
+Oppo	Find X8 Ultra Wide Camera	DNG	No	18.0	2025
+Oppo	Find X8 Telephoto Camera	DNG	No	18.2	2025
+Oppo	Find X8 Ultrawide Camera	DNG	No	18.2	2025
+Oppo	Find X8 Wide Camera	DNG	No	18.2	2025
+Oppo	Find X8s Telephoto Camera	DNG	No	18.2	2025
+Oppo	Find X8s Ultrawide Camera	DNG	No	18.2	2025
+Oppo	Find X8s Wide Camera	DNG	No	18.2	2025
+Oppo	Find X8s+ Telephoto Camera	DNG	No	18.2	2025
+Oppo	Find X8s+ Ultrawide Camera	DNG	No	18.2	2025
+Oppo	Find X8s+ Wide Camera	DNG	No	18.2	2025
+Oppo	Find X8 Pro Super Telephoto Camera	DNG	No	18.2	2025
+Oppo	Find X8 Pro Telephoto Camera	DNG	No	18.2	2025
+Oppo	Find X8 Pro Ultrawide Camera	DNG	No	18.2	2025
+Oppo	Find X8 Pro Wide Camera	DNG	No	18.2	2025
+Oppo	Find X9 Telephoto Camera	DNG	No	18.3.1	2025
+Oppo	Find X9 Ultrawide Camera	DNG	No	18.3.1	2025
+Oppo	Find X9 Wide Camera	DNG	No	18.3.1	2025
+Oppo	Find X9 Pro Telephoto Camera	DNG	No	18.3.1	2025
+Oppo	Find X9 Pro Ultrawide Camera	DNG	No	18.3.1	2025
+Oppo	Find X9 Pro Wide Camera	DNG	No	18.3.1	2025
+Oppo	Find X9s Pro Telephoto Camera	DNG	No	18.3.1	2025
+Oppo	Find X9s Pro Ultrawide Camera	DNG	No	18.3.1	2025
+Oppo	Find X9s Pro Wide Camera	DNG	No	18.3.1	2025
+Oppo	Find X9 Ultra Super Telephoto Camera	DNG	No	18.3.1	2025
+Oppo	Find X9 Ultra Telephoto Camera	DNG	No	18.3.1	2025
+Oppo	Find X9 Ultra Ultrawide Camera	DNG	No	18.3.1	2025
+Oppo	Find X9 Ultra Wide Camera	DNG	No	18.3.1	2025
+Panasonic	LUMIX AG-GH4	RW2	No	8.5	2013
+Panasonic	LUMIX DC-FZ80 (DC-FZ82, DC-FZ85)	RW2	Yes	9.9	2015
+Panasonic	LUMIX DC-FZ80D (DC-FZ82D, DC-FZ85D)	RW2	Yes	16.4	2023
+Panasonic	LUMIX DC-FZ81 (DC-FZ83)	RW2	Yes	9.10.1	2015
+Panasonic	LUMIX DC-FZ1000M2 (DC-FZ10002)	RW2	Yes	11.2.1	2018
+Panasonic	LUMIX DC-G100 (DC-G110)	RW2	Yes	12.4	2019
+Panasonic	LUMIX DC-G9	RW2	Yes	10.1	2017
+Panasonic	LUMIX DC-G99 (DC-G90, DC-G91, DC-G95)	RW2	Yes	11.3	2018
+Panasonic	LUMIX DC-GF9 (DC-GX850, DC-GX800)	RW2	Yes	9.9	2015
+Panasonic	LUMIX DC-GF10 (DC-GF90)	RW2	Yes	10.2	2017
+Panasonic	LUMIX DC-GH5	RW2	Yes	9.9	2015
+Panasonic	LUMIX DC-GH5M2	RW2	Yes	13.3	2020
+Panasonic	LUMIX DC-GH5s	RW2	Yes	10.2	2017
+Panasonic	LUMIX DC-GH6	RW2	Yes	14.3	2021
+Panasonic	LUMIX DC-GH7	RW2	Yes	16.4	2023
+Panasonic	LUMIX DC-GX880	RW2	Yes	11.4	2018
+Panasonic	LUMIX DC-LX100 II	RW2	Yes	11.0	2018
+Panasonic	LUMIX DC-S1	RW2	Yes	11.2.1	2018
+Panasonic	LUMIX DC-S1H	RW2	Yes	11.4.1	2018
+Panasonic	LUMIX DC-S1R	RW2	Yes	11.2.1	2018
+Panasonic	LUMIX DC-S5	RW2	Yes	13.0	2020
+Panasonic	LUMIX DC-S9	RW2	Yes	16.4	2023
+Panasonic	LUMIX DC-ZS70 (DC-TZ90, DC-TZ91, DC-TZ92, DC-TZ93)	RW2	Yes	9.10.1	2015
+Panasonic	LUMIX DC-ZS80 (DC-TZ95, DC-TZ96, DC-TZ97)	RW2	Yes	11.2.1	2018
+Panasonic	LUMIX DMC-CM1	RW2	No	8.7	2013
+Panasonic	LUMIX DMC-CM10	RW2	No	9.5	2015
+Panasonic	LUMIX DMC-FZ1000	RW2	Yes	8.6	2013
+Panasonic	LUMIX DMC-FX150	RW2	No	5.2	2008
+Panasonic	LUMIX DMC-FZ8	RAW	No	4.0	2007
+Panasonic	LUMIX DMC-FZ18	RAW	No	4.2	2007
+Panasonic	LUMIX DMC-FZ28	RW2	No	5.2	2008
+Panasonic	LUMIX DMC-FZ30	RAW	No	3.2	2005
+Panasonic	LUMIX DMC-FZ35	RW2	No	5.5	2008
+Panasonic	LUMIX DMC-FZ38	RW2	No	5.6	2008
+Panasonic	LUMIX DMC-FZ40 (DMC-FZ45)	RW2	No	6.2	2010
+Panasonic	LUMIX DMC-FZ50	RAW	No	3.5	2005
+Panasonic	LUMIX DMC-FZ70	RW2	No	8.2	2013
+Panasonic	LUMIX DMC-FZ72	RW2	No	8.2	2013
+Panasonic	LUMIX DMC-FZ100	RW2	No	6.2	2010
+Panasonic	LUMIX DMC-FZ150	RW2	No	6.5	2010
+Panasonic	LUMIX DMC-FZ200	RW2	No	7.2	2012
+Panasonic	LUMIX DMC-FZ2500 (DMC-FZ2000, DMC-FZH1)	RW2	Yes	9.8	2015
+Panasonic	LUMIX DMC-FZ300	RW2	Yes	9.1.1	2015
+Panasonic	LUMIX DMC-FZ330	RW2	Yes	9.1.1	2015
+Panasonic	LUMIX DMC-G1	RW2	No	5.2	2008
+Panasonic	LUMIX DMC-G2	RW2	No	6.1	2010
+Panasonic	LUMIX DMC-G3	RW2	No	6.5	2010
+Panasonic	LUMIX DMC-G5	RW2	No	7.2	2012
+Panasonic	LUMIX DMC-G6	RW2	No	8.1	2013
+Panasonic	LUMIX DMC-G7	RW2	Yes	9.1	2015
+Panasonic	LUMIX DMC-G8 (DMC-G80, DMC-G81, DMC-G85)	RW2	Yes	9.7	2015
+Panasonic	LUMIX DMC-G10	RW2	No	6.1	2010
+Panasonic	LUMIX DMC-GF1	RW2	No	5.5	2008
+Panasonic	LUMIX DMC-GF2	RW2	No	6.3	2010
+Panasonic	LUMIX DMC-GF3	RW2	No	6.5	2010
+Panasonic	LUMIX DMC-GF5	RW2	No	7.1	2012
+Panasonic	LUMIX DMC-GF6	RW2	No	7.4	2012
+Panasonic	LUMIX DMC-GF7	RW2	No	9.0	2015
+Panasonic	LUMIX DMC-GF8	RW2	No	9.5	2015
+Panasonic	LUMIX DMC-GH1	RW2	No	5.4	2008
+Panasonic	LUMIX DMC-GH2	RW2	No	6.3	2010
+Panasonic	LUMIX DMC-GH3	RW2	No	7.3	2012
+Panasonic	LUMIX DMC-GH4	RW2	Yes	8.6	2013
+Panasonic	LUMIX DMC-GM1	RW2	No	8.3	2013
+Panasonic	LUMIX DMC-GM1S	RW2	No	8.7	2013
+Panasonic	LUMIX DMC-GM5	RW2	No	8.7	2013
+Panasonic	LUMIX DMC-GX1	RW2	No	6.6	2010
+Panasonic	LUMIX DMC-GX7	RW2	No	8.2	2013
+Panasonic	LUMIX DMC-GX8	RW2	Yes	9.1.1	2015
+Panasonic	LUMIX DMC-GX85 (DMC-GX80, DMC-GX7MK2)	RW2	Yes	9.6	2015
+Panasonic	LUMIX DC-GX9 (DC-GX7MK3)	RW2	Yes	10.3	2017
+Panasonic	LUMIX DMC-L1	RAW	No	3.5	2005
+Panasonic	LUMIX DMC-L10	RAW	No	4.3	2007
+Panasonic	LUMIX DMC-LC1	RAW	No	2.1	2003
+Panasonic	LUMIX DMC-LF1	RW2	No	8.1	2013
+Panasonic	LUMIX DMC-LX1	RAW	No	3.2	2005
+Panasonic	LUMIX DMC-LX2	RAW	No	3.6	2005
+Panasonic	LUMIX DMC-LX3	RW2	No	5.2	2008
+Panasonic	LUMIX DMC-LX5	RW2	No	6.2	2010
+Panasonic	LUMIX DMC-LX7	RW2	No	7.2	2012
+Panasonic	LUMIX DMC-LX9 (DMC-LX10, DMC-LX15)	RW2	Yes	9.7	2015
+Panasonic	LUMIX DMC-LX100	RW2	Yes	8.7	2013
+Panasonic	LUMIX DMC-TZ82	RW2	Yes	9.8	2015
+Panasonic	LUMIX DMC-ZS40 (DMC-TZ60, DMC-TZ61)	RW2	No	8.4	2013
+Panasonic	LUMIX DMC-ZS50 (DMC-TZ70, DMC-TZ71)	RW2	No	9.0	2015
+Panasonic	LUMIX DMC-ZS60 (DMC-TZ80, DMC-TZ81, DMC-TZ85)	RW2	Yes	9.4	2015
+Panasonic	LUMIX DMC-ZS100 (DMC-ZS110, DMC-TZ100, DMC-TZ101, DMC-TZ110, DMC-TX1)	RW2	Yes	9.5	2015
+Panasonic	LUMIX ZS200 (DC-TX2, DC-TZ200, DC-TZ202, DC-TZ220, DC-ZS220)	RW2	Yes	10.3	2017
+Panasonic	LUMIX DC-G95D	RW2	Yes	14.5	2021
+Panasonic	LUMIX DC-G99D	RW2	Yes	14.4	2021
+Panasonic	LUMIX DC-TX2D (DC-TZ200D, DC-TZ202D, DC-TZ220D, DC-ZS200D, DC-ZS220D)	RW2	Yes	15.0	2022
+Panasonic	LUMIX DC-ZS80D (DC-TZ95D, DC-TZ96D)	RW2	Yes	15.1	2022
+Panasonic	LUMIX DC-S5M2	RW2	Yes	15.2	2022
+Panasonic	LUMIX DC-S5M2X	RW2	Yes	15.3	2022
+Panasonic	LUMIX DCG9M2	RW2	Yes	16.0	2023
+Panasonic	LUMIX DC-G100D	RW2	Yes	16.1	2023
+Panasonic	LUMIX DC-S5D	RW2	Yes	17.0	2024
+Panasonic	LUMIX DC - G97 (DC-G99M2)	RW2	Yes	17.2	2024
+Panasonic	LUMIX DC - TZ99 (DC - ZS99)	RW2	Yes	17.2	2024
+Panasonic	LUMIX DC-S1RM2 (Final Support)	RW2	Yes	17.3	2024
+Panasonic	LUMIX DC-S1M2ES (Final Support)	RW2	Yes	17.4	2024
+Panasonic	LUMIX DC-S1M2	RW2	Yes	17.4	2024
+Panasonic	LUMIX DC-ZS300 (DC-TZ300, DC-TX3)	RW2	Yes	18.3	2025
+Panasonic	LUMIX DC-L10	RW2	Yes	18.3	2025
+Parrot	Anafi	DNG	No	10.5	2017
+Parrot	ANAFI Ai	DNG	No	13.4	2020
+Pentax	645D	DNG, PEF	No	6.2	2010
+Pentax	645Z	DNG, PEF	Yes	8.5	2013
+Pentax	*ist D	PEF	No	2.1	2003
+Pentax	*ist DL	PEF	No	3.3	2005
+Pentax	*ist DL2	PEF	No	3.4	2005
+Pentax	*ist DS	PEF	No	3.2	2005
+Pentax	*ist DS2	PEF	No	3.3	2005
+Pentax	K-01	DNG	No	7.1	2012
+Pentax	K-1	DNG, PEF	Yes	9.5.1	2015
+Pentax	K-1 II (* see note)	DNG, PEF	Yes	10.4	2017
+Pentax	K-3	DNG, PEF	No	8.3	2013
+Pentax	K-3 II († see note)	DNG, PEF	Yes	9.1.1	2015
+Pentax	K-5	DNG, PEF	No	6.3	2010
+Pentax	K-5 II	DNG, PEF	No	7.3	2012
+Pentax	K-5 IIs	DNG, PEF	No	7.3	2012
+Pentax	K-7	PEF	Yes	5.4	2008
+Pentax	K-3 Mark III	DNG, PEF	Yes	13.3	2020
+Pentax	K-3 Mark III Monochrome	DNG/PEF	No	15.4	2022
+Pentax	K-30	DNG	No	7.2	2012
+Pentax	K-50	DNG	No	8.2	2013
+Pentax	K-70	PEF	No	9.8	2015
+Pentax	K-500	DNG	No	8.2	2013
+Pentax	KP	DNG, PEF	No	9.10	2015
+Pentax	K-r	PEF	No	6.3	2010
+Pentax	K-S1	DNG, PEF	No	8.7	2013
+Pentax	K-S2	DNG, PEF	No	9.1	2015
+Pentax	K-x	PEF	No	5.6	2008
+Pentax	K10D	DNG, PEF	Yes	3.7	2005
+Pentax	K20D	DNG, PEF	Yes	4.4	2007
+Pentax	K100D	PEF	No	3.6	2005
+Pentax	K100D Super	PEF	No	4.2	2007
+Pentax	K110D	PEF	No	3.6	2005
+Pentax	K200D	DNG, PEF	Yes	4.4	2007
+Pentax	K2000 K-m	PEF	No	5.1	2008
+Pentax	KF	PEF, DNG	No	15.1	2022
+Pentax	MX-1	DNG	No	7.4	2012
+Pentax	Q	DNG	No	6.5	2010
+Pentax	Q7	DNG	No	8.2	2013
+Pentax	Q10	DNG, PEF	No	7.3	2012
+Pentax	QS-1	DNG	No	8.7	2013
+Pixii	PIXII Camera (A1571)	DNG	No	14.1	2021
+Phase One	H 20	TIF	No	4.1	2007
+Phase One	H 25	TIF	No	4.1	2007
+Phase One	IQ 140	IIQ	No	6.5	2010
+Phase One	IQ 160	IIQ	No	6.5	2010
+Phase One	IQ 150	IIQ	No	9.4	2015
+Phase One	IQ 180	IIQ	No	6.5	2010
+Phase One	IQ 250	IIQ	No	8.4	2013
+Phase One	IQ 260	IIQ	No	8.3	2013
+Phase One	IQ 280	IIQ	No	8.3	2013
+Phase One	IQ3 50MP	IIQ	No	9.1.1	2015
+Phase One	IQ3 60MP	IIQ	No	9.1.1	2015
+Phase One	IQ3 80MP	IIQ	No	9.1.1	2015
+Phase One	IQ3 100MP	IIQ	No	9.9	2015
+Phase One	IQ3 100MP Trichromatic (*see note)	IIQ	No	10.4	2017
+Phase One	IQ4 150MP (**see note)	IIQ	No	12.2	2019
+Phase One	IQ4 150MP Achromatic (** see note)	IIQ	No	13.2	2020
+Phase One	P 20	TIF	No	4.1	2007
+Phase One	P 20+	TIF	No	4.2	2007
+Phase One	P 21	TIF	No	4.1	2007
+Phase One	P 21+	TIF	No	4.2	2007
+Phase One	P 25	TIF	No	4.1	2007
+Phase One	P 25+	TIF	No	4.2	2007
+Phase One	P 30	TIF	No	4.1	2007
+Phase One	P 30+	TIF	No	4.2	2007
+Phase One	P 40+	IIQ	No	6.5	2010
+Phase One	P 45	TIF	No	4.1	2007
+Phase One	P 45+	TIF	No	4.2	2007
+Phase One	P 65+	IIQ	No	6.5	2010
+Ricoh	GR	DNG	No	8.1	2013
+Ricoh	GR II	DNG	No	9.1.1	2015
+Ricoh	GR III	DNG	Yes	11.3	2018
+Ricoh	GR IIIx	DNG	Yes	14.1	2021
+Ricoh	GR III HDF	DNG	Yes	16.3	2023
+Ricoh	GR IIIx HDF	DNG	Yes	16.3	2023
+Ricoh	GR IV	DNG	Yes	17.5	2024
+Ricoh	GR IV Monochrome	DNG	No	18.2	2025
+Ricoh	GR Digital	DNG	No	2.3	2003
+Ricoh	GR Digital II	DNG	No	2.3	2003
+Ricoh	GR Digital III	DNG	No	5.5	2008
+Ricoh	GR Digital IV	DNG	No	6.6	2010
+Ricoh	GX100	DNG	No	2.3	2003
+Ricoh	GX200	DNG	No	2.3	2003
+Ricoh	GXR with GR LENS A12 28mm F2.5	DNG	No	6.3	2010
+Ricoh	GXR with GR LENS A12 50mm F2.5 MACRO	DNG	No	5.6	2008
+Ricoh	GXR with GR LENS A16 24-85 F3.5-5.5	DNG	No	6.7	2010
+Ricoh	GXR with GR LENS S10 24-72mm F2.5-4.4 VC	DNG	No	5.6	2008
+Ricoh	GXR with GR LENS Mount A12	DNG	No	6.5	2010
+Ricoh	THETA Z1	DNG	No	11.3	2018
+Samsung	EK-GN100	SRW	No	7.4	2012
+Samsung	EK-GN110	SRW	No	7.4	2012
+Samsung	EK-GN120	SRW	No	7.4	2012
+Samsung	EK-KN120	SRW	No	7.4	2012
+Samsung	EX2F	SRW	No	7.2	2012
+Samsung	NX300	SRW	No	7.4	2012
+Samsung	NX500	SRW	No	9.0	2015
+Samsung	NX1000	SRW	No	7.1	2012
+Samsung	NX1100	SRW	No	7.4	2012
+Samsung	NX2000	SRW	No	7.4	2012
+Samsung	NX3000	SRW	No	8.5	2013
+Samsung	NX3300	SRW	No	9.5	2015
+Samsung	NX U	SRW	No	7.4	2012
+Samsung	Pro 815	DNG	No	2.3	2003
+Samsung	TL350 (WB2000)	SRW	No	6.3	2010
+Samsung	TL500 (EX1)	SRW	No	6.2	2010
+Samsung	Galaxy Note 9	DNG	No	11.1	2018
+Samsung	Galaxy Note 20 Rear Main Camera	DNG	No	13.1	2020
+Samsung	Galaxy Note 20 Ultra Rear Main Camera	DNG	No	13.1	2020
+Samsung	Galaxy S20 Front Camera	DNG	No	12.2.1	2019
+Samsung	Galaxy S20 Rear Main Camera	DNG	No	12.2.1	2019
+Samsung	Galaxy S20+ Front Camera	DNG	No	12.2.1	2019
+Samsung	Galaxy S20+ Rear Main Camera	DNG	No	12.2.1	2019
+Samsung	Galaxy S20 Ultra Front Camera	DNG	No	12.2.1	2019
+Samsung	Galaxy S20 Ultra Rear Main Camera	DNG	No	12.2.1	2019
+Samsung	Galaxy S21 Rear Main Camera	DNG	No	13.2	2020
+Samsung	Galaxy S21 Rear Wide Camera	DNG	No	13.2	2020
+Samsung	Galaxy S21+ Rear Main Camera	DNG	No	13.2	2020
+Samsung	Galaxy S21+ Rear Wide Camera	DNG	No	13.2	2020
+Samsung	Galaxy S21 Ultra Rear Main Camera	DNG	No	13.2	2020
+Samsung	Galaxy S21 Ultra Rear Wide Camera	DNG	No	13.2	2020
+Samsung	Galaxy S21 Ultra Super Telephoto Camera	DNG	No	14.1	2021
+Samsung	Galaxy S21 Ultra Telephoto Camera	DNG	No	14.1	2021
+Samsung	Galaxy S6	DNG	No	11.1	2018
+Samsung	Galaxy S6 Edge	DNG	No	11.1	2018
+Samsung	Galaxy S7	DNG	No	9.8	2015
+Samsung	Galaxy S7 Edge	DNG	No	9.8	2015
+Samsung	Galaxy S8	DNG	No	10.0	2017
+Samsung	Galaxy S8+	DNG	No	10.0	2017
+Samsung	Galaxy S9	DNG	No	10.4	2017
+Samsung	Galaxy S9+	DNG	No	10.4	2017
+Samsung	Galaxy Z Fold3 Rear Main Camera	DNG	No	14.1	2021
+Samsung	Galaxy Z Fold3 Rear Telephoto Camera	DNG	No	14.1	2021
+Samsung	Galaxy Z Fold3 Rear Ultrawide Camera	DNG	No	14.1	2021
+Samsung	Galaxy S22 Front Camera	DNG	No	14.2	2021
+Samsung	Galaxy S22 Rear Telephoto Camera	DNG	Samsung Expert Raw	14.2	2021
+Samsung	Galaxy S22 Rear Ultrawide Camera	DNG	Samsung Expert Raw	14.2	2021
+Samsung	Galaxy S22 Rear Wide Camera	DNG	Samsung Expert Raw	14.2	2021
+Samsung	Galaxy S22+ Front Camera	DNG	No	14.2	2021
+Samsung	Galaxy S22+ Rear Telephoto Camera	DNG	Samsung Expert Raw	14.2	2021
+Samsung	Galaxy S22+ Rear Ultrawide Camera	DNG	Samsung Expert Raw	14.2	2021
+Samsung	Galaxy S22+ Rear Wide Camera	DNG	Samsung Expert Raw	14.2	2021
+Samsung	Galaxy S22 Ultra Front Camera	DNG	No	14.2	2021
+Samsung	Galaxy S22 Ultra Rear Super Telephoto Camera	DNG	Samsung Expert Raw	14.2	2021
+Samsung	Galaxy S22 Ultra Rear Telephoto Camera	DNG	Samsung Expert Raw	14.2	2021
+Samsung	Galaxy S22 Ultra Rear Ultrawide Camera	DNG	Samsung Expert Raw	14.2	2021
+Samsung	Galaxy S22 Ultra Rear Wide Camera	DNG	Samsung Expert Raw	14.2	2021
+Samsung	Galaxy S23 Front Camera	DNG	Samsung Expert Raw	15.2	2022
+Samsung	Galaxy S23 Rear Telephoto Camera	DNG	Samsung Expert Raw	15.2	2022
+Samsung	Galaxy S23 Rear Ultrawide Camera	DNG	Samsung Expert Raw	15.2	2022
+Samsung	Galaxy S23 Rear Wide Camera	DNG	Samsung Expert Raw	15.2	2022
+Samsung	Galaxy S23+ Front Camera	DNG	Samsung Expert Raw	15.2	2022
+Samsung	Galaxy S23+ Rear Telephoto Camera	DNG	Samsung Expert Raw	15.2	2022
+Samsung	Galaxy S23+ Rear Ultrawide Camera	DNG	Samsung Expert Raw	15.2	2022
+Samsung	Galaxy S23+ Rear Wide Camera	DNG	Samsung Expert Raw	15.2	2022
+Samsung	Galaxy S23 Ultra Front Camera	DNG	Samsung Expert Raw	15.2	2022
+Samsung	Galaxy S23 Ultra Rear Super Telephoto Camera	DNG	Samsung Expert Raw	15.2	2022
+Samsung	Galaxy S23 Ultra Rear Telephoto Camera	DNG	Samsung Expert Raw	15.2	2022
+Samsung	Galaxy S23 Ultra Rear Ultrawide Camera	DNG	Samsung Expert Raw	15.2	2022
+Samsung	Galaxy S23 Ultra Rear Wide Camera	DNG	Samsung Expert Raw	15.2	2022
+Samsung	Galaxy S24 Front Camera	DNG	No	16.1.1	2023
+Samsung	Galaxy S24 Rear Telephoto Camera	DNG	No	16.1.1	2023
+Samsung	Galaxy S24 Rear Ultrawide Camera	DNG	No	16.1.1	2023
+Samsung	Galaxy S24 Rear Wide Camera	DNG	No	16.1.1	2023
+Samsung	Galaxy S24+ Front Camera	DNG	No	16.1.1	2023
+Samsung	Galaxy S24+ Rear Telephoto Camera	DNG	No	16.1.1	2023
+Samsung	Galaxy S24+ Rear Ultrawide Camera	DNG	No	16.1.1	2023
+Samsung	Galaxy S24+ Rear Wide Camera	DNG	No	16.1.1	2023
+Samsung	Galaxy S24 Ultra Front Camera	DNG	No	16.1.1	2023
+Samsung	Galaxy S24 Ultra Rear Super Telephoto Camera	DNG	No	16.1.1	2023
+Samsung	Galaxy S24 Ultra Rear Telephoto Camera	DNG	No	16.1.1	2023
+Samsung	Galaxy S24 Ultra Rear Ultrawide Camera	DNG	No	16.1.1	2023
+Samsung	Galaxy S24 Ultra Rear Wide Camera	DNG	No	16.1.1	2023
+Samsung	Galaxy S25 Front Camera	DNG	No	17.2	2024
+Samsung	Galaxy S25 Rear Telephoto Camera	DNG	No	17.2	2024
+Samsung	Galaxy S25 Rear Ultrawide Camera	DNG	No	17.2	2024
+Samsung	Galaxy S25 Rear Wide Camera	DNG	No	17.2	2024
+Samsung	Galaxy S25+ Front Camera	DNG	No	17.2	2024
+Samsung	Galaxy S25+ Rear Telephoto Camera	DNG	No	17.2	2024
+Samsung	Galaxy S25+ Rear Ultrawide Camera	DNG	No	17.2	2024
+Samsung	Galaxy S25+ Rear Wide Camera	DNG	No	17.2	2024
+Samsung	Galaxy S25 Ultra Front Camera	DNG	No	17.2	2024
+Samsung	Galaxy S25 Ultra Rear Super Telephoto Camera	DNG	No	17.2	2024
+Samsung	Galaxy S25 Ultra Rear Telephoto Camera	DNG	No	17.2	2024
+Samsung	Galaxy S25 Ultra Rear Ultrawide Camera	DNG	No	17.2	2024
+Samsung	Galaxy S25 Ultra Rear Wide Camera	DNG	No	17.2	2024
+Samsung	Galaxy Z Fold4 Rear Telephoto Camera	DNG	Samsung Expert Raw	14.5	2021
+Samsung	Galaxy Z Fold4 Rear Ultrawide Camera	DNG	Samsung Expert Raw	14.5	2021
+Samsung	Galaxy Z Fold4 Rear Wide Camera	DNG	Samsung Expert Raw	14.5	2021
+Samsung	Galaxy Z Fold5 Front Camera	DNG	Samsung Expert Raw	15.5	2022
+Samsung	Galaxy Z Fold5 Telephoto Camera	DNG	Samsung Expert Raw	15.5	2022
+Samsung	Galaxy Z Fold5 Ultrawide Camera	DNG	Samsung Expert Raw	15.5	2022
+Samsung	Galaxy Z Fold5 Wide Camera	DNG	Samsung Expert Raw	15.5	2022
+Samsung	Galaxy Z Fold6 Front Camera	DNG	No	16.5	2023
+Samsung	Galaxy Z Fold6 Rear Telephoto Camera	DNG	No	16.5	2023
+Samsung	Galaxy Z Fold6 Rear Ultrawide Camera	DNG	No	16.5	2023
+Samsung	Galaxy Z Fold6 Rear Wide Camera	DNG	No	16.5	2023
+Samsung	Galaxy Z Fold Special Edition Front Camera	DNG	Samsung Expert Raw	17.1	2024
+Samsung	Galaxy Z Fold Special Edition Rear Telephoto Camera	DNG	Samsung Expert Raw	17.1	2024
+Samsung	Galaxy Z Fold Special Edition Rear Ultrawide Camera	DNG	Samsung Expert Raw	17.1	2024
+Samsung	Galaxy Z Fold Special Edition Rear Wide Camera	DNG	Samsung Expert Raw	17.1	2024
+Samsung	Galaxy Z Flip6 Rear Ultrawide Camera	DNG	No	16.5	2023
+Samsung	Galaxy Z Flip6 Rear Wide Camera	DNG	No	16.5	2023
+Samsung	Galaxy Z Flip7 FE Front Camera	DNG	Samsung Expert Raw	17.5	2024
+Samsung	Galaxy Z Flip7 FE Rear Ultrawide Camera	DNG	Samsung Expert Raw	17.5	2024
+Samsung	Galaxy Z Flip7 FE Wide Camera	DNG	Samsung Expert Raw	17.5	2024
+Samsung	Galaxy Z Flip7 Front Camera	DNG	No	18.0	2025
+Samsung	Galaxy Z Flip7 Rear Ultrawide Camera	DNG	No	18.0	2025
+Samsung	Galaxy Z Flip7 Rear Wide Camera	DNG	No	18.0	2025
+Samsung	Galaxy Z Fold7 Front Camera	DNG	Samsung Expert Raw	17.5	2024
+Samsung	Galaxy Z Fold7 Rear Telephoto Camera	DNG	Samsung Expert Raw	17.5	2024
+Samsung	Galaxy Z Fold7 Rear Ultrawide Camera	DNG	Samsung Expert Raw	17.5	2024
+Samsung	Galaxy Z Fold7 Under-Display Camera	DNG	Samsung Expert Raw	17.5	2024
+Samsung	Galaxy Z Fold7 Rear Wide Camera	DNG	Samsung Expert Raw	17.5	2024
+Samsung	Galaxy Z Trifold Front Camera	DNG	Samsung Expert Raw	18.1.1	2025
+Samsung	Galaxy Z Trifold Rear Telephoto Camera	DNG	Samsung Expert Raw	18.1.1	2025
+Samsung	Galaxy Z Trifold Rear Ultrawide Camera	DNG	Samsung Expert Raw	18.1.1	2025
+Samsung	Galaxy Z Trifold Rear Wide Camera	DNG	Samsung Expert Raw	18.1.1	2025
+Sigma	BF	DNG	Yes	17.3	2024
+Sigma	DP1	X3F	No	4.6, 5.1	2007
+Sigma	DP1s	X3F	No	5.6	2008
+Sigma	DP2	X3F	No	5.4	2008
+Sigma	fp	DNG	Yes	12.1	2019
+Sigma	fp L	DNG	Yes	13.2	2020
+Sigma	SD9	X3F	No	2.2	2003
+Sigma	SD10	X3F	No	2.2	2003
+Sigma	SD14	X3F	No	4.1	2007
+Skydio	Skydio 2	DNG	No	12.4	2019
+Sony	Xperia 5 IV Telephoto Camera	DNG	No	15.0	2022
+Sony	Xperia 5 IV Ultrawide Camera	DNG	No	15.0	2022
+Sony	Xperia 5 IV Wide Camera	DNG	No	15.0	2022
+Sony	Xperia 1 V Front Camera	DNG	No	15.4	2022
+Sony	Xperia 1 V Ultrawide Camera	DNG	No	15.4	2022
+Sony	Xperia 1 V Wide Camera	DNG	No	15.4	2022
+Sony	Xperia 1 V Zoom Camera	DNG	No	15.4	2022
+Sony	A1 II (ILCE-1M2) (** see note)	ARW	Yes	17.1	2024
+Sony	A7 (ILCE-7)	ARW	Yes	8.3	2013
+Sony	A7 II (ILCE-A7M2)	ARW	Yes	8.7.1	2013
+Sony	A7 III (ILCE-7M3)	ARW	Yes	10.3	2017
+Sony	A7 IV (ILCE-7M4)	ARW	Yes	14.1	2021
+Sony	A7 V (ILCE-7M5) (** see note)	ARW	No	18.1.1	2025
+Sony	A7C (ILCE-7C)	ARW	Yes	13.1	2020
+Sony	A7C II (ILCE-7CM2)	ARW	Yes	16.0	2023
+Sony	A7CR (ILCE-7CR)	ARW	Yes	16.0	2023
+Sony	A7R (ILCE-7R)	ARW	Yes	8.3	2013
+Sony	A7R II (ILCE-7RM2)	ARW	Yes	9.1.1	2015
+Sony	A7R III (ILCE-7RM3)	ARW	Yes	10.1	2017
+Sony	A7R IV (ILCE-7RM4)	ARW	Yes	11.4.1	2018
+Sony	A7S (ILCE-7S)	ARW	Yes	8.5	2013
+Sony	A7S II (ILCE-7SM2)	ARW	Yes	9.2	2015
+Sony	A7s III (ILCE-7SM3)	ARW	Yes	13.0	2020
+Sony	A9 (ILCE-9)	ARW	Yes	9.10.1	2015
+Sony	A9 II (ILCE-9M2)	ARW	Yes	12.1	2019
+Sony	A9 III (ILCE-9M3)	ARW	Yes	16.1	2023
+Sony	A33 (SLT-A33)	ARW	No	6.2	2010
+Sony	A35 (SLT-A35)	ARW	No	6.5	2010
+Sony	A37 (SLT-A37)	ARW	No	7.1	2012
+Sony	A55V (SLT-A55V)	ARW	No	6.2	2010
+Sony	A57 (SLT-A57)	ARW	No	7.1	2012
+Sony	A58 (SLT-A58)	ARW	No	7.4	2012
+Sony	A65 (SLT-A65)	ARW	No	6.5	2010
+Sony	A68 (ILCA-68)	ARW	Yes	9.4	2015
+Sony	A77 (SLT-A77)	ARW	No	6.5	2010
+Sony	A77 II (ILCA-77M2)	ARW	Yes	8.5	2013
+Sony	A7R IIIA (ILCE-7RM3A)	ARW	Yes	13.3	2020
+Sony	A7R IVA (ILCE-7RM4A)	ARW	Yes	13.3	2020
+Sony	A7R V (ILCE-7RM5)	ARW	Yes	15.1	2022
+Sony	A7R VI (ILCE-7RM6) (** see note)	ARW	No	18.3.2	2025
+Sony	A99 (SLT-A99V)	ARW	Yes	7.2	2012
+Sony	A99 II (ILCA-99M2)	ARW	Yes	9.8	2015
+Sony	A100 (DSLR-A100)	ARW	No	3.5	2005
+Sony	A200 (DSLR-A200)	ARW	No	4.4	2007
+Sony	A230 (DSLR-A230)	ARW	No	5.4	2008
+Sony	A290 (DSLR-A290)	ARW	No	6.2	2010
+Sony	A300 (DSLR-A300)	ARW	No	4.4	2007
+Sony	A330 (DSLR A330)	ARW	No	5.4	2008
+Sony	A350 (DSLR-A350)	ARW	No	4.4	2007
+Sony	A380 (DSLR-A380)	ARW	No	5.4	2008
+Sony	A390 (DSLR-A390)	ARW	No	6.2	2010
+Sony	A450 (DSLR-A450)	ARW	No	6.1	2010
+Sony	A500 (DSLR-A500)	ARW	No	5.6	2008
+Sony	A550 (DSLR-A550)	ARW	No	5.6	2008
+Sony	A560 (DSLR-A560)	ARW	No	6.3	2010
+Sony	A580 (DSLR-A580)	ARW	No	6.3	2010
+Sony	A700 (DSLR-A700)	ARW	No	4.2	2007
+Sony	A850 (DSLR-A850)	ARW	No	5.6	2008
+Sony	A900 (DSLR-A900)	ARW	No	5.1	2008
+Sony	A3000 (ILCE-3000)	ARW	No	8.2	2013
+Sony	A3500 (ILCE-3500)	ARW	No	8.2	2013
+Sony	A5000 (ILCE-5000)	ARW	Yes	8.4	2013
+Sony	A5100 (ILCE-5100)	ARW	Yes	8.7	2013
+Sony	A6000 (ILCE-6000)	ARW	Yes	8.4	2013
+Sony	A6100 (ILCE-6100)	ARW	Yes	12.0	2019
+Sony	A6300 (ILCE-6300)	ARW	Yes	9.5	2015
+Sony	A6400 (ILCE-6400)	ARW	Yes	11.2.1	2018
+Sony	A6500 (ILCE-6500)	ARW	Yes	9.8	2015
+Sony	A6600 (ILCE-6600)	ARW	Yes	12.0	2019
+Sony	A6700 (ILCE-6700)	ARW	Yes	15.5	2022
+Sony	DSC-F828	SRF	No	2.1	2003
+Sony	DSC-HX95	ARW	Yes	11.1	2018
+Sony	DSC-HX99	ARW	Yes	11.1	2018
+Sony	DSC-V3	SRF	No	3.0	2005
+Sony	DSC-RX100M7A	ARW	Yes	17.3.1	2024
+Sony	FX3 (ILME-FX3)	ARW	Yes	13.3	2020
+Sony	FX30 (ILME-FX30)	ARW	Yes	15.1	2022
+Sony	NEX-3	ARW	Yes	6.2	2010
+Sony	NEX-3N	ARW	Yes	7.4	2012
+Sony	NEX-5	ARW	Yes	6.2	2010
+Sony	NEX-5N	ARW	Yes	6.5	2010
+Sony	NEX-5R	ARW	Yes	7.2	2012
+Sony	NEX-5T	ARW	Yes	8.2	2013
+Sony	NEX-6	ARW	Yes	7.2	2012
+Sony	NEX-7	ARW	Yes	6.6	2010
+Sony	NEX-C3	ARW	Yes	6.5	2010
+Sony	NEX-F3	ARW	Yes	7.1	2012
+Sony	NEX-VG20	ARW	Yes	7.1	2012
+Sony	NEX-VG30	ARW	Yes	7.3	2012
+Sony	NEX-VG900	ARW	Yes	7.3	2012
+Sony	RX0 (DSC-RX0)	ARW	Yes	10.0	2017
+Sony	RX0 II (DSC-RX0M2)	ARW	Yes	11.3	2018
+Sony	RX1 (DSC-RX1)	ARW	Yes	7.3	2012
+Sony	RX1R (DSC-RX1R)	ARW	Yes	8.1	2013
+Sony	RX1R II (DSC-RX1RM2)	ARW	Yes	9.3	2015
+Sony	RX10 (DSC-RX10)	ARW	Yes	8.3	2013
+Sony	RX10 II (DSC-RX10M2)	ARW	Yes	9.1.1	2015
+Sony	RX10 III (DSC-RX10M3)	ARW	Yes	9.5.1	2015
+Sony	RX10 IV (DSC-RX10M4)	ARW	Yes	10.1	2017
+Sony	RX10 V (DSC-RX10M5) (** see note)	ARW	No	18.4.1	2025
+Sony	RX100 (DSC-RX100)	ARW	Yes	7.2	2012
+Sony	RX100 II (DSC-RX100M2)	ARW	Yes	8.2	2013
+Sony	RX100 III (DSC-RX100M3)	ARW	Yes	8.5	2013
+Sony	RX100 IV (DSC-RX100M4)	ARW	Yes	9.1.1	2015
+Sony	RX100 V (DSC-RX100M5)	ARW	Yes	9.8	2015
+Sony	RX100 VA (DSC-RX100M5A)	ARW	Yes	10.5	2017
+Sony	RX100 VI (DSC-RX100M6)	ARW	Yes	10.5	2017
+Sony	RX100 VII (DSC-RX100M7)	ARW	Yes	11.4.1	2018
+Sony	QX1 (ILCE-QX1)	ARW	Yes	8.7	2013
+Sony	ZV-1 (DCZV1/B)	ARW	Yes	12.4	2019
+Sony	Alpha 1 (ILCE-1)*	ARW	Yes	13.2	2020
+Sony	Xperia 1 Wide-angle Camera	DNG	No	13.3	2020
+Sony	Xperia 1 II Telephoto Camera	DNG	No	13.3	2020
+Sony	Xperia 1 II Ultra wide-angle Camera	DNG	No	13.3	2020
+Sony	Xperia 1 II Wide-angle Camera	DNG	No	13.3	2020
+Sony	Xperia 1 IV Wide Camera	DNG	No	14.5	2021
+Sony	Xperia 1 IV Zoom Camera	DNG	No	14.5	2021
+Sony	Xperia 1 IV Ultrawide Camera	DNG	No	14.5	2021
+Sony	Xperia 1 VI Front Camera	DNG	No	16.4	2023
+Sony	Xperia 1 VI Ultrawide Camera	DNG	No	16.4	2023
+Sony	Xperia 1 VI Wide Camera	DNG	No	16.4	2023
+Sony	Xperia 1 VI Zoom Camera	DNG	No	16.4	2023
+Sony	Xperia 1 VII Front Camera	DNG	No	17.4	2024
+Sony	Xperia 1 VII Ultrawide Camera	DNG	No	17.4	2024
+Sony	Xperia 1 VII Wide Camera	DNG	No	17.4	2024
+Sony	Xperia 1 VII Zoom Camera	DNG	No	17.4	2024
+Sony	Xperia 1 III Telephoto Camera	DNG	No	14.0	2021
+Sony	Xperia 1 III Ultra wide-angle Camera	DNG	No	14.0	2021
+Sony	Xperia 1 III Wide-angle Camera	DNG	No	14.0	2021
+Sony	Xperia 5 III Super Telephoto Camera	DNG	No	14.0	2021
+Sony	Xperia 5 III Telephoto Camera	DNG	No	14.0	2021
+Sony	Xperia 5 III Ultra wide-angle Camera	DNG	No	14.0	2021
+Sony	Xperia 5 III Wide-angle Camera	DNG	No	14.0	2021
+Sony	Xperia 5 V Front Camera	DNG	No	16.4	2023
+Sony	Xperia 5 V Ultrawide Camera	DNG	No	16.4	2023
+Sony	Xperia 5 V Wide Camera	DNG	No	16.4	2023
+Sony	Xperia Pro-I Rear Wide Camera	DNG	No	14.2	2021
+Sony	ZV-E10	ARW	Yes	14.0	2021
+Sony	ZV-E1	ARW	Yes	15.4	2022
+Sony	ZV-E10M2	ARW			
+Sony	ZV-1M2	ARW	Yes	15.4	2022
+Sony	ZV-1A	ARW	No	17.4	2024
+Sony	ILX-LR1	ARW	Yes	16.2.1	2023
+Sony	ILCE - 1M2 (Final Support)	ARW	Yes	17.2	2024
+Sony	ILCE - 6100A	ARW	Yes	17.2	2024
+Sony	ILCE - 6400A	ARW	Yes	17.2	2024
+Sony	FX2 (ILMEFX2) (** see note)	ARW	Yes	17.4.1	2024
+Sony	FX3A (ILMEFX3A)	ARW	Yes	17.4.1	2024
+Sony	RX1R III (DSC-RX1RM3)	ARW	Yes	17.4.2	2024
+Xiaomi	Mi 11 Lite Front Camera	DNG	No	14.0	2021
+Xiaomi	Mi 11 Lite Rear Ultrawide Camera	DNG	No	14.0	2021
+Xiaomi	Mi 11 Lite Rear Wide Camera	DNG	No	14.0	2021
+Xiaomi	Xiaomi 12S	DNG	No	14.4	2021
+Xiaomi	Xiaomi 12S Pro	DNG	No	14.4	2021
+Xiaomi	Xiaomi 12S Ultra	DNG	No	14.4	2021
+Xiaomi	Xiaomi 13 Rear Telephoto Camera	DNG	No	15.1	2022
+Xiaomi	Xiaomi 13 Rear Ultrawide Camera	DNG	No	15.1	2022
+Xiaomi	Xiaomi 13 Rear Wide Camera	DNG	No	15.1	2022
+Xiaomi	Xiaomi 13 Pro Rear Telephoto Camera	DNG	No	15.1	2022
+Xiaomi	Xiaomi 13 Pro Rear Ultrawide Camera	DNG	No	15.1	2022
+Xiaomi	Xiaomi 13 Pro Rear Wide Camera	DNG	No	15.1	2022
+Xiaomi	Xiaomi 13 Ultra Rear Super Telephoto Camera	DNG	No	15.3	2022
+Xiaomi	Xiaomi 13 Ultra Rear Telephoto Camera	DNG	No	15.3	2022
+Xiaomi	Xiaomi 13 Ultra Rear Ultrawide Camera	DNG	No	15.3	2022
+Xiaomi	Xiaomi 13 Ultra Rear Wide Camera	DNG	No	15.3	2022
+Xiaomi	Xiaomi 13T Front Camera	DNG	No	15.5	2022
+Xiaomi	Xiaomi 13T Rear Telephoto Camera	DNG	No	15.5	2022
+Xiaomi	Xiaomi 13T Rear Ultrawide Camera	DNG	No	15.5	2022
+Xiaomi	Xiaomi 13T Rear Wide Camera	DNG	No	15.5	2022
+Xiaomi	Xiaomi 13T Pro Front Camera	DNG	No	15.5	2022
+Xiaomi	Xiaomi 13T Pro Rear Telephoto Camera	DNG	No	15.5	2022
+Xiaomi	Xiaomi 13T Pro Rear Ultrawide Camera	DNG	No	15.5	2022
+Xiaomi	Xiaomi 13T Pro Rear Wide Camera	DNG	No	15.5	2022
+Xiaomi	Xiaomi 14 Rear Telephoto Camera	DNG	No	16.0	2023
+Xiaomi	Xiaomi 14 Rear Ultrawide Camera	DNG	No	16.0	2023
+Xiaomi	Xiaomi 14 Rear Wide Camera	DNG	No	16.0	2023
+Xiaomi	Xiaomi 14 Pro Rear Telephoto Camera	DNG	No	16.0	2023
+Xiaomi	Xiaomi 14 Pro Rear Ultrawide Camera	DNG	No	16.0	2023
+Xiaomi	Xiaomi 14 Pro Rear Wide Camera	DNG	No	16.0	2023
+Xiaomi	Xiaomi 14 Ultra Rear Super Telephoto Camera	DNG	No	16.2	2023
+Xiaomi	Xiaomi 14 Ultra Rear Telephoto Camera	DNG	No	16.2	2023
+Xiaomi	Xiaomi 14 Ultra Rear Ultrawide Camera	DNG	No	16.2	2023
+Xiaomi	Xiaomi 14 Ultra Rear Wide Camera	DNG	No	16.2	2023
+Xiaomi	Xiaomi 14T Front Camera	DNG	No	16.5	2023
+Xiaomi	Xiaomi 14T Telephoto Camera	DNG	No	16.5	2023
+Xiaomi	Xiaomi 14T Ultrawide Camera	DNG	No	16.5	2023
+Xiaomi	Xiaomi 14T Wide Camera	DNG	No	16.5	2023
+Xiaomi	Xiaomi 14T Pro Front Camera	DNG	No	16.5	2023
+Xiaomi	Xiaomi 14T Pro Telephoto Camera	DNG	No	16.5	2023
+Xiaomi	Xiaomi 14T Pro Ultrawide Camera	DNG	No	16.5	2023
+Xiaomi	Xiaomi 14T Pro Wide Camera	DNG	No	16.5	2023
+Xiaomi	Xiaomi MIX Fold 3 Rear Telephoto Camera	DNG	No	15.5	2022
+Xiaomi	Xiaomi MIX Fold 3 Rear Super Telephoto Camera	DNG	No	15.5	2022
+Xiaomi	Xiaomi MIX Fold 3 Rear Ultrawide Camera	DNG	No	15.5	2022
+Xiaomi	Xiaomi MIX Fold 3 Rear Wide Camera	DNG	No	15.5	2022
+Xiaomi	Xiaomi Civi 4 Pro Rear Telephoto Camera	DNG	No	16.3	2023
+Xiaomi	Xiaomi Civi 4 Pro Rear Ultrawide Camera	DNG	No	16.3	2023
+Xiaomi	Xiaomi Civi 4 Pro Rear Wide Camera	DNG	No	16.3	2023
+Xiaomi	Xiaomi 15 Rear Telephoto Camera	DNG	No	17.0	2024
+Xiaomi	Xiaomi 15 Rear Ultrawide Camera	DNG	No	17.0	2024
+Xiaomi	Xiaomi 15 Rear Wide Camera	DNG	No	17.0	2024
+Xiaomi	Xiaomi 15 Pro Rear Telephoto Camera	DNG	No	17.0	2024
+Xiaomi	Xiaomi 15 Pro Rear Ultrawide Camera	DNG	No	17.0	2024
+Xiaomi	Xiaomi 15 Pro Rear Wide Camera	DNG	No	17.0	2024
+Xiaomi	Xiaomi 17 Ultra Rear Telephoto Camera	DNG	No	18.1.1	2025
+Xiaomi	Xiaomi 17 Ultra Rear Ultrawide Camera	DNG	No	18.1.1	2025
+Xiaomi	Xiaomi 17 Ultra Rear Wide Camera	DNG	No	18.1.1	2025
+Yuneec	CGO4	DNG	No	9.5	2015
+Yuneec	ION L1 Pro	DNG	No	11.3	2018
+Zeiss	ZX1	DNG	No	12.1	2019
