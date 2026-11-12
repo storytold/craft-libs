@@ -332,7 +332,8 @@ impl Rows<'_> {
     fn rule(&self, ui: &mut Ui, rule: &mut Condition, path: &[usize], depth: usize, (at, remove, insert): Pending<'_>) {
         let words = self.words;
         Row::new().fill_width().align(RowAlign::SpaceBetween).show(ui, |ui, _| {
-            Row::new().show(ui, |ui, _| {
+            // Field and operator keep their labels whole; what does not fit on the line goes to the next one.
+            Row::new().wrap(true).show(ui, |ui, _| {
                 self.pick_field(ui, rule, path);
                 self.pick_operator(ui, rule, path);
                 self.edit_value(ui, rule, path);
@@ -430,9 +431,15 @@ impl Rows<'_> {
                 }
             }
             ConditionValue::Range(low, high) => {
-                let new_low = self.number(ui, path, "low", low);
-                Text::new(words.and.clone()).show(ui);
-                let new_high = self.number(ui, path, "high", high);
+                // The two ends and the "and" between them wrap as one.
+                let (new_low, new_high) = Row::new()
+                    .show(ui, |ui, _| {
+                        let new_low = self.number(ui, path, "low", low);
+                        Text::new(words.and.clone()).show(ui);
+                        (new_low, self.number(ui, path, "high", high))
+                    })
+                    .inner
+                    .unwrap_or_default();
                 if new_low.is_some() || new_high.is_some() {
                     rule.value = ConditionValue::Range(new_low.unwrap_or(low), new_high.unwrap_or(high));
                 }
@@ -447,9 +454,11 @@ impl Rows<'_> {
             ConditionValue::DateRange(low, high) => {
                 // Each picker stops at the other date.
                 let (mut low_picked, mut high_picked) = (Some(low), Some(high));
-                DatePicker::new(words.value.clone(), Bind::bound(&mut low_picked)).max(high).id_salt(salt("low")).show(ui);
-                Text::new(words.and.clone()).show(ui);
-                DatePicker::new(words.value.clone(), Bind::bound(&mut high_picked)).min(low).id_salt(salt("high")).show(ui);
+                Row::new().show(ui, |ui, _| {
+                    DatePicker::new(words.value.clone(), Bind::bound(&mut low_picked)).max(high).id_salt(salt("low")).show(ui);
+                    Text::new(words.and.clone()).show(ui);
+                    DatePicker::new(words.value.clone(), Bind::bound(&mut high_picked)).min(low).id_salt(salt("high")).show(ui);
+                });
                 let (new_low, new_high) = (low_picked.unwrap_or(low), high_picked.unwrap_or(high));
                 if (new_low, new_high) != (low, high) {
                     rule.value = ConditionValue::DateRange(new_low, new_high);

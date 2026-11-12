@@ -9,9 +9,10 @@ use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, EditEvent, IconId, It
 use craft_ui::buttons::Button;
 use craft_ui::contract::{
     CollectionEvent, ColumnKind, ColumnSpec, DropAt, DropKind, DropPlace, ListDrag, Pattern, Props as _, Remember, ReorderMove, ReorderRule,
-    Show as _, ShowCollection as _, ShowContainer as _, SweepApply, SweepStep, ToggleColumn, Trigger, clicked,
+    RowAlign, Show as _, ShowCollection as _, ShowContainer as _, SweepApply, SweepStep, ToggleColumn, Trigger, clicked,
 };
 use craft_ui::display::{Divider, Shade, Text};
+use craft_ui::layout_components::Row;
 use craft_ui::list::{List, ListRow, ToggleCell, ToggleState};
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::primitives::IconSpec;
@@ -673,8 +674,13 @@ impl Model<'_> {
         })
     }
 
-    /// Refresh, Calculated Field… and the Report Layout menu.
+    /// Refresh, Calculated Field… and the Report Layout menu, whole: in a narrow panel the buttons that do not fit go on
+    /// a second line.
     fn footer(&self, ui: &mut Ui, edits: &Edits) {
+        Row::new().fill_width().wrap(true).align(RowAlign::End).show(ui, |ui, _| self.footer_buttons(ui, edits));
+    }
+
+    fn footer_buttons(&self, ui: &mut Ui, edits: &Edits) {
         let words = self.words;
         if clicked(&Button::new(words.refresh.clone()).show(ui)) {
             edits.borrow_mut().push(FieldListEdit::Refresh);
