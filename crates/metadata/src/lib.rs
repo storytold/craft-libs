@@ -385,6 +385,20 @@ pub fn lens_spec_name(spec: [f64; 4]) -> Option<String> {
     Some(format!("{focal} mm f/{aperture}"))
 }
 
+/// Whether `s` has the `<focal> mm f/<aperture>` shape written by [`lens_spec_name`].
+pub fn is_lens_spec_name(s: &str) -> bool {
+    let Some((focal, aperture)) = s.trim().split_once(" mm f/") else { return false };
+    let is_num_or_range = |part: &str| {
+        let mut pieces = part.split('-');
+        let Some(first) = pieces.next() else { return false };
+        let second = pieces.next();
+        pieces.next().is_none()
+            && first.parse::<f64>().is_ok_and(|v| v.is_finite() && v > 0.0)
+            && second.is_none_or(|b| b.parse::<f64>().is_ok_and(|v| v.is_finite() && v > 0.0))
+    };
+    is_num_or_range(focal) && is_num_or_range(aperture)
+}
+
 /// Lenient number parsing used by XMP/IPTC: `"28/10"`, `"2.8"`, `"+0.7"`.
 pub(crate) fn parse_number(s: &str) -> Option<f64> {
     let s = s.trim();
@@ -408,6 +422,17 @@ mod tests {
         assert_eq!(lens_spec_name([0.0, 0.0, 0.0, 0.0]), None);
         assert_eq!(lens_spec_name([200.0, 80.0, 2.8, 2.8]), None);
         assert_eq!(lens_spec_name([f64::NAN, 50.0, 1.8, 1.8]), None);
+    }
+
+    #[test]
+    fn lens_spec_names_are_recognised() {
+        for spec in [[50.0, 50.0, 1.8, 1.8], [18.0, 135.0, 3.5, 5.6]] {
+            assert!(is_lens_spec_name(&lens_spec_name(spec).unwrap()));
+        }
+        assert!(is_lens_spec_name(" 24.0-70.0 mm f/2.8 "));
+        for not in ["EF 50mm f/1.8", "50 mm f/", "0 mm f/2.8", "50-60-70 mm f/2.8", "nan mm f/2", "50 mm f/1.8-"] {
+            assert!(!is_lens_spec_name(not), "{not}");
+        }
     }
 
     #[test]
