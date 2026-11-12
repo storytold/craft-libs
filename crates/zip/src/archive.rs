@@ -1,7 +1,7 @@
 //! An archive open for reading: entry-count guard, duplicate names, budgeted entry reads.
 
 use std::borrow::Cow;
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 
 use crate::preflight::{ReadError, read_entry};
 use crate::{Budget, Error, check_entry_count};
@@ -16,6 +16,10 @@ pub struct Limits {
 }
 
 /// A ZIP archive in memory. Nothing is decompressed until an entry is read.
+///
+/// A clone shares the parsed directory and the bytes, and carries a copy of the budget: a
+/// caller that reads through a clone keeps its own count.
+#[derive(Clone)]
 pub struct Archive<'a> {
     zip: zip::ZipArchive<Cursor<&'a [u8]>>,
     budget: Budget,
@@ -84,6 +88,33 @@ impl<'a> Archive<'a> {
     pub fn declared_size(&mut self, name: &str) -> Option<u64> {
         let index = self.zip.index_for_name(name)?;
         self.zip.by_index_raw(index).ok().map(|f| f.size())
+    }
+
+    /// The size entry `name` takes in the archive, compressed. With [`Archive::declared_size`] it
+    /// gives the compression ratio the entry claims.
+    pub fn compressed_size(&mut self, name: &str) -> Option<u64> {
+        let index = self.zip.index_for_name(name)?;
+        self.zip.by_index_raw(index).ok().map(|f| f.compressed_size())
+    }
+
+    /// The first `n` bytes of entry `name` (all of it when it is shorter), or `None` when there
+    /// is no such entry: for telling a file by its signature without inflating it. The bytes are
+    /// charged to the total; a total with less left than the bytes wanted refuses before reading.
+    ///
+    /// The entry's checksum is not checked: it covers the whole entry.
+    pub fn read_head(&mut self, name: &str, n: usize) -> Result<Option<Vec<u8>>, Error> {
+        let Some(index) = self.zip.index_for_name(name) else { return Ok(None) };
+        let entry = |msg: String| Error::Entry { name: name.to_string(), msg };
+        let f = self.zip.by_index(index).map_err(|e| entry(e.to_string()))?;
+        // Never more than the entry declares: a shorter entry costs only what it has.
+        let want = (n as u64).min(f.size());
+        if self.budget.remaining() < want {
+            return Err(Error::BudgetSpent { name: name.to_string(), limit: self.budget.limit() });
+        }
+        let mut out = Vec::with_capacity(n.min(64 * 1024));
+        f.take(want).read_to_end(&mut out).map_err(|e| entry(e.to_string()))?;
+        self.budget.charge(out.len() as u64).map_err(|e| Error::BudgetSpent { name: name.to_string(), limit: e.limit })?;
+        Ok(Some(out))
     }
 
     /// The bytes of entry `name`, or `None` when there is no such entry.

@@ -89,9 +89,14 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   and message, images, and the vector network and geometry blobs. Bounded on hostile input.
   Carved from FigCraft.
 - [`craft-epub`](crates/epub/README.md): EPUB packages: the OCF ZIP container, the package document (metadata, manifest, spine) and the navigation document, written as EPUB 3 (reflowable and fixed layout) and read (EPUB 2 and 3) with bounded entry sizes. Content documents are the caller's.
+- [`craft-ews`](crates/ews/README.md): the SOAP layer of Exchange Web Services, from MailCraft, without
+  sockets: the request envelope and an escaping element builder, and the answer envelope, faults
+  and response messages with their codes, read with `craft-xml`. The operations and everything
+  over HTTP stay in each app.
 - [`craft-exr`](crates/exr/src/lib.rs): OpenEXR pieces shared by PhotoCraft and EffectCraft: layer
   and channel names, the channels that make a colour picture, and Cryptomatte IDs, metadata keys,
-  manifests and rank channels. Takes names and attribute text; decoding is not part of it yet.
+  manifests and rank channels. The optional `decode` feature adds bounded part listing, flat
+  decoding (scan lines, tiles, every compression of the `exr` crate) and writing.
 - [`craft-flow`](crates/flow/README.md): the flow model every text format maps to (paragraphs with a kind, lists and formatted spans; tables; pictures, fields, notes, equations), converted to and from a craft-wordmodel `Document`.
 - [`craft-font-catalog`](crates/font-catalog/README.md): the installed fonts on every platform
   (font folders, fontconfig and Flatpak host folders, CoreText, DirectWrite, the font store),
@@ -173,6 +178,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   primitives (`.abr`, `.asl`, `.aco`, `.act`, `.ase`, `.grd`, `.pat`, `.atn`, `.csh`, `.shc`) and
   the Photoshop blocks of a layered TIFF. Bounded and panic-free on hostile input. Compositing
   and the mapping onto a document stay in each app.
+- [`craft-jmap`](crates/jmap/README.md): the JMAP protocol core (RFC 8620), from MailCraft, without
+  sockets: session, requests of method calls with back-references, responses, ids, address
+  templates, credentials and the judgement of HTTP answers, over any HTTP implementation. Bounded
+  on hostile answers; what a program asks and makes of the answers stays in it.
 - [`craft-jpeg`](crates/jpeg/README.md): clean-room decoder for 12-bit and arithmetic-coded
   JPEG (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), from PhotoCraft, and a frame probe for routing.
   Metadata stays in each app.
