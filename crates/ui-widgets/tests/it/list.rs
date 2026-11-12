@@ -257,6 +257,34 @@ fn hosted_items_take_their_own_width_and_an_optional_one_drops_first() {
     assert!(field.right() <= row_rect.right() + 0.5, "the row's items stay inside it: {field:?} in {row_rect:?}");
 }
 
+/// A list sized to its content makes room for each row's optional item and shows its label whole, whether the label
+/// is shorter or longer than its least width.
+#[trial]
+fn a_content_sized_list_makes_room_for_its_rows_optional_items() {
+    use craft_ui::contract::Sizing;
+    use std::cell::Cell;
+    const ROWS: [(&str, &str); 2] = [("Levels", "Image > Adjustments"), ("Gaussian Blur and Sharpen More", "Filter > Blur")];
+    let shown = Rc::new(Cell::new(egui::Rect::NOTHING));
+    let held = shown.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1];
+        let source = keyed(&keys, |key: &usize| *key).with_text(|key| std::borrow::Cow::Borrowed(ROWS[*key].0));
+        let out = List::new("Commands")
+            .sizing(Sizing::Content)
+            .show_items(ui, &source, &mut |key, _| ListRow::new(ROWS[*key].0).trailing("Ctrl+L").optional(ROWS[*key].1));
+        held.set(out.response.rect);
+    });
+    fixture.room(Vec2::new(800.0, 300.0));
+    fixture.settle();
+    let list = shown.get();
+    assert!(list.width() < 800.0, "the list takes its width from its rows: {list:?}");
+    let whole = |text: &str| fixture.texts().iter().find(|run| run.text == text && list.contains_rect(run.rect)).map(|run| run.elided);
+    for (label, path) in ROWS {
+        assert_eq!(whole(label), Some(false), "{label} shows whole");
+        assert_eq!(whole(path), Some(false), "the path of {label} shows whole");
+    }
+}
+
 /// The components a row hosts under its label stand in one line inside the row, which grows to hold them, and a click on
 /// one reaches its output.
 #[trial]

@@ -158,7 +158,7 @@ pub(super) struct Placed {
     pub(super) items: Vec<Option<Rect>>,
     /// The row's least width: the label at its least, the required items at theirs.
     pub(super) min_width: f32,
-    /// The row's least width with the required items at their widths where the row has room.
+    /// The row's least width with every trailing item, optional ones included, at its width where the row has room.
     pub(super) ideal_width: f32,
 }
 
@@ -463,7 +463,9 @@ impl ListRow<'_> {
         let dividers = cells.iter().filter(|(_, _, leading)| *leading).map(|(_, cell, _)| if rtl { cell.left() } else { cell.right() }).collect();
         let least: f32 = widths.items.iter().filter(|item| !item.optional).map(|item| item.least + sizes.gap).sum();
         let min_width = lead + trail + base + column + leading_width + sizes.min_label + least + sizes.trailing_pad;
-        let ideal_width = min_width - least + required;
+        // Every item, optional ones included: at its ideal width the row shows everything.
+        let all: f32 = widths.items.iter().map(|item| item.width + sizes.gap).sum();
+        let ideal_width = min_width - least + all;
         Placed {
             toggles,
             texts,

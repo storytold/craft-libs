@@ -464,7 +464,8 @@ impl<'a> ListRow<'a> {
         self
     }
 
-    /// A text at the trailing end that drops out when the label would get narrower than its least width with it.
+    /// A text at the trailing end that drops out when the label would get narrower than its least width with it. A row
+    /// sized to its content makes room for it.
     #[must_use]
     pub fn optional(mut self, text: impl Into<Label>) -> Self {
         self.trailing.push(Trailing { item: TrailingItem::Text { text: text.into(), name: None, strong: false }, optional: true });
@@ -522,7 +523,8 @@ impl<'a> ListRow<'a> {
     }
 
     /// A component at the trailing end as [`trailing_field`](Self::trailing_field) adds one, that drops out when the
-    /// label would get narrower than its least width with it (a binding's badge).
+    /// label would get narrower than its least width with it (a binding's badge). A row sized to its content makes
+    /// room for it.
     #[must_use]
     pub fn optional_field<C: Show + 'a>(self, field: C, output: impl FnOnce(C::Output) + 'a) -> Self {
         self.hosted(Hosting::new(field, output), true)
