@@ -1042,6 +1042,7 @@ name = "craft-fig"
 version = "0.1.0"
 dependencies = [
  "craft-kiwi",
+ "craft-zip",
  "flate2",
  "ruzstd",
  "serde_json",
@@ -1311,6 +1312,7 @@ dependencies = [
  "aes",
  "base64 0.23.1",
  "craft-xml",
+ "craft-zip",
  "flate2",
  "getrandom 0.3.4",
  "hmac",
@@ -1342,7 +1344,7 @@ name = "craft-opc"
 version = "0.1.0"
 dependencies = [
  "craft-xml",
- "flate2",
+ "craft-zip",
  "log",
  "thiserror 2.0.21",
  "zip",
@@ -1387,7 +1389,7 @@ dependencies = [
 name = "craft-penpot"
 version = "0.1.0"
 dependencies = [
- "flate2",
+ "craft-zip",
  "serde_json",
  "thiserror 2.0.21",
  "zip",
@@ -1564,7 +1566,7 @@ dependencies = [
 name = "craft-sketch"
 version = "0.1.0"
 dependencies = [
- "flate2",
+ "craft-zip",
  "serde_json",
  "thiserror 2.0.21",
  "zip",

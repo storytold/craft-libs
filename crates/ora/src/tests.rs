@@ -318,7 +318,7 @@ fn an_archive_declaring_too_many_entries_is_refused_before_it_is_indexed() {
 /// Two entries of one name: `zip` keeps one, and which one the writer meant is not known.
 #[test]
 fn two_entries_of_one_name_are_refused() {
-    let bytes = archive(&"<image w=\x271\x27 h=\x271\x27><stack/></image>", &[("dupA", vec![1]), ("dupB", vec![2])]);
+    let bytes = archive("<image w='1' h='1'><stack/></image>", &[("dupA", vec![1]), ("dupB", vec![2])]);
     assert!(Archive::open(&bytes).is_ok());
     let mut renamed = bytes.clone();
     let mut i = 0;
