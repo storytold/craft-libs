@@ -22,7 +22,8 @@ fn strict() -> Vec<u8> {
         r#"<x:worksheet {NS}><x:cols><x:col min="2" max="3" width="20.5" customWidth="1"/><x:col min="0" max="1"/></x:cols><x:sheetData>
         <x:row r="1"><x:c r="A1" t="s"><x:v>1</x:v></x:c><x:c r="B1" s="1"><x:v>1</x:v></x:c><x:c r="C1"><x:f>B1*2</x:f><x:v>2</x:v></x:c></x:row>
         <x:row r="2"><x:c r="A2" t="d"><x:v>1904-01-03</x:v></x:c><x:c r="B2" t="s"><x:v>9</x:v></x:c></x:row></x:sheetData>
-        <x:mergeCells><x:mergeCell ref="A3:B4"/><x:mergeCell ref="C3"/></x:mergeCells><x:pageSetup orientation="landscape"/></x:worksheet>"#
+        <x:mergeCells><x:mergeCell ref="A3:B4"/><x:mergeCell ref="C3"/></x:mergeCells><x:pageSetup orientation="landscape"/><x:drawing r:id="d1"/>
+        <x:extLst><x:ext uri="{{05C60535-1F16-4fd2-B633-F4F36F0B64E0}}" xmlns:e="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><e:sparklineGroups xmlns:m="http://schemas.microsoft.com/office/excel/2006/main"><e:sparklineGroup><e:sparklines><e:sparkline><m:f>A1:E1</m:f><m:sqref>F1</m:sqref></e:sparkline></e:sparklines></e:sparklineGroup></e:sparklineGroups></x:ext></x:extLst></x:worksheet>"#
     );
     zip(&[
         ("[Content_Types].xml", b"<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>"),
@@ -82,6 +83,13 @@ fn a_strict_workbook_with_prefixes() {
     assert_eq!((part.columns[0].first, part.columns[0].last, part.columns[0].width), (1, 2, Some(20.5)));
     assert_eq!(part.root.child("pageSetup").and_then(|e| e.attr("orientation")), Some("landscape"));
     assert!(part.root.child("sheetData").is_some_and(|d| d.elements().next().is_none()));
+    // Other namespaces keep fixed prefixes, so the rest of the part can be written back.
+    assert_eq!(part.root.child("drawing").and_then(|d| d.attr("r:id")), Some("d1"));
+    assert_eq!(part.root.find("xm:sqref").map(|e| e.text().into_owned()).as_deref(), Some("F1"));
+    let mut root = part.root.clone();
+    craft_xlsx::ns::declare(&mut root);
+    let again = craft_xml::Options::canonical(&craft_xlsx::ns::CANONICAL).parse(root.to_xml().as_bytes()).unwrap();
+    assert_eq!(again, part.root);
     assert_eq!((part.rows, part.dropped, part.damaged.as_deref()), (2, 0, None));
     let values: Vec<_> = cells.iter().map(|c| c.value.resolve(&strings, true)).collect();
     assert_eq!(values, [Value::text("one"), Value::Number(1.0), Value::Number(2.0), Value::Number(2.0), Value::Empty]);
