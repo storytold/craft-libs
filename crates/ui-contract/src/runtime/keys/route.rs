@@ -63,33 +63,11 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
             };
         }
         for (text, taken) in batch.texts.iter().zip(&mut taken_texts) {
-            let digits;
-            let text = if rec.stop.role.digits {
-                let (found, rest) = craft_behavior::keys::split_digits(text);
-                for digit in found {
-                    push(&mut routed, Some(rec.stop.id), Intent::Digit(digit), false);
-                    *taken = true;
-                }
-                digits = rest;
-                &digits
-            } else {
-                text
-            };
-            if text.is_empty() {
-                continue;
+            let route = text_route(ctx, rec, driven, text);
+            *taken = !route.is_empty();
+            for (to, intent) in route {
+                push(&mut routed, Some(to), intent, false);
             }
-            let typed = rec.stop.role.type_ahead && !text.trim().is_empty();
-            let to_list = driven.filter(|driven| !driven.text && !text.trim().is_empty());
-            if let Some(driven) = to_list {
-                push(&mut routed, Some(driven.list), Intent::Text(Arc::from(text.as_str())), false);
-            } else if matches!(rec.stop.keys.owner, OwnerClass::Text) || typed {
-                routed.entry(Some(rec.stop.id)).or_default().items.push(Item { intent: Intent::Text(Arc::from(text.as_str())), horizontal: false });
-            } else if let Some(menu) = focus::menu_scope(ctx, rec).filter(|_| !text.trim().is_empty()) {
-                push(&mut routed, Some(menu), Intent::Text(Arc::from(text.as_str())), false);
-            } else {
-                continue;
-            }
-            *taken = true;
         }
     } else {
         // With nothing focused, a plain Enter submits to the window, as an unfocused Escape cancels: a tool's pending
@@ -195,7 +173,7 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
     let scopes = target.map(|rec| focus::scope_chain(ctx, rec)).unwrap_or_default();
     let owner = owner_at(ctx, target, &scopes, None);
     let own = target.map(|rec| rec.stop.keys.owner);
-    let silent = matches!(owner, KeyOwner::Class(OwnerClass::Menu | OwnerClass::Recorder));
+    let silent = keeps_every_key(owner);
     let dialog = owner == KeyOwner::Class(OwnerClass::Dialog);
     // The focused component keeps its own keys inside a dialog: a text field its typing, a widget its activation.
     let typing = owner != KeyOwner::Blocked && own == Some(OwnerClass::Text);
@@ -222,9 +200,12 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
 /// Whether the focused stop `target`, whose keys `owner` owns, holds `press`: the press is its own and reaches neither
 /// egui's input, where the app reads its own keys, nor the app's shortcuts. A widget or popup holds the presses its
 /// routing `taken`, the keys its filter keeps from the key stage, and the presses whose text it took (`typed`: the
-/// type-ahead of a list).
+/// type-ahead of a list). A menu or a recorder holds every press.
 fn holds_press(owner: KeyOwner, target: Option<&StopRec>, press: &Press, taken: bool, typed: bool) -> bool {
     let Some(keys) = target.map(|rec| &rec.stop.keys) else { return false };
+    if keeps_every_key(owner) {
+        return true;
+    }
     let widget = owner != KeyOwner::Blocked && matches!(keys.owner, OwnerClass::Widget | OwnerClass::Popup | OwnerClass::PassivePopup);
     let kept = match keys.keep {
         focus::KeepKeys::Tab => press.key == Key::Tab,
@@ -235,10 +216,53 @@ fn holds_press(owner: KeyOwner, target: Option<&StopRec>, press: &Press, taken: 
     widget && (taken || typed || kept)
 }
 
-/// Whether the focused component of the running viewport holds a press of `chord`: it claims the chord, or its
-/// routing takes the press and keeps it from the app as `owned_shortcuts` does. Such a press reaches neither egui's
-/// input nor the app's shortcuts, so an app command bound to the chord does not run while the component has the focus.
-/// Typed text is not a chord: the letters a list takes as type-ahead are held as they are typed.
+/// `Menu` and `Recorder` keep every key (9.3): no press of theirs reaches egui's input or the app's shortcuts.
+fn keeps_every_key(owner: KeyOwner) -> bool {
+    matches!(owner, KeyOwner::Class(OwnerClass::Menu | OwnerClass::Recorder))
+}
+
+/// Where the focused stop `rec` sends the typed `text`, and as what: a digits stop takes its digits, and the rest goes
+/// to the list `driven` drives, to a text or type-ahead stop, or to the menu around the stop. Empty when no component
+/// takes the text. Reads state only, so a query can ask it.
+fn text_route(ctx: &Context, rec: &StopRec, driven: Option<Driven>, text: &str) -> Vec<(Id, Intent)> {
+    let mut route = Vec::new();
+    let rest;
+    let text = if rec.stop.role.digits {
+        let (found, left) = keys::split_digits(text);
+        route.extend(found.into_iter().map(|digit| (rec.stop.id, Intent::Digit(digit))));
+        rest = left;
+        rest.as_str()
+    } else {
+        text
+    };
+    if text.is_empty() {
+        return route;
+    }
+    let letters = !text.trim().is_empty();
+    let to = if let Some(driven) = driven.filter(|driven| !driven.text && letters) {
+        Some(driven.list)
+    } else if matches!(rec.stop.keys.owner, OwnerClass::Text) || (rec.stop.role.type_ahead && letters) {
+        Some(rec.stop.id)
+    } else if letters {
+        focus::menu_scope(ctx, rec)
+    } else {
+        None
+    };
+    route.extend(to.map(|to| (to, Intent::Text(Arc::from(text)))));
+    route
+}
+
+/// The text a press of `chord` types: the character of a letter, digit or symbol key pressed with no Cmd, Ctrl or Alt
+/// held (`Chord::is_plain`, the chords typing would trigger).
+fn text_of(chord: Chord) -> Option<&'static str> {
+    let key = chord.key;
+    (chord.is_plain() && (key.is_letter() || key.is_digit() || key.is_symbol())).then(|| key.name())
+}
+
+/// Whether the focused component of the running viewport holds a press of `chord`, as routing decides for the press:
+/// it claims the chord, its routing takes the press or the text the press types (a list's type-ahead), or a menu or
+/// recorder has the keys. No app command bound to the chord runs while the component has the focus, and the press
+/// reaches egui's input only for the app's own widget (`Stop::host`), which reads its keys there.
 pub fn focus_holds(ctx: &Context, chord: Chord) -> bool {
     let Some(rec) = focus::focused_rec(ctx) else { return false };
     let viewport = crate::runtime::egui::pass::current_viewport(ctx);
@@ -247,10 +271,12 @@ pub fn focus_holds(ctx: &Context, chord: Chord) -> bool {
         return true;
     }
     let press = Press { key: chord.key, mods: chord.mods, repeat: false, in_egui: None, release: None, text: None };
-    let driven = Driven::of(ctx, &rec).or_else(|| list_of_field(ctx, &rec));
-    let taken = !matches!(press_route(ctx, crate::runtime::windows::os_of(ctx), &rec, &press, driven), PressRoute::Free);
+    let driven = Driven::of(ctx, &rec);
+    let route = press_route(ctx, crate::runtime::windows::os_of(ctx), &rec, &press, driven.or_else(|| list_of_field(ctx, &rec)));
+    let taken = !matches!(route, PressRoute::Free);
+    let typed = text_of(chord).is_some_and(|text| !text_route(ctx, &rec, driven, text).is_empty());
     let owner = owner_at(ctx, Some(&rec), &focus::scope_chain(ctx, &rec), None);
-    holds_press(owner, Some(&rec), &press, taken, false)
+    holds_press(owner, Some(&rec), &press, taken, typed)
 }
 
 /// Takes the presses the focused component holds out of the running pass's egui input, where the app reads its own

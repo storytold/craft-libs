@@ -144,3 +144,20 @@ fn a_recorder_reads_a_press_as_one_chord_and_no_command_runs() {
     assert_eq!(press_k("recorder"), (vec![chord], 0), "the recorder owns the press");
     assert_eq!(press_k("button").0, Vec::new(), "no other role reads chords");
 }
+
+/// A recorder holds every press: the app reads none from egui's input, and `focus_holds` answers so before the press.
+#[trial]
+fn a_recorder_holds_its_presses_from_the_app() {
+    let saw = std::cell::Cell::new(false);
+    let mut show = |ui: &mut Ui| {
+        stop(ui, "button", KeyUse::of(Input::Pointer));
+        stop(ui, "recorder", KeyUse::RECORDER);
+        saw.set(saw.get() || ui.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::Key { key: Key::K, pressed: true, .. }))));
+    };
+    let mut frames = shown(false, &mut show);
+    focus_on(&mut frames, &mut show, "recorder");
+    let chord = craft_keymap::Chord { mods: craft_keymap::Mods { shift: true, ..craft_keymap::Mods::CMD }, key: craft_keymap::Key::K };
+    assert!(crate::runtime::keys::focus_holds(&frames.ctx, chord), "the recorder names the chord as its own");
+    frames.frame(vec![key_press(Key::K, Modifiers::COMMAND | Modifiers::SHIFT)], &mut show);
+    assert!(!saw.get(), "the app reads no press the recorder holds");
+}

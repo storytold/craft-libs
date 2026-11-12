@@ -179,6 +179,7 @@ fn a_list_with_one_tab_stop_moves_its_lead_and_selects() {
     assert_eq!(last(&seen), 0);
     press(&mut frames, Key::PageDown, Modifiers::NONE, &mut show);
     assert!(last(&seen) > 1, "a page moves several rows: {:?}", seen.leads());
+    assert!(keys::focus_holds(&frames.ctx, Chord::plain(craft_keymap::Key::C)), "a letter the type-ahead takes is the list's own");
     frames.frame(vec![Event::Text("c".into())], &mut show);
     assert_eq!(last(&seen), 4, "type-ahead picks the word starting with the letter");
 
