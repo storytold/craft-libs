@@ -156,6 +156,23 @@ fn a_click_on_the_selected_event_deselects_it() {
     );
 }
 
+/// An empty event log says so with the collection's own empty text: one label, not a notice.
+#[trial]
+fn an_empty_event_log_says_so_in_the_collections_empty_text() {
+    use craft_ui::contract::Role;
+    use craft_ui::list::EventList;
+    let mut fixture = Fixture::new(move |ui| {
+        let keys: [u64; 0] = [];
+        let source = keyed(&keys, |key: &u64| *key);
+        let _ = EventList::new("Events").show_items(ui, &source, &mut |key, _| ListRow::new(NAMES[*key as usize]));
+    });
+    fixture.settle();
+    let empty = fixture.by_label("No events.").expect("the empty log says so");
+    let list = fixture.by_role(Role::LIST).into_iter().next().expect("the list");
+    assert!(empty.rect.left() < list.rect.center().x, "the text starts at the reading start");
+    assert!(fixture.by_role(Role::STATUS).is_empty(), "no notice");
+}
+
 /// A single click on a finding activates it, so the app goes to what it is about.
 #[trial]
 fn a_click_on_a_finding_activates_it() {

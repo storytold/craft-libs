@@ -167,5 +167,5 @@ impl NoticeCenter {
 
 /// The "Don't Show Again" action's label: the word of `common.dontShowAgain`.
 fn dont_show_again() -> Label {
-    CommonWords::WORDS.iter().find(|word| word.id == DONT_SHOW_AGAIN).copied().map_or(Label::Empty, Label::Word)
+    CommonWords::word(DONT_SHOW_AGAIN).map_or(Label::Empty, Label::Word)
 }

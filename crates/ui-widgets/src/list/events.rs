@@ -4,17 +4,14 @@
 use super::view_words::EventWords;
 use super::{ListRow, RowEvent};
 use crate::contract::{
-    Bind, BindMut, BodyCx, Collection, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, Props as _, Role, SelectMode,
-    Show as _, Sizing, WordSetCx as _,
+    Bind, BindMut, Collection, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, Props as _, Role, SelectMode, Sizing,
 };
-use crate::notices::{Notice, NoticeLayout};
 use crate::primitives::IconSpec;
-use crate::runtime::env::Label;
+use crate::runtime::env::{Label, WordSet as _};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::{DisplayOrder, IconId, ItemSource, Metrics, Selection, SpanLayout};
 use craft_i18n::Format;
 use craft_theme::variant::Tone;
-use egui::Ui;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
@@ -208,7 +205,11 @@ impl<'a> EventList<'a> {
         EventList {
             common: Common::new(),
             props: ContainerProps::new().surface(SurfaceKind::Sunken).sizing(Sizing::Fill),
-            items: CollectionProps::new().select(SelectMode::Single).striped(true).allow_empty(true),
+            items: CollectionProps::new()
+                .select(SelectMode::Single)
+                .striped(true)
+                .allow_empty(true)
+                .empty(EventWords::word(NONE).map_or(Label::Empty, Label::Word)),
             selection: None,
         }
         .label(label)
@@ -248,13 +249,7 @@ impl Collection for EventList<'_> {
     fn item_layout(&self, source: &dyn ItemSource<u64>, width: f32, cx: &StyleCx<'_>) -> SpanLayout {
         SpanLayout::sized(source, width, cx.control().height)
     }
-
-    fn empty_height(&self, _width: f32, _ui: &Ui, cx: &StyleCx<'_>) -> f32 {
-        cx.control().height
-    }
-
-    fn empty(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
-        let words = cx.words::<EventWords>();
-        Notice::new(Tone::Neutral, words.none.clone()).layout(NoticeLayout::Centred).show_at(ui, cx.rect);
-    }
 }
+
+/// The id of the word an empty log shows.
+const NONE: &str = "eventLog.none";

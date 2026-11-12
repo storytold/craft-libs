@@ -238,6 +238,11 @@ pub trait WordSet: Sized {
 
     /// The text each word of the table shows now.
     fn rows(&self) -> WordRows;
+
+    /// The word of the table with `id`, for a label that resolves in the language of wherever it shows.
+    fn word(id: &str) -> Option<Word> {
+        Self::WORDS.iter().find(|word| word.id == id).copied()
+    }
 }
 
 /// A template with `{name}` placeholders, filled at use. The only placeholder filler: each value is isolated in

@@ -5,16 +5,16 @@ use super::view_words::FindingsWords;
 use super::words::ListWords;
 use super::{ListRow, RowEvent};
 use crate::contract::{
-    ActivateOn, Bind, BindMut, BodyCx, Collection, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, MeasureCx, PaintUi,
-    Props as _, Role, SelectMode, Show as _, Sizing, Styled as _, WordSetCx as _,
+    ActivateOn, Bind, BindMut, Collection, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, MeasureCx, PaintUi,
+    Props as _, Role, SelectMode, Sizing, Styled as _, WordSetCx as _,
 };
-use crate::notices::{Notice, NoticeLayout};
 use crate::primitives::{IconSpec, TextRun, glyph};
+use crate::runtime::env::{Label, WordSet as _};
 use crate::style::{ComponentStyle, IconLook, Stateful, StyleCx, SurfaceKind, TextLook, TypeRole};
 use craft_behavior::{DisplayOrder, Flow, IconId, Insets, ItemSource, Metrics, Selection, Sense, SpanLayout};
 use craft_i18n::Format;
 use craft_theme::variant::Tone;
-use egui::{Response, Ui, Vec2};
+use egui::{Response, Vec2};
 use std::borrow::Cow;
 
 /// How serious a finding is. The glyph's shape differs per severity as well as its colour.
@@ -163,11 +163,14 @@ pub struct FindingsList<'a> {
 
 impl<'a> FindingsList<'a> {
     /// A findings list named `label`.
-    pub fn new(label: impl Into<crate::runtime::env::Label>) -> Self {
+    pub fn new(label: impl Into<Label>) -> Self {
         FindingsList {
             common: Common::new(),
             props: ContainerProps::new().surface(SurfaceKind::Sunken).sizing(Sizing::Fill),
-            items: CollectionProps::new().select(SelectMode::Single).activate(ActivateOn::Click),
+            items: CollectionProps::new()
+                .select(SelectMode::Single)
+                .activate(ActivateOn::Click)
+                .empty(ListWords::word(NO_FINDINGS).map_or(Label::Empty, Label::Word)),
             selection: None,
         }
         .label(label)
@@ -207,16 +210,10 @@ impl Collection for FindingsList<'_> {
     fn item_layout(&self, source: &dyn ItemSource<u64>, width: f32, cx: &StyleCx<'_>) -> SpanLayout {
         SpanLayout::sized(source, width, cx.control().height)
     }
-
-    fn empty_height(&self, _width: f32, _ui: &Ui, cx: &StyleCx<'_>) -> f32 {
-        cx.control().height
-    }
-
-    fn empty(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
-        let words = cx.words::<ListWords>();
-        Notice::new(Tone::Neutral, words.no_findings.clone()).layout(NoticeLayout::Centred).show_at(ui, cx.rect);
-    }
 }
+
+/// The id of the word an empty list shows.
+const NO_FINDINGS: &str = "findingsList.noFindings";
 
 /// The style of the summary line.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
