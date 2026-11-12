@@ -309,7 +309,7 @@ fn pcm_past_4_gib_reads_back_whole() {
     let out = w.finish().unwrap();
     let f = open(&out).unwrap();
     let s = &f.tracks[0].samples;
-    let bytes = (writes * MIB) as u64;
+    let bytes = writes as u64 * MIB as u64;
     assert_eq!(s.iter().map(|s| u64::from(s.size)).sum::<u64>(), bytes);
     assert_eq!(s.iter().map(|s| u64::from(s.duration)).sum::<u64>(), bytes / 4);
     assert!(s.iter().all(|s| s.size <= 1 << 20));

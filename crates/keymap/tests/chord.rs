@@ -28,6 +28,45 @@ fn canonical_text_round_trips_for_every_key_and_modifier_set() {
 }
 
 #[test]
+fn plus_and_minus_keys_parse_from_their_glyphs() {
+    assert_eq!(Key::parse("+"), Some(Key::Plus));
+    assert_eq!(Key::parse("-"), Some(Key::Minus));
+    assert_eq!(Key::parse("−"), Some(Key::Minus), "U+2212");
+}
+
+#[test]
+fn the_iso_key_next_to_left_shift_reads_and_writes_as_intl_backslash() {
+    assert_eq!(Key::parse("IntlBackslash"), Some(Key::IntlBackslash));
+    assert_eq!(Key::parse("intlbackslash"), Some(Key::IntlBackslash));
+    for text in ["IntlBackslash", "Cmd+IntlBackslash", "Shift+IntlBackslash"] {
+        let c = chord(text);
+        assert_eq!(c.to_string(), text);
+        assert_eq!(Trigger::parse(text).map(|t| t.to_string()).as_deref(), Ok(text));
+        let json = serde_json::to_string(&c).unwrap();
+        assert_eq!(json, format!("\"{text}\""));
+        assert_eq!(serde_json::from_str::<Chord>(&json).unwrap(), c);
+    }
+    assert_eq!(chord("Cmd+IntlBackslash").display(Platform::Windows), "Ctrl+IntlBackslash");
+    assert_eq!(chord("Cmd+IntlBackslash").display(Platform::Mac), "⌘IntlBackslash");
+    assert!(Key::IntlBackslash.is_symbol());
+    // It is not the usual backslash key, and `<` and `>` have no key of their own.
+    assert_eq!(Key::parse("\\"), Some(Key::Backslash));
+    assert_ne!(chord("Shift+IntlBackslash"), chord("Shift+\\"));
+    assert_eq!(Key::parse("<"), None);
+    assert_eq!(Key::from_char('<'), None);
+    assert_eq!(Key::from_char('>'), None);
+}
+
+#[test]
+fn arrow_glyphs_parse_as_arrow_keys() {
+    for (glyph, key) in [("←", Key::Left), ("→", Key::Right), ("↑", Key::Up), ("↓", Key::Down)] {
+        assert_eq!(Key::parse(glyph), Some(key), "{glyph}");
+    }
+    assert_eq!(Chord::parse("⌘←").unwrap().to_string(), "Cmd+Left");
+    assert_eq!(Chord::parse("Alt+Shift+→").unwrap().to_string(), "Alt+Shift+Right");
+}
+
+#[test]
 fn aliases_parse_to_canonical_chords() {
     let cases = [
         ("cmd+shift+z", "Cmd+Shift+Z"),
@@ -50,6 +89,8 @@ fn aliases_parse_to_canonical_chords() {
         ("Cmd+Plus", "Cmd++"),
         ("cmd+Equals", "Cmd+="),
         ("Cmd+-", "Cmd+-"),
+        ("Cmd+−", "Cmd+-"),
+        ("⌘−", "Cmd+-"),
         ("Cmd + K", "Cmd+K"),
         ("esc", "Escape"),
         ("return", "Enter"),

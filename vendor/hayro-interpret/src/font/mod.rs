@@ -155,7 +155,8 @@ impl OutlineGlyph {
 
     /// Get raw font bytes and metadata for downstream use.
     ///
-    /// Returns `None` for Type1 fonts.
+    /// Returns `None` for Type1 fonts. Craft patch (flatten): Type1C (`FontFile3`) fonts return
+    /// their CFF bytes.
     pub fn font_data(&self) -> Option<OutlineFontData> {
         self.font.font_data()
     }

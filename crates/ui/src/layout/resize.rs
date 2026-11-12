@@ -24,7 +24,8 @@ pub struct ResizeResponse {
 /// A focusable divider with pointer, arrow-key and accessibility resizing.
 ///
 /// This widget never stores or changes a pane size. IDs and labels are separate, so translated
-/// labels do not change identity. Pointer drags retain egui's immediate `Sense::drag` behavior.
+/// labels do not change identity. Pointer drags retain egui's immediate `Sense::drag` behavior
+/// and hold focus only for the gesture (see [`drag_focus`]).
 /// Only arrows along the split axis are consumed, while this handle has focus. Tab remains
 /// available for normal focus traversal.
 pub struct ResizeHandle<'a> {
@@ -36,11 +37,12 @@ pub struct ResizeHandle<'a> {
     hit_margin: f32,
     step: f32,
     value: Option<(f32, RangeInclusive<f32>)>,
+    reversed: bool,
 }
 
 impl<'a> ResizeHandle<'a> {
     pub fn new(id: Id, axis: SplitAxis, rect: Rect, label: &'a str, style: ResizeHandleStyle) -> Self {
-        Self { id, axis, rect, label, style, hit_margin: 3.0, step: 8.0, value: None }
+        Self { id, axis, rect, label, style, hit_margin: 3.0, step: 8.0, value: None, reversed: false }
     }
 
     /// Expand the hit rectangle along the movement axis, in logical points. Default: 3.
@@ -62,6 +64,22 @@ impl<'a> ResizeHandle<'a> {
         self
     }
 
+    /// The value grows against the axis, as for a column docked on the right edge that widens
+    /// as its divider moves left. Accessibility actions then work on the value; the pointer
+    /// and arrow keys stay physical, and `delta` stays along the axis.
+    pub fn reversed(mut self, reversed: bool) -> Self {
+        self.reversed = reversed;
+        self
+    }
+
+    /// Show the handle and return a resize proposal for the caller to apply.
+    ///
+    /// Invalid geometry or values make the handle inert. Pointer drags and arrow keys produce a
+    /// physical `delta` along the split axis; `reversed` flips only accessibility
+    /// increment/decrement/SetValue changes, not the pointer or arrow movement. A finite nonzero
+    /// delta marks the response changed. The accessibility role is `Splitter`, oriented
+    /// perpendicular to the movement axis, with Increment/Decrement and optional SetValue actions
+    /// and numeric value when configured.
     pub fn show(self, ui: &mut Ui) -> ResizeResponse {
         let hit = self.rect.expand2(match self.axis {
             SplitAxis::Horizontal => Vec2::new(self.hit_margin, 0.0),
@@ -83,9 +101,7 @@ impl<'a> ResizeHandle<'a> {
         let enabled = valid && response.enabled();
         let mut delta = 0.0;
         if enabled {
-            if response.drag_started() {
-                response.request_focus();
-            }
+            drag_focus(ui, &response);
             if response.dragged() {
                 let drag = response.drag_delta();
                 delta = match self.axis {
@@ -117,27 +133,30 @@ impl<'a> ResizeHandle<'a> {
                     }
                 });
             }
+            let mut change = 0.0;
             ui.input_mut(|input| {
                 input.consume_accesskit_action_requests(response.id, |request| match request.action {
                     accesskit::Action::Increment => {
-                        delta += self.step;
+                        change += self.step;
                         true
                     }
                     accesskit::Action::Decrement => {
-                        delta -= self.step;
+                        change -= self.step;
                         true
                     }
                     accesskit::Action::SetValue => {
                         if let (Some((value, range)), Some(accesskit::ActionData::NumericValue(new_value))) = (&self.value, &request.data)
                             && new_value.is_finite()
                         {
-                            delta = (new_value.clamp(f64::from(*range.start()), f64::from(*range.end())) - f64::from(*value)) as f32;
+                            change = (new_value.clamp(f64::from(*range.start()), f64::from(*range.end())) - f64::from(*value)) as f32;
+                            delta = 0.0;
                         }
                         true
                     }
                     _ => false,
                 });
             });
+            delta += if self.reversed { -change } else { change };
         }
         if !delta.is_finite() {
             delta = 0.0;
@@ -151,7 +170,7 @@ impl<'a> ResizeHandle<'a> {
             {
                 egui::WidgetInfo::slider(enabled, f64::from(*value), self.label)
             } else {
-                egui::WidgetInfo::labeled(egui::WidgetType::Other, enabled, self.label)
+                egui::WidgetInfo::labeled(egui::Role::Unknown, enabled, self.label)
             }
         });
         ui.ctx().accesskit_node_builder(response.id, |node| {
@@ -194,5 +213,21 @@ impl<'a> ResizeHandle<'a> {
             }
         }
         ResizeResponse { response, delta }
+    }
+}
+
+/// A pointer drag focuses its handle for the gesture only and gives the focus up on release,
+/// so the app's shortcuts and its canvas arrow keys work again (they defer to a focused
+/// widget). A handle focused from the keyboard (Tab, F6) before the drag keeps its focus.
+pub(crate) fn drag_focus(ui: &Ui, response: &Response) {
+    let key = response.id.with("pointer-focus");
+    if response.drag_started() {
+        if !response.has_focus() {
+            ui.ctx().data_mut(|d| d.insert_temp(key, ()));
+        }
+        response.request_focus();
+    }
+    if response.drag_stopped() && ui.ctx().data_mut(|d| d.remove_temp::<()>(key)).is_some() {
+        response.surrender_focus();
     }
 }

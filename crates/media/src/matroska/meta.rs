@@ -3,7 +3,22 @@
 
 use crate::matroska::codec::map_codec;
 use crate::matroska::ebml::{Children, float, int, string, uint};
-use crate::matroska::ids::*;
+use crate::matroska::ids::{
+    ALPHA_MODE, AUDIO, BIT_DEPTH, BITS_PER_CHANNEL, CB_SUBSAMPLING_HORZ, CB_SUBSAMPLING_VERT, CHANNELS, CHAP_COUNTRY, CHAP_LANGUAGE,
+    CHAP_LANGUAGE_BCP47, CHAP_STRING, CHAPTER_ATOM, CHAPTER_DISPLAY, CHAPTER_FLAG_ENABLED, CHAPTER_FLAG_HIDDEN, CHAPTER_STRING_UID, CHAPTER_TIME_END,
+    CHAPTER_TIME_START, CHAPTER_UID, CHROMA_SITING_HORZ, CHROMA_SITING_VERT, CHROMA_SUBSAMPLING_HORZ, CHROMA_SUBSAMPLING_VERT, CODEC_DELAY, CODEC_ID,
+    CODEC_NAME, CODEC_PRIVATE, COLOUR, COLOUR_SPACE, CONTENT_COMP_ALGO, CONTENT_COMP_SETTINGS, CONTENT_COMPRESSION, CONTENT_ENCODING,
+    CONTENT_ENCODING_ORDER, CONTENT_ENCODING_SCOPE, CONTENT_ENCODING_TYPE, CONTENT_ENCODINGS, CUE_BLOCK_NUMBER, CUE_CLUSTER_POSITION, CUE_DURATION,
+    CUE_POINT, CUE_RELATIVE_POSITION, CUE_TIME, CUE_TRACK, CUE_TRACK_POSITIONS, DATE_UTC, DEFAULT_DURATION, DISPLAY_HEIGHT, DISPLAY_UNIT,
+    DISPLAY_WIDTH, DURATION, EDITION_ENTRY, EDITION_FLAG_DEFAULT, EDITION_FLAG_HIDDEN, EDITION_FLAG_ORDERED, EDITION_UID, FIELD_ORDER, FLAG_DEFAULT,
+    FLAG_ENABLED, FLAG_FORCED, FLAG_HEARING_IMPAIRED, FLAG_INTERLACED, FLAG_LACING, LANGUAGE, LANGUAGE_BCP47, LUMINANCE_MAX, LUMINANCE_MIN,
+    MASTERING_METADATA, MATRIX_COEFFICIENTS, MAX_CLL, MAX_FALL, MUXING_APP, NAME, OUTPUT_SAMPLING_FREQUENCY, PIXEL_CROP_BOTTOM, PIXEL_CROP_LEFT,
+    PIXEL_CROP_RIGHT, PIXEL_CROP_TOP, PIXEL_HEIGHT, PIXEL_WIDTH, PRIMARIES, PRIMARY_B_X, PRIMARY_B_Y, PRIMARY_G_X, PRIMARY_G_Y, PRIMARY_R_X,
+    PRIMARY_R_Y, PROJECTION, PROJECTION_POSE_PITCH, PROJECTION_POSE_ROLL, PROJECTION_POSE_YAW, PROJECTION_TYPE, RANGE, SAMPLING_FREQUENCY, SEEK,
+    SEEK_ID, SEEK_POSITION, SEEK_PRE_ROLL, SEGMENT_UUID, SIMPLE_TAG, STEREO_MODE, TAG, TAG_ATTACHMENT_UID, TAG_BINARY, TAG_CHAPTER_UID, TAG_DEFAULT,
+    TAG_EDITION_UID, TAG_LANGUAGE, TAG_NAME, TAG_STRING, TAG_TRACK_UID, TARGET_TYPE, TARGET_TYPE_VALUE, TARGETS, TIMESTAMP_SCALE, TITLE, TRACK_ENTRY,
+    TRACK_NUMBER, TRACK_TYPE, TRACK_UID, TRANSFER_CHARACTERISTICS, VIDEO, WHITE_POINT_X, WHITE_POINT_Y, WRITING_APP,
+};
 use crate::matroska::track::{AudioInfo, Color, ContentEncoding, MasteringMetadata, Projection, Track, TrackKind, VideoInfo, gcd};
 
 // A malformed Matroska file may contain arbitrarily deep ChapterAtom and SimpleTag chains.
@@ -13,6 +28,11 @@ const MAX_META_DEPTH: usize = 64;
 /// produce. Real files strip a few bytes of codec header; a longer one is treated as an
 /// unsupported compression and its frames are not reconstructed.
 const MAX_STRIPPED_HEADER: usize = 256;
+/// Most `ContentEncoding` entries a track may list. A muxer writes one or two (compression,
+/// encryption); readers check the whole chain for every frame they return, so a longer chain
+/// would multiply that work by the frame count. A track with more is treated as having an
+/// unsupported compression, and its frames are returned as stored.
+const MAX_CONTENT_ENCODINGS: usize = 16;
 /// Largest accepted `TimestampScale` (about 4.3 s per tick). It keeps tick to nanosecond
 /// arithmetic on 64-bit timestamps within `i128`.
 const MAX_TIMESTAMP_SCALE: u64 = 1 << 32;
@@ -444,6 +464,9 @@ fn parse_audio(d: &[u8]) -> AudioInfo {
 }
 
 fn parse_encodings(d: &[u8]) -> Vec<ContentEncoding> {
+    if Children::new(d).filter(|e| e.id == CONTENT_ENCODING).nth(MAX_CONTENT_ENCODINGS).is_some() {
+        return vec![ContentEncoding::Compression { algo: u64::MAX, settings: Vec::new(), scope: 1 }];
+    }
     let mut list: Vec<(u64, ContentEncoding)> = Vec::new();
     for ce in Children::new(d).filter(|e| e.id == CONTENT_ENCODING) {
         let (mut order, mut scope, mut ty) = (0u64, 1u64, 0u64);
@@ -611,6 +634,18 @@ mod metadata_depth_tests {
         let mut parsed = parse_tracks(&tracks, 1_000_000);
         assert_eq!(parsed.len(), 1);
         parsed.remove(0)
+    }
+
+    #[test]
+    fn a_long_encoding_chain_is_not_rechecked_for_every_frame() {
+        let strip: (&[u8], u64) = (b"", 2);
+        let most = track_with_private(b"private", &[strip; MAX_CONTENT_ENCODINGS]);
+        assert_eq!(most.encodings.len(), MAX_CONTENT_ENCODINGS);
+        assert!(most.frames_readable());
+        let many = track_with_private(b"private", &vec![strip; 10_000]);
+        assert!(matches!(&many.encodings[..], [ContentEncoding::Compression { scope: 1, .. }]), "{:?}", many.encodings.len());
+        assert!(!many.frames_readable());
+        assert_eq!(many.codec_private, b"private");
     }
 
     #[test]

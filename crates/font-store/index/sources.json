@@ -1,0 +1,4 @@
+{"schema":1,"version":"1.1","indexes":[
+{"source":"google/fonts","name":"Google Fonts","curated":true,"path":"indexes/google-fonts.json","size":4724581,"sha256":"72ea418e43785d572e73350ad08e9e6601a5a12f93315805f92bd3e092618a63","gz_path":"indexes/google-fonts.json.gz","gz_size":596893,"gz_sha256":"62d1d5645417a691e4710f6d1b895f925284ea9c804de268a97432bd67e9c1f6","commit":"45e3d5269e4a17d823f6d84470bc084dc5ae46f6","families":2040,"files":3781},
+{"source":"notofonts","name":"Noto","curated":true,"path":"indexes/noto.json","size":117706,"sha256":"8243d697c407776ec4fb19fa892c089279a4a528eb4e04cd970ac6ec14ce142a","gz_path":"indexes/noto.json.gz","gz_size":18192,"gz_sha256":"0d467fb79bcd3afe10350ed3caba2ff57af02aedbc413292e06bc78c02994999","commit":"93fac8abebe6c7fed0c5b7d2456d8fa484fa146c","families":30,"files":130}
+]}

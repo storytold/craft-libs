@@ -12,7 +12,7 @@ use crate::layout::Layout;
 pub mod foreign;
 
 /// The longest chord or trigger text [`Chord::parse`] and [`Trigger::parse`] accept, in bytes.
-pub const MAX_CHORD_TEXT: usize = 64;
+pub const MAX_CHORD_TEXT: usize = 72;
 
 /// The platform a keymap is used on. It decides display text and whether `ctrl` folds into `cmd`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -92,7 +92,7 @@ keys! {
     Up => "Up", Down => "Down", Left => "Left", Right => "Right",
     Minus => "-", Equals => "=", Plus => "+", OpenBracket => "[", CloseBracket => "]",
     Backslash => "\\", Semicolon => ";", Quote => "'", Backtick => "`",
-    Comma => ",", Period => ".", Slash => "/",
+    Comma => ",", Period => ".", Slash => "/", IntlBackslash => "IntlBackslash",
     Colon => ":", Pipe => "|", Questionmark => "?", Exclamationmark => "!",
     OpenCurlyBracket => "{", CloseCurlyBracket => "}",
 }
@@ -126,12 +126,14 @@ const KEY_ALIASES: &[(&str, Key)] = &[
     ("grave", Key::Backtick),
     ("backquote", Key::Backtick),
     ("apostrophe", Key::Quote),
+    // The minus sign menus and docs print (U+2212), not the hyphen-minus the key types.
+    ("−", Key::Minus),
 ];
 
 impl Key {
     /// Reads a key name: canonical (`K`, `PageUp`, `;`), egui variant names (`ArrowUp`, `Num5`,
     /// `Semicolon`) and the aliases `esc`, `return`, `del`, `pgup`, `pgdn`, `spacebar`, `ins`,
-    /// and the Mac key glyphs. Case does not matter.
+    /// the Mac key glyphs and the minus sign `−`. Case does not matter.
     pub fn parse(name: &str) -> Option<Key> {
         Key::ALL
             .iter()
@@ -179,7 +181,8 @@ impl Key {
     }
 
     /// Punctuation and symbol keys: `-`, `=`, `+`, brackets, `\`, `;`, `'`, `` ` ``, `,`, `.`,
-    /// `/` and the shifted symbols `:`, `|`, `?`, `!`, `{`, `}`.
+    /// `/`, the ISO key next to left Shift (`IntlBackslash`) and the shifted symbols `:`, `|`,
+    /// `?`, `!`, `{`, `}`.
     pub const fn is_symbol(self) -> bool {
         matches!(
             self,
@@ -195,6 +198,7 @@ impl Key {
                 | Key::Comma
                 | Key::Period
                 | Key::Slash
+                | Key::IntlBackslash
                 | Key::Colon
                 | Key::Pipe
                 | Key::Questionmark

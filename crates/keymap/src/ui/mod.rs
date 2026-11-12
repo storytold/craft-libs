@@ -58,7 +58,9 @@ pub enum Outcome {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ConflictMode {
-    /// Ask with the conflict bar: Take It, Take It and Go to Conflict, Keep Both, Cancel.
+    /// Ask with the conflict bar: Take It, Take It and Go to Conflict, Keep Both, Cancel. Assign
+    /// in the detail pane takes the chord without asking, as Steal does: the pane has already
+    /// listed its holders under "Currently assigned to".
     #[default]
     Ask,
     /// Take the chord from the other commands, then say so.
@@ -233,7 +235,7 @@ impl<'a> ShortcutsDialog<'a> {
             let mut open = true;
             let mut out = None;
             egui::Window::new(title)
-                .id(egui::Id::new("craft_keymap.shortcuts"))
+                .id(egui::Id::unique("craft_keymap.shortcuts"))
                 .collapsible(false)
                 .resizable(true)
                 .open(&mut open)

@@ -1,0 +1,99 @@
+[package]
+name = "linesweeper"
+version = "0.5.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+authors = ["Joe Neeman <joe@neeman.me>"]
+description = "Robust sweep-line algorithm and two-dimensional boolean ops"
+repository = "https://github.com/jneem/linesweeper"
+
+[workspace]
+members = ["fuzz", "util"]
+
+[workspace.dependencies]
+kurbo = "0.13.0"
+skrifa = "0.31.0"
+svg = { version = "0.18", default-features = false }
+usvg = { version = "0.46.0", default-features = false }
+
+[features]
+arbitrary = ["dep:arbitrary"]
+debug-svg = ["dep:svg"]
+slow-asserts = []
+generators = []
+
+[dependencies]
+arbitrary = { version = "1.4.1", features = ["derive"], optional = true }
+arrayvec = { version = "0.7.6", features = ["serde"] }
+kurbo = { workspace = true, features = ["serde"] }
+polycool = "0.4.0"
+rustc-hash = "2.1.1"
+smallvec = "1.15.1"
+svg = { workspace = true, optional = true }
+
+[dev-dependencies]
+anyhow = "1.0.80"
+arbitrary = { version = "1.4.1", features = ["derive"] }
+arbtest = "0.3.2"
+assert_matches = "1.5.0"
+clap = { version = "4.5.1", features = ["derive"] }
+color = "0.3.2"
+glam = "0.29.0"
+glob = "0.3.2"
+gungraun = "0.17.0"
+i_overlay = "1.9.4"
+insta = { version = "1.41.1", features = ["serde", "ron"] }
+kompari = { git = "https://github.com/linebender/kompari" }
+libtest-mimic = "0.8.1"
+linesweeper_util = { path = "util" }
+path-bool = { git = "https://github.com/GraphiteEditor/Graphite" }
+proptest = "1.4.0"
+serde = { version = "1.0.216", features = ["derive"] }
+serde_json = "1.0"
+skrifa.workspace = true
+svg.workspace = true
+tiny-skia = "0.11.4"
+usvg.workspace = true
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.bench]
+debug = true
+strip = false
+
+[lib]
+bench = false
+
+[[bench]]
+name = "linebender_logo"
+harness = false
+
+[[bench]]
+name = "synthetic"
+harness = false
+required-features = ["generators"]
+
+[[bench]]
+name = "painted_dreams"
+harness = false
+
+[[example]]
+name = "boolean_op"
+required-features = ["generators"]
+
+[[test]]
+name = "regression"
+harness = false
+
+[[test]]
+name = "snapshots"
+harness = false
+
+[[test]]
+name = "fonts"
+harness = false
+
+[[test]]
+name = "paperjs"
+harness = false
