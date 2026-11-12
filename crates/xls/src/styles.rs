@@ -161,7 +161,7 @@ impl StyleRecords {
     }
 
     /// The 64-entry colour table: the built-in eight, then the palette (or the default one).
-    fn color_table(&self) -> [u32; 64] {
+    pub(crate) fn color_table(&self) -> [u32; 64] {
         let mut table = DEFAULT_PALETTE;
         if let Some(p) = &self.palette {
             for (slot, c) in table.iter_mut().skip(8).zip(p.iter()) {
@@ -215,7 +215,7 @@ fn read_font(c: &mut Cursor<'_, '_>) -> Option<(Font, u16)> {
 
 /// A colour index in an XF (IcvXF) or Font (IcvFont): 0-63 from the colour table, the system
 /// and automatic colours as automatic.
-fn color(icv: u16, table: &[u32; 64]) -> Color {
+pub(crate) fn color(icv: u16, table: &[u32; 64]) -> Color {
     match icv {
         ICV_DEFAULT_FG | ICV_DEFAULT_BG | ICV_FONT_AUTO => Color::Auto,
         _ => table.get(usize::from(icv)).map_or(Color::Auto, |c| Color::Rgb(*c)),
@@ -223,7 +223,7 @@ fn color(icv: u16, table: &[u32; 64]) -> Color {
 }
 
 /// A border line style from its BIFF8 code (dgLeft and the like); unknown codes are no border.
-fn border_style(dg: u32) -> BorderStyle {
+pub(crate) fn border_style(dg: u32) -> BorderStyle {
     match dg {
         1 => BorderStyle::Thin,
         2 => BorderStyle::Medium,
@@ -243,7 +243,7 @@ fn border_style(dg: u32) -> BorderStyle {
 }
 
 /// A fill pattern from its BIFF8 code (fls); unknown codes are no pattern.
-fn pattern(fls: u16) -> Pattern {
+pub(crate) fn pattern(fls: u16) -> Pattern {
     match fls {
         0x01 => Pattern::Solid,
         0x02 => Pattern::Gray50,

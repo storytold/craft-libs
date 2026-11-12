@@ -52,12 +52,28 @@ linear.
 `escape` writes `& < > " '` as references; `escape_dq` leaves `'`, for content and attribute
 values in double quotes.
 
+## HTML documents (feature `flow`)
+
+`craft_html::doc` reads a page or a pasted fragment into the [craft-flow](../flow/README.md)
+model and a craft-wordmodel `Document`, and writes one as clean HTML. The reader is a tolerant
+tag-soup builder on this crate's tokenizer (a stack of open elements with HTML's implicit closes),
+with a CSS subset from `style` attributes and `<style>` rules with simple selectors in cascade
+order, tables with spans, lists, pictures (`data:` URIs, others through the caller's
+`ImageLoader`), ruby and MathML equations ([craft-math](../math/README.md)). `import_page` opens a
+web page as Word does (Times New Roman 12 pt, HTML's default spacing); `import` reads a fragment in
+the document's own formatting. `decode` / `decode_as` turn a page's bytes into text (BOM, declared
+charset, else detection). The writer gives semantic HTML with inline CSS, pictures as `data:`
+URIs, equations as MathML and ruby as `<ruby>`.
+
+The feature brings in craft-flow, craft-wordmodel, craft-math, craft-mime and craft-codepage; a
+reader that only needs tokens (mail, clipboard tables) leaves it off.
+
 ## Not here
 
 - The full HTML5 named reference table (about 2,200 names): only the names above.
 - Decoding bytes to text. `declared_charset` gives the label a page names; a decoder for it is
   the caller's (`craft-mime::charset` for the WHATWG labels).
-- Tree construction, implied end tags, CSS.
+- A DOM, and CSS beyond the subset the document reader applies.
 
 ## Provenance
 

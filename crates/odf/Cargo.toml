@@ -26,10 +26,46 @@ hmac = "0.13"
 getrandom = "0.3"
 zeroize = "1"
 
+[features]
+# ODT documents: read into and written from the craft-flow model and a craft-wordmodel Document.
+text = ["dep:craft-flow", "dep:craft-wordmodel", "dep:craft-math", "dep:craft-metafile", "dep:image", "dep:chrono", "dep:log", "dep:js-sys"]
+
+[dependencies.craft-flow]
+workspace = true
+optional = true
+
+[dependencies.craft-wordmodel]
+workspace = true
+optional = true
+
+[dependencies.craft-math]
+workspace = true
+optional = true
+
+[dependencies.craft-metafile]
+workspace = true
+optional = true
+
+[dependencies.image]
+version = "0.25"
+default-features = false
+features = ["png"]
+optional = true
+
+[dependencies.chrono]
+workspace = true
+optional = true
+
+[dependencies.log]
+version = "0.4"
+optional = true
+
 [dev-dependencies]
 # The tests build archives, hostile ones included, by hand.
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+# The browser clock for tracked-change dates (`text` feature; `SystemTime::now()` panics there).
+js-sys = { version = "0.3", optional = true }
 # The browser's `crypto.getRandomValues` for the salts and vectors of encrypted saves.
 getrandom = { version = "0.3", features = ["wasm_js"] }
