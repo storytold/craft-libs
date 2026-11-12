@@ -5,7 +5,7 @@ use super::open::open_now;
 use super::placement::{Placement, measure_layer, overlay_of, shown_placement};
 use super::regions::{
     RegionFrame, RegionSizes, end_full_height, footer_in_end, gap_of, header_gap_of, label_extra_of, least_of, pad_of, paint_edge_rule, paint_rules,
-    rect_of, shared_labels, shared_line,
+    LabelColumns, LabelsFound, rect_of, shared_labels, shared_line,
 };
 use super::reorder::REORDER_BAND;
 use super::scroll::{Glide, Jumps, ScrollState, aim_glide, follow_anchor, jump_frame, overflow_inset, scroll_of};
@@ -16,7 +16,7 @@ use crate::contract::cx::{BodyCx, BodyOwner};
 use crate::contract::label::{self, LabelIn};
 use crate::contract::run::{Measuring, ShapeHooks, ShowAt};
 use crate::contract::{Container, Cx, DragBand, Gap, Internal, Mount, PartsCx, SetPosition, Sizing, ValueOf};
-use crate::layout::{self};
+use crate::layout::{self, Reached};
 use crate::primitives::SurfaceSlot;
 use crate::runtime::access::scope;
 use crate::runtime::access::{self, Politeness, Role};
@@ -786,7 +786,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             });
             let wide = self.wide();
             let (layout, body) = (&props.layout, &mut *self.body);
-            let label_column = props.label_column;
+            let columns = LabelColumns::of(&props);
             // The room a scrolling body's bars take under or beside its content this run: no part of the line.
             let mut bars_inset = Vec2::ZERO;
             let mut run = |parent: &mut Ui, at: Rect, bcx: &mut BodyCx<'_>| -> Option<Vec2> {
@@ -799,7 +799,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                     body_ui.set_clip_rect(clip.intersect(body_ui.clip_rect()));
                 }
                 let installed = Env::install_for(&body_ui, body_env.clone());
-                let mut group_extent = None;
+                let mut labels = LabelsFound::default();
                 // The size the body took: a scrolling body takes the visible part of its content, since its region
                 // is a child that allocates nothing in `body_ui`.
                 let took = match scroll {
@@ -845,7 +845,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                         let view_env = body_env.derive_local(|scoped| scoped.lazy = Some(view));
                         let region_env = Env::install_for(&region_ui, view_env.clone());
                         layout::run_body_measured(&mut region_ui, &view_env, layout_id, layout, gap, line, |ui| {
-                            shared_labels(ui, id, label_column, room.x, &mut group_extent, |ui| body(ui, bcx))
+                            shared_labels(ui, id, columns, room.x, &mut labels, |ui| body(ui, bcx))
                         });
                         Env::restore(&ctx, region_env);
                         let extent = region_ui.min_rect().size();
@@ -879,7 +879,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                     // A row that places its block itself asks for its children's width, not the room it spans.
                     None => {
                         let (_, natural) = layout::run_body_measured(&mut body_ui, &body_env, layout_id, layout, gap, line, |ui| {
-                            shared_labels(ui, id, label_column, room.x, &mut group_extent, |ui| body(ui, bcx))
+                            shared_labels(ui, id, columns, room.x, &mut labels, |ui| body(ui, bcx))
                         });
                         natural.map(|width| Vec2::new(width, body_ui.min_rect().height()))
                     }
@@ -889,10 +889,16 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 // A content-sized column of rows takes, in a measuring run, the width they take at the group's widest
                 // label: the rows measured before the widest one measured against a narrower column.
                 let stacked = matches!(layout, layout::BodyLayout::Stack) && !wide;
-                Some(match group_extent.filter(|_| stacked && !real) {
+                let extent = labels.extent.or_else(|| labels.reached.as_ref().and_then(Reached::extent));
+                let took = match extent.filter(|_| stacked && !real) {
                     Some(width) => Vec2::new(took.x.max(width), took.y),
                     None => took,
-                })
+                };
+                // A content-sized body hands its rows' reaches on to the group around once its measure is known.
+                if !real && !wide {
+                    self.reached = labels.reached.map(|reached| (reached, !matches!(layout, layout::BodyLayout::Stack)));
+                }
+                Some(took)
             };
             self.body_size = match props.transform {
                 // The measuring run lays the body out on the layer the real run shows it on.
@@ -1143,6 +1149,7 @@ impl BodyHooks<'_> {
         #[cfg(feature = "testing")]
         crate::runtime::measure::count_body(&ctx, id);
         layout_memory::begin_measure(&ctx, id);
+        self.reached = None;
         let available = match at.at {
             ShowAt::Rect(rect) => rect,
             // Not the cursor: in a right-to-left layout it extends to -inf along the line.
@@ -1179,6 +1186,15 @@ impl BodyHooks<'_> {
         }
         if let Some(content) = content {
             record(sub(id, "content"), content);
+        }
+        // The rows of a content-sized body reach past the columns of the group around by as much more as the
+        // container does: a box's padding, or a row's members after its labelled one. The group measures its extent
+        // from these, at its widest columns.
+        if let Some((reached, row)) = self.reached.take().filter(|_| self.open) {
+            let (body, [header, footer, end]) =
+                (self.body_size.unwrap_or(Vec2::ZERO), [self.header_size, self.footer_size, self.end_size].map(Option::unwrap_or_default));
+            let outer = (self.regions_size(&props, body, header, footer, end) + pad).x;
+            reached.forward(&ctx, |columns, past| if row { outer - columns } else { past + outer - body.x });
         }
         layout_memory::end_measure(&ctx, id, key);
         let body = if self.open { self.body_size.unwrap_or(Vec2::ZERO) } else { Vec2::ZERO };

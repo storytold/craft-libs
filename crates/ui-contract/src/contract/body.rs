@@ -109,6 +109,9 @@ pub(super) struct BodyHooks<'b> {
     footer_size: Option<Vec2>,
     end_size: Option<Vec2>,
     controls_size: Option<Vec2>,
+    /// How far the rows of a content-sized `Through` body reached past the group's columns in this measuring run, and
+    /// whether the body is a row, for the container to hand on once its measure is known.
+    reached: Option<(crate::layout::Reached, bool)>,
     extent: Option<Vec2>,
     view: Option<Rect>,
     save: Option<SaveKey>,
@@ -179,6 +182,7 @@ impl<'b> BodyHooks<'b> {
             footer_size: None,
             end_size: None,
             controls_size: None,
+            reached: None,
             extent: None,
             view: None,
             save: None,

@@ -22,8 +22,9 @@ enum Report {
     Beyond(Vec<ColumnKey>, f32),
 }
 
-/// A row's report to the group `group`, as a measuring run hands it forward: a pass that takes a body's kept
-/// transcript makes it again, so the group's widths are what the run would have found.
+/// A row's report to the open frame `group` (a group, or a `Through` frame for a reach past columns), as a measuring
+/// run hands it forward: a pass that takes a body's kept transcript makes it again, so the group's widths are what
+/// the run would have found.
 struct Reported {
     group: Id,
     report: Report,
@@ -44,15 +45,15 @@ impl layout_memory::Contribution for Reported {
 
     fn undo(&self, ctx: &Context) -> layout_memory::TakeBack {
         let (group, report) = (self.group, self.report.clone());
-        let was = with_group(ctx, group, |widest, beyond| match &report {
-            Report::Width(column, _) => widest.get(column).copied(),
+        let was = with_frame(ctx, group, |widest, beyond| match &report {
+            Report::Width(column, _) => widest.and_then(|widest| widest.get(column).copied()),
             Report::Beyond(columns, _) => beyond.get(columns).copied(),
         });
         Box::new(move |ctx| {
             let Some(was) = was else { return };
-            with_group(ctx, group, |widest, beyond| match (&report, was) {
-                (Report::Width(column, _), Some(width)) => drop(widest.insert(column.clone(), width)),
-                (Report::Width(column, _), None) => drop(widest.remove(column)),
+            with_frame(ctx, group, |widest, beyond| match (&report, was) {
+                (Report::Width(column, _), Some(width)) => drop(widest.map(|widest| widest.insert(column.clone(), width))),
+                (Report::Width(column, _), None) => drop(widest.map(|widest| widest.remove(column))),
                 (Report::Beyond(columns, _), Some(past)) => drop(beyond.insert(columns.clone(), past)),
                 (Report::Beyond(columns, _), None) => drop(beyond.remove(columns)),
             });
@@ -60,31 +61,37 @@ impl layout_memory::Contribution for Reported {
     }
 }
 
-/// Runs `f` on the widths of the innermost open group `group`; `None` when that group is not open.
-fn with_group<R>(ctx: &Context, group: Id, f: impl FnOnce(&mut HashMap<ColumnKey, f32>, &mut HashMap<Vec<ColumnKey>, f32>) -> R) -> Option<R> {
+/// A frame's widest width per column: a group's; `None` for a `Through` frame, which keeps none.
+type Widths<'a> = Option<&'a mut HashMap<ColumnKey, f32>>;
+
+/// Runs `f` on the widths and the reaches past columns of the innermost open frame `frame`; `None` when that frame is
+/// not open.
+fn with_frame<R>(ctx: &Context, frame: Id, f: impl FnOnce(Widths<'_>, &mut HashMap<Vec<ColumnKey>, f32>) -> R) -> Option<R> {
     pass_state::with::<Open, _>(ctx, |open| {
-        let (widest, beyond) = open.0.iter_mut().rev().find_map(|frame| match frame {
-            Frame::Group { id, widest, beyond, .. } if *id == group => Some((widest, beyond)),
+        let (widest, beyond) = open.0.iter_mut().rev().find_map(|open| match open {
+            Frame::Group { id, widest, beyond, .. } if *id == frame => Some((Some(widest), beyond)),
+            Frame::Through { id, beyond, .. } if *id == frame => Some((None, beyond)),
             _ => None,
         })?;
         Some(f(widest, beyond))
     })
 }
 
-/// Adds `report` to the innermost open group `group`; `None` when that group is not open.
-fn add(ctx: &Context, group: Id, report: Report) -> Option<f32> {
-    with_group(ctx, group, |widest, beyond| match report {
+/// Adds `report` to the innermost open frame `frame`; `None` when that frame is not open, or it keeps no widths.
+fn add(ctx: &Context, frame: Id, report: Report) -> Option<f32> {
+    with_frame(ctx, frame, |widest, beyond| match report {
         Report::Width(column, content) => {
-            let widest = widest.entry(column).or_insert(0.0);
+            let widest = widest?.entry(column).or_insert(0.0);
             *widest = widest.max(content);
-            *widest
+            Some(*widest)
         }
         Report::Beyond(columns, past) => {
             let widest = beyond.entry(columns).or_insert(0.0);
             *widest = widest.max(past);
-            *widest
+            Some(*widest)
         }
     })
+    .flatten()
 }
 
 /// Makes `report` to `group` through layout memory, which hands it forward from a measuring run.
@@ -107,8 +114,45 @@ enum Frame {
     /// sits after (in order from the start edge), the widest the row reaches past them (see [`report_beyond`]).
     /// `depth`: the measuring runs open when the group opened (`layout_memory::depth`).
     Group { id: Id, widest: HashMap<ColumnKey, f32>, beyond: HashMap<Vec<ColumnKey>, f32>, room: Option<f32>, depth: usize },
+    /// A plain container's body in the group `group`: its rows read and report that group's widths, as the rows
+    /// directly in the group do. Their reaches past the columns stay here, for the container's own extent, and the
+    /// container hands them on to the frame around it (`Reached`). `room`: the width the container was offered.
+    Through { id: Id, group: Id, beyond: HashMap<Vec<ColumnKey>, f32>, room: f32 },
     /// No group: rows inside read none, whatever group is open outside.
     Barrier,
+}
+
+impl Open {
+    /// The group a row in the innermost open frame reads its widths from, and the frame its reaches past the columns
+    /// go to; `None` when no group is open or a barrier is.
+    fn innermost(&self) -> Option<(Id, Id)> {
+        match self.0.last()? {
+            Frame::Group { id, .. } => Some((*id, *id)),
+            Frame::Through { id, group, .. } => Some((*group, *id)),
+            Frame::Barrier => None,
+        }
+    }
+}
+
+/// How far the rows of a plain container's body reached past the columns of the group around it, from a measuring
+/// run of the body (`ColumnGroup::through`): per run of columns, the width those columns had when the body closed and
+/// the most a row reached past them.
+pub(crate) struct Reached(Vec<(Vec<ColumnKey>, f32, f32)>);
+
+impl Reached {
+    /// The width the rows take at the columns' widths when the body closed.
+    pub(crate) fn extent(&self) -> Option<f32> {
+        self.0.iter().map(|(_, columns, past)| columns + past).reduce(f32::max)
+    }
+
+    /// Hands the rows' reaches on to the frame open around the container, so the group measures its extent at its
+    /// widest columns across the containers it holds. `past` gives, from the width a run of columns had and a row's
+    /// reach past them, how far the container reaches past them.
+    pub(crate) fn forward(&self, ctx: &Context, past: impl Fn(f32, f32) -> f32) {
+        for (columns, width, reach) in &self.0 {
+            report_beyond(ctx, columns, past(*width, *reach));
+        }
+    }
 }
 
 /// The widest content per column key of one scope, measured through the same `LayoutMemory` rule as a `Grid`
@@ -154,14 +198,33 @@ impl ColumnGroup {
         (result, extent)
     }
 
-    /// Runs `rows` with no group open: a labelled row inside reads no column, so only the rows that sit directly in a
-    /// group's body share its widths. A component's own label steps and a nested container's body run in one.
+    /// Runs `rows` with no group open: a labelled row inside reads no column, whatever group is open outside. A
+    /// component's own label steps run in one, and the bodies that lay out apart from the group (`shared_labels`).
     pub fn barrier<R>(ui: &mut Ui, rows: impl FnOnce(&mut Ui) -> R) -> R {
         let ctx = ui.ctx().clone();
         pass_state::with::<Open, _>(&ctx, |open| open.0.push(Frame::Barrier));
         let result = rows(ui);
         pass_state::with::<Open, _>(&ctx, |open| open.0.pop());
         result
+    }
+
+    /// Runs the `rows` of a plain container's body, offered `room`: inside a group they read and report its widths, as
+    /// the rows directly in it do, so the labelled rows of a section, a box or a row line up with the group's.
+    /// Outside a group they read none. A measuring run returns how far the rows reached past the columns.
+    pub(crate) fn through<R>(ui: &mut Ui, id: Id, room: f32, rows: impl FnOnce(&mut Ui) -> R) -> (R, Option<Reached>) {
+        let ctx = ui.ctx().clone();
+        let Some((group, _)) = pass_state::with::<Open, _>(&ctx, |open| open.innermost()) else { return (Self::barrier(ui, rows), None) };
+        pass_state::with::<Open, _>(&ctx, |open| open.0.push(Frame::Through { id, group, beyond: HashMap::new(), room }));
+        let result = rows(ui);
+        let Some(Frame::Through { beyond, .. }) = pass_state::with::<Open, _>(&ctx, |open| open.0.pop()) else { return (result, None) };
+        if !crate::runtime::measure::active(&ctx) || beyond.is_empty() {
+            return (result, None);
+        }
+        let reached = beyond.into_iter().map(|(columns, past)| {
+            let width = columns.iter().map(|column| current_width(&ctx, group, column)).sum();
+            (columns, width, past)
+        });
+        (result, Some(Reached(reached.collect())))
     }
 
     /// Records the width the group's container was offered. A row that sits directly in the group decides whether
@@ -186,15 +249,12 @@ impl ColumnGroup {
     }
 }
 
-/// The width of `column` in the innermost open frame, `None` when no group is open or a barrier is. The row reports
-/// `content`.
+/// The width of `column` in the group the innermost open frame reads, `None` when no group is open or a barrier is.
+/// The row reports `content`.
 #[doc(hidden)]
 pub fn ambient_width(ctx: &Context, column: &ColumnKey, content: f32) -> Option<f32> {
-    let id = pass_state::with::<Open, _>(ctx, |open| match open.0.last() {
-        Some(Frame::Group { id, .. }) => Some(*id),
-        _ => None,
-    })?;
-    Some(shared_width(ctx, id, column, content))
+    let (group, _) = pass_state::with::<Open, _>(ctx, |open| open.innermost())?;
+    Some(shared_width(ctx, group, column, content))
 }
 
 /// The width the innermost open frame's container was offered, `None` when no group is open or a barrier is, or the
@@ -202,22 +262,19 @@ pub fn ambient_width(ctx: &Context, column: &ColumnKey, content: f32) -> Option<
 pub(crate) fn ambient_room(ctx: &Context) -> Option<f32> {
     pass_state::with::<Open, _>(ctx, |open| match open.0.last() {
         Some(Frame::Group { room, .. }) => *room,
+        Some(Frame::Through { room, .. }) => Some(*room),
         _ => None,
     })
 }
 
-/// Reports that a row of the innermost open group, in a content-sized column, sits after `columns` (in order from the
+/// Reports that a row of the innermost open frame, in a content-sized column, sits after `columns` (in order from the
 /// start edge: a label column, or a menu row's mark and icon columns) and reaches `past` beyond the last of them: for
 /// a labelled row the gap and its control. The group's extent sums the columns' widest widths before `past`. Nothing
 /// happens where no group is open or a barrier is.
 #[doc(hidden)]
 pub fn report_beyond(ctx: &Context, columns: &[ColumnKey], past: f32) {
-    let group = pass_state::with::<Open, _>(ctx, |open| match open.0.last() {
-        Some(Frame::Group { id, .. }) => Some(*id),
-        _ => None,
-    });
-    if let Some(group) = group {
-        report(ctx, group, Report::Beyond(columns.to_vec(), past));
+    if let Some((_, frame)) = pass_state::with::<Open, _>(ctx, |open| open.innermost()) {
+        report(ctx, frame, Report::Beyond(columns.to_vec(), past));
     }
 }
 
@@ -236,6 +293,12 @@ fn shared_width(ctx: &Context, group: Id, column: &ColumnKey, content: f32) -> f
         Some(depth) => layout_memory::read_input(ctx, depth, sub(group, column), width),
         None => width,
     }
+}
+
+/// The width `column` of the open group `group` has now, without a report.
+fn current_width(ctx: &Context, group: Id, column: &ColumnKey) -> f32 {
+    let so_far = with_frame(ctx, group, |widest, _| widest.and_then(|widest| widest.get(column).copied())).flatten().unwrap_or(0.0);
+    column_width(ctx, group, column).map_or(so_far, |found| found.max(so_far))
 }
 
 /// The widest width of `column` a measuring run of this pass recorded for `group`.

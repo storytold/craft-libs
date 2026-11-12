@@ -2,8 +2,8 @@
 
 use super::BodyHooks;
 use crate::contract::cx::BodyCx;
-use crate::contract::{Container, ContainerProps, FooterPlace, Gap, HeaderParts, LeastWidth, Pad, PaneEdge, Sizing};
-use crate::layout::ColumnGroup;
+use crate::contract::{Container, ContainerProps, FooterPlace, Gap, HeaderParts, LeastWidth, Mount, Pad, PaneEdge, Sizing};
+use crate::layout::{ColumnGroup, Reached};
 use crate::primitives::{RectSide, Rule};
 use crate::runtime::access::{self};
 use crate::runtime::egui::{alloc, child, style};
@@ -450,19 +450,63 @@ pub(super) fn label_extra_of(body: Rect, control: Rect, label: Rect, rtl: bool) 
     ))
 }
 
-/// Runs `body` in a column group named `labels` under the container `id` when `shared` is set, so the labelled
-/// rows directly inside share the widest label. Otherwise the body runs behind a barrier: the labelled rows of a
-/// nested container read no group of the container around it. In a measuring run, `extent` takes the width the
-/// group's rows take at the widest label (`ColumnGroup::scope_measured`).
-pub(super) fn shared_labels<R>(ui: &mut Ui, id: Id, shared: bool, room: f32, extent: &mut Option<f32>, body: impl FnOnce(&mut Ui) -> R) -> R {
-    if shared {
-        let (result, took) = ColumnGroup::scope_measured(ui, sub(id, "labels"), |ui, group| {
-            group.offer(room);
-            body(ui)
-        });
-        *extent = took;
-        result
-    } else {
-        ColumnGroup::barrier(ui, body)
+/// How a container's body takes part in the label columns of the group around it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum LabelColumns {
+    /// The body is a group of its own (`label_column`): its labelled rows share the widest label.
+    Own,
+    /// The body's rows read the group around the container, as the rows directly in the group do.
+    Through,
+    /// The body lays out apart from the group around it, and its rows read none.
+    Apart,
+}
+
+impl LabelColumns {
+    /// The part `props`'s body takes. A labelled container's body is its field's control, whose labels stay its own; a
+    /// body on a mount of its own (a popup, a dialog, a pane), one with a scroll region (a view of its own, as a bar's)
+    /// and a grid (whose columns align its cells) lay out apart. Every other body (a section, a box, a stack, a row)
+    /// passes the group through.
+    pub(super) fn of(props: &ContainerProps) -> Self {
+        if props.label_column {
+            LabelColumns::Own
+        } else if props.label.is_some()
+            || props.mount != Mount::Inline
+            || props.scroll.is_some()
+            || matches!(props.layout, crate::layout::BodyLayout::Grid { .. })
+        {
+            LabelColumns::Apart
+        } else {
+            LabelColumns::Through
+        }
+    }
+}
+
+/// What a measuring run of a body found of the label columns its rows share.
+#[derive(Default)]
+pub(super) struct LabelsFound {
+    /// The width the rows of the body's own group take at its widest label (`ColumnGroup::scope_measured`).
+    pub(super) extent: Option<f32>,
+    /// How far the rows of a `Through` body reached past the columns of the group around (`ColumnGroup::through`).
+    pub(super) reached: Option<Reached>,
+}
+
+/// Runs `body`, offered `room`, under the label columns `columns`: in a column group named `labels` under the container
+/// `id`, so the labelled rows directly inside share the widest label; through to the group around; or behind a barrier.
+pub(super) fn shared_labels<R>(ui: &mut Ui, id: Id, columns: LabelColumns, room: f32, found: &mut LabelsFound, body: impl FnOnce(&mut Ui) -> R) -> R {
+    match columns {
+        LabelColumns::Own => {
+            let (result, took) = ColumnGroup::scope_measured(ui, sub(id, "labels"), |ui, group| {
+                group.offer(room);
+                body(ui)
+            });
+            found.extent = took;
+            result
+        }
+        LabelColumns::Through => {
+            let (result, reached) = ColumnGroup::through(ui, sub(id, "through"), room, body);
+            found.reached = reached;
+            result
+        }
+        LabelColumns::Apart => ColumnGroup::barrier(ui, body),
     }
 }
