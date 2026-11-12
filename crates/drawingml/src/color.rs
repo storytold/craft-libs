@@ -1,6 +1,8 @@
 //! Colour: sRGB colours, theme colour slots and DrawingML-style colour transforms
 //! (tint, shade, luminance modulation/offset, alpha…), so theme-relative colours resolve the way
 //! presentation files expect.
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 /// An sRGB colour with straight alpha, components 0–255.
@@ -137,7 +139,7 @@ impl Rgba {
 
 /// The twelve theme colour slots, plus the mapped aliases (`bg1`, `tx1`…) and `phClr` (the
 /// placeholder colour a style matrix entry is applied with).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SchemeSlot {
     Dk1,
@@ -236,15 +238,62 @@ impl SchemeSlot {
     }
 }
 
-/// A colour scheme: the twelve theme colours.
+/// Rows of tints and shades computed under a colour of the colour galleries.
+pub const VARIANT_ROWS: usize = 5;
+/// The most rows an explicit `tints` list may hold.
+pub const MAX_TINT_ROWS: usize = 10;
+/// The most extra named colours a scheme holds: what `design.colors` and the dialog accept, and
+/// what a file carries in either direction.
+pub const MAX_EXTRA_COLORS: usize = 200;
+
+/// A named colour beyond the twelve slots (a brand palette entry). It is shown in the colour
+/// galleries after the theme colours and can be named wherever a scheme colour name is accepted;
+/// applying it stores its RGB, since files have no slot for it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtraColor {
+    pub name: String,
+    pub color: Rgba,
+    /// Explicit gallery rows under the colour (0 to [`MAX_TINT_ROWS`]; exactly these are shown)
+    /// in place of the computed tints and shades.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tints: Option<Vec<Rgba>>,
+}
+
+/// One cell under a gallery colour: the colour shown and how it is applied (`mods` on the slot
+/// when computed, the colour itself when it comes from an explicit `tints` override).
+#[derive(Clone, Debug, PartialEq)]
+pub struct GalleryVariant {
+    pub color: Rgba,
+    pub label: String,
+    pub mods: Option<Vec<ColorTransform>>,
+}
+
+/// A colour scheme: the twelve theme colours, plus any number of extra named colours and
+/// optional explicit tint rows (both extensions: a file keeps them in an `a:extLst` of the colour
+/// scheme that other applications ignore, see [`crate::theme::EXT_EXTRA_COLORS`]).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ColorScheme {
     pub name: String,
     pub colors: [Rgba; 12],
+    /// Named colours shown after the theme colours, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra: Vec<ExtraColor>,
+    /// Explicit gallery rows per theme slot (0 to [`MAX_TINT_ROWS`]; exactly these are shown),
+    /// replacing the computed tints and shades.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tints: BTreeMap<SchemeSlot, Vec<Rgba>>,
+    /// Whether a colour without an explicit list gets the computed tint and shade rows (the
+    /// default); `false` shows no rows under it.
+    #[serde(default = "crate::yes", skip_serializing_if = "Clone::clone")]
+    pub computed_tints: bool,
 }
 
 impl ColorScheme {
+    pub fn new(name: impl Into<String>, colors: [Rgba; 12]) -> Self {
+        ColorScheme { name: name.into(), colors, extra: Vec::new(), tints: BTreeMap::new(), computed_tints: true }
+    }
     pub fn get(&self, slot: SchemeSlot) -> Rgba {
         let i = match slot {
             SchemeSlot::Dk1 | SchemeSlot::Tx1 => 0,
@@ -269,6 +318,36 @@ impl ColorScheme {
         {
             *v = c;
         }
+    }
+    /// The extra colour called `name` (case-insensitive, trimmed), if any.
+    pub fn extra_color(&self, name: &str) -> Option<&ExtraColor> {
+        let name = name.trim();
+        if name.is_empty() {
+            return None;
+        }
+        self.extra.iter().find(|e| e.name.trim().eq_ignore_ascii_case(name))
+    }
+    /// The gallery rows under theme colour `slot`: exactly its `tints` list where given, else the
+    /// computed tints and shades when `computed_tints`, else none.
+    pub fn slot_variants(&self, slot: SchemeSlot) -> Vec<GalleryVariant> {
+        variants_of(self.get(slot), self.tints.get(&slot).map(Vec::as_slice), self.computed_tints)
+    }
+    /// The gallery rows under extra colour `i` (as for a slot).
+    pub fn extra_variants(&self, i: usize) -> Vec<GalleryVariant> {
+        self.extra.get(i).map(|e| variants_of(e.color, e.tints.as_deref(), self.computed_tints)).unwrap_or_default()
+    }
+}
+
+/// The cells under `base`: exactly the explicit `tints` when there is a list (possibly none), the
+/// [`VARIANT_ROWS`] computed tints and shades when `computed`, nothing otherwise.
+pub fn variants_of(base: Rgba, tints: Option<&[Rgba]>, computed: bool) -> Vec<GalleryVariant> {
+    match tints {
+        Some(list) => list.iter().take(MAX_TINT_ROWS).map(|c| GalleryVariant { color: *c, label: format!("#{}", c.hex()), mods: None }).collect(),
+        None if computed => theme_variants(base)
+            .into_iter()
+            .map(|(mods, label)| GalleryVariant { color: apply(base, &mods), label: label.to_string(), mods: Some(mods) })
+            .collect(),
+        None => Vec::new(),
     }
 }
 
@@ -485,34 +564,187 @@ pub const STANDARD_COLORS: [(Rgba, &str); 10] = [
     (Rgba::rgb(0x70, 0x30, 0xA0), "Purple"),
 ];
 
-/// A few CSS-like preset colour names (`prstClr`).
+/// A preset colour (`a:prstClr/@val`, `ST_PresetColorVal`): every name in [`PRESET_NAMES`], with
+/// the CSS colour of the same name. Case does not matter, and the `dk`, `lt` and `med`
+/// abbreviations are the `dark`, `light` and `medium` names (writers vary both).
 pub fn preset(name: &str) -> Option<Rgba> {
-    let c = match name {
-        "black" => (0, 0, 0),
-        "white" => (255, 255, 255),
-        "red" => (255, 0, 0),
-        "green" => (0, 128, 0),
-        "lime" => (0, 255, 0),
-        "blue" => (0, 0, 255),
-        "yellow" => (255, 255, 0),
-        "cyan" | "aqua" => (0, 255, 255),
-        "magenta" | "fuchsia" => (255, 0, 255),
-        "gray" | "grey" => (128, 128, 128),
-        "silver" => (192, 192, 192),
-        "maroon" => (128, 0, 0),
-        "navy" => (0, 0, 128),
-        "olive" => (128, 128, 0),
-        "purple" => (128, 0, 128),
-        "teal" => (0, 128, 128),
-        "orange" => (255, 165, 0),
-        "pink" => (255, 192, 203),
-        "brown" => (165, 42, 42),
-        "gold" => (255, 215, 0),
-        "ltGray" | "lightGray" => (211, 211, 211),
-        "dkGray" | "darkGray" => (169, 169, 169),
+    let mut lower = name.to_ascii_lowercase();
+    for (short, long) in [("dk", "dark"), ("lt", "light"), ("med", "medium")] {
+        if lower.starts_with(short) && !lower.starts_with(long) {
+            lower.replace_range(..short.len(), long);
+        }
+    }
+    let i = PRESET_RGB.binary_search_by(|(n, _)| (*n).cmp(lower.as_str())).ok()?;
+    PRESET_RGB.get(i).map(|(_, v)| rgb24(*v))
+}
+
+fn rgb24(v: u32) -> Rgba {
+    Rgba::rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
+}
+
+/// The preset colours by lower-case long name, sorted.
+const PRESET_RGB: [(&str, u32); 147] = [
+    ("aliceblue", 0xF0F8FF),
+    ("antiquewhite", 0xFAEBD7),
+    ("aqua", 0x00FFFF),
+    ("aquamarine", 0x7FFFD4),
+    ("azure", 0xF0FFFF),
+    ("beige", 0xF5F5DC),
+    ("bisque", 0xFFE4C4),
+    ("black", 0x000000),
+    ("blanchedalmond", 0xFFEBCD),
+    ("blue", 0x0000FF),
+    ("blueviolet", 0x8A2BE2),
+    ("brown", 0xA52A2A),
+    ("burlywood", 0xDEB887),
+    ("cadetblue", 0x5F9EA0),
+    ("chartreuse", 0x7FFF00),
+    ("chocolate", 0xD2691E),
+    ("coral", 0xFF7F50),
+    ("cornflowerblue", 0x6495ED),
+    ("cornsilk", 0xFFF8DC),
+    ("crimson", 0xDC143C),
+    ("cyan", 0x00FFFF),
+    ("darkblue", 0x00008B),
+    ("darkcyan", 0x008B8B),
+    ("darkgoldenrod", 0xB8860B),
+    ("darkgray", 0xA9A9A9),
+    ("darkgreen", 0x006400),
+    ("darkgrey", 0xA9A9A9),
+    ("darkkhaki", 0xBDB76B),
+    ("darkmagenta", 0x8B008B),
+    ("darkolivegreen", 0x556B2F),
+    ("darkorange", 0xFF8C00),
+    ("darkorchid", 0x9932CC),
+    ("darkred", 0x8B0000),
+    ("darksalmon", 0xE9967A),
+    ("darkseagreen", 0x8FBC8F),
+    ("darkslateblue", 0x483D8B),
+    ("darkslategray", 0x2F4F4F),
+    ("darkslategrey", 0x2F4F4F),
+    ("darkturquoise", 0x00CED1),
+    ("darkviolet", 0x9400D3),
+    ("deeppink", 0xFF1493),
+    ("deepskyblue", 0x00BFFF),
+    ("dimgray", 0x696969),
+    ("dimgrey", 0x696969),
+    ("dodgerblue", 0x1E90FF),
+    ("firebrick", 0xB22222),
+    ("floralwhite", 0xFFFAF0),
+    ("forestgreen", 0x228B22),
+    ("fuchsia", 0xFF00FF),
+    ("gainsboro", 0xDCDCDC),
+    ("ghostwhite", 0xF8F8FF),
+    ("gold", 0xFFD700),
+    ("goldenrod", 0xDAA520),
+    ("gray", 0x808080),
+    ("green", 0x008000),
+    ("greenyellow", 0xADFF2F),
+    ("grey", 0x808080),
+    ("honeydew", 0xF0FFF0),
+    ("hotpink", 0xFF69B4),
+    ("indianred", 0xCD5C5C),
+    ("indigo", 0x4B0082),
+    ("ivory", 0xFFFFF0),
+    ("khaki", 0xF0E68C),
+    ("lavender", 0xE6E6FA),
+    ("lavenderblush", 0xFFF0F5),
+    ("lawngreen", 0x7CFC00),
+    ("lemonchiffon", 0xFFFACD),
+    ("lightblue", 0xADD8E6),
+    ("lightcoral", 0xF08080),
+    ("lightcyan", 0xE0FFFF),
+    ("lightgoldenrodyellow", 0xFAFAD2),
+    ("lightgray", 0xD3D3D3),
+    ("lightgreen", 0x90EE90),
+    ("lightgrey", 0xD3D3D3),
+    ("lightpink", 0xFFB6C1),
+    ("lightsalmon", 0xFFA07A),
+    ("lightseagreen", 0x20B2AA),
+    ("lightskyblue", 0x87CEFA),
+    ("lightslategray", 0x778899),
+    ("lightslategrey", 0x778899),
+    ("lightsteelblue", 0xB0C4DE),
+    ("lightyellow", 0xFFFFE0),
+    ("lime", 0x00FF00),
+    ("limegreen", 0x32CD32),
+    ("linen", 0xFAF0E6),
+    ("magenta", 0xFF00FF),
+    ("maroon", 0x800000),
+    ("mediumaquamarine", 0x66CDAA),
+    ("mediumblue", 0x0000CD),
+    ("mediumorchid", 0xBA55D3),
+    ("mediumpurple", 0x9370DB),
+    ("mediumseagreen", 0x3CB371),
+    ("mediumslateblue", 0x7B68EE),
+    ("mediumspringgreen", 0x00FA9A),
+    ("mediumturquoise", 0x48D1CC),
+    ("mediumvioletred", 0xC71585),
+    ("midnightblue", 0x191970),
+    ("mintcream", 0xF5FFFA),
+    ("mistyrose", 0xFFE4E1),
+    ("moccasin", 0xFFE4B5),
+    ("navajowhite", 0xFFDEAD),
+    ("navy", 0x000080),
+    ("oldlace", 0xFDF5E6),
+    ("olive", 0x808000),
+    ("olivedrab", 0x6B8E23),
+    ("orange", 0xFFA500),
+    ("orangered", 0xFF4500),
+    ("orchid", 0xDA70D6),
+    ("palegoldenrod", 0xEEE8AA),
+    ("palegreen", 0x98FB98),
+    ("paleturquoise", 0xAFEEEE),
+    ("palevioletred", 0xDB7093),
+    ("papayawhip", 0xFFEFD5),
+    ("peachpuff", 0xFFDAB9),
+    ("peru", 0xCD853F),
+    ("pink", 0xFFC0CB),
+    ("plum", 0xDDA0DD),
+    ("powderblue", 0xB0E0E6),
+    ("purple", 0x800080),
+    ("red", 0xFF0000),
+    ("rosybrown", 0xBC8F8F),
+    ("royalblue", 0x4169E1),
+    ("saddlebrown", 0x8B4513),
+    ("salmon", 0xFA8072),
+    ("sandybrown", 0xF4A460),
+    ("seagreen", 0x2E8B57),
+    ("seashell", 0xFFF5EE),
+    ("sienna", 0xA0522D),
+    ("silver", 0xC0C0C0),
+    ("skyblue", 0x87CEEB),
+    ("slateblue", 0x6A5ACD),
+    ("slategray", 0x708090),
+    ("slategrey", 0x708090),
+    ("snow", 0xFFFAFA),
+    ("springgreen", 0x00FF7F),
+    ("steelblue", 0x4682B4),
+    ("tan", 0xD2B48C),
+    ("teal", 0x008080),
+    ("thistle", 0xD8BFD8),
+    ("tomato", 0xFF6347),
+    ("turquoise", 0x40E0D0),
+    ("violet", 0xEE82EE),
+    ("wheat", 0xF5DEB3),
+    ("white", 0xFFFFFF),
+    ("whitesmoke", 0xF5F5F5),
+    ("yellow", 0xFFFF00),
+    ("yellowgreen", 0x9ACD32),
+];
+
+/// A system colour (`a:sysClr/@val`) for a file that gives no `lastClr`: the usual light-theme
+/// value of the common names; `None` for the others.
+pub fn system(name: &str) -> Option<Rgba> {
+    let v = match name {
+        "windowText" | "btnText" | "menuText" | "captionText" | "infoText" => 0x000000,
+        "window" | "menu" | "highlightText" => 0xFFFFFF,
+        "btnFace" | "3dLight" => 0xF0F0F0,
+        "grayText" | "btnShadow" => 0xA0A0A0,
+        "highlight" => 0x0078D7,
         _ => return None,
     };
-    Some(Rgba::rgb(c.0, c.1, c.2))
+    Some(rgb24(v))
 }
 
 /// Every preset colour name a file may write (`ST_PresetColorVal`, with the later editions' aliases).
@@ -758,6 +990,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn preset_colours_in_any_case_and_their_dk_lt_spellings() {
+        assert_eq!(preset("red"), Some(Rgba::rgb(255, 0, 0)));
+        assert_eq!(preset("Red"), preset("red"));
+        assert_eq!(preset("dkBlue"), Some(Rgba::rgb(0, 0, 0x8B)));
+        assert_eq!(preset("darkBlue"), preset("dkBlue"));
+        assert_eq!(preset("ltGrey"), Some(Rgba::rgb(0xD3, 0xD3, 0xD3)));
+        assert_eq!(preset("tomato"), Some(Rgba::rgb(0xFF, 0x63, 0x47)));
+        assert_eq!(preset("unknownColor"), None);
+    }
+
+    #[test]
     fn from_hex_rejects_multiple_hashes() {
         assert_eq!(Rgba::from_hex("##FF0000"), None);
         assert_eq!(Rgba::from_hex("####FF0000"), None);
@@ -819,12 +1062,101 @@ mod tests {
 
     #[test]
     fn scheme_slots() {
-        let mut s = ColorScheme { name: "t".into(), colors: [Rgba::BLACK; 12] };
+        let mut s = ColorScheme::new("t", [Rgba::BLACK; 12]);
         s.set(SchemeSlot::Accent3, Rgba::WHITE);
         assert_eq!(s.get(SchemeSlot::Accent3), Rgba::WHITE);
         assert_eq!(s.get(SchemeSlot::Tx1), Rgba::BLACK);
         for slot in SchemeSlot::THEME {
             assert_eq!(SchemeSlot::from_xml(slot.xml_name()), Some(slot));
         }
+    }
+
+    #[test]
+    fn every_preset_name_has_a_colour_whatever_its_case_or_abbreviation() {
+        for name in PRESET_NAMES {
+            assert!(preset(name).is_some(), "{name}");
+        }
+        assert!(PRESET_RGB.windows(2).all(|w| w[0].0 < w[1].0));
+        assert_eq!(preset("Red"), Some(Rgba::rgb(255, 0, 0)));
+        assert_eq!(preset("dkBlue"), preset("darkBlue"));
+        assert_eq!(preset("darkBlue"), Some(Rgba::rgb(0, 0, 0x8B)));
+        assert_eq!(preset("ltGray"), Some(Rgba::rgb(0xD3, 0xD3, 0xD3)));
+        assert_eq!(preset("medSeaGreen"), Some(Rgba::rgb(0x3C, 0xB3, 0x71)));
+        assert_eq!(preset("green"), Some(Rgba::rgb(0, 0x80, 0)));
+        assert_eq!(preset("notAColor"), None);
+        assert_eq!(preset("dk"), None);
+    }
+
+    #[test]
+    fn common_system_colours_have_a_value_without_last_clr() {
+        assert_eq!(system("window"), Some(Rgba::WHITE));
+        assert_eq!(system("btnFace"), Some(Rgba::rgb(0xF0, 0xF0, 0xF0)));
+        assert_eq!(system("scrollBar"), None);
+    }
+
+    #[test]
+    fn variants_are_the_list_given_else_computed_else_none() {
+        let base = Rgba::rgb(0x4D, 0xA0, 0x60);
+        let computed = variants_of(base, None, true);
+        assert_eq!(computed.len(), VARIANT_ROWS);
+        assert!(computed.iter().all(|v| v.mods.is_some()));
+        assert_eq!(computed[0].label, "Lighter 80%");
+        assert!(variants_of(base, None, false).is_empty(), "no list and no computed rows: nothing");
+        let two = [Rgba::rgb(0xC7, 0xEB, 0xBA), Rgba::rgb(0x0D, 0x4A, 0x21)];
+        for computed in [true, false] {
+            let v = variants_of(base, Some(&two), computed);
+            assert_eq!(v.len(), 2, "exactly the list, no filling");
+            assert_eq!(v[0], GalleryVariant { color: two[0], label: "#C7EBBA".into(), mods: None });
+            assert_eq!(v[1].color, two[1]);
+            assert!(variants_of(base, Some(&[]), computed).is_empty(), "an empty list: no rows");
+        }
+        assert_eq!(variants_of(base, Some(&[Rgba::WHITE; 20]), true).len(), MAX_TINT_ROWS, "a long list is cut");
+        let mut s = ColorScheme::new("t", [base; 12]);
+        s.tints.insert(SchemeSlot::Accent5, two.to_vec());
+        s.tints.insert(SchemeSlot::Accent6, vec![]);
+        assert_eq!(s.slot_variants(SchemeSlot::Accent5).len(), 2);
+        assert!(s.slot_variants(SchemeSlot::Accent6).is_empty());
+        assert_eq!(s.slot_variants(SchemeSlot::Accent4), computed);
+        s.computed_tints = false;
+        assert_eq!(s.slot_variants(SchemeSlot::Accent5).len(), 2);
+        assert!(s.slot_variants(SchemeSlot::Accent4).is_empty());
+    }
+
+    #[test]
+    fn extra_colours_by_name() {
+        let mut s = ColorScheme::new("t", [Rgba::BLACK; 12]);
+        let sand = Rgba::rgb(0xEB, 0xE5, 0xE0);
+        s.extra.push(ExtraColor { name: "Sand".into(), color: sand, tints: Some(vec![Rgba::WHITE]) });
+        assert_eq!(s.extra_color("sand").map(|e| e.color), Some(sand));
+        assert_eq!(s.extra_color(" SAND ").map(|e| e.color), Some(sand));
+        assert_eq!(s.extra_color("Navy"), None);
+        assert_eq!(s.extra_color(""), None);
+        assert_eq!(s.extra_variants(0), vec![GalleryVariant { color: Rgba::WHITE, label: "#FFFFFF".into(), mods: None }]);
+        assert!(s.extra_variants(7).is_empty());
+        s.extra.push(ExtraColor { name: "Navy".into(), color: Rgba::rgb(0, 0, 0x61), tints: None });
+        assert_eq!(s.extra_variants(1).len(), VARIANT_ROWS);
+        s.computed_tints = false;
+        assert!(s.extra_variants(1).is_empty());
+        assert_eq!(s.extra_variants(0).len(), 1);
+    }
+
+    #[test]
+    fn scheme_json_keeps_extras_and_reads_old_files() {
+        let mut s = ColorScheme::new("KTH", [Rgba::WHITE; 12]);
+        s.extra.push(ExtraColor { name: "Sand".into(), color: Rgba::rgb(0xEB, 0xE5, 0xE0), tints: None });
+        s.tints.insert(SchemeSlot::Accent1, vec![Rgba::BLACK; VARIANT_ROWS]);
+        s.tints.insert(SchemeSlot::Accent2, vec![]);
+        s.computed_tints = false;
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"accent1\"") && json.contains("\"computedTints\":false"), "{json}");
+        assert_eq!(serde_json::from_str::<ColorScheme>(&json).unwrap(), s);
+        s.computed_tints = true;
+        assert!(!serde_json::to_string(&s).unwrap().contains("computedTints"), "the default is not written");
+        // A file written before the extension has neither key.
+        let plain = ColorScheme::new("t", [Rgba::BLACK; 12]);
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("extra") && !json.contains("tints"), "{json}");
+        assert_eq!(serde_json::from_str::<ColorScheme>(&json).unwrap(), plain);
+        assert!(plain.computed_tints);
     }
 }

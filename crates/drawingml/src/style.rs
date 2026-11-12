@@ -120,17 +120,34 @@ pub enum GradientShape {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Gradient {
+    /// The stops in the order the file gives them, so a write gives them back in that order.
+    /// [`Gradient::sorted_stops`] is them by position.
     pub stops: Vec<GradientStop>,
-    pub shape: GradientShape,
+    /// `a:lin` or `a:path`. `None` when the file has neither: each reader of the model applies
+    /// its own default (PowerPoint draws a top-to-bottom linear gradient, Word a left-to-right one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<GradientShape>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flip: Option<GradientFlip>,
-    #[serde(default = "crate::yes")]
-    pub rotate_with_shape: bool,
+    /// `rotWithShape`. `None` when the file does not say; each reader of the model applies its own
+    /// default. A model saved before this was optional reads as `Some(true)`.
+    #[serde(default = "crate::some_yes")]
+    pub rotate_with_shape: Option<bool>,
     /// `a:tileRect`: the box the gradient is laid out in, as insets from the shape's box
     /// (fractions; negative reaches outside it). PowerPoint's "from corner" radial presets use it
     /// to centre the gradient on the corner.
     #[serde(default, skip_serializing_if = "is_zero4")]
     pub tile: [f64; 4],
+}
+
+impl Gradient {
+    /// The stops by position (a stable sort: stops at one position keep their order), for
+    /// drawing.
+    pub fn sorted_stops(&self) -> Vec<GradientStop> {
+        let mut stops = self.stops.clone();
+        stops.sort_by(|a, b| a.pos.total_cmp(&b.pos));
+        stops
+    }
 }
 
 fn is_zero4(v: &[f64; 4]) -> bool {

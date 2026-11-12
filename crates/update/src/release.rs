@@ -186,6 +186,16 @@ fn contains_encoded_separator(rest: &str) -> bool {
     bytes.windows(3).any(|w| w[0] == b'%' && matches!(&w[1..].to_ascii_lowercase()[..], b"2f" | b"5c" | b"2e"))
 }
 
+/// Also accepts a repository-qualified release tag (`artcraft-v0.42.1`). The prefix must
+/// match this repository exactly; an unrelated app's tag is never treated as a release version.
+fn tag_version(tag: &str, repo: &str) -> Option<version::Version> {
+    version::parse(tag).or_else(|| {
+        let name = repo.rsplit('/').next()?;
+        let suffix = tag.strip_prefix(name)?.strip_prefix('-')?;
+        version::parse(suffix)
+    })
+}
+
 /// Reads `GET /repos/<repo>/releases/latest` (or one element of `/releases`).
 pub fn parse_github_release(json: &str, repo: &str) -> Result<Release, String> {
     let v: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("unreadable answer from GitHub ({e})"))?;
@@ -240,7 +250,7 @@ fn release_from_value(v: &serde_json::Value, repo: &str) -> Result<Release, Stri
         })
         .unwrap_or_default();
     Ok(Release {
-        version: version::parse(&tag),
+        version: tag_version(&tag, repo),
         name: v["name"].as_str().map(|n| truncate(n, 120)).filter(|n| !n.is_empty()).unwrap_or_else(|| tag.clone()),
         tag,
         published_at: v["published_at"].as_str().and_then(crate::time::parse_rfc3339),
@@ -262,7 +272,7 @@ pub fn release_from_sums(repo: &str, tag: &str, sums: &[(String, String)]) -> Re
     let assets: Vec<Asset> = sums.iter().filter_map(|(hash, name)| asset(name, Some(hash.clone()))).chain(asset("SHA256SUMS.txt", None)).collect();
     Release {
         tag: tag.to_string(),
-        version: version::parse(tag),
+        version: tag_version(tag, repo),
         name: tag.to_string(),
         published_at: None,
         html_url: format!("https://github.com/{repo}/releases/tag/{tag}"),
@@ -351,6 +361,26 @@ mod tests {
     use super::*;
 
     const REPO: &str = "storytold/photocraft";
+
+    #[test]
+    fn repository_prefixed_tags_are_ordered_without_changing_download_links() {
+        let repo = "storytold/artcraft";
+        let json = r#"[{"tag_name":"artcraft-v0.41.1","draft":false,"prerelease":false,"assets":[]},
+            {"tag_name":"artcraft-v0.42.1","draft":false,"prerelease":false,"assets":[]},
+            {"tag_name":"other-app-v99.0.0","draft":false,"prerelease":false,"assets":[]},
+            {"tag_name":"artcraft-v99.0.0","draft":true,"prerelease":false,"assets":[]}]"#;
+        let release = parse_github_release_list(json, repo, false).expect("valid releases").expect("published release");
+        assert_eq!(release.tag, "artcraft-v0.42.1");
+        assert_eq!(release.version, version::parse("0.42.1"));
+        let hash = "a".repeat(64);
+        let sums = release_from_sums(repo, &release.tag, &[(hash, "artcraft-0.42.1-linux-x86_64.flatpak".into())]);
+        assert_eq!(sums.version, release.version);
+        assert_eq!(
+            sums.assets[0].url,
+            "https://github.com/storytold/artcraft/releases/download/artcraft-v0.42.1/artcraft-0.42.1-linux-x86_64.flatpak"
+        );
+        assert!(parse_github_release(r#"{"tag_name":"other-v0.42.1","assets":[]}"#, repo).expect("valid JSON").version.is_none());
+    }
 
     #[test]
     fn truncate_keeps_whole_characters() {

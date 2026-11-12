@@ -322,8 +322,8 @@ fn unpadded_len_matches_the_written_body() {
             let mut rec = sample_record(version);
             rec.mask = MaskData::Mask(mask);
             rec.name = vec![b'n'; 300];
-            rec.blocks.push(TaggedBlock { signature: *b"8BIM", key: *b"lsct", data: vec![1; 5], padding: Some(vec![0; 3]) });
-            rec.blocks.push(TaggedBlock { signature: *b"8BIM", key: *b"Lr16", data: vec![2; 7], padding: None });
+            rec.blocks.push(TaggedBlock { signature: *b"8BIM", key: *b"lsct", data: vec![1; 5], padding: Some(vec![0; 3]), stored: None });
+            rec.blocks.push(TaggedBlock { signature: *b"8BIM", key: *b"Lr16", data: vec![2; 7], padding: None, stored: None });
             rec.extra_trailing = vec![9; 2];
             layers.push(rec);
         }
