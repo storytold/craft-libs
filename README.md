@@ -88,6 +88,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   and message, images, and the vector network and geometry blobs. Bounded on hostile input.
   Carved from FigCraft.
 - [`craft-epub`](crates/epub/README.md): EPUB packages: the OCF ZIP container, the package document (metadata, manifest, spine) and the navigation document, written as EPUB 3 (reflowable and fixed layout) and read (EPUB 2 and 3) with bounded entry sizes. Content documents are the caller's.
+- [`craft-ews`](crates/ews/README.md): the SOAP layer of Exchange Web Services, from MailCraft, without
+  sockets: the request envelope and an escaping element builder, and the answer envelope, faults
+  and response messages with their codes, read with `craft-xml`. The operations and everything
+  over HTTP stay in each app.
 - [`craft-exr`](crates/exr/src/lib.rs): OpenEXR pieces shared by PhotoCraft and EffectCraft: layer
   and channel names, the channels that make a colour picture, and Cryptomatte IDs, metadata keys,
   manifests and rank channels. Takes names and attribute text; decoding is not part of it yet.
