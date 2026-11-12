@@ -13,6 +13,8 @@ use craft_keymap::Mods;
 use craft_theme::LabelColor;
 use craft_ui::contract::{Entry, ReorderMove};
 
+use super::filter::{EffectKind, LayerFilter, SmartSource};
+
 /// The app's view of its layers, built per pass over its document (no copies of the layers).
 ///
 /// ```ignore
@@ -48,6 +50,14 @@ pub trait LayerTree {
 
     /// What the row of `id` shows. Cheap: called only for rows in view.
     fn info(&self, id: &Self::Id) -> LayerInfo;
+
+    /// Whether `id` is listed under `filter`, called for every layer while the filter is
+    /// [`active`](LayerFilter::active). By default [`LayerFilter::lists`], the rule over this tree's
+    /// own answers. An app overrides it for what only it knows (PhotoCraft: which linked files are
+    /// missing, which pixel layers are empty) and calls `filter.lists(self, id)` for the rest.
+    fn listed(&self, id: &Self::Id, filter: &LayerFilter) -> bool {
+        filter.lists(self, id)
+    }
 
     /// The selected layers, the active one and the part edits go to.
     fn selection(&self) -> LayerSelection<Self::Id>;
@@ -122,6 +132,13 @@ pub struct LayerInfo {
     /// The blend label at the row's trailing end: `Some` when the mode is neither Normal nor Pass
     /// Through. Dropped first when the name would get narrower than `list.min_label`.
     pub blend_label: Option<String>,
+    /// The kinds of the layer's effects that are on, for the Effect filter.
+    pub effect_kinds: Vec<EffectKind>,
+    /// Whether an Advanced Blending option is away from its default (a channel left out,
+    /// Knockout, a Blend If range), for the Attribute filter.
+    pub advanced_blending: bool,
+    /// A smart object's source, for the Smart Object filter; `None` for other layers.
+    pub smart: Option<SmartSource>,
     /// The layer's masks, pixel mask first, then the vector mask; at most one of each.
     pub masks: Vec<MaskInfo>,
     /// The layer has effects: the `fx` indicator and the effects triangle.
@@ -157,6 +174,9 @@ impl LayerInfo {
             linked: false,
             blend_key: String::from("normal"),
             blend_label: None,
+            effect_kinds: Vec::new(),
+            advanced_blending: false,
+            smart: None,
             masks: Vec::new(),
             has_effects: false,
             has_smart_filters: false,

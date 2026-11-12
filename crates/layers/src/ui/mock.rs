@@ -5,6 +5,7 @@ use std::cell::Cell;
 use craft_theme::LabelColor;
 use craft_ui::contract::Entry;
 
+use super::filter::{EffectKind, FilterBy, LayerAttribute, LayerFilter, SmartKind, SmartSource};
 use super::tree::{
     LayerInfo, LayerKind, LayerLocks, LayerPart, LayerProperties, LayerSelection, LayerTree, LayersFooterState, MaskInfo, SubRow, SubRowGroup,
     SubRows,
@@ -43,6 +44,11 @@ pub struct FakeLayers {
     pub hovered: Option<u32>,
     /// The revision the tree reports; `None` walks every pass.
     pub revision: Option<u64>,
+    /// The layers with no visible pixels, which only the app knows: the Attribute filter's Empty.
+    pub empty: Vec<u32>,
+    /// The linked smart objects whose file is not there, which only the app knows: the Smart Object
+    /// filter's Missing.
+    pub missing: Vec<u32>,
     info_calls: Cell<usize>,
 }
 
@@ -118,6 +124,7 @@ impl FakeLayers {
             Some(photo),
             named("Dodge", LayerKind::Pixel, |i| {
                 i.clipped = true;
+                i.advanced_blending = true;
                 i.blend_key = String::from("colorDodge");
                 i.blend_label = Some(String::from("Color Dodge"));
             }),
@@ -131,7 +138,14 @@ impl FakeLayers {
             }),
             false,
         );
-        let backdrop = tree.add(Some(photo), named("Backdrop", LayerKind::SmartObject, |i| i.has_smart_filters = true), false);
+        let backdrop = tree.add(
+            Some(photo),
+            named("Backdrop", LayerKind::SmartObject, |i| {
+                i.has_smart_filters = true;
+                i.smart = Some(SmartSource::Embedded);
+            }),
+            false,
+        );
         tree.layer_mut(backdrop).effects_open = true;
         tree.layer_mut(backdrop).smart_filters = Some(SubRows {
             header: SubRow { mask: true, ..SubRow::new("Smart Filters") },
@@ -140,8 +154,10 @@ impl FakeLayers {
         let glow = tree.add(Some(photo), named("Glow", LayerKind::Pixel, |i| i.has_effects = true), false);
         tree.layer_mut(glow).effects_open = true;
         tree.layer_mut(glow).effects = Some(effects(&["Outer Glow", "Color Overlay"]));
+        tree.layer_mut(glow).info.effect_kinds = vec![EffectKind::OuterGlow, EffectKind::Overlay];
         let outline = tree.add(Some(photo), named("Outline", LayerKind::Pixel, |i| i.has_effects = true), false);
         tree.layer_mut(outline).effects = Some(effects(&["Stroke"]));
+        tree.layer_mut(outline).info.effect_kinds = vec![EffectKind::Stroke];
 
         let details = tree.add(None, named("Details", LayerKind::Group, |_| {}), false);
         tree.add(Some(details), named("Dust", LayerKind::Pixel, |_| {}), false);
@@ -186,7 +202,8 @@ impl FakeLayers {
         tree.add(None, named("Placed Photo", LayerKind::Image, |_| {}), false);
         let mut n = 1;
         while tree.layers.len() < 49 {
-            tree.add(None, named(&format!("Sketch {n}"), LayerKind::Pixel, |_| {}), false);
+            let sketch = tree.add(None, named(&format!("Sketch {n}"), LayerKind::Pixel, |_| {}), false);
+            tree.empty.push(sketch);
             n += 1;
         }
         tree.add(
@@ -200,6 +217,37 @@ impl FakeLayers {
             false,
         );
         tree.selection = LayerSelection::new(vec![portrait], Some(portrait), LayerPart::Pixels);
+        tree
+    }
+
+    /// The Artboard filter's tree: artboard "Cover" holding "Title" and the group "Trees" ("Oak",
+    /// "Pine"), artboard "Back" holding "Grass", the group "Shapes" ("Circle"), a linked smart object
+    /// whose file is missing, "Loose" in no artboard and the Background; "Oak" selected.
+    pub fn boards() -> Self {
+        let mut tree = Self::default();
+        let cover = tree.add(None, named("Cover", LayerKind::Artboard, |_| {}), true);
+        tree.add(Some(cover), named("Title", LayerKind::Text, |_| {}), false);
+        let trees = tree.add(Some(cover), named("Trees", LayerKind::Group, |_| {}), true);
+        let oak = tree.add(Some(trees), named("Oak", LayerKind::Pixel, |_| {}), false);
+        tree.add(Some(trees), named("Pine", LayerKind::Pixel, |_| {}), false);
+        let back = tree.add(None, named("Back", LayerKind::Artboard, |_| {}), true);
+        tree.add(Some(back), named("Grass", LayerKind::Pixel, |_| {}), false);
+        let shapes = tree.add(None, named("Shapes", LayerKind::Group, |_| {}), true);
+        tree.add(Some(shapes), named("Circle", LayerKind::Shape, |_| {}), false);
+        let linked = tree.add(None, named("Linked Logo", LayerKind::SmartObject, |i| i.smart = Some(SmartSource::Linked)), false);
+        tree.missing.push(linked);
+        tree.add(None, named("Loose", LayerKind::Pixel, |_| {}), false);
+        tree.add(
+            None,
+            named("Background", LayerKind::Pixel, |i| {
+                i.background = true;
+                i.renamable = false;
+                i.thumb_loads_selection = false;
+                i.locks = LayerLocks { all: true, ..LayerLocks::default() };
+            }),
+            false,
+        );
+        tree.selection = LayerSelection::new(vec![oak], Some(oak), LayerPart::Pixels);
         tree
     }
 
@@ -288,6 +336,17 @@ impl LayerTree for FakeLayers {
     fn info(&self, id: &u32) -> LayerInfo {
         self.info_calls.set(self.info_calls.get() + 1);
         self.layer(id).map(|layer| layer.info.clone()).unwrap_or_else(|| LayerInfo::new(String::new(), LayerKind::Pixel))
+    }
+
+    /// The app's own answers for Empty, Not Empty and Missing ([`empty`](Self::empty),
+    /// [`missing`](Self::missing)); the generic rule for the rest.
+    fn listed(&self, id: &u32, filter: &LayerFilter) -> bool {
+        match filter.by {
+            FilterBy::Attribute if filter.attribute == LayerAttribute::Empty => self.empty.contains(id),
+            FilterBy::Attribute if filter.attribute == LayerAttribute::NotEmpty => !self.empty.contains(id),
+            FilterBy::SmartObject if filter.smart.contains(&SmartKind::Missing) && self.missing.contains(id) => true,
+            _ => filter.lists(self, id),
+        }
     }
 
     fn selection(&self) -> LayerSelection<u32> {

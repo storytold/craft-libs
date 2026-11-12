@@ -160,6 +160,7 @@ pub struct LayersPanel<'a, T: LayerTree> {
     visibility_key: Option<craft_keymap::Chord>,
     blend_rows: bool,
     filter_bar: bool,
+    find_name: bool,
     row_menu: Option<Box<RowMenu<'a, T::Id>>>,
     trailing: Option<Box<dyn TrailingCell<T::Id> + 'a>>,
     reveal: Option<T::Id>,
@@ -200,6 +201,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             visibility_key: None,
             blend_rows: true,
             filter_bar: true,
+            find_name: false,
             row_menu: None,
             trailing: None,
             reveal: None,
@@ -255,6 +257,13 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
         self
     }
 
+    /// Find Layers (PhotoCraft's Select › Find Layers): this pass the filter bar switches to Name and its field takes
+    /// the focus with its text selected, so typing replaces it. A hidden filter bar stays hidden and takes no focus.
+    pub fn focus_filter_name(mut self) -> Self {
+        self.find_name = true;
+        self
+    }
+
     /// The host's row menu: called with where it was opened (a layer row, an effects row) each pass
     /// while a row menu is chosen; a pick is [`LayersEvent::Menu`]. A right-click outside the
     /// selection selects the row first.
@@ -297,6 +306,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             visibility_key,
             blend_rows,
             filter_bar,
+            find_name,
             row_menu,
             trailing,
             reveal,
@@ -336,15 +346,15 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
                 };
                 let before = held(&mut filter, stack);
                 if filter_bar && settings.show_filters {
-                    let modes = tree.blend_modes(true, &before.mode);
+                    let modes = tree.blend_modes(false, &before.mode);
                     match filter.as_mut() {
                         Some(bind) => {
-                            let out = LayerFilterBar::new(bind.reborrowed()).blend_modes(&modes).show(ui);
+                            let out = LayerFilterBar::new(bind.reborrowed()).blend_modes(&modes).focus_name(find_name).show(ui);
                             events.borrow_mut().extend(out.edit.map(LayersEvent::Filter));
                         }
                         None => {
                             let own = &mut stack.memory::<Session<T::Id>>().filter;
-                            let _ = LayerFilterBar::new(Bind::bound(own)).blend_modes(&modes).show(ui);
+                            let _ = LayerFilterBar::new(Bind::bound(own)).blend_modes(&modes).focus_name(find_name).show(ui);
                         }
                     }
                 }
@@ -369,7 +379,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
                 if let Some(layer) = rename.clone() {
                     start_rename(ui, list, layer);
                 }
-                let body = show_body(ui, &cx, &rows, session, &plan, filter.active(), &unlock_label);
+                let body = show_body(ui, &cx, &rows, session, &plan, rows.filtered, &unlock_label);
                 let menus = show_row_menus(ui, &cx, &body.response, row_menu.as_deref(), session);
                 let mut reported = body.events;
                 reported.extend(menus);

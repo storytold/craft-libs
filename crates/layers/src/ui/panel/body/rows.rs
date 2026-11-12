@@ -29,17 +29,20 @@ pub(in crate::ui::panel) struct DisplayRow<Id> {
 pub(in crate::ui::panel) struct LayerRows<'t, T: LayerTree> {
     tree: &'t T,
     pub(in crate::ui::panel) rows: Vec<DisplayRow<T::Id>>,
+    /// The filter left a layer out: rows list at their shown depth, so a drop finds its place by its neighbours.
+    pub(in crate::ui::panel) filtered: bool,
     revision: Option<u64>,
 }
 
 impl<'t, T: LayerTree> LayerRows<'t, T> {
     /// The rows for `filter`, with the groups in `opened` shown open besides the tree's own.
     pub(in crate::ui::panel) fn new(tree: &'t T, filter: &LayerFilter, opened: &[T::Id]) -> Self {
-        let filtered = filter.active();
+        let active = filter.active();
+        let mut walk = Walk { tree, filter, active, open_all: active && filter.lists_closed_contents(), opened, left_out: false };
         let mut rows = Vec::new();
-        push_level(tree, filter, filtered, opened, tree.children(None), Level { shown: 0, true_depth: 0 }, &mut rows);
-        let revision = tree.revision().filter(|_| !filtered && opened.is_empty());
-        LayerRows { tree, rows, revision }
+        push_level(&mut walk, tree.children(None), Level { shown: 0, true_depth: 0 }, &mut rows);
+        let revision = tree.revision().filter(|_| !active && opened.is_empty());
+        LayerRows { tree, rows, filtered: walk.left_out, revision }
     }
 
     pub(in crate::ui::panel) fn keys(&self) -> Vec<LayerRowKey<T::Id>> {
@@ -120,19 +123,26 @@ fn leaf<Id>(key: LayerRowKey<Id>, level: Level) -> DisplayRow<Id> {
     DisplayRow { key, depth: level.shown, paint_depth: level.true_depth, has_children: false, open: false }
 }
 
-fn push_level<T: LayerTree>(
-    tree: &T,
-    filter: &LayerFilter,
-    filtered: bool,
-    opened: &[T::Id],
-    children: Vec<T::Id>,
-    level: Level,
-    out: &mut Vec<DisplayRow<T::Id>>,
-) {
+/// A walk of the tree for the display order.
+struct Walk<'a, T: LayerTree> {
+    tree: &'a T,
+    filter: &'a LayerFilter,
+    /// The filter is on: each layer is asked whether it is listed.
+    active: bool,
+    /// The filter lists the contents of closed groups.
+    open_all: bool,
+    opened: &'a [T::Id],
+    /// A layer was not listed.
+    left_out: bool,
+}
+
+fn push_level<T: LayerTree>(walk: &mut Walk<'_, T>, children: Vec<T::Id>, level: Level, out: &mut Vec<DisplayRow<T::Id>>) {
+    let tree = walk.tree;
     for id in children {
         let below = tree.children(Some(&id));
-        let shown = !filtered || filter.shows(&tree.info(&id));
-        let open = filtered || (!below.is_empty() && (tree.is_open(&id) || opened.contains(&id)));
+        let shown = !walk.active || tree.listed(&id, walk.filter);
+        walk.left_out |= !shown;
+        let open = walk.open_all || (!below.is_empty() && (tree.is_open(&id) || walk.opened.contains(&id)));
         let at = out.len();
         if shown {
             let mut row = leaf(LayerRowKey::Layer(id.clone()), level);
@@ -144,9 +154,9 @@ fn push_level<T: LayerTree>(
         let after_sub_rows = out.len();
         if open {
             let inner = Level { shown: level.shown + usize::from(shown), true_depth: level.true_depth + 1 };
-            push_level(tree, filter, filtered, opened, below, inner, out);
+            push_level(walk, below, inner, out);
         }
-        if shown && filtered {
+        if shown && walk.open_all {
             // A group with no match inside has nothing to open.
             out[at].has_children = out.len() > after_sub_rows;
             out[at].open = out[at].has_children;

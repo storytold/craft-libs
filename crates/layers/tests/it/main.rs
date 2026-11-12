@@ -1,5 +1,6 @@
 //! The integration binary of craft-layers: every test is a registered trial.
 
+mod panel_filter;
 mod panel_input;
 mod panel_order;
 
