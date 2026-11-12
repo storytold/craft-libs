@@ -1,9 +1,11 @@
 //! [`HyperlinkDialog`] (Insert › Link, Insert Hyperlink): link to a web address, an email address or a place in the
 //! document (a slide, a heading, a bookmark), the text to display, a ScreenTip, and the Highlight click option.
 
-use craft_behavior::{Selection, keyed};
+use craft_behavior::{IconId, Selection, keyed};
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};
-use craft_ui::contract::{Bind, NoValue, Outcome, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing};
+use craft_ui::contract::{
+    Bind, FieldLayout, NoValue, Outcome, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, SideLabel, Sizing,
+};
 use craft_ui::dialog::{Dialog, DialogId, DialogOutput, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::display::Text;
 use craft_ui::form::{Field, FieldGroup};
@@ -370,11 +372,13 @@ impl HyperlinkDialog {
 fn body(ui: &mut Ui, given: &Given, form: &mut Form, words: &HyperlinkWords) {
     Row::new().show(ui, |ui, _| {
         RadioGroup::new(words.link_to.clone(), Bind::bound(&mut form.mode)).show(ui, |ui, _| {
-            Stack::new().show(ui, |ui, _| {
+            Stack::new().show(ui, |ui, cx| {
                 Text::new(words.link_to.clone()).show(ui);
-                Radio::new(Mode::Url).label(words.web_page.clone()).show(ui);
-                Radio::new(Mode::Email).label(words.email.clone()).show(ui);
-                Radio::new(Mode::Place).label(words.place.clone()).show(ui);
+                let options = [(Mode::Url, &words.web_page, "globe"), (Mode::Email, &words.email, "mail"), (Mode::Place, &words.place, "bookmark")];
+                for (at, (mode, label, icon)) in options.into_iter().enumerate() {
+                    let side = SideLabel::new().layout(FieldLayout::After).icon(IconId::new(icon));
+                    cx.labelled(ui, at, label.clone(), side, Radio::new(mode));
+                }
             });
         });
         Stack::new().show(ui, |ui, _| {
