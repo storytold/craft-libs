@@ -1,9 +1,11 @@
-//! `Bar`: a body too wide for the bar shrinks its members before it scrolls, a captioned field among them too.
+//! `Bar`: a body too wide for the bar shrinks its members before it scrolls, a captioned field among them too; a
+//! status bar's message gives way while its trailing group keeps its width.
 
 use craft_behavior::IconId;
-use craft_ui::bars::{Bar, BarKind, BreadcrumbBar, path_crumbs};
-use craft_ui::buttons::{Button, IconButton};
-use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use craft_theme::variant::Tone;
+use craft_ui::bars::{Bar, BarKind, BreadcrumbBar, StatusMessage, StatusProgress, path_crumbs};
+use craft_ui::buttons::{Button, IconButton, Link};
+use craft_ui::contract::{Bind, Entry, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::display::Text;
 use craft_ui::form::Field;
 use craft_ui::pickers::Select;
@@ -148,4 +150,76 @@ fn a_select_in_a_short_bar_narrows_past_a_fields_own_least_and_elides() {
     let (narrow, elided) = select_in(200.0);
     assert!(narrow.width() < 96.0, "the select stayed {} wide", narrow.width());
     assert!(narrow.width() < wide.width() - SLACK && elided, "the select {narrow:?} did not elide its pick");
+}
+
+/// What a status bar shows: the message's rect (none when it shows nothing), the readout before it, and the trailing
+/// group's progress and render-path link.
+struct Status {
+    message: Option<Rect>,
+    readout: Rect,
+    progress: Rect,
+    link: Rect,
+}
+
+impl Default for Status {
+    fn default() -> Self {
+        Status { message: None, readout: Rect::NOTHING, progress: Rect::NOTHING, link: Rect::NOTHING }
+    }
+}
+
+fn status_fixture(message: &'static str, cancelled: Rc<Cell<bool>>, seen: Rc<Cell<Status>>) -> Fixture {
+    Fixture::new(move |ui| {
+        let (mut progress, mut link) = (Rect::NOTHING, Rect::NOTHING);
+        let shown = Bar::new("Status", BarKind::Status)
+            .trailing(|ui| {
+                let output = StatusProgress::new("Blur", Some(0.45)).cancel("Cancel").show(ui);
+                if output.cancelled {
+                    cancelled.set(true);
+                }
+                progress = output.response.rect;
+                link = Link::new("CPU Rendering").tone(Tone::Warn).show(ui).rect;
+            })
+            .show(ui, |ui, _| {
+                let readout = Text::new("1200 px x 800 px (72 ppi)").show(ui).rect;
+                (readout, StatusMessage::new(message).tone(Tone::Bad).show(ui).map(|shown| shown.rect))
+            });
+        if let Some((readout, message)) = shown.inner {
+            seen.set(Status { message, readout, progress, link });
+        }
+    })
+}
+
+fn status(width: f32, message: &'static str) -> Status {
+    let seen = Rc::new(Cell::new(Status::default()));
+    status_fixture(message, Rc::new(Cell::new(false)), Rc::clone(&seen)).room(Vec2::new(width, 80.0)).settle();
+    seen.take()
+}
+
+#[trial]
+fn a_narrow_status_bar_cuts_its_message_and_keeps_its_trailing_group_whole() {
+    const LONG: &str = "Exported 14 layers to the folder Documents/Exports/2026";
+    let wide = status(1200.0, LONG);
+    let narrow = status(520.0, LONG);
+    let (wide_message, narrow_message) = (wide.message.expect("a message shows"), narrow.message.expect("a cut message shows"));
+    assert!(narrow_message.width() < wide_message.width() - SLACK, "the message kept its width {} in a narrow bar", narrow_message.width());
+    assert!(narrow_message.max.x <= narrow.progress.min.x + SLACK, "the message runs under the trailing group: {narrow_message:?}");
+    assert!((narrow.progress.width() - wide.progress.width()).abs() < SLACK, "the progress narrowed with the bar");
+    assert!((narrow.link.width() - wide.link.width()).abs() < SLACK, "the render-path label narrowed with the bar");
+    assert!(narrow.link.max.x <= 520.0 + SLACK, "the trailing group ends past the bar at {}", narrow.link.max.x);
+    let empty = status(1200.0, "");
+    assert!(empty.message.is_none(), "an empty message shows");
+    assert!((empty.readout.width() - wide.readout.width()).abs() < SLACK, "an empty message changed the members before it");
+}
+
+#[trial]
+fn a_status_progress_is_named_by_its_task_and_reports_cancel() {
+    let cancelled = Rc::new(Cell::new(false));
+    let mut fixture = status_fixture("", Rc::clone(&cancelled), Rc::new(Cell::new(Status::default())));
+    fixture.room(Vec2::new(900.0, 80.0)).settle();
+    let progress = fixture.by_role(Role::PROGRESS_INDICATOR);
+    assert_eq!(progress.len(), 1, "one progress indicator");
+    assert_eq!(craft_ui::testing::access::name(fixture.tree(), progress[0].node), Some("Blur"), "the task's name labels the progress");
+    let cancel = fixture.by_label("Cancel").expect("the cancel button");
+    fixture.click(&cancel).settle();
+    assert!(cancelled.get(), "a click on Cancel reports it");
 }

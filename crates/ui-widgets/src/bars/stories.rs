@@ -1,6 +1,7 @@
 //! Stories of the bars.
 
-use super::{Bar, BarHome, BarItem, BarItems, BarKind, BarTool, ItemDisplay};
+use super::{Bar, BarHome, BarItem, BarItems, BarKind, BarTool, ItemDisplay, StatusItem, StatusMessage, StatusProgress, StatusReadout, StatusValues};
+use crate::buttons::Link;
 use crate::choice::{Checkbox, Segmented};
 use crate::contract::{Bind, Entry, Props as _, Sizing};
 use crate::contract::{Show as _, ShowContainer as _};
@@ -11,11 +12,18 @@ use crate::pickers::Select;
 use crate::runtime::commands::EditCommands;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use crate::text::NumberField;
-use craft_behavior::IconId;
-use egui::{Key, Modifiers, Ui};
+use craft_behavior::kurbo::{Point, Size};
+use craft_behavior::{CanvasView, IconId};
+use craft_theme::variant::Tone;
+use egui::{Key, Modifiers, Pos2, Rect, Ui};
 
 /// A width that holds the first items of `items` and not the rest.
 const NARROW: f32 = 80.0;
+/// The widths of the old status bar stories.
+const STATUS_WIDTH: f32 = 640.0;
+const STATUS_NARROW: f32 = 480.0;
+/// The document the status readout zooms, in document units.
+const DOCUMENT: Size = Size::new(2000.0, 1500.0);
 
 fn items() -> Vec<BarItem> {
     vec![
@@ -79,17 +87,59 @@ fn bar_captioned(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         .into()
 }
 
+/// PhotoCraft's status bar: the zoom and the chosen readout, the message, and the render path in the trailing group.
+fn status_bar(ui: &mut Ui, data: &mut StoryData, message: StatusMessage, width: f32) -> StoryOutput {
+    let values = StatusValues { document_sizes: Some((26_100_000, 31_400_000)), ..StatusValues::default() };
+    let canvas = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0));
+    let mut item = *data.value("item", StatusItem::DocumentSizes);
+    let view = data.value("view", CanvasView::new(canvas, Point::new(1000.0, 750.0), 0.6667));
+    let shown = crate::testing::memory::scoped(ui, |ui| {
+        ui.set_max_width(width.min(ui.available_width()));
+        Bar::new("Status", BarKind::Status)
+            .trailing(|ui| {
+                Link::new("CPU Rendering").tone(Tone::Warn).show(ui);
+            })
+            .show(ui, |ui, _| {
+                if let Some(picked) = StatusReadout::new(Bind::bound(view), DOCUMENT, item, &values).show(ui).item {
+                    item = picked;
+                }
+                message.show(ui);
+            })
+            .output
+    });
+    *data.value("item", StatusItem::DocumentSizes) = item;
+    shown.into()
+}
+
 #[story(Bar<'static>, covers = [], drive = Drive::Never)]
-fn bar_status(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    Bar::new("Status", BarKind::Status)
-        .show(ui, |ui, _| {
-            Text::new("Doc: 2.4M/8.1M").shade(Shade::Muted).show(ui);
-            Divider::vertical().show(ui);
-            Text::new("1920 x 1080 px").shade(Shade::Muted).show(ui);
-            Divider::vertical().show(ui);
-            Text::new("Ready").shade(Shade::Faint).show(ui);
-        })
-        .into()
+fn bar_status(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    status_bar(ui, data, StatusMessage::new("Saved to Documents"), STATUS_WIDTH)
+}
+
+#[story(StatusMessage, covers = [Default], drive = Drive::Never)]
+fn status_message_error(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    status_bar(ui, data, StatusMessage::new("Couldn't save: the disk is full").tone(Tone::Bad), STATUS_WIDTH)
+}
+
+/// The message gives way in a narrow bar; the trailing group keeps its width.
+#[story(StatusMessage, covers = [], drive = Drive::Never)]
+fn status_message_narrow(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    status_bar(ui, data, StatusMessage::new("Exported 14 layers to the folder Documents/Exports/2026"), STATUS_NARROW)
+}
+
+/// A job's progress alone in the trailing group.
+#[story(StatusProgress, covers = [Default], drive = Drive::Never)]
+fn status_progress(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    crate::testing::memory::scoped(ui, |ui| {
+        ui.set_max_width(STATUS_WIDTH.min(ui.available_width()));
+        Bar::new("Status", BarKind::Status)
+            .trailing(|ui| {
+                StatusProgress::new("Blur", Some(0.45)).cancel("Cancel").show(ui);
+            })
+            .show(ui, |_, _| {})
+            .output
+    })
+    .into()
 }
 
 #[story(BarItems, covers = [Default], drive = Drive::Never)]

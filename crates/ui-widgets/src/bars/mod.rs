@@ -1,4 +1,4 @@
-//! `Bar` and `BarItems`: the bar container and its strip of command items.
+//! `Bar` and `BarItems`: the bar container and its strip of command items, and the members of a status bar.
 
 mod align;
 mod bar;
@@ -6,6 +6,7 @@ mod breadcrumb;
 mod constraint_fields;
 mod items;
 mod lead;
+mod status;
 mod status_readout;
 #[cfg(feature = "testing")]
 mod stories;
@@ -18,5 +19,6 @@ pub use constraint_fields::{ConstraintFields, ConstraintFieldsOutput};
 pub use craft_behavior::fit::FitKeep;
 pub use items::{BarItem, BarItems, BarItemsStyle, ItemDisplay, MoreMenu};
 pub use lead::{BarHome, BarTool, BarToolOutput};
+pub use status::{StatusMessage, StatusProgress, StatusProgressOutput};
 pub use status_readout::{StatusItem, StatusReadout, StatusReadoutOutput, StatusValues};
 pub use words::BarWords;
