@@ -26,6 +26,7 @@ enum Row<T> {
 struct Item<T> {
     value: T,
     label: Label,
+    closed: Option<Label>,
     icon: Option<IconSpec<'static>>,
     enabled: bool,
     reason: Option<Label>,
@@ -36,7 +37,9 @@ struct Item<T> {
 impl<T> Entry<T> {
     /// An entry reporting `value` when picked, shown as `label`: enabled and unchecked, without an icon.
     pub fn new(value: T, label: impl Into<Label>) -> Self {
-        Entry { row: Row::Item(Item { value, label: label.into(), icon: None, enabled: true, reason: None, checked: false, stepped: true }) }
+        Entry {
+            row: Row::Item(Item { value, label: label.into(), closed: None, icon: None, enabled: true, reason: None, checked: false, stepped: true }),
+        }
     }
 
     /// A rule between groups of entries. It is not a row: it takes no pick and no lead.
@@ -70,6 +73,16 @@ impl<T> Entry<T> {
     #[must_use]
     pub fn empty_swatch(self) -> Self {
         self.icon(IconSpec::empty_swatch())
+    }
+
+    /// The text a closed control shows for the entry in place of its label (a tab leader's fill without its number).
+    /// The list, type-ahead and the accessible value keep the label. A heading or separator has none.
+    #[must_use]
+    pub fn closed_label(mut self, text: impl Into<Label>) -> Self {
+        if let Row::Item(item) = &mut self.row {
+            item.closed = Some(text.into());
+        }
+        self
     }
 
     /// Whether the entry can be picked; a disabled entry shows dimmed and never takes the lead.
@@ -126,6 +139,14 @@ impl<T> Entry<T> {
             Row::Item(item) => &item.label,
             Row::Heading(label) => label,
             Row::Separator => &NO_LABEL,
+        }
+    }
+
+    /// The text a closed control shows for the entry: its closed label, else its label.
+    pub fn face_label(&self) -> &Label {
+        match &self.row {
+            Row::Item(Item { closed: Some(closed), .. }) => closed,
+            _ => self.label(),
         }
     }
 

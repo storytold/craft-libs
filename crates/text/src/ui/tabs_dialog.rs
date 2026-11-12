@@ -316,7 +316,11 @@ impl TabStopsDialog {
         let stops = self.stops.clone();
         let unit = self.unit;
         let aligns: Vec<Entry<TabAlign>> = TabAlign::ALL.into_iter().map(|align| Entry::new(align, align_text(words, align))).collect();
-        let leaders: Vec<Entry<TabLeader>> = TabLeader::ALL.into_iter().map(|leader| Entry::new(leader, leader_text(words, leader))).collect();
+        // The closed box shows the fill alone, as Word's does; the list reads "1 ……".
+        let leaders: Vec<Entry<TabLeader>> = TabLeader::ALL
+            .into_iter()
+            .map(|leader| Entry::new(leader, leader_text(words, leader)).closed_label(leader_face(words, leader)))
+            .collect();
         let range = -f64::from(MAX_POSITION)..=f64::from(MAX_POSITION);
         let edits: RefCell<Vec<(usize, CellEdit)>> = RefCell::new(Vec::new());
         let position_ids: RefCell<Vec<(usize, egui::Id)>> = RefCell::new(Vec::new());
@@ -421,6 +425,11 @@ fn align_text(words: &TabStopsWords, align: TabAlign) -> String {
         TabAlign::Bar => words.bar.as_str(),
     }
     .to_owned()
+}
+
+/// A leader's text in its closed box: "None", or the fill alone.
+pub fn leader_face(words: &TabStopsWords, kind: TabLeader) -> String {
+    if kind == TabLeader::None { words.leader_none.as_str().to_owned() } else { kind.sample().to_owned() }
 }
 
 /// A leader option's text as Word's list reads: "None", or the fill after its number.

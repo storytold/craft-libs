@@ -4,7 +4,7 @@
 //! hook on the dropdown preset. Focus stays on the field: the host hands the list keys to the listbox while it is
 //! open, and Escape closes it without a change.
 
-use super::dress::RowDress;
+use super::dress::{RowDress, SelectPicture};
 use super::face::{SelectFace, toggle_on_key};
 use super::rows::EntryRows;
 use super::search;
@@ -16,8 +16,9 @@ use crate::contract::{
     MeasureCx, Numeric, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Role, Show as _,
     ShowCollection as _, ShowContainer as _, WordSetCx as _, step_stop, step_stops,
 };
-use crate::list::{List, ListRow};
+use crate::list::{List, ListRow, ThumbAspect};
 use crate::menu::Menu;
+use crate::primitives::ContentPainterCx;
 use crate::runtime::env::Label;
 use crate::runtime::focus::FocusMove;
 use crate::runtime::overlay::CloseReason;
@@ -27,7 +28,7 @@ use craft_behavior::{
     CancelReason, GesturePhase, HitLevel, HitPriority, IconId, Metrics, NavMove, PartKey, Selection, Sense, TypeAhead, Value, wheel_step,
 };
 use craft_theme::{Stateful, States};
-use egui::{Ui, Vec2};
+use egui::{Rect, Ui, Vec2};
 use std::borrow::Cow;
 
 #[cfg(feature = "testing")]
@@ -75,6 +76,10 @@ impl<'a> HeaderMenu<'a> {
 /// arrow keys, Home, End and the wheel (while the field is focused or armed) step the pick through the stepped entries
 /// ([`Entry::stepped`]); from a value that is none of them, forward lands on the first and back on the last. The field is as wide as its widest entry, placeholder or mixed word, so it keeps its
 /// width whichever is shown.
+///
+/// The face shows the picked entry's [closed label](Entry::closed_label) where it has one; the list, type-ahead and
+/// the accessible value keep the full label. A [`picture`](Select::picture) draws each entry's thumbnail in its row
+/// and before the face's text, or alone on the face with [`picture_only`](Select::picture_only).
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(overlay, probe(Select<'static, u8>))]
 pub struct Select<'a, T: Value + 'static> {
@@ -91,6 +96,12 @@ pub struct Select<'a, T: Value + 'static> {
     /// Adds the host's content to each entry's row.
     #[prop(func = "Fn(&T, ListRow<'a>) -> ListRow<'a>")]
     decorate: Option<RowDress<'a, T>>,
+    /// Paints an entry's picture, given its value: the thumbnail of its row and of the face while it is picked.
+    #[prop(func = "Fn(&T, &ContentPainterCx, Rect)")]
+    picture: Option<SelectPicture<'a, T>>,
+    /// The face shows the picked entry's picture alone; its label stays the accessible value.
+    #[prop(flag)]
+    picture_only: bool,
     /// The row under the pointer is proposed as the value while the list is open, as the rows the keys reach are;
     /// closing the list without a pick restores the value.
     #[prop(flag)]
@@ -103,12 +114,29 @@ pub struct Select<'a, T: Value + 'static> {
 impl<'a, T: Value + 'static> Select<'a, T> {
     /// A select named `label` over `value`, choosing among `entries`.
     pub fn new(label: impl Into<Label>, value: Bind<'a, T>, entries: &'a [Entry<T>]) -> Self {
-        Select { common: Common::new(), value, entries, searchable: false, placeholder: None, decorate: None, preview: false, header_menu: None }
-            .label(label)
+        Select {
+            common: Common::new(),
+            value,
+            entries,
+            searchable: false,
+            placeholder: None,
+            decorate: None,
+            picture: None,
+            picture_only: false,
+            preview: false,
+            header_menu: None,
+        }
+        .label(label)
     }
 
     fn position(&self, value: Option<&T>) -> Option<usize> {
         value.and_then(|value| self.entries.iter().position(|entry| entry.value() == Some(value)))
+    }
+
+    /// The face of `text`, with the picture's room before it, or the picture alone, when the select has a picture.
+    fn sized_face(&self, text: Label, picture: bool) -> SelectFace<'static> {
+        let face = SelectFace::new(text);
+        if self.picture.is_some() && picture { face.thumb(ThumbAspect::SQUARE, |_, _| {}).name(!self.picture_only) } else { face }
     }
 
     /// Sets the value to the entry at `at` unless it is the value already.
@@ -150,12 +178,13 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         }
     }
 
-    /// The widest face of an entry, the placeholder and the mixed word, so the field keeps its size whichever is shown.
+    /// The widest face of an entry (its closed label, or its picture), the placeholder and the mixed word, so the field
+    /// keeps its size whichever is shown.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let mixed = cx.words::<PickerWords>().mixed.clone();
-        let entries = self.entries.iter().filter(|entry| entry.is_item()).map(Entry::label);
-        let texts = entries.chain(self.placeholder.as_ref()).chain(std::iter::once(&mixed));
-        texts.map(|text| cx.face(SelectFace::new(cx.env.resolve(text)))).fold(Vec2::ZERO, Vec2::max)
+        let entries = self.entries.iter().filter(|entry| entry.is_item()).map(|entry| (entry.face_label(), true));
+        let texts = entries.chain(self.placeholder.iter().map(|text| (text, false))).chain(std::iter::once((&mixed, false)));
+        texts.map(|(text, picture)| cx.face(self.sized_face(cx.env.resolve(text), picture))).fold(Vec2::ZERO, Vec2::max)
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, T>> {
@@ -238,7 +267,7 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         let name = cx.label();
         let words = cx.words::<PickerWords>();
         let held = self.position(cx.value());
-        let (searchable, dress) = (self.searchable, self.decorate.as_ref());
+        let (searchable, dress, picture) = (self.searchable, self.decorate.as_ref(), self.picture.as_ref());
         let mut header_menu = self.header_menu.as_mut();
         let events = ui.show(popup, Overlay::dropdown(), |ui, body| {
             let list = ui.scope_id().with("options");
@@ -268,7 +297,7 @@ impl<T: Value + 'static> Component for Select<'_, T> {
                 .selection(Bind::given(selection))
                 .lead_on_open(lead)
                 .filter(&query, |at| labels[*at].clone())
-                .show_items(ui, &rows, &mut |at, _| rows.row(*at, held, dress))
+                .show_items(ui, &rows, &mut |at, _| rows.row(*at, held, dress, picture))
                 .events
         });
         let mut picked = None;
@@ -301,14 +330,18 @@ impl<T: Value + 'static> Component for Select<'_, T> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let (text, muted) = match self.position(cx.value()) {
-            Some(at) => (cx.env.resolve(self.entries[at].label()), false),
+        let held = self.position(cx.value());
+        let (text, muted) = match held {
+            Some(at) => (cx.env.resolve(self.entries[at].face_label()), false),
             None if cx.value().is_none() => (cx.env.resolve(&cx.words::<PickerWords>().mixed.clone()), true),
             None => (self.placeholder.as_ref().map_or(Label::Empty, |text| cx.env.resolve(text)), true),
         };
         let mut face = SelectFace::new(text);
-        if let Some(icon) = self.position(cx.value()).and_then(|at| self.entries[at].icon_spec()) {
+        if let Some(icon) = held.and_then(|at| self.entries[at].icon_spec()) {
             face = face.leading(icon.clone());
+        }
+        if let (Some(picture), Some(value)) = (self.picture.as_ref(), held.and_then(|at| self.entries[at].value())) {
+            face = face.thumb(ThumbAspect::SQUARE, move |cx, rect| picture.paint(value, cx, rect)).name(!self.picture_only);
         }
         ui.face(FACE, if muted { face.placeholder() } else { face });
     }

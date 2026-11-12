@@ -16,11 +16,11 @@ use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::{List, ListRow, ThumbAspect, ThumbSize};
 use craft_ui::pickers::Select;
-use craft_ui::primitives::IconSpec;
+use craft_ui::primitives::{ContentPainterCx, IconSpec};
 use craft_ui::runtime::env::{Env, Label, UnitKind};
 use craft_ui::style::{ComponentStyle, StyleCx, SurfaceLook, TypeRole};
 use craft_ui::text::NumberField;
-use egui::{Response, Ui, Vec2};
+use egui::{Rect, Response, Ui, Vec2};
 use std::sync::Arc;
 
 use super::{
@@ -383,9 +383,10 @@ impl Body<'_> {
             Field::new(row.label.clone()).id_salt(("row", row.id.as_str())).show(ui, |ui, _| {
                 let mut select = Select::new(row.label.clone(), Bind::given(current.clone()), &entries);
                 if let Some(painter) = &row.paint {
-                    select = select.decorate(move |id: &String, entry| match row.choices.iter().find(|choice| &choice.id == id) {
-                        Some(choice) => entry.thumb(ThumbSize::Small, move |cx, rect| painter.paint(cx, rect, choice)),
-                        None => entry,
+                    select = select.picture(move |id: &String, cx: &ContentPainterCx, rect: Rect| {
+                        if let Some(choice) = row.choices.iter().find(|choice| &choice.id == id) {
+                            painter.paint(cx, rect, choice);
+                        }
                     });
                 }
                 picked = select.show(ui).value().cloned();

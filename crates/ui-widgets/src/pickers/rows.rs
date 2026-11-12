@@ -1,8 +1,8 @@
 //! `EntryRows`: the entries of a picker as the rows of its option list.
 
-use super::dress::RowDress;
+use super::dress::{RowDress, SelectPicture};
 use crate::contract::{Entry, Props as _, TooltipSpec};
-use crate::list::ListRow;
+use crate::list::{ListRow, ThumbSize};
 use crate::runtime::env::Label;
 use craft_behavior::{DisplayOrder, ItemSource};
 use std::borrow::Cow;
@@ -20,15 +20,29 @@ impl<'a, T> EntryRows<'a, T> {
     }
 
     /// The row of the entry at `at`: its label and icon as an option, checked when it is the `chosen` entry, a caption
-    /// for a heading, a spacer for a separator, the host's dress over the rest.
-    pub(super) fn row<'r>(&self, at: usize, chosen: Option<usize>, dress: Option<&RowDress<'r, T>>) -> ListRow<'r> {
-        let entry = &self.entries[at];
+    /// for a heading, a spacer for a separator, the host's picture as the thumbnail and its dress over the rest.
+    pub(super) fn row<'r>(
+        &self,
+        at: usize,
+        chosen: Option<usize>,
+        dress: Option<&RowDress<'r, T>>,
+        picture: Option<&'r SelectPicture<'r, T>>,
+    ) -> ListRow<'r>
+    where
+        'a: 'r,
+    {
+        let entries: &'a [Entry<T>] = self.entries;
+        let entry = &entries[at];
         let Some(value) = entry.value() else {
             return if entry.is_heading() { ListRow::heading(self.labels[at].clone()) } else { ListRow::spacer() };
         };
         let row = ListRow::new(self.labels[at].clone()).option().check(chosen == Some(at)).enabled(entry.is_enabled());
         let row = match entry.icon_spec() {
             Some(icon) => row.icon(icon.clone()),
+            None => row,
+        };
+        let row = match picture {
+            Some(picture) => row.thumb(ThumbSize::Small, move |cx, rect| picture.paint(value, cx, rect)),
             None => row,
         };
         let row = match entry.why_disabled() {

@@ -208,7 +208,7 @@ impl Component for ComboBox<'_> {
                 .selection(Bind::given(selection))
                 .filter(&query, |key| labels[*key].clone())
                 .ranked(true)
-                .show_items(ui, &rows, &mut |key, _| rows.row(*key, current, decorate))
+                .show_items(ui, &rows, &mut |key, _| rows.row(*key, current, decorate, None))
                 .events
         });
         let (mut picked, mut keyed_to) = (None, None);

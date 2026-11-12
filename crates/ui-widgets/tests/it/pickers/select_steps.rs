@@ -35,3 +35,17 @@ fn a_select_steps_over_its_stepped_entries_and_from_an_unstepped_one_to_an_end()
     assert_eq!(step(4, Key::ArrowDown), (1, (true, true)), "from an unstepped entry, forward lands on the first stop");
     assert_eq!(step(4, Key::ArrowUp), (3, (true, true)), "from an unstepped entry, back lands on the last stop");
 }
+
+#[trial]
+fn the_closed_face_shows_an_entrys_closed_label_and_the_accessible_value_keeps_its_label() {
+    let mut fixture = Fixture::new(|ui| {
+        let entries = [Entry::new(1u8, "1 Dots").closed_label("Dots"), Entry::new(2u8, "2 Lines").closed_label("Lines")];
+        Select::new("Leader", Bind::given(1u8), &entries).show(ui);
+    });
+    fixture.settle();
+    let texts: Vec<String> = fixture.texts().iter().map(|run| run.text.clone()).collect();
+    assert!(texts.iter().any(|text| text == "Dots"), "the face shows the closed label: {texts:?}");
+    assert!(!texts.iter().any(|text| text == "1 Dots"), "and not the list text");
+    let node = fixture.by_role(Role::COMBO_BOX).first().expect("the field").node;
+    assert_eq!(fixture.tree().value_of(node), Some("1 Dots"), "the accessible value is the full label");
+}

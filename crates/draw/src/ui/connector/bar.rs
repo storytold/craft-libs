@@ -5,10 +5,10 @@ use craft_ui::choice::Segmented;
 use craft_ui::contract::{Bind, Entry, Outcome, Show as _, ShowContainer as _};
 use craft_ui::display::Divider;
 use craft_ui::layout_components::Row;
-use craft_ui::list::ThumbSize;
 use craft_ui::pickers::Select;
+use craft_ui::primitives::ContentPainterCx;
 use craft_ui::runtime::env::Env;
-use egui::{Response, Ui};
+use egui::{Rect, Response, Ui};
 
 use super::words::ConnectorBarWords;
 use crate::geometry::connector::Routing;
@@ -136,10 +136,13 @@ impl<'a> ConnectorBar<'a> {
                     let mut select = Select::new(name.clone(), Bind::given(current), &entries);
                     if let Some(paint) = &row.paint {
                         let choices = row.choices;
-                        select = select.decorate(move |id: &String, list_row| match choices.iter().find(|c| &c.id == id) {
-                            Some(choice) => list_row.thumb(ThumbSize::Small, move |cx, rect| paint.paint(cx, rect, choice)),
-                            None => list_row,
-                        });
+                        select = select
+                            .picture(move |id: &String, cx: &ContentPainterCx, rect: Rect| {
+                                if let Some(choice) = choices.iter().find(|c| &c.id == id) {
+                                    paint.paint(cx, rect, choice);
+                                }
+                            })
+                            .picture_only();
                     }
                     if let Some(id) = select.show(ui).value().cloned() {
                         *slot = Some(id);
@@ -164,13 +167,15 @@ impl<'a> ConnectorBar<'a> {
                 Mixed::Same(held) => held,
                 Mixed::Mixed => ConnectorLine::default(),
             };
-            let select = Select::new(words.line_style.clone(), Bind::given(current), &entries).decorate(move |pick: &LinePick, list_row| {
-                let (dashed, weight) = match *pick {
-                    LinePick::Style(dashed) => (dashed, held.weight),
-                    LinePick::Weight(index) => (held.dashed, ConnectorLine::WEIGHTS[index]),
-                };
-                list_row.thumb(ThumbSize::Small, move |cx, rect| StrokePreview::new(&sample(weight, dashed), weight as f32).paint(cx, rect))
-            });
+            let select = Select::new(words.line_style.clone(), Bind::given(current), &entries)
+                .picture(move |pick: &LinePick, cx: &ContentPainterCx, rect: Rect| {
+                    let (dashed, weight) = match *pick {
+                        LinePick::Style(dashed) => (dashed, held.weight),
+                        LinePick::Weight(index) => (held.dashed, ConnectorLine::WEIGHTS[index]),
+                    };
+                    StrokePreview::new(&sample(weight, dashed), weight as f32).paint(cx, rect);
+                })
+                .picture_only();
             if let Some(pick) = select.show(ui).value().copied() {
                 line_pick = Some(match pick {
                     LinePick::Style(dashed) => ConnectorLine { dashed, ..held },
