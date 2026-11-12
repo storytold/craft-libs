@@ -329,6 +329,38 @@ mod tests {
         assert_eq!(m.caption.as_deref(), Some("A caption"));
     }
 
+    fn jpeg_with_orientation(exif_orientation: Option<crate::Orientation>, xmp_orientation: &str) -> Vec<u8> {
+        let mut jpeg = vec![0xff, 0xd8];
+        if let Some(orientation) = exif_orientation {
+            let mut exif = b"Exif\0\0".to_vec();
+            exif.extend(crate::exif::write_exif(&crate::Metadata { orientation: Some(orientation), ..Default::default() }));
+            jpeg.extend(seg(0xe1, &exif));
+        }
+        let packet = format!(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:Orientation="{xmp_orientation}"/></rdf:RDF>"#
+        );
+        let mut xmp = XMP_SIG.to_vec();
+        xmp.extend_from_slice(packet.as_bytes());
+        jpeg.extend(seg(0xe1, &xmp));
+        jpeg.extend_from_slice(&[0xff, 0xd9]);
+        jpeg
+    }
+
+    #[test]
+    fn embedded_xmp_orientation_requires_integral_value_and_respects_exif() {
+        let malformed = crate::extract(&jpeg_with_orientation(None, "6.9"));
+        assert_eq!(malformed.orientation, None);
+
+        let malformed_xmp_with_exif = crate::extract(&jpeg_with_orientation(Some(crate::Orientation::Rotate180), "6.5"));
+        assert_eq!(malformed_xmp_with_exif.orientation.map(|orientation| orientation.to_exif()), Some(3));
+
+        let valid_xmp = crate::extract(&jpeg_with_orientation(None, "6"));
+        assert_eq!(valid_xmp.orientation.map(|orientation| orientation.to_exif()), Some(6));
+
+        let valid_exif = crate::extract(&jpeg_with_orientation(Some(crate::Orientation::Rotate180), "6"));
+        assert_eq!(valid_exif.orientation.map(|orientation| orientation.to_exif()), Some(3));
+    }
+
     #[test]
     fn jpeg_extended_xmp() {
         let mut j = vec![0xff, 0xd8];

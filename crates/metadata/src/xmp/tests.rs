@@ -671,3 +671,40 @@ fn the_toolkit_is_read_and_written_back() {
     let bare = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/>"#;
     assert_eq!(crate::parse_xmp(bare).unwrap().toolkit, None);
 }
+
+fn orientation_packet(value: &str) -> String {
+    format!(
+        r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:Orientation="{value}"/></rdf:RDF>"#
+    )
+}
+
+#[test]
+fn xmp_orientation_rejects_fractional_values_and_keeps_raw_properties() {
+    for value in ["6.5", "6.9", "1.5", "8.9", "13/2"] {
+        let parsed = parse_xmp(&orientation_packet(value)).unwrap();
+        assert_eq!(parsed.metadata.orientation, None, "{value}");
+        assert_eq!(parsed.properties["tiff:Orientation"], vec![value.to_string()], "{value}");
+        assert!(!write_xmp(&parsed.metadata).contains("tiff:Orientation"), "rejected {value} must not become a written orientation");
+    }
+}
+
+#[test]
+fn xmp_orientation_integral_forms_keep_their_meaning() {
+    for code in 1..=8 {
+        let parsed = parse_xmp(&orientation_packet(&code.to_string())).unwrap();
+        assert_eq!(parsed.metadata.orientation.map(|orientation| orientation.to_exif()), Some(code));
+    }
+    for value in ["6.0", "6/1", " 6 ", " 6.0 "] {
+        let parsed = parse_xmp(&orientation_packet(value)).unwrap();
+        assert_eq!(parsed.metadata.orientation.map(|orientation| orientation.to_exif()), Some(6), "{value}");
+    }
+}
+
+#[test]
+fn xmp_orientation_rejects_existing_invalid_values() {
+    for value in ["0", "9", "-1", "nan", "inf"] {
+        let parsed = parse_xmp(&orientation_packet(value)).unwrap();
+        assert_eq!(parsed.metadata.orientation, None, "{value}");
+        assert_eq!(parsed.properties["tiff:Orientation"], vec![value.to_string()], "{value}");
+    }
+}

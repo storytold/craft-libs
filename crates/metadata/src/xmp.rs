@@ -620,7 +620,7 @@ pub fn parse_xmp_with(s: &str, extra: &[XmpNamespace]) -> Result<XmpData, XmpErr
         exposure_program: num("exif:ExposureProgram").map(|v| v as u16),
         metering_mode: num("exif:MeteringMode").map(|v| v as u16),
         white_balance: num("exif:WhiteBalance").map(|v| v as u16),
-        orientation: num("tiff:Orientation").map(|v| v as u16).filter(|v| (1..=8).contains(v)).map(Orientation::from_exif),
+        orientation: num("tiff:Orientation").filter(|v| (1.0..=8.0).contains(v) && v.fract() == 0.0).map(|v| Orientation::from_exif(v as u16)),
         width: num("tiff:ImageWidth").filter(|v| *v >= 0.0).or_else(|| num("exif:PixelXDimension").filter(|v| *v >= 0.0)).map(|v| v as u32),
         height: num("tiff:ImageLength").filter(|v| *v >= 0.0).or_else(|| num("exif:PixelYDimension").filter(|v| *v >= 0.0)).map(|v| v as u32),
         title: first("dc:title"),
