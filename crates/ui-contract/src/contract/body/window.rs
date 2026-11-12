@@ -8,6 +8,7 @@ use crate::contract::{Container, ContainerProps, Cx, Mount, PartsCx};
 use crate::runtime::commands::{self, CommandSet as _, WindowCommand};
 use crate::runtime::egui::pass;
 use crate::runtime::egui::{input, viewports};
+use crate::runtime::env::{EnvView, ShellEntry};
 use crate::runtime::memory::sub;
 use crate::runtime::windows::{self, ResizeEdge, WindowAction, WindowHit};
 use crate::runtime::{keys, pointer};
@@ -35,6 +36,8 @@ struct WindowParts {
 impl WindowParts {
     /// The parts of a layer or a full-window mount, which move the container and never the OS window.
     const LAYER: WindowParts = WindowParts { band: true, grips: true };
+    /// The parts of a container that stands for no OS window and is no layer: none.
+    const NONE: WindowParts = WindowParts { band: false, grips: false };
 
     fn of(ctx: &Context, viewport: ViewportId) -> WindowParts {
         let window = windows::shell_of(ctx, viewport).window;
@@ -54,12 +57,15 @@ fn answered_by_platform(ctx: &Context, viewport: ViewportId) -> bool {
 
 /// The viewport of the OS window a container's move and resize parts act on: a viewport mount's own window, the
 /// window a `Window`, `Pane` or `Inline` container is shown in. A layer (also a viewport mount's fallback layer)
-/// and a full-window mount are not an OS window of their own.
-pub(super) fn os_window(props: &ContainerProps, ctx: &Context, id: Id) -> Option<ViewportId> {
+/// and a full-window mount are not an OS window of their own. Nor is a `Window`, `Pane` or `Inline` container inside an
+/// embedded shell (`ShellCx::region`): the shell fills a region of another window and never acts on that window, so a
+/// title bar in an app preview moves, frames and reports nothing.
+pub(super) fn os_window(props: &ContainerProps, ctx: &Context, id: Id, env: &EnvView<'_>) -> Option<ViewportId> {
+    let embedded = env.get::<ShellEntry>().0.is_some_and(|shell| shell.region().is_some());
     match &props.mount {
         Mount::Viewport { .. } if viewports::available(ctx) => Some(viewports::viewport_id(id)),
-        Mount::Window { .. } | Mount::Pane(_) | Mount::Inline => Some(pass::current_viewport(ctx)),
-        Mount::Viewport { .. } | Mount::Layer(_) | Mount::FullWindow => None,
+        Mount::Window { .. } | Mount::Pane(_) | Mount::Inline if !embedded => Some(pass::current_viewport(ctx)),
+        Mount::Window { .. } | Mount::Pane(_) | Mount::Inline | Mount::Viewport { .. } | Mount::Layer(_) | Mount::FullWindow => None,
     }
 }
 
@@ -451,7 +457,7 @@ impl BodyHooks<'_> {
         if !matches!(props.mount, Mount::Viewport { .. }) {
             return;
         }
-        let Some(viewport) = os_window(props, &cx.core.ctx, cx.core.id) else { return };
+        let Some(viewport) = os_window(props, &cx.core.ctx, cx.core.id, &cx.core.env) else { return };
         let Some(facts) = windows::WindowHost::of(&cx.core.ctx).facts(viewport) else { return };
         let now = facts.outer.unwrap_or(facts.inner);
         let placed = &mut cx.core.memory.shown::<WindowPlaced>(sub(sub(cx.core.id, "body"), "window_placed")).0;
@@ -472,8 +478,13 @@ impl BodyHooks<'_> {
         let ctx = pcx.ui.ctx().clone();
         let handle = pcx.tokens.tokens().size.handle.sm;
         let reason = "the Move and Size commands of the window command set do the same";
-        let os = os_window(props, &ctx, pcx.id);
-        let stands = os.map_or(WindowParts::LAYER, |viewport| WindowParts::of(&ctx, viewport));
+        let os = os_window(props, &ctx, pcx.id, &pcx.env);
+        let stands = match (&props.mount, os) {
+            (_, Some(viewport)) => WindowParts::of(&ctx, viewport),
+            (Mount::Layer(_) | Mount::Viewport { .. } | Mount::FullWindow, None) => WindowParts::LAYER,
+            // A container of an embedded shell: no OS window to move or resize.
+            (Mount::Window { .. } | Mount::Pane(_) | Mount::Inline, None) => WindowParts::NONE,
+        };
         let exclusive = |hit: WindowHit| os.is_some().then_some(hit);
         let moves_window = matches!(&props.mount, Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } if overlay.moves_window);
         // A layer moves when its overlay says so; other mounts follow the header's band.

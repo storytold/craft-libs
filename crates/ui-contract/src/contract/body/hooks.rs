@@ -604,7 +604,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.surface_press(comp.sense().contains(craft_behavior::Sense::SURFACE), cx);
         let band = props.header.is_some_and(|header| header.band == DragBand::Move);
         if (band || matches!(props.mount, Mount::Viewport { .. } | Mount::Window { .. }))
-            && let Some(viewport) = os_window(props, cx.core.memory.ctx(), cx.core.id)
+            && let Some(viewport) = os_window(props, cx.core.memory.ctx(), cx.core.id, &cx.core.env)
         {
             self.window_os(viewport, cx);
             self.window_movable(viewport, cx);

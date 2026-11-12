@@ -29,7 +29,8 @@ use egui::{Response, Ui, pos2};
 pub struct TitleBarOutput {
     /// The bar's response.
     pub response: Response,
-    /// The caption button clicked in this pass. Minimize and Maximize have already acted on the window.
+    /// The caption button clicked in this pass. Minimize and Maximize have already acted on the window, unless the bar
+    /// is in an embedded shell.
     pub caption_clicked: Option<Caption>,
     /// The Close button was clicked. The bar never closes the window: the app runs its unsaved-documents path.
     pub close_requested: bool,
@@ -55,7 +56,10 @@ impl Outcome for TitleBarOutput {
 ///   A double click maximizes or restores.
 ///
 /// In full screen the bar shows no captions and reserves no room. The free area is the container's move band:
-/// pressing and dragging it moves the window, and a double click acts as above. The body is the leading content; the
+/// pressing and dragging it moves the window, and a double click acts as above.
+///
+/// In an embedded shell (an app preview, a story) the bar is a picture of a window: it acts on no window and reads
+/// none. The captions show hover and report their clicks, but send no window command, and the bar has no move band. The body is the leading content; the
 /// trailing content ([`trailing`](TitleBar::trailing)) sits before the end's captions. [`show_titled`](TitleBar::show_titled)
 /// adds the title in the gap between them. Close never closes the window; see [`TitleBarOutput`].
 #[derive(crate::contract::Component, crate::contract::Props)]
@@ -91,6 +95,8 @@ struct Window {
     maximized: bool,
     double_click: DoubleClick,
     ends: Ends,
+    /// Whether the bar acts on the running window: false in an embedded shell.
+    acts: bool,
 }
 
 impl<'a> TitleBar<'a> {
@@ -146,14 +152,15 @@ impl<'a> TitleBar<'a> {
         let ctx = cx.memory.ctx().clone();
         let shell = windows::shell_of(&ctx, pass::current_viewport(&ctx));
         let frame = self.frame.clone().unwrap_or_else(|| WindowHost::of(&ctx).frame());
-        let state = shell.window.state;
+        let acts = !cx.shell().is_some_and(|shell| shell.region().is_some());
+        let state = if acts { shell.window.state } else { WindowState::Normal };
         let rtl = cx.env.direction().is_rtl();
         let ends = Ends::of(&frame, state != WindowState::Fullscreen, rtl);
-        Window { frame, maximized: self.maximized.unwrap_or(state == WindowState::Maximized), double_click: shell.double_click, ends }
+        Window { frame, maximized: self.maximized.unwrap_or(state == WindowState::Maximized), double_click: shell.double_click, ends, acts }
     }
 
-    /// Shows one end's room and buttons, and acts on a click: Minimize and Maximize go to the window, Close is
-    /// reported.
+    /// Shows one end's room and buttons, and acts on a click: Minimize and Maximize go to the window the bar acts on,
+    /// Close is reported.
     fn show_end(&mut self, ui: &mut Ui, cx: &BodyCx<'_>, end: &End, window: &Window) {
         let height = SlotSize::TitleBar.resolve(&Env::of(ui).tokens);
         let mut buttons: Vec<Placed<'_>> = end
@@ -180,6 +187,7 @@ impl<'a> TitleBar<'a> {
             }
             self.clicked = Some(slot.caption);
             match slot.caption {
+                Caption::Minimize | Caption::Maximize if !window.acts => {}
                 Caption::Minimize => {
                     host.act(viewport, WindowAction::Minimize);
                 }
@@ -243,7 +251,8 @@ impl Container for TitleBar<'_> {
     /// band acts here, once a pass.
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         let window = self.window(cx);
-        if cx.band_double_pressed()
+        if window.acts
+            && cx.band_double_pressed()
             && let Some(action) = windows::double_click_action(&window.frame, window.double_click, window.maximized)
         {
             let ctx = cx.memory.ctx().clone();

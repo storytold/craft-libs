@@ -2,4 +2,5 @@
 
 mod caption_button;
 mod screen_mode;
+mod title_bar;
 mod window_parts;
