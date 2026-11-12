@@ -11,6 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 # `deflate-flate2` with flate2's default miniz_oxide backend, as craft-update pins it (zip's own

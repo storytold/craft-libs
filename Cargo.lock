@@ -1423,6 +1423,7 @@ name = "craft-penpot"
 version = "0.1.0"
 dependencies = [
  "flate2",
+ "serde",
  "serde_json",
  "thiserror 2.0.21",
  "zip",
