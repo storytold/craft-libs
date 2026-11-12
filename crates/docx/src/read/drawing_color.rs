@@ -107,38 +107,45 @@ pub(crate) fn fill(e: &El, theme: &[Rgb], ph: Option<(Rgb, f32)>) -> Option<Fill
         "a:solidFill" => solid(Some(e)),
         "a:pattFill" => solid(e.child("a:fgClr")),
         "a:gradFill" => {
-            let pct = |v: Option<&str>| v.and_then(int).map_or(0.0, |v| v.clamp(-100_000_000, 100_000_000) as f32 / 1000.0);
-            let rect = |r: Option<&El>| r.map_or([0.0; 4], |r| ["l", "t", "r", "b"].map(|k| pct(r.attr(k))));
+            // Read by craft-drawingml, which keeps what the file says; Word's defaults are applied
+            // here: no `a:lin`/`a:path` is a left-to-right linear gradient, and an unstated
+            // `rotWithShape` is off.
+            let g = craft_drawingml::read::gradient(&crate::xml::to_craft(e));
+            let percent = |v: f64| (v * 100.0) as f32;
+            let rect = |r: [f64; 4]| r.map(percent);
+            // Stop colours resolve against the document's theme and `phClr`, so they are read
+            // here from the same `a:gs` elements, which craft-drawingml keeps in file order.
             let stops = e
                 .child("a:gsLst")
                 .into_iter()
                 .flat_map(|l| l.children("a:gs"))
+                .zip(&g.stops)
                 .take(MAX_STOPS * 4)
-                .filter_map(|g| color_alpha(g, theme, ph).map(|(color, transparency)| GradStop { pos: pct(g.attr("pos")), color, transparency }))
+                .filter_map(|(gs, stop)| {
+                    color_alpha(gs, theme, ph).map(|(color, transparency)| GradStop { pos: percent(stop.pos), color, transparency })
+                })
                 .collect();
-            let on = |v: Option<&str>| v.is_some_and(|v| v == "1" || v == "true");
-            let kind = match (e.child("a:path"), e.child("a:lin")) {
-                (Some(p), _) => {
-                    let shape = match p.attr("path") {
-                        Some("rect") => PathShape::Rect,
-                        Some("shape") => PathShape::Shape,
+            let kind = match g.shape {
+                Some(craft_drawingml::style::GradientShape::Path { path, focus }) => {
+                    let shape = match path.as_str() {
+                        "rect" => PathShape::Rect,
+                        "shape" => PathShape::Shape,
                         _ => PathShape::Circle,
                     };
-                    GradientKind::Path { shape, focus: rect(p.child("a:fillToRect")) }
+                    GradientKind::Path { shape, focus: rect(focus) }
                 }
-                (None, l) => GradientKind::Linear {
-                    angle: l.and_then(|l| l.attr("ang")).and_then(int).map_or(0.0, |a| (a % 21_600_000) as f32 / 60_000.0),
-                    scaled: on(l.and_then(|l| l.attr("scaled"))),
-                },
+                Some(craft_drawingml::style::GradientShape::Linear { angle, scaled }) => GradientKind::Linear { angle: angle as f32, scaled },
+                None => GradientKind::Linear { angle: 0.0, scaled: false },
             };
-            let flip = match e.attr("flip") {
-                Some("x") => GradientFlip::X,
-                Some("y") => GradientFlip::Y,
-                Some("xy") => GradientFlip::Xy,
-                _ => GradientFlip::None,
+            let flip = match g.flip {
+                Some(craft_drawingml::style::GradientFlip::X) => GradientFlip::X,
+                Some(craft_drawingml::style::GradientFlip::Y) => GradientFlip::Y,
+                Some(craft_drawingml::style::GradientFlip::Xy) => GradientFlip::Xy,
+                Some(craft_drawingml::style::GradientFlip::None) | None => GradientFlip::None,
             };
-            let tile = e.child("a:tileRect").map(|r| rect(Some(r)));
-            Fill::Gradient(Arc::new(Gradient { stops, kind, tile, rot_with_shape: on(e.attr("rotWithShape")), flip })).sanitized()
+            let tile = e.child("a:tileRect").map(|_| rect(g.tile));
+            let rot_with_shape = g.rotate_with_shape.unwrap_or(false);
+            Fill::Gradient(Arc::new(Gradient { stops, kind, tile, rot_with_shape, flip })).sanitized()
         }
         _ => None,
     }
