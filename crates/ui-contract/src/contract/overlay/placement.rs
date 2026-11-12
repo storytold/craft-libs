@@ -78,6 +78,21 @@ pub(super) fn anchor_rect(ctx: &Context, layer: &Layer<'_>, bounds: Rect, memory
     resolved_anchor(ctx, layer.overlay, layer.anchor, bounds, layer.env.tokens.space.pad.regular, &mut memory.pointer_at)
 }
 
+/// The rect `layer` is placed inside: `kept_in` for its anchor as the host resolves it.
+fn layer_bounds(layer: &Layer<'_>, bounds: Rect) -> Rect {
+    kept_in(layer.overlay, layer.anchor, bounds, layer.env.tokens.space.pad.regular)
+}
+
+/// The rect a layer of `overlay` is placed and measured inside, the one rule the host and the body's measuring run
+/// share: the safe rect `bounds`, and for a `Corner` anchor the part of its rect (`resolved`, in screen space) within
+/// it, less `inset`, so a toast stays inside the body whose corner it sits at.
+fn kept_in(overlay: &Overlay, resolved: Rect, bounds: Rect, inset: f32) -> Rect {
+    match &overlay.place {
+        Place::Anchored { anchor: Anchor::Corner(..), .. } => resolved.intersect(bounds).shrink(inset),
+        _ => bounds,
+    }
+}
+
 /// The anchor rect of `overlay` in screen space, the one rule the host and the body's measuring run share: a
 /// `Corner` anchor from its rect as `resolved` gives it in screen space, within the safe rect `bounds`, less `inset`, a `Pointer` anchor from `pointer_at` (the pointer where
 /// the layer opened, taken from the pointer now when none is recorded), any other from `resolved`.
@@ -111,7 +126,7 @@ pub(crate) fn measuring_room(
     let bounds = areas::safe_rect(ctx);
     let resolved = resolve_anchor(ctx, id, overlay, own, own_to_screen);
     let anchor = resolved_anchor(ctx, overlay, resolved, bounds, inset, &mut MemoryStage::peek::<LayerMemory>(ctx, memory_slot(id)).pointer_at);
-    Some(content_room(overlay, bounds, anchor, rtl))
+    Some(content_room(overlay, bounds, kept_in(overlay, resolved, bounds, inset), anchor, rtl))
 }
 
 /// The most a layer's body may take: the fit's share of the safe rect `bounds`, at least as wide as the layer's
@@ -125,13 +140,14 @@ fn cap(overlay: &Overlay, bounds: Rect, anchor: Rect) -> egui::Vec2 {
     }
 }
 
-/// The room a layer offers its content before it is placed: the cap, and for an anchored layer the cap within the
-/// larger side of its anchor along the side's axis. Content measured in it fits wherever `placement` puts it: on its
-/// preferred side when it fits there, else on the larger side.
-pub(crate) fn content_room(overlay: &Overlay, bounds: Rect, anchor: Rect, rtl: bool) -> egui::Vec2 {
+/// The room a layer offers its content before it is placed: the cap (a share of the safe rect `bounds`), and for an
+/// anchored layer the cap within the larger side of its anchor along the side's axis, inside `kept` (`kept_in`).
+/// Content measured in it fits wherever `placement` puts it: on its preferred side when it fits there, else on the
+/// larger side.
+pub(crate) fn content_room(overlay: &Overlay, bounds: Rect, kept: Rect, anchor: Rect, rtl: bool) -> egui::Vec2 {
     let cap = cap(overlay, bounds, anchor);
     let Place::Anchored { side, .. } = &overlay.place else { return cap.min(bounds.size()) };
-    let request = PlaceRequest::new(anchor, cap, bounds).side(*side).rtl(rtl).min_width(overlay.min_width);
+    let request = PlaceRequest::new(anchor, cap, kept).side(*side).rtl(rtl).min_width(overlay.min_width);
     let on = |side: Side| craft_behavior::overlay::place(&request.kept(Some(side))).rect.size();
     let (vertical, other) = match side {
         Side::Below => (true, Side::Above),
@@ -162,14 +178,15 @@ pub(super) fn placement(ctx: &Context, layer: &Layer<'_>, size: Option<egui::Vec
     let cap = cap(layer.overlay, bounds, anchor);
     match &layer.overlay.place {
         Place::Anchored { side, align, .. } => {
+            let kept = layer_bounds(layer, bounds);
             let Some(size) = size else {
-                let room = content_room(layer.overlay, bounds, anchor, rtl);
-                return Placed { at: anchor.left_bottom().clamp(bounds.min, bounds.max), side: None, room };
+                let room = content_room(layer.overlay, bounds, kept, anchor, rtl);
+                return Placed { at: anchor.left_bottom().clamp(kept.min, kept.max), side: None, room };
             };
             // The side taken in an earlier pass is the preferred one while the layer stays open: it stays while the
             // content fits there or that side is the larger, so a size measured later (a body that grew) still flips it.
             let taken = overlay::entry(ctx, layer.id).and_then(|entry| entry.side).unwrap_or(*side);
-            let request = PlaceRequest::new(anchor, size, bounds).side(taken).align(*align).rtl(rtl).min_width(layer.overlay.min_width);
+            let request = PlaceRequest::new(anchor, size, kept).side(taken).align(*align).rtl(rtl).min_width(layer.overlay.min_width);
             let placed = craft_behavior::overlay::place(&request);
             // The room is what the side the layer took leaves for a body as large as the cap.
             let room = craft_behavior::overlay::place(&request.kept(Some(placed.side)).size(cap)).rect.size();

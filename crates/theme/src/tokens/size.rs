@@ -231,6 +231,8 @@ pub struct SizeTokens {
     pub pane: PaneSizes,
     /// The docks' columns.
     pub dock: DockColumnSizes,
+    /// Notice cards: toasts.
+    pub notice: NoticeSizes,
     /// The rulers of a canvas.
     pub ruler: RulerSizes,
     /// The stage a story draws on.
@@ -275,6 +277,13 @@ pub struct PaneSizes {
 pub struct DockColumnSizes {
     /// The width an expanded column has until the user resizes it.
     pub column: f32,
+}
+
+/// The sizes of a notice card, in logical pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NoticeSizes {
+    /// The width every card of a toast stack has where the room allows.
+    pub width: f32,
 }
 
 /// The sizes of a floating dock window, in logical pixels.

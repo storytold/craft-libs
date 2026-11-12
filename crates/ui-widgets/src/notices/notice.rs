@@ -24,7 +24,8 @@ pub enum NoticeLayout {
     /// The icon at the reading start and the text beside it, across the width offered, with no surface.
     #[default]
     Inline,
-    /// The inline layout on a floating surface, as wide as its text up to the card width: a toast.
+    /// The inline layout on a floating surface, the card width wide where the room allows: a toast. A card of a status
+    /// tone draws its edge and title in the tone's colour.
     Card,
     /// Icon, title, message and actions in a column centred in the room, at most the reading width wide: an empty
     /// state. The first action is the primary button and the others secondary, all as wide as the widest, side by side
@@ -151,7 +152,7 @@ pub struct NoticeStyle {
     /// The icon's side and colour.
     #[style(icon)]
     icon: IconLook,
-    /// The width a card wraps its text at when the room is open.
+    /// The width of every card, padding included, where the room allows.
     card_width: f32,
     /// The widest column of the centred layout.
     reading_width: f32,
@@ -463,11 +464,20 @@ impl Component for Notice<'_> {
             ),
             NoticeLayout::Card => {
                 let fill = StyleColor(cx.surface(SurfaceKind::Floating).fill);
+                let mut surface =
+                    SurfaceLook::new(Stateful::new(fill)).kind(SurfaceKind::Floating).radius(UiTokens::corner(cx.tokens.shape.radius.surface));
+                // A card of a status tone carries the tone on its edge and title; a neutral card keeps the surface's edge.
+                let title = if key.tone == Tone::Neutral {
+                    normal
+                } else {
+                    surface = surface.border(stateful(tone), cx.tokens.stroke.thin).border_replaces_edge();
+                    tone
+                };
                 (
-                    TextLook::new(TypeRole::BodyStrong, stateful(normal)),
+                    TextLook::new(TypeRole::BodyStrong, stateful(title)),
                     TextLook::new(TypeRole::Body, stateful(normal)),
                     TextLook::new(TypeRole::Body, stateful(normal)),
-                    SurfaceLook::new(Stateful::new(fill)).kind(SurfaceKind::Floating).radius(UiTokens::corner(cx.tokens.shape.radius.surface)),
+                    surface,
                     Insets::uniform(cx.tokens.space.pad.roomy),
                 )
             }
@@ -495,7 +505,7 @@ impl Component for Notice<'_> {
             line,
             more,
             icon: IconLook::new(control.icon, stateful(tone)),
-            card_width: cx.tokens.size.length.field,
+            card_width: cx.tokens.size.notice.width,
             reading_width: cx.tokens.typography.get(TypeRole::Body).size * READING_IN_BODY_SIZES,
         }
     }
@@ -505,8 +515,12 @@ impl Component for Notice<'_> {
         let texts = self.texts(&cx.env, &cx.words::<NoticeWords>(), cx.format(), cx.resolved.label);
         let natural = self.plan(cx, &texts, f32::INFINITY).needs;
         let width = match (self.layout, cx.room) {
-            (NoticeLayout::Card, Some(room)) => natural.min(cx.style.card_width).min(room),
-            (NoticeLayout::Card, None) => natural.min(cx.style.card_width),
+            // The card is the card width wide, its padding included, where the room allows.
+            (NoticeLayout::Card, room) => {
+                let padding = cx.style.metrics.padding;
+                let width = cx.style.card_width - padding.start - padding.end;
+                room.map_or(width, |room| width.min(room))
+            }
             (NoticeLayout::Centred, None) => natural.min(cx.style.reading_width),
             (_, Some(room)) => room,
             (_, None) => natural,

@@ -142,6 +142,7 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.size.story.width_min" Num 120.0..=1024.0 => s.story.width_min;
         "base.size.story.width_max" Num 120.0..=2048.0 => s.story.width_max;
         "base.size.dock.column" Num 120.0..=640.0 => s.dock.column;
+        "base.size.notice.width" Num 120.0..=1024.0 => s.notice.width;
     }
     let sp = &mut b.space;
     leaves! { out;

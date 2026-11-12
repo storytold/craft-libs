@@ -171,6 +171,7 @@ size.window.cascade = 32
 size.pane.least = 40
 size.ruler.tick.mid = 3
 size.dock.column = 340
+size.notice.width = 360
 size.story.height = 360
 size.story.width_min = 240
 size.story.width_max = 720

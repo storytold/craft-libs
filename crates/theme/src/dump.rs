@@ -7,8 +7,8 @@ use std::fmt::Write as _;
 
 use crate::{
     BarSizes, ColorToken, ControlSizes, DockColumnSizes, Easing, Edge, Elevation, ElevationTokens, FloatSizes, FontSlot, Gaps, HandleSizes, HitSizes,
-    IconSizes, Insets, KnobShape, LengthSizes, Motion, MotionTokens, Pads, PaneSizes, PlotSizes, RadiusSet, RailSizes, RampSizes, Rgba, RowStyle,
-    RulerSizes, RulerTickSizes, ShapeTokens, SizeTokens, SpaceTokens, StorySizes, StrokeTokens, ThumbSizes, Tokens, TypeStyle, TypeTokens,
+    IconSizes, Insets, KnobShape, LengthSizes, Motion, MotionTokens, NoticeSizes, Pads, PaneSizes, PlotSizes, RadiusSet, RailSizes, RampSizes, Rgba,
+    RowStyle, RulerSizes, RulerTickSizes, ShapeTokens, SizeTokens, SpaceTokens, StorySizes, StrokeTokens, ThumbSizes, Tokens, TypeStyle, TypeTokens,
     WindowSizes,
 };
 
@@ -129,6 +129,7 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
         pane,
         ruler,
         dock,
+        notice,
         story,
     } = size;
     let ControlSizes { sm, md } = control;
@@ -189,6 +190,8 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     out.line("size.ruler.tick.mid", len(*mid));
     let DockColumnSizes { column } = dock;
     out.line("size.dock.column", len(*column));
+    let NoticeSizes { width } = notice;
+    out.line("size.notice.width", len(*width));
     let StorySizes { height, width_min, width_max } = story;
     out.line("size.story.height", len(*height));
     out.line("size.story.width_min", len(*width_min));

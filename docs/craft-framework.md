@@ -979,6 +979,7 @@ A theme with its own shape replaces the radii or adds an offset to control, surf
 | `size.ramp.groove` | Gradient ramp drawn as the groove of a value track |
 | `size.rail.width`, `size.rail.button` | Tool rail and panel rail |
 | `size.length.field`, `size.length.track`, `size.length.short`, `size.length.number` | Text or value field, value track, short field, number field over a slider |
+| `size.notice.width` | Width of a toast card where the room allows |
 | `size.story.height`, `size.story.width_min`, `size.story.width_max` | The stage a story of a canvas control draws its canvas on: its height and the range of its width; `width_min` is also the least width of a column of a story grid |
 | `size.thumb.card` | The picture side of a tile card at zoom 1 (tile grids, preset browsers, the start screen) |
 | `space.gap.*`, `space.pad.*` | Gaps between and padding inside components |

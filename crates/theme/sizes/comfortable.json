@@ -57,6 +57,9 @@
         "short": 120.0,
         "track": 144.0
       },
+      "notice": {
+        "width": 360.0
+      },
       "pane": {
         "least": 50.0
       },
