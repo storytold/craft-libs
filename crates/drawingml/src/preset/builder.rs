@@ -37,17 +37,27 @@ impl Pb {
     pub(super) fn arc(&mut self, wr: f64, hr: f64, st: f64, sw: f64) -> &mut Self {
         let (s, e) = (st.to_radians(), (st + sw).to_radians());
         let c = Point::new(self.cur.x - wr * s.cos(), self.cur.y - hr * s.sin());
-        // One cubic per quarter turn or part of one. `kurbo::Arc::to_cubic_beziers` sizes its
-        // segments from an error tolerance through `powf`, and libm implementations disagree on
-        // that call's last bits, so its `ceil` can pick a different segment count on another
-        // platform: the same shape then had two outlines, which no cross-platform golden can
-        // pin. `ceil` of a ratio of two exactly computed angles has no such edge.
         let (rx, ry) = (wr.abs(), hr.abs());
         let sweep = e - s;
+        // Segments come from the same error tolerance `kurbo::Arc::to_cubic_beziers(0.05, …)` was
+        // given, but sized with exact arithmetic. That call reached its count through `powf`, and
+        // libm implementations disagree on its last bits, so its `ceil` could pick a different
+        // segment count on another platform: the same shape then had two outlines, which no
+        // cross-platform golden can pin. A quarter-turn cubic misses its circle by about 2.75e-4
+        // of the radius, and halving a segment's angle cuts that error by 2^6, so doubling until
+        // the bound holds keeps large shapes within the tolerance the small ones already met.
+        const TOLERANCE: f64 = 0.05;
+        const QUARTER_TURN_ERROR: f64 = 2.75e-4;
+        let mut cut = 1usize;
+        let mut error = QUARTER_TURN_ERROR * rx.max(ry);
+        while error > TOLERANCE && cut < 4096 {
+            cut *= 2;
+            error /= 64.0;
+        }
         // The small offset keeps a quarter turn that came out of `to_radians` or `acos` a hair
         // above the exact ratio from asking for a second segment.
         let quarters = sweep.abs() / std::f64::consts::FRAC_PI_2;
-        let n = (quarters - 1e-9).ceil().max(1.0) as usize;
+        let n = ((quarters - 1e-9).ceil().max(1.0) as usize) * cut;
         let step = sweep / n as f64;
         let arm = (4.0 / 3.0) * (step * 0.25).abs().tan() * sweep.signum();
         let sample = |a: f64| (c.x + rx * a.cos(), c.y + ry * a.sin());
