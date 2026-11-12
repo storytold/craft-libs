@@ -246,8 +246,8 @@ pub fn point_at(ctx: &Context, key: Id, index: Option<usize>) {
         let kept = log.kept.entry(key).or_default();
         std::mem::replace(&mut kept.pointed, index) != index
     });
-    if changed && reads::earlier(ctx, BindKey::Record(pointer_key(key)), key).other {
-        request_discard(ctx, Rerun::Edit);
+    if changed {
+        edited(ctx, BindKey::Record(pointer_key(key)), key);
     }
 }
 
@@ -268,7 +268,16 @@ fn write(ctx: &Context, key: Id, edit: impl FnOnce(&mut Kept) -> bool) {
         kept.pass = pass;
         edit(kept)
     });
-    if changed && reads::earlier(ctx, BindKey::Record(key), key).other {
+    if changed {
+        edited(ctx, BindKey::Record(key), key);
+    }
+}
+
+/// Notes an edit of the record `read` that `editor` made: a settled region that read it runs, and so does the pass when
+/// something read it earlier in the pass.
+fn edited(ctx: &Context, read: BindKey, editor: Id) {
+    crate::runtime::lazy::note_edit(ctx, read);
+    if reads::earlier(ctx, read, editor).other {
         request_discard(ctx, Rerun::Edit);
     }
 }

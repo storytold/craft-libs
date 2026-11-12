@@ -1,5 +1,6 @@
-//! The read record: which components read which binding in the running pass, in which run kind, and what their
-//! measure took. An edit reruns the pass only when this record shows an earlier reader its change would make stale.
+//! The read record: which components read which binding, inspection record or command state in the running pass, in
+//! which run kind, and what their measure took. An edit reruns the pass only when this record shows an earlier reader
+//! its change would make stale.
 
 use crate::runtime::egui::pass;
 use crate::runtime::frame::{PerViewport, Stamped};
@@ -22,6 +23,8 @@ pub(crate) enum BindKey {
     Saved(Id),
     /// An inspection record, or the element its list points at, under this key.
     Record(Id),
+    /// A command's state on the board: the command's number and the instance whose state it is, `None` for the app's.
+    Command(u32, Option<Id>),
 }
 
 /// One measure a reader made from the value it read: what it was offered and the size it took.

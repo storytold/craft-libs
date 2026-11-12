@@ -4,7 +4,7 @@
 //! registration the services below take per pass: each service that keeps one notes it here while a record is open,
 //! as the call that makes it again. Records nest: a region's record holds the records its settled regions replayed.
 //!
-//! The record also holds the facts the settled test reads (`runtime::lazy`): the bound values the run read, whether
+//! The record also holds the facts the settled test reads (`runtime::lazy`): the values the run read, whether
 //! something in it still moves (an animation that is not at its end, a repaint request) and the earliest time it asked
 //! to be shown again, and whether it did something a replay cannot repeat (an overlay it shows, paint on another
 //! layer, a label scope open around it). Such a record is never replayed: the region runs.
@@ -53,7 +53,7 @@ impl Open {
 /// What the settled test reads from a record.
 #[derive(Clone, Default)]
 pub(crate) struct Facts {
-    /// The bound values the run read.
+    /// The values the run read: bound values, inspection records and command states.
     pub(crate) reads: HashSet<BindKey>,
     /// Something in the run still moves: it runs again next pass.
     pub(crate) unsettled: bool,
@@ -155,7 +155,7 @@ pub(crate) fn journal<F: Fn(&Context) + Send + Sync + 'static>(ctx: &Context, ma
     }
 }
 
-/// Notes that the running code read the bound value `key`.
+/// Notes that the running code read the value `key`.
 pub(crate) fn note_read(ctx: &Context, key: BindKey) {
     with_open(ctx, |facts| {
         facts.reads.insert(key);

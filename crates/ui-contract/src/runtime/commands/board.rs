@@ -5,10 +5,12 @@ use super::{
     CommandChain, CommandGate, CommandInput, CommandScope, CommandSet, CommandState, EditCommands, FirePhase, FireSource, Fired, ResolvedCommand,
     WindowShortcut, registry,
 };
+use crate::runtime::egui::sizing::{Rerun, request_discard};
 use crate::runtime::egui::{pass, repaint};
 use crate::runtime::focus::EditSet;
 use crate::runtime::pass_state;
-use crate::runtime::{focus, keys, overlay, sampler};
+use crate::runtime::reads::{self, BindKey};
+use crate::runtime::{focus, keys, lazy, measure, overlay, replay, sampler};
 use craft_behavior::{EditCommand, KeyOwner, OwnerClass, pick_instance, resolve_flags};
 use craft_keymap::{
     Active, Chord, CommandDef, CommandKind, CommandRef, Keymap, Lookup, Matcher, ModalRule, Overrides, Platform, Press, Scopes, Trigger,
@@ -64,6 +66,8 @@ pub(crate) struct Board {
     numbers: HashMap<String, u32>,
     this: HashMap<StateKey, CommandState>,
     last: HashMap<StateKey, CommandState>,
+    /// What the frame's input changed, under the root frame it arrived for (`set_input`).
+    changed: (u64, InputChanges),
     /// Scoped commands waiting for their instance.
     queue: Vec<Fired>,
     /// App-scope commands for the next `FrameOutput`.
@@ -92,6 +96,29 @@ pub(crate) struct Board {
     unknown: HashSet<String>,
     /// The scope each child scope is declared inside: an instance of the child is also an instance of the parent.
     parents: HashMap<&'static str, &'static str>,
+}
+
+/// What `set_input` changed for the readers of command states, which each pass of the frame notes before any component
+/// runs (`begin`).
+#[derive(Clone, Default)]
+struct InputChanges {
+    /// The states a resolution at the start of the frame finds other than one at the end of the frame before.
+    states: Vec<StateKey>,
+    /// The keymap was rebuilt: any chord shown may differ.
+    keymap: bool,
+}
+
+/// Whether a resolution finds the same state under `a` and `b`: no state is the default one.
+fn same_state(a: Option<&CommandState>, b: Option<&CommandState>) -> bool {
+    a.cloned().unwrap_or_default() == b.cloned().unwrap_or_default()
+}
+
+/// Notes, in the read record, that the running code showed the state under `key`: a settled region that showed it runs
+/// when the state changes, and a change published after it in the pass runs the pass again.
+fn note_read(ctx: &Context, key: Option<StateKey>) {
+    if let Some((number, instance)) = key {
+        reads::note(ctx, BindKey::Command(number, instance), Id::NULL, measure::active(ctx), &[]);
+    }
 }
 
 /// Where a resolution judges a command from: the modal facts and the focus. The board's own is the key focus of the
@@ -235,8 +262,16 @@ impl Board {
         (in_reach && edits.is_some_and(|edits| edits.contains(edit))).then_some(Declaration::Focused)
     }
 
-    /// `command` as seen by `instance`, or by the app for an app-scope command, from `from`, before the gate.
-    fn resolve(&self, ctx: &Context, command: &CommandRef, instance: Option<Id>, reach: Reach<'_>, from: &Vantage) -> ResolvedCommand {
+    /// `command` as seen by `instance`, or by the app for an app-scope command, from `from`, before the gate, and the
+    /// key of the state it read (`None` when the focused component answers for the command).
+    fn resolve(
+        &self,
+        ctx: &Context,
+        command: &CommandRef,
+        instance: Option<Id>,
+        reach: Reach<'_>,
+        from: &Vantage,
+    ) -> (ResolvedCommand, Option<StateKey>) {
         let def = self.registry.get(&command.id);
         let app = is_app(self.scope_of(command));
         let instance = if app { None } else { instance };
@@ -277,7 +312,7 @@ impl Board {
         let live = app || instance.is_some_and(|id| self.is_live(ctx, id));
         let chord =
             self.keymap.as_ref().and_then(|cache| cache.keymap.bindings(command).into_iter().find(|b| !b.trigger.double).map(|b| b.trigger.chord));
-        ResolvedCommand {
+        let resolved = ResolvedCommand {
             label: state.and_then(|s| s.title_ref().cloned()).unwrap_or_else(|| Arc::from(def.map_or(command.id.as_str(), |def| def.label.as_str()))),
             icon: def.and_then(|def| def.icon.clone()),
             chord,
@@ -288,7 +323,8 @@ impl Board {
             kind: def.map_or(CommandKind::Command, |def| def.kind.clone()),
             command: command.clone(),
             instance,
-        }
+        };
+        (resolved, key)
     }
 }
 
@@ -410,13 +446,25 @@ pub(crate) fn platform(ctx: &Context) -> Platform {
 /// keymap follows the user's overrides.
 pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
     let platform = platform(ctx);
+    let frame = pass::root_frame_nr(ctx);
     with(ctx, |board| {
-        board.last = std::mem::take(&mut board.this);
-        board.modal_published_last = std::mem::take(&mut board.modal_published);
+        let mut states = HashMap::new();
         for (command, state) in &input.states {
             let number = board.number(&command.id);
-            board.this.insert((number, None), state.clone());
+            states.insert((number, None), state.clone());
         }
+        // A state resolves from this frame's, else the last frame's. The ending frame resolved `this`, else `last`; the
+        // starting frame resolves the input, else the ending frame's `this`. A key whose two differ changed for its readers.
+        let changed: HashSet<StateKey> = board
+            .this
+            .keys()
+            .chain(board.last.keys())
+            .chain(states.keys())
+            .filter(|key| !same_state(board.this.get(key).or_else(|| board.last.get(key)), states.get(key).or_else(|| board.this.get(key))))
+            .copied()
+            .collect();
+        board.last = std::mem::replace(&mut board.this, states);
+        board.modal_published_last = std::mem::take(&mut board.modal_published);
         board.gate = input.gate.clone();
         let stale = board.keymap.as_ref().is_none_or(|cache| {
             cache.platform != platform
@@ -430,6 +478,7 @@ pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
             let BuiltKeymap { keymap, edit_chords, window_shortcuts } = keymap_for(&board.registry, platform, input.overrides.as_ref());
             board.keymap = Some(KeymapCache { keymap, platform, overrides: input.overrides.clone(), edit_chords, window_shortcuts });
         }
+        board.changed = (frame, InputChanges { states: changed.into_iter().collect(), keymap: stale });
     });
 }
 
@@ -530,10 +579,18 @@ fn beneath(ctx: &Context, layer: Id) -> Vantage {
 }
 
 /// `command` as seen by `instance` (`None` for the app) from `from` (`None`: the key focus of the running pass), with
-/// the gate applied outside the board's lock.
-fn resolve_in(ctx: &Context, command: &CommandRef, instance: Option<Id>, reach: Reach<'_>, from: Option<&Vantage>) -> ResolvedCommand {
-    let (mut resolved, first_unknown, gate) = with(ctx, |board| {
+/// the gate applied outside the board's lock, and the key of the state it read.
+fn resolve_in(
+    ctx: &Context,
+    command: &CommandRef,
+    instance: Option<Id>,
+    reach: Reach<'_>,
+    from: Option<&Vantage>,
+) -> (ResolvedCommand, Option<StateKey>) {
+    let ((mut resolved, key), first_unknown, gate) = with(ctx, |board| {
         let first_unknown = board.registry.get(&command.id).is_none() && board.unknown.insert(command.id.clone());
+        // A command no state named yet has a key too, so a state given later reaches the regions that read it.
+        board.number(&command.id);
         let resolved = board.resolve(ctx, command, instance, reach, from.unwrap_or(&board.here));
         (resolved, first_unknown, board.gate.clone())
     });
@@ -543,7 +600,7 @@ fn resolve_in(ctx: &Context, command: &CommandRef, instance: Option<Id>, reach: 
     if gate.is_some_and(|gate| !gate.allows(command)) {
         resolved.enabled = false;
     }
-    resolved
+    (resolved, key)
 }
 
 /// `command` for a surface with no component of its own: against the instance that `fire` would target.
@@ -560,7 +617,9 @@ pub(crate) fn resolve_beneath(ctx: &Context, layer: Id, command: &CommandRef) ->
 
 fn resolve_from(ctx: &Context, command: &CommandRef, from: Option<&Vantage>) -> ResolvedCommand {
     let (_, instance) = with(ctx, |board| board.target_of(ctx, command, from.unwrap_or(&board.here)));
-    resolve_in(ctx, command, instance, Reach::Focus, from)
+    let (resolved, key) = resolve_in(ctx, command, instance, Reach::Focus, from);
+    note_read(ctx, key);
+    resolved
 }
 
 /// Step 1: the bound command of a component, resolved against its own instance. A component outside every instance
@@ -568,7 +627,9 @@ fn resolve_from(ctx: &Context, command: &CommandRef, from: Option<&Vantage>) -> 
 /// reaches.
 pub(crate) fn resolve_bound(ctx: &Context, chain: &CommandChain, command: &CommandRef) -> ResolvedCommand {
     let instance = with(ctx, |board| board.innermost(chain, board.scope_of(command)).or_else(|| board.target_of(ctx, command, &board.here).1));
-    resolve_in(ctx, command, instance, Reach::Chain(chain), None)
+    let (resolved, key) = resolve_in(ctx, command, instance, Reach::Chain(chain), None);
+    note_read(ctx, key);
+    resolved
 }
 
 /// Step-1 resolution for a context in `chain`; `None` when the command's scope has no instance in the chain.
@@ -602,7 +663,7 @@ fn queue(ctx: &Context, fired: Fired) {
 pub(crate) fn fall_through(ctx: &Context, command: craft_behavior::EditCommand) {
     let Some(command) = EditCommands::of(command) else { return };
     let command = CommandRef::from(command);
-    let target = with(ctx, |board| board.resolve(ctx, &command, None, Reach::Focus, &board.here).instance);
+    let target = with(ctx, |board| board.resolve(ctx, &command, None, Reach::Focus, &board.here).0.instance);
     let fired = Fired { command, target, source: FireSource::Key, phase: FirePhase::Press, cycle: false, alt_variant: false };
     with(ctx, |board| if fired.target.is_some() { board.queue.push(fired) } else { board.out.push(fired) });
     repaint::request_of(ctx, ViewportId::ROOT);
@@ -641,7 +702,7 @@ fn fire_in(ctx: &Context, command: &CommandRef, source: FireSource, from: Option
     if !app && instance.is_none() {
         return false;
     }
-    let resolved = resolve_in(ctx, command, instance, Reach::Focus, from);
+    let (resolved, _) = resolve_in(ctx, command, instance, Reach::Focus, from);
     if !resolved.enabled {
         return false;
     }
@@ -651,8 +712,21 @@ fn fire_in(ctx: &Context, command: &CommandRef, source: FireSource, from: Option
     true
 }
 
+/// Publishes `state` of `command` for the innermost instance in `chain`. A state other than the one resolved so far in
+/// the frame is an edit of it: a settled region that read it runs, and so does the pass, when something read it
+/// earlier in the pass.
+///
+/// A publish is a board effect, which a measuring run skips as it skips registration: the real run of the same content
+/// publishes, and its edit check sees the reads the measuring runs made.
 pub(crate) fn publish(ctx: &Context, chain: &CommandChain, command: &CommandRef, state: CommandState) {
-    with(ctx, |board| {
+    if !measure::effect(ctx, "commands::publish") {
+        return;
+    }
+    replay::journal(ctx, || {
+        let (chain, command, state) = (chain.clone(), command.clone(), state.clone());
+        move |ctx: &Context| publish(ctx, &chain, &command, state.clone())
+    });
+    let changed = with(ctx, |board| {
         let scope = board.scope_of(command);
         let declared = board.registry.get(&command.id).is_some_and(|def| def.modal == ModalRule::Declared);
         debug_assert!(
@@ -662,16 +736,25 @@ pub(crate) fn publish(ctx: &Context, chain: &CommandChain, command: &CommandRef,
         // A declared app-scope command is published by the innermost instance around the caller, inside whichever
         // modal layer it sits in.
         let instance = if is_app(scope) { chain.innermost_any() } else { board.innermost(chain, scope) };
-        if let Some(instance) = instance {
-            let number = board.number(&command.id);
-            // The pass that publishes is the one that knows the layers around the caller.
-            let in_modal = chain.ids().any(|id| board.is_modal_root(id));
-            if in_modal {
-                board.modal_published.insert((number, Some(instance)));
-            }
-            board.this.insert((number, Some(instance)), state);
+        let instance = instance?;
+        let number = board.number(&command.id);
+        let key = (number, Some(instance));
+        // The pass that publishes is the one that knows the layers around the caller.
+        let in_modal = chain.ids().any(|id| board.is_modal_root(id));
+        if in_modal {
+            board.modal_published.insert(key);
         }
+        let changed = !same_state(board.this.get(&key).or_else(|| board.last.get(&key)), Some(&state));
+        board.this.insert(key, state);
+        changed.then_some((number, instance))
     });
+    if let Some((number, instance)) = changed {
+        let key = BindKey::Command(number, Some(instance));
+        lazy::note_edit(ctx, key);
+        if reads::earlier(ctx, key, instance).other {
+            request_discard(ctx, Rerun::Edit);
+        }
+    }
 }
 
 /// The next command `from_ref` reads that is routed to `instance`. The instance of the app scope (an `AppShell`'s
@@ -730,6 +813,15 @@ pub(crate) fn binds_scoped(ctx: &Context, chord: &Chord) -> bool {
 }
 
 pub(crate) fn begin(ctx: &Context) {
+    let (arrived, changed) = with(ctx, |board| board.changed.clone());
+    if arrived == pass::root_frame_nr(ctx) {
+        if changed.keymap {
+            lazy::unsettle(ctx);
+        }
+        for (number, instance) in changed.states {
+            lazy::note_edit(ctx, BindKey::Command(number, instance));
+        }
+    }
     let viewport = pass::current_viewport(ctx);
     let focused = focus::record(ctx, viewport).focused;
     let shortcuts = keys::take_shortcuts(ctx);
@@ -801,7 +893,7 @@ pub(crate) fn begin(ctx: &Context) {
                     continue;
                 };
                 let (app, instance) = with(ctx, |board| board.target_of(ctx, &hit.command, &board.here));
-                let resolved = resolve_in(ctx, &hit.command, instance, Reach::Focus, None);
+                let (resolved, _) = resolve_in(ctx, &hit.command, instance, Reach::Focus, None);
                 if !resolved.enabled {
                     continue;
                 }

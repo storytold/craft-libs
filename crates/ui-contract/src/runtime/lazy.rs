@@ -149,7 +149,7 @@ struct Changes {
     unsettled_through: u64,
     /// The pass whose input was looked at.
     scanned: u64,
-    /// The bound values written in a frame, and the frame.
+    /// The values changed in a frame, and the frame.
     edited: (u64, HashSet<BindKey>),
 }
 
@@ -251,7 +251,7 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - the pointer is not over it, no press started on it and none of its widgets is dragged or holds egui focus, and
 ///   none of that held in its last run;
 /// - none of its stops holds focus or is the target of a focus request, now or in its last run;
-/// - no bound value it read was written this frame (`note_edit`);
+/// - no value it read (a bound value, an inspection record, a command's state) changed this frame (`note_edit`);
 /// - no frame unsettled every child (`unsettle`): input other than pointer motion this frame or the one before, an app's
 ///   repaint request or an edit of a given value;
 /// - the run did nothing a replay cannot repeat (`runtime::replay`).
@@ -351,7 +351,7 @@ pub(crate) fn ran(ctx: &Context, id: Id, record: Record, place: Place, rect: Rec
     });
 }
 
-/// Notes that the bound value `key` was written in this frame: a settling child that read it runs.
+/// Notes that the value `key` changed in this frame: a settling child that read it runs.
 pub(crate) fn note_edit(ctx: &Context, key: BindKey) {
     with(ctx, |store, _, frame| {
         let edited = &mut store.changes.edited;

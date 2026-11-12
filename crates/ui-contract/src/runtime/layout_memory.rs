@@ -1156,7 +1156,7 @@ pub(crate) mod guard {
         ("contract::steps::scroll_owner::", "scroll reveals and moves: read; taken through take_queued"),
         ("contract::body::scroll::Jumps", "scroll jumps: taken through take_queued"),
         ("runtime::edit::CancelAll", "edit cancels: read; a measuring run ends nothing"),
-        ("runtime::commands::board::Board", "commands: read; registration is an effect skipped in measuring runs"),
+        ("runtime::commands::board::Board", "commands: read; registration and publishing are effects skipped in measuring runs"),
         (
             "shell::app_shell::dialogs::Hosts",
             "dialog hosts: one handle per window, made on first use; dialogs open on clicks, which only real runs sense",
