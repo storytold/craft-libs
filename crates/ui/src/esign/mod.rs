@@ -843,7 +843,8 @@ mod tests {
             ..Default::default()
         };
         let ctx = Context::default();
-        let full = ctx.run_ui(egui::RawInput::default(), |ui| dialog.ui(ui));
+        let mut full = ctx.run_ui(egui::RawInput::default(), |ui| dialog.ui(ui));
+        full.textures_delta.clear();
         let shown = texts(&full.shapes);
         assert!(shown.iter().any(|t| t == &dialog.labels.sign_in_first), "sign-in message not shown for an unlinked account: {shown:?}");
     }
