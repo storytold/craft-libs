@@ -5,7 +5,7 @@ use super::level::{LevelMemory, MenuLevel, level_env};
 use crate::contract::overlay::{Anchor, Dismiss, Outside, Popup};
 use crate::contract::{
     Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, Entry, Focus as _, Gap, InMenu, LeastWidth, Mount, NoValue, Outcome,
-    Overlay, POPUP_PAD, Pointer as _, Props as _, Remember as _, Role, Show as _, ShowContainer as _, TooltipSpec, Trigger,
+    Overlay, POPUP_PAD, Pointer as _, Props as _, Remember as _, Role, Scroll, Show as _, ShowContainer as _, TooltipSpec, Trigger,
 };
 use crate::display::Divider;
 use crate::runtime::env::{Env, Label};
@@ -144,6 +144,8 @@ pub(crate) fn pick_values_from<T: Value + 'static>(ui: &mut Ui, label: impl Into
 /// - The body is one column group: the rows directly in it share the widest mark and icon columns, so their labels
 ///   start at one edge.
 /// - A menu over value entries is a value menu ([`values`](Menu::values)) and shows with [`pick`](Menu::pick).
+/// - A menu taller than the room its layer has scrolls: strips above and below its rows scroll while the pointer
+///   rests on them, the wheel scrolls it, and it keeps the width of its rows.
 ///
 /// Menu-body helpers (`EditMenu`, `PanelMenu`) show their rows in the body and return an output.
 #[derive(crate::contract::Component, crate::contract::Props)]
@@ -177,6 +179,7 @@ impl<'a> Menu<'a> {
             .least_width(LeastWidth::Popup)
             .roving(Roving::new(NavShape::Flat).arrows(Arrows::Vertical).wrap(true))
             .label_column(true)
+            .scroll(Scroll::vertical().strips())
             .mount(Mount::Layer(layer(false)));
         Menu { common: Common::new(), props, open: None, closed: None, submenu: false, values: false, opener: None, back: false, step: None }
             .label(label)
@@ -197,7 +200,8 @@ impl<'a> Menu<'a> {
             .body_gap(Gap::None)
             .least_width(LeastWidth::Popup)
             .roving(Roving::new(NavShape::Flat).arrows(Arrows::Vertical).wrap(true))
-            .label_column(true);
+            .label_column(true)
+            .scroll(Scroll::vertical().strips());
         Menu { common: Common::new(), props, open: None, closed: None, submenu: false, values: false, opener: None, back: false, step: None }
             .label(label)
     }

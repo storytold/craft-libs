@@ -178,8 +178,9 @@ fn room(anchor: Rect, bounds: Rect, side: Side, rtl: bool, gap: f32) -> f32 {
 }
 
 /// Places an overlay: the preferred side unless the other has more room and the content does not fit, shifted to
-/// stay inside the bounds, its height (or width, beside the anchor) capped to the room. The rect is always finite
-/// and inside the bounds.
+/// stay inside the bounds, its height (or width, beside the anchor) capped to the room. Beside the anchor it lines up
+/// with the anchor's other end when it runs past the bounds from the aligned end and fits from the other. The rect
+/// is always finite and inside the bounds.
 pub fn place(request: &PlaceRequest) -> Placement {
     let anchor = clean(request.anchor);
     let bounds = clean(request.bounds);
@@ -206,10 +207,15 @@ pub fn place(request: &PlaceRequest) -> Placement {
         (Align::Start, true) | (Align::End, false) => anchor.right() - size.x,
         (Align::Center, _) => anchor.center().x - size.x / 2.0,
     };
+    // Beside the anchor, an overlay that runs past the bounds from the edge it aligns to opens the other way when it
+    // fits there: a tall submenu of a low row opens upward, its bottom level with the row's.
+    let (down, up) = (anchor.top() + size.y <= bounds.bottom(), anchor.bottom() - size.y >= bounds.top());
     let across_y = match request.align {
-        Align::Start => anchor.top(),
+        Align::Start if down || !up => anchor.top(),
         Align::Center => anchor.center().y - size.y / 2.0,
-        Align::End => anchor.bottom() - size.y,
+        Align::End if up || !down => anchor.bottom() - size.y,
+        Align::Start => anchor.bottom() - size.y,
+        Align::End => anchor.top(),
     };
     let min = match (side, rtl) {
         (Side::Below, _) => Pos2::new(across_x(request.align), anchor.bottom() + gap),
@@ -231,6 +237,19 @@ mod tests {
     }
 
     const BOUNDS: Rect = Rect { min: Pos2::new(0.0, 0.0), max: Pos2::new(800.0, 600.0) };
+
+    #[test]
+    fn beside_a_low_anchor_a_tall_overlay_opens_upward_and_one_taller_than_both_ways_slides() {
+        let row = rect(100.0, 500.0, 200.0, 24.0);
+        let request = PlaceRequest::new(row, Vec2::new(150.0, 300.0), BOUNDS).side(Side::End);
+        let placed = place(&request).rect;
+        assert_eq!(placed.bottom(), row.bottom(), "opens upward from the row's bottom: {placed:?}");
+        let fits_down = place(&PlaceRequest::new(rect(100.0, 100.0, 200.0, 24.0), Vec2::new(150.0, 300.0), BOUNDS).side(Side::End)).rect;
+        assert_eq!(fits_down.top(), 100.0, "hangs down from the row while it fits");
+        let mid = rect(100.0, 250.0, 200.0, 24.0);
+        let neither = place(&PlaceRequest::new(mid, Vec2::new(150.0, 400.0), BOUNDS).side(Side::End)).rect;
+        assert_eq!(neither.bottom(), BOUNDS.bottom(), "fits neither way: slides up to stay inside");
+    }
 
     #[test]
     fn rect_is_finite_and_inside_the_bounds_for_any_request() {

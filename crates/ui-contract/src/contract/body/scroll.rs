@@ -19,6 +19,22 @@ const SCROLL_Y: PartKey = PartKey::new("body_scroll_y");
 
 const SCROLL_X: PartKey = PartKey::new("body_scroll_x");
 
+/// The scroll strip above the view of a region with `ScrollIndicator::Strips`.
+#[doc(hidden)]
+pub const STRIP_BACK: PartKey = PartKey::new("body_scroll_strip_back");
+
+/// The scroll strip below the view.
+#[doc(hidden)]
+pub const STRIP_FORWARD: PartKey = PartKey::new("body_scroll_strip_forward");
+
+/// How far resting the pointer on a scroll strip scrolls, in points per second.
+const STRIP_SPEED: f32 = 600.0;
+
+/// The height of a scroll strip.
+pub(super) fn scroll_strip_height(tokens: &UiTokens) -> f32 {
+    tokens.size.control.sm
+}
+
 /// The scroll offset a container with no `Component::scroll` binding keeps for the session, and the content extent
 /// every scrolling container keeps with it.
 #[derive(Clone, Default)]
@@ -56,12 +72,29 @@ pub(super) fn jump_frame(ctx: &Context) -> u64 {
 }
 
 /// The room the scroll bars of `scroll` take from a view of `view` over content of `extent`: `bar` across the view
-/// for each axis whose content overflows it.
+/// for each axis whose content overflows it. Scroll strips take none across the view.
 pub(super) fn overflow_inset(scroll: Scroll, extent: Vec2, view: Vec2, bar: f32) -> Vec2 {
     Vec2::new(
-        if scroll.vertical_on() && f64::from(extent.y) > f64::from(view.y) + 0.5 { bar } else { 0.0 },
+        if scroll.vertical_on() && !scroll.has_strips() && f64::from(extent.y) > f64::from(view.y) + 0.5 { bar } else { 0.0 },
         if scroll.horizontal_on() && f64::from(extent.x) > f64::from(view.x) + 0.5 { bar } else { 0.0 },
     )
+}
+
+/// The scroll strips of a region with `ScrollIndicator::Strips` over the body rect `at`, whose content of `extent`
+/// overflows it along y: the strip above the view and the strip below it, each `height` tall and at most a third of
+/// `at`. `None` while the content fits, and for a region with a bar.
+pub(super) fn strips_of(scroll: Scroll, extent: Vec2, at: Rect, height: f32) -> Option<(Rect, Rect)> {
+    let over = scroll.has_strips() && f64::from(extent.y) > f64::from(at.height()) + 0.5;
+    over.then(|| {
+        let height = height.min(at.height() / 3.0).max(0.0);
+        (Rect::from_min_max(at.min, Pos2::new(at.max.x, at.min.y + height)), Rect::from_min_max(Pos2::new(at.min.x, at.max.y - height), at.max))
+    })
+}
+
+/// The part of the body rect `at` the content shows in: all of it, less the scroll strips while they show.
+pub(super) fn view_within(scroll: Scroll, extent: Vec2, at: Rect, height: f32) -> Rect {
+    strips_of(scroll, extent, at, height)
+        .map_or(at, |(back, forward)| Rect::from_min_max(Pos2::new(at.min.x, back.max.y), Pos2::new(at.max.x, forward.min.y)))
 }
 
 /// The scroll region of a container: its own, or for a layer the vertical one that takes the overflow of any fit
@@ -111,6 +144,17 @@ impl BodyHooks<'_> {
     pub(super) fn paint_scroll_bars<C: Container>(&self, ui: &mut Ui, cx: &Cx<'_, C>, props: &ContainerProps, rtl: bool, env: &Env) {
         let tokens = &*env.tokens;
         let look = scroll_bar_look(tokens, ScrollBarKind::Overlay);
+        if let Some(at) = self.view
+            && let Some(scroll) = scroll_of(props)
+            && let Some(strips) = self.strips(scroll, at)
+        {
+            let max = self.max_offset(self.shown_view(scroll, at).size()).y;
+            let (live, dead) = (crate::style::rgba_color(tokens.color.text.normal), crate::style::rgba_color(tokens.color.text.disabled));
+            for (strip, back, moves) in [(strips.0, true, self.offset.y > 0.5), (strips.1, false, self.offset.y < max - 0.5)] {
+                ui.painter().add(ScrollBar::strip_arrow(strip, back, if moves { live } else { dead }));
+            }
+            return;
+        }
         if let Some(view) = self.view
             && let Some(scroll) = scroll_of(props)
         {
@@ -153,11 +197,20 @@ impl BodyHooks<'_> {
         if let Some(range) = cx.scroll_moved(SCROLL_Y) {
             offset.y = range.start;
         }
+        // Resting the pointer on a strip scrolls toward it at a steady speed, frame by frame.
+        if self.last.view.is_some_and(|at| self.strips(scroll, rect_of(at)).is_some()) {
+            let step = f64::from(STRIP_SPEED * ctx.input(|input| input.stable_dt).clamp(0.0, 0.1));
+            for (strip, toward) in [(STRIP_BACK, -1.0), (STRIP_FORWARD, 1.0)] {
+                if cx.core.results.get(&(strip, None)).is_some_and(|result| result.hovered) {
+                    offset.y += toward * step;
+                }
+            }
+        }
         if let Some(range) = cx.scroll_moved(SCROLL_X) {
             offset.x = range.start;
         }
         self.access_scroll(scroll, &mut offset, cx);
-        let view = self.last.view.map_or(Vec2::ZERO, |view| rect_of(view).size());
+        let view = self.last.view.map_or(Vec2::ZERO, |view| self.shown_view(scroll, rect_of(view)).size());
         let offset = self.clamped(scroll, view, offset);
         if offset != self.offset {
             let id = cx.core.id;
@@ -178,7 +231,7 @@ impl BodyHooks<'_> {
     fn access_scroll<C: Container>(&self, scroll: Scroll, offset: &mut ScrollPos, cx: &mut Cx<'_, C>) {
         use craft_behavior::{AccessAction as Action, AccessData as ActionData};
         let rtl = cx.core.env.direction().is_rtl();
-        let view = self.last.view.map_or(Vec2::ZERO, |view| rect_of(view).size());
+        let view = self.last.view.map_or(Vec2::ZERO, |view| self.shown_view(scroll, rect_of(view)).size());
         while let Some(request) = cx.core.intents.take_scroll_access(false) {
             let (vertical, toward_end) = match request.action {
                 Action::ScrollUp => (true, false),
@@ -206,13 +259,23 @@ impl BodyHooks<'_> {
 }
 
 impl<'b> BodyHooks<'b> {
+    /// The scroll strips over the body rect `at`, from the content's last extent.
+    pub(super) fn strips(&self, scroll: Scroll, at: Rect) -> Option<(Rect, Rect)> {
+        strips_of(scroll, Vec2::new(self.last_extent.0, self.last_extent.1), at, self.strip)
+    }
+
+    /// The part of the body rect `at` the content shows in, from the content's last extent.
+    pub(super) fn shown_view(&self, scroll: Scroll, at: Rect) -> Rect {
+        view_within(scroll, Vec2::new(self.last_extent.0, self.last_extent.1), at, self.strip)
+    }
+
     pub(super) fn scroll_geometry(&self, props: &ContainerProps, view: Rect, rtl: bool, tokens: &UiTokens) -> Vec<(Bar, ScrollSpan)> {
         let Some(scroll) = scroll_of(props) else { return Vec::new() };
         let thickness = scroll_bar_look(tokens, ScrollBarKind::Overlay).thickness;
         let (v_on, h_on) = (scroll.vertical_on(), scroll.horizontal_on());
         let (ex, ey) = self.last_extent;
         let mut bars = Vec::new();
-        if v_on {
+        if v_on && !scroll.has_strips() {
             let track = if rtl {
                 Rect::from_min_max(view.min, Pos2::new(view.min.x + thickness, view.max.y))
             } else {

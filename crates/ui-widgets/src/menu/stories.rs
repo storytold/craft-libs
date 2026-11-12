@@ -75,6 +75,75 @@ fn menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     })
 }
 
+/// A menu taller than the window: strips above and below its rows scroll it.
+#[story(Menu<'static>, covers = [], drive = Drive::Never)]
+fn menu_taller_than_the_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    in_row(ui, |ui| {
+        let opener = Button::new("Fonts").show(ui);
+        let mut ran = false;
+        let shown = Menu::new("Fonts").open(Bind::bound(data.value("open", true))).opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+            for name in FONTS {
+                ran |= MenuItem::new(name).show(ui).ran;
+            }
+        });
+        let mut output = StoryOutput::from(shown.output);
+        output.clicked |= ran;
+        output
+    })
+}
+
+/// Enough font names to run past any window the gallery shows.
+const FONTS: [&str; 48] = [
+    "Arial",
+    "Avenir",
+    "Baskerville",
+    "Bodoni",
+    "Calibri",
+    "Cambria",
+    "Candara",
+    "Caslon",
+    "Century",
+    "Charter",
+    "Cochin",
+    "Consolas",
+    "Constantia",
+    "Corbel",
+    "Courier",
+    "Didot",
+    "Franklin",
+    "Frutiger",
+    "Futura",
+    "Garamond",
+    "Georgia",
+    "Gill Sans",
+    "Helvetica",
+    "Hoefler",
+    "Impact",
+    "Inter",
+    "Jenson",
+    "Lato",
+    "Lucida",
+    "Menlo",
+    "Minion",
+    "Monaco",
+    "Myriad",
+    "Noto Sans",
+    "Noto Serif",
+    "Optima",
+    "Palatino",
+    "Perpetua",
+    "Roboto",
+    "Rockwell",
+    "Sabon",
+    "Segoe",
+    "Source Sans",
+    "Tahoma",
+    "Times",
+    "Trebuchet",
+    "Univers",
+    "Verdana",
+];
+
 #[story(Menu<'static>, covers = [], drive = Drive::Never)]
 fn menu_of_values(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     in_row(ui, |ui| {

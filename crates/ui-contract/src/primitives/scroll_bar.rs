@@ -36,7 +36,19 @@ impl HiddenContent {
     }
 }
 
+/// A scroll strip's arrow as shares of the strip's height: its width and its height.
+const STRIP_ARROW: (f32, f32) = (0.75, 0.28125);
+
 impl ScrollBar {
+    /// The filled arrow of a scroll strip, centred in `strip`: pointing up for the strip before the view (`back`),
+    /// down for the one after it.
+    pub fn strip_arrow(strip: Rect, back: bool, color: Color32) -> Shape {
+        let (half, depth) = (strip.height() * STRIP_ARROW.0 / 2.0, strip.height() * STRIP_ARROW.1 / 2.0);
+        let c = strip.center();
+        let (tip, base) = if back { (c.y - depth, c.y + depth) } else { (c.y + depth, c.y - depth) };
+        Shape::convex_polygon(vec![pos2(c.x - half, base), pos2(c.x + half, base), pos2(c.x, tip)], color, egui::Stroke::NONE)
+    }
+
     /// The thumb inside `track`, a bar along `axis`, for `span`: its length is the shown share of the track, at least
     /// `min_thumb`, and it sits at the visible range's share of the travel, from the right under right-to-left
     /// on the x axis. This is the thumb a press takes; the painted one is inset by its look's `inset`.

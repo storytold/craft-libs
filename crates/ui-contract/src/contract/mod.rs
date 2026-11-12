@@ -48,6 +48,8 @@ pub use crate::runtime::pending::{Job, Pending, Progress};
 pub use body::REORDER_BAND;
 #[doc(hidden)]
 pub use body::pad_of;
+#[doc(hidden)]
+pub use body::{STRIP_BACK, STRIP_FORWARD};
 pub use collection::{
     ActivateOn, CollectionEvent, CollectionProps, CollectionResponse, ColumnAlign, ColumnEvent, ColumnKind, ColumnRequest, ColumnSort, ColumnSpec,
     ContextMenuRequest, DragPayload, DropAt, DropKind, DropPayload, DropPlace, EdgePress, HeaderMenuRequest, ItemKeys, LeadOnOpen, LeadSource,
@@ -60,7 +62,7 @@ pub use container::InBar;
 pub use container::InMenu;
 pub use container::{
     BandFill, Collapse, ContainerProps, DragBand, EndRegion, FooterPlace, FooterRegion, Gap, HeaderEdge, HeaderParts, HeaderRegion, LeastWidth,
-    Mount, Notch, POPUP_PAD, Pad, PaneEdge, Scroll, ScrollAnchor, ScrollAxes, ShellPane, Sizing, ThemeScope, WrapWidth,
+    Mount, Notch, POPUP_PAD, Pad, PaneEdge, Scroll, ScrollAnchor, ScrollAxes, ScrollIndicator, ShellPane, Sizing, ThemeScope, WrapWidth,
 };
 pub use craft_ui_macros::{CommandSet, Component, Pattern, Props, register_contract};
 #[doc(hidden)]

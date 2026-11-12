@@ -531,6 +531,17 @@ pub enum ScrollAxes {
     Both,
 }
 
+/// How a scrolling body shows that its content overflows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ScrollIndicator {
+    /// A scroll bar over the view's end edge, and fades at the edges past which content is hidden.
+    Bar,
+    /// A strip with an arrow above the view and one below it while the content overflows along y, as a menu shows:
+    /// resting the pointer on a strip scrolls toward it. The strips take their height from the view, never width.
+    Strips,
+}
+
 /// A scrolling body.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -541,11 +552,24 @@ pub struct Scroll {
     pub anchor: ScrollAnchor,
     /// The distance of one wheel notch.
     pub notch: Notch,
+    /// How the overflow shows.
+    pub indicator: ScrollIndicator,
 }
 
 impl Scroll {
     const fn on(axes: ScrollAxes) -> Scroll {
-        Scroll { axes, anchor: ScrollAnchor::Start, notch: Notch::Lines(3.0) }
+        Scroll { axes, anchor: ScrollAnchor::Start, notch: Notch::Lines(3.0), indicator: ScrollIndicator::Bar }
+    }
+
+    /// Shows the overflow along y as scroll strips instead of a bar.
+    pub const fn strips(mut self) -> Scroll {
+        self.indicator = ScrollIndicator::Strips;
+        self
+    }
+
+    /// Whether the overflow along y shows as scroll strips.
+    pub const fn has_strips(&self) -> bool {
+        matches!(self.indicator, ScrollIndicator::Strips) && self.vertical_on()
     }
 
     /// Scrolls along y.

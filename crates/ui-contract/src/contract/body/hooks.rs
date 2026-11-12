@@ -8,7 +8,10 @@ use super::regions::{
     label_extra_of, least_of, pad_of, paint_edge_rule, paint_rules, rect_of, shared_labels, shared_line,
 };
 use super::reorder::REORDER_BAND;
-use super::scroll::{Glide, Jumps, ScrollState, aim_glide, follow_anchor, jump_frame, overflow_inset, scroll_of};
+use super::scroll::{
+    Glide, Jumps, STRIP_BACK, STRIP_FORWARD, ScrollState, aim_glide, follow_anchor, jump_frame, overflow_inset, scroll_of, scroll_strip_height,
+    strips_of, view_within,
+};
 use super::size::MeasureKey;
 use super::window::{WindowMode, os_window, window_instance};
 use super::{BodyHooks, BodyView};
@@ -173,6 +176,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             _ => false,
         };
         self.last = stage.recall::<BodyView>(sub(id, "view"));
+        self.strip = scroll_strip_height(&env.tokens);
         let Some(scroll) = scroll else { return };
         self.last_extent = stage.session::<ScrollState>(sub(id, "scroll")).extent;
         self.scroll_bound = comp.scroll().is_some();
@@ -191,7 +195,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.offset = held;
         self.offset_at_read = held;
         let rtl = env.direction.is_rtl();
-        let view = self.last.view.map_or(Vec2::ZERO, |view| rect_of(view).size());
+        let view = self.last.view.map_or(Vec2::ZERO, |view| self.shown_view(scroll, rect_of(view)).size());
         // Step 4 applies, in order, the scroll bar and AccessKit moves of the last pass (`scroll_input`), this pass's
         // wheel share and the reveal request queued last pass.
         let frame = jump_frame(&ctx);
@@ -210,9 +214,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             self.offset.y -= f64::from(share.scroll.y);
             self.moved = true;
         }
-        if let (Some(rect), Some(view_rect)) =
-            (if quiet { crate::contract::peek_reveal(&ctx, id) } else { crate::contract::take_reveal(&ctx, id) }, self.last.view.map(rect_of))
-        {
+        if let (Some(rect), Some(view_rect)) = (
+            if quiet { crate::contract::peek_reveal(&ctx, id) } else { crate::contract::take_reveal(&ctx, id) },
+            self.last.view.map(|view| self.shown_view(scroll, rect_of(view))),
+        ) {
             let (by, shown) = crate::contract::steps::reveal_move(rect, view_rect);
             self.offset.y += f64::from(by.y);
             self.offset.x += f64::from(if rtl { -by.x } else { by.x });
@@ -426,6 +431,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 open_bound: self.open_bound,
                 scroll_bound: self.scroll_bound,
                 last_extent: self.last_extent,
+                strip: self.strip,
                 anchor: self.anchor,
                 follows_end: self.follows_end,
                 view_offset: self.view_offset,
@@ -542,13 +548,19 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let regions = self.regions(&props, inner, pad_of(tokens, props.pad), room, rtl, self.measured_sizes());
         let scroll = scroll_of(&props);
         if self.open && scroll.is_some() {
-            let view = regions.body;
-            self.view = Some(view);
+            let at = regions.body;
+            self.view = Some(at);
+            let view = scroll.map_or(at, |scroll| self.shown_view(scroll, at));
             if let Some(scroll) = scroll {
                 self.clamp_offset(scroll, view.size());
             }
-            for (bar, span) in self.scroll_geometry(&props, view, rtl, tokens) {
+            for (bar, span) in self.scroll_geometry(&props, at, rtl, tokens) {
                 pcx.scroll(bar.key, bar.track, bar.axis, span);
+            }
+            if let Some((back, forward)) = scroll.and_then(|scroll| self.strips(scroll, at)) {
+                for (strip, rect) in [(STRIP_BACK, back), (STRIP_FORWARD, forward)] {
+                    pcx.part(strip, rect).pointer_only("The arrow keys, Page Up and Page Down and the wheel scroll the rows");
+                }
             }
             if let Some(scroll) = scroll {
                 let notch = scroll.notch.wheel(tokens.tokens().typography.body.line_height);
@@ -564,7 +576,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 if vertical || horizontal {
                     wheel::register(
                         &ctx,
-                        WheelTaker::new(pcx.id, view)
+                        WheelTaker::new(pcx.id, at)
                             .vertical(vertical)
                             .horizontal(horizontal)
                             .scrolls(true)
@@ -827,10 +839,12 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                         let off = self.offset;
                         let big = crate::contract::MAX_EXTENT;
                         let bar = scroll_bar_look(&body_env.tokens, ScrollBarKind::Overlay).thickness;
-                        let inset = overflow_inset(scroll, Vec2::new(self.last_extent.0, self.last_extent.1), at.size(), bar);
+                        let last = Vec2::new(self.last_extent.0, self.last_extent.1);
+                        let inset = overflow_inset(scroll, last, at.size(), bar);
+                        let shows = view_within(scroll, last, at, self.strip);
                         let seen = Rect::from_min_max(
-                            Pos2::new(if rtl { at.min.x + inset.x } else { at.min.x }, at.min.y),
-                            Pos2::new(if rtl { at.max.x } else { at.max.x - inset.x }, at.max.y - inset.y),
+                            Pos2::new(if rtl { shows.min.x + inset.x } else { shows.min.x }, shows.min.y),
+                            Pos2::new(if rtl { shows.max.x } else { shows.max.x - inset.x }, shows.max.y - inset.y),
                         );
                         let (width, height) =
                             (if scroll.horizontal_on() { big } else { seen.width() }, if scroll.vertical_on() { big } else { seen.height() });
@@ -840,7 +854,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                         let layout_of = *body_ui.layout();
                         let mut region_ui =
                             alloc::child(&mut body_ui, UiBuilder::new().scope_id(sub(id, "scroll_region")).layout(layout_of).max_rect(max));
-                        region_ui.set_clip_rect(at.intersect(body_ui.clip_rect()));
+                        region_ui.set_clip_rect(shows.intersect(body_ui.clip_rect()));
                         // The view this pass shows, where this run lays the content out.
                         let shown = self.view_offset;
                         let shift = Vec2::new(
@@ -893,7 +907,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                         self.extent = Some(extent);
                         // Along an axis it scrolls the body took what the view shows; along the other it took its content.
                         bars_inset = overflow_inset(scroll, extent, at.size(), bar);
-                        let took = extent + bars_inset;
+                        // Strips take their height from the view: a body that overflows takes all of its room.
+                        let strips = strips_of(scroll, extent, at, self.strip).map_or(0.0, |(back, forward)| back.height() + forward.height());
+                        let took = extent + bars_inset + Vec2::new(0.0, strips);
                         Some(Vec2::new(
                             if scroll.horizontal_on() { took.x.min(at.width()) } else { took.x },
                             if scroll.vertical_on() { took.y.min(at.height()) } else { took.y },

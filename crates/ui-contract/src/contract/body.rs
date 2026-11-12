@@ -32,6 +32,7 @@ pub(crate) use regions::HeaderSlots;
 pub use regions::pad_of;
 #[doc(hidden)]
 pub use reorder::REORDER_BAND;
+pub use scroll::{STRIP_BACK, STRIP_FORWARD};
 #[cfg(feature = "testing")]
 pub(crate) use window::MOVE_BAND;
 use window::WindowMode;
@@ -105,6 +106,8 @@ pub(super) struct BodyHooks<'b> {
     last: BodyView,
     /// The content's extent from the last run that laid it out, kept with the offset it bounds (`ScrollState`).
     last_extent: (f32, f32),
+    /// The height of a scroll strip (`ScrollIndicator::Strips`).
+    strip: f32,
     /// This pass's sizes, recorded at step 17.
     body_size: Option<Vec2>,
     header_size: Option<Vec2>,
@@ -190,6 +193,7 @@ impl<'b> BodyHooks<'b> {
             pass_on: None,
             last: BodyView::default(),
             last_extent: (0.0, 0.0),
+            strip: 0.0,
             body_size: None,
             header_size: None,
             footer_size: None,
