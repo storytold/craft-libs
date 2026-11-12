@@ -34,6 +34,9 @@ const DELETE: [Chord; 2] = [Chord::plain(Key::Delete), Chord::plain(Key::Backspa
 const NUDGE: f32 = 1.0;
 const NUDGE_LARGE: f32 = 10.0;
 
+/// The greatest side of the graph, in least plot widths (`size.plot.width`; 300 at a 240 plot).
+const MOST_IN_PLOTS: f32 = 1.25;
+
 /// One channel of a curve dialog: its name and colour.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CurveChannel {
@@ -498,7 +501,7 @@ impl Component for CurveGraph<'_> {
             focus: cx.focus_look(),
             look: PlotLook::new(cx),
             least,
-            most: tokens.size.plot.most.max(least),
+            most: (tokens.size.plot.width * MOST_IN_PLOTS).max(least),
             bar: tokens.size.icon.sm,
             bar_gap: tokens.space.gap.inline,
             hit: tokens.size.hit.target,

@@ -23,7 +23,6 @@
         "title": 32.0
       },
       "canvas": {
-        "compass": 24.0,
         "stage_height": 360.0,
         "stage_width_max": 720.0,
         "stage_width_min": 240.0
@@ -42,16 +41,11 @@
       },
       "groove": 3.0,
       "handle": {
-        "band_inner": 5.0,
-        "band_outer": 18.0,
-        "hit": 12.0,
         "md": 8.0,
         "ring": 18.0,
-        "rotate_reach": 36.0,
         "sm": 6.0
       },
       "hit": {
-        "reveal": 56.0,
         "slop": 3.0,
         "target": 8.0
       },
@@ -74,7 +68,6 @@
       "panel_header": 28.0,
       "plot": {
         "height": 144.0,
-        "most": 300.0,
         "width": 240.0
       },
       "pointer_tip": {

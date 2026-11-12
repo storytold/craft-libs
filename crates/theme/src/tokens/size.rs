@@ -242,8 +242,6 @@ pub struct SizeTokens {
 /// The sizes of the controls drawn over a canvas, in logical pixels.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CanvasSizes {
-    /// The side of the canvas compass, the control that shows and resets the view rotation.
-    pub compass: f32,
     /// The height of the stage a story of a canvas control shows its canvas on.
     pub stage_height: f32,
     /// The least width of that stage.
@@ -335,8 +333,6 @@ pub struct PlotSizes {
     pub width: f32,
     /// Least height.
     pub height: f32,
-    /// The greatest side of a square plot that takes the room it is given (the graph of a curve editor).
-    pub most: f32,
 }
 
 /// Canvas drag handle sizes, in logical pixels.
@@ -348,14 +344,6 @@ pub struct HandleSizes {
     pub md: f32,
     /// The radius of the ring a pin's fixed rotation is set on.
     pub ring: f32,
-    /// The hit radius of a transform box's handle.
-    pub hit: f32,
-    /// How far from a transform box's corner the rotate pointer shows outside the box.
-    pub rotate_reach: f32,
-    /// Where the rotate band outside a transform box's corner begins, from the corner.
-    pub band_inner: f32,
-    /// Where the rotate band outside a transform box's corner ends, from the corner.
-    pub band_outer: f32,
 }
 
 /// Pointer tolerances, in logical pixels.
@@ -365,8 +353,6 @@ pub struct HitSizes {
     pub slop: f32,
     /// The least hit size of a part, in logical pixels; a thin handle or line is padded to it.
     pub target: f32,
-    /// How far from the pointer the handles of an on-canvas object show.
-    pub reveal: f32,
 }
 
 /// Line widths, dash lengths and gaps, in points.

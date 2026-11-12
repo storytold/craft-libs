@@ -151,7 +151,7 @@ impl<'a> PagePreview<'a> {
 pub struct PagePictureStyle {
     #[style(metrics)]
     metrics: Metrics,
-    /// The longest side the picture asks for room, from the tokens' floating window height.
+    /// The longest side the picture asks for room: a picture area's least width (`size.plot.width`).
     ideal: f32,
     /// The failure message.
     message: StyleColor,
@@ -217,7 +217,7 @@ impl Component for PagePicture<'_> {
     type Output = PagePictureOutput;
 
     fn style(cx: &StyleCx<'_>, _: PagePictureStyleKey) -> PagePictureStyle {
-        PagePictureStyle { metrics: Metrics::new(), ideal: cx.tokens.size.float.height, message: cx.color(cx.tokens.color.text.muted) }
+        PagePictureStyle { metrics: Metrics::new(), ideal: cx.tokens.size.plot.width, message: cx.color(cx.tokens.color.text.muted) }
     }
 
     fn sense(&self) -> Sense {

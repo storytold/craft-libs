@@ -19,7 +19,7 @@ use crate::runtime::focus::{self, FocusTarget};
 use crate::style::{ComponentStyle, Corners, StyleCx, SurfaceKind};
 use crate::tabs::{Tab, TabKind, TabStrip, TornOff};
 use craft_behavior::{IconId, Metrics, PartKey, PressPhase, Sense, keyed};
-use craft_theme::ControlSize;
+use craft_theme::{ControlSize, HandleSizes};
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::borrow::Cow;
 use std::hash::Hash;
@@ -92,7 +92,7 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        Vec2::new(cx.tokens.size.handle.band_outer, cx.tokens.size.panel_header)
+        Vec2::new(grip_width(&cx.tokens.size.handle), cx.tokens.size.panel_header)
     }
 
     fn sense(&self) -> Sense {
@@ -116,6 +116,15 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
 
 /// The band at the header's end the group is dragged by.
 const GRIP: PartKey = PartKey::new("grip");
+
+/// The width of the band a group is dragged by, in standard handle sides (18 at an 8 handle, the band the old dock
+/// headers had).
+const GRIP_IN_HANDLES: f32 = 2.25;
+
+/// The width of the band a group is dragged by.
+fn grip_width(handle: &HandleSizes) -> f32 {
+    handle.md * GRIP_IN_HANDLES
+}
 /// The panel menu button at the header's end edge.
 pub(super) const MENU: PartKey = PartKey::new("panel_menu");
 
@@ -308,12 +317,12 @@ impl<P: Clone + Hash + Send + Sync + 'static> Component for DockGroup<'_, P> {
         let Some(slot) = cx.header_slot(HeaderEdge::End) else { return };
         let words = cx.words::<DockWords>();
         let flow = craft_behavior::Flow::new(slot, cx.flow.is_rtl());
-        let (band, rest) = flow.take_start(cx.tokens.size.handle.band_outer);
+        let (band, rest) = flow.take_start(grip_width(&cx.tokens.size.handle));
         let sense = if self.movable { Sense::CLICK | Sense::DRAG | Sense::FOCUS } else { Sense::CLICK | Sense::FOCUS };
         let _ = cx.header_part(HeaderEdge::End, GRIP, band).sense(sense).focusable();
         if self.menu_button() {
             // An icon button is square: its side is the slot's room past the band and the gap.
-            let side = (slot.width() - cx.tokens.size.handle.band_outer - cx.tokens.space.gap.item).max(0.0);
+            let side = (slot.width() - grip_width(&cx.tokens.size.handle) - cx.tokens.space.gap.item).max(0.0);
             let end = rest.take_end(side).0;
             let button = Rect::from_min_size(egui::Pos2::new(end.left(), slot.top()), Vec2::new(end.width(), side.min(slot.height())));
             let _ = cx
@@ -400,7 +409,7 @@ impl<P: Clone + Hash + Send + Sync + 'static> Component for DockGroup<'_, P> {
 impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
     /// The drag band, then the panel menu button when it shows, at the header's end edge.
     fn header_parts(&self, cx: &MeasureCx<'_, Self>) -> HeaderParts {
-        let band = cx.tokens.size.handle.band_outer;
+        let band = grip_width(&cx.tokens.size.handle);
         let button =
             if self.menu_button() { cx.tokens.space.gap.item + cx.face(Self::menu_face(cx.words::<DockWords>().panel_menu.clone())).x } else { 0.0 };
         HeaderParts::NONE.end(band + button)

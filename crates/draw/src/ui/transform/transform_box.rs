@@ -38,6 +38,13 @@ const ROTATE_BY_KEY: &str = "the angle field in the options bar";
 const NUDGE: f64 = 1.0;
 const NUDGE_FAR: f64 = 10.0;
 
+/// The handles' pointer distances, in standard handle sides (`size.handle.md`; at an 8 handle: a hit radius of 12, the
+/// rotate pointer within 36 of a corner, the rotate band from 5 to 18 outside it).
+const HIT_IN_HANDLES: f32 = 1.5;
+const ROTATE_REACH_IN_HANDLES: f32 = 4.5;
+const BAND_INNER_IN_HANDLES: f32 = 0.625;
+const BAND_OUTER_IN_HANDLES: f32 = 2.25;
+
 /// Where a press outside the box rotates it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -421,10 +428,10 @@ impl Component for TransformBox<'_> {
             handle: cx.handle(),
             line: cx.color(overlay.line),
             halo: cx.color(overlay.halo),
-            hit: handle.hit,
-            rotate_reach: handle.rotate_reach,
-            band_inner: handle.band_inner,
-            band_outer: handle.band_outer,
+            hit: handle.md * HIT_IN_HANDLES,
+            rotate_reach: handle.md * ROTATE_REACH_IN_HANDLES,
+            band_inner: handle.md * BAND_INNER_IN_HANDLES,
+            band_outer: handle.md * BAND_OUTER_IN_HANDLES,
             pivot_radius: cx.tokens.size.handle.sm / 2.0,
             pivot_arm: hit.target,
         }

@@ -22,6 +22,9 @@ use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
 
 use super::model::{SplitAt, WarpEdit, WarpMesh, WarpSide, WarpSplit};
 
+/// How far from the pointer the mesh's handles show, in hit targets (`size.hit.target`; 56 at an 8 target).
+const REVEAL_IN_TARGETS: f32 = 7.0;
+
 /// An anchor or a handle end: `POINT.at(index)` with the index into [`WarpMesh::points`].
 pub const POINT: PartKey = PartKey::new("point");
 
@@ -383,7 +386,7 @@ impl Component for WarpGrid<'_> {
             anchor: cx.handle(),
             end,
             reach: cx.tokens.size.hit.target,
-            reveal: cx.tokens.size.hit.reveal,
+            reveal: cx.tokens.size.hit.target * REVEAL_IN_TARGETS,
         }
     }
 

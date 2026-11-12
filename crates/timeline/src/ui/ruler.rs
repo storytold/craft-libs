@@ -381,7 +381,7 @@ impl Component for TimelineRuler<'_> {
             label: TextLook::new(LABEL_ROLE, Stateful::new(cx.color(c.text.muted))),
             body: body_height(cx.tokens),
             band: handle,
-            render: cx.tokens.size.groove,
+            render: cx.tokens.stroke.heavy,
             head_side: handle,
             cap_width: cx.tokens.stroke.thick,
             grab: cx.tokens.size.hit.target,
