@@ -496,6 +496,12 @@ impl<T: Copy> PressMachine<T> {
         self.open.is_some_and(|open| open.dragging)
     }
 
+    /// Whether the button went up and the release waits for a later pass, which the caller must ask for: no input may
+    /// come to start it.
+    pub fn release_held(&self) -> bool {
+        self.open.is_some_and(|open| open.released_at.is_some())
+    }
+
     /// Runs one pass. `pick` chooses the press winner and what it senses at a press position; it returns `None`
     /// when no shape of this root takes the press.
     pub fn step(&mut self, input: PassInput<'_>, mut pick: impl FnMut(Pos2) -> Option<(T, Sense)>) -> PressStep<T> {

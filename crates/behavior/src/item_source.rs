@@ -113,8 +113,9 @@ pub trait ItemSource<K>: DisplayOrder<K> {
 
     /// `Some(steps)` when entry `at` is a sub-row of an entry above it (a layer's effects): a compact row whose toggle
     /// cells sit in its content, `steps` indent steps from its start, instead of in their columns (`sub_row_cells`).
-    /// A press flips them there, and a sweep down the toggle columns passes them by. A drag or Delete of a selected
-    /// sub-row takes the selected sub-rows only, and one of any other selected row the selected rows that are not sub-rows.
+    /// A press flips them there, and a sweep down the toggle columns passes them by. A drag, stacking key or Delete on
+    /// a selected sub-row takes the selected sub-rows only; on any other selected row it takes the selected rows that
+    /// are not sub-rows.
     fn sub_row(&self, _at: usize) -> Option<usize> {
         None
     }

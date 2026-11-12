@@ -722,7 +722,7 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
     // Hover needs the root's layer on top under the pointer, or egui's layer cover (a popup) would be ignored.
     let top = pass_pointer.hover.and_then(|at| areas::layer_at(ctx, at));
     let hover_layer_ok = top.is_some_and(|top| top == layer || Some(top) == body_layer);
-    let mut cancelled = false;
+    let (mut cancelled, mut release_held) = (false, false);
     let outcome = with_arena(ctx, arena, pass_nr, |state| {
         let root = state.root.unwrap_or(RootInfo { id: Id::NULL, rect: Rect::NOTHING, own_sense: Sense::empty() });
         let pos = pos.unwrap_or(Pos2::ZERO);
@@ -769,6 +769,7 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             hit.map(|hit| (hit, hit.sense))
         });
         cancelled = matches!(step.phase, Some(PressPhase::Cancel { .. }));
+        release_held = machine.release_held();
         let open = machine.target();
         let dragging = step.dragging;
         state.machine = machine;
@@ -785,6 +786,9 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
     });
     if cancelled {
         crate::runtime::frame::note_cancelled_press(ctx);
+    }
+    if release_held {
+        crate::runtime::egui::repaint::request(ctx);
     }
     outcome
 }

@@ -5,7 +5,7 @@ use craft_behavior::{EditEvent, SelectionChange};
 use craft_layers::testing;
 use craft_layers::ui::mock::{FakeLayers, sub_row};
 use craft_layers::ui::panel::{ActivateOn, LayerDrop, LayersEvent, LayersPanel, MaskMove};
-use craft_layers::ui::tree::{LayerInfo, LayerKind, LayerPart, LayerRowKey, LayerSelection, MaskInfo, SubRow, SubRows};
+use craft_layers::ui::tree::{LayerInfo, LayerKind, LayerPart, LayerRowKey, LayerSelection, MaskInfo, SubRow, SubRowGroup, SubRows};
 use craft_ui::testing::{Fixture, Target, pointer, trial};
 use egui::{Key, Modifiers, Vec2};
 use std::cell::RefCell;
@@ -265,6 +265,7 @@ fn a_smart_filter_row_dragged_onto_another_smart_object_moves_there() {
         })
         .collect();
     assert_eq!(transfers, [(vec![LayerRowKey::Filters(SMART, Some(0))], other, false)], "{events:?}");
+    // The rig applies selections only, so the filter stays on its layer and its row stays selected for this drag.
     let from = node(&fixture, "Smart Object").center();
     fixture.drag_hold_at(from, to - from).release_at(to).idle(2);
     let events = take(&app);
@@ -276,4 +277,22 @@ fn a_smart_filter_row_dragged_onto_another_smart_object_moves_there() {
         })
         .collect();
     assert_eq!(moved, [vec![SMART]], "{events:?}");
+}
+
+/// A stacking key on a selected Smart Filter row, selected beside its layer, moves that filter within its stack.
+#[trial]
+fn a_stacking_key_on_a_selected_smart_filter_row_moves_the_filter() {
+    let (mut fixture, app) = rig(tree());
+    fixture.click(&node(&fixture, "Gaussian Blur")).idle(2);
+    take(&app);
+    fixture.key(Key::OpenBracket, Modifiers::COMMAND).idle(2);
+    let events = take(&app);
+    let moves: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            LayersEvent::Drop(EditEvent::Set { after: LayerDrop::SubRows(mv), .. }) => Some((mv.layer, mv.group, mv.from, mv.to)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(moves, [(SMART, SubRowGroup::SmartFilters, 0, 1)], "{events:?}");
 }

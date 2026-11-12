@@ -408,7 +408,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     fn begin_row_drag(&mut self, cx: &mut Cx<'_, C>, props: &CollectionProps, at: usize) {
         let id = cx.core.id;
         let key = self.source.key(at);
-        let keys = self.acted_on(at);
+        let keys = self.keys_at(&self.acted_on(at));
         let count = keys.len() as u64;
         let preview = match props.drag_count {
             Some(word) => DragPreview::Badge(Label::from(cx.env.counted(word, count))),
@@ -621,13 +621,13 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
     }
 
-    /// A stacking key on the lead row `at`: the selection moves when the lead is in it, else the lead, as a row drag
-    /// takes them (`reorder::key_move`).
+    /// A stacking key on the lead row `at`: the rows `acted_on` names move, as a row drag takes them
+    /// (`reorder::key_move`).
     pub(super) fn key_reorder(&mut self, cx: &mut Cx<'_, C>, props: &CollectionProps, at: usize, mv: reorder::ItemMove) {
         let groups = props.reorder.is_some_and(|rule| rule.into_groups);
         let outline = Outline::new(self.source);
         let tree = groups.then_some(&outline as &dyn craft_behavior::NavOutline);
-        let mut places: Vec<usize> = if self.holds(at) { self.placed().rows() } else { vec![at] };
+        let mut places = self.acted_on(at);
         places.sort_unstable();
         // A selected row inside another selected row moves with it.
         if groups {
@@ -653,7 +653,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         if to == from && together && parent == held {
             return;
         }
-        let keys: Vec<C::Key> = places.iter().map(|&place| self.source.key(place)).collect();
+        let keys = self.keys_at(&places);
         let key = self.source.key(at);
         let before = ReorderMove::new(key.clone(), keys.clone(), from, false).in_group(held);
         let after = ReorderMove::new(key, keys, to, false).in_group(parent);

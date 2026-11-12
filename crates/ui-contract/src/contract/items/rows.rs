@@ -100,15 +100,20 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         selection.placed(self.source).rows().into_iter().map(|at| self.source.key(at)).collect()
     }
 
-    /// The keys a gesture on the row at `at` acts on, in the display order: the selected rows of its kind when the
-    /// selection holds it (sub-rows for a sub-row, the other rows for any other row), else that row alone. A sub-row
-    /// belongs to the row above it, so the two kinds never move or go together.
-    pub(super) fn acted_on(&self, at: usize) -> Vec<C::Key> {
+    /// The positions a gesture on the row at `at` (a drag, a stacking key, Delete) acts on, in the display order: the
+    /// selected rows of its kind when the selection holds it (sub-rows for a sub-row, the other rows for any other
+    /// row), else that row alone. A sub-row belongs to the row above it, so the two kinds never move or go together.
+    pub(super) fn acted_on(&self, at: usize) -> Vec<usize> {
         if !self.holds(at) {
-            return vec![self.source.key(at)];
+            return vec![at];
         }
         let sub = self.source.sub_row(at).is_some();
-        self.placed().rows().into_iter().filter(|row| self.source.sub_row(*row).is_some() == sub).map(|row| self.source.key(row)).collect()
+        self.placed().rows().into_iter().filter(|row| self.source.sub_row(*row).is_some() == sub).collect()
+    }
+
+    /// The keys of the rows at `places`.
+    pub(super) fn keys_at(&self, places: &[usize]) -> Vec<C::Key> {
+        places.iter().map(|&at| self.source.key(at)).collect()
     }
 
     /// A pick of the rows `from` to `to` in a model of cells: one range of whole rows (the rows' cells in every column
