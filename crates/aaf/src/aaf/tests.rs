@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use craft_timeline::time::FrameRate;
+use craft_timeline::FrameRate;
 
 use super::ids::{self, cls, ddef, def, path, pid};
 use super::store::{self, Obj, Value};
@@ -517,7 +517,7 @@ fn sound_source_offsets_use_audio_sample_rate_on_disk() {
             _ => None,
         })
         .unwrap();
-    assert_eq!(clip.start, craft_timeline::time::FrameRate::FPS_25.tick_of(10));
+    assert_eq!(clip.start, craft_timeline::FrameRate::FPS_25.tick_of(10));
 }
 
 #[test]

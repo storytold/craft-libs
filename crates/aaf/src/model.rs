@@ -7,7 +7,7 @@
 //! mobs and file source mobs: here, a [`Source`] per essence, grouped into one media item by its
 //! key. All times are ticks; the format serialisers convert to and from edit units.
 
-use craft_timeline::time::{FrameRate, TICKS_PER_SECOND, Tick};
+use craft_timeline::{FrameRate, TICKS_PER_SECOND, Tick};
 
 /// Picture or sound.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

@@ -4,7 +4,7 @@
 //!
 //! - [`model`]: a [`model::Document`] of compositions (tracks of fillers, source clips and
 //!   overlapping transitions, with clip gain and markers) and the media sources they reference,
-//!   with exact times ([`craft_timeline::time::Tick`]).
+//!   with exact times ([`craft_timeline::Tick`]).
 //! - [`aaf`]: Advanced Authoring Format, Edit Protocol, in structured storage (`craft-cfb`).
 //! - [`omf`]: OMF Interchange 2.0 in a Bento container; sound only.
 //!
