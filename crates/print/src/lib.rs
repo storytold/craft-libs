@@ -377,11 +377,7 @@ pub fn printer_options(printer: &str) -> Vec<PrinterOption> {
             f.take(PPD_CAP).read_to_end(&mut bytes).ok().map(|_| bytes)
         });
         let mut options = ppd.map(|b| parse_ppd(&ppd_text(&b))).unwrap_or_default();
-        let current = std::process::Command::new("lpoptions")
-            .args(["-p", printer, "-l"])
-            .output()
-            .map(|o| parse_lpoptions(&String::from_utf8_lossy(&o.stdout)))
-            .unwrap_or_default();
+        let current = queue_defaults(std::process::Command::new("lpoptions").args(["-p", printer, "-l"]), QUEUES_LIMIT);
         apply_queue_defaults(&mut options, &current);
         options
     }
@@ -516,6 +512,13 @@ fn printers_via(
     printers_parsed(&queues, available.as_deref())
 }
 
+/// The queue's current choices from `lpoptions -p NAME -l`, run like the `lpstat` commands: its
+/// output capped, and given `limit` to answer (none when it doesn't).
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn queue_defaults(command: &mut std::process::Command, limit: std::time::Duration) -> Vec<(String, String)> {
+    output_within(command, limit).map(|out| parse_lpoptions(&String::from_utf8_lossy(&out))).unwrap_or_default()
+}
+
 /// The most of a command's output that is read: far more than any `lpstat` listing.
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 const OUTPUT_CAP: u64 = 4 << 20;
@@ -609,6 +612,20 @@ mod lpstat_limits {
         let found = printers_via(&mut queues, Duration::from_secs(5), &mut sh("sleep 30"), Duration::from_millis(300));
         assert_eq!(found.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Office_Laser"]);
         assert!(found[0].default);
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    }
+
+    /// `lpoptions` that never answers or prints without end gives no defaults, in time and in bounded memory.
+    #[test]
+    fn lpoptions_is_bounded_in_time_and_output() {
+        let started = Instant::now();
+        assert!(queue_defaults(&mut sh("sleep 30"), Duration::from_millis(300)).is_empty());
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+        let answer = queue_defaults(&mut sh("printf 'Duplex/2-Sided: None *DuplexNoTumble\\n'"), Duration::from_secs(5));
+        assert_eq!(answer, [("Duplex".to_string(), "DuplexNoTumble".to_string())]);
+        // Endless output stops at the cap (the command is killed at the deadline), and does not hang.
+        let started = Instant::now();
+        let _ = queue_defaults(&mut sh("yes 'Key/Label: a *b c'"), Duration::from_millis(500));
         assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
     }
 
