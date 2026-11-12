@@ -67,8 +67,9 @@ pub trait StackDialog: Any + Send {
     }
 
     /// Answers OK as a click on the default button would, without drawing: runs what OK runs
-    /// (storing remembered values) and returns the answer. `None` when OK is disabled or the
-    /// dialog has no programmatic OK (the default). Used by [`DialogHost::confirm`].
+    /// (storing remembered values) and returns the answer. `None` when OK is disabled, the answer
+    /// is one the dialog offers no enabled button for (a prompt's choice), or the dialog has no
+    /// programmatic OK (the default). Used by [`DialogHost::confirm`].
     fn confirm(&mut self, _ctx: &Context) -> Option<Self::Result> {
         None
     }
@@ -80,9 +81,10 @@ pub trait StackDialog: Any + Send {
     }
 
     /// Sets the value `field` names, as the user editing that control would (`ui.dialog.set`); a prompt's answer
-    /// is its `choice` field. `Err` says why the dialog refused: no such field, or a value the control can't hold.
-    /// Refuses everything by default.
-    fn set_json_field(&mut self, field: &str, _value: Value) -> Result<(), String> {
+    /// is its `choice` field, one of the answers it has an enabled button for. `Err` says why the dialog refused:
+    /// no such field, a control that takes no input now, or a value the control can't hold. Refuses everything by
+    /// default.
+    fn set_json_field(&mut self, _ctx: &Context, field: &str, _value: Value) -> Result<(), String> {
         Err(format!("unknown field `{field}`: this dialog has no fields"))
     }
 
@@ -129,7 +131,7 @@ trait AnyStackDialog: Send {
     fn instance(&self) -> Option<DialogId>;
     fn confirm_erased(&mut self, ctx: &Context) -> Option<Box<dyn Any + Send>>;
     fn json_fields(&self) -> Option<Value>;
-    fn set_json_field(&mut self, field: &str, value: Value) -> Result<(), String>;
+    fn set_json_field(&mut self, ctx: &Context, field: &str, value: Value) -> Result<(), String>;
     fn show_erased(&mut self, ui: &mut Ui, stack: &DialogStack) -> Option<Box<dyn Any + Send>>;
     /// `DialogResult::<D::Result>::Cancel`, boxed, for a dialog closed from outside.
     fn cancelled(&self) -> Box<dyn Any + Send>;
@@ -164,8 +166,8 @@ impl<D: StackDialog> AnyStackDialog for D {
         StackDialog::json_fields(self)
     }
 
-    fn set_json_field(&mut self, field: &str, value: Value) -> Result<(), String> {
-        StackDialog::set_json_field(self, field, value)
+    fn set_json_field(&mut self, ctx: &Context, field: &str, value: Value) -> Result<(), String> {
+        StackDialog::set_json_field(self, ctx, field, value)
     }
 
     fn show_erased(&mut self, ui: &mut Ui, stack: &DialogStack) -> Option<Box<dyn Any + Send>> {
@@ -425,9 +427,9 @@ impl DialogHost {
     }
 
     /// Sets `field` of the open dialog `id` names ([`StackDialog::set_json_field`]), whatever its type.
-    pub fn set_json_field(&mut self, id: DialogId, field: &str, value: Value) -> Result<(), String> {
+    pub fn set_json_field(&mut self, ctx: &Context, id: DialogId, field: &str, value: Value) -> Result<(), String> {
         match self.open.iter_mut().find(|dialog| dialog.id() == id) {
-            Some(dialog) => dialog.set_json_field(field, value),
+            Some(dialog) => dialog.set_json_field(ctx, field, value),
             None => Err("no such dialog".to_owned()),
         }
     }

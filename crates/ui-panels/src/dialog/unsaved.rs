@@ -72,7 +72,8 @@ impl UnsavedChangesDialog {
         Self { id: dialog_id("unsaved-changes"), scope, name: document_name.into(), remaining: 1, apply_to_all: false, open: true, chosen: None }
     }
 
-    /// The answer a host-side `confirm` gives, as pressing that button would; the accepting answer's until set.
+    /// The answer a host-side `confirm` gives, as pressing that button would; the accepting answer's until set. An
+    /// answer the question has no button for (Save while reverting) gives none.
     pub fn set_answer(&mut self, answer: CloseAnswer) {
         self.chosen = Some(answer);
     }
@@ -97,22 +98,27 @@ impl UnsavedChangesDialog {
 
     /// The answers in the order the buttons are given: what each means and how it is asked.
     fn replies(&self, words: &DialogWords, cancel: Label, os: Os) -> Vec<(CloseAnswer, Reply)> {
-        let cancel = (CloseAnswer::Cancel, Reply::new(cancel, DialogRole::Cancel));
+        let mac = os == Os::Mac;
+        self.offered()
+            .iter()
+            .map(|&answer| {
+                let reply = match answer {
+                    CloseAnswer::Save => Reply::new(if mac { &words.unsaved_save } else { &words.unsaved_yes }.clone(), DialogRole::Accept),
+                    CloseAnswer::DontSave if self.scope == CloseScope::Revert => Reply::new(words.unsaved_revert.clone(), DialogRole::Accept),
+                    CloseAnswer::DontSave => Reply::new(if mac { &words.unsaved_dont_save } else { &words.unsaved_no }.clone(), DialogRole::Other),
+                    CloseAnswer::Cancel => Reply::new(cancel.clone(), DialogRole::Cancel),
+                };
+                (answer, reply)
+            })
+            .collect()
+    }
+
+    /// The answers the question has buttons for, in button order: reverting has no Save.
+    fn offered(&self) -> &'static [CloseAnswer] {
         if self.scope == CloseScope::Revert {
-            return vec![(CloseAnswer::DontSave, Reply::new(words.unsaved_revert.clone(), DialogRole::Accept)), cancel];
-        }
-        if os == Os::Mac {
-            vec![
-                (CloseAnswer::Save, Reply::new(words.unsaved_save.clone(), DialogRole::Accept)),
-                (CloseAnswer::DontSave, Reply::new(words.unsaved_dont_save.clone(), DialogRole::Other)),
-                cancel,
-            ]
+            &[CloseAnswer::DontSave, CloseAnswer::Cancel]
         } else {
-            vec![
-                (CloseAnswer::Save, Reply::new(words.unsaved_yes.clone(), DialogRole::Accept)),
-                (CloseAnswer::DontSave, Reply::new(words.unsaved_no.clone(), DialogRole::Other)),
-                cancel,
-            ]
+            &[CloseAnswer::Save, CloseAnswer::DontSave, CloseAnswer::Cancel]
         }
     }
 
@@ -174,41 +180,44 @@ impl StackDialog for UnsavedChangesDialog {
     }
 
     /// The answer set with `set_answer`; the accepting answer's (Save, or Don't Save when reverting) unless set.
+    /// None for an answer the question has no button for.
     fn confirm(&mut self, _: &Context) -> Option<UnsavedAnswer> {
-        Some(self.answer(self.chosen()))
+        let chosen = self.chosen();
+        self.offered().contains(&chosen).then(|| self.answer(chosen))
     }
 
     /// `choice` (`save`, `dontSave` or `cancel`), the answer a programmatic OK gives, and `applyToAll` while the
     /// guard has more documents.
     fn json_fields(&self) -> Option<Value> {
-        let choice = match self.chosen() {
-            CloseAnswer::Save => "save",
-            CloseAnswer::DontSave => "dontSave",
-            CloseAnswer::Cancel => "cancel",
-        };
-        let mut fields = json!({ "choice": choice });
+        let mut fields = json!({ "choice": answer_name(self.chosen()) });
         if self.offers_apply_to_all() {
             fields["applyToAll"] = Value::Bool(self.apply_to_all);
         }
         Some(fields)
     }
 
-    fn set_json_field(&mut self, field: &str, value: Value) -> Result<(), String> {
+    fn set_json_field(&mut self, _: &Context, field: &str, value: Value) -> Result<(), String> {
         match field {
-            "choice" => self.set_answer(match value.as_str() {
-                Some("save") if self.scope != CloseScope::Revert => CloseAnswer::Save,
-                Some("dontSave") => CloseAnswer::DontSave,
-                Some("cancel") => CloseAnswer::Cancel,
-                _ => {
-                    return Err(format!(
-                        "`choice` takes {}",
-                        if self.scope == CloseScope::Revert { "dontSave or cancel" } else { "save, dontSave or cancel" }
-                    ));
-                }
-            }),
+            "choice" => {
+                let answer = self.offered().iter().copied().find(|answer| value.as_str() == Some(answer_name(*answer)));
+                let Some(answer) = answer else {
+                    let taken: Vec<&str> = self.offered().iter().map(|answer| answer_name(*answer)).collect();
+                    return Err(format!("`choice` can't take {value}: the question answers {}", json!(taken)));
+                };
+                self.set_answer(answer);
+            }
             "applyToAll" if self.offers_apply_to_all() => self.apply_to_all = value.as_bool().ok_or("`applyToAll` takes true or false")?,
             _ => return Err(format!("unknown field `{field}`")),
         }
         Ok(())
+    }
+}
+
+/// What automation calls `answer`.
+fn answer_name(answer: CloseAnswer) -> &'static str {
+    match answer {
+        CloseAnswer::Save => "save",
+        CloseAnswer::DontSave => "dontSave",
+        CloseAnswer::Cancel => "cancel",
     }
 }

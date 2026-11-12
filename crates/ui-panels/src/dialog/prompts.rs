@@ -226,7 +226,7 @@ impl StandardPrompt {
     }
 
     /// The answer a host-side `confirm` gives, as pressing that button would; Proceed (the default button) until
-    /// set.
+    /// set. A choice the prompt has no enabled button for gives none.
     pub fn set_choice(&mut self, choice: PromptChoice) {
         self.chosen = choice;
     }
@@ -310,25 +310,53 @@ impl StandardPrompt {
 
     /// The title, message and answers of the kind, with the app's replacements applied.
     fn content(&self, words: &DialogWords, common: &CommonWords, format: &Format) -> Content {
-        let (mut title, mut message, mut answers) = self.kind_content(words, common, format);
+        let (mut title, mut message, (proceed, role)) = self.kind_content(words, common, format);
         if let Some(own) = &self.title {
             title = own.clone();
         }
         if let Some(own) = &self.message {
             message = own.clone();
         }
-        if !self.buttons.is_empty() {
-            answers = self.buttons.iter().map(|(choice, label)| (*choice, Reply::new(label.clone(), choice.role()))).collect();
-        }
+        let answers = self
+            .offered()
+            .into_iter()
+            .map(|(choice, enabled)| {
+                let own = self.buttons.iter().find(|(button, _)| *button == choice).map(|(_, label)| Reply::new(label.clone(), choice.role()));
+                let reply = own.unwrap_or_else(|| match choice {
+                    PromptChoice::Proceed => Reply::new(proceed.clone(), role),
+                    PromptChoice::Alternate => Reply::new(words.discard.clone(), DialogRole::Other),
+                    PromptChoice::Cancel => Reply::new(common.cancel.clone(), DialogRole::Cancel),
+                });
+                (choice, reply.enabled(enabled, None))
+            })
+            .collect();
         if title.as_str().is_empty() {
             title = words.custom_title.clone();
         }
         (title, message, answers)
     }
 
-    fn kind_content(&self, words: &DialogWords, common: &CommonWords, format: &Format) -> Content {
-        let cancel = (PromptChoice::Cancel, Reply::new(common.cancel.clone(), DialogRole::Cancel));
-        let proceed = |label: &Label, role: DialogRole| (PromptChoice::Proceed, Reply::new(label.clone(), role));
+    /// The answers the prompt has buttons for, in button order, with whether each takes a press: the app's own
+    /// buttons when it gave any, else the kind's.
+    fn offered(&self) -> Vec<(PromptChoice, bool)> {
+        if !self.buttons.is_empty() {
+            return self.buttons.iter().map(|(choice, _)| (*choice, true)).collect();
+        }
+        match self.kind {
+            PromptKind::Custom => Vec::new(),
+            PromptKind::TrashMask => vec![(PromptChoice::Proceed, self.can_apply), (PromptChoice::Alternate, true), (PromptChoice::Cancel, true)],
+            _ => vec![(PromptChoice::Proceed, true), (PromptChoice::Cancel, true)],
+        }
+    }
+
+    /// Whether `choice` has a button that takes a press.
+    fn takes(&self, choice: PromptChoice) -> bool {
+        self.offered().contains(&(choice, true))
+    }
+
+    /// The kind's title, message, and the label and role of its Proceed button.
+    fn kind_content(&self, words: &DialogWords, common: &CommonWords, format: &Format) -> (Label, Label, (Label, DialogRole)) {
+        let proceed = |label: &Label, role: DialogRole| (label.clone(), role);
         match &self.kind {
             PromptKind::ConfirmDelete { names, count } => {
                 let message = if *count <= 1 && names.len() == 1 {
@@ -343,40 +371,30 @@ impl StandardPrompt {
                     let things = noun.text(n, &format.integer(n));
                     words.confirm_delete_many.fill(&[("things", things.as_str()), ("names", listed.as_str())])
                 };
-                (words.confirm_delete_title.clone(), message.into(), vec![proceed(&words.delete, DialogRole::Destructive), cancel])
+                (words.confirm_delete_title.clone(), message.into(), proceed(&words.delete, DialogRole::Destructive))
             }
             PromptKind::DamagedFile { name } => (
                 words.damaged_title.clone(),
                 words.damaged_message.fill(&[("name", name.as_str())]).into(),
-                vec![proceed(&words.open_anyway, DialogRole::Accept), cancel],
+                proceed(&words.open_anyway, DialogRole::Accept),
             ),
             PromptKind::ChangedOnDisk { name } => {
                 let message =
                     format!("{}\n\n{}", words.changed_on_disk_message.fill(&[("name", name.as_str())]), words.changed_on_disk_detail.as_str());
-                (words.changed_on_disk_title.clone(), message.into(), vec![proceed(&words.replace, DialogRole::Destructive), cancel])
+                (words.changed_on_disk_title.clone(), message.into(), proceed(&words.replace, DialogRole::Destructive))
             }
             PromptKind::ReplaceFile { name, answered } => {
                 let mut message = words.replace_file_message.fill(&[("name", name.as_str())]);
                 if let Some(answered) = answered {
                     message = format!("{message}\n\n{}", words.replace_file_detail.fill(&[("answered", answered.as_str())]));
                 }
-                (words.replace_file_title.clone(), message.into(), vec![proceed(&words.replace, DialogRole::Destructive), cancel])
+                (words.replace_file_title.clone(), message.into(), proceed(&words.replace, DialogRole::Destructive))
             }
-            PromptKind::Custom => (Label::Empty, Label::Empty, Vec::new()),
-            PromptKind::TrashVectorMask => (
-                words.trash_vector_mask_title.clone(),
-                words.trash_vector_mask_message.clone(),
-                vec![proceed(&common.ok, DialogRole::Accept), cancel],
-            ),
-            PromptKind::TrashMask => (
-                words.trash_mask_title.clone(),
-                words.trash_mask_message.clone(),
-                vec![
-                    (PromptChoice::Proceed, Reply::new(words.apply.clone(), DialogRole::Accept).enabled(self.can_apply, None)),
-                    (PromptChoice::Alternate, Reply::new(words.discard.clone(), DialogRole::Other)),
-                    cancel,
-                ],
-            ),
+            PromptKind::Custom => (Label::Empty, Label::Empty, proceed(&common.ok, DialogRole::Accept)),
+            PromptKind::TrashVectorMask => {
+                (words.trash_vector_mask_title.clone(), words.trash_vector_mask_message.clone(), proceed(&common.ok, DialogRole::Accept))
+            }
+            PromptKind::TrashMask => (words.trash_mask_title.clone(), words.trash_mask_message.clone(), proceed(&words.apply, DialogRole::Accept)),
         }
     }
 
@@ -447,9 +465,10 @@ impl StackDialog for StandardPrompt {
         self.present(ui, true).answer.map(DialogResult::Ok)
     }
 
-    /// The answer set with `set_choice`: the default button's, Proceed, unless set.
+    /// The answer set with `set_choice`: the default button's, Proceed, unless set. None while that answer's
+    /// button is missing or disabled.
     fn confirm(&mut self, _: &Context) -> Option<PromptAnswer> {
-        Some(self.answer(self.chosen, self.skip))
+        self.takes(self.chosen).then(|| self.answer(self.chosen, self.skip))
     }
 
     /// `choice`, the answer a programmatic OK gives, and `skip`, the "Don't show again" box where the prompt has
@@ -462,9 +481,16 @@ impl StackDialog for StandardPrompt {
         Some(fields)
     }
 
-    fn set_json_field(&mut self, field: &str, value: Value) -> Result<(), String> {
+    fn set_json_field(&mut self, _: &Context, field: &str, value: Value) -> Result<(), String> {
         match field {
-            "choice" => self.set_choice(serde_json::from_value(value).map_err(|error| format!("`choice`: {error}"))?),
+            "choice" => {
+                let choice = serde_json::from_value(value.clone()).ok().filter(|choice| self.takes(*choice));
+                let Some(choice) = choice else {
+                    let taken: Vec<Value> = self.offered().into_iter().filter(|(_, enabled)| *enabled).map(|(choice, _)| json!(choice)).collect();
+                    return Err(format!("`choice` can't take {value}: the prompt answers {}", Value::from(taken)));
+                };
+                self.set_choice(choice);
+            }
             "skip" if self.skip_box => self.skip = value.as_bool().ok_or("`skip` takes true or false")?,
             _ => return Err(format!("unknown field `{field}`")),
         }

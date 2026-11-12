@@ -6,7 +6,7 @@ use crate::runtime::requests::{ColorRequest, HostAnswer, PathRequest};
 
 use super::form::FormDialog;
 use super::host_requests::HostRequests;
-use super::param::{Param, ParamKind, fill_defaults, open_fields, set_color_field};
+use super::param::{Param, ParamKind, open_fields, set_color_field};
 use super::preview::{PreviewPane, PreviewView, PreviewZoom};
 
 use super::rows::{ParamRows, ParamRowsOutput};
@@ -194,6 +194,8 @@ pub struct ParamDialog<'a> {
     /// The host's answers to the requests of earlier passes; the dialog writes them into its values first.
     #[prop]
     answers: Vec<HostAnswer>,
+    /// The bound values were opened already ([`HostedParamDialog`] opens its own): the first pass leaves them.
+    values_opened: bool,
 }
 
 /// What `ParamDialog::shaped` applies to the built [`Dialog`].
@@ -247,6 +249,7 @@ impl<'a> ParamDialog<'a> {
             below: None,
             shaped: None,
             answers: Vec::new(),
+            values_opened: false,
         }
     }
 
@@ -255,6 +258,29 @@ impl<'a> ParamDialog<'a> {
     pub fn shaped(mut self, shape: impl FnOnce(Dialog<'a>) -> Dialog<'a> + 'a) -> Self {
         self.shaped = Some(Shaped(Box::new(shape)));
         self
+    }
+
+    /// Marks the bound values as opened by the host, so the first pass doesn't open them again.
+    fn values_opened(mut self) -> Self {
+        self.values_opened = true;
+        self
+    }
+
+    /// The answer OK gives with `fields`: with `remember`, it keeps the part of them the dialog saves.
+    fn result(key: String, params: &[Param], remember: Option<SaveKey>, fields: DialogFields) -> ParamResult {
+        let remember = remember.map(|save| (save, Self::remembered(params, &fields)));
+        ParamResult { key, fields, remember }
+    }
+
+    /// Opens `values` for `params`: the `saved` values a remembering dialog keeps over them, then the defaults of
+    /// the keys still missing, then the snapshot Reset restores.
+    fn open_values(params: &[Param], saved: Option<&DialogFields>, values: &mut DialogFields) {
+        if let Some(saved) = saved {
+            for (name, value) in Self::remembered(params, saved).iter() {
+                values.set(name, value.clone());
+            }
+        }
+        open_fields(params, values);
     }
 
     /// The part of `fields` a remembering dialog saves: numbers, angles, choices and check boxes of the remembered
@@ -312,6 +338,7 @@ impl<'a> ParamDialog<'a> {
             below,
             mut shaped,
             answers,
+            values_opened,
         } = self;
         let words = Env::of(ui).words::<ParamDialogWords>();
 
@@ -380,15 +407,9 @@ impl<'a> ParamDialog<'a> {
         let mut live = Live::default();
         let mut rows = None;
         let shown = form.show(ui, |ui, cx, values| {
-            if cx.first() {
-                if let Some(key) = &remember
-                    && let Some(saved) = cx.saved::<Option<DialogFields>>(key).clone()
-                {
-                    for (name, value) in Self::remembered(&params, &saved).iter() {
-                        values.set(name, value.clone());
-                    }
-                }
-                open_fields(&params, values);
+            if cx.first() && !values_opened {
+                let saved = remember.as_ref().and_then(|key| cx.saved::<Option<DialogFields>>(key).clone());
+                Self::open_values(&params, saved.as_ref(), values);
             }
             for answer in cx.take_answers() {
                 match answer {
@@ -422,10 +443,7 @@ impl<'a> ParamDialog<'a> {
             true
         });
 
-        let result = shown.accepted.map(|fields| {
-            let kept = remember.map(|key| (key, Self::remembered(&params, &fields)));
-            ParamResult { key, fields, remember: kept }
-        });
+        let result = shown.accepted.map(|fields| Self::result(key, &params, remember, fields));
         ParamDialogOutput {
             response: shown.response,
             closed: shown.closed,
@@ -591,6 +609,8 @@ pub struct HostedParamDialog {
     key: String,
     instance: Option<DialogId>,
     fields: DialogFields,
+    /// The values were opened (remembered values and defaults loaded) by the first show, OK or set.
+    opened: bool,
     build: Box<Build>,
     requests: HostRequests,
 }
@@ -603,7 +623,15 @@ impl HostedParamDialog {
         build: impl for<'b> Fn(&'b mut DialogFields) -> ParamDialog<'b> + Send + 'static,
     ) -> Self {
         let key = key.into();
-        HostedParamDialog { id: dialog_id(key.as_str()), key, instance: None, fields, build: Box::new(build), requests: HostRequests::new() }
+        HostedParamDialog {
+            id: dialog_id(key.as_str()),
+            key,
+            instance: None,
+            fields,
+            opened: false,
+            build: Box::new(build),
+            requests: HostRequests::new(),
+        }
     }
 
     /// A hosted command form: the same as [`new`](HostedParamDialog::new), with `build` making a
@@ -658,6 +686,33 @@ impl HostedParamDialog {
     pub fn cancel_requests(&mut self) {
         self.requests.cancel();
     }
+
+    /// Opens the values once, as a `ParamDialog`'s first pass does, before the first show, OK or set reads them.
+    fn open(&mut self, ctx: &Context) {
+        if std::mem::replace(&mut self.opened, true) {
+            return;
+        }
+        let ParamDialog { params, remember, .. } = (self.build)(&mut self.fields);
+        let params = params.into_owned();
+        let saved = remember.and_then(|key| MemoryStage::peek_saved::<Option<DialogFields>>(ctx, &key));
+        ParamDialog::open_values(&params, saved.as_ref(), &mut self.fields);
+    }
+}
+
+/// `value` read as the value a row of `kind` keeps; `None` when it isn't one, or the row keeps none.
+fn read_value(kind: &ParamKind, value: Value) -> Option<FieldValue> {
+    Some(match kind {
+        ParamKind::Range { .. } | ParamKind::Angle { .. } | ParamKind::Number { .. } | ParamKind::OptionalNumber { .. } => {
+            FieldValue::Number(value.as_f64()?)
+        }
+        ParamKind::Int { .. } | ParamKind::Channel { .. } => FieldValue::Int(value.as_i64()?),
+        ParamKind::Bool { .. } => FieldValue::Bool(value.as_bool()?),
+        ParamKind::Choice { .. } | ParamKind::Radio { .. } | ParamKind::Text { .. } => FieldValue::Text(value.as_str()?.to_owned()),
+        ParamKind::Color { .. } => FieldValue::Color(serde_json::from_value(value).ok()?),
+        ParamKind::Point { .. } => FieldValue::Point(serde_json::from_value(value).ok()?),
+        ParamKind::Grid { .. } => FieldValue::Grid(serde_json::from_value(value).ok()?),
+        ParamKind::Custom(_) | ParamKind::Section => return None,
+    })
 }
 
 impl StackDialog for HostedParamDialog {
@@ -669,7 +724,8 @@ impl StackDialog for HostedParamDialog {
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<ParamResult>> {
         let answers = if crate::runtime::measure::active(ui.ctx()) { Vec::new() } else { self.requests.take_answers() };
-        let shown = (self.build)(&mut self.fields).answers(answers).show(ui);
+        self.open(ui.ctx());
+        let shown = (self.build)(&mut self.fields).values_opened().answers(answers).show(ui);
         if let Some(mut rows) = shown.rows {
             self.requests.absorb(&mut rows);
         }
@@ -689,16 +745,14 @@ impl StackDialog for HostedParamDialog {
     }
 
     /// Answers OK as the button does: none while OK is disabled. The result keeps what a remembering dialog saves.
-    fn confirm(&mut self, _: &Context) -> Option<ParamResult> {
+    fn confirm(&mut self, ctx: &Context) -> Option<ParamResult> {
+        self.open(ctx);
         let ParamDialog { key, params, remember, ok_enabled, .. } = (self.build)(&mut self.fields);
         if !ok_enabled {
             return None;
         }
         let params = params.into_owned();
-        fill_defaults(&params, &mut self.fields);
-        let fields = self.fields.clone();
-        let remember = remember.map(|save| (save, ParamDialog::remembered(&params, &fields)));
-        Some(ParamResult { key, fields, remember })
+        Some(ParamDialog::result(key, &params, remember, self.fields.clone()))
     }
 
     /// The values by parameter key, as [`DialogFields`] serializes them.
@@ -706,17 +760,25 @@ impl StackDialog for HostedParamDialog {
         serde_json::to_value(&self.fields).ok()
     }
 
-    /// Keeps `value` when a parameter row (or its unit choice) takes it, as [`Param::accepts`] says.
-    fn set_json_field(&mut self, field: &str, value: Value) -> Result<(), String> {
+    /// Keeps `value` when the row `field` names (a parameter or its unit choice) is shown, takes input, and takes
+    /// the value ([`Param::accepts`]).
+    fn set_json_field(&mut self, ctx: &Context, field: &str, value: Value) -> Result<(), String> {
+        self.open(ctx);
         let params = (self.build)(&mut self.fields).params.into_owned();
-        let parsed: FieldValue = serde_json::from_value(value.clone()).map_err(|error| format!("`{field}`: {error}"))?;
-        if params.iter().any(|param| param.accepts(field, &parsed)) {
-            self.fields.set(field, parsed);
-            Ok(())
-        } else if params.iter().any(|param| param.key == field || param.unit_key() == Some(field)) {
-            Err(format!("`{field}` can't take {value}"))
-        } else {
-            Err(format!("unknown field `{field}`"))
+        let Some(param) = params.iter().find(|param| param.key == field || param.unit_key() == Some(field)) else {
+            return Err(format!("unknown field `{field}`"));
+        };
+        if !param.visible(&self.fields) || !param.enabled(&self.fields) {
+            return Err(format!("`{field}` takes no input now: its row is hidden or disabled"));
+        }
+        let read =
+            if param.key == field { read_value(&param.kind, value.clone()) } else { value.as_str().map(|unit| FieldValue::Text(unit.to_owned())) };
+        match read.filter(|read| param.accepts(field, read)) {
+            Some(read) => {
+                self.fields.set(field, read);
+                Ok(())
+            }
+            None => Err(format!("`{field}` can't take {value}")),
         }
     }
 }
