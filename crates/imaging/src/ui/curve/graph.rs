@@ -10,11 +10,11 @@ use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Outcome, PaintUi, PartsCx, Pointer as _,
     Props as _, Remember as _, Role, WordSetCx as _,
 };
-use craft_ui::primitives::{Draw, PaintShape, StrokeWidth};
+use craft_ui::primitives::{ContentPainterCx, Draw, PaintShape, StrokeWidth};
 use craft_ui::runtime::access::Name;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{ActivateKeys, KeyUse};
-use craft_ui::style::{ComponentStyle, DataColor, FocusLook, Mix as _, StyleColor, StyleCx};
+use craft_ui::style::{ComponentStyle, DataColor, FocusLook, Mix as _, RuleKind, StyleColor, StyleCx};
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Vec2, pos2, vec2};
 use std::ops::Deref;
 use std::rc::Rc;
@@ -124,13 +124,12 @@ impl Map {
     }
 }
 
-/// The look of a plot: the frame, the histogram inks, the grid and the curves per channel. The graph and the preview
-/// have one.
+/// The look of a plot: the frame, the histogram inks, the diagonal and the curves per channel; the quarter grid is
+/// divider rules. The graph, the preview and the contour thumbnails have one.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlotLook {
     frame: PlotFrame,
     inks: HistogramInks,
-    grid: StyleColor,
     baseline: StyleColor,
     /// The curve in each channel's colour, in `ChannelColor::ALL` order.
     curves: [StyleColor; 7],
@@ -149,14 +148,13 @@ fn slot(color: ChannelColor) -> usize {
 const OTHER_FADE: f32 = 0.2;
 
 impl PlotLook {
-    pub(super) fn new(cx: &StyleCx<'_>) -> Self {
+    pub(crate) fn new(cx: &StyleCx<'_>) -> Self {
         let colors = &cx.tokens.color;
         let plot = cx.color(colors.surface.sunken);
         let curves = ChannelColor::ALL.map(|c| c.curve(cx));
         PlotLook {
             frame: PlotFrame::new(cx),
             inks: HistogramInks::new(cx),
-            grid: cx.color(colors.line.divider),
             baseline: cx.color(colors.line.control_edge),
             curves,
             others: curves.map(|c| c.mix(plot, OTHER_FADE)),
@@ -173,27 +171,22 @@ impl PlotLook {
     }
 
     /// The frame, the backdrop, the quarter grid and the diagonal of the plot `plot` (the value area is inset by the pad).
-    pub(super) fn backdrop(
-        &self,
-        ui: &PaintUi<'_>,
-        painter: &craft_ui::primitives::ContentPainterCx<'_>,
-        plot: Rect,
-        histogram: Option<&HistogramData>,
-    ) {
+    pub(super) fn backdrop(&self, painter: &ContentPainterCx<'_>, plot: Rect, histogram: Option<&HistogramData>) {
         paint_frame(painter, plot, &self.frame, true);
         let area = plot.shrink(self.pad);
         if let Some(data) = histogram {
             paint_bins(painter, area, data, HistogramLook::Backdrop, &self.inks);
         }
-        let draw = ui.draw();
-        for i in 1..4 {
-            let f = i as f32 / 4.0;
-            let x = area.left() + f * area.width();
-            let y = area.top() + f * area.height();
-            line(&draw, [pos2(x, area.top()), pos2(x, area.bottom())], self.grid);
-            line(&draw, [pos2(area.left(), y), pos2(area.right(), y)], self.grid);
-        }
-        line(&draw, [area.left_bottom(), area.right_top()], self.baseline);
+        painter.with_draw(|draw| {
+            for i in 1..4 {
+                let f = i as f32 / 4.0;
+                let x = area.left() + f * area.width();
+                let y = area.top() + f * area.height();
+                draw.rule(RuleKind::Divider, pos2(x, area.top()), pos2(x, area.bottom()));
+                draw.rule(RuleKind::Divider, pos2(area.left(), y), pos2(area.right(), y));
+            }
+            line(draw, [area.left_bottom(), area.right_top()], self.baseline);
+        });
     }
 }
 
@@ -692,7 +685,7 @@ impl Component for CurveGraph<'_> {
         let color = self.color();
         {
             let painter = ui.content_painter(cx);
-            style.look.backdrop(ui, &painter, frame.plot, self.histogram);
+            style.look.backdrop(&painter, frame.plot, self.histogram);
             let draw = ui.draw();
             for i in self.other_channels() {
                 paint_line(

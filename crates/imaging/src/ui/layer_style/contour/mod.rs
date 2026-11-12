@@ -15,13 +15,13 @@ use craft_ui::list::ThumbAspect;
 use craft_ui::patterns::presets::{PickerField, PresetEvent, PresetFooterEvent, PresetPicker, PresetRow, PresetState};
 use craft_ui::primitives::ContentPainterCx;
 use craft_ui::runtime::env::{Env, Label};
-use craft_ui::style::{Corners, SurfaceKind};
-use egui::{Rect, Response, Shape, Stroke, Ui, pos2};
+use egui::{Rect, Response, Ui};
 
 pub use editor::ContourEditorDialog;
 
 use crate::layer_style::{Contour, ContourPoint};
-use crate::ui::curve::Curve;
+use crate::ui::curve::{Curve, PlotLook, paint_preview};
+use crate::ui::histogram::ChannelColor;
 
 craft_ui::words! {
     /// The words of the contour field and the Contour Editor, and the names of the built-in contours.
@@ -83,10 +83,6 @@ pub(crate) type SharedSampler = Arc<dyn Fn(&[[f32; 2]]) -> Vec<f32> + Send + Syn
 
 /// The levels of a contour as a curve: input and output run `0..=255`.
 const LEVELS: f32 = 255.0;
-/// The line of a thumbnail's curve, as a share of its side.
-const LINE_SHARE: f32 = 0.05;
-/// The room around a thumbnail's curve, as a share of its side.
-const INSET_SHARE: f32 = 0.08;
 
 /// A contour a picker lists: one of the built-in contours or one of the user's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -173,22 +169,15 @@ pub fn contour_rows(presets: &[Contour], user: &[Contour], words: &ContourWords,
 
 type SamplerFn = dyn Fn(&[[f32; 2]]) -> Vec<f32> + Send + Sync;
 
-/// A thumbnail of a contour: its curve over a well.
+/// A thumbnail of a contour: its curve in the curve preview's look (plot, quarter grid, diagonal).
 fn paint_thumbnail(painter: &ContentPainterCx<'_>, rect: Rect, curve: &Curve, sampler: Option<&SamplerFn>) {
-    painter.surface(rect, SurfaceKind::Sunken, Corners::None);
     let Curve::Points { points, corners } = curve else { return };
     let outputs = Curve::through(points, corners, |points| match sampler {
         Some(sampler) => sampler(points),
         None => Curve::monotone(points, LEVELS),
     });
-    let side = rect.width().min(rect.height());
-    let area = rect.shrink(side * INSET_SHARE);
-    let line: Vec<_> = outputs
-        .iter()
-        .enumerate()
-        .map(|(input, output)| pos2(area.left() + input as f32 / LEVELS * area.width(), area.bottom() - output / LEVELS * area.height()))
-        .collect();
-    painter.painter.add(Shape::line(line, Stroke::new(side * LINE_SHARE, painter.ink_on(SurfaceKind::Sunken))));
+    let look = PlotLook::new(&painter.style_cx());
+    paint_preview(painter, &look, rect, &outputs, LEVELS, ChannelColor::Neutral);
 }
 
 /// The contour as a curve in levels.

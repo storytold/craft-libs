@@ -10,8 +10,10 @@ pub(crate) mod stories;
 mod words;
 
 pub use editor::{CurveEditor, CurveEditorOutput, CurveRows};
+pub(crate) use graph::PlotLook;
 pub use graph::{CurveChannel, CurveSampler};
 pub use model::{Curve, CurveRules};
 pub use preview::CurvePreview;
+pub(crate) use preview::paint_preview;
 pub use ramp::ToneRamp;
 pub use words::CurveWords;

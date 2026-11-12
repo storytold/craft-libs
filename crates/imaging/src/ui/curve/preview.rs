@@ -5,9 +5,10 @@ use super::model::Curve;
 use crate::ui::histogram::ChannelColor;
 use craft_behavior::{Input, Metrics, Sense};
 use craft_ui::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};
+use craft_ui::primitives::ContentPainterCx;
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, StyleCx};
-use egui::{Response, Vec2};
+use egui::{Rect, Response, Vec2};
 
 /// The style of a curve preview.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -82,14 +83,20 @@ impl Component for CurvePreview<'_> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let look = &cx.style.look;
-        let painter = ui.content_painter(cx);
-        look.backdrop(ui, &painter, cx.rect, None);
-        let map = Map { area: cx.rect.shrink(look.pad()), levels: self.levels };
-        paint_line(&ui.draw(), &outputs(self.curve, self.sampler.as_ref(), self.levels), map, look.curve(self.color));
+        let outputs = outputs(self.curve, self.sampler.as_ref(), self.levels);
+        paint_preview(&ui.content_painter(cx), &cx.style.look, cx.rect, &outputs, self.levels, self.color);
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> Response {
         cx.response.clone()
     }
+}
+
+/// A curve drawn read-only over the plot `rect` in `look`: the frame, the quarter grid, the diagonal and the curve
+/// through `outputs` (the output at each input level up to `levels`) in `color`. The preview and the contour
+/// thumbnails paint with it.
+pub(crate) fn paint_preview(painter: &ContentPainterCx<'_>, look: &PlotLook, rect: Rect, outputs: &[f32], levels: f32, color: ChannelColor) {
+    look.backdrop(painter, rect, None);
+    let map = Map { area: rect.shrink(look.pad()), levels };
+    painter.with_draw(|draw| paint_line(draw, outputs, map, look.curve(color)));
 }
