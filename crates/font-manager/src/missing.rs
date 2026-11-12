@@ -17,7 +17,7 @@ use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Stack;
 use craft_ui::list::{List, ListRow};
 use craft_ui::runtime::env::{Env, Label};
-use craft_ui::sections::{DialogRole, FooterButton, Section};
+use craft_ui::sections::{DialogRole, FooterButton, HeaderStrength, Section};
 use egui::Ui;
 
 use crate::picker::FontPicker;
@@ -221,18 +221,20 @@ impl StackDialog for MissingFontsDialog {
             .show(ui, |ui, _| {
                 Stack::new().show(ui, |ui, _| {
                     Text::new(message.clone()).show(ui);
-                    FieldGroup::new(words.replace_with.clone()).show(ui, |ui, _| {
-                        for (i, row) in rows.iter().enumerate().filter(|(_, r)| r.status == FontStatus::Missing) {
-                            let name = font_name(&row.font);
-                            let label = Label::from(words.missing_font.fill(&[("font", &name), ("status", words.missing.as_str())]));
-                            Field::new(label.clone()).show(ui, |ui, _| {
-                                let mut current = replacements[i].clone().unwrap_or_else(|| default_family.clone());
-                                let out = FontPicker::new(label.clone(), Bind::bound(&mut current), catalog).show(ui);
-                                if let Some(picked) = out.picked {
-                                    replacements[i] = Some(picked);
-                                }
-                            });
-                        }
+                    Section::fixed(words.replace_with.clone()).strength(HeaderStrength::Caption).show(ui, |ui, _| {
+                        FieldGroup::new(words.replace_with.clone()).show(ui, |ui, _| {
+                            for (i, row) in rows.iter().enumerate().filter(|(_, r)| r.status == FontStatus::Missing) {
+                                let name = font_name(&row.font);
+                                let label = Label::from(words.missing_font.fill(&[("font", &name), ("status", words.missing.as_str())]));
+                                Field::new(label.clone()).show(ui, |ui, _| {
+                                    let mut current = replacements[i].clone().unwrap_or_else(|| default_family.clone());
+                                    let out = FontPicker::new(label.clone(), Bind::bound(&mut current), catalog).show(ui);
+                                    if let Some(picked) = out.picked {
+                                        replacements[i] = Some(picked);
+                                    }
+                                });
+                            }
+                        });
                     });
                     Section::new(words.used_fonts.clone()).initially_open(false).remember(DOCUMENT_FONTS_OPEN).show(ui, |ui, _| {
                         List::<usize>::new(words.font.clone()).select(SelectMode::Single).sizing(Sizing::Content).max_rows(6).show_items(
