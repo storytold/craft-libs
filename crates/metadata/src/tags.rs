@@ -361,7 +361,7 @@ pub fn tag_rows(tiff: &Tiff) -> Vec<TagRow> {
 /// [`tag_rows`] of a file's bytes: a TIFF-based file directly, else its embedded EXIF block
 /// (JPEG, PNG, WebP, HEIF, PSD/PSB…). Empty when there is none.
 pub fn file_tag_rows(bytes: &[u8]) -> Vec<TagRow> {
-    if Tiff::sniff(bytes).is_some()
+    let (mut rows, recipe) = if Tiff::sniff(bytes).is_some()
         && let Ok(t) = Tiff::parse(bytes)
     {
         let mut rows = tag_rows(&t);
@@ -371,13 +371,20 @@ pub fn file_tag_rows(bytes: &[u8]) -> Vec<TagRow> {
             row.value = words.to_string();
         }
         panasonic_lens_row(bytes, &t, &mut rows);
-        return rows;
+        (rows, crate::fuji::recipe_from_exif(bytes))
+    } else {
+        let Some(exif) = crate::embedded(bytes).exif else { return Vec::new() };
+        let data = crate::strip_exif_header(&exif);
+        let Ok(t) = Tiff::parse(data) else { return Vec::new() };
+        let mut rows = tag_rows(&t);
+        panasonic_lens_row(data, &t, &mut rows);
+        (rows, crate::fuji::recipe_from_exif(&exif))
+    };
+    if let Some(recipe) = recipe {
+        for row in recipe.rows {
+            rows.push(TagRow { group: "Fujifilm", tag: row.tag, name: row.label, value: row.value });
+        }
     }
-    let Some(exif) = crate::embedded(bytes).exif else { return Vec::new() };
-    let data = crate::strip_exif_header(&exif);
-    let Ok(t) = Tiff::parse(data) else { return Vec::new() };
-    let mut rows = tag_rows(&t);
-    panasonic_lens_row(data, &t, &mut rows);
     rows
 }
 

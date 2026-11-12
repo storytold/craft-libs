@@ -23,6 +23,7 @@ mod datetime;
 mod exif;
 pub mod focus;
 mod focus_read;
+mod fuji;
 mod geom;
 mod gpx;
 mod iptc;
@@ -35,6 +36,7 @@ pub use container::{Embedded, embedded, jpeg_segments, png_chunks, webp_chunks};
 pub use datetime::{DatePrecision, DateTime};
 pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, try_read_exif_with, write_exif};
 pub use focus::FocusPoint;
+pub use fuji::{FujiRecipe, FujiRow, might_hold_fuji_recipe, read_recipe_file, recipe_from_bytes, recipe_from_exif};
 pub use geom::{Orientation, Point, Rect};
 pub use gpx::{GpxError, Match, TrackPoint, Tracklog, parse_gpx};
 pub use iptc::parse_iptc;
@@ -155,6 +157,9 @@ pub struct Metadata {
     /// Where the camera focused, from its maker notes ([`focus`]; Sony only for now), on the upright photo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<FocusPoint>,
+    /// Fujifilm in-camera film recipe from the MakerNote. Not written back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fuji_recipe: Option<FujiRecipe>,
 }
 
 macro_rules! fill {
@@ -251,7 +256,10 @@ impl Metadata {
             self.regions = other.regions.clone();
         }
         if self.focus.is_none() {
-            self.focus = other.focus.clone();
+            self.focus.clone_from(&other.focus);
+        }
+        if self.fuji_recipe.is_none() {
+            self.fuji_recipe.clone_from(&other.fuji_recipe);
         }
     }
 
@@ -334,6 +342,9 @@ pub fn from_embedded(e: &Embedded) -> Metadata {
         if let (Some(drawn_on), Some(orientation), Some(stored)) = (xmp.regions_drawn_on(), exif_orientation, stored) {
             upright_regions(&mut m.regions, drawn_on, orientation, stored);
         }
+    }
+    if let Some(exif) = e.exif.as_deref() {
+        m.fuji_recipe = fuji::recipe_from_exif(exif);
     }
     m
 }
