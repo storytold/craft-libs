@@ -1199,6 +1199,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-jmap"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-jpeg"
 version = "0.1.0"
 dependencies = [
