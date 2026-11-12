@@ -23,6 +23,8 @@ are one crate.
 | `embedded(&[u8]) -> Embedded` | Sniffs JPEG, PNG, WebP, TIFF-based files, Fujifilm RAF, Canon CR3 and JPEG XL containers and returns the Exif, XMP (and extended XMP), ICC and IPTC blocks. `jpeg_segments`, `png_chunks`, `webp_chunks` are the walkers. |
 | `cr3::parse_cr3` | The Canon CR3 container: `CMT1`…`CMT4`, the XMP `uuid` box, the thumbnail, the tracks. |
 | `jxl::metadata` | The `Exif` and `xml ` boxes of a JPEG XL container, plain or Brotli-wrapped in `brob`. |
+| `edit::upright_exif`, `edit::upright_xmp`, `edit::exif_with_resolution`, `edit::xmp_with_resolution`, `edit::export_exif`, `edit::export_xmp` | Byte-preserving edits for export: Orientation set to 1, the resolution set (in place, malformed entries removed, or appended when missing), the source thumbnail dropped. Every other byte stays. `edit::exif_orientation`, `edit::exif_resolution`, `edit::xmp_resolution`, `edit::photoshop_resolution` and `edit::exif_color_space` read the same values with the editors' strict rules. |
+| `mpf::images`, `mpf::write` | The Multi-Picture Format index (CIPA DC-007) of a JPEG: the images stored after the primary one (a gain map, a preview), and writing an index plus appending the images. `mpf::markers` lists the marker segments before the first scan. |
 | `extract(&[u8]) -> Metadata` | All of it for a whole file. Precedence: EXIF, then IPTC fills gaps, then XMP overrides the user fields (rating, label, title, caption, artist, copyright, keywords, GPS) and fills the rest. `from_embedded` does the same for blocks already located. |
 
 HEIF, PSD and MRW files are read by `craft-heif`, `craft-psd` and `craft-raw`. Put the blocks they
@@ -49,7 +51,7 @@ A foreign namespace that uses a recognised prefix cannot supply recognised prope
 ## Limits
 
 XMP: 64 levels, 200 000 nodes, 1 MiB of flattened keys and 8 MiB of opaque names per packet
-(`XmpError::TooComplex`). GPX: 64 levels, 5 000 000 points. CR3 and JPEG XL: 4096 boxes; a `brob` box inflates to at most 32 MiB. JPEG ICC is returned only when its APP2 chunks form a
+(`XmpError::TooComplex`). GPX: 64 levels, 5 000 000 points. MPF: 16 index entries. CR3 and JPEG XL: 4096 boxes; a `brob` box inflates to at most 32 MiB. JPEG ICC is returned only when its APP2 chunks form a
 complete, consistent, uniquely numbered sequence. TIFF limits are `craft-tiff`'s. No input panics:
 proptests feed random bytes to every container walker and random text to the XMP parser, and a sample
 JPEG is cut at every byte.

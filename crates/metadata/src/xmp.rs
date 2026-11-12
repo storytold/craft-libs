@@ -95,6 +95,9 @@ pub struct XmpData {
     /// Every top-level property with its full structure (arrays of structs such as local
     /// corrections, which [`XmpData::properties`] flattens).
     pub values: BTreeMap<String, XmpValue>,
+    /// The `x:xmptk` attribute of `x:xmpmeta` (older packets: `x:xaptk` of `x:xapmeta`), the name
+    /// of the program that wrote the packet. [`write_xmp_with`] writes [`XmpWrite::toolkit`] there.
+    pub toolkit: Option<String>,
 }
 
 impl XmpData {
@@ -674,7 +677,13 @@ pub fn parse_xmp_with(s: &str, extra: &[XmpNamespace]) -> Result<XmpData, XmpErr
         m.gps = Some(Gps { latitude: lat, longitude: lon, altitude });
     }
     m.regions = values.get("mwg-rs:Regions").map(parse_regions).unwrap_or_default();
-    Ok(XmpData { metadata: m, properties: props, values })
+    let toolkit = tree
+        .children
+        .iter()
+        .find(|n| n.name == "x:xmpmeta" || n.name == "x:xapmeta")
+        .and_then(|n| n.attr("x:xmptk").or_else(|| n.attr("x:xaptk")))
+        .map(str::to_string);
+    Ok(XmpData { metadata: m, properties: props, values, toolkit })
 }
 
 fn frac(v: f64) -> String {

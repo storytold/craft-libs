@@ -14,7 +14,7 @@
 //!   supplies.
 //! - **Generators** other than the ones every editor has: [`Generator::Other`] carries a name and
 //!   an opaque payload.
-//! - **Extensions.** `ext` on items (a sequence's is its item's), tracks, clips, transitions and markers is JSON
+//! - **Extensions.** `ext` on items, sequences, tracks, clips, transitions and markers is JSON
 //!   text the application owns. A format that can carry application metadata (OpenTimelineIO)
 //!   writes it under the application's namespace and gives it back on reading; the others ignore it.
 
@@ -540,11 +540,12 @@ pub struct Sequence {
     pub markers: Vec<Marker>,
     /// Timecode of the first frame, in frames.
     pub start_timecode: i64,
+    pub ext: Ext,
 }
 
 impl Sequence {
     pub fn new(settings: SequenceSettings) -> Self {
-        Self { settings, video_tracks: Vec::new(), audio_tracks: Vec::new(), markers: Vec::new(), start_timecode: 0 }
+        Self { settings, video_tracks: Vec::new(), audio_tracks: Vec::new(), markers: Vec::new(), start_timecode: 0, ext: None }
     }
     /// The end of the last clip.
     pub fn duration(&self) -> Tick {

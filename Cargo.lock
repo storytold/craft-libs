@@ -1019,6 +1019,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-dav"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "proptest",
+]
+
+[[package]]
 name = "craft-dialogs"
 version = "0.1.0"
 dependencies = [
@@ -1049,6 +1057,28 @@ dependencies = [
 [[package]]
 name = "craft-docpath"
 version = "0.1.0"
+
+[[package]]
+name = "craft-docx"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "craft-cfb",
+ "craft-offcrypto",
+ "craft-opc",
+ "craft-wordmodel",
+ "craft-xml",
+ "image",
+ "log",
+ "proptest",
+ "quick-xml 0.41.0",
+ "serde_json",
+ "thiserror 2.0.21",
+ "unicode-bidi",
+ "zeroize",
+ "zip",
+]
 
 [[package]]
 name = "craft-dpx"
@@ -1142,6 +1172,15 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-flow"
+version = "0.1.0"
+dependencies = [
+ "craft-wordmodel",
+ "image",
+ "log",
 ]
 
 [[package]]
@@ -1341,11 +1380,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-latex"
+version = "0.1.0"
+dependencies = [
+ "craft-flow",
+ "craft-markdown",
+ "craft-math",
+ "craft-mime",
+ "craft-wordmodel",
+ "proptest",
+]
+
+[[package]]
 name = "craft-lottie"
 version = "0.1.0"
 dependencies = [
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-markdown"
+version = "0.1.0"
+dependencies = [
+ "craft-flow",
+ "craft-html",
+ "craft-wordmodel",
+]
+
+[[package]]
+name = "craft-math"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1511,6 +1581,8 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "bytemuck",
+ "craft-stream-codecs",
+ "flate2",
  "hayro",
  "hayro-cmap",
  "hayro-interpret",
@@ -1541,6 +1613,7 @@ name = "craft-penpot"
 version = "0.1.0"
 dependencies = [
  "craft-zip",
+ "serde",
  "serde_json",
  "thiserror 2.0.21",
  "zip",
@@ -1722,7 +1795,9 @@ dependencies = [
 name = "craft-sketch"
 version = "0.1.0"
 dependencies = [
+ "craft-figma-rest",
  "craft-zip",
+ "kurbo 0.13.1",
  "serde_json",
  "thiserror 2.0.21",
  "zip",
@@ -1797,7 +1872,6 @@ dependencies = [
  "craft-xml",
  "proptest",
  "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -1966,6 +2040,9 @@ version = "0.1.0"
 dependencies = [
  "craft-cfb",
  "craft-sheet",
+ "md-5 0.10.6",
+ "miniz_oxide 0.9.1",
+ "sha1 0.10.7",
  "thiserror 2.0.21",
 ]
 
