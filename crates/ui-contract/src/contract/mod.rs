@@ -372,6 +372,13 @@ pub trait Component: Meta + Sized {
     /// Pure function of the resolved context and the key.
     fn style(cx: &StyleCx<'_>, key: Self::StyleKey) -> Self::Style;
 
+    /// The insets from `rect` to the content rect where the component is shown: the style's padding. A component
+    /// whose insets follow its rect computes them here (a sheet's row headers hold the digits of the last row its view
+    /// shows). Measuring adds the style's padding.
+    fn padding(&self, _rect: Rect, style: &Self::Style) -> craft_behavior::Insets {
+        style.metrics().padding
+    }
+
     /// Content size only; the pipeline adds padding and minimum size.
     fn measure(&mut self, _cx: &MeasureCx<'_, Self>) -> Vec2 {
         Vec2::ZERO

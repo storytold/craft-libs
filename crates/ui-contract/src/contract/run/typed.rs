@@ -249,6 +249,10 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
         C::paint_outset(tokens)
     }
 
+    fn padding(&self, rect: Rect) -> craft_behavior::Insets {
+        self.comp.padding(rect, self.cx.style)
+    }
+
     fn parts(&mut self, rect: Rect, flow: Flow, content_rect: Rect, parts: &mut PartsStep, input: &MeasureIn<'_>, rtl: bool) {
         let id = self.cx.core.id;
         let last = self.cx.core.memory.shown::<steps::Shown<ValueOf<C>>>(id).state.last_state;
@@ -616,7 +620,7 @@ pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSo
     core.face_mode = true;
     core.faded = source.faded;
     core.rect = rect;
-    core.content_rect = flow.inset(StyleView::metrics(&*style).padding);
+    core.content_rect = flow.inset(face.padding(rect, &style));
     core.flow = flow;
     core.visible = rect;
     let mut cx = Cx::<C> { core, style: &style, shown, mixed, events: Vec::new(), applied: 0, validity: Validity::Ok };
@@ -697,7 +701,7 @@ pub(crate) fn member_prepare<C: Show>(ui: &Ui, env: &Env, id: Id, row: Rect, hov
     if C::PARTS {
         let resolved = steps::resolved(id, &step1, &common);
         let flow = Flow::new(row, env.direction.is_rtl());
-        let content_rect = flow.inset(StyleView::metrics(&*style).padding);
+        let content_rect = flow.inset(item.padding(row, &style));
         let input = MeasureIn { ui, env, proposal: Proposal::Ideal, room: None };
         let mut pcx = PartsCx {
             content_rect,
@@ -775,7 +779,7 @@ pub(crate) fn member_show<C: Show>(
     core.faded = faded;
     let flow = Flow::new(row, rtl);
     core.rect = row;
-    core.content_rect = flow.inset(StyleView::metrics(&*style).padding);
+    core.content_rect = flow.inset(item.padding(row, &style));
     core.flow = flow;
     core.visible = row.intersect(ui.clip_rect());
     core.part_cursors = crate::primitives::sensing::hovered_cursor(decls.parts(), &sensed.parts).into_iter().collect();

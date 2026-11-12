@@ -10,11 +10,17 @@ pub const HEADER_MIN_ZOOM: f32 = 0.75;
 
 /// How far below the window (points at 100 %) the row headers look for the last row whose digits they must hold, so
 /// the header does not resize while scrolling.
-pub(super) const ROW_HEADER_LOOKAHEAD: f64 = 200.0;
+const ROW_HEADER_LOOKAHEAD: f64 = 200.0;
 
 /// The digits the row headers hold for rows up to `last` (at least two).
 pub(crate) fn digits_of(last: u32) -> u32 {
     (last.saturating_add(1).ilog10() + 1).max(2)
+}
+
+/// The digits the row headers of a grid `height` high hold at `zoom`, scrolled down `scroll_y` points at 100 %: those
+/// of the row [`ROW_HEADER_LOOKAHEAD`] below the view's bottom.
+pub(crate) fn row_digits(rows: &LineIndex, scroll_y: f32, height: f32, zoom: f32) -> u32 {
+    digits_of(rows.at(f64::from(scroll_y + height / zoom) + ROW_HEADER_LOOKAHEAD))
 }
 
 /// The header sizes geometry needs, taken from the grid's style.
@@ -159,10 +165,7 @@ impl SheetGeometry {
         layout.zoom = if layout.zoom.is_finite() { layout.zoom.clamp(least, greatest) } else { 1.0 };
         layout.frozen = (layout.frozen.0.min(layout.rows.count()), layout.frozen.1.min(layout.columns.count()));
         let (zoom, rect) = (layout.zoom, layout.rect);
-        let digits = layout.digits.unwrap_or_else(|| {
-            let last_row = layout.rows.at(f64::from(layout.scroll.y + rect.height() / zoom) + ROW_HEADER_LOOKAHEAD);
-            digits_of(last_row)
-        });
+        let digits = layout.digits.unwrap_or_else(|| row_digits(&layout.rows, layout.scroll.y, rect.height(), zoom));
         let header = metrics.header(layout.headings, zoom, digits);
         let cells = Rect::from_min_max(Pos2::new(rect.left() + layout.bands.x + header.x, rect.top() + layout.bands.y + header.y), rect.max);
         let frozen_size = Vec2::new(layout.columns.start(layout.frozen.1) as f32 * zoom, layout.rows.start(layout.frozen.0) as f32 * zoom);

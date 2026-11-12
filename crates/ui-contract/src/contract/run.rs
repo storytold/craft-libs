@@ -522,6 +522,8 @@ pub(crate) trait ErasedPass<'a> {
     /// Whether the component is bound, and whether its binding has a reset value.
     fn bound(&mut self) -> (bool, bool);
     fn paint_outset(&self, tokens: &crate::style::UiTokens) -> f32;
+    /// `Component::padding` at `rect`.
+    fn padding(&self, rect: Rect) -> craft_behavior::Insets;
     /// Step 7: the component's parts, then the shape's.
     fn parts(&mut self, rect: Rect, flow: Flow, content_rect: Rect, parts: &mut PartsStep, input: &MeasureIn<'_>, rtl: bool);
     /// Step 8b for a text part.
@@ -828,7 +830,6 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     let ctx = p.p.core_ref().ctx.clone();
     let (id, rtl) = (p.resolved.id, p.env.direction.is_rtl());
     let (env, resolved, inert, facts, style) = (host_env.unwrap_or(p.env), p.resolved, p.inert, p.facts, p.style);
-    let metrics = style.metrics();
     // 6 place
     let at = host_at.unwrap_or(p.at);
     // A root that fills takes the room of the `Ui` its host runs it in: a pane's or a layer's own, not its parent's.
@@ -855,7 +856,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     // 7 parts
     p.trace.mark(Step::Parts);
     let flow = Flow::new(rect, rtl);
-    let content_rect = flow.inset(steps::padding(&metrics, resolved.pad));
+    let content_rect = flow.inset(steps::padding(e.padding(rect), resolved.pad));
     let mut parts = PartsStep { decls: Default::default(), rovings: Vec::new(), scrolls: Vec::new(), text: super::text::TextStep::default() };
     if !inert && facts.text() {
         parts.text.commit_now = focus::commit_now(&ctx) == Some(id);

@@ -4,7 +4,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use craft_behavior::{CellSelection, EditEvent, PartKey, PartRef};
+use craft_behavior::{CellSelection, EditEvent, PartKey, PartRef, ScrollPos};
 use craft_table::ui::{
     CellAt, CellEdit, CellGrid, CellProblem, CellRange, ColumnFilter, GridEdit, GridModel, GridState, LineIndex, SHEET_COLUMNS, SHEET_ROWS,
     SheetGeometry,
@@ -398,4 +398,20 @@ fn chrome_sits_in_its_cells_and_clear_of_the_scroll_bar() {
     let before = state.borrow().scroll;
     fixture.click_at(tag.center()).idle(2);
     assert!(state.borrow().scroll.y > before.y, "the press on the track paged the rows, the tag did not take it");
+}
+
+/// The row headers hold the digits of the last row the view shows: two at the top of a short view, whatever the data,
+/// and wider once the view scrolls down to row 100.
+#[trial]
+fn row_headers_widen_for_the_rows_the_view_shows() {
+    let mut rig = rig(None, a1(), 1.0);
+    rig.fixture.room(Vec2::new(400.0, 200.0)).settle();
+    let corner = PartKey::new("corner");
+    let top = rig.part_rect(corner);
+    rig.state.borrow_mut().scroll = ScrollPos { x: 0.0, y: f64::from(ROW) * 100.0 };
+    rig.fixture.settle();
+    let scrolled = rig.part_rect(corner);
+    assert!(scrolled.width() > top.width(), "the header strip widens for three digits: {} > {}", scrolled.width(), top.width());
+    let row = rig.cell_under(rig.geometry.borrow().as_ref().expect("the grid showed").cells().center());
+    assert!(row.row >= 99, "the view shows row 100, not {row:?}");
 }

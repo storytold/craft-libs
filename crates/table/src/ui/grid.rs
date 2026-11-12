@@ -6,7 +6,7 @@
 //! parts and paint.
 
 pub use craft_behavior::{CellAdvance, CellAt, CellDirection, CellRange, CellSelection, CellSpace, LineIndex, Positions, SHEET_ZOOM};
-use craft_behavior::{DisplayOrder, EditEvent, ItemSource, Metrics, Mixed, ScrollPos, SheetLayout};
+use craft_behavior::{DisplayOrder, EditEvent, Insets, ItemSource, Metrics, Mixed, ScrollPos, SheetLayout};
 use craft_ui::contract::{
     Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, ContainerProps, ContextMenuRequest, Cx, Outcome,
     PaintUi, Props as _, Remember as _, Role, SelectMode, Sizing,
@@ -16,7 +16,6 @@ use craft_ui::runtime::focus::{EndKey, KeepKeys, KeyUse};
 use craft_ui::style::{ComponentStyle, Stateful, StyleColor, StyleCx, SurfaceLook};
 use egui::{Rect, Response, Vec2};
 
-use self::geometry::ROW_HEADER_LOOKAHEAD;
 use super::filter::FilterButtonEvent;
 use super::outline::{OutlineAction, OutlineAxis};
 
@@ -35,7 +34,7 @@ pub use model::{CellEdit, CellProblem, ColumnFilter, GridEdit, GridMenuTarget, G
 pub use reference::{SHEET_COLUMNS, SHEET_ROWS, absolute_range_reference, absolute_reference, column_letters};
 pub use row::GridRow;
 
-pub(crate) use geometry::{digits_of, header_insets};
+pub(crate) use geometry::{digits_of, header_insets, row_digits};
 pub(crate) use reference::edges;
 
 /// The rows of a sheet as the collection's source: one key per row, equal to its position.
@@ -170,8 +169,6 @@ pub struct CellGrid<'a> {
     #[prop]
     headings: bool,
     #[style_key]
-    digits: u8,
-    #[style_key]
     percent: u16,
     #[style_key]
     levels: (u8, u8),
@@ -184,6 +181,8 @@ pub struct CellGrid<'a> {
     /// The state's zoom, which a pinch writes for the next pass.
     zoom_kept: &'a mut f32,
     scroll: Bind<'a, ScrollPos>,
+    /// The scroll as the app held it when the pass began, which the row headers' digits read.
+    scroll_at: ScrollPos,
     /// The ranges the copy marks surround.
     #[prop]
     copy_mark: &'a [CellRange<u32>],
@@ -206,13 +205,11 @@ impl<'a> CellGrid<'a> {
     pub fn new(label: impl Into<Label>, model: &'a dyn GridModel, state: &'a mut GridState) -> Self {
         let GridState { selection, zoom: zoom_kept, scroll } = state;
         let zoom = if zoom_kept.is_finite() { zoom_kept.clamp(*SHEET_ZOOM.start(), *SHEET_ZOOM.end()) } else { 1.0 };
-        let digits = digits_of(model.last_used().row.saturating_add(ROW_HEADER_LOOKAHEAD as u32)) as u8;
         CellGrid {
             common: Common::new(),
             props: ContainerProps::new().sizing(Sizing::Fill),
             items: CollectionProps::new().select(SelectMode::Cells),
             headings: true,
-            digits,
             percent: (zoom * 100.0).round() as u16,
             levels: (0, 0),
             model,
@@ -220,6 +217,7 @@ impl<'a> CellGrid<'a> {
             selection: Bind::bound(selection),
             zoom,
             zoom_kept,
+            scroll_at: *scroll,
             scroll: Bind::bound(scroll),
             copy_mark: &[],
             filters: &[],
@@ -261,6 +259,11 @@ impl craft_ui::contract::Component for CellGrid<'_> {
 
     fn style(cx: &StyleCx<'_>, key: CellGridStyleKey) -> CellGridStyle {
         paint::style(cx, key)
+    }
+
+    /// The headers and bands before the cells, the row headers wide enough for the last row a view of `rect` shows.
+    fn padding(&self, rect: Rect, style: &CellGridStyle) -> Insets {
+        header_insets(style.sheet, self.headings, self.zoom, self.digits_at(rect), style.bands)
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut craft_ui::contract::PartsCx<'_, Self>) {

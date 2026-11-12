@@ -6,7 +6,7 @@ use crate::contract::{Component, Resolved, Sizing, ValueOf};
 use crate::runtime::env::Env;
 use crate::runtime::layout_memory::{self, Inputs};
 use crate::style::{ComponentStyle, StyleView};
-use craft_behavior::{Insets, Metrics, Proposal};
+use craft_behavior::{Insets, Proposal};
 use egui::{Ui, Vec2};
 
 /// What step 5 reads besides the component.
@@ -37,7 +37,7 @@ pub(crate) fn measure_content<C: Component>(
 pub(crate) fn measure(style: &dyn StyleView, input: &MeasureIn<'_>, content: Vec2, extent: Vec2, resolved: &Resolved<'_>) -> Vec2 {
     let (metrics, sizing) = (style.metrics(), resolved.sizing);
     let content = content + extent;
-    let padding = padding(&metrics, resolved.pad);
+    let padding = padding(metrics.padding, resolved.pad);
     let padding = Vec2::new(padding.start + padding.end, padding.top + padding.bottom);
     let floor = match (input.proposal, metrics.least_width) {
         (Proposal::Min, Some(least)) => Vec2::new(least, metrics.min_size.y),
@@ -50,10 +50,9 @@ pub(crate) fn measure(style: &dyn StyleView, input: &MeasureIn<'_>, content: Vec
     size
 }
 
-/// The padding between the component's edge and its content: the style's, and `pad` on every side that the shape's
-/// props add (`Resolved::pad`).
-pub(crate) fn padding(metrics: &Metrics, pad: f32) -> Insets {
-    let padding = metrics.padding;
+/// The padding between the component's edge and its content: `padding` (the style's, or `Component::padding` where
+/// the component is shown), and `pad` on every side that the shape's props add (`Resolved::pad`).
+pub(crate) fn padding(padding: Insets, pad: f32) -> Insets {
     Insets::new(padding.start + pad, padding.end + pad, padding.top + pad, padding.bottom + pad)
 }
 
@@ -65,7 +64,7 @@ pub(crate) fn measure_cx<'a, C: Component>(
     resolved: &'a Resolved<'a>,
     value: Option<&'a ValueOf<C>>,
 ) -> MeasureCx<'a, C> {
-    let padding = padding(&ComponentStyle::metrics(style), resolved.pad);
+    let padding = padding(ComponentStyle::metrics(style).padding, resolved.pad);
     MeasureCx {
         env: input.env.view(),
         style,

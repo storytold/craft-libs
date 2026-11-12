@@ -20,7 +20,7 @@ use super::{
     CellAt, CellGrid, CellGridStyle, CellGridStyleKey, CellGridWords, CellRange, CellSelection, ColumnFilter, GridLayout, GridModel, SheetGeometry,
     SheetMetrics,
 };
-use super::{edges, header_insets};
+use super::{digits_of, edges, header_insets, row_digits};
 use crate::ui::error_tag::ErrorTag;
 use crate::ui::filter::FilterButton;
 use crate::ui::outline::{self, OutlineBand};
@@ -65,7 +65,8 @@ pub(super) fn style(cx: &StyleCx<'_>, key: CellGridStyleKey) -> CellGridStyle {
     let c = &cx.tokens.color;
     CellGridStyle {
         surface: cx.text_well(),
-        metrics: Metrics::new().padding(header_insets(sheet, key.headings, zoom, u32::from(key.digits), bands)),
+        // Row headers at their least, two digits; `CellGrid::padding` widens them for the rows the view shows.
+        metrics: Metrics::new().padding(header_insets(sheet, key.headings, zoom, digits_of(0), bands)),
         sheet,
         bands,
         background: cx.color(c.surface.background),
@@ -131,8 +132,14 @@ impl CellGrid<'_> {
             .headings(self.headings)
             .bands(style.bands)
             .right_to_left(rtl)
-            .digits(u32::from(self.digits));
+            .digits(self.digits_at(rect));
         SheetGeometry::new(layout, style.sheet)
+    }
+
+    /// The digits the row headers of the grid in `rect` hold at the scroll the pass began with: the same in `padding`
+    /// and in the geometry, so the cells start where the content rect does.
+    pub(super) fn digits_at(&self, rect: Rect) -> u32 {
+        row_digits(self.model.rows(), (self.scroll_at.y / f64::from(self.zoom)) as f32, rect.height(), self.zoom)
     }
 
     /// The column header cell of `column` in screen coordinates, kept to the columns' side of the frozen split.
