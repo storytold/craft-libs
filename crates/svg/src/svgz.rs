@@ -21,8 +21,8 @@ pub enum Error {
     Corrupt(String),
     /// The gzip stream holds gzip data again. A reader that unpacks what it is handed would
     /// unpack that second layer with no limit, so it is refused here.
-    #[error("the compressed SVG holds another compressed file, not a document")]
-    Nested,
+    #[error("the compressed SVG holds another compressed file, not a document ({0} decoded bytes)")]
+    Nested(usize),
     /// The text is not valid in its encoding.
     #[error("the SVG is not UTF-8, UTF-16 or ISO 8859-1")]
     Encoding,
@@ -66,7 +66,7 @@ pub fn inflate(bytes: &[u8], limit: usize) -> Result<Cow<'_, [u8]>, Error> {
         first = false;
     }
     if is_svgz(&out) {
-        return Err(Error::Nested);
+        return Err(Error::Nested(out.len()));
     }
     Ok(Cow::Owned(out))
 }
@@ -177,7 +177,7 @@ mod tests {
         let z = compress(SVG.as_bytes());
         assert!(matches!(inflate(z.get(..z.len() / 2).unwrap_or_default(), MB), Err(Error::Corrupt(_))));
         assert!(matches!(inflate(&[0x1f, 0x8b, 0xff], MB), Err(Error::Corrupt(_))));
-        assert_eq!(inflate(&compress(&z), MB), Err(Error::Nested));
+        assert_eq!(inflate(&compress(&z), MB), Err(Error::Nested(z.len())));
     }
 
     #[test]

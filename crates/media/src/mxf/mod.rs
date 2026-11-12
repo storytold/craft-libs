@@ -38,7 +38,7 @@ pub use index::{IndexEntry, IndexSegment};
 pub use klv::{Rational, Ul};
 pub use write::{
     CodedKind, ColorSpace, FrameInfo, MxfWriter, OpAtomPcm, PackageIds, Pattern, PictureCoding, PictureDesc, SoundDesc, StartTimecode, Timestamp,
-    Umid, WriterConfig, encode_pcm, write_opatom_pcm,
+    Umid, WriterConfig, encode_pcm, write_opatom_pcm, write_opatom_pcm_as,
 };
 
 use std::fmt;

@@ -196,13 +196,49 @@ pub struct Stream {
     super_index: Vec<u64>,
 }
 
+/// How the NAL units of an H.264 or HEVC stream are framed ([`Stream::nal_framing`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NalFraming {
+    /// Start codes (Annex B). With `header_sets`, the bytes after the format header are parameter
+    /// sets in Annex B, which a decoder needs before the first chunk: the chunks need not repeat
+    /// them.
+    AnnexB {
+        /// The stream header carries parameter sets.
+        header_sets: bool,
+    },
+    /// Length prefixes of this many bytes (1 to 4): the bytes after the format header are an
+    /// `avcC` / `hvcC` record, as in a stream copied from MP4 as it is.
+    LengthPrefixed(usize),
+}
+
 impl Stream {
+    /// How the chunks of an H.264 or HEVC stream frame their NAL units, from the bytes after the
+    /// format header (`BitmapInfo::extra`); `None` for any other stream. A record (first byte 1)
+    /// gives the length-prefix size it declares, start codes mean parameter sets in Annex B, and
+    /// anything else leaves the stream as Annex B with its sets in band.
+    pub fn nal_framing(&self) -> Option<NalFraming> {
+        let extra = &self.video.as_ref()?.extra;
+        // lengthSizeMinusOne: byte 4 of an avcC record, byte 21 of an hvcC record
+        let size_at = match self.codec_params().codec {
+            crate::CodecId::H264 => 4,
+            crate::CodecId::Hevc => 21,
+            _ => return None,
+        };
+        Some(if extra.first() == Some(&1) {
+            NalFraming::LengthPrefixed(extra.get(size_at).map_or(4, |b| usize::from(b & 3) + 1))
+        } else {
+            NalFraming::AnnexB { header_sets: extra.starts_with(&[0, 0, 1]) || extra.starts_with(&[0, 0, 0, 1]) }
+        })
+    }
+
     /// What a decoder needs for this stream, in the container-neutral form the codec crates take.
     ///
     /// The codec comes from `biCompression` (video) or the format tag (audio). `tag` is the video
-    /// FourCC as stored. `extradata` is the bytes after the format header as stored: AVI keeps
-    /// H.264 and HEVC as Annex B, so it is not an `avcC` / `hvcC` record, and it may be empty
-    /// (the parameter sets are then in the stream). Uncompressed video is [`CodecId::Unknown`]
+    /// FourCC as stored. `extradata` is the bytes after the format header as stored. For H.264
+    /// and HEVC that is one of three things, which [`Stream::nal_framing`] tells apart: nothing
+    /// (the parameter sets are in the chunks), Annex B parameter sets (a file written with global
+    /// headers), or an `avcC` / `hvcC` record (a stream copied from MP4, whose chunks are then
+    /// length-prefixed). Uncompressed video is [`CodecId::Unknown`]
     /// with its FourCC (or `BI_RGB` / `BI_BITFIELDS`) in `tag`; see [`BitmapInfo`] for its layout.
     ///
     /// [`CodecId::Unknown`]: crate::CodecId::Unknown

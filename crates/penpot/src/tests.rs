@@ -2,6 +2,9 @@
 #![allow(clippy::unwrap_used, clippy::panic)]
 
 use serde_json::json;
+use std::io::{Cursor, Write};
+
+use zip::ZipArchive;
 use zip::write::SimpleFileOptions;
 
 use super::*;
@@ -183,36 +186,38 @@ fn an_archive_with_a_zip64_directory_opens() {
         z.start_file(format!("{i}"), stored).unwrap();
     }
     let bytes = z.finish().unwrap().into_inner();
-    assert_eq!(declared_entries(&bytes), Some(70_001));
     assert_eq!(Archive::open(&bytes).unwrap().names().len(), 70_001);
 }
 
 #[test]
 fn the_byte_budget_counts_bytes_read_even_when_headers_claim_less() {
-    // Two independent readers share the same actual output limit.
-    let mut budget = Budget { remaining: 5, exceeded: false, json_values: MAX_JSON_VALUES, json_exceeded: false };
-    let mut first = Vec::new();
-    BudgetReader { inner: Cursor::new(b"abcd"), budget: &mut budget }.read_to_end(&mut first).unwrap();
-    assert_eq!(first, b"abcd");
-    assert_eq!(budget.remaining, 1);
-
-    let mut second = Vec::new();
-    let result = BudgetReader { inner: Cursor::new(b"xyz"), budget: &mut budget }.read_to_end(&mut second);
-    assert!(result.is_err(), "bytes beyond the combined budget must be rejected");
-    assert_eq!(budget.remaining, 0);
-    assert!(budget.check().is_err());
-    // Ending exactly at the budget is not an overrun.
-    let mut budget = Budget { remaining: 3, exceeded: false, json_values: MAX_JSON_VALUES, json_exceeded: false };
-    let mut exact = Vec::new();
-    BudgetReader { inner: Cursor::new(b"xyz"), budget: &mut budget }.read_to_end(&mut exact).unwrap();
-    assert!(budget.check().is_ok());
+    // b.json's headers say one byte; it holds five. The read stops past the claim and is charged it.
+    let mut bytes = zip_of(&[good_manifest(), ("a.json".into(), b"[0,1]".to_vec()), ("b.json".into(), b"[2,3]".to_vec())]);
+    let start = {
+        let mut z = ZipArchive::new(Cursor::new(&bytes[..])).unwrap();
+        z.by_name("b.json").unwrap().central_header_start() as usize
+    };
+    bytes[start + 24..start + 28].copy_from_slice(&1u32.to_le_bytes());
+    let mut a = Archive::open(&bytes).unwrap();
+    let before = a.bytes_left();
+    assert!(a.json("b.json").is_err());
+    assert_eq!(before - a.bytes_left(), 1);
+    assert!(a.check().is_ok(), "a lying member is an error of its own, not the budget's");
+    // Two members share one limit; ending exactly at it is not an overrun.
+    let left = a.bytes_left();
+    a.zip.budget_mut().charge(left - 5).unwrap();
+    assert_eq!(a.json("a.json").unwrap(), json!([0, 1]));
+    assert!(a.check().is_ok());
+    assert!(a.json("a.json").is_err(), "bytes beyond the combined budget must be rejected");
+    assert!(a.check().is_err());
 }
 
 #[test]
 fn an_exhausted_byte_budget_fails_the_archive_even_for_optional_members() {
     let bytes = zip_of(&[good_manifest(), ("a.json".into(), b"[0,0]".to_vec())]);
     let mut a = Archive::open(&bytes).unwrap();
-    a.budget.remaining = 3;
+    let left = a.bytes_left();
+    a.zip.budget_mut().charge(left - 3).unwrap();
     assert!(a.json("a.json").is_err());
     assert_eq!(a.check().err(), Some(Error::Corrupt("actual decompressed ZIP contents exceed 1 GiB".into())));
 }
@@ -232,7 +237,7 @@ fn the_json_value_budget_is_shared_by_shape_and_other_members() {
 }
 
 fn budget_of(json_values: usize) -> Budget {
-    Budget { remaining: MAX_DECOMPRESSED, exceeded: false, json_values, json_exceeded: false }
+    Budget { exceeded: false, json_values, json_exceeded: false }
 }
 
 #[test]
@@ -424,4 +429,12 @@ fn mangled_archives_never_panic() {
         }
         read(&b);
     }
+}
+
+/// A ZIP64 end record can declare millions of members in a small file: refused on the raw bytes
+/// before the archive is indexed.
+#[test]
+fn an_archive_declaring_too_many_members_is_refused_before_it_is_indexed() {
+    let bomb = craft_zip::zip64_entry_count_sample(MAX_ENTRIES as u64 + 1);
+    assert_eq!(Archive::open(&bomb).err(), Some(Error::Corrupt("too many ZIP members".into())));
 }

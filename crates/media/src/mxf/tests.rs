@@ -3,6 +3,8 @@
 
 use super::*;
 
+mod hostile;
+
 fn ul(b: &[u8]) -> [u8; 16] {
     let mut k = [0u8; 16];
     k[..b.len()].copy_from_slice(b);

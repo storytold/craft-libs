@@ -216,7 +216,9 @@ async fn screenshot_carries_the_png_as_data_whatever_the_app_calls_it() {
 #[wasm_bindgen_test]
 async fn params_that_are_not_a_json_object_reject_and_never_reach_the_app() {
     reset();
-    Rc::new(PageApi::new("vectorcraft", Methods::default(), recording_request(json!({"ok": true, "result": {}})))).install().expect("install");
+    Rc::new(PageApi::new("vectorcraft", Methods::default(), recording_request(json!({"ok": true, "result": {}}))).with_max_in_flight(1))
+        .install()
+        .expect("install");
     let date = js_sys::Date::new(&JsValue::from_str("not a date"));
     let to_json_null = obj("{}");
     let null_fn = Closure::<dyn Fn() -> JsValue>::new(|| JsValue::NULL).into_js_value();
@@ -260,4 +262,37 @@ async fn params_that_are_not_a_json_object_reject_and_never_reach_the_app() {
     call("request", &["custom.method".into(), JsValue::NULL]).await.expect("null params");
     let calls = REQUESTS.with(|r| r.borrow().clone());
     assert_eq!(calls, [("custom.method".to_string(), json!({})), ("custom.method".to_string(), json!({}))], "absent params are {{}}");
+}
+
+/// Start `window.vectorcraft.<name>(args…)` without awaiting it, so several calls can be in flight.
+fn start(name: &str, args: &[JsValue]) -> js_sys::Promise {
+    let api = api();
+    let f: js_sys::Function = js_sys::Reflect::get(&api, &JsValue::from_str(name)).expect(name).unchecked_into();
+    f.apply(&api, &args.iter().collect::<js_sys::Array>()).expect("call").unchecked_into()
+}
+
+fn message(err: JsValue) -> String {
+    String::from(err.unchecked_into::<js_sys::Error>().message())
+}
+
+#[wasm_bindgen_test]
+async fn a_call_beyond_the_in_flight_limit_is_refused_and_its_slot_comes_back() {
+    reset();
+    let never: Request = Rc::new(|_method: String, _params: Value| {
+        Box::pin(async {
+            let _ = JsFuture::from(js_sys::Promise::new(&mut |_, _| {})).await;
+            Value::Null
+        })
+    });
+    Rc::new(PageApi::new("vectorcraft", Methods::default(), never).with_timeout(50).with_max_in_flight(1)).install().expect("install");
+
+    let first = start("commands", &[]);
+    let second = start("commands", &[]);
+    let busy = JsFuture::from(second).await.expect_err("a second call while one waits is refused");
+    assert!(message(busy).contains("vectorcraft is busy: 1 calls are already waiting"), "the refusal says why");
+    let timed_out = JsFuture::from(first).await.expect_err("the first call times out");
+    assert!(message(timed_out).contains("did not answer"), "the first call was accepted and waited");
+
+    let again = call("commands", &[]).await.expect_err("a later call is accepted again");
+    assert!(message(again).contains("did not answer"), "its slot came back once the first call ended");
 }

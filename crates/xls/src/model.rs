@@ -4,96 +4,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-/// A cell position, zero-based. Ordered by row, then column.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct CellRef {
-    pub row: u32,
-    pub col: u32,
-}
-
-impl CellRef {
-    pub const fn new(row: u32, col: u32) -> Self {
-        CellRef { row, col }
-    }
-
-    /// The A1 text (`B3`).
-    pub fn a1(self) -> String {
-        crate::expr::a1(self.row, self.col)
-    }
-}
-
-/// A rectangle of cells, both corners included; `first` is the top left one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Range {
-    pub first: CellRef,
-    pub last: CellRef,
-}
-
-impl Range {
-    /// The rectangle spanned by two corners, in any order.
-    pub fn new(a: CellRef, b: CellRef) -> Self {
-        Range { first: CellRef::new(a.row.min(b.row), a.col.min(b.col)), last: CellRef::new(a.row.max(b.row), a.col.max(b.col)) }
-    }
-
-    pub fn contains(&self, c: CellRef) -> bool {
-        (self.first.row..=self.last.row).contains(&c.row) && (self.first.col..=self.last.col).contains(&c.col)
-    }
-
-    pub fn is_single(&self) -> bool {
-        self.first == self.last
-    }
-}
-
-/// The error values a BIFF8 file stores ([MS-XLS] 2.5.10, BErr).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum CellError {
-    Null,
-    Div0,
-    Value,
-    Ref,
-    Name,
-    Num,
-    NA,
-    GettingData,
-}
-
-impl CellError {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            CellError::Null => "#NULL!",
-            CellError::Div0 => "#DIV/0!",
-            CellError::Value => "#VALUE!",
-            CellError::Ref => "#REF!",
-            CellError::Name => "#NAME?",
-            CellError::Num => "#NUM!",
-            CellError::NA => "#N/A",
-            CellError::GettingData => "#GETTING_DATA",
-        }
-    }
-}
-
-/// A cell's stored value (for a formula cell, its saved result).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub enum Value {
-    #[default]
-    Empty,
-    Number(f64),
-    Text(Arc<str>),
-    Bool(bool),
-    Error(CellError),
-}
-
-impl Value {
-    /// A number, or `#NUM!` when it is NaN or infinite (Excel never stores those). Negative zero
-    /// becomes zero.
-    pub fn number(v: f64) -> Value {
-        if v.is_finite() { Value::Number(if v == 0.0 { 0.0 } else { v }) } else { Value::Error(CellError::Num) }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        matches!(self, Value::Empty)
-    }
-}
+pub use craft_sheet::{BorderStyle, CellError, CellRef, HAlign, Pattern, Range, Script, Underline, VAlign, Value, Visibility};
 
 /// A cell's formula.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,15 +23,6 @@ pub struct Cell {
     /// [`Workbook::formats`]) and for a format index the file does not have.
     pub format: Option<u16>,
     pub formula: Option<Formula>,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Visibility {
-    #[default]
-    Visible,
-    Hidden,
-    /// Hidden, and not offered by Excel's Unhide dialog.
-    VeryHidden,
 }
 
 /// A column's ColInfo record ([MS-XLS] 2.4.53).
@@ -202,6 +104,166 @@ pub struct Sheet {
     pub print_area: Option<String>,
     /// The sheet's `Print_Titles` name as formula text (`Sheet1!$1:$2`).
     pub print_titles: Option<String>,
+    /// Data validation rules (Dv records), in file order.
+    pub validations: Vec<DataValidation>,
+    /// Cell comments (Note records with their text), in file order.
+    pub notes: Vec<Note>,
+    /// Conditional formats (CF records), in file order: the first has the highest priority.
+    pub conditional_formats: Vec<ConditionalFormat>,
+    /// Pictures placed on the sheet, in drawing order.
+    pub pictures: Vec<Picture>,
+    /// The AutoFilter's range: the sheet's `_FilterDatabase` name, when the sheet has an
+    /// AutoFilterInfo record (the name can outlive the filter). The criteria are not read.
+    pub autofilter: Option<Range>,
+}
+
+/// A cell comment (Note, [MS-XLS] 2.4.179, with the TxO text of its object).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Note {
+    pub cell: CellRef,
+    pub author: String,
+    /// Empty when the comment's text object is missing.
+    pub text: String,
+    /// Shown all the time, not only when the cell is pointed at.
+    pub visible: bool,
+}
+
+/// Where a picture sits: its top left and bottom right corners as a cell and a fraction of it
+/// (OfficeArtClientAnchorSheet, [MS-XLS] 2.5.193): `dx` in 1/1024 of the column's width, `dy`
+/// in 1/256 of the row's height.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClientAnchor {
+    pub col1: u16,
+    pub dx1: u16,
+    pub row1: u16,
+    pub dy1: u16,
+    pub col2: u16,
+    pub dx2: u16,
+    pub row2: u16,
+    pub dy2: u16,
+}
+
+/// A picture: a shape that names a stored picture and has a client anchor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Picture {
+    pub anchor: ClientAnchor,
+    /// The file: PNG, JPEG, EMF, WMF (with its placeable header put back) or BMP (a DIB with a
+    /// file header in front). Shapes that show one picture share its bytes.
+    pub data: Arc<Vec<u8>>,
+    /// `image/png`, `image/jpeg`, `image/x-emf`, `image/x-wmf` or `image/bmp`.
+    pub mime: &'static str,
+}
+
+/// What a conditional format tests.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConditionRule {
+    /// "Cell value is": the cell compared with one formula, or two for `Between` and
+    /// `NotBetween`.
+    CellIs { operator: Operator, formula1: String, formula2: Option<String> },
+    /// A formula that is true.
+    Expression { formula: String },
+}
+
+/// The fill a differential format sets: each part `None` when it leaves the cell's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DxfFill {
+    pub pattern: Option<Pattern>,
+    pub fg: Option<Color>,
+    pub bg: Option<Color>,
+}
+
+/// What a conditional format changes (DXFN, [MS-XLS] 2.5.81): each part `None` when it leaves
+/// the cell's. The font's face and size are never changed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DifferentialFormat {
+    pub number_format: Option<String>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub strike: Option<bool>,
+    pub underline: Option<Underline>,
+    pub font_color: Option<Color>,
+    pub left: Option<BorderLine>,
+    pub right: Option<BorderLine>,
+    pub top: Option<BorderLine>,
+    pub bottom: Option<BorderLine>,
+    pub fill: Option<DxfFill>,
+}
+
+/// A conditional format (CondFmt with one of its CF records).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConditionalFormat {
+    pub ranges: Vec<Range>,
+    /// Formulas are A1 text without `=`, relative references from the top left cell of the
+    /// CondFmt's bounding range.
+    pub rule: ConditionRule,
+    pub format: DifferentialFormat,
+}
+
+/// What a data validation rule allows ([MS-XLS] 2.4.95 `typOperator`'s sibling `valType`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ValidationType {
+    /// Any value; also the undefined types 8 to 15, which Excel opens as "any value".
+    #[default]
+    Any,
+    Whole,
+    Decimal,
+    List,
+    Date,
+    Time,
+    TextLength,
+    Custom,
+}
+
+/// How a value is compared with one or two formulas: in data validation (whole, decimal,
+/// date, time and text length rules) and in "cell value is" conditional formats.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Operator {
+    #[default]
+    Between,
+    NotBetween,
+    Equal,
+    NotEqual,
+    Greater,
+    Less,
+    GreaterOrEqual,
+    LessOrEqual,
+}
+
+/// The alert shown for a value the rule refuses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ErrorStyle {
+    #[default]
+    Stop,
+    Warning,
+    Information,
+}
+
+/// A data validation rule (Dv, [MS-XLS] 2.4.95), in the terms SpreadsheetML uses for the same
+/// rule (`dataValidation`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DataValidation {
+    /// The ranges it covers. A range over every BIFF8 row (column) is a whole column (row) of
+    /// the 1,048,576 × 16,384 grid, as SpreadsheetML stores it.
+    pub ranges: Vec<Range>,
+    pub kind: ValidationType,
+    /// `Between` for the types without an operator.
+    pub operator: Operator,
+    /// The first formula as A1 text without `=`, relative references from the top left cell of
+    /// all the ranges. A literal list is quoted, its items separated by commas and each `"`
+    /// doubled (`"Red,Green"`), as SpreadsheetML's `formula1`. Empty for "any value".
+    pub formula1: String,
+    /// The upper bound of `Between` and `NotBetween`.
+    pub formula2: Option<String>,
+    pub allow_blank: bool,
+    /// A list shows its drop-down arrow in the cell.
+    pub in_cell_dropdown: bool,
+    pub prompt_title: String,
+    pub prompt: String,
+    pub show_prompt: bool,
+    pub error_title: String,
+    pub error: String,
+    pub error_style: ErrorStyle,
+    pub show_error: bool,
 }
 
 /// A user-defined name.
@@ -224,24 +286,6 @@ pub enum Color {
     Rgb(u32),
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum Underline {
-    #[default]
-    None,
-    Single,
-    Double,
-    SingleAccounting,
-    DoubleAccounting,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum Script {
-    #[default]
-    Baseline,
-    Superscript,
-    Subscript,
-}
-
 /// A Font record ([MS-XLS] 2.4.122).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Font {
@@ -262,29 +306,6 @@ pub struct Font {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum HAlign {
-    #[default]
-    General,
-    Left,
-    Center,
-    Right,
-    Fill,
-    Justify,
-    CenterAcross,
-    Distributed,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum VAlign {
-    Top,
-    Center,
-    #[default]
-    Bottom,
-    Justify,
-    Distributed,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Alignment {
     pub h: HAlign,
     pub v: VAlign,
@@ -293,25 +314,6 @@ pub struct Alignment {
     pub rotation: i16,
     pub indent: u8,
     pub shrink: bool,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum BorderStyle {
-    #[default]
-    None,
-    Thin,
-    Medium,
-    Dashed,
-    Dotted,
-    Thick,
-    Double,
-    Hair,
-    MediumDashed,
-    DashDot,
-    MediumDashDot,
-    DashDotDot,
-    MediumDashDotDot,
-    SlantDashDot,
 }
 
 /// One border side. A side without a style has the automatic colour.
@@ -331,31 +333,6 @@ pub struct Borders {
     pub diag_down: BorderLine,
     /// The diagonal from the bottom left corner up.
     pub diag_up: BorderLine,
-}
-
-/// Fill patterns, named as SpreadsheetML names them.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum Pattern {
-    #[default]
-    None,
-    Solid,
-    Gray50,
-    Gray75,
-    Gray25,
-    DarkHorizontal,
-    DarkVertical,
-    DarkDown,
-    DarkUp,
-    DarkGrid,
-    DarkTrellis,
-    LightHorizontal,
-    LightVertical,
-    LightDown,
-    LightUp,
-    LightGrid,
-    LightTrellis,
-    Gray125,
-    Gray0625,
 }
 
 /// A cell's fill. Without a pattern both colours are automatic.

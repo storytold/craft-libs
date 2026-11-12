@@ -1,11 +1,48 @@
 # craft-lottie
 
-Lottie (Bodymovin) JSON: the wire layer. A Lottie document is JSON, and most of what is hard about
-it is a handful of encodings that every layer, mask and shape reuses. This crate reads and writes
-those on `serde_json` values. It has no document model of its own yet: which layer, shape, effect
-and text feature becomes what in an application's document is the application's work.
+Lottie (Bodymovin) JSON: the document as the file has it, and the encodings its values use. Bytes
+in, a neutral model out, and back. Which layer, shape, effect and text feature becomes what in an
+application's document is the application's work.
 
 No file access: callers pass bytes, so the crate builds for wasm32.
+
+## The document model
+
+`Animation::read(bytes)` gives the document; `to_json` and `to_vec` write it. The model is the
+lottie-spec 1.0 object model, one struct per object and one field per key:
+
+- `Animation`: version, frame rate, frame range, size, `assets`, `layers`, `markers`, `fonts`,
+  `chars`, `meta`.
+- `Asset`: an image (`dir`, `path`, `embedded`) or a precomposition (`layers`).
+- `Layer`: the keys every layer has (name, `index`, `parent`, timing, blend mode, `transform`,
+  `masks`, `effects`, matte keys) and `content`, by `ty`: `Precomp`, `Solid`, `Image`, `Null`,
+  `Shape`, `Text`, or `Other` for a type the model has no struct for.
+- `Shape`: the keys every shape item has and `kind`, by `ty`: group, rectangle, ellipse, polystar,
+  path, fill, stroke, gradient fill and stroke, transform, trim, round corners, repeater, merge,
+  pucker and bloat, twist, zig-zag, offset path, or `Other`.
+- `Transform`, `Mask`, `Effect` (an effect and its values), `Marker`, `Fonts`, `Font`, `Char`.
+- `TextData`: the documents over time (`TextDocument`), range animators (`TextRange`,
+  `TextSelector`, `TextStyle`), alignment and path options.
+
+Every field is an `Option`: files leave keys out, and a writer sets what it needs. An animatable
+property is an `Animated`, the property's JSON; `Animated::read` gives its value or keyframes (see
+below). What a value means depends on the property, so the model does not decode values.
+
+Nothing a file holds is dropped because the model does not know it. A key the struct does not
+name, and a key whose value has another type than the struct expects, stay in the struct's `extra`
+and are written back. A layer or shape of an unknown `ty` keeps its `ty` and its keys. So a
+document read and written back is the same JSON, with three exceptions: an entry of a list that is
+not an object where objects are expected is left out, a whole number written `30.0` comes back
+`30`, and a flag written `1` or `0` where the schema has a boolean comes back `true` or `false`.
+
+`Limits` bounds what is read: bytes of JSON (256 MiB), nesting (128 levels, which is also where
+`serde_json` stops), layers of the document and its precompositions together (100,000), assets
+(20,000) and shape items (2,000,000). Passing one is `LottieError::TooLarge`. No reader panics on
+any input.
+
+## The encodings
+
+These work on `serde_json` values, for the values the model leaves as JSON.
 
 | Part | Read | Write |
 |---|---|---|
@@ -17,9 +54,8 @@ No file access: callers pass bytes, so the crate builds for wasm32.
 | Numbers, colours, `#rrggbb` | `nums`, `color`, `hex_color` | `round6`, `to_hex` |
 | Embedded images (`data:` URIs, RFC 4648 base64) | `base64::data_uri` | `base64::to_data_uri`, `image_mime` |
 
-Not here: the layer, shape, mask, effect and text item layouts (they are still in EffectCraft's
-`effectcraft-lottie`, written against its project model), and dotLottie (`.lottie`), which is a
-ZIP archive around the same JSON.
+Not here: dotLottie (`.lottie`), which is a ZIP archive around the same JSON, and layer styles
+(`sy`), which lottie-spec 1.0 does not define (they stay in a layer's `extra`).
 
 ## What the readers accept
 
@@ -38,9 +74,7 @@ tolerant where players are:
 - colours written 0..=255 instead of 0..=1;
 - a gradient list without alpha pairs, and a colour count larger than the list.
 
-Input is hostile: nothing is indexed by a number from the file, JSON nesting is bounded by
-`serde_json` (128 levels), and no reader panics. Sizes are those of the JSON the caller parsed;
-bound the file size before calling.
+Nothing is indexed by a number from the file, and no reader panics.
 
 ## Ease
 
@@ -61,6 +95,7 @@ computes.
 ## Sources and clean room
 
 Implemented from the public Lottie format description (the lottie-spec 1.0 schema and the
-LottieFiles format documentation); no player or exporter source was used. The code comes from
-EffectCraft's `effectcraft-lottie` crate. The four fixtures in `tests/fixtures` are hand-written
+LottieFiles format documentation); no player or exporter source was used. The encodings come from
+EffectCraft's `effectcraft-lottie` crate; the document model is written here from the same
+description. The four fixtures in `tests/fixtures` are hand-written
 JSON (original work), not exported from any product.

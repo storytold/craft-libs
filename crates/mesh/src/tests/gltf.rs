@@ -106,6 +106,24 @@ fn glb_quad_with_a_node_tree_and_a_material() {
     assert!((p[0] - -9.0).abs() < 1e-9 && (p[1] - 2.0).abs() < 1e-9 && p[2].abs() < 1e-9, "{p:?}");
 }
 
+#[test]
+fn gltf_preserves_authored_tangents_on_the_mesh_positions() {
+    let mut b = B::default();
+    let p = b.f32s(&QUAD[..9], "VEC3", 3);
+    let tangent = [1.0, 0.0, 0.0, -1.0].repeat(3);
+    let t = b.f32s(&tangent, "VEC4", 4);
+    let i = b.u16s(&[0, 1, 2]);
+    let scene = parse(&b.glb(json!({
+        "meshes": [{ "primitives": [{ "attributes": { "POSITION": p, "TANGENT": t }, "indices": i }] }]
+    })))
+    .unwrap();
+
+    scene.validate().unwrap();
+    let mesh = scene.meshes.first().unwrap();
+    assert_eq!(mesh.tangents, vec![[1.0, 0.0, 0.0, -1.0]; 3]);
+    assert!(mesh.parts.first().unwrap().has_tangents);
+}
+
 fn base64(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();

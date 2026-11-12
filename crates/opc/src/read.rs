@@ -2,27 +2,25 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::io::{Cursor, Read};
 use std::sync::Arc;
 
 use craft_xml::{El, Options};
 
-use crate::guard::check_entry_count;
 use crate::name::{normalize, rels_path};
 use crate::rels::{ContentTypes, Rels, targets_of};
 use crate::{Error, Limits, Oversized};
 
-/// Most bytes reserved for a part before any of it has been read, whatever size it declares.
-const MAX_PREALLOC: u64 = 16 * 1024 * 1024;
+type Zip<'a> = craft_zip::Archive<'a>;
 
-type Zip<'a> = zip::ZipArchive<Cursor<&'a [u8]>>;
-
-fn open_zip<'a>(bytes: &'a [u8], limits: &Limits) -> Result<Zip<'a>, Error> {
-    // Before `zip` parses every entry the end record declares.
-    check_entry_count(bytes, limits.max_entries as u64)?;
-    let zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| Error::Zip(e.to_string()))?;
-    if zip.len() > limits.max_entries {
-        return Err(Error::TooManyEntries { declared: zip.len() as u64, limit: limits.max_entries as u64 });
+/// The archive, its declared entry count checked before it is indexed. `max_total` is the
+/// archive's own total; a reader that keeps its own counts passes `u64::MAX`.
+fn open_zip<'a>(bytes: &'a [u8], limits: &Limits, max_total: u64) -> Result<Zip<'a>, Error> {
+    let zip = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: limits.max_entries as u64, max_total_bytes: max_total })
+        .map_err(crate::zip_error)?;
+    // `zip` keeps one entry of a repeated name. Part names are compared by spelling rules this
+    // crate applies itself (see `Package::new`); an exact repeat is noted, as other spellings are.
+    if zip.has_duplicate_names() {
+        log::warn!("opc: the archive repeats an entry name; one of the entries is read");
     }
     Ok(zip)
 }
@@ -52,62 +50,55 @@ impl Package {
     /// inflate without limit. A part over a limit refuses the package or is left out
     /// ([`Limits::oversized`]).
     pub fn open(bytes: &[u8], limits: &Limits) -> Result<Package, Error> {
-        let mut zip = open_zip(bytes, limits)?;
+        // This reader keeps its own two counts (bytes kept, bytes inflated), so the archive's is
+        // not used.
+        let mut zip = open_zip(bytes, limits, u64::MAX)?;
         let skip = limits.oversized == Oversized::Skip;
         let mut files = BTreeMap::new();
         let (mut total, mut work) = (0u64, 0u64);
-        for i in 0..zip.len() {
+        let entries: Vec<String> = zip.names().map(|n| n.into_owned()).collect();
+        for (i, entry) in entries.iter().enumerate() {
             if skip && work >= limits.max_work {
-                log::warn!("opc: decompression budget spent; skipping the remaining {} entries", zip.len().saturating_sub(i));
+                log::warn!("opc: decompression budget spent; skipping the remaining {} entries", entries.len().saturating_sub(i));
                 break;
             }
-            let mut f = match zip.by_index(i) {
-                Ok(f) => f,
-                Err(e) => {
-                    log::warn!("opc: skipping unreadable zip entry {i}: {e}");
-                    continue;
-                }
-            };
-            if f.is_dir() {
+            if entry.ends_with('/') {
                 continue;
             }
-            let name = match f.name() {
-                Ok(name) => stored_name(&name),
-                Err(e) => {
-                    log::warn!("opc: skipping zip entry {i} with an unreadable name: {e}");
-                    continue;
-                }
-            };
-            if f.size() > limits.max_part {
+            let name = stored_name(entry);
+            let size = zip.declared_size(entry).unwrap_or(0);
+            if size > limits.max_part {
                 if skip {
-                    log::warn!("opc: skipping oversized part {name} ({} bytes)", f.size());
+                    log::warn!("opc: skipping oversized part {name} ({size} bytes)");
                     continue;
                 }
                 return Err(Error::PartTooLarge { part: name, limit: limits.max_part });
             }
             let left = limits.max_total.saturating_sub(total).min(limits.max_work.saturating_sub(work));
             let room = limits.max_part.min(left);
-            let mut buf = Vec::with_capacity(f.size().min(MAX_PREALLOC) as usize);
-            let read = (&mut f).take(room.saturating_add(1)).read_to_end(&mut buf);
-            // Charged whether or not the part is kept.
-            work = work.saturating_add(buf.len() as u64);
-            if buf.len() as u64 > room {
+            if size > room {
+                // It fits the part limit but not what is left: refused before inflating anything.
                 if skip {
                     log::warn!("opc: part {name} exceeds size limits; skipped");
                     continue;
                 }
-                return Err(if left < limits.max_part {
-                    Error::PackageTooLarge { limit: limits.max_total.min(limits.max_work) }
-                } else {
-                    Error::PartTooLarge { part: name, limit: limits.max_part }
-                });
+                return Err(Error::PackageTooLarge { limit: limits.max_total.min(limits.max_work) });
             }
-            if let Err(e) = read {
-                log::warn!("opc: zip entry {name} unreadable: {e}");
-                continue;
+            match zip.read(entry, room) {
+                Ok(Some(buf)) => {
+                    work = work.saturating_add(buf.len() as u64);
+                    total = total.saturating_add(buf.len() as u64);
+                    files.insert(name, Arc::new(buf));
+                }
+                Ok(None) => {}
+                // A damaged entry, or one that inflates past the size it declares: left out and
+                // charged what it may have inflated, its declared size (the read stops one byte
+                // past it).
+                Err(e) => {
+                    work = work.saturating_add(size);
+                    log::warn!("opc: zip entry {name} unreadable: {e}");
+                }
             }
-            total = total.saturating_add(buf.len() as u64);
-            files.insert(name, Arc::new(buf));
         }
         Ok(Package::new(files))
     }
@@ -207,8 +198,8 @@ impl Package {
 /// reader that needs a few parts of a large file, or one part at a time.
 pub struct LazyPackage<'a> {
     zip: Zip<'a>,
-    /// Normalized part name → zip index (the first entry of a name).
-    names: HashMap<String, usize>,
+    /// Normalized part name → entry name (the first entry of a name).
+    names: HashMap<String, String>,
     total: u64,
     limits: Limits,
 }
@@ -217,12 +208,11 @@ impl<'a> LazyPackage<'a> {
     /// Indexes the archive. Nothing is inflated; [`Limits::max_work`] and
     /// [`Limits::oversized`] are not used.
     pub fn open(bytes: &'a [u8], limits: &Limits) -> Result<LazyPackage<'a>, Error> {
-        let zip = open_zip(bytes, limits)?;
+        // This reader keeps its own count, which a failed read spends (see `read_limited`).
+        let zip = open_zip(bytes, limits, u64::MAX)?;
         let mut names = HashMap::new();
-        for i in 0..zip.len() {
-            if let Some(Ok(n)) = zip.name_for_index(i) {
-                names.entry(normalize(&n)).or_insert(i);
-            }
+        for n in zip.names() {
+            names.entry(normalize(&n)).or_insert_with(|| n.into_owned());
         }
         Ok(LazyPackage { zip, names, total: 0, limits: *limits })
     }
@@ -236,6 +226,12 @@ impl<'a> LazyPackage<'a> {
 
     pub fn has(&self, part: &str) -> bool {
         self.names.contains_key(&normalize(part))
+    }
+
+    /// The stored spelling of part `name` (leading `/` ignored; case-insensitive), as
+    /// [`Package::canonical`] gives it: for a writer that keeps the package's part names.
+    pub fn canonical(&self, name: &str) -> Option<String> {
+        self.names.get(&normalize(name)).map(|n| n.trim_start_matches('/').replace('\\', "/"))
     }
 
     /// Bytes charged to [`Limits::max_total`] so far. It is the whole of it once a read has
@@ -270,31 +266,30 @@ impl<'a> LazyPackage<'a> {
     /// pay it again and again. Every later read is then a cheap error.
     pub fn read_limited(&mut self, part: &str, maximum: u64) -> Result<Option<Vec<u8>>, Error> {
         let maximum = maximum.min(self.limits.max_part);
-        let Some(&idx) = self.names.get(&normalize(part)) else {
+        let Some(entry) = self.names.get(&normalize(part)) else {
             return Ok(None);
         };
-        let mut f = self.zip.by_index(idx).map_err(|e| Error::Zip(format!("{part}: {e}")))?;
-        if f.size() > maximum {
+        let size = self.zip.declared_size(entry).unwrap_or(0);
+        if size > maximum {
             return Err(Error::PartTooLarge { part: part.to_string(), limit: maximum });
         }
         let remaining = self.limits.max_total.saturating_sub(self.total);
-        let limit = maximum.min(remaining);
-        let mut out = Vec::with_capacity(f.size().min(MAX_PREALLOC) as usize);
-        let read = (&mut f).take(limit.saturating_add(1)).read_to_end(&mut out);
-        if out.len() as u64 > limit {
+        if size > remaining {
             self.total = self.limits.max_total;
-            return Err(if remaining < maximum {
-                Error::PackageTooLarge { limit: self.limits.max_total }
-            } else {
-                Error::PartTooLarge { part: part.to_string(), limit: maximum }
-            });
+            return Err(Error::PackageTooLarge { limit: self.limits.max_total });
         }
-        if let Err(e) = read {
-            self.total = self.limits.max_total;
-            return Err(Error::Zip(format!("{part}: {e}")));
+        match self.zip.read(entry, maximum.min(remaining)) {
+            Ok(Some(out)) => {
+                self.total = self.total.saturating_add(out.len() as u64);
+                Ok(Some(out))
+            }
+            Ok(None) => Ok(None),
+            // Damaged, or inflating past the size it declares.
+            Err(e) => {
+                self.total = self.limits.max_total;
+                Err(Error::Zip(format!("{part}: {e}")))
+            }
         }
-        self.total = self.total.saturating_add(out.len() as u64);
-        Ok(Some(out))
     }
 
     /// Part `name` as XML, read with `options`. `Ok(None)` when there is no such part.
@@ -316,11 +311,9 @@ impl<'a> LazyPackage<'a> {
 /// The first part whose declared size is over [`Limits::max_part`], with that size: for telling
 /// the user which part made a package too large.
 pub fn declared_oversized(bytes: &[u8], limits: &Limits) -> Option<(String, u64)> {
-    let mut zip = open_zip(bytes, limits).ok()?;
-    (0..zip.len()).find_map(|i| {
-        let f = zip.by_index_raw(i).ok()?;
-        (f.size() > limits.max_part).then(|| (f.name().map(|n| n.into_owned()).unwrap_or_default(), f.size()))
-    })
+    let mut zip = open_zip(bytes, limits, u64::MAX).ok()?;
+    let names: Vec<String> = zip.names().map(|n| n.into_owned()).collect();
+    names.into_iter().find_map(|n| zip.declared_size(&n).filter(|size| *size > limits.max_part).map(|size| (n, size)))
 }
 
 #[cfg(test)]
