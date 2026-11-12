@@ -88,6 +88,30 @@ pub fn visible_slots<'a, T: PartialEq>(slots: &'a [ToolSlot<T>], hidden: &[T]) -
         .collect()
 }
 
+/// The rows of a rail of `cells` cells in `columns` columns, as the first cell of each row, split into groups: a row
+/// ends its group when one of its visible slots (`visible`, the slot indices in order) ends a group, or a hidden slot
+/// after it and before the next visible one does. Cells past the visible slots (the Edit Toolbar button) end nothing.
+pub(crate) fn row_groups<T>(slots: &[ToolSlot<T>], visible: &[usize], cells: usize, columns: usize) -> Vec<Vec<usize>> {
+    let columns = columns.max(1);
+    let ends = |k: usize| {
+        let Some(&from) = visible.get(k) else { return false };
+        let to = visible.get(k + 1).copied().unwrap_or(slots.len());
+        slots[from..to.max(from + 1).min(slots.len())].iter().any(|slot| slot.group_end)
+    };
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut group = Vec::new();
+    for first in (0..cells).step_by(columns) {
+        group.push(first);
+        if (first..(first + columns).min(cells)).any(ends) {
+            groups.push(std::mem::take(&mut group));
+        }
+    }
+    if !group.is_empty() {
+        groups.push(group);
+    }
+    groups
+}
+
 /// The tool a slot shows: the current tool when the slot has it, else the one remembered in `last_used` if it is
 /// still among the visible `tools` and `enabled`, else the first enabled tool, else the first. `None` for an empty
 /// slot. `enabled` is the command state of a tool.

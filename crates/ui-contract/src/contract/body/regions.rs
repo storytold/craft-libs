@@ -71,6 +71,7 @@ pub(super) fn gap_of(tokens: &UiTokens, gap: Gap) -> f32 {
         Gap::Section => gaps.section,
         Gap::CardColumn => gaps.card_column,
         Gap::CardRow => gaps.card_row,
+        Gap::Inline => gaps.inline,
         _ => gaps.row,
     }
 }

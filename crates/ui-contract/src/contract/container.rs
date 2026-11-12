@@ -575,6 +575,8 @@ pub enum Gap {
     CardColumn,
     /// `space.gap.card_row`.
     CardRow,
+    /// `space.gap.inline`: between groups of tools in a rail.
+    Inline,
 }
 
 /// Set by a bar for its body: its fields put `space.gap.item` between a caption and the control, a vertical divider

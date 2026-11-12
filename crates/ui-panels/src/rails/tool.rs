@@ -8,7 +8,7 @@ use crate::contract::{
     Scroll, Show as _, ShowContainer as _, Sizing, WordSetCx as _, clicked,
 };
 use crate::contract::{BodyCx, BodyLayout};
-use crate::layout_components::Row;
+use crate::layout_components::{Row, Stack};
 use crate::runtime::access::Name;
 use crate::runtime::commands::Commands as _;
 use crate::runtime::env::{Env, Label};
@@ -24,6 +24,7 @@ mod drag;
 #[cfg(feature = "testing")]
 pub(super) mod stories;
 
+use data::row_groups;
 pub use data::{LastUsed, RailTool, SlotId, ToolSlot, remembered, shown_tool, visible_slots};
 pub(crate) use drag::SlotDrop;
 pub use drag::{DropAt, ToolDrag, ToolDropped, drop_in_slot};
@@ -101,7 +102,8 @@ type FooterFn<'a> = Box<dyn FnMut(&mut Ui, RailFooter) + 'a>;
 
 /// The rail of tool slots, as a side panel at one edge of the window: one `FlyoutButton` per visible slot showing the
 /// slot's shown tool, the slot with the current tool toggled on. A click selects the shown tool, a row of the flyout
-/// selects that tool. With two columns the slots fill rows in reading order. The column toggle is the header and the
+/// selects that tool. With two columns the slots fill rows in reading order. A slot that ends a group leaves
+/// `space.gap.inline` after its row; slots within a group sit `space.gap.tight` apart. The column toggle is the header and the
 /// Edit Toolbar button follows the last slot; the host's footer stays in view under the slots, which scroll when the
 /// window is short. The buttons are one roving group: arrow keys move between them by the grid. While the toolbar is
 /// edited the buttons are dragged and take drops, and report the drop in the output.
@@ -147,7 +149,7 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
             .pad(Pad::Control)
             .sizing(Sizing::Content)
             .layout(BodyLayout::stack())
-            .body_gap(Gap::Tight)
+            .body_gap(Gap::Inline)
             .child_size(ControlSize::Md)
             .scroll(Scroll::vertical())
             .footer(FooterRegion::new());
@@ -176,7 +178,15 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
     fn at_end(&self) -> bool {
         self.edge == PaneEdge::End
     }
+}
 
+/// The side of a rail at `edge` that faces the canvas, where its flyouts and drawer open: `PaneEdge::End` is the end
+/// edge, any other value the start edge.
+pub(crate) fn canvas_side(edge: PaneEdge) -> Side {
+    if edge == PaneEdge::End { Side::Start } else { Side::End }
+}
+
+impl<'a, T: Value + 'static> ToolRail<'a, T> {
     /// Shows the rail. `footer` draws under the last slot (colour chips, Quick Mask, Screen Mode); it stays in view
     /// when the window is short.
     pub fn show_rail(mut self, ui: &mut Ui, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> ToolRailOutput<T> {
@@ -188,7 +198,7 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
         self.footer = Some(Box::new(footer));
         let (slots, current, last_used, hidden) = (self.slots, self.current, self.last_used, self.hidden);
         let (editing, edit_label) = (self.editing, self.edit_toolbar.clone());
-        let opens = if self.at_end() { Side::Start } else { Side::End };
+        let opens = canvas_side(self.edge);
         let last = remembered(slots, current, last_used);
         let mut collected = Collected::default();
         let shown = self.show(ui, |ui, cx| {
@@ -196,44 +206,48 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
             let visible = visible_slots(slots, hidden);
             let cells = visible.len() + usize::from(edit_label.is_some());
             let enabled = |tool: &RailTool<T>| cx.resolve_command(tool.command.clone()).is_some_and(|resolved| resolved.enabled);
-            let rows: Vec<usize> = (0..cells).step_by(columns).collect();
-            for first in rows {
-                Row::new().gap(Gap::Tight).show(ui, |ui, _| {
-                    for k in first..(first + columns).min(cells) {
-                        match visible.get(k) {
-                            Some((index, tools)) => {
-                                let slot = &slots[*index];
-                                let owned: Vec<RailTool<T>> = tools.iter().map(|tool| (*tool).clone()).collect();
-                                let Some(shown) = shown_tool(current, slot.id, tools, last_used, enabled) else { continue };
-                                let selected = tools.iter().any(|tool| tool.id == *current);
-                                let mut button = FlyoutButton::new(&owned, &shown.id)
-                                    .id_salt(("slot", slot.id))
-                                    .selected(selected)
-                                    .enabled(tools.iter().any(|tool| enabled(tool)))
-                                    .opens(opens);
-                                if editing {
-                                    button = button.edit(SlotEdit::new(slot.id, *index, slot.tools.len(), columns == 1));
-                                }
-                                let out = button.show(ui);
-                                if out.select.is_some() {
-                                    collected.select = out.select;
-                                }
-                                if out.double_clicked {
-                                    collected.double_clicked = Some(shown.id.clone());
-                                }
-                                if out.opened {
-                                    collected.flyout = Some(slot.id);
-                                }
-                                if out.dropped.is_some() {
-                                    collected.dropped = out.dropped;
+            let at: Vec<usize> = visible.iter().map(|(index, _)| *index).collect();
+            for group in row_groups(slots, &at, cells, columns) {
+                Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+                    for &first in &group {
+                        Row::new().gap(Gap::Tight).show(ui, |ui, _| {
+                            for k in first..(first + columns).min(cells) {
+                                match visible.get(k) {
+                                    Some((index, tools)) => {
+                                        let slot = &slots[*index];
+                                        let owned: Vec<RailTool<T>> = tools.iter().map(|tool| (*tool).clone()).collect();
+                                        let Some(shown) = shown_tool(current, slot.id, tools, last_used, enabled) else { continue };
+                                        let selected = tools.iter().any(|tool| tool.id == *current);
+                                        let mut button = FlyoutButton::new(&owned, &shown.id)
+                                            .id_salt(("slot", slot.id))
+                                            .selected(selected)
+                                            .enabled(tools.iter().any(|tool| enabled(tool)))
+                                            .opens(opens);
+                                        if editing {
+                                            button = button.edit(SlotEdit::new(slot.id, *index, slot.tools.len(), columns == 1));
+                                        }
+                                        let out = button.show(ui);
+                                        if out.select.is_some() {
+                                            collected.select = out.select;
+                                        }
+                                        if out.double_clicked {
+                                            collected.double_clicked = Some(shown.id.clone());
+                                        }
+                                        if out.opened {
+                                            collected.flyout = Some(slot.id);
+                                        }
+                                        if out.dropped.is_some() {
+                                            collected.dropped = out.dropped;
+                                        }
+                                    }
+                                    None => {
+                                        let label = edit_label.clone().unwrap_or(Label::Empty);
+                                        let more = IconButton::new(IconId::new("more")).id_salt("edit-toolbar").label(label).show(ui);
+                                        collected.edit_toolbar = Some(more.response);
+                                    }
                                 }
                             }
-                            None => {
-                                let label = edit_label.clone().unwrap_or(Label::Empty);
-                                let more = IconButton::new(IconId::new("more")).id_salt("edit-toolbar").label(label).show(ui);
-                                collected.edit_toolbar = Some(more.response);
-                            }
-                        }
+                        });
                     }
                 });
             }

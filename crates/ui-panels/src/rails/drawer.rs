@@ -1,13 +1,13 @@
 //! `ToolbarDrawer`: Edit Toolbar's All Tools drawer beside the tool rail, where tools move between the toolbar and the
 //! drawer.
 
-use super::tool::{DropAt, RailTool, SlotId, ToolDrag, ToolDropped, ToolSlot};
+use super::tool::{DropAt, RailTool, SlotId, ToolDrag, ToolDropped, ToolSlot, canvas_side};
 use super::words::RailWords;
 use crate::buttons::{Button, IconButton};
 use crate::contract::overlay::{Anchor, Dismiss, Overlay, Place};
 use crate::contract::{
-    ActivateOn, Bind, CollectionEvent, Gap, ListDrag, NoValue, Outcome, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
-    Sizing, clicked,
+    ActivateOn, Bind, CollectionEvent, Gap, ListDrag, NoValue, Outcome, PaneEdge, Props as _, SelectMode, Show as _, ShowCollection as _,
+    ShowContainer as _, Sizing, clicked,
 };
 use crate::display::{Shade, Text};
 use crate::layout_components::{Row, Stack};
@@ -19,7 +19,7 @@ use crate::runtime::env::{Env, Label};
 use crate::runtime::windows::os_of;
 use crate::sections::DropAction;
 use crate::style::TypeRole;
-use craft_behavior::overlay::{Align, Side};
+use craft_behavior::overlay::Align;
 use craft_behavior::{DisplayOrder, IconId, ItemSource, Value};
 use egui::{Rect, Response, Ui};
 use std::borrow::Cow;
@@ -132,9 +132,9 @@ pub struct ToolbarDrawer<'a, T: Value + 'static> {
     rail: Rect,
     groups: &'a [DrawerGroup<T>],
     toolbar: &'a [ToolSlot<T>],
-    /// The side of the rail the drawer opens on.
+    /// The window edge the rail sits at, as given to `ToolRail::edge`: the drawer opens on the rail's canvas side.
     #[prop]
-    opens: Side,
+    edge: PaneEdge,
     dropped: Option<ToolDropped>,
     opener: Option<Response>,
 }
@@ -143,7 +143,7 @@ impl<'a, T: Value + 'static> ToolbarDrawer<'a, T> {
     /// A drawer beside `rail` (the rail's rect), listing `groups`, over a toolbar of `toolbar` slots. `dropped` is the
     /// drag the rail took in this pass (`ToolRailOutput::dropped`); the drawer turns it into an edit.
     pub fn new(rail: Rect, groups: &'a [DrawerGroup<T>], toolbar: &'a [ToolSlot<T>], dropped: Option<ToolDropped>) -> Self {
-        ToolbarDrawer { rail, groups, toolbar, opens: Side::End, dropped, opener: None }
+        ToolbarDrawer { rail, groups, toolbar, edge: PaneEdge::Start, dropped, opener: None }
     }
 
     /// The control that opened the drawer, the rail's Edit Toolbar button (`ToolRailOutput::edit_toolbar`): the focus
@@ -217,7 +217,8 @@ fn on_toolbar<T: PartialEq>(toolbar: &[ToolSlot<T>], id: &T) -> bool {
 impl<T: Value + 'static> ToolbarDrawer<'_, T> {
     /// Shows the drawer and reports what the user changed.
     pub fn show(self, ui: &mut Ui) -> ToolbarDrawerOutput<T> {
-        let ToolbarDrawer { rail, groups, toolbar, opens, dropped, opener } = self;
+        let ToolbarDrawer { rail, groups, toolbar, edge, dropped, opener } = self;
+        let opens = canvas_side(edge);
         let env = Env::of(ui);
         let words = env.words::<RailWords>();
         let os = os_of(ui.ctx());
