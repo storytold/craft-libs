@@ -77,7 +77,7 @@ pub mod ljpeg;
 #[cfg(feature = "mef")]
 mod mef;
 #[cfg(feature = "mrw")]
-mod mrw;
+pub mod mrw;
 #[cfg(feature = "nef")]
 mod nef;
 #[cfg(feature = "nef")]
