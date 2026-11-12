@@ -68,11 +68,17 @@ fn nikon_color_space(bytes: &[u8], tiff: &Tiff, exif: &Ifd, make: &str) -> Optio
 
 /// The first frame (SOF) marker of a JPEG and its position, from the marker segments before the first scan.
 fn first_frame(b: &[u8]) -> Option<(u8, usize)> {
+    first_frame_within(b, &mut { usize::MAX })
+}
+
+/// [`first_frame`] charging `work` one per step (a segment, or a fill byte); `None` too when it runs out.
+fn first_frame_within(b: &[u8], work: &mut usize) -> Option<(u8, usize)> {
     if b.len() < 4 || !b.starts_with(&[0xff, 0xd8]) {
         return None;
     }
     let mut i = 2usize;
     while i.checked_add(4)? <= b.len() {
+        *work = work.checked_sub(1)?;
         if *b.get(i)? != 0xff {
             return None;
         }
@@ -200,7 +206,8 @@ fn candidates<'a>(data: &'a [u8], ifd: &Ifd, base: u64, out: &mut Vec<&'a [u8]>,
     }
 }
 
-/// The largest embedded preview, if any: a JPEG, or (DNG 1.7) a JPEG XL file.
+/// The largest embedded preview, if any: a JPEG, or (DNG 1.7) a JPEG XL file, or for a Hasselblad 3FR / FFF, which
+/// has no JPEG, its uncompressed RGB preview wrapped as a baseline TIFF.
 pub fn embedded_preview(bytes: &[u8]) -> Option<Vec<u8>> {
     preview_covering(bytes, None)
 }
@@ -258,6 +265,7 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
             }
         }
     }
+    bound_candidates(&mut found, bytes.len());
     let largest = found.iter().copied().filter(|s| is_dct_jpeg(s) || is_jxl(s)).max_by_key(|s| s.len());
     let best = min_edge
         .zip(largest)
@@ -265,7 +273,30 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
         .or(largest)
         .map(|s| if is_jxl(s) { s.to_vec() } else { trim_eoi(s).to_vec() });
     // a TIFF raw whose preview no tag points to: one we can't decode (Leaf MOS), or Epson ERF (in its maker note)
-    best.or_else(|| format.filter(|f| !f.is_supported() || *f == crate::RawFormat::Erf).and_then(|_| scan_for_jpeg(bytes)))
+    let best = best.or_else(|| format.filter(|f| !f.is_supported() || *f == crate::RawFormat::Erf).and_then(|_| scan_for_jpeg(bytes)));
+    // Hasselblad 3FR / FFF carry no JPEG, only uncompressed RGB images: one wrapped as a baseline TIFF
+    #[cfg(feature = "hasselblad")]
+    let best = best.or_else(|| (format == Some(crate::RawFormat::CfaTiff)).then(|| crate::hasselblad::rgb_preview(&tiff, bytes)).flatten());
+    best
+}
+
+/// Drops candidate ranges that repeat an earlier one, that are not a displayable JPEG or JPEG XL, and valid ones
+/// past a shared budget of [`scan_budget`] bytes: a range is charged only once it validates, so invalid ranges
+/// covering most of the file cannot use up the budget before a valid preview. The header walks that validate
+/// (or reject) the ranges share a second budget of the same size, charged for every walk, so many ranges
+/// that start a JPEG header and run through fill bytes cannot each cost a walk of their length.
+fn bound_candidates(found: &mut Vec<&[u8]>, file_len: usize) {
+    let mut seen = std::collections::HashSet::new();
+    let mut left = scan_budget(file_len);
+    let mut work = scan_budget(file_len);
+    found.retain(|s| {
+        let mut dct = || first_frame_within(s, &mut work).is_some_and(|(m, _)| matches!(m, 0xc0..=0xc2));
+        if !seen.insert((s.as_ptr() as usize, s.len())) || !(dct() || is_jxl(s)) || s.len() > left {
+            return false;
+        }
+        left -= s.len();
+        true
+    });
 }
 
 /// The end of the DCT JPEG whose SOI is at `soi` (exclusive index after its EOI) and its component count,
@@ -408,3 +439,52 @@ fn trim_eoi(s: &[u8]) -> &[u8] {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod bound_tests {
+    #[test]
+    fn repeated_and_over_budget_candidates_are_dropped() {
+        let mut data = vec![0u8; 4 << 20];
+        // a valid JPEG header every 16 bytes, so each range below validates
+        for i in 0..64 {
+            data[i * 16..i * 16 + 15].copy_from_slice(&[0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]);
+        }
+        let mut found: Vec<&[u8]> = vec![&data[..], &data[..], &data[..]];
+        super::bound_candidates(&mut found, data.len());
+        assert_eq!(found.len(), 1);
+        // overlapping but unequal ranges stop at the shared budget (8 x the file, at least 1 MiB)
+        let mut found: Vec<&[u8]> = (0..64).map(|i| &data[i * 16..]).collect();
+        super::bound_candidates(&mut found, data.len());
+        assert!(found.len() <= 8 && found.iter().map(|s| s.len()).sum::<usize>() <= 8 * data.len());
+    }
+
+    #[test]
+    fn invalid_ranges_do_not_use_up_the_budget_before_a_valid_preview() {
+        let mut data = vec![0u8; 2 << 20];
+        let jpeg = [0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0];
+        data[1 << 20..(1 << 20) + jpeg.len()].copy_from_slice(&jpeg);
+        // 40 distinct invalid ranges of nearly the whole file (far past the 8 x budget), then the valid one
+        let mut found: Vec<&[u8]> = (0..40).map(|i| &data[i..1 << 20]).collect();
+        found.push(&data[1 << 20..]);
+        super::bound_candidates(&mut found, data.len());
+        assert_eq!(found.len(), 1);
+        assert!(found[0].starts_with(&[0xff, 0xd8]));
+    }
+
+    #[test]
+    fn header_walks_of_many_fill_byte_ranges_share_a_budget() {
+        // a JPEG header followed by 100 000 fill bytes and no frame: each walk would run to the end
+        let mut data = vec![0xffu8; 100_100];
+        data[..2].copy_from_slice(&[0xff, 0xd8]);
+        let valid = [0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0];
+        // 50 distinct such ranges (5 M steps against the 1 MiB budget), then a valid header
+        let mut found: Vec<&[u8]> = (0..50).map(|i| &data[..100_000 + i]).collect();
+        found.push(&valid);
+        super::bound_candidates(&mut found, data.len());
+        assert!(found.is_empty(), "the walks stop at the shared budget, so the later header is not reached");
+        // the same header with no hostile ranges before it is kept
+        let mut found: Vec<&[u8]> = vec![&valid];
+        super::bound_candidates(&mut found, data.len());
+        assert_eq!(found.len(), 1);
+    }
+}

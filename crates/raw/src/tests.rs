@@ -207,7 +207,8 @@ fn private_containers_are_recognised_by_their_magic() {
     assert_eq!(probe(b"FOVb\x02\0\x02\0"), Some(RawFormat::X3f));
     assert_eq!(RawFormat::Crw.is_supported(), cfg!(feature = "crw"));
     assert!(RawFormat::Dng.is_supported());
-    assert!(!RawFormat::Mrw.is_supported() && !RawFormat::X3f.is_supported());
+    assert_eq!(RawFormat::Mrw.is_supported(), cfg!(feature = "mrw"));
+    assert!(!RawFormat::X3f.is_supported());
     // a CRW signature with no heap behind it is corrupt, not a panic
     #[cfg(feature = "crw")]
     assert!(matches!(decode(b"II\x1a\0\0\0HEAPCCDR\0\0"), Err(RawError::Corrupt(_))));
@@ -390,6 +391,177 @@ fn hasselblad_make_with_sony_raw_coding_is_arw() {
     // a Hasselblad CFA image in another coding is not an ARW
     assert_ne!(probe(&file("HASSELBLAD", 1, false)), Some(RawFormat::Arw));
     assert_ne!(probe(&file("HASSELBLAD", 7, false)), Some(RawFormat::Arw));
+}
+
+#[cfg(feature = "hasselblad")]
+mod cfa_tiff {
+    use super::*;
+
+    // --- TIFF raws that describe their raw IFD the way DNG does but carry no DNG version tag ---
+
+    /// 8 x 6 samples, 16 bits, value `1000 + 100 y + x`.
+    fn cfa_samples() -> Vec<u16> {
+        (0..48u16).map(|i| 1000 + 100 * (i / 8) + i % 8).collect()
+    }
+
+    /// A small raw in the layout of the Hasselblad 3FR/FFF family: IFD0 is a reduced RGB image with the
+    /// colour tags, a SubIFD holds the full-resolution CFA image (no `CFAPattern`, DNG-style levels and
+    /// crop). `strip` is the CFA image's data and `compression` its coding.
+    fn plain_cfa_tiff(compression: u16, strip: Vec<u8>, pattern: Option<[u8; 4]>) -> Vec<u8> {
+        let mut raw = IfdBuilder::new();
+        raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
+        raw.set(t::IMAGE_WIDTH, Value::Long(vec![8]));
+        raw.set(t::IMAGE_LENGTH, Value::Long(vec![6]));
+        raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+        raw.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![1]));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
+        raw.set(t::COMPRESSION, Value::Short(vec![compression]));
+        raw.set(t::BLACK_LEVEL, Value::Rational(vec![(256, 1)]));
+        raw.set(t::WHITE_LEVEL, Value::Long(vec![60000]));
+        raw.set(t::DEFAULT_CROP_ORIGIN, Value::Short(vec![2, 2]));
+        raw.set(t::DEFAULT_CROP_SIZE, Value::Short(vec![4, 2]));
+        if let Some(p) = pattern {
+            raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
+            raw.set(t::CFA_PATTERN_EP, Value::Byte(p.to_vec()));
+        }
+        raw.set_image(ImageData::Strips { rows_per_strip: 6, strips: vec![strip] });
+        let mut ifd0 = rgb_ifd(4, 3);
+        ifd0.set(t::MAKE, Value::Ascii("Hasselblad".into()));
+        ifd0.set(t::COLOR_MATRIX_1, Value::SRational(vec![(5, 10), (-1, 10), (0, 10), (-5, 10), (12, 10), (3, 10), (-1, 10), (2, 10), (6, 10)]));
+        ifd0.set(t::AS_SHOT_NEUTRAL, Value::Rational(vec![(2, 5), (1, 1), (3, 5)]));
+        ifd0.add_sub_ifd(raw);
+        write(&[ifd0])
+    }
+
+    fn le_words(v: &[u16]) -> Vec<u8> {
+        v.iter().flat_map(|x| x.to_le_bytes()).collect()
+    }
+
+    /// Known answer: samples, black and white level, crop and colour come from the file's own tags; the
+    /// layout it does not state is RGGB.
+    #[test]
+    fn uncompressed_cfa_tiff_without_a_dng_version_decodes() {
+        let bytes = plain_cfa_tiff(1, le_words(&cfa_samples()), None);
+        assert_eq!(probe(&bytes), Some(RawFormat::CfaTiff));
+        let r = decode(&bytes).unwrap();
+        assert_eq!((r.format, r.width, r.height, r.bits), (RawFormat::CfaTiff, 8, 6, 16));
+        assert_eq!(r.data, RawData::U16(cfa_samples()));
+        assert_eq!(r.cfa.as_ref().unwrap().name(), "RGGB");
+        assert_eq!((r.black.mean(), r.white.clone()), (256.0, vec![60000.0]));
+        assert_eq!(r.crop, Rect::new(2, 2, 4, 2));
+        assert!(r.color.color_matrix[0].is_some());
+        assert_eq!(r.color.as_shot_neutral, Some([0.4, 1.0, 0.6]));
+        // headers only: the same description without samples
+        let i = probe_info(&bytes).unwrap();
+        assert_eq!((i.format, i.cfa.as_ref().map(Cfa::name), i.crop), (RawFormat::CfaTiff, Some("RGGB".to_string()), Rect::new(2, 2, 4, 2)));
+    }
+
+    /// Without DNG's white-balance tag the file is left alone (a Kodak or Sinar TIFF with a CFA IFD, say).
+    #[test]
+    fn cfa_tiff_without_a_white_balance_tag_is_not_claimed() {
+        let mut raw = IfdBuilder::new();
+        raw.set(t::IMAGE_WIDTH, Value::Long(vec![8]));
+        raw.set(t::IMAGE_LENGTH, Value::Long(vec![6]));
+        raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+        raw.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![1]));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
+        raw.set(t::COMPRESSION, Value::Short(vec![1]));
+        raw.set_image(ImageData::Strips { rows_per_strip: 6, strips: vec![le_words(&cfa_samples())] });
+        let mut ifd0 = rgb_ifd(4, 3);
+        ifd0.add_sub_ifd(raw);
+        assert_eq!(probe(&write(&[ifd0])), Some(RawFormat::OtherTiff));
+    }
+
+    /// A stated `CFAPattern` wins over the RGGB default.
+    #[test]
+    fn cfa_tiff_keeps_a_stated_pattern() {
+        let bytes = plain_cfa_tiff(1, le_words(&cfa_samples()), Some([2, 1, 1, 0]));
+        assert_eq!(decode(&bytes).unwrap().cfa.unwrap().name(), "BGGR");
+    }
+
+    /// The lossless-JPEG coding of the same layout goes through the lossless decoder (one strip for the
+    /// whole image, as the 3FR/FFF files have it).
+    #[test]
+    fn lossless_jpeg_cfa_tiff_decodes() {
+        let strip = ljpeg::encode(&cfa_samples(), 8, 6, 1, 16, 1, 0);
+        let bytes = plain_cfa_tiff(7, strip, None);
+        assert_eq!(probe(&bytes), Some(RawFormat::CfaTiff));
+        let r = decode(&bytes).unwrap();
+        assert_eq!(r.data, RawData::U16(cfa_samples()));
+        assert_eq!(r.cfa.unwrap().name(), "RGGB");
+    }
+
+    /// Hasselblad's own lossless-JPEG coding (selection value 8, as in FFF and most compressed 3FR files) of the
+    /// same layout decodes: the file is read like the uncompressed one.
+    #[test]
+    fn selection_value_8_cfa_tiff_decodes() {
+        let strip = ljpeg::tests::encode_hasselblad(&cfa_samples(), 8, 6);
+        let bytes = plain_cfa_tiff(7, strip, None);
+        assert_eq!(probe(&bytes), Some(RawFormat::CfaTiff));
+        let r = decode(&bytes).unwrap();
+        assert_eq!((r.format, r.width, r.height), (RawFormat::CfaTiff, 8, 6));
+        assert_eq!(r.data, RawData::U16(cfa_samples()));
+        assert_eq!(r.cfa.unwrap().name(), "RGGB");
+        assert_eq!(probe_info(&bytes).unwrap().format, RawFormat::CfaTiff);
+    }
+
+    /// A lossless-JPEG scan whose predictor selection value is neither 0 to 7 (T.81) nor 8 (Hasselblad) is not a
+    /// coding the lossless decoder knows: the file stays an undecodable raw, with that as the reason, and keeps the
+    /// stand-in preview an unsupported container gets.
+    #[test]
+    fn cfa_tiff_with_an_unknown_predictor_stays_undecodable() {
+        let mut strip = ljpeg::encode(&cfa_samples(), 8, 6, 1, 16, 1, 0);
+        let sos = strip.windows(2).position(|w| w == [0xff, 0xda]).unwrap();
+        let ss = sos + 2 + 2 + 1 + 2;
+        assert_eq!(strip[ss], 1, "selection value byte");
+        strip[ss] = 9;
+        assert!(matches!(ljpeg::decode(&strip, 1 << 20), Err(RawError::Unsupported(w)) if w.contains("selection value 9")));
+        let bytes = plain_cfa_tiff(7, strip, None);
+        assert_eq!(probe(&bytes), Some(RawFormat::OtherTiff));
+        assert!(!RawFormat::OtherTiff.is_supported());
+        assert_eq!(embedded_preview(&bytes), None, "no JPEG in the file, and an undecodable raw gets no RGB stand-in");
+        let Err(RawError::Unsupported(why)) = decode(&bytes) else { panic!("expected Unsupported") };
+        assert!(why.contains("lossless JPEG") && why.contains("selection value 9"), "{why}");
+    }
+
+    /// Other codings of a CFA IFD (here Deflate) are not claimed by the plain reader.
+    #[test]
+    fn cfa_tiff_with_another_coding_is_not_claimed() {
+        let bytes = plain_cfa_tiff(8, vec![0; 96], None);
+        assert_eq!(probe(&bytes), Some(RawFormat::OtherTiff));
+    }
+
+    /// PhotoCraft's reader: four black levels without a `BlackLevelRepeatDim` are one per site of the 2 × 2 CFA in a
+    /// file that is not a DNG. The DNG reader took the first for every site. In a DNG the count must match the repeat.
+    #[test]
+    fn four_black_levels_without_a_repeat_are_per_cfa_site_outside_dng() {
+        let with_blacks = |dng: bool| {
+            let mut raw = IfdBuilder::new();
+            raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
+            raw.set(t::IMAGE_WIDTH, Value::Long(vec![8]));
+            raw.set(t::IMAGE_LENGTH, Value::Long(vec![6]));
+            raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+            raw.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![1]));
+            raw.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
+            raw.set(t::COMPRESSION, Value::Short(vec![1]));
+            raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
+            raw.set(t::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 1, 2]));
+            raw.set(t::BLACK_LEVEL, Value::Short(vec![250, 252, 254, 256]));
+            raw.set_image(ImageData::Strips { rows_per_strip: 6, strips: vec![le_words(&cfa_samples())] });
+            let mut ifd0 = rgb_ifd(4, 3);
+            ifd0.set(t::MAKE, Value::Ascii("Hasselblad".into()));
+            ifd0.set(t::AS_SHOT_NEUTRAL, Value::Rational(vec![(2, 5), (1, 1), (3, 5)]));
+            if dng {
+                ifd0.set(t::DNG_VERSION, Value::Byte(vec![1, 4, 0, 0]));
+            }
+            ifd0.add_sub_ifd(raw);
+            decode(&write(&[ifd0])).unwrap().black
+        };
+        let b = with_blacks(false);
+        assert_eq!((b.repeat_rows, b.repeat_cols, b.values.clone()), (2, 2, vec![250.0, 252.0, 254.0, 256.0]));
+        assert_eq!((b.at(0, 0, 0, 1), b.at(1, 0, 0, 1), b.at(0, 1, 0, 1), b.at(3, 3, 0, 1)), (250.0, 252.0, 254.0, 256.0));
+        assert_eq!(with_blacks(true), BlackLevel::uniform(250.0), "a DNG's count has to match its repeat");
+    }
 }
 
 /// A Samsung-branded body whose maker note has a Pentax layout is read by the Pentax reader; another
