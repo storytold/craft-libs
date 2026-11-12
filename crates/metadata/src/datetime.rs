@@ -107,7 +107,8 @@ impl DateTime {
             _ => return None,
         };
         let (h, m) = match rest.split_once(':') {
-            Some((h, m)) => (num(h)?, num(m)?),
+            Some((h, m)) if m.len() == 2 => (num(h)?, num(m)?),
+            Some(_) => return None,
             None if rest.len() == 4 => (num(rest.get(..2)?)?, num(rest.get(2..)?)?),
             None => (num(rest)?, 0),
         };
@@ -237,6 +238,14 @@ impl DateTime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn offset_rejects_short_minute_field() {
+        assert_eq!(DateTime::parse_offset("+08:5"), None);
+        assert_eq!(DateTime::parse_offset("+1:2"), None);
+        assert_eq!(DateTime::parse_offset("+08:05"), Some(485));
+        assert_eq!(DateTime::parse_offset("-05:30"), Some(-330));
+    }
 
     #[test]
     fn exif_forms() {
