@@ -27,6 +27,12 @@
         "md": 30.0,
         "sm": 24.0
       },
+      "dialog": {
+        "button": 84.0,
+        "least": 380.0,
+        "side_button": 96.0,
+        "wrap": 440.0
+      },
       "dock": {
         "column": 340.0
       },

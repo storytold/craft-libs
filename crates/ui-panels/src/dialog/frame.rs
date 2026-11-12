@@ -3,8 +3,8 @@
 
 use super::host::DialogResult;
 use crate::contract::{
-    BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterRegion, Gap, HeaderRegion, Pad, Props as _, Role, Scroll, Show as _,
-    ShowContainer as _, WordSetCx as _,
+    BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterRegion, Gap, HeaderRegion, LeastWidth, Pad, Props as _, Role, Scroll,
+    Show as _, ShowContainer as _, WordSetCx as _, WrapWidth,
 };
 use crate::contract::{NoValue, Outcome};
 use crate::runtime::env::Label;
@@ -227,10 +227,11 @@ pub const FOOTER: FooterRegion = FooterRegion::new().gap(REGION_GAP);
 #[doc(hidden)]
 pub const SIDE_BUTTONS: EndRegion = EndRegion::new().gap(REGION_GAP);
 
-/// The props every dialog shell starts from: the dialog surface and the dialog header. A layer scrolls its body
-/// vertically unless the body is a collection; a frame in a parent's flow asks for the scroll itself.
+/// The props every dialog shell starts from: the dialog surface, the dialog header and the dialog width, at least
+/// `size.dialog.least` with paragraphs wrapping at `size.dialog.wrap`. A layer scrolls its body vertically unless the
+/// body is a collection; a frame in a parent's flow asks for the scroll itself.
 pub(crate) fn chrome_props() -> ContainerProps {
-    ContainerProps::new().surface(SurfaceKind::Dialog).pad(Pad::Regular).header(HEADER)
+    ContainerProps::new().surface(SurfaceKind::Dialog).pad(Pad::Regular).header(HEADER).least_width(LeastWidth::Dialog).wrap_width(WrapWidth::Dialog)
 }
 
 /// The style of a dialog frame: the surface and padding come from the container.

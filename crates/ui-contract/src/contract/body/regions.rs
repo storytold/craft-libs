@@ -77,10 +77,7 @@ pub(super) fn gap_of(tokens: &UiTokens, gap: Gap) -> f32 {
 }
 
 pub(super) fn least_of(tokens: &UiTokens, least: Option<LeastWidth>) -> f32 {
-    match least {
-        Some(LeastWidth::Popup) => tokens.tokens().size.popup_min,
-        None => 0.0,
-    }
+    least.map_or(0.0, |least| least.points(tokens.tokens()))
 }
 
 pub(super) fn rect_of(parts: [f32; 4]) -> Rect {

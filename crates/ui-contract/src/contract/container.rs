@@ -170,12 +170,48 @@ pub enum Sizing {
     Content,
 }
 
-/// A size role that sets the least width of a container's content.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A size role that sets the least width of a container's content or of a button.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum LeastWidth {
     /// `size.popup_min`: popup surfaces.
     Popup,
+    /// `size.dialog.least`: a dialog's content.
+    Dialog,
+    /// `size.dialog.button`: a dialog's footer button.
+    DialogButton,
+    /// `size.dialog.side_button`: a button in a dialog's column of buttons beside the body.
+    DialogSideButton,
+}
+
+impl LeastWidth {
+    /// The width the role names in `tokens`.
+    pub fn points(self, tokens: &craft_theme::Tokens) -> f32 {
+        match self {
+            LeastWidth::Popup => tokens.size.popup_min,
+            LeastWidth::Dialog => tokens.size.dialog.least,
+            LeastWidth::DialogButton => tokens.size.dialog.button,
+            LeastWidth::DialogSideButton => tokens.size.dialog.side_button,
+        }
+    }
+}
+
+/// A size role that sets the line length of the paragraphs in a container whose width comes from its content: a
+/// wrapping text breaks its lines there when its room is wider, and content wider than it still widens the container.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WrapWidth {
+    /// `size.dialog.wrap`: a dialog's paragraphs.
+    Dialog,
+}
+
+impl WrapWidth {
+    /// The width the role names in `tokens`.
+    pub fn points(self, tokens: &craft_theme::Tokens) -> f32 {
+        match self {
+            WrapWidth::Dialog => tokens.size.dialog.wrap,
+        }
+    }
 }
 
 /// What dragging the header does.
@@ -658,6 +694,8 @@ pub struct ContainerProps {
     pub body_gap: Gap,
     /// The least width of the content, from a size role; the content may be wider.
     pub least_width: Option<LeastWidth>,
+    /// The line length of the body's paragraphs while the container takes its width from its content, from a size role.
+    pub wrap_width: Option<WrapWidth>,
     /// A divider along the inner edge of the edge pane the container sits in: the edge that faces the window's centre.
     /// Outside an edge pane it draws nothing.
     pub edge_rule: bool,
@@ -723,6 +761,7 @@ impl ContainerProps {
             && self.collapse == other.collapse
             && self.body_gap == other.body_gap
             && self.least_width == other.least_width
+            && self.wrap_width == other.wrap_width
             && self.child_size == other.child_size
             && self.child_glyphs == other.child_glyphs
             && self.transform == other.transform
@@ -752,6 +791,7 @@ impl ContainerProps {
             collapse: None,
             body_gap: Gap::Row,
             least_width: None,
+            wrap_width: None,
             edge_rule: false,
             child_size: None,
             child_glyphs: None,
@@ -874,6 +914,12 @@ impl ContainerProps {
     /// The least width of the content, from a size role.
     pub const fn least_width(mut self, least: LeastWidth) -> Self {
         self.least_width = Some(least);
+        self
+    }
+
+    /// The line length of the body's paragraphs while the container takes its width from its content, from a size role.
+    pub const fn wrap_width(mut self, wrap: WrapWidth) -> Self {
+        self.wrap_width = Some(wrap);
         self
     }
 

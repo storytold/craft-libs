@@ -235,6 +235,8 @@ pub struct SizeTokens {
     pub dock: DockColumnSizes,
     /// Notice cards: toasts.
     pub notice: NoticeSizes,
+    /// Dialogs: their content width and their buttons.
+    pub dialog: DialogSizes,
     /// The rulers of a canvas.
     pub ruler: RulerSizes,
     /// The stage a story draws on.
@@ -286,6 +288,19 @@ pub struct DockColumnSizes {
 pub struct NoticeSizes {
     /// The width every card of a toast stack has where the room allows.
     pub width: f32,
+}
+
+/// The sizes of a dialog, in logical pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DialogSizes {
+    /// The least width of a dialog's content: a dialog of a few short fields opens this wide.
+    pub least: f32,
+    /// The line length a dialog's paragraphs wrap at; content wider than it widens the dialog.
+    pub wrap: f32,
+    /// The least width of a footer button.
+    pub button: f32,
+    /// The least width of a button in a column beside the body.
+    pub side_button: f32,
 }
 
 /// The sizes of a floating dock window, in logical pixels.

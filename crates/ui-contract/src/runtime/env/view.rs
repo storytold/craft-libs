@@ -48,6 +48,11 @@ impl<'a> EnvView<'a> {
         self.scoped.lazy
     }
 
+    /// The line length paragraphs wrap at in this scope, if a container around it sets one.
+    pub(crate) fn measure(&self) -> Option<f32> {
+        self.scoped.measure
+    }
+
     /// The roving group of the innermost body with `ContainerProps.roving`.
     pub(crate) fn roving(&self) -> Option<Id> {
         self.scoped.roving

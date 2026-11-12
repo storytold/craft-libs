@@ -6,10 +6,10 @@
 use std::fmt::Write as _;
 
 use crate::{
-    BarSizes, ColorToken, ControlSizes, DockColumnSizes, Easing, Edge, Elevation, ElevationTokens, FloatSizes, FontSlot, Gaps, HandleSizes, HitSizes,
-    IconSizes, Insets, KnobShape, LengthSizes, Motion, MotionTokens, NoticeSizes, Pads, PaneSizes, PlotSizes, RadiusSet, RailSizes, RampSizes, Rgba,
-    RowSizes, RowStyle, RulerSizes, RulerTickSizes, ShapeTokens, SizeTokens, SpaceTokens, StorySizes, StrokeTokens, ThumbSizes, Tokens, TypeStyle,
-    TypeTokens, WindowSizes,
+    BarSizes, ColorToken, ControlSizes, DialogSizes, DockColumnSizes, Easing, Edge, Elevation, ElevationTokens, FloatSizes, FontSlot, Gaps,
+    HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, Motion, MotionTokens, NoticeSizes, Pads, PaneSizes, PlotSizes, RadiusSet,
+    RailSizes, RampSizes, Rgba, RowSizes, RowStyle, RulerSizes, RulerTickSizes, ShapeTokens, SizeTokens, SpaceTokens, StorySizes, StrokeTokens,
+    ThumbSizes, Tokens, TypeStyle, TypeTokens, WindowSizes,
 };
 
 /// The text of every token, one `key = value` line each, in a fixed order.
@@ -131,6 +131,7 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
         ruler,
         dock,
         notice,
+        dialog,
         story,
     } = size;
     let ControlSizes { sm, md } = control;
@@ -197,6 +198,11 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     out.line("size.dock.column", len(*column));
     let NoticeSizes { width } = notice;
     out.line("size.notice.width", len(*width));
+    let DialogSizes { least, wrap, button, side_button } = dialog;
+    out.line("size.dialog.least", len(*least));
+    out.line("size.dialog.wrap", len(*wrap));
+    out.line("size.dialog.button", len(*button));
+    out.line("size.dialog.side_button", len(*side_button));
     let StorySizes { height, width_min, width_max } = story;
     out.line("size.story.height", len(*height));
     out.line("size.story.width_min", len(*width_min));

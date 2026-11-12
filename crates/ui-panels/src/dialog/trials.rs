@@ -1,14 +1,17 @@
 //! Trials of the dialog shells' layer behaviour: initial focus, Escape and a closed dialog's keys.
 
 use super::{BlockingOverlay, Dialog};
+use crate::buttons::Button;
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Role, Show as _, ShowContainer as _};
+use crate::display::Text;
+use crate::layout_components::Row;
 use crate::runtime::overlay::CloseReason;
 use crate::sections::{DialogRole, FooterButton};
 use crate::testing::input::key_press;
 use crate::testing::{Fixture, Frames, trial};
 use crate::text::TextField;
-use egui::{Key, Modifiers, Ui};
+use egui::{Key, Modifiers, Rect, Ui};
 use std::cell::Cell;
 
 #[trial]
@@ -98,6 +101,48 @@ fn a_dialog_widens_for_a_footer_wider_than_its_body() {
     let long = button_widths(&"A body wider than the three buttons together. ".repeat(6), names);
     assert!(short.iter().all(|width| *width > 0.0), "each button is shown: {short:?}");
     assert_eq!(short, long, "a short body does not squeeze the buttons");
+}
+
+/// The settled bounds of the dialog "Options" and of its text, with `text` over a row of `options` buttons.
+fn dialog_and_text(text: &str, options: usize) -> (Rect, Rect) {
+    let mut frames = Frames::new();
+    let mut ui = |ui: &mut Ui| {
+        let mut open = true;
+        Dialog::new("Options").opened(Bind::bound(&mut open)).buttons([FooterButton::new("OK", DialogRole::Accept)]).show(ui, |ui, _| {
+            Text::new(text.to_owned()).show(ui);
+            if options > 0 {
+                Row::new().show(ui, |ui, _| {
+                    for at in 0..options {
+                        Button::new(format!("Option {at}")).show(ui);
+                    }
+                });
+            }
+        });
+    };
+    frames.idle(30, &mut ui);
+    let tree = frames.tree();
+    let rect = |role: Role, name: &str| {
+        let key = tree.keys().into_iter().find(|key| tree.role_of(*key) == Some(role) && tree.name_of(*key) == Some(name));
+        key.and_then(|key| tree.bounds_of(key))
+    };
+    match (rect(Role::DIALOG, "Options"), rect(Role::LABEL, text)) {
+        (Some(dialog), Some(text)) => (dialog, text),
+        shown => panic!("the dialog and its text are shown: {shown:?}"),
+    }
+}
+
+/// A dialog opens at its least width, however short its content; a paragraph wraps at the dialog's wrap width even
+/// where the window has room for it on one line; content that cannot wrap widens the dialog past that width.
+#[trial]
+fn a_dialogs_paragraphs_wrap_at_its_width_and_wider_content_widens_it() {
+    let (short, word) = dialog_and_text("Sure?", 0);
+    assert!(short.width() > 4.0 * word.width(), "a one-word dialog opens at the least width, not at its word: {word:?} {short:?}");
+    let paragraph = "The document has changes from an earlier run that were saved automatically five minutes ago.";
+    let (long, text) = dialog_and_text(paragraph, 0);
+    assert!(text.height() > 1.5 * word.height(), "the paragraph wraps although the window could hold it on one line: {word:?} {text:?}");
+    assert!(text.max.x <= long.max.x, "the paragraph stays inside the dialog: {text:?} {long:?}");
+    let (wide, _) = dialog_and_text("Sure?", 8);
+    assert!(wide.width() > long.width() + 1.0, "a row wider than the wrap width widens the dialog: {long:?} {wide:?}");
 }
 
 /// The dialog chrome every dialog shares: the body starts apart from the title row's rule and ends apart from the

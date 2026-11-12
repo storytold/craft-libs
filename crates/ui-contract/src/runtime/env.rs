@@ -137,6 +137,10 @@ pub struct Scoped {
     /// The width a body that sizes its width from its content was offered this pass, less its padding: the room its
     /// direct children share across a column or along a row, wider than the body's own band before it measured them.
     pub(crate) offered: Option<f32>,
+    /// The line length of paragraphs: the wrap width (`ContainerProps::wrap_width`) of the innermost container that
+    /// declares one and takes its width from its content. A wrapping text in a wider room breaks its lines there. The
+    /// bodies nested inside keep it; a layer or a pane starts without one.
+    pub(crate) measure: Option<f32>,
     /// The innermost scrolling body that encloses the scope: a collection under it owns no scroll of its own, and
     /// page and end moves a component leaves untaken go to it.
     pub(crate) scroll_owner: Option<ScrollOwner>,
@@ -422,6 +426,7 @@ impl Env {
                 shrink: None,
                 least: false,
                 offered: None,
+                measure: None,
                 scroll_owner: None,
                 unbounded: (false, false),
                 lazy: None,
@@ -471,6 +476,7 @@ impl Env {
     pub fn capture(&self) -> EnvCapture {
         EnvCapture(self.derive(|s| {
             s.start_room();
+            s.measure = None;
             s.arena = None;
             s.roving = None;
             s.transform = None;
@@ -510,6 +516,7 @@ impl Env {
         self.derive_local(|scoped| {
             scoped.start_room();
             scoped.lazy = None;
+            scoped.measure = None;
         })
     }
 

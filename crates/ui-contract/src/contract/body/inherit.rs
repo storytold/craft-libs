@@ -86,6 +86,10 @@ impl BodyHooks<'_> {
         if let Some(theme) = &props.theme {
             theme.apply(ctx, scoped);
         }
+        // A container given its width (a resized dialog) leaves its paragraphs the room it has.
+        if let Some(wrap) = props.wrap_width.filter(|_| !self.wide()) {
+            scoped.measure = Some(wrap.points(scoped.tokens.tokens()));
+        }
     }
 
     /// What the body inherits on top of the line's env: arena, transform, the room it is offered and its scroll axes.

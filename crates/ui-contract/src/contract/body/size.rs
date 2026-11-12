@@ -54,6 +54,7 @@ pub(crate) struct EnvFacts {
     row_room: Option<f32>,
     row_line: Option<f32>,
     offered: Option<f32>,
+    measure: Option<f32>,
     grid: Option<Id>,
 }
 
@@ -72,6 +73,7 @@ impl EnvFacts {
             row_room: env.row_room,
             row_line: env.row_line,
             offered: env.offered,
+            measure: env.measure,
             grid: env.grid,
         }
     }
