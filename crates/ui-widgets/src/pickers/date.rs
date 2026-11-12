@@ -252,7 +252,7 @@ impl Component for DatePicker<'_> {
         use craft_behavior::Codec as _;
         let codec = self.codec(cx.env.dates(), false);
         let sample = codec.sample(&None);
-        let text = cx.layout(&TextRun::new(sample.as_ref())).size();
+        let text = cx.field_text(&TextRun::new(sample.as_ref()));
         let name = cx.words::<PickerWords>().date_pick.clone();
         Vec2::new(text.x + reserve(cx.style, &[], &Self::trailing(name)), text.y)
     }

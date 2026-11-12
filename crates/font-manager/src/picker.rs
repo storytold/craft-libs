@@ -455,7 +455,7 @@ impl Component for FontPicker<'_> {
     /// The width of the longest family names in common use, so the field keeps its size whichever family is picked.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let current = cx.value().map_or("", String::as_str);
-        let widest = [NAME_SAMPLE, current].into_iter().map(|text| cx.layout(&TextRun::new(text)).size()).fold(Vec2::ZERO, Vec2::max);
+        let widest = [NAME_SAMPLE, current].into_iter().map(|text| cx.field_text(&TextRun::new(text))).fold(Vec2::ZERO, Vec2::max);
         let name = cx.words::<FontPickerWords>().list.clone();
         Vec2::new(widest.x + reserve(cx.style, &[], &Self::trailing(name)), widest.y)
     }

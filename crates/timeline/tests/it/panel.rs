@@ -1,4 +1,4 @@
-//! The track stack: resizing rows.
+//! The Timeline panel: resizing rows, and the headers, the ruler and the lanes on one time origin.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -6,6 +6,7 @@ use std::rc::Rc;
 use craft_timeline::ui::{Timeline, TimelineEdit};
 use craft_timeline::{ClipId, ClipInfo, TimeRange, TimelineModel, TrackId, TrackInfo};
 use craft_timeline::{FrameRate, Tick, TimeFormat, TimeView, TrackKind};
+use craft_ui::contract::Role;
 use craft_ui::testing::{Fixture, Target, trial};
 use egui::{Rect, Vec2};
 
@@ -22,6 +23,8 @@ const V2: TrackId = TrackId(2);
 const A1: TrackId = TrackId(3);
 /// The panel's room.
 const PANEL_ROOM: Vec2 = Vec2::new(900.0, 500.0);
+/// Where every clip of the sequence starts.
+const CLIP_START_SECONDS: f64 = 2.0;
 /// The time the panel's view shows per second of room.
 const PANEL_POINTS_PER_SECOND: f64 = 20.0;
 
@@ -77,7 +80,7 @@ impl TimelineModel for Sequence {
         let clip = |id: u64| ClipInfo {
             id: ClipId(id),
             track,
-            range: TimeRange::from_bounds(secs(2.0), secs(6.0)),
+            range: TimeRange::from_bounds(secs(CLIP_START_SECONDS), secs(6.0)),
             name: "Clip",
             label: None,
             enabled: !self.disabled.contains(&ClipId(id)),
@@ -206,3 +209,29 @@ const RESIZE_TRAVEL: f32 = 10.0;
 
 /// The rounding slack of a measured point.
 const SLACK: f32 = 0.5;
+
+/// The ruler and the lanes share one time origin: the ruler starts where the lanes do and spans the time area, so a clip
+/// sits under its time on the ruler. The headers hold only the switches some track has: no track here has a sync lock.
+#[trial]
+fn the_ruler_starts_where_the_lanes_do_and_the_headers_hold_only_switches_some_track_has() {
+    let panel = panel();
+    let tree = panel.fixture.tree();
+    let ruler = panel
+        .fixture
+        .by_role(Role::SLIDER)
+        .into_iter()
+        .find(|target| tree.name_of(target.node) == Some("Overview"))
+        .expect("the ruler is a slider named Overview");
+    assert!(ruler.rect.width() > PANEL_ROOM.x / 2.0, "the ruler spans the time area: {:?}", ruler.rect);
+    let clip = panel.in_row("Clip", panel.row("V1"));
+    let at = CLIP_START_SECONDS as f32 * PANEL_POINTS_PER_SECOND as f32;
+    assert!(
+        (clip.rect.left() - ruler.rect.left() - at).abs() < SLACK,
+        "the clip at {CLIP_START_SECONDS} s sits {at} pt from the ruler's start: clip {:?}, ruler {:?}",
+        clip.rect,
+        ruler.rect
+    );
+    let named = |words: &str| tree.keys().into_iter().any(|key| tree.name_of(key).is_some_and(|name| name.contains(words)));
+    assert!(named("Toggle track targeting"), "every track has a target switch");
+    assert!(!named("Toggle Sync Lock"), "no track has a sync lock, so no header has its column");
+}

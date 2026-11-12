@@ -368,15 +368,13 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         self.settle_lengths(&cx.env.units());
         let codec = self.ruled(&cx.env.units(), false, self.names(|row| cx.env.resolve(&row.label().clone())));
         // The number's room is one digit and the caret; a field sized to its range (`fit_range`) or to its content
-        // (`Sizing::Content`) takes the widest value.
+        // (`Sizing::Content`) takes the widest value and the caret.
         let content = cx.resolved.sizing() == Some(Sizing::Content);
-        let caret = cx.ui.visuals().text_cursor.stroke.width;
         let text = if self.fit_range || content {
             let sample = cx.value().map_or(Cow::Borrowed(""), |value| codec.sample(value));
-            cx.layout(&TextRun::new(sample.as_ref())).size()
+            cx.field_text(&TextRun::new(sample.as_ref()))
         } else {
-            let digit = cx.layout(&TextRun::new("0")).size();
-            Vec2::new(digit.x + caret, digit.y)
+            cx.field_text(&TextRun::new("0"))
         };
         self.leading = Self::before_text(cx);
         self.trailing = self.after_text(cx, &self.chevrons(&cx.words::<TextWords>()));

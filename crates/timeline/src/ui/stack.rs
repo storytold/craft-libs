@@ -1,10 +1,11 @@
 //! `TrackStack` and `TrackRow`: the tracks of one pane of a timeline on the collection contract (20.6).
 //!
-//! A stack is one collection keyed by [`TrackId`]. Its columns are the colour strip, the track name (the header width the
-//! app keeps, frozen and resizable), one sweepable toggle column per switch of the [`TrackInfo`] and the lane. A row paints
-//! its header in the cells and registers the lane's clips as parts of the lane cell through [`ClipLane`], so a track of
-//! any number of clips costs one pipeline run. Switches reach the app as the collection's `Toggle` events, the width of
-//! the header as its `Column` events; everything else a row reports is its [`TrackEvent`].
+//! A stack is one collection keyed by [`TrackId`]. Its columns are the colour strip, the track name (frozen and
+//! resizable), one sweepable toggle column per switch some track of the timeline has and the lane, as one
+//! [`HeaderColumns`] gives them to every pane. A row paints its header in the cells and registers the lane's clips as
+//! parts of the lane cell through [`ClipLane`], so a track of any number of clips costs one pipeline run. Switches
+//! reach the app as the collection's `Toggle` events, the width of the header as its `Column` events; everything else a
+//! row reports is its [`TrackEvent`].
 
 use super::clips::{ClipLane, ClipLaneEvents, ClipLook};
 use super::view::{TimelineWords, time_axis};
@@ -14,19 +15,20 @@ use crate::model::{ClipId, TrackId, TrackInfo, TrackKind};
 use crate::time::Tick;
 use craft_behavior::{
     ColumnKey, ColumnWidth, CursorIcon, DisplayOrder, EditEvent, EditEvents, HitLevel, HitPriority, IconId, ItemSource, MarqueeSelect, Metrics,
-    Mixed, PartKey, PressPhase, Selection, SelectionChange, Sense, SizeHint, SpanLayout,
+    Mixed, PartKey, PressPhase, Proposal, Selection, SelectionChange, Sense, SizeHint, SpanLayout,
 };
 use craft_theme::Opacity;
 use craft_ui::contract::{
     Access, Bind, BindMut, Collection, CollectionProps, CollectionResponse, ColumnKind, ColumnSpec, Common, Component, ContainerProps, Cx, Edit as _,
     ItemKeys, ItemOutput, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _, Props, Remember as _, Role, Scroll, ScrollAnchor, SelectMode,
-    Sizing, Styled as _, ToggleColumn, WordSetCx as _,
+    Show as _, Sizing, Styled as _, ToggleColumn, WordSetCx as _,
 };
+use craft_ui::display::Text;
 use craft_ui::primitives::{IconSpec, PaintShape, RectSide, RuleKind};
 use craft_ui::runtime::commands::FireSource;
-use craft_ui::runtime::env::Label;
+use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::{ComponentStyle, DataColor, IconLook, Stateful, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole, UiTokens};
-use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
+use egui::{CornerRadius, Pos2, Rect, Response, Ui, Vec2};
 use std::sync::Arc;
 
 /// The colour strip: a click on it opens the label menu.
@@ -83,12 +85,10 @@ pub struct TrackSizes {
 
 /// A track grows to at most this many heights of a large thumbnail.
 const MOST_IN_THUMBS: f32 = 4.0;
-/// The name column's width until the user drags it.
-pub(crate) const NAME_DEFAULT: ColumnWidth = ColumnWidth::Controls(6.0);
-/// A switch column is one control wide.
-const SWITCH_WIDTH: ColumnWidth = ColumnWidth::Controls(1.0);
-/// The colour strip is a quarter of a control wide.
-const STRIP_WIDTH: ColumnWidth = ColumnWidth::Controls(0.25);
+/// The colour strip is this share of a switch column wide.
+const STRIP_SHARE: f32 = 0.25;
+/// The role the track name paints in, and is measured in for the name column.
+const NAME_ROLE: TypeRole = TypeRole::Label;
 
 impl TrackSizes {
     /// The sizes the tokens give.
@@ -120,18 +120,85 @@ impl TrackSizes {
         let (short, tall) = (self.caption, self.video);
         if now < (short + tall) / 2.0 { tall } else { short }
     }
+}
 
-    /// The width of the headers (colour strip, name and the switches) for a name column `name` wide: where the lane
-    /// begins. The view reads it before its body has laid the stacks out, so it sums the same column widths the stacks
-    /// declare.
-    pub fn header_extent(&self, name: Option<ColumnWidth>) -> f32 {
-        let fixed = |width: ColumnWidth| match width.in_unit(self.unit) {
+/// The track headers of a timeline in one pass: the switch columns some track has and the name column's width. Every
+/// pane's [`TrackStack`] declares these columns, and the panel's head cell and the view's inset take
+/// [`extent`](Self::extent), so the lanes, the ruler and the time area start at one x however the panes split the
+/// tracks. The view reads the extent before its body runs, so it is worked out from the model before the view shows.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct HeaderColumns {
+    /// The switch columns some track of the timeline has, in header order. A track without one leaves its cell empty.
+    pub switches: Vec<ColumnKey>,
+    /// The name column's width, in points.
+    pub name: f32,
+    /// A switch column's width: one control height.
+    pub switch: f32,
+}
+
+impl HeaderColumns {
+    /// The headers of `tracks` under `ui`. The name column is `dragged` wide once the user dragged it, else as wide as
+    /// the widest track name with its pads and indent. It widens until the headers are `least` wide: the block over
+    /// them (the timecode and the toolbar) sets their least width, as Premiere's does.
+    pub fn measure(ui: &Ui, tracks: &[TrackInfo<'_>], dragged: Option<ColumnWidth>, least: f32) -> HeaderColumns {
+        let env = Env::of(ui);
+        let (switch, pad) = (env.tokens.size.control.md, name_pad(&env.tokens));
+        let switches =
+            SWITCHES.iter().map(|(key, _, _)| key.clone()).filter(|key| tracks.iter().any(|track| switch_of(track, key).is_some())).collect();
+        let dragged = dragged.and_then(|width| match width.in_unit(switch) {
             ColumnWidth::Fixed(width) => Some(width),
             _ => None,
-        };
-        let name = name.and_then(fixed).or_else(|| fixed(NAME_DEFAULT)).unwrap_or(0.0);
-        let switches = SWITCHES.len() as f32 * fixed(SWITCH_WIDTH).unwrap_or(0.0);
-        fixed(STRIP_WIDTH).unwrap_or(0.0) + name + switches
+        });
+        let name = dragged.unwrap_or_else(|| {
+            tracks
+                .iter()
+                .map(|track| {
+                    let text = Text::new(track.name.to_owned()).role(NAME_ROLE).measure_in(ui, Proposal::Ideal).x;
+                    text + 2.0 * name_inset(pad, track)
+                })
+                .fold(0.0, f32::max)
+        });
+        let mut header = HeaderColumns { switches, name, switch };
+        header.name += (least - header.extent()).max(0.0);
+        header
+    }
+
+    /// The colour strip's width.
+    pub fn strip(&self) -> f32 {
+        self.switch * STRIP_SHARE
+    }
+
+    /// The width of the headers: the colour strip, the name and the switches. The lanes begin here.
+    pub fn extent(&self) -> f32 {
+        self.strip() + self.name + self.switches.len() as f32 * self.switch
+    }
+}
+
+/// The pad between the colour strip and the name, and the indent of one level of depth.
+fn name_pad(tokens: &UiTokens) -> f32 {
+    tokens.space.pad.regular
+}
+
+/// The inset of `track`'s name from each side of the name cell: one pad and its depth's indent.
+fn name_inset(pad: f32, track: &TrackInfo<'_>) -> f32 {
+    pad * (1.0 + f32::from(track.depth))
+}
+
+/// Whether `track`'s switch in `column` is on; `None` when the track has no such switch.
+fn switch_of(track: &TrackInfo<'_>, column: &ColumnKey) -> Option<bool> {
+    if *column == LOCK {
+        track.locked
+    } else if *column == TARGET {
+        track.targeted
+    } else if *column == SYNC_LOCK {
+        track.sync_lock
+    } else if *column == OUTPUT {
+        track.enabled
+    } else if *column == MUTE {
+        track.muted
+    } else {
+        track.solo
     }
 }
 
@@ -165,39 +232,11 @@ impl DisplayOrder<TrackId> for Tracks<'_> {
 
 impl ItemSource<TrackId> for Tracks<'_> {
     fn toggled(&self, at: usize, column: &ColumnKey) -> bool {
-        let track = &self.tracks[at];
-        let on = if *column == LOCK {
-            track.locked
-        } else if *column == TARGET {
-            track.targeted
-        } else if *column == SYNC_LOCK {
-            track.sync_lock
-        } else if *column == OUTPUT {
-            track.enabled
-        } else if *column == MUTE {
-            track.muted
-        } else {
-            track.solo
-        };
-        on.unwrap_or(false)
+        switch_of(&self.tracks[at], column).unwrap_or(false)
     }
 
     fn toggle_enabled(&self, at: usize, column: &ColumnKey) -> bool {
-        let track = &self.tracks[at];
-        let switch = if *column == LOCK {
-            track.locked
-        } else if *column == TARGET {
-            track.targeted
-        } else if *column == SYNC_LOCK {
-            track.sync_lock
-        } else if *column == OUTPUT {
-            track.enabled
-        } else if *column == MUTE {
-            track.muted
-        } else {
-            track.solo
-        };
-        switch.is_some()
+        switch_of(&self.tracks[at], column).is_some()
     }
 }
 
@@ -270,8 +309,8 @@ pub struct TrackStack {
 }
 
 impl TrackStack {
-    /// A stack named `label` whose name column is `name` wide (the default until the user drags it).
-    pub fn new(label: impl Into<Label>, name: Option<ColumnWidth>, words: &TimelineWords) -> Self {
+    /// A stack named `label` with the header columns `header`: the same for every pane of a timeline.
+    pub fn new(label: impl Into<Label>, header: &HeaderColumns, words: &TimelineWords) -> Self {
         let switch_name = |key: &ColumnKey| match () {
             _ if *key == LOCK => words.lock.clone(),
             _ if *key == TARGET => words.target.clone(),
@@ -281,12 +320,12 @@ impl TrackStack {
             _ => words.solo.clone(),
         };
         let mut columns = vec![
-            ColumnSpec::new(STRIP, words.track_color.clone(), STRIP_WIDTH),
-            ColumnSpec::new(NAME, "", name.unwrap_or(NAME_DEFAULT)).resizable().frozen(),
+            ColumnSpec::new(STRIP, words.track_color.clone(), ColumnWidth::Fixed(header.strip())),
+            ColumnSpec::new(NAME, "", ColumnWidth::Fixed(header.name)).resizable().frozen(),
         ];
-        for (key, _, _) in SWITCHES {
-            let header = switch_name(&key);
-            columns.push(ColumnSpec::new(key, header, SWITCH_WIDTH).kind(ColumnKind::Toggle(ToggleColumn::sweepable())));
+        for key in &header.switches {
+            let name = switch_name(key);
+            columns.push(ColumnSpec::new(key.clone(), name, ColumnWidth::Fixed(header.switch)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())));
         }
         columns.push(ColumnSpec::new(LANE, "", ColumnWidth::fill(1.0)));
         TrackStack {
@@ -464,11 +503,11 @@ impl Component for TrackRow<'_> {
         TrackRowStyle {
             surface: SurfaceLook::new(Stateful::new(cx.color(color.surface.panel))),
             metrics: Metrics::new(),
-            name: TextLook::new(TypeRole::Caption, Stateful::new(cx.color(color.text.normal))),
+            name: TextLook::new(NAME_ROLE, Stateful::new(cx.color(color.text.normal))),
             on: IconLook::new(cx.control().icon, Stateful::new(cx.color(color.text.normal))),
             off: IconLook::new(cx.control().icon, Stateful::new(cx.color(color.text.faint))),
             hover: cx.color(color.state.hover),
-            pad: cx.tokens.space.pad.regular,
+            pad: name_pad(cx.tokens),
             edge: cx.tokens.size.hit.target / 2.0,
             clip: ClipLook::of(cx),
             sizes: TrackSizes::of(cx.tokens),
@@ -606,10 +645,9 @@ impl Component for TrackRow<'_> {
         }
         draw.edge_rule(RuleKind::Divider, headers, RectSide::Bottom);
         if let Some(cell) = self.cell(&NAME) {
-            let indent = f32::from(self.track.depth) * style.pad;
             let flow = craft_behavior::Flow::new(cell, rtl);
-            let text = flow.inset(craft_behavior::Insets::horizontal(style.pad + indent));
-            draw.text(text, &craft_ui::primitives::TextRun::new(self.track.name).elide());
+            let text = flow.inset(craft_behavior::Insets::horizontal(name_inset(style.pad, self.track)));
+            draw.text(text, &craft_ui::primitives::TextRun::new(self.track.name).role(NAME_ROLE).elide());
         }
         for (key, on_icon, off_icon) in SWITCHES {
             let Some(cell) = self.cell(&key) else { continue };
@@ -635,20 +673,7 @@ impl Component for TrackRow<'_> {
 impl TrackRow<'_> {
     /// Whether the track's switch in `column` is on; `None` when the track has no such switch.
     fn switch(&self, column: &ColumnKey) -> Option<bool> {
-        let track = self.track;
-        if *column == LOCK {
-            track.locked
-        } else if *column == TARGET {
-            track.targeted
-        } else if *column == SYNC_LOCK {
-            track.sync_lock
-        } else if *column == OUTPUT {
-            track.enabled
-        } else if *column == MUTE {
-            track.muted
-        } else {
-            track.solo
-        }
+        switch_of(self.track, column)
     }
 }
 

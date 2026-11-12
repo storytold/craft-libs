@@ -1800,7 +1800,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::BodyLayout`: `pub enum BodyLayout { Stack, Row { wrap: bool, align: RowAlign }, Grid { columns: Cow<'static, [ColumnWidth]> } }`. How a body lays out its children, in reading order: mirrored under a right-to-left direction.
   - `pub const fn stack() -> Self`. Children one under another.
   - `pub const fn row() -> Self`. Children side by side from the start edge, with no wrap.
-  - `pub const fn grid(columns: &'static [ColumnWidth]) -> Self`. Children row-major over `columns`.
+  - `pub fn grid(columns: impl Into<Cow<'static, [ColumnWidth]>>) -> Self`. Children row-major over `columns`: a `'static` slice, or columns built in the pass.
   - `pub fn wrap(self, on: bool) -> Self`. A `Row` that wraps; any other layout is unchanged.
   - `pub fn align(self, align: RowAlign) -> Self`. A `Row` with `align`; any other layout is unchanged.
 - `craft_ui::contract::CellWidth`: `pub type CellWidth = ColumnWidth`. The width of a caption's cell.
@@ -2103,6 +2103,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn cell_width(&self, column: &craft_behavior::ColumnKey, width: f32)`. Reports, from the `Ideal` measure of a collection's item, the width its content in `column` takes unclipped,
   - `pub fn layout(&self, run: &TextRun<'_>) -> TextLayout`. Lays `run` out in the content's room, as `Draw::text` will paint it.
   - `pub fn layout_at(&self, run: &TextRun<'_>, width: f32) -> TextLayout`. Lays `run` out `width` wide, for a text that paints in a band narrower than the room.
+  - `pub fn field_text(&self, run: &TextRun<'_>) -> Vec2`. The room an editable text in a control sized by its text needs for `run`: the laid-out text and the caret the
   - `pub fn layout_doc(&self, text: &crate::primitives::DocText<'_>) -> TextLayout`. Lays document `text` out `text.wrap` wide, as `ContentPainterCx::layout` will paint it: the galley a content
   - `pub fn child<D: Show>(&self, key: impl Hash + Debug, child: &mut D, proposal: Proposal) -> Vec2`. Measures a child under the composite's resolved `enabled` and `size`, as `PaintUi::child` will show it.
   - `pub fn labelled<D: Show>(&self, key: impl Hash + Debug, side: &crate::contract::SideLabel, child: &mut D, proposal: Proposal) -> Vec2`. Measures a child as `PaintUi::labelled` will show it with `side`: under the inside label `side` gives it
@@ -2509,7 +2510,7 @@ The layout services: `LabelColumn`, `ColumnGroup`, the `Grid` cursor, `measure_s
 - `craft_ui::layout::BodyLayout`: `pub enum BodyLayout { Stack, Row { wrap: bool, align: RowAlign }, Grid { columns: Cow<'static, [ColumnWidth]> } }`. How a body lays out its children, in reading order: mirrored under a right-to-left direction.
   - `pub const fn stack() -> Self`. Children one under another.
   - `pub const fn row() -> Self`. Children side by side from the start edge, with no wrap.
-  - `pub const fn grid(columns: &'static [ColumnWidth]) -> Self`. Children row-major over `columns`.
+  - `pub fn grid(columns: impl Into<Cow<'static, [ColumnWidth]>>) -> Self`. Children row-major over `columns`: a `'static` slice, or columns built in the pass.
   - `pub fn wrap(self, on: bool) -> Self`. A `Row` that wraps; any other layout is unchanged.
   - `pub fn align(self, align: RowAlign) -> Self`. A `Row` with `align`; any other layout is unchanged.
 - `craft_ui::layout::ColumnGroup`: `pub struct ColumnGroup`. The widest content per column key of one scope, measured through the same `LayoutMemory` rule as a `Grid`

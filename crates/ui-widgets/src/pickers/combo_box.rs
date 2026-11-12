@@ -121,7 +121,7 @@ impl Component for ComboBox<'_> {
         let current = cx.value().map_or("", String::as_str);
         let placeholder = self.placeholder.as_ref().map_or("", Label::as_str);
         let texts = self.options.iter().filter_map(|option| option.value().map(String::as_str)).chain([current, placeholder]);
-        let widest = texts.map(|text| cx.layout(&TextRun::new(text)).size()).fold(Vec2::ZERO, Vec2::max);
+        let widest = texts.map(|text| cx.field_text(&TextRun::new(text))).fold(Vec2::ZERO, Vec2::max);
         let name = cx.words::<PickerWords>().combo_options.clone();
         Vec2::new(widest.x + reserve(cx.style, &[], &Self::trailing(name)), widest.y)
     }

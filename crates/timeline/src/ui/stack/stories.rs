@@ -1,6 +1,6 @@
 //! Stories of `TrackStack`: no tracks, one track and many.
 
-use super::{TrackRow, TrackStack, Tracks};
+use super::{HeaderColumns, TrackRow, TrackStack, Tracks};
 use crate::model::{TrackId, TrackInfo, TrackKind};
 use craft_ui::contract::CollectionEvent;
 use craft_ui::contract::ShowCollection as _;
@@ -30,7 +30,8 @@ fn stack(ui: &mut Ui, names: &[&str]) -> StoryOutput {
     let words = Env::of(ui).words::<crate::ui::view::TimelineWords>();
     let source = Tracks::new(&tracks);
     let none: [crate::model::ClipInfo<'_>; 0] = [];
-    let out = TrackStack::new("Tracks", None, &words).tracks(&tracks).show_items(ui, &source, &mut |key, icx| {
+    let header = HeaderColumns::measure(ui, &tracks, None, 0.0);
+    let out = TrackStack::new("Tracks", &header, &words).tracks(&tracks).show_items(ui, &source, &mut |key, icx| {
         let at = tracks.iter().position(|t| t.id == *key).unwrap_or(0);
         let lane = crate::ui::clips::ClipLane::new(&none);
         TrackRow::new(&tracks[at], icx.cells().to_vec(), lane, false, false)

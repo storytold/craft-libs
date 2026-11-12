@@ -214,11 +214,10 @@ impl<'a> TimecodeField<'a> {
         TimecodeField { common: Common::new(), value, format, min: Tick::ZERO, options }.label(label)
     }
 
-    /// The large readout: the prominent text role in the accent ink.
+    /// The large readout: the timecode face in the accent ink. The face keeps every digit one width, so the field's
+    /// widest time is its widest text and the readout holds still while the time runs.
     #[must_use]
     pub fn large(mut self) -> Self {
-        self.options.mono = false;
-        self.options.role = TypeRole::BodyLarge;
         self.options.ink = Some(Ink::Accent);
         self
     }
@@ -255,8 +254,7 @@ impl Component for TimecodeField<'_> {
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let codec = self.codec();
         let sample = codec.sample(cx.value().unwrap_or(&Tick::ZERO));
-        let role = if self.options.mono { TypeRole::Mono } else { self.options.role };
-        cx.layout(&TextRun::new(sample.as_ref()).role(role)).size()
+        cx.field_text(&TextRun::new(sample.as_ref()).role(TypeRole::Mono))
     }
 
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {

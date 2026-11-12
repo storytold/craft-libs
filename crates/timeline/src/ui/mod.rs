@@ -52,7 +52,7 @@ pub use render_queue::{
     RenderItemId, RenderQueueEvent, RenderQueueItem, RenderQueueList, RenderQueueListOutput, RenderQueueWords, RenderStatus, format_eta,
 };
 pub use ruler::{RenderBarState, RenderSpan, SplitMarks, TimeTick, TimelineRuler, TimelineRulerResponse, ruler_ladder, ruler_ticks};
-pub use stack::{TrackRow, TrackStack};
+pub use stack::{HeaderColumns, TrackRow, TrackStack};
 pub use timecode::{
     TimecodeCodec, TimecodeField, TimecodeFieldOutput, TimecodePanel, TimecodePanelOutput, TimecodePanelSettings, TimecodeRow, TimecodeRowKind,
     TimecodeSource, TimecodeText, TimecodeWords,

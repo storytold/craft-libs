@@ -254,7 +254,7 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
             None => Cow::Borrowed(""),
         };
         let text = if sample.is_empty() { self.options.placeholder.as_ref().map_or("", Label::as_str) } else { sample.as_ref() };
-        let mut size = cx.layout(&TextRun::new(text).role(self.options.role)).size();
+        let mut size = cx.field_text(&TextRun::new(text).role(self.options.role));
         // A multi-line field takes the height of its lines, and grows past them with longer text, as the editor does.
         if let Some(lines) = self.options.lines.filter(|_| self.options.multiline()) {
             let line = cx.layout(&TextRun::new("M").role(self.options.role)).size().y;

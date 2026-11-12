@@ -8,7 +8,7 @@ use crate::model::{ClipId, ClipInfo, TimelineModel, TrackId, TrackInfo, TrackKin
 use crate::rates::FrameRate;
 use crate::time::{Tick, TimeRange, TimeView};
 use crate::timecode::TimeFormat;
-use craft_behavior::{ColumnWidth, Selection, SelectionModel as _};
+use craft_behavior::{ColumnWidth, Proposal, Selection, SelectionModel as _};
 use craft_ui::contract::{Show as _, ShowContainer as _};
 use craft_ui::display::Text;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
@@ -233,7 +233,9 @@ fn timeline_panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// The strip over the headers and the time area: the head block in the first column, the ruler row in the second.
 #[story(TopStrip, covers = [Default], drive = Drive::Never)]
 fn top_strip(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let out = TopStrip::new().show(ui, |ui, _| {
+    // The head column is as wide as its text, as the panel's is as wide as the headers.
+    let head = Text::new("Head").measure_in(ui, Proposal::Ideal).x;
+    let out = TopStrip::new(head).show(ui, |ui, _| {
         Text::new("Head").show(ui);
         Text::new("Ruler").show(ui);
     });

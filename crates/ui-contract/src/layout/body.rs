@@ -63,9 +63,9 @@ impl BodyLayout {
         BodyLayout::Row { wrap: false, align: RowAlign::Start }
     }
 
-    /// Children row-major over `columns`.
-    pub const fn grid(columns: &'static [ColumnWidth]) -> Self {
-        BodyLayout::Grid { columns: Cow::Borrowed(columns) }
+    /// Children row-major over `columns`: a `'static` slice, or columns built in the pass.
+    pub fn grid(columns: impl Into<Cow<'static, [ColumnWidth]>>) -> Self {
+        BodyLayout::Grid { columns: columns.into() }
     }
 
     /// A `Row` that wraps; any other layout is unchanged.

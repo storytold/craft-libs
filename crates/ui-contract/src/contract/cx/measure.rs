@@ -111,6 +111,13 @@ impl<C: Component> MeasureCx<'_, C> {
         run.layout(self.ui.ctx(), &env, width)
     }
 
+    /// The room an editable text in a control sized by its text needs for `run`: the laid-out text and the caret the
+    /// editor draws past its last letter, so the caret stays inside the control and the text never scrolls.
+    pub fn field_text(&self, run: &TextRun<'_>) -> Vec2 {
+        let text = self.layout(run).size();
+        Vec2::new(text.x + self.ui.visuals().text_cursor.stroke.width, text.y)
+    }
+
     /// Lays document `text` out `text.wrap` wide, as `ContentPainterCx::layout` will paint it: the galley a content
     /// painter's measure sizes its band by is the one its paint draws.
     pub fn layout_doc(&self, text: &crate::primitives::DocText<'_>) -> TextLayout {

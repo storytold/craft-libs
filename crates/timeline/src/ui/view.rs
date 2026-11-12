@@ -4,12 +4,11 @@
 //! playhead, and shows the horizontal scroll bar as a scroll part over the view (a thumb end drag zooms).
 
 use super::ruler::{SHIFT_STEP_FRAMES, STEP_FRAMES};
-use super::stack::TrackSizes;
 use crate::clock::{Follow, FollowMode};
 use crate::time::{Tick, TimeRange, TimeView, VIEW_EXTENT_PAST_END};
 use crate::timecode::TimeFormat;
 use craft_behavior::scroll::ScrollSpan;
-use craft_behavior::{Axis, ColumnWidth, EditEvent, Granularity, Intent, Metrics, Mixed, NavMove, PartKey, Sense, Wheel};
+use craft_behavior::{Axis, EditEvent, Granularity, Intent, Metrics, Mixed, NavMove, PartKey, Sense, Wheel};
 use craft_ui::contract::{
     Access, Bind, BindMut, CommandSet, Commands as _, Common, Component, Container, ContainerProps, Cx, Edit as _, EditResponse, Focus as _, Name,
     Outcome, PaintUi, PartsCx, Pointer as _, Props, Remember as _, Role, Sizing, THUMB, WordSetCx as _,
@@ -194,8 +193,6 @@ pub struct TimelineViewStyle {
     #[style(metrics)]
     metrics: Metrics,
     look: ScrollBarLook,
-    /// The sizes of the headers left of the time area.
-    sizes: TrackSizes,
     /// The playhead's line over the panes.
     playhead: StyleColor,
     /// The line at the time a drag snapped to.
@@ -251,13 +248,10 @@ pub struct TimelineView<'a> {
     view: Bind<'a, TimeView>,
     format: TimeFormat,
     end: Tick,
-    /// The name column's width of the headers left of the time area; the headers take the default until the user drags
-    /// it.
-    #[prop(into)]
-    header_width: Option<ColumnWidth>,
-    /// Whether track headers sit left of the time area; the time area spans the whole width without them.
-    #[prop]
-    headers: bool,
+    /// The width of the track headers left of the time area (`HeaderColumns::extent`); with none the time area spans the
+    /// whole width.
+    #[prop(quantity = "points")]
+    header_extent: f32,
     follow: FollowMode,
     playing: bool,
     playhead: Tick,
@@ -285,8 +279,7 @@ impl<'a> TimelineView<'a> {
             view,
             format,
             end,
-            header_width: None,
-            headers: false,
+            header_extent: 0.0,
             follow: FollowMode::Page,
             playing: false,
             playhead: Tick::ZERO,
@@ -317,13 +310,13 @@ impl<'a> TimelineView<'a> {
     }
 
     /// The width of the time area in a view `rect` wide.
-    fn width(&self, rect: Rect, style: &TimelineViewStyle) -> f32 {
-        (rect.width() - self.inset(style)).max(0.0)
+    fn width(&self, rect: Rect) -> f32 {
+        (rect.width() - self.inset()).max(0.0)
     }
 
     /// The width of the headers, left of the time area, along the start edge.
-    fn inset(&self, style: &TimelineViewStyle) -> f32 {
-        if self.headers { style.sizes.header_extent(self.header_width) } else { 0.0 }
+    fn inset(&self) -> f32 {
+        self.header_extent.max(0.0)
     }
 
     /// The playhead moved to `to`: one `Set` event, as a key gives it.
@@ -455,7 +448,6 @@ impl Component for TimelineView<'_> {
         TimelineViewStyle {
             metrics: Metrics::new(),
             look: cx.scroll_bar(ScrollBarKind::Docked),
-            sizes: TrackSizes::of(cx.tokens),
             playhead: cx.color(cx.tokens.color.accent.solid),
             snap: cx.color(cx.tokens.color.overlay.line),
             marquee_fill: cx.color(cx.tokens.color.accent.soft),
@@ -478,7 +470,7 @@ impl Component for TimelineView<'_> {
             return;
         }
         let Some(view) = cx.value().copied() else { return };
-        let width = self.width(rect, cx.style);
+        let width = self.width(rect);
         if !(view.points_per_second > 0.0 && view.points_per_second.is_finite() && width > 0.0) {
             return;
         }
@@ -489,14 +481,14 @@ impl Component for TimelineView<'_> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         self.anim = *cx.memory::<Anim>();
         let Some(target) = cx.value().copied() else { return };
-        let width = self.width(cx.rect, cx.style);
+        let width = self.width(cx.rect);
         let valid = target.points_per_second > 0.0 && target.points_per_second.is_finite() && width > 0.0;
         if !valid {
             return;
         }
         let mut next = target;
         let pointer = cx.response.hover_pos().unwrap_or_else(|| cx.rect.center());
-        let left = cx.flow.span(self.inset(cx.style), width).left();
+        let left = cx.flow.span(self.inset(), width).left();
         if let Some(wheel) = cx.take_wheel() {
             // The wheel's own point: over a child (the ruler) the view itself has no hover.
             let pointer = wheel.at.unwrap_or(pointer);
@@ -542,11 +534,11 @@ impl Component for TimelineView<'_> {
         if !self.full {
             return;
         }
-        let span = cx.flow.span(self.inset(cx.style), self.width(cx.rect, cx.style));
+        let span = cx.flow.span(self.inset(), self.width(cx.rect));
         let area = Rect::from_min_max(Pos2::new(span.left(), cx.rect.top()), Pos2::new(span.right(), cx.rect.bottom()));
         ui.draw().fill(&PaintShape::Rect(area, CornerRadius::ZERO), cx.style.well);
         let Some(view) = cx.value().copied() else { return };
-        let width = self.width(cx.rect, cx.style);
+        let width = self.width(cx.rect);
         if !(view.points_per_second > 0.0 && view.points_per_second.is_finite() && width > 0.0) {
             return;
         }
@@ -579,7 +571,7 @@ impl Component for TimelineView<'_> {
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let Some(view) = cx.value().copied() else { return };
-        let width = self.width(cx.rect, cx.style);
+        let width = self.width(cx.rect);
         if !(view.points_per_second > 0.0 && view.points_per_second.is_finite() && width > 0.0) {
             return;
         }
@@ -599,7 +591,7 @@ impl Component for TimelineView<'_> {
 impl TimelineView<'_> {
     /// The bar's rect: the bottom edge of `rect`, from the end of the headers to the end edge.
     fn bar(&self, rect: Rect, flow: craft_behavior::Flow, style: &TimelineViewStyle) -> Rect {
-        let (inset, thickness) = (self.inset(style), style.look.thickness);
+        let (inset, thickness) = (self.inset(), style.look.thickness);
         let span = flow.span(inset, (rect.width() - inset).max(0.0));
         Rect::from_min_max(Pos2::new(span.left(), rect.bottom() - thickness), Pos2::new(span.right(), rect.bottom()))
     }

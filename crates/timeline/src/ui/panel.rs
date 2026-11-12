@@ -6,7 +6,7 @@ use super::clips::{ClipContent, ClipLane, TimelineTool};
 use super::markers::{MarkerEdit, MarkerSpan, MarkerStrip};
 use super::ruler::TimelineRuler;
 use super::stack::{
-    LANE, LOCK, MUTE, MovePointer, MoveTarget, NAME, NAME_DEFAULT, OUTPUT, RowGeom, SOLO, SYNC_LOCK, Side, TARGET, TrackEvent, TrackRow, TrackStack,
+    HeaderColumns, LANE, LOCK, MUTE, MovePointer, MoveTarget, NAME, OUTPUT, RowGeom, SOLO, SYNC_LOCK, Side, TARGET, TrackEvent, TrackRow, TrackStack,
     Tracks, resolve_move, set_event,
 };
 use super::view::{Overlay, TimelineView, TimelineWords, time_axis};
@@ -16,13 +16,14 @@ use crate::clock::FollowMode;
 use crate::markers::MarkerColor;
 use crate::model::{ClipId, ClipInfo, TimelineModel, TrackId, TrackInfo, TrackKind};
 use crate::time::{Tick, TimeRange};
+use crate::timecode::TimeFormat;
 use craft_behavior::{
-    Axis, ColumnKey, ColumnWidth, CursorIcon, CursorPriority, EditEvent, EditEvents, GestureId, IconId, MarqueeSelect, Metrics, Mixed,
+    Axis, ColumnKey, ColumnWidth, CursorIcon, CursorPriority, EditEvent, EditEvents, GestureId, IconId, MarqueeSelect, Metrics, Mixed, Proposal,
     SelectionChange,
 };
 use craft_ui::buttons::{IconButton, ToggleButton};
 use craft_ui::contract::{
-    Bind, BodyCx, BodyLayout, CollectionEvent, CollectionResponse, ColumnEvent, Common, Component, Container, ContainerProps, Cx, EditResponse,
+    Bind, BodyCx, BodyLayout, CollectionEvent, CollectionResponse, ColumnEvent, Common, Component, Container, ContainerProps, Cx, EditResponse, Gap,
     NoValue, Outcome, Pattern, Props, Remember as _, Role, Show as _, ShowCollection as _, ShowContainer as _, ShownRow, SizeLimits, Sizing,
     SweepApply, SweepStep,
 };
@@ -177,8 +178,10 @@ pub struct TimelineToolbar {
 /// Layout, top to bottom: the large [`TimecodeField`] and the toolbar over the headers beside the [`MarkerStrip`] and the
 /// [`TimelineRuler`]; then the caption tracks, the video tracks (V1 nearest the divider), the divider, the audio tracks
 /// and the Mix row when the model has a master volume; the bar of the [`TimelineView`] at the bottom. The headers are the
-/// header columns of each [`TrackStack`], `header_width` wide at the name column and resizable
-/// ([`TimelineEdit::HeaderWidth`]); the lanes paint their clips' content through [`content`](Self::content).
+/// [`HeaderColumns`] of every [`TrackStack`]: the colour strip, the name column and the switches some track has. The name
+/// column is as wide as the widest track name until the user drags it ([`TimelineEdit::HeaderWidth`], kept as
+/// `header_width`), and the headers are never narrower than the timecode and the toolbar over them. The lanes paint
+/// their clips' content through [`content`](Self::content).
 ///
 /// Input: the wheel, the pinch and the keys of [`TimelineView`]; the colour strip of a header opens the label menu; the
 /// Menu key and Shift+F10 report [`TimelineEdit::ContextMenu`] for the selection's last clip, else the first targeted
@@ -282,7 +285,7 @@ struct PlacedRow {
 /// What the panes share in a pass.
 struct Panes<'p, 'a> {
     words: &'p TimelineWords,
-    name: Option<ColumnWidth>,
+    header: &'p HeaderColumns,
     selection: &'p [ClipId],
     targets: Option<&'p SnapTargets>,
     tool: TimelineTool,
@@ -299,7 +302,7 @@ impl Panes<'_, '_> {
             Side::Upper => "Video",
             Side::Lower => "Audio",
         };
-        let mut stack = TrackStack::new(label, self.name, self.words).tracks(pane);
+        let mut stack = TrackStack::new(label, self.header, self.words).tracks(pane);
         match side {
             Side::Upper => stack = stack.anchored_at_end(),
             // The caption tracks take the height their rows need, so the video and audio panes keep the rest.
@@ -330,7 +333,7 @@ impl Panes<'_, '_> {
 struct Mapping<'p> {
     pane: &'p [TrackInfo<'p>],
     words: &'p TimelineWords,
-    name: Option<ColumnWidth>,
+    header: &'p HeaderColumns,
     palette: &'p LabelPalette,
 }
 
@@ -396,7 +399,7 @@ impl Mapping<'_> {
                 }
                 CollectionEvent::Column(ColumnEvent::Resized { key, width, .. }) if *key == NAME => {
                     edits.push(TimelineEdit::HeaderWidth(set_event(
-                        self.name.unwrap_or(NAME_DEFAULT),
+                        ColumnWidth::Fixed(self.header.name),
                         ColumnWidth::Fixed(*width),
                         self.words.header_width.as_str(),
                     )));
@@ -524,9 +527,13 @@ impl<M: TimelineModel> Timeline<'_, M> {
                 (Side::Upper, of_kind(|kind| kind == TrackKind::Video)),
                 (Side::Lower, of_kind(|kind| !matches!(kind, TrackKind::Caption | TrackKind::Video))),
             ];
+            // The head block over the headers sets their least width; the headers are worked out before the view shows,
+            // since its inset and every pane's columns take them.
+            let least = Stack::new().measure_in(ui, Proposal::Ideal, |ui, _| head_block(ui, &words, playhead, format, snap, linked_selection)).x;
+            let header = HeaderColumns::measure(ui, &tracks, header_width, least);
             let shared = Panes {
                 words: &words,
-                name: header_width,
+                header: &header,
                 selection: &selection,
                 targets: targets.as_ref(),
                 tool,
@@ -541,22 +548,17 @@ impl<M: TimelineModel> Timeline<'_, M> {
 
             let overlay = Overlay::default();
             let area = TimelineView::new(label, Bind::given(view), format, duration)
-                .headers(true)
+                .header_extent(header.extent())
                 .follow(follow, playing, playhead)
                 .edit_points(&points)
                 .overlay(&overlay);
-            let area = match header_width {
-                Some(width) => area.header_width(width),
-                None => area,
-            };
             let body = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
-                TopStrip::new().show(ui, |ui, _| {
+                TopStrip::new(header.extent()).show(ui, |ui, _| {
                     Stack::new().show(ui, |ui, _| {
-                        let field = TimecodeField::new(words.panel.clone(), Bind::given(playhead), format).large().show(ui);
-                        timecode_edit = field.edit.events;
-                        toolbar = toolbar_row(ui, &words, snap, linked_selection);
+                        (timecode_edit, toolbar) = head_block(ui, &words, playhead, format, snap, linked_selection);
                     });
-                    Stack::new().show(ui, |ui, _| {
+                    // The marker strip and the ruler fill the cell over the time area.
+                    Stack::new().fill_width().show(ui, |ui, _| {
                         let strip = MarkerStrip::new(words.overview.clone(), markers);
                         let strip = match shared.targets {
                             Some(targets) => strip.snap(targets),
@@ -585,7 +587,7 @@ impl<M: TimelineModel> Timeline<'_, M> {
                     let pane: Vec<TrackInfo<'_>> = indices.iter().map(|&i| tracks[i].clone()).collect();
                     let out = shared.show(ui, side, &pane, indices);
                     pane_rects.push(out.response.rect);
-                    let mapping = Mapping { pane: &pane, words: &words, name: header_width, palette: &palette };
+                    let mapping = Mapping { pane: &pane, words: &words, header: &header, palette: &palette };
                     mapping.collect(&out, &mut edits, &mut memory, &mut reports);
                     mapping.label_menu(ui, &out.response, &mut memory, &mut edits);
                 };
@@ -787,6 +789,20 @@ fn retarget(event: &mut EditEvent<ClipEdit>, target: MoveTarget) {
 }
 
 /// The toolbar under the timecode: Snap, Linked Selection, Add Marker and the display settings.
+/// The block over the headers, a stack's body: the large timecode, then the toolbar. The panel measures it for the
+/// headers' least width and shows it in the top strip's head cell.
+fn head_block(
+    ui: &mut Ui,
+    words: &TimelineWords,
+    playhead: Tick,
+    format: TimeFormat,
+    snap: bool,
+    linked_selection: bool,
+) -> (EditEvents<Tick>, Option<TimelineToolbar>) {
+    let field = TimecodeField::new(words.panel.clone(), Bind::given(playhead), format).large().show(ui);
+    (field.edit.events, toolbar_row(ui, words, snap, linked_selection))
+}
+
 fn toolbar_row(ui: &mut Ui, words: &TimelineWords, snap: bool, linked_selection: bool) -> Option<TimelineToolbar> {
     let shown = Row::new().show(ui, |ui, _| {
         let snap = ToggleButton::new(words.snap.clone(), Bind::given(snap)).icon(IconSpec::svg(IconId::new("snap"))).icon_only().show(ui);
@@ -809,7 +825,8 @@ fn mix_row(ui: &mut Ui, words: &TimelineWords, value: &str) {
     });
 }
 
-/// The top strip: the head block over the headers, then the marker strip and the ruler over the time area.
+/// The top strip: the head block over the headers, then the marker strip and the ruler over the time area. Its head
+/// column is the headers' extent and its columns touch, so the ruler starts where the lanes do.
 #[derive(Component)]
 #[component(container)]
 struct TopStrip {
@@ -820,9 +837,13 @@ struct TopStrip {
 }
 
 impl TopStrip {
-    fn new() -> Self {
-        const COLUMNS: &[ColumnWidth] = &[ColumnWidth::Content, ColumnWidth::fill(1.0)];
-        TopStrip { common: Common::new(), props: ContainerProps::new().sizing(Sizing::FillWidth).layout(BodyLayout::grid(COLUMNS)) }
+    /// A strip whose head column is `headers` wide.
+    fn new(headers: f32) -> Self {
+        let columns = vec![ColumnWidth::Fixed(headers), ColumnWidth::fill(1.0)];
+        TopStrip {
+            common: Common::new(),
+            props: ContainerProps::new().sizing(Sizing::FillWidth).layout(BodyLayout::grid(columns)).body_gap(Gap::None),
+        }
     }
 }
 
