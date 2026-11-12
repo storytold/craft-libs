@@ -60,12 +60,12 @@
 mod cr2;
 #[cfg(feature = "cr3")]
 mod cr3;
+#[cfg(feature = "crw")]
+mod crw;
 #[cfg(feature = "cr3")]
 mod crx;
 #[cfg(feature = "cr3")]
 mod crx_wavelet;
-#[cfg(feature = "crw")]
-mod crw;
 #[cfg(feature = "dng")]
 mod dng;
 #[cfg(feature = "dng")]
@@ -126,6 +126,7 @@ mod rafc;
 mod rw2;
 #[cfg(feature = "dng")]
 pub mod semantic;
+pub mod sparse;
 #[cfg(feature = "arw")]
 mod sr2;
 // (the TIFF pixel plumbing every TIFF-based maker shares; DNG is its only user so far)

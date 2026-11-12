@@ -149,7 +149,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   what PhotoCraft's and FilmCraft's readers added: container parsing and decompression to a neutral
   raw image (samples, CFA, black and white levels, active area, crop, orientation, colour tags,
   opcode lists, embedded previews), one Cargo feature per format. DNG reading and writing,
-  Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2, Fujifilm RAF, Olympus ORF (uncompressed), Sony ARW and Canon CRW (through
+  Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2, Fujifilm RAF, Olympus ORF (uncompressed), Sony ARW, Canon CR3 and Canon CRW (through
   `craft-crw`) so far; demosaicing and everything after stay with the develop
   pipeline.
 - [`craft-tga`](crates/tga/src/lib.rs): Truevision Targa, from FilmCraft (reader) and PhotoCraft

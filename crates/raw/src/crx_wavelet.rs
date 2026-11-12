@@ -85,7 +85,7 @@ fn zeroed(count: usize) -> Result<Vec<i32>> {
 /// One inverse level. `HL` is horizontally high-pass, `LH` vertically high-pass.
 pub(crate) fn inverse_level(ll: &Band, hl: &Band, lh: &Band, hh: &Band, width: usize, height: usize, edges: TileEdges) -> Result<Band> {
     let count = width.checked_mul(height).filter(|n| *n > 0).ok_or_else(corrupt)?;
-    if count > limits.samples() {
+    if count > crate::MAX_SAMPLES {
         return Err(RawError::Limit("CRX wavelet image size"));
     }
     let (lw, hw) = sizes(width, edges.left, edges.right);
@@ -93,7 +93,7 @@ pub(crate) fn inverse_level(ll: &Band, hl: &Band, lh: &Band, hh: &Band, width: u
     if !valid_band(ll, lw, lhgt) || !valid_band(hl, hw, lhgt) || !valid_band(lh, lw, hhgt) || !valid_band(hh, hw, hhgt) {
         return Err(corrupt());
     }
-    let intermediate_count = width.checked_mul(lhgt + hhgt).filter(|n| *n <= limits.samples()).ok_or(RawError::Limit("CRX wavelet image size"))?;
+    let intermediate_count = width.checked_mul(lhgt + hhgt).filter(|n| *n <= crate::MAX_SAMPLES).ok_or(RawError::Limit("CRX wavelet image size"))?;
     let mut temporary = zeroed(intermediate_count)?;
     // CRX analysis is vertical then horizontal. Integer rounding means that
     // synthesis must reverse that order, including for quantized subbands.
@@ -132,7 +132,7 @@ pub(crate) fn reconstruct(bands: &[Band], width: usize, height: usize, levels: u
         return Err(corrupt());
     }
     let count = width.checked_mul(height).ok_or_else(corrupt)?;
-    if count > limits.samples() {
+    if count > crate::MAX_SAMPLES {
         return Err(RawError::Limit("CRX wavelet image size"));
     }
     let mut dimensions = vec![(width, height)];

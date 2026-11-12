@@ -20,9 +20,9 @@
 
 use crate::crx;
 use crate::shared::{black_from_columns, white_from_data};
-use crate::{BlackLevel, Camera, Cfa, ColorData, Limits, MAX_SAMPLES, Orientation, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
-use craft_tiff::{Ifd, Tiff};
+use crate::{BlackLevel, Camera, Cfa, ColorData, Limits, Mode, OpcodeLists, Orientation, RawData, RawError, RawFormat, RawImage, Rect, Result};
 use craft_metadata::cr3::{Cr3ImageArea, Cr3Track, Cr3TrackKind, parse_cr3};
+use craft_tiff::{Ifd, Tiff};
 
 const SENSOR_INFO: u16 = 0x00e0;
 const COLOR_DATA: u16 = 0x4001;
@@ -192,7 +192,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         return Err(RawError::Unsupported(format!("Canon CR3 encoding {} with {} planes", coding.encoding, coding.planes)));
     }
     let (width, height) = (coding.width as usize, coding.height as usize);
-    let samples = width.checked_mul(height).filter(|&n| n > 0 && n <= MAX_SAMPLES).ok_or(RawError::Limit("CR3 sensor dimensions"))?;
+    let samples = width.checked_mul(height).filter(|&n| n > 0 && n <= limits.samples()).ok_or(RawError::Limit("CR3 sensor dimensions"))?;
     let cfa = cfa(coding.cfa_pattern).ok_or_else(|| RawError::Unsupported(format!("Canon CR3 CFA {}", coding.cfa_pattern)))?;
     let (offset, len) = track.data.ok_or_else(|| RawError::Corrupt("CR3 raw sample outside file".into()))?;
     let sample =
@@ -266,6 +266,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         opcodes: OpcodeLists::default(),
         camera: ifd0.map(Camera::from_ifd0).unwrap_or_default(),
         cinema: Default::default(),
+        lens_metadata: Default::default(),
     };
     // Canon's stated white level can sit below the sensor's true saturation (EOS RP: 14558
     // stated, 16383 real). Extend it to a saturation pile-up above it, so highlight data
@@ -718,7 +719,7 @@ mod tests {
         let samples = r.data.clone();
         assert!(extend_white(&mut r));
         assert_eq!(r.white_at(0), 16383.0);
-        assert!((r.color.baseline_exposure - (0.5 + ((16383.0 - 528.0) / (14558.0 - 528.0) as f64).log2())).abs() < 1e-6);
+        assert!((r.color.baseline_exposure - (0.5 + ((16383.0f64 - 528.0) / (14558.0 - 528.0)).log2())).abs() < 1e-6);
         assert_eq!(r.data, samples);
         let ev = r.color.baseline_exposure;
         assert!(!extend_white(&mut r), "idempotent");
