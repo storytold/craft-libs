@@ -374,7 +374,12 @@ impl CellGrid<'_> {
             let state = Marks::of_line(&marks.columns, column);
             let (fill, text) = look(COLUMN.at(u64::from(column)));
             draw.fill(&rect(at), fill);
-            draw.text(at, &TextRun::new(self.model.column_label(column)).color(text).align(HAlign::Center).elide());
+            // A column cut by the cells' edge leaves a strip narrower than its letters; they then stay unpainted, as a
+            // cut row's number does.
+            let letters = TextRun::new(self.model.column_label(column)).color(text).align(HAlign::Center).elide();
+            if draw.layout(&letters, f32::INFINITY).size().x <= at.width() {
+                draw.text(at, &letters);
+            }
             if state.is_some() {
                 draw.fill(&rect(Rect::from_x_y_ranges(at.x_range(), at.bottom() - bar..=at.bottom())), style.accent);
             }
