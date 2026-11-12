@@ -124,7 +124,8 @@ pub struct CellGridStyle {
     /// The thickness of the accent bar on a selected line's header edge.
     pub(crate) accent_bar: f32,
     pub(crate) preview: StyleColor,
-    pub(crate) selection: StyleColor,
+    /// The tint of a merged cell by its flags, the look a row tints its cells with.
+    pub(crate) tint: Stateful<StyleColor>,
     pub(crate) handle_fill: StyleColor,
     pub(crate) handle_ring: StyleColor,
     pub(crate) edit_fill: StyleColor,

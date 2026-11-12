@@ -1,17 +1,18 @@
 //! The grid's style, its own parts, and the paint over the rows: headers, the range outline, the fill handle, the copy
 //! marks, the in-cell editor and the chrome that sits on the sheet.
 
-use craft_behavior::{CursorIcon, HitLevel, HitPriority, Metrics, PartKey, ScrollPos, Sense, TextPos};
+use craft_behavior::{CursorIcon, HitLevel, HitPriority, Metrics, PartKey, Positions, RowAt, ScrollPos, SelectionModel as _, Sense, TextPos};
 use craft_ui::contract::{Access, Cx, Focus as _, Name, PaintUi, PartsCx, Remember as _, Role, Styled as _};
 use craft_ui::primitives::{
     Dashes, Draw, EditorLine, EditorPurpose, EditorRun, EditorState, HAlign, PaintShape, RectSide, RuleKind, StrokeWidth, TextRun,
 };
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::motion::Animate as _;
-use craft_ui::style::{Flags, Stateful, StyleCx, TypeRole};
+use craft_ui::style::{Flags, State, StateMix, StateSet, Stateful, StyleCx, TypeRole};
 use egui::{CornerRadius, Pos2, Rect, Vec2};
 
 use super::editor::{EditState, Mode};
+use super::row::CellPaint;
 use super::{CellAt, CellGrid, CellGridStyle, CellGridStyleKey, CellGridWords, CellRange, CellSelection, GridLayout, SheetGeometry, SheetMetrics};
 use super::{edges, header_insets};
 use crate::ui::error_tag::ErrorTag;
@@ -57,7 +58,7 @@ pub(super) fn style(cx: &StyleCx<'_>, key: CellGridStyleKey) -> CellGridStyle {
         accent: cx.color(c.accent.solid),
         accent_bar: cx.tokens.stroke.thick,
         preview: cx.color(c.text.muted),
-        selection: cx.color(c.state.text_selection),
+        tint: super::row::cell_tint(cx),
         handle_fill: cx.color(c.accent.solid),
         handle_ring: cx.color(c.surface.background),
         edit_fill: cx.color(c.surface.raised),
@@ -266,6 +267,7 @@ impl CellGrid<'_> {
         let editing = cx.recall::<EditState>();
         let open = editing.mode != Mode::Ready;
         let preview = cx.recall::<super::input::Preview>();
+        self.paint_merges(ui, geometry, &selection, cx);
         {
             let draw = ui.draw();
             let rect = |shape: Rect| PaintShape::Rect(shape, CornerRadius::ZERO);
@@ -320,6 +322,32 @@ impl CellGrid<'_> {
             }
         }
         self.place_chrome(ui, &frame, style, cx.env.words::<CellGridWords>().outline.clone());
+    }
+
+    /// Paints the merged cells in view, each whole over the rows it spans and cut to each pane it shows in, as a row
+    /// paints its cells. A merged cell takes the flags the item step gives a row's cells: selected when the selection
+    /// holds its first cell, lead when it holds the active cell while the grid has focus.
+    fn paint_merges(&self, ui: &mut PaintUi<'_>, geometry: &SheetGeometry, selection: &CellSelection<u32>, cx: &Cx<'_, Self>) {
+        let cells =
+            CellPaint { model: self.model, background: cx.style.background, tint: &cx.style.tint, zoom: self.zoom, rtl: geometry.right_to_left() };
+        let focused = cx.is_focused();
+        let order = Positions::new(self.model.rows().count());
+        let shown = geometry.mirror_rect(geometry.cells());
+        for merge in self.model.merges() {
+            let rect = geometry.mirror_rect(geometry.range_rect(merge));
+            if !rect.intersects(shown) {
+                continue;
+            }
+            let (top, bottom, left, right) = edges(merge);
+            let held = |cell: &CellAt<u32>| (top..=bottom).contains(&cell.row) && (left..=right).contains(&cell.column);
+            let mut flags = Flags::empty();
+            flags.set(Flags::SELECTED, selection.contains_cell(RowAt::new(&top, top as usize, &order), left));
+            flags.set(Flags::LEAD, focused && selection.active().is_some_and(held));
+            let state = StateSet::new(State::Rest, flags, StateMix::REST);
+            for pane in geometry.range_panes(merge) {
+                ui.clipped(geometry.mirror_rect(pane), |ui| cells.paint(ui, CellAt::new(top, left), rect, &state));
+            }
+        }
     }
 
     fn paint_headers(&self, draw: &Draw<'_>, frame: &Frame, selection: &CellSelection<u32>, cx: &Cx<'_, Self>) {

@@ -287,3 +287,62 @@ fn a_pinch_zooms_about_the_pointer() {
     assert!(zoom > 1.0 && zoom <= 4.0, "the zoom grew within the sheet's range: {zoom}");
     assert_eq!(rig.cell_under(at), before, "the cell under the pointer stays under it");
 }
+
+/// The test sheet with cells B3:C4 merged and the first row and column frozen, recording each cell it paints.
+struct Merged {
+    sheet: Sheet,
+    merges: [CellRange<u32>; 1],
+    painted: Rc<RefCell<Vec<(CellAt<u32>, Rect)>>>,
+}
+
+impl GridModel for Merged {
+    fn rows(&self) -> &LineIndex {
+        self.sheet.rows()
+    }
+
+    fn columns(&self) -> &LineIndex {
+        self.sheet.columns()
+    }
+
+    fn frozen(&self) -> (u32, u32) {
+        (1, 1)
+    }
+
+    fn merges(&self) -> &[CellRange<u32>] {
+        &self.merges
+    }
+
+    fn paint_cell(&self, ui: &mut PaintUi<'_>, rect: Rect, cell: CellAt<u32>, zoom: f32) {
+        self.painted.borrow_mut().push((cell, rect));
+        self.sheet.paint_cell(ui, rect, cell, zoom);
+    }
+
+    fn cell_text(&self, cell: CellAt<u32>) -> String {
+        self.sheet.cell_text(cell)
+    }
+}
+
+/// A merged cell paints once, over the whole of the rows and columns it spans, and none of the cells it covers paints.
+#[trial]
+fn a_merged_cell_paints_once_over_all_its_rows() {
+    let painted = Rc::new(RefCell::new(Vec::new()));
+    let seen = painted.clone();
+    let state = RefCell::new(GridState::new(a1(), 1.0));
+    let mut fixture = Fixture::new(move |ui| {
+        let merges = [CellRange::cells(CellAt::new(2, 1), CellAt::new(3, 2))];
+        let model = Merged { sheet: Sheet::new(None, Rc::new(Cell::new(1.0))), merges, painted: seen.clone() };
+        let mut shown = state.borrow().clone();
+        CellGrid::new("Sheet", &model, &mut shown).show_sheet(ui);
+        *state.borrow_mut() = shown;
+    });
+    fixture.room(Vec2::new(400.0, 300.0)).settle();
+    painted.borrow_mut().clear();
+    fixture.idle(1);
+    let painted = painted.borrow();
+    let merged: Vec<Rect> = painted.iter().filter(|(cell, _)| *cell == CellAt::new(2, 1)).map(|(_, rect)| *rect).collect();
+    let [rect] = merged.as_slice() else { panic!("the merged cell painted once, not {} times", merged.len()) };
+    let one = painted.iter().find(|(cell, _)| *cell == CellAt::new(1, 1)).map(|(_, rect)| *rect).expect("B2 painted");
+    assert!(rect.height() > one.height() * 1.5 && rect.width() > one.width() * 1.5, "the merged cell spans two rows and two columns");
+    let covered = [CellAt::new(2, 2), CellAt::new(3, 1), CellAt::new(3, 2)];
+    assert!(painted.iter().all(|(cell, _)| !covered.contains(cell)), "a covered cell painted: {painted:?}");
+}

@@ -121,6 +121,25 @@ impl PaintUi<'_> {
         self.draw().for_part(inactive)
     }
 
+    /// Runs `paint` with this `PaintUi` cut to `rect` (inside the clip already in force), as `Draw::clipped` does for a
+    /// `Draw`: content painted whole over one pane of the component, such as a sheet's merged cell under a frozen row.
+    /// The children shown inside take the cut too; the clip is restored afterwards.
+    pub fn clipped<R>(&mut self, rect: Rect, paint: impl FnOnce(&mut Self) -> R) -> R {
+        let kept = self.ui.clip_rect();
+        let kids_kept = self.kids.as_ref().map(Ui::clip_rect);
+        self.ui.set_clip_rect(rect.intersect(kept));
+        if let Some(kids) = &mut self.kids {
+            kids.set_clip_rect(rect.intersect(kids.clip_rect()));
+        }
+        let out = paint(self);
+        self.ui.set_clip_rect(kept);
+        if let Some(kids) = &mut self.kids {
+            // Children first shown inside `paint` built their Ui under the cut; they get the clip it had before.
+            kids.set_clip_rect(kids_kept.unwrap_or(kept));
+        }
+        out
+    }
+
     /// Runs `f` with the style context of this component's env, so app hooks called from `paint` pick colours and
     /// sizes through tokens as `style` does.
     pub fn with_style<R>(&self, variant: Variant, f: impl FnOnce(&StyleCx<'_>) -> R) -> R {
