@@ -23,6 +23,12 @@
 //! its own colours, and the tooltips and screen-reader labels from [`Labels`], which the app
 //! translates. Desktops that draw the frame ([`Frame::Desktop`]) never need any of this.
 //!
+//! The buttons come in Adwaita's style only, which matches
+//! [`CaptionFamily::Adwaita`](crate::policy::CaptionFamily::Adwaita); they don't read
+//! [`Captions::family`](crate::policy::Captions::family) yet, so for the Breeze, Windows and Generic
+//! families the app draws its own buttons for now. The resize edges and [`DesktopGrab`] don't depend
+//! on the family.
+//!
 //! ```ignore
 //! // Once, at startup:
 //! craft_window::controls::install(&cc.egui_ctx);
