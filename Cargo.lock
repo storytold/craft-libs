@@ -1834,8 +1834,12 @@ name = "craft-rtf"
 version = "0.1.0"
 dependencies = [
  "craft-codepage",
+ "craft-flow",
+ "craft-metafile",
  "craft-mime",
+ "craft-wordmodel",
  "encoding_rs",
+ "image",
  "proptest",
 ]
 
