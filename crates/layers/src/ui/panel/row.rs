@@ -37,7 +37,6 @@ pub(super) const OPTIONS_PART: u16 = 2;
 const DISABLED_MASK: LabelColor = LabelColor::Red;
 const CROSS_INSET_SHARE: f32 = 0.12;
 const MARK_WIDTH_SHARE: f32 = 0.06;
-const BADGE_SHARE: f32 = 0.34;
 const BADGE_GLYPH_SHARE: f32 = 0.28;
 /// The kind glyph's share of the tile's shorter side.
 const KIND_GLYPH_SHARE: f32 = 0.64;
@@ -166,17 +165,19 @@ fn paint_kind_tile(painter: &ContentPainterCx<'_>, rect: Rect, kind: LayerKind) 
     }
 }
 
-/// The square in the bottom corner of the thumbnail `rect` that a badge fills.
-fn badge_area(rect: Rect) -> Rect {
-    let badge = rect.width().min(rect.height()) * BADGE_SHARE;
+/// The square in the bottom corner of the thumbnail `rect` that a badge fills: the small icon size, the least that
+/// still reads, within the thumbnail.
+fn badge_area(painter: &ContentPainterCx<'_>, rect: Rect) -> Rect {
+    let badge = painter.style_cx().tokens.size.icon.sm.min(rect.width().min(rect.height()));
     Rect::from_min_size(pos2(rect.right() - badge, rect.bottom() - badge), vec2(badge, badge))
 }
 
-/// The app's badge on a layer thumbnail: its icon on the scrim.
+/// The app's badge on a layer thumbnail: its icon at the small glyph size on the scrim.
 fn paint_thumb_badge(painter: &ContentPainterCx<'_>, rect: Rect, icon: IconId) {
-    let area = badge_area(rect);
+    let area = badge_area(painter, rect);
     painter.surface(area, SurfaceKind::Scrim, Corners::None);
-    let glyph = area.shrink(area.width() * CROSS_INSET_SHARE);
+    let side = painter.style_cx().tokens.size.icon.glyph_sm.min(area.width());
+    let glyph = Rect::from_center_size(area.center(), vec2(side, side));
     painter.icon(glyph, &IconSpec::svg(icon).ink(SurfaceKind::Scrim.ink()));
 }
 
@@ -190,7 +191,7 @@ fn paint_mask_marks(painter: &ContentPainterCx<'_>, rect: Rect, mask: &MaskInfo,
         painter.painter.line_segment([inner.right_top(), inner.left_bottom()], stroke);
     }
     if badges {
-        let area = badge_area(rect);
+        let area = badge_area(painter, rect);
         let badge = area.width();
         painter.surface(area, SurfaceKind::Scrim, Corners::None);
         let ink = painter.ink_on(SurfaceKind::Scrim);
