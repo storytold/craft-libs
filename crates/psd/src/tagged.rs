@@ -453,6 +453,19 @@ pub(crate) fn is_sig(b: &[u8]) -> bool {
     b.starts_with(b"8BIM") || b.starts_with(b"8B64") || TaggedBlock::is_foreign_order_signature(b)
 }
 
+/// The channels a `brst` block (channel blending restrictions) leaves out of blending, as a bit
+/// mask: bit `i` for channel `i`. The block is a list of big-endian `u32` channel indices;
+/// indices above 31 and a trailing partial index are ignored.
+pub fn channel_restrictions(data: &[u8]) -> u32 {
+    data.as_chunks::<4>().0.iter().map(|c| u32::from_be_bytes(*c)).filter(|&i| i < 32).fold(0, |m, i| m | 1 << i)
+}
+
+/// The data of a `brst` block for the channels `mask` leaves out ([`channel_restrictions`]);
+/// `None` when every channel blends, which Photoshop writes as no block.
+pub fn channel_restrictions_data(mask: u32) -> Option<Vec<u8>> {
+    (mask != 0).then(|| (0..32u32).filter(|i| mask & 1 << i != 0).flat_map(u32::to_be_bytes).collect())
+}
+
 /// Reads tagged blocks until the reader is exhausted. Bytes that do not form
 /// a block (fewer than 12 bytes or no valid signature) are returned as
 /// trailing data.
@@ -537,6 +550,16 @@ pub(crate) fn write_blocks_to<W: std::io::Write + std::io::Seek + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn channel_restrictions_round_trip_as_a_mask() {
+        let data = [0u32, 2, 40].iter().flat_map(|i| i.to_be_bytes()).chain([0, 0]).collect::<Vec<u8>>();
+        assert_eq!(channel_restrictions(&data), 0b101);
+        assert_eq!(channel_restrictions_data(0b101), Some([0u32, 2].iter().flat_map(|i| i.to_be_bytes()).collect()));
+        assert_eq!(channel_restrictions_data(0), None);
+        assert_eq!(channel_restrictions(&[]), 0);
+        assert_eq!(channel_restrictions(&channel_restrictions_data(u32::MAX).unwrap()), u32::MAX);
+    }
 
     fn rt(blocks: &[TaggedBlock], version: Version) -> Vec<u8> {
         let mut out = Vec::new();
