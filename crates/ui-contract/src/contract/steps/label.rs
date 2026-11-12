@@ -16,9 +16,18 @@ pub(super) fn scrub_press<C: Component>(comp: &C, cx: &Cx<'_, C>) -> Option<(cra
         let press = cx.core.results.get(&(part.key, part.index)).map(|result| result.press)?;
         pressed(&press).then(|| (press, drag.clone()))
     });
-    let label = || scrub.by_label.then(|| scope::field_label(&cx.core.ctx)).flatten().map(|label| label.press).filter(pressed);
+    let label = || scrub.by_label.then(|| side_label(cx)).flatten().map(|(press, _)| press).filter(pressed);
     let field = || (scrub.on_field && !cx.core.text_takes_pointer).then_some(cx.core.press).filter(pressed);
     part.or_else(|| label().or_else(field).map(|press| (press, scrub.drag.clone())))
+}
+
+/// The press and hover of the side label a `by_label` scrub reads: the inside label's part when the control declared
+/// one (`PartsCx::label_part`), else the label scope's label.
+fn side_label<C: Component>(cx: &Cx<'_, C>) -> Option<(craft_behavior::PressState, bool)> {
+    match cx.core.results.get(&(crate::contract::InsideLabel::PART, None)) {
+        Some(part) => Some((part.press, part.hovered)),
+        None => scope::field_label(&cx.core.ctx).map(|label| (label.press, label.hovered)),
+    }
 }
 
 /// The value a label scrub started from.
@@ -67,14 +76,14 @@ pub(crate) fn scrub_by_label<C: Component>(comp: &C, cx: &mut Cx<'_, C>) {
         }
         return;
     }
-    let label = scrub.by_label.then(|| scope::field_label(&cx.core.ctx)).flatten();
-    if label.is_some() {
+    if scrub.by_label && scope::field_label(&cx.core.ctx).is_some() {
         scope::register_scrub(&cx.core.ctx);
     }
+    let label = scrub.by_label.then(|| side_label(cx)).flatten();
     // A scrub's source shows the horizontal resize cursor under the pointer.
     let part_hovered = scrub.parts.iter().any(|(part, _)| cx.core.results.get(&(part.key, part.index)).is_some_and(|result| result.hovered));
     let field_hovered = scrub.on_field && !cx.core.text_takes_pointer && cx.core.response.hovered();
-    if part_hovered || field_hovered || label.is_some_and(|label| label.hovered) {
+    if part_hovered || field_hovered || label.is_some_and(|(_, hovered)| hovered) {
         crate::runtime::cursor::request(&cx.core.ctx, Cursor::System(craft_behavior::CursorIcon::ResizeHorizontal), CursorPriority::Part);
     }
     let Some((press, drag)) = scrub_press(comp, cx) else { return };

@@ -12,5 +12,6 @@ mod step;
 #[doc(hidden)]
 pub use leaf::colon_of;
 pub(crate) use place::{control_after, label_gap};
-pub use props::{CellWidth, FieldLayout, GlyphLabel, LabelAlign, LabelKind, Scrub, SideLabel};
-pub(crate) use step::{LabelIn, LeafLabel, Trailing, flow_leaf, leaf, run, show_leaf_in_flow};
+pub(crate) use props::inside;
+pub use props::{CellWidth, FieldLayout, GlyphLabel, InsideLabel, LabelAlign, LabelKind, Scrub, SideLabel};
+pub(crate) use step::{LabelIn, LeafLabel, Trailing, flow_leaf, leaf, leaf_under, run, show_leaf_in_flow};

@@ -113,7 +113,20 @@ impl<C: Component> MeasureCx<'_, C> {
     /// Measures a child under the composite's resolved `enabled` and `size`, as `PaintUi::child` will show it.
     pub fn child<D: Show>(&self, key: impl Hash + Debug, child: &mut D, proposal: Proposal) -> Vec2 {
         let id = self.id.with(key);
-        crate::contract::measure_under(child, self.ui, Some(id), proposal, Some(self.enabled_size))
+        crate::contract::measure_under(child, self.ui, Some(id), proposal, Some(&self.under()))
+    }
+
+    /// Measures a child as `PaintUi::labelled` will show it with `side`: under the inside label `side` gives it
+    /// (`FieldLayout::Inside`), and otherwise as `child` does. The label's own room is the composite's to add.
+    pub fn labelled<D: Show>(&self, key: impl Hash + Debug, side: &crate::contract::SideLabel, child: &mut D, proposal: Proposal) -> Vec2 {
+        let id = self.id.with(key);
+        let mut under = self.under();
+        under.inside = crate::contract::label::inside(self.env, side, under.enabled);
+        crate::contract::measure_under(child, self.ui, Some(id), proposal, Some(&under))
+    }
+
+    fn under(&self) -> crate::contract::cx::Under {
+        crate::contract::cx::Under::new(self.enabled_size.0, self.enabled_size.1)
     }
 
     /// The size `face` has when `PaintUi::face` shows it as the look of a part: steps 1, 2 and 4 of the face run
@@ -122,7 +135,7 @@ impl<C: Component> MeasureCx<'_, C> {
     pub fn face<S: Show>(&self, mut face: S) -> Vec2 {
         let id = self.id.with("face");
         let proposal = if self.proposal == Proposal::Min { Proposal::Min } else { Proposal::Ideal };
-        crate::contract::measure_under(&mut face, self.ui, Some(id), proposal, Some(self.enabled_size))
+        crate::contract::measure_under(&mut face, self.ui, Some(id), proposal, Some(&self.under()))
     }
 
     /// The icon side of the component's size.

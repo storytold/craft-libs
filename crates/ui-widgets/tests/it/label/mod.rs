@@ -3,6 +3,7 @@
 mod align;
 pub mod group;
 mod hit;
+mod inside;
 pub mod kit;
 mod tooltip;
 

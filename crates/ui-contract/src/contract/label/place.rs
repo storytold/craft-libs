@@ -93,8 +93,8 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
             (width, width + gap + input.control_min)
         }
         FieldLayout::Above => (natural.x, f32::INFINITY),
-        // `Line` returned above.
-        FieldLayout::After | FieldLayout::Line => (natural.x, 0.0),
+        // `Line` returned above; an `Inside` label shows no leaf, so it is never decided.
+        FieldLayout::After | FieldLayout::Line | FieldLayout::Inside => (natural.x, 0.0),
         FieldLayout::Caption(cell) => {
             let width = match cell {
                 ColumnWidth::Fixed(width) => width.min(natural.x),
@@ -151,7 +151,7 @@ pub(crate) fn label_gap(env: &Env) -> f32 {
 pub(crate) fn control_after(ui: &mut Ui, env: &Env, input: &LabelIn<'_>) -> Placed {
     let ctx = ui.ctx().clone();
     let flow = Flow::new(input.row, env.direction.is_rtl());
-    if input.side.kind == LabelKind::Hidden {
+    if input.side.shows_no_leaf() {
         return Placed { label: Rect::NOTHING, control: hidden_control(&ctx, input, flow, label_gap(env)), trailing: Rect::NOTHING };
     }
     let reset = scope::last_reset(&ctx, input.scope);
@@ -160,7 +160,7 @@ pub(crate) fn control_after(ui: &mut Ui, env: &Env, input: &LabelIn<'_>) -> Plac
     leaf.resettable = reset.is_some();
     leaf.colon = colon(env, input);
     match &input.side.kind {
-        LabelKind::Glyph(glyph) => leaf.glyph = Some(glyph.resolved(env)),
+        LabelKind::Glyph(glyph) => leaf.glyph = Some(glyph.resolved(env.view())),
         _ => {
             leaf.icon = input.side.icon.clone();
             leaf.detail = input.side.detail.as_ref().map(|detail| env.view().resolve(detail));
@@ -169,7 +169,7 @@ pub(crate) fn control_after(ui: &mut Ui, env: &Env, input: &LabelIn<'_>) -> Plac
     let glyph = leaf.glyph.is_some();
     let builder = UiBuilder::new().max_rect(input.row).layout(child::pinned_layout()).scope_id(sub(input.scope, "label_ui"));
     let kids = alloc::child(ui, builder);
-    let installed = Env::install_for(&kids, crate::contract::cx::child_env(env, input.enabled, input.size));
+    let installed = Env::install_for(&kids, crate::contract::cx::child_env(env, &crate::contract::cx::Under::new(input.enabled, input.size)));
     let placed = decide(&ctx, env, input, &kids, &mut leaf, glyph, flow);
     Env::restore(&ctx, installed);
     placed

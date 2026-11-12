@@ -1,7 +1,8 @@
 //! The number field's own logic: stepping, the range on typed values, presets and the label scrub across a pointer warp.
 
 use craft_host::{AppInfo, Host};
-use craft_ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft_ui::contract::{Bind, Entry, FieldLayout, GlyphLabel, InsideLabel, LabelKind, Props as _, Show as _, ShowContainer as _, SideLabel};
+use craft_ui::form::Field;
 use craft_ui::runtime::env::UnitKind;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::pointer::{click, drag};
@@ -207,4 +208,36 @@ fn a_drag_from_the_slider_chevron_moves_the_value_and_its_release_closes_the_sli
     fixture.release_at(chevron + Vec2::new(30.0, 0.0));
     fixture.settle();
     assert!(fixture.by_role(Role::SLIDER).is_empty(), "the release closed the slider");
+}
+
+/// A glyph label inside the field is a scrub handle at the field's start: it lies before the text without
+/// overlapping it, and a drag on it scrubs the value, in edit too.
+#[trial]
+fn an_inside_glyph_label_scrubs_the_field_in_edit_too() {
+    let value = std::rc::Rc::new(Cell::new(Some(START)));
+    let id = std::rc::Rc::new(Cell::new(None));
+    let (shown, seen) = (value.clone(), id.clone());
+    let mut fixture = craft_ui::testing::Fixture::new(move |ui| {
+        let side = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text("W"))).layout(FieldLayout::Inside).scrub(true);
+        Field::new("Width").side(side).show(ui, |ui, _| {
+            let mut now = shown.get();
+            let out = NumberField::new("Width", Bind::bound(&mut now)).id_salt("width").scrub_by_label().show(ui);
+            shown.set(now);
+            seen.set(Some(out.response.id));
+        });
+    });
+    fixture.settle();
+    let field = id.get().unwrap_or_else(|| panic!("the field ran"));
+    let glyph = fixture.part_rect(field, InsideLabel::PART).unwrap_or_else(|| panic!("the field declares the inside label's slot"));
+    let painted = |text: &str| fixture.texts().iter().find(|run| run.text == text).map(|run| run.rect);
+    let number = painted("10").unwrap_or_else(|| panic!("the field shows its value"));
+    let mark = painted("W").unwrap_or_else(|| panic!("the field shows the glyph"));
+    assert!(glyph.contains_rect(mark), "the glyph is painted in its slot: {mark:?} {glyph:?}");
+    assert!(glyph.max.x <= number.min.x, "the glyph lies before the value without overlap: {glyph:?} {number:?}");
+    let target = fixture.by_label("Width").unwrap_or_else(|| panic!("the label names the field"));
+    fixture.click(&target);
+    assert!(fixture.focused_stop().is_some_and(|(stop, _)| stop == field), "a click puts the field in edit");
+    fixture.drag_at(glyph.center(), Vec2::new(30.0, 0.0));
+    fixture.idle(2);
+    assert!(value.get().unwrap_or_default() > START, "a drag on the glyph in edit raised the value");
 }

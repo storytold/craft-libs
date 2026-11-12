@@ -12,10 +12,10 @@ use super::session::Interpolation;
 use super::session_bar::TransformBarWords;
 use craft_behavior::geometry::quad::BoxState;
 use craft_behavior::kurbo::Rect;
-use craft_behavior::{EditEvent, EditEvents, GestureId, Mixed, RulerUnits};
+use craft_behavior::{EditEvent, EditEvents, GestureId, IconId, Mixed, RulerUnits};
 use craft_ui::canvas::RulerText;
 use craft_ui::contract::{
-    Bind, BodyCx, Entry, GlyphLabel, LabelKind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing,
+    Bind, BodyCx, Entry, FieldLayout, GlyphLabel, LabelKind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing,
 };
 use craft_ui::display::Divider;
 use craft_ui::form::{Field, FieldGroup};
@@ -40,7 +40,6 @@ craft_ui::words! {
         h_glyph: "transform.hGlyph" = "H";
         h_name: "transform.hName" = "Height";
         link: "transform.link" = "Maintain aspect ratio";
-        angle_glyph: "transform.angleGlyph" = "°";
         angle_name: "transform.angleName" = "Angle";
         skew_h_glyph: "transform.skewHGlyph" = "H";
         skew_h_name: "transform.skewHName" = "Horizontal skew";
@@ -350,22 +349,28 @@ impl Cells<'_> {
         self.out.events.push(event);
     }
 
-    fn glyph_and_name(&self, field: TransformField) -> (Label, Label) {
+    /// The field's scrubbing glyph label and its name: the angle's rotate icon inside the field, the other glyphs
+    /// beside theirs.
+    fn side_and_name(&self, field: TransformField) -> (SideLabel, Label) {
         let words = &self.words;
-        match field {
-            TransformField::X => (words.x_glyph.clone(), words.x_name.clone()),
-            TransformField::Y => (words.y_glyph.clone(), words.y_name.clone()),
-            TransformField::W => (words.w_glyph.clone(), words.w_name.clone()),
-            TransformField::H => (words.h_glyph.clone(), words.h_name.clone()),
-            TransformField::Angle => (words.angle_glyph.clone(), words.angle_name.clone()),
-            TransformField::SkewH => (words.skew_h_glyph.clone(), words.skew_h_name.clone()),
-            TransformField::SkewV => (words.skew_v_glyph.clone(), words.skew_v_name.clone()),
-        }
+        let beside = |glyph: &Label| SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(glyph.clone())));
+        let (side, name) = match field {
+            TransformField::X => (beside(&words.x_glyph), &words.x_name),
+            TransformField::Y => (beside(&words.y_glyph), &words.y_name),
+            TransformField::W => (beside(&words.w_glyph), &words.w_name),
+            TransformField::H => (beside(&words.h_glyph), &words.h_name),
+            TransformField::Angle => {
+                (SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::icon(IconId::new("rotate_cw")))).layout(FieldLayout::Inside), &words.angle_name)
+            }
+            TransformField::SkewH => (beside(&words.skew_h_glyph), &words.skew_h_name),
+            TransformField::SkewV => (beside(&words.skew_v_glyph), &words.skew_v_name),
+        };
+        (side.scrub(true), name.clone())
     }
 
     /// One captioned field. Returns the field's event lifted to the row.
     fn field(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, pass: &mut Pass, field: TransformField) {
-        let (glyph, name) = self.glyph_and_name(field);
+        let (side, name) = self.side_and_name(field);
         let conversion = &pass.conversion;
         let (kind, decimals) = conversion.format(field);
         let bound = conversion.bound(field);
@@ -377,7 +382,6 @@ impl Cells<'_> {
         let unit = Label::from(self.units.symbol(kind));
         let percent = kind == UnitKind::Percent;
         let menu = self.size_units.filter(|_| matches!(field, TransformField::W | TransformField::H));
-        let side = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(glyph))).scrub(true);
         let mut events = EditEvents::new();
         let mut picked = None;
         Field::new(name.clone()).id_salt(field.key()).enabled(self.enabled).side(side).sizing(Sizing::Content).show(ui, |ui, _| {

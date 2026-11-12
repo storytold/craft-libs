@@ -76,7 +76,7 @@ pub use items::put_toggle_names;
 pub use items::{ColumnCommands, SweepApply, SweepStep, item_part_open, request_rename, section_part};
 #[doc(hidden)]
 pub use label::colon_of;
-pub use label::{CellWidth, FieldLabelRole, FieldLayout, GlyphLabel, LabelAlign, LabelKind, Scrub, SideLabel};
+pub use label::{CellWidth, FieldLabelRole, FieldLayout, GlyphLabel, InsideLabel, LabelAlign, LabelKind, Scrub, SideLabel};
 pub use lazy::Lazy;
 #[cfg(feature = "testing")]
 pub(crate) use level::kit_module;

@@ -20,7 +20,7 @@ use crate::runtime::overlay::CloseReason;
 use crate::runtime::reads::{self, BindKey};
 use crate::style::{Flags, StateSet, StyleCx, StyleView};
 use craft_behavior::{EditEvent, Flow, ItemSource, KeyRole, PartRef, Proposal, Roving, Sense};
-use craft_theme::{ControlSize, Variant};
+use craft_theme::Variant;
 use egui::{Context, Id, Rect, Ui, Vec2};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -447,7 +447,7 @@ fn measure_shape<C: Component>(
     ui: &Ui,
     id: Option<Id>,
     proposal: Proposal,
-    under: Option<(bool, ControlSize)>,
+    under: Option<&crate::contract::cx::Under>,
     hooks: &mut dyn ShapeHooks<C>,
 ) -> Vec2 {
     super::measure_shape(&mut Typed::new(Held::Lent(comp), hooks), ui, id, proposal, under)
@@ -531,9 +531,15 @@ pub(crate) fn show_items<'r, C: Collection>(comp: C, ui: &mut Ui, source: &dyn I
 }
 
 /// Measures `comp` as `show` will show it, without allocating: steps 1 to 5 under the id `show` would use next. It
-/// reads memory through a peek, registers no id and applies nothing. `under` is the composite's resolved
-/// `(enabled, size)` when it measures a child it shows with `PaintUi::child`.
-pub(crate) fn measure_under<C: Component>(comp: &mut C, ui: &Ui, id: Option<Id>, proposal: Proposal, under: Option<(bool, ControlSize)>) -> Vec2 {
+/// reads memory through a peek, registers no id and applies nothing. `under` is what the composite hands a child it
+/// shows with `PaintUi::child` or `PaintUi::labelled` when it measures that child.
+pub(crate) fn measure_under<C: Component>(
+    comp: &mut C,
+    ui: &Ui,
+    id: Option<Id>,
+    proposal: Proposal,
+    under: Option<&crate::contract::cx::Under>,
+) -> Vec2 {
     measure_shape(comp, ui, id, proposal, under, &mut LeafHooks { scope: None })
 }
 

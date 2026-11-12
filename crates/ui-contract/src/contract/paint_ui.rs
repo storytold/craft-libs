@@ -1,10 +1,10 @@
 //! `PaintUi` (5.3): what `paint` and `paint_over` get instead of a `Ui`. It lives in the contract (layer 4)
 //! because `child` and `face` show components; `Draw` and the painters stay in `primitives`.
 
-use super::SideLabel;
 use super::label::{self, LeafLabel};
 use super::run::{self, FaceSource, ShowAt};
 use super::{ContentPainter, Cx, Show, TipFn};
+use super::{InsideLabel, SideLabel};
 use crate::primitives::sensing::PartResults;
 use crate::primitives::{ContentPainterCx, Draw, DrawEnv, PaintRecord, TextRun, Wrap};
 use crate::runtime::access;
@@ -20,6 +20,7 @@ use egui::{Id, Rect, Response, Ui};
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::sync::Arc;
 
 /// What `paint` and `paint_over` get instead of a `Ui`.
 pub struct PaintUi<'a> {
@@ -141,7 +142,7 @@ impl PaintUi<'_> {
     /// Shows a child component at a physical rect, with id `cx.key(key)`. The child `Ui` is pinned left to
     /// right: this site is unmirrored.
     pub fn child<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, child: C) -> C::Output {
-        self.child_with(self.id.with(key), rect, child, None)
+        self.child_with(self.id.with(key), rect, child, None, None)
     }
 
     /// Shows `child` as the owner's own control, such as a picker the owner draws its field with. The child's node
@@ -151,12 +152,12 @@ impl PaintUi<'_> {
     pub fn inner<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, child: C) -> C::Output {
         let id = self.id.with(key);
         access::fold::request(self.ui.ctx(), id, self.id);
-        self.child_with(id, rect, child, None)
+        self.child_with(id, rect, child, None, None)
     }
 
     /// Shows a child with rich tooltip content.
     pub fn child_with_tip<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, child: C, tip: impl FnOnce(&mut Ui)) -> C::Output {
-        self.child_with(self.id.with(key), rect, child, Some(Box::new(tip)))
+        self.child_with(self.id.with(key), rect, child, Some(Box::new(tip)), None)
     }
 
     /// Runs the label step (B2) for one leaf child at `rect`: the label's placement beside or above the child, the
@@ -166,23 +167,25 @@ impl PaintUi<'_> {
         let id = self.id.with(key);
         let env = Env::of(self.ui);
         let mut child = child;
-        let at =
-            LeafLabel { id, owner: self.id, parent: Some(self.id), row: rect, text: &label, side: &side, enabled: self.enabled, size: self.size };
+        let under = label::leaf_under(&env, &side, &child, (self.enabled, self.size));
+        let at = LeafLabel { id, owner: self.id, parent: Some(self.id), row: rect, text: &label, side: &side, under: &under };
         let ctx = self.ui.ctx().clone();
         layout_memory::boundary(&ctx, true, || {
             let placed = crate::layout::ColumnGroup::barrier(&mut *self.ui, |ui| label::leaf(ui, &env, &at, &mut child, None));
             let mut control = placed.control;
             if child.fills() != Some(craft_behavior::Axis::Y) {
-                let ideal = run::measure_under(&mut child, &*self.ui, Some(id), craft_behavior::Proposal::Ideal, Some((self.enabled, self.size)));
+                let ideal = run::measure_under(&mut child, &*self.ui, Some(id), craft_behavior::Proposal::Ideal, Some(&under));
                 control.max.y = control.max.y.min(control.min.y + ideal.y);
             }
-            let output = self.child_with(id, control, child, None);
+            let output = self.child_with(id, control, child, None, under.inside.clone());
             placed.finish(&ctx);
             output
         })
     }
 
-    fn child_with<C: Show>(&mut self, id: Id, rect: Rect, child: C, tip: Option<TipFn<'_>>) -> C::Output {
+    /// Shows `child` at `rect` under the composite's `enabled` and `size`, and `inside`, the inside label of the side
+    /// label the child is the control of.
+    fn child_with<C: Show>(&mut self, id: Id, rect: Rect, child: C, tip: Option<TipFn<'_>>, inside: Option<Arc<InsideLabel>>) -> C::Output {
         let scope = sub(self.id, "children");
         let parent = &mut *self.ui;
         let kids = self.kids.get_or_insert_with(|| {
@@ -190,7 +193,7 @@ impl PaintUi<'_> {
             alloc::child(parent, access::with_parent(builder, self.id))
         });
         let ctx = kids.ctx().clone();
-        let env = super::cx::child_env(&Env::of(kids), self.enabled, self.size);
+        let env = super::cx::child_env(&Env::of(kids), &super::cx::Under { enabled: self.enabled, size: self.size, inside });
         let installed = Env::install_for(kids, env);
         // The child sits in a rect its owner chose, and the owner's own measure answers for it: no body's transcript
         // holds it.

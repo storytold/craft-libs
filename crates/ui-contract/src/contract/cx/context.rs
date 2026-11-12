@@ -345,10 +345,28 @@ impl<C: Component> StageAccess for Cx<'_, C> {
     }
 }
 
-/// An env derived for children `PaintUi` builds: the composite's resolved `enabled` and `size`.
-pub(crate) fn child_env(env: &Env, enabled: bool, size: craft_theme::ControlSize) -> Env {
+/// What a composite hands a child it shows or measures: its resolved `enabled` and `size`, and the inside label of
+/// the side label the child is the control of (`FieldLayout::Inside`).
+#[derive(Clone)]
+pub(crate) struct Under {
+    pub enabled: bool,
+    pub size: craft_theme::ControlSize,
+    pub inside: Option<std::sync::Arc<crate::contract::InsideLabel>>,
+}
+
+impl Under {
+    /// The composite's `enabled` and `size`, with no inside label.
+    pub(crate) fn new(enabled: bool, size: craft_theme::ControlSize) -> Self {
+        Under { enabled, size, inside: None }
+    }
+}
+
+/// An env derived for children `PaintUi` builds: the composite's resolved `enabled` and `size`, and only the inside
+/// label `under` gives.
+pub(crate) fn child_env(env: &Env, under: &Under) -> Env {
     env.derive_local(|scoped| {
-        scoped.enabled &= enabled;
-        scoped.size = size;
+        scoped.enabled &= under.enabled;
+        scoped.size = under.size;
+        scoped.inside_label.clone_from(&under.inside);
     })
 }

@@ -5,6 +5,7 @@ use super::place::{Placed, decide, hidden_control, label_gap};
 use super::props::{FieldLayout, LabelKind, SideLabel};
 use crate::contract::Props;
 use crate::contract::Show;
+use crate::contract::cx::Under;
 use crate::runtime::access::{
     self,
     scope::{self, FieldLabel},
@@ -77,9 +78,15 @@ pub(crate) struct LeafLabel<'a> {
     pub row: Rect,
     pub text: &'a Label,
     pub side: &'a SideLabel,
-    /// The enabled state and size the child inherits.
-    pub enabled: bool,
-    pub size: craft_theme::ControlSize,
+    /// What the child inherits (`leaf_under`).
+    pub under: &'a Under,
+}
+
+/// What the label step hands its leaf child in every measure and run: the enabled state `under` gives with the
+/// child's own (a disabled field's label does not scrub), the size, and the inside label of `side`.
+pub(crate) fn leaf_under<C: Show>(env: &Env, side: &SideLabel, child: &C, (enabled, size): (bool, craft_theme::ControlSize)) -> Under {
+    let enabled = enabled && child.common(crate::contract::Internal::new()).enabled.unwrap_or(true);
+    Under { enabled, size, inside: super::props::inside(env.view(), side, enabled) }
 }
 
 /// A leaf child's label step that has run: the rect left for the child and the scope the caller closes.
@@ -102,9 +109,8 @@ impl LeafPlaced {
 /// then calls `LeafPlaced::finish`.
 pub(crate) fn leaf<C: Show>(ui: &mut Ui, env: &Env, at: &LeafLabel<'_>, child: &mut C, trailing: Option<Trailing<'_>>) -> LeafPlaced {
     let scope = sub(at.id, "field");
-    // The child's own `enabled(false)` disables its label too: a disabled field's label does not scrub.
-    let enabled = at.enabled && child.common(crate::contract::Internal::new()).enabled.unwrap_or(true);
-    let control_min = crate::contract::run::measure_under(child, &*ui, Some(at.id), craft_behavior::Proposal::Min, Some((enabled, at.size))).x;
+    let enabled = at.under.enabled;
+    let control_min = crate::contract::run::measure_under(child, &*ui, Some(at.id), craft_behavior::Proposal::Min, Some(at.under)).x;
     let input = LabelIn {
         scope,
         owner: at.owner,
@@ -116,7 +122,7 @@ pub(crate) fn leaf<C: Show>(ui: &mut Ui, env: &Env, at: &LeafLabel<'_>, child: &
         side: at.side,
         help: None,
         enabled,
-        size: at.size,
+        size: at.under.size,
         control_min,
         leaf: true,
         claims: C::LABELLED_AFTER,
@@ -138,7 +144,7 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, trailing: Option<
     let reset = scope::last_reset(&ctx, input.scope);
     let flow = Flow::new(input.row, rtl);
     let label_id = sub(input.scope, "label");
-    if input.side.kind == LabelKind::Hidden {
+    if input.side.shows_no_leaf() {
         scope::begin(&ctx, input.scope, input.owner, scope::Kind::Label(field_label(env, input, label_id, Rect::NOTHING)));
         return Placed { label: Rect::NOTHING, control: hidden_control(&ctx, input, flow, gap), trailing: Rect::NOTHING };
     }
@@ -155,7 +161,7 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, trailing: Option<
         leaf = leaf.tooltip(tooltip);
     }
     match &input.side.kind {
-        LabelKind::Glyph(glyph) => leaf.glyph = Some(glyph.resolved(env)),
+        LabelKind::Glyph(glyph) => leaf.glyph = Some(glyph.resolved(env.view())),
         _ => {
             leaf.icon = input.side.icon.clone();
             leaf.detail = input.side.detail.as_ref().map(|detail| env.view().resolve(detail));
@@ -168,7 +174,7 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, trailing: Option<
         None => builder,
     };
     let mut kids = alloc::child(ui, builder);
-    let kid_env = crate::contract::cx::child_env(env, input.enabled, input.size);
+    let kid_env = crate::contract::cx::child_env(env, &Under::new(input.enabled, input.size));
     let installed = Env::install_for(&kids, kid_env);
     let glyph = leaf.glyph.is_some();
     let mut placed = decide(&ctx, env, input, &kids, &mut leaf, glyph, flow);
@@ -213,17 +219,16 @@ pub(crate) fn flow_leaf<C: Show>(
     child: C,
     trailing: Option<Trailing<'_>>,
 ) -> C::Output {
-    let (enabled, size) = under;
     let env = Env::of(ui);
     let mut child = child;
-    let under = Some(under);
-    let ideal = crate::contract::run::measure_under(&mut child, &*ui, Some(id), craft_behavior::Proposal::Ideal, under);
+    let under = leaf_under(&env, &side, &child, under);
+    let ideal = crate::contract::run::measure_under(&mut child, &*ui, Some(id), craft_behavior::Proposal::Ideal, Some(&under));
     let avail = ui.available_rect_before_wrap();
     // The child's own height: a stacked label pushes the control down, and the allocation below follows the placement.
     // The row spans the room's own edges: a room that scrolls along x is unbounded at its start edge, the left one
     // under RTL.
     let row = Rect::from_min_max(avail.min, egui::pos2(avail.max.x, avail.min.y + ideal.y));
-    let at = LeafLabel { id, owner, parent: None, row, text: &label, side: &side, enabled, size };
+    let at = LeafLabel { id, owner, parent: None, row, text: &label, side: &side, under: &under };
     let placed = leaf(ui, &env, &at, &mut child, trailing);
     // In a column that sizes from its content the row is the label plus the control, never the room around them.
     // A row of a horizontal flow is as wide as its label and control: the room it has there is unbounded.
@@ -245,7 +250,12 @@ pub(crate) fn flow_leaf<C: Show>(
         let column = if matches!(side.kind, LabelKind::Glyph(_)) { crate::layout::GLYPHS } else { crate::layout::LABELS };
         crate::layout::report_beyond(ui.ctx(), std::slice::from_ref(&column), label_gap(&env) + control_width);
     }
+    // The child runs under the inside label its measures saw.
+    let installed = under.inside.clone().map(|inside| Env::install_for(ui, env.derive_local(|scoped| scoped.inside_label = Some(inside))));
     let output = crate::contract::run::show_leaf(crate::contract::Props::id(child, id), ui, crate::contract::run::ShowAt::Rect(control), None);
+    if let Some(installed) = installed {
+        Env::restore(ui.ctx(), installed);
+    }
     let bottom = control.bottom().max(placed.label.bottom());
     placed.finish(ui.ctx());
     alloc::space(ui, Vec2::new(extent, (bottom - row.top()).max(ideal.y)));

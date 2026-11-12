@@ -138,7 +138,13 @@ impl<'a> BodyCx<'a> {
         let under = (self.resolved.enabled, self.resolved.size);
         let content_id = crate::runtime::memory::sub(id, "content");
         let mut content = content;
-        let size = crate::contract::run::measure_under(&mut content, &*ui, Some(content_id), craft_behavior::Proposal::Ideal, Some(under));
+        let size = crate::contract::run::measure_under(
+            &mut content,
+            &*ui,
+            Some(content_id),
+            craft_behavior::Proposal::Ideal,
+            Some(&super::Under::new(under.0, under.1)),
+        );
         let show = Box::new(move |ui: &mut Ui, rect: Rect| {
             let _ =
                 crate::contract::run::show_leaf(crate::contract::Props::id(content, content_id), ui, crate::contract::run::ShowAt::Rect(rect), None);

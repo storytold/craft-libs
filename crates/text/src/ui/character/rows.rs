@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::ui::length::{DocUnit, length_field};
 use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, NumberCodec};
 use craft_ui::buttons::ToggleButton;
-use craft_ui::contract::{Bind, Entry, GlyphLabel, LabelKind, Show as _, ShowContainer as _, SideLabel};
+use craft_ui::contract::{Bind, Entry, FieldLayout, GlyphLabel, LabelKind, Show as _, ShowContainer as _, SideLabel};
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
@@ -48,7 +48,7 @@ impl Lengths<'_> {
     pub(super) fn row(&self, ui: &mut Ui, spec: LengthRow<'_>) -> (EditEvents<Option<f64>>, Option<NumberPick>) {
         let LengthRow { label, glyph, hint, value, range, presets } = spec;
         let points = value.map_or(Mixed::Mixed, |value| Mixed::Same(Some(f64::from(value))));
-        let field = Field::new(label.clone()).side(mark(glyph, hint)).show(ui, |ui, _| {
+        let field = Field::new(label.clone()).side(mark(glyph, hint, FieldLayout::Inside)).show(ui, |ui, _| {
             let out = length_field(self.unit, label.clone(), points, range.clone()).presets(presets).scrub_by_label().show(ui);
             (out.edit.events, out.preset)
         });
@@ -66,7 +66,7 @@ impl Lengths<'_> {
         presets: &[Entry<NumberPick>],
     ) -> EditEvents<NamedOr<KerningName>> {
         let units = self.units;
-        let shown = Field::new(label.clone()).side(mark(glyph, Some(hint))).show(ui, |ui, _| {
+        let shown = Field::new(label.clone()).side(mark(glyph, Some(hint), FieldLayout::Beside)).show(ui, |ui, _| {
             let field = NumberField::named(label.clone(), Bind::given(mixed(value))).range(TRACKING_RANGE).presets(presets).scrub_by_label();
             field.codec(NumberCodec::new(units.reader(None), 0)).show(ui).edit.events
         });
@@ -77,7 +77,7 @@ impl Lengths<'_> {
     pub(super) fn plain(&self, ui: &mut Ui, spec: PlainRow<'_>) -> (EditEvents<Option<f64>>, Option<NumberPick>) {
         let PlainRow { label, glyph, hint, value, range, percent, presets } = spec;
         let units = self.units;
-        let shown = Field::new(label.clone()).side(mark(glyph, hint)).show(ui, |ui, _| {
+        let shown = Field::new(label.clone()).side(mark(glyph, hint, FieldLayout::Inside)).show(ui, |ui, _| {
             let field = NumberField::new(label.clone(), Bind::given(value)).range(range.clone()).presets(presets).scrub_by_label();
             let field = if percent {
                 field.unit_kind(UnitKind::Percent).unit(units.symbol(UnitKind::Percent)).step(UnitKind::Percent.step())
@@ -91,9 +91,10 @@ impl Lengths<'_> {
     }
 }
 
-/// A label shown as a mark, whose drag scrubs the field; `hint`, when given, is its tooltip in place of the label.
-pub(super) fn mark(glyph: GlyphLabel, hint: Option<Label>) -> SideLabel {
-    let side = SideLabel::new().kind(LabelKind::Glyph(glyph)).scrub(true);
+/// A label shown as a mark at `layout`, whose drag scrubs the field; `hint`, when given, is its tooltip in place of the
+/// label.
+pub(super) fn mark(glyph: GlyphLabel, hint: Option<Label>, layout: FieldLayout) -> SideLabel {
+    let side = SideLabel::new().kind(LabelKind::Glyph(glyph)).layout(layout).scrub(true);
     match hint {
         Some(hint) => side.tooltip(hint),
         None => side,

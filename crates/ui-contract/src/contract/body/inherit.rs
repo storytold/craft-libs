@@ -60,6 +60,8 @@ impl BodyHooks<'_> {
         scoped.ink = cx.core.ink;
         scoped.surface = SurfaceKind::under(own_surface(props, cx), scoped.surface);
         scoped.start_room();
+        // An inside label is its control's alone: a container shows none of it to what it holds.
+        scoped.inside_label = None;
         // Along a width the container takes from its content, its regions measure at their content widths: a child
         // that fills takes what it needs, not the whole room.
         if !real && !self.given.0 {

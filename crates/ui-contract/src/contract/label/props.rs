@@ -3,8 +3,8 @@
 use crate::contract::Tooltip;
 use crate::primitives::IconSpec;
 use crate::runtime::access::scope::FieldLabelRole;
-use crate::runtime::env::{Env, Label};
-use craft_behavior::{ColumnWidth, PartRef, ValueDrag};
+use crate::runtime::env::{EnvView, Label};
+use craft_behavior::{ColumnWidth, PartKey, PartRef, ValueDrag};
 use std::sync::Arc;
 
 /// How a side label is shown.
@@ -48,10 +48,10 @@ impl GlyphLabel {
     }
 
     /// What the label leaf draws: the icon, or the text resolved in `env`.
-    pub(super) fn resolved(&self, env: &Env) -> Glyph {
+    pub(super) fn resolved(&self, env: EnvView<'_>) -> Glyph {
         match &self.shown {
             Glyph::Icon(icon) => Glyph::Icon(icon.clone()),
-            Glyph::Text(text) => Glyph::Text(env.view().resolve(text)),
+            Glyph::Text(text) => Glyph::Text(env.resolve(text)),
         }
     }
 }
@@ -84,6 +84,59 @@ pub enum FieldLayout {
     /// On one line: the label at the start and the control in a `size.length.number` cell at the end, as a number
     /// field sits over its slider. The label elides before the cell. The row never stacks.
     Line,
+    /// In the control's box at its start, in the slot a control that offers one shows it (a number field's leading
+    /// adornment); the control takes the whole row. For a glyph label of a body that is one such control: the slot
+    /// is the label's, so a drag on it scrubs a scrubbing label at any time. A control that offers no slot shows no
+    /// label; the label still names it.
+    Inside,
+}
+
+/// What a control shows in its slot for a side label with `FieldLayout::Inside` (`EnvView::inside_label`): the
+/// glyph, the label's tooltip and whether a drag on the slot scrubs. The control declares the slot with
+/// `PartsCx::label_part`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InsideLabel {
+    glyph: Glyph,
+    tooltip: Option<Tooltip>,
+    scrubs: bool,
+}
+
+impl InsideLabel {
+    /// The part a control declares its slot as (`PartsCx::label_part`).
+    pub const PART: PartKey = PartKey::new("inside_label");
+
+    /// The glyph's icon, for an icon glyph.
+    pub fn icon(&self) -> Option<&IconSpec<'static>> {
+        match &self.glyph {
+            Glyph::Icon(icon) => Some(icon),
+            Glyph::Text(_) => None,
+        }
+    }
+
+    /// The glyph's text, resolved in the scope's language, for a text glyph.
+    pub fn text(&self) -> Option<&Label> {
+        match &self.glyph {
+            Glyph::Text(text) => Some(text),
+            Glyph::Icon(_) => None,
+        }
+    }
+
+    /// The label's tooltip, shown over the slot.
+    pub fn tooltip(&self) -> Option<&Tooltip> {
+        self.tooltip.as_ref()
+    }
+
+    /// A drag on the slot scrubs the control's value.
+    pub fn scrubs(&self) -> bool {
+        self.scrubs
+    }
+}
+
+/// The inside label a control under `side` shows in its slot: `Some` for a glyph label with `FieldLayout::Inside`.
+pub(crate) fn inside(env: EnvView<'_>, side: &SideLabel, enabled: bool) -> Option<Arc<InsideLabel>> {
+    let LabelKind::Glyph(glyph) = &side.kind else { return None };
+    (side.layout == FieldLayout::Inside)
+        .then(|| Arc::new(InsideLabel { glyph: glyph.resolved(env), tooltip: side.tooltip.clone(), scrubs: side.scrub && enabled }))
 }
 
 /// The width of a caption's cell.
@@ -114,6 +167,11 @@ pub struct SideLabel {
 }
 
 impl SideLabel {
+    /// The label step shows no label leaf: a hidden label, or one the control shows inside its box.
+    pub(super) fn shows_no_leaf(&self) -> bool {
+        self.kind == LabelKind::Hidden || self.layout == FieldLayout::Inside
+    }
+
     /// A text label beside its control that names it.
     pub const fn new() -> Self {
         SideLabel {

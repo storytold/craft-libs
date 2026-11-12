@@ -7,8 +7,8 @@ mod stories;
 use super::NumberField;
 use crate::buttons::ToggleButton;
 use crate::contract::{
-    Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, Outcome, PaintUi, Props as _, Remember as _, Role, SideLabel,
-    WordSetCx as _,
+    Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, FieldLayout, GlyphLabel, LabelKind, MeasureCx, Outcome, PaintUi, Props as _,
+    Remember as _, Role, SideLabel, WordSetCx as _,
 };
 use crate::primitives::TextRun;
 use crate::runtime::env::Label;
@@ -173,8 +173,8 @@ impl<'a, const N: usize> LinkedFields<'a, N> {
         .label(label)
     }
 
-    /// Shows a caption beside each field that also scrubs it, and names the field. Without captions a field is named
-    /// by the group's label and its position.
+    /// Shows a caption with each field that also scrubs it, and names the field: inside the field at its start in the
+    /// `Row` layout, beside it in the others. Without captions a field is named by the group's label and its position.
     #[must_use]
     pub fn captions(mut self, captions: [impl Into<Label>; N]) -> Self {
         self.captions = Some(captions.map(Into::into));
@@ -196,6 +196,15 @@ impl<'a, const N: usize> LinkedFields<'a, N> {
         match &self.captions {
             Some(captions) => captions[i].clone(),
             None => Label::from(words.field_name.fill(&[("group", group.as_str()), ("n", format.integer(i as u64 + 1).as_str())])),
+        }
+    }
+
+    /// The side label of field `i`'s caption: a glyph inside the field in the `Row` layout, beside it in the others.
+    fn caption_side(&self, caption: &Label) -> SideLabel {
+        let side = SideLabel::new().scrub(true);
+        match self.layout {
+            LinkedLayout::Row => side.kind(LabelKind::Glyph(GlyphLabel::text(caption.clone()))).layout(FieldLayout::Inside),
+            LinkedLayout::Column | LinkedLayout::Columns => side,
         }
     }
 
@@ -229,10 +238,15 @@ impl<const N: usize> Component for LinkedFields<'_, N> {
         let mut cell = Vec2::ZERO;
         for (i, value) in shown.iter().enumerate() {
             let mut field = self.field(i, &group, &words, cx.format(), *value);
-            let size = cx.child(("field", i), &mut field, Proposal::Ideal);
-            let caption = match &self.captions {
-                Some(captions) => cx.layout(&TextRun::new(captions[i].as_str())).size().x + colon + gap,
-                None => 0.0,
+            // A caption inside the field is part of the field's measure; one beside it adds its own room.
+            let (size, caption) = match &self.captions {
+                Some(captions) => {
+                    let side = self.caption_side(&captions[i]);
+                    let size = cx.labelled(("field", i), &side, &mut field, Proposal::Ideal);
+                    let beside = side.layout != FieldLayout::Inside;
+                    (size, if beside { cx.layout(&TextRun::new(captions[i].as_str())).size().x + colon + gap } else { 0.0 })
+                }
+                None => (cx.child(("field", i), &mut field, Proposal::Ideal), 0.0),
             };
             cell = cell.max(Vec2::new(size.x + caption, size.y));
         }
@@ -292,7 +306,7 @@ impl<const N: usize> Component for LinkedFields<'_, N> {
                 let field = self.field(i, &group, &words, cx.format(), shown[i]);
                 match &self.captions {
                     Some(captions) => {
-                        ui.labelled(("field", i), place(cell), captions[i].clone(), SideLabel::new().scrub(true), field.scrub_by_label())
+                        ui.labelled(("field", i), place(cell), captions[i].clone(), self.caption_side(&captions[i]), field.scrub_by_label())
                     }
                     None => ui.child(("field", i), place(cell), field),
                 }

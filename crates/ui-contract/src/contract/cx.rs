@@ -20,7 +20,7 @@ pub use access::Accessible;
 pub use body::BodyCx;
 pub(crate) use body::BodyOwner;
 pub use context::{Activation, Cx, CxCore};
-pub(crate) use context::{RecordedText, child_env};
+pub(crate) use context::{RecordedText, Under, child_env};
 pub use edit::Edit;
 pub(crate) use edit::gesture_key;
 pub use focus::Focus;

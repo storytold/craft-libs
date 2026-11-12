@@ -53,6 +53,12 @@ impl<'a> EnvView<'a> {
         self.scoped.roving
     }
 
+    /// The inside label the component shows in its slot, when it is the control of a side label with
+    /// `FieldLayout::Inside`.
+    pub fn inside_label(&self) -> Option<&'a crate::contract::InsideLabel> {
+        self.scoped.inside_label.as_deref()
+    }
+
     /// The flow direction: layout order, arrow keys and roving.
     pub fn direction(&self) -> Direction {
         self.scoped.direction

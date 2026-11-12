@@ -19,7 +19,7 @@ use crate::runtime::reads::{self, BindKey, Sample};
 use crate::runtime::{commands, focus, inspect, keys, memory};
 use crate::style::{Ink, StateSet, StyleCx, StyleView};
 use craft_behavior::{Flow, Input, KeyRole, NavMove, PartRef, PressState, Proposal, Roving, Sense};
-use craft_theme::{ControlSize, Variant};
+use craft_theme::Variant;
 use egui::{Context, Id, Pos2, Rect, Response, Ui, Vec2};
 use std::any::TypeId;
 use std::cell::RefCell;
@@ -1332,10 +1332,10 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
 /// Measures the component in `t` as `show` will show it, without allocating: steps 1 to 5 under the id `show` would
 /// use next (or `id`). It reads memory through a peek, registers no id and applies nothing. `under` is the
 /// composite's resolved `(enabled, size)` when it measures a child it shows with `PaintUi::child`.
-pub(super) fn measure_shape(t: &mut dyn Erased, ui: &Ui, id: Option<Id>, proposal: Proposal, under: Option<(bool, ControlSize)>) -> Vec2 {
+pub(super) fn measure_shape(t: &mut dyn Erased, ui: &Ui, id: Option<Id>, proposal: Proposal, under: Option<&super::cx::Under>) -> Vec2 {
     let facts = t.facts();
     let env = match under {
-        Some((enabled, size)) => super::cx::child_env(&Env::of(ui), enabled, size),
+        Some(under) => super::cx::child_env(&Env::of(ui), under),
         None => Env::of(ui),
     };
     let id = id.unwrap_or_else(|| steps::id(ui, &t.common().id, false, false, facts.style_key, facts.name));

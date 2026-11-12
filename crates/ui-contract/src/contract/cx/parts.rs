@@ -339,6 +339,23 @@ impl<C: Component> PartsCx<'_, C> {
         PartBuilder { decl, declared, window }
     }
 
+    /// Declares `rect`, the slot where the component shows its inside label (`EnvView::inside_label`), as the label's
+    /// part (`InsideLabel::PART`): it shows the label's tooltip and, for a scrubbing label, takes the press a
+    /// `Scrub::by_label` scrubs with, in edit too. Declares nothing without an inside label.
+    pub fn label_part(&mut self, rect: Rect) {
+        let Some(inside) = self.measure.env.inside_label() else { return };
+        let sense = if inside.scrubs() { Sense::CLICK | Sense::DRAG } else { Sense::HOVER };
+        let tooltip = inside.tooltip().cloned();
+        let builder = self
+            .part(crate::contract::InsideLabel::PART, rect)
+            .sense(sense)
+            .priority(HitPriority::new(HitLevel::Handle, 0))
+            .pointer_only("the control's own keys change its value as the label's drag does");
+        if let Some(tooltip) = tooltip {
+            builder.tooltip(tooltip);
+        }
+    }
+
     /// Declares a roving group over part and child keys.
     pub fn roving(&mut self, roving: Roving) {
         self.rovings.push(roving);

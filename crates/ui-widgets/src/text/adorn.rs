@@ -20,12 +20,13 @@ pub struct Adornment {
 enum Kind {
     Glyph(IconSpec<'static>),
     Button(PartKey, IconSpec<'static>, Label),
-    /// Text in the line, of `role`, monospace with `mono`; `size` is its measured run, zero until
-    /// [`Adornment::measured`].
+    /// Text in the line, of `role`, monospace with `mono`, the gap kept before the text with `apart`; `size` is its
+    /// measured run, zero until [`Adornment::measured`].
     Text {
         label: Label,
         role: TypeRole,
         mono: bool,
+        apart: bool,
         size: Vec2,
     },
 }
@@ -45,7 +46,7 @@ impl Adornment {
     /// its run, which the field measures with [`Adornment::measured`] before placing it, and sits against the text
     /// with no gap between them.
     pub fn text(label: impl Into<Label>, role: TypeRole) -> Adornment {
-        Adornment { kind: Kind::Text { label: label.into(), role, mono: false, size: Vec2::ZERO } }
+        Adornment { kind: Kind::Text { label: label.into(), role, mono: false, apart: false, size: Vec2::ZERO } }
     }
 
     /// A text adornment in the monospace face, as the text of a monospace field; a glyph or a button is returned as it
@@ -53,6 +54,15 @@ impl Adornment {
     pub fn mono(mut self) -> Adornment {
         if let Kind::Text { mono, .. } = &mut self.kind {
             *mono = true;
+        }
+        self
+    }
+
+    /// A text adornment that keeps the gap to the field's text, as a glyph does: a handle in the box, not part of what
+    /// the field shows. A glyph or a button is returned as it is.
+    pub fn apart(mut self) -> Adornment {
+        if let Kind::Text { apart, .. } = &mut self.kind {
+            *apart = true;
         }
         self
     }
@@ -65,7 +75,7 @@ impl Adornment {
 
     /// The adornment with a text adornment's run measured in `cx`; a glyph or a button is returned as it is.
     pub fn measured<C: crate::contract::Component>(mut self, cx: &MeasureCx<'_, C>) -> Adornment {
-        if let Kind::Text { label, role, mono, size } = &mut self.kind {
+        if let Kind::Text { label, role, mono, size, .. } = &mut self.kind {
             *size = cx.layout(&Self::run(label, *role, *mono)).size();
         }
         self
@@ -88,9 +98,10 @@ impl Adornment {
         }
     }
 
-    /// The gap between the adornment and its neighbour towards the text: none for text, which reads as part of it.
+    /// The gap between the adornment and its neighbour towards the text: none for text, which reads as part of it,
+    /// unless it stands `apart`.
     fn gap_after(&self, style: &FieldStyle, innermost: bool) -> f32 {
-        if innermost && matches!(self.kind, Kind::Text { .. }) { 0.0 } else { style.metrics.gap }
+        if innermost && matches!(self.kind, Kind::Text { apart: false, .. }) { 0.0 } else { style.metrics.gap }
     }
 
     /// The icon, painted in `color` when there is one.

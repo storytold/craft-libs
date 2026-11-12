@@ -17,10 +17,10 @@ use crate::contract::{
 };
 use crate::primitives::{TextOptions, TextRun};
 use crate::runtime::env::{Label, LengthUnits, UnitKind, Units};
-use crate::style::{ComponentStyle, StyleCx, SurfaceLook, TextLook, TypeRole};
+use crate::style::{ComponentStyle, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole};
 use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps};
 use craft_behavior::{
-    Codec, Flow, HitLevel, HitPriority, Metrics, NavMove, NumberCodec, PartKey, PressPhase, Sense, ValueDrag, decimals_for_step, wheel_step,
+    Codec, HitLevel, HitPriority, Metrics, NavMove, NumberCodec, PartKey, PressPhase, Sense, ValueDrag, decimals_for_step, wheel_step,
 };
 use craft_theme::{Stateful, States};
 use egui::{Rect, Vec2};
@@ -69,6 +69,8 @@ pub struct NumberStyle {
     unit: TextLook,
     /// The field look the adornments are placed by; `surface` and `metrics` are its own.
     field: FieldStyle,
+    /// The colour of the inside label's glyph, a scrub handle.
+    handle: Stateful<StyleColor>,
 }
 
 /// A number field: a text part over [`NumberCodec`]; empty text is `None`.
@@ -131,6 +133,8 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// as a drag on the slider would.
     track: f32,
     picked: Option<NumberPick>,
+    /// The inside label's glyph before the text (`EnvView::inside_label`), measured in measure and parts for paint.
+    leading: Vec<Adornment>,
     /// The unit and the chevrons after the text, measured in measure and parts for paint.
     trailing: Vec<Adornment>,
 }
@@ -184,6 +188,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             scrub: false,
             track: 0.0,
             picked: None,
+            leading: Vec::new(),
             trailing: Vec::new(),
         }
         .label(label)
@@ -300,9 +305,20 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         unit.chain(chevrons).collect()
     }
 
-    /// The rect of the text, the unit and the chevrons inside `rect`.
+    /// The inside label's glyph, measured: what sits before the text.
+    fn before_text(cx: &MeasureCx<'_, Self>) -> Vec<Adornment> {
+        let Some(inside) = cx.env.inside_label() else { return Vec::new() };
+        let glyph = match (inside.icon(), inside.text()) {
+            (Some(icon), _) => Adornment::glyph(icon.clone()),
+            (None, Some(text)) => Adornment::text(text.clone(), TypeRole::Body).apart().measured(cx),
+            (None, None) => return Vec::new(),
+        };
+        vec![glyph]
+    }
+
+    /// The rect of the inside label's glyph, the text, the unit and the chevrons inside `rect`.
     fn laid_out(&self, style: &NumberStyle, rect: Rect, rtl: bool) -> Placed {
-        place(rect, &style.field, &[], &self.trailing, rtl)
+        place(rect, &style.field, &self.leading, &self.trailing, rtl)
     }
 }
 impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
@@ -315,12 +331,14 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
     fn style(cx: &StyleCx<'_>, _: NumberFieldStyleKey<V>) -> NumberStyle {
         let field = FieldStyle::at(cx);
         let faint = cx.color(cx.tokens.color.text.faint);
+        let muted = cx.color(cx.tokens.color.text.muted);
         NumberStyle {
             surface: field.surface.clone(),
             // The width is a number cell, or the range's widest value with `fit_range` (`measure`); the style's minimum
             // is only the height.
             metrics: field.metrics.min_size(Vec2::new(0.0, field.metrics.min_size.y)).ideal_width(0.0),
             unit: TextLook::new(TypeRole::Body, Stateful::new(faint).off(States::new(faint, faint, faint, cx.color(cx.tokens.color.text.disabled)))),
+            handle: Stateful::new(muted).off(States::new(muted, muted, muted, cx.color(cx.tokens.color.text.disabled))),
             field,
         }
     }
@@ -342,9 +360,10 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             let digit = cx.layout(&TextRun::new("0")).size();
             Vec2::new(digit.x + caret, digit.y)
         };
+        self.leading = Self::before_text(cx);
         self.trailing = self.after_text(cx, &self.chevrons(&cx.words::<TextWords>()));
-        // The unit and the chevrons take their own room and the change of the edge inset a button makes.
-        let width = text.x + reserve(&cx.style.field, &[], &self.trailing);
+        // The adornments take their own room and the change of the edge inset a button makes.
+        let width = text.x + reserve(&cx.style.field, &self.leading, &self.trailing);
         // A field is one number cell wide, the unit and the chevrons inside it, so a column of fields ends at one edge;
         // it grows only when the room left for the number drops below one digit and the caret.
         let field = cx.style.field.metrics();
@@ -357,8 +376,12 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         self.track = cx.tokens.size.length.track;
         let rtl = cx.flow.is_rtl();
         let chevrons = self.chevrons(&cx.words::<TextWords>());
+        self.leading = Self::before_text(cx);
         self.trailing = self.after_text(cx, &chevrons);
         let placed = self.laid_out(cx.style, cx.content_rect, rtl);
+        if let Some(slot) = placed.leading.first() {
+            cx.label_part(*slot);
+        }
         let text = placed.text;
         self.options.centred = true;
         self.options.steps_value = self.presets.is_none() && self.popup_slider.is_none();
@@ -504,6 +527,9 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             && let (Some(unit), Some(at)) = (self.trailing.first(), placed.trailing.first())
         {
             unit.paint(ui, *at, cx.resolve(&cx.style.unit.color));
+        }
+        if let (Some(glyph), Some(at)) = (self.leading.first(), placed.leading.first()) {
+            glyph.paint(ui, *at, cx.resolve(&cx.style.handle));
         }
         for (key, name) in chevrons {
             ui.face(key, IconButton::new(crate::controls::disclosure::DisclosureGlyph::dropdown()).label(name));
