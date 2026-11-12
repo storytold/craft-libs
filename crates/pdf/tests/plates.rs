@@ -537,3 +537,73 @@ fn default_color_spaces_leave_device_color_on_its_plates() {
         }
     }
 }
+
+/// A type 4 tint transform of `inputs` inputs running `program`, into four CMYK outputs.
+fn cmyk_tint_transform(inputs: usize, program: &str) -> Vec<u8> {
+    let domain = vec!["0 1"; inputs].join(" ");
+    stream(&format!("/FunctionType 4 /Domain [{domain}] /Range [0 1 0 1 0 1 0 1]"), program.as_bytes())
+}
+
+/// A spot ink and its appearance at 100%.
+type SpotSeen = (Ink, [u8; 3]);
+
+/// Every spot ink the page paints with its appearance at 100%, in the order first painted.
+fn spots_seen(pdf: &[u8]) -> Vec<SpotSeen> {
+    let seen: Arc<Mutex<Vec<SpotSeen>>> = Arc::default();
+    let log = seen.clone();
+    let sink: InkSinkFn = Arc::new(move |ink: &Ink, appearance: &dyn Fn(f32) -> [u8; 3]| {
+        let mut log = log.lock().unwrap();
+        if !log.iter().any(|(seen, _)| seen == ink) {
+            log.push((ink.clone(), appearance(1.0)));
+        }
+    });
+    render(pdf, &InterpreterSettings { ink_sink: Some(sink), ..Default::default() });
+    seen.lock().unwrap().clone()
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn device_n_process_components_separate_onto_the_process_plates() {
+    // P1..P4 are the components of the DeviceCMYK process space (ISO 32000-2 §8.6.6.5, Table 72).
+    let space = format!(
+        "[/DeviceN [/P1 /P2 /P3 /P4 /Gold] /DeviceCMYK 5 0 R << /Subtype /NChannel /Process << /ColorSpace /DeviceCMYK /Components [/P1 /P2 /P3 /P4] >> /Colorants << /Gold {GOLD} >> >>]"
+    );
+    let pdf = page_pdf("/N cs 0.2 0.4 0.6 0.8 0.5 scn 0 0 40 40 re f", &format!("/ColorSpace << /N {space} >>"), &[cmyk_tint_transform(5, "{pop}")]);
+    let s = plates(&pdf, &inks(&["Gold", "P1"]), true, None);
+    assert_eq!(s.at(20, 20), [20, 40, 60, 80, 50, 0], "process tints on the process plates, none on a P1 plate");
+    let names: Vec<String> = spots_seen(&pdf).iter().map(|(ink, _)| ink.name().to_owned()).collect();
+    assert_eq!(names, ["Gold"], "P1..P4 are not spot inks");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn device_n_process_names_are_kept_for_a_process_space_that_is_not_cmyk_or_would_repeat_an_ink() {
+    let tint = || cmyk_tint_transform(2, "{pop pop 0 0 0 0}");
+    let rgb = "[/DeviceN [/P1 /P2] /DeviceCMYK 5 0 R << /Process << /ColorSpace /DeviceRGB /Components [/P1 /P2 /P3] >> >>]";
+    // P1 would become Cyan, which the space already names.
+    let repeat = "[/DeviceN [/Cyan /P1] /DeviceCMYK 5 0 R << /Process << /ColorSpace /DeviceCMYK /Components [/P1 /P2 /P3 /P4] >> >>]";
+    for space in [rgb, repeat] {
+        let pdf = page_pdf("/N cs 1 1 scn 0 0 40 40 re f", &format!("/ColorSpace << /N {space} >>"), &[tint()]);
+        let names: Vec<String> = spots_seen(&pdf).iter().map(|(ink, _)| ink.name().to_owned()).collect();
+        assert!(names.iter().any(|n| n == "P1"), "{space}: {names:?}");
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn a_device_n_spot_looks_like_its_colorants_separation() {
+    // The tint transform paints Gold alone as no ink at all; `/Colorants` says Gold alone is
+    // GOLD's yellowish alternate (ISO 32000-2 §8.6.6.5, Table 71).
+    let with = |attributes: &str| {
+        let space = format!("[/DeviceN [/Cyan /Gold] /DeviceCMYK 5 0 R {attributes}]");
+        page_pdf("/N cs 0 1 scn 0 0 40 40 re f", &format!("/ColorSpace << /N {space} >>"), &[cmyk_tint_transform(2, "{pop 0 0 0}")])
+    };
+    let separation = page_pdf("/CS0 cs 1 scn 0 0 40 40 re f", &gold_resource(), &[]);
+    let gold = spots_seen(&separation)[0].1;
+    assert_ne!(gold, [255; 3]);
+    assert_eq!(spots_seen(&with(&format!("<< /Colorants << /Gold {GOLD} >> >>")))[0].1, gold);
+    // Without the entry, or with one that names another colorant, the tint transform decides.
+    assert_eq!(spots_seen(&with("<< >>"))[0].1, [255; 3]);
+    let silver = "[/Separation /Silver /DeviceGray << /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [0.5] /N 1 >>]";
+    assert_eq!(spots_seen(&with(&format!("<< /Colorants << /Gold {silver} >> >>")))[0].1, [255; 3]);
+}
