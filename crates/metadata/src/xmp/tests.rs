@@ -774,7 +774,10 @@ fn writer_drops_characters_xml_1_0_forbids() {
     let illegal: Vec<char> =
         x.chars().filter(|&c| (c < '\u{20}' && !matches!(c, '\t' | '\n' | '\r')) || c == '\u{FFFE}' || c == '\u{FFFF}').collect();
     assert!(illegal.is_empty(), "illegal XML chars in output: {illegal:?}");
-    assert!(x.contains(">abcde\tf\ng\rh<"), "allowed characters must survive: {x}");
+    // a carriage return is written as a reference: a literal one would read back as a line feed (XML end-of-line handling)
+    assert!(x.contains(">abcde\tf\ng&#13;h<"), "allowed characters must survive: {x}");
+    let back = parse_xmp(&x).unwrap();
+    assert_eq!(back.metadata.caption.as_deref(), Some("abcde\tf\ng\rh"), "and read back unchanged");
 }
 
 #[test]

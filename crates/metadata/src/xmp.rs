@@ -428,6 +428,12 @@ fn xml_safe(s: &str) -> String {
     s.chars().filter(|&c| is_xml_char(c)).collect()
 }
 
+/// Escaped text with each carriage return as `&#13;`: XML end-of-line handling turns a literal one
+/// into a line feed on read.
+fn keep_cr(escaped: std::borrow::Cow<'_, str>) -> String {
+    escaped.replace('\r', "&#13;")
+}
+
 /// Index of the `;` that ends a reference starting at `rest` (its `&`). The scan stops at the first
 /// byte that cannot appear in a name or a numeric reference, so zero-padded references such as
 /// `&#000000097;` are found and each run of name bytes is read once, not once per `&`.
@@ -1190,13 +1196,13 @@ pub fn write_xmp_with(meta: &Metadata, with: &XmpWrite) -> String {
     }
     x.push_str(">\n");
     for (k, v) in &simple {
-        x.push_str(&format!("   <{k}>{}</{k}>\n", escape(xml_safe(v))));
+        x.push_str(&format!("   <{k}>{}</{k}>\n", keep_cr(escape(xml_safe(v)))));
     }
     for (k, v) in with.properties.iter().filter(|_| own.is_some()) {
         let p = own.map_or("", |n| n.0);
         if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             // element content: quotes needn't be escaped, which keeps JSON readable
-            x.push_str(&format!("   <{p}:{k}>{}</{p}:{k}>\n", partial_escape(xml_safe(v))));
+            x.push_str(&format!("   <{p}:{k}>{}</{p}:{k}>\n", keep_cr(partial_escape(xml_safe(v)))));
         }
     }
     let array = |x: &mut String, k: &str, kind: &str, items: &[String], lang: bool| {
@@ -1206,9 +1212,9 @@ pub fn write_xmp_with(meta: &Metadata, with: &XmpWrite) -> String {
         x.push_str(&format!("   <{k}>\n    <rdf:{kind}>\n"));
         for it in items {
             if lang {
-                x.push_str(&format!("     <rdf:li xml:lang=\"x-default\">{}</rdf:li>\n", escape(xml_safe(it))));
+                x.push_str(&format!("     <rdf:li xml:lang=\"x-default\">{}</rdf:li>\n", keep_cr(escape(xml_safe(it)))));
             } else {
-                x.push_str(&format!("     <rdf:li>{}</rdf:li>\n", escape(xml_safe(it))));
+                x.push_str(&format!("     <rdf:li>{}</rdf:li>\n", keep_cr(escape(xml_safe(it)))));
             }
         }
         x.push_str(&format!("    </rdf:{kind}>\n   </{k}>\n"));
