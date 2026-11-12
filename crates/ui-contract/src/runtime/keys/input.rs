@@ -303,6 +303,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
         if press {
             overlay::note_dropped_press(ctx, viewport);
         }
+        with(ctx, viewport, |stage| stage.keyed = false);
         return removed || trimmed;
     }
     let os = crate::runtime::windows::os_of(ctx);
@@ -340,9 +341,11 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
         };
         let mut batch = Batch::default();
         let mut visible = None;
+        stage.keyed = false;
         input.events.retain(|event| {
             let read = raw_input::key_event(event, os, &latin);
             note_down(&mut stage.down, &read);
+            stage.keyed |= matches!(read, KeyEvent::Press { .. } | KeyEvent::Text(_) | KeyEvent::Clip { .. });
             visible = match &read {
                 KeyEvent::PointerPress => Some(false),
                 KeyEvent::Press { .. } | KeyEvent::Text(_) => Some(true),
@@ -384,6 +387,12 @@ fn note_down(down: &mut Vec<Key>, event: &KeyEvent) {
 #[doc(hidden)]
 pub fn down(ctx: &Context) -> Vec<Key> {
     current(ctx, |stage| stage.down.clone())
+}
+
+/// Whether the running viewport's input hook read a key press, typed text or a clipboard event in this pass, the ones
+/// the key stage took from egui's input included: an app that redraws state after input asks this, not egui's events.
+pub fn keyed(ctx: &Context) -> bool {
+    current(ctx, |stage| stage.keyed)
 }
 
 /// Takes the Tab and F6 moves the input hook recorded, for the focus service's begin hook. The pass's root env is

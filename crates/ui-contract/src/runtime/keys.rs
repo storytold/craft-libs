@@ -27,7 +27,7 @@ pub use claims::take_claimed;
 /// The types `Intents` reads and returns, for an app that reads the window's intents (`with_window_intents`).
 pub use craft_behavior::{AccessRequest, Intent, MoveMods, NavMove, PartRef};
 #[doc(hidden)]
-pub use input::down;
+pub use input::{down, keyed};
 pub(crate) use input::{input_hook, queue_nav, take_menu_keys, take_nav};
 pub use intents::Intents;
 #[doc(hidden)]
@@ -198,6 +198,8 @@ pub(crate) struct Stage {
     alt: AltTrack,
     /// The keys down now, as the input hook read them before it withheld any press.
     down: Vec<Key>,
+    /// The input hook read a key press, typed text or a clipboard event in this pass, withheld ones included.
+    keyed: bool,
     /// The keys whose press the strip took and whose release it is still to drop.
     consumed: Vec<Key>,
     shortcuts: Shortcuts,

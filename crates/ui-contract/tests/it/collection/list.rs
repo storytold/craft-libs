@@ -303,6 +303,22 @@ fn a_text_after_a_release_takes_no_press_with_it() {
     assert!(saw.borrow().contains(&Key::F5), "and the app reads the press that typed nothing");
 }
 
+/// A press the list takes from egui's input is still key input of its pass (`keys::keyed`); a pass with only a
+/// release has none.
+#[trial]
+fn a_press_the_list_takes_is_key_input_of_its_pass() {
+    let words = Words::flat(&labels());
+    let seen = Seen::default();
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| show_words(ui, List::new(SelectMode::Single), &words, &seen);
+    frames.idle(2, &mut show);
+    focus_list(&mut frames, &seen, &mut show);
+    frames.frame(vec![input::key_press(Key::ArrowDown, Modifiers::NONE)], &mut show);
+    assert!(keys::keyed(&frames.ctx), "the pass of the press had key input");
+    frames.frame(vec![craft_ui::testing::focus::key_release(Key::ArrowDown, Modifiers::NONE)], &mut show);
+    assert!(!keys::keyed(&frames.ctx), "the pass of the release had none");
+}
+
 /// A list without type-ahead leaves typed letters to the app's tool keys: the lead stays where it is, and the letter's
 /// press reaches the app.
 #[trial]

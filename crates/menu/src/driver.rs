@@ -485,9 +485,10 @@ pub(crate) fn native_ok(c: &Chord) -> bool {
     c.has_command()
 }
 
-/// A key press or click this frame. It may have changed state an app's menu hash doesn't list,
-/// so apps fold it into the `state` passed to [`NativeMenu::sync_with`], for example as
-/// `had_input(ctx).then_some(ctx.cumulative_frame_nr())`.
+/// A key press, typed text or click this frame. It may have changed state an app's menu hash
+/// doesn't list, so apps fold it into the `state` passed to [`NativeMenu::sync_with`], for
+/// example as `had_input(ctx).then_some(ctx.cumulative_frame_nr())`. Keys come from the key
+/// stage (`keys::keyed`), which also counts the presses a focused component took from egui.
 pub fn had_input(ctx: &egui::Context) -> bool {
-    ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::PointerButton { pressed: false, .. })))
+    craft_ui::runtime::keys::keyed(ctx) || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::PointerButton { pressed: false, .. })))
 }
