@@ -9,7 +9,6 @@
 //! pixels at 100 percent and the cost follows the window, not the document. Pixels are drawn sharp (nearest) from
 //! 100 percent up and filtered below.
 //!
-//!
 //! The display takes no pointer and no keys and declares no parts: a press on it reaches the canvas's tool.
 
 mod detail;
@@ -308,9 +307,7 @@ impl Component for RasterDisplay<'_> {
             Picture::Source(source) if !bounds.is_empty() => *source,
             // An empty document, or a picture the app paints: the display holds no textures.
             _ => {
-                if !held.0.is_empty() {
-                    Self::release(&ctx, id);
-                }
+                Self::release(&ctx, id);
                 if !bounds.is_empty() {
                     self.shown = Some(Shown { view: space.view, size, textures: None });
                 }
