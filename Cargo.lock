@@ -1538,7 +1538,9 @@ dependencies = [
 name = "craft-rtf"
 version = "0.1.0"
 dependencies = [
+ "craft-mime",
  "encoding_rs",
+ "proptest",
 ]
 
 [[package]]
