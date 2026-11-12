@@ -311,7 +311,11 @@ impl<'a> PasswordDialog<'a> {
                             }
                             let text = text.show(ui);
                             let name = if entries.reveal { words.hide.clone() } else { words.show.clone() };
-                            let reveal = ToggleButton::new(name, Bind::bound(&mut entries.reveal)).icon(IconId::new("eye")).icon_only().show(ui);
+                            let reveal = ToggleButton::new(name, Bind::bound(&mut entries.reveal))
+                                .icon(IconId::new("eye"))
+                                .on_icon(IconId::new("eye_off"))
+                                .icon_only()
+                                .show(ui);
                             // Typing goes on in the field: the reveal button hands the focus back, as does a press that left
                             // nothing focused.
                             if clicked(reveal.response()) || focus::focused_rec(ui.ctx()).is_none() {
