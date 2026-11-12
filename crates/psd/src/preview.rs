@@ -43,7 +43,6 @@ impl PsdFile {
         {
             return Ok(None);
         }
-        let dec = self.image_data.row_decoder(h)?;
         let k = h.width.max(h.height).div_ceil(max_side.max(1)).max(1);
         let (w, ht) = (h.width.div_ceil(k), h.height.div_ceil(k));
         let bps = usize::from(h.depth / 8);
@@ -51,9 +50,11 @@ impl PsdFile {
         let n = (w as usize)
             .checked_mul(ht as usize)
             .and_then(|p| p.checked_mul(4))
-            .ok_or(crate::error::PsdError::LimitExceeded("preview size overflow"))?;
+            .filter(|&n| n as u64 <= crate::compression::MAX_DECODED_BYTES)
+            .ok_or(crate::error::PsdError::LimitExceeded("preview exceeds MAX_DECODED_BYTES"))?;
+        let dec = self.image_data.row_decoder(h)?;
         let mut rgba = Vec::new();
-        rgba.try_reserve_exact(n).map_err(|_| crate::error::PsdError::LimitExceeded("not enough memory for the preview"))?;
+        rgba.try_reserve_exact(n).map_err(|_| crate::error::PsdError::OutOfMemory("not enough memory for the preview"))?;
         rgba.resize(n, 255u8);
         for y in 0..ht {
             let src_y = (y * k) as usize;
@@ -120,6 +121,14 @@ mod tests {
             }
         }
         assert!(testgen::small(Version::Psd, Compression::Zip).merged_preview(4).unwrap().is_none());
+    }
+
+    /// The preview size is the caller's: one over the decode limit is refused before allocating.
+    #[test]
+    fn a_preview_over_the_decode_limit_is_refused() {
+        let mut file = testgen::small(Version::Psb, Compression::Raw);
+        (file.header.width, file.header.height) = (300_000, 300_000);
+        assert!(matches!(file.merged_preview(300_000), Err(crate::error::PsdError::LimitExceeded(_))));
     }
 
     /// Grayscale is replicated to RGB; 16-bit keeps each sample's high byte; 32-bit linear
