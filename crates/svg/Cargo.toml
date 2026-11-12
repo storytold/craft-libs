@@ -1,0 +1,30 @@
+[package]
+name = "craft-svg"
+description = "SVG: sniffing, SVGZ and text encodings, pre-parse limits, a geometry reader (Bézier paths in millimetres), CSS colours and a writer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-xml = { workspace = true }
+# SVGZ (gzip), pure-Rust backend.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+kurbo = { workspace = true }
+roxmltree = "0.21.2"
+thiserror = { workspace = true }
+# The full SVG parser (Apache-2.0 OR MIT). The one version every Craft app uses: apps depend on
+# craft-svg's `tree` feature and take usvg from its re-export, never directly.
+usvg = { version = "=0.48.1", default-features = false, optional = true }
+
+[features]
+# `craft_svg::tree`: usvg behind the bounded entry point.
+tree = ["dep:usvg"]
+# Text converted to paths (needs a font database in the options).
+tree-text = ["tree", "usvg/text"]
+# The system's fonts in `usvg::fontdb`.
+tree-system-fonts = ["tree-text", "usvg/system-fonts"]
