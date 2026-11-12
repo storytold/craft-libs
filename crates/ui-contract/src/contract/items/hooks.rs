@@ -479,6 +479,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         // A double click on a column's edge fits the column to its widest cell among the rows built here, in view.
         let fit = self.header.fit.as_ref().map(|(column, _)| column.clone());
         let mut fit_widest = 0.0_f32;
+        let aligns = self.header.aligns();
         let place_rows = |ui: &mut Ui| {
             // The items of a collection whose items are members of its run share one `Ui` under the collection's env.
             let members_ui = C::MEMBERS.then(|| {
@@ -591,6 +592,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                                     columns: column_keys,
                                     toggles: toggle_keys,
                                     toggle_keys: self.header.toggle_keys(),
+                                    aligns: aligns.clone(),
                                     pressed: state.pressed.clone(),
                                     menu_open: state.menu_open,
                                 }));

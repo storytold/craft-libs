@@ -338,7 +338,6 @@ impl TabStopsDialog {
                 let leader = Select::new(words.leader.clone(), Bind::given(stop.leader), &leaders);
                 ListRow::new(texts[at].clone())
                     .cells(icx.cells())
-                    .columns(&columns)
                     .cell_field(POSITION, position, move |out| {
                         position_ids.borrow_mut().push((at, out.response.id));
                         edits.borrow_mut().extend(out.edit.events.into_iter().map(|event| (at, CellEdit::Position(event))));

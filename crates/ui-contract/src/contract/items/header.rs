@@ -3,7 +3,7 @@
 
 use super::ItemsHooks;
 use crate::contract::collection::{
-    CollectionEvent, CollectionProps, ColumnEvent, ColumnKind, ColumnRequest, ColumnSort, ColumnSpec, HeaderMenuRequest, ToggleColumn,
+    CollectionEvent, CollectionProps, ColumnAlign, ColumnEvent, ColumnKind, ColumnRequest, ColumnSort, ColumnSpec, HeaderMenuRequest, ToggleColumn,
 };
 use crate::contract::reorder::{self, Gap};
 use crate::contract::{
@@ -318,6 +318,11 @@ impl Header {
         })
     }
 
+    /// Each column's alignment and whether its figures are tabular, in display order.
+    pub(super) fn aligns(&self) -> Vec<(ColumnKey, ColumnAlign, bool)> {
+        self.specs.iter().map(|spec| (spec.key.clone(), spec.align, spec.tabular)).collect()
+    }
+
     /// The toggle columns that have a key, with the key.
     pub(super) fn toggle_keys(&self) -> Vec<(ColumnKey, craft_keymap::Chord)> {
         self.toggle_columns().filter_map(|(column, toggle)| Some((column, toggle.key?))).collect()
@@ -369,11 +374,6 @@ impl Header {
         let grip = scroll_bar_look(pcx.tokens, ScrollBarKind::Overlay).thickness;
         let rtl = pcx.flow.is_rtl();
         let widths = self.widths(area.width());
-        let help = pcx.words::<HeaderWords>().tip.clone();
-        for (at, (spec, width)) in self.specs.iter().zip(widths).enumerate() {
-            let (rect, rest) = flow.take_start(width);
-            flow = rest;
-            let hash = hash_of(&spec.key);
         let wide = widths.iter().sum::<f32>().max(area.width());
         let left = if rtl { area.max.x + offset - wide } else { area.min.x - offset };
         let mut flow = Flow::new(Rect::from_min_size(Pos2::new(left, area.min.y), Vec2::new(wide, self.height)), rtl);
@@ -382,6 +382,11 @@ impl Header {
             let x = rect.min.x.clamp(view.min.x, view.max.x);
             Rect::from_x_y_ranges(x..=rect.max.x.clamp(x, view.max.x), rect.y_range())
         };
+        let help = pcx.words::<HeaderWords>().tip.clone();
+        for (at, (spec, width)) in self.specs.iter().zip(widths).enumerate() {
+            let (rect, rest) = flow.take_start(width);
+            flow = rest;
+            let hash = hash_of(&spec.key);
             let mut sense = Sense::CLICK | Sense::FOCUS;
             if spec.movable {
                 sense |= Sense::DRAG;
@@ -729,6 +734,7 @@ impl Header {
                 .then(|| HeaderEdge { state: cx.core.part_state(GRIP.at(cell.hash)), keyed: self.memory.resizing.as_ref() == Some(&spec.key) });
             let mut label = HeaderText::new(Label::from(text), self.inset, sort).id(sub(id, ("header_text", cell.hash)));
             label.edge = edge;
+            label.align = spec.align;
             label.show_at(&mut cell_ui, cell.rect);
             Env::restore(&ctx, installed);
         }
@@ -820,6 +826,8 @@ struct HeaderText {
     /// Whether the label is its own AccessKit node. The header row's label is not: its `ColumnHeader` sub-node carries
     /// the name.
     node: bool,
+    /// The column's alignment: an end-aligned column's label and sort mark end at the cell's end, over its cells.
+    align: ColumnAlign,
 }
 
 impl HeaderText {
@@ -829,7 +837,7 @@ impl HeaderText {
     }
 
     fn new(text: Label, inset: f32, sort: Option<bool>) -> Self {
-        HeaderText { common: Common::new(), inset, sort, edge: None, node: false }.label(text)
+        HeaderText { common: Common::new(), inset, sort, edge: None, node: false, align: ColumnAlign::Start }.label(text)
     }
 
     /// The label on one line, cut with an ellipsis when its column is narrower than the text.
@@ -895,21 +903,18 @@ impl Component for HeaderText {
         let inner = Flow::new(Flow::new(cx.rect, rtl).inset(Insets::horizontal(self.inset)), rtl);
         let ink = if self.sort.is_some() { cx.style.sorted } else { cx.style.ink };
         let run = self.run(cx.core.resolved.label).color(ink);
-        match self.sort {
-            Some(descending) => {
-                // The mark follows the label's end; a label too long for the cell is cut to leave the mark its room.
-                let (side, gap) = (cx.style.mark, cx.style.gap);
-                let room = (inner.rect().width() - side - gap).max(0.0);
-                let label = ui.draw().layout(&run, room).size().x.min(room);
-                let (text, rest) = inner.take_start(label);
-                ui.draw().text(text, &run);
-                let slot = Flow::new(rest.span(gap, side), rtl);
-                let id = IconId::new(if descending { "sort_descending" } else { "sort_ascending" });
-                ui.draw().icon(slot.align(Vec2::splat(side), Align::Min, Align::Center), &IconSpec::svg(id));
-            }
-            None => {
-                ui.draw().text(inner.rect(), &run);
-            }
+        // The mark follows the label's end; a label too long for the cell is cut to leave the mark its room. An
+        // end-aligned column puts the two at the cell's end.
+        let mark = self.sort.map(|descending| (descending, cx.style.mark, cx.style.gap));
+        let room = (inner.rect().width() - mark.map_or(0.0, |(_, side, gap)| side + gap)).max(0.0);
+        let label = ui.draw().layout(&run, room).size().x.min(room);
+        let lead = if self.align == ColumnAlign::End { room - label } else { 0.0 };
+        let (text, rest) = Flow::new(inner.span(lead, inner.rect().width() - lead), rtl).take_start(label);
+        ui.draw().text(text, &run);
+        if let Some((descending, side, gap)) = mark {
+            let slot = Flow::new(rest.span(gap, side), rtl);
+            let id = IconId::new(if descending { "sort_descending" } else { "sort_ascending" });
+            ui.draw().icon(slot.align(Vec2::splat(side), Align::Min, Align::Center), &IconSpec::svg(id));
         }
         self.paint_edge(ui, cx, rtl);
     }

@@ -134,6 +134,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             self.header.columns(0.0).into_iter().map(|(key, width)| (key, Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 0.0)))).collect();
         let columns: Vec<craft_behavior::ColumnKey> = cells.iter().map(|(key, _)| key.clone()).collect();
         let toggles: Vec<craft_behavior::ColumnKey> = self.header.toggle_columns().map(|(key, _)| key).collect();
+        let aligns = self.header.aligns();
         let len = self.source.len();
         let mut largest = Vec2::ZERO;
         let mut widest: Vec<(craft_behavior::ColumnKey, f32)> = Vec::new();
@@ -173,6 +174,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
                 columns: columns.clone(),
                 toggles: toggles.clone(),
                 toggle_keys: Vec::new(),
+                aligns: aligns.clone(),
                 pressed: None,
                 menu_open: false,
             };

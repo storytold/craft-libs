@@ -111,7 +111,7 @@ impl Component for ListRow<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        self.adopt_toggle_columns(&cx.env, cx.resolved.id);
+        self.adopt_facts(&cx.env, cx.resolved.id);
         let sizes = &cx.style.sizes;
         if self.spacer {
             return Vec2::ZERO;
@@ -174,7 +174,7 @@ impl Component for ListRow<'_> {
         if self.spacer {
             return;
         }
-        self.adopt_toggle_columns(&cx.env, cx.resolved.id);
+        self.adopt_facts(&cx.env, cx.resolved.id);
         self.measure_hosted(cx);
         let widths = self.widths(&cx.style.sizes, &|run| cx.layout_at(run, f32::INFINITY).size().x);
         let placed = self.place(&cx.style.sizes, &widths, rect, cx.flow.is_rtl());

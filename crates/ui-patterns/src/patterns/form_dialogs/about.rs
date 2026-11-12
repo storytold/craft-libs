@@ -395,7 +395,6 @@ impl Shown<'_> {
                     let contributor = &list[*key];
                     let mut row = ListRow::new(contributor.name(mode).into_owned())
                         .cells(icx.cells())
-                        .columns(&columns)
                         .striped(icx.row.striped)
                         .tooltip(writer.summary(contributor));
                     for sort in ContributorSort::ALL.iter().filter(|sort| **sort != ContributorSort::Name) {
@@ -445,7 +444,7 @@ impl Shown<'_> {
             &source,
             &mut |key, icx| {
                 let model = &models[*key];
-                let mut row = ListRow::new(model.company.to_string()).cells(icx.cells()).columns(&columns).striped(icx.row.striped);
+                let mut row = ListRow::new(model.company.to_string()).cells(icx.cells()).striped(icx.row.striped);
                 for column in ModelColumn::ALL.iter().filter(|column| **column != ModelColumn::Company) {
                     row = row.cell(column.key(), column.cell(model, total, writer));
                 }

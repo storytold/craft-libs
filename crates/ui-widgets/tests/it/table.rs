@@ -248,6 +248,10 @@ fn columns_wider_than_the_table_keep_their_least_width_scroll_sideways_with_the_
     assert!(count.right() > table.right(), "the columns run past the table: {count:?} in {table:?}");
     let label = fixture.texts().iter().find(|painted| painted.text == LONG).cloned().expect("the label was painted");
     assert!(label.elided && label.rect.right() <= name.right() + 0.5, "the label stays in its column: {:?} in {name:?}", label.rect);
+    let figure = painted(&fixture, "12");
+    assert!(pages.right() - figure.right() < figure.left() - pages.left(), "a numeric cell ends at its column's end: {figure:?} in {pages:?}");
+    let heading = painted(&fixture, "Pages");
+    assert!(pages.right() - heading.right() < heading.left() - pages.left(), "a numeric header ends at its column's end: {heading:?} in {pages:?}");
     let before = painted(&fixture, "7");
     fixture.frame(vec![pointer::moved(table.center())]);
     fixture.frame(vec![egui::Event::MouseWheel {

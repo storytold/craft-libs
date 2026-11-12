@@ -9,7 +9,7 @@
 
 use super::toggle::ToggleCell;
 use super::words::ListWords;
-use crate::contract::{ColumnSpec, Common, OpenChange, RowPressed, RowState, Show};
+use crate::contract::{Common, OpenChange, RowPressed, RowState, Show};
 use crate::primitives::{ContentPainterCx, HAlign, IconSpec};
 use crate::runtime::env::Label;
 use craft_behavior::ColumnKey;
@@ -30,7 +30,6 @@ use crate::contract::Hosting;
 pub use output::{RowEvent, RowOutput};
 #[cfg(feature = "testing")]
 pub use placement::RowPlacement;
-use placement::halign;
 #[cfg(feature = "testing")]
 #[doc(hidden)]
 pub use placement::indent_steps;
@@ -339,14 +338,6 @@ impl<'a> ListRow<'a> {
         self.menu_open |= row.menu_open;
         self.striped = row.striped;
         self.highlight |= row.emphasized;
-        self
-    }
-
-    /// The columns' specs, for the alignment and the figures of the text cells: an end-aligned column's text ends
-    /// at the cell's end (mirrored in a right-to-left interface) and a numeric column's figures are tabular.
-    #[must_use]
-    pub fn columns(mut self, specs: &[ColumnSpec]) -> Self {
-        self.aligns = specs.iter().map(|spec| (spec.key.clone(), halign(spec.align), spec.tabular)).collect();
         self
     }
 

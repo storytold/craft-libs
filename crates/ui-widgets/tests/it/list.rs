@@ -400,12 +400,11 @@ fn a_cell_field_stands_in_its_cell_takes_the_click_and_reports_its_edit() {
         let source = keyed(&keys, |key: &usize| *key);
         let held = held.clone();
         let cell = cell.clone();
-        Table::<usize>::new("Stops", columns.clone()).show_items(ui, &source, &mut |_, icx| {
+        Table::<usize>::new("Stops", columns).show_items(ui, &source, &mut |_, icx| {
             *cell.borrow_mut() = icx.cell(&SIZE).unwrap_or(Rect::NOTHING);
             let held = held.clone();
             ListRow::new("Row label")
                 .cells(icx.cells())
-                .columns(&columns)
                 .cell(SIZE, "Size text")
                 .cell_field(NAME, TextField::new("Name field", Bind::given("draft".to_owned())), |_| {})
                 .cell_field(SIZE, NumberField::new("Size field", Bind::given(Some(4.0))), move |out| {

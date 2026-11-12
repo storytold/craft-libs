@@ -867,7 +867,6 @@ impl<K: Clone + PartialEq + Send + Sync + 'static> Model<K> {
                 let data = &rows[row];
                 ListRow::new(data.owner.clone())
                     .cells(icx.cells())
-                    .columns(&columns)
                     .striped(icx.at % 2 == 1)
                     .cell(FILE_NAME, file_name(&data.link.stored).to_owned())
                     .cell(FILE_PATH, data.link.stored.clone())

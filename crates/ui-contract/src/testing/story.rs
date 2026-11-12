@@ -545,6 +545,7 @@ where
         columns: Vec::new(),
         toggles: Vec::new(),
         toggle_keys: Vec::new(),
+        aligns: Vec::new(),
         pressed: None,
         menu_open: false,
     };
