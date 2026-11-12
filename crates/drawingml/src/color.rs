@@ -770,6 +770,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn preset_colours_in_any_case_and_their_dk_lt_spellings() {
+        assert_eq!(preset("red"), Some(Rgba::rgb(255, 0, 0)));
+        assert_eq!(preset("Red"), preset("red"));
+        assert_eq!(preset("dkBlue"), Some(Rgba::rgb(0, 0, 0x8B)));
+        assert_eq!(preset("darkBlue"), preset("dkBlue"));
+        assert_eq!(preset("ltGrey"), Some(Rgba::rgb(0xD3, 0xD3, 0xD3)));
+        assert_eq!(preset("tomato"), Some(Rgba::rgb(0xFF, 0x63, 0x47)));
+        assert_eq!(preset("unknownColor"), None);
+    }
+
+    #[test]
     fn from_hex_rejects_multiple_hashes() {
         assert_eq!(Rgba::from_hex("##FF0000"), None);
         assert_eq!(Rgba::from_hex("####FF0000"), None);
