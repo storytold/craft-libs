@@ -10,8 +10,8 @@ Implemented clean-room from the public IDML File Format Specification and from i
 packages exported from synthetic documents.
 
 This crate is the layer between the bytes and IDML's own element tree, with a typed model of
-the layout and the stories (`model`). Styles, swatches and preferences are not modelled yet: a
-caller walks those elements and maps them onto its own document. InCopy Markup (ICML), one
+the layout, the stories and the resources (`model`): a caller reads it and maps it onto its own
+document. InCopy Markup (ICML), one
 story as one XML document, is read and written too (`icml`).
 
 ## Reading
@@ -152,6 +152,20 @@ assert_eq!(story.text(|a| (a == Ace::PageNumber).then_some('#')), "Page #\n");
 - Content keeps its whitespace exactly; elements the model does not type are kept as written.
   Containers nest as deep as the XML reader allows (256), and text is gathered without
   recursion.
+
+## Resources
+
+- `style_groups` gives the root style groups (`RootParagraphStyleGroup` and the character,
+  object, cell and table ones) as trees of `StyleGroup` and `Style`, written back exactly.
+  `StyleGroup::styles` lists every style with the names of the groups it is in; `Style` has
+  `based_on`, `next_style` and its other children (`other`: an object style's
+  `TextFramePreference`, its effect settings).
+- `swatches` gives `Color`, `Tint`, `Gradient` (with `stops`), `MixedInk`, `MixedInkGroup` and the
+  None `Swatch`: `spot`, `space`, `color_value`, `base_color`, `tint_value`, `radial`.
+- `stroke_styles` (dashed with `dash_array`, dotted, striped with `stripe_array`) and
+  `color_groups` (with `members`).
+- `preference` finds a preference element (`DocumentPreference`, `GridPreference`, …) and
+  `named` every element of a name (`Ink`, `Layer`, `Section`, `Condition`, `NumberingList`).
 
 ## ICML
 
