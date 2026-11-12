@@ -268,7 +268,8 @@ impl<'a> SwatchPair<'a> {
 
     /// The wells' rects in logical coordinates from the pair's start edge, primary first, inside their outlines.
     fn well_rects(&self, style: &SwatchPairStyle, size: Vec2) -> [Rect; 2] {
-        let top = if self.has_buttons() { style.buttons + style.metrics.gap } else { 0.0 } + style.outline;
+        // The buttons' squares hold their glyphs with room round them, so the wells follow without a gap.
+        let top = if self.has_buttons() { style.buttons } else { 0.0 } + style.outline;
         let square = Vec2::splat(style.well);
         let primary = Rect::from_min_size(pos2(style.outline, top), square);
         let end = size.x.min(Self::wells(style).x) - style.outline;
@@ -285,14 +286,13 @@ impl Component for SwatchPair<'_> {
 
     fn style(cx: &StyleCx<'_>, _: SwatchPairStyleKey) -> SwatchPairStyle {
         let colors = &cx.tokens.color;
-        let tight = cx.tokens.space.gap.tight;
         SwatchPairStyle {
-            metrics: Metrics::new().gap(tight),
+            metrics: Metrics::new(),
             focus: cx.focus_look(),
             well: cx.tokens.size.icon.lg,
             step: cx.tokens.size.icon.sm,
             radius: SwatchMetrics::of(cx).radius,
-            gap: tight,
+            gap: cx.tokens.space.gap.tight,
             buttons: cx.control().icon,
             ground: cx.color(colors.surface.panel),
             edge: cx.color(colors.line.control_edge),
@@ -308,7 +308,7 @@ impl Component for SwatchPair<'_> {
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let style = cx.style;
         let wells = Self::wells(style);
-        if self.has_buttons() { vec2(wells.x, wells.y + style.buttons + style.metrics.gap) } else { wells }
+        if self.has_buttons() { vec2(wells.x, wells.y + style.buttons) } else { wells }
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, Well>> {
