@@ -12,6 +12,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+craft-behavior = { workspace = true }
 craft-host = { workspace = true }
 craft-i18n = { workspace = true }
 craft-theme = { workspace = true }
