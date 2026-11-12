@@ -352,3 +352,30 @@ fn the_unit_keeps_its_place_at_the_end_of_the_field() {
         .collect();
     assert!((ends[0] - ends[1]).abs() < 0.5, "the units end at one place from the field's end: {ends:?}");
 }
+
+/// A field's digits sit on its centre line at both control sizes when the text row is taller than the part (here
+/// egui's own fonts, far larger than the field's; on a Mac, the OS interface face's tall row in a small field): the
+/// row is centred on the part, not allocated from the part's top. The side label follows the digits' baseline, so
+/// this keeps it level too.
+#[trial]
+fn the_digits_sit_on_the_field_centre_line() {
+    use craft_theme::ControlSize;
+    use craft_ui::testing::Fixture;
+    let boxes: std::rc::Rc<RefCell<Vec<Rect>>> = std::rc::Rc::default();
+    let b = boxes.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut v = b.borrow_mut();
+        v.clear();
+        for (at, size) in [ControlSize::Sm, ControlSize::Md].into_iter().enumerate() {
+            v.push(NumberField::new("N", Bind::bound(&mut Some(100.0))).size(size).id_salt(at).show(ui).response.rect);
+        }
+    });
+    fixture.ctx().all_styles_mut(|style| style.text_styles.values_mut().for_each(|font| font.size *= 3.0));
+    fixture.settle();
+    fixture.idle(3);
+    for field in boxes.borrow().iter() {
+        let digits = fixture.texts().iter().find(|text| field.intersects(text.rect) && text.text == "100").expect("the digits are painted");
+        let off = digits.rect.center().y - field.center().y;
+        assert!(off.abs() <= 0.5, "the digits sit {off} pt off the centre line of {field:?}");
+    }
+}

@@ -124,6 +124,14 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         ui.fonts_mut(|fonts| crate::runtime::egui::text_layout::layout_with(fonts, job))
     };
     let hint_text = hint.map(|hint| egui::RichText::new(hint).font(FontId::proportional(font_id.size)));
+    // A single-line edit runs in a rect one text row tall, or the part's height when that is taller, centred on the
+    // part's centre line: the row's centre is the part's whatever row egui allocates from the top of its rect.
+    let rect = if multiline || galley.is_some() {
+        rect
+    } else {
+        let row = ui.fonts_mut(|fonts| fonts.row_height(&font_id));
+        Rect::from_center_size(rect.center(), egui::vec2(rect.width(), rect.height().max(row)))
+    };
     // The component's root took its place in the flow already: the editor runs in a child that takes none, so the
     // parent's cursor stays past the root, not past the text part inside it.
     let output = {
@@ -146,6 +154,8 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
                 let mut edit = if multiline { egui::TextEdit::multiline($buffer) } else { egui::TextEdit::singleline($buffer) };
                 edit = edit
                     .id(id)
+                    // egui sizes the text row by this font: the text's own, not egui's default.
+                    .font(font_id.clone())
                     .interactive(focusable && pointer)
                     .frame(egui::Frame::NONE)
                     .desired_width(rect.width())
@@ -156,8 +166,7 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
                     .event_filter(filter)
                     .return_key(if multiline { Some(egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Enter)) } else { None })
                     .layouter(&mut layouter)
-                    // A laid-out galley sits at the rect's corner, as a painted run does: egui's own row height
-                    // (its default font's) would otherwise centre it lower.
+                    // A laid-out galley sits at the rect's corner, as a painted run does.
                     .align(match (centred, rtl) {
                         _ if galley.is_some() => egui::Align2::LEFT_TOP,
                         (true, _) => egui::Align2::CENTER_CENTER,
