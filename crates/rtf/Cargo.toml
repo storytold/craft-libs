@@ -1,0 +1,34 @@
+[package]
+name = "craft-rtf"
+description = "Rich Text Format: a tokenizer, text decoding in the file's code pages, and a reader and writer for a small neutral model (paragraphs, character formatting, outline levels, tables)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# `outlook`: compressed RTF ([MS-OXRTFCP]) and the text or encapsulated HTML ([MS-OXRTFEX]) of a
+# mail item's body.
+outlook = ["dep:craft-mime"]
+# `doc`: RTF read into and written from the word model (craft-wordmodel), through craft-flow.
+doc = ["dep:craft-flow", "dep:craft-metafile", "dep:craft-wordmodel", "dep:image"]
+
+[dependencies]
+craft-codepage = { workspace = true }
+# Character sets by Windows code page number, for the `outlook` module.
+craft-mime = { workspace = true, optional = true }
+# The East Asian multibyte code pages (932, 936, 949, 950).
+encoding_rs = { workspace = true }
+
+# The word-model reader and writer (`doc`).
+craft-flow = { workspace = true, optional = true }
+craft-metafile = { workspace = true, optional = true }
+craft-wordmodel = { workspace = true, optional = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "tiff", "webp"], optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
