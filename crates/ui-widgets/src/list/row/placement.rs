@@ -63,7 +63,8 @@ impl Sizes {
             label_line: tokens.typography.get(role).line_height,
             detail_line: tokens.typography.get(TypeRole::Caption).line_height,
             cell_inset: control.pad_x,
-            cell_pad: control.gap,
+            // A text row's wrapped cell keeps the room a text row has around its line.
+            cell_pad: if rows == RowHeight::Text { tokens.space.gap.tight } else { control.gap },
         }
     }
 

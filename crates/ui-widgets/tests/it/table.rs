@@ -122,7 +122,7 @@ fn the_metadata_name_column_fits_its_widest_name_up_to_a_third_of_the_table() {
 }
 
 /// The search field sits at the top of the metadata table, inset at its sides only, and the first group's row starts
-/// where the field ends: no gap above the first group.
+/// where the field ends: no gap above the first group. A field's wrapped value keeps its row a text row high.
 #[trial]
 fn the_metadata_filter_sits_in_the_header_with_no_gap_above_the_first_group() {
     let rect = Rc::new(Cell::new(Rect::NOTHING));
@@ -139,6 +139,8 @@ fn the_metadata_filter_sits_in_the_header_with_no_gap_above_the_first_group() {
     assert!((field.top() - whole.top()).abs() < 0.5, "nothing above the field: {field:?} in {whole:?}");
     assert!(field.left() > whole.left(), "the field is inset at its start: {field:?} in {whole:?}");
     assert!((group.top() - field.bottom()).abs() < 0.5, "the first group starts where the field ends: {group:?} under {field:?}");
+    let make = fixture.by_label("Make").expect("the field's row").rect;
+    assert!((make.height() - group.height()).abs() < 0.5, "a row with a one-line wrapped value is as tall as a text row: {make:?}, {group:?}");
 }
 
 /// A table sorted by its hideable Size column, with movable Name and Date columns; the app drops its sort on
