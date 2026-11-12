@@ -25,7 +25,7 @@ use craft_ui::runtime::commands::{self, CommandRef, Commands as _, EditCommands}
 use craft_ui::runtime::env::{Env, Label, WindowKey};
 use craft_ui::shell::{AppShell, AppShellOutput, CaptionFamily, Captions, Frame, ScreenMode, ShellDialogsCx as _, Title, TitleBar};
 use craft_window::Layout;
-use egui::Ui;
+use egui::{Rect, Ui};
 
 /// The parameters of Gaussian Blur.
 const BLUR: &str = r#"{"radius":0.1..1000=1}"#;
@@ -66,17 +66,30 @@ impl<'a> EditorMock<'a> {
 
     /// Shows the window in the room offered. Each instance keeps its screen mode, Tab toggle and dialogs apart.
     pub fn show(self, ui: &mut Ui) -> AppShellOutput {
+        self.show_in(ui, None)
+    }
+
+    /// Shows the window at `rect`, taking that rect's room in the flow of `ui`: for a host that sizes it (a story
+    /// card, which sizes a filling story from its content, and the window's canvas has none).
+    pub fn show_at(self, ui: &mut Ui, rect: Rect) -> AppShellOutput {
+        self.show_in(ui, Some(rect))
+    }
+
+    fn show_in(self, ui: &mut Ui, at: Option<Rect>) -> AppShellOutput {
         let EditorMock { label, state, screen_mode } = self;
         let window = WindowKey::new(format!("mock-{:x}-{}", ui.scope_id().value(), label.as_str()));
-        AppShell::embedded(window)
+        let shell = AppShell::embedded(window)
             .screen_mode(screen_mode)
             .title_bar_if(true, |ui, _, state: &mut MockState| title_bar(ui, state))
             .options_bar(true, |ui, _, state: &mut MockState| options_bar(ui, state))
             .tools(true, |ui, _, state: &mut MockState| tool_rail(ui, state))
             .status(true, |ui, _, state: &mut MockState| status_bar(ui, state))
             .body_label(label)
-            .body(|ui, cx, state: &mut MockState| body(ui, cx, state))
-            .show(ui, state)
+            .body(|ui, cx, state: &mut MockState| body(ui, cx, state));
+        match at {
+            Some(rect) => shell.show_at(ui, rect, state),
+            None => shell.show(ui, state),
+        }
     }
 }
 
