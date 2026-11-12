@@ -285,6 +285,8 @@ impl Element {
         }
         if br.read_flag().ok()? {
             let h = Header::read(&mut br).ok()?;
+            // a header that runs past its fill element is damaged: keep the one in use
+            (br.position() <= p.end).then_some(())?;
             if self.header != Some(h) {
                 if self.header.is_none_or(|o| !o.same_tables(&h)) {
                     for c in &mut self.channels {
@@ -377,13 +379,13 @@ pub(crate) const TEST_HEADER: Header = Header {
 
 /// An SBR single channel element for tests at output rate `rate`: [`TEST_HEADER`] (3 dB steps,
 /// start 5, stop 9, the default extra fields), then one FIXFIX envelope at high resolution with
-/// band `k` at `env(k)` (1.5 dB steps, as a single FIXFIX envelope has) and every noise floor
-/// value `noise`.
+/// band `k` at `env(k)` (1.5 dB steps, as a single FIXFIX envelope has) and noise band `k` at
+/// `noise(k)`.
 #[cfg(test)]
-pub(crate) fn test_payload(rate: u32, env: impl Fn(usize) -> i32, noise: u32) -> Option<Vec<u8>> {
+pub(crate) fn test_payload(rate: u32, env: impl Fn(usize) -> i32, noise: impl Fn(usize) -> i32) -> Option<Vec<u8>> {
     use craft_media::bitstream::BitWriter;
     let t = FreqTables::new(&TEST_HEADER, rate)?;
-    let (env, n_q): (Vec<i32>, usize) = ((0..t.n_high()).map(env).collect(), t.n_q());
+    let (env, noise): (Vec<i32>, Vec<i32>) = ((0..t.n_high()).map(env).collect(), (0..t.n_q()).map(noise).collect());
     let mut bw = BitWriter::new();
     bw.write_bits(1, 1); // bs_header_flag
     for (v, n) in [(1, 1), (5, 4), (9, 4), (0, 3), (0, 2), (0, 1), (0, 1)] {
@@ -394,7 +396,7 @@ pub(crate) fn test_payload(rate: u32, env: impl Fn(usize) -> i32, noise: u32) ->
     bw.write_bits(0, 2); // one envelope
     bw.write_bits(1, 1); // high resolution
     bw.write_bits(0, 2); // frequency-direction envelope and noise floor
-    for _ in 0..n_q {
+    for _ in &noise {
         bw.write_bits(0, 2); // no inverse filtering
     }
     bw.write_bits(env[0] as u32, 7);
@@ -402,9 +404,9 @@ pub(crate) fn test_payload(rate: u32, env: impl Fn(usize) -> i32, noise: u32) ->
         let (code, len) = tables::F_ENV_1_5DB[(w[1] - w[0] + 60) as usize];
         bw.write_bits(code, u32::from(len));
     }
-    bw.write_bits(noise, 5);
-    for _ in 1..n_q {
-        let (code, len) = tables::F_ENV_3_0DB[31];
+    bw.write_bits(noise[0] as u32, 5);
+    for w in noise.windows(2) {
+        let (code, len) = tables::F_ENV_3_0DB[(w[1] - w[0] + 31) as usize];
         bw.write_bits(code, u32::from(len));
     }
     bw.write_bits(0, 2); // no sinusoids, no extended data
@@ -460,7 +462,7 @@ mod tests {
     fn the_high_band_follows_the_envelope() {
         let t = tables();
         let mid = t.n_high() / 2;
-        let data = test_payload(RATE, |k| if k < mid { 30 } else { 42 }, 0).unwrap();
+        let data = test_payload(RATE, |k| if k < mid { 30 } else { 42 }, |_| 0).unwrap();
         let mut e = Element::new(1, RATE);
         let out = run(&mut e, &data, 6);
         let tail = &out[out.len() - 4096..];
@@ -481,7 +483,7 @@ mod tests {
     /// finite and of full length.
     #[test]
     fn damaged_sbr_data_is_survived() {
-        let good = test_payload(RATE, |k| 20 + k as i32, 3).unwrap();
+        let good = test_payload(RATE, |k| 20 + k as i32, |_| 3).unwrap();
         let mut seed = 0x1234_5678u32;
         let mut next = || {
             seed ^= seed << 13;
@@ -509,5 +511,34 @@ mod tests {
             let out = pair.process(&[vec![0.1; 1024], vec![-0.1; 1024]], Some(p));
             assert!(out.iter().all(|c| c.len() == 2048 && c.iter().all(|s| s.is_finite())));
         }
+    }
+
+    /// The largest envelope (127 steps of 1.5 dB) with the largest noise floor (each band 31
+    /// steps below the last) keeps the output finite: the gains are formed so that no
+    /// intermediate product of two clamped levels overflows.
+    #[test]
+    fn extreme_levels_stay_finite() {
+        let rate =
+            [22_050, 24_000, 32_000, 44_100, 48_000].into_iter().find(|&r| FreqTables::new(&TEST_HEADER, r).is_some_and(|t| t.n_q() >= 3)).unwrap();
+        let data = test_payload(rate, |_| 127, |k| -31 * k as i32).unwrap();
+        let mut e = Element::new(1, rate);
+        run(&mut e, &data, 3);
+    }
+
+    /// A header that runs past the end of its fill element is not taken: the one in use stays,
+    /// and the frame is dropped.
+    #[test]
+    fn a_header_cut_short_is_not_taken() {
+        let data = test_payload(RATE, |_| 30, |_| 0).unwrap();
+        let mut e = Element::new(1, RATE);
+        run(&mut e, &data, 1);
+        assert_eq!(e.header, Some(TEST_HEADER));
+        // another start frequency (bits 2..6), in an element that ends 6 bits in
+        let mut cut = data.clone();
+        cut[0] ^= 0x04;
+        assert!(e.read(Payload { data: &cut, start: 0, end: 6, crc: false }).is_none());
+        assert_eq!(e.header, Some(TEST_HEADER));
+        assert!(e.read(Payload { data: &cut, start: 0, end: 8 * cut.len(), crc: false }).is_some());
+        assert_ne!(e.header, Some(TEST_HEADER));
     }
 }

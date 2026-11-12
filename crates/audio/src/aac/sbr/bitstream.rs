@@ -204,8 +204,9 @@ impl Grid {
         if t[0] < 0 || t[..=n].windows(2).any(|w| w[0] >= w[1]) {
             return Err(bad());
         }
+        // l_A (ISO/IEC 14496-3 §4.6.18.3.3): VARFIX pointer 1, like 0, marks no envelope
         let la = match (pointer, class) {
-            (0, _) => None,
+            (0, _) | (1, VARFIX) => None,
             (p, FIXVAR | VARVAR) => Some((n + 1).checked_sub(p).ok_or_else(bad)?),
             (p, _) => Some(p - 1),
         };
@@ -468,6 +469,9 @@ mod tests {
         // VARFIX: leading border 1, relative 2, pointer 2: l_A = 1
         let g = grid(&[(VARFIX as u32, 2), (1, 2), (1, 2), (0, 2), (2, 2), (1, 1), (0, 1)]).unwrap();
         assert_eq!((g.num_env, &g.t_env[..3], g.la, g.t_noise), (2, &[1, 3, 16][..], Some(1), [1, 3, 16]));
+        // the same with pointer 1: no transient envelope, the noise floors still split at 3
+        let g = grid(&[(VARFIX as u32, 2), (1, 2), (1, 2), (0, 2), (1, 2), (1, 1), (0, 1)]).unwrap();
+        assert_eq!((g.la, g.t_noise), (None, [1, 3, 16]));
         // VARVAR: 1 .. 17 with one border from each end
         let g = grid(&[(VARVAR as u32, 2), (1, 2), (1, 2), (1, 2), (1, 2), (0, 2), (0, 2), (0, 2), (0, 1), (0, 1), (0, 1)]).unwrap();
         assert_eq!((g.num_env, &g.t_env[..4], g.la), (3, &[1, 3, 15, 17][..], None));

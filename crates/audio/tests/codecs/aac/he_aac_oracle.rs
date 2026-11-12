@@ -149,8 +149,12 @@ fn matches_ffmpeg_he_aac_decoder() {
                     }
                 }
             }
-            let mean = diffs.iter().sum::<f64>() / diffs.len().max(1) as f64;
-            let mad = diffs.iter().map(|d| d.abs()).sum::<f64>() / diffs.len().max(1) as f64;
+            // the LFE (WAV channel 3 of 5.1) has no SBR, so no high band; every other channel must
+            // have one to compare
+            let lfe = case.channels == 6 && c == 3;
+            assert!(lfe || !diffs.is_empty(), "{} ch{c}: no high band to compare", case.name);
+            let mean = diffs.iter().sum::<f64>() / diffs.len() as f64;
+            let mad = diffs.iter().map(|d| d.abs()).sum::<f64>() / diffs.len() as f64;
             println!(
                 "{} ch{c}: full SNR {full:.1} dB, low band SNR {low:.1} dB, high band level {mean:+.2} dB (mean |Δ| {mad:.2} dB over {})",
                 case.name,
@@ -159,7 +163,7 @@ fn matches_ffmpeg_he_aac_decoder() {
             // The low band differs by the core decoders' rounding; the high band's noise comes
             // from the same table, so whole frames match too.
             assert!(full > 45.0 && low > 55.0, "{} ch{c}: SNR {full:.1} / {low:.1} dB", case.name);
-            assert!(mad < 0.1, "{} ch{c}: high band off by {mad:.2} dB", case.name);
+            assert!(lfe || mad < 0.1, "{} ch{c}: high band off by {mad:.2} dB", case.name);
         }
     }
 }

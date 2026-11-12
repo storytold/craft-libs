@@ -75,8 +75,9 @@ fn start_stop(h: &Header, fs: u32) -> Option<(usize, usize)> {
         }
     }
     .min(64);
-    // the low band reaches only the analysis bank's 32 channels
-    (1..32).contains(&k0).then_some(())?;
+    // the low band reaches only the analysis bank's 32 channels (`kx` is checked against them
+    // once the crossover is known)
+    (1..=32).contains(&k0).then_some(())?;
     (k2 > k0).then_some((k0 as usize, k2 as usize))
 }
 
@@ -339,6 +340,14 @@ mod tests {
             }
         }
         assert!(valid > 10_000, "{valid}");
+    }
+
+    /// The highest start a header can give, 32 at 24 kHz (start 15), is valid: with stop 14
+    /// (twice the start) and linear bands it covers channels 32 to 64.
+    #[test]
+    fn a_start_at_channel_32_is_accepted() {
+        let t = FreqTables::new(&header(15, 14, 0, 0, false, 2), 24_000).unwrap();
+        assert_eq!((t.k0, t.kx, t.m), (32, 32, 32));
     }
 
     /// A typical 44.1 kHz header: start channel 12 + offset, stop near 64, three noise bands.

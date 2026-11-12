@@ -201,13 +201,14 @@ fn envelope_gains(f: &Frame, l: usize, sine_index: &[bool; 64], delta: bool) -> 
     }
     let mut out = EnvelopeGains { gain: [0.0; 64], noise: [0.0; 64], sine: [0.0; 64] };
     for c in 0..m {
+        // `q / (1 + q)` first: energy and noise ratio are each clamped, their product is not
         let (eo, ec, q) = (e_orig[c], e_curr[c], q[c]);
-        out.noise[c] = (eo * q / (1.0 + q)).sqrt();
+        let share = q / (1.0 + q);
+        out.noise[c] = (eo * share).sqrt();
         if sine_index[c] {
             out.sine[c] = (eo / (1.0 + q)).sqrt();
         }
-        out.gain[c] =
-            if s_band[c] { (eo / (EPS + ec) * q / (1.0 + q)).sqrt() } else { (eo / ((EPS + ec) * (1.0 + if delta { q } else { 0.0 }))).sqrt() };
+        out.gain[c] = if s_band[c] { (eo / (EPS + ec) * share).sqrt() } else { (eo / ((EPS + ec) * (1.0 + if delta { q } else { 0.0 }))).sqrt() };
     }
     // limit per limiter band, then boost back the energy the limiter took
     let lim_gain = LIMITER_GAINS[usize::from(hdr.limiter_gains & 3)];

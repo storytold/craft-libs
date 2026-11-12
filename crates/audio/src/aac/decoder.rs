@@ -135,6 +135,10 @@ impl Decoder {
         }
         self.layout = layout;
         self.offsets = offsets;
+        // the SBR decoders' history belongs to the old element order: `apply_sbr` rebuilds them
+        if let Some(e) = self.sbr_out.as_mut() {
+            e.clear();
+        }
         self.channels = vec![ChannelState { overlap: vec![0.0; 1024], prev_shape: WindowShape::Sine }; n];
     }
 
@@ -700,7 +704,7 @@ mod tests {
     /// its SBR fill element describes is there; with SBR off, the core alone (silence).
     #[test]
     fn sbr_fill_elements_rebuild_the_high_band() {
-        let payload = sbr::test_payload(44_100, |_| 40, 0).unwrap();
+        let payload = sbr::test_payload(44_100, |_| 40, |_| 0).unwrap();
         let mut bw = BitWriter::new();
         bw.write_bits(ID_SCE, 3);
         bw.write_bits(0, 4);
@@ -736,6 +740,11 @@ mod tests {
         assert_eq!(out.len(), 4 * 2048);
         let rms = (out[2048..].iter().map(|s| s * s).sum::<f32>() / (out.len() - 2048) as f32).sqrt();
         assert!(rms > 1e-4, "{rms}");
+        // a new layout drops the SBR decoders (their history is the old element order's) and
+        // keeps SBR on
+        dec.set_layout(vec![(ElementType::Sce, 0)]);
+        assert_eq!(dec.sbr_out.as_ref().map(Vec::len), Some(0));
+        assert_eq!(dec.decode(&au).unwrap()[0].len(), 2048);
     }
 
     /// An access unit whose elements are all empty: `elements` are (id, tag), then ID_END.
