@@ -88,6 +88,7 @@ craft-menu = { path = "crates/menu" }
 craft-metafile = { path = "crates/metafile" }
 craft-offcrypto = { path = "crates/offcrypto" }
 craft-opc = { path = "crates/opc" }
+craft-openpgp = { path = "crates/openpgp" }
 craft-ora = { path = "crates/ora" }
 craft-pptx = { path = "crates/pptx" }
 craft-penpot = { path = "crates/penpot" }
