@@ -240,4 +240,43 @@ fn an_inside_glyph_label_scrubs_the_field_in_edit_too() {
     fixture.drag_at(glyph.center(), Vec2::new(30.0, 0.0));
     fixture.idle(2);
     assert!(value.get().unwrap_or_default() > START, "a drag on the glyph in edit raised the value");
+
+/// The one name of `named_field`'s values, tied to its presets row.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Metrics;
+
+impl craft_ui::text::NumberName for Metrics {
+    fn id(self) -> u32 {
+        METRICS_ROW
+    }
+
+    fn from_id(id: u32) -> Option<Self> {
+        (id == METRICS_ROW).then_some(Metrics)
+    }
+}
+
+const METRICS_ROW: u32 = 7;
+
+/// A field that holds a name shows its presets row's label as its text, and typing the name over a number commits the
+/// name (kerning's Metrics).
+#[trial]
+fn a_named_value_shows_its_row_label_and_the_typed_name_commits_it() {
+    use craft_ui::text::NamedOr;
+    let value = std::rc::Rc::new(RefCell::new(NamedOr::Named(Metrics)));
+    let (held, id) = (value.clone(), std::rc::Rc::new(Cell::new(egui::Id::NULL)));
+    let shown_id = id.clone();
+    let presets = vec![Entry::new(NumberPick::Choice(METRICS_ROW), "Metrics"), Entry::new(NumberPick::Number(25.0), "25")];
+    let mut fixture = craft_ui::testing::Fixture::new(move |ui| {
+        let mut guard = held.borrow_mut();
+        let field = NumberField::named("Kerning", Bind::bound(&mut *guard)).id_salt("kerning").presets(&presets);
+        shown_id.set(field.show(ui).response.id);
+    });
+    fixture.settle();
+    assert_eq!(fixture.tree().value(id.get()), Some("Metrics"), "a named value shows its row's label");
+    *value.borrow_mut() = NamedOr::Number(5.0);
+    fixture.settle();
+    let field = fixture.by_label("Kerning").expect("the field");
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("metrics").key(Key::Enter, Modifiers::NONE).settle();
+    assert_eq!(*value.borrow(), NamedOr::Named(Metrics), "the typed name commits the name");
 }

@@ -346,7 +346,8 @@ impl Outcome for CharacterControlsOutput {
 ///   the field (presets are shortcuts, not limits: any value in range can be typed). Ranges in points: size
 ///   0.1–1296, leading 0.1–5000, baseline shift −1296–1296; tracking and kerning −1000–10000; scales 0–1000 %. The
 ///   leading menu starts with an Auto row ([`Leading::Auto`]); while leading is Auto the field shows the font size
-///   × 120 %. The kerning menu starts with Metrics and Optical; the field is empty while either is the kerning.
+///   × 120 %. The kerning menu starts with Metrics and Optical; while either is the kerning the field shows its name,
+///   and the name typed sets it.
 /// - Family: craft-font-manager's `FontPicker` with `font-picker` and [`font_picker`](Self::font_picker), else a
 ///   `Select` of `families`.
 /// - Toggles are toggle buttons in one row, pressed while on; Tab reaches each.
