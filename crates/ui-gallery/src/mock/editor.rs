@@ -4,10 +4,12 @@ use super::commands::AppCommand;
 use super::model::{MockState, Panel, Tool, ToolKey};
 use super::panels::Panels;
 use super::tools::Tools;
+use super::words::MockWords;
 use craft_behavior::IconId;
 use craft_behavior::dock::PanelState;
-use craft_ui::bars::{Bar, BarKind, StatusReadout, StatusValues};
-use craft_ui::buttons::IconButton;
+use craft_theme::variant::Tone;
+use craft_ui::bars::{Bar, BarKind, StatusMessage, StatusReadout, StatusValues};
+use craft_ui::buttons::{IconButton, Link};
 use craft_ui::canvas::{PickStep, ViewCommands};
 use craft_ui::contract::{Bind, BodyCx, Props as _, Remember as _, SaveKey, Show as _, ShowContainer as _};
 use craft_ui::dialog::{DialogResult, PromptChoice, StandardPrompt};
@@ -19,8 +21,8 @@ use craft_ui::patterns::form_dialogs::{
     DialogFields, HostedImageSize, HostedParamDialog, ImageSize, ImageSizeValues, Param, ParamDialog, ParamResult,
 };
 use craft_ui::rails::ToolRail;
-use craft_ui::runtime::commands::{CommandRef, Commands as _, EditCommands};
-use craft_ui::runtime::env::{Label, WindowKey};
+use craft_ui::runtime::commands::{self, CommandRef, Commands as _, EditCommands};
+use craft_ui::runtime::env::{Env, Label, WindowKey};
 use craft_ui::shell::{AppShell, AppShellOutput, CaptionFamily, Captions, Frame, ScreenMode, ShellDialogsCx as _, Title, TitleBar};
 use craft_window::Layout;
 use egui::Ui;
@@ -97,12 +99,12 @@ fn body(ui: &mut Ui, cx: &mut BodyCx<'_>, state: &mut MockState) {
     }
 
     while let Some((command, _)) = cx.take_command::<Tool>() {
-        state.tool = command;
+        select(ui, state, command);
     }
     while let Some((key, _)) = cx.take_command::<ToolKey>() {
         match key {
-            ToolKey::PickBrush => pick(state, Tool::Brush, PickStep::Last),
-            ToolKey::CycleBrush => pick(state, Tool::Brush, PickStep::Next),
+            ToolKey::PickBrush => pick(ui, state, Tool::Brush, PickStep::Last),
+            ToolKey::CycleBrush => pick(ui, state, Tool::Brush, PickStep::Next),
             ToolKey::SwapColors => state.colors.swap(),
             ToolKey::ResetColors => state.colors.reset(),
         }
@@ -154,6 +156,10 @@ fn body(ui: &mut Ui, cx: &mut BodyCx<'_>, state: &mut MockState) {
             }
             if let Some(result) = host.take::<HostedImageSize>().and_then(DialogResult::ok) {
                 state.document.resize(result.size);
+                let env = Env::of(ui);
+                let (width, height) = (env.format().integer(result.size.width), env.format().integer(result.size.height));
+                let text = env.words::<MockWords>().size_status.fill(&[("width", &width), ("height", &height)]);
+                state.status = Some(StatusMessage::new(text));
             }
             let confirmed = host.take::<StandardPrompt>().and_then(DialogResult::ok).is_some_and(|answer| answer.choice == PromptChoice::Proceed);
             if confirmed {
@@ -164,10 +170,18 @@ fn body(ui: &mut Ui, cx: &mut BodyCx<'_>, state: &mut MockState) {
 }
 
 /// Makes the tool a key picks in `tool`'s slot the current tool.
-fn pick(state: &mut MockState, tool: Tool, step: PickStep) {
+fn pick(ui: &Ui, state: &mut MockState, tool: Tool, step: PickStep) {
     if let Some(picked) = Tool::pick(tool.slot(), state.tool, &state.last_used, step) {
-        state.tool = picked;
+        select(ui, state, picked);
     }
+}
+
+/// Makes `tool` the current tool and says so in the status bar.
+fn select(ui: &Ui, state: &mut MockState, tool: Tool) {
+    state.tool = tool;
+    let name = commands::resolve(ui.ctx(), CommandRef::from(tool)).label;
+    let text = Env::of(ui).words::<MockWords>().tool_status.fill(&[("tool", &*name)]);
+    state.status = Some(StatusMessage::new(text));
 }
 
 /// The title bar as a picture of a window: an integrated frame of the generic family with every caption at the end,
@@ -245,23 +259,40 @@ fn tool_rail(ui: &mut Ui, state: &mut MockState) {
     let last_used = state.last_used.clone();
     let output = ToolRail::new("Tools", &slots, &current, &last_used).show_rail(ui, |_, _| {});
     if let Some(tool) = output.select {
-        state.tool = tool;
+        select(ui, state, tool);
     }
     if let Some(last_used) = output.last_used {
         state.last_used = last_used;
     }
 }
 
+/// The status bar: the zoom and the chosen readout item, the colour mode, the layer count and the message, and the
+/// render-path warning at the end.
 fn status_bar(ui: &mut Ui, state: &mut MockState) {
-    let MockState { document, tool, status_item, .. } = state;
+    let MockState { document, tool, status_item, status, .. } = state;
     let mut values = StatusValues::default();
     values.document_dimensions = Some(document.pixel_size());
     values.current_tool = Some(CommandRef::from(*tool));
     values.layer_count = Some(document.layers.len());
+    let env = Env::of(ui);
+    let words = env.words::<MockWords>();
+    let layers = document.layers.len() as u64;
+    let layer_count = words.layer_count.text(layers, &env.format().integer(layers));
     let mut chosen = None;
-    let _ = Bar::new("Status", BarKind::Status).show(ui, |ui, _| {
-        chosen = StatusReadout::new(Bind::bound(&mut document.view), document.size, *status_item, &values).show(ui).item;
-    });
+    let _ = Bar::new("Status", BarKind::Status)
+        .trailing(|ui| {
+            Link::new(words.cpu_rendering.clone()).tone(Tone::Warn).show(ui);
+        })
+        .show(ui, |ui, _| {
+            chosen = StatusReadout::new(Bind::bound(&mut document.view), document.size, *status_item, &values).show(ui).item;
+            Divider::vertical().show(ui);
+            Text::new(words.color_mode.clone()).show(ui);
+            Divider::vertical().show(ui);
+            Text::new(layer_count.clone()).show(ui);
+            if let Some(message) = status.as_ref() {
+                message.show(ui);
+            }
+        });
     if let Some(item) = chosen {
         *status_item = item;
     }

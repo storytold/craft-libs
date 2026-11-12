@@ -6,7 +6,7 @@ use craft_behavior::kurbo::Rect as DocRect;
 use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::{Axis, PixelSize};
 use craft_behavior::{CanvasView, Selection};
-use craft_ui::bars::StatusItem;
+use craft_ui::bars::{StatusItem, StatusMessage};
 use craft_ui::canvas::{Guide, GuideKey, PickStep, PixelRect, tool_pick};
 use craft_ui::contract::CommandSet;
 use craft_ui::rails::{LastUsed, RailTool, SlotId, ToolSlot};
@@ -406,6 +406,8 @@ pub struct MockState {
     pub last_used: LastUsed<Tool>,
     /// The status bar's item.
     pub status_item: StatusItem,
+    /// The status bar's message: the newest thing the mock had to say.
+    pub status: Option<StatusMessage>,
     /// The foreground and background colours.
     pub colors: ColorPair,
     /// The panel whose frame shows alone.
@@ -422,6 +424,7 @@ impl Default for MockState {
             tool: Tool::Move,
             last_used: LastUsed::default(),
             status_item: StatusItem::DocumentDimensions,
+            status: None,
             colors: ColorPair::default(),
             maximized: None,
         }
