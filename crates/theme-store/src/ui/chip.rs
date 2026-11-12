@@ -3,13 +3,12 @@
 use super::page::AppearanceWords;
 use craft_behavior::{Flow, IconId, Insets, Metrics, PartKey, Sense};
 use craft_theme::{Appearance, Contrast, Mode, Size, Stateful, States, TextSize, ThemeDef, ThemeId};
-use craft_ui::buttons::IconButton;
 use craft_ui::choice::RadioKind;
 use craft_ui::contract::{
     Access, Common, Component, Cx, GroupHandle, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Props as _, Remember as _, Role, Styled as _,
     WordSetCx as _,
 };
-use craft_ui::primitives::{PaintShape, StrokeWidth};
+use craft_ui::primitives::{IconSpec, PaintShape, StrokeWidth};
 use craft_ui::style::{ComponentStyle, DataColor, Flags, FocusLook, StyleColor, StyleCx, SurfaceKind};
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Vec2};
 
@@ -57,8 +56,16 @@ pub struct ThemeChipStyle {
     strip: f32,
     /// The diameter of the accent dot.
     dot: f32,
-    /// The side of the favourite star's box.
+    /// The diameter of the favourite badge: a standard icon's side.
     badge: f32,
+    /// The badge's fill, the raised surface, and its edge, the card border.
+    badge_fill: StyleColor,
+    badge_edge: StyleColor,
+    /// The side of the star in the badge: a small icon's.
+    star: f32,
+    /// The star of a favourite (the accent) and of a theme that is not one (the muted ink).
+    star_on: StyleColor,
+    star_off: StyleColor,
 }
 
 /// The miniature's colours, kept while the theme and the mode stay the same.
@@ -92,11 +99,12 @@ impl Sampled {
 /// A miniature of a theme, after PhotoCraft's theme swatch.
 ///
 /// The outline holds a fill of the theme's panel colour with a strip of its chrome colour along the top and an accent
-/// dot near the bottom end corner, all resolved for the row's mode. The outline is the accent when chosen, the muted ink
-/// under the pointer, else the card border. A star badge on the top end corner shows filled for a favourite, and as an
-/// outline while the pointer is over the chip; a click on the badge reports `favorite_clicked` and does not pick the
-/// theme. The chip is a member of the [`RadioGroup`](craft_ui::choice::RadioGroup) it is shown in: the group picks it
-/// on a click or Space, moves between chips with the arrow keys and takes Tab to the chosen one.
+/// dot near the bottom end corner, all resolved for the row's mode. The outline is the accent when chosen, the muted
+/// ink under the pointer, else the card border. A round badge in the top end corner holds a star, filled in the accent
+/// for a favourite and as a muted outline while the pointer is over the chip; its tooltip says what a click does, and a
+/// click on the badge reports `favorite_clicked` and does not pick the theme. The chip is a member of the
+/// [`RadioGroup`](craft_ui::choice::RadioGroup) it is shown in: the group picks it on a click or Space, moves between
+/// chips with the arrow keys and takes Tab to the chosen one.
 #[must_use = "show the chip with `show`"]
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 pub struct ThemeChip<'a> {
@@ -155,7 +163,12 @@ impl Component for ThemeChip<'_> {
             inset: space.gap.tight,
             strip: space.gap.inline,
             dot: size.handle.sm,
-            badge: size.handle.md,
+            badge: size.icon.md,
+            badge_fill: cx.color(colors.surface.raised),
+            badge_edge: rest,
+            star: size.icon.sm,
+            star_on: accent,
+            star_off: muted,
         }
     }
 
@@ -168,10 +181,13 @@ impl Component for ThemeChip<'_> {
         if !(self.favorite || cx.hovered()) {
             return;
         }
-        let (side, inset) = (cx.style.badge, cx.style.inset);
+        // The badge sits in the chip's top end corner, inside its rect: overhanging it would reach into the next chip.
+        let side = cx.style.badge;
         let (slot, _) = Flow::new(rect, cx.flow.is_rtl()).take_end(side);
-        let badge = Rect::from_min_size(Pos2::new(slot.min.x, rect.top() + inset), Vec2::splat(side));
-        let _ = cx.part(STAR, badge).sense(Sense::CLICK).pointer_only(STAR_REASON);
+        let badge = Rect::from_min_size(Pos2::new(slot.min.x, rect.top()), Vec2::splat(side));
+        let words = cx.words::<AppearanceWords>();
+        let action = if self.favorite { words.remove_favorite.clone() } else { words.add_favorite.clone() };
+        let _ = cx.part(STAR, badge).sense(Sense::CLICK).pointer_only(STAR_REASON).tooltip(action);
         self.star = Some(badge);
     }
 
@@ -219,9 +235,12 @@ impl Component for ThemeChip<'_> {
         draw.data_fill(&PaintShape::Circle(Pos2::new(x, inner.bottom() - toward_end), style.dot / 2.0), accent);
         let width = if self.checked { StrokeWidth::Medium } else { StrokeWidth::Thin };
         draw.stroke(&PaintShape::Rect(rect, style.radius), width, cx.resolve(&style.outline));
-        if self.star.is_some() {
-            let icon = IconId::new(if self.favorite { "star_filled" } else { "star" });
-            ui.face(STAR, IconButton::new(icon).label(cx.resolved.label.to_owned()));
+        if let Some(badge) = self.star {
+            let disc = PaintShape::Circle(badge.center(), badge.width() / 2.0);
+            draw.fill(&disc, style.badge_fill);
+            draw.stroke(&disc, StrokeWidth::Thin, style.badge_edge);
+            let (icon, ink) = if self.favorite { ("star_filled", style.star_on) } else { ("star", style.star_off) };
+            draw.icon(Rect::from_center_size(badge.center(), Vec2::splat(style.star)), &IconSpec::svg(IconId::new(icon)).color(ink));
         }
     }
 
