@@ -206,10 +206,10 @@ pub(crate) fn canvas_keys(ctx: &Context, viewport: ViewportId) -> Option<KeyUse>
     with_viewport(ctx, viewport, |state| state.stops.iter().find(|rec| rec.stop.keys.chrome_key).map(|rec| rec.stop.keys))
 }
 
-/// Whether `viewport` registered any focus stop in its last pass. Read before the begin hook rotates the
-/// registrations, by the input hook.
-pub(crate) fn has_stops(ctx: &Context, viewport: ViewportId) -> bool {
-    with_viewport(ctx, viewport, |state| !state.stops.is_empty())
+/// Whether a Tab in `viewport` has nothing to leave and nowhere to go: egui held no focus at the end of its last pass
+/// and it registered no focus stop there. Read by the input hook, before the begin hook rotates the registrations.
+pub(crate) fn tab_from_nothing(ctx: &Context, viewport: ViewportId) -> bool {
+    with_viewport(ctx, viewport, |state| state.focus_now.is_none() && state.stops.is_empty())
 }
 
 /// How many stops the running pass has registered so far.

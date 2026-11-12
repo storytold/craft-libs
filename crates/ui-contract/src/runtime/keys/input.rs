@@ -38,8 +38,9 @@ struct Strip<'a> {
     /// Nothing has the focus and the window's canvas keeps Tab (`KeepKeys::Tab`): the canvas is the key target, as
     /// the chrome gate takes it, and reads a bare Tab from egui.
     canvas_keeps_tab: bool,
-    /// Nothing has the focus and the window registered no focus stop in its last pass: a framework focus move has
-    /// nowhere to go, so a bare Tab is egui's.
+    /// egui holds no focus and the window registered no focus stop in its last pass: a framework focus move has
+    /// nowhere to go, so a bare Tab is egui's. Focus on a component's widget without a stop is focus: egui would take
+    /// a Tab from it as a move to the next widget it shows, in a later pass.
     no_stops: bool,
     /// egui holds a label text selection, which a copy or cut event copies.
     label_selection: bool,
@@ -280,7 +281,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
     let window_shortcuts = commands::window_shortcuts(ctx);
     let canvas_keeps_tab =
         keys.is_none() && !record.foreign && focus::canvas_keys(ctx, viewport).is_some_and(|canvas| canvas.keep == focus::KeepKeys::Tab);
-    let no_stops = keys.is_none() && !record.foreign && !focus::has_stops(ctx, viewport);
+    let no_stops = keys.is_none() && !record.foreign && focus::tab_from_nothing(ctx, viewport);
     let latin = input.latin_layout_chars.clone();
     let (batch, visible) = with(ctx, viewport, |stage| {
         let mut claims = record.claims.clone();

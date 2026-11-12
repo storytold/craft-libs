@@ -199,6 +199,8 @@ enum Before {
     Stop,
     /// A component's egui widget that registered no stop, as a disabled component's.
     Unstopped,
+    /// The same widget, holding egui focus.
+    FocusedUnstopped,
 }
 
 /// A window of the app's own egui buttons after `before`: where egui focus is after a bare Tab or Shift+Tab from
@@ -207,6 +209,8 @@ fn tab_from_nothing(before: Before, shift: bool) -> (Option<Id>, bool) {
     let (first, last) = (named_id("host first"), named_id("host last"));
     let reached = Rc::new(RefCell::new(false));
     let seen_tab = Rc::clone(&reached);
+    let unstopped = Rc::new(std::cell::Cell::new(None));
+    let shown = Rc::clone(&unstopped);
     let mut show = move |ui: &mut Ui| {
         *seen_tab.borrow_mut() |= key_reached(ui.ctx(), Key::Tab);
         match before {
@@ -215,8 +219,9 @@ fn tab_from_nothing(before: Before, shift: bool) -> (Option<Id>, bool) {
                 widget(ui, named_id("button"));
                 register_stop(ui.ctx(), Stop::new(named_id("button"), KeyUse::of(Input::Pointer)));
             }
-            Before::Unstopped => {
-                sensing::show(ui, &[ProbeRoot::new("unstopped", Rect::from_min_size(Pos2::new(100.0, 300.0), egui::vec2(80.0, 30.0)), Sense::CLICK)]);
+            Before::Unstopped | Before::FocusedUnstopped => {
+                let root = ProbeRoot::new("unstopped", Rect::from_min_size(Pos2::new(100.0, 300.0), egui::vec2(80.0, 30.0)), Sense::CLICK);
+                shown.set(sensing::show(ui, &[root]).first().map(|report| report.root.id));
             }
         }
         fixture::host_button(ui, first, Rect::from_min_size(Pos2::new(300.0, 300.0), egui::vec2(80.0, 30.0)));
@@ -224,7 +229,11 @@ fn tab_from_nothing(before: Before, shift: bool) -> (Option<Id>, bool) {
     };
     let mut frames = Frames::new();
     frames.idle(2, &mut show);
-    assert_eq!(egui_focused(&frames.ctx), None);
+    if matches!(before, Before::FocusedUnstopped) {
+        fixture::host_focus(&frames.ctx, unstopped.get().expect("the widget was shown"));
+        frames.idle(2, &mut show);
+    }
+    assert_eq!(egui_focused(&frames.ctx), unstopped.get().filter(|_| matches!(before, Before::FocusedUnstopped)));
     let mods = if shift { Modifiers::SHIFT } else { Modifiers::NONE };
     frames.frame(vec![key_press(Key::Tab, mods)], &mut show);
     let reached = *reached.borrow();
@@ -239,6 +248,8 @@ fn tab_from_nothing_focused_in_a_window_without_stops_moves_egui_focus() {
     assert_eq!(tab_from_nothing(Before::Nothing, true), (last, true), "Shift+Tab to the last");
     assert_eq!(tab_from_nothing(Before::Stop, false), (Some(named_id("button")), false), "with a framework stop, Tab is the framework's move");
     assert_eq!(tab_from_nothing(Before::Unstopped, false), (None, true), "egui's Tab gives no focus to a component's widget without a stop");
+    let (focused, reached) = tab_from_nothing(Before::FocusedUnstopped, false);
+    assert!(focused.is_some() && focused != first && !reached, "egui focus on that widget is focus: the Tab is not egui's and moves nothing");
 }
 
 #[trial]
