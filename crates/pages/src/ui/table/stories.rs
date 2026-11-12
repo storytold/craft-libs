@@ -3,6 +3,7 @@
 use craft_behavior::{CellAt, CellRange, CellSelection, Mixed};
 use craft_ui::canvas::Canvas;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _, Validity};
+use craft_ui::layout_components::Row;
 use craft_ui::runtime::env::{Message, UnitKind};
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -20,15 +21,40 @@ fn mixed_edges() -> BorderEdges {
     edges
 }
 
+/// The four outer edges on, the inside lines off.
+fn outer_edges() -> BorderEdges {
+    let mut edges = BorderEdges::default();
+    for key in [EdgeKey::Top, EdgeKey::Bottom, EdgeKey::Left, EdgeKey::Right] {
+        edges.set(key, true);
+    }
+    edges
+}
+
 fn click_top_border(fixture: &mut Fixture) {
     if let Some(top) = fixture.by_label("Top Border") {
         fixture.click(&top);
     }
 }
 
-#[story(EdgePicker<'static>, covers = [Default], drive = Drive::Custom(click_top_border))]
+/// The cell picker and the paragraph picker side by side, each with its outer edges on.
+#[story(EdgePicker<'static>, covers = [Default], drive = Drive::Custom(click_top_border), title = "Cell")]
 fn edge_picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    EdgePicker::new("Borders", Bind::bound(data.value("edges", mixed_edges()))).show(ui).into()
+    let (mut cell, mut paragraph) = *data.value("edges", (outer_edges(), outer_edges()));
+    let (shown, event) = Row::new()
+        .show(ui, |ui, _| {
+            let shown = EdgePicker::new("Cell borders", Bind::bound(&mut cell)).show(ui);
+            let other = EdgePicker::new("Paragraph borders", Bind::bound(&mut paragraph)).paragraph().show(ui);
+            let event = shown.events.last().or(other.events.last()).map(|event| format!("{event:?}"));
+            (StoryOutput::from(shown), event)
+        })
+        .inner;
+    *data.value("edges", (outer_edges(), outer_edges())) = (cell, paragraph);
+    let last = data.note("last", None::<String>);
+    if event.is_some() {
+        *last = event;
+    }
+    let readout = last.as_ref().map_or_else(|| "No event yet".to_owned(), |event| format!("Last event: {event}"));
+    shown.readout(readout)
 }
 
 #[story(EdgePicker<'static>, covers = [Mixed], drive = Drive::Never)]
