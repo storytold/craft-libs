@@ -93,6 +93,7 @@ craft-ora = { path = "crates/ora" }
 craft-pptx = { path = "crates/pptx" }
 craft-penpot = { path = "crates/penpot" }
 craft-pcraft-format = { path = "crates/pcraft-format" }
+craft-pkcs7 = { path = "crates/pkcs7" }
 craft-plotter = { path = "crates/plotter" }
 craft-prepress = { path = "crates/prepress" }
 craft-print = { path = "crates/print" }

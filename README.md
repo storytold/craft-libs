@@ -257,6 +257,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-pcraft-format`](crates/pcraft-format/README.md): the envelope of PhotoCraft's `.pcraft`
   bundle: `Manifest<D>` with the document as a type parameter, `TileRef`, the entry paths, the
   manifest decode limits and the migration runner. The document model stays in PhotoCraft.
+- [`craft-pkcs7`](crates/pkcs7/README.md): the formats of digital signatures, read, verified and
+  written: ASN.1 DER, X.509 certificates and chains, CMS SignedData (PKCS #7), PKCS #12 identity
+  files, RFC 3161 timestamps, and CRL / OCSP revocation evidence. What a signature means for a
+  document or a message stays in each app.
 - [`craft-penpot`](crates/penpot/README.md): clean-room reader and writer for the Penpot 2.x export
   container (`.penpot`): the ZIP archive, its manifest, the per-file, per-page and per-shape JSON
   members and media objects, as the JSON the file holds. Bounded on hostile input. Carved from
