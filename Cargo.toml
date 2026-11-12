@@ -106,6 +106,7 @@ craft-vcard = { path = "crates/vcard" }
 craft-vectorcraft-format = { path = "crates/vectorcraft-format" }
 craft-vectordrawable = { path = "crates/vectordrawable" }
 craft-xls = { path = "crates/xls" }
+craft-wordmodel = { path = "crates/wordmodel" }
 craft-xlsx = { path = "crates/xlsx" }
 craft-xcf = { path = "crates/xcf" }
 craft-xml = { path = "crates/xml" }
