@@ -10,7 +10,7 @@ use craft_draw::ui::gradient::{ColorStop, GradientEditor, GradientStops, Opacity
 use craft_theme::Srgba;
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Fixture, trial};
-use egui::Vec2;
+use egui::{Color32, Shape, TextureId, Vec2};
 
 const RED: Srgba = Srgba::rgb(1.0, 0.0, 0.0);
 const BLUE: Srgba = Srgba::rgb(0.0, 0.0, 1.0);
@@ -125,4 +125,38 @@ fn a_split_bar_holds_its_midpoint_diamonds_inside_its_rect() {
         let diamond = rig.marker(name).rect;
         assert!(bar.contains_rect(diamond), "{name} {diamond:?} lies inside the bar {bar:?}");
     }
+}
+
+/// The vertex colours of a red-to-blue editor's ramp, split into its red and its blue ones: the untextured meshes'
+/// vertices of a pure red or blue hue (the markers' tips are meshes too, in theme colours).
+fn ramp_ends(enabled: bool) -> (Vec<Color32>, Vec<Color32>) {
+    let mut fixture = Fixture::new(move |ui| {
+        let mut stops = red_to_blue();
+        let _ = GradientEditor::new("Gradient", Bind::bound(&mut stops)).fields(false).enabled(enabled).show(ui);
+    });
+    fixture.settle();
+    let colors: Vec<Color32> = fixture
+        .frame_shapes()
+        .iter()
+        .filter_map(|shape| match shape {
+            Shape::Mesh(mesh) if mesh.texture_id == TextureId::default() => Some(mesh.vertices.iter().map(|vertex| vertex.color)),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let hue = |keep: fn(Color32) -> bool| colors.iter().copied().filter(|&c| c.a() > 0 && keep(c)).collect::<Vec<_>>();
+    (hue(|c| c.r() > 0 && c.g() == 0 && c.b() == 0), hue(|c| c.b() > 0 && c.r() == 0 && c.g() == 0))
+}
+
+/// A disabled editor paints its ramp, data painted with its content painter, dimmer than an enabled one, and the
+/// ramp's two ends keep their hues.
+#[trial]
+fn a_disabled_editor_dims_its_ramp_and_keeps_its_hues() {
+    let strongest = |colors: &[Color32]| colors.iter().map(|c| c.a()).max();
+    let (red, blue) = ramp_ends(true);
+    let (dim_red, dim_blue) = ramp_ends(false);
+    assert!(strongest(&red).is_some() && strongest(&blue).is_some(), "the enabled ramp paints its red and blue ends");
+    assert!(strongest(&dim_red) < strongest(&red), "the disabled ramp's red {dim_red:?} is dimmer than the enabled {red:?}");
+    assert!(strongest(&dim_blue) < strongest(&blue), "the disabled ramp's blue {dim_blue:?} is dimmer than the enabled {blue:?}");
+    assert!(!dim_red.is_empty() && !dim_blue.is_empty(), "the disabled ramp keeps a red and a blue end");
 }

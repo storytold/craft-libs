@@ -2,7 +2,7 @@
 
 use super::{ColorDisc, DiscMove, MARKER};
 use craft_theme::Srgba;
-use craft_ui::contract::{Bind, Show as _, Validity};
+use craft_ui::contract::{Bind, Props as _, Show as _, Validity};
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -20,4 +20,10 @@ fn color_disc_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_pale = |moved: &DiscMove| if moved.saturation < 0.5 { Validity::Refuse(Message::new("Too pale")) } else { Validity::Ok };
     let moved = Bind::bound(data.value("pale", DiscMove::new(1, 0.0, 0.2))).check(refuse_pale);
     ColorDisc::new("Harmony", &MARKERS, moved).chosen(1).show(ui).into()
+}
+
+#[story(ColorDisc<'static>, covers = [], drive = Drive::Never, title = "Disabled")]
+fn color_disc_disabled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let moved = data.value("move", DiscMove::new(0, 0.0, 0.7));
+    ColorDisc::new("Harmony", &MARKERS, Bind::bound(moved)).chosen(1).enabled(false).show(ui).into()
 }

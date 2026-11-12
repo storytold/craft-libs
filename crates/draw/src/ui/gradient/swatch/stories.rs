@@ -3,7 +3,7 @@
 use super::GradientSwatch;
 use crate::ui::gradient::{ColorStop, GradientStops, OpacityStop, StopRows};
 use craft_theme::Srgba;
-use craft_ui::contract::{Show as _, ShowContainer as _};
+use craft_ui::contract::{Props as _, Show as _, ShowContainer as _};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::env::Env;
@@ -59,4 +59,20 @@ fn gradient_swatch(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut output = StoryOutput::default();
     output.clicked = clicked;
     output.readout(craft_i18n::fmt(words.clicked.as_str(), &[("count", clicks.to_string().as_str())]))
+}
+
+/// A gradient fading in, enabled and disabled, each with its name.
+#[story(GradientSwatch, covers = [], drive = Drive::Never, title = "Disabled")]
+fn gradient_swatch_disabled(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let mut fading = GradientStops::new(vec![stop(0.0, [0.96, 0.65, 0.14]), stop(1.0, [0.24, 0.39, 0.87])]);
+    fading.opacity = vec![OpacityStop::new(0.0, 0.0), OpacityStop::new(1.0, 1.0)];
+    Stack::new().show(ui, |ui, _| {
+        for (name, enabled) in [("Enabled", true), ("Disabled", false)] {
+            Row::new().show(ui, |ui, _| {
+                GradientSwatch::new(name, &fading).enabled(enabled).show(ui);
+                Text::new(name).shade(Shade::Muted).show(ui);
+            });
+        }
+    });
+    StoryOutput::default()
 }

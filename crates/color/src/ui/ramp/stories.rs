@@ -2,7 +2,7 @@
 
 use super::{ColorRamp, RampKind, RampPick};
 use craft_theme::Srgba;
-use craft_ui::contract::{Bind, Show as _, Validity};
+use craft_ui::contract::{Bind, Props as _, Show as _, Validity};
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -43,4 +43,9 @@ fn color_ramp_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .kind_name("RGB Spectrum")
         .show(ui)
         .into()
+}
+
+#[story(ColorRamp<'static>, covers = [], drive = Drive::Never, title = "Disabled")]
+fn color_ramp_disabled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    ColorRamp::new("Color ramp", RampKind::Spectrum, Bind::bound(data.value("pick", pick()))).kind_name("RGB Spectrum").enabled(false).show(ui).into()
 }

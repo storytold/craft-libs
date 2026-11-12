@@ -81,3 +81,9 @@ fn gradient_editor_popover(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let output = GradientEditor::new("Gradient", Bind::bound(stops)).color_popover(true).shared_selection(Bind::bound(selected)).show(ui);
     hinted(ui, data, output)
 }
+
+#[story(GradientEditor<'static, u8>, covers = [], drive = Drive::Never, title = "Disabled")]
+fn gradient_editor_disabled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let stops = data.value("stops", split());
+    GradientEditor::new("Gradient", Bind::bound(stops)).enabled(false).show(ui).into()
+}
