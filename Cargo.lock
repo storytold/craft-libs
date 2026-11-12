@@ -1019,6 +1019,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-dav"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "proptest",
+]
+
+[[package]]
 name = "craft-dialogs"
 version = "0.1.0"
 dependencies = [
