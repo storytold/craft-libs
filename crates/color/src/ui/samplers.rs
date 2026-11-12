@@ -20,7 +20,7 @@ use craft_theme::{Srgba, TypeRole};
 use craft_ui::buttons::Button;
 use craft_ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer, canvas_space};
 use craft_ui::contract::{Access, CommandSet, Common, Component, Cx, MeasureCx, NoValue, Outcome, PaintUi, Props as _, Role, Show as _};
-use craft_ui::display::Text;
+use craft_ui::display::{Elide, Shade, Text};
 use craft_ui::primitives::{PaintShape, StrokeWidth, TextRun};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::toast::Toast;
@@ -427,7 +427,7 @@ impl SamplerOptions {
         let counted = words.count.fill(&[("n", &self.count.to_string()), ("max", &MAX_SAMPLERS.to_string())]);
         Text::new(Label::from(counted)).show(ui);
         let clear = Button::new(words.clear_all.clone()).enabled(self.count > 0).show(ui);
-        Text::new(words.hint.clone()).show(ui);
+        Text::new(words.hint.clone()).shade(Shade::Faint).elide(Elide::End).show(ui);
         SamplerOptionsOutput { clear_all: craft_ui::contract::clicked(&clear), response: clear.response }
     }
 }
