@@ -64,12 +64,16 @@ fn two_artboards(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let stage = craft_ui::testing::stage(ui);
     let bounds = items.iter().fold(items[0].rect, |bounds, item| bounds.union(item.rect));
     let view = craft_ui::testing::canvas_story::story_view(stage, ui.pixels_per_point(), bounds.center(), 100.0);
-    Canvas::new("Document").view(view).show_at(ui, stage, |ui, body| {
+    let shown = Canvas::new("Document").view(view).show_at(ui, stage, |ui, body| {
         craft_ui::testing::canvas_story::show_document(ui, body.rect, &craft_ui::testing::canvas_story::StoryDocument::STANDARD);
-        let _ = Pasteboard::new("Pasteboard", &pages).show_at(ui, body.rect);
-        ArtboardOverlay::new("Artboards", items, selected).show_at(ui, body.rect)
+        let named = Pasteboard::new("Pasteboard", &pages).show_at(ui, body.rect).name_clicked.is_some();
+        let _ = ArtboardOverlay::new("Artboards", items, selected).show_at(ui, body.rect);
+        named
     });
-    StoryOutput::default()
+    // A board's name is a button: its click is a click of the story.
+    let mut output = StoryOutput::default();
+    output.clicked = shown.inner.unwrap_or_default();
+    output
 }
 
 /// The bar for one board, whose size the story keeps: a preset, Make Portrait or Landscape, or W and H resize it.

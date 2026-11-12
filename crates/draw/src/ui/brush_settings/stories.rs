@@ -135,18 +135,21 @@ impl Brush {
         Brush { sections: sections(on), shown: DYNAMICS, jitter: ControlRow::new(Control::PenPressure), scatter: ControlRow::new(Control::Fade) }
     }
 
+    fn section(&mut self, key: u8) -> Option<&mut BrushSection<u8>> {
+        self.sections.iter_mut().find(|section| section.key == key)
+    }
+
     /// Applies a list event as the app applies it to its brush settings.
     fn apply(&mut self, event: BrushSectionEvent<u8>) {
-        let section = |brush: &mut Brush, key: u8| brush.sections.iter_mut().find(|section| section.key == key);
         match event {
             BrushSectionEvent::Select(key) => self.shown = key,
             BrushSectionEvent::Enable { key, on } | BrushSectionEvent::Switch { key, on } => {
-                if let Some(section) = section(self, key) {
+                if let Some(section) = self.section(key) {
                     section.enabled = Some(on);
                 }
             }
             BrushSectionEvent::Lock { key, on } => {
-                if let Some(section) = section(self, key) {
+                if let Some(section) = self.section(key) {
                     section.locked = Some(on);
                 }
             }
