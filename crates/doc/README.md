@@ -43,7 +43,11 @@ let outline = craft_doc::outline(&bytes, &limits)?;
   writer it names, and `supported`, which is `false` when the version is newer than the crate
   reads.
 - `renditions(bytes, &Limits) -> Result<Vec<Rendition>, Error>`: each `Rendition` has a `kind`
-  (`Pdf`, `Thumbnail`, `Composite`), a `mime` and the `bytes`.
+  (`Pdf`, `Thumbnail`, `Composite`), a `mime` and the `bytes`. `is_full_composite` is true only
+  for a PhotoCraft composite selected from an explicit `full_composite` declaration; it is
+  false for the legacy preview and every other rendition. It records the selected source,
+  without decoding pixels or checking canvas dimensions. Derived equality and debug output
+  include this provenance.
 - `rendition(bytes, RenditionKind, &Limits) -> Result<Option<Rendition>, Error>`: the requested
   kind only, or `None` when absent. Container metadata and JSON limits are still checked. Other
   rendition payloads are not decoded or copied: a damaged preview does not prevent reading the
@@ -64,9 +68,28 @@ let outline = craft_doc::outline(&bytes, &limits)?;
   allocations and behavior. No pixel feature is required. A cancellation variant can follow
   after the cooperative document-read APIs in [#571](https://github.com/storytold/craft-libs/pull/571)
   merge.
-- `Error` is `Unrecognized`, `Malformed`, `TooNew`, `Unsupported` or `LimitExceeded`. A file
+- `Error` is `Unrecognized`, `Malformed`, `TooNew`, `Unsupported`, `LimitExceeded` or `Cancelled`. A file
   whose version is newer than the crate reads gives `TooNew` from `renditions` and `outline`. A
   ZIP archive whose `manifest.json` has no `format_version` gives `Unrecognized`.
+
+### Cooperative cancellation
+
+`info_with_cancel`, `renditions_with_cancel` and `outline_with_cancel` take the same bytes and
+limits plus `&dyn Fn() -> bool`. The callback runs on the calling thread. Once it returns true,
+that call stops with `Error::Cancelled`, even if a later callback result would be false.
+
+```rust
+use std::sync::atomic::{AtomicBool, Ordering};
+
+let stopped = AtomicBool::new(false);
+let renditions = craft_doc::renditions_with_cancel(&bytes, &limits, &|| stopped.load(Ordering::Relaxed))?;
+```
+
+Checks occur during format detection, JSON scans and parsing, gzip input and output, rendition
+copies, ZIP directory and entry reads, CRC traversal, and outline conversion, including shared
+header, manifest and base64 helpers.
+The existing entry points keep their behavior and limits. PDF parsing/rendering and optional
+PhotoCraft layer pixel decoding are separate operations.
 
 ## What each format gives
 
@@ -75,7 +98,7 @@ let outline = craft_doc::outline(&bytes, &limits)?;
 | Container | JSON, plain or gzip; since version 4, large members after the JSON (`\n\0VCBLOBS\0`) | ZIP of STORE or DEFLATE entries | JSON |
 | Version read | `version` up to 4 (`"format": "vectorcraft"` or `"drawcraft"`) | `format_version` 1 | `schema` up to 2 |
 | Writer | `generator` | `generator` | `savedBy` |
-| Renditions | `preview` (Thumbnail) and `pdf` (Pdf), when the file was saved with them | the `thumbnail` and `composite` the manifest names | none |
+| Renditions | `preview` (Thumbnail) and `pdf` (Pdf), when the file was saved with them | the `thumbnail` and flattened composite the manifest names | none |
 | Pages | artboards, in points | none | compositions by item id, in pixels, with frame rate and duration |
 | Layers | top-level layers | the layer tree with groups | each composition's layers |
 
@@ -86,6 +109,12 @@ EffectCraft layers have no `opacity`, because opacity is an animated property th
 
 A `.pcraft` bundle saved as a folder, ZIP64 archives and encrypted entries are not read. The
 `.ecprojx` XML copies are not read.
+
+For PhotoCraft, `Composite` prefers `full_composite` (`composite/full.png`) when declared,
+otherwise `composite` (`composite/preview.png`). The unused preview payload is not read. A
+declared full-canvas image that is missing or exceeds the limits is an error. The reader does
+not silently substitute the smaller preview. Returned PNG bytes retain any embedded color profile;
+the reader does not decode pixels or convert colors.
 
 ## PhotoCraft layer pixels
 
