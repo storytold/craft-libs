@@ -16,6 +16,9 @@
 //!   EXIF, XMP) from the start of a file, without the layers or pixels.
 //! * [`descriptor`] parses and writes ActionDescriptors.
 //! * [`engine_data`] parses and writes the text engine document of type layers.
+//! * [`text`], [`smart`] and [`adjust`] are read-only views of the blocks a viewer needs: a type
+//!   layer's text and style, a smart object's placement, warp and embedded file, an adjustment
+//!   layer's settings, a fill layer's colour and the layer effects.
 //!
 //! Implemented clean-room from Adobe's public "Photoshop File Formats
 //! Specification". Undocumented details that follow MIT-licensed psd-tools
@@ -46,6 +49,7 @@
 pub mod abr;
 pub mod aco;
 pub mod act;
+pub mod adjust;
 pub mod animation;
 pub mod ase;
 pub mod asl;
@@ -78,12 +82,14 @@ pub mod resources;
 pub mod rows;
 pub mod shc;
 pub mod slices;
+pub mod smart;
 pub mod source;
 pub mod tagged;
 #[cfg(any(test, feature = "testgen"))]
 // Test-data generator (tests and fuzz seeds only): failing loudly is the point.
 #[allow(clippy::expect_used)]
 pub mod testgen;
+pub mod text;
 pub mod tiff;
 pub mod tree;
 
