@@ -347,6 +347,13 @@ pub(crate) fn host_focus(ctx: &Context, id: egui::Id) {
     ctx.memory_mut(|memory| memory.request_focus(id));
 }
 
+/// A host's own egui drag area `id` at `rect`; returns whether egui reports it dragged and whether its drag stopped
+/// this pass.
+pub(crate) fn host_drag_area(ui: &Ui, id: egui::Id, rect: Rect) -> (bool, bool) {
+    let response = ui.interact(rect, id, egui::Sense::drag());
+    (response.dragged(), response.drag_stopped())
+}
+
 /// A host's own selectable egui label of `text`; returns its rect.
 pub(crate) fn host_label(ui: &mut Ui, text: &str) -> Rect {
     ui.add(egui::Label::new(text).selectable(true)).rect

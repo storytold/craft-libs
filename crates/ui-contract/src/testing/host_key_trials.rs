@@ -158,6 +158,36 @@ fn escape_cancels_a_framework_drag_while_an_egui_field_has_focus() {
 }
 
 #[trial]
+fn escape_ends_an_egui_drag_on_a_host_widget() {
+    let area = named_id("host drag area");
+    let rect = Rect::from_min_size(Pos2::new(300.0, 300.0), egui::vec2(120.0, 120.0));
+    let drag = Rc::new(RefCell::new((false, false)));
+    let (host, mut base) = host_window();
+    let shared = Rc::clone(&drag);
+    let mut show = move |ui: &mut Ui| {
+        base(ui);
+        *shared.borrow_mut() = fixture::host_drag_area(ui, area, rect);
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    let start = rect.center();
+    frames.frame(vec![moved(start)], &mut show);
+    frames.frame(vec![press(start)], &mut show);
+    // Far past any click distance, so egui's drag has started.
+    let far = start + egui::vec2(rect.width() / 3.0, 0.0);
+    frames.frame(vec![moved(far)], &mut show);
+    frames.frame(vec![moved(far + egui::vec2(1.0, 0.0))], &mut show);
+    assert_eq!(*drag.borrow(), (true, false), "the host's egui drag runs");
+    seen(&host);
+    press_key(&mut frames, &mut show, Key::Escape);
+    assert_eq!(*drag.borrow(), (false, true), "the Escape ended egui's drag in its own pass");
+    assert_eq!(seen(&host), (Vec::new(), 1), "the window took the Escape as its Cancel");
+    frames.frame(vec![moved(far - egui::vec2(rect.width() / 3.0, 0.0))], &mut show);
+    assert!(!drag.borrow().0, "the held button does not restart the drag");
+    frames.frame(vec![release(far)], &mut show);
+}
+
+#[trial]
 fn copy_with_a_label_selection_copies_the_label() {
     const TEXT: &str = "host label text";
     let label = Rc::new(std::cell::Cell::new(Rect::NOTHING));

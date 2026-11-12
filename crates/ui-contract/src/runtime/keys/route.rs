@@ -7,7 +7,7 @@ use crate::runtime::egui::input::{Action, ActionKind};
 use crate::runtime::focus::{self, StopRec};
 use crate::runtime::frame::request_chrome_toggle;
 use crate::runtime::overlay;
-use craft_behavior::focus::key_owner;
+use craft_behavior::focus::{EscapeRouting, key_owner};
 use craft_behavior::keys;
 use craft_behavior::{EditCommand, Intent, KeyOwner, MoveMods, NavMove, OwnerClass};
 use craft_host::target::Os;
@@ -17,8 +17,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// The begin hook's intents: the pass's key events, AccessKit requests and claimed chords, routed to the
-/// focused component (or to the component that owns a requested node).
-pub(crate) fn begin(ctx: &Context, press_captured: bool) -> bool {
+/// focused component (or to the component that owns a requested node). Returns how the pass's Escapes split
+/// between the captured press and the components.
+pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let os = crate::runtime::windows::os_of(ctx);
     let target = focus::focused_rec(ctx);
     let (batch, nodes, captures) = current(ctx, |stage| {
@@ -159,7 +160,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> bool {
             );
         }
     });
-    escapes.cancels_press
+    escapes
 }
 
 pub(super) fn push(routed: &mut HashMap<Option<Id>, Routed>, target: Option<Id>, intent: Intent, horizontal: bool) {
