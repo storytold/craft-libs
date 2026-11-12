@@ -237,7 +237,8 @@ impl Overlay {
 /// step), publishes the [`TimeAxis`] to its body and shows the horizontal bar over the time area. The time area is one
 /// Tab stop and an F6 pane; its keys are Premiere's, each an exact chord: Left and Right step the playhead a frame
 /// (Shift: five), Home and End go to the start and the end, Up and Down to the previous and next edit point, and the
-/// [`TimeCommand`]s zoom and fit. The Menu key and Shift+F10 report [`TimelineViewOutput::context_menu`].
+/// [`TimeCommand`]s zoom and fit. The Menu key and Shift+F10 report [`TimelineViewOutput::context_menu`]. Alt+wheel,
+/// a pinch, and a plain vertical wheel over a zoom zone (the ruler) zoom about the pointer.
 #[derive(Component, Props)]
 #[component(container)]
 pub struct TimelineView<'a> {
@@ -367,7 +368,7 @@ impl<'a> TimelineView<'a> {
     /// Reads this pass's wheel into `next`.
     fn wheel(&mut self, wheel: Wheel, next: &mut TimeView, at: Tick, width: f32) {
         let pinched = (f64::from(wheel.zoom) - 1.0).abs() > PINCH_EPSILON;
-        if pinched || (wheel.mods.alt && wheel.scroll.y != 0.0) {
+        if pinched || ((wheel.zooms || wheel.mods.alt) && wheel.scroll.y != 0.0) {
             let factor = if pinched { f64::from(wheel.zoom) } else { wheel_zoom_factor(wheel.scroll.y) };
             if factor.is_finite() {
                 self.zoom(next, factor, at, width);
@@ -495,6 +496,8 @@ impl Component for TimelineView<'_> {
         let pointer = cx.response.hover_pos().unwrap_or_else(|| cx.rect.center());
         let left = cx.flow.span(self.inset(cx.style), width).left();
         if let Some(wheel) = cx.take_wheel() {
+            // The wheel's own point: over a child (the ruler) the view itself has no hover.
+            let pointer = wheel.at.unwrap_or(pointer);
             let at = next.time_at(pointer.x.max(left), left);
             self.wheel(wheel, &mut next, at, width);
         }

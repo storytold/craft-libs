@@ -271,6 +271,7 @@ fn rows(rect: Rect, style: &TimelineRulerStyle) -> (Rect, Rect, Rect) {
 /// - Keyboard: one Tab stop. Left and Right step the playhead one frame (Shift: five), Home and End go to the start
 ///   and the end; each a `Set`.
 /// - A secondary click reports the time under it in [`TimelineRulerResponse::context`].
+/// - A vertical wheel over the ruler zooms the enclosing `TimelineView` about the pointer, focused or not.
 /// - AccessKit: a slider named by the label, value the playhead's text, numeric value the playhead in seconds over
 ///   `0..=end`.
 #[derive(Component, Props)]
@@ -401,7 +402,7 @@ impl Component for TimelineRuler<'_> {
     }
 
     fn sense(&self) -> Sense {
-        Sense::FOCUS
+        Sense::FOCUS | Sense::WHEEL_ZOOMS_VIEW
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, Tick>> {

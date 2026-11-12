@@ -85,7 +85,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         );
         // A capped collection is bounded by its rows, so it scrolls them inside a scrolling body too.
         self.scrolls = self.capped || (!natural && !shared);
-        self.own_wheel = crate::contract::Component::sense(comp).intersects(Sense::WHEEL | Sense::WHEEL_X | Sense::WHEEL_Y | Sense::WHEEL_ZOOM);
+        self.own_wheel = crate::contract::Component::sense(comp).intersects(Sense::WHEELS);
         self.overflow = overflow;
         self.selection = match comp.selection() {
             Some(bind) => match bind.get() {

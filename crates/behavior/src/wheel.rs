@@ -48,12 +48,15 @@ pub struct Wheel {
     pub phase: WheelPhase,
     /// Where the pointer was, in screen points; a zoom is about this point.
     pub at: Option<Pos2>,
+    /// The vertical scroll came from over a zoom zone (`Sense::WHEEL_ZOOMS_VIEW`): the taker zooms its view by it,
+    /// about `at`, instead of scrolling.
+    pub zooms: bool,
 }
 
 impl Wheel {
     /// A scroll of `scroll` points with no zoom.
     pub const fn new(scroll: Vec2, mods: Mods, unit: WheelUnit, phase: WheelPhase) -> Self {
-        Wheel { scroll, zoom: 1.0, mods, unit, phase, at: None }
+        Wheel { scroll, zoom: 1.0, mods, unit, phase, at: None, zooms: false }
     }
 
     /// The same gesture with zoom factor `zoom`.
@@ -92,6 +95,9 @@ pub struct WheelTaker<O> {
     pub notch: WheelNotch,
     /// How far a scroll region can still move each way; `None` for a taker without an end (a value control, a canvas).
     pub room: Option<WheelRoom>,
+    /// A zoom zone: a vertical wheel over it goes to the innermost enclosing open taker of the zoom share, with
+    /// `Wheel::zooms` set. A zone that takes no axis itself never takes a share.
+    pub zooms_view: bool,
 }
 
 /// The scroll left in a region, in points of wheel scroll: `positive` is what a wheel with positive `scroll` can
@@ -148,18 +154,28 @@ impl<O> WheelTaker<O> {
             scrolls: false,
             notch: WheelNotch::DEFAULT,
             room: None,
+            zooms_view: false,
         }
     }
 
     /// The taker a shape with `sense` registers, `None` when `sense` has no wheel bit: `WHEEL` takes both scroll
-    /// axes and zoom; `WHEEL_X`, `WHEEL_Y` and `WHEEL_ZOOM` take one share each and combine.
+    /// axes and zoom; `WHEEL_X`, `WHEEL_Y` and `WHEEL_ZOOM` take one share each and combine; `WHEEL_ZOOMS_VIEW`
+    /// makes a zoom zone.
     pub fn for_sense(owner: O, rect: Rect, sense: Sense) -> Option<Self> {
         let all = sense.contains(Sense::WHEEL);
         let taker = WheelTaker::new(owner, rect)
             .horizontal(all || sense.contains(Sense::WHEEL_X))
             .vertical(all || sense.contains(Sense::WHEEL_Y))
-            .zoom(all || sense.contains(Sense::WHEEL_ZOOM));
-        (taker.horizontal || taker.vertical || taker.zoom).then_some(taker)
+            .zoom(all || sense.contains(Sense::WHEEL_ZOOM))
+            .zooms_view(sense.contains(Sense::WHEEL_ZOOMS_VIEW));
+        (taker.horizontal || taker.vertical || taker.zoom || taker.zooms_view).then_some(taker)
+    }
+
+    /// Whether it is a zoom zone (`WheelTaker::zooms_view`).
+    #[must_use]
+    pub const fn zooms_view(mut self, on: bool) -> Self {
+        self.zooms_view = on;
+        self
     }
 
     /// Whether it takes horizontal scroll.
@@ -227,37 +243,48 @@ impl<O> WheelTaker<O> {
 
 /// The split rule: each axis of `wheel` goes to the innermost taker under `at` that takes it; a share no taker
 /// takes, or that a scroll region at its end in that direction cannot move, passes to the next enclosing one. A gated taker takes no axis unless it is `focused` or
-/// `armed`. Shift turns a vertical wheel sideways when its vertical owner is a scroll region. Shares of one owner merge.
+/// `armed`. Shift turns a vertical wheel sideways when its vertical owner is a scroll region. When the innermost open
+/// taker under `at` for the vertical share is a zoom zone, the share goes to the innermost open zoom taker enclosing it,
+/// with `Wheel::zooms` set; without one the zone is passed over. Shares of one owner merge.
 pub fn split<O: Copy + PartialEq>(takers: &[WheelTaker<O>], at: Pos2, wheel: Wheel, focused: Option<O>, armed: Option<O>) -> Vec<(O, Wheel)> {
     // Takers register outer first, so among equal areas the later one is the deeper (or the upper) and goes first.
     let mut under: Vec<&WheelTaker<O>> = takers.iter().rev().filter(|taker| taker.rect.contains(at)).collect();
     under.sort_by(|a, b| a.rect.area().total_cmp(&b.rect.area()));
     let open = |taker: &&WheelTaker<O>| !taker.gated || armed == Some(taker.owner) || focused == Some(taker.owner);
+    let zone = (wheel.scroll.y != 0.0).then(|| under.iter().position(|t| (t.vertical || t.zooms_view) && open(t))).flatten();
+    let zone_view = zone.filter(|&at| !under[at].vertical).and_then(|at| under[at + 1..].iter().find(|t| t.zoom && open(t))).map(|t| t.owner);
     let vertical_owner = (wheel.scroll.y != 0.0).then(|| under.iter().find(|t| t.vertical && open(t))).flatten();
     // Shift turns the vertical wheel sideways over a scroll region (Photoshop); a value control that takes the
     // vertical wheel keeps Shift as its modifier, and a device that already sends a sideways axis keeps it.
-    let wheel = if wheel.mods.shift && wheel.scroll.x == 0.0 && vertical_owner.is_some_and(|t| t.scrolls) {
+    let wheel = if zone_view.is_none() && wheel.mods.shift && wheel.scroll.x == 0.0 && vertical_owner.is_some_and(|t| t.scrolls) {
         Wheel { scroll: Vec2::new(wheel.scroll.y, 0.0), ..wheel }
     } else {
         wheel
     };
-    let vertical =
-        (wheel.scroll.y != 0.0).then(|| under.iter().find(|t| t.vertical && open(t) && t.has_room(true, wheel.scroll.y))).flatten().map(|t| t.owner);
+    let vertical = zone_view.or_else(|| {
+        (wheel.scroll.y != 0.0).then(|| under.iter().find(|t| t.vertical && open(t) && t.has_room(true, wheel.scroll.y))).flatten().map(|t| t.owner)
+    });
     let horizontal = (wheel.scroll.x != 0.0)
         .then(|| under.iter().find(|t| t.horizontal && open(t) && t.has_room(false, wheel.scroll.x)))
         .flatten()
         .map(|t| t.owner);
     let zoom = (wheel.zoom != 1.0).then(|| under.iter().find(|t| t.zoom && open(t))).flatten().map(|t| t.owner);
     let mut shares: Vec<(O, Wheel)> = Vec::new();
-    let parts = [(vertical, Vec2::new(0.0, wheel.scroll.y), 1.0), (horizontal, Vec2::new(wheel.scroll.x, 0.0), 1.0), (zoom, Vec2::ZERO, wheel.zoom)];
-    for (owner, scroll, zoom) in parts {
+    let zooms = zone_view.is_some();
+    let parts = [
+        (vertical, Vec2::new(0.0, wheel.scroll.y), 1.0, zooms),
+        (horizontal, Vec2::new(wheel.scroll.x, 0.0), 1.0, false),
+        (zoom, Vec2::ZERO, wheel.zoom, false),
+    ];
+    for (owner, scroll, zoom, zooms) in parts {
         let Some(owner) = owner else { continue };
         match shares.iter_mut().find(|(o, _)| *o == owner) {
             Some((_, share)) => {
                 share.scroll += scroll;
                 share.zoom *= zoom;
+                share.zooms |= zooms;
             }
-            None => shares.push((owner, Wheel { scroll, zoom, ..wheel })),
+            None => shares.push((owner, Wheel { scroll, zoom, zooms, ..wheel })),
         }
     }
     shares
@@ -284,5 +311,20 @@ mod tests {
         let owner = |y| split(&[outer, inner], at, wheel(0.0, y), None, None).first().map(|(o, _)| *o);
         assert_eq!(owner(7.0), Some(1), "no room toward positive: the outer takes it");
         assert_eq!(owner(-7.0), Some(2), "room toward negative: the inner keeps it");
+    }
+
+    #[test]
+    fn a_vertical_wheel_over_a_zoom_zone_zooms_the_enclosing_view() {
+        let region = WheelTaker::new(1u8, rect(300.0)).vertical(true).scrolls(true);
+        let view = WheelTaker::new(2u8, rect(200.0)).horizontal(true).zoom(true);
+        let zone = WheelTaker::new(3u8, rect(100.0)).zooms_view(true);
+        let at = pos2(10.0, 10.0);
+        let shares = split(&[region, view, zone], at, wheel(0.0, 5.0), None, None);
+        assert_eq!(shares.len(), 1);
+        assert_eq!((shares[0].0, shares[0].1.scroll.y, shares[0].1.zooms), (2, 5.0, true), "the view zooms by the vertical share");
+        let shares = split(&[region, zone], at, wheel(0.0, 5.0), None, None);
+        assert_eq!(shares.iter().map(|(o, w)| (*o, w.zooms)).collect::<Vec<_>>(), [(1, false)], "no zoom taker: the zone is passed over");
+        let shares = split(&[region, view, zone], at, wheel(4.0, 0.0), None, None);
+        assert_eq!(shares.iter().map(|(o, w)| (*o, w.zooms)).collect::<Vec<_>>(), [(2, false)], "the horizontal share passes the zone");
     }
 }

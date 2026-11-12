@@ -42,12 +42,18 @@ bitflags! {
         /// is a one-value gesture, not a click. Declared with `DRAG`: a drag moves the value with the pointer.
         /// `Cx::follow_press` runs such a part's gesture.
         const SETS_ON_PRESS = 16384;
+        /// A zoom zone: a vertical wheel over the shape zooms the view of the innermost enclosing taker of the zoom
+        /// share (a ruler over its time area). The shape takes no wheel share itself.
+        const WHEEL_ZOOMS_VIEW = 32768;
     }
 }
 
 impl Sense {
     /// The bits that make a shape a press candidate.
     pub const PRESS: Sense = Sense::CLICK.union(Sense::DRAG);
+
+    /// The bits that make a shape register a wheel taker.
+    pub const WHEELS: Sense = Sense::WHEEL.union(Sense::WHEEL_X).union(Sense::WHEEL_Y).union(Sense::WHEEL_ZOOM).union(Sense::WHEEL_ZOOMS_VIEW);
 
     /// Whether a press can start on a shape with this sense.
     pub const fn takes_press(self) -> bool {

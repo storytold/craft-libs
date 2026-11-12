@@ -855,7 +855,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     let registers = match e.shape() {
         ShapeKind::Leaf => true,
         ShapeKind::Body => own.intersects(Sense::WHEEL | Sense::WHEEL_X),
-        ShapeKind::Item => !own.intersects(Sense::WHEEL | Sense::WHEEL_X | Sense::WHEEL_Y | Sense::WHEEL_ZOOM),
+        ShapeKind::Item => !own.intersects(Sense::WHEELS),
     };
     if !inert && registers {
         steps::register_wheel(&ctx, id, rect, own, e.bound().0 && !facts.binds_view, env.wheel);
