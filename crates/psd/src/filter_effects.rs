@@ -189,6 +189,52 @@ impl FilterEffects {
         let mut out = Vec::new();
         out.put_u32(self.version);
         for it in &self.items {
+            let section = out.begin_len(true);
+            write_pascal(&mut out, it.id.as_bytes(), 1);
+            out.put_u32(it.version);
+            let at = out.begin_len(true);
+            write_rect(&mut out, &it.rect);
+            out.put_u32(it.depth);
+            out.put_u32(it.max_channels);
+            for i in 0..it.max_channels as usize + 2 {
+                match it.slots.get(i).and_then(Option::as_ref) {
+                    Some(p) => {
+                        out.put_u32(1);
+                        write_plane(&mut out, p);
+                    }
+                    None => out.put_u32(0),
+                }
+            }
+            // A 64-bit length never overflows.
+            let _ = out.end_len(at, true);
+            match &it.mask {
+                Some((r, p)) => {
+                    out.put_u8(1);
+                    write_rect(&mut out, r);
+                    write_plane(&mut out, p);
+                }
+                None => out.put_u8(0),
+            }
+            let _ = out.end_len(section, true);
+            out.resize(out.len().next_multiple_of(4), 0);
+        }
+        if self.items.is_empty() {
+            // One empty section, so the block still parses.
+            out.put_u64(0);
+        }
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Serialize filter-effect sections through staging buffers as a byte oracle.
+    fn staged_bytes(fx: &FilterEffects) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.put_u32(fx.version);
+        for it in &fx.items {
             let mut body = Vec::new();
             write_pascal(&mut body, it.id.as_bytes(), 1);
             body.put_u32(it.version);
@@ -219,17 +265,12 @@ impl FilterEffects {
             out.put(&body);
             out.resize(out.len().next_multiple_of(4), 0);
         }
-        if self.items.is_empty() {
+        if fx.items.is_empty() {
             // One empty section, so the block still parses.
             out.put_u64(0);
         }
         out
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 
     fn item(id: &str, mask: bool) -> FilterEffectsItem {
         let rect = Rect { top: 1, left: 2, bottom: 5, right: 6 };
@@ -238,6 +279,20 @@ mod tests {
         slots[0] = Some(plane(10));
         slots[25] = Some(plane(255));
         FilterEffectsItem { id: id.into(), version: 1, rect, depth: 8, max_channels: 24, slots, mask: mask.then(|| (rect, plane(128))) }
+    }
+
+    /// Compare direct filter-effect serialization with staged bytes and section lengths.
+    #[test]
+    fn direct_sections_match_staged_bytes() {
+        for version in [1, 2, 3] {
+            let mut large = item(&"é".repeat(140), true);
+            large.rect.top = -7;
+            large.slots[0].as_mut().unwrap().data = vec![73; 8193];
+            for items in [Vec::new(), vec![large, item("odd", false), item("four", true)]] {
+                let fx = FilterEffects { version, items };
+                assert_eq!(fx.to_bytes(), staged_bytes(&fx));
+            }
+        }
     }
 
     /// The unpadded body of `it`'s section.

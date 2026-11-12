@@ -7,6 +7,10 @@
 //! routes (`<rte>`) carry no timeline and are ignored. The schema defines a track segment as one
 //! continuous span of logging, so positions are only interpolated *within* a segment, never across
 //! the gap where reception was lost or the logger was off.
+//!
+//! Each point also records which `<trk>` it came from ([`TrackPoint::track`], with the tracks'
+//! `<name>`s in [`Tracklog::names`]), so a map can draw the tracks of a file apart and tag from
+//! one of them ([`Tracklog::only_track`]).
 
 use quick_xml::events::Event;
 
@@ -15,6 +19,10 @@ use crate::{DateTime, Gps};
 /// Nesting / size limits (a track log is flat; these only stop hostile input).
 const MAX_DEPTH: usize = 64;
 const MAX_POINTS: usize = 5_000_000;
+/// Most tracks (`<trk>`) in one file.
+const MAX_TRACKS: usize = 10_000;
+/// Longest track name kept (characters); the rest is cut.
+const MAX_NAME_CHARS: usize = 200;
 
 /// One timed point of a track.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -27,6 +35,8 @@ pub struct TrackPoint {
     pub elevation: Option<f64>,
     /// Track segment number, counted across the whole file (continuous logging spans).
     pub segment: u32,
+    /// The `<trk>` it belongs to, counted from 0 in file order.
+    pub track: u32,
 }
 
 /// How a position was found by [`Tracklog::locate`].
@@ -44,6 +54,8 @@ pub struct Tracklog {
     pub points: Vec<TrackPoint>,
     /// Tracks (`<trk>`) in the file.
     pub tracks: usize,
+    /// Each track's `<name>` (empty when it has none), in file order: `names.len() == tracks`.
+    pub names: Vec<String>,
     /// Track points without a usable time (left out of `points`).
     pub untimed: usize,
 }
@@ -120,7 +132,13 @@ pub fn parse_gpx(s: &str) -> Result<Tracklog, GpxError> {
                 }
                 match name.as_slice() {
                     b"gpx" if path.is_empty() => seen_gpx = true,
-                    b"trk" if parent == Some(b"gpx") => log.tracks += 1,
+                    b"trk" if parent == Some(b"gpx") => {
+                        if log.tracks >= MAX_TRACKS {
+                            return Err(GpxError::TooComplex);
+                        }
+                        log.tracks += 1;
+                        log.names.push(String::new());
+                    }
                     b"trkseg" if parent == Some(b"trk") && log.points.last().is_some_and(|p| p.segment == segment) => segment += 1,
                     b"trkpt" if parent == Some(b"trkseg") => {
                         let mut p = Pending::default();
@@ -182,6 +200,11 @@ pub fn parse_gpx(s: &str) -> Result<Tracklog, GpxError> {
                         }
                     }
                     b"trkpt" => finish_point(&mut log, pt.take(), segment)?,
+                    b"name" if parent == Some(b"trk") => {
+                        if let Some(n) = log.names.last_mut() {
+                            *n = text.trim().chars().take(MAX_NAME_CHARS).collect();
+                        }
+                    }
                     _ => {}
                 }
                 text.clear();
@@ -214,7 +237,9 @@ fn finish_point(log: &mut Tracklog, p: Option<Pending>, segment: u32) -> Result<
     if log.points.len() >= MAX_POINTS {
         return Err(GpxError::TooComplex);
     }
-    log.points.push(TrackPoint { time, latitude: lat, longitude: lon, elevation: p.ele, segment });
+    let track = u32::try_from(log.tracks.saturating_sub(1)).unwrap_or(u32::MAX);
+    let elevation = p.ele.filter(|e| e.is_finite());
+    log.points.push(TrackPoint { time, latitude: lat, longitude: lon, elevation, segment, track });
     Ok(())
 }
 
@@ -222,6 +247,16 @@ impl Tracklog {
     /// First and last point times (seconds since the epoch, UTC).
     pub fn span(&self) -> Option<(f64, f64)> {
         Some((self.points.first()?.time, self.points.last()?.time))
+    }
+
+    /// The points of track `index` alone (its segments as they were), or `None` when there is no
+    /// such track.
+    pub fn only_track(&self, index: usize) -> Option<Tracklog> {
+        if index >= self.tracks {
+            return None;
+        }
+        let points = self.points.iter().filter(|p| usize::try_from(p.track).ok() == Some(index)).copied().collect();
+        Some(Tracklog { points, tracks: 1, names: vec![self.names.get(index).cloned().unwrap_or_default()], untimed: 0 })
     }
 
     /// Where the logger was at `time` (seconds since the epoch, UTC).
@@ -458,8 +493,8 @@ mod tests {
 
     #[test]
     fn interpolation_across_the_antimeridian() {
-        let a = TrackPoint { time: 0.0, latitude: 0.0, longitude: 179.0, elevation: None, segment: 0 };
-        let b = TrackPoint { time: 10.0, latitude: 0.0, longitude: -179.0, elevation: None, segment: 0 };
+        let a = TrackPoint { time: 0.0, latitude: 0.0, longitude: 179.0, elevation: None, segment: 0, track: 0 };
+        let b = TrackPoint { time: 10.0, latitude: 0.0, longitude: -179.0, elevation: None, segment: 0, track: 0 };
         let g = lerp(&a, &b, 0.75);
         assert!((g.longitude - -179.5).abs() < 1e-9, "{g:?}");
     }
@@ -487,5 +522,57 @@ mod tests {
         );
         let deep = "<gpx>".to_string() + &"<a>".repeat(100);
         assert_eq!(parse_gpx(&deep), Err(GpxError::TooComplex));
+        let many = "<gpx>".to_string() + &"<trk/>".repeat(MAX_TRACKS + 1) + "</gpx>";
+        assert_eq!(parse_gpx(&many), Err(GpxError::TooComplex));
+    }
+
+    #[test]
+    fn tracks_are_told_apart_with_their_names() {
+        let s = r#"<gpx version="1.1"><trk><name> Morning </name><trkseg>
+            <trkpt lat="1" lon="1"><time>2026-01-01T10:00:00Z</time></trkpt>
+            <trkpt lat="1.1" lon="1.1"><time>2026-01-01T10:01:00Z</time></trkpt>
+        </trkseg></trk>
+        <trk><trkseg/></trk>
+        <trk><trkseg>
+            <trkpt lat="2" lon="2"><time>2026-01-01T09:00:00Z</time></trkpt>
+        </trkseg></trk></gpx>"#;
+        let log = parse_gpx(s).unwrap();
+        assert_eq!(log.tracks, 3);
+        assert_eq!(log.names, vec!["Morning".to_string(), String::new(), String::new()]);
+        // sorted by time: the third track's point comes first
+        assert_eq!(log.points.iter().map(|p| p.track).collect::<Vec<_>>(), vec![2, 0, 0]);
+        let first = log.only_track(0).unwrap();
+        assert_eq!((first.points.len(), first.tracks, first.names[0].as_str()), (2, 1, "Morning"));
+        assert!(log.only_track(1).unwrap().points.is_empty(), "an empty track");
+        assert!(log.only_track(3).is_none());
+        // a different track is a different segment: never interpolated across
+        assert_ne!(log.points[0].segment, log.points[1].segment);
+    }
+
+    #[test]
+    fn hostile_points_are_left_out() {
+        let s = r#"<gpx><trk><name>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</name><trkseg>
+            <trkpt lat="NaN" lon="1"><time>2026-01-01T10:00:00Z</time></trkpt>
+            <trkpt lat="1" lon="inf"><time>2026-01-01T10:00:01Z</time></trkpt>
+            <trkpt lat="91" lon="1"><time>2026-01-01T10:00:02Z</time></trkpt>
+            <trkpt lat="1" lon="-180.5"><time>2026-01-01T10:00:03Z</time></trkpt>
+            <trkpt lat="90" lon="180"><ele>NaN</ele><time>2026-01-01T10:00:04Z</time></trkpt>
+            <trkpt lat="-90" lon="-180"><time>not a time</time></trkpt>
+            <trkpt lat="5" lon="5"><time>2026-01-01T10:00:05Z</time></trkpt>
+            <trkpt lat="6" lon="6"><time>2026-01-01T09:00:00Z</time></trkpt>
+        </trkseg></trk></gpx>"#;
+        let log = parse_gpx(s).unwrap();
+        assert_eq!(log.points.len(), 3, "{:?}", log.points);
+        assert_eq!(log.untimed, 1);
+        assert!(log.points.iter().all(|p| p.latitude.is_finite() && p.longitude.is_finite()));
+        assert_eq!((log.points[1].latitude, log.points[1].elevation), (90.0, None), "a NaN elevation is no elevation");
+        // out of order in the file, in order in the log
+        assert_eq!((log.points[0].latitude, log.points[2].latitude), (6.0, 5.0));
+        assert_eq!(log.names[0].chars().count(), MAX_NAME_CHARS);
+        // a single point: located at its own time only (within the gap)
+        let one = parse_gpx(r#"<gpx><trk><trkseg><trkpt lat="1" lon="2"><time>2026-01-01T00:00:00Z</time></trkpt></trkseg></trk></gpx>"#).unwrap();
+        assert_eq!(one.span(), Some((one.points[0].time, one.points[0].time)));
+        assert!(one.locate(one.points[0].time + 10.0, 60.0).is_some());
+        assert!(one.locate(f64::NAN, 60.0).is_none());
     }
 }

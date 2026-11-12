@@ -23,6 +23,9 @@
 //!   reach on all eight samples.
 //! - `TTW` is a TIFF with IFD0 (orientation), Exif and the maker note; the preview JPEG sits in it with its first
 //!   byte overwritten (see `preview::scan_for_jpeg`).
+//!
+//! [`parse`] reads the block container on its own, for a caller that wants a block (the `TTW` Exif, say)
+//! without decoding the mosaic.
 use crate::{
     BlackLevel, Camera, Cfa, ColorData, Limits, Mode, OpcodeLists, Orientation, RawData, RawError, RawFormat, RawImage, Rect, Result, unpack,
 };
@@ -72,22 +75,22 @@ fn prd(b: &[u8]) -> Result<Prd> {
 
 /// The blocks and the offset of the sensor data in an MRW file.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Mrw<'a> {
+pub struct Mrw<'a> {
     /// `(name without the leading NUL, contents)`, in file order.
-    pub(crate) blocks: Vec<([u8; 3], &'a [u8])>,
+    pub blocks: Vec<([u8; 3], &'a [u8])>,
     /// Absolute offset of the sensor data.
-    pub(crate) data_offset: usize,
+    pub data_offset: usize,
 }
 
 impl<'a> Mrw<'a> {
     /// The first block called `name` (e.g. `b"PRD"`).
-    pub(crate) fn block(&self, name: &[u8; 3]) -> Option<&'a [u8]> {
+    pub fn block(&self, name: &[u8; 3]) -> Option<&'a [u8]> {
         self.blocks.iter().find(|(n, _)| n == name).map(|(_, d)| *d)
     }
 }
 
 /// At most this many blocks are walked (real files have four or five).
-const MAX_BLOCKS: usize = 64;
+pub const MAX_BLOCKS: usize = 64;
 
 fn be32(b: &[u8], at: usize) -> Option<usize> {
     let s = b.get(at..at.checked_add(4)?)?;
@@ -95,8 +98,9 @@ fn be32(b: &[u8], at: usize) -> Option<usize> {
 }
 
 /// Parse the block list of an MRW file. `None` when the magic is missing or the header length points past the
-/// file; a block that runs past the header is dropped together with everything after it.
-pub(crate) fn parse(bytes: &[u8]) -> Option<Mrw<'_>> {
+/// file; a block that runs past the header is dropped together with everything after it, and at most
+/// [`MAX_BLOCKS`] blocks are read. Nothing is decoded and nothing is copied.
+pub fn parse(bytes: &[u8]) -> Option<Mrw<'_>> {
     if !bytes.starts_with(b"\0MRM") {
         return None;
     }
@@ -317,5 +321,16 @@ mod container_tests {
         for n in 0..f.len() {
             let _ = parse(&f[..n]);
         }
+    }
+
+    #[test]
+    fn at_most_max_blocks_are_read() {
+        let body: Vec<u8> = (0..MAX_BLOCKS + 6).flat_map(|_| block(b"PAD", &[0])).collect();
+        let mut f = b"\0MRM".to_vec();
+        f.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        f.extend_from_slice(&body);
+        let m = parse(&f).unwrap();
+        assert_eq!(m.blocks.len(), MAX_BLOCKS);
+        assert_eq!(m.data_offset, f.len());
     }
 }

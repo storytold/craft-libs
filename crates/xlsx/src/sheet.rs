@@ -7,6 +7,7 @@ use craft_opc::Rels;
 use craft_sheet::{CellError, CellRef, MAX_COLS, MAX_ROWS, Range, Value};
 use craft_xml::{El, Writer};
 
+use crate::features::Features;
 use crate::strings::{StringItem, decode_xstring, encode_xstring};
 use crate::write::{assemble, list, num, write_streamed};
 
@@ -190,6 +191,9 @@ pub struct SheetPart {
     /// Why reading stopped early, when the part is damaged; the rows before the damage were
     /// handed out.
     pub damaged: Option<String>,
+    /// Views, print setup, data validation, conditional formats, hyperlinks: written from here,
+    /// not from [`SheetPart::root`].
+    pub features: Features,
 }
 
 impl SheetPart {
@@ -213,6 +217,7 @@ impl SheetPart {
                 });
             }
         }
+        self.features = Features::read(&self.root, &self.rels);
         if let Some(m) = self.root.child("mergeCells") {
             self.merges.extend(m.children("mergeCell").filter_map(|m| m.attr("ref").and_then(Range::parse)).filter(|r| !r.is_single()));
         }
@@ -220,8 +225,8 @@ impl SheetPart {
 }
 
 impl SheetPart {
-    /// The worksheet part with `rows` as its `sheetData`. The dimension, the columns and the
-    /// merged cells come from the fields; everything else in [`SheetPart::root`] is written as
+    /// The worksheet part with `rows` as its `sheetData`. The dimension, the columns, the
+    /// merged cells and [`SheetPart::features`] come from the fields; everything else in [`SheetPart::root`] is written as
     /// kept, in place.
     pub fn to_xml(&self, rows: &[Row]) -> Vec<u8> {
         let root = if self.root.name.is_empty() { El::new("worksheet") } else { self.root.clone() };
@@ -230,12 +235,13 @@ impl SheetPart {
             cols.push(column_el(c));
         }
         let merges = self.merges.iter().map(|m| El::new("mergeCell").with_attr("ref", m.a1())).collect();
-        let owned = vec![
-            ("dimension", Some(El::new("dimension").with_attr("ref", used(rows).map_or_else(|| "A1".to_string(), |r| r.a1())))),
-            ("cols", (!self.columns.is_empty()).then_some(cols)),
-            ("sheetData", Some(El::new("sheetData"))),
-            ("mergeCells", list(&root, "mergeCells", merges)),
+        let mut owned = vec![
+            ("dimension", vec![El::new("dimension").with_attr("ref", used(rows).map_or_else(|| "A1".to_string(), |r| r.a1()))]),
+            ("cols", Vec::from_iter((!self.columns.is_empty()).then_some(cols))),
+            ("sheetData", vec![El::new("sheetData")]),
+            ("mergeCells", Vec::from_iter(list(&root, "mergeCells", merges))),
         ];
+        owned.extend(self.features.owned());
         let mut root = assemble(&root, WORKSHEET, owned);
         let prefixes: Vec<&str> = rows.iter().flat_map(|r| &r.attrs).filter_map(|(k, _)| k.split_once(':').map(|(p, _)| p)).collect();
         crate::ns::declare_with(&mut root, &prefixes);

@@ -144,7 +144,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   heic-rs reads the container and HEVC pictures, and this crate converts to 16-bit RGB to match
   libheif (VUI range and matrix, chroma upsampling, `imir`, ICC on grid tiles). Also orientation,
   alpha, EXIF/XMP and thumbnails. It never panics, and apps put it behind a non-default feature.
-- [`craft-html`](crates/html/README.md): the bottom layer of reading and writing HTML: a tolerant tokenizer (text, start tags, end tags; elements to drop or to read as raw text are options), character references with the legacy names browsers accept without `;`, escaping, and the character set a page declares. No tree, no CSS, no rendering.
+- [`craft-html`](crates/html/README.md): the bottom layer of reading and writing HTML: a tolerant tokenizer (text, start tags, end tags; elements to drop or to read as raw text are options), character references with the legacy names browsers accept without `;`, escaping, and the character set a page declares. With the `flow` feature, HTML documents read into and written from the craft-flow model.
 - [`craft-i18n`](crates/i18n/README.md): translations over the embedded craft-i18n catalogs:
   lookup with fallback (`pt-br` → `pt` → English), plurals, language names, the system locale and
   a pseudo locale. The catalogs stay a fully optional build input; apps keep `tl!` and their
@@ -262,6 +262,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-plotter`](crates/plotter/README.md): cutter and pen-plotter command languages: HP-GL,
   DMPL and GP-GL (plain and the Silhouette dialect, three generations, registration marks) from a
   job in millimetres, plus the Silhouette device queries and reply parsers. No I/O.
+- [`craft-pptx`](crates/pptx/README.md): PresentationML, the model of a `.pptx` presentation:
+  masters, layouts, slides, shapes, placeholders and their inheritance, transitions and animations,
+  comments, sections, media and kept parts. From DeckCraft. DrawingML comes from `craft-drawingml`.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
 - [`craft-proof`](crates/proof/README.md): proofing per language (spelling, suggestions, grammar,

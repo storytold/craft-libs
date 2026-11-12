@@ -1065,6 +1065,8 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "craft-cfb",
+ "craft-drawingml",
+ "craft-math",
  "craft-offcrypto",
  "craft-opc",
  "craft-wordmodel",
@@ -1288,6 +1290,12 @@ dependencies = [
 name = "craft-html"
 version = "0.1.0"
 dependencies = [
+ "craft-codepage",
+ "craft-flow",
+ "craft-math",
+ "craft-mime",
+ "craft-wordmodel",
+ "encoding_rs",
  "proptest",
 ]
 
@@ -1658,6 +1666,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-pptx"
+version = "0.1.0"
+dependencies = [
+ "craft-drawingml",
+ "kurbo 0.13.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-prc"
 version = "0.1.0"
 dependencies = [
@@ -1711,6 +1729,7 @@ dependencies = [
  "encoding_rs",
  "flate2",
  "proptest",
+ "rayon",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -1765,7 +1784,9 @@ name = "craft-rtf"
 version = "0.1.0"
 dependencies = [
  "craft-codepage",
+ "craft-mime",
  "encoding_rs",
+ "proptest",
 ]
 
 [[package]]
@@ -1872,6 +1893,7 @@ dependencies = [
  "craft-xml",
  "proptest",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1991,6 +2013,7 @@ dependencies = [
 name = "craft-webp"
 version = "0.1.0"
 dependencies = [
+ "craft-video",
  "image",
  "thiserror 2.0.21",
 ]
@@ -2018,6 +2041,7 @@ name = "craft-wordmodel"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "craft-math",
  "log",
  "proptest",
  "serde",
