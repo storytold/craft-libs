@@ -149,7 +149,7 @@ fn fields_with_an_armed_split(ui: &mut Ui, data: &mut StoryData) -> StoryOutput 
 
 #[story(WarpFields<'static>, covers = [], group = "Group", title = "On a type layer")]
 fn fields_on_a_type_layer(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    fields(ui, data, Warp::new("none", 0.0, None), true)
+    fields(ui, data, Warp::new("arc", 50.0, None), true)
 }
 
 #[story(MeshLines<'static>, covers = [Default])]
