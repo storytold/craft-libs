@@ -94,17 +94,25 @@ pub enum CursorBadge {
 pub enum PaintedCursor {
     /// A crosshair.
     Crosshair,
-    /// A circle of `radius` points.
+    /// A circle of `radius` points: a round brush tip at this zoom.
     #[non_exhaustive]
     Circle {
         /// The radius.
         radius: f32,
+        /// A crosshair of [`CENTRE_ARM`](PaintedCursor::CENTRE_ARM) arms on the pointer.
+        centre: bool,
+        /// A mark centred on the pointer.
+        badge: Option<CursorBadge>,
     },
-    /// App shapes, as closed rings around the pointer.
+    /// App shapes, as closed rings around the pointer: a shaped brush tip.
     #[non_exhaustive]
     Outline {
         /// The rings.
         rings: Vec<Vec<Pos2>>,
+        /// A crosshair of [`CENTRE_ARM`](PaintedCursor::CENTRE_ARM) arms on the pointer.
+        centre: bool,
+        /// A mark centred on the pointer.
+        badge: Option<CursorBadge>,
     },
     /// An open hand.
     Hand,
@@ -156,14 +164,28 @@ pub enum PaintedCursor {
 }
 
 impl PaintedCursor {
-    /// A circle of `radius` points.
+    /// The arm of the centre mark of a circle or an outline, in points.
+    pub const CENTRE_ARM: f32 = 3.0;
+
+    /// A circle of `radius` points, with no centre mark and no badge.
     pub const fn circle(radius: f32) -> Self {
-        PaintedCursor::Circle { radius }
+        PaintedCursor::Circle { radius, centre: false, badge: None }
     }
 
-    /// App shapes as closed rings.
+    /// App shapes as closed rings, with no centre mark and no badge.
     pub fn outline(rings: Vec<Vec<Pos2>>) -> Self {
-        PaintedCursor::Outline { rings }
+        PaintedCursor::Outline { rings, centre: false, badge: None }
+    }
+
+    /// A circle or an outline with the centre mark when `centre` and `badge` centred on the pointer; any other cursor
+    /// unchanged.
+    #[must_use]
+    pub fn marked(self, centre: bool, badge: Option<CursorBadge>) -> Self {
+        match self {
+            PaintedCursor::Circle { radius, .. } => PaintedCursor::Circle { radius, centre, badge },
+            PaintedCursor::Outline { rings, .. } => PaintedCursor::Outline { rings, centre, badge },
+            other => other,
+        }
     }
 
     /// A magnifier, zooming out when `out`.

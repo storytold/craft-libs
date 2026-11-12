@@ -48,8 +48,14 @@ fn paint_pointer(ctx: &Context, env: &Env, painter: &egui::Painter) {
     let ink = crate::style::ink_color(&env.tokens, Ink::OnDark);
     let edge = env.tokens.stroke.thin;
     match &cursor {
-        PaintedCursor::Outline { rings, .. } => pointers::outline(&pen, rings),
-        PaintedCursor::Circle { radius, .. } => pointers::circle(&pen, *radius, edge, ink),
+        PaintedCursor::Outline { rings, centre, badge, .. } => {
+            pointers::outline(&pen, rings);
+            pointers::tip_marks(&pen, *centre, *badge, pen.thin, pen.fill);
+        }
+        PaintedCursor::Circle { radius, centre, badge, .. } => {
+            pointers::circle(&pen, *radius, edge, ink);
+            pointers::tip_marks(&pen, *centre, *badge, edge, ink);
+        }
         PaintedCursor::Crosshair => pointers::crosshair(&pen, env.tokens.size.icon.sm, edge, ink),
         PaintedCursor::Hand => pointers::hand(&pen, pointer::frame(ctx).buttons.contains(craft_behavior::Buttons::PRIMARY)),
         PaintedCursor::Zoom { out, .. } => pointers::zoom(&pen, *out),

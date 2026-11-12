@@ -90,8 +90,10 @@ impl BrushCursorOptions {
 /// 6. An outline whose farthest point is nearer than the hit target (`size.hit.target`, the arm of the crosshair the
 ///    host paints) to the hotspot: the crosshair.
 ///
-/// A [`badge`](Self::badge) rides on the Standard icon and on the crosshair. NaN, infinite, negative and zero sizes
-/// never panic and never give a non-finite ring (they fall to rule 6).
+/// A [`badge`](Self::badge) rides on whichever pointer rules 1 to 6 give: in the Standard icon's own slot, beside the
+/// crosshair, centred on the hotspot inside a circle or an outline; the hidden pointer of a pixel tip has none. A
+/// circle or an outline draws its centre mark while [`centre`](Self::centre) is on. NaN, infinite, negative and zero
+/// sizes never panic and never give a non-finite ring (they fall to rule 6).
 #[derive(Clone, Debug)]
 pub struct BrushCursor<'a> {
     tip: &'a BrushTip,
@@ -116,8 +118,9 @@ impl<'a> BrushCursor<'a> {
         self
     }
 
-    /// Whether an aliased tip shows the crosshair rather than hiding the pointer: the app's rule (Show Crosshair in
-    /// Brush Tip; Clone Stamp only while Alt is held; the Background Eraser always). Default off.
+    /// Whether the circle or outline draws its centre mark and an aliased tip shows the crosshair rather than hiding
+    /// the pointer: the app's rule (Show Crosshair in Brush Tip; Clone Stamp only while Alt is held; the Background
+    /// Eraser always). Default off.
     #[must_use]
     pub fn centre(mut self, on: bool) -> Self {
         self.centre = on;
@@ -145,7 +148,7 @@ impl<'a> BrushCursor<'a> {
         self
     }
 
-    /// A mark on the Standard icon and on the crosshair: the + or - of the selection mode. Default none.
+    /// A mark on the pointer: the + or - of the selection mode. Default none.
     #[must_use]
     pub fn badge(mut self, badge: Option<CursorBadge>) -> Self {
         self.badge = badge;
@@ -226,10 +229,10 @@ impl<'a> BrushCursor<'a> {
             // A round tip stays a plain circle while the mapped axes are equal and square.
             let anisotropic = (x.length_sq() - y.length_sq()).abs() > ISOTROPY_TOLERANCE || x.dot(y).abs() > ISOTROPY_TOLERANCE;
             if !anisotropic {
-                return PaintedCursor::circle(x.length());
+                return PaintedCursor::circle(x.length()).marked(self.centre, self.badge);
             }
         }
-        PaintedCursor::outline(rings)
+        PaintedCursor::outline(rings).marked(self.centre, self.badge)
     }
 
     /// The aliased tip's cell as a canvas control, for the tool to show beside the hidden pointer; `None` for another
@@ -363,26 +366,26 @@ pub struct CursorBitmap {
     pub hotspot: [u16; 2],
 }
 
-/// What a bitmap cursor shows.
+/// What a bitmap cursor shows; a circle and an outline with their centre mark when the flag is on.
 enum Shape<'a> {
-    Circle(f32),
+    Circle(f32, bool),
     Crosshair(f32),
-    Outline(&'a [Vec<Pos2>]),
+    Outline(&'a [Vec<Pos2>], bool),
 }
 
 impl CursorBitmap {
-    /// The image of a painted `cursor` (a circle, the crosshair or an outline) by signed-distance coverage per pixel,
-    /// so the line stays one hardware pixel crisp at every scale. `None` for another cursor, a shape that is not
-    /// finite, or one larger than `spec.max_side`.
+    /// The image of a painted `cursor` (a circle, the crosshair or an outline, with its centre mark) by signed-distance
+    /// coverage per pixel, so the line stays one hardware pixel crisp at every scale; a badge is the overlay host's to
+    /// paint. `None` for another cursor, a shape that is not finite, or one larger than `spec.max_side`.
     pub fn render(cursor: &PaintedCursor, spec: &CursorBitmapSpec) -> Option<CursorBitmap> {
         let scale = spec.scale;
         if !scale.is_finite() || scale <= 0.0 {
             return None;
         }
         let shape = match cursor {
-            PaintedCursor::Circle { radius, .. } => Shape::Circle(*radius),
+            PaintedCursor::Circle { radius, centre, .. } => Shape::Circle(*radius, *centre),
             PaintedCursor::Crosshair => Shape::Crosshair(spec.crosshair),
-            PaintedCursor::Outline { rings, .. } => Shape::Outline(rings),
+            PaintedCursor::Outline { rings, centre, .. } => Shape::Outline(rings, *centre),
             _ => return None,
         };
         let extent = extent(&shape)?;
@@ -404,7 +407,7 @@ impl CursorBitmap {
             }
         };
         match shape {
-            Shape::Outline(rings) => {
+            Shape::Outline(rings, centre) => {
                 // Splat each segment into its bounding box instead of measuring every ring per pixel: tip outlines
                 // may carry hundreds of points.
                 let reach = (0.5 * spec.stroke + 1.0) * scale + 2.0;
@@ -418,26 +421,34 @@ impl CursorBitmap {
                         splat_segment(&mut dist, n, hotf, a.to_vec2() * scale, ring[(i + 1) % len].to_vec2() * scale, reach);
                     }
                 }
+                if centre {
+                    let arm = PaintedCursor::CENTRE_ARM * scale;
+                    splat_segment(&mut dist, n, hotf, Vec2::new(-arm, 0.0), Vec2::new(arm, 0.0), reach);
+                    splat_segment(&mut dist, n, hotf, Vec2::new(0.0, -arm), Vec2::new(0.0, arm), reach);
+                }
                 for (i, &d) in dist.iter().enumerate() {
                     if d.is_finite() {
                         put(i % n, i / n, line_coverage(d, scale, spec.stroke));
                     }
                 }
             }
-            Shape::Circle(_) | Shape::Crosshair(_) => {
-                // Columns to evaluate in each row: the ring's two arcs for a circle, the whole row otherwise.
+            Shape::Circle(..) | Shape::Crosshair(_) => {
+                // Columns to evaluate in each row: the ring's two arcs and the centre mark for a circle, the whole row
+                // otherwise.
                 let last = f32::from(side - 1);
                 for row in 0..n {
                     let dy = row as f32 - hotf;
-                    let spans: [Option<(f32, f32)>; 2] = match shape {
-                        Shape::Circle(radius) => {
+                    let spans: [Option<(f32, f32)>; 3] = match shape {
+                        Shape::Circle(radius, centre) => {
                             let fringe = (0.5 * spec.stroke + 1.0) * scale + 0.5;
-                            match ring_spans(dy, radius * scale, fringe) {
+                            let [left, right] = match ring_spans(dy, radius * scale, fringe) {
                                 Some([l, r]) => [Some(l), Some(r)],
                                 None => [None, None],
-                            }
+                            };
+                            let arm = PaintedCursor::CENTRE_ARM * scale + fringe;
+                            [left, right, (centre && dy.abs() <= arm).then_some((-arm, arm))]
                         }
-                        _ => [Some((-hotf, hotf)), None],
+                        _ => [Some((-hotf, hotf)), None, None],
                     };
                     for (a, b) in spans.into_iter().flatten() {
                         let (c0, c1) = ((hotf + a).floor().clamp(0.0, last) as usize, (hotf + b).ceil().clamp(0.0, last) as usize);
@@ -455,8 +466,9 @@ impl CursorBitmap {
 /// The reach of `shape` from the hotspot in points, `None` for a shape that cannot be drawn.
 fn extent(shape: &Shape<'_>) -> Option<f32> {
     match shape {
-        Shape::Circle(length) | Shape::Crosshair(length) => (length.is_finite() && *length > 0.0).then_some(*length),
-        Shape::Outline(rings) => {
+        Shape::Circle(radius, centre) => (radius.is_finite() && *radius > 0.0).then_some(with_centre(*radius, *centre)),
+        Shape::Crosshair(length) => (length.is_finite() && *length > 0.0).then_some(*length),
+        Shape::Outline(rings, centre) => {
             let mut farthest = 0.0f32;
             for p in rings.iter().flatten() {
                 if !p.x.is_finite() || !p.y.is_finite() {
@@ -464,9 +476,14 @@ fn extent(shape: &Shape<'_>) -> Option<f32> {
                 }
                 farthest = farthest.max(p.to_vec2().length());
             }
-            (farthest > 0.0).then_some(farthest)
+            (farthest > 0.0).then_some(with_centre(farthest, *centre))
         }
     }
+}
+
+/// The reach `reach` of a shape, at least the centre mark's arm when it has one.
+fn with_centre(reach: f32, centre: bool) -> f32 {
+    if centre { reach.max(PaintedCursor::CENTRE_ARM) } else { reach }
 }
 
 /// Distance to the nearest arm of a crosshair of arm `length` (round caps), in the units of `x` and `y`.
@@ -488,9 +505,13 @@ fn seg_distance(x: f32, y: f32, a: Vec2, b: Vec2) -> f32 {
 fn coverage(shape: &Shape<'_>, dx: f32, dy: f32, scale: f32, width: f32) -> (f32, f32) {
     let (x, y) = (dx.abs(), dy.abs());
     match shape {
-        Shape::Circle(radius) => line_coverage((x.hypot(y) - radius * scale).abs(), scale, width),
+        Shape::Circle(radius, centre) => {
+            let ring = (x.hypot(y) - radius * scale).abs();
+            let distance = if *centre { ring.min(cross_distance(x, y, PaintedCursor::CENTRE_ARM * scale)) } else { ring };
+            line_coverage(distance, scale, width)
+        }
         Shape::Crosshair(length) => line_coverage(cross_distance(x, y, length * scale), scale, width),
-        Shape::Outline(_) => (0.0, 0.0),
+        Shape::Outline(..) => (0.0, 0.0),
     }
 }
 

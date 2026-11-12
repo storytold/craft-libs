@@ -4,7 +4,7 @@
 
 use crate::primitives::{Draw, IconSpec};
 use crate::style::StyleColor;
-use craft_behavior::{CursorBadge, IconId};
+use craft_behavior::{CursorBadge, IconId, PaintedCursor};
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, Vec2};
 
 /// The icon sets draw on a box this many units on a side; a tool pointer's hotspot is in these.
@@ -139,6 +139,17 @@ pub(super) fn circle(pen: &Pen<'_>, radius: f32, width: f32, color: Color32) {
 /// A crosshair with arms of `arm` points.
 pub(super) fn crosshair(pen: &Pen<'_>, arm: f32, width: f32, color: Color32) {
     pen.lines(width, color, &[Mark::Line(v([-arm, 0.0]), v([arm, 0.0])), Mark::Line(v([0.0, -arm]), v([0.0, arm]))]);
+}
+
+/// A brush tip's marks on the pointer: the centre mark when `centre`, a crosshair of `PaintedCursor::CENTRE_ARM` arms
+/// in the tip's own line of `width` in `color`, and `badge` centred over it.
+pub(super) fn tip_marks(pen: &Pen<'_>, centre: bool, badge: Option<CursorBadge>, width: f32, color: Color32) {
+    if centre {
+        crosshair(pen, PaintedCursor::CENTRE_ARM, width, color);
+    }
+    if let Some(badge) = badge {
+        self::badge(pen, Vec2::ZERO, badge);
+    }
 }
 
 /// Rings of a brush tip, as offsets from the pointer.
