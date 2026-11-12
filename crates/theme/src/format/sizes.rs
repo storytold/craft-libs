@@ -257,7 +257,11 @@ impl SizeSet {
         le("base.stroke.thick", self.base.stroke.thick, "at most base.stroke.heavy", self.base.stroke.heavy);
         le("base.size.thumb.sm", s.thumb.sm, "at most base.size.thumb.md", s.thumb.md);
         le("base.size.thumb.md", s.thumb.md, "at most base.size.thumb.lg", s.thumb.lg);
+        le("base.size.row.text", s.row.text, "at most base.size.control.sm", s.control.sm);
         let t = &self.base.typography;
+        if s.row.text < t.body.line_height {
+            errors.push(err(&path_of("base.size.row.text"), ErrorKind::CrossRule { rule: "at least base.typography.body.line_height" }));
+        }
         for (name, style) in [
             ("caption", t.caption),
             ("label", t.label),

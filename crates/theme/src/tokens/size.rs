@@ -217,6 +217,8 @@ pub struct SizeTokens {
     pub plot: PlotSizes,
     /// Lengths of controls that stretch along one axis.
     pub length: LengthSizes,
+    /// Row heights other than a control's.
+    pub row: RowSizes,
     /// The thickness of the groove of a value track (a slider, a range slider, a progress bar).
     pub groove: f32,
     /// Gradient ramps: the colours a value runs through, drawn as a bar or as the groove of a track.
@@ -323,6 +325,14 @@ pub struct LengthSizes {
     pub short: f32,
     /// The width of a number field over a slider, one per control size.
     pub number: ControlSizes,
+}
+
+/// Row heights other than a control's, in logical pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RowSizes {
+    /// The height of a row that shows text only: one body line and `space.gap.tight`. Read-only display tables (a
+    /// metadata table) take it; rows the user picks from stay a control high.
+    pub text: f32,
 }
 
 /// Thicknesses of gradient ramps, in logical pixels.

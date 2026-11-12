@@ -8,8 +8,8 @@ use std::fmt::Write as _;
 use crate::{
     BarSizes, ColorToken, ControlSizes, DockColumnSizes, Easing, Edge, Elevation, ElevationTokens, FloatSizes, FontSlot, Gaps, HandleSizes, HitSizes,
     IconSizes, Insets, KnobShape, LengthSizes, Motion, MotionTokens, NoticeSizes, Pads, PaneSizes, PlotSizes, RadiusSet, RailSizes, RampSizes, Rgba,
-    RowStyle, RulerSizes, RulerTickSizes, ShapeTokens, SizeTokens, SpaceTokens, StorySizes, StrokeTokens, ThumbSizes, Tokens, TypeStyle, TypeTokens,
-    WindowSizes,
+    RowSizes, RowStyle, RulerSizes, RulerTickSizes, ShapeTokens, SizeTokens, SpaceTokens, StorySizes, StrokeTokens, ThumbSizes, Tokens, TypeStyle,
+    TypeTokens, WindowSizes,
 };
 
 /// The text of every token, one `key = value` line each, in a fixed order.
@@ -121,6 +121,7 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
         checker,
         plot,
         length,
+        row,
         groove,
         ramp,
         pointer_tip,
@@ -174,6 +175,8 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     out.line("size.length.short", len(*short));
     out.line("size.length.number.sm", len(number.sm));
     out.line("size.length.number.md", len(number.md));
+    let RowSizes { text } = row;
+    out.line("size.row.text", len(*text));
     out.line("size.groove", len(*groove));
     let RampSizes { bar, groove: ramp_groove } = ramp;
     out.line("size.ramp.bar", len(*bar));

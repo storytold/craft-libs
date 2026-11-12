@@ -986,6 +986,7 @@ A theme with its own shape replaces the radii or adds an offset to control, surf
 | `size.length.field.sm`, `size.length.field.md` | Text or value field, one width per control size: a field in a small options bar is narrower than one in a dialog |
 | `size.length.number.sm`, `size.length.number.md` | Number field and the number cell over a slider, one width per control size |
 | `size.length.track`, `size.length.short` | Value track, short field |
+| `size.row.text` | A row that shows text only: one body line and `space.gap.tight`; read-only display tables take it, lists the user picks from keep control-high rows |
 | `size.notice.width` | Width of a toast card where the room allows |
 | `size.story.height`, `size.story.width_min`, `size.story.width_max` | The stage a story of a canvas control draws its canvas on: its height and the range of its width; `width_min` is also the least width of a column of a story grid |
 | `size.thumb.card` | The picture side of a tile card at zoom 1 (tile grids, preset browsers, the start screen) |

@@ -87,6 +87,9 @@
         "bar": 10.0,
         "groove": 5.0
       },
+      "row": {
+        "text": 18.0
+      },
       "ruler": {
         "tick": {
           "mid": 3.0

@@ -130,6 +130,7 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.size.length.short" Num 32.0..=512.0 => s.length.short;
         "base.size.length.number.sm" Num 32.0..=512.0 => s.length.number.sm;
         "base.size.length.number.md" Num 32.0..=512.0 => s.length.number.md;
+        "base.size.row.text" Num 12.0..=48.0 => s.row.text;
         "base.size.groove" Num 0.25..=16.0 => s.groove;
         "base.size.ramp.bar" Num 1.0..=64.0 => s.ramp.bar;
         "base.size.ramp.groove" Num 0.25..=32.0 => s.ramp.groove;
