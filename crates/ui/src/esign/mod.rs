@@ -14,6 +14,8 @@ use egui::{Context, RichText, Ui};
 
 mod backend;
 #[cfg(test)]
+mod coderabbit_repro;
+#[cfg(test)]
 mod review_repro;
 
 pub use backend::{Answer, EsignBackend, Replier, Request};
@@ -27,15 +29,24 @@ const RETRY: f64 = 20.0;
 
 type Inbox = (u64, Result<Answer, String>);
 
-/// What dialog state a reply belongs to: which document, under which
-/// signed-in account. A reply installs only when this still matches the
-/// dialog's current context; see [`EsignDialog::submit_in_context`] and
-/// [`EsignDialog::pump`]. Deliberately excludes incidental UI state such as
-/// search text, which changes without the dialog meaning something new.
+/// What dialog state a reply belongs to: which document revision, under
+/// which signed-in account, opened which time. A reply installs only when
+/// this still matches the dialog's current context; see
+/// [`EsignDialog::submit_in_context`] and [`EsignDialog::pump`]. Deliberately
+/// excludes incidental UI state such as search text, which changes without
+/// the dialog meaning something new.
+///
+/// `opening` is bumped every time [`EsignDialog::open`] actually changes
+/// something (document, revision or account). `document_etag` alone would
+/// already separate two revisions of the same document id, but it cannot
+/// separate "document A, closed, then A opened again" from the first
+/// opening: both carry the same id and the same etag. `opening` does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct EsignContext {
     document_id: String,
+    document_etag: Option<String>,
     account: Option<String>,
+    opening: u64,
 }
 
 /// Every string the dialog shows.
@@ -57,6 +68,9 @@ pub struct EsignLabels {
     pub no_service: String,
     pub sign_in_first: String,
     pub need_recipient: String,
+    /// Shown instead of adding the person, when a search match has no email
+    /// address the provider can invite.
+    pub contact_missing_email: String,
     pub status: String,
     pub void: String,
     pub remind: String,
@@ -83,6 +97,7 @@ impl Default for EsignLabels {
             no_service: "Signatures cannot be requested here.".into(),
             sign_in_first: "Sign in to request signatures.".into(),
             need_recipient: "Add at least one signer.".into(),
+            contact_missing_email: "This contact has no email address to invite.".into(),
             status: "Status".into(),
             void: "Void".into(),
             remind: "Remind".into(),
@@ -120,6 +135,23 @@ pub struct EsignDialog {
     /// Context (document plus account) each in-flight context-sensitive
     /// request was issued under. Consulted, then removed, in [`Self::pump`].
     contexts: HashMap<u64, EsignContext>,
+    /// Sequences whose context has already been consulted once in
+    /// [`Self::pump`], bounded to the most recent entries. A backend that
+    /// answers the same sequence twice (via [`Replier::dup`]) has its second
+    /// answer dropped unconditionally instead of re-entering the match arms
+    /// with no context to check.
+    consumed: std::collections::HashSet<u64>,
+    consumed_order: std::collections::VecDeque<u64>,
+    /// The sequence that currently owns `busy`, if any. An answer (success or
+    /// failure) for any other sequence must not clear `busy` on its behalf.
+    pending_op_seq: Option<u64>,
+    /// The most recently issued `Request::Status` sequence. An older status
+    /// reply that arrives after a newer one has already installed is
+    /// superseded and dropped.
+    status_seq: u64,
+    /// How many times [`Self::open`] has actually changed something. Part of
+    /// [`EsignContext`]; see its docs.
+    opening: u64,
     document_id: String,
     document_etag: Option<String>,
     document_title: String,
@@ -137,6 +169,12 @@ pub struct EsignDialog {
     error: Option<String>,
     envelope: Option<Envelope>,
     send_out: Option<SendRequest>,
+    /// The context [`Self::queue_send`] captured for the still-outstanding
+    /// [`SendRequest`], consumed by [`Self::submit_request`] or
+    /// [`Self::note_create_result`] so a reply is tagged with the context the
+    /// send was queued under, not whatever context is current when the
+    /// application finally submits it.
+    pending_send_context: Option<EsignContext>,
     completed_bytes: Option<Vec<u8>>,
     account_fingerprint: Option<String>,
 }
@@ -159,6 +197,11 @@ impl Default for EsignDialog {
             rx,
             newest: 0,
             contexts: HashMap::new(),
+            consumed: std::collections::HashSet::new(),
+            consumed_order: std::collections::VecDeque::new(),
+            pending_op_seq: None,
+            status_seq: 0,
+            opening: 0,
             document_id: String::new(),
             document_etag: None,
             document_title: String::new(),
@@ -176,10 +219,26 @@ impl Default for EsignDialog {
             error: None,
             envelope: None,
             send_out: None,
+            pending_send_context: None,
             completed_bytes: None,
             account_fingerprint: None,
         }
     }
+}
+
+/// A send operation id no other send in this process has used, from a random
+/// start so one saved by an earlier process is unlikely to repeat either.
+/// Mirrors `docking::model::fresh_window_id`: a counter kept on one
+/// [`EsignDialog`] repeats across two dialog instances (two windows, or one
+/// replaced after a document closes), and two sends sharing an idempotency
+/// key have a conforming provider return the first envelope for the second.
+fn fresh_send_id() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: OnceLock<AtomicU64> = OnceLock::new();
+    let next = NEXT.get_or_init(|| AtomicU64::new(std::collections::hash_map::RandomState::new().build_hasher().finish() >> 1));
+    next.fetch_add(1, Ordering::Relaxed)
 }
 
 impl EsignDialog {
@@ -213,17 +272,29 @@ impl EsignDialog {
         let fingerprint = format!("{}@{}", sender.id, sender.email.as_deref().unwrap_or(""));
         let account_changed = self.account_fingerprint.as_deref() != Some(fingerprint.as_str());
         let document_changed = self.document_id != document_id;
-        if account_changed || document_changed {
+        let revision_changed = self.document_etag != document_etag;
+        if account_changed || document_changed || revision_changed {
             self.recipients.clear();
             self.message.clear();
             self.envelope = None;
             self.completed_bytes = None;
             self.error = None;
             self.draft_idempotency_key = None;
+            // A's fields must never reappear as B's: see the Major finding
+            // this guards against.
+            self.placements.clear();
+            // An untaken send request was built for the context being left;
+            // drop it so a later `take_send_request` cannot hand the
+            // application A's draft to submit under B's dialog.
+            // `pending_send_context`, captured once the request is taken, is
+            // deliberately left alone here: see its field doc.
+            self.send_out = None;
+            self.opening = self.opening.wrapping_add(1);
             // Any job still in flight was issued for the context being left.
             // Its reply will be dropped in `pump` (context no longer
             // matches), so nothing will ever clear `busy` on its behalf.
             self.busy = false;
+            self.pending_op_seq = None;
         }
         self.account_fingerprint = Some(fingerprint);
         self.document_id = document_id;
@@ -242,6 +313,10 @@ impl EsignDialog {
     /// Field placements the app prepared (page-normalised). Replaces any prior set.
     pub fn set_placements(&mut self, placements: Vec<FieldPlacement>) {
         self.placements = placements;
+        // Same reasoning as `add_contact`/`add_email`/removing a recipient: the
+        // fields a retried create would send have changed, so a key from
+        // before this call must not be reused for them.
+        self.draft_idempotency_key = None;
     }
 
     /// What Send asked the application to encode and submit, if anything.
@@ -251,8 +326,20 @@ impl EsignDialog {
 
     /// Submit a request through the host backend (for example after the app
     /// encoded document bytes for a [`SendRequest`]).
+    ///
+    /// Tags the reply with the context [`Self::queue_send`] captured when it
+    /// built the [`SendRequest`] being submitted, not whatever context is
+    /// current now. The application can encode bytes, or the dialog can be
+    /// reopened for another document or account, before this runs; a reply
+    /// for a [`SendRequest`] built under a now-abandoned context must drop in
+    /// [`Self::pump`] exactly as one issued under that context would, not
+    /// install under whichever context happens to be current when this is
+    /// finally called.
     pub fn submit_request(&mut self, request: Request) {
-        let _ = self.submit_in_context(request);
+        let context = self.pending_send_context.take().unwrap_or_else(|| self.current_context());
+        let seq = self.submit(request);
+        self.contexts.insert(seq, context);
+        self.pending_op_seq = Some(seq);
     }
 
     /// Completed document bytes after a successful download request.
@@ -261,8 +348,19 @@ impl EsignDialog {
     }
 
     /// Tell the dialog create/send finished (or failed) after the app submitted.
+    ///
+    /// Gated the same way as [`Self::submit_request`]: when a context was
+    /// captured for the outstanding send, a result reported after the
+    /// dialog moved on to another document or account is dropped instead of
+    /// installing under the new context.
     pub fn note_create_result(&mut self, result: Result<Envelope, String>) {
+        if let Some(context) = self.pending_send_context.take()
+            && context != self.current_context()
+        {
+            return;
+        }
         self.busy = false;
+        self.pending_op_seq = None;
         match result {
             Ok(env) => {
                 self.envelope = Some(env);
@@ -284,9 +382,15 @@ impl EsignDialog {
         seq
     }
 
-    /// The context (document plus account) a reply must still match to install.
+    /// The context (document revision plus account, plus which opening) a
+    /// reply must still match to install. See [`EsignContext`].
     fn current_context(&self) -> EsignContext {
-        EsignContext { document_id: self.document_id.clone(), account: self.account_fingerprint.clone() }
+        EsignContext {
+            document_id: self.document_id.clone(),
+            document_etag: self.document_etag.clone(),
+            account: self.account_fingerprint.clone(),
+            opening: self.opening,
+        }
     }
 
     /// Like [`Self::submit`], but tags the request with the dialog's current
@@ -301,24 +405,51 @@ impl EsignDialog {
         seq
     }
 
+    /// Remembers that `seq`'s context has already been consulted once in
+    /// [`Self::pump`], bounded to the most recently consulted sequences. A
+    /// backend that answers the same sequence twice (only possible through
+    /// [`Replier::dup`]) has its second answer dropped unconditionally,
+    /// instead of reaching the match arms with no context left to check.
+    fn remember_consumed(&mut self, seq: u64) {
+        const TRACKED: usize = 64;
+        if self.consumed_order.len() >= TRACKED
+            && let Some(oldest) = self.consumed_order.pop_front()
+        {
+            self.consumed.remove(&oldest);
+        }
+        self.consumed_order.push_back(seq);
+        self.consumed.insert(seq);
+    }
+
     fn pump(&mut self, now: f64) {
         while let Ok((seq, result)) = self.rx.try_recv() {
-            if self.caps_seq == Some(seq) {
+            let is_caps_reply = self.caps_seq == Some(seq);
+            if is_caps_reply {
                 self.caps_seq = None;
+            }
+            if self.consumed.contains(&seq) {
+                continue;
             }
             // A context-tagged reply installs only for the context that
             // issued it; it drops silently for any other, including a
-            // document switch or an account switch. Typing in the signer
-            // search bumps `newest` and is not a context change, so it no
-            // longer gates a create/status/completed/void/remind reply: the
-            // rule here is context equality, nothing else.
-            if let Some(context) = self.contexts.remove(&seq)
-                && context != self.current_context()
-            {
-                continue;
+            // document switch, a revision change or an account switch.
+            // Typing in the signer search bumps `newest` and is not a
+            // context change, so it no longer gates a create/status/
+            // completed/void/remind reply: the rule here is context
+            // equality, nothing else.
+            if let Some(context) = self.contexts.remove(&seq) {
+                self.remember_consumed(seq);
+                if context != self.current_context() {
+                    continue;
+                }
             }
             match result {
-                Ok(Answer::Capabilities { capabilities, responsible_party, linked }) => {
+                // Guarded by `is_caps_reply`, computed before the swap
+                // above cleared it: a reply from a backend `set_backend`
+                // already replaced carries a sequence that is not (or no
+                // longer) `caps_seq`, so it cannot overwrite capabilities,
+                // responsible or linked for the new backend.
+                Ok(Answer::Capabilities { capabilities, responsible_party, linked }) if is_caps_reply => {
                     self.capabilities = Some(capabilities);
                     self.responsible = Some(responsible_party);
                     self.linked = linked;
@@ -327,27 +458,48 @@ impl EsignDialog {
                     self.matches = contacts;
                     self.looking = false;
                 }
-                Ok(Answer::Created(env)) | Ok(Answer::Status(env)) => {
+                Ok(Answer::Created(env)) => {
                     self.busy = false;
+                    self.pending_op_seq = None;
+                    self.envelope = Some(env);
+                    self.error = None;
+                }
+                // Guarded by `status_seq`, the most recently issued status
+                // request: two "Refresh status" clicks in flight at once can
+                // answer out of order, and the older one must not overwrite
+                // state a newer one already installed.
+                Ok(Answer::Status(env)) if seq == self.status_seq => {
+                    self.busy = false;
+                    self.pending_op_seq = None;
                     self.envelope = Some(env);
                     self.error = None;
                 }
                 Ok(Answer::Completed(doc)) => {
                     self.busy = false;
+                    self.pending_op_seq = None;
                     self.completed_bytes = Some(doc.bytes);
                     self.error = None;
                 }
                 Ok(Answer::Voided { .. }) => {
                     self.busy = false;
+                    self.pending_op_seq = None;
                     if let Some(env) = self.envelope.as_mut() {
                         env.status = EnvelopeStatus::Voided;
                     }
                 }
                 Ok(Answer::Reminded { .. }) => {
                     self.busy = false;
+                    self.pending_op_seq = None;
                 }
+                // Clears `busy` only when this failure belongs to the
+                // operation that currently owns it: a lookup failing (or a
+                // superseded status request failing) must not wrongly
+                // report a still-running create as finished.
                 Err(reason) => {
-                    self.busy = false;
+                    if self.pending_op_seq == Some(seq) {
+                        self.busy = false;
+                        self.pending_op_seq = None;
+                    }
                     self.looking = false;
                     self.error = Some(reason);
                 }
@@ -381,7 +533,15 @@ impl EsignDialog {
     }
 
     fn add_contact(&mut self, contact: Contact) {
-        let email = contact.email.clone().unwrap_or_else(|| contact.id.clone());
+        // `Contact::id` is the provider's share identifier, decided by
+        // `target`, and is not promised to be an address: `craft_cloud`
+        // documents the two as distinct and warns against treating one as
+        // the other. Falling back to it here would hand the envelope create
+        // request a recipient email that is not an email.
+        let Some(email) = contact.email.clone() else {
+            self.error = Some(self.labels.contact_missing_email.clone());
+            return;
+        };
         if self.recipients.iter().any(|r| r.email.eq_ignore_ascii_case(&email)) {
             return;
         }
@@ -431,12 +591,13 @@ impl EsignDialog {
             expires: None,
         };
         if self.draft_idempotency_key.is_none() {
-            self.draft_idempotency_key = Some(format!("esign-{}-{}", self.document_id, self.seq.saturating_add(1)));
+            self.draft_idempotency_key = Some(format!("esign-{}-{}", self.document_id, fresh_send_id()));
         }
         let idempotency_key = self.draft_idempotency_key.clone().unwrap_or_default();
         self.busy = true;
         self.error = None;
         self.send_out = Some(SendRequest { draft, idempotency_key });
+        self.pending_send_context = Some(self.current_context());
     }
 
     /// Draw the dialog when open. Call every frame (even when closed) so
@@ -478,6 +639,13 @@ impl EsignDialog {
         if let Some(env) = self.envelope.clone() {
             self.status_panel(ui, &env);
             return;
+        }
+
+        if !self.linked {
+            // Send is disabled below without saying why; the compose form is
+            // the one place an unlinked user sees before reaching it.
+            ui.label(&self.labels.sign_in_first);
+            ui.add_space(4.0);
         }
 
         ui.label(RichText::new(&self.document_title).strong());
@@ -562,18 +730,21 @@ impl EsignDialog {
                 && let Some(r) = env.recipients.iter().find(|r| r.status == RecipientStatus::Pending)
             {
                 self.busy = true;
-                let _ = self.submit_in_context(Request::Remind { envelope: env.id.clone(), recipient: r.id.clone() });
+                let seq = self.submit_in_context(Request::Remind { envelope: env.id.clone(), recipient: r.id.clone() });
+                self.pending_op_seq = Some(seq);
             }
             if caps.contains(&EsignCapability::Void)
                 && env.status == EnvelopeStatus::Sent
                 && ui.add_enabled(!self.busy, egui::Button::new(&self.labels.void)).clicked()
             {
                 self.busy = true;
-                let _ = self.submit_in_context(Request::Void { envelope: env.id.clone(), reason: "voided by sender".into() });
+                let seq = self.submit_in_context(Request::Void { envelope: env.id.clone(), reason: "voided by sender".into() });
+                self.pending_op_seq = Some(seq);
             }
             if env.status == EnvelopeStatus::Completed && ui.add_enabled(!self.busy, egui::Button::new(&self.labels.download)).clicked() {
                 self.busy = true;
-                let _ = self.submit_in_context(Request::Completed { envelope: env.id.clone() });
+                let seq = self.submit_in_context(Request::Completed { envelope: env.id.clone() });
+                self.pending_op_seq = Some(seq);
             }
             if ui.button(&self.labels.close).clicked() {
                 self.open = false;
@@ -581,7 +752,9 @@ impl EsignDialog {
         });
         if ui.button("Refresh status").clicked() {
             self.busy = true;
-            let _ = self.submit_in_context(Request::Status { envelope: env.id.clone() });
+            let seq = self.submit_in_context(Request::Status { envelope: env.id.clone() });
+            self.pending_op_seq = Some(seq);
+            self.status_seq = seq;
         }
     }
 }
@@ -644,5 +817,90 @@ mod tests {
         let req = dialog.take_send_request().expect("send");
         assert_eq!(req.draft.recipients.len(), 1);
         assert_eq!(req.draft.recipients[0].email, "bob@example.com");
+    }
+
+    /// The texts egui drew, walking into `Shape::Vec` groups the way widgets nest them. Same
+    /// pattern as `docking::native_tests::texts`.
+    fn texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
+                egui::Shape::Text(text) => out.push(text.galley.text().to_owned()),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        shapes.iter().for_each(|clipped| walk(&clipped.shape, &mut out));
+        out
+    }
+
+    #[test]
+    fn compose_form_shows_sign_in_message_when_not_linked() {
+        let mut dialog = EsignDialog {
+            capabilities: Some(vec![EsignCapability::Envelopes]),
+            document_title: "A.pdf".into(),
+            linked: false,
+            ..Default::default()
+        };
+        let ctx = Context::default();
+        let full = ctx.run_ui(egui::RawInput::default(), |ui| dialog.ui(ui));
+        let shown = texts(&full.shapes);
+        assert!(shown.iter().any(|t| t == &dialog.labels.sign_in_first), "sign-in message not shown for an unlinked account: {shown:?}");
+    }
+
+    fn ada() -> Identity {
+        Identity { id: "u".into(), display: "Ada".into(), email: Some("ada@example.com".into()), avatar: None }
+    }
+
+    fn placement() -> FieldPlacement {
+        FieldPlacement { role: "Signer".into(), page: 0, x: 0.1, y: 0.2, w: 0.3, h: 0.05, kind: "signature".into(), required: true }
+    }
+
+    #[test]
+    fn add_contact_rejects_a_contact_with_no_email() {
+        let mut dialog = EsignDialog::default();
+        let contact =
+            Contact { id: "share-id-123".into(), target: craft_cloud::ShareTarget::User("share-id-123".into()), name: "Mallory".into(), email: None, avatar: None, is_group: false };
+        dialog.add_contact(contact);
+        assert!(dialog.recipients.is_empty(), "a contact with no email became a recipient: {:?}", dialog.recipients);
+        assert_eq!(dialog.error.as_deref(), Some(dialog.labels.contact_missing_email.as_str()));
+    }
+
+    #[test]
+    fn set_placements_invalidates_the_idempotency_key() {
+        let mut dialog = EsignDialog { linked: true, sender: Some(ada()), ..Default::default() };
+        dialog.add_email("bob@example.com".into());
+        dialog.queue_send();
+        let first = dialog.take_send_request().expect("first send").idempotency_key;
+
+        dialog.set_placements(vec![placement()]);
+        dialog.queue_send();
+        let second = dialog.take_send_request().expect("second send").idempotency_key;
+
+        assert_ne!(first, second, "changing placements kept the old idempotency key: {first}");
+    }
+
+    #[test]
+    fn placements_do_not_survive_a_document_change() {
+        let mut dialog = EsignDialog::default();
+        dialog.open("doc-A".into(), "A.pdf".into(), None, ada());
+        dialog.set_placements(vec![placement()]);
+
+        dialog.open("doc-B".into(), "B.pdf".into(), None, ada());
+
+        assert!(dialog.placements.is_empty(), "doc-B inherited doc-A's placements: {:?}", dialog.placements);
+    }
+
+    #[test]
+    fn queue_send_keys_are_unique_across_dialog_instances() {
+        fn send_key(doc: &str) -> String {
+            let mut dialog = EsignDialog { linked: true, sender: Some(ada()), document_id: doc.into(), ..Default::default() };
+            dialog.add_email("bob@example.com".into());
+            dialog.queue_send();
+            dialog.take_send_request().expect("send").idempotency_key
+        }
+        let a = send_key("doc-A");
+        let b = send_key("doc-A");
+        assert_ne!(a, b, "two fresh dialog instances for the same document produced the same idempotency key: {a}");
     }
 }
