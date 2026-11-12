@@ -57,7 +57,7 @@ pub const BAR: PartKey = PartKey::new("bar");
 /// The chords the editor claims while it is focused.
 const EASY_EASE: Chord = Chord::new(Mods::NONE, Key::F9);
 const EASY_EASE_IN: Chord = Chord::new(Mods::SHIFT, Key::F9);
-const EASY_EASE_OUT: Chord = Chord::new(Mods { cmd: true, ctrl: false, alt: false, shift: true }, Key::F9);
+const EASY_EASE_OUT: Chord = Chord::new(Mods { cmd: false, ctrl: true, alt: false, shift: true }, Key::F9);
 const CLAIMED: [Chord; 3] = [EASY_EASE, EASY_EASE_IN, EASY_EASE_OUT];
 
 craft_ui::words! {
