@@ -125,8 +125,9 @@ pub struct CardEvents {
 /// The column lists of story grids, by count.
 static COLUMNS: [ColumnWidth; 4] = [ColumnWidth::fill(1.0); 4];
 
-/// The columns of a form-rows card: the captions, the stories, then the values they show.
-const FORM_ROWS: &[ColumnWidth] = &[ColumnWidth::Content, ColumnWidth::fill(1.0), ColumnWidth::Content];
+/// The columns of a form-rows card: the captions, the stories, then the values they show. The stories' column is as
+/// wide as its widest story, so each value sits a gap past its control, as the old gallery showed it.
+const FORM_ROWS: &[ColumnWidth] = &[ColumnWidth::Content, ColumnWidth::Content, ColumnWidth::fill(1.0)];
 
 impl Card<'_> {
     /// Shows the card in the room `ui` offers, with the states of its stories.
