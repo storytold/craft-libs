@@ -25,6 +25,19 @@
 //! | `dng` | Adobe DNG: uncompressed (any depth, packed), lossless JPEG, lossy JPEG, Deflate (integer and floating point), strips and tiles, CFA and LinearRaw, DNG 1.7 interleaved storage; reading and writing |
 //! | `jxl` | JPEG XL compressed DNG (DNG 1.7, compression 52546) through `jxl-oxide`; implies `dng` |
 //! | `crw` | Canon CRW (CIFF), decoded by `craft-crw` and returned through this crate's types |
+//! | `cr2` | Canon CR2: the sliced lossless-JPEG mosaic, and sRAW / mRAW (subsampled YCbCr) as linear RGB |
+//! | `mrw` | Minolta / Konica Minolta MRW: 12-bit packed and 16-bit word mosaics in the `\0MRM` block container |
+//! | `erf` | Epson ERF (R-D1 family): 12-bit samples in 16-byte blocks |
+//! | `mef` | Mamiya MEF (ZD): uncompressed 12-bit packed |
+//! | `kodak` | Kodak DCS520C TIFF: two-component lossless JPEG with a response curve |
+//! | `nef` | Nikon NEF and NRW: uncompressed, packed, Nikon's Huffman coding (lossless and lossy, 12 and 14 bits), small raw |
+//! | `rw2` | Panasonic RW2, Leica RWL and the older Panasonic / Leica RAW: packed, formats 4 and 6, format 8 prefix-coded strips, 16-bit words |
+//! | `raf` | Fujifilm RAF: uncompressed Bayer and X-Trans, Fujifilm's lossless and lossy compression, lens corrections |
+//! | `orf` | Olympus / OM System ORF: uncompressed 16-bit, 12-bit packed and two-field layouts, 16-byte blocks; compressed refused |
+//! | `arw` | Sony ARW (and SR2 / SRF containers): uncompressed, ARW2, lossless JPEG tiles, ARW6, the encrypted SR2SubIFD, lens corrections |
+//! | `cr3` | Canon CR3: CRX lossless Bayer and C-RAW (lossy), through craft-metadata's CR3 container |
+//! | `pef` | Pentax PEF: uncompressed (packed or 16-bit words) and Pentax's Huffman coding (compression 65535) |
+//! | `srw` | Samsung SRW: the uncompressed variants (compression 32769 words, 32770 at 12 bits packed) |
 //! | `hasselblad` | Hasselblad 3FR and FFF (and other CFA TIFFs in the DNG layout without a DNG version): uncompressed and Hasselblad's lossless JPEG; implies `dng` |
 //!
 //! [`probe`] names every container it can tell apart whatever the features; [`RawFormat::is_supported`] says
@@ -43,24 +56,84 @@
 //! and from observation of files. No other raw decoder's source was consulted; see `README.md`.
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "cr2")]
+mod cr2;
+#[cfg(feature = "cr3")]
+mod cr3;
 #[cfg(feature = "crw")]
 mod crw;
+#[cfg(feature = "cr3")]
+mod crx;
+#[cfg(feature = "cr3")]
+mod crx_wavelet;
 #[cfg(feature = "dng")]
 mod dng;
 #[cfg(feature = "dng")]
 pub mod dngwrite;
+#[cfg(feature = "erf")]
+mod erf;
 pub mod gaintable;
 #[cfg(feature = "hasselblad")]
 mod hasselblad;
+// (the Huffman difference decoder Pentax, Nikon, Panasonic and Sony codings share)
+#[cfg(feature = "arw")]
+mod arw;
+#[cfg(feature = "arw")]
+mod arw6;
+#[cfg(feature = "arw")]
+mod arw6_curve;
+#[cfg(all(test, feature = "arw"))]
+mod arw6_testenc;
+#[cfg(feature = "arw")]
+mod arw_lens;
+#[cfg(feature = "arw")]
+mod arw_lens_rm6;
+#[allow(dead_code)]
+mod huffman;
 #[cfg(feature = "jxl")]
 mod jxl;
+pub mod kelvin;
+#[cfg(feature = "kodak")]
+mod kodak;
+pub mod lens_metadata;
 pub mod ljpeg;
+#[cfg(feature = "arw")]
+mod llvc;
+#[cfg(feature = "mef")]
+mod mef;
+#[cfg(feature = "mrw")]
+pub mod mrw;
+#[cfg(feature = "nef")]
+mod nef;
+#[cfg(feature = "nef")]
+mod nef_lens;
+#[cfg(feature = "nef")]
+mod nefc;
 pub mod opcodes;
+#[cfg(feature = "orf")]
+mod orf;
+#[cfg(feature = "pef")]
+mod pef;
 mod preview;
 pub mod profile;
+#[cfg(feature = "raf")]
+mod raf;
+#[cfg(feature = "raf")]
+mod raf_lens;
+#[cfg(feature = "raf")]
+mod rafc;
+#[cfg(feature = "rw2")]
+mod rw2;
 #[cfg(feature = "dng")]
 pub mod semantic;
+pub mod sparse;
+#[cfg(feature = "arw")]
+mod sr2;
 // (the TIFF pixel plumbing every TIFF-based maker shares; DNG is its only user so far)
+#[allow(dead_code)] // each maker uses some of these helpers; which are live depends on the features
+mod shared;
+#[cfg(feature = "srw")]
+mod srw;
 #[cfg_attr(not(feature = "dng"), allow(dead_code))]
 mod tiffraw;
 #[cfg_attr(not(feature = "dng"), allow(dead_code))]
@@ -68,8 +141,14 @@ mod unpack;
 
 #[cfg(feature = "dng")]
 pub use dngwrite::{DngCompression, DngWriteOptions, write_dng};
+pub use lens_metadata::LensMetadata;
 pub use opcodes::{Opcode, OpcodeLists};
-pub use preview::{PreviewColorSpace, embedded_preview, embedded_preview_color_space, embedded_preview_covering};
+#[cfg(feature = "arw")]
+pub use preview::embedded_preview_dynamic_range_optimized;
+pub use preview::{
+    PREVIEW_PREFIX, PreviewColorSpace, PreviewRange, bounded_preview, embedded_preview, embedded_preview_color_space, embedded_preview_covering,
+    embedded_preview_from_range,
+};
 #[cfg(feature = "dng")]
 pub use semantic::{SemanticMask, semantic_masks};
 
@@ -163,7 +242,7 @@ pub(crate) fn checked_pixel_count(width: u64, height: u64) -> Option<u64> {
 }
 
 /// Exif `CFAPattern` (in the Exif IFD), which the Pentax family states its layout with.
-const EXIF_CFA_PATTERN: u16 = 0xa302;
+pub(crate) const EXIF_CFA_PATTERN: u16 = 0xa302;
 
 /// How the stored rows and columns map onto the upright picture: the eight Exif `Orientation` values.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -296,6 +375,19 @@ impl RawFormat {
         (self == RawFormat::Dng && cfg!(feature = "dng"))
             || (self == RawFormat::Crw && cfg!(feature = "crw"))
             || (self == RawFormat::CfaTiff && cfg!(feature = "hasselblad"))
+            || (self == RawFormat::KodakDcs && cfg!(feature = "kodak"))
+            || (self == RawFormat::Mrw && cfg!(feature = "mrw"))
+            || (self == RawFormat::Erf && cfg!(feature = "erf"))
+            || (self == RawFormat::Mef && cfg!(feature = "mef"))
+            || (self == RawFormat::Cr2 && cfg!(feature = "cr2"))
+            || (matches!(self, RawFormat::Nef | RawFormat::Nrw) && cfg!(feature = "nef"))
+            || (self == RawFormat::Rw2 && cfg!(feature = "rw2"))
+            || (self == RawFormat::Raf && cfg!(feature = "raf"))
+            || (self == RawFormat::Orf && cfg!(feature = "orf"))
+            || (self == RawFormat::Arw && cfg!(feature = "arw"))
+            || (self == RawFormat::Cr3 && cfg!(feature = "cr3"))
+            || (self == RawFormat::Pef && cfg!(feature = "pef"))
+            || (self == RawFormat::Srw && cfg!(feature = "srw"))
     }
 }
 
@@ -369,6 +461,18 @@ pub fn probe(bytes: &[u8]) -> Option<RawFormat> {
     }
     if make.starts_with("SAMSUNG") && samsung_raw {
         return Some(RawFormat::Srw);
+    }
+    #[cfg(feature = "erf")]
+    if erf::raw_ifd(&t, bytes.len()).is_some() {
+        return Some(RawFormat::Erf);
+    }
+    #[cfg(feature = "mef")]
+    if mef::raw_ifd(&t, bytes.len()).is_some() {
+        return Some(RawFormat::Mef);
+    }
+    #[cfg(feature = "kodak")]
+    if kodak::raw_ifd(&t, bytes).is_some() {
+        return Some(RawFormat::KodakDcs);
     }
     #[cfg(feature = "dng")]
     if dng::is_plain_cfa_tiff(&t, bytes) {
@@ -549,6 +653,17 @@ pub(crate) enum Mode {
 
 #[cfg_attr(not(any(feature = "dng", feature = "crw")), allow(unused_variables))]
 fn decode_in(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawImage> {
+    let mut raw = decode_format(bytes, mode, limits)?;
+    if mode == Mode::Header {
+        // the samples weren't read, so no source a decoder reported for a measured level holds
+        raw.level_sources = LevelSources::default();
+    }
+    Ok(raw)
+}
+
+fn decode_format(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawImage> {
+    // (unused when every format feature is off)
+    let _ = (mode, limits);
     match probe(bytes).ok_or(RawError::NotRaw)? {
         #[cfg(feature = "dng")]
         RawFormat::Dng => dng::decode(bytes, mode, limits),
@@ -556,6 +671,32 @@ fn decode_in(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawImage> {
         RawFormat::Crw => crw::decode(bytes, mode, limits),
         #[cfg(feature = "hasselblad")]
         RawFormat::CfaTiff => hasselblad::decode(bytes, mode, limits),
+        #[cfg(feature = "kodak")]
+        RawFormat::KodakDcs => kodak::decode(bytes, mode, limits),
+        #[cfg(feature = "mrw")]
+        RawFormat::Mrw => mrw::decode(bytes, mode, limits),
+        #[cfg(feature = "erf")]
+        RawFormat::Erf => erf::decode(bytes, mode, limits),
+        #[cfg(feature = "mef")]
+        RawFormat::Mef => mef::decode(bytes, mode, limits),
+        #[cfg(feature = "cr2")]
+        RawFormat::Cr2 => cr2::decode(bytes, mode, limits),
+        #[cfg(feature = "nef")]
+        RawFormat::Nef | RawFormat::Nrw => nef::decode(bytes, mode, limits),
+        #[cfg(feature = "rw2")]
+        RawFormat::Rw2 => rw2::decode(bytes, mode, limits),
+        #[cfg(feature = "raf")]
+        RawFormat::Raf => raf::decode(bytes, mode, limits),
+        #[cfg(feature = "orf")]
+        RawFormat::Orf => orf::decode(bytes, mode, limits),
+        #[cfg(feature = "arw")]
+        RawFormat::Arw => arw::decode(bytes, mode, limits),
+        #[cfg(feature = "cr3")]
+        RawFormat::Cr3 => cr3::decode(bytes, mode, limits),
+        #[cfg(feature = "pef")]
+        RawFormat::Pef => pef::decode(bytes, mode, limits),
+        #[cfg(feature = "srw")]
+        RawFormat::Srw => srw::decode(bytes, mode, limits),
         RawFormat::OtherTiff => Err(RawError::Unsupported(other_tiff_reason(bytes))),
         other => Err(RawError::Unsupported(format!("{other:?} files are not decoded by this build"))),
     }
@@ -582,6 +723,10 @@ pub struct RawInfo {
     /// CinemaDNG frame tags (empty for a still).
     #[serde(default)]
     pub cinema: CinemaTags,
+    /// Lens-correction tables the file records, decoded but not necessarily applied (see [`lens_metadata`]); only
+    /// validated components are in `opcodes`.
+    #[serde(default)]
+    pub lens_metadata: LensMetadata,
     /// See [`RawImage::pixel_aspect`].
     #[serde(default = "square_pixels")]
     pub pixel_aspect: f32,
@@ -769,6 +914,35 @@ impl BlackLevel {
     }
 }
 
+/// Where a black or white level came from. Rendering ignores it; code that compares or stacks frames can refuse
+/// a [`LevelSource::Fallback`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum LevelSource {
+    /// The decoder doesn't say (every decoder that hasn't been annotated yet).
+    #[default]
+    Unknown,
+    /// Stated by the file: a tag, a maker note or a table.
+    Metadata,
+    /// Measured from the file's masked (optical black) samples.
+    MaskedPixels,
+    /// Inferred from the picture samples, e.g. a saturation plateau.
+    Inferred,
+    /// Neither read from the file nor measured from it: a default (0 or a format constant for black, the full bit
+    /// range or a format constant for white). Not necessarily wrong: a frame with no clipped highlights has no
+    /// saturation plateau to find.
+    Fallback,
+}
+
+/// The [`LevelSource`] of a [`RawImage`]'s black and white levels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct LevelSources {
+    /// Where [`RawImage::black`] came from.
+    pub black: LevelSource,
+    /// Where [`RawImage::white`] came from.
+    pub white: LevelSource,
+}
+
 /// DNG colour tags (DNG 1.7 chapter 6). Matrices are 3×3 (three-colour cameras).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ColorData {
@@ -795,6 +969,10 @@ pub struct ColorData {
     /// `ProfileGainTableMap*`, as data: the develop pipeline applies them, and a DNG export writes them back.
     #[serde(default)]
     pub profile: profile::ProfileLook,
+    /// The camera's white-balance presets at stated temperatures (Canon CR2), which give a raw without colour
+    /// matrices a Kelvin scale ([`kelvin`]). Not a DNG tag: the DNG writer does not write it.
+    #[serde(default)]
+    pub kelvin_presets: Option<kelvin::KelvinPresets>,
 }
 
 /// A decoded raw image.
@@ -833,6 +1011,14 @@ pub struct RawImage {
     /// CinemaDNG frame tags (empty for a still).
     #[serde(default)]
     pub cinema: CinemaTags,
+    /// Lens-correction tables the file records, decoded but not necessarily applied (see [`lens_metadata`]); only
+    /// validated components are in `opcodes`.
+    #[serde(default)]
+    pub lens_metadata: LensMetadata,
+    /// Where `black` and `white` came from. Both [`LevelSource::Unknown`] after a headers-only decode, whose
+    /// measured levels are placeholders.
+    #[serde(default)]
+    pub level_sources: LevelSources,
 }
 
 impl RawImage {
@@ -853,6 +1039,7 @@ impl RawImage {
             opcodes: self.opcodes.clone(),
             camera: self.camera.clone(),
             cinema: self.cinema.clone(),
+            lens_metadata: self.lens_metadata.clone(),
             pixel_aspect: self.pixel_aspect,
         }
     }
@@ -874,6 +1061,7 @@ impl RawImage {
             opcodes: self.opcodes,
             camera: self.camera,
             cinema: self.cinema,
+            lens_metadata: self.lens_metadata,
             pixel_aspect: self.pixel_aspect,
         }
     }

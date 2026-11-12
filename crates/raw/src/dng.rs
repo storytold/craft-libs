@@ -125,6 +125,7 @@ pub(crate) fn color_data(ifd0: &Ifd, raw: &Ifd, order: ByteOrder) -> ColorData {
         // DNG 1.7 BaselineSharpness (IFD 0 or the enhanced IFD); implausible values are ignored
         baseline_sharpness: get(t::BASELINE_SHARPNESS).and_then(|v| v.first().copied()).filter(|v| v.is_finite() && *v > 0.0 && *v <= 16.0),
         profile: profile_look(ifd0, raw, order),
+        kelvin_presets: None,
     }
 }
 
@@ -440,6 +441,8 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
         opcodes,
         camera: Camera::from_ifd0(ifd0),
         cinema: cinema_tags(ifd0, raw),
+        lens_metadata: Default::default(),
+        level_sources: Default::default(),
     };
     img.validate_for(mode)?;
     Ok(img)

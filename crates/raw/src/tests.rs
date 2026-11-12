@@ -47,6 +47,8 @@ fn an_active_area_that_wraps_past_the_image_is_corrupt() {
         opcodes: OpcodeLists::default(),
         camera: Camera::default(),
         cinema: Default::default(),
+        lens_metadata: Default::default(),
+        level_sources: Default::default(),
         pixel_aspect: 1.0,
     };
     assert!(raw.validate().is_err(), "`x + width` wrapped: the area is outside the image");
@@ -207,7 +209,8 @@ fn private_containers_are_recognised_by_their_magic() {
     assert_eq!(probe(b"FOVb\x02\0\x02\0"), Some(RawFormat::X3f));
     assert_eq!(RawFormat::Crw.is_supported(), cfg!(feature = "crw"));
     assert!(RawFormat::Dng.is_supported());
-    assert!(!RawFormat::Mrw.is_supported() && !RawFormat::X3f.is_supported());
+    assert_eq!(RawFormat::Mrw.is_supported(), cfg!(feature = "mrw"));
+    assert!(!RawFormat::X3f.is_supported());
     // a CRW signature with no heap behind it is corrupt, not a panic
     #[cfg(feature = "crw")]
     assert!(matches!(decode(b"II\x1a\0\0\0HEAPCCDR\0\0"), Err(RawError::Corrupt(_))));

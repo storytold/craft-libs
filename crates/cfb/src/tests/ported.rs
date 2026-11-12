@@ -702,3 +702,14 @@ fn special_values_in_every_field_never_panic() {
         }
     }
 }
+
+#[test]
+fn strict_root_validation_rejects_a_loop_beyond_declared_mini_stream() {
+    let data = pattern(100, 1);
+    let mut file = foreign_file(&[("Small", &data)]);
+    let root = dir_at(&file, 0);
+    let start = u32::from_le_bytes(file[root + 116..root + 120].try_into().unwrap());
+    put_u32(&mut file, 512 + start as usize * 4, start);
+    let cf = CompoundFile::open(&file).unwrap();
+    assert!(cf.validate_root_chain().is_err());
+}
