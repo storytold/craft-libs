@@ -288,11 +288,19 @@ impl<C: Component> ShapeHooks<C> for LeafHooks {
 
     fn sized(&self, comp: &C, ui: &Ui, id: Id, size: Vec2) -> Vec2 {
         let room = crate::layout::flow_fill_room(ui);
-        // The line height of a content-height row is not known inside `sized` (the other children have not run), so a
-        // child that fills across it keeps its measured size there.
-        let content = Env::of(ui).content;
+        // Along an axis the enclosing body sizes from its content, a child that fills keeps its measured size, so it
+        // never sets that size. Across an unwrapped row's line it is shown across the line the row settled on in its
+        // measuring run, where the child measured at its own size.
+        let env = Env::of(ui);
+        let (content, line) = (env.content, env.row_line);
         let fill = |measured: f32, offered: f32, content: bool, along: craft_behavior::Axis| {
-            if !offered.is_finite() || content {
+            if content {
+                return match (along, line) {
+                    (craft_behavior::Axis::Y, Some(line)) => measured.max(line),
+                    _ => measured,
+                };
+            }
+            if !offered.is_finite() {
                 return measured;
             }
             match crate::layout::main_fill(ui, id, along) {
