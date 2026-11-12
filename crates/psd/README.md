@@ -23,6 +23,8 @@ A standalone reader and writer for Adobe Photoshop **PSD** (version 1) and **PSB
 PsdFile::from_bytes(&[u8]) -> Result<PsdFile>
 PsdFile::from_bytes_and_merged(&[u8], want) -> Result<(PsdFile, Option<Result<Vec<u8>>>)>
                                             // + decode_merged() when want(&file): ZIP inflated once
+PsdFile::from_bytes_salvaging(&[u8]) -> Result<(PsdFile, Option<PsdError>)>  // damaged layers: flattened, with the skipped error
+PsdFile::composite_f32() / layer_f32(i, canvas) -> Result<FloatImage>   // straight RGBA f32, every mode and depth, within a budget
 PsdFile::from_source(Source) -> Result<PsdFile>   // channel data and merged image left in the source
 PsdFile::from_source_and_merged_recovering(Source, want, recover)
 PsdFile::to_bytes(&self) -> Result<Vec<u8>>

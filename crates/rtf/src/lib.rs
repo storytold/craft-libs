@@ -33,6 +33,8 @@ pub mod codepage;
 mod date;
 mod lex;
 mod model;
+#[cfg(feature = "outlook")]
+pub mod outlook;
 mod read;
 mod text;
 mod write;
