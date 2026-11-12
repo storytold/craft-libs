@@ -24,6 +24,9 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod model;
+#[cfg(test)]
+mod model_tests;
 #[cfg(test)]
 mod tests;
 
@@ -245,6 +248,13 @@ impl<'b> Archive<'b> {
             .cloned()
             .collect();
         if found.len() > max { Err(found.into_iter().take(max).collect()) } else { Ok(found) }
+    }
+
+    /// JSON member `path` read as a record of [`model`] (or any type serde reads), within the
+    /// same budgets as [`Self::json`]. A field of the wrong type fails the read.
+    pub fn typed<T: serde::de::DeserializeOwned>(&mut self, path: &str) -> Result<T, Error> {
+        let value = self.json(path)?;
+        serde_json::from_value(value).map_err(|e| corrupt(format!("{path}: {e}")))
     }
 
     /// JSON member `path`, within [`MAX_JSON`] and the archive's budgets.

@@ -19,9 +19,13 @@ pub fn pt(e: &El, name: &str) -> Option<f64> {
     e.attr_local(name).and_then(value::to_i64_lossy).map(emu_to_pt)
 }
 
-/// 1/100 000 → fraction.
+/// 1/100 000 → fraction. Strict OOXML writes a percentage as `50%`.
 pub fn pct(e: &El, name: &str) -> Option<f64> {
-    e.attr_local(name).and_then(value::to_f64).map(|v| v / 100_000.0)
+    let v = e.attr_local(name)?.trim();
+    match v.strip_suffix('%') {
+        Some(p) => value::to_f64(p).map(|v| v / 100.0),
+        None => value::to_f64(v).map(|v| v / 100_000.0),
+    }
 }
 
 fn bullet_size_points(value: Option<&str>) -> Option<f64> {
@@ -51,11 +55,11 @@ pub fn color_el(c: &El) -> Option<ColorRef> {
         "schemeClr" => ColorBase::Scheme { slot: c.attr_local("val").and_then(SchemeSlot::from_xml).unwrap_or(SchemeSlot::Tx1) },
         "sysClr" => ColorBase::System {
             name: c.attr_local("val").unwrap_or("windowText").to_string(),
-            last: c.attr_local("lastClr").and_then(Rgba::from_hex).unwrap_or(if c.attr_local("val") == Some("window") {
-                Rgba::WHITE
-            } else {
-                Rgba::BLACK
-            }),
+            last: c
+                .attr_local("lastClr")
+                .and_then(Rgba::from_hex)
+                .or_else(|| c.attr_local("val").and_then(crate::color::system))
+                .unwrap_or(Rgba::BLACK),
         },
         "prstClr" => ColorBase::Preset { name: c.attr_local("val").unwrap_or("black").to_string() },
         "scrgbClr" => {
@@ -809,5 +813,13 @@ mod tests {
         assert_eq!(b.vert.map(|v| v.xml()), Some("mongolianVert"));
         let d = parse(br#"<a:bodyPr vert="wordArtVertRtl"/>"#).unwrap();
         assert_eq!(body_pr(&d).vert.map(|v| v.xml()), Some("wordArtVertRtl"));
+    }
+
+    #[test]
+    fn percentages_read_in_either_spelling() {
+        let d = parse(br#"<a:custDash xmlns:a="x"><a:ds d="400000" sp="300%"/><a:ds d="12.5%" sp="x"/></a:custDash>"#).unwrap();
+        let ds: Vec<_> = d.children(Local("ds")).collect();
+        assert_eq!((pct(ds[0], "d"), pct(ds[0], "sp")), (Some(4.0), Some(3.0)));
+        assert_eq!((pct(ds[1], "d"), pct(ds[1], "sp")), (Some(0.125), None));
     }
 }

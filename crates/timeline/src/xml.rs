@@ -1,6 +1,7 @@
 //! XML for the xmeml and FCPXML modules: bounded reading and pretty writing through craft-xml,
 //! with the small node view their readers are written against.
 
+pub(crate) use craft_xml::esc_attr as escape_attr;
 use craft_xml::{Doctype, El, Limits, Options, UnknownEntity};
 
 /// The reader's limits: craft-xml's defaults, which stop a document at 256 levels of nesting

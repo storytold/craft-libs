@@ -11,7 +11,7 @@ use craft_timeline::model::{
     TransitionId, VideoStreamInfo,
 };
 use craft_timeline::time::{FrameRate, TICKS_PER_SECOND, Tick, TimeRange};
-use craft_timeline::{ExportOptions, ImportOptions, Imported, Report, fcp7};
+use craft_timeline::{Error, ExportOptions, Format, ImportOptions, Imported, Report, fcp7, fcpxml};
 
 /// [`Standard`] and a few effects an application adds: a blur, a grade, two transitions.
 pub struct TestCatalog;
@@ -53,7 +53,7 @@ pub fn iopts(base_dir: Option<&str>) -> ImportOptions<'_> {
 }
 
 pub fn xopts() -> ExportOptions<'static> {
-    ExportOptions { relative_to: None, name: None, catalog: &TestCatalog, namespace: NS, xmeml_version: 4 }
+    ExportOptions { relative_to: None, name: None, catalog: &TestCatalog, namespace: NS, xmeml_version: 4, fcpxml_version: Default::default() }
 }
 
 pub fn instance(id: &str) -> EffectInstance {
@@ -297,4 +297,35 @@ pub fn only_seq(imp: &Imported) -> ItemId {
 
 pub fn f(rate: FrameRate, n: i64) -> Tick {
     rate.tick_of(n)
+}
+
+/// Import `bytes` as `format`, as an application does: text decoded, the catalog and namespace of these tests.
+pub fn import(bytes: &[u8], format: Format, base_dir: Option<&str>) -> Result<(Imported, Report), Error> {
+    let text = craft_timeline::decode_text(bytes);
+    let mut report = Report::default();
+    let opts = iopts(base_dir);
+    let imported = match format {
+        Format::Fcp7Xml => fcp7::import(&text, &opts, &mut report),
+        Format::Fcpxml => fcpxml::import(&text, &opts, &mut report),
+        _ => Err(Error::Other(format!("{} is not read here", format.name()))),
+    }?;
+    Ok((imported, report))
+}
+
+/// Export `seq` as `format`.
+pub fn export(p: &Project, seq: ItemId, format: Format, opts: &ExportOptions) -> Result<(Vec<u8>, Report), Error> {
+    let mut report = Report::default();
+    let text = match format {
+        Format::Fcp7Xml => fcp7::export(p, seq, opts, &mut report),
+        Format::Fcpxml => fcpxml::export(p, seq, opts, &mut report),
+        _ => Err(Error::Other(format!("{} is not written here", format.name()))),
+    }?;
+    Ok((text.into_bytes(), report))
+}
+
+pub fn roundtrip(p: &Project, seq: ItemId, format: Format, opts: &ExportOptions) -> (Imported, String, Report) {
+    let (bytes, _rep) = export(p, seq, format, opts).expect("export");
+    let text = String::from_utf8(bytes.clone()).unwrap();
+    let (imp, rep) = import(&bytes, format, None).unwrap_or_else(|e| panic!("import failed: {e}\n{text}"));
+    (imp, text, rep)
 }

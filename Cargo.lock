@@ -992,6 +992,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-crs"
+version = "0.1.0"
+dependencies = [
+ "craft-metadata",
+ "craft-xml",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-crw"
 version = "0.1.0"
 dependencies = [
@@ -1007,6 +1016,14 @@ name = "craft-csv"
 version = "0.1.0"
 dependencies = [
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-dav"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "proptest",
 ]
 
 [[package]]
@@ -1040,6 +1057,28 @@ dependencies = [
 [[package]]
 name = "craft-docpath"
 version = "0.1.0"
+
+[[package]]
+name = "craft-docx"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "craft-cfb",
+ "craft-offcrypto",
+ "craft-opc",
+ "craft-wordmodel",
+ "craft-xml",
+ "image",
+ "log",
+ "proptest",
+ "quick-xml 0.41.0",
+ "serde_json",
+ "thiserror 2.0.21",
+ "unicode-bidi",
+ "zeroize",
+ "zip",
+]
 
 [[package]]
 name = "craft-dpx"
@@ -1105,6 +1144,7 @@ name = "craft-exr"
 version = "0.1.0"
 dependencies = [
  "exr",
+ "flate2",
  "half",
  "serde_json",
  "thiserror 2.0.21",
@@ -1248,12 +1288,6 @@ dependencies = [
 name = "craft-html"
 version = "0.1.0"
 dependencies = [
- "craft-codepage",
- "craft-flow",
- "craft-math",
- "craft-mime",
- "craft-wordmodel",
- "encoding_rs",
  "proptest",
 ]
 
@@ -1547,6 +1581,8 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "bytemuck",
+ "craft-stream-codecs",
+ "flate2",
  "hayro",
  "hayro-cmap",
  "hayro-interpret",
@@ -1577,6 +1613,7 @@ name = "craft-penpot"
 version = "0.1.0"
 dependencies = [
  "craft-zip",
+ "serde",
  "serde_json",
  "thiserror 2.0.21",
  "zip",
@@ -1618,6 +1655,16 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-pptx"
+version = "0.1.0"
+dependencies = [
+ "craft-drawingml",
+ "kurbo 0.13.1",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1674,6 +1721,7 @@ dependencies = [
  "encoding_rs",
  "flate2",
  "proptest",
+ "rayon",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -1758,7 +1806,9 @@ dependencies = [
 name = "craft-sketch"
 version = "0.1.0"
 dependencies = [
+ "craft-figma-rest",
  "craft-zip",
+ "kurbo 0.13.1",
  "serde_json",
  "thiserror 2.0.21",
  "zip",
@@ -2001,6 +2051,9 @@ version = "0.1.0"
 dependencies = [
  "craft-cfb",
  "craft-sheet",
+ "md-5 0.10.6",
+ "miniz_oxide 0.9.1",
+ "sha1 0.10.7",
  "thiserror 2.0.21",
 ]
 
