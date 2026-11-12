@@ -626,7 +626,7 @@ impl<'a> Tx<'a> {
                     self.raw(pad.min(self.remaining()))?;
                 }
             }
-            b"FEid" | b"FXid" => self.filter_effects()?,
+            b"FEid" | b"FXid" | b"FELS" => self.filter_effects()?,
             b"lrFX" => self.legacy_effects()?,
             b"levl" => {
                 self.u16()?;

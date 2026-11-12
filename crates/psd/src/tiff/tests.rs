@@ -631,6 +631,29 @@ fn filter_effects_block() {
     assert_eq!(FilterEffects::parse(&back.global_blocks[0].data).unwrap(), fx);
 }
 
+/// `FELS` (the filter masks of linked smart objects) has the `FEid` layout: it is checked and
+/// byte-swapped the same way.
+#[test]
+fn linked_filter_masks_are_filter_effects() {
+    use crate::filter_effects::{EffectsPlane, FilterEffects, FilterEffectsItem};
+    let rect = crate::layer::Rect { top: 0, left: 0, bottom: 2, right: 3 };
+    let mask = EffectsPlane::encode(Compression::Raw, &[9; 6], 3, 2, 8).unwrap();
+    let item = FilterEffectsItem { id: "linked".into(), version: 1, rect, depth: 8, max_channels: 1, slots: vec![None, None, None], mask: Some((rect, mask)) };
+    let fx = FilterEffects { version: 1, items: vec![item] };
+    let data = fx.to_bytes();
+    let little = |key: [u8; 4]| {
+        let d = ImageSourceData { global_blocks: vec![TaggedBlock::new(key, data.clone())], ..Default::default() };
+        let (bytes, w) = d.to_bytes(ByteOrder::Little).unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        // After the 36-byte signature, the signature, key and length: the block data.
+        bytes[36 + 12..].to_vec()
+    };
+    assert_eq!(little(*b"FELS"), little(*b"FEid"));
+    block_rt(*b"FELS", data.clone());
+    assert!(TaggedBlock::new(*b"FELS", data.clone()).check_structure().is_ok());
+    assert!(TaggedBlock::new(*b"FELS", data[..data.len() - 1].to_vec()).check_structure().is_err());
+}
+
 /// Photoshop writes one `FEid` section per smart object: every section's lengths and
 /// numbers are swapped, not only the first one's.
 #[test]
