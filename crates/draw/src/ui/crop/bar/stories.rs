@@ -54,15 +54,15 @@ fn crop_bar_with_user_presets(ui: &mut Ui, data: &mut StoryData) -> StoryOutput 
 }
 
 #[story(CropOverlayMenu<'static>, covers = [], drive = Drive::Never)]
-fn crop_overlay_menu_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+fn crop_overlay_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let settings = data.value("overlay", CropSettings::default());
-    CropOverlayMenu::new(settings).opened().show(ui).into()
+    CropOverlayMenu::new(settings).show(ui).into()
 }
 
 #[story(CropOptionsMenu<'static>, covers = [], drive = Drive::Never)]
-fn crop_options_menu_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+fn crop_options_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let settings = data.value("options", CropSettings::default());
-    CropOptionsMenu::new(settings).opened().show(ui).into()
+    CropOptionsMenu::new(settings).show(ui).into()
 }
 
 #[story(CropOptionsMenu<'static>, covers = [], drive = Drive::Never)]
@@ -70,5 +70,5 @@ fn crop_options_menu_classic_mode(ui: &mut Ui, data: &mut StoryData) -> StoryOut
     let mut settings = CropSettings::default();
     settings.shield.classic_mode = true;
     let settings = data.value("classic", settings);
-    CropOptionsMenu::new(settings).opened().show(ui).into()
+    CropOptionsMenu::new(settings).show(ui).into()
 }
