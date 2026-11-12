@@ -1051,6 +1051,28 @@ name = "craft-docpath"
 version = "0.1.0"
 
 [[package]]
+name = "craft-docx"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "craft-cfb",
+ "craft-offcrypto",
+ "craft-opc",
+ "craft-wordmodel",
+ "craft-xml",
+ "image",
+ "log",
+ "proptest",
+ "quick-xml 0.41.0",
+ "serde_json",
+ "thiserror 2.0.21",
+ "unicode-bidi",
+ "zeroize",
+ "zip",
+]
+
+[[package]]
 name = "craft-dpx"
 version = "0.1.0"
 dependencies = [
@@ -1346,6 +1368,16 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-math"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1723,7 +1755,9 @@ dependencies = [
 name = "craft-sketch"
 version = "0.1.0"
 dependencies = [
+ "craft-figma-rest",
  "craft-zip",
+ "kurbo 0.13.1",
  "serde_json",
  "thiserror 2.0.21",
  "zip",

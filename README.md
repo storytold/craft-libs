@@ -78,6 +78,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   preview header (read and write), the DSC header comments and bounding boxes (also `(atend)`),
   the EPSI preview bitmap, ASCII85 data, and telling EPS, PostScript and Illustrator files
   (PostScript- or PDF-based) apart. No PostScript interpreter.
+- [`craft-docx`](crates/docx/README.md): DOCX (WordprocessingML) read and written on `craft-wordmodel`, with
+  Word XML (Flat OPC) and Word 2003 XML, password-protected packages and Restrict Editing hashes.
+  WordCraft's DOCX crate on `craft-opc`, `craft-xml` and `craft-offcrypto`.
 - [`craft-dxf`](crates/dxf/src/lib.rs): DXF tag reader and writer, from CADCraft: ASCII and
   binary DXF as (group code, value) tags, split into sections and entities, with pre-2007 code
   pages and version detection, and written back; and `model`, the drawing above the tags (header
@@ -204,6 +207,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-audio`](crates/audio/README.md): audio file I/O and codecs (WAV, AIFF, FLAC, AAC, Opus,
   AC-3/E-AC-3, MP1/MP2, MP3 encoding), streaming and seeking, and packet decoding for any demuxer. See its
   README for formats and features.
+- [`craft-math`](crates/math/README.md): equations as one tree (the Office Math object model) with its syntaxes, read and written: OMML, presentation MathML, LaTeX math and the UnicodeMath linear format.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
   (`isobmff`), Matroska/WebM (`matroska`) and MXF (`mxf`) demuxers and muxers, Ogg (`ogg`), AVI (`avi`) and
   MPEG-TS/PS (`mpegts`) demuxers, from FilmCraft, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
