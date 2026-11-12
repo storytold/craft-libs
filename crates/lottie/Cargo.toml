@@ -1,0 +1,15 @@
+[package]
+name = "craft-lottie"
+description = "Lottie (Bodymovin) JSON: the lottie-spec 1.0 document model with a bounded reader and a writer, animated properties and their keyframes, ease tangents, bezier paths, gradients, value coercions and embedded image data URIs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
+thiserror = { workspace = true }

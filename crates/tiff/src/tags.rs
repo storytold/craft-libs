@@ -44,6 +44,8 @@ pub const CFA_PATTERN_EP: u16 = 33422;
 pub const COPYRIGHT: u16 = 33432;
 pub const EXPOSURE_TIME_EP: u16 = 33434;
 pub const IPTC_NAA: u16 = 33723;
+/// Photoshop image resources embedded in TIFF tag 34377.
+pub const PHOTOSHOP_IMAGE_RESOURCES: u16 = 34377;
 pub const EXIF_IFD: u16 = 34665;
 pub const ICC_PROFILE: u16 = 34675;
 pub const GPS_IFD: u16 = 34853;
@@ -100,6 +102,8 @@ pub const GPS_ALTITUDE: u16 = 6;
 pub const GPS_TIME_STAMP: u16 = 7;
 pub const GPS_IMG_DIRECTION_REF: u16 = 16;
 pub const GPS_IMG_DIRECTION: u16 = 17;
+pub const GPS_DEST_LATITUDE: u16 = 20;
+pub const GPS_DEST_LONGITUDE: u16 = 22;
 pub const GPS_DATE_STAMP: u16 = 29;
 
 // --- DNG

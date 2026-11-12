@@ -1,7 +1,8 @@
 //! 3D mesh file formats behind one neutral model.
 //!
 //! Each format is a module behind a Cargo feature of the same name: [`stl`], [`obj`] (with MTL),
-//! [`ply`] and [`gltf`] (glTF 2.0 and GLB). A reader turns bytes into a [`Scene`]; a writer turns
+//! [`ply`], [`gltf`] (glTF 2.0 and GLB), [`fbx`] and [`threemf`] (3MF). A reader turns bytes into a [`Scene`]; a
+//! writer turns
 //! a [`Scene`] into bytes. Mapping a [`Scene`] onto an application's own mesh, body or document
 //! types is the caller's business, as are computing missing normals, tangents and UVs, welding,
 //! unit scaling and turning a file's up axis.
@@ -24,12 +25,18 @@
 //! (an OBJ material library, a glTF buffer or image) is listed in [`Scene::external`] and asked
 //! of the caller's [`Resolver`], which may decline.
 //!
-//! Depends on no other Craft crate.
+//! Depends on no other Craft crate, except that `threemf` opens its package with `craft-opc`
+//! and reads its XML with `craft-xml`.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 // The helpers the formats share are not all used by every subset of them.
-#![cfg_attr(not(all(feature = "stl", feature = "obj", feature = "ply", feature = "gltf")), allow(dead_code, unused_imports))]
+#![cfg_attr(
+    not(all(feature = "stl", feature = "obj", feature = "ply", feature = "gltf", feature = "fbx", feature = "threemf")),
+    allow(dead_code, unused_imports)
+)]
 
+#[cfg(feature = "fbx")]
+pub mod fbx;
 #[cfg(feature = "gltf")]
 pub mod gltf;
 #[cfg(feature = "obj")]
@@ -38,6 +45,8 @@ pub mod obj;
 pub mod ply;
 #[cfg(feature = "stl")]
 pub mod stl;
+#[cfg(feature = "threemf")]
+pub mod threemf;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -161,6 +170,8 @@ pub struct Part {
     pub material: Option<usize>,
     /// OBJ smoothing group; 0 is off.
     pub smoothing: u32,
+    /// This glTF primitive supplies tangents for its positions.
+    pub has_tangents: bool,
     /// Corners of each face, in order. Empty means every face is a triangle.
     pub face_sizes: Vec<u32>,
     /// The corners of all faces, one face after another.
@@ -205,6 +216,9 @@ pub struct Mesh {
     pub name: String,
     pub positions: Vec<[f64; 3]>,
     pub normals: Vec<[f64; 3]>,
+    /// Authored glTF tangents `[x, y, z, handedness]`, aligned with `positions`; empty when no
+    /// primitive supplies tangents. A part's [`Part::has_tangents`] distinguishes absent values.
+    pub tangents: Vec<[f64; 4]>,
     /// UV sets; every set has the same length and is indexed by [`Corner::uv`].
     pub uv_sets: Vec<Vec<[f32; 2]>>,
     /// RGBA per position (same length as `positions`), or empty.
@@ -246,10 +260,15 @@ impl Mesh {
         if self.uv_sets.iter().any(|s| s.len() != uvs) {
             return bad("UV sets differ in length");
         }
-        for (what, len) in [("colours", self.colors.len()), ("joints", self.joints.len()), ("weights", self.weights.len())] {
+        for (what, len) in
+            [("colours", self.colors.len()), ("tangents", self.tangents.len()), ("joints", self.joints.len()), ("weights", self.weights.len())]
+        {
             if len != 0 && len != self.positions.len() {
                 return bad(&format!("{what} do not match the positions"));
             }
+        }
+        if self.parts.iter().any(|p| p.has_tangents) && self.tangents.len() != self.positions.len() {
+            return bad("a part names tangents but the tangent array does not match the positions");
         }
         for p in &self.parts {
             let total = if p.face_sizes.is_empty() {
@@ -689,6 +708,33 @@ pub fn srgb_to_linear(c: f32) -> f32 {
 /// Linear component to sRGB-encoded.
 pub fn linear_to_srgb(c: f32) -> f32 {
     if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
+}
+
+/// Decode standard or URL-safe base64 (with or without padding; whitespace ignored).
+pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(s.len() / 4 * 3 + 3);
+    let mut acc = 0u32;
+    let mut bits = 0;
+    for c in s.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            b'=' => break,
+            b' ' | b'\n' | b'\r' | b'\t' => continue,
+            _ => return None,
+        };
+        acc = (acc << 6) | u32::from(v);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
 }
 
 /// Warnings that would repeat are counted and reported once.

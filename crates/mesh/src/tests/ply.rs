@@ -1,6 +1,6 @@
 use super::hammer;
 use crate::ply::{Encoding, Kind, MAX_ELEMENTS, MAX_PROPERTIES, Rows, Scalar, is_ply, parse_header, read};
-use crate::{Error, Limits, Scene};
+use crate::{Corner, Error, Limits, Scene};
 
 fn parse(bytes: &[u8]) -> crate::Result<Scene> {
     read(bytes, &Limits::default())
@@ -192,4 +192,38 @@ fn limits() {
     };
     assert!(parse(properties(MAX_PROPERTIES).as_bytes()).is_ok());
     assert!(too(parse(properties(MAX_PROPERTIES + 1).as_bytes())));
+}
+
+/// As MeshLab writes a textured mesh: the texture named in a comment, a `u v` per face corner.
+const WEDGE_UVS: &str = "ply\nformat ascii 1.0\ncomment TextureFile wood grain.png\nelement vertex 4\nproperty float x\nproperty float y\nproperty float z\n\
+property float s\nproperty float t\nelement face 3\nproperty list uchar int vertex_indices\nproperty list uchar float texcoord\nend_header\n\
+0 0 0 9 9\n1 0 0 9 9\n1 1 0 9 9\n0 1 0 9 9\n3 0 1 2 6 0 0 1 0 1 1\n3 0 2 3 6 0 0.25 1 1 0 1\n3 0 1 3 4 0 0 1 1\n";
+
+#[test]
+fn per_corner_texcoords_and_the_texture_file_comment() {
+    let s = parse(WEDGE_UVS.as_bytes()).unwrap();
+    s.validate().unwrap();
+    let mesh = &s.meshes[0];
+    // Vertex 0 has two coordinates, one per face: the faces' lists are the UV set (v flipped),
+    // not the vertices' `s t`. A list that does not fit its face is passed over.
+    assert_eq!(mesh.uv_sets, [vec![[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.75], [1.0, 0.0], [0.0, 0.0]]]);
+    let corners: Vec<Corner> =
+        [(0, 0), (1, 1), (2, 2), (0, 3), (2, 4), (3, 5)].map(|(position, uv)| Corner { position, normal: crate::NONE, uv }).to_vec();
+    assert_eq!(mesh.parts[0].corners, [corners, [0, 1, 3].map(Corner::at).to_vec()].concat());
+    // The comment names the image of a material; nothing is opened.
+    let material = &s.materials[mesh.parts[0].material.unwrap()];
+    assert_eq!(s.images[material.base_color_texture.unwrap().image].uri.as_deref(), Some("wood grain.png"));
+    assert_eq!(s.external, ["wood grain.png"]);
+    // Without either, the vertices' own coordinates and no material, as before.
+    let plain = WEDGE_UVS.replace("comment TextureFile wood grain.png\n", "").replace("texcoord", "other");
+    let s = parse(plain.as_bytes()).unwrap();
+    assert_eq!(
+        (s.materials.len(), s.meshes[0].uv_sets[0].len(), s.meshes[0].parts[0].corners[4]),
+        (0, 4, Corner { position: 2, normal: crate::NONE, uv: 2 })
+    );
+    // The coordinates count against the vertex limit, and a coordinate list may be twice a face.
+    let tight = |max_vertices, max_face_corners| read(WEDGE_UVS.as_bytes(), &Limits { max_vertices, max_face_corners, ..Limits::default() });
+    assert!(tight(6, 3).is_ok());
+    assert!(matches!(tight(5, 3), Err(Error::TooLarge(_))));
+    hammer(WEDGE_UVS.as_bytes(), &parse);
 }

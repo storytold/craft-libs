@@ -14,9 +14,14 @@ and command handling remain in each application. No icons, fonts or application 
 
 ## Host-owned docking chrome
 
-Iconic flyouts resize from their canvas-side edge, bottom and shared corner, keeping
-the edge against the icon column anchored. Resizing saves the group's `height`
-and `flyout_width`, so workspaces retain independent sizes for each group.
+Iconic flyouts resize from their canvas-side edge, top, bottom and the two
+canvas-side corners, keeping the edge against the icon column anchored. Resizing
+saves the group's `height` and `flyout_width`, and a top-edge resize saves
+`flyout_offset`, the top's distance from the group's icons, so workspaces retain
+independent sizes and placement for each group. Without an offset a flyout aligns
+with its icons, and a saved one stays inside the float bounds. The top handle is a
+4 pt band over the top of the tab strip (`FloatingFrame::top_handle_height`), so it is
+easy to grab while the rest of the strip keeps its clicks and drags.
 An explicit height overrides content fitting; untouched heights continue to fit
 content, including after a width-only drag. Layout locks and float bounds apply.
 
@@ -91,6 +96,8 @@ and is also suitable for GridCraft/DeckCraft dialogs and creative-app inspectors
 is separate; application-specific dialog behavior remains in each app.
 
 ## SVG catalogs
+
+For common Insert Shapes choices and previews, see [the shared shape gallery](docs/shape-gallery.md).
 
 ```rust
 use std::sync::OnceLock;
