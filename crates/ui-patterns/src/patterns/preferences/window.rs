@@ -18,9 +18,14 @@ use crate::sections::{DialogRole, FooterButton};
 use craft_behavior::{EditEvent, Mixed};
 use craft_i18n::matcher::Matcher;
 use craft_theme::variant::Tone;
-use egui::Ui;
+use egui::{Ui, Vec2, vec2};
 use std::cell::RefCell;
 use std::sync::Arc;
+
+/// The size the window opens at until the user resizes it.
+pub const DEFAULT_SIZE: Vec2 = vec2(1040.0, 800.0);
+/// The least size the window may be resized to.
+pub const MIN_SIZE: Vec2 = vec2(560.0, 400.0);
 
 /// What the window keeps between passes; the host owns it and binds it with [`PreferencesWindow::new`].
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -160,6 +165,7 @@ impl<'a> PreferencesWindow<'a> {
         let mut dialog = Dialog::new(title.clone())
             .collection_body()
             .resizable(true)
+            .overlay(|overlay| overlay.size(DEFAULT_SIZE).min_size(MIN_SIZE))
             .close_on_enter(can_ok)
             .on_pick(|button, cx| {
                 if button.role() == DialogRole::Other && !nested {

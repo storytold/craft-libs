@@ -27,4 +27,4 @@ mod body;
 mod rows;
 mod window;
 
-pub use window::{PreferencesState, PreferencesWindow};
+pub use window::{DEFAULT_SIZE, MIN_SIZE, PreferencesState, PreferencesWindow};

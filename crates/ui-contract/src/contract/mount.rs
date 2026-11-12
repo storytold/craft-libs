@@ -333,8 +333,12 @@ impl Host for ViewportHost {
         let open = ViewportOpen {
             id,
             title: title.as_str(),
-            // A placed rect is the caller's size for the window; the measured size is for a window sized by content.
-            size: placed.map(|rect| rect.size()).or_else(|| layout_memory::read(&ctx, id)),
+            // A placed rect is the caller's size for the window, then a resizable fallback's default size, as the layer
+            // takes it; the measured size is for a window sized by content.
+            size: placed
+                .map(|rect| rect.size())
+                .or(self.overlay.size.filter(|_| self.overlay.fit == overlay::OverlayFit::Resizable))
+                .or_else(|| layout_memory::read(&ctx, id)),
             save: self.save.as_deref(),
             spec: &spec,
             limits: (Some(self.overlay.size_limits.min), self.overlay.size_limits.max),
