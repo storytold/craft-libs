@@ -92,7 +92,17 @@ fn aaf_round_trips_the_edit_at_every_rate() {
             assert_eq!(sound.key, picture.key, "one media item");
             // what was read, written again, reads as the same edit (mob ids, and so source keys, are new)
             let again = read_clean(&aaf_bytes(&back, small), true);
-            assert_eq!((shape(&again), &again.compositions), (shape(&back), &back.compositions), "{rate}");
+            let without_ids = |doc: &Document| {
+                doc.compositions
+                    .iter()
+                    .cloned()
+                    .map(|mut c| {
+                        c.aaf_mob_id = None;
+                        c
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!((shape(&again), without_ids(&again)), (shape(&back), without_ids(&back)), "{rate}");
         }
     }
 }
@@ -214,4 +224,28 @@ fn a_composition_nested_in_itself_is_a_gap() {
     assert!(report.mentions("nested in itself"), "{report}");
     assert_eq!(back.nested.len(), 1);
     assert!(matches!(back.nested[0].tracks[0].items[..], [CItem::Filler(_)]), "{:?}", back.nested[0].tracks[0].items);
+}
+
+#[test]
+fn aaf_source_start_uses_referenced_slot_rate() {
+    let doc = sound_only(None);
+    let bytes = aaf_bytes(&doc, false);
+    let back = read_clean(&bytes, true);
+    let original = doc.compositions[0].tracks[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            CItem::Clip(c) => Some(c.start),
+            _ => None,
+        })
+        .unwrap();
+    let actual = back.compositions[0].tracks[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            CItem::Clip(c) => Some(c.start),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(actual, original);
 }
