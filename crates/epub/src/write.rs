@@ -20,6 +20,7 @@ pub const MAX_RESOURCES: usize = 100_000;
 const ROOT: &str = "OEBPS";
 const OPF: &str = "content.opf";
 const NAV: &str = "nav.xhtml";
+const NCX: &str = "toc.ncx";
 
 const CONTAINER: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\"><rootfiles><rootfile full-path=\"OEBPS/content.opf\" media-type=\"application/oebps-package+xml\"/></rootfiles></container>\n";
 
@@ -128,6 +129,9 @@ pub struct Book<'a> {
     /// The reading order: resource ids.
     pub spine: Vec<String>,
     pub nav: Nav,
+    /// Also write `toc.ncx`, the EPUB 2 table of contents, with the navigation's entries, and
+    /// name it in the spine: reading systems from before EPUB 3 have no other one.
+    pub ncx: bool,
 }
 
 /// A content document's shell around `body`: XML declaration, `html` with the XHTML and `epub`
@@ -183,10 +187,10 @@ fn check(book: &Book) -> Result<(), Error> {
     if book.resources.len() > MAX_RESOURCES {
         return invalid(format!("{} resources (at most {MAX_RESOURCES})", book.resources.len()));
     }
-    let mut ids = HashSet::from(["nav"]);
+    let mut ids = HashSet::from(["nav", "ncx"]);
     // Archive names compare without case on some systems, so two paths that differ only in case
     // are refused as well.
-    let mut paths = HashSet::from([OPF.to_string(), NAV.to_string()]);
+    let mut paths = HashSet::from([OPF.to_string(), NAV.to_string(), NCX.to_string()]);
     for r in &book.resources {
         if !is_name(&r.id) || r.id.contains(':') {
             return invalid(format!("resource id `{}` is not an XML name", r.id));
@@ -208,7 +212,7 @@ fn check(book: &Book) -> Result<(), Error> {
     if book.spine.is_empty() {
         return invalid("the spine is empty".into());
     }
-    if let Some(missing) = book.spine.iter().find(|id| !ids.contains(id.as_str()) || id.as_str() == "nav") {
+    if let Some(missing) = book.spine.iter().find(|id| !ids.contains(id.as_str()) || matches!(id.as_str(), "nav" | "ncx")) {
         return invalid(format!("spine item `{missing}` is not a resource"));
     }
     Ok(())
@@ -243,6 +247,9 @@ fn package_document(book: &Book, modified: &str) -> String {
         let _ = writeln!(o, "<meta name=\"generator\" content=\"{}\"/>", esc_attr(g.trim()));
     }
     o.push_str("</metadata>\n<manifest>\n<item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>\n");
+    if book.ncx {
+        o.push_str("<item id=\"ncx\" href=\"toc.ncx\" media-type=\"application/x-dtbncx+xml\"/>\n");
+    }
     for r in &book.resources {
         let _ = write!(o, "<item id=\"{}\" href=\"{}\" media-type=\"{}\"", esc_attr(&r.id), href(&r.path), esc_attr(r.media_type.trim()));
         if !r.properties.trim().is_empty() {
@@ -250,7 +257,7 @@ fn package_document(book: &Book, modified: &str) -> String {
         }
         o.push_str("/>\n");
     }
-    o.push_str("</manifest>\n<spine>\n");
+    o.push_str(if book.ncx { "</manifest>\n<spine toc=\"ncx\">\n" } else { "</manifest>\n<spine>\n" });
     for id in &book.spine {
         let _ = writeln!(o, "<itemref idref=\"{}\"/>", esc_attr(id));
     }
@@ -258,71 +265,124 @@ fn package_document(book: &Book, modified: &str) -> String {
     o
 }
 
-/// The entries as nested `li`/`ol` items (the content of the navigation's outer `ol`).
-fn nav_list(items: &[NavItem]) -> String {
+/// How nested entries are written: an entry's start, its end, and what goes around the entries
+/// nested in it.
+struct Nesting<'a> {
+    start: &'a dyn Fn(usize, &NavItem) -> String,
+    end: &'a str,
+    sub_start: &'a str,
+    sub_end: &'a str,
+}
+
+/// The entries nested by level: a deeper entry goes into the one before it.
+fn nested(items: &[NavItem], n: &Nesting) -> String {
     let mut out = String::new();
     let mut open: Vec<u8> = Vec::new();
-    for NavItem { href, label, level } in items {
+    for (k, item) in items.iter().enumerate() {
+        let level = item.level;
         match open.last().copied() {
-            None => open.push(*level),
-            Some(top) if *level > top => {
-                out.push_str("<ol>");
-                open.push(*level);
+            None => open.push(level),
+            Some(top) if level > top => {
+                out.push_str(n.sub_start);
+                open.push(level);
             }
             Some(_) => {
                 // Close the levels whose parent is as deep as this entry or deeper.
-                while open.len() > 1 && open.len().checked_sub(2).and_then(|i| open.get(i)).is_some_and(|parent| *parent >= *level) {
+                while open.len() > 1 && open.len().checked_sub(2).and_then(|i| open.get(i)).is_some_and(|parent| *parent >= level) {
                     open.pop();
-                    out.push_str("</li></ol>");
+                    out.push_str(n.end);
+                    out.push_str(n.sub_end);
                 }
-                out.push_str("</li>");
+                out.push_str(n.end);
                 if let Some(t) = open.last_mut() {
-                    *t = (*t).min(*level);
+                    *t = (*t).min(level);
                 }
             }
         }
-        let _ = write!(out, "<li><a href=\"{}\">{}</a>", esc_attr(href), esc(label));
+        out.push_str(&(n.start)(k, item));
     }
     for i in (0..open.len()).rev() {
-        out.push_str("</li>");
+        out.push_str(n.end);
         if i > 0 {
-            out.push_str("</ol>");
+            out.push_str(n.sub_end);
         }
     }
     out
 }
 
+/// The navigation's entries; with none, one to the first spine item, labelled with the title.
+fn nav_items<'b>(book: &'b Book) -> Cow<'b, [NavItem]> {
+    if !book.nav.items.is_empty() {
+        return Cow::Borrowed(&book.nav.items);
+    }
+    let path = book.spine.first().and_then(|id| book.resources.iter().find(|r| &r.id == id)).map(|r| href(&r.path)).unwrap_or_default();
+    Cow::Owned(vec![NavItem { href: path, label: capped_title(&book.metadata.title).to_string(), level: 1 }])
+}
+
 fn nav_document(book: &Book) -> String {
-    let title = capped_title(&book.metadata.title);
-    let first = || {
-        let path = book.spine.first().and_then(|id| book.resources.iter().find(|r| &r.id == id)).map(|r| href(&r.path)).unwrap_or_default();
-        vec![NavItem { href: path, label: title.to_string(), level: 1 }]
-    };
-    let items = if book.nav.items.is_empty() { Cow::Owned(first()) } else { Cow::Borrowed(&book.nav.items) };
     let kind = match book.nav.kind {
         NavKind::Toc => "toc",
         NavKind::PageList => "page-list",
     };
-    let body = format!("<nav epub:type=\"{kind}\" id=\"toc\"><h1>{}</h1><ol>{}</ol></nav>", esc(&book.nav.heading), nav_list(&items));
-    xhtml(&book.metadata.language, title, "", "", &body)
+    let start = |_: usize, i: &NavItem| format!("<li><a href=\"{}\">{}</a>", esc_attr(&i.href), esc(&i.label));
+    let list = nested(&nav_items(book), &Nesting { start: &start, end: "</li>", sub_start: "<ol>", sub_end: "</ol>" });
+    let body = format!("<nav epub:type=\"{kind}\" id=\"toc\"><h1>{}</h1><ol>{list}</ol></nav>", esc(&book.nav.heading));
+    xhtml(&book.metadata.language, capped_title(&book.metadata.title), "", "", &body)
+}
+
+/// The EPUB 2 table of contents (NCX): the same entries as nested `navPoint`s in reading order.
+fn ncx_document(book: &Book) -> String {
+    let start = |k: usize, i: &NavItem| {
+        let n = k + 1;
+        format!(
+            "<navPoint id=\"np{n}\" playOrder=\"{n}\"><navLabel><text>{}</text></navLabel><content src=\"{}\"/>",
+            esc(&i.label),
+            esc_attr(&i.href)
+        )
+    };
+    let items = nav_items(book);
+    let depth = {
+        // Nesting depth, as `nested` nests: the most levels open at once.
+        let (mut open, mut deepest): (Vec<u8>, usize) = (Vec::new(), 1);
+        for i in items.iter() {
+            while open.last().is_some_and(|top| *top >= i.level) {
+                open.pop();
+            }
+            open.push(i.level);
+            deepest = deepest.max(open.len());
+        }
+        deepest
+    };
+    let points = nested(&items, &Nesting { start: &start, end: "</navPoint>", sub_start: "", sub_end: "" });
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" version=\"2005-1\" xml:lang=\"{}\">\n<head><meta name=\"dtb:uid\" content=\"{}\"/><meta name=\"dtb:depth\" content=\"{depth}\"/><meta name=\"dtb:totalPageCount\" content=\"0\"/><meta name=\"dtb:maxPageNumber\" content=\"0\"/></head>\n<docTitle><text>{}</text></docTitle>\n<navMap>{points}</navMap>\n</ncx>\n",
+        language(&book.metadata.language),
+        esc_attr(book.metadata.identifier.trim()),
+        esc(capped_title(&book.metadata.title))
+    )
 }
 
 /// `book` as an EPUB 3 package: the stored `mimetype`, `META-INF/container.xml`, then under
-/// `OEBPS/` the package document, the navigation document and the resources in their order.
+/// `OEBPS/` the package document, the navigation document, `toc.ncx` when [`Book::ncx`] asks for
+/// it, and the resources in their order.
 pub fn write(book: &Book) -> Result<Vec<u8>, Error> {
     check(book)?;
     let modified =
         w3cdtf(&book.metadata.modified).ok_or_else(|| Error::Invalid(format!("`{}` is not a modification date", book.metadata.modified)))?;
     let opf = package_document(book, &modified);
     let nav = nav_document(book);
+    let ncx = book.ncx.then(|| ncx_document(book));
     let fail = |e: craft_zip::Error| Error::Invalid(e.to_string());
     let mut z = craft_zip::Writer::new();
-    let own = [
+    let mut own = vec![
         ("mimetype".to_string(), MIMETYPE.as_bytes(), true),
         ("META-INF/container.xml".to_string(), CONTAINER.as_bytes(), false),
         (format!("{ROOT}/{OPF}"), opf.as_bytes(), false),
         (format!("{ROOT}/{NAV}"), nav.as_bytes(), false),
     ];
+    if let Some(ncx) = &ncx {
+        own.push((format!("{ROOT}/{NCX}"), ncx.as_bytes(), false));
+    }
     let resources = book.resources.iter().map(|r| (format!("{ROOT}/{}", r.path), r.data.as_ref(), r.stored));
     for (name, data, store) in own.into_iter().chain(resources) {
         z.add(&name, data, if store { craft_zip::Compression::Stored } else { craft_zip::Compression::Deflated }).map_err(fail)?;
