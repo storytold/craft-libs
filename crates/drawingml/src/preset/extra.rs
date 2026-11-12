@@ -764,23 +764,31 @@ mod tests {
     /// Sizes the digests were taken at: wide, tall and square.
     const GOLD_SIZES: [(f64, f64); 4] = [(120.0, 80.0), (300.0, 50.0), (64.0, 64.0), (50.0, 300.0)];
 
-    /// Each outline's path elements, for every adjust set and size. Coordinates are printed to 2
-    /// decimal places so last-bit libm differences between platforms do not change it.
-    fn outline_text(name: &str) -> String {
+    /// `v` as the digest prints it: a value that prints as zero at 3 decimal places becomes
+    /// `0.0`, so a residue such as `-1.4e-14` left by a sine or cosine of a right angle prints
+    /// `0.000` whatever its sign. Its sign depends on the platform's libm, and `{:.3}` prints a
+    /// negative residue as `-0.000`.
+    fn digest_coord(v: f64) -> f64 {
+        if v.abs() < 0.0005 { 0.0 } else { v }
+    }
+
+    /// FNV-1a over each outline's path elements, for every adjust set and size. Coordinates are
+    /// printed to 3 decimal places through [`digest_coord`] so last-bit libm differences between
+    /// platforms do not change it.
+    fn outline_digest(name: &str) -> u64 {
         use std::fmt::Write;
+        let c = digest_coord;
         let mut text = String::new();
-        // Negative zero prints "-0.00" on one platform and "0.00" on another.
-        let z = |v: f64| if v == 0.0 { 0.0 } else { v };
         for adj in GOLD_ADJ {
             for (w, h) in GOLD_SIZES {
                 let g = build(name, w, h, adj).unwrap_or_else(|| panic!("{name} builds no outline"));
                 for el in g.outline().elements() {
                     let _ = match *el {
-                        PathEl::MoveTo(p) => write!(text, "M{:.2},{:.2}", z(p.x), z(p.y)),
-                        PathEl::LineTo(p) => write!(text, "L{:.2},{:.2}", z(p.x), z(p.y)),
-                        PathEl::QuadTo(a, p) => write!(text, "Q{:.2},{:.2},{:.2},{:.2}", z(a.x), z(a.y), z(p.x), z(p.y)),
+                        PathEl::MoveTo(p) => write!(text, "M{:.3},{:.3}", c(p.x), c(p.y)),
+                        PathEl::LineTo(p) => write!(text, "L{:.3},{:.3}", c(p.x), c(p.y)),
+                        PathEl::QuadTo(a, p) => write!(text, "Q{:.3},{:.3},{:.3},{:.3}", c(a.x), c(a.y), c(p.x), c(p.y)),
                         PathEl::CurveTo(a, b, p) => {
-                            write!(text, "C{:.2},{:.2},{:.2},{:.2},{:.2},{:.2}", z(a.x), z(a.y), z(b.x), z(b.y), z(p.x), z(p.y))
+                            write!(text, "C{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}", c(a.x), c(a.y), c(b.x), c(b.y), c(p.x), c(p.y))
                         }
                         PathEl::ClosePath => write!(text, "Z"),
                     };
@@ -788,64 +796,74 @@ mod tests {
                 text.push('|');
             }
         }
-        text
-    }
-
-    /// FNV-1a of [`outline_text`].
-    fn fnv(text: &str) -> u64 {
         text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
     }
 
-    /// Digests of every name's outline: any changed shape fails here. Arcs are laid out by
-    /// [`super::builder::Pb::arc`] in quarter-turn cubics of its own, not by kurbo's
-    /// tolerance-driven subdivision, so these hold on every platform.
+    /// Digests of every name's outlines as the string dispatch built them (craft-libs 2b35d243;
+    /// DeckCraft's fc35ad67 gave other digests for curvedRightArrow and curvedDownArrow), so
+    /// this refactor is proven output-identical: any changed outline fails here. pieWedge,
+    /// curvedRightArrow and curvedDownArrow were taken again when [`digest_coord`] began printing
+    /// their near-zero residues as `0.000`; their outlines are unchanged.
     const GOLDEN: [(&str, u64); 38] = [
-        ("lineInv", 0x555968c5c6b7d35f),
-        ("nonIsoscelesTrapezoid", 0x8c792838cff341c6),
-        ("pieWedge", 0x4c34af9886460b05),
-        ("leftRightArrowCallout", 0x5c3f1c2d89bf7e3d),
-        ("upDownArrowCallout", 0x900420d1f8f4ffbd),
-        ("quadArrowCallout", 0xb4276d31f1b595a3),
-        ("circularArrow", 0x631abd60df5ecb83),
-        ("leftCircularArrow", 0x8c025366846b477d),
-        ("leftRightCircularArrow", 0x9cf0f01d5cb01683),
-        ("curvedRightArrow", 0x78a7075ba3843fce),
-        ("curvedLeftArrow", 0xc9837da9f388a110),
-        ("curvedUpArrow", 0x6bce459b402857c1),
-        ("curvedDownArrow", 0xd110a7a91f8b37bd),
-        ("swooshArrow", 0x03f8340ba220fefb),
-        ("callout1", 0xc02b94f2a53a97d8),
-        ("callout2", 0xb767bc9356848c38),
-        ("callout3", 0x71ea9d29f8e06811),
-        ("accentCallout1", 0x1be482c16b380492),
-        ("accentCallout2", 0x9c9458db49392ca0),
-        ("accentCallout3", 0x7acbe8cebea1ba85),
-        ("borderCallout2", 0xb767bc9356848c38),
-        ("borderCallout3", 0x71ea9d29f8e06811),
-        ("accentBorderCallout1", 0x1be482c16b380492),
-        ("accentBorderCallout2", 0x9c9458db49392ca0),
-        ("accentBorderCallout3", 0x7acbe8cebea1ba85),
-        ("ellipseRibbon", 0x8cbb238ea5bb29bc),
-        ("ellipseRibbon2", 0x0d20475f23e98b7b),
-        ("leftRightRibbon", 0x7b2e70ee1ec713cf),
-        ("flowChartOfflineStorage", 0x3022c6036835f2f1),
-        ("gear6", 0x4136728f3d329fd4),
-        ("gear9", 0xc552847e0e47dc87),
-        ("funnel", 0xf0ee2c5391c57d8b),
-        ("cornerTabs", 0x6ec2b0d1097b774d),
-        ("squareTabs", 0x1bb3486754296c19),
-        ("plaqueTabs", 0xe3a2f2ff7d20ba59),
-        ("chartX", 0x3c3f2cb6cea59fa9),
-        ("chartStar", 0x945456b86aa6a9f5),
-        ("chartPlus", 0x5846987e0adf8017),
+        ("lineInv", 0x4a58a16923e54a4f),
+        ("nonIsoscelesTrapezoid", 0x79eca0b36812e282),
+        ("pieWedge", 0xdc0ac340a52dc971),
+        ("leftRightArrowCallout", 0x9cd88f0ab55f76e5),
+        ("upDownArrowCallout", 0x568bc91708855007),
+        ("quadArrowCallout", 0xca59015298b1584b),
+        ("circularArrow", 0x4227aa468cfe990e),
+        ("leftCircularArrow", 0x6fc3779ce4b08914),
+        ("leftRightCircularArrow", 0x9dd43d9ba80e47df),
+        ("curvedRightArrow", 0x221373c5b15a8e5e),
+        ("curvedLeftArrow", 0xfc2f5e13e33b67b2),
+        ("curvedUpArrow", 0x3059aec6f6cef157),
+        ("curvedDownArrow", 0x42266528db8e9a07),
+        ("swooshArrow", 0x63ff193fdf1d0427),
+        ("callout1", 0xe7e0410f96282e8d),
+        ("callout2", 0xcaa7730106a9ee1b),
+        ("callout3", 0x4bc625449c0dfb30),
+        ("accentCallout1", 0x64f4c3eb775542fb),
+        ("accentCallout2", 0x2e3caa5b473ab4c7),
+        ("accentCallout3", 0x6ca203b149a2618e),
+        ("borderCallout2", 0xcaa7730106a9ee1b),
+        ("borderCallout3", 0x4bc625449c0dfb30),
+        ("accentBorderCallout1", 0x64f4c3eb775542fb),
+        ("accentBorderCallout2", 0x2e3caa5b473ab4c7),
+        ("accentBorderCallout3", 0x6ca203b149a2618e),
+        ("ellipseRibbon", 0x7d259fa067028102),
+        ("ellipseRibbon2", 0x3536b31ad0c95cf5),
+        ("leftRightRibbon", 0x6adc78f12d1cab9c),
+        ("flowChartOfflineStorage", 0x36960029a3770971),
+        ("gear6", 0x62b46d43b67decea),
+        ("gear9", 0xa42f43c2ae80314b),
+        ("funnel", 0x9327e2c2e99ab7d3),
+        ("cornerTabs", 0xe236f19aac60a20d),
+        ("squareTabs", 0xc3aea5acb50d6ccd),
+        ("plaqueTabs", 0xc64ebb2d06640521),
+        ("chartX", 0x6b2a9ff342247551),
+        ("chartStar", 0x6ebb545c66f313dd),
+        ("chartPlus", 0x979031aae16250d7),
     ];
+
+    /// A near-zero residue prints the same whichever sign the platform's libm left on it, and
+    /// values that round away from zero keep their sign.
+    #[test]
+    fn digest_prints_near_zero_residues_without_a_sign() {
+        let print = |v: f64| format!("{:.3}", digest_coord(v));
+        for v in [-1.4210854715202004e-14, 1.4210854715202004e-14, -7.105427357601002e-15, -0.0, 0.0, -0.00049, 0.00049] {
+            assert_eq!(print(v), "0.000", "{v:e}");
+        }
+        assert_eq!(print(-0.0006), "-0.001");
+        assert_eq!(print(-12.25), "-12.250");
+        assert_eq!(print(0.0006), "0.001");
+    }
 
     /// Every name builds the same outline as before the `Name` enum, and unknown names build nothing.
     #[test]
     fn outlines_match_the_string_dispatch() {
         for (name, want) in GOLDEN {
-            let text = outline_text(name);
-            assert_eq!(fnv(&text), want, "{name} outline changed\n{text}");
+            let have = outline_digest(name);
+            assert_eq!(have, want, "{name} outline changed");
         }
         assert!(build("noSuchShape", 100.0, 100.0, &[]).is_none());
     }
