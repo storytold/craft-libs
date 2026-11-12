@@ -904,8 +904,12 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     let delay_ticks = i64::try_from(rescale_round(t.codec_delay_ns.saturating_mul(den), num.saturating_mul(1_000_000_000), 1)).unwrap_or(i64::MAX);
     let start = t.samples.iter().map(|s| s.pts).min().unwrap_or(0).saturating_add(delay_ticks);
     let frames = last.and_then(|s| {
-        let duration = if s.duration > 0 {
-            s.duration
+        let (block_start, block_duration) =
+            final_mkv_block_duration(t.samples.iter().map(|sample| (sample.block_offset, sample.pts, sample.duration)), s.block_offset, s.pts);
+        let (end_start, duration) = if block_duration > 0 {
+            // BlockDuration applies to the entire block, including every lace. The demuxer
+            // divides it among frames, so sum the final block and measure from its first lace.
+            (block_start, block_duration)
         } else {
             // ffmpeg 6 writes AAC and E-AC-3 without block durations, and records the end in a tag.
             let n = match &frames_of {
@@ -914,9 +918,9 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
                 _ => return None,
             };
             let packet = rescale_round(n.saturating_mul(den), u64::from(rate).saturating_mul(num), 1);
-            tagged_last_duration(track_duration_tag(&file.tags, t.uid)?, s.pts, delay_ticks, packet, t.timebase)?
+            (s.pts, tagged_last_duration(track_duration_tag(&file.tags, t.uid)?, s.pts, delay_ticks, packet, t.timebase)?)
         };
-        let end = u64::try_from(s.pts.saturating_add(i64::try_from(duration).ok()?).saturating_sub(start)).ok()?;
+        let end = u64::try_from(end_start.saturating_add(i64::try_from(duration).ok()?).saturating_sub(start)).ok()?;
         Some(rescale_round(end.saturating_mul(num), den, u64::from(rate)))
     });
     let mut demux = demux;
@@ -929,6 +933,33 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     demux.seek(track, i64::MIN).ok()?;
     let packets = Packets::Mkv { demux: Box::new(demux), track, rate, first_ns, frames: frames_of, src: src.clone(), pending: None };
     native(container, packets, &params, &lookahead, skip, frames, frames).map(Ok)
+}
+
+/// Return the start timestamp and total duration of the laces belonging to the final block.
+fn final_mkv_block_duration(samples: impl Iterator<Item = (u64, i64, u64)>, block_offset: u64, last_pts: i64) -> (i64, u64) {
+    samples.fold(
+        (last_pts, 0u64),
+        |(start, duration), (offset, pts, lace_duration)| {
+            if offset == block_offset { (start.min(pts), duration.saturating_add(lace_duration)) } else { (start, duration) }
+        },
+    )
+}
+
+#[cfg(test)]
+mod final_mkv_block_duration_tests {
+    use super::final_mkv_block_duration;
+
+    #[test]
+    fn sums_all_lace_durations_from_the_first_lace() {
+        let samples = [(10, 0, 64), (20, 100, 24), (20, 124, 24), (30, 200, 0)];
+        assert_eq!(final_mkv_block_duration(samples.into_iter(), 20, 124), (100, 48));
+    }
+
+    #[test]
+    fn unknown_duration_stays_unknown_and_keeps_the_last_timestamp() {
+        let samples = [(20, 100, 0), (20, 100, 0)];
+        assert_eq!(final_mkv_block_duration(samples.into_iter(), 20, 100), (100, 0));
+    }
 }
 
 /// The `DURATION` tag of the track with UID `uid`, in nanoseconds. ffmpeg and mkvmerge write it

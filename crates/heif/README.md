@@ -24,6 +24,7 @@ let info = craft_heif::probe(&bytes)?;           // size, depth, alpha: check li
 let img = craft_heif::decode(&bytes, &craft_heif::Options::default())?;
 // img.width, img.height, img.has_alpha, img.bit_depth, img.data (RGB/RGBA u16), img.colour, img.icc, img.exif, img.xmp
 let thumb = craft_heif::decode_thumbnail(&bytes, 256, &Default::default())?; // Option<Decoded>
+let (exif, xmp) = craft_heif::read_metadata(&bytes)?;  // no picture decoded: for cataloguing
 ```
 
 Chroma is upsampled like libheif by default.
@@ -34,6 +35,12 @@ Apple's blends the neighbouring column and, for 4:2:0, the neighbouring row.
 Errors are `Error::Unsupported` (image sequences, overlays, 4:2:2/4:4:4, …), `Error::Limit` or
 `Error::Malformed`. It never panics: every call into heic-rs runs under `catch_unwind`, and a panic
 inside it (PhotoCraft's fuzzing found two in 0.1.1) becomes `Error::Malformed`.
+
+Features: `decode` (default) is the decoder above. `metadata` adds `craft_heif::items::read`: the
+first `Exif` item and XMP packet from the box structure alone (`iinf`, `iloc`, `idat`; at most 4096
+boxes, 1024 items, 1024 extents per item, 32 MiB per item), without heic-rs. A build with
+`default-features = false, features = ["metadata"]` has no heic-rs dependency, and its
+`read_metadata` is that reader. With both features, a test checks that the two readers agree.
 
 Feature `testdata` exposes `craft_heif::testdata`: lossless synthetic HEIF files (PCM-coded
 32 × 32 HEVC pictures, grids, every property above) for the tests of the crates above.
