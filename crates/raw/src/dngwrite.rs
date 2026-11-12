@@ -153,6 +153,7 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
         ifd.set(t::BLACK_LEVEL_DELTA_V, Value::SRational(b.delta_v.iter().map(|&v| srational(v as f64)).collect()));
     }
     let white: Vec<u32> = (0..cpp).map(|s| raw.white_at(s).round().clamp(0.0, u32::MAX as f32) as u32).collect();
+    let max_white = white.iter().copied().max().unwrap_or(0);
     if matches!(raw.data, RawData::F32(_)) {
         ifd.set(t::WHITE_LEVEL, rat_vec(&(0..cpp).map(|s| raw.white_at(s) as f64).collect::<Vec<_>>()));
     } else {
@@ -216,8 +217,9 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
             ifd.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![bytes] });
         }
         (RawData::U16(v), _) => {
-            let maxv = v.iter().copied().max().unwrap_or(0);
-            let bits = (16 - maxv.leading_zeros()).max(raw.bits.min(16)).max(2) as u8;
+            // Dark frames may never reach the sensor's white level, which must still fit.
+            let maxv = u32::from(v.iter().copied().max().unwrap_or(0)).max(max_white);
+            let bits = (32 - maxv.leading_zeros()).max(raw.bits).clamp(2, 16) as u8;
             ifd.set(
                 t::BITS_PER_SAMPLE,
                 Value::Short(vec![if matches!(opts.compression, DngCompression::Uncompressed) { 16 } else { bits as u16 }; cpp]),

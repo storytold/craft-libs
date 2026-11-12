@@ -714,14 +714,11 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         _ => (read_image_in(mode, bytes, &info, tiff.order, Packing::Msb, limits)?, bits),
     };
     let RawData::U16(ref samples) = data else { return Err(RawError::Unsupported("float ARW".into())) };
-    // "12-bit uncompressed" files (e.g. ILCE-7RM2) say BitsPerSample 12 but store 16-bit words on the 14-bit scale
-    // of the other modes (black 512, peaks near 16383): black and white follow the data, `bits` keeps the tag
-    let scale_bits = if info.compression == 1 && out_bits < 14 && strip_len >= (w * h * 2) as u64 && samples.iter().any(|&v| v >> (out_bits + 1) != 0)
-    {
-        14
-    } else {
-        out_bits
-    };
+    // Sony's "12-bit uncompressed" mode stores 16-bit words on the 14-bit scale,
+    // including dark frames with no sample above 4095. The layout, not the scene's
+    // brightest sample, determines black/white units. Header and full decodes must
+    // agree too. Genuinely packed 12-bit strips retain their 12-bit scale.
+    let scale_bits = if info.compression == 1 && out_bits < 14 && strip_len >= (w * h * 2) as u64 { 14 } else { out_bits };
 
     let cfa = match (raw.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), raw.bytes(t::CFA_PATTERN_EP)) {
         (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => Cfa { width: 2, height: 2, pattern: p.to_vec() },
@@ -1527,6 +1524,46 @@ mod tests {
         assert_eq!(sr2_black_in(&[], start, Little), None);
         // implausible levels at a known position
         assert_eq!(sr2_black_in(&sr2_block(start, 27152, BLACK_LEVEL, 2166, [4; 4], None), start, Little), None);
+    }
+
+    /// Verify Sony word storage uses the same levels in dark and bright frames and survives DNG export.
+    #[test]
+    fn uncompressed_12_bit_word_levels_do_not_depend_on_scene_brightness() {
+        use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        for peak in [1024u16, 3144, 12000] {
+            let samples: Vec<u16> = (0..64).map(|i| if i == 0 { peak } else { 512 }).collect();
+            let mut raw = IfdBuilder::new();
+            raw.set(t::MAKE, Value::Ascii("SONY".into()));
+            raw.set(t::MODEL, Value::Ascii("ILCA-99M2".into()));
+            raw.set(t::IMAGE_WIDTH, Value::Long(vec![8]));
+            raw.set(t::IMAGE_LENGTH, Value::Long(vec![8]));
+            raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![12]));
+            raw.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![1]));
+            raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::CFA]));
+            raw.set(t::COMPRESSION, Value::Short(vec![1]));
+            raw.set_image(ImageData::Strips { rows_per_strip: 8, strips: vec![samples.iter().flat_map(|v| v.to_le_bytes()).collect()] });
+            let bytes = TiffWriter::default().write(&[raw]).unwrap();
+            for mode in [Mode::Header, Mode::Full] {
+                let decoded = decode(&bytes, mode, &Limits::default()).unwrap();
+                assert_eq!(decoded.bits, 12, "keep the recorded bit depth");
+                assert_eq!(decoded.black.mean(), 512.0, "peak {peak}, {mode:?}");
+                assert_eq!(decoded.white, vec![16383.0], "peak {peak}, {mode:?}");
+                #[cfg(feature = "dng")]
+                if matches!(mode, Mode::Full) {
+                    let dng = crate::write_dng(&decoded, &crate::DngWriteOptions::default()).unwrap();
+                    let tiff = Tiff::parse(&dng).unwrap();
+                    let bits = tiff.ifds[0].u32(t::BITS_PER_SAMPLE).unwrap();
+                    let white = tiff.ifds[0].u32(t::WHITE_LEVEL).unwrap();
+                    assert!((2..=16).contains(&bits));
+                    assert!(white < (1u32 << bits), "peak {peak}: {bits} bits cannot represent white {white}");
+                    let back = crate::decode(&dng).unwrap();
+                    assert_eq!(back.white, decoded.white);
+                    assert_eq!(back.black.mean(), decoded.black.mean());
+                    let RawData::U16(back_samples) = back.data else { panic!("integer DNG samples") };
+                    assert_eq!(back_samples, samples);
+                }
+            }
+        }
     }
 
     #[test]
