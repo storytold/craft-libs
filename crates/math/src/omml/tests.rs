@@ -143,3 +143,49 @@ fn deeply_nested_wrappers_are_bounded() {
     let e = omath(&inner);
     let _ = read_omath(&e, MathJc::CenterGroup);
 }
+
+#[test]
+fn text_entry_points_find_the_equation_and_refuse_junk() {
+    let ns = r#"xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math""#;
+    // Any prefix, inside other markup, as a display paragraph with its justification.
+    let x = r#"<p><o:oMathPara xmlns:o="http://schemas.openxmlformats.org/officeDocument/2006/math"><o:oMathParaPr><o:jc o:val="left"/></o:oMathParaPr><o:oMath><o:r><o:t>x</o:t></o:r></o:oMath></o:oMathPara></p>"#;
+    let m = read_str(x).unwrap();
+    assert_eq!((crate::math::to_linear(&m.nodes).as_str(), m.jc), ("x", MathJc::Left));
+    // The strict OOXML namespace.
+    let strict = r#"<m:oMath xmlns:m="http://purl.oclc.org/ooxml/officeDocument/math"><m:r><m:t>y</m:t></m:r></m:oMath>"#;
+    assert_eq!(read_str(strict).map(|m| crate::math::to_linear(&m.nodes)).as_deref(), Some("y"));
+    // Kept OMML, prefixes without declarations.
+    assert_eq!(read_str("<m:oMath><m:r><m:t>z</m:t></m:r></m:oMath>").map(|m| crate::math::to_linear(&m.nodes)).as_deref(), Some("z"));
+    for junk in ["", "<p/>", "not xml", "<m:oMath", "\u{0}"] {
+        let _ = read_str(junk);
+    }
+    assert!(read_str("<p/>").is_none() && read_str("").is_none());
+    // More elements than the reader keeps: refused, not read in part.
+    let wide = format!("<m:oMath {ns}>{}</m:oMath>", "<m:r/>".repeat(MAX_ELEMENTS * 2 + 1));
+    assert!(parse(&wide).is_none());
+    let fits = format!("<m:oMath {ns}>{}</m:oMath>", "<m:r><m:t>a</m:t></m:r>".repeat(1000));
+    assert!(parse(&fits).is_some());
+    // Deep nesting is bounded.
+    let deep = format!("<m:oMath {ns}>{}<m:r><m:t>x</m:t></m:r>{}</m:oMath>", "<m:box><m:e>".repeat(5000), "</m:e></m:box>".repeat(5000));
+    let _ = read_str(&deep);
+}
+
+#[test]
+fn kept_omml_is_written_back_only_when_well_formed() {
+    let m = read_str(r#"<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:t>x</m:t></m:r></m:oMath>"#).unwrap();
+    assert_eq!(write_str("", false, &m, None), m.omml);
+    let broken = Math { omml: "<m:oMath><m:r>".into(), ..m.clone() };
+    let out = write_str("", false, &broken, None);
+    assert!(out.starts_with("<m:oMath>") && out.ends_with("</m:oMath>") && out.contains(">x</m:t>"), "{out}");
+    // A colour that differs from the kept one rewrites the equation from the tree, with the colour.
+    let red = write_str("", false, &m, Some(Rgb(255, 0, 0)));
+    assert!(red.contains(r#"<w:color w:val="FF0000"/>"#), "{red}");
+}
+
+proptest::proptest! {
+    #[test]
+    fn any_text_reads_without_panicking(s in "[<>/=\"a-z:m ]{0,120}") {
+        let _ = read_str(&s);
+        let _ = crate::mathml::parse(&s).map(|e| crate::mathml::to_tree(&e));
+    }
+}
