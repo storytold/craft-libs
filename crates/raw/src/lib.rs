@@ -30,6 +30,8 @@
 //! | `erf` | Epson ERF (R-D1 family): 12-bit samples in 16-byte blocks |
 //! | `mef` | Mamiya MEF (ZD): uncompressed 12-bit packed |
 //! | `kodak` | Kodak DCS520C TIFF: two-component lossless JPEG with a response curve |
+//! | `nef` | Nikon NEF and NRW: uncompressed, packed, Nikon's Huffman coding (lossless and lossy, 12 and 14 bits), small raw |
+//! | `rw2` | Panasonic RW2, Leica RWL and the older Panasonic / Leica RAW: packed, formats 4 and 6, format 8 prefix-coded strips, 16-bit words |
 //! | `pef` | Pentax PEF: uncompressed (packed or 16-bit words) and Pentax's Huffman coding (compression 65535) |
 //! | `srw` | Samsung SRW: the uncompressed variants (compression 32769 words, 32770 at 12 bits packed) |
 //! | `hasselblad` | Hasselblad 3FR and FFF (and other CFA TIFFs in the DNG layout without a DNG version): uncompressed and Hasselblad's lossless JPEG; implies `dng` |
@@ -76,11 +78,19 @@ pub mod ljpeg;
 mod mef;
 #[cfg(feature = "mrw")]
 mod mrw;
+#[cfg(feature = "nef")]
+mod nef;
+#[cfg(feature = "nef")]
+mod nef_lens;
+#[cfg(feature = "nef")]
+mod nefc;
 pub mod opcodes;
 #[cfg(feature = "pef")]
 mod pef;
 mod preview;
 pub mod profile;
+#[cfg(feature = "rw2")]
+mod rw2;
 #[cfg(feature = "dng")]
 pub mod semantic;
 // (the TIFF pixel plumbing every TIFF-based maker shares; DNG is its only user so far)
@@ -328,6 +338,8 @@ impl RawFormat {
             || (self == RawFormat::Erf && cfg!(feature = "erf"))
             || (self == RawFormat::Mef && cfg!(feature = "mef"))
             || (self == RawFormat::Cr2 && cfg!(feature = "cr2"))
+            || (matches!(self, RawFormat::Nef | RawFormat::Nrw) && cfg!(feature = "nef"))
+            || (self == RawFormat::Rw2 && cfg!(feature = "rw2"))
             || (self == RawFormat::Pef && cfg!(feature = "pef"))
             || (self == RawFormat::Srw && cfg!(feature = "srw"))
     }
@@ -612,6 +624,10 @@ fn decode_in(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawImage> {
         RawFormat::Mef => mef::decode(bytes, mode, limits),
         #[cfg(feature = "cr2")]
         RawFormat::Cr2 => cr2::decode(bytes, mode, limits),
+        #[cfg(feature = "nef")]
+        RawFormat::Nef | RawFormat::Nrw => nef::decode(bytes, mode, limits),
+        #[cfg(feature = "rw2")]
+        RawFormat::Rw2 => rw2::decode(bytes, mode, limits),
         #[cfg(feature = "pef")]
         RawFormat::Pef => pef::decode(bytes, mode, limits),
         #[cfg(feature = "srw")]
