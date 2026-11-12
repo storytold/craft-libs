@@ -1600,3 +1600,40 @@ fn block_end(w: &mut W, h: u64, record: u64) {
     w.s(8, "0");
     w.sub("AcDbBlockEnd");
 }
+
+/// Group codes whose values are handles of other objects (DXF Reference, group code ranges):
+/// soft and hard pointers and owners (320–369), more of them (390–399), 480 and 481, and the
+/// extended data handle (1005).
+pub fn is_pointer_code(code: i32) -> bool {
+    matches!(code, 320..=369 | 390..=399 | 480..=481 | 1005)
+}
+
+/// The tags of records kept from another file, for `raw_entities` or `raw_objects`, with every
+/// handle renumbered by `map`: each record's own handle (group 5, or 105 of a DIMSTYLE) and
+/// every pointer ([`is_pointer_code`]). A handle `map` gives nothing for is written as the null
+/// handle `0`, so a kept record never points at an object the new file gives another meaning;
+/// a record's own handle that `map` drops keeps its group with `0`. Groups inside an
+/// application's own `102 {` ... `102 }` group are pointers too (reactors, extension
+/// dictionaries) and are renumbered the same way. The null handle stays null, and text that is
+/// no handle is left as it is.
+///
+/// From CADCraft's `cadcraft-io` `dxf_raw.rs` (5a6aa9b6), which renumbers what it keeps this way.
+pub fn remap_handles(tags: &[Tag], map: impl Fn(u64) -> Option<u64>) -> Vec<Tag> {
+    let mut kind = "";
+    tags.iter()
+        .map(|t| {
+            if t.code == 0 {
+                kind = t.str_ref().map_or("", str::trim);
+                return t.clone();
+            }
+            let own = t.code == 5 || (t.code == 105 && kind == "DIMSTYLE");
+            if !own && !is_pointer_code(t.code) {
+                return t.clone();
+            }
+            match super::parse_handle(&t.str()) {
+                Some(0) | None => t.clone(),
+                Some(h) => Tag::s(t.code, format!("{:X}", map(h).unwrap_or(0))),
+            }
+        })
+        .collect()
+}
