@@ -24,7 +24,7 @@ enum Tok {
 }
 
 /// Commands whose `{…}` argument is text, where spaces are part of the content.
-const TEXT_COMMANDS: &[&str] = &["text", "textrm", "mbox", "textnormal", "textbf", "textit"];
+const TEXT_COMMANDS: &[&str] = &["text", "textrm", "mbox", "hbox", "textnormal", "textbf", "textit", "emph", "textsf"];
 
 fn tokenize(s: &str) -> Vec<Tok> {
     let cs: Vec<char> = s.chars().take(20_000).collect();
@@ -382,7 +382,7 @@ impl Lp {
                 let env = self.raw_arg();
                 self.environment(env.trim())
             }
-            "text" | "textrm" | "mbox" | "textnormal" => {
+            "text" | "textrm" | "mbox" | "hbox" | "textnormal" => {
                 let t = self.raw_arg();
                 one(MNode::Run(MRun { text: t, nor: true, sty: Some(MSty::Plain), ..Default::default() }))
             }
@@ -390,10 +390,22 @@ impl Lp {
                 let t = self.raw_arg();
                 one(MNode::Run(MRun { text: t, nor: true, sty: Some(MSty::Bold), ..Default::default() }))
             }
-            "textit" => {
+            "textit" | "emph" => {
                 let t = self.raw_arg();
                 one(MNode::Run(MRun { text: t, nor: true, sty: Some(MSty::Italic), ..Default::default() }))
             }
+            "textsf" => {
+                let t = self.raw_arg();
+                one(MNode::Run(MRun { text: t, nor: true, sty: Some(MSty::Plain), scr: MScr::SansSerif, ..Default::default() }))
+            }
+            // MathLive's absolute value, upright constants and differential.
+            "abs" => {
+                let e = self.arg();
+                one(MNode::Delim { beg: Some('|'), end: Some('|'), sep: None, grow: true, shp_match: false, elems: vec![e] })
+            }
+            "differentialD" => vec![run("d")],
+            "exponentialE" => vec![MNode::Run(MRun::plain("e"))],
+            "imaginaryI" => vec![MNode::Run(MRun::plain("i"))],
             "operatorname" => {
                 let starred = self.peek() == Some(&Tok::Ch('*'));
                 if starred {
@@ -428,6 +440,7 @@ impl Lp {
                 let a = self.arg();
                 styled(a, Some(MSty::Bold), MScr::Roman, false)
             }
+            "mathnormal" => self.arg(),
             "mathit" => {
                 let a = self.arg();
                 styled(a, Some(MSty::Italic), MScr::Roman, false)
@@ -480,6 +493,14 @@ impl Lp {
                 } else {
                     one(g)
                 }
+            }
+            "underleftarrow" | "underrightarrow" | "underleftrightarrow" => {
+                let chr = match c {
+                    "underleftarrow" => '←',
+                    "underrightarrow" => '→',
+                    _ => '↔',
+                };
+                one(MNode::GroupChr { chr, top: false, e: self.arg() })
             }
             "stackrel" | "overset" => {
                 let over = self.arg();
@@ -1238,5 +1259,34 @@ mod tests {
         };
         let tex = to_latex(&[delim]);
         assert!(tex.contains(r"\middle\|"), "Expected \\middle\\|, got: {tex}");
+    }
+
+    /// Commands MathLive and typed input use, from equaSHion (storytold/craft-libs#29).
+    #[test]
+    fn mathlive_and_other_spellings() {
+        let lin = |src: &str| crate::math::to_linear(&parse_latex(src));
+        assert_eq!(lin(r"\abs{x-1}"), lin(r"\left|x-1\right|"));
+        assert_eq!(lin(r"\lvert x\rvert+\lVert v\rVert"), "|x|+‖v‖");
+        assert_eq!(lin(r"a\nparallel b \backprime"), "a∦b‵");
+        assert_eq!(lin(r"\infinity\cross 2"), "∞×2");
+        assert_eq!(lin(r"\mathnormal{x}"), "x");
+        let runs = parse_latex(r"\exponentialE^{\imaginaryI\pi}\differentialD x");
+        assert!(
+            matches!(&runs[0], MNode::Script { base, .. } if matches!(&base[0], MNode::Run(r) if r.text == "e" && r.sty == Some(MSty::Plain))),
+            "{runs:?}"
+        );
+        for (src, sty, scr) in [
+            (r"\emph{so it is}", MSty::Italic, MScr::Roman),
+            (r"\textsf{so it is}", MSty::Plain, MScr::SansSerif),
+            (r"\hbox{so it is}", MSty::Plain, MScr::Roman),
+        ] {
+            let a = parse_latex(src);
+            assert!(matches!(a.as_slice(), [MNode::Run(r)] if r.text == "so it is" && r.nor && r.sty == Some(sty) && r.scr == scr), "{src}: {a:?}");
+        }
+        for (src, want) in [(r"\underrightarrow{AB}", '→'), (r"\underleftarrow{AB}", '←'), (r"\underleftrightarrow{AB}", '↔')] {
+            assert!(matches!(parse_latex(src).as_slice(), [MNode::GroupChr { chr, top: false, .. }] if *chr == want), "{src}");
+        }
+        // The writer keeps its own names.
+        assert_eq!(to_latex(&parse_latex(r"\infinity")), to_latex(&parse_latex(r"\infty")));
     }
 }
