@@ -205,7 +205,7 @@ fn math_symbol(name: &str) -> Option<char> {
 /// For every `l` in `chars`, the index of the `r` that closes it, found in one stack pass.
 /// Looking groups up here keeps scanning linear: rescanning to the end of the input for every
 /// unmatched `(` made long equations quadratic.
-pub(super) fn closers(chars: &[char], l: char, r: char) -> Vec<Option<usize>> {
+pub fn closers(chars: &[char], l: char, r: char) -> Vec<Option<usize>> {
     let mut out = vec![None; chars.len()];
     let mut open = Vec::new();
     for (i, c) in chars.iter().enumerate() {
@@ -222,7 +222,7 @@ pub(super) fn closers(chars: &[char], l: char, r: char) -> Vec<Option<usize>> {
 }
 
 /// The balanced group opening at `open` (see [`closers`]): its content and the index after it.
-pub(super) fn balanced(chars: &[char], closers: &[Option<usize>], open: usize) -> Option<(String, usize)> {
+pub fn balanced(chars: &[char], closers: &[Option<usize>], open: usize) -> Option<(String, usize)> {
     let close = (*closers.get(open)?)?;
     Some((chars.get(open + 1..close).unwrap_or_default().iter().collect(), close + 1))
 }
