@@ -29,7 +29,8 @@ pub enum GlyphRole {
     /// A glyph inside a control: `size.icon.glyph_sm` or `glyph_md` by the control size, in the variant's ink.
     #[default]
     Control,
-    /// A command strip of tool icons (align and distribute): `size.icon.md`, in the variant's ink.
+    /// A command strip of tool icons (align and distribute) or a panel footer's actions: `size.icon.md`, in the
+    /// variant's ink.
     Tool,
     /// A tool rail: `size.icon.lg`, resting in `text.muted` and in the variant's ink under the pointer.
     ToolRail,

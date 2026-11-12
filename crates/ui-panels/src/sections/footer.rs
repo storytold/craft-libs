@@ -12,7 +12,7 @@ use crate::runtime::access::Name;
 use crate::runtime::env::{Env, EnvValue, Label};
 use crate::runtime::focus;
 use crate::runtime::keys;
-use crate::style::{ComponentStyle, RuleKind, StyleCx};
+use crate::style::{ComponentStyle, GlyphRole, RuleKind, StyleCx};
 use craft_behavior::{Insets, Metrics, OwnerClass, Sense};
 use craft_host::target::Os;
 use craft_keymap::{Chord, Key};
@@ -566,10 +566,12 @@ impl FooterBar {
 
     /// A footer bar of icon actions laid out from the reading end, as Photoshop's panel footers: the first action given
     /// sits at the end edge (Delete), the next one before it, and a panel menu given last at the start of the group.
-    /// Tab visits them in display order; the indexes the output reports are those of the given order. Show it with
-    /// `show_footer`.
+    /// Tab visits them in display order; the indexes the output reports are those of the given order. The actions show
+    /// their icons at the tool size (`GlyphRole::Tool`). Show it with `show_footer`.
     pub fn actions(actions: impl IntoIterator<Item = FooterAction>) -> Self {
-        FooterBar { content: Content::Actions(actions.into_iter().collect()), actions: true, ..FooterBar::body() }
+        let body = FooterBar::body();
+        let props = body.props.child_glyphs(GlyphRole::Tool);
+        FooterBar { content: Content::Actions(actions.into_iter().collect()), actions: true, props, ..body }
     }
 
     /// The first `count` actions sit at the start edge in the given order and the rest from the end edge as
