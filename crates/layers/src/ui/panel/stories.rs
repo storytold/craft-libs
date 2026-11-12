@@ -69,3 +69,12 @@ fn layers_panel_extra_columns(ui: &mut Ui, data: &mut StoryData) -> StoryOutput 
     let shown = LayersPanel::new(&tree).lock_column(true).show(ui);
     with_readout(data, shown)
 }
+
+/// The row kinds PhotoCraft adds: a compact artboard heading, a frame with its content thumbnail, a smart object's badge,
+/// Smart Filter rows with their Blending Options buttons and one of them selected on its own, an artboard with a mask.
+#[story(LayersPanel<'static, FakeLayers>, covers = [], drive = Drive::Never)]
+fn layers_panel_row_kinds(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let tree = FakeLayers::row_kinds();
+    let shown = LayersPanel::new(&tree).show(ui);
+    with_readout(data, shown)
+}

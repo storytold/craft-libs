@@ -6,10 +6,12 @@ use craft_theme::LabelColor;
 use craft_ui::contract::Entry;
 
 use super::filter::{EffectKind, FilterBy, LayerAttribute, LayerFilter, SmartKind, SmartSource};
+use super::tree::LayerRowKey;
 use super::tree::{
     LayerInfo, LayerKind, LayerLocks, LayerPart, LayerProperties, LayerSelection, LayerTree, LayersFooterState, MaskInfo, SubRow, SubRowGroup,
     SubRows,
 };
+use craft_behavior::IconId;
 
 /// One layer of a [`FakeLayers`] tree.
 #[derive(Clone, Debug)]
@@ -258,6 +260,43 @@ impl FakeLayers {
             let id = u32::try_from(n + 1).expect("the mock tree holds fewer than 2^32 layers");
             tree.push(id, None, LayerInfo::new(format!("Layer {id}"), LayerKind::Pixel), false);
         }
+        tree
+    }
+
+    /// The row kinds PhotoCraft adds (story `composites/layers-panel/row-kinds`): an artboard
+    /// without masks (a heading) holding a frame and a smart object with Smart Filters, each with
+    /// its Blending Options button, the first filter selected on its own; an artboard with a
+    /// mask, which keeps its thumbnail; the Background.
+    pub fn row_kinds() -> Self {
+        let mut tree = Self::default();
+        let board = tree.add(None, named("Artboard 1", LayerKind::Artboard, |_| {}), true);
+        tree.add(Some(board), named("Frame 1", LayerKind::Frame, |_| {}), false);
+        let smart = tree.add(
+            Some(board),
+            named("Photo", LayerKind::SmartObject, |i| {
+                i.has_smart_filters = true;
+                i.thumb_badge = Some(IconId::new("app_window"));
+            }),
+            false,
+        );
+        tree.layer_mut(smart).effects_open = true;
+        let filter = |label: &str| SubRow { options: true, ..sub_row(label) };
+        tree.layer_mut(smart).smart_filters =
+            Some(SubRows::new(SubRow { mask: true, ..SubRow::new("Smart Filters") }, vec![filter("Gaussian Blur"), filter("Add Noise")]));
+        let masked = tree.add(None, named("Artboard 2", LayerKind::Artboard, |i| i.masks.push(mask(LayerPart::LayerMask, true, true))), true);
+        tree.add(Some(masked), named("Sky", LayerKind::Pixel, |_| {}), false);
+        tree.add(
+            None,
+            named("Background", LayerKind::Pixel, |i| {
+                i.background = true;
+                i.renamable = false;
+                i.thumb_loads_selection = false;
+                i.locks = LayerLocks { all: true, ..LayerLocks::default() };
+            }),
+            false,
+        );
+        tree.selection = LayerSelection::new(vec![smart], Some(smart), LayerPart::Pixels);
+        tree.selection.sub_row = Some(LayerRowKey::Filters(smart, Some(0)));
         tree
     }
 
