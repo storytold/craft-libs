@@ -16,6 +16,10 @@ and, for every file kept, the hash in the package (`source_sha256`) and the hash
   after it is stated for `alpha^(i+1)`.
 - `docs/sweep.typ`: two typos are corrected. "condi0.2tions" reads "conditions", and `q(i+i)` reads
   `q(i+1)`, the first index for which `q` is false.
+- `docs/sweep.typ`: the lemma for the intersection scan to the left asks for the ordering invariant on
+  `(alpha^1, ..., alpha^(i+1))` and the crossing invariant on `(alpha^1, ..., alpha^i)`, which is how
+  the bidirectional lemma uses it. The argument for the order invariant cites the crossing invariant
+  instead of a "third invariant"; the document defines two.
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 

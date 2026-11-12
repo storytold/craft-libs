@@ -221,7 +221,7 @@ The first observation is that the sweep line invariants are maintained as we inc
 to the next event:
 + For the order invariant, first note that there is an event whenever $y$ leaves the domain of a segment, so $y$ remains in all domains until the next event.
   Moreover, if at any $y' > y$ the ordering breaks, two line segments must have $epsilon$-crossed one another by $y'$.
-  The third invariant guarantees that there's an event before this happens, so by the contra-positive until an event happens the ordering
+  The crossing invariant guarantees that there's an event before this happens, so by the contra-positive until an event happens the ordering
   constraint is maintained.
 + The crossing invariant is maintained because the set of things to check (i.e. the set of line segments that $epsilon$-cross
   one another after $y$) only shrinks as $y$ increases.
@@ -383,8 +383,8 @@ of the other one.
 We'll skip the proof of the following lemma, because it's basically the same as the last one.
 
 #lemma[
-Suppose that $(alpha^1, ..., alpha^i)$ satisfy the ordering invariant
-at $y$, and suppose also that $(alpha^1, ..., alpha^(i+1))$
+Suppose that $(alpha^1, ..., alpha^(i+1))$ satisfy the ordering invariant
+at $y$, and suppose also that $(alpha^1, ..., alpha^i)$
 satisfy the crossing invariant at $y$.
 After running an intersection scan to the left,
 $(alpha^1, ..., alpha^(i+1))$ satisfy a slightly stronger crossing invariant at $y$: for every $j <= i$,
