@@ -651,3 +651,53 @@ fn an_empty_swap_guid_on_a_row_resets_a_swap_below_it_to_the_default_main() {
     assert_eq!(badge_main(&out.json, "Card", 1).as_deref(), Some("1:20"));
     assert_eq!(badge_main(&out.json, "Card copy", 1).as_deref(), Some("1:10"));
 }
+
+/// A three-point network blob whose points have no style of their own.
+fn triangle_network() -> Vec<u8> {
+    crate::network::encode(&crate::network::Network {
+        vertices: vec![
+            crate::network::Vertex { style: 0, x: 0.0, y: 0.0 },
+            crate::network::Vertex { style: 0, x: 1.0, y: 0.0 },
+            crate::network::Vertex { style: 0, x: 0.5, y: 1.0 },
+        ],
+        segments: (0..3).map(|i| crate::network::Segment { style: 0, a: i, ta: (0.0, 0.0), b: (i + 1) % 3, tb: (0.0, 0.0) }).collect(),
+        regions: vec![crate::network::Region { style: 0, non_zero: true, loops: vec![vec![0, 1, 2]] }],
+    })
+}
+
+#[test]
+fn points_without_a_radius_of_their_own_take_the_layers() {
+    let vd = || o(vec![("vectorNetworkBlob", u(0)), ("normalizedSize", xy(1.0, 1.0))]);
+    let nodes = vec![
+        node(0, None, "DOCUMENT", "D", vec![]),
+        node(1, Some((0, "!")), "CANVAS", "P", vec![]),
+        node(2, Some((1, "!")), "SYMBOL", "Main", vec![("size", xy(20.0, 20.0))]),
+        node(3, Some((2, "!")), "VECTOR", "V", vec![("size", xy(20.0, 20.0)), ("vectorData", vd()), ("cornerRadius", f(4.0))]),
+        // An instance overriding the vector's radius: its own network, not its main's.
+        node(
+            4,
+            Some((1, "\"")),
+            "INSTANCE",
+            "I",
+            vec![
+                ("size", xy(20.0, 20.0)),
+                (
+                    "symbolData",
+                    o(vec![
+                        ("symbolID", g(2)),
+                        ("symbolOverrides", arr(vec![o(vec![("guidPath", o(vec![("guids", arr(vec![g(3)]))])), ("cornerRadius", f(7.0))])])),
+                    ]),
+                ),
+            ],
+        ),
+    ];
+    let msg = o(vec![("nodeChanges", arr(nodes)), ("blobs", arr(vec![o(vec![("bytes", Kv::Bytes(triangle_network()))])]))]);
+    let out = mapped(&msg);
+    let radii = |r: &Value| -> Vec<f64> {
+        let net = out.networks[r.as_u64().unwrap() as usize].as_ref().unwrap();
+        net.vertices.iter().map(|v| v.radius).collect()
+    };
+    assert_eq!(radii(&named(&out.json, "Main")["children"][0]["vectorNetworkRef"]), [4.0, 4.0, 4.0]);
+    let in_instance = &named(&out.json, "I")["children"][0];
+    assert_eq!(radii(&in_instance["vectorNetworkRef"]), [7.0, 7.0, 7.0]);
+}
