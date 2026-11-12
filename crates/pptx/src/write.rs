@@ -16,12 +16,15 @@ use craft_xml::{Local, Writer};
 
 use crate::text::{ListStyle, Paragraph, TextBody};
 use crate::theme::Theme;
-use crate::{Background, Defaults, Error, Layout, LayoutId, Master, MediaId, PhType, Placeholder, Presentation, Shape, ShapeId, Slide, SlideId};
+use crate::{
+    Background, Comment, Defaults, Error, Layout, LayoutId, Master, MediaId, PhType, Placeholder, Presentation, Shape, ShapeId, Slide, SlideId,
+};
 
 pub(crate) const NS_A: &str = craft_drawingml::ns::NS_A;
 pub(crate) const NS_R: &str = craft_drawingml::ns::NS_R;
 pub(crate) const NS_P: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
 pub(crate) const NS_MC: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+pub(crate) const NS_P188: &str = "http://schemas.microsoft.com/office/powerpoint/2018/8/main";
 pub(crate) const NS_P14: &str = "http://schemas.microsoft.com/office/powerpoint/2010/main";
 pub(crate) const RT_MEDIA: &str = "http://schemas.microsoft.com/office/2007/relationships/media";
 pub(crate) const RT_MODEL3D: &str = "http://schemas.microsoft.com/office/2017/06/relationships/model3d";
@@ -43,6 +46,23 @@ const CT_TAGS: &str = "application/vnd.openxmlformats-officedocument.presentatio
 const CT_CHART: &str = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
 const CT_CHARTEX: &str = "application/vnd.ms-office.chartex+xml";
 const RT_CHARTEX: &str = "http://schemas.microsoft.com/office/2014/relationships/chartEx";
+const CT_NOTES: &str = "application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml";
+
+const CT_COMMENTS: &str = "application/vnd.openxmlformats-officedocument.presentationml.comments+xml";
+
+const CT_AUTHORS: &str = "application/vnd.openxmlformats-officedocument.presentationml.commentAuthors+xml";
+
+/// Modern threaded comments (read by PowerPoint 2021+ and DeckCraft; the flattened legacy
+/// part next to it serves older readers).
+pub(crate) const CT_COMMENTS_MODERN: &str = "application/vnd.ms-powerpoint.comments+xml";
+
+const CT_AUTHORS_MODERN: &str = "application/vnd.ms-powerpoint.authors+xml";
+
+const RT_COMMENTS_MODERN: &str = "http://schemas.microsoft.com/office/2018/10/relationships/comments";
+
+const RT_AUTHORS_MODERN: &str = "http://schemas.microsoft.com/office/2018/10/relationships/authors";
+/// Extension URI of the modern-comments anchor in a slide (names the threaded comment part).
+const COMMENTS_EXT_URI: &str = "{6950BFC3-D8DA-4A85-94F7-54DA5524770B}";
 const CT_CORE: &str = "application/vnd.openxmlformats-package.core-properties+xml";
 const CT_APP: &str = "application/vnd.openxmlformats-officedocument.extended-properties+xml";
 
@@ -661,6 +681,11 @@ pub fn export(p: &Presentation, defaults: &dyn Defaults, main_ct: &str) -> Resul
         handout_rid = Some(pres.rels.add("handoutMaster", &craft_opc::relative("ppt/presentation.xml", handout_path), false));
     }
 
+    // Comment authors.
+    let mut authors: Vec<(String, String, u32)> = vec![];
+    let mut author_map: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut n_comments = 0u32;
+
     // Slides.
     let mut slide_rids = vec![];
     for (i, s) in p.slides.iter().enumerate() {
@@ -669,11 +694,62 @@ pub fn export(p: &Presentation, defaults: &dyn Defaults, main_ct: &str) -> Resul
         if let Some(lp) = layout_parts.get(&s.layout) {
             so.rels.add("slideLayout", &craft_opc::relative(&sname, lp), false);
         }
-        let xml = slide_xml(&mut x, &mut so, s);
+        if !s.notes.is_empty() {
+            let nname = format!("ppt/notesSlides/notesSlide{}.xml", i + 1);
+            so.rels.add("notesSlide", &craft_opc::relative(&sname, &nname), false);
+            let mut no = Out::new(&nname);
+            no.rels.add("notesMaster", &craft_opc::relative(&nname, notes_master), false);
+            no.rels.add("slide", &craft_opc::relative(&nname, &sname), false);
+            let xml = notes_xml(&mut x, &mut no, &s.notes);
+            x.pkg.xml_part(&nname, CT_NOTES, xml);
+            x.pkg.rels(&nname, &no.rels);
+        }
+        let mut comment_rel = None;
+        if !s.comments.is_empty() {
+            n_comments += 1;
+            let cname = format!("ppt/comments/comment{n_comments}.xml");
+            so.rels.add("comments", &craft_opc::relative(&sname, &cname), false);
+            x.pkg.xml_part(&cname, CT_COMMENTS, comments_xml(&s.comments, &mut authors, &mut author_map));
+            // The modern threaded part next to the flattened legacy one:
+            // PowerPoint 2021+ and DeckCraft read replies and resolved state from it,
+            // older readers keep the legacy part.
+            let mname = format!("ppt/comments/modernComment{n_comments}.xml");
+            let rid = so.rels.add(RT_COMMENTS_MODERN, &craft_opc::relative(&sname, &mname), false);
+            x.pkg.xml_part(&mname, CT_COMMENTS_MODERN, modern_comments_xml(&s.comments, &cname, &mut authors, &mut author_map));
+            comment_rel = Some(rid);
+        }
+        let xml = slide_xml(&mut x, &mut so, s, comment_rel.as_deref());
         x.pkg.xml_part(&sname, CT_SLIDE, xml);
         x.pkg.rels(&sname, &so.rels);
         slide_rids.push(pres.rels.add("slide", &craft_opc::relative("ppt/presentation.xml", &sname), false));
     }
+    if !authors.is_empty() {
+        let name = "ppt/commentAuthors.xml";
+        let mut w = Writer::document();
+        root_open(&mut w, "p:cmAuthorLst", A::new());
+        for (i, (n, ini, last)) in authors.iter().enumerate() {
+            w.tag("p:cmAuthor").attr("id", i).attr("name", n).attr("initials", ini).attr("lastIdx", last).attr("clrIdx", i % 8).empty();
+        }
+        w.close();
+        x.pkg.xml_part(name, CT_AUTHORS, w.into_bytes());
+        pres.rels.add("commentAuthors", "commentAuthors.xml", false);
+        // The modern authors part the threaded comments' authorId GUIDs point at.
+        let mut w = Writer::document();
+        w.tag("p188:authorLst").attr("xmlns:p188", NS_P188).open();
+        for (n, ini, _) in authors.iter() {
+            w.tag("p188:author")
+                .attr("id", author_guid(n))
+                .attr("name", n)
+                .attr("initials", ini)
+                .attr("userId", "")
+                .attr("providerId", "None")
+                .empty();
+        }
+        w.close();
+        x.pkg.xml_part("ppt/authors.xml", CT_AUTHORS_MODERN, w.into_bytes());
+        pres.rels.add(RT_AUTHORS_MODERN, "authors.xml", false);
+    }
+
     // Presentation-level parts.
     let theme1 = "theme/theme1.xml";
     pres.rels.add("theme", theme1, false);
@@ -763,7 +839,7 @@ fn master_xml(x: &mut Exp, o: &mut Out, m: &Master, layouts: &[(u64, String)]) -
     w.into_bytes()
 }
 
-fn slide_xml(x: &mut Exp, o: &mut Out, s: &Slide) -> Vec<u8> {
+fn slide_xml(x: &mut Exp, o: &mut Out, s: &Slide, comment_rel: Option<&str>) -> Vec<u8> {
     let mut w = Writer::document();
     root_open(&mut w, "p:sld", A::new().o("showMasterSp", (!s.show_master_shapes).then_some("0")).o("show", s.hidden.then_some("0")));
     let ids = csld(&mut w, x, o, &s.name, s.background.as_ref(), &s.shapes, &s.tags);
@@ -774,9 +850,188 @@ fn slide_xml(x: &mut Exp, o: &mut Out, s: &Slide) -> Vec<u8> {
     if !s.animations.is_empty() {
         timing::timing(&mut w, x, &s.animations, &s.shapes, &ids);
     }
-    ext_list(&mut w, s.raw_ext.as_deref());
+    slide_ext_list(&mut w, s.raw_ext.as_deref(), comment_rel);
     w.close();
     w.into_bytes()
+}
+
+fn notes_xml(x: &mut Exp, o: &mut Out, notes: &TextBody) -> Vec<u8> {
+    let mut w = Writer::document();
+    root_open(&mut w, "p:notes", A::new());
+    let img = Shape {
+        id: ShapeId(2),
+        name: "Slide Image Placeholder 1".into(),
+        ph: Some(Placeholder { kind: PhType::SlideImage, ..Default::default() }),
+        ..Default::default()
+    };
+    let mut tb = notes.clone();
+    tb.body = Default::default();
+    let body = Shape {
+        id: ShapeId(3),
+        name: "Notes Placeholder 2".into(),
+        ph: Some(Placeholder { kind: PhType::Body, idx: 1, ..Default::default() }),
+        text: Some(tb),
+        ..Default::default()
+    };
+    csld(&mut w, x, o, "", None, &[img, body], &[]);
+    w.open("p:clrMapOvr", &[]);
+    w.empty("a:masterClrMapping", &[]);
+    w.close();
+    w.close();
+    w.into_bytes()
+}
+
+fn comments_xml(list: &[Comment], authors: &mut Vec<(String, String, u32)>, author_map: &mut std::collections::HashMap<String, usize>) -> Vec<u8> {
+    let mut w = Writer::document();
+    root_open(&mut w, "p:cmLst", A::new());
+    let mut flat: Vec<&Comment> = vec![];
+    for c in list.iter().take(10_000) {
+        flat.push(c);
+        for r in c.replies.iter().take(1000) {
+            flat.push(r);
+        }
+    }
+    for c in flat {
+        let ai = author_slot(c, authors, author_map);
+        let idx = match authors.get_mut(ai) {
+            Some(a) => {
+                a.2 += 1;
+                a.2
+            }
+            None => 1,
+        };
+        let dt = if valid_date(&c.date) { c.date.clone() } else { "2024-01-01T00:00:00.000".into() };
+        w.tag("p:cm").attr("authorId", ai).attr("dt", dt).attr("idx", idx).open();
+        let pos = |v: f64| if v.is_finite() { (v * 8.0).round().clamp(0.0, 1.0e9) as i64 } else { 0 };
+        w.tag("p:pos").attr("x", pos(c.x)).attr("y", pos(c.y)).empty();
+        w.leaf("p:text", &[], &c.text);
+        w.close();
+    }
+    w.close();
+    w.into_bytes()
+}
+
+/// The author's slot in the shared bucket list, adding them on first use. Legacy parts index the
+/// list by number, the modern authors part gives every slot a GUID.
+fn author_slot(c: &Comment, authors: &mut Vec<(String, String, u32)>, map: &mut std::collections::HashMap<String, usize>) -> usize {
+    let author = if c.author.is_empty() { "Author" } else { &c.author };
+    if let Some(&i) = map.get(author) {
+        return i;
+    }
+    let ini = if c.initials.is_empty() { author.chars().filter(|ch| ch.is_alphabetic()).take(2).collect() } else { c.initials.clone() };
+    let idx = authors.len();
+    authors.push((author.to_string(), ini, 0));
+    map.insert(author.to_string(), idx);
+    idx
+}
+
+/// The modern (p188) threaded-comment part: replies nest and the resolved state is kept, which
+/// the flattened legacy part cannot express.
+fn modern_comments_xml(
+    list: &[Comment],
+    part: &str,
+    authors: &mut Vec<(String, String, u32)>,
+    author_map: &mut std::collections::HashMap<String, usize>,
+) -> Vec<u8> {
+    let mut w = Writer::document();
+    w.tag("p188:cmLst").attr("xmlns:p188", NS_P188).attr("xmlns:a", NS_A).attr("xmlns:r", NS_R).open();
+    for (ti, c) in list.iter().take(10_000).enumerate() {
+        modern_comment(&mut w, c, part, ti, authors, author_map, 0);
+    }
+    w.close();
+    w.into_bytes()
+}
+
+fn modern_comment(
+    w: &mut Writer,
+    c: &Comment,
+    part: &str,
+    ti: usize,
+    authors: &mut Vec<(String, String, u32)>,
+    author_map: &mut std::collections::HashMap<String, usize>,
+    depth: usize,
+) {
+    let ai = author_slot(c, authors, author_map);
+    let author = authors.get(ai).map(|(n, _, _)| n.clone()).unwrap_or_default();
+    let dt = if valid_date(&c.date) { c.date.clone() } else { "2024-01-01T00:00:00.000".into() };
+    let mut a = A::new()
+        .a("id", craft_drawingml::table::styles::guid(&format!("deckcraft-comment:{part}:{ti}")))
+        .a("authorId", author_guid(&author))
+        .a("created", dt);
+    if c.resolved {
+        a = a.a("status", "resolved");
+    }
+    w.tag("p188:cm").list(a).open();
+    w.empty("p188:unknownAnchor", &[]);
+    let emu = |v: f64| if v.is_finite() { (v * 12_700.0).round().clamp(0.0, 1.0e9) as i64 } else { 0 };
+    w.tag("p188:pos").attr("x", emu(c.x)).attr("y", emu(c.y)).empty();
+    if depth < 4 && !c.replies.is_empty() {
+        w.open("p188:replyLst", &[]);
+        for (ri, r) in c.replies.iter().take(1000).enumerate() {
+            let ri_ai = author_slot(r, authors, author_map);
+            let r_author = authors.get(ri_ai).map(|(n, _, _)| n.clone()).unwrap_or_default();
+            let rdt = if valid_date(&r.date) { r.date.clone() } else { "2024-01-01T00:00:00.000".into() };
+            let mut ra = A::new()
+                .a("id", craft_drawingml::table::styles::guid(&format!("deckcraft-comment:{part}:{ti}:{ri}")))
+                .a("authorId", author_guid(&r_author))
+                .a("created", rdt);
+            if r.resolved {
+                ra = ra.a("status", "resolved");
+            }
+            w.tag("p188:reply").list(ra).open();
+            tx_body(w, &r.text);
+            w.close();
+        }
+        w.close();
+    }
+    tx_body(w, &c.text);
+    w.close();
+}
+
+/// An `a:txBody` with one paragraph per line, the shape the reader re-joins with `\n`.
+fn tx_body(w: &mut Writer, text: &str) {
+    w.open("p188:txBody", &[]);
+    w.empty("a:bodyPr", &[]);
+    for line in text.split('\n') {
+        w.open("a:p", &[]);
+        w.open("a:r", &[]);
+        w.tag("a:rPr").attr("lang", "en-US").empty();
+        w.leaf("a:t", &[], line);
+        w.close();
+        w.close();
+    }
+    w.close();
+}
+
+/// The modern author id for a name: the same GUID the authors part writes. The `deckcraft-`
+/// seeds here and on comment ids are part of the format: files written earlier carry them.
+fn author_guid(name: &str) -> String {
+    craft_drawingml::table::styles::guid(&format!("deckcraft-comment-author:{name}"))
+}
+
+/// The slide's extension list, plus the modern-comments anchor when the slide has a threaded
+/// comment part: the rel reference is how PowerPoint finds it.
+fn slide_ext_list(w: &mut Writer, raw: Option<&str>, comment_rel: Option<&str>) {
+    let mut exts: Vec<String> = raw
+        .filter(|r| !r.trim().is_empty())
+        .and_then(|raw| crate::package::parse(format!("<x>{raw}</x>").as_bytes()).ok())
+        .map(|d| d.root.elements().filter(|e| e.is(Local("ext")) && e.attr_local("uri").is_some()).map(|e| e.to_xml()).collect())
+        .unwrap_or_default();
+    if let Some(rid) = comment_rel {
+        let mut e = Writer::new();
+        e.tag("p:ext").attr("uri", COMMENTS_EXT_URI).open();
+        e.tag("p188:commentRel").attr("xmlns:p188", NS_P188).attr("r:id", rid).empty();
+        e.close();
+        exts.push(e.finish());
+    }
+    if exts.is_empty() {
+        return;
+    }
+    w.open("p:extLst", &[]);
+    for e in exts {
+        w.raw(&e);
+    }
+    w.close();
 }
 
 /// Sections with every slide in exactly one section, in slide order.
