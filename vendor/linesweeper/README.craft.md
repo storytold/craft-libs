@@ -15,6 +15,7 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 
 | File | Change |
 |---|---|
+| `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
 | `src/topology.rs` | `Contours::grouped` walks each containment tree with an explicit stack instead of one recursive call per nesting level, and returns the contours in the same order. Before, contours nested about 10,000 deep overflowed a 1 MiB stack, which aborts the process. The `grouped_*` tests cover the order and a 30,000-deep nesting on a 256 KiB stack. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:

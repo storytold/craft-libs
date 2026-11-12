@@ -1,0 +1,20 @@
+[package]
+name = "craft-plotter"
+description = "Cutter and pen-plotter command languages: HP-GL, DMPL and GP-GL (plain and the Silhouette dialect) from a job in millimetres, plus the device queries and reply parsers. No I/O"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+serde = { workspace = true, optional = true }
+
+[features]
+# `Serialize` / `Deserialize` for `gpgl::silhouette::Mat`, as its short name (`"12x24"`).
+serde = ["dep:serde"]
+
