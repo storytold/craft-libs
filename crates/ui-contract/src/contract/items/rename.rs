@@ -19,7 +19,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
 
     /// A rename requested from outside (`request_rename`): the lead moves to the item, the item is revealed and its
     /// rename field opens.
-    pub(super) fn requested_rename(&mut self, comp: &C, cx: &mut Cx<'_, C>, props: &CollectionProps, layout: &C::ItemLayout, view: f32) {
+    pub(super) fn requested_rename(&mut self, comp: &C, cx: &mut Cx<'_, C>, props: &CollectionProps, layout: &C::ItemLayout) {
         let Some(key) = request::take_rename::<C::Key>(&cx.core.ctx, cx.core.id) else { return };
         if let Some(at) = self.index_of(&key)
             && !self.source.section_stop(at)
@@ -27,7 +27,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             && comp.can_rename(&key)
         {
             self.move_lead(at, LeadSource::Keys);
-            self.reveal_with(layout, at, view);
+            self.reveal_with(layout, at);
             self.begin_rename(comp, cx, at);
         }
     }

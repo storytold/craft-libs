@@ -109,8 +109,6 @@ pub(super) struct Session<Id> {
     /// The selection anchor the list left, with the layers of the pick that left it.
     anchor: Option<LayerRowKey<Id>>,
     produced: Vec<Id>,
-    /// The active layer of the last pass, to reveal it when it changes.
-    seen_active: Option<Option<Id>>,
     /// The menu the last context request chose.
     menu: Option<OpenMenu<Id>>,
     /// The eye or lock sweep in progress.
@@ -121,7 +119,7 @@ pub(super) struct Session<Id> {
 
 impl<Id> Default for Session<Id> {
     fn default() -> Self {
-        Session { anchor: None, produced: Vec::new(), seen_active: None, menu: None, sweeps: ToggleSweeps::default(), filter: LayerFilter::default() }
+        Session { anchor: None, produced: Vec::new(), menu: None, sweeps: ToggleSweeps::default(), filter: LayerFilter::default() }
     }
 }
 
@@ -177,6 +175,7 @@ pub struct LayersPanel<'a, T: LayerTree> {
     trailing: Option<Box<dyn TrailingCell<T::Id> + 'a>>,
     reveal: Option<T::Id>,
     rename: Option<T::Id>,
+    document: Option<u64>,
 }
 
 /// What [`LayersPanel::show`] returns.
@@ -222,6 +221,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             trailing: None,
             reveal: None,
             rename: None,
+            document: None,
         }
     }
 
@@ -304,10 +304,20 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
         self
     }
 
-    /// Reveals `layer` this pass: its closed ancestors open ([`LayersEvent::Open`]) and its row
-    /// scrolls into view when hidden. The active layer is revealed by itself when it changes.
+    /// Reveals `layer` this pass: its closed groups open ([`LayersEvent::Open`]) and its row scrolls into view when it
+    /// is not wholly in view. The app calls it in the pass its active layer changes.
     pub fn reveal(mut self, layer: T::Id) -> Self {
         self.reveal = Some(layer);
+        self
+    }
+
+    /// The document the panel shows: the rows keep their scroll position and lead per document, so each document
+    /// shows again where it was left. Without it every document shares one.
+    pub fn document(mut self, key: impl std::hash::Hash) -> Self {
+        use std::hash::Hasher as _;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        key.hash(&mut hasher);
+        self.document = Some(hasher.finish());
         self
     }
 
@@ -336,13 +346,17 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             trailing,
             reveal,
             rename,
+            document,
         } = self;
         let env = Env::of(ui);
         let words = env.words::<LayersPanelWords>();
         let list_words = env.words::<ListWords>();
         let fallback = LayersSettings::default();
         let settings = settings.unwrap_or(&fallback);
-        let list = ui.scope_id().with("layers-rows");
+        let list = match document {
+            Some(document) => ui.scope_id().with(("layers-rows", document)),
+            None => ui.scope_id().with("layers-rows"),
+        };
         let cx = PanelContext {
             list,
             tree,
@@ -419,7 +433,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             .show(ui, |ui, stack| {
                 let filter = current.borrow().clone();
                 let session = stack.memory::<Session<T::Id>>();
-                let plan = reveal_plan(tree, cx.selection.active.as_ref(), reveal.clone(), session);
+                let plan = reveal_plan(tree, reveal.clone());
                 let rows = LayerRows::new(tree, &filter, &plan.opened());
                 if let Some(layer) = rename.clone() {
                     start_rename(ui, list, layer);

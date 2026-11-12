@@ -204,24 +204,12 @@ impl<Id: Clone> RevealPlan<Id> {
     }
 }
 
-/// The reveal of the layer the app named, or of the active layer when it changed since the last pass.
-pub(in crate::ui::panel) fn reveal_plan<T: LayerTree>(
-    tree: &T,
-    active: Option<&T::Id>,
-    named: Option<T::Id>,
-    session: &mut Session<T::Id>,
-) -> RevealPlan<T::Id> {
-    let previous = session.seen_active.replace(active.cloned());
-    if let Some(id) = named {
-        let opens = closed_ancestor_opens(tree, &id);
-        return RevealPlan { target: Some(id), opens };
+/// The reveal the app named: the layer, past its closed ancestors opened.
+pub(in crate::ui::panel) fn reveal_plan<T: LayerTree>(tree: &T, named: Option<T::Id>) -> RevealPlan<T::Id> {
+    match named {
+        Some(id) => RevealPlan { opens: closed_ancestor_opens(tree, &id), target: Some(id) },
+        None => RevealPlan { target: None, opens: Vec::new() },
     }
-    let changed = previous.as_ref().is_some_and(|previous| previous.as_ref() != active);
-    let opens = match (active, changed) {
-        (Some(active), true) => closed_ancestor_opens(tree, active),
-        _ => Vec::new(),
-    };
-    RevealPlan { target: active.cloned().filter(|_| changed), opens }
 }
 
 /// The tree's selection as the list holds it: the selected layers and the sub-row selected on its own, that row or

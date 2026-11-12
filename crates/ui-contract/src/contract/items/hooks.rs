@@ -366,7 +366,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         self.drag_step(comp, cx, &layout, (rect, offset, rtl), &props);
         self.marquee_step(comp, cx, &layout, (rect, offset, rtl), &props);
         self.navigate(comp, cx, &layout, view, header_held);
-        self.switch_page(comp, cx, &props, &layout, view);
+        self.switch_page(comp, cx, &props, &layout);
         let lead_at = self.lead.key.as_ref().and_then(|key| self.index_of(key)).or(lead_at);
         self.intent_actions(comp, cx, &props, lead_at, header_held);
         self.context_key(cx, &layout, at, lead_at);
@@ -374,9 +374,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         self.toggle_by_access(cx, &layout, at);
         self.node_by_access(comp, cx, &layout, at);
         self.reorder_and_rename(comp, cx, &props, lead_at);
-        self.requested_rename(comp, cx, &props, &layout, view);
-        self.requested_reveal(comp, &layout, view);
-        self.type_ahead(comp, cx, &layout, view, lead_at);
+        self.requested_rename(comp, cx, &props, &layout);
+        self.requested_reveal(comp, &layout);
+        self.type_ahead(comp, cx, &layout, lead_at);
         request::record_lead(&cx.core.ctx, cx.core.id, self.lead.key.as_ref().and_then(|key| self.index_of(key)));
         if let Some(at) = self.page_reveal.take().filter(|&at| layout.shown(at)) {
             cx.core.reveal = Some(self.screen(&layout, rect, at, ScrollPos::default(), rtl));
@@ -411,6 +411,19 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         }
         let rtl = env.direction.is_rtl();
         let node = matches!(C::ROLE, Role::Node(_));
+        let (child_size, child_glyphs) = (comp.props(Internal::new()).child_size, comp.props(Internal::new()).child_glyphs);
+        // The rows sit on the surface the collection paints, else on the one the collection sits on.
+        let own = surface.or_else(|| cx.style.surface().and_then(|look| look.kind_in(&cx.core.state)));
+        let base_env = env.derive(|scoped| {
+            scoped.extend_values(values);
+            scoped.arena = Some(ArenaId::new(id));
+            scoped.size = child_size.unwrap_or(cx.core.resolved.size);
+            if let Some(role) = child_glyphs {
+                scoped.glyphs = role;
+            }
+            scoped.surface = SurfaceKind::under(own, scoped.surface);
+        });
+        self.place_reveal(comp, ui, (id, cx.core.env, &base_env), &mut layout, rect);
         let offset = ScrollPos { x: self.offset_x, y: self.offset };
         Arc::make_mut(&mut layout).set_view(rect.size(), offset);
         if self.scrolls {
@@ -436,18 +449,6 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         if let Some(scope) = command_scope {
             crate::runtime::commands::register_instance(&ctx, scope, id);
         }
-        let (child_size, child_glyphs) = (comp.props(Internal::new()).child_size, comp.props(Internal::new()).child_glyphs);
-        // The rows sit on the surface the collection paints, else on the one the collection sits on.
-        let own = surface.or_else(|| cx.style.surface().and_then(|look| look.kind_in(&cx.core.state)));
-        let base_env = env.derive(|scoped| {
-            scoped.extend_values(values);
-            scoped.arena = Some(ArenaId::new(id));
-            scoped.size = child_size.unwrap_or(cx.core.resolved.size);
-            if let Some(role) = child_glyphs {
-                scoped.glyphs = role;
-            }
-            scoped.surface = SurfaceKind::under(own, scoped.surface);
-        });
         self.header.paint(ui, cx, env, id, rtl);
         let len = self.source.len();
         let tree = matches!(layout.nav(), craft_behavior::NavShape::Tree);
@@ -609,8 +610,10 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                         (None, Some((members_ui, _))) => members_ui,
                         (None, None) => unreachable!("a row is a run or a member"),
                     };
-                    if layout.is_auto(at) {
+                    if layout.is_auto(at) && !self.measured_for_reveal.contains(&at) {
                         let measured = item.measure_in(measure_ui, Proposal::Width(row.width())).y;
+                        #[cfg(feature = "testing")]
+                        crate::runtime::measure::count_row_measure(&ctx, rows::measured_id(id, &key));
                         rows::record_measure(&ctx, id, rows::measured_id(id, &key), Vec2::new(row.width(), measured));
                         if measured != row.height() {
                             Arc::make_mut(&mut layout).set_height(at, measured);

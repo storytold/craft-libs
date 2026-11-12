@@ -49,12 +49,12 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             match step {
                 NavStep::Moved(to) if cells => {
                     let reveal = self.cell_move(comp, layout, mv, to, state.column, mods);
-                    self.reveal_with(layout, reveal, view);
+                    self.reveal_with(layout, reveal);
                 }
                 NavStep::Column(column) if cells => {
                     if let Some((at, _)) = start {
                         let reveal = self.cell_move(comp, layout, mv, at, column, mods);
-                        self.reveal_with(layout, reveal, view);
+                        self.reveal_with(layout, reveal);
                     }
                 }
                 // An arrow at the edge of the grid still runs the rules: it collapses the selection to the active cell.
@@ -72,7 +72,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     } else if !mods.lead && !mods.extend && comp.items().arrows_select {
                         self.pick(comp, to, false, false);
                     }
-                    self.reveal_with(layout, to, view);
+                    self.reveal_with(layout, to);
                 }
                 NavStep::Expand(at) => self.events.push(CollectionEvent::Open(OpenChange::new(self.source.key(at), true))),
                 NavStep::Collapse(at) => self.events.push(CollectionEvent::Open(OpenChange::new(self.source.key(at), false))),
@@ -83,7 +83,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
 
     /// Ctrl+Tab and its platform equivalents at a collection of pages: the lead and the selection move to the next
     /// (or previous) item that can be taken, wrapping at the ends.
-    pub(super) fn switch_page(&mut self, comp: &C, cx: &mut Cx<'_, C>, props: &CollectionProps, layout: &C::ItemLayout, view: f32) {
+    pub(super) fn switch_page(&mut self, comp: &C, cx: &mut Cx<'_, C>, props: &CollectionProps, layout: &C::ItemLayout) {
         if !props.pages {
             return;
         }
@@ -101,7 +101,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         if let Some(to) = to {
             self.move_lead(to, LeadSource::Keys);
             self.pick(comp, to, false, false);
-            self.reveal_with(layout, to, view);
+            self.reveal_with(layout, to);
         }
     }
 
@@ -261,7 +261,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     }
 
     /// Typed text moves the lead to the next row whose label starts with it.
-    pub(super) fn type_ahead(&mut self, comp: &C, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, view: f32, lead_at: Option<usize>) {
+    pub(super) fn type_ahead(&mut self, comp: &C, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, lead_at: Option<usize>) {
         let (ctx, id, len) = (cx.core.ctx.clone(), cx.core.id, self.source.len());
         while let Some(text) = cx.core.intents.take_text() {
             let now = frame::clock(&ctx);
@@ -275,7 +275,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             if let Some(to) = TypeAhead::pick(&prefix, lead_at, len, |at| source.text(at).unwrap_or_default()) {
                 self.move_lead(to, LeadSource::Keys);
                 self.pick(comp, to, false, false);
-                self.reveal_with(layout, to, view);
+                self.reveal_with(layout, to);
             }
         }
     }

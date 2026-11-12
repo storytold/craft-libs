@@ -8,7 +8,7 @@ use crate::contract::collection::RowState;
 use crate::contract::run::{Measuring, ShowAt};
 use crate::contract::{Collection, Internal, ItemCx, Props, Show as _, Sizing};
 use crate::runtime::access::SetPosition;
-use crate::runtime::env::{Env, ItemFacts};
+use crate::runtime::env::{Env, EnvView, ItemFacts};
 use crate::runtime::layout_memory;
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::style::{StyleCx, UiTokens};
@@ -132,61 +132,14 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
         let mut memory = MemoryStage::open_peek(&ctx, id);
         let cells: Vec<(craft_behavior::ColumnKey, Rect)> =
             self.header.columns(0.0).into_iter().map(|(key, width)| (key, Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 0.0)))).collect();
-        let columns: Vec<craft_behavior::ColumnKey> = cells.iter().map(|(key, _)| key.clone()).collect();
-        let toggles: Vec<craft_behavior::ColumnKey> = self.header.toggle_columns().map(|(key, _)| key).collect();
-        let aligns = self.header.aligns();
-        let len = self.source.len();
         let mut largest = Vec2::ZERO;
         let mut widest: Vec<(craft_behavior::ColumnKey, f32)> = Vec::new();
-        for at in 0..len {
+        for at in 0..self.source.len() {
             if self.source.section_stop(at) {
                 continue;
             }
-            let key = self.source.key(at);
-            let item_id = sub(id, ("key", key_hash(&key)));
-            let position =
-                SetPosition::new(at - self.source.section_stops_before(at)).of(len - self.source.section_stops_before(len)).columns(cells.len());
-            let mut icx = ItemCx {
-                key: &key,
-                at,
-                rect: Rect::ZERO,
-                row: RowState::default(),
-                depth: self.source.depth(at),
-                set: position,
-                row_index: at,
-                row_count: len,
-                column_count: cells.len(),
-                env: env.view(),
-                id: sub(item_id, "item"),
-                cells: cells.clone(),
-                grid: None,
-                tip: None,
-                openers: Vec::new(),
-                item: item_id,
-                memory: &mut memory,
-            };
-            let item = (self.item)(&key, &mut icx);
-            let mut item = Props::id(comp.dress(item, &RowState::default()), item_id);
-            let facts = ItemFacts {
-                item: item_id,
-                flags: crate::style::Flags::empty(),
-                position,
-                columns: columns.clone(),
-                toggles: toggles.clone(),
-                toggle_keys: Vec::new(),
-                aligns: aligns.clone(),
-                pressed: None,
-                menu_open: false,
-            };
-            let installed = Env::install_for(
-                ui,
-                env.derive_local(|scoped| {
-                    scoped.item = Some(item_id);
-                    scoped.row = Some(rows::row_group(item_id));
-                    scoped.item_facts = Some(std::sync::Arc::new(facts));
-                }),
-            );
-            let (size, cells) = crate::runtime::measure::cell_widths(&ctx, || item.measure_in(ui, Proposal::Ideal));
+            let row = RowMeasure { at, rect: Rect::ZERO, cells: cells.clone(), proposal: Proposal::Ideal };
+            let (size, cells) = self.measure_row(comp, ui, (id, env.view(), &env), &mut memory, row);
             largest = largest.max(size);
             for (column, width) in cells {
                 match widest.iter_mut().find(|(held, _)| *held == column) {
@@ -194,10 +147,82 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
                     None => widest.push((column, width)),
                 }
             }
-            Env::restore(&ctx, installed);
         }
         (largest, widest)
     }
+
+    /// Builds the item of `row.at` as the collection `id` builds it, with the default row state, under `installed`
+    /// (`view` is what the item builder sees), and measures it at `row.proposal` without allocating: its size and the
+    /// widths its column cells reported. Item memory goes to `memory`.
+    pub(super) fn measure_row(
+        &mut self,
+        comp: &C,
+        ui: &Ui,
+        (id, view, installed): (Id, EnvView<'_>, &Env),
+        memory: &mut MemoryStage,
+        row: RowMeasure,
+    ) -> (Vec2, Vec<(craft_behavior::ColumnKey, f32)>) {
+        let ctx = ui.ctx().clone();
+        let RowMeasure { at, rect, cells, proposal } = row;
+        let len = self.source.len();
+        let key = self.source.key(at);
+        let item_id = sub(id, ("key", key_hash(&key)));
+        let position =
+            SetPosition::new(at - self.source.section_stops_before(at)).of(len - self.source.section_stops_before(len)).columns(cells.len());
+        let columns: Vec<craft_behavior::ColumnKey> = cells.iter().map(|(key, _)| key.clone()).collect();
+        let column_count = cells.len();
+        let mut icx = ItemCx {
+            key: &key,
+            at,
+            rect,
+            row: RowState::default(),
+            depth: self.source.depth(at),
+            set: position,
+            row_index: at,
+            row_count: len,
+            column_count,
+            env: view,
+            id: sub(item_id, "item"),
+            cells,
+            grid: None,
+            tip: None,
+            openers: Vec::new(),
+            item: item_id,
+            memory,
+        };
+        let item = (self.item)(&key, &mut icx);
+        let mut item = Props::id(comp.dress(item, &RowState::default()), item_id);
+        let facts = ItemFacts {
+            item: item_id,
+            flags: crate::style::Flags::empty(),
+            position,
+            columns,
+            toggles: self.header.toggle_columns().map(|(key, _)| key).collect(),
+            toggle_keys: Vec::new(),
+            aligns: self.header.aligns(),
+            pressed: None,
+            menu_open: false,
+        };
+        let env = Env::install_for(
+            ui,
+            installed.derive_local(|scoped| {
+                scoped.item = Some(item_id);
+                scoped.row = Some(rows::row_group(item_id));
+                scoped.item_facts = Some(std::sync::Arc::new(facts));
+            }),
+        );
+        let measured = crate::runtime::measure::cell_widths(&ctx, || item.measure_in(ui, proposal));
+        Env::restore(&ctx, env);
+        measured
+    }
+}
+
+/// A row to build and measure (`measure_row`): its position, rect and column cells, and the proposal it is measured at.
+pub(super) struct RowMeasure {
+    pub(super) at: usize,
+    pub(super) rect: Rect,
+    pub(super) cells: Vec<(craft_behavior::ColumnKey, Rect)>,
+    pub(super) proposal: Proposal,
 }
 
 /// The inputs a kept measure of the items serves under.

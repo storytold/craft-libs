@@ -735,3 +735,43 @@ fn a_list_without_an_edge_press_gives_the_line_to_the_rows() {
     assert!(!events.iter().any(|event| matches!(event, CollectionEvent::EdgePressed { .. })), "{events:?}");
     assert!(events.iter().any(|event| matches!(event, CollectionEvent::Selection(_))), "{events:?}");
 }
+
+/// A revealed row far below the view, past rows no pass built yet and taller than the list's estimate, shows wholly
+/// in view in the frame that reveals it: the list measures the rows it scrolls past before it places them, runs the
+/// frame once, and measures no row twice.
+#[trial]
+fn a_revealed_row_past_unbuilt_rows_taller_than_the_estimate_shows_wholly_in_one_pass() {
+    use craft_ui::list::ThumbSize;
+    use std::cell::Cell;
+    const ROWS: usize = 40;
+    let names: Vec<String> = (0..ROWS).map(|at| format!("Photo {at:02}")).collect();
+    let reveal = Rc::new(Cell::new(None::<usize>));
+    let asked = reveal.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let keys: Vec<usize> = (0..ROWS).collect();
+        let source = keyed(&keys, |key: &usize| *key);
+        let mut list = List::new("Photos");
+        if let Some(key) = asked.take() {
+            list = list.reveal(key);
+        }
+        list.show_items(ui, &source, &mut |key, _| ListRow::new(names[*key].clone()).thumb(ThumbSize::Large, |_, _| {}));
+    });
+    fixture.room(Vec2::new(300.0, 300.0));
+    fixture.settle();
+    let view = |fixture: &Fixture| fixture.by_label("Photos").expect("the list's node").rect;
+    let in_view = |fixture: &Fixture, name: &str| fixture.by_label(name).is_some_and(|row| view(fixture).contains_rect(row.rect));
+    assert!(in_view(&fixture, "Photo 00") && !in_view(&fixture, "Photo 39"), "the list starts at the top");
+
+    reveal.set(Some(ROWS - 1));
+    fixture.idle(1);
+    assert!(in_view(&fixture, "Photo 39"), "the revealed row shows wholly in the frame that reveals it");
+    assert_eq!(fixture.passes(), 1, "the reveal runs the frame once");
+    let measures = craft_ui::runtime::measure::row_measures(fixture.ctx());
+    assert!(!measures.is_empty() && measures.iter().all(|(_, count)| *count == 1), "no row is measured twice in the pass: {measures:?}");
+    fixture.idle(2);
+    assert!(in_view(&fixture, "Photo 39"), "the row stays in view");
+
+    reveal.set(Some(0));
+    fixture.idle(1);
+    assert!(in_view(&fixture, "Photo 00"), "the first row scrolls back wholly into view");
+}

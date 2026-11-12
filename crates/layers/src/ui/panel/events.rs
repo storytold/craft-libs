@@ -52,7 +52,8 @@ pub enum LayersEvent<K> {
         color: Option<LabelColor>,
     },
     /// A group asked to open or close: its disclosure (Alt for every group), the arrow keys, a
-    /// screen reader, or the reveal of the active layer. A view change: no undo step.
+    /// screen reader, or a reveal ([`LayersPanel::reveal`](super::LayersPanel::reveal)). A
+    /// view change: no undo step.
     Open(OpenChange<K>),
     /// A layer's effects and Smart Filter rows asked to open or close: the `fx` disclosure, or the
     /// effects commands on the lead; `all` (Alt) for every layer.

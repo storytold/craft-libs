@@ -190,6 +190,10 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     drags: Drags<C::Key>,
     /// The row a key move brought to the lead in a collection without its own scroll: the page's scroll owner shows it.
     page_reveal: Option<usize>,
+    /// The row this pass scrolls into view, placed before the rows are built (`place_reveal`).
+    revealing: Option<usize>,
+    /// The rows `place_reveal` built and measured this pass: the build places them by that measure.
+    measured_for_reveal: Vec<usize>,
     /// The row the collection's own press is held on this pass, and where on it.
     pressed: Option<(usize, crate::contract::collection::RowPressed)>,
     /// The rows above and below the edge-press band declared this pass.
@@ -252,6 +256,8 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             header: Header::default(),
             drags: Drags::default(),
             page_reveal: None,
+            revealing: None,
+            measured_for_reveal: Vec::new(),
             pressed: None,
             edge: None,
         }
