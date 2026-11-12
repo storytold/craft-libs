@@ -1,14 +1,15 @@
 //! Stories of the warp grid, its options-bar group and the mesh lines.
 
 use craft_behavior::kurbo::{Point, Rect as DocRect};
-use craft_ui::contract::{Bind, Show as _};
+use craft_ui::bars::{Bar, BarKind};
+use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::testing::{Drive, Fixture, Grip, StoryData, StoryOutput, pointer, story};
 use egui::{Ui, vec2};
 
 use crate::ui::transform_preview::PreviewMap;
 use crate::ui::transform_preview::stories::{Document, Zoom, draw};
 
-use super::{MeshLines, POINT, WarpFieldValues, WarpFields, WarpGrid, WarpGridChoice, WarpMesh, WarpSplit, WarpStyleEntry};
+use super::{MeshLines, POINT, WarpFieldValues, WarpFields, WarpFieldsEdit, WarpGrid, WarpGridChoice, WarpMesh, WarpSplit, WarpStyleEntry};
 
 /// The layer the mesh starts over: the transform preview stage's layer.
 fn picture() -> DocRect {
@@ -59,30 +60,96 @@ fn lines_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     on_canvas(ui, mesh, |ui, rect, mesh| WarpGrid::new("Warp", Bind::bound(mesh), picture()).lines_only().show_at(ui, rect))
 }
 
+/// The app's style list: None, four presets and Custom.
 fn styles() -> Vec<WarpStyleEntry> {
     vec![
         WarpStyleEntry::new("none", "None"),
-        WarpStyleEntry::new("custom", "Custom").custom(true),
         WarpStyleEntry::new("arc", "Arc").preset(true),
+        WarpStyleEntry::new("bulge", "Bulge").preset(true),
         WarpStyleEntry::new("flag", "Flag").preset(true),
+        WarpStyleEntry::new("wave", "Wave").preset(true),
+        WarpStyleEntry::new("custom", "Custom").custom(true),
     ]
 }
 
-#[story(WarpFields<'static>, covers = [Default])]
-fn fields_on_a_preset_style(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let styles = styles();
-    let mut values = WarpFieldValues::new("arc");
-    values.bend = 50.0;
-    values.grid = WarpGridChoice::Three;
-    WarpFields::new(&styles, values).show(ui);
-    StoryOutput::default()
+/// What the app keeps of a warp that the group shows: its values and the armed split.
+#[derive(Clone, Debug, PartialEq)]
+struct Warp {
+    values: WarpFieldValues,
+    split: Option<WarpSplit>,
 }
 
-#[story(WarpFields<'static>, covers = [Default])]
-fn fields_on_a_type_layer(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+impl Warp {
+    fn new(style: &str, bend: f64, split: Option<WarpSplit>) -> Self {
+        let mut values = WarpFieldValues::new(style);
+        values.bend = bend;
+        if style == "custom" {
+            values.grid = WarpGridChoice::Custom;
+        }
+        Self { values, split }
+    }
+
+    /// What the app does with the group's edits: the fields take them over.
+    fn apply(&mut self, edits: Vec<WarpFieldsEdit>) {
+        for edit in edits {
+            match edit {
+                WarpFieldsEdit::Split(split) => self.split = split,
+                WarpFieldsEdit::Grid(size) => {
+                    self.values.grid = match size {
+                        3 => WarpGridChoice::Three,
+                        4 => WarpGridChoice::Four,
+                        5 => WarpGridChoice::Five,
+                        _ => WarpGridChoice::Default,
+                    };
+                }
+                WarpFieldsEdit::Style(key) => self.values.style = key,
+                WarpFieldsEdit::Orientation { vertical } => self.values.vertical = vertical,
+                WarpFieldsEdit::Bend(event) => self.values.bend = event.value().copied().unwrap_or(self.values.bend),
+                WarpFieldsEdit::Horizontal(event) => self.values.horizontal = event.value().copied().unwrap_or(self.values.horizontal),
+                WarpFieldsEdit::Vertical(event) => {
+                    self.values.vertical_distortion = event.value().copied().unwrap_or(self.values.vertical_distortion);
+                }
+            }
+        }
+    }
+}
+
+/// The group in an options bar, as the transform's Warp phase shows it, over the warp kept in `data`.
+fn fields(ui: &mut Ui, data: &mut StoryData, start: Warp, on_type: bool) -> StoryOutput {
     let styles = styles();
-    WarpFields::new(&styles, WarpFieldValues::new("none")).on_type().show(ui);
-    StoryOutput::default()
+    let warp = data.value("warp", start);
+    let mut shown = Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+        let mut group = WarpFields::new(&styles, warp.values.clone());
+        if let Some(split) = warp.split {
+            group = group.split(split);
+        }
+        if on_type {
+            group = group.on_type();
+        }
+        group.show(ui)
+    });
+    shown.settle(|_, output| warp.apply(std::mem::take(&mut output.edits)));
+    shown.into()
+}
+
+#[story(WarpFields<'static>, covers = [Default], group = "Group", title = "A preset style")]
+fn fields_on_a_preset_style(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    fields(ui, data, Warp::new("arc", 50.0, None), false)
+}
+
+#[story(WarpFields<'static>, covers = [], group = "Group", title = "Custom")]
+fn fields_on_custom(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    fields(ui, data, Warp::new("custom", 0.0, None), false)
+}
+
+#[story(WarpFields<'static>, covers = [], group = "Group", title = "An armed split")]
+fn fields_with_an_armed_split(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    fields(ui, data, Warp::new("arc", 50.0, Some(WarpSplit::Cross)), false)
+}
+
+#[story(WarpFields<'static>, covers = [], group = "Group", title = "On a type layer")]
+fn fields_on_a_type_layer(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    fields(ui, data, Warp::new("none", 0.0, None), true)
 }
 
 #[story(MeshLines<'static>, covers = [Default])]
