@@ -1,0 +1,19 @@
+# Fujifilm RAF regression files; CC0 1.0, raw.pixls.us.
+# Published SHA-256 values retrieved 2026-10-07; see docs/raf-compression.md.
+018781e126842596fcf3876b3fb6cd8973dc3936ccc753ee8648618be8889287  corpus/raw/raf-fuji-gfx100-3773.raf
+0e7dad9819a748bb3d3be26bbf5770d4968e2d80b9cb41d97036bf7c27f7bfe7  corpus/raw/raf-fuji-gfx100-3775.raf
+14bed5ac8191d6f2a7c82984e3bf6470ad4740df329293eac42b8018cc6a668a  corpus/raw/raf-fuji-gfx100rf-8091.raf
+a7bf8f061b603f7ef5fd29276eb6b2ac57355ca2f589a340117bfff0d03c065c  corpus/raw/raf-fuji-gfx100s-4495.raf
+1bb4608b61861a3d9e85b0ca6c00689b8ba4620cbe8579374d958c21ed08edf0  corpus/raw/raf-fuji-gfx100s-4503.raf
+a7124d13910e0241a6b035154bc1fcdb7be4439371d043b1e1950a0251feb51e  corpus/raw/raf-fuji-gfx50s-1435.raf
+28f56cc9784164209e92fae209bdcc78267bd692aa2fb964595485f7e93692ab  corpus/raw/raf-fuji-xe5-8509.raf
+caeadb2666f6c5d9bbe32fbe692c2079b6a7e028f8514a13173f360656d08507  corpus/raw/raf-fuji-xh2-6001.raf
+109be38f59963c9b8ff289ebe1f5ec9168c52f609e5b601432bd194520b4605b  corpus/raw/raf-fuji-xh2-6002.raf
+c76ce546e15727abb4ba201471010c554403176963a1a6b8cc017462606429e5  corpus/raw/raf-fuji-xm5-7748.raf
+f756ad5be551a8b3e1b503a8a6f7e8e637fba519c0b0f8c79dd58e94b0287602  corpus/raw/raf-fuji-xt2-865.raf
+a23045101b2912e64f154100d646c228c0d16585d21e95e0d1a006e537f7784c  corpus/raw/raf-fuji-xt20-compressed.raf
+07ea642656074834ffe5c661870a612ffa2e80fc1218a05166ee966bbe5f6fae  corpus/raw/raf-fuji-xt4-3914.raf
+871836938ffa695f4c41765ddb107c2703ce755f7f3ced7e10f9e04746f1734e  corpus/raw/raf-fuji-xt4-3918.raf
+b2a067e7fda16338f15c2532caa12b238b2415dc1c75a96a6d24d3445cfd0ae3  corpus/raw/raf-fuji-xt5-6122.raf
+cddd7ae0c43f9280876e5fdcbdf8878718972ebd3d034d8affc8cfc6752d33dc  corpus/raw/raf-fuji-xt5-6123.raf
+3a8a9ac6d92274969aaa1f55ea669191b98bb8f588d00ec8ec17afd8b3963dea  corpus/raw/raf-fuji-xt50-7807.raf
