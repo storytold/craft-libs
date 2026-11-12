@@ -43,11 +43,12 @@ use crate::patterns::{PatternBudget, PsdPattern, parse_pattern_block_with, write
 pub const MAX_EDGE: u32 = 8192;
 /// Most brushes read from one file.
 pub const MAX_BRUSHES: usize = 20_000;
-/// Cap on decoded sample bytes over the whole file. 32-bit targets (wasm) keep 512 MiB: the file,
-/// its base64 copies and the decoded tips must all fit a 4 GiB address space, and running out
-/// there aborts instead of returning an error.
-pub const MAX_TOTAL_BYTES: usize = if cfg!(target_pointer_width = "64") { 1 << 30 } else { 512 << 20 };
-const _: () = assert!(cfg!(target_pointer_width = "64") || MAX_TOTAL_BYTES == 512 << 20);
+/// Cap on decoded sample bytes over the whole file (2 GiB on 64-bit targets, matching Photoshop's
+/// 2 GB `.abr` limit). 32-bit targets (wasm) keep 512 MiB: the file, its base64 copies and the
+/// decoded tips must all fit a 4 GiB address space, and running out there aborts instead of
+/// returning an error.
+pub const MAX_TOTAL_BYTES: usize = if cfg!(target_pointer_width = "64") { 2 << 30 } else { 512 << 20 };
+const _: () = assert!((cfg!(target_pointer_width = "64") && MAX_TOTAL_BYTES == 2 << 30) || MAX_TOTAL_BYTES == 512 << 20);
 
 /// A sampled tip: one grayscale plane where the maximum value is full paint.
 #[derive(Debug, Clone, PartialEq)]
