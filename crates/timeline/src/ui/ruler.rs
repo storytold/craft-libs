@@ -218,7 +218,7 @@ pub struct TimelineRulerStyle {
     needs_render: StyleColor,
     on_disk: StyleColor,
     label: TextLook,
-    /// The tick row and its labels.
+    /// The tick row: the label line over the split-mark row.
     body: f32,
     /// The work-area band above the body.
     band: f32,
@@ -246,9 +246,17 @@ impl TimelineRulerStyle {
     }
 }
 
-/// The tick body: as thick as its labels need, and no thinner than a small icon.
+/// The tick body: the label line, as thick as its labels need and no thinner than a small icon, over the split-mark
+/// row, one label line so a tag fits in it.
 fn body_height(tokens: &UiTokens) -> f32 {
-    tokens.size.icon.sm.max(tokens.typography.get(LABEL_ROLE).line_height)
+    let line = tokens.typography.get(LABEL_ROLE).line_height;
+    tokens.size.icon.sm.max(line) + line
+}
+
+/// The split-mark row along the bottom of the tick body: video brackets hang from its top, audio brackets stand on its
+/// bottom, and their tags stay inside it, clear of the tick labels above.
+fn mark_row(body: Rect, style: &TimelineRulerStyle) -> Rect {
+    Rect::from_min_max(Pos2::new(body.left(), body.bottom() - style.line), body.max)
 }
 
 /// The rows of the ruler inside `rect`: the work-area band, the tick body and the render bar.
@@ -351,7 +359,8 @@ fn bracket_points(axis: &TimeAxis, rect: Rect, style: &TimelineRulerStyle, brack
     let at = if bracket.is_in { bracket.time } else { bracket.time + axis.frame() };
     let x = axis.x_of(at, rect.left());
     let (_, body, _) = rows(rect, style);
-    let top = if bracket.audio { body.bottom() - style.bracket_height } else { body.top() + style.line };
+    let marks = mark_row(body, style);
+    let top = if bracket.audio { marks.bottom() - style.bracket_height } else { marks.top() };
     let arm = style.bracket_height * SPLIT_ARM_SHARE * if bracket.is_in { 1.0 } else { -1.0 };
     (Pos2::new(x + SPLIT_TAG_ARMS * arm, top + style.bracket_height / 2.0), Pos2::new(x, top))
 }
@@ -616,6 +625,7 @@ impl Component for TimelineRuler<'_> {
         }
 
         let words = cx.words::<TimelineRulerWords>();
+        let split_row = mark_row(body, style);
         for bracket in self.split_marks.listed().into_iter().flatten() {
             let (centre, top) = bracket_points(&axis, rect, style, bracket);
             let arm = style.bracket_height * SPLIT_ARM_SHARE * if bracket.is_in { 1.0 } else { -1.0 };
@@ -623,9 +633,9 @@ impl Component for TimelineRuler<'_> {
             draw.stroke(&PaintShape::Path(vec![top, Pos2::new(top.x + arm, top.y)]), StrokeWidth::Medium, style.bracket);
             let tag = if bracket.audio { words.audio_tag.as_str() } else { words.video_tag.as_str() };
             let layout = draw.layout(&TextRun::new(tag).role(style.label.role).color(color), f32::INFINITY);
-            // The tag sits beside its arm, kept inside the ruler: a larger text size makes it taller than the bracket.
+            // The tag sits beside its arm, kept inside the mark row: it is taller than the bracket.
             let at = centre - layout.size() / 2.0;
-            let at = Pos2::new(at.x, at.y.min(rect.bottom() - layout.size().y).max(rect.top()));
+            let at = Pos2::new(at.x, at.y.min(split_row.bottom() - layout.size().y).max(split_row.top()));
             draw.galley(at, &layout);
         }
 
