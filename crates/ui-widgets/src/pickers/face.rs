@@ -39,7 +39,8 @@ pub struct SelectFaceStyle {
 }
 
 /// The closed box of a picker: `text` elided to the room left of a trailing chevron. The box is as wide as the text
-/// and the chevron need, at least a field wide; a thumbnail alone takes only its own width. A host shows it as the look of one of its parts with
+/// and the chevron need, at least a field wide; a [fitted](SelectFace::fit) box is at most a field wide and has no
+/// floor; a thumbnail alone takes only its own width. A host shows it as the look of one of its parts with
 /// `ui.face(part, SelectFace::new(text))` over the field well it paints itself, and gives the box the width of its
 /// widest text so the width does not change with the pick. A thumbnail goes before the text, or alone.
 #[derive(crate::contract::Component, crate::contract::Props)]
@@ -62,12 +63,17 @@ pub struct SelectFace<'a> {
     #[style_key]
     #[prop]
     name: bool,
+    /// Whether the box fits its text: as wide as the text and the chevron need, up to a field length, where a longer
+    /// text elides. A content-sized select, and a select in a bar, fit their faces.
+    #[style_key]
+    #[prop]
+    fit: bool,
 }
 
 impl<'a> SelectFace<'a> {
     /// A face showing `text`, which is also its name.
     pub fn new(text: impl Into<Label>) -> Self {
-        SelectFace { common: Common::new(), placeholder: false, thumb: None, leading: None, thumb_caption: None, name: true }.label(text)
+        SelectFace { common: Common::new(), placeholder: false, thumb: None, leading: None, thumb_caption: None, name: true, fit: false }.label(text)
     }
 
     /// A picture `aspect` times as wide as high before the text; `paint` draws into the picture's rect through the
@@ -114,9 +120,10 @@ impl Component for SelectFace<'_> {
 
     fn style(cx: &StyleCx<'_>, key: SelectFaceStyleKey) -> SelectFaceStyle {
         let field = FieldStyle::at(cx);
-        // A thumbnail alone keeps the field's padding and height, not the widths a field keeps for its text.
+        // A thumbnail alone, and a fitted box, keep the field's padding and height, not the widths a field keeps for
+        // its text; `measure` caps a fitted box at the field length.
         let metrics = field.metrics();
-        let metrics = if key.name { metrics } else { metrics.ideal_width(0.0).min_size(Vec2::new(0.0, metrics.min_size.y)) };
+        let metrics = if key.name && !key.fit { metrics } else { metrics.ideal_width(0.0).min_size(Vec2::new(0.0, metrics.min_size.y)) };
         let off = cx.color(cx.tokens.color.text.disabled);
         let (ink, muted) = (cx.ink(Ink::OnPanel), cx.color(cx.tokens.color.text.faint));
         let caption = cx.color(cx.tokens.color.text.muted);
@@ -139,11 +146,9 @@ impl Component for SelectFace<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         // At its least the face elides its name to an ellipsis.
-        let text = match (self.name, cx.proposal) {
-            (true, Proposal::Min) => {
-                let ellipsis = cx.layout(&TextRun::new("…").role(cx.style.text.role)).size().x;
-                Vec2::new(ellipsis, cx.layout(&TextRun::new(cx.resolved.label).role(cx.style.text.role)).size().y)
-            }
+        let ellipsis = || cx.layout(&TextRun::new("…").role(cx.style.text.role)).size().x;
+        let mut text = match (self.name, cx.proposal) {
+            (true, Proposal::Min) => Vec2::new(ellipsis(), cx.layout(&TextRun::new(cx.resolved.label).role(cx.style.text.role)).size().y),
             (true, _) => cx.layout(&TextRun::new(cx.resolved.label).role(cx.style.text.role)).size(),
             (false, _) => Vec2::ZERO,
         };
@@ -153,7 +158,14 @@ impl Component for SelectFace<'_> {
             (Some(_), false) => cx.style.thumb,
             (Some(_), true) => cx.style.thumb + cx.style.caption_gap + caption.y,
         };
-        Vec2::new(self.lead(cx.style, caption.x) + text.x + reserve(&cx.style.field, &self.leading_glyphs(), &[Self::chevron()]), text.y.max(picture))
+        let beside = self.lead(cx.style, caption.x) + reserve(&cx.style.field, &self.leading_glyphs(), &[Self::chevron()]);
+        if self.fit && self.name {
+            // A fitted box is at most a field length, padding included; a longer text elides, down to its ellipsis.
+            let field = cx.style.field.metrics();
+            let room = field.ideal_width - cx.style.metrics.padding.start - cx.style.metrics.padding.end - beside;
+            text.x = text.x.min(room.max(ellipsis()));
+        }
+        Vec2::new(beside + text.x, text.y.max(picture))
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {

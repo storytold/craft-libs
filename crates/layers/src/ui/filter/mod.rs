@@ -11,7 +11,7 @@ mod stories;
 use craft_behavior::{EditEvent, IconId, Mixed};
 use craft_theme::{ControlSize, LabelColor};
 use craft_ui::buttons::ToggleButton;
-use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::layout_components::Row;
 use craft_ui::list::{ListWords, label_color_label};
 use craft_ui::pickers::Select;
@@ -658,7 +658,8 @@ impl<'a> LayerFilterBar<'a> {
                 next.by = FilterBy::Name.among(&offered);
             }
             let types: Vec<Entry<FilterBy>> = offered.iter().copied().map(|by| Entry::new(by, type_label(by, &words).clone())).collect();
-            let picked = Select::new(words.filter_type.clone(), Bind::given(next.by), &types).size(size).show(ui);
+            // The type select fits its widest type, so the controls after it keep their room.
+            let picked = Select::new(words.filter_type.clone(), Bind::given(next.by), &types).size(size).sizing(Sizing::Content).show(ui);
             if let Some(by) = picked.value() {
                 next.by = *by;
             }

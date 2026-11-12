@@ -12,9 +12,9 @@ use super::words::PickerWords;
 use crate::buttons::IconButton;
 use crate::contract::overlay::{Popup, Trigger};
 use crate::contract::{
-    Access, Bind, BindMut, BodyCx, CollectionEvent, Common, Component, Cx, Edit as _, EditResponse, Entry, Focus as _, LeadOnOpen, LeadSource,
+    Access, Bind, BindMut, BodyCx, CollectionEvent, Common, Component, Cx, Edit as _, EditResponse, Entry, Focus as _, InBar, LeadOnOpen, LeadSource,
     MeasureCx, Numeric, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Role, Show as _,
-    ShowCollection as _, ShowContainer as _, WordSetCx as _, step_stop, step_stops,
+    ShowCollection as _, ShowContainer as _, Sizing, WordSetCx as _, step_stop, step_stops,
 };
 use crate::list::{List, ListRow, ThumbAspect};
 use crate::menu::Menu;
@@ -74,8 +74,10 @@ impl<'a> HeaderMenu<'a> {
 /// is one gesture: each entry the keys (Up, Down, Page keys, Home, End, type-ahead) make active is proposed as the
 /// value, Enter or a click picks, and Escape, Alt+Up or a press outside close it and put the value back. Closed, the
 /// arrow keys, Home, End and the wheel (while the field is focused or armed) step the pick through the stepped entries
-/// ([`Entry::stepped`]); from a value that is none of them, forward lands on the first and back on the last. The field is as wide as its widest entry, placeholder or mixed word, so it keeps its
-/// width whichever is shown.
+/// ([`Entry::stepped`]); from a value that is none of them, forward lands on the first and back on the last. The field is
+/// as wide as its widest entry, placeholder or mixed word, at least a field length, so it keeps its width whichever is
+/// shown. A content-sized select, and a select in a bar, fit that widest face, up to a field length; a longer one
+/// elides.
 ///
 /// The face shows the picked entry's [closed label](Entry::closed_label) where it has one; the list, type-ahead and
 /// the accessible value keep the full label. A [`picture`](Select::picture) draws each entry's thumbnail in its row
@@ -134,8 +136,8 @@ impl<'a, T: Value + 'static> Select<'a, T> {
     }
 
     /// The face of `text`, with the picture's room before it, or the picture alone, when the select has a picture.
-    fn sized_face(&self, text: Label, picture: bool) -> SelectFace<'static> {
-        let face = SelectFace::new(text);
+    fn sized_face(&self, text: Label, picture: bool, fit: bool) -> SelectFace<'static> {
+        let face = SelectFace::new(text).fit(fit);
         if self.picture.is_some() && picture { face.thumb(ThumbAspect::SQUARE, |_, _| {}).name(!self.picture_only) } else { face }
     }
 
@@ -147,6 +149,12 @@ impl<'a, T: Value + 'static> Select<'a, T> {
             cx.set(value.clone());
         }
     }
+}
+
+/// Whether a select's faces fit their text: a select sized to its content, or one in a bar, whose members take their
+/// content's width.
+fn fits(sizing: Option<Sizing>, in_bar: bool) -> bool {
+    sizing == Some(Sizing::Content) || in_bar
 }
 
 /// The stop a move over the closed field reaches: `stops` are the positions of the stepped entries and `from` the
@@ -184,7 +192,8 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         let mixed = cx.words::<PickerWords>().mixed.clone();
         let entries = self.entries.iter().filter(|entry| entry.is_item()).map(|entry| (entry.face_label(), true));
         let texts = entries.chain(self.placeholder.iter().map(|text| (text, false))).chain(std::iter::once((&mixed, false)));
-        texts.map(|(text, picture)| cx.face(self.sized_face(cx.env.resolve(text), picture))).fold(Vec2::ZERO, Vec2::max)
+        let fit = fits(cx.resolved.sizing(), cx.env.get::<InBar>().0);
+        texts.map(|(text, picture)| cx.face(self.sized_face(cx.env.resolve(text), picture, fit))).fold(Vec2::ZERO, Vec2::max)
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, T>> {
@@ -336,7 +345,7 @@ impl<T: Value + 'static> Component for Select<'_, T> {
             None if cx.value().is_none() => (cx.env.resolve(&cx.words::<PickerWords>().mixed.clone()), true),
             None => (self.placeholder.as_ref().map_or(Label::Empty, |text| cx.env.resolve(text)), true),
         };
-        let mut face = SelectFace::new(text);
+        let mut face = SelectFace::new(text).fit(fits(cx.resolved.sizing(), cx.env.get::<InBar>().0));
         if let Some(icon) = held.and_then(|at| self.entries[at].icon_spec()) {
             face = face.leading(icon.clone());
         }
