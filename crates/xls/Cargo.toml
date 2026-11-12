@@ -1,0 +1,24 @@
+[package]
+name = "craft-xls"
+description = "Clean-room Excel 97-2003 workbook (.xls, BIFF8) reader: sheets, cell values, formulas as text, cell formats, layout and defined names."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-cfb = { workspace = true }
+craft-sheet = { workspace = true }
+# RC4 and RC4 CryptoAPI encryption ([MS-OFFCRYPTO] 2.3.5, 2.3.6).
+md5 = { workspace = true }
+sha1 = { version = "0.10", default-features = false }
+# zlib-wrapped metafiles in the drawing group.
+miniz_oxide = "0.9"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+miniz_oxide = "0.9"

@@ -1,0 +1,138 @@
+[package]
+name = "craft-video"
+description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8, ProRes, H.264, HEVC, VP9, AV1."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[features]
+# Every codec feature turns on one codec module; none is on by default.
+# DNxHD / DNxHR (SMPTE ST 2019-1): decoder and encoder.
+dnx = []
+# APV (Advanced Professional Video, RFC 9924): decoder and encoder; `apv-decode` or `apv-encode` for one of them.
+apv = ["apv-decode", "apv-encode"]
+apv-decode = ["craft-media/bitstream"]
+apv-encode = ["craft-media/bitstream"]
+# VP8 (RFC 6386): decoder and encoder; `vp8-decode` or `vp8-encode` for one of them.
+vp8 = ["vp8-decode", "vp8-encode"]
+vp8-decode = []
+vp8-encode = []
+# MPEG-2 video (ITU-T H.262) and MPEG-1 video (ISO/IEC 11172-2): decoder.
+mpeg2 = []
+# Apple ProRes (SMPTE RDD 36): decoder and encoder.
+prores = ["craft-media/bitstream"]
+# H.264 / AVC: decoder and encoder; `h264-decode` or `h264-encode` for one of them.
+h264 = ["h264-decode", "h264-encode"]
+h264-decode = ["craft-media/bitstream"]
+h264-encode = ["craft-media/isobmff"]
+# H.265 / HEVC: decoder and encoder; `hevc-decode` or `hevc-encode` for one of them.
+hevc = ["hevc-decode", "hevc-encode"]
+hevc-decode = ["craft-media/bitstream"]
+hevc-encode = ["craft-media/isobmff"]
+# VP9: decoder and encoder; `vp9-decode` or `vp9-encode` for one of them.
+vp9 = ["vp9-decode", "vp9-encode"]
+vp9-decode = ["craft-media/bitstream"]
+vp9-encode = ["craft-media/isobmff"]
+# AV1: decoder and encoder; `av1-decode` or `av1-encode` for one of them.
+av1 = ["av1-decode", "av1-encode"]
+av1-decode = []
+av1-encode = ["craft-media/isobmff"]
+# Decode and encode across worker threads (rayon) in the codecs that support it.
+threads = ["dep:rayon"]
+
+[dependencies]
+craft-media = { workspace = true }
+thiserror = { workspace = true }
+rayon = { workspace = true, optional = true }
+
+[dev-dependencies]
+craft-media-testkit = { workspace = true }
+
+[[test]]
+name = "dnx"
+required-features = ["dnx"]
+
+[[test]]
+name = "apv"
+required-features = ["apv"]
+
+[[test]]
+name = "vp8"
+required-features = ["vp8-decode"]
+
+[[example]]
+name = "vp8_fuzz"
+required-features = ["vp8-decode"]
+
+[[example]]
+name = "vp8_vp8dec"
+required-features = ["vp8-decode"]
+
+[[test]]
+name = "av1_decode"
+required-features = ["av1-decode"]
+
+[[example]]
+name = "av1_av1dec"
+required-features = ["av1-decode"]
+
+[[test]]
+name = "h264_decode"
+required-features = ["h264-decode"]
+
+[[test]]
+name = "h264_encode"
+required-features = ["h264-encode"]
+
+[[example]]
+name = "h264_h264dec"
+required-features = ["h264-decode"]
+
+[[example]]
+name = "h264_h264enc_bench"
+required-features = ["h264-encode"]
+test = true
+
+[[test]]
+name = "hevc_decode"
+required-features = ["hevc-decode"]
+
+[[example]]
+name = "hevc_hevcdec"
+required-features = ["hevc-decode"]
+
+[[test]]
+name = "vp8_encode"
+required-features = ["vp8"]
+
+[[test]]
+name = "vp9_decode"
+required-features = ["vp9-decode"]
+
+[[example]]
+name = "vp9_vp9dec"
+required-features = ["vp9-decode"]
+
+[[test]]
+name = "mpeg2"
+required-features = ["mpeg2"]
+
+[[test]]
+name = "prores"
+required-features = ["prores"]
+
+[[test]]
+name = "hevc"
+required-features = ["hevc-encode"]
+
+[[test]]
+name = "av1"
+required-features = ["av1"]

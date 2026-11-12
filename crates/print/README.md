@@ -15,6 +15,15 @@ opens Windows printer preferences and submits jobs with copies, collation, duple
 
 - **macOS/Linux:** CUPS `lpstat`, `lpoptions` and `lp`. Jobs stream through stdin. Exact-size
   sheets use `fit-to-page=false`; shrink-to-fit uses IPP `print-scaling=auto-fit`.
+- **macOS paper tray:** a job whose options name no `InputSlot` also sends `AP_D_InputSlot=`,
+  the system Print dialog's Paper Feed: Auto Select. Without it CUPS uses the PPD's default
+  tray, and a printer whose default tray is empty holds the job while CUPS reports it completed
+  (storytold/pdfcraft#3752). A tray the job names wins, as does one in the user's `lpoptions`
+  defaults, which `lp` adds to every job. `apply_queue_defaults` puts the same choice in the
+  driver's tray option: `AUTO_SELECT` (an empty keyword, which `lp_args` never sends), labelled
+  "Auto Select", first and as the default unless the user's defaults name another tray. Apps
+  may show their own translation of the label. Other CUPS builds don't know `AP_D_InputSlot`,
+  so Linux jobs are unchanged.
 - **Flatpak:** the Freedesktop runtime has libcups but not `lpstat`/`lp`/`lpoptions`, so the app
   bundles them (the apps' manifests build them from CUPS as a `cups-client` module). What each
   piece is for:
@@ -171,10 +180,14 @@ if let Some(success) = craft_print::query_worker() {
 ```
 
 These read-only Windows queries run in a separate process with the host's ordinary permissions.
-Discovery allows ten seconds; `query_two_sided()` allows sixty seconds and honors cancellation.
-Direct synchronous `printers()` and `two_sided()` do not require worker dispatch.
-On other platforms `query_printers()` uses existing discovery and `query_two_sided()` returns
-unknown.
+Discovery allows ten seconds. `query_two_sided()` and `query_paper_info()` allow sixty seconds
+and honor cancellation. Paper information includes supported names and dimensions in points,
+plus the configured default's dimensions when available. Cancel obsolete reads when the
+selection changes or the dialog closes, and discard that printer's cached paper information
+after its preferences window closes.
+Direct synchronous `printers()`, `two_sided()`, `printer_papers()` and `printer_paper_info()`
+do not require worker dispatch. On other platforms `query_printers()` uses existing discovery;
+the capability queries return unknown.
 
 `DuplexSession` owns selected-printer capability reads. Supply `Arc::new(query_two_sided)` as
 its `DuplexSource` and a repaint callback to `select()`, then call `poll()` to receive answers.

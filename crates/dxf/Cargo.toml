@@ -1,0 +1,17 @@
+[package]
+name = "craft-dxf"
+description = "Standalone DXF tag reader/writer (ASCII and binary, pre-2007 code pages), from the published DXF reference"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-codepage = { workspace = true }
+thiserror = { workspace = true }
+log = "0.4"
+encoding_rs = "0.8.35"

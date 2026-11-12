@@ -1,5 +1,5 @@
 //! Windows subprocesses for read-only spooler queries and native printer preferences.
-//! Query workers accept only discovery and duplex reads, never preferences or jobs.
+//! Query workers accept only discovery and capability reads, never preferences or jobs.
 
 use std::io::Write as _;
 use std::process::Command;
@@ -48,6 +48,10 @@ pub(super) fn two_sided(printer: &str, cancelled: &AtomicBool) -> Option<bool> {
     query("two-sided", printer, cancelled, LIMIT).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).flatten()
 }
 
+pub(super) fn paper_info(printer: &str, cancelled: &AtomicBool) -> Option<crate::PaperInfo> {
+    query("paper-info", printer, cancelled, LIMIT).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok())
+}
+
 /// Handle the private read-only worker invocation before CLI or desktop startup. Returns
 /// `None` for a normal launch. Handled queries terminate this process after writing their answer.
 /// If `Some` is returned, the host must immediately exit using its value as the success status.
@@ -62,7 +66,7 @@ pub fn worker() -> Option<bool> {
     let valid = args.next().is_none()
         && match (operation.as_deref(), printer.as_deref()) {
             (Some("list"), Some("")) => true,
-            (Some("two-sided"), Some(name)) => !name.is_empty(),
+            (Some("two-sided" | "paper-info"), Some(name)) => !name.is_empty(),
             _ => false,
         };
     if !valid {
@@ -74,6 +78,8 @@ pub fn worker() -> Option<bool> {
         let value = if operation.as_deref() == Some("list") {
             let list: Vec<_> = crate::printer_queues().into_iter().map(|printer| (printer.name, printer.default)).collect();
             serde_json::to_vec(&list)
+        } else if operation.as_deref() == Some("paper-info") {
+            serde_json::to_vec(&crate::windows::paper_info(printer.as_deref().unwrap_or_default()))
         } else {
             serde_json::to_vec(&printer.as_deref().and_then(crate::two_sided))
         };

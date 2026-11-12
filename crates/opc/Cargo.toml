@@ -1,0 +1,26 @@
+[package]
+name = "craft-opc"
+description = "Open Packaging Conventions (ECMA-376 Part 2): the ZIP container of DOCX, XLSX and PPTX files, with bounded reads, part names, relationships and content types, and a package writer."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# `zip64_entry_count_sample`, the regression input for a reader's own entry-count test.
+test-support = ["craft-zip/test-support"]
+
+[dependencies]
+craft-xml = { workspace = true }
+log = "0.4"
+thiserror = { workspace = true }
+craft-zip = { workspace = true }
+
+[dev-dependencies]
+craft-zip = { workspace = true, features = ["test-support"] }
+# The tests build hostile archives by hand.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }

@@ -184,6 +184,8 @@ pub struct Profile {
 impl Profile {
     /// Parses ICC profile bytes.
     pub fn parse(bytes: &[u8]) -> Result<Profile, CmsError> {
+        CURVE_SAMPLES_LEFT.with(|left| left.set(MAX_CURVE_SAMPLES));
+        CLUT_VALUES_LEFT.with(|left| left.set(MAX_PROFILE_CLUT_VALUES));
         let mut p = parse_profile(bytes)?;
         p.bytes = Some(Arc::new(bytes.to_vec()));
         Ok(p)
@@ -211,7 +213,9 @@ impl Profile {
         self.color_space.channels()
     }
 
-    /// Hash of the profile's ICC bytes (stable within a process; used as a cache key).
+    /// Hash of the profile's ICC bytes (stable within a process; used as a cache key). It is a
+    /// fixed-key 64-bit hash, so a crafted profile can share another's: equal hashes only narrow
+    /// the search, [`Profile::same_bytes`] decides.
     pub fn content_hash(&self) -> u64 {
         *self.hash.get_or_init(|| {
             use std::hash::{Hash, Hasher};
@@ -221,6 +225,16 @@ impl Profile {
         })
     }
 
+    /// Whether `self` and `other` have the same ICC bytes.
+    pub fn same_bytes(&self, other: &Profile) -> bool {
+        if let (Some(a), Some(b)) = (&self.bytes, &other.bytes)
+            && Arc::ptr_eq(a, b)
+        {
+            return true;
+        }
+        self.content_hash() == other.content_hash() && self.to_bytes() == other.to_bytes()
+    }
+
     /// Whether `self` and `other` describe the same colours: same colour space, and every sample
     /// of a device-value grid has the same colour through both (relative colorimetric, within
     /// [`SAME_COLORS_MAX_DELTA_E`]). Different encodings of one space are the same colours: the
@@ -228,7 +242,7 @@ impl Profile {
     /// parametric curves) differ in every byte. Colours are compared rather than round-tripped
     /// because CMYK → PCS → CMYK is not an identity even through a single profile.
     pub fn same_colors(&self, other: &Profile) -> bool {
-        if self.content_hash() == other.content_hash() {
+        if self.same_bytes(other) {
             return true;
         }
         let n = self.channels();
@@ -406,22 +420,22 @@ fn encode_pcs(pcs: Pcs, kind: LutKind) -> Stage {
 
 // ---------------------------------------------------------------- reader
 
-struct Reader<'a> {
-    b: &'a [u8],
+pub(crate) struct Reader<'a> {
+    pub(crate) b: &'a [u8],
 }
 
 impl<'a> Reader<'a> {
-    fn slice(&self, off: usize, len: usize) -> Result<&'a [u8], CmsError> {
+    pub(crate) fn slice(&self, off: usize, len: usize) -> Result<&'a [u8], CmsError> {
         off.checked_add(len).and_then(|end| self.b.get(off..end)).ok_or(CmsError::Truncated)
     }
     fn u8(&self, off: usize) -> Result<u8, CmsError> {
         self.b.get(off).copied().ok_or(CmsError::Truncated)
     }
-    fn u16(&self, off: usize) -> Result<u16, CmsError> {
+    pub(crate) fn u16(&self, off: usize) -> Result<u16, CmsError> {
         let s = self.slice(off, 2)?;
         Ok(u16::from_be_bytes([s[0], s[1]]))
     }
-    fn u32(&self, off: usize) -> Result<u32, CmsError> {
+    pub(crate) fn u32(&self, off: usize) -> Result<u32, CmsError> {
         let s = self.slice(off, 4)?;
         Ok(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
     }
@@ -429,8 +443,16 @@ impl<'a> Reader<'a> {
         Ok(self.u32(off)? as i32 as f64 / 65536.0)
     }
     fn xyz(&self, off: usize) -> Result<[f64; 3], CmsError> {
-        Ok([self.s15f16(off)?, self.s15f16(off + 4)?, self.s15f16(off + 8)?])
+        let r = Reader { b: self.slice(off, 12)? };
+        Ok([r.s15f16(0)?, r.s15f16(4)?, r.s15f16(8)?])
     }
+}
+
+/// `base + n * size` for a count or offset read from the file, or `Truncated` when it does not
+/// fit a `usize`. Such fields reach `u32::MAX`, which overflows on 32-bit targets (wasm32):
+/// a panic with overflow checks on, a wrapped offset that reads the wrong bytes without (#4976).
+fn extent(base: usize, n: usize, size: usize) -> Result<usize, CmsError> {
+    n.checked_mul(size).and_then(|len| base.checked_add(len)).ok_or(CmsError::Truncated)
 }
 
 fn sig(s: &[u8; 4]) -> u32 {
@@ -565,6 +587,39 @@ fn parse_profile(bytes: &[u8]) -> Result<Profile, CmsError> {
     Ok(p)
 }
 
+/// Sampled-curve entries one profile may decode in all (64 MB of `f32`). Tags and curve groups can
+/// point at the same encoded bytes, and each reference decodes its own table.
+const MAX_CURVE_SAMPLES: usize = 16 << 20;
+
+/// CLUT values one profile may decode in all (128 MB of `f32`): the twelve LUT tags can alias
+/// one table, and each reference decodes its own copy.
+const MAX_PROFILE_CLUT_VALUES: usize = 32 << 20;
+
+thread_local! {
+    /// What is left of [`MAX_CURVE_SAMPLES`] for the profile being parsed on this thread.
+    static CURVE_SAMPLES_LEFT: std::cell::Cell<usize> = const { std::cell::Cell::new(MAX_CURVE_SAMPLES) };
+    /// What is left of [`MAX_PROFILE_CLUT_VALUES`] for the profile being parsed on this thread.
+    static CLUT_VALUES_LEFT: std::cell::Cell<usize> = const { std::cell::Cell::new(MAX_PROFILE_CLUT_VALUES) };
+}
+
+/// Charges `n` decoded curve samples to the profile being parsed.
+fn charge_curve_samples(n: usize) -> Result<(), CmsError> {
+    CURVE_SAMPLES_LEFT.with(|left| {
+        let rest = left.get().checked_sub(n).ok_or_else(|| CmsError::Invalid("the profile's curves hold too many samples".into()))?;
+        left.set(rest);
+        Ok(())
+    })
+}
+
+/// Charges `n` decoded CLUT values to the profile being parsed.
+fn charge_clut_values(n: usize) -> Result<(), CmsError> {
+    CLUT_VALUES_LEFT.with(|left| {
+        let rest = left.get().checked_sub(n).ok_or_else(|| CmsError::Invalid("the profile's lookup tables hold too many values".into()))?;
+        left.set(rest);
+        Ok(())
+    })
+}
+
 /// Parses a `curv` or `para` element; returns the curve and the element's byte length
 /// (unpadded).
 fn parse_curve(d: &[u8]) -> Result<(Curve, usize), CmsError> {
@@ -584,6 +639,7 @@ fn parse_curve(d: &[u8]) -> Result<(Curve, usize), CmsError> {
                 1 => Ok((Curve::Gamma(r.u16(12)? as f64 / 256.0), len)),
                 _ => {
                     let s = r.slice(12, n * 2)?;
+                    charge_curve_samples(n)?;
                     let t = s.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]) as f32 / 65535.0).collect();
                     Ok((Curve::Table(t), len))
                 }
@@ -660,6 +716,7 @@ fn parse_lut(d: &[u8], a2b: bool) -> Result<Lut, CmsError> {
                 return Err(CmsError::Invalid("CLUT too large".into()));
             }
             let total = nodes as usize * o;
+            charge_clut_values(total)?;
             let s = r.slice(off, total * bps)?;
             let data: Vec<f32> = if wide {
                 s.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]) as f32 / 65535.0).collect()
@@ -687,36 +744,8 @@ fn parse_lut(d: &[u8], a2b: bool) -> Result<Lut, CmsError> {
                 return Err(CmsError::Invalid("bad lutAB dimensions".into()));
             }
             let (ob, om, omc, oc, oa) = (r.u32(12)? as usize, r.u32(16)? as usize, r.u32(20)? as usize, r.u32(24)? as usize, r.u32(28)? as usize);
-            let matrix = |off: usize| -> Result<Stage, CmsError> {
-                let mut m = vec![0.0; 9];
-                for (k, v) in m.iter_mut().enumerate() {
-                    *v = r.s15f16(off + k * 4)?;
-                }
-                let offset = vec![r.s15f16(off + 36)?, r.s15f16(off + 40)?, r.s15f16(off + 44)?];
-                Ok(Stage::Matrix { rows: 3, cols: 3, m, offset })
-            };
-            let clut = |off: usize, cin: usize, cout: usize| -> Result<Stage, CmsError> {
-                let mut grid = Vec::with_capacity(cin);
-                for k in 0..cin {
-                    let g = r.u8(off + k)? as usize;
-                    if g < 1 {
-                        return Err(CmsError::Invalid("zero grid points".into()));
-                    }
-                    grid.push(g);
-                }
-                let prec = r.u8(off + 16)? as usize;
-                let nodes: u128 = grid.iter().map(|g| *g as u128).product();
-                if nodes * cout as u128 > MAX_CLUT_VALUES as u128 {
-                    return Err(CmsError::Invalid("CLUT too large".into()));
-                }
-                let total = nodes as usize * cout;
-                let data: Vec<f32> = match prec {
-                    1 => r.slice(off + 20, total)?.iter().map(|b| *b as f32 / 255.0).collect(),
-                    2 => r.slice(off + 20, total * 2)?.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]) as f32 / 65535.0).collect(),
-                    _ => return Err(CmsError::Invalid(format!("CLUT precision {prec}"))),
-                };
-                Ok(Stage::Clut(Clut::new(grid, cout, data)?))
-            };
+            let matrix = |off: usize| lut_ab_matrix(&r, off);
+            let clut = |off: usize, cin: usize, cout: usize| lut_ab_clut(&r, off, cin, cout);
             let mut stages = Vec::new();
             if ty == b"mAB " {
                 // A curves → CLUT → M curves → matrix → B curves.
@@ -761,6 +790,46 @@ fn parse_lut(d: &[u8], a2b: bool) -> Result<Lut, CmsError> {
         }
         other => Err(CmsError::Unsupported(format!("LUT type {:?}", String::from_utf8_lossy(other)))),
     }
+}
+
+/// The 3×3 matrix and offset of a `mAB `/`mBA ` element at `off`, an offset stored in the file.
+fn lut_ab_matrix(r: &Reader, off: usize) -> Result<Stage, CmsError> {
+    // One bounds-checked slice, then offsets inside it: `off + 44` need not fit a `usize`.
+    let e = Reader { b: r.slice(off, 48)? };
+    let mut m = vec![0.0; 9];
+    for (k, v) in m.iter_mut().enumerate() {
+        *v = e.s15f16(k * 4)?;
+    }
+    let offset = vec![e.s15f16(36)?, e.s15f16(40)?, e.s15f16(44)?];
+    Ok(Stage::Matrix { rows: 3, cols: 3, m, offset })
+}
+
+/// The CLUT of a `mAB `/`mBA ` element at `off`, an offset stored in the file.
+fn lut_ab_clut(r: &Reader, off: usize, cin: usize, cout: usize) -> Result<Stage, CmsError> {
+    // Grid points (16 bytes), precision and padding; the samples follow.
+    let head = Reader { b: r.slice(off, 20)? };
+    let mut grid = Vec::with_capacity(cin);
+    for k in 0..cin {
+        let g = head.u8(k)? as usize;
+        if g < 1 {
+            return Err(CmsError::Invalid("zero grid points".into()));
+        }
+        grid.push(g);
+    }
+    let prec = head.u8(16)? as usize;
+    let nodes: u128 = grid.iter().map(|g| *g as u128).product();
+    if nodes * cout as u128 > MAX_CLUT_VALUES as u128 {
+        return Err(CmsError::Invalid("CLUT too large".into()));
+    }
+    let total = nodes as usize * cout;
+    charge_clut_values(total)?;
+    let samples = extent(off, 20, 1)?;
+    let data: Vec<f32> = match prec {
+        1 => r.slice(samples, total)?.iter().map(|b| *b as f32 / 255.0).collect(),
+        2 => r.slice(samples, total * 2)?.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]) as f32 / 65535.0).collect(),
+        _ => return Err(CmsError::Invalid(format!("CLUT precision {prec}"))),
+    };
+    Ok(Stage::Clut(Clut::new(grid, cout, data)?))
 }
 
 /// Text from `desc` (textDescriptionType), `mluc` (English or first record) or `text`.
@@ -810,6 +879,7 @@ fn parse_text(d: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::builtin::Builtin;
 
     /// The count from a `curv` tag must be bounded before `12 + n * 2` is computed: on a 32-bit
     /// target the multiplication panics with overflow checks on, which is what the guard exists
@@ -833,6 +903,209 @@ mod tests {
         d.extend_from_slice(&2u32.to_be_bytes());
         d.extend_from_slice(&(u32::MAX - 20).to_be_bytes());
         d.extend_from_slice(&[0u8; 12]);
-        assert!(parse_text(&d).is_empty());
+        assert!(parse_text(&d).is_empty())
+    }
+
+    fn be(v: u32) -> [u8; 4] {
+        v.to_be_bytes()
+    }
+
+    /// #4976: offsets and counts stored in a profile reach `u32::MAX`, which is `usize::MAX` on
+    /// 32-bit targets. The arithmetic on them must report a truncated profile, not overflow.
+    #[test]
+    fn offsets_at_the_top_of_the_address_space_are_truncated_not_overflowed() {
+        let bytes = [0u8; 64];
+        let r = Reader { b: &bytes };
+        for off in [usize::MAX, usize::MAX - 3, usize::MAX - 11, usize::MAX - 19, usize::MAX - 47] {
+            assert_eq!(r.xyz(off), Err(CmsError::Truncated), "xyz at {off}");
+            assert!(matches!(lut_ab_matrix(&r, off), Err(CmsError::Truncated)), "matrix at {off}");
+            assert!(matches!(lut_ab_clut(&r, off, 3, 3), Err(CmsError::Truncated)), "clut at {off}");
+        }
+        assert_eq!(extent(16, usize::MAX, 12), Err(CmsError::Truncated));
+        assert_eq!(extent(usize::MAX, 1, 1), Err(CmsError::Truncated));
+        assert_eq!(extent(16, 3, 12), Ok(52));
+    }
+
+    #[test]
+    fn a_curve_count_is_checked_before_its_length_is_computed() {
+        let mut d = b"curv\0\0\0\0".to_vec();
+        d.extend(be(u32::MAX));
+        assert_eq!(parse_curve(&d).map(|c| c.1), Err(CmsError::Invalid("curve too long".into())));
+        // Controls: the identity and a two-point table still parse with their lengths.
+        let mut d = b"curv\0\0\0\0".to_vec();
+        d.extend(be(0));
+        assert_eq!(parse_curve(&d).map(|c| c.1), Ok(12));
+        let mut d = b"curv\0\0\0\0".to_vec();
+        d.extend(be(2));
+        d.extend([0, 0, 0xFF, 0xFF]);
+        assert_eq!(parse_curve(&d).map(|c| c.1), Ok(16));
+    }
+
+    #[test]
+    fn lut_ab_elements_at_hostile_offsets_are_rejected() {
+        // A 3→3 lutAtoB with identity B curves at byte 32; then its B-curve, matrix and CLUT
+        // offsets in turn point at the end of a 32-bit file.
+        let lut = |b: u32, matrix: u32, m: u32, clut: u32, a: u32| {
+            let mut d = b"mAB \0\0\0\0".to_vec();
+            d.extend([3, 3, 0, 0]);
+            for v in [b, matrix, m, clut, a] {
+                d.extend(be(v));
+            }
+            for _ in 0..3 {
+                d.extend(b"curv\0\0\0\0");
+                d.extend(be(0));
+            }
+            d
+        };
+        assert!(parse_lut(&lut(32, 0, 0, 0, 0), true).is_ok(), "the control parses");
+        let top = u32::MAX - 8;
+        assert!(parse_lut(&lut(top, 0, 0, 0, 0), true).is_err(), "B curves offset");
+        assert!(parse_lut(&lut(32, top, 32, 0, 0), true).is_err(), "matrix offset");
+        assert!(parse_lut(&lut(32, 0, 0, top, 32), true).is_err(), "CLUT offset");
+    }
+
+    #[test]
+    fn multilingual_records_with_a_huge_record_size_give_the_first_record() {
+        let record = |lang: &[u8; 2], len: u32, off: u32| {
+            let mut r = lang.to_vec();
+            r.extend(b"US");
+            r.extend(be(len));
+            r.extend(be(off));
+            r
+        };
+        // Two records of the standard 12 bytes: the English one wins.
+        let mut d = b"mluc\0\0\0\0".to_vec();
+        d.extend(be(2));
+        d.extend(be(12));
+        d.extend(record(b"de", 4, 40));
+        d.extend(record(b"en", 4, 44));
+        d.extend([0, b'D', 0, b'E', 0, b'E', 0, b'N']);
+        assert_eq!(parse_text(&d), "EN");
+        // A record size of u32::MAX: the second record lies past any file, so the first is used.
+        d[12..16].copy_from_slice(&be(u32::MAX));
+        assert_eq!(parse_text(&d), "DE");
+        // No records at all.
+        let mut d = b"mluc\0\0\0\0".to_vec();
+        d.extend(be(u32::MAX));
+        d.extend(be(u32::MAX));
+        assert_eq!(parse_text(&d), "");
+    }
+
+    #[test]
+    fn mab_offsets_near_the_end_of_the_address_space_are_errors() {
+        // Offsets are file-controlled u32s: element reads must be checked slices, never `off + k`.
+        for tag in [b"mAB ", b"mBA "] {
+            for off in [u32::MAX, u32::MAX - 3, u32::MAX - 19, u32::MAX - 47] {
+                for (ob, om, omc, oc, oa) in [(off, 0, 0, 0, 0), (32, off, 32, 0, 0), (32, 32, 32, off, 32), (32, 0, 0, 32, off)] {
+                    let mut e = tag.to_vec();
+                    e.extend([0u8; 4]);
+                    e.extend([3, 3, 0, 0]);
+                    for v in [ob, om, omc, oc, oa] {
+                        e.extend(v.to_be_bytes());
+                    }
+                    e.resize(256, 0);
+                    assert!(parse_lut(&e, true).is_err() || parse_lut(&e, false).is_err());
+                }
+            }
+        }
+    }
+
+    /// `p` with the content hash of `other`: the hash is a fixed-key 64-bit SipHash, so a
+    /// crafted profile can have another's (#8613). Setting it stands in for finding one.
+    fn with_hash_of(p: &Profile, other: &Profile) -> Profile {
+        let p = Profile { hash: std::sync::OnceLock::from(other.content_hash()), ..p.clone() };
+        assert_eq!(p.content_hash(), other.content_hash());
+        p
+    }
+
+    /// #8613: a profile that shares sRGB's hash is not taken for sRGB.
+    #[test]
+    fn a_hash_collision_is_not_the_same_colours() {
+        let srgb = Builtin::Srgb.profile();
+        let p3 = with_hash_of(Builtin::DisplayP3.profile(), srgb);
+        assert!(!p3.same_bytes(srgb));
+        assert!(!p3.same_colors(srgb));
+        // Controls: equal bytes are the same, whatever object holds them.
+        assert!(srgb.same_bytes(srgb));
+        assert!(srgb.same_bytes(&Profile::parse(&srgb.to_bytes()).unwrap()));
+        assert!(Builtin::DisplayP3.profile().same_colors(Builtin::DisplayP3.profile()));
+    }
+
+    /// #8613: the transform cache does not hand a colliding profile the other's transform.
+    #[test]
+    fn a_hash_collision_does_not_get_the_cached_transform() {
+        use crate::transform::{Transform, TransformOptions, cached};
+        let (srgb, lab) = (Builtin::Srgb.profile(), Builtin::LabD50.profile());
+        let p3 = with_hash_of(Builtin::DisplayP3.profile(), srgb);
+        let opts = TransformOptions::default();
+        let green = [0.0, 1.0, 0.0];
+        let eval = |t: &Transform| {
+            let mut out = [0f32; 3];
+            t.eval(&green, &mut out).unwrap();
+            out
+        };
+        let want = eval(&Transform::with_options(Builtin::DisplayP3.profile(), lab, opts).unwrap());
+        assert_ne!(want, eval(&Transform::with_options(srgb, lab, opts).unwrap()), "P3 green is not sRGB green");
+        let sr = eval(&cached(srgb, lab, opts).unwrap());
+        assert_eq!(eval(&cached(&p3, lab, opts).unwrap()), want);
+        // Control: sRGB still gets its own transform after the colliding lookup.
+        assert_eq!(eval(&cached(srgb, lab, opts).unwrap()), sr);
+    }
+}
+#[cfg(test)]
+mod parse_budget_tests {
+    use super::*;
+
+    #[test]
+    fn aliased_curves_are_charged_for_each_decoded_table() {
+        // One 1M-sample `curv` element referenced seventeen times decodes 17M samples.
+        let mut element = b"curv\0\0\0\0".to_vec();
+        element.extend((1u32 << 20).to_be_bytes());
+        element.extend(std::iter::repeat_n(0u8, 2 << 20));
+        CURVE_SAMPLES_LEFT.with(|left| left.set(MAX_CURVE_SAMPLES));
+        let failed_at = (0..17).find(|_| parse_curve(&element).is_err());
+        assert_eq!(failed_at, Some(16), "sixteen tables fit the budget, the seventeenth does not");
+        // Each profile parse starts with a fresh budget.
+        CURVE_SAMPLES_LEFT.with(|left| left.set(MAX_CURVE_SAMPLES));
+        assert!(parse_curve(&element).is_ok());
+    }
+
+    /// Three parses of one encoded element: each decodes its own copy, so the third passes the
+    /// allowance (the table itself is within the per-table limit).
+    fn assert_third_copy_refused(element: &[u8]) {
+        CLUT_VALUES_LEFT.with(|left| left.set(MAX_PROFILE_CLUT_VALUES));
+        assert!(parse_lut(element, true).is_ok());
+        assert!(parse_lut(element, true).is_ok());
+        assert!(parse_lut(element, true).is_err(), "the third decoded copy passes the profile's allowance");
+        CLUT_VALUES_LEFT.with(|left| left.set(MAX_PROFILE_CLUT_VALUES));
+        assert!(parse_lut(element, true).is_ok());
+    }
+
+    #[test]
+    fn aliased_mab_cluts_are_charged_for_each_decoded_table() {
+        // mAB 3 -> 1: B curve at 32, A curves at 44, a 255^3 x 1 8-bit CLUT at 80.
+        let mut e = b"mAB \0\0\0\0".to_vec();
+        e.extend([3, 1, 0, 0]);
+        for off in [32u32, 0, 0, 80, 44] {
+            e.extend(off.to_be_bytes());
+        }
+        for _ in 0..4 {
+            e.extend(b"curv\0\0\0\0\0\0\0\0");
+        }
+        e.extend([255, 255, 255]);
+        e.resize(80 + 16, 0);
+        e.extend([1, 0, 0, 0]);
+        e.extend(std::iter::repeat_n(0u8, 255 * 255 * 255));
+        assert_third_copy_refused(&e);
+    }
+
+    #[test]
+    fn aliased_mft1_cluts_are_charged_for_each_decoded_table() {
+        // mft1 3 -> 1 with a 250^3 x 1 CLUT: input tables, CLUT, output table.
+        let mut e = b"mft1\0\0\0\0".to_vec();
+        e.extend([3, 1, 250, 0]);
+        e.resize(48, 0);
+        e.extend(std::iter::repeat_n(0u8, 3 * 256 + 250usize.pow(3) + 256));
+        assert_third_copy_refused(&e);
     }
 }

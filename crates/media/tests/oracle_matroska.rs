@@ -168,12 +168,12 @@ fn h264_aac() {
     assert!(!f.cues.is_empty());
     assert!(!f.seek_head.is_empty());
     check_seeks(&bytes, OpenOptions::default(), v, &packets);
-    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false }, v, &packets);
+    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false, index_limit: None }, v, &packets);
     check_seeks(&bytes, OpenOptions::default(), a, &packets);
     // Read + Seek entry point and CRC verification (ffmpeg writes CRC-32 in level-1 elements)
     let d = Demuxer::from_reader(std::io::Cursor::new(bytes.clone())).unwrap();
     assert_eq!(d.file().tracks.len(), 2);
-    let crc = open_with(&bytes[..], &OpenOptions { index: true, verify_crc: true }).unwrap();
+    let crc = open_with(&bytes[..], &OpenOptions { index: true, verify_crc: true, index_limit: None }).unwrap();
     assert!(crc.crc_checked > 0);
     assert!(crc.crc_errors.is_empty());
     let kf = Demuxer::from_slice(&bytes).unwrap().keyframe_index(v).unwrap();
@@ -192,7 +192,7 @@ fn vp9_opus_webm() {
     let v = f.track_of_kind(TrackKind::Video).unwrap();
     assert!(matches!(f.tracks[v].codec, Codec::Vp9 { .. }));
     check_seeks(&bytes, OpenOptions::default(), v, &packets);
-    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false }, v, &packets);
+    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false, index_limit: None }, v, &packets);
 }
 
 #[test]
@@ -241,7 +241,7 @@ fn cues_at_front() {
     assert!(!f.cues.is_empty());
     assert!(f.clusters.len() >= 5);
     let v = f.track_of_kind(TrackKind::Video).unwrap();
-    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false }, v, &packets);
+    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false, index_limit: None }, v, &packets);
 }
 
 #[test]
@@ -252,8 +252,8 @@ fn live_stream_without_cues() {
     assert!(f.duration_ns().unwrap() > 1_900_000_000);
     let v = f.track_of_kind(TrackKind::Video).unwrap();
     // no cues: seeking builds the index by scanning clusters
-    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false }, v, &packets);
-    let mut d = Demuxer::with_options(&bytes[..], OpenOptions { index: false, verify_crc: false }).unwrap();
+    check_seeks(&bytes, OpenOptions { index: false, verify_crc: false, index_limit: None }, v, &packets);
+    let mut d = Demuxer::with_options(&bytes[..], OpenOptions { index: false, verify_crc: false, index_limit: None }).unwrap();
     assert!(!d.file().indexed);
     assert!(!d.keyframe_index(v).unwrap().is_empty());
     assert!(d.file().indexed);
@@ -324,11 +324,20 @@ fn laced_remux() {
                 .map(|(ti, t)| {
                     let mut s = TrackSpec::new(t.kind, t.codec_id.clone());
                     s.codec_private = t.codec_private.clone();
-                    // audio without a DefaultDuration gets its mean packet spacing, so it can lace
-                    s.default_duration_ns = t.default_duration_ns.or_else(|| {
-                        let pts: Vec<i64> = packets.iter().filter(|p| p.track == ti).map(|p| p.pts_ns).collect();
-                        (t.kind == TrackKind::Audio && pts.len() > 1).then(|| ((pts[pts.len() - 1] - pts[0]) / (pts.len() as i64 - 1)) as u64)
-                    });
+                    // BlockDuration overrides DefaultDuration: ffmpeg's Vorbis files declare a short
+                    // default and store longer durations per block. Audio takes its median packet
+                    // duration (the packet spacing when no packet has one), so its frames can lace.
+                    s.default_duration_ns = if t.kind == TrackKind::Audio {
+                        let audio: Vec<&Packet> = packets.iter().filter(|p| p.track == ti).collect();
+                        let mut durations: Vec<u64> = audio.iter().map(|p| p.duration_ns).filter(|&d| d > 0).collect();
+                        if durations.is_empty() {
+                            durations = audio.windows(2).filter_map(|w| u64::try_from(w[1].pts_ns - w[0].pts_ns).ok()).filter(|&d| d > 0).collect();
+                        }
+                        durations.sort_unstable();
+                        durations.get(durations.len() / 2).copied().or(t.default_duration_ns)
+                    } else {
+                        t.default_duration_ns
+                    };
                     s.video_size = t.video.as_ref().map(|v| (v.pixel_width, v.pixel_height));
                     s.audio = t.audio.as_ref().map(|a| (a.sampling_frequency, a.channels, a.bit_depth));
                     s.codec_delay_ns = t.codec_delay_ns;
@@ -338,7 +347,9 @@ fn laced_remux() {
             let opts = MuxOptions { lacing: mode, ..Default::default() };
             let mut w = MkvWriter::new(std::io::Cursor::new(Vec::new()), specs, opts).unwrap();
             for p in &packets {
-                w.write_frame(p.track, p.pts_ns, p.keyframe, &p.data, None).unwrap();
+                // Keep explicit durations, a short last packet's too: one that differs from the
+                // track's default ends the lace.
+                w.write_frame(p.track, p.pts_ns, p.keyframe, &p.data, (p.duration_ns > 0).then_some(p.duration_ns)).unwrap();
             }
             let out = w.finish().unwrap().into_inner();
             let laced = {

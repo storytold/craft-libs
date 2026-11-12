@@ -45,7 +45,7 @@ pub struct StartupPrompt {
 impl StartupPrompt {
     /// Creates a new prompt dialog state for the given app and newly discovered release.
     pub fn new(app: &'static App, release: Release, running_version: impl Into<String>) -> Self {
-        let is_self_updating = crate::self_update::is_self_updating(app);
+        let is_self_updating = crate::self_update::is_self_updating(app) && crate::self_update::release_installs(app, &release);
         Self {
             app,
             release,

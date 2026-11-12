@@ -4,6 +4,14 @@
 
 #[cfg(feature = "aac-decode")]
 use crate::aac;
+#[cfg(feature = "ac3-decode")]
+use crate::ac3;
+#[cfg(feature = "alac-decode")]
+use crate::alac;
+#[cfg(feature = "mpa-decode")]
+use crate::mpa;
+#[cfg(feature = "opus-decode")]
+use crate::opus;
 use crate::pcm::{PcmKind, deinterleave};
 use crate::{AudioBuffer, AudioError, ChannelLayout, CodecId, CodecParams, Result, SampleFormat};
 
@@ -20,20 +28,41 @@ enum Inner {
         /// The format ADTS packets must keep, when their headers gave the configuration.
         adts_format: Option<AdtsFormat>,
     },
+    #[cfg(feature = "alac-decode")]
+    Alac {
+        dec: alac::Decoder,
+        order: Option<&'static [usize]>,
+        /// 2^-(bit depth - 1): full scale to ±1.
+        scale: f64,
+    },
+    /// The decoder, and what the packets read so far say of the track's packets.
+    #[cfg(feature = "ac3-decode")]
+    Ac3(Box<ac3::Decoder>, Ac3Packets),
+    #[cfg(feature = "opus-decode")]
+    Opus {
+        dec: Box<opus::Decoder>,
+        order: Option<&'static [usize]>,
+    },
+    #[cfg(feature = "mpa-decode")]
+    Mpa(Box<mpa::Decoder>),
     Pcm {
         kind: PcmKind,
         channels: usize,
     },
 }
 
+/// Reads the frames a packet holds from its data, given the frames of a full packet.
+#[cfg(feature = "decode-native")]
+pub(crate) type PacketFrames = fn(&[u8], u64) -> Option<u64>;
+
 /// Decodes the packets of one audio track to planar `f32`, in WAV channel order when
 /// [`TrackDecoder::layout`] is ordered.
 ///
 /// It takes the track's [`CodecParams`] (from `isobmff::Track::codec_params`,
 /// `matroska::Track::codec_params`, `ogg::Stream::codec_params`, or built by hand for another
-/// container) and decodes AAC (LC; HE-AAC as its upsampled LC core) and PCM.
-/// Container timing (AAC priming, end trimming) is the caller's: every decoded sample is
-/// returned.
+/// container) and decodes AAC (LC; HE-AAC as its upsampled LC core), ALAC, Opus, AC-3/E-AC-3,
+/// MP1/MP2 and PCM. Container timing (AAC priming, Opus pre-skip, end trimming) is the caller's:
+/// every decoded sample is returned.
 ///
 /// ```no_run
 /// # fn demo(params: &craft_audio::CodecParams, packets: &[Vec<u8>]) -> craft_audio::Result<()> {
@@ -75,19 +104,30 @@ impl std::fmt::Debug for TrackDecoder {
 impl TrackDecoder {
     /// A decoder for the track `params` describes. `lookahead` holds the track's first packets
     /// (up to [`LOOKAHEAD_PACKETS`]; empty when they are not at hand): HE-AAC signalled only
-    /// inside the stream is found in them.
+    /// inside the stream is found in them, and AC-3 and MPEG audio take their rate and channel
+    /// layout (MPEG audio its layer too) from the first frame. Without them those are taken from
+    /// `params` and set from the first decoded packet.
     ///
     /// Streams without codec configuration are accepted where the packets carry it: AAC with
     /// empty `extradata` takes its configuration from the ADTS headers of the lookahead (MPEG-TS,
-    /// raw `.aac`), the one most of them share, and ADTS headers are stripped from every packet. Other missing configuration is
-    /// [`AudioError::Malformed`].
+    /// raw `.aac`), the one most of them share, and ADTS headers are stripped from every packet;
+    /// Opus with empty `extradata` and 1 or 2 `channels` (RTP, MPEG-TS) needs no `OpusHead`. Other
+    /// missing configuration is [`AudioError::Malformed`].
     ///
-    /// Codecs without a native packet decoder yet are [`AudioError::Unsupported`];
-    /// `craft_audio::decode` decodes MP3, FLAC, ALAC and Vorbis through symphonia when the
+    /// ALAC needs its magic cookie in `extradata`.
+    ///
+    /// Codecs without a native packet decoder yet (MP3, FLAC, Vorbis) are
+    /// [`AudioError::Unsupported`]; `craft_audio::decode` decodes them through symphonia when the
     /// `symphonia` feature is on.
     pub fn new(params: &CodecParams, lookahead: &[&[u8]]) -> Result<TrackDecoder> {
+        #[cfg(not(feature = "aac-decode"))]
+        let _ = lookahead;
         let rate = params.sample_rate.unwrap_or(0);
         let channels = usize::from(params.channels.unwrap_or(0));
+        // AC-3 and MPEG audio read their parameters from the first frame; AAC reads the lookahead;
+        // Opus needs none.
+        #[cfg_attr(not(any(feature = "ac3-decode", feature = "mpa-decode")), allow(unused_variables))]
+        let first = lookahead.first().copied().unwrap_or_default();
         let (inner, codec, sample_rate, layout, sample_format) = match params.codec {
             #[cfg(feature = "aac-decode")]
             CodecId::Aac | CodecId::HeAac => {
@@ -116,11 +156,85 @@ impl TrackDecoder {
                 let codec = if up.is_some() { CodecId::HeAac } else { CodecId::Aac };
                 // Only twice the core rate is upsampled to; any other signalled rate plays the core.
                 let out = if up.is_some() { out } else { dec.sample_rate() };
-                let cfg = dec.config().channel_config;
+                // a program config element that spells out a configuration has its speakers
+                let cfg = aac::speaker_config(dec.config());
                 let layout = aac_layout(cfg, dec.channels());
                 let order = layout.is_ordered().then(|| aac::wav_order(cfg)).flatten();
                 (Inner::Aac { dec: Box::new(dec), up, order, adts_format }, codec, out, layout, SampleFormat::Compressed)
             }
+            #[cfg(feature = "alac-decode")]
+            CodecId::Alac => {
+                if params.extradata.is_empty() {
+                    return Err(AudioError::Malformed("ALAC track without a magic cookie (extradata)".into()));
+                }
+                let dec = alac::Decoder::new(&params.extradata)?;
+                let cfg = *dec.config();
+                // The cookie's rate is the codec's; the container's stands in when it is 0.
+                let rate = if cfg.sample_rate > 0 { cfg.sample_rate } else { rate };
+                if rate == 0 {
+                    return Err(AudioError::Malformed("ALAC track without a sample rate in its cookie or container".into()));
+                }
+                let (layout, order) = if cfg.has_standard_layout() {
+                    (ChannelLayout::from_mask(alac::channel_mask(cfg.channels)), alac::wav_order(cfg.channels))
+                } else {
+                    (ChannelLayout::unordered(u16::from(cfg.channels)), None)
+                };
+                let sample_format = match cfg.bit_depth {
+                    1..=8 => SampleFormat::Int8,
+                    9..=16 => SampleFormat::Int16,
+                    17..=24 => SampleFormat::Int24,
+                    _ => SampleFormat::Int32,
+                };
+                let scale = 2f64.powi(1 - i32::from(cfg.bit_depth));
+                (Inner::Alac { dec, order, scale }, CodecId::Alac, rate, layout, sample_format)
+            }
+            #[cfg(feature = "ac3-decode")]
+            CodecId::Ac3 | CodecId::Eac3 => match ac3::parse_header(first) {
+                Ok(h) => {
+                    let codec = if h.is_eac3() { CodecId::Eac3 } else { CodecId::Ac3 };
+                    (Inner::Ac3(Box::default(), Ac3Packets::of(lookahead)), codec, h.sample_rate, ac3_layout(&h), SampleFormat::Compressed)
+                }
+                Err(_) => (
+                    Inner::Ac3(Box::default(), Ac3Packets::default()),
+                    params.codec,
+                    rate,
+                    ChannelLayout::unordered(crate::layout::count(channels)),
+                    SampleFormat::Compressed,
+                ),
+            },
+            #[cfg(feature = "opus-decode")]
+            CodecId::Opus => {
+                // Opus over RTP or in MPEG-TS has no OpusHead: mono and stereo need none (RFC 7845
+                // mapping family 0), so one is made from the channel count.
+                let head = match (params.extradata.is_empty(), channels) {
+                    (false, _) => opus::OpusHead::parse(&params.extradata)?,
+                    (true, 1 | 2) => opus::OpusHead::parse(&default_opus_head(channels as u8, rate))?,
+                    (true, _) => {
+                        return Err(AudioError::Malformed("Opus track without an OpusHead (extradata) needs 1 or 2 channels".into()));
+                    }
+                };
+                let layout = opus_layout(&head);
+                let order = if head.mapping_family == 1 { opus::wav_order(head.channels) } else { None };
+                let dec = opus::Decoder::from_head(head, 48_000)?;
+                (Inner::Opus { dec: Box::new(dec), order }, CodecId::Opus, 48_000, layout, SampleFormat::Compressed)
+            }
+            #[cfg(feature = "mpa-decode")]
+            CodecId::Mp1 | CodecId::Mp2 | CodecId::Mp3 => match mpa::parse_header(first) {
+                Ok(h) if h.layer == 3 => return Err(unsupported(CodecId::Mp3)),
+                Ok(h) => {
+                    let codec = if h.layer == 1 { CodecId::Mp1 } else { CodecId::Mp2 };
+                    (Inner::Mpa(Box::default()), codec, h.sample_rate, mpa_layout(&h), SampleFormat::Compressed)
+                }
+                // Without a first frame, a container that names layer III is left to symphonia.
+                Err(_) if params.codec == CodecId::Mp3 => return Err(unsupported(CodecId::Mp3)),
+                Err(_) => (
+                    Inner::Mpa(Box::default()),
+                    params.codec,
+                    rate,
+                    ChannelLayout::default_for(crate::layout::count(channels)),
+                    SampleFormat::Compressed,
+                ),
+            },
             CodecId::Pcm => {
                 let pcm = params.pcm.ok_or_else(|| AudioError::Malformed("PCM track without a sample format".into()))?;
                 let (kind, sample_format) = pcm_kind(pcm.bits, pcm.float, pcm.big_endian, !pcm.signed)
@@ -136,7 +250,7 @@ impl TrackDecoder {
     }
 
     /// The codec, refined from the stream: [`CodecId::HeAac`] for AAC with spectral band
-    /// replication.
+    /// replication, `Eac3` for Dolby Digital Plus, `Mp1`/`Mp2` by layer.
     pub fn codec(&self) -> CodecId {
         self.codec
     }
@@ -161,9 +275,14 @@ impl TrackDecoder {
         self.sample_format
     }
 
-    /// Decode one packet. A packet that fails is an error for every codec: call [`TrackDecoder::conceal`] for audio of its length, so what follows keeps
+    /// Decode one packet. An MP4 or Matroska packet may hold several AC-3 or MPEG audio frames;
+    /// an E-AC-3 dependent substream decodes to no frames. A packet that fails is an error for
+    /// every codec: call [`TrackDecoder::conceal`] for audio of its length, so what follows keeps
     /// its timing.
     pub fn decode(&mut self, packet: &[u8]) -> Result<AudioBuffer> {
+        // A packet decoded only in part says nothing of how long packets are.
+        #[cfg_attr(not(feature = "ac3-decode"), allow(unused_mut))]
+        let mut partial = false;
         let channels = match &mut self.inner {
             #[cfg(feature = "aac-decode")]
             Inner::Aac { dec, up, order, adts_format } => {
@@ -190,12 +309,69 @@ impl TrackDecoder {
                 }
                 reorder(out, *order)
             }
+            #[cfg(feature = "alac-decode")]
+            Inner::Alac { dec, order, scale } => {
+                let decoded = dec.decode(packet)?;
+                let floats = decoded.into_iter().map(|c| c.into_iter().map(|v| (f64::from(v) * *scale) as f32).collect()).collect();
+                reorder(floats, *order)
+            }
+            #[cfg(feature = "mpa-decode")]
+            Inner::Mpa(d) => {
+                let mut out: Vec<Vec<f32>> = Vec::new();
+                let mut p = 0;
+                while let Some(rest) = packet.get(p..).filter(|r| !r.is_empty()) {
+                    let f = match d.decode(rest) {
+                        Ok(f) => f,
+                        Err(e) if out.is_empty() => return Err(e.into()),
+                        Err(_) => break,
+                    };
+                    p += f.header.frame_bytes.max(1);
+                    if self.last_frames == 0 {
+                        self.sample_rate = f.header.sample_rate;
+                        self.layout = mpa_layout(&f.header);
+                    }
+                    append(&mut out, f.channels)?;
+                }
+                out
+            }
+            #[cfg(feature = "ac3-decode")]
+            Inner::Ac3(d, shape) => {
+                let mut out: Vec<Vec<f32>> = Vec::new();
+                let mut p = 0;
+                while let Some(rest) = packet.get(p..).filter(|r| !r.is_empty()) {
+                    let f = match d.decode(rest) {
+                        Ok(f) => f,
+                        Err(e) if out.is_empty() => return Err(e.into()),
+                        Err(_) => {
+                            partial = true;
+                            break;
+                        }
+                    };
+                    p += f.header.frame_bytes.max(1);
+                    shape.short |= f.header.is_primary() && f.header.samples() < AC3_FRAME_SAMPLES;
+                    if !f.channels.is_empty() {
+                        if self.last_frames == 0 {
+                            self.sample_rate = f.header.sample_rate;
+                            self.layout = ac3_layout(&f.header);
+                        }
+                        append(&mut out, f.channels)?;
+                    }
+                }
+                let frames = out.first().map_or(0, Vec::len);
+                shape.varies |= !partial && frames > 0 && shape.first > 0 && frames != shape.first;
+                out
+            }
+            #[cfg(feature = "opus-decode")]
+            Inner::Opus { dec, order } => {
+                let out = dec.decode(Some(packet))?;
+                reorder(out, *order)
+            }
             Inner::Pcm { kind, channels } => {
                 let frames = (packet.len() / (kind.bytes() * *channels).max(1)) as u64;
                 deinterleave(packet, *kind, *channels, frames)?
             }
         };
-        if let Some(n) = channels.iter().map(Vec::len).min().filter(|&n| n > 0) {
+        if let Some(n) = channels.iter().map(Vec::len).min().filter(|&n| n > 0 && !partial) {
             self.last_frames = n;
             if channels.len() != usize::from(self.layout.channels()) {
                 self.layout = ChannelLayout::unordered(crate::layout::count(channels.len()));
@@ -205,14 +381,23 @@ impl TrackDecoder {
     }
 
     /// What stands in for a lost or undecodable packet (`packet` when its bytes are at hand):
-    /// silence as long as the packet would have been (from its frame
-    /// header, the codec's frame length, or the last packet). Empty when the length is unknown.
+    /// Opus's loss concealment, or silence, as long as the packet would have been (from its TOC or
+    /// frame header, the codec's frame length, or the last packet). Empty when the length is
+    /// unknown.
     /// Fails with [`AudioError::TooLarge`](crate::AudioError::TooLarge) when that silence would pass
     /// the decode limit (2^30 samples, as [`decode`](Self::decode) has) or cannot be allocated,
     /// rather than return less than the packet's length.
     pub fn conceal(&mut self, packet: Option<&[u8]>) -> Result<AudioBuffer> {
         let data = packet.unwrap_or_default();
         let frames = match &mut self.inner {
+            #[cfg(feature = "opus-decode")]
+            Inner::Opus { dec, order } => {
+                let order = *order;
+                if let Ok(out) = dec.conceal(packet) {
+                    return Ok(AudioBuffer { sample_rate: self.sample_rate, channels: reorder(out, order) });
+                }
+                None
+            }
             #[cfg(feature = "aac-decode")]
             Inner::Aac { up, .. } => {
                 let per_unit = aac::FRAME_LEN * if up.is_some() { 2 } else { 1 };
@@ -224,6 +409,16 @@ impl TrackDecoder {
                     None => Some(per_unit),
                 }
             }
+            // A damaged packet whose header survives says its length; otherwise a packet is as
+            // long as the last one (a full one at the start).
+            #[cfg(feature = "alac-decode")]
+            Inner::Alac { dec, .. } => {
+                Some(dec.packet_frames(data).unwrap_or(if self.last_frames > 0 { self.last_frames } else { dec.config().frame_length as usize }))
+            }
+            #[cfg(feature = "ac3-decode")]
+            Inner::Ac3(..) => Some(ac3_packet_frames(data)),
+            #[cfg(feature = "mpa-decode")]
+            Inner::Mpa(_) => mpa::parse_header(data).ok().map(|h| h.samples()),
             Inner::Pcm { kind, channels } => Some(data.len() / (kind.bytes() * *channels).max(1)),
         };
         let frames = frames.filter(|&n| n > 0).unwrap_or(self.last_frames);
@@ -231,28 +426,80 @@ impl TrackDecoder {
     }
 
     /// The frames every packet decodes to, for codecs whose packets all have one length: AAC
-    /// (1024, 2048 for HE-AAC; a packet of several ADTS frames decodes to that many times this);
-    /// `None` for PCM.
+    /// (1024, 2048 for HE-AAC; a packet of several ADTS frames decodes to that many times this) and
+    /// AC-3 / E-AC-3 (the frames of the last decoded packet, else of the first packet's primary
+    /// syncframes, else 1536) and MP1/MP2 (one frame per packet); `None` for Opus, PCM and ALAC
+    /// (whose last packet is shorter; the container's timing says), and for AC-3 / E-AC-3 whose
+    /// packets read so far differ in length.
     pub fn frames_per_packet(&self) -> Option<usize> {
         match &self.inner {
             #[cfg(feature = "aac-decode")]
             Inner::Aac { up, .. } => Some(aac::FRAME_LEN * if up.is_some() { 2 } else { 1 }),
+            #[cfg(feature = "alac-decode")]
+            Inner::Alac { .. } => None,
+            #[cfg(feature = "ac3-decode")]
+            Inner::Ac3(_, shape) if shape.varies => None,
+            #[cfg(feature = "ac3-decode")]
+            Inner::Ac3(_, shape) => Some(match (self.last_frames, shape.first) {
+                (0, 0) => AC3_FRAME_SAMPLES,
+                (0, n) | (n, _) => n,
+            }),
+            #[cfg(feature = "opus-decode")]
+            Inner::Opus { .. } => None,
+            #[cfg(feature = "mpa-decode")]
+            Inner::Mpa(_) => Some(if self.codec == CodecId::Mp1 { 384 } else { 1152 }),
             Inner::Pcm { .. } => None,
         }
     }
 
+    /// The frames of a full packet, for codecs whose packets all have that length except ones
+    /// at the end of the stream: ALAC's frame length (only the last packet is shorter). Where
+    /// [`Self::frames_per_packet`] is `Some`, the same value.
+    #[cfg(feature = "decode-native")]
+    pub(crate) fn full_packet_frames(&self) -> Option<usize> {
+        match &self.inner {
+            #[cfg(feature = "alac-decode")]
+            Inner::Alac { dec, .. } => Some(dec.config().frame_length as usize),
+            _ => self.frames_per_packet(),
+        }
+    }
+
+    /// How many frames a packet holds, read from the packet alone, for codecs whose packets
+    /// say: ALAC's headers (given the frame length).
+    #[cfg(feature = "decode-native")]
+    pub(crate) fn packet_frames_reader(&self) -> Option<PacketFrames> {
+        match &self.inner {
+            #[cfg(feature = "alac-decode")]
+            Inner::Alac { .. } => Some(crate::alac::header_frames),
+            _ => None,
+        }
+    }
+
     /// Frames to decode before a seek target and drop, so the decoder has settled when the target
-    /// is reached: two AAC frames, none for PCM.
+    /// is reached: two AAC frames, 80 ms of Opus (RFC 7845 §4.6), one AC-3 or MPEG audio frame
+    /// (their filter banks overlap one frame), none for ALAC (its packets decode independently)
+    /// and PCM. E-AC-3 syncframes of fewer than six blocks may reuse exponents from any syncframe
+    /// before them, so once one has been read the stream decodes from its start (`usize::MAX`).
     pub fn preroll(&self) -> usize {
         match &self.inner {
             #[cfg(feature = "aac-decode")]
             Inner::Aac { up, .. } => 2 * aac::FRAME_LEN * if up.is_some() { 2 } else { 1 },
+            #[cfg(feature = "alac-decode")]
+            Inner::Alac { .. } => 0,
+            #[cfg(feature = "ac3-decode")]
+            Inner::Ac3(_, shape) if shape.short => usize::MAX,
+            #[cfg(feature = "ac3-decode")]
+            Inner::Ac3(..) => AC3_FRAME_SAMPLES,
+            #[cfg(feature = "opus-decode")]
+            Inner::Opus { .. } => 3840,
+            #[cfg(feature = "mpa-decode")]
+            Inner::Mpa(_) => self.last_frames.max(1152),
             Inner::Pcm { .. } => 0,
         }
     }
 
     /// Forget the decoder state, for a seek: the next packet decodes as if it were the first
-    /// (codecs with overlap, such as AAC, need [`TrackDecoder::preroll`] frames to
+    /// (codecs with overlap, such as AAC and Opus, need [`TrackDecoder::preroll`] frames to
     /// settle).
     pub fn reset(&mut self) {
         // the packet before a seek says nothing about the length of a packet lost after it
@@ -265,6 +512,14 @@ impl TrackDecoder {
                     up.reset();
                 }
             }
+            #[cfg(feature = "alac-decode")]
+            Inner::Alac { .. } => {}
+            #[cfg(feature = "ac3-decode")]
+            Inner::Ac3(d, _) => d.reset(),
+            #[cfg(feature = "opus-decode")]
+            Inner::Opus { dec, .. } => dec.reset(),
+            #[cfg(feature = "mpa-decode")]
+            Inner::Mpa(d) => d.reset(),
             Inner::Pcm { .. } => {}
         }
     }
@@ -273,12 +528,16 @@ impl TrackDecoder {
 fn unsupported(codec: CodecId) -> AudioError {
     let feature = match codec {
         CodecId::Aac | CodecId::HeAac => Some("aac-decode"),
+        CodecId::Alac => Some("alac-decode"),
+        CodecId::Ac3 | CodecId::Eac3 => Some("ac3-decode"),
+        CodecId::Opus => Some("opus-decode"),
+        CodecId::Mp1 | CodecId::Mp2 => Some("mpa-decode"),
         _ => None,
     };
     match feature {
         // A codec this crate decodes, in a build without its feature.
         Some(f) => AudioError::Unsupported(format!("decoding {} needs the `{f}` feature", codec.name())),
-        None if cfg!(feature = "symphonia") && matches!(codec, CodecId::Mp3 | CodecId::Flac | CodecId::Alac | CodecId::Vorbis) => {
+        None if cfg!(feature = "symphonia") && matches!(codec, CodecId::Mp3 | CodecId::Flac | CodecId::Vorbis) => {
             AudioError::Unsupported(format!("no native {} packet decoder yet (craft_audio::decode reads it through symphonia)", codec.name()))
         }
         None => AudioError::Unsupported(format!("no native {} packet decoder yet", codec.name())),
@@ -287,7 +546,7 @@ fn unsupported(codec: CodecId) -> AudioError {
 
 /// `channels` reordered by `order` (output channel → decoded channel); unchanged when the counts
 /// differ.
-#[cfg(feature = "aac-decode")]
+#[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode"))]
 fn reorder(mut channels: Vec<Vec<f32>>, order: Option<&[usize]>) -> Vec<Vec<f32>> {
     match order {
         Some(order) if order.len() == channels.len() => order.iter().map(|&c| channels.get_mut(c).map(std::mem::take).unwrap_or_default()).collect(),
@@ -297,7 +556,7 @@ fn reorder(mut channels: Vec<Vec<f32>>, order: Option<&[usize]>) -> Vec<Vec<f32>
 
 /// Append `more` to `out` channel by channel. A packet whose frames differ in channel count is
 /// malformed: one buffer cannot hold them.
-#[cfg(feature = "aac-decode")]
+#[cfg(any(feature = "aac-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 fn append(out: &mut Vec<Vec<f32>>, more: Vec<Vec<f32>>) -> Result<()> {
     if out.is_empty() {
         *out = more;
@@ -321,6 +580,51 @@ const MAX_ADTS_FRAMES_PER_PACKET: usize = 1024;
 #[cfg(feature = "aac-decode")]
 pub(crate) fn adts_stream_header(headers: &[aac::AdtsHeader]) -> Option<aac::AdtsHeader> {
     headers.iter().rev().max_by_key(|h| headers.iter().filter(|o| adts_format_of(o) == adts_format_of(h)).count()).copied()
+}
+
+/// The frames of a six-block (AC-3 or E-AC-3) syncframe.
+#[cfg(feature = "ac3-decode")]
+const AC3_FRAME_SAMPLES: usize = 1536;
+
+/// What the AC-3 / E-AC-3 packets read so far say of the track's packets.
+#[cfg(feature = "ac3-decode")]
+#[derive(Clone, Copy, Debug, Default)]
+struct Ac3Packets {
+    /// The frames the first packet's primary syncframes hold (0 when unknown).
+    first: usize,
+    /// Packets have decoded to different lengths: a packet's index does not give its position.
+    varies: bool,
+    /// A primary syncframe of fewer than six blocks (E-AC-3), whose exponents may come from any
+    /// syncframe before it.
+    short: bool,
+}
+
+#[cfg(feature = "ac3-decode")]
+impl Ac3Packets {
+    fn of(lookahead: &[&[u8]]) -> Ac3Packets {
+        let lengths: Vec<usize> = lookahead.iter().map(|p| ac3_packet_frames(p)).filter(|&n| n > 0).collect();
+        let short = lookahead.iter().any(|p| ac3_syncframes(p).any(|h| h.is_primary() && h.samples() < AC3_FRAME_SAMPLES));
+        Ac3Packets { first: lookahead.first().map_or(0, |p| ac3_packet_frames(p)), varies: lengths.windows(2).any(|w| w[0] != w[1]), short }
+    }
+}
+
+/// The headers of the syncframes `packet` holds, up to the first that does not parse.
+#[cfg(feature = "ac3-decode")]
+fn ac3_syncframes(packet: &[u8]) -> impl Iterator<Item = ac3::Header> + '_ {
+    let mut p = 0;
+    std::iter::from_fn(move || {
+        let h = ac3::parse_header(packet.get(p..)?).ok()?;
+        p += h.frame_bytes.max(1);
+        Some(h)
+    })
+}
+
+/// The frames an AC-3 / E-AC-3 packet decodes to: those of every primary syncframe in it (an MP4
+/// or Matroska packet may hold several, as E-AC-3 frames of fewer than six blocks are grouped),
+/// up to the first that does not parse. 0 when none does.
+#[cfg(feature = "ac3-decode")]
+fn ac3_packet_frames(packet: &[u8]) -> usize {
+    ac3_syncframes(packet).filter(ac3::Header::is_primary).map(|h| h.samples()).sum()
 }
 
 /// The ADTS frames `packet` holds, 0 when it is not ADTS-framed.
@@ -386,6 +690,16 @@ fn adts_units(frames: Vec<(aac::AdtsHeader, &[u8])>, format: Option<AdtsFormat>)
     Ok(frames.into_iter().map(|(_, unit)| unit).collect())
 }
 
+/// A mapping-family-0 `OpusHead` (RFC 7845 §5.1) for `channels` (1 or 2) and no pre-skip.
+#[cfg(feature = "opus-decode")]
+fn default_opus_head(channels: u8, input_rate: u32) -> Vec<u8> {
+    let mut h = b"OpusHead".to_vec();
+    h.extend_from_slice(&[1, channels, 0, 0]);
+    h.extend_from_slice(&(if input_rate > 0 { input_rate } else { 48_000 }).to_le_bytes());
+    h.extend_from_slice(&[0, 0, 0]);
+    h
+}
+
 /// The sample layout and stored format of PCM samples, `None` for a depth we do not read.
 pub(crate) fn pcm_kind(bits: u16, float: bool, big_endian: bool, unsigned: bool) -> Option<(PcmKind, SampleFormat)> {
     let bytes = usize::from(bits.div_ceil(8));
@@ -422,6 +736,46 @@ pub(crate) fn aac_layout(channel_config: u8, channels: usize) -> ChannelLayout {
     }
 }
 
+#[cfg(feature = "mpa-decode")]
+/// MPEG audio: mono, or stereo (also for dual channel and joint stereo).
+pub(crate) fn mpa_layout(h: &mpa::Header) -> ChannelLayout {
+    if h.channels() == 1 { ChannelLayout::MONO } else { ChannelLayout::STEREO }
+}
+
+#[cfg(feature = "ac3-decode")]
+/// The speakers of an AC-3 / E-AC-3 program (A/52 Table 5.8) in the decoder's WAV order: fronts,
+/// LFE, surrounds. Dual mono (1+1) has no speaker assignment.
+pub(crate) fn ac3_layout(h: &ac3::Header) -> ChannelLayout {
+    let fronts = match h.acmod & 7 {
+        0 => return ChannelLayout::unordered(crate::layout::count(h.channels())),
+        1 => 0x4,
+        2 => 0x3,
+        3 => 0x7,
+        4 => 0x103,
+        5 => 0x107,
+        6 => 0x603,
+        _ => 0x607,
+    };
+    ChannelLayout::from_mask(fronts | if h.lfeon { 0x8 } else { 0 })
+}
+
+#[cfg(feature = "opus-decode")]
+/// The speakers of an Opus stream (RFC 7845 §5.1.1): Vorbis order for mapping family 1, reordered
+/// to WAV order by [`opus::wav_order`]; other families have no speaker assignment.
+pub(crate) fn opus_layout(head: &opus::OpusHead) -> ChannelLayout {
+    match (head.mapping_family, head.channels) {
+        (0 | 1, 1) => ChannelLayout::MONO,
+        (0 | 1, 2) => ChannelLayout::STEREO,
+        (1, 3) => ChannelLayout::SURROUND_3_0,
+        (1, 4) => ChannelLayout::QUAD,
+        (1, 5) => ChannelLayout::SURROUND_5_0,
+        (1, 6) => ChannelLayout::SURROUND_5_1,
+        (1, 7) => ChannelLayout::SURROUND_6_1,
+        (1, 8) => ChannelLayout::SURROUND_7_1,
+        (_, n) => ChannelLayout::unordered(crate::layout::count(n)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -441,6 +795,26 @@ mod tests {
         // silence past the decode limit is an error, not shorter silence
         dec.last_frames = usize::try_from(crate::pcm::MAX_DECODE_SAMPLES / 2 + 1).unwrap();
         assert!(matches!(dec.conceal(None), Err(AudioError::TooLarge(_))));
+    }
+
+    #[cfg(feature = "opus-decode")]
+    #[test]
+    fn opus_conceals_a_damaged_packet_at_its_own_length() {
+        let params = CodecParams::new(CodecId::Opus).with_sample_rate(48_000).with_channels(2);
+        let mut dec = TrackDecoder::new(&params, &[]).unwrap();
+        // CELT fullband, 20 ms (config 31); SILK narrowband, 60 ms (config 3); CELT, 10 ms (config 30).
+        let celt_20ms = [31 << 3, 0xFF, 0xFE, 0x01];
+        let silk_60ms = [3 << 3, 0x12, 0x34];
+        let celt_10ms = [30 << 3, 0x12, 0x34];
+        assert_eq!(dec.decode(&celt_20ms).unwrap().frames(), 960);
+        assert_eq!(dec.conceal(Some(&silk_60ms)).unwrap().frames(), 2880);
+        // A packet lost whole is as long as the last one.
+        assert_eq!(dec.conceal(None).unwrap().frames(), 2880);
+        // The first packet after a reset has no last packet to go by.
+        dec.reset();
+        assert_eq!(dec.conceal(Some(&celt_10ms)).unwrap().frames(), 480);
+        // Bytes whose framing does not parse fall back to the last length.
+        assert_eq!(dec.conceal(Some(&[(31 << 3) | 3])).unwrap().frames(), 480);
     }
 
     /// One ADTS frame (stereo, 48 kHz, or channel configuration 0 with a PCE) of silence.
@@ -706,21 +1080,121 @@ mod tests {
         let mut dec = TrackDecoder::new(&aac_params(), &[&frame]).unwrap();
         assert_eq!(dec.channels(), 3);
         assert_eq!(dec.decode(&frame).unwrap().channels.len(), 3);
+        // its element lists a centre and a front pair, as configuration 3 does: L R C, in WAV order
+        assert_eq!(dec.layout(), ChannelLayout::SURROUND_3_0);
         // no program config element where one is needed
         let bare = aac::AdtsHeader::write(2, 3, 0, 1, 0x7FF).unwrap();
         let bare = [&bare[..], &[0xE0]].concat();
         assert!(matches!(TrackDecoder::new(&aac_params(), &[&bare]), Err(AudioError::Malformed(_))));
     }
 
+    #[cfg(feature = "ac3-decode")]
+    #[test]
+    fn e_ac3_packets_are_as_long_as_all_their_syncframes() {
+        use crate::ac3::tests::single_block_eac3;
+        let params = CodecParams::new(CodecId::Eac3);
+        // One block per packet: 256 frames, known before any packet is decoded.
+        let one = single_block_eac3(true);
+        let dec = TrackDecoder::new(&params, &[&one]).unwrap();
+        assert_eq!((dec.codec(), dec.frames_per_packet()), (CodecId::Eac3, Some(256)));
+        // Six one-block syncframes to a packet (as MP4 groups them): 1536.
+        let six = [one.clone(), (0..5).flat_map(|_| single_block_eac3(false)).collect()].concat();
+        let mut dec = TrackDecoder::new(&params, &[&six]).unwrap();
+        assert_eq!(dec.frames_per_packet(), Some(1536));
+        assert_eq!(dec.decode(&six).unwrap().channels[0].len(), 1536);
+        // A damaged packet conceals at the length of all its syncframes.
+        dec.reset();
+        assert_eq!(dec.conceal(Some(&six)).unwrap().channels[0].len(), 1536);
+        assert_eq!(dec.conceal(Some(&one)).unwrap().channels[0].len(), 256);
+    }
+
+    #[cfg(feature = "ac3-decode")]
+    #[test]
+    fn a_packet_decoded_in_part_keeps_the_length_lost_packets_are_concealed_at() {
+        use crate::ac3::tests::single_block_eac3;
+        let params = CodecParams::new(CodecId::Eac3);
+        let one = single_block_eac3(true);
+        let six = [one.clone(), (0..5).flat_map(|_| single_block_eac3(false)).collect()].concat();
+        let mut dec = TrackDecoder::new(&params, &[&six, &six]).unwrap();
+        assert_eq!(dec.decode(&six).unwrap().channels[0].len(), 1536);
+        // The second syncframe is damaged: its first one decodes, the rest of the packet is lost.
+        let damaged = [one.clone(), vec![0x0B, 0x77, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]].concat();
+        assert_eq!(dec.decode(&damaged).unwrap().channels[0].len(), 256);
+        assert_eq!(dec.conceal(None).unwrap().channels[0].len(), 1536, "a lost packet is as long as the last whole one");
+        assert_eq!(dec.frames_per_packet(), Some(1536), "a damaged packet does not make the packets' lengths differ");
+    }
+
+    #[cfg(feature = "ac3-decode")]
+    #[test]
+    fn e_ac3_packets_of_different_lengths_or_short_syncframes_are_not_indexed() {
+        use crate::ac3::tests::single_block_eac3;
+        let params = CodecParams::new(CodecId::Eac3);
+        let one = single_block_eac3(true);
+        let two = [single_block_eac3(true), single_block_eac3(false)].concat();
+        // Packets of 256 and 512 frames: a packet's index does not give its position.
+        let dec = TrackDecoder::new(&params, &[&one, &one, &two]).unwrap();
+        assert_eq!(dec.frames_per_packet(), None);
+        // Known only once decoded: from then on too.
+        let mut dec = TrackDecoder::new(&params, &[&one]).unwrap();
+        assert_eq!(dec.frames_per_packet(), Some(256));
+        dec.decode(&two).unwrap();
+        assert_eq!(dec.frames_per_packet(), None);
+        // One-block syncframes may reuse exponents from any syncframe before them.
+        assert_eq!(TrackDecoder::new(&params, &[&one]).unwrap().preroll(), usize::MAX);
+    }
+
     #[test]
     fn codecs_without_a_packet_decoder_are_unsupported() {
-        for codec in [CodecId::Flac, CodecId::Vorbis, CodecId::Alac, CodecId::Mp3, CodecId::Opus, CodecId::H264] {
+        for codec in [CodecId::Flac, CodecId::Vorbis, CodecId::Mp3, CodecId::H264] {
             assert!(matches!(TrackDecoder::new(&CodecParams::new(codec), &[]), Err(AudioError::Unsupported(_))), "{codec:?}");
         }
         // A codec whose feature is off names the feature.
         #[cfg(not(feature = "aac-decode"))]
         assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Aac), &[]), Err(AudioError::Unsupported(m)) if m.contains("aac-decode")));
+        #[cfg(not(feature = "alac-decode"))]
+        assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Alac), &[]), Err(AudioError::Unsupported(m)) if m.contains("alac-decode")));
+        #[cfg(not(feature = "opus-decode"))]
+        assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Opus), &[]), Err(AudioError::Unsupported(m)) if m.contains("opus-decode")));
         // PCM needs its sample format.
         assert!(TrackDecoder::new(&CodecParams::new(CodecId::Pcm).with_channels(2).with_sample_rate(48_000), &[]).is_err());
+    }
+
+    #[cfg(feature = "alac-decode")]
+    #[test]
+    fn alac_needs_a_sample_rate() {
+        let cookie = alac::SpecificConfig::new(0, 2, 16, 4096).to_bytes();
+        assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Alac).with_extradata(cookie.clone()), &[]), Err(AudioError::Malformed(_))));
+        let dec = TrackDecoder::new(&CodecParams::new(CodecId::Alac).with_extradata(cookie).with_sample_rate(32_000), &[]).unwrap();
+        assert_eq!(dec.sample_rate(), 32_000);
+    }
+
+    #[cfg(feature = "alac-decode")]
+    #[test]
+    fn alac_needs_its_cookie() {
+        assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Alac), &[]), Err(AudioError::Malformed(_))));
+        let bad = CodecParams::new(CodecId::Alac).with_extradata(vec![0; 10]);
+        assert!(matches!(TrackDecoder::new(&bad, &[]), Err(AudioError::Malformed(_))));
+    }
+
+    /// ALAC 5.1 comes out in WAV order at full scale, and a lost packet is as long as the last.
+    #[cfg(all(feature = "alac-decode", feature = "alac-encode"))]
+    #[test]
+    fn alac_decodes_in_wav_order() {
+        // ALAC order C L R Ls Rs LFE: channel i holds the constant i * 1000.
+        let input: Vec<Vec<i32>> = (0..6).map(|i| vec![i * 1000; 300]).collect();
+        let mut enc = alac::Encoder::new(alac::EncoderConfig::new(48_000, 6, 16).with_frame_length(1024)).unwrap();
+        let packet = enc.encode(&input.iter().map(Vec::as_slice).collect::<Vec<_>>()).unwrap();
+        let params = CodecParams::new(CodecId::Alac).with_extradata(enc.cookie()).with_sample_rate(44_100);
+        let mut dec = TrackDecoder::new(&params, &[]).unwrap();
+        // a damaged packet whose header survives is concealed with its own length
+        assert_eq!(dec.conceal(Some(&packet[..8])).unwrap().frames(), 300);
+        assert_eq!((dec.sample_rate(), dec.layout(), dec.sample_format()), (48_000, ChannelLayout::SURROUND_5_1, SampleFormat::Int16));
+        assert_eq!(dec.conceal(None).unwrap().frames(), 1024);
+        let out = dec.decode(&packet).unwrap();
+        // WAV order L R C LFE Ls Rs
+        let firsts: Vec<f32> = out.channels.iter().map(|c| c[0] * 32768.0).collect();
+        assert_eq!(firsts, vec![1000.0, 2000.0, 0.0, 5000.0, 3000.0, 4000.0]);
+        assert_eq!(dec.conceal(None).unwrap().frames(), 300);
+        assert_eq!((dec.frames_per_packet(), dec.preroll()), (None, 0));
     }
 }

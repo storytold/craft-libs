@@ -36,7 +36,7 @@ serde_json = "1"
 # ticket (winprint.rs#12, storytold/pdfcraft#3823), and reads whitespace-padded integers in
 # PrintCapabilities (winprint.rs#3, storytold/pdfcraft#2430). Pinned to an immutable revision;
 # review before bumping.
-winprint = { git = "https://github.com/storytold/winprint.rs", rev = "3c978dfcf3d460577fabd87aeea7a84ffdcfb396", default-features = false }
+winprint = { git = "https://github.com/storytold/winprint.rs", rev = "bc06a7c48b768eb27a828c7986f6d2868b245ee0", default-features = false }
 # GetDefaultPrinter (MIT).
 winsafe = { version = "0.0.29", default-features = false, features = ["winspool"] }
 # The job file's private folder and bounded query output.

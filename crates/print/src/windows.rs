@@ -68,6 +68,50 @@ pub(crate) fn two_sided_named(name: &str) -> Option<bool> {
     PrinterDevice::all().ok()?.iter().find(|d| d.name() == name).and_then(two_sided)
 }
 
+/// Read paper metadata in the query worker, under the same provider guard as other queries.
+pub(super) fn paper_info(name: &str) -> crate::PaperInfo {
+    let _provider = print_ticket_provider();
+    let papers = paper_sizes(name);
+    let settings = crate::rgb::default_settings(name).ok();
+    let default = settings.as_ref().and_then(|s| crate::rgb::page(name, Some(s)).ok()).map(|page| page.paper);
+    (papers, default)
+}
+
+pub(super) fn printer_papers(name: &str) -> Vec<crate::PrinterPaper> {
+    let _provider = print_ticket_provider();
+    paper_sizes(name)
+}
+
+fn paper_sizes(name: &str) -> Vec<crate::PrinterPaper> {
+    use winprint::ticket::FeatureOptionPackWithPredefined as _;
+    let Ok(devices) = PrinterDevice::all() else { return Vec::new() };
+    let Some(device) = devices.into_iter().find(|device| device.name() == name) else { return Vec::new() };
+    let Ok(capabilities) = PrintCapabilities::fetch(&device) else { return Vec::new() };
+    let mut papers = Vec::new();
+    for media in capabilities.page_media_sizes() {
+        let size = media.size();
+        let w_pts = (size.width_in_micron() as f64) * 72.0 / 25_400.0;
+        let h_pts = (size.height_in_micron() as f64) * 72.0 / 25_400.0;
+        if w_pts.is_finite() && h_pts.is_finite() && w_pts >= 72.0 && h_pts >= 72.0 && w_pts <= 14400.0 && h_pts <= 14400.0 {
+            let name = media.display_name().map(str::to_string).unwrap_or_else(|| {
+                if let Some(predefined) = media.as_predefined_name() { format!("{predefined:?}") } else { format!("{w_pts:.1} x {h_pts:.1} pt") }
+            });
+            let w_pts = (w_pts * 100.0).round() / 100.0;
+            let h_pts = (h_pts * 100.0).round() / 100.0;
+            if !papers.iter().any(|(n, (w, h)): &crate::PrinterPaper| n == &name && (*w - w_pts).abs() < 0.1 && (*h - h_pts).abs() < 0.1) {
+                papers.push((name, (w_pts, h_pts)));
+            }
+        }
+    }
+    papers
+}
+
+/// Whether the driver of the queue `name` renders XPS itself (`PRINTER_DRIVER_XPS`); `None`
+/// when no queue has that name or its driver can't be read.
+pub(crate) fn xps_driver_named(name: &str) -> Option<bool> {
+    PrinterDevice::all().ok()?.iter().find(|d| d.name() == name)?.is_xps_driver().ok()
+}
+
 #[cfg(test)]
 thread_local! {
     /// The driver capability queries printer discovery made on this thread, so a test can show
@@ -109,7 +153,7 @@ fn select_device(devices: Vec<PrinterDevice>, requested: Option<&str>, default: 
         .ok_or_else(|| spool_error(format!("the printer is not available: {name} (reopen Print to refresh the list)")))
 }
 
-/// The ticket the driver accepted: [`ticket::ticket_xml_for_duplex`] with the driver's own paper option for
+/// The ticket the driver accepted: [`ticket::ticket_xml_with`] with the driver's own paper option for
 /// `sheet` (its exact option, so a vendor's sizes survive; a ticket with dimensions only can come
 /// back as Letter) and its own "no scaling" option, merged and validated against the printer's
 /// capabilities. For exact size the driver must have that paper; for shrink-to-fit without one,
@@ -176,7 +220,7 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
         }
     };
     let document_only = ticket::document_duplex_only(capabilities_xml, job.duplex);
-    let requested = PrintTicket::from_xml(ticket::ticket_xml_for_duplex(job, landscape, document_only));
+    let requested = PrintTicket::from_xml(ticket::ticket_xml_with(job, landscape, document_only, ticket::grey_option(capabilities_xml)));
     let mut document = PrintTicketDocument::parse_from_bytes(requested.get_xml()).map_err(spool_error)?;
     if let Some(media) = media {
         let media_ticket: PrintTicket = media.clone().into();
