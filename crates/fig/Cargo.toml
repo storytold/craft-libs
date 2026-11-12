@@ -1,0 +1,27 @@
+[package]
+name = "craft-fig"
+description = "Clean-room reader and writer for the .fig container (Figma Design and FigJam local copies): the ZIP archive, the chunked canvas with its kiwi schema and message, images, vector network and geometry blobs, with bounded reads."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-figma-rest = { workspace = true }
+craft-kiwi = { workspace = true }
+kurbo = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+craft-zip = { workspace = true }
+# The canvas chunks are deflate or zlib streams.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+ruzstd = { version = "0.9", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+# The tests build archives, hostile ones included, by hand.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+craft-zip = { workspace = true, features = ["test-support"] }

@@ -11,10 +11,13 @@ file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` dow
 hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
 holds `upstream_revision`. `local_patches` describes each local change.
 
+The patched files are `src/sweep/sweep_line.rs` and `src/order.rs`.
+
 ## Local changes
 
 | Change | Code comment label | Touches | Tests |
 |---|---|---|---|
+| The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out | `Craft patch (exited slots)` | `src/sweep/sweep_line.rs` | none |
 | `ComparisonCache::compare_segments` panics with a message when either segment is horizontal, in every build profile, and its doc comment states it | `Craft patch (horizontal comparison)` | `src/order.rs` | `horizontal_and_cubic`, `horizontal_and_line` |
 
 Every change here updates this table and `SOURCE.json` in the same commit.
