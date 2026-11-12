@@ -39,6 +39,8 @@ craft_ui::words! {
         fit: template "artboardStory.fit" = "Fit to the object at {x}, {y}";
         /// Illustrator: Esc left the tool.
         left: "artboardStory.left" = "Left the Artboard tool";
+        /// The bar story's board size.
+        size: template "artboardStory.size" = "Size {width} × {height}";
     }
 }
 
@@ -54,24 +56,41 @@ fn boards() -> Vec<ArtboardItem> {
     vec![ArtboardItem::new("Artboard 1", Rect::new(0.0, 0.0, 180.0, 240.0)), ArtboardItem::new("Artboard 2", Rect::new(240.0, 0.0, 420.0, 240.0))]
 }
 
+/// Two boards on the pasteboard, the first selected.
 #[story(ArtboardOverlay<'static>, covers = [Default])]
 fn two_artboards(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let (items, selected) = (boards(), [0_usize]);
+    let shown = Boards { items: boards(), selected: vec![0] };
+    let (items, selected, pages) = (&shown.items, &shown.selected, shown.pages());
     let stage = craft_ui::testing::stage(ui);
     let bounds = items.iter().fold(items[0].rect, |bounds, item| bounds.union(item.rect));
     let view = craft_ui::testing::canvas_story::story_view(stage, ui.pixels_per_point(), bounds.center(), 100.0);
     Canvas::new("Document").view(view).show_at(ui, stage, |ui, body| {
         craft_ui::testing::canvas_story::show_document(ui, body.rect, &craft_ui::testing::canvas_story::StoryDocument::STANDARD);
-        ArtboardOverlay::new("Artboards", &items, &selected).show_at(ui, body.rect)
+        let _ = Pasteboard::new("Pasteboard", &pages).show_at(ui, body.rect);
+        ArtboardOverlay::new("Artboards", items, selected).show_at(ui, body.rect)
     });
     StoryOutput::default()
 }
 
+/// The bar for one board, whose size the story keeps: a preset, Make Portrait or Landscape, or W and H resize it.
 #[story(ArtboardBar<'static>, covers = [Default], drive = Drive::Never)]
-fn bar_for_a_landscape_board(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let board = ArtboardItem::new("Artboard 1", Rect::new(0.0, 0.0, 480.0, 270.0));
+fn bar_for_a_landscape_board(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let env = Env::of(ui);
+    let (words, units) = (env.words::<ArtboardStoryWords>(), env.units());
+    let size = data.value("size", Size::new(240.0, 180.0));
+    let board = ArtboardItem::new("Artboard 1", Rect::from_origin_size(Point::ORIGIN, *size));
     let presets = presets();
-    Bar::new("Options", BarKind::Options).show(ui, |ui, _| ArtboardBar::new(Some(&board), &presets).show(ui)).output.into()
+    let mut members = None;
+    let bar = Bar::new("Options", BarKind::Options).show(ui, |ui, _| members = Some(ArtboardBar::new(Some(&board), &presets).show(ui)));
+    let mut output = StoryOutput::from(bar.output);
+    if let Some(members) = members {
+        output.edits = members.size.iter().filter_map(EditKind::of).collect();
+        if let Some(landed) = members.size.landed() {
+            *size = *landed;
+        }
+    }
+    let number = |value: f64| units.number(value, 0..=0);
+    output.readout(craft_i18n::fmt(words.size.as_str(), &[("width", number(size.width).as_str()), ("height", number(size.height).as_str())]))
 }
 
 #[story(ArtboardProperties<'static>, covers = [Default], drive = Drive::Never)]
