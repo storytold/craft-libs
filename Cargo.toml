@@ -30,6 +30,7 @@ craft-atomic = { path = "crates/atomic" }
 craft-captions = { path = "crates/captions" }
 craft-cfb = { path = "crates/cfb" }
 craft-cms = { path = "crates/cms" }
+craft-crs = { path = "crates/crs" }
 craft-crw = { path = "crates/crw" }
 craft-csv = { path = "crates/csv" }
 craft-dialogs = { path = "crates/dialogs" }
