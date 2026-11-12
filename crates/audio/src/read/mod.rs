@@ -14,6 +14,7 @@ mod flac;
 #[cfg(feature = "symphonia")]
 mod mp4;
 mod native;
+mod raw;
 mod source;
 #[cfg(feature = "symphonia")]
 mod symph;
@@ -21,6 +22,7 @@ mod wav;
 
 use crate::{AudioBuffer, AudioError, AudioInfo, ChannelLayout, CodecId, Container, Result};
 use native::Native;
+pub use raw::{RawPcm, aiff_pcm, wav_pcm};
 pub use source::SharedSource;
 use source::Src;
 use std::sync::Arc;
@@ -152,7 +154,12 @@ pub struct DecodeOptions {
     /// them; `None` is the first.
     pub track: Option<usize>,
     /// The most samples (frames × channels) [`decode_with`] returns; a longer file is
-    /// [`AudioError::TooLarge`]. The streaming [`Decoder`] has no limit.
+    /// [`AudioError::TooLarge`]. The default, [`DEFAULT_MAX_SAMPLES`], is 2^30 samples: 4 GiB of
+    /// `f32`, about 3 hours of 48 kHz stereo. It is a ceiling for trusted input, not a budget:
+    /// a small compressed file (silent FLAC, say) can decode to all of it, and [`decode_with`]
+    /// holds the whole result in memory. A caller that decodes files it does not control sets
+    /// this to what it can hold, or reads blocks with [`Decoder`], which keeps nothing and has no
+    /// limit.
     pub max_samples: u64,
 }
 
@@ -399,7 +406,9 @@ pub fn decode(bytes: &[u8], ext_hint: Option<&str>) -> Result<(AudioInfo, AudioB
     decode_with(bytes, ext_hint, &DecodeOptions::default())
 }
 
-/// [`decode`] with options: another track, or another size limit.
+/// [`decode`] with options: another track, or another size limit. [`decode`] and `decode_with`
+/// keep every decoded sample, so for untrusted files pass a limit
+/// ([`DecodeOptions::with_max_samples`]) that the host can hold, or stream with [`Decoder`].
 ///
 /// ```
 /// # #[cfg(feature = "pcm-encode")] {
