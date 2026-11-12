@@ -127,13 +127,18 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                         RowPress { primary, clicks: start.clicks, origin: local(start.origin), offset },
                     );
                 }
-            } else if primary
-                && props.allow_empty
-                && !(props.marquee && (mods_now.shift || mods_now.cmd || mods_now.alt))
-                && !matches!(Self::select_mode(comp), SelectMode::None)
-                && self.selection != C::Selection::default()
-            {
-                self.change(SelectionChange::Clear);
+            } else {
+                if primary && start.clicks == 2 {
+                    self.events.push(CollectionEvent::EmptyActivated);
+                }
+                if primary
+                    && props.allow_empty
+                    && !(props.marquee && (mods_now.shift || mods_now.cmd || mods_now.alt))
+                    && !matches!(Self::select_mode(comp), SelectMode::None)
+                    && self.selection != C::Selection::default()
+                {
+                    self.change(SelectionChange::Clear);
+                }
             }
         }
         // A press that a part of an item won leaves the selection alone and moves the lead to its row. A press on the

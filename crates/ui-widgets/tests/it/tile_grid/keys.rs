@@ -90,3 +90,21 @@ fn a_slow_click_on_the_caption_renames_and_a_double_click_activates() {
     let activated = seen.borrow().collection.iter().any(|event| matches!(event, CollectionEvent::Activate(1)));
     assert!(activated && renames(&seen) == 0, "a double click activates and opens no rename");
 }
+
+/// A double click on the grid's background reports `EmptyActivated`; a double click on a tile activates it instead.
+#[trial]
+fn a_double_click_on_the_background_activates_the_empty_space() {
+    let (mut fixture, seen) = rig(|| TileGrid::new("Library"));
+    let tile = fixture.by_label("Tile 2").expect("the tile has a node").rect;
+    let empty_space = egui::pos2(tile.center().x, tile.max.y + 80.0);
+    let count = |seen: &Rc<RefCell<Seen>>, of: fn(&CollectionEvent<usize, craft_ui::tile_grid::TilePartEvent>) -> bool| {
+        seen.borrow().collection.iter().filter(|event| of(event)).count()
+    };
+    fixture.click_at(empty_space).click_at(empty_space).idle(1);
+    assert_eq!(count(&seen, |event| matches!(event, CollectionEvent::EmptyActivated)), 1, "the background's double click is reported once");
+    assert_eq!(count(&seen, |event| matches!(event, CollectionEvent::Activate(_))), 0, "no tile activates");
+    fixture.advance(1.0).idle(1);
+    fixture.click_at(tile.center()).click_at(tile.center()).idle(1);
+    assert_eq!(count(&seen, |event| matches!(event, CollectionEvent::Activate(1))), 1, "a double click on a tile activates it");
+    assert_eq!(count(&seen, |event| matches!(event, CollectionEvent::EmptyActivated)), 1, "and is no background double click");
+}

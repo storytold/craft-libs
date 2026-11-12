@@ -169,6 +169,9 @@ pub enum CollectionEvent<K, E> {
     },
     /// Enter or a double click on an item.
     Activate(K),
+    /// A primary double click on the collection's empty space, below or between its items (FilmCraft's media bin
+    /// imports).
+    EmptyActivated,
     /// Space on the lead of a collection whose Space previews (`SpaceAction::Preview`).
     Preview(K),
     /// The user asked for an item's context menu.
