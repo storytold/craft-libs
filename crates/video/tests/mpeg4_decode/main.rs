@@ -789,3 +789,23 @@ fn a_switch_to_low_delay_outputs_the_held_back_picture() {
     assert!(!pics[5].info.low_delay && pics[6].info.low_delay);
     assert_eq!(pics.iter().map(|p| p.pts).collect::<Vec<_>>()[6..], [6, 7, 8, 9]);
 }
+
+/// A smaller memory budget applies from the next VOL: the current layer keeps decoding, and a
+/// smaller VOL that fits the new budget exactly (four 32×32 pictures) is decoded.
+#[cfg(feature = "mpeg4-encode")]
+#[test]
+fn a_reduced_budget_applies_from_the_next_layer() {
+    let large = encoded(64, 64, 3);
+    let small = encoded(32, 32, 2);
+    let mut dec = Decoder::new();
+    for (i, p) in large[..2].iter().enumerate() {
+        assert_eq!(dec.decode(p, i as i64).expect("decode").len(), 1);
+    }
+    dec.set_memory_budget(4 * 1536);
+    assert_eq!(dec.decode(&large[2], 2).expect("the current layer keeps decoding").len(), 1);
+    for (i, p) in small.iter().enumerate() {
+        let pics = dec.decode(p, 3 + i as i64).expect("the smaller layer within the new budget");
+        assert_eq!(pics.iter().map(|p| p.width).collect::<Vec<_>>(), [32]);
+    }
+    assert_eq!(dec.errors(), 0);
+}

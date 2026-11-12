@@ -42,12 +42,35 @@ const DIRECT_MV_BOUND: i64 = 1 << 16;
 /// the results are bounded by [`DIRECT_MV_BOUND`]. Where nothing exceeds it the values are those
 /// of `i32` arithmetic, as both divisions truncate toward zero.
 pub(super) fn direct_scale(v: i32, d: i32, trb: i32, trd: i32) -> [i32; 2] {
+    direct_scale_wide(v, d, trb, trd).map(bound_direct)
+}
+
+fn bound_direct(x: i64) -> i32 {
+    x.clamp(-DIRECT_MV_BOUND, DIRECT_MV_BOUND) as i32
+}
+
+/// [`direct_scale`] before the bound: exact, as the chrominance vector needs it.
+fn direct_scale_wide(v: i32, d: i32, trb: i32, trd: i32) -> [i64; 2] {
     let (v, d, trb) = (i64::from(v), i64::from(d), i64::from(trb));
     let trd = if trd == 0 { 1 } else { i64::from(trd) };
     let f = v * trb / trd + d;
     let b = if d == 0 { v * (trb - trd) / trd } else { f - v };
-    let bound = |x: i64| x.clamp(-DIRECT_MV_BOUND, DIRECT_MV_BOUND) as i32;
-    [bound(f), bound(b)]
+    [f, b]
+}
+
+/// Forward and backward direct-mode prediction of a frame macroblock from the four co-located
+/// vectors `mvs`: the bounded luminance vectors and the chrominance vector, which is derived
+/// from the exact ones (bounding each first would change how vectors of opposite signs cancel).
+pub(super) fn direct_four(mvs: &[[i32; 2]; 4], delta: [i32; 2], trb: i32, trd: i32, quarter_sample: bool) -> [([[i32; 2]; 4], [i32; 2]); 2] {
+    let wide: [[[i64; 2]; 2]; 4] = mvs.map(|mv| {
+        let x = direct_scale_wide(mv[0], delta[0], trb, trd);
+        let y = direct_scale_wide(mv[1], delta[1], trb, trd);
+        [[x[0], y[0]], [x[1], y[1]]]
+    });
+    std::array::from_fn(|dir| {
+        let exact: [[i64; 2]; 4] = wide.map(|w| w[dir]);
+        (exact.map(|m| m.map(bound_direct)), mc::chroma_mv_4_wide(&exact, quarter_sample))
+    })
 }
 
 /// A decoded picture: luminance and both chrominance planes, sized to whole macroblocks.
@@ -129,7 +152,8 @@ pub(super) struct Refs<'a> {
 #[derive(Clone, Copy, Debug)]
 enum Motion {
     Frame([i32; 2]),
-    Four([[i32; 2]; 4]),
+    /// The four 8×8 vectors and the chrominance vector derived from them.
+    Four([[i32; 2]; 4], [i32; 2]),
     Field([[i32; 2]; 2], [usize; 2]),
 }
 
@@ -715,7 +739,7 @@ impl Dec<'_> {
                 self.set_bmv(idx, std::array::from_fn(|j| if j < k { mv[j] } else { mv[k] }));
             }
             self.mbs[idx] = MbInfo { kind: MbKind::Inter, mv, field: None };
-            return Ok(Motion::Four(mv));
+            return Ok(Motion::Four(mv, mc::chroma_mv_4(&mv, self.vol.quarter_sample)));
         }
         let p = self.mv_pred(idx, 0);
         if let Some(sel) = field_sel {
@@ -785,13 +809,13 @@ impl Dec<'_> {
                 mc::luma(ly.view(None), mx * 16, my * 16, mv, q, rounding, &mut Dst { out: &mut pix.y, stride: 16, w: 16, h: 16 });
                 chroma(pix, None, mc::chroma_mv_1(mv, q), 0);
             }
-            Motion::Four(mvs) => {
+            Motion::Four(mvs, cmv) => {
                 for (k, mv) in mvs.iter().enumerate() {
                     let (x, y) = (mx * 16 + (k as i32 & 1) * 8, my * 16 + (k as i32 >> 1) * 8);
                     let out = &mut pix.y[(k >> 1) * 128 + (k & 1) * 8..];
                     mc::luma(ly.view(None), x, y, *mv, q, rounding, &mut Dst { out, stride: 16, w: 8, h: 8 });
                 }
-                chroma(pix, None, mc::chroma_mv_4(&mvs, q), 0);
+                chroma(pix, None, cmv, 0);
             }
             Motion::Field(mvs, sel) => {
                 for f in 0..2 {
@@ -918,12 +942,8 @@ impl Dec<'_> {
             return [Some(Motion::Field(fwd, fm.sel)), Some(Motion::Field(bwd, [0, 1]))];
         }
         let mvs = if col.kind == MbKind::Intra { [[0; 2]; 4] } else { col.mv };
-        let mut fwd = [[0; 2]; 4];
-        let mut bwd = [[0; 2]; 4];
-        for k in 0..4 {
-            (fwd[k], bwd[k]) = vec(mvs[k], t.trb, t.trd);
-        }
-        [Some(Motion::Four(fwd)), Some(Motion::Four(bwd))]
+        let [(fwd, fc), (bwd, bc)] = direct_four(&mvs, delta, t.trb, t.trd, self.vol.quarter_sample);
+        [Some(Motion::Four(fwd, fc)), Some(Motion::Four(bwd, bc))]
     }
 }
 
