@@ -6,7 +6,7 @@ use craft_behavior::IconId;
 use craft_theme::variant::Tone;
 use craft_ui::buttons::{Button, IconButton};
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Entry, Held, Pad, Pattern, Props as _, RowAlign, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, Entry, Held, Pad, Pattern, Props as _, RowAlign, Show as _, ShowContainer as _, Sizing, clicked};
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::notices::{Notice, NoticeLayout};
@@ -283,7 +283,10 @@ impl Rows<'_> {
             [Entry::new(Match::All, words.all.clone()), Entry::new(Match::Any, words.any.clone()), Entry::new(Match::None, words.none.clone())];
         Row::new().show(ui, |ui, _| {
             Text::new(words.match_word.clone()).show(ui);
-            Select::new(words.match_word.clone(), Bind::bound(&mut group.matching), &modes).id_salt((path.clone(), "match")).show(ui);
+            Select::new(words.match_word.clone(), Bind::bound(&mut group.matching), &modes)
+                .id_salt((path.clone(), "match"))
+                .sizing(Sizing::Content)
+                .show(ui);
             Text::new(words.of_rules.clone()).show(ui);
         });
         let mut remove = None;
@@ -383,7 +386,7 @@ impl Rows<'_> {
             entries.push(Entry::new(id, label));
         }
         let mut field = rule.field.clone();
-        Select::new(self.words.field.clone(), Bind::bound(&mut field), &entries).id_salt((path.to_vec(), "field")).show(ui);
+        Select::new(self.words.field.clone(), Bind::bound(&mut field), &entries).id_salt((path.to_vec(), "field")).sizing(Sizing::Content).show(ui);
         if field != rule.field {
             rule.operator = self.fields.operators(&field).into_iter().next().map(|(id, _)| id).unwrap_or_default();
             rule.value = self.fields.default_value(&field, &rule.operator);
@@ -395,7 +398,10 @@ impl Rows<'_> {
     fn pick_operator(&self, ui: &mut Ui, rule: &mut Condition, path: &[usize]) {
         let entries: Vec<Entry<String>> = self.fields.operators(&rule.field).into_iter().map(|(id, label)| Entry::new(id, label)).collect();
         let mut operator = rule.operator.clone();
-        Select::new(self.words.operator.clone(), Bind::bound(&mut operator), &entries).id_salt((path.to_vec(), "operator")).show(ui);
+        Select::new(self.words.operator.clone(), Bind::bound(&mut operator), &entries)
+            .id_salt((path.to_vec(), "operator"))
+            .sizing(Sizing::Content)
+            .show(ui);
         if operator != rule.operator {
             let value = self.fields.default_value(&rule.field, &operator);
             if std::mem::discriminant(&value) != std::mem::discriminant(&rule.value) {
@@ -475,7 +481,7 @@ impl Rows<'_> {
                     TextField::new(words.unit.clone(), Bind::bound(&mut edited)).id_salt(salt("unit")).show(ui);
                 } else {
                     let entries: Vec<Entry<String>> = units.into_iter().map(|(id, label)| Entry::new(id, label)).collect();
-                    Select::new(words.unit.clone(), Bind::bound(&mut edited), &entries).id_salt(salt("unit")).show(ui);
+                    Select::new(words.unit.clone(), Bind::bound(&mut edited), &entries).id_salt(salt("unit")).sizing(Sizing::Content).show(ui);
                 }
                 if new_count.is_some() || edited != unit {
                     rule.value = ConditionValue::Last { n: new_count.unwrap_or(n), unit: edited };
@@ -497,7 +503,7 @@ impl Rows<'_> {
             ConditionValue::Choice(choice) => {
                 let entries: Vec<Entry<String>> = self.fields.choices(&rule.field).into_iter().map(|(id, label)| Entry::new(id, label)).collect();
                 let mut picked = choice.clone();
-                Select::new(words.value.clone(), Bind::bound(&mut picked), &entries).id_salt(salt("value")).show(ui);
+                Select::new(words.value.clone(), Bind::bound(&mut picked), &entries).id_salt(salt("value")).sizing(Sizing::Content).show(ui);
                 if picked != choice {
                     rule.value = ConditionValue::Choice(picked);
                 }
