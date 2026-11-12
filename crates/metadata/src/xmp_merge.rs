@@ -466,7 +466,7 @@ mod tests {
     fn many_attributes_scan_in_linear_time() {
         // quick-xml's duplicate-name check compares each attribute with all earlier ones: 200 000 attributes on
         // one description took over 20 s to scan, about 30 ms with the set. Four times the attributes must take
-        // about four times as long, not sixteen. A ratio of best-of-three times holds on a loaded machine, where
+        // about four times as long, not sixteen. A ratio of the fastest runs holds on a loaded machine, where
         // a fixed bound does not.
         let packet = |n: usize| {
             let mut s = String::from(
@@ -479,20 +479,20 @@ mod tests {
             s.push_str("/></rdf:RDF></x:xmpmeta>");
             s
         };
-        let best = |n: usize| {
-            let s = packet(n);
-            (0..3)
-                .map(|_| {
-                    let t = std::time::Instant::now();
-                    let found = scan(&s, &[]).unwrap();
-                    let took = t.elapsed();
-                    assert_eq!(found.descs[0].attrs.len(), n + 2, "every attribute is read");
-                    took
-                })
-                .min()
-                .unwrap_or_default()
+        let run = |s: &str, n: usize| {
+            let t = std::time::Instant::now();
+            let found = scan(s, &[]).unwrap();
+            let took = t.elapsed();
+            assert_eq!(found.descs[0].attrs.len(), n + 2, "every attribute is read");
+            took
         };
-        let (small, large) = (best(25_000), best(100_000));
+        let (n, small_packet, large_packet) = (50_000, packet(50_000), packet(200_000));
+        // interleaved, so a burst of load slows both sizes rather than one; the fastest run of each counts
+        let (mut small, mut large) = (std::time::Duration::MAX, std::time::Duration::MAX);
+        for _ in 0..5 {
+            small = small.min(run(&small_packet, n));
+            large = large.min(run(&large_packet, 4 * n));
+        }
         let ratio = large.as_secs_f64() / small.as_secs_f64().max(1e-6);
         assert!(ratio < 10.0, "4x the attributes took {ratio:.1}x as long ({small:?}, then {large:?})");
     }
