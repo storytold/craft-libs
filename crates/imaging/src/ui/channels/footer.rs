@@ -44,11 +44,11 @@ pub(super) fn accepts_footer_drop(button: ChannelsFooterButton, kind: ChannelKin
     }
 }
 
-// Photoshop's order from the leading end.
-const LOAD: usize = 0;
-const SAVE: usize = 1;
-const NEW: usize = 2;
-const DELETE: usize = 3;
+// Photoshop's order from the end edge.
+const DELETE: usize = 0;
+const NEW: usize = 1;
+const SAVE: usize = 2;
+const LOAD: usize = 3;
 
 fn button_at(at: usize) -> Option<ChannelsFooterButton> {
     match at {
@@ -79,13 +79,13 @@ pub(super) fn show_footer<K: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     let takes = |button: ChannelsFooterButton| move |drag: &ChannelDrag<K>| drag.list == list && accepts_footer_drop(button, drag.kind);
     let icon = |name: &'static str| IconSpec::svg(IconId::new(name));
     let actions = [
-        FooterAction::new(icon("ellipse_dashed"), words.load_selection.clone()).accepts_drops(takes(ChannelsFooterButton::LoadSelection)),
-        FooterAction::new(icon("rect_dashed"), words.save_selection.clone()),
-        FooterAction::new(icon("plus"), words.new.clone()).accepts_drops(takes(ChannelsFooterButton::New)),
         FooterAction::new(icon("trash"), words.delete.clone())
             .enabled(delete_enabled)
             .takes_drops_disabled(true)
             .accepts_drops(takes(ChannelsFooterButton::Delete)),
+        FooterAction::new(icon("plus"), words.new.clone()).accepts_drops(takes(ChannelsFooterButton::New)),
+        FooterAction::new(icon("rect_dashed"), words.save_selection.clone()),
+        FooterAction::new(icon("ellipse_dashed"), words.load_selection.clone()).accepts_drops(takes(ChannelsFooterButton::LoadSelection)),
     ];
     let out = FooterBar::actions(actions).show_footer(ui);
     let mut events = Vec::new();

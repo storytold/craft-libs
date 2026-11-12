@@ -58,6 +58,10 @@ const LOCKED: ColumnKey = ColumnKey::new("locked");
 const NAME: ColumnKey = ColumnKey::new("name");
 const OPTIONS: TrailingPart = TrailingPart::new(0);
 
+// The footer's actions from the end edge: Delete, Duplicate, New.
+const DUPLICATE: usize = 1;
+const NEW: usize = 2;
+
 /// One row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -243,15 +247,15 @@ impl<'a> PageList<'a> {
                 let list = *list_id.borrow();
                 let ours = move |drag: &ListDrag<usize>| Some(drag.list) == list;
                 let actions = [
-                    FooterAction::new(IconId::new("plus"), words.new_artboard.clone()).accepts_drops(ours),
-                    FooterAction::new(IconId::new("copy"), words.duplicate.clone()).enabled(any_picked),
                     FooterAction::new(IconId::new("trash"), words.delete.clone()).enabled(!deletable.is_empty()).accepts_drops(ours),
+                    FooterAction::new(IconId::new("copy"), words.duplicate.clone()).enabled(any_picked),
+                    FooterAction::new(IconId::new("plus"), words.new_artboard.clone()).accepts_drops(ours),
                 ];
                 let footer = FooterBar::actions(actions).show_footer(ui);
                 let mut events = events.borrow_mut();
                 if let Some(drop) = &footer.dropped {
                     let Some(drag) = drop.payload::<ListDrag<usize>>() else { return };
-                    if drop.index == 0 {
+                    if drop.index == NEW {
                         events.push(PageListEvent::New { duplicate: Some(drag.grabbed), options: false });
                     } else {
                         let dropped = unlocked(&drag.keys);
@@ -261,8 +265,8 @@ impl<'a> PageList<'a> {
                     }
                 } else if let Some(picked_action) = footer.picked {
                     events.push(match picked_action {
-                        0 => PageListEvent::New { duplicate: None, options: footer.mods.alt },
-                        1 => PageListEvent::New { duplicate: Some(active), options: false },
+                        NEW => PageListEvent::New { duplicate: None, options: footer.mods.alt },
+                        DUPLICATE => PageListEvent::New { duplicate: Some(active), options: false },
                         _ => PageListEvent::Delete(deletable.clone()),
                     });
                 }

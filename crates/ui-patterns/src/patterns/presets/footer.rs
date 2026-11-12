@@ -133,7 +133,7 @@ impl<'a> PresetFooterOptions<'a> {
 /// The footer of a preset panel: the host's own controls, the thumbnail size slider and the count, then the action
 /// buttons Delete, New and New Group and the host's own actions.
 ///
-/// - **Buttons.** Delete (disabled by `can_delete(false)`), New, New Group
+/// - **Buttons.** From the end edge: Delete (disabled by `can_delete(false)`), New, New Group
 ///   (left out by `new_group(false)`), then the host's [`FooterAction`]s. Their names come from [`PresetWords`].
 /// - **Host actions.** A disabled action takes no click. An action that `accepts_drops` takes presets dragged from
 ///   any preset list and reports [`PresetFooterEvent::CustomDrop`].
@@ -193,18 +193,18 @@ impl<K: Clone + Send + Sync + 'static> PresetFooter<'_, K> {
         let words = env.words::<PresetWords>();
         let mut shown = Vec::with_capacity(actions.len() + 3);
         let mut slots = Vec::with_capacity(actions.len() + 3);
-        for (index, action) in actions.into_iter().enumerate() {
-            shown.push(action);
-            slots.push(Slot::Custom(index));
-        }
+        shown.push(FooterAction::new(IconId::new("trash"), words.delete_button.clone()).enabled(can_delete));
+        slots.push(Slot::Delete);
+        shown.push(FooterAction::new(IconId::new("plus"), words.new_preset.clone()));
+        slots.push(Slot::New);
         if new_group {
             shown.push(FooterAction::new(IconId::new("new_folder"), words.new_group.clone()));
             slots.push(Slot::NewGroup);
         }
-        shown.push(FooterAction::new(IconId::new("plus"), words.new_preset.clone()));
-        slots.push(Slot::New);
-        shown.push(FooterAction::new(IconId::new("trash"), words.delete_button.clone()).enabled(can_delete));
-        slots.push(Slot::Delete);
+        for (index, action) in actions.into_iter().enumerate() {
+            shown.push(action);
+            slots.push(Slot::Custom(index));
+        }
 
         let row = Row::new().fill().align(RowAlign::End).show(ui, |ui, _| {
             if let Some(add) = &leading {

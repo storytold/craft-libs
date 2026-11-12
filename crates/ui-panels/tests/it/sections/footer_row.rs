@@ -1,5 +1,5 @@
 //! A footer row: a row of view modes, a thumbnail slider and a footer bar narrows its slider to leave the bar its
-//! actions; a footer bar with a start group shows it at the start edge and the rest at the end edge.
+//! actions; a footer bar with a start group shows it at the start edge and the rest from the end edge.
 
 use craft_behavior::IconId;
 use craft_ui::choice::Segmented;
@@ -34,16 +34,17 @@ fn footer(width: f32) -> (Rect, Rect, Vec<Rect>) {
 #[trial]
 fn a_footer_row_narrows_its_slider_to_leave_the_footer_bar_its_actions() {
     let (modes, wide, actions) = footer(900.0);
-    let span = |rects: &[Rect]| rects.last().map_or(0.0, |last| last.max.x) - rects.first().map_or(0.0, |first| first.min.x);
+    let start = |rects: &[Rect]| rects.iter().map(|rect| rect.min.x).fold(f32::INFINITY, f32::min);
+    let end = |rects: &[Rect]| rects.iter().map(|rect| rect.max.x).fold(f32::NEG_INFINITY, f32::max);
+    let span = |rects: &[Rect]| end(rects) - start(rects);
     // A row with room for the modes, the actions and half the slider's natural length, with a member gap at each
     // seam: the track gives way to about a control's height, as a media bin's footer in a narrow panel needs.
     let gap = wide.min.x - modes.max.x;
     let width = (modes.width() + wide.width() / 2.0 + span(&actions) + 3.0 * gap).ceil();
     let (_, slider, actions) = footer(width);
-    let last = actions.last().copied().unwrap_or(Rect::NOTHING);
-    assert!(last.max.x <= width + 0.5, "the last action ends at {} past a {width}-point row", last.max.x);
+    assert!(end(&actions) <= width + 0.5, "the actions end at {} past a {width}-point row", end(&actions));
     assert!(slider.width() < wide.width() - 0.5, "the slider kept its width {} in a narrow row", slider.width());
-    assert!(slider.max.x <= actions[0].min.x + 0.5, "the slider {slider:?} runs into the actions {actions:?}");
+    assert!(slider.max.x <= start(&actions) + 0.5, "the slider {slider:?} runs into the actions {actions:?}");
 }
 
 /// The rects of a footer bar's four actions whose first two sit at the start edge, in a bar `WIDE` points wide.
@@ -61,16 +62,18 @@ fn split(direction: craft_ui::runtime::env::Direction) -> Vec<Rect> {
 
 const WIDE: f32 = 400.0;
 
-/// The start group sits at the start edge and the rest at the end edge, the room left between them; right to left
-/// the groups trade sides.
+/// The start group sits at the start edge in the given order and the rest from the end edge, the first of them at the
+/// edge, the room left between them; right to left the groups trade sides.
 #[trial]
 fn the_start_and_end_groups_of_a_footer_bar_sit_at_their_edges() {
     use craft_ui::runtime::env::Direction;
     let ltr = split(Direction::Ltr);
     assert_eq!(ltr.len(), 4);
-    let (pair, between) = (ltr[1].min.x - ltr[0].max.x, ltr[2].min.x - ltr[1].max.x);
+    let (pair, between) = (ltr[1].min.x - ltr[0].max.x, ltr[3].min.x - ltr[1].max.x);
     assert!(between > pair + WIDE / 4.0, "the room lies between the groups: {ltr:?}");
-    assert!(ltr[0].min.x < WIDE / 4.0 && ltr[3].max.x > WIDE * 3.0 / 4.0, "the groups reach the edges: {ltr:?}");
+    assert!(ltr[0].min.x < WIDE / 4.0 && ltr[2].max.x > WIDE * 3.0 / 4.0, "the groups reach the edges: {ltr:?}");
+    assert!(ltr[0].max.x < ltr[1].min.x, "the start group reads from the start edge: {ltr:?}");
+    assert!(ltr[3].max.x < ltr[2].min.x, "the end group reads from the end edge: {ltr:?}");
     let rtl = split(Direction::Rtl);
     assert!(rtl[0].min.x > rtl[2].max.x, "right to left the start group sits at the right: {rtl:?}");
 }

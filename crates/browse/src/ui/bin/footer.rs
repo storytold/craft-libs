@@ -13,6 +13,9 @@ use egui::Ui;
 use super::list::NAME;
 use super::{BinEvent, BinState, BinView, BinWords};
 
+/// New Bin's place among the footer's actions: the first, at the end edge.
+const NEW_BIN: usize = 0;
+
 /// A pick in the Sort Icons menu.
 #[derive(Clone, Debug, PartialEq)]
 enum SortPick {
@@ -25,8 +28,8 @@ fn sortable(columns: &[ColumnSpec], words: &BinWords) -> Vec<ColumnSpec> {
     if columns.is_empty() { vec![ColumnSpec::new(NAME, words.name.clone(), craft_behavior::ColumnWidth::fill(1.0))] } else { columns.to_vec() }
 }
 
-/// Draws the footer: the view `Segmented` (List, Icon, Freeform), a `ThumbnailSlider`, then the actions: the
-/// host's, Sort Icons (Icon and Freeform views) and New Bin. Returns the footer's events.
+/// Draws the footer: the view `Segmented` (List, Icon, Freeform), a `ThumbnailSlider`, then the actions, from the end
+/// edge: New Bin, the host's, Sort Icons (Icon and Freeform views). Returns the footer's events.
 pub(super) fn footer<K: TextureKey>(
     ui: &mut Ui,
     state: &BinState<K>,
@@ -38,13 +41,13 @@ pub(super) fn footer<K: TextureKey>(
     let mut events = Vec::new();
     let mut view = state.settings.view;
     let mut zoom_value = state.settings.zoom;
-    let mut all: Vec<FooterAction> = actions.to_vec();
+    let mut all = vec![FooterAction::new(IconId::new("new_folder"), words.new_bin.clone())];
+    all.extend_from_slice(actions);
     let sort_at = (view != BinView::List).then(|| {
         all.push(FooterAction::new(IconId::new("more"), words.sort_icons.clone()).popup(PopupKind::Menu));
         all.len() - 1
     });
-    let new_bin = all.len();
-    all.push(FooterAction::new(IconId::new("new_folder"), words.new_bin.clone()));
+    let host = |at: usize| at.checked_sub(NEW_BIN + 1).filter(|action| *action < actions.len());
 
     let modes = [
         Entry::new(BinView::List, words.list_view.clone()).icon(IconId::new("list")),
@@ -64,14 +67,14 @@ pub(super) fn footer<K: TextureKey>(
         events.push(BinEvent::Zoom(event));
     }
     if let Some(drop) = &bar.dropped {
-        if let Some(drag) = drop.payload::<ListDrag<K>>() {
-            events.push(BinEvent::FooterDrop { action: drop.index, keys: drag.keys.clone() });
+        if let (Some(drag), Some(action)) = (drop.payload::<ListDrag<K>>(), host(drop.index)) {
+            events.push(BinEvent::FooterDrop { action, keys: drag.keys.clone() });
         }
     } else if let Some(at) = bar.picked {
-        if at == new_bin {
+        if at == NEW_BIN {
             events.push(BinEvent::NewBin);
-        } else if Some(at) != sort_at {
-            events.push(BinEvent::Footer { action: at });
+        } else if let Some(action) = host(at) {
+            events.push(BinEvent::Footer { action });
         }
     }
     if let Some(response) = sort_at.and_then(|at| bar.responses.get(at)) {

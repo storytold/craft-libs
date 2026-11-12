@@ -67,14 +67,14 @@ pub enum LayersFooterAction {
     Style(String),
 }
 
-// Reading order of the footer's buttons.
-const LINK: usize = 0;
-const STYLE: usize = 1;
-const MASK: usize = 2;
+// The footer's buttons from the end edge, as Photoshop's.
+const DELETE: usize = 0;
+const LAYER: usize = 1;
+const GROUP: usize = 2;
 const ADJUSTMENT: usize = 3;
-const GROUP: usize = 4;
-const LAYER: usize = 5;
-const DELETE: usize = 6;
+const MASK: usize = 4;
+const STYLE: usize = 5;
+const LINK: usize = 6;
 
 fn button_at(at: usize) -> Option<LayersFooterButton> {
     match at {
@@ -104,16 +104,16 @@ pub(super) fn show_footer<T: LayerTree>(ui: &mut Ui, cx: &PanelContext<'_, T>, w
     let icon = |name: &'static str| IconSpec::svg(IconId::new(name));
     let mask_name = state.mask_label.clone().map_or_else(|| words.add_mask.clone(), craft_ui::runtime::env::Label::from);
     let actions = [
-        FooterAction::new(icon("link"), words.link_layers.clone()).enabled(state.link_enabled),
-        FooterAction::new(icon("fx"), words.add_style.clone()).popup(PopupKind::Menu),
-        FooterAction::new(icon("layer_mask"), mask_name).enabled(state.mask_label.is_some()),
-        FooterAction::new(icon("adjustment_layer"), words.add_adjustment.clone()).popup(PopupKind::Menu),
-        FooterAction::new(icon("new_folder"), words.new_group.clone()).accepts_drops(takes(LayersFooterButton::NewGroup)),
-        FooterAction::new(icon("new_layer"), words.new_layer.clone()).accepts_drops(takes(LayersFooterButton::NewLayer)),
         FooterAction::new(icon("trash"), craft_ui::runtime::env::Label::from(state.delete_label.clone()))
             .enabled(state.delete_enabled)
             .takes_drops_disabled(true)
             .accepts_drops(takes(LayersFooterButton::Delete)),
+        FooterAction::new(icon("new_layer"), words.new_layer.clone()).accepts_drops(takes(LayersFooterButton::NewLayer)),
+        FooterAction::new(icon("new_folder"), words.new_group.clone()).accepts_drops(takes(LayersFooterButton::NewGroup)),
+        FooterAction::new(icon("adjustment_layer"), words.add_adjustment.clone()).popup(PopupKind::Menu),
+        FooterAction::new(icon("layer_mask"), mask_name).enabled(state.mask_label.is_some()),
+        FooterAction::new(icon("fx"), words.add_style.clone()).popup(PopupKind::Menu),
+        FooterAction::new(icon("link"), words.link_layers.clone()).enabled(state.link_enabled),
     ];
     let out = FooterBar::actions(actions).show_footer(ui);
 

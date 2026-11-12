@@ -520,7 +520,8 @@ where
         self
     }
 
-    /// The host's footer buttons, after the view buttons and slider. An action that takes drops reports
+    /// The host's footer buttons, placed from the end edge as `FooterBar::actions` places them, after New Bin: the
+    /// first given sits next to New Bin. An action that takes drops reports
     /// `FooterDrop` with the dragged keys when it was built with `accepts_drops::<ListDrag<K>>`.
     pub fn footer_actions(mut self, actions: impl IntoIterator<Item = FooterAction>) -> Self {
         self.actions = actions.into_iter().collect();

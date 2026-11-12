@@ -11,16 +11,16 @@ use super::body::{Body, delete_event};
 use super::panel::{ActionSelection, ActionsEvent, ActionsPanelState};
 use crate::actions::ActionList;
 
-// Reading order of the footer's buttons.
-const STOP: usize = 0;
-const RECORD: usize = 1;
-const PLAY: usize = 2;
+// The footer's buttons from its end edge.
+const BUTTON_MODE: usize = 0;
+const DELETE: usize = 1;
+const NEW_ACTION: usize = 2;
 const NEW_SET: usize = 3;
-const NEW_ACTION: usize = 4;
-const DELETE: usize = 5;
-const BUTTON_MODE: usize = 6;
+const PLAY: usize = 4;
+const RECORD: usize = 5;
+const STOP: usize = 6;
 
-/// The footer under the list, in this order, each a Tab stop with its name and tooltip:
+/// The footer under the list, in this order from the start edge, each a Tab stop with its name and tooltip:
 ///
 /// | Button | Icon | Reports | Enabled |
 /// |---|---|---|---|
@@ -46,15 +46,15 @@ pub(super) fn show_footer(ui: &mut Ui, body: &Body<'_>, state: &mut ActionsPanel
         record = record.tone(Tone::Bad);
     }
     let actions = [
-        FooterAction::new(icon("square"), words.stop.clone()).enabled(hosted && !idle),
-        record,
-        FooterAction::new(icon("play"), words.play.clone()).enabled(hosted && idle && target.is_some()),
-        FooterAction::new(icon("new_folder"), words.new_set.clone()).enabled(idle),
-        FooterAction::new(icon("plus"), words.new_action.clone()).enabled(hosted && idle),
+        FooterAction::new(icon("toggle_right"), words.button_mode.clone()).enabled(idle).pressed(state.settings.button_mode),
         FooterAction::new(icon("trash"), words.delete.clone()).enabled(delete.is_some()).takes_drops_disabled(true).accepts_drops(
             move |drag: &ListDrag<ActionSelection>| !playing && drag.list == list_id && delete_event(&drag.grabbed, recording.is_some()).is_some(),
         ),
-        FooterAction::new(icon("toggle_right"), words.button_mode.clone()).enabled(idle).pressed(state.settings.button_mode),
+        FooterAction::new(icon("plus"), words.new_action.clone()).enabled(hosted && idle),
+        FooterAction::new(icon("new_folder"), words.new_set.clone()).enabled(idle),
+        FooterAction::new(icon("play"), words.play.clone()).enabled(hosted && idle && target.is_some()),
+        record,
+        FooterAction::new(icon("square"), words.stop.clone()).enabled(hosted && !idle),
     ];
     let out = FooterBar::actions(actions).show_footer(ui);
     // The footer runs twice per pass: the sizing pass measures it and must report nothing.

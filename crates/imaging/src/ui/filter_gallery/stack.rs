@@ -150,18 +150,19 @@ impl<'a> EffectStack<'a> {
                     _ => {}
                 }
             }
+            // Move Up and Move Down at the start edge, then Delete and New from the end edge, as PhotoCraft lays them out.
             let actions = [
                 FooterAction::new(IconId::new("chevron_up"), words.move_up.clone()).enabled(current + 1 < count),
                 FooterAction::new(IconId::new("chevron_down"), words.move_down.clone()).enabled(current > 0),
-                FooterAction::new(IconId::new("new_layer"), words.new_layer.clone()),
                 FooterAction::new(IconId::new("trash"), words.delete_layer.clone()).enabled(count > 1),
+                FooterAction::new(IconId::new("new_layer"), words.new_layer.clone()),
             ];
-            let footer = FooterBar::actions(actions).show_footer(ui);
+            let footer = FooterBar::actions(actions).at_start(2).show_footer(ui);
             let pressed = match footer.picked {
                 Some(0) => Some(EffectChange::move_to(current, current + 1)),
                 Some(1) => Some(EffectChange::move_to(current, current.saturating_sub(1))),
-                Some(2) => Some(EffectChange::Add),
-                Some(3) => Some(EffectChange::Delete),
+                Some(2) => Some(EffectChange::Delete),
+                Some(3) => Some(EffectChange::Add),
                 _ => None,
             };
             if pressed.is_some() {

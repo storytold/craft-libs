@@ -564,14 +564,17 @@ impl FooterBar {
         self
     }
 
-    /// A footer bar of icon actions, in the given order. Show it with `show_footer`.
+    /// A footer bar of icon actions laid out from the reading end, as Photoshop's panel footers: the first action given
+    /// sits at the end edge (Delete), the next one before it, and a panel menu given last at the start of the group.
+    /// Tab visits them in display order; the indexes the output reports are those of the given order. Show it with
+    /// `show_footer`.
     pub fn actions(actions: impl IntoIterator<Item = FooterAction>) -> Self {
         FooterBar { content: Content::Actions(actions.into_iter().collect()), actions: true, ..FooterBar::body() }
     }
 
-    /// The first `count` actions sit at the start edge and the rest at the end edge, the room left between the two
-    /// groups (Clear Override and Redefine before a style panel's other actions). The indexes the output reports stay
-    /// those of the given order.
+    /// The first `count` actions sit at the start edge in the given order and the rest from the end edge as
+    /// [`actions`](FooterBar::actions) places them, the room left between the two groups (Clear Override and Redefine
+    /// before a style panel's other actions). The indexes the output reports stay those of the given order.
     #[must_use]
     pub fn at_start(mut self, count: usize) -> Self {
         self.start = count;
@@ -594,13 +597,14 @@ impl FooterBar {
             Content::Actions(actions) => {
                 let mut shown = Shown::default();
                 let start = start.min(actions.len());
+                let from_end = || (start..actions.len()).rev();
                 if start == 0 {
-                    show_actions(ui, actions, 0, &mut shown);
+                    show_actions(ui, actions, from_end(), &mut shown);
                 } else {
-                    let (first, rest) = actions.split_at(start);
-                    Row::new().show(ui, |ui, _| show_actions(ui, first, 0, &mut shown));
-                    Row::new().show(ui, |ui, _| show_actions(ui, rest, start, &mut shown));
+                    Row::new().show(ui, |ui, _| show_actions(ui, actions, 0..start, &mut shown));
+                    Row::new().show(ui, |ui, _| show_actions(ui, actions, from_end(), &mut shown));
                 }
+                shown.responses.sort_by_key(|(at, _)| *at);
                 shown
             }
             Content::Buttons(buttons) => {
@@ -659,16 +663,16 @@ impl FooterBar {
             picked: inner.picked,
             dropped: inner.dropped,
             drop_hint: inner.drop_hint,
-            responses: inner.responses,
+            responses: inner.responses.into_iter().map(|(_, response)| response).collect(),
             mods,
         }
     }
 }
 
-/// Shows `actions`, the first of them at index `from` of the bar's actions, and collects what happened to them.
-fn show_actions(ui: &mut Ui, actions: &[FooterAction], from: usize, shown: &mut Shown) {
-    for (at, action) in actions.iter().enumerate() {
-        let at = from + at;
+/// Shows the bar's `actions` at the indexes `order`, in display order, and collects what happened to them.
+fn show_actions(ui: &mut Ui, actions: &[FooterAction], order: impl Iterator<Item = usize>, shown: &mut Shown) {
+    for at in order {
+        let action = &actions[at];
         let response = match &action.drops {
             Some(drops) => {
                 let slot = drops(ui, action);
@@ -685,7 +689,7 @@ fn show_actions(ui: &mut Ui, actions: &[FooterAction], from: usize, shown: &mut 
         if crate::contract::clicked(&response) {
             shown.picked = Some(at);
         }
-        shown.responses.push(response);
+        shown.responses.push((at, response));
     }
 }
 
@@ -695,7 +699,8 @@ struct Shown {
     picked: Option<usize>,
     dropped: Option<FooterDrop>,
     drop_hint: Option<Label>,
-    responses: Vec<Response>,
+    /// Each action's index in the given order and its response, in display order until the bar sorts them.
+    responses: Vec<(usize, Response)>,
 }
 
 impl Component for FooterBar {

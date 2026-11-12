@@ -198,14 +198,14 @@ impl Facts {
     }
 }
 
-/// The footer's buttons in reading order.
+/// The footer's buttons: the start group from the start edge, the rest from the end edge.
 const FOOTER: [TextStyleCommand; 6] = [
     TextStyleCommand::ClearOverride,
     TextStyleCommand::Redefine,
-    TextStyleCommand::Options,
-    TextStyleCommand::Duplicate,
-    TextStyleCommand::New,
     TextStyleCommand::Delete,
+    TextStyleCommand::New,
+    TextStyleCommand::Duplicate,
+    TextStyleCommand::Options,
 ];
 
 /// How many of the footer's buttons sit at its start edge: Clear Override and Redefine.
