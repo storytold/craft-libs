@@ -59,7 +59,12 @@ fn people_bar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     room.0[4].spotlight = true;
     room.1 = true;
     let following = *data.value("following", Some(ParticipantId(2)));
-    let shown = PeopleBar::new(&room).following(following).show(ui);
+    let bar = PeopleBar::new(&room);
+    let shown = match following {
+        Some(who) => bar.following(who),
+        None => bar,
+    }
+    .show(ui);
     let last = data.note("last", None::<String>);
     if let Some(request) = shown.requests.last() {
         *last = Some(format!("{request:?}"));

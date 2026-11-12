@@ -47,7 +47,8 @@ fn edge_picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             let event = shown.events.last().or(other.events.last()).map(|event| format!("{event:?}"));
             (StoryOutput::from(shown), event)
         })
-        .inner;
+        .inner
+        .unwrap_or_default();
     *data.value("edges", (outer_edges(), outer_edges())) = (cell, paragraph);
     let last = data.note("last", None::<String>);
     if event.is_some() {
