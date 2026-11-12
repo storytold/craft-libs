@@ -8,7 +8,7 @@ use super::words::PreferencesWords;
 use crate::contract::{
     ActivateOn, Bind, CollectionEvent, Props as _, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
 };
-use crate::display::{Shade, Text};
+use crate::display::{Divider, Shade, Text};
 use crate::form::FieldGroup;
 use crate::layout_components::{Row, Stack};
 use crate::list::{List, ListRow, RowInk};
@@ -157,6 +157,7 @@ pub(super) fn show_body<H: PreferencesModel + ?Sized>(
                 state.selected = key;
             }
         }
+        Divider::vertical().show(ui);
         Stack::new()
             .fill()
             .scroll(Scroll::vertical())
