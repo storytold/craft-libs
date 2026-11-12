@@ -16,6 +16,7 @@
 //!   attribute, or a child of `<Properties>`.
 //! - [`value`] has the codecs of attribute values: numbers, transforms, `Self` ids, style names,
 //!   link URIs, base64 `Contents`.
+//! - [`icml`] reads and writes InCopy Markup: one story and what it uses, as one XML document.
 //! - [`tagged`] reads and writes InDesign Tagged Text, the plain-text interchange format.
 //! - [`model`] types the layout (spreads and parent spreads, pages, guides, page items and the
 //!   graphics placed in them, with path geometry) and stories (paragraph and character ranges,
@@ -29,6 +30,7 @@
 #[doc = include_str!("../README.md")]
 struct ReadmeExamples;
 
+pub mod icml;
 pub mod model;
 mod package;
 mod part;

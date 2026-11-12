@@ -11,7 +11,8 @@ packages exported from synthetic documents.
 
 This crate is the layer between the bytes and IDML's own element tree, with a typed model of
 the layout and the stories (`model`). Styles, swatches and preferences are not modelled yet: a
-caller walks those elements and maps them onto its own document.
+caller walks those elements and maps them onto its own document. InCopy Markup (ICML), one
+story as one XML document, is read and written too (`icml`).
 
 ## Reading
 
@@ -151,6 +152,16 @@ assert_eq!(story.text(|a| (a == Ace::PageNumber).then_some('#')), "Page #\n");
 - Content keeps its whitespace exactly; elements the model does not type are kept as written.
   Containers nest as deep as the XML reader allows (256), and text is gathered without
   recursion.
+
+## ICML
+
+`icml::is_icml` sniffs the `SnippetType="InCopyInterchange"` instruction in the first 4 KiB.
+`icml::read_icml` reads the file as a package part is read, at most `MAX_ICML_BYTES` (512 MiB);
+a root that is not `Document` or a file without a `Story` is refused, and a reference to a
+package part (an ICML file has none) is left out with a warning. `Icml::stories` gives its
+stories; which one to place (usually the first no text frame of the file holds) is the
+caller's choice. `icml::icml_xml` writes a `Document` with the two `<?aid?>` instructions that
+mark the file.
 
 ## Values
 
