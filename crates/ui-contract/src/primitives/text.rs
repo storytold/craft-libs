@@ -209,7 +209,7 @@ impl<'a> TextRun<'a> {
         self
     }
 
-    /// Sets where the lines sit within the run's width.
+    /// Sets where the lines sit within the run's width, and where `Draw::text` places the run in its rect.
     pub fn align(mut self, align: HAlign) -> Self {
         self.align = align;
         self
