@@ -8,7 +8,7 @@
 #[cfg(feature = "testing")]
 mod stories;
 
-use super::browser::{PresetBrowser, ThumbPainter};
+use super::browser::{BrowserTools, PresetBrowser, ThumbPainter};
 use super::event::PresetEvent;
 use super::footer::PresetFooterOptions;
 use super::model::{CellShape, PresetRow, ThumbInfo};
@@ -27,7 +27,7 @@ use crate::runtime::memory::StageAccess;
 use crate::style::{ComponentStyle, FocusLook, StyleCx, SurfaceLook};
 use crate::tile_grid::TileZoom;
 use craft_behavior::{CancelReason, GesturePhase, HitLevel, HitPriority, Metrics, PartKey, PressPhase, Sense, Value};
-use egui::{Rect, Response, Ui, Vec2};
+use egui::{Id, Rect, Response, Ui, Vec2};
 use std::hash::Hash;
 
 /// The face under the whole field.
@@ -144,6 +144,13 @@ pub struct PresetPicker<'a, K: Value + Eq + Hash + 'static> {
     /// A row above the presets with the search field.
     #[prop]
     toolbar: bool,
+    /// The host's controls at the reading end of the browser's toolbar.
+    #[prop(func = "FnMut(&mut Ui)")]
+    tools: Option<BrowserTools<'a>>,
+    /// The id of the browser in the popover, which `PresetBrowser::request_rename` names: a host that starts a rename
+    /// from its own control (a menu's Rename) gives one.
+    #[prop]
+    browser_id: Option<Id>,
     /// Which presets and groups the browser may rename.
     #[prop(func = "Fn(&K) -> bool")]
     can_rename: Option<RowTest<'a, K>>,
@@ -212,6 +219,8 @@ impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
             view: PresetView::Grid,
             default_open: DefaultOpen::All,
             toolbar: false,
+            tools: None,
+            browser_id: None,
             can_rename: None,
             can_delete: None,
             can_move: None,
@@ -372,6 +381,8 @@ impl<K: Value + Eq + Hash + 'static> Component for PresetPicker<'_, K> {
         let (thumb_range, footer, keep_open) = (self.thumb_range, self.footer.as_ref(), self.keep_open);
         let state = &mut self.state;
         let head = &mut self.head;
+        let tools = &mut self.tools;
+        let browser_id = self.browser_id;
         let preview = self.preview.as_ref();
         // The actions follow the presets as rows of the browser's collection, set off by a divider, as the preset menu
         // lists them.
@@ -389,6 +400,12 @@ impl<K: Value + Eq + Hash + 'static> Component for PresetPicker<'_, K> {
                 .actions(action_labels.clone());
             if let Some(options) = footer {
                 browser = browser.footer(options.clone());
+            }
+            if let Some(tools) = tools.as_mut() {
+                browser = browser.tools(|ui| tools.show(ui));
+            }
+            if let Some(id) = browser_id {
+                browser = browser.browser_id(id);
             }
             if let Some(key) = current.clone() {
                 browser = browser.selected(key);

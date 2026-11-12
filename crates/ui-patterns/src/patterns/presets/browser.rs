@@ -122,6 +122,23 @@ impl<'a, K> ThumbPainter<'a, K> {
     }
 }
 
+type BrowserToolsFn<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
+
+/// The host's controls at the reading end of the toolbar, after the search field: a picker's buttons and menus.
+pub struct BrowserTools<'a>(BrowserToolsFn<'a>);
+
+impl<'a> BrowserTools<'a> {
+    /// The controls that `show` adds.
+    pub fn new(show: impl FnMut(&mut Ui) + 'a) -> Self {
+        BrowserTools(Box::new(show))
+    }
+
+    /// Adds the controls: how a picker hands its own to the browser it opens.
+    pub(super) fn show(&mut self, ui: &mut Ui) {
+        (self.0)(ui);
+    }
+}
+
 /// A library of named presets shown as thumbnails.
 ///
 /// - **Rows.** The host's flat display list: groups with their depth, then presets. The grid view shows each group as
@@ -168,6 +185,9 @@ pub struct PresetBrowser<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// A row above the presets with the search field and the grid and list buttons.
     #[prop]
     toolbar: bool,
+    /// The host's controls at the reading end of the toolbar.
+    #[prop(func = "FnMut(&mut Ui)")]
+    tools: Option<BrowserTools<'a>>,
     /// Whether a secondary click or the context-menu key opens the row menu: Rename, Move to, Delete and the host's
     /// `extra_items`.
     #[prop]
@@ -212,6 +232,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
             thumb_range: TileZoom::Ladder,
             default_open: DefaultOpen::All,
             toolbar: false,
+            tools: None,
             row_menu: true,
             view_lock: None,
             can_rename: None,
@@ -479,6 +500,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             thumb_range,
             default_open,
             toolbar,
+            mut tools,
             row_menu,
             view_lock,
             can_rename,
@@ -519,7 +541,11 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                     Entry::new(PresetView::List, words.list_view.clone()).icon(IconId::new("list")),
                 ];
                 let locked = view_lock.is_some();
-                let _ = Bar::new(Label::Empty, BarKind::Tool).show(ui, |ui, _| {
+                let mut bar = Bar::new(Label::Empty, BarKind::Tool);
+                if let Some(tools) = tools.as_mut() {
+                    bar = bar.trailing(|ui| tools.show(ui));
+                }
+                let _ = bar.show(ui, |ui, _| {
                     let field = TextField::search(words.search.clone(), Bind::bound(&mut local.filter)).placeholder(words.search.clone());
                     let field = field.drives(list_id);
                     field.show(ui);

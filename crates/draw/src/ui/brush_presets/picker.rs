@@ -1,15 +1,19 @@
 //! The Brush Preset picker ([`BrushPresetPicker`]): a closed field that opens a popover with the brush's Size and
 //! Hardness, the buttons and gear menu, and the preset browser.
 
+use std::cell::{Cell, RefCell};
 use std::hash::Hash;
 
 use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, Value};
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::{Bind, BodyCx, EditResponse, Outcome, Props as _, Show as _, ShowContainer as _, Trigger, clicked};
+use craft_ui::display::Divider;
 use craft_ui::form::SliderField;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::menu::{Menu, MenuItem};
-use craft_ui::patterns::presets::{CellShape, PickerField, PresetEvent, PresetFooterOptions, PresetPicker, PresetRow, PresetState, PresetView};
+use craft_ui::patterns::presets::{
+    CellShape, PickerField, PresetBrowser, PresetEvent, PresetFooterOptions, PresetPicker, PresetRow, PresetState, PresetView,
+};
 use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::{Env, Label, UnitKind};
 use craft_ui::tile_grid::TileZoom;
@@ -50,10 +54,9 @@ pub enum BrushPick<K> {
     Select(K),
     /// A double click or Enter on a preset: the binding holds it and the picker closes.
     Activate(K),
-    /// A browser event: `Rename`, `Delete` (also from the gear), `Reorder`, `MoveTo` and the footer's buttons.
+    /// A browser event: `Rename` (also from the gear's Rename Brush…, which opens the name field on the current
+    /// preset), `Delete` (also from the gear), `Reorder`, `MoveTo` and the footer's buttons.
     List(PresetEvent<K>),
-    /// Rename Brush… in the gear: the app asks for the new name of the current preset.
-    Rename(K),
     /// Brush Settings…: open the Brush Settings panel.
     OpenSettings,
     /// New Brush Preset (the button or the gear): open the app's New Brush Preset dialog.
@@ -140,16 +143,16 @@ impl<K: Value> Outcome for BrushPresetPickerOutput<K> {
 /// a popover over [`PresetPicker`].
 ///
 /// - **Head.** [`BrushSizeField`] (Size, 1 to [`max_diameter`](Self::max_diameter), log slider) and, while
-///   [`BrushPickerValues::hardness`] is set, a Hardness slider field (0 to 100 %). They edit the brush live and report
-///   [`BrushPresetPickerOutput::diameter`] and [`hardness`](BrushPresetPickerOutput::hardness). Under them the Brush
-///   Settings and New Brush Preset buttons and the gear.
-/// - **Gear menu.** New Brush Preset…; Rename Brush… and Delete Brush (enabled with a current preset); the Brush
-///   Name, Brush Stroke and Brush Tip boxes (at least one stays on); Import Brushes… with
-///   [`import`](Self::import).
-/// - **Presets.** The browser with its search field (any letter case, groups open while filtering) and the scale
-///   slider (0.15 to 2.0) in its footer. The tip alone is a grid with the size as each caption; the name or the stroke
-///   is a list, with the stroke band while the stroke shows. A click picks and keeps the picker open; a double click
-///   or Enter picks and closes it.
+///   [`BrushPickerValues::hardness`] is set, a Hardness slider field (0 to 100 %), then a divider. They edit the brush
+///   live and report [`BrushPresetPickerOutput::diameter`] and [`hardness`](BrushPresetPickerOutput::hardness).
+/// - **Search row.** The browser's search field (any letter case, groups open while filtering), then at its reading
+///   end the Brush Settings and New Brush Preset buttons and the gear.
+/// - **Gear menu.** New Brush Preset…; Rename Brush… (opens the name field on the current preset) and Delete Brush
+///   (enabled with a current preset); the Brush Name, Brush Stroke and Brush Tip boxes (at least one stays on);
+///   Import Brushes… with [`import`](Self::import).
+/// - **Presets.** The browser, with the scale slider (0.15 to 2.0) in its footer. The tip alone is a grid with the
+///   size as each caption; the name or the stroke is a list, with the stroke band while the stroke shows. A click
+///   picks and keeps the picker open; a double click or Enter picks and closes it.
 /// - **Closing.** The popover's own: a press outside, Escape, and the picks that open something else
 ///   ([`BrushPick::closes`]).
 #[must_use = "show the picker with `show`"]
@@ -200,12 +203,11 @@ impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
             };
             let has_current = held.as_ref().is_some_and(|key| rows.iter().any(|row| !row.is_group() && row.key == *key));
             let mut browser = before.browser.clone();
-            let mut next_parts = parts;
-            let mut head_picks: Vec<BrushPick<K>> = Vec::new();
+            let next_parts = Cell::new(parts);
+            let tool_picks: RefCell<Vec<BrushPick<K>>> = RefCell::new(Vec::new());
             let (mut diameter, mut hardness) = (EditEvents::new(), EditEvents::new());
-            let head = |ui: &mut Ui, head_cx: &mut BodyCx<'_>| {
-                head_picks.clear();
-                next_parts = parts;
+            let browser_id = ui.make_persistent_id("browser");
+            let head = |ui: &mut Ui, _: &mut BodyCx<'_>| {
                 let size = BrushSizeField::new(words.size.clone(), Bind::given(values.diameter), max_diameter).show(ui);
                 diameter = size.edit.map(|edit| edit.events).unwrap_or_default();
                 hardness = EditEvents::new();
@@ -216,49 +218,53 @@ impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
                         .show(ui);
                     hardness = field.events.map(|percent| (percent / 100.0).clamp(0.0, 1.0));
                 }
+                Divider::horizontal().show(ui);
+            };
+            // The buttons and the gear at the reading end of the browser's search row.
+            let tools = |ui: &mut Ui| {
+                let mut picks = tool_picks.borrow_mut();
+                picks.clear();
+                next_parts.set(parts);
                 Row::new().show(ui, |ui, _| {
                     let icon = |name: &'static str| IconSpec::svg(IconId::new(name));
                     let settings = IconButton::new(icon("adjustments")).label(words.settings.clone()).tooltip(words.settings.clone()).show(ui);
                     if clicked(&settings) {
-                        head_picks.push(BrushPick::OpenSettings);
+                        picks.push(BrushPick::OpenSettings);
                     }
                     let new_preset = IconButton::new(icon("plus")).label(words.new_preset.clone()).tooltip(words.new_preset.clone()).show(ui);
                     if clicked(&new_preset) {
-                        head_picks.push(BrushPick::NewPreset);
+                        picks.push(BrushPick::NewPreset);
                     }
                     let gear = IconButton::new(icon("settings")).label(words.options.clone()).tooltip(words.options.clone()).show(ui);
                     let _ = Menu::new(words.options.clone()).opened_by(&gear, Trigger::Click).show(ui, |ui, _| {
                         if MenuItem::new(words.menu_new.clone()).show(ui).ran {
-                            head_picks.push(BrushPick::NewPreset);
+                            picks.push(BrushPick::NewPreset);
                         }
                         if MenuItem::new(words.menu_rename.clone()).enabled(has_current).show(ui).ran
-                            && let Some(key) = held.clone()
+                            && let Some(key) = held.as_ref()
                         {
-                            head_picks.push(BrushPick::Rename(key));
+                            PresetBrowser::request_rename(ui.ctx(), browser_id, key);
                         }
                         if MenuItem::new(words.menu_delete.clone()).enabled(has_current).show(ui).ran
                             && let Some(key) = held.clone()
                         {
-                            head_picks.push(BrushPick::List(PresetEvent::Delete(key)));
+                            picks.push(BrushPick::List(PresetEvent::Delete(key)));
                         }
                         for (part, label) in [
                             (BrushCardPart::Name, &words.part_name),
                             (BrushCardPart::Stroke, &words.part_stroke),
                             (BrushCardPart::Tip, &words.part_tip),
                         ] {
-                            let on = next_parts.get(part);
+                            let on = next_parts.get().get(part);
                             if MenuItem::new(label.clone()).check(on).keep_open(true).show(ui).ran {
-                                next_parts = next_parts.set(part, !on);
+                                next_parts.set(next_parts.get().set(part, !on));
                             }
                         }
                         if import && MenuItem::new(words.menu_import.clone()).show(ui).ran {
-                            head_picks.push(BrushPick::Import);
+                            picks.push(BrushPick::Import);
                         }
                     });
                 });
-                if head_picks.iter().any(BrushPick::closes) {
-                    head_cx.request_close();
-                }
             };
             let picker = PresetPicker::new(words.picker.clone(), current.reborrowed(), rows, Bind::bound(&mut browser))
                 .field(PickerField::Thumbnail)
@@ -274,14 +280,16 @@ impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
                     1.0,
                 ))
                 .footer(PresetFooterOptions::new().new_group(false))
-                .head(head);
+                .browser_id(browser_id)
+                .head(head)
+                .tools(tools);
             let out = picker.show(ui);
-            let mut picks = std::mem::take(&mut head_picks);
+            let mut picks = tool_picks.take();
             if let Some(key) = out.picked {
                 picks.insert(0, if out.closed { BrushPick::Activate(key) } else { BrushPick::Select(key) });
             }
             picks.extend(out.events.into_iter().map(BrushPick::List));
-            let after = BrushPickerState { browser, parts: next_parts };
+            let after = BrushPickerState { browser, parts: next_parts.get() };
             let mut settings = None;
             if after != before {
                 let event = EditEvent::set(Mixed::Same(before.clone()), after.clone(), name.clone(), None);

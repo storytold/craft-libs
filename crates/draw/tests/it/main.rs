@@ -29,6 +29,9 @@ mod measure;
 // draw-stroke
 mod stroke_button;
 
+// draw-brush-presets
+mod brush_presets;
+
 // draw-transform-a
 mod transform_box;
 mod transform_session;

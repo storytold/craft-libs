@@ -17,7 +17,7 @@ mod state;
 mod named;
 mod picker;
 
-pub use browser::{PresetBrowser, PresetItemCommands, PresetReorder, ThumbPainter};
+pub use browser::{BrowserTools, PresetBrowser, PresetItemCommands, PresetReorder, ThumbPainter};
 pub use event::{PresetEvent, PresetOutput};
 pub use files::{PresetExport, PresetFileEvent, PresetFileFailure, PresetFileRequest, PresetFiles};
 pub use footer::{PresetFooter, PresetFooterEvent, PresetFooterOptions, PresetFooterOutput};
