@@ -78,3 +78,12 @@ fn layers_panel_row_kinds(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let shown = LayersPanel::new(&tree).show(ui);
     with_readout(data, shown)
 }
+
+/// A frame selected as a whole: the brackets frame both its shape and its content.
+#[story(LayersPanel<'static, FakeLayers>, covers = [], drive = Drive::Never)]
+fn layers_panel_frame_selected(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut tree = FakeLayers::row_kinds();
+    tree.selection = LayerSelection::new(vec![2], Some(2), LayerPart::Pixels);
+    let shown = LayersPanel::new(&tree).show(ui);
+    with_readout(data, shown)
+}

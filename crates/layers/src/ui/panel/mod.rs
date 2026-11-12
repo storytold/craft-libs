@@ -85,6 +85,7 @@ craft_ui::words! {
         layer_mask_targeted: "layersPanel.layerMaskTargeted" = "layer mask targeted";
         vector_mask_targeted: "layersPanel.vectorMaskTargeted" = "vector mask targeted";
         filter_mask_targeted: "layersPanel.filterMaskTargeted" = "filter mask targeted";
+        frame_shape_targeted: "layersPanel.frameShapeTargeted" = "frame targeted";
         frame_content_targeted: "layersPanel.frameContentTargeted" = "frame content targeted";
         link_layers: "layersPanel.linkLayers" = "Link layers";
         add_mask: "layersPanel.addMask" = "Add a mask";

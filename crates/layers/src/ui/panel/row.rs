@@ -114,6 +114,7 @@ pub(super) fn row_description(words: &LayersPanelWords, info: &LayerInfo, target
         LayerPart::LayerMask => &words.layer_mask_targeted,
         LayerPart::VectorMask => &words.vector_mask_targeted,
         LayerPart::FilterMask => &words.filter_mask_targeted,
+        LayerPart::FrameShape => &words.frame_shape_targeted,
         LayerPart::FrameContent => &words.frame_content_targeted,
     });
     let mut parts: Vec<&str> = std::iter::once(kind.as_str()).chain(flags.iter().filter(|(on, _)| *on).map(|(_, word)| word.as_str())).collect();
@@ -262,13 +263,13 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
             row = row.thumb_drag(ThumbTarget::Extra(masks_from + at), LayersDrag::new(cx.list, vec![LayerRowKey::Mask(id.clone(), part)]));
         }
         if active {
-            let target = match cx.selection.target {
-                LayerPart::Pixels => Some(ThumbTarget::First),
-                LayerPart::FilterMask => None,
-                part => Some(extra_parts(&info).iter().position(|held| *held == part).map_or(ThumbTarget::First, ThumbTarget::Extra)),
-            };
-            if let Some(target) = target {
-                row = row.thumb_target(target);
+            let extra = |part: LayerPart| extra_parts(&info).iter().position(|held| *held == part).map(ThumbTarget::Extra);
+            match cx.selection.target {
+                LayerPart::FilterMask => {}
+                // A frame as a whole: its shape and its content.
+                LayerPart::Pixels if frame => row = row.thumb_target([ThumbTarget::First, ThumbTarget::Extra(0)]),
+                LayerPart::Pixels | LayerPart::FrameShape => row = row.thumb_target(ThumbTarget::First),
+                part => row = row.thumb_target(extra(part).unwrap_or(ThumbTarget::First)),
             }
         }
     } else if let Some(icon) = kind_icon(info.kind) {

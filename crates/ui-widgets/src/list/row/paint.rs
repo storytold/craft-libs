@@ -100,18 +100,29 @@ impl ListRow<'_> {
             if let Some(Some(paint)) = paints.next() {
                 let _ = ui.child(("thumb", at), *thumb, RowThumb::new(paint));
             }
-            let draw = ui.draw();
             let shape = PaintShape::Rect(*thumb, style.thumb_radius);
-            draw.stroke(&shape, StrokeWidth::Thin, style.thumb_edge);
-            let target = target_at(at);
-            if self.target == Some(target) {
-                let r = thumb.expand(outset);
-                for (corner, dx, dy) in
-                    [(r.left_top(), 1.0, 1.0), (r.right_top(), -1.0, 1.0), (r.right_bottom(), -1.0, -1.0), (r.left_bottom(), 1.0, -1.0)]
-                {
-                    let path = vec![corner + Vec2::new(arm * dx, 0.0), corner, corner + Vec2::new(0.0, arm * dy)];
-                    draw.stroke(&PaintShape::Path(path), StrokeWidth::Medium, ink);
-                }
+            ui.draw().stroke(&shape, StrokeWidth::Thin, style.thumb_edge);
+        }
+        // Adjacent targets are one target together (a frame and its content): one set of brackets frames them all.
+        let mut at = 0;
+        while at < rects.len() {
+            if !self.targets.contains(target_at(at)) {
+                at += 1;
+                continue;
+            }
+            let mut framed = rects[at];
+            while at + 1 < rects.len() && self.targets.contains(target_at(at + 1)) {
+                at += 1;
+                framed = framed.union(rects[at]);
+            }
+            at += 1;
+            let r = framed.expand(outset);
+            let draw = ui.draw();
+            for (corner, dx, dy) in
+                [(r.left_top(), 1.0, 1.0), (r.right_top(), -1.0, 1.0), (r.right_bottom(), -1.0, -1.0), (r.left_bottom(), 1.0, -1.0)]
+            {
+                let path = vec![corner + Vec2::new(arm * dx, 0.0), corner, corner + Vec2::new(0.0, arm * dy)];
+                draw.stroke(&PaintShape::Path(path), StrokeWidth::Medium, ink);
             }
         }
         for (at, (_, link)) in placed.extras.iter().enumerate() {

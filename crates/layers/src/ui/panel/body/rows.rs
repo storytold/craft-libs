@@ -236,7 +236,7 @@ pub(super) fn list_selection<T: LayerTree>(cx: &PanelContext<'_, T>, session: &S
     Selection::new(items, lead, anchor)
 }
 
-/// Whether a thumbnail click acts on its own and does not select the row. A frame's content takes the clicks a
+/// Whether a thumbnail click acts on its own and does not select the row. A frame's thumbnails take the clicks a
 /// layer thumbnail takes.
 pub(in crate::ui::panel) fn thumb_click_replaces_select(part: LayerPart, mods: Mods, info: &LayerInfo) -> bool {
     let on_mask = matches!(part, LayerPart::LayerMask | LayerPart::VectorMask | LayerPart::FilterMask);
@@ -249,6 +249,7 @@ pub(in crate::ui::panel) fn thumb_click_replaces_select(part: LayerPart, mods: M
 pub(super) fn thumb_part<Id>(key: &LayerRowKey<Id>, info: &LayerInfo, which: ThumbTarget) -> LayerPart {
     match which {
         ThumbTarget::First if matches!(key, LayerRowKey::Filters(_, None)) => LayerPart::FilterMask,
+        ThumbTarget::First if info.kind == LayerKind::Frame => LayerPart::FrameShape,
         ThumbTarget::First => LayerPart::Pixels,
         ThumbTarget::Extra(i) => extra_parts(info).get(i).copied().unwrap_or(LayerPart::Pixels),
         _ => LayerPart::Pixels,

@@ -89,6 +89,31 @@ impl ThumbTarget {
     }
 }
 
+/// The thumbnails a row's editing is aimed at, framed with corner brackets: usually one, several when the edit goes to
+/// them together (a frame and its content), where one set of brackets frames each run of adjacent targets. Built from
+/// one [`ThumbTarget`] or an array of them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ThumbTargets(Vec<ThumbTarget>);
+
+impl ThumbTargets {
+    /// Whether `target` is one of them.
+    pub fn contains(&self, target: ThumbTarget) -> bool {
+        self.0.contains(&target)
+    }
+}
+
+impl From<ThumbTarget> for ThumbTargets {
+    fn from(target: ThumbTarget) -> Self {
+        ThumbTargets(vec![target])
+    }
+}
+
+impl<const N: usize> From<[ThumbTarget; N]> for ThumbTargets {
+    fn from(targets: [ThumbTarget; N]) -> Self {
+        ThumbTargets(targets.to_vec())
+    }
+}
+
 /// Paints into a thumbnail's rect through the content painter, which is clipped to it.
 pub type ThumbPaint<'a> = Box<dyn FnOnce(&ContentPainterCx, Rect) + 'a>;
 

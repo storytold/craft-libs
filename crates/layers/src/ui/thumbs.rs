@@ -86,11 +86,11 @@ impl<L> LayerThumb<L> {
         Self { layer, kind: LayerThumbKind::FrameContent, contents }
     }
 
-    /// The thumbnail of `part`: [`pixels`](Self::pixels) for [`LayerPart::Pixels`], the frame's
-    /// content for [`LayerPart::FrameContent`], else the matching mask.
+    /// The thumbnail of `part`: [`pixels`](Self::pixels) for [`LayerPart::Pixels`] and a frame's
+    /// shape, the frame's content for [`LayerPart::FrameContent`], else the matching mask.
     pub fn of_part(layer: L, part: LayerPart, contents: ThumbContents) -> Self {
         match part {
-            LayerPart::Pixels => Self::pixels(layer, contents),
+            LayerPart::Pixels | LayerPart::FrameShape => Self::pixels(layer, contents),
             LayerPart::LayerMask => Self::mask(layer),
             LayerPart::VectorMask => Self::vector_mask(layer),
             LayerPart::FilterMask => Self::filter_mask(layer),

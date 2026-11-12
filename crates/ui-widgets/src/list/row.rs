@@ -40,7 +40,7 @@ pub use style::{ListRowStyle, RowStyleCx};
 pub(crate) use thumb::RowThumb;
 pub(super) use thumb::Thumb;
 use thumb::ThumbPayload;
-pub use thumb::{ThumbAspect, ThumbPaint, ThumbSize, ThumbTarget};
+pub use thumb::{ThumbAspect, ThumbPaint, ThumbSize, ThumbTarget, ThumbTargets};
 use trailing::Hosted;
 pub(super) use trailing::{Trailing, TrailingItem};
 pub use trailing::{TrailingFace, TrailingPart};
@@ -211,9 +211,10 @@ pub struct ListRow<'a> {
     pub(super) thumb_aspect: ThumbAspect,
     pub(super) first: Option<ThumbPaint<'a>>,
     pub(super) extras: Vec<Thumb<'a>>,
-    /// The thumbnail the row's editing is aimed at: framed with corner brackets whether or not the row is selected.
-    #[prop(name = "thumb_target")]
-    pub(super) target: Option<ThumbTarget>,
+    /// The thumbnails the row's editing is aimed at: one target, or several together (`[ThumbTarget; N]`), framed with
+    /// corner brackets whether or not the row is selected.
+    #[prop(into, name = "thumb_target")]
+    pub(super) targets: ThumbTargets,
     pub(super) trailing: Vec<Trailing<'a>>,
     /// The components under the label band's text, in one line (`below`).
     pub(super) below: Vec<Hosted<'a>>,
@@ -292,7 +293,7 @@ impl<'a> ListRow<'a> {
             thumb_aspect: ThumbAspect::SQUARE,
             first: None,
             extras: Vec::new(),
-            target: None,
+            targets: ThumbTargets::default(),
             trailing: Vec::new(),
             below: Vec::new(),
             cell_fields: Vec::new(),
