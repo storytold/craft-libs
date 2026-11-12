@@ -1322,6 +1322,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ods"
+version = "0.1.0"
+dependencies = [
+ "craft-odf",
+ "craft-sheet",
+ "craft-xml",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-offcrypto"
 version = "0.1.0"
 dependencies = [
