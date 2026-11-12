@@ -11,6 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+craft-drawingml = { workspace = true }
 craft-opc = { workspace = true }
 craft-sheet = { workspace = true }
 craft-xml = { workspace = true }

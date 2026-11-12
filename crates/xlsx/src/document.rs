@@ -3,6 +3,9 @@
 
 use craft_opc::{ContentTypes, PackageOut, RT_BASE, Rel, RelOut, Rels, RelsOut, relative, rels_path};
 
+use craft_drawingml::chart::Chart;
+
+use crate::drawing::{Anchor, Drawing, Item, Placement};
 use crate::features::{Comments, NoteShape, notes_vml};
 use crate::sheet::{CellValue, Row, SheetPart};
 use crate::strings::StringItem;
@@ -15,6 +18,10 @@ const CT_STRINGS: &str = "application/vnd.openxmlformats-officedocument.spreadsh
 const CT_STYLES: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml";
 const CT_COMMENTS: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml";
 const CT_VML: &str = "application/vnd.openxmlformats-officedocument.vmlDrawing";
+const CT_DRAWING: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
+const CT_CHART: &str = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
+const CT_CHARTEX: &str = "application/vnd.ms-office.chartex+xml";
+const RT_CHARTEX: &str = "http://schemas.microsoft.com/office/2014/relationships/chartEx";
 /// The relationship type namespace of strict files: kept relationships are written with the
 /// transitional one, as the parts this crate writes are.
 const RT_STRICT: &str = "http://purl.oclc.org/ooxml/officeDocument/relationships/";
@@ -77,6 +84,41 @@ pub struct Worksheet {
     /// How the comments are shown, from the legacy VML drawing. The drawing itself is kept as
     /// read; these are used only to draw the comments of a sheet that has no VML drawing.
     pub notes: Vec<NoteShape>,
+    /// The drawing part, written from here. `None` removes it.
+    pub drawing: Option<DrawingPart>,
+}
+
+/// A worksheet's drawing part and its relationships (to charts and pictures, kept with their
+/// ids).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DrawingPart {
+    /// The part's name; a new name is chosen on writing when empty.
+    pub part: String,
+    pub drawing: Drawing,
+    /// `target` is the part name for an internal relationship; the target written is made
+    /// relative to the drawing part again.
+    pub rels: Vec<Rel>,
+}
+
+impl DrawingPart {
+    /// Adds a relationship to part `target` (`kind` a last segment of the standard namespace or
+    /// a full type URI) and returns its id.
+    pub fn add_rel(&mut self, kind: &str, target: &str) -> String {
+        let taken: Vec<String> = self.rels.iter().map(|r| r.id.to_ascii_lowercase()).collect();
+        let id = fresh(&taken, |n| format!("rId{n}"));
+        let ty = if kind.starts_with("http") { kind.to_string() } else { format!("{RT_BASE}{kind}") };
+        self.rels.push(Rel { id: id.clone(), ty, target_raw: String::new(), target: target.to_string(), external: false });
+        id
+    }
+
+    /// The next free `xdr:cNvPr/@id`.
+    fn next_shape_id(&self) -> u32 {
+        let ids = self.drawing.items.iter().filter_map(|i| match i {
+            Item::Anchor(a) => a.props().and_then(|p| p.attr_u32("id")),
+            Item::Other(e) => e.descendants().filter(|d| d.name == "xdr:cNvPr").filter_map(|d| d.attr_u32("id")).max(),
+        });
+        ids.max().unwrap_or(1).saturating_add(1)
+    }
 }
 
 /// A part carried through unchanged: drawings, charts, the theme, document properties, a VBA
@@ -142,7 +184,8 @@ impl Document {
                 Ok(part) => {
                     let comments = p.comments(&part)?;
                     let notes = if comments.is_some() { p.note_shapes(&part)? } else { Vec::new() };
-                    worksheets.push(Some(Worksheet { rows, part, comments, notes }));
+                    let drawing = p.drawing(&part)?.map(|(name, drawing, rels)| DrawingPart { part: name, drawing, rels: rels.list });
+                    worksheets.push(Some(Worksheet { rows, part, comments, notes, drawing }));
                 }
                 Err(Error::TooLarge(m)) => return Err(Error::TooLarge(m)),
                 Err(e) => {
@@ -159,6 +202,10 @@ impl Document {
             if ws.comments.is_some() {
                 made.extend(ws.part.rels.first("comments").filter(|r| !r.external).map(|r| r.target.clone()));
             }
+            if let Some(d) = &ws.drawing {
+                made.push(d.part.clone());
+                made.push(rels_path(&d.part));
+            }
         }
         made.extend(workbook_rels.list.iter().filter(|r| !r.external && regenerated(r)).map(|r| r.target.clone()));
         let opc = p.opc();
@@ -173,6 +220,77 @@ impl Document {
         }
         let kind = types.of(&workbook_part).and_then(XlsxKind::of_content_type).unwrap_or_default();
         Ok(Document { kind, workbook_part, workbook, workbook_rels, shared_strings, styles, worksheets, parts, warnings: p.warnings().to_vec() })
+    }
+
+    /// Adds a chart to worksheet `sheet` (an index into [`Workbook::sheets`]): a new chart part
+    /// written by `craft-drawingml` (an Office 2016 `chartEx` part for the chart types that need
+    /// one, behind an `mc:AlternateContent` so older readers skip it), and an anchor for it in
+    /// the sheet's drawing, made when the sheet has none.
+    pub fn add_chart(&mut self, sheet: usize, placement: Placement, chart: &Chart, name: &str) -> Result<(), Error> {
+        let taken = self.part_names();
+        let ex = craft_drawingml::chart::write::chartex_part(chart);
+        let (part, ct, bytes) = match ex {
+            Some((bytes, _)) => (fresh(&taken, |n| format!("xl/charts/chartEx{n}.xml")), CT_CHARTEX, bytes),
+            None => (fresh(&taken, |n| format!("xl/charts/chart{n}.xml")), CT_CHART, craft_drawingml::chart::write::chart_xml(chart).0),
+        };
+        let d = self.drawing_of(sheet)?;
+        let id = d.next_shape_id();
+        if ct == CT_CHARTEX {
+            let rel = d.add_rel(RT_CHARTEX, &part);
+            let mut anchor = Anchor::chart(placement, id, name, &rel);
+            if let Some(data) = anchor.object.child_mut("a:graphic").and_then(|g| g.child_mut("a:graphicData")) {
+                data.set_attr("uri", "http://schemas.microsoft.com/office/drawing/2014/chartex");
+                if let Some(c) = data.child_mut("c:chart") {
+                    c.name = "cx:chart".into();
+                }
+            }
+            let choice = craft_xml::El::new("mc:Choice").with_attr("Requires", "cx1").with_child(anchor.to_el());
+            d.drawing
+                .items
+                .push(Item::Other(craft_xml::El::new("mc:AlternateContent").with_child(choice).with_child(craft_xml::El::new("mc:Fallback"))));
+        } else {
+            let rel = d.add_rel("chart", &part);
+            d.drawing.items.push(Item::Anchor(Anchor::chart(placement, id, name, &rel)));
+        }
+        self.parts.push(KeptPart { name: part, content_type: Some(ct.into()), bytes });
+        Ok(())
+    }
+
+    /// Adds a picture to worksheet `sheet`: the image bytes as a new media part (`ext` its file
+    /// extension: `png`, `jpeg`, `gif`, ...), and an anchor for it in the sheet's drawing.
+    pub fn add_picture(&mut self, sheet: usize, placement: Placement, image: Vec<u8>, ext: &str, descr: &str) -> Result<(), Error> {
+        let ext = ext.trim_start_matches('.').to_ascii_lowercase();
+        let ct = match ext.as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "bmp" => "image/bmp",
+            "tif" | "tiff" => "image/tiff",
+            "svg" => "image/svg+xml",
+            "emf" => "image/x-emf",
+            "wmf" => "image/x-wmf",
+            "webp" => "image/webp",
+            _ => return Err(Error::Invalid(format!("no image type for .{ext}"))),
+        };
+        let part = fresh(&self.part_names(), |n| format!("xl/media/image{n}.{ext}"));
+        let d = self.drawing_of(sheet)?;
+        let id = d.next_shape_id();
+        let rel = d.add_rel("image", &part);
+        d.drawing.items.push(Item::Anchor(Anchor::picture(placement, id, &format!("Picture {}", id.saturating_sub(1)), descr, &rel)));
+        self.parts.push(KeptPart { name: part, content_type: Some(ct.into()), bytes: image });
+        Ok(())
+    }
+
+    /// Every part name in use, in lower case: kept parts and the drawings of worksheets.
+    fn part_names(&self) -> Vec<String> {
+        let drawings = self.worksheets.iter().flatten().filter_map(|w| w.drawing.as_ref()).map(|d| d.part.clone());
+        self.parts.iter().map(|p| p.name.clone()).chain(drawings).map(|n| n.to_ascii_lowercase()).collect()
+    }
+
+    fn drawing_of(&mut self, sheet: usize) -> Result<&mut DrawingPart, Error> {
+        let ws =
+            self.worksheets.get_mut(sheet).and_then(Option::as_mut).ok_or_else(|| Error::Invalid(format!("sheet {sheet} is not a worksheet")))?;
+        Ok(ws.drawing.get_or_insert_with(DrawingPart::default))
     }
 
     /// The package. Refused when [`Document::worksheets`] does not match the workbook's sheets,
@@ -270,7 +388,43 @@ impl Document {
 fn write_sheet(out: &mut PackageOut, name: &str, ws: &Worksheet, taken: &mut Vec<String>, blocks: &mut Vec<u32>) {
     let mut part = ws.part.clone();
     let mut rels = RelsOut::default();
-    rels.items.extend(ws.part.rels.list.iter().filter(|r| ws.comments.is_some() || r.kind() != "comments").map(kept));
+    // A comments or drawing relationship stays when this writes that part, or the part is kept.
+    let stays = |r: &&Rel| match r.kind() {
+        "comments" => ws.comments.is_some(),
+        "drawing" => ws.drawing.as_ref().map_or(taken.contains(&r.target.to_ascii_lowercase()), |d| d.part.eq_ignore_ascii_case(&r.target)),
+        _ => true,
+    };
+    rels.items.extend(ws.part.rels.list.iter().filter(stays).map(kept));
+    if ws.drawing.is_none() && !rels.items.iter().any(|r| part.features.drawing.as_deref() == Some(&r.id)) {
+        part.features.drawing = None;
+    }
+    if let Some(d) = &ws.drawing {
+        let target = if d.part.is_empty() || taken.contains(&d.part.to_ascii_lowercase()) {
+            fresh(taken, |n| format!("xl/drawings/drawing{n}.xml"))
+        } else {
+            d.part.clone()
+        };
+        taken.push(target.to_ascii_lowercase());
+        let id = match ws.part.rels.list.iter().find(|r| r.kind() == "drawing" && r.target.eq_ignore_ascii_case(&target)) {
+            Some(r) => r.id.clone(),
+            None => {
+                let id = fresh_id(&rels);
+                rels.items.push(RelOut { id: id.clone(), ty: format!("{RT_BASE}drawing"), target: relative(name, &target), external: false });
+                id
+            }
+        };
+        part.features.drawing = Some(id);
+        out.xml_part(&target, CT_DRAWING, d.drawing.to_xml());
+        let mut drels = RelsOut::default();
+        for r in &d.rels {
+            let mut o = kept(r);
+            if !r.external {
+                o.target = relative(&target, &r.target);
+            }
+            drels.items.push(o);
+        }
+        out.rels(&target, &drels);
+    }
     for h in &mut part.features.hyperlinks {
         let Some(url) = &h.url else { continue };
         let ok = h.rel_id.as_deref().and_then(|id| ws.part.rels.by_id(id)).is_some_and(|r| r.external && r.target == *url);
