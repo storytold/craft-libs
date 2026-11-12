@@ -1207,6 +1207,13 @@ phosphor = "intersect"
 tabler = "blend-mode"
 
 [[icon]]
+name = "smart_filters"  # two overlapping rings, the Smart Filters badge
+directional = false
+lucide = "blend"
+phosphor = "intersect"
+tabler = "blend-mode"
+
+[[icon]]
 name = "brush_cleaning"
 directional = false
 lucide = "brush-cleaning"

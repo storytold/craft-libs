@@ -9,6 +9,7 @@ use craft_ui::primitives::textures::{Priority, ThumbPaint as PicturePaint, Thumb
 use craft_ui::primitives::{ContentPainterCx, IconSpec};
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{Corners, DataColor, SurfaceKind};
+use egui::emath::GuiRounding as _;
 use egui::{Color32, Rect, Stroke, pos2, vec2};
 
 use super::LayersPanelWords;
@@ -35,6 +36,11 @@ const CROSS_INSET_SHARE: f32 = 0.12;
 const MARK_WIDTH_SHARE: f32 = 0.06;
 const BADGE_SHARE: f32 = 0.34;
 const BADGE_GLYPH_SHARE: f32 = 0.28;
+/// The kind glyph's share of the tile's shorter side.
+const KIND_GLYPH_SHARE: f32 = 0.64;
+/// A type layer's tile is ink on paper, the same in every theme, as the checkerboard is.
+const TYPE_PAPER: Color32 = Color32::from_rgb(0xfa, 0xfa, 0xfa);
+const TYPE_INK: Color32 = Color32::from_rgb(0x28, 0x28, 0x28);
 
 /// A data colour as the painter takes it.
 pub(super) fn paint_color(color: Rgba) -> Color32 {
@@ -133,6 +139,26 @@ fn paint_picture<Id: Clone + Eq + std::hash::Hash + Send + Sync + 'static>(
     host.thumbnails.paint(painter, rect, &state, paint)
 }
 
+/// The tile of a layer whose thumbnail has no picture: the sunken placeholder with the kind's glyph (a pixel layer has
+/// none), or for a type layer its glyph in ink on paper.
+fn paint_kind_tile(painter: &ContentPainterCx<'_>, rect: Rect, kind: LayerKind) {
+    let rect = rect.round_to_pixels(painter.pixels_per_point());
+    let side = rect.width().min(rect.height()) * KIND_GLYPH_SHARE;
+    let glyph = Rect::from_center_size(rect.center(), vec2(side, side));
+    let icon = kind_icon(kind).map(IconSpec::svg);
+    if kind == LayerKind::Text {
+        painter.painter.rect_filled(rect, 0.0, TYPE_PAPER);
+        if let Some(icon) = icon {
+            painter.icon(glyph, &icon.data_color(DataColor::new(TYPE_INK)));
+        }
+        return;
+    }
+    painter.surface(rect, SurfaceKind::Sunken, Corners::None);
+    if let Some(icon) = icon {
+        painter.icon(glyph, &icon.ink(SurfaceKind::Sunken.ink()));
+    }
+}
+
 /// The cross of a disabled mask and the badge that names a layer or vector mask.
 fn paint_mask_marks(painter: &ContentPainterCx<'_>, rect: Rect, mask: &MaskInfo, badges: bool) {
     let side = rect.width().min(rect.height());
@@ -179,9 +205,11 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
 
     if size != ThumbSize::None {
         let host = cx.thumbs;
-        let layer = id.clone();
+        let (layer, kind) = (id.clone(), info.kind);
         row = row.thumb(size, move |painter, rect| {
-            paint_picture(host, &LayerThumb::pixels(layer, contents), painter, rect, &PicturePaint::default());
+            if !paint_picture(host, &LayerThumb::pixels(layer, contents), painter, rect, &PicturePaint::default()) {
+                paint_kind_tile(painter, rect, kind);
+            }
         });
         for (at, mask) in info.masks.iter().enumerate() {
             let (layer, mask, badges, part) = (id.clone(), *mask, cx.options.show_layer_mask_badges, mask.part);
@@ -221,10 +249,10 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
         row = row.trailing_part(TrailingPart::new(FX_PART), TrailingFace::disclosure(open), name);
     }
     if info.has_smart_filters {
-        row = row.trailing_icon(IconSpec::svg(IconId::new("funnel")), words.smart_filters.clone());
+        row = row.trailing_icon(IconSpec::svg(IconId::new("smart_filters")), words.smart_filters.clone());
     }
     if info.has_effects {
-        row = row.trailing(words.fx.clone());
+        row = row.trailing_strong(words.fx.clone(), words.has_effects.clone());
     }
     if info.linked {
         row = row.trailing_icon(IconSpec::svg(IconId::new("link")), words.linked.clone());

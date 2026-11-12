@@ -642,6 +642,11 @@ impl ContentPainterCx<'_> {
         self.painter.extend(Surface::shapes(&style, None, rect, corners, self.direction, self.ppp()));
     }
 
+    /// Paints `icon` centred in `rect`, as `Draw::icon` does: a glyph on a tile the content draws itself.
+    pub fn icon(&self, rect: Rect, icon: &super::IconSpec<'_>) {
+        self.with_draw(|draw| draw.icon(rect, icon));
+    }
+
     /// The ink text and glyphs read on a surface of `kind`.
     pub fn ink_on(&self, kind: SurfaceKind) -> Color32 {
         ink_color(self.tokens, kind.ink())
