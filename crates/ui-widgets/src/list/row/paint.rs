@@ -2,7 +2,7 @@
 
 use super::ListRow;
 use super::placement::Placed;
-use super::show::{TEXT_CELL, TOGGLE, TRAILING};
+use super::show::{TEXT_CELL, TOGGLE};
 use super::style::ListRowStyle;
 use super::thumb::{RowThumb, target_at};
 use super::trailing::{TrailingFace, TrailingItem, cell_key, field_key, trailing_run};
@@ -40,7 +40,7 @@ impl ListRow<'_> {
                     }
                 }
                 TrailingItem::Part { part, face, enabled, revealed, .. } => {
-                    let key = TRAILING.at(u64::from(part.0));
+                    let key = part.part();
                     let shown = !*revealed
                         || cx.response.hovered()
                         || selected

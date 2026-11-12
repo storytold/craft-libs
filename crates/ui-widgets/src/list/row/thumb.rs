@@ -87,6 +87,16 @@ impl ThumbTarget {
         let at = part.index.filter(|_| part.key == super::show::THUMB)?;
         usize::try_from(at).ok().map(target_at)
     }
+
+    /// The row part this thumbnail is, the inverse of [`ThumbTarget::of_part`]: a thumbnail is a pointer-only part
+    /// with no access node, so a test finds its place by this part.
+    pub fn part(self) -> craft_behavior::PartRef {
+        let at = match self {
+            ThumbTarget::First => 0,
+            ThumbTarget::Extra(i) => i + 1,
+        };
+        super::show::THUMB.at(at as u64)
+    }
 }
 
 /// The thumbnails a row's editing is aimed at, framed with corner brackets: usually one, several when the edit goes to

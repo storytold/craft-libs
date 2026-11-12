@@ -11,7 +11,7 @@ use super::super::context::PanelContext;
 use super::super::events::LayerColumn;
 use super::super::row::{EYE, LOCK};
 use crate::ui::filter::LayerFilter;
-use crate::ui::tree::{LayerInfo, LayerKind, LayerPart, LayerRowKey, LayerTree, SubRowGroup};
+use crate::ui::tree::{LayerInfo, LayerPart, LayerRowKey, LayerTree, SubRowGroup};
 
 /// One displayed row.
 pub(in crate::ui::panel) struct DisplayRow<Id> {
@@ -246,21 +246,12 @@ pub(in crate::ui::panel) fn thumb_click_replaces_select(part: LayerPart, mods: M
     if on_mask { mods.shift || mods.alt } else { mods.alt && !mods.shift }
 }
 
+/// The part the thumbnail `which` of the row `key` shows: a Smart Filters row's is the filter mask.
 pub(super) fn thumb_part<Id>(key: &LayerRowKey<Id>, info: &LayerInfo, which: ThumbTarget) -> LayerPart {
     match which {
         ThumbTarget::First if matches!(key, LayerRowKey::Filters(_, None)) => LayerPart::FilterMask,
-        ThumbTarget::First if info.kind == LayerKind::Frame => LayerPart::FrameShape,
-        ThumbTarget::First => LayerPart::Pixels,
-        ThumbTarget::Extra(i) => extra_parts(info).get(i).copied().unwrap_or(LayerPart::Pixels),
-        _ => LayerPart::Pixels,
+        which => info.thumb_shows(which).unwrap_or(LayerPart::Pixels),
     }
-}
-
-/// The parts of a layer row's thumbnails after the first, in the order the row adds them: a frame's content, then the
-/// masks.
-pub(in crate::ui::panel) fn extra_parts(info: &LayerInfo) -> Vec<LayerPart> {
-    let content = (info.kind == LayerKind::Frame).then_some(LayerPart::FrameContent);
-    content.into_iter().chain(info.masks.iter().map(|mask| mask.part)).collect()
 }
 
 /// The readers of the eye and lock sweeps, kept across passes while the pointer is held.

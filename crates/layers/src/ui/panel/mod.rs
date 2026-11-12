@@ -21,6 +21,8 @@ pub use events::{
 };
 pub use footer::{LayersFooterAction, LayersFooterButton};
 pub use menu::{LayersMenuAction, LayersPanelCommands, LayersPanelKeys, panel_rows};
+#[cfg(feature = "screen-testing")]
+pub(crate) use row::FX_BADGE;
 
 use std::cell::RefCell;
 

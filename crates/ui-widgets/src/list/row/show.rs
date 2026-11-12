@@ -264,7 +264,7 @@ impl Component for ListRow<'_> {
                 TrailingItem::Part { part, face, name, enabled, .. } => {
                     // A text face takes its whole slot; the other faces the icon square in it.
                     let shape = if matches!(face, TrailingFace::Strong(_)) { *slot } else { shape };
-                    let key = TRAILING.at(u64::from(part.0));
+                    let key = part.part();
                     if self.drag_at(RowDragSpot::Trailing(*part)).is_some() {
                         cx.part(key, shape)
                             .sense(Sense::CLICK | Sense::DRAG | Sense::PICKS_ITEM)
@@ -288,7 +288,7 @@ impl Component for ListRow<'_> {
             let target = target_at(at);
             let sense =
                 if self.drag_at(RowDragSpot::Thumb(target)).is_some() { Sense::CLICK | Sense::DRAG } else { Sense::CLICK } | Sense::PICKS_ITEM;
-            let part = cx.part(THUMB.at(at as u64), thumb).sense(sense).pointer_only("A thumbnail is a pointer target; the keys act on the row");
+            let part = cx.part(target.part(), thumb).sense(sense).pointer_only("A thumbnail is a pointer target; the keys act on the row");
             if let Some((_, cursor)) = self.cursors.iter().find(|(held, _)| *held == target) {
                 part.cursor(cursor.clone());
             }
@@ -332,16 +332,16 @@ impl Component for ListRow<'_> {
             }
         }
         for at in 0..=self.extras.len() {
-            let Some(result) = cx.part_if_declared(THUMB.at(at as u64)) else { continue };
             let target = target_at(at);
+            let Some(result) = cx.part_if_declared(target.part()) else { continue };
             let phase = result.press.phase;
             if let (PressPhase::DragStart { .. }, Some(payload)) = (phase, self.drag_at(RowDragSpot::Thumb(target))) {
                 let preview = DragPreview::frame(self.thumb_size(&cx.style.sizes), None);
                 crate::runtime::drag::start(&cx.ctx, cx.id, payload.clone(), None, preview);
                 self.event = Some(RowEvent::PartDrag(RowDragSpot::Thumb(target)));
-            } else if let Some(source) = cx.part_activated(THUMB.at(at as u64)) {
+            } else if let Some(source) = cx.part_activated(target.part()) {
                 let clicks = part_clicks(source, phase);
-                self.event = Some(RowEvent::ThumbClicked { target, mods: part_mods(cx, THUMB.at(at as u64), source), clicks });
+                self.event = Some(RowEvent::ThumbClicked { target, mods: part_mods(cx, target.part(), source), clicks });
             }
         }
         if self.lead_text.is_some()
@@ -352,7 +352,7 @@ impl Component for ListRow<'_> {
         }
         for trailing in &self.trailing {
             let TrailingItem::Part { part, .. } = &trailing.item else { continue };
-            let key = TRAILING.at(u64::from(part.0));
+            let key = part.part();
             if let Some(payload) = self.drag_at(RowDragSpot::Trailing(*part)) {
                 // A handle's click is the row's: only its drag is its own.
                 if let Some(result) = cx.part_if_declared(key)
@@ -473,7 +473,7 @@ impl Component for ListRow<'_> {
                 }
                 TrailingItem::Part { part, face, name, .. } => {
                     let name = self.part_name(*part, name, &words, label);
-                    let node = access.node(TRAILING.at(u64::from(part.0)), Role::BUTTON);
+                    let node = access.node(part.part(), Role::BUTTON);
                     node.name = Name::Text(name.as_str().to_owned());
                     if let TrailingFace::Disclosure { open } = face {
                         node.expanded(*open);

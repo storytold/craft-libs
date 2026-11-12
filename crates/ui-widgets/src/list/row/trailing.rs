@@ -20,6 +20,11 @@ impl TrailingPart {
     pub const fn new(n: u16) -> Self {
         TrailingPart(n)
     }
+
+    /// The row part this item is: a drag handle has no access node, so a test finds its place by this part.
+    pub fn part(self) -> craft_behavior::PartRef {
+        super::show::TRAILING.at(u64::from(self.0))
+    }
 }
 
 /// How a trailing part looks.

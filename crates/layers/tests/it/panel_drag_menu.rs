@@ -4,9 +4,10 @@
 
 use craft_behavior::EditEvent;
 use craft_behavior::{Cursor, CursorBadge, CursorIcon, PaintedCursor, SelectionChange};
+use craft_layers::testing;
 use craft_layers::ui::mock::FakeLayers;
 use craft_layers::ui::panel::{LayerDrop, LayerSelect, LayersDrag, LayersEvent, LayersPanel, MaskMove};
-use craft_layers::ui::tree::{LayerPart, LayerRowKey};
+use craft_layers::ui::tree::{LayerPart, LayerRowKey, LayerTree as _};
 use craft_theme::LabelColor;
 use craft_ui::contract::Entry;
 use craft_ui::testing::{Fixture, Target, pointer, trial};
@@ -49,21 +50,30 @@ fn right_click(fixture: &mut Fixture, at: Pos2) {
     fixture.idle(3);
 }
 
-/// The middle of the painted `fx` badge of the row named `layer`.
+/// The sample tree's layer with a layer mask.
+const MASKED: u32 = 3;
+
+/// The middle of the `fx` badge of the row named `layer`, found from the row's node as a host test finds it.
 fn fx_badge(fixture: &Fixture, layer: &str) -> Pos2 {
-    let row = node(fixture, layer).rect;
-    let badge = fixture.texts().iter().find(|text| text.text == "fx" && row.contains(text.rect.center())).expect("the row's fx badge");
-    badge.rect.center()
+    let row = node(fixture, layer);
+    testing::fx_badge_rect(fixture.ctx(), row.node.into()).expect("the row's fx badge").center()
 }
 
 fn node(fixture: &Fixture, label: &str) -> Target {
     fixture.by_label(label).unwrap_or_else(|| panic!("no node named {label:?}"))
 }
 
-/// A point on the layer mask thumbnail of `layer`, which follows its link chain.
-fn mask_thumb(fixture: &Fixture, layer: &str) -> Pos2 {
-    let link = node(fixture, &format!("Unlink layer mask of {layer}"));
-    Pos2::new(link.rect.right() + link.rect.width() * 0.75, link.rect.center().y)
+/// The middle of the thumbnail that shows `part` in the row of the sample tree's layer `id`, found from the row's
+/// node as a host test finds it.
+fn thumb(fixture: &Fixture, id: u32, part: LayerPart) -> Pos2 {
+    let info = FakeLayers::sample().info(&id);
+    let row = node(fixture, &info.name);
+    testing::thumb_rect(fixture.ctx(), row.node.into(), &info, part).unwrap_or_else(|| panic!("no {part:?} thumbnail in {:?}", info.name)).center()
+}
+
+/// The middle of the layer mask thumbnail of the sample tree's layer `id`.
+fn mask_thumb(fixture: &Fixture, id: u32) -> Pos2 {
+    thumb(fixture, id, LayerPart::LayerMask)
 }
 
 /// Drags from `from` and releases on the middle of the row named `onto`.
@@ -99,13 +109,13 @@ fn transfers(seen: &Seen) -> Vec<(Vec<LayerRowKey<u32>>, u32, bool)> {
 #[trial]
 fn a_mask_thumbnail_dropped_on_another_layer_moves_the_mask_there() {
     let (mut fixture, seen, _) = rig();
-    let from = mask_thumb(&fixture, "Masked");
+    let from = mask_thumb(&fixture, MASKED);
     drag_onto(&mut fixture, from, "Title");
-    assert_eq!(mask_drops(&seen), [MaskMove::new(3, LayerPart::LayerMask, 4, false)], "onto Title");
+    assert_eq!(mask_drops(&seen), [MaskMove::new(MASKED, LayerPart::LayerMask, 4, false)], "onto Title");
     fixture.hold(Modifiers::ALT);
     drag_onto(&mut fixture, from, "Title");
     fixture.hold(Modifiers::NONE);
-    assert_eq!(mask_drops(&seen), [MaskMove::new(3, LayerPart::LayerMask, 4, true)], "Alt copies");
+    assert_eq!(mask_drops(&seen), [MaskMove::new(MASKED, LayerPart::LayerMask, 4, true)], "Alt copies");
     drag_onto(&mut fixture, from, "Levels 1");
     assert_eq!(mask_drops(&seen), [], "Levels 1 has a layer mask already");
 }
@@ -121,7 +131,7 @@ fn a_row_drag_carries_its_layers_for_targets_outside_the_panel() {
     fixture.drag_hold_at(title, away);
     assert_eq!(held(&fixture).layers(), [&4], "the dragged row's layer");
     fixture.release_at(title + away).idle(2);
-    let mask = mask_thumb(&fixture, "Masked");
+    let mask = mask_thumb(&fixture, MASKED);
     fixture.drag_hold_at(mask, away);
     assert!(held(&fixture).layers().is_empty(), "a mask is no layer");
     fixture.release_at(mask + away).idle(2);
@@ -175,6 +185,25 @@ fn the_fx_badge_drags_the_layers_effects_and_a_click_on_it_selects_the_row() {
     assert_eq!(selects.last().map(|select| &select.change), Some(&SelectionChange::Set(vec![7])), "the click selects Styled");
 }
 
+/// A Cmd/Ctrl click on a thumbnail a host test finds from the row's node loads that thumbnail's part: the layer's
+/// pixels, then its layer mask.
+#[trial]
+fn a_cmd_click_on_a_thumbnail_found_from_its_row_loads_its_part() {
+    for part in [LayerPart::Pixels, LayerPart::LayerMask] {
+        let (mut fixture, seen, _) = rig();
+        let at = thumb(&fixture, MASKED, part);
+        fixture.hold(Modifiers::COMMAND);
+        fixture.click_at(at).idle(2);
+        fixture.hold(Modifiers::NONE);
+        let loads: Vec<(u32, LayerPart)> = seen
+            .borrow()
+            .iter()
+            .filter_map(|event| if let LayersEvent::ThumbClick { layer, part, .. } = event { Some((*layer, *part)) } else { None })
+            .collect();
+        assert_eq!(loads, [(MASKED, part)], "{part:?}");
+    }
+}
+
 /// With Cmd/Ctrl held over a thumbnail a click would load as a selection, the cursor is the pointing hand, with the
 /// mark of the operation Shift or Alt picks; without Cmd/Ctrl it is not.
 #[trial]
@@ -187,7 +216,7 @@ fn cmd_over_a_thumbnail_shows_the_load_cursor() {
         fixture.hold(Modifiers::NONE);
         cursor
     };
-    let mask = mask_thumb(&fixture, "Masked");
+    let mask = mask_thumb(&fixture, MASKED);
     assert_eq!(cursor_over(&mut fixture, mask, Modifiers::COMMAND), Some(Cursor::System(CursorIcon::PointingHand)), "a new selection");
     assert_eq!(
         cursor_over(&mut fixture, mask, Modifiers::COMMAND | Modifiers::SHIFT),

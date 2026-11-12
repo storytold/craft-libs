@@ -365,6 +365,16 @@ pub(crate) fn sensing_parts(ctx: &Context, root: Id, sense: craft_behavior::Sens
 /// The bounds of the part `part` of `owner` (the arena root or a member) in last pass's shape record: pointer-only
 /// parts have no access node, so this record is where their place is read.
 pub(crate) fn part_bounds(ctx: &Context, owner: Id, part: craft_behavior::PartRef) -> Option<egui::Rect> {
+    owned_part_bounds(ctx, |shape_owner| shape_owner == owner, part)
+}
+
+/// [`part_bounds`] of the owner whose AccessKit node is `node`, for a test that holds the node it found, not the id.
+#[cfg(feature = "testing")]
+pub(crate) fn node_part_bounds(ctx: &Context, node: accesskit::NodeId, part: craft_behavior::PartRef) -> Option<egui::Rect> {
+    owned_part_bounds(ctx, |shape_owner| shape_owner.accesskit_id() == node, part)
+}
+
+fn owned_part_bounds(ctx: &Context, owner: impl Fn(Id) -> bool, part: craft_behavior::PartRef) -> Option<egui::Rect> {
     let viewport = pass::current_viewport(ctx);
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
         record
@@ -372,7 +382,7 @@ pub(crate) fn part_bounds(ctx: &Context, owner: Id, part: craft_behavior::PartRe
             .values()
             .flat_map(|roots| roots.values())
             .flat_map(|root| root.shapes.iter())
-            .find(|shape| shape.owner == owner && shape.part == Some(part))
+            .find(|shape| owner(shape.owner) && shape.part == Some(part))
             .map(|shape| shape.shape.bounds())
     })
 }

@@ -22,6 +22,13 @@ impl NodeKey {
     }
 }
 
+impl From<NodeKey> for NodeId {
+    /// The AccessKit id of the node, for lookups that take what a host test holds (`testing::pointer::part_rect_of_node`).
+    fn from(key: NodeKey) -> NodeId {
+        NodeId(key.0)
+    }
+}
+
 /// An action a node declares.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

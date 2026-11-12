@@ -12,6 +12,7 @@ use craft_behavior::IconId;
 use craft_keymap::Mods;
 use craft_theme::LabelColor;
 use craft_ui::contract::{Entry, ReorderMove};
+use craft_ui::list::ThumbTarget;
 
 use super::filter::{EffectKind, LayerFilter, SmartSource};
 use super::panel::MenuTarget;
@@ -205,6 +206,35 @@ impl LayerInfo {
             thumb_badge: None,
             description: None,
         }
+    }
+
+    /// The parts a layer row's thumbnails show, in the row's order: the layer's pixels (a frame's shape), a frame's
+    /// content, then the masks. A row at thumbnail size None, and an artboard's row without masks, shows none of them.
+    fn thumb_parts(&self) -> impl Iterator<Item = LayerPart> {
+        let frame = self.kind == LayerKind::Frame;
+        let first = if frame { LayerPart::FrameShape } else { LayerPart::Pixels };
+        let content = frame.then_some(LayerPart::FrameContent);
+        std::iter::once(first).chain(content).chain(self.masks.iter().map(|mask| mask.part))
+    }
+
+    /// The part the layer row's thumbnail `which` shows; `None` past the last.
+    pub(crate) fn thumb_shows(&self, which: ThumbTarget) -> Option<LayerPart> {
+        let mut parts = self.thumb_parts();
+        match which {
+            ThumbTarget::First => parts.next(),
+            ThumbTarget::Extra(i) => parts.nth(i + 1),
+            _ => None,
+        }
+    }
+
+    /// The thumbnail of the layer's row that shows `part`; `None` when none does ([`LayerPart::Pixels`] of a frame,
+    /// whose shape and content are two). A host test finds its place with `testing::thumb_rect`.
+    pub fn thumb(&self, part: LayerPart) -> Option<ThumbTarget> {
+        let mut parts = self.thumb_parts();
+        if parts.next() == Some(part) {
+            return Some(ThumbTarget::First);
+        }
+        parts.position(|shown| shown == part).map(ThumbTarget::Extra)
     }
 }
 

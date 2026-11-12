@@ -14,7 +14,7 @@ use egui::emath::GuiRounding as _;
 use egui::{Color32, Rect, Stroke, pos2, vec2};
 
 use super::LayersPanelWords;
-use super::body::{extra_parts, thumb_click_replaces_select};
+use super::body::thumb_click_replaces_select;
 use super::context::{PanelContext, ThumbHost};
 use super::drag::LayersDrag;
 use crate::ui::thumbs::LayerThumb;
@@ -34,7 +34,7 @@ pub(super) const FX_PART: u16 = 1;
 /// A Smart Filter's trailing Blending Options button.
 pub(super) const OPTIONS_PART: u16 = 2;
 /// The trailing `fx` badge: a drag handle that carries the layer's effects.
-pub(super) const FX_BADGE: u16 = 3;
+pub(crate) const FX_BADGE: u16 = 3;
 
 /// The cross over a disabled mask is a fixed data colour, like the label colours.
 const DISABLED_MASK: LabelColor = LabelColor::Red;
@@ -290,13 +290,12 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
             row = with_load_cursor(row, cx.held, target, part, &info);
         }
         if active {
-            let extra = |part: LayerPart| extra_parts(&info).iter().position(|held| *held == part).map(ThumbTarget::Extra);
             match cx.selection.target {
                 LayerPart::FilterMask => {}
                 // A frame as a whole: its shape and its content.
                 LayerPart::Pixels if frame => row = row.thumb_target([ThumbTarget::First, ThumbTarget::Extra(0)]),
                 LayerPart::Pixels | LayerPart::FrameShape => row = row.thumb_target(ThumbTarget::First),
-                part => row = row.thumb_target(extra(part).unwrap_or(ThumbTarget::First)),
+                part => row = row.thumb_target(info.thumb(part).unwrap_or(ThumbTarget::First)),
             }
         }
     } else if let Some(icon) = kind_icon(info.kind) {

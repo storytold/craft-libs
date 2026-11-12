@@ -6,7 +6,7 @@ mod rows;
 
 use map::map_events;
 pub(in crate::ui::panel) use map::start_rename;
-pub(in crate::ui::panel) use rows::{LayerRows, ToggleSweeps, extra_parts, reveal_plan, thumb_click_replaces_select};
+pub(in crate::ui::panel) use rows::{LayerRows, ToggleSweeps, reveal_plan, thumb_click_replaces_select};
 use rows::{RevealPlan, list_selection};
 
 use craft_behavior::{ColumnWidth, IconId};
