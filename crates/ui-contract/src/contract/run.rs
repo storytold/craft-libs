@@ -137,10 +137,11 @@ pub(crate) trait ShapeHooks<C: Component> {
         comp.fills() == Some(craft_behavior::Axis::X)
     }
 
-    /// Whether the root is a line itself, which sits at the centre of a `Row`'s line, rather than a block or column,
-    /// which sits at its top. A leaf is a control on the line.
-    fn on_line(&self, _comp: &C) -> bool {
-        true
+    /// How far below the root's top the centre of its first line lies, at `height` tall: a root whose first line lies
+    /// at half its height is one line, which sits with its centre on a `Row`'s line; any other root sits at the
+    /// line's top. A leaf is one control on the line.
+    fn first_line(&self, _comp: &C, _ctx: &Context, _id: Id, height: f32) -> Option<f32> {
+        Some(height / 2.0)
     }
 
     /// Whether the root is one member of a bar's line, shown whole or not at all: a leaf is; a body is when it has a
@@ -304,7 +305,7 @@ impl<C: Component> ShapeHooks<C> for LeafHooks {
         // never sets that size. Across an unwrapped row's line it is shown across the line the row settled on in its
         // measuring run, where the child measured at its own size.
         let env = Env::of(ui);
-        let (content, line) = (env.content, env.row_line);
+        let (content, line) = (env.content, env.row_line.and_then(|line| line.height));
         let fill = |measured: f32, offered: f32, content: bool, along: craft_behavior::Axis| {
             if content {
                 return match (along, line) {
@@ -562,7 +563,7 @@ pub(crate) trait ErasedPass<'a> {
     fn focus(&self) -> Option<focus::FocusPolicy>;
     fn sized(&self, ui: &Ui, id: Id, size: Vec2) -> Vec2;
     fn fills_width(&self) -> bool;
-    fn on_line(&self) -> bool;
+    fn first_line(&self, ctx: &Context, id: Id, height: f32) -> Option<f32>;
     fn member(&self) -> bool;
     fn fills_width_only(&self) -> bool;
     fn arena(&self) -> bool;
@@ -790,9 +791,10 @@ fn sense_root(ui: &Ui, member: Option<crate::runtime::env::ArenaId>, spec: RootS
 
 /// Step 6: the rect the root takes in `ui`, and whether it is a fill-width root held at its measured width.
 fn place_root(p: &Pass<'_, '_, '_>, ui: &mut Ui, at: ShowAt, env: &Env, size: Vec2, inert: bool, rtl: bool) -> (Rect, bool) {
+    let (ctx, id) = (ui.ctx().clone(), p.resolved.id);
+    let first = |height: f32| p.p.first_line(&ctx, id, height);
     // In a content-sized column a fill-width child takes its measured width in the flow and shows across the width
     // the column settles on, so it never sets that width.
-    let line = p.p.on_line();
     let held = !inert
         && matches!(at, ShowAt::Flow)
         && ((env.content_column && p.p.fills_width()) || (crate::layout::in_grid_content_column(ui) && p.p.fills_width_only()));
@@ -803,12 +805,13 @@ fn place_root(p: &Pass<'_, '_, '_>, ui: &mut Ui, at: ShowAt, env: &Env, size: Ve
             .then(|| crate::layout::flow_room(ui).x)
             .filter(|width| width.is_finite())
             .unwrap_or(0.0);
-        let flowed = steps::place(ui, at, Vec2::new(p.measured.x.min(size.x), size.y), InFlow { fill: false, line });
+        let flowed = steps::place(ui, at, Vec2::new(p.measured.x.min(size.x), size.y), InFlow { fill: false, first: first(size.y) });
         let across = Vec2::new(size.x.max(flowed.width()).max(column), flowed.height());
         if rtl { Rect::from_min_size(Pos2::new(flowed.max.x - across.x, flowed.min.y), across) } else { Rect::from_min_size(flowed.min, across) }
     } else {
         let fill = p.p.fills_width() && !p.p.fills_width_only();
-        steps::place(ui, at, if inert { Vec2::ZERO } else { size }, InFlow { fill, line })
+        let size = if inert { Vec2::ZERO } else { size };
+        steps::place(ui, at, size, InFlow { fill, first: first(size.y) })
     };
     (rect, held)
 }

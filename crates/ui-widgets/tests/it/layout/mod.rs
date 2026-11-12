@@ -5,6 +5,7 @@ mod fonts;
 mod grid_least;
 mod nested;
 mod room_height;
+mod row_line;
 mod row_room;
 mod rtl_scroll;
 mod scroll_region;

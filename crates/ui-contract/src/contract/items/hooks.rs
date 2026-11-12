@@ -42,8 +42,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         true
     }
 
-    fn on_line(&self, comp: &C) -> bool {
-        comp.items().overflow == Axis::X
+    /// A collection whose rows run along X is one line; one whose rows run along Y has no line of its own.
+    fn first_line(&self, comp: &C, _ctx: &Context, _id: Id, height: f32) -> Option<f32> {
+        (comp.items().overflow == Axis::X).then_some(height / 2.0)
     }
 
     /// A collection that keeps focus on press senses the press without taking focus.
@@ -420,6 +421,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 scoped.glyphs = role;
             }
             scoped.surface = SurfaceKind::under(own, scoped.surface);
+            // The rows lay out their own content: no line or first line of the body around reaches them.
+            scoped.row_line = None;
+            scoped.first_line = None;
         });
         self.place_reveal(comp, ui, (id, cx.core.env, &base_env), &mut layout, rect);
         let offset = ScrollPos { x: self.offset_x, y: self.offset };

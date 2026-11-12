@@ -3,7 +3,7 @@
 
 use crate::contract::InBar;
 use crate::runtime::egui::{alloc, child};
-use crate::runtime::env::{Env, Shrink};
+use crate::runtime::env::{Env, RowLine, Shrink};
 use crate::runtime::layout_memory;
 use crate::runtime::measure;
 use crate::runtime::memory::sub;
@@ -92,6 +92,65 @@ pub(crate) struct Cursors(HashMap<Id, Cursor>);
 /// The number of children that fill the main axis of each `Stack` or `Row` body measured this pass, by body id.
 #[derive(Default)]
 pub(crate) struct FillCounts(HashMap<Id, u32>);
+
+/// What the first child a measuring sweep placed in flow in each open target reported (`Scoped::first_line`): the y
+/// of its first line's centre, or `None` for a child with no line of its own. A container's measuring sweep opens and
+/// closes its header's and body's targets; a body's sweep starts its own target afresh.
+#[derive(Default)]
+pub(crate) struct FirstLines(HashMap<Id, Option<f32>>);
+
+/// What the children of each unwrapped `Row` body took in the sweep of a measuring run running now, by body id.
+#[derive(Default)]
+pub(crate) struct RowLines(HashMap<Id, LineTook>);
+
+/// What the children of a row took about its line.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct LineTook {
+    /// The lowest centre among the one-line children, from their tops.
+    centre: Option<f32>,
+    /// How far the one-line children reach below their centre, at most.
+    below: f32,
+    /// The height of the tallest child of more than one line, or with no line of its own.
+    block: f32,
+}
+
+impl LineTook {
+    fn add(&mut self, first: Option<f32>, height: f32) {
+        match first {
+            Some(first) => {
+                self.centre = Some(self.centre.map_or(first, |centre| centre.max(first)));
+                self.below = self.below.max(height - first);
+            }
+            None => self.block = self.block.max(height),
+        }
+    }
+
+    /// The height of the row once every child sits on the line.
+    fn height(self) -> f32 {
+        self.centre.map_or(0.0, |centre| centre + self.below).max(self.block)
+    }
+}
+
+/// Opens the first-line targets `targets` of a container's measuring sweep (`Scoped::first_line`).
+pub(crate) fn open_first_lines(ctx: &egui::Context, targets: &[Id]) {
+    pass_state::with::<FirstLines, _>(ctx, |lines| {
+        for target in targets {
+            lines.0.remove(target);
+        }
+    });
+}
+
+/// Closes `target`: what the first child placed in flow there reported, `None` when nothing was.
+pub(crate) fn close_first_line(ctx: &egui::Context, target: Id) -> Option<Option<f32>> {
+    pass_state::with::<FirstLines, _>(ctx, |lines| lines.0.remove(&target))
+}
+
+/// Reports a child's first line `at` to `target`, unless an earlier child of the sweep did.
+fn report_first_line(ctx: &egui::Context, target: Id, at: Option<f32>) {
+    pass_state::with::<FirstLines, _>(ctx, |lines| {
+        lines.0.entry(target).or_insert(at);
+    });
+}
 
 /// How a child that fills the main axis of the body it sits in sizes along it.
 pub(crate) enum MainFill {
@@ -549,37 +608,69 @@ impl Spread {
 pub(crate) struct InFlow {
     /// Whether the child fills its cell's height in a `Grid` (declares `Sizing::Fill`).
     pub fill: bool,
-    /// Whether the child is a line itself: a control, a `Row` body that does not wrap, or a collection whose rows run
-    /// along X. Anything else is a block or a column.
-    pub line: bool,
+    /// How far below the child's top the centre of its first line lies: half a control's height, a container's
+    /// first child's first line, a `Row` body's line. `None` for a child with no line of its own: a collection whose
+    /// rows run along Y, or a container whose first child is one. The child is one line when that centre lies at
+    /// half its height (`one_line`).
+    pub first: Option<f32>,
 }
 
-impl InFlow {
-    /// A control on the line that does not fill its cell.
-    pub const LINE: InFlow = InFlow { fill: false, line: true };
+/// How far a one-line child's first-line centre may lie from half its height: half a pixel at the scales the box runs.
+const ONE_LINE_SLACK: f32 = 0.5;
+
+/// The centre of the line of a child `height` tall whose first line's centre lies `first` below its top, when the
+/// child is one line: a control, a row of one-line children, a container around one line (a field with its label
+/// beside its control). A child of more than one line (a column, a field with its label above or a help line below)
+/// has its first line above its middle.
+fn one_line(first: Option<f32>, height: f32) -> Option<f32> {
+    first.filter(|first| (2.0 * first - height).abs() <= ONE_LINE_SLACK)
 }
 
 /// The rect a child of measured `size` takes in flow in `ui`: the next cell of the `Grid` or spread `Row` body that
-/// encloses it directly, else the next allocation of `ui`'s layout. A direct child of an unwrapped `Row` takes the
-/// row's line: a line sits at its vertical centre, a block or column at its top. In a `Grid` cell a child that
-/// `fill`s takes the cell's whole height from the cell's top, so the cards of one row share their top and bottom
-/// edges; any other child sits at the vertical centre of its cell.
+/// encloses it directly, else the next allocation of `ui`'s layout. A direct child of an unwrapped `Row` that is one
+/// line sits with its centre on the row's line; a child of more than one line (a column, a field with a help line)
+/// sits at the row's top. In a `Grid` cell a child that `fill`s takes the
+/// cell's whole height from the cell's top, so the cards of one row share their top and bottom edges; any other child
+/// sits at the vertical centre of its cell.
 #[doc(hidden)]
 pub fn place_in_flow(ui: &mut Ui, size: Vec2) -> Rect {
-    place_in_cell(ui, size, InFlow::LINE)
+    place_in_cell(ui, size, InFlow { fill: false, first: Some(size.y / 2.0) })
 }
 
-/// `place_in_flow` for a child that is `child`.
+/// `place_in_flow` for a child that is `child`. In a measuring run the child reports its line to the row around it
+/// and its first line to the container whose header or body it starts.
 pub(crate) fn place_in_cell(ui: &mut Ui, size: Vec2, child: InFlow) -> Rect {
     let env = Env::of(ui);
-    let slot = Vec2::new(size.x, env.row_line.map_or(size.y, |line| line.max(size.y)));
+    let (line, target) = (env.row_line, env.first_line);
+    let child = InFlow { first: one_line(child.first, size.y), ..child };
+    let above = line.and_then(|line| line.centre).zip(child.first).map_or(0.0, |(centre, first)| (centre - first).max(0.0));
+    let slot = Vec2::new(size.x, line.and_then(|line| line.height).map_or(above + size.y, |height| height.max(above + size.y)));
     let (rect, in_cell) = take_in(ui, env.grid, slot);
-    if child.fill && in_cell {
-        return rect;
+    let placed = if child.fill && in_cell {
+        rect
+    } else {
+        let (above, below) = match line {
+            Some(_) => (above, (rect.height() - above - size.y).max(0.0)),
+            None => {
+                let spare = (rect.height() - size.y).max(0.0);
+                (spare / 2.0, spare / 2.0)
+            }
+        };
+        Rect::from_min_max(egui::pos2(rect.min.x, rect.min.y + above), egui::pos2(rect.max.x, rect.max.y - below))
+    };
+    if measure::active(ui.ctx()) {
+        if let Some(line) = line {
+            pass_state::with::<RowLines, _>(ui.ctx(), |rows| {
+                if let Some(took) = rows.0.get_mut(&line.body) {
+                    took.add(child.first, size.y);
+                }
+            });
+        }
+        if let Some(target) = target {
+            report_first_line(ui.ctx(), target, child.first.map(|first| placed.min.y + first));
+        }
     }
-    let spare = (rect.height() - size.y).max(0.0);
-    let (above, below) = if env.row_line.is_some() && !child.line { (0.0, spare) } else { (spare / 2.0, spare / 2.0) };
-    Rect::from_min_max(egui::pos2(rect.min.x, rect.min.y + above), egui::pos2(rect.max.x, rect.max.y - below))
+    placed
 }
 
 /// Takes `size` in flow in `ui`: the next cell of the `Grid` or spread `Row` body that encloses it directly, else the
@@ -799,24 +890,62 @@ fn this_pass(ctx: &egui::Context, sizing: bool, id: Id) -> Option<Vec2> {
     if sizing { None } else { layout_memory::measured(ctx, id).map(|found| found.took) }
 }
 
-/// The line of the unwrapped `Row` body `id`: the height of its tallest child in this pass's measuring run.
-fn row_line(ctx: &egui::Context, sizing: bool, id: Id) -> Option<f32> {
-    this_pass(ctx, sizing, sub(id, "line")).map(|took| took.y).filter(|line| *line > 0.0)
+/// The line of the unwrapped `Row` body `id` in this pass's measuring run, with the line it shares already in it: how
+/// far below its top the line's centre lies, and the row's height once its children sit on it.
+fn row_line(ctx: &egui::Context, sizing: bool, id: Id) -> Option<(f32, f32)> {
+    this_pass(ctx, sizing, sub(id, "line")).map(|took| (took.x, took.y)).filter(|(_, height)| *height > 0.0)
 }
 
-/// The line an unwrapped `Row` sets its children on: its own, or the line it shares with its container's regions
-/// when that is taller.
-fn on_line(own: Option<f32>, shared: Option<f32>) -> Option<f32> {
-    match (own, shared) {
-        (Some(own), Some(shared)) => Some(own.max(shared)),
-        (own, shared) => own.or(shared),
+/// The line the unwrapped `Row` body `body` sets its children on: its own (`centre`, `height`), or the line `shared`
+/// high it shares with its container's inline header or end region, centred, when that centre is lower.
+fn on_line(body: Id, own: Option<(f32, f32)>, shared: Option<f32>) -> RowLine {
+    let (centre, height) = match (own, shared) {
+        (Some((centre, height)), Some(shared)) => {
+            let line = centre.max(shared / 2.0);
+            (Some(line), Some((height + line - centre).max(shared)))
+        }
+        (Some((centre, height)), None) => (Some(centre), Some(height)),
+        (None, Some(shared)) => (Some(shared / 2.0), Some(shared)),
+        (None, None) => (None, None),
+    };
+    RowLine { body, centre, height }
+}
+
+/// Starts a sweep of a body's children in a measuring run: the body's first-line `target` and, for the unwrapped
+/// `Row` body `row`, its line start afresh.
+fn open_sweep(ctx: &egui::Context, target: Option<Id>, row: Option<Id>) {
+    if let Some(target) = target {
+        open_first_lines(ctx, &[target]);
+    }
+    if let Some(row) = row {
+        pass_state::with::<RowLines, _>(ctx, |rows| rows.0.insert(row, LineTook::default()));
     }
 }
 
-/// Records the line of the unwrapped `Row` body `id` from what its children took in `ui`, the block they ran in; a
-/// real run records nothing. The last sweep of a measuring run gives the line.
-fn record_line(ui: &Ui, sizing: bool, id: Id) {
-    found(ui.ctx(), sizing, sub(id, "line"), Vec2::ZERO, Vec2::new(0.0, ui.min_rect().height()));
+/// Records the line of the unwrapped `Row` body `id` from what its children took in `ui`, the block they ran in,
+/// with the line `shared` it shares with its container's regions; a real run records nothing. The last sweep of a
+/// measuring run gives the line. The block takes the row's height once its children sit on the line, and the row
+/// reports its line to the target its body reports a first line to.
+fn record_line(ui: &mut Ui, sizing: bool, id: Id, shared: Option<f32>) {
+    if !sizing {
+        return;
+    }
+    let ctx = ui.ctx().clone();
+    let took = pass_state::with::<RowLines, _>(&ctx, |rows| rows.0.remove(&id)).unwrap_or_default();
+    let own = (took.height() > 0.0).then(|| (took.centre.unwrap_or(0.0), took.height()));
+    let line = on_line(id, own, shared);
+    // What a child took without reporting its line still counts toward the row's height.
+    let height = line.height.unwrap_or(0.0).max(ui.min_rect().height());
+    let centre = line.centre.unwrap_or(0.0);
+    found(&ctx, sizing, sub(id, "line"), Vec2::ZERO, if height > 0.0 { Vec2::new(centre, height) } else { Vec2::ZERO });
+    if height <= 0.0 {
+        return;
+    }
+    let top = ui.max_rect().top();
+    alloc::reach_down_to(ui, top + height);
+    if let Some(target) = Env::of(ui).first_line {
+        report_first_line(&ctx, target, took.centre.map(|_| top + centre));
+    }
 }
 
 /// Records what a measuring run found under `id`; a real run records nothing.
@@ -852,6 +981,13 @@ pub(crate) fn run_body_measured<R>(
     let rtl = env.direction.is_rtl();
     let ctx = ui.ctx().clone();
     let sizing = measure::active(&ctx);
+    // Each sweep of a measuring run finds the body's first line and an unwrapped row's line afresh.
+    let target = env.first_line.filter(|_| sizing);
+    let row = (sizing && matches!(layout, BodyLayout::Row { wrap: false, .. })).then_some(id);
+    let mut body = |ui: &mut Ui| {
+        open_sweep(&ctx, target, row);
+        body(ui)
+    };
     match layout {
         BodyLayout::Stack => {
             // Each leaf shows at most the stack's room, never below its least.
@@ -866,17 +1002,18 @@ pub(crate) fn run_body_measured<R>(
                 let flow = Flow::new(ui.available_rect_before_wrap(), rtl);
                 let spread = Spread::new(flow, gap.x, this_pass(&ctx, sizing, id));
                 pass_state::with::<Cursors, _>(&ctx, |cursors| cursors.0.insert(id, Cursor::Spread(spread)));
-                let line = on_line(row_line(&ctx, sizing, id), shared);
+                let line = on_line(id, row_line(&ctx, sizing, id), shared);
                 let installed = Env::install_for(
                     ui,
                     env.derive_local(|scoped| {
                         scoped.grid = Some(id);
-                        scoped.row_line = line;
+                        scoped.row_line = Some(line);
+                        scoped.first_line = None;
                     }),
                 );
                 let inner = body(ui);
                 Env::restore(&ctx, installed);
-                record_line(ui, sizing, id);
+                record_line(ui, sizing, id, shared);
                 inner
             });
             let measured = match pass_state::with::<Cursors, _>(&ctx, |cursors| cursors.0.remove(&id)) {
@@ -890,18 +1027,19 @@ pub(crate) fn run_body_measured<R>(
         }
         BodyLayout::Row { wrap: false, align: RowAlign::Start } => {
             let room = ui.available_rect_before_wrap();
-            let line = on_line(row_line(&ctx, sizing, id), shared);
+            let line = on_line(id, row_line(&ctx, sizing, id), shared);
             let inner = run_sharing(ui, env, id, Axis::X, child::row_layout(rtl, false), |ui| {
                 let installed = Env::install_for(
                     ui,
                     Env::of(ui).derive_local(|scoped| {
                         scoped.row_room = Some(room.width());
-                        scoped.row_line = line;
+                        scoped.row_line = Some(line);
+                        scoped.first_line = None;
                     }),
                 );
                 let inner = run_shrinking(ui, id, &mut body);
                 Env::restore(&ctx, installed);
-                record_line(ui, sizing, id);
+                record_line(ui, sizing, id, shared);
                 inner
             });
             (inner, None)
@@ -922,20 +1060,24 @@ pub(crate) fn run_body_measured<R>(
                     })
                 }
             };
-            // A wrapped row has a line per wrap, so its children stay on the top of each.
-            let line = if *wrap { None } else { on_line(row_line(&ctx, sizing, id), shared) };
+            // A wrapped row has a line per wrap, so its children stay on the top of each, and its first child gives its
+            // first line.
+            let line = (!*wrap).then(|| on_line(id, row_line(&ctx, sizing, id), shared));
             let (inner, took) = child::block(ui, rect, child::row_layout(rtl, *wrap), |ui| {
                 let installed = Env::install_for(
                     ui,
                     env.derive_local(|scoped| {
                         scoped.row_room = Some(room.width());
                         scoped.row_line = line;
+                        if line.is_some() {
+                            scoped.first_line = None;
+                        }
                     }),
                 );
                 let inner = if *wrap { body(ui) } else { run_shrinking(ui, id, &mut body) };
                 Env::restore(&ctx, installed);
                 if !*wrap {
-                    record_line(ui, sizing, id);
+                    record_line(ui, sizing, id, shared);
                 }
                 inner
             });

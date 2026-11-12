@@ -1128,6 +1128,8 @@ pub(crate) mod guard {
         ("layout::column_group::Open", "column groups: frames the run opens and closes; reports go through contribute"),
         ("access::scope::Stack", "label and merge scopes: opened and closed by the run; control minimums go through contribute"),
         ("layout::body::FillCounts", "fill counts: opened and closed by the body's own measuring sweep"),
+        ("layout::body::FirstLines", "first lines: opened and closed by the container's own measuring sweep; the line goes through emit_record"),
+        ("layout::body::RowLines", "row lines: opened by each sweep of the row and closed after it; the line goes through emit_record"),
         ("layout::body::Cursors", "grid and spread cursors: opened and closed by the body's own run"),
         ("layout::body::ShrinkReports", "shrink reports: opened and closed by the row's own first sweep; the widths go through emit_record"),
         ("layout::body::LeastReports", "least reports: opened and closed by the row's own least sweep; the widths go through emit_record"),

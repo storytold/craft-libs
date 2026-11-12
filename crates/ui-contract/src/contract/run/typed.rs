@@ -386,8 +386,8 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
         self.hooks.fills_width(self.comp)
     }
 
-    fn on_line(&self) -> bool {
-        self.hooks.on_line(self.comp)
+    fn first_line(&self, ctx: &Context, id: Id, height: f32) -> Option<f32> {
+        self.hooks.first_line(self.comp, ctx, id, height)
     }
 
     fn member(&self) -> bool {

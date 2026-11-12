@@ -501,8 +501,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.sizing(comp.props(Internal::new())) == Sizing::FillWidth
     }
 
-    fn on_line(&self, comp: &C) -> bool {
-        matches!(comp.props(Internal::new()).layout, layout::BodyLayout::Row { wrap: false, .. })
+    /// The first line this pass's measuring run found: its header's first child's, else its body's
+    /// (`layout::FirstLines`).
+    fn first_line(&self, _comp: &C, ctx: &Context, id: Id, _height: f32) -> Option<f32> {
+        layout_memory::measured(ctx, sub(id, "first")).map(|found| found.took.y)
     }
 
     fn member(&self, comp: &C) -> bool {
@@ -666,6 +668,12 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let mut gate = self.gate;
         let mut close: Option<CloseReason> = None;
         let field_message = if props.label.is_some() { scope::last_message(&ctx, id) } else { None };
+        // A measuring run finds the container's first line: the first child its header or body places in flow reports
+        // it (`layout::FirstLines`).
+        let (first_header, first_body) = (sub(id, "first_header"), sub(id, "first_body"));
+        if !real {
+            layout::open_first_lines(&ctx, &[first_header, first_body]);
+        }
         // B1 header
         if props.header.is_some() {
             let header_parts = Self::header_parts(comp, ui, env, cx);
@@ -677,7 +685,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 .with_owner(owner);
             let trailing = props.header.is_some_and(|header| header.trailing);
             let inset = props.header.map_or(0.0, |header| pad_of(&env.tokens, header.inset));
-            close = close.or(self.header_region(comp, ui, &mut bcx, &frame, regions.header, (trailing, inset, header_parts)));
+            let header_env = (!real).then(|| region_env.derive_local(|scoped| scoped.first_line = Some(first_header)));
+            let header_frame = RegionFrame { env: header_env.as_ref().unwrap_or(&region_env), ..frame };
+            close = close.or(self.header_region(comp, ui, &mut bcx, &header_frame, regions.header, (trailing, inset, header_parts)));
             for stop in after_header {
                 crate::runtime::focus::register_stop(&ctx, stop);
             }
@@ -766,6 +776,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             (body_rect, label_rect, caption) = (placed.control, placed.label, placed.caption);
             label_input = Some(input);
         }
+        // Where the body runs; a measuring run may move it once the control reported its minimum width.
+        let ran_top = body_rect.min.y;
         let label_extra = label_extra_of(regions.body, body_rect, label_rect, rtl);
         // The body's control shows an inside label in its slot, in the measuring run and the real run alike.
         let inside = props.label.as_ref().and_then(|side| label::inside(env.view(), side, cx.core.resolved.enabled));
@@ -777,6 +789,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             self.scope_body(scoped, &props, id, BodyScope { room, real, sizing, content_column, scroll, label_width, beside: regions.beside });
             scoped.inside_label = inside;
             scoped.cell_fills = cell_fills;
+            // A scrolling body shows its first child wherever the view is: the container has no first line there.
+            scoped.first_line = (!real && scroll.is_none()).then_some(first_body);
         });
         // B3 body, if open, under the body env; the gate is read after the header changed it.
         if is_open {
@@ -995,6 +1009,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 scope::discard(&ctx, id);
             }
         }
+        if !real {
+            self.first_line = first_line_found(&ctx, (first_header, first_body), rect.min.y, body_rect.min.y - ran_top);
+        }
         // B4 footer: under the control column of a label-scoped container, which starts where the label step put
         // the control.
         if props.footer.is_some() {
@@ -1152,6 +1169,17 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
     }
 }
 
+/// How far below the container's top `top` the centre of its first line lies, from what the first children placed in
+/// its header and body reported (`targets`): the header's first line, else the body's, moved by `moved` with the body
+/// after its run. `None` when the first child there has no line of its own, or nothing was placed.
+fn first_line_found(ctx: &Context, (header, body): (Id, Id), top: f32, moved: f32) -> Option<f32> {
+    let (header, body) = (layout::close_first_line(ctx, header), layout::close_first_line(ctx, body));
+    match header {
+        Some(found) => found.map(|y| y - top),
+        None => body.flatten().map(|y| y + moved - top),
+    }
+}
+
 impl BodyHooks<'_> {
     /// The measuring run of the regions in `self.room`, under the inputs `key`: what they took together, padding
     /// included. `content`: the size the body's content took in the run taken back before this one, recorded with it.
@@ -1222,6 +1250,9 @@ impl BodyHooks<'_> {
         }
         let record = |key: Id, took: Vec2| layout_memory::emit_record(&ctx, key, layout_memory::Measured::new(self.room, took));
         record(id, self.body_size.unwrap_or(Vec2::ZERO));
+        if let Some(first) = self.first_line {
+            record(sub(id, "first"), Vec2::new(0.0, first));
+        }
         for (key, size) in [("header", self.header_size), ("footer", self.footer_size), ("end", self.end_size), ("controls", self.controls_size)] {
             if let Some(size) = size {
                 record(sub(id, key), size);

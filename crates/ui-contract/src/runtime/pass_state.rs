@@ -92,6 +92,8 @@ pass_state! {
         least_reports: crate::layout::body::LeastReports,
         bar_rules: crate::contract::BarRules,
         fill_counts: crate::layout::body::FillCounts,
+        first_lines: crate::layout::body::FirstLines,
+        row_lines: crate::layout::body::RowLines,
         cursors: crate::layout::body::Cursors,
         column_groups: crate::layout::column_group::Open,
         popups: crate::contract::overlay::popups::Popups,

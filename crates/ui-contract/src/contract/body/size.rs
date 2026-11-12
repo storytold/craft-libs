@@ -52,7 +52,7 @@ pub(crate) struct EnvFacts {
     given_column: bool,
     unbounded: (bool, bool),
     row_room: Option<f32>,
-    row_line: Option<f32>,
+    row_line: Option<crate::runtime::env::RowLine>,
     offered: Option<f32>,
     measure: Option<f32>,
     grid: Option<Id>,

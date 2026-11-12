@@ -116,11 +116,11 @@ pub struct Scoped {
     /// The width a `Row` body was offered this pass, before its `End` or `Center` lead narrowed the block: the room
     /// its direct children share. Only the row's own children read it.
     pub(crate) row_room: Option<f32>,
-    /// The line of an unwrapped `Row` body: the height of its tallest child in this pass's measuring run, or the line
-    /// the body shares with its container's inline header or end region when that is taller. Its direct children
-    /// placed in flow that are lines sit at the line's vertical centre, blocks and columns at its top. `None` while a
-    /// row that shares no line is measured.
-    pub(crate) row_line: Option<f32>,
+    /// The line of the unwrapped `Row` body whose direct children the scope places in flow (`RowLine`).
+    pub(crate) row_line: Option<RowLine>,
+    /// Where the first child the scope places in flow reports its first line: a container's header or body
+    /// (`layout::FirstLines`). `None` in the children of a `Row` body, which reports its line itself.
+    pub(crate) first_line: Option<Id>,
     /// The `Stack` or `Row` body that encloses the scope and the axis it runs along, when a child that fills that
     /// axis shares the room its siblings leave (set only where the body is given the axis).
     pub(crate) fill_body: Option<(Id, craft_behavior::Axis)>,
@@ -236,6 +236,20 @@ pub(crate) enum Shrink {
     Fit,
 }
 
+/// The line of an unwrapped `Row` body, as its direct children placed in flow see it: a child of one line sits with
+/// its centre on the line's centre, and a child of more than one line, or with no line of its own, at its top.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct RowLine {
+    /// The row body, which the children of a measuring run report their lines to.
+    pub(crate) body: Id,
+    /// How far below the row's top the line's centre lies: the lowest centre among its one-line children in this
+    /// pass's measuring run, or that of the line the body shares with its container's inline header or end region
+    /// when lower. `None` while a row that shares no line is measured.
+    pub(crate) centre: Option<f32>,
+    /// The row's height once its children sit on the line, at least the shared line's. `None` with `centre`.
+    pub(crate) height: Option<f32>,
+}
+
 /// What a collection records for one of its items in a pass: the row flags the item folds into its state (step 12)
 /// and its place in the set (step 16). The collection owns the record; a component reads it from its env.
 #[derive(Clone, Debug)]
@@ -323,6 +337,7 @@ impl Scoped {
         self.content = (false, false);
         self.row_room = None;
         self.row_line = None;
+        self.first_line = None;
         self.fill_body = None;
         self.fill_share = None;
         self.shrink = None;
@@ -443,6 +458,7 @@ impl Env {
                 content: (false, false),
                 row_room: None,
                 row_line: None,
+                first_line: None,
                 fill_body: None,
                 fill_share: None,
                 shrink: None,

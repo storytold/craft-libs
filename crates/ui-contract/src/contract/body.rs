@@ -111,6 +111,9 @@ pub(super) struct BodyHooks<'b> {
     footer_size: Option<Vec2>,
     end_size: Option<Vec2>,
     controls_size: Option<Vec2>,
+    /// How far below the container's top the centre of its first line lies, as its measuring run found it: the first
+    /// line of its header, else of its body. `None` for a container whose first child has no line of its own.
+    first_line: Option<f32>,
     /// How far the rows of a content-sized `Through` body reached past the group's columns in this measuring run, and
     /// whether the body is a row, for the container to hand on once its measure is known.
     reached: Option<(crate::layout::Reached, bool)>,
@@ -192,6 +195,7 @@ impl<'b> BodyHooks<'b> {
             footer_size: None,
             end_size: None,
             controls_size: None,
+            first_line: None,
             reached: None,
             settle: None,
             unsettled: None,
