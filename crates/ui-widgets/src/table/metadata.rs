@@ -4,8 +4,8 @@
 use super::Table;
 use super::words::MetadataWords;
 use crate::contract::{
-    Bind, CollectionEvent, CollectionResponse, ColumnKind, ColumnSpec, NoValue, Outcome, Pad, Pattern, Props, SelectMode, Show as _,
-    ShowCollection as _, ShowContainer as _, ToggleColumn,
+    Bind, CollectionEvent, CollectionResponse, ColumnKind, ColumnSpec, NoValue, Outcome, Pad, Pattern, Props, RowHeight, SelectMode, Show as _,
+    ShowCollection as _, ShowContainer as _, Sizing, ToggleColumn,
 };
 use crate::layout_components::Stack;
 use crate::list::{ListRow, RowEvent, ToggleCell, ToggleState};
@@ -16,6 +16,7 @@ use craft_i18n::matcher::Matcher;
 use craft_theme::ControlSize;
 use egui::{Response, Ui};
 use std::borrow::Cow;
+use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 const SHOW: ColumnKey = ColumnKey::new("show");
@@ -98,8 +99,10 @@ pub struct Checked {
 /// What the table reported this pass.
 #[non_exhaustive]
 pub struct MetadataTableOutput {
-    /// The table's response, its events and its visible range.
-    pub table: CollectionResponse<FieldKey, RowEvent>,
+    /// The response of the whole: the search field and the table.
+    pub response: Response,
+    /// The table's response, its events and its visible range; `None` in a pass that did not show the rows.
+    pub table: Option<CollectionResponse<FieldKey, RowEvent>>,
     /// The search text changed.
     pub filter_changed: bool,
     /// The checks the user changed this pass, in order; a bound chosen list already holds them.
@@ -112,12 +115,12 @@ impl Outcome for MetadataTableOutput {
     type Value = NoValue;
 
     fn response(&self) -> &Response {
-        &self.table.response
+        &self.response
     }
 
     #[cfg(feature = "testing")]
     fn story_facts(&self) -> crate::testing::StoryOutput {
-        self.table.story_facts()
+        self.table.as_ref().map_or_else(Default::default, Outcome::story_facts)
     }
 }
 
@@ -201,89 +204,93 @@ impl<'a> MetadataTable<'a> {
 
     /// Shows the table and returns what the user did this pass.
     pub fn show(self, ui: &mut Ui) -> MetadataTableOutput {
-        let MetadataTable { label, groups, filter, mut choose } = self;
+        let MetadataTable { label, groups, mut filter, mut choose } = self;
         let env = Env::of(ui);
         let words = env.words::<MetadataWords>();
-        let mut query = String::new();
-        let mut filter_changed = false;
         let rows = ui.scope_id().with("rows");
-        if let Some(text) = filter {
-            // The field starts where the table's text does: one cell inset (`space.pad.control`) from the edge.
-            let mut text = text;
-            let edit = Stack::new()
-                .pad(Pad::Control)
-                .show(ui, |ui, _| TextField::search(words.filter.clone(), text.reborrowed()).placeholder(words.filter.clone()).drives(rows).show(ui));
-            if let Some(edit) = edit.inner {
-                filter_changed = !edit.events.is_empty();
-                if let Some(Mixed::Same(shown)) = &edit.shown {
-                    query.clone_from(&**shown);
-                }
-            }
-        }
-        let query = query.trim();
-        let matcher = (!query.is_empty()).then(|| Matcher::new(&env.folder(), query));
-
-        let mut keys = Vec::new();
-        let mut entries = Vec::new();
-        for (at, group) in groups.iter().enumerate() {
-            let kept: Vec<usize> =
-                (0..group.rows.len()).filter(|&row| matcher.as_ref().is_none_or(|matcher| group.rows[row].matches(matcher))).collect();
-            if kept.is_empty() {
-                continue;
-            }
-            if !group.name.is_empty() {
-                keys.push(FieldKey::Group(at));
-                entries.push(Entry::Group(group));
-            }
-            for row in kept {
-                keys.push(FieldKey::Field(at, row));
-                entries.push(Entry::Field(&group.rows[row]));
-            }
-        }
-        let empty = if groups.iter().all(|group| group.rows.is_empty()) { words.none.clone() } else { words.no_match.clone() };
-
-        let mut columns = vec![
-            ColumnSpec::new(NAME, words.name.clone(), ColumnWidth::Content).at_most(NAME_SHARE),
-            ColumnSpec::new(VALUE, words.value.clone(), ColumnWidth::fill(1.0)),
-        ];
-        if choose.is_some() {
-            columns
-                .insert(0, ColumnSpec::new(SHOW, words.show.clone(), ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())));
-        }
         let held: Option<Vec<String>> = choose.as_mut().map(|bind| match bind.reborrow().get() {
             Some(Mixed::Same(keys)) => keys,
             _ => Vec::new(),
         });
-        let source = Fields { keys, entries, chosen: held.as_deref() };
         let checks = choose.is_some();
-        let table = Table::<FieldKey>::new(label.clone(), columns)
-            .id(rows)
-            .select(SelectMode::Single)
-            .size(ControlSize::Sm)
-            .striped(true)
-            .header(false)
-            .rows_stamp(query_stamp(query))
-            .empty(empty)
-            .show_items(ui, &source, &mut |_, icx| match &source.entries[icx.at] {
-                Entry::Group(group) => ListRow::new(group.name.clone()).cells(icx.cells()).heading().space_above(icx.at > 0),
-                Entry::Field(row) => {
-                    let line = ListRow::new(row.name.clone())
-                        .cells(icx.cells())
-                        .striped(icx.row.striped)
-                        .cell_muted(NAME)
-                        .cell_lines(VALUE, row.value.clone())
-                        .cell_selectable(VALUE);
-                    if checks {
-                        line.toggle(ToggleCell::check(SHOW, ToggleState::of(source.toggled(icx.at, &SHOW)), words.show_field.clone()))
-                    } else {
-                        line
+        // The header runs before the body in each run, so the rows follow this pass's text.
+        let query = RefCell::new(String::new());
+        let filter_changed = Cell::new(false);
+        let mut stack = Stack::new().sizing(Sizing::Fill);
+        if let Some(text) = filter.as_mut() {
+            stack = stack
+                .header(|ui, _| {
+                    let edit = TextField::search(words.filter.clone(), text.reborrowed()).placeholder(words.filter.clone()).drives(rows).show(ui);
+                    filter_changed.set(filter_changed.get() || !edit.events.is_empty());
+                    if let Some(Mixed::Same(shown)) = &edit.shown {
+                        query.replace(shown.trim().to_owned());
                     }
+                })
+                .header_inset(Pad::Control);
+        }
+        let shown = stack.show(ui, |ui, _| {
+            let query = query.borrow();
+            let matcher = (!query.is_empty()).then(|| Matcher::new(&env.folder(), query.as_str()));
+            let mut keys = Vec::new();
+            let mut entries = Vec::new();
+            for (at, group) in groups.iter().enumerate() {
+                let kept: Vec<usize> =
+                    (0..group.rows.len()).filter(|&row| matcher.as_ref().is_none_or(|matcher| group.rows[row].matches(matcher))).collect();
+                if kept.is_empty() {
+                    continue;
                 }
-            });
-        drop(source);
+                if !group.name.is_empty() {
+                    keys.push(FieldKey::Group(at));
+                    entries.push(Entry::Group(group));
+                }
+                for row in kept {
+                    keys.push(FieldKey::Field(at, row));
+                    entries.push(Entry::Field(&group.rows[row]));
+                }
+            }
+            let empty = if groups.iter().all(|group| group.rows.is_empty()) { words.none.clone() } else { words.no_match.clone() };
+
+            let mut columns = vec![
+                ColumnSpec::new(NAME, words.name.clone(), ColumnWidth::Content).at_most(NAME_SHARE),
+                ColumnSpec::new(VALUE, words.value.clone(), ColumnWidth::fill(1.0)),
+            ];
+            if checks {
+                columns.insert(
+                    0,
+                    ColumnSpec::new(SHOW, words.show.clone(), ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())),
+                );
+            }
+            let source = Fields { keys, entries, chosen: held.as_deref() };
+            Table::<FieldKey>::new(label.clone(), columns)
+                .id(rows)
+                .select(SelectMode::Single)
+                .size(ControlSize::Sm)
+                .row_height(RowHeight::Text)
+                .striped(true)
+                .header(false)
+                .rows_stamp(query_stamp(query.as_str()))
+                .empty(empty)
+                .show_items(ui, &source, &mut |_, icx| match &source.entries[icx.at] {
+                    Entry::Group(group) => ListRow::new(group.name.clone()).cells(icx.cells()).heading().space_above(icx.at > 0),
+                    Entry::Field(row) => {
+                        let line = ListRow::new(row.name.clone())
+                            .cells(icx.cells())
+                            .striped(icx.row.striped)
+                            .cell_muted(NAME)
+                            .cell_lines(VALUE, row.value.clone())
+                            .cell_selectable(VALUE);
+                        if checks {
+                            line.toggle(ToggleCell::check(SHOW, ToggleState::of(source.toggled(icx.at, &SHOW)), words.show_field.clone()))
+                        } else {
+                            line
+                        }
+                    }
+                })
+        });
+        let table = shown.inner;
 
         let mut checked = Vec::new();
-        if let (Some(mut choose), Some(before)) = (choose, held) {
+        if let (Some(mut choose), Some(before), Some(table)) = (choose, held, &table) {
             let mut chosen = before.clone();
             for event in &table.events {
                 let CollectionEvent::Toggle(edit) = event else { continue };
@@ -308,7 +315,7 @@ impl<'a> MetadataTable<'a> {
                 choose.reborrow().apply(&EditEvent::set(Mixed::Same(before), chosen, name, None));
             }
         }
-        MetadataTableOutput { table, filter_changed, checked }
+        MetadataTableOutput { response: shown.output, table, filter_changed: filter_changed.get(), checked }
     }
 }
 

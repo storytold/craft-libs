@@ -123,7 +123,7 @@ fn metadata_value_copies_without_selecting_the_row() {
     let groups = vec![MetadataGroup::new("Camera", vec![MetadataRow::new("Make", "FUJIFILM"), MetadataRow::new("Model", "X100V")])];
     let mut fixture = Fixture::new(move |ui| {
         let out = MetadataTable::new("Metadata", &groups).show(ui);
-        if out.table.events.iter().any(|event| matches!(event, CollectionEvent::Selection(_))) {
+        if out.table.iter().flat_map(|table| &table.events).any(|event| matches!(event, CollectionEvent::Selection(_))) {
             seen.set(true);
         }
     });

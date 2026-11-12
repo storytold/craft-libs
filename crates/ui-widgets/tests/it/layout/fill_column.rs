@@ -35,7 +35,7 @@ fn column(ui: &mut Ui, fill_width: bool, groups: Option<&[MetadataGroup]>, seen:
     let shown = stack.show(ui, |ui, _| {
         let text = Text::new(LONG).show(ui).rect.width();
         let divider = Divider::horizontal().show(ui).rect.width();
-        let table = groups.map_or(0.0, |groups| MetadataTable::new("Metadata", groups).show(ui).table.response.rect.width());
+        let table = groups.map_or(0.0, |groups| MetadataTable::new("Metadata", groups).show(ui).response.rect.width());
         let button = Button::new("Action").show(ui).rect.width();
         Widths { text, divider, table, button, ..Widths::default() }
     });

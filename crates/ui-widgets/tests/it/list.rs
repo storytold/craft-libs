@@ -1,7 +1,7 @@
 //! List rows: the rename draft, the row menu and the trailing parts a row reveals.
 
 use craft_behavior::{EditEvent, Mixed, keyed};
-use craft_ui::contract::{CollectionEvent, Props as _, ShowCollection as _, request_rename};
+use craft_ui::contract::{CollectionEvent, Props as _, RowHeight, ShowCollection as _, request_rename};
 use craft_ui::list::{List, ListRow, RowEvent};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Id, Vec2};
@@ -29,6 +29,28 @@ fn rig(draft: fn(&usize) -> Option<String>) -> (Fixture, Rc<RefCell<Vec<Collecti
     fixture.room(Vec2::new(300.0, 200.0));
     fixture.settle();
     (fixture, seen)
+}
+
+/// The rects of the three rows of a list shown with `rows`.
+fn row_rects(rows: RowHeight) -> Vec<egui::Rect> {
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key).with_text(|key| std::borrow::Cow::Borrowed(NAMES[*key]));
+        List::new("Artboards").row_height(rows).show_items(ui, &source, &mut |key, _| ListRow::new(NAMES[*key]));
+    });
+    fixture.room(Vec2::new(300.0, 200.0));
+    fixture.settle();
+    NAMES.iter().map(|name| fixture.by_label(name).expect("the row's node").rect).collect()
+}
+
+/// Text rows are shorter than control-high rows, in the layout and in each row's own height.
+#[trial]
+fn text_rows_are_shorter_than_control_rows() {
+    let (control, text) = (row_rects(RowHeight::Control), row_rects(RowHeight::Text));
+    for (control, text) in control.iter().zip(&text) {
+        assert!(text.height() < control.height(), "a text row is shorter: {text:?} against {control:?}");
+    }
+    assert!(text[2].top() - text[0].top() < control[2].top() - control[0].top(), "text rows follow each other closer");
 }
 
 /// The text the rename field of `row` opens with.

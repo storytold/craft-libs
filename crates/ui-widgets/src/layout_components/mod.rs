@@ -242,6 +242,16 @@ impl<'a> Stack<'a> {
         }
         self
     }
+
+    /// The padding `pad` on the header's two sides, none above or below it: a field over a table starts where the
+    /// table's text does. Set it after [`header`](Stack::header).
+    #[must_use]
+    pub fn header_inset(mut self, pad: Pad) -> Self {
+        if let Some(header) = self.props.header {
+            self.props = self.props.header(header.inset(pad));
+        }
+        self
+    }
 }
 
 impl Default for Stack<'_> {

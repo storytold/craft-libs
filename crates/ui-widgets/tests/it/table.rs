@@ -4,7 +4,7 @@
 
 use craft_behavior::{ColumnKey, ColumnWidth, keyed};
 use craft_host::target::Os;
-use craft_ui::contract::{CollectionEvent, ColumnEvent, ColumnSort, ColumnSpec, Role, ShowCollection as _};
+use craft_ui::contract::{Bind, CollectionEvent, ColumnEvent, ColumnSort, ColumnSpec, Role, ShowCollection as _};
 use craft_ui::list::ListRow;
 use craft_ui::table::{MetadataGroup, MetadataRow, MetadataTable, Table};
 use craft_ui::testing::{Fixture, Room, pointer, trial};
@@ -94,7 +94,7 @@ fn metadata(names: &'static [&'static str]) -> (Fixture, Rc<Cell<Rect>>) {
     let mut fixture = Fixture::new(move |ui| {
         let rows = names.iter().enumerate().map(|(at, name)| MetadataRow::new(*name, format!("v{at}"))).collect();
         let groups = vec![MetadataGroup::new("Camera", rows)];
-        held.set(MetadataTable::new("Metadata", &groups).show(ui).table.response.rect);
+        held.set(MetadataTable::new("Metadata", &groups).show(ui).response.rect);
     });
     fixture.in_room(Room::Dialog).settle();
     (fixture, rect)
@@ -119,6 +119,26 @@ fn the_metadata_name_column_fits_its_widest_name_up_to_a_third_of_the_table() {
     let long_value = left_of(&long, "v1");
     assert!(long_value > short_value, "a longer name widens the name column");
     assert!(long_value - table.left() <= table.width() / 3.0 + padding, "the name column stops at a third of the table");
+}
+
+/// The search field sits at the top of the metadata table, inset at its sides only, and the first group's row starts
+/// where the field ends: no gap above the first group.
+#[trial]
+fn the_metadata_filter_sits_in_the_header_with_no_gap_above_the_first_group() {
+    let rect = Rc::new(Cell::new(Rect::NOTHING));
+    let held = rect.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut filter = String::new();
+        let groups = vec![MetadataGroup::new("Camera", vec![MetadataRow::new("Make", "FUJIFILM")])];
+        held.set(MetadataTable::new("Metadata", &groups).filter(Bind::bound(&mut filter)).show(ui).response.rect);
+    });
+    fixture.in_room(Room::Dialog).settle();
+    let whole = rect.get();
+    let field = fixture.by_label("Filter fields").expect("the search field's node").rect;
+    let group = fixture.by_label("Camera").expect("the group's row").rect;
+    assert!((field.top() - whole.top()).abs() < 0.5, "nothing above the field: {field:?} in {whole:?}");
+    assert!(field.left() > whole.left(), "the field is inset at its start: {field:?} in {whole:?}");
+    assert!((group.top() - field.bottom()).abs() < 0.5, "the first group starts where the field ends: {group:?} under {field:?}");
 }
 
 /// A table sorted by its hideable Size column, with movable Name and Date columns; the app drops its sort on
