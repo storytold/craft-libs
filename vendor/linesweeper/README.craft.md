@@ -6,7 +6,8 @@ local patches listed below. `.cargo_vcs_info.json` names the commit it was packa
 names, which is archived; its README says development moved off GitHub.
 
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
-in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
+in the `.crate` archive. The patched files are `src/sweep/sweep_line.rs` and `src/position.rs`.
+`SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
 hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
 holds `upstream_revision`. `local_patches` describes each local patch.
@@ -15,6 +16,7 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 
 | File | Change |
 |---|---|
+| `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
 | `src/position.rs` | `PositionedOutputSeg::from_cubic` and `from_quad`, and the copied pieces of the strict layout (`next_subsegment`), cut the input curve at the points nearest the output piece's end points, found by Newton steps from the parameters `solve_t_for_y` gives (restarted from the nearest point of the whole curve at a point where a step cannot leave, such as a repeated handle), and move the piece onto its end points: each end moves sideways with its handle (a quadratic's control point by the mean of its ends' moves), and the heights are mapped linearly, so the piece stays monotonic in `y`. `from_cubic` and `from_quad` used to move the inner control points sideways by their height's share of the gap at each end, and `next_subsegment` moved only the end points. Where a curve is almost flat at an end, a tiny error in that end's height is a large gap: the union of `M0,0 C0,1000 300,1000 1000,1000 L1000,2000 L-1000,2000 Z` with the rectangle `M998.37,500 L1500,500 L1500,1500 L998.37,1500 Z` at eps 1e-6 gave an outline 1.05 from both inputs and 815 too small in area, and with the rectangle at x = 990.37 the strict layout gave an outline 9.9e-4 from both inputs. Code comments label the changes `Craft patch (flat-end shear)`. `repeated_end_handle_stays_near_the_end` places cubics with a repeated handle at the flat end between end points moved along it, the `flat_end_shift_stays_near_the_end` test places steep-to-flat and flat-to-steep cubics and quadratics between end points moved along their flat ends, `flat_end_pieces_stay_monotonic` places a quadratic and a cubic between end points off the curve and checks that their heights do not decrease or pass the end point, `flat_end_union_stays_on_the_inputs` checks the union of that shape with a copy moved by (-3.26e-6, -4.66e-8), and `flat_end_crossing_stays_on_the_inputs` checks the unions with the two rectangles in both layouts. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:

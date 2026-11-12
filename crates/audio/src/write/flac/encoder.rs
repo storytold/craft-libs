@@ -13,18 +13,30 @@ use super::predict::{Effort, Subframe};
 /// Byte offset of the 34-byte STREAMINFO body in [`Encoder::header`].
 pub const STREAMINFO_OFFSET: u64 = 8;
 
+/// Why the encoder refused a configuration or a block of samples.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
+    /// The configuration is outside what FLAC can code; the text names the field.
     #[error("invalid configuration: {0}")]
     InvalidConfig(&'static str),
+    /// A block had a different number of channels than the configuration.
     #[error("expected {expected} channels, got {got}")]
-    Channels { expected: usize, got: usize },
+    Channels {
+        /// The configured channel count.
+        expected: usize,
+        /// The channels in the block.
+        got: usize,
+    },
+    /// The channels of a block differ in length.
     #[error("channels of unequal length")]
     UnequalChannels,
+    /// A sample is outside the configured sample size.
     #[error("sample {0} does not fit the configured sample size")]
     SampleRange(i32),
 }
 
+/// What to encode and how hard to try.
 #[derive(Clone, Debug)]
 pub struct EncoderConfig {
     /// 1 to 1 048 575 Hz.
@@ -41,11 +53,14 @@ pub struct EncoderConfig {
 }
 
 impl EncoderConfig {
+    /// 4096-sample blocks at level 5.
     pub fn new(sample_rate: u32, channels: u8, bits_per_sample: u8) -> Self {
         EncoderConfig { sample_rate, channels, bits_per_sample, block_size: 4096, level: 5 }
     }
 }
 
+/// The packet encoder: [`Encoder::header`], then frames from [`Encoder::encode`] and
+/// [`Encoder::finish`], then [`Encoder::streaminfo`] over [`STREAMINFO_OFFSET`].
 pub struct Encoder {
     cfg: EncoderConfig,
     effort: Effort,
@@ -56,9 +71,12 @@ pub struct Encoder {
     min_frame: u32,
     max_frame: u32,
     md5: super::md5::Md5,
+    /// The LPC analysis window for the current block length.
+    window: Vec<f64>,
 }
 
 impl Encoder {
+    /// An encoder for `cfg`, or [`Error::InvalidConfig`] when FLAC cannot code it.
     pub fn new(cfg: EncoderConfig) -> Result<Self, Error> {
         if !(1..=8).contains(&cfg.channels) {
             return Err(Error::InvalidConfig("1 to 8 channels"));
@@ -84,6 +102,7 @@ impl Encoder {
             // STREAMINFO holds an MD5 signature of the unencoded audio (RFC 9639 §8.2); this is an
             // integrity checksum, not a password hash or a security boundary.
             md5: super::md5::Md5::default(), // NOSONAR
+            window: Vec::new(),
         })
     }
 
@@ -157,11 +176,24 @@ impl Encoder {
         }
         let bs = usize::from(self.cfg.block_size);
         let mut out = Vec::new();
-        while self.pending.first().is_some_and(|p| p.len() >= bs) {
-            let block: Vec<Vec<i32>> = self.pending.iter_mut().map(|p| p.drain(..bs).collect()).collect();
+        // Walk the buffered samples by offset and compact once: draining each block from the
+        // front moved the whole remainder per frame, quadratic in the batch length.
+        let mut at = 0;
+        while self.pending.first().is_some_and(|p| p.len() - at >= bs) {
+            let block: Vec<Vec<i32>> = self.pending.iter().map(|p| p.get(at..at + bs).unwrap_or_default().to_vec()).collect();
             out.push(self.frame(&block));
+            at += bs;
+        }
+        for p in &mut self.pending {
+            p.drain(..at);
         }
         Ok(out)
+    }
+
+    /// Samples per channel waiting for a full block: the length of the frame [`Encoder::finish`]
+    /// would write.
+    pub fn pending_samples(&self) -> usize {
+        self.pending.first().map_or(0, Vec::len)
     }
 
     /// Encode what is left as a final, shorter frame.
@@ -187,7 +219,11 @@ impl Encoder {
         self.md5.update(&raw);
 
         let effort = self.effort;
-        let code = |x: &[i32], b: u8| super::predict::choose(x, b, effort);
+        if self.window.len() != n {
+            self.window = super::predict::window(n);
+        }
+        let win = &self.window;
+        let code = |x: &[i32], b: u8| super::predict::choose(x, b, effort, win);
         let data = match block {
             // the side channel takes one bit more than the samples: at most 32 (i32)
             [l, r] if effort.stereo && bps < 32 => {
