@@ -378,6 +378,17 @@ comments label them `Craft patch (flatten)`.
 | hayro-interpret `types.rs`, `x_object.rs` | `RasterImage::with_inks`: an image's samples in its own space's inks (`InkImage`), `/Decode` and `/Matte` applied, transfer functions left out, with its alpha at the alpha's own size |
 | hayro-interpret `interpret/mod.rs` | The `sh` operator drops the shading's `/Background`, which only a shading pattern paints (ISO 32000-2 §8.7.4.5.1) |
 
+Streams without a readable `endstream`, ported from PdfCraft
+[bfaa20db](https://github.com/storytold/pdfcraft/commit/bfaa20db2) and
+[9e29af78](https://github.com/storytold/pdfcraft/commit/9e29af784) (hayro-syntax patch 36, in
+`object/stream.rs`): a stream with no `endstream` after it (a producer that writes `endstrea`) is the
+bytes its `/Length` gives (ISO 32000-2 7.3.8.2), tried before the search for `endstream` so that the
+search cannot run on into a later object and take its header and data as this stream's, and only when
+the `/Length` ends where the stream would (before `endstream`, a misspelt one or `endobj` where the
+object ends too, or the end of the data). `endstream` and the search for it are whole tokens, so
+`endstreamer` in the payload does not end a stream. The search keeps this tree's cancellation checks.
+Tests: `object::stream::tests::a_stream_without_endstream_is_its_length_before_a_later_one` and
+`a_stream_does_not_end_inside_a_longer_word`.
 Legacy encryption key length, ported from [PdfCraft #1882](https://github.com/storytold/pdfcraft/pull/1882)
 (commit 344ba9f8, marked `PdfCraft patch` in `hayro-syntax/src/crypto/mod.rs`): an encryption
 dictionary of revision 2–4 whose `/Length` is above 128 bits is refused with `InvalidEncryption`.
