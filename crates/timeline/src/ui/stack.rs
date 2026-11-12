@@ -17,17 +17,18 @@ use craft_behavior::{
     ColumnKey, ColumnWidth, CursorIcon, DisplayOrder, EditEvent, EditEvents, HitLevel, HitPriority, IconId, ItemSource, MarqueeSelect, Metrics,
     Mixed, PartKey, PressPhase, Proposal, Selection, SelectionChange, Sense, SizeHint, SpanLayout,
 };
-use craft_theme::Opacity;
+use craft_theme::{ControlSize, Opacity};
+use craft_ui::buttons::ToggleButton;
 use craft_ui::contract::{
     Access, Bind, BindMut, Collection, CollectionProps, CollectionResponse, ColumnKind, ColumnSpec, Common, Component, ContainerProps, Cx, Edit as _,
     ItemKeys, ItemOutput, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _, Props, Remember as _, Role, Scroll, ScrollAnchor, SelectMode,
-    Show as _, Sizing, Styled as _, ToggleColumn, WordSetCx as _,
+    Show as _, Sizing, ToggleColumn, WordSetCx as _,
 };
 use craft_ui::display::Text;
 use craft_ui::primitives::{IconSpec, PaintShape, RectSide, RuleKind};
 use craft_ui::runtime::commands::FireSource;
 use craft_ui::runtime::env::{Env, Label};
-use craft_ui::style::{ComponentStyle, DataColor, IconLook, Stateful, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole, UiTokens};
+use craft_ui::style::{ComponentStyle, DataColor, Flags, Stateful, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole, UiTokens};
 use egui::{CornerRadius, Pos2, Rect, Response, Ui, Vec2};
 use std::sync::Arc;
 
@@ -54,6 +55,8 @@ const LABEL: PartKey = PartKey::new("label");
 const HEADER: PartKey = PartKey::new("header");
 const EDGE_BOTTOM: PartKey = PartKey::new("heightBottom");
 const EDGE_TOP: PartKey = PartKey::new("heightTop");
+/// A switch's face, at its place in `SWITCHES`. The collection's toggle cell beneath takes the presses.
+const SWITCH: PartKey = PartKey::new("switch");
 
 /// The switch columns in header order, each with its icon while on and off.
 const SWITCHES: [(ColumnKey, &str, &str); 6] = [
@@ -185,6 +188,18 @@ fn name_inset(pad: f32, track: &TrackInfo<'_>) -> f32 {
     pad * (1.0 + f32::from(track.depth))
 }
 
+/// The name of the switch in `column`: its column header and its face's name.
+fn switch_name(words: &TimelineWords, column: &ColumnKey) -> Label {
+    match () {
+        _ if *column == LOCK => words.lock.clone(),
+        _ if *column == TARGET => words.target.clone(),
+        _ if *column == SYNC_LOCK => words.sync_lock.clone(),
+        _ if *column == OUTPUT => words.output.clone(),
+        _ if *column == MUTE => words.mute.clone(),
+        _ => words.solo.clone(),
+    }
+}
+
 /// Whether `track`'s switch in `column` is on; `None` when the track has no such switch.
 fn switch_of(track: &TrackInfo<'_>, column: &ColumnKey) -> Option<bool> {
     if *column == LOCK {
@@ -311,20 +326,12 @@ pub struct TrackStack {
 impl TrackStack {
     /// A stack named `label` with the header columns `header`: the same for every pane of a timeline.
     pub fn new(label: impl Into<Label>, header: &HeaderColumns, words: &TimelineWords) -> Self {
-        let switch_name = |key: &ColumnKey| match () {
-            _ if *key == LOCK => words.lock.clone(),
-            _ if *key == TARGET => words.target.clone(),
-            _ if *key == SYNC_LOCK => words.sync_lock.clone(),
-            _ if *key == OUTPUT => words.output.clone(),
-            _ if *key == MUTE => words.mute.clone(),
-            _ => words.solo.clone(),
-        };
         let mut columns = vec![
             ColumnSpec::new(STRIP, words.track_color.clone(), ColumnWidth::Fixed(header.strip())),
             ColumnSpec::new(NAME, "", ColumnWidth::Fixed(header.name)).resizable().frozen(),
         ];
         for key in &header.switches {
-            let name = switch_name(key);
+            let name = switch_name(words, key);
             columns.push(ColumnSpec::new(key.clone(), name, ColumnWidth::Fixed(header.switch)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())));
         }
         columns.push(ColumnSpec::new(LANE, "", ColumnWidth::fill(1.0)));
@@ -429,12 +436,6 @@ pub struct TrackRowStyle {
     /// The track name.
     #[style(text)]
     name: TextLook,
-    /// A switch while on.
-    #[style(icon)]
-    on: IconLook,
-    /// A switch while off.
-    #[style(icon)]
-    off: IconLook,
     /// The colour strip while the track has no label and the pointer is over it.
     hover: StyleColor,
     /// Between the strip and the name, and the indent of one level of depth.
@@ -504,8 +505,6 @@ impl Component for TrackRow<'_> {
             surface: SurfaceLook::new(Stateful::new(cx.color(color.surface.panel))),
             metrics: Metrics::new(),
             name: TextLook::new(NAME_ROLE, Stateful::new(cx.color(color.text.normal))),
-            on: IconLook::new(cx.control().icon, Stateful::new(cx.color(color.text.normal))),
-            off: IconLook::new(cx.control().icon, Stateful::new(cx.color(color.text.faint))),
             hover: cx.color(color.state.hover),
             pad: name_pad(cx.tokens),
             edge: cx.tokens.size.hit.target / 2.0,
@@ -534,6 +533,13 @@ impl Component for TrackRow<'_> {
         }
         if let Some(name) = self.cell(&NAME) {
             cx.part(HEADER, name).sense(Sense::CLICK).pointer_only("the host's track height command");
+        }
+        let side = cx.tokens.size.control.sm;
+        for (at, (key, _, _)) in SWITCHES.iter().enumerate() {
+            let (Some(cell), Some(on)) = (self.cell(key), self.switch(key)) else { continue };
+            let face = Rect::from_center_size(cell.center(), Vec2::splat(side)).intersect(cell);
+            let flags = if on { Flags::CHECKED } else { Flags::empty() };
+            let _ = cx.part(SWITCH.at(at as u64), face).flags(flags);
         }
         let row = self.row();
         let reach = cx.style.edge;
@@ -649,13 +655,15 @@ impl Component for TrackRow<'_> {
             let text = flow.inset(craft_behavior::Insets::horizontal(name_inset(style.pad, self.track)));
             draw.text(text, &craft_ui::primitives::TextRun::new(self.track.name).role(NAME_ROLE).elide());
         }
-        for (key, on_icon, off_icon) in SWITCHES {
-            let Some(cell) = self.cell(&key) else { continue };
-            let Some(on) = self.switch(&key) else { continue };
-            let look = if on { &style.on } else { &style.off };
-            let color = cx.resolve(&look.color);
-            let icon = IconSpec::svg(IconId::new(if on { on_icon } else { off_icon })).color(color);
-            draw.icon(Rect::from_center_size(cell.center(), Vec2::splat(look.side)), &icon);
+        let words = cx.words::<TimelineWords>();
+        for (at, (key, on_icon, off_icon)) in SWITCHES.iter().enumerate() {
+            let (Some(_), Some(on)) = (self.cell(key), self.switch(key)) else { continue };
+            let face = ToggleButton::new(switch_name(&words, key), Bind::given(on))
+                .icon(IconSpec::svg(IconId::new(*off_icon)))
+                .on_icon(IconSpec::svg(IconId::new(*on_icon)))
+                .icon_only()
+                .size(ControlSize::Sm);
+            ui.face(SWITCH.at(at as u64), face);
         }
         if let (Some(lane), Some(axis)) = (self.cell(&LANE), time_axis(&cx.env)) {
             self.lane.paint(ui, lane, &axis, &style.clip, cx);
