@@ -109,11 +109,15 @@ pub struct Limits {
     /// One XML part. Rows and shared strings are streamed, so `max_nodes` bounds one row or one
     /// string and what is left of a part, not a sheet's length.
     pub xml: craft_xml::Limits,
-    /// Records in one binary part.
+    /// Records read from a binary workbook, every part together. Records are skipped or decoded
+    /// without being kept, so this bounds parse time, not memory. Excel writes four records per
+    /// row besides the cells, and one per formatted empty cell, so a sheet needs many more
+    /// records than cells.
     pub binary_records: usize,
-    /// Cells with a value read from a binary workbook, over all its sheets.
+    /// Cells with a value read from a binary workbook, over all its sheets; also the most
+    /// shared-string items.
     pub binary_cells: usize,
-    /// Bytes of decoded text in a binary workbook, over all its parts.
+    /// Bytes of decoded text (shared and inline strings) in a binary workbook, over all its parts.
     pub binary_text: usize,
 }
 
@@ -122,9 +126,10 @@ impl Default for Limits {
         Limits {
             package: craft_opc::Limits::new(200_000, 512 << 20, 1 << 30),
             xml: craft_xml::Limits { max_input: 512 << 20, ..craft_xml::Limits::DEFAULT },
-            binary_records: 5_000_000,
-            binary_cells: 1_000_000,
-            binary_text: 64 << 20,
+            // The limits of `craft-xls`.
+            binary_records: 40_000_000,
+            binary_cells: 4_000_000,
+            binary_text: 256 << 20,
         }
     }
 }

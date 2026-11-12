@@ -27,8 +27,10 @@ cell keeps its format index).
 - `Limits.package`: ZIP entries, bytes per part and in all (`craft-opc`).
 - `Limits.xml`: one XML part. Rows and shared strings are streamed, so this bounds one row, one
   string and what is left of a part, not a sheet's length.
-- `Limits.binary_records`, `binary_cells`, `binary_text`: a binary workbook. Fixed caps: 1024
-  sheets, 1,000,000 shared strings, 100,000 merged ranges per sheet, 64 nested extension blocks.
+- `Limits.binary_records`, `binary_cells`, `binary_text`: a binary workbook, over all its parts
+  (40 million records, 4 million cells and as many shared strings, 256 MiB of text, as
+  `craft-xls` allows). Fixed caps: 1024 sheets, 100,000 merged ranges per sheet, 64 nested
+  extension blocks.
 - Cells and rows outside the 1,048,576 × 16,384 grid are dropped and counted.
 
 SpreadsheetML is read leniently: a damaged optional part is a warning, a damaged worksheet keeps

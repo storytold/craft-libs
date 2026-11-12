@@ -139,7 +139,7 @@ impl<'a> Package<'a> {
         if self.binary.is_some() {
             let bytes = self.required(&self.workbook_part.clone())?;
             let rels = self.workbook_rels()?;
-            return xlsb::workbook(&bytes, &rels, &self.limits, &mut self.warnings);
+            return xlsb::workbook(&bytes, &rels, &self.limits, &self.budget, &mut self.warnings);
         }
         let options = self.xml_options();
         let root = match self.opc.read_xml(&self.workbook_part, &options)? {
@@ -178,7 +178,7 @@ impl<'a> Package<'a> {
                 xlsb::check_type(types, &rel.target, xlsb::STRINGS)?;
             }
             let bytes = self.required(&rel.target)?;
-            let strings = xlsb::shared_strings(&bytes, &self.limits, &mut self.budget, &mut self.warnings)?;
+            let strings = xlsb::shared_strings(&bytes, &self.limits, &self.budget, &mut self.warnings)?;
             self.binary_strings = Some(strings.len());
             return Ok(strings);
         }
@@ -229,7 +229,7 @@ impl<'a> Package<'a> {
                 None => self.shared_strings()?.len(),
             };
             let bytes = self.required(&part)?;
-            let mut sheet = xlsb::worksheet(&bytes, strings, &self.limits, &mut self.budget, &mut self.warnings, &mut each)?;
+            let mut sheet = xlsb::worksheet(&bytes, strings, &self.limits, &self.budget, &mut self.warnings, &mut each)?;
             sheet.part = part;
             return Ok(sheet);
         }

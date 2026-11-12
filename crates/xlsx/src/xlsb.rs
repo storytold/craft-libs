@@ -16,8 +16,6 @@ pub(crate) const MAIN: &str = "application/vnd.ms-excel.main";
 const BINARY_MAIN: &str = "application/vnd.ms-excel.sheet.binary.macroEnabled.main";
 pub(crate) const WORKSHEET: &str = "application/vnd.ms-excel.worksheet";
 pub(crate) const STRINGS: &str = "application/vnd.ms-excel.sharedStrings";
-/// Most shared-string items.
-const MAX_STRINGS: usize = 1_000_000;
 /// Most sheets in the workbook.
 const MAX_SHEETS: usize = 1024;
 /// Most merged ranges in one worksheet.
@@ -36,26 +34,36 @@ pub(crate) fn check_type(types: &ContentTypes, part: &str, expected: &str) -> Re
     Ok(())
 }
 
-/// What the workbook has used of [`Limits`].
+/// What the workbook has used of [`Limits`], over all its parts. Every part's [`Records`]
+/// charges the same record allowance while cells and text are charged, hence the `Cell`s.
 #[derive(Default)]
 pub(crate) struct Budget {
-    cells: usize,
-    text: usize,
+    cells: std::cell::Cell<usize>,
+    text: std::cell::Cell<usize>,
+    records: std::cell::Cell<usize>,
 }
 
 impl Budget {
-    fn text(&mut self, len: usize, limits: &Limits) -> Result<(), Error> {
-        self.text = self.text.saturating_add(len);
-        if self.text > limits.binary_text {
+    fn text(&self, len: usize, limits: &Limits) -> Result<(), Error> {
+        self.text.set(self.text.get().saturating_add(len));
+        if self.text.get() > limits.binary_text {
             return Err(Error::TooLarge(format!("XLSB decoded text exceeds {} MiB", limits.binary_text >> 20)));
         }
         Ok(())
     }
 
-    fn cell(&mut self, limits: &Limits) -> Result<(), Error> {
-        self.cells += 1;
-        if self.cells > limits.binary_cells {
+    fn cell(&self, limits: &Limits) -> Result<(), Error> {
+        self.cells.set(self.cells.get().saturating_add(1));
+        if self.cells.get() > limits.binary_cells {
             return Err(Error::TooLarge(format!("XLSB exceeds {} imported cells", limits.binary_cells)));
+        }
+        Ok(())
+    }
+
+    fn record(&self, limits: &Limits) -> Result<(), Error> {
+        self.records.set(self.records.get().saturating_add(1));
+        if self.records.get() > limits.binary_records {
+            return Err(Error::TooLarge(format!("XLSB workbook contains too many records (more than {})", limits.binary_records)));
         }
         Ok(())
     }
@@ -131,21 +139,18 @@ impl<'a> Bytes<'a> {
 struct Records<'a, 'l> {
     bytes: Bytes<'a>,
     limits: &'l Limits,
-    count: usize,
+    budget: &'l Budget,
     blocks: Vec<u16>,
 }
 
 impl<'a, 'l> Records<'a, 'l> {
-    fn new(bytes: &'a [u8], limits: &'l Limits) -> Self {
-        Self { bytes: Bytes::new(bytes), limits, count: 0, blocks: vec![] }
+    fn new(bytes: &'a [u8], limits: &'l Limits, budget: &'l Budget) -> Self {
+        Self { bytes: Bytes::new(bytes), limits, budget, blocks: vec![] }
     }
 
     fn next(&mut self, warnings: &mut Warnings) -> Result<Option<(u16, &'a [u8])>, Error> {
         while !self.bytes.rest.is_empty() {
-            self.count += 1;
-            if self.count > self.limits.binary_records {
-                return Err(Error::TooLarge("XLSB part contains too many records".into()));
-            }
+            self.budget.record(self.limits)?;
             let first = self.bytes.u8()?;
             let id = if first & 0x80 == 0 {
                 u16::from(first)
@@ -217,8 +222,8 @@ impl<'a, 'l> Records<'a, 'l> {
 }
 
 /// The workbook part: BrtBeginBook, BrtWbProp, the BrtBundleSh list.
-pub(crate) fn workbook(bytes: &[u8], rels: &Rels, limits: &Limits, warnings: &mut Warnings) -> Result<Workbook, Error> {
-    let mut records = Records::new(bytes, limits);
+pub(crate) fn workbook(bytes: &[u8], rels: &Rels, limits: &Limits, budget: &Budget, warnings: &mut Warnings) -> Result<Workbook, Error> {
+    let mut records = Records::new(bytes, limits, budget);
     records.first(131, warnings)?;
     let mut wb = Workbook::default();
     let mut bundle = false;
@@ -329,8 +334,8 @@ fn item(text: String) -> StringItem {
 }
 
 /// The shared strings part: BrtBeginSst, BrtSSTItem, BrtEndSst.
-pub(crate) fn shared_strings(bytes: &[u8], limits: &Limits, budget: &mut Budget, warnings: &mut Warnings) -> Result<Vec<StringItem>, Error> {
-    let mut records = Records::new(bytes, limits);
+pub(crate) fn shared_strings(bytes: &[u8], limits: &Limits, budget: &Budget, warnings: &mut Warnings) -> Result<Vec<StringItem>, Error> {
+    let mut records = Records::new(bytes, limits, budget);
     let Some((159, payload)) = records.next(warnings)? else {
         return Err(invalid("missing shared-string begin record"));
     };
@@ -338,7 +343,8 @@ pub(crate) fn shared_strings(bytes: &[u8], limits: &Limits, budget: &mut Budget,
     let total = header.u32()?;
     let unique = header.u32()?;
     header.finish()?;
-    if unique > total || unique as usize > MAX_STRINGS {
+    // Each item is kept with its own allocation: no more than there are cells to show them.
+    if unique > total || unique as usize > limits.binary_cells {
         return Err(Error::TooLarge("invalid or oversized shared-string count".into()));
     }
     let mut strings = vec![];
@@ -402,7 +408,7 @@ fn skip_formula(b: &mut Bytes<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-fn value(id: u16, b: &mut Bytes<'_>, strings: usize, limits: &Limits, budget: &mut Budget) -> Result<CellValue, Error> {
+fn value(id: u16, b: &mut Bytes<'_>, strings: usize, limits: &Limits, budget: &Budget) -> Result<CellValue, Error> {
     let value = match id {
         1 => CellValue::Empty,
         2 => {
@@ -447,11 +453,11 @@ pub(crate) fn worksheet(
     bytes: &[u8],
     strings: usize,
     limits: &Limits,
-    budget: &mut Budget,
+    budget: &Budget,
     warnings: &mut Warnings,
     each: &mut dyn FnMut(Row) -> Result<(), Error>,
 ) -> Result<SheetPart, Error> {
-    let mut records = Records::new(bytes, limits);
+    let mut records = Records::new(bytes, limits, budget);
     records.first(129, warnings)?;
     let mut sheet = SheetPart::default();
     let mut data = false;
