@@ -103,7 +103,7 @@
 //! 1 and 3, and bit depths other than the ones above (no samples of any of them).
 
 use crate::huffman::{Bits, Huffman, diff};
-use crate::shared::{active_rows, white_from_data};
+use crate::shared::{active_rows, white_from_data_sourced};
 use crate::{
     BlackLevel, Camera, Cfa, ColorData, Limits, Mode, Opcode, OpcodeLists, Orientation, RawData, RawError, RawFormat, RawImage, Rect, Result,
 };
@@ -620,23 +620,31 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     }
 
     let cfa = cfa(ifd0.u16(CFA_PATTERN).unwrap_or(1));
-    let tags = BLACK_RGB.map(|tag| ifd0.f64(tag).filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(0.0) as f32);
+    let read = BLACK_RGB.map(|tag| ifd0.f64(tag).filter(|v| v.is_finite() && *v >= 0.0));
+    let tags = read.map(|v| v.unwrap_or(0.0) as f32);
     let offset = match encoding {
         Encoding::Blocks { kind: Block::Format4 | Block::Format6 { .. }, .. } => CODEC_BLACK_OFFSET,
         _ => 0.0,
     };
-    let rgb = if tags.iter().all(|&v| v == 0.0) { [DEFAULT_BLACK; 3] } else { tags.map(|v| v + offset) };
+    let (rgb, black_source) = if tags.iter().all(|&v| v == 0.0) {
+        ([DEFAULT_BLACK; 3], crate::LevelSource::Fallback)
+    } else {
+        // a missing tag reads 0: the file stated only part of the level
+        let source = if read.iter().all(Option::is_some) { crate::LevelSource::Metadata } else { crate::LevelSource::Fallback };
+        (tags.map(|v| v + offset), source)
+    };
     // per CFA position, anchored at the active area
     let values = cfa.shifted(active.x, active.y).pattern.iter().map(|&c| rgb[c as usize]).collect();
     let black = BlackLevel { repeat_rows: 2, repeat_cols: 2, values, ..Default::default() };
     let full = ((1u32 << bits.clamp(1, 16)) - 1) as f32;
-    let white = if data.is_empty() {
+    let (white, white_source) = if data.is_empty() {
         // headers only (white isn't part of `RawInfo`): the recorded limit as a placeholder
-        LINEARITY_LIMIT.iter().filter_map(|&tag| ifd0.f64(tag)).map(|v| v as f32).filter(|v| *v > 0.0 && *v <= full).fold(full, f32::min)
+        let limit = LINEARITY_LIMIT.iter().filter_map(|&tag| ifd0.f64(tag)).map(|v| v as f32).filter(|v| *v > 0.0 && *v <= full).fold(full, f32::min);
+        (limit, crate::LevelSource::Unknown)
     } else {
-        white_from_data(&active_rows(&data, w, active), bits)
+        white_from_data_sourced(&active_rows(&data, w, active), bits)
     };
-    let white = if white > black.mean() { white } else { full };
+    let (white, white_source) = if white > black.mean() { (white, white_source) } else { (full, crate::LevelSource::Fallback) };
     let wb = match WB_RGB.map(|tag| ifd0.f64(tag)) {
         [Some(r), Some(g), Some(b)] if r > 0.0 && g > 0.0 && b > 0.0 => Some([(r / g) as f32, 1.0, (b / g) as f32]),
         _ => None,
@@ -662,6 +670,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         camera: tiff.ifds.first().map(Camera::from_ifd0).unwrap_or_default(),
         cinema: Default::default(),
         lens_metadata: Default::default(),
+        level_sources: crate::LevelSources { black: black_source, white: white_source },
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -1086,6 +1095,51 @@ mod tests {
         tags.extend([0x002f, 0x0030, 0x0031, 0x0032].map(|tag| short(tag, 0))); // some bodies write zeros
         let bytes = file(w as u16, h as u16, &tags, &rotate(pack(&px, 12)), &|off| vec![(RAW_OFFSET, Value::Long(vec![off]))]);
         assert_eq!(crate::decode(&bytes).unwrap().crop, Rect::new(0, 0, w - 4, h - 2));
+    }
+
+    /// The black is `Metadata` only when all three `BLACK_RGB` tags were read: a missing one is a 0 the file never
+    /// stated, so the level is a fallback (its values stay as they were).
+    #[test]
+    fn black_source_needs_every_black_tag() {
+        let (w, h) = (90usize, 60usize);
+        let px: Vec<u16> = (0..w * h).map(|i| 300 + (i % 7) as u16).collect();
+        let decode = |black: &[(u16, u16)]| {
+            let mut tags = vec![short(CFA_PATTERN, 2), short(BITS, 12), short(RAW_FORMAT, 5)];
+            tags.extend(black.iter().map(|&(tag, v)| short(tag, v)));
+            crate::decode(&file(w as u16, h as u16, &tags, &rotate(pack(&px, 12)), &|off| vec![(RAW_OFFSET, Value::Long(vec![off]))])).unwrap()
+        };
+        let [r, g, b] = BLACK_RGB;
+        assert_eq!(decode(&[(r, 100), (g, 110), (b, 120)]).level_sources.black, crate::LevelSource::Metadata);
+        let partial = decode(&[(r, 100), (g, 110)]);
+        assert_eq!(partial.level_sources.black, crate::LevelSource::Fallback, "the blue black was never stated");
+        let mut values = partial.black.values.clone();
+        values.sort_by(f32::total_cmp);
+        assert_eq!(values, vec![0.0, 100.0, 110.0, 110.0], "the missing channel still reads 0");
+        assert_eq!(decode(&[]).level_sources.black, crate::LevelSource::Fallback);
+    }
+
+    /// A plateau at or below the black level can't be the white: the full range is used, a `Fallback`. A
+    /// headers-only decode reads no samples, so both sources are `Unknown`.
+    #[test]
+    fn white_source_of_a_plateau_below_the_black_and_of_headers_only() {
+        let (w, h) = (90usize, 60usize);
+        let mut px: Vec<u16> = (0..w * h).map(|i| 300 + (i % 7) as u16).collect();
+        px[10 * w..20 * w].fill(2500);
+        let make = |black: u16| {
+            let mut tags = vec![short(CFA_PATTERN, 2), short(BITS, 12), short(RAW_FORMAT, 5)];
+            tags.extend(BLACK_RGB.map(|tag| short(tag, black)));
+            file(w as u16, h as u16, &tags, &rotate(pack(&px, 12)), &|off| vec![(RAW_OFFSET, Value::Long(vec![off]))])
+        };
+        let r = crate::decode(&make(100)).unwrap();
+        assert!((2400.0..=2500.0).contains(&r.white_at(0)), "{}", r.white_at(0));
+        assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::Metadata, white: crate::LevelSource::Inferred });
+        let r = crate::decode(&make(3000)).unwrap();
+        assert_eq!(r.white_at(0), 4095.0);
+        assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::Metadata, white: crate::LevelSource::Fallback });
+        assert_eq!(
+            crate::decode_in(&make(100), crate::Mode::Header, &crate::Limits::default()).unwrap().level_sources,
+            crate::LevelSources::default()
+        );
     }
 
     /// Format 8 code tables as two cameras write them (16-bit DC-GH6; 14-bit DC-S5M2, whose codes for categories 15

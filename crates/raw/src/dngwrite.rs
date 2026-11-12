@@ -461,6 +461,7 @@ mod tests {
             camera: Default::default(),
             cinema: Default::default(),
             lens_metadata: Default::default(),
+            level_sources: Default::default(),
         };
         let opts = |tile: u32| DngWriteOptions { compression: DngCompression::Deflate { tile, half: false }, ..DngWriteOptions::default() };
         let hostile = write_dng(&raw, &opts(u32::MAX)).expect("the clamped tile writes");
