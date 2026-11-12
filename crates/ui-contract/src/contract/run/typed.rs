@@ -635,6 +635,8 @@ pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSo
             ui: &mut *ui,
             env: &env,
             ink: cx.core.ink,
+            // A face of an inactive part paints its data as `draw_part` does for the host.
+            data: if source.result.inactive { crate::primitives::DataMode::Inactive } else { crate::primitives::DataMode::of(&state) },
             id,
             rect,
             record: &cx.core.paint,

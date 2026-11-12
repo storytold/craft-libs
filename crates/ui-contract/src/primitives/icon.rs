@@ -172,11 +172,17 @@ impl<'a> IconSpec<'a> {
     }
 
     /// Adds a dot of `color` at the bottom-trailing corner of an SVG or glyph icon, ringed in the icon's colour: the
-    /// tone a point picker sets. The dot is image data, so it keeps its colour in every state; the ring follows the
-    /// icon's.
+    /// tone a point picker sets. The dot is a data colour (`Draw::data_fill`); the ring follows the icon's colour.
     pub fn badge(mut self, color: DataColor) -> Self {
         self.badge = Some(color);
         self
+    }
+}
+
+impl IconSpec<'_> {
+    /// The colour the spec names, else its ink's colour: what the glyph, a swatch's edge and the badge's ring paint in.
+    pub(crate) fn color_in(&self, tokens: &UiTokens) -> Color32 {
+        self.color.map_or_else(|| ink_color(tokens, self.ink), StyleColor::egui)
     }
 }
 
@@ -196,9 +202,9 @@ pub fn icon_names() -> &'static [&'static str] {
     svg_set::names()
 }
 
-/// Paints `spec` centred in the square of `rect`'s shorter side.
+/// Paints `spec`'s glyph centred in the square of `rect`'s shorter side; `Draw::icon` adds the badge.
 pub(crate) fn paint(painter: &Painter, tokens: &UiTokens, direction: Direction, rect: Rect, spec: &IconSpec<'_>) {
-    let color = spec.color.map_or_else(|| ink_color(tokens, spec.ink), StyleColor::egui);
+    let color = spec.color_in(tokens);
     let rtl = direction == Direction::Rtl;
     let side = rect.width().min(rect.height());
     let square = Rect::from_center_size(rect.center(), vec2(side, side));
@@ -217,11 +223,6 @@ pub(crate) fn paint(painter: &Painter, tokens: &UiTokens, direction: Direction, 
             let mirrored = rtl && svg_set::directional(index) && spec.mirror == Mirror::Auto;
             svg(painter, tokens, square, index, spec.set, mirrored, color);
         }
-    }
-    if let Some(badge) = spec.badge {
-        let radius = tokens.size.handle.sm / 2.0;
-        let centre = if rtl { square.left_bottom() + vec2(radius, -radius) } else { square.right_bottom() - vec2(radius, radius) };
-        painter.circle(centre, radius, badge.0, egui::Stroke::new(tokens.stroke.thin, color));
     }
 }
 

@@ -59,6 +59,7 @@ pub use textures::{
     ThumbSource, ThumbnailOptions, Thumbnails, fit_image, fit_rect, reduce_image, texture_factor, texture_side, thumb_image,
 };
 
+pub(crate) use draw::DataMode;
 #[doc(hidden)]
 pub use draw::DrawEnv;
 pub(crate) use draw::surface_look_shapes;

@@ -1,12 +1,16 @@
-//! `DisabledLook::Faded`: a disabled component that shows data paints its enabled look at `Opacity::DISABLED`, its
-//! faces and the faded children it shows each faded once; a settled region holding one replays the faded paint.
+//! How a disabled component dims what it shows. `DisabledLook::Faded`: a component that shows data paints its enabled
+//! look at `Opacity::DISABLED`, its faces and the faded children it shows each faded once; a settled region holding one
+//! replays the faded paint. `DisabledLook::States`: the data colours its `Draw` paints dim and keep their hues.
 
+use craft_behavior::IconId;
 use craft_theme::variant::Tone;
 use craft_theme::{Opacity, Srgba};
-use craft_ui::buttons::Button;
+use craft_ui::buttons::{Button, IconButton};
 use craft_ui::contract::{Lazy, Props as _, Show as _};
 use craft_ui::list::ThumbAspect;
+use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::Label;
+use craft_ui::style::DataColor;
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Frames, trial};
 use craft_ui::tile_grid::{BadgeKind, BadgeSlot, Tile, TileBadge};
@@ -113,4 +117,25 @@ fn a_settled_region_replays_a_faded_component_without_running_it() {
         assert_eq!(runs.get(), 0, "settled frame {frame} ran the region");
         assert_eq!(alphas(&shapes), alphas(&ran), "settled frame {frame} paints the faded shapes a run paints");
     }
+}
+
+/// The fill of the badge an icon button paints on its icon in `color`.
+fn badge_fill(enabled: bool, color: Color32) -> Color32 {
+    let shapes = settled_shapes(&mut Frames::new(), |ui| {
+        in_region(ui, REGION, |ui| {
+            IconButton::new(IconSpec::svg(IconId::new("eyedropper")).badge(DataColor::new(color))).label("Pick").enabled(enabled).show(ui);
+        });
+    });
+    shapes.iter().find_map(|shape| if let Shape::Circle(circle) = shape { Some(circle.fill) } else { None }).expect("the badge paints")
+}
+
+/// A disabled button paints its icon's badge, a data colour, dimmer than an enabled one, and two badge colours stay
+/// two colours (not the one disabled fill).
+#[trial]
+fn a_disabled_button_dims_its_badge_and_keeps_its_hue() {
+    let (black, white) = (Color32::from_gray(0), Color32::from_gray(255));
+    let enabled = badge_fill(true, white);
+    let disabled = badge_fill(false, white);
+    assert!(disabled.a() < enabled.a(), "the disabled badge {disabled:?} is dimmer than the enabled {enabled:?}");
+    assert_ne!(badge_fill(false, black), disabled, "two disabled badges keep their own colours");
 }

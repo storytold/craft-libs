@@ -4,11 +4,13 @@ use super::{Button, IconButton, Link, SplitButton, ToggleButton};
 use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Validity};
 use crate::display::{Shade, Text};
 use crate::layout_components::{Grid, Row};
+use crate::primitives::IconSpec;
 use crate::runtime::env::Message;
+use crate::style::DataColor;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::{ColumnWidth, IconId, Mixed, Proposal};
 use craft_theme::{ControlSize, Variant};
-use egui::{Key, Modifiers, Ui};
+use egui::{Color32, Key, Modifiers, Ui};
 
 const SIZES: [(&str, ControlSize); 2] = [("Sm", ControlSize::Sm), ("Md", ControlSize::Md)];
 
@@ -81,6 +83,25 @@ fn icon_button_selected(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
             [("undo", "Undo"), ("redo", "Redo"), ("copy", "Copy"), ("trash", "Delete"), ("settings", "Settings")].into_iter().enumerate()
         {
             IconButton::new(IconId::new(icon)).label(label).selected(i == 0).id_salt(icon).show(ui);
+        }
+    });
+    shown.into()
+}
+
+/// Icon buttons with a colour badge on their icon, enabled and then disabled: a disabled button dims each badge and
+/// keeps its hue.
+#[story(IconButton<'static>, covers = [], drive = Drive::Never, title = "Badge")]
+fn icon_button_badge(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    const BADGES: [(&str, Color32); 2] = [("Red", Color32::from_rgb(230, 51, 51)), ("Blue", Color32::from_rgb(51, 102, 230))];
+    let shown = Row::new().show(ui, |ui, _| {
+        for enabled in [true, false] {
+            for (name, color) in BADGES {
+                IconButton::new(IconSpec::svg(IconId::new("eyedropper")).badge(DataColor::new(color)))
+                    .label(name)
+                    .enabled(enabled)
+                    .id_salt((name, enabled))
+                    .show(ui);
+            }
         }
     });
     shown.into()

@@ -164,13 +164,32 @@ pub struct DrawEnv<'a> {
     pub ink: Ink,
 }
 
+/// How a `Draw` paints colours from data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DataMode {
+    /// As they are.
+    Full,
+    /// At `Opacity::DISABLED`, for a component that paints its Disabled state: the data can't be used now but is
+    /// still what it is, so each colour keeps its hue.
+    Dimmed,
+    /// In the theme's disabled fill, for an inactive part (a switched-off clip): the data is off.
+    Inactive,
+}
+
+impl DataMode {
+    /// The mode of a component painting in `state`: `Dimmed` in its Disabled state, which step 12 gives a disabled
+    /// component that is not faded as a whole.
+    pub(crate) fn of(state: &crate::style::StateSet) -> Self {
+        if state.state == craft_theme::State::Disabled { DataMode::Dimmed } else { DataMode::Full }
+    }
+}
+
 /// The content-paint API `PaintUi::draw` gives.
 pub struct Draw<'a> {
     painter: &'a Painter,
     record: &'a RefCell<PaintRecord>,
     env: DrawEnv<'a>,
-    /// Painting for an inactive part: data fills and strokes take the theme's disabled fill.
-    inactive: bool,
+    data: DataMode,
     /// The paragraph direction of text: the env's direction unless the caller sets the interface's.
     text_direction: Direction,
 }
@@ -178,7 +197,7 @@ pub struct Draw<'a> {
 impl<'a> Draw<'a> {
     #[doc(hidden)]
     pub fn new(painter: &'a Painter, record: &'a RefCell<PaintRecord>, env: DrawEnv<'a>) -> Self {
-        Draw { painter, record, env, inactive: false, text_direction: env.direction }
+        Draw { painter, record, env, data: DataMode::Full, text_direction: env.direction }
     }
 
     /// The same painter with `direction` as the paragraph direction of its text, while `env.direction` stays the
@@ -188,9 +207,9 @@ impl<'a> Draw<'a> {
         self
     }
 
-    /// The same painter for a part that is `inactive`.
-    pub(crate) fn for_part(mut self, inactive: bool) -> Self {
-        self.inactive = inactive;
+    /// The same painter painting data colours in `data`.
+    pub(crate) fn data(mut self, data: DataMode) -> Self {
+        self.data = data;
         self
     }
 
@@ -242,14 +261,20 @@ impl<'a> Draw<'a> {
     }
 
     /// Lays `text` out in `rect`'s width and paints it top aligned, its block placed in `rect` by `text.align` (Start
-    /// and End swap sides under right-to-left). Each run keeps its own font, size and colour.
+    /// and End swap sides under right-to-left). Each run keeps its own font, size and colour; a disabled component's
+    /// runs paint at `Opacity::DISABLED`, as `data_fill` does.
     pub fn doc(&self, rect: Rect, text: &DocText<'_>) -> TextLayout {
         let text = DocText { wrap: Some(rect.width()), ..*text };
         let layout = text.layout(self.painter.ctx(), self.env.tokens, self.text_direction);
         let layout = TextLayout { galley: super::text::anchored_at_start(layout.galley.clone()), ..layout };
         let share = super::text::free_room_before(text.align, self.text_direction == Direction::Rtl);
         let x = rect.left() + (rect.width() - layout.size().x).max(0.0) * share;
-        self.galley(Pos2::new(x, rect.top()), &layout);
+        // The runs' colours are data.
+        if self.data == DataMode::Dimmed {
+            self.faded(craft_theme::Opacity::DISABLED, |draw| draw.galley(Pos2::new(x, rect.top()), &layout));
+        } else {
+            self.galley(Pos2::new(x, rect.top()), &layout);
+        }
         layout
     }
 
@@ -283,21 +308,33 @@ impl<'a> Draw<'a> {
     }
 
     /// Paints `icon` centred in `rect`, in the colour or ink the spec names, mirrored under right-to-left when it is
-    /// directional.
+    /// directional, with its badge at the bottom-trailing corner.
     pub fn icon(&self, rect: Rect, icon: &super::IconSpec<'_>) {
-        if let super::IconSource::Swatch(color) = &icon.source {
-            let side = rect.width().min(rect.height());
-            let well = Rect::from_center_size(rect.center(), Vec2::splat(side));
-            let edge = icon.color.map_or_else(|| ink_color(self.env.tokens, icon.ink), StyleColor::egui);
-            self.swatch_well(well, CornerRadius::ZERO, *color);
-            self.paint(&PaintShape::Rect(well, CornerRadius::ZERO), None, Some(Stroke::new(self.width(StrokeWidth::Thin), edge)));
-            return;
+        let color = icon.color_in(self.env.tokens);
+        let side = rect.width().min(rect.height());
+        let square = Rect::from_center_size(rect.center(), Vec2::splat(side));
+        match icon.source {
+            super::IconSource::Swatch(swatch) => {
+                self.swatch_well(square, CornerRadius::ZERO, swatch);
+                self.paint(&PaintShape::Rect(square, CornerRadius::ZERO), None, Some(Stroke::new(self.width(StrokeWidth::Thin), color)));
+                return;
+            }
+            super::IconSource::Initial(letter) => {
+                self.initial(rect, letter, StyleColor(color));
+                return;
+            }
+            _ => super::icon::paint(self.painter, self.env.tokens, self.env.direction, rect, icon),
         }
-        if let super::IconSource::Initial(letter) = icon.source {
-            self.initial(rect, letter, icon.color.unwrap_or_else(|| StyleColor(ink_color(self.env.tokens, icon.ink))));
-            return;
+        if let Some(badge) = icon.badge {
+            let radius = self.env.tokens.size.handle.sm / 2.0;
+            let centre = if self.env.direction == Direction::Rtl {
+                square.left_bottom() + Vec2::new(radius, -radius)
+            } else {
+                square.right_bottom() - Vec2::splat(radius)
+            };
+            let ring = Stroke::new(self.width(StrokeWidth::Thin), color);
+            self.paint(&PaintShape::Circle(centre, radius), Some(self.data_color(badge)), Some(ring));
         }
-        super::icon::paint(self.painter, self.env.tokens, self.env.direction, rect, icon);
     }
 
     /// `letter` in caption text centred in an outlined box that fills the square of `rect`'s shorter side.
@@ -317,8 +354,7 @@ impl<'a> Draw<'a> {
         self.painter.extend(super::ResetMark::shapes(look, center, differs));
     }
 
-    /// Paints `marker` in `look`. A `Draw` for an inactive part fills a filled marker with the theme's disabled fill, as
-    /// `data_fill` does.
+    /// Paints `marker` in `look`. A filled marker's fill is a data colour, painted as `data_fill` paints it.
     pub fn marker(&self, look: &crate::style::MarkerLook, marker: &super::Marker) {
         let marker = match marker.fill() {
             Some(color) => marker.with_fill(self.data_color(DataColor::new(color))),
@@ -387,36 +423,47 @@ impl<'a> Draw<'a> {
     }
 
     /// Strokes `shape` at a theme width or a width from the document, in a theme colour or a colour from data (a
-    /// chart series, a curve). A `Draw` for an inactive part strokes a data colour with the theme's disabled fill
-    /// instead.
+    /// chart series, a curve). A data colour paints as `data_fill` paints it.
     pub fn stroke(&self, shape: &PaintShape, width: impl Into<DataStrokeWidth>, color: impl Into<StrokeColor>) {
         self.paint(shape, None, Some(self.line(width.into(), color.into())));
     }
 
-    /// Fills `shape` with a colour from data (a swatch well, a layer label dot, an avatar). A `Draw` for an inactive
-    /// part (`PaintUi::draw_part`) fills with the theme's disabled fill instead.
+    /// Fills `shape` with a colour from data (a swatch well, a layer label dot, an avatar). A component that paints its
+    /// Disabled state fills at `Opacity::DISABLED`, keeping the colour's hue; a `Draw` for an inactive part
+    /// (`PaintUi::draw_part`) fills with the theme's disabled fill instead.
     pub fn data_fill(&self, shape: &PaintShape, color: DataColor) {
         let fill = self.data_color(color);
         self.paint(shape, Some(fill), None);
     }
 
-    /// Paints the part `uv` of `texture` (from `TextureCache` or a `TextureStore`) into `rect`, untinted. A `Draw`
-    /// for an inactive part fills `rect` with the theme's disabled fill instead, as `data_fill` does.
+    /// Paints the part `uv` of `texture` (from `TextureCache` or a `TextureStore`) into `rect`, untinted. The picture
+    /// is data: a disabled component paints it at `Opacity::DISABLED`, and a `Draw` for an inactive part fills `rect`
+    /// with the theme's disabled fill instead, as `data_fill` does.
     pub fn texture(&self, rect: Rect, texture: TextureId, uv: Rect) {
-        if self.inactive {
-            self.data_fill(&PaintShape::Rect(rect, CornerRadius::ZERO), DataColor::new(Color32::TRANSPARENT));
-        } else {
-            self.painter.image(texture, rect, uv, super::textures::UNTINTED);
-        }
+        let tint = match self.data {
+            DataMode::Inactive => {
+                self.data_fill(&PaintShape::Rect(rect, CornerRadius::ZERO), DataColor::new(Color32::TRANSPARENT));
+                return;
+            }
+            DataMode::Dimmed => super::textures::UNTINTED.gamma_multiply(craft_theme::Opacity::DISABLED),
+            DataMode::Full => super::textures::UNTINTED,
+        };
+        self.painter.image(texture, rect, uv, tint);
     }
 
-    /// Paints `checker` over `rect` with corners `radius`, a light cell at the rect's top left. A `Draw` for an
-    /// inactive part fills the rect with the theme's disabled fill instead, as `data_fill` does.
+    /// Paints `checker` over `rect` with corners `radius`, a light cell at the rect's top left. It shows through data,
+    /// so it paints as the data over it: at `Opacity::DISABLED` for a disabled component, and for an inactive part as
+    /// the theme's disabled fill, as `data_fill` does.
     pub fn checker(&self, checker: &super::Checker, rect: Rect, radius: CornerRadius) {
-        if self.inactive {
-            self.data_fill(&PaintShape::Rect(rect, radius), DataColor::new(Color32::TRANSPARENT));
-        } else {
-            self.painter.add(checker.shape(self.painter.ctx(), self.env.tokens, super::CheckerArea::Rect(rect, radius), rect.min));
+        let shape = || checker.shape(self.painter.ctx(), self.env.tokens, super::CheckerArea::Rect(rect, radius), rect.min);
+        match self.data {
+            DataMode::Inactive => self.data_fill(&PaintShape::Rect(rect, radius), DataColor::new(Color32::TRANSPARENT)),
+            DataMode::Dimmed => {
+                faded_painter(self.painter, craft_theme::Opacity::DISABLED).add(shape());
+            }
+            DataMode::Full => {
+                self.painter.add(shape());
+            }
         }
     }
 
@@ -441,8 +488,13 @@ impl<'a> Draw<'a> {
         }
     }
 
+    /// The one mapping of a data colour, by `self.data`.
     fn data_color(&self, color: DataColor) -> Color32 {
-        if self.inactive { crate::style::rgba_color(self.env.tokens.color.state.disabled_fill) } else { color.0 }
+        match self.data {
+            DataMode::Full => color.0,
+            DataMode::Dimmed => color.0.gamma_multiply(craft_theme::Opacity::DISABLED),
+            DataMode::Inactive => crate::style::rgba_color(self.env.tokens.color.state.disabled_fill),
+        }
     }
 
     /// Strokes the open path `path` as dashes (copy marks, drag previews, reference lines), with the width and colour
@@ -475,7 +527,7 @@ impl<'a> Draw<'a> {
     /// under a frozen band, a bracket cut at a lane's edge.
     pub fn clipped(&self, rect: Rect, paint: impl FnOnce(&Draw<'_>)) {
         let painter = self.painter.with_clip_rect(rect);
-        paint(&Draw { painter: &painter, record: self.record, env: self.env, inactive: self.inactive, text_direction: self.text_direction });
+        paint(&Draw { painter: &painter, record: self.record, env: self.env, data: self.data, text_direction: self.text_direction });
     }
 
     /// Runs `paint` with a `Draw` whose fills, strokes, text runs, icons and pictures are all `share` as opaque as
@@ -484,7 +536,7 @@ impl<'a> Draw<'a> {
     /// clamped and a non-finite one leaves the opacity as it was.
     pub fn faded(&self, share: f32, paint: impl FnOnce(&Draw<'_>)) {
         let painter = faded_painter(self.painter, share);
-        paint(&Draw { painter: &painter, record: self.record, env: self.env, inactive: self.inactive, text_direction: self.text_direction });
+        paint(&Draw { painter: &painter, record: self.record, env: self.env, data: self.data, text_direction: self.text_direction });
     }
 
     fn paint(&self, shape: &PaintShape, fill: Option<Color32>, stroke: Option<Stroke>) {

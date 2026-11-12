@@ -6,7 +6,7 @@ use super::run::{self, FaceSource, ShowAt};
 use super::{ContentPainter, Cx, Show, TipFn};
 use super::{InsideLabel, SideLabel};
 use crate::primitives::sensing::PartResults;
-use crate::primitives::{ContentPainterCx, Draw, DrawEnv, PaintRecord, TextRun, Wrap};
+use crate::primitives::{ContentPainterCx, DataMode, Draw, DrawEnv, PaintRecord, TextRun, Wrap};
 use crate::runtime::access;
 use crate::runtime::egui::{alloc, child, focus as egui_focus, text_edit};
 use crate::runtime::env::{Env, Label};
@@ -29,6 +29,8 @@ pub struct PaintUi<'a> {
     pub env: &'a Env,
     /// The ink of the component's own surface, which `draw` paints text and rules in.
     pub(crate) ink: Ink,
+    /// How `draw` paints data colours: dimmed while the component paints its Disabled state.
+    pub(crate) data: DataMode,
     pub(crate) id: Id,
     pub(crate) rect: Rect,
     pub(crate) record: &'a RefCell<PaintRecord>,
@@ -54,10 +56,12 @@ pub struct PaintUi<'a> {
 }
 
 impl PaintUi<'_> {
-    /// The content-paint API: text, rules, surfaces and shapes, recorded for the later steps.
+    /// The content-paint API: text, rules, surfaces and shapes, recorded for the later steps. While the component
+    /// paints its Disabled state (`DisabledLook::States`), its data colours paint at `Opacity::DISABLED`.
     pub fn draw(&self) -> Draw<'_> {
         Draw::new(self.ui.painter(), self.record, DrawEnv { tokens: &self.env.tokens, direction: self.env.direction, ink: self.ink })
             .text_direction(self.env.text_direction)
+            .data(self.data)
     }
 
     /// Shows the selection part `part` (`PartsCx::selectable_text`): `run` in `rect`, painted as `Draw::text`
@@ -114,11 +118,12 @@ impl PaintUi<'_> {
     }
 
     /// The content-paint API for painting `part`: as [`draw`](Self::draw), and when the part was declared
-    /// [`inactive`](super::PartBuilder::inactive) its data fills and strokes use the theme's disabled fill.
+    /// [`inactive`](super::PartBuilder::inactive) its data colours use the theme's disabled fill.
     pub fn draw_part(&self, part: impl Into<PartRef>) -> Draw<'_> {
         let part = part.into();
         let inactive = self.results.get(&(part.key, part.index)).is_some_and(|result| result.inactive);
-        self.draw().for_part(inactive)
+        let draw = self.draw();
+        if inactive { draw.data(DataMode::Inactive) } else { draw }
     }
 
     /// Runs `paint` with this `PaintUi` cut to `rect` (inside the clip already in force), as `Draw::clipped` does for a
@@ -270,6 +275,6 @@ impl PaintUi<'_> {
 
     /// The raw painter for an allowlisted content painter, clipped to the component's own rect.
     pub fn content_painter<C: ContentPainter>(&self, cx: &Cx<'_, C>) -> ContentPainterCx<'_> {
-        ContentPainterCx::new(self.ui.painter().with_clip_rect(cx.core.rect.intersect(self.ui.clip_rect())), self.env, self.ink)
+        ContentPainterCx::new(self.ui.painter().with_clip_rect(cx.core.rect.intersect(self.ui.clip_rect())), self.env, self.ink).data(self.data)
     }
 }

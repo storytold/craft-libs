@@ -5,13 +5,13 @@ use super::face::{self, tinted};
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, PopupKind, Props, Role, Styled as _};
 use crate::primitives::{IconSpec, PaintShape, StrokeWidth};
 use crate::runtime::commands::CommandRef;
-use crate::style::{ComponentStyle, DataColor, FocusLook, IconLook, StyleColor, StyleCx, SurfaceLook};
+use crate::style::{ComponentStyle, FocusLook, IconLook, StyleColor, StyleCx, SurfaceLook};
 use craft_behavior::{Metrics, Sense};
 use craft_theme::{
-    Srgba, Variant,
+    Variant,
     variant::{Emphasis, Tone},
 };
-use egui::{Color32, Pos2, Vec2};
+use egui::{Pos2, Vec2};
 
 /// The style of an icon button.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -57,11 +57,6 @@ pub struct IconButton<'a> {
     /// field's clear button repeats Escape.
     #[prop]
     focusable: bool,
-    /// A small dot of the colour at the end-bottom corner of the glyph, ringed so it shows on any fill. The colour
-    /// is the user's content, so it has no contrast pair. It takes the place of the dot a marked command shows in the
-    /// accent.
-    #[prop(into)]
-    badge: Option<Srgba>,
     /// The kind of popup the button opens: AccessKit reports it, and a mark shows at the end-bottom corner when
     /// [`popup_mark`](Self::popup_mark) is on.
     #[prop(into)]
@@ -78,7 +73,7 @@ pub struct IconButton<'a> {
 impl<'a> IconButton<'a> {
     /// An icon button showing `icon`; `label` it with the accessible name.
     pub fn new(icon: impl Into<IconSpec<'a>>) -> Self {
-        IconButton { common: Common::new(), icon: icon.into(), focusable: true, badge: None, popup: None, popup_mark: false, expanded: None }
+        IconButton { common: Common::new(), icon: icon.into(), focusable: true, popup: None, popup_mark: false, expanded: None }
     }
 
     /// An icon button bound to `command`: its label, enabled state and activation follow the command.
@@ -140,14 +135,11 @@ impl Component for IconButton<'_> {
         // A mark tells that the command's content has something to show, so it shows while that content is not
         // shown: a rail's panel that is closed.
         let marked = cx.command.as_ref().is_some_and(|command| command.marked && command.checked != Some(true));
-        if self.badge.is_some() || marked {
+        if marked {
             let radius = cx.style.marker / 2.0;
             let x = if cx.flow.is_rtl() { glyph.left() + radius } else { glyph.right() - radius };
             let dot = PaintShape::Circle(Pos2::new(x, glyph.bottom() - radius), radius);
-            match self.badge {
-                Some(badge) => draw.data_fill(&dot, DataColor::new(Color32::from(badge))),
-                None => draw.fill(&dot, cx.style.marker_color),
-            }
+            draw.fill(&dot, cx.style.marker_color);
             draw.stroke(&dot, StrokeWidth::Thin, cx.style.marker_edge);
         }
     }

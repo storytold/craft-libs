@@ -31,6 +31,8 @@ pub struct ContentPainterCx<'a> {
     pub(super) direction: Direction,
     env: &'a Env,
     ink: Ink,
+    /// How `with_draw` paints data colours, as the component's `PaintUi::draw` does.
+    data: super::DataMode,
 }
 
 impl<'a> ContentPainterCx<'a> {
@@ -38,7 +40,13 @@ impl<'a> ContentPainterCx<'a> {
     /// content-paint kit reads.
     #[doc(hidden)]
     pub fn new(painter: Painter, env: &'a Env, ink: Ink) -> Self {
-        ContentPainterCx { painter, tokens: &env.tokens, direction: env.direction, env, ink }
+        ContentPainterCx { painter, tokens: &env.tokens, direction: env.direction, env, ink, data: super::DataMode::Full }
+    }
+
+    /// The same painter whose `with_draw` paints data colours in `data`.
+    pub(crate) fn data(mut self, data: super::DataMode) -> Self {
+        self.data = data;
+        self
     }
 
     /// The style context of the scope being painted, for a content painter that resolves the style of a component
@@ -65,7 +73,7 @@ impl<'a> ContentPainterCx<'a> {
     #[doc(hidden)]
     pub fn with_draw<R>(&self, paint: impl FnOnce(&Draw<'_>) -> R) -> R {
         let record = RefCell::new(PaintRecord::default());
-        paint(&Draw::new(&self.painter, &record, DrawEnv { tokens: self.tokens, direction: self.direction, ink: self.ink }))
+        paint(&Draw::new(&self.painter, &record, DrawEnv { tokens: self.tokens, direction: self.direction, ink: self.ink }).data(self.data))
     }
 
     /// The colour of text and glyphs on the surface being painted: the resolved content-text colour `Draw` paints
@@ -90,6 +98,7 @@ impl<'a> ContentPainterCx<'a> {
             direction: self.direction,
             env: self.env,
             ink: self.ink,
+            data: self.data,
         };
         paint(&faded);
     }
