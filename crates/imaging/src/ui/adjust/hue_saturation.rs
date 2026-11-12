@@ -13,7 +13,7 @@ use craft_ui::form::Field;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label, UnitKind};
 use craft_ui::style::{DataColor, TypeRole};
-use craft_ui::value_drag::{Anchor, Thumb, ThumbRow, TrackFace};
+use craft_ui::value_drag::{Anchor, OffThumbs, SpanInk, Thumb, ThumbRow, ThumbSpan, TrackFace};
 use egui::{Color32, Ui};
 
 use super::sliders::{Run, editor_group, lifted, read, words};
@@ -35,6 +35,8 @@ const COLORIZE_SATURATION: f64 = 25.0;
 const TURN: f64 = 360.0;
 /// The most a range spans: the end thumb is at most this far past the start.
 const MAX_SPAN: f64 = 359.0;
+/// The bands under a range's thumbs: the whole range faint, its full-strength part muted.
+const RANGE_SPANS: [ThumbSpan; 2] = [ThumbSpan::new(0, 3, SpanInk::Faint), ThumbSpan::new(1, 2, SpanInk::Muted)];
 
 /// One of Hue/Saturation's six colour ranges (Reds, Yellows, Greens, Cyans, Blues, Magentas).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -251,8 +253,9 @@ impl std::ops::Deref for HueSaturationOutput {
 ///   [`adjusted_spectrum`](Self::adjusted_spectrum) below (the same 37 hues after the adjustment; the input bar again
 ///   without it). Not mirrored in right-to-left layouts: they are scales of the image.
 /// - **Range thumbs** (a range shown): four thumbs under the lower bar as one thumb row that wraps through 0° and keeps
-///   its order going round from the first thumb. A drag moves a thumb with [`HueRangeValue::move_bound`], whole
-///   degrees. Under the bars a readout "a° / b°  ·  c° \ d°", each bound within one turn.
+///   its order going round from the first thumb, over a faint band from the first thumb to the last and a muted one
+///   between the middle two. A drag on a thumb moves it with [`HueRangeValue::move_bound`], whole degrees; a press
+///   off the thumbs does nothing. The row is not mirrored either. Under the bars a readout "a° / b°  ·  c° \ d°", each bound within one turn.
 #[must_use = "show the editor with `show`"]
 #[derive(Pattern)]
 pub struct HueSaturationEditor<'a> {
@@ -377,8 +380,11 @@ impl<'a> HueSaturationEditor<'a> {
                         .step(1.0)
                         .anchor(Anchor::new(0, MAX_SPAN))
                         .thumbs(thumbs)
+                        .off_thumbs(OffThumbs::Ignore)
+                        .spans(&RANGE_SPANS)
                         .track_face(TrackFace::new(ToneRamp::new(&after)))
                         .label(words.spectrum_after.clone())
+                        .ltr_axis()
                         .show(ui)
                         .edit;
                     run.push(cx, row, move |now: &HueSaturation, row: &[Mixed<f64>; 4]| now.with_thumbs(r, row));

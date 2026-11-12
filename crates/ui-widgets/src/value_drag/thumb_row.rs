@@ -2,10 +2,11 @@
 //! editor do. One leaf with a focusable thumb part per value. A press on a thumb grabs it and a drag moves it by the
 //! pointer's travel; a press elsewhere on the row jumps the nearest thumb there; arrows, the wheel and AccessKit step
 //! the focused thumb. Each value is mixed or not on its own. The row's rules (order, wrap, split halves) are
-//! `RowRules`.
+//! `RowRules`; what a press off the thumbs does is the row's [`OffThumbs`].
 //!
-//! Alt keeps the meaning it has in Photoshop's levels: a drag that begins with Alt held moves one half of a split
-//! thumb alone, at full rate. On a thumb that is not split, Alt scales a drag finer as on every value control.
+//! Alt keeps the meaning it has in Photoshop's Blend If: on a split thumb it moves one half alone, at full rate on a
+//! drag (from the moment it is held) and by the plain step on a key or the wheel; without it the pair moves together.
+//! On a thumb that is not split, Alt scales a move finer as on every value control.
 
 use super::track::{self, Pick, Press, Scale, SliderScale, ThumbRing, TrackFace, Travel, travel};
 use super::words::ValueDragWords;
@@ -25,7 +26,7 @@ use craft_behavior::{
 };
 use craft_keymap::Mods;
 use craft_theme::{Rgba, Stateful, States};
-use egui::{Pos2, Rangef, Rect, Vec2, pos2};
+use egui::{CornerRadius, Pos2, Rangef, Rect, Vec2, pos2};
 use std::ops::RangeInclusive;
 
 #[cfg(feature = "testing")]
@@ -56,6 +57,12 @@ pub struct ThumbRowStyle {
     track: TrackLook,
     /// The length a row asks for along its axis.
     length: f32,
+    /// The ink of a [`SpanInk::Faint`] span.
+    span_faint: StyleColor,
+    /// The ink of a [`SpanInk::Muted`] span.
+    span_muted: StyleColor,
+    /// The thickness of a span.
+    span: f32,
 }
 
 /// How a thumb's value is kept among the row's other values.
@@ -93,6 +100,49 @@ pub enum Neighbours {
     Stop,
     /// It pushes the other thumb along, and that one the next, up to the end of the range: a Blend If bar's handles.
     Push,
+}
+
+/// What a press off the thumbs does: one beyond the reach of every thumb.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OffThumbs {
+    /// The nearest thumb jumps to the pointer, on a tap and on a drag: a levels row.
+    #[default]
+    Jump,
+    /// A drag takes the nearest thumb to the pointer; a tap only focuses it: a Blend If bar.
+    Nearest,
+    /// Nothing: only a press on a thumb moves one. The range thumbs of a hue editor.
+    Ignore,
+}
+
+/// The ink of a [`ThumbSpan`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SpanInk {
+    /// The theme's faint text colour.
+    Faint,
+    /// The theme's muted text colour.
+    Muted,
+}
+
+/// A band along the row from one thumb to another, under the thumbs' tips: the extent of a hue range and of its
+/// full-strength part. In a wrapping row it runs forward from `from` round to `to`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ThumbSpan {
+    /// The thumb the span starts at.
+    pub from: usize,
+    /// The thumb the span ends at.
+    pub to: usize,
+    /// Its ink.
+    pub ink: SpanInk,
+}
+
+impl ThumbSpan {
+    /// A span from thumb `from` to thumb `to` in `ink`.
+    pub const fn new(from: usize, to: usize, ink: SpanInk) -> Self {
+        ThumbSpan { from, to, ink }
+    }
 }
 
 /// Where a thumb sits that a function of the row's values places (a levels gamma thumb, between the black and the
@@ -191,9 +241,11 @@ impl Thumb {
     /// drawn as the left half of a triangle; the next one only brings its own face, range and order. The pair's
     /// values `[low, high]` sit in consecutive entries with `low <= high`.
     ///
-    /// A press that begins without Alt moves the pair together, keeping the spread; with Alt it moves only the half
-    /// it grabs, at full rate (Alt is not the fine scale on that drag). Where the halves coincide they draw as one triangle. Keys, the wheel and AccessKit move one half. A
-    /// row does not combine a split thumb with wrapping.
+    /// A drag, a key, the wheel and an AccessKit change of either half move the pair together, keeping the spread.
+    /// While Alt is held a drag moves only the half it grabs, at full rate, and a key or the wheel moves the focused
+    /// half alone by the plain step: Alt is not the fine scale on a split thumb. Where the halves coincide they draw
+    /// as one triangle, and a press takes the half on its side of the tip. A row does not combine a split thumb with
+    /// wrapping.
     #[must_use]
     pub fn split(mut self) -> Self {
         self.split = true;
@@ -313,6 +365,11 @@ impl<const N: usize> RowRules<'_, N> {
     /// Where thumb `i` may go among the thumbs it is ordered with, which are at `values`. In a wrapping row the
     /// bounds are measured the short way round from the thumb's own value, and open where it has no neighbour.
     fn order_bounds(&self, values: &[f64; N], i: usize) -> (f64, f64) {
+        self.order_bounds_besides(values, i, None)
+    }
+
+    /// [`order_bounds`](Self::order_bounds), with thumb `except` not counted: it moves with thumb `i`.
+    fn order_bounds_besides(&self, values: &[f64; N], i: usize, except: Option<usize>) -> (f64, f64) {
         if let Some(anchor) = self.anchored {
             return self.anchored_bounds(values, i, anchor);
         }
@@ -324,7 +381,7 @@ impl<const N: usize> RowRules<'_, N> {
         }
         let Order::Between { below, above, gap } = self.thumbs[i].order else { return open };
         let side = |j: Option<usize>, gap: f64, end: f64| {
-            j.and_then(|j| values.get(j)).map_or(end, |v| {
+            j.filter(|j| Some(*j) != except).and_then(|j| values.get(j)).map_or(end, |v| {
                 if self.wrap.is_some() { values[i] + self.short(v - values[i]) + gap } else { (v + gap).clamp(scale.min, scale.max) }
             })
         };
@@ -461,10 +518,49 @@ impl<const N: usize> RowRules<'_, N> {
         (lo, hi)
     }
 
-    /// The bounds AccessKit reports for thumb `i`: the range of a wrapping row, else [`bounds`](Self::bounds).
+    /// Where thumb `i` may go when its split partner `j` moves with it, keeping the spread: within its own bounds
+    /// among the other thumbs while the partner stays within its own.
+    fn pair_bounds(&self, values: &[f64; N], i: usize, j: usize) -> (f64, f64) {
+        let (lo_i, hi_i) = self.order_bounds_besides(values, i, Some(j));
+        let (lo_j, hi_j) = self.order_bounds_besides(values, j, Some(i));
+        let hi = (hi_i - values[i]).min(hi_j - values[j]);
+        let lo = (lo_i - values[i]).max(lo_j - values[j]).min(hi);
+        (values[i] + lo, values[i] + hi)
+    }
+
+    /// The split partner a move of thumb `i` takes along: none when the thumb is not split or moves `alone`.
+    fn taken_along(&self, i: usize, alone: bool) -> Option<usize> {
+        self.partner(i).filter(|_| !alone)
+    }
+
+    /// Where a move of thumb `i` may take it: with its partner, if it takes one, or else alone among the others.
+    fn move_bounds(&self, values: &[f64; N], i: usize, alone: bool) -> (f64, f64) {
+        match self.taken_along(i, alone) {
+            Some(j) => self.pair_bounds(values, i, j),
+            None => self.bounds(values, i),
+        }
+    }
+
+    /// `row`, whose values are drawn at `values`, with thumb `i` moved to `to_i`, a value settled within its
+    /// [`move_bounds`](Self::move_bounds): a split half takes its partner along by the same amount unless it moves
+    /// `alone`, and the thumbs they run into are pushed along.
+    fn moved_to(&self, row: &[Mixed<f64>; N], values: &[f64; N], i: usize, to_i: f64, alone: bool) -> [Mixed<f64>; N] {
+        let mut to = *values;
+        to[i] = to_i;
+        match self.taken_along(i, alone) {
+            Some(j) => {
+                to[j] = values[j] + (to[i] - values[i]);
+                self.with_moved(row, to, &[i, j])
+            }
+            None => self.with_moved(row, to, &[i]),
+        }
+    }
+
+    /// The bounds AccessKit reports for thumb `i`: the range of a wrapping row, else where a change of its value may
+    /// take it (a split half with its partner).
     fn reported_bounds(&self, values: &[f64; N], i: usize) -> (f64, f64) {
         let scale = self.scale_of(i);
-        if self.wrap.is_some() { (scale.min, scale.max) } else { self.bounds(values, i) }
+        if self.wrap.is_some() { (scale.min, scale.max) } else { self.move_bounds(values, i, false) }
     }
 
     /// `value` for thumb `i`: within `bounds` and on its stops; in a wrapping row, then wrapped.
@@ -479,13 +575,25 @@ impl<const N: usize> RowRules<'_, N> {
 
     /// `row` with `op` applied to its thumb: from where the thumb is drawn (an unset or mixed thumb steps from where
     /// it sits), on its stops and within its bounds among the others, so the order and the gap hold. The thumb takes
-    /// a number; the other thumbs keep `row`'s values, mixed or not.
+    /// a number; the other thumbs keep `row`'s values, mixed or not. On a half of a split thumb the op moves the pair,
+    /// keeping the spread; a move with the fine flag (Alt) or a wheel event with Alt moves the half alone, by the
+    /// plain step.
     pub fn apply(&self, op: &RowOp, row: &[Mixed<f64>; N]) -> [Mixed<f64>; N] {
         let values = self.placed(row);
         let i = op.thumb;
-        let mut to = values;
-        to[i] = if self.wrap.is_some() { self.apply_wrapped(&op.op, &values, i) } else { self.apply_plain(&op.op, &values, i) };
-        self.with_moved(row, to, &[i])
+        let (op, alone) = match (self.partner(i), op.op) {
+            (None, op) => (op, false),
+            (Some(_), ThumbOp::Move(mv, mods)) => (ThumbOp::Move(mv, mods.fine(false)), mods.fine),
+            (Some(_), ThumbOp::Wheel(wheel, rtl)) => {
+                let mut plain = wheel;
+                plain.mods.alt = false;
+                (ThumbOp::Wheel(plain, rtl), wheel.mods.alt)
+            }
+            (Some(_), op @ ThumbOp::Set(_)) => (op, false),
+        };
+        let bounds = self.move_bounds(&values, i, alone);
+        let to = if self.wrap.is_some() { self.apply_wrapped(&op, &values, i, bounds) } else { self.apply_plain(&op, &values, i, bounds) };
+        self.moved_to(row, &values, i, to, alone)
     }
 
     /// What `op` does to the step maths: a move or a wheel event gives the new value from `steps`.
@@ -497,9 +605,9 @@ impl<const N: usize> RowRules<'_, N> {
         }
     }
 
-    fn apply_plain(&self, op: &ThumbOp, values: &[f64; N], i: usize) -> f64 {
+    /// The value `op` gives thumb `i`, which may go within `bounds`.
+    fn apply_plain(&self, op: &ThumbOp, values: &[f64; N], i: usize, bounds: (f64, f64)) -> f64 {
         let scale = self.scale_of(i);
-        let bounds = self.bounds(values, i);
         let small = scale.small();
         let steps = ValueSteps::new(values[i], bounds.0, bounds.1, small, small * LARGE_STEPS);
         match Self::stepped(op, &steps) {
@@ -511,9 +619,8 @@ impl<const N: usize> RowRules<'_, N> {
     /// [`apply_plain`](Self::apply_plain) for a wrapping row: a step goes on past the range's end and comes back at
     /// its start, and Home and End go to the neighbours, or the range's start and its end less a step where there
     /// are none.
-    fn apply_wrapped(&self, op: &ThumbOp, values: &[f64; N], i: usize) -> f64 {
+    fn apply_wrapped(&self, op: &ThumbOp, values: &[f64; N], i: usize, bounds: (f64, f64)) -> f64 {
         let scale = self.scale_of(i);
-        let bounds = self.bounds(values, i);
         let from = if self.anchored.is_some() { self.aim(values, i, values[i]) } else { values[i] };
         let target = match op {
             ThumbOp::Set(value) => self.aim(values, i, *value),
@@ -542,10 +649,11 @@ struct Layout<'r, const N: usize> {
     pick: Pick,
     /// The press moves only the half of a split thumb it grabs.
     alone: bool,
+    off: OffThumbs,
 }
 
 impl<'r, const N: usize> Layout<'r, N> {
-    fn new(rules: RowRules<'r, N>, rect: Rect, thumb: Vec2, rtl: bool, reach: f32, alone: bool) -> Self {
+    fn new(rules: RowRules<'r, N>, rect: Rect, thumb: Vec2, rtl: bool, reach: f32, alone: bool, off: OffThumbs) -> Self {
         let travel = travel(rect, thumb.x);
         let (left, right) = (travel.min, travel.max);
         // A wrapping row's period in points; 0 when the row does not wrap.
@@ -553,7 +661,7 @@ impl<'r, const N: usize> Layout<'r, N> {
             Some(period) if rules.scale.span() > 0.0 => ((right - left) as f64 * period / rules.scale.span()) as f32,
             _ => 0.0,
         };
-        Layout { rules, left, right, rtl, pick: Pick { reach, overlap: thumb.x, period, span: false }, alone }
+        Layout { rules, left, right, rtl, pick: Pick { reach, overlap: thumb.x, period, span: false }, alone, off }
     }
 
     fn x_of(&self, value: f64) -> f32 {
@@ -570,9 +678,49 @@ impl<'r, const N: usize> Layout<'r, N> {
         std::array::from_fn(|i| self.x_of(self.at(values, i)))
     }
 
-    /// What a press at `x` moves, with the thumbs at `values`.
+    /// What a press at `x` moves, with the thumbs at `values`: none off the thumbs in a row that ignores such a
+    /// press.
     fn press(&self, values: &[f64; N], x: f32) -> Option<Press> {
-        self.pick.press(&self.xs(values), x)
+        let xs = self.xs(values);
+        let press = self.side_of_tip(self.pick.press(&xs, x)?, &xs, x);
+        match (press, self.off) {
+            (Press::Jump(_), OffThumbs::Ignore) => None,
+            _ => Some(press),
+        }
+    }
+
+    /// `press` on a split thumb whose halves coincide, drawn as one triangle at `xs`, as a press on the half on the
+    /// side of the tip where `x` is: the low half toward the lower values. Other presses are as they are.
+    fn side_of_tip(&self, press: Press, xs: &[f32; N], x: f32) -> Press {
+        let pair = match press {
+            Press::Either { first, last } => Some((first, last)),
+            Press::Grab(i) | Press::Jump(i) => self.rules.partner(i).map(|j| (i.min(j), i.max(j))),
+            Press::Span => None,
+        };
+        let Some((low, high)) = pair.filter(|&(low, high)| self.rules.partner(low) == Some(high) && xs[low] == xs[high]) else {
+            return press;
+        };
+        let toward_low = if self.rtl { x > xs[low] } else { x <= xs[low] };
+        let half = if toward_low { low } else { high };
+        if let Press::Jump(_) = press { Press::Jump(half) } else { Press::Grab(half) }
+    }
+
+    /// The pieces of `span` along the row, as x ranges: between its thumbs, and in a wrapping row forward from the
+    /// first round to the second, in two pieces when that passes the end of the range.
+    fn span_xs(&self, values: &[f64; N], span: &ThumbSpan) -> Vec<(f32, f32)> {
+        if span.from >= N || span.to >= N {
+            return Vec::new();
+        }
+        let (a, b) = (self.at(values, span.from), self.at(values, span.to));
+        let scale = &self.rules.scale;
+        let pieces = if self.rules.wrap.is_some() && b < a { vec![(a, scale.max), (scale.min, b)] } else { vec![(a.min(b), a.max(b))] };
+        pieces
+            .into_iter()
+            .map(|(lo, hi)| {
+                let (x, y) = (self.x_of(lo), self.x_of(hi));
+                (x.min(y), x.max(y))
+            })
+            .collect()
     }
 
     /// The values with `press` dragged to the position `state` holds: the moved thumb from where it was at `anchor`
@@ -592,7 +740,6 @@ impl<'r, const N: usize> Layout<'r, N> {
         let from = rules.placed(anchor);
         let placed_at = if rules.anchored.is_some() { rules.aim(&from, i, self.at(&from, i)) } else { self.at(&from, i) };
         let travel = Travel { track: self.left..self.right, units: rules.scale.min..=rules.scale.max, rtl: self.rtl };
-        let half = rules.partner(i).filter(|_| !self.alone);
         // Alt moves one half of a split thumb alone: that drag is not scaled finer.
         let fine = !click && !rules.thumbs[i].alt_reports && !(self.alone && rules.partner(i).is_some());
         let Some(at) = travel.value(press, placed_at, state, fine) else { return out };
@@ -605,20 +752,8 @@ impl<'r, const N: usize> Layout<'r, N> {
         } else {
             from[i] + rules.short(value - from[i])
         };
-        if let Some(j) = half {
-            let (lo_i, hi_i) = rules.order_bounds(&from, i);
-            let (lo_j, hi_j) = rules.order_bounds(&from, j);
-            let (lo, hi) = ((lo_i - from[i]).max(lo_j - from[j]), (hi_i - from[i]).min(hi_j - from[j]));
-            let lo = lo.min(hi);
-            let moved = rules.scale_of(i).snap(from[i] + (value - from[i]).clamp(lo, hi)).clamp(from[i] + lo, from[i] + hi);
-            let mut to = from;
-            to[i] = moved;
-            to[j] = from[j] + (moved - from[i]);
-            return rules.with_moved(anchor, to, &[i, j]);
-        }
-        let mut to = from;
-        to[i] = rules.settle(i, value, rules.bounds(&from, i));
-        rules.with_moved(anchor, to, &[i])
+        let to = rules.settle(i, value, rules.move_bounds(&from, i, self.alone));
+        rules.moved_to(anchor, &from, i, to, self.alone)
     }
 }
 
@@ -646,12 +781,11 @@ fn triangle(tip: Pos2, size: Vec2, half: Option<Half>, rtl: bool) -> Vec<Pos2> {
     vec![tip, pos2(right, tip.y + size.y), pos2(left, tip.y + size.y)]
 }
 
-/// The values of the running drag when it began, the press it resolved to, and whether it moves a half alone.
+/// The values of the running drag when it began and the press it resolved to.
 #[derive(Clone, Default)]
 struct Held {
     anchor: Vec<Mixed<f64>>,
     press: Option<Press>,
-    alone: bool,
     /// The thumb the pointer moves now, and the modifiers held in the latest pass of the drag.
     thumb: Option<usize>,
     mods: Mods,
@@ -736,6 +870,12 @@ pub struct ThumbRow<'a, const N: usize> {
     /// What a thumb does when a move takes it into a thumb it is ordered with: stop (the default) or push it along.
     #[prop]
     neighbours: Neighbours,
+    /// What a press off the thumbs does: the nearest thumb jumps there (the default), only takes a drag, or nothing.
+    #[prop]
+    off_thumbs: OffThumbs,
+    /// Bands along the row between thumbs, under their tips; none by default.
+    #[prop]
+    spans: &'a [ThumbSpan],
     /// Paints a groove above the thumbs with `face`, a component shown as the look of the track (a colour gradient);
     /// the thumbs point up at it.
     #[prop]
@@ -773,6 +913,8 @@ impl<'a, const N: usize> ThumbRow<'a, N> {
             wrap: false,
             anchor: None,
             neighbours: Neighbours::Stop,
+            off_thumbs: OffThumbs::Jump,
+            spans: &[],
             track_face: None,
         }
     }
@@ -817,6 +959,9 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
             thumb: Vec2::new(cx.tokens.size.marker.width, cx.tokens.size.marker.height),
             track: TrackLook { thickness: cx.tokens.size.ramp.bar, ..cx.track() },
             length,
+            span_faint: cx.color(colors.text.faint),
+            span_muted: cx.color(colors.text.muted),
+            span: cx.tokens.size.ramp.groove,
         }
     }
 
@@ -848,7 +993,7 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
         let row = cx.value().cloned().unwrap_or_else(all_mixed);
         let shown = rules.placed(&row);
         let size = cx.style.thumb;
-        let layout = Layout::new(rules, rect, size, cx.flow.is_rtl(), 0.0, false);
+        let layout = Layout::new(rules, rect, size, cx.flow.is_rtl(), 0.0, false, self.off_thumbs);
         let xs = layout.xs(&shown);
         let groove = self.track_face.is_some().then_some(cx.style.track.thickness);
         let thumbs = band(rect, groove);
@@ -882,7 +1027,7 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let rules = self.rules();
-        let (rect, rtl, reach) = (cx.rect, cx.flow.is_rtl(), cx.style.hit);
+        let (rect, rtl, reach, off) = (cx.rect, cx.flow.is_rtl(), cx.style.hit, self.off_thumbs);
         let size = cx.style.thumb;
         let row = cx.value().cloned().unwrap_or_else(all_mixed);
         let parts: Vec<PartRef> = std::iter::once(PartRef::from(ROW)).chain((0..N).map(|i| Thumb::PART.at(i as u64))).collect();
@@ -890,10 +1035,11 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
             let press = cx.part(part).press;
             match press.phase {
                 PressPhase::DragStart { start, pos, .. } => {
-                    let layout = Layout::new(rules, rect, size, rtl, reach, press.mods.alt);
+                    // Alt moves a half of a split thumb alone while it is held, from the values the drag began at.
+                    let layout = Layout::new(rules, rect, size, rtl, reach, press.mods.alt, off);
                     if let Some(picked) = layout.press(&rules.placed(&row), start.origin.x) {
                         let thumb = picked.thumb(start.origin.x, pos.x);
-                        *cx.memory::<Held>() = Held { anchor: row.to_vec(), press: Some(picked), alone: press.mods.alt, thumb, mods: press.mods };
+                        *cx.memory::<Held>() = Held { anchor: row.to_vec(), press: Some(picked), thumb, mods: press.mods };
                         if let Some(thumb) = thumb {
                             cx.focus_part(Thumb::PART.at(thumb as u64));
                         }
@@ -909,7 +1055,7 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
                         now.mods = press.mods;
                     }
                     if let (Some(picked), Ok(anchor)) = (held.press, <[Mixed<f64>; N]>::try_from(held.anchor)) {
-                        let layout = Layout::new(rules, rect, size, rtl, reach, held.alone);
+                        let layout = Layout::new(rules, rect, size, rtl, reach, press.mods.alt, off);
                         cx.propose(layout.moved(&anchor, picked, &press, false));
                     }
                 }
@@ -917,18 +1063,20 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
                     if cx.gesture().is_some() {
                         let held = cx.memory::<Held>().clone();
                         if let (Some(picked), Ok(anchor)) = (held.press, <[Mixed<f64>; N]>::try_from(held.anchor)) {
-                            let layout = Layout::new(rules, rect, size, rtl, reach, held.alone);
+                            let layout = Layout::new(rules, rect, size, rtl, reach, press.mods.alt, off);
                             cx.propose(layout.moved(&anchor, picked, &press, false));
                         }
                         cx.commit();
                     } else if click && start.clicks < 2 {
-                        // A tap off the thumbs moves the nearest one there; a tap on a thumb moves none. A second
-                        // click is the reset, which the pipeline applies.
-                        let layout = Layout::new(rules, rect, size, rtl, reach, false);
-                        if let Some(picked @ Press::Jump(thumb)) = layout.press(&rules.placed(&row), start.origin.x)
-                            && let Some(&target) = layout.moved(&row, picked, &press, true)[thumb].same()
-                        {
-                            cx.set(rules.apply(&RowOp::new(thumb, ThumbOp::Set(target)), &row));
+                        // A tap off the thumbs focuses the nearest one and, in a row whose thumbs jump, moves it there;
+                        // a tap on a thumb moves none. A second click is the reset, which the pipeline applies.
+                        let layout = Layout::new(rules, rect, size, rtl, reach, false, off);
+                        if let Some(picked @ Press::Jump(thumb)) = layout.press(&rules.placed(&row), start.origin.x) {
+                            if off == OffThumbs::Jump
+                                && let Some(&target) = layout.moved(&row, picked, &press, true)[thumb].same()
+                            {
+                                cx.set(rules.apply(&RowOp::new(thumb, ThumbOp::Set(target)), &row));
+                            }
                             cx.focus_part(Thumb::PART.at(thumb as u64));
                         }
                     }
@@ -1001,7 +1149,7 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
         let row = cx.value().cloned().unwrap_or_else(all_mixed);
         let shown = rules.placed(&row);
         let size = style.thumb;
-        let layout = Layout::new(rules, cx.rect, size, cx.flow.is_rtl(), style.hit, false);
+        let layout = Layout::new(rules, cx.rect, size, cx.flow.is_rtl(), style.hit, false, self.off_thumbs);
         let xs = layout.xs(&shown);
         let running = cx.gesture().and_then(|_| cx.recall::<Held>().press);
         let hovered = std::iter::once(PartRef::from(ROW))
@@ -1011,6 +1159,15 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
         let thumbs = band(cx.rect, self.track_face.is_some().then_some(style.track.thickness));
         let top = thumbs.top();
         let halves = self.halves(&rules, &shown);
+        for span in self.spans {
+            let ink = match span.ink {
+                SpanInk::Faint => style.span_faint,
+                SpanInk::Muted => style.span_muted,
+            };
+            for (left, right) in layout.span_xs(&shown, span) {
+                draw.fill(&PaintShape::Rect(Rect::from_x_y_ranges(left..=right, top..=top + style.span), CornerRadius::ZERO), ink);
+            }
+        }
         for i in 0..N {
             // Coinciding halves are one triangle, which the low half draws.
             if halves[i].is_none() && rules.partner(i).is_some_and(|j| j < i) {

@@ -10,7 +10,7 @@ use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::{DataColor, TypeRole};
-use craft_ui::value_drag::{Neighbours, Order, Thumb, ThumbRow, TrackFace};
+use craft_ui::value_drag::{Neighbours, OffThumbs, Order, Thumb, ThumbRow, TrackFace};
 use egui::{Color32, Ui};
 
 use crate::layer_style::BlendIfRange;
@@ -61,11 +61,14 @@ impl BlendIfRange {
 /// A Blend If slider: a black-to-white ramp with a black and a white handle under it, each split into two halves by
 /// Alt (the layer fades between them). A split pair shows two half triangles; a pair whose halves coincide, one whole
 /// triangle. The readout ("0 / 20    255": a split side as "low / high") sits above the bar at the trailing end. The
-/// bar mirrors with the row, like every thumb row.
+/// bar never mirrors: it is a tone scale.
 ///
-/// - Pointer: a press picks the nearest handle; a drag moves its pair, keeping the spread, or with Alt the half alone.
-///   A handle pushes the handles it runs into along, so the order holds. One gesture per drag; Esc cancels.
-/// - Keys: the four handles are Tab stops in order. Arrows, Page keys, Home, End and the wheel move one half.
+/// - Pointer: a press picks the nearest handle, and on a triangle of coinciding halves the half on its side of the
+///   tip. A drag moves the handle's pair to the pointer, keeping the spread; while Alt is held, the half alone. A
+///   handle pushes the handles it runs into along, so the order holds. One gesture per drag; Esc cancels. A tap
+///   focuses the nearest handle and moves nothing.
+/// - Keys: the four handles are Tab stops in order. Arrows, Page keys, Home, End and the wheel move the focused
+///   handle's pair, Shift by ten levels; with Alt the focused half alone.
 /// - AccessKit: each handle is a slider named by [`BlendIfWords::handle`] ("Black low, This Layer").
 #[must_use = "show the bar with `show`"]
 #[derive(craft_ui::contract::Pattern)]
@@ -120,8 +123,10 @@ impl<'a> BlendIfBar<'a> {
                 .step(1.0)
                 .thumbs(thumbs)
                 .neighbours(Neighbours::Push)
+                .off_thumbs(OffThumbs::Nearest)
                 .track_face(TrackFace::new(ToneRamp::new(&ramp)))
                 .label(label.clone())
+                .ltr_axis()
                 .show(ui)
                 .edit
                 .map(|row| BlendIfRange::of_row(&row));

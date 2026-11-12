@@ -222,36 +222,6 @@ impl BlendIfRange {
         }
         BlendIfRange(q)
     }
-
-    /// Handle `handle` (0..4) moved to `to`. `split` (Alt held): only that half moves. Otherwise
-    /// the pair (0 and 1, or 2 and 3) moves by the same amount, keeping its spread, each half
-    /// clamped to 0..=255. Then the order is restored by pushing: handles before `handle` are
-    /// lowered to at most its value, handles after it raised to at least it, and each value
-    /// raised to at least the one before.
-    // pc: crates/ui-egui/src/dialogs/layer_style.rs:1399-1430 (the drag in `blend_if_bar`).
-    pub fn moved(self, handle: usize, to: u8, split: bool) -> BlendIfRange {
-        let Some(&current) = self.0.get(handle) else {
-            return self;
-        };
-        let mut n = self.0;
-        if split {
-            n[handle] = to;
-        } else {
-            let delta = i16::from(to) - i16::from(current);
-            let pair = if handle < 2 { 0 } else { 2 };
-            for v in &mut n[pair..pair + 2] {
-                *v = u8::try_from((i16::from(*v) + delta).clamp(0, 255)).unwrap_or(*v);
-            }
-        }
-        for i in 0..4 {
-            if i < handle {
-                n[i] = n[i].min(n[handle]);
-            } else if i > handle {
-                n[i] = n[i].max(n[handle]);
-            }
-        }
-        BlendIfRange::ordered(n)
-    }
 }
 
 /// The Blend If ranges of one channel entry.

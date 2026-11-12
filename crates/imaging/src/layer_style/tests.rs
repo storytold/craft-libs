@@ -76,23 +76,10 @@ fn shadow_drag_uses_whole_degrees_and_pixels_and_moves_the_global_angle() {
 // The blend defaults of a spec become the host's keys; unknown names stay. Bevel & Emboss has two
 // Blend fields: only the one defaulting to Multiply is renamed.
 
-// `BlendIfRange::ordered` and `moved` always give black low ≤ black high ≤ white low ≤ white
-// high, pushing the other handles.
+// `BlendIfRange::ordered` raises each value to at least the one before it.
 #[trial]
-fn blend_if_edits_keep_the_four_values_ordered() {
+fn blend_if_ranges_read_ordered() {
     assert_eq!(BlendIfRange::ordered([10, 5, 200, 100]), BlendIfRange([10, 10, 200, 200]));
-    let start = BlendIfRange([10, 30, 200, 220]);
-    for handle in 0..4 {
-        for to in (0..=255u8).step_by(5) {
-            for split in [false, true] {
-                let r = start.moved(handle, to, split).0;
-                assert!(r.windows(2).all(|w| w[0] <= w[1]), "{handle} {to} {split}: {r:?}");
-            }
-        }
-    }
-    // A split move past a neighbour pushes it.
-    assert_eq!(start.moved(1, 210, true), BlendIfRange([10, 210, 210, 220]));
-    assert_eq!(start.moved(9, 0, false), start);
 }
 
 // A `StyleValue::Other` key no field shows survives `set_param`, `toggle` and
