@@ -313,16 +313,39 @@ impl<'a> Document<'a> {
     /// [`Layer::surface`] names). Only one decoded surface is held at a time unless `each` keeps
     /// them. Data after the last block is an error.
     pub fn read_surfaces(&self, keep_going: &dyn Fn() -> bool, each: &mut dyn FnMut(usize, Surface)) -> Result<()> {
+        self.try_read_surfaces(keep_going, &mut |index, surface| {
+            each(index, surface);
+            Ok(())
+        })
+    }
+
+    /// Decodes surfaces as [`Self::read_surfaces`], stopping when `each` returns an error.
+    /// Cancellation returned by the callback is propagated before the next surface is allocated.
+    pub fn try_read_surfaces<E>(
+        &self,
+        keep_going: &dyn Fn() -> bool,
+        each: &mut dyn FnMut(usize, Surface) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(), ReadSurfacesError<E>> {
         let mut reader = Reader { bytes: self.bytes, pos: self.pixels_at };
         for (i, block) in self.blocks.iter().enumerate() {
-            let data = pixels(&mut reader, block.length, keep_going)?;
-            each(i, Surface { width: self.width, stride: block.stride, data });
+            check(keep_going).map_err(ReadSurfacesError::Decode)?;
+            let data = pixels(&mut reader, block.length, keep_going).map_err(ReadSurfacesError::Decode)?;
+            each(i, Surface { width: self.width, stride: block.stride, data }).map_err(ReadSurfacesError::Callback)?;
         }
         if reader.pos != self.bytes.len() {
-            return Err(invalid("unexpected trailing data"));
+            return Err(ReadSurfacesError::Decode(invalid("unexpected trailing data")));
         }
         Ok(())
     }
+}
+
+/// Failure while decoding surfaces or handling one in [`Document::try_read_surfaces`].
+#[derive(Debug)]
+pub enum ReadSurfacesError<E> {
+    /// The PDN pixel stream is invalid, or decoding was cancelled through `keep_going`.
+    Decode(Error),
+    /// The caller stopped while handling a decoded surface.
+    Callback(E),
 }
 
 /// Reads a memory block's numbered chunks in their on-disk order; each chunk has its own gzip
