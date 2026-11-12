@@ -128,7 +128,8 @@ struct Batch {
     menu: Vec<MenuKey>,
     /// Whether the last Enter event of the pass was a press (`true`) or a release, `None` when there was none.
     enter_down: Option<bool>,
-    /// The latest key press of the pass, which a following text event was typed by, and its place in `presses`.
+    /// The latest key press of the pass, which a following text event was typed by, and its place in `presses`; its
+    /// release or a clipboard event ends it.
     last_press: Option<(KeyInput, Option<usize>)>,
     /// What this pass's typed text taught: the physical key, the modifiers and the text.
     learned: Vec<(Key, Mods, String)>,

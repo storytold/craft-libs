@@ -53,6 +53,10 @@ impl Strip<'_> {
     /// `consumed` holds the keys whose press the strip took and whose release has not come yet: the release goes
     /// with the press, in this pass or a later one.
     fn event(&self, batch: &mut Batch, alt: &mut AltTrack, consumed: &mut Vec<Key>, event: KeyEvent) -> bool {
+        if matches!(event, KeyEvent::Clip { .. }) {
+            // A clipboard event stands for its chord's press, which types nothing.
+            batch.last_press = None;
+        }
         match event {
             KeyEvent::Press { key, input, repeat } => {
                 alt.other_key = true;
@@ -80,11 +84,16 @@ impl Strip<'_> {
                 kept
             }
             KeyEvent::Release { input } => {
-                if let Some(at) = input.physical.or(input.typed).and_then(|held| consumed.iter().position(|k| *k == held)) {
+                // The press's text comes before its release: a text after it is no press's.
+                let key = input.physical.or(input.typed);
+                if batch.last_press.as_ref().is_some_and(|(pressed, _)| pressed.physical.or(pressed.typed) == key) {
+                    batch.last_press = None;
+                }
+                if let Some(at) = key.and_then(|held| consumed.iter().position(|k| *k == held)) {
                     consumed.swap_remove(at);
                     return false;
                 }
-                if input.physical.or(input.typed) == Some(Key::Enter) {
+                if key == Some(Key::Enter) {
                     batch.enter_down = Some(false);
                 }
                 batch.shortcuts.push(Shortcut { input, phase: FirePhase::Release, typed: false, press: None });

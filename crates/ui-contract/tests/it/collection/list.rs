@@ -272,6 +272,36 @@ fn arrows_wrap_at_the_ends_of_a_wrapping_list() {
     assert_eq!(seen.leads().last(), Some(&last), "Up on the first row wraps to the last");
 }
 
+/// The keys whose presses reached egui's input in a pass, where the app reads its own keys.
+fn app_read(ui: &Ui, saw: &RefCell<Vec<Key>>) {
+    ui.input(|input| {
+        saw.borrow_mut().extend(input.events.iter().filter_map(|event| match event {
+            Event::Key { key, pressed: true, .. } => Some(*key),
+            _ => None,
+        }));
+    });
+}
+
+/// A text that comes after a press's release was typed by no press: the type-ahead takes it, and the released press,
+/// which typed nothing, still reaches the app.
+#[trial]
+fn a_text_after_a_release_takes_no_press_with_it() {
+    let words = Words::flat(&labels());
+    let seen = Seen::default();
+    let saw = RefCell::new(Vec::new());
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        app_read(ui, &saw);
+        show_words(ui, List::new(SelectMode::Single).type_ahead(), &words, &seen);
+    };
+    frames.idle(2, &mut show);
+    focus_list(&mut frames, &seen, &mut show);
+    let release = craft_ui::testing::focus::key_release(Key::F5, Modifiers::NONE);
+    frames.frame(vec![input::key_press(Key::F5, Modifiers::NONE), release, Event::Text("c".into())], &mut show);
+    assert_eq!(seen.leads().last(), Some(&4), "the type-ahead takes the text");
+    assert!(saw.borrow().contains(&Key::F5), "and the app reads the press that typed nothing");
+}
+
 /// A list without type-ahead leaves typed letters to the app's tool keys: the lead stays where it is.
 #[trial]
 fn a_list_without_type_ahead_leaves_typed_letters_alone() {
