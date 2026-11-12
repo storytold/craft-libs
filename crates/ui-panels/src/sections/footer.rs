@@ -1,7 +1,7 @@
 //! `FooterBar` (16.4): the container that fills a container's footer region.
 
 use super::words::SectionWords;
-use crate::buttons::{Button, IconButton};
+use crate::buttons::{Button, IconButton, PopupMark};
 use crate::contract::{
     Access, BodyLayout, Common, Component, Container, ContainerProps, Cx, DropMark, DropOperation, DropTarget, LeastWidth, NoValue, Outcome, Pad,
     PaintUi, Pointer as _, PopupKind, Props as _, Role, RowAlign, Show as _, ShowContainer as _, Sizing, TooltipSpec, WordSetCx as _,
@@ -147,7 +147,7 @@ impl FooterAction {
         self
     }
 
-    /// The kind of popup the action opens: the action reports it, and a mark shows at its end-bottom corner.
+    /// The kind of popup the action opens: the action reports it, and the dropdown arrow shows under its icon.
     #[must_use]
     pub fn popup(mut self, kind: PopupKind) -> Self {
         self.popup = Some(kind);
@@ -199,7 +199,7 @@ impl FooterAction {
             button = button.variant(Variant::look(Emphasis::Ghost, tone));
         }
         if let Some(kind) = self.popup {
-            button = button.popup(kind).popup_mark(true);
+            button = button.popup(kind).popup_mark(PopupMark::Menu);
         }
         if let Some(open) = self.expanded {
             button = button.expanded(open);

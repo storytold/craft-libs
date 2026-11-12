@@ -1,7 +1,7 @@
 //! Stories of the menu bar, the edit menu and the panel menu.
 
 use super::{MenuBar, MenuHelp, MenuTitle};
-use crate::buttons::IconButton;
+use crate::buttons::{IconButton, PopupMark};
 use crate::contract::{Bind, Entry, PopupKind, Props as _, Show as _, ShowContainer as _, Trigger};
 use crate::display::Divider;
 use crate::menu::{EditMenu, GroupItem, HelpEntry, Menu, MenuItem, PanelMenu, PanelRow};
@@ -106,7 +106,7 @@ fn panel_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         ];
         PanelMenu::new(host, group)
     };
-    let opener = IconButton::new(IconId::new("menu")).popup(PopupKind::Menu).popup_mark(true).label("Panel menu").show(ui);
+    let opener = IconButton::new(IconId::new("menu")).popup(PopupKind::Menu).popup_mark(PopupMark::Menu).label("Panel menu").show(ui);
     let mut picked = None;
     let shown = Menu::new("Panel menu")
         .open(Bind::bound(data.value("open", false)))

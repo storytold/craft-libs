@@ -1,7 +1,7 @@
 //! `FlyoutButton`: a rail button that stands for a group of tools and opens them as a flyout.
 
 use super::tool::{RailTool, SlotDrop, SlotId, ToolDrag, ToolDropped};
-use crate::buttons::IconButton;
+use crate::buttons::{IconButton, PopupMark};
 use crate::contract::overlay::{Anchor, Place};
 use crate::contract::{
     Access, Common, Component, Cx, DragPreview, MeasureCx, Name, NoValue, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _,
@@ -161,7 +161,7 @@ impl<'a, T: Value + 'static> FlyoutButton<'a, T> {
         };
         let mut face = face.selected(selected).glyphs(glyphs);
         if self.has_flyout() {
-            face = face.popup(PopupKind::Menu).popup_mark(true);
+            face = face.popup(PopupKind::Menu).popup_mark(PopupMark::ToolGroup);
         }
         face
     }

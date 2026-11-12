@@ -1,10 +1,13 @@
 //! A menu with several openers: a context menu over a popover.
 
-use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, Role, Show as _, ShowContainer as _, Trigger};
+use craft_behavior::IconId;
+use craft_ui::buttons::{Button, IconButton, PopupMark};
+use craft_ui::contract::{Bind, PopupKind, Props as _, Role, Show as _, ShowContainer as _, Trigger};
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::popover::Popover;
+use craft_ui::runtime::env::Direction;
 use craft_ui::testing::{Fixture, pointer, trial};
+use egui::{Rect, Shape, pos2};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -96,4 +99,52 @@ fn a_new_right_click_moves_an_open_context_menu_to_the_pointer() {
     right_click(&mut fixture, second);
     let after = menu_rect(&fixture).expect("the menu is open after the second right-click");
     assert!(after.min.x > before.min.x + 40.0, "the menu moved to the second point: {before:?} then {after:?}");
+}
+
+/// An icon button that opens a menu hangs the dropdown arrow under the end edge of its glyph, inside the button and
+/// clear of the glyph, in either reading direction; a tool group's button shows the corner triangle instead.
+#[trial]
+fn a_menu_button_hangs_its_arrow_under_the_end_of_its_glyph() {
+    const BUTTON: Rect = Rect { min: pos2(20.0, 20.0), max: pos2(44.0, 44.0) };
+    for direction in [Direction::Ltr, Direction::Rtl] {
+        let at_end = |x: f32| if direction == Direction::Rtl { x < BUTTON.center().x } else { x > BUTTON.center().x };
+        for mark in [PopupMark::Menu, PopupMark::ToolGroup] {
+            let mut fixture = Fixture::new(move |ui| {
+                IconButton::new(IconId::new("plus")).label("Add").popup(PopupKind::Menu).popup_mark(mark).show_at(ui, BUTTON);
+            });
+            fixture.direction(direction).settle();
+            let shapes = fixture.frame_shapes();
+            let meshes = |textured: bool| {
+                shapes
+                    .iter()
+                    .filter_map(move |shape| match shape {
+                        Shape::Mesh(mesh) if (mesh.texture_id != egui::TextureId::default()) == textured => Some(mesh.calc_bounds()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let glyph = *meshes(true).first().expect("the glyph");
+            let arrows: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Path(path) if !path.closed => Some((Rect::from_points(&path.points), path.visual_bounding_rect())),
+                    _ => None,
+                })
+                .collect();
+            match mark {
+                PopupMark::Menu => {
+                    let [(points, painted)] = arrows[..] else { panic!("{direction:?}: one arrow, not {arrows:?}") };
+                    assert!(BUTTON.contains_rect(painted), "{direction:?}: the arrow {painted:?} leaves the button");
+                    assert!(points.top() >= glyph.bottom() - 0.5, "{direction:?}: the arrow {points:?} covers the glyph {glyph:?}");
+                    assert!(at_end(points.center().x), "{direction:?}: the arrow {points:?} is not at the end edge");
+                    assert!(meshes(false).is_empty(), "{direction:?}: a menu button shows no corner triangle");
+                }
+                _ => {
+                    assert!(arrows.is_empty(), "{direction:?}: a tool group shows no arrow");
+                    let triangle = *meshes(false).first().expect("the corner triangle");
+                    assert!(BUTTON.contains_rect(triangle) && at_end(triangle.center().x), "{direction:?}: the triangle {triangle:?}");
+                }
+            }
+        }
+    }
 }
