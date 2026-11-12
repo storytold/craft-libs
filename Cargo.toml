@@ -73,6 +73,7 @@ craft-metafile = { path = "crates/metafile" }
 craft-offcrypto = { path = "crates/offcrypto" }
 craft-opc = { path = "crates/opc" }
 craft-ora = { path = "crates/ora" }
+craft-pptx = { path = "crates/pptx" }
 craft-penpot = { path = "crates/penpot" }
 craft-pcraft-format = { path = "crates/pcraft-format" }
 craft-plotter = { path = "crates/plotter" }

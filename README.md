@@ -219,6 +219,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-plotter`](crates/plotter/README.md): cutter and pen-plotter command languages: HP-GL,
   DMPL and GP-GL (plain and the Silhouette dialect, three generations, registration marks) from a
   job in millimetres, plus the Silhouette device queries and reply parsers. No I/O.
+- [`craft-pptx`](crates/pptx/README.md): PresentationML, the model of a `.pptx` presentation:
+  masters, layouts, slides, shapes, placeholders and their inheritance, transitions and animations,
+  comments, sections, media and kept parts. From DeckCraft. DrawingML comes from `craft-drawingml`.
 - [`craft-print`](crates/print/README.md): PDF submission to CUPS and Windows, printer discovery,
   duplex/copies/colour and driver preferences. PDF generation stays in each app.
 - [`craft-proof`](crates/proof/README.md): proofing per language (spelling, suggestions, grammar,

@@ -1416,6 +1416,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-pptx"
+version = "0.1.0"
+dependencies = [
+ "craft-drawingml",
+ "kurbo 0.13.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-prc"
 version = "0.1.0"
 dependencies = [
