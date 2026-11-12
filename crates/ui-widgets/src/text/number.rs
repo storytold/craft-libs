@@ -116,9 +116,6 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// The decimals a committed value is rounded to; the display keeps the codec's.
     #[prop]
     commit_decimals: Option<usize>,
-    /// The field is as wide as the widest value of its range, when that is wider than a number cell.
-    #[prop]
-    fit_range: bool,
     /// An empty field means automatic: it shows the "Auto" word as its placeholder.
     #[prop]
     automatic: bool,
@@ -180,7 +177,6 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             presets: None,
             popup_slider: None,
             snap_typed: false,
-            fit_range: false,
             automatic: false,
             commit_decimals: None,
             fixed_decimals: None,
@@ -349,8 +345,8 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         let muted = cx.color(cx.tokens.color.text.muted);
         NumberStyle {
             surface: field.surface.clone(),
-            // The width is a number cell, or the range's widest value with `fit_range` or `Sizing::Content` (`measure`);
-            // the style's minimum is only the height.
+            // The width is the value area, at most a number cell, and the adornments beside it, at least a cell
+            // (`measure`); the style's minimum is only the height.
             metrics: field.clone().sized_by_content().metrics,
             unit: TextLook::new(TypeRole::Body, Stateful::new(faint).off(States::new(faint, faint, faint, cx.color(cx.tokens.color.text.disabled)))),
             handle: Stateful::new(muted).off(States::new(muted, muted, muted, cx.color(cx.tokens.color.text.disabled))),
@@ -367,28 +363,26 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         self.settle_lengths(&cx.env.units());
         let codec = self.ruled(&cx.env.units(), false, self.names(|row| cx.env.resolve(&row.label().clone())));
-        // The number's room is one digit and the caret; a field sized to its range (`fit_range`) or to its content
-        // (`Sizing::Content`) takes the widest value and the caret.
+        // The value area holds the widest value the field shows (the range's ends at the codec's precision, or the
+        // value when the range is open) with the caret and the unit, at most one number cell; a longer value scrolls
+        // inside it. The inside label and the chevrons take their own room beside it, each as `place` gives it. The
+        // field is never narrower than a cell, so a column of short fields ends at one edge. A content-sized field
+        // takes its whole value and has no floor.
         let content = cx.resolved.sizing() == Some(Sizing::Content);
-        let text = if self.fit_range || content {
-            let sample = cx.value().map_or(Cow::Borrowed(""), |value| codec.sample(value));
-            cx.field_text(&TextRun::new(sample.as_ref()))
-        } else {
-            cx.field_text(&TextRun::new("0"))
-        };
+        let sample = cx.value().map_or(Cow::Borrowed(""), |value| codec.sample(value));
+        let text = cx.field_text(&TextRun::new(sample.as_ref()));
+        let chevrons = self.chevrons(&cx.words::<TextWords>());
         self.leading = Self::before_text(cx);
-        self.trailing = self.after_text(cx, &self.chevrons(&cx.words::<TextWords>()));
-        // The adornments take their own room and the change of the edge inset a button makes.
-        let width = text.x + reserve(&cx.style.field, &self.leading, &self.trailing);
-        // A field is one number cell wide, the unit and the chevrons inside it, so a column of fields ends at one edge;
-        // it grows only when the room left for the number drops below one digit and the caret. A content-sized field
-        // is as wide as its widest value and adornments.
+        self.trailing = self.after_text(cx, &chevrons);
+        let unit = &self.trailing[..self.trailing.len() - chevrons.len()];
+        let value = text.x + reserve(&cx.style.field, &[], unit);
+        let beside = reserve(&cx.style.field, &self.leading, &self.trailing) - reserve(&cx.style.field, &[], unit);
         if content {
-            return Vec2::new(width, text.y);
+            return Vec2::new(value + beside, text.y);
         }
         let field = cx.style.field.metrics();
-        let width = width.max(cx.style.cell - field.padding.start - field.padding.end);
-        Vec2::new(width, text.y)
+        let cell = cx.style.cell - field.padding.start - field.padding.end;
+        Vec2::new((value.min(cell) + beside).max(cell), text.y)
     }
 
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {

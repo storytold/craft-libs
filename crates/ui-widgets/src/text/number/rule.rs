@@ -203,7 +203,7 @@ impl<V: NumberValue> Codec for Ruled<V> {
         match current.named() {
             Some(_) => Cow::Owned(self.format(current)),
             None if self.rule.low.is_finite() && self.rule.high.is_finite() => Cow::Owned(self.inner.widest(&(self.rule.low..=self.rule.high))),
-            None => self.inner.sample(&self.shown(current)),
+            None => Cow::Owned(self.format(current)),
         }
     }
 }

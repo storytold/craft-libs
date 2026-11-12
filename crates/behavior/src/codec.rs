@@ -215,12 +215,19 @@ impl NumberCodec {
         self
     }
 
-    /// The widest text the codec writes for a number in `range`: the longer of its two ends, with every decimal
-    /// place, so a field over the range is sized for any value in it.
+    /// The widest text the codec writes for a number in `range`: the longest of each end and the number one place of
+    /// the last decimal inside it ("100" and "99.9" over 0 to 100 at one decimal), so a field over the range is sized
+    /// for any value it shows in it.
     pub fn widest(&self, range: &RangeInclusive<f64>) -> String {
-        let text = |number: f64| format!("{number:.*}", self.decimals).replace('.', &self.reader.decimal_separator().to_string());
-        let (low, high) = (text(*range.start()), text(*range.end()));
-        if low.chars().count() > high.chars().count() { low } else { high }
+        let (low, high) = (*range.start(), *range.end());
+        let place = 10f64.powi(-i32::try_from(self.decimals).unwrap_or(i32::MAX));
+        let inside = |end: f64, other: f64| (self.decimals > 0 && (other - end).abs() >= place).then(|| end + place.copysign(other - end));
+        [Some(low), Some(high), inside(low, high), inside(high, low)]
+            .into_iter()
+            .flatten()
+            .map(|number| self.format(&Some(number)))
+            .max_by_key(|text| text.chars().count())
+            .unwrap_or_default()
     }
 
     /// The most decimal places the codec writes.

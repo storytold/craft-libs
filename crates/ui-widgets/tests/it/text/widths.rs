@@ -30,3 +30,47 @@ fn a_small_field_is_narrower_than_a_standard_one() {
         assert!(small > 0.0 && small < standard, "a small {name} is narrower than a standard one: {small} against {standard}");
     }
 }
+
+/// A small number field with a pop-up slider shows "100%" whole before its chevron, and is no wider than its content
+/// needs: under a number cell, the chevron and a quarter cell. A field over a long range keeps one cell.
+#[trial]
+fn a_small_percent_field_shows_its_value_whole_beside_the_chevron() {
+    use craft_ui::contract::Role;
+    use craft_ui::runtime::env::UnitKind;
+    use std::rc::Rc;
+    let widths = Rc::new(Cell::new([0.0; 3]));
+    let seen = widths.clone();
+    let mut fixture = craft_ui::testing::Fixture::new(move |ui| {
+        let percent = NumberField::new("Opacity", Bind::given(Some(100.0)))
+            .range(0.0..=100.0)
+            .unit_kind(UnitKind::Percent)
+            .popup_slider(0.0..=100.0)
+            .size(ControlSize::Sm)
+            .id_salt("percent")
+            .show(ui);
+        // A field whose value is narrower than a cell is one cell wide.
+        let cell = NumberField::new("Count", Bind::given(Some(1.0))).size(ControlSize::Sm).id_salt("cell").show(ui);
+        // A range whose widest value is wider than a cell keeps the cell; long values scroll inside it.
+        let long = NumberField::new("Side", Bind::given(Some(240.0)))
+            .range(1.0..=300_000.0)
+            .unit_kind(UnitKind::Pixels)
+            .size(ControlSize::Sm)
+            .id_salt("long")
+            .show(ui);
+        seen.set([percent.response.rect.width(), cell.response.rect.width(), long.response.rect.width()]);
+    });
+    fixture.settle();
+    let chevron = fixture.by_role(Role::BUTTON).first().unwrap_or_else(|| panic!("the field shows its chevron")).rect;
+    let painted = |text: &str| fixture.texts().iter().find(|run| run.text == text).map(|run| run.rect);
+    let value = painted("100").unwrap_or_else(|| panic!("the field shows its value"));
+    let unit = painted("%").unwrap_or_else(|| panic!("the field shows its unit"));
+    assert!(value.max.x <= unit.min.x, "the value ends before its unit: {value:?} {unit:?}");
+    assert!(unit.max.x <= chevron.min.x, "the unit ends before the chevron: {unit:?} {chevron:?}");
+    let [percent, cell, long] = widths.get();
+    assert!(
+        percent < cell + chevron.width() + cell / 4.0,
+        "the field is as wide as its content: {percent} against a {cell} cell and a {} chevron",
+        chevron.width()
+    );
+    assert!((long - cell).abs() < 0.01, "a field over a long range is one cell wide: {long} against {cell}");
+}
