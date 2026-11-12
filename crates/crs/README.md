@@ -4,11 +4,11 @@ Adobe Camera Raw settings: the `crs:` namespace (`http://ns.adobe.com/camera-raw
 in an XMP packet, as Camera Raw's Save Settings writes an `.xmp` settings file and as Camera Raw,
 Lightroom and Bridge write a raw file's sidecar.
 
-- `Settings::parse` reads a file; `Settings::from_packet` reads a packet already parsed with
-  `packet` (or any `craft_xml` tree with the `crs:` / `rdf:` / `x:` prefixes of `CANONICAL`).
-  Settings come back as written, in file order: a name and a `Value` (text from an attribute or a
-  plain element, the plain items of an `rdf:Seq`, or the element of a structure such as
-  `crs:GradientBasedCorrections`, for the caller to read). The file's own prefixes do not matter.
+- `Settings::parse` reads a file; `Settings::from_xmp` takes a packet already read by
+  `craft_metadata::parse_xmp`. Settings come back by name (`Exposure2012`), the last one winning
+  where a name repeats: text from an attribute or a plain element, the plain items of an
+  `rdf:Seq`, or a structure (`crs:GradientBasedCorrections` and other local corrections) as
+  `craft_metadata`'s `XmpValue`, for the caller to read. The file's own prefixes do not matter.
   A description inside a structure belongs to the structure, not to the settings.
 - `number`, `signed` and `points`: Camera Raw's numbers (`+0.50`) and tone curve points
   (`"32, 22"`).
@@ -25,10 +25,11 @@ Which setting drives which control, and the ranges they clamp to, are the applic
 | Limit | Value |
 | --- | --- |
 | Input | 4 MiB (`MAX_XMP_BYTES`) |
-| Element nesting | 512 (`MAX_XML_DEPTH`) |
-| Document type declarations | refused |
+| Nesting and size of the packet | `craft-metadata`'s XMP limits |
+| Structure depth written | 64 (`MAX_WRITE_DEPTH`) |
 
 ## XMP
 
-The packet is parsed with `craft-xml` directly. A shared XMP reader can take over `packet` later;
-`Settings::from_packet` is the seam.
+Packets are read by `craft-metadata`'s XMP reader, the one every crate shares. `toolkit` reads
+only the `x:xmptk` attribute of the first `x:xmpmeta` start tag, with a bounded `craft-xml` scan,
+because that reader does not return it.

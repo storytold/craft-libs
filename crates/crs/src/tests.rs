@@ -1,5 +1,5 @@
 use super::*;
-use craft_xml::El;
+use craft_metadata::XmpValue;
 
 /// A hand-written settings file laid out as Photoshop 26's Camera Raw Filter saves one (the
 /// field set and order follow Camera Raw 18; the values are synthetic), plus element-form
@@ -43,8 +43,7 @@ fn text<'a>(s: &'a Settings, name: &str) -> &'a str {
 #[test]
 fn reads_a_photoshop_preset() {
     let s = Settings::parse(FIXTURE).unwrap();
-    assert_eq!(s.entries.len(), 35 + 3, "attributes first, then the three elements");
-    assert_eq!((s.entries[0].name.as_str(), s.entries[37].name.as_str()), ("Version", "ToneCurvePV2012Red"));
+    assert_eq!(s.entries.len(), 35 + 3, "the attributes and the three elements");
     assert_eq!((text(&s, "Version"), text(&s, "WhiteBalance"), text(&s, "CameraProfile")), ("18.1.1", "Custom", "Default Color"));
     assert_eq!(number(text(&s, "IncrementalTint")), Some(10.0));
     assert_eq!(number(text(&s, "Exposure2012")), Some(0.05));
@@ -70,13 +69,13 @@ fn structures_other_prefixes_and_other_namespaces() {
          <dc:title>t</dc:title><c:Empty/></r:Description></r:RDF></a:xmpmeta>"
     );
     let s = Settings::parse(xmp.as_bytes()).unwrap();
-    let names: Vec<&str> = s.entries.iter().map(|e| e.name.as_str()).collect();
+    let names: Vec<&str> = s.entries.keys().map(String::as_str).collect();
     // A description inside a structure belongs to the structure, not to the settings.
-    assert_eq!(names, ["Texture", "Look", "MaskGroupBasedCorrections", "Empty"]);
+    assert_eq!(names, ["Empty", "Look", "MaskGroupBasedCorrections", "Texture"]);
     let Some(Value::Structured(look)) = s.get("Look") else { panic!("not a structure") };
-    assert_eq!(look.path(&["rdf:Description"]).and_then(|d| d.attr("crs:Name")), Some("Adobe Color"), "names carry the canonical prefixes");
+    assert_eq!(look.field("crs:Name").and_then(XmpValue::text), Some("Adobe Color"), "fields carry the canonical prefix");
     let Some(Value::Structured(masks)) = s.get("MaskGroupBasedCorrections") else { panic!("a sequence of descriptions is a structure") };
-    assert_eq!(masks.path(&["rdf:Seq", "rdf:li", "rdf:Description"]).and_then(|d| d.attr("crs:What")), Some("Correction"));
+    assert_eq!(masks.items().first().and_then(|m| m.field("crs:What")).and_then(XmpValue::text), Some("Correction"));
     assert_eq!(s.get("Empty"), Some(&Value::Text(String::new())));
     assert_eq!(s.get("format"), None);
     // The last value of a repeated name wins.
@@ -112,7 +111,7 @@ fn deeply_nested_settings_are_an_error_not_a_stack_overflow() {
     let xml = format!("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">{}{}</x:xmpmeta>", "<g>".repeat(20_000), "</g>".repeat(20_000));
     let run = move || (Settings::parse(xml.as_bytes()).err(), toolkit(xml.as_bytes()));
     let (e, tk) = std::thread::Builder::new().stack_size(512 * 1024).spawn(run).unwrap().join().unwrap();
-    assert!(matches!(&e, Some(Error::Xml(m)) if m.contains("deeper")), "{e:?}");
+    assert!(matches!(&e, Some(Error::Xml(m)) if m.contains("deeply nested")), "{e:?}");
     assert_eq!(tk, None);
 }
 
@@ -129,7 +128,8 @@ fn malformed_input_is_an_error() {
         assert_eq!(Settings::parse(bytes).err(), Some(want));
     }
     for bytes in [&b""[..], b"not xml", b"<x:xmpmeta", b"<a><b></a>", b"<!DOCTYPE x [<!ENTITY e \"v\">]><x/>", b"{\"crs\": 1}"] {
-        assert!(matches!(Settings::parse(bytes), Err(Error::Xml(_))), "{:?}", String::from_utf8_lossy(bytes));
+        // Not XMP: refused by the XMP reader, or read as a packet with no settings.
+        assert!(matches!(Settings::parse(bytes), Err(Error::Xml(_) | Error::NoSettings)), "{:?}", String::from_utf8_lossy(bytes));
     }
     // Truncations and bit flips of a real file never panic.
     for cut in 0..FIXTURE.len() {
@@ -150,7 +150,9 @@ fn malformed_input_is_an_error() {
 
 #[test]
 fn the_toolkit_names_the_writer() {
-    let own = Settings { entries: vec![Setting { name: "Texture".into(), value: Value::Text("+3".into()) }] }.to_xmp("Example \"App\" & Co");
+    let mut own = Settings::default();
+    own.set("Texture", "+3");
+    let own = own.to_xmp("Example \"App\" & Co");
     assert_eq!(toolkit(own.as_bytes()).as_deref(), Some("Example \"App\" & Co"));
     let wrapped = format!("\u{feff}<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n{own}<?xpacket end=\"w\"?>");
     assert_eq!(toolkit(wrapped.as_bytes()).as_deref(), Some("Example \"App\" & Co"), "an xpacket wrapper and a byte order mark");
@@ -166,18 +168,18 @@ fn the_toolkit_names_the_writer() {
 #[test]
 fn a_written_file_reads_back_the_same() {
     let mut s = Settings::default();
-    s.push("Version", "18.4");
-    s.push("Exposure2012", signed(0.5, 2));
-    s.push("CameraProfile", "A <\"quoted\"> & 'odd' name\tx");
-    s.push_crop(Crop { top: 0.125, left: 0.25, bottom: 0.875, right: 0.5 });
-    s.push("HasSettings", "True");
-    s.push_seq("ToneCurvePV2012", vec!["0, 0".into(), "128, <140>".into(), "255, 255".into()]);
-    s.push_seq("ToneCurvePV2012Red", vec![]);
+    s.set("Version", "18.4");
+    s.set("Exposure2012", signed(0.5, 2));
+    s.set("CameraProfile", "A <\"quoted\"> & 'odd' name\tx");
+    s.set_crop(Crop { top: 0.125, left: 0.25, bottom: 0.875, right: 0.5 });
+    s.set("HasSettings", "True");
+    s.set_seq("ToneCurvePV2012", vec!["0, 0".into(), "128, <140>".into(), "255, 255".into()]);
+    s.set_seq("ToneCurvePV2012Red", vec![]);
     let xmp = s.to_xmp("Example");
     assert!(xmp.starts_with(
-        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"Example\">\n <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n  <rdf:Description rdf:about=\"\"\n    xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\"\n   crs:Version=\"18.4\"\n   crs:Exposure2012=\"+0.50\"\n"
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"Example\">\n <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n  <rdf:Description rdf:about=\"\"\n    xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\"\n   crs:CameraProfile="
     ));
-    assert!(xmp.contains("   crs:HasCrop=\"True\"\n   crs:CropTop=\"0.125000\"\n   crs:CropLeft=\"0.250000\"\n   crs:CropBottom=\"0.875000\"\n   crs:CropRight=\"0.500000\"\n   crs:CropAngle=\"0\"\n   crs:HasSettings=\"True\">\n"));
+    assert!(xmp.contains("\n   crs:CropAngle=\"0\"\n   crs:CropBottom=\"0.875000\"\n   crs:CropLeft=\"0.250000\"\n   crs:CropRight=\"0.500000\"\n   crs:CropTop=\"0.125000\"\n   crs:Exposure2012=\"+0.50\"\n   crs:HasCrop=\"True\"\n   crs:HasSettings=\"True\"\n   crs:Version=\"18.4\">\n"), "{xmp}");
     assert!(xmp.contains("   <crs:ToneCurvePV2012>\n    <rdf:Seq>\n     <rdf:li>0, 0</rdf:li>\n     <rdf:li>128, &lt;140&gt;</rdf:li>\n     <rdf:li>255, 255</rdf:li>\n    </rdf:Seq>\n   </crs:ToneCurvePV2012>\n"));
     assert!(xmp.ends_with("   </crs:ToneCurvePV2012Red>\n  </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>\n"));
     let back = Settings::parse(xmp.as_bytes()).unwrap();
@@ -185,14 +187,17 @@ fn a_written_file_reads_back_the_same() {
     assert_eq!(back.crop(), CropState::Crop(Crop { top: 0.125, left: 0.25, bottom: 0.875, right: 0.5 }));
     // What cannot be written is left out: a structure, and a name that is not an XML name.
     let mut odd = Settings::default();
-    odd.entries.push(Setting { name: "Look".into(), value: Value::Structured(El::new("crs:Other")) });
-    odd.push("bad name=\"x\"", "1");
-    odd.push("crs:Prefixed", "1");
-    odd.push("Texture", "1");
-    assert_eq!(
-        Settings::parse(odd.to_xmp("Example").as_bytes()).unwrap().entries,
-        [Setting { name: "Texture".into(), value: Value::Text("1".into()) }]
-    );
+    let foreign =
+        XmpValue::Struct([("dc:title".to_string(), XmpValue::Text("x".into())), ("crs:Name".to_string(), XmpValue::Text("n".into()))].into());
+    odd.entries.insert("Look".into(), Value::Structured(foreign));
+    odd.set("bad name=\"x\"", "1");
+    odd.set("crs:Prefixed", "1");
+    odd.set("Texture", "1");
+    let back = Settings::parse(odd.to_xmp("Example").as_bytes()).unwrap();
+    let names: Vec<&str> = back.entries.keys().map(String::as_str).collect();
+    assert_eq!(names, ["Look", "Texture"]);
+    let Some(Value::Structured(look)) = back.get("Look") else { panic!("not a structure") };
+    assert_eq!((look.field("crs:Name").and_then(XmpValue::text), look.field("dc:title")), (Some("n"), None), "only crs: fields are written");
     // No settings at all still writes well-formed XMP.
     assert_eq!(Settings::parse(Settings::default().to_xmp("Example").as_bytes()).err(), Some(Error::NoSettings));
 }
@@ -292,11 +297,12 @@ fn structures_are_written_back_as_they_were_read() {
          </rdf:Description></rdf:RDF></x:xmpmeta>"
     );
     let s = Settings::parse(correction.as_bytes()).unwrap();
-    let Some(Value::Structured(el)) = s.get("GradientBasedCorrections") else { panic!("not a structure") };
-    let d = el.path(&["rdf:Seq", "rdf:li", "rdf:Description"]).unwrap();
-    assert_eq!((d.attr("crs:LocalExposure2012"), d.child_text("crs:CorrectionName").as_deref()), (Some("0.25"), Some("Sky & sea")));
-    let mask = d.path(&["crs:CorrectionMasks", "rdf:Seq", "rdf:li"]).unwrap();
-    assert_eq!((mask.attr("crs:What"), mask.attr("crs:ZeroX")), (Some("Mask/Gradient"), Some("0.1")));
+    let Some(Value::Structured(v)) = s.get("GradientBasedCorrections") else { panic!("not a structure") };
+    let d = &v.items()[0];
+    let text = |v: &XmpValue, k: &str| v.field(k).and_then(XmpValue::text).map(str::to_string);
+    assert_eq!((text(d, "crs:LocalExposure2012"), text(d, "crs:CorrectionName")), (Some("0.25".into()), Some("Sky & sea".into())));
+    let mask = &d.field("crs:CorrectionMasks").unwrap().items()[0];
+    assert_eq!((text(mask, "crs:What"), text(mask, "crs:ZeroX")), (Some("Mask/Gradient".into()), Some("0.1".into())));
     assert_eq!(s.entries.len(), 2, "the correction's own properties are not settings");
     let back = Settings::parse(s.to_xmp("Example").as_bytes()).unwrap();
     assert_eq!(back, s);

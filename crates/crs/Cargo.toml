@@ -11,5 +11,6 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+craft-metadata = { workspace = true }
 craft-xml = { workspace = true }
 thiserror = { workspace = true }

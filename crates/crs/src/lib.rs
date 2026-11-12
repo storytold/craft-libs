@@ -4,35 +4,35 @@
 //! `.xmp` file and as Camera Raw, Lightroom and Bridge write them to a raw file's sidecar
 //! (`IMG_0001.xmp` beside `IMG_0001.CR2`).
 //!
-//! - [`Settings::parse`] reads a file; [`Settings::from_packet`] reads a packet that is already
-//!   parsed. Either gives the settings as written, in file order: a name and a [`Value`]
-//!   (text, an `rdf:Seq` of items, or a structure this crate does not read).
+//! - [`Settings::parse`] reads a file or sidecar; [`Settings::from_xmp`] takes a packet that is
+//!   already parsed with `craft_metadata::parse_xmp`. Either gives the settings by name: a
+//!   [`Value`] (text, the plain items of an `rdf:Seq`, or a structure such as local corrections).
 //! - [`number`], [`points`] and [`Settings::crop`] read what the text means: Camera Raw's
 //!   numbers (`+0.50`), tone curve points (`"32, 22"`) and the crop rectangle.
 //! - [`Settings::to_xmp`] writes a settings file Camera Raw's Load Settings reads, and
 //!   [`toolkit`] says which application wrote one.
 //!
-//! Which setting drives which control is the application's to decide. This crate reads the XMP
-//! with `craft-xml`; a general XMP reader can replace that part without changing the model.
+//! Which setting drives which control is the application's to decide. The packet is read by
+//! `craft-metadata`'s XMP reader, so there is one XMP reader for every crate.
 
 #[cfg(test)]
 mod tests;
 
-use craft_xml::{Canonical, El, Options};
+use std::collections::BTreeMap;
+
+use craft_metadata::{XmpData, XmpValue};
 
 /// The Camera Raw settings namespace.
-pub const CRS_NS: &str = "http://ns.adobe.com/camera-raw-settings/1.0/";
+pub use craft_metadata::CRS_NS;
 /// The RDF namespace.
 pub const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 /// The namespace of `x:xmpmeta`.
 pub const META_NS: &str = "adobe:ns:meta/";
 /// Largest settings file read; real ones are a few kilobytes.
 pub const MAX_XMP_BYTES: usize = 4 * 1024 * 1024;
-/// Deepest element nesting read.
-pub const MAX_XML_DEPTH: usize = 512;
-
-/// The prefixes [`packet`] gives the three namespaces, whatever the file calls them.
-pub const CANONICAL: Canonical<'static> = Canonical::new(&[("crs", CRS_NS), ("rdf", RDF_NS), ("x", META_NS)]);
+/// Deepest structure [`Settings::to_xmp`] writes; deeper levels are left out. The reader stops
+/// well before this.
+pub const MAX_WRITE_DEPTH: usize = 64;
 
 /// Why a settings file was not read.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -50,109 +50,73 @@ pub enum Error {
 /// What a setting holds.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
-    /// An attribute's value, or the text of an element without child elements.
+    /// An attribute's value or a plain element's text, trimmed.
     Text(String),
-    /// The items of an `rdf:Seq` that are all plain text: a tone curve's points, one `"x, y"`
-    /// each.
+    /// The items of an `rdf:Seq` (or `rdf:Bag`, `rdf:Alt`) that are all plain text: a tone
+    /// curve's points, one `"x, y"` each.
     Seq(Vec<String>),
-    /// Any other element with child elements (masks and local corrections, looks, lens
-    /// profiles): the `crs:` element itself, its names with the prefixes of [`CANONICAL`],
-    /// for the caller to read. [`Settings::to_xmp`] writes it back as it is.
-    Structured(El),
+    /// Anything else: a structure or an array of structures (masks and local corrections,
+    /// looks, lens profiles), with its fields named `crs:Field`, for the caller to read.
+    /// [`Settings::to_xmp`] writes it back.
+    Structured(XmpValue),
 }
 
-/// One `crs:` setting.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Setting {
-    /// The name without its prefix: `Exposure2012`, `ToneCurvePV2012`.
-    pub name: String,
-    pub value: Value,
+impl Value {
+    fn from_xmp(v: &XmpValue) -> Value {
+        match v {
+            XmpValue::Text(t) => Value::Text(t.clone()),
+            XmpValue::Array(items) if items.iter().all(|i| matches!(i, XmpValue::Text(_))) => {
+                Value::Seq(items.iter().filter_map(|i| i.text().map(str::to_string)).collect())
+            }
+            other => Value::Structured(other.clone()),
+        }
+    }
 }
 
-/// The `crs:` settings of a packet, in file order: for each `rdf:Description`, its attributes
-/// and then its child elements. A name may occur more than once; a reader applying settings in
-/// order lets the last win.
+/// The `crs:` settings of a packet, by name without the prefix (`Exposure2012`). Where a name
+/// occurs more than once (in several `rdf:Description`s), the last one is kept.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Settings {
-    pub entries: Vec<Setting>,
-}
-
-/// Parses XMP text into its root element with the namespaces of [`CANONICAL`] as `crs:`, `rdf:`
-/// and `x:`. A byte order mark and an `<?xpacket?>` wrapper are accepted. Refuses more than
-/// [`MAX_XMP_BYTES`], nesting past [`MAX_XML_DEPTH`], a document type declaration and
-/// malformed XML.
-pub fn packet(bytes: &[u8]) -> Result<El, Error> {
-    if bytes.len() > MAX_XMP_BYTES {
-        return Err(Error::TooLarge);
-    }
-    let text = std::str::from_utf8(bytes).map_err(|_| Error::NotText)?;
-    let options = Options {
-        doctype: craft_xml::Doctype::Reject,
-        limits: craft_xml::Limits { max_input: MAX_XMP_BYTES, max_depth: MAX_XML_DEPTH, ..craft_xml::Limits::DEFAULT },
-        ..Options::canonical(&CANONICAL).strict()
-    };
-    options.parse(text.trim_start_matches('\u{feff}').as_bytes()).map_err(|e| Error::Xml(e.to_string()))
+    pub entries: BTreeMap<String, Value>,
 }
 
 /// The XMP toolkit a file names on `x:xmpmeta` (`x:xmptk`): the application that last wrote
-/// it. `None` for a file that is not XMP or names none.
+/// it. `None` for a file that is not XMP or names none. Only the first start tag named
+/// `x:xmpmeta` (by namespace) is looked at: a bounded scan, not a parse of the packet.
 pub fn toolkit(bytes: &[u8]) -> Option<String> {
-    let root = packet(bytes).ok()?;
-    std::iter::once(&root).chain(root.descendants()).find(|e| e.name == "x:xmpmeta")?.attr("x:xmptk").map(str::to_string)
+    if bytes.len() > MAX_XMP_BYTES {
+        return None;
+    }
+    let canonical = craft_xml::Canonical::new(&[("x", META_NS)]);
+    let el = craft_xml::Options::canonical(&canonical).first_start(bytes, "x:xmpmeta")?;
+    el.attr("x:xmptk").map(str::to_string)
 }
 
 impl Settings {
-    /// Reads a settings file or sidecar. An error when it is not XMP ([`packet`]) or holds no
-    /// `crs:` setting.
+    /// Reads a settings file or sidecar. An error when it is not XMP or holds no `crs:`
+    /// setting.
     pub fn parse(bytes: &[u8]) -> Result<Settings, Error> {
-        let settings = Settings::from_packet(&packet(bytes)?);
+        if bytes.len() > MAX_XMP_BYTES {
+            return Err(Error::TooLarge);
+        }
+        let text = std::str::from_utf8(bytes).map_err(|_| Error::NotText)?;
+        let xmp = craft_metadata::parse_xmp(text).map_err(|e| Error::Xml(e.to_string()))?;
+        let settings = Settings::from_xmp(&xmp);
         if settings.entries.is_empty() { Err(Error::NoSettings) } else { Ok(settings) }
     }
 
-    /// The `crs:` settings of a parsed packet whose names carry the prefixes of [`CANONICAL`]
-    /// (as [`packet`] returns it). `root` may be `x:xmpmeta`, `rdf:RDF` or anything around them.
-    /// Settings are read from every `rdf:Description` that is not inside a `crs:` element: one
-    /// inside belongs to that setting's structure.
-    pub fn from_packet(root: &El) -> Settings {
-        let mut entries = Vec::new();
-        // Iterative, so a hand-built tree of any depth is walked without recursion.
-        let mut descriptions = Vec::new();
-        let mut open = vec![root];
-        while let Some(el) = open.pop() {
-            if el.name == "rdf:Description" {
-                descriptions.push(el);
-            }
-            open.extend(el.elements().filter(|c| !c.name.starts_with("crs:")).collect::<Vec<_>>().into_iter().rev());
-        }
-        for desc in descriptions {
-            for (name, value) in &desc.attrs {
-                if let Some(name) = name.strip_prefix("crs:") {
-                    entries.push(Setting { name: name.to_string(), value: Value::Text(value.clone()) });
-                }
-            }
-            for child in desc.elements() {
-                let Some(name) = child.name.strip_prefix("crs:") else { continue };
-                let plain_seq = child.child("rdf:Seq").filter(|seq| {
-                    child.elements().count() == 1
-                        && seq.elements().all(|li| li.name == "rdf:li" && li.attrs.is_empty() && li.elements().next().is_none())
-                });
-                let value = match plain_seq {
-                    Some(seq) => Value::Seq(seq.elements().map(|li| li.text().into_owned()).collect()),
-                    None if child.elements().next().is_some() => Value::Structured(child.clone()),
-                    None => Value::Text(child.text().into_owned()),
-                };
-                entries.push(Setting { name: name.to_string(), value });
-            }
-        }
+    /// The `crs:` settings of a packet `craft_metadata::parse_xmp` read.
+    pub fn from_xmp(xmp: &XmpData) -> Settings {
+        let entries = xmp.values.iter().filter_map(|(k, v)| Some((k.strip_prefix("crs:")?.to_string(), Value::from_xmp(v)))).collect();
         Settings { entries }
     }
 
-    /// The last value of `name`.
+    /// The value of `name`.
     pub fn get(&self, name: &str) -> Option<&Value> {
-        self.entries.iter().rev().find(|s| s.name == name).map(|s| &s.value)
+        self.entries.get(name)
     }
 
-    /// The last text value of `name`.
+    /// The text value of `name`.
     pub fn text(&self, name: &str) -> Option<&str> {
         match self.get(name)? {
             Value::Text(t) => Some(t),
@@ -160,23 +124,23 @@ impl Settings {
         }
     }
 
-    /// Adds a text setting (written as an attribute).
-    pub fn push(&mut self, name: &str, value: impl Into<String>) {
-        self.entries.push(Setting { name: name.to_string(), value: Value::Text(value.into()) });
+    /// Sets a text setting (written as an attribute).
+    pub fn set(&mut self, name: &str, value: impl Into<String>) {
+        self.entries.insert(name.to_string(), Value::Text(value.into()));
     }
 
-    /// Adds a sequence setting (written as an element holding an `rdf:Seq`).
-    pub fn push_seq(&mut self, name: &str, items: Vec<String>) {
-        self.entries.push(Setting { name: name.to_string(), value: Value::Seq(items) });
+    /// Sets a sequence setting (written as an element holding an `rdf:Seq`).
+    pub fn set_seq(&mut self, name: &str, items: Vec<String>) {
+        self.entries.insert(name.to_string(), Value::Seq(items));
     }
 
-    /// Adds the keys of a crop: `HasCrop`, the four edges to six decimals, and a zero angle.
-    pub fn push_crop(&mut self, crop: Crop) {
-        self.push("HasCrop", "True");
+    /// Sets the keys of a crop: `HasCrop`, the four edges to six decimals, and a zero angle.
+    pub fn set_crop(&mut self, crop: Crop) {
+        self.set("HasCrop", "True");
         for (key, v) in CROP_KEYS.iter().zip([crop.top, crop.left, crop.bottom, crop.right]) {
-            self.push(key, format!("{v:.6}"));
+            self.set(key, format!("{v:.6}"));
         }
-        self.push("CropAngle", "0");
+        self.set("CropAngle", "0");
     }
 
     /// The file's crop from its keys. `HasCrop` must be `True`: without it, or with `False`,
@@ -209,42 +173,74 @@ impl Settings {
     }
 
     /// Writes the settings as a Camera Raw settings file, naming `toolkit` as the application
-    /// that wrote it: text settings as attributes of one `rdf:Description`, sequences as its
-    /// child elements, each in the order given, then structures as they are. Names that are
-    /// not XML names are left out, as is a structure whose element is not the `crs:` element
-    /// of that name.
+    /// that wrote it: text settings as attributes of one `rdf:Description`, then sequences and
+    /// structures as its child elements, each group by name. Left out: names that are not XML
+    /// names, structure fields outside the `crs:` namespace, and levels past
+    /// [`MAX_WRITE_DEPTH`].
     pub fn to_xmp(&self, toolkit: &str) -> String {
-        let named = |s: &&Setting| craft_xml::is_name(&s.name) && !s.name.contains(':');
+        let named = |(name, _): &(&String, &Value)| plain_name(name);
         let mut out = format!(
             "<x:xmpmeta xmlns:x=\"{META_NS}\" x:xmptk=\"{}\">\n <rdf:RDF xmlns:rdf=\"{RDF_NS}\">\n  <rdf:Description rdf:about=\"\"\n    xmlns:crs=\"{CRS_NS}\"",
             craft_xml::esc_attr(toolkit)
         );
-        for s in self.entries.iter().filter(named) {
-            if let Value::Text(text) = &s.value {
-                out.push_str(&format!("\n   crs:{}=\"{}\"", s.name, craft_xml::esc_attr(text)));
+        for (name, value) in self.entries.iter().filter(named) {
+            if let Value::Text(text) = value {
+                out.push_str(&format!("\n   crs:{name}=\"{}\"", craft_xml::esc_attr(text)));
             }
         }
         out.push_str(">\n");
-        for s in self.entries.iter().filter(named) {
-            if let Value::Seq(items) = &s.value {
-                out.push_str(&format!("   <crs:{}>\n    <rdf:Seq>\n", s.name));
-                for item in items {
-                    out.push_str(&format!("     <rdf:li>{}</rdf:li>\n", craft_xml::esc(item)));
+        for (name, value) in self.entries.iter().filter(named) {
+            match value {
+                Value::Text(_) => {}
+                Value::Seq(items) => {
+                    out.push_str(&format!("   <crs:{name}>\n    <rdf:Seq>\n"));
+                    for item in items {
+                        out.push_str(&format!("     <rdf:li>{}</rdf:li>\n", craft_xml::esc(item)));
+                    }
+                    out.push_str(&format!("    </rdf:Seq>\n   </crs:{name}>\n"));
                 }
-                out.push_str(&format!("    </rdf:Seq>\n   </crs:{}>\n", s.name));
-            }
-        }
-        for s in self.entries.iter().filter(named) {
-            if let Value::Structured(el) = &s.value
-                && el.name.strip_prefix("crs:") == Some(s.name.as_str())
-            {
-                out.push_str("   ");
-                el.write_xml(&mut out);
-                out.push('\n');
+                Value::Structured(v) => {
+                    out.push_str("   ");
+                    write_property(&mut out, &format!("crs:{name}"), v, 0);
+                    out.push('\n');
+                }
             }
         }
         out.push_str("  </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>\n");
         out
+    }
+}
+
+/// A local name this writer can put after `crs:`.
+fn plain_name(name: &str) -> bool {
+    craft_xml::is_name(name) && !name.contains(':')
+}
+
+/// Writes `v` as the element `tag`: text as content, an array as an `rdf:Seq`, a structure as
+/// `rdf:parseType="Resource"` with its `crs:` fields.
+fn write_property(out: &mut String, tag: &str, v: &XmpValue, depth: usize) {
+    match v {
+        XmpValue::Text(t) => out.push_str(&format!("<{tag}>{}</{tag}>", craft_xml::esc(t))),
+        XmpValue::Array(items) => {
+            out.push_str(&format!("<{tag}><rdf:Seq>"));
+            if depth < MAX_WRITE_DEPTH {
+                for item in items {
+                    write_property(out, "rdf:li", item, depth + 1);
+                }
+            }
+            out.push_str(&format!("</rdf:Seq></{tag}>"));
+        }
+        XmpValue::Struct(fields) => {
+            out.push_str(&format!("<{tag} rdf:parseType=\"Resource\">"));
+            if depth < MAX_WRITE_DEPTH {
+                for (key, field) in fields {
+                    if let Some(local) = key.strip_prefix("crs:").filter(|l| plain_name(l)) {
+                        write_property(out, &format!("crs:{local}"), field, depth + 1);
+                    }
+                }
+            }
+            out.push_str(&format!("</{tag}>"));
+        }
     }
 }
 
