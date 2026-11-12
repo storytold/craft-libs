@@ -31,8 +31,8 @@ use craft_behavior::{
 };
 use craft_ui::canvas::canvas_space;
 use craft_ui::contract::{
-    Animate as _, Bind, BindMut, CommandSet as _, Commands as _, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Outcome,
-    PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role,
+    Animate as _, Bind, BindMut, CommandSet as _, Commands as _, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, Outcome, PaintUi,
+    PartsCx, Pointer as _, Props as _, Remember as _, Role,
 };
 use craft_ui::primitives::{EditorLine, EditorPurpose, EditorRun, EditorState, PaintShape, StrokeWidth};
 use craft_ui::runtime::commands::ClipItem;

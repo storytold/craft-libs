@@ -385,7 +385,7 @@ fn the_row_menu_opens_the_host_menu_keeps_its_button_and_renames_the_row() {
 #[trial]
 fn a_cell_field_stands_in_its_cell_takes_the_click_and_reports_its_edit() {
     use craft_behavior::{ColumnKey, ColumnWidth};
-    use craft_ui::contract::{Bind, ColumnSpec, Show as _};
+    use craft_ui::contract::{Bind, ColumnSpec};
     use craft_ui::table::Table;
     use craft_ui::text::{NumberField, TextField};
     use egui::{Key, Modifiers, Rect};

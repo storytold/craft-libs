@@ -603,7 +603,7 @@ impl<'a> CharacterControls<'a> {
             }
             toggles.push(Toggle::new(&words.underline, "text_underline", values.underline, Box::new(CharacterChange::Underline)));
             toggles.push(Toggle::new(&words.strikethrough, "text_strikethrough", values.strikethrough, Box::new(CharacterChange::Strikethrough)));
-            edits.extend(toggle_row(ui, None, toggles));
+            edits.extend(toggle_row(ui, None, &toggles));
 
             let names = [
                 &words.standard_ligatures,
@@ -623,7 +623,7 @@ impl<'a> CharacterControls<'a> {
                     Toggle::new(name, icon, Some(values.opentype.contains(&tag)), Box::new(move |on| CharacterChange::OpenType { tag, on }))
                 })
                 .collect();
-            edits.extend(toggle_row(ui, None, features));
+            edits.extend(toggle_row(ui, None, &features));
 
             if let Some(entries) = &language_entries {
                 edits.extend(select_row(ui, &words.language, mixed(values.language.clone()), entries, CharacterChange::Language));

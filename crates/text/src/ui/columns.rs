@@ -415,18 +415,6 @@ impl TextColumnsDialog {
         length_field(self.unit, caption.to_owned(), points, f64::from(*range.start())..=f64::from(*range.end())).enabled(enabled)
     }
 
-    /// One width or spacing field, named `caption`; its events in points.
-    fn length_row(
-        &self,
-        ui: &mut Ui,
-        caption: &str,
-        points: Option<f32>,
-        enabled: bool,
-        range: std::ops::RangeInclusive<f32>,
-    ) -> EditEvents<Option<f32>> {
-        in_points(self.length_cell(caption, points, enabled, range).show(ui))
-    }
-
     fn body(&mut self, ui: &mut Ui, words: &TextColumnsWords, units: &Units, valid: &Cell<bool>) {
         if self.word.is_some() {
             GroupBox::new(words.presets.clone(), None).show(ui, |ui, _| self.presets(ui, words));

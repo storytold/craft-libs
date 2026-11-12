@@ -181,14 +181,14 @@ impl<C> Toggle<C> {
 
 /// A row of icon toggle buttons, each its own Tab stop; a clicked one reports its change. `label` names the row as a
 /// group (Alignment).
-pub(super) fn toggle_row<C>(ui: &mut Ui, label: Option<&Label>, toggles: Vec<Toggle<C>>) -> Vec<EditEvent<C>> {
+pub(super) fn toggle_row<C>(ui: &mut Ui, label: Option<&Label>, toggles: &[Toggle<C>]) -> Vec<EditEvent<C>> {
     let mut edits = Vec::new();
     let row = match label {
         Some(label) => Row::new().label(label.clone()),
         None => Row::new(),
     };
     row.wrap(true).show(ui, |ui, _| {
-        for toggle in &toggles {
+        for toggle in toggles {
             let bind = Bind::given(mixed(toggle.on));
             let mut button = ToggleButton::new(toggle.name.clone(), bind).icon(IconId::new(toggle.icon)).icon_only();
             if let Some(reason) = &toggle.disabled {
