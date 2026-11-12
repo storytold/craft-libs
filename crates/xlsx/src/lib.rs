@@ -49,6 +49,7 @@
 //! # }
 //! ```
 
+mod document;
 pub mod ns;
 mod package;
 mod sheet;
@@ -57,19 +58,22 @@ mod styles;
 #[doc(hidden)]
 pub mod testing;
 mod workbook;
+mod write;
 mod xlsb;
 
 pub use craft_sheet::{
     BorderStyle, CellError, CellRef, DEFAULT_PALETTE, HAlign, MAX_COLS, MAX_ROWS, Pattern, Range, Script, Underline, VAlign, Value, Visibility,
     builtin_format, builtin_format_id, quote_sheet, sheet_needs_quotes,
 };
+pub use document::{Document, KeptPart, Worksheet, XlsxKind};
 pub use package::{Package, is_xlsb};
 pub use sheet::{Cell, CellFormula, CellValue, Column, FormulaKind, Row, SheetPart, iso_date_serial};
-pub use strings::{PhoneticProps, PhoneticRun, StringItem, TextRun, decode_xstring, encode_xstring, rich_text};
+pub use strings::{PhoneticProps, PhoneticRun, StringItem, TextRun, decode_xstring, encode_xstring, rich_text, t_el};
 pub use styles::{
     Alignment, Border, BorderEdge, CellStyle, Color, ColorSource, Dxf, Fill, Font, FontScheme, GradientFill, PatternFill, Protection, Styles, Xf,
 };
 pub use workbook::{DefinedName, SheetEntry, SheetKind, Workbook};
+pub use write::num;
 
 /// Why a workbook could not be read.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

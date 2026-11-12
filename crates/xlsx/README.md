@@ -24,6 +24,20 @@ A cell keeps the file's terms: a shared-string index, a format index, the formul
 file spells it, value and cell metadata indexes. `CellValue::resolve` gives the value it shows.
 Shared formulas are not expanded and formulas are not parsed: that needs a formula grammar.
 
+## Writing
+
+`Document::read` holds a whole SpreadsheetML workbook: the `Workbook`, shared strings, `Styles`,
+each worksheet's `Row`s and `SheetPart`, and every other part as a `KeptPart` (bytes and content
+type: drawings, charts, the theme, document properties, a VBA project, their relationships).
+`Document::write` regenerates the workbook part (sheets, defined names, date system, active tab),
+the worksheets (dimension, columns, merged cells, rows), the shared strings and the styles tables
+from those fields, keeps the rest of each part's tree in place, and writes the kept parts as they
+were. Part names and relationship ids are kept, so a file read and written without changes points
+where it did, and writing it twice gives the same bytes. The calculation chain is dropped (Excel
+rebuilds it). `XlsxKind` is the workbook part's content type (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`).
+The parts this crate writes use the transitional namespaces; a strict file's kept parts stay as
+they were. A binary workbook is not written.
+
 A binary workbook gives the same `Workbook`, strings, rows and merged cells, with saved values
 only: its formulas are token streams that are not decoded, and its styles are not read (each
 cell keeps its format index).

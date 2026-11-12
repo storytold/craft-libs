@@ -98,8 +98,13 @@ pub const CANONICAL: Canonical<'static> = Canonical { namespaces: NAMESPACES, un
 /// drops each `mc:Choice` that requires a namespace this crate does not know, since its content
 /// was not kept. Declarations already on `root` are replaced.
 pub fn declare(root: &mut El) {
+    declare_with(root, &[]);
+}
+
+/// [`declare`], also declaring the `prefixes` of names written outside the tree (streamed rows).
+pub(crate) fn declare_with(root: &mut El, prefixes: &[&str]) {
     drop_unknown_choices(root);
-    let mut used: Vec<&str> = Vec::new();
+    let mut used: Vec<&str> = prefixes.to_vec();
     collect(root, &mut used);
     let mut decls = vec![("xmlns".to_string(), MAIN.to_string())];
     for (p, uri) in NAMESPACES {
@@ -112,12 +117,15 @@ pub fn declare(root: &mut El) {
     root.attrs = decls;
 }
 
+/// Drops each `mc:Choice` that requires an unlisted namespace, and an `mc:AlternateContent` left
+/// with no choice and no fallback.
 fn drop_unknown_choices(e: &mut El) {
     e.children
         .retain(|n| !matches!(n, Node::El(c) if c.name == "mc:Choice" && c.attr("Requires").is_some_and(|r| r.split_whitespace().any(|p| p == "?"))));
     for c in e.elements_mut() {
         drop_unknown_choices(c);
     }
+    e.children.retain(|n| !matches!(n, Node::El(c) if c.name == "mc:AlternateContent" && c.elements().next().is_none()));
 }
 
 fn collect<'a>(e: &'a El, used: &mut Vec<&'a str>) {

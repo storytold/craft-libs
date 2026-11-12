@@ -4,6 +4,34 @@ use craft_opc::Rels;
 use craft_sheet::Visibility;
 use craft_xml::El;
 
+use crate::write::{assemble, flag, set};
+
+/// The children of a workbook in schema order (`CT_Workbook`).
+const WORKBOOK: &[&str] = &[
+    "fileVersion",
+    "fileSharing",
+    "workbookPr",
+    "workbookProtection",
+    "bookViews",
+    "sheets",
+    "functionGroups",
+    "externalReferences",
+    "definedNames",
+    "calcPr",
+    "oleSize",
+    "customWorkbookViews",
+    "pivotCaches",
+    "smartTagPr",
+    "smartTagTypes",
+    "webPublishing",
+    "fileRecoveryPr",
+    "webPublishObjects",
+    "extLst",
+];
+
+/// `<definedName>` attributes read into [`DefinedName`]'s fields.
+const NAME_ATTRS: &[&str] = &["name", "localSheetId", "comment", "hidden"];
+
 /// What kind of sheet a workbook entry points at, from its relationship type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SheetKind {
@@ -46,7 +74,7 @@ pub struct SheetEntry {
 }
 
 /// One `<definedName>`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DefinedName {
     /// The name as written, built-in names included (`_xlnm.Print_Area`, `_xlnm._FilterDatabase`).
     pub name: String,
@@ -56,6 +84,8 @@ pub struct DefinedName {
     pub formula: String,
     pub comment: String,
     pub hidden: bool,
+    /// The other attributes as written (`function`, `vbProcedure`, `shortcutKey`, ...).
+    pub attrs: Vec<(String, String)>,
 }
 
 /// The workbook part.
@@ -102,6 +132,7 @@ impl Workbook {
                     formula: d.text().trim().to_string(),
                     comment: d.attr("comment").unwrap_or_default().to_string(),
                     hidden: d.flag("hidden", false),
+                    attrs: d.attrs.iter().filter(|(k, _)| !NAME_ATTRS.contains(&k.as_str())).cloned().collect(),
                 });
             }
         }
@@ -114,5 +145,57 @@ impl Workbook {
         }
         wb.root = root;
         wb
+    }
+
+    /// The workbook part's root: `sheets` and `definedNames` regenerated from the fields, the
+    /// date system set in `workbookPr` and the active tab in the view it was read from;
+    /// everything else in [`Workbook::root`] as kept. Each sheet's `r:id` is written as
+    /// [`SheetEntry::rel_id`] holds it.
+    pub fn to_el(&self) -> El {
+        let root = if self.root.name.is_empty() { El::new("workbook") } else { self.root.clone() };
+        let mut pr = root.child("workbookPr").cloned().unwrap_or_else(|| El::new("workbookPr"));
+        set(&mut pr, "date1904", flag(self.date_1904));
+        let mut views = root.child("bookViews").cloned();
+        if let Some(tab) = self.active_tab {
+            let views = views.get_or_insert_with(|| El::new("bookViews"));
+            if views.child("workbookView").is_none() {
+                views.push(El::new("workbookView"));
+            }
+            let visible = views.children("workbookView").position(|v| v.attr("visibility").unwrap_or("visible") == "visible").unwrap_or(0);
+            if let Some(v) = views.elements_mut().filter(|v| v.name == "workbookView").nth(visible) {
+                v.set_attr("activeTab", tab);
+            }
+        }
+        let mut sheets = El::new("sheets");
+        for s in &self.sheets {
+            let mut e = El::new("sheet").with_attr("name", &s.name).with_attr("sheetId", s.sheet_id);
+            set(
+                &mut e,
+                "state",
+                match s.visibility {
+                    Visibility::Visible => None,
+                    Visibility::Hidden => Some("hidden".into()),
+                    Visibility::VeryHidden => Some("veryHidden".into()),
+                },
+            );
+            e.set_attr("r:id", &s.rel_id);
+            sheets.push(e);
+        }
+        let mut names = El::new("definedNames");
+        for d in &self.defined_names {
+            let mut e = El::new("definedName").with_attr("name", &d.name);
+            e.attrs.extend(d.attrs.iter().cloned());
+            set(&mut e, "comment", (!d.comment.is_empty()).then(|| d.comment.clone()));
+            set(&mut e, "hidden", flag(d.hidden));
+            set(&mut e, "localSheetId", d.local_sheet_id.map(|v| v.to_string()));
+            names.push(if d.formula.is_empty() { e } else { e.with_text(&d.formula) });
+        }
+        let owned = vec![
+            ("workbookPr", Some(pr)),
+            ("bookViews", views),
+            ("sheets", Some(sheets)),
+            ("definedNames", (!self.defined_names.is_empty()).then_some(names)),
+        ];
+        assemble(&root, WORKBOOK, owned)
     }
 }
