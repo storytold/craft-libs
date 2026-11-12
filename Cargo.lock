@@ -1181,6 +1181,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ical"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "proptest",
+]
+
+[[package]]
 name = "craft-idml"
 version = "0.1.0"
 dependencies = [
@@ -1402,6 +1410,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-pdn"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "proptest",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-penpot"
 version = "0.1.0"
 dependencies = [
@@ -1556,7 +1573,9 @@ dependencies = [
 name = "craft-rtf"
 version = "0.1.0"
 dependencies = [
+ "craft-mime",
  "encoding_rs",
+ "proptest",
 ]
 
 [[package]]
@@ -1807,6 +1826,16 @@ version = "0.1.0"
 dependencies = [
  "craft-cfb",
  "craft-sheet",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-xlsx"
+version = "0.1.0"
+dependencies = [
+ "craft-opc",
+ "craft-sheet",
+ "craft-xml",
  "thiserror 2.0.21",
 ]
 

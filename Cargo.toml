@@ -17,6 +17,7 @@ craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
 craft-ai-core = { path = "crates/ai-core" }
 craft-pdf = { path = "crates/pdf", version = "=0.1.0" }
+craft-pdn = { path = "crates/pdn" }
 craft-plate-test = { path = "crates/plate-test" }
 krilla = { version = "=0.8.2", default-features = false, features = ["raster-images"] }
 hayro = { version = "=0.7.1", default-features = false }
@@ -55,6 +56,7 @@ craft-fig = { path = "crates/fig" }
 craft-fonts-build = { path = "crates/fonts-build" }
 craft-i18n = { path = "crates/i18n" }
 craft-idml = { path = "crates/idml" }
+craft-ical = { path = "crates/ical" }
 craft-jpeg = { path = "crates/jpeg" }
 craft-kiwi = { path = "crates/kiwi" }
 craft-keymap = { path = "crates/keymap" }
@@ -104,6 +106,7 @@ craft-vcard = { path = "crates/vcard" }
 craft-vectorcraft-format = { path = "crates/vectorcraft-format" }
 craft-vectordrawable = { path = "crates/vectordrawable" }
 craft-xls = { path = "crates/xls" }
+craft-xlsx = { path = "crates/xlsx" }
 craft-xcf = { path = "crates/xcf" }
 craft-xml = { path = "crates/xml" }
 craft-zip = { path = "crates/zip" }
