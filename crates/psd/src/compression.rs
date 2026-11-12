@@ -68,34 +68,90 @@ pub mod packbits {
 
     /// Encodes one row, appending to `out`. Never emits the `-128` no-op.
     pub fn encode(src: &[u8], out: &mut Vec<u8>) {
+        // Constant 16-bit samples with different bytes contain only literal packets.
+        if src.len() >= 128
+            && let Some(&[a, b]) = src.first_chunk::<2>()
+            && a != b
+        {
+            let (blocks, tail) = src.as_chunks::<8>();
+            if blocks.iter().all(|v| *v == [a, b, a, b, a, b, a, b]) && tail.iter().zip([a, b].into_iter().cycle()).all(|(&v, p)| v == p) {
+                for chunk in src.chunks(128) {
+                    out.push((chunk.len() - 1) as u8);
+                    out.extend_from_slice(chunk);
+                }
+                return;
+            }
+        }
+        packets(src, |header, bytes| {
+            out.push(header);
+            out.extend_from_slice(bytes);
+        });
+    }
+
+    /// The encoded row length, without allocating or writing its payload.
+    pub fn encoded_len(src: &[u8]) -> usize {
+        let mut len = 0;
+        packets(src, |_, bytes| len += 1 + bytes.len());
+        len
+    }
+
+    /// Visit PackBits run and literal packets in their deterministic encoding order.
+    fn packets(src: &[u8], mut emit: impl FnMut(u8, &[u8])) {
         let n = src.len();
         let mut i = 0;
         while i < n {
             // Length of the run starting at i.
             let mut run = 1;
-            while i + run < n && run < 128 && src[i + run] == src[i] {
+            while i + run < n && run < 8 && src[i + run] == src[i] {
                 run += 1;
+            }
+            if run == 8 {
+                while run + 8 <= 128 && src.get(i + run..).and_then(|s| s.first_chunk::<8>()) == Some(&[src[i]; 8]) {
+                    run += 8;
+                }
+                while i + run < n && run < 128 && src[i + run] == src[i] {
+                    run += 1;
+                }
             }
             // A literal never stops before a 2-byte run, so any run of >= 2
             // seen here starts a packet boundary: a run packet is never larger.
             if run >= 2 {
-                out.push((1i16 - run as i16) as i8 as u8);
-                out.push(src[i]);
+                emit((1i16 - run as i16) as i8 as u8, &src[i..i + 1]);
                 i += run;
                 continue;
             }
             // Literal: extend until a run of >= 3 begins or 128 bytes.
             let start = i;
             let mut len = 0;
-            while i < n && len < 128 {
+            // Short packets keep the scalar scan; lookahead pays only on longer literals.
+            while i < n && len < 16 {
                 if i + 2 < n && src[i] == src[i + 1] && src[i] == src[i + 2] {
                     break;
                 }
                 i += 1;
                 len += 1;
             }
-            out.push((len - 1) as u8);
-            out.extend_from_slice(&src[start..start + len]);
+            if len == 16 {
+                while len + 8 <= 128 {
+                    let Some(&[a, b, c, d, e, f, g, h, j, k]) = src.get(i..).and_then(|s| s.first_chunk::<10>()) else { break };
+                    let word = u64::from_le_bytes([a, b, c, d, e, f, g, h]);
+                    let different = (word ^ u64::from_le_bytes([b, c, d, e, f, g, h, j])) | (word ^ u64::from_le_bytes([c, d, e, f, g, h, j, k]));
+                    // A zero byte marks a triple; scalar scanning keeps the first boundary.
+                    if different.wrapping_sub(0x0101010101010101) & !different & 0x8080808080808080 != 0 {
+                        break;
+                    }
+                    i += 8;
+                    len += 8;
+                }
+                while i < n && len < 128 {
+                    if i + 2 < n && src[i] == src[i + 1] && src[i] == src[i + 2] {
+                        break;
+                    }
+                    i += 1;
+                    len += 1;
+                }
+            }
+            emit((len - 1) as u8, &src[start..start + len]);
         }
     }
 
@@ -369,82 +425,178 @@ fn decode_rle(data: &[u8], layout: &PlaneLayout, total: usize) -> Result<Vec<u8>
     Ok(out)
 }
 
+/// Encode independent row chunks and join their count tables and payloads in order.
 fn encode_rle(decoded: &[u8], layout: &PlaneLayout) -> Result<Vec<u8>> {
     let rows = layout.rows()?;
-    let rb = layout.row_bytes();
-    let cs = layout.count_size();
     if rows == 0 {
         return Ok(Vec::new());
     }
-    // Rows are independent, so they pack in parallel chunks of rows. Two passes: the first only
-    // measures each packed row, so the output is allocated once at its exact size and the second
-    // packs every row straight into its place. Collecting packed chunks and then copying them into
-    // the output held the encoded image twice, with growth slack, at the save's peak (photocraft#6607).
+    let rb = layout.row_bytes();
+    let cs = layout.count_size();
     let threads = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |v| v.get()).clamp(1, 32) };
-    let chunk_rows = rows.div_ceil(threads).max(1);
-    let row = |r: usize| &decoded[r * rb..(r + 1) * rb];
-    let mut lens = vec![0usize; rows];
-    for_each_chunk(threads, lens.chunks_mut(chunk_rows).enumerate().collect(), |(c, lens): (usize, &mut [usize])| {
-        let mut scratch = Vec::with_capacity(rb + rb.div_ceil(128));
-        for (i, len) in lens.iter_mut().enumerate() {
-            scratch.clear();
-            packbits::encode(row(c * chunk_rows + i), &mut scratch);
-            *len = scratch.len();
-        }
-    })?;
-    let mut out = vec![0u8; rows * cs + lens.iter().sum::<usize>()];
-    let (counts, mut packed) = out.split_at_mut(rows * cs);
-    for (count, &n) in counts.chunks_exact_mut(cs).zip(&lens) {
-        if cs == 2 {
-            let n = u16::try_from(n).map_err(|_| PsdError::LimitExceeded("RLE row exceeds 65535 bytes (use PSB)"))?;
-            count.copy_from_slice(&n.to_be_bytes());
-        } else {
-            let n = u32::try_from(n).map_err(|_| PsdError::LimitExceeded("RLE row too large"))?;
-            count.copy_from_slice(&n.to_be_bytes());
-        }
+    let step = rows.div_ceil(threads).max(1);
+    let ranges: Vec<_> = (0..rows).step_by(step).map(|start| start..start.saturating_add(step).min(rows)).collect();
+    // Scan packets once. Each worker owns its count table and payload; joining copies each
+    // payload once, trading temporary encoded bytes for the former second packet scan.
+    let mut chunks: Vec<_> = map_chunks(threads, ranges.clone(), |range| -> Result<Vec<u8>> {
+        let table = range.len().checked_mul(cs).ok_or(PsdError::LimitExceeded("RLE table overflow"))?;
+        let hint =
+            if cfg!(target_arch = "wasm32") { table } else { table.saturating_add(range.len().saturating_mul(rb.saturating_add(rb.div_ceil(128)))) };
+        encode_rle_chunk(decoded, layout, range, hint)
+    })?
+    .into_iter()
+    .collect::<Result<_>>()?;
+    if chunks.len() == 1 {
+        return Ok(chunks.remove(0).into_boxed_slice().into_vec());
     }
-    let mut parts = Vec::with_capacity(threads);
-    for (c, lens) in lens.chunks(chunk_rows).enumerate() {
-        let (part, rest) = packed.split_at_mut(lens.iter().sum());
-        parts.push((c, lens, part));
-        packed = rest;
+    let total = chunks.iter().try_fold(0usize, |n, c| n.checked_add(c.len()).ok_or(PsdError::LimitExceeded("RLE size overflow")))?;
+    let table = rows.checked_mul(cs).ok_or(PsdError::LimitExceeded("RLE table overflow"))?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(total).map_err(|_| PsdError::OutOfMemory("not enough memory for encoded RLE"))?;
+    out.resize(table, 0);
+    for (range, chunk) in ranges.into_iter().zip(chunks) {
+        let counts = range.len() * cs;
+        out[range.start * cs..range.end * cs].copy_from_slice(&chunk[..counts]);
+        out.extend_from_slice(&chunk[counts..]);
     }
-    for_each_chunk(threads, parts, |(c, lens, mut part): (usize, &[usize], &mut [u8])| {
-        let mut scratch = Vec::with_capacity(rb + rb.div_ceil(128));
-        for (i, &n) in lens.iter().enumerate() {
-            scratch.clear();
-            packbits::encode(row(c * chunk_rows + i), &mut scratch);
-            let (dst, rest) = std::mem::take(&mut part).split_at_mut(n);
-            dst.copy_from_slice(&scratch);
-            part = rest;
-        }
-    })?;
     Ok(out)
 }
 
-/// Runs `f` on every item, each on its own thread unless `threads` is 1 (wasm32).
-fn for_each_chunk<T: Send>(threads: usize, items: Vec<T>, f: impl Fn(T) + Sync) -> Result<()> {
-    if threads == 1 {
-        items.into_iter().for_each(f);
-        return Ok(());
-    }
-    std::thread::scope(|scope| {
-        let handles: Vec<_> = items.into_iter().map(|item| scope.spawn(|| f(item))).collect();
-        // Join every worker instead of aborting the scope with a thread panic.
-        let mut ok = true;
-        for h in handles {
-            ok &= h.join().is_ok();
+/// Encode one worker's rows, measuring packets only when the spare capacity cannot bound them.
+fn encode_rle_chunk(decoded: &[u8], layout: &PlaneLayout, range: std::ops::Range<usize>, hint: usize) -> Result<Vec<u8>> {
+    const OOM: PsdError = PsdError::OutOfMemory("not enough memory for encoded RLE");
+    let rb = layout.row_bytes();
+    let cs = layout.count_size();
+    let table = range.len().checked_mul(cs).ok_or(PsdError::LimitExceeded("RLE table overflow"))?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(hint.max(table)).or_else(|_| out.try_reserve_exact(table)).map_err(|_| OOM)?;
+    out.resize(table, 0);
+    let row_bound = rb.saturating_add(rb.div_ceil(128));
+    for (i, row) in range.enumerate() {
+        let src = &decoded[row * rb..(row + 1) * rb];
+        if out.capacity() - out.len() < row_bound {
+            let needed = packbits::encoded_len(src);
+            out.try_reserve(needed).or_else(|_| out.try_reserve_exact(needed)).map_err(|_| OOM)?;
         }
-        if ok { Ok(()) } else { Err(PsdError::LimitExceeded("an RLE worker panicked")) }
-    })
+        let start = out.len();
+        packbits::encode(src, &mut out);
+        let n = out.len() - start;
+        let count = &mut out[i * cs..(i + 1) * cs];
+        if cs == 2 {
+            count.copy_from_slice(&u16::try_from(n).map_err(|_| PsdError::LimitExceeded("RLE row exceeds 65535 bytes (use PSB)"))?.to_be_bytes());
+        } else {
+            count.copy_from_slice(&u32::try_from(n).map_err(|_| PsdError::LimitExceeded("RLE row too large"))?.to_be_bytes());
+        }
+    }
+    Ok(out)
+}
+
+/// Ordered work on the caller's pool, including nested channel and row encoding.
+fn map_chunks<T: Send, R: Send>(threads: usize, items: Vec<T>, f: impl Fn(T) -> R + Sync) -> Result<Vec<R>> {
+    if threads == 1 {
+        return Ok(items.into_iter().map(f).collect());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| items.into_par_iter().map(&f).collect()))
+            .map_err(|_| PsdError::LimitExceeded("an RLE worker panicked"))
+    }
+    #[cfg(target_arch = "wasm32")]
+    Ok(items.into_iter().map(f).collect())
 }
 
 /// zlib-compresses `data` at the default level.
 pub fn zip_compress(data: &[u8]) -> Vec<u8> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut e = zip_encoder();
+    #[cfg(target_arch = "wasm32")]
     let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
-    // Writing into a Vec cannot fail.
+    // The in-memory output always accepts the complete write.
     let _ = e.write_all(data);
-    e.finish().unwrap_or_default()
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if e.try_finish().is_err() {
+            return Vec::new();
+        }
+        let output = std::mem::take(e.get_mut());
+        // Return only the finished codec; the slot stays empty during compression.
+        let _ = ZIP_ENCODER.try_with(|slot| slot.set(Some(e)));
+        output.into_vec()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        e.finish().unwrap_or_default()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+thread_local! {
+    /// One finished codec per thread; encoded output moves out before it is retained.
+    static ZIP_ENCODER: std::cell::Cell<Option<flate2::write::ZlibEncoder<ZipOutput>>> = const { std::cell::Cell::new(None) };
+}
+
+/// Reset a thread's finished encoder without reallocating its fixed-size working buffers.
+/// Nested calls and thread teardown can use a fresh encoder without accessing a busy slot.
+#[cfg(not(target_arch = "wasm32"))]
+fn zip_encoder() -> flate2::write::ZlibEncoder<ZipOutput> {
+    if let Some(mut encoder) = ZIP_ENCODER.try_with(std::cell::Cell::take).ok().flatten()
+        && encoder.reset(ZipOutput::default()).is_ok()
+    {
+        return encoder;
+    }
+    flate2::write::ZlibEncoder::new(ZipOutput::default(), flate2::Compression::default())
+}
+
+/// Bounded native output blocks avoid reallocating large ZIP buffers as they grow.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct ZipOutput {
+    blocks: Vec<Vec<u8>>,
+    current: Vec<u8>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::io::Write for ZipOutput {
+    /// Accept all input bytes into bounded output blocks without reserving raw image size.
+    fn write(&mut self, mut bytes: &[u8]) -> std::io::Result<usize> {
+        let len = bytes.len();
+        while !bytes.is_empty() {
+            if self.current.len() == self.current.capacity() {
+                if !self.current.is_empty() {
+                    self.blocks.push(std::mem::take(&mut self.current));
+                }
+                self.current = Vec::with_capacity(if self.blocks.is_empty() { 8192 } else { 256 << 10 });
+            }
+            let part = &mut self.current;
+            let (head, rest) = bytes.split_at((part.capacity() - part.len()).min(bytes.len()));
+            part.extend_from_slice(head);
+            bytes = rest;
+        }
+        Ok(len)
+    }
+
+    /// Complete a no-op flush because every write is already retained in memory.
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ZipOutput {
+    /// Join encoded ZIP blocks into one vector sized to the compressed payload.
+    fn into_vec(mut self) -> Vec<u8> {
+        self.blocks.push(self.current);
+        if self.blocks.len() == 1 {
+            return self.blocks.pop().unwrap_or_default().into_boxed_slice().into_vec();
+        }
+        let len = self.blocks.iter().fold(0usize, |n, c| n.saturating_add(c.len()));
+        let mut out = Vec::with_capacity(len);
+        for part in self.blocks {
+            out.extend_from_slice(&part);
+        }
+        out
+    }
 }
 
 /// Decompresses a zlib stream, requiring at least `expected` output bytes and
@@ -489,6 +641,20 @@ pub fn predict(buf: &mut [u8], layout: &PlaneLayout) -> Result<()> {
     if rb == 0 {
         return Ok(());
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if buf.len() >= 1 << 20 && matches!(layout.depth, 1 | 8 | 16 | 32) {
+        use rayon::prelude::*;
+        let threads = rayon::current_num_threads().min(32);
+        let rows = buf.len() / rb;
+        let step = rows.div_ceil(threads).max(1) * rb;
+        return buf[..rows * rb].par_chunks_mut(step).try_for_each(|part| predict_rows(part, layout));
+    }
+    predict_rows(buf, layout)
+}
+
+/// Apply per-row prediction, reusing scratch for float byte-plane shuffling.
+fn predict_rows(buf: &mut [u8], layout: &PlaneLayout) -> Result<()> {
+    let rb = layout.row_bytes();
     let w = layout.width;
     let mut scratch = Vec::new();
     for row in buf.chunks_exact_mut(rb) {
@@ -509,7 +675,6 @@ pub fn predict(buf: &mut [u8], layout: &PlaneLayout) -> Result<()> {
                 }
             }
             32 => {
-                scratch.clear();
                 scratch.resize(rb, 0);
                 // Split into four byte planes (MSB first) and delta the whole
                 // plane-major row. Plane k's first delta uses the last byte of
