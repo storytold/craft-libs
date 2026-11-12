@@ -6,11 +6,11 @@ use craft_behavior::EditEvents;
 use craft_behavior::kurbo::Rect;
 use craft_theme::Srgba;
 use craft_ui::choice::Swatch;
-use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Entry, GlyphLabel, LabelKind, NoValue, Outcome, Show as _, ShowContainer as _, SideLabel};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
-use craft_ui::runtime::env::{Env, UnitKind};
+use craft_ui::runtime::env::{Env, Label, UnitKind};
 use craft_ui::runtime::requests::ColorRequest;
 use craft_ui::sections::Section;
 use craft_ui::text::NumberField;
@@ -107,12 +107,11 @@ impl<'a> ArtboardProperties<'a> {
                         rect_events.extend(pick.events.map(|_| moved));
                     }
                 });
-                let field = |ui: &mut Ui,
-                             caption: &craft_ui::runtime::env::Label,
-                             name: &craft_ui::runtime::env::Label,
-                             value: f64,
-                             range: &RangeInclusive<f64>| {
-                    Field::new(caption.clone())
+                // A glyph-labelled number field; the pairs share a row, as W and H in the shape panel.
+                let field = |ui: &mut Ui, glyph: &Label, name: &Label, value: f64, range: &RangeInclusive<f64>| {
+                    let side = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(glyph.clone()))).scrub(true);
+                    Field::new(name.clone())
+                        .side(side)
                         .show(ui, |ui, _| {
                             NumberField::new(name.clone(), Bind::given(Some(value)))
                                 .range(range.clone())
@@ -126,10 +125,14 @@ impl<'a> ArtboardProperties<'a> {
                 };
                 let resized = |size: (f64, f64)| Rect::new(rect.x0, rect.y0, rect.x0 + size.0, rect.y0 + size.1);
                 let moved = |at: (f64, f64)| Rect::new(at.0, at.1, at.0 + width, at.1 + height);
-                rect_events.extend(field(ui, &words.width, &words.width_name, width, &SIDE).map(|v| resized((v.unwrap_or(width), height))));
-                rect_events.extend(field(ui, &words.height, &words.height_name, height, &SIDE).map(|v| resized((width, v.unwrap_or(height)))));
-                rect_events.extend(field(ui, &words.x, &words.x, rect.x0, &OFFSET).map(|v| moved((v.unwrap_or(rect.x0), rect.y0))));
-                rect_events.extend(field(ui, &words.y, &words.y, rect.y0, &OFFSET).map(|v| moved((rect.x0, v.unwrap_or(rect.y0)))));
+                Row::new().show(ui, |ui, _| {
+                    rect_events.extend(field(ui, &words.width, &words.width_name, width, &SIDE).map(|v| resized((v.unwrap_or(width), height))));
+                    rect_events.extend(field(ui, &words.height, &words.height_name, height, &SIDE).map(|v| resized((width, v.unwrap_or(height)))));
+                });
+                Row::new().show(ui, |ui, _| {
+                    rect_events.extend(field(ui, &words.x, &words.x, rect.x0, &OFFSET).map(|v| moved((v.unwrap_or(rect.x0), rect.y0))));
+                    rect_events.extend(field(ui, &words.y, &words.y, rect.y0, &OFFSET).map(|v| moved((rect.x0, v.unwrap_or(rect.y0)))));
+                });
                 Field::new(words.background.clone()).show(ui, |ui, _| {
                     Row::new().show(ui, |ui, _| {
                         let now = match background {

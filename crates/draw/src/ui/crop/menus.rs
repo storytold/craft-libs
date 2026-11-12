@@ -14,7 +14,7 @@ use craft_ui::contract::{
 };
 use craft_ui::display::Divider;
 use craft_ui::form::{Field, SliderField};
-use craft_ui::layout_components::Row;
+use craft_ui::layout_components::{Row, Stack};
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::popover::Popover;
 use craft_ui::runtime::env::{Env, UnitKind};
@@ -225,47 +225,50 @@ impl<'a> CropOptionsMenu<'a> {
                     SideLabel::new().layout(FieldLayout::After),
                     Checkbox::new(Bind::bound(&mut shield.enabled)),
                 );
-                let on = shield.enabled;
-                let mut color = shield.color;
-                Field::new(words.color_name.clone()).enabled(on).show(ui, |ui, _| {
-                    Row::new().show(ui, |ui, _| {
-                        let group = RadioGroup::new(words.color_name.clone(), Bind::bound(&mut color)).show(ui, |ui, cx| {
-                            let after = SideLabel::new().layout(FieldLayout::After);
-                            cx.labelled(ui, 0u8, words.match_canvas.clone(), after.clone(), Radio::new(ShieldColor::MatchCanvas));
-                            let custom = cx.labelled(ui, 1u8, words.custom.clone(), after, Radio::new(ShieldColor::Custom));
-                            clicked(&custom)
+                // The shield's own settings sit indented under Enable Crop Shield.
+                Stack::new().fill_width().indent(1).show(ui, |ui, cx| {
+                    let on = shield.enabled;
+                    let mut color = shield.color;
+                    Field::new(words.color_name.clone()).enabled(on).show(ui, |ui, _| {
+                        Row::new().show(ui, |ui, _| {
+                            let group = RadioGroup::new(words.color_name.clone(), Bind::bound(&mut color)).show(ui, |ui, cx| {
+                                let after = SideLabel::new().layout(FieldLayout::After);
+                                cx.labelled(ui, 0u8, words.match_canvas.clone(), after.clone(), Radio::new(ShieldColor::MatchCanvas));
+                                let custom = cx.labelled(ui, 1u8, words.custom.clone(), after, Radio::new(ShieldColor::Custom));
+                                clicked(&custom)
+                            });
+                            pick |= group.inner.unwrap_or(false);
+                            let [r, g, b] = shield.custom_color;
+                            if shield.color == ShieldColor::Custom || color == ShieldColor::Custom {
+                                let swatch = Swatch::new(
+                                    words.shield_color.clone(),
+                                    Mixed::Same(craft_theme::Srgba::from_rgb_array([r, g, b].map(|c| f32::from(c) / 255.0))),
+                                )
+                                .picker(Self::COLOR_KEY)
+                                .enabled(on)
+                                .show(ui);
+                                pick |= swatch.pick_color.is_some();
+                            }
                         });
-                        pick |= group.inner.unwrap_or(false);
-                        let [r, g, b] = shield.custom_color;
-                        if shield.color == ShieldColor::Custom || color == ShieldColor::Custom {
-                            let swatch = Swatch::new(
-                                words.shield_color.clone(),
-                                Mixed::Same(craft_theme::Srgba::from_rgb_array([r, g, b].map(|c| f32::from(c) / 255.0))),
-                            )
-                            .picker(Self::COLOR_KEY)
-                            .enabled(on)
-                            .show(ui);
-                            pick |= swatch.pick_color.is_some();
-                        }
                     });
+                    shield.color = color;
+                    if !shield.opacity.is_finite() {
+                        shield.opacity = CropShield::default().opacity;
+                    }
+                    let mut opacity = f64::from(shield.opacity);
+                    SliderField::new(words.opacity_name.clone(), Bind::bound(&mut opacity), 0.0..=100.0)
+                        .unit_kind(UnitKind::Percent)
+                        .enabled(on)
+                        .show(ui);
+                    shield.opacity = opacity as f32;
+                    cx.labelled(
+                        ui,
+                        "adjust",
+                        words.auto_adjust.clone(),
+                        SideLabel::new().layout(FieldLayout::After),
+                        Checkbox::new(Bind::bound(&mut shield.auto_adjust)).enabled(on),
+                    );
                 });
-                shield.color = color;
-                if !shield.opacity.is_finite() {
-                    shield.opacity = CropShield::default().opacity;
-                }
-                let mut opacity = f64::from(shield.opacity);
-                SliderField::new(words.opacity_name.clone(), Bind::bound(&mut opacity), 0.0..=100.0)
-                    .unit_kind(UnitKind::Percent)
-                    .enabled(on)
-                    .show(ui);
-                shield.opacity = opacity as f32;
-                cx.labelled(
-                    ui,
-                    "adjust",
-                    words.auto_adjust.clone(),
-                    SideLabel::new().layout(FieldLayout::After),
-                    Checkbox::new(Bind::bound(&mut shield.auto_adjust)).enabled(on),
-                );
             });
             button
         });
