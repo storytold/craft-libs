@@ -159,7 +159,7 @@ impl Outcome for GlyphsPanelOutput {
 /// How many recent glyphs are kept (Photoshop).
 const RECENT_LIMIT: usize = 25;
 /// The cell size of the grid and its zoom: factors of the medium thumbnail.
-pub const ZOOM: TileZoom = TileZoom::bounded(0.75, 2.0, 0.125, 1.0);
+pub const ZOOM: TileZoom = TileZoom::bounded(1.0, 2.625, 0.125, 1.25);
 /// The cells of the recents strip, as a factor of the medium thumbnail.
 const RECENT_ZOOM: f32 = 0.75;
 /// The room round a glyph in its cell, as a fraction of the cell.

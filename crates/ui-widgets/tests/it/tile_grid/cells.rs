@@ -1,5 +1,5 @@
-//! Content cells: a grid sizes its cards from what its tiles measure, and keeps that measure while nothing it reads
-//! changes.
+//! Cell sizes: a grid sizes content cells from what its tiles measure and keeps that measure while nothing it reads
+//! changes, and packs tiles without a caption closer than captioned ones.
 
 use craft_behavior::{IconId, keyed};
 use craft_ui::contract::ShowCollection as _;
@@ -38,4 +38,27 @@ fn content_cells_fit_the_icons_and_keep_their_measure() {
     let over = cells.by_label("Icon 1").expect("tile").center();
     cells.frame(vec![pointer::moved(over)]);
     assert!(widest_runs(cells.ctx()).is_empty(), "a pointer move measured the tiles again: {:?}", widest_runs(cells.ctx()));
+}
+
+fn photo_grid(caption: CaptionPlace) -> Fixture {
+    let mut fixture = Fixture::new(move |ui| {
+        let source = keyed(&KEYS, |key: &usize| *key);
+        let grid = TileGrid::new("Photos").caption(caption).rows_stamp(1);
+        let _ = grid.show_items(ui, &source, &mut |key, _| Tile::new(format!("Photo {key}")));
+    });
+    fixture.room(Vec2::new(600.0, 400.0));
+    fixture.settle();
+    fixture
+}
+
+/// Tiles without a caption pack closer than captioned tiles of the same picture size: neighbours in a row are nearer.
+#[trial]
+fn bare_tiles_pack_closer_than_captioned_tiles() {
+    let pitch = |fixture: &Fixture| {
+        let at = |key: usize| fixture.by_label(&format!("Photo {key}")).expect("the tile has a node").rect;
+        assert!((at(0).top() - at(1).top()).abs() < 0.5, "the first two tiles share a row");
+        (at(1).center().x - at(0).center().x).abs()
+    };
+    let (bare, captioned) = (photo_grid(CaptionPlace::None), photo_grid(CaptionPlace::Below));
+    assert!(pitch(&bare) < pitch(&captioned), "bare tiles sit closer than captioned ones");
 }

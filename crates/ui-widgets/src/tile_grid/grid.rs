@@ -139,13 +139,19 @@ pub struct TileGridStyle {
     thumbs: [f32; 3],
     /// What a tile adds around its picture.
     around: AroundPicture,
-    /// The gaps of the arrangement and the height of a group header.
+    /// The gaps of the arrangement and the height of a group header, for captioned tiles and for bare ones.
     spacing: ArrangeSpacing,
+    bare_spacing: ArrangeSpacing,
 }
 
 impl TileGridStyle {
     fn build(cx: &StyleCx<'_>, card: bool) -> TileGridStyle {
         let colors = &cx.tokens.color;
+        let spacing = ArrangeSpacing::new(
+            if card { cx.tokens.space.gap.section } else { cx.tokens.space.gap.stack },
+            cx.tokens.space.gap.inline,
+            cx.tokens.size.panel_header,
+        );
         TileGridStyle {
             metrics: Metrics::new(),
             pinned: cx.color(colors.surface.panel),
@@ -154,12 +160,15 @@ impl TileGridStyle {
             card: cx.tokens.size.thumb.card,
             thumbs: [cx.tokens.size.thumb.sm, cx.tokens.size.thumb.md, cx.tokens.size.thumb.lg],
             around: Tile::around(cx, card),
-            spacing: ArrangeSpacing::new(
-                if card { cx.tokens.space.gap.section } else { cx.tokens.space.gap.stack },
-                cx.tokens.space.gap.inline,
-                cx.tokens.size.panel_header,
-            ),
+            spacing,
+            // Bare tiles sit with no gap between them: the room around each picture keeps them apart.
+            bare_spacing: if card { spacing } else { ArrangeSpacing { gap: 0.0, ..spacing } },
         }
+    }
+
+    /// The spacing of a grid whose tiles have their caption in `place`.
+    fn spacing(&self, place: CaptionPlace) -> ArrangeSpacing {
+        if place == CaptionPlace::None { self.bare_spacing } else { self.spacing }
     }
 
     /// The side of a picture at `zoom`, a factor on the thumbnail of `size`, or on the card thumbnail for `None`.
@@ -386,7 +395,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
     /// the picture plus what the tile adds around it in every tiling.
     fn laid_out(&self, previous: Option<GridLayout>, source: &dyn ItemSource<K>, width: f32, item: Option<Vec2>, cx: &StyleCx<'_>) -> GridLayout {
         let style = TileGridStyle::build(cx, self.card);
-        let spacing = style.spacing;
+        let spacing = style.spacing(self.caption);
         let around = style.around.get(self.caption, self.detail_line);
         // A card never outgrows the grid: in a column narrower than a card the card takes the column.
         let mut side = self.picture_side(&style, item, around).min(width - 2.0 * spacing.inset - around.size().x).max(1.0);
@@ -789,7 +798,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
         let card = style.card(self.picture_side(&style, item, around), aspect, around).x;
         let columns = self.card_columns as f32;
         // Half a point over, so the division that counts the columns back never rounds below `columns`.
-        columns * card + (columns - 1.0) * style.spacing.gap + 2.0 * style.spacing.inset + 0.5
+        let spacing = style.spacing(self.caption);
+        columns * card + (columns - 1.0) * spacing.gap + 2.0 * spacing.inset + 0.5
     }
 
     fn item_layout_from(

@@ -109,7 +109,6 @@ struct Sizes {
     start: f32,
     /// The picture width of a tile measured on its own: least, and ideal (a grid's card thumbnail at zoom 1).
     thumbs: [f32; 2],
-    around: AroundPicture,
 }
 
 /// What a tile adds around its picture for each caption arrangement, from the sizes: the grid sizes its cards with it.
@@ -122,10 +121,8 @@ pub(super) struct AroundPicture {
 }
 
 impl AroundPicture {
-    fn of(sizes: &Sizes) -> AroundPicture {
-        let around = |place: CaptionPlace, detail: bool| {
-            Around::new(sizes.inset + sizes.column(place), sizes.inset, sizes.inset, sizes.inset + sizes.caption(place, detail))
-        };
+    fn of(cx: &StyleCx<'_>, card: bool) -> AroundPicture {
+        let around = |place: CaptionPlace, detail: bool| Sizes::of(cx, card, place).around(place, detail);
         AroundPicture {
             below: around(CaptionPlace::Below, false),
             below_detail: around(CaptionPlace::Below, true),
@@ -146,13 +143,20 @@ impl AroundPicture {
 }
 
 impl Sizes {
-    fn of(cx: &StyleCx<'_>, card: bool) -> Sizes {
+    /// The sizes of a tile with its caption in `place`. A bare tile keeps only the room its selection ring draws in, so
+    /// a grid packs bare tiles close.
+    fn of(cx: &StyleCx<'_>, card: bool, place: CaptionPlace) -> Sizes {
         let (tokens, control) = (cx.tokens, cx.control());
         let line = tokens.typography.get(TypeRole::Caption).line_height;
         let name_line = if card { tokens.typography.get(TypeRole::BodyStrong).line_height } else { line };
-        let sizes = Sizes {
+        let inset = match (card, place) {
+            (true, _) => tokens.space.pad.control,
+            (false, CaptionPlace::None) => tokens.space.gap.tight,
+            (false, _) => tokens.space.gap.inline,
+        };
+        Sizes {
             card,
-            inset: if card { tokens.space.pad.control } else { tokens.space.gap.inline },
+            inset,
             tight: tokens.space.gap.tight,
             bar: control.height,
             glyph: control.icon,
@@ -164,9 +168,12 @@ impl Sizes {
             detail_line: line,
             start: control.height,
             thumbs: [tokens.size.thumb.sm, tokens.size.thumb.card],
-            around: AroundPicture::default(),
-        };
-        Sizes { around: AroundPicture::of(&sizes), ..sizes }
+        }
+    }
+
+    /// What the tile adds around its picture with its caption in `place`, with a detail line reserved or not.
+    fn around(&self, place: CaptionPlace, detail: bool) -> Around {
+        Around::new(self.inset + self.column(place), self.inset, self.inset, self.inset + self.caption(place, detail))
     }
 
     /// The height of the caption band under the picture.
@@ -287,6 +294,7 @@ pub struct Tile<'a> {
     #[common]
     common: Common,
     /// Where the caption goes: the grid's, applied to its tiles.
+    #[style_key]
     #[prop]
     caption: CaptionPlace,
     /// The card has a line for the detail, whether this tile has one or not: the grid's, applied to its tiles.
@@ -446,12 +454,12 @@ impl<'a> Tile<'a> {
     /// What a tile adds around its picture: its padding, the caption band under the picture or the column at its
     /// reading start. A tile grid sizes a tile as the picture plus this.
     pub fn around_picture(cx: &StyleCx<'_>, place: CaptionPlace, detail: bool) -> Around {
-        Self::around(cx, false).get(place, detail)
+        Sizes::of(cx, false, place).around(place, detail)
     }
 
     /// What a tile adds around its picture for every caption arrangement.
     pub(super) fn around(cx: &StyleCx<'_>, card: bool) -> AroundPicture {
-        Sizes::of(cx, card).around
+        AroundPicture::of(cx, card)
     }
 
     /// Whether the caption band holds a detail line.
@@ -619,7 +627,7 @@ impl Component for Tile<'_> {
         let (state, text) = (&colors.state, &colors.text);
         let clear = Rgba::TRANSPARENT;
         let c = |rgba: Rgba| cx.color(rgba);
-        let sizes = Sizes::of(cx, key.card);
+        let sizes = Sizes::of(cx, key.card, key.caption);
         // Selection and hover are rings around the picture; only a card has a fill of its own.
         let fill = if key.card {
             let raised = colors.surface.raised;
