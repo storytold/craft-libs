@@ -313,6 +313,119 @@ fn negative_xmp_pixel_width_is_ignored() {
     assert_eq!(read(r#"exif:PixelXDimension="-1""#), None);
 }
 
+fn xmp_dimensions(body: &str) -> XmpData {
+    let (attributes, elements) = body.split_once('|').unwrap_or((body, ""));
+    let packet = format!(
+        r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description xmlns:tiff="http://ns.adobe.com/tiff/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/" {attributes}>{elements}</rdf:Description>
+        </rdf:RDF>"#
+    );
+    parse_xmp(&packet).expect("procedural XMP dimension fixture parses")
+}
+
+#[test]
+fn xmp_dimensions_reject_fractional_values() {
+    for (field, value) in [
+        ("tiff:ImageWidth", "640.9"),
+        ("exif:PixelXDimension", "640.9"),
+        ("tiff:ImageLength", "480.9"),
+        ("exif:PixelYDimension", "480.9"),
+        ("tiff:ImageWidth", "1.0000000000000001"),
+    ] {
+        let data = xmp_dimensions(&format!(r#"{field}="{value}""#));
+        assert_eq!(data.metadata.width, None, "{field}={value}");
+        assert_eq!(data.metadata.height, None, "{field}={value}");
+        assert_eq!(data.properties.get(field).map(Vec::as_slice), Some([value.to_owned()].as_slice()), "raw {field}={value}");
+    }
+}
+
+#[test]
+fn xmp_dimensions_reject_out_of_range_values() {
+    for (field, value) in [
+        ("tiff:ImageWidth", "4294967296"),
+        ("exif:PixelXDimension", "4294967296"),
+        ("tiff:ImageLength", "4294967296"),
+        ("exif:PixelYDimension", "4294967296"),
+        ("tiff:ImageWidth", "-1"),
+        ("tiff:ImageWidth", "-0"),
+        ("tiff:ImageWidth", "0/0"),
+        ("exif:PixelXDimension", "-1"),
+        ("tiff:ImageLength", "-1"),
+        ("exif:PixelYDimension", "-1"),
+        ("tiff:ImageWidth", "1e100000"),
+        ("tiff:ImageWidth", "NaN"),
+        ("tiff:ImageWidth", "Infinity"),
+        ("tiff:ImageWidth", "not-a-number"),
+    ] {
+        let data = xmp_dimensions(&format!(r#"{field}="{value}""#));
+        assert_eq!(data.metadata.width, None, "{field}={value}");
+        assert_eq!(data.metadata.height, None, "{field}={value}");
+        assert_eq!(data.properties.get(field).map(Vec::as_slice), Some([value.to_owned()].as_slice()), "raw {field}={value}");
+    }
+}
+
+#[test]
+fn xmp_dimensions_invalid_primary_allows_fallback() {
+    let width = xmp_dimensions(r#"tiff:ImageWidth="0.5" exif:PixelXDimension="640""#);
+    assert_eq!(width.metadata.width, Some(640));
+    let height = xmp_dimensions(r#"tiff:ImageLength="480.9" exif:PixelYDimension="480""#);
+    assert_eq!(height.metadata.height, Some(480));
+}
+
+#[test]
+fn xmp_dimensions_preserve_valid_values() {
+    for (field, value, expected) in [
+        ("tiff:ImageWidth", "0", 0),
+        ("tiff:ImageWidth", "0001", 1),
+        ("tiff:ImageWidth", "0/1e-129", 0),
+        ("tiff:ImageWidth", "1e-400/1e-400", 1),
+        ("tiff:ImageWidth", "1e400/1e400", 1),
+        ("tiff:ImageWidth", "4294967295", u32::MAX),
+        ("exif:PixelXDimension", "640.0", 640),
+        ("tiff:ImageLength", "960/2", 480),
+        ("exif:PixelYDimension", "48e1", 480),
+        ("tiff:ImageWidth", "1e39/1e39", 1),
+    ] {
+        let data = xmp_dimensions(&format!(r#"{field}="{value}""#));
+        let actual = if matches!(field, "tiff:ImageWidth" | "exif:PixelXDimension") { data.metadata.width } else { data.metadata.height };
+        assert_eq!(actual, Some(expected), "{field}={value}");
+    }
+    assert_eq!(xmp_dimensions(r#"tiff:ImageWidth="640" exif:PixelXDimension="800""#).metadata.width, Some(640));
+    assert_eq!(xmp_dimensions(r#"tiff:ImageLength="480" exif:PixelYDimension="800""#).metadata.height, Some(480));
+    let element = xmp_dimensions(r#"|<tiff:ImageWidth>640</tiff:ImageWidth><exif:PixelYDimension>480</exif:PixelYDimension>"#);
+    assert_eq!(element.metadata.width, Some(640));
+    assert_eq!(element.metadata.height, Some(480));
+    let sequence = xmp_dimensions(r#"|<tiff:ImageWidth><rdf:Seq><rdf:li>640</rdf:li></rdf:Seq></tiff:ImageWidth>"#);
+    assert_eq!(sequence.metadata.width, Some(640));
+}
+
+#[test]
+fn xmp_dimensions_preserve_large_exact_ratio() {
+    for coefficient in ["999999999999999999999999999999999999999".to_owned(), "9".repeat(1024)] {
+        let data = xmp_dimensions(&format!(r#"tiff:ImageWidth="{coefficient}/{coefficient}""#));
+        assert_eq!(data.metadata.width, Some(1), "coefficient length {}", coefficient.len());
+    }
+    let denominator = "9".repeat(1024);
+    let numerator = format!("1{}8", "9".repeat(1023));
+    let data = xmp_dimensions(&format!(r#"tiff:ImageWidth="{numerator}/{denominator}""#));
+    assert_eq!(data.metadata.width, Some(2));
+
+    let numerator = format!("{}8", "9".repeat(1023));
+    let data = xmp_dimensions(&format!(r#"tiff:ImageWidth="{numerator}/{denominator}""#));
+    assert_eq!(data.metadata.width, None);
+}
+
+#[test]
+fn xmp_dimensions_rejected_values_are_not_written() {
+    let data = xmp_dimensions(r#"tiff:ImageWidth="640.9" dc:title="Keep this""#);
+    assert_eq!(data.metadata.width, None);
+    assert_eq!(data.metadata.title.as_deref(), Some("Keep this"));
+    assert_eq!(data.properties.get("tiff:ImageWidth").map(Vec::as_slice), Some(["640.9".to_owned()].as_slice()));
+    let written = write_xmp(&data.metadata);
+    assert!(!written.contains("tiff:ImageWidth"));
+    assert_eq!(parse_xmp(&written).unwrap().metadata.width, None);
+}
+
 #[test]
 fn malformed_inputs() {
     assert!(parse_xmp("<a><b></a>").is_ok() || parse_xmp("<a><b></a>").is_err());

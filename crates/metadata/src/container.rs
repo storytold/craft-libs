@@ -384,6 +384,42 @@ mod tests {
     }
 
     #[test]
+    fn jpeg_rejected_xmp_dimensions_keep_exif_dimensions_and_other_metadata() {
+        let mut jpeg = vec![0xff, 0xd8];
+        let mut exif = b"Exif\0\0".to_vec();
+        exif.extend(crate::exif::tests::sample_exif(ByteOrder::Big));
+        jpeg.extend(seg(0xe1, &exif));
+        let packet = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description xmlns:tiff="http://ns.adobe.com/tiff/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/"
+                tiff:ImageWidth="640.9" exif:PixelYDimension="8000" dc:title="Retained"/>
+        </rdf:RDF>"#;
+        let mut xmp = XMP_SIG.to_vec();
+        xmp.extend_from_slice(packet.as_bytes());
+        jpeg.extend(seg(0xe1, &xmp));
+        jpeg.extend_from_slice(&[0xff, 0xda, 0, 2]);
+
+        let metadata = crate::extract(&jpeg);
+        assert_eq!(metadata.width, Some(6000));
+        assert_eq!(metadata.height, Some(4000));
+        assert_eq!(metadata.title.as_deref(), Some("Retained"));
+    }
+
+    #[test]
+    fn jpeg_rejected_xmp_dimension_falls_back_during_whole_file_extract() {
+        let mut jpeg = vec![0xff, 0xd8];
+        let packet = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description xmlns:tiff="http://ns.adobe.com/tiff/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/"
+                tiff:ImageWidth="640.9" exif:PixelXDimension="800"/>
+        </rdf:RDF>"#;
+        let mut xmp = XMP_SIG.to_vec();
+        xmp.extend_from_slice(packet.as_bytes());
+        jpeg.extend(seg(0xe1, &xmp));
+        jpeg.extend_from_slice(&[0xff, 0xda, 0, 2]);
+
+        assert_eq!(crate::extract(&jpeg).width, Some(800));
+    }
+
+    #[test]
     fn jpeg_extended_xmp() {
         let mut j = vec![0xff, 0xd8];
         for (off, part) in [(5u32, &b"world"[..]), (0, b"hello")] {

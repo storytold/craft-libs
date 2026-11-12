@@ -581,7 +581,8 @@ fn fmt_gps_coord(v: f64, pos: char, neg: char) -> String {
     format!("{},{:.6}{}", d as i64, m, if v < 0.0 { neg } else { pos })
 }
 
-// Preserve the numeric text exactly: parsing it as `f64` first can round a fractional value to an integer.
+// Pixel dimensions are integers. Keep decimal coefficients as digits so wide rational components
+// remain exact and fractions that `f64` rounds to an integer can still be rejected.
 struct ExactDecimal {
     negative: bool,
     coefficient: String,
@@ -620,18 +621,21 @@ fn exact_decimal(value: &str) -> Option<ExactDecimal> {
     if !digits.clone().all(|digit| digit.is_ascii_digit()) {
         return None;
     }
-    let digit_count = whole.len().checked_add(fraction.len())?;
-    if digit_count == 0 {
+    let count = whole.len().checked_add(fraction.len())?;
+    if count == 0 {
         return None;
     }
-    let leading_zeroes = digits.clone().take_while(|digit| *digit == b'0').count();
-    if leading_zeroes == digit_count {
-        return Some(ExactDecimal { negative, coefficient: "0".to_string(), exponent: 0 });
+    let leading = digits.clone().take_while(|digit| *digit == b'0').count();
+    if leading == count {
+        return Some(ExactDecimal { negative, coefficient: "0".to_owned(), exponent: 0 });
     }
-    let trailing_zeroes = digits.clone().rev().take_while(|digit| *digit == b'0').count();
-    let significant_digits = digit_count.checked_sub(leading_zeroes)?.checked_sub(trailing_zeroes)?;
-    let coefficient: String = digits.skip(leading_zeroes).take(significant_digits).map(char::from).collect();
-    let exponent = exponent.checked_sub(i64::try_from(fraction.len()).ok()?)?.checked_add(i64::try_from(trailing_zeroes).ok()?)?;
+    let trailing = digits.clone().rev().take_while(|digit| *digit == b'0').count();
+    let significant = count.checked_sub(leading)?.checked_sub(trailing)?;
+    let mut coefficient = String::with_capacity(significant);
+    for digit in digits.skip(leading).take(significant) {
+        coefficient.push(char::from(digit));
+    }
+    let exponent = exponent.checked_sub(i64::try_from(fraction.len()).ok()?)?.checked_add(i64::try_from(trailing).ok()?)?;
     Some(ExactDecimal { negative, coefficient, exponent })
 }
 
@@ -647,65 +651,111 @@ fn exact_ratio(numerator: ExactDecimal, denominator: ExactDecimal) -> Option<Exa
     })
 }
 
-fn multiply_decimal_by_u32(value: &str, multiplier: u32) -> Option<String> {
-    let mut reversed = Vec::new();
+fn multiply_decimal_by_u32(value: &str, multiplier: u32) -> String {
+    if multiplier == 0 {
+        return "0".to_owned();
+    }
+    let mut digits = Vec::with_capacity(value.len().saturating_add(10));
     let mut carry = 0u64;
     for digit in value.bytes().rev() {
-        let digit = u64::from(digit.checked_sub(b'0')?);
-        let product = digit.checked_mul(u64::from(multiplier))?.checked_add(carry)?;
-        reversed.push(b'0'.checked_add(u8::try_from(product % 10).ok()?)?);
+        let product = u64::from(digit - b'0') * u64::from(multiplier) + carry;
+        digits.push(b'0' + (product % 10) as u8);
         carry = product / 10;
     }
-    while carry > 0 {
-        reversed.push(b'0'.checked_add(u8::try_from(carry % 10).ok()?)?);
+    while carry != 0 {
+        digits.push(b'0' + (carry % 10) as u8);
         carry /= 10;
     }
-    reversed.reverse();
-    String::from_utf8(reversed).ok()
+    digits.reverse();
+    digits.into_iter().map(char::from).collect()
 }
 
-fn compare_scaled_decimal(left: &str, left_zeroes: i64, right: &str, right_zeroes: i64) -> Option<std::cmp::Ordering> {
-    let left_zeroes = usize::try_from(left_zeroes).ok()?;
-    let right_zeroes = usize::try_from(right_zeroes).ok()?;
-    let left_len = left.len().checked_add(left_zeroes)?;
-    let right_len = right.len().checked_add(right_zeroes)?;
-    if left_len != right_len {
-        return Some(left_len.cmp(&right_len));
+fn decimal_significand(value: &str) -> Option<f64> {
+    let mut prefix = 0u64;
+    let mut digits = 0u32;
+    for digit in value.bytes().take(17) {
+        prefix = prefix.checked_mul(10)?.checked_add(u64::from(digit.checked_sub(b'0')?))?;
+        digits = digits.checked_add(1)?;
     }
-    Some(left.bytes().chain(std::iter::repeat_n(b'0', left_zeroes)).cmp(right.bytes().chain(std::iter::repeat_n(b'0', right_zeroes))))
+    let exponent = i32::try_from(digits.checked_sub(1)?).ok()?;
+    Some(prefix as f64 / 10.0_f64.powi(exponent))
 }
 
-fn exact_ratio_to_u32(value: ExactRatio, candidate: u32) -> Option<u32> {
-    if value.negative || value.numerator == "0" || value.denominator == "0" || candidate == 0 {
+fn compare_scaled_decimal(left: &str, left_exponent: i64, right: &str, right_exponent: i64) -> Option<std::cmp::Ordering> {
+    if left == "0" {
+        return Some(if right == "0" { std::cmp::Ordering::Equal } else { std::cmp::Ordering::Less });
+    }
+    if right == "0" {
+        return Some(std::cmp::Ordering::Greater);
+    }
+    let left_magnitude = i128::try_from(left.len()).ok()?.checked_add(i128::from(left_exponent))?;
+    let right_magnitude = i128::try_from(right.len()).ok()?.checked_add(i128::from(right_exponent))?;
+    match left_magnitude.cmp(&right_magnitude) {
+        std::cmp::Ordering::Equal => {}
+        ordering => return Some(ordering),
+    }
+    let length = left.len().max(right.len());
+    for (left_digit, right_digit) in left.bytes().chain(std::iter::repeat(b'0')).zip(right.bytes().chain(std::iter::repeat(b'0'))).take(length) {
+        match left_digit.cmp(&right_digit) {
+            std::cmp::Ordering::Equal => {}
+            ordering => return Some(ordering),
+        }
+    }
+    Some(std::cmp::Ordering::Equal)
+}
+
+fn exact_ratio_to_u32(value: ExactRatio) -> Option<u32> {
+    if value.negative || value.denominator == "0" {
         return None;
     }
-    let denominator = multiply_decimal_by_u32(&value.denominator, candidate)?;
-    let (numerator_zeroes, denominator_zeroes) = if value.exponent >= 0 { (value.exponent, 0) } else { (0, value.exponent.checked_neg()?) };
-    (compare_scaled_decimal(&value.numerator, numerator_zeroes, &denominator, denominator_zeroes)? == std::cmp::Ordering::Equal).then_some(candidate)
+    if value.numerator == "0" {
+        return Some(0);
+    }
+    if value.exponent < -128 || value.exponent > 128 {
+        return None;
+    }
+    let numerator_length = i128::try_from(value.numerator.len()).ok()?;
+    let denominator_length = i128::try_from(value.denominator.len()).ok()?;
+    let decimal_scale = numerator_length.checked_add(i128::from(value.exponent))?.checked_sub(denominator_length)?;
+    if !(0..=10).contains(&decimal_scale) {
+        return None;
+    }
+    // The prefix only estimates a candidate. Acceptance compares the full exact coefficients below.
+    let approximate =
+        decimal_significand(&value.numerator)? / decimal_significand(&value.denominator)? * 10.0_f64.powi(i32::try_from(decimal_scale).ok()?);
+    if !approximate.is_finite() {
+        return None;
+    }
+    let integer = approximate.round().clamp(0.0, f64::from(u32::MAX)) as u32;
+    let product = multiply_decimal_by_u32(&value.denominator, integer);
+    let ordering = if product == "0" {
+        compare_scaled_decimal(&value.numerator, value.exponent, "0", 0)?
+    } else {
+        let trailing_zeroes = product.bytes().rev().take_while(|digit| *digit == b'0').count();
+        let product_exponent = i64::try_from(trailing_zeroes).ok()?;
+        compare_scaled_decimal(&value.numerator, value.exponent, product.trim_end_matches('0'), product_exponent)?
+    };
+    (ordering == std::cmp::Ordering::Equal).then_some(integer)
 }
 
-fn exact_iso_from_text(value: &str, candidate: u32) -> Option<u32> {
+fn exact_u32_from_text(value: &str) -> Option<u32> {
     let value = value.trim();
     let ratio = if let Some((numerator, denominator)) = value.split_once('/') {
         exact_ratio(exact_decimal(numerator)?, exact_decimal(denominator)?)?
     } else {
         let value = exact_decimal(value)?;
-        ExactRatio { negative: value.negative, numerator: value.coefficient, denominator: "1".to_string(), exponent: value.exponent }
+        ExactRatio { negative: value.negative, numerator: value.coefficient, denominator: "1".to_owned(), exponent: value.exponent }
     };
-    exact_ratio_to_u32(ratio, candidate)
+    exact_ratio_to_u32(ratio)
 }
 
+/// A positive whole-number ISO, read exactly (a fraction or an out-of-range value is not one).
 fn iso_from_text(value: &str) -> Option<u32> {
-    // The float supplies a candidate only. Exact decimal comparison decides whether it is integral.
-    let approximate = parse_number(value)?;
-    if !approximate.is_finite() || approximate <= 0.0 {
-        return None;
-    }
-    let rounded = approximate.round();
-    if rounded < 1.0 || rounded > u32::MAX as f64 {
-        return None;
-    }
-    exact_iso_from_text(value, rounded as u32)
+    exact_u32_from_text(value).filter(|&iso| iso > 0)
+}
+
+fn dimension_candidate(first: impl Fn(&str) -> Option<String>, key: &str) -> Option<u32> {
+    first(key).and_then(|value| exact_u32_from_text(&value))
 }
 
 /// Parse an XMP packet (with or without the `<?xpacket?>` wrapper / `x:xmpmeta` element).
@@ -748,8 +798,8 @@ pub fn parse_xmp_with(s: &str, extra: &[XmpNamespace]) -> Result<XmpData, XmpErr
         metering_mode: num("exif:MeteringMode").map(|v| v as u16),
         white_balance: num("exif:WhiteBalance").map(|v| v as u16),
         orientation: num("tiff:Orientation").filter(|v| (1.0..=8.0).contains(v) && v.fract() == 0.0).map(|v| Orientation::from_exif(v as u16)),
-        width: num("tiff:ImageWidth").filter(|v| *v >= 0.0).or_else(|| num("exif:PixelXDimension").filter(|v| *v >= 0.0)).map(|v| v as u32),
-        height: num("tiff:ImageLength").filter(|v| *v >= 0.0).or_else(|| num("exif:PixelYDimension").filter(|v| *v >= 0.0)).map(|v| v as u32),
+        width: dimension_candidate(first, "tiff:ImageWidth").or_else(|| dimension_candidate(first, "exif:PixelXDimension")),
+        height: dimension_candidate(first, "tiff:ImageLength").or_else(|| dimension_candidate(first, "exif:PixelYDimension")),
         title: first("dc:title"),
         caption: first("dc:description"),
         alt_text: first("Iptc4xmpCore:AltTextAccessibility"),
