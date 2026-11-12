@@ -1,5 +1,5 @@
-//! `PageRangeField`: Acrobat's Pages selected field, a text field taking "1-3, 5" with a menu button of page presets,
-//! showing the pages back in the same format; and `PageRangeOptions`, the All pages / Pages from-to / Subset rows of
+//! `PageRangeField`: Acrobat's Pages selected field, a text field taking "1-3, 5" with a menu button of the app's
+//! page choices, showing the pages back in the same format; and `PageRangeOptions`, the All pages / Pages from-to / Subset rows of
 //! Acrobat's Page Range Options.
 
 #[cfg(feature = "screen-testing")]
@@ -28,9 +28,6 @@ craft_ui::words! {
     pub struct PageRangeFieldWords {
         selected_pages: "pageRangeField.selectedPages" = "Selected pages";
         select_pages: "pageRangeField.selectPages" = "Select pages";
-        all_pages: "pageRangeField.allPages" = "All pages";
-        current_page: "pageRangeField.currentPage" = "Current page";
-        selected_preset: "pageRangeField.selectedPreset" = "Selected pages";
         /// `{page}` is the text that is not a page.
         not_a_page: template "pageRangeField.notAPage" = "\"{page}\" is not a page number or label";
         /// `{n}` is the page asked for, `{count}` the number of pages.
@@ -131,33 +128,39 @@ impl Outcome for PageRangeFieldOutput {
     }
 }
 
-/// A text field over page numbers with a menu button of presets.
+/// A text field over page numbers with a menu button of the app's page choices.
 ///
-/// - The field shows `pages` formatted ([`format_pages`]); with none, the current page is its placeholder.
+/// - The field shows `pages` formatted ([`format_pages`]); with none, the current page's number is its placeholder.
 /// - Typed text applies on Enter or when the field loses focus: text that reads reports the pages and shows them back
 ///   formatted; text that does not stays, with the error under the field. Escape puts the pages' text back.
-/// - The button opens the presets: All pages, Current page and the document's selected pages; Down opens it from the
-///   button. A pick reports like typed pages.
+/// - The button opens the app's entries ([`menu`](PageRangeField::menu)), each naming its pages; Down opens it from
+///   the button. A pick reports like typed pages. A field given no entries has no button.
 #[must_use = "show the field with `show`"]
 #[derive(Pattern)]
 pub struct PageRangeField<'a> {
     label: Label,
     pages: &'a [usize],
-    selected: &'a [usize],
     count: usize,
     current: usize,
+    menu: &'a [Entry<Vec<usize>>],
 }
 
 impl<'a> PageRangeField<'a> {
-    /// The field named `label` over `pages` (0-based) in a document of `count` pages. `selected` are the pages the
-    /// Selected pages preset picks and `current` (0-based) the page the Current page preset picks.
-    pub fn new(label: impl Into<Label>, pages: &'a [usize], selected: &'a [usize], count: usize, current: usize) -> Self {
-        PageRangeField { label: label.into(), pages, selected, count, current }
+    /// The field named `label` over `pages` (0-based) in a document of `count` pages, `current` (0-based) the page
+    /// the placeholder names.
+    pub fn new(label: impl Into<Label>, pages: &'a [usize], count: usize, current: usize) -> Self {
+        PageRangeField { label: label.into(), pages, count, current, menu: &[] }
+    }
+
+    /// The entries of the menu button, each with the pages (0-based) it picks (All pages, Odd pages only).
+    pub fn menu(mut self, entries: &'a [Entry<Vec<usize>>]) -> Self {
+        self.menu = entries;
+        self
     }
 
     /// Shows the field.
     pub fn show(self, ui: &mut Ui) -> PageRangeFieldOutput {
-        let PageRangeField { label, pages, selected, count, current } = self;
+        let PageRangeField { label, pages, count, current, menu } = self;
         let env = Env::of(ui);
         let words = env.words::<PageRangeFieldWords>();
         let units = env.units();
@@ -168,24 +171,25 @@ impl<'a> PageRangeField<'a> {
                 None => Validity::Ok,
             }
         };
-        let presets = [
-            Entry::new((0..count).collect::<Vec<usize>>(), words.all_pages.clone()),
-            Entry::new(vec![current.min(count.saturating_sub(1))], words.current_page.clone()),
-            Entry::new(selected.to_vec(), words.selected_preset.clone()).enabled(!selected.is_empty()),
-        ];
+        let placeholder = units.number((current.min(count.saturating_sub(1)) + 1) as f64, 0..=0);
         let mut picked = None;
         let mut response = None;
         Field::new(label).side(SideLabel::new().kind(LabelKind::Hidden)).show(ui, |ui, _| {
             Row::new().show(ui, |ui, _| {
                 let value = Bind::given(PageSelection::of(pages)).check(&refuse);
-                let field = TextField::with_codec(words.selected_pages.clone(), value, PageRangeCodec::new(count)).show(ui);
+                let field = TextField::with_codec(words.selected_pages.clone(), value, PageRangeCodec::new(count))
+                    .placeholder(Label::from(placeholder.clone()))
+                    .show(ui);
                 if let Some(typed) = field.value().filter(|typed| typed.error.is_none()) {
                     picked = Some(typed.pages.clone());
                 }
                 response = Some(field.response.clone());
+                if menu.is_empty() {
+                    return;
+                }
                 let button =
                     IconButton::new(craft_ui::controls::disclosure::DisclosureGlyph::menu_button()).label(words.select_pages.clone()).show(ui);
-                let menu = Menu::new(words.select_pages.clone()).opened_by(&button, Trigger::Press).pick(ui, &presets);
+                let menu = Menu::new(words.select_pages.clone()).opened_by(&button, Trigger::Press).pick(ui, menu);
                 if let Some(pages) = menu.picked {
                     picked = Some(pages);
                 }
