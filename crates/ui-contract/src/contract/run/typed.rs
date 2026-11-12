@@ -599,7 +599,8 @@ pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSo
     let rect = source.result.rect;
     let flow = Flow::new(rect, env.direction.is_rtl());
     let part_state = steps::part_state(source.result, source.faded || (step1.enabled && source.enabled), source.focus);
-    let mut core = blank_core(env.view(), &resolved, &mut stage, ctx.clone(), env.ink, source.response.clone(), None);
+    // The face reads its bound command (marked, checked, hint) as a shown component does.
+    let mut core = blank_core(env.view(), &resolved, &mut stage, ctx.clone(), env.ink, source.response.clone(), step1.command.clone());
     core.face_mode = true;
     core.faded = source.faded;
     core.rect = rect;
