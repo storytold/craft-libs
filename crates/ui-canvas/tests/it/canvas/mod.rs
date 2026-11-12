@@ -4,6 +4,8 @@ mod crop;
 
 mod navigate;
 
+mod navigator;
+
 mod opacity_keys;
 
 mod pasteboard;

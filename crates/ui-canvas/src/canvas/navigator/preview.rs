@@ -113,8 +113,9 @@ pub struct NavigatorStyle {
 /// - With Cmd (macOS) or Ctrl held at the press, the drag draws a rectangle and the release zooms the view to it.
 /// - The wheel zooms about the view centre, one notch at a time, whether or not Zoom with Scroll Wheel is on; a pinch
 ///   zooms the same way when the navigation options allow it.
-/// - Focused, the arrow keys move the view by a tenth of its span (Shift: half); Page Up, Page Down, Home and End
-///   scroll as on the canvas ([`PageKey`]); `+` and `-` step the zoom ladder, and a step past a limit changes nothing.
+/// - Focused, the arrow keys move the view by a tenth of its span (Shift: half); Page Up and Page Down scroll as on
+///   the canvas ([`PageKey`]); Home centres the document; `+` and `-` step the zoom ladder, and a step past a limit
+///   changes nothing.
 /// - With Animated Zoom on, a zoom (the wheel, `+` and `-`, the zoom rectangle) eases on the canvas whose view the
 ///   navigator edits: the bound view takes the target, and the canvas that the view commands reach (the one the zoom
 ///   row's Zoom In steps) shows the way there in its one zoom ease.
@@ -229,6 +230,10 @@ fn take_navigation(cx: &mut Cx<'_, Navigator<'_>>, next: &mut CanvasView, runnin
             NavMove::Forward => delta.x += side * span.x * share,
             NavMove::Up => delta.y -= span.y * share,
             NavMove::Down => delta.y += span.y * share,
+            NavMove::Start if !mods.extend && !mods.lead && !mods.fine => {
+                *next = centred(next, Point::new(document.width / 2.0, document.height / 2.0), document);
+            }
+            NavMove::Start | NavMove::End => {}
             _ => {
                 if let Some(key) = PageKey::of(mv, mods, span) {
                     key.apply(next, document);
