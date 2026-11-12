@@ -76,11 +76,13 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         // second owner.
         let overflow = comp.items().overflow;
         let shared = env.scroll_owner.is_some() && if overflow == Axis::X { env.unbounded.0 } else { env.unbounded.1 };
+        self.capped = comp.items().max_rows.is_some();
         debug_assert!(
-            !shared || natural,
-            "a collection owns its scroll: show it outside a body that scrolls along its rows, or give it the natural height (16.3)"
+            !shared || natural || self.capped,
+            "a collection owns its scroll: show it outside a body that scrolls along its rows, cap its rows, or give it the natural height (16.3)"
         );
-        self.scrolls = !natural && !shared;
+        // A capped collection is bounded by its rows, so it scrolls them inside a scrolling body too.
+        self.scrolls = self.capped || (!natural && !shared);
         self.overflow = overflow;
         self.selection = match comp.selection() {
             Some(bind) => match bind.get() {
@@ -209,10 +211,15 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         }
         let content = layout.content_size();
         self.content = Vec2::new(content.x as f32, content.y as f32);
+        let props = comp.items();
+        let row = scx.control().height;
+        let floor = rows_height(&layout, self.source.len(), props.min_rows, row);
+        let cap = props.max_rows.map(|rows| rows_height(&layout, self.source.len(), rows, row).max(floor));
         self.columns = layout.column_count() as u32;
         self.layout = Some(Arc::new(layout));
         let empty = if self.source.is_empty() { comp.empty_height(width, ui, scx) } else { 0.0 };
-        let height = self.content.y.max(empty) + self.header.height;
+        let rows = self.content.y.max(empty).max(floor);
+        let height = cap.map_or(rows, |cap| rows.min(cap)) + self.header.height;
         if !(self.scrolls && room.y.is_finite()) {
             // Under a body sized from its content, a `Fill` collection offers its least width here too: the body
             // has no room of its own to hand it, and the layout above was made at the enclosing room.
@@ -235,7 +242,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 } else {
                     self.widest_in(comp, ui, id, room).min(room.x)
                 };
-                Vec2::new(wide, if y { height.min(room.y) } else { 0.0 })
+                Vec2::new(wide, if y || self.capped { height.min(room.y) } else { 0.0 })
             }
             Sizing::Content | Sizing::FillWidth => Vec2::new(if self.content_sized(comp) { self.content.x } else { 0.0 }, height.min(room.y)),
         }
@@ -248,7 +255,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let width_from_content = self.from_content.0 && sizing == Sizing::Fill;
         let width = if self.room.x.is_finite() && !self.content_sized(comp) && !width_from_content { self.room.x.max(size.x) } else { size.x };
         let height = match (self.scrolls && self.room.y.is_finite(), sizing) {
-            (true, Sizing::Fill) if !self.from_content.1 => self.room.y,
+            (true, Sizing::Fill) if !self.from_content.1 && !self.capped => self.room.y,
             (true, Sizing::Fill) => size.y.min(self.room.y),
             (true, Sizing::Content | Sizing::FillWidth) => size.y.min(self.room.y),
             (false, _) => size.y,
@@ -830,4 +837,14 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             }
         }
     }
+}
+
+/// The height of the first `rows` rows of `layout` over `len` items: the rows it lays out, and the control height `row`
+/// for each one it does not have.
+fn rows_height(layout: &impl ItemLayout, len: usize, rows: u16, row: f32) -> f32 {
+    let rows = usize::from(rows);
+    let laid = rows.min(len);
+    let top = if len == 0 { 0.0 } else { layout.rect(0, ScrollPos::default()).min.y };
+    let built = if laid == 0 { 0.0 } else { layout.rect(laid - 1, ScrollPos::default()).max.y - top };
+    built + (rows - laid) as f32 * row
 }

@@ -488,18 +488,15 @@ impl Model<'_> {
         let source = Checklist { fields: self.fields, ticked: self.fields.iter().map(|field| self.ticked(&field.name)).collect() };
         let columns = vec![ColumnSpec::new(CHECK, Label::Empty, ColumnWidth::Controls(1.0)).kind(ColumnKind::Toggle(ToggleColumn::sweepable()))];
         let separator = self.words.samples_separator.as_str();
-        let out = List::<String>::new(self.words.choose.clone()).natural_height(true).columns(columns).header(false).show_items(
-            ui,
-            &source,
-            &mut |key, icx| {
+        let out =
+            List::<String>::new(self.words.choose.clone()).max_rows(8).columns(columns).header(false).show_items(ui, &source, &mut |key, icx| {
                 let state = ToggleState::of(source.ticked[icx.at]);
                 let row = ListRow::new(key.clone()).cells(icx.cells()).toggle(ToggleCell::check(CHECK, state, "{row}"));
                 match self.fields.get(icx.at).filter(|field| !field.samples.is_empty()) {
                     Some(field) => row.tooltip(field.samples.join(separator)),
                     None => row,
                 }
-            },
-        );
+            });
         let mut seen = HashSet::new();
         for event in out.events {
             let CollectionEvent::Toggle(edit) = event else { continue };
@@ -527,6 +524,7 @@ impl Model<'_> {
             let out = List::<Slot>::new(name.clone())
                 .id(ids[at])
                 .natural_height(true)
+                .min_rows(2)
                 .empty(self.words.drop_here.clone())
                 .reorder(ReorderRule::new())
                 .deletable(true)

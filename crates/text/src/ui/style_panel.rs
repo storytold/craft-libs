@@ -378,7 +378,7 @@ impl<'a> TextStylesPanel<'a> {
                     .activate(ActivateOn::Click)
                     .allow_empty(true)
                     .deletable(true)
-                    .natural_height(true)
+                    .max_rows(8)
                     .can_drag(move |_| highlighting)
                     .drag_payload(|drag: &ListDrag<u64>| Some(drag.clone()))
                     .selection(selection.reborrowed())

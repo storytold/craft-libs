@@ -185,6 +185,22 @@ impl<'a> List<'a> {
         self
     }
 
+    /// `seen` takes the rect of the empty state.
+    pub fn on_empty(mut self, seen: &'a Cell<Rect>) -> Self {
+        self.on_empty = Some(seen);
+        self
+    }
+
+    /// At least `min` rows tall, at most `max` rows shown; with no most, the natural height.
+    pub fn rows(mut self, min: u16, max: Option<u16>) -> Self {
+        self.items = self.items.min_rows(min);
+        self.items = match max {
+            Some(max) => self.items.max_rows(max),
+            None => self.items.natural_height(true),
+        };
+        self
+    }
+
     /// The arrows move the lead only.
     pub fn arrows_move_only(mut self) -> Self {
         self.items = self.items.arrows_select(false);

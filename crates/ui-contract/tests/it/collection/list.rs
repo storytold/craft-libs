@@ -118,6 +118,38 @@ fn a_list_at_its_end_hands_the_wheel_to_the_enclosing_panel() {
     assert!(top0 - first_top.get() > SAME, "at its end the list hands the wheel to the panel: {top0} -> {}", first_top.get());
 }
 
+/// A list with a row range is as tall as its rows between the least and the most it shows; past the most it scrolls
+/// them, inside a scrolling panel too.
+#[trial]
+fn a_row_range_bounds_the_list_and_it_scrolls_past_the_cap() {
+    use craft_ui::contract::{ContainerProps, Scroll, ShowContainer as _};
+    use craft_ui_test_kit::body::Slab;
+    let cases: [(usize, u16, Option<u16>); 5] = [(ROWS, 0, Some(3)), (3, 0, Some(3)), (2, 0, Some(3)), (0, 0, None), (0, 2, None)];
+    let seen: Vec<Seen> = cases.iter().map(|_| Seen::default()).collect();
+    let empty: Vec<Cell<Rect>> = cases.iter().map(|_| Cell::new(Rect::NOTHING)).collect();
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, Vec2::new(VIEW.x, 1000.0)), |ui| {
+            Slab::new(ContainerProps::new().scroll(Scroll::vertical())).id_salt("panel").show(ui, |ui, _| {
+                for (at, (rows, min, max)) in cases.iter().enumerate() {
+                    let list = List::new(SelectMode::None).rows(*min, *max).on_empty(&empty[at]).id_salt(("list", at));
+                    seen[at].take(list.show_items(ui, &Count(*rows), &mut |_, _| Row::new()));
+                }
+            });
+        });
+    };
+    frames.idle(3, &mut show);
+    let height = |at: usize| seen[at].rect.get().height();
+    assert!((height(0) - height(1)).abs() < SAME, "past the cap the list is as tall as its first rows: {} vs {}", height(0), height(1));
+    assert!(height(2) < height(1) - SAME, "under the cap the list is as tall as its rows");
+    let (least, plain) = (empty[4].get().height(), empty[3].get().height());
+    assert!(least > plain + SAME, "the least rows keep an empty list taller than its empty state: {least} vs {plain}");
+    let first = seen[0].range().start;
+    frames.frame(vec![pointer::moved(seen[0].rect.get().center())], &mut show);
+    frames.frame(vec![pointer::wheel(-WHEEL)], &mut show);
+    assert!(seen[0].range().start > first, "the capped list scrolls its rows under the wheel");
+}
+
 /// One tab stop; the lead moves by arrows, Home and End, Page and type-ahead; selection by Space, Shift and Ctrl.
 #[trial]
 fn a_list_with_one_tab_stop_moves_its_lead_and_selects() {

@@ -190,6 +190,12 @@ pub struct CollectionProps {
     /// the lead scrolls the page to keep the row in view. For short collections only; a long one keeps its own
     /// scroll and is shown outside a scrolling body (16.3).
     pub natural_height: bool,
+    /// The least number of rows the collection is tall: rows it does not have count the control height, so an empty
+    /// collection stays a target of its size.
+    pub min_rows: u16,
+    /// The most rows the collection shows: past them it is as tall as its first `max_rows` rows and scrolls them. It
+    /// owns that scroll inside a scrolling body too, since its height is bounded and the wheel passes on at its ends.
+    pub max_rows: Option<u16>,
     /// The axis the rows overflow along. A collection owns the scroll along it, so it sits only in a scrolling body
     /// that does not scroll along it too: a strip of tabs (`Axis::X`) sits in a page that scrolls vertically.
     pub overflow: Axis,
@@ -273,6 +279,8 @@ impl CollectionProps {
             drag_payload: None,
             drag_count: None,
             natural_height: false,
+            min_rows: 0,
+            max_rows: None,
             overflow: Axis::Y,
             pages: false,
             current: None,
@@ -474,6 +482,20 @@ impl CollectionProps {
     #[must_use]
     pub const fn natural_height(mut self, on: bool) -> Self {
         self.natural_height = on;
+        self
+    }
+
+    /// The collection is at least `rows` rows tall (see [`CollectionProps::min_rows`]).
+    #[must_use]
+    pub const fn min_rows(mut self, rows: u16) -> Self {
+        self.min_rows = rows;
+        self
+    }
+
+    /// The collection shows at most `rows` rows and scrolls the rest (see [`CollectionProps::max_rows`]).
+    #[must_use]
+    pub const fn max_rows(mut self, rows: u16) -> Self {
+        self.max_rows = Some(rows);
         self
     }
 

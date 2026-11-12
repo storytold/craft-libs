@@ -143,6 +143,8 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     /// run, the width in a measuring run (the real run shows a collection that fills across the column it is held in).
     from_content: (bool, bool),
     scrolls: bool,
+    /// The collection shows at most `max_rows` rows: its height is bounded by its rows, whatever its sizing.
+    capped: bool,
     /// The axis the rows overflow along.
     overflow: Axis,
     selection: C::Selection,
@@ -205,6 +207,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             room: Vec2::ZERO,
             from_content: (false, false),
             scrolls: true,
+            capped: false,
             overflow: Axis::Y,
             selection: C::Selection::default(),
             selection_at_read: C::Selection::default(),

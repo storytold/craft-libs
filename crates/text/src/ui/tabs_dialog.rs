@@ -315,7 +315,8 @@ impl TabStopsDialog {
         let stops = self.stops.clone();
         let out = Table::<usize>::new(words.title.clone(), columns.clone())
             .select(SelectMode::Single)
-            .natural_height(true)
+            .min_rows(1)
+            .max_rows(6)
             .selection(Bind::given(selection))
             .show_items(ui, &Stops { stops: &stops, texts: &texts }, &mut |key, icx| {
                 let stop = &stops[*key];

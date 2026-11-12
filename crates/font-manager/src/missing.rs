@@ -235,7 +235,7 @@ impl StackDialog for MissingFontsDialog {
                         }
                     });
                     Section::new(words.used_fonts.clone()).initially_open(false).remember(DOCUMENT_FONTS_OPEN).show(ui, |ui, _| {
-                        List::<usize>::new(words.font.clone()).select(SelectMode::Single).sizing(Sizing::Content).show_items(
+                        List::<usize>::new(words.font.clone()).select(SelectMode::Single).sizing(Sizing::Content).max_rows(6).show_items(
                             ui,
                             &Listed(&listed),
                             &mut |key, _| ListRow::new(listed[*key].clone()),
