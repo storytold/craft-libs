@@ -4,7 +4,7 @@
 use super::body::shown_placement;
 use super::container::PaneEdge;
 use super::overlay::{self, FloatPlace, Layer, Outside, Overlay, Place};
-use super::run::{Host, HostCx, HostPass, ShowAt};
+use super::run::{Host, HostCx, HostPass, Inline, ShowAt};
 use super::{ContainerProps, Mount, ShellPane};
 use crate::runtime::egui::areas;
 use crate::runtime::egui::panels::{self, Edge};
@@ -38,7 +38,7 @@ pub(super) fn host(props: &ContainerProps, at: &HostCx<'_>, open: bool, title: &
     };
     let closed = || Mounted { host: Box::new(ClosedHost), exiting: false };
     let mounted = match &props.mount {
-        Mount::Inline => Mounted { host: Box::new(InlineHost), exiting: false },
+        Mount::Inline => Mounted { host: Box::new(Inline), exiting: false },
         Mount::Pane(pane) => Mounted { host: Box::new(PaneHost(*pane)), exiting: false },
         Mount::Window { .. } => Mounted { host: Box::new(WindowContentHost), exiting: false },
         Mount::Layer(overlay) => match layer(overlay) {
@@ -99,15 +99,6 @@ impl Host for ClosedHost {
         if !parent.is_sizing_pass() {
             overlay::forget_layer(parent.ctx(), id, id);
         }
-    }
-}
-
-/// The parent `Ui` is the host `Ui`.
-struct InlineHost;
-
-impl Host for InlineHost {
-    fn run(&mut self, _: Id, parent: &mut Ui, _: &Env, pass: &mut HostPass<'_>) {
-        pass(parent, None, None);
     }
 }
 
