@@ -16,7 +16,7 @@ use craft_ui::contract::{
 use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::display::{Shade, Text};
 use craft_ui::fonts::FontRef;
-use craft_ui::layout_components::{Row, Stack};
+use craft_ui::layout_components::Row;
 use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::primitives::{DocRun, DocText, Draw, HAlign, PaintShape, StrokeWidth, TextureCache};
 use craft_ui::runtime::env::Env;
@@ -518,56 +518,54 @@ impl StackDialog for SignaturePadDialog {
         let SignaturePadDialog { draft, scan, open, decoding, error, .. } = self;
         let decoding = decoding.is_some();
         let shown = Dialog::new(title.clone()).opened(Bind::bound(open)).buttons(buttons).show(ui, |ui, _| {
-            Stack::new().show(ui, |ui, _| {
-                let mut tabs = vec![
-                    Entry::new(SignatureTab::Type, words.type_tab.clone()),
-                    Entry::new(SignatureTab::Draw, words.draw_tab.clone()),
-                    Entry::new(SignatureTab::Image, words.image_tab.clone()),
-                ];
-                if scan.is_some() {
-                    tabs.push(Entry::new(SignatureTab::Scan, words.scan_tab.clone()));
+            let mut tabs = vec![
+                Entry::new(SignatureTab::Type, words.type_tab.clone()),
+                Entry::new(SignatureTab::Draw, words.draw_tab.clone()),
+                Entry::new(SignatureTab::Image, words.image_tab.clone()),
+            ];
+            if scan.is_some() {
+                tabs.push(Entry::new(SignatureTab::Scan, words.scan_tab.clone()));
+            }
+            Segmented::new(title.clone(), Bind::bound(&mut draft.tab), &tabs).show(ui);
+            match draft.tab {
+                SignatureTab::Type => {
+                    TextField::new(words.type_hint.clone(), Bind::bound(&mut draft.text))
+                        .placeholder(words.type_hint.clone())
+                        .limit(MAX_SIGNATURE_CHARS)
+                        .show(ui);
+                    DrawPad::typed(draft.text.clone(), &draft.text).show(ui);
                 }
-                Segmented::new(title.clone(), Bind::bound(&mut draft.tab), &tabs).show(ui);
-                match draft.tab {
-                    SignatureTab::Type => {
-                        TextField::new(words.type_hint.clone(), Bind::bound(&mut draft.text))
-                            .placeholder(words.type_hint.clone())
-                            .limit(MAX_SIGNATURE_CHARS)
-                            .show(ui);
-                        DrawPad::typed(draft.text.clone(), &draft.text).show(ui);
+                SignatureTab::Draw => {
+                    DrawPad::new(words.draw_tab.clone(), Bind::bound(&mut draft.strokes)).show(ui);
+                }
+                SignatureTab::Image => {
+                    Text::new(words.image_hint.clone()).shade(Shade::Muted).show(ui);
+                    if clicked(&Button::new(words.browse.clone()).icon(craft_behavior::IconId::new("folder")).loading(decoding).show(ui)) {
+                        browse = true;
                     }
-                    SignatureTab::Draw => {
-                        DrawPad::new(words.draw_tab.clone(), Bind::bound(&mut draft.strokes)).show(ui);
+                    if let Some(error) = *error {
+                        let word = match error {
+                            PickError::Unreadable => &words.image_failed,
+                            PickError::TooLarge => &words.image_too_large,
+                        };
+                        Notice::new(Tone::Bad, word.clone()).layout(NoticeLayout::Inline).show(ui);
                     }
-                    SignatureTab::Image => {
-                        Text::new(words.image_hint.clone()).shade(Shade::Muted).show(ui);
-                        if clicked(&Button::new(words.browse.clone()).icon(craft_behavior::IconId::new("folder")).loading(decoding).show(ui)) {
-                            browse = true;
-                        }
-                        if let Some(error) = *error {
-                            let word = match error {
-                                PickError::Unreadable => &words.image_failed,
-                                PickError::TooLarge => &words.image_too_large,
-                            };
-                            Notice::new(Tone::Bad, word.clone()).layout(NoticeLayout::Inline).show(ui);
-                        }
-                        DrawPad::image(words.image_tab.clone(), draft.image.as_ref()).show(ui);
-                    }
-                    SignatureTab::Scan => {
-                        if let Some(tab) = scan.as_mut() {
-                            tab(ui, draft);
-                        }
+                    DrawPad::image(words.image_tab.clone(), draft.image.as_ref()).show(ui);
+                }
+                SignatureTab::Scan => {
+                    if let Some(tab) = scan.as_mut() {
+                        tab(ui, draft);
                     }
                 }
-                Row::new().show(ui, |ui, _| {
-                    if draft.tab == SignatureTab::Draw && clicked(&Button::new(words.undo.clone()).enabled(!draft.strokes.is_empty()).show(ui)) {
-                        draft.undo_stroke();
-                    }
-                    if clicked(&Button::new(words.clear.clone()).show(ui)) {
-                        draft.clear();
-                        *error = None;
-                    }
-                });
+            }
+            Row::new().show(ui, |ui, _| {
+                if draft.tab == SignatureTab::Draw && clicked(&Button::new(words.undo.clone()).enabled(!draft.strokes.is_empty()).show(ui)) {
+                    draft.undo_stroke();
+                }
+                if clicked(&Button::new(words.clear.clone()).show(ui)) {
+                    draft.clear();
+                    *error = None;
+                }
             });
         });
         if browse && let Some(host) = &host {

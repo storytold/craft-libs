@@ -8,7 +8,6 @@ use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, CollectionEvent, Entry, Props as _, Show as _, ShowCollection as _, ShowContainer as _, Trigger, clicked};
 use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::display::Text;
-use craft_ui::layout_components::Stack;
 use craft_ui::menu::Menu;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label};
@@ -251,100 +250,98 @@ impl StackDialog for FindReplaceDialog {
         let close_at = buttons.len() - 1;
 
         let shown = Dialog::new(words.title.clone()).modeless().side_buttons(true).buttons(buttons).show(ui, |ui, _| {
-            Stack::new().show(ui, |ui, _| {
-                if word {
-                    let tabs = [
-                        (FindTab::Find, words.find_tab.as_str().to_owned()),
-                        (FindTab::Replace, words.replace_tab.as_str().to_owned()),
-                        (FindTab::GoTo, words.go_to_tab.as_str().to_owned()),
-                    ];
-                    let source = keyed(&tabs[..], |tab: &(FindTab, String)| tab.0).with_text(|tab| Cow::Borrowed(tab.1.as_str()));
-                    let strip = TabStrip::new(words.title.clone()).kind(TabKind::Text).shown(tab).natural_height(true);
-                    let out = strip.show_items(ui, &source, &mut |key, _| {
-                        Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(String::new, |tab| tab.1.clone()))
-                    });
-                    for event in out.response.events {
-                        if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
-                            && let Some(chosen) = keys.last()
-                        {
-                            next_tab = *chosen;
-                        }
+            if word {
+                let tabs = [
+                    (FindTab::Find, words.find_tab.as_str().to_owned()),
+                    (FindTab::Replace, words.replace_tab.as_str().to_owned()),
+                    (FindTab::GoTo, words.go_to_tab.as_str().to_owned()),
+                ];
+                let source = keyed(&tabs[..], |tab: &(FindTab, String)| tab.0).with_text(|tab| Cow::Borrowed(tab.1.as_str()));
+                let strip = TabStrip::new(words.title.clone()).kind(TabKind::Text).shown(tab).natural_height(true);
+                let out = strip.show_items(ui, &source, &mut |key, _| {
+                    Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(String::new, |tab| tab.1.clone()))
+                });
+                for event in out.response.events {
+                    if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                        && let Some(chosen) = keys.last()
+                    {
+                        next_tab = *chosen;
                     }
                 }
-                if tab == FindTab::GoTo {
-                    Text::new(words.go_to_what.clone()).show(ui);
-                    let entries: Vec<Entry<usize>> = kinds.iter().enumerate().map(|(at, kind)| Entry::new(at, kind.clone())).collect();
-                    let edit = Select::new(words.go_to_what.clone(), Bind::given(go_kind.min(kinds.len().saturating_sub(1))), &entries).show(ui);
-                    if let Some(value) = edit.events.value() {
-                        go_kind = *value;
-                    }
-                    let edit = TextField::new(words.go_to.clone(), Bind::given(target.clone())).show(ui);
-                    if let Some(value) = edit.events.value() {
-                        target.clone_from(value);
-                    }
-                    return;
+            }
+            if tab == FindTab::GoTo {
+                Text::new(words.go_to_what.clone()).show(ui);
+                let entries: Vec<Entry<usize>> = kinds.iter().enumerate().map(|(at, kind)| Entry::new(at, kind.clone())).collect();
+                let edit = Select::new(words.go_to_what.clone(), Bind::given(go_kind.min(kinds.len().saturating_sub(1))), &entries).show(ui);
+                if let Some(value) = edit.events.value() {
+                    go_kind = *value;
                 }
+                let edit = TextField::new(words.go_to.clone(), Bind::given(target.clone())).show(ui);
+                if let Some(value) = edit.events.value() {
+                    target.clone_from(value);
+                }
+                return;
+            }
 
-                Text::new(words.find_what.clone()).show(ui);
-                let mut field = TextField::new(words.find_what.clone(), Bind::given(query.clone()));
-                if let Some((Field::Find, code)) = &pending {
+            Text::new(words.find_what.clone()).show(ui);
+            let mut field = TextField::new(words.find_what.clone(), Bind::given(query.clone()));
+            if let Some((Field::Find, code)) = &pending {
+                field = field.replace_selection(code.clone());
+            }
+            let edit = field.show(ui);
+            if edit.response.has_focus() {
+                last_field = Field::Find;
+            }
+            if let Some(value) = edit.events.value() {
+                query.clone_from(value);
+            }
+            submitted |= edit.submitted;
+            if tab == FindTab::Replace {
+                Text::new(words.replace_with.clone()).show(ui);
+                let mut field = TextField::new(words.replace_with.clone(), Bind::given(with.clone()));
+                if let Some((Field::With, code)) = &pending {
                     field = field.replace_selection(code.clone());
                 }
                 let edit = field.show(ui);
                 if edit.response.has_focus() {
-                    last_field = Field::Find;
+                    last_field = Field::With;
                 }
                 if let Some(value) = edit.events.value() {
-                    query.clone_from(value);
+                    with.clone_from(value);
                 }
-                submitted |= edit.submitted;
-                if tab == FindTab::Replace {
-                    Text::new(words.replace_with.clone()).show(ui);
-                    let mut field = TextField::new(words.replace_with.clone(), Bind::given(with.clone()));
-                    if let Some((Field::With, code)) = &pending {
-                        field = field.replace_selection(code.clone());
-                    }
-                    let edit = field.show(ui);
-                    if edit.response.has_focus() {
-                        last_field = Field::With;
-                    }
-                    if let Some(value) = edit.events.value() {
-                        with.clone_from(value);
-                    }
-                }
+            }
 
-                let check = |ui: &mut Ui, label: &Label, value: &mut bool, enabled: bool| {
-                    Checkbox::new(Bind::bound(value)).label(label.clone()).enabled(enabled).show(ui);
-                };
-                if !word {
-                    check(ui, &words.match_case.clone(), &mut options.match_case, true);
-                    check(ui, &words.whole_words.clone(), &mut options.whole_word, true);
-                    return;
-                }
-                if clicked(&Button::new(words.search_options.clone()).show(ui)) {
-                    more = !more;
-                }
-                if !more {
-                    return;
-                }
-                // Word greys the case, word and ignore options out while wildcards are on.
-                let free = !options.wildcards || options.regex;
-                let no_regex = !options.regex;
-                check(ui, &words.match_case.clone(), &mut options.match_case, free);
-                check(ui, &words.whole_words.clone(), &mut options.whole_word, free);
-                check(ui, &words.use_wildcards.clone(), &mut options.wildcards, no_regex);
-                check(ui, &words.match_prefix.clone(), &mut options.prefix, free);
-                check(ui, &words.match_suffix.clone(), &mut options.suffix, free);
-                check(ui, &words.ignore_punctuation.clone(), &mut options.ignore_punctuation, free);
-                check(ui, &words.ignore_space.clone(), &mut options.ignore_space, free);
-                check(ui, &words.regular_expressions.clone(), &mut options.regex, true);
-                let entries = special_entries(&words, tab == FindTab::Replace);
-                let button = Button::new(words.special.clone()).show(ui);
-                if let Some(code) = Menu::new(words.special.clone()).opened_by(&button, Trigger::Press).pick(ui, &entries).picked {
-                    let field = if last_field == Field::With && tab == FindTab::Replace { Field::With } else { Field::Find };
-                    picked_code = Some((field, code.to_owned()));
-                }
-            });
+            let check = |ui: &mut Ui, label: &Label, value: &mut bool, enabled: bool| {
+                Checkbox::new(Bind::bound(value)).label(label.clone()).enabled(enabled).show(ui);
+            };
+            if !word {
+                check(ui, &words.match_case.clone(), &mut options.match_case, true);
+                check(ui, &words.whole_words.clone(), &mut options.whole_word, true);
+                return;
+            }
+            if clicked(&Button::new(words.search_options.clone()).show(ui)) {
+                more = !more;
+            }
+            if !more {
+                return;
+            }
+            // Word greys the case, word and ignore options out while wildcards are on.
+            let free = !options.wildcards || options.regex;
+            let no_regex = !options.regex;
+            check(ui, &words.match_case.clone(), &mut options.match_case, free);
+            check(ui, &words.whole_words.clone(), &mut options.whole_word, free);
+            check(ui, &words.use_wildcards.clone(), &mut options.wildcards, no_regex);
+            check(ui, &words.match_prefix.clone(), &mut options.prefix, free);
+            check(ui, &words.match_suffix.clone(), &mut options.suffix, free);
+            check(ui, &words.ignore_punctuation.clone(), &mut options.ignore_punctuation, free);
+            check(ui, &words.ignore_space.clone(), &mut options.ignore_space, free);
+            check(ui, &words.regular_expressions.clone(), &mut options.regex, true);
+            let entries = special_entries(&words, tab == FindTab::Replace);
+            let button = Button::new(words.special.clone()).show(ui);
+            if let Some(code) = Menu::new(words.special.clone()).opened_by(&button, Trigger::Press).pick(ui, &entries).picked {
+                let field = if last_field == Field::With && tab == FindTab::Replace { Field::With } else { Field::Find };
+                picked_code = Some((field, code.to_owned()));
+            }
             if !message.is_empty() {
                 Text::new(message.clone()).show(ui);
             }

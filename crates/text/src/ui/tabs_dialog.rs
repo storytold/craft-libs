@@ -18,7 +18,7 @@ use craft_ui::contract::{
 };
 use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::form::Field;
-use craft_ui::layout_components::{Row, Stack};
+use craft_ui::layout_components::Row;
 use craft_ui::list::ListRow;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Units};
@@ -270,15 +270,13 @@ enum CellEdit {
 
 impl TabStopsDialog {
     fn body(&mut self, ui: &mut Ui, words: &TabStopsWords, units: &Units) {
-        Stack::new().show(ui, |ui, _| {
-            self.default_row(ui, words);
-            self.table(ui, words, units);
-            self.buttons(ui, words);
-            if !self.cleared.is_empty() {
-                let positions: Vec<String> = self.cleared.iter().map(|gone| self.text(units, *gone)).collect();
-                craft_ui::display::Text::new(format!("{} {}", words.to_be_cleared.as_str(), positions.join(", "))).show(ui);
-            }
-        });
+        self.default_row(ui, words);
+        self.table(ui, words, units);
+        self.buttons(ui, words);
+        if !self.cleared.is_empty() {
+            let positions: Vec<String> = self.cleared.iter().map(|gone| self.text(units, *gone)).collect();
+            craft_ui::display::Text::new(format!("{} {}", words.to_be_cleared.as_str(), positions.join(", "))).show(ui);
+        }
     }
 
     /// `points` as the number in the unit with its suffix.
@@ -307,7 +305,7 @@ impl TabStopsDialog {
     /// selection change moves the selected stop.
     fn table(&mut self, ui: &mut Ui, words: &TabStopsWords, units: &Units) {
         let columns = vec![
-            ColumnSpec::new(POSITION, words.position_column.clone(), ColumnWidth::fill(1.0)),
+            ColumnSpec::new(POSITION, words.position_column.clone(), ColumnWidth::Content),
             ColumnSpec::new(ALIGNMENT, words.alignment.clone(), ColumnWidth::fill(1.0)),
             ColumnSpec::new(LEADER, words.leader.clone(), ColumnWidth::fill(1.0)),
         ];

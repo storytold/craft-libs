@@ -5,7 +5,7 @@ use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use crate::dialog::Dialog;
 use crate::display::Text;
-use crate::layout_components::{Grid, Stack};
+use crate::layout_components::Grid;
 use crate::runtime::env::WindowKey;
 use crate::shell::{CanvasPanel, Slot};
 use crate::testing::{Drive, StoryData, StoryOutput, stage, story};
@@ -77,10 +77,8 @@ fn shell_region(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 /// What the story dialogs hold: two check boxes whose values the story keeps between passes.
 fn dialog_body(ui: &mut Ui, checks: &mut [bool; 2]) {
     let [snap, rulers] = checks;
-    Stack::new().show(ui, |ui, _| {
-        Checkbox::new(Bind::bound(snap)).label("Snap to grid").show(ui);
-        Checkbox::new(Bind::bound(rulers)).label("Show rulers").show(ui);
-    });
+    Checkbox::new(Bind::bound(snap)).label("Snap to grid").show(ui);
+    Checkbox::new(Bind::bound(rulers)).label("Show rulers").show(ui);
 }
 
 /// Two embedded regions side by side, each with its own open dialog: a dialog opened in a region is placed in it, its

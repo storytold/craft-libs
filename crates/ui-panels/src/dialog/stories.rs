@@ -4,7 +4,6 @@ use super::modal::ModalDragStrip;
 use super::{BlockingOverlay, Dialog, DialogFrame};
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
-use crate::layout_components::Stack;
 use crate::runtime::focus::Initial;
 use crate::sections::{DialogRole, FooterButton};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -14,10 +13,8 @@ use egui::Ui;
 #[doc(hidden)]
 pub fn body(ui: &mut Ui, checks: &mut [bool; 2]) {
     let [snap, rulers] = checks;
-    Stack::new().show(ui, |ui, _| {
-        Checkbox::new(Bind::bound(snap)).label("Snap to grid").show(ui);
-        Checkbox::new(Bind::bound(rulers)).label("Show rulers").show(ui);
-    });
+    Checkbox::new(Bind::bound(snap)).label("Snap to grid").show(ui);
+    Checkbox::new(Bind::bound(rulers)).label("Show rulers").show(ui);
 }
 
 /// The drive of the shells with a close action: a click on it.

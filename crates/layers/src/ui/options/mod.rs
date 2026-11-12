@@ -300,43 +300,41 @@ impl StackDialog for LayersOptionsDialog {
         let words = env.words::<LayersOptionsWords>();
         let list = env.words::<ListWords>();
         let shown = FormDialog::new(words.title.clone(), Bind::bound(&mut self.options)).show(ui, |ui, _, options| {
-            Stack::new().show(ui, |ui, _| {
-                GroupBox::new(words.thumbnail_size.clone(), None).show(ui, |ui, _| {
-                    RadioGroup::new(words.thumbnail_size.clone(), Bind::bound(&mut options.thumbnail_size)).show(ui, |ui, cx| {
-                        Stack::new().show(ui, |ui, _| {
-                            // Each size's sample is its option's label: a click on it picks the size, and the size's
-                            // name names the radio and is the sample's tooltip.
-                            for size in ThumbSize::ALL {
-                                let side = SideLabel::new().layout(FieldLayout::After);
-                                if size == ThumbSize::None {
-                                    cx.labelled(ui, size, size.label(&list), side, Radio::new(size));
-                                } else {
-                                    let sample = Picture::new(words.sample.clone(), SAMPLE_KEY, &sample_image).extent(PictureSize::Thumb(size));
-                                    cx.labelled_with(ui, size, size.label(&list), side.kind(LabelKind::Hidden), Radio::new(size), sample);
-                                }
+            GroupBox::new(words.thumbnail_size.clone(), None).show(ui, |ui, _| {
+                RadioGroup::new(words.thumbnail_size.clone(), Bind::bound(&mut options.thumbnail_size)).show(ui, |ui, cx| {
+                    Stack::new().show(ui, |ui, _| {
+                        // Each size's sample is its option's label: a click on it picks the size, and the size's
+                        // name names the radio and is the sample's tooltip.
+                        for size in ThumbSize::ALL {
+                            let side = SideLabel::new().layout(FieldLayout::After);
+                            if size == ThumbSize::None {
+                                cx.labelled(ui, size, size.label(&list), side, Radio::new(size));
+                            } else {
+                                let sample = Picture::new(words.sample.clone(), SAMPLE_KEY, &sample_image).extent(PictureSize::Thumb(size));
+                                cx.labelled_with(ui, size, size.label(&list), side.kind(LabelKind::Hidden), Radio::new(size), sample);
                             }
-                        });
+                        }
                     });
                 });
-                GroupBox::new(words.thumbnail_contents.clone(), None).show(ui, |ui, _| {
-                    RadioGroup::new(words.thumbnail_contents.clone(), Bind::bound(&mut options.thumbnail_contents)).show(ui, |ui, _| {
-                        Stack::new().show(ui, |ui, _| {
-                            Radio::new(ThumbContents::LayerBounds).label(words.layer_bounds.clone()).show(ui);
-                            Radio::new(ThumbContents::EntireDocument).label(words.entire_document.clone()).show(ui);
-                        });
-                    });
-                });
-                let switches = [
-                    (&words.default_masks, &mut options.use_default_masks_on_fill_layers),
-                    (&words.expand_new_effects, &mut options.expand_new_effects),
-                    (&words.add_copy, &mut options.add_copy_to_copied_layers_and_groups),
-                    (&words.preview_on_canvas, &mut options.preview_on_canvas_when_reordering),
-                    (&words.mask_badges, &mut options.show_layer_mask_badges),
-                ];
-                for (label, value) in switches {
-                    Checkbox::new(Bind::bound(value)).label(label.clone()).show(ui);
-                }
             });
+            GroupBox::new(words.thumbnail_contents.clone(), None).show(ui, |ui, _| {
+                RadioGroup::new(words.thumbnail_contents.clone(), Bind::bound(&mut options.thumbnail_contents)).show(ui, |ui, _| {
+                    Stack::new().show(ui, |ui, _| {
+                        Radio::new(ThumbContents::LayerBounds).label(words.layer_bounds.clone()).show(ui);
+                        Radio::new(ThumbContents::EntireDocument).label(words.entire_document.clone()).show(ui);
+                    });
+                });
+            });
+            let switches = [
+                (&words.default_masks, &mut options.use_default_masks_on_fill_layers),
+                (&words.expand_new_effects, &mut options.expand_new_effects),
+                (&words.add_copy, &mut options.add_copy_to_copied_layers_and_groups),
+                (&words.preview_on_canvas, &mut options.preview_on_canvas_when_reordering),
+                (&words.mask_badges, &mut options.show_layer_mask_badges),
+            ];
+            for (label, value) in switches {
+                Checkbox::new(Bind::bound(value)).label(label.clone()).show(ui);
+            }
             true
         });
         match (shown.accepted, shown.closed) {
