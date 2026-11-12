@@ -63,6 +63,9 @@ workflows:
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
         - 'step-security/harden-runner@v2.22.4'
         - 'step-security/rust-cache@v2.9.2'
+    '.github/workflows/lockfile.yml':
+        - 'actions/checkout@v7.0.1'
+        - 'step-security/harden-runner@v2.22.4'
     '.github/workflows/media.yml':
         - 'actions/checkout@v7.0.1'
         - 'step-security/dtolnay-rust-toolchain@v1.0.0'
