@@ -66,10 +66,10 @@ pub(super) fn hidden_control(ctx: &egui::Context, input: &LabelIn<'_>, flow: Flo
     }
 }
 
-/// How far a control with its label after it (a check box row) starts from its row's start. Under a form whose
-/// labelled rows share a label column, a leaf row of the column's flow starts past the column and the gap, so its
-/// control lines up with theirs, when the row has room for the column, the gap and the control; 0 elsewhere. An
-/// inspector's check rows stay at the row's start.
+/// How far a control with its label after it (a check box row: a labelled check box, or a field whose label follows
+/// its control) starts from its row's start. Under a form whose labelled rows share a label column, a row of the
+/// column's flow starts past the column and the gap, so its control lines up with theirs, when the row has room for
+/// the column, the gap and the control; 0 elsewhere. An inspector's check rows stay at the row's start.
 fn after_indent(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, gap: f32) -> f32 {
     if input.side.layout != FieldLayout::After || !input.in_column || env.values.get::<LabelScheme>() != LabelScheme::Form {
         return 0.0;

@@ -2,7 +2,7 @@
 
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};
-use craft_ui::contract::{Bind, GlyphLabel, LabelKind, LabelScheme, Props as _, Show as _, ShowContainer as _, SideLabel};
+use craft_ui::contract::{Bind, FieldLayout, GlyphLabel, LabelKind, LabelScheme, Props as _, Show as _, ShowContainer as _, SideLabel};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::text::NumberField;
@@ -84,8 +84,8 @@ fn a_glyph_caption_takes_a_colon_in_a_bar_only() {
 }
 
 /// A check box row of a form starts its box in the control column, where the rows labelled beside it start their
-/// controls. In an inspector, in a form with no labelled row, and as a radio group's member, it stays at the row's
-/// start.
+/// controls, whether the check box carries its label or a field's label follows it. In an inspector, in a form with no
+/// labelled row, and as a radio group's member, it stays at the row's start.
 #[trial]
 fn a_forms_check_box_row_starts_in_the_control_column() {
     let check = |scheme: LabelScheme, labelled: bool| {
@@ -97,6 +97,9 @@ fn a_forms_check_box_row_starts_in_the_control_column() {
                     });
                 }
                 Checkbox::new(Bind::given(true)).label("Embed Color Profile").show(ui);
+                Field::new("Snap to grid").layout(FieldLayout::After).show(ui, |ui, _| {
+                    Checkbox::new(Bind::given(true)).show(ui);
+                });
                 RadioGroup::new("Artboards", Bind::given(true)).show(ui, |ui, _| {
                     Radio::new(true).label("All").show(ui);
                 });
@@ -104,18 +107,24 @@ fn a_forms_check_box_row_starts_in_the_control_column() {
         });
         fixture.settle();
         let boxed = fixture.by_label("Embed Color Profile").expect("the check box").rect;
-        let start = fixture.texts().iter().find(|run| run.text == "Embed Color Profile").map(|run| run.rect).expect("the label is painted");
+        let fielded = fixture.by_label("Snap to grid").expect("the field's check box").rect;
+        let text = |name: &str| fixture.texts().iter().find(|run| run.text == name).map(|run| run.rect).expect("the label is painted");
+        let texts = (text("Embed Color Profile"), text("Snap to grid"));
         let field = labelled.then(|| fixture.by_label(LONG).expect("the field").rect);
         let radio = fixture.by_label("All").expect("the radio button").rect;
-        (boxed, start, field, radio)
+        (boxed, fielded, texts, field, radio)
     };
-    let (form, text, field, radio) = check(LabelScheme::Form, true);
+    let (form, fielded, (text, field_text), field, radio) = check(LabelScheme::Form, true);
     let field = field.expect("the labelled row");
     assert!(radio.min.x < field.min.x - SLACK, "a radio group's member stays at the row's start: {radio:?}");
     assert!((form.min.x - field.min.x).abs() <= SLACK, "a form's check box starts at the control edge: {form:?} {field:?}");
-    assert!(text.min.x > form.min.x, "its label follows the box: {text:?}");
-    let (inspector, _, field, _) = check(LabelScheme::Inspector, true);
-    assert!(inspector.min.x < field.expect("the labelled row").min.x - SLACK, "an inspector's check box stays at the row's start");
-    let (alone, _, _, _) = check(LabelScheme::Form, false);
+    assert!((fielded.min.x - field.min.x).abs() <= SLACK, "a field's check box starts at the control edge: {fielded:?} {field:?}");
+    assert!(text.min.x > form.min.x && field_text.min.x > fielded.min.x, "each label follows its box: {text:?} {field_text:?}");
+    let (inspector, fielded, _, field, _) = check(LabelScheme::Inspector, true);
+    let field = field.expect("the labelled row");
+    assert!(inspector.min.x < field.min.x - SLACK, "an inspector's check box stays at the row's start");
+    assert!((fielded.min.x - inspector.min.x).abs() <= SLACK, "so does an inspector's field check box: {fielded:?}");
+    let (alone, fielded, _, _, _) = check(LabelScheme::Form, false);
     assert!((alone.min.x - inspector.min.x).abs() <= SLACK, "with no labelled row the box stays at the row's start: {alone:?}");
+    assert!((fielded.min.x - inspector.min.x).abs() <= SLACK, "and so does a field's: {fielded:?}");
 }

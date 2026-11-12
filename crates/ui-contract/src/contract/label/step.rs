@@ -42,8 +42,8 @@ pub(crate) struct LabelIn<'a> {
     pub control_min: f32,
     /// The control is a leaf child shown in the flow with its label after it, not a field's body.
     pub leaf: bool,
-    /// The leaf is a row of a vertical flow, not a member of a row's line: under a form's label column, a control with
-    /// its label after it starts in the control column.
+    /// The row is a row of a vertical flow, not a member of a row's line (`in_column`): under a form's label column, a
+    /// control with its label after it, a leaf's or a field's, starts in the control column.
     pub in_column: bool,
     /// The leaf child draws only its mark (`Component::LABELLED_AFTER`): the label is part of its hit target.
     pub claims: bool,
@@ -128,7 +128,7 @@ pub(crate) fn leaf<C: Show>(ui: &mut Ui, env: &Env, at: &LeafLabel<'_>, child: &
         size: at.under.size,
         control_min,
         leaf: true,
-        in_column: !ui.layout().is_horizontal(),
+        in_column: in_column(ui),
         claims: C::LABELLED_AFTER,
         status: false,
         trailing: trailing.as_ref().map_or(Vec2::ZERO, |trailing| trailing.size),
@@ -220,6 +220,22 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, trailing: Option<
     placed
 }
 
+/// Whether a row shown in `flow` is a row of a vertical flow, not a member of a row's line.
+pub(crate) fn in_column(flow: &Ui) -> bool {
+    !flow.layout().is_horizontal()
+}
+
+/// A control with its label after it that the label step moved into the control column (its `control` starts past
+/// its `row`'s start) reaches past that column by the gap, the control, the gap and the label: a sizing pass reports
+/// that reach, so a content-sized group measures the row whole. `extent` is the row's width from its start edge.
+pub(crate) fn report_after_reach(ctx: &egui::Context, env: &Env, side: &SideLabel, (row, control): (Rect, Rect), extent: f32) {
+    let indent = if env.direction.is_rtl() { row.max.x - control.max.x } else { control.min.x - row.min.x };
+    if side.layout == FieldLayout::After && indent > 0.0 {
+        let column = indent - label_gap(env);
+        crate::layout::report_beyond(ctx, std::slice::from_ref(&crate::layout::LABELS), extent - column);
+    }
+}
+
 /// Runs the label step for one leaf child in the flow of `ui`: `label` sits beside the child or above it, with the
 /// icon and detail of `side`, and the child takes the width the label leaves. The row is as high as the placement
 /// measured: the child (plus the label line when the label stacks), and the label when it is taller. `id` is the
@@ -265,12 +281,8 @@ pub(crate) fn flow_leaf<C: Show>(
         let column = if matches!(side.kind, LabelKind::Glyph(_)) { crate::layout::GLYPHS } else { crate::layout::LABELS };
         crate::layout::report_beyond(ui.ctx(), std::slice::from_ref(&column), label_gap(&env) + control_width);
     }
-    // A control with its label after it that the label step moved into the control column reaches past the column by
-    // the gap, the control and the label.
-    let indent = if rtl { avail.max.x - control.max.x } else { control.min.x - avail.min.x };
-    if content && ui.is_sizing_pass() && side.layout == FieldLayout::After && indent > 0.0 {
-        let column = indent - label_gap(&env);
-        crate::layout::report_beyond(ui.ctx(), std::slice::from_ref(&crate::layout::LABELS), extent - column);
+    if content && ui.is_sizing_pass() {
+        report_after_reach(ui.ctx(), &env, &side, (avail, control), extent);
     }
     // The child runs under the inside label its measures saw.
     let installed = under.inside.clone().map(|inside| Env::install_for(ui, env.derive_local(|scoped| scoped.inside_label = Some(inside))));

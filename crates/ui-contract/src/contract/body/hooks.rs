@@ -276,6 +276,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let env = Env::of(ui);
         self.given = self.given_axes(props, &env, at);
         self.passes = self.passes_width(props, &env, at);
+        self.in_column = label::in_column(ui);
         self.given.1 |= self.over_room(props, &env, at, ui.ctx(), id);
         let measured = self.measured_body.unwrap_or(Vec2::ZERO);
         let body = if self.presence.visible { Vec2::new(measured.x, measured.y * self.presence.t) } else { Vec2::ZERO };
@@ -329,6 +330,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         };
         self.given = self.given_axes(&props, at.env, at.at);
         self.passes = self.passes_width(&props, at.env, at.at);
+        self.in_column = label::in_column(at.ui);
         // A body that fills the main axis of the body it sits in is measured and shown at its share of it. The first
         // sweep of that body's measuring run only counts it: its contents run in the second sweep, at the share.
         let (x, y) = (craft_behavior::Axis::X, craft_behavior::Axis::Y);
@@ -753,7 +755,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 size: resolved.size,
                 control_min: scope::measured_control_min(&ctx, id),
                 leaf: false,
-                in_column: false,
+                in_column: self.in_column,
                 claims: false,
                 status: props.footer.is_some_and(|footer| footer.status),
                 trailing: Vec2::ZERO,
@@ -949,8 +951,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             if let Some(size) = &mut self.body_size {
                 // A body beside its label in a content-sized column of rows reports how far it reaches past the label
                 // column, so that column's container measures its rows at the widest label.
-                if let (false, true, Some(side)) = (real, env.content.0, props.label.as_ref().filter(|_| label_extra.x > 0.0 && label_extra.y <= 0.0))
-                {
+                let beside = |side: &&label::SideLabel| side.layout != label::FieldLayout::After && label_extra.x > 0.0 && label_extra.y <= 0.0;
+                if let (false, true, Some(side)) = (real, env.content.0, props.label.as_ref().filter(beside)) {
                     let column = if matches!(side.kind, label::LabelKind::Glyph(_)) { layout::GLYPHS } else { layout::LABELS };
                     layout::report_beyond(&ctx, std::slice::from_ref(&column), label::label_gap(env) + size.x);
                 }
@@ -958,6 +960,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 // A caption above the control counts whole toward the container's width, so a row never narrows the
                 // field below it.
                 size.x = size.x.max(caption);
+                if let (false, true, Some(side)) = (real, env.content.0, props.label.as_ref()) {
+                    label::report_after_reach(&ctx, env, side, (regions.body, body_rect), size.x);
+                }
             }
             self.view = Some(body_rect);
             if real && props.end.is_some() {

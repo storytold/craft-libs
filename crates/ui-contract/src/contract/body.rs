@@ -138,6 +138,9 @@ pub(super) struct BodyHooks<'b> {
     /// A content-sized container that passes the width its column gives it on to its own body (`passes`): it is not
     /// given the width, but its body is laid out as if it were.
     passes: bool,
+    /// The container is a row of a vertical flow, not a member of a row's line (`label::in_column`), as its parent
+    /// flow showed it this run: its own measuring run shows its content in a flow of its own.
+    in_column: bool,
     /// A bottom-anchored region is following the end of its content.
     follows_end: bool,
 }
@@ -201,6 +204,7 @@ impl<'b> BodyHooks<'b> {
             fixed: false,
             given: (false, false),
             passes: false,
+            in_column: true,
             follows_end: false,
         }
     }
