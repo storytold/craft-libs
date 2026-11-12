@@ -38,6 +38,8 @@ pub struct PartResult {
     pub hover_pos: Option<Pos2>,
     /// The value flags the component set on the part.
     pub flags: Flags,
+    /// What the part senses, as declared.
+    pub sense: Sense,
     /// The component declared the part inactive: it paints with the Disabled state and `PaintUi::draw_part` draws data
     /// colours with the disabled fill, and it keeps sensing.
     pub inactive: bool,
@@ -53,6 +55,7 @@ impl PartResult {
         hovered: false,
         hover_pos: None,
         flags: Flags::empty(),
+        sense: Sense::empty(),
         inactive: false,
         held: false,
     };
@@ -847,6 +850,7 @@ fn part_results_in(
                     hovered,
                     hover_pos: read.hover_pos,
                     flags: decl.flags,
+                    sense: decl.sense,
                     inactive: decl.inactive,
                     held: decl.held,
                 },

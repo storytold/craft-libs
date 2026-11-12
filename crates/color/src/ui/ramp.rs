@@ -158,7 +158,7 @@ struct Cache {
 /// colours are computed when the kind, ends, web flag or [`gamut_revision`](ColorRamp::gamut_revision) change, and
 /// kept.
 ///
-/// - Pointer: a click picks the colour under the pointer (the cell's centre on a web-safe ramp); a drag picks while it
+/// - Pointer: a press picks the colour under the pointer (the cell's centre on a web-safe ramp); a drag picks while it
 ///   moves, also outside the bar, where the pick stays at the edge, and commits at the release. A
 ///   [`Between`](RampKind::Between) ramp keeps the ends it had at the press for the whole gesture. Alt at the press
 ///   sets [`other`](RampPick::other) on every event. A click with Shift starts no gesture and sets
@@ -371,7 +371,7 @@ impl Component for ColorRamp<'_> {
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let (bar, boxes) = self.layout(rect, cx.style);
-        cx.part(BAR, bar).sense(Sense::DRAG | Sense::CLICK).focusable().value_part();
+        cx.part(BAR, bar).sense(Sense::DRAG | Sense::SETS_ON_PRESS | Sense::CLICK).focusable().value_part();
         if self.boxes {
             let half = boxes.center().y;
             cx.part(WHITE, Rect::from_min_max(boxes.min, pos2(boxes.right(), half))).sense(Sense::CLICK).focusable();
@@ -395,39 +395,21 @@ impl Component for ColorRamp<'_> {
         let ends = if running || press.phase.is_press() { held.ends.unwrap_or(configured) } else { configured };
         self.shown_ends = ends;
         let mut cursor = cx.memory::<Cursor>().0.unwrap_or((0, CELLS_Y / 2));
-        if primary(&press) {
-            let at = |pos: Pos2| fractions(bar, pos);
-            match press.phase {
-                PressPhase::DragStart { pos, .. } if !held.shift => {
-                    let (fx, fy) = at(pos);
-                    cursor = cell_of(fx, fy);
-                    cx.begin();
-                    cx.propose(self.pick_at(ends, fx, fy, held.alt));
-                }
-                PressPhase::Drag { pos, .. } if !held.shift && cx.gesture().is_some() => {
-                    let (fx, fy) = at(pos);
-                    cursor = cell_of(fx, fy);
-                    cx.propose(self.pick_at(ends, fx, fy, held.alt));
-                }
-                PressPhase::Release { pos, click, .. } => {
-                    let (fx, fy) = at(pos);
-                    if cx.gesture().is_some() {
-                        cx.propose(self.pick_at(ends, fx, fy, held.alt));
-                        cx.commit();
-                    } else if click {
-                        cursor = cell_of(fx, fy);
-                        if held.shift {
-                            self.cycle = true;
-                        } else {
-                            cx.set(self.pick_at(ends, fx, fy, held.alt));
-                        }
-                    }
-                    if !held.shift {
-                        cursor = cell_of(fx, fy);
-                    }
-                }
-                _ => {}
-            }
+        if primary(&press) && !held.shift {
+            let mut picked = None;
+            cx.follow_press(BAR, |pos| {
+                let (fx, fy) = fractions(bar, pos);
+                picked = Some(cell_of(fx, fy));
+                Some(self.pick_at(ends, fx, fy, held.alt))
+            });
+            cursor = picked.unwrap_or(cursor);
+        } else if let PressPhase::Release { pos, click: true, .. } = press.phase
+            && primary(&press)
+        {
+            // Shift+click cycles the ends instead of picking.
+            let (fx, fy) = fractions(bar, pos);
+            cursor = cell_of(fx, fy);
+            self.cycle = true;
         }
         self.menu_at = context_click(&press);
         let bar_active = cx.active_part() == Some(BAR.into());

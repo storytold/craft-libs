@@ -4,7 +4,7 @@
 
 use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Numeric, PaintUi, PartsCx, Pointer as _,
-    Props as _, Remember as _, Role, WordSetCx as _,
+    Props as _, Role, WordSetCx as _,
 };
 use crate::primitives::{ContentPainterCx, PaintShape};
 use crate::runtime::access::Name;
@@ -12,10 +12,9 @@ use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use crate::style::{ComponentStyle, FocusLook, StyleCx};
 use craft_behavior::nav::{LARGE_STEPS, STEP_SHARE, StepResult, ValueAxes, ValueSteps, snap_to_step, step_value};
 use craft_behavior::{
-    AccessAction, Axis, CursorIcon, HitLevel, HitPriority, Metrics, Mixed, MoveMods, NavMove, PartKey, PressPhase, PressState, Sense, ValueDrag,
-    Wheel, decimals_for_step, wheel_step,
+    AccessAction, Axis, CursorIcon, HitLevel, HitPriority, Metrics, Mixed, MoveMods, NavMove, PartKey, Sense, ValueDrag, Wheel, decimals_for_step,
+    wheel_step,
 };
-use craft_keymap::Mods;
 use egui::{Pos2, Rect, Vec2, pos2};
 use std::ops::RangeInclusive;
 
@@ -58,10 +57,6 @@ pub struct PointPickerStyle {
     /// The side of the square that grabs the point.
     hit: f32,
 }
-
-/// The point at the start of the running drag.
-#[derive(Clone, Default)]
-struct DragStart([f64; 2]);
 
 /// Paints the image under the point into the plot rect through the content painter: `PointPicker::backdrop`.
 pub struct Backdrop<'a>(BackdropFn<'a>);
@@ -224,13 +219,11 @@ impl<'a> PointPicker<'a> {
         pos2(plot.left() + at(0) * plot.width(), plot.top() + at(1) * plot.height())
     }
 
-    /// The point `press` gives, from the point at the start of the drag.
-    fn moved_by(&self, drags: &[ValueDrag; 2], start: [f64; 2], press: &PressState) -> Option<[f64; 2]> {
-        let fine = press.mods.alt && !press.mods.shift;
-        Some([
-            self.settle(0, drags[0].value(start[0], press, false)?, self.grid(0, fine)),
-            self.settle(1, drags[1].value(start[1], press, false)?, self.grid(1, fine)),
-        ])
+    /// The point under the pointer at `pos`, on the step grid. Modifiers change nothing: the point is where the
+    /// pointer is.
+    fn point_at(&self, drags: &[ValueDrag; 2], pos: Pos2) -> Option<[Mixed<f64>; 2]> {
+        let axis = |axis: usize| drags[axis].at(pos, false).map(|value| self.settle(axis, value, self.grid(axis, false)));
+        Some(Mixed::each([axis(0)?, axis(1)?]))
     }
 }
 
@@ -281,12 +274,12 @@ impl Component for PointPicker<'_> {
         let placed = self.placed(cx.value().unwrap_or(&ALL_MIXED));
         let thumb = Rect::from_center_size(self.position(placed, self.plot(rect)), Vec2::splat(cx.style.hit));
         cx.part(Self::WELL, rect)
-            .sense(Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS)
+            .sense(Sense::CLICK | Sense::DRAG | Sense::SETS_ON_PRESS | Sense::TAKE_FOCUS)
             .value_part()
             .cursor(CursorIcon::Crosshair)
             .pointer_only("the arrow keys move the point");
         cx.part(THUMB, thumb)
-            .sense(Sense::DRAG | Sense::TAKE_FOCUS)
+            .sense(Sense::DRAG | Sense::SETS_ON_PRESS | Sense::TAKE_FOCUS)
             .priority(HitPriority::new(HitLevel::Handle, 0))
             .value_part()
             .pointer_only("the arrow keys move the point");
@@ -303,36 +296,7 @@ impl Component for PointPicker<'_> {
             ValueDrag::absolute(plot.top()..plot.bottom(), self.along(1)).axis(Axis::Y),
         ];
         for key in [THUMB, Self::WELL] {
-            let press = cx.part(key).press;
-            let start = cx.memory::<DragStart>().0;
-            match press.phase {
-                PressPhase::DragStart { .. } => {
-                    let from = self.placed(cx.value().unwrap_or(&ALL_MIXED));
-                    cx.memory::<DragStart>().0 = from;
-                    cx.begin();
-                }
-                PressPhase::Drag { .. } => {
-                    if let Some(next) = self.moved_by(&drags, start, &press) {
-                        cx.propose(Mixed::each(next));
-                    }
-                }
-                PressPhase::Release { click, .. } => {
-                    if cx.gesture().is_some() {
-                        if let Some(next) = self.moved_by(&drags, start, &press) {
-                            cx.propose(Mixed::each(next));
-                        }
-                        cx.commit();
-                    } else if click {
-                        // A click jumps to the pointer whatever is held: it starts from the shown point and the fine and
-                        // coarse factors of a drag do not apply.
-                        let from = self.placed(cx.value().unwrap_or(&ALL_MIXED));
-                        if let Some(next) = self.moved_by(&drags, from, &press.mods(Mods::NONE)) {
-                            cx.set(Mixed::each(next));
-                        }
-                    }
-                }
-                _ => {}
-            }
+            cx.follow_press(key, |pos| self.point_at(&drags, pos));
         }
         let running = cx.gesture().is_some();
         let mut now = cx.value().cloned().unwrap_or(ALL_MIXED);

@@ -6,7 +6,7 @@ use craft_behavior::{HitLevel, HitPriority, HitShape, Metrics, NavMove, PartKey,
 use craft_theme::{ColorModel, HsbModel, ModelValues};
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Numeric, PaintUi, PartsCx,
-    Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
+    Pointer as _, Props as _, Role, WordSetCx as _,
 };
 use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
@@ -175,10 +175,6 @@ pub struct ColorWheelStyle {
     most: f32,
 }
 
-/// The part a press began in, for its whole drag.
-#[derive(Clone, Copy, Default)]
-struct Held(Option<WheelPart>);
-
 /// A hue ring round a saturation and brightness triangle, editing a colour's HSB values.
 ///
 /// The host gives the colour as HSB [`ModelValues`] and gets them back with only the picked components changed: the
@@ -322,11 +318,11 @@ impl Component for ColorWheel<'_> {
         let reach = cx.style.grab;
         // The ring takes every press within its reach; the triangle takes the circle inside the ring's reach.
         cx.part(RING, HitShape::circle(geometry.center, geometry.outer + reach))
-            .sense(Sense::DRAG | Sense::CLICK)
+            .sense(Sense::DRAG | Sense::SETS_ON_PRESS | Sense::CLICK)
             .focusable()
             .focus_shape(FocusShape::Circle);
         cx.part(TRIANGLE, HitShape::circle(geometry.center, (geometry.inner - reach).max(0.0)))
-            .sense(Sense::DRAG | Sense::CLICK)
+            .sense(Sense::DRAG | Sense::SETS_ON_PRESS | Sense::CLICK)
             .priority(HitPriority::new(HitLevel::Handle, 0))
             .focusable()
             .focus_shape(FocusShape::Circle);
@@ -347,26 +343,8 @@ impl Component for ColorWheel<'_> {
             if matches!(press.phase, PressPhase::Down { .. }) {
                 cx.focus_part(key);
             }
-            match press.phase {
-                PressPhase::DragStart { pos, .. } => {
-                    cx.memory::<Held>().0 = Some(part);
-                    cx.begin();
-                    cx.propose(value_at(&geometry, &current(&*cx), part, pos));
-                }
-                PressPhase::Drag { pos, .. } if cx.gesture().is_some() && cx.memory::<Held>().0 == Some(part) => {
-                    cx.propose(value_at(&geometry, &current(&*cx), part, pos));
-                }
-                PressPhase::Release { pos, click, .. } => {
-                    if cx.gesture().is_some() {
-                        cx.propose(value_at(&geometry, &current(&*cx), part, pos));
-                        cx.commit();
-                    } else if click {
-                        cx.set(value_at(&geometry, &current(&*cx), part, pos));
-                    }
-                    cx.memory::<Held>().0 = None;
-                }
-                _ => {}
-            }
+            let now = current(&*cx);
+            cx.follow_press(key, |pos| Some(value_at(&geometry, &now, part, pos)));
         }
         let running = cx.gesture().is_some();
         let focused = match cx.active_part() {

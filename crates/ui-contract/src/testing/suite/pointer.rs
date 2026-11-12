@@ -50,7 +50,11 @@ fn slop_separates_click_from_drag(subject: &Subject) -> Result<(), String> {
                 }
             }
             Plan::Drag(Grip { part, .. }) if probe.carries_value() => {
-                for (by, begins) in [(0.5 * slop, 0), (2.0 * slop, 1)] {
+                // A part whose press sets the value begins its gesture at the press, within slop or not.
+                let on_press = fixture
+                    .root_id()
+                    .is_some_and(|id| crate::runtime::pointer::sensing_parts(fixture.ctx(), id, Sense::SETS_ON_PRESS).contains(&part));
+                for (by, begins) in [(0.5 * slop, usize::from(on_press)), (2.0 * slop, 1)] {
                     let mut fixture = input_fixture(story);
                     let Some(grip) = fixture.root_id().and_then(|id| fixture.part(id, part)) else { continue };
                     fixture.take_outputs();
@@ -62,6 +66,9 @@ fn slop_separates_click_from_drag(subject: &Subject) -> Result<(), String> {
                             "{}: a press moved {by} points (slop {slop}) began {started} drags, expected {begins}: {kinds:?}",
                             story.name
                         ));
+                    }
+                    if on_press && by < slop && kinds.last() != Some(&EditKind::Commit) {
+                        return Err(format!("{}: a press within slop that sets the value ended {kinds:?}, not with a Commit", story.name));
                     }
                 }
             }

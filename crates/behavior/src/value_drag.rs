@@ -138,7 +138,7 @@ impl ValueDrag {
         };
         let raw = match &self.mapping {
             Mapping::Absolute { track } => {
-                let at = |point: Pos2| self.fraction(point, track, rtl) * (self.range.end() - self.range.start()) + self.range.start();
+                let at = |point: Pos2| self.on_track(point, track, rtl);
                 if fine == 1.0 { at(pos) } else { start + (at(pos) - at(origin)) * fine }
             }
             Mapping::Relative { rate } => {
@@ -153,6 +153,20 @@ impl ValueDrag {
             }
         };
         Some(self.fit(raw))
+    }
+
+    /// The value at `pos` on an absolute drag's track, in the range: what a press there sets. `None` for a relative
+    /// drag, whose value comes from travel, not from a place. Horizontal travel mirrors when `rtl`.
+    pub fn at(&self, pos: Pos2, rtl: bool) -> Option<f64> {
+        match &self.mapping {
+            Mapping::Absolute { track } => Some(self.fit(self.on_track(pos, track, rtl))),
+            Mapping::Relative { .. } => None,
+        }
+    }
+
+    /// The value at `point` on `track`, before it is kept in the range.
+    fn on_track(&self, point: Pos2, track: &Range<f32>, rtl: bool) -> f64 {
+        self.fraction(point, track, rtl) * (self.range.end() - self.range.start()) + self.range.start()
     }
 
     fn along(&self, point: Pos2) -> f32 {

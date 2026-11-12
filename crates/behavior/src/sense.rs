@@ -38,6 +38,10 @@ bitflags! {
         /// A part of an item of a collection: an unmodified primary click on it also picks the item, as a click on the
         /// item's own area does. The part reports its own click as well.
         const PICKS_ITEM = 8192;
+        /// The press sets the value under the pointer: it begins a gesture at once, so a press released within slop
+        /// is a one-value gesture, not a click. Declared with `DRAG`: a drag moves the value with the pointer.
+        /// `Cx::follow_press` runs such a part's gesture.
+        const SETS_ON_PRESS = 16384;
     }
 }
 

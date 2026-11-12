@@ -1,10 +1,10 @@
 //! The `Edit` trait: edit gestures and their events, with the press facts a gesture reads.
 
 use super::context::{Cx, CxCore};
-use crate::contract::{Component, EditResponse, Validity, ValueOf};
+use crate::contract::{Component, EditResponse, Pointer as _, Validity, ValueOf};
 use crate::primitives::Adopted;
-use craft_behavior::{CancelReason, EditEvent, Gesture, GesturePhase, Mixed, PressCancel, PressPhase, Value};
-use egui::Id;
+use craft_behavior::{CancelReason, EditEvent, Gesture, GesturePhase, Mixed, PartRef, PointerButton, PressCancel, PressPhase, Sense, Value};
+use egui::{Id, Pos2};
 use std::sync::Arc;
 
 impl CxCore<'_> {
@@ -298,6 +298,39 @@ impl<C: Component> Edit for Cx<'_, C> {
                 Mixed::Mixed => None,
             };
             self.mixed = self.shown.is_none();
+        }
+    }
+}
+
+impl<C: Component> Cx<'_, C> {
+    /// Runs the gesture of `part`, a part declared with [`Sense::SETS_ON_PRESS`], whose value is what lies under the
+    /// pointer (a colour field, a point on a well): its primary press begins the gesture with the value `at` its
+    /// origin, shown in the press pass; a drag proposes the value `at` the pointer; the release proposes it and
+    /// commits, so a press released within slop is a one-value gesture. `at` gives `None` where the pointer names no
+    /// value. A press of another button is the caller's; a cancelled press ends the gesture through the press (the
+    /// update step).
+    pub fn follow_press(&mut self, part: impl Into<PartRef>, mut at: impl FnMut(Pos2) -> Option<ValueOf<C>>) {
+        let Some(result) = self.part_if_declared(part) else { return };
+        debug_assert!(result.sense.contains(Sense::SETS_ON_PRESS), "follow_press drives a part declared with Sense::SETS_ON_PRESS");
+        let press = result.press;
+        let Some(start) = press.phase.start().filter(|start| start.button == PointerButton::Primary) else { return };
+        match press.phase {
+            PressPhase::Down { .. } => match at(start.origin) {
+                Some(value) => self.propose(value),
+                None => self.begin(),
+            },
+            PressPhase::DragStart { pos, .. } | PressPhase::Drag { pos, .. } if self.gesture().is_some() => {
+                if let Some(value) = at(pos) {
+                    self.propose(value);
+                }
+            }
+            PressPhase::Release { pos, .. } if self.gesture().is_some() => {
+                if let Some(value) = at(pos) {
+                    self.propose(value);
+                }
+                self.commit();
+            }
+            _ => {}
         }
     }
 }

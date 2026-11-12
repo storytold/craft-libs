@@ -1,13 +1,12 @@
 //! [`ColorStrip`]: one component of a colour along a vertical strip, the others fixed.
 
-use super::channels::{QUANTIZE_CELLS, channel_range, channel_step, primary, quantized, settled, snapped};
+use super::channels::{QUANTIZE_CELLS, channel_range, channel_step, quantized, settled, snapped};
 use crate::AreaMode;
 use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps, step_value};
-use craft_behavior::{Axis, Metrics, NavMove, PartKey, PressPhase, Sense, ValueDrag};
+use craft_behavior::{Axis, Metrics, NavMove, PartKey, Sense, ValueDrag};
 use craft_theme::ModelValues;
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, Numeric, PaintUi, PartsCx, Pointer as _, Props as _,
-    Remember as _, Role,
+    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, Numeric, PaintUi, PartsCx, Props as _, Role,
 };
 use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
@@ -39,10 +38,6 @@ pub struct ColorStripStyle {
     /// The side of the square a pointer triangle fills.
     pointer_size: f32,
 }
-
-/// The value at the start of the running drag.
-#[derive(Clone, Default)]
-struct DragStart(f64);
 
 /// The component strip beside a colour picker's [`ColorArea`](super::ColorArea): the [`AreaMode`]'s strip component
 /// from its lowest value at the bottom to its highest at the top, the others fixed (PhotoCraft's component strip; hue
@@ -165,7 +160,10 @@ impl Component for ColorStrip<'_> {
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        cx.part(STRIP, rect).sense(Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS).value_part().pointer_only("the arrow keys step the value");
+        cx.part(STRIP, rect)
+            .sense(Sense::CLICK | Sense::DRAG | Sense::SETS_ON_PRESS | Sense::TAKE_FOCUS)
+            .value_part()
+            .pointer_only("the arrow keys step the value");
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, ModelValues>> {
@@ -178,31 +176,8 @@ impl Component for ColorStrip<'_> {
         let drag = ValueDrag::absolute(cx.rect.bottom()..cx.rect.top(), channel_range(model, channel)).axis(Axis::Y);
         let start_values = ModelValues::new(model.id(), &[]);
         let current = |cx: &Cx<'_, Self>| cx.value().copied().unwrap_or(start_values);
-        let press = cx.part(STRIP).press;
-        match press.phase {
-            PressPhase::DragStart { .. } if primary(&press) => {
-                cx.memory::<DragStart>().0 = f64::from(current(&*cx).values[channel]);
-                cx.begin();
-            }
-            PressPhase::Drag { .. } if primary(&press) => {
-                let from = cx.memory::<DragStart>().0;
-                if let Some(next) = drag.value(from, &press, false) {
-                    cx.propose(self.with(&current(&*cx), next));
-                }
-            }
-            PressPhase::Release { click, .. } if primary(&press) => {
-                if cx.gesture().is_some() {
-                    let from = cx.memory::<DragStart>().0;
-                    if let Some(next) = drag.value(from, &press, false) {
-                        cx.propose(self.with(&current(&*cx), next));
-                    }
-                    cx.commit();
-                } else if click && let Some(next) = drag.value(0.0, &press.mods(craft_keymap::Mods::NONE), false) {
-                    cx.set(self.with(&current(&*cx), next));
-                }
-            }
-            _ => {}
-        }
+        let base = current(&*cx);
+        cx.follow_press(STRIP, |pos| drag.at(pos, false).map(|value| self.with(&base, value)));
         // A running drag is one edit: keys and SetValue wait for it, and are still taken.
         let running = cx.gesture().is_some();
         while let Some((mv, mods)) = cx.intents().take_move() {
