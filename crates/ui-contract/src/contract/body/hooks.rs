@@ -138,6 +138,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         // The overlay host decides a layer's Escape; so does a full-window mount's.
         self.layer = matches!(props.mount, Mount::Layer(_) | Mount::Viewport { .. } | Mount::FullWindow);
         self.region_gap = gap_of(&env.tokens, Gap::Tight);
+        self.end_gap = gap_of(&env.tokens, props.end.map_or(Gap::Tight, |end| end.gap));
         self.header_gap = header_gap_of(props, &env.tokens);
         self.least_width = least_of(&env.tokens, props.least_width);
         let quiet = stage.is_peek() || crate::runtime::measure::active(&ctx);
@@ -317,6 +318,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.last = BodyView::default();
         self.offset = ScrollPos::default();
         self.region_gap = gap_of(&at.env.tokens, Gap::Tight);
+        self.end_gap = gap_of(&at.env.tokens, props.end.map_or(Gap::Tight, |end| end.gap));
         self.header_gap = header_gap_of(&props, &at.env.tokens);
         self.least_width = least_of(&at.env.tokens, props.least_width);
         self.room = match at.width {

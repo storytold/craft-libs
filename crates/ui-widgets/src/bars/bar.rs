@@ -77,10 +77,10 @@ impl Outcome for BarOutput {
 /// size, an options or status bar's at the small one. They are one roving group unless the bar is made of
 /// [`tab_stops`](Bar::tab_stops). The bar is as tall as its tallest member plus the control padding, and takes the
 /// width it is offered. A bar of one row lays its body out as a row; a bar of several rows as a stack whose rows the
-/// caller makes with `Row`. A row too long for the bar first narrows its selects and elidable text, then scrolls, so a
-/// member past the edge is reached by Tab and revealed. A rule between groups of members is a `Divider::vertical()`. A
-/// bar with `commit_cancel` ends with a cancel and a commit button in its end region, outside the scroll; they run
-/// `BarCommands`.
+/// caller makes with `Row`. A row too long for the bar first narrows its selects and elidable text, the last first,
+/// then scrolls, so a member past the edge is reached by Tab and revealed. A rule between groups of members is a
+/// `Divider::vertical()`. A bar with `commit_cancel` ends with a cancel and a commit button in its end region, outside
+/// the scroll and `space.gap.stack` from the body; they run `BarCommands`.
 #[derive(crate::contract::Component)]
 #[component(container)]
 pub struct Bar<'a> {
@@ -142,7 +142,7 @@ impl<'a> Bar<'a> {
     #[must_use]
     pub fn commit_cancel(mut self, commit: impl Into<Label>, cancel: impl Into<Label>) -> Self {
         self.commit_cancel = Some((commit.into(), cancel.into()));
-        self.props = self.props.end(EndRegion::new()).command_scope(BarCommands::SCOPE);
+        self.props = self.props.end(EndRegion::new().gap(Gap::Stack)).command_scope(BarCommands::SCOPE);
         self
     }
 
@@ -151,7 +151,7 @@ impl<'a> Bar<'a> {
     #[must_use]
     pub fn trailing(mut self, group: impl FnMut(&mut Ui) + 'a) -> Self {
         self.trailing = Some(Box::new(group));
-        self.props = self.props.end(EndRegion::new());
+        self.props = self.props.end(EndRegion::new().gap(Gap::Stack));
         self
     }
 }

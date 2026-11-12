@@ -384,17 +384,25 @@ pub struct EndRegion {
     /// Whether the region takes the full height under the header, down to the container's bottom, beside the body and
     /// the footer, instead of the line's height. Its content then starts at the top, else it is centred on the line.
     pub full_height: bool,
+    /// The gap between the body and the region.
+    pub gap: Gap,
 }
 
 impl EndRegion {
-    /// An end region as high as the line.
+    /// An end region as high as the line, `space.gap.tight` from the body.
     pub const fn new() -> Self {
-        EndRegion { full_height: false }
+        EndRegion { full_height: false, gap: Gap::Tight }
     }
 
     /// Whether the region takes the full height under the header.
     pub const fn full_height(mut self, on: bool) -> Self {
         self.full_height = on;
+        self
+    }
+
+    /// Sets the gap between the body and the region.
+    pub const fn gap(mut self, gap: Gap) -> Self {
+        self.gap = gap;
         self
     }
 }

@@ -380,7 +380,7 @@ impl<'b> BodyHooks<'b> {
             end.x.max(footer_w).min(width)
         });
         let taken = measured.unwrap_or(0.0);
-        let cut = if taken > 0.0 { taken + self.region_gap } else { 0.0 };
+        let cut = if taken > 0.0 { taken + self.end_gap } else { 0.0 };
         let end_w = measured.unwrap_or(width);
         let end_bottom = if full { footer_top + across_h } else { footer_top };
         let mut end = if rtl {

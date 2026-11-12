@@ -162,14 +162,14 @@ impl<'b> BodyHooks<'b> {
         let in_end = footer_in_end(props);
         let end = if in_end { Vec2::new(end.x.max(footer.x), end.y + footer.y) } else { end };
         let across = if in_end { Vec2::ZERO } else { footer };
-        let gap = |width: f32| if width > 0.0 { width + self.region_gap } else { 0.0 };
+        let gap = |width: f32, gap: f32| if width > 0.0 { width + gap } else { 0.0 };
         let inline = props.header.is_some_and(|header| header.inline);
         // The line: the body with an inline header before it.
-        let line = if inline { Vec2::new(body.x + gap(header.x), body.y.max(header.y)) } else { body };
+        let line = if inline { Vec2::new(body.x + gap(header.x, self.region_gap), body.y.max(header.y)) } else { body };
         let (width, height) = if end_full_height(props) {
-            (line.x.max(across.x) + gap(end.x), (line.y + across.y).max(end.y))
+            (line.x.max(across.x) + gap(end.x, self.end_gap), (line.y + across.y).max(end.y))
         } else {
-            ((line.x + gap(end.x)).max(across.x), line.y.max(end.y) + across.y)
+            ((line.x + gap(end.x, self.end_gap)).max(across.x), line.y.max(end.y) + across.y)
         };
         if inline { Vec2::new(width, height) } else { Vec2::new(width.max(header.x), height + header.y + self.header_space(header.y)) }
     }

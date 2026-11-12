@@ -64,6 +64,8 @@ pub(super) struct BodyHooks<'b> {
     open_given: bool,
     /// The gap between an inline header and the body, and between a header and its trailing region.
     region_gap: f32,
+    /// The gap between the body and the end region (`EndRegion::gap`).
+    end_gap: f32,
     /// The space between a stacked header and the body (`HeaderRegion::gap`), zero without one.
     header_gap: f32,
     /// The least width of the content, from `ContainerProps::least_width`.
@@ -143,6 +145,7 @@ impl<'b> BodyHooks<'b> {
             reuse: false,
             open_given: false,
             region_gap: 0.0,
+            end_gap: 0.0,
             header_gap: 0.0,
             least_width: 0.0,
             overflow: 0.0,
