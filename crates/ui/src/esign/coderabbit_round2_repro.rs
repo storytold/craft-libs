@@ -81,9 +81,13 @@ fn status_for_the_current_document_is_not_consumed_by_an_outstanding_send_from_a
     let (mut dialog, hold) = ready();
 
     // Document A's send is taken by the app but never submitted: its captured
-    // context stays pending.
+    // context stays pending. The `send` helper would submit the create and
+    // consume that context, which is exactly what this test must avoid.
     dialog.open("doc-A".into(), "A.pdf".into(), None, who("alice"));
-    send(&mut dialog, b"A bytes");
+    dialog.add_email("bob@example.com".into());
+    dialog.queue_send();
+    let taken = dialog.take_send_request();
+    assert!(taken.is_some(), "A's send request was taken, leaving its context pending");
 
     // The dialog moves on to document B, which already has an envelope the
     // host wants a status for.
