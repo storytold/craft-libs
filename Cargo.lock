@@ -1797,6 +1797,7 @@ dependencies = [
  "craft-xml",
  "proptest",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
