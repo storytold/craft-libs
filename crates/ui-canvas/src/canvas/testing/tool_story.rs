@@ -230,13 +230,16 @@ pub struct ToolRun<'a, T, D, R> {
 /// The tool host of a tool story's canvas for one pass.
 pub struct StoryHost<'a> {
     ui: &'a Ui,
-    canvas: &'a CanvasOutput,
+    /// `None` in the stage's measuring run, which shows no canvas.
+    canvas: Option<&'a CanvasOutput>,
 }
 
 impl StoryHost<'_> {
-    /// Runs `tool` as the canvas's active tool, as an app's [`ToolHost::run`] does.
+    /// Runs `tool` as the canvas's active tool, as an app's [`ToolHost::run`] does. In the stage's measuring run there
+    /// is no canvas and the tool does not run; the story still returns its readout from the tool's state, so the card
+    /// measures the readout line.
     pub fn run(&self, tool: &mut dyn CanvasTool) -> ToolHostResponse {
-        ToolHost::new().run(self.ui, self.canvas, tool)
+        self.canvas.map_or_else(ToolHostResponse::default, |canvas| ToolHost::new().run(self.ui, canvas, tool))
     }
 }
 
@@ -293,9 +296,14 @@ pub fn tool_story<T: 'static, D: Value, R>(
                 }
             });
         };
-        // A measuring run of the stage runs no body: no canvas, so no tool runs either.
+        // A measuring run of the stage runs no body: no canvas, so no tool runs either, but the story's output (its
+        // readout) still comes from the tool's state.
         let stage = Stack::new().fill().footer(row).footer_gap(Gap::Stack).show_at(ui, room, |ui, stack| canvas(ui, stack.rect));
-        let Some(shown) = stage.inner else { return StoryOutput::default() };
+        let Some(shown) = stage.inner else {
+            let view = story.view_of(room, pixels_per_point);
+            let mut tool = kept.borrow_mut();
+            return run(ToolRun { tool: &mut tool, document, shown: None, view, pressed: None, host: StoryHost { ui, canvas: None } });
+        };
         shown
     };
     if let Some(script) = &story.play {
@@ -319,7 +327,7 @@ pub fn tool_story<T: 'static, D: Value, R>(
     }
     let output = {
         let mut tool = kept.borrow_mut();
-        run(ToolRun { tool: &mut tool, document, shown: shown.inner, view, pressed, host: StoryHost { ui, canvas: &shown.output } })
+        run(ToolRun { tool: &mut tool, document, shown: shown.inner, view, pressed, host: StoryHost { ui, canvas: Some(&shown.output) } })
     };
     *data.note::<Option<Playing>>("play", None) = playing;
     output
