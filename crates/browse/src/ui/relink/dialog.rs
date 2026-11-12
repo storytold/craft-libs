@@ -862,10 +862,10 @@ impl<K: Clone + PartialEq + Send + Sync + 'static> Model<K> {
             .select(SelectMode::Single)
             .selection(Bind::bound(&mut selection))
             .sort(self.layout.sort.clone())
-            .sizing(Sizing::Content)
             .show_items(ui, &source, &mut |&row, icx| {
                 let data = &rows[row];
                 ListRow::new(data.owner.clone())
+                    .cells(icx.cells())
                     .columns(&columns)
                     .striped(icx.at % 2 == 1)
                     .cell(FILE_NAME, file_name(&data.link.stored).to_owned())
