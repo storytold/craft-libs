@@ -75,19 +75,26 @@ fn on_canvas<'a>(ui: &mut Ui, data: &mut StoryData, rect: Rect, handles: impl Fn
         (handles(body.rect).show_at(ui, body.rect), name_clicked)
     });
     let last = data.note("clicked", None::<(AddSide, bool)>);
-    let Some((output, name_clicked)) = shown.inner else { return StoryOutput::default() };
-    if let Some(side) = output.added {
-        *last = Some((side, output.copy));
-    }
+    // A measuring run shows no canvas body; the readout still shows, so the card keeps its line.
+    let (facts, hovered) = match shown.inner {
+        Some((output, name_clicked)) => {
+            if let Some(side) = output.added {
+                *last = Some((side, output.copy));
+            }
+            let hovered = output.hovered;
+            // The artboard's name is a button too: its click is a click of the story.
+            let mut facts = StoryOutput::from(output);
+            facts.clicked |= name_clicked;
+            (facts, hovered)
+        }
+        None => (StoryOutput::default(), None),
+    };
     let named = |template: &str, side: AddSide| craft_i18n::fmt(template, &[("side", side_name(&sides, side))]);
-    let readout = match (output.hovered, *last) {
+    let readout = match (hovered, *last) {
         (Some(side), _) => named(words.hovered.as_str(), side),
         (None, Some((side, copy))) => named(if copy { words.copy.as_str() } else { words.clicked.as_str() }, side),
         (None, None) => words.none.as_str().to_owned(),
     };
-    // The artboard's name is a button too: its click is a click of the story.
-    let mut facts = StoryOutput::from(output);
-    facts.clicked |= name_clicked;
     facts.readout(readout)
 }
 

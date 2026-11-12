@@ -56,6 +56,11 @@ impl TransformKept {
     }
 }
 
+/// The persisted settings the story starts from: the defaults with Show Reference Point on, so the point shows.
+fn sample_settings() -> TransformSettings {
+    TransformSettings { show_reference_point: true, ..TransformSettings::default() }
+}
+
 /// A session on the layer, its box at `state`.
 fn open(state: BoxState, settings: &TransformSettings) -> TransformSession<()> {
     TransformSession::with_state(FRAME, state).settings(settings)
@@ -67,9 +72,9 @@ fn open(state: BoxState, settings: &TransformSettings) -> TransformSession<()> {
 #[story(TransformOverlay<'static, ()>, covers = [Default])]
 fn transform_phase(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let words = Env::of(ui).words::<TransformStoryWords>();
-    let first = data.value("settings", TransformSettings::default()).clone();
+    let first = data.value("settings", sample_settings()).clone();
     let kept = story_tool(data, || TransformKept::new(&first));
-    let settings = data.value("settings", TransformSettings::default());
+    let settings = data.value("settings", sample_settings());
     // The bar shows before the canvas, as the app's options bar does: its edits reach the session on this pass.
     let bar = TransformBar::new("Free Transform", &kept.borrow().session, Bind::bound(settings)).show(ui);
     let settings = settings.clone();
