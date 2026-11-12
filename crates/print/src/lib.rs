@@ -18,6 +18,8 @@ mod tests;
 mod ticket;
 #[cfg(windows)]
 mod windows;
+#[cfg(any(test, windows))]
+mod xml;
 
 /// Native Windows driver settings, printable geometry and explicit RGB/GDI transport.
 /// Callers perform ICC conversion and compose page pixels/vector strokes. Other platforms
