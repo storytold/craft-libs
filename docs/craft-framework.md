@@ -214,12 +214,12 @@ Native-only modules use `#[cfg(not(target_arch = "wasm32"))]`. A crate that cann
 | Facade | One dependency for apps | `craft` |
 | UI library | Shared UI infrastructure ([3.2](#32-the-ui-library-crates)) | `craft-ui` (facade), `craft-ui-contract`, `craft-ui-widgets`, `craft-ui-panels`, `craft-ui-canvas`, `craft-ui-patterns`, `craft-ui-shell`, `craft-ui-macros`, `craft-behavior` |
 | Domain families | Features with core logic and egui UI | `craft-color`, `craft-draw`, `craft-imaging`, `craft-layers`, `craft-browse`, `craft-text`, `craft-font-manager`, `craft-pages`, `craft-review`, `craft-table`, `craft-timeline`; planned: `craft-code` |
-| Infrastructure services | Egui-free logic that families and apps share | `craft-theme`, `craft-theme-store`, `craft-host`, `craft-i18n`, `craft-settings`, `craft-keymap`, `craft-menu`, `craft-automation`, `craft-update`, `craft-cms`, `craft-ai-core`, `craft-atomic`, `craft-docpath`, `craft-font-catalog`, `craft-font-store`, `craft-pdf`, `craft-prepress`, `craft-proof` |
+| Infrastructure services | Egui-free logic that families and apps share | `craft-theme`, `craft-theme-store`, `craft-host`, `craft-i18n`, `craft-settings`, `craft-keymap`, `craft-menu`, `craft-automation`, `craft-update`, `craft-cms`, `craft-ai-core`, `craft-atomic`, `craft-docpath`, `craft-font-catalog`, `craft-font-store`, `craft-font-subset` (with its FFI crate `harfbuzz-subset-sys`), `craft-pdf`, `craft-prepress`, `craft-proof` |
 | Formats and codecs | Clean-room readers and writers | `craft-audio`, `craft-crw`, `craft-jpeg`, `craft-media`, `craft-doc`, `craft-ecproj-format`, `craft-pcraft-format`, `craft-vectorcraft-format` |
 | Platform adapters | One operating-system, window-system or browser service each | `craft-platform`, `craft-dialogs`, `craft-window`, `craft-win32`, `craft-quit`, `craft-print`, `craft-web-api`, `craft-web-host`; next: `craft-gpu` |
 | Tooling | Not shipped in apps | `craft-ui-gallery`, `story-render`, `feature-root`, `craft-ui-bench`, `craft-ui-test-kit`, `craft-design-lint`, `craft-plate-test`, `craft-fonts-build`, `craft-media-testkit` |
 
-`craft-win32` is the one crate that allows `unsafe` code: it wraps the Win32 window-procedure subclassing and window-handle calls behind a safe API, so no other crate needs `unsafe`. The workspace lint table sets `unsafe_code = "forbid"`; craft-win32 sets it to `deny` and allows it in `lib.rs`, and the design-lint rule `contract/unsafe-allow` names it. The benchmark's counting allocator (`craft-ui-bench`, `src/alloc.rs`) is the other allowed site.
+Two crates allow `unsafe` code, each wrapping foreign calls behind a safe API so no other crate needs `unsafe`: `craft-win32` (the Win32 window-procedure subclassing and window-handle calls) and `harfbuzz-subset-sys` (the vendored HarfBuzz subsetter, wrapped in its `safe` module for `craft-font-subset`). The workspace lint table sets `unsafe_code = "forbid"`; these two set it to `deny` and allow it in `lib.rs`, and the design-lint rule `contract/unsafe-allow` names them. The benchmark's counting allocator (`craft-ui-bench`, `src/alloc.rs`) is the other allowed site.
 
 Services and adapters may carry a `ui` feature (`craft-keymap`, `craft-update`, `craft-dialogs`) but name no document concept. Module tables: [Appendix B](#appendix-b-crate-and-module-layout).
 
@@ -962,7 +962,7 @@ Conventions:
 - Types carry their full name (`LayersPanel`, not `layers::Panel`), so they read the same wherever they are imported.
 - In a family crate, a module `ui::x` is the egui side and a bare `x` is core.
 
-28 crates are new relative to storytold main: `craft`, `craft-automation`, `craft-behavior`, `craft-browse`, `craft-color`, `craft-design-lint`, `craft-draw`, `craft-host`, `craft-imaging`, `craft-layers`, `craft-pages`, `craft-review`, `craft-table`, `craft-theme`, `craft-theme-store`, `craft-timeline`, `craft-ui-bench`, `craft-ui-canvas`, `craft-ui-contract`, `craft-ui-gallery`, `craft-ui-macros`, `craft-ui-panels`, `craft-ui-patterns`, `craft-ui-shell`, `craft-ui-test-kit`, `craft-ui-widgets`, `craft-win32` and `story-render`. `craft-ui` keeps upstream's package name as the library's facade. `craft-gpu` is the next step, and `craft-code` is planned.
+30 crates are new relative to storytold main: `craft`, `craft-automation`, `craft-behavior`, `craft-browse`, `craft-color`, `craft-design-lint`, `craft-draw`, `craft-font-subset`, `craft-host`, `craft-imaging`, `craft-layers`, `craft-pages`, `craft-review`, `craft-table`, `craft-theme`, `craft-theme-store`, `craft-timeline`, `craft-ui-bench`, `craft-ui-canvas`, `craft-ui-contract`, `craft-ui-gallery`, `craft-ui-macros`, `craft-ui-panels`, `craft-ui-patterns`, `craft-ui-shell`, `craft-ui-test-kit`, `craft-ui-widgets`, `craft-win32`, `harfbuzz-subset-sys` and `story-render`. `craft-ui` keeps upstream's package name as the library's facade. `craft-gpu` is the next step, and `craft-code` is planned.
 
 ### Facade features
 
@@ -1234,6 +1234,16 @@ The font store: indexes, exact lookup, verified installs into the suite's font f
 | `pin` | The index commit and hash this build trusts | exists |
 | `store` | Store folder, consent, installs, manifest, removal | exists |
 | `verify` | Checks a file against its index entry | exists |
+
+#### craft-font-subset
+
+The one font subsetter, on HarfBuzz through `harfbuzz-subset-sys`: glyph closure, CFF and CFF2, variable-font instancing, licence-aware renaming and WOFF2. Native only. New on the branch.
+
+| Module | Holds | State |
+| --- | --- | --- |
+| crate root | `subset` (renamed WOFF2 for previews), `subset_renamed`, `encode_woff2`; `cut_face` (one face cut to a character set, every feature kept, for build-time interface faces) | exists |
+| `closure` | Characters a shaper may need beyond the text | exists |
+| `codepoints` | The canonical codepoint list of on-demand preview URLs | exists |
 
 #### craft-fonts-build
 
@@ -1737,3 +1747,7 @@ Decides who draws the window frame, makes an app-drawn strip act as the title ba
 | `restore` | Window restore | exists |
 | `title_bar` | An app strip as the title bar | exists |
 | `viewports` | Immediate viewports per window | exists |
+
+#### harfbuzz-subset-sys
+
+The HarfBuzz subsetter built from vendored source (`harfbuzz/`, release and checksum in its README; `scripts/update-harfbuzz.sh` replaces it): raw declarations at the root and safe wrappers in `safe`. It and craft-win32 are the two crates that allow `unsafe` code ([3.4](#34-crate-taxonomy)). Native only.

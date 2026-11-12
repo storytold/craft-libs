@@ -1,0 +1,30 @@
+[package]
+name = "harfbuzz-subset-sys"
+description = "The HarfBuzz subsetter, built from vendored source: raw declarations and the safe wrappers craft-font-subset uses, so no other crate needs `unsafe`. Native only."
+version.workspace = true
+edition.workspace = true
+# The Rust code is the repository's; the vendored HarfBuzz source (harfbuzz/) is HarfBuzz's "Old MIT" licence
+# (harfbuzz/COPYING).
+license = "(MIT OR Apache-2.0) AND MIT-Modern-Variant"
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+links = "harfbuzz-subset"
+
+[build-dependencies]
+cc = "1"
+
+# The workspace table with `unsafe_code` at `deny`: `lib.rs` allows it for the FFI calls, and design-lint's
+# `contract/unsafe-allow` rule names this crate's source as one of the places that may. Cargo cannot override one
+# workspace lint.
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(craft_pdf_unicode_fixtures)"] }
+
+[lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
+dbg_macro = "warn"
+todo = "warn"

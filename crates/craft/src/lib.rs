@@ -37,6 +37,8 @@ pub use craft_font_catalog as font_catalog;
 pub use craft_font_manager as font_manager;
 #[cfg(feature = "font-store")]
 pub use craft_font_store as font_store;
+#[cfg(feature = "font-subset")]
+pub use craft_font_subset as font_subset;
 pub use craft_host as host;
 pub use craft_i18n as i18n;
 #[cfg(feature = "imaging")]

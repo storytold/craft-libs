@@ -62,6 +62,15 @@ fn every_reject_fixture_fails_with_exactly_its_rules() {
 }
 
 #[test]
+fn unsafe_allow_is_accepted_only_in_the_ffi_crates() {
+    let src = fixture("reject", "contract-unsafe-allow.rs");
+    for path in ["crates/win32/src/lib.rs", "crates/harfbuzz-subset-sys/src/safe.rs", "crates/ui-bench/src/alloc.rs"] {
+        assert!(rules_at(&src, path, &scope()).is_empty(), "{path}");
+    }
+    assert_eq!(rules_at(&src, "crates/font-subset/src/lib.rs", &scope()), ["contract/unsafe-allow"]);
+}
+
+#[test]
 fn accept_fixtures_pass() {
     for file in ["behavior-pipeline-only.rs", "props.rs", "style.rs", "entry.rs"] {
         let findings = analyze_contract(&fixture("accept", file), Path::new(FAMILY), &scope(), false);

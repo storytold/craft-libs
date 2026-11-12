@@ -33,6 +33,7 @@ craft-ecproj-format = { workspace = true, optional = true }
 craft-font-catalog = { workspace = true, optional = true }
 craft-font-manager = { workspace = true, optional = true }
 craft-font-store = { workspace = true, optional = true }
+craft-font-subset = { workspace = true, optional = true }
 craft-imaging = { workspace = true, optional = true }
 craft-jpeg = { workspace = true, optional = true }
 craft-keymap = { workspace = true, optional = true }
@@ -147,6 +148,8 @@ font-manager = ["dep:craft-font-manager"] # native only: needs craft-font-store'
 
 font-store = ["dep:craft-font-store"]
 font-store-bundled-index = ["font-store", "craft-font-store/bundled-index"]
+
+font-subset = ["dep:craft-font-subset"] # native only: HarfBuzz's C++ builds with the target's C++ compiler
 
 i18n-collate = ["craft-i18n/collate"]
 

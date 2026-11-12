@@ -69,6 +69,8 @@ craft-html = { path = "crates/html" }
 craft-heif = { path = "crates/heif" }
 craft-fig = { path = "crates/fig" }
 craft-fonts-build = { path = "crates/fonts-build" }
+craft-font-subset = { path = "crates/font-subset" }
+harfbuzz-subset-sys = { path = "crates/harfbuzz-subset-sys" }
 craft-host = { path = "crates/host" }
 craft-i18n = { path = "crates/i18n" }
 craft-idml = { path = "crates/idml" }
