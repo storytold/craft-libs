@@ -2188,7 +2188,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn labelled<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, label: Label, side: SideLabel, child: C) -> C::Output`. Runs the label step (B2) for one leaf child at `rect`: the label's placement beside or above the child, the
   - `pub fn face<C: Show>(&mut self, part: impl Into<PartRef>, face: C)`. Paints `face` as the look of `part`: its style, surface and state fill from the part's state merged with the
   - `pub fn face_in<C: Show>(&mut self, part: impl Into<PartRef>, face: C, ink: &Stateful<StyleColor>)`. `face`, for a face on a fill the composite draws for that part alone (a plate over a picture): the face reads
-  - `pub fn content_painter<C: ContentPainter>(&self, cx: &Cx<'_, C>) -> ContentPainterCx<'_>`. The raw painter for an allowlisted content painter, clipped to the component's own rect.
+  - `pub fn content_painter<C: ContentPainter>(&self, cx: &Cx<'_, C>) -> ContentPainterCx<'_>`. The raw painter for an allowlisted content painter, clipped to the component's own rect. Its data paths paint
 - `craft_ui::contract::PaneEdge`: `pub enum PaneEdge { Center, Start, End, Top, Bottom }`. Where a shell pane sits.
 - `craft_ui::contract::PartBuilder`: `pub struct PartBuilder<'a>`. A part as `PartsCx::part` declares it; the builder sets its flags.
   - `pub fn sense(self, sense: Sense) -> Self`. What the part senses; hover only by default.
