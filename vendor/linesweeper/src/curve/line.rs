@@ -8,7 +8,13 @@ fn line_at_ys(line: Line, y0: f64, y1: f64) -> (f64, f64) {
     let dy = line.p1.y - line.p0.y;
     let (t0, t1) = if dy.is_finite() {
         let dy_recip = dy.recip();
-        ((y0 - line.p0.y) * dy_recip, (y1 - line.p0.y) * dy_recip)
+        if dy_recip.is_finite() {
+            ((y0 - line.p0.y) * dy_recip, (y1 - line.p0.y) * dy_recip)
+        } else {
+            // The reciprocal of a height below about 5.6e-309 is above f64::MAX,
+            // so divide by the height instead.
+            ((y0 - line.p0.y) / dy, (y1 - line.p0.y) / dy)
+        }
     } else {
         // The line is more than f64::MAX tall, so work with half of each height.
         let dy_recip = (line.p1.y * 0.5 - line.p0.y * 0.5).recip();
@@ -222,6 +228,17 @@ mod tests {
         assert!((-1e303..0.0).contains(&order.cmps[0].end), "{order:?}");
         assert!((0.0..1e303).contains(&order.cmps[1].end), "{order:?}");
         assert_eq!(order.cmps[2].end, 1e308);
+    }
+
+    #[test]
+    fn subnormal_height() {
+        let h = 1e-310;
+        let l0 = Line::new((0.0, 0.0), (0.0, h));
+        let l1 = Line::new((1.0, 0.0), (1.0, h));
+        let order = intersect_lines(l0, l1, 1e-6);
+        assert_eq!(order.cmps.len(), 1);
+        assert_eq!(order.cmps[0].order, Order::Left);
+        assert_eq!(order.cmps[0].end, h);
     }
 
     #[test]
