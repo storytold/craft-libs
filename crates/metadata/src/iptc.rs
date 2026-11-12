@@ -13,6 +13,67 @@ fn decode(b: &[u8], utf8: bool) -> String {
     }
 }
 
+fn decimal_pair(bytes: &[u8]) -> Option<u16> {
+    let [tens, ones] = bytes else { return None };
+    if !tens.is_ascii_digit() || !ones.is_ascii_digit() {
+        return None;
+    }
+    Some(u16::from(*tens - b'0') * 10 + u16::from(*ones - b'0'))
+}
+
+fn parse_created(date: Option<&str>, time: Option<&str>) -> Option<DateTime> {
+    let date = date.filter(|value| value.len() == 8 && value.bytes().all(|byte| byte.is_ascii_digit()))?;
+    let time = time.filter(|value| !value.is_empty());
+    if let Some(time) = time {
+        let bytes = time.as_bytes();
+        let clock = bytes.get(..6)?;
+        if !clock.iter().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        let hour = decimal_pair(clock.get(..2)?)?;
+        let minute = decimal_pair(clock.get(2..4)?)?;
+        let second = decimal_pair(clock.get(4..6)?)?;
+        if hour > 23 || minute > 59 || second > 59 {
+            return None;
+        }
+        match bytes.len() {
+            // IPTC-IIM permits a local wall-clock form, but without an offset
+            // it is ambiguous; retain the date and omit this time.
+            6 => {}
+            11 => {
+                let offset = bytes.get(6..11)?;
+                if !matches!(offset.first().copied(), Some(b'+' | b'-')) || !offset.get(1..)?.iter().all(|byte| byte.is_ascii_digit()) {
+                    return None;
+                }
+                let offset_hour = decimal_pair(offset.get(1..3)?)?;
+                let offset_minute = decimal_pair(offset.get(3..5)?)?;
+                if offset_hour > 18 || offset_minute > 59 || (offset_hour == 18 && offset_minute != 0) {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+
+    let mut iso = format!("{}-{}-{}", date.get(..4)?, date.get(4..6)?, date.get(6..8)?);
+    if let Some(time) = time.filter(|time| time.len() == 11) {
+        let bytes = time.as_bytes();
+        iso.push('T');
+        iso.push_str(time.get(..2)?);
+        iso.push(':');
+        iso.push_str(time.get(2..4)?);
+        iso.push(':');
+        iso.push_str(time.get(4..6)?);
+        if bytes.len() == 11 {
+            let offset = time.get(6..)?;
+            iso.push_str(offset.get(..3)?);
+            iso.push(':');
+            iso.push_str(offset.get(3..)?);
+        }
+    }
+    DateTime::parse_iso(&iso)
+}
+
 /// Parse an IIM stream into the fields [`Metadata`] carries (title, keywords, artist, copyright, caption,
 /// creation date/time).
 pub fn parse_iptc(b: &[u8]) -> Metadata {
@@ -57,16 +118,7 @@ pub fn parse_iptc(b: &[u8]) -> Metadata {
         }
         i = at + size;
     }
-    if let Some(d) = date.filter(|d| d.len() == 8 && d.bytes().all(|c| c.is_ascii_digit())) {
-        let mut s = format!("{}-{}-{}", &d[..4], &d[4..6], &d[6..8]);
-        if let Some(t) = time.filter(|t| t.is_ascii() && t.len() >= 6 && t[..6].bytes().all(|c| c.is_ascii_digit())) {
-            s += &format!("T{}:{}:{}", &t[..2], &t[2..4], &t[4..6]);
-            if t.len() >= 11 {
-                s += &format!("{}:{}", &t[6..9], &t[9..11]);
-            }
-        }
-        m.capture_time = DateTime::parse_iso(&s);
-    }
+    m.capture_time = parse_created(date.as_deref(), time.as_deref());
     m
 }
 
@@ -117,6 +169,61 @@ pub(crate) mod tests {
         assert_eq!(m.copyright.as_deref(), Some("CC0"));
         assert_eq!(m.caption.as_deref(), Some("A caption"));
         assert_eq!(m.capture_time.unwrap().to_iso(), "2021-03-04T10:11:12+01:00");
+    }
+
+    fn capture_time(time: Option<&[u8]>) -> Metadata {
+        let mut iim = Vec::new();
+        ds(&mut iim, 2, 55, b"20260101");
+        if let Some(time) = time {
+            ds(&mut iim, 2, 60, time);
+        }
+        ds(&mut iim, 2, 5, b"kept title");
+        ds(&mut iim, 2, 25, b"kept keyword");
+        parse_iptc(&iim)
+    }
+
+    #[test]
+    fn iptc_time_created_rejects_incomplete_or_trailing_text() {
+        for time in [
+            &b"121314+01"[..],
+            b"121314junk",
+            b"12A314",
+            b"12131499",
+            b"121314+0100junk",
+            b"121314+",
+            b"121314+010",
+            b"121314+01000",
+            b"12345",
+            b"240000",
+            b"250000+0100",
+            b"126100+0100",
+            b"235960",
+            b"235960+0000",
+            b"121314+1801",
+        ] {
+            let metadata = capture_time(Some(time));
+            assert_eq!(metadata.capture_time, None, "accepted malformed Time Created {time:?}");
+            assert_eq!(metadata.title.as_deref(), Some("kept title"), "unrelated metadata was lost for {time:?}");
+            assert_eq!(metadata.keywords, ["kept keyword"], "unrelated metadata was lost for {time:?}");
+        }
+    }
+
+    #[test]
+    fn iptc_time_created_preserves_supported_forms() {
+        let cases: &[(Option<&[u8]>, Option<&str>)] = &[
+            (None, Some("2026-01-01T00:00:00")),
+            (Some(b""), Some("2026-01-01T00:00:00")),
+            (Some(b" \t"), Some("2026-01-01T00:00:00")),
+            (Some(b"121314"), Some("2026-01-01T00:00:00")),
+            (Some(b"121314+0100"), Some("2026-01-01T12:13:14+01:00")),
+            (Some(b"121314-0530"), Some("2026-01-01T12:13:14-05:30")),
+            (Some(b"121314+1800"), Some("2026-01-01T12:13:14+18:00")),
+            (Some(b" 121314+0000 \0"), Some("2026-01-01T12:13:14+00:00")),
+        ];
+        for (time, expected) in cases {
+            let metadata = capture_time(*time);
+            assert_eq!(metadata.capture_time.map(|value| value.to_iso()).as_deref(), *expected, "Time Created {time:?}");
+        }
     }
 
     #[test]

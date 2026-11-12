@@ -45,7 +45,7 @@ fn simple_fill(w: &mut Writer, f: &Fill) {
         }
         Fill::Gradient(_) | Fill::Picture(_) | Fill::Group | Fill::Background => {
             if let Fill::Gradient(g) = f
-                && let Some(s) = g.stops.first()
+                && let Some(s) = g.sorted_stops().first()
             {
                 dml::solid(w, &s.color);
             }

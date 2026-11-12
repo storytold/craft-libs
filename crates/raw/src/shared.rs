@@ -87,11 +87,11 @@ pub(crate) fn white_from_data(data: &[u16], bits: u32) -> f32 {
     }
 }
 
-#[cfg(feature = "rw2")]
+#[cfg(any(feature = "rw2", feature = "arw"))]
 /// Output radii sampled to fit a radial warp.
 const DISTORTION_SAMPLES: usize = 64;
 
-#[cfg(feature = "rw2")]
+#[cfg(any(feature = "rw2", feature = "arw"))]
 /// Least-squares radial warp from a camera's forward distortion map.
 ///
 /// `corrected` maps a source radius to the output radius it lands at; it must rise monotonically up to `t_max`, the
@@ -133,7 +133,7 @@ pub(crate) fn warp_from_forward_map(corrected: &dyn Fn(f64) -> f64, t_max: f64, 
     fit_radial_warp(&|u| source(u * t_max), max_fit_error, 1.0)
 }
 
-#[cfg(feature = "rw2")]
+#[cfg(any(feature = "rw2", feature = "arw"))]
 /// Least-squares `source = u·(k0 + k1u² + k2u⁴ + k3u⁶)` through `source_of_u` sampled at `u = i/64`, i = 0..=64
 /// (`u` = output radius, `WarpRectilinear` units, so the result is directly a plane's `[k0, k1, k2, k3]`). `None` when
 /// a sample is not finite, the normal equations are singular, or the worst fit error at the samples up to the first
@@ -173,7 +173,7 @@ pub(crate) fn fit_radial_warp(source_of_u: &dyn Fn(f64) -> f64, max_fit_error: f
     (worst <= max_fit_error).then_some(k)
 }
 
-#[cfg(feature = "rw2")]
+#[cfg(any(feature = "rw2", feature = "arw"))]
 /// Solve the 4 × 4 system `a·x = b` (Gaussian elimination with partial pivoting); `None` when singular or not finite.
 fn solve4(mut a: [[f64; 4]; 4], mut b: [f64; 4]) -> Option<[f64; 4]> {
     for c in 0..4 {
@@ -300,7 +300,7 @@ pub(crate) mod tests {
         assert!((13500.0..=13583.0).contains(&w), "{w}");
     }
 
-    #[cfg(feature = "rw2")]
+    #[cfg(any(feature = "rw2", feature = "arw"))]
     #[test]
     fn warp_from_forward_map_recovers_identity_and_rejects_folds() {
         let k = warp_from_forward_map(&|r| r, 1.0, 1e-9).unwrap();
@@ -329,7 +329,7 @@ pub(crate) mod tests {
         assert!(warp_from_forward_map(&|_| f64::NAN, 1.0, 1e-3).is_none());
     }
 
-    #[cfg(feature = "rw2")]
+    #[cfg(any(feature = "rw2", feature = "arw"))]
     #[test]
     fn fit_radial_warp_identity_and_gate() {
         let k = fit_radial_warp(&|u| u, 1e-9, 1.0).unwrap();

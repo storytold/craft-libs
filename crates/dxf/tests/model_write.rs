@@ -5,9 +5,9 @@ use std::collections::HashSet;
 use craft_dxf::model::text::{MText, MTextColumns};
 use craft_dxf::model::write::{BlockDef, Drawing, Format, entity_tags, fixed};
 use craft_dxf::model::{
-    Attrib, Color, Common, DashElement, Dimension, Document, Entity, EntityKind, Gradient, Hatch, HatchEdge, HatchLoop, HatchPath, Image, Insert,
-    Layer, Leader, Linetype, Lineweight, LwPolyline, LwVertex, PatternLine, Polyline, Spline, Text, TextStyle, Transparency, Vertex, Viewport,
-    records,
+    Attrib, Color, Common, DashElement, Dimension, Document, Entity, EntityKind, Gradient, Hatch, HatchEdge, HatchLoop, HatchPath, Helix, Image,
+    Insert, Layer, Leader, Linetype, Lineweight, LwPolyline, LwVertex, PatternLine, Polyline, Spline, Text, TextStyle, Transparency, Vertex,
+    Viewport, records,
 };
 use craft_dxf::{Tag, parse, write_ascii_as};
 
@@ -236,6 +236,27 @@ fn sample(full: bool) -> Vec<Entity> {
             end_tangent: Some([0.0, 1.0, 0.0]),
             fit_tolerance: 0.01,
         })),
+        e(EntityKind::Helix(Helix {
+            spline: Spline {
+                degree: 3,
+                flags: 0,
+                knots: vec![0.0, 1.0],
+                control: vec![p(0.0), p(1.0)],
+                weights: vec![],
+                fit: vec![],
+                start_tangent: None,
+                end_tangent: None,
+                fit_tolerance: 0.0,
+            },
+            axis_base: p(1.0),
+            start: p(2.0),
+            axis: [0.0, 0.0, 1.0],
+            radius: 2.0,
+            turns: 3.0,
+            turn_height: 1.5,
+            ccw: false,
+            constrain: 1,
+        })),
         e(EntityKind::Ray { base: p(1.0), direction: [0.0, 1.0, 0.0] }),
         e(EntityKind::XLine { base: p(1.0), direction: [1.0, 0.0, 0.0] }),
         e(EntityKind::Text(text("10^2\tm"))),
@@ -373,8 +394,8 @@ fn owners_are_the_space_the_entity_is_in() {
     let back = read_back(&tags);
     assert_eq!(back[0].common.owner, Some(fixed::PAPER_RECORD), "a paper space entity");
     assert_eq!(back[1].common.owner, Some(fixed::MODEL_RECORD));
-    let EntityKind::Insert(i) = &back[17].kind else { panic!("an insert") };
-    assert_eq!(i.attribs[0].0.owner, back[17].common.handle, "an attribute is owned by its insert");
+    let EntityKind::Insert(i) = &back[18].kind else { panic!("an insert") };
+    assert_eq!(i.attribs[0].0.owner, back[18].common.handle, "an attribute is owned by its insert");
     assert_eq!((back[0].common.handle, i.attribs[0].0.handle), (Some(0x500), Some(0x501)), "given handles are kept");
 }
 
@@ -592,7 +613,7 @@ fn the_file_around_the_content() {
 
 #[test]
 fn one_entity_for_a_file_the_caller_writes() {
-    let insert = sample(true).remove(17);
+    let insert = sample(true).remove(18);
     let mut next = 0x10;
     let tags =
         entity_tags(&Entity { common: Common { handle: Some(0x5), ..insert.common.clone() }, ..insert.clone() }, Format::R2018, 0x1F, &mut next);

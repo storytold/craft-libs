@@ -3,7 +3,8 @@
 //!
 //! **Sony** (the MakerNote IFD: header-less in ARWs, after a `SONY DSC` header in JPEGs). Tag identities and value names come from the public ExifTool
 //! tag-name documentation (Sony table); every layout below was confirmed on real ILCE-1 (α1) and
-//! ILCE-7SM3 (A7S III) ARWs, compared with ExifTool's output as a black box. No third-party code was read.
+//! ILCE-7SM3 (A7S III) ARWs, compared with ExifTool's output as a black box, then on the public raw.pixls.us
+//! samples of every other body in [`SONY_MODELS`]. No third-party code was read.
 //!
 //! | Tag | Layout (confirmed) | Use |
 //! |---|---|---|
@@ -79,7 +80,63 @@ impl FocusPoint {
 
 /// Sony bodies whose focus tags have been checked against real files. Another body may store the same
 /// tags differently (or not mean the same by them): it shows no focus point until its files are checked.
-pub const SONY_MODELS: &[&str] = &["ILCE-1", "ILCE-7SM3"];
+///
+/// The α1 and A7S III on 333 files of a photographer's library; the others on the public raw.pixls.us samples (one to
+/// six ARWs per body, 103 files of the 44 bodies): every point equal to the one ExifTool's FocusLocation and
+/// FocusFrameSize give (77 points, one of them rotated), every refusal (26: manual focus, Wide at the exact centre)
+/// equal to what ExifTool's focus modes say, and each body's box drawn on its camera JPEG on the subject it
+/// focused on (a pigeon, a face, a leaf, a chart patch). Seven of them (DSC-HX95, DSC-HX99, ILCE-6700, ILCE-7CR,
+/// ILCE-7RM2, ILCE-7SM2, ILCE-9M3) only have samples without a point, read as ExifTool reads them. Not listed: the
+/// bodies without `0x2027` (every NEX, SLT and DSLR-A; ILCE-3000, 3500, 5000, 5100, 6000 and 6001, QX1, 7, 7R, 7S
+/// and 7M2; ILCA-68 and 77M2; RX100 to RX100 III, RX10, RX1 and RX1R; UMC-R10C), and the DSC-RX0, RX100 IV, RX100 V,
+/// RX10 II, RX10 III and RX1R II, whose `0x201b` reads 0 (Manual) while the enciphered block says AF-S: ExifTool
+/// doesn't decode that tag for them.
+pub const SONY_MODELS: &[&str] = &[
+    "DSC-HX95",
+    "DSC-HX99",
+    "DSC-RX0M2",
+    "DSC-RX100M5A",
+    "DSC-RX100M6",
+    "DSC-RX100M7",
+    "DSC-RX100M7A",
+    "DSC-RX10M4",
+    "DSC-RX1RM3",
+    "ILCA-99M2",
+    "ILCE-1",
+    "ILCE-1M2",
+    "ILCE-6100",
+    "ILCE-6300",
+    "ILCE-6400",
+    "ILCE-6400A",
+    "ILCE-6500",
+    "ILCE-6600",
+    "ILCE-6700",
+    "ILCE-7C",
+    "ILCE-7CM2",
+    "ILCE-7CR",
+    "ILCE-7M3",
+    "ILCE-7M4",
+    "ILCE-7M5",
+    "ILCE-7RM2",
+    "ILCE-7RM3",
+    "ILCE-7RM3A",
+    "ILCE-7RM4",
+    "ILCE-7RM4A",
+    "ILCE-7RM5",
+    "ILCE-7SM2",
+    "ILCE-7SM3",
+    "ILCE-9",
+    "ILCE-9M2",
+    "ILCE-9M3",
+    "ILME-FX2",
+    "ILME-FX3",
+    "ILME-FX30",
+    "ZV-1",
+    "ZV-1M2",
+    "ZV-E1",
+    "ZV-E10",
+    "ZV-E10M2",
+];
 
 /// Whether a camera as the catalog names it (`"SONY ILCE-1"`: the Exif Make, a space, the Model) is
 /// one whose files can carry a focus point, so a photo from any other camera is never opened to look.

@@ -1,6 +1,6 @@
 [package]
 name = "craft-raw"
-description = "Camera raw files, the file-format layer: container parsing, decompression and the sensor data out as a neutral raw image with its levels, crop, orientation, colour tags and embedded previews. DNG (read and write), Hasselblad 3FR/FFF, MRW, ERF, MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2 and Canon CRW so far."
+description = "Camera raw files, the file-format layer: container parsing, decompression and the sensor data out as a neutral raw image with its levels, crop, orientation, colour tags and embedded previews. DNG (read and write), Hasselblad 3FR/FFF, MRW, ERF, MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2, Fujifilm RAF, Olympus ORF (uncompressed), Sony ARW and Canon CRW so far."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,7 +11,7 @@ repository.workspace = true
 workspace = true
 
 [features]
-default = ["dng", "jxl", "crw", "hasselblad", "mrw", "erf", "mef", "kodak", "pef", "srw", "cr2", "nef", "rw2"]
+default = ["dng", "jxl", "crw", "hasselblad", "mrw", "erf", "mef", "kodak", "pef", "srw", "cr2", "nef", "rw2", "raf", "orf", "arw"]
 ## Adobe DNG, reading and writing: uncompressed, lossless JPEG, lossy JPEG, Deflate.
 dng = ["dep:miniz_oxide", "dep:zune-jpeg", "dep:zune-core"]
 ## JPEG XL compressed DNGs (DNG 1.7, compression 52546) via jxl-oxide (pure Rust, MIT OR Apache-2.0).
@@ -36,6 +36,12 @@ cr2 = []
 nef = []
 ## Panasonic RW2, Leica RWL and the older Panasonic / Leica RAW: every raw format (packed, 4, 6, 8 and 16-bit words).
 rw2 = []
+## Fujifilm RAF: uncompressed Bayer and X-Trans, lossless and lossy compressed, in-file lens corrections.
+raf = []
+## Olympus / OM System ORF: the uncompressed layouts. Compressed ORF is refused (its embedded preview still reads).
+orf = []
+## Sony ARW, SR2 and SRF: uncompressed, ARW2 (cRAW), lossless JPEG tiles, ARW6 (Compressed RAW 2, RDD 34 LLVC), the encrypted SR2SubIFD, in-file lens corrections.
+arw = []
 ## Canon CRW (CIFF) through craft-crw, the one CRW decoder.
 crw = ["dep:craft-crw", "dep:chrono"]
 
@@ -57,6 +63,8 @@ jxl-oxide = { version = "0.12", default-features = false, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+# The SHA-256 of the SR2 keystream known answer.
+sha2 = { version = "0.10", default-features = false, features = ["std"] }
 # Encodes the lossy-JPEG tiles of the tests.
 jpeg-encoder = { version = "0.7", default-features = false, features = ["std"] }
 # Lossless JPEG XL encoder for the JPEG XL DNG tests.
