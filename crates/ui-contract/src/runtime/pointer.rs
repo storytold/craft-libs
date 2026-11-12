@@ -412,6 +412,13 @@ pub(crate) fn registered_widgets(ctx: &Context) -> std::collections::HashSet<Id>
     })
 }
 
+/// Whether `id` is a root or an egui widget that a component registered in the running pass of `viewport`.
+pub(crate) fn made_by_component(ctx: &Context, viewport: ViewportId, id: Id) -> bool {
+    PerViewport::<Shapes>::with(ctx, viewport, |record| {
+        record.this.values().any(|roots| roots.contains_key(&id) || roots.values().any(|root| root.widgets.contains(&id)))
+    })
+}
+
 /// The winner of a press at `at` among last pass's shapes of the root egui hands the press to, on the topmost
 /// layer under it, with that root: what the focus service classifies the press by (8.3, H7). A press whose egui
 /// target is no root's widget has no winner. A root's widget covers its whole rect, so when no shape of the click

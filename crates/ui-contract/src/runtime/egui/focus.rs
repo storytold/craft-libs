@@ -32,6 +32,11 @@ pub(crate) fn focused(ctx: &Context) -> Option<Id> {
     ctx.memory(|memory| memory.focused())
 }
 
+/// Whether an egui popup of the running viewport is open: an app's own popup or menu, which reads its keys from egui.
+pub(crate) fn popup_open(ctx: &Context) -> bool {
+    egui::Popup::is_any_open(ctx)
+}
+
 /// Gives `id` key focus with `filter`, applied from this pass: a filter set afterwards acts a pass late.
 pub(crate) fn focus_with_filter(ctx: &Context, id: Id, filter: KeyFilter) {
     let filter =

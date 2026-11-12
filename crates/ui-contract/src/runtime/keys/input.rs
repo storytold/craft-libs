@@ -30,6 +30,9 @@ struct Strip<'a> {
     menu_bar: bool,
     /// A dialog keeps a canvas open and Space belongs to it: the press is the canvas's momentary command chord.
     canvas_space: bool,
+    /// An app's own egui widget or popup has the focus (`FocusedRecord::foreign`): Tab, Escape and the clipboard
+    /// events are its own.
+    foreign: bool,
 }
 
 impl Strip<'_> {
@@ -87,6 +90,7 @@ impl Strip<'_> {
                 }
                 false
             }
+            KeyEvent::Clip { .. } if self.foreign => true,
             KeyEvent::Clip { command, .. } => {
                 // The platform sends the clipboard event in place of the chord: an unlisted one is the chord. The
                 // web sends the chord's press as well.
@@ -147,6 +151,10 @@ impl Strip<'_> {
         let ctrl_tab = key == Key::Tab && (if self.os == Os::Mac { mods.ctrl && !mods.cmd } else { mods.cmd });
         let ctrl_tab = ctrl_tab && self.pages && !self.keeps_tab;
         let bare_tab = key == Key::Tab && !mods.cmd && !mods.ctrl && !mods.alt;
+        // Alt and Shift ride along, as with Enter: a canvas tool reads them; Cmd and Ctrl chords are the app's. While
+        // the focused stop records, Escape with any modifier held is a chord for the recorder; only plain Escape is a
+        // scope escape.
+        let escape = key == Key::Escape && !mods.cmd && !mods.ctrl && !(self.records && !mods.is_none());
         let mnemonic = self.menu_bar && self.os != Os::Mac && mods == Mods::ALT && key.is_letter();
         let edit = self.edit_chords.iter().find(|(command, chord)| (self.edits)(*command) && self.layout.matches(chord, input, self.os));
         if let Some(chord) = claimed {
@@ -162,6 +170,9 @@ impl Strip<'_> {
                 batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, typed: false, press: None });
             }
             false
+        } else if self.foreign && (bare_tab || escape) {
+            // The app's own focused widget or popup reads the key from egui; the runtime routes nothing for it.
+            true
         } else if bare_tab && !self.keeps_tab {
             batch.tabs.push(TabPress { input: *input, repeat });
             false
@@ -171,10 +182,7 @@ impl Strip<'_> {
         } else if key == Key::F6 && (mods.is_none() || mods == Mods::SHIFT) {
             batch.nav.panes.push(!mods.shift);
             false
-        } else if key == Key::Escape && !mods.cmd && !mods.ctrl && !(self.records && !mods.is_none()) {
-            // Alt and Shift ride along, as with Enter: a canvas tool reads them; Cmd and Ctrl chords are the app's. While
-            // the focused stop records, Escape with any modifier held is a chord for the recorder; only plain Escape is a
-            // scope escape.
+        } else if escape {
             batch.escapes += 1;
             false
         } else if key == Key::F10 && mods.is_none() && self.menu_bar {
@@ -270,6 +278,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
             edit_chords: &edit_chords,
             menu_bar,
             canvas_space: hole.as_ref().is_some_and(|hole| hole.space || hole.space_pressed),
+            foreign: record.foreign,
         };
         let mut batch = Batch::default();
         let mut visible = None;

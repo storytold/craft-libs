@@ -584,6 +584,7 @@ pub(super) fn end(state: &mut State, focused: Option<Id>, frame: u64) -> Vec<Act
         pages: stop.as_ref().is_some_and(|stop| stop.role.pages),
         keys,
         menu_bar: std::mem::take(&mut state.menu_bar),
+        foreign: false,
     };
     acts
 }

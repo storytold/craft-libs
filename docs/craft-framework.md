@@ -148,12 +148,13 @@ An app with its own eframe `App` calls the hooks in `craft::ui::shell::embed`. `
 
 | What | Effect on the app's own egui code |
 | --- | --- |
-| Tab | Bare Tab moves framework focus and never reaches egui, unless the focused framework stop keeps Tab. With `RootEnv::tab_toggles_chrome`, Tab with nothing focused toggles the chrome and arrives in `FrameOutput::chrome_toggles`. |
+| Tab | Bare Tab moves framework focus and never reaches egui, unless the focused framework stop keeps Tab or an app's own widget has the focus (below). With `RootEnv::tab_toggles_chrome`, Tab with nothing focused toggles the chrome and arrives in `FrameOutput::chrome_toggles`. |
 | F6 | F6 and Shift+F6 move between panes and never reach egui. |
-| Escape | Plain Escape (Alt and Shift may be held) never reaches egui. It goes to the focused framework stop and its scopes; with no framework stop focused, it goes to the window as `Intent::Cancel`. |
+| Escape | Plain Escape (Alt and Shift may be held) goes to the focused framework stop and its scopes; with no framework stop focused, it goes to the window as `Intent::Cancel`. It reaches egui only while an app's own widget has the focus (below). |
 | F10, Alt+letter | Taken while a framework menu bar is registered: F10 focuses the bar, Alt+letter opens a menu (not on macOS). |
-| Edit chords | Taken while a framework editor is focused. |
+| Edit chords | Taken while a framework editor is focused. Otherwise egui's copy, cut and paste events become the ⌘C/X/V chord for the app's commands, unless an app's own widget has the focus (below). |
 | IME | Taken while a framework editor owns the IME: its events and `PlatformOutput.ime` are the runtime's. Otherwise they stay egui's, for the app's own `TextEdit` or IME code. |
+| An app's own focused widget | While egui focus is on a widget no framework component made, or an egui popup is open, and no framework press or drag is captured, Tab, Shift+Tab, Escape and egui's clipboard events stay in egui's input for it, and the runtime routes nothing for them. |
 | Releases | The release of every key the runtime took is taken too. |
 | Focus surrender | egui's own surrender is off; the runtime moves focus on press. A press a framework component takes moves focus to it; a press no component takes drops egui focus, unless it lands on the widget that holds egui focus (an app's own focused field keeps it). |
 | Zoom keys | egui's keyboard zoom is off. The interface scale is `RootEnv::scale`. |
@@ -161,7 +162,7 @@ An app with its own eframe `App` calls the hooks in `craft::ui::shell::embed`. `
 | Close path | The runtime's window host owns the root window's close request. `embed::logic` asks the app through its closure, then hands the close to the platform quit where there is one (macOS). |
 | Input pacing | One press per pass: extra presses in one frame wait for the next passes. A press outside an open framework menu closes the menu and goes no further. After an OS resize of the window, the held pointer is released. |
 
-The window's keys are the ones the runtime routes to no component: an Escape or a plain Enter while no framework stop is focused, and the arrows' nudge. `with_window_intents` offers them to its closure while nothing has framework focus. The closure takes what it handles (`Intents::take(Intent::Cancel)`) and returns whether it took anything; the rest stays for later readers. A framework scope that ran earlier in the pass takes them first (an open dialog takes the Escape that closes it), so the app reads them last in its UI to see what no component took. App code that read `Key::Escape`, `Key::Tab`, F6 or F10 from egui reads these intents and `FrameOutput::chrome_toggles` instead.
+The window's keys are the ones the runtime routes to no component: an Escape or a plain Enter while no framework stop is focused, and the arrows' nudge. `with_window_intents` offers them to its closure while nothing has framework focus. The closure takes what it handles (`Intents::take(Intent::Cancel)`) and returns whether it took anything; the rest stays for later readers. A framework scope that ran earlier in the pass takes them first (an open dialog takes the Escape that closes it), so the app reads them last in its UI to see what no component took. App code that read `Key::Escape`, `Key::Tab`, F6 or F10 from egui while none of its own widgets had focus reads these intents and `FrameOutput::chrome_toggles` instead; its own focused widgets and popups keep reading Tab and Escape from egui.
 
 Framework dialogs the app keeps as values run on a `DialogHost`: the app calls `run(ui)` once per pass after its own UI and reads results with `take`.
 

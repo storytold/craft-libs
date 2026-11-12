@@ -72,6 +72,10 @@ pub(crate) struct FocusedRecord {
     /// The focused stop switches pages with Ctrl+Tab.
     pub(crate) pages: bool,
     pub(crate) menu_bar: bool,
+    /// egui focus is on a widget no framework component made, or an egui popup is open, and no framework press or
+    /// drag is captured: an app's own focused widget or popup keeps the keys a focused component keeps (Tab, Escape,
+    /// the clipboard events). Written by the end hook after its focus moves.
+    pub(crate) foreign: bool,
 }
 
 /// A change to egui's focus, applied after the state lock is released.
@@ -636,9 +640,16 @@ pub(crate) fn begin(ctx: &Context, tab_all_controls: bool) {
 /// moves it off a stop that was not registered, and records what the next input hook reads.
 pub(crate) fn end(ctx: &Context) {
     let focused = egui_focus::focused(ctx);
-    let frame = crate::runtime::egui::pass::frame_nr(ctx, viewport(ctx));
+    let viewport = viewport(ctx);
+    let frame = crate::runtime::egui::pass::frame_nr(ctx, viewport);
     let acts = with(ctx, |state| nav::end(state, focused, frame));
     apply(ctx, acts);
+    // Escape over a captured framework press or drag cancels it (`frame::begin_pass`), whatever egui has focused.
+    let captured = crate::runtime::pointer::press_captured(ctx) || crate::runtime::drag::running(ctx);
+    let unmade = with(ctx, |state| state.focus_now.filter(|_| state.stop_of_focus().is_none()));
+    let foreign =
+        !captured && (egui_focus::popup_open(ctx) || unmade.is_some_and(|id| !crate::runtime::pointer::made_by_component(ctx, viewport, id)));
+    with(ctx, |state| state.record.foreign = foreign);
 }
 
 /// The scopes `rec` sits in, innermost first.
