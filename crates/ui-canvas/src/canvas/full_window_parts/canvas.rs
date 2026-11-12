@@ -118,7 +118,8 @@ type ControlsFn<'a> = Box<dyn FnMut(&mut Ui, Rect) + 'a>;
 /// The canvas region of a full-window dialog: the app's image, its overlays and one tool, filling what the other
 /// regions left.
 ///
-/// - **Look.** The canvas surface; the image through `RasterDisplay` over the [checkerboard](Self::checkerboard);
+/// - **Look.** The canvas surface; the image through `RasterDisplay` over the [checkerboard](Self::checkerboard), with
+///   the divider rule outside its edge;
 ///   then each [`RasterOverlay`] in the order given (they paint and have no AccessKit node of their own); then the canvas controls of [`controls`](Self::controls); then
 ///   the tool's own painting and cursor.
 /// - **View.** [`FullWindowView`], bound by the app, fits the image on the first pass and keeps fitting it until the
@@ -214,7 +215,7 @@ impl<'a> FullWindowCanvas<'a> {
                 ui,
                 rect,
                 |ui, body| {
-                    let mut image = RasterDisplay::new(label.clone(), source);
+                    let mut image = RasterDisplay::new(label.clone(), source).outlined();
                     if let Some(checker) = checkerboard {
                         image = image.checkerboard(checker);
                     }

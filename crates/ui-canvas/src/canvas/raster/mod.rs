@@ -19,7 +19,7 @@ use super::{PixelRect, RasterSource, canvas_space};
 use crate::contract::{Access, Common, Component, Cx, NoValue, Outcome, PaintUi, Props as _, Role};
 use crate::primitives::textures::UNTINTED;
 use crate::primitives::{
-    CachedTexture, Checker, CheckerArea, Revision, TextureState, TextureStore, TextureStoreOptions, texture_factor, texture_side,
+    CachedTexture, Checker, CheckerArea, Draw, Revision, RuleKind, TextureState, TextureStore, TextureStoreOptions, texture_factor, texture_side,
 };
 use crate::runtime::env::Label;
 use crate::runtime::memory::Remember as _;
@@ -29,7 +29,7 @@ use craft_behavior::kurbo::{Point as Point64, Rect as Rect64};
 use craft_behavior::{CanvasView, Metrics, PixelSize};
 use detail::{texel_extent, texel_origin};
 use egui::epaint::{Mesh, Vertex};
-use egui::{Color32, ColorImage, Context, Id, Response, Shape, TextureFilter, TextureOptions, pos2};
+use egui::{Color32, ColorImage, Context, Id, Pos2, Response, Shape, TextureFilter, TextureOptions, Vec2, pos2};
 use std::collections::HashMap;
 
 /// The style of a raster display: it has no look of its own.
@@ -92,6 +92,8 @@ impl Outcome for RasterDisplayOutput {
 /// - **Transparency.** [`checkerboard`](Self::checkerboard) draws a transparency grid under the document, holding
 ///   still while the document scrolls; the app's [`Checker`] sets its cells, and an empty one is the theme's.
 ///   Without it the document draws straight on the canvas (an opaque document, a video frame).
+/// - **Edge.** [`outlined`](Self::outlined) draws the divider rule just outside the document's edge, so an image
+///   reads apart from the surface around it; a mapped display draws none.
 /// - **Turned views.** A rotated or mirrored view draws each texture as one quad on the view's mapped corners.
 /// - **Memory.** The textures live in two `TextureStore`s per display id and go with the store's budget; a
 ///   detail texture of a plan no longer in use is dropped in the pass the plan changes.
@@ -104,6 +106,9 @@ pub struct RasterDisplay<'a> {
     /// The transparency grid under the document; none draws the document straight on the canvas.
     #[prop]
     checkerboard: Option<Checker>,
+    /// The divider rule just outside the document's edge.
+    #[prop(flag)]
+    outlined: bool,
     read: PixelRect,
     shown: Option<Shown>,
     mapping: Option<Mapping>,
@@ -122,7 +127,8 @@ impl<'a> RasterDisplay<'a> {
     /// A display named `label` of the document `source` gives. An empty label makes a display that only paints, with
     /// no AccessKit node: a further image over a named one.
     pub fn new(label: impl Into<Label>, source: &'a dyn RasterSource) -> Self {
-        RasterDisplay { common: Common::new(), source, checkerboard: None, read: PixelRect::default(), shown: None, mapping: None }.label(label)
+        RasterDisplay { common: Common::new(), source, checkerboard: None, outlined: false, read: PixelRect::default(), shown: None, mapping: None }
+            .label(label)
     }
 
     /// Draws the image through `frame` (the unit square onto the document) on a `cells` by `cells` mesh, so a
@@ -285,11 +291,34 @@ impl Component for RasterDisplay<'_> {
         if let Some((texture, plan)) = shown.detail {
             painter.painter.add(textured_quad(&shown.view, texture, plan.factor, plan.region));
         }
+        if self.outlined {
+            painter.with_draw(|draw| edge(draw, corners));
+        }
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> RasterDisplayOutput {
         let detail = self.shown.as_ref().and_then(|shown| shown.detail.as_ref().map(|(_, plan)| *plan));
         RasterDisplayOutput { response: cx.response.clone(), read: (!self.read.is_empty()).then_some(self.read), detail }
+    }
+}
+
+/// The divider rule just outside `corners`, a convex quad on screen: each side moved out by half the rule's width and
+/// run on by half a width at each end, so the corners close.
+fn edge(draw: &Draw<'_>, corners: [Pos2; 4]) {
+    if !corners.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
+        return;
+    }
+    let half = draw.rule_width(RuleKind::Divider) / 2.0;
+    let centre = (corners.iter().fold(Vec2::ZERO, |sum, p| sum + p.to_vec2()) / 4.0).to_pos2();
+    for (at, &from) in corners.iter().enumerate() {
+        let to = corners[(at + 1) % corners.len()];
+        let along = (to - from).normalized();
+        if along == Vec2::ZERO {
+            continue;
+        }
+        let normal = along.rot90();
+        let out = if normal.dot(from.lerp(to, 0.5) - centre) < 0.0 { -normal } else { normal };
+        draw.rule(RuleKind::Divider, from + (out - along) * half, to + (out + along) * half);
     }
 }
 
