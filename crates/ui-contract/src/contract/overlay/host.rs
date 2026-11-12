@@ -187,8 +187,8 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
             ui.set_clip_rect(ui.clip_rect().intersect(region));
         }
         areas::fade(ui, layer.fade * overlay.opacity);
-        // The layer is not inside its opener's arena, roving group, scroll or row: its content starts from the
-        // opener's inherited env with the layer-local fields fresh.
+        // The layer is not inside its opener's arena, roving group, scroll, row or label scope: its content starts
+        // from the opener's inherited env with the layer-local fields fresh, and outside the opener's scopes.
         let installed = Env::install_for(ui, layer.env.capture().env());
         let real = !ui.is_sizing_pass();
         if real && (layer.exiting || matches!(overlay.rank, Rank::Popup | Rank::Modal { .. })) {
@@ -202,7 +202,7 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
         if overlay.fit == OverlayFit::Resizable {
             ui.set_min_size(overlay.size_limits.min.min(placed.room));
         }
-        body(ui);
+        access::scope::outside(ctx, || body(ui));
         if scope.is_some() && real {
             focus::pop_scope(ctx);
         }

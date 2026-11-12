@@ -1,5 +1,5 @@
 //! The tooltip of a control that paints no label: its own label shows there, inside a field or not; a control named
-//! only by its field label shows none.
+//! only by its field label shows none, and the field's label stays where it was.
 
 use super::kit::PlainStyle;
 use craft_behavior::Sense;
@@ -52,9 +52,19 @@ fn texts_added_by_hover(show: impl Fn(&mut Ui) -> Rect + 'static) -> Vec<String>
     fixture.settle();
     // A cut run carries its full text too: runs are told apart by whether they are cut.
     let before: Vec<(String, bool)> = fixture.texts().iter().map(|run| (run.text.clone(), run.elided)).collect();
+    let placed: Vec<(String, Rect)> = fixture.texts().iter().map(|run| (run.text.clone(), run.rect)).collect();
     fixture.frame(vec![moved(at.get().center())]);
     fixture.advance(DELAY);
     fixture.settle();
+    // The tooltip shows on its own layer: every text shown before stays where it was, a field's label included.
+    for shown in &placed {
+        assert!(
+            fixture.texts().iter().any(|run| run.text == shown.0 && run.rect == shown.1),
+            "{:?} stays at {:?} under the tooltip",
+            shown.0,
+            shown.1
+        );
+    }
     let after = fixture.texts().iter().map(|run| (run.text.clone(), run.elided));
     after.filter(|run| !before.contains(run)).map(|(text, _)| text).collect()
 }

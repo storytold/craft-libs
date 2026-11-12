@@ -187,6 +187,15 @@ pub(crate) fn depth(ctx: &Context) -> usize {
     pass_state::with::<Stack, _>(ctx, |stack| stack.0.len())
 }
 
+/// Runs `body` outside every open label and merge scope, as a layer's content runs: a tooltip or popup shown from a
+/// control is not part of the field the control sits in, so it neither names, lines up nor sizes that field's label.
+pub(crate) fn outside<R>(ctx: &Context, body: impl FnOnce() -> R) -> R {
+    let open = pass_state::with::<Stack, _>(ctx, |stack| std::mem::take(&mut stack.0));
+    let out = body();
+    pass_state::with::<Stack, _>(ctx, |stack| stack.0 = open);
+    out
+}
+
 /// Opens the scope of `container`; its body shows inside it.
 pub(crate) fn begin(ctx: &Context, container: Id, owner: Id, kind: Kind) {
     pass_state::with::<Stack, _>(ctx, |stack| {
