@@ -106,7 +106,7 @@ impl<'a, K: Value + 'static> BreadcrumbBar<'a, K> {
     /// The face crumb `at` wears: plain text for an ancestor, strong text for the current crumb.
     fn crumb_face(&self, at: usize, label: &Label) -> CrumbFace {
         if self.is_last(at) {
-            CrumbFace::Current(Text::new(label.clone()).role(TypeRole::BodyStrong).elide(Elide::End))
+            CrumbFace::Current(Text::new(label.clone()).role(TypeRole::BodyStrong).elide(Elide::Middle))
         } else {
             CrumbFace::Ancestor(Text::new(label.clone()).elide(Elide::Middle))
         }
