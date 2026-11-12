@@ -235,6 +235,10 @@ pub struct PreviewPane<'a> {
     /// Whether a click centres the view on the point clicked.
     #[prop]
     click_centres: bool,
+    /// The well's width over its height: the pane is as tall as its width over this. Without one, the height is the
+    /// one its container gives, at least the plot height.
+    #[prop]
+    aspect: Option<f32>,
     /// The view after this pass, when the user changed it.
     moved: Option<PreviewView>,
     /// The well took the second press of a double click this pass.
@@ -264,6 +268,7 @@ impl PreviewPane<'_> {
             state,
             view: view.clone(),
             click_centres: true,
+            aspect: None,
             moved: None,
             double_clicked: false,
             overlay: None,
@@ -393,7 +398,8 @@ impl Component for PreviewPane<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        Vec2::new(cx.picture_width(cx.tokens.size.plot.width, f32::INFINITY), 0.0)
+        let width = cx.picture_width(cx.tokens.size.plot.width, f32::INFINITY);
+        Vec2::new(width, self.aspect.filter(|aspect| *aspect > 0.0).map_or(0.0, |aspect| width / aspect))
     }
 
     fn sense(&self) -> Sense {

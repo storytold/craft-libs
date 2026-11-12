@@ -401,7 +401,7 @@ impl Pass<'_> {
     fn preview(&self, ui: &mut Ui, options: &ExportOptions, held: &mut Held) {
         let words = self.words;
         let state = held.shown.as_ref().map_or(PreviewState::Pending(None), |shown| shown.state.clone());
-        let pane = PreviewPane::state(words.preview.clone(), state, &held.view).click_centres(true).show(ui);
+        let pane = PreviewPane::state(words.preview.clone(), state, &held.view).click_centres(true).aspect(1.0).show(ui);
         held.view = pane.view.unwrap_or(pane.shown);
         let name = self.formats.iter().find(|format| format.id == options.format).map_or("", |format| format.name).to_uppercase();
         let estimate = match held.shown.as_ref().and_then(|shown| shown.estimate) {
