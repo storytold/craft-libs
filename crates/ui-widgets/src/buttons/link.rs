@@ -34,8 +34,8 @@ pub struct Link {
     /// The type role, to match the text around it.
     #[prop]
     role: TypeRole,
-    /// How the text fits its room: cut with an ellipsis (`Wrap::Elide`, or `Wrap::ElidePath` for a path segment, so
-    /// the end stays) instead of clipping.
+    /// How the text fits its room: cut with an ellipsis (`Wrap::Elide`, or `Wrap::ElidePath` for a path, so
+    /// the name at its end stays) instead of clipping.
     #[prop]
     wrap: Wrap,
     /// The tone the link takes its colour from, in place of the accent.

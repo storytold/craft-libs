@@ -20,12 +20,25 @@ pub enum Wrap {
     Line,
     /// Wraps at the room's width.
     Wrap,
-    /// One line, cut with an ellipsis at the end.
+    /// One line, cut with an ellipsis at the end: names, titles, labels beside fixed controls.
     Elide,
-    /// One line, cut with an ellipsis in the middle, so the end of a path stays.
+    /// One line, cut with an ellipsis at the start: anything whose end says the most.
+    ElideStart,
+    /// One line, cut with an ellipsis in the middle, the end keeping a quarter of what stays: file names, where the
+    /// extension and version suffix say as much as the start.
+    ElideMiddle,
+    /// One line, a folder or file path that drops leading folders first (`…/Pictures/Library`, `…\Pictures`), so the
+    /// name at its end stays; a last name too long by itself is cut at its end.
     ElidePath,
     /// Wraps at the room's width and is cut with an ellipsis at the end of the given number of lines (at least 1).
     Clamp(u8),
+}
+
+impl Wrap {
+    /// Whether the run is one line cut to its room.
+    pub const fn cuts(self) -> bool {
+        matches!(self, Wrap::Elide | Wrap::ElideStart | Wrap::ElideMiddle | Wrap::ElidePath)
+    }
 }
 
 /// Where the lines of a multi-line run sit within the run's width.
@@ -262,10 +275,14 @@ impl TextRun<'_> {
     pub(crate) fn layout(&self, ctx: &Context, env: &TextEnv<'_>, max_width: f32) -> TextLayout {
         let full = self.full_text();
         let galley = match self.wrap {
-            Wrap::ElidePath => self.layout_elided_path(ctx, env, max_width),
+            Wrap::ElideStart | Wrap::ElideMiddle | Wrap::ElidePath => self.layout_cut(ctx, env, &full, max_width),
+            // Right-to-left text ends at its left: the cut keeps its logical start, in either paragraph direction.
+            Wrap::Elide if self.is_rtl(env) || craft_i18n::base_direction(&full) == Some(Direction::Rtl) => {
+                self.layout_cut(ctx, env, &full, max_width)
+            }
             _ => text_layout::layout(ctx, self.job(env, self.spans.iter().map(|s| (s, s.text.as_ref())), max_width)),
         };
-        let elided = galley.elided || self.wrap == Wrap::ElidePath && galley.job.text != full;
+        let elided = galley.elided || self.wrap.cuts() && galley.job.text != full;
         let mut layout = TextLayout::new(aligned_rows(galley, self.align, self.is_rtl(env), ctx.pixels_per_point()), elided, full);
         layout.rotation = self.rotation;
         layout
@@ -277,7 +294,7 @@ impl TextRun<'_> {
     }
 
     fn job<'s>(&self, env: &TextEnv<'_>, parts: impl Iterator<Item = (&'s Span<'s>, &'s str)>, max_width: f32) -> LayoutJob {
-        let elide = matches!(self.wrap, Wrap::Elide | Wrap::ElidePath);
+        let elide = self.wrap.cuts();
         let wrap = TextWrapping {
             max_width: if self.wrap == Wrap::Line { f32::INFINITY } else { max_width },
             max_rows: match self.wrap {
@@ -310,58 +327,101 @@ impl TextRun<'_> {
         job
     }
 
-    /// Cuts characters from the middle until the run fits on one row, keeping a longer tail than head.
-    fn layout_elided_path(&self, ctx: &Context, env: &TextEnv<'_>, max_width: f32) -> Arc<Galley> {
-        let full = self.full_text();
+    /// The run on one row, cut where its wrap says (the end for `Elide`) with one ellipsis, keeping the most characters
+    /// that fit `max_width`; whole when it fits.
+    fn layout_cut(&self, ctx: &Context, env: &TextEnv<'_>, full: &str, max_width: f32) -> Arc<Galley> {
         let whole = text_layout::layout(ctx, self.job(env, self.spans.iter().map(|s| (s, s.text.as_ref())), f32::INFINITY));
         if whole.size().x <= max_width {
             return whole;
         }
-        let chars: Vec<(usize, char)> = full.char_indices().collect();
-        let n = chars.len();
-        let fits = |cut: usize| {
-            let galley = text_layout::layout(ctx, self.job_cut(env, &chars, &full, cut));
-            (galley.size().x <= max_width, galley)
-        };
-        let (mut lo, mut hi) = (1, n);
-        while lo < hi {
-            let mid = (lo + hi) / 2;
-            if fits(mid).0 { hi = mid } else { lo = mid + 1 }
+        // Right-to-left text in a left-to-right paragraph keeps its ellipsis at its own end, the left.
+        let rtl_text = !self.is_rtl(env) && craft_i18n::base_direction(full) == Some(Direction::Rtl);
+        let layout = |pieces: &[Piece]| text_layout::layout(ctx, self.job_cut(env, full, pieces, rtl_text));
+        if self.wrap == Wrap::ElidePath {
+            // Leading folders go first, up to the separator before the last name; a trailing separator starts no name.
+            let end = full.trim_end_matches(['/', '\\']).len();
+            for (at, _) in full.match_indices(['/', '\\']).filter(|(at, _)| *at > 0 && at + 1 < end) {
+                let galley = layout(&[Piece::Ellipsis, Piece::Keep(at..full.len())]);
+                if galley.size().x <= max_width {
+                    return galley;
+                }
+            }
+            let name = full.get(..end).and_then(|text| text.rfind(['/', '\\'])).map_or(0, |at| at + 1)..end;
+            return Self::fit(&layout, full, name, Wrap::Elide, max_width);
         }
-        fits(lo).1
+        Self::fit(&layout, full, 0..full.len(), self.wrap, max_width)
     }
 
-    /// The job with `cut` characters removed from the middle and one ellipsis in their place, in the style of the
-    /// span the cut starts in.
-    fn job_cut(&self, env: &TextEnv<'_>, chars: &[(usize, char)], full: &str, cut: usize) -> LayoutJob {
-        let n = chars.len();
-        let keep = n.saturating_sub(cut);
-        let head = keep / 3;
-        let tail_start = (head + cut).min(n);
-        let byte_at = |i: usize| chars.get(i).map_or(full.len(), |(b, _)| *b);
-        let (cut_from, cut_to) = (byte_at(head), byte_at(tail_start));
-        let mut pieces: Vec<(&Span<'_>, String)> = Vec::new();
+    /// The cut of `kept` (bytes of `full`) at `wrap`'s place that keeps the most characters within `max_width`, found
+    /// by bisection over the character count; at least the ellipsis alone.
+    fn fit(layout: &dyn Fn(&[Piece]) -> Arc<Galley>, full: &str, kept: Range<usize>, wrap: Wrap, max_width: f32) -> Arc<Galley> {
+        let text = full.get(kept.clone()).unwrap_or_default();
+        let ends: Vec<usize> = text.char_indices().map(|(at, _)| kept.start + at).chain([kept.end]).collect();
+        let total = ends.len() - 1;
+        let cut = |count: usize| -> Vec<Piece> {
+            let (head, tail) = match wrap {
+                Wrap::ElideStart => (0, count),
+                Wrap::ElideMiddle => (count - count / 4, count / 4),
+                _ => (count, 0),
+            };
+            let mut pieces = vec![Piece::Keep(kept.start..ends[head]), Piece::Ellipsis, Piece::Keep(ends[total - tail]..kept.end)];
+            pieces.retain(|piece| !matches!(piece, Piece::Keep(range) if range.is_empty()));
+            pieces
+        };
+        let (mut lo, mut hi) = (0, total.saturating_sub(1));
+        while lo < hi {
+            let mid = (lo + hi).div_ceil(2);
+            if layout(&cut(mid)).size().x <= max_width { lo = mid } else { hi = mid - 1 }
+        }
+        layout(&cut(lo))
+    }
+
+    /// The job of `pieces` of `full`: each kept range in the style of the spans it covers, each ellipsis in the style
+    /// of the span the text resumes in (the last span at the end). With `rtl_text` each ellipsis is followed by a
+    /// right-to-left mark, so it takes the text's direction instead of the paragraph's.
+    fn job_cut(&self, env: &TextEnv<'_>, full: &str, pieces: &[Piece], rtl_text: bool) -> LayoutJob {
+        let mut starts = Vec::with_capacity(self.spans.len());
         let mut at = 0;
         for span in &self.spans {
-            let range: Range<usize> = at..at + span.text.len();
-            let mut text = String::new();
-            for (offset, c) in span.text.char_indices() {
-                let b = range.start + offset;
-                if b < cut_from || b >= cut_to {
-                    text.push(c);
-                }
-                if b == cut_from {
-                    text.push('\u{2026}');
-                }
-            }
-            if cut_from == full.len() && range.end == full.len() {
-                text.push('\u{2026}');
-            }
-            at = range.end;
-            pieces.push((span, text));
+            starts.push(at..at + span.text.len());
+            at += span.text.len();
         }
-        self.job(env, pieces.iter().map(|(span, text)| (*span, text.as_str())), f32::INFINITY)
+        let span_at = |byte: usize| starts.iter().position(|range| range.contains(&byte)).unwrap_or(starts.len().saturating_sub(1));
+        let mut parts: Vec<(&Span<'_>, Cow<'_, str>)> = Vec::new();
+        for (index, piece) in pieces.iter().enumerate() {
+            match piece {
+                Piece::Keep(range) => {
+                    for (span, bytes) in self.spans.iter().zip(&starts) {
+                        let (from, to) = (range.start.max(bytes.start), range.end.min(bytes.end));
+                        if from < to {
+                            parts.push((span, Cow::Borrowed(full.get(from..to).unwrap_or_default())));
+                        }
+                    }
+                }
+                Piece::Ellipsis => {
+                    let next = pieces.get(index + 1).and_then(|piece| match piece {
+                        Piece::Keep(range) => Some(range.start),
+                        Piece::Ellipsis => None,
+                    });
+                    if let Some(span) = self.spans.get(span_at(next.unwrap_or(full.len().saturating_sub(1)))) {
+                        parts.push((span, Cow::Borrowed(if rtl_text { RTL_ELLIPSIS } else { ELLIPSIS })));
+                    }
+                }
+            }
+        }
+        self.job(env, parts.iter().map(|(span, text)| (*span, text.as_ref())), f32::INFINITY)
     }
+}
+
+/// The ellipsis every cut shows.
+const ELLIPSIS: &str = "\u{2026}";
+/// The ellipsis followed by a right-to-left mark.
+const RTL_ELLIPSIS: &str = "\u{2026}\u{200f}";
+
+/// A piece of a cut run: a byte range of its text kept, or the ellipsis.
+enum Piece {
+    Keep(Range<usize>),
+    Ellipsis,
 }
 
 /// One direction run of a single-row layout, owned.

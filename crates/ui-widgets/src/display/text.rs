@@ -33,7 +33,11 @@ pub enum Elide {
     Off,
     /// One line, cut with an ellipsis at the end.
     End,
-    /// One line, cut in the middle so the end of a path stays.
+    /// One line, cut in the middle, the end keeping a quarter of what stays: a file name.
+    Middle,
+    /// One line, cut at the start so the end stays.
+    Start,
+    /// One line, a path that drops leading folders first so the name at its end stays.
     Path,
 }
 
@@ -108,6 +112,8 @@ impl Text {
         let wrap = match self.elide {
             Elide::Off => Wrap::Wrap,
             Elide::End => Wrap::Elide,
+            Elide::Middle => Wrap::ElideMiddle,
+            Elide::Start => Wrap::ElideStart,
             Elide::Path => Wrap::ElidePath,
         };
         let run = if self.italic { TextRun::spans(vec![Span::new(label).italic()]) } else { TextRun::new(label) };

@@ -239,7 +239,7 @@ impl<C: Component> PartsCx<'_, C> {
     /// the state's colours. Its text is the component's own: it has no node of its own, so the component's node
     /// names it. An elided run cannot be one, since the selection counts the characters shown.
     pub fn selectable_text(&mut self, part: impl Into<PartRef>, run: &TextRun<'_>) {
-        debug_assert!(!matches!(run.wrap, Wrap::Elide | Wrap::ElidePath | Wrap::Clamp(_)), "a selection part shows its whole text");
+        debug_assert!(!(run.wrap.cuts() || matches!(run.wrap, Wrap::Clamp(_))), "a selection part shows its whole text");
         let part = part.into();
         debug_assert!(self.text.selections.iter().all(|decl| decl.part != part), "selection part {part:?} declared twice");
         self.text.selections.push(SelectDecl { part, text: run.full_text(), multiline: run.wrap == Wrap::Wrap });

@@ -980,7 +980,7 @@ impl Tile<'_> {
         let look = if failed { &style.name_failed } else { &style.name };
         let ink = cx.resolve(&look.color);
         if !self.renaming {
-            let run = TextRun::new(cx.resolved.label).role(look.role).color(ink).wrap(Wrap::ElidePath);
+            let run = TextRun::new(cx.resolved.label).role(look.role).color(ink).wrap(Wrap::ElideMiddle);
             let layout = draw.layout(&run, placed.name.width());
             let at = Pos2::new(self.text_x(placed.name, layout.size().x, cx), placed.name.top());
             draw.galley(at, &layout);
@@ -990,7 +990,7 @@ impl Tile<'_> {
             }
         }
         if let (Some(detail), Some(rect)) = (&self.detail, placed.detail) {
-            let run = TextRun::new(detail.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).wrap(Wrap::ElidePath);
+            let run = TextRun::new(detail.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).wrap(Wrap::ElideMiddle);
             let layout = draw.layout(&run, rect.width());
             draw.galley(Pos2::new(self.text_x(rect, layout.size().x, cx), rect.top()), &layout);
         }

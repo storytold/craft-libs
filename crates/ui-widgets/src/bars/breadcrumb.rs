@@ -108,7 +108,7 @@ impl<'a, K: Value + 'static> BreadcrumbBar<'a, K> {
         if self.is_last(at) {
             CrumbFace::Current(Text::new(label.clone()).role(TypeRole::BodyStrong).elide(Elide::End))
         } else {
-            CrumbFace::Ancestor(Text::new(label.clone()).elide(Elide::Path))
+            CrumbFace::Ancestor(Text::new(label.clone()).elide(Elide::Middle))
         }
     }
 
