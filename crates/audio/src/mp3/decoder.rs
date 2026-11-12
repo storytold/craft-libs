@@ -421,7 +421,9 @@ fn scalefactors_lsf(r: &mut BitReader, g: &Granule, intensity_right: bool) -> Re
 }
 
 /// The Huffman-coded lines of a granule (§2.4.2.7 `huffmancodebits`) into `out`, reading up to
-/// bit `end` of the main data (count1 quadruples past it are dropped). Lines not coded stay 0.
+/// bit `end` of the main data. Bits past `end` belong to the next granule: a damaged granule
+/// whose big values would run past it stops there, and a count1 quadruple that crosses it is
+/// dropped. Lines not coded stay 0.
 fn huffman(r: &mut BitReader, end: usize, g: &Granule, bands: &Bands, out: &mut [i32; LINES]) -> Result<()> {
     let big = (g.big_values * 2).min(LINES);
     // region boundaries: with window switching, region 1 starts at short band 3 (3 × 12 = 36
@@ -445,6 +447,9 @@ fn huffman(r: &mut BitReader, end: usize, g: &Granule, bands: &Bands, out: &mut 
         let (tree, size) = trees.pair(select).ok_or(Error::Invalid("Huffman table 4 or 14"))?;
         let linbits = LINBITS.get(select).copied().unwrap_or(0);
         while i + 2 <= region_end {
+            if r.position() >= end {
+                return Ok(());
+            }
             let sym = tree.decode(r)?;
             let mut pair = [(sym / size) as i32, (sym % size) as i32];
             for v in pair.iter_mut() {
@@ -481,8 +486,7 @@ fn huffman(r: &mut BitReader, end: usize, g: &Granule, bands: &Bands, out: &mut 
     Ok(())
 }
 
-/// Requantize (§2.4.3.4.7) and reorder the short windows (§2.4.3.4.8) into `xr`: each subband's
-/// 18 short-block lines become 6 frequencies × 3 windows.
+/// Requantize (§2.4.3.4.7) into `xr`, in coded order: short-block bands window by window.
 fn requantize(ints: &[i32; LINES], g: &Granule, sf: &Scalefactors, preflag: bool, lsf: bool, bands: &Bands, xr: &mut [f32; LINES]) {
     let p43 = tables::pow43();
     let shift = if g.scalefac_scale { 1.0 } else { 0.5 };
@@ -513,16 +517,33 @@ fn requantize(ints: &[i32; LINES], g: &Granule, sf: &Scalefactors, preflag: bool
         for w in 0..3 {
             let scf = sf.short.get(sfb).and_then(|s| s.get(w)).copied().unwrap_or(0);
             let exp = gain - 2.0 * g.subblock_gain[w] as f32 - shift * f32::from(scf);
-            for i in 0..width {
-                let (from, to) = (start + w * width + i, start + 3 * i + w);
-                if let (Some(&q), Some(x)) = (ints.get(from), xr.get_mut(to)) {
-                    *x = value(q, exp);
-                }
+            let at = start + w * width;
+            for (x, &q) in xr.get_mut(at..at + width).unwrap_or_default().iter_mut().zip(ints.get(at..at + width).unwrap_or_default()) {
+                *x = value(q, exp);
             }
         }
     }
 }
 
+/// Reorder a short block's lines (§2.4.3.4.8) from window by window within each band to the
+/// IMDCT's order: each subband's 18 lines become 6 frequencies × 3 windows. Mixed blocks keep
+/// their long bands as they are.
+fn reorder(xr: &mut [f32; LINES], g: &Granule, bands: &Bands) {
+    if !g.short() {
+        return;
+    }
+    let coded = *xr;
+    for sfb in if g.mixed { 3 } else { 0 }..13 {
+        let (start, width) = bands.short_band(sfb);
+        for w in 0..3 {
+            for i in 0..width {
+                if let (Some(&v), Some(x)) = (coded.get(start + w * width + i), xr.get_mut(start + 3 * i + w)) {
+                    *x = v;
+                }
+            }
+        }
+    }
+}
 /// Intensity-stereo ratios `(left, right)` for MPEG-1 positions 0-6: `tan(pos·π/12)` split as
 /// `(r / (1 + r), 1 / (1 + r))` (§2.4.3.4.9.3).
 fn is_ratio_mpeg1(pos: u8) -> (f32, f32) {
@@ -543,7 +564,9 @@ fn is_ratio_lsf(pos: u8, intensity_scale: bool) -> (f32, f32) {
 
 /// Joint stereo (§2.4.3.4.9): intensity stereo above the right channel's last non-zero band
 /// (per window for short blocks), mid/side elsewhere. The right channel's block layout decides
-/// the bands, as both channels must share it.
+/// the bands, as both channels must share it. The lines are in coded order (before
+/// [`reorder`]), as ffmpeg and libmad process them: where the channels' layouts differ, against
+/// the specification, each channel is then reordered by its own.
 fn stereo(xr: &mut [[f32; LINES]; 2], mode_extension: u8, g: &Granule, sf: &Scalefactors, lsf: bool, bands: &Bands) {
     let ms = mode_extension & 2 != 0;
     let intensity = mode_extension & 1 != 0;
@@ -582,7 +605,7 @@ fn stereo(xr: &mut [[f32; LINES]; 2], mode_extension: u8, g: &Granule, sf: &Scal
             for w in 0..3 {
                 for sfb in (short_start..13).rev() {
                     let (start, width) = bands.short_band(sfb);
-                    let lines = (0..width).map(|i| start + 3 * i + w);
+                    let lines = (0..width).map(|i| start + w * width + i);
                     if lines.clone().any(|l| right.get(l).is_some_and(|&v| v != 0.0)) {
                         nonzero_short = true;
                         break;
@@ -839,14 +862,24 @@ impl Decoder {
     }
 
     /// Samples per channel to decode before a seek target, so that its frame's main data and
-    /// the filter state are complete: enough frames like the last one to hold the furthest
-    /// reach of `main_data_begin`, and two more for the IMDCT overlap and synthesis filter.
-    /// `None` before the first frame.
+    /// the filter state are complete: enough of the smallest frames the stream can hold to span
+    /// the furthest reach of `main_data_begin`, and two more for the IMDCT overlap and synthesis
+    /// filter. A VBR stream's frames before the target may be of the lowest bit rate whatever the
+    /// last frame was; the version, sampling frequency, channel mode and CRC do not change within
+    /// a stream. `None` before the first frame.
     pub fn preroll(&self) -> Option<usize> {
         let h = self.last?;
-        let main = h.frame_bytes.saturating_sub(4 + if h.crc { 2 } else { 0 } + side_info_len(&h)).max(1);
-        let back = if h.version == Version::Mpeg1 { MAX_BACK_MPEG1 } else { MAX_BACK_LSF };
+        // the lowest bit rate: 32 kbit/s in MPEG-1, 8 kbit/s at the lower sampling frequencies
+        let (slots, kbps, back) = if h.version == Version::Mpeg1 { (144, 32, MAX_BACK_MPEG1) } else { (72, 8, MAX_BACK_LSF) };
+        let smallest = slots * kbps * 1000 / (h.sample_rate as usize).max(1);
+        let main = smallest.saturating_sub(4 + if h.crc { 2 } else { 0 } + side_info_len(&h)).max(1);
         Some((back.div_ceil(main) + 2) * h.samples())
+    }
+
+    /// Take the stream's format from `header` (its first frame) before any frame is decoded, so
+    /// that [`Decoder::preroll`] knows it.
+    pub(crate) fn prime(&mut self, header: Header) {
+        self.last.get_or_insert(header);
     }
 
     /// Decode the frame at the start of `frame` (which may run on into the next frames; only
@@ -929,6 +962,7 @@ impl Decoder {
             prev = sfs;
             for ch in 0..nch {
                 let g = &si.granules[gr][ch];
+                reorder(&mut xr[ch], g, &bands);
                 antialias(&mut xr[ch], g);
                 let pcm = out.get_mut(ch).and_then(|o| o.get_mut(gr * LINES..(gr + 1) * LINES));
                 if let Some(pcm) = pcm {
@@ -970,6 +1004,37 @@ impl Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A damaged granule whose big values run past its `part2_3_length` stops at its end: the
+    /// bits after it are the next granule's.
+    #[test]
+    fn big_values_stop_at_the_granule_end() {
+        // table 1 decodes each run of zero bits as (1, 1) with two positive signs: 5 bits a pair
+        let data = [0u8; 200];
+        let mut r = BitReader::new(&data);
+        let g = Granule { big_values: 288, table_select: [1, 1, 1], region0_count: 15, region1_count: 7, ..Granule::default() };
+        let mut out = [0i32; LINES];
+        huffman(&mut r, 10, &g, &Bands::of(44_100), &mut out).unwrap();
+        assert_eq!(out[..4], [1, 1, 1, 1]);
+        assert!(out[4..].iter().all(|&v| v == 0), "lines past the granule's end were decoded");
+    }
+
+    /// The seek pre-roll covers the smallest frames the stream may hold, not the last frame's
+    /// size: a 320 kbit/s frame at 44.1 kHz holds 1008 bytes of main data, a 32 kbit/s one 68,
+    /// so the 511 bytes of reservoir span 8 small frames.
+    #[test]
+    fn preroll_assumes_the_smallest_frames() {
+        let mut frame = vec![0u8; 1044];
+        frame[..4].copy_from_slice(&[0xFF, 0xFB, 0xE0, 0x00]); // MPEG-1 Layer III, 320 kbit/s, 44.1 kHz, stereo
+        let mut dec = Decoder::new();
+        assert_eq!(dec.preroll(), None);
+        dec.decode(&frame).unwrap();
+        assert_eq!(dec.preroll(), Some((8 + 2) * 1152));
+        // 8 kbit/s at 24 kHz, stereo: 24-byte frames with 3 bytes of main data each
+        let mut dec = Decoder::new();
+        dec.prime(mpa::parse_header(&[0xFF, 0xF3, 0x14, 0x00]).unwrap());
+        assert_eq!(dec.preroll(), Some((85 + 2) * 576));
+    }
 
     #[test]
     fn every_huffman_table_is_a_complete_prefix_code() {

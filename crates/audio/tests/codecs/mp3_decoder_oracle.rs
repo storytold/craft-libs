@@ -5,9 +5,10 @@
 //! - The `lame` command, when installed: CRC-protected frames, forced mid / side and no bit
 //!   reservoir.
 //! - This crate's own encoder.
-//! - What no encoder at hand writes, made by editing LAME's frames (a valid stream either way,
-//!   as every bit string decodes): intensity stereo (the `mode_extension` bit turned on) and
-//!   mixed blocks (`mixed_block_flag` set on short blocks).
+//! - What no encoder at hand writes, made by editing LAME's frames so that they stay valid:
+//!   intensity stereo (the `mode_extension` bit turned on, which MPEG-1 scalefactors do not
+//!   depend on) and mixed blocks (`mixed_block_flag` set on short blocks whose scalefactors take
+//!   no bits, so the granule's `part2_3_length` still holds).
 //!
 //! Each stream's side information is read here as well, to prove what it covers (short blocks,
 //! mid / side, CRC).
@@ -51,12 +52,19 @@ const LAME: &[Lame] = &[
     Lame { name: "mpeg25_12k_24k", input: CLICKS, rate: 12_000, channels: 2, enc: &["-b:a", "24k"] },
     Lame { name: "mpeg25_11k_mono", input: TONES, rate: 11_025, channels: 1, enc: &["-b:a", "16k"] },
     Lame { name: "mpeg25_8k_8k", input: CLICKS, rate: 8_000, channels: 1, enc: &["-b:a", "8k"] },
+    // Low bit rates: many short blocks with scalefac_compress 0, for the mixed block edits.
+    Lame { name: "mixed_44k_32k", input: CLICKS, rate: 44_100, channels: 2, enc: &["-b:a", "32k"] },
+    Lame { name: "mixed_32k_mono_32k", input: CLICKS, rate: 32_000, channels: 1, enc: &["-b:a", "32k"] },
+    Lame { name: "mixed_lsf_22k_32k", input: CLICKS, rate: 22_050, channels: 2, enc: &["-b:a", "32k"] },
+    // 16 kHz has the band tables of MPEG-2.5's 11.025 and 12 kHz, whose streams give LAME few
+    // short blocks to edit.
+    Lame { name: "mixed_lsf_16k_32k", input: CLICKS, rate: 16_000, channels: 2, enc: &["-b:a", "32k"] },
 ];
 
 /// The minimum SNR against ffmpeg. Both decoders compute in f32 with different IMDCT and
-/// synthesis factorizations: they agree to 127-131 dB on encoded streams (112 dB on the edited
-/// MPEG-2.5 mixed blocks). A wrong table entry, band boundary or stereo factor costs far more:
-/// the 8 kHz short-block region boundary at 36 lines instead of 72 measured -5 dB.
+/// synthesis factorizations: they agree to 125-132 dB on encoded and edited streams. A wrong
+/// table entry, band boundary or stereo factor costs far more: the 8 kHz short-block region
+/// boundary at 36 lines instead of 72 measured -5 dB.
 const MIN_SNR: f64 = 100.0;
 
 fn generate(out: &Path, cmd: impl FnOnce(&Path) -> Command) -> Option<PathBuf> {
@@ -239,6 +247,7 @@ fn streams_cover_short_blocks_and_mid_side() {
 /// `mixed_block_flag` is (a bit offset in the frame) when it switches windows.
 struct GranuleSide {
     block_type: u8,
+    scalefac_compress: u32,
     mixed_bit: Option<usize>,
 }
 
@@ -255,13 +264,24 @@ fn granules(frame: &[u8]) -> Vec<GranuleSide> {
     let mut out = Vec::new();
     for _ in 0..if lsf { 1 } else { 2 } {
         for _ in 0..nch {
+            let scalefac_compress = field(p + 29, if lsf { 9 } else { 4 });
             let ws = p + if lsf { 38 } else { 33 };
             let (block_type, mixed_bit) = if bit(ws) == 1 { (field(ws + 1, 2) as u8, Some(ws + 3)) } else { (0, None) };
-            out.push(GranuleSide { block_type, mixed_bit });
+            out.push(GranuleSide { block_type, scalefac_compress, mixed_bit });
             p += if lsf { 63 } else { 59 };
         }
     }
     out
+}
+
+/// A granule the mixed block test may edit: its frame, where its `mixed_block_flag` is, whether
+/// it is a short block, and whether its scalefactors take no bits.
+#[derive(Clone, Copy)]
+struct Candidate {
+    frame: usize,
+    bit: Option<usize>,
+    short: bool,
+    editable: bool,
 }
 
 /// Write `frames` (edited copies) as a stream and compare it with ffmpeg.
@@ -299,28 +319,48 @@ fn intensity_stereo_matches_ffmpeg() {
 }
 
 /// Mixed blocks: LAME's short-block granules with `mixed_block_flag` set, at MPEG-1 and MPEG-2
-/// sampling frequencies.
+/// sampling frequencies (16 kHz shares its band tables with MPEG-2.5's 11.025 and 12 kHz).
+///
+/// - Only granules whose scalefactors take no bits (`scalefac_compress` 0) are edited: the mixed
+///   layout reads the same zero bits, so the stream stays valid. Editing others would shift every
+///   later field of the granule past its `part2_3_length`, and decoders differ on such damage.
+/// - Not a granule whose channel's next granule is a short block that stays unmixed. ffmpeg's
+///   short-block IMDCT drops the last 6 overlap values of each subband, which is exact after a
+///   start or short window (whose tails are zero) but not after a mixed block's long subbands
+///   (the normal window's tail is not); ISO/IEC 11172-3 adds the whole overlap, as this decoder
+///   does.
+/// - Not at 8 kHz, where ffmpeg does not implement mixed blocks.
 #[test]
 fn mixed_blocks_match_ffmpeg() {
     let ff = require_ffmpeg!();
-    for name in ["joint_44k_clicks", "mono_32k_48k", "lsf_22k_64k", "mpeg25_12k_24k"] {
+    for name in ["mixed_44k_32k", "mixed_32k_mono_32k", "mixed_lsf_22k_32k", "mixed_lsf_16k_32k"] {
         let s = LAME.iter().find(|s| s.name == name).unwrap();
         let Some(f) = lame_stream(&ff, s) else { continue };
         let data = std::fs::read(f).unwrap();
+        let mut fr: Vec<Vec<u8>> = frames(&data).into_iter().map(<[u8]>::to_vec).collect();
+        // each channel's granules in order
+        let mut channels: Vec<Vec<Candidate>> = vec![Vec::new(); s.channels];
+        for (frame, f) in fr.iter().enumerate() {
+            for (i, g) in granules(f).into_iter().enumerate() {
+                let short = g.block_type == 2;
+                let editable = short && g.scalefac_compress == 0;
+                channels[i % s.channels].push(Candidate { frame, bit: g.mixed_bit, short, editable });
+            }
+        }
         let mut mixed = 0;
-        let fr: Vec<Vec<u8>> = frames(&data)
-            .into_iter()
-            .map(|f| {
-                let mut f = f.to_vec();
-                for g in granules(&f) {
-                    if let (2, Some(p)) = (g.block_type, g.mixed_bit) {
-                        f[p / 8] |= 0x80 >> (p % 8);
-                        mixed += 1;
-                    }
+        for ch in &channels {
+            // from the last granule back, so whether the next one is mixed is already decided
+            let mut next_pure_short = false;
+            for c in ch.iter().rev() {
+                let edit = c.editable && !next_pure_short;
+                if let (true, Some(p)) = (edit, c.bit) {
+                    fr[c.frame][p / 8] |= 0x80 >> (p % 8);
+                    mixed += 1;
                 }
-                f
-            })
-            .collect();
+                next_pure_short = c.short && !edit;
+            }
+        }
+        println!("{name}: {mixed} granules made mixed");
         assert!(mixed > 5, "{name}: {mixed} mixed granules");
         check_edited(&ff, fr, s.rate, s.channels, &format!("{name}_mixed"));
     }

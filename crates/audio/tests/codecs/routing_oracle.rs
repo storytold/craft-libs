@@ -394,6 +394,8 @@ fn reference_lead(name: &str) -> usize {
         "aac.mkv" => 1024,
         "eac3-5.1.mkv" => 256,
         "mp2.mkv" => 481,
+        // LAME's encoder delay and the decoder's, the Matroska CodecDelay
+        "mp3.mkv" => 1105,
         _ => 0,
     }
 }

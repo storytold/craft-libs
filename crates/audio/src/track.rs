@@ -231,7 +231,9 @@ impl TrackDecoder {
             CodecId::Mp1 | CodecId::Mp2 | CodecId::Mp3 => match mpa::parse_header(first) {
                 #[cfg(feature = "mp3-decode")]
                 Ok(h) if h.layer == 3 => {
-                    (Inner::Mp3 { dec: Box::default(), samples: h.samples() }, CodecId::Mp3, h.sample_rate, mpa_layout(&h), SampleFormat::Compressed)
+                    let mut dec = Box::<mp3::Decoder>::default();
+                    dec.prime(h);
+                    (Inner::Mp3 { dec, samples: h.samples() }, CodecId::Mp3, h.sample_rate, mpa_layout(&h), SampleFormat::Compressed)
                 }
                 #[cfg(not(feature = "mp3-decode"))]
                 Ok(h) if h.layer == 3 => return Err(unsupported(CodecId::Mp3)),
@@ -592,12 +594,12 @@ fn reorder(mut channels: Vec<Vec<f32>>, order: Option<&[usize]>) -> Vec<Vec<f32>
     }
 }
 
-/// Frames of an MP3 stream decoded before a seek target when no frame has been decoded yet to say
-/// how many the bit reservoir needs: the smallest frames (8 kbit/s at 24 kHz) hold 11 bytes of
-/// main data, so 255 bytes of reservoir span 24 of them, and two more settle the filter banks.
-/// MPEG-1 needs at most 9 (511 bytes at 75 bytes a frame).
+/// Frames of an MP3 stream decoded before a seek target when neither a lookahead nor a decoded
+/// frame has said what the stream is: the most any stream needs. The smallest frames (8 kbit/s at
+/// 24 kHz, stereo, with CRC) hold 1 byte of main data, so 255 bytes of reservoir span 255 of them,
+/// and two more settle the filter banks.
 #[cfg(feature = "mp3-decode")]
-const MP3_PREROLL_FRAMES: usize = 26;
+const MP3_PREROLL_FRAMES: usize = 257;
 
 /// The MPEG audio frames of a packet (an MP4 or Matroska packet may hold several), decoded by
 /// `decode`, and the first frame's header. A frame after the first that fails ends the packet.
