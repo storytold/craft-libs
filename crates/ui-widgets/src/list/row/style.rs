@@ -26,6 +26,9 @@ pub struct ListRowStyle {
     /// The row's trailing icons.
     #[style(icon)]
     pub(super) trailing_icon: IconLook,
+    /// The glyph of a toggle cell and of the link between thumbnails: quiet at rest, the normal ink under the pointer.
+    #[style(icon)]
+    pub(super) toggle: IconLook,
     /// The detail line.
     #[style(text)]
     pub(super) detail: TextLook,
@@ -203,6 +206,14 @@ impl RowStyleCx for StyleCx<'_> {
     fn command_row_ink(&self, base: Rgba) -> Stateful<StyleColor> {
         row_ink_of(self, self.color(base), RowForm::Command)
     }
+}
+
+/// The ink of a row's toggle and link glyphs: `row_ink_of` on `text.muted`, whose off states are the quiet ink's, so
+/// the glyph reads in `text.normal` under the pointer and while pressed. The flag rules keep every fill's paired ink.
+pub(super) fn quiet_row_ink(cx: &StyleCx<'_>, form: RowForm) -> Stateful<StyleColor> {
+    let mut ink = row_ink_of(cx, cx.color(cx.tokens.color.text.muted), form);
+    ink.off = cx.quiet_ink().off;
+    ink
 }
 
 /// `row_ink` for a base that is already a style colour (a tone). A disabled row's ink is `text.disabled`.

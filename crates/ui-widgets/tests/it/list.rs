@@ -556,6 +556,58 @@ fn a_toggle_column_holds_one_toggle_with_room_on_each_side() {
     assert!(cell.width() < 2.0 * cell.height(), "the toggle column holds one toggle: {cell:?}");
 }
 
+/// A toggle cell's glyph rests in `text.muted` and reads in `text.normal` under the pointer.
+#[trial]
+fn a_toggle_glyph_rests_muted_and_reads_normal_under_the_pointer() {
+    use craft_behavior::{ColumnKey, ColumnWidth};
+    use craft_ui::contract::{ColumnSpec, ToggleColumn};
+    use craft_ui::list::ToggleCell;
+    use craft_ui::runtime::env::Env;
+    use craft_ui::testing::pointer;
+    use egui::Color32;
+    use std::cell::Cell;
+    const EYE: ColumnKey = ColumnKey::new("eye");
+    const NAME: ColumnKey = ColumnKey::new("name");
+    let seen = Rc::new(Cell::new((egui::Rect::NOTHING, Color32::TRANSPARENT, Color32::TRANSPARENT)));
+    let held = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let text = Env::of(ui).tokens.tokens().color.text;
+        let color = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
+        let columns = vec![ColumnSpec::toggle(EYE, "", ToggleColumn::sweepable()), ColumnSpec::new(NAME, "", ColumnWidth::fill(1.0))];
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key);
+        let _ = List::new("Layers").columns(columns).show_items(ui, &source, &mut |key, icx| {
+            held.set((icx.cell(&EYE).unwrap_or(egui::Rect::NOTHING), color(text.muted.0), color(text.normal.0)));
+            ListRow::new(NAMES[*key]).cells(icx.cells()).toggle(ToggleCell::eye(EYE, true))
+        });
+    });
+    fixture.room(Vec2::new(300.0, 200.0));
+    fixture.settle();
+    let tints = |shapes: &[egui::Shape], cell: egui::Rect| -> Vec<Color32> {
+        let mut tints: Vec<Color32> = shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Mesh(mesh) if cell.contains(mesh.calc_bounds().center()) => Some(mesh.vertices.iter().map(|vertex| vertex.color)),
+                _ => None,
+            })
+            .flatten()
+            .filter(|color| color.a() > 0)
+            .collect();
+        tints.dedup();
+        tints
+    };
+    let (cell, muted, normal) = seen.get();
+    let rest = tints(&fixture.frame_shapes(), cell);
+    fixture.frame(vec![pointer::moved(cell.center())]);
+    fixture.frame(Vec::new());
+    let hovered = tints(&fixture.frame_shapes(), cell);
+    assert!(!rest.is_empty() && rest.iter().all(|tint| *tint == muted), "the eye rests in text.muted {muted:?}: {rest:?}");
+    assert!(
+        !hovered.is_empty() && hovered.iter().all(|tint| *tint == normal),
+        "the eye reads in text.normal {normal:?} under the pointer: {hovered:?}"
+    );
+}
+
 /// Every filled rect among `shapes`, nested lists included.
 fn fills(shapes: &[egui::Shape], out: &mut Vec<(egui::Rect, egui::Color32)>) {
     for shape in shapes {

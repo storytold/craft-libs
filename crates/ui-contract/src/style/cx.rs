@@ -252,6 +252,14 @@ impl<'a> StyleCx<'a> {
         self.host_muted.cloned().unwrap_or(base)
     }
 
+    /// The ink of a glyph that acts on a click without a face of its own (a disclosure, a list row's toggle cell):
+    /// `text.muted` at rest, `text.normal` under the pointer and while pressed, `text.disabled` when disabled, on or off.
+    pub fn quiet_ink(&self) -> Stateful<StyleColor> {
+        let text = &self.tokens.color.text;
+        let (muted, normal, off) = (self.color(text.muted), self.color(text.normal), self.color(text.disabled));
+        Stateful::new(muted).off(States::new(muted, normal, normal, off))
+    }
+
     /// The fill of an accent control that is on or filled: the strong accent at rest, with its hover and pressed
     /// shades, and the disabled fill when disabled.
     pub fn accent_fill(&self) -> Stateful<StyleColor> {

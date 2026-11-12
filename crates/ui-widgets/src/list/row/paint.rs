@@ -2,7 +2,7 @@
 
 use super::ListRow;
 use super::placement::Placed;
-use super::show::{TEXT_CELL, TOGGLE};
+use super::show::{LINK, TEXT_CELL, TOGGLE};
 use super::style::ListRowStyle;
 use super::thumb::{RowThumb, target_at};
 use super::trailing::{TrailingFace, TrailingItem, cell_key, field_key, trailing_run};
@@ -12,8 +12,8 @@ use crate::contract::{Bind, Cx, PaintUi, Pointer as _, Props as _, Styled as _, 
 use crate::controls::disclosure::Disclosure;
 use crate::list::toggle::{ToggleFace, ToggleState};
 use crate::primitives::{Draw, HAlign, IconSpec, PaintShape, Span, StrokeWidth, TextRun, Wrap};
-use crate::style::{Flags, Ink, StyleColor};
-use craft_behavior::{Flow, IconId, Mixed};
+use crate::style::{Flags, Ink, StateMix, StateSet, StyleColor};
+use craft_behavior::{Flow, IconId, Mixed, PartRef};
 use craft_theme::ControlSize;
 use egui::{CornerRadius, Pos2, Rect, Vec2};
 
@@ -85,8 +85,9 @@ impl ListRow<'_> {
                         ToggleState::Off => None,
                     };
                     if let Some(id) = shown {
-                        let ink = if toggle.fill.is_some() { Ink::OnDark } else { Ink::OnPanel };
-                        ui.draw().icon(Rect::from_center_size(cell.center(), Vec2::splat(icon)), &IconSpec::svg(id.clone()).ink(ink));
+                        let spec = IconSpec::svg(id.clone());
+                        let spec = if toggle.fill.is_some() { spec.ink(Ink::OnDark) } else { spec.color(glyph_ink(cx, part)) };
+                        ui.draw().icon(Rect::from_center_size(cell.center(), Vec2::splat(icon)), &spec);
                     }
                 }
             }
@@ -132,7 +133,8 @@ impl ListRow<'_> {
             let (Some(slot), Some((linked, _))) = (link, &self.extras[at].link) else { continue };
             let id = IconId::new(if *linked { "link" } else { "unlink" });
             let side = Rect::from_center_size(slot.center(), Vec2::splat(style.sizes.icon));
-            ui.draw().icon(side, &IconSpec::svg(id));
+            let color = glyph_ink(cx, LINK.at(at as u64));
+            ui.draw().icon(side, &IconSpec::svg(id).color(color));
         }
     }
 
@@ -257,6 +259,12 @@ impl ListRow<'_> {
             item.show(ui, cell_key(at), Rect::from_center_size(room.center(), Vec2::new(room.width(), height)));
         }
     }
+}
+
+/// The ink of a toggle or link glyph: its own part's hover and press, over the row's selection and lead.
+fn glyph_ink(cx: &Cx<'_, ListRow<'_>>, part: PartRef) -> StyleColor {
+    let (row, cell) = (cx.state(), cx.part_state(part));
+    StateSet::new(cell.state, row.flags, StateMix::new(cell.t.hover, cell.t.press, row.t.on)).resolve(&cx.style.toggle.color)
 }
 
 /// The down-right clipping mark: a stem down from the top, then a leg toward the reading end with an arrowhead.

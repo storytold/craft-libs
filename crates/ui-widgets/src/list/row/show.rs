@@ -4,7 +4,7 @@ use super::ListRowStyleKey;
 use super::output::{RowEvent, RowOutput};
 use super::paint::draw_clip_arrow;
 use super::placement::{Sizes, lead_run};
-use super::style::{FillKey, ListRowStyle, RowForm, fill_of, row_ink_of, selected_outline};
+use super::style::{FillKey, ListRowStyle, RowForm, fill_of, quiet_row_ink, row_ink_of, selected_outline};
 use super::thumb::{RowThumb, target_at};
 use super::trailing::{HostedSize, TrailingFace, TrailingItem, TrailingPart, below_key, cell_key, field_key};
 use super::{ListRow, RowDragSpot, RowInk};
@@ -32,7 +32,7 @@ const TOGGLE_CELL: PartKey = PartKey::new("toggle-cell");
 const LABEL_CELL: PartKey = PartKey::new("label-cell");
 const DISCLOSURE: PartKey = PartKey::new("disclosure");
 
-const LINK: PartKey = PartKey::new("link");
+pub(super) const LINK: PartKey = PartKey::new("link");
 const PROGRESS: PartKey = PartKey::new("progress");
 const LINES: PartKey = PartKey::new("lines");
 pub(super) const TRAILING: PartKey = PartKey::new("trailing");
@@ -104,6 +104,7 @@ impl Component for ListRow<'_> {
                     tone => row_ink_of(cx, cx.tone(tone), form),
                 },
             ),
+            toggle: IconLook::new(sizes.icon, quiet_row_ink(cx, form)),
             detail: TextLook::new(TypeRole::Caption, ink(text.faint)),
             cell: TextLook::new(role, ink(base)),
             cell_muted: TextLook::new(role, ink(muted)),

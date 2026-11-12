@@ -4,10 +4,9 @@ use crate::contract::{
     Animate as _, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, PaintUi, Pointer as _, Role, Styled as _, spec,
 };
 use crate::primitives::{Glyph, PaintShape, StrokeWidth};
-use crate::style::{ComponentStyle, IconLook, Stateful, StyleCx, UiTokens, ink_color, rgba_color};
+use crate::style::{ComponentStyle, IconLook, StyleCx, UiTokens, ink_color, rgba_color};
 use craft_behavior::{Metrics, Sense};
 use craft_i18n::Direction;
-use craft_theme::States;
 use egui::emath::GuiRounding as _;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, Vec2};
 
@@ -114,14 +113,6 @@ impl DisclosureGlyph {
     fn tone(&self, tokens: &UiTokens, ink: Color32) -> Color32 {
         if !self.filled && ink == ink_color(tokens, crate::style::Ink::OnPanel) { rgba_color(tokens.color.text.muted) } else { ink }
     }
-
-    /// The colour a disclosure component shows its glyph in: muted at rest, the normal text colour under the pointer and
-    /// while pressed.
-    fn ink(cx: &StyleCx<'_>) -> Stateful<crate::style::StyleColor> {
-        let text = &cx.tokens.color.text;
-        let (muted, normal, off) = (cx.color(text.muted), cx.color(text.normal), cx.color(text.disabled));
-        Stateful::new(muted).off(States::new(muted, normal, normal, off))
-    }
 }
 
 impl Glyph for DisclosureGlyph {
@@ -190,7 +181,7 @@ impl Component for Disclosure<'_> {
 
     fn style(cx: &StyleCx<'_>, _: DisclosureStyleKey) -> DisclosureStyle {
         let side = cx.control().icon;
-        DisclosureStyle { metrics: Metrics::new().min_size(Vec2::splat(side)), glyph: IconLook::new(side, DisclosureGlyph::ink(cx)) }
+        DisclosureStyle { metrics: Metrics::new().min_size(Vec2::splat(side)), glyph: IconLook::new(side, cx.quiet_ink()) }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
