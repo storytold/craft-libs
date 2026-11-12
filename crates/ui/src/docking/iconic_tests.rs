@@ -318,6 +318,62 @@ fn a_saved_flyout_offset_stays_inside_the_bounds() {
     {
         let saved = serde_json::to_string(&d.layout).unwrap();
         assert!(!saved.contains("flyout_offset"), "an unset offset is not written");
+        // A workspace saved before offsets existed has no field: it opens aligned.
+        let mut older = DockDriver::new(serde_json::from_str(&saved).unwrap(), Content);
+        older.click(hit(&older, Hit::Icon(3)).center());
+        older.settle();
+        assert_eq!(flyout_rect(&older), aligned);
+    }
+}
+
+/// Dragging the top edge down past the minimum stops at the minimum height with the bottom
+/// fixed; the saved offset matches where the top stopped, and reopening keeps that rectangle.
+#[test]
+fn a_top_edge_drag_down_stops_at_the_minimum_height() {
+    let mut d = DockDriver::new(docked(&[&[1], &[3]], true), Content);
+    let icon = hit(&d, Hit::Icon(3)).center();
+    d.click(icon);
+    d.settle();
+    let before = flyout_rect(&d);
+    let from = top_edge(before, before.center().x);
+    d.drag(from, from + vec2(0.0, 2000.0));
+    d.settle();
+    let small = flyout_rect(&d);
+    let style = DockStyle::default();
+    assert_eq!(small.height(), style.tab_height + style.min_pane);
+    assert_eq!(small.bottom(), before.bottom());
+    let group = first_column(&d.layout).groups[1].clone();
+    assert_eq!(group.flyout_offset, Some(small.top() - hit(&d, Hit::Icon(3)).top()));
+    assert_eq!(group.height, Some(small.height()));
+    d.click(hit(&d, Hit::Icon(1)).center());
+    d.click(icon);
+    d.settle();
+    assert_eq!(flyout_rect(&d), small);
+}
+
+/// In float bounds shorter than the minimum, a flyout with a saved offset stays inside them,
+/// a top drag cannot push it out, and its width still resizes.
+#[test]
+fn a_flyout_with_an_offset_in_a_short_viewport_stays_inside_and_resizes_its_width() {
+    for height in [20.0, 50.0] {
+        let mut d = DockDriver::new(docked(&[&[1]], true), Content);
+        d.layout.apply(Action::MoveFlyoutTop { panel: 1, offset: Some(-300.0) }).unwrap();
+        let bounds = Rect::from_min_size(Pos2::ZERO, vec2(800.0, height));
+        d.float_bounds = Some(bounds);
+        d.click(hit(&d, Hit::Icon(1)).center());
+        d.settle();
+        let before = flyout_rect(&d);
+        assert!(bounds.contains_rect(before), "{height}: {before:?}");
+        let from = top_edge(before, before.center().x);
+        d.drag(from, from - vec2(0.0, 500.0));
+        d.settle();
+        assert!(bounds.contains_rect(flyout_rect(&d)), "{height}: {:?}", flyout_rect(&d));
+        let corner = d.ctx.read_response(d.id.with("flyout").with("resize")).unwrap().rect.right_bottom() - vec2(2.0, 2.0);
+        d.drag(corner, corner + vec2(60.0, 0.0));
+        d.settle();
+        let after = flyout_rect(&d);
+        assert!((after.width() - before.width() - 60.0).abs() < 1.0, "{height}: {before:?} -> {after:?}");
+        assert!(bounds.contains_rect(after));
     }
 }
 
