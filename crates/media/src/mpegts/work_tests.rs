@@ -65,7 +65,7 @@ fn pes_packet(stream_id: u8, payload: &[u8]) -> Vec<u8> {
 
 /// Two audio streams interleaved in maximal PES packets over more than three window refills,
 /// with a pack header per PES packet; MPEG-2 or MPEG-1 pack headers.
-fn big_program_stream(mpeg1: bool, frames: usize) -> (Vec<u8>, Vec<Vec<u8>>, Vec<Vec<u8>>) {
+pub(super) fn big_program_stream(mpeg1: bool, frames: usize) -> (Vec<u8>, Vec<Vec<u8>>, Vec<Vec<u8>>) {
     let a: Vec<Vec<u8>> = (0..frames).map(|k| mp2_frame(k, 0)).collect();
     let b: Vec<Vec<u8>> = (0..frames).map(|k| mp2_frame(k, 0x55)).collect();
     let (ea, eb) = (a.concat(), b.concat());

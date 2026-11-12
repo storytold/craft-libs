@@ -191,7 +191,7 @@ pub struct AssetName {
     pub kind: PackageKind,
 }
 
-/// Reads `<stem>-<version>-<os>-<arch>[-portable].<ext>`; `None` for checksums, zsync files, CLI
+/// Reads suite package names or Tauri DMG/MSI names; `None` for checksums, zsync files, CLI
 /// and web bundles, or anything else.
 pub fn parse_asset_name(name: &str, stems: &[&str]) -> Option<AssetName> {
     const KINDS: [PackageKind; 9] = [
@@ -216,7 +216,48 @@ pub fn parse_asset_name(name: &str, stems: &[&str]) -> Option<AssetName> {
         }
         return Some(AssetName { stem: (*stem).to_string(), version: version.to_string(), token: format!("{os}-{arch}"), kind });
     }
-    None
+    parse_tauri_asset_name(base, kind, stems)
+}
+
+/// Tauri's established package names omit the OS: `<Product>_<version>_universal.dmg`
+/// or `<Product>_<version>_x64_en-US.msi`. Only these installer formats use this fallback;
+/// their suffix and explicit architecture still prevent selecting a different platform.
+fn parse_tauri_asset_name(base: &str, kind: PackageKind, stems: &[&str]) -> Option<AssetName> {
+    if !matches!(kind, PackageKind::Msi | PackageKind::Dmg) {
+        return None;
+    }
+    stems.iter().find_map(|stem| {
+        if !base.get(..stem.len())?.eq_ignore_ascii_case(stem) {
+            return None;
+        }
+        let rest = base.get(stem.len()..)?.strip_prefix('_')?;
+        let (version, platform) = rest.split_once('_')?;
+        if crate::version::parse(version).is_none() || !version.starts_with(|c: char| c.is_ascii_digit()) {
+            return None;
+        }
+        let token = match kind {
+            PackageKind::Dmg => match platform {
+                "universal" => "macos-universal",
+                "aarch64" | "arm64" => "macos-arm64",
+                "x64" | "x86_64" => "macos-x86_64",
+                _ => return None,
+            },
+            PackageKind::Msi => {
+                let (arch, locale) = platform.split_once('_')?;
+                if locale.len() > 16 || !locale.split('-').all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphabetic())) {
+                    return None;
+                }
+                match arch {
+                    "x64" => "windows-x64",
+                    "x86" => "windows-x86",
+                    "arm64" => "windows-arm64",
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        Some(AssetName { stem: (*stem).to_string(), version: version.to_string(), token: token.to_string(), kind })
+    })
 }
 
 /// The best asset of `release` for `platform`, trying `kinds` in order and, within a kind, the
@@ -236,6 +277,25 @@ pub fn pick_asset<'a>(release: &'a Release, stems: &[&str], platform: Platform, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tauri_package_names_keep_platform_and_architecture_boundaries() {
+        let r = release(&["ArtCraft_0.42.1_x64_en-US.msi", "ArtCraft_0.42.1_universal.dmg", "artcraft-0.42.1-linux-x86_64.flatpak"]);
+        for (platform, kind, expected) in [
+            (Platform { os: Os::Windows, arch: Arch::X64 }, PackageKind::Msi, "ArtCraft_0.42.1_x64_en-US.msi"),
+            (Platform { os: Os::MacOs, arch: Arch::X64 }, PackageKind::Dmg, "ArtCraft_0.42.1_universal.dmg"),
+            (Platform { os: Os::MacOs, arch: Arch::Arm64 }, PackageKind::Dmg, "ArtCraft_0.42.1_universal.dmg"),
+            (Platform { os: Os::Linux, arch: Arch::X64 }, PackageKind::Flatpak, "artcraft-0.42.1-linux-x86_64.flatpak"),
+        ] {
+            assert_eq!(pick_asset(&r, &["artcraft"], platform, &[kind]).map(|(a, _)| a.name.as_str()), Some(expected));
+            assert!(pick_asset(&r, &["other-app"], platform, &[kind]).is_none());
+        }
+        let arm_only = release(&["ArtCraft_0.42.1_aarch64.dmg", "ArtCraft_0.42.1_arm64_en-US.msi"]);
+        assert!(pick_asset(&arm_only, &["artcraft"], Platform { os: Os::MacOs, arch: Arch::X64 }, &[PackageKind::Dmg]).is_none());
+        assert!(pick_asset(&arm_only, &["artcraft"], Platform { os: Os::Windows, arch: Arch::X64 }, &[PackageKind::Msi]).is_none());
+        assert!(parse_asset_name("ArtCraft_not-a-version_x64_en-US.msi", &["artcraft"]).is_none());
+        assert!(parse_asset_name("ArtCraft_0.42.1_x64_extra_en-US.msi", &["artcraft"]).is_none());
+    }
 
     fn release(names: &[&str]) -> Release {
         Release {

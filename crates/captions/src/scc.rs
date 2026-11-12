@@ -295,7 +295,8 @@ pub fn parse(text: &str) -> Result<Document> {
         // the first time code says how the file counts (drop-frame or not)
         doc.labels.get_or_insert((RATE, tc.contains([';', '.', ','])));
         for (k, w) in it.enumerate() {
-            let Ok(v) = u16::from_str_radix(w, 16) else {
+            let v = if w.len() == 4 && w.bytes().all(|b| b.is_ascii_hexdigit()) { u16::from_str_radix(w, 16).ok() } else { None };
+            let Some(v) = v else {
                 doc.warnings.push(format!("line {}: bad code word \"{w}\"", n + 1));
                 continue;
             };
@@ -364,10 +365,15 @@ pub fn wrap_rows(text: &str) -> Vec<String> {
     rows
 }
 
+/// The rows the CEA-608 writers (SCC, MCC field 1) load for caption `text`: its plain text in at
+/// most 15 rows of 32 columns. What does not fit is left out.
+pub fn caption_rows(text: &str) -> Vec<String> {
+    wrap_rows(&crate::plain_text(text))
+}
+
 /// Byte pairs (without parity) that load `text` into non-displayed memory.
 fn load_pairs(text: &str) -> Vec<(u8, u8)> {
-    let plain = crate::plain_text(text);
-    let rows = wrap_rows(&plain);
+    let rows = caption_rows(text);
     let mut out = vec![(0x14, misc::RCL), (0x14, misc::RCL), (0x14, misc::ENM), (0x14, misc::ENM)];
     let first_row = 16 - rows.len();
     for (i, row) in rows.iter().enumerate() {
@@ -531,6 +537,17 @@ mod tests {
 
     fn cue(s: i64, e: i64, text: &str) -> Cue {
         Cue { start: RATE.tick_of(s), end: RATE.tick_of(e), text: text.into(), ..Default::default() }
+    }
+
+    #[test]
+    fn plus_signed_code_word_is_rejected() {
+        for bad in ["+942", "-942", "+94", "94G2"] {
+            let doc = parse(&format!("Scenarist_SCC V1.0\n\n00:00:01:00\t{bad} 9420\n")).unwrap();
+            assert_eq!(doc.warnings.len(), 1, "{bad}: {:?}", doc.warnings);
+            assert!(doc.warnings[0].contains("bad code word"));
+        }
+        let doc = parse("Scenarist_SCC V1.0\n\n00:00:01:00\t9420 9420\n").unwrap();
+        assert!(doc.warnings.is_empty());
     }
 
     #[test]

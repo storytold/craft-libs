@@ -7,12 +7,16 @@
 //! results, and formulas as A1 text, including shared and array formulas), the cell formats
 //! (number formats, fonts, fills, borders, alignment, protection, with palette colours
 //! resolved), user-defined cell styles, merged cells, column and row records, sheet display
-//! flags, calculation settings, defined names, print areas and print titles, and the 1904 date
-//! flag. Widths and heights stay in the file's units.
+//! flags, calculation settings, defined names, print areas and print titles, data validation
+//! rules, cell comments, conditional formats ("cell value is" and "formula is"), pictures with
+//! their cell anchors, the AutoFilter range, and the 1904 date flag. Widths, heights and anchors
+//! stay in the file's units.
 //!
-//! Everything else (charts, pictures, comments, conditional formats, validation, hyperlinks,
-//! PivotTables, macros) is skipped and named in [`Read::warnings`]. Encrypted workbooks and
-//! versions before BIFF8 are refused ([`Error::Encrypted`], [`Error::Biff5`]). A formula that
+//! Everything else (charts, other shapes, newer conditional formats, hyperlinks,
+//! PivotTables, macros) is skipped and named in [`Read::warnings`]. A workbook encrypted with
+//! RC4 or RC4 CryptoAPI is read with its password ([`read_with_password`]; without one, Excel's
+//! default password is tried and [`Error::Encrypted`] says one is needed). Other encryption and
+//! versions before BIFF8 are refused ([`Error::UnsupportedEncryption`], [`Error::Biff5`]). A formula that
 //! cannot be put back into text (links to other workbooks, macro commands, unknown tokens)
 //! leaves its cell with the saved result and a [`Warning::FormulaKept`].
 //!
@@ -30,10 +34,15 @@
 //! # }
 //! ```
 
+mod cond;
+mod crypt;
+mod drawing;
+mod dv;
 mod expr;
 mod formula;
 mod ftab;
 mod model;
+mod notes;
 mod read;
 mod records;
 mod styles;
@@ -42,10 +51,11 @@ pub mod testing;
 
 pub use craft_sheet::{DEFAULT_PALETTE, quote_sheet, sheet_needs_quotes};
 pub use model::{
-    Alignment, BorderLine, BorderStyle, Borders, Calc, CalcMode, Cell, CellError, CellFormat, CellRef, Color, Column, DefinedName, Fill, Font,
-    Formula, HAlign, Pattern, Range, Row, Script, Sheet, Underline, VAlign, Value, View, Visibility, Workbook,
+    Alignment, BorderLine, BorderStyle, Borders, Calc, CalcMode, Cell, CellError, CellFormat, CellRef, ClientAnchor, Color, Column, ConditionRule,
+    ConditionalFormat, DataValidation, DefinedName, DifferentialFormat, DxfFill, ErrorStyle, Fill, Font, Formula, HAlign, Note, Operator, Pattern,
+    Picture, Range, Row, Script, Sheet, Underline, VAlign, ValidationType, Value, View, Visibility, Workbook,
 };
-pub use read::{is_xls, read, read_with};
+pub use read::{is_encrypted, is_xls, read, read_with, read_with_password};
 
 /// Why a workbook could not be read.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -57,9 +67,17 @@ pub enum Error {
     /// More than a [`Limits`] value or a fixed cap allows.
     #[error("the workbook is too large: {0}")]
     TooLarge(String),
-    /// The workbook is password-protected (it has a FilePass record).
+    /// The workbook is encrypted with a password (it has a FilePass record): read it with
+    /// [`read_with_password`].
     #[error("the workbook is password-protected (encrypted)")]
     Encrypted,
+    /// The password does not open the workbook.
+    #[error("the password is not the workbook's")]
+    WrongPassword,
+    /// The workbook is encrypted with a scheme that is not read (XOR obfuscation, CryptoAPI with
+    /// AES or another cipher or hash, an external provider), named.
+    #[error("the workbook uses {0} encryption, which is not read")]
+    UnsupportedEncryption(String),
     /// An Excel 5.0/95 workbook (BIFF5), which is not read.
     #[error("Excel 5.0/95 workbooks (BIFF5) are not supported")]
     Biff5,
@@ -85,14 +103,32 @@ pub enum Warning {
     MissingSharedString,
     #[error("what-if data tables were not read; their values were kept")]
     DataTable,
-    #[error("cell comments were not read")]
-    Comments,
-    #[error("pictures, charts and shapes were not read")]
-    Drawings,
-    #[error("conditional formatting was not read")]
-    ConditionalFormatting,
-    #[error("data validation was not read")]
-    DataValidation,
+    /// Some comment or drawing object records were shorter than they say and were skipped.
+    #[error("some comment or object records were damaged and skipped")]
+    DamagedObjects,
+    /// Charts embedded in a worksheet are not read.
+    #[error("charts were not read")]
+    Charts,
+    /// Pictures in a format that is not read (PICT, TIFF), damaged ones, ones past the limits,
+    /// and shapes that name a missing picture.
+    #[error("some pictures were damaged, in a format that is not read (PICT, TIFF), or past the limits, and were skipped")]
+    PicturesSkipped,
+    /// Some CF records could not be read: a rule type other than "cell value is" and "formula
+    /// is", a formula that could not be decoded, a damaged record, or more than the reader keeps.
+    #[error("some conditional formatting rules could not be read and were skipped")]
+    ConditionalFormattingSkipped,
+    /// CF12 records (Excel 2007 data bars, colour scales, icon sets) are not read.
+    #[error("newer conditional formats (data bars, colour scales, icon sets) were not read")]
+    ConditionalFormatting12,
+    /// Some Dv records could not be read: Excel would refuse them (an unknown alert style or
+    /// operator, a formula or range list past the record), no range was left, a formula could not
+    /// be decoded, or the sheet had more rules than the reader keeps.
+    #[error("some data validation rules could not be read and were skipped")]
+    DataValidationSkipped,
+    /// Dv records with no DVal record before them, or past the number of rules it gives: Excel
+    /// does not read them either.
+    #[error("some data validation records were ignored, as Excel ignores them: no DVal record before them, or past the number of rules it gives")]
+    DataValidationIgnored,
     #[error("hyperlinks were not read")]
     Hyperlinks,
     #[error("PivotTables were not read; their values were kept")]

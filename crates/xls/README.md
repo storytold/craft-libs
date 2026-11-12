@@ -3,8 +3,9 @@
 A clean-room reader for Excel 97-2003 workbooks (`.xls`, BIFF8). It turns the bytes of a file
 into a `Workbook` that keeps the file's own terms: cells, formulas as text, the format table,
 column and row records. Mapping that onto an application's document is the caller's work.
-No `unsafe`; the only dependencies are `craft-cfb` (the compound file container), `craft-sheet` (cell
-positions, values and tables shared with the other spreadsheet formats) and `thiserror`.
+No `unsafe`. Dependencies: `craft-cfb` (the compound file container), `craft-sheet` (cell positions,
+values and tables shared with the other spreadsheet formats), `md-5` and `sha1` (RC4 keys),
+`miniz_oxide` (compressed metafiles) and `thiserror`.
 No third-party implementation was consulted.
 
 | Document | Used for |
@@ -29,10 +30,39 @@ No third-party implementation was consulted.
 - Merged cells, ColInfo and Row records (width in 1/256 character, height in twips, hidden,
   outline, default format), the default row height, the Window2 display flags.
 - Defined names with their scope, print areas and print titles.
+- Data validation (DVal and Dv records): type, operator, formulas as text (relative references
+  from the top left cell of the rule's ranges, a literal list as `"a,b"`), messages, alert style
+  and flags, in SpreadsheetML's terms. Exactly the DVal's count of rules is read, as Excel does;
+  a rule Excel would refuse is skipped with a warning, and at most 65,536 are kept per sheet.
 
-Not read: charts, pictures, comments, conditional formats, data validation, hyperlinks,
-PivotTables, macros. Each is named once in `Read::warnings`. Encrypted workbooks
-(`Error::Encrypted`) and BIFF5 and older (`Error::Biff5`) are refused. There is no writer
+- Cell comments: each Note's cell, author and visibility, with its text object's text (Obj,
+  TxO and its Continue records).
+- Conditional formats: CondFmt ranges with their "cell value is" and "formula is" CF rules,
+  formulas relative to the bounding range, and the DXFN as a `DifferentialFormat` whose unset
+  parts are `None`.
+- Pictures: the drawing group's BLIP store and each sheet's picture shapes with their client
+  anchors (cells and fractions): PNG, JPEG, EMF and WMF (inflated, a WMF given its placeable
+  header back), and DIB as BMP. Shapes that show one picture share its bytes.
+- The AutoFilter range (AutoFilterInfo with the `_FilterDatabase` name); not its criteria.
+
+Limits for these: 256 MiB of drawing records for the workbook and for each sheet, 4096 stored
+pictures, 256 MiB of inflated metafiles in all (64 MiB each), 65,536 pictures, comments and
+conditional formats per sheet. A damaged comment, object or conditional-format record is
+skipped with a warning.
+
+Not read: charts, other shapes, newer conditional formats (CF12), hyperlinks,
+PivotTables, macros. Each is named once in `Read::warnings`. BIFF5 and older is refused
+(`Error::Biff5`).
+
+## Encrypted workbooks
+
+A workbook encrypted with RC4 (version 1.1, keyed through MD5) or RC4 CryptoAPI (versions 2.2,
+3.2 and 4.2, keyed through SHA-1 with a 40- to 128-bit key, which current Excel writes) is read
+with `read_with_password` ([MS-OFFCRYPTO] 2.3.5, 2.3.6). Without a password, Excel's default one
+(`VelvetSweatshop`) is tried, and `Error::Encrypted` says a password is needed. A wrong password
+is `Error::WrongPassword`; XOR obfuscation and CryptoAPI with AES, another cipher or hash, or an
+external provider are `Error::UnsupportedEncryption`. Every size in the FilePass record is
+checked before it is used. There is no writer
 (`craft_xls::testing` builds small fixtures for tests).
 
 A formula that cannot be put back into text (a link to another workbook, a macro command, an
