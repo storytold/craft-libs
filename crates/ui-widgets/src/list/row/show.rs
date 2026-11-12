@@ -9,8 +9,8 @@ use super::thumb::{RowThumb, target_at};
 use super::trailing::{HostedSize, TrailingFace, TrailingItem, TrailingPart, below_key, cell_key, field_key};
 use super::{ListRow, RowInk};
 use crate::contract::{
-    Access, Bind, Component, Cx, DragPreview, MeasureCx, Name, OpenChange, PaintUi, PartsCx, Pointer as _, Props as _, Role, RowPressed, Styled as _,
-    WordSetCx as _,
+    Access, Bind, Component, Cx, DragPreview, Focus as _, MeasureCx, Name, OpenChange, PaintUi, PartsCx, Pointer as _, Props as _, Role, RowPressed,
+    Styled as _, WordSetCx as _,
 };
 use crate::controls::disclosure::Disclosure;
 use crate::display::Progress;
@@ -290,11 +290,21 @@ impl Component for ListRow<'_> {
         if self.spacer {
             return;
         }
-        if let Some(open) = self.group
-            && cx.part_activated(DISCLOSURE).is_some()
-        {
-            let change = OpenChange::new((), !open);
-            self.open = Some(if cx.part(DISCLOSURE).press.mods.alt { change.all() } else { change });
+        if let Some(open) = self.group {
+            // The router hands an AccessKit Expand or Collapse on the disclosure to the row only when it changes the
+            // state, so it asks what a click does.
+            let disclosure: PartRef = DISCLOSURE.into();
+            let by_access = cx
+                .intents()
+                .take_access_where(|request| {
+                    request.target == Some(disclosure)
+                        && matches!(request.action, craft_behavior::AccessAction::Expand | craft_behavior::AccessAction::Collapse)
+                })
+                .is_some();
+            if by_access || cx.part_activated(DISCLOSURE).is_some() {
+                let change = OpenChange::new((), !open);
+                self.open = Some(if !by_access && cx.part(DISCLOSURE).press.mods.alt { change.all() } else { change });
+            }
         }
         for (at, thumb) in self.extras.iter().enumerate() {
             let part = LINK.at(at as u64);
