@@ -13,7 +13,7 @@ use super::view::{Overlay, TimelineView, TimelineWords, time_axis};
 use super::{DragEvent, LabelPalette, TimecodeField, label_palette};
 use crate::clips::{ClipEdit, SnapTargets};
 use crate::clock::FollowMode;
-use crate::markers::{Marker, MarkerColor};
+use crate::markers::MarkerColor;
 use crate::model::{ClipId, ClipInfo, TimelineModel, TrackId, TrackInfo, TrackKind};
 use crate::time::{Tick, TimeRange};
 use craft_behavior::{
@@ -166,7 +166,7 @@ pub struct TimelineToolbar {
     pub snap: EditResponse<bool>,
     /// The Linked Selection toggle button.
     pub linked_selection: EditResponse<bool>,
-    /// The Add Marker button; it is disabled while a marker sits at the playhead.
+    /// The Add Marker button; the app decides what a click adds.
     pub add_marker: Response,
     /// The display settings button.
     pub settings: Response,
@@ -545,7 +545,7 @@ impl<M: TimelineModel> Timeline<'_, M> {
                     Stack::new().show(ui, |ui, _| {
                         let field = TimecodeField::new(words.panel.clone(), Bind::given(playhead), format).large().show(ui);
                         timecode_edit = field.edit.events;
-                        toolbar = toolbar_row(ui, &words, snap, linked_selection, markers, playhead);
+                        toolbar = toolbar_row(ui, &words, snap, linked_selection);
                     });
                     Stack::new().show(ui, |ui, _| {
                         let strip = MarkerStrip::new(words.overview.clone(), markers);
@@ -774,22 +774,14 @@ fn retarget(event: &mut EditEvent<ClipEdit>, target: MoveTarget) {
 }
 
 /// The toolbar under the timecode: Snap, Linked Selection, Add Marker and the display settings.
-fn toolbar_row(
-    ui: &mut Ui,
-    words: &TimelineWords,
-    snap: bool,
-    linked_selection: bool,
-    markers: &[Marker],
-    playhead: Tick,
-) -> Option<TimelineToolbar> {
+fn toolbar_row(ui: &mut Ui, words: &TimelineWords, snap: bool, linked_selection: bool) -> Option<TimelineToolbar> {
     let shown = Row::new().show(ui, |ui, _| {
         let snap = ToggleButton::new(words.snap.clone(), Bind::given(snap)).icon(IconSpec::svg(IconId::new("snap"))).icon_only().show(ui);
         let linked = ToggleButton::new(words.linked_selection.clone(), Bind::given(linked_selection))
             .icon(IconSpec::svg(IconId::new("linked_selection")))
             .icon_only()
             .show(ui);
-        let refused = markers.iter().any(|marker| marker.start == playhead);
-        let add_marker = IconButton::new(IconSpec::svg(IconId::new("flag"))).label(words.add_marker.clone()).enabled(!refused).show(ui).response;
+        let add_marker = IconButton::new(IconSpec::svg(IconId::new("flag"))).label(words.add_marker.clone()).show(ui).response;
         let settings = IconButton::new(IconSpec::svg(IconId::new("settings"))).label(words.settings.clone()).show(ui).response;
         (snap, linked, add_marker, settings)
     });
