@@ -133,13 +133,14 @@ pub(crate) fn counting_fills(ui: &Ui, axis: Axis) -> bool {
 }
 
 /// What a unit of a shrinking row reported in the first sweep: its id, the width it took there, the width it asks for
-/// in no room and the least it shrinks to. A body unit reports what it took as both; the row asks it for its least
-/// (`Shrink::Least`) only when the row is short.
+/// in no room and the least it shrinks to, and whether its content is made to be cut (`Component::cut_first`). A body
+/// unit reports what it took as both; the row asks it for its least (`Shrink::Least`) only when the row is short.
 struct Reported {
     leaf: Id,
     took: f32,
     widths: ShrinkUnit,
     body: bool,
+    cut_first: bool,
 }
 
 /// The widths of a unit of a row that shrinks to fit: the width it asks for and the least it narrows to.
@@ -160,8 +161,9 @@ pub(crate) struct ShrinkReports(HashMap<Id, Vec<Reported>>);
 pub(crate) struct LeastReports(HashMap<Id, HashMap<Id, f32>>);
 
 /// Reports the widths of the unit `leaf` of the row `row` that counts them: a leaf's least, or `None` for a body.
-pub(crate) fn report_shrink(ctx: &egui::Context, row: Id, leaf: Id, took: f32, ideal: f32, least: Option<f32>) {
-    let leaf = Reported { leaf, took, widths: ShrinkUnit { ideal, least: least.unwrap_or(ideal).min(ideal) }, body: least.is_none() };
+pub(crate) fn report_shrink(ctx: &egui::Context, row: Id, leaf: Id, took: f32, ideal: f32, least: Option<f32>, cut_first: bool) {
+    let widths = ShrinkUnit { ideal, least: least.unwrap_or(ideal).min(ideal) };
+    let leaf = Reported { leaf, took, widths, body: least.is_none(), cut_first };
     pass_state::with::<ShrinkReports, _>(ctx, |reports| reports.0.entry(row).or_default().push(leaf));
 }
 
@@ -230,6 +232,27 @@ pub fn shrink_widths(units: &[ShrinkUnit], fixed: f32, room: f32, order: ShrinkO
     }
 }
 
+/// `shrink_widths` in two turns: the units whose content is made to be cut (`first`) give what they can of the
+/// shortfall, and the others give only the rest. A row that does not fit even with every unit at its least keeps the
+/// natural widths, as `shrink_widths` does.
+fn shrink_widths_in_turn(units: &[ShrinkUnit], first: &[bool], fixed: f32, room: f32, order: ShrinkOrder) -> Vec<f32> {
+    let pick = |turn: bool| -> Vec<ShrinkUnit> { units.iter().zip(first).filter(|(_, first)| **first == turn).map(|(unit, _)| *unit).collect() };
+    let (cut, rest) = (pick(true), pick(false));
+    let slack = |units: &[ShrinkUnit]| units.iter().map(|unit| unit.ideal - unit.least).sum::<f32>();
+    let short = fixed + units.iter().map(|unit| unit.ideal).sum::<f32>() - room;
+    // Half a point: less than a pixel shows at any scale the box runs.
+    if short <= 0.0 || slack(&cut) <= 0.0 || short - slack(&cut) - slack(&rest) >= 0.5 {
+        return shrink_widths(units, fixed, room, order);
+    }
+    let ideal = |units: &[ShrinkUnit]| units.iter().map(|unit| unit.ideal).sum::<f32>();
+    // The cut units take the shortfall against the others at their ideal, down to their least.
+    let cut_widths =
+        if short >= slack(&cut) { cut.iter().map(|unit| unit.least).collect() } else { shrink_widths(&cut, fixed + ideal(&rest), room, order) };
+    let rest_widths = shrink_widths(&rest, fixed + cut_widths.iter().sum::<f32>(), room, order);
+    let (mut cut_widths, mut rest_widths) = (cut_widths.into_iter(), rest_widths.into_iter());
+    first.iter().map(|first| if *first { cut_widths.next() } else { rest_widths.next() }.unwrap_or_default()).collect()
+}
+
 /// Runs `body`, the children of the unwrapped `Row` body `id`, in `ui`, the block they are placed in, with the row's
 /// shrink step: a row fits its room by narrowing its units, never past the least each reports, evenly or, in a bar,
 /// from its end, and a row that cannot fit even at its units' leasts keeps their natural widths. A unit is a leaf that
@@ -269,7 +292,9 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
     // Records the width each unit gets, and returns whether one took another width in the first sweep.
     let settle = |leaves: &[Reported], fixed: f32| {
         let units: Vec<ShrinkUnit> = leaves.iter().map(|leaf| leaf.widths).collect();
-        let widths = if room.is_finite() { shrink_widths(&units, fixed, room, order) } else { units.iter().map(|unit| unit.ideal).collect() };
+        let first: Vec<bool> = leaves.iter().map(|leaf| leaf.cut_first).collect();
+        let widths =
+            if room.is_finite() { shrink_widths_in_turn(&units, &first, fixed, room, order) } else { units.iter().map(|unit| unit.ideal).collect() };
         let mut again = false;
         for (leaf, width) in leaves.iter().zip(widths) {
             layout_memory::emit_record(&ctx, shrink_key(id, leaf.leaf), layout_memory::Measured::new(Vec2::new(room, 0.0), Vec2::new(width, 0.0)));

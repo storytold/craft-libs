@@ -179,6 +179,10 @@ impl Component for Text {
         }
     }
 
+    fn cut_first(&self) -> bool {
+        self.elide != Elide::Off
+    }
+
     fn sense(&self) -> Sense {
         super::display_sense(&self.common, self.elide != Elide::Off)
     }

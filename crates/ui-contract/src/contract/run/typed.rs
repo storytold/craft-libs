@@ -115,6 +115,10 @@ impl<C: Component> Erased for Typed<'_, '_, C> {
         self.comp.get_ref().fills()
     }
 
+    fn cut_first(&self) -> bool {
+        self.comp.get_ref().cut_first()
+    }
+
     fn measure_content(&mut self, input: &MeasureIn<'_>, resolved: &Resolved<'_>) -> (Vec2, Inputs) {
         let style = self.style.as_deref().expect("step 2 ran");
         steps::measure_content(self.comp.get(), input, style, resolved, self.shown.as_deref())

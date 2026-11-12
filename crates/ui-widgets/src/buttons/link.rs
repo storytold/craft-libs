@@ -4,7 +4,7 @@ use super::ButtonOutput;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Pointer as _, Role, Styled as _};
 use crate::primitives::{Span, TextLayout, TextRun, Wrap};
 use crate::style::{ComponentStyle, FocusLook, Stateful, StyleCx, TextLook, TypeRole};
-use craft_behavior::{Flow, Metrics, PointerButton, PressPhase, Sense};
+use craft_behavior::{Flow, Metrics, PointerButton, PressPhase, Proposal, Sense};
 use craft_theme::variant::Tone;
 use craft_theme::{Contrast, States};
 use egui::{Pos2, Vec2};
@@ -80,8 +80,14 @@ impl Component for Link {
         Sense::CLICK | Sense::FOCUS | Sense::MIDDLE_CLICK
     }
 
+    fn cut_first(&self) -> bool {
+        matches!(self.wrap, Wrap::Elide | Wrap::ElideStart | Wrap::ElideMiddle | Wrap::ElidePath)
+    }
+
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        let layout = cx.layout(&self.run(cx.resolved.label));
+        // At its least a link that elides is the ellipsis.
+        let band = if cx.proposal == Proposal::Min && self.cut_first() { 0.0 } else { cx.room.unwrap_or(f32::INFINITY) };
+        let layout = cx.layout_at(&self.run(cx.resolved.label), band);
         Vec2::new(layout.size().x, painted_height(&layout))
     }
 

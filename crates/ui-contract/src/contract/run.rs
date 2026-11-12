@@ -456,6 +456,7 @@ pub(crate) trait Erased {
     fn peek_value(&mut self, ctx: &Context, id: Id, command: Option<&ResolvedCommand>) -> bool;
     fn bind_key(&mut self, id: Id) -> Option<BindKey>;
     fn fills(&self) -> Option<craft_behavior::Axis>;
+    fn cut_first(&self) -> bool;
     /// What `C::measure` gives for the shown value.
     fn measure_content(&mut self, input: &MeasureIn<'_>, resolved: &Resolved<'_>) -> (Vec2, Inputs);
     fn measured_extent(&mut self, at: &Measuring<'_, '_>, stage: &mut MemoryStage) -> Vec2;
@@ -1264,9 +1265,9 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
     match shrink {
         Some(crate::layout::Shrink::Count(row)) if shape == ShapeKind::Leaf => {
             let (ideal, least) = (ask(&mut *t, Proposal::Ideal, None, Vec2::ZERO).0.x, ask(&mut *t, Proposal::Min, None, Vec2::ZERO).0.x);
-            crate::layout::report_shrink(&ctx, row, id, size.x, ideal, Some(least));
+            crate::layout::report_shrink(&ctx, row, id, size.x, ideal, Some(least), t.cut_first());
         }
-        Some(crate::layout::Shrink::Count(row)) => crate::layout::report_shrink(&ctx, row, id, size.x, size.x, None),
+        Some(crate::layout::Shrink::Count(row)) => crate::layout::report_shrink(&ctx, row, id, size.x, size.x, None, false),
         Some(crate::layout::Shrink::Least(row)) if shape == ShapeKind::Body => crate::layout::report_least(&ctx, row, id, size.x),
         _ => {}
     }
@@ -1274,7 +1275,7 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
     // the units narrow to leave it, and it takes what they leave.
     if let Some(crate::layout::Shrink::Count(row)) = env.shrink.filter(|_| fill_body) {
         let content = measured.x + t.overflow();
-        crate::layout::report_shrink(&ctx, row, id, size.x.min(content), content, Some(content));
+        crate::layout::report_shrink(&ctx, row, id, size.x.min(content), content, Some(content), false);
     }
     // A component shown at a rect fills it: the rect is its size, and a leaf that measures nothing (a content
     // painter) still shows there.

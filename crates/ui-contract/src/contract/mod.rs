@@ -381,6 +381,12 @@ pub trait Component: Meta + Sized {
         None
     }
 
+    /// Whether the content is made to be cut where it does not fit: an elided line or a path. In a row too short for
+    /// its children such a component narrows to its least before any other gives way, so labels beside it stay whole.
+    fn cut_first(&self) -> bool {
+        false
+    }
+
     /// The root's sense; the shape's default unless a canvas control.
     fn sense(&self) -> Sense {
         if Self::CANVAS_CONTROL { Sense::empty() } else { <Self::Shape as ShowShape>::DEFAULT_SENSE }
