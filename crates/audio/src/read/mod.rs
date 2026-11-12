@@ -14,6 +14,7 @@ mod flac;
 #[cfg(feature = "symphonia")]
 mod mp4;
 mod native;
+mod raw;
 mod source;
 #[cfg(feature = "symphonia")]
 mod symph;
@@ -21,6 +22,7 @@ mod wav;
 
 use crate::{AudioBuffer, AudioError, AudioInfo, ChannelLayout, CodecId, Container, Result};
 use native::Native;
+pub use raw::{RawPcm, aiff_pcm, wav_pcm};
 pub use source::SharedSource;
 use source::Src;
 use std::sync::Arc;

@@ -44,8 +44,25 @@ fn pef(compression: u16) -> Vec<u8> {
     TiffWriter::new(ByteOrder::Big, false).write(&[ifd]).unwrap()
 }
 
+/// A Canon CR2: three placeholder IFDs and IFD3 with a 2-component lossless JPEG frame.
+fn cr2() -> Vec<u8> {
+    let img: Vec<u16> = (0..(W * H) as usize).map(|i| 1024 + (i * 7919 % 12000) as u16).collect();
+    let enc = craft_raw::ljpeg::encode(&img, W as usize / 2, H as usize, 2, 14, 1, 0);
+    let mut ifd0 = IfdBuilder::new();
+    ifd0.set(t::MAKE, Value::Ascii("Canon".into()));
+    let mut ifd3 = IfdBuilder::new();
+    ifd3.set(t::COMPRESSION, Value::Short(vec![6]));
+    ifd3.set(0xc640, Value::Short(vec![1, 16, 16]));
+    ifd3.set_image(ImageData::Strips { rows_per_strip: H, strips: vec![enc] });
+    let blank = || IfdBuilder::new().with(1, Value::Short(vec![0]));
+    TiffWriter::new(ByteOrder::Little, false).write(&[ifd0, blank(), blank(), ifd3]).unwrap()
+}
+
 fn samples() -> Vec<Vec<u8>> {
     vec![
+        cr2(),
+        cfa_tiff("NIKON CORPORATION", 1, 12, ByteOrder::Big),
+        cfa_tiff("NIKON CORPORATION", 34713, 14, ByteOrder::Big),
         pef(1),
         pef(65535),
         cfa_tiff("SAMSUNG", 1, 12, ByteOrder::Little),
