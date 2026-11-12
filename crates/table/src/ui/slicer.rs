@@ -11,10 +11,10 @@ use craft_ui::contract::{
     HeaderRegion, NoValue, Outcome, Pad, PaintUi, Pattern, Props, Role, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
     Styled as _, WordSetCx as _, clicked,
 };
-use craft_ui::display::Text;
 use craft_ui::primitives::{IconSpec, TextRun};
 use craft_ui::runtime::env::{Env, Label};
-use craft_ui::style::{ComponentStyle, Flags, FocusLook, Stateful, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole};
+use craft_ui::sections::{HeaderStrength, TitleRow};
+use craft_ui::style::{ComponentStyle, Flags, FocusLook, Stateful, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens};
 use egui::{Rect, Response, Ui, Vec2, pos2};
 
 #[cfg(feature = "screen-testing")]
@@ -57,10 +57,10 @@ impl Outcome for SlicerOutput {
     }
 }
 
-/// Excel's slicer: a raised card whose header holds the caption and the funnel button (tinted while a filter is on),
-/// over value tiles in `columns` columns (on: the accent fill with the on-accent text; off: the hover fill with muted
-/// text). A click, Enter or Space on a tile reports [`SlicerAction::Toggle`] with its value, the funnel reports
-/// [`SlicerAction::Clear`]; elsewhere a press is the app's (select, drag the object).
+/// Excel's slicer: a raised card whose header band, in the accent's tint, holds the caption and the funnel button
+/// (tinted while a filter is on), over value tiles in `columns` columns (on: the accent fill with the on-accent text;
+/// off: the hover fill with muted text). A click, Enter or Space on a tile reports [`SlicerAction::Toggle`] with its
+/// value, the funnel reports [`SlicerAction::Clear`]; elsewhere a press is the app's (select, drag the object).
 ///
 /// The tiles are one Tab stop whose arrows move between them in reading order and wrap over the rows; the funnel
 /// button is a Tab stop of its own. A card too small for all the tiles scrolls them. `zoom` is the sheet zoom the
@@ -180,7 +180,8 @@ struct SlicerCardStyle {
     metrics: Metrics,
 }
 
-/// The raised card: the caption in its header, the funnel button at the header's end and the tiles in its body.
+/// The raised card: the caption in its accent header band, the funnel button at the band's end, the tiles in its
+/// body.
 #[derive(Component, Props)]
 #[component(container)]
 struct SlicerCard {
@@ -198,7 +199,7 @@ impl SlicerCard {
             .surface(SurfaceKind::Raised)
             .pad(Pad::Control)
             .sizing(Sizing::Fill)
-            .header(HeaderRegion::new().rule(true).trailing(true))
+            .header(HeaderRegion::new().tint(Tone::Accent).inset(Pad::Control).trailing(true))
             .collection_body();
         SlicerCard { common: Common::new(), props, filtered, cleared: false }.label(caption)
     }
@@ -226,7 +227,7 @@ impl Component for SlicerCard {
 
 impl Container for SlicerCard {
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
-        Text::new(cx.label()).role(TypeRole::BodyStrong).show(ui);
+        TitleRow::new(cx.label()).strength(HeaderStrength::Section).tone(Tone::Accent).show(ui);
     }
 
     fn controls(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
@@ -354,7 +355,7 @@ impl Component for SlicerTile {
         let (hover, solid): (StyleColor, StyleColor) = (cx.color(colors.state.hover), cx.color(colors.accent.solid));
         let (muted, on_accent): (StyleColor, StyleColor) = (cx.color(colors.text.muted), cx.color(colors.text.on_accent));
         SlicerTileStyle {
-            surface: SurfaceLook::new(Stateful::new(hover).when(Flags::CHECKED, solid)).radius(cx.variant_look().radius),
+            surface: SurfaceLook::new(Stateful::new(hover).when(Flags::CHECKED, solid)).radius(UiTokens::corner(cx.tokens.shape.radius.control)),
             metrics: Metrics::new().min_size(Vec2::new(0.0, cx.control().height)),
             focus: cx.focus_look(),
             text: TextLook::new(TypeRole::Body, Stateful::new(muted).when(Flags::CHECKED, on_accent)),

@@ -30,7 +30,7 @@ use crate::runtime::overlay::CloseReason;
 use crate::runtime::pass_state;
 use crate::runtime::{keys, layout_memory, pointer, wheel};
 use crate::style::ComponentStyle as _;
-use crate::style::{ScrollBarKind, StyleCx, SurfaceKind, scroll_bar_look, surface_style};
+use crate::style::{ScrollBarKind, StyleCx, SurfaceKind, band_color, scroll_bar_look, surface_style};
 use craft_behavior::layout_memory::measure_tolerance;
 use craft_behavior::{CancelRule, CursorIcon, EditEvent, KeyRole, Mixed, Roving, ScrollPos, ScrollSpan, WheelRoom, WheelTaker};
 use egui::{Context, CornerRadius, Id, Pos2, Rect, Shape, Ui, UiBuilder, Vec2};
@@ -1033,10 +1033,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         if let Some(kind) = props.surface {
             surface_slot.paint(&env.tokens, kind, rect, env.direction);
         }
-        if let Some(kind) = props.header.and_then(|header| header.fill) {
+        if let Some(fill) = props.header.and_then(|header| header.fill) {
             let style = surface_style(&env.tokens, props.surface.unwrap_or(SurfaceKind::Panel));
             let radius = CornerRadius { sw: 0, se: 0, ..style.radius };
-            ui.painter().set(band_slot, Shape::rect_filled(regions.header, radius, surface_style(&env.tokens, kind).fill));
+            ui.painter().set(band_slot, Shape::rect_filled(regions.header, radius, band_color(&env.tokens, fill)));
         }
         paint_rules(ui, &props, env, inner, &regions);
         paint_edge_rule(ui, &props, env, rect);

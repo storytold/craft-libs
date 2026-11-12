@@ -22,7 +22,7 @@ pub enum Emphasis {
 }
 
 /// What a variant says about its subject. The one tone type of the component layer: messages, notices, badges and
-/// status ink all name it, and `StyleCx::tone` and `StyleCx::tone_fill` give its colours.
+/// status ink all name it, and `StyleCx::tone`, [`Tone::soft_fill`] and [`Tone::on_soft`] give its colours.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub enum Tone {
@@ -39,6 +39,19 @@ pub enum Tone {
     Warn,
     /// Failure.
     Bad,
+}
+
+impl Tone {
+    /// The tone's tinted fill: `accent.soft`, the status background, and the sunken surface for no status.
+    pub fn soft_fill(self, tokens: &Tokens) -> Rgba {
+        tokens.color.get(ToneTokens::of(self).soft_fill)
+    }
+
+    /// The ink text and icons read in on the tone's [`soft_fill`](Self::soft_fill): `accent.on_soft`, the status
+    /// foreground, and the normal text for no status.
+    pub fn on_soft(self, tokens: &Tokens) -> Rgba {
+        tokens.color.get(ToneTokens::of(self).on_soft)
+    }
 }
 
 /// Which radius of the theme's shape a look uses.
@@ -75,6 +88,8 @@ pub struct VariantLook {
 #[derive(Clone, Copy, Debug)]
 struct ToneTokens {
     soft_fill: ColorToken,
+    /// Text and icons on `soft_fill`.
+    on_soft: ColorToken,
     fg: ColorToken,
     edge: ColorToken,
     solid: ColorToken,
@@ -88,6 +103,7 @@ impl ToneTokens {
         use ColorToken as T;
         let status = |fg, bg, edge, solid, solid_hover, solid_pressed| ToneTokens {
             soft_fill: bg,
+            on_soft: fg,
             fg,
             edge,
             solid,
@@ -98,6 +114,7 @@ impl ToneTokens {
         match tone {
             Tone::Neutral => ToneTokens {
                 soft_fill: T::SurfaceSunken,
+                on_soft: T::TextNormal,
                 fg: T::TextNormal,
                 edge: T::TextMuted,
                 solid: T::TextMuted,
@@ -107,6 +124,7 @@ impl ToneTokens {
             },
             Tone::Accent => ToneTokens {
                 soft_fill: T::AccentSoft,
+                on_soft: T::AccentOnSoft,
                 fg: T::AccentText,
                 edge: T::AccentBorder,
                 solid: T::AccentStrong,

@@ -2,6 +2,7 @@
 
 use super::look::SurfaceKind;
 use super::tokens::UiTokens;
+use crate::contract::BandFill;
 use craft_theme::{Edge, Elevation, Rgba, Stroke as StrokeStep};
 use egui::{Color32, CornerRadius, Shadow, Stroke};
 
@@ -81,6 +82,14 @@ fn shadow(e: Elevation) -> Option<Shadow> {
 }
 
 /// The look of `kind` in `tokens`.
+/// The colour a band behind a header paints: the surface's fill, or the tone's tinted fill.
+pub(crate) fn band_color(tokens: &UiTokens, fill: BandFill) -> Color32 {
+    match fill {
+        BandFill::Surface(kind) => surface_style(tokens, kind).fill,
+        BandFill::Tone(tone) => color(tone.soft_fill(tokens)),
+    }
+}
+
 pub(crate) fn surface_style(tokens: &UiTokens, kind: SurfaceKind) -> SurfaceStyle {
     use SurfaceKind as K;
     let c = &tokens.color;

@@ -16,6 +16,7 @@ use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, IconLook, Ink, StyleCx, TextLook, TypeRole};
 use craft_behavior::{CursorIcon, Flow, IconId, Metrics, Mixed, NavShape, PartKey, Roving, Sense};
+use craft_theme::variant::Tone;
 use craft_theme::{ControlSize, Stateful, States};
 use egui::{Id, Rect, Response, Ui, Vec2};
 
@@ -168,6 +169,10 @@ pub struct TitleRow<'a> {
     #[style_key]
     #[prop]
     strength: HeaderStrength,
+    /// The tone of the band the row sits on (`HeaderRegion::tint`): the title takes the tone's ink for that fill.
+    #[style_key]
+    #[prop(into)]
+    tone: Option<Tone>,
     /// The heading level AccessKit reports.
     #[prop]
     level: usize,
@@ -220,6 +225,7 @@ impl<'a> TitleRow<'a> {
         TitleRow {
             common,
             strength: HeaderStrength::Normal,
+            tone: None,
             level: 2,
             note: None,
             subtitle: None,
@@ -333,7 +339,8 @@ impl Component for TitleRow<'_> {
             HeaderStrength::Heading => (cx.tokens.size.panel_header, TypeRole::Heading, text.normal),
             HeaderStrength::Caption => (cx.control().height, TypeRole::Label, text.faint),
         };
-        let (shade, ink, disabled) = (cx.color(shade), cx.ink(Ink::OnPanel), cx.color(text.disabled));
+        let shade = key.tone.map_or_else(|| cx.color(shade), |tone| cx.tone_on_fill(tone));
+        let (ink, disabled) = (cx.ink(Ink::OnPanel), cx.color(text.disabled));
         TitleRowStyle {
             metrics: Metrics::new().min_size(Vec2::new(0.0, height)).gap(cx.control().gap),
             text: TextLook::new(role, Stateful::new(shade).off(States::new(shade, shade, shade, disabled))),

@@ -12,6 +12,7 @@ use crate::runtime::windows::WindowSpec;
 use crate::style::{GlyphRole, SurfaceKind};
 use craft_behavior::{CanvasTransform, Roving};
 use craft_theme::ControlSize;
+use craft_theme::variant::Tone;
 use egui::Rect;
 
 pub use crate::runtime::env::ThemeScope;
@@ -265,6 +266,16 @@ pub enum HeaderEdge {
     End,
 }
 
+/// What the band behind a header paints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BandFill {
+    /// A surface's fill.
+    Surface(SurfaceKind),
+    /// A tone's tinted fill (`Tone::soft_fill`).
+    Tone(Tone),
+}
+
 /// A header region, filled by `Container::header`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -282,9 +293,9 @@ pub struct HeaderRegion {
     /// Whether the header has a trailing child region at its end edge, filled by `Container::controls`; the header
     /// itself fills the room it leaves.
     pub trailing: bool,
-    /// The surface a band behind the header paints. The band spans the container's width and starts at its top edge
+    /// What a band behind the header paints. The band spans the container's width and starts at its top edge
     /// whatever the body's padding, and has no rule.
-    pub fill: Option<SurfaceKind>,
+    pub fill: Option<BandFill>,
     /// The padding on the header's two sides: the header's own tier, independent of the body's.
     pub inset: Pad,
     /// The space between a stacked header and the body, none by default.
@@ -299,7 +310,14 @@ impl HeaderRegion {
 
     /// The surface of a band behind the header.
     pub const fn fill(mut self, kind: SurfaceKind) -> Self {
-        self.fill = Some(kind);
+        self.fill = Some(BandFill::Surface(kind));
+        self
+    }
+
+    /// A band behind the header in `tone`'s tinted fill (a slicer's caption band); the header's title row takes the
+    /// tone's ink for that fill (`TitleRow::tone`).
+    pub const fn tint(mut self, tone: Tone) -> Self {
+        self.fill = Some(BandFill::Tone(tone));
         self
     }
 
