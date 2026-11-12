@@ -6,7 +6,7 @@ use craft_opc::{ContentTypes, PackageOut, RT_BASE, Rel, RelOut, Rels, RelsOut, r
 use craft_drawingml::chart::Chart;
 
 use crate::drawing::{Anchor, Drawing, Item, Placement};
-use crate::features::{Comments, NoteShape, notes_vml};
+use crate::features::{Comments, NoteShape, Table, notes_vml};
 use crate::sheet::{CellValue, Row, SheetPart};
 use crate::strings::StringItem;
 use crate::styles::Styles;
@@ -18,6 +18,7 @@ const CT_STRINGS: &str = "application/vnd.openxmlformats-officedocument.spreadsh
 const CT_STYLES: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml";
 const CT_COMMENTS: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml";
 const CT_VML: &str = "application/vnd.openxmlformats-officedocument.vmlDrawing";
+const CT_TABLE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml";
 const CT_DRAWING: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
 const CT_CHART: &str = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
 const CT_CHARTEX: &str = "application/vnd.ms-office.chartex+xml";
@@ -86,6 +87,16 @@ pub struct Worksheet {
     pub notes: Vec<NoteShape>,
     /// The drawing part, written from here. `None` removes it.
     pub drawing: Option<DrawingPart>,
+    /// The table parts, written from here, in the order of the sheet's `tableParts`.
+    pub tables: Vec<TablePart>,
+}
+
+/// A table part. Its relationships (a query table) are kept parts.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TablePart {
+    /// The part's name; a new name is chosen on writing when empty.
+    pub part: String,
+    pub table: Table,
 }
 
 /// A worksheet's drawing part and its relationships (to charts and pictures, kept with their
@@ -185,7 +196,8 @@ impl Document {
                     let comments = p.comments(&part)?;
                     let notes = if comments.is_some() { p.note_shapes(&part)? } else { Vec::new() };
                     let drawing = p.drawing(&part)?.map(|(name, drawing, rels)| DrawingPart { part: name, drawing, rels: rels.list });
-                    worksheets.push(Some(Worksheet { rows, part, comments, notes, drawing }));
+                    let tables = p.tables(&part)?.into_iter().map(|(part, table)| TablePart { part, table }).collect();
+                    worksheets.push(Some(Worksheet { rows, part, comments, notes, drawing, tables }));
                 }
                 Err(Error::TooLarge(m)) => return Err(Error::TooLarge(m)),
                 Err(e) => {
@@ -206,6 +218,7 @@ impl Document {
                 made.push(d.part.clone());
                 made.push(rels_path(&d.part));
             }
+            made.extend(ws.tables.iter().map(|t| t.part.clone()));
         }
         made.extend(workbook_rels.list.iter().filter(|r| !r.external && regenerated(r)).map(|r| r.target.clone()));
         let opc = p.opc();
@@ -310,7 +323,14 @@ impl Document {
         }
         let mut workbook = self.workbook.clone();
         let mut sheet_parts = Vec::new();
+        // Every name a part keeps is taken before any new part is named, so a new one never
+        // takes the name of a part written later.
         let mut taken: Vec<String> = self.parts.iter().map(|p| p.name.to_ascii_lowercase()).collect();
+        for ws in self.worksheets.iter().flatten() {
+            let comments = ws.comments.as_ref().and(ws.part.rels.first("comments")).map(|r| r.target.clone());
+            let own = [ws.part.part.clone()].into_iter().chain(comments).chain(ws.drawing.iter().map(|d| d.part.clone()));
+            taken.extend(own.chain(ws.tables.iter().map(|t| t.part.clone())).filter(|n| !n.is_empty()).map(|n| n.to_ascii_lowercase()));
+        }
         for (i, (entry, ws)) in workbook.sheets.iter_mut().zip(&self.worksheets).enumerate() {
             let Some(ws) = ws else {
                 if rels.items.iter().any(|r| r.id == entry.rel_id) {
@@ -319,7 +339,7 @@ impl Document {
                 return Err(Error::Invalid(format!("sheet \"{}\" has neither a worksheet nor a kept part", entry.name)));
             };
             let mut name = ws.part.part.clone();
-            if name.is_empty() || taken.contains(&name.to_ascii_lowercase()) {
+            if name.is_empty() {
                 name = fresh(&taken, |n| format!("xl/worksheets/sheet{}.xml", i + n));
             }
             taken.push(name.to_ascii_lowercase());
@@ -357,8 +377,9 @@ impl Document {
             out.rels("", &package);
         }
         let mut blocks = vml_blocks(&self.parts);
+        let kept_names: Vec<String> = self.parts.iter().map(|p| p.name.to_ascii_lowercase()).collect();
         for (name, ws) in &sheet_parts {
-            write_sheet(&mut out, name, ws, &mut taken, &mut blocks);
+            write_sheet(&mut out, name, ws, &kept_names, &mut taken, &mut blocks);
         }
         if let Some(name) = &strings {
             let count: usize =
@@ -385,13 +406,15 @@ impl Document {
 
 /// A worksheet, its relationships, and its comments with a VML drawing to show them when it has
 /// none. A hyperlink to a URL its relationship does not lead to gets a relationship of its own.
-fn write_sheet(out: &mut PackageOut, name: &str, ws: &Worksheet, taken: &mut Vec<String>, blocks: &mut Vec<u32>) {
+fn write_sheet(out: &mut PackageOut, name: &str, ws: &Worksheet, kept_names: &[String], taken: &mut Vec<String>, blocks: &mut Vec<u32>) {
     let mut part = ws.part.clone();
     let mut rels = RelsOut::default();
+    let kept_part = |r: &Rel| kept_names.contains(&r.target.to_ascii_lowercase());
     // A comments or drawing relationship stays when this writes that part, or the part is kept.
     let stays = |r: &&Rel| match r.kind() {
         "comments" => ws.comments.is_some(),
-        "drawing" => ws.drawing.as_ref().map_or(taken.contains(&r.target.to_ascii_lowercase()), |d| d.part.eq_ignore_ascii_case(&r.target)),
+        "drawing" => ws.drawing.as_ref().map_or(kept_part(r), |d| d.part.eq_ignore_ascii_case(&r.target)),
+        "table" => ws.tables.iter().any(|t| t.part.eq_ignore_ascii_case(&r.target)) || kept_part(r),
         _ => true,
     };
     rels.items.extend(ws.part.rels.list.iter().filter(stays).map(kept));
@@ -399,11 +422,7 @@ fn write_sheet(out: &mut PackageOut, name: &str, ws: &Worksheet, taken: &mut Vec
         part.features.drawing = None;
     }
     if let Some(d) = &ws.drawing {
-        let target = if d.part.is_empty() || taken.contains(&d.part.to_ascii_lowercase()) {
-            fresh(taken, |n| format!("xl/drawings/drawing{n}.xml"))
-        } else {
-            d.part.clone()
-        };
+        let target = if d.part.is_empty() { fresh(taken, |n| format!("xl/drawings/drawing{n}.xml")) } else { d.part.clone() };
         taken.push(target.to_ascii_lowercase());
         let id = match ws.part.rels.list.iter().find(|r| r.kind() == "drawing" && r.target.eq_ignore_ascii_case(&target)) {
             Some(r) => r.id.clone(),
@@ -457,6 +476,26 @@ fn write_sheet(out: &mut PackageOut, name: &str, ws: &Worksheet, taken: &mut Vec
             out.binary(&vml, CT_VML, notes_vml(&c.comments, &ws.notes, block));
         }
     }
+    let mut table_ids = Vec::new();
+    for t in &ws.tables {
+        let target = if t.part.is_empty() { fresh(taken, |n| format!("xl/tables/table{n}.xml")) } else { t.part.clone() };
+        taken.push(target.to_ascii_lowercase());
+        let id = match ws.part.rels.list.iter().find(|r| r.kind() == "table" && r.target.eq_ignore_ascii_case(&target)) {
+            Some(r) => r.id.clone(),
+            None => {
+                let id = fresh_id(&rels);
+                rels.items.push(RelOut { id: id.clone(), ty: format!("{RT_BASE}table"), target: relative(name, &target), external: false });
+                id
+            }
+        };
+        table_ids.push(id);
+        out.xml_part(&target, CT_TABLE, t.table.to_xml());
+    }
+    // Tables kept as parts (unreadable ones) keep their place after those written.
+    let kept_tables =
+        part.features.table_parts.iter().filter(|id| !table_ids.contains(id) && rels.items.iter().any(|r| r.id == **id && r.ty.ends_with("/table")));
+    table_ids.extend(kept_tables.cloned().collect::<Vec<_>>());
+    part.features.table_parts = table_ids;
     out.xml_part(name, CT_WORKSHEET, part.to_xml(&ws.rows));
     out.rels(name, &rels);
 }

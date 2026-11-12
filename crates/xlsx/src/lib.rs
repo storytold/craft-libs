@@ -68,11 +68,12 @@ pub use craft_sheet::{
     BorderStyle, CellError, CellRef, DEFAULT_PALETTE, HAlign, MAX_COLS, MAX_ROWS, Pattern, Range, Script, Underline, VAlign, Value, Visibility,
     builtin_format, builtin_format_id, quote_sheet, sheet_needs_quotes,
 };
-pub use document::{Document, DrawingPart, KeptPart, Worksheet, XlsxKind};
+pub use document::{Document, DrawingPart, KeptPart, TablePart, Worksheet, XlsxKind};
 pub use drawing::{Anchor, Drawing, Item, Marker, ObjectKind, Placement};
 pub use features::{
     Break, CfRule, Cfvo, ColorScale, Comment, Comments, ConditionalFormatting, DataBar, DataValidation, DataValidations, Features, HeaderFooter,
-    Hyperlink, IconSet, NoteShape, PageMargins, PageSetup, Pane, Print, PrintOptions, Selection, SheetView, notes_vml, parse_sqref, range_ref,
+    Hyperlink, IconSet, NoteShape, PageMargins, PageSetup, Pane, Print, PrintOptions, Selection, SheetView, Table, TableColumn, TableStyleInfo,
+    notes_vml, parse_sqref, range_ref,
 };
 pub use package::{Package, is_xlsb};
 pub use sheet::{Cell, CellFormula, CellValue, Column, FormulaKind, Row, SheetPart, iso_date_serial};

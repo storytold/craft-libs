@@ -651,6 +651,8 @@ pub struct Features {
     pub legacy_drawing: Option<String>,
     /// `drawing/@r:id`: the drawing part (shapes, pictures, charts).
     pub drawing: Option<String>,
+    /// `tableParts/tablePart/@r:id`: the sheet's table parts, in order.
+    pub table_parts: Vec<String>,
 }
 
 impl Features {
@@ -677,6 +679,10 @@ impl Features {
                 .unwrap_or_default(),
             legacy_drawing: root.child("legacyDrawing").and_then(|l| l.attr_or_plain("r:id")).map(str::to_string),
             drawing: root.child("drawing").and_then(|l| l.attr_or_plain("r:id")).map(str::to_string),
+            table_parts: root
+                .child("tableParts")
+                .map(|t| t.children("tablePart").filter_map(|p| p.attr_or_plain("r:id")).map(str::to_string).collect())
+                .unwrap_or_default(),
         }
     }
 
@@ -713,6 +719,14 @@ impl Features {
             ("colBreaks", Vec::from_iter(breaks_el("colBreaks", &p.col_breaks))),
             ("legacyDrawing", Vec::from_iter(self.legacy_drawing.as_ref().map(|id| El::new("legacyDrawing").with_attr("r:id", id)))),
             ("drawing", Vec::from_iter(self.drawing.as_ref().map(|id| El::new("drawing").with_attr("r:id", id)))),
+            (
+                "tableParts",
+                Vec::from_iter((!self.table_parts.is_empty()).then(|| {
+                    let mut e = El::new("tableParts").with_attr("count", self.table_parts.len());
+                    self.table_parts.iter().for_each(|id| e.push(El::new("tablePart").with_attr("r:id", id)));
+                    e
+                })),
+            ),
         ]
     }
 }
@@ -919,5 +933,155 @@ mod tests {
             assert_eq!(range_ref(&Range::parse(r).unwrap()), r);
         }
         assert_eq!(parse_sqref(" A1  B2:C3 bad 4:4").len(), 3);
+    }
+}
+
+// ------------------------------------------------------------------------------- tables
+
+element! {
+    /// `<tableColumn>`.
+    pub struct TableColumn {
+        id: u32 = "id",
+        unique_name: String = "uniqueName",
+        name: String = "name",
+        /// `none`, `sum`, `min`, `max`, `average`, `count`, `countNums`, `stdDev`, `var`, `custom`.
+        totals_row_function: String = "totalsRowFunction",
+        totals_row_label: String = "totalsRowLabel",
+        query_table_field_id: u32 = "queryTableFieldId",
+        header_row_dxf_id: u32 = "headerRowDxfId",
+        data_dxf_id: u32 = "dataDxfId",
+        totals_row_dxf_id: u32 = "totalsRowDxfId",
+        header_row_cell_style: String = "headerRowCellStyle",
+        data_cell_style: String = "dataCellStyle",
+        totals_row_cell_style: String = "totalsRowCellStyle",
+    }
+    + {
+        /// `calculatedColumnFormula`, as written, and whether it is an array formula.
+        calculated_formula: Option<(String, bool)>,
+        /// `totalsRowFormula` (for `custom`), and whether it is an array formula.
+        totals_row_formula: Option<(String, bool)>,
+        /// `xmlColumnPr` and `extLst`, as written.
+        other: Vec<El>,
+    }
+}
+
+element! {
+    /// `<tableStyleInfo>`.
+    pub struct TableStyleInfo {
+        name: String = "name",
+        show_first_column: bool = "showFirstColumn",
+        show_last_column: bool = "showLastColumn",
+        show_row_stripes: bool = "showRowStripes",
+        show_column_stripes: bool = "showColumnStripes",
+    }
+}
+
+element! {
+    /// A table (`<table>`, 18.5): a named range with a header row, columns and a style.
+    pub struct Table {
+        id: u32 = "id",
+        name: String = "name",
+        display_name: String = "displayName",
+        comment: String = "comment",
+        /// `worksheet`, `xml`, `queryTable`.
+        table_type: String = "tableType",
+        header_row_count: u32 = "headerRowCount",
+        insert_row: bool = "insertRow",
+        insert_row_shift: bool = "insertRowShift",
+        totals_row_count: u32 = "totalsRowCount",
+        totals_row_shown: bool = "totalsRowShown",
+        published: bool = "published",
+        header_row_dxf_id: u32 = "headerRowDxfId",
+        data_dxf_id: u32 = "dataDxfId",
+        totals_row_dxf_id: u32 = "totalsRowDxfId",
+        header_row_border_dxf_id: u32 = "headerRowBorderDxfId",
+        table_border_dxf_id: u32 = "tableBorderDxfId",
+        totals_row_border_dxf_id: u32 = "totalsRowBorderDxfId",
+        header_row_cell_style: String = "headerRowCellStyle",
+        data_cell_style: String = "dataCellStyle",
+        totals_row_cell_style: String = "totalsRowCellStyle",
+        connection_id: u32 = "connectionId",
+    }
+    + {
+        range: Range,
+        /// `autoFilter` and `sortState`, as written (they may hold their own extensions).
+        auto_filter: Option<El>,
+        sort_state: Option<El>,
+        columns: Vec<TableColumn>,
+        style: Option<TableStyleInfo>,
+        ext: Option<El>,
+    }
+}
+
+impl Table {
+    /// A table part read with [`crate::ns::CANONICAL`]. `None` without a readable `ref`.
+    pub fn read(t: &El) -> Option<Table> {
+        let formula = |c: &El, n: &str| c.child(n).map(|f| (f.text().into_owned(), f.flag("array", false)));
+        let columns = t
+            .child("tableColumns")
+            .map(|cs| {
+                cs.children("tableColumn")
+                    .map(|c| TableColumn {
+                        calculated_formula: formula(c, "calculatedColumnFormula"),
+                        totals_row_formula: formula(c, "totalsRowFormula"),
+                        other: kids(c, &["calculatedColumnFormula", "totalsRowFormula"]),
+                        ..TableColumn::read_attrs(c)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(Table {
+            range: Range::parse(t.attr("ref")?)?,
+            auto_filter: t.child("autoFilter").cloned(),
+            sort_state: t.child("sortState").cloned(),
+            columns,
+            style: t.child("tableStyleInfo").map(TableStyleInfo::read_attrs),
+            ext: t.child("extLst").cloned(),
+            ..Table::read_attrs(t)
+        })
+    }
+
+    /// The table part.
+    pub fn to_xml(&self) -> Vec<u8> {
+        let mut e = El::new("table");
+        self.write_attrs(&mut e);
+        e.attrs.insert(0, ("ref".into(), self.range.a1()));
+        // `id`, `name` and `displayName` lead, as Excel writes them.
+        e.attrs.sort_by_key(|(k, _)| match k.as_str() {
+            "id" => 0,
+            "name" => 1,
+            "displayName" => 2,
+            "ref" => 3,
+            _ => 4,
+        });
+        for x in [&self.auto_filter, &self.sort_state].into_iter().flatten() {
+            e.push(x.clone());
+        }
+        let mut cols = El::new("tableColumns").with_attr("count", self.columns.len());
+        for c in &self.columns {
+            let mut ce = El::new("tableColumn");
+            c.write_attrs(&mut ce);
+            for (n, f) in [("calculatedColumnFormula", &c.calculated_formula), ("totalsRowFormula", &c.totals_row_formula)] {
+                if let Some((text, array)) = f {
+                    let fe = El::new(n).with_text(text.as_str());
+                    ce.push(if *array { fe.with_attr("array", 1) } else { fe });
+                }
+            }
+            ce.children.extend(c.other.iter().cloned().map(Node::El));
+            cols.push(ce);
+        }
+        e.push(cols);
+        if let Some(s) = &self.style {
+            let mut se = El::new("tableStyleInfo");
+            s.write_attrs(&mut se);
+            e.push(se);
+        }
+        if let Some(x) = &self.ext {
+            e.push(x.clone());
+        }
+        crate::ns::declare(&mut e);
+        let mut w = craft_xml::Writer::document();
+        w.tree(&e);
+        w.into_bytes()
     }
 }

@@ -56,6 +56,14 @@ or image relationship and its `a:xfrm`, and `craft_drawingml::read` reads its fi
 (a `chartEx` part behind `mc:AlternateContent` for the Office 2016 types) or an image, with its
 anchor. Chart parts and media are kept parts.
 
+Tables: `Package::tables` reads a sheet's table parts (in `tableParts` order) into `Table`
+(every `CT_Table` attribute, `TableColumn`s with calculated and totals formulas,
+`TableStyleInfo`; `autoFilter`, `sortState` and extensions kept as written). A `Document`
+worksheet holds them as `TablePart`s, regenerated on writing with their relationships and
+`tableParts` entries; a removed table takes both with it. Every part name a document keeps is
+reserved before new parts are named, so a new part never takes a name another sheet's part
+keeps.
+
 The parts this crate writes use the transitional namespaces; a strict file's kept parts stay as
 they were. A binary workbook is not written.
 
