@@ -36,10 +36,16 @@ pub struct Naming {
     pub family_name: String,
     /// The SHA-256 of the upstream font file.
     pub sha256: [u8; 32],
+    /// The word the new names start with, before [`Naming::number`]: the family becomes `<prefix> <n>` and the
+    /// PostScript name `<prefix>-<n>` (`<family> derivative <prefix><n>` and `<ps>-derivative<prefix><n>` for the
+    /// Ubuntu Font Licence).
+    pub prefix: String,
+    /// Who changed the font, in the Apache 2.0 notice `Subset of <family>, changed by <changed_by>`.
+    pub changed_by: String,
 }
 
 impl Naming {
-    /// The number in `FPS <n>`: decimal, so it can never spell a word.
+    /// The number in the new names: decimal, so it can never spell a word.
     pub fn number(&self) -> u64 {
         let [a, b, c, d, e, f, g, h, ..] = self.sha256;
         u64::from_be_bytes([a, b, c, d, e, f, g, h]) % 1_000_000_000
@@ -152,9 +158,9 @@ fn new_names(font: &FontRef, name: &Name, naming: &Naming) -> Result<NewNames, E
     let raw_style = english(name, 17).or_else(|| english(name, 2));
     let (family, ps) = if ufl {
         let orig_ps = source_ps(name, PS_ID, naming, raw_style.as_deref());
-        (format!("{} derivative FPS{n}", naming.family_name), derivative_ps(&orig_ps, n))
+        (format!("{} derivative {}{n}", naming.family_name, naming.prefix), derivative_ps(&orig_ps, &naming.prefix, n))
     } else {
-        (format!("FPS {n}"), format!("FPS-{n}"))
+        (format!("{} {n}", naming.prefix), ps_chars(&format!("{}-{n}", naming.prefix), MAX_PS_LEN))
     };
     let style = raw_style.and_then(|s| style_part(&s, &banned)).filter(|s| s != "Regular");
     let full = match style {
@@ -162,7 +168,7 @@ fn new_names(font: &FontRef, name: &Name, naming: &Naming) -> Result<NewNames, E
         None => family.clone(),
     };
     let instance_ps = instance_ps_names(font, name, naming, &banned);
-    let notice = (naming.licence == Licence::Apache).then(|| format!("Subset of {}, changed by font-preview-service", naming.family_name));
+    let notice = (naming.licence == Licence::Apache).then(|| format!("Subset of {}, changed by {}", naming.family_name, naming.changed_by));
 
     for s in [&family, &full, &ps].into_iter().chain(instance_ps.values()) {
         if rfn.found_in(s) {
@@ -214,21 +220,21 @@ fn instance_ps_names(font: &FontRef, name: &Name, naming: &Naming, banned: &Bann
         };
         let style = english(name, inst.subfamily_name_id.to_u16());
         let ps = if naming.licence == Licence::Ufl {
-            derivative_ps(&source_ps(name, id.to_u16(), naming, style.as_deref()), n)
+            derivative_ps(&source_ps(name, id.to_u16(), naming, style.as_deref()), &naming.prefix, n)
         } else {
             let style = style.and_then(|s| style_part(&s, banned)).unwrap_or_default();
-            let ps = ps_chars(&format!("FPS-{n}-{style}"), MAX_PS_LEN);
-            if banned.found_in(&ps) { format!("FPS-{n}-{i}") } else { ps }
+            let ps = ps_chars(&format!("{}-{n}-{style}", naming.prefix), MAX_PS_LEN);
+            if banned.found_in(&ps) { ps_chars(&format!("{}-{n}-{i}", naming.prefix), MAX_PS_LEN) } else { ps }
         };
         out.insert(id.to_u16(), ps);
     }
     out
 }
 
-/// `<ps>-derivativeFPS<n>`, cutting `ps` so the whole fits PostScript rules.
-fn derivative_ps(ps: &str, n: u64) -> String {
-    let suffix = format!("-derivativeFPS{n}");
-    let base = ps_chars(ps, MAX_PS_LEN - suffix.len());
+/// `<ps>-derivative<prefix><n>`, cutting `ps` so the whole fits PostScript rules.
+fn derivative_ps(ps: &str, prefix: &str, n: u64) -> String {
+    let suffix = ps_chars(&format!("-derivative{prefix}{n}"), MAX_PS_LEN);
+    let base = ps_chars(ps, MAX_PS_LEN.saturating_sub(suffix.len()));
     format!("{base}{suffix}")
 }
 
@@ -342,6 +348,6 @@ mod tests {
         assert_eq!(style_part("Roboto Flex Bold", &banned).as_deref(), Some("Bold"));
         assert_eq!(style_part("ABeeZee-Italic", &banned).as_deref(), Some("Italic"));
         assert_eq!(style_part("ABeeZee", &banned), None);
-        assert_eq!(banned.replace("Version 1.0; ABeeZee", "FPS 1"), "Version 1.0; FPS 1");
+        assert_eq!(banned.replace("Version 1.0; ABeeZee", "PRV 1"), "Version 1.0; PRV 1");
     }
 }

@@ -4,7 +4,8 @@ description = "The HarfBuzz subsetter, built from vendored source: raw declarati
 version.workspace = true
 edition.workspace = true
 # The Rust code is the repository's; the vendored HarfBuzz source (harfbuzz/) is HarfBuzz's "Old MIT" licence
-# (harfbuzz/COPYING).
+# (harfbuzz/COPYING). MIT-Modern-Variant is allowed for this vendored HarfBuzz source only (the owner's exception,
+# 2026-11-12); the house licence allowlist itself lives in storytold/craft-contrib.
 license = "(MIT OR Apache-2.0) AND MIT-Modern-Variant"
 rust-version.workspace = true
 repository.workspace = true

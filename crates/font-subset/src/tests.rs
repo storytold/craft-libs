@@ -17,7 +17,7 @@ fn fixture(path: &str) -> Vec<u8> {
 }
 
 fn naming(licence: Licence, family: &str) -> Naming {
-    Naming { licence, family_name: family.to_owned(), sha256: [0x42; 32] }
+    Naming { licence, family_name: family.to_owned(), sha256: [0x42; 32], prefix: "PRV".to_owned(), changed_by: "the tests".to_owned() }
 }
 
 /// Subsets `text` (with its closure) and returns the decoded sfnt.
@@ -77,8 +77,8 @@ fn ofl_subset_drops_reserved_name_and_keeps_licence_fields() {
     let naming = naming(Licence::Ofl { reserved_names: vec!["ABeeZee".into()] }, "ABeeZee");
     let ttf = subset_text(&font, "Hello", &Instance::List, &naming);
     let n = naming.number();
-    assert_eq!(names(&ttf, 1), [format!("FPS {n}")]);
-    assert_eq!(names(&ttf, 6), [format!("FPS-{n}")]);
+    assert_eq!(names(&ttf, 1), [format!("PRV {n}")]);
+    assert_eq!(names(&ttf, 6), [format!("PRV-{n}")]);
     for id in [1, 3, 4, 6, 16, 18, 21] {
         for s in names(&ttf, id) {
             assert!(!s.to_lowercase().contains("abeezee"), "ID {id}: {s}");
@@ -94,7 +94,7 @@ fn ofl_subset_drops_reserved_name_and_keeps_licence_fields() {
 fn apache_subset_says_it_was_changed() {
     let font = fixture("abeezee/ABeeZee-Regular.ttf");
     let ttf = subset_text(&font, "Hi", &Instance::List, &naming(Licence::Apache, "ABeeZee"));
-    assert_eq!(names(&ttf, 10), ["Subset of ABeeZee, changed by font-preview-service"]);
+    assert_eq!(names(&ttf, 10), ["Subset of ABeeZee, changed by the tests"]);
 }
 
 #[test]
@@ -103,9 +103,9 @@ fn ufl_subset_is_a_named_derivative() {
     let naming = naming(Licence::Ufl, "Ubuntu");
     let ttf = subset_text(&font, "Hello", &Instance::List, &naming);
     let n = naming.number();
-    assert_eq!(names(&ttf, 1), [format!("Ubuntu derivative FPS{n}")]);
+    assert_eq!(names(&ttf, 1), [format!("Ubuntu derivative PRV{n}")]);
     let ps = &names(&ttf, 6)[0];
-    assert_eq!(*ps, format!("{}-derivativeFPS{n}", names(&font, 6)[0]));
+    assert_eq!(*ps, format!("{}-derivativePRV{n}", names(&font, 6)[0]));
     assert!(ps.len() <= 63 && ps.chars().all(|c| c.is_ascii_graphic()));
 }
 
@@ -193,7 +193,7 @@ fn var_subset_renames_instance_postscript_names() {
     assert!(!ids.is_empty());
     for id in ids {
         let [s] = names(&var, id).try_into().unwrap();
-        assert!(s.starts_with(&format!("FPS-{}-", naming.number())), "{s}");
+        assert!(s.starts_with(&format!("PRV-{}-", naming.number())), "{s}");
         assert!(!s.to_lowercase().contains("orbitron"), "{s}");
     }
 }
@@ -228,7 +228,7 @@ fn cff_names_are_rewritten_and_outlines_survive() {
     let cff = subset_font.table_data(Tag::new(b"CFF ")).unwrap();
     let cff = cff.as_bytes();
     let contains = |needle: &[u8]| cff.windows(needle.len()).any(|w| w == needle);
-    assert!(contains(format!("FPS-{}", naming.number()).as_bytes()));
+    assert!(contains(format!("PRV-{}", naming.number()).as_bytes()));
     assert!(!contains(b"NotoSansCJK"));
     assert!(!contains(b"Noto Sans CJK"));
     for c in text.chars() {

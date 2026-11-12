@@ -18,7 +18,9 @@ wraps them in a safe API. The crate is one of the places that allow `unsafe`
 `harfbuzz/src/` is the tarball's `src/` without the Rust and WebAssembly
 shapers, unit tests, generator scripts and inputs, meson files, and the
 `harfbuzz.cc` and `harfbuzz-world.cc` amalgamations. `harfbuzz/COPYING` is
-HarfBuzz's licence ("Old MIT").
+HarfBuzz's licence ("Old MIT", SPDX `MIT-Modern-Variant`). That identifier is
+allowed for this vendored source only (the owner's exception, 2026-11-12); it is
+not on the house licence allowlist for other dependencies.
 
 ## Updating
 
