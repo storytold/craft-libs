@@ -3,8 +3,8 @@
 //! [`Document::read`] indexes a tag list (from [`crate::parse`]) into its header variables,
 //! symbol tables, blocks, entities and objects. Nothing is copied: every record borrows its tags,
 //! so a caller can still read a group this module gives no name to (its own extended data, a
-//! newer group). The typed forms ([`Layer`], [`Linetype`], [`TextStyle`], [`Layout`]...) are made
-//! on request.
+//! newer group). The typed forms ([`Layer`], [`Linetype`], [`TextStyle`], [`Layout`], and
+//! [`Entity`] for an entity record) are made on request.
 //!
 //! The values are the file's: points in the coordinate system the format stores them in (the
 //! object coordinate system for planar entities, see [`ocs_to_wcs`]), angles in the unit the
@@ -18,10 +18,19 @@ use crate::Tag;
 
 pub mod aci;
 mod document;
+mod entity;
+mod hatch;
 mod tables;
+pub mod text;
+pub mod write;
 
 pub use document::{Block, Dictionary, Document, EntityRecord, Header, Layout, Record, entity_records, records};
+pub use entity::{
+    Attrib, Common, Dimension, Entity, EntityKind, Image, Insert, Leader, LwPolyline, LwVertex, Polyline, Spline, Text, Vertex, Viewport,
+};
+pub use hatch::{Gradient, Hatch, HatchEdge, HatchLoop, HatchPath, PatternLine};
 pub use tables::{AppId, BlockRecord, DashElement, DimStyle, Layer, Linetype, TextStyle, Ucs, View, Vport, dim_var_code, dim_var_name};
+pub use text::{MText, MTextColumns};
 
 /// A point or vector: x, y, z.
 pub type Point = [f64; 3];

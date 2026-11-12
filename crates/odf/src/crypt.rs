@@ -10,7 +10,7 @@
 //! [`decrypt`] gives a plain package, which a reader opens as any other; [`encrypt`] takes a
 //! plain package. Neither looks at what the files hold.
 
-use std::io::{Cursor, Read, Write};
+use std::io::{Read, Write};
 
 use aes::cipher::{BlockCipherDecrypt, BlockCipherEncrypt, KeyInit};
 use base64::Engine as _;
@@ -80,24 +80,29 @@ fn read_manifest(xml: &[u8]) -> Vec<(String, Params, Option<usize>)> {
         .collect()
 }
 
-/// `name` read from `z`, at most [`MAX_ENTRY`] bytes of it.
-fn read_entry(z: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
-    let f = z.by_name(name).ok()?;
-    if f.size() > MAX_ENTRY {
-        return None;
-    }
-    let mut out = Vec::new();
-    f.take(MAX_ENTRY).read_to_end(&mut out).ok()?;
-    Some(out)
+/// The package, its declared entry count checked before it is indexed (with
+/// [`zip_guard`]'s wording).
+fn open_zip(bytes: &[u8]) -> Result<craft_zip::Archive<'_>, CryptError> {
+    zip_guard::check(bytes, MAX_ZIP_ENTRIES).map_err(CryptError::Unsupported)?;
+    craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: MAX_ZIP_ENTRIES, max_total_bytes: u64::MAX })
+        .map_err(|e| CryptError::Unsupported(format!("not a valid package ({e})")))
+}
+
+/// `name` read from `z`, at most [`MAX_ENTRY`] bytes of it. `None` when it is missing, damaged
+/// or larger.
+fn read_entry(z: &mut craft_zip::Archive<'_>, name: &str) -> Option<Vec<u8>> {
+    z.read(name, MAX_ENTRY).ok().flatten()
+}
+
+/// The files of a package in its order, folders left out, each at most [`MAX_ENTRY`] bytes.
+fn files_of(z: &craft_zip::Archive<'_>) -> Vec<String> {
+    z.names().filter(|n| !n.ends_with('/')).map(|n| n.into_owned()).collect()
 }
 
 /// Does this package hold encrypted files?
 pub fn is_encrypted(bytes: &[u8]) -> bool {
     // A package with too many entries isn't parsed here: opening it refuses it (`zip_guard`).
-    if zip_guard::check(bytes, MAX_ZIP_ENTRIES).is_err() {
-        return false;
-    }
-    let Ok(mut z) = zip::ZipArchive::new(Cursor::new(bytes)) else { return false };
+    let Ok(mut z) = open_zip(bytes) else { return false };
     read_entry(&mut z, MANIFEST_PATH).is_some_and(|m| !read_manifest(&m).is_empty())
 }
 
@@ -235,25 +240,16 @@ fn plain_manifest(xml: &str) -> String {
 
 /// A password-protected package decrypted into a plain one.
 pub fn decrypt(bytes: &[u8], password: &str) -> Result<Vec<u8>, CryptError> {
-    let broken = |e: zip::result::ZipError| CryptError::Unsupported(format!("not a valid package ({e})"));
-    zip_guard::check(bytes, MAX_ZIP_ENTRIES).map_err(CryptError::Unsupported)?;
-    let mut z = zip::ZipArchive::new(Cursor::new(bytes)).map_err(broken)?;
+    let broken = |e: craft_zip::Error| CryptError::Unsupported(format!("not a valid package ({e})"));
+    let mut z = open_zip(bytes)?;
     let manifest = read_entry(&mut z, MANIFEST_PATH).unwrap_or_default();
     let encrypted = read_manifest(&manifest);
-    let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    let deflated = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    let io = |e: std::io::Error| CryptError::Unsupported(e.to_string());
+    let mut w = craft_zip::Writer::new();
     let mut checked = false;
     let mut work = 0u64;
-    for i in 0..z.len().min(MAX_FILES) {
-        let Ok(mut f) = z.by_index(i) else { continue };
-        let Ok(name) = f.name().map(|n| n.into_owned()) else { continue };
-        if f.is_dir() {
-            continue;
-        }
-        let mut data = Vec::new();
-        f.by_ref().take(MAX_ENTRY).read_to_end(&mut data).map_err(io)?;
+    for name in files_of(&z).into_iter().take(MAX_FILES) {
+        // A file past the limit is refused, not cut short.
+        let Some(data) = z.read(&name, MAX_ENTRY).map_err(broken)? else { continue };
         let data = match encrypted.iter().find(|(p, ..)| *p == name) {
             Some((_, p, size)) => {
                 charge(&mut work, p)?;
@@ -264,13 +260,13 @@ pub fn decrypt(bytes: &[u8], password: &str) -> Result<Vec<u8>, CryptError> {
             None if name == MANIFEST_PATH => plain_manifest(&String::from_utf8_lossy(&data)).into_bytes(),
             None => data,
         };
-        w.start_file(name.as_str(), if name == "mimetype" { stored } else { deflated }).map_err(broken)?;
-        w.write_all(&data).map_err(io)?;
+        let compression = if name == "mimetype" { craft_zip::Compression::Stored } else { craft_zip::Compression::Deflated };
+        w.add(&name, &data, compression).map_err(broken)?;
     }
     if !checked {
         return Err(CryptError::Unsupported("no encrypted file could be read".into()));
     }
-    Ok(w.finish().map_err(broken)?.into_inner())
+    w.finish().map_err(broken)
 }
 
 /// An attribute value's text (the manifest's own entity escapes).
@@ -287,23 +283,17 @@ fn random(n: usize) -> Result<Vec<u8>, CryptError> {
 /// A package encrypted with `password`: every file but the `mimetype` and the manifest, the
 /// manifest saying how.
 pub fn encrypt(bytes: &[u8], password: &str) -> Result<Vec<u8>, CryptError> {
-    let err = |e: zip::result::ZipError| CryptError::Unsupported(e.to_string());
+    let err = |e: craft_zip::Error| CryptError::Unsupported(e.to_string());
     let io = |e: std::io::Error| CryptError::Unsupported(e.to_string());
-    zip_guard::check(bytes, MAX_ZIP_ENTRIES).map_err(CryptError::Unsupported)?;
-    let mut z = zip::ZipArchive::new(Cursor::new(bytes)).map_err(err)?;
+    let mut z = open_zip(bytes)?;
     let start = start_key(SHA256, Some(32), password)?;
     let mut files: Vec<(String, Vec<u8>, bool)> = Vec::new();
     let mut manifest = String::new();
     // name → its encryption data and size, for the manifest.
     let mut data_of: Vec<(String, String)> = Vec::new();
-    for i in 0..z.len() {
-        let mut f = z.by_index(i).map_err(err)?;
-        if f.is_dir() {
-            continue;
-        }
-        let Ok(name) = f.name().map(|n| n.into_owned()) else { continue };
-        let mut data = Vec::new();
-        f.read_to_end(&mut data).map_err(io)?;
+    for name in files_of(&z) {
+        // At most `MAX_ENTRY` a file: it was read without a limit.
+        let Some(data) = z.read(&name, MAX_ENTRY).map_err(err)? else { continue };
         if name == MANIFEST_PATH {
             manifest = String::from_utf8_lossy(&data).into_owned();
             continue;
@@ -370,21 +360,17 @@ pub fn encrypt(bytes: &[u8], password: &str) -> Result<Vec<u8>, CryptError> {
         }
         None => out.push_str(rest),
     }
-    let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    let deflated = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    use craft_zip::Compression::{Deflated, Stored};
+    let mut w = craft_zip::Writer::new();
     for (name, data, _) in files.iter().filter(|(n, _, _)| n == "mimetype") {
-        w.start_file(name.as_str(), stored).map_err(err)?;
-        w.write_all(data).map_err(io)?;
+        w.add(name, data, Stored).map_err(err)?;
     }
-    w.start_file(MANIFEST_PATH, deflated).map_err(err)?;
-    w.write_all(out.as_bytes()).map_err(io)?;
+    w.add(MANIFEST_PATH, out.as_bytes(), Deflated).map_err(err)?;
     // Encrypted files are stored: they're deflated already (§3.4.1).
     for (name, data, _) in files.iter().filter(|(n, _, _)| n != "mimetype") {
-        w.start_file(name.as_str(), stored).map_err(err)?;
-        w.write_all(data).map_err(io)?;
+        w.add(name, data, Stored).map_err(err)?;
     }
-    Ok(w.finish().map_err(err)?.into_inner())
+    w.finish().map_err(err)
 }
 
 #[cfg(test)]

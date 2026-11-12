@@ -189,6 +189,9 @@ fn decode_tf(tf: &[u8], out: &mut String, italic: &mut bool, underline: &mut boo
                 *underline = false;
             }
             0x00..=0x1f | 0x7f..=0x9f => {}
+            // literal text, kept apart from the style tags this reader makes
+            b'<' => out.push_str("&lt;"),
+            b'&' => out.push_str("&amp;"),
             0x20..=0x7e => out.push(b as char),
             0xc1..=0xcf => {
                 if let Some(&base) = tf.get(i)
@@ -209,7 +212,27 @@ fn decode_tf(tf: &[u8], out: &mut String, italic: &mut bool, underline: &mut boo
 
 /// Caption text → text-field bytes (`<i>`, `<u>` become control codes; other tags dropped).
 fn encode_text(text: &str) -> Vec<u8> {
+    encode_text_noting(text, &mut Vec::new())
+}
+
+/// The characters of `text` that ISO/IEC 6937 has no code for, in order: [`write`] sends each
+/// as `?`.
+pub fn unencodable(text: &str) -> Vec<char> {
+    let mut lost = Vec::new();
+    encode_text_noting(text, &mut lost);
+    lost
+}
+
+/// [`encode_text`], noting in `lost` each character it writes as `?`.
+fn encode_text_noting(text: &str, lost: &mut Vec<char>) -> Vec<u8> {
     let mut out = Vec::new();
+    let mut put = |out: &mut Vec<u8>, ch: char| match encode_6937(ch) {
+        Some(b) => out.extend(b),
+        None => {
+            lost.push(ch);
+            out.push(b'?');
+        }
+    };
     let mut rest = text;
     while let Some(ch) = rest.chars().next() {
         let is_tag_start = ch == '<'
@@ -236,14 +259,20 @@ fn encode_text(text: &str) -> Vec<u8> {
                 continue;
             }
         }
+        // a stored entity is the character it names
+        if let Some((decoded, len)) = crate::entity_at(rest) {
+            put(&mut out, decoded);
+            rest = rest.get(len..).unwrap_or("");
+            continue;
+        }
         if is_tag_start && !rest.contains('>') {
             // This cannot become markup later.  Encode the remaining literal text in one pass
             // instead of searching the shrinking suffix after every opening bracket.
-            for ch in rest.chars() {
+            for ch in crate::decode_entities(rest).chars() {
                 if ch == '\n' {
                     out.push(0x8a);
                 } else {
-                    out.extend(encode_6937(ch).unwrap_or_else(|| vec![b'?']));
+                    put(&mut out, ch);
                 }
             }
             break;
@@ -251,7 +280,7 @@ fn encode_text(text: &str) -> Vec<u8> {
         if ch == '\n' {
             out.push(0x8a);
         } else {
-            out.extend(encode_6937(ch).unwrap_or_else(|| vec![b'?']));
+            put(&mut out, ch);
         }
         rest = &rest[ch.len_utf8()..];
     }
@@ -364,13 +393,26 @@ fn put(buf: &mut [u8], at: usize, len: usize, s: &str) {
     }
 }
 
+/// The frame rate and disk format code [`write`] uses for a programme at `rate`: 29.97 fps
+/// (`STL30.01`) for 29.97 and 30, else 25 fps (`STL25.01`).
+fn file_rate(rate: Option<FrameRate>) -> (FrameRate, &'static str) {
+    match rate {
+        Some(r) if r == FrameRate::FPS_29_97 || r == FrameRate::FPS_30 => (FrameRate::FPS_29_97, "STL30.01"),
+        _ => (FrameRate::FPS_25, "STL25.01"),
+    }
+}
+
+/// The time code [`write`] gives a caption starting at `t` in a programme at `rate`.
+pub fn timecode(t: Tick, rate: Option<FrameRate>) -> String {
+    let (rate, _) = file_rate(rate);
+    let (_, h, m, s, f) = frames_to_fields(rate.frame_at(rate.snap_nearest(t)), rate, false);
+    format!("{h:02}:{m:02}:{s:02}:{f:02}")
+}
+
 /// Write `doc` at `rate` (25 fps → `STL25.01`; 29.97 / 30 → `STL30.01`; others are written at 25).
 /// `program` goes in the GSI block's originator field (32 characters).
 pub fn write(doc: &Document, rate: Option<FrameRate>, program: &str) -> Vec<u8> {
-    let (rate, dfc) = match rate {
-        Some(r) if r == FrameRate::FPS_29_97 || r == FrameRate::FPS_30 => (FrameRate::FPS_29_97, "STL30.01"),
-        _ => (FrameRate::FPS_25, "STL25.01"),
-    };
+    let (rate, dfc) = file_rate(rate);
     // TTI blocks first (the GSI counts them)
     let mut ttis: Vec<[u8; TTI]> = Vec::new();
     let mut n_subs = 0u16;
@@ -549,10 +591,19 @@ mod tests {
         let encoded = write(&doc, Some(FrameRate::FPS_25), "test");
         let decoded = parse(&encoded).expect("valid EBU STL");
         assert_eq!(decoded.cues.len(), 1);
-        assert_eq!(decoded.cues[0].text, literal);
+        assert_eq!(crate::plain_text(&decoded.cues[0].text), literal);
+        assert_eq!(write(&decoded, Some(FrameRate::FPS_25), "test"), encoded, "another export preserves literal bytes");
         // Recognized styling still becomes STL control bytes.
         assert_eq!(encode_text("<i>Hi</i>"), vec![0x80, b'H', b'i', 0x81]);
         assert_eq!(encode_text("<i >Hi</i >"), vec![0x80, b'H', b'i', 0x81]);
+    }
+
+    #[test]
+    fn entities_are_encoded_as_their_characters() {
+        // a stored `&lt;` is the character, not an entity spelled out; the tag beside it stays a tag
+        assert_eq!(encode_text("1 &lt; 2 &amp; <i>x</i>"), encode_text("1 < 2 & <i>x</i>"));
+        assert_eq!(encode_text("x &lt;y> z"), b"x <y> z".to_vec(), "a decoded bracket is text, not a tag");
+        assert_eq!(encode_text("a &lt;b"), encode_text("a <b"));
     }
 
     #[test]
