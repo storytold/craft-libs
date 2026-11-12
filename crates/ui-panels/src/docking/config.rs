@@ -76,6 +76,8 @@ pub struct DockConfig {
     /// closes them, for tabs that act as documents. Off: panels close from their menu. Accordion headers and iconic
     /// columns never show it.
     pub tab_close_buttons: bool,
+    /// The wheel over a tab strip shows the next or previous panel, one per wheel notch.
+    pub wheel_selects_tabs: bool,
     /// A floating window opens in an OS window of its own where the window host opens OS windows and reports where
     /// they are on the desktop (not on Wayland) and its panels allow it (`PanelSpec::allow_native`). Elsewhere, and
     /// with this off, it shows in the app window.
@@ -95,6 +97,7 @@ impl Default for DockConfig {
             close_menu_items: true,
             close_button: true,
             tab_close_buttons: false,
+            wheel_selects_tabs: false,
             native_windows: true,
         }
     }
@@ -168,6 +171,13 @@ impl DockConfig {
     #[must_use]
     pub fn tab_close_buttons(mut self, on: bool) -> Self {
         self.tab_close_buttons = on;
+        self
+    }
+
+    /// Wheel selection of tabs on or off.
+    #[must_use]
+    pub fn wheel_selects_tabs(mut self, on: bool) -> Self {
+        self.wheel_selects_tabs = on;
         self
     }
 

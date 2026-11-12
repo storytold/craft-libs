@@ -65,6 +65,47 @@ fn the_close_button_and_its_node_close_a_tab() {
     assert_eq!(closed.borrow().clone(), vec![1, 0], "an AccessKit Click on the close node closes its tab");
 }
 
+/// A strip of the three titles showing tab 0 that applies its selection changes, with or without `wheel_selects`;
+/// returns the fixture and the tab it shows.
+fn wheel_rig(wheel_selects: bool) -> (Fixture, Rc<Cell<usize>>) {
+    let shown = Rc::new(Cell::new(0_usize));
+    let now = shown.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let strip = TabStrip::new("Documents").shown(now.get());
+        let strip = if wheel_selects { strip.wheel_selects() } else { strip };
+        let out = strip.show_items(ui, &source, &mut |key, _| Tab::new(TITLES[*key]));
+        for event in &out.response.events {
+            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                && let Some(key) = keys.last()
+            {
+                now.set(*key);
+            }
+        }
+    });
+    fixture.settle();
+    (fixture, shown)
+}
+
+/// With `wheel_selects`, a wheel notch down over the strip shows the next tab and a notch up the previous one; without
+/// it the wheel shows no other tab.
+#[trial]
+fn the_wheel_steps_the_shown_tab_only_where_the_strip_asks_for_it() {
+    use craft_ui::testing::pointer;
+    for wheel_selects in [true, false] {
+        let (mut fixture, shown) = wheel_rig(wheel_selects);
+        let over = fixture.by_label("Two").expect("the tab's node").center();
+        fixture.frame(vec![pointer::moved(over)]).idle(1);
+        fixture.frame(vec![pointer::wheel_lines(-1.0)]).idle(2);
+        assert_eq!(shown.get(), usize::from(wheel_selects), "a notch down, wheel_selects {wheel_selects}");
+        if wheel_selects {
+            fixture.frame(vec![pointer::wheel_lines(1.0)]).idle(2);
+            assert_eq!(shown.get(), 0, "a notch up shows the previous tab");
+        }
+    }
+}
+
 /// A double click on the empty room after the last document tab asks for a new document; a double click on a tab
 /// activates it and asks for none.
 #[trial]

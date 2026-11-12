@@ -143,6 +143,9 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     /// run, the width in a measuring run (the real run shows a collection that fills across the column it is held in).
     from_content: (bool, bool),
     scrolls: bool,
+    /// The collection senses the wheel itself (a tab strip stepping its tabs): the wheel is its own, not the rows'
+    /// scroll.
+    own_wheel: bool,
     /// The collection shows at most `max_rows` rows: its height is bounded by its rows, whatever its sizing.
     capped: bool,
     /// The distance one wheel notch scrolls the rows, from `CollectionProps::notch`.
@@ -211,6 +214,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             room: Vec2::ZERO,
             from_content: (false, false),
             scrolls: true,
+            own_wheel: false,
             capped: false,
             notch: craft_behavior::WheelNotch::DEFAULT,
             overflow: Axis::Y,

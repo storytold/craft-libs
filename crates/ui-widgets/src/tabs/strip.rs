@@ -15,14 +15,16 @@ use super::{Tab, TabPartEvent};
 use crate::buttons::IconButton;
 use crate::contract::{
     Access, Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, ContainerProps, ContextMenuRequest,
-    Cx, DropKind, DropMark, Entry, ListDrag, Name, NoValue, Outcome, OverlayUi, Overlays as _, PartsCx, Pointer as _, Props as _, Role, RowState,
-    SelectMode, Sizing, WindowDropTarget, WordSetCx as _,
+    Cx, DropKind, DropMark, Entry, ListDrag, Meta, Name, NoValue, Outcome, OverlayUi, Overlays as _, PartsCx, Pointer as _, Props as _, Role,
+    RowState, SelectMode, ShowShape, Sizing, WindowDropTarget, WordSetCx as _,
 };
 use crate::list::{DropTest, RowTest};
 use crate::menu::Menu;
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
-use craft_behavior::{HitLevel, HitPriority, IconId, ItemLayout, ItemSource, Metrics, NavShape, PartKey, PressPhase, ScrollPos, Selection, Sense};
+use craft_behavior::{
+    HitLevel, HitPriority, IconId, ItemLayout, ItemSource, Metrics, NavShape, PartKey, PressPhase, ScrollPos, Selection, SelectionChange, Sense,
+};
 use egui::{Id, Pos2, Rect, Response, Vec2};
 use std::cell::RefCell;
 use std::hash::Hash;
@@ -88,6 +90,8 @@ impl<K> Outcome for TabStripOutput<K> {
 pub struct TabStripStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// The text line a wheel notch given in lines counts.
+    line: f32,
 }
 
 /// What the layout tells the strip's parts and menu after fitting the tabs.
@@ -276,6 +280,10 @@ pub struct TabStrip<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + '
     /// A tab dragged out and released where no target takes it is reported as `torn_off`.
     #[prop(flag)]
     tear_off: bool,
+    /// The wheel over the strip shows the next or previous tab, one per wheel notch, stopping at the ends; not with
+    /// Ctrl or Cmd held.
+    #[prop(flag)]
+    wheel_selects: bool,
     /// Which tabs may be dragged.
     #[prop(func = "Fn(&K) -> bool")]
     can_drag: Option<RowTest<'a, K>>,
@@ -292,6 +300,8 @@ pub struct TabStrip<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + '
     more: Option<Rect>,
     picked: Option<K>,
     torn: Option<TornOff<K>>,
+    /// The tab the wheel stepped to this pass.
+    wheeled: Option<K>,
     empty_drag: bool,
     empty_double: bool,
 }
@@ -307,6 +317,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
             large: false,
             shown: None,
             tear_off: false,
+            wheel_selects: false,
             can_drag: None,
             drops: Vec::new(),
             accepts: None,
@@ -316,6 +327,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
             more: None,
             picked: None,
             torn: None,
+            wheeled: None,
             empty_drag: false,
             empty_double: false,
         }
@@ -335,6 +347,27 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
     pub fn takes_drop(mut self, kind: DropKind<'a, K>) -> Self {
         self.drops.push(kind);
         self
+    }
+
+    /// With `wheel_selects`, the wheel's whole notches step the shown tab through the tabs in the source's order:
+    /// down to later tabs, up to earlier ones.
+    fn wheel_step(&mut self, cx: &mut Cx<'_, Self>) {
+        if !self.wheel_selects {
+            return;
+        }
+        let Some(wheel) = cx.take_wheel().filter(|wheel| !wheel.mods.cmd && !wheel.mods.ctrl) else { return };
+        let notch = self.items.wheel_notch(cx.style.line).points(cx.rect.height());
+        let steps = if notch > 0.0 { (wheel.scroll.y / notch).trunc() } else { 0.0 };
+        if steps == 0.0 || !steps.is_finite() {
+            return;
+        }
+        let texts = self.texts.borrow();
+        let Some(at) = self.shown.as_ref().and_then(|shown| texts.iter().position(|(key, _)| key == shown)) else { return };
+        let last = texts.len().saturating_sub(1) as i64;
+        let to = (at as i64 - steps as i64).clamp(0, last) as usize;
+        if to != at {
+            self.wheeled = Some(texts[to].0.clone());
+        }
     }
 
     fn report(&self) -> Report {
@@ -374,8 +407,13 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
     type Style = TabStripStyle;
     type Output = TabStripOutput<K>;
 
-    fn style(_: &StyleCx<'_>, _: TabStripStyleKey<K>) -> TabStripStyle {
-        TabStripStyle { metrics: Metrics::new() }
+    fn style(cx: &StyleCx<'_>, _: TabStripStyleKey<K>) -> TabStripStyle {
+        TabStripStyle { metrics: Metrics::new(), line: cx.tokens.typography.body.line_height }
+    }
+
+    fn sense(&self) -> Sense {
+        let sense = <<Self as Meta>::Shape as ShowShape>::DEFAULT_SENSE;
+        if self.wheel_selects { sense | Sense::WHEEL_Y } else { sense }
     }
 
     /// The overflow button, over the end of the row or right after the last shown tab.
@@ -413,6 +451,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
             self.empty_drag = matches!(press.phase, PressPhase::DragStart { .. });
             self.empty_double = press.double_pressed();
         }
+        self.wheel_step(cx);
         if !self.tear_off {
             return;
         }
@@ -462,7 +501,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
 
     fn finish(self, mut cx: Cx<'_, Self>) -> TabStripOutput<K> {
         let tab_rects = self.tab_rects(&cx);
-        let TabStrip { picked, torn, empty_drag, empty_double, .. } = self;
+        let TabStrip { picked, torn, wheeled, empty_drag, empty_double, .. } = self;
         let mut response = cx.collection_response();
         let (mut closed, mut menu) = (Vec::new(), None);
         let mut kept = Vec::with_capacity(response.events.len());
@@ -473,6 +512,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
                 other => kept.push(other),
             }
         }
+        kept.extend(wheeled.map(|key| CollectionEvent::Selection(SelectionChange::Set(vec![key]))));
         response.events = kept;
         TabStripOutput { response, closed, menu, picked, torn_off: torn, tab_rects, empty_drag, empty_double }
     }

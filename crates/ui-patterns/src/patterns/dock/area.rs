@@ -698,6 +698,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             if scene.config.tab_close_buttons {
                 group = group.closable();
             }
+            if scene.config.wheel_selects_tabs {
+                group = group.wheel_selects_tabs();
+            }
             group
         };
         let rect = match at {

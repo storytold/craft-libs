@@ -521,6 +521,11 @@ impl CollectionProps {
         self
     }
 
+    /// The wheel distance of one notch, with a text line `line` points high: the set notch, else the default.
+    pub fn wheel_notch(&self, line: f32) -> craft_behavior::WheelNotch {
+        self.notch.map_or(craft_behavior::WheelNotch::DEFAULT, |notch| notch.wheel(line))
+    }
+
     /// The axis the rows overflow along (see [`CollectionProps::overflow`]).
     #[must_use]
     pub const fn overflow(mut self, axis: Axis) -> Self {

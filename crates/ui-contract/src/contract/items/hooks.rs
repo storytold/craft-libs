@@ -22,8 +22,7 @@ use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::{focus, keys, layout_memory, lazy, overlay, wheel};
 use crate::style::{ComponentStyle as _, ScrollBarKind, StyleCx, SurfaceKind, scroll_bar_look, surface_style};
 use craft_behavior::{
-    Axis, CancelReason, EditEvent, Intent, ItemLayout, Mixed, Proposal, ScrollPos, ScrollSpan, SelectionModel, Sense, WheelNotch, WheelRoom,
-    WheelTaker,
+    Axis, CancelReason, EditEvent, Intent, ItemLayout, Mixed, Proposal, ScrollPos, ScrollSpan, SelectionModel, Sense, WheelRoom, WheelTaker,
 };
 use egui::{Context, Id, Pos2, Rect, Ui, UiBuilder, Vec2};
 use std::rc::Rc;
@@ -86,6 +85,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         );
         // A capped collection is bounded by its rows, so it scrolls them inside a scrolling body too.
         self.scrolls = self.capped || (!natural && !shared);
+        self.own_wheel = crate::contract::Component::sense(comp).intersects(Sense::WHEEL | Sense::WHEEL_X | Sense::WHEEL_Y | Sense::WHEEL_ZOOM);
         self.overflow = overflow;
         self.selection = match comp.selection() {
             Some(bind) => match bind.get() {
@@ -133,7 +133,13 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let view = self.last.view.map_or(0.0, |view| view[3] - view[1]);
         if self.scrolls {
             let quiet = stage.is_peek() || crate::runtime::measure::active(&ctx);
-            let taken = if quiet { wheel::peek(&ctx, id) } else { wheel::take(&ctx, id) };
+            let taken = if self.own_wheel {
+                None
+            } else if quiet {
+                wheel::peek(&ctx, id)
+            } else {
+                wheel::take(&ctx, id)
+            };
             if let Some(share) = taken {
                 self.offset -= f64::from(share.scroll.y);
                 self.offset_x -= f64::from(share.scroll.x);
@@ -280,7 +286,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
 
     fn parts(&mut self, comp: &mut C, _: Rect, pcx: &mut PartsCx<'_, C>) {
         self.header.parts(pcx);
-        self.notch = comp.items().notch.map_or(WheelNotch::DEFAULT, |notch| notch.wheel(pcx.tokens.typography.body.line_height));
+        self.notch = comp.items().wheel_notch(pcx.tokens.typography.body.line_height);
         if !self.scrolls {
             return;
         }
@@ -299,7 +305,14 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
 
     fn sensed(&mut self, comp: &mut C, cx: &mut Cx<'_, C>) {
         cx.core.collection_selection = Some(Box::new(self.selection.clone()));
-        if self.scrolls {
+        if self.own_wheel {
+            // A collection that takes the wheel itself reads it in its own notches, in place of the rows' scroll.
+            if cx.core.resolved.enabled
+                && let Some(taker) = WheelTaker::for_sense(cx.core.id, cx.core.rect, crate::contract::Component::sense(comp))
+            {
+                wheel::register(&cx.core.ctx, taker.notch(self.notch).gated(cx.core.env.wheel() == WheelScope::Gated));
+            }
+        } else if self.scrolls {
             // The taker covers the whole collection, header row and frame included: the wheel over the header scrolls
             // the rows (Shift sideways).
             let view = self.below_header(cx.core.content_rect);

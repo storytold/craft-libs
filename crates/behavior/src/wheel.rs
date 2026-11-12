@@ -125,6 +125,14 @@ pub enum WheelNotch {
 impl WheelNotch {
     /// The distance of a taker that states none.
     pub const DEFAULT: WheelNotch = WheelNotch::Points(40.0);
+
+    /// The notch in points, for a taker whose view is `extent` points along the axis.
+    pub fn points(self, extent: f32) -> f32 {
+        match self {
+            WheelNotch::Points(points) => points,
+            WheelNotch::ViewShare(share) => extent * share,
+        }
+    }
 }
 
 impl<O> WheelTaker<O> {
@@ -211,10 +219,7 @@ impl<O> WheelTaker<O> {
         let size = self.rect.size();
         match unit {
             WheelUnit::Point => scroll,
-            WheelUnit::Line => match self.notch {
-                WheelNotch::Points(points) => scroll * points,
-                WheelNotch::ViewShare(share) => scroll * size * share,
-            },
+            WheelUnit::Line => Vec2::new(scroll.x * self.notch.points(size.x), scroll.y * self.notch.points(size.y)),
             WheelUnit::Page => scroll * size,
         }
     }

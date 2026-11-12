@@ -850,8 +850,14 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     let member = if arena || facts.text() { None } else { env.arena };
     stops_step(StopsStep { ctx: &ctx, id, rtl, env, resolved, inert, holder_widget, member, own, text_keys }, e, facts, &parts);
     // A body's wheel share is its scroll taker (body step, step 7); the gate value does not take the wheel. A body root that
-    // senses the wheel itself (a canvas) registers like any other component.
-    if !inert && (e.shape() != ShapeKind::Body || own.intersects(Sense::WHEEL | Sense::WHEEL_X)) {
+    // senses the wheel itself (a canvas) registers like any other component. A collection that senses the wheel itself
+    // registers in the item step, with its notch.
+    let registers = match e.shape() {
+        ShapeKind::Leaf => true,
+        ShapeKind::Body => own.intersects(Sense::WHEEL | Sense::WHEEL_X),
+        ShapeKind::Item => !own.intersects(Sense::WHEEL | Sense::WHEEL_X | Sense::WHEEL_Y | Sense::WHEEL_ZOOM),
+    };
+    if !inert && registers {
         steps::register_wheel(&ctx, id, rect, own, e.bound().0 && !facts.binds_view, env.wheel);
     }
     // 8 sense

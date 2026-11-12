@@ -229,6 +229,9 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// Tabs of panels that are closable show a close button and close on a middle click.
     #[prop(flag)]
     closable: bool,
+    /// The wheel over the tabs shows the next or previous panel, one per wheel notch.
+    #[prop(flag)]
+    wheel_selects_tabs: bool,
     /// The dock whose drop registry the group's spots go to.
     #[prop]
     dock: Option<Id>,
@@ -267,6 +270,7 @@ impl<'a, P: Clone + Hash + Send + Sync + 'static> DockGroup<'a, P> {
             minimized: false,
             movable: true,
             closable: false,
+            wheel_selects_tabs: false,
             dock: None,
             zones: ZoneRule::Fraction,
             menu: Vec::new(),
@@ -426,7 +430,7 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
         let words = cx.words::<DockWords>();
         let from = PanelKey::of(&self.anchor);
         let started = drop::started(&cx.env);
-        let (panels, active, closable) = (self.panels, self.active, self.closable);
+        let (panels, active, closable, wheel_selects) = (self.panels, self.active, self.closable, self.wheel_selects_tabs);
         let menu_rows = self.menu.clone();
         let panel_menu = words.panel_menu.clone();
         let mut extra = self.extra.take();
@@ -448,17 +452,20 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
             let source = keyed(panels, |panel: &PanelTitle| panel.key).with_text(|panel| Cow::Borrowed(panel.title.as_str()));
             let closes = |panel: &PanelTitle| closable && panel.closable;
             let kind = if panels.iter().any(closes) { TabKind::Document } else { TabKind::Panel };
-            let strip = TabStrip::new(name.clone())
+            let mut strip = TabStrip::new(name.clone())
                 .kind(kind)
                 .shown(active)
                 .tear_off()
                 .natural_height(true)
-                .drag_payload(move |drag: &ListDrag<PanelKey>| Some(PanelDrag { panel: drag.grabbed, from, source: Some(size), started }))
-                .show_items(ui, &source, &mut |key, _| {
-                    let panel = panels.iter().find(|panel| &panel.key == key);
-                    let title = panel.map_or_else(Label::default, |panel| panel.title.clone());
-                    Tab::new(title).closable(panel.is_some_and(closes))
-                });
+                .drag_payload(move |drag: &ListDrag<PanelKey>| Some(PanelDrag { panel: drag.grabbed, from, source: Some(size), started }));
+            if wheel_selects {
+                strip = strip.wheel_selects();
+            }
+            let strip = strip.show_items(ui, &source, &mut |key, _| {
+                let panel = panels.iter().find(|panel| &panel.key == key);
+                let title = panel.map_or_else(Label::default, |panel| panel.title.clone());
+                Tab::new(title).closable(panel.is_some_and(closes))
+            });
             let strip_id = strip.response.response.id;
             // A press on the group's empty body focuses its panel, as in Photoshop.
             if surface_pressed {
