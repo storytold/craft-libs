@@ -1106,9 +1106,11 @@ dependencies = [
 name = "craft-fig"
 version = "0.1.0"
 dependencies = [
+ "craft-figma-rest",
  "craft-kiwi",
  "craft-zip",
  "flate2",
+ "kurbo 0.13.1",
  "ruzstd",
  "serde_json",
  "thiserror 2.0.21",
