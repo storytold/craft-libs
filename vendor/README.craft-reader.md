@@ -387,6 +387,17 @@ displaced, a later header replaces a stand-in), the object is read back behind t
 and enumeration yields one object per location and number. Tests:
 `xref::tests::a_rebuilt_table_finds_an_object_whose_header_names_another_generation` and
 `a_rebuilt_tables_generation_0_stand_in_is_not_a_second_object`.
+Streams without a readable `endstream`, ported from PdfCraft
+[bfaa20db](https://github.com/storytold/pdfcraft/commit/bfaa20db2) and
+[9e29af78](https://github.com/storytold/pdfcraft/commit/9e29af784) (hayro-syntax patch 36, in
+`object/stream.rs`): a stream with no `endstream` after it (a producer that writes `endstrea`) is the
+bytes its `/Length` gives (ISO 32000-2 7.3.8.2), tried before the search for `endstream` so that the
+search cannot run on into a later object and take its header and data as this stream's, and only when
+the `/Length` ends where the stream would (before `endstream`, a misspelt one or `endobj` where the
+object ends too, or the end of the data). `endstream` and the search for it are whole tokens, so
+`endstreamer` in the payload does not end a stream. The search keeps this tree's cancellation checks.
+Tests: `object::stream::tests::a_stream_without_endstream_is_its_length_before_a_later_one` and
+`a_stream_does_not_end_inside_a_longer_word`.
 Legacy encryption key length, ported from [PdfCraft #1882](https://github.com/storytold/pdfcraft/pull/1882)
 (commit 344ba9f8, marked `PdfCraft patch` in `hayro-syntax/src/crypto/mod.rs`): an encryption
 dictionary of revision 2–4 whose `/Length` is above 128 bits is refused with `InvalidEncryption`.

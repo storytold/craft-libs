@@ -133,3 +133,22 @@ fn helix() {
     assert_eq!((h.axis_base, h.start, h.axis), ([0.5, 0.5, 0.0], [1.5, 0.5, 0.0], [0.0, 0.0, 1.0]));
     assert_eq!((h.radius, h.turns, h.turn_height, h.ccw, h.constrain), (1.0, 3.0, 2.0, false, 1));
 }
+
+#[test]
+fn mline() {
+    let t = tags("0|SECTION|2|ENTITIES|0|MLINE|100|AcDbEntity|8|0|100|AcDbMline|2|WALL|340|41|40|2.0|70|1|71|3|72|2|73|2|10|0.0|20|0.0|30|0.0|210|0.0|220|0.0|230|1.0
+        11|0.0|21|0.0|31|0.0|12|1.0|22|0.0|32|0.0|13|0.0|23|1.0|33|0.0|74|3|41|0.5|41|1.0|41|2.0|75|0|74|1|41|-0.5|75|1|42|7.0
+        11|4.0|21|0.0|31|0.0|12|1.0|22|0.0|32|0.0|13|0.0|23|1.0|33|0.0|74|1|41|0.5|75|0|74|1|41|-0.5|75|0|0|ENDSEC|0|EOF");
+    let d = Document::read(&t);
+    let EntityKind::MLine(m) = Entity::read(&d.entities[0]).kind else { panic!("a multiline") };
+    assert_eq!(
+        (m.style.as_str(), m.style_handle, m.scale, m.justification, m.flags, m.elements, m.start),
+        ("WALL", Some(0x41), 2.0, 1, 3, 2, [0.0; 3])
+    );
+    assert_eq!(m.vertices.len(), 2);
+    let v = &m.vertices[0];
+    assert_eq!((v.location, v.direction, v.miter), ([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]));
+    assert_eq!(v.element_params, [vec![0.5, 1.0, 2.0], vec![-0.5]]);
+    assert_eq!(v.fill_params, [vec![], vec![7.0]], "42s go to the list their 75 started");
+    assert_eq!(m.vertices[1].location, [4.0, 0.0, 0.0]);
+}

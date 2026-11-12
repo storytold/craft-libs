@@ -27,7 +27,8 @@ pub mod write;
 
 pub use document::{Block, Dictionary, Document, EntityRecord, Header, Layout, Record, entity_records, records};
 pub use entity::{
-    Attrib, Common, Dimension, Entity, EntityKind, Helix, Image, Insert, Leader, LwPolyline, LwVertex, Polyline, Spline, Text, Vertex, Viewport,
+    Attrib, Common, Dimension, Entity, EntityKind, Helix, Image, Insert, Leader, LwPolyline, LwVertex, MLine, MLineVertex, Polyline, Spline, Text,
+    Vertex, Viewport,
 };
 pub use hatch::{Gradient, Hatch, HatchEdge, HatchLoop, HatchPath, PatternLine};
 pub use tables::{AppId, BlockRecord, DashElement, DimStyle, Layer, Linetype, TextStyle, Ucs, View, Vport, dim_var_code, dim_var_name};

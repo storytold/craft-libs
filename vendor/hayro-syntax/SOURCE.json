@@ -278,7 +278,7 @@
       "path": "src/object/stream.rs",
       "source_sha256": "f5229eb2f52c9918830027c93112e042a9e97d34b5fec72f97dcc7de8c5410ac",
       "source_git_blob": "a80f0730cba317ed3771cee61d6a7ab18de296d7",
-      "sha256": "b482506cb41ea2496fd282f72f6e19e39113a23998a164194ee76051c504e915"
+      "sha256": "ce9b81f31963cd0474aba253d7c9937f78cd3a1034b6811ccf4cbdf68c3769b6"
     },
     {
       "path": "src/object/string.rs",
