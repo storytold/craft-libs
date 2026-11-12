@@ -39,7 +39,8 @@ pub fn decode_uri_path(path: &str) -> String {
     percent_decode(path)
 }
 
-fn percent_encode_path(s: &str) -> String {
+/// Percent-encode a URI path while preserving path separators.
+pub fn encode_uri_path(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for &c in s.as_bytes() {
         if c.is_ascii_alphanumeric() || b"/-._~!$&'()*+,;=:@".contains(&c) {
@@ -88,11 +89,11 @@ pub fn path_to_file_url(path: &str, localhost: bool) -> String {
     };
     let host = if localhost { "localhost" } else { "" };
     if is_windows_abs(&p) {
-        format!("file://{host}/{}", percent_encode_path(&p))
+        format!("file://{host}/{}", encode_uri_path(&p))
     } else if let Some(unc) = p.strip_prefix("//") {
-        format!("file://{}", percent_encode_path(unc))
+        format!("file://{}", encode_uri_path(unc))
     } else {
-        format!("file://{host}{}", percent_encode_path(&p))
+        format!("file://{host}{}", encode_uri_path(&p))
     }
 }
 
@@ -170,7 +171,7 @@ pub fn resolve_url(reference: &str, base_dir: Option<&str>) -> String {
 
 /// A relative path written as a URL (the inverse of [`resolve_url`]'s decoding).
 pub fn relative_url(path: &str) -> String {
-    percent_encode_path(path)
+    encode_uri_path(path)
 }
 
 /// Resolve a media reference from a document: file URLs become paths, relative paths are joined to
