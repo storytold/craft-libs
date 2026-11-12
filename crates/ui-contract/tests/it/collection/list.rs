@@ -356,3 +356,42 @@ fn a_million_row_layout_places_and_hits_the_last_row_exactly() {
     pointer::click(&mut frames, click, &mut show);
     assert!(seen.leads().contains(&(COUNT - 1)), "a press at the last row's centre hits it");
 }
+
+/// A press the focused list takes as a move or a stacking move is gone from egui's input, where the app reads its
+/// own shortcuts: one press, one action. A chord the list does not take still reaches the app.
+#[trial]
+fn keys_the_list_takes_do_not_reach_the_app() {
+    let words = Words::flat(&labels());
+    let seen = Seen::default();
+    let selection = RefCell::new(Selection::<usize>::default());
+    // Every key the app could read in a frame, before the list runs: a press event or a key held down.
+    let app_saw = RefCell::new(Vec::<Key>::new());
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        ui.input(|input| {
+            let mut saw = app_saw.borrow_mut();
+            saw.extend(input.events.iter().filter_map(|event| match event {
+                Event::Key { key, pressed: true, .. } => Some(*key),
+                _ => None,
+            }));
+            saw.extend(input.keys_down.iter().copied());
+        });
+        let mut held = selection.borrow().clone();
+        let list = List::new(SelectMode::Multi).reorder().selection(Bind::bound(&mut held));
+        show_words(ui, list, &words, &seen);
+        *selection.borrow_mut() = held;
+    };
+    frames.idle(2, &mut show);
+    focus_list(&mut frames, &seen, &mut show);
+    press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
+    press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
+    let reorders = |seen: &Seen| seen.events.borrow_mut().drain(..).filter(|event| matches!(event, CollectionEvent::Reorder(_))).count();
+    reorders(&seen);
+    assert!(selection.borrow().contains(&1), "the arrows moved the selection");
+    assert!(!app_saw.borrow().contains(&Key::ArrowDown), "the app reads no arrow the list took");
+    press(&mut frames, Key::CloseBracket, Modifiers::COMMAND, &mut show);
+    assert_eq!(reorders(&seen), 1, "Cmd+] moves the row once");
+    assert!(!app_saw.borrow().contains(&Key::CloseBracket), "the app reads no Cmd+] the list took");
+    press(&mut frames, Key::E, Modifiers::COMMAND, &mut show);
+    assert!(app_saw.borrow().contains(&Key::E), "a chord the list leaves reaches the app");
+}

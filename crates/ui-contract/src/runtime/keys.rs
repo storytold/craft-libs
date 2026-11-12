@@ -68,6 +68,10 @@ struct Press {
     mods: Mods,
     /// An auto-repeat of a key that is still held.
     repeat: bool,
+    /// The press's place among the key presses the strip left in egui's input, `None` when the strip took it.
+    in_egui: Option<usize>,
+    /// The key the press's release names (the physical key, else the typed one), which the strip matches releases by.
+    release: Option<Key>,
 }
 
 /// A key press, release or clipboard chord that the shortcut dispatcher may match, with the press that the
@@ -107,6 +111,8 @@ pub(crate) struct Shortcuts {
 #[derive(Default)]
 struct Batch {
     presses: Vec<Press>,
+    /// How many key presses the strip left in egui's input.
+    egui_presses: usize,
     shortcuts: Vec<Shortcut>,
     /// The text of the paste the focused component takes.
     paste: Option<String>,

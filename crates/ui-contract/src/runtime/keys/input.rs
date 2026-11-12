@@ -60,7 +60,15 @@ impl Strip<'_> {
                 if key == Key::Enter {
                     batch.enter_down = Some(true);
                 }
+                let pushed = batch.presses.len();
                 let kept = self.press(batch, key, &input, repeat);
+                if kept {
+                    if let Some(press) = batch.presses.get_mut(pushed) {
+                        press.in_egui = Some(batch.egui_presses);
+                        press.release = input.physical.or(input.typed);
+                    }
+                    batch.egui_presses += 1;
+                }
                 // The canvas's Space is a momentary chord: its release ends the command, so it stays readable.
                 let held_by_canvas = key == Key::Space && self.canvas_space;
                 if let Some(held) = input.physical.or(input.typed) {
@@ -206,7 +214,7 @@ impl Strip<'_> {
             batch.tabs.push(TabPress { input: *input, repeat });
             false
         } else if ctrl_tab {
-            batch.presses.push(Press { key, mods, repeat });
+            batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None });
             false
         } else if let Some(WindowShortcut::Pane { forward }) = window_shortcut {
             batch.nav.panes.push(forward);
@@ -221,7 +229,7 @@ impl Strip<'_> {
             batch.menu.push(MenuKey::Letter(key.name().chars().next().unwrap_or('A')));
             false
         } else {
-            batch.presses.push(Press { key, mods, repeat });
+            batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None });
             if !repeat {
                 batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, typed: false, press: Some(batch.presses.len() - 1) });
             }

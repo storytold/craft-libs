@@ -40,6 +40,40 @@ pub(crate) fn hold_back_presses(input: &mut RawInput, frame: u64, held: &mut Hel
     !held.events.is_empty()
 }
 
+/// Takes key presses out of the running pass's input: `places` counts the input's key presses, in order. Each press
+/// goes with its release when that is in the input too; otherwise its key is no longer down. Returns, for each
+/// place, whether the release is still to come.
+pub(crate) fn withdraw_presses(ctx: &Context, places: &[usize]) -> Vec<bool> {
+    ctx.input_mut(|input| {
+        let presses: Vec<(usize, egui::Key)> = input
+            .events
+            .iter()
+            .enumerate()
+            .filter_map(|(at, event)| match event {
+                Event::Key { key, pressed: true, .. } => Some((at, *key)),
+                _ => None,
+            })
+            .collect();
+        let mut gone = vec![false; input.events.len()];
+        let mut open = Vec::with_capacity(places.len());
+        for (at, key) in places.iter().filter_map(|place| presses.get(*place).copied()) {
+            gone[at] = true;
+            let release = input.events[at + 1..]
+                .iter()
+                .position(|event| matches!(event, Event::Key { key: up, pressed: false, .. } if *up == key))
+                .map(|after| at + 1 + after);
+            match release {
+                Some(release) => gone[release] = true,
+                None => _ = input.keys_down.remove(&key),
+            }
+            open.push(release.is_none());
+        }
+        let mut gone = gone.into_iter();
+        input.events.retain(|_| !gone.next().unwrap_or(false));
+        open
+    })
+}
+
 /// Asks for an immediate repaint of `viewport`, from the input hook where the viewport is not yet current.
 pub(crate) fn request_repaint_of(ctx: &Context, viewport: ViewportId) {
     ctx.request_repaint_of(viewport);

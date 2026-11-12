@@ -109,7 +109,8 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     for command in queued {
         push(&mut routed, focused, Intent::Edit(command), false);
     }
-    let shortcuts = owned_shortcuts(ctx, target.as_ref(), &batch, &consumed);
+    let (shortcuts, held) = owned_shortcuts(ctx, target.as_ref(), &batch, &consumed);
+    withdraw_held(ctx, &batch, &held);
     let pasted = batch.paste.as_deref().zip(focused).map(|(text, id)| (id, Arc::<str>::from(text)));
     let escapes = craft_behavior::focus::route_escapes(batch.escapes, press_captured);
     for _ in 0..escapes.to_components {
@@ -178,12 +179,12 @@ pub(crate) fn owner_at(ctx: &Context, target: Option<&StopRec>, scopes: &[Id], b
     key_owner(layer == overlay::LayerKeys::Blocked, &present)
 }
 
-/// The shortcut events the key owner leaves to the app (9.3). The owner is the focused component's class, or
-/// `Blocked` while a modal layer is stacked above the focus; inside a layer its `Overlay.keys` class ranks with
-/// the component's. `Menu` and `Recorder` keep every key; a `Widget` or popup keeps the keys
-/// it activates with, the keys of its intents and the keys its filter keeps from the key stage; a text field
+/// The shortcut events the key owner leaves to the app (9.3), and the presses the focused component holds. The owner
+/// is the focused component's class, or `Blocked` while a modal layer is stacked above the focus; inside a layer its
+/// `Overlay.keys` class ranks with the component's. `Menu` and `Recorder` keep every key; a `Widget` or popup holds
+/// the keys it activates with, the keys of its intents and the keys its filter keeps from the key stage; a text field
 /// keeps the text its presses typed.
-fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consumed: &[Taken]) -> Shortcuts {
+fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consumed: &[Taken]) -> (Shortcuts, Vec<bool>) {
     let scopes = target.map(|rec| focus::scope_chain(ctx, rec)).unwrap_or_default();
     let owner = owner_at(ctx, target, &scopes, None);
     let own = target.map(|rec| rec.stop.keys.owner);
@@ -206,19 +207,39 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
     let blocked = owner == KeyOwner::Blocked;
     let typing = !blocked && own == Some(OwnerClass::Text);
     let widget = !blocked && matches!(own, Some(OwnerClass::Widget | OwnerClass::Popup | OwnerClass::PassivePopup));
+    let owner_keys = target.map(|rec| &rec.stop.keys);
+    let held: Vec<bool> = (0..batch.presses.len()).map(|at| widget && held_by(owner_keys, at)).collect();
     let keys = if silent {
         Vec::new()
     } else {
-        let owner_keys = target.map(|rec| &rec.stop.keys);
         batch
             .shortcuts
             .iter()
             .filter(|shortcut| !(typing && shortcut.typed))
-            .filter(|shortcut| !(widget && shortcut.press.is_some_and(|at| held_by(owner_keys, at))))
+            .filter(|shortcut| !shortcut.press.is_some_and(|at| held[at]))
             .copied()
             .collect()
     };
-    Shortcuts { keys, typing, dialog, layout: Layout::default() }
+    (Shortcuts { keys, typing, dialog, layout: Layout::default() }, held)
+}
+
+/// Takes the presses the focused component holds out of the running pass's egui input, where the app reads its own
+/// keys: one press, one action. A held press whose release has not come yet leaves its release to the strip.
+fn withdraw_held(ctx: &Context, batch: &Batch, held: &[bool]) {
+    let presses: Vec<&Press> =
+        batch.presses.iter().zip(held).filter(|(press, held)| **held && press.in_egui.is_some()).map(|(press, _)| press).collect();
+    if presses.is_empty() {
+        return;
+    }
+    let places: Vec<usize> = presses.iter().filter_map(|press| press.in_egui).collect();
+    let open = crate::runtime::egui::input::withdraw_presses(ctx, &places);
+    current(ctx, |stage| {
+        for key in presses.iter().zip(open).filter(|(_, open)| *open).filter_map(|(press, _)| press.release) {
+            if !stage.consumed.contains(&key) {
+                stage.consumed.push(key);
+            }
+        }
+    });
 }
 
 /// The keyboard layout of the running viewport.
