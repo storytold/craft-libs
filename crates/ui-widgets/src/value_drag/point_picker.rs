@@ -7,10 +7,10 @@ use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Numeric, PaintUi, PartsCx,
     Pointer as _, Props as _, Role, WordSetCx as _,
 };
-use crate::primitives::{ContentPainterCx, PaintShape};
+use crate::primitives::{ContentPainterCx, Marker, PaintShape};
 use crate::runtime::access::Name;
 use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
-use crate::style::{ComponentStyle, FocusLook, StyleCx};
+use crate::style::{ComponentStyle, FocusLook, MarkerLook, StyleCx};
 use craft_behavior::nav::{LARGE_STEPS, STEP_SHARE, StepResult, ValueAxes, ValueSteps, snap_to_step, step_until_changed, step_value};
 use craft_behavior::{
     AccessAction, Axis, CursorIcon, HitLevel, HitPriority, Metrics, Mixed, MoveMods, NavMove, PartKey, Sense, ValueDrag, Wheel, decimals_for_step,
@@ -53,8 +53,10 @@ pub struct PointPickerStyle {
     metrics: Metrics,
     #[style(focus)]
     focus: FocusLook,
-    /// The length of the cross, and the width of the ring, at the point.
+    /// The length of the cross at the point.
     thumb: f32,
+    /// The ring at the point.
+    marker: MarkerLook,
     /// The side of the square that grabs the point.
     hit: f32,
 }
@@ -342,6 +344,7 @@ impl Component for PointPicker<'_> {
             metrics: Metrics::new().min_size(Vec2::new(cx.tokens.size.plot.width, cx.tokens.size.plot.height)),
             focus: cx.focus_look(),
             thumb: cx.tokens.size.handle.md,
+            marker: cx.marker(),
             hit: cx.tokens.size.hit.target,
         }
     }
@@ -456,7 +459,7 @@ impl Component for PointPicker<'_> {
                         painter.outline(&PaintShape::Path(vec![center + from, center + to]));
                     }
                 }
-                PointMark::Ring => painter.outline(&PaintShape::Circle(center, arm)),
+                PointMark::Ring => ui.draw().marker(&cx.style.marker, &Marker::hollow(center)),
             }
         }
     }

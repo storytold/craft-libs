@@ -8,11 +8,11 @@ use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, Name, Outcome, PaintUi, PartsCx, Pointer as _,
     Props as _, Remember as _, Role, WordSetCx as _,
 };
-use craft_ui::primitives::{PaintShape, StrokeWidth};
+use craft_ui::primitives::{Marker, PaintShape, StrokeWidth};
 use craft_ui::runtime::commands::FireSource;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{KeepKeys, KeyUse};
-use craft_ui::style::{ComponentStyle, DataColor, FocusLook, StyleColor, StyleCx};
+use craft_ui::style::{ComponentStyle, DataColor, FocusLook, MarkerLook, StyleColor, StyleCx};
 use egui::{Color32, CornerRadius, Mesh, Pos2, Rect, Response, Vec2, pos2};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
@@ -56,8 +56,8 @@ pub struct ColorRampStyle {
     boxes: f32,
     /// The gap between the bar and the boxes.
     boxes_gap: f32,
-    /// The diameter of the cursor cell's marker.
-    marker: f32,
+    /// The cursor cell's marker.
+    marker: MarkerLook,
 }
 
 /// Which colours the ramp shows.
@@ -358,7 +358,7 @@ impl Component for ColorRamp<'_> {
             edge: cx.color(tokens.color.line.control_edge),
             boxes: tokens.size.icon.lg,
             boxes_gap: tokens.space.gap.tight,
-            marker: tokens.size.handle.md,
+            marker: cx.marker(),
         }
     }
 
@@ -462,7 +462,7 @@ impl Component for ColorRamp<'_> {
         if cx.focus_visible() && cx.active_part() == Some(BAR.into()) {
             let (fx, fy) = centre_of(self.cursor);
             let at = pos2(bar.left() + bar.width() * fx, bar.top() + bar.height() * fy);
-            painter.outline(&PaintShape::Circle(at, cx.style.marker / 2.0));
+            draw.marker(&cx.style.marker, &Marker::hollow(at));
         }
         if self.boxes {
             let half = boxes.center().y;

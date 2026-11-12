@@ -23,7 +23,9 @@ pub use cx::{StyleCx, VariantParts};
 pub use key::{EnvKey, Ink, StyleKey};
 pub(crate) use look::StyleView;
 pub use look::{ComponentStyle, Corners, DataColor, FocusLook, IconLook, StyleColor, SurfaceKind, SurfaceLook, TextLook, TrackLook};
-pub use paint::{HandleLook, ResetMarkLook, ResizeLineLook, RuleKind, RuleLook, RuleWidth, ScrollBarKind, ScrollBarLook, resize_line_look};
+pub use paint::{
+    HandleLook, MarkerLook, ResetMarkLook, ResizeLineLook, RuleKind, RuleLook, RuleWidth, ScrollBarKind, ScrollBarLook, resize_line_look,
+};
 pub(crate) use paint::{min_thumb, scroll_bar_look};
 pub use replacements::{DuplicateStyle, StyleReplacements};
 pub use state::StateSet;

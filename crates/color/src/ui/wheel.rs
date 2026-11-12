@@ -8,10 +8,10 @@ use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Numeric, PaintUi, PartsCx,
     Pointer as _, Props as _, Role, WordSetCx as _,
 };
-use craft_ui::primitives::{PaintShape, StrokeWidth};
+use craft_ui::primitives::{Marker, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{ActivateKeys, FocusShape, KeepKeys, KeyUse};
-use craft_ui::style::{ComponentStyle, FocusLook, StyleColor, StyleCx};
+use craft_ui::style::{ComponentStyle, FocusLook, MarkerLook, StyleColor, StyleCx};
 use egui::{Mesh, Pos2, Rect, Vec2, vec2};
 use std::f32::consts::TAU;
 
@@ -168,8 +168,8 @@ pub struct ColorWheelStyle {
     grab: f32,
     /// The edge round the ring and the triangle.
     edge: StyleColor,
-    /// The diameter of the knobs.
-    knob: f32,
+    /// The knobs.
+    knob: MarkerLook,
     /// The least side of the picture, and the most it takes of the width it is given.
     least: f32,
     most: f32,
@@ -300,7 +300,7 @@ impl Component for ColorWheel<'_> {
             triangle_inset: tokens.stroke.thin,
             grab: tokens.size.hit.target,
             edge: cx.color(tokens.color.line.control_edge),
-            knob: tokens.size.handle.md,
+            knob: cx.marker(),
         }
     }
 
@@ -395,7 +395,7 @@ impl Component for ColorWheel<'_> {
         draw.stroke(&PaintShape::Polygon(corners.to_vec()), StrokeWidth::Thin, cx.style.edge);
         let knobs = [geometry.ring_knob(hue), triangle_point(corners, saturation / 100.0, brightness / 100.0)];
         for at in knobs {
-            painter.outline(&PaintShape::Circle(at, cx.style.knob / 2.0));
+            draw.marker(&cx.style.knob, &Marker::hollow(at));
         }
     }
 

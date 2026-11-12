@@ -18,10 +18,10 @@ use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _,
     Props, Remember as _, Role, Styled as _, WordSetCx as _,
 };
-use craft_ui::primitives::{Dashes, PaintShape, StrokeWidth};
+use craft_ui::primitives::{Dashes, Marker, MarkerSize, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::KeyUse;
-use craft_ui::style::{ComponentStyle, DataColor, HandleLook, StyleColor, StyleCx};
+use craft_ui::style::{ComponentStyle, HandleLook, MarkerLook, StyleColor, StyleCx};
 use egui::{Color32, Pos2, Rect, Response, Vec2, vec2};
 
 use super::gradient_line::{at_screen, midpoint_location};
@@ -63,22 +63,18 @@ pub struct GradientOverlayStyle {
     metrics: Metrics,
     /// The end handles' look.
     handle: HandleLook,
-    /// The line, the extent and the rings.
+    /// The end rings and the colour stops.
+    marker: MarkerLook,
+    /// The line and the extent.
     line: StyleColor,
-    /// The outline beside the line and under the rings.
+    /// The outline beside the line and the extent, and round the diamonds.
     halo: StyleColor,
-    /// The selected stop's ring, the selected diamond's fill and a picked end's ring.
+    /// The selected diamond's fill.
     selected: StyleColor,
-    /// The fill under a stop's colour where the colour has opacity.
-    backing: StyleColor,
     /// Length of a dash of the mirrored extent.
     dash: f32,
     /// Length of the gap between dashes of the mirrored extent.
     gap: f32,
-    /// Radius of an end handle's ring.
-    end_radius: f32,
-    /// Radius of a colour stop's disc.
-    stop_radius: f32,
     /// Radius of a midpoint's diamond.
     diamond_radius: f32,
     /// Distance from the line past which a dragged stop is torn off.
@@ -283,14 +279,12 @@ impl Component for GradientOverlay<'_> {
         GradientOverlayStyle {
             metrics: Metrics::new().min_size(Vec2::splat(size.handle.md)),
             handle: cx.handle(),
+            marker: cx.marker(),
             line: cx.color(overlay.handle_fill),
             halo: cx.color(overlay.halo),
             selected: cx.color(overlay.handle_stroke),
-            backing: cx.color(overlay.handle_fill),
             dash: stroke.dash,
             gap: stroke.dash_gap,
-            end_radius: size.handle.md,
-            stop_radius: size.handle.sm,
             diamond_radius: size.handle.sm,
             tear_off: TEAR_OFF,
         }
@@ -412,9 +406,7 @@ impl GradientOverlay<'_> {
                 }
             }
             for (at, key, part) in [(start, START, LinePart::Start), (end, END, LinePart::End)] {
-                let ring = PaintShape::Circle(at, style.end_radius);
-                draw.stroke(&ring, StrokeWidth::Thick, style.halo);
-                draw.stroke(&ring, StrokeWidth::Medium, if marked(key, part) { style.selected } else { style.line });
+                draw.marker(&style.marker, &Marker::hollow(at).size(MarkerSize::Large).selected(marked(key, part)));
             }
             for (i, stop) in value.stops.color.iter().enumerate() {
                 if self.report.torn && cx.part(STOP.at(i as u64)).press.phase.is_drag() {
@@ -422,17 +414,11 @@ impl GradientOverlay<'_> {
                 }
                 let at = at_screen(start, end, stop.location, self.reverse);
                 let color = Color32::from(stop.color);
-                let disc = PaintShape::Circle(at, style.stop_radius);
-                draw.stroke(&PaintShape::Circle(at, style.stop_radius), StrokeWidth::Thick, style.halo);
-                match self.rules.rows {
-                    StopRows::Combined => {
-                        draw.fill(&disc, style.backing);
-                        draw.data_fill(&disc, DataColor::new(color));
-                    }
-                    _ => draw.data_fill(&disc, DataColor::new(Color32::from_rgb(color.r(), color.g(), color.b()))),
-                }
-                let ring = if selected == Some(StopRef::Color(i)) { style.selected } else { style.line };
-                draw.stroke(&disc, StrokeWidth::Medium, ring);
+                let color = match self.rules.rows {
+                    StopRows::Combined => color,
+                    _ => Color32::from_rgb(color.r(), color.g(), color.b()),
+                };
+                draw.marker(&style.marker, &Marker::filled(at, color).selected(selected == Some(StopRef::Color(i))));
             }
         });
     }

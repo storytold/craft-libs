@@ -306,6 +306,16 @@ impl<'a> Draw<'a> {
         self.painter.extend(super::ResetMark::shapes(look, center, differs));
     }
 
+    /// Paints `marker` in `look`. A `Draw` for an inactive part fills a filled marker with the theme's disabled fill, as
+    /// `data_fill` does.
+    pub fn marker(&self, look: &crate::style::MarkerLook, marker: &super::Marker) {
+        let marker = match marker.fill() {
+            Some(color) => marker.with_fill(self.data_color(DataColor::new(color))),
+            None => *marker,
+        };
+        self.painter.extend(marker.shapes(look));
+    }
+
     /// Paints the line of `kind` from `from` to `to`.
     pub fn rule(&self, kind: RuleKind, from: Pos2, to: Pos2) {
         let look = rule_look(self.env.tokens, kind);

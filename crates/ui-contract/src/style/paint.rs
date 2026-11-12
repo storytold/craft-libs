@@ -1,4 +1,4 @@
-//! What the small painters (rules, handles, scroll bars, the reset mark) draw, read from tokens.
+//! What the small painters (rules, handles, colour markers, scroll bars, the reset mark) draw, read from tokens.
 
 use super::tokens::UiTokens;
 use craft_theme::{Rgba, Stateful};
@@ -130,6 +130,43 @@ pub(crate) fn handle_look(tokens: &UiTokens) -> HandleLook {
         style_color(c.state.disabled_fill),
     ));
     HandleLook { side: tokens.size.handle.md, fill, stroke: style_color(c.overlay.handle_stroke), stroke_width: tokens.stroke.thin }
+}
+
+/// A colour marker: the mark on a colour field, wheel, disc or gradient line that shows where a colour sits. Its ring
+/// and the halo just outside it make one of the two read on any colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct MarkerLook {
+    /// The radius of a marker, out to the inner edge of its ring.
+    pub radius: f32,
+    /// The radius of a large marker (a set's base colour).
+    pub large: f32,
+    /// The ring colour.
+    pub ring: StyleColor,
+    /// The ring colour of a selected marker.
+    pub selected: StyleColor,
+    /// The ring's width.
+    pub ring_width: f32,
+    /// The halo ring's colour, just outside the ring.
+    pub halo: StyleColor,
+    /// The halo ring's width.
+    pub halo_width: f32,
+    /// The fill under a translucent marked colour.
+    pub backing: StyleColor,
+}
+
+pub(crate) fn marker_look(tokens: &UiTokens) -> MarkerLook {
+    let (o, stroke, handle) = (&tokens.color.overlay, &tokens.stroke, &tokens.size.handle);
+    MarkerLook {
+        radius: handle.sm,
+        large: handle.md,
+        ring: style_color(o.handle_fill),
+        selected: style_color(o.handle_stroke),
+        ring_width: stroke.medium,
+        halo: style_color(o.halo),
+        halo_width: stroke.thin,
+        backing: style_color(o.handle_fill),
+    }
 }
 
 /// Where a scroll bar sits.

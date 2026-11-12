@@ -10,6 +10,7 @@ mod handle;
 mod icon;
 mod ime_surface;
 mod kit;
+mod marker;
 mod record;
 mod reset_mark;
 mod rule;
@@ -37,6 +38,7 @@ pub use kit::{
     Checker, CheckerArea, GridAxis, GridInk, GridLines, GridLook, GridStroke, MAX_LINES, Tick, TickEdge, TickRank, dashed, drop_mark, ellipse,
     grid_lines, grid_lines_with, marching_ants, outline, ramp, ticks,
 };
+pub use marker::{Marker, MarkerSize};
 pub use reset_mark::ResetMark;
 pub use rule::{Rule, RuleKind};
 pub use scroll_bar::{HiddenContent, ScrollBar};

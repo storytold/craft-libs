@@ -3,6 +3,7 @@
 use craft_behavior::{CursorIcon, HitLevel, HitPriority, HitShape, NavShape, PartKey, PartRef, Roving, Sense};
 use craft_ui::canvas::canvas_space;
 use craft_ui::contract::PartsCx;
+use craft_ui::primitives::{Marker, MarkerSize};
 use egui::Pos2;
 
 use super::{GradientOverlay, screen_line};
@@ -76,8 +77,8 @@ impl GradientOverlay<'_> {
         let (start, end) = screen_line(&space.view, value);
         let sense = if live { Sense::DRAG | Sense::CLICK | Sense::TAKE_FOCUS | Sense::CONTEXT_CLICK } else { Sense::HOVER };
         let radius = |part: LinePart| match part {
-            LinePart::Start | LinePart::End => style.end_radius,
-            LinePart::Stop(_) => style.stop_radius,
+            LinePart::Start | LinePart::End => Marker::reach(&style.marker, MarkerSize::Large),
+            LinePart::Stop(_) => Marker::reach(&style.marker, MarkerSize::Regular),
             _ => style.diamond_radius,
         };
         let at = |part: LinePart| -> Pos2 {

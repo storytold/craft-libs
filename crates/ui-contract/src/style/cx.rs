@@ -3,7 +3,8 @@
 use super::key::{EnvKey, Ink};
 use super::look::{DataColor, FocusLook, StyleColor, SurfaceKind, SurfaceLook, TrackLook};
 use super::paint::{
-    HandleLook, ResetMarkLook, RuleKind, RuleLook, ScrollBarKind, ScrollBarLook, handle_look, reset_mark_look, rule_look, scroll_bar_look,
+    HandleLook, MarkerLook, ResetMarkLook, RuleKind, RuleLook, ScrollBarKind, ScrollBarLook, handle_look, marker_look, reset_mark_look, rule_look,
+    scroll_bar_look,
 };
 use super::surface::{SurfaceStyle, surface_style};
 use super::tokens::UiTokens;
@@ -345,6 +346,11 @@ impl<'a> StyleCx<'a> {
     /// The look of a canvas handle.
     pub fn handle(&self) -> HandleLook {
         handle_look(self.tokens)
+    }
+
+    /// The look of a colour marker.
+    pub fn marker(&self) -> MarkerLook {
+        marker_look(self.tokens)
     }
 
     /// The look of a scroll bar of `kind`.
