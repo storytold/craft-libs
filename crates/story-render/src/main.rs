@@ -28,7 +28,7 @@ use craft_ui::fonts::{I18nScripts, UiFonts};
 use craft_ui::layout_components::{Grid, Stack};
 use craft_ui::runtime::env::{RootEnv, WindowKey};
 use craft_ui::shell::AppShell;
-use craft_ui::testing::snapshot::{Renderer, RgbaImage, layer_rects};
+use craft_ui::testing::snapshot::{Renderer, RgbaImage, layer_rects, modal_open};
 use craft_ui::testing::{Frames, StoryRegistration};
 use craft_ui_gallery::WINDOW;
 use craft_ui_gallery::chrome::{Spec, StoryBody, overview_card};
@@ -264,8 +264,10 @@ fn render(job: &Job, renderer: &mut Renderer, env: &RootEnv, options: &Options) 
         Shown::Card(spec) => card(&mut frames, spec, options),
     };
     let layers = layer_rects(&frames.ctx).into_iter().fold(Rect::NOTHING, Rect::union);
-    // An opened card dialog is cropped alone, as the old gallery's dialog shots are.
-    let crop = if dialog && layers.is_positive() { layers } else { shown.map_or(layers, |shown| layers.union(shown)) };
+    // An opened card dialog, or a modal layer the story opened itself, is cropped alone, as the old gallery's dialog
+    // shots are.
+    let alone = dialog || modal_open(&frames.ctx);
+    let crop = if alone && layers.is_positive() { layers } else { shown.map_or(layers, |shown| layers.union(shown)) };
     let paint = frames.take_paint().ok_or("no paint recorded")?;
     let image = renderer.render(&frames.ctx, paint);
     renderer.finish();

@@ -58,3 +58,8 @@ impl Renderer {
 pub fn layer_rects(ctx: &Context) -> Vec<Rect> {
     overlay::open_entries(ctx).into_iter().map(|entry| entry.region.map_or(entry.rect, |region| entry.rect.intersect(region))).collect()
 }
+
+/// Whether a layer shown last frame and not fading out is modal (a dialog over the window).
+pub fn modal_open(ctx: &Context) -> bool {
+    overlay::open_entries(ctx).into_iter().any(|entry| entry.rank.is_modal())
+}
