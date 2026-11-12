@@ -1,7 +1,7 @@
 //! Puppet Warp: the session on a recording solver, the pins on a canvas and the options bar.
 
 use craft_behavior::kurbo::Point;
-use craft_behavior::{CanvasView, EditEvent};
+use craft_behavior::{CanvasView, Cursor, CursorIcon, EditEvent};
 use craft_imaging::ui::warp::pin::{Pin, PinEdit, PinMeshView, PinSolver, PinWarp, PinWarpOptions, PinWarpSession, PinWarpSettings};
 use craft_ui::canvas::Canvas;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
@@ -228,4 +228,22 @@ fn alt_drag_near_a_selected_pin_turns_it_and_fixes_its_rotation() {
 
     h.drag((300.0, 150.0), (300.0, 190.0), Modifiers::ALT);
     assert!(h.seen().is_empty(), "far from the pin the press turns nothing: {:?}", h.seen());
+}
+
+#[trial]
+fn alt_held_over_a_pin_shows_the_not_allowed_cursor_its_press_deletes() {
+    let mut h = harness(vec![pin(200.0, 150.0)], Vec::new());
+    let cursor = |h: &Harness| craft_ui::runtime::cursor::current(h.fixture.ctx());
+    let over = h.at(200.0, 150.0);
+    h.fixture.frame(vec![pointer::moved(over)]);
+    h.fixture.frame(Vec::new());
+    assert_eq!(cursor(&h), Some(Cursor::System(CursorIcon::Move)));
+    h.fixture.hold(Modifiers::ALT);
+    h.fixture.frame(Vec::new());
+    h.fixture.frame(Vec::new());
+    assert_eq!(cursor(&h), Some(Cursor::System(CursorIcon::NotAllowed)), "Alt pressed with the pointer still");
+    h.fixture.hold(Modifiers::NONE);
+    h.fixture.frame(Vec::new());
+    h.fixture.frame(Vec::new());
+    assert_eq!(cursor(&h), Some(Cursor::System(CursorIcon::Move)));
 }

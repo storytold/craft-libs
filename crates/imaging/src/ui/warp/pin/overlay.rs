@@ -4,8 +4,8 @@
 use craft_behavior::geometry::crop::normalized_angle;
 use craft_behavior::kurbo::{Point, Vec2 as DocVec};
 use craft_behavior::{
-    Axis, CancelReason, CanvasView, CursorIcon, EditCommand, Granularity, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape, PartKey,
-    PointerButton, PressPhase, Roving, Sense,
+    Axis, CancelReason, CanvasView, CursorIcon, CursorPriority, EditCommand, Granularity, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape,
+    PartKey, PointerButton, PressPhase, Roving, Sense,
 };
 use craft_ui::canvas::{CanvasSpace, NUDGE, NUDGE_FAR, canvas_space};
 use craft_ui::contract::{
@@ -338,6 +338,10 @@ impl PinWarp<'_> {
             if hovered {
                 self.report.hovered = Some(i);
                 self.report.pointer = hover_pos.map(|at| space.view.to_doc(at));
+                if !press.phase.is_press() {
+                    // A press with Alt deletes the pin.
+                    cx.cursor(if press.mods.alt { CursorIcon::NotAllowed } else { CursorIcon::Move }, CursorPriority::Part);
+                }
             }
             match press.phase {
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
@@ -483,7 +487,7 @@ impl Component for PinWarp<'_> {
                 .part(PIN.at(i as u64), HitShape::circle(space.view.to_screen(pin.at), radius))
                 .sense(Sense::DRAG | Sense::TAKE_FOCUS)
                 .priority(HitPriority::new(HitLevel::Handle, 0))
-                .cursor(CursorIcon::Move)
+                .drag_cursor(CursorIcon::Move)
                 .focusable();
             if selected.contains(&i) {
                 part.selected().flags(Flags::SELECTED);
