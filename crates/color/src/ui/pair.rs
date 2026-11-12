@@ -108,9 +108,11 @@ pub struct SwatchPairStyle {
     buttons: f32,
     /// The colour the pair sits on, for the gap.
     ground: StyleColor,
-    /// The outline of a well.
+    /// The outline just outside a well.
     edge: StyleColor,
-    /// The light line just inside a well's outline, so any colour reads against the surface.
+    /// The outline's width: `stroke.thin`.
+    outline: f32,
+    /// The light line just inside a well's edge, so any colour reads against the surface.
     mark: StyleColor,
 }
 
@@ -256,15 +258,21 @@ impl<'a> SwatchPair<'a> {
     /// end.
     fn button_rects(style: &SwatchPairStyle) -> [Rect; 2] {
         let side = Vec2::splat(style.buttons);
-        [Rect::from_min_size(pos2(0.0, 0.0), side), Rect::from_min_size(pos2(style.well + style.step - style.buttons, 0.0), side)]
+        [Rect::from_min_size(pos2(0.0, 0.0), side), Rect::from_min_size(pos2(Self::wells(style).x - style.buttons, 0.0), side)]
     }
 
-    /// The wells' rects in logical coordinates from the pair's start edge, primary first.
+    /// The size of the two wells with the outlines round them.
+    fn wells(style: &SwatchPairStyle) -> Vec2 {
+        Vec2::splat(style.well + style.step + 2.0 * style.outline)
+    }
+
+    /// The wells' rects in logical coordinates from the pair's start edge, primary first, inside their outlines.
     fn well_rects(&self, style: &SwatchPairStyle, size: Vec2) -> [Rect; 2] {
-        let top = if self.has_buttons() { style.buttons + style.metrics.gap } else { 0.0 };
+        let top = if self.has_buttons() { style.buttons + style.metrics.gap } else { 0.0 } + style.outline;
         let square = Vec2::splat(style.well);
-        let primary = Rect::from_min_size(pos2(0.0, top), square);
-        let secondary = Rect::from_min_size(pos2(size.x.min(style.well + style.step) - style.well, top + style.step), square);
+        let primary = Rect::from_min_size(pos2(style.outline, top), square);
+        let end = size.x.min(Self::wells(style).x) - style.outline;
+        let secondary = Rect::from_min_size(pos2(end - style.well, top + style.step), square);
         [primary, secondary]
     }
 }
@@ -288,6 +296,7 @@ impl Component for SwatchPair<'_> {
             buttons: cx.control().icon,
             ground: cx.color(colors.surface.panel),
             edge: cx.color(colors.line.control_edge),
+            outline: cx.tokens.stroke.thin,
             mark: cx.color(colors.text.normal),
         }
     }
@@ -298,7 +307,7 @@ impl Component for SwatchPair<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let style = cx.style;
-        let wells = Vec2::splat(style.well + style.step);
+        let wells = Self::wells(style);
         if self.has_buttons() { vec2(wells.x, wells.y + style.buttons + style.metrics.gap) } else { wells }
     }
 
@@ -435,9 +444,8 @@ impl Component for SwatchPair<'_> {
                     Some(color) if shown.ring => paint_ring(&draw, at, *color, style),
                     color => {
                         draw.swatch_well(at, style.radius, color.copied());
-                        draw.stroke(&PaintShape::Rect(at, style.radius), StrokeWidth::Thin, style.edge);
-                        let inside = at.shrink(draw.width(StrokeWidth::Thin));
-                        draw.stroke(&PaintShape::Rect(inside, style.radius), StrokeWidth::Thin, style.mark);
+                        draw.stroke(&PaintShape::Rect(at, style.radius), StrokeWidth::Thin, style.mark);
+                        draw.stroke(&outline(at, style), StrokeWidth::Thin, style.edge);
                     }
                 }
             }
@@ -474,11 +482,15 @@ impl Component for SwatchPair<'_> {
 /// A ring well: a band of the colour round the edge, the middle open to what is behind, outlined on both sides.
 fn paint_ring(draw: &Draw<'_>, at: Rect, color: Srgba, style: &SwatchPairStyle) {
     let band = at.width() * RING_SHARE;
-    let outline = PaintShape::Rect(at, style.radius);
-    draw.stroke(&outline, DataWidth::points(band), DataColor::new(Color32::from(color)));
-    draw.stroke(&outline, StrokeWidth::Thin, style.edge);
-    let hole = at.shrink(band - draw.width(StrokeWidth::Thin));
+    draw.stroke(&PaintShape::Rect(at, style.radius), DataWidth::points(band), DataColor::new(Color32::from(color)));
+    draw.stroke(&outline(at, style), StrokeWidth::Thin, style.edge);
+    let hole = at.shrink(band - style.outline);
     draw.stroke(&PaintShape::Rect(hole, CornerRadius::ZERO), StrokeWidth::Thin, style.edge);
+}
+
+/// The outline just outside the well `at`, concentric with its corners.
+fn outline(at: Rect, style: &SwatchPairStyle) -> PaintShape {
+    PaintShape::Rect(at.expand(style.outline), UiTokens::corner(f32::from(style.radius.nw) + style.outline))
 }
 
 /// The glyphs of the pair's buttons, drawn on a square grid of `GRID` units; they picture the pair, so they mirror
