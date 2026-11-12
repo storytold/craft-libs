@@ -1,5 +1,6 @@
 //! Cursor chat: your box at the pointer, and everyone's bubbles.
 
+use craft_theme::Opacity;
 use craft_theme::variant::Variant;
 use craft_ui::contract::{Bind, NoValue, Outcome, PaintUi, Pattern, Props, Remember as _, Show as _, ShowContainer as _};
 use craft_ui::layout_components::Stack;
@@ -15,9 +16,6 @@ use crate::collab::CollabRequest;
 
 #[cfg(feature = "screen-testing")]
 mod stories;
-
-/// How much of the ink the name over a bubble's text keeps.
-const NAME_INK: f32 = 0.8;
 
 craft_ui::words! {
     /// The chat box's words, English by default.
@@ -85,7 +83,7 @@ pub fn paint_chat_bubble(ui: &PaintUi<'_>, look: &BubbleLook, tip: Pos2, name: O
         draw.data_fill(&PaintShape::Rect(rect, CornerRadius { nw: 0, ne: round, sw: round, se: round }), DataColor::new(background));
         let mut at = rect.min + look.pad;
         if let Some(title) = &title {
-            draw.faded(NAME_INK, |draw| {
+            draw.faded(Opacity::SECONDARY, |draw| {
                 draw.text(Rect::from_min_size(at, Vec2::new(width, look.caption.1)), title);
             });
             at.y += head_height;

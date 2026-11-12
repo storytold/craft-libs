@@ -221,4 +221,14 @@ impl Opacity {
     pub const MOVING: f32 = 0.75;
     /// Alpha of a mark the app derived, drawn beside the user's own marks of the same kind so those stand out.
     pub const DERIVED: f32 = 0.7;
+    /// Alpha of a colour that faintly washes an area behind its content: a track's label colour over its lane.
+    pub const WASH: f32 = 0.10;
+    /// Alpha of a colour that tints an area behind or over content so the area stands out while the content still
+    /// reads: a track's label colour over its header, an inspected element's padding.
+    pub const TINT: f32 = 0.18;
+    /// Alpha of a data colour filling a span bar beside the solid mark it belongs to: a range marker's duration.
+    pub const SPAN: f32 = 0.5;
+    /// Alpha of secondary ink drawn over a data colour, below the primary ink of the same surface: the author's name
+    /// over a chat bubble's message.
+    pub const SECONDARY: f32 = 0.8;
 }

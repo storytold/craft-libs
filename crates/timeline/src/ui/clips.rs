@@ -7,6 +7,7 @@
 use std::rc::Rc;
 
 use craft_behavior::{CursorIcon, HitLevel, HitPriority, Intent, MarqueeSelect, PartKey, PartRef, PointerButton, PressPhase, SelectionChange, Sense};
+use craft_theme::Opacity;
 use craft_ui::contract::{
     Access, Component, ContentPainter, Cx, Edit as _, Focus as _, Name, Outcome, PaintUi, PartsCx, Pointer as _, Remember as _, Styled as _,
 };
@@ -21,8 +22,6 @@ use crate::model::{ClipId, ClipInfo};
 use crate::time::Tick;
 use crate::timecode::format_time;
 
-/// How strongly a track's colour label tints its lane (FilmCraft `timeline.rs:255` `TRACK_LANE_TINT`, used at `:335`).
-const LANE_LABEL_TINT: f32 = 0.10;
 /// The locked hatch's line spacing, as a share of the control height.
 const HATCH_STEP_SHARE: f32 = 0.25;
 /// Within this share of the edge zone of a cut, the Selection tool with its no-modifier trims rolls.
@@ -573,7 +572,7 @@ impl<'a> ClipLane<'a> {
         let palette = label_palette(&cx.env);
         let geometry = self.geometry(axis, lane, look);
         if let Some(label) = self.track_label {
-            let tint = palette.0[usize::from(label.0) % palette.0.len()].gamma_multiply(LANE_LABEL_TINT);
+            let tint = palette.0[usize::from(label.0) % palette.0.len()].gamma_multiply(Opacity::WASH);
             ui.draw().data_fill(&PaintShape::Rect(lane, CornerRadius::ZERO), DataColor::new(tint));
         }
         for clip in self.clips {

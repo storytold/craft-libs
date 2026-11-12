@@ -16,6 +16,7 @@ use craft_behavior::{
     ColumnKey, ColumnWidth, CursorIcon, DisplayOrder, EditEvent, EditEvents, HitLevel, HitPriority, IconId, ItemSource, MarqueeSelect, Metrics,
     Mixed, PartKey, PressPhase, Selection, SelectionChange, Sense, SizeHint, SpanLayout,
 };
+use craft_theme::Opacity;
 use craft_ui::contract::{
     Access, Bind, BindMut, Collection, CollectionProps, CollectionResponse, ColumnKind, ColumnSpec, Common, Component, ContainerProps, Cx, Edit as _,
     ItemKeys, ItemOutput, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _, Props, Remember as _, Role, Scroll, ScrollAnchor, SelectMode,
@@ -61,9 +62,6 @@ const SWITCHES: [(ColumnKey, &str, &str); 6] = [
     (MUTE, "track_mute", "track_mute"),
     (SOLO, "solo", "solo"),
 ];
-
-/// How strongly a track's colour label tints its header: a share of the label colour (FilmCraft `TRACK_HEADER_TINT`).
-const HEADER_LABEL_TINT: f32 = 0.18;
 
 /// The sizes of a timeline's tracks and headers, all from the tokens.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -599,7 +597,7 @@ impl Component for TrackRow<'_> {
         if let Some(label) = self.track.label {
             let palette: LabelPalette = label_palette(&cx.env);
             let tint = palette.0[usize::from(label.0) % palette.0.len()];
-            draw.data_fill(&PaintShape::Rect(headers, CornerRadius::ZERO), DataColor::new(tint.gamma_multiply(HEADER_LABEL_TINT)));
+            draw.data_fill(&PaintShape::Rect(headers, CornerRadius::ZERO), DataColor::new(tint.gamma_multiply(Opacity::TINT)));
             if let Some(strip) = self.cell(&STRIP) {
                 draw.data_fill(&PaintShape::Rect(strip, CornerRadius::ZERO), DataColor::new(tint));
             }

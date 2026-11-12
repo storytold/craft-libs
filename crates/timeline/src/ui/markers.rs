@@ -12,6 +12,7 @@ use craft_behavior::{
     Arrows, CancelReason, CursorIcon, EditEvent, GestureId, Granularity, HitLevel, HitPriority, Input, Intent, Metrics, Mixed, NavShape, PartKey,
     PointerButton, PressCancel, PressPhase, Roving, Sense,
 };
+use craft_theme::Opacity;
 use craft_ui::contract::{
     Access, Common, Component, Cx, Focus as _, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role,
     SetPosition, WordSetCx as _, clicked,
@@ -30,8 +31,6 @@ use crate::markers::{Marker, MarkerColor, MarkerId};
 use crate::time::Tick;
 use crate::timecode::format_time;
 
-/// The fill of a range marker's duration bar, as a share of the label colour (EffectCraft `markers_ui.rs:296`).
-const DURATION_TINT: f32 = 0.5;
 /// Where a marker's point sits, as a share of the strip's height (EffectCraft `markers_ui.rs:274`). A proportion of
 /// the strip, not a size.
 pub const MARKER_POINT: f32 = 0.6;
@@ -436,7 +435,7 @@ impl Component for MarkerStrip<'_> {
             let end = (length > Tick::ZERO).then(|| axis.x_of(start + length, rect.left()));
             if let Some(end) = end {
                 let bar = Rect::from_min_max(pos2(x, rect.top()), pos2(end, rect.top() + height));
-                draw.data_fill(&PaintShape::Rect(bar, CornerRadius::ZERO), DataColor::new(tint(marker.color).gamma_multiply(DURATION_TINT)));
+                draw.data_fill(&PaintShape::Rect(bar, CornerRadius::ZERO), DataColor::new(tint(marker.color).gamma_multiply(Opacity::SPAN)));
             }
             if marker.name.is_empty() {
                 continue;
