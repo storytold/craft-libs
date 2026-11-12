@@ -248,3 +248,22 @@ fn the_thumbs_a_press_would_move_wear_the_ring_and_a_click_on_the_span_focuses_t
     fixture.frame(vec![pointer::moved(Pos2::new(FIELD.left() + 12.0, FIELD.center().y))]);
     assert_eq!(rings(&fixture.frame_shapes(), FIELD) - rest, 1, "over the bare track the slider's thumb wears the ring");
 }
+
+/// The filled rects a frame paints inside `within`.
+fn fills(shapes: &[egui::Shape], within: Rect) -> usize {
+    shapes.iter().filter(|shape| matches!(shape, egui::Shape::Rect(rect) if rect.fill.a() > 0 && within.expand(8.0).contains_rect(rect.rect))).count()
+}
+
+/// A slider draws the ticks it is asked for: `ticks(10)` paints eleven marks under the track more than no ticks.
+#[trial]
+fn a_slider_draws_the_ticks_it_is_asked_for() {
+    let painted = |ticks: usize| {
+        let mut fixture = Fixture::new(move |ui| {
+            let mut value = START;
+            Slider::new(Bind::bound(&mut value), 0.0..=100.0).ticks(ticks).label("Opacity").show_at(ui, FIELD);
+        });
+        fixture.motion(MotionMode::Off).settle();
+        fills(&fixture.frame_shapes(), FIELD)
+    };
+    assert_eq!(painted(10) - painted(0), 11, "ten intervals draw eleven ticks");
+}

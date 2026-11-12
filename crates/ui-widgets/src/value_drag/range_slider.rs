@@ -103,9 +103,6 @@ pub struct RangeSlider<'a> {
     /// Whether the part of the track between the thumbs is filled.
     #[prop]
     fill: bool,
-    /// Evenly spaced ticks under the track: one more than this, none for 0.
-    #[prop]
-    ticks: usize,
     marks: Marks,
     /// Paints the groove with `face`, a component shown as the look of the track. The fill is not drawn over it.
     #[prop]
@@ -123,7 +120,6 @@ impl<'a> RangeSlider<'a> {
             step: None,
             scale: SliderScale::Linear,
             fill: true,
-            ticks: 0,
             marks: Marks::default(),
             track_face: None,
         }
@@ -134,6 +130,12 @@ impl<'a> RangeSlider<'a> {
     /// [`Slider::marks`]: super::Slider::marks
     pub fn marks(mut self, marks: &[f64]) -> Self {
         self.marks.set(marks);
+        self
+    }
+
+    /// `count + 1` evenly spaced ticks under the track, none for 0. The thumb does not snap to them.
+    pub fn ticks(mut self, count: usize) -> Self {
+        self.marks.ticks = count;
         self
     }
 

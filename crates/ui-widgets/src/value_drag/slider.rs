@@ -77,9 +77,6 @@ pub struct Slider<'a> {
     /// The shape of the thumb.
     #[prop]
     thumb: SliderThumb,
-    /// Evenly spaced ticks under the track: one more than this, none for 0.
-    #[prop]
-    ticks: usize,
     marks: Marks,
     /// The change of one wheel notch where it is coarser than the step (an offset of 0.0001 steps that wants 0.01 a
     /// notch); the step by default. Shift and Alt scale it as they scale the step. A logarithmic track with no step
@@ -127,7 +124,6 @@ impl<'a> Slider<'a> {
             scale: SliderScale::Linear,
             fill: true,
             thumb: SliderThumb::Round,
-            ticks: 0,
             marks: Marks::default(),
             wheel_step: None,
             value_text: None,
@@ -141,6 +137,12 @@ impl<'a> Slider<'a> {
     /// the range is ignored. Keys and the wheel use the step only, so with a step the marks should lie on it.
     pub fn marks(mut self, marks: &[f64]) -> Self {
         self.marks.set(marks);
+        self
+    }
+
+    /// `count + 1` evenly spaced ticks under the track, none for 0. The thumb does not snap to them.
+    pub fn ticks(mut self, count: usize) -> Self {
+        self.marks.ticks = count;
         self
     }
 
