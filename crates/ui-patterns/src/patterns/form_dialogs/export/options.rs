@@ -414,7 +414,6 @@ fn jpeg_params(words: &FormatOptionsWords, options: JpegOptions) -> Vec<Param> {
         Param::section(words.image_options.clone()),
         Param::custom(QUALITY, words.quality.clone(), move |ui, fields, _| quality_rows(ui, fields, &quality_name, &preset_name, &presets, start))
             .full_width(),
-        Param::section(words.format_options.clone()),
         Param::new(FORMAT, words.format_options.clone(), ParamKind::radio(formats, Some(options.format.id().to_owned()))),
     ]
 }
