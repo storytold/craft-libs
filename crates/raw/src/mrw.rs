@@ -131,7 +131,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         .and_then(|s| s.get(..need))
         .ok_or_else(|| RawError::Corrupt(format!("Mrw sensor data truncated (needs {need} bytes)")))?;
     let cfa = Cfa::bayer_static(p.cfa);
-    let (data, white) = if mode == Mode::Full {
+    let (data, white, white_source) = if mode == Mode::Full {
         let mut d = vec![0u16; n];
         if p.packed {
             unpack::unpack_msb(src, 12, &mut d);
@@ -141,10 +141,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
                 *v = (*v).min(4095);
             }
         }
-        let white = crate::shared::white_from_data(&d, 12);
-        (RawData::U16(d), white)
+        let (white, white_source) = crate::shared::white_from_data_sourced(&d, 12);
+        (RawData::U16(d), white, white_source)
     } else {
-        (RawData::U16(Vec::new()), 4095.0)
+        (RawData::U16(Vec::new()), 4095.0, crate::LevelSource::Unknown)
     };
     let wb = m.block(b"WBG").and_then(|b| wb_from(b, &cfa));
     let tiff = m.block(b"TTW").and_then(|b| Tiff::parse(b).ok());
@@ -169,6 +169,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         camera: tiff.as_ref().and_then(|t| t.ifds.first()).map(Camera::from_ifd0).unwrap_or_default(),
         cinema: Default::default(),
         lens_metadata: Default::default(),
+        level_sources: crate::LevelSources { black: crate::LevelSource::Fallback, white: white_source },
         pixel_aspect: 1.0,
     };
     img.validate_for(mode)?;
@@ -251,6 +252,11 @@ pub(crate) mod tests {
             assert_eq!(r.camera.make.as_deref(), Some("Minolta Co., Ltd."));
             let wb = r.wb_multipliers.unwrap();
             assert!((wb[0] - 408.0 / 256.0).abs() < 1e-6 && (wb[2] - 450.0 / 256.0).abs() < 1e-6, "{wb:?}");
+            assert_eq!(
+                r.level_sources,
+                crate::LevelSources { black: crate::LevelSource::Fallback, white: crate::LevelSource::Fallback },
+                "packed {packed}"
+            );
             assert_eq!(crate::probe_info(&f).unwrap(), r.info());
         }
     }

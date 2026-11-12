@@ -21,7 +21,7 @@
 //!   renders. Bayer bodies (X-A series) use RGGB at (0, 0), verified by colour renders.
 //! - Striped predictive compression is decoded by `rafc`; see `docs/raf-compression.md`.
 
-use crate::shared::white_from_data;
+use crate::shared::white_from_data_sourced;
 use crate::unpack::{unpack_lsb, unpack_words32_msb};
 use crate::{BlackLevel, Camera, Cfa, ColorData, Limits, Mode, OpcodeLists, Orientation, RawData, RawError, RawFormat, RawImage, Rect, Result};
 use craft_tiff::{ByteOrder, Ifd, Tiff};
@@ -215,18 +215,18 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     };
     let active = if active.width == 0 || active.height == 0 { Rect::new(0, 0, w, hgt) } else { active };
     // black levels: one per CFA position, anchored at (0, 0) of the raw data; re-anchor at the active area
-    let black = match ifd.f64s(0xf00a) {
+    let (black, black_source) = match ifd.f64s(0xf00a) {
         Some(v) if v.len() == cfa.pattern.len() && v.iter().any(|b| *b != v[0]) => {
             let (cw, chh) = (cfa.width, cfa.height);
             let values = (0..chh * cw).map(|i| v[((i / cw + active.y) % chh) * cw + (i % cw + active.x) % cw] as f32).collect();
-            BlackLevel { repeat_rows: chh, repeat_cols: cw, values, ..Default::default() }
+            (BlackLevel { repeat_rows: chh, repeat_cols: cw, values, ..Default::default() }, crate::LevelSource::Metadata)
         }
-        Some(v) if !v.is_empty() => BlackLevel::uniform(v[0] as f32),
-        _ => BlackLevel::uniform(0.0),
+        Some(v) if !v.is_empty() => (BlackLevel::uniform(v[0] as f32), crate::LevelSource::Metadata),
+        _ => (BlackLevel::uniform(0.0), crate::LevelSource::Fallback),
     };
     let wb =
         ifd.f64s(0xf00e).filter(|v| v.len() >= 3 && v.iter().take(3).all(|x| *x > 0.0)).map(|v| [(v[1] / v[0]) as f32, 1.0, (v[2] / v[0]) as f32]);
-    let white = white_from_data(&data, bits);
+    let (white, white_source) = white_from_data_sourced(&data, bits);
     let kelvin_presets = fuji_kelvin_presets(&ifd);
     let exif = h.jpeg.and_then(jpeg_exif_tiff);
     let ifd0 = exif.as_ref().and_then(|t| t.ifds.first());
@@ -254,6 +254,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
             .unwrap_or_else(|| Camera { model: Some(camera_name(bytes)).filter(|n| !n.is_empty()), ..Default::default() }),
         cinema: Default::default(),
         lens_metadata: Default::default(),
+        level_sources: crate::LevelSources { black: black_source, white: white_source },
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -426,6 +427,27 @@ pub(super) mod tests {
                 bitsv.chunks(4).flat_map(|c| [c[3], c[2], c[1], c[0]]).collect()
             }
         }
+    }
+
+    /// The black is `Metadata` when the raw IFD states it (`0xf00a`), else a `Fallback` 0; the white is `Inferred`
+    /// from a saturation plateau, else the full range, a `Fallback`.
+    #[test]
+    fn level_sources_follow_the_black_tag_and_the_plateau() {
+        let (w, h) = (64u32, 32u32);
+        let flat: Vec<u16> = (0..w * h).map(|i| 300 + (i % 50) as u16).collect();
+        let mut peaked = flat.clone();
+        peaked[..200].fill(15000);
+        let r = crate::decode(&raf(w, h, 14, pack(&peaked, 16), None, b"")).unwrap();
+        assert_eq!(r.black.mean(), 64.0);
+        assert!((14900.0..=15000.0).contains(&r.white[0]), "{}", r.white[0]);
+        assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::Metadata, white: crate::LevelSource::Inferred });
+        // the same file with tag 0xf00a renamed to 0xf00b: no black is stated
+        let mut bytes = raf(w, h, 14, pack(&flat, 16), None, b"");
+        let at = bytes.windows(4).position(|b| b == [0x0a, 0xf0, 4, 0]).unwrap();
+        bytes[at] = 0x0b;
+        let r = crate::decode(&bytes).unwrap();
+        assert_eq!((r.black.mean(), r.white[0]), (0.0, 16383.0));
+        assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::Fallback, white: crate::LevelSource::Fallback });
     }
 
     #[test]

@@ -82,11 +82,12 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         _ => return Err(RawError::Unsupported("Erf raw without a 2x2 CFAPattern".into())),
     };
     let mn = maker_note(bytes, &tiff);
-    let black = match mn.as_ref().and_then(|m| m.u64s(MN_BLACK)).as_deref() {
-        Some(v @ [_, _, _, _]) if v.iter().all(|&b| b < 4095) => {
-            BlackLevel { repeat_rows: 2, repeat_cols: 2, values: v.iter().map(|&b| b as f32).collect(), delta_h: vec![], delta_v: vec![] }
-        }
-        _ => BlackLevel::uniform(0.0),
+    let (black, black_source) = match mn.as_ref().and_then(|m| m.u64s(MN_BLACK)).as_deref() {
+        Some(v @ [_, _, _, _]) if v.iter().all(|&b| b < 4095) => (
+            BlackLevel { repeat_rows: 2, repeat_cols: 2, values: v.iter().map(|&b| b as f32).collect(), delta_h: vec![], delta_v: vec![] },
+            crate::LevelSource::Metadata,
+        ),
+        _ => (BlackLevel::uniform(0.0), crate::LevelSource::Fallback),
     };
     let size = mn.as_ref().and_then(|m| Some((m.u32(MN_WIDTH)? as usize, m.u32(MN_HEIGHT)? as usize)));
     let crop = match size {
@@ -102,7 +103,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         .ok_or_else(|| RawError::Corrupt("Erf strip outside file".into()))?;
     let mut d = vec![0u16; n];
     unpack(src, &mut d);
-    let white = crate::shared::white_from_data(&d, 12);
+    let (white, white_source) = crate::shared::white_from_data_sourced(&d, 12);
     let data = if mode == Mode::Full { RawData::U16(d) } else { RawData::U16(Vec::new()) };
     let img = RawImage {
         format: RawFormat::Erf,
@@ -124,6 +125,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         camera: tiff.ifds.first().map(Camera::from_ifd0).unwrap_or_default(),
         cinema: Default::default(),
         lens_metadata: Default::default(),
+        level_sources: crate::LevelSources { black: black_source, white: white_source },
         pixel_aspect: 1.0,
     };
     img.validate_for(mode)?;
@@ -177,6 +179,8 @@ mod tests {
         assert_eq!(r.data, RawData::U16(px));
         assert_eq!(r.cfa.as_ref().map(Cfa::name).as_deref(), Some("RGGB"));
         assert_eq!(r.wb_multipliers, None, "the file states none");
+        // no maker note: no stated black; no plateau
+        assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::Fallback, white: crate::LevelSource::Fallback });
         assert_eq!(crate::probe_info(&f).unwrap(), r.info());
     }
 

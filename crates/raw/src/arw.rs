@@ -728,25 +728,31 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     // the decrypted SR2SubIFD, read once and only when a plain black level or white balance is missing
     let sr2_cell = std::cell::OnceCell::new();
     let sr2 = || sr2_cell.get_or_init(|| crate::sr2::SubIfd::read(bytes, ifd0, tiff.order)).as_ref();
-    let black = match raw.f64s(BLACK_LEVEL).as_deref() {
-        Some(v) if linear_rgb && !v.is_empty() => BlackLevel::uniform((v.iter().sum::<f64>() / v.len() as f64) as f32 + YCBCR_OFFSET),
-        Some([a, b, c, d]) => {
-            BlackLevel { repeat_rows: 2, repeat_cols: 2, values: vec![*a as f32, *b as f32, *c as f32, *d as f32], ..Default::default() }
+    let (black, black_source) = match raw.f64s(BLACK_LEVEL).as_deref() {
+        Some(v) if linear_rgb && !v.is_empty() => {
+            (BlackLevel::uniform((v.iter().sum::<f64>() / v.len() as f64) as f32 + YCBCR_OFFSET), crate::LevelSource::Metadata)
         }
-        _ if linear_rgb => BlackLevel::uniform(default_black + YCBCR_OFFSET),
-        _ => BlackLevel::uniform((scale_bits >= 14).then(|| sr2().and_then(sr2_black)).flatten().unwrap_or(default_black)),
+        Some([a, b, c, d]) => (
+            BlackLevel { repeat_rows: 2, repeat_cols: 2, values: vec![*a as f32, *b as f32, *c as f32, *d as f32], ..Default::default() },
+            crate::LevelSource::Metadata,
+        ),
+        _ if linear_rgb => (BlackLevel::uniform(default_black + YCBCR_OFFSET), crate::LevelSource::Fallback),
+        _ => match (scale_bits >= 14).then(|| sr2().and_then(sr2_black)).flatten() {
+            Some(b) => (BlackLevel::uniform(b), crate::LevelSource::Metadata),
+            None => (BlackLevel::uniform(default_black), crate::LevelSource::Fallback),
+        },
     };
     // ARW6 samples are in 2 x 14-bit units, so the file's 14-bit levels double; without the tag the white is the
     // 14-bit white in those units, 2 x 16383
     let unit = if info.compression == 32766 { 2.0 } else { 1.0 };
-    let white = if linear_rgb {
-        YCBCR_WHITE + YCBCR_OFFSET
+    let (white, white_source) = if linear_rgb {
+        (YCBCR_WHITE + YCBCR_OFFSET, crate::LevelSource::Fallback)
     } else {
         let tag = raw.f64(t::WHITE_LEVEL).map(|v| v as f32 * unit).filter(|v| *v > 0.0);
         match (tag, info.compression) {
-            (Some(v), _) => v,
-            (None, 32766) => 32766.0,
-            (None, _) => crate::shared::white_from_data(samples, scale_bits),
+            (Some(v), _) => (v, crate::LevelSource::Metadata),
+            (None, 32766) => (32766.0, crate::LevelSource::Fallback),
+            (None, _) => crate::shared::white_from_data_sourced(samples, scale_bits),
         }
     };
     let black = BlackLevel { values: black.values.iter().map(|v| v * unit).collect(), ..black };
@@ -833,6 +839,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         camera: Camera::from_ifd0(ifd0),
         cinema: Default::default(),
         lens_metadata: LensMetadata { sony: sony_lens },
+        level_sources: crate::LevelSources { black: black_source, white: white_source },
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -869,6 +876,7 @@ mod tests {
         // the YCbCr data sit 512 above the recorded sensor black level; white moves with it
         assert_eq!((full.black.mean(), full.white_at(0)), (1024.0, 16895.0));
         assert_eq!((header.black.mean(), header.white_at(0)), (1024.0, 16895.0));
+        assert_eq!(full.level_sources, crate::LevelSources { black: crate::LevelSource::Metadata, white: crate::LevelSource::Fallback });
         let RawData::U16(ref pixels) = full.data else {
             panic!("integer ARW");
         };

@@ -63,6 +63,7 @@ fn synthetic(w: usize, h: usize, cfa: Option<Cfa>, cpp: usize) -> RawImage {
         camera,
         cinema: Default::default(),
         lens_metadata: Default::default(),
+        level_sources: Default::default(),
     }
 }
 
