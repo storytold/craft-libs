@@ -271,9 +271,10 @@ pub(crate) fn parse(src: &Src<'_>) -> Result<WavParse> {
             // A size of 0 in a file whose RIFF size is right and that has only chunks after it is an
             // empty data chunk followed by metadata (LIST, bext, …); otherwise it is a recording
             // that was never finalised, and what follows is audio.
-            let len = data_chunk_len(src, DataChunk { body, size32, is_rf64, remaining, declared });
+            // Only the first data chunk is used, so its length is worked out once: deciding whether
+            // an empty one is followed by chunks alone walks the rest of the file.
             if data.is_none() {
-                data = Some((body, len));
+                data = Some((body, data_chunk_len(src, DataChunk { body, size32, is_rf64, remaining, declared })));
             }
             if declared > remaining {
                 break;
