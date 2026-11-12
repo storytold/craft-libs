@@ -1,4 +1,4 @@
-//! The text editor over an in-memory host: one line, one unit per char.
+//! The text editor over an in-memory host: lines of four chars, one unit per char.
 
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use craft_behavior::kurbo::Point;
 use craft_text::quotes::QuoteStyle;
-use craft_text::ui::editor::{CaretLine, EditKind, HostLine, TextEditor, TextEditorHost, TextSelection};
+use craft_text::ui::editor::{CaretLine, EditKind, HostLine, StyleKey, TextEditor, TextEditorHost, TextSelection};
 use craft_ui::canvas::Canvas;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::testing::{Fixture, trial};
@@ -17,7 +17,14 @@ struct Host {
     text: String,
     revision: u64,
     vertical: bool,
+    /// The host applies formatting keys.
+    formats: bool,
+    /// The formatting keys the editor asked for.
+    styles: Vec<StyleKey>,
 }
+
+/// The chars of one line.
+const LINE: usize = 4;
 
 impl TextEditorHost for Host {
     fn text(&self) -> &str {
@@ -65,24 +72,35 @@ impl TextEditorHost for Host {
         0..self.text.chars().count()
     }
 
-    fn line_step(&mut self, offset: usize, _: i32) -> usize {
-        offset
+    fn line_step(&mut self, offset: usize, lines: i32) -> usize {
+        (offset as i64 + i64::from(lines) * LINE as i64).clamp(0, self.text.chars().count() as i64) as usize
     }
 
     fn line_edge(&mut self, offset: usize, end: bool) -> usize {
         let _ = offset;
         if end { self.text.chars().count() } else { 0 }
     }
+
+    fn style_key(&mut self, key: StyleKey, _: TextSelection) -> bool {
+        self.styles.push(key);
+        self.formats
+    }
 }
 
 struct Session {
     fixture: Fixture,
     host: Rc<RefCell<Host>>,
+    selection: Rc<RefCell<TextSelection>>,
     commits: Rc<Cell<u32>>,
 }
 
 fn session(text: &str, quotes: Option<QuoteStyle>) -> Session {
-    let host = Rc::new(RefCell::new(Host { text: text.to_owned(), ..Host::default() }));
+    session_on(Host { text: text.to_owned(), ..Host::default() }, quotes)
+}
+
+fn session_on(host: Host, quotes: Option<QuoteStyle>) -> Session {
+    let text = host.text.clone();
+    let host = Rc::new(RefCell::new(host));
     let selection = Rc::new(RefCell::new(TextSelection::caret_at(text.chars().count())));
     let commits = Rc::new(Cell::new(0));
     let (shown_host, shown_selection, shown_commits) = (Rc::clone(&host), Rc::clone(&selection), Rc::clone(&commits));
@@ -97,7 +115,7 @@ fn session(text: &str, quotes: Option<QuoteStyle>) -> Session {
         });
     });
     fixture.settle();
-    Session { fixture, host, commits }
+    Session { fixture, host, selection, commits }
 }
 
 impl Session {
@@ -121,4 +139,23 @@ fn command_enter_commits_one_session_and_a_session_without_edits_commits_nothing
     editor.fixture.type_text("d").key(Key::Enter, Modifiers::COMMAND).settle();
     assert_eq!(editor.commits.get(), 1);
     assert_eq!(editor.text(), "abcd");
+}
+
+/// In vertical text Alt+Down follows the flow and loosens the tracking; a host that applies no formatting leaves
+/// Alt+Up to move the caret a line up.
+#[trial]
+fn formatting_keys_follow_the_flow_and_fall_back_to_caret_moves() {
+    let mut vertical = session_on(Host { text: "abcdefgh".to_owned(), vertical: true, formats: true, ..Host::default() }, None);
+    vertical.focus();
+    vertical.fixture.key(Key::ArrowDown, Modifiers::ALT).settle();
+    let asked = vertical.host.borrow().styles.last().copied();
+    assert!(matches!(asked, Some(StyleKey::Kern(by) | StyleKey::Tracking(by)) if by > 0.0), "Alt+Down tracks in vertical text: {asked:?}");
+
+    let mut plain = session_on(Host { text: "abcdefgh".to_owned(), ..Host::default() }, None);
+    plain.focus();
+    let before = plain.selection.borrow().caret;
+    assert!(before >= LINE, "the click left the caret past the first line");
+    plain.fixture.key(Key::ArrowUp, Modifiers::ALT).settle();
+    assert!(!plain.host.borrow().styles.is_empty(), "the host was asked for the leading step");
+    assert_eq!(plain.selection.borrow().caret, before.saturating_sub(LINE), "the step the host did not take moved the caret a line up");
 }

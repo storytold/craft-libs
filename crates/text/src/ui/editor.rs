@@ -27,8 +27,7 @@ use std::ops::Range;
 
 use craft_behavior::kurbo::Point;
 use craft_behavior::{
-    CancelReason, CanvasView, CursorIcon, CursorPriority, EditCommand, EditorInput, GesturePhase, Granularity, Metrics, MoveMods, NavMove,
-    PressPhase, Sense, TextPos,
+    CancelReason, CanvasView, CursorIcon, CursorPriority, EditCommand, EditorInput, GesturePhase, Metrics, PressPhase, Sense, TextPos,
 };
 use craft_ui::canvas::canvas_space;
 use craft_ui::contract::{
@@ -302,8 +301,9 @@ impl Outcome for TextEditorOutput {
 /// the text's screen bounds while the session is open and drops it when the session ends.
 ///
 /// What the user sees and does:
-/// - A caret drawn as two strokes (light under dark), so it shows on any image. It blinks in Photoshop's rhythm,
-///   solid while dragging and restarting at each edit or move. Marked text is underlined, the converted segment
+/// - A caret drawn as two strokes (light under dark), so it shows on any image. It blinks in Photoshop's rhythm for
+///   as long as the session runs, also while another control holds the keys, solid while dragging and restarting at
+///   each edit or move. Marked text is underlined, the converted segment
 ///   thicker.
 /// - Clicks: one places the caret, Shift-click extends; quick clicks in one spot select more: two a word, three the
 ///   laid-out line, four the paragraph, five all text, the sixth starts over (Photoshop). Dragging extends by char,
@@ -312,7 +312,9 @@ impl Outcome for TextEditorOutput {
 ///   line, Cmd+Up and Cmd+Down to the text's start or end, Home and End to the line's edges, Shift extends any of
 ///   them. Backspace and Delete by char, Alt by word, Cmd+Backspace to the line start. Cmd+A all, Cmd+C, Cmd+X and
 ///   Cmd+V the clipboard. Enter a line break; Cmd+Enter commits; Esc commits or cancels. The
-///   [`TextEditorCommand`]s format. In vertical text the arrows turn with the flow.
+///   [`TextEditorCommand`]s format. In vertical text the arrows turn with the flow, the formatting keys too: Alt+Up
+///   and Alt+Down track, Alt+Left and Alt+Right set the leading. A formatting key the host does not take moves the
+///   caret as its arrow does: a line, a word, or with Cmd to the text's start or end; Shift extends.
 /// - Typed straight quotes become the language's marks while [`smart_quotes`](Self::smart_quotes) is set; pasted
 ///   text is kept as it is. Pasted line endings become `\n`.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
@@ -536,14 +538,14 @@ impl Component for TextEditor<'_> {
         }
 
         for command in fired {
+            let command = command.along_flow(edits.host.vertical());
             let empty = edits.selection.is_empty();
             match command.style_key(empty) {
                 None => edits.done.commit |= edits.session.preedit.is_none(),
                 Some(key) => {
                     let handled = edits.host.style_key(key, edits.selection);
-                    if !handled && let Some(forward) = command.word_move() {
-                        let step = if forward { NavMove::Forward } else { NavMove::Back };
-                        edits.motion(step, MoveMods::new(false, false, Granularity::Word));
+                    if !handled && let Some((step, mods)) = command.fallback() {
+                        edits.move_along(step, mods);
                     }
                 }
             }
@@ -612,7 +614,6 @@ impl Component for TextEditor<'_> {
         let caret = self.host.caret(caret_at, None);
         let caret_rect = caret.map(|CaretLine { top, bottom }| Rect::from_two_pos(screen(top), screen(bottom)).expand(1.0));
         if range.is_empty()
-            && cx.is_focused()
             && (session.dragging.is_some() || cx.blink(session.blink_start))
             && let Some(CaretLine { top, bottom }) = caret
         {

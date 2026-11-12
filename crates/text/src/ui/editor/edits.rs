@@ -295,14 +295,19 @@ impl Edits<'_> {
         }
     }
 
-    /// A logical move of the caret.
+    /// The caret move an arrow key means, in the flow of the text: in vertical text Up is the previous char.
     pub fn motion(&mut self, step: NavMove, mods: MoveMods) {
+        let step = flow_move(step, self.host.vertical());
+        self.move_along(step, mods);
+    }
+
+    /// A move of the caret along the text, whatever its flow: Back and Forward by char or word, Up and Down by line.
+    pub fn move_along(&mut self, step: NavMove, mods: MoveMods) {
         self.clamp_selection();
         let text = self.host.text().to_owned();
         let chars = text.chars().count();
         let caret = self.selection.caret;
         let range = self.selection.range();
-        let step = flow_move(step, self.host.vertical());
         let to = match step {
             NavMove::Back | NavMove::Forward => {
                 let forward = step == NavMove::Forward;

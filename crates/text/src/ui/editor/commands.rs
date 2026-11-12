@@ -1,6 +1,8 @@
 //! The editor's own commands: Photoshop's type formatting keys and the commit chord. The editor reads them with
 //! `take_command`, so the keymap rebinds them like any command; the editor reads no raw keys.
 
+use craft_behavior::{Granularity, MoveMods, NavMove};
+
 use super::{CharToggle, StyleKey};
 
 /// How far a leading, baseline or tracking step moves, in points or thousandths of an em.
@@ -103,13 +105,45 @@ impl TextEditorCommand {
         })
     }
 
-    /// Whether the command is a tracking step that moves the caret by word when the host has no pair to kern:
-    /// the direction is forward for a loosen step.
-    pub(super) fn word_move(self) -> Option<bool> {
-        match self {
-            TextEditorCommand::TrackingLess | TextEditorCommand::TrackingLessFar => Some(false),
-            TextEditorCommand::TrackingMore | TextEditorCommand::TrackingMoreFar => Some(true),
-            _ => None,
+    /// The command the same key means in text that runs vertically: the arrows follow the flow (Up is Left, Down
+    /// Right, Left Down, Right Up), so the leading and tracking steps trade places. Other commands and horizontal text
+    /// unchanged.
+    pub(super) fn along_flow(self, vertical: bool) -> Self {
+        use TextEditorCommand as C;
+        if !vertical {
+            return self;
         }
+        match self {
+            C::LeadingLess => C::TrackingLess,
+            C::LeadingMore => C::TrackingMore,
+            C::LeadingLessFar => C::TrackingLessFar,
+            C::LeadingMoreFar => C::TrackingMoreFar,
+            C::TrackingLess => C::LeadingMore,
+            C::TrackingMore => C::LeadingLess,
+            C::TrackingLessFar => C::LeadingMoreFar,
+            C::TrackingMoreFar => C::LeadingLessFar,
+            other => other,
+        }
+    }
+
+    /// The caret move along the text that the command's arrow key makes when the host takes no formatting step:
+    /// leading a line up or down (with the command modifier to the text's start or end), baseline the same while
+    /// extending the selection, tracking a word back or forward. `None` for the commands without an arrow.
+    pub(super) fn fallback(self) -> Option<(NavMove, MoveMods)> {
+        use TextEditorCommand as C;
+        let line = |extend: bool, by: Granularity| MoveMods::new(extend, false, by);
+        Some(match self {
+            C::LeadingLess => (NavMove::Up, line(false, Granularity::Unit)),
+            C::LeadingMore => (NavMove::Down, line(false, Granularity::Unit)),
+            C::LeadingLessFar => (NavMove::Up, line(false, Granularity::Document)),
+            C::LeadingMoreFar => (NavMove::Down, line(false, Granularity::Document)),
+            C::BaselineUp => (NavMove::Up, line(true, Granularity::Unit)),
+            C::BaselineDown => (NavMove::Down, line(true, Granularity::Unit)),
+            C::BaselineUpFar => (NavMove::Up, line(true, Granularity::Document)),
+            C::BaselineDownFar => (NavMove::Down, line(true, Granularity::Document)),
+            C::TrackingLess | C::TrackingLessFar => (NavMove::Back, line(false, Granularity::Word)),
+            C::TrackingMore | C::TrackingMoreFar => (NavMove::Forward, line(false, Granularity::Word)),
+            _ => return None,
+        })
     }
 }
