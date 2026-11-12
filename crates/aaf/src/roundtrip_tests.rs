@@ -2,7 +2,7 @@
 
 use craft_timeline::time::{FrameRate, Tick};
 
-use crate::model::{CItem, CKind, CMarker, Document, Gain};
+use crate::model::{CItem, CKind, CMarker, Composition, Document, Gain};
 use crate::testdoc::{IDENTITY, pcm_ramp, picture_and_sound, sound_only};
 use crate::{Error, Report, aaf, omf};
 
@@ -90,9 +90,19 @@ fn aaf_round_trips_the_edit_at_every_rate() {
             let sound = back.sources.iter().find(|s| s.kind == CKind::Sound).unwrap();
             assert_eq!((sound.channels, sound.file_channels, sound.sample_rate, sound.bits), (2, 2, 48_000, 24), "{rate}");
             assert_eq!(sound.key, picture.key, "one media item");
-            // what was read, written again, reads as the same edit (mob ids, and so source keys, are new)
+            // what was read, written again, reads as the same edit (mob ids, and so source keys, are new;
+            // a writer generates fresh format identifiers and never preserves `aaf_mob_id`)
             let again = read_clean(&aaf_bytes(&back, small), true);
-            assert_eq!((shape(&again), &again.compositions), (shape(&back), &back.compositions), "{rate}");
+            let no_ids = |c: &[Composition]| {
+                c.iter()
+                    .cloned()
+                    .map(|mut c| {
+                        c.aaf_mob_id = None;
+                        c
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!((shape(&again), no_ids(&again.compositions)), (shape(&back), no_ids(&back.compositions)), "{rate}");
         }
     }
 }
@@ -214,4 +224,28 @@ fn a_composition_nested_in_itself_is_a_gap() {
     assert!(report.mentions("nested in itself"), "{report}");
     assert_eq!(back.nested.len(), 1);
     assert!(matches!(back.nested[0].tracks[0].items[..], [CItem::Filler(_)]), "{:?}", back.nested[0].tracks[0].items);
+}
+
+#[test]
+fn aaf_source_start_uses_referenced_slot_rate() {
+    let doc = sound_only(None);
+    let bytes = aaf_bytes(&doc, false);
+    let back = read_clean(&bytes, true);
+    let original = doc.compositions[0].tracks[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            CItem::Clip(c) => Some(c.start),
+            _ => None,
+        })
+        .unwrap();
+    let actual = back.compositions[0].tracks[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            CItem::Clip(c) => Some(c.start),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(actual, original);
 }

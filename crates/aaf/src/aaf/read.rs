@@ -172,6 +172,7 @@ impl R<'_> {
         let mut sample_rate = tag("FilmCraft Audio Sample Rate").and_then(|s| s.parse().ok()).unwrap_or(0u32);
         let mut comp = Composition {
             name,
+            aaf_mob_id: c.mob_id(pid::MOB_ID).map(|id| hex(&id)),
             rate,
             sample_rate: 48_000,
             width: 1920,
@@ -329,22 +330,28 @@ impl R<'_> {
                 }
                 items
             }
-            x if x == cls::SELECTOR => match c.strong(pid::SELECTED) {
-                Some(s) => {
-                    let mut items = self.segment(s, rate, kind, depth);
-                    fit(&mut items, len);
-                    items
+            x if x == cls::SELECTOR => {
+                self.report.info("a selector was flattened to its selected input");
+                match c.strong(pid::SELECTED) {
+                    Some(s) => {
+                        let mut items = self.segment(s, rate, kind, depth);
+                        fit(&mut items, len);
+                        items
+                    }
+                    None => vec![CItem::Filler(len)],
                 }
-                None => vec![CItem::Filler(len)],
-            },
-            x if x == cls::NESTED_SCOPE => match c.objs(pid::NESTED_SLOTS).last() {
-                Some(s) => {
-                    let mut items = self.segment(s, rate, kind, depth);
-                    fit(&mut items, len);
-                    items
+            }
+            x if x == cls::NESTED_SCOPE => {
+                self.report.info("a nested scope was flattened to its final input");
+                match c.objs(pid::NESTED_SLOTS).last() {
+                    Some(s) => {
+                        let mut items = self.segment(s, rate, kind, depth);
+                        fit(&mut items, len);
+                        items
+                    }
+                    None => vec![CItem::Filler(len)],
                 }
-                None => vec![CItem::Filler(len)],
-            },
+            }
             _ => {
                 self.report.info("an unsupported component was imported as a gap");
                 vec![CItem::Filler(len)]
@@ -379,15 +386,22 @@ impl R<'_> {
 
     fn clip(&mut self, c: &Obj, rate: (i64, i64), kind: CKind, master_key: Option<String>) -> CItem {
         let len = units_to_ticks(len_of(c), rate.0, rate.1);
-        let start = units_to_ticks(c.i64(pid::START_TIME).unwrap_or(0), rate.0, rate.1);
-        let name = tagged_values(c, pid::COMPONENT_USER_COMMENTS).into_iter().find(|(k, _)| k == "Clip Name").map(|(_, v)| v).unwrap_or_default();
+        let tagged_name = tagged_values(c, pid::COMPONENT_USER_COMMENTS).into_iter().find(|(k, _)| k == "Clip Name").map(|(_, v)| v);
         let (Some(id), Some(slot)) = (c.mob_id(pid::SOURCE_ID), c.u32(pid::SOURCE_MOB_SLOT_ID)) else { return CItem::Filler(len) };
+        let name = tagged_name.or_else(|| self.mobs.get(&id).and_then(|mob| mob.string(pid::MOB_NAME))).unwrap_or_default();
         if id == [0; 32] {
             return CItem::Filler(len);
         }
         if let Some(mob) = self.mobs.get(&id).copied().filter(|m| m.class == cls::COMPOSITION_MOB) {
             return self.nest_clip(c, NestClip { mob, mob_id: id, slot_id: slot, rate, kind, name });
         }
+        let source_rate = self
+            .mobs
+            .get(&id)
+            .and_then(|mob| mob.objs(pid::SLOTS).iter().find(|s| s.u32(pid::SLOT_ID) == Some(slot)))
+            .and_then(|s| rate_of(s, pid::EDIT_RATE))
+            .unwrap_or(rate);
+        let start = units_to_ticks(c.i64(pid::START_TIME).unwrap_or(0), source_rate.0, source_rate.1);
         match self.resolve(id, slot, start, kind, master_key, 0) {
             Some((source, t)) => CItem::Clip(CClip { len, source, start: t, gain: None, name }),
             None => CItem::Filler(len),
@@ -484,9 +498,15 @@ impl R<'_> {
         if mob.class == cls::MASTER_MOB {
             let key = master_key.unwrap_or_else(|| hex(&id));
             let clip = first_clip(seg)?;
-            let inner = units_to_ticks(clip.i64(pid::START_TIME).unwrap_or(0), rate.0, rate.1);
             let next = clip.mob_id(pid::SOURCE_ID)?;
             let next_slot = clip.u32(pid::SOURCE_MOB_SLOT_ID)?;
+            let source_rate = self
+                .mobs
+                .get(&next)
+                .and_then(|m| m.objs(pid::SLOTS).iter().find(|s| s.u32(pid::SLOT_ID) == Some(next_slot)))
+                .and_then(|s| rate_of(s, pid::EDIT_RATE))
+                .unwrap_or(rate);
+            let inner = units_to_ticks(clip.i64(pid::START_TIME).unwrap_or(0), source_rate.0, source_rate.1);
             if next == [0; 32] {
                 return None;
             }
@@ -525,7 +545,7 @@ impl R<'_> {
             DataKind::Sound => CKind::Sound,
             _ => kind,
         };
-        let path = d.objs(pid::LOCATOR).iter().find_map(|l| l.string(pid::URL_STRING)).map(|u| craft_timeline::path::file_url_to_path(&u));
+        let path = d.objs(pid::LOCATOR).iter().find_map(|l| l.string(pid::URL_STRING)).map(|u| locator_path(&u));
         let file_rate = rate_of(d, pid::SAMPLE_RATE).unwrap_or(rate);
         let length = d
             .i64(pid::FILE_LENGTH)
@@ -719,4 +739,21 @@ fn markers_of(seg: &Obj, rate: (i64, i64)) -> Vec<CMarker> {
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn locator_path(url: &str) -> String {
+    if url.contains("://") { craft_timeline::path::file_url_to_path(url) } else { craft_timeline::path::decode_uri_path(url) }
+}
+
+#[cfg(test)]
+mod locator_tests {
+    use super::locator_path;
+
+    #[test]
+    fn decodes_relative_locator_escapes_without_losing_remote_authorities() {
+        assert_eq!(locator_path("Audio%20Files/Di%C3%A1logo%20%231.wav"), "Audio Files/Diálogo #1.wav");
+        assert_eq!(locator_path("file:///tmp/a%20b.wav"), "/tmp/a b.wav");
+        assert_eq!(locator_path("file://server/share/a.wav"), "//server/share/a.wav");
+        assert_eq!(locator_path("https://example.com/a%20b.wav"), "https://example.com/a%20b.wav");
+    }
 }

@@ -377,6 +377,7 @@ const MAX_PATH_BYTES: usize = 64 << 20;
 /// Parse the object tree of an AAF compound file (the root object).
 pub(crate) fn read(bytes: &[u8]) -> Result<Obj, String> {
     let cf = CompoundFile::open(bytes).map_err(|e| e.to_string())?;
+    cf.validate_root_chain().map_err(|e| e.to_string())?;
     let mut paths = Vec::new();
     if let Ok(rp) = cf.read_path("referenced properties")
         && rp.len() >= 7

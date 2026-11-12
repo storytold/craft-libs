@@ -110,6 +110,22 @@ fn named(name: &str) -> Option<[u8; 3]> {
     })
 }
 
+/// Look up an exact normalized X11 color name as RGB channels in `0..=1`.
+///
+/// Names must contain 1–64 bytes of lowercase ASCII letters or digits. Unknown names,
+/// unnormalized names and XPM-only aliases return `None`; this does not parse hex colors
+/// or transparency. Values are the stored X11 bytes divided by 255, without CSS overrides
+/// or color-space conversion. XPM decoding retains its own normalization and alias policy.
+pub fn x11_color_rgb(name: &str) -> Option<[f32; 3]> {
+    // Bound work on untrusted names before searching the shared table, without allocating.
+    if name.is_empty() || name.len() > 64 || !name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()) {
+        return None;
+    }
+    let index = x11_colors::X11_COLORS.binary_search_by_key(&name, |(entry, _)| *entry).ok()?;
+    let (_, rgb) = x11_colors::X11_COLORS.get(index)?;
+    Some(rgb.map(|channel| f32::from(channel) / 255.0))
+}
+
 fn color(name: &str) -> Option<[u8; 4]> {
     if name.eq_ignore_ascii_case("none") {
         return Some([0, 0, 0, 0]);

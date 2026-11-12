@@ -1,12 +1,13 @@
 //! The native decode path: craft-media's demuxers (ISO BMFF / QuickTime, Matroska / WebM), raw
 //! ADTS, AC-3 and MPEG audio streams, and WAV / AIFF PCM, feeding [`TrackDecoder`].
-//! [`Native::open`] answers `None` for a stream with no native codec (MP3, FLAC, ALAC, Vorbis,
-//! ...) or a container these demuxers do not read; the caller then uses symphonia.
+//! [`Native::open`] answers `None` for a stream with no native codec (FLAC, Vorbis, ...) or a
+//! container these demuxers do not read; the caller then uses symphonia.
 //!
 //! Every container is a [`Packets`] source over a [`Src`], read packet by packet, so a decode
 //! streams. Timing follows the containers: MP4 edit lists (AAC priming, Opus pre-skip), Matroska
 //! `CodecDelay` and per-block `DiscardPadding`, and Ogg Opus pre-skip and end trimming (RFC 7845
-//! §4) are applied, so a file decodes to exactly its presentation length.
+//! §4) are applied, and so are an MP3's encoder delay and padding from its LAME tag, so a file
+//! decodes to exactly its presentation length.
 
 use super::aiff::{self, AiffParse};
 use super::id3v2_len;
@@ -716,15 +717,41 @@ fn open_adts<'a>(src: &Src<'a>, at: u64) -> Option<Result<Native<'a>>> {
     Some(Ok(n))
 }
 
-/// A raw MPEG audio layer I or II stream.
+/// The decoder's own delay that a LAME tag's encoder delay leaves out: decoded audio lags the
+/// encoder's input by the delay plus these 528 + 1 samples.
+#[cfg(feature = "mp3-decode")]
+const MP3_DECODER_DELAY: u64 = 529;
+
+/// A raw MPEG audio stream: layer I or II, and layer III with `mp3-decode`. A Xing / Info or
+/// VBRI frame at the start carries no audio and is not a packet; its LAME tag's encoder delay
+/// and padding trim the decoded audio to what was encoded.
 fn open_mpa<'a>(src: &Src<'a>, at: u64) -> Option<Result<Native<'a>>> {
-    let frames = match raw_frames(src, at, |rest| {
-        mpa::parse_header(rest).ok().filter(|h| h.layer == 1 || h.layer == 2).map(|h| (h.frame_bytes, h.samples() as u32))
-    }) {
-        Ok(frames) => frames?,
-        Err(e) => return Some(Err(e)),
+    let layer_ok = |layer: u8| layer == 1 || layer == 2 || (cfg!(feature = "mp3-decode") && layer == 3);
+    #[cfg_attr(not(feature = "mp3-decode"), allow(unused_mut))]
+    let mut frames =
+        match raw_frames(src, at, |rest| mpa::parse_header(rest).ok().filter(|h| layer_ok(h.layer)).map(|h| (h.frame_bytes, h.samples() as u32))) {
+            Ok(frames) => frames?,
+            Err(e) => return Some(Err(e)),
+        };
+    #[cfg_attr(not(feature = "mp3-decode"), allow(unused_mut))]
+    let mut gapless: Option<(u32, u32)> = None;
+    #[cfg(feature = "mp3-decode")]
+    if let Some(&(p, n, _)) = frames.first() {
+        let first = match src.read(p, n as usize) {
+            Ok(first) => first,
+            Err(e) => return Some(Err(e)),
+        };
+        if let Some(tag) = crate::mp3::InfoTag::parse(&first) {
+            frames.remove(0);
+            gapless = tag.delay_padding;
+        }
+    }
+    let total: u64 = frames.iter().map(|&(_, _, f)| u64::from(f)).sum();
+    let (skip, limit) = match gapless {
+        #[cfg(feature = "mp3-decode")]
+        Some((delay, padding)) => (u64::from(delay) + MP3_DECODER_DELAY, Some(total.saturating_sub(u64::from(delay) + u64::from(padding)))),
+        _ => (0, None),
     };
-    let total = frames.iter().map(|&(_, _, f)| u64::from(f)).sum();
     let lookahead = match raw_lookahead(src, &frames, 1) {
         Ok(lookahead) => lookahead,
         Err(e) => return Some(Err(e)),
@@ -734,9 +761,9 @@ fn open_mpa<'a>(src: &Src<'a>, at: u64) -> Option<Result<Native<'a>>> {
         Packets::Raw { frames, src: src.clone(), next: 0 },
         &CodecParams::new(CodecId::Mp2),
         &lookahead,
-        0,
-        None,
-        Some(total),
+        skip,
+        limit,
+        Some(limit.unwrap_or(total)),
     )
     .map(Ok)
 }

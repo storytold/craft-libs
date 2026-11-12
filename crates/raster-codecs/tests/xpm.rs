@@ -16,6 +16,64 @@ static char *icon[] = {
 "#;
 
 #[test]
+fn exact_x11_lookup_preserves_x11_values_without_css_overrides() {
+    for (name, rgb) in [
+        ("black", [0u8, 0, 0]),
+        ("white", [255, 255, 255]),
+        ("gray", [190, 190, 190]),
+        ("maroon", [176, 48, 96]),
+        ("purple", [160, 32, 240]),
+        ("gray42", [107, 107, 107]),
+        ("steelblue4", [54, 100, 139]),
+        ("navyblue", [0, 0, 128]),
+    ] {
+        assert_eq!(xpm::x11_color_rgb(name), Some(rgb.map(|channel| f32::from(channel) / 255.0)), "{name}");
+    }
+}
+
+#[test]
+fn exact_x11_lookup_rejects_unnormalized_names_and_xpm_aliases() {
+    for name in [
+        "",
+        "Gray",
+        "ghost white",
+        "ghost-white",
+        "ghost_white",
+        " gray",
+        "gray ",
+        "gray\0",
+        "é",
+        "ｇｒａｙ",
+        "gray01",
+        "gray101",
+        "notacolor",
+        "silver",
+        "olive",
+        "teal",
+        "fuchsia",
+        "aqua",
+        "none",
+        "transparent",
+        "#ffffff",
+        "rgb:ff/ff/ff",
+    ] {
+        assert_eq!(xpm::x11_color_rgb(name), None, "{name:?}");
+    }
+    assert_eq!(xpm::x11_color_rgb(&"a".repeat(64)), None, "unknown name at the byte limit");
+    assert_eq!(xpm::x11_color_rgb(&"a".repeat(65)), None, "oversized name");
+}
+
+#[test]
+fn xpm_palette_keeps_its_aliases_and_name_normalization() {
+    let bytes = b"! XPM2\n7 1 7 1\na c silver\nb c olive\nc c teal\nd c fuchsia\ne c Ghost-White\nf c ghost_white\ng c None\nabcdefg\n";
+    let image = decode(bytes).unwrap();
+    assert_eq!(
+        image.data(),
+        &[192, 192, 192, 255, 128, 128, 0, 255, 0, 128, 128, 255, 255, 0, 255, 255, 248, 248, 255, 255, 248, 248, 255, 255, 0, 0, 0, 0]
+    );
+}
+
+#[test]
 fn xpm3_decodes_palette_transparency_and_spaces_in_keys() {
     assert!(xpm::looks_like_xpm(SAMPLE));
     let img = decode(SAMPLE).unwrap();

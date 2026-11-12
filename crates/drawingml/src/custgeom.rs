@@ -16,6 +16,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::preset::FillMode;
 
+/// A connection site of a custom geometry (`a:cxnLst`): where a connector end glues. `x` and `y`
+/// are fractions of the shape's box (0 = left/top, 1 = right/bottom; outside that range is
+/// allowed), so the site keeps its place when the shape is resized.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ConnectionSite {
+    pub x: f64,
+    pub y: f64,
+}
+
+impl ConnectionSite {
+    pub const fn new(x: f64, y: f64) -> Self {
+        ConnectionSite { x, y }
+    }
+}
+
 /// One sub-path of a custom geometry: SVG-like commands in path units.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -459,10 +475,51 @@ pub fn parse_path(d: &str) -> Vec<(char, Vec<f64>)> {
 
 /// Write custom paths as `a:custGeom`. Coordinates are integers in the file, so small path spaces
 /// are scaled up.
-pub fn write_cust_geom(w: &mut Writer, paths: &[CustomPath]) {
+/// The extent a shape without a transform of its own (a placeholder) is read and written with,
+/// in EMU: its sites keep their fractions through a round trip.
+pub const INHERITED_EXTENT_EMU: f64 = 21600.0;
+
+/// `a:cxnLst`: the connection sites as fractions of the shape's box, in file order (connectors
+/// refer to them by index, so a `cxn` without a `pos` keeps its place as the box's corner).
+/// Positions are in the shape's own coordinate space, `w_emu` × `h_emu` (the extent, where the
+/// guides are evaluated), not in a path's `w`/`h` space.
+pub fn read_cxn_lst(cg: &El, w_emu: f64, h_emu: f64) -> Vec<ConnectionSite> {
+    let Some(list) = cg.child(Local("cxnLst")) else { return vec![] };
+    let mut g = Guides::new(w_emu, h_emu);
+    g.eval_list(cg.child(Local("avLst")));
+    g.eval_list(cg.child(Local("gdLst")));
+    let frac = |v: f64, size: f64| if size > 0.0 { finite(v / size) } else { 0.0 };
+    list.children(Local("cxn"))
+        .take(1000)
+        .map(|c| {
+            c.child(Local("pos"))
+                .map(|pos| {
+                    let (x, y) = pt(&g, pos);
+                    ConnectionSite::new(frac(x, w_emu), frac(y, h_emu))
+                })
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// Write custom paths as `a:custGeom`. Coordinates are integers in the file, so small path spaces
+/// are scaled up. `sites` go out as `a:cxnLst` in the shape's space `ext` (EMU).
+pub fn write_cust_geom(w: &mut Writer, paths: &[CustomPath], sites: &[ConnectionSite], ext: (i64, i64)) {
     w.open("a:custGeom", &[]);
-    for list in ["a:avLst", "a:gdLst", "a:ahLst", "a:cxnLst"] {
+    for list in ["a:avLst", "a:gdLst", "a:ahLst"] {
         w.empty(list, &[]);
+    }
+    if sites.is_empty() {
+        w.empty("a:cxnLst", &[]);
+    } else {
+        w.open("a:cxnLst", &[]);
+        let emu = |f: f64, size: i64| (finite(f) * size as f64).round().clamp(-2.0e9, 2.0e9) as i64;
+        for s in sites.iter().take(1000) {
+            w.tag("a:cxn").attr("ang", "0").open();
+            w.tag("a:pos").attr("x", emu(s.x, ext.0)).attr("y", emu(s.y, ext.1)).empty();
+            w.close();
+        }
+        w.close();
     }
     w.empty("a:rect", &[("l", "l"), ("t", "t"), ("r", "r"), ("b", "b")]);
     w.open("a:pathLst", &[]);
@@ -607,7 +664,7 @@ mod tests {
     fn write_then_read_path() {
         let p = CustomPath { w: 100.0, h: 50.0, d: "M 0 0 L 100 0 C 100 10 90 50 50 50 Q 0 50 0 0 Z".into(), fill: FillMode::Norm, stroke: true };
         let mut w = Writer::new();
-        write_cust_geom(&mut w, std::slice::from_ref(&p));
+        write_cust_geom(&mut w, std::slice::from_ref(&p), &[], (0, 0));
         let d = parse(w.as_str().as_bytes()).unwrap();
         let back = read_cust_geom(&d, 1.0, 1.0);
         assert_eq!(back.len(), 1);
@@ -705,8 +762,37 @@ mod tests {
         assert_eq!(p.d, "M 0 0 L 30 0 C 30 20 20 30 0 30 Z");
         assert_eq!(p.fill, FillMode::None);
         let mut w = Writer::new();
-        write_cust_geom(&mut w, std::slice::from_ref(&p));
+        write_cust_geom(&mut w, std::slice::from_ref(&p), &[], (30, 30));
         let back = read_cust_geom(&parse(w.finish().as_bytes()).unwrap(), 1.0, 1.0);
         assert_eq!(parse_path(&back[0].d).len(), 4);
+    }
+
+    /// `a:cxnLst` positions are in the shape's space (the extent, with its guides), not the
+    /// path's own `w`/`h`; they come back as fractions of the box and go out again in EMU.
+    #[test]
+    fn connection_sites_read_in_the_shape_space_and_write_back() {
+        let x = br#"<a:custGeom xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+            <a:avLst/><a:gdLst><a:gd name="mid" fmla="*/ h 1 2"/></a:gdLst><a:ahLst/>
+            <a:cxnLst><a:cxn ang="0"><a:pos x="0" y="mid"/></a:cxn><a:cxn ang="5400000"><a:pos x="r" y="mid"/></a:cxn>
+              <a:cxn ang="0"/><a:cxn ang="0"><a:pos x="500" y="625"/></a:cxn></a:cxnLst>
+            <a:rect l="0" t="0" r="r" b="b"/>
+            <a:pathLst><a:path w="100" h="50"><a:moveTo><a:pt x="0" y="25"/></a:moveTo><a:lnTo><a:pt x="100" y="25"/></a:lnTo></a:path></a:pathLst>
+        </a:custGeom>"#;
+        let d = parse(x).unwrap();
+        let sites = read_cxn_lst(&d, 1000.0, 500.0);
+        assert_eq!(
+            sites,
+            vec![ConnectionSite::new(0.0, 0.5), ConnectionSite::new(1.0, 0.5), ConnectionSite::new(0.0, 0.0), ConnectionSite::new(0.5, 1.25)],
+            "a cxn without a pos keeps its index (a connector may point past it)"
+        );
+        assert!(read_cxn_lst(&d, 0.0, 0.0).iter().all(|s| s.x == 0.0 && s.y == 0.0), "a zero extent gives no division by zero");
+        let paths = read_cust_geom(&d, 1000.0, 500.0);
+        let mut w = Writer::new();
+        write_cust_geom(&mut w, &paths, &sites, (1000, 500));
+        let out = w.finish();
+        assert!(out.contains(r#"<a:cxnLst><a:cxn ang="0"><a:pos x="0" y="250"/></a:cxn><a:cxn ang="0"><a:pos x="1000" y="250"/></a:cxn><a:cxn ang="0"><a:pos x="0" y="0"/></a:cxn><a:cxn ang="0"><a:pos x="500" y="625"/></a:cxn></a:cxnLst>"#), "{out}");
+        let mut w = Writer::new();
+        write_cust_geom(&mut w, &paths, &[], (1000, 500));
+        assert!(w.finish().contains("<a:cxnLst/>"), "no sites: the empty list as before");
     }
 }

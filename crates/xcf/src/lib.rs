@@ -566,6 +566,12 @@ impl<'a> Xcf<'a> {
     /// Reads the header, the image properties and every layer structure of an XCF file
     /// (already inflated when it was gzipped).
     pub fn parse(bytes: &'a [u8]) -> Result<Xcf<'a>> {
+        Self::parse_with(bytes, &|| true)
+    }
+
+    /// Parses an XCF file like [`Self::parse`], checking `keep_going` between layer records.
+    /// This lets callers stop large metadata parses when their operation is cancelled.
+    pub fn parse_with(bytes: &'a [u8], keep_going: &dyn Fn() -> bool) -> Result<Xcf<'a>> {
         if !is_xcf(bytes) {
             return Err(invalid("not an XCF file"));
         }
@@ -639,6 +645,9 @@ impl<'a> Xcf<'a> {
         let c = c.at(0);
         let mut meta_budget = MAX_METADATA_BYTES;
         for ptr in layer_ptrs {
+            if !keep_going() {
+                return Err(Error::Cancelled);
+            }
             let layer = layer(c.at(ptr), &image, &mut meta_budget)?;
             image.layers.push(layer);
         }

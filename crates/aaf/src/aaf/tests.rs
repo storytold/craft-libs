@@ -125,7 +125,14 @@ fn edits_tagged_with_either_usage_code_both_import() {
     old.set(pid::USAGE_CODE, Value::Data(def::USAGE_TOP_LEVEL_OLD.to_vec()));
     mobs.push(old);
     let mixed = store::write(&root, craft_cfb::Version::V4).unwrap();
-    let mut names: Vec<String> = read_clean(&mixed).compositions.into_iter().map(|c| c.name).collect();
+    let document = read_clean(&mixed);
+    let mut ids: Vec<_> = document.compositions.iter().map(|c| c.aaf_mob_id.as_deref().unwrap()).collect();
+    assert_eq!(ids.len(), 2);
+    assert!(ids.iter().all(|id| id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())));
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 2, "each composition keeps its own MobID");
+    let mut names: Vec<String> = document.compositions.into_iter().map(|c| c.name).collect();
     names.sort();
     assert_eq!(names, ["Old", "S"]);
 }
@@ -464,4 +471,89 @@ fn audio_tracks_keep_their_names() {
         let back = read_clean(&written(&doc, false));
         assert_eq!(back.compositions[0].tracks[1].name, name);
     }
+}
+
+#[test]
+fn unnamed_source_clip_uses_the_referenced_master_name() {
+    let mut doc = crate::testdoc::sound_only(None);
+    let name = doc.sources[0].name.clone();
+    for item in &mut doc.compositions[0].tracks[0].items {
+        if let CItem::Clip(clip) = item {
+            clip.name = name.clone();
+        }
+    }
+    let mut root = store::read(&written(&doc, false)).unwrap();
+    let content = strong_mut(strong_mut(&mut root, pid::ROOT_HEADER), pid::CONTENT);
+    let master = objs_mut(content, pid::MOBS).iter_mut().find(|m| m.class == cls::MASTER_MOB).unwrap();
+    master.set(pid::MOB_NAME, Value::Data(store::utf16z("Master edit")));
+    let bytes = store::write(&root, craft_cfb::Version::V4).unwrap();
+    let back = read_clean(&bytes);
+    let clip = back.compositions[0].tracks[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            CItem::Clip(c) => Some(c),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(clip.name, "Master edit");
+}
+
+#[test]
+fn sound_source_offsets_use_audio_sample_rate_on_disk() {
+    let doc = crate::testdoc::sound_only(None);
+    let bytes = written(&doc, false);
+    let root = store::read(&bytes).unwrap();
+    let mut all = Vec::new();
+    walk(&root, &mut all);
+    let starts: Vec<i64> = all.iter().filter(|o| o.class == cls::SOURCE_CLIP).filter_map(|o| o.i64(pid::START_TIME)).collect();
+    assert!(starts.contains(&19_200), "expected 0.4 seconds at 48 kHz: {starts:?}");
+    let back = read_clean(&bytes);
+    let clip = back.compositions[0].tracks[0]
+        .items
+        .iter()
+        .find_map(|i| match i {
+            CItem::Clip(c) => Some(c),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(clip.start, craft_timeline::time::FrameRate::FPS_25.tick_of(10));
+}
+
+#[test]
+fn flattened_selectors_and_nested_scopes_are_reported() {
+    for (class, property, message) in
+        [(cls::SELECTOR, pid::SELECTED, "selector was flattened"), (cls::NESTED_SCOPE, pid::NESTED_SLOTS, "nested scope was flattened")]
+    {
+        let mut root = store::read(&written(&document(), false)).unwrap();
+        let content = strong_mut(strong_mut(&mut root, pid::ROOT_HEADER), pid::CONTENT);
+        let comp = objs_mut(content, pid::MOBS).iter_mut().find(|mob| mob.class == cls::COMPOSITION_MOB).unwrap();
+        let slot = objs_mut(comp, pid::SLOTS)
+            .iter_mut()
+            .find(|slot| {
+                slot.strong(pid::SEGMENT).is_some_and(|s| s.class == cls::SEQUENCE && s.weak_key(pid::DATA_DEFINITION) == Some(&ddef::SOUND[..]))
+            })
+            .unwrap();
+        let segment = strong_mut(slot, pid::SEGMENT);
+        let child = segment.clone();
+        let mut wrapper = Obj::new(class)
+            .with(pid::DATA_DEFINITION, child.get(pid::DATA_DEFINITION).unwrap().clone())
+            .with(pid::LENGTH, child.get(pid::LENGTH).unwrap().clone());
+        let value = if class == cls::SELECTOR { Value::Strong(Box::new(child)) } else { Value::StrongVec(vec![child]) };
+        wrapper.set(property, value);
+        *segment = wrapper;
+        let bytes = store::write(&root, craft_cfb::Version::V4).unwrap();
+        let mut report = Report::default();
+        read(&bytes, &mut report).unwrap();
+        assert!(report.mentions(message), "{report}");
+    }
+}
+
+#[test]
+fn relative_media_locator_round_trips_escaped_characters() {
+    let mut doc = document();
+    doc.sources[0].path = Some("Audio Files/100%20 #1.wav".into());
+    let bytes = written(&doc, false);
+    let got = read_clean(&bytes);
+    assert!(got.sources.iter().any(|s| s.path.as_deref() == Some("Audio Files/100%20 #1.wav")));
 }

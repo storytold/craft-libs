@@ -111,6 +111,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   and channel names, the channels that make a colour picture, and Cryptomatte IDs, metadata keys,
   manifests and rank channels. The optional `decode` feature adds bounded part listing, flat
   decoding (scan lines, tiles, every compression of the `exr` crate) and writing.
+- [`craft-flags`](crates/flags/README.md): Feature flags shared by the Craft apps and the ArtCraft Launcher: one per-user `ArtCraft/flags.toml`, a `CRAFT_FLAGS` override, every flag off by default (`AI-MCP`, `AI-MODELS`).
 - [`craft-flow`](crates/flow/README.md): the flow model every text format maps to (paragraphs with a kind, lists and formatted spans; tables; pictures, fields, notes, equations), converted to and from a craft-wordmodel `Document`.
 - [`craft-font-catalog`](crates/font-catalog/README.md): the installed fonts on every platform
   (font folders, fontconfig and Flatpak host folders, CoreText, DirectWrite, the font store),
@@ -241,6 +242,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   header fields, MIME parts and multiparts, encoded-words, RFC 2231 parameters, base64 and
   quoted-printable, character sets, address lists, dates, mbox files and the `multipart/related`
   lookups of MHT web archives. What a message means (body, attachments, flags) stays in each app.
+- [`craft-openpgp`](crates/openpgp/README.md): OpenPGP as mail carries it: PGP/MIME and cleartext
+  Digital signatures checked, attached Public keys and `Autocrypt:` headers read, a secret key
+  file inspected without using it. Built on rPGP; no I/O, and every size and count is capped.
 - [`craft-odf`](crates/odf/README.md): OpenDocument packages (ODF 1.3 Part 2), read and written: the ZIP container with its `mimetype` and manifest within limits, password protection (AES-256-CBC with PBKDF2, as LibreOffice writes it) and flat single-file documents. With the `text` feature, OpenDocument Text documents read into and written from the craft-flow model.
 - [`craft-prc`](crates/prc/README.md): a reader for PRC (ISO 14739-1), the 3D model format of PDF 3D
   annotations: container, bit-level primitives, schema, tessellations and the product tree as
@@ -254,6 +258,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-pcraft-format`](crates/pcraft-format/README.md): the envelope of PhotoCraft's `.pcraft`
   bundle: `Manifest<D>` with the document as a type parameter, `TileRef`, the entry paths, the
   manifest decode limits and the migration runner. The document model stays in PhotoCraft.
+- [`craft-pkcs7`](crates/pkcs7/README.md): the formats of digital signatures, read, verified and
+  written: ASN.1 DER, X.509 certificates and chains, CMS SignedData (PKCS #7), PKCS #12 identity
+  files, RFC 3161 timestamps, and CRL / OCSP revocation evidence. What a signature means for a
+  document or a message stays in each app.
 - [`craft-penpot`](crates/penpot/README.md): clean-room reader and writer for the Penpot 2.x export
   container (`.penpot`): the ZIP archive, its manifest, the per-file, per-page and per-shape JSON
   members and media objects, as the JSON the file holds. Bounded on hostile input. Carved from
