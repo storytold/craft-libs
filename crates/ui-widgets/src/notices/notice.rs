@@ -137,6 +137,9 @@ pub struct NoticeStyle {
     byline: TextLook,
     /// How far a byline beside a brand title sits above the title's bottom edge.
     byline_lift: f32,
+    /// Between the rows of an inline or card notice: its head, each bullet line, the "…and n more" line and the
+    /// actions (at least the gap before the actions).
+    stack: f32,
     /// The message's role and colour.
     #[style(text)]
     message: TextLook,
@@ -241,6 +244,10 @@ struct Plan {
     more: Option<f32>,
     actions: Vec<Vec2>,
     dismiss: Option<Vec2>,
+    /// The height of the head line in a row layout, where the icon, the first line of the text and the dismiss button
+    /// share one centre line; and how far the text sits below the head's top to put its first line there.
+    line: f32,
+    text_offset: f32,
     /// The actions sit one under the other because they do not fit side by side.
     stacked: bool,
     /// The width the elements need at this width: the natural width when it is unbounded.
@@ -411,9 +418,12 @@ impl<'a> Notice<'a> {
         let line_column = if width.is_finite() { (width - bullet).max(0.0) } else { f32::INFINITY };
         let line_sizes: Vec<Vec2> = texts.lines.iter().map(|line| cx.layout_at(&self.run(line, cx.style.line.role), line_column).size()).collect();
         let more = texts.more.as_deref().map(|more| cx.layout_at(&self.run(more, cx.style.more.role), width).size());
-        let lines_width = line_sizes.iter().map(|size| size.x + bullet).fold(more.map_or(0.0, |size| size.x), f32::max);
-        let lines_height = line_sizes.iter().map(|size| size.y).sum::<f32>() + more.map_or(0.0, |size| size.y);
+        let stack = cx.style.stack;
         let actions_width = actions.iter().map(|size| size.x).sum::<f32>() + gap * actions.len().saturating_sub(1) as f32;
+        // In a row layout the lines and the actions run from the content's start edge, under the icon.
+        let below_width = if row { actions_width } else { 0.0 };
+        let lines_width = line_sizes.iter().map(|size| size.x + bullet).fold(more.map_or(below_width, |size| size.x.max(below_width)), f32::max);
+        let lines_height = line_sizes.iter().chain(more.iter()).map(|size| stack + size.y).sum::<f32>();
         let stacked = !row && column.is_finite() && actions_width > column;
         let actions_height = if stacked {
             actions.iter().map(|size| size.y).sum::<f32>() + gap * actions.len().saturating_sub(1) as f32
@@ -421,21 +431,43 @@ impl<'a> Notice<'a> {
             actions.iter().map(|size| size.y).fold(0.0, f32::max)
         };
         let content_width = self.content_sizes.iter().map(|size| size.x).fold(0.0, f32::max);
-        let text_width = title.map_or(0.0, |size| size.x).max(message.x).max(actions_width).max(content_width);
-        let head = title.map_or(0.0, |size| size.y) + message.y;
-        let beside = icon.unwrap_or(0.0).max(dismiss.map_or(0.0, |size| size.y));
-        // Lines start under the row of the icon, the text and the dismiss button.
-        let head = if line_sizes.is_empty() && more.is_none() { head } else { head.max(beside) };
-        let with_actions = head + lines_height + if actions.is_empty() { 0.0 } else { gap + actions_height };
+        let text_width = title.map_or(0.0, |size| size.x).max(message.x).max(actions_width - below_width).max(content_width);
+        // The head line: the icon, the first line of the text and the dismiss button share its centre line.
+        let first_role = match (&texts.title, texts.message.is_empty()) {
+            (Some(_), _) => Some(title_role),
+            (None, false) => Some(cx.style.message.role),
+            (None, true) => None,
+        };
+        let first = first_role.map_or(0.0, |role| cx.tokens.typography.get(role).line_height);
+        let line = icon.unwrap_or(0.0).max(dismiss.map_or(0.0, |size| size.y)).max(first);
+        let text_offset = (line - first) / 2.0;
+        // Lines and actions start under the head line.
+        let head = (text_offset + title.map_or(0.0, |size| size.y) + message.y).max(line);
+        let with_actions = head + lines_height + if actions.is_empty() { 0.0 } else { stack.max(gap) + actions_height };
         let (needs, height) = if row {
-            ((icon_width + text_width + dismiss_width).max(lines_width), with_actions.max(beside))
+            ((icon_width + text_width + dismiss_width).max(lines_width), with_actions)
         } else {
             let parts = [icon, title.map(|size| size.y), Some(message.y), (!actions.is_empty()).then_some(actions_height)];
             let shown: Vec<f32> = parts.into_iter().flatten().chain(self.content_sizes.iter().map(|size| size.y)).collect();
             (text_width.max(icon.unwrap_or(0.0)), shown.iter().sum::<f32>() + gap * shown.len().saturating_sub(1) as f32)
         };
         let lines = line_sizes.iter().map(|size| size.y).collect();
-        Plan { icon, title, brand, message, bullet, lines, more: more.map(|size| size.y), actions, dismiss, stacked, needs, height }
+        Plan {
+            icon,
+            title,
+            brand,
+            message,
+            bullet,
+            lines,
+            more: more.map(|size| size.y),
+            actions,
+            dismiss,
+            line,
+            text_offset,
+            stacked,
+            needs,
+            height,
+        }
     }
 }
 
@@ -454,13 +486,14 @@ impl Component for Notice<'_> {
         let (normal, muted) = (cx.color(text.normal), cx.color(text.muted));
         let control = cx.control();
         let faint = cx.color(text.faint);
-        let (title, message, detail, surface, padding) = match key.layout {
+        let (title, message, detail, surface, padding, stack) = match key.layout {
             NoticeLayout::Inline => (
                 TextLook::new(TypeRole::BodyStrong, stateful(tone)),
                 TextLook::new(TypeRole::Caption, stateful(tone)),
                 TextLook::new(TypeRole::Caption, stateful(muted)),
                 SurfaceLook::new(Stateful::new(cx.color(Rgba::TRANSPARENT))),
                 Insets::uniform(0.0),
+                0.0,
             ),
             NoticeLayout::Card => {
                 let fill = StyleColor(cx.surface(SurfaceKind::Floating).fill);
@@ -478,7 +511,8 @@ impl Component for Notice<'_> {
                     TextLook::new(TypeRole::Body, stateful(normal)),
                     TextLook::new(TypeRole::Body, stateful(normal)),
                     surface,
-                    Insets::uniform(cx.tokens.space.pad.roomy),
+                    Insets::uniform(cx.tokens.space.pad.regular),
+                    cx.tokens.space.gap.stack,
                 )
             }
             NoticeLayout::Centred => (
@@ -487,6 +521,7 @@ impl Component for Notice<'_> {
                 TextLook::new(TypeRole::Body, stateful(muted)),
                 SurfaceLook::new(Stateful::new(cx.color(Rgba::TRANSPARENT))),
                 Insets::horizontal(control.pad_x),
+                0.0,
             ),
         };
         let brand = TextLook::new(TypeRole::Display, stateful(normal));
@@ -500,6 +535,7 @@ impl Component for Notice<'_> {
             brand,
             byline,
             byline_lift: cx.tokens.space.gap.stack,
+            stack,
             message,
             detail,
             line,
@@ -548,19 +584,22 @@ impl Component for Notice<'_> {
         let plan = self.plan(cx, &texts, rect.width());
         let mut placed = Placed { labels: self.action_labels(cx), ..Placed::default() };
         if self.row() {
+            let stack = cx.style.stack;
+            // Each item of the head line is centred on it.
+            let on_line = |height: f32| rect.top() + (plan.line - height) / 2.0;
             let mut flow = Flow::new(rect, rtl);
             if let Some(side) = plan.icon {
                 let (slot, rest) = flow.take_start(side);
-                placed.icon = Some(Rect::from_min_size(slot.min, Vec2::splat(side)));
+                placed.icon = Some(Rect::from_min_size(Pos2::new(slot.min.x, on_line(side)), Vec2::splat(side)));
                 flow = rest.take_start(gap).1;
             }
             if let Some(size) = plan.dismiss {
                 let (slot, rest) = flow.take_end(size.x);
-                placed.dismiss = Some(Rect::from_min_size(slot.min, size));
+                placed.dismiss = Some(Rect::from_min_size(Pos2::new(slot.min.x, on_line(size.y)), size));
                 flow = rest.take_end(gap).1;
             }
             let column = flow.rect();
-            let mut y = column.top();
+            let mut y = column.top() + plan.text_offset;
             if let Some(size) = plan.title {
                 placed.title = Some(Rect::from_min_size(Pos2::new(column.left(), y), Vec2::new(column.width(), size.y)));
                 y += size.y;
@@ -569,22 +608,21 @@ impl Component for Notice<'_> {
                 placed.message = Some(Rect::from_min_size(Pos2::new(column.left(), y), Vec2::new(column.width(), plan.message.y)));
                 y += plan.message.y;
             }
-            if !plan.lines.is_empty() || plan.more.is_some() {
-                let beside = plan.icon.unwrap_or(0.0).max(plan.dismiss.map_or(0.0, |size| size.y));
-                y = y.max(rect.top() + beside);
-            }
+            y = y.max(rect.top() + plan.line);
             for height in &plan.lines {
+                y += stack;
                 let band = Flow::new(Rect::from_min_size(Pos2::new(rect.left(), y), Vec2::new(rect.width(), *height)), rtl);
                 let (bullet, text) = band.take_start(plan.bullet);
                 placed.lines.push((bullet, text.rect()));
                 y += height;
             }
             if let Some(height) = plan.more {
+                y += stack;
                 placed.more = Some(Rect::from_min_size(Pos2::new(rect.left(), y), Vec2::new(rect.width(), height)));
                 y += height;
             }
-            y += gap;
-            let mut line = Flow::new(Rect::from_min_size(Pos2::new(column.left(), y), Vec2::new(column.width(), (rect.bottom() - y).max(0.0))), rtl);
+            y += stack.max(gap);
+            let mut line = Flow::new(Rect::from_min_size(Pos2::new(rect.left(), y), Vec2::new(rect.width(), (rect.bottom() - y).max(0.0))), rtl);
             for size in &plan.actions {
                 let (slot, rest) = line.take_start(size.x);
                 placed.actions.push(Rect::from_min_size(slot.min, *size));
