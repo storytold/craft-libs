@@ -95,7 +95,7 @@ fn detect_by_magic(b: &[u8], depth: u32) -> Option<Container> {
 /// The file extensions of the formats [`decode`] reads, lower case and without the dot: what a
 /// file picker or a browser filters by. Each is a hint [`detect_container`] knows; a file's
 /// contents still decide what it is. Without the `symphonia` feature the formats only symphonia
-/// decodes (FLAC, MP3, CAF) are left out.
+/// decodes (FLAC, CAF) are left out.
 #[cfg(feature = "symphonia")]
 pub const DECODE_EXTENSIONS: &[&str] = &[
     "wav", "wave", "bwf", "rf64", "aif", "aiff", "aifc", "flac", "mp3", "mp2", "mp1", "mpa", "ogg", "oga", "opus", "m4a", "m4b", "mp4", "mov", "aac",
@@ -104,11 +104,11 @@ pub const DECODE_EXTENSIONS: &[&str] = &[
 /// The file extensions of the formats [`decode`] reads, lower case and without the dot: what a
 /// file picker or a browser filters by. Each is a hint [`detect_container`] knows; a file's
 /// contents still decide what it is. Without the `symphonia` feature the formats only symphonia
-/// decodes (FLAC, MP3, CAF) are left out.
+/// decodes (FLAC, CAF) are left out.
 #[cfg(not(feature = "symphonia"))]
 pub const DECODE_EXTENSIONS: &[&str] = &[
-    "wav", "wave", "bwf", "rf64", "aif", "aiff", "aifc", "mp2", "mp1", "mpa", "ogg", "oga", "opus", "m4a", "m4b", "mp4", "mov", "aac", "adts", "ac3",
-    "eac3", "ec3", "mkv", "mka", "webm",
+    "wav", "wave", "bwf", "rf64", "aif", "aiff", "aifc", "mp3", "mp2", "mp1", "mpa", "ogg", "oga", "opus", "m4a", "m4b", "mp4", "mov", "aac", "adts",
+    "ac3", "eac3", "ec3", "mkv", "mka", "webm",
 ];
 
 fn detect_by_ext(ext: &str) -> Option<Container> {
