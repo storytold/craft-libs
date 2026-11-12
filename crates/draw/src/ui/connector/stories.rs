@@ -16,7 +16,8 @@ use super::{
     ConnectionSite, ConnectionTarget, ConnectorBar, ConnectorEnd, ConnectorEvent, ConnectorHandles, ConnectorItem, ConnectorLine, ConnectorTool,
 };
 use crate::geometry::connector::{ConnectionSide, RouteEnd, Routing, route, route_along};
-use crate::ui::stroke::{StrokeChoice, StrokeChoiceRow};
+use crate::ui::stroke::stories::paint_head;
+use crate::ui::stroke::{ChoicePainter, StrokeChoice, StrokeChoiceRow};
 
 craft_ui::words! {
     /// The status line of the Connector tool story.
@@ -83,6 +84,11 @@ fn connector_glued_at_both_ends(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
     on_canvas(ui, &targets, |ui, at| ConnectorHandles::new("Connector", Bind::bound(&mut *item), &targets).show_at(ui, at))
 }
 
+/// The arrowhead previews of the cap choices, at the line's start or end.
+fn heads(at_end: bool) -> ChoicePainter<'static> {
+    ChoicePainter::new(move |cx, rect, choice| paint_head(cx, rect, if choice.id == "dot" { "circle" } else { &choice.id }, at_end))
+}
+
 fn caps() -> Vec<StrokeChoice> {
     vec![StrokeChoice::new("none", "None"), StrokeChoice::new("arrow", "Arrow"), StrokeChoice::new("dot", "Dot")]
 }
@@ -92,8 +98,8 @@ fn connector_bar_for_one_connector(ui: &mut Ui, _: &mut StoryData) -> StoryOutpu
     let choices = caps();
     Bar::new("Options", BarKind::Options)
         .show(ui, |ui, _| {
-            let start = StrokeChoiceRow::new("start", "Start", &choices).selected(Mixed::Same("none"));
-            let end = StrokeChoiceRow::new("end", "End", &choices).selected(Mixed::Same("arrow"));
+            let start = StrokeChoiceRow::new("start", "Start", &choices).paint(heads(false)).selected(Mixed::Same("none"));
+            let end = StrokeChoiceRow::new("end", "End", &choices).paint(heads(true)).selected(Mixed::Same("arrow"));
             let _ = ConnectorBar::new(Mixed::Same(Routing::Elbow), Mixed::Same(ConnectorLine::default())).caps(start, end).show(ui);
         })
         .output
@@ -105,8 +111,8 @@ fn connector_bar_for_a_mixed_selection(ui: &mut Ui, _: &mut StoryData) -> StoryO
     let choices = caps();
     Bar::new("Options", BarKind::Options)
         .show(ui, |ui, _| {
-            let start = StrokeChoiceRow::new("start", "Start", &choices).selected(Mixed::Mixed);
-            let end = StrokeChoiceRow::new("end", "End", &choices).selected(Mixed::Same("arrow"));
+            let start = StrokeChoiceRow::new("start", "Start", &choices).paint(heads(false)).selected(Mixed::Mixed);
+            let end = StrokeChoiceRow::new("end", "End", &choices).paint(heads(true)).selected(Mixed::Same("arrow"));
             let _ = ConnectorBar::new(Mixed::Mixed, Mixed::Mixed).caps(start, end).show(ui);
         })
         .output

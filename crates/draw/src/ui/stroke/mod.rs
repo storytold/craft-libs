@@ -9,7 +9,7 @@ mod button;
 mod editor;
 mod preview;
 #[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod stories;
 mod words;
 
 use std::ops::BitOr;
@@ -205,7 +205,7 @@ impl<'a> StrokeChoiceRow<'a> {
         self
     }
 
-    /// Paints each choice's preview beside its name, in the select's list.
+    /// Paints each choice's preview: in the select's list beside its name, and on its closed face.
     pub fn paint(mut self, paint: ChoicePainter<'a>) -> Self {
         self.paint = Some(paint);
         self

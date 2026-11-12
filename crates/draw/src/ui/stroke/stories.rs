@@ -95,7 +95,7 @@ fn stroke_editor_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 }
 
 /// The arrowhead `id` at one end of the line through `rect`.
-fn paint_head(cx: &ContentPainterCx, rect: Rect, id: &str, at_end: bool) {
+pub(crate) fn paint_head(cx: &ContentPainterCx, rect: Rect, id: &str, at_end: bool) {
     let ink = cx.ink();
     let line = rect.height() * HEAD_LINE_SHARE;
     let y = rect.center().y;
