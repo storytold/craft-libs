@@ -1,6 +1,7 @@
 //! A typed model of IDML: spreads and parent (master) spreads, pages, guides, page items and the
 //! graphics placed in them; stories with their paragraph and character ranges, text, tables,
-//! notes and anchored items.
+//! notes and anchored items; style groups and styles, swatches, inks, stroke styles, colour
+//! groups and preferences.
 //!
 //! The model types what contains what. Each node keeps its attributes and `<Properties>`
 //! children as written ([`Values`]) and reads them through typed accessors, path geometry among
@@ -12,10 +13,15 @@
 //! [`spreads`]) and written back with `to_el`, then [`crate::part_xml`].
 
 mod geometry;
+mod resources;
 mod spread;
 mod story;
 
 pub use geometry::{MAX_PATH_POINTS, PathGeometry, PathPoint, SubPath};
+pub use resources::{
+    ColorGroup, ColorSpace, GradientStop, StrokeStyle, StrokeStyleKind, Style, StyleGroup, StyleKind, StyleNode, Swatch, SwatchKind, color_groups,
+    named, preference, stroke_styles, style_groups, swatches,
+};
 pub use spread::{Graphic, GraphicChild, GraphicKind, Guide, ItemChild, ItemKind, Link, Page, PageChild, PageItem, Spread, SpreadChild, spreads};
 pub use story::{Ace, CONTAINERS, Cell, Container, ContentPart, Range, Story, Table, TableChild, TextNode, stories};
 
