@@ -22,10 +22,10 @@
 
 #![allow(clippy::needless_range_loop)]
 
-mod dct;
 mod headers;
 mod picture;
-mod tables;
+
+use super::{dct, tables};
 
 #[cfg(test)]
 mod tests;
