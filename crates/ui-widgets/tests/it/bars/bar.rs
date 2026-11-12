@@ -1,9 +1,11 @@
 //! `Bar`: a body too wide for the bar shrinks its members before it scrolls, a captioned field among them too; a
-//! status bar's message gives way while its trailing group keeps its width.
+//! bar gives way from its end, and a status bar's trailing group keeps its width.
 
+use craft_behavior::CanvasView;
 use craft_behavior::IconId;
+use craft_behavior::kurbo::{Point, Size};
 use craft_theme::variant::Tone;
-use craft_ui::bars::{Bar, BarKind, BreadcrumbBar, StatusMessage, StatusProgress, path_crumbs};
+use craft_ui::bars::{Bar, BarKind, BreadcrumbBar, StatusItem, StatusMessage, StatusProgress, StatusReadout, StatusValues, path_crumbs};
 use craft_ui::buttons::{Button, IconButton, Link};
 use craft_ui::contract::{Bind, Entry, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::display::Text;
@@ -222,4 +224,35 @@ fn a_status_progress_is_named_by_its_task_and_reports_cancel() {
     let cancel = fixture.by_label("Cancel").expect("the cancel button");
     fixture.click(&cancel).settle();
     assert!(cancelled.get(), "a click on Cancel reports it");
+}
+
+/// The texts a status bar `width` wide paints, each with whether it was cut: the readout of the document sizes, a long
+/// message and the render-path link in its trailing group.
+fn readout_texts(width: f32) -> Vec<(String, bool)> {
+    let mut fixture = Fixture::new(|ui| {
+        let mut values = StatusValues::default();
+        values.document_sizes = Some((26_100_000, 31_400_000));
+        let canvas = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(800.0, 600.0));
+        let view = CanvasView::new(canvas, Point::new(1000.0, 750.0), 0.6667);
+        Bar::new("Status", BarKind::Status)
+            .trailing(|ui| {
+                Link::new("CPU Rendering").tone(Tone::Warn).show(ui);
+            })
+            .show(ui, |ui, _| {
+                StatusReadout::new(Bind::given(view), Size::new(2000.0, 1500.0), StatusItem::DocumentSizes, &values).show(ui);
+                StatusMessage::new("Exported 14 layers to the folder Documents/Exports/2026").show(ui);
+            });
+    });
+    fixture.room(Vec2::new(width, 80.0)).settle();
+    fixture.texts().iter().map(|text| (text.text.clone(), text.elided)).collect()
+}
+
+#[trial]
+fn a_narrow_bar_gives_way_from_its_end_so_the_message_elides_before_the_readout() {
+    let cut = |texts: &[(String, bool)], start: &str| texts.iter().find(|(text, _)| text.starts_with(start)).expect(start).1;
+    let wide = readout_texts(1200.0);
+    assert!(!cut(&wide, "Doc") && !cut(&wide, "Exported"), "a wide bar cuts nothing");
+    let narrow = readout_texts(480.0);
+    assert!(cut(&narrow, "Exported"), "the message kept its whole text in a 480-point bar");
+    assert!(!cut(&narrow, "Doc"), "the readout's text was cut while the message after it could still give way");
 }

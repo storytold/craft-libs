@@ -561,8 +561,8 @@ pub enum Gap {
     CardRow,
 }
 
-/// Set by a bar for its body: its fields put `space.gap.item` between a caption and the control, and a vertical
-/// divider takes a box wider than its line.
+/// Set by a bar for its body: its fields put `space.gap.item` between a caption and the control, a vertical divider
+/// takes a box wider than its line, and a row too long for its room narrows its last units first.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[doc(hidden)]
 pub struct InBar(pub bool);

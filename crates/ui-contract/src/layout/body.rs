@@ -1,6 +1,7 @@
 //! `BodyLayout` and the layout of a body: the physical egui layout, the measured placement of `Row` End and
 //! Center and of each row child on the row's line, and the cursors of `Grid` and of a `Row` that spreads its children.
 
+use crate::contract::InBar;
 use crate::runtime::egui::{alloc, child};
 use crate::runtime::env::{Env, Shrink};
 use crate::runtime::layout_memory;
@@ -182,23 +183,56 @@ fn shrink_key(row: Id, leaf: Id) -> Id {
     sub(row, ("shrink", leaf))
 }
 
+/// Which units of a row too long for its room give way first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ShrinkOrder {
+    /// Every unit gives the same share of what it can give, so all reach their least together.
+    #[default]
+    Even,
+    /// The last unit in reading order goes to its least before the one before it gives anything: a bar gives way from
+    /// its end, where the members that matter least sit.
+    FromEnd,
+}
+
 /// The widths of the units of a row whose units, with `fixed` (its other children and gaps), ask for more than `room`:
-/// the shortfall comes off every unit in proportion to what it can give (its ideal less its least), the same share of
-/// that from each, so all reach their least together. A row that fits gives each unit its ideal, and so does a row
-/// that does not fit even with every unit at its least: it overflows (or its body scrolls) at its natural widths,
-/// instead of cutting its units to their least and overflowing all the same.
-pub fn shrink_widths(units: &[ShrinkUnit], fixed: f32, room: f32) -> Vec<f32> {
+/// the shortfall comes off the units in `order`, never past the least each reports (its ideal less what it can give).
+/// A row that fits gives each unit its ideal, and so does a row that does not fit even with every unit at its least:
+/// it overflows (or its body scrolls) at its natural widths, instead of cutting its units to their least and
+/// overflowing all the same.
+pub fn shrink_widths(units: &[ShrinkUnit], fixed: f32, room: f32, order: ShrinkOrder) -> Vec<f32> {
     let short = fixed + units.iter().map(|unit| unit.ideal).sum::<f32>() - room;
     let slack: f32 = units.iter().map(|unit| unit.ideal - unit.least).sum();
     // Half a point: less than a pixel shows at any scale the box runs.
     let fits_at_least = short - slack < 0.5;
-    let share = if short > 0.0 && slack > 0.0 && fits_at_least { (short / slack).min(1.0) } else { 0.0 };
-    units.iter().map(|unit| unit.ideal - (unit.ideal - unit.least) * share).collect()
+    if short <= 0.0 || slack <= 0.0 || !fits_at_least {
+        return units.iter().map(|unit| unit.ideal).collect();
+    }
+    match order {
+        ShrinkOrder::Even => {
+            let share = (short / slack).min(1.0);
+            units.iter().map(|unit| unit.ideal - (unit.ideal - unit.least) * share).collect()
+        }
+        ShrinkOrder::FromEnd => {
+            let mut left = short;
+            let mut widths: Vec<f32> = units
+                .iter()
+                .rev()
+                .map(|unit| {
+                    let given = (unit.ideal - unit.least).min(left);
+                    left -= given;
+                    unit.ideal - given
+                })
+                .collect();
+            widths.reverse();
+            widths
+        }
+    }
 }
 
 /// Runs `body`, the children of the unwrapped `Row` body `id`, in `ui`, the block they are placed in, with the row's
-/// shrink step: a row fits its room by narrowing its units, never past the least each reports, and a row that cannot
-/// fit even at its units' leasts keeps their natural widths. A unit is a leaf that
+/// shrink step: a row fits its room by narrowing its units, never past the least each reports, evenly or, in a bar,
+/// from its end, and a row that cannot fit even at its units' leasts keeps their natural widths. A unit is a leaf that
 /// can shrink (elidable text, fields, selects), whose least is its `Proposal::Min`, or a body that does not fill the
 /// row (a captioned field, a nested row), whose least is what its content takes unbounded with every leaf at its least.
 ///
@@ -231,10 +265,11 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         return child::block(ui, None, layout, |ui| sweep(ui, Shrink::Apply(id), &mut body)).0;
     }
     let room = shrink_room(ui);
+    let order = if Env::of(ui).values.get::<InBar>().0 { ShrinkOrder::FromEnd } else { ShrinkOrder::Even };
     // Records the width each unit gets, and returns whether one took another width in the first sweep.
     let settle = |leaves: &[Reported], fixed: f32| {
         let units: Vec<ShrinkUnit> = leaves.iter().map(|leaf| leaf.widths).collect();
-        let widths = if room.is_finite() { shrink_widths(&units, fixed, room) } else { units.iter().map(|unit| unit.ideal).collect() };
+        let widths = if room.is_finite() { shrink_widths(&units, fixed, room, order) } else { units.iter().map(|unit| unit.ideal).collect() };
         let mut again = false;
         for (leaf, width) in leaves.iter().zip(widths) {
             layout_memory::emit_record(&ctx, shrink_key(id, leaf.leaf), layout_memory::Measured::new(Vec2::new(room, 0.0), Vec2::new(width, 0.0)));

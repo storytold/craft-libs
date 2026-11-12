@@ -6,7 +6,7 @@ use super::style::ListRowStyle;
 use super::thumb::{Thumb, ThumbSize};
 use super::trailing::{TrailingItem, trailing_run};
 use crate::contract::{ColumnAlign, PartsCx, WordSetCx as _};
-use crate::layout::{ShrinkUnit, shrink_widths};
+use crate::layout::{ShrinkOrder, ShrinkUnit, shrink_widths};
 use crate::list::toggle::ToggleState;
 use crate::list::words::ListWords;
 use crate::primitives::{HAlign, TextRun, Wrap};
@@ -373,7 +373,7 @@ impl ListRow<'_> {
             .chain(std::iter::once(ShrinkUnit { ideal: indent_full, least: 0.0 }))
             .collect();
         let gaps = kept.iter().filter(|kept| **kept).count() as f32 * sizes.gap;
-        let mut given = shrink_widths(&units, base + column + leading_width + sizes.min_label + gaps, end);
+        let mut given = shrink_widths(&units, base + column + leading_width + sizes.min_label + gaps, end, ShrinkOrder::Even);
         let indent_given = given.pop().unwrap_or(0.0);
         let used = gaps + given.iter().sum::<f32>();
         let label_end = end - used;
