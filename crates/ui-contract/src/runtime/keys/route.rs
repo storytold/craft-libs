@@ -247,11 +247,14 @@ fn text_route(ctx: &Context, rec: &StopRec, driven: Option<Driven>, text: &str) 
     route
 }
 
-/// The text a press of `chord` types: the character of a letter, digit or symbol key pressed with no Cmd, Ctrl or Alt
-/// held (`Chord::is_plain`, the chords typing would trigger).
+/// The text a press of `chord` types: a space, or the character of a letter, digit or symbol key, pressed with no Cmd,
+/// Ctrl or Alt held (`Chord::is_plain`, the chords typing would trigger).
 fn text_of(chord: Chord) -> Option<&'static str> {
     let key = chord.key;
-    (chord.is_plain() && (key.is_letter() || key.is_digit() || key.is_symbol())).then(|| key.name())
+    if !chord.is_plain() {
+        return None;
+    }
+    if key == Key::Space { Some(" ") } else { (key.is_letter() || key.is_digit() || key.is_symbol()).then(|| key.name()) }
 }
 
 /// Whether the focused component of the running viewport holds a press of `chord`, as routing decides for the press:

@@ -38,7 +38,7 @@ fn clearing_a_search_field_with_a_draft_leaves_it_empty_after_blur() {
 }
 
 /// A letter typed into a text field is the field's own: the field gets the text, the app reads no press of it, and
-/// `focus_holds` names the letter before it is typed.
+/// `focus_holds` names the letter, and Space, before they are typed.
 #[trial]
 fn a_letter_typed_into_a_field_is_its_own() {
     let text = Rc::new(RefCell::new(String::new()));
@@ -60,10 +60,8 @@ fn a_letter_typed_into_a_field_is_its_own() {
     fixture.settle();
     fixture.key(Key::Tab, Modifiers::NONE);
     fixture.settle();
-    assert!(
-        craft_ui::runtime::keys::focus_holds(fixture.ctx(), craft_keymap::Chord::plain(craft_keymap::Key::T)),
-        "the field names a letter as its own"
-    );
+    let holds = |key| craft_ui::runtime::keys::focus_holds(fixture.ctx(), craft_keymap::Chord::plain(key));
+    assert!(holds(craft_keymap::Key::T) && holds(craft_keymap::Key::Space), "the field names a letter and Space as its own");
     fixture.frame(vec![craft_ui::testing::input::key_press(Key::T, Modifiers::NONE), craft_ui::testing::input::text("t")]);
     fixture.frame(vec![craft_ui::testing::focus::key_release(Key::T, Modifiers::NONE)]);
     fixture.idle(2);
