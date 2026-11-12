@@ -1,7 +1,8 @@
 //! Stories of `Slicer`.
 
 use super::{Slicer, SlicerCard, SlicerTile, SlicerTiles, Values};
-use craft_ui::contract::{Props as _, ShowCollection as _, ShowContainer as _};
+use craft_behavior::Proposal;
+use craft_ui::contract::{CollectionResponse, Props as _, ShowCollection as _, ShowContainer as _};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, show_as_only_item, stage_fitting, stage_width, story};
 use egui::Ui;
 
@@ -24,9 +25,13 @@ fn slicer(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     slicer.show(ui, rect).into()
 }
 
+/// The card with the six regions' tiles in two columns, as tall as the tiles at the stage's width, as `slicer` shows it.
 fn card(ui: &mut Ui, filtered: bool) -> StoryOutput {
-    let room = ui.available_rect_before_wrap();
-    SlicerCard::new("Colour".into(), filtered).show_at_taking_room(ui, room, |_, _| {}).into()
+    let items = regions();
+    let mut card = SlicerCard::new("Region".into(), filtered);
+    let height = card.measure_in(ui, Proposal::Width(stage_width(ui)), |ui, _| tiles(ui, "Region", &items)).y;
+    let rect = stage_fitting(ui, |_| height);
+    card.show_at(ui, rect, |ui, _| tiles(ui, "Region", &items)).into()
 }
 
 #[story(SlicerCard, covers = [Default], drive = Drive::Never)]
@@ -39,24 +44,25 @@ fn slicer_card_filtered(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     card(ui, true)
 }
 
-fn tiles(ui: &mut Ui, values: &[(String, bool)]) -> StoryOutput {
+/// `values` as tiles in two columns, named `label`.
+fn tiles(ui: &mut Ui, label: &'static str, values: &[(String, bool)]) -> CollectionResponse<usize, ()> {
     let source = Values(values);
-    SlicerTiles::new(2, 1.0).label("Colour").show_items(ui, &source, &mut |key, _| SlicerTile::new(values[*key].0.clone()).on(values[*key].1)).into()
+    SlicerTiles::new(2, 1.0).label(label).show_items(ui, &source, &mut |key, _| SlicerTile::new(values[*key].0.clone()).on(values[*key].1))
 }
 
 #[story(SlicerTiles, covers = [Empty], drive = Drive::Never)]
 fn slicer_tiles_empty(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    tiles(ui, &[])
+    tiles(ui, "Colour", &[]).into()
 }
 
 #[story(SlicerTiles, covers = [One], drive = Drive::Never)]
 fn slicer_tiles_one(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    tiles(ui, &colours()[..1])
+    tiles(ui, "Colour", &colours()[..1]).into()
 }
 
 #[story(SlicerTiles, covers = [Default, Many], drive = Drive::Never)]
 fn slicer_tiles_many(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    tiles(ui, &colours())
+    tiles(ui, "Colour", &colours()).into()
 }
 
 #[story(SlicerTile, covers = [Default], drive = Drive::Never)]
