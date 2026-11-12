@@ -7,7 +7,7 @@
 //! Alt keeps the meaning it has in Photoshop's levels: a drag that begins with Alt held moves one half of a split
 //! thumb alone, at full rate. On a thumb that is not split, Alt scales a drag finer as on every value control.
 
-use super::track::{self, Pick, Press, Scale, SliderScale, TrackFace, Travel, travel};
+use super::track::{self, Pick, Press, Scale, SliderScale, ThumbRing, TrackFace, Travel, travel};
 use super::words::ValueDragWords;
 use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Numeric, Outcome, PaintUi, PartsCx,
@@ -46,10 +46,8 @@ pub struct ThumbRowStyle {
     face: Stateful<StyleColor>,
     /// A thumb's edge.
     edge: Stateful<StyleColor>,
-    /// The ring round a thumb that is hovered or pressed.
-    ring: Stateful<StyleColor>,
-    /// How far the ring reaches past the thumb's edge.
-    ring_width: f32,
+    /// The ring round a thumb while a press at the pointer would move it.
+    ring: ThumbRing,
     /// How far from a thumb's centre a press grabs it.
     hit: f32,
     /// The width and height of a thumb's triangle.
@@ -558,25 +556,6 @@ fn triangle(tip: Pos2, size: Vec2, half: Option<Half>, rtl: bool) -> Vec<Pos2> {
     vec![tip, pos2(right, tip.y + size.y), pos2(left, tip.y + size.y)]
 }
 
-/// The triangle grown by `out` on every side: its sides move out by `out` when it scales about its incentre.
-fn grown(points: &[Pos2], out: f32) -> Vec<Pos2> {
-    let len = |a: Pos2, b: Pos2| (a - b).length();
-    let (a, b, c) = (len(points[1], points[2]), len(points[0], points[2]), len(points[0], points[1]));
-    let perimeter = a + b + c;
-    if perimeter <= 0.0 {
-        return points.to_vec();
-    }
-    let centre = ((points[0].to_vec2() * a + points[1].to_vec2() * b + points[2].to_vec2() * c) / perimeter).to_pos2();
-    let width = points[1].x.max(points[2].x) - points[1].x.min(points[2].x);
-    let height = points[1].y - points[0].y;
-    let radius = width * height / perimeter;
-    if radius <= 0.0 {
-        return points.to_vec();
-    }
-    let k = (radius + out) / radius;
-    points.iter().map(|p| centre + (*p - centre) * k).collect()
-}
-
 /// The values of the running drag when it began, the press it resolved to, and whether it moves a half alone.
 #[derive(Clone, Default)]
 struct Held {
@@ -731,7 +710,6 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
         let control = cx.control();
         let colors = &cx.tokens.color;
         let length = cx.tokens.size.length.track;
-        let (clear, soft, accent) = (Rgba::TRANSPARENT, colors.accent.soft, colors.accent.strong);
         let fixed = |rest: Rgba, disabled: Rgba| {
             Stateful::new(cx.color(rest)).off(States::new(cx.color(rest), cx.color(rest), cx.color(rest), cx.color(disabled)))
         };
@@ -740,8 +718,7 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
             focus: cx.focus_look(),
             face: fixed(colors.surface.knob, colors.state.disabled_fill),
             edge: fixed(colors.text.muted, colors.text.disabled),
-            ring: Stateful::new(cx.color(clear)).off(States::new(cx.color(clear), cx.color(soft), cx.color(accent), cx.color(clear))),
-            ring_width: cx.tokens.stroke.thick,
+            ring: ThumbRing::new(cx),
             hit: cx.tokens.size.hit.target,
             thumb: Vec2::new(cx.tokens.size.marker.width, cx.tokens.size.marker.height),
             track: TrackLook { thickness: cx.tokens.size.ramp.bar, ..cx.track() },
@@ -932,16 +909,11 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
         let size = style.thumb;
         let layout = Layout::new(rules, cx.rect, size, cx.flow.is_rtl(), style.hit, false);
         let xs = layout.xs(&shown);
-        // The thumbs a press at the pointer would move take the hover look.
-        let lit = std::iter::once(PartRef::from(ROW))
+        let running = cx.gesture().and_then(|_| cx.recall::<Held>().press);
+        let hovered = std::iter::once(PartRef::from(ROW))
             .chain((0..N).map(|i| Thumb::PART.at(i as u64)))
             .find_map(|part| cx.hover_pos(part))
-            .and_then(|at| layout.press(&shown, at.x))
-            .map_or_else(Vec::new, |press| match press {
-                Press::Grab(i) | Press::Jump(i) => vec![i],
-                Press::Either { first, last } => vec![first, last],
-                Press::Span => Vec::new(),
-            });
+            .and_then(|at| layout.press(&shown, at.x));
         let thumbs = band(cx.rect, self.track_face.is_some().then_some(style.track.thickness));
         let top = thumbs.top();
         let halves = self.halves(&rules, &shown);
@@ -952,8 +924,8 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
             }
             let points = triangle(pos2(xs[i], top), size, halves[i], cx.flow.is_rtl());
             let part = Thumb::PART.at(i as u64);
-            let state = cx.core.part_state_lit(part, lit.contains(&i));
-            draw.fill(&PaintShape::Polygon(grown(&points, style.ring_width)), state.resolve(&style.ring));
+            let state = cx.core.part_state_lit(part, track::lit(running, hovered, i));
+            style.ring.paint_pointer(&draw, &points, state.resolve(&style.ring.color));
             let shape = PaintShape::Polygon(points);
             match rules.thumbs[i].face {
                 Some(face) => draw.data_fill(&shape, face),

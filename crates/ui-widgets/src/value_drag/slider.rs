@@ -4,7 +4,7 @@
 //! a panel scrolls over it; inside a `WheelScope::Free` scope (an adjustment dialog) without focus too. The track maps
 //! positions to values through a [`SliderScale`], linear by default.
 
-use super::track::{self, Along, Fill, MarkInk, MarkSpace, Marks, Pick, Press, Scale, SliderScale, TrackFace, Travel};
+use super::track::{self, Along, Fill, MarkInk, MarkSpace, Marks, Press, Scale, SliderScale, ThumbRing, TrackFace, Travel};
 use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Numeric, PaintUi, PartsCx, Pointer as _,
     Remember as _, Role, Styled as _,
@@ -40,6 +40,8 @@ pub struct SliderStyle {
     space: MarkSpace,
     /// The thumb: the theme's knob.
     knob: Stateful<SurfaceStyle>,
+    /// The ring round the thumb while a press at the pointer would move it.
+    ring: ThumbRing,
     /// The diameter of the drawn thumb.
     diameter: f32,
     /// The length a slider asks for along its axis.
@@ -168,6 +170,7 @@ impl Component for Slider<'_> {
             track: cx.track(),
             space: MarkSpace::new(cx),
             knob: track::knob(cx),
+            ring: ThumbRing::new(cx),
             diameter: cx.tokens.component.slider.thumb_height.get(cx.size),
             length,
         }
@@ -208,11 +211,11 @@ impl Component for Slider<'_> {
         let scale = self.track_scale();
         let bounds = (scale.min, scale.max);
         let along = self.along(cx.rect, cx.style, cx.flow);
-        let (rtl, height) = (cx.flow.is_rtl(), along.area.height());
+        let rtl = cx.flow.is_rtl();
         let length = along.length().max(1.0);
         // The drag runs over positions along the track, so every scale shares the maths.
         let travel = Travel { track: along.travel().min..along.travel().max, units: 0.0..=1.0, rtl };
-        let pick = Pick { reach: height / 2.0, overlap: height, period: 0.0, span: false };
+        let pick = along.pick(false);
         let marks = &self.marks;
         let at = |position: f64| marks.snapped(&scale, length, position).unwrap_or_else(|| scale.snap(scale.at_position(position)));
         let current = |cx: &Cx<'_, Self>| cx.value().copied().unwrap_or_else(|| scale.middle());
@@ -313,12 +316,22 @@ impl Component for Slider<'_> {
         }
         let ink = MarkInk { marks: cx.resolve(&style.track.mark_color), labels: cx.resolve(&style.mark_text.color), role: style.mark_text.role };
         track::paint_marks(&draw, &style.track, &self.marks, &scale, along, cx.rect, &ink);
-        let knob = cx.resolve_part(Self::THUMB, &style.knob);
+        // A press anywhere on the slider moves the thumb, so hovering anywhere on it lights the thumb.
+        let running = cx.gesture().and_then(|_| cx.recall::<Held>().press);
+        let hovered = [Self::THUMB, TRACK].into_iter().find_map(|part| cx.hover_pos(part)).and_then(|at| along.pick(false).press(&[centre.x], at.x));
+        let state = cx.core.part_state_lit(Self::THUMB.into(), track::lit(running, hovered, 0));
+        let (knob, ring) = (state.resolve(&style.knob), state.resolve(&style.ring.color));
         match self.thumb {
-            SliderThumb::Round => draw.surface_styled(Rect::from_center_size(centre, Vec2::splat(style.diameter)), &knob),
+            SliderThumb::Round => {
+                let rect = Rect::from_center_size(centre, Vec2::splat(style.diameter));
+                style.ring.paint_round(&draw, rect, knob.radius, ring);
+                draw.surface_styled(rect, &knob);
+            }
             SliderThumb::Triangle => {
                 let (half, top, x) = (style.diameter / 2.0, track::groove_rect(&style.track, along.area).bottom(), centre.x);
-                track::paint_pointer(&draw, vec![Pos2::new(x, top), Pos2::new(x + half, top + half), Pos2::new(x - half, top + half)], &knob);
+                let points = vec![Pos2::new(x, top), Pos2::new(x + half, top + half), Pos2::new(x - half, top + half)];
+                style.ring.paint_pointer(&draw, &points, ring);
+                track::paint_pointer(&draw, points, &knob);
             }
         }
     }

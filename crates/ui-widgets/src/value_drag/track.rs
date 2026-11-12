@@ -198,11 +198,16 @@ impl Along {
         if self.flow.is_rtl() { travel.max - along } else { travel.min + along }
     }
 
-    /// The square a press grabs a thumb at `position` in: as tall as the area, centred on the thumb, cut to the area
-    /// so it never reaches past the control's edge.
+    /// Where a press grabs the thumb at `position`: as wide as the drawn thumb and as tall as the area, cut to the
+    /// area so it never reaches past the control's edge.
     pub fn thumb_rect(&self, position: f64) -> Rect {
-        let hit = self.area.height();
-        Rect::from_center_size(Pos2::new(self.x(position), self.area.center().y), Vec2::splat(hit)).intersect(self.area)
+        Rect::from_center_size(Pos2::new(self.x(position), self.area.center().y), Vec2::new(self.thumb, self.area.height())).intersect(self.area)
+    }
+
+    /// Which thumb a press moves: one within half a drawn thumb of the press, or the one a press off the thumbs
+    /// reaches; `span` lets a press between two thumbs drag both.
+    pub fn pick(&self, span: bool) -> Pick {
+        Pick { reach: self.thumb / 2.0, overlap: self.thumb, period: 0.0, span }
     }
 }
 
@@ -430,6 +435,81 @@ impl Press {
     pub fn grabs(self) -> bool {
         !matches!(self, Press::Jump(_))
     }
+
+    /// Whether the press can move thumb `i`: the one it grabs or jumps, either of overlapping thumbs, or every thumb
+    /// of a span.
+    pub fn moves(self, i: usize) -> bool {
+        match self {
+            Press::Grab(j) | Press::Jump(j) => i == j,
+            Press::Either { first, last } => i == first || i == last,
+            Press::Span => true,
+        }
+    }
+}
+
+/// The ring round a thumb that takes the hover look: the thumb a press at the pointer would move, or the one a drag
+/// moves.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ThumbRing {
+    pub color: Stateful<StyleColor>,
+    /// The ring's width.
+    pub width: f32,
+    /// The room between a surface thumb's edge and the ring.
+    pub gap: f32,
+}
+
+impl ThumbRing {
+    pub fn new(cx: &StyleCx<'_>) -> Self {
+        let (clear, soft) = (cx.color(Rgba::TRANSPARENT), cx.color(cx.tokens.color.accent.soft));
+        ThumbRing {
+            color: Stateful::new(clear).off(States::new(clear, soft, soft, clear)),
+            width: cx.tokens.stroke.thick,
+            gap: cx.tokens.space.gap.tight,
+        }
+    }
+
+    /// Paints the ring in `color` round a surface thumb over `rect` with `corner`, clear of its edge.
+    pub fn paint_round(&self, draw: &Draw<'_>, rect: Rect, corner: CornerRadius, color: StyleColor) {
+        if color.egui().a() == 0 {
+            return;
+        }
+        let out = self.gap + self.width / 2.0;
+        let grow = |r: u8| (f32::from(r) + out).round().min(f32::from(u8::MAX)) as u8;
+        let corner = CornerRadius { nw: grow(corner.nw), ne: grow(corner.ne), sw: grow(corner.sw), se: grow(corner.se) };
+        draw.stroke(&PaintShape::Rect(rect.expand(out), corner), StrokeWidth::Thick, color);
+    }
+
+    /// Paints the ring in `color` round a pointer thumb, the triangle `points`: the triangle grown by the ring's width,
+    /// under the thumb.
+    pub fn paint_pointer(&self, draw: &Draw<'_>, points: &[Pos2], color: StyleColor) {
+        if color.egui().a() != 0 {
+            draw.fill(&PaintShape::Polygon(grown(points, self.width)), color);
+        }
+    }
+}
+
+/// Whether thumb `i` takes the hover look: the running drag's press moves it, or else a press at the pointer would.
+pub(crate) fn lit(running: Option<Press>, hovered: Option<Press>, i: usize) -> bool {
+    running.or(hovered).is_some_and(|press| press.moves(i))
+}
+
+/// The triangle grown by `out` on every side: its sides move out by `out` when it scales about its incentre.
+pub(crate) fn grown(points: &[Pos2], out: f32) -> Vec<Pos2> {
+    let len = |a: Pos2, b: Pos2| (a - b).length();
+    let (a, b, c) = (len(points[1], points[2]), len(points[0], points[2]), len(points[0], points[1]));
+    let perimeter = a + b + c;
+    if perimeter <= 0.0 {
+        return points.to_vec();
+    }
+    let centre = ((points[0].to_vec2() * a + points[1].to_vec2() * b + points[2].to_vec2() * c) / perimeter).to_pos2();
+    let width = points[1].x.max(points[2].x) - points[1].x.min(points[2].x);
+    let height = points[1].y - points[0].y;
+    let radius = width * height / perimeter;
+    if radius <= 0.0 {
+        return points.to_vec();
+    }
+    let k = (radius + out) / radius;
+    points.iter().map(|p| centre + (*p - centre) * k).collect()
 }
 
 /// Where the pointer was when the press began and where it is, once a drag has started.

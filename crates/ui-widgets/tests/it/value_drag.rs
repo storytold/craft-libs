@@ -186,3 +186,47 @@ fn the_wheel_steps_a_slider_when_focused_or_freed_and_otherwise_scrolls_the_pane
     let (value, panel) = turned(&[WheelScope::Gated, WheelScope::Free], false);
     assert!(value == 0.0 && panel > 0.0, "a gated scope wins over a free one inside it ({value}, {panel})");
 }
+
+/// The rings a frame paints inside `within`: outlines with no fill.
+fn rings(shapes: &[egui::Shape], within: Rect) -> usize {
+    shapes
+        .iter()
+        .filter(|shape| matches!(shape, egui::Shape::Rect(rect) if rect.fill.a() == 0 && rect.stroke.color.a() > 0 && within.expand(8.0).contains_rect(rect.rect)))
+        .count()
+}
+
+/// The thumbs a press at the pointer would move wear the ring: over the span between a range slider's thumbs both do,
+/// over one thumb that one alone, and over a slider's bare track its thumb. A click on the span focuses the nearer
+/// thumb and leaves the range as it was.
+#[trial]
+fn the_thumbs_a_press_would_move_wear_the_ring_and_a_click_on_the_span_focuses_the_nearer() {
+    use craft_behavior::Mixed;
+    use craft_ui::value_drag::RangeSlider;
+    let range = Rc::new(RefCell::new((Mixed::Same(20.0), Mixed::Same(80.0))));
+    let shown = range.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        RangeSlider::new(Bind::bound(&mut *shown.borrow_mut()), 0.0..=100.0).label("Hue").show_at(ui, FIELD);
+    });
+    fixture.motion(MotionMode::Off).settle();
+    let rest = rings(&fixture.frame_shapes(), FIELD);
+    // The thumbs' centres run between half a thumb in from each end: 20 and 80 lie a fifth and four fifths along.
+    let x_at = |share: f32| FIELD.left() + FIELD.width() * share;
+    let on = |fixture: &mut Fixture, x: f32| {
+        fixture.frame(vec![pointer::moved(Pos2::new(x, FIELD.center().y))]);
+        rings(&fixture.frame_shapes(), FIELD) - rest
+    };
+    assert_eq!(on(&mut fixture, x_at(0.45)), 2, "over the span both thumbs wear the ring");
+    let upper = FIELD.left() + 4.0 + (FIELD.width() - 8.0) * 0.8;
+    assert_eq!(on(&mut fixture, upper), 1, "over a thumb that thumb alone wears it");
+    fixture.click_at(Pos2::new(x_at(0.6), FIELD.center().y)).settle();
+    assert!(fixture.focused_stop().is_some_and(|(_, part)| part.is_some()), "a click on the span focuses a thumb");
+    assert_eq!(*range.borrow(), (Mixed::Same(20.0), Mixed::Same(80.0)), "the click moves neither thumb");
+
+    let slide = Rc::new(Slide::new(START));
+    let showing = slide.clone();
+    let mut fixture = Fixture::new(move |ui| showing.show(ui));
+    fixture.motion(MotionMode::Off).settle();
+    let rest = rings(&fixture.frame_shapes(), FIELD);
+    fixture.frame(vec![pointer::moved(Pos2::new(FIELD.left() + 12.0, FIELD.center().y))]);
+    assert_eq!(rings(&fixture.frame_shapes(), FIELD) - rest, 1, "over the bare track the slider's thumb wears the ring");
+}

@@ -2,7 +2,7 @@
 //! thumb grabs it and a drag moves it by the pointer's travel; a press on the track moves the nearer thumb there.
 //! Where the thumbs meet, the direction of the drag picks the one that moves. Each end is mixed or not on its own.
 
-use super::track::{self, Along, Fill, MarkInk, MarkSpace, Marks, Pick, Press, Scale, SliderScale, TrackFace, Travel};
+use super::track::{self, Along, Fill, MarkInk, MarkSpace, Marks, Press, Scale, SliderScale, ThumbRing, TrackFace, Travel};
 use super::words::ValueDragWords;
 use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Numeric, PaintUi, PartsCx,
@@ -43,6 +43,8 @@ pub struct RangeSliderStyle {
     space: MarkSpace,
     /// A thumb: a flat handle.
     handle: Stateful<SurfaceStyle>,
+    /// The ring round a thumb while a press at the pointer would move it.
+    ring: ThumbRing,
     /// The width of a drawn thumb.
     thumb_width: f32,
     /// The height of a drawn thumb.
@@ -179,6 +181,7 @@ impl Component for RangeSlider<'_> {
             track: cx.track(),
             space: MarkSpace::new(cx),
             handle: track::handle(cx),
+            ring: ThumbRing::new(cx),
             thumb_width: cx.tokens.size.handle.sm,
             thumb_height: cx.tokens.component.slider.thumb_height.get(cx.size),
             length,
@@ -224,13 +227,13 @@ impl Component for RangeSlider<'_> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let scale = self.track_scale();
         let along = self.along(cx.rect, cx.style, cx.flow);
-        let (rtl, height) = (cx.flow.is_rtl(), along.area.height());
+        let rtl = cx.flow.is_rtl();
         let length = along.length().max(1.0);
         let marks = &self.marks;
         let snap = |position: f64| marks.snapped(&scale, length, position);
         // Thumbs follow the pointer's position along the track, in positions 0 to 1.
         let travel = Travel { track: along.travel().min..along.travel().max, units: 0.0..=1.0, rtl };
-        let pick = Pick { reach: height / 2.0, overlap: height, period: 0.0, span: true };
+        let pick = along.pick(true);
         let thumbs_at = |pair: &Pair| {
             let (lower, upper) = placed(&scale, pair);
             [lower, upper].map(|value| along.x(scale.position(value)))
@@ -290,13 +293,21 @@ impl Component for RangeSlider<'_> {
                         }
                         cx.commit();
                     } else if click && start.clicks < 2 {
-                        // A press on the track moves the nearer thumb there; a click on a thumb changes nothing.
+                        // A press on the track moves the nearer thumb there; a click on a thumb or the span between
+                        // them changes nothing, and one on the span focuses the nearer thumb.
                         let from = Self::current(cx);
-                        if let Some(jump @ Press::Jump(thumb)) = press_at(&from, start.origin.x)
-                            && let Some(next) = moved(&from, jump, &press, false)
-                        {
-                            cx.set(next);
-                            cx.focus_part(key_of(thumb == 1));
+                        match press_at(&from, start.origin.x) {
+                            Some(jump @ Press::Jump(thumb)) => {
+                                if let Some(next) = moved(&from, jump, &press, false) {
+                                    cx.set(next);
+                                    cx.focus_part(key_of(thumb == 1));
+                                }
+                            }
+                            Some(Press::Span) => {
+                                let xs = thumbs_at(&from);
+                                cx.focus_part(key_of((start.origin.x - xs[0]).abs() > (start.origin.x - xs[1]).abs()));
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -393,9 +404,17 @@ impl Component for RangeSlider<'_> {
         }
         let ink = MarkInk { marks: cx.resolve(&style.track.mark_color), labels: cx.resolve(&style.mark_text.color), role: style.mark_text.role };
         track::paint_marks(&draw, &style.track, &self.marks, &scale, along, cx.rect, &ink);
-        for (key, centre, _) in thumbs {
+        let running = cx.gesture().and_then(|_| cx.recall::<Held>().drag.map(|(_, press)| press));
+        let hovered = [LOWER, UPPER, TRACK]
+            .into_iter()
+            .find_map(|part| cx.hover_pos(part))
+            .and_then(|at| along.pick(true).press(&thumbs.map(|(_, centre, _)| centre.x), at.x));
+        for (i, (key, centre, _)) in thumbs.into_iter().enumerate() {
+            let state = cx.core.part_state_lit(key.into(), track::lit(running, hovered, i));
+            let (handle, ring) = (state.resolve(&style.handle), state.resolve(&style.ring.color));
             let drawn = Rect::from_center_size(centre, Vec2::new(style.thumb_width, style.thumb_height));
-            draw.surface_styled(drawn, &cx.resolve_part(key, &style.handle));
+            style.ring.paint_round(&draw, drawn, handle.radius, ring);
+            draw.surface_styled(drawn, &handle);
         }
     }
 
