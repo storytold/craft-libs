@@ -184,9 +184,9 @@ fn toggle_column(edit: &EditEvent<ToggleEdit<usize>>) -> Option<&ColumnKey> {
 
 /// The list, built per pass.
 ///
-/// - Rows are `ListRow`s: the number, the name, an eye and a lock toggle column (sweepable), the options icon as a
-///   trailing part. The active row is the list's current item and its lead. A double click on the number fits the
-///   row (`Fit`).
+/// - Rows are `ListRow`s under no header row: the number, the name, an eye and a lock toggle column (sweepable), the
+///   options icon as a trailing part. The active row is the list's current item and its lead. A double click on the
+///   number fits the row (`Fit`).
 /// - Pointer, keys, rename and drag are the table's: click activates and picks; Shift-click extends,
 ///   Cmd/Ctrl-click toggles; one Tab stop, up and down move the active row, F2 renames, Enter activates, Delete and
 ///   Backspace delete, Cmd/Ctrl+] and [ move the picked rows, the Menu key and Shift+F10 open the menu.
@@ -269,6 +269,7 @@ impl<'a> PageList<'a> {
             })
             .show(ui, |ui, cx| {
                 let shown = Table::new(label.clone(), columns.clone())
+                    .header(false)
                     .select(SelectMode::Multi)
                     .selection(Bind::bound(&mut *picked))
                     .reorder(ReorderRule::new())
