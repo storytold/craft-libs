@@ -1,0 +1,21 @@
+[package]
+name = "craft-pst"
+description = "Outlook personal folders files (.pst, [MS-PST]): a reader over any Read + Seek of the node database, property and table contexts, folders, messages, recipients, attachments and named properties."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[features]
+# The test writer (`test_writer`): synthetic .pst files for the tests of code that reads them.
+# A dev-dependency feature only.
+test-writer = []
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+proptest = { workspace = true }

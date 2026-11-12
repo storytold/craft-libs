@@ -708,6 +708,11 @@ fn find_capture(src: &(impl ByteSource + ?Sized), from: u64, len: u64, recovery:
 
 /// The first `max` bytes of a packet's parts.
 fn read_parts(src: &(impl ByteSource + ?Sized), parts: &[(u64, u32)], max: usize) -> Result<Vec<u8>> {
+    // Ranges come from a scan of some source; check them against this one before sizing a buffer.
+    let len = src.len();
+    if parts.iter().any(|&(o, n)| o.checked_add(u64::from(n)).is_none_or(|end| end > len)) {
+        return Err(Error::Invalid("packet range lies outside the source".into()));
+    }
     let mut v = Vec::with_capacity(parts.iter().map(|p| p.1 as usize).sum::<usize>().min(max));
     for &(o, n) in parts {
         let a = v.len();
@@ -773,8 +778,15 @@ pub struct OpusTiming {
     pub total: i64,
 }
 
+/// Largest granule position [`OpusTiming::of`] trusts: 2^62 samples at 48 kHz is about 3 million years.
+pub const MAX_OPUS_GRANULE: i64 = 1 << 62;
+
 impl OpusTiming {
     /// Timing of the Opus stream `s` (`pre_skip` from its `OpusHead`).
+    ///
+    /// A granule position outside `0..=MAX_OPUS_GRANULE` (a negative value other than -1, or an
+    /// absurdly large one) is treated like a missing granule: the page's packets continue from the
+    /// previous position instead of jumping to a nonsense one.
     pub fn of(stream: &Stream, pre_skip: u32) -> OpusTiming {
         // Granule positions come straight from the file, so the arithmetic saturates: a hostile
         // value gives wrong positions, never an overflow.
@@ -784,10 +796,11 @@ impl OpusTiming {
         let mut i = 0;
         let mut cursor: Option<i64> = None;
         let mut trimmed_end: Option<i64> = None;
+        let granule_of = |k: usize| stream.packets.get(k).and_then(|p| p.granule).filter(|g| (0..=MAX_OPUS_GRANULE).contains(g));
         while i < n {
             // packets completing on the same page: i..j, the last carries the page granule
             let mut j = i;
-            while j < n && stream.packets[j].granule.is_none() {
+            while j < n && granule_of(j).is_none() {
                 j += 1;
             }
             if j == n {
@@ -797,9 +810,11 @@ impl OpusTiming {
                     c = c.saturating_add(i64::from(durations[k]));
                     ends[k] = Some(c);
                 }
+                // the total counts these packets too
+                cursor = Some(c);
                 break;
             }
-            let Some(g) = stream.packets[j].granule else { break };
+            let Some(g) = granule_of(j) else { break };
             let sum = durations[i..=j].iter().fold(0i64, |a, &d| a.saturating_add(i64::from(d)));
             let eos = stream.packets[j].eos;
             let end = match cursor.map(|c| c.saturating_add(sum)) {

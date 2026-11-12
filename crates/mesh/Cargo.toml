@@ -1,0 +1,28 @@
+[package]
+name = "craft-mesh"
+description = "3D mesh file formats behind one neutral model: STL, Wavefront OBJ/MTL, PLY and glTF 2.0 / GLB readers and writers and FBX and 3MF readers, bounded on hostile input"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["stl", "obj", "ply", "gltf", "fbx", "threemf"]
+stl = []
+obj = []
+ply = []
+gltf = ["dep:serde_json"]
+fbx = ["dep:miniz_oxide"]
+threemf = ["dep:craft-opc", "dep:craft-xml"]
+
+[dependencies]
+serde_json = { workspace = true, optional = true }
+# zlib-compressed arrays in binary FBX.
+miniz_oxide = { version = "0.9", optional = true }
+# 3MF is an OPC package of XML parts.
+craft-opc = { workspace = true, optional = true }
+craft-xml = { workspace = true, optional = true }
