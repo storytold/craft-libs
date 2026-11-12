@@ -236,6 +236,13 @@ impl Reader<'_> {
 
     fn use_material(&mut self, name: &str) -> Result<()> {
         self.slot = None;
+        if name.trim().is_empty() {
+            // A bare `usemtl` selects no named material. In particular, do not create a
+            // material with an empty name: callers can map the missing material to their own
+            // default, and writers need not emit a meaningless empty material name.
+            self.material = None;
+            return Ok(());
+        }
         self.material = match self.material_ids.get(name) {
             Some(i) => Some(*i),
             None if self.scene.materials.len() >= self.limits.max_materials => {

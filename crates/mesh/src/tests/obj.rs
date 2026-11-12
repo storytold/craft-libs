@@ -126,6 +126,18 @@ fn objects_groups_quads_and_negative_indices() {
 }
 
 #[test]
+fn bare_usemtl_does_not_create_an_empty_named_material() {
+    for line in ["usemtl", "usemtl "] {
+        let src = format!("v 0 0 0\nv 1 0 0\nv 0 1 0\n{line}\nf 1 2 3\n");
+        let scene = read(src.as_bytes(), &Limits::default(), &mut |_| None).unwrap();
+        assert!(scene.materials.is_empty(), "{line:?}: {:?}", scene.materials);
+        assert_eq!(scene.meshes.iter().map(Mesh::triangle_count).sum::<usize>(), 1);
+        assert_eq!(scene.meshes[0].parts[0].material, None);
+        scene.validate().unwrap();
+    }
+}
+
+#[test]
 fn corner_normals_and_smoothing_groups() {
     let vertices = "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 -0.8660254037844386 0.5\n";
     let authored = format!("{vertices}vn 0 0 1\nvn 0 0.5 0.8660254037844386\nf 1//-2 2//-2 3//-2\nf 2//-1 1//-1 4//-1\n");
