@@ -2,7 +2,7 @@
 
 use craft_timeline::time::{FrameRate, Tick};
 
-use crate::model::{CItem, CKind, CMarker, Document, Gain};
+use crate::model::{CItem, CKind, CMarker, Composition, Document, Gain};
 use crate::testdoc::{IDENTITY, pcm_ramp, picture_and_sound, sound_only};
 use crate::{Error, Report, aaf, omf};
 
@@ -90,19 +90,11 @@ fn aaf_round_trips_the_edit_at_every_rate() {
             let sound = back.sources.iter().find(|s| s.kind == CKind::Sound).unwrap();
             assert_eq!((sound.channels, sound.file_channels, sound.sample_rate, sound.bits), (2, 2, 48_000, 24), "{rate}");
             assert_eq!(sound.key, picture.key, "one media item");
-            // what was read, written again, reads as the same edit (mob ids, and so source keys, are new)
+            // what was read, written again, reads as the same edit (mob ids, and so source keys, are new;
+            // a writer generates fresh format identifiers and never preserves `aaf_mob_id`)
             let again = read_clean(&aaf_bytes(&back, small), true);
-            let without_ids = |doc: &Document| {
-                doc.compositions
-                    .iter()
-                    .cloned()
-                    .map(|mut c| {
-                        c.aaf_mob_id = None;
-                        c
-                    })
-                    .collect::<Vec<_>>()
-            };
-            assert_eq!((shape(&again), without_ids(&again)), (shape(&back), without_ids(&back)), "{rate}");
+            let no_ids = |c: &[Composition]| c.iter().cloned().map(|mut c| { c.aaf_mob_id = None; c }).collect::<Vec<_>>();
+            assert_eq!((shape(&again), no_ids(&again.compositions)), (shape(&back), no_ids(&back.compositions)), "{rate}");
         }
     }
 }
