@@ -14,6 +14,8 @@
 //!   ([`omml::write_equation`], [`omml::write_str`]).
 //! - [`mathml`]: presentation MathML, written ([`mathml::to_mathml`]) and read
 //!   ([`mathml::parse`], [`mathml::read`], [`mathml::to_tree`]).
+//! - [`latex_text`]: LaTeX math and the linear format converted as text, keeping the source's
+//!   spacing, for LaTeX documents ([`latex_text::latex_to_linear`], [`latex_text::linear_to_latex`]).
 //! - [`math_tree`]: the arguments of a node and a walk over every run.
 //! - [`symbol_fonts`]: text in symbol fonts (Symbol, Wingdings…) as Unicode, as OMML runs and
 //!   Word text need it.
@@ -41,6 +43,7 @@
 #[doc = include_str!("../README.md")]
 struct ReadmeExamples;
 
+pub mod latex_text;
 pub mod math;
 pub mod math_latex;
 pub mod math_linear;

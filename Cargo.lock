@@ -1380,6 +1380,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-latex"
+version = "0.1.0"
+dependencies = [
+ "craft-flow",
+ "craft-markdown",
+ "craft-math",
+ "craft-mime",
+ "craft-wordmodel",
+ "proptest",
+]
+
+[[package]]
 name = "craft-lottie"
 version = "0.1.0"
 dependencies = [
