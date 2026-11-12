@@ -1,4 +1,4 @@
-//! `Divider`: a separator line one physical pixel wide, horizontal or vertical.
+//! `Divider`: a separator line as wide as a divider rule, horizontal or vertical.
 use crate::contract::{Common, Component, Cx, InBar, InMenu, MeasureCx, PaintUi, Role};
 use crate::primitives::RuleKind;
 use crate::style::{ComponentStyle, RuleWidth, StyleCx};

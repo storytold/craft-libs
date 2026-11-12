@@ -295,3 +295,68 @@ fn an_end_region_with_a_rule_has_a_line_along_its_edge_toward_the_body() {
     };
     assert!(edge_lines(true) > edge_lines(false), "the rule draws a line along the end region's edge toward the body");
 }
+
+/// The rules between the regions (above and under the header, over the footer, before the end region) each take a
+/// band of their own: no rule shares a pixel with the header's, body's, footer's or end region's content, at 1x or 2x,
+/// and a rule is as wide in points at 2x as at 1x.
+#[trial]
+fn region_rules_take_their_own_band_at_every_scale() {
+    use craft_ui::contract::EndRegion;
+    use egui::Shape;
+    let rules_at = |pixels_per_point: f32| {
+        let props = ContainerProps::new()
+            .sizing(Sizing::Fill)
+            .header(HeaderRegion::new().rule(true).rule_above(true))
+            .footer(FooterRegion::new().rule(true))
+            .end(EndRegion::new().full_height(true).rule(true));
+        let took = RefCell::new(Took::default());
+        let mut frames = Frames::new();
+        frames.pixels_per_point(pixels_per_point);
+        let mut show = |ui: &mut Ui| {
+            let shown = Regioned {
+                common: Common::new(),
+                props: props.clone(),
+                header: Some(Vec2::new(100.0, 20.0)),
+                end: Vec2::new(80.0, 40.0),
+                footer: Vec2::new(70.0, 16.0),
+                rows: 1,
+                took: &took,
+            }
+            .show_at(ui, AREA, |_, cx| cx.rect);
+            took.borrow_mut().body = shown.inner;
+        };
+        frames.idle(2, &mut show);
+        let shapes = frames.frame_shapes(&mut show);
+        // Each rule's band: the segment's run, as wide across it as its stroke.
+        let bands: Vec<(Rect, f32)> = shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::LineSegment { points: [a, b], stroke } => {
+                    let half = stroke.width / 2.0;
+                    let run = Rect::from_two_pos(*a, *b);
+                    let across = if (a.y - b.y).abs() <= (a.x - b.x).abs() { Vec2::new(0.0, half) } else { Vec2::new(half, 0.0) };
+                    Some((run.expand2(across), stroke.width))
+                }
+                _ => None,
+            })
+            .collect();
+        let took = *took.borrow();
+        let regions = [("header", took.header), ("body", took.body), ("footer", took.footer), ("end", took.end)];
+        for (band, _) in &bands {
+            for (name, region) in regions {
+                let region = region.unwrap_or_else(|| panic!("the {name} ran"));
+                let shared = band.intersect(region);
+                assert!(
+                    shared.width() <= 1e-3 || shared.height() <= 1e-3,
+                    "at {pixels_per_point}x a rule {band:?} lies over the {name}'s content {region:?}"
+                );
+            }
+        }
+        bands
+    };
+    let (one, two) = (rules_at(1.0), rules_at(2.0));
+    assert!(one.len() >= 4 && two.len() == one.len(), "the four rules draw at both scales: {} and {}", one.len(), two.len());
+    for ((_, at_one), (_, at_two)) in one.iter().zip(&two) {
+        assert!((at_one - at_two).abs() < 1e-3, "a rule is {at_one} pt wide at 1x and {at_two} pt at 2x");
+    }
+}

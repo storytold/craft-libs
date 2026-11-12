@@ -1,6 +1,6 @@
 //! `ScrollBar`: the track and thumb of a scroll part, with state.
 
-use super::rule::Rule;
+use super::rule::{RectSide, Rule};
 use crate::style::{ScrollBarKind, ScrollBarLook, StateSet};
 use craft_behavior::{Axis, ScrollSpan};
 use egui::{Color32, CornerRadius, Direction, Rect, Shape, Vec2, pos2};
@@ -91,8 +91,8 @@ impl ScrollBar {
         };
         let mut shapes = vec![Shape::rect_filled(track, track_round, state.resolve(&look.track).egui())];
         if let Some(edge) = &look.edge {
-            let (from, to) = if axis == Axis::X { (track.left_top(), track.right_top()) } else { (track.left_top(), track.left_bottom()) };
-            shapes.extend(Rule::shapes(edge, from, to, pixels_per_point));
+            let side = if axis == Axis::X { RectSide::Top } else { RectSide::Left };
+            shapes.extend(Rule::edge(edge, track, side, pixels_per_point));
         }
         shapes.push(Shape::rect_filled(thumb, round(thumb), state.resolve(&look.thumb).egui()));
         shapes

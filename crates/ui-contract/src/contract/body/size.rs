@@ -186,15 +186,21 @@ impl<'b> BodyHooks<'b> {
         let end = if in_end { Vec2::new(end.x.max(footer.x), end.y + footer.y) } else { end };
         let across = if in_end { Vec2::ZERO } else { footer };
         let gap = |width: f32, gap: f32| if width > 0.0 { width + gap } else { 0.0 };
+        let end_gap = self.end_gap + self.rules.end;
         let inline = props.header.is_some_and(|header| header.inline);
         // The line: the body with an inline header before it.
         let line = if inline { Vec2::new(body.x + gap(header.x, self.region_gap), body.y.max(header.y)) } else { body };
         let (width, height) = if end_full_height(props) {
-            (line.x.max(across.x) + gap(end.x, self.end_gap), (line.y + across.y).max(end.y))
+            (line.x.max(across.x) + gap(end.x, end_gap), (line.y + across.y).max(end.y))
         } else {
-            ((line.x + gap(end.x, self.end_gap)).max(across.x), line.y.max(end.y) + across.y)
+            ((line.x + gap(end.x, end_gap)).max(across.x), line.y.max(end.y) + across.y)
         };
-        if inline { Vec2::new(width, height) } else { Vec2::new(width.max(header.x), height + header.y + self.header_space(header.y)) }
+        let above = self.rules.above;
+        if inline {
+            Vec2::new(width, height + above)
+        } else {
+            Vec2::new(width.max(header.x), above + header.y + self.header_space(header.y) + height)
+        }
     }
 
     /// The width the regions ask for in a content-sized container: what they took together in this pass's measuring run.

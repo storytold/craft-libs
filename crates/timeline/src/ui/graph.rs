@@ -16,7 +16,7 @@ use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, MeasureCx, Name, Outcome, PaintUi, PartsCx,
     Pointer as _, Props, Role, Styled as _, WordSetCx as _,
 };
-use craft_ui::primitives::{Dashes, GridInk, GridLines, IconSpec, PaintShape, RuleKind, StrokeWidth, TextRun, TickRank};
+use craft_ui::primitives::{Dashes, GridInk, GridLines, IconSpec, PaintShape, RectSide, RuleKind, StrokeWidth, TextRun, TickRank};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::KeyUse;
 use craft_ui::style::{ComponentStyle, Flags, FocusLook, Resolve as _, State, StateMix, Stateful, States, StyleColor, StyleCx, TextLook, TypeRole};
@@ -1004,7 +1004,7 @@ impl Component for GraphEditor<'_> {
 
         // The bottom bar, over whatever the curves drew past the plot.
         draw.fill(&PaintShape::Rect(bar, CornerRadius::ZERO), style.bar_fill);
-        draw.rule(RuleKind::Divider, bar.left_top(), bar.right_top());
+        draw.edge_rule(RuleKind::Divider, bar, RectSide::Top);
         let cells = Self::bar_cells(bar, style);
         for x in Self::bar_rules(&cells) {
             draw.rule(RuleKind::Divider, Pos2::new(x, bar.top() + style.gap), Pos2::new(x, bar.bottom() - style.gap));

@@ -69,6 +69,8 @@ pub(super) struct BodyHooks<'b> {
     end_gap: f32,
     /// The space between a stacked header and the body (`HeaderRegion::gap`), zero without one.
     header_gap: f32,
+    /// The bands the rules between the regions take.
+    rules: regions::RuleBands,
     /// The least width of the content, from `ContainerProps::least_width`.
     least_width: f32,
     /// How far the widest region wants to exceed the width the room allows, from this pass's measure.
@@ -161,6 +163,7 @@ impl<'b> BodyHooks<'b> {
             region_gap: 0.0,
             end_gap: 0.0,
             header_gap: 0.0,
+            rules: regions::RuleBands::default(),
             least_width: 0.0,
             overflow: 0.0,
             room: Vec2::ZERO,

@@ -500,8 +500,10 @@ impl Component for ListRow<'_> {
                 draw.edge_rule(RuleKind::Divider, rect, RectSide::Bottom);
             }
             if self.layer && style.dividers {
-                for x in &placed.dividers {
-                    draw.rule(RuleKind::Divider, Pos2::new(*x, rect.top()), Pos2::new(*x, rect.bottom()));
+                // Each toggle cell's rule lies just past the cell, where a cell's fill never covers it.
+                for &x in &placed.dividers {
+                    let after = if rtl { rect.left()..=x } else { x..=rect.right() };
+                    draw.edge_rule(RuleKind::Divider, Rect::from_x_y_ranges(after, rect.y_range()), RectSide::start(rtl));
                 }
             }
         }

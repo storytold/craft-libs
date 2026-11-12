@@ -78,7 +78,7 @@ pub struct TitleBar<'a> {
     /// Whether a bar in a native frame shows the title.
     #[prop(flag)]
     title_when_native: bool,
-    /// A hairline along the bar's bottom edge, for a bar whose window draws no edge under it.
+    /// A divider rule along the bar's bottom edge, for a bar whose window draws no edge under it.
     #[prop(flag)]
     separator: bool,
     /// Glyphs from the desktop's icon theme for the round caption families.

@@ -54,7 +54,7 @@ impl<K, R> Outcome for BrushSettingsPanelOutput<K, R> {
 }
 
 /// Photoshop's Brush Settings panel: the [`BrushSectionList`] at the reading start, a vertical line, the shown
-/// section's pane (the app's content) in a scrolling body, a hairline, then the [`BrushStrokeStrip`] with the New,
+/// section's pane (the app's content) in a scrolling body, a divider rule, then the [`BrushStrokeStrip`] with the New,
 /// Reset and Update icon buttons at the reading end. An ordinary dockable panel.
 ///
 /// - **Pane.** The `pane` closure (a body closure that also gets the key of the section shown) draws the shown pane section's controls, with the shared rows

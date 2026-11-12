@@ -7,7 +7,7 @@ use crate::contract::{
     PaintUi, Pointer as _, PopupKind, Props as _, Role, RowAlign, Show as _, ShowContainer as _, Sizing, TooltipSpec, WordSetCx as _,
 };
 use crate::layout_components::Row;
-use crate::primitives::IconSpec;
+use crate::primitives::{IconSpec, RectSide};
 use crate::runtime::access::Name;
 use crate::runtime::env::{Env, EnvValue, Label};
 use crate::runtime::focus;
@@ -724,7 +724,7 @@ impl Component for FooterBar {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         if cx.style.rule {
-            ui.draw().rule(RuleKind::Divider, cx.rect.left_top(), cx.rect.right_top());
+            ui.draw().edge_rule(RuleKind::Divider, cx.rect, RectSide::Top);
         }
     }
 

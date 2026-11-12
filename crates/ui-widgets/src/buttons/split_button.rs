@@ -6,7 +6,7 @@ use crate::contract::{
     ShowContainer as _, Styled as _, WordSetCx as _,
 };
 use crate::menu::{self, Menu};
-use crate::primitives::{IconSpec, PaintShape};
+use crate::primitives::{IconSpec, PaintShape, RuleKind};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, Corners, FocusLook, IconLook, RuleLook, RuleWidth, Stateful, StyleColor, StyleCx, SurfaceLook, TextLook};
 use craft_behavior::{Flow, HitLevel, HitPriority, Metrics, NavMove, PartKey, Sense, Value};
@@ -43,6 +43,7 @@ pub struct SplitButtonStyle {
     chevron: Stateful<StyleColor>,
     /// The line between the parts, in the variant's edge colour.
     divider: Stateful<StyleColor>,
+    /// The divider rule's width.
     divider_width: RuleWidth,
     /// The divider's gap from the top and bottom edges.
     divider_inset: f32,
@@ -130,7 +131,7 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
             part_fill: Stateful::new(clear).off(States::new(clear, fill.hover, fill.pressed, clear)),
             chevron,
             divider,
-            divider_width: RuleWidth::Points(cx.tokens.stroke.thin),
+            divider_width: cx.rule(RuleKind::Divider).width,
             divider_inset: cx.tokens.space.gap.inline,
             radius: parts.radius,
         }

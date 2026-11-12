@@ -284,9 +284,10 @@ pub struct HeaderRegion {
     /// inline header's move band spans its whole line (header, body and end region), so every free point of the line
     /// moves the window or layer.
     pub band: DragBand,
-    /// Whether a rule separates the header from the body. An inline header has no rule.
+    /// Whether a rule separates the header from the body, in a band of its own between them. An inline header has no
+    /// rule.
     pub rule: bool,
-    /// Whether a rule runs across the container's width above the header, at its top edge.
+    /// Whether a rule runs across the container's width above the header, in a band of its own at the top edge.
     pub rule_above: bool,
     /// Whether the header shares a line with the body: the header at its measured width, the body in the rest.
     pub inline: bool,
@@ -368,7 +369,8 @@ impl HeaderRegion {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct FooterRegion {
-    /// Whether a rule separates the footer from the content beside it: the body, or the end region's content.
+    /// Whether a rule separates the footer from the content beside it (the body, or the end region's content), in a
+    /// band of its own.
     pub rule: bool,
     /// Where the footer sits.
     pub place: FooterPlace,
@@ -450,7 +452,8 @@ pub struct EndRegion {
     pub full_height: bool,
     /// The gap between the body and the region.
     pub gap: Gap,
-    /// Whether a rule separates the end region from the body, along the region's edge that faces it.
+    /// Whether a rule separates the end region from the body, in a band of its own along the region's edge that
+    /// faces it.
     pub rule: bool,
 }
 

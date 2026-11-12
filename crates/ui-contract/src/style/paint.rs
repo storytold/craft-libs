@@ -55,11 +55,11 @@ impl RuleWidth {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum RuleKind {
-    /// A separator between neighbours.
+    /// A separator between neighbours: `line.divider`, `stroke.thin` wide.
     Divider,
-    /// The edge of a surface or region.
+    /// The edge of a surface or region: `line.border`, `stroke.thin` wide.
     Edge,
-    /// A grid line.
+    /// A grid line: `overlay.grid`, one physical pixel wide.
     Grid,
     /// The insertion mark of a drop.
     DropMark,
@@ -67,11 +67,12 @@ pub enum RuleKind {
 
 pub(crate) fn rule_look(tokens: &UiTokens, kind: RuleKind) -> RuleLook {
     let c = &tokens.color;
-    let hairline = RuleWidth::Hairline;
+    let thin = RuleWidth::Points(tokens.stroke.thin);
     match kind {
-        RuleKind::Divider => RuleLook { color: color(c.line.divider), width: hairline },
-        RuleKind::Edge => RuleLook { color: color(c.line.border), width: hairline },
-        RuleKind::Grid => RuleLook { color: color(c.overlay.grid), width: hairline },
+        RuleKind::Divider => RuleLook { color: color(c.line.divider), width: thin },
+        RuleKind::Edge => RuleLook { color: color(c.line.border), width: thin },
+        // A grid over the document stays finer than the chrome around it.
+        RuleKind::Grid => RuleLook { color: color(c.overlay.grid), width: RuleWidth::Hairline },
         RuleKind::DropMark => RuleLook { color: color(c.accent.solid), width: RuleWidth::Points(tokens.stroke.thick) },
     }
 }

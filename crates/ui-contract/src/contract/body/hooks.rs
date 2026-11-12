@@ -4,8 +4,8 @@ use super::inherit::{BodyScope, register_instances};
 use super::open::open_now;
 use super::placement::{Placement, measure_layer, overlay_of, shown_placement};
 use super::regions::{
-    LabelColumns, LabelsFound, RegionFrame, RegionSizes, end_full_height, footer_in_end, gap_of, header_gap_of, label_extra_of, least_of, pad_of,
-    paint_edge_rule, paint_rules, rect_of, shared_labels, shared_line,
+    LabelColumns, LabelsFound, RegionFrame, RegionSizes, RuleBands, end_full_height, footer_in_end, footer_rule_under, gap_of, header_gap_of,
+    label_extra_of, least_of, pad_of, paint_edge_rule, paint_rules, rect_of, shared_labels, shared_line,
 };
 use super::reorder::REORDER_BAND;
 use super::scroll::{Glide, Jumps, ScrollState, aim_glide, follow_anchor, jump_frame, overflow_inset, scroll_of};
@@ -141,6 +141,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.region_gap = gap_of(&env.tokens, Gap::Tight);
         self.end_gap = gap_of(&env.tokens, props.end.map_or(Gap::Tight, |end| end.gap));
         self.header_gap = header_gap_of(props, &env.tokens);
+        self.rules = RuleBands::of(props, &env.tokens, crate::runtime::egui::scale::pixels_per_point(&ctx));
         self.least_width = least_of(&env.tokens, props.least_width);
         let quiet = stage.is_peek() || crate::runtime::measure::active(&ctx);
         if !matches!(props.mount, Mount::Inline | Mount::Pane(_))
@@ -323,6 +324,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.region_gap = gap_of(&at.env.tokens, Gap::Tight);
         self.end_gap = gap_of(&at.env.tokens, props.end.map_or(Gap::Tight, |end| end.gap));
         self.header_gap = header_gap_of(&props, &at.env.tokens);
+        self.rules = RuleBands::of(&props, &at.env.tokens, crate::runtime::egui::scale::pixels_per_point(at.ui.ctx()));
         self.least_width = least_of(&at.env.tokens, props.least_width);
         self.room = match at.width {
             Some(width) => Vec2::new(width, props.room_height.unwrap_or(f32::INFINITY)),
@@ -997,12 +999,13 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         // the control.
         if props.footer.is_some() {
             let (mut footer_rect, offset) = self.place_footer(&props, &mut regions, inner, body_rect, rtl);
-            // The region's size counts the gap and the inset (they are part of what the footer took), so the content
-            // starts below the gap and stays the inset away from the sides and the foot.
+            // The region's size counts the rule's band, the gap and the inset (they are part of what the footer took), so
+            // the content starts below the band and the gap and stays the inset away from the sides and the foot.
             let lead = props.footer.and_then(|footer| footer.gap).map_or(0.0, |gap| gap_of(&env.tokens, gap));
             let inset = props.footer.map_or(0.0, |footer| pad_of(&env.tokens, footer.inset));
-            footer_rect.min.y += lead;
-            footer_rect.max.y = (footer_rect.max.y - inset).max(footer_rect.min.y);
+            let (rule_over, rule_under) = if footer_rule_under(&props) { (0.0, self.rules.footer) } else { (self.rules.footer, 0.0) };
+            footer_rect.min.y += rule_over + lead;
+            footer_rect.max.y = (footer_rect.max.y - inset - rule_under).max(footer_rect.min.y);
             footer_rect.min.x += inset;
             footer_rect.max.x = (footer_rect.max.x - inset).max(footer_rect.min.x);
             let mut bcx = BodyCx::new(body_id, env_view, resolved, footer_rect, &mut *cx.core.memory, &mut open, gate.as_mut())
@@ -1021,6 +1024,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             if took.y > 0.0 {
                 took.y += lead + inset;
             }
+            took.y += self.rules.footer;
             self.footer_size = Some(took);
         }
         self.open = open;
@@ -1041,7 +1045,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             let radius = CornerRadius { sw: 0, se: 0, ..style.radius };
             ui.painter().set(band_slot, Shape::rect_filled(regions.header, radius, band_color(&env.tokens, fill)));
         }
-        paint_rules(ui, &props, env, inner, &regions);
+        paint_rules(ui, env, &regions);
         paint_edge_rule(ui, &props, env, rect);
     }
 

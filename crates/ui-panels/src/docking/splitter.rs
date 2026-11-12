@@ -6,7 +6,7 @@ use crate::style::{ComponentStyle, Stateful, StyleColor, StyleCx, resize_line_lo
 use craft_behavior::{Axis, Metrics, Sense};
 use egui::{Response, Vec2};
 
-/// The style of a splitter: a hairline that becomes a thick accent line under the pointer.
+/// The style of a splitter: a thin line that becomes a thick accent line under the pointer.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct SplitterStyle {
@@ -16,7 +16,7 @@ pub struct SplitterStyle {
     /// The line of a column's inner edge: none at rest, as the column's frame already draws that edge, and the accent
     /// under the pointer.
     edge_line: Stateful<StyleColor>,
-    /// The line's width: a hairline at rest, thick under the pointer.
+    /// The line's width: thin at rest, thick under the pointer.
     width: Stateful<f32>,
 }
 

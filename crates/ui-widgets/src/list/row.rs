@@ -156,7 +156,7 @@ pub struct ListRow<'a> {
     /// or thumbnail.
     #[prop]
     pub(super) clipped: bool,
-    /// A hairline along the row's bottom edge, in a plain row too.
+    /// A divider rule along the row's bottom edge, in a plain row too.
     #[prop]
     pub(super) rule: bool,
     /// The rename editor replaces the label; `state` sets it from the collection's row state.

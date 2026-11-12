@@ -1,6 +1,6 @@
 //! The style of the title bar.
 //!
-//! The bar paints a chrome surface and a hairline along its bottom edge; its height is its slot's
+//! The bar paints a chrome surface and a divider rule along its bottom edge; its height is its slot's
 //! ([`SlotSize::TitleBar`](crate::shell::SlotSize), `size.bar.title`), the caption buttons carry their own
 //! family metrics and colours (`caption.*`), and the title is a `Text`. Nothing else of the legacy bar style has a
 //! token: the corner size belongs to the window's grips, the gaps to the body's row gap.

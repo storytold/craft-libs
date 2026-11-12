@@ -682,7 +682,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
         for &(at, rect) in &self.placed_tail {
             let row = &self.tail[at];
             if at == 0 {
-                ui.draw().rule(RuleKind::Divider, rect.left_top(), rect.right_top());
+                ui.draw().edge_rule(RuleKind::Divider, rect, RectSide::Top);
             }
             let state = RowState { emphasized: lead == Some(Slot::Tail(at)), ..RowState::default() };
             ui.face(section_part(&row.key), ListRow::new(row.label.clone()).node(false).state(state));

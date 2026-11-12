@@ -49,6 +49,42 @@ pub fn pad_of(tokens: &UiTokens, pad: Pad) -> f32 {
     }
 }
 
+/// The room the rules between a container's regions take, in points: the divider rule's width on the display for each
+/// rule the container draws, none for one it doesn't. Each rule lies in a band of its own, so it shares no pixel with
+/// a region's content at any scale.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct RuleBands {
+    /// Above a header with `HeaderRegion::rule_above`.
+    pub(super) above: f32,
+    /// Under a stacked header with `HeaderRegion::rule`, before its gap.
+    pub(super) under: f32,
+    /// Between a footer with `FooterRegion::rule` and the content beside it: over the footer, or under it in the end
+    /// region's top (`footer_rule_under`).
+    pub(super) footer: f32,
+    /// Between the body and an end region with `EndRegion::rule`, after the end gap.
+    pub(super) end: f32,
+}
+
+impl RuleBands {
+    /// The bands of `props`' rules in `tokens` on a display of `pixels_per_point`.
+    pub(super) fn of(props: &ContainerProps, tokens: &UiTokens, pixels_per_point: f32) -> Self {
+        let width = rule_look(tokens, RuleKind::Divider).width.points(pixels_per_point);
+        let on = |rule: bool| if rule { width } else { 0.0 };
+        RuleBands {
+            above: on(props.header.is_some_and(|header| header.rule_above)),
+            under: on(props.header.is_some_and(|header| header.rule && !header.inline)),
+            footer: on(props.footer.is_some_and(|footer| footer.rule)),
+            end: on(props.end.is_some_and(|end| end.rule)),
+        }
+    }
+}
+
+/// Whether a ruled footer's rule lies under it: a footer at the top of the end region separates itself from the end
+/// region's content below; every other footer from the content above it.
+pub(super) fn footer_rule_under(props: &ContainerProps) -> bool {
+    props.footer.is_some_and(|footer| footer.place == FooterPlace::EndTop) && footer_in_end(props)
+}
+
 /// The space `props`' stacked header leaves before the body: its `HeaderRegion::gap`, none without one.
 pub(super) fn header_gap_of(props: &ContainerProps, tokens: &UiTokens) -> f32 {
     props.header.and_then(|header| header.gap).map_or(0.0, |gap| gap_of(tokens, gap))
@@ -95,6 +131,8 @@ pub(super) struct Regions {
     /// The width the body's line gives the regions beside the body: an inline header and the end region, with their
     /// gaps.
     pub(super) beside: f32,
+    /// The bands of the rules between the regions (`RuleBands`), each with the side its rule runs along.
+    pub(super) rules: [Option<(Rect, RectSide)>; 4],
 }
 
 /// The sizes of the header, footer and end region that the regions are placed from (zero or `None` for a region the
@@ -150,35 +188,12 @@ pub(super) fn paint_edge_rule(ui: &mut Ui, props: &ContainerProps, env: &Env, re
     ui.painter().extend(Rule::edge(&rule, rect, side, ui.ctx().pixels_per_point()));
 }
 
-/// The divider rules above and under the header, above the footer and beside the end region.
-pub(super) fn paint_rules(ui: &mut Ui, props: &ContainerProps, env: &Env, inner: Rect, regions: &Regions) {
+/// The divider rules above and under the header, beside the footer and beside the end region, each in its band.
+pub(super) fn paint_rules(ui: &mut Ui, env: &Env, regions: &Regions) {
     let rule = rule_look(&env.tokens, RuleKind::Divider);
     let ppp = ui.ctx().pixels_per_point();
-    let draw_rule = |from: f32, to: f32, y: f32| ui.painter().extend(Rule::shapes(&rule, Pos2::new(from, y), Pos2::new(to, y), ppp));
-    if props.header.is_some_and(|header| header.rule_above) {
-        draw_rule(inner.min.x, inner.max.x, regions.header.min.y);
-    }
-    if props.header.is_some_and(|header| header.rule && !header.inline) {
-        draw_rule(inner.min.x, inner.max.x, regions.header.max.y);
-    }
-    // A footer across the container rules the whole width; one beside or in the end region rules its own.
-    match props.footer.filter(|footer| footer.rule) {
-        Some(footer) if footer.place == FooterPlace::EndTop && footer_in_end(props) => {
-            draw_rule(regions.footer.min.x, regions.footer.max.x, regions.footer.max.y);
-        }
-        Some(_) if end_full_height(props) => draw_rule(regions.footer.min.x, regions.footer.max.x, regions.footer.min.y),
-        Some(_) => draw_rule(inner.min.x, inner.max.x, regions.footer.min.y),
-        None => {}
-    }
-    // The end region's rule runs along its edge toward the body, beside a footer placed in it too.
-    if props.end.is_some_and(|end| end.rule) && regions.end.width() > 0.0 {
-        let (top, bottom) = if footer_in_end(props) {
-            (regions.end.min.y.min(regions.footer.min.y), regions.end.max.y.max(regions.footer.max.y))
-        } else {
-            (regions.end.min.y, regions.end.max.y)
-        };
-        let end = Rect::from_x_y_ranges(regions.end.x_range(), top..=bottom);
-        ui.painter().extend(Rule::edge(&rule, end, RectSide::start(env.direction.is_rtl()), ppp));
+    for (band, side) in regions.rules.iter().flatten() {
+        ui.painter().extend(Rule::edge(&rule, *band, *side, ppp));
     }
 }
 
@@ -316,9 +331,10 @@ impl<'b> BodyHooks<'b> {
         bcx.close_requested()
     }
 
-    /// The space under a stacked header `header_h` high: `HeaderRegion::gap` while the body shows, scaled by its presence.
+    /// The space under a stacked header `header_h` high: the band of the rule under it, then `HeaderRegion::gap` while
+    /// the body shows, scaled by its presence.
     pub(super) fn header_space(&self, header_h: f32) -> f32 {
-        if header_h > 0.0 { self.header_gap * self.presence.t } else { 0.0 }
+        self.rules.under + if header_h > 0.0 { self.header_gap * self.presence.t } else { 0.0 }
     }
 
     /// The regions inside `inner` (the rect minus padding and the padding tier), placed from `sizes`. A header with a
@@ -331,8 +347,9 @@ impl<'b> BodyHooks<'b> {
         // A footer in the end region takes no band across the container: it stacks with the end region's content.
         let across_h = if in_end { 0.0 } else { footer_h };
         let end_h = sizes.end.map_or(0.0, |end| end.y) + if in_end { footer_h } else { 0.0 };
-        // An inline header takes no height of its own: the line is as high as the taller of header and body.
-        let stacked_h = if inline { 0.0 } else { header_h + self.header_space(header_h) };
+        // An inline header takes no height of its own: the line is as high as the taller of header and body. A rule
+        // above the header takes its band either way.
+        let stacked_h = self.rules.above + if inline { 0.0 } else { header_h + self.header_space(header_h) };
         let top = inner.min.y + stacked_h;
         // Along an axis the container is not given, its body is offered the room the container was offered and the
         // container takes what the body took.
@@ -372,7 +389,8 @@ impl<'b> BodyHooks<'b> {
         };
         let (left, right) = if rtl { (inner.max.x - width, inner.max.x) } else { (inner.min.x, inner.min.x + width) };
         let band = |top: f32, bottom: f32| Rect::from_min_max(Pos2::new(left, top), Pos2::new(right, bottom.max(top)));
-        let header = band(inner.min.y, if props.header.is_some() { inner.min.y + header_h.max(0.0) } else { inner.min.y });
+        let header_top = inner.min.y + self.rules.above;
+        let header = band(header_top, if props.header.is_some() { header_top + header_h.max(0.0) } else { header_top });
         let mut body = band(top, bottom);
         let header = if inline {
             // The header keeps the width it measured, none when it measured nothing; before its first measure it
@@ -389,6 +407,9 @@ impl<'b> BodyHooks<'b> {
         } else {
             header
         };
+        let across = |top: f32, width: f32| (width > 0.0).then(|| (Rect::from_x_y_ranges(inner.x_range(), top..=top + width), RectSide::Top));
+        let above = across(inner.min.y, self.rules.above);
+        let under = if inline { None } else { across(header.max.y, self.rules.under) };
         // The end region keeps the width it measured (with a footer in it, the wider of the two) and takes the end
         // edge; the body takes the rest. Before its first measure it spans the line and the body keeps its width.
         let measured = props.end.and(sizes.end).map(|end| {
@@ -396,7 +417,7 @@ impl<'b> BodyHooks<'b> {
             end.x.max(footer_w).min(width)
         });
         let taken = measured.unwrap_or(0.0);
-        let cut = if taken > 0.0 { taken + self.end_gap } else { 0.0 };
+        let cut = if taken > 0.0 { taken + self.end_gap + self.rules.end } else { 0.0 };
         let end_w = measured.unwrap_or(width);
         let end_bottom = if full { footer_top + across_h } else { footer_top };
         let mut end = if rtl {
@@ -429,7 +450,23 @@ impl<'b> BodyHooks<'b> {
         } else {
             header
         };
-        Regions { header, body, end, footer, beside: width - body.width() }
+        let footer_rule = (self.rules.footer > 0.0).then(|| {
+            // A footer across the container rules the whole width; one beside or in the end region rules its own.
+            let x = if full { footer.x_range() } else { inner.x_range() };
+            let w = self.rules.footer;
+            if footer_rule_under(props) {
+                (Rect::from_x_y_ranges(x, footer.max.y - w..=footer.max.y), RectSide::Bottom)
+            } else {
+                (Rect::from_x_y_ranges(x, footer.min.y..=footer.min.y + w), RectSide::Top)
+            }
+        });
+        // The end region's rule runs along its edge toward the body, beside a footer placed in it too.
+        let end_rule = (self.rules.end > 0.0 && end.width() > 0.0).then(|| {
+            let (top, bottom) = if in_end { (end.min.y.min(footer.min.y), end.max.y.max(footer.max.y)) } else { (end.min.y, end.max.y) };
+            let x = if rtl { end.max.x } else { end.min.x - self.rules.end };
+            (Rect::from_x_y_ranges(x..=x + self.rules.end, top..=bottom), RectSide::end(rtl))
+        });
+        Regions { header, body, end, footer, beside: width - body.width(), rules: [above, under, footer_rule, end_rule] }
     }
 }
 
