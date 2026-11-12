@@ -378,6 +378,15 @@ comments label them `Craft patch (flatten)`.
 | hayro-interpret `types.rs`, `x_object.rs` | `RasterImage::with_inks`: an image's samples in its own space's inks (`InkImage`), `/Decode` and `/Matte` applied, transfer functions left out, with its alpha at the alpha's own size |
 | hayro-interpret `interpret/mod.rs` | The `sh` operator drops the shading's `/Background`, which only a shading pattern paints (ISO 32000-2 §8.7.4.5.1) |
 
+Repair scan, ported from PdfCraft [4a0b1dd1](https://github.com/storytold/pdfcraft/commit/4a0b1dd15)
+(hayro-syntax patch 34, `xref.rs`, #5580): in a table rebuilt by scanning the file, an object whose
+header names a generation the reference does not (`3 99999 obj`, or `3 18446744073709551616 obj` as in
+poppler-85140-0.pdf) is found by its object number: the header is read leniently (an unreadable
+generation is 0), each scanned object is also filed under generation 0 (a real `N 0 obj` is never
+displaced, a later header replaces a stand-in), the object is read back behind the same lenient header,
+and enumeration yields one object per location and number. Tests:
+`xref::tests::a_rebuilt_table_finds_an_object_whose_header_names_another_generation` and
+`a_rebuilt_tables_generation_0_stand_in_is_not_a_second_object`.
 Streams without a readable `endstream`, ported from PdfCraft
 [bfaa20db](https://github.com/storytold/pdfcraft/commit/bfaa20db2) and
 [9e29af78](https://github.com/storytold/pdfcraft/commit/9e29af784) (hayro-syntax patch 36, in
