@@ -403,3 +403,15 @@ fn an_attributes_vertical_alignment_is_group_74_not_the_field_length() {
     let EntityKind::Text(t) = one("0|TEXT|10|1.0|1|x|73|3|74|1").kind else { panic!("text") };
     assert_eq!(t.valign, 3, "TEXT has its alignment in 73");
 }
+
+#[test]
+fn entity_groups_written_after_the_entitys_own_marker() {
+    // An AcDbEntity subclass without a layer: the run of entity codes after the LINE's own marker
+    // is the entity's.
+    let c = one("0|LINE|5|2A|100|AcDbEntity|100|AcDbLine|8|Walls|62|1|370|50|10|1.0|20|2.0|48|9.0").common;
+    assert_eq!((c.layer.as_str(), c.color, c.lineweight), ("Walls", Color::Index(1), Lineweight::Hundredths(50)));
+    assert_eq!(c.ltscale, 1.0, "the run ends at the entity's own first group");
+    // With a layer in AcDbEntity, nothing after the entity's marker is taken.
+    let c = one("0|MTEXT|100|AcDbEntity|8|A|100|AcDbMText|62|3|48|7.0").common;
+    assert_eq!((c.layer.as_str(), c.color, c.ltscale), ("A", Color::ByLayer, 1.0));
+}

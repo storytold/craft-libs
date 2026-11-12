@@ -6,6 +6,8 @@
 //! 3DFACE, MTEXT, LEADER and DIMENSION definition points are world coordinates. Angles are in
 //! degrees, except an ELLIPSE's parameters, which the format stores in radians.
 
+use std::borrow::Cow;
+
 use super::document::{EntityRecord, Record};
 use super::hatch::Hatch;
 use super::text::{MText, decode_line, split_embedded};
@@ -39,21 +41,40 @@ pub struct Common {
     pub plot_style: Option<u64>,
 }
 
+/// The AcDbEntity group codes a writer can put after the entity's own subclass marker instead
+/// (DXF Reference, Common Group Codes for Entities): paper space, layout, layer, linetype,
+/// material, colour, lineweight, linetype scale, visibility, true colour, colour name,
+/// transparency, plot style and shadow mode.
+const ENTITY_CODES: [i32; 14] = [67, 410, 8, 6, 347, 62, 370, 48, 60, 420, 430, 440, 390, 284];
+
 /// The groups of the AcDbEntity subclass: the record up to the entity's own subclass marker (all
 /// of it in files without markers, and in records with no AcDbEntity marker, whose layer and
 /// colour may follow the entity's marker), or up to an embedded object (101). Later groups reuse
 /// the codes: an MTEXT's column width is 48. Markers inside an application-defined group do not
 /// count.
-fn entity_groups(tags: &[Tag]) -> &[Tag] {
+///
+/// Some writers leave the AcDbEntity subclass without a layer and put its groups right after the
+/// entity's own marker. Every entity has a layer, so its absence marks that layout, and the run
+/// of [`ENTITY_CODES`] that starts after the marker is read too. The run ends at the first other
+/// code, so the entity's own groups that reuse a code are not taken for it. Only such a record
+/// pays for the copy.
+fn entity_groups(tags: &[Tag]) -> Cow<'_, [Tag]> {
     let is_entity = |t: &Tag| t.str_ref().is_some_and(|s| s == "AcDbEntity");
     let marked = outside_app(tags).any(|(_, t)| t.code == 100 && is_entity(t));
     let end = outside_app(tags).find(|(_, t)| (marked && t.code == 100 && !is_entity(t)) || t.code == 101).map_or(tags.len(), |(i, _)| i);
-    tags.get(..end).unwrap_or(tags)
+    let groups = tags.get(..end).unwrap_or(tags);
+    let after_own_marker = marked && tags.get(end).is_some_and(|t| t.code == 100);
+    if !after_own_marker || outside_app(groups).any(|(_, t)| t.code == 8) {
+        return Cow::Borrowed(groups);
+    }
+    let run = tags.get(end + 1..).unwrap_or_default().iter().take_while(|t| ENTITY_CODES.contains(&t.code));
+    Cow::Owned(groups.iter().chain(run).cloned().collect())
 }
 
 impl Common {
     pub fn read(tags: &[Tag]) -> Common {
-        let (all, e) = (Groups(tags), Groups(entity_groups(tags)));
+        let own = entity_groups(tags);
+        let (all, e) = (Groups(tags), Groups(&own));
         Common {
             handle: e.handle(5),
             owner: outside_app(tags).find(|(_, t)| t.code == 330).and_then(|(_, t)| parse_handle(&t.str())),
