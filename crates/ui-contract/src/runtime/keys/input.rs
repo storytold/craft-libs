@@ -206,9 +206,11 @@ impl Strip<'_> {
             false
         } else if key == Key::Space && self.canvas_space {
             // The canvas has Space (`runtime::sampler`): only the shortcut dispatcher reads it, so the dialog's
-            // focused control does not activate.
+            // focused control does not activate. Its shortcut follows the held rule: a space a text field types is
+            // the field's.
+            batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: true });
             if !repeat {
-                batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: None });
+                batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1) });
             }
             false
         } else if (self.foreign && (bare_tab || escape)) || canvas_tab || canvas_edit {
@@ -223,7 +225,7 @@ impl Strip<'_> {
             batch.tabs.push(TabPress { input: *input, repeat });
             false
         } else if ctrl_tab {
-            batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None });
+            batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: false });
             false
         } else if let Some(WindowShortcut::Pane { forward }) = window_shortcut {
             batch.nav.panes.push(forward);
@@ -238,7 +240,7 @@ impl Strip<'_> {
             batch.menu.push(MenuKey::Letter(key.name().chars().next().unwrap_or('A')));
             false
         } else {
-            batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None });
+            batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: false });
             if !repeat {
                 batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1) });
             }

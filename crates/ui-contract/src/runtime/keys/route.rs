@@ -54,7 +54,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     // Whether a component took each text of the pass, as typing, type-ahead or digits.
     let mut taken_texts = vec![false; batch.texts.len()];
     if let Some(rec) = &target {
-        for (press, taken) in batch.presses.iter().zip(&mut consumed) {
+        for (press, taken) in batch.presses.iter().zip(&mut consumed).filter(|(press, _)| !press.canvas) {
             *taken = if stale_repeat(&mut stale, press) {
                 Taken::Yes
             } else {
@@ -73,7 +73,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         // With nothing focused, a plain Enter submits to the window, as an unfocused Escape cancels: a tool's pending
         // edit or a dialog's default button takes it. The arrows nudge the window's canvas content (a tool or the
         // session control on a canvas), unless a modal layer is open.
-        for (press, taken) in batch.presses.iter().zip(&mut consumed) {
+        for (press, taken) in batch.presses.iter().zip(&mut consumed).filter(|(press, _)| !press.canvas) {
             if press.key == Key::Enter && press.mods.is_none() && !press.repeat {
                 push(&mut routed, None, Intent::Submit, false);
                 *taken = Taken::Yes;
@@ -268,7 +268,7 @@ pub fn focus_holds(ctx: &Context, chord: Chord) -> bool {
     if current(ctx, |stage| super::input::focused_claims(&record, stage)).contains(&chord) {
         return true;
     }
-    let press = Press { key: chord.key, mods: chord.mods, repeat: false, in_egui: None, release: None, text: None };
+    let press = Press { key: chord.key, mods: chord.mods, repeat: false, in_egui: None, release: None, text: None, canvas: false };
     let driven = Driven::of(ctx, &rec);
     let route = press_route(ctx, crate::runtime::windows::os_of(ctx), &rec, &press, driven.or_else(|| list_of_field(ctx, &rec)));
     let taken = !matches!(route, PressRoute::Free);

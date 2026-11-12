@@ -75,6 +75,9 @@ struct Press {
     release: Option<Key>,
     /// The place in `Batch::texts` of the text the press typed.
     text: Option<usize>,
+    /// The Space of the canvas a dialog keeps open (`runtime::sampler`): no component's routing reads it, and only the
+    /// held rule decides whether its shortcut runs.
+    canvas: bool,
 }
 
 /// A key press, release or clipboard chord that the shortcut dispatcher may match, with the press that the
