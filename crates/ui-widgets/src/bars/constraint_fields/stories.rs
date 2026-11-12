@@ -3,7 +3,7 @@
 use super::ConstraintFields;
 use crate::bars::{Bar, BarKind};
 use crate::contract::{Bind, Entry, ShowContainer as _};
-use crate::runtime::env::UnitKind;
+use crate::runtime::env::{Env, UnitKind};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::PixelSize;
 use craft_behavior::geometry::Constraint;
@@ -11,7 +11,8 @@ use egui::Ui;
 
 const PIXELS_PER_INCH: f64 = 300.0;
 
-/// The cells in an options bar over the story's constraint, starting at `start`; `units` gives Fixed Size units.
+/// The cells in an options bar over the story's constraint, starting at `start`; `units` gives Fixed Size units. The
+/// readout names the constraint and the unit the fields show, as a host reads them.
 fn bar(ui: &mut Ui, data: &mut StoryData, start: Constraint, units: bool, enabled: bool) -> StoryOutput {
     let list = [
         Entry::new(UnitKind::Pixels, "Pixels"),
@@ -19,15 +20,25 @@ fn bar(ui: &mut Ui, data: &mut StoryData, start: Constraint, units: bool, enable
         Entry::new(UnitKind::Centimetres, "Centimetres"),
         Entry::new(UnitKind::Percent, "Percent"),
     ];
+    let unit = *data.value("unit", if units { UnitKind::Inches } else { UnitKind::Pixels });
     let value = data.value("constraint", start);
-    Bar::new("Options", BarKind::Options)
-        .show(ui, |ui, _| {
-            let fields = ConstraintFields::new(Bind::bound(&mut *value)).enabled(enabled);
-            let fields = if units { fields.size_units(UnitKind::Inches, &list, PIXELS_PER_INCH, PixelSize::new(1920, 1080)) } else { fields };
-            fields.show(ui);
-        })
-        .output
-        .into()
+    let mut picked = None;
+    let shown = Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+        let fields = ConstraintFields::new(Bind::bound(&mut *value)).enabled(enabled);
+        let fields = if units { fields.size_units(unit, &list, PIXELS_PER_INCH, PixelSize::new(1920, 1080)) } else { fields };
+        picked = fields.show(ui).unit_picked;
+    });
+    let constraint = *value;
+    if let Some(kind) = picked {
+        *data.value("unit", unit) = kind;
+    }
+    let symbol = Env::of(ui).units().symbol(picked.unwrap_or(unit));
+    let readout = match constraint {
+        Constraint::Ratio(w, h) => format!("Fixed Ratio: {w} x {h}\nUnit: {symbol}"),
+        Constraint::Size(w, h) => format!("Fixed Size: {w} x {h} {symbol}\nUnit: {symbol}"),
+        _ => format!("Normal: - x -\nUnit: {symbol}"),
+    };
+    StoryOutput::from(shown.output).readout(readout)
 }
 
 #[story(ConstraintFields<'static>, covers = [], drive = Drive::Never)]
