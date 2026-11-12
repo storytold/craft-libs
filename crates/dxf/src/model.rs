@@ -22,6 +22,7 @@ mod entity;
 mod hatch;
 mod tables;
 pub mod text;
+pub mod write;
 
 pub use document::{Block, Dictionary, Document, EntityRecord, Header, Layout, Record, entity_records, records};
 pub use entity::{

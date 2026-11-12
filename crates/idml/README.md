@@ -9,9 +9,9 @@ An IDML package is a ZIP whose first entry is an uncompressed `mimetype`, follow
 Implemented clean-room from the public IDML File Format Specification and from inspecting IDML
 packages exported from synthetic documents.
 
-This crate is the layer between the bytes and IDML's own element tree. What the elements mean
-(spreads, page items, stories, styles, swatches) is not modelled here yet: a caller walks the
-tree and maps it onto its own document.
+This crate is the layer between the bytes and IDML's own element tree, with a typed model of
+the layout (`model`). Stories, styles, swatches and preferences are not modelled yet: a caller
+walks those elements and maps them onto its own document.
 
 ## Reading
 
@@ -78,6 +78,50 @@ assert!(craft_idml::is_idml(&bytes));
 
 Parts are written with an element that has only element children one child per line, and any
 other element on one line, so story text is never changed by indentation.
+
+## The layout model
+
+```rust
+# fn main() -> craft_idml::Result<()> {
+# let bytes: Vec<u8> = Vec::new();
+# if bytes.is_empty() { return Ok(()); }
+use craft_idml::model::{apply, spreads};
+
+let doc = craft_idml::Package::open(&bytes)?.document()?;
+for spread in spreads(&doc) {
+    for page in spread.pages() {
+        let _bounds = page.geometric_bounds();      // top left bottom right
+        let _parent = page.applied_master();
+    }
+    for (item, to_spread) in spread.all_items() {  // nested items too, with their transform
+        let outline = item.geometry();             // subpaths of anchor and direction points
+        if let Some([top, left, _, _]) = outline.bounds() {
+            let _corner = apply(&to_spread, [left, top]);
+        }
+        for graphic in item.graphics() {
+            let _file = graphic.link().and_then(|l| l.uri());
+            let _embedded = graphic.contents();
+        }
+    }
+}
+# Ok(()) }
+```
+
+- `Spread` (and parent spreads, `master`), `Page`, `Guide`, `PageItem` (`ItemKind`: text frames,
+  rectangles, ovals, polygons, lines, groups, buttons, EPS text, and other page item elements by
+  name), `Graphic` (`GraphicKind`: images, EPS, PDF, imported pages, WMF, PICT, SVG) and `Link`.
+  Children keep their document order: page items stack back to front.
+- Each node keeps its attributes and `<Properties>` as written (`Values`) and reads them through
+  accessors: `item_transform`, `geometric_bounds`, `applied_master`, `override_list`,
+  `parent_story`, `next_text_frame`, `graphic_bounds`, `contents`, and `num`, `boolean`,
+  `value` for any other property. Anything the model does not type is kept as XML where it
+  stood, without the part's indentation (`tidy`). `to_el` writes a node back: what is read and
+  written again reads the same.
+- `PathGeometry` (`geometry`, `set_geometry`) holds subpaths of points. A point without a usable
+  anchor is left out, a missing direction point is the anchor, and a subpath holding `NaN` or an
+  infinity is left out whole. At most `MAX_PATH_POINTS` (1,000,000) points are kept.
+- `Spread::all_items` walks nested groups without recursion, giving each item's transform into
+  spread coordinates (`concat` of the transforms on the way).
 
 ## Values
 

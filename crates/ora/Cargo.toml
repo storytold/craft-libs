@@ -13,8 +13,9 @@ workspace = true
 [dependencies]
 craft-xml = { workspace = true }
 thiserror = { workspace = true }
-# `deflate-flate2` with flate2's default miniz_oxide backend, as craft-update pins it (zip's own
-# `deflate` feature would switch a whole app's flate2 to zlib-rs).
+craft-zip = { workspace = true }
+
+[dev-dependencies]
+# The tests build archives, hostile ones included, by hand.
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
-# The backend of zip's deflate: `deflate-flate2` leaves the choice to the build.
-flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+craft-zip = { workspace = true, features = ["test-support"] }
