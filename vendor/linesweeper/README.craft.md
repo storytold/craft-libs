@@ -3,7 +3,8 @@
 This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and the
 changes listed under Local changes. `.cargo_vcs_info.json` names the commit it was packaged from,
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
-names, which is archived; its README says development moved off GitHub.
+names, which is archived; its README says development moved off GitHub. The local changes touch
+`src/arbitrary.rs` and `src/sweep/sweep_line.rs`.
 
 Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
 file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
@@ -15,6 +16,7 @@ holds `upstream_revision`. `local_patches` describes each local change.
 
 | Change | Code comment label | Touches | Tests |
 |---|---|---|---|
+| The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out | `Craft patch (exited slots)` | `src/sweep/sweep_line.rs` | |
 | `another_monotonic_bezier` returns `arbitrary::Error::IncorrectFormat` when no piece of the generated cubic increases in y; it returned that cubic, which can be horizontal | `Craft patch (flat cubic)` | `src/arbitrary.rs` | `another_monotonic_bezier_increases_in_y_or_fails` |
 
 Every change here updates this table and `SOURCE.json` in the same commit. To take a new linesweeper
