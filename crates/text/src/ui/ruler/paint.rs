@@ -50,6 +50,19 @@ impl TextRuler<'_> {
                 draw.stroke(&path(at - vec2(0.0, style.grip_reach), at + vec2(0.0, style.grip_reach)), StrokeWidth::Thin, cx.resolve(&style.marker));
             }
         }
+        if held.widths {
+            let units = cx.env.units();
+            let text = ruler_text(self.unit, &units);
+            let color: StyleColor = cx.resolve(&style.label.color);
+            for pair in self.columns.windows(2) {
+                let [left, right] = pair else { continue };
+                let run = TextRun::new(text.format_value(&units, f64::from((right - left).abs()), 0.0)).role(style.label.role).color(color);
+                let size = draw.layout(&run, f32::INFINITY).size();
+                let boxed = Rect::from_center_size(pos2(g.x((left + right) / 2.0), g.strip.center().y), size);
+                draw.fill(&rect(boxed), style.fill);
+                draw.text(boxed, &run);
+            }
+        }
         let x = |item: Item| g.x(item.position(&values, g.width));
         let line = |item: Item| cx.resolve_part(item.part(), &style.marker);
         let triangle = |a: Pos2, b: Pos2, c: Pos2, item: Item| {

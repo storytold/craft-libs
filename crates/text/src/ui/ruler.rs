@@ -305,8 +305,9 @@ pub struct TextRulerStyle {
 /// - The tab selector ([`kind`](Self::kind)) sits in the corner square at the interface's start edge of the rect:
 ///   click for the next kind, secondary click for the previous one.
 /// - A table's column borders ([`columns`](Self::columns)): a grip marker on each border of the caret row; dragging
-///   one reports a [`ColumnDrag`] gesture, snapped like a stop (Alt free). A border is a slider too: the arrows and the screen
-///   reader's Increment, Decrement and SetValue report a lone [`GesturePhase::Commit`].
+///   one reports a [`ColumnDrag`] gesture, snapped like a stop (Alt free). While Alt is held in the drag, each column's
+///   width shows between its borders. A border is a slider too: the arrows and the screen reader's Increment,
+///   Decrement and SetValue report a lone [`GesturePhase::Commit`].
 /// - Right-to-left paragraphs mirror the ruler: positions run from the right edge, and the stops' feet point the other
 ///   way.
 /// - Keys: the markers, stops and column borders are one Tab stop. Page Down and Page Up move to the next or previous

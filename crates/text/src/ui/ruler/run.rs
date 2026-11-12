@@ -28,6 +28,8 @@ pub(super) struct Held {
     pub(super) off: bool,
     /// The borders of the table when a column border drag began.
     columns: Option<Vec<f32>>,
+    /// Alt is held in a column border drag: the columns' widths show between the borders.
+    pub(super) widths: bool,
 }
 
 /// The tick rule of a unit: Word's sixteenths for inches, the units' own decimal table otherwise.
@@ -283,6 +285,11 @@ impl TextRuler<'_> {
                 _ => {}
             }
         }
+        held.widths = held.columns.is_some()
+            && (0..self.columns.len()).any(|index| {
+                let press = cx.part(COLUMN.at(index as u64)).press;
+                press.captured && press.mods.alt
+            });
     }
 
     /// A key or the screen reader sets the table column border `index` to `to` points: one gesture of one commit.
