@@ -347,6 +347,11 @@ pub(crate) fn host_focus(ctx: &Context, id: egui::Id) {
     ctx.memory_mut(|memory| memory.request_focus(id));
 }
 
+/// A host's own selectable egui label of `text`; returns its rect.
+pub(crate) fn host_label(ui: &mut Ui, text: &str) -> Rect {
+    ui.add(egui::Label::new(text).selectable(true)).rect
+}
+
 /// A host's own egui popup `id` at `at`, shown while egui's memory holds it open.
 pub(crate) fn host_popup(ui: &Ui, id: egui::Id, at: Pos2) {
     egui::Popup::new(id, ui.ctx().clone(), at, ui.layer_id()).open_memory(None).show(|ui| ui.allocate_space(ui.spacing().interact_size));

@@ -585,6 +585,7 @@ pub(super) fn end(state: &mut State, focused: Option<Id>, frame: u64) -> Vec<Act
         keys,
         menu_bar: std::mem::take(&mut state.menu_bar),
         foreign: false,
+        label_selection: false,
     };
     acts
 }

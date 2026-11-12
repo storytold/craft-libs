@@ -33,6 +33,8 @@ struct Strip<'a> {
     /// An app's own egui widget or popup has the focus (`FocusedRecord::foreign`): Tab, Escape and the clipboard
     /// events are its own.
     foreign: bool,
+    /// egui holds a label text selection, which a copy or cut event copies.
+    label_selection: bool,
 }
 
 impl Strip<'_> {
@@ -91,6 +93,7 @@ impl Strip<'_> {
                 false
             }
             KeyEvent::Clip { .. } if self.foreign => true,
+            KeyEvent::Clip { command: EditCommand::Copy | EditCommand::Cut, .. } if self.label_selection => true,
             KeyEvent::Clip { command, .. } => {
                 // The platform sends the clipboard event in place of the chord: an unlisted one is the chord. The
                 // web sends the chord's press as well.
@@ -279,6 +282,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
             menu_bar,
             canvas_space: hole.as_ref().is_some_and(|hole| hole.space || hole.space_pressed),
             foreign: record.foreign,
+            label_selection: record.label_selection,
         };
         let mut batch = Batch::default();
         let mut visible = None;

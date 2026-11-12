@@ -152,7 +152,7 @@ An app with its own eframe `App` calls the hooks in `craft::ui::shell::embed`. `
 | F6 | F6 and Shift+F6 move between panes and never reach egui. |
 | Escape | Plain Escape (Alt and Shift may be held) goes to the focused framework stop and its scopes; with no framework stop focused, it goes to the window as `Intent::Cancel`. It reaches egui only while an app's own widget has the focus (below). |
 | F10, Alt+letter | Taken while a framework menu bar is registered: F10 focuses the bar, Alt+letter opens a menu (not on macOS). |
-| Edit chords | Taken while a framework editor is focused. Otherwise egui's copy, cut and paste events become the ⌘C/X/V chord for the app's commands, unless an app's own widget has the focus (below). |
+| Edit chords | Taken while a framework editor is focused. Otherwise egui's copy, cut and paste events become the ⌘C/X/V chord for the app's commands, unless an app's own widget has the focus (below). While egui holds a label text selection, copy and cut stay egui's, and egui copies the selection. |
 | IME | Taken while a framework editor owns the IME: its events and `PlatformOutput.ime` are the runtime's. Otherwise they stay egui's, for the app's own `TextEdit` or IME code. |
 | An app's own focused widget | While egui focus is on a widget no framework component made, or an egui popup is open, and no framework press or drag is captured, Tab, Shift+Tab, Escape and egui's clipboard events stay in egui's input for it, and the runtime routes nothing for them. |
 | Releases | The release of every key the runtime took is taken too. |

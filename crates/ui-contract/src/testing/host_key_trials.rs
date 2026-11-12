@@ -6,7 +6,7 @@ use crate::runtime::focus::KeyUse;
 use crate::runtime::keys::with_window_intents;
 use crate::testing::focus::{Stop, egui_focused, named_id, register_stop, widget};
 use crate::testing::input::{key_press, key_reached};
-use crate::testing::pointer::{moved, press, release};
+use crate::testing::pointer::{self, moved, press, release};
 use crate::testing::{Frames, trial};
 use craft_behavior::{Input, Intent};
 use egui::{Event, Id, ImeEvent, Key, Modifiers, Pos2, Rect, Ui};
@@ -152,4 +152,24 @@ fn escape_cancels_a_framework_drag_while_an_egui_field_has_focus() {
     assert!(!drag::running(&frames.ctx), "Escape cancelled the drag");
     assert_eq!(seen(&host), (Vec::new(), 0), "the Escape went to the drag alone");
     frames.frame(vec![release(inside)], &mut show);
+}
+
+#[trial]
+fn copy_with_a_label_selection_copies_the_label() {
+    const TEXT: &str = "host label text";
+    let label = Rc::new(std::cell::Cell::new(Rect::NOTHING));
+    let at = Rc::clone(&label);
+    let (_, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        base(ui);
+        at.set(fixture::host_label(ui, TEXT));
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    frames.frame(vec![Event::Copy], &mut show);
+    assert!(frames.copied().is_empty(), "with no selection, the copy is the app's chord");
+    let rect = label.get();
+    pointer::drag(&mut frames, rect.left_center() + egui::vec2(1.0, 0.0), egui::vec2(rect.width() - 2.0, 0.0), &mut show);
+    frames.frame(vec![Event::Copy], &mut show);
+    assert!(frames.copied().iter().any(|copied| !copied.is_empty() && TEXT.contains(copied.as_str())), "egui copied the selection");
 }

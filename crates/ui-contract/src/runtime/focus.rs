@@ -76,6 +76,9 @@ pub(crate) struct FocusedRecord {
     /// drag is captured: an app's own focused widget or popup keeps the keys a focused component keeps (Tab, Escape,
     /// the clipboard events). Written by the end hook after its focus moves.
     pub(crate) foreign: bool,
+    /// egui holds a label text selection: a copy or cut event is egui's, which copies the selection. Written by the
+    /// end hook.
+    pub(crate) label_selection: bool,
 }
 
 /// A change to egui's focus, applied after the state lock is released.
@@ -649,7 +652,11 @@ pub(crate) fn end(ctx: &Context) {
     let unmade = with(ctx, |state| state.focus_now.filter(|_| state.stop_of_focus().is_none()));
     let foreign =
         !captured && (egui_focus::popup_open(ctx) || unmade.is_some_and(|id| !crate::runtime::pointer::made_by_component(ctx, viewport, id)));
-    with(ctx, |state| state.record.foreign = foreign);
+    let label_selection = egui_focus::label_selection(ctx);
+    with(ctx, |state| {
+        state.record.foreign = foreign;
+        state.record.label_selection = label_selection;
+    });
 }
 
 /// The scopes `rec` sits in, innermost first.

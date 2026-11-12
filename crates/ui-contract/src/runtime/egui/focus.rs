@@ -37,6 +37,11 @@ pub(crate) fn popup_open(ctx: &Context) -> bool {
     egui::Popup::is_any_open(ctx)
 }
 
+/// Whether egui holds a label text selection, which egui copies on a copy or cut event.
+pub(crate) fn label_selection(ctx: &Context) -> bool {
+    ctx.with_plugin::<egui::text_selection::LabelSelectionState, _>(|state| state.has_selection()).unwrap_or(false)
+}
+
 /// Gives `id` key focus with `filter`, applied from this pass: a filter set afterwards acts a pass late.
 pub(crate) fn focus_with_filter(ctx: &Context, id: Id, filter: KeyFilter) {
     let filter =
