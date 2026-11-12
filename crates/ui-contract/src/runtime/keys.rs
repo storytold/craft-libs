@@ -26,7 +26,7 @@ pub(crate) use claims::hold_escape;
 pub use claims::take_claimed;
 #[doc(hidden)]
 pub use input::down;
-pub(crate) use input::{input_hook, take_menu_keys, take_nav};
+pub(crate) use input::{input_hook, queue_nav, take_menu_keys, take_nav};
 pub use intents::Intents;
 #[doc(hidden)]
 pub use intents::intents_of;
@@ -202,6 +202,10 @@ pub(crate) struct Stage {
     enter_stale: bool,
     /// How many lent keys session members have taken (`lend`), counted over the viewport's life.
     lent_taken: u64,
+    /// The pane moves that menu, palette or automation fires of `NavCommand` asked for: `true` is forward.
+    fired_panes: Vec<bool>,
+    /// A menu, palette or automation fire of `NavCommand::FocusMenuBar` asked for the menu bar.
+    fired_menu: bool,
 }
 
 fn with<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(&mut Stage) -> R) -> R {

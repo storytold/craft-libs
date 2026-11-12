@@ -3,13 +3,15 @@
 
 use super::{
     CommandChain, CommandGate, CommandInput, CommandScope, CommandSet, CommandState, EditCommands, FirePhase, FireSource, Fired, ResolvedCommand,
-    registry,
+    WindowShortcut, registry,
 };
 use crate::runtime::egui::{pass, repaint};
 use crate::runtime::pass_state;
 use crate::runtime::{focus, keys, sampler};
 use craft_behavior::{EditCommand, pick_instance, resolve_flags};
-use craft_keymap::{Active, Chord, CommandKind, CommandRef, Keymap, Lookup, Matcher, ModalRule, Overrides, Platform, Press, Scopes};
+use craft_keymap::{
+    Active, Chord, CommandDef, CommandKind, CommandRef, Keymap, Lookup, Matcher, ModalRule, Overrides, Platform, Press, Scopes, Trigger,
+};
 use egui::{Context, Id, ViewportId};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -41,6 +43,8 @@ struct KeymapCache {
     /// The chords bound to the edit commands, which the input hook removes from the raw input when the focused
     /// component lists the command.
     edit_chords: Arc<[(EditCommand, Chord)]>,
+    /// The chords bound to the window's keys, which the input hook takes before any component.
+    window_shortcuts: Arc<[(WindowShortcut, Chord)]>,
 }
 
 /// A momentary command whose key is down: its release fires the command again.
@@ -288,10 +292,28 @@ pub(crate) fn install(ctx: &Context) -> Result<(), registry::CommandDefError> {
     Ok(())
 }
 
-/// A keymap and the chords it binds to the edit commands.
-type BuiltKeymap = (Arc<Keymap>, Arc<[(EditCommand, Chord)]>);
+/// A keymap with the chords it binds to the edit commands and to the window's keys.
+#[derive(Clone)]
+struct BuiltKeymap {
+    keymap: Arc<Keymap>,
+    edit_chords: Arc<[(EditCommand, Chord)]>,
+    window_shortcuts: Arc<[(WindowShortcut, Chord)]>,
+}
 
-/// The keymap of `registry` on `platform` under `overrides`, and the chords it binds to the edit commands.
+/// The keymap of `defs` on `platform` under `overrides`.
+fn keymap_of(defs: Vec<CommandDef>, scopes: Scopes, platform: Platform, overrides: Option<&Arc<Overrides>>) -> Keymap {
+    let mut keymap = Keymap::new(defs, scopes, platform);
+    if let Some(overrides) = overrides {
+        keymap.set_overrides((**overrides).clone());
+    }
+    keymap
+}
+
+/// The keymap of `registry` on `platform` under `overrides`, and the chords it binds to the edit commands and to the
+/// window's keys.
+///
+/// A window shortcut's default chord that another command also binds is that command's: the window shortcut loses it, so the
+/// app's binding beats the framework's default. A window shortcut the overrides name keeps what they give it.
 fn build_keymap(registry: &registry::Registry, platform: Platform, overrides: Option<&Arc<Overrides>>) -> BuiltKeymap {
     let mut scopes = Scopes::new();
     for def in registry.defs() {
@@ -299,10 +321,31 @@ fn build_keymap(registry: &registry::Registry, platform: Platform, overrides: Op
             scopes = scopes.with_panel(def.scope.as_str());
         }
     }
-    let mut keymap = Keymap::new(registry.defs_for(platform), scopes, platform);
-    if let Some(overrides) = overrides {
-        keymap.set_overrides((**overrides).clone());
+    let mut defs = registry.defs_for(platform);
+    let mut keymap = keymap_of(defs.clone(), scopes.clone(), platform, overrides);
+    let overridden = |def: &CommandDef| overrides.is_some_and(|overrides| overrides.get(&def.command.id).is_some());
+    let yielded: Vec<(CommandRef, Trigger)> = defs
+        .iter()
+        .filter(|def| WindowShortcut::of(&def.command).is_some() && !overridden(def))
+        .flat_map(|def| keymap.conflicts_with(&def.command))
+        .filter(|conflict| WindowShortcut::of(&conflict.b.0).is_none())
+        .map(|conflict| (conflict.a.0, conflict.chord))
+        .collect();
+    if !yielded.is_empty() {
+        for def in &mut defs {
+            def.defaults
+                .retain(|binding| !yielded.iter().any(|(command, chord)| *command == def.command && binding.trigger.effective(platform) == *chord));
+        }
+        keymap = keymap_of(defs, scopes, platform, overrides);
     }
+    let window_shortcuts = registry
+        .defs()
+        .iter()
+        .filter_map(|def| WindowShortcut::of(&def.command).map(|key| (key, &def.command)))
+        .flat_map(|(key, command)| {
+            keymap.bindings(command).into_iter().filter(|binding| !binding.trigger.double).map(move |binding| (key, binding.trigger.chord))
+        })
+        .collect();
     let edit_chords = registry
         .defs()
         .iter()
@@ -311,7 +354,7 @@ fn build_keymap(registry: &registry::Registry, platform: Platform, overrides: Op
             keymap.bindings(command).into_iter().filter(|binding| !binding.trigger.double).map(move |binding| (edit, binding.trigger.chord))
         })
         .collect();
-    (Arc::new(keymap), edit_chords)
+    BuiltKeymap { keymap: Arc::new(keymap), edit_chords, window_shortcuts }
 }
 
 /// The keymap of the shared registry on each platform with no overrides. It depends on nothing else, so every
@@ -373,8 +416,8 @@ pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
                 }
         });
         if stale {
-            let (keymap, edit_chords) = keymap_for(&board.registry, platform, input.overrides.as_ref());
-            board.keymap = Some(KeymapCache { keymap, platform, overrides: input.overrides.clone(), edit_chords });
+            let BuiltKeymap { keymap, edit_chords, window_shortcuts } = keymap_for(&board.registry, platform, input.overrides.as_ref());
+            board.keymap = Some(KeymapCache { keymap, platform, overrides: input.overrides.clone(), edit_chords, window_shortcuts });
         }
     });
 }
@@ -383,6 +426,11 @@ pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
 /// focused component lists the command.
 pub(crate) fn edit_chords(ctx: &Context) -> Arc<[(EditCommand, Chord)]> {
     with(ctx, |board| board.keymap.as_ref().map(|cache| Arc::clone(&cache.edit_chords)).unwrap_or_default())
+}
+
+/// The chords bound to the window's keys, which the input hook takes before any component.
+pub(crate) fn window_shortcuts(ctx: &Context) -> Arc<[(WindowShortcut, Chord)]> {
+    with(ctx, |board| board.keymap.as_ref().map(|cache| Arc::clone(&cache.window_shortcuts)).unwrap_or_default())
 }
 
 /// The app-scope commands fired since the last call.

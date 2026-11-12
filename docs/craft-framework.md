@@ -150,9 +150,9 @@ An app with its own eframe `App` calls the hooks in `craft::ui::shell::embed`. `
 | What | Effect on the app's own egui code |
 | --- | --- |
 | Tab | Bare Tab moves framework focus and never reaches egui, unless the focused framework stop keeps Tab or an app's own widget has the focus (below). With `RootEnv::tab_toggles_chrome`, Tab toggles the chrome in a window that shows a document canvas, with nothing focused or the canvas focused, and arrives in `FrameOutput::chrome_toggles`. The canvas is a framework canvas, or the app's own egui canvas declared each pass with `ui::runtime::focus::host_canvas`. |
-| F6 | F6 and Shift+F6 move between panes and never reach egui. |
+| F6 | F6 and Shift+F6 move between panes and never reach egui. They are the defaults of the commands `window.nextPane` and `window.previousPane` (`NavCommand`): a default chord that another command binds is that command's, and the overrides move or unbind them (`CommandInput::overrides`). An app whose own shortcut table keeps F6 unbinds them there. |
 | Escape | Plain Escape (Alt and Shift may be held) goes to the focused framework stop and its scopes; with no framework stop focused, it goes to the window as `Intent::Cancel`. It reaches egui only while an app's own widget has the focus (below). |
-| F10, Alt+letter | Taken while a framework menu bar is registered: F10 focuses the bar, Alt+letter opens a menu (not on macOS). |
+| F10, Alt+letter | Taken while a framework menu bar is registered: F10 (`window.focusMenuBar`, bound and yielded as F6 is) focuses the bar, Alt+letter opens a menu (not on macOS). |
 | Edit chords | Taken while a framework editor is focused. Otherwise egui's copy, cut and paste events become the ⌘C/X/V chord for the app's commands, unless an app's own widget has the focus (below). While egui holds a label text selection, copy and cut stay egui's, and egui copies the selection. |
 | IME | Taken while a framework editor owns the IME: its events and `PlatformOutput.ime` are the runtime's. Otherwise they stay egui's, for the app's own `TextEdit` or IME code. |
 | An app's own focused widget | While egui focus is on a widget no framework component made, or an egui popup is open, and no framework press or drag is captured, Tab, Shift+Tab, Escape and egui's clipboard events stay in egui's input for it, and the runtime routes nothing for them. |

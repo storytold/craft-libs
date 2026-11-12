@@ -1,5 +1,6 @@
 //! Trials of the keys and presses a host's own egui widgets keep while the runtime is installed on the whole window.
 
+use crate::runtime::commands::{CommandInput, CommandSet as _, EditCommands, NavCommand};
 use crate::runtime::drag::{self, DragPreview};
 use crate::runtime::egui::fixture;
 use crate::runtime::env::RootEnv;
@@ -32,7 +33,7 @@ struct Host {
     start_drag: bool,
 }
 
-const WATCHED: [Key; 2] = [Key::Tab, Key::Escape];
+const WATCHED: [Key; 3] = [Key::Tab, Key::Escape, Key::F6];
 
 /// What the host saw since the last call: the keys that reached egui and the window cancels it took.
 fn seen(host: &RefCell<Host>) -> (Vec<Key>, usize) {
@@ -211,4 +212,30 @@ fn a_host_canvas_marks_the_window_and_tab_toggles_its_panels() {
         (Vec::new(), true),
         "a focused canvas that keeps Tab gets it from egui"
     );
+}
+
+/// What an F6 press did under `overrides`: whether it reached egui, and the ids of the commands it fired.
+fn f6_under(overrides: Option<craft_keymap::Overrides>) -> (bool, Vec<String>) {
+    let (host, mut show) = host_window();
+    let mut frames = Frames::new();
+    if let Some(overrides) = overrides {
+        frames.commands(CommandInput::new().overrides(Arc::new(overrides)));
+    }
+    frames.frame(Vec::new(), &mut show);
+    take_output(&frames.ctx);
+    seen(&host);
+    press_key(&mut frames, &mut show, Key::F6);
+    let fired = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect();
+    (seen(&host).0.contains(&Key::F6), fired)
+}
+
+#[trial]
+fn an_app_binding_on_f6_beats_the_pane_move() {
+    assert_eq!(f6_under(None), (false, Vec::new()), "by default F6 is the window's pane move");
+    let mut bound = craft_keymap::Overrides::default();
+    bound.insert(EditCommands::Delete.id(), vec!["F6".to_owned()]);
+    assert_eq!(f6_under(Some(bound)), (true, vec![EditCommands::Delete.id().to_owned()]), "a command bound to F6 takes it");
+    let mut unbound = craft_keymap::Overrides::default();
+    unbound.insert(NavCommand::NextPane.id(), Vec::new());
+    assert_eq!(f6_under(Some(unbound)), (true, Vec::new()), "with the pane move unbound, F6 is egui's");
 }

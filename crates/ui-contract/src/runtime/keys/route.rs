@@ -1,7 +1,7 @@
 //! The begin hook's routing: key presses, shortcuts and AccessKit requests to the intents of their owners.
 
 use super::input::chrome_toggle_of;
-use super::{Batch, Item, Node, Press, Routed, Shortcuts, Taken, current, with};
+use super::{Batch, Item, MenuKey, Node, Press, Routed, Shortcuts, Taken, current, with};
 use crate::runtime::commands::{self, FirePhase};
 use crate::runtime::egui::input::{Action, ActionKind};
 use crate::runtime::focus::{self, StopRec};
@@ -137,6 +137,9 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> bool {
         stage.claimed = claimed;
         stage.activated = activated;
         stage.menu = batch.menu;
+        if std::mem::take(&mut stage.fired_menu) {
+            stage.menu.push(MenuKey::Focus);
+        }
         stage.shortcuts = shortcuts;
         if !stage.shortcuts.keys.is_empty() {
             stage.shortcuts.layout = stage.layout.clone();

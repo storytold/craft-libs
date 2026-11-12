@@ -329,8 +329,9 @@ pub(crate) fn in_pass(ctx: &Context) -> bool {
 pub fn take_output(ctx: &Context) -> FrameOutput {
     let mut output = pass_state::with::<FrameState, _>(ctx, |state| std::mem::take(&mut state.output));
     output.fired = commands::take_fired(ctx);
-    // The menu, palette and automation fires of the chrome commands reach the app as ordinary fires with no window: the
-    // focused window's shell takes them in the next pass. A key fire already wrote its toggle in the key stage.
+    // The menu, palette and automation fires of the chrome and nav commands reach the app as ordinary fires with no
+    // window: the focused window's shell takes a toggle, and its focus service a pane move, in the next pass. A key fire
+    // already acted in the key stage.
     let focused = crate::runtime::egui::viewports::reported(ctx).into_iter().find(|(_, facts)| facts.focused).map(|(viewport, _)| viewport);
     for fired in &output.fired {
         if fired.source == commands::FireSource::Key {
@@ -338,6 +339,9 @@ pub fn take_output(ctx: &Context) -> FrameOutput {
         }
         if let (Some(command), Some(viewport)) = (commands::ChromeCommand::from_ref(&fired.command), focused) {
             queue_toggle(ctx, viewport, command.toggle());
+        }
+        if let (Some(command), Some(viewport)) = (commands::NavCommand::from_ref(&fired.command), focused) {
+            keys::queue_nav(ctx, viewport, command);
         }
     }
     output

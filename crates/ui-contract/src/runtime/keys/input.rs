@@ -2,7 +2,7 @@
 
 use super::route::layout_of;
 use super::{AltTrack, Batch, MenuKey, NavKeys, Press, Shortcut, TabPress, current, with};
-use crate::runtime::commands::{self, ChromeCommand, EditCommands, FirePhase};
+use crate::runtime::commands::{self, EditCommands, FirePhase, NavCommand, WindowShortcut};
 use crate::runtime::egui::input::{self as raw_input, KeyEvent, RawInput};
 use crate::runtime::env::Env;
 use crate::runtime::focus::{self, EndKey, KeyUse};
@@ -12,7 +12,7 @@ use crate::runtime::sampler;
 use craft_behavior::{EditCommand, OwnerClass};
 use craft_host::target::Os;
 use craft_keymap::{Chord, Key, KeyInput, Layout, Mods};
-use egui::Context;
+use egui::{Context, ViewportId};
 use std::sync::Arc;
 
 /// What the strip of one event decided.
@@ -27,6 +27,8 @@ struct Strip<'a> {
     edits: &'a dyn Fn(EditCommand) -> bool,
     /// The chords bound to the edit commands.
     edit_chords: &'a [(EditCommand, Chord)],
+    /// The chords bound to the window's keys (`commands::window_shortcuts`).
+    window_shortcuts: &'a [(WindowShortcut, Chord)],
     menu_bar: bool,
     /// A dialog keeps a canvas open and Space belongs to it: the press is the canvas's momentary command chord.
     canvas_space: bool,
@@ -160,6 +162,12 @@ impl Strip<'_> {
         let escape = key == Key::Escape && !mods.cmd && !mods.ctrl && !(self.records && !mods.is_none());
         let mnemonic = self.menu_bar && self.os != Os::Mac && mods == Mods::ALT && key.is_letter();
         let edit = self.edit_chords.iter().find(|(command, chord)| (self.edits)(*command) && self.layout.matches(chord, input, self.os));
+        // The chrome keys are Tab's, which the bare-Tab arm and `take_nav` read.
+        let window_shortcut = self
+            .window_shortcuts
+            .iter()
+            .find(|(key, chord)| !matches!(key, WindowShortcut::Chrome(_)) && self.layout.matches(chord, input, self.os))
+            .map(|(key, _)| *key);
         if let Some(chord) = claimed {
             batch.claimed.push(*chord);
             false
@@ -182,13 +190,13 @@ impl Strip<'_> {
         } else if ctrl_tab {
             batch.presses.push(Press { key, mods, repeat });
             false
-        } else if key == Key::F6 && (mods.is_none() || mods == Mods::SHIFT) {
-            batch.nav.panes.push(!mods.shift);
+        } else if let Some(WindowShortcut::Pane { forward }) = window_shortcut {
+            batch.nav.panes.push(forward);
             false
         } else if escape {
             batch.escapes += 1;
             false
-        } else if key == Key::F10 && mods.is_none() && self.menu_bar {
+        } else if window_shortcut == Some(WindowShortcut::MenuBar) && self.menu_bar {
             batch.menu.push(MenuKey::Focus);
             false
         } else if mnemonic {
@@ -225,11 +233,11 @@ fn tab_toggles_chrome(enabled: bool, canvas: bool, layer: overlay::LayerKeys, fo
 pub(super) fn chrome_toggle_of(ctx: &Context, input: &KeyInput) -> Option<ChromeToggle> {
     let os = crate::runtime::windows::os_of(ctx);
     let layout = layout_of(ctx);
-    ChromeCommand::ALL.into_iter().find_map(|command| {
-        let resolved = commands::resolve(ctx, command);
-        let chord = resolved.chord?;
-        (resolved.enabled && layout.matches(&chord, input, os)).then_some(command.toggle())
-    })
+    let command = commands::window_shortcuts(ctx).iter().find_map(|(key, chord)| match key {
+        WindowShortcut::Chrome(command) if layout.matches(chord, input, os) => Some(*command),
+        _ => None,
+    })?;
+    commands::resolve(ctx, command).enabled.then_some(command.toggle())
 }
 
 /// The input hook's key steps (H3). Reads only `RawInput` and records keyed by `input.viewport_id`. Returns
@@ -258,6 +266,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
     } else {
         Arc::default()
     };
+    let window_shortcuts = commands::window_shortcuts(ctx);
     let latin = input.latin_layout_chars.clone();
     let (batch, visible) = with(ctx, viewport, |stage| {
         let mut claims = record.claims.clone();
@@ -279,6 +288,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
             claims: &claims,
             edits: &edits,
             edit_chords: &edit_chords,
+            window_shortcuts: &window_shortcuts,
             menu_bar,
             canvas_space: hole.as_ref().is_some_and(|hole| hole.space || hole.space_pressed),
             foreign: record.foreign,
@@ -337,7 +347,11 @@ pub fn down(ctx: &Context) -> Vec<Key> {
 /// command's toggle for the running viewport; any other Tab moves focus. A repeat of a toggling press is dropped: it
 /// neither toggles again nor moves focus.
 pub(crate) fn take_nav(ctx: &Context) -> NavKeys {
-    let (mut nav, tabs) = current(ctx, |stage| (std::mem::take(&mut stage.batch.nav), std::mem::take(&mut stage.batch.tabs)));
+    let (mut nav, tabs) = current(ctx, |stage| {
+        let mut nav = std::mem::take(&mut stage.batch.nav);
+        nav.panes.append(&mut stage.fired_panes);
+        (nav, std::mem::take(&mut stage.batch.tabs))
+    });
     if tabs.is_empty() {
         return nav;
     }
@@ -355,6 +369,17 @@ pub(crate) fn take_nav(ctx: &Context) -> NavKeys {
         }
     }
     nav
+}
+
+/// Queues what a menu, palette or automation fire of `command` asks of `viewport`: a pane move, or the menu bar's
+/// focus, in its next pass. A key fire moved already in the key stage.
+pub(crate) fn queue_nav(ctx: &Context, viewport: ViewportId, command: NavCommand) {
+    with(ctx, viewport, |stage| match command {
+        NavCommand::NextPane => stage.fired_panes.push(true),
+        NavCommand::PreviousPane => stage.fired_panes.push(false),
+        NavCommand::FocusMenuBar => stage.fired_menu = true,
+    });
+    crate::runtime::egui::repaint::request_of(ctx, viewport);
 }
 
 /// The menu-bar keys of the pass (spec 9.7).

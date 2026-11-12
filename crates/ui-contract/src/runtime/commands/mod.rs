@@ -9,7 +9,8 @@ pub use clipboard::{ClipContent, ClipError, ClipItem, ClipboardHandle};
 pub use craft_behavior::EditCommand;
 pub use craft_keymap::{Binding, CommandDef, CommandKind, CommandRef, CommandScope, ModalRule, Platform};
 pub use library::ChromeCommand;
-pub use library::{EditCommands, WindowCommand};
+pub(crate) use library::WindowShortcut;
+pub use library::{EditCommands, NavCommand, WindowCommand};
 pub use registry::CommandDefError;
 #[doc(hidden)]
 pub use registry::{SetEntry, sets};
@@ -22,7 +23,9 @@ pub(crate) use board::publish as publish_for;
 pub(crate) use board::take as take_for_instance;
 #[doc(hidden)]
 pub use board::take_around;
-pub(crate) use board::{begin, binds_scoped, edit_chords, end, install, note_focus, platform, register_instance, set_input, take_fired};
+pub(crate) use board::{
+    begin, binds_scoped, edit_chords, end, install, note_focus, platform, register_instance, set_input, take_fired, window_shortcuts,
+};
 pub(crate) use board::{fire_bound, fire_resolved, resolve_bound, resolve_scoped};
 
 use craft_behavior::CommandFlags;
