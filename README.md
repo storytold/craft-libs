@@ -190,6 +190,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-audio`](crates/audio/README.md): audio file I/O and codecs (WAV, AIFF, FLAC, AAC, Opus,
   AC-3/E-AC-3, MP1/MP2, MP3 encoding), streaming and seeking, and packet decoding for any demuxer. See its
   README for formats and features.
+- [`craft-markdown`](crates/markdown/README.md): Markdown read and written (a CommonMark subset with GitHub tables and strikethrough), to and from the craft-flow model.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
   (`isobmff`), Matroska/WebM (`matroska`) and MXF (`mxf`) demuxers and muxers, Ogg (`ogg`), AVI (`avi`) and
   MPEG-TS/PS (`mpegts`) demuxers, from FilmCraft, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and

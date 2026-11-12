@@ -1255,6 +1255,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-markdown"
+version = "0.1.0"
+dependencies = [
+ "craft-flow",
+ "craft-html",
+ "craft-wordmodel",
+]
+
+[[package]]
 name = "craft-media"
 version = "0.1.0"
 dependencies = [
