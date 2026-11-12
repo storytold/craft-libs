@@ -1882,7 +1882,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::Common`: `pub struct Common { pub label: Label, pub tooltip: Option<Tooltip>, pub description: Option<String>, pub selected: Option<bool> }`. What every component carries: the props the pipeline reads at step 1.
   - `pub const fn new() -> Common`. A `Common` with every prop unset, which the derive's constructors start from.
 - `craft_ui::contract::Component`: re-export of `craft_ui_macros::Component` (outside these crates).
-- `craft_ui::contract::ContainerProps`: `pub struct ContainerProps { pub mount: Mount, pub surface: Option<SurfaceKind>, pub pad: Pad, pub sizing: Sizing, pub room_height: Option<f32>, pub layout: BodyLayout, pub header: Option<HeaderRegion>, pub scroll: Option<Scroll>, pub footer: Option<FooterRegion>, pub end: Option<EndRegion>, pub help: Option<Label>, pub position: Option<SetPosition>, pub focus: FocusPolicy, pub collapse: Option<Collapse>, pub body_gap: Gap, pub least_width: Option<LeastWidth>, pub edge_rule: bool, pub child_size: Option<ControlSize>, pub child_glyphs: Option<GlyphRole>, pub arena: bool, pub scroll_owner: bool, pub gates: bool, pub transform: Option<CanvasTransform>, pub theme: Option<ThemeScope>, pub command_scope: Option<CommandScope>, pub live: Option<Politeness>, pub label: Option<SideLabel>, pub roving: Option<Roving>, pub save: Option<SaveKey>, pub outer_edit: bool, pub collection_body: bool, pub label_column: bool, pub labels: Option<LabelScheme> }`. What a container or collection adds to `Common`. A builder added here is added to the forwarder list in
+- `craft_ui::contract::ContainerProps`: `pub struct ContainerProps { pub mount: Mount, pub surface: Option<SurfaceKind>, pub pad: Pad, pub sizing: Sizing, pub room_height: Option<f32>, pub layout: BodyLayout, pub header: Option<HeaderRegion>, pub scroll: Option<Scroll>, pub footer: Option<FooterRegion>, pub end: Option<EndRegion>, pub help: Option<Label>, pub position: Option<SetPosition>, pub focus: FocusPolicy, pub collapse: Option<Collapse>, pub body_gap: Gap, pub least_width: Option<LeastWidth>, pub wrap_width: Option<WrapWidth>, pub edge_rule: bool, pub child_size: Option<ControlSize>, pub child_glyphs: Option<GlyphRole>, pub arena: bool, pub scroll_owner: bool, pub gates: bool, pub transform: Option<CanvasTransform>, pub theme: Option<ThemeScope>, pub command_scope: Option<CommandScope>, pub live: Option<Politeness>, pub label: Option<SideLabel>, pub roving: Option<Roving>, pub save: Option<SaveKey>, pub outer_edit: bool, pub collection_body: bool, pub label_column: bool, pub labels: Option<LabelScheme> }`. What a container or collection adds to `Common`. A builder added here is added to the forwarder list in
   - `pub const fn new() -> Self`. Props with every field at its default.
   - `pub fn mount(mut self, mount: Mount) -> Self`. Where the container lives.
   - `pub const fn surface(mut self, surface: SurfaceKind) -> Self`. The surface the container paints.
@@ -1901,6 +1901,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const fn collapse(mut self, collapse: Collapse) -> Self`. Collapse configuration.
   - `pub const fn body_gap(mut self, gap: Gap) -> Self`. The spacing between the children of the body.
   - `pub const fn least_width(mut self, least: LeastWidth) -> Self`. The least width of the content, from a size role.
+  - `pub const fn wrap_width(mut self, wrap: WrapWidth) -> Self`. The line length of the body's paragraphs while the container takes its width from its content, from a size role.
   - `pub const fn edge_rule(mut self, on: bool) -> Self`. Draws a divider along the inner edge of the edge pane the container sits in.
   - `pub const fn child_size(mut self, size: ControlSize) -> Self`. A scope size for the body.
   - `pub const fn child_glyphs(mut self, role: GlyphRole) -> Self`. A scope glyph role for the body: a rail's buttons show its icons at the rail's side and ink.
@@ -2094,7 +2095,8 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn show<R>(self, ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> Option<R>`. Runs `add` in a child `Ui` placed in flow in `ui`, or takes the remembered extent there; `None` when it did not
 - `craft_ui::contract::LeadOnOpen`: `pub enum LeadOnOpen { Selected, First }`. Where the lead starts when the collection first shows rows.
 - `craft_ui::contract::LeadSource`: `pub enum LeadSource { Keys, Pointer }`. What moved the lead.
-- `craft_ui::contract::LeastWidth`: `pub enum LeastWidth { Popup }`. A size role that sets the least width of a container's content.
+- `craft_ui::contract::LeastWidth`: `pub enum LeastWidth { Popup, Dialog, DialogButton, DialogSideButton }`. A size role that sets the least width of a container's content or of a button.
+  - `pub fn points(self, tokens: &craft_theme::Tokens) -> f32`. The width the role names in `tokens`.
 - `craft_ui::contract::ListDrag`: `pub struct ListDrag<K> { pub list: Id, pub keys: Vec<K>, pub grabbed: K }`. What a row drag carries through the drag session (8.4).
   - `pub fn new(list: Id, keys: Vec<K>, grabbed: K) -> Self`. A drag of `keys` from `list`, grabbed at `grabbed`.
 - `craft_ui::contract::Looks`: `pub struct Looks`. Only apps write `Looks`: a replacement for one component type's style function, keyed by its `StyleKey`.
@@ -2372,6 +2374,8 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `fn label(&self) -> Label`. The label as given, a cheap clone.
   - `fn words<L: WordSet + Send + Sync + 'static>(&self) -> Arc<L>`. The word set `L` in the language of the scope; built once per installed `Words`.
   - `fn format(&self) -> &Format`. How the scope writes numbers: locale digits, separators and grouping.
+- `craft_ui::contract::WrapWidth`: `pub enum WrapWidth { Dialog }`. A size role that sets the line length of the paragraphs in a container whose width comes from its content: a
+  - `pub fn points(self, tokens: &craft_theme::Tokens) -> f32`. The width the role names in `tokens`.
 - `craft_ui::contract::announce`: `pub fn announce(ctx: &Context, text: impl Into<String>, politeness: Politeness)`. Announces `text`; for code without a context. Components call `cx.announce`. The same announcement made again
 - `craft_ui::contract::clicked`: `pub fn clicked(response: &Response) -> bool`. Whether `response` reports a click, by pointer or by keyboard activation.
 - `craft_ui::contract::item_part_open`: `pub fn item_part_open(ctx: &Context, item: Id, part: impl Into<craft_behavior::PartRef>) -> bool`. Whether a menu or popover hung from the part `part` of the item `item` (`ItemCx::part_opener`) is open: an item
