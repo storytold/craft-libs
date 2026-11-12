@@ -66,15 +66,30 @@ pub(super) fn hidden_control(ctx: &egui::Context, input: &LabelIn<'_>, flow: Flo
     }
 }
 
+/// How far a control with its label after it (a check box row) starts from its row's start. Under a form whose
+/// labelled rows share a label column, a leaf row of the column's flow starts past the column and the gap, so its
+/// control lines up with theirs, when the row has room for the column, the gap and the control; 0 elsewhere. An
+/// inspector's check rows stay at the row's start.
+fn after_indent(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, gap: f32) -> f32 {
+    if input.side.layout != FieldLayout::After || !input.in_column || env.values.get::<LabelScheme>() != LabelScheme::Form {
+        return 0.0;
+    }
+    match crate::layout::ambient_width(ctx, &crate::layout::LABELS, 0.0).filter(|column| *column > 0.0) {
+        Some(column) if input.room >= column + gap + input.control_min => column + gap,
+        _ => 0.0,
+    }
+}
+
 /// Decides where the label and the control of `input` sit, from `input.control_min`, `input.room` and the group's
 /// label column. Shows and records nothing.
 pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: &Ui, leaf: &mut LabelLeaf, glyph: bool, flow: Flow) -> Placed {
     let rtl = env.direction.is_rtl();
     let gap = label_gap(env);
+    let indent = after_indent(ctx, env, input, gap);
     let mut natural = leaf.measure_in(kids, craft_behavior::Proposal::Ideal);
     if input.side.layout == FieldLayout::After {
         // The label takes the room the control and the gap leave, and its detail wraps there.
-        let room = (input.row.width() - input.control_min - gap).max(0.0);
+        let room = (input.row.width() - indent - input.control_min - gap).max(0.0);
         if natural.x > room {
             natural = leaf.measure_in(kids, craft_behavior::Proposal::Width(room));
         }
@@ -125,6 +140,7 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
     };
 
     if input.side.layout == FieldLayout::After {
+        let flow = if indent > 0.0 { flow.take_start(indent).1 } else { flow };
         place_after(ctx, input, flow, gap, natural, baseline, leaf.first_line.get())
     } else {
         let placed = crate::layout::place_label(

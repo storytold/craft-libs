@@ -753,6 +753,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 size: resolved.size,
                 control_min: scope::measured_control_min(&ctx, id),
                 leaf: false,
+                in_column: false,
                 claims: false,
                 status: props.footer.is_some_and(|footer| footer.status),
                 trailing: Vec2::ZERO,

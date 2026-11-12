@@ -466,14 +466,16 @@ pub(super) enum LabelColumns {
 }
 
 impl LabelColumns {
-    /// The part `props`'s body takes. A labelled container's body is its field's control, whose labels stay its own; a
-    /// body on a mount of its own (a popup, a dialog, a pane), one with a scroll region (a view of its own, as a bar's)
-    /// and a grid (whose columns align its cells) lay out apart. Every other body (a section, a box, a stack, a row)
+    /// The part `props`'s body takes. A labelled container's body is its field's control, whose labels stay its own, as
+    /// is a roving group's (one control over its members: a radio group); a body on a mount of its own (a popup, a
+    /// dialog, a pane), one with a scroll region (a view of its own, as a bar's) and a grid (whose columns align its
+    /// cells) lay out apart. Every other body (a section, a box, a stack, a row)
     /// passes the group through.
     pub(super) fn of(props: &ContainerProps, sized: bool) -> Self {
         if props.label_column {
             LabelColumns::Own
         } else if props.label.is_some()
+            || props.roving.is_some()
             || props.mount != Mount::Inline
             || props.scroll.is_some()
             || matches!(props.layout, crate::layout::BodyLayout::Grid { .. })

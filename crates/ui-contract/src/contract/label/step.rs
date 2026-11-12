@@ -42,6 +42,9 @@ pub(crate) struct LabelIn<'a> {
     pub control_min: f32,
     /// The control is a leaf child shown in the flow with its label after it, not a field's body.
     pub leaf: bool,
+    /// The leaf is a row of a vertical flow, not a member of a row's line: under a form's label column, a control with
+    /// its label after it starts in the control column.
+    pub in_column: bool,
     /// The leaf child draws only its mark (`Component::LABELLED_AFTER`): the label is part of its hit target.
     pub claims: bool,
     /// The container shows its control's validity message as its status line (`FooterRegion::status`).
@@ -125,6 +128,7 @@ pub(crate) fn leaf<C: Show>(ui: &mut Ui, env: &Env, at: &LeafLabel<'_>, child: &
         size: at.under.size,
         control_min,
         leaf: true,
+        in_column: !ui.layout().is_horizontal(),
         claims: C::LABELLED_AFTER,
         status: false,
         trailing: trailing.as_ref().map_or(Vec2::ZERO, |trailing| trailing.size),
@@ -260,6 +264,13 @@ pub(crate) fn flow_leaf<C: Show>(
     if content && ui.is_sizing_pass() && side.layout == FieldLayout::Beside && placed.label.bottom() > placed.control.top() {
         let column = if matches!(side.kind, LabelKind::Glyph(_)) { crate::layout::GLYPHS } else { crate::layout::LABELS };
         crate::layout::report_beyond(ui.ctx(), std::slice::from_ref(&column), label_gap(&env) + control_width);
+    }
+    // A control with its label after it that the label step moved into the control column reaches past the column by
+    // the gap, the control and the label.
+    let indent = if rtl { avail.max.x - control.max.x } else { control.min.x - avail.min.x };
+    if content && ui.is_sizing_pass() && side.layout == FieldLayout::After && indent > 0.0 {
+        let column = indent - label_gap(&env);
+        crate::layout::report_beyond(ui.ctx(), std::slice::from_ref(&crate::layout::LABELS), extent - column);
     }
     // The child runs under the inside label its measures saw.
     let installed = under.inside.clone().map(|inside| Env::install_for(ui, env.derive_local(|scoped| scoped.inside_label = Some(inside))));
