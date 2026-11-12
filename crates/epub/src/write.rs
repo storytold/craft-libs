@@ -3,7 +3,6 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fmt::Write as _;
-use std::io::Write as _;
 
 use craft_xml::{esc, esc_attr, is_name};
 
@@ -316,10 +315,8 @@ pub fn write(book: &Book) -> Result<Vec<u8>, Error> {
         w3cdtf(&book.metadata.modified).ok_or_else(|| Error::Invalid(format!("`{}` is not a modification date", book.metadata.modified)))?;
     let opf = package_document(book, &modified);
     let nav = nav_document(book);
-    let fail = |e: &dyn std::fmt::Display| Error::Invalid(format!("the archive could not be written: {e}"));
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    let deflated = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let fail = |e: craft_zip::Error| Error::Invalid(e.to_string());
+    let mut z = craft_zip::Writer::new();
     let own = [
         ("mimetype".to_string(), MIMETYPE.as_bytes(), true),
         ("META-INF/container.xml".to_string(), CONTAINER.as_bytes(), false),
@@ -328,10 +325,7 @@ pub fn write(book: &Book) -> Result<Vec<u8>, Error> {
     ];
     let resources = book.resources.iter().map(|r| (format!("{ROOT}/{}", r.path), r.data.as_ref(), r.stored));
     for (name, data, store) in own.into_iter().chain(resources) {
-        // More than 4 GiB needs the ZIP64 form.
-        let options = if store { stored } else { deflated }.large_file(data.len() >= u32::MAX as usize);
-        z.start_file(name, options).map_err(|e| fail(&e))?;
-        z.write_all(data).map_err(|e| fail(&e))?;
+        z.add(&name, data, if store { craft_zip::Compression::Stored } else { craft_zip::Compression::Deflated }).map_err(fail)?;
     }
-    z.finish().map(std::io::Cursor::into_inner).map_err(|e| fail(&e))
+    z.finish().map_err(fail)
 }
