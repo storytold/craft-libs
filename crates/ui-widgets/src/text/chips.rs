@@ -23,9 +23,9 @@ use std::borrow::Cow;
 /// The characters that end a chip in typed or pasted text.
 const SEPARATORS: [char; 3] = [',', ';', '\n'];
 
-/// A chip's body: the chip's text on a pill.
+/// A chip: the chip's text on a pill, its remove part at the pill's end.
 const CHIP: PartKey = PartKey::new("chip");
-/// A chip's remove part, at the end of the chip.
+/// A chip's remove part: the square at the end of the chip's pill.
 const REMOVE: PartKey = PartKey::new("remove");
 /// The button after the shown chips that counts the hidden ones and opens their menu.
 const MORE: PartKey = PartKey::new("more");
@@ -174,9 +174,11 @@ impl<'a> ChipField<'a> {
         self.partial.as_ref().is_some_and(|partial| (partial.0)(chip))
     }
 
-    /// What chip `chip` shows: its text, with an asterisk after a partial one's.
-    fn face_text(&self, chip: &str) -> String {
-        if self.is_partial(chip) { format!("{chip}*") } else { chip.to_owned() }
+    /// The face of chip `chip`: its text, with an asterisk after a partial one's and muted then, on a pill whose end
+    /// holds the remove part.
+    fn face(&self, chip: &str) -> Badge {
+        let face = Badge::new(if self.is_partial(chip) { format!("{chip}*") } else { chip.to_owned() }).variant(Variant::SECONDARY).end_mark();
+        if self.is_partial(chip) { face.muted() } else { face }
     }
 }
 
@@ -249,9 +251,7 @@ fn place(widths: &[f32], room: f32, gap: f32, draft_min: f32) -> Placement {
 
 /// The chips measured as faces, and where they and the buttons sit.
 struct Arranged {
-    /// The width of each chip's body face.
-    bodies: Vec<f32>,
-    /// The width each shown chip wants, body and remove part.
+    /// The width each chip's face wants, its remove part included.
     wants: Vec<f32>,
     /// A chip's height, and the side of its remove part.
     side: f32,
@@ -287,8 +287,7 @@ impl Arranged {
 /// room for "+N more" in the last line, the draft's line counted.
 fn arrange(cx: &MeasureCx<'_, ChipField<'_>>, field: &ChipField<'_>, chips: &[String], room: Option<f32>) -> Arranged {
     let metrics = &cx.style.metrics;
-    let sizes: Vec<Vec2> =
-        chips.iter().enumerate().map(|(at, chip)| cx.child(("chip", at), &mut Badge::new(field.face_text(chip)), Proposal::Ideal)).collect();
+    let sizes: Vec<Vec2> = chips.iter().enumerate().map(|(at, chip)| cx.child(("chip", at), &mut field.face(chip), Proposal::Ideal)).collect();
     let words = cx.words::<ChipWords>();
     let button = |key: &'static str, text: String| cx.child(key, &mut Badge::new(text), Proposal::Ideal).x;
     // The widest count names every chip, so the button keeps its width whatever it counts.
@@ -297,7 +296,7 @@ fn arrange(cx: &MeasureCx<'_, ChipField<'_>>, field: &ChipField<'_>, chips: &[St
     let side = sizes.iter().map(|size| size.y).fold(0.0, f32::max);
     let gap = cx.gap();
     let draft_min = cx.style.draft_min;
-    let wants: Vec<f32> = sizes.iter().map(|size| size.x + side).collect();
+    let wants: Vec<f32> = sizes.iter().map(|size| size.x).collect();
     let room = room.unwrap_or_else(|| wants.iter().chain(&clear).sum::<f32>() + gap * (wants.len() + 1) as f32 + draft_min);
     let layout = |shown: usize| {
         let mut cells = wants[..shown].to_vec();
@@ -319,16 +318,7 @@ fn arrange(cx: &MeasureCx<'_, ChipField<'_>>, field: &ChipField<'_>, chips: &[St
             shown -= 1;
         }
     }
-    Arranged {
-        bodies: sizes.iter().map(|size| size.x).collect(),
-        wants,
-        side,
-        line: metrics.min_size.y.max(side),
-        gap,
-        shown,
-        clear: clear.is_some(),
-        placement,
-    }
+    Arranged { wants, side, line: metrics.min_size.y.max(side), gap, shown, clear: clear.is_some(), placement }
 }
 
 /// "+N more" for `hidden` chips, `integer` the count in the installed number format.
@@ -377,15 +367,15 @@ impl Component for ChipField<'_> {
         };
         for (at, chip) in chips.iter().enumerate().take(arranged.shown) {
             let cell = cell_rect(at);
-            let (body, remove) = Flow::new(cell, rtl).take_start(arranged.bodies[at].min(cell.width()));
-            let part = cx.part(CHIP.at(at as u64), body).sense(Sense::CLICK | Sense::FOCUS).focusable();
+            let (remove, _) = Flow::new(cell, rtl).take_end(arranged.side.min(cell.width()));
+            let part = cx.part(CHIP.at(at as u64), cell).sense(Sense::CLICK | Sense::FOCUS).focusable();
             // A chip cut to its line shows its whole text as its tooltip.
             let part = if arranged.placement.widths[at] < arranged.wants[at] { part.tooltip(Label::from(chip.clone())) } else { part };
             // The chip next to the draft is the group's arrival: Shift+Tab from the draft lands on it.
             if at + 1 == arranged.shown {
                 part.selected();
             }
-            cx.part(REMOVE.at(at as u64), remove.rect()).sense(Sense::CLICK).over().pointer_only(REMOVE_BY_KEY);
+            cx.part(REMOVE.at(at as u64), remove).sense(Sense::CLICK).over().pointer_only(REMOVE_BY_KEY);
         }
         if let Some(at) = arranged.more_cell(chips.len()) {
             cx.part(MORE, cell_rect(at)).sense(Sense::CLICK | Sense::FOCUS).focusable().toggles("more");
@@ -495,8 +485,7 @@ impl Component for ChipField<'_> {
             if cx.part_if_declared(CHIP.at(at as u64)).is_none() {
                 continue;
             }
-            let face = Badge::new(self.face_text(chip)).variant(Variant::SECONDARY);
-            ui.face(CHIP.at(at as u64), if self.is_partial(chip) { face.muted() } else { face });
+            ui.face(CHIP.at(at as u64), self.face(chip));
         }
         let words = cx.words::<ChipWords>();
         if cx.part_if_declared(MORE).is_some() {

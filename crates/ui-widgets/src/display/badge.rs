@@ -4,7 +4,7 @@ use crate::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Rol
 use crate::primitives::{TextRun, Wrap};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx, SurfaceLook, TextLook, TypeRole};
-use craft_behavior::{Insets, Metrics, Sense};
+use craft_behavior::{Flow, Insets, Metrics, Sense};
 use craft_theme::{
     Variant,
     variant::{Emphasis, Tone},
@@ -61,18 +61,30 @@ pub struct Badge {
     /// The label in the muted text colour: what only some of a selection carries (a partial chip).
     #[prop(flag)]
     muted: bool,
+    /// The pill's end holds a square as high as the pill, in place of its end padding, for a mark the host draws over
+    /// it (a chip's remove button).
+    #[prop(flag)]
+    end_mark: bool,
 }
 
 impl Badge {
     /// A neutral, soft badge showing `label`, which is also its accessible name.
     pub fn new(label: impl Into<Label>) -> Self {
-        Badge { common: Common::new(), muted: false }.label(label)
+        Badge { common: Common::new(), muted: false, end_mark: false }.label(label)
     }
 
     /// A count: `99+` above `MAX_COUNT`.
     pub fn count(n: u32) -> Self {
         let text = if n > MAX_COUNT { format!("{MAX_COUNT}+") } else { n.to_string() };
         Badge::new(Label::from_cow(Cow::Owned(text)))
+    }
+}
+
+impl Badge {
+    /// The width the end mark adds to the content `height` high: the pill's height less the end padding it replaces.
+    fn mark_room(&self, style: &BadgeStyle, height: f32) -> f32 {
+        let padding = style.metrics.padding;
+        if self.end_mark { (height + padding.top + padding.bottom - padding.end).max(0.0) } else { 0.0 }
     }
 }
 
@@ -101,7 +113,8 @@ impl Component for Badge {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        cx.layout(&TextRun::new(cx.resolved.label).role(cx.style.text.role)).size()
+        let text = cx.layout(&TextRun::new(cx.resolved.label).role(cx.style.text.role)).size();
+        Vec2::new(text.x + self.mark_room(&cx.style, text.y), text.y)
     }
 
     fn sense(&self) -> Sense {
@@ -112,8 +125,11 @@ impl Component for Badge {
         let draw = ui.draw();
         let text = if self.muted { &cx.style.muted } else { &cx.style.text };
         let run = TextRun::new(cx.resolved.label).role(text.role).color(cx.resolve(&text.color)).wrap(Wrap::Elide);
-        let layout = draw.layout(&run, cx.content_rect.width());
-        draw.galley(cx.content_rect.center() - layout.size() / 2.0, &layout);
+        let content = cx.content_rect;
+        let room = self.mark_room(&cx.style, content.height());
+        let (label, _) = Flow::new(content, cx.flow.is_rtl()).take_start((content.width() - room).max(0.0));
+        let layout = draw.layout(&run, label.width());
+        draw.galley(label.center() - layout.size() / 2.0, &layout);
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> Response {

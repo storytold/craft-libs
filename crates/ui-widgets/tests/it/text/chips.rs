@@ -82,6 +82,16 @@ mod field {
         assert!(chips(&mut fixture).is_empty(), "Clear All removes every chip");
     }
 
+    /// A chip's remove button sits inside the chip's pill, at its end.
+    #[trial]
+    fn a_chips_remove_button_sits_inside_its_pill_at_the_end() {
+        let fixture = fixture();
+        let chip = fixture.by_role(Role::LIST_ITEM)[0].rect;
+        let remove = button(&fixture, "Remove").rect;
+        assert!(chip.contains_rect(remove), "the remove button {remove:?} lies inside its chip {chip:?}");
+        assert!(remove.center().x > chip.center().x, "the remove button sits at the chip's end");
+    }
+
     /// A click on a chip is reported, and a secondary click on another chip asks for that chip's menu, not the focused
     /// one's.
     #[trial]
