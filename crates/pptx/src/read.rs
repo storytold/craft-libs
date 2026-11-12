@@ -2,6 +2,7 @@
 
 pub(crate) mod chart;
 mod shapes;
+mod timing;
 
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
@@ -1126,6 +1127,13 @@ fn read_slide(imp: &mut Imp, part: &Part, doc: &Doc, id: SlideId, layout: Layout
             let pics = shapes::controls(imp, part, &mut ctx, c);
             s.shapes.extend(pics);
         }
+    }
+    if let Some(t) = root.child(Local("transition")) {
+        s.transition = timing::transition(imp, part, t);
+    }
+    if let Some(t) = root.child(Local("timing")) {
+        s.animations = timing::animations(imp, part, &ctx, t, &s.shapes);
+        timing::media_settings(t, &ctx, &mut s.shapes);
     }
     if let Some(ext) = root.child(Local("extLst")).filter(|e| !has_rel_refs(e)) {
         s.raw_ext = Some(ext.elements().map(|e| part.keep(e)).collect());

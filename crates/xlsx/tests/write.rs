@@ -6,6 +6,7 @@ use craft_xlsx::{
     Cell, CellRef, CellValue, DefinedName, Document, Error, Font, KeptPart, Limits, Package, Range, Row, SheetEntry, SheetKind, StringItem, Styles,
     Value, Visibility, Workbook, Worksheet, XlsxKind,
 };
+use craft_xlsx::{Marker, ObjectKind, Placement};
 
 const MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const RT: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -50,7 +51,7 @@ fn excel_like() -> Vec<u8> {
     let package_rels = format!(
         r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{RT}/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>"#
     );
-    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="bin" ContentType="application/vnd.ms-office.vbaProject"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.ms-excel.sheet.macroEnabled.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/chartsheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml"/><Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/><Override PartName="/xl/comments1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>"#;
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="bin" ContentType="application/vnd.ms-office.vbaProject"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.ms-excel.sheet.macroEnabled.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/chartsheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml"/><Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/><Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/><Override PartName="/xl/comments1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>"#;
     zip(&[
         ("[Content_Types].xml", types.as_bytes()),
         ("_rels/.rels", package_rels.as_bytes()),
@@ -62,7 +63,10 @@ fn excel_like() -> Vec<u8> {
         ("xl/worksheets/sheet2.xml", format!("<worksheet {ns}><sheetData/></worksheet>").as_bytes()),
         ("xl/chartsheets/sheet1.xml", b"<chartsheet/>"),
         ("xl/theme/theme1.xml", b"<a:theme xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" name=\"Office\"/>"),
-        ("xl/drawings/drawing1.xml", b"<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\"/>"),
+        ("xl/drawings/drawing1.xml", DRAWING.as_bytes()),
+        ("xl/drawings/_rels/drawing1.xml.rels", DRAWING_RELS.as_bytes()),
+        ("xl/charts/chart1.xml", CHART.as_bytes()),
+        ("xl/media/image1.png", b"\x89PNG\r\n\x1a\n"),
         ("xl/styles.xml", styles.as_bytes()),
         ("xl/sharedStrings.xml", strings.as_bytes()),
         ("xl/calcChain.xml", b"<calcChain/>"),
@@ -74,6 +78,10 @@ fn excel_like() -> Vec<u8> {
 
 const COMMENTS: &str = "<comments xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><authors><author>Ann</author></authors><commentList><comment ref=\"B2\" authorId=\"0\" shapeId=\"0\"><text><r><rPr><b/></rPr><t>Ann:</t></r><r><t xml:space=\"preserve\">\nnote</t></r></text></comment><comment ref=\"bad\"/></commentList></comments>";
 const VML: &str = "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><o:shapelayout v:ext=\"edit\"><o:idmap v:ext=\"edit\" data=\"1\"/></o:shapelayout><v:shape id=\"_x0000_s1025\" style=\"position:absolute;width:120pt;height:60pt\"><x:ClientData ObjectType=\"Note\"><x:Anchor>2, 15, 0, 2, 4, 15, 4, 16</x:Anchor><x:Row>1</x:Row><x:Column>1</x:Column><x:Visible/></x:ClientData></v:shape></xml>";
+
+const DRAWING: &str = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><xdr:twoCellAnchor><xdr:from><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>9</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>15</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"><a:extLst><a:ext uri="{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}"><a16:creationId xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" id="{A}"/></a:ext></a:extLst></xdr:cNvPr><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor><xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>20</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="952500" cy="476250"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="3" name="Picture 2" descr="logo"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>"#;
+const DRAWING_RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/></Relationships>"#;
+const CHART: &str = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>S1</c:v></c:tx><c:cat><c:strRef><c:f>Data!$A$1:$A$2</c:f><c:strCache><c:ptCount val="2"/><c:pt idx="0"><c:v>a</c:v></c:pt><c:pt idx="1"><c:v>b</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:f>Data!$C$1:$C$2</c:f><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#;
 
 fn read(bytes: &[u8]) -> Document {
     Document::read(bytes, &Limits::default()).unwrap()
@@ -121,6 +129,7 @@ fn assert_same(a: &Document, b: &Document) {
         assert_eq!(x.part.rels.list, y.part.rels.list);
         assert_eq!(x.part.features, y.part.features);
         assert_eq!(x.notes, y.notes);
+        assert_eq!(x.drawing, y.drawing);
         assert_eq!(
             x.comments.as_ref().map(|c| (&c.authors, &c.comments, c.to_xml())),
             y.comments.as_ref().map(|c| (&c.authors, &c.comments, c.to_xml()))
@@ -139,8 +148,7 @@ fn a_workbook_round_trips() {
     assert_eq!(doc.kind, XlsxKind::MacroWorkbook);
     assert_eq!(doc.worksheets.iter().map(Option::is_some).collect::<Vec<_>>(), [true, false, true]);
     let kept: Vec<&str> = doc.parts.iter().map(|p| p.name.as_str()).collect();
-    for name in
-        ["_rels/.rels", "docProps/core.xml", "xl/theme/theme1.xml", "xl/drawings/drawing1.xml", "xl/chartsheets/sheet1.xml", "xl/vbaProject.bin"]
+    for name in ["_rels/.rels", "docProps/core.xml", "xl/theme/theme1.xml", "xl/charts/chart1.xml", "xl/chartsheets/sheet1.xml", "xl/vbaProject.bin"]
     {
         assert!(kept.contains(&name), "{name} in {kept:?}");
     }
@@ -297,6 +305,72 @@ fn features_are_edited() {
 /// part a VML drawing.
 fn doc_after(doc: &Document) -> Document {
     read(&doc.write().unwrap())
+}
+
+#[test]
+fn charts_and_pictures() {
+    let bytes = excel_like();
+    let mut doc = read(&bytes);
+    let d = doc.worksheets[0].as_ref().unwrap().drawing.clone().unwrap();
+    assert_eq!(d.part, "xl/drawings/drawing1.xml");
+    let anchors = d.drawing.anchors();
+    assert_eq!(anchors.iter().map(|a| a.kind()).collect::<Vec<_>>(), [ObjectKind::Chart, ObjectKind::Picture]);
+    assert_eq!((anchors[1].picture_rel(), anchors[1].name()), (Some("rId2"), Some("Picture 2")));
+    let chart_part = d.rels.iter().find(|r| Some(r.id.as_str()) == anchors[0].chart_rel()).map(|r| r.target.clone()).unwrap();
+    assert!(!doc.parts.iter().any(|p| p.name.starts_with("xl/drawings/drawing1")), "the drawing is not a kept part");
+
+    let mut p = Package::open(&bytes, &Limits::default()).unwrap();
+    let chart = p.chart(&chart_part).unwrap().unwrap();
+    assert_eq!(
+        (chart.series.len(), chart.series[0].values.clone(), chart.categories.clone()),
+        (1, vec![Some(1.0), Some(2.0)], vec!["a".to_string(), "b".to_string()])
+    );
+    let theme = p.theme().unwrap().unwrap();
+    assert_eq!(theme.name, "Office");
+
+    // A chart and a picture on the sheet without a drawing.
+    let at = Placement::OneCell { from: Marker { col: 1, row: 1, ..Marker::default() }, cx: 3_000_000, cy: 2_000_000 };
+    let mut fresh = chart.clone();
+    fresh.raw = None;
+    doc.add_chart(2, at.clone(), &fresh, "Chart 9").unwrap();
+    let waterfall = craft_xlsx::craft_drawingml::chart::Chart { kind: craft_xlsx::craft_drawingml::chart::ChartType::Waterfall, ..fresh.clone() };
+    doc.add_chart(2, at.clone(), &waterfall, "Waterfall").unwrap();
+    doc.add_picture(2, at, b"GIF89a".to_vec(), "gif", "small").unwrap();
+    assert!(
+        doc.add_picture(1, Placement::Absolute { x: 0, y: 0, cx: 1, cy: 1 }, vec![], "png", "").is_err(),
+        "a chart sheet has no drawing of its own here"
+    );
+    let out = doc.write().unwrap();
+    let again = read(&out);
+    assert_same(&doc_after(&doc), &again);
+    let d2 = again.worksheets[2].as_ref().unwrap().drawing.clone().unwrap();
+    assert_eq!(d2.part, "xl/drawings/drawing2.xml");
+    let kinds: Vec<_> = d2.drawing.anchors().iter().map(|a| (a.kind(), a.props().and_then(|p| p.attr_u32("id")))).collect();
+    assert_eq!(kinds, [(ObjectKind::Chart, Some(2)), (ObjectKind::Picture, Some(4))]);
+    let alternate: Vec<_> = d2.drawing.items.iter().filter_map(|i| if let craft_xlsx::Item::Other(e) = i { Some(e) } else { None }).collect();
+    let ex = craft_xlsx::Drawing::alternate_anchors(alternate[0]);
+    assert_eq!((ex[0].kind(), ex[0].name()), (ObjectKind::Chart, Some("Waterfall")));
+    let targets: Vec<&str> = d2.rels.iter().map(|r| r.target.as_str()).collect();
+    assert_eq!(targets, ["xl/charts/chart2.xml", "xl/charts/chartEx1.xml", "xl/media/image1.gif"]);
+    let mut p = Package::open(&out, &Limits::default()).unwrap();
+    assert_eq!(p.chart("xl/charts/chart2.xml").unwrap().map(|c| c.series.len()), Some(1));
+    assert_eq!(p.chart("xl/charts/chartEx1.xml").unwrap().map(|c| c.kind), Some(craft_xlsx::craft_drawingml::chart::ChartType::Waterfall));
+    let drawing = String::from_utf8(p.opc().read("xl/drawings/drawing2.xml").unwrap().unwrap()).unwrap();
+    assert!(drawing.contains(r#"Requires="cx1""#) && drawing.contains("xmlns:cx1=") && drawing.contains("<cx:chart r:id="), "{drawing}");
+    let types = String::from_utf8(p.opc().read("[Content_Types].xml").unwrap().unwrap()).unwrap();
+    assert!(types.contains(r#"Extension="gif" ContentType="image/gif""#) && types.contains("/xl/drawings/drawing2.xml"), "{types}");
+    let wb = p.workbook().unwrap();
+    let sheet = p.sheet(&wb.sheets[2], |_| Ok(())).unwrap();
+    assert!(sheet.features.drawing.as_deref().is_some_and(|id| sheet.rels.by_id(id).is_some_and(|r| r.target == "xl/drawings/drawing2.xml")));
+
+    // A drawing removed takes its relationship with it; its charts stay as kept parts.
+    let mut doc = again;
+    doc.worksheets[2].as_mut().unwrap().drawing = None;
+    let out = doc.write().unwrap();
+    let mut p = Package::open(&out, &Limits::default()).unwrap();
+    let wb = p.workbook().unwrap();
+    let sheet = p.sheet(&wb.sheets[2], |_| Ok(())).unwrap();
+    assert!(sheet.rels.first("drawing").is_none() && sheet.features.drawing.is_none());
 }
 
 #[test]

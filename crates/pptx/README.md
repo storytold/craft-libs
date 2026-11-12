@@ -43,4 +43,8 @@ tags, kept parts and document properties. A slide whose layout is missing goes o
 a presentation with no master gets the caller's. `Defaults` also gives the text styles written
 where a master or the presentation has none, and the program name for `docProps/app.xml`.
 
-Not read or written yet (later changes): transitions and animations, speaker notes, comments.
+Transitions (`p:transition`, with the PowerPoint 2010 and later effects) and animations
+(`p:timing`, flattened into `anim::Animation` on reading and built back into the timing tree on
+writing, with media volume and playback settings) are read and written.
+
+Not read or written yet (later changes): speaker notes, comments.
