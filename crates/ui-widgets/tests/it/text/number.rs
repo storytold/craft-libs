@@ -240,6 +240,7 @@ fn an_inside_glyph_label_scrubs_the_field_in_edit_too() {
     fixture.drag_at(glyph.center(), Vec2::new(30.0, 0.0));
     fixture.idle(2);
     assert!(value.get().unwrap_or_default() > START, "a drag on the glyph in edit raised the value");
+}
 
 /// The one name of `named_field`'s values, tied to its presets row.
 #[derive(Clone, Copy, Debug, PartialEq)]
