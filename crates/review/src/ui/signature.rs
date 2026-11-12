@@ -14,10 +14,9 @@ use craft_ui::contract::{
     Show as _, ShowContainer as _, clicked,
 };
 use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
-use craft_ui::display::{Picture, PictureSize, Text};
+use craft_ui::display::{Shade, Text};
 use craft_ui::fonts::FontRef;
 use craft_ui::layout_components::{Row, Stack};
-use craft_ui::list::ThumbSize;
 use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::primitives::{DocRun, DocText, Draw, HAlign, PaintShape, StrokeWidth, TextureCache};
 use craft_ui::runtime::env::Env;
@@ -193,7 +192,7 @@ fn decode_image(bytes: &[u8]) -> Decoded {
     Ok(SignatureImage::new(decoded.width(), decoded.height(), decoded.into_raw()))
 }
 
-/// The pixels of `image` for a `Picture`, empty when its buffer does not match its size.
+/// The pixels of `image` for its texture, empty when its buffer does not match its size.
 fn pixels(image: &SignatureImage) -> ColorImage {
     let size = [image.width() as usize, image.height() as usize];
     if size[0].checked_mul(size[1]).and_then(|n| n.checked_mul(4)) == Some(image.rgba().len()) {
@@ -212,23 +211,50 @@ pub struct DrawPadStyle {
     #[style(focus)]
     focus: FocusLook,
     ink: StyleColor,
+    /// How far a shown signature sits in from the paper's edge.
+    inset: f32,
 }
 
 const PAD: PartKey = PartKey::new("pad");
 
-/// The Draw tab's pad: a paper box that records strokes in pad units from the pointer or a pen. The Type tab makes the
-/// same signature from the keyboard.
+/// What a pad holds.
+enum PadContent<'a> {
+    /// Strokes in pad units that the pointer draws.
+    Strokes(Bind<'a, Vec<Vec<[f32; 2]>>>),
+    /// Typed text, shown as the signature it makes.
+    Typed(&'a str),
+    /// The picked image, if any, fitted to the paper.
+    Image(Option<&'a SignatureImage>),
+}
+
+/// The paper every tab of the signature pad shows its signature on, one size for all of them. The Draw tab's pad
+/// records strokes in pad units from the pointer or a pen (the Type tab makes the same signature from the keyboard);
+/// the Type and Image tabs' pads show the typed text or the picked image.
 #[derive(craft_ui::contract::Component)]
 pub struct DrawPad<'a> {
     #[common]
     common: Common,
-    strokes: Bind<'a, Vec<Vec<[f32; 2]>>>,
+    content: PadContent<'a>,
 }
 
 impl<'a> DrawPad<'a> {
     /// A pad named `label` that edits `strokes`.
     pub fn new(label: impl Into<craft_ui::runtime::env::Label>, strokes: Bind<'a, Vec<Vec<[f32; 2]>>>) -> Self {
-        DrawPad { common: Common::new(), strokes }.label(label)
+        DrawPad { common: Common::new(), content: PadContent::Strokes(strokes) }.label(label)
+    }
+
+    /// A pad named `label` that shows `text` as a typed signature.
+    pub fn typed(label: impl Into<craft_ui::runtime::env::Label>, text: &'a str) -> Self {
+        DrawPad { common: Common::new(), content: PadContent::Typed(text) }.label(label)
+    }
+
+    /// A pad named `label` that shows `image` fitted to it, or blank paper without one.
+    pub fn image(label: impl Into<craft_ui::runtime::env::Label>, image: Option<&'a SignatureImage>) -> Self {
+        DrawPad { common: Common::new(), content: PadContent::Image(image) }.label(label)
+    }
+
+    fn draws(&self) -> bool {
+        matches!(self.content, PadContent::Strokes(_))
     }
 }
 
@@ -248,6 +274,7 @@ impl Component for DrawPad<'_> {
             metrics: Metrics::new().min_size(Vec2::new(width, width / PAD_ASPECT)),
             focus: cx.focus_look(),
             ink: cx.color(cx.tokens.color.text.normal),
+            inset: cx.tokens.space.pad.control,
         }
     }
 
@@ -256,18 +283,26 @@ impl Component for DrawPad<'_> {
     }
 
     fn sense(&self) -> Sense {
-        Sense::FOCUS
+        if self.draws() { Sense::FOCUS } else { Sense::empty() }
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, Vec<Vec<[f32; 2]>>>> {
-        Some(self.strokes.reborrow())
+        match &mut self.content {
+            PadContent::Strokes(strokes) => Some(strokes.reborrow()),
+            PadContent::Typed(_) | PadContent::Image(_) => None,
+        }
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        cx.part(PAD, rect).sense(Sense::DRAG | Sense::TAKE_FOCUS).pointer_only("the Type tab makes the same signature from the keyboard");
+        if self.draws() {
+            cx.part(PAD, rect).sense(Sense::DRAG | Sense::TAKE_FOCUS).pointer_only("the Type tab makes the same signature from the keyboard");
+        }
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if !self.draws() {
+            return;
+        }
         let rect = cx.rect;
         let normalise = |p: Pos2| {
             let p = p.clamp(rect.min, rect.max);
@@ -307,15 +342,23 @@ impl Component for DrawPad<'_> {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let draw = ui.draw();
         draw.surface(cx.rect, SurfaceKind::Well, craft_ui::style::Corners::All);
-        let strokes = cx.value().cloned().unwrap_or_default();
         let ink = cx.style.ink;
-        paint_strokes(
-            cx.rect,
-            &strokes,
-            false,
-            |dot| draw.fill(&PaintShape::Circle(dot, 1.0), ink),
-            |line| draw.stroke(&PaintShape::Path(line), StrokeWidth::Medium, ink),
-        );
+        let inner = cx.rect.shrink(cx.style.inset);
+        match &self.content {
+            PadContent::Strokes(_) => {
+                let strokes = cx.value().cloned().unwrap_or_default();
+                paint_strokes(
+                    cx.rect,
+                    &strokes,
+                    false,
+                    |dot| draw.fill(&PaintShape::Circle(dot, 1.0), ink),
+                    |line| draw.stroke(&PaintShape::Path(line), StrokeWidth::Medium, ink),
+                );
+            }
+            PadContent::Typed(text) => paint_typed(&draw, inner, text.trim(), DataColor::new(ink.egui())),
+            PadContent::Image(Some(image)) => paint_image(&cx.ctx, &draw, inner, image),
+            PadContent::Image(None) => {}
+        }
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> Self::Output {
@@ -347,9 +390,9 @@ fn pop_stroke(strokes: &mut Vec<Vec<[f32; 2]>>) -> bool {
 /// The Scan tab's content, the app's.
 pub type ScanTab = Box<dyn FnMut(&mut egui::Ui, &mut SignatureDraft) + Send>;
 
-/// Acrobat's signature pad on the dialog host: "Create signature" or "Change initials" with the tabs Type (a field),
-/// Draw (a pad of strokes, Undo), Image (Browse… a PNG or JPEG up to [`MAX_IMAGE_BYTES`] through `host.files()`) and
-/// Scan (shown when the app gives a scan hook); Clear; Apply (enabled when [`SignatureDraft::ready`]) and Cancel.
+/// Acrobat's signature pad on the dialog host: "Create signature" or "Change initials" with the tabs Type (a field over
+/// the pad that shows the typed signature), Draw (a pad of strokes, Undo), Image (Browse… a PNG or JPEG up to
+/// [`MAX_IMAGE_BYTES`] through `host.files()`, shown fitted to the same pad) and Scan (shown when the app gives a scan hook); Clear; Apply (enabled when [`SignatureDraft::ready`]) and Cancel.
 /// Browse… reads and decodes the file on `host.jobs()`; a pick that fails or is too large shows an error under the
 /// button.
 #[derive(craft_ui::contract::Pattern)]
@@ -484,12 +527,13 @@ impl StackDialog for SignaturePadDialog {
                             .placeholder(words.type_hint.clone())
                             .limit(MAX_SIGNATURE_CHARS)
                             .show(ui);
+                        DrawPad::typed(draft.text.clone(), &draft.text).show(ui);
                     }
                     SignatureTab::Draw => {
                         DrawPad::new(words.draw_tab.clone(), Bind::bound(&mut draft.strokes)).show(ui);
                     }
                     SignatureTab::Image => {
-                        Text::new(words.image_hint.clone()).show(ui);
+                        Text::new(words.image_hint.clone()).shade(Shade::Muted).show(ui);
                         if clicked(&Button::new(words.browse.clone()).icon(craft_behavior::IconId::new("folder")).loading(decoding).show(ui)) {
                             browse = true;
                         }
@@ -500,10 +544,7 @@ impl StackDialog for SignaturePadDialog {
                             };
                             Notice::new(Tone::Bad, word.clone()).layout(NoticeLayout::Inline).show(ui);
                         }
-                        if let Some(image) = &draft.image {
-                            let make = || pixels(image);
-                            Picture::new(words.image_tab.clone(), image.key(), &make).extent(PictureSize::Thumb(ThumbSize::Small)).show(ui);
-                        }
+                        DrawPad::image(words.image_tab.clone(), draft.image.as_ref()).show(ui);
                     }
                     SignatureTab::Scan => {
                         if let Some(tab) = scan.as_mut() {
