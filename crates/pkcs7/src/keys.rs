@@ -137,7 +137,7 @@ impl DigestAlg {
             DigestAlg::Sha3_512 => sha3_run::<sha3::Sha3_512>(parts),
             DigestAlg::Ripemd160 => {
                 use ripemd::Digest;
-                let mut h = ripemd::Ripemd160::new();
+                let mut h = ripemd::Ripemd160::new(); // NOSONAR: a digest CMS signatures name; validated, and reported as weak by `weakness`
                 for p in parts {
                     h.update(p);
                 }
