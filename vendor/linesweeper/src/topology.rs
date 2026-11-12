@@ -551,6 +551,25 @@ impl<W: WindingNumber> Topology<W> {
     where
         Iter: IntoIterator<Item = (&'a BezPath, W::Tag)>,
     {
+        Self::from_paths_with_limits(paths, eps, work_limit, usize::MAX)
+    }
+
+    /// [`Topology::from_paths_with_work_limit`], which also returns
+    /// [`Error::WorkLimitExceeded`](crate::Error::WorkLimitExceeded) once the topology holds
+    /// more than `output_segment_limit` output segments.
+    ///
+    /// Each output segment stores its end points, its neighbors and two winding numbers, so this
+    /// limit bounds the memory the topology uses. Overlapping horizontal segments are split at
+    /// every position of the others, so n of them can make about n^2 output segments.
+    pub fn from_paths_with_limits<'a, Iter>(
+        paths: Iter,
+        eps: f64,
+        work_limit: u64,
+        output_segment_limit: usize,
+    ) -> Result<Self, crate::Error>
+    where
+        Iter: IntoIterator<Item = (&'a BezPath, W::Tag)>,
+    {
         let mut segments = Segments::default();
         let mut tag = Vec::new();
         for (p, t) in paths {
@@ -564,18 +583,19 @@ impl<W: WindingNumber> Topology<W> {
             SegVec::from_vec(tag),
             eps,
             Correctness::GoodEnough,
-            Some(work_limit),
+            Some((work_limit, output_segment_limit)),
         )
     }
 
-    /// Returns [`crate::Error::WorkLimitExceeded`] if `work_limit` is given and the sweep does
-    /// more work than it.
+    /// Returns [`crate::Error::WorkLimitExceeded`] if `limits` is given and the sweep does
+    /// more work than its first value, or the topology makes more output segments than its
+    /// second value.
     fn from_segments(
         segments: Segments,
         tag: SegVec<W::Tag>,
         eps: f64,
         correctness: Correctness,
-        work_limit: Option<u64>,
+        limits: Option<(u64, usize)>,
     ) -> Result<Self, crate::Error> {
         let mut ret = Self {
             eps,
@@ -597,8 +617,10 @@ impl<W: WindingNumber> Topology<W> {
             segments: Segments::default(),
         };
         let mut sweep_state = Sweeper::new_with_correctness(&segments, eps, correctness);
-        if let Some(work_limit) = work_limit {
+        let mut output_segment_limit = usize::MAX;
+        if let Some((work_limit, segment_limit)) = limits {
             sweep_state.set_work_limit(work_limit);
+            output_segment_limit = segment_limit;
         }
         let mut range_bufs = SweepLineRangeBuffers::default();
         let mut line_bufs = SweepLineBuffers::default();
@@ -612,12 +634,12 @@ impl<W: WindingNumber> Topology<W> {
                     debug_assert!(!ret.open_segs[prev_seg].is_empty());
                     ret.open_segs[prev_seg].front().copied()
                 };
-                if !ret.process_sweep_line_range(positions, &segments, scan_west_seg) {
+                if !ret.process_sweep_line_range(positions, &segments, scan_west_seg, output_segment_limit) {
                     return Err(crate::Error::WorkLimitExceeded);
                 }
             }
         }
-        if sweep_state.work_limit_exceeded() {
+        if sweep_state.work_limit_exceeded() || ret.winding.inner.len() > output_segment_limit {
             return Err(crate::Error::WorkLimitExceeded);
         }
         ret.segments = segments;
@@ -776,12 +798,14 @@ impl<W: WindingNumber> Topology<W> {
 
     /// Craft patch (work limit): returns `false`, leaving the topology
     /// incomplete, if the sweep passes its work limit while visiting the
-    /// horizontal segments of this range.
+    /// horizontal segments of this range, or the topology holds more than
+    /// `output_segment_limit` output segments.
     fn process_sweep_line_range(
         &mut self,
         mut pos: SweepLineRange,
         segments: &Segments,
         mut scan_west: Option<OutputSegIdx>,
+        output_segment_limit: usize,
     ) -> bool {
         let y = pos.line().y();
         let mut winding = scan_west
@@ -797,7 +821,7 @@ impl<W: WindingNumber> Topology<W> {
         let mut last_connected_down_seg: Option<OutputSegIdx> = None;
 
         while let Some(next_x) = pos.x() {
-            if pos.work_limit_exceeded() {
+            if pos.work_limit_exceeded() || self.winding.inner.len() > output_segment_limit {
                 return false;
             }
             let p = PointIdx(self.points.inner.len());
@@ -824,6 +848,9 @@ impl<W: WindingNumber> Topology<W> {
             // Also, calculate their winding numbers and update `winding`.
             seg_buf.clear();
             for new_seg in connected_segs.connected_down() {
+                if self.winding.inner.len() >= output_segment_limit {
+                    return false;
+                }
                 let prev_winding = winding.clone();
                 let orientation = segments.positively_oriented(new_seg);
                 winding += W::single(self.tag[new_seg], !orientation);
@@ -859,6 +886,9 @@ impl<W: WindingNumber> Topology<W> {
             let mut w = winding.clone();
             seg_buf.clear();
             for (new_seg, same_orientation) in hsegs {
+                if self.winding.inner.len() >= output_segment_limit {
+                    return false;
+                }
                 let prev_w = w.clone();
                 let orientation = same_orientation == segments.positively_oriented(new_seg);
                 w += W::single(self.tag[new_seg], !orientation);
@@ -2767,6 +2797,34 @@ mod tests {
         let actual = Topology::<i32>::from_paths_with_work_limit(tagged(), 1e-6, u64::MAX).unwrap();
         assert_eq!(actual.winding.inner.len(), expected.winding.inner.len());
         assert!(actual.winding.inner.len() > 100_000, "{} output segments", actual.winding.inner.len());
+    }
+
+    // Craft patch (work limit). The same paths make more than 100,000 output
+    // segments, each holding points, neighbors and winding numbers. The output
+    // segment limit stops the topology before it allocates them all.
+    #[test]
+    fn output_segment_limit() {
+        let n = 300;
+        let paths: Vec<BezPath> = (0..n)
+            .map(|i| {
+                let i = f64::from(i);
+                let mut path = BezPath::new();
+                path.move_to((i, 0.0));
+                path.line_to((2.0 * f64::from(n) + i, 0.0));
+                path.close_path();
+                path
+            })
+            .collect();
+        let tagged = || paths.iter().map(|p| (p, ()));
+
+        let result = Topology::<i32>::from_paths_with_limits(tagged(), 1e-6, u64::MAX, 10_000);
+        assert_eq!(result.err(), Some(crate::Error::WorkLimitExceeded));
+
+        let all = Topology::<i32>::from_paths(tagged(), 1e-6).unwrap().winding.inner.len();
+        let exact = Topology::<i32>::from_paths_with_limits(tagged(), 1e-6, u64::MAX, all).unwrap();
+        assert_eq!(exact.winding.inner.len(), all);
+        let result = Topology::<i32>::from_paths_with_limits(tagged(), 1e-6, u64::MAX, all - 1);
+        assert_eq!(result.err(), Some(crate::Error::WorkLimitExceeded));
     }
 
     fn run_perturbation(ps: Vec<Perturbation<F64Perturbation>>) {
