@@ -192,7 +192,7 @@ fn choice_has_model3d(el: &El, rels: &Rels) -> bool {
 
 /// Bytes of tags one import copies into the model, every tags part and reference together: a
 /// small compressed tags part listed by many shapes, or many times by one, must not grow without
-/// bound. The package budgets (`opc::MAX_XML_PART`, `MAX_TOTAL`, #1283) bound what is
+/// bound. The package budgets ([`MAX_XML_PART`](crate::MAX_XML_PART), [`MAX_TOTAL`](crate::MAX_TOTAL)) bound what is
 /// parsed; this bounds what is copied from it.
 pub const MAX_TAG_BYTES: usize = 64 << 20;
 /// What each copied pair costs besides its text, so empty pairs count too.
