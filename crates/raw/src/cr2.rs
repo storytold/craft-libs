@@ -25,7 +25,7 @@
 
 mod sraw;
 
-use crate::shared::{active_rows, black_from_columns, white_from_data};
+use crate::shared::{active_rows, black_from_columns_sourced, white_from_data_sourced};
 use crate::{
     BlackLevel, Camera, Cfa, ColorData, Limits, Mode, OpcodeLists, Orientation, RawData, RawError, RawFormat, RawImage, Rect, Result, ljpeg,
 };
@@ -271,10 +271,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     let kelvin_presets = color_data.as_deref().and_then(kelvin_presets_from_color_data);
     let wb = color_data.as_deref().and_then(wb_from_color_balance).or_else(|| wb_from_wb_info(mn.as_ref()?));
     let cfa = cfa_from_tag(raw.u64(CR2_CFA_PATTERN)).unwrap_or_else(|| Cfa::bayer_static("RGGB"));
-    let white = white_from_data(&active_rows(&data, width, active), prec as u32);
-    let black = match masked_columns(&data, width, active, white) {
-        cols if cols.len() >= 2 => black_from_columns(&data, width, cols, active.y..active.y + active.height, active),
-        _ => BlackLevel::uniform(0.0),
+    let (white, white_source) = white_from_data_sourced(&active_rows(&data, width, active), prec as u32);
+    let (black, black_source) = match masked_columns(&data, width, active, white) {
+        cols if cols.len() >= 2 => black_from_columns_sourced(&data, width, cols, active.y..active.y + active.height, active),
+        _ => (BlackLevel::uniform(0.0), crate::LevelSource::Fallback),
     };
     let img = RawImage {
         format: RawFormat::Cr2,
@@ -297,6 +297,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         camera: tiff.ifds.first().map(Camera::from_ifd0).unwrap_or_default(),
         cinema: Default::default(),
         lens_metadata: Default::default(),
+        level_sources: crate::LevelSources { black: black_source, white: white_source },
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -359,6 +360,15 @@ pub(crate) mod tests {
         TiffWriter::new(ByteOrder::Little, false)
             .write(&[ifd0, IfdBuilder::new().with(1, Value::Short(vec![0])), IfdBuilder::new().with(1, Value::Short(vec![0])), ifd3])
             .unwrap()
+    }
+
+    /// A frame with no masked border and no saturation plateau says so: both levels are fallbacks.
+    #[test]
+    fn levels_without_masked_columns_or_plateau_are_fallbacks() {
+        let (bytes, _) = synthetic_cr2(64, 10, None);
+        let r = crate::decode(&bytes).unwrap();
+        assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::Fallback, white: crate::LevelSource::Fallback });
+        assert_eq!(r.white, vec![16383.0]);
     }
 
     #[test]
@@ -426,7 +436,7 @@ pub(crate) mod tests {
         let active = Rect::new(border, 2, w - border, h - 2);
         let cols = masked_columns(&data, w, active, 15000.0);
         assert_eq!(cols, 2..light - 2);
-        let black = black_from_columns(&data, w, cols, 2..h, active);
+        let black = crate::shared::black_from_columns(&data, w, cols, 2..h, active);
         assert!(black.values.iter().all(|v| (2048.0..=2049.0).contains(v)), "{:?}", black.values);
         // the whole border masked: every column but the two next to the image
         let dark: Vec<u16> = (0..w * h).map(|i| if i % w < border { 2048 } else { 6000 }).collect();
