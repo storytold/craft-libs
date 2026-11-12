@@ -125,7 +125,14 @@ fn edits_tagged_with_either_usage_code_both_import() {
     old.set(pid::USAGE_CODE, Value::Data(def::USAGE_TOP_LEVEL_OLD.to_vec()));
     mobs.push(old);
     let mixed = store::write(&root, craft_cfb::Version::V4).unwrap();
-    let mut names: Vec<String> = read_clean(&mixed).compositions.into_iter().map(|c| c.name).collect();
+    let document = read_clean(&mixed);
+    let mut ids: Vec<_> = document.compositions.iter().map(|c| c.aaf_mob_id.as_deref().unwrap()).collect();
+    assert_eq!(ids.len(), 2);
+    assert!(ids.iter().all(|id| id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())));
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 2, "each composition keeps its own MobID");
+    let mut names: Vec<String> = document.compositions.into_iter().map(|c| c.name).collect();
     names.sort();
     assert_eq!(names, ["Old", "S"]);
 }

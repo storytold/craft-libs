@@ -52,7 +52,18 @@ pub(crate) fn two_clips(rate: FrameRate, source: usize, cut: i64, dur: i64, (in_
 }
 
 pub(crate) fn composition(name: &str, rate: FrameRate, tracks: Vec<CTrack>) -> Composition {
-    Composition { name: name.into(), rate, sample_rate: 48_000, width: 1920, height: 1080, start_tc: 0, drop: false, tracks, markers: Vec::new() }
+    Composition {
+        name: name.into(),
+        aaf_mob_id: None,
+        rate,
+        sample_rate: 48_000,
+        width: 1920,
+        height: 1080,
+        start_tc: 0,
+        drop: false,
+        tracks,
+        markers: Vec::new(),
+    }
 }
 
 pub(crate) fn track(kind: CKind, name: &str, number: u32, items: Vec<CItem>) -> CTrack {
