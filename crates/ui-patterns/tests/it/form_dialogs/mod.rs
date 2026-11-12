@@ -6,4 +6,5 @@ mod export;
 mod params;
 mod password;
 mod preview;
+mod preview_width;
 mod size_model;
