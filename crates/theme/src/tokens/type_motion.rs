@@ -44,6 +44,8 @@ pub enum TypeRole {
     BodyLarge,
     /// Code, numbers in tables.
     Mono,
+    /// A brand title: the app's name on its start screen.
+    Display,
 }
 
 /// Every type role.
@@ -65,6 +67,8 @@ pub struct TypeTokens {
     pub body_large: TypeStyle,
     /// Code, numbers in tables.
     pub mono: TypeStyle,
+    /// A brand title: the app's name on its start screen.
+    pub display: TypeStyle,
 }
 
 impl TypeTokens {
@@ -79,6 +83,7 @@ impl TypeTokens {
             TypeRole::Heading => self.heading,
             TypeRole::BodyLarge => self.body_large,
             TypeRole::Mono => self.mono,
+            TypeRole::Display => self.display,
         }
     }
 
@@ -95,6 +100,7 @@ impl TypeTokens {
             heading: s(self.heading),
             body_large: s(self.body_large),
             mono: s(self.mono),
+            display: s(self.display),
         }
     }
 }

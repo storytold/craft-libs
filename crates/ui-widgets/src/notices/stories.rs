@@ -64,6 +64,22 @@ fn notice_centred(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         .into()
 }
 
+/// An app's start screen: the brand title with its byline, a description, two actions, a drop hint and a footer.
+#[story(Notice<'static>, covers = [], drive = Drive::Never)]
+fn notice_brand(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Notice::new(Tone::Neutral, "Create a new document or open an existing file.")
+        .layout(NoticeLayout::Centred)
+        .icon(NoticeIcon::None)
+        .title("Sample App")
+        .brand("open source")
+        .action(NoticeAction::new("New Document\u{2026}"))
+        .action(NoticeAction::new("Open\u{2026}"))
+        .content(Text::new("Drop an image here to open it").shade(Shade::Muted), |_| {})
+        .content(Text::new("No recent files").shade(Shade::Muted), |_| {})
+        .show(ui)
+        .into()
+}
+
 #[story(SettingsNotices, covers = [], drive = Drive::Never)]
 fn settings_notices(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let mut state = SettingsNoticeState::new();

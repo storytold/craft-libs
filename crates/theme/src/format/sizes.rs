@@ -265,6 +265,7 @@ impl SizeSet {
             ("heading", t.heading),
             ("body_large", t.body_large),
             ("mono", t.mono),
+            ("display", t.display),
         ] {
             if style.line_height < style.size {
                 errors.push(err(&path_of(&format!("base.typography.{name}.line_height")), ErrorKind::CrossRule { rule: "at least the role's size" }));

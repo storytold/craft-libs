@@ -150,6 +150,11 @@
         "line_height": 16.0,
         "size": 11.5
       },
+      "display": {
+        "font": "ui_semibold",
+        "line_height": 46.0,
+        "size": 38.0
+      },
       "heading": {
         "font": "ui_semibold",
         "line_height": 24.0,

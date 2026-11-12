@@ -100,6 +100,8 @@ const DISMISS: PartKey = PartKey::new("dismiss");
 const TITLE: PartKey = PartKey::new("title");
 /// The title's text and the message's: selection parts.
 const TITLE_TEXT: PartKey = PartKey::new("title_text");
+/// The byline beside a brand title: a selection part.
+const BYLINE: PartKey = PartKey::new("byline");
 const MESSAGE: PartKey = PartKey::new("message");
 /// A bullet line's text, and the line that stands for the lines left out: selection parts.
 const LINE: PartKey = PartKey::new("line");
@@ -126,6 +128,14 @@ pub struct NoticeStyle {
     /// The title's role and colour.
     #[style(text)]
     title: TextLook,
+    /// A brand title's role and colour.
+    #[style(text)]
+    brand: TextLook,
+    /// The byline beside a brand title.
+    #[style(text)]
+    byline: TextLook,
+    /// How far a byline beside a brand title sits above the title's bottom edge.
+    byline_lift: f32,
     /// The message's role and colour.
     #[style(text)]
     message: TextLook,
@@ -171,6 +181,10 @@ pub struct Notice<'a> {
     /// A title above the message.
     #[prop(into)]
     title: Option<Label>,
+    /// Draws the title of a centred notice as the app's brand: the title in the display role with this byline after it,
+    /// or under it when both don't fit. The title stays the heading.
+    #[prop(into)]
+    brand: Option<Label>,
     /// The icon.
     #[prop]
     icon: NoticeIcon<'a>,
@@ -200,6 +214,7 @@ pub struct Notice<'a> {
 struct Placed {
     icon: Option<Rect>,
     title: Option<Rect>,
+    byline: Option<Rect>,
     message: Option<Rect>,
     /// Each shown line's bullet and text, then the "…and n more" line.
     lines: Vec<(Rect, Rect)>,
@@ -214,7 +229,10 @@ struct Placed {
 /// Sizes of the elements for one width.
 struct Plan {
     icon: Option<f32>,
+    /// The title's block: a brand title and its byline together.
     title: Option<Vec2>,
+    /// A brand title's size, its byline's, and whether the byline sits beside the title.
+    brand: Option<(Vec2, Vec2, bool)>,
     message: Vec2,
     /// The bullet's width, each shown line's height and the "…and n more" line's height.
     bullet: f32,
@@ -232,6 +250,8 @@ struct Plan {
 /// The texts of a notice as resolved for this pass.
 struct Texts<'t> {
     title: Option<String>,
+    /// The byline of a centred brand title.
+    byline: Option<String>,
     message: &'t str,
     /// The shown bullet lines, then the "…and n more" text when lines were left out.
     lines: Vec<String>,
@@ -246,6 +266,7 @@ impl<'a> Notice<'a> {
             tone,
             layout: NoticeLayout::Inline,
             title: None,
+            brand: None,
             icon: NoticeIcon::Tone,
             dismiss: false,
             footer_actions: false,
@@ -298,7 +319,8 @@ impl<'a> Notice<'a> {
         let lines = self.lines[..shown].iter().map(|line| env.resolve(line).as_str().to_owned()).collect();
         let left = if self.row() { self.lines.len() - shown } else { 0 };
         let more = (left > 0).then(|| words.more.fill(&[("n", format.integer(left as u64).as_str())]));
-        Texts { title: self.title.as_ref().map(|title| env.resolve(title).as_str().to_owned()), message, lines, more }
+        let byline = self.brand.as_ref().filter(|_| !self.row()).map(|byline| env.resolve(byline).as_str().to_owned());
+        Texts { title: self.title.as_ref().map(|title| env.resolve(title).as_str().to_owned()), byline, message, lines, more }
     }
 
     fn icon_spec(&self) -> Option<IconSpec<'a>> {
@@ -323,6 +345,11 @@ impl<'a> Notice<'a> {
     fn run(&self, text: &str, role: TypeRole) -> TextRun<'static> {
         let run = TextRun::new(text.to_owned()).role(role).wrap(Wrap::Wrap);
         if self.layout == NoticeLayout::Centred { run.align(HAlign::Center) } else { run }
+    }
+
+    /// The title's look: the brand look for a centred brand title.
+    fn title_look<'s>(&self, style: &'s NoticeStyle) -> &'s TextLook {
+        if self.brand.is_some() && !self.row() { &style.brand } else { &style.title }
     }
 
     /// The width the elements wrap at when the notice is `width` wide.
@@ -367,7 +394,16 @@ impl<'a> Notice<'a> {
         let dismiss_width = dismiss.map_or(0.0, |size| size.x + gap);
         let column = if width.is_finite() { (width - icon_width - dismiss_width).max(0.0) } else { f32::INFINITY };
         let run = |text: &str, role: TypeRole| cx.layout_at(&self.run(text, role), column).size();
-        let title = texts.title.as_deref().map(|title| run(title, cx.style.title.role));
+        let title_role = self.title_look(cx.style).role;
+        let mut title = texts.title.as_deref().map(|title| run(title, title_role));
+        let brand = title.zip(texts.byline.as_deref()).map(|(name, byline)| {
+            let byline = run(byline, cx.style.byline.role);
+            let beside = name.x + gap + byline.x <= column;
+            (name, byline, beside)
+        });
+        if let Some((name, byline, beside)) = brand {
+            title = Some(if beside { Vec2::new(name.x + gap + byline.x, name.y) } else { Vec2::new(name.x.max(byline.x), name.y + gap + byline.y) });
+        }
         let message = if texts.message.is_empty() { Vec2::ZERO } else { run(texts.message, cx.style.message.role) };
         let bullet = if texts.lines.is_empty() { 0.0 } else { cx.layout(&TextRun::new(BULLET).role(cx.style.line.role)).size().x + gap };
         let line_column = (column - bullet).max(0.0);
@@ -394,7 +430,7 @@ impl<'a> Notice<'a> {
             (text_width.max(icon.unwrap_or(0.0)), shown.iter().sum::<f32>() + gap * shown.len().saturating_sub(1) as f32)
         };
         let lines = line_sizes.iter().map(|size| size.y).collect();
-        Plan { icon, title, message, bullet, lines, more: more.map(|size| size.y), actions, dismiss, stacked, needs, height }
+        Plan { icon, title, brand, message, bullet, lines, more: more.map(|size| size.y), actions, dismiss, stacked, needs, height }
     }
 }
 
@@ -439,12 +475,17 @@ impl Component for Notice<'_> {
                 Insets::horizontal(control.pad_x),
             ),
         };
+        let brand = TextLook::new(TypeRole::Display, stateful(normal));
+        let byline = TextLook::new(TypeRole::Label, stateful(faint));
         let line = TextLook::new(message.role, stateful(muted));
         let more = TextLook::new(message.role, stateful(faint));
         NoticeStyle {
             surface,
             metrics: Metrics::new().padding(padding).gap(control.gap),
             title,
+            brand,
+            byline,
+            byline_lift: cx.tokens.space.gap.stack,
             message,
             detail,
             line,
@@ -535,6 +576,26 @@ impl Component for Notice<'_> {
             };
             placed.icon = plan.icon.map(|side| put(Vec2::splat(side)));
             placed.title = plan.title.map(&mut put);
+            if let (Some(block), Some((name, byline, beside))) = (placed.title, plan.brand) {
+                let (title, rest) = Flow::new(block, rtl).take_start(name.x.min(block.width()));
+                if beside {
+                    let byline_rect = rest.take_start(gap).1.rect();
+                    let bottom = block.bottom() - cx.style.byline_lift;
+                    placed.title = Some(Rect::from_min_size(title.min, name));
+                    placed.byline =
+                        Some(Rect::from_min_max(Pos2::new(byline_rect.left(), bottom - byline.y), Pos2::new(byline_rect.right(), bottom)));
+                } else {
+                    let band = |top: f32, size: Vec2| {
+                        Flow::new(Rect::from_min_size(Pos2::new(block.left(), top), Vec2::new(block.width(), size.y)), rtl).align(
+                            size,
+                            Align::Center,
+                            Align::Min,
+                        )
+                    };
+                    placed.title = Some(band(block.top(), name));
+                    placed.byline = Some(band(block.top() + name.y + gap, byline));
+                }
+            }
             placed.message = Some(put(plan.message));
             if plan.stacked {
                 placed.actions = plan.actions.iter().map(|size| put(*size)).collect();
@@ -556,7 +617,10 @@ impl Component for Notice<'_> {
             cx.part(TITLE, title).sense(Sense::HOVER);
         }
         if let Some(title) = texts.title.as_deref().filter(|_| placed.title.is_some()) {
-            cx.selectable_text(TITLE_TEXT, &self.run(title, cx.style.title.role));
+            cx.selectable_text(TITLE_TEXT, &self.run(title, self.title_look(cx.style).role));
+        }
+        if let Some(byline) = texts.byline.as_deref().filter(|_| placed.byline.is_some()) {
+            cx.selectable_text(BYLINE, &self.run(byline, cx.style.byline.role));
         }
         if placed.message.is_some() {
             let role = if self.title.is_some() { cx.style.detail.role } else { cx.style.message.role };
@@ -651,8 +715,14 @@ impl Component for Notice<'_> {
             ui.draw().icon(rect, &spec);
         }
         if let (Some(rect), Some(title)) = (placed.title, self.title.as_ref()) {
-            let run = self.run(cx.env.resolve(title).as_str(), cx.style.title.role);
-            ui.selectable_text(TITLE_TEXT, rect, &run.color(cx.resolve(&cx.style.title.color)));
+            let look = self.title_look(cx.style);
+            let run = self.run(cx.env.resolve(title).as_str(), look.role);
+            ui.selectable_text(TITLE_TEXT, rect, &run.color(cx.resolve(&look.color)));
+        }
+        if let (Some(rect), Some(byline)) = (placed.byline, self.brand.as_ref().filter(|_| !self.row())) {
+            let look = &cx.style.byline;
+            let run = self.run(cx.env.resolve(byline).as_str(), look.role);
+            ui.selectable_text(BYLINE, rect, &run.color(cx.resolve(&look.color)));
         }
         let look = if self.title.is_some() { &cx.style.detail } else { &cx.style.message };
         if let Some(message) = placed.message {

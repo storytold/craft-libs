@@ -204,7 +204,7 @@ fn slot(s: FontSlot) -> &'static str {
 }
 
 fn type_lines(out: &mut Lines, t: &TypeTokens) {
-    let TypeTokens { caption, label, body, body_strong, title, heading, body_large, mono } = t;
+    let TypeTokens { caption, label, body, body_strong, title, heading, body_large, mono, display } = t;
     let roles = [
         ("caption", caption),
         ("label", label),
@@ -214,6 +214,7 @@ fn type_lines(out: &mut Lines, t: &TypeTokens) {
         ("heading", heading),
         ("body_large", body_large),
         ("mono", mono),
+        ("display", display),
     ];
     for (k, style) in roles {
         let TypeStyle { size, line_height, font } = style;

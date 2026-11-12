@@ -208,6 +208,9 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.typography.mono.size" Num 8.0..=32.0 => t.mono.size;
         "base.typography.mono.line_height" Num 8.0..=48.0 => t.mono.line_height;
         "base.typography.mono.font" Font 0.0..=0.0 => t.mono.font;
+        "base.typography.display.size" Num 16.0..=64.0 => t.display.size;
+        "base.typography.display.line_height" Num 16.0..=80.0 => t.display.line_height;
+        "base.typography.display.font" Font 0.0..=0.0 => t.display.font;
     }
     out
 }
