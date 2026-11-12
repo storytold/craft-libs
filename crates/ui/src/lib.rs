@@ -6,6 +6,7 @@
 //! accept focused style values and return egui responses; no application engine is required.
 
 pub mod buttons;
+pub mod capability;
 pub mod capture;
 pub mod combo;
 pub mod direction;
@@ -18,6 +19,7 @@ pub mod layout;
 pub mod localized;
 pub mod panes;
 pub mod printing;
+pub mod scanning;
 pub mod tabs;
 #[cfg(all(feature = "screen-testing", not(target_arch = "wasm32")))]
 pub mod testing;
