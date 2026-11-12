@@ -9,10 +9,16 @@
 //! - [`preset`]: outlines of the preset shapes (`a:prstGeom`), by their file names.
 //! - [`custgeom`]: custom geometry (`a:custGeom`), with the shape guide formulas.
 //! - [`warp`]: preset text warps (`a:prstTxWarp`).
-//! - The model, without readers and writers yet: [`style`] (colour references, fills, lines,
-//!   effects), [`text`] (text bodies, paragraphs, runs), [`table`], [`chart`] with [`numfmt`]
-//!   (number format codes), [`theme`] (colour, font and format schemes) and [`diagram`] (SmartArt outlines). Media are named by [`MediaId`];
-//!   the bytes stay with the caller.
+//! - The model: [`style`] (colour references, fills, lines, effects), [`text`] (text bodies,
+//!   paragraphs, runs), [`table`], [`chart`] with [`numfmt`] (number format codes), [`theme`]
+//!   (colour, font and format schemes) and [`diagram`] (SmartArt outlines). Media are named by
+//!   [`MediaId`]; the bytes stay with the caller.
+//! - Readers and writers: [`read`] and [`write`] (`a:` fills, lines, effects, `a:xfrm`, text
+//!   bodies), [`chart::read`], [`chart::chartex`] and [`chart::write`] (`c:chartSpace`,
+//!   `cx:chartSpace`), [`theme::read_theme`] and [`theme::theme_xml`], [`table::styles`]
+//!   (`a:tblStyleLst`) and [`diagram::parts`] (`dgm:` data, layout, style and colour parts).
+//!   What they need from the package is the caller's [`part::Source`] or [`part::Sink`];
+//!   [`xmlx`] holds the parser settings and markup-compatibility handling they share.
 //!
 //! Nothing here opens a package: readers take a [`craft_xml::El`] and writers a
 //! [`craft_xml::Writer`], so the same code serves a slide, a document or a worksheet drawing.
@@ -23,11 +29,23 @@ pub mod color;
 pub mod custgeom;
 pub mod diagram;
 pub mod numfmt;
+pub mod part;
 pub mod preset;
+pub mod read;
 pub mod style;
 pub mod table;
 pub mod text;
 pub mod theme;
+pub mod write;
+pub mod xmlx;
+
+/// Namespace URIs.
+pub mod ns {
+    pub const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+    pub const NS_R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    pub const NS_A14: &str = "http://schemas.microsoft.com/office/drawing/2010/main";
+    pub const NS_C: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
+}
 mod trendline;
 pub mod warp;
 
@@ -36,6 +54,10 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) fn yes() -> bool {
     true
+}
+
+pub(crate) fn some_yes() -> Option<bool> {
+    Some(true)
 }
 
 macro_rules! id_type {

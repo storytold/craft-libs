@@ -109,8 +109,8 @@ pub fn default_format() -> FormatScheme {
                 GradientStop { pos: 0.0, color: ph().with(ColorTransform::LumMod(a)).with(ColorTransform::SatMod(103000)) },
                 GradientStop { pos: 1.0, color: ph().with(ColorTransform::LumMod(b)) },
             ],
-            shape: GradientShape::Linear { angle: 90.0, scaled: false },
-            rotate_with_shape: true,
+            shape: Some(GradientShape::Linear { angle: 90.0, scaled: false }),
+            rotate_with_shape: Some(true),
             flip: None,
         })
     };
@@ -181,3 +181,8 @@ mod tests {
         assert_eq!(partial.name, "X");
     }
 }
+
+mod read;
+mod write;
+pub use read::read_theme;
+pub use write::theme_xml;

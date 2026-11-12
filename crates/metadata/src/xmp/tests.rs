@@ -21,6 +21,7 @@ fn full() -> Metadata {
         // roundtrip fixture must leave this empty or `roundtrip_all_fields` can't round-trip it.
         regions: Vec::new(),
         focus: None,
+        fuji_recipe: None,
         make: Some("Maker & Sons".into()),
         model: Some("X <1>".into()),
         serial_number: Some("SN1".into()),
@@ -628,4 +629,45 @@ fn the_callers_namespace_is_written_and_read_only_when_passed() {
     // properties without a namespace to put them in are not written
     let orphan = write_xmp_with(&Metadata::default(), &XmpWrite { properties: &[("flag", "pick")], ..Default::default() });
     assert_eq!(orphan, plain);
+}
+
+#[test]
+fn resource_struct_attributes_and_elements_flatten_like_description_fields() {
+    let forms = [
+        r#"<c:Parameters rdf:parseType="Resource" c:ConvertToGrayscale="True"><c:Version>1</c:Version></c:Parameters>"#,
+        r#"<c:Parameters><rdf:Description c:ConvertToGrayscale="True"><c:Version>1</c:Version></rdf:Description></c:Parameters>"#,
+        r#"<c:Parameters rdf:parseType="Resource"><c:ConvertToGrayscale>True</c:ConvertToGrayscale><c:Version>1</c:Version></c:Parameters>"#,
+        r#"<c:Parameters rdf:parseType="Resource" c:ConvertToGrayscale="True" c:Version="1"/>"#,
+    ];
+    let mut previous = None;
+    for form in forms {
+        let xml = format!(
+            r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:c="http://ns.adobe.com/camera-raw-settings/1.0/"><c:Look rdf:parseType="Resource">{form}</c:Look></rdf:Description>"#
+        );
+        let packet = parse_xmp(&xml).unwrap();
+        assert_eq!(packet.properties["crs:Look/crs:Parameters/crs:ConvertToGrayscale"], vec!["True"]);
+        assert_eq!(packet.properties["crs:Look/crs:Parameters/crs:Version"], vec!["1"]);
+        assert!(packet.properties.keys().all(|key| !key.contains("rdf:")));
+        if let Some((properties, values)) = previous {
+            assert_eq!(packet.properties, properties);
+            assert_eq!(packet.values, values);
+        }
+        previous = Some((packet.properties, packet.values));
+    }
+}
+
+#[test]
+fn the_toolkit_is_read_and_written_back() {
+    let x = write_lc(&Metadata::default(), &[]);
+    assert_eq!(parse_xmp(&x).unwrap().toolkit.as_deref(), Some("Editor"));
+    assert_eq!(crate::parse_xmp(&write_xmp(&Metadata::default())).unwrap().toolkit.as_deref(), Some("craft-metadata"));
+    let escaped = write_xmp_with(&Metadata::default(), &XmpWrite { toolkit: "A & \"B\"", ..Default::default() });
+    assert_eq!(crate::parse_xmp(&escaped).unwrap().toolkit.as_deref(), Some("A & \"B\""));
+    // any prefix bound to adobe:ns:meta/, the older xapmeta form, and none at all
+    let other = r#"<m:xmpmeta xmlns:m="adobe:ns:meta/" m:xmptk="Adobe XMP Core 5.6"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/></m:xmpmeta>"#;
+    assert_eq!(crate::parse_xmp(other).unwrap().toolkit.as_deref(), Some("Adobe XMP Core 5.6"));
+    let old = r#"<x:xapmeta xmlns:x="adobe:ns:meta/" x:xaptk="XMP toolkit 3.0-28"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/></x:xapmeta>"#;
+    assert_eq!(crate::parse_xmp(old).unwrap().toolkit.as_deref(), Some("XMP toolkit 3.0-28"));
+    let bare = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/>"#;
+    assert_eq!(crate::parse_xmp(bare).unwrap().toolkit, None);
 }

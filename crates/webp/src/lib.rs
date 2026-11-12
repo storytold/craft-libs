@@ -11,9 +11,14 @@
 //! else, or the extended form (`VP8X`) with an uncompressed alpha plane and ICC, EXIF and XMP
 //! chunks in the order the specification gives.
 //!
+//! Animated files: [`anim::animation`] writes the `ANIM` / `ANMF` chunks around frames another
+//! encoder made; with feature `vp8`, [`anim::lossy_animation`] encodes RGBA frames with
+//! `craft-video`'s VP8 encoder.
+//!
 //! Input is treated as hostile: every read is bounds-checked, chunk sizes are checked against the
 //! file, and the number of frames recorded is capped by the caller.
 
+pub mod anim;
 #[cfg(test)]
 mod tests;
 
