@@ -229,6 +229,14 @@ fn reading_can_be_cancelled_during_parsing_and_pixel_decode() {
     let seen = Cell::new(0);
     let result = doc.read_surfaces(&|| seen.get() == 0, &mut |_, _| seen.set(seen.get() + 1));
     assert_eq!((result, seen.get()), (Err(Error::Cancelled), 1), "cancelled after the first surface");
+
+    let seen = Cell::new(0);
+    let result = doc.try_read_surfaces(GO, &mut |_, _| {
+        seen.set(seen.get() + 1);
+        Err(Error::Cancelled)
+    });
+    assert!(matches!(result, Err(ReadSurfacesError::Callback(Error::Cancelled))));
+    assert_eq!(seen.get(), 1, "a failed callback stops before decoding another surface");
 }
 
 proptest::proptest! {
