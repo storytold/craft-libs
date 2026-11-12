@@ -100,7 +100,7 @@ fn main() {
     println!("{entries} entries → {} words (+{} from compounds)", list.len(), extra.len());
     list.extend(extra);
     let dict = Dictionary::from_entries(list);
-    let bytes = dict.to_bytes();
+    let bytes = dict.to_bytes().expect("dictionary within the inflate limit");
     std::fs::create_dir_all(&out_dir).expect("mkdir");
     std::fs::write(out_dir.join("en-us.dic"), &bytes).expect("write en-us.dic");
     let back = Dictionary::from_bytes(&bytes).expect("roundtrip");

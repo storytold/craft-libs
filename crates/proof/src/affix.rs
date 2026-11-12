@@ -42,6 +42,8 @@ use std::hash::Hasher;
 use crate::patterns::{FxHasher, FxMap};
 
 mod compound;
+#[cfg(test)]
+mod rep_tests;
 
 pub(crate) use compound::{MAX_SUGGEST_COMPOUND_WORK, Pieces};
 
@@ -677,6 +679,19 @@ fn cap_try(s: &str) -> String {
     out
 }
 
+/// Most `REP` entries kept; every suggestion round tries each one at every place it matches.
+const MAX_REP_ENTRIES: usize = 4096;
+
+/// Adds a `REP` entry (`_` stands for a space) unless the table is full, `from` is empty or longer
+/// than any word a suggester takes (it could never match), or `to` is longer than a dictionary word.
+fn push_rep(rep: &mut Vec<(String, String)>, from: &str, to: &str) {
+    // Letters, not bytes: a 40-letter word in a four-byte script is 160 bytes long.
+    let fits = from.chars().nth(crate::affix_suggest::MAX_LETTERS).is_none();
+    if rep.len() < MAX_REP_ENTRIES && !from.is_empty() && fits && to.len() <= MAX_WORD_BYTES {
+        rep.push((from.replace('_', " "), to.replace('_', " ")));
+    }
+}
+
 /// `form`, unless it is empty: no word is, and `FULLSTRIP` can strip a stem down to nothing.
 fn non_empty(form: String) -> Option<String> {
     Some(form).filter(|f| !f.is_empty())
@@ -1120,7 +1135,7 @@ fn parse_aff(aff: &str, english: bool) -> Result<Rules, String> {
                 if !rep_header && at(1).parse::<usize>().is_ok() {
                     rep_header = true;
                 } else if f.len() >= 3 {
-                    r.rep.push((at(1).replace('_', " "), at(2).replace('_', " ")));
+                    push_rep(&mut r.rep, at(1), at(2));
                 }
             }
             "PFX" | "SFX" => {
@@ -2674,7 +2689,7 @@ impl AffixDict {
                     read.map_err(|e| format!("affix dictionary: bad `{line}`: {e}"))?;
                 }
                 "MAP" => rules.map.push(at(1).chars().collect()),
-                "REP" => rules.rep.push((at(1).replace('_', " "), at(2).replace('_', " "))),
+                "REP" => push_rep(&mut rules.rep, at(1), at(2)),
                 kind @ ("PFX" | "SFX") => {
                     let flag = rules.one_flag(at(1)).map_err(|e| format!("affix dictionary: bad flag in `{line}`: {e}"))?;
                     if f.len() != 6 {

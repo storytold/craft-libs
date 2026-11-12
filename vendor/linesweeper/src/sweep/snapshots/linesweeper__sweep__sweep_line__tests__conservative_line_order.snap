@@ -1,0 +1,136 @@
+---
+source: src/sweep/sweep_line.rs
+expression: "snapshot_outputs(segs, 0.25)"
+---
+[
+  Output(
+    y: 0.0,
+    order: SegmentOrder(
+      segs: [
+        SegmentOrderEntry(
+          seg: SegIdx(0),
+          exit: false,
+          enter: true,
+          lower_bound: -1.25,
+          upper_bound: 0.8500000000000001,
+          in_changed_interval: true,
+          old_idx: Some(0),
+          old_seg: None,
+        ),
+        SegmentOrderEntry(
+          seg: SegIdx(1),
+          exit: false,
+          enter: true,
+          lower_bound: -0.25,
+          upper_bound: 0.25,
+          in_changed_interval: true,
+          old_idx: Some(1),
+          old_seg: None,
+        ),
+        SegmentOrderEntry(
+          seg: SegIdx(2),
+          exit: false,
+          enter: true,
+          lower_bound: 0.04999999999999999,
+          upper_bound: 0.55,
+          in_changed_interval: true,
+          old_idx: Some(2),
+          old_seg: None,
+        ),
+      ],
+    ),
+    changed: [
+      ChangedInterval(
+        segs: Range(
+          start: 0,
+          end: 3,
+        ),
+        horizontals: None,
+      ),
+    ],
+  ),
+  Output(
+    y: 0.5,
+    order: SegmentOrder(
+      segs: [
+        SegmentOrderEntry(
+          seg: SegIdx(0),
+          exit: false,
+          enter: false,
+          lower_bound: -1.25,
+          upper_bound: 0.8500000000000001,
+          in_changed_interval: false,
+          old_idx: None,
+          old_seg: None,
+        ),
+        SegmentOrderEntry(
+          seg: SegIdx(1),
+          exit: false,
+          enter: false,
+          lower_bound: -0.25,
+          upper_bound: 0.25,
+          in_changed_interval: false,
+          old_idx: None,
+          old_seg: None,
+        ),
+        SegmentOrderEntry(
+          seg: SegIdx(2),
+          exit: false,
+          enter: false,
+          lower_bound: 0.04999999999999999,
+          upper_bound: 0.55,
+          in_changed_interval: false,
+          old_idx: None,
+          old_seg: None,
+        ),
+      ],
+    ),
+    changed: [],
+  ),
+  Output(
+    y: 1.0,
+    order: SegmentOrder(
+      segs: [
+        SegmentOrderEntry(
+          seg: SegIdx(0),
+          exit: true,
+          enter: false,
+          lower_bound: -1.25,
+          upper_bound: 0.8500000000000001,
+          in_changed_interval: true,
+          old_idx: Some(0),
+          old_seg: None,
+        ),
+        SegmentOrderEntry(
+          seg: SegIdx(1),
+          exit: true,
+          enter: false,
+          lower_bound: -0.25,
+          upper_bound: 0.25,
+          in_changed_interval: true,
+          old_idx: Some(1),
+          old_seg: None,
+        ),
+        SegmentOrderEntry(
+          seg: SegIdx(2),
+          exit: true,
+          enter: false,
+          lower_bound: 0.04999999999999999,
+          upper_bound: 0.55,
+          in_changed_interval: true,
+          old_idx: Some(2),
+          old_seg: None,
+        ),
+      ],
+    ),
+    changed: [
+      ChangedInterval(
+        segs: Range(
+          start: 0,
+          end: 3,
+        ),
+        horizontals: None,
+      ),
+    ],
+  ),
+]

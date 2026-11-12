@@ -145,6 +145,8 @@ fn linux_env(root: &Path) -> FontEnv {
     }
 }
 
+// Uses Unix paths, which Windows doesn't treat as absolute (#619).
+#[cfg(unix)]
 #[test]
 fn linux_font_dirs_cover_xdg_flatpak_and_fontconfig() {
     let root = temp("dirs");
@@ -167,6 +169,8 @@ fn linux_font_dirs_cover_xdg_flatpak_and_fontconfig() {
     assert_eq!(dirs, want);
 }
 
+// Uses Unix paths, which Windows doesn't treat as absolute (#619).
+#[cfg(unix)]
 #[test]
 fn fontconfig_dirs_follow_includes_prefixes_and_skip_the_rest() {
     let root = temp("conf");
@@ -210,6 +214,8 @@ fn fontconfig_dirs_follow_includes_prefixes_and_skip_the_rest() {
     );
 }
 
+// Uses Unix paths, which Windows doesn't treat as absolute (#619).
+#[cfg(unix)]
 #[test]
 fn flatpak_adds_the_hosts_font_folders() {
     let root = temp("flatpak");
@@ -249,15 +255,26 @@ fn macos_and_windows_folders() {
     assert_eq!(office_font_dirs(&env).len(), 1);
 }
 
+// Uses Unix paths, which Windows doesn't treat as absolute (#619).
+#[cfg(unix)]
 #[test]
 fn font_store_folder() {
     let env = FontEnv { os: Os::Unix, home: Some("/home/me".into()), ..Default::default() };
     assert_eq!(font_store_dir(&env), Some(PathBuf::from("/home/me/.local/share/craft-fonts")));
     let env = FontEnv { xdg_data_home: Some("/data".into()), ..env };
     assert_eq!(font_store_dir(&env), Some(PathBuf::from("/data/craft-fonts")));
-    let env = FontEnv { font_store: Some("/portable/fonts".into()), ..env };
-    assert_eq!(font_store_dir(&env), Some(PathBuf::from("/portable/fonts")));
-    assert_eq!(font_store_dir(&FontEnv { os: Os::None, home: Some("/h".into()), ..Default::default() }), None);
+}
+
+/// The store override wins with or without platform defaults; unsupported platforms have no default store.
+#[test]
+fn font_store_override_and_no_store() {
+    for os in [Os::Unix, Os::MacOs, Os::Windows, Os::Haiku, Os::None] {
+        let env = FontEnv { os, font_store: Some("portable/fonts".into()), ..Default::default() };
+        assert_eq!(font_store_dir(&env), Some(PathBuf::from("portable/fonts")));
+        let env = FontEnv { home: Some("home".into()), local_app_data: Some("local".into()), ..env };
+        assert_eq!(font_store_dir(&env), Some(PathBuf::from("portable/fonts")));
+    }
+    assert_eq!(font_store_dir(&FontEnv { os: Os::None, home: Some("h".into()), ..Default::default() }), None);
 }
 
 /// A Linux system with fonts in a system folder, the Flatpak host folder, the user's folder and
@@ -497,4 +514,57 @@ fn fork_of(fonts: &[Vec<u8>]) -> Vec<u8> {
     fork.extend(data);
     fork.extend(map);
     fork
+}
+
+#[test]
+fn repeated_name_records_are_bounded_before_pairing() {
+    // Thousands of legacy family and style records in one language: pairing them all would
+    // allocate millions of strings. write-fonts refuses unsorted or repeated records, so the
+    // `name` table is written by hand.
+    let mut names: Vec<(u16, String)> = Vec::new();
+    for i in 0..2000 {
+        names.push((1, format!("Family {}", i % 1000)));
+        names.push((2, format!("Style {}", i % 1000)));
+    }
+    names.push((16, "Typo Family".into()));
+    names.push((17, "Regular".into()));
+    let mut records = Vec::new();
+    let mut strings = Vec::new();
+    let mut stored: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for (id, text) in &names {
+        let utf16: Vec<u8> = text.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        let offset = *stored.entry(text.as_str()).or_insert_with(|| {
+            strings.extend_from_slice(&utf16);
+            strings.len() - utf16.len()
+        });
+        for v in [3u16, 1, 0x409, *id, utf16.len() as u16, offset as u16] {
+            records.extend_from_slice(&v.to_be_bytes());
+        }
+    }
+    let mut name = Vec::new();
+    for v in [0u16, names.len() as u16, (6 + records.len()) as u16] {
+        name.extend_from_slice(&v.to_be_bytes());
+    }
+    name.extend(records);
+    name.extend(strings);
+    let mut builder = FontBuilder::new();
+    builder.add_raw(Tag::new(b"name"), name);
+    builder.add_raw(Tag::new(b"glyf"), vec![0u8; 4]);
+    let faces = crate::scan::data_faces(&builder.build(), 1, None, Source::User);
+    let face = faces.first().expect("a face");
+    assert_eq!(face.info.family, "Typo Family");
+    assert!(!face.keys.legacy.is_empty());
+    assert_eq!(face.keys.legacy.len(), 256, "the pair budget counts distinct pairs");
+}
+
+/// A read stops at its cap, whatever the file has grown to since its size was checked.
+#[test]
+fn a_read_is_capped_where_the_file_has_grown() {
+    use crate::catalog::read_capped;
+    let path = std::env::temp_dir().join(format!("craft-font-catalog-cap-{}", std::process::id()));
+    std::fs::write(&path, b"0123456789").unwrap();
+    assert_eq!(read_capped(&path, 10).unwrap(), b"0123456789");
+    assert!(matches!(read_capped(&path, 9), Err(FontFileError::TooLarge { size: 10, max: 9 })));
+    assert!(matches!(read_capped(&path.with_extension("missing"), 9), Err(FontFileError::Io(_))));
+    let _ = std::fs::remove_file(&path);
 }

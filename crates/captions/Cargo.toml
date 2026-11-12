@@ -1,0 +1,21 @@
+[package]
+name = "craft-captions"
+description = "Caption and subtitle files behind one neutral model: SubRip, WebVTT, Scenarist SCC, MacCaption MCC, EBU STL and TTML/IMSC1/DFXP readers and writers with exact time, and CEA-608/708 coding"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-timeline = { workspace = true }
+craft-xml = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+# A second XML reader for the tests: checks of written TTML, and the comparison in tests/it/ttml_xml_views.rs.
+roxmltree = "0.21"

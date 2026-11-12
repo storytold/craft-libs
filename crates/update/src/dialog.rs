@@ -35,14 +35,32 @@ pub struct StartupPrompt {
     /// [`StartupPrompt::set_note`] and [`StartupPrompt::set_message`] keep only one.
     pub status_note: Option<Note>,
     pub is_installing: bool,
+    /// The update is ready and waits for the app to close: the main button reads "Restart to
+    /// Update" and answers [`StartupPromptResponse::UpdateAndRestart`].
+    pub is_ready: bool,
+    /// The app holds unsaved work it can save: the update button reads Save and Update and asks
+    /// for that save first.
+    pub offer_save: bool,
+    /// The app is saving the work; the update starts once it is done.
+    pub is_saving: bool,
+    /// The user chose Save and Update and the app has not taken the request yet.
+    pub save_wanted: bool,
     /// Puts the card's words in the interface language ([`crate::translate`]); English by default.
     pub translate: Translate,
 }
 
 impl StartupPrompt {
-    /// Creates a new prompt dialog state for the given app and newly discovered release.
+    /// Creates a new prompt dialog state for the given app and newly discovered release. It reads
+    /// the installed files to set `is_self_updating`, on the calling thread;
+    /// [`StartupPrompt::with_self_update`] takes the answer from elsewhere.
     pub fn new(app: &'static App, release: Release, running_version: impl Into<String>) -> Self {
-        let is_self_updating = crate::self_update::is_self_updating(app);
+        let is_self_updating = crate::self_update::is_self_updating(app) && crate::self_update::release_installs(app, &release);
+        Self::with_self_update(app, release, running_version, is_self_updating)
+    }
+
+    /// [`StartupPrompt::new`] with `is_self_updating` already known, for example found by a
+    /// worker thread, so that no installed file is read here.
+    pub fn with_self_update(app: &'static App, release: Release, running_version: impl Into<String>, is_self_updating: bool) -> Self {
         Self {
             app,
             release,
@@ -52,6 +70,10 @@ impl StartupPrompt {
             status_message: None,
             status_note: None,
             is_installing: false,
+            is_ready: false,
+            offer_save: false,
+            is_saving: false,
+            save_wanted: false,
             translate: english,
         }
     }
@@ -102,7 +124,7 @@ impl StartupPrompt {
         }
 
         let pal = Palette::new(ctx, self.app);
-        let Palette { is_dark, card_bg, border_color, text_primary, text_muted, fill, on_fill } = pal;
+        let Palette { card_bg, border_color, text_primary, text_muted, fill, on_fill, alert, alert_bg, .. } = pal;
         let t = self.translate;
         let version = self.release.version_label();
 
@@ -126,24 +148,26 @@ impl StartupPrompt {
                         ui.add_space(8.0);
 
                         if let Some(msg) = self.message() {
-                            let alert_bg = if is_dark { Color32::from_rgb(50, 30, 20) } else { Color32::from_rgb(255, 242, 235) };
-                            let alert_color = Color32::from_rgb(225, 95, 30);
                             egui::Frame::new()
                                 .fill(alert_bg)
-                                .stroke(egui::Stroke::new(1.0, alert_color))
+                                .stroke(egui::Stroke::new(1.0, alert))
                                 .corner_radius(egui::CornerRadius::ZERO)
                                 .inner_margin(egui::Margin::symmetric(10, 6))
                                 .show(ui, |ui| {
                                     ui.set_width(ui.available_width());
-                                    ui.label(RichText::new(msg).size(12.0).color(alert_color));
+                                    bounded(ui, "craft_update.prompt_message", |ui| {
+                                        ui.label(RichText::new(msg).size(12.0).color(alert));
+                                    });
                                 });
                             ui.add_space(4.0);
                         }
 
-                        if self.is_installing {
+                        if self.is_installing || self.is_saving {
+                            // Plain dots: the save's words add no new non-ASCII glyph to the card (#343).
+                            let status = if self.is_saving { t("Saving your work...", &[]) } else { t("Downloading and installing update…", &[]) };
                             ui.horizontal(|ui| {
                                 ui.spinner();
-                                ui.label(RichText::new(t("Downloading and installing update…", &[])).size(12.0).color(text_primary));
+                                ui.label(RichText::new(status).size(12.0).color(text_primary));
                             });
                         } else {
                             let desc = t(
@@ -182,6 +206,11 @@ impl StartupPrompt {
                             }
 
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                // Nothing in the button's place: the second click of a double click
+                                // must not dismiss the update. Esc and the close button still do.
+                                if self.is_saving {
+                                    return;
+                                }
                                 if self.is_installing {
                                     let dismiss_btn = egui::Button::new(RichText::new(button(t, "Dismiss")).size(10.5).monospace().color(text_muted))
                                         .corner_radius(egui::CornerRadius::ZERO)
@@ -190,13 +219,19 @@ impl StartupPrompt {
                                         response = StartupPromptResponse::Later;
                                     }
                                 } else {
-                                    if self.is_self_updating {
-                                        let update_btn = egui::Button::new(
-                                            RichText::new(button(t, "Update and Restart")).size(10.5).strong().monospace().color(on_fill),
-                                        )
-                                        .fill(fill)
-                                        .corner_radius(egui::CornerRadius::ZERO)
-                                        .min_size(Vec2::new(140.0, 26.0));
+                                    if self.is_self_updating || self.is_ready {
+                                        let label = if self.offer_save {
+                                            "Save and Update"
+                                        } else if self.is_ready {
+                                            "Restart to Update"
+                                        } else {
+                                            "Update and Restart"
+                                        };
+                                        let update_btn =
+                                            egui::Button::new(RichText::new(button(t, label)).size(10.5).strong().monospace().color(on_fill))
+                                                .fill(fill)
+                                                .corner_radius(egui::CornerRadius::ZERO)
+                                                .min_size(Vec2::new(140.0, 26.0));
                                         if ui.add(update_btn).clicked() {
                                             response = StartupPromptResponse::UpdateAndRestart;
                                         }
@@ -243,6 +278,10 @@ struct Palette {
     fill: Color32,
     /// Text on `fill`.
     on_fill: Color32,
+    /// Errors and failure reasons, on the card and on `alert_bg`.
+    alert: Color32,
+    /// The box around a message in the prompt.
+    alert_bg: Color32,
 }
 
 impl Palette {
@@ -257,6 +296,8 @@ impl Palette {
             text_muted: if is_dark { Color32::from_rgb(150, 150, 160) } else { Color32::from_rgb(105, 105, 115) },
             fill,
             on_fill: ink_on(fill),
+            alert: if is_dark { Color32::from_rgb(225, 95, 30) } else { Color32::from_rgb(184, 66, 8) },
+            alert_bg: if is_dark { Color32::from_rgb(44, 26, 18) } else { Color32::from_rgb(255, 242, 235) },
         }
     }
 }
@@ -352,18 +393,24 @@ pub enum CheckResultResponse {
     None,
     /// OK, the close button, Esc or a click outside: the app stops showing the dialog.
     Close,
-    /// Failed state only: the app starts another requested check.
+    /// Failed states only: the app starts another requested check.
     CheckAgain,
+    /// Ready state only: the app calls `Updater::restart_to_update`, which asks it to close.
+    RestartToUpdate,
 }
 
 /// The result of a manual "Check for Updates", in the same card as [`StartupPrompt`]: a spinner
-/// while checking, "newest version" when up to date, the error and a retry when it failed.
+/// while checking, "newest version" when up to date, the error and a retry when it failed, an
+/// update installing or ready, and the launcher's choice when it manages the version. It also
+/// shows what the last update came to at the first start after it.
 ///
 /// An app shows it while a requested check is in view: open it when the user starts a check
-/// (`Updater::check_now`), call [`show`](Self::show) every frame with `updater.status()` until it
-/// returns [`CheckResultResponse::Close`], then stop calling it. On
-/// [`CheckResultResponse::CheckAgain`] start another requested check and keep showing it. An
-/// available update goes to [`StartupPrompt`] instead; the app closes this dialog when the prompt opens.
+/// (`Updater::check_now`) or when `updater.status()` is not [`Status::Idle`] after the check at
+/// start, call [`show`](Self::show) every frame with `updater.status()` until it returns
+/// [`CheckResultResponse::Close`], then call `Updater::dismiss_status` and stop calling it. On
+/// [`CheckResultResponse::CheckAgain`] start another requested check and keep showing it; on
+/// [`CheckResultResponse::RestartToUpdate`] call `Updater::restart_to_update`. An available update
+/// goes to [`StartupPrompt`] instead; the app closes this dialog when the prompt opens.
 #[derive(Clone, Copy, Debug)]
 pub struct CheckResultDialog {
     app: &'static App,
@@ -384,14 +431,15 @@ impl CheckResultDialog {
         self
     }
 
-    /// Draws the modal card for `status` and returns what the user chose. [`Status::Idle`] draws
-    /// nothing and returns [`CheckResultResponse::None`].
+    /// Draws the card for `status` and returns what the user chose. [`Status::Idle`] draws
+    /// nothing and returns [`CheckResultResponse::None`]. The card is modal except for
+    /// [`Status::Updated`], a notice that leaves the app usable behind it.
     pub fn show(&self, ctx: &egui::Context, status: &Status) -> CheckResultResponse {
         if matches!(status, Status::Idle) {
             return CheckResultResponse::None;
         }
         let mut response = CheckResultResponse::None;
-        if backdrop(ctx) {
+        if !matches!(status, Status::Updated(_)) && backdrop(ctx) {
             response = CheckResultResponse::Close;
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
@@ -399,7 +447,7 @@ impl CheckResultDialog {
         }
 
         let pal = Palette::new(ctx, self.app);
-        let Palette { card_bg, border_color, text_primary, text_muted, fill, on_fill, .. } = pal;
+        let Palette { card_bg, border_color, text_primary, text_muted, fill, on_fill, alert, .. } = pal;
         let t = self.translate;
         egui::Area::new(egui::Id::unique("craft_update.check_result")).anchor(Align2::CENTER_CENTER, Vec2::ZERO).order(egui::Order::Foreground).show(
             ctx,
@@ -424,6 +472,33 @@ impl CheckResultDialog {
                                     ui.label(RichText::new(t("Checking for updates…", &[])).size(12.5).color(text_primary));
                                 });
                             }
+                            Status::Installing => {
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.label(RichText::new(t("Installing update…", &[])).size(12.5).color(text_primary));
+                                });
+                            }
+                            Status::Ready => {
+                                let text = t(crate::updater::READY_TEXT, &[("app", self.app.name)]);
+                                ui.label(RichText::new(text).size(12.5).color(text_primary));
+                            }
+                            Status::Managed => {
+                                let text = t(
+                                    "{app} {version} follows the version chosen in the launcher, so it does not update itself.",
+                                    &[("app", self.app.name), ("version", self.running_version)],
+                                );
+                                ui.label(RichText::new(text).size(12.5).color(text_muted));
+                            }
+                            Status::Updated(version) => {
+                                let text = t("{app} updated to {version}.", &[("app", self.app.name), ("version", version)]);
+                                ui.label(RichText::new(text).size(12.5).color(text_primary));
+                            }
+                            Status::InstallFailed(reason) => {
+                                let text = t("The update could not be installed: {reason}", &[("reason", reason)]);
+                                bounded(ui, "craft_update.install_failure", |ui| {
+                                    ui.add(egui::Label::new(RichText::new(text).size(12.5).color(alert)).selectable(true));
+                                });
+                            }
                             Status::UpToDate => {
                                 let text = t(
                                     "{app} {version} is the newest version available.",
@@ -432,9 +507,10 @@ impl CheckResultDialog {
                                 ui.label(RichText::new(text).size(12.5).color(text_muted));
                             }
                             Status::Failed(error) => {
-                                let alert_color = Color32::from_rgb(225, 95, 30);
-                                ui.label(RichText::new(t("Could not check for updates.", &[])).size(12.5).strong().color(alert_color));
-                                ui.add(egui::Label::new(RichText::new(error).size(12.0).color(text_muted)).selectable(true));
+                                ui.label(RichText::new(t("Could not check for updates.", &[])).size(12.5).strong().color(alert));
+                                bounded(ui, "craft_update.check_failure", |ui| {
+                                    ui.add(egui::Label::new(RichText::new(error).size(12.0).color(text_muted)).selectable(true));
+                                });
                                 ui.label(
                                     RichText::new(t("All releases are listed at {url}", &[("url", &self.app.releases_url())]))
                                         .size(11.5)
@@ -458,12 +534,21 @@ impl CheckResultDialog {
                                 if ui.add(ok).clicked() {
                                     response = CheckResultResponse::Close;
                                 }
-                                if matches!(status, Status::Failed(_)) {
+                                if matches!(status, Status::Failed(_) | Status::InstallFailed(_)) {
                                     let again = egui::Button::new(RichText::new(button(t, "Check Again")).size(10.5).monospace().color(text_primary))
                                         .corner_radius(egui::CornerRadius::ZERO)
                                         .min_size(Vec2::new(100.0, 26.0));
                                     if ui.add(again).clicked() {
                                         response = CheckResultResponse::CheckAgain;
+                                    }
+                                }
+                                if matches!(status, Status::Ready) {
+                                    let restart =
+                                        egui::Button::new(RichText::new(button(t, "Restart to Update")).size(10.5).monospace().color(text_primary))
+                                            .corner_radius(egui::CornerRadius::ZERO)
+                                            .min_size(Vec2::new(130.0, 26.0));
+                                    if ui.add(restart).clicked() {
+                                        response = CheckResultResponse::RestartToUpdate;
                                     }
                                 }
                             });
@@ -473,6 +558,16 @@ impl CheckResultDialog {
         );
         response
     }
+}
+
+/// The tallest an error or failure reason draws in a card; a longer one scrolls, so the card's
+/// buttons stay on screen.
+const REASON_MAX_HEIGHT: f32 = 160.0;
+
+/// Draws `add_contents` (an error or a failure reason) at most [`REASON_MAX_HEIGHT`] tall,
+/// scrolling the rest.
+fn bounded(ui: &mut egui::Ui, id: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
+    egui::ScrollArea::vertical().id_salt(id).max_height(REASON_MAX_HEIGHT).auto_shrink([false, true]).show(ui, add_contents);
 }
 
 /// Backgrounds of an unfilled button (LATER, DISMISS) when hovered and when pressed: a step from
@@ -541,13 +636,13 @@ fn decode_icon(png: &[u8], max_side: u32) -> Option<egui::ColorImage> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::suite::PHOTOCRAFT;
     use egui::{Context, Event, FullOutput, Key, Modifiers, RawInput, Rect};
 
     const DARK_CARD: Color32 = Color32::from_rgb(26, 26, 28);
-    const DARK_STATUS: Color32 = Color32::from_rgb(50, 30, 20);
+    const DARK_STATUS: Color32 = Color32::from_rgb(44, 26, 18);
 
     fn screen() -> Rect {
         Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 480.0))
@@ -573,6 +668,10 @@ mod tests {
             status_message: None,
             status_note: None,
             is_installing: false,
+            is_ready: false,
+            offer_save: false,
+            is_saving: false,
+            save_wanted: false,
             translate: english,
         }
     }
@@ -860,8 +959,56 @@ mod tests {
         }
     }
 
+    /// Errors and failure reasons reach WCAG AA's 4.5:1 on the card and in the prompt's message
+    /// box, in both themes.
+    #[test]
+    fn failure_text_reaches_aa_in_both_themes() {
+        for theme in [egui::ThemePreference::Dark, egui::ThemePreference::Light] {
+            let ctx = Context::default();
+            ctx.set_theme(theme);
+            let pal = Palette::new(&ctx, &PHOTOCRAFT);
+            for (surface, bg) in [("card", pal.card_bg), ("message box", pal.alert_bg)] {
+                let ratio = contrast(pal.alert, bg);
+                assert!(ratio >= 4.5, "{theme:?} {surface}: {ratio:.2}:1");
+            }
+        }
+    }
+
+    /// A long error or failure reason scrolls inside the card, so the card's buttons stay on
+    /// screen.
+    #[test]
+    fn a_long_reason_keeps_the_buttons_on_screen() {
+        let long = "the installer reported an error. ".repeat(120);
+        let on_screen = |output: &FullOutput, label: &str| text_pos(output, label).is_some_and(|pos| screen().contains(pos));
+        let dialog = CheckResultDialog::new(&PHOTOCRAFT, "0.1.0");
+        for status in [Status::InstallFailed(long.clone()), Status::Failed(long.clone())] {
+            let ctx = dark_context();
+            let mut output = None;
+            // The first frame of an area only sizes it; the second paints.
+            for _ in 0..2 {
+                let mut out = ctx.run_ui(RawInput { screen_rect: Some(screen()), ..RawInput::default() }, |ui| {
+                    dialog.show(ui.ctx(), &status);
+                });
+                out.textures_delta.clear();
+                output = Some(out);
+            }
+            let output = output.unwrap();
+            for label in ["OK", "CHECK AGAIN"] {
+                assert!(on_screen(&output, label), "{label} is off screen for a long {status:?}");
+            }
+        }
+        let ctx = dark_context();
+        let mut prompt = prompt_for(true);
+        prompt.set_message(long);
+        frame(&ctx, &mut prompt, Vec::new());
+        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+        for label in ["UPDATE AND RESTART", "LATER"] {
+            assert!(on_screen(&output, label), "{label} is off screen under a long message");
+        }
+    }
+
     /// Where the frame painted `text` (inside its galley, so a pointer there is over it).
-    fn text_pos(output: &FullOutput, text: &str) -> Option<egui::Pos2> {
+    pub(crate) fn text_pos(output: &FullOutput, text: &str) -> Option<egui::Pos2> {
         fn find(shape: &egui::Shape, text: &str) -> Option<egui::Pos2> {
             match shape {
                 egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| find(s, text)),
@@ -963,6 +1110,104 @@ mod tests {
         assert!(card, "dialog card missing");
     }
 
+    /// Work the app can save: the main button says so, and a click answers as the update button does.
+    #[test]
+    fn a_prompt_with_work_to_save_offers_save_and_update() {
+        let ctx = dark_context();
+        let mut prompt = StartupPrompt { offer_save: true, ..prompt_for(true) };
+        frame(&ctx, &mut prompt, Vec::new());
+        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+        let painted = painted_text(&output);
+        assert!(painted.contains("SAVE AND UPDATE") && painted.contains("LATER"), "{painted}");
+        assert!(!painted.contains("UPDATE AND RESTART"), "{painted}");
+        let at = text_pos(&output, "SAVE AND UPDATE").expect("SAVE AND UPDATE is painted");
+        let button = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        frame(&ctx, &mut prompt, vec![Event::PointerMoved(at)]);
+        frame(&ctx, &mut prompt, vec![button(true)]);
+        let (response, _) = frame(&ctx, &mut prompt, vec![button(false)]);
+        assert_eq!(response, StartupPromptResponse::UpdateAndRestart);
+    }
+
+    /// A ready update with work to save offers Save and Update, not Restart to Update.
+    #[test]
+    fn a_ready_prompt_with_work_to_save_offers_save_and_update() {
+        let ctx = dark_context();
+        let mut prompt = StartupPrompt { is_ready: true, offer_save: true, ..prompt_for(false) };
+        frame(&ctx, &mut prompt, Vec::new());
+        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+        let painted = painted_text(&output);
+        assert!(painted.contains("SAVE AND UPDATE"), "{painted}");
+        assert!(!painted.contains("RESTART TO UPDATE"), "{painted}");
+        let at = text_pos(&output, "SAVE AND UPDATE").expect("SAVE AND UPDATE is painted");
+        let button = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        frame(&ctx, &mut prompt, vec![Event::PointerMoved(at)]);
+        frame(&ctx, &mut prompt, vec![button(true)]);
+        let (response, _) = frame(&ctx, &mut prompt, vec![button(false)]);
+        assert_eq!(response, StartupPromptResponse::UpdateAndRestart);
+    }
+
+    /// A copy that can't update itself keeps its Download button, whatever the app can save.
+    #[test]
+    fn a_download_prompt_never_offers_save_and_update() {
+        let ctx = dark_context();
+        let mut prompt = StartupPrompt { offer_save: true, ..prompt_for(false) };
+        frame(&ctx, &mut prompt, Vec::new());
+        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+        let painted = painted_text(&output);
+        assert!(painted.contains("DOWNLOAD") && !painted.contains("SAVE AND UPDATE"), "{painted}");
+    }
+
+    /// While the app saves, the card says that and stays ASCII (#343). No button takes the place
+    /// of Save and Update, where the second click of a double click would land; Esc and the
+    /// close button still dismiss.
+    #[test]
+    fn a_saving_prompt_says_so_and_offers_no_second_click() {
+        let ctx = dark_context();
+        let mut prompt = StartupPrompt { is_saving: true, offer_save: true, ..prompt_for(true) };
+        frame(&ctx, &mut prompt, Vec::new());
+        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+        let painted = painted_text(&output);
+        assert!(painted.contains("Saving your work..."), "{painted}");
+        for absent in ["Downloading", "SAVE AND UPDATE", "DISMISS", "LATER"] {
+            assert!(!painted.contains(absent), "{absent} in {painted}");
+        }
+        assert!(painted.is_ascii(), "the prompt paints a non-ASCII character: {painted:?}");
+    }
+
+    /// The new button and status words are the app's to translate.
+    #[test]
+    fn the_save_button_and_status_go_through_the_translator() {
+        for (offer_save, is_saving) in [(true, false), (false, true)] {
+            let ctx = dark_context();
+            let mut prompt = StartupPrompt { offer_save, is_saving, ..prompt_for(true) }.with_translator(pseudo);
+            frame(&ctx, &mut prompt, Vec::new());
+            let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+            let painted = painted_text(&output);
+            assert_all_translated(&painted, &["P", "PhotoCraft"]);
+            assert!(!offer_save || painted.contains("[ | SAVE AND UPDATE]"), "{painted}");
+            assert!(!is_saving || painted.contains("[ | Saving your work...]"), "{painted}");
+        }
+    }
+
+    /// The second click of a double click lands where Save and Update was: it must not dismiss.
+    #[test]
+    fn a_second_click_during_the_save_leaves_the_prompt_open() {
+        let ctx = dark_context();
+        let mut prompt = StartupPrompt { offer_save: true, ..prompt_for(true) };
+        frame(&ctx, &mut prompt, Vec::new());
+        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+        // Right of the label's centre, where a right-aligned Dismiss would sit.
+        let at = text_pos(&output, "SAVE AND UPDATE").expect("SAVE AND UPDATE is painted") + egui::vec2(40.0, 0.0);
+        prompt.is_saving = true;
+        let button = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        frame(&ctx, &mut prompt, Vec::new());
+        frame(&ctx, &mut prompt, vec![Event::PointerMoved(at)]);
+        frame(&ctx, &mut prompt, vec![button(true)]);
+        let (response, _) = frame(&ctx, &mut prompt, vec![button(false)]);
+        assert_eq!(response, StartupPromptResponse::Pending);
+        assert!(prompt.open);
+    }
+
     #[test]
     fn installing_prompt_paints_status_and_dismiss() {
         let ctx = dark_context();
@@ -1049,6 +1294,26 @@ mod tests {
         let (_, idle) = run(&ctx, &Status::Idle, Vec::new());
         assert!(painted_text(&idle).is_empty());
 
+        // An update under way, the launcher's choice, and what the last update came to.
+        let ready = crate::translate::fill(crate::updater::READY_TEXT, &[("app", "PhotoCraft")]);
+        let backdrop = Color32::from_black_alpha(150);
+        for (status, wants, modal) in [
+            (Status::Installing, vec!["Installing update…", "OK"], true),
+            (Status::Ready, vec![ready.as_str(), "RESTART TO UPDATE", "OK"], true),
+            (Status::Managed, vec!["PhotoCraft 0.1.0 follows the version chosen in the launcher, so it does not update itself.", "OK"], true),
+            (Status::Updated("0.2.0".into()), vec!["PhotoCraft updated to 0.2.0.", "OK"], false),
+            (Status::InstallFailed("disk full".into()), vec!["The update could not be installed: disk full", "CHECK AGAIN", "OK"], true),
+        ] {
+            let (response, output) = run(&ctx, &status, Vec::new());
+            let text = painted_text(&output);
+            for want in wants {
+                assert!(text.contains(want), "{status:?}: {want} missing in {text}");
+            }
+            assert!(!text.contains("newest version"), "{status:?} is not called newest: {text}");
+            assert_eq!(response, CheckResultResponse::None);
+            assert_eq!(rect_fills(&output).iter().any(|(_, fill)| *fill == backdrop), modal, "{status:?} modal");
+        }
+
         let escape = Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
         assert_eq!(run(&dark_context(), &Status::UpToDate, vec![escape]).0, CheckResultResponse::Close);
     }
@@ -1070,19 +1335,20 @@ mod tests {
 
     #[test]
     fn the_prompt_draws_its_words_through_the_apps_translator() {
-        for (self_updating, installing) in [(false, false), (true, false), (true, true)] {
+        for (self_updating, installing, ready) in [(false, false, false), (true, false, false), (true, true, false), (true, false, true)] {
             let ctx = dark_context();
-            let mut prompt = StartupPrompt { is_installing: installing, ..prompt_for(self_updating) }.with_translator(pseudo);
+            let mut prompt = StartupPrompt { is_installing: installing, is_ready: ready, ..prompt_for(self_updating) }.with_translator(pseudo);
             frame(&ctx, &mut prompt, Vec::new());
             let (_, output) = frame(&ctx, &mut prompt, Vec::new());
             let painted = painted_text(&output);
             assert_all_translated(&painted, &["P", "PhotoCraft"]);
             // Values reach the translation; buttons are looked up in title case and drawn in capitals.
             assert!(painted.contains("[0.1.0, 0.2.0 | v]") && painted.contains("[ArtCraft | by ]"), "{painted}");
-            let button = match (self_updating, installing) {
-                (_, true) => "[ | DISMISS]",
-                (true, false) => "[ | UPDATE AND RESTART]",
-                (false, false) => "[ | DOWNLOAD]",
+            let button = match (self_updating, installing, ready) {
+                (_, true, _) => "[ | DISMISS]",
+                (_, false, true) => "[ | RESTART TO UPDATE]",
+                (true, false, false) => "[ | UPDATE AND RESTART]",
+                (false, false, false) => "[ | DOWNLOAD]",
             };
             assert!(painted.contains(button) && painted.contains("[ | UPDATE]"), "{painted}");
         }
@@ -1091,7 +1357,16 @@ mod tests {
     #[test]
     fn the_result_dialog_draws_its_words_through_the_apps_translator() {
         let dialog = CheckResultDialog::new(&PHOTOCRAFT, "0.1.0").with_translator(pseudo);
-        for status in [Status::Checking, Status::UpToDate, Status::Failed("no network".into())] {
+        for status in [
+            Status::Checking,
+            Status::UpToDate,
+            Status::Failed("no network".into()),
+            Status::Installing,
+            Status::Ready,
+            Status::Managed,
+            Status::Updated("0.2.0".into()),
+            Status::InstallFailed("no network".into()),
+        ] {
             let ctx = dark_context();
             let mut output = None;
             for _ in 0..2 {

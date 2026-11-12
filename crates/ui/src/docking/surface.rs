@@ -32,7 +32,7 @@ pub struct DockStyle {
     pub panels_label: String,
     pub resize_label: String,
     pub resize_window_label: String,
-    /// Accessibility label of a group's drag bar and top border.
+    /// Accessibility label of a group's drag bar and top border; `{name}` names the group.
     pub move_group_label: String,
     pub close_group_label: String,
     pub minimize_label: String,
@@ -115,7 +115,7 @@ pub struct DockStyle {
     /// [D] Lay docks out right to left: `Side::Start` is the right edge. egui has no app-wide
     /// layout direction, so the host sets this from its locale. Splits keep their sides.
     pub right_to_left: bool,
-    /// [D] Accessibility label of a column bar.
+    /// [D] Accessibility label of a column bar; `{name}` names the column ([`Self::localized`]).
     pub move_column_label: String,
     /// [D] Column menu and group menu items.
     pub collapse_to_icons_label: String,
@@ -194,7 +194,7 @@ impl DockStyle {
             panels_label: "Panels".into(),
             resize_label: "Resize panels".into(),
             resize_window_label: "Resize panel window".into(),
-            move_group_label: "Move tab group".into(),
+            move_group_label: super::labels::MOVE_GROUP.into(),
             close_group_label: "Close Tab Group".into(),
             minimize_label: "Minimize".into(),
             expand_label: "Expand".into(),
@@ -221,7 +221,7 @@ impl DockStyle {
             iconic_label_width: 96.0,
             auto_collapse_label: "Auto-Collapse Iconic Panels".into(),
             right_to_left: false,
-            move_column_label: "Move panel column".into(),
+            move_column_label: super::labels::MOVE_COLUMN.into(),
             collapse_to_icons_label: "Collapse to Icons".into(),
             expand_panels_label: "Expand Panels".into(),
             collapse_column_label: "Collapse column to icons".into(),
@@ -1227,6 +1227,8 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             return false;
         }
         super::hits::named(self.id, layout).contains_key(&focused)
+            || (super::flyout::<P>(ctx, self.id).is_some()
+                && super::chrome::RESIZE_HANDLES.iter().any(|name| self.id.with("flyout").with(name) == focused))
     }
 
     /// Raise a panel's floating window (or open its flyout) on this frame. Apply Activate
