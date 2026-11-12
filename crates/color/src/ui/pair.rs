@@ -1,18 +1,19 @@
 //! [`SwatchPair`]: two overlapping colour wells, foreground over background or fill over stroke.
 
-use craft_behavior::{EditEvents, Flow, HitLevel, HitPriority, IconId, Metrics, Mixed, NavShape, PartKey, PressPhase, Roving, Sense};
+use craft_behavior::{EditEvents, Flow, HitLevel, HitPriority, Metrics, Mixed, NavShape, PartKey, PressPhase, Roving, Sense};
 use craft_theme::Srgba;
 use craft_ui::buttons::IconButton;
-use craft_ui::choice::{ChoiceWords, Swatch, SwatchMetrics};
+use craft_ui::choice::{ChoiceWords, SwatchMetrics};
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Outcome, Overlay, OverlayUi, Overlays as _,
     PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
-use craft_ui::primitives::{PaintShape, StrokeWidth};
+use craft_ui::primitives::{DataWidth, Draw, Glyph, IconSpec, PaintShape, StrokeWidth};
 use craft_ui::runtime::commands::FireSource;
 use craft_ui::runtime::env::Label;
-use craft_ui::style::{ComponentStyle, DataColor, Flags, FocusLook, StyleColor, StyleCx};
-use egui::{Color32, Rect, Response, Vec2, pos2, vec2};
+use craft_ui::style::{ComponentStyle, DataColor, Flags, FocusLook, GlyphRole, StyleColor, StyleCx, UiTokens};
+use egui::emath::GuiRounding as _;
+use egui::{Color32, CornerRadius, Painter, Pos2, Rect, Response, Shape, Stroke, StrokeKind, Vec2, pos2, vec2};
 
 use super::popover::compact_picker;
 use super::{ColorPicker, PickedColor, ScreenPickGesture};
@@ -99,14 +100,18 @@ pub struct SwatchPairStyle {
     well: f32,
     /// The offset of the secondary well from the primary one on both axes: `size.icon.sm`.
     step: f32,
+    /// The corners of a well: the swatch's.
+    radius: CornerRadius,
     /// The gap in the panel's colour round the front well: `space.gap.tight`.
     gap: f32,
-    /// The height of the button row.
+    /// The side of a button: the icon slot of a control.
     buttons: f32,
     /// The colour the pair sits on, for the gap.
     ground: StyleColor,
-    /// The edge of a ring well.
+    /// The outline of a well.
     edge: StyleColor,
+    /// The light line just inside a well's outline, so any colour reads against the surface.
+    mark: StyleColor,
 }
 
 /// A closure that sets up the picker of the popup.
@@ -272,15 +277,18 @@ impl Component for SwatchPair<'_> {
 
     fn style(cx: &StyleCx<'_>, _: SwatchPairStyleKey) -> SwatchPairStyle {
         let colors = &cx.tokens.color;
+        let tight = cx.tokens.space.gap.tight;
         SwatchPairStyle {
-            metrics: Metrics::new().gap(cx.control().gap),
+            metrics: Metrics::new().gap(tight),
             focus: cx.focus_look(),
             well: cx.tokens.size.icon.lg,
             step: cx.tokens.size.icon.sm,
-            gap: cx.tokens.space.gap.tight,
-            buttons: SwatchMetrics::of(cx).side,
+            radius: SwatchMetrics::of(cx).radius,
+            gap: tight,
+            buttons: cx.control().icon,
             ground: cx.color(colors.surface.panel),
             edge: cx.color(colors.line.control_edge),
+            mark: cx.color(colors.text.normal),
         }
     }
 
@@ -412,23 +420,34 @@ impl Component for SwatchPair<'_> {
         let rects = self.well_rects(style, cx.rect.size());
         let active = cx.value().copied().unwrap_or_default();
         let place = |logical: Rect| flow.to_physical(logical.translate(cx.rect.min.to_vec2()));
-        // The back well first, then the front one with a gap of the ground colour round it.
-        for well in [active.other(), active] {
-            let at = place(rects[well.index() as usize]);
-            let shown = &self.wells[well.index() as usize];
-            if well == active {
-                ui.draw().fill(&PaintShape::Rect(at.expand(style.gap), egui::CornerRadius::ZERO), style.ground);
-            }
-            match shown.color.same() {
-                Some(color) if shown.ring => paint_ring(ui, at, *color, style),
-                _ => ui.face(WELL.at(well.index()), Swatch::new(shown.label.clone(), shown.color).selected(well == active)),
+        // The back well first, then the front one with a gap of the ground colour round it: being in front is what
+        // shows the active well.
+        {
+            let draw = ui.draw();
+            for well in [active.other(), active] {
+                let at = place(rects[well.index() as usize]);
+                let shown = &self.wells[well.index() as usize];
+                if well == active {
+                    let halo = UiTokens::corner(f32::from(style.radius.nw) + style.gap);
+                    draw.fill(&PaintShape::Rect(at.expand(style.gap), halo), style.ground);
+                }
+                match shown.color.same() {
+                    Some(color) if shown.ring => paint_ring(&draw, at, *color, style),
+                    color => {
+                        draw.swatch_well(at, style.radius, color.copied());
+                        draw.stroke(&PaintShape::Rect(at, style.radius), StrokeWidth::Thin, style.edge);
+                        let inside = at.shrink(draw.width(StrokeWidth::Thin));
+                        draw.stroke(&PaintShape::Rect(inside, style.radius), StrokeWidth::Thin, style.mark);
+                    }
+                }
             }
         }
+        // The buttons' glyphs keep the control size whatever glyph role the pair's scope sets (a tool rail's).
         if let Some(name) = self.default_button.clone() {
-            ui.face(DEFAULT, IconButton::new(IconId::new("default_colors")).label(name));
+            ui.face(DEFAULT, IconButton::new(IconSpec::glyph(&PairGlyph::Defaults)).label(name).glyphs(GlyphRole::Control));
         }
         if let Some(name) = self.swap_button.clone() {
-            ui.face(SWAP, IconButton::new(IconId::new("swap_colors")).label(name));
+            ui.face(SWAP, IconButton::new(IconSpec::glyph(&PairGlyph::Swap)).label(name).glyphs(GlyphRole::Control));
         }
     }
 
@@ -452,19 +471,89 @@ impl Component for SwatchPair<'_> {
     }
 }
 
-/// A ring well: a band of the colour round the edge, the middle open to what is behind.
-fn paint_ring(ui: &mut PaintUi<'_>, at: Rect, color: Srgba, style: &SwatchPairStyle) {
+/// A ring well: a band of the colour round the edge, the middle open to what is behind, outlined on both sides.
+fn paint_ring(draw: &Draw<'_>, at: Rect, color: Srgba, style: &SwatchPairStyle) {
     let band = at.width() * RING_SHARE;
-    let fill = DataColor::new(Color32::from(color));
-    let draw = ui.draw();
-    let bands = [
-        Rect::from_min_max(at.min, pos2(at.max.x, at.min.y + band)),
-        Rect::from_min_max(pos2(at.min.x, at.max.y - band), at.max),
-        Rect::from_min_max(pos2(at.min.x, at.min.y + band), pos2(at.min.x + band, at.max.y - band)),
-        Rect::from_min_max(pos2(at.max.x - band, at.min.y + band), pos2(at.max.x, at.max.y - band)),
-    ];
-    for part in bands {
-        draw.data_fill(&PaintShape::Rect(part, egui::CornerRadius::ZERO), fill);
+    let outline = PaintShape::Rect(at, style.radius);
+    draw.stroke(&outline, DataWidth::points(band), DataColor::new(Color32::from(color)));
+    draw.stroke(&outline, StrokeWidth::Thin, style.edge);
+    let hole = at.shrink(band - draw.width(StrokeWidth::Thin));
+    draw.stroke(&PaintShape::Rect(hole, CornerRadius::ZERO), StrokeWidth::Thin, style.edge);
+}
+
+/// The glyphs of the pair's buttons, drawn on a square grid of `GRID` units; they picture the pair, so they mirror
+/// with it.
+#[derive(Clone, Copy)]
+enum PairGlyph {
+    /// Default colours: a black square over a white one, as the wells stand.
+    Defaults,
+    /// Swap colours: a shaft curving from the primary well's place to the secondary one's, with a head at each end.
+    Swap,
+}
+
+/// The side of a pair glyph's grid, in units.
+const GRID: f32 = 13.0;
+/// Defaults: the black square's start-top corner and the white square's, and the side of each.
+const BLACK_AT: f32 = 1.0;
+const WHITE_AT: f32 = 5.0;
+const SQUARE: f32 = 7.0;
+/// Swap: the shaft's ends and its control point (it leaves the start across and ends going down), and each head's
+/// length and half width.
+const SHAFT: [(f32, f32); 3] = [(4.0, 4.0), (9.0, 4.0), (9.0, 9.0)];
+const HEAD_LENGTH: f32 = 3.0;
+const HEAD_HALF: f32 = 2.8;
+/// The points the swap shaft is drawn through.
+const SHAFT_STEPS: usize = 10;
+
+impl Glyph for PairGlyph {
+    fn directional(&self) -> bool {
+        true
     }
-    draw.stroke(&PaintShape::Rect(at, egui::CornerRadius::ZERO), StrokeWidth::Thin, style.edge);
+
+    fn paint(&self, painter: &Painter, tokens: &UiTokens, rect: Rect, color: Color32, mirrored: bool) {
+        // Whole pixels, so the squares' edges stay sharp.
+        let rect = Rect::from_min_size(rect.min.round_to_pixels(painter.pixels_per_point()), rect.size());
+        let unit = rect.width() / GRID;
+        let at = |x: f32, y: f32| rect.min + vec2(if mirrored { GRID - x } else { x }, y) * unit;
+        match self {
+            PairGlyph::Defaults => {
+                let square = |from: f32, to: f32| Rect::from_two_pos(at(from, from), at(to, to));
+                let corner = CornerRadius::from(unit);
+                let edge = Stroke::new(tokens.stroke.thin, color);
+                let black = square(BLACK_AT, BLACK_AT + SQUARE);
+                // The white square shows only outside the black one and a unit's gap round it: two strips, each
+                // painted through a clip, so its outline runs along its outer sides only.
+                let clear = BLACK_AT + SQUARE + 1.0;
+                let white = square(WHITE_AT, WHITE_AT + SQUARE);
+                let strips = [Rect::from_two_pos(at(clear, 0.0), at(GRID, GRID)), Rect::from_two_pos(at(0.0, clear), at(clear, GRID))];
+                for strip in strips {
+                    let painter = painter.with_clip_rect(strip);
+                    painter.rect(white, corner, Color32::from(Srgba::WHITE), edge, StrokeKind::Inside);
+                }
+                painter.rect(black, corner, Color32::from(Srgba::BLACK), edge, StrokeKind::Inside);
+            }
+            PairGlyph::Swap => {
+                let point = |(x, y): (f32, f32)| pos2(x, y);
+                let [start, control, end] = SHAFT.map(point);
+                let shaft: Vec<Pos2> = (0..=SHAFT_STEPS)
+                    .map(|i| {
+                        let t = i as f32 / SHAFT_STEPS as f32;
+                        let (a, b) = (1.0 - t, t);
+                        let p = start.to_vec2() * a * a + control.to_vec2() * 2.0 * a * b + end.to_vec2() * b * b;
+                        at(p.x, p.y)
+                    })
+                    .collect();
+                painter.add(Shape::line(shaft, Stroke::new(tokens.stroke.medium, color)));
+                for (tip, out) in [(start, -(control - start).normalized()), (end, (end - control).normalized())] {
+                    let side = vec2(-out.y, out.x);
+                    let head = [tip + out * HEAD_LENGTH, tip + side * HEAD_HALF, tip - side * HEAD_HALF];
+                    let mut head: Vec<Pos2> = head.iter().map(|p| at(p.x, p.y)).collect();
+                    if mirrored {
+                        head.reverse();
+                    }
+                    painter.add(Shape::convex_polygon(head, color, Stroke::NONE));
+                }
+            }
+        }
+    }
 }

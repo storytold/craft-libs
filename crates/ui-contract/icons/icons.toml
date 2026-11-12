@@ -436,22 +436,6 @@ carbon = "error--outline"
 tabler = "alert-circle"
 
 [[icon]]
-name = "swap_colors"
-directional = false
-lucide = "arrow-left-right"
-phosphor = "swap"
-carbon = "arrows--horizontal"
-tabler = "arrows-exchange"
-
-[[icon]]
-name = "default_colors"
-directional = false
-lucide = "squares-subtract"
-phosphor = "subtract-square"
-carbon = "intersect"
-tabler = "layers-subtract"
-
-[[icon]]
 name = "adjustment_layer"
 directional = false
 lucide = "contrast"
