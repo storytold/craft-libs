@@ -4,8 +4,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use craft_theme::{Srgba, TypeRole};
-use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, CommandSet as _, Entry, NoValue, Outcome, Pattern, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{CommandSet as _, Entry, NoValue, Outcome, Pattern, Props as _, Show as _, ShowContainer as _};
 use craft_ui::display::{Divider, Text};
 use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::{Row, Stack};
@@ -41,8 +40,6 @@ pub struct LayerStyleOutput {
     /// The page the user chose this pass (a list row, an added or removed instance); the host keeps it in
     /// [`LayerStyleDraft::page`], and the dialog draws it from then on.
     pub page: Option<LayerStylePage>,
-    /// The Preview check box changed to this; the host keeps it in [`LayerStyleDraft::preview`].
-    pub preview: Option<bool>,
     /// The Blend If entry chosen this pass, an index into `blending.blend_if`; the host keeps it in
     /// [`LayerStyleDraft::blend_if_channel`].
     pub blend_if_channel: Option<usize>,
@@ -81,15 +78,12 @@ impl Outcome for LayerStyleOutput {
 }
 
 impl LayerStyleOutput {
-    /// Writes the view state this pass reported (page, Preview, Blend If channel) and the
+    /// Writes the view state this pass reported (page, Blend If channel) and the
     /// [`fill_default`](LayerStyleOutput::fill_default) into `draft`. The style edit is the host's, as its history rules
     /// apply it.
     pub fn apply_view(&self, draft: &mut LayerStyleDraft) {
         if let Some(page) = self.page {
             draft.page = page;
-        }
-        if let Some(preview) = self.preview {
-            draft.preview = preview;
         }
         if let Some(channel) = self.blend_if_channel {
             draft.blend_if_channel = channel;
@@ -109,8 +103,8 @@ impl LayerStyleOutput {
 /// - A page change is reported in [`LayerStyleOutput::page`] and drawn once the host has applied it. The page drawn in
 ///   the pass of a click is the one the click left, so its fields see their focus loss and commit what was typed
 ///   before the page changes.
-/// - The page title is the effect's name with the Preview check box at its end (it flips
-///   [`LayerStyleDraft::preview`]; the Styles page has none, and its title carries New Style…).
+/// - The page title is the effect's name, plain (the Styles page's title carries New Style…). The Preview check box
+///   is the host's, in the button column under OK and Cancel (Photoshop's place), over [`LayerStyleDraft::preview`].
 /// - The Styles page ([`StylePresets`]), the Blending Options page, or an effect page drawn from the kind's
 ///   [`EffectSpec`].
 /// - Use Global Light: on an effect that uses it, the Angle edits the shared light angle of every such effect
@@ -203,7 +197,7 @@ impl<'a> LayerStyleDialog<'a> {
     }
 
     /// Draws the list and the page and reports this pass's change. List actions and field edits become the style edit;
-    /// the page, Preview and Blend If channel are reported beside it.
+    /// the page and Blend If channel are reported beside it.
     pub fn show(self, ui: &mut Ui) -> LayerStyleOutput {
         let LayerStyleDialog { label, draft, channel_names, specs, blend_keys, blend_modes, patterns, user_contours, sampler, style_presets } = self;
         let env = Env::of(ui);
@@ -252,7 +246,6 @@ impl<'a> LayerStyleDialog<'a> {
             response: shown.output,
             edit,
             page: (next.page != draft.page).then_some(next.page),
-            preview: (next.preview != draft.preview).then_some(next.preview),
             blend_if_channel: (next.blend_if_channel != draft.blend_if_channel).then_some(next.blend_if_channel),
             pick_color: extras.pick_color,
             apply_style: extras.apply_style,
@@ -359,7 +352,7 @@ impl Work {
         };
         match (draft.page, instance) {
             (LayerStylePage::Blending, _) => {
-                self.title_with_preview(ui, words, words.blending_options.clone());
+                Text::new(words.blending_options.clone()).role(TypeRole::Title).show(ui);
                 let input = BlendingInput {
                     style: &draft.style,
                     blend_if_channel: self.next.blend_if_channel,
@@ -373,7 +366,7 @@ impl Work {
                 }
             }
             (LayerStylePage::Effect(id), Some(instance)) => {
-                self.title_with_preview(ui, words, words.effect(instance.kind).clone());
+                Text::new(words.effect(instance.kind).clone()).role(TypeRole::Title).show(ui);
                 let Some(spec) = env.specs.iter().find(|spec| spec.kind == instance.kind) else { return };
                 let input = PageInput {
                     spec,
@@ -403,17 +396,6 @@ impl Work {
                 self.extras.new_style = out.new_style;
             }
         }
-    }
-
-    /// The page title with the Preview check box at its end; a click flips the copy's `preview`.
-    fn title_with_preview(&mut self, ui: &mut Ui, words: &LayerStyleWords, title: Label) {
-        let (shown, flipped) = (self.next.preview, &mut self.next.preview);
-        title_row(ui, title, |ui| {
-            let check = Checkbox::new(Bind::given(shown)).label(words.preview.clone()).id_salt("preview").show(ui);
-            if let Some(on) = check.value() {
-                *flipped = *on;
-            }
-        });
     }
 }
 
