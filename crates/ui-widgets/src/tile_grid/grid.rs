@@ -14,8 +14,8 @@ use super::tile::AroundPicture;
 use super::{CaptionPlace, Tile, TilePartEvent, ZoomStep};
 use crate::contract::{
     Access, Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, ColumnKind, ColumnSpec, Common, Component,
-    ContainerProps, Cx, EditResponse, Focus as _, ListDrag, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, RowState, SelectMode,
-    Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn,
+    ContainerProps, Cx, EditResponse, Focus as _, ListDrag, NoValue, Notch, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, RowState,
+    SelectMode, Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn,
 };
 use crate::contract::{lead_position, section_part};
 use crate::controls::disclosure::Disclosure;
@@ -173,9 +173,13 @@ impl TileGridStyle {
     }
 }
 
+/// The share of the grid's view one wheel notch scrolls (LightCraft's filmstrip).
+const WHEEL_SHARE: f32 = 1.0 / 3.0;
+
 /// A grid of tiles: one Tab stop, the selection rules of the collection contract, type-ahead on the tiles' names (with
 /// `type_ahead`), rename in place (F2, or a slow second click on the caption of the only selected tile), drag to reorder, files dropped from the OS, and the request for the app's context
-/// menu. A double click on the background reports `CollectionEvent::EmptyActivated` (an import, in FilmCraft).
+/// menu. A double click on the background reports `CollectionEvent::EmptyActivated` (an import, in FilmCraft). One wheel
+/// notch scrolls a third of the grid's view.
 ///
 /// The picture side is `zoom` times the thumbnail side (the card thumbnail unless `thumb_size` names one): the factor the app's zoom control holds. A card is the
 /// picture plus what the tile adds around it, whatever the layout. Pictures are `aspect` wide over high; with
@@ -288,7 +292,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
         TileGrid {
             common: Common::new(),
             props: ContainerProps::new().sizing(Sizing::Fill),
-            items: CollectionProps::new().select(SelectMode::Multi).slow_click_rename(true),
+            items: CollectionProps::new().select(SelectMode::Multi).slow_click_rename(true).notch(Notch::ViewShare(WHEEL_SHARE)),
             selection: None,
             reveal: None,
             justified: false,

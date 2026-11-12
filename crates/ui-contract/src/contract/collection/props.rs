@@ -2,6 +2,7 @@
 
 use super::columns::{ColumnSort, ColumnSpec};
 use super::events::ListDrag;
+use crate::contract::Notch;
 use crate::runtime::env::{Counted, Label};
 use craft_behavior::{Axis, ColumnKey};
 use std::any::Any;
@@ -196,6 +197,8 @@ pub struct CollectionProps {
     /// The most rows the collection shows: past them it is as tall as its first `max_rows` rows and scrolls them. It
     /// owns that scroll inside a scrolling body too, since its height is bounded and the wheel passes on at its ends.
     pub max_rows: Option<u16>,
+    /// The distance one wheel notch scrolls the rows; unset, the default notch.
+    pub notch: Option<Notch>,
     /// The axis the rows overflow along. A collection owns the scroll along it, so it sits only in a scrolling body
     /// that does not scroll along it too: a strip of tabs (`Axis::X`) sits in a page that scrolls vertically.
     pub overflow: Axis,
@@ -281,6 +284,7 @@ impl CollectionProps {
             natural_height: false,
             min_rows: 0,
             max_rows: None,
+            notch: None,
             overflow: Axis::Y,
             pages: false,
             current: None,
@@ -496,6 +500,13 @@ impl CollectionProps {
     #[must_use]
     pub const fn max_rows(mut self, rows: u16) -> Self {
         self.max_rows = Some(rows);
+        self
+    }
+
+    /// The distance one wheel notch scrolls the rows (see [`CollectionProps::notch`]).
+    #[must_use]
+    pub const fn notch(mut self, notch: Notch) -> Self {
+        self.notch = Some(notch);
         self
     }
 

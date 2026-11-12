@@ -417,6 +417,16 @@ impl Default for Notch {
     }
 }
 
+impl Notch {
+    /// The wheel distance of the notch, with a text line `line` points high.
+    pub fn wheel(self, line: f32) -> craft_behavior::WheelNotch {
+        match self {
+            Notch::Lines(lines) => craft_behavior::WheelNotch::Points(lines * line),
+            Notch::ViewShare(share) => craft_behavior::WheelNotch::ViewShare(share),
+        }
+    }
+}
+
 /// The axes a body scrolls on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

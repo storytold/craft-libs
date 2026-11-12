@@ -191,6 +191,7 @@ const COLLECTION: &[Forwarded] = &[
     ("natural_height", "bool", "The collection takes its full content height and owns no scroll: for a short collection inside a scrolling page."),
     ("min_rows", "u16", "The collection is at least this many rows tall; rows it does not have count the control height."),
     ("max_rows", "u16", "The collection shows at most this many rows and scrolls the rest, inside a scrolling body too."),
+    ("notch", "::craft_ui::contract::Notch", "The distance one wheel notch scrolls the rows."),
     (
         "current",
         "::core::option::Option<impl ::core::marker::Send + ::core::marker::Sync + 'static>",

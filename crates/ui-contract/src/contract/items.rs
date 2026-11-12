@@ -145,6 +145,8 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     scrolls: bool,
     /// The collection shows at most `max_rows` rows: its height is bounded by its rows, whatever its sizing.
     capped: bool,
+    /// The distance one wheel notch scrolls the rows, from `CollectionProps::notch`.
+    notch: craft_behavior::WheelNotch,
     /// The axis the rows overflow along.
     overflow: Axis,
     selection: C::Selection,
@@ -208,6 +210,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             from_content: (false, false),
             scrolls: true,
             capped: false,
+            notch: craft_behavior::WheelNotch::DEFAULT,
             overflow: Axis::Y,
             selection: C::Selection::default(),
             selection_at_read: C::Selection::default(),

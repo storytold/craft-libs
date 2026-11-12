@@ -2,7 +2,7 @@
 
 use craft_behavior::{EditEvent, keyed};
 use craft_ui::contract::{CollectionEvent, ShowCollection as _};
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::testing::{Fixture, pointer, trial};
 use craft_ui::tile_grid::{GridEvent, RatingKeys, Tile, TileGrid, ZoomStep};
 use egui::{Key, Modifiers, Vec2};
 use std::cell::RefCell;
@@ -107,4 +107,30 @@ fn a_double_click_on_the_background_activates_the_empty_space() {
     fixture.click_at(tile.center()).click_at(tile.center()).idle(1);
     assert_eq!(count(&seen, |event| matches!(event, CollectionEvent::Activate(1))), 1, "a double click on a tile activates it");
     assert_eq!(count(&seen, |event| matches!(event, CollectionEvent::EmptyActivated)), 1, "and is no background double click");
+}
+
+/// One wheel notch over a grid that overflows scrolls a third of its view.
+#[trial]
+fn a_wheel_notch_scrolls_a_third_of_the_view() {
+    let seen = Rc::new(RefCell::new((0..40usize).map(|_| egui::Rect::NOTHING).collect::<Vec<_>>()));
+    let held = seen.clone();
+    let view = Rc::new(std::cell::Cell::new(egui::Rect::NOTHING));
+    let shown = view.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let keys: Vec<usize> = (0..40).collect();
+        let source = keyed(&keys, |key: &usize| *key);
+        let out = TileGrid::new("Library").show_items(ui, &source, &mut |key, icx| {
+            held.borrow_mut()[*key] = icx.rect;
+            Tile::new(format!("Tile {key}"))
+        });
+        shown.set(out.response.response.rect);
+    });
+    fixture.room(Vec2::new(600.0, 300.0));
+    fixture.settle();
+    let top = seen.borrow()[0].min.y;
+    fixture.frame(vec![pointer::moved(view.get().center())]);
+    fixture.frame(vec![pointer::wheel_lines(-1.0)]).idle(2);
+    let moved = top - seen.borrow()[0].min.y;
+    let share = moved / view.get().height();
+    assert!((0.3..0.37).contains(&share), "one notch scrolls a third of the view: {moved} of {}", view.get().height());
 }

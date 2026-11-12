@@ -15,7 +15,7 @@ use super::{BodyHooks, BodyView};
 use crate::contract::cx::{BodyCx, BodyOwner};
 use crate::contract::label::{self, LabelIn};
 use crate::contract::run::{Measuring, ShapeHooks, ShowAt};
-use crate::contract::{Container, Cx, DragBand, Gap, Internal, Mount, Notch, PartsCx, SetPosition, Sizing, ValueOf};
+use crate::contract::{Container, Cx, DragBand, Gap, Internal, Mount, PartsCx, SetPosition, Sizing, ValueOf};
 use crate::layout::{self};
 use crate::primitives::SurfaceSlot;
 use crate::runtime::access::scope;
@@ -32,7 +32,7 @@ use crate::runtime::{keys, layout_memory, pointer, wheel};
 use crate::style::ComponentStyle as _;
 use crate::style::{ScrollBarKind, StyleCx, SurfaceKind, scroll_bar_look, surface_style};
 use craft_behavior::layout_memory::measure_tolerance;
-use craft_behavior::{CancelRule, CursorIcon, EditEvent, KeyRole, Mixed, Roving, ScrollPos, ScrollSpan, WheelNotch, WheelRoom, WheelTaker};
+use craft_behavior::{CancelRule, CursorIcon, EditEvent, KeyRole, Mixed, Roving, ScrollPos, ScrollSpan, WheelRoom, WheelTaker};
 use egui::{Context, CornerRadius, Id, Pos2, Rect, Shape, Ui, UiBuilder, Vec2};
 use std::any::Any;
 use std::sync::Arc;
@@ -548,10 +548,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 pcx.scroll(bar.key, bar.track, bar.axis, span);
             }
             if let Some(scroll) = scroll {
-                let notch = match scroll.notch {
-                    Notch::Lines(lines) => WheelNotch::Points(lines * tokens.tokens().typography.body.line_height),
-                    Notch::ViewShare(share) => WheelNotch::ViewShare(share),
-                };
+                let notch = scroll.notch.wheel(tokens.tokens().typography.body.line_height);
                 // A region takes an axis only while its content overflows there, and hands the wheel on at its ends.
                 let max = self.max_offset(view.size());
                 let (vertical, horizontal) = (scroll.vertical_on() && max.y > 0.0, scroll.horizontal_on() && max.x > 0.0);

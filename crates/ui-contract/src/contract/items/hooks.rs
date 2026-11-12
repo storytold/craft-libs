@@ -20,7 +20,8 @@ use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::{focus, keys, layout_memory, lazy, overlay, wheel};
 use crate::style::{ComponentStyle as _, ScrollBarKind, StyleCx, SurfaceKind, scroll_bar_look, surface_style};
 use craft_behavior::{
-    Axis, CancelReason, EditEvent, Intent, ItemLayout, Mixed, Proposal, ScrollPos, ScrollSpan, SelectionModel, Sense, WheelRoom, WheelTaker,
+    Axis, CancelReason, EditEvent, Intent, ItemLayout, Mixed, Proposal, ScrollPos, ScrollSpan, SelectionModel, Sense, WheelNotch, WheelRoom,
+    WheelTaker,
 };
 use egui::{Context, Id, Pos2, Rect, Ui, UiBuilder, Vec2};
 use std::rc::Rc;
@@ -274,8 +275,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         Some(Rc::new(Rows { rects, offset }))
     }
 
-    fn parts(&mut self, _: &mut C, _: Rect, pcx: &mut PartsCx<'_, C>) {
+    fn parts(&mut self, comp: &mut C, _: Rect, pcx: &mut PartsCx<'_, C>) {
         self.header.parts(pcx);
+        self.notch = comp.items().notch.map_or(WheelNotch::DEFAULT, |notch| notch.wheel(pcx.tokens.typography.body.line_height));
         if !self.scrolls {
             return;
         }
@@ -304,6 +306,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             wheel::register(
                 &cx.core.ctx,
                 WheelTaker::new(cx.core.id, cx.core.rect)
+                    .notch(self.notch)
                     .vertical((vertical && max.y > 0.0) || horizontal)
                     .horizontal(horizontal)
                     .scrolls(true)
