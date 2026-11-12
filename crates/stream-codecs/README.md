@@ -8,8 +8,8 @@ reader can use the same LZW, predictor, CCITT and JBIG2 code.
 - **Licence:** MIT OR Apache-2.0. Written from ISO 32000-2 §7.4, TIFF 6.0 §14 (predictor 2) and
   RFC 2083 §6 (PNG filters). CCITT Group 4 encoding (ITU-T T.6) is the `fax` crate's (MIT). CCITT
   decoding (T.4 and T.6) is `hayro-ccitt`'s (MIT OR Apache-2.0), bounded here: this crate has
-  no CCITT decoder of its own, and no JBIG2 decoder (that is `hayro-jbig2`, which the tests
-  read the encoder's output back with). JBIG2 encoding
+  no CCITT decoder of its own. JBIG2 decoding is `hayro-jbig2`'s (MIT OR Apache-2.0), bounded
+  here the same way. JBIG2 encoding
   is written from the public ISO/IEC 14492 Final Committee Draft (WG1 N1359, 1999); Annex H.2
   checks the arithmetic coder byte for byte.
 - No `unsafe`. Never panics on input.
@@ -35,6 +35,7 @@ pub struct CcittParams { k, columns, rows, end_of_line, encoded_byte_align, end_
 decode_ccitt_within(data, &params, max_rows, work: &mut u64) -> Result<Vec<u8>, CodecError>
 encode_g4(data, columns, rows) -> Result<Vec<u8>, CodecError>
 
+decode_jbig2_within(data, globals, columns, rows, max, work: &mut u64) -> Result<Vec<u8>, CodecError>
 encode_jbig2_generic(data, columns, rows) -> Result<Vec<u8>, CodecError>
 encode_jbig2(data, columns, rows) -> Result<Vec<u8>, CodecError>
 encode_jbig2_shared(&[(data, columns, rows)]) -> Result<Option<SharedJbig2>, CodecError>
@@ -54,7 +55,7 @@ each row on a new byte.
 | ASCII85 | `<~` prefix, `z`, white space, `~>` (or bare `~`, or none), final partial group; `z` inside a group, a 1-character final group, overflow or bad characters are `Corrupt` | `z` for zero groups, newline every 75 characters, `~>` |
 | RunLength | 0–127 literal, 129–255 repeat, 128 ends (optional); a truncated run is `Corrupt` | runs of 2 or more repeat, literals up to 128, 128 |
 | CCITT fax | Group 3 (1-D and 2-D) and Group 4 through `hayro-ccitt`, as rows of 1-bit samples, black 0 unless `black_is_1`, at most `max_rows` rows (fewer with `rows`), the rows before any damage, up to `MAX_CCITT_COLUMNS` (1,048,576) samples a row; the rows are paid for from `work` before they are decoded | `encode_g4`: Group 4 with an end-of-block mark, 0 bits coded black; up to `MAX_G4_COLUMNS` (32,767) samples a row |
-| JBIG2 | not here: `hayro-jbig2` | `encode_jbig2_generic`: one immediate lossless generic region (template 0, typical prediction, MQ coder). `encode_jbig2`: the smaller of that and symbol coding (exact copies only, so the stream decodes to the same bits). `encode_jbig2_shared`: a group of images sharing one symbol dictionary (the PDF `/JBIG2Globals` data) |
+| JBIG2 | `decode_jbig2_within`: the embedded organisation through `hayro-jbig2`, with the decoded globals if any, as rows of 1-bit samples, black 0; the page has to be `columns` × `rows`, within `max` bytes and `MAX_JBIG2_PIXELS` (2^28), checked before it is decoded; reading and decoding spend from `work`, in the decoder's steps | `encode_jbig2_generic`: one immediate lossless generic region (template 0, typical prediction, MQ coder). `encode_jbig2`: the smaller of that and symbol coding (exact copies only, so the stream decodes to the same bits). `encode_jbig2_shared`: a group of images sharing one symbol dictionary (the PDF `/JBIG2Globals` data) |
 
 The limits of the JBIG2 encoder (symbols per plan, instances per text region, marks, runs) are
 those `hayro-jbig2` reads back; they are documented on the constants in `src/jbig2/symbols.rs`.
@@ -69,10 +70,12 @@ those `hayro-jbig2` reads back; they are documented on the constants in `src/jbi
 - `mq.rs`: the arithmetic coder reproduces Annex H.2's 30 bytes from its 256 decisions.
 - `jbig2.rs`, `jbig2/symbols.rs`: output decoded by `hayro-jbig2` matches the input bits for
   every coding, plan and strip size, with property tests; size and limit refusals.
+- `jbig2/decode.rs`: `decode_jbig2_within` gives back the rows of both codings; refuses a page
+  of another size, past `max` or past `MAX_JBIG2_PIXELS` before decoding it, globals that are
+  not JBIG2 and damaged data; stops when `work` is spent; every prefix of a stream returns
+  rather than panics.
 
 ## Not here
 
-A bounded JBIG2 decoding entry (`decode_jbig2_within` in PdfCraft): it needs the caller-owned
-work allowance PdfCraft added to its `hayro-jbig2` (`Image::decode_within`, `charge_reading`),
-which the copy vendored here does not have yet. Flate (a container's choice of zlib settings and tolerances), DCT and JPEG 2000, CCITT Group 3
+Flate (a container's choice of zlib settings and tolerances), DCT and JPEG 2000, CCITT Group 3
 encoding.
