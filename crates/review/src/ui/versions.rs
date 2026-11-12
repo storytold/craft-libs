@@ -9,7 +9,7 @@ use craft_theme::variant::Variant;
 use craft_ui::buttons::{Button, ButtonOutput, IconButton, Link};
 use craft_ui::contract::overlay::Anchor;
 use craft_ui::contract::{
-    ActivateOn, Bind, CollectionEvent, Entry, NoValue, OpenChange, Outcome, Pattern, Props, Remember as _, SelectMode, Show as _,
+    ActivateOn, Bind, CollectionEvent, Entry, Gap, NoValue, OpenChange, Outcome, Pattern, Props, Remember as _, RowAlign, SelectMode, Show as _,
     ShowCollection as _, ShowContainer as _, Trigger, clicked,
 };
 use craft_ui::display::{Shade, Text};
@@ -242,7 +242,7 @@ impl<'a> VersionHistoryPanel<'a> {
         let mut actions = Vec::new();
         let shown = Stack::new().label(label).show(ui, |ui, cx| {
             let mut state = std::mem::take(cx.keep::<PanelState>());
-            Row::new().show(ui, |ui, _| {
+            Row::new().fill_width().align(RowAlign::SpaceBetween).show(ui, |ui, _| {
                 Text::new(words.title.clone()).role(TypeRole::Title).show(ui);
                 if state.form.is_none() && clicked(&Button::new(words.save.clone()).show(ui)) {
                     state.form = Some((String::new(), String::new()));
@@ -295,20 +295,22 @@ fn branch_section(
         Text::new(words.no_branches.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
     }
     for branch in branches {
-        Row::new().show(ui, |ui, _| {
-            if clicked(&Link::new(branch.name.clone()).id_salt(("branch", branch.id)).show(ui)) {
-                actions.push(VersionAction::OpenBranch(branch.id));
-            }
-            let state_word = match branch.state {
-                BranchState::Active => &words.branch_active,
-                BranchState::Merged => &words.branch_merged,
-                BranchState::Archived => &words.branch_archived,
-            };
-            let date = age_text(view, branch.created, now);
-            Text::new(words.branch_detail.fill(&[("state", state_word.as_str()), ("date", date.as_str())]))
-                .role(TypeRole::Caption)
-                .shade(Shade::Muted)
-                .show(ui);
+        Row::new().fill_width().align(RowAlign::SpaceBetween).show(ui, |ui, _| {
+            Stack::new().gap(Gap::None).show(ui, |ui, _| {
+                if clicked(&Link::new(branch.name.clone()).id_salt(("branch", branch.id)).show(ui)) {
+                    actions.push(VersionAction::OpenBranch(branch.id));
+                }
+                let state_word = match branch.state {
+                    BranchState::Active => &words.branch_active,
+                    BranchState::Merged => &words.branch_merged,
+                    BranchState::Archived => &words.branch_archived,
+                };
+                let date = age_text(view, branch.created, now);
+                Text::new(words.branch_detail.fill(&[("state", state_word.as_str()), ("date", date.as_str())]))
+                    .role(TypeRole::Caption)
+                    .shade(Shade::Muted)
+                    .show(ui);
+            });
             let name = words.branch_more.fill(&[("branch", branch.name.as_str())]);
             let more = IconButton::new(IconId::new("more")).label(name.clone()).id_salt(("more", branch.id)).show(ui);
             let mut entries = vec![Entry::new(0u8, words.open.clone()), Entry::new(1, words.review_merge.clone())];

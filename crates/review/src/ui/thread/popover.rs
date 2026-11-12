@@ -1,10 +1,10 @@
 //! The thread popover and the comment composer.
 
 use craft_behavior::IconId;
-use craft_theme::variant::Tone;
+use craft_theme::variant::{Tone, Variant};
 use craft_ui::buttons::{Button, IconButton, ToggleButton};
 use craft_ui::contract::overlay::Anchor;
-use craft_ui::contract::{Bind, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _, Trigger, clicked};
+use craft_ui::contract::{Bind, Pattern, Props as _, Remember as _, RowAlign, Show as _, ShowContainer as _, Trigger, clicked};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::menu::{Menu, MenuItem};
@@ -102,12 +102,12 @@ impl ThreadPopover<'_> {
         let shown = popover.show(ui, |ui, cx| {
             let Editing(mut editing) = cx.keep::<Editing>().clone();
             Stack::new().show(ui, |ui, _| {
-                Row::new().show(ui, |ui, _| {
+                Row::new().fill_width().align(RowAlign::End).show(ui, |ui, _| {
                     let resolved = thread.resolved;
                     let label = if resolved { &words.reopen } else { &words.resolve };
-                    let toggle = ToggleButton::new(label.clone(), Bind::given(resolved)).show(ui);
-                    if let Some(&now_resolved) = toggle.value() {
-                        edits.push(CommentEdit::Resolve { thread: thread.id, resolved: now_resolved });
+                    let resolve = IconButton::new(IconSpec::svg(IconId::new("check"))).label(label.clone()).selected(resolved).show(ui);
+                    if clicked(&resolve) {
+                        edits.push(CommentEdit::Resolve { thread: thread.id, resolved: !resolved });
                     }
                     let more = IconButton::new(IconSpec::svg(IconId::new("more"))).label(words.more.clone()).show(ui);
                     let mut ran = None;
@@ -128,29 +128,33 @@ impl ThreadPopover<'_> {
                     close |= clicked(&IconButton::new(IconSpec::svg(IconId::new("close"))).label(words.close.clone()).show(ui));
                 });
                 for (index, message) in thread.messages.iter().enumerate() {
-                    Row::new().show(ui, |ui, _| {
+                    Row::new().fill_width().show(ui, |ui, _| {
                         let _ = Avatar::new(message.author.clone()).show(ui);
-                        Stack::new().show(ui, |ui, _| {
-                            Row::new().show(ui, |ui, _| {
-                                Text::new(message.author.clone()).role(TypeRole::BodyStrong).show(ui);
-                                let age = age_text(&view, message.modified.unwrap_or(message.created), now);
-                                Text::new(age).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
-                                if message.author == me {
-                                    let delete = IconButton::new(IconSpec::svg(IconId::new("trash"))).label(words.delete.clone()).show(ui);
-                                    if clicked(&delete) {
-                                        edits.push(CommentEdit::Delete { thread: thread.id, index });
-                                    }
-                                    let edit = IconButton::new(IconSpec::svg(IconId::new("pencil"))).label(words.edit.clone()).show(ui);
-                                    if clicked(&edit) {
-                                        editing = Some((index, message.text.clone()));
-                                    }
-                                }
-                                let react = IconButton::new(IconSpec::svg(IconId::new("plus"))).label(words.react.clone()).show(ui);
-                                Menu::new(words.react.clone()).opened_by(&react, Trigger::Click).show(ui, |ui, _| {
-                                    for emoji in REACTIONS {
-                                        let mine = message.reactions.iter().any(|r| r.emoji == emoji && r.people.iter().any(|p| p == me));
-                                        if MenuItem::new(emoji.to_owned()).check(mine).show(ui).ran {
-                                            edits.push(CommentEdit::React { thread: thread.id, index, emoji: emoji.to_owned() });
+                        Stack::new().fill_width().show(ui, |ui, _| {
+                            Row::new().fill_width().align(RowAlign::SpaceBetween).show(ui, |ui, _| {
+                                Row::new().show(ui, |ui, _| {
+                                    Text::new(message.author.clone()).role(TypeRole::BodyStrong).show(ui);
+                                    let age = age_text(&view, message.modified.unwrap_or(message.created), now);
+                                    Text::new(age).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+                                });
+                                Row::new().show(ui, |ui, _| {
+                                    let react = IconButton::new(IconSpec::svg(IconId::new("plus"))).label(words.react.clone()).show(ui);
+                                    Menu::new(words.react.clone()).opened_by(&react, Trigger::Click).show(ui, |ui, _| {
+                                        for emoji in REACTIONS {
+                                            let mine = message.reactions.iter().any(|r| r.emoji == emoji && r.people.iter().any(|p| p == me));
+                                            if MenuItem::new(emoji.to_owned()).check(mine).show(ui).ran {
+                                                edits.push(CommentEdit::React { thread: thread.id, index, emoji: emoji.to_owned() });
+                                            }
+                                        }
+                                    });
+                                    if message.author == me {
+                                        let edit = IconButton::new(IconSpec::svg(IconId::new("pencil"))).label(words.edit.clone()).show(ui);
+                                        if clicked(&edit) {
+                                            editing = Some((index, message.text.clone()));
+                                        }
+                                        let delete = IconButton::new(IconSpec::svg(IconId::new("trash"))).label(words.delete.clone()).show(ui);
+                                        if clicked(&delete) {
+                                            edits.push(CommentEdit::Delete { thread: thread.id, index });
                                         }
                                     }
                                 });
@@ -163,7 +167,7 @@ impl ThreadPopover<'_> {
                                     }
                                     let escaped = field.escaped;
                                     let trimmed = text.trim().to_owned();
-                                    let post = Button::new(words.post.clone()).enabled(!trimmed.is_empty()).show(ui);
+                                    let post = Button::new(words.post.clone()).variant(Variant::PRIMARY).enabled(!trimmed.is_empty()).show(ui);
                                     let post_clicked = clicked(&post);
                                     if post_clicked && !trimmed.is_empty() {
                                         edits.push(CommentEdit::Edit { thread: thread.id, index, text: trimmed });
@@ -218,7 +222,7 @@ impl ThreadPopover<'_> {
                     *draft = kept;
                 }
                 let text = draft.trim().to_owned();
-                let post = Button::new(words.post.clone()).enabled(!text.is_empty()).show(ui);
+                let post = Button::new(words.post.clone()).variant(Variant::PRIMARY).enabled(!text.is_empty()).show(ui);
                 if (clicked(&post) || field.submitted) && !text.is_empty() {
                     edits.push(CommentEdit::Reply { thread: thread.id, text });
                     draft.clear();
