@@ -86,6 +86,7 @@ craft-update = { path = "crates/update" }
 craft-vectorcraft-format = { path = "crates/vectorcraft-format" }
 craft-vectordrawable = { path = "crates/vectordrawable" }
 craft-xls = { path = "crates/xls" }
+craft-xlsx = { path = "crates/xlsx" }
 craft-xml = { path = "crates/xml" }
 craft-epub = { path = "crates/epub" }
 craft-video = { path = "crates/video" }
