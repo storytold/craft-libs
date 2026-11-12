@@ -28,6 +28,7 @@ mod stories;
 
 use std::cell::RefCell;
 use std::hash::Hash;
+use std::num::NonZeroU8;
 use std::sync::Arc;
 
 use craft_behavior::{ColumnKey, EditEvent, IconId, Mixed, Selection, SelectionChange};
@@ -36,10 +37,10 @@ use craft_ui::bars::{Bar, BarKind, BreadcrumbBar};
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::{
     Bind, BodyCx, ColumnEvent, ColumnSort, ColumnSpec, CommandSet, Commands as _, ContextMenuRequest, Entry, ListDrag, NoValue, OpenChange, Outcome,
-    Pattern, Props as _, ReorderMove, Show as _, ShowContainer as _, Sizing, clicked,
+    Pattern, Props as _, ReorderMove, RowAlign, Show as _, ShowContainer as _, Sizing, clicked,
 };
 use craft_ui::display::{Shade, Text};
-use craft_ui::layout_components::Stack;
+use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::{OpenSet, ThumbSize};
 use craft_ui::primitives::textures::{TextureKey, ThumbSource, Thumbnails};
 use craft_ui::runtime::env::{Env, Label};
@@ -58,6 +59,9 @@ const ZOOM_DEFAULT: f64 = 1.0;
 const ZOOM_MIN: f64 = 0.5;
 const ZOOM_MAX: f64 = 4.0;
 const ZOOM_STEP: f64 = 0.25;
+
+/// The header's rows: the title, then the search.
+const TWO_ROWS: NonZeroU8 = NonZeroU8::MIN.saturating_add(1);
 
 /// Bins nested deeper than this are not followed, so a model that contains itself ends.
 const MAX_DEPTH: usize = 64;
@@ -428,9 +432,10 @@ impl<K: Eq + Hash + Clone> Default for BinMemory<K> {
 
 /// The project or media panel.
 ///
-/// - **Header.** An Up `IconButton`, a `BreadcrumbBar` of the shown bin's ancestors (`BinModel::parent`,
-///   the root named [`BinWords::root`]), a search field and the item count ([`BinWords::items`], or
-///   [`BinWords::selected_of`] with a selection). Then the host's `.header(..)` slot.
+/// - **Header.** Two rows of one tool `Bar`: an Up `IconButton` and a `BreadcrumbBar` of the shown bin's
+///   ancestors (`BinModel::parent`, the root named [`BinWords::root`]); then, at the end edge, a search field and the
+///   item count ([`BinWords::items`], or [`BinWords::selected_of`] with a selection). Then the host's `.header(..)`
+///   slot.
 /// - **Search.** Typing filters live by [`name_matches`]; a non-empty search lists matches from every
 ///   sub-bin, flat; Esc clears, a second Esc leaves the field.
 /// - **List view** (`list.rs`): a tree `Table`, bins before items, every bin a group so an empty bin has
@@ -674,23 +679,30 @@ where
             };
             let crumbs = crumbs_of(model, local.shown.as_ref(), &words.root.clone());
             let shown = local.shown.clone();
-            let _ = Bar::new(Label::Empty, BarKind::Tool).show(ui, |ui, _| {
-                let up = IconButton::new(IconId::new("chevron_up")).label(words.up.clone()).enabled(shown.is_some()).show(ui);
-                if clicked(&up) {
-                    let to = shown.as_ref().and_then(|key| model.parent(key));
-                    local.apply(&BinEvent::Navigate(to.clone()));
-                    events.push(BinEvent::Navigate(to));
-                }
-                if let Some(target) = BreadcrumbBar::new(words.path.clone(), &crumbs).show(ui).picked {
-                    local.apply(&BinEvent::Navigate(target.clone()));
-                    events.push(BinEvent::Navigate(target));
-                }
-                let typed = local.search.clone();
-                TextField::search(words.search.clone(), Bind::bound(&mut local.search)).placeholder(words.search.clone()).drives(list_id).show(ui);
-                if local.search != typed {
-                    events.push(BinEvent::Search(local.search.clone()));
-                }
-                Text::new(count_text.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
+            let _ = Bar::new(Label::Empty, BarKind::Tool).rows(TWO_ROWS).show(ui, |ui, _| {
+                Row::new().fill_width().show(ui, |ui, _| {
+                    let up = IconButton::new(IconId::new("chevron_up")).label(words.up.clone()).enabled(shown.is_some()).show(ui);
+                    if clicked(&up) {
+                        let to = shown.as_ref().and_then(|key| model.parent(key));
+                        local.apply(&BinEvent::Navigate(to.clone()));
+                        events.push(BinEvent::Navigate(to));
+                    }
+                    if let Some(target) = BreadcrumbBar::new(words.path.clone(), &crumbs).show(ui).picked {
+                        local.apply(&BinEvent::Navigate(target.clone()));
+                        events.push(BinEvent::Navigate(target));
+                    }
+                });
+                Row::new().fill_width().align(RowAlign::End).show(ui, |ui, _| {
+                    let typed = local.search.clone();
+                    TextField::search(words.search.clone(), Bind::bound(&mut local.search))
+                        .placeholder(words.search.clone())
+                        .drives(list_id)
+                        .show(ui);
+                    if local.search != typed {
+                        events.push(BinEvent::Search(local.search.clone()));
+                    }
+                    Text::new(count_text.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
+                });
             });
             if let Some(header) = header.borrow_mut().as_mut() {
                 header(ui);
