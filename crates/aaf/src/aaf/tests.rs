@@ -474,6 +474,27 @@ fn audio_tracks_keep_their_names() {
 }
 
 #[test]
+fn sound_source_offsets_use_audio_sample_rate_on_disk() {
+    let doc = crate::testdoc::sound_only(None);
+    let bytes = written(&doc, false);
+    let root = store::read(&bytes).unwrap();
+    let mut all = Vec::new();
+    walk(&root, &mut all);
+    let starts: Vec<i64> = all.iter().filter(|o| o.class == cls::SOURCE_CLIP).filter_map(|o| o.i64(pid::START_TIME)).collect();
+    assert!(starts.contains(&19_200), "expected 0.4 seconds at 48 kHz: {starts:?}");
+    let back = read_clean(&bytes);
+    let clip = back.compositions[0].tracks[0]
+        .items
+        .iter()
+        .find_map(|i| match i {
+            CItem::Clip(c) => Some(c),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(clip.start, craft_timeline::time::FrameRate::FPS_25.tick_of(10));
+}
+
+#[test]
 fn flattened_selectors_and_nested_scopes_are_reported() {
     for (class, property, message) in
         [(cls::SELECTOR, pid::SELECTED, "selector was flattened"), (cls::NESTED_SCOPE, pid::NESTED_SLOTS, "nested scope was flattened")]

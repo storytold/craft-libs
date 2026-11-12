@@ -217,3 +217,27 @@ fn a_composition_nested_in_itself_is_a_gap() {
     assert_eq!(back.nested.len(), 1);
     assert!(matches!(back.nested[0].tracks[0].items[..], [CItem::Filler(_)]), "{:?}", back.nested[0].tracks[0].items);
 }
+
+#[test]
+fn aaf_source_start_uses_referenced_slot_rate() {
+    let doc = sound_only(None);
+    let bytes = aaf_bytes(&doc, false);
+    let back = read_clean(&bytes, true);
+    let original = doc.compositions[0].tracks[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            CItem::Clip(c) => Some(c.start),
+            _ => None,
+        })
+        .unwrap();
+    let actual = back.compositions[0].tracks[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            CItem::Clip(c) => Some(c.start),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(actual, original);
+}

@@ -386,7 +386,6 @@ impl R<'_> {
 
     fn clip(&mut self, c: &Obj, rate: (i64, i64), kind: CKind, master_key: Option<String>) -> CItem {
         let len = units_to_ticks(len_of(c), rate.0, rate.1);
-        let start = units_to_ticks(c.i64(pid::START_TIME).unwrap_or(0), rate.0, rate.1);
         let name = tagged_values(c, pid::COMPONENT_USER_COMMENTS).into_iter().find(|(k, _)| k == "Clip Name").map(|(_, v)| v).unwrap_or_default();
         let (Some(id), Some(slot)) = (c.mob_id(pid::SOURCE_ID), c.u32(pid::SOURCE_MOB_SLOT_ID)) else { return CItem::Filler(len) };
         if id == [0; 32] {
@@ -395,6 +394,13 @@ impl R<'_> {
         if let Some(mob) = self.mobs.get(&id).copied().filter(|m| m.class == cls::COMPOSITION_MOB) {
             return self.nest_clip(c, NestClip { mob, mob_id: id, slot_id: slot, rate, kind, name });
         }
+        let source_rate = self
+            .mobs
+            .get(&id)
+            .and_then(|mob| mob.objs(pid::SLOTS).iter().find(|s| s.u32(pid::SLOT_ID) == Some(slot)))
+            .and_then(|s| rate_of(s, pid::EDIT_RATE))
+            .unwrap_or(rate);
+        let start = units_to_ticks(c.i64(pid::START_TIME).unwrap_or(0), source_rate.0, source_rate.1);
         match self.resolve(id, slot, start, kind, master_key, 0) {
             Some((source, t)) => CItem::Clip(CClip { len, source, start: t, gain: None, name }),
             None => CItem::Filler(len),
@@ -491,9 +497,15 @@ impl R<'_> {
         if mob.class == cls::MASTER_MOB {
             let key = master_key.unwrap_or_else(|| hex(&id));
             let clip = first_clip(seg)?;
-            let inner = units_to_ticks(clip.i64(pid::START_TIME).unwrap_or(0), rate.0, rate.1);
             let next = clip.mob_id(pid::SOURCE_ID)?;
             let next_slot = clip.u32(pid::SOURCE_MOB_SLOT_ID)?;
+            let source_rate = self
+                .mobs
+                .get(&next)
+                .and_then(|m| m.objs(pid::SLOTS).iter().find(|s| s.u32(pid::SLOT_ID) == Some(next_slot)))
+                .and_then(|s| rate_of(s, pid::EDIT_RATE))
+                .unwrap_or(rate);
+            let inner = units_to_ticks(clip.i64(pid::START_TIME).unwrap_or(0), source_rate.0, source_rate.1);
             if next == [0; 32] {
                 return None;
             }
