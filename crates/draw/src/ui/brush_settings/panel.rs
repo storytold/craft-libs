@@ -103,7 +103,7 @@ impl<'a, K: Value + Eq + Hash + std::fmt::Debug> BrushSettingsPanel<'a, K> {
         let mut result = None;
         let bottom = |ui: &mut Ui, _: &mut BodyCx<'_>| {
             Divider::horizontal().show(ui);
-            Grid::new(BOTTOM).show(ui, |ui, _| {
+            Grid::new(BOTTOM).fill_width().show(ui, |ui, _| {
                 if let Some(strip) = strip.clone() {
                     strip.show(ui);
                 }
