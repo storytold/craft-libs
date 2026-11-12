@@ -2,6 +2,7 @@
 //! the format (widths and heights keep the file's units, formulas are text).
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub use craft_sheet::{BorderStyle, CellError, CellRef, HAlign, Pattern, Range, Script, Underline, VAlign, Value, Visibility};
 
@@ -105,6 +106,97 @@ pub struct Sheet {
     pub print_titles: Option<String>,
     /// Data validation rules (Dv records), in file order.
     pub validations: Vec<DataValidation>,
+    /// Cell comments (Note records with their text), in file order.
+    pub notes: Vec<Note>,
+    /// Conditional formats (CF records), in file order: the first has the highest priority.
+    pub conditional_formats: Vec<ConditionalFormat>,
+    /// Pictures placed on the sheet, in drawing order.
+    pub pictures: Vec<Picture>,
+    /// The AutoFilter's range: the sheet's `_FilterDatabase` name, when the sheet has an
+    /// AutoFilterInfo record (the name can outlive the filter). The criteria are not read.
+    pub autofilter: Option<Range>,
+}
+
+/// A cell comment (Note, [MS-XLS] 2.4.179, with the TxO text of its object).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Note {
+    pub cell: CellRef,
+    pub author: String,
+    /// Empty when the comment's text object is missing.
+    pub text: String,
+    /// Shown all the time, not only when the cell is pointed at.
+    pub visible: bool,
+}
+
+/// Where a picture sits: its top left and bottom right corners as a cell and a fraction of it
+/// (OfficeArtClientAnchorSheet, [MS-XLS] 2.5.193): `dx` in 1/1024 of the column's width, `dy`
+/// in 1/256 of the row's height.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClientAnchor {
+    pub col1: u16,
+    pub dx1: u16,
+    pub row1: u16,
+    pub dy1: u16,
+    pub col2: u16,
+    pub dx2: u16,
+    pub row2: u16,
+    pub dy2: u16,
+}
+
+/// A picture: a shape that names a stored picture and has a client anchor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Picture {
+    pub anchor: ClientAnchor,
+    /// The file: PNG, JPEG, EMF, WMF (with its placeable header put back) or BMP (a DIB with a
+    /// file header in front). Shapes that show one picture share its bytes.
+    pub data: Arc<Vec<u8>>,
+    /// `image/png`, `image/jpeg`, `image/x-emf`, `image/x-wmf` or `image/bmp`.
+    pub mime: &'static str,
+}
+
+/// What a conditional format tests.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConditionRule {
+    /// "Cell value is": the cell compared with one formula, or two for `Between` and
+    /// `NotBetween`.
+    CellIs { operator: Operator, formula1: String, formula2: Option<String> },
+    /// A formula that is true.
+    Expression { formula: String },
+}
+
+/// The fill a differential format sets: each part `None` when it leaves the cell's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DxfFill {
+    pub pattern: Option<Pattern>,
+    pub fg: Option<Color>,
+    pub bg: Option<Color>,
+}
+
+/// What a conditional format changes (DXFN, [MS-XLS] 2.5.81): each part `None` when it leaves
+/// the cell's. The font's face and size are never changed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DifferentialFormat {
+    pub number_format: Option<String>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub strike: Option<bool>,
+    pub underline: Option<Underline>,
+    pub font_color: Option<Color>,
+    pub left: Option<BorderLine>,
+    pub right: Option<BorderLine>,
+    pub top: Option<BorderLine>,
+    pub bottom: Option<BorderLine>,
+    pub fill: Option<DxfFill>,
+}
+
+/// A conditional format (CondFmt with one of its CF records).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConditionalFormat {
+    pub ranges: Vec<Range>,
+    /// Formulas are A1 text without `=`, relative references from the top left cell of the
+    /// CondFmt's bounding range.
+    pub rule: ConditionRule,
+    pub format: DifferentialFormat,
 }
 
 /// What a data validation rule allows ([MS-XLS] 2.4.95 `typOperator`'s sibling `valType`).
@@ -122,10 +214,10 @@ pub enum ValidationType {
     Custom,
 }
 
-/// How a rule compares the value with its formulas. Only whole, decimal, date, time and text
-/// length rules have one.
+/// How a value is compared with one or two formulas: in data validation (whole, decimal,
+/// date, time and text length rules) and in "cell value is" conditional formats.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ValidationOperator {
+pub enum Operator {
     #[default]
     Between,
     NotBetween,
@@ -155,7 +247,7 @@ pub struct DataValidation {
     pub ranges: Vec<Range>,
     pub kind: ValidationType,
     /// `Between` for the types without an operator.
-    pub operator: ValidationOperator,
+    pub operator: Operator,
     /// The first formula as A1 text without `=`, relative references from the top left cell of
     /// all the ranges. A literal list is quoted, its items separated by commas and each `"`
     /// doubled (`"Red,Green"`), as SpreadsheetML's `formula1`. Empty for "any value".
