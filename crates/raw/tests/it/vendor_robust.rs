@@ -168,8 +168,79 @@ fn rw2_samples_decode_unmutated() {
     }
 }
 
+/// A Fujifilm RAF: header, records, raw block (LE TIFF whose IFD0 points to a 0xf000 raw IFD).
+fn raf_file(w: u32, h: u32, bits: u32, strip: Vec<u8>, layout: Option<[u8; 36]>, jpeg: &[u8]) -> Vec<u8> {
+    let mut block = b"II*\0\x08\0\0\0".to_vec();
+    let sub_off: u32 = 8 + 2 + 12 + 4;
+    block.extend_from_slice(&1u16.to_le_bytes());
+    block.extend_from_slice(&[0x00, 0xf0, 13, 0, 1, 0, 0, 0]);
+    block.extend_from_slice(&sub_off.to_le_bytes());
+    block.extend_from_slice(&0u32.to_le_bytes());
+    let n = 7u32;
+    let wb_off = sub_off + 2 + 12 * n + 4;
+    let strip_off = wb_off + 12;
+    let entries: [(u16, u32, u32); 7] = [
+        (0xf001, 1, w),
+        (0xf002, 1, h),
+        (0xf003, 1, bits),
+        (0xf007, 1, strip_off),
+        (0xf008, 1, strip.len() as u32),
+        (0xf00a, 1, 64),
+        (0xf00e, 3, wb_off),
+    ];
+    block.extend_from_slice(&(n as u16).to_le_bytes());
+    for (tag, count, v) in entries {
+        block.extend_from_slice(&tag.to_le_bytes());
+        block.extend_from_slice(&4u16.to_le_bytes());
+        block.extend_from_slice(&count.to_le_bytes());
+        block.extend_from_slice(&v.to_le_bytes());
+    }
+    block.extend_from_slice(&0u32.to_le_bytes());
+    for v in [300u32, 600, 450] {
+        block.extend_from_slice(&v.to_le_bytes());
+    }
+    block.extend_from_slice(&strip);
+    let mut recs: Vec<u8> = Vec::new();
+    let mut nrec = 0u32;
+    let mut add = |tag: u16, d: &[u8]| {
+        recs.extend_from_slice(&tag.to_be_bytes());
+        recs.extend_from_slice(&(d.len() as u16).to_be_bytes());
+        recs.extend_from_slice(d);
+        nrec += 1;
+    };
+    add(0x0100, &[(h >> 8) as u8, h as u8, (w >> 8) as u8, w as u8]);
+    add(0x0110, &[0, 2, 0, 4]);
+    add(0x0111, &[0, (h - 2) as u8, 0, (w - 4) as u8]);
+    if let Some(l) = layout {
+        add(0x0131, &l);
+    }
+    let mut dir = nrec.to_be_bytes().to_vec();
+    dir.extend_from_slice(&recs);
+    let mut out = b"FUJIFILMCCD-RAW 0201FF000000TEST".to_vec();
+    out.resize(108, 0);
+    let jpeg_off = 160u32;
+    let dir_off = jpeg_off + jpeg.len() as u32;
+    let raw_off = dir_off + dir.len() as u32;
+    for (i, v) in [jpeg_off, jpeg.len() as u32, dir_off, dir.len() as u32, raw_off, block.len() as u32].iter().enumerate() {
+        out[84 + i * 4..88 + i * 4].copy_from_slice(&v.to_be_bytes());
+    }
+    out.resize(160, 0);
+    out.extend_from_slice(jpeg);
+    out.extend_from_slice(&dir);
+    out.extend_from_slice(&block);
+    out
+}
+
+/// A RAF with an X-Trans layout and a stub JPEG.
+fn raf() -> Vec<u8> {
+    let strip: Vec<u8> = (0..(W * H * 2) as usize).map(|i| (i * 11) as u8).collect();
+    let layout: [u8; 36] = std::array::from_fn(|i| (i % 3) as u8);
+    raf_file(W, H, 16, strip, Some(layout), b"\xff\xd8\xff\xd9")
+}
+
 fn samples() -> Vec<Vec<u8>> {
     vec![
+        raf(),
         rw2(),
         cr2(),
         cfa_tiff("NIKON CORPORATION", 1, 12, ByteOrder::Big),
