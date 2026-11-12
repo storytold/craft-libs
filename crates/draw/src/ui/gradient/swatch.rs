@@ -4,7 +4,6 @@ use craft_behavior::{Axis, CursorIcon, CursorPriority, Metrics, Sense};
 use craft_theme::{Stateful, States};
 use craft_ui::choice::SwatchMetrics;
 use craft_ui::contract::{Access, Common, Component, Cx, MeasureCx, Outcome, PaintUi, Pointer as _, PopupKind, Props as _, Role, Styled as _};
-use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::style::{ComponentStyle, FocusLook, StyleColor, StyleCx};
 use egui::{CornerRadius, Response, Vec2};
 
@@ -15,7 +14,7 @@ use super::value::{GradientStops, StopRows};
 #[cfg(feature = "screen-testing")]
 mod stories;
 
-/// The style of a gradient swatch: the colour swatch's side, corners and ring.
+/// The style of a gradient swatch: the colour swatch's height, corners and ring.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct GradientSwatchStyle {
@@ -23,7 +22,7 @@ pub struct GradientSwatchStyle {
     metrics: Metrics,
     #[style(focus)]
     focus: FocusLook,
-    /// The side of the square well.
+    /// The height of the well: the colour swatch's side.
     side: f32,
     /// The well's corners.
     radius: CornerRadius,
@@ -53,10 +52,10 @@ impl Outcome for GradientSwatchOutput {
 /// `if GradientSwatch::new("Gradient", &stops).show(ui).clicked { open_editor }`.
 ///
 /// The ramp is drawn over the checkerboard where it is translucent, inside the swatch's ring. The
-/// swatch edits nothing; a click is the host's cue. `fill` takes the width the layout offers (an
-/// options bar cell), else the well is square. AccessKit sees a button named by the label, with
-/// `has_popup` when the host opens a dialog on the click. A disabled swatch keeps its gradient and
-/// fades its ring.
+/// swatch edits nothing; a click is the host's cue. The well has the gradient chip aspect
+/// (`GradientRamp::CHIP_ASPECT`); `fill` takes the wider width the layout offers (an options bar
+/// cell). AccessKit sees a button named by the label, with `has_popup` when the host opens a
+/// dialog on the click. A disabled swatch keeps its gradient and fades its ring.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(content_painter)]
 pub struct GradientSwatch<'a> {
@@ -94,23 +93,23 @@ impl Component for GradientSwatch<'_> {
     type Output = GradientSwatchOutput;
 
     fn style(cx: &StyleCx<'_>, _: GradientSwatchStyleKey) -> GradientSwatchStyle {
-        let metrics = SwatchMetrics::of(cx);
-        let colors = &cx.tokens.color;
-        let rest = cx.color(colors.line.control_edge);
-        let disabled = cx.color(colors.text.disabled);
+        let (radius, rest) = GradientRamp::chip_look(cx);
+        let disabled = cx.color(cx.tokens.color.text.disabled);
         GradientSwatchStyle {
             metrics: Metrics::new(),
             focus: cx.focus_look(),
-            side: metrics.side,
-            radius: metrics.radius,
+            side: SwatchMetrics::of(cx).side,
+            radius,
             edge: Stateful::new(rest).off(States::new(rest, rest, rest, disabled)),
         }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        let side = cx.style.side;
-        let width = if self.fill { cx.room.filter(|room| room.is_finite()).map_or(side, |room| room.max(side)) } else { side };
-        Vec2::new(width, side)
+        let height = cx.style.side;
+        let (wide, high) = GradientRamp::CHIP_ASPECT;
+        let chip = height * f32::from(wide) / f32::from(high);
+        let width = if self.fill { cx.room.filter(|room| room.is_finite()).map_or(chip, |room| room.max(chip)) } else { chip };
+        Vec2::new(width, height)
     }
 
     fn fills(&self) -> Option<Axis> {
@@ -139,8 +138,7 @@ impl Component for GradientSwatch<'_> {
         let default = default_sampler(self.rows);
         let sampler: &Sampler = self.sampler.unwrap_or(&default);
         let colors = GradientRamp::colors(self.stops, sampler);
-        GradientRamp::paint(&ui.content_painter(cx), cx.rect, style.radius, &colors);
-        ui.draw().stroke(&PaintShape::Rect(cx.rect, style.radius), StrokeWidth::Thin, cx.resolve(&style.edge));
+        GradientRamp::paint_chip(&ui.content_painter(cx), cx.rect, style.radius, &colors, cx.resolve(&style.edge));
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> GradientSwatchOutput {

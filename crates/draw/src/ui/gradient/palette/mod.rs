@@ -3,7 +3,7 @@
 //! the palette supplies the rows and paints each preset's thumbnail as a gradient ramp.
 
 use craft_ui::contract::{Bind, NoValue, Outcome, Pattern};
-use craft_ui::patterns::presets::{PresetBrowser, PresetEvent, PresetRow, PresetState};
+use craft_ui::patterns::presets::{CellShape, PresetBrowser, PresetEvent, PresetRow, PresetState};
 use craft_ui::runtime::env::Label;
 use egui::{Response, Ui};
 
@@ -196,10 +196,12 @@ impl<'a> GradientPalette<'a> {
         let thumb =
             move |cx: &craft_ui::primitives::ContentPainterCx, rect: egui::Rect, info: craft_ui::patterns::presets::ThumbInfo<'_, GradientRef>| {
                 if let Some(stops) = stops_of(groups, recent, *info.key) {
-                    GradientRamp::paint(cx, rect, egui::CornerRadius::ZERO, &GradientRamp::colors(stops, sampler));
+                    let (radius, edge) = GradientRamp::chip_look(&cx.style_cx());
+                    GradientRamp::paint_chip(cx, rect, radius, &GradientRamp::colors(stops, sampler), edge);
                 }
             };
-        let mut browser = PresetBrowser::new(self.label, self.state, &rows).thumb(thumb);
+        let (wide, high) = GradientRamp::CHIP_ASPECT;
+        let mut browser = PresetBrowser::new(self.label, self.state, &rows).cell_shape(CellShape::ratio(wide, high)).thumb(thumb);
         if let Some(selected) = self.selected {
             browser = browser.selected(selected);
         }

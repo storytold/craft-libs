@@ -2,8 +2,9 @@
 
 use craft_behavior::Axis;
 use craft_theme::Srgba;
-use craft_ui::primitives::{Checker, ContentPainterCx};
-use craft_ui::style::DataColor;
+use craft_ui::choice::SwatchMetrics;
+use craft_ui::primitives::{Checker, ContentPainterCx, PaintShape, StrokeWidth};
+use craft_ui::style::{DataColor, StyleColor, StyleCx};
 use egui::{Color32, CornerRadius, Rect};
 
 use super::stops::Sampler;
@@ -19,6 +20,9 @@ const EVEN_SAMPLES: usize = 64;
 pub struct GradientRamp;
 
 impl GradientRamp {
+    /// Width to height of a gradient chip, a swatch or a palette cell: wide enough that the ramp reads along it.
+    pub const CHIP_ASPECT: (u16, u16) = (16, 9);
+
     /// The colours to draw `stops` with at the locations a mesh needs: the ends, every stop and
     /// midpoint of both rows, and even steps between, from `sampler`.
     pub fn colors(stops: &GradientStops, sampler: &Sampler) -> Vec<(f32, Srgba)> {
@@ -53,5 +57,17 @@ impl GradientRamp {
         }
         let stops: Vec<(f32, DataColor)> = colors.iter().map(|&(at, c)| (at, DataColor::new(Color32::from(c)))).collect();
         cx.ramp(rect, radius, &stops, Axis::X);
+    }
+
+    /// The corners and the ring of a gradient chip: the colour swatch's corners and `line.control_edge`.
+    pub fn chip_look(cx: &StyleCx<'_>) -> (CornerRadius, StyleColor) {
+        (SwatchMetrics::of(cx).radius, cx.color(cx.tokens.color.line.control_edge))
+    }
+
+    /// A gradient chip: `colors` across `rect` in corners of `radius`, inside a thin `edge` ring that separates it
+    /// from the panel.
+    pub fn paint_chip(cx: &ContentPainterCx<'_>, rect: Rect, radius: CornerRadius, colors: &[(f32, Srgba)], edge: StyleColor) {
+        Self::paint(cx, rect, radius, colors);
+        cx.with_draw(|draw| draw.stroke(&PaintShape::Rect(rect, radius), StrokeWidth::Thin, edge));
     }
 }
