@@ -325,10 +325,6 @@ fn cbor_item(b: &[u8], pos: &mut usize, depth: u32) -> Option<Value> {
             for _ in 0..n {
                 items.push(cbor_item(b, pos, depth + 1)?);
             }
-            // A version array like [0, 3, 10] reads as "0.3.10".
-            if items.len() == 3 && items.iter().all(Value::is_u64) {
-                return Some(Value::from(items.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(".")));
-            }
             Some(Value::Array(items))
         }
         5 => {
@@ -349,6 +345,9 @@ fn cbor_item(b: &[u8], pos: &mut usize, depth: u32) -> Option<Value> {
                 }
                 let v = cbor_item(b, pos, depth + 1)?;
                 let v = match (k.as_str(), &v) {
+                    ("solc" | "vyper", Value::Array(items)) if items.len() == 3 && items.iter().all(Value::is_u64) => {
+                        Value::from(items.iter().map(|v| v.to_string()).collect::<Vec<_>>().join("."))
+                    }
                     ("solc", Value::String(s)) if s.starts_with("0x") && s.len() == 8 => {
                         let d: Vec<u8> = (0..3).filter_map(|i| u8::from_str_radix(s.get(2 + 2 * i..4 + 2 * i)?, 16).ok()).collect();
                         if let [a, bb, c] = d.as_slice() { Value::from(format!("{a}.{bb}.{c}")) } else { v }
