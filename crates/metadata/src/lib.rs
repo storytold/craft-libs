@@ -14,6 +14,7 @@
 //!   JPEG XL ([`jxl`]) files.
 //!   [`extract`] does all of the above for a whole file. [`mpf`] reads and writes the Multi-Picture
 //!   index of a JPEG that carries further images, such as a gain map.
+//! - [`edit`]: byte-preserving Exif and XMP edits for export (Orientation, resolution, thumbnail).
 //!
 //! HEIF, PSD and MRW files are read by their own crates. Put the blocks they return into an
 //! [`Embedded`] and call [`from_embedded`].
@@ -21,6 +22,7 @@
 mod container;
 pub mod cr3;
 mod datetime;
+pub mod edit;
 mod exif;
 pub mod focus;
 mod focus_read;
