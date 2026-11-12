@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use craft_behavior::{CanvasTransform, Proposal};
 use craft_ui::contract::{
-    Bind, Common, Component, Container, ContainerProps, Cx, FooterRegion, Held, NoValue, Outcome, PaintUi, Props, Remember as _, Role, Show as _,
-    ShowContainer as _, Sizing, clicked,
+    Bind, Common, Component, Container, ContainerProps, Cx, Held, NoValue, Outcome, PaintUi, Props, Role, Show as _, ShowContainer as _, Sizing,
+    clicked,
 };
 use craft_ui::patterns::form_dialogs::{PaneOverlay, PreviewPane, PreviewState, PreviewView};
 use craft_ui::primitives::textures::{CachedTexture, Revision, TextureStore, TextureStoreOptions};
@@ -77,13 +77,12 @@ struct Shown {
     view: Option<PreviewView>,
 }
 
-/// The pane's well in the last pass, for the marks painted over it.
-#[derive(Clone, Default)]
-struct Well(Option<Rect>);
-
 /// One compare pane: a picture fitted into its well, zoomed and panned through a [`PreviewView`] the panes share,
-/// under its caption strip, with the rejected veil and the active ring.
+/// with its caption strip under it, the rejected veil and the active ring.
 ///
+/// - **Layout.** The well has the picture's aspect, as large as the tile's rect allows with the caption strip under
+///   it; well and strip are centred in the rect together, so the ring and the caption follow the picture. Without a
+///   picture the well takes the whole room.
 /// - **Picture.** The well is a `PreviewPane`: drag and the arrow keys pan, the wheel and pinch zoom. A double click
 ///   toggles Fit and 1:1 ([`CompareTile::toggle_zoom`]). `.survey(true)` shows the picture always fitted and adopts no
 ///   view change.
@@ -124,6 +123,8 @@ pub struct CompareTile<'a> {
     #[prop(func = "FnOnce(&ContentPainterCx, CanvasTransform, Rect)")]
     overlay: Option<PaneOverlay<'a>>,
     description: Option<String>,
+    /// The well `place` laid out, for the marks painted over it.
+    well: Option<Rect>,
 }
 
 impl<'a> CompareTile<'a> {
@@ -132,7 +133,7 @@ impl<'a> CompareTile<'a> {
         let label = label.into();
         CompareTile {
             common: Common::new(),
-            props: ContainerProps::new().sizing(Sizing::Fill).footer(FooterRegion::new()),
+            props: ContainerProps::new().sizing(Sizing::Fill),
             label,
             view: Some(view),
             image: Some(image),
@@ -143,6 +144,7 @@ impl<'a> CompareTile<'a> {
             survey: false,
             overlay: None,
             description: None,
+            well: None,
         }
     }
 
@@ -184,6 +186,18 @@ impl<'a> CompareTile<'a> {
             }
             Some(CompareImage::None) | None => None,
         };
+        let tokens = &env.tokens;
+        let caption = self.caption.clone();
+        let strip_height = caption.as_ref().map_or(0.0, |caption| caption.height(ui));
+        let (well, strip) = Self::layout(
+            rect,
+            picture.map(|texture| texture.size),
+            strip_height,
+            tokens.space.gap.row,
+            tokens.stroke.thick,
+            env.view().direction().is_rtl(),
+        );
+        self.well = Some(well);
         // The body runs in the measuring pass and again in the real one: it borrows what it shows and consumes
         // nothing. The overlay is called at most once, by the pane's paint, which only the real run reaches.
         let view = RefCell::new(self.view.take().map(Held::new));
@@ -210,9 +224,10 @@ impl<'a> CompareTile<'a> {
                     }
                 });
             }
-            let out = pane.show(ui);
-            let well = out.response.rect;
-            cx.memory::<Well>().0 = Some(well);
+            let out = pane.show_at(ui, well);
+            if let Some(caption) = &caption {
+                caption.strip(ui, strip);
+            }
             let pill = match &state {
                 RenderState::Pending(true) => Some(RenderPill::pending(rendering.clone())),
                 RenderState::Failed(message) => Some(RenderPill::failed(render_failed.clone(), Some(message.clone()).filter(|m| !m.is_empty()))),
@@ -245,6 +260,26 @@ impl<'a> CompareTile<'a> {
     }
 }
 
+impl CompareTile<'_> {
+    /// The well and the caption strip in `rect`, for a picture of `picture` points, a strip `strip` high and `gap`
+    /// under the well, and a ring `ring` wide round the well. The strip runs from the well's reading start to the
+    /// rect's end, as wide as the caption may need.
+    fn layout(rect: Rect, picture: Option<Vec2>, strip: f32, gap: f32, ring: f32, rtl: bool) -> (Rect, Rect) {
+        let inner = rect.shrink(ring);
+        let under = if strip > 0.0 { gap + strip } else { 0.0 };
+        let room = vec2(inner.width(), (inner.height() - under).max(0.0));
+        let size = match picture.filter(|picture| picture.x > 0.0 && picture.y > 0.0) {
+            Some(picture) => picture * (room.x / picture.x).min(room.y / picture.y),
+            None => room,
+        };
+        let top = inner.top() + (inner.height() - size.y - under) / 2.0;
+        let well = Rect::from_min_size(egui::pos2(inner.center().x - size.x / 2.0, top), size);
+        let (start, end) = if rtl { (inner.left(), well.right()) } else { (well.left(), inner.right()) };
+        let strip = Rect::from_min_max(egui::pos2(start, well.bottom() + gap), egui::pos2(end, well.bottom() + under));
+        (well, strip)
+    }
+}
+
 /// An image of `size` pixels in points: at 1.0 zoom one device pixel per image pixel.
 fn points(size: [u32; 2], pixels_per_point: f32) -> Vec2 {
     vec2(size[0].max(1) as f32, size[1].max(1) as f32) / pixels_per_point
@@ -267,7 +302,7 @@ impl Component for CompareTile<'_> {
 
     /// The rejected veil and the active ring over the well.
     fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let Some(well) = cx.recall::<Well>().0 else { return };
+        let Some(well) = self.well else { return };
         let style = cx.style;
         let draw = ui.draw();
         if self.rejected {
@@ -284,11 +319,4 @@ impl Component for CompareTile<'_> {
     }
 }
 
-impl Container for CompareTile<'_> {
-    /// The caption strip under the picture.
-    fn footer(&mut self, ui: &mut Ui, cx: &mut craft_ui::contract::BodyCx<'_>) {
-        if let Some(caption) = &self.caption {
-            caption.strip(ui, cx.rect.width());
-        }
-    }
-}
+impl Container for CompareTile<'_> {}

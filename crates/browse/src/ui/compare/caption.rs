@@ -3,15 +3,16 @@
 use craft_behavior::{IconId, Proposal};
 use craft_i18n::Format;
 use craft_theme::Srgba;
+use craft_theme::variant::Tone;
 use craft_ui::choice::Rating;
-use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _};
 use craft_ui::display::{Icon, Shade, Text};
 use craft_ui::layout_components::Row;
 use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::Env;
-use craft_ui::style::TypeRole;
+use craft_ui::style::{DataColor, TypeRole};
 use craft_ui::tile_grid::TileFlag;
-use egui::Ui;
+use egui::{Color32, Rect, Ui};
 
 use super::CompareWords;
 
@@ -76,48 +77,83 @@ impl CompareCaption {
         words.tile_name.fill(&[("label", &self.label), ("name", &self.name), ("details", &details)])
     }
 
-    /// Shows the strip in `ui`, which is `room` points wide. The name stays out when it would not fit beside the
-    /// label and the marks.
-    pub(super) fn strip(&self, ui: &mut Ui, room: f32) {
-        let mut label = Text::new(self.label.clone()).role(TypeRole::BodyStrong);
-        let mut name = Text::new(self.name.clone()).role(TypeRole::Caption).shade(Shade::Muted);
-        let stars = self.rating.filter(|n| *n > 0).map(|n| n.min(STARS));
-        let mut marks = 0.0;
-        if let Some(n) = stars {
-            marks += Rating::new(Bind::given(n), STARS).enabled(false).measure_in(ui, Proposal::Ideal).x;
-        }
+    /// The compact stars of the rating, if any: only the lit stars, in the panel's ink. Read-only: the caption shows
+    /// the rating, the app sets it elsewhere.
+    fn stars(&self) -> Option<Rating<'static>> {
+        self.rating.filter(|n| *n > 0).map(|n| Rating::new(Bind::given(n.min(STARS)), STARS).compact(true).read_only(true))
+    }
+
+    /// The flag in its tone, then the colour label's dot: the marks after the stars.
+    fn marks(&self) -> Vec<Icon<'static>> {
         let flag = self.flag.and_then(|flag| match flag {
-            TileFlag::Picked => Some(IconSpec::svg(IconId::new("flag"))),
-            TileFlag::Rejected => Some(IconSpec::svg(IconId::new("ban"))),
+            TileFlag::Picked => Some(Icon::new(IconSpec::svg(IconId::new("flag"))).tone(Tone::Good)),
+            TileFlag::Rejected => Some(Icon::new(IconSpec::svg(IconId::new("ban"))).tone(Tone::Bad)),
             _ => None,
         });
-        if let Some(flag) = &flag {
-            marks += Icon::new(flag.clone()).measure_in(ui, Proposal::Ideal).x;
+        let dot = self.label_color.map(|color| Icon::new(IconSpec::disc().data_color(DataColor::new(Color32::from(color)))));
+        flag.into_iter().chain(dot).collect()
+    }
+
+    fn label_text(&self) -> Text {
+        Text::new(self.label.clone()).role(TypeRole::BodyStrong)
+    }
+
+    fn name_text(&self) -> Text {
+        Text::new(self.name.clone()).role(TypeRole::Caption).shade(Shade::Muted)
+    }
+
+    /// The strip's height: its tallest part.
+    pub(super) fn height(&self, ui: &Ui) -> f32 {
+        let mut height = self.label_text().measure_in(ui, Proposal::Ideal).y;
+        if let Some(mut stars) = self.stars() {
+            height = height.max(stars.measure_in(ui, Proposal::Ideal).y);
         }
-        let dot = self.label_color.map(IconSpec::swatch);
-        if let Some(dot) = &dot {
-            marks += Icon::new(dot.clone()).measure_in(ui, Proposal::Ideal).x;
+        for mut mark in self.marks() {
+            height = height.max(mark.measure_in(ui, Proposal::Ideal).y);
         }
-        let name_fits = label.measure_in(ui, Proposal::Ideal).x + name.measure_in(ui, Proposal::Ideal).x + marks <= room;
-        let env = Env::of(ui);
-        let stars_name = stars.map(|n| env.words::<CompareWords>().stars.text(u64::from(n), &env.view().format().integer(u64::from(n))).to_string());
-        Row::new().show(ui, |ui, _| {
-            Text::new(self.label.clone()).role(TypeRole::BodyStrong).show(ui);
-            if name_fits {
-                Text::new(self.name.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+        height
+    }
+
+    /// Shows the strip at `rect`: the label, then the stars, the flag and the dot while each fits, then the name in
+    /// the room they leave after the label.
+    pub(super) fn strip(&self, ui: &mut Ui, rect: Rect) {
+        let gap = Env::of(ui).tokens.space.gap.row;
+        let mut used = self.label_text().measure_in(ui, Proposal::Ideal).x;
+        // The stars, then each mark, while the next one fits.
+        let mut widths = Vec::new();
+        if let Some(mut stars) = self.stars() {
+            widths.push(stars.measure_in(ui, Proposal::Ideal).x);
+        }
+        widths.extend(self.marks().into_iter().map(|mut mark| mark.measure_in(ui, Proposal::Ideal).x));
+        let shown = widths.iter().take_while(|width| {
+            let fits = used + gap + **width <= rect.width();
+            if fits {
+                used += gap + **width;
             }
-            if let Some(n) = stars {
-                let rating = Rating::new(Bind::given(n), STARS).enabled(false);
+            fits
+        });
+        let shown = shown.count();
+        let name_fits = used + gap + self.name_text().measure_in(ui, Proposal::Ideal).x <= rect.width();
+        let shown_stars = usize::from(self.stars().is_some()).min(shown);
+        let shown_marks = shown - shown_stars;
+        let env = Env::of(ui);
+        let stars_name = self.rating.filter(|n| *n > 0).map(|n| {
+            let n = u64::from(n.min(STARS));
+            env.words::<CompareWords>().stars.text(n, &env.view().format().integer(n)).to_string()
+        });
+        Row::new().gap(Gap::Row).show_at(ui, rect, |ui, _| {
+            self.label_text().show(ui);
+            if name_fits {
+                self.name_text().show(ui);
+            }
+            if let Some(stars) = self.stars().filter(|_| shown_stars > 0) {
                 match &stars_name {
-                    Some(name) => rating.label(name.clone()).show(ui),
-                    None => rating.show(ui),
+                    Some(name) => stars.label(name.clone()).show(ui),
+                    None => stars.show(ui),
                 };
             }
-            if let Some(flag) = flag.clone() {
-                Icon::new(flag).show(ui);
-            }
-            if let Some(dot) = dot.clone() {
-                Icon::new(dot).show(ui);
+            for mark in self.marks().into_iter().take(shown_marks) {
+                mark.show(ui);
             }
         });
     }
