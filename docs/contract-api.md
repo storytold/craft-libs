@@ -356,7 +356,7 @@ Zoom rules as pure functions on a [`CanvasView`]: Photoshop's zoom range and Zoo
   - `pub fn new(reader: Reader, decimals: usize) -> Self`. A codec reading with `reader` and writing at most `decimals` decimal places.
   - `pub fn fixed(mut self) -> Self`. The same codec writing every decimal place, trailing zeros included ("1.00"), as a field of a quantity shown
   - `pub fn or_parse(mut self, parse: impl Fn(&str) -> Option<f64> + Send + Sync + 'static) -> Self`. The same codec with `parse` as a second reader: it runs when the reader rejects the text, so words of the
-  - `pub fn widest(&self, range: &RangeInclusive<f64>) -> String`. The widest text the codec writes for a number in `range`: the longer of its two ends, with every decimal
+  - `pub fn widest(&self, range: &RangeInclusive<f64>) -> String`. The widest text the codec writes for a number in `range`: the longest of each end and the number one place of
   - `pub fn decimals(&self) -> usize`. The most decimal places the codec writes.
   - `pub fn reader(&self) -> &Reader`. The reader the codec parses with.
 - `craft_behavior::codec::PlainText`: `pub struct PlainText`. Plain text: every draft is a value.
@@ -1809,7 +1809,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const fn initially_open(mut self, on: bool) -> Self`. Whether the body starts open.
   - `pub const fn animated(mut self, on: bool) -> Self`. Whether opening and closing animate.
 - `craft_ui::contract::CollectionEvent`: `pub enum CollectionEvent<K, E> { Selection(SelectionChange<K>), LeadMoved { key: K, by: LeadSource }, Activate(K), EmptyActivated, Preview(K), ContextMenu(ContextMenuRequest<K>), CommandClick { key: K, mods: craft_keymap::Mods }, Delete(Vec<K>), Open(OpenChange<K>), Reorder(EditEvent<ReorderMove<K>>), Move(EditEvent<Vec2>), Dropped { at: DropAt<K>, op: DropOperation, payload: DropPayload }, Zoom { factor: f32, about: Pos2 }, Rename(EditEvent<Rename<K>>), Toggle(EditEvent<ToggleEdit<K>>), Column(ColumnEvent), Item(K, E) }`. What a collection reports, in drawing order.
-- `craft_ui::contract::CollectionProps`: `pub struct CollectionProps { pub select: SelectMode, pub reorder: Option<ReorderRule>, pub rename: bool, pub rename_column: Option<ColumnKey>, pub slow_click_rename: bool, pub columns: Vec<ColumnSpec>, pub sort: Option<ColumnSort>, pub empty: Option<Label>, pub activate: ActivateOn, pub striped: bool, pub allow_empty: bool, pub lead_on_open: LeadOnOpen, pub lead_follows_hover: bool, pub arrows_select: bool, pub focus_on_press: bool, pub rows_stamp: Option<u64>, pub space: SpaceAction, pub type_ahead: bool, pub arrows_wrap: bool, pub header: bool, pub digit_keys: bool, pub menu_on_click: bool, pub item_keys: ItemKeys, pub marquee: bool, pub deletable: bool, pub drag_payload: Option<DragPayload>, pub drag_count: Option<Counted>, pub natural_height: bool, pub min_rows: u16, pub max_rows: Option<u16>, pub command_click: bool, pub notch: Option<Notch>, pub overflow: Axis, pub pages: bool, pub current: Option<Arc<dyn Any + Send + Sync>> }`. What a collection reads from the app: plain data. A new builder's name is added to the forwarder list in
+- `craft_ui::contract::CollectionProps`: `pub struct CollectionProps { pub select: SelectMode, pub reorder: Option<ReorderRule>, pub rename: bool, pub rename_column: Option<ColumnKey>, pub slow_click_rename: bool, pub columns: Vec<ColumnSpec>, pub sort: Option<ColumnSort>, pub empty: Option<Label>, pub activate: ActivateOn, pub striped: bool, pub allow_empty: bool, pub lead_on_open: LeadOnOpen, pub lead_follows_hover: bool, pub arrows_select: bool, pub focus_on_press: bool, pub rows_stamp: Option<u64>, pub space: SpaceAction, pub type_ahead: bool, pub arrows_wrap: bool, pub header: bool, pub digit_keys: bool, pub menu_on_click: bool, pub item_keys: ItemKeys, pub marquee: bool, pub deletable: bool, pub drag_payload: Option<DragPayload>, pub drag_count: Option<Counted>, pub natural_height: bool, pub min_rows: u16, pub max_rows: Option<u16>, pub row_height: RowHeight, pub command_click: bool, pub notch: Option<Notch>, pub overflow: Axis, pub pages: bool, pub current: Option<Arc<dyn Any + Send + Sync>> }`. What a collection reads from the app: plain data. A new builder's name is added to the forwarder list in
   - `pub const fn new() -> Self`. Collection props with every setting at its default.
   - `pub fn select(mut self, mode: SelectMode) -> Self`. What can be selected.
   - `pub fn reorder(mut self, rule: ReorderRule) -> Self`. Items reorder by `rule`.
@@ -1841,6 +1841,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const fn natural_height(mut self, on: bool) -> Self`. The collection takes its full content height and owns no scroll (see [`CollectionProps::natural_height`]).
   - `pub const fn min_rows(mut self, rows: u16) -> Self`. The collection is at least `rows` rows tall (see [`CollectionProps::min_rows`]).
   - `pub const fn max_rows(mut self, rows: u16) -> Self`. The collection shows at most `rows` rows and scrolls the rest (see [`CollectionProps::max_rows`]).
+  - `pub const fn row_height(mut self, height: RowHeight) -> Self`. The rows are `height` tall (see [`RowHeight`]).
   - `pub const fn command_click(mut self, on: bool) -> Self`. A Cmd/Ctrl click on an item is a command, not a pick (see [`CollectionProps::command_click`]).
   - `pub const fn notch(mut self, notch: Notch) -> Self`. The distance one wheel notch scrolls the rows (see [`CollectionProps::notch`]).
   - `pub fn wheel_notch(&self, line: f32) -> craft_behavior::WheelNotch`. The wheel distance of one notch, with a text line `line` points high: the set notch, else the default.
@@ -2274,6 +2275,8 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn sizing(&self) -> Option<Sizing>`. The sizing the host set on this component, if any: a leaf with `Sizing::Content` sizes to its content.
 - `craft_ui::contract::Role`: re-export of `craft_ui::runtime::access::Role`.
 - `craft_ui::contract::RowAlign`: `pub enum RowAlign { Start, Center, End, SpaceBetween }`. Where a `Row` places its block of children along the row.
+- `craft_ui::contract::RowHeight`: `pub enum RowHeight { Control, Text }`. How tall a collection's rows are. Read-only display tables (a metadata table) take text rows; lists the user picks
+  - `pub fn of(self, cx: &StyleCx<'_>) -> f32`. The height of one row under `cx`.
 - `craft_ui::contract::RowPressed`: `pub enum RowPressed { Row, Cell(ColumnKey), Part { was_lead: bool } }`. Where the collection holds a primary press on a row, within slop, or the press a part of the row holds.
 - `craft_ui::contract::RowState`: `pub struct RowState { pub selected: bool, pub lead: bool, pub drop_target: bool, pub dragging: bool, pub renaming: bool, pub emphasized: bool, pub current: bool, pub striped: bool, pub open: bool, pub hovered: bool, pub pressed: Option<RowPressed>, pub menu_open: bool, pub activated_by_key: bool }`. What an item reads of its place in the collection; the item step joins it to the item's flags at step 12.
 - `craft_ui::contract::Sampler`: `pub trait Sampler: sealed::Host`. The canvas reach under a modal layer (15.5, 8.3): a control of a dialog keeps the canvas below it usable. It is
@@ -2570,6 +2573,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn even(length: f32) -> Self`. Dashes of `length` with gaps of the same length, starting at the pattern's beginning.
   - `pub fn phase(mut self, phase: f32) -> Self`. The pattern advanced by `phase` points.
 - `craft_ui::primitives::DataStrokeWidth`: `pub enum DataStrokeWidth { Named(StrokeWidth), Data(DataWidth) }`. The width of a stroke: a named theme width or one from the document.
+  - `pub fn scaled(self, scale: f32) -> Self`. The width with a document width multiplied by `scale` (a view's zoom); a theme width stays as the theme names
 - `craft_ui::primitives::DataWidth`: `pub struct DataWidth`. A line width the data gives (a path's thickness, a pen size), in screen points: the caller maps a document width
   - `pub const fn points(points: f32) -> Self`. A width of `points`.
 - `craft_ui::primitives::DocRun`: `pub struct DocRun<'a> { pub text: Cow<'a, str>, pub font: FontRef, pub size: f32, pub weight: u16, pub italic: bool, pub color: DataColor, pub underline: bool, pub strikethrough: bool, pub indent: f32 }`. One run of document text.
@@ -2608,6 +2612,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn checker(&self, checker: &super::Checker, rect: Rect, radius: CornerRadius)`. Paints `checker` over `rect` with corners `radius`, a light cell at the rect's top left. A `Draw` for an
   - `pub fn swatch_well(&self, well: Rect, radius: CornerRadius, color: Option<Srgba>)`. Paints the well of a colour swatch over `well` with corners `radius`: the colour, over a checkerboard where it is
   - `pub fn dashed(&self, path: &[Pos2], pattern: Dashes, width: impl Into<DataStrokeWidth>, color: impl Into<StrokeColor>)`. Strokes the open path `path` as dashes (copy marks, drag previews, reference lines), with the width and colour
+  - `pub fn dashes(&self) -> Dashes`. The theme's dash pattern: `stroke.dash` dashes with `stroke.dash_gap` gaps.
   - `pub fn clipped(&self, rect: Rect, paint: impl FnOnce(&Draw<'_>))`. Runs `paint` with a `Draw` whose painting is cut to `rect` (inside the clip already in force): scrolled content
   - `pub fn faded(&self, share: f32, paint: impl FnOnce(&Draw<'_>))`. Runs `paint` with a `Draw` whose fills, strokes, text runs, icons and pictures are all `share` as opaque as
 - `craft_ui::primitives::EditorLine`: `pub struct EditorLine<'a> { pub text: &'a str, pub rect: Rect, pub baseline: f32, pub runs: &'a [EditorRun<'a>] }`. One visible line of an own-caret editor.
@@ -2833,6 +2838,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
 - `craft_ui::primitives::dashed`: `pub fn dashed(points: &[Pos2], pattern: Dashes, width: f32, color: Color32) -> Vec<Shape>`. A dashed line along `points` in `color`, `width` thick, with the lengths and phase of `pattern`. The pattern
 - `craft_ui::primitives::drop_mark`: `pub fn drop_mark(tokens: &UiTokens, from: Pos2, to: Pos2, pixels_per_point: f32) -> Vec<Shape>`. The insertion mark of a drop from `from` to `to`.
 - `craft_ui::primitives::ellipse`: `pub fn ellipse(center: Pos2, axes: [Vec2; 2]) -> Vec<Pos2>`. The points of the ellipse with centre `center` and conjugate half-axes `axes` (a rotated or skewed circle is
+- `craft_ui::primitives::fill_polygon`: `pub fn fill_polygon(points: &[Pos2], color: Color32, feather: f32) -> Mesh`. The closed polygon through `points` (convex or not; its edges must not cross) filled with `color`, as one mesh:
 - `craft_ui::primitives::fit_image`: `pub fn fit_image(image: ColorImage, max_side: u32) -> ColorImage`. `image` reduced to at most `max_side` texels per side, or unchanged when it fits. The image is reduced by the
 - `craft_ui::primitives::fit_rect`: `pub fn fit_rect(cell: Rect, picture: Vec2) -> Rect`. The rect inside `cell` that shows a picture of `picture`'s aspect whole, as large as fits and centred; `cell`
 - `craft_ui::primitives::grid_lines`: `pub fn grid_lines(tokens: &UiTokens, grid: &GridLines, ink: &GridInk, pixels_per_point: f32) -> Vec<Shape>`. The lines of `grid` as `ink` draws them: minor lines first, then the major ones, each running across
