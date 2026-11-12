@@ -1,10 +1,12 @@
 //! The colour row of the dialogs that offer a named list and Custom…: Guides and Navigator Panel Options.
 
 use super::HostRequests;
+use crate::choice::Swatch;
 use crate::contract::{Bind, Entry, Show as _, ShowContainer as _};
 use crate::runtime::requests::{ColorRequest, HostAnswer};
 
 use crate::form::Field;
+use crate::layout_components::Row;
 use crate::pickers::Select;
 use crate::runtime::env::Label;
 use craft_theme::Srgba;
@@ -36,9 +38,10 @@ pub(super) struct ColorRowTexts {
     pub(super) picker_title: Label,
 }
 
-/// The colour row: the named colours and Custom…, each with a swatch. Picking a named colour sets it. Every pick of
-/// Custom…, also while a custom colour is selected, files a colour request under `key` that opens the picker at the
-/// colour shown; the colour stays as it is until the host answers, and a cancelled pick changes nothing.
+/// The colour row: the named colours and Custom…, each with a swatch. Picking a named colour sets it. While a custom
+/// colour is chosen, a swatch of it follows the list. Every pick of Custom…, also while a custom colour is selected,
+/// and every click on that swatch files a colour request under `key` that opens the picker at the colour shown; the
+/// colour stays as it is until the host answers, and a cancelled pick changes nothing.
 pub(super) fn color_row<C: ColorChoice>(
     ui: &mut Ui,
     texts: &ColorRowTexts,
@@ -56,15 +59,22 @@ pub(super) fn color_row<C: ColorChoice>(
     } else {
         entries.push(entry(custom));
     }
+    let mut asked = None;
     Field::new(texts.label.clone()).show(ui, |ui, _| {
-        match Select::new(texts.label.clone(), Bind::given(current), &entries).show(ui).value().copied() {
-            Some(chosen) if chosen.is_custom() => {
-                requests.request_color(ColorRequest::new(key, chosen.srgba()).title(texts.picker_title.clone()));
+        Row::new().show(ui, |ui, _| {
+            match Select::new(texts.label.clone(), Bind::given(current), &entries).show(ui).value().copied() {
+                Some(chosen) if chosen.is_custom() => asked = Some(chosen),
+                Some(named) => *color = named,
+                None => {}
             }
-            Some(named) => *color = named,
-            None => {}
-        }
+            if current.is_custom() && Swatch::new(name(current), current.srgba()).show(ui).clicked {
+                asked = Some(current);
+            }
+        });
     });
+    if let Some(custom) = asked {
+        requests.request_color(ColorRequest::new(key, custom.srgba()).title(texts.picker_title.clone()));
+    }
 }
 
 /// Sets `color` from the host's answers to the colour request `key`.
