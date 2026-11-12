@@ -1003,7 +1003,8 @@ fn tx_body(w: &mut Writer, text: &str) {
     w.close();
 }
 
-/// The modern author id for a name: the same GUID the authors part writes.
+/// The modern author id for a name: the same GUID the authors part writes. The `deckcraft-`
+/// seeds here and on comment ids are part of the format: files written earlier carry them.
 fn author_guid(name: &str) -> String {
     craft_drawingml::table::styles::guid(&format!("deckcraft-comment-author:{name}"))
 }
