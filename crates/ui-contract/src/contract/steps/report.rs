@@ -37,11 +37,11 @@ fn command_facts(command: &ResolvedCommand, platform: craft_keymap::Platform) ->
     (command.hint.as_deref(), command.chord.as_ref().map(|chord| chord.display(platform)))
 }
 
-/// The message of a validity that warns or refuses, and whether it warns.
+/// The message of a validity that warns, refuses or errs, and whether it warns.
 pub(crate) fn validity_of<V>(validity: &Validity<V>) -> Option<(&Message, bool)> {
     match validity {
         Validity::Warn(message) => Some((message, true)),
-        Validity::Refuse(message) => Some((message, false)),
+        Validity::Refuse(message) | Validity::Error(message) => Some((message, false)),
         _ => None,
     }
 }

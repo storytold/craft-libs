@@ -210,6 +210,7 @@ fn lifted(verdict: Validity<f64>) -> Validity<Option<f64>> {
         Validity::Fix(number) => Validity::Fix(Some(number)),
         Validity::Warn(message) => Validity::Warn(message),
         Validity::Refuse(message) => Validity::Refuse(message),
+        Validity::Error(message) => Validity::Error(message),
         _ => Validity::Ok,
     }
 }

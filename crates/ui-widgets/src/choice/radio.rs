@@ -22,7 +22,7 @@ impl<T: Value + 'static> GroupKind for RadioKind<T> {
     type Member = T;
 }
 
-/// Whether the group's value is refused, read by its members so each radio shows the invalid look.
+/// Whether the group's value is refused or an error, read by its members so each radio shows the invalid look.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct GroupInvalid(bool);
 
@@ -126,7 +126,7 @@ impl<T: Value + 'static> Component for RadioGroup<'_, T> {
             handle.begin_registration();
         }
         values.set(handle);
-        values.set(GroupInvalid(matches!(cx.validity(), Validity::Refuse(_))));
+        values.set(GroupInvalid(matches!(cx.validity(), Validity::Refuse(_) | Validity::Error(_))));
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> EditResponse<T> {

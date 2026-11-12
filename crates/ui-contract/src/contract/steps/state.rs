@@ -49,7 +49,7 @@ pub(crate) fn value_flags<C: Component>(comp: &C, cx: &Cx<'_, C>) -> Flags {
         flags |= Flags::MIXED;
     }
     match &cx.validity {
-        Validity::Refuse(_) => flags |= Flags::INVALID,
+        Validity::Refuse(_) | Validity::Error(_) => flags |= Flags::INVALID,
         Validity::Warn(_) => flags |= Flags::WARN,
         _ => {}
     }

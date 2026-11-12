@@ -597,7 +597,7 @@ impl Component for CropOverlay<'_> {
         let frame = self.shown(cx.value(), &space.view);
         let picked =
             cx.focus_visible().then(|| cx.active_part()).flatten().filter(|part| part.key == FRAME).and_then(|part| part.index).and_then(frame_part);
-        let refused = matches!(cx.validity(), crate::contract::Validity::Refuse(_));
+        let refused = matches!(cx.validity(), crate::contract::Validity::Refuse(_) | crate::contract::Validity::Error(_));
         paint::paint(ui, cx, &paint::Scene { space: &space, frame, drag: live.drag.as_ref(), picked, refused, overlay: self });
     }
 

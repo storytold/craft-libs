@@ -138,6 +138,9 @@ pub enum Validity<T, M> {
     Warn(M),
     /// Not accepted; a commit is refused.
     Refuse(M),
+    /// Accepted, and shown as an error: the value stands while its owner holds it (a dialog's OK waits for a valid
+    /// one), the control reads invalid and the message shows in the bad tone.
+    Error(M),
 }
 
 /// Where a gesture stands in one pass.

@@ -166,7 +166,8 @@ impl<'a, T: Value> Bind<'a, T> {
         self
     }
 
-    /// The check on a value: `Fix` replaces it, `Warn` and `Refuse` set the component's state.
+    /// The check on a value: `Fix` replaces it; `Warn`, `Refuse` and `Error` set the component's state, and `Refuse`
+    /// also refuses a commit.
     pub fn check(mut self, check: impl Fn(&T) -> Validity<T> + 'a) -> Self {
         self.check = Some(Box::new(check));
         self
@@ -486,6 +487,7 @@ impl<T: Clone> EditResponse<T> {
             Validity::Fix(value) => Validity::Fix(f(value)),
             Validity::Warn(message) => Validity::Warn(message),
             Validity::Refuse(message) => Validity::Refuse(message),
+            Validity::Error(message) => Validity::Error(message),
             _ => Validity::Ok,
         };
         let shown = self.shown.map(|shown| match shown {

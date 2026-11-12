@@ -4,19 +4,18 @@
 
 use super::length::{DocUnit, length_field, shown};
 use craft_behavior::{EditEvent, EditEvents, Metrics, Mixed, NumberCodec};
-use craft_theme::variant::Tone;
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{
-    Bind, Common, Component, Cx, Entry, FieldLayout, MeasureCx, PaintUi, Props as _, Role, Show as _, ShowContainer as _, SideLabel, Sizing, clicked,
+    Bind, Common, Component, Cx, Entry, FieldLayout, MeasureCx, PaintUi, Props as _, Role, Show as _, ShowContainer as _, SideLabel, Sizing,
+    Validity, clicked,
 };
 use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
-use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::pickers::Select;
 use craft_ui::primitives::{PaintShape, StrokeWidth};
-use craft_ui::runtime::env::{Env, Label, Units};
+use craft_ui::runtime::env::{Env, Label, Message, Units};
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton, GroupBox};
 use craft_ui::style::{ComponentStyle, StyleColor, StyleCx, SurfaceKind, TypeRole};
@@ -131,7 +130,7 @@ pub enum ColumnsPreset {
 /// The Columns dialog: only what changed comes back.
 ///
 /// - [`word`](Self::word) off (PowerPoint): Number (1 to [`MAX_COLUMNS`]) and Spacing (0 to [`MAX_SPACING`] points);
-///   values out of range keep the dialog open with the range messages under the fields.
+///   values out of range mark their fields invalid, with the range messages under them, and keep the dialog open.
 /// - On (Word): the presets row, Number, the width and spacing grid (one row per column, Col 1 to n; width fields
 ///   disabled after the first with Equal column width), Equal column width, Line between, and the page's text width for
 ///   the grid's sums.
@@ -433,19 +432,34 @@ impl TextColumnsDialog {
             GroupBox::new(words.presets.clone(), None).show(ui, |ui, _| self.presets(ui, words));
         }
         FieldGroup::new(words.title.clone()).show(ui, |ui, _| {
-            let bad = !self.count_in_range();
             let shown = self.edited.count.map_or(Mixed::Mixed, |n| Mixed::Same(Some(f64::from(n))));
             let codec = NumberCodec::new(units.reader(None), 0);
+            let most = self.most_columns();
+            let message = Self::number_message(words, units, most);
+            let count_check = move |count: &Option<f64>| match count {
+                Some(n) if !(1.0..=f64::from(most)).contains(n) => Validity::Error(Message::new(message.clone())),
+                _ => Validity::Ok,
+            };
             let edit = Field::new(words.number.clone())
-                .show(ui, |ui, _| NumberField::new(words.number.clone(), Bind::given(shown)).codec(codec.clone()).show(ui))
+                .show(ui, |ui, _| NumberField::new(words.number.clone(), Bind::given(shown).check(&count_check)).codec(codec.clone()).show(ui))
                 .inner;
             self.edit_count(edit.map(|out| out.edit.events).unwrap_or_default());
-            if bad {
-                Notice::new(Tone::Bad, Self::number_message(words, units, self.most_columns())).layout(NoticeLayout::Inline).show(ui);
-            }
             if self.word.is_none() {
+                let points = self.edited.spacing.map_or(Mixed::Mixed, |p| Mixed::Same(Some(f64::from(p))));
+                let range = 0.0..=f64::from(MAX_SPACING);
+                let message = self.spacing_message(words, units);
+                let in_range = range.clone();
+                let spacing_check = move |spacing: &Option<f64>| match spacing {
+                    Some(points) if !in_range.contains(points) => Validity::Error(Message::new(message.clone())),
+                    _ => Validity::Ok,
+                };
+                let lengths = self.unit.lengths();
                 let edit = Field::new(words.spacing.clone())
-                    .show(ui, |ui, _| self.length_row(ui, words.spacing.as_str(), self.edited.spacing, true, 0.0..=MAX_SPACING))
+                    .show(ui, |ui, _| {
+                        let bind = Bind::given(points).check(&spacing_check);
+                        let field = NumberField::length(words.spacing.clone(), bind, lengths).range(range.clone());
+                        field.show(ui).edit.events.map(|v| v.map(|p| p as f32))
+                    })
                     .inner
                     .unwrap_or_default();
                 self.edit(edit, |me, v: Option<f32>| {
@@ -453,9 +467,6 @@ impl TextColumnsDialog {
                         me.edited.spacing = Some(v);
                     }
                 });
-                if !self.spacing_in_range() {
-                    Notice::new(Tone::Bad, self.spacing_message(words, units)).layout(NoticeLayout::Inline).show(ui);
-                }
             }
         });
         if self.word.is_some() {

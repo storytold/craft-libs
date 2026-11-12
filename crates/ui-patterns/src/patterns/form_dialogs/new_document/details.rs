@@ -18,7 +18,6 @@ use crate::style::TypeRole;
 use crate::text::TextField;
 use craft_behavior::{EditEvent, EditEvents, PixelSize};
 use craft_theme::Srgba;
-use craft_theme::variant::Tone;
 use egui::Ui;
 
 /// What the details column asks the dialog to do after the pass.
@@ -299,7 +298,7 @@ fn save_row(ui: &mut Ui, session: &mut Session, read: &Read<'_>, right: &mut Rig
     let tried = session.name_tried;
     let library = read.library;
     let check = |typed: &String| match refusal(library, typed) {
-        Some(refused) if tried => Validity::Warn(Message::new(refusal_message(read, &refused)).tone(Tone::Bad)),
+        Some(refused) if tried => Validity::Error(Message::new(refusal_message(read, &refused))),
         _ => Validity::Ok,
     };
     Field::new(words.preset_name.clone()).id_salt("preset-name").show(ui, |ui, _| {

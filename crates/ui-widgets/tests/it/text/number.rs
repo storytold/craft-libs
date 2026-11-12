@@ -280,3 +280,39 @@ fn a_named_value_shows_its_row_label_and_the_typed_name_commits_it() {
     fixture.key(Key::A, Modifiers::COMMAND).type_text("metrics").key(Key::Enter, Modifiers::NONE).settle();
     assert_eq!(*value.borrow(), NamedOr::Named(Metrics), "the typed name commits the name");
 }
+
+/// A value the binding's check calls an error stays: the commit goes through, the field reads invalid and its row shows
+/// the message.
+#[trial]
+fn a_value_the_check_calls_an_error_commits_and_shows_invalid_with_its_message() {
+    use craft_ui::contract::{ShowContainer as _, Validity};
+    use craft_ui::form::Field;
+    use craft_ui::runtime::env::Message;
+    const TOO_MANY: &str = "Enter a number from 1 to 10";
+    let value = std::rc::Rc::new(RefCell::new(Some(START)));
+    let (held, id) = (value.clone(), std::rc::Rc::new(Cell::new(egui::Id::NULL)));
+    let shown_id = id.clone();
+    let mut fixture = craft_ui::testing::Fixture::new(move |ui| {
+        let check = |count: &Option<f64>| match count {
+            Some(n) if *n > 10.0 => Validity::Error(Message::new(TOO_MANY)),
+            _ => Validity::Ok,
+        };
+        let shown = *held.borrow();
+        let out =
+            Field::new("Number").show(ui, |ui, _| NumberField::new("Number", Bind::given(shown).check(&check)).id_salt("number").show(ui)).inner;
+        if let Some(out) = out {
+            shown_id.set(out.response.id);
+            if let Some(typed) = out.value().copied() {
+                *held.borrow_mut() = typed;
+            }
+        }
+    });
+    fixture.settle();
+    assert!(!fixture.tree().invalid(id.get()), "a value in range reads valid");
+    let field = fixture.by_label("Number").expect("the field");
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("12").key(Key::Enter, Modifiers::NONE).settle();
+    assert_eq!(*value.borrow(), Some(12.0), "the commit went through");
+    assert!(fixture.tree().invalid(id.get()), "the field reads invalid");
+    assert!(fixture.texts().iter().any(|text| text.text == TOO_MANY), "the row shows the message");
+}
