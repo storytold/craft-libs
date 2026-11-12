@@ -341,7 +341,7 @@ fn mask(part: LayerPart, enabled: bool, linked: bool) -> MaskInfo {
 
 /// An "Effects" group with one row per name.
 pub fn effects(names: &[&str]) -> SubRows {
-    SubRows::new(SubRow { icon: Some(IconId::new("sparkles")), ..SubRow::new("Effects") }, names.iter().map(|name| sub_row(name)).collect())
+    SubRows::new(SubRow::new("Effects"), names.iter().map(|name| sub_row(name)).collect())
 }
 
 /// An "on" row reading `label`.

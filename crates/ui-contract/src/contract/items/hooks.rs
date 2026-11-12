@@ -522,6 +522,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                     menu_open: self.drags.menu.as_ref() == Some(&key) && menu_open,
                     sub_row: self.source.sub_row(at),
                     continued: at + 1 < len && self.source.sub_row(at + 1).is_some(),
+                    last: at + 1 == len,
                     activated_by_key: self.keyed_activation.as_ref() == Some(&key),
                     ..RowState::default()
                 };

@@ -153,8 +153,9 @@ pub struct ListRow<'a> {
     #[style_key]
     pub(super) sub_row: bool,
     pub(super) sub_steps: usize,
-    /// The next row is a sub-row of this one or of the row it continues (`RowState::continued`): no divider under it.
-    pub(super) continued: bool,
+    /// The divider under the row: off where the next row is a sub-row that continues it (`RowState::continued`) and
+    /// under a collection's last row (`RowState::last`), since dividers fall between rows.
+    pub(super) divider_below: bool,
     /// The label in italics.
     #[prop]
     pub(super) italic: bool,
@@ -290,7 +291,7 @@ impl<'a> ListRow<'a> {
             rows: RowHeight::Control,
             sub_row: false,
             sub_steps: 0,
-            continued: false,
+            divider_below: true,
             italic: false,
             highlight: false,
             clipped: false,
@@ -377,7 +378,7 @@ impl<'a> ListRow<'a> {
     pub(crate) fn sub_row(mut self, row: &RowState) -> Self {
         self.sub_row = row.sub_row.is_some();
         self.sub_steps = row.sub_row.unwrap_or(0);
-        self.continued = row.continued;
+        self.divider_below = !row.continued && !row.last;
         self
     }
 

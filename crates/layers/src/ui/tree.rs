@@ -461,7 +461,8 @@ pub struct SubRow {
     pub on: bool,
     /// Whether the row has an eye cell at all.
     pub eye_shown: bool,
-    /// The icon before the label (Photoshop's sparkles on the "Effects" row).
+    /// An icon before the label, for a host whose sub-row kind has one. Photoshop's Effects and Smart Filter
+    /// headers show none: only the eye and the label.
     pub icon: Option<IconId>,
     /// A Smart Filters header shows the shared filter-mask thumbnail (hidden at thumbnail size
     /// None).

@@ -632,6 +632,8 @@ pub struct RowState {
     pub sub_row: Option<usize>,
     /// The next row is a sub-row, which continues this row: no divider between them.
     pub continued: bool,
+    /// The row is the collection's last: dividers fall between rows, so none under it.
+    pub last: bool,
     /// The activation key (Enter) activated the row this pass: a row with controls of its own may move focus into one.
     pub activated_by_key: bool,
 }

@@ -498,7 +498,7 @@ impl Component for ListRow<'_> {
         self.label_rect = placed.label;
         {
             let draw = ui.draw();
-            if self.rule || (self.layer && style.dividers && !self.continued) {
+            if self.rule || (self.layer && style.dividers && self.divider_below) {
                 draw.edge_rule(RuleKind::Divider, rect, RectSide::Bottom);
             }
             if self.layer && style.dividers {
