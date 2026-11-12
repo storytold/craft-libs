@@ -551,6 +551,98 @@ fn exif_without_thumbnail(exif: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// The Exif IFD pointer tag in IFD0.
+const TAG_EXIF_IFD: u16 = 34665;
+/// PixelXDimension and PixelYDimension in the Exif IFD (EXIF 2.3, SHORT or LONG).
+const TAG_PIXEL_X: u16 = 40962;
+const TAG_PIXEL_Y: u16 = 40963;
+const TYPE_LONG: u16 = 4;
+
+/// Where the Exif IFD of a TIFF stream starts, from IFD0's pointer (LONG or IFD; in BigTIFF also
+/// LONG8 or IFD8). The first pointer wins; one that doesn't hold exactly one value is not followed.
+fn exif_ifd(order: Order, b: &[u8], first: usize, count: usize, entry_bytes: usize, big: bool) -> Option<usize> {
+    let e = (0..count).filter_map(|i| first.checked_add(i.checked_mul(entry_bytes)?)).find(|&e| order.u16(b, e) == Some(TAG_EXIF_IFD))?;
+    let count_at = e.checked_add(4)?;
+    let values = if big { order.u64(b, count_at)? } else { u64::from(order.u32(b, count_at)?) };
+    if values != 1 {
+        return None;
+    }
+    let ty = order.u16(b, e.checked_add(2)?)?;
+    let at = e.checked_add(if big { 12 } else { 8 })?;
+    let offset = match ty {
+        4 | 13 => u64::from(order.u32(b, at)?),
+        16 | 18 if big => order.u64(b, at)?,
+        _ => return None,
+    };
+    usize::try_from(offset).ok()
+}
+
+/// `exif` with the Exif IFD's PixelXDimension and PixelYDimension set to `size`, the pixels the
+/// file is written with; borrowed when there is nothing to change (no such tags, already right,
+/// or unparseable). A camera records its sensor's size there, which after flattening a cropped,
+/// resized or rotated document names a size the file doesn't have. Only a tag with one
+/// SHORT or LONG value is rewritten, in place and as a LONG (EXIF allows either), so no offset
+/// moves.
+pub fn exif_with_pixel_size(exif: &[u8], (width, height): (u32, u32)) -> Cow<'_, [u8]> {
+    let body = tiff_body(exif);
+    let prefix = exif.len() - body.len();
+    let Some((order, first, count, entry_bytes, big)) = ifd0_entries(body) else {
+        return Cow::Borrowed(exif);
+    };
+    let Some(dir) = exif_ifd(order, body, first, count, entry_bytes, big) else {
+        return Cow::Borrowed(exif);
+    };
+    let (count_bytes, value_offset, field) = if big { (8, 12, 8) } else { (2, 8, 4) };
+    let entries = if big { order.u64(body, dir).and_then(|n| usize::try_from(n).ok()) } else { order.u16(body, dir).map(usize::from) };
+    let Some(start) = dir.checked_add(count_bytes) else { return Cow::Borrowed(exif) };
+    // Every entry must be present: a truncated directory is left as it is.
+    let Some(entries) = entries.filter(|n| n.checked_mul(entry_bytes).and_then(|len| len.checked_add(start)).is_some_and(|end| end <= body.len()))
+    else {
+        return Cow::Borrowed(exif);
+    };
+    let put = |v: u32| match order {
+        Order::Little => v.to_le_bytes(),
+        Order::Big => v.to_be_bytes(),
+    };
+    let long = match order {
+        Order::Little => TYPE_LONG.to_le_bytes(),
+        Order::Big => TYPE_LONG.to_be_bytes(),
+    };
+    // Where entry `i`'s type and value sit in `exif`, and the value to write, when it is a
+    // PixelX/YDimension entry with one SHORT or LONG value that differs from it.
+    let stale = |i: usize| -> Option<(usize, usize, u32)> {
+        let e = start.checked_add(i.checked_mul(entry_bytes)?)?;
+        let want = match order.u16(body, e)? {
+            TAG_PIXEL_X => width,
+            TAG_PIXEL_Y => height,
+            _ => return None,
+        };
+        let count_at = e.checked_add(4)?;
+        let n = if big { order.u64(body, count_at)? } else { u64::from(order.u32(body, count_at)?) };
+        let type_at = e.checked_add(2)?;
+        let at = e.checked_add(value_offset)?;
+        let now = match order.u16(body, type_at)? {
+            TYPE_SHORT => u32::from(order.u16(body, at)?),
+            TYPE_LONG => order.u32(body, at)?,
+            _ => return None,
+        };
+        (n == 1 && now != want).then_some((prefix.checked_add(type_at)?, prefix.checked_add(at)?, want))
+    };
+    let mut out: Option<Vec<u8>> = None;
+    for (type_at, at, want) in (0..entries).filter_map(stale) {
+        let o = out.get_or_insert_with(|| exif.to_vec());
+        let mut value = [0u8; 8];
+        value[..4].copy_from_slice(&put(want));
+        if let Some(slot) = type_at.checked_add(2).and_then(|end| o.get_mut(type_at..end)) {
+            slot.copy_from_slice(&long);
+        }
+        if let Some(slot) = at.checked_add(field).and_then(|end| o.get_mut(at..end)) {
+            slot.copy_from_slice(&value[..field]);
+        }
+    }
+    out.map_or(Cow::Borrowed(exif), Cow::Owned)
+}
+
 /// Most IFD entries `overlaps_ifd0` examines in total: a hostile block with thousands of Exif/GPS
 /// pointers to large sub-IFDs would otherwise cost billions of checks.
 const MAX_OVERLAP_ENTRIES: usize = 1 << 20;

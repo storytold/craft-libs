@@ -29,8 +29,8 @@ mod resolution;
 
 pub use color::{EXIF_COLOR_SPACE_SRGB, exif_color_space};
 pub use resolution::{
-    exif_resolution, exif_with_resolution, exif_with_resolution_adding_missing, export_exif, export_exif_adding_missing_resolution, export_xmp,
-    photoshop_resolution, resolution, xmp_resolution, xmp_with_resolution,
+    exif_resolution, exif_with_pixel_size, exif_with_resolution, exif_with_resolution_adding_missing, export_exif,
+    export_exif_adding_missing_resolution, export_xmp, photoshop_resolution, resolution, xmp_resolution, xmp_with_resolution,
 };
 
 /// The TIFF/EXIF Orientation tag.
