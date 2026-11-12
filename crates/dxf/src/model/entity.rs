@@ -530,6 +530,8 @@ pub enum EntityKind {
     Spline(Spline),
     Helix(Helix),
     MLine(MLine),
+    /// Read only: [`super::write`] leaves it out (pass the record as raw tags).
+    MLeader(super::mleader::MLeader),
     Ray {
         base: Point,
         direction: Point,
@@ -797,6 +799,7 @@ impl Entity {
                 let own = if own.0.is_empty() { g } else { own };
                 EntityKind::MLine(mline(own.0, &own))
             }
+            "MULTILEADER" | "MLEADER" => EntityKind::MLeader(super::mleader::MLeader::read(e.tags)),
             "RAY" => EntityKind::Ray { base: line(&g).0, direction: line(&g).1 },
             "XLINE" => EntityKind::XLine { base: line(&g).0, direction: line(&g).1 },
             "TEXT" => EntityKind::Text(Text::read(&g)),
