@@ -16,6 +16,7 @@ text formats that are documents of their own.
 | `edl` | CMX 3600 edit decision lists: `parse` to the list as written (events, their lines and timecode fields, `M2`, `AUD`, clip-name, source-file, effect-name and locator comments), `write` for events the caller built, channel codes, reel names, the frame-rate guess. |
 | `fcp7` (feature `xml`) | Final Cut Pro 7 XML (`xmeml` 4 and 5, the dialect Premiere Pro reads and writes) to and from `model`. Read with craft-xml, strictly and bounded. |
 | `fcpxml` (feature `xml`) | FCPXML 1.9–1.11 to and from `model`: the primary storyline as V1, connected clips by lane, `ref-clip` compounds as nested sequences, rational times exact, transforms, opacity, volume and their keyframes, retiming through `timeMap`. |
+| `otio` (feature `otio`) | OpenTimelineIO JSON to and from `model`: timelines, collections, stacks as nested sequences, gaps, transitions, markers, linear time warps and freeze frames. What OTIO has no schema for goes in `metadata.<namespace>`, and the model's `ext` is merged into it, so an application's own data round-trips. |
 | crate root | `Format` (EDL, xmeml, FCPXML, OTIO, AAF, OMF), `detect_text`, `decode_text`. |
 
 No file I/O. EDL and ALE give the document as the format writes it. The formats that describe a
@@ -23,7 +24,7 @@ whole edit read into and write from `model`; mapping `model` onto an application
 stays in the application.
 AAF and OMF are in `craft-aaf`.
 
-Feature `xml`: the XML formats, on craft-xml. Feature `serde`: `Serialize` / `Deserialize` for the time, report and `Format` types.
+Feature `xml`: the XML formats, on craft-xml. Feature `otio`: OpenTimelineIO, on serde_json. Feature `serde`: `Serialize` / `Deserialize` for the time, report and `Format` types.
 
 ## Specifications
 
