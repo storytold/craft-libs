@@ -222,6 +222,42 @@ pub struct Helix {
     pub constrain: i64,
 }
 
+/// A vertex of an MLINE.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct MLineVertex {
+    /// Groups 11/21/31.
+    pub location: Point,
+    /// Groups 12/22/32: the direction of the segment that starts here.
+    pub direction: Point,
+    /// Groups 13/23/33: the miter direction.
+    pub miter: Point,
+    /// Per element of the style: its 74 count of 41 parameters (the distance from the vertex
+    /// along the miter, then the pairs that start and end its breaks).
+    pub element_params: Vec<Vec<f64>>,
+    /// Per element: its 75 count of 42 area fill parameters.
+    pub fill_params: Vec<Vec<f64>>,
+}
+
+/// An MLINE: parallel lines drawn by an MLINESTYLE.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MLine {
+    /// Group 2: the style's name.
+    pub style: String,
+    /// Group 340: the MLINESTYLE.
+    pub style_handle: Option<u64>,
+    /// Group 40.
+    pub scale: f64,
+    /// Group 70: 0 top, 1 zero (centred), 2 bottom.
+    pub justification: i64,
+    /// Group 71: 1 has vertices, 2 closed, 4 start caps suppressed, 8 end caps suppressed.
+    pub flags: i64,
+    /// Group 73: the number of elements of the style, as the entity states it.
+    pub elements: i64,
+    /// Groups 10/20/30.
+    pub start: Point,
+    pub vertices: Vec<MLineVertex>,
+}
+
 /// TEXT, and the text of an ATTRIB or ATTDEF.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Text {
@@ -493,6 +529,7 @@ pub enum EntityKind {
     Polyline(Polyline),
     Spline(Spline),
     Helix(Helix),
+    MLine(MLine),
     Ray {
         base: Point,
         direction: Point,
@@ -584,6 +621,50 @@ fn polyline(g: &Groups<'_>, followers: &[Record<'_>]) -> Polyline {
         m: g.i_or(71, 0),
         n: g.i_or(72, 0),
         smooth: g.i_or(75, 0),
+        vertices,
+    }
+}
+
+fn mline(tags: &[Tag], g: &Groups<'_>) -> MLine {
+    let mut vertices: Vec<MLineVertex> = Vec::new();
+    // Which list the 41s or 42s go to: the last one a 74 or 75 started.
+    let mut fill = false;
+    for t in tags {
+        if t.code == 11 {
+            vertices.push(MLineVertex { location: [t.f64(), 0.0, 0.0], ..MLineVertex::default() });
+            continue;
+        }
+        let Some(v) = vertices.last_mut() else { continue };
+        let axis = match t.code / 10 {
+            1 => 0,
+            2 => 1,
+            _ => 2,
+        };
+        match t.code {
+            21 | 31 => v.location[axis] = t.f64(),
+            12 | 22 | 32 => v.direction[axis] = t.f64(),
+            13 | 23 | 33 => v.miter[axis] = t.f64(),
+            74 => {
+                v.element_params.push(Vec::new());
+                fill = false;
+            }
+            75 => {
+                v.fill_params.push(Vec::new());
+                fill = true;
+            }
+            41 if !fill => v.element_params.last_mut().into_iter().for_each(|l| l.push(t.f64())),
+            42 if fill => v.fill_params.last_mut().into_iter().for_each(|l| l.push(t.f64())),
+            _ => {}
+        }
+    }
+    MLine {
+        style: g.s(2).unwrap_or_default(),
+        style_handle: g.handle(340).filter(|h| *h != 0),
+        scale: g.f_or(40, 1.0),
+        justification: g.i_or(70, 0),
+        flags: g.i_or(71, 1),
+        elements: g.i_or(73, 0),
+        start: g.point(10),
         vertices,
     }
 }
@@ -710,6 +791,11 @@ impl Entity {
                     ccw: h.i_or(290, 1) != 0,
                     constrain: h.i_or(280, 2),
                 })
+            }
+            "MLINE" => {
+                let own = g.subclass("AcDbMline");
+                let own = if own.0.is_empty() { g } else { own };
+                EntityKind::MLine(mline(own.0, &own))
             }
             "RAY" => EntityKind::Ray { base: line(&g).0, direction: line(&g).1 },
             "XLINE" => EntityKind::XLine { base: line(&g).0, direction: line(&g).1 },
