@@ -101,9 +101,14 @@ fn jbig2_segment(out: &mut Vec<u8>, number: u32, kind: u8, refs: &[u8], data: &[
 /// The page information of a 16 × 2 JBIG2 page whose default pixel is black, so that the image, if
 /// it decodes, draws black whatever its other segments hold.
 fn black_jbig2_page() -> Vec<u8> {
+    black_jbig2_page_of(16, 2)
+}
+
+/// [`black_jbig2_page`], `width` × `height`.
+fn black_jbig2_page_of(width: u32, height: u32) -> Vec<u8> {
     let mut page = Vec::new();
-    page.extend_from_slice(&16u32.to_be_bytes());
-    page.extend_from_slice(&2u32.to_be_bytes());
+    page.extend_from_slice(&width.to_be_bytes());
+    page.extend_from_slice(&height.to_be_bytes());
     page.extend_from_slice(&[0; 8]); // resolution
     page.extend_from_slice(&[4, 0, 0]); // flags (default pixel black), striping
     let mut stream = Vec::new();
@@ -118,6 +123,150 @@ fn jbig2_region_info(width: u32, height: u32) -> Vec<u8> {
     region.extend_from_slice(&height.to_be_bytes());
     region.extend_from_slice(&[0; 9]); // x, y, combination operator
     region
+}
+
+/// A Huffman-coded symbol dictionary of `symbols` symbols of width 0 and height 1, exported or not:
+/// each holds no pixels, and costs a bitmap's header all the same.
+fn zero_width_jbig2_dictionary(symbols: u32, exported: bool) -> Vec<u8> {
+    let mut dictionary = vec![0x00, 0x01]; // Huffman, tables B.4, B.2, B.1, B.1
+    dictionary.extend_from_slice(&(if exported { symbols } else { 0 }).to_be_bytes());
+    dictionary.extend_from_slice(&symbols.to_be_bytes()); // new
+    let mut bits = Bits::default();
+    bits.put(0, 1); // height class delta 1 (B.4)
+    for _ in 0..symbols {
+        bits.put(0, 1); // width delta 0 (B.2)
+    }
+    bits.put(0b111111, 6); // end of the class (B.2)
+    bits.put(0, 5); // BMSIZE 0, uncompressed (B.1)
+    bits.align();
+    if exported {
+        bits.table_b1(0); // the first export run isn't exported
+    }
+    bits.table_b1(symbols);
+    dictionary.extend_from_slice(&bits.bytes);
+    dictionary
+}
+
+/// A Huffman-coded symbol dictionary of `symbols` symbols of width 1 and no rows, none exported.
+/// Only table B.5 has a negative height class delta, so it gets to no rows from one.
+fn no_row_jbig2_dictionary(symbols: u32) -> Vec<u8> {
+    let mut bits = Bits::default();
+    bits.put(0, 1); // height class delta 1 (B.5), a class of no symbols
+    bits.put(0b111111, 6); // end of the class (B.2)
+    bits.put(0, 5); // BMSIZE 0, uncompressed (B.1)
+    bits.align();
+    bits.put(0b1111110, 7); // height class delta -1 (B.5): -255 and 254
+    bits.put(254, 8);
+    bits.put(0b10, 2); // width delta 1 (B.2)
+    for _ in 1..symbols {
+        bits.put(0, 1); // width delta 0 (B.2)
+    }
+    bits.put(0b111111, 6); // end of the class (B.2)
+    bits.put(0, 5); // BMSIZE 0, uncompressed (B.1)
+    bits.align();
+    bits.table_b1(symbols); // the first export run, not exported, is all of them
+    let mut dictionary = vec![0x00, 0x05]; // Huffman, tables B.5, B.2, B.1, B.1
+    dictionary.extend_from_slice(&0u32.to_be_bytes()); // exported
+    dictionary.extend_from_slice(&symbols.to_be_bytes()); // new
+    dictionary.extend_from_slice(&bits.bytes);
+    dictionary
+}
+
+/// A Huffman-coded symbol dictionary that climbs to `height`, stays about there for `classes`
+/// classes of no symbols, each with a byte of MMR bitmap, and drops to one row for its one symbol,
+/// not exported.
+fn empty_class_jbig2_dictionary(classes: u32, height: u32) -> Vec<u8> {
+    let mut bits = Bits::default();
+    bits.put(0b111110, 6); // height class delta, the upper line of table B.5
+    bits.put(height - 76, 32);
+    let mut at = height;
+    for class in 0..classes {
+        // Table B.5 has no delta of 0, so it goes down one and up one.
+        if class % 2 == 1 {
+            bits.put(0b1111110, 7); // height class delta -1 (B.5): -255 and 254
+            bits.put(254, 8);
+            at -= 1;
+        } else if class > 0 {
+            bits.put(0, 1); // height class delta 1 (B.5)
+            at += 1;
+        }
+        bits.put(0b111111, 6); // end of the class (B.2)
+        bits.put(1, 5); // BMSIZE 1 (B.1)
+        bits.align();
+        bits.put(0xFF, 8);
+    }
+    bits.put(0b1111111, 7); // height class delta, the lower line of table B.5
+    bits.put(at - 1 - 256, 32);
+    bits.put(0b10, 2); // width delta 1 (B.2)
+    bits.put(0b111111, 6); // end of the class (B.2)
+    bits.put(0, 5); // BMSIZE 0, uncompressed (B.1)
+    bits.align();
+    bits.put(0, 8); // its row
+    bits.table_b1(1); // the first export run, not exported, is all of them
+    let mut dictionary = vec![0x00, 0x05]; // Huffman, tables B.5, B.2, B.1, B.1
+    dictionary.extend_from_slice(&0u32.to_be_bytes()); // exported
+    dictionary.extend_from_slice(&1u32.to_be_bytes()); // new
+    dictionary.extend_from_slice(&bits.bytes);
+    dictionary
+}
+
+/// A Huffman-coded symbol dictionary of `symbols` white symbols of width 1 and `height` rows, none
+/// exported, for `height` from 76 up.
+fn narrow_jbig2_dictionary(symbols: u32, height: u32) -> Vec<u8> {
+    let mut bits = Bits::default();
+    bits.put(0b11111, 5); // height class delta, the upper line of table B.4
+    bits.put(height - 76, 32);
+    bits.put(0b10, 2); // width delta 1 (B.2)
+    for _ in 1..symbols {
+        bits.put(0, 1); // width delta 0 (B.2)
+    }
+    bits.put(0b111111, 6); // end of the class (B.2)
+    let rows = height.div_ceil(8) + 1; // an MMR-coded white bitmap: one bit a row
+    bits.table_b1(rows); // BMSIZE (B.1)
+    bits.align();
+    for _ in 0..rows {
+        bits.put(0xFF, 8);
+    }
+    bits.table_b1(symbols); // the first export run, not exported, is all of them
+    let mut dictionary = vec![0x00, 0x01]; // Huffman, tables B.4, B.2, B.1, B.1
+    dictionary.extend_from_slice(&0u32.to_be_bytes()); // exported
+    dictionary.extend_from_slice(&symbols.to_be_bytes()); // new
+    dictionary.extend_from_slice(&bits.bytes);
+    dictionary
+}
+
+/// A Huffman-coded symbol dictionary of one white symbol of `width` columns in each height class
+/// of `heights` (rising), none exported: wide symbols hold many pixels in few retained words.
+fn wide_jbig2_dictionary(width: u32, heights: &[u32]) -> Vec<u8> {
+    let mut bits = Bits::default();
+    let mut previous = 0;
+    for &height in heights {
+        match height - previous {
+            // Height class delta (table B.4): 1, or the upper line.
+            1 => bits.put(0, 1),
+            delta => {
+                bits.put(0b11111, 5);
+                bits.put(delta - 76, 32);
+            }
+        }
+        previous = height;
+        bits.put(0b111110, 6); // width delta, the upper line of table B.2
+        bits.put(width - 75, 32);
+        bits.put(0b111111, 6); // end of the class (B.2)
+        let rows = height.div_ceil(8) + 1; // an MMR-coded white bitmap: one bit a row
+        bits.table_b1(rows); // BMSIZE (B.1)
+        bits.align();
+        for _ in 0..rows {
+            bits.put(0xFF, 8);
+        }
+    }
+    let symbols = u32::try_from(heights.len()).unwrap();
+    bits.table_b1(symbols); // the first export run, not exported, is all of them
+    let mut dictionary = vec![0x00, 0x01]; // Huffman, tables B.4, B.2, B.1, B.1
+    dictionary.extend_from_slice(&0u32.to_be_bytes()); // exported
+    dictionary.extend_from_slice(&symbols.to_be_bytes()); // new
+    dictionary.extend_from_slice(&bits.bytes);
+    dictionary
 }
 
 /// An intermediate generic region, white, every row typical: it decodes in a few bytes however
@@ -152,28 +301,6 @@ fn jbig2_halftone_of(side: u32, width: u32, height: u32, mmr: bool) -> Vec<u8> {
     halftone.extend_from_slice(&height.to_be_bytes());
     halftone.extend_from_slice(&[0; 12]); // grid offset and vector
     halftone
-}
-
-/// A Huffman-coded symbol dictionary of `symbols` symbols of width 0 and height 1, exported or not:
-/// each holds no pixels, and costs a bitmap's header all the same.
-fn zero_width_jbig2_dictionary(symbols: u32, exported: bool) -> Vec<u8> {
-    let mut dictionary = vec![0x00, 0x01]; // Huffman, tables B.4, B.2, B.1, B.1
-    dictionary.extend_from_slice(&(if exported { symbols } else { 0 }).to_be_bytes());
-    dictionary.extend_from_slice(&symbols.to_be_bytes()); // new
-    let mut bits = Bits::default();
-    bits.put(0, 1); // height class delta 1 (B.4)
-    for _ in 0..symbols {
-        bits.put(0, 1); // width delta 0 (B.2)
-    }
-    bits.put(0b111111, 6); // end of the class (B.2)
-    bits.put(0, 5); // BMSIZE 0, uncompressed (B.1)
-    bits.align();
-    if exported {
-        bits.table_b1(0); // the first export run isn't exported
-    }
-    bits.table_b1(symbols);
-    dictionary.extend_from_slice(&bits.bytes);
-    dictionary
 }
 
 /// A Huffman-coded symbol dictionary of one white symbol, `side` from 76 up, exported or not.
@@ -253,6 +380,25 @@ fn jbig2_refinement_region() -> Vec<u8> {
     region.push(1); // template 1, no typical prediction
     region.extend_from_slice(&[0; 4]);
     region
+}
+
+/// A class of no symbols has nothing to cut from its bitmap, and rows are charged by the symbol, so
+/// decoding one would be rows for nothing: a thousand classes of 65,000 rows take a second, from a
+/// dictionary of 4 KB. It isn't decoded, however many there are, and the symbol after them shows that
+/// its bytes are stepped over.
+#[test]
+fn jbig2_classes_of_no_symbols_decode_no_bitmap() {
+    let mut stream = black_jbig2_page();
+    for number in 0..1_000 {
+        jbig2_segment(&mut stream, number + 1, 0, &[], &empty_class_jbig2_dictionary(1024, 65_000));
+    }
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = done.send(jbig2_image_draws(&stream));
+    });
+    // This takes milliseconds now and took a quarter of an hour, so a margin this wide can't fail on
+    // a busy machine.
+    assert_eq!(finished.recv_timeout(std::time::Duration::from_secs(120)), Ok(true));
 }
 
 /// Each item a JBIG2 stream decodes costs its work, and the stream may ask for 2^30: four of the
@@ -363,45 +509,47 @@ fn jbig2_decoding_work_is_counted_item_by_item() {
             data: jbig2_pattern_dictionary(32, 2),
             cost: two_patterns(1, 32),
         },
-        // Rows cost in a symbol of no pixels too.
-        Item { what: "symbols without pixels", before: vec![], spent: 0, kind: 0, refs: &[], data: zero_width_jbig2_dictionary(3, false), cost: 12 },
-        Item { what: "a tall symbol of no width", before: vec![], spent: 0, kind: 0, refs: &[], data: zero(1000), cost: 4000 },
-        Item { what: "new symbols", before: vec![], spent: 0, kind: 0, refs: &[], data: square_jbig2_dictionary(80, false), cost: 6720 },
-        Item { what: "referred symbols", before: symbol(), spent: 4, kind: 0, refs: &[1], data: exporting_none, cost: 1 },
+        // What an item reads counts, at 38 an integer: two classes, five widths and an export run.
+        Item { what: "symbols of no rows", before: vec![], spent: 0, kind: 0, refs: &[], data: no_row_jbig2_dictionary(5), cost: 304 },
+        // Rows cost in a symbol of no pixels too, on top of a class, three widths and an export run.
+        Item { what: "symbols without pixels", before: vec![], spent: 0, kind: 0, refs: &[], data: zero_width_jbig2_dictionary(3, false), cost: 202 },
+        Item { what: "a tall symbol of no width", before: vec![], spent: 0, kind: 0, refs: &[], data: zero(1000), cost: 4114 },
+        Item { what: "new symbols", before: vec![], spent: 0, kind: 0, refs: &[], data: square_jbig2_dictionary(80, false), cost: 6834 },
+        Item { what: "referred symbols", before: symbol(), spent: 156, kind: 0, refs: &[1], data: exporting_none, cost: 39 },
         // Its symbol, and its one row and word; Huffman-coded, a table line for the symbol.
-        Item { what: "immediate text", before: symbol(), spent: 4, kind: 6, refs: &[1], data: jbig2_text_region(1, 1, 0), cost: 13 },
-        Item { what: "intermediate text", before: symbol(), spent: 4, kind: 4, refs: &[1], data: jbig2_text_region(1, 1, 0), cost: 13 },
-        Item { what: "a text region's pixels", before: symbol(), spent: 4, kind: 6, refs: &[1], data: jbig2_text_region(32, 32, 0), cost: 75 },
+        Item { what: "immediate text", before: symbol(), spent: 156, kind: 6, refs: &[1], data: jbig2_text_region(1, 1, 0), cost: 13 },
+        Item { what: "intermediate text", before: symbol(), spent: 156, kind: 4, refs: &[1], data: jbig2_text_region(1, 1, 0), cost: 13 },
+        Item { what: "a text region's pixels", before: symbol(), spent: 156, kind: 6, refs: &[1], data: jbig2_text_region(32, 32, 0), cost: 75 },
         Item {
             what: "an intermediate text region's pixels",
             before: symbol(),
-            spent: 4,
+            spent: 156,
             kind: 4,
             refs: &[1],
             data: jbig2_text_region(32, 32, 0),
             cost: 75,
         },
-        // The region's 13, a copy of the symbol's row and the round of the loop.
-        Item { what: "an instance", before: symbol(), spent: 4, kind: 6, refs: &[1], data: jbig2_text_region(1, 1, 1), cost: 15 },
-        // The region's 13, 80 rows of 4 words copied, the round of the loop.
+        // The region's 13, a copy of the symbol's row, and the instance's 4 integers.
+        Item { what: "an instance", before: symbol(), spent: 156, kind: 6, refs: &[1], data: jbig2_text_region(1, 1, 1), cost: 166 },
+        // The region's 13, 80 rows of 4 words copied, and the instance's 4 integers.
         Item {
             what: "an instance of a large symbol",
             before: vec![(0, square_jbig2_dictionary(80, true))],
-            spent: 6720,
+            spent: 6872,
             kind: 6,
             refs: &[1],
             data: jbig2_text_region(1, 1, 1),
-            cost: 334,
+            cost: 485,
         },
-        // And decoded as well as copied.
+        // And decoded as well as copied, with the 4 integers that gave its size.
         Item {
             what: "a refined instance",
             before: vec![(0, square_jbig2_dictionary(80, true))],
-            spent: 6720,
+            spent: 6872,
             kind: 6,
             refs: &[1],
             data: jbig2_refined_text_region(),
-            cost: 7054,
+            cost: 7357,
         },
         // A bit plane, a cell's copy and the region's.
         Item {
@@ -454,6 +602,54 @@ fn jbig2_decoding_work_is_counted_item_by_item() {
     for item in &items {
         assert!(jbig2_image_draws(&stream(item, item.cost)), "{}: with its cost left it draws", item.what);
         assert!(!jbig2_image_draws(&stream(item, item.cost - 1)), "{}: with one less it's refused", item.what);
+    }
+}
+
+/// From `cargo xtask fuzz`: one changed byte in a symbol dictionary's arithmetic-coded data
+/// hung the renderer. Two of its loops can stop advancing: an export run of length 0, and a
+/// height class whose first width is already the end-of-class marker. Past the end of its
+/// data the decoder can return those for ever. Vendored hayro-jbig2 patch: at most one height
+/// class per new symbol and `2 × symbols + 1` export runs, each plus `EXTRA_EMPTY_STEPS`.
+/// These synthetic dictionaries (two new symbols each, a few bytes of arbitrary data) decode
+/// the same way. In the second every class after the first symbol adds 13 to the height, so it
+/// only fails when the height overflows `u32`, after 330 million empty classes (about five
+/// seconds; a delta of 0 would never end). The page draws it as twenty images, so that the
+/// stall without the patch is well past the timeout on any machine.
+#[test]
+fn jbig2_symbol_dictionaries_that_never_advance_terminate() {
+    for (what, data, copies) in
+        [("zero-length export runs", &[0x05, 0x70, 0x05, 0x14, 0x02, 0x1d, 0x56, 0x3f][..], 1), ("empty height classes", &[0x06, 0x99][..], 20)]
+    {
+        // Embedded JBIG2 segments (ISO 14492 §7.2): page information, then a symbol dictionary.
+        let mut jbig2 = Vec::new();
+        let mut segment = |number: u32, kind: u8, data: &[u8]| {
+            jbig2.extend_from_slice(&number.to_be_bytes());
+            jbig2.extend_from_slice(&[kind, 0, 1]);
+            jbig2.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+            jbig2.extend_from_slice(data);
+        };
+        let mut page = Vec::new();
+        page.extend_from_slice(&8u32.to_be_bytes());
+        page.extend_from_slice(&8u32.to_be_bytes());
+        page.extend_from_slice(&[0; 8]); // resolution
+        page.extend_from_slice(&[0, 0, 0]); // flags, striping
+        segment(0, 48, &page);
+        let mut dictionary = vec![0, 0]; // arithmetic coding, template 0, no refinement
+        dictionary.extend_from_slice(&[3, 0xff, 0xfd, 0xff, 2, 0xfe, 0xfe, 0xfe]); // AT pixels
+        dictionary.extend_from_slice(&1u32.to_be_bytes()); // exported symbols
+        dictionary.extend_from_slice(&2u32.to_be_bytes()); // new symbols
+        dictionary.extend_from_slice(data);
+        segment(1, 0, &dictionary);
+        // The stall without the patch is well past the timeout on any machine; `copies` decodes stand
+        // in for the images the page draws.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for _ in 0..copies {
+                let _ = black_pixels(&jbig2);
+            }
+            let _ = tx.send(());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap_or_else(|_| panic!("{what}: a JBIG2 symbol dictionary must not stall the decoder"));
     }
 }
 
@@ -520,3 +716,4 @@ fn jbig2_placements_at_the_end_of_an_i32_draw_nothing() {
     assert_eq!(ink(hex(UPPER_LINE), 16, 12), 0, "an upper range line past an i32");
     assert_eq!(ink(hex(LOWER_LINE), 16, 12), 0, "a lower range line past an i32");
 }
+
