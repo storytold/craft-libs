@@ -15,7 +15,8 @@ pub enum LabelKind {
     #[default]
     Text,
     /// No visible label: the text still names the control. In a body whose labelled rows share a label column, the
-    /// row keeps the column, so its control starts in the control column.
+    /// row keeps the column, so its control starts in the control column. A label given content
+    /// (`BodyCx::labelled_with`) shows the content alone, with the text as its tooltip.
     Hidden,
     /// An icon or a short text shown in place of the label; the text still names the control. Glyph labels share
     /// a column of their own, apart from the text labels'. The label's detail joins the description and is not shown.
@@ -180,9 +181,16 @@ pub struct SideLabel {
 }
 
 impl SideLabel {
-    /// The label step shows no label leaf: a hidden label, or one the control shows inside its box.
-    pub(super) fn shows_no_leaf(&self) -> bool {
-        self.kind == LabelKind::Hidden || self.layout == FieldLayout::Inside
+    /// The label step shows no label leaf: a hidden label without content, or one the control shows inside its box.
+    /// A hidden label with `content` (`BodyCx::labelled_with`) shows the content alone.
+    pub(super) fn shows_no_leaf(&self, content: bool) -> bool {
+        (self.kind == LabelKind::Hidden && !content) || self.layout == FieldLayout::Inside
+    }
+
+    /// The label shows only its content: a hidden label with content. The text still names the control and is the
+    /// content's tooltip.
+    pub(super) fn content_only(&self, content: bool) -> bool {
+        self.kind == LabelKind::Hidden && content
     }
 
     /// A text label beside its control that names it.

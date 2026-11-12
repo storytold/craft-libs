@@ -84,6 +84,8 @@ pub(super) struct LabelLeaf {
     pub(super) claimed: bool,
     /// The size of the content the label step shows after the text, inside the label: 0 without one.
     pub(super) trailing: Vec2,
+    /// The name shows; false for a label that shows only its content (`SideLabel::content_only`).
+    pub(super) named: bool,
     double_click: bool,
     dot_click: bool,
     activated: bool,
@@ -120,6 +122,7 @@ impl LabelLeaf {
             wraps: false,
             claimed: false,
             trailing: Vec2::ZERO,
+            named: true,
             double_click: false,
             dot_click: false,
             activated: false,
@@ -179,6 +182,12 @@ impl Component for LabelLeaf {
             self.baseline.set(baseline);
             self.first_line.set(shown.y);
             return Vec2::new(shown.x + self.slot, shown.y);
+        }
+        if !self.named {
+            let height = self.trailing.y.max(name.y);
+            self.baseline.set(line.first_baseline + (height - name.y) / 2.0);
+            self.first_line.set(height);
+            return Vec2::new(self.trailing.x + self.slot, height);
         }
         let room = match cx.proposal {
             craft_behavior::Proposal::Width(width) => Some(width),
@@ -279,6 +288,13 @@ impl Component for LabelLeaf {
         let middle = if wrapped { cx.rect.top() + first / 2.0 } else { cx.rect.center().y };
         if self.trailing.x > 0.0 {
             rest = rest.take_end(self.trailing_width(cx.style.gap)).1;
+        }
+        if !self.named {
+            // The content is the label: the step shows it in the label's rect.
+            if self.slot > 0.0 {
+                draw.reset_mark(&cx.style.reset, slot.center(), self.differs);
+            }
+            return;
         }
         let centred = |rect: Rect, height: f32| Rect::from_min_size(egui::pos2(rect.min.x, middle - height / 2.0), Vec2::new(rect.width(), height));
         if let Some(glyph) = &self.glyph {

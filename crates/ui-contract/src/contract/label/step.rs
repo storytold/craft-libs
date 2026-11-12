@@ -144,7 +144,8 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, trailing: Option<
     let reset = scope::last_reset(&ctx, input.scope);
     let flow = Flow::new(input.row, rtl);
     let label_id = sub(input.scope, "label");
-    if input.side.shows_no_leaf() {
+    let content = input.trailing.x > 0.0;
+    if input.side.shows_no_leaf(content) {
         scope::begin(&ctx, input.scope, input.owner, scope::Kind::Label(field_label(env, input, label_id, Rect::NOTHING)));
         let control = hidden_control(&ctx, input, flow, gap);
         scope::place_controls(&ctx, input.scope, control.top());
@@ -155,12 +156,15 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, trailing: Option<
     leaf.scrub = input.enabled && (input.side.scrub || scope::last_scrub(&ctx, input.scope));
     leaf.resettable = reset.is_some();
     leaf.differs = reset.is_some_and(|fact| fact.differs);
-    leaf.colon = colon(env, input);
+    leaf.named = !input.side.content_only(content);
+    leaf.colon = colon(env, input).filter(|_| leaf.named);
     leaf.wraps = input.side.layout == FieldLayout::After;
     leaf.claimed = input.claims;
     leaf.trailing = input.trailing;
     if let Some(tooltip) = input.side.tooltip.clone() {
         leaf = leaf.tooltip(tooltip);
+    } else if !leaf.named {
+        leaf = leaf.tooltip(input.text.clone());
     }
     match &input.side.kind {
         LabelKind::Glyph(glyph) => leaf.glyph = Some(glyph.resolved(env.view())),

@@ -151,14 +151,17 @@ pub(crate) fn label_gap(env: &Env) -> f32 {
 pub(crate) fn control_after(ui: &mut Ui, env: &Env, input: &LabelIn<'_>) -> Placed {
     let ctx = ui.ctx().clone();
     let flow = Flow::new(input.row, env.direction.is_rtl());
-    if input.side.shows_no_leaf() {
+    let content = input.trailing.x > 0.0;
+    if input.side.shows_no_leaf(content) {
         return Placed { label: Rect::NOTHING, control: hidden_control(&ctx, input, flow, label_gap(env)), trailing: Rect::NOTHING };
     }
     let reset = scope::last_reset(&ctx, input.scope);
     let slot = if reset.is_some() && input.side.reset_dot { env.tokens.size.handle.sm } else { 0.0 };
     let mut leaf = LabelLeaf::new(input.side.kind.shown(input.text).clone(), slot);
     leaf.resettable = reset.is_some();
-    leaf.colon = colon(env, input);
+    leaf.trailing = input.trailing;
+    leaf.named = !input.side.content_only(content);
+    leaf.colon = colon(env, input).filter(|_| leaf.named);
     match &input.side.kind {
         LabelKind::Glyph(glyph) => leaf.glyph = Some(glyph.resolved(env.view())),
         _ => {

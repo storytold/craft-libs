@@ -124,7 +124,8 @@ impl<'a> BodyCx<'a> {
 
     /// `labelled`, with `content` shown inside the label after its text (a sample of what the option picks). The
     /// content belongs to the label: for a child that draws only its mark (a radio button, a check box) a press on it
-    /// is the child's, as a press on the label is, so the content takes none itself.
+    /// is the child's, as a press on the label is, so the content takes none itself. With a `LabelKind::Hidden` label
+    /// the content is the whole label: a picture in place of the option's name.
     pub fn labelled_with<C: Show, D: Show>(
         &mut self,
         ui: &mut Ui,
