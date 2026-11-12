@@ -4578,7 +4578,8 @@ fn shape_gradients_and_transparency_are_read_and_survive_saving() {
             rot_with_shape: false,
             flip: GradientFlip::Xy,
         }))),
-        Some(grad(vec![stop(0.0, ph, 0.0), stop(100.0, Rgb(0x20, 0x40, 0x60), 0.0)], lin(90.0, false), true)),
+        // `a:shade val="50000"` of phClr, mixed in linear light (craft-drawingml; sRGB bytes gave 20 40 60).
+        Some(grad(vec![stop(0.0, ph, 0.0), stop(100.0, Rgb(44, 92, 140), 0.0)], lin(90.0, false), true)),
         Some(grad(vec![stop(0.0, ph, 0.0), stop(100.0, black, 0.0)], centre, true)),
         None,
     ];

@@ -15,6 +15,9 @@ workspace = true
 test-support = []
 
 [dependencies]
+# The equation tree and its forms (math, math_latex, math_linear, math_symbols, math_tree), with
+# symbol_fonts and Rgb, re-exported here under the paths they had.
+craft-math = { workspace = true }
 base64 = "0.23"
 log = "0.4"
 serde = { version = "1", features = ["derive", "rc"] }

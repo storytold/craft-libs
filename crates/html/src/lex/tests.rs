@@ -175,3 +175,18 @@ proptest::proptest! {
         }
     }
 }
+
+#[test]
+fn a_token_can_be_read_again() {
+    let mut l = Lexer::new("é<b>x</b>");
+    assert_eq!(l.next(), Some(Token::Text("é")));
+    let at = l.pos();
+    assert!(matches!(l.next(), Some(Token::Start(t)) if t.name == "b"));
+    l.set_pos(at);
+    assert!(matches!(l.next(), Some(Token::Start(t)) if t.name == "b"));
+    // Inside a character or past the end: the next boundary.
+    l.set_pos(1);
+    assert!(matches!(l.next(), Some(Token::Start(t)) if t.name == "b"));
+    l.set_pos(1000);
+    assert_eq!(l.next(), None);
+}

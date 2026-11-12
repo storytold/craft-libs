@@ -16,14 +16,14 @@
 //! The blocks themselves stay raw in the model ([`crate::TaggedBlock`]) and write back
 //! unchanged; these are read-only views. Came from EffectCraft's `effectcraft-psd`.
 
+use std::borrow::Cow;
 use std::ops::Range;
 
 use crate::descriptor::{Descriptor, UnicodeString, Value};
 use crate::error::{PsdError, Result};
 use crate::file::PsdFile;
-use crate::io::{Reader, read_pascal};
+use crate::io::{Reader, WriteExt, read_pascal};
 use crate::layer::LayerRecord;
-use crate::tagged::TaggedBlock;
 
 /// The most pixels a baked smart object may have: 2^24 (256 MiB as float RGBA). The size comes
 /// from the file's transform, which is untrusted.
@@ -457,20 +457,227 @@ fn linked_file(item: &[u8], at: usize) -> Result<LinkedFile> {
     Ok(out)
 }
 
+/// The four-character file type Photoshop records for an embedded file, from its first bytes:
+/// `8BPS` (`8BPB` for a PSB), `PNGf`, `JPEG`, `TIFF`, `GIFf`, or four spaces.
+pub fn file_type(bytes: &[u8]) -> [u8; 4] {
+    match bytes {
+        [b'8', b'B', b'P', b'S', 0, 2, ..] => *b"8BPB",
+        [b'8', b'B', b'P', b'S', ..] => *b"8BPS",
+        [0x89, b'P', b'N', b'G', ..] => *b"PNGf",
+        [0xFF, 0xD8, ..] => *b"JPEG",
+        [b'I', b'I', 42, 0, ..] | [b'M', b'M', 0, 42, ..] => *b"TIFF",
+        [b'G', b'I', b'F', ..] => *b"GIFf",
+        _ => *b"    ",
+    }
+}
+
+/// One embedded-file record (`liFD`, version 7: no open descriptor, no child document, no
+/// modification time, unlocked) with its length field and padding to 4, ready to append to a
+/// linked layer block's data. The type is [`file_type`] of the bytes; the id is cut to 255 bytes.
+pub fn encode_embedded_file(uuid: &str, name: &str, bytes: &[u8]) -> Vec<u8> {
+    let mut item = b"liFD".to_vec();
+    item.put_u32(7);
+    let id = uuid.as_bytes().get(..uuid.len().min(255)).unwrap_or_default();
+    item.put_u8(id.len() as u8);
+    item.put(id);
+    // NUL-terminated, the terminator counted (as Photoshop writes and reads it).
+    UnicodeString::new_nul(name).write(&mut item);
+    item.put(&file_type(bytes));
+    item.put(b"8BIM");
+    item.put_u64(bytes.len() as u64);
+    item.put_u8(0);
+    item.put(bytes);
+    item.put_u32(0); // child document id (version 5)
+    item.put_f64(0.0); // asset modification time (version 6)
+    item.put_u8(0); // asset locked (version 7)
+    let mut out = Vec::with_capacity(item.len() + 11);
+    out.put_u64(item.len() as u64);
+    out.put(&item);
+    out.resize(out.len().next_multiple_of(4), 0);
+    out
+}
+
+/// One record of a linked layer block's data, unparsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinkedRecord<'a> {
+    /// The record's unique id, when its header is readable (lossy UTF-8).
+    pub uuid: Option<&'a [u8]>,
+    /// The whole record: length field, record and padding.
+    pub raw: &'a [u8],
+}
+
+impl LinkedRecord<'_> {
+    /// The unique id as text, when it is readable and valid UTF-8.
+    pub fn uuid_str(&self) -> Option<&str> {
+        std::str::from_utf8(self.uuid?).ok()
+    }
+}
+
+/// The record inside `data` at its start: (the record without its length field, the record
+/// with length field and padding). `None` when the length runs past the data.
+fn framed_record(data: &[u8]) -> Option<(&[u8], &[u8])> {
+    let len = usize::try_from(u64::from_be_bytes(*data.first_chunk::<8>()?)).ok()?;
+    let end = len.checked_add(8)?;
+    let item = data.get(8..end)?;
+    let padded = end.checked_next_multiple_of(4)?.min(data.len());
+    Some((item, data.get(..padded)?))
+}
+
+/// The unique id bytes of a record (after its type and version), when they are present.
+fn record_uuid(item: &[u8]) -> Option<&[u8]> {
+    let n = usize::from(*item.get(8)?);
+    item.get(9..9usize.checked_add(n)?)
+}
+
+/// The records of a linked layer block's data, in order, each with its unique id when its header
+/// is readable. A tail that is no complete record is returned as one record without an id.
+pub fn linked_records(data: &[u8]) -> Vec<LinkedRecord<'_>> {
+    let mut out = Vec::new();
+    let mut rest = data;
+    while !rest.is_empty() {
+        let Some((item, raw)) = framed_record(rest) else {
+            out.push(LinkedRecord { uuid: None, raw: rest });
+            break;
+        };
+        out.push(LinkedRecord { uuid: record_uuid(item), raw });
+        rest = rest.get(raw.len()..).unwrap_or_default();
+    }
+    out
+}
+
+/// The unique ids of every record of a linked layer block's data that has a readable one.
+pub fn linked_uuids(data: &[u8]) -> Vec<String> {
+    linked_records(data).iter().filter_map(|r| r.uuid.map(|u| String::from_utf8_lossy(u).into_owned())).collect()
+}
+
+/// A linked layer block's data with the records `keep` accepts (by unique id, lossy UTF-8) and
+/// every record without a readable id, then the records of `add` (see
+/// [`encode_embedded_file`]) appended. `None` when nothing would change.
+pub fn rebuild_linked_block(data: &[u8], keep: &dyn Fn(&str) -> bool, add: &[Vec<u8>]) -> Option<Vec<u8>> {
+    let records = linked_records(data);
+    let kept = |r: &LinkedRecord<'_>| r.uuid.is_none_or(|u| keep(&String::from_utf8_lossy(u)));
+    if records.iter().all(kept) && add.is_empty() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(data.len());
+    for r in records.iter().filter(|r| kept(r)) {
+        out.extend_from_slice(r.raw);
+    }
+    for a in add {
+        out.extend_from_slice(a);
+    }
+    Some(out)
+}
+
+/// Only the complete records `keep(uuid, raw record)` accepts, for copying smart objects to
+/// another document: unlike [`rebuild_linked_block`], records without an id and a damaged tail
+/// are left out, so a copy never carries unrelated embedded files. An id must be valid UTF-8 to
+/// be selected: one that is not, but whose lossy text `keep` accepts, is an error, as is a
+/// selected record that is cut short. `Ok(None)` when every record is selected and complete
+/// (the data can be shared as it is).
+pub fn select_linked_records(data: &[u8], keep: &dyn Fn(&str, &[u8]) -> bool) -> Result<Option<Vec<u8>>> {
+    let cut_short = || PsdError::invalid("a selected linked-layer record is cut short");
+    let append = |out: &mut Vec<u8>, bytes: &[u8]| -> Result<()> {
+        out.try_reserve(bytes.len()).map_err(|_| PsdError::OutOfMemory("not enough memory to copy linked-layer records"))?;
+        out.extend_from_slice(bytes);
+        Ok(())
+    };
+    let mut selected: Option<Vec<u8>> = None;
+    let mut at = 0usize;
+    while let Some(rest) = data.get(at..).filter(|r| !r.is_empty()) {
+        let Some((item, raw)) = framed_record(rest) else {
+            if let Some(item) = rest.get(8..)
+                && selection_uuid(item, rest, keep)?.is_some_and(|uuid| keep(uuid, rest))
+            {
+                return Err(cut_short());
+            }
+            if selected.is_none() {
+                let mut prefix = Vec::new();
+                append(&mut prefix, data.get(..at).ok_or_else(cut_short)?)?;
+                selected = Some(prefix);
+            }
+            break;
+        };
+        if selection_uuid(item, raw, keep)?.is_some_and(|uuid| keep(uuid, raw)) {
+            if let Some(out) = &mut selected {
+                append(out, raw)?;
+            }
+        } else if selected.is_none() {
+            let mut prefix = Vec::new();
+            append(&mut prefix, data.get(..at).ok_or_else(cut_short)?)?;
+            selected = Some(prefix);
+        }
+        at = at.checked_add(raw.len()).ok_or_else(cut_short)?;
+    }
+    Ok(selected)
+}
+
+/// A record's id for selection: exact UTF-8, or an error when only its lossy text is selected.
+fn selection_uuid<'a>(item: &'a [u8], raw: &[u8], keep: &dyn Fn(&str, &[u8]) -> bool) -> Result<Option<&'a str>> {
+    let Some(bytes) = record_uuid(item).filter(|b| !b.is_empty()) else { return Ok(None) };
+    match std::str::from_utf8(bytes) {
+        Ok(uuid) => Ok(Some(uuid)),
+        Err(_) if keep(&String::from_utf8_lossy(bytes), raw) => Err(PsdError::invalid("a linked-layer record id is not valid UTF-8")),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Whether the complete record `record` (length field and padding included) is in a linked layer
+/// block's data, without decoding any file bytes.
+pub fn contains_linked_record(data: &[u8], record: &[u8]) -> bool {
+    let mut rest = data;
+    while let Some((_, raw)) = framed_record(rest) {
+        if raw == record {
+            return true;
+        }
+        let Some(next) = rest.get(raw.len()..) else { return false };
+        rest = next;
+    }
+    false
+}
+
+/// The record with id `uuid` copied under `new_uuid` (at most 255 bytes), with its length
+/// field and padding; the rest of the record (embedded, external or alias data) is kept.
+pub fn copy_linked_record(data: &[u8], uuid: &str, new_uuid: &str) -> Option<Vec<u8>> {
+    let record = linked_records(data).into_iter().find(|r| r.uuid == Some(uuid.as_bytes()))?;
+    let (item, _) = framed_record(record.raw)?;
+    let old_end = 9usize.checked_add(usize::from(*item.get(8)?))?;
+    let new_len = u8::try_from(new_uuid.len()).ok()?;
+    let mut copy = item.get(..8)?.to_vec();
+    copy.push(new_len);
+    copy.extend_from_slice(new_uuid.as_bytes());
+    copy.extend_from_slice(item.get(old_end..)?);
+    let mut out = Vec::with_capacity(copy.len() + 11);
+    out.put_u64(copy.len() as u64);
+    out.extend(copy);
+    out.resize(out.len().next_multiple_of(4), 0);
+    Some(out)
+}
+
 impl PsdFile {
-    /// Every linked file of the document's linked layer blocks, each with the block that holds
-    /// it ([`LinkedFile::data`] is a range of that block's data).
-    pub fn linked_files(&self) -> Vec<(&TaggedBlock, LinkedFile)> {
-        self.global_blocks
-            .iter()
-            .filter(|b| is_linked_layer_key(&b.key))
-            .flat_map(|b| linked_files(&b.data).into_iter().map(move |f| (b, f)))
-            .collect()
+    /// Every linked file of the document's linked layer blocks, each with the index of the
+    /// global block that holds it ([`LinkedFile::data`] is a range of that block's data). A
+    /// block left in the source ([`crate::TaggedBlock::stored`]) is read for it.
+    pub fn linked_files(&self) -> Result<Vec<(usize, LinkedFile)>> {
+        let mut out = Vec::new();
+        for (i, b) in self.global_blocks.iter().enumerate().filter(|(_, b)| is_linked_layer_key(&b.key)) {
+            out.extend(linked_files(&b.encoded()?).into_iter().map(|f| (i, f)));
+        }
+        Ok(out)
     }
 
-    /// The embedded bytes of the linked file `uuid`, when the document embeds it.
-    pub fn linked_data(&self, uuid: &str) -> Option<&[u8]> {
-        self.linked_files().into_iter().find_map(|(b, f)| if f.uuid == uuid { b.data.get(f.data?) } else { None })
+    /// The embedded bytes of the linked file `uuid`, when the document embeds it: borrowed from
+    /// a block in memory, read from the source for a block left there.
+    pub fn linked_data(&self, uuid: &str) -> Result<Option<Cow<'_, [u8]>>> {
+        for b in self.global_blocks.iter().filter(|b| is_linked_layer_key(&b.key)) {
+            let data = b.encoded()?;
+            let Some(range) = linked_files(&data).into_iter().find(|f| f.uuid == uuid).and_then(|f| f.data) else { continue };
+            return Ok(match data {
+                Cow::Borrowed(d) => d.get(range).map(Cow::Borrowed),
+                Cow::Owned(d) => d.get(range).map(|e| Cow::Owned(e.to_vec())),
+            });
+        }
+        Ok(None)
     }
 }
 
@@ -479,6 +686,7 @@ mod tests {
     use super::*;
     use crate::descriptor::{Id, ObjectArray};
     use crate::io::{WriteExt, write_pascal};
+    use crate::tagged::TaggedBlock;
 
     fn so(quad: [[f64; 2]; 4], warp: Option<Warp>) -> SmartObject {
         SmartObject { uuid: "x".into(), quad, size: None, warp }
@@ -520,6 +728,138 @@ mod tests {
         out.put(&item);
         out.resize(out.len().div_ceil(4) * 4, 0);
         out
+    }
+
+    /// The embedded files of a block, as (id, name, bytes).
+    fn embedded(data: &[u8]) -> Vec<(String, String, Vec<u8>)> {
+        linked_files(data).into_iter().filter_map(|f| Some((f.uuid, f.name, data.get(f.data?)?.to_vec()))).collect()
+    }
+
+    #[test]
+    fn embedded_file_records_read_back_and_check() {
+        let mut data = encode_embedded_file("abc-1", "a.png", &[0x89, b'P', b'N', b'G', 1]);
+        data.extend(encode_embedded_file("def-2", "b.psb", b"8BPS\0\x02rest"));
+        assert_eq!(
+            embedded(&data),
+            [("abc-1".into(), "a.png".into(), vec![0x89, b'P', b'N', b'G', 1]), ("def-2".into(), "b.psb".into(), b"8BPS\0\x02rest".to_vec())]
+        );
+        assert_eq!(linked_files(&data).iter().map(|f| f.file_type.clone()).collect::<Vec<_>>(), ["PNGf", "8BPB"]);
+        TaggedBlock::new(*b"lnk2", data).check_structure().unwrap();
+        for (bytes, ty) in [
+            (&b"8BPS\0\x01"[..], b"8BPS"),
+            (&[0xFF, 0xD8, 0xFF][..], b"JPEG"),
+            (b"II*\0", b"TIFF"),
+            (b"MM\0*", b"TIFF"),
+            (b"GIF89a", b"GIFf"),
+            (b"%PDF", b"    "),
+        ] {
+            assert_eq!(&file_type(bytes), ty);
+        }
+    }
+
+    #[test]
+    fn blocks_are_pruned_and_extended() {
+        let (a, b, c) =
+            (encode_embedded_file("a", "a.png", &[1]), encode_embedded_file("b", "b.psb", &[2, 2]), encode_embedded_file("c", "c", &[7; 3]));
+        let mut data = a.clone();
+        data.extend(&b);
+        assert_eq!(linked_uuids(&data), ["a", "b"]);
+        assert_eq!(rebuild_linked_block(&data, &|_| true, &[]), None);
+        let out = rebuild_linked_block(&data, &|u| u != "a", std::slice::from_ref(&c)).unwrap();
+        assert_eq!(out, [b.clone(), c.clone()].concat());
+        // A malformed tail is kept as it is.
+        let mut bad = a.clone();
+        bad.extend([0, 0, 0, 0, 0, 0, 1, 0, 9]);
+        assert!(rebuild_linked_block(&bad, &|_| true, std::slice::from_ref(&c)).unwrap().starts_with(&bad));
+        assert!(linked_records(&[0, 0, 0, 0, 0, 0, 0, 200, 1, 2]).iter().all(|r| r.uuid.is_none()));
+        assert!(linked_records(&[]).is_empty());
+    }
+
+    #[test]
+    fn copying_a_record_keeps_an_unknown_external_payload() {
+        let mut raw = encode_embedded_file("old", "missing.psb", &[7; 5]);
+        raw[8..12].copy_from_slice(b"liFE");
+        let copy = copy_linked_record(&raw, "old", "independent-copy").unwrap();
+        assert_eq!(linked_uuids(&copy), ["independent-copy"]);
+        let original_len = u64::from_be_bytes(raw[..8].try_into().unwrap()) as usize;
+        let copied_len = u64::from_be_bytes(copy[..8].try_into().unwrap()) as usize;
+        assert_eq!(&copy[8..16], &raw[8..16]);
+        assert_eq!(&copy[17 + "independent-copy".len()..8 + copied_len], &raw[20..8 + original_len]);
+        assert!(copy_linked_record(&raw, "missing", "new").is_none());
+        assert!(copy_linked_record(&raw, "old", &"x".repeat(256)).is_none());
+    }
+
+    #[test]
+    fn selected_records_leave_out_other_files_and_unidentified_pieces() {
+        let (a, b) = (encode_embedded_file("a", "a.psb", &[1; 3]), encode_embedded_file("b", "b.psb", &[2; 4]));
+        assert!(select_linked_records(&a, &|uuid, _| uuid == "a").unwrap().is_none(), "a block of only selected records can be shared");
+        let mut data = a.clone();
+        data.extend(&b);
+        data.extend([0, 0, 0, 0, 0, 0, 1, 0, 9]);
+        assert_eq!(select_linked_records(&data, &|uuid, _| uuid == "a").unwrap(), Some(a.clone()));
+        assert_eq!(select_linked_records(&data, &|uuid, _| uuid == "b").unwrap(), Some(b));
+        assert_eq!(select_linked_records(&data, &|_, _| false).unwrap(), Some(Vec::new()));
+        // A complete but unidentified record is skipped without losing a later selected one.
+        let mut unreadable = 1u64.to_be_bytes().to_vec();
+        unreadable.extend([7, 0, 0, 0]);
+        unreadable.extend(&a);
+        assert_eq!(select_linked_records(&unreadable, &|uuid, _| uuid == "a").unwrap(), Some(a));
+    }
+
+    #[test]
+    fn selected_external_and_alias_records_keep_unknown_payloads_verbatim() {
+        for kind in [*b"liFE", *b"liFA", *b"next"] {
+            let mut raw = encode_embedded_file("selected", "missing.psb", &[7; 5]);
+            raw[8..12].copy_from_slice(&kind);
+            raw[12..16].copy_from_slice(&42u32.to_be_bytes()); // an unknown future version
+            let mut data = encode_embedded_file("unselected", "other.psb", &[9; 3]);
+            data.extend(&raw);
+            assert_eq!(select_linked_records(&data, &|uuid, _| uuid == "selected").unwrap(), Some(raw));
+        }
+    }
+
+    #[test]
+    fn a_cut_selected_record_is_an_error_not_a_missing_file() {
+        let mut raw = encode_embedded_file("selected", "missing.psb", &[7; 5]);
+        raw[..8].copy_from_slice(&u64::MAX.to_be_bytes());
+        assert!(select_linked_records(&raw, &|uuid, _| uuid == "selected").unwrap_err().to_string().contains("cut short"));
+        assert_eq!(select_linked_records(&raw, &|uuid, _| uuid == "other").unwrap(), Some(Vec::new()));
+    }
+
+    #[test]
+    fn records_are_matched_whole() {
+        let (a, b, different) =
+            (encode_embedded_file("a", "a.psb", &[1; 3]), encode_embedded_file("b", "b.psb", &[2; 4]), encode_embedded_file("a", "a.psb", &[9; 3]));
+        let combined = [a.clone(), b.clone()].concat();
+        assert!(contains_linked_record(&combined, &a) && contains_linked_record(&combined, &b));
+        assert!(!contains_linked_record(&combined, &different));
+        assert_eq!(select_linked_records(&a, &|_, raw| !contains_linked_record(&combined, raw)).unwrap(), Some(Vec::new()));
+        assert!(select_linked_records(&different, &|_, raw| !contains_linked_record(&combined, raw)).unwrap().is_none());
+    }
+
+    #[test]
+    fn empty_ids_are_unidentified_even_when_asked_for() {
+        let raw = encode_embedded_file("", "unidentified.psb", &[7; 5]);
+        assert_eq!(select_linked_records(&raw, &|_, _| true).unwrap(), Some(Vec::new()));
+        let mut cut = raw;
+        cut[..8].copy_from_slice(&u64::MAX.to_be_bytes());
+        assert_eq!(select_linked_records(&cut, &|_, _| true).unwrap(), Some(Vec::new()));
+    }
+
+    #[test]
+    fn selection_never_takes_a_lossy_id_for_a_record_identity() {
+        let (mut a, mut b) = (encode_embedded_file("x", "a.psb", &[1; 3]), encode_embedded_file("x", "b.psb", &[2; 4]));
+        a[17] = 0xff;
+        b[17] = 0xfe;
+        let mut data = [a, b].concat();
+        assert_eq!(linked_uuids(&data), ["\u{fffd}", "\u{fffd}"]);
+        assert!(select_linked_records(&data, &|uuid, _| uuid == "\u{fffd}").unwrap_err().to_string().contains("not valid UTF-8"));
+        let valid = encode_embedded_file("valid", "valid.psb", &[3; 5]);
+        data.extend(&valid);
+        assert_eq!(select_linked_records(&data, &|uuid, _| uuid == "valid").unwrap(), Some(valid));
+        // A literal replacement character can itself be a valid UTF-8 id.
+        let unicode = encode_embedded_file("\u{fffd}", "unicode.psb", &[4; 2]);
+        assert!(select_linked_records(&unicode, &|uuid, _| uuid == "\u{fffd}").unwrap().is_none());
     }
 
     #[test]
@@ -651,15 +991,27 @@ mod tests {
     #[test]
     fn a_document_finds_the_embedded_bytes_of_a_smart_object() {
         let mut file = crate::testgen::small(crate::Version::Psd, crate::Compression::Raw);
+        let first = file.global_blocks.len();
         file.global_blocks.push(TaggedBlock::new(*b"lnk2", linked_record(b"liFD", "uuid-1", "a.png", b"PNGf", b"PNGDATA")));
         file.global_blocks.push(TaggedBlock::new(*b"lnkE", linked_record(b"liFE", "uuid-2", "b.psd", b"8BPS", b"")));
-        assert_eq!(file.linked_files().len(), 2);
-        assert_eq!(file.linked_data("uuid-1"), Some(b"PNGDATA".as_slice()));
-        assert_eq!(file.linked_data("uuid-2"), None);
-        assert_eq!(file.linked_data("nope"), None);
+        let embedded = |f: &PsdFile, uuid: &str| f.linked_data(uuid).unwrap().map(Cow::into_owned);
+        assert_eq!(
+            file.linked_files().unwrap().iter().map(|(i, f)| (*i, f.uuid.as_str())).collect::<Vec<_>>(),
+            [(first, "uuid-1"), (first + 1, "uuid-2")]
+        );
+        assert_eq!(embedded(&file, "uuid-1").as_deref(), Some(b"PNGDATA".as_slice()));
+        assert_eq!(embedded(&file, "uuid-2"), None);
+        assert_eq!(embedded(&file, "nope"), None);
         // The blocks are untouched: the file still writes and reads back.
         let again = PsdFile::from_bytes(&file.to_bytes().unwrap()).unwrap();
-        assert_eq!(again.linked_data("uuid-1"), Some(b"PNGDATA".as_slice()));
+        assert_eq!(embedded(&again, "uuid-1").as_deref(), Some(b"PNGDATA".as_slice()));
+        // With the linked-file blocks left in the source, the same files and bytes are found.
+        let bytes = file.to_bytes().unwrap();
+        let (deferred, _) =
+            PsdFile::from_source_deferring(crate::Source::new(bytes), |key, _| is_linked_layer_key(key), |_| Ok(false), |_| false).unwrap();
+        assert!(deferred.global_blocks.iter().filter(|b| is_linked_layer_key(&b.key)).all(|b| b.data.is_empty() && b.stored.is_some()));
+        assert_eq!(deferred.linked_files().unwrap(), file.linked_files().unwrap());
+        assert_eq!(embedded(&deferred, "uuid-1").as_deref(), Some(b"PNGDATA".as_slice()));
     }
 
     #[test]
