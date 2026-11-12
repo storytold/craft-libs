@@ -81,7 +81,13 @@ impl Intents {
 
     /// Takes the next move.
     pub fn take_move(&mut self) -> Option<(NavMove, MoveMods)> {
-        let at = self.items.iter().position(|(item, taken)| !taken && matches!(item, Intent::Move(..)))?;
+        self.take_move_where(|_, _| true)
+    }
+
+    /// Takes the next move that `wanted` accepts; the others stay for a later taker, or for the scroll owner around a
+    /// focused component when they scroll (9.2 rule 5).
+    pub fn take_move_where(&mut self, wanted: impl Fn(NavMove, MoveMods) -> bool) -> Option<(NavMove, MoveMods)> {
+        let at = self.items.iter().position(|(item, taken)| !taken && matches!(item, Intent::Move(mv, mods) if wanted(*mv, *mods)))?;
         self.items[at].1 = true;
         match self.items[at].0 {
             Intent::Move(mv, mods) => {
@@ -97,19 +103,6 @@ impl Intents {
     /// The arrow moves `take_move` took this pass: the run step checks that the component holds those keys.
     pub(crate) fn taken_arrow_moves(&self) -> &[NavMove] {
         &self.took_arrows
-    }
-
-    /// Takes the next move that scrolls (page up or down, start, end): what a focused component that does not
-    /// take it leaves to the scroll owner around it (9.2 rule 5).
-    pub(crate) fn take_scroll_move(&mut self) -> Option<NavMove> {
-        let at = self.items.iter().position(|(item, taken)| {
-            !taken && matches!(item, Intent::Move(NavMove::PageUp | NavMove::PageDown | NavMove::Start | NavMove::End, _))
-        })?;
-        self.items[at].1 = true;
-        match self.items[at].0 {
-            Intent::Move(mv, _) => Some(mv),
-            _ => None,
-        }
     }
 
     /// Takes the next AccessKit request that asks a scroll region to scroll, or with `into_view` to show its target.

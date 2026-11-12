@@ -14,8 +14,8 @@ mod words;
 use craft_behavior::geometry::{SelectionOperation, turn_to_45};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2};
 use craft_behavior::{
-    Axis, CanvasView, EditCommand, Granularity, HitLevel, HitPriority, HitShape, Intent, NavMove, NavShape, PartKey, PartRef, PointerButton,
-    PressPhase, PressStart, Roving, Sense,
+    Axis, CanvasView, EditCommand, Granularity, HitLevel, HitPriority, HitShape, Intent, MoveMods, NavMove, NavShape, PartKey, PartRef,
+    PointerButton, PressPhase, PressStart, Roving, Sense,
 };
 use craft_keymap::{Chord, Key, Mods};
 use craft_theme::Srgba;
@@ -781,11 +781,11 @@ impl<'a> BezierOverlay<'a> {
         {
             self.report.select = Some(PathSelection { path: Some(item.key), anchors: vec![item.knot], segment: None });
         }
-        while let Some((mv, mods)) = cx.intents().take_move() {
+        // With Cmd (Ctrl) a page key is the canvas's: it scrolls sideways and picks no part.
+        let steps = |mv: NavMove, mods: MoveMods| !(matches!(mv, NavMove::PageDown | NavMove::PageUp) && mods.lead);
+        while let Some((mv, mods)) = cx.intents().take_move_where(steps) {
             let here = current.and_then(|c| keyboard.iter().position(|item| item.part() == c.part()));
             let picked: Option<&Item> = match mv {
-                // With Cmd (Ctrl) a page key scrolls the canvas sideways; it picks no part.
-                NavMove::PageDown | NavMove::PageUp if mods.lead => None,
                 NavMove::PageDown | NavMove::PageUp if mods.extend => {
                     let anchors: Vec<&Item> = keyboard.iter().copied().filter(|item| item.kind == Kind::Anchor).collect();
                     let at = current.and_then(|c| anchors.iter().position(|a| a.path == c.path && a.knot == c.knot));

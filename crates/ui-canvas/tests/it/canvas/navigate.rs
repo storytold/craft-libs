@@ -1,10 +1,12 @@
 //! Navigation rules (wheel, page keys, flick, autoscroll), the zoom motion and the momentary tool order.
 
+use craft_behavior::geometry::CropBox;
+use craft_behavior::kurbo::Rect;
 use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::{CanvasView, Wheel, WheelPhase, WheelUnit};
 use craft_keymap::{Mods, Platform};
-use craft_ui::canvas::{Canvas, Momentary, MomentaryCommands, MomentaryTool, NavigationOptions, TouchpadGlide};
-use craft_ui::contract::ShowContainer as _;
+use craft_ui::canvas::{Canvas, CropOverlay, Momentary, MomentaryCommands, MomentaryTool, NavigationOptions, TouchpadGlide};
+use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::runtime::access::Role;
 use craft_ui::runtime::commands::FirePhase;
 use craft_ui::testing::{Fixture, trial};
@@ -74,4 +76,29 @@ fn cmd_or_ctrl_with_page_down_scrolls_a_focused_canvas_sideways_on_every_os() {
         let down = view.get().center;
         assert!(down.y > sideways.y && down.x == sideways.x, "{os:?}: plain Page Down scrolls down");
     }
+}
+
+#[trial]
+fn cmd_or_ctrl_with_page_down_on_a_focused_canvas_control_scrolls_the_canvas_sideways() {
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+    let shown = Rc::clone(&view);
+    let mut crop = CropBox::upright(Rect::new(1900.0, 1900.0, 2100.0, 2100.0));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document")
+            .document(Size::new(4000.0, 4000.0))
+            .view(given)
+            .show(ui, |ui, body| CropOverlay::new("Crop", Bind::bound(&mut crop)).show_at(ui, body.rect));
+        shown.set(canvas.output.view.unwrap_or(given));
+    });
+    fixture.settle();
+    // The crop box lies around the canvas's centre: a click inside it focuses the crop.
+    let canvas = fixture.by_role(Role::CANVAS)[0];
+    fixture.click(&canvas);
+    assert!(fixture.focused_stop().is_some_and(|(id, _)| Some(id) != fixture.root_id()), "the click focuses the crop, not the canvas");
+    let before = view.get().center;
+    fixture.key(Key::PageDown, Modifiers::COMMAND).settle();
+    let sideways = view.get().center;
+    assert!(sideways.x > before.x && sideways.y == before.y, "the crop leaves Cmd/Ctrl+Page Down to the canvas: {before:?} -> {sideways:?}");
 }

@@ -95,6 +95,8 @@ pub(super) struct BodyHooks<'b> {
     glide_at_read: Option<scroll::Glide>,
     scroll_bound: bool,
     moved: bool,
+    /// The part of a reveal this body showed, passed on to the scroll owner around it.
+    pass_on: Option<Rect>,
     last: BodyView,
     /// The content's extent from the last run that laid it out, kept with the offset it bounds (`ScrollState`).
     last_extent: (f32, f32),
@@ -162,6 +164,7 @@ impl<'b> BodyHooks<'b> {
             glide_at_read: None,
             scroll_bound: false,
             moved: false,
+            pass_on: None,
             last: BodyView::default(),
             last_extent: (0.0, 0.0),
             body_size: None,

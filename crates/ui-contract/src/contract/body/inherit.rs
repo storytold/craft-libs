@@ -105,11 +105,11 @@ impl BodyHooks<'_> {
                 if real && sizing == Sizing::Content { self.wanted_width(props).map_or(room.x, |wanted| wanted.min(room.x)) } else { room.x };
             (offered - label_width).max(0.0)
         });
+        if scroll.is_some() || props.scroll_owner {
+            scoped.scroll_owner = Some(id);
+        }
         match scroll {
-            Some(scroll) => {
-                scoped.scroll_owner = Some(id);
-                scoped.unbounded = (scroll.horizontal_on(), scroll.vertical_on());
-            }
+            Some(scroll) => scoped.unbounded = (scroll.horizontal_on(), scroll.vertical_on()),
             // A container that sized an axis itself (a rect it was shown at, a fixed layer) bounds the room along it.
             None => scoped.unbounded = (scoped.unbounded.0 && !self.room.x.is_finite(), scoped.unbounded.1 && !self.room.y.is_finite()),
         }

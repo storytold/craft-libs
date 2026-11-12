@@ -210,6 +210,43 @@ fn tab_reaches_the_control_of_a_child_out_of_view() {
     assert!(view.get().contains_rect(rect), "the body scrolled the control into view: {rect:?} in {:?}", view.get());
 }
 
+/// A scroll region inside another: focus arriving at a control out of the inner region's view, which lies itself out
+/// of the outer one's, scrolls the inner region to the control and the outer one to the part the inner one shows.
+#[trial]
+fn focus_out_of_view_in_a_nested_scroll_region_scrolls_both_regions_to_it() {
+    const BUTTONS: usize = 6;
+    let buttons: Vec<Cell<(Id, Rect)>> = (0..BUTTONS).map(|_| Cell::new((Id::NULL, Rect::NOTHING))).collect();
+    let (outer, inner) = (Cell::new(Rect::NOTHING), Cell::new(Rect::NOTHING));
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            Slab::new(ContainerProps::new().scroll(Scroll::vertical()).room_height(VIEW.y / 2.0)).id_salt("outer").show(ui, |ui, cx| {
+                outer.set(cx.rect);
+                Block::new(Vec2::new(LINE.x, 2.0 * VIEW.y)).show(ui);
+                Slab::new(ContainerProps::new().scroll(Scroll::vertical())).id_salt("inner").show(ui, |ui, cx| {
+                    inner.set(cx.rect);
+                    for button in &buttons {
+                        let out = Button::new("Child").show(ui);
+                        if !ui.is_sizing_pass() {
+                            button.set((out.id, out.rect));
+                        }
+                        Block::new(Vec2::new(LINE.x, HUNDRED)).show(ui);
+                    }
+                });
+            });
+        });
+    };
+    let mut frames = Frames::new();
+    frames.screen(VIEW + ORIGIN.to_vec2());
+    frames.idle(3, &mut show);
+    let (target, rect) = buttons[BUTTONS - 2].get();
+    assert!(!outer.get().intersects(rect), "the control starts out of view");
+    request(&frames.ctx, FocusTarget::Id(target));
+    frames.idle(4, &mut show);
+    let (_, rect) = buttons[BUTTONS - 2].get();
+    assert!(inner.get().contains_rect(rect), "the inner region shows the control: {rect:?} in {:?}", inner.get());
+    assert!(outer.get().contains_rect(rect), "the outer region shows it too: {rect:?} in {:?}", outer.get());
+}
+
 /// Lazy cards in the rows of a grid, each keyed by itself: a change of the column count regroups the rows and runs
 /// only the cards in view, the cards out of view keeping their extents; the rows in view are as tall as their
 /// tallest card. Guards that a `Lazy` in a `Grid` holds its cell, run or skipped.

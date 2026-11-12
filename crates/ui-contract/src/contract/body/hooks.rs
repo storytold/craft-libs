@@ -210,25 +210,13 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         if let (Some(rect), Some(view_rect)) =
             (if quiet { crate::contract::peek_reveal(&ctx, id) } else { crate::contract::take_reveal(&ctx, id) }, self.last.view.map(rect_of))
         {
-            // A view with no extent on an axis shows nothing there: no offset reveals into it.
-            let into = |low: f32, high: f32, view_low: f32, view_high: f32| {
-                if view_high <= view_low {
-                    0.0
-                } else if low < view_low {
-                    low - view_low
-                } else if high > view_high {
-                    high - view_high
-                } else {
-                    0.0
-                }
-            };
-            self.offset.y += f64::from(into(rect.min.y, rect.max.y, view_rect.min.y, view_rect.max.y));
-            let dx = into(rect.min.x, rect.max.x, view_rect.min.x, view_rect.max.x);
-            self.offset.x += f64::from(if rtl { -dx } else { dx });
+            let (by, shown) = crate::contract::steps::reveal_move(rect, view_rect);
+            self.offset.y += f64::from(by.y);
+            self.offset.x += f64::from(if rtl { -by.x } else { by.x });
             self.moved = true;
+            self.pass_on = (!quiet).then_some(shown);
         }
-        let moves = if quiet { crate::contract::steps::peek_scroll_moves(&ctx, id) } else { crate::contract::steps::take_scroll_moves(&ctx, id) };
-        for mv in moves {
+        for (mv, _) in crate::contract::steps::scroll_moves(&ctx, id, quiet) {
             let (visible, extent, offset, vertical) = if scroll.vertical_on() {
                 (view.y, self.last_extent.1, self.offset.y, true)
             } else {
@@ -601,6 +589,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         }
         if scroll.is_some() {
             self.scroll_input(props, cx);
+        }
+        if let Some(shown) = self.pass_on.take() {
+            crate::contract::Focus::reveal(cx, shown);
         }
         // AccessKit Expand, Collapse and Click reach a collapsible container as an activation: it folds or unfolds.
         if props.collapse.is_some() && cx.activation().is_some_and(|activation| activation.by_key) {

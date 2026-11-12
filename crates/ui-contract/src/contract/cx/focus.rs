@@ -4,9 +4,10 @@ use super::context::{Cx, CxCore};
 use crate::contract::Component;
 use crate::runtime::focus::{self};
 use crate::runtime::keys::{Intents, MenuKey};
-use craft_behavior::{PartRef, PressPhase};
+use crate::runtime::measure;
+use craft_behavior::{MoveMods, NavMove, PartRef, PressPhase};
 use craft_keymap::Chord;
-use egui::Rect;
+use egui::{Rect, Vec2};
 
 /// Focus and keys (chapter 9).
 pub trait Focus {
@@ -32,6 +33,13 @@ pub trait Focus {
     fn focus_visible(&self) -> bool;
     /// Asks the nearest scroll owner to bring `rect` into view.
     fn reveal(&mut self, rect: Rect);
+    /// For a container that is its body's scroll owner with a view of its own (`ContainerProps::scroll_owner`): the
+    /// page and end moves its focused children left untaken, with their modifiers, in the order they arrived.
+    fn take_scroll_moves(&mut self) -> Vec<(NavMove, MoveMods)>;
+    /// For a container that is its body's scroll owner with a view of its own: the reveal a child asked of it, as the
+    /// smallest move of `view` (screen points, positive toward larger coordinates) that shows the child. The part of
+    /// the child the moved view shows is passed on to the scroll owner around, as a scroll region passes it on.
+    fn take_reveal(&mut self, view: Rect) -> Option<Vec2>;
     /// Registers that this component is a menu bar that takes the menu-bar keys of the next input hook (9.7).
     fn register_menu_bar(&mut self);
     /// The menu-bar keys of the pass: F10 or a lone Alt press focus the bar, Alt and a letter open a menu.
@@ -78,6 +86,20 @@ impl Focus for CxCore<'_> {
         self.reveal = Some(rect);
     }
 
+    fn take_scroll_moves(&mut self) -> Vec<(NavMove, MoveMods)> {
+        crate::contract::steps::scroll_moves(&self.ctx, self.id, measure::active(&self.ctx))
+    }
+
+    fn take_reveal(&mut self, view: Rect) -> Option<Vec2> {
+        let quiet = measure::active(&self.ctx);
+        let rect = if quiet { crate::contract::peek_reveal(&self.ctx, self.id) } else { crate::contract::take_reveal(&self.ctx, self.id) }?;
+        let (by, shown) = crate::contract::steps::reveal_move(rect, view);
+        if !quiet {
+            self.reveal = Some(shown);
+        }
+        Some(by)
+    }
+
     fn register_menu_bar(&mut self) {
         focus::register_menu_bar(&self.ctx);
     }
@@ -122,6 +144,14 @@ impl<C: Component> Focus for Cx<'_, C> {
 
     fn reveal(&mut self, rect: Rect) {
         self.core.reveal(rect);
+    }
+
+    fn take_scroll_moves(&mut self) -> Vec<(NavMove, MoveMods)> {
+        self.core.take_scroll_moves()
+    }
+
+    fn take_reveal(&mut self, view: Rect) -> Option<Vec2> {
+        self.core.take_reveal(view)
     }
 
     fn register_menu_bar(&mut self) {

@@ -4,15 +4,16 @@ use crate::contract::cx::CxCore;
 use crate::runtime::egui::repaint;
 use crate::runtime::pass_state;
 use crate::runtime::wheel;
-use craft_behavior::NavMove;
-use egui::{Context, Id, Rect};
+use craft_behavior::{MoveMods, NavMove};
+use egui::{Context, Id, Rect, Vec2};
 
 /// What the component left untaken that a scroll region serves: page and end moves go to the innermost scroll
 /// owner around the component, and an AccessKit request to show the component reveals its rect there. Both are
 /// applied at the owner's step 4 of the next pass.
 pub(super) fn route_to_scroll_owner(core: &mut CxCore<'_>) {
+    let scrolls = |mv: NavMove, _| matches!(mv, NavMove::PageUp | NavMove::PageDown | NavMove::Start | NavMove::End);
     let mut moves = Vec::new();
-    while let Some(mv) = core.intents.take_scroll_move() {
+    while let Some(mv) = core.intents.take_move_where(scrolls) {
         moves.push(mv);
     }
     let reveal = core.intents.take_scroll_access(true).is_some();
@@ -20,7 +21,7 @@ pub(super) fn route_to_scroll_owner(core: &mut CxCore<'_>) {
         return;
     }
     let Some(owner) = core.env.scroll_owner().or_else(|| wheel::nearest_scroll_owner(&core.ctx, core.rect)) else { return };
-    pass_state::with::<ScrollMoves, _>(&core.ctx, |queue| queue.0.extend(moves.into_iter().map(|mv| (owner, mv))));
+    pass_state::with::<ScrollMoves, _>(&core.ctx, |queue| queue.0.extend(moves.into_iter().map(|(mv, mods)| (owner, mv, mods))));
     if reveal {
         pass_state::with::<Reveals, _>(&core.ctx, |reveals| reveals.0.push(Reveal { owner, to: RevealTo::Rect(core.rect) }));
     }
@@ -94,20 +95,37 @@ pub(crate) fn child_reveal(ctx: &Context, owner: Id, quiet: bool) -> Option<Id> 
     })
 }
 
-/// A page or end move a focused component left untaken, addressed to the scroll owner around it (9.2 rule 5).
+/// A page or end move a focused component left untaken, with its modifiers, addressed to the scroll owner around it
+/// (9.2 rule 5).
 #[derive(Default)]
-pub(crate) struct ScrollMoves(Vec<(Id, NavMove)>);
+pub(crate) struct ScrollMoves(Vec<(Id, NavMove, MoveMods)>);
 
-/// The scroll moves addressed to `owner`, in the order they arrived.
-pub(crate) fn take_scroll_moves(ctx: &Context, owner: Id) -> Vec<NavMove> {
+/// The scroll moves addressed to `owner`, in the order they arrived: taken, or left queued when `quiet`.
+pub(crate) fn scroll_moves(ctx: &Context, owner: Id, quiet: bool) -> Vec<(NavMove, MoveMods)> {
     pass_state::with::<ScrollMoves, _>(ctx, |moves| {
-        let (mine, rest) = std::mem::take(&mut moves.0).into_iter().partition(|(id, _)| *id == owner);
-        moves.0 = rest;
-        mine.into_iter().map(|(_, mv)| mv).collect()
+        let mine = moves.0.iter().filter(|(id, ..)| *id == owner).map(|(_, mv, mods)| (*mv, *mods)).collect();
+        if !quiet {
+            moves.0.retain(|(id, ..)| *id != owner);
+        }
+        mine
     })
 }
 
-/// The scroll moves addressed to `owner`, left queued.
-pub(crate) fn peek_scroll_moves(ctx: &Context, owner: Id) -> Vec<NavMove> {
-    pass_state::with::<ScrollMoves, _>(ctx, |moves| moves.0.iter().filter(|(id, _)| *id == owner).map(|(_, mv)| *mv).collect())
+/// The smallest move of `view` that shows `rect`, per axis in screen points (positive: toward larger coordinates), and
+/// the part of `rect` the moved view shows: what a scroll owner moves for a reveal and passes on to the scroll owner
+/// around it. Along an axis the view has no extent on it moves nothing.
+pub(crate) fn reveal_move(rect: Rect, view: Rect) -> (Vec2, Rect) {
+    let into = |low: f32, high: f32, view_low: f32, view_high: f32| {
+        if view_high <= view_low {
+            0.0
+        } else if low < view_low {
+            low - view_low
+        } else if high > view_high {
+            high - view_high
+        } else {
+            0.0
+        }
+    };
+    let by = Vec2::new(into(rect.min.x, rect.max.x, view.min.x, view.max.x), into(rect.min.y, rect.max.y, view.min.y, view.max.y));
+    (by, rect.translate(-by).intersect(view))
 }

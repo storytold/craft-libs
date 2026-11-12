@@ -586,10 +586,15 @@ pub(crate) fn record(ctx: &Context, viewport: ViewportId) -> FocusedRecord {
     with_viewport(ctx, viewport, |state| state.record.clone())
 }
 
-/// Whether the last `request` or move of focus landed on component `id`, once: the component then asks the enclosing
-/// scroll owner to reveal it.
-pub(crate) fn take_reveal_of(ctx: &Context, id: Id) -> bool {
-    with(ctx, |state| state.revealed.is_some_and(|key| key.0 == id).then(|| state.revealed.take()).is_some())
+/// Whether the last `request` or move of focus landed on component `id`, once, and on which of its parts: the
+/// component then asks the enclosing scroll owner to reveal it.
+pub(crate) fn take_reveal_of(ctx: &Context, id: Id) -> Option<Option<PartRef>> {
+    with(ctx, |state| {
+        state.revealed.filter(|key| key.0 == id).map(|key| {
+            state.revealed = None;
+            key.1
+        })
+    })
 }
 
 /// The stops registered so far in the running pass that keyboard focus reaches, in Tab order, among those of the

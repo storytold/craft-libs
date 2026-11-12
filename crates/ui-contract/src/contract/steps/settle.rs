@@ -22,8 +22,10 @@ pub(crate) fn settle<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) -> ValueEdi
     if C::OVERLAYS {
         crate::contract::overlay::write_open(&mut *cx.core.memory, owner);
     }
-    if focus::take_reveal_of(&cx.core.ctx, owner) {
-        cx.core.reveal.get_or_insert(cx.core.rect);
+    if let Some(part) = focus::take_reveal_of(&cx.core.ctx, owner) {
+        // Focus on a part reveals the part, as a pin of a canvas overlay that spans the canvas.
+        let rect = part.and_then(|part| cx.core.results.get(&(part.key, part.index))).map_or(cx.core.rect, |result| result.rect);
+        cx.core.reveal.get_or_insert(rect);
     }
     if let Some(rect) = cx.core.reveal.take()
         && let Some(owner) = cx.core.env.scroll_owner().or_else(|| wheel::nearest_scroll_owner(&cx.core.ctx, rect))

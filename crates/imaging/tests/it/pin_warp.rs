@@ -1,6 +1,6 @@
 //! Puppet Warp: the session on a recording solver, the pins on a canvas and the options bar.
 
-use craft_behavior::kurbo::Point;
+use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::{CanvasView, Cursor, CursorIcon, EditEvent};
 use craft_imaging::ui::warp::pin::{Pin, PinEdit, PinMeshView, PinSolver, PinWarp, PinWarpOptions, PinWarpSession, PinWarpSettings};
 use craft_ui::canvas::Canvas;
@@ -135,6 +135,15 @@ struct Harness {
 }
 
 fn harness(pins: Vec<Pin>, selected: Vec<usize>) -> Harness {
+    build(pins, selected, false)
+}
+
+/// A harness whose canvas shows a document and keeps the view it reports, so page keys and reveals move it.
+fn panning_harness(pins: Vec<Pin>) -> Harness {
+    build(pins, Vec::new(), true)
+}
+
+fn build(pins: Vec<Pin>, selected: Vec<usize>, pans: bool) -> Harness {
     let mut solver = Fake::flat();
     let mut session = PinWarpSession::from_pins(pins, &PinWarpSettings::default());
     session.apply(PinEdit::Select(selected), &mut solver).expect("selects");
@@ -143,19 +152,28 @@ fn harness(pins: Vec<Pin>, selected: Vec<usize>) -> Harness {
     let (shown_state, shown_view) = (Rc::clone(&state), Rc::clone(&view));
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
-        let canvas_view = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
+        let canvas_view = match shown_view.get().filter(|_: &CanvasView| pans) {
+            Some(mut panned) => {
+                panned.rect = room;
+                panned
+            }
+            None => CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0),
+        };
         shown_view.set(Some(canvas_view));
         let output = {
             let held = shown_state.borrow();
-            Canvas::new("Document")
-                .view(canvas_view)
-                .show(ui, |ui, body| {
-                    PinWarp::new("Pins", Bind::given(held.session.pins().to_vec()), held.solver.mesh())
-                        .selected_pins(held.session.selected())
-                        .show_mesh(true)
-                        .show_at(ui, body.rect)
-                })
-                .inner
+            let canvas = Canvas::new("Document").view(canvas_view);
+            let canvas = if pans { canvas.document(Size::new(4000.0, 4000.0)) } else { canvas };
+            let shown = canvas.show(ui, |ui, body| {
+                PinWarp::new("Pins", Bind::given(held.session.pins().to_vec()), held.solver.mesh())
+                    .selected_pins(held.session.selected())
+                    .show_mesh(true)
+                    .show_at(ui, body.rect)
+            });
+            if pans {
+                shown_view.set(Some(shown.output.view.unwrap_or(canvas_view)));
+            }
+            shown.inner
         };
         let Some(output) = output else { return };
         let mut held = shown_state.borrow_mut();
@@ -250,7 +268,7 @@ fn alt_held_over_a_pin_shows_the_not_allowed_cursor_its_press_deletes() {
 
 #[trial]
 fn page_down_steps_to_the_next_pin_and_with_cmd_or_ctrl_leaves_it_to_the_canvas() {
-    let mut h = harness(vec![pin(150.0, 150.0), pin(250.0, 150.0)], Vec::new());
+    let mut h = panning_harness(vec![pin(150.0, 150.0), pin(250.0, 150.0)]);
     let first = h.at(150.0, 150.0);
     h.fixture.frame(vec![pointer::moved(first)]);
     h.fixture.frame(vec![pointer::press(first)]);
@@ -258,8 +276,15 @@ fn page_down_steps_to_the_next_pin_and_with_cmd_or_ctrl_leaves_it_to_the_canvas(
     h.fixture.frame(Vec::new());
     let on_first = h.fixture.focused_stop();
     assert!(on_first.is_some_and(|(_, part)| part.is_some()), "a click focuses the pin");
-    h.fixture.key(egui::Key::PageDown, Modifiers::COMMAND);
+    let before = h.view.get().expect("shown");
+    h.fixture.key(egui::Key::PageDown, Modifiers::COMMAND).settle();
     assert_eq!(h.fixture.focused_stop(), on_first, "Cmd or Ctrl with Page Down is no step");
-    h.fixture.key(egui::Key::PageDown, Modifiers::NONE);
+    let sideways = h.view.get().expect("shown");
+    assert!(sideways.center.x > before.center.x && sideways.center.y == before.center.y, "the canvas scrolls sideways");
+    let second = Point::new(250.0, 150.0);
+    assert!(!sideways.rect.contains(sideways.to_screen(second)), "the page moved the pins out of view");
+    h.fixture.key(egui::Key::PageDown, Modifiers::NONE).settle();
     assert_ne!(h.fixture.focused_stop(), on_first, "Page Down steps to the next pin");
+    let back = h.view.get().expect("shown");
+    assert!(back.rect.contains(back.to_screen(second)), "the pin focus arrived at shows");
 }

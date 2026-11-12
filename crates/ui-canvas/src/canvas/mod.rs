@@ -157,22 +157,7 @@ pub struct Canvas<'a> {
     common: Common,
     #[container]
     props: ContainerProps,
-    /// The view the canvas shows its document through, as a binding: the canvas writes the view of its pass through
-    /// it (`Bind::bound` holds it in the app's variable, `Bind::kept` in the canvas's own memory). A given view
-    /// (`Bind::given`, or a plain [`CanvasView`]) is only read: the app copies what a tool changed from
-    /// [`ToolHostResponse::view`] (or [`CanvasOutput::view`] without a tool host) every pass.
-    ///
-    /// The canvas sets the view's rect to its own rect, inside the rulers while they show ([`show_rulers`](Self::show_rulers)),
-    /// so the body and the reported view carry this pass's rect. A view whose rect has no area (`CanvasView::new(Rect::NOTHING, ..)`,
-    /// a document never shown) opens fitted: Fit on Screen in the first pass the canvas has area and a document. A
-    /// canvas with no area (a minimized window) leaves the view as it is, so a restore does not refit.
-    ///
-    /// The body reads the view as a [`CanvasSpace`] with [`canvas_space`]: the view on screen, part way through a
-    /// zoom that eases. Its controls register parts in the canvas root's screen space through
-    /// `CanvasView::to_screen`. The view sets no body transform: a body of components that keep canvas-space geometry
-    /// (a node graph) also sets `transform(view.layer_transform())`, which exists for an unrotated, unmirrored,
-    /// square view only.
-    #[prop(into)]
+    /// The view the canvas shows its document through ([`view`](Self::view)).
     view: Option<Bind<'a, CanvasView>>,
     /// The view the binding held when the pass began.
     given: Option<CanvasView>,
@@ -241,6 +226,31 @@ impl<'a> Canvas<'a> {
         .ltr_axis()
     }
 
+    /// The view the canvas shows its document through, as a binding: the canvas writes the view of its pass through
+    /// it (`Bind::bound` holds it in the app's variable, `Bind::kept` in the canvas's own memory). A given view
+    /// (`Bind::given`, or a plain [`CanvasView`]) is only read: the app copies what a tool changed from
+    /// [`ToolHostResponse::view`] (or [`CanvasOutput::view`] without a tool host) every pass.
+    ///
+    /// The canvas sets the view's rect to its own rect, inside the rulers while they show ([`show_rulers`](Self::show_rulers)),
+    /// so the body and the reported view carry this pass's rect. A view whose rect has no area (`CanvasView::new(Rect::NOTHING, ..)`,
+    /// a document never shown) opens fitted: Fit on Screen in the first pass the canvas has area and a document. A
+    /// canvas with no area (a minimized window) leaves the view as it is, so a restore does not refit.
+    ///
+    /// The body reads the view as a [`CanvasSpace`] with [`canvas_space`]: the view on screen, part way through a
+    /// zoom that eases. Its controls register parts in the canvas root's screen space through
+    /// `CanvasView::to_screen`. The view sets no body transform: a body of components that keep canvas-space geometry
+    /// (a node graph) also sets `transform(view.layer_transform())`, which exists for an unrotated, unmirrored,
+    /// square view only.
+    ///
+    /// A canvas with a view is its body's scroll owner: the page keys a control focused in it leaves scroll the view
+    /// as the canvas's own do, and focus arriving at a control off the view brings the control into view.
+    #[must_use]
+    pub fn view(mut self, view: impl Into<Bind<'a, CanvasView>>) -> Self {
+        self.view = Some(view.into());
+        self.props.scroll_owner = true;
+        self
+    }
+
     /// Leaves the view commands to the instance around the canvas that owns its view (a full-window dialog's): the
     /// canvas is no instance of them, so the chords reach that instance while the canvas has the focus.
     #[must_use]
@@ -305,10 +315,21 @@ impl<'a> Canvas<'a> {
             pan(&mut view, delta);
             jumped = true;
         }
+        // As its body's scroll owner the canvas shows a control focus arrives at, and applies the page keys a focused
+        // control leaves as its own.
+        if let Some(by) = cx.take_reveal(area) {
+            pan(&mut view, -by);
+            jumped = true;
+        }
         // Page Up and Down, Home and End scroll the view as in Photoshop; the arrows are the tool's nudges. A canvas
         // that leaves its keys to its body hands both to it.
         let mut keys = BodyKeys::default();
-        while let Some((step, mods)) = cx.intents().take_move() {
+        let mut moves = Vec::new();
+        while let Some(mv) = cx.intents().take_move() {
+            moves.push(mv);
+        }
+        moves.extend(cx.take_scroll_moves());
+        for (step, mods) in moves {
             if self.keys_to_body {
                 keys.page = Some((step, mods));
             } else if let (Some(document), Some(key)) = (self.document, PageKey::of(step, mods, area.size())) {

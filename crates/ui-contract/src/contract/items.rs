@@ -161,6 +161,8 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     offset_at_read: f64,
     offset_x: f64,
     offset_x_at_read: f64,
+    /// The part of a reveal the rows showed, passed on to the scroll owner around the collection.
+    pass_on: Option<Rect>,
     /// The scroll position named by content, kept with an offset the framework holds (`Scrolled`).
     anchor: Option<crate::runtime::lazy::Anchor>,
     anchor_at_read: Option<crate::runtime::lazy::Anchor>,
@@ -222,6 +224,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             offset_at_read: 0.0,
             offset_x: 0.0,
             offset_x_at_read: 0.0,
+            pass_on: None,
             anchor: None,
             anchor_at_read: None,
             last: View::default(),

@@ -26,7 +26,8 @@ pub(crate) fn register(ctx: &Context, taker: WheelTaker<Id>) {
     PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| state.this.push(taker));
 }
 
-/// The innermost non-gated taker of last pass whose view meets `rect`: where a reveal request goes.
+/// The innermost scroll region of last pass whose view meets `rect`: where a reveal request or a page move goes from
+/// outside every declared scroll owner. A taker that is no scroll region (a canvas) owns only what it declares.
 pub(crate) fn nearest_scroll_owner(ctx: &Context, rect: Rect) -> Option<Id> {
     PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| {
         state
@@ -34,7 +35,7 @@ pub(crate) fn nearest_scroll_owner(ctx: &Context, rect: Rect) -> Option<Id> {
             .iter()
             // Takers register outer first: of equal views the later one is the inner.
             .rev()
-            .filter(|taker| !taker.gated && taker.rect.intersects(rect))
+            .filter(|taker| taker.scrolls && !taker.gated && taker.rect.intersects(rect))
             .min_by(|a, b| a.rect.area().total_cmp(&b.rect.area()))
             .map(|taker| taker.owner)
     })

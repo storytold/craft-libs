@@ -637,6 +637,10 @@ pub struct ContainerProps {
     pub child_size: Option<ControlSize>,
     /// The container is an arena root.
     pub arena: bool,
+    /// The container is its body's scroll owner without a scroll region, as a canvas with a view of its own is: the
+    /// page and end moves and the reveals its children leave go to it (`Focus::take_scroll_moves`,
+    /// `Focus::take_reveal`). A container with a `scroll` region is one already.
+    pub scroll_owner: bool,
     /// The container's value is a gate that disables its content while off.
     #[doc(hidden)]
     pub gates: bool,
@@ -717,6 +721,7 @@ impl ContainerProps {
             edge_rule: false,
             child_size: None,
             arena: false,
+            scroll_owner: false,
             gates: false,
             transform: None,
             theme: None,
@@ -858,6 +863,12 @@ impl ContainerProps {
     /// Makes the container an arena root.
     pub const fn arena(mut self, on: bool) -> Self {
         self.arena = on;
+        self
+    }
+
+    /// Makes the container its body's scroll owner with a view of its own (`ContainerProps::scroll_owner`).
+    pub const fn scroll_owner(mut self, on: bool) -> Self {
+        self.scroll_owner = on;
         self
     }
 

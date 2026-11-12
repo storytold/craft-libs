@@ -146,11 +146,11 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             if let (Some(rect), Some(bounds)) =
                 (if quiet { crate::contract::peek_reveal(&ctx, id) } else { crate::contract::take_reveal(&ctx, id) }, self.last.view)
             {
-                if rect.min.y < bounds[1] {
-                    self.offset += f64::from(rect.min.y - bounds[1]);
-                } else if rect.max.y > bounds[3] {
-                    self.offset += f64::from(rect.max.y - bounds[3]);
-                }
+                // The rows scroll along y only: the reveal moves them along it and passes the rest on.
+                let view = Rect::from_min_max(Pos2::new(f32::NEG_INFINITY, bounds[1]), Pos2::new(f32::INFINITY, bounds[3]));
+                let (by, shown) = crate::contract::steps::reveal_move(rect, view);
+                self.offset += f64::from(by.y);
+                self.pass_on = (!quiet).then_some(shown);
             }
             self.offset = self.offset.clamp(0.0, f64::from((self.last.extent - view).max(0.0)));
         }
@@ -327,6 +327,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         self.xf = comp.props(Internal::new()).transform.map(|zoom| areas::body_map(rect.min, zoom.scale, zoom.offset));
         if let Some(range) = cx.scroll_moved(SCROLL) {
             self.offset = range.start;
+        }
+        if let Some(shown) = self.pass_on.take() {
+            crate::contract::Focus::reveal(cx, shown);
         }
         self.offset = self.offset.clamp(0.0, self.max_offset(view));
         let header_held = self.header_step(cx);
