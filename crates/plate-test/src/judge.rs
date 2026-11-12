@@ -153,19 +153,16 @@ fn point_pixels(point: &SamplePoint, plates: &BTreeMap<String, Plate>, res: f32)
         (PointKind::Text, Some([x, y, w, h])) => {
             let glyph = point.plate.as_deref().unwrap_or(TEXT_PLATE);
             let plate = plates.get(glyph).ok_or_else(|| format!("no {glyph} plate to find the text on"))?;
-            let (x0, y0, x1, y1) = (px(x).max(0.0), px(y).max(0.0), px(x + w), px(y + h));
+            // Integer pixel ranges clipped to the plate: a huge or NaN region (`NaN.max(0.0)` is 0,
+            // `as usize` saturates) would otherwise stall a float counter or loop for ages.
+            let clip = |v: f32, max: usize| px(v).max(0.0).min(max as f32) as usize;
+            let (x0, x1) = (clip(x, width), clip(x + w, width));
+            let (y0, y1) = (clip(y, height), clip(y + h, height));
             let mut region = Vec::new();
-            let mut row = y0;
-            while row < y1 {
-                let mut col = x0;
-                while col < x1 {
-                    if inside(col, row) {
-                        let (cx, cy) = (col as usize, row as usize);
-                        region.push(((cx, cy), plate.ink(cx, cy).unwrap_or(0.0)));
-                    }
-                    col += 1.0;
+            for cy in y0..y1 {
+                for cx in x0..x1 {
+                    region.push(((cx, cy), plate.ink(cx, cy).unwrap_or(0.0)));
                 }
-                row += 1.0;
             }
             let darkest = region.iter().map(|(_, ink)| *ink).fold(0.0, f32::max);
             if darkest < TEXT_MIN_INK {
@@ -300,6 +297,14 @@ mod tests {
         let skipped = judge(&scene(SCENE), &no_text, 72.0, false);
         assert_eq!(skipped.points[1].verdict, Verdict::Skipped);
         assert_eq!(skipped.failed_points(), 0);
+    }
+
+    #[test]
+    fn a_huge_text_region_samples_only_the_plate() {
+        let region = r#"{"at": [15, 20], "kind": "text", "region": [-3e38, -3e38, 3.4e38, 3.4e38], "inks": {"Black": 100}, "tol": 2}"#;
+        let huge = scene(&SCENE.replacen(r#"{"at": [45, 20], "inks": {"Cyan": 100, "Gold": 50}, "tol": 2}"#, region, 1));
+        let judgement = judge(&huge, &plates(true, None), 72.0, true);
+        assert_eq!(judgement.points[0].how.as_deref(), Some("200 glyph pixels on Black"), "{judgement:#?}");
     }
 
     #[test]
