@@ -5,8 +5,7 @@
 use super::words::NoticeWords;
 use crate::buttons::{Button, IconButton, Link};
 use crate::contract::{
-    Access, Accessible as _, Common, Component, Cx, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Politeness, Props as _, Remember as _, Role,
-    Styled as _, WordSetCx as _,
+    Access, Common, Component, Cx, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Politeness, Props as _, Role, Styled as _, WordSetCx as _,
 };
 use crate::primitives::{HAlign, IconSpec, TextRun, Wrap};
 use crate::runtime::commands::CommandRef;
@@ -104,10 +103,6 @@ const MESSAGE: PartKey = PartKey::new("message");
 const TITLE_LEVEL: usize = 1;
 const DISMISS_ICON: &str = "close";
 
-/// Whether the first show of a notice has been announced.
-#[derive(Clone, Default)]
-struct Announced(bool);
-
 /// The style of a notice.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
@@ -141,8 +136,8 @@ const READING_IN_BODY_SIZES: f32 = 38.5;
 
 /// A message in a tone. The tone picks the icon and the colours; the neutral tone reads muted and has no icon. The
 /// message is the label; a title above it is optional. Actions read as links (as buttons in the centred layout) and
-/// are reported in the output; with `dismiss` a close button is the last part. With `announce` set, the first show is
-/// announced once. The title and message wrap and can be selected and copied; Tab passes over them.
+/// are reported in the output; with `dismiss` a close button is the last part. With `announce` set, the notice is a
+/// live region: its title and message are announced when it appears and whenever they change. The title and message wrap and can be selected and copied; Tab passes over them.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct Notice<'a> {
     #[common]
@@ -167,7 +162,8 @@ pub struct Notice<'a> {
     /// arrow keys are left to the surrounding scope.
     #[prop(flag)]
     footer_actions: bool,
-    /// Announces the notice once when it first shows.
+    /// Makes the notice a live region of this politeness: its title and message are announced when it appears and
+    /// whenever they change.
     #[prop]
     announce: Option<Politeness>,
     actions: Vec<NoticeAction>,
@@ -501,20 +497,6 @@ impl Component for Notice<'_> {
         if cx.part_activated(DISMISS).is_some() || (self.dismiss && cx.core.intents.take(Intent::Cancel)) {
             self.dismissed = true;
         }
-        if let Some(politeness) = self.announce {
-            let first = {
-                let announced = cx.memory::<Announced>();
-                !std::mem::replace(&mut announced.0, true)
-            };
-            if first {
-                let message = cx.resolved.label;
-                let text = match self.title.as_ref().map(|title| cx.env.resolve(title)) {
-                    Some(title) => format!("{}, {message}", title.as_str()),
-                    None => message.to_owned(),
-                };
-                cx.announce(text, politeness);
-            }
-        }
     }
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
@@ -522,10 +504,12 @@ impl Component for Notice<'_> {
             (None, _) => {
                 access.role(Role::LABEL);
             }
-            (Some(_), Tone::Bad) => {
-                access.role(Role::ALERT);
+            (Some(politeness), Tone::Bad) => {
+                access.role(Role::ALERT).live(politeness);
             }
-            (Some(_), _) => {}
+            (Some(politeness), _) => {
+                access.live(politeness);
+            }
         }
         if let Some(title) = self.title.as_ref().map(|title| cx.env.resolve(title).as_str().to_owned()) {
             if self.layout == NoticeLayout::Centred {
