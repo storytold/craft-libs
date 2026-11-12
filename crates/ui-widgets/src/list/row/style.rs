@@ -9,8 +9,6 @@ use egui::CornerRadius;
 /// Least contrast ratio of a selected fill on the panel for it to identify the row alone: standard, high.
 const OUTLINE_MIN: (f64, f64) = (3.0, 4.5);
 
-/// How far the hover tint of the layer form tints toward the accent.
-const LAYER_TINT: f32 = 0.12;
 /// How far the stripe of a striped row tints toward the hover fill.
 const STRIPE: f32 = 0.25;
 
@@ -72,7 +70,7 @@ pub(super) fn fill_of(cx: &StyleCx<'_>, key: FillKey) -> Stateful<StyleColor> {
     let state = &cx.tokens.color.state;
     let clear = Rgba::TRANSPARENT;
     let rest = if key.striped { state.hover.faded(STRIPE) } else { clear };
-    let hover = if key.layer { over(cx.tokens.color.accent.solid.faded(LAYER_TINT), state.hover) } else { state.hover };
+    let hover = state.hover;
     let c = |rgba: Rgba| cx.color(rgba);
     // `over` keeps the alpha of what is under it, so over a clear rest the tint is the token itself.
     let tinted = if rest.a() == 0 { hover } else { over(hover, rest) };
