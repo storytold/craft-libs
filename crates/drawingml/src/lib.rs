@@ -9,18 +9,75 @@
 //! - [`preset`]: outlines of the preset shapes (`a:prstGeom`), by their file names.
 //! - [`custgeom`]: custom geometry (`a:custGeom`), with the shape guide formulas.
 //! - [`warp`]: preset text warps (`a:prstTxWarp`).
+//! - The model: [`style`] (colour references, fills, lines, effects), [`text`] (text bodies,
+//!   paragraphs, runs), [`table`], [`chart`] with [`numfmt`] (number format codes), [`theme`]
+//!   (colour, font and format schemes) and [`diagram`] (SmartArt outlines). Media are named by
+//!   [`MediaId`]; the bytes stay with the caller.
+//! - Readers and writers: [`read`] and [`write`] (`a:` fills, lines, effects, `a:xfrm`, text
+//!   bodies), [`chart::read`], [`chart::chartex`] and [`chart::write`] (`c:chartSpace`,
+//!   `cx:chartSpace`), [`theme::read_theme`] and [`theme::theme_xml`], [`table::styles`]
+//!   (`a:tblStyleLst`) and [`diagram::parts`] (`dgm:` data, layout, style and colour parts).
+//!   What they need from the package is the caller's [`part::Source`] or [`part::Sink`];
+//!   [`xmlx`] holds the parser settings and markup-compatibility handling they share.
 //!
 //! Nothing here opens a package: readers take a [`craft_xml::El`] and writers a
 //! [`craft_xml::Writer`], so the same code serves a slide, a document or a worksheet drawing.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod chart;
 pub mod color;
 pub mod custgeom;
+pub mod diagram;
+pub mod numfmt;
+pub mod part;
 pub mod preset;
+pub mod read;
+pub mod style;
+pub mod table;
+pub mod text;
+pub mod theme;
+pub mod write;
+pub mod xmlx;
+
+/// Namespace URIs.
+pub mod ns {
+    pub const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+    pub const NS_R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    pub const NS_A14: &str = "http://schemas.microsoft.com/office/drawing/2010/main";
+    pub const NS_C: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
+}
+mod trendline;
 pub mod warp;
 
 use kurbo::{Affine, Point, Rect, Vec2};
 use serde::{Deserialize, Serialize};
+
+pub(crate) fn yes() -> bool {
+    true
+}
+
+macro_rules! id_type {
+    ($(#[$doc:meta])* $name:ident) => {
+        $(#[$doc])*
+        #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(pub u32);
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+    };
+}
+id_type!(
+    /// A picture, sound or other embedded file, by the id its owner gave it. The bytes stay with
+    /// the owner (a package part in a file).
+    MediaId
+);
+id_type!(
+    /// The target of a link to a slide. Only presentations have them.
+    SlideId
+);
 
 /// EMU per point.
 pub const EMU_PER_PT: f64 = 12_700.0;

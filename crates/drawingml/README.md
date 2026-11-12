@@ -16,7 +16,20 @@ files store EMU (12 700 per point).
 | `custgeom` | `read_cust_geom` / `write_cust_geom` between `a:custGeom` and `CustomPath` (an `M L C Q Z` path string per sub-path), and `Guides`, the shape guide formula evaluator | `a:custGeom`, `a:gd` |
 | `warp` | `warp(name, adjusts, rect)`: the bands and guide curves of a preset text warp, and the mapping of laid-out lines onto them | `a:prstTxWarp` |
 
-Fills, lines, effects, text bodies, tables, themes and charts are not here yet.
+## The model
+
+These modules hold types only; their readers and writers are not here yet.
+
+| Module | Types | Markup they stand for |
+|---|---|---|
+| `style` | `ColorRef` (a base colour plus transforms, resolved against a `ColorScheme`), `Fill`, `Gradient`, `PictureFill`, `Line`, `Effects`, `ShapeStyle` | `a:solidFill`, `a:gradFill`, `a:blipFill`, `a:pattFill`, `a:ln`, `a:effectLst`, `p:style` |
+| `text` | `TextBody`, `Paragraph`, `ParaProps`, `Run`, `RunProps`, `ListStyle`, hyperlinks and actions | `a:txBody`, `a:bodyPr`, `a:lstStyle`, `a:p`, `a:r` |
+| `table` | `Table`, `Row`, `Cell`, `TableStyleDef` and the built-in table styles | `a:tbl`, `a:tblStyleLst` |
+| `chart` | `Chart`, `Series`, axes, data labels, trendlines and error bars, with the values they compute | `c:chartSpace`, `cx:chartSpace` |
+| `numfmt` | `format(code, value, lang)`: number format codes as charts and cells use them | `c:numFmt` |
+| `diagram` | `Diagram`, `DiagramNode` | `dgm:dataModel` |
+
+A picture or sound is a `MediaId`; whoever owns the package keeps the bytes. Themes are not here yet.
 
 ## Preset shapes and text warps
 

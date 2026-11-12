@@ -1,4 +1,4 @@
-//! A bytes-only check of a ZIP package's declared entry count before the `zip` crate opens it.
+//! A bytes-only check of a ZIP archive's declared entry count before the `zip` crate opens it.
 //!
 //! `zip::ZipArchive::new` reserves room for, and parses, as many central directory headers as the
 //! end record declares before its caller can look at `len()`. A ZIP64 end record can declare
