@@ -814,10 +814,11 @@ fn limits_are_checked_before_allocating() {
     segment(&mut s, 0xC9, &[8, 0xFF, 0xFF, 0xFF, 0xFF, 3, 1, 0x44, 0, 2, 0x11, 0, 3, 0x11, 0]);
     let small = Limits { max_alloc: 1 << 20, ..Limits::default() };
     assert!(matches!(decode(&s, &small, None), Err(Error::LimitExceeded(_))));
-    // 64×64 gray: 32 KiB of coefficients and plane plus 4 KiB of output, each under the limit
-    // alone but not together.
+    // 64×64 gray: 32 KiB of coefficients and plane, 4 KiB of output and 128 upsampling steps,
+    // each under the limit alone but not together.
     let stream = arith_stream(8, 8, 8, &coefficients(64, 1, 100), &[(0, 63, 0, 0)], 0);
-    for (max_alloc, ok) in [(36 << 10, true), ((36 << 10) - 1, false), (32 << 10, false)] {
+    let all = (36 << 10) + 128 * size_of::<UpsampleStep>() as u64;
+    for (max_alloc, ok) in [(all, true), (all - 1, false), (36 << 10, false), (32 << 10, false)] {
         let limits = Limits { max_alloc, ..Limits::default() };
         assert_eq!(decode(&stream, &limits, None).is_ok(), ok, "max_alloc {max_alloc}");
     }
