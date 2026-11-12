@@ -290,7 +290,7 @@ impl<'a, P: Clone + Hash + Send + Sync + 'static> DockGroup<'a, P> {
 
     /// The panel menu button's face.
     fn menu_face(name: Label) -> IconButton<'static> {
-        IconButton::new(IconId::new("more")).size(ControlSize::Sm).popup(PopupKind::Menu).popup_mark(false).label(name)
+        IconButton::new(IconId::new("more")).size(ControlSize::Sm).popup(PopupKind::Menu).label(name)
     }
 
     /// Starts a drag of the whole group: its ghost is the group's frame with its name.

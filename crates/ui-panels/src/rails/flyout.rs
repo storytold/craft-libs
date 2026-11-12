@@ -158,7 +158,7 @@ impl<'a, T: Value + 'static> FlyoutButton<'a, T> {
         };
         let mut face = face.selected(selected);
         if self.has_flyout() {
-            face = face.popup(PopupKind::Menu);
+            face = face.popup(PopupKind::Menu).popup_mark(true);
         }
         face
     }

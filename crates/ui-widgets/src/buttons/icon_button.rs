@@ -62,11 +62,12 @@ pub struct IconButton<'a> {
     /// accent.
     #[prop(into)]
     badge: Option<Srgba>,
-    /// The kind of popup the button opens: AccessKit reports it, and a mark shows at the end-bottom corner unless
-    /// [`popup_mark`](Self::popup_mark) is off.
+    /// The kind of popup the button opens: AccessKit reports it, and a mark shows at the end-bottom corner when
+    /// [`popup_mark`](Self::popup_mark) is on.
     #[prop(into)]
     popup: Option<PopupKind>,
-    /// Whether the popup mark shows; off where the glyph itself names the popup, as a panel menu's "…" does.
+    /// Whether the popup mark shows; on for a rail button with a flyout and a panel footer button that opens a menu,
+    /// the places a mark tells that a button opens more than it shows.
     #[prop]
     popup_mark: bool,
     /// Whether the popup the button opens is open, as the host knows it.
@@ -77,7 +78,7 @@ pub struct IconButton<'a> {
 impl<'a> IconButton<'a> {
     /// An icon button showing `icon`; `label` it with the accessible name.
     pub fn new(icon: impl Into<IconSpec<'a>>) -> Self {
-        IconButton { common: Common::new(), icon: icon.into(), focusable: true, badge: None, popup: None, popup_mark: true, expanded: None }
+        IconButton { common: Common::new(), icon: icon.into(), focusable: true, badge: None, popup: None, popup_mark: false, expanded: None }
     }
 
     /// An icon button bound to `command`: its label, enabled state and activation follow the command.

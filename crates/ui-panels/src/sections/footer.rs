@@ -199,7 +199,7 @@ impl FooterAction {
             button = button.variant(Variant::look(Emphasis::Ghost, tone));
         }
         if let Some(kind) = self.popup {
-            button = button.popup(kind);
+            button = button.popup(kind).popup_mark(true);
         }
         if let Some(open) = self.expanded {
             button = button.expanded(open);
