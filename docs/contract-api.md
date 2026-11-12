@@ -1770,6 +1770,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::ActivateOn`: `pub enum ActivateOn { DoubleClick, Click }`. The pointer gesture that activates an item.
 - `craft_ui::contract::Activation`: `pub struct Activation { pub by_key: bool, pub mods: craft_keymap::Mods }`. How a component was activated this pass.
 - `craft_ui::contract::Animate`: re-export of `craft_ui::runtime::motion::Animate`.
+- `craft_ui::contract::BandFill`: `pub enum BandFill { Surface(SurfaceKind), Tone(Tone) }`. What the band behind a header paints.
 - `craft_ui::contract::Bind`: `pub struct Bind<'a, T>`. The binding of a value component: a value the app owns, the check on it and the value a reset restores. The same
   - `pub fn given(v: impl Into<Mixed<T>>) -> Self`. A value in; every edit comes out as an event.
   - `pub fn bound(v: &'a mut T) -> Self`. Edits write through to `v`.
@@ -2045,9 +2046,10 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const NONE: HeaderParts`. No room for parts.
   - `pub const fn start(mut self, width: f32) -> Self`. `width` at the start edge.
   - `pub const fn end(mut self, width: f32) -> Self`. `width` at the end edge.
-- `craft_ui::contract::HeaderRegion`: `pub struct HeaderRegion { pub band: DragBand, pub rule: bool, pub rule_above: bool, pub inline: bool, pub trailing: bool, pub fill: Option<SurfaceKind>, pub inset: Pad, pub gap: Option<Gap> }`. A header region, filled by `Container::header`.
+- `craft_ui::contract::HeaderRegion`: `pub struct HeaderRegion { pub band: DragBand, pub rule: bool, pub rule_above: bool, pub inline: bool, pub trailing: bool, pub fill: Option<BandFill>, pub inset: Pad, pub gap: Option<Gap> }`. A header region, filled by `Container::header`.
   - `pub const fn new() -> Self`. A header with no drag band, no rule, on its own line, with no trailing region, no fill and no inset.
   - `pub const fn fill(mut self, kind: SurfaceKind) -> Self`. The surface of a band behind the header.
+  - `pub const fn tint(mut self, tone: Tone) -> Self`. A band behind the header in `tone`'s tinted fill (a slicer's caption band); the header's title row takes the
   - `pub const fn gap(mut self, gap: Gap) -> Self`. The space between a stacked header and the body.
   - `pub const fn inset(mut self, pad: Pad) -> Self`. The padding tier between the container's edge and the header's content.
   - `pub const fn band(mut self, band: DragBand) -> Self`. What dragging the header does.
@@ -3830,6 +3832,7 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
   - `pub fn focus_look(&self) -> FocusLook`. The one builder of the focus ring: the line's focus colour at the medium stroke, on the shape's edge.
   - `pub fn tone(&self, tone: Tone) -> StyleColor`. The colour text and icons of `tone` read in.
   - `pub fn tone_fill(&self, tone: Tone) -> StyleColor`. The tinted background text and icons of `tone` sit on: the status or accent background, and the sunken surface
+  - `pub fn tone_on_fill(&self, tone: Tone) -> StyleColor`. The colour text and icons read in on [`tone_fill`](Self::tone_fill): `accent.on_soft`, the status foreground,
   - `pub fn host_ink(&self, base: Stateful<StyleColor>) -> Stateful<StyleColor>`. A text or icon colour that is `base` when the component stands alone and the text colour of the host part
   - `pub fn host_muted_ink(&self, base: Stateful<StyleColor>) -> Stateful<StyleColor>`. A muted text colour that is `base` when the component stands alone and the muted text colour of the host part
   - `pub fn accent_fill(&self) -> Stateful<StyleColor>`. The fill of an accent control that is on or filled: the strong accent at rest, with its hover and pressed
