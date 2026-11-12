@@ -379,3 +379,52 @@ fn the_row_menu_opens_the_host_menu_keeps_its_button_and_renames_the_row() {
         seen.borrow()
     );
 }
+
+/// A cell field shows in its column's cell in place of the cell's text, and in the label's column in the label's place
+/// with the label still the row's name; a click on it takes the focus and its edit reaches the output.
+#[trial]
+fn a_cell_field_stands_in_its_cell_takes_the_click_and_reports_its_edit() {
+    use craft_behavior::{ColumnKey, ColumnWidth};
+    use craft_ui::contract::{Bind, ColumnSpec, Show as _};
+    use craft_ui::table::Table;
+    use craft_ui::text::{NumberField, TextField};
+    use egui::{Key, Modifiers, Rect};
+    const NAME: ColumnKey = ColumnKey::new("name");
+    const SIZE: ColumnKey = ColumnKey::new("size");
+    let typed = Rc::new(RefCell::new(None::<f64>));
+    let size_cell = Rc::new(RefCell::new(Rect::NOTHING));
+    let (held, cell) = (typed.clone(), size_cell.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let columns = vec![ColumnSpec::new(NAME, "Name", ColumnWidth::fill(1.0)), ColumnSpec::new(SIZE, "Size", ColumnWidth::fill(1.0))];
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key);
+        let held = held.clone();
+        let cell = cell.clone();
+        Table::<usize>::new("Stops", columns.clone()).show_items(ui, &source, &mut |_, icx| {
+            *cell.borrow_mut() = icx.cell(&SIZE).unwrap_or(Rect::NOTHING);
+            let held = held.clone();
+            ListRow::new("Row label")
+                .cells(icx.cells())
+                .columns(&columns)
+                .cell(SIZE, "Size text")
+                .cell_field(NAME, TextField::new("Name field", Bind::given("draft".to_owned())), |_| {})
+                .cell_field(SIZE, NumberField::new("Size field", Bind::given(Some(4.0))), move |out| {
+                    if let Some(value) = out.edit.events.landed() {
+                        *held.borrow_mut() = *value;
+                    }
+                })
+        });
+    });
+    fixture.room(Vec2::new(400.0, 200.0)).settle();
+    let painted = |fixture: &Fixture, text: &str| fixture.texts().iter().any(|run| run.text == text);
+    assert!(!painted(&fixture, "Size text"), "the cell paints no text of its own");
+    assert!(!painted(&fixture, "Row label"), "the field in the label's column stands in the label's place");
+    assert!(fixture.by_label("Row label").is_some(), "the label stays the row's name");
+    let field = fixture.by_label("Size field").expect("the size field shows");
+    let cell = *size_cell.borrow();
+    assert!(cell.expand(0.5).contains_rect(field.rect), "the field lies in its cell: {:?} in {cell:?}", field.rect);
+    fixture.click(&field).settle();
+    assert_eq!(craft_ui::testing::access::focused_key(fixture.tree()), field.node, "a click on the cell reaches the field");
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("12").key(Key::Enter, Modifiers::NONE).settle();
+    assert_eq!(*typed.borrow(), Some(12.0), "the field's edit reaches the output");
+}

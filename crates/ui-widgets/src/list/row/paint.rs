@@ -5,7 +5,7 @@ use super::placement::Placed;
 use super::show::{TEXT_CELL, TOGGLE, TRAILING};
 use super::style::ListRowStyle;
 use super::thumb::{RowThumb, target_at};
-use super::trailing::{TrailingFace, TrailingItem, field_key, trailing_run};
+use super::trailing::{TrailingFace, TrailingItem, cell_key, field_key, trailing_run};
 use crate::buttons::IconButton;
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Cx, PaintUi, Pointer as _, Props as _, Styled as _, item_part_open};
@@ -145,7 +145,7 @@ impl ListRow<'_> {
             }
             _ => 0.0,
         };
-        if !self.renaming {
+        if !self.renaming && !self.label_has_field() {
             let muted = self.label_column(&self.cells).is_some_and(|column| self.muted.contains(column));
             let look = if muted { &style.cell_muted } else { &style.text };
             let mut span = Span::new(cx.resolved.label);
@@ -190,6 +190,9 @@ impl ListRow<'_> {
         let rtl = cx.env.direction().is_rtl();
         for (at, position, cell) in &placed.texts {
             let text = &self.texts[*at];
+            if self.cell_fields.iter().any(|(column, _)| *column == text.column) {
+                continue;
+            }
             let (align, _) = self.align_of(&text.column);
             let look = self.cell_look(cx.style, &text.column);
             let cell = Rect::from_x_y_ranges(cell.x_range(), cx.rect.y_range());
@@ -210,6 +213,34 @@ impl ListRow<'_> {
             } else {
                 ui.draw().galley(Pos2::new(x, top), &layout);
             }
+        }
+    }
+}
+
+impl ListRow<'_> {
+    /// Whether a cell field stands in the label's place.
+    pub(super) fn label_has_field(&self) -> bool {
+        self.label_column(&self.cells).is_some_and(|label| self.cell_fields.iter().any(|(column, _)| column == label))
+    }
+
+    /// Shows each cell field in its column's cell, or in the label's room in the label's column, at its own height up to
+    /// the row's, centred on the row's band.
+    pub(super) fn paint_cell_fields(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed) {
+        let sizes = &cx.style.sizes;
+        let rtl = cx.env.direction().is_rtl();
+        let label = self.label_column(&self.cells).cloned();
+        let band = placed.label.y_range();
+        for (at, (column, field)) in self.cell_fields.iter_mut().enumerate() {
+            let (Some(item), Some(size)) = (field.item.take(), field.size) else { continue };
+            let room = if label.as_ref() == Some(column) {
+                placed.label
+            } else {
+                let Some((_, cell)) = self.cells.iter().find(|(key, _)| key == column) else { continue };
+                let cell = Rect::from_x_y_ranges(cell.x_range(), band);
+                Flow::new(cell, rtl).span(sizes.cell_inset, sizes.cell_room(cell.width()))
+            };
+            let height = size.ideal.y.min(room.height());
+            item.show(ui, cell_key(at), Rect::from_center_size(room.center(), Vec2::new(room.width(), height)));
         }
     }
 }

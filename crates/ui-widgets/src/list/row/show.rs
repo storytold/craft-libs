@@ -6,7 +6,7 @@ use super::paint::draw_clip_arrow;
 use super::placement::{Sizes, lead_run};
 use super::style::{FillKey, ListRowStyle, RowForm, fill_of, row_ink_of, selected_outline};
 use super::thumb::{RowThumb, target_at};
-use super::trailing::{HostedSize, TrailingFace, TrailingItem, TrailingPart, below_key, field_key};
+use super::trailing::{HostedSize, TrailingFace, TrailingItem, TrailingPart, below_key, cell_key, field_key};
 use super::{ListRow, RowInk};
 use crate::contract::{
     Access, Bind, Component, Cx, DragPreview, MeasureCx, Name, OpenChange, PaintUi, PartsCx, Pointer as _, Props as _, Role, RowPressed, Styled as _,
@@ -505,6 +505,7 @@ impl Component for ListRow<'_> {
             ui.face(PROGRESS, Progress::new(fraction));
         }
         self.paint_cells(ui, cx, &placed);
+        self.paint_cell_fields(ui, cx, &placed);
         self.paint_trailing(ui, cx, &placed);
     }
 
@@ -549,6 +550,15 @@ impl ListRow<'_> {
                 let ideal = item.measure(cx, below_key(at), Proposal::Ideal);
                 let least = item.measure(cx, below_key(at), Proposal::Min).x;
                 below.size = Some(HostedSize { ideal, least });
+            }
+        }
+        for (at, (_, field)) in self.cell_fields.iter_mut().enumerate() {
+            if field.size.is_none()
+                && let Some(item) = field.item.as_mut()
+            {
+                let ideal = item.measure(cx, cell_key(at), Proposal::Ideal);
+                let least = item.measure(cx, cell_key(at), Proposal::Min).x;
+                field.size = Some(HostedSize { ideal, least });
             }
         }
     }

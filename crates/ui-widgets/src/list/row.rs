@@ -215,6 +215,8 @@ pub struct ListRow<'a> {
     pub(super) trailing: Vec<Trailing<'a>>,
     /// The components under the label band's text, in one line (`below`).
     pub(super) below: Vec<Hosted<'a>>,
+    /// The components shown in a column's cell in place of its text (`cell_field`).
+    pub(super) cell_fields: Vec<(ColumnKey, Hosted<'a>)>,
     /// The row's depth in a tree, which indents it; `None` for a row of a flat list.
     /// The row is at `depth` levels of a tree: indented by it, an `AccessKit` tree item.
     #[prop]
@@ -287,6 +289,7 @@ impl<'a> ListRow<'a> {
             target: None,
             trailing: Vec::new(),
             below: Vec::new(),
+            cell_fields: Vec::new(),
             depth: None,
             group: None,
             option: false,
@@ -363,6 +366,18 @@ impl<'a> ListRow<'a> {
     #[must_use]
     pub fn cell(mut self, column: ColumnKey, text: impl Into<Label>) -> Self {
         self.texts.push(TextCell { column, text: text.into(), wrap: false });
+        self
+    }
+
+    /// A component in the cell of `column` in place of a text: a field that edits the row's value in that column (a
+    /// tab stop's position or alignment). It fills the cell's width, inset as a text cell is, at its own height up to
+    /// the row's. In the column the label takes it stands in the label's place, and the label stays the row's
+    /// accessible name. The row shows `field` and hands its output to `output` in the pass it is shown; its stop joins
+    /// the row's roving group as a trailing field's does, and it takes its own presses and the keys it declares. A
+    /// column that `cells(..)` does not list shows nothing.
+    #[must_use]
+    pub fn cell_field<C: Show + 'a>(mut self, column: ColumnKey, field: C, output: impl FnOnce(C::Output) + 'a) -> Self {
+        self.cell_fields.push((column, Hosted { item: Some(Box::new(Hosting::new(field, output))), size: None }));
         self
     }
 
