@@ -34,6 +34,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-ai-core`](crates/ai-core/README.md): the data model and contract for AI in the Craft Apps (connections, models, tools, requests, jobs, consent, history, route spec). Pure, no I/O, wasm-safe. Contract in [docs/ai-shared-layer.md](docs/ai-shared-layer.md).
 - [`craft-pdf`](crates/pdf/README.md): independently optional PDF parsing, interpretation, rasterization and guarded authoring. Apps retain layout, fonts, editing and export policy; writer-only consumers do not enable the shared reader.
 
+- [`craft-pdn`](crates/pdn/README.md): Paint.NET documents (`.pdn`, PDN3), read: the layer list, blend modes and chunked gzip pixel blocks, with a data-only MS-NRBF (.NET binary serialization) reader. From PhotoCraft.
 - [`craft-aaf`](crates/aaf/README.md): clean-room AAF (Edit Protocol, structured storage) and OMF Interchange 2.0 (Bento) readers and writers over one mob-style composition model with exact times, clip gain, markers, nested compositions and embedded PCM essence. From FilmCraft.
 - [`craft-assuan`](crates/assuan/README.md): the Assuan protocol and gpg-agent's operations (key lookup, signing a digest, decrypting a session key) over any `Read + Write` stream, with a bounded canonical S-expression reader. No sockets; everything the agent sends is capped.
 - [`craft-affinity`](crates/affinity/README.md): bounded reader for native Affinity documents (`.af`, `.afdesign`, `.afphoto`, `.afpub`): archive, object stream and a neutral document model with layers, artboards, vectors, text, tables, images and masks. Read only; mapping onto an app's document stays in the app.
@@ -134,8 +135,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   what PhotoCraft's and FilmCraft's readers added: container parsing and decompression to a neutral
   raw image (samples, CFA, black and white levels, active area, crop, orientation, colour tags,
   opcode lists, embedded previews), one Cargo feature per format. DNG reading and writing,
-  Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2 and Canon CRW (through
-  Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW and Canon CRW (through
+  Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW and Canon CRW (through
   `craft-crw`) so far; demosaicing and everything after stay with the develop
   pipeline.
 - [`craft-tga`](crates/tga/src/lib.rs): Truevision Targa, from FilmCraft (reader) and PhotoCraft
@@ -143,6 +143,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   origin, to RGBA8, and a run-length writer whose packets end with their scan line. Bounded on
   hostile input.
 - [`craft-idml`](crates/idml/README.md): IDML (InDesign Markup Language) packages: the ZIP container read with bounded part sizes and lenient part names, `designmap.xml` with its includes in place, the `<Properties>` form on craft-xml elements, value codecs and the package writer; and InDesign Tagged Text, read and written.
+- [`craft-ical`](crates/ical/README.md): iCalendar (RFC 5545) building blocks, from MailCraft: content
+  lines, DATE/DATE-TIME values, durations, TEXT escaping, the common subset of recurrence rules,
+  and `VTIMEZONE` definitions read and written. No time-zone database; what events and to-dos
+  mean stays in each app. Bounded and panic-free on hostile input.
 - [`craft-stream-codecs`](crates/stream-codecs/README.md): byte-stream and bi-level image codecs that
   PDF, PostScript and TIFF share: LZW, ASCII85, ASCIIHex, RunLength, TIFF and PNG predictors,
   CCITT Group 3 and 4 decoding and Group 4 encoding, lossless JBIG2 encoding. Every
@@ -286,10 +290,15 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   `window.<app>` shape (`request`, `execute`, `commands`, `docInspect`, `uiInspect`, `screenshot`) over the app's
   JSON control channel.
 - [`craft-web-host`](crates/web-host/README.md): the host messages between a Craft app's web build and the page that hosts it (`?host=parent` or `data-host="page"`): one contract and one bridge for every app.
+- [`craft-webp`](crates/webp/src/lib.rs): the WebP container, from EffectCraft (reader) and
+  PhotoCraft (writer): canvas size, alpha and every animation frame's timing from the chunk
+  headers without decoding, and the RIFF container around an encoded VP8 frame with alpha, ICC,
+  EXIF and XMP chunks. The VP8 and VP8L codecs are not part of it.
 - [`craft-xls`](crates/xls/README.md): clean-room Excel 97-2003 workbook (`.xls`, BIFF8) reader: worksheets, cell values, formulas as A1 text (shared and array formulas included), cell formats with resolved palette colours, merged cells, column and row records, defined names, print areas and calculation settings, with limits on records, cells and text.
 - [`craft-wordmodel`](crates/wordmodel/README.md): a word-processing document model (stories, paragraphs,
   runs, tables, sections, styles, numbering, fields, notes, comments, revisions, drawings, math): what the
   text-format crates read into and write from. WordCraft's model without its editing code.
+- [`craft-xlsx`](crates/xlsx/README.md): Excel workbooks (`.xlsx`, `.xlsm`, SpreadsheetML, transitional and strict) and binary workbooks (`.xlsb`) on `craft-opc`: the workbook part, shared strings, the styles tables and worksheet rows streamed one at a time, with limits on the package, the XML and the binary records.
 - [`craft-ora`](crates/ora/README.md): OpenRaster documents (`.ora`): the ZIP archive and the `stack.xml` layer tree as written, read with bounded sizes and written. From PhotoCraft.
 - [`craft-y4m`](crates/y4m/src/lib.rs): YUV4MPEG2 (`.y4m`) reader, from FilmCraft: the stream
   header, colour space layouts at 8 to 16 bits, a frame index built from the `FRAME` lines without

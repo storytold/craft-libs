@@ -1181,6 +1181,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ical"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "proptest",
+]
+
+[[package]]
 name = "craft-idml"
 version = "0.1.0"
 dependencies = [
@@ -1409,6 +1417,15 @@ dependencies = [
  "ttf-parser",
  "wasm-bindgen-test",
  "zeroize",
+]
+
+[[package]]
+name = "craft-pdn"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "proptest",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1788,6 +1805,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-webp"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-window"
 version = "0.1.0"
 dependencies = [
@@ -1833,6 +1858,16 @@ version = "0.1.0"
 dependencies = [
  "craft-cfb",
  "craft-sheet",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-xlsx"
+version = "0.1.0"
+dependencies = [
+ "craft-opc",
+ "craft-sheet",
+ "craft-xml",
  "thiserror 2.0.21",
 ]
 
