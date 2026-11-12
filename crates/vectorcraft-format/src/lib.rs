@@ -444,6 +444,18 @@ impl Image {
         self.len() == 0
     }
 
+    /// [`Image::len`] with fallible checkpoints while scanning inline data. The checkpoint's
+    /// error is returned unchanged.
+    pub fn len_with_check<E>(&self, mut check: impl FnMut() -> Result<(), E>) -> Result<u64, E> {
+        match self.blob {
+            Some([_, len]) => {
+                check()?;
+                Ok(len)
+            }
+            None => base64::decoded_len_with_check(&self.data, check),
+        }
+    }
+
     /// The entry's bytes: `data` decoded, or the range `blob` names in `tail` (the data after the
     /// JSON, from [`split_tail`]). `None` when the entry states more than [`MAX_ENTRY`] bytes,
     /// when `data` is not valid base64, or when `tail` ends before the range does. Each call
@@ -462,6 +474,26 @@ impl Image {
         match self.blob {
             Some(at) => entry(tail, at).map(<[u8]>::to_vec),
             None => base64::decode(&self.data),
+        }
+    }
+
+    /// [`Image::bytes_at_most`] with fallible checkpoints during size checks, base64 decoding
+    /// and copying. `Ok(None)` has the same meaning as [`Image::bytes_at_most`].
+    pub fn bytes_at_most_with_check<E>(&self, tail: &[u8], max: u64, mut check: impl FnMut() -> Result<(), E>) -> Result<Option<Vec<u8>>, E> {
+        if self.len_with_check(&mut check)? > max {
+            return Ok(None);
+        }
+        match self.blob {
+            Some(at) => {
+                let Some(bytes) = entry(tail, at) else { return Ok(None) };
+                let mut out = Vec::with_capacity(bytes.len());
+                for chunk in bytes.chunks(base64::CHECK_CHUNK) {
+                    check()?;
+                    out.extend_from_slice(chunk);
+                }
+                Ok(Some(out))
+            }
+            None => base64::decode_with_check(&self.data, check),
         }
     }
 }
