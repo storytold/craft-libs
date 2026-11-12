@@ -378,7 +378,16 @@ impl EsignDialog {
     /// install under whichever context happens to be current when this is
     /// finally called.
     pub fn submit_request(&mut self, request: Request) {
-        let context = self.pending_send_context.take().unwrap_or_else(|| self.current_context());
+        // The captured send context belongs to the create submission answering
+        // a taken [`SendRequest`], and to nothing else. A status refresh (or
+        // any other request) submitted while that send is still outstanding is
+        // the current document's business: tagging it with the old send's
+        // context would make `pump` drop its reply as stale.
+        let context = if matches!(request, Request::Create { .. }) {
+            self.pending_send_context.take().unwrap_or_else(|| self.current_context())
+        } else {
+            self.current_context()
+        };
         // A public `Request::Status` submission is request-specific routing
         // state too: without this, `pump`'s `status_seq` guard never sees
         // this sequence and drops the reply that comes back for it.
