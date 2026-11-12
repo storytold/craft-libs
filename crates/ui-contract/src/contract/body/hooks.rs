@@ -4,8 +4,8 @@ use super::inherit::{BodyScope, register_instances};
 use super::open::open_now;
 use super::placement::{Placement, measure_layer, overlay_of, shown_placement};
 use super::regions::{
-    RegionFrame, RegionSizes, footer_in_end, gap_of, header_gap_of, label_extra_of, least_of, pad_of, paint_edge_rule, paint_rules, rect_of,
-    shared_labels, shared_line,
+    RegionFrame, RegionSizes, end_full_height, footer_in_end, gap_of, header_gap_of, label_extra_of, least_of, pad_of, paint_edge_rule, paint_rules,
+    rect_of, shared_labels, shared_line,
 };
 use super::reorder::REORDER_BAND;
 use super::scroll::{Glide, Jumps, ScrollState, aim_glide, follow_anchor, jump_frame, overflow_inset, scroll_of};
@@ -780,6 +780,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             let wide = self.wide();
             let (layout, body) = (&props.layout, &mut *self.body);
             let label_column = props.label_column;
+            // The room a scrolling body's bars take under or beside its content this run: no part of the line.
+            let mut bars_inset = Vec2::ZERO;
             let mut run = |parent: &mut Ui, at: Rect, bcx: &mut BodyCx<'_>| -> Option<Vec2> {
                 let mut body_ui = alloc::child(parent, {
                     let builder = UiBuilder::new().max_rect(at).layout(child::column_layout(rtl)).scope_id(body_id);
@@ -835,7 +837,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                         }
                         let view_env = body_env.derive_local(|scoped| scoped.lazy = Some(view));
                         let region_env = Env::install_for(&region_ui, view_env.clone());
-                        layout::run_body(&mut region_ui, &view_env, layout_id, layout, gap, |ui| {
+                        layout::run_body_measured(&mut region_ui, &view_env, layout_id, layout, gap, line, |ui| {
                             shared_labels(ui, id, label_column, room.x, &mut group_extent, |ui| body(ui, bcx))
                         });
                         Env::restore(&ctx, region_env);
@@ -860,7 +862,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                         }
                         self.extent = Some(extent);
                         // Along an axis it scrolls the body took what the view shows; along the other it took its content.
-                        let took = extent + overflow_inset(scroll, extent, at.size(), bar);
+                        bars_inset = overflow_inset(scroll, extent, at.size(), bar);
+                        let took = extent + bars_inset;
                         Some(Vec2::new(
                             if scroll.horizontal_on() { took.x.min(at.width()) } else { took.x },
                             if scroll.vertical_on() { took.y.min(at.height()) } else { took.y },
@@ -944,7 +947,12 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 let mut end_cx = BodyCx::new(body_id, line_env.view(), resolved, regions.end, &mut *cx.core.memory, &mut open, gate.as_mut())
                     .with_field_message(field_message.clone())
                     .with_owner(owner);
-                close = close.or(self.end_region(comp, ui, &mut end_cx, &end_frame, &props, regions.end));
+                // The end region is centred on the line it shares with the body, above a scroll bar under the body.
+                let mut end = regions.end;
+                if !end_full_height(&props) {
+                    end.max.y = (end.max.y - bars_inset.y).max(end.min.y);
+                }
+                close = close.or(self.end_region(comp, ui, &mut end_cx, &end_frame, &props, end));
             }
         } else {
             // A collapsed body keeps its last full size in layout memory, so opening it again places by that size
