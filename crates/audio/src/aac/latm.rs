@@ -94,7 +94,10 @@ fn stream_mux_config(r: &mut BitReader) -> Option<LatmConfig> {
     }
     let sample_rate = *SAMPLE_RATES.get(sf as usize)?;
     let asc = super::AudioSpecificConfig::lc(sf as u8, ch as u8).to_bytes().ok()?;
-    Some(LatmConfig { asc, sample_rate, channels: if ch == 0 { 2 } else { ch } })
+    // `ch` is an index into Table 1.19, not a count: 7 and 12 are eight channels, 11 is seven, and a
+    // reserved configuration has no layout
+    let channels = if ch == 0 { 2 } else { super::config_layout(ch as u8)?.iter().map(|e| e.0.channels() as u32).sum() };
+    Some(LatmConfig { asc, sample_rate, channels })
 }
 
 /// Whether `frame` starts with the LOAS `AudioSyncStream` sync word (0x2B7) and a length.
@@ -201,6 +204,21 @@ mod tests {
         assert_eq!(latm_config(&same), None);
         assert_eq!(latm_split(&same, &mut last), Some((cfg.asc, payload[..10].to_vec())));
         assert_eq!(latm_split(&same, &mut None), None, "nothing to reuse");
+    }
+
+    #[test]
+    fn a_channel_configuration_is_not_a_channel_count() {
+        for (config, channels) in [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 8), (11, 7), (12, 8)] {
+            let got = latm_config(&loas(&config_fields(3, config), &[0; 4])).unwrap_or_else(|| panic!("configuration {config} refused"));
+            assert_eq!((got.channels, got.sample_rate), (channels, 48_000), "configuration {config}");
+        }
+    }
+
+    #[test]
+    fn a_reserved_channel_configuration_is_refused() {
+        for config in [8, 9, 10, 13, 14, 15] {
+            assert_eq!(latm_config(&loas(&config_fields(3, config), &[0; 4])), None, "configuration {config}");
+        }
     }
 
     #[test]
