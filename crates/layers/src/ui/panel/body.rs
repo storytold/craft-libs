@@ -11,7 +11,8 @@ use rows::{RevealPlan, list_selection};
 
 use craft_behavior::{ColumnWidth, IconId};
 use craft_ui::contract::{
-    Bind, CollectionEvent, ColumnKind, ColumnSpec, ListDrag, PendingDrop, Props as _, ReorderRule, ShowCollection as _, ToggleColumn,
+    Bind, CollectionEvent, ColumnKind, ColumnSpec, DropAt, DropKind, DropPlace, ListDrag, PendingDrop, Props as _, ReorderRule, ShowCollection as _,
+    ToggleColumn,
 };
 use craft_ui::list::List;
 use craft_ui::runtime::env::Label;
@@ -19,7 +20,7 @@ use egui::Ui;
 
 use super::Session;
 use super::context::PanelContext;
-use super::drag::{LayersDrag, accepts_drop, layer_drop};
+use super::drag::{LayersDrag, accepts_drop, accepts_mask_drop, layer_drop};
 use super::events::{LayerDrop, LayerMove, LayersEvent};
 use super::row::{EYE, LOCK, NAME, build_row};
 use crate::ui::tree::{LayerRowKey, LayerTree};
@@ -67,6 +68,7 @@ pub(super) fn show_body<T: LayerTree>(
     columns.push(ColumnSpec::new(NAME, Label::Empty, ColumnWidth::fill(1.0)));
     let parent_of = |id: &T::Id| tree.parent(id);
     let ctx = ui.ctx().clone();
+    let list_id = cx.list;
 
     let mut list = List::new(cx.words.list.clone())
         .id(cx.list)
@@ -81,7 +83,10 @@ pub(super) fn show_body<T: LayerTree>(
         .accepts(|drag: &ListDrag<LayerRowKey<T::Id>>, _over, insert| {
             accepts_drop(tree, drag, &order, insert, craft_ui::runtime::pointer::frame(&ctx).mods)
         })
-        .drag_payload(|drag: &ListDrag<LayerRowKey<T::Id>>| Some(LayersDrag::of_rows(drag)));
+        .drag_payload(|drag: &ListDrag<LayerRowKey<T::Id>>| Some(LayersDrag::of_rows(drag)))
+        .takes_drop(DropKind::new(DropPlace::Onto, move |drag: &LayersDrag<T::Id>, at: &DropAt<LayerRowKey<T::Id>>| {
+            accepts_mask_drop(tree, list_id, drag, at)
+        }));
     if let Some(key) = reveal_key {
         list = list.reveal(key);
     }

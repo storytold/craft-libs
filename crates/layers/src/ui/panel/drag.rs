@@ -1,14 +1,14 @@
 //! Drag and drop: what a reorder of the list means for layers, effects and Smart Filters, the
 //! payload that footer buttons accept, and the stacking commands.
 
-use craft_behavior::{EditEvent, Mixed};
+use craft_behavior::{DropOperation, EditEvent, Mixed};
 use craft_keymap::Mods;
-use craft_ui::contract::{ListDrag, ReorderMove};
+use craft_ui::contract::{DropAt, ListDrag, ReorderMove};
 use std::sync::Arc;
 
 use super::LayersPanelCommands;
-use super::events::{LayerDrop, LayerMove, LayerPosition, LayersEvent, RowTransfer, SubRowMove};
-use crate::ui::tree::{LayerKind, LayerRowKey, LayerTree, SubRowGroup};
+use super::events::{LayerDrop, LayerMove, LayerPosition, LayersEvent, MaskMove, RowTransfer, SubRowMove};
+use crate::ui::tree::{LayerKind, LayerPart, LayerRowKey, LayerTree, SubRowGroup};
 
 /// What a drag from the Layers panel carries for the drop targets outside its rows: the footer buttons, the rows
 /// that take a mask, and the app's own targets (a document tab that copies the dragged layers into its document).
@@ -151,8 +151,32 @@ pub(super) fn accepts_drop<T: LayerTree>(
             transfer.rows.iter().all(|row| !matches!(row, LayerRowKey::Filters(..))) || tree.info(&transfer.to).kind == LayerKind::SmartObject
         }
         Some(LayerDrop::SubRows(_)) => true,
-        None => false,
+        Some(LayerDrop::Mask(_)) | None => false,
     }
+}
+
+/// The mask a drag of `list` carries and the layer row it is over, when that row is another layer's.
+fn mask_onto<'d, K: PartialEq>(list: egui::Id, drag: &'d LayersDrag<K>, at: &'d DropAt<LayerRowKey<K>>) -> Option<(&'d K, LayerPart, &'d K)> {
+    let (DropAt::Onto(LayerRowKey::Layer(to)), [LayerRowKey::Mask(from, part)]) = (at, drag.keys.as_slice()) else { return None };
+    (drag.list == list && to != from).then_some((from, *part, to))
+}
+
+/// Whether the mask thumbnail a drag of the rows' list `list` carries may land on the row under the pointer.
+pub(super) fn accepts_mask_drop<T: LayerTree>(tree: &T, list: egui::Id, drag: &LayersDrag<T::Id>, at: &DropAt<LayerRowKey<T::Id>>) -> bool {
+    mask_onto(list, drag, at).is_some_and(|(from, part, to)| tree.accepts_mask_drop(from, part, to))
+}
+
+/// The drop a mask thumbnail makes on the row it was released over, one `Set` named `label`.
+pub(super) fn mask_drop_event<K: Clone + PartialEq>(
+    list: egui::Id,
+    drag: &LayersDrag<K>,
+    at: &DropAt<LayerRowKey<K>>,
+    op: DropOperation,
+    label: Arc<str>,
+) -> Option<LayersEvent<K>> {
+    let (from, part, to) = mask_onto(list, drag, at)?;
+    let drop = LayerDrop::Mask(MaskMove::new(from.clone(), part, to.clone(), op == DropOperation::Copy));
+    Some(LayersEvent::Drop(EditEvent::set(Mixed::Mixed, drop, label, None)))
 }
 
 /// The reorder event of the list as the panel reports it: one `Set` per drop.

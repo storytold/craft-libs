@@ -1,5 +1,5 @@
 //! `LayersEvent` and the types it carries (`LayerSelect`, `LayerToggle`, `LayerDrop`, `LayerMove`,
-//! `SubRowMove`, `RowTransfer`).
+//! `SubRowMove`, `RowTransfer`, `MaskMove`).
 //!
 //! The panel reports what the user did in the order it happened; the app applies each event with
 //! its own commands and undo, in the pass it is reported.
@@ -112,7 +112,8 @@ pub enum LayersEvent<K> {
     Properties(LayerPropertyEdit),
     /// The filter bar's edit, for a filter binding that does not write through.
     Filter(EditEvent<LayerFilter>),
-    /// A drop of rows (a drag, a stacking key in the list, or a stacking command): one `Set`, one undo step.
+    /// A drop of rows or a mask thumbnail (a drag, a stacking key in the list, or a stacking command): one `Set`, one
+    /// undo step.
     Drop(EditEvent<LayerDrop<K>>),
     /// A press on a footer button.
     Footer(LayersFooterAction),
@@ -233,6 +234,8 @@ pub enum LayerDrop<Id> {
     SubRows(SubRowMove<Id>),
     /// Effects or Smart Filters moved to another layer.
     Transfer(RowTransfer<Id>),
+    /// A mask thumbnail dropped on another layer's row: the mask moves there.
+    Mask(MaskMove<Id>),
 }
 
 /// Layers moved or copied next to a target layer.
@@ -285,6 +288,27 @@ pub struct RowTransfer<Id> {
     pub to: Id,
     /// Alt: copy instead of move.
     pub copy: bool,
+}
+
+/// A mask moved or copied onto another layer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MaskMove<Id> {
+    /// The layer the mask comes from.
+    pub layer: Id,
+    /// The mask: [`LayerPart::LayerMask`] or [`LayerPart::VectorMask`].
+    pub part: LayerPart,
+    /// The layer it goes to.
+    pub to: Id,
+    /// Alt: copy instead of move.
+    pub copy: bool,
+}
+
+impl<Id> MaskMove<Id> {
+    /// The mask `part` of `layer` lands on `to`.
+    pub fn new(layer: Id, part: LayerPart, to: Id, copy: bool) -> Self {
+        Self { layer, part, to, copy }
+    }
 }
 
 /// Where the host's row menu was opened.

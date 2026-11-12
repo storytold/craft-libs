@@ -16,7 +16,8 @@ mod stories;
 
 pub use drag::LayersDrag;
 pub use events::{
-    ActivateOn, LayerColumn, LayerDrop, LayerMove, LayerPosition, LayerSelect, LayerToggle, LayersEvent, MenuTarget, RowTransfer, SubRowMove,
+    ActivateOn, LayerColumn, LayerDrop, LayerMove, LayerPosition, LayerSelect, LayerToggle, LayersEvent, MaskMove, MenuTarget, RowTransfer,
+    SubRowMove,
 };
 pub use footer::{LayersFooterAction, LayersFooterButton};
 pub use menu::{LayersMenuAction, LayersPanelCommands, LayersPanelKeys, panel_rows};
@@ -151,7 +152,8 @@ impl<Id> Default for Session<Id> {
 /// - **Pointer**: clicks select (Cmd/Ctrl toggles, Shift extends, the empty space clears), the eye
 ///   and lock columns sweep, Alt-click on an eye shows only that layer, the eye's right-click opens
 ///   its colour menu, a modified thumbnail click is a [`LayersEvent::ThumbClick`], double clicks
-///   rename or activate, rows drag to reorder (Alt copies) and onto the footer.
+///   rename or activate, rows drag to reorder (Alt copies) and onto the footer, and a mask thumbnail drags onto
+///   another layer's row to move the mask there (Alt copies).
 /// - **Right to left**: the list and the footer mirror.
 #[must_use = "show the panel with `show`"]
 #[derive(craft_ui::contract::Pattern)]

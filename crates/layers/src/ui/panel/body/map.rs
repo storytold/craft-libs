@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use super::super::Session;
 use super::super::context::PanelContext;
-use super::super::drag::drop_event;
+use super::super::drag::{LayersDrag, drop_event, mask_drop_event};
 use super::super::events::{ActivateOn, LayerColumn, LayerSelect, LayerToggle, LayersEvent, MenuTarget};
 use super::super::menu::OpenMenu;
 use super::super::row::{EYE, FX_PART, LOCK_PART, NAME, OPTIONS_PART};
@@ -117,6 +117,11 @@ pub(super) fn map_events<T: LayerTree>(
                 }
             }
             CollectionEvent::Reorder(edit) => events.extend(drop_event(edit, order, parent_of, filtered)),
+            CollectionEvent::Dropped { at, op, payload, .. } => {
+                if let Some(drag) = payload.get::<LayersDrag<T::Id>>() {
+                    events.extend(mask_drop_event(cx.list, drag, &at, op, Arc::from(cx.words.list.as_str())));
+                }
+            }
             CollectionEvent::Toggle(edit) => toggle_events(edit, &mut session.sweeps, &mut toggle_label, events),
             CollectionEvent::Rename(edit) => {
                 if let EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } = edit

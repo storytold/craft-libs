@@ -86,6 +86,14 @@ pub trait LayerTree {
         true
     }
 
+    /// Whether the mask `part` of layer `from`, dragged by its thumbnail, may drop onto the row of layer `to`, another
+    /// layer. A row that refuses shows no marker and takes nothing. By default a layer takes a mask of a kind it does
+    /// not have (Photoshop asks before it replaces one); PhotoCraft takes only layer masks.
+    fn accepts_mask_drop(&self, from: &Self::Id, part: LayerPart, to: &Self::Id) -> bool {
+        let _ = from;
+        !self.info(to).masks.iter().any(|mask| mask.part == part)
+    }
+
     /// The layer under the pointer on the canvas, drawn with the list's hover look.
     fn hovered(&self) -> Option<Self::Id> {
         None
@@ -359,8 +367,8 @@ pub enum LayerRowKey<Id> {
     Effects(Id, Option<usize>),
     /// A Smart Filters row: `None` is the header row, `Some(i)` the `i`-th filter, top first.
     Filters(Id, Option<usize>),
-    /// A mask thumbnail being dragged: a drag payload only, never a row. Only the footer's
-    /// Delete takes it.
+    /// A mask thumbnail being dragged: a drag payload only, never a row. The footer's Delete
+    /// and the rows of other layers take it.
     Mask(Id, LayerPart),
 }
 
