@@ -3,15 +3,15 @@
 use std::ops::RangeInclusive;
 
 use crate::ui::length::DocUnit;
-use craft_behavior::{EditEvent, IconId};
-use craft_ui::choice::{Checkbox, Segmented};
-use craft_ui::contract::{Bind, Entry, GlyphLabel, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
+use craft_behavior::EditEvent;
+use craft_ui::choice::Checkbox;
+use craft_ui::contract::{Bind, GlyphLabel, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
 use craft_ui::layout_components::{Grid, Stack};
 use craft_ui::runtime::env::{Env, Label};
 use egui::{Response, Ui};
 
 use super::TWO_COLUMNS;
-use super::rows::{LengthRow, Lengths, mixed, number_change};
+use super::rows::{LengthRow, Lengths, Toggle, mixed, number_change, toggle_row};
 
 craft_ui::words! {
     /// The Paragraph controls' words, English by default (PhotoCraft's tooltips).
@@ -182,7 +182,7 @@ impl<'a> ParagraphControls<'a> {
         let units = env.units();
         let lengths = Lengths { units: &units, unit: self.unit };
 
-        let aligns: Vec<Entry<TextAlign>> = [
+        let aligns: Vec<Toggle<ParagraphChange>> = [
             (TextAlign::Left, "align_left", &words.left),
             (TextAlign::Center, "align_center", &words.center),
             (TextAlign::Right, "align_right", &words.right),
@@ -193,25 +193,25 @@ impl<'a> ParagraphControls<'a> {
         ]
         .into_iter()
         .map(|(align, icon, name)| {
-            let entry = Entry::new(align, name.clone()).icon(IconId::new(icon));
-            if point_text && align.needs_box() { entry.disabled_reason(words.justify_needs_box.clone()) } else { entry }
+            let toggle = Toggle::new(name, icon, Some(values.align == Some(align)), Box::new(move |_| ParagraphChange::Align(align)));
+            if point_text && align.needs_box() { toggle.disabled(&words.justify_needs_box) } else { toggle }
         })
         .collect();
-        let directions: Vec<Entry<ParagraphDirection>> = [
+        let directions: Vec<Toggle<ParagraphChange>> = [
             (ParagraphDirection::Automatic, "pilcrow", &words.direction_auto),
             (ParagraphDirection::LeftToRight, "pilcrow_right", &words.direction_ltr),
             (ParagraphDirection::RightToLeft, "pilcrow_left", &words.direction_rtl),
         ]
         .into_iter()
-        .map(|(direction, icon, name)| Entry::new(direction, name.clone()).icon(IconId::new(icon)))
+        .map(|(direction, icon, name)| {
+            Toggle::new(name, icon, Some(values.direction == Some(direction)), Box::new(move |_| ParagraphChange::Direction(direction)))
+        })
         .collect();
 
         let mut edits: Vec<EditEvent<ParagraphChange>> = Vec::new();
         let shown = Stack::new().fill_width().label(self.label).show(ui, |ui, _| {
-            let out = Segmented::new(words.alignment.clone(), Bind::given(mixed(values.align)), &aligns).show(ui);
-            edits.extend(out.events.map(ParagraphChange::Align));
-            let out = Segmented::new(words.direction.clone(), Bind::given(mixed(values.direction)), &directions).show(ui);
-            edits.extend(out.events.map(ParagraphChange::Direction));
+            edits.extend(toggle_row(ui, Some(&words.alignment), aligns));
+            edits.extend(toggle_row(ui, Some(&words.direction), directions));
 
             Grid::new(&TWO_COLUMNS).fill_width().show(ui, |ui, _| {
                 let start = LengthRow {

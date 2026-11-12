@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::ui::length::{DocUnit, length_field};
 use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, NumberCodec};
 use craft_ui::buttons::ToggleButton;
-use craft_ui::contract::{Bind, Entry, FieldLayout, GlyphLabel, LabelKind, Show as _, ShowContainer as _, SideLabel};
+use craft_ui::contract::{Bind, Entry, FieldLayout, GlyphLabel, LabelKind, Props as _, Show as _, ShowContainer as _, SideLabel, TooltipSpec};
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
@@ -163,21 +163,38 @@ pub(super) struct Toggle<C> {
     pub(super) icon: &'static str,
     pub(super) on: Option<bool>,
     pub(super) change: Box<dyn Fn(bool) -> C>,
+    /// Why the button is disabled; `None` while it is enabled.
+    pub(super) disabled: Option<Label>,
 }
 
 impl<C> Toggle<C> {
     pub(super) fn new(name: &Label, icon: &'static str, on: Option<bool>, change: Box<dyn Fn(bool) -> C>) -> Self {
-        Toggle { name: name.clone(), icon, on, change }
+        Toggle { name: name.clone(), icon, on, change, disabled: None }
+    }
+
+    /// The button is disabled for `reason`, which its tooltip shows.
+    pub(super) fn disabled(mut self, reason: &Label) -> Self {
+        self.disabled = Some(reason.clone());
+        self
     }
 }
 
-/// A row of icon toggle buttons; the pressed ones report their change when clicked.
-pub(super) fn toggle_row<C>(ui: &mut Ui, toggles: Vec<Toggle<C>>) -> Vec<EditEvent<C>> {
+/// A row of icon toggle buttons, each its own Tab stop; a clicked one reports its change. `label` names the row as a
+/// group (Alignment).
+pub(super) fn toggle_row<C>(ui: &mut Ui, label: Option<&Label>, toggles: Vec<Toggle<C>>) -> Vec<EditEvent<C>> {
     let mut edits = Vec::new();
-    Row::new().wrap(true).show(ui, |ui, _| {
+    let row = match label {
+        Some(label) => Row::new().label(label.clone()),
+        None => Row::new(),
+    };
+    row.wrap(true).show(ui, |ui, _| {
         for toggle in &toggles {
             let bind = Bind::given(mixed(toggle.on));
-            let out = ToggleButton::new(toggle.name.clone(), bind).icon(IconId::new(toggle.icon)).icon_only().show(ui);
+            let mut button = ToggleButton::new(toggle.name.clone(), bind).icon(IconId::new(toggle.icon)).icon_only();
+            if let Some(reason) = &toggle.disabled {
+                button = button.enabled(false).tooltip(TooltipSpec::new(toggle.name.clone()).disabled_text(reason.clone()));
+            }
+            let out = button.show(ui);
             edits.extend(out.events.map(&toggle.change));
         }
     });
