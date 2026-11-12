@@ -1,9 +1,8 @@
 //! The zip around `canvas.fig`.
 
 use std::cell::Cell;
-use std::io::{Cursor, Read, Seek, Write};
 
-use zip::write::SimpleFileOptions;
+use craft_zip::Compression;
 
 use crate::canvas::MAX_CANVAS;
 use crate::images::MAX_IMAGE_HASH;
@@ -13,6 +12,8 @@ use crate::{Error, corrupt};
 const MAX_META: u64 = 1 << 20;
 /// Largest file [`write_archive`] writes (the canvas and the images together).
 const MAX_FILE: u64 = 2 * 1024 * 1024 * 1024;
+/// Most entries an archive may declare; checked before the archive is indexed.
+pub const MAX_ENTRIES: u64 = 1_000_000;
 
 /// What one open may read from `images/`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,8 +38,7 @@ impl Default for Limits {
 
 /// Whether `bytes` look like a `.fig` file: a zip holding `canvas.fig`, or a bare canvas.
 pub fn is_fig(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"fig-")
-        || (bytes.starts_with(b"PK") && zip::ZipArchive::new(Cursor::new(bytes)).is_ok_and(|z| z.index_for_name("canvas.fig").is_some()))
+    bytes.starts_with(b"fig-") || (bytes.starts_with(b"PK") && open_zip(bytes).is_ok_and(|z| z.contains("canvas.fig")))
 }
 
 /// The parts of a `.fig` archive (or of a bare canvas, which has no images).
@@ -50,7 +50,7 @@ pub struct Archive<'b> {
     /// `meta.json`'s `file_name`.
     pub file_name: Option<String>,
     /// `images/<hash>` members (or nothing for a bare canvas).
-    zip: Option<zip::ZipArchive<Cursor<&'b [u8]>>>,
+    zip: Option<craft_zip::Archive<'b>>,
     max_image: u64,
     /// Bytes left for image reads. A reader that caches what it resolved, failures included,
     /// reads or counts each referenced member only once.
@@ -69,7 +69,11 @@ impl<'b> Archive<'b> {
         if bytes.starts_with(b"fig-") {
             return Ok(Archive { canvas: bytes.to_vec(), file_name: None, zip: None, max_image, remaining, skipped });
         }
-        let mut z = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| corrupt(e.to_string()))?;
+        let mut z = open_zip(bytes).map_err(|e| corrupt(e.to_string()))?;
+        // `zip` keeps one entry of a repeated name; which one the writer meant is not known.
+        if z.has_duplicate_names() {
+            return Err(corrupt("two entries of the archive share a name"));
+        }
         let canvas = read_member(&mut z, "canvas.fig", MAX_CANVAS)?;
         let file_name = read_member(&mut z, "meta.json", MAX_META)
             .ok()
@@ -85,7 +89,7 @@ impl<'b> Archive<'b> {
 
     /// Whether `images/` has a member for image `hash`.
     pub fn has_image(&self, hash: &str) -> bool {
-        self.zip.as_ref().is_some_and(|z| z.index_for_name(&format!("images/{hash}")).is_some())
+        self.zip.as_ref().is_some_and(|z| z.contains(&format!("images/{hash}")))
     }
 
     /// What is left of the total image budget ([`Limits::max_image_total`]).
@@ -107,8 +111,8 @@ impl<'b> Archive<'b> {
         }
         // A clone shares the parsed directory and the bytes; the resolver only has shared access.
         let mut z = self.zip.clone()?;
-        let f = z.by_name(&format!("images/{hash}")).ok()?;
-        let size = f.size();
+        let member = format!("images/{hash}");
+        let size = z.declared_size(&member)?;
         if size > self.max_image {
             return None;
         }
@@ -117,46 +121,32 @@ impl<'b> Archive<'b> {
             self.skipped.set(self.skipped.get() + 1);
             return None;
         }
-        let checksum = f.crc32();
-        let mut data = Vec::new();
-        // Probe past the per-image cap only when the total budget has room. Even a dishonest
-        // size cannot make the read exceed the remaining total; failed reads keep their charge.
-        let limit = remaining.min(self.max_image.saturating_add(1));
-        let read = f.take(limit).read_to_end(&mut data);
-        let used = data.len() as u64;
-        self.remaining.set(remaining - used);
-        if used > size && used == remaining {
-            self.skipped.set(self.skipped.get() + 1);
-        }
-        if read.is_err() || used != size {
-            return None;
-        }
-        // `take` can stop exactly at the budget without asking ZIP for EOF (where it checks CRC).
-        // Check it here too, without spending an extra byte on an overflow probe.
-        if used == limit {
-            let mut crc = flate2::Crc::new();
-            crc.update(&data);
-            if crc.sum() != checksum {
-                return None;
-            }
-        }
-        Some(data)
+        // The read stops one byte past the declared size, so a failed read (a bad checksum, a
+        // stream that says it is shorter than it is) cost at most that: it keeps the charge.
+        let read = z.read(&member, size);
+        let used = match &read {
+            Ok(Some(data)) => data.len() as u64,
+            _ => size,
+        };
+        self.remaining.set(remaining.saturating_sub(used));
+        read.ok().flatten()
     }
 }
 
+/// The archive, its declared entry count checked before it is indexed. The image budget is this
+/// crate's own ([`Limits`]), so the archive's total is not used.
+fn open_zip(bytes: &[u8]) -> Result<craft_zip::Archive<'_>, craft_zip::Error> {
+    craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: MAX_ENTRIES, max_total_bytes: u64::MAX })
+}
+
 /// Member `name` of `z`, refused when it is (or unpacks to) more than `limit` bytes.
-fn read_member<R: Read + Seek>(z: &mut zip::ZipArchive<R>, name: &str, limit: u64) -> Result<Vec<u8>, Error> {
-    let f = z.by_name(name).map_err(|e| corrupt(format!("{name}: {e}")))?;
-    let too_large = || corrupt(format!("{name} is too large"));
-    if f.size() > limit {
-        return Err(too_large());
+fn read_member(z: &mut craft_zip::Archive<'_>, name: &str, limit: u64) -> Result<Vec<u8>, Error> {
+    match z.read(name, limit) {
+        Ok(Some(data)) => Ok(data),
+        Ok(None) => Err(corrupt(format!("{name}: not in the archive"))),
+        Err(craft_zip::Error::EntryTooLarge { .. }) => Err(corrupt(format!("{name} is too large"))),
+        Err(e) => Err(corrupt(e.to_string())),
     }
-    let mut data = Vec::new();
-    f.take(limit.saturating_add(1)).read_to_end(&mut data).map_err(|e| corrupt(format!("{name}: {e}")))?;
-    if data.len() as u64 > limit {
-        return Err(too_large());
-    }
-    Ok(data)
 }
 
 /// What [`write_archive`] puts in a `.fig` file.
@@ -178,15 +168,11 @@ pub struct Package<'a> {
 /// (stored, as they are compressed already; `meta.json` deflated).
 pub fn write_archive(package: &Package) -> Result<Vec<u8>, Error> {
     let io = |e: &dyn std::fmt::Display| Error::Io(e.to_string());
-    let mut buf = Cursor::new(Vec::new());
+    let mut z = craft_zip::Writer::new();
+    let (stored, deflated) = (Compression::Stored, Compression::Level(3));
     {
-        let mut z = zip::ZipWriter::new(&mut buf);
-        let stored = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        let deflated = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated).compression_level(Some(3));
-        let mut put = |name: &str, options: SimpleFileOptions, bytes: &[u8]| -> Result<(), Error> {
-            z.start_file(name, options).map_err(|e| io(&e))?;
-            z.write_all(bytes).map_err(|e| io(&e))
-        };
+        let mut put =
+            |name: &str, compression: Compression, bytes: &[u8]| -> Result<(), Error> { z.add(name, bytes, compression).map_err(|e| io(&e)) };
         put("canvas.fig", stored, package.canvas)?;
         if let Some(t) = package.thumbnail {
             put("thumbnail.png", stored, t)?;
@@ -213,7 +199,6 @@ pub fn write_archive(package: &Package) -> Result<Vec<u8>, Error> {
             }
             put(&format!("images/{name}"), stored, bytes)?;
         }
-        z.finish().map_err(|e| io(&e))?;
     }
-    Ok(buf.into_inner())
+    z.finish().map_err(|e| io(&e))
 }

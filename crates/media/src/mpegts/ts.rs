@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use super::es::Splitter;
 use super::pes::{self, PesHeader};
-use super::{ByteSource, Codec, Error, File, Format, Result, Stream, StreamId, Unit, Unwrap, read_some};
+use super::{ByteSource, ClockRange, Codec, Error, File, Format, Result, Stream, StreamId, Unit, Unwrap, read_some};
 
 /// Byte-wise table for the MSB-first CRC-32 (polynomial 0x04C11DB7): entry `i` is the CRC register
 /// after shifting the byte `i` through eight bit steps.
@@ -83,6 +83,54 @@ fn packet(p: &[u8]) -> std::result::Result<Packet<'_>, Bad> {
     }
     let has_payload = afc & 1 != 0;
     Ok(Packet { pusi, pid, cc, has_payload, discontinuity, pcr, payload: if has_payload { &p[start..188] } else { &[] } })
+}
+
+/// `(transport_error_indicator, scrambled)` of a packet whose first byte is the sync byte (H.222.0
+/// §2.4.3.3). Both are false for anything without a sync byte or too short for the header.
+fn skip_flags(p: &[u8]) -> (bool, bool) {
+    match (p.first(), p.get(1), p.get(3)) {
+        (Some(0x47), Some(b1), Some(b3)) => (b1 & 0x80 != 0, b3 >> 6 != 0),
+        _ => (false, false),
+    }
+}
+
+/// Drops an exact duplicate packet (§2.4.3.3: a packet may be sent twice, same continuity counter
+/// and same content). Conservative: only a payload-bearing packet with the previous payload-bearing
+/// packet's counter and identical payload bytes counts; a packet that signals a discontinuity
+/// starts a new sequence and is never a duplicate; anything else is kept.
+struct DupGuard {
+    cc: Option<u8>,
+    len: usize,
+    data: [u8; 188],
+}
+
+impl Default for DupGuard {
+    fn default() -> Self {
+        Self { cc: None, len: 0, data: [0; 188] }
+    }
+}
+
+impl DupGuard {
+    /// Whether `pk` repeats the previous packet of its PID; remembers `pk` as the previous one.
+    fn is_dup(&mut self, pk: &Packet<'_>) -> bool {
+        if pk.discontinuity {
+            // a restart: the saved counter and payload belong to the old sequence, even when
+            // this packet carries only an adaptation field
+            self.cc = None;
+        }
+        if !pk.has_payload {
+            return false;
+        }
+        let dup = !pk.discontinuity && self.cc == Some(pk.cc) && self.data.get(..self.len) == Some(pk.payload);
+        if !dup {
+            self.cc = Some(pk.cc);
+            self.len = pk.payload.len().min(self.data.len());
+            if let (Some(dst), Some(src)) = (self.data.get_mut(..self.len), pk.payload.get(..self.len)) {
+                dst.copy_from_slice(src);
+            }
+        }
+        dup
+    }
 }
 
 /// Reassembles a PES header that may span packets; yields each packet's elementary-stream bytes.
@@ -181,6 +229,7 @@ struct EsState {
     split: Splitter,
     asm: PesAsm,
     cc: Option<u8>,
+    dup: DupGuard,
 }
 
 /// Map a PMT stream_type (and the ES descriptors) to a codec. `hdmv`: a Blu-ray / AVCHD stream
@@ -240,7 +289,8 @@ fn language(desc: &[u8]) -> Option<String> {
         let (tag, len) = (desc[i], desc[i + 1] as usize);
         if tag == 0x0A && len >= 3 {
             let b = desc.get(i + 2..i + 5)?;
-            return Some(String::from_utf8_lossy(b).trim().to_string()).filter(|s| !s.is_empty());
+            // ISO 639-2 codes are three ASCII letters; anything else is garbage
+            return b.iter().all(u8::is_ascii_alphabetic).then(|| b.to_ascii_lowercase().iter().map(|&c| c as char).collect());
         }
         i += 2 + len;
     }
@@ -285,32 +335,11 @@ fn resync(block: &[u8], from: usize, packet_size: usize, sync_offset: usize, at_
     (i, true)
 }
 
-/// PCR values unwrapped across the 33-bit base wrap, with the range seen.
-#[derive(Default)]
-struct PcrTrack {
-    unwrap: i64,
-    last: Option<i64>,
-    range: Option<(i64, i64)>,
-}
-
-impl PcrTrack {
-    fn update(&mut self, pcr: i64) {
-        // 33-bit base × 300 wraps at 2^33·300
-        let wrap = (1i64 << 33) * 300;
-        let mut v = pcr + self.unwrap;
-        if let Some(l) = self.last
-            && v < l - wrap / 2
-        {
-            self.unwrap += wrap;
-            v += wrap;
-        }
-        self.last = Some(v);
-        self.range = Some(self.range.map_or((v, v), |(a, b)| (a.min(v), b.max(v))));
-    }
-}
-
 /// Register the elementary streams a (CRC-checked) PMT section announces and that are not yet known.
-fn add_pmt_streams(sec: &[u8], packet_size: usize, es: &mut HashMap<u16, EsState>, order: &mut Vec<u16>) {
+/// For a `later` PMT version, returns whether it changed a known stream's type or left one out.
+fn add_pmt_streams(sec: &[u8], packet_size: usize, later: bool, es: &mut HashMap<u16, EsState>, order: &mut Vec<u16>) -> bool {
+    let mut changed = false;
+    let mut listed: Vec<u16> = Vec::new();
     let pinfo = (((sec[10] & 0x0F) as usize) << 8) | sec[11] as usize;
     let prog_desc = sec.get(12..12 + pinfo).unwrap_or(&[]);
     let hdmv = packet_size == 192 || prog_desc.windows(4).any(|w| w == b"HDMV");
@@ -322,7 +351,11 @@ fn add_pmt_streams(sec: &[u8], packet_size: usize, es: &mut HashMap<u16, EsState
         let ilen = (((sec[i + 3] & 0x0F) as usize) << 8) | sec[i + 4] as usize;
         let desc = sec.get(i + 5..(i + 5 + ilen).min(end)).unwrap_or(&[]);
         i += 5 + ilen;
-        if es.contains_key(&pid) {
+        listed.push(pid);
+        if let Some(old) = es.get(&pid) {
+            if later && old.stream.stream_type != st {
+                changed = true;
+            }
             continue;
         }
         let mut codec = codec_of(st, desc, hdmv);
@@ -339,8 +372,120 @@ fn add_pmt_streams(sec: &[u8], packet_size: usize, es: &mut HashMap<u16, EsState
             pes_packets: 0,
             skipped_bytes: 0,
         };
-        es.insert(pid, EsState { stream, split: Splitter::new(&codec), asm: PesAsm::default(), cc: None });
+        es.insert(pid, EsState { stream, split: Splitter::new(&codec), asm: PesAsm::default(), cc: None, dup: DupGuard::default() });
         order.push(pid);
+    }
+    changed || (later && es.keys().any(|p| !listed.contains(p)))
+}
+
+/// The PSI state gathered while scanning: the selected program and its PMT, the PMT's PCR_PID
+/// and whether a later PMT version added streams mid-stream.
+#[derive(Default)]
+struct PmtState {
+    pmt_pid: Option<u16>,
+    program: Option<u16>,
+    pmt: Psi,
+    pmt_version: Option<u8>,
+    pcr_pid: Option<u16>,
+    pmt_changed: bool,
+}
+
+/// One program clock across every PCR_PID that is active in packet order. Until the first PMT
+/// names the clock, each PID carrying a PCR keeps its own candidate (a fixed-size min/max, so at
+/// most one per 13-bit PID); the named PID's candidate becomes the clock. Without a PMT, the first
+/// PID carrying a PCR stands in.
+#[derive(Default)]
+struct ProgramClock {
+    clock: ClockRange,
+    candidates: HashMap<u16, ClockRange>,
+    first_pid: Option<u16>,
+}
+
+impl ProgramClock {
+    /// A PCR on `pid`, with the PMT's PCR_PID so far.
+    fn push(&mut self, pcr_pid: Option<u16>, pid: u16, pcr: i64) {
+        match pcr_pid {
+            Some(p) if p == pid => self.clock.push(pcr),
+            Some(_) => {}
+            None => {
+                self.first_pid.get_or_insert(pid);
+                self.candidates.entry(pid).or_default().push(pcr);
+            }
+        }
+    }
+
+    /// The first PMT names `pid`: the PCRs it carried before count, the other candidates go
+    /// (0x1fff, "no PCR PID", has none).
+    fn named(&mut self, pid: u16) {
+        self.clock = self.candidates.remove(&pid).unwrap_or_default();
+        self.candidates = HashMap::new();
+    }
+
+    fn range(&self, pcr_pid: Option<u16>) -> Option<(i64, i64)> {
+        match (pcr_pid, self.first_pid) {
+            (None, Some(pid)) => self.candidates.get(&pid).and_then(ClockRange::range),
+            _ => self.clock.range(),
+        }
+    }
+}
+
+/// Feed one PAT section stream: the first program's PMT PID is chosen; later PAT repeats
+/// cannot change it.
+fn feed_pat(pk: &Packet<'_>, pat: &mut Psi, pmt: &mut PmtState, crc_errors: &mut u64) {
+    for sec in pat.feed(pk.pusi, pk.payload) {
+        if sec.len() < 12 || sec[0] != 0 {
+            continue;
+        }
+        if sec[5] & 1 == 0 {
+            // not yet applicable (current_next_indicator 0)
+            continue;
+        }
+        if crc32_mpeg(&sec) != 0 {
+            *crc_errors += 1;
+            continue;
+        }
+        let body = &sec[8..sec.len() - 4];
+        for e in body.as_chunks::<4>().0 {
+            let num = u16::from_be_bytes([e[0], e[1]]);
+            let pid = (((e[2] & 0x1F) as u16) << 8) | e[3] as u16;
+            if num != 0 && pmt.pmt_pid.is_none() {
+                pmt.pmt_pid = Some(pid);
+                pmt.program = Some(num);
+            }
+        }
+    }
+}
+
+/// Feed one PMT section stream: the PMT's PCR_PID becomes the file clock and new PIDs are
+/// registered; a later PMT version may only add PIDs, existing streams are never re-mapped or
+/// dropped.
+fn feed_pmt<'a>(pk: &Packet<'a>, pmt: &mut PmtState, packet_size: usize, es: &mut HashMap<u16, EsState>, order: &mut Vec<u16>, crc_errors: &mut u64) {
+    for sec in pmt.pmt.feed(pk.pusi, pk.payload) {
+        if sec.len() < 16 || sec[0] != 2 {
+            continue;
+        }
+        // current_next_indicator 0: not yet applicable; a PMT is one section (0 of 0)
+        if sec[5] & 1 == 0 || sec[6] != 0 || sec[7] != 0 {
+            continue;
+        }
+        if Some(u16::from_be_bytes([sec[3], sec[4]])) != pmt.program {
+            continue;
+        }
+        if crc32_mpeg(&sec) != 0 {
+            *crc_errors += 1;
+            continue;
+        }
+        let version = (sec[5] >> 1) & 0x1F;
+        if pmt.pmt_version == Some(version) {
+            // a repeat of the PMT already used: no need to check it again
+            continue;
+        }
+        let later = pmt.pmt_version.is_some();
+        pmt.pmt_version = Some(version);
+        pmt.pcr_pid = Some((((sec[8] & 0x1F) as u16) << 8) | sec[9] as u16);
+        if add_pmt_streams(&sec, packet_size, later, es, order) {
+            pmt.pmt_changed = true;
+        }
     }
 }
 
@@ -351,15 +496,15 @@ pub(crate) fn scan<S: ByteSource + ?Sized>(src: &S, packet_size: usize, sync_off
     let mut off = first_sync(&head[..n], packet_size, sync_offset).ok_or(Error::NotMpeg)? as u64;
     let mut warnings: Vec<String> = Vec::new();
     let mut pat = Psi::default();
-    let mut pmt_pid: Option<u16> = None;
-    let mut program = None;
-    let mut pmt = Psi::default();
+    let mut pmt = PmtState::default();
     let mut es: HashMap<u16, EsState> = HashMap::new();
     let mut order: Vec<u16> = Vec::new();
-    let mut pmt_version: Option<u8> = None;
+    // one timestamp unwrapper for the program: its streams share one clock, so a stream whose
+    // first timestamp lies just after the 33-bit wrap stays in step with one just before it
     let mut unwrap = Unwrap::default();
-    let mut pcr_track = PcrTrack::default();
+    let mut pcr_clock = ProgramClock::default();
     let (mut lost_sync, mut cc_errors, mut crc_errors) = (0u64, 0u64, 0u64);
+    let (mut tei_dropped, mut scrambled, mut duplicates) = (0u64, 0u64, 0u64);
     const BLOCK: usize = 4096;
     let mut block = vec![0u8; BLOCK * packet_size];
     let mut bad_adaptation = 0u64;
@@ -376,6 +521,13 @@ pub(crate) fn scan<S: ByteSource + ?Sized>(src: &S, packet_size: usize, sync_off
         while p + packet_size <= got {
             let pos = off + p as u64;
             let raw = &block[p..p + packet_size];
+            let (tei, is_scrambled) = skip_flags(&raw[sync_offset..]);
+            if tei {
+                // transport_error_indicator: the payload (and the header) cannot be trusted
+                tei_dropped += 1;
+                p += packet_size;
+                continue;
+            }
             let pk = match packet(&raw[sync_offset..]) {
                 Ok(pk) => pk,
                 Err(Bad::Adaptation) => {
@@ -396,48 +548,35 @@ pub(crate) fn scan<S: ByteSource + ?Sized>(src: &S, packet_size: usize, sync_off
             };
             p += packet_size;
             if let Some(pcr) = pk.pcr {
-                pcr_track.update(pcr);
+                pcr_clock.push(pmt.pcr_pid, pk.pid, pcr);
             }
-            if pk.pid == 0 {
-                for sec in pat.feed(pk.pusi, pk.payload) {
-                    if sec.len() < 12 || sec[0] != 0 {
-                        continue;
-                    }
-                    if crc32_mpeg(&sec) != 0 {
-                        crc_errors += 1;
-                        continue;
-                    }
-                    let body = &sec[8..sec.len() - 4];
-                    for e in body.as_chunks::<4>().0 {
-                        let num = u16::from_be_bytes([e[0], e[1]]);
-                        let pid = (((e[2] & 0x1F) as u16) << 8) | e[3] as u16;
-                        if num != 0 && pmt_pid.is_none() {
-                            pmt_pid = Some(pid);
-                            program = Some(num);
-                        }
-                    }
+            if is_scrambled {
+                // encrypted payload is noise to the splitter; keep the counter in step
+                scrambled += 1;
+                if let Some(e) = es.get_mut(&pk.pid)
+                    && pk.has_payload
+                {
+                    e.cc = Some(pk.cc);
                 }
                 continue;
             }
-            if Some(pk.pid) == pmt_pid {
-                for sec in pmt.feed(pk.pusi, pk.payload) {
-                    if sec.len() < 16 || sec[0] != 2 {
-                        continue;
-                    }
-                    if crc32_mpeg(&sec) != 0 {
-                        crc_errors += 1;
-                        continue;
-                    }
-                    let version = (sec[5] >> 1) & 0x1F;
-                    if pmt_version == Some(version) {
-                        continue;
-                    }
-                    pmt_version = Some(version);
-                    add_pmt_streams(&sec, packet_size, &mut es, &mut order);
+            if pk.pid == 0 {
+                feed_pat(&pk, &mut pat, &mut pmt, &mut crc_errors);
+                continue;
+            }
+            if Some(pk.pid) == pmt.pmt_pid {
+                let had_pcr_pid = pmt.pcr_pid.is_some();
+                feed_pmt(&pk, &mut pmt, packet_size, &mut es, &mut order, &mut crc_errors);
+                if !had_pcr_pid && let Some(pid) = pmt.pcr_pid {
+                    pcr_clock.named(pid);
                 }
                 continue;
             }
             let Some(e) = es.get_mut(&pk.pid) else { continue };
+            if e.dup.is_dup(&pk) {
+                duplicates += 1;
+                continue;
+            }
             if pk.has_payload {
                 if let Some(prev) = e.cc
                     && !pk.discontinuity
@@ -469,10 +608,22 @@ pub(crate) fn scan<S: ByteSource + ?Sized>(src: &S, packet_size: usize, sync_off
     if cc_errors > 0 {
         warnings.push(format!("{cc_errors} continuity counter error(s)"));
     }
+    if tei_dropped > 0 {
+        warnings.push(format!("{tei_dropped} packet(s) with the transport error indicator dropped"));
+    }
+    if scrambled > 0 {
+        warnings.push(format!("{scrambled} scrambled packet(s) skipped"));
+    }
+    if duplicates > 0 {
+        warnings.push(format!("{duplicates} duplicate packet(s) dropped"));
+    }
+    if pmt.pmt_changed {
+        warnings.push("program map table changed mid-stream; new streams were added, changes to or removal of known ones ignored".into());
+    }
     if crc_errors > 0 {
         warnings.push(format!("{crc_errors} PSI section(s) with bad CRC"));
     }
-    if pmt_pid.is_none() {
+    if pmt.pmt_pid.is_none() {
         warnings.push("no program association table".into());
     }
     let mut streams = Vec::new();
@@ -486,7 +637,8 @@ pub(crate) fn scan<S: ByteSource + ?Sized>(src: &S, packet_size: usize, sync_off
         }
         streams.push(e.stream);
     }
-    Ok(File { format: Format::Ts { packet_size, sync_offset }, streams, program, pcr_range: pcr_track.range, warnings })
+    let pcr_range = pcr_clock.range(pmt.pcr_pid);
+    Ok(File { format: Format::Ts { packet_size, sync_offset }, streams, program: pmt.program, pcr_range, warnings })
 }
 
 /// Collect unit `u` of stream `st`: from the packet at `u.pos`, the PID's elementary-stream bytes.
@@ -496,6 +648,7 @@ pub(crate) fn read<S: ByteSource + ?Sized>(src: &S, packet_size: usize, sync_off
     let mut skip = u.offset as usize;
     let mut off = u.pos;
     let mut asm = PesAsm::default();
+    let mut dup = DupGuard::default();
     let mut first = true;
     let mut block = vec![0u8; 512 * packet_size];
     while out.len() < need {
@@ -506,12 +659,15 @@ pub(crate) fn read<S: ByteSource + ?Sized>(src: &S, packet_size: usize, sync_off
         }
         for k in 0..whole {
             let raw = &block[k * packet_size..(k + 1) * packet_size];
+            if skip_flags(&raw[sync_offset..]).0 {
+                continue;
+            }
             let pk = match packet(&raw[sync_offset..]) {
                 Ok(pk) => pk,
                 Err(Bad::Sync) => return Ok(()),
                 Err(Bad::Adaptation) => continue,
             };
-            if pk.pid != pid {
+            if pk.pid != pid || skip_flags(&raw[sync_offset..]).1 || dup.is_dup(&pk) {
                 continue;
             }
             // a unit starting in a PES packet's first packet: the header is skipped
@@ -555,5 +711,39 @@ mod tests {
         assert!(asm.dropping && asm.hdr.is_empty());
         let (h, es) = asm.packet(true, &[0, 0, 1, 0xC0, 0, 0, 0x80, 0, 0, 0xAA, 0xBB]);
         assert_eq!((h.map(|h| h.header_len), es), (Some(9), &[0xAA, 0xBB][..]));
+    }
+}
+
+#[cfg(test)]
+mod dup_tests {
+    use super::*;
+
+    #[test]
+    fn a_discontinuity_packet_is_never_a_duplicate() {
+        let payload = [7u8; 20];
+        let pk = |discontinuity| Packet { pusi: true, pid: 0x100, cc: 3, has_payload: true, discontinuity, pcr: None, payload: &payload };
+        let mut g = DupGuard::default();
+        assert!(!g.is_dup(&pk(false)));
+        assert!(!g.is_dup(&pk(true)), "same counter and payload, but the stream restarts here");
+        assert!(g.is_dup(&pk(false)), "the discontinuity packet is the new reference");
+    }
+
+    #[test]
+    fn an_adaptation_only_discontinuity_resets_the_duplicate_history() {
+        let payload = [7u8; 20];
+        let pk = |has_payload, discontinuity| Packet {
+            pusi: true,
+            pid: 0x100,
+            cc: 3,
+            has_payload,
+            discontinuity,
+            pcr: None,
+            payload: if has_payload { &payload } else { &[] },
+        };
+        let mut g = DupGuard::default();
+        assert!(!g.is_dup(&pk(true, false)));
+        assert!(!g.is_dup(&pk(false, true)), "adaptation-only packets are never dropped");
+        assert!(!g.is_dup(&pk(true, false)), "payload A with CC=3 after the restart is new");
+        assert!(g.is_dup(&pk(true, false)), "a real repeat is still dropped");
     }
 }
