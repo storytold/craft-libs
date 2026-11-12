@@ -13,8 +13,11 @@ holds `upstream_revision`. `local_patches` describes each local change.
 
 ## Local changes
 
+The files under Local changes are `src/sweep/sweep_line.rs` and `src/curve/mod.rs`.
+
 | Change | Code comment label | Touches | Tests |
 |---|---|---|---|
+| The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. | `Craft patch (exited slots)` | `src/sweep/sweep_line.rs` | None |
 | `intersect_cubics_with_precomputed_decomp` compares the precomputed approximations of two pieces with `ish_tolerance` before it cuts either cubic to their shared y-range, and when that gives one `Left` or `Right` interval it records that order without cutting them | `Craft patch (approximation first)` | `src/curve/mod.rs` | `curve::test::approximation_first_keeps_the_curve_order` |
 
 Every change here updates this table and `SOURCE.json` in the same commit.
