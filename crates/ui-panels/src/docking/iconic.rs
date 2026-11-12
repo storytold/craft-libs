@@ -12,18 +12,22 @@ use crate::contract::{
 };
 use crate::menu::GroupItem;
 use crate::primitives::IconSpec;
+use crate::primitives::TextRun;
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
-use crate::style::{ComponentStyle, Corners, StyleCx, SurfaceKind};
+use crate::style::{ComponentStyle, Corners, StyleColor, StyleCx, SurfaceKind};
 use craft_behavior::dock::{Column, DockEdge, Group};
-use craft_behavior::{Axis, CursorIcon, DockSide, IconId, Metrics, PartKey, PressPhase, Sense, Value};
+use craft_behavior::{Axis, CursorIcon, DockSide, Metrics, PartKey, PressPhase, Sense, Value};
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::hash::Hash;
 
 #[cfg(feature = "testing")]
 mod stories;
+#[cfg(feature = "testing")]
+mod trials;
 
 const CELL: PartKey = PartKey::new("cell");
+const NAME: PartKey = PartKey::new("name");
 const GRIP: PartKey = PartKey::new("grip");
 const EDGE: PartKey = PartKey::new("edge");
 
@@ -39,13 +43,24 @@ pub struct IconicSizes {
     pub grip: f32,
     /// The room between two icon groups.
     pub separator: f32,
+    /// The column width from which each cell shows its panel's name beside its icon.
+    pub labels: f32,
 }
+
+/// The column width, in rail widths, from which the cells show their panels' names: 96 points at the Compact size.
+const LABELS_IN_RAIL_WIDTHS: f32 = 2.4;
 
 impl IconicSizes {
     /// The sizes of the style context `cx`.
     pub fn style(cx: &StyleCx<'_>) -> Self {
         let size = &cx.tokens.size;
-        IconicSizes { column: DockSizes::style(cx), cell: size.rail.button, grip: size.handle.sm, separator: cx.tokens.space.gap.tight }
+        IconicSizes {
+            column: DockSizes::style(cx),
+            cell: size.rail.button,
+            grip: size.handle.sm,
+            separator: cx.tokens.space.gap.tight,
+            labels: size.rail.width * LABELS_IN_RAIL_WIDTHS,
+        }
     }
 }
 
@@ -86,9 +101,17 @@ pub struct IconicColumnStyle {
     #[style(metrics)]
     metrics: Metrics,
     sizes: IconicSizes,
+    /// The ink of a panel's name in a wide column.
+    name: StyleColor,
+    /// The ink of the name of the panel whose flyout is open.
+    name_selected: StyleColor,
+    /// The room between an icon and its name.
+    name_gap: f32,
 }
 
-/// A column collapsed to icons: the column bar over icon groups, one cell per panel. A click or Enter on an icon
+/// A column collapsed to icons: the column bar over icon groups, one cell per panel. A panel without an icon shows the
+/// first letter of its name in a box. A column widened past `IconicSizes::labels` shows each panel's name beside its
+/// icon, cut with an ellipsis to the cell; a click or drag on the name acts as one on the icon. A click or Enter on an icon
 /// opens the flyout of its panel beside the column, switches it to that panel or closes it; one flyout is open at a
 /// time. A drag of an icon starts a move of its panel, a drag of the band on top of a group a move of the group, a
 /// drag of the bar beside its button a move of the column; each starts through the drag session, and a press outside
@@ -134,8 +157,11 @@ pub struct IconicColumn<'a, P: Value + Hash + 'static> {
 /// Where the parts of an iconic column sit.
 struct Plan {
     bar: Rect,
-    /// `(group, panel, rect)` of each icon cell, top to bottom.
+    /// `(group, panel, rect)` of each icon cell, top to bottom: the whole row, or in a wide column the icon's square at
+    /// the reading start.
     cells: Vec<(usize, usize, Rect)>,
+    /// The rest of each row in a wide column, where the panel's name shows; empty in a narrow column.
+    names: Vec<Rect>,
     /// `(group, rect)` of each group's drag band.
     grips: Vec<(usize, Rect)>,
     /// `(group, rect)` of the cells of each group.
@@ -217,23 +243,31 @@ impl<'a, P: Value + Hash + 'static> IconicColumn<'a, P> {
         self.column.groups.get(group).and_then(|group| group.panels.get(panel))
     }
 
-    fn plan(&self, rect: Rect, sizes: &IconicSizes) -> Plan {
+    fn plan(&self, rect: Rect, sizes: &IconicSizes, rtl: bool) -> Plan {
         let bar = Rect::from_min_max(rect.min, Pos2::new(rect.right(), (rect.top() + sizes.column.bar).min(rect.bottom())));
         let body = Rect::from_min_max(Pos2::new(rect.left(), bar.bottom()), rect.max);
-        let (mut y, mut cells, mut grips, mut groups) = (body.top(), Vec::new(), Vec::new(), Vec::new());
+        let wide = body.width() >= sizes.labels;
+        let (mut y, mut cells, mut names, mut grips, mut groups) = (body.top(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for (at, group) in self.column.groups.iter().enumerate() {
             if at > 0 {
                 y += sizes.separator;
             }
             let top = y;
             for panel in 0..group.panels.len() {
-                cells.push((at, panel, Rect::from_min_size(Pos2::new(body.left(), y), Vec2::new(body.width(), sizes.cell))));
+                let row = Rect::from_min_size(Pos2::new(body.left(), y), Vec2::new(body.width(), sizes.cell));
+                if wide {
+                    let (icon, name) = split_row(row, sizes.cell, rtl);
+                    cells.push((at, panel, icon));
+                    names.push(name);
+                } else {
+                    cells.push((at, panel, row));
+                }
                 y += sizes.cell;
             }
             grips.push((at, Rect::from_min_max(Pos2::new(body.left(), top), Pos2::new(body.right(), (top + sizes.grip).min(y)))));
             groups.push((at, Rect::from_min_max(Pos2::new(body.left(), top), Pos2::new(body.right(), y))));
         }
-        Plan { bar, cells, grips, groups, body }
+        Plan { bar, cells, names, grips, groups, body }
     }
 
     /// The height of the flyout of `group`: the group's own height, else what its panels ask for, else the least.
@@ -271,7 +305,14 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
     }
 
     fn style(cx: &StyleCx<'_>, _: IconicColumnStyleKey<P>) -> IconicColumnStyle {
-        IconicColumnStyle { metrics: Metrics::new(), sizes: IconicSizes::style(cx) }
+        let colors = &cx.tokens.color;
+        IconicColumnStyle {
+            metrics: Metrics::new(),
+            sizes: IconicSizes::style(cx),
+            name: cx.color(colors.text.normal),
+            name_selected: cx.color(colors.accent.text),
+            name_gap: cx.tokens.space.gap.item,
+        }
     }
 
     fn sense(&self) -> Sense {
@@ -286,7 +327,7 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
     /// top of the first icon over the band, which is declared first.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let sizes = cx.style.sizes;
-        let plan = self.plan(rect, &sizes);
+        let plan = self.plan(rect, &sizes, cx.flow.is_rtl());
         self.bar = plan.bar;
         let (chevron, _) = bar_slots(plan.bar, self.edge, cx.flow.is_rtl());
         let name = chevron_name(&cx.words::<DockWords>(), false);
@@ -300,6 +341,9 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
                 .tooltip(label)
                 .toggles_at("flyout", at)
                 .on_click();
+            if let Some(name) = plan.names.get(at) {
+                cx.part(NAME.at(at as u64), *name).sense(Sense::CLICK | Sense::DRAG).keyboard_via(CELL).toggles_at("flyout", at).on_click();
+            }
         }
         for (group, grip) in &plan.grips {
             cx.part(GRIP.at(*group as u64), *grip)
@@ -334,7 +378,8 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
             }
         }
         for (at, (group, panel, cell)) in plan.cells.iter().enumerate() {
-            if dragging(cx.part(CELL.at(at as u64)).press.phase)
+            let named = cx.part_if_declared(NAME.at(at as u64)).is_some_and(|name| dragging(name.press.phase));
+            if (dragging(cx.part(CELL.at(at as u64)).press.phase) || named)
                 && let Some(panel) = self.panel(*group, *panel)
             {
                 let label = Label::from((self.spec)(panel).label.as_str().to_owned());
@@ -394,8 +439,15 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
         for (at, (group, panel)) in flat.iter().enumerate() {
             let Some(panel) = self.panel(*group, *panel) else { continue };
             let spec = (self.spec)(panel);
-            let icon: IconSpec<'static> = spec.icon.unwrap_or_else(|| IconId::new("more").into());
-            ui.face(CELL.at(at as u64), IconButton::new(icon).label(spec.label).selected(self.shown == Some(at)));
+            let icon: IconSpec<'static> = spec.icon.unwrap_or_else(|| IconSpec::initial(spec.label.as_str()));
+            let selected = self.shown == Some(at);
+            if let Some(name) = self.laid.as_ref().and_then(|plan| plan.names.get(at)) {
+                let style = &cx.style;
+                let room = if cx.flow.is_rtl() { name.with_max_x(name.max.x - style.name_gap) } else { name.with_min_x(name.min.x + style.name_gap) };
+                let ink = if selected { style.name_selected } else { style.name };
+                let _ = ui.draw().text(room, &TextRun::new(spec.label.as_str().to_owned()).color(ink).elide());
+            }
+            ui.face(CELL.at(at as u64), IconButton::new(icon).label(spec.label).selected(selected));
         }
         // The edge's line lies on the column's inner edge; its handle stays inside the column.
         let (rect, edge) = (cx.rect, self.edge_divider(cx.rect, &cx.style.sizes.column));
@@ -472,6 +524,18 @@ impl<P: Value + Hash + 'static> IconicColumn<'_, P> {
             DockTargets::register(ctx, self.dock, DockSpot::group(anchor.clone(), DockSide::Top), upper);
             DockTargets::register(ctx, self.dock, DockSpot::group(anchor.clone(), DockSide::Bottom), lower);
         }
+    }
+}
+
+/// A row of a wide column split into the icon's square at the reading start, `side` wide, and the room for the name.
+fn split_row(row: Rect, side: f32, rtl: bool) -> (Rect, Rect) {
+    let side = side.min(row.width());
+    if rtl {
+        let icon = Rect::from_min_max(Pos2::new(row.right() - side, row.top()), row.max);
+        (icon, Rect::from_min_max(row.min, Pos2::new(icon.left(), row.bottom())))
+    } else {
+        let icon = Rect::from_min_max(row.min, Pos2::new(row.left() + side, row.bottom()));
+        (icon, Rect::from_min_max(Pos2::new(icon.right(), row.top()), row.max))
     }
 }
 

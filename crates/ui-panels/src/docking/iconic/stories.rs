@@ -13,8 +13,9 @@ use craft_behavior::Mixed;
 use craft_behavior::dock::{Column, Group};
 use egui::Ui;
 
+/// Panels without icons, so each cell shows the first letter of its panel's name.
 fn spec(panel: &u8) -> PanelSpec {
-    PanelSpec::new(format!("Panel {panel}"))
+    PanelSpec::new(["Brushes", "Swatches", "History"].get(usize::from(*panel)).copied().unwrap_or("Panel"))
 }
 
 #[story(IconicColumn<'static, u8>, covers = [Default], drive = Drive::Never)]

@@ -48,6 +48,9 @@ pub enum IconSource<'a> {
     /// A filled circle as wide as the icon's square, in the spec's colour or ink (`IconSpec::data_color` for a colour
     /// from data).
     Disc,
+    /// A letter in an outlined box, in the spec's colour or ink: the icon of something that has none, from the first
+    /// letter of its name. Painted by [`Draw::icon`](super::Draw::icon) as text, in the theme's fonts.
+    Initial(char),
 }
 
 impl std::fmt::Debug for IconSource<'_> {
@@ -57,6 +60,7 @@ impl std::fmt::Debug for IconSource<'_> {
             IconSource::Glyph(_) => f.write_str("Glyph(..)"),
             IconSource::Swatch(color) => f.debug_tuple("Swatch").field(color).finish(),
             IconSource::Disc => f.write_str("Disc"),
+            IconSource::Initial(letter) => f.debug_tuple("Initial").field(letter).finish(),
         }
     }
 }
@@ -69,6 +73,7 @@ impl PartialEq for IconSource<'_> {
             (IconSource::Glyph(a), IconSource::Glyph(b)) => std::ptr::addr_eq(*a, *b),
             (IconSource::Swatch(a), IconSource::Swatch(b)) => a == b,
             (IconSource::Disc, IconSource::Disc) => true,
+            (IconSource::Initial(a), IconSource::Initial(b)) => a == b,
             _ => false,
         }
     }
@@ -103,6 +108,13 @@ impl<'a> IconSpec<'a> {
     /// A swatch of `color`, painted by [`Draw::data_fill`](super::Draw::data_fill).
     pub fn swatch(color: Srgba) -> Self {
         IconSpec { source: IconSource::Swatch(color), ink: Ink::OnPanel, color: None, mirror: Mirror::Never, set: IconSet::default() }
+    }
+
+    /// The first letter of `name` in capitals, in an outlined box, in the panel ink: the icon of something that has
+    /// none. A blank name shows an empty box.
+    pub fn initial(name: &str) -> Self {
+        let letter = name.trim_start().chars().next().map_or(' ', |first| first.to_uppercase().next().unwrap_or(first));
+        IconSpec { source: IconSource::Initial(letter), ink: Ink::OnPanel, color: None, mirror: Mirror::Never, set: IconSet::default() }
     }
 
     /// A filled circle in the panel ink, or in the colour [`color`](Self::color) or [`data_color`](Self::data_color)
@@ -167,8 +179,8 @@ pub(crate) fn paint(painter: &Painter, tokens: &UiTokens, direction: Direction, 
     let side = rect.width().min(rect.height());
     let square = Rect::from_center_size(rect.center(), vec2(side, side));
     match &spec.source {
-        // `Draw::icon` paints swatches with the data-colour fill.
-        IconSource::Swatch(_) => {}
+        // `Draw::icon` paints swatches with the data-colour fill and initials as text.
+        IconSource::Swatch(_) | IconSource::Initial(_) => {}
         IconSource::Disc => {
             painter.circle_filled(square.center(), side / 2.0, color);
         }

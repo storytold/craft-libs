@@ -6,7 +6,7 @@ use super::rule::RuleKind;
 use super::surface::Surface;
 use super::text::{TextEnv, TextLayout, TextRun};
 use crate::fonts::stack_facts;
-use crate::style::{Corners, DataColor, Ink, StyleColor, SurfaceKind, SurfaceStyle, UiTokens, ink_color, rule_look, surface_style};
+use crate::style::{Corners, DataColor, Ink, StyleColor, SurfaceKind, SurfaceStyle, TypeRole, UiTokens, ink_color, rule_look, surface_style};
 use craft_i18n::Direction;
 use egui::epaint::{CircleShape, RectShape};
 use egui::{Color32, CornerRadius, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, TextureId, Vec2};
@@ -281,7 +281,23 @@ impl<'a> Draw<'a> {
             self.paint(&shape, None, Some(Stroke::new(self.width(StrokeWidth::Thin), edge)));
             return;
         }
+        if let super::IconSource::Initial(letter) = icon.source {
+            self.initial(rect, letter, icon.color.unwrap_or_else(|| StyleColor(ink_color(self.env.tokens, icon.ink))));
+            return;
+        }
         super::icon::paint(self.painter, self.env.tokens, self.env.direction, rect, icon);
+    }
+
+    /// `letter` in caption text centred in an outlined box that fills the square of `rect`'s shorter side.
+    fn initial(&self, rect: Rect, letter: char, color: StyleColor) {
+        let side = rect.width().min(rect.height());
+        let square = Rect::from_center_size(rect.center(), Vec2::splat(side));
+        let radius = UiTokens::corner(self.env.tokens.shape.radius.sm);
+        let width = self.width(StrokeWidth::Thin);
+        self.paint(&PaintShape::Rect(square.shrink(width / 2.0), radius), None, Some(Stroke::new(width, color.egui())));
+        let run = TextRun::new(letter.to_string()).role(TypeRole::Caption).color(color);
+        let layout = self.layout(&run, f32::INFINITY);
+        self.galley(square.center() - layout.size() / 2.0, &layout);
     }
 
     /// Paints the reset mark of `look` centred on `center`: the dot while the value `differs`, else the ring.
