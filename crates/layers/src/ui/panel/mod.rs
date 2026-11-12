@@ -177,6 +177,9 @@ pub struct LayersOutput<Id> {
     /// While rows are dragged and Preview on Canvas When Reordering Layers is on, the layer move the release would
     /// make, for the app's canvas preview; `None` otherwise.
     pub drop_preview: Option<LayerMove<Id>>,
+    /// The layer whose row is under the pointer, for the app's canvas outline of it (PhotoCraft's Move tool); `None`
+    /// over an effects or Smart Filter row and away from the rows.
+    pub hovered: Option<Id>,
     /// The panel.
     pub response: Response,
 }
@@ -386,12 +389,12 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
                 while let Some((key, _)) = stack.take_command::<LayersPanelKeys>() {
                     reported.extend(key.event(tree));
                 }
-                (reported, body.drop_preview)
+                (reported, body.drop_preview, body.hovered)
             });
         // Only the real run's result comes back, so the reveal's opens and the list's events are reported once.
         let mut events = events.into_inner();
-        let (body, drop_preview) = shown.inner.unwrap_or_default();
+        let (body, drop_preview, hovered) = shown.inner.unwrap_or_default();
         events.extend(body);
-        LayersOutput { events, drop_preview, response: shown.output }
+        LayersOutput { events, drop_preview, hovered, response: shown.output }
     }
 }

@@ -30,6 +30,8 @@ pub(super) struct BodyOutput<Id> {
     pub(super) response: egui::Response,
     /// The layer move a release of the held rows would make, while the option to preview it is on.
     pub(super) drop_preview: Option<LayerMove<Id>>,
+    /// The layer whose row the list shows hovered.
+    pub(super) hovered: Option<Id>,
 }
 
 /// Shows the list over `rows` and maps what it reports.
@@ -78,7 +80,13 @@ pub(super) fn show_body<T: LayerTree>(
     if let Some(key) = reveal_key {
         list = list.reveal(key);
     }
+    let mut hovered = None;
     let out = list.show_items(ui, rows, &mut |key, item| {
+        if item.row.hovered
+            && let LayerRowKey::Layer(id) = key
+        {
+            hovered = Some(id.clone());
+        }
         let row = build_row(cx, key).cells(item.cells()).state(item.row.clone());
         match rows.rows.get(item.at) {
             Some(shown) if shown.has_children => row.depth(shown.paint_depth).group(shown.open),
@@ -108,5 +116,5 @@ pub(super) fn show_body<T: LayerTree>(
         session.anchor = selection.anchor.as_ref().map(|key| LayerRowKey::Layer(key.layer().clone()));
         session.produced = layers;
     }
-    BodyOutput { events, response: out.response, drop_preview }
+    BodyOutput { events, response: out.response, drop_preview, hovered }
 }
