@@ -71,6 +71,16 @@ pub struct Variable {
     pub published: bool,
 }
 
+/// Decode the native published-library manifest.
+pub fn read_manifest(bytes: &[u8]) -> Result<Manifest, serde_json::Error> {
+    serde_json::from_slice(bytes)
+}
+
+/// Encode the native published-library manifest.
+pub fn write_manifest(manifest: &Manifest) -> Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(manifest)
+}
+
 /// Whether `id` is a valid stable library id in the native manifest.
 pub fn is_valid_id(id: &str) -> bool {
     (1..=MAX_ID_CHARS).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
@@ -92,7 +102,7 @@ pub fn write_members<'a, D: Serialize>(
     already_written: &BTreeSet<String>,
     images: impl IntoIterator<Item = (&'a str, &'a [u8])>,
 ) -> Result<(), super::ArchiveWriteError> {
-    let manifest_bytes = serde_json::to_vec(manifest)?;
+    let manifest_bytes = write_manifest(manifest)?;
     writer.add(MANIFEST, &manifest_bytes, super::Compression::Level(3))?;
     writer.add_document_json(DOCUMENT, document, image_index)?;
     for (hash, bytes) in images {
@@ -140,11 +150,11 @@ mod tests {
     #[test]
     fn manifest_wire_names_defaults_and_round_trip_match_native_contract() {
         let json = r#"{"id":"lib-1","components":[{"id":12,"set":true}],"styles":[{"id":"s","type":"paint"}],"collections":[{"id":"c"}],"variables":[{"id":"v","collection":"c","type":"color"}]}"#;
-        let manifest: Manifest = serde_json::from_str(json).unwrap();
+        let manifest = read_manifest(json.as_bytes()).unwrap();
         assert_eq!(manifest.components[0].id, 12);
         assert_eq!(manifest.styles[0].kind, "paint");
         assert_eq!(manifest.variables[0].kind, "color");
-        let encoded = serde_json::to_value(manifest).unwrap();
+        let encoded: serde_json::Value = serde_json::from_slice(&write_manifest(&manifest).unwrap()).unwrap();
         assert_eq!(encoded["styles"][0]["type"], "paint");
         assert!(encoded["styles"][0].get("kind").is_none());
         assert_eq!(encoded["variables"][0]["type"], "color");
@@ -177,6 +187,8 @@ mod tests {
         let mut archive = super::super::Archive::open(&bytes, super::super::ArchiveLimits { max_entries: 8, max_total_bytes: 1024 }).unwrap();
         assert!(archive.contains(MANIFEST));
         assert!(archive.contains(DOCUMENT));
+        let manifest_bytes = archive.read(MANIFEST, MAX_MANIFEST_BYTES).unwrap().unwrap();
+        assert_eq!(read_manifest(&manifest_bytes).unwrap(), manifest);
         assert!(archive.contains("library/images/stored"));
         assert!(!archive.contains("library/images/existing"));
         assert!(!archive.contains("library/images/../bad"));
