@@ -33,6 +33,130 @@ pub struct ParagraphListValues {
     pub bullet_font_style: Option<String>,
 }
 
+/// Paragraph border and shading values after the caller resolves model colours and enums.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ParagraphBoxValues {
+    pub shading_on: Option<bool>,
+    pub shading_color: Option<String>,
+    pub shading_tint: Option<f64>,
+    pub shading_offsets: Option<[f64; 4]>,
+    pub shading_overprint: Option<bool>,
+    pub border_on: Option<bool>,
+    pub border_color: Option<String>,
+    pub border_tint: Option<f64>,
+    pub border_weights: Option<[f64; 4]>,
+    pub border_offsets: Option<[f64; 4]>,
+    pub border_type: Option<String>,
+    pub border_cap: Option<String>,
+    pub border_join: Option<String>,
+    pub border_corners: Option<[(String, f64); 4]>,
+    pub border_width: Option<String>,
+    pub border_top: Option<String>,
+    pub border_bottom: Option<String>,
+    pub border_display_if_splits: Option<bool>,
+    pub border_merge: Option<bool>,
+    pub border_gap_color: Option<String>,
+    pub border_gap_tint: Option<f64>,
+    pub border_overprint: Option<bool>,
+    pub border_gap_overprint: Option<bool>,
+    pub shading_width: Option<String>,
+    pub shading_top: Option<String>,
+    pub shading_bottom: Option<String>,
+    pub shading_clip: Option<bool>,
+    pub shading_nonprinting: Option<bool>,
+    pub shading_corners: Option<[(String, f64); 4]>,
+}
+
+impl ParagraphBoxValues {
+    /// Writes IDML attributes and properties for paragraph borders and shading.
+    pub fn to_parts(&self) -> (Vec<(String, String)>, Vec<El>) {
+        use crate::value::num;
+
+        let mut attrs = Vec::new();
+        let mut props = Vec::new();
+        push_boolean(&mut attrs, "ParagraphShadingOn", self.shading_on);
+        if let Some(color) = &self.shading_color {
+            props.push(property("ParagraphShadingColor", "object", color.clone()));
+        }
+        push_number(&mut attrs, "ParagraphShadingTint", self.shading_tint);
+        push_boolean(&mut attrs, "ParagraphShadingOverprint", self.shading_overprint);
+        const SIDES: [&str; 4] = ["Top", "Left", "Bottom", "Right"];
+        if let Some(offsets) = self.shading_offsets {
+            for (side, value) in SIDES.iter().zip(offsets) {
+                push_number(&mut attrs, &format!("ParagraphShading{side}Offset"), Some(value));
+            }
+        }
+        push_boolean(&mut attrs, "ParagraphBorderOn", self.border_on);
+        if let Some(color) = &self.border_color {
+            props.push(property("ParagraphBorderColor", "object", color.clone()));
+        }
+        push_number(&mut attrs, "ParagraphBorderTint", self.border_tint);
+        push_boolean(&mut attrs, "ParagraphBorderOverprint", self.border_overprint);
+        if let Some(weights) = self.border_weights {
+            for (side, value) in SIDES.iter().zip(weights) {
+                push_number(&mut attrs, &format!("ParagraphBorder{side}LineWeight"), Some(value));
+            }
+        }
+        if let Some(offsets) = self.border_offsets {
+            for (side, value) in SIDES.iter().zip(offsets) {
+                push_number(&mut attrs, &format!("ParagraphBorder{side}Offset"), Some(value));
+            }
+        }
+        if let Some(kind) = &self.border_type {
+            props.push(property("ParagraphBorderType", "object", kind.clone()));
+        }
+        if let Some(cap) = &self.border_cap {
+            attrs.push(("ParagraphBorderStrokeEndCap".into(), cap.clone()));
+        }
+        if let Some(join) = &self.border_join {
+            attrs.push(("ParagraphBorderStrokeEndJoin".into(), join.clone()));
+        }
+        for (prefix, corners) in [("ParagraphBorder", &self.border_corners), ("ParagraphShading", &self.shading_corners)] {
+            if let Some(corners) = corners {
+                const CORNERS: [&str; 4] = ["TopLeft", "TopRight", "BottomRight", "BottomLeft"];
+                for ((shape, radius), corner) in corners.iter().zip(CORNERS) {
+                    attrs.push((format!("{prefix}{corner}CornerOption"), shape.clone()));
+                    attrs.push((format!("{prefix}{corner}CornerRadius"), num(*radius)));
+                }
+            }
+        }
+        for (key, value) in [
+            ("ParagraphBorderWidth", &self.border_width),
+            ("ParagraphBorderTopOrigin", &self.border_top),
+            ("ParagraphBorderBottomOrigin", &self.border_bottom),
+            ("ParagraphShadingWidth", &self.shading_width),
+            ("ParagraphShadingTopOrigin", &self.shading_top),
+            ("ParagraphShadingBottomOrigin", &self.shading_bottom),
+        ] {
+            if let Some(value) = value {
+                attrs.push((key.to_string(), value.clone()));
+            }
+        }
+        push_boolean(&mut attrs, "ParagraphBorderDisplayIfSplits", self.border_display_if_splits);
+        push_boolean(&mut attrs, "MergeConsecutiveParaBorders", self.border_merge);
+        if let Some(color) = &self.border_gap_color {
+            props.push(property("ParagraphBorderGapColor", "object", color.clone()));
+        }
+        push_number(&mut attrs, "ParagraphBorderGapTint", self.border_gap_tint);
+        push_boolean(&mut attrs, "ParagraphBorderGapOverprint", self.border_gap_overprint);
+        push_boolean(&mut attrs, "ParagraphShadingClipToFrame", self.shading_clip);
+        push_boolean(&mut attrs, "ParagraphShadingSuppressPrinting", self.shading_nonprinting);
+        (attrs, props)
+    }
+}
+
+fn push_boolean(attrs: &mut Vec<(String, String)>, key: &str, value: Option<bool>) {
+    if let Some(value) = value {
+        attrs.push((key.to_string(), if value { "true" } else { "false" }.to_string()));
+    }
+}
+
+fn push_number(attrs: &mut Vec<(String, String)>, key: &str, value: Option<f64>) {
+    if let Some(value) = value {
+        attrs.push((key.to_string(), crate::value::num(value)));
+    }
+}
+
 impl ParagraphListValues {
     pub fn from_el(el: &El) -> Self {
         let values = Values::of(el);
