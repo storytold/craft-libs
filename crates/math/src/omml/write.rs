@@ -491,3 +491,6 @@ fn run(w: &mut W, r: &MRun) {
     w.leaf("m:t", &[("xml:space", "preserve")], &r.text);
     w.close("m:r");
 }
+
+#[cfg(test)]
+mod tests;
