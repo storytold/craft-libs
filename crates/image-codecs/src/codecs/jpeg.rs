@@ -821,7 +821,10 @@ mod tests {
     fn lossless_and_twelve_bit_progressive_are_unsupported_not_damaged() {
         for marker in [0xC3, 0xC2] {
             let mut bytes = vec![0xFF, 0xD8, 0xFF, marker, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0];
-            bytes.extend_from_slice(&[0xFF, 0xDA, 0, 8, 1, 1, 0, 0, 0x3F, 0, 0x12, 0x34, 0xFF, 0xD9]);
+            // A progressive frame's first scan is a DC scan (Ss=Se=0); a
+            // sequential frame uses the full spectral range (Ss=0, Se=63).
+            let spectral_end = if marker == 0xC2 { 0 } else { 0x3F };
+            bytes.extend_from_slice(&[0xFF, 0xDA, 0, 8, 1, 1, 0, 0, spectral_end, 0, 0x12, 0x34, 0xFF, 0xD9]);
             let e = crate::decode(&bytes).unwrap_err();
             assert!(matches!(e, CodecError::Unsupported { .. }), "{marker:#x}: {e:?}");
         }
