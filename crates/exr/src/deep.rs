@@ -5,8 +5,9 @@
 //! sample data, then the compressed count table (cumulative within each row of the block) and the
 //! compressed sample data (row by row, each row channel by channel). The layout was checked
 //! against files written by the OpenEXR library. Deep data permits NONE, RLE, ZIPS and ZIP
-//! compression; the first three are read (one scan line per block keeps the count table
-//! unambiguous) and ZIP is [`Error::Unsupported`].
+//! compression; all four are read. NONE, RLE and ZIPS store one scan line per block; ZIP
+//! stores up to sixteen, and its count table and sample data are read as one multi-row
+//! block, the way a tile already is.
 //!
 //! [`decode_deep`] returns the samples ([`DeepImage`]); [`flatten`] composites them into a flat
 //! picture: samples sorted by Z, front-to-back `over` with premultiplied colour, un-premultiplied
@@ -263,7 +264,7 @@ fn decompress(compression: Compression, packed: &[u8], expected: usize, what: &s
             interleave_byte_blocks(&mut out)?;
             Ok(out)
         }
-        Compression::ZIP1 => {
+        Compression::ZIP1 | Compression::ZIP16 => {
             // Inflate straight into `out`, grown with `reserve_up_to` rather than by
             // `read_to_end`, whose doubling reserves past `expected`. Once `expected` bytes are
             // in, a one-byte read checks that the stream ends there.
@@ -294,7 +295,7 @@ fn decompress(compression: Compression, packed: &[u8], expected: usize, what: &s
             interleave_byte_blocks(&mut out)?;
             Ok(out)
         }
-        other => Err(unsup(format!("deep data with {other:?} compression (NONE, RLE and ZIPS are supported)"))),
+        other => Err(unsup(format!("deep data with {other:?} compression (NONE, RLE, ZIPS and ZIP are supported)"))),
     }
 }
 
@@ -337,8 +338,8 @@ fn decode_deep_meta(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Result<De
     let header_index = meta.headers.iter().position(|h| h.deep).ok_or_else(|| unsup("the file has no deep part"))?;
     let header = meta.headers.get(header_index).ok_or_else(|| unsup("the file has no deep part"))?;
     let compression = header.compression;
-    if !matches!(compression, Compression::Uncompressed | Compression::RLE | Compression::ZIP1) {
-        return Err(unsup(format!("deep data with {compression:?} compression (NONE, RLE and ZIPS are supported)")));
+    if !matches!(compression, Compression::Uncompressed | Compression::RLE | Compression::ZIP1 | Compression::ZIP16) {
+        return Err(unsup(format!("deep data with {compression:?} compression (NONE, RLE, ZIPS and ZIP are supported)")));
     }
 
     let dw = header.data_window();
@@ -405,9 +406,16 @@ fn decode_deep_meta(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Result<De
     }
     let tables_end = cur.position();
 
-    // Block geometry.
+    // Block geometry. `exr` names the spec's ZIPS `ZIP1`; ZIP is the only compression whose
+    // scan-line blocks carry more than one scan line (16, as the flat format does).
     let (tiles_x, tile_w, tile_h, slots) = match &header.blocks {
-        BlockDescription::ScanLines => (0usize, w, 1usize, h), // one line per block for NONE/RLE/ZIPS
+        BlockDescription::ScanLines => {
+            let lines = match compression {
+                Compression::ZIP16 => 16,
+                _ => 1,
+            };
+            (0usize, w, lines, h.saturating_add(lines - 1) / lines)
+        } // one line per block for NONE/RLE/ZIPS
         BlockDescription::Tiles(t) => {
             if t.level_mode != LevelMode::Singular {
                 return Err(unsup("deep mip-map or rip-map tiles (single-level tiles are supported)"));
@@ -445,11 +453,16 @@ fn decode_deep_meta(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Result<De
         let (block_rows, block_cols, slot): (std::ops::Range<usize>, std::ops::Range<usize>, usize) = match &header.blocks {
             BlockDescription::ScanLines => {
                 let y = i32(&mut cur)?;
-                let row = match y.checked_sub(y0) {
+                let by = match y.checked_sub(y0) {
                     Some(d) if d >= 0 && (d as usize) < h => d as usize,
                     _ => return Err(err(format!("scan line block y={y} is outside the data window"))),
                 };
-                (row..row + 1, 0..w, row)
+                if by % tile_h != 0 {
+                    return Err(err(format!("scan line block y={y} is not aligned to its {tile_h}-line block")));
+                }
+                // A ZIP block's y coordinate is its first scan line; its rows are clipped at
+                // the data window's end like a tile's, and its slot counts rows in blocks.
+                (by..by.saturating_add(tile_h).min(h), 0..w, by / tile_h)
             }
             BlockDescription::Tiles(_) => {
                 let (tx, ty, lx, ly) = (i32(&mut cur)?, i32(&mut cur)?, i32(&mut cur)?, i32(&mut cur)?);
@@ -593,7 +606,7 @@ fn decode_deep_meta(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Result<De
         read_exact(&mut cur, packed_table as usize, "the sample-count table")?;
         let data_bytes = read_exact(&mut cur, chunk.packed_data as usize, "the deep sample data")?;
         let raw = decompress(compression, data_bytes, chunk.unpacked_data as usize, "the deep sample data")?;
-        // Row by row (a scan line block is one row), and within a row channel by channel, as
+        // Row by row (a block's rows in order), and within a row channel by channel, as
         // flat tiles are laid out: each pixel's samples are contiguous within its channel. A
         // block row is a run of consecutive pixels in raster order, so its samples are the
         // contiguous range `counts[first]..counts[last + 1]` of every output channel.
