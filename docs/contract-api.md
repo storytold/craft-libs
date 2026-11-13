@@ -2561,7 +2561,7 @@ The layout services: `LabelColumn`, `ColumnGroup`, the `Grid` cursor, `measure_s
   - `pub fn align(self, align: RowAlign) -> Self`. A `Row` with `align`; any other layout is unchanged.
 - `craft_ui::layout::ColumnGroup`: `pub struct ColumnGroup`. The widest content per column key of one scope, measured through the same `LayoutMemory` rule as a `Grid`
   - `pub fn scope<R>(ui: &mut Ui, key: impl Hash + Debug, rows: impl FnOnce(&mut Ui, &mut ColumnGroup) -> R) -> R`. Runs `rows` with a group named `key` under `ui`. A measuring run records the widest width per column the rows
-  - `pub fn barrier<R>(ui: &mut Ui, rows: impl FnOnce(&mut Ui) -> R) -> R`. Runs `rows` with no group open: a labelled row inside reads no column, whatever group is open outside. A
+  - `pub fn barrier<R>(ui: &mut Ui, rows: impl FnOnce(&mut Ui) -> R) -> R`. Runs `rows` with no group open: a labelled row inside reads no column, whatever group is open outside. The
   - `pub fn width(&mut self, ui: &Ui, column: &ColumnKey, content: f32) -> f32`. The width every row gives column `column`: the widest content this pass's measuring run found, or in that run
 - `craft_ui::layout::Placed`: `pub struct Placed<'c>`. A keyed child for `arrange`; shown once, under the id derived from the key.
   - `pub fn new<C: Show + 'c>(key: impl Hash + Debug + 'c, child: C) -> Self`. A child shown under the id `key` derives from the arranging `Ui`.
