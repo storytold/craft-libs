@@ -92,6 +92,8 @@ pub struct SavedCrossReference {
     pub self_id: Option<String>,
     pub applied_format: Option<String>,
     pub parts: Vec<SavedCrossReferencePart>,
+    /// The first directly nested character range, which supplies the marker's formatting.
+    pub character_range: Option<Range>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -109,9 +111,17 @@ impl SavedCrossReference {
             self_id: el.attr("Self").map(str::to_string),
             applied_format: el.attr("AppliedFormat").map(str::to_string),
             parts: Vec::new(),
+            character_range: el.find(Local("CharacterStyleRange")).and_then(|range| match TextNode::from_el(range) {
+                TextNode::Character(range) => Some(range),
+                _ => None,
+            }),
         };
         saved_xref_parts(el, page_variables, &mut parsed.parts, 0);
         parsed
+    }
+
+    pub fn from_container(container: &Container, page_variables: &[String]) -> SavedCrossReference {
+        Self::from_el(&container.to_el(), page_variables)
     }
 }
 
