@@ -2,12 +2,128 @@
 //! The neutral JSON header and version contract for FigCraft's native project format.
 //! App-specific document fields remain a generic flattened payload.
 use serde::de::{IgnoredAny, MapAccess, Visitor};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 pub const EXTENSION: &str = "figcraft";
 pub const FORMAT: &str = "figcraft";
 pub const VERSION: u32 = 1;
+
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
+/// One native version-history index entry. Invalid optional values decode to the same defaults as
+/// the historical lenient reader; the app applies document-specific validity and issue reporting.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct VersionEntry {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub time: u64,
+    #[serde(skip_serializing_if = "is_false")]
+    pub auto: bool,
+    pub images: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for VersionEntry {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        let string = |key: &str| value.get(key).and_then(Value::as_str).unwrap_or_default().to_owned();
+        let images = value.get("images").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
+        Ok(Self {
+            id: string("id"),
+            name: string("name"),
+            description: string("description"),
+            time: value.get("time").and_then(Value::as_u64).unwrap_or(0),
+            auto: value.get("auto").and_then(Value::as_bool).unwrap_or(false),
+            images,
+        })
+    }
+}
+
+/// Native version-history index, oldest first.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct VersionIndex {
+    pub versions: Vec<VersionEntry>,
+}
+
+impl<'de> Deserialize<'de> for VersionIndex {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        let versions = value
+            .get("versions")
+            .and_then(Value::as_array)
+            .map(|entries| entries.iter().cloned().map(serde_json::from_value).collect::<Result<Vec<_>, _>>())
+            .transpose()
+            .map_err(serde::de::Error::custom)?
+            .unwrap_or_default();
+        Ok(Self { versions })
+    }
+}
+
+/// State stored on a native branch entry.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BranchState {
+    #[default]
+    Active,
+    Merged,
+    Archived,
+}
+
+/// One native branch index entry.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchEntry {
+    pub id: String,
+    pub name: String,
+    pub time: u64,
+    pub client: u32,
+    pub state: BranchState,
+    pub base_images: Vec<String>,
+    pub head_images: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for BranchEntry {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        let string = |key: &str| value.get(key).and_then(Value::as_str).unwrap_or_default().to_owned();
+        let images =
+            |key: &str| value.get(key).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
+        let state = value.get("state").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+        let client = value.get("client").and_then(Value::as_u64).and_then(|v| u32::try_from(v).ok()).unwrap_or(0);
+        Ok(Self {
+            id: string("id"),
+            name: string("name"),
+            time: value.get("time").and_then(Value::as_u64).unwrap_or(0),
+            client,
+            state,
+            base_images: images("baseImages"),
+            head_images: images("headImages"),
+        })
+    }
+}
+
+/// Native branch index.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct BranchIndex {
+    pub branches: Vec<BranchEntry>,
+}
+
+impl<'de> Deserialize<'de> for BranchIndex {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        let branches = value
+            .get("branches")
+            .and_then(Value::as_array)
+            .map(|entries| entries.iter().cloned().map(serde_json::from_value).collect::<Result<Vec<_>, _>>())
+            .transpose()
+            .map_err(serde::de::Error::custom)?
+            .unwrap_or_default();
+        Ok(Self { branches })
+    }
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Header {
@@ -91,6 +207,34 @@ mod tests {
         let h = read_header(r#"{"version":1,"imageIndex":[{"hash":"abc"}],"nested":{"unused":true}}"#).unwrap();
         assert_eq!(h.version, Some(1));
         assert_eq!(h.images, Some(vec!["abc".into()]));
+    }
+
+    #[test]
+    fn version_index_preserves_lenient_defaults_and_writes_compact_auto_flag() {
+        let index: VersionIndex =
+            serde_json::from_str(r#"{"extra":true,"versions":[{"id":"v1","time":7,"auto":false,"images":["a",3]},{}]}"#).unwrap();
+        assert_eq!(index.versions.len(), 2);
+        assert_eq!(index.versions[0].images, vec!["a"]);
+        assert_eq!(index.versions[1], VersionEntry::default());
+        let encoded = serde_json::to_value(&index).unwrap();
+        assert!(encoded["versions"][0].get("auto").is_none());
+        assert_eq!(encoded["versions"][0]["time"], 7);
+    }
+
+    #[test]
+    fn branch_index_uses_native_camel_case_and_tolerates_invalid_optional_fields() {
+        let index: BranchIndex = serde_json::from_str(
+            r#"{"branches":[{"id":"b1","client":4294967296,"state":"unknown","baseImages":["a",false],"headImages":["b"]},{}]}"#,
+        )
+        .unwrap();
+        let first = &index.branches[0];
+        assert_eq!(first.client, 0);
+        assert_eq!(first.state, BranchState::Active);
+        assert_eq!(first.base_images, vec!["a"]);
+        assert_eq!(first.head_images, vec!["b"]);
+        let encoded = serde_json::to_value(&index).unwrap();
+        assert_eq!(encoded["branches"][0]["baseImages"][0], "a");
+        assert!(encoded["branches"][0].get("base_images").is_none());
     }
     #[test]
     fn newer_version_is_reported_before_document_decode() {
