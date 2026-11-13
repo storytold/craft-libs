@@ -44,9 +44,8 @@ fn binary_converts_values_to_their_codes_kind() {
     let back = parse(&write_binary(&tags, true)).unwrap();
     assert_eq!(back[0], Tag::i(70, 12));
     assert_eq!(back[1], Tag::i(62, i64::from(i16::MAX)));
-    assert_eq!(back[2].code, 310);
-    assert_eq!(back[3].code, 310, "300 bytes are split into chunks of at most 255");
-    assert_eq!(back[2].str().len() + back[3].str().len(), 600);
+    let sizes: Vec<usize> = back.iter().filter(|t| t.code == 310).map(|t| t.str().len()).collect();
+    assert_eq!(sizes, vec![254, 254, 92], "300 bytes are split into chunks of at most 127 (254 hex digits)");
 }
 
 #[test]
