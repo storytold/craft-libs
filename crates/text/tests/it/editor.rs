@@ -4,6 +4,7 @@ use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::rc::Rc;
 
+use craft_behavior::CanvasView;
 use craft_behavior::kurbo::Point;
 use craft_text::quotes::QuoteStyle;
 use craft_text::ui::editor::{CaretLine, EditKind, HostLine, StyleKey, TextEditor, TextEditorHost, TextSelection};
@@ -106,7 +107,10 @@ fn session_on(host: Host, quotes: Option<QuoteStyle>) -> Session {
     let (shown_host, shown_selection, shown_commits) = (Rc::clone(&host), Rc::clone(&selection), Rc::clone(&commits));
     let mut fixture = Fixture::new(move |ui| {
         let (mut host, mut selection) = (shown_host.borrow_mut(), shown_selection.borrow_mut());
-        Canvas::new("Document").show(ui, |ui, body| {
+        let room = ui.available_rect_before_wrap();
+        // Document (0, 0) at the room's top left, at 100 %.
+        let view = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
+        Canvas::new("Document").view(view).show(ui, |ui, body| {
             let bounds = Rect::from_min_size(body.rect.min, vec2(200.0, 20.0));
             let editor = TextEditor::new("Text", &mut *host, Bind::bound(&mut *selection));
             let output = if let Some(style) = quotes { editor.smart_quotes(style) } else { editor }.show_at(ui, bounds);
@@ -138,6 +142,18 @@ fn command_enter_commits_one_session_and_a_session_without_edits_commits_nothing
     assert_eq!(editor.commits.get(), 0, "no text changed");
     editor.fixture.type_text("d").key(Key::Enter, Modifiers::COMMAND).settle();
     assert_eq!(editor.commits.get(), 1);
+    assert_eq!(editor.text(), "abcd");
+}
+
+#[trial]
+fn a_press_on_the_canvas_background_commits_the_session_and_one_on_the_text_does_not() {
+    let mut editor = session("abc", None);
+    editor.focus();
+    editor.fixture.type_text("d").settle();
+    editor.fixture.click_at(pos2(40.0, 10.0)).settle();
+    assert_eq!(editor.commits.get(), 0, "a press on the text is the editor's");
+    editor.fixture.click_at(pos2(300.0, 300.0)).settle();
+    assert_eq!(editor.commits.get(), 1, "a press on the canvas background commits the session");
     assert_eq!(editor.text(), "abcd");
 }
 
