@@ -1705,6 +1705,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-materialx"
+version = "0.1.0"
+dependencies = [
+ "craft-xml",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-math"
 version = "0.1.0"
 dependencies = [
