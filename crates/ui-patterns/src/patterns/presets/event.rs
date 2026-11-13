@@ -76,6 +76,33 @@ pub enum PresetEvent<K> {
     },
 }
 
+impl<K> PresetEvent<K> {
+    /// A click on `key` with `mods` held.
+    pub fn select(key: K, mods: Mods) -> Self {
+        PresetEvent::Select { key, mods }
+    }
+
+    /// A double click on `key` with `mods` held.
+    pub fn activate(key: K, mods: Mods) -> Self {
+        PresetEvent::Activate { key, mods }
+    }
+
+    /// `key` renamed to `text`.
+    pub fn rename(key: K, text: impl Into<String>) -> Self {
+        PresetEvent::Rename { key, text: text.into() }
+    }
+
+    /// `key` moved to the end of `group`.
+    pub fn move_to(key: K, group: K) -> Self {
+        PresetEvent::MoveTo { key, group }
+    }
+
+    /// `key` dropped on the drop zone at `at` with `mods` held.
+    pub fn drop_at(key: K, at: Pos2, mods: Mods) -> Self {
+        PresetEvent::DropAt { key, at, mods }
+    }
+}
+
 /// What `PresetBrowser::show` returns.
 #[derive(Debug)]
 #[non_exhaustive]
