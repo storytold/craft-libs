@@ -1,5 +1,6 @@
 //! Huffman entropy decoding: code tables, the bit reader and the Huffman scan decoder.
 
+use super::arith::ArithMode;
 use super::scan::*;
 use super::*;
 
@@ -210,6 +211,128 @@ impl ScanDecoder for HuffmanScan<'_> {
             let slot = blk.get_mut(k).ok_or_else(|| err("AC coefficient past the end of the block"))?;
             *slot = extend(self.bits.get(s), s);
             k += 1;
+        }
+        if self.bits.exhausted {
+            return Err(err("entropy-coded data ends before the scan does"));
+        }
+        Ok(())
+    }
+}
+
+/// Huffman-coded progressive scan state (G.1.2). EOB runs span blocks in a scan.
+pub(super) struct ProgressiveHuffmanScan<'a> {
+    pub(super) bits: Bits<'a>,
+    pub(super) tables: Vec<(&'a Huffman, &'a Huffman)>,
+    pub(super) mode: ArithMode,
+    pub(super) ss: usize,
+    pub(super) se: usize,
+    pub(super) al: u8,
+    pub(super) pred: [i32; 4],
+    pub(super) eob_run: usize,
+}
+
+impl ScanDecoder for ProgressiveHuffmanScan<'_> {
+    fn restart(&mut self) {
+        self.bits.restart();
+        self.pred = [0; 4];
+        self.eob_run = 0;
+    }
+
+    fn block(&mut self, sc: usize, blk: &mut [i32; 64]) -> Result<(), Error> {
+        let &(dc, ac) = self.tables.get(sc).ok_or_else(|| err("bad scan component"))?;
+        let p1 = 1i32.checked_shl(u32::from(self.al)).ok_or_else(|| err("bad successive approximation"))?;
+        match self.mode {
+            ArithMode::DcFirst => {
+                let t = u32::from(dc.decode(&mut self.bits)?);
+                if t > 15 {
+                    return Err(err("bad DC difference category"));
+                }
+                let diff = extend(self.bits.get(t), t);
+                let pred = self.pred.get_mut(sc).ok_or_else(|| err("bad scan component"))?;
+                *pred = pred.wrapping_add(diff);
+                blk[0] = pred.wrapping_mul(p1);
+            }
+            ArithMode::DcRefine => {
+                if self.bits.get(1) != 0 {
+                    blk[0] = if blk[0] < 0 { blk[0].wrapping_sub(p1) } else { blk[0].wrapping_add(p1) };
+                }
+            }
+            ArithMode::AcFirst => {
+                if self.eob_run != 0 {
+                    self.eob_run -= 1;
+                } else {
+                    let mut k = self.ss;
+                    while k <= self.se {
+                        let rs = ac.decode(&mut self.bits)?;
+                        let (r, s) = (usize::from(rs >> 4), u32::from(rs & 15));
+                        if s == 0 {
+                            if r == 15 {
+                                k += 16;
+                                continue;
+                            }
+                            self.eob_run = (1usize << r).saturating_add(self.bits.get(r as u32) as usize).saturating_sub(1);
+                            break;
+                        }
+                        k = k.saturating_add(r);
+                        if k > self.se {
+                            return Err(err("AC coefficient past the end of the band"));
+                        }
+                        blk[k] = extend(self.bits.get(s), s).wrapping_mul(p1);
+                        k += 1;
+                    }
+                }
+            }
+            ArithMode::AcRefine => {
+                let mut k = self.ss;
+                if self.eob_run == 0 {
+                    while k <= self.se {
+                        let rs = ac.decode(&mut self.bits)?;
+                        let (mut r, s) = (usize::from(rs >> 4), rs & 15);
+                        let mut new_value = 0;
+                        if s == 0 {
+                            if r != 15 {
+                                self.eob_run = (1usize << r).saturating_add(self.bits.get(r as u32) as usize);
+                                break;
+                            }
+                            r = 16;
+                        } else {
+                            if s != 1 {
+                                return Err(err("bad AC refinement category"));
+                            }
+                            new_value = if self.bits.get(1) != 0 { p1 } else { -p1 };
+                        }
+                        while k <= self.se {
+                            if blk[k] != 0 {
+                                if self.bits.get(1) != 0 && (blk[k].unsigned_abs() & p1 as u32) == 0 {
+                                    blk[k] = if blk[k] < 0 { blk[k].wrapping_sub(p1) } else { blk[k].wrapping_add(p1) };
+                                }
+                            } else if r == 0 {
+                                break;
+                            } else {
+                                r -= 1;
+                            }
+                            k += 1;
+                        }
+                        if new_value != 0 {
+                            if k > self.se {
+                                return Err(err("AC refinement past the band"));
+                            }
+                            blk[k] = new_value;
+                        }
+                        k += 1;
+                    }
+                }
+                if self.eob_run != 0 {
+                    while k <= self.se {
+                        if blk[k] != 0 && self.bits.get(1) != 0 && (blk[k].unsigned_abs() & p1 as u32) == 0 {
+                            blk[k] = if blk[k] < 0 { blk[k].wrapping_sub(p1) } else { blk[k].wrapping_add(p1) };
+                        }
+                        k += 1;
+                    }
+                    self.eob_run -= 1;
+                }
+            }
+            ArithMode::Sequential => return Err(err("invalid progressive scan mode")),
         }
         if self.bits.exhausted {
             return Err(err("entropy-coded data ends before the scan does"));

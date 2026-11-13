@@ -349,7 +349,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                     columns: columns
                         .iter()
                         .map(|c| Column {
-                            groups: c.groups.iter().map(|g| Group { height: None, flyout_width: None, ..g.clone() }).collect(),
+                            groups: c.groups.iter().map(|g| Group { height: None, flyout_width: None, flyout_offset: None, ..g.clone() }).collect(),
                             width: None,
                             iconic: c.iconic,
                             iconic_width: None,
@@ -491,7 +491,14 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                     && let Some(index) = entries.iter().position(|e| &e.panel == panel)
                 {
                     let entry = entries.remove(index);
-                    let group = Group { panels: vec![entry.panel], active: 0, minimized: !entry.open, height: entry.height, flyout_width: None };
+                    let group = Group {
+                        panels: vec![entry.panel],
+                        active: 0,
+                        minimized: !entry.open,
+                        height: entry.height,
+                        flyout_width: None,
+                        flyout_offset: None,
+                    };
                     let moving = whole(Moving::group(group));
                     return Ok(Moving { id: None, ..moving });
                 }
@@ -505,6 +512,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                             minimized: !entry.open,
                             height: entry.height,
                             flyout_width: None,
+                            flyout_offset: None,
                         })))
                     }
                     _ => Err(DockError::MissingPanel),

@@ -87,6 +87,22 @@ note = "`run` takes `can_start`; `show` is a contract entry-point name, so the u
 
 [[setter]]
 type = "Updater"
+old = "show_with_save(ctx, can_start, can_save)"
+new = "run_with_save(&mut DialogHost, can_start, can_save) -> Action"
+note = "`run` with the app's answer to whether it holds unsaved work it can save: the prompt's main button reads Save and Update, a click asks the app to save (`take_save_request`), and the install starts once the app reports the save done (`save_stopped`)."
+
+[[setter]]
+type = "Updater"
+old = "take_save_request()"
+new = "take_save_request()"
+
+[[setter]]
+type = "Updater"
+old = "save_stopped(error)"
+new = "save_stopped(error)"
+
+[[setter]]
+type = "Updater"
 old = "check_at_start(ctx)"
 new = "check_at_start()"
 note = "The worker no longer asks for a repaint; `tick` polls."

@@ -558,7 +558,11 @@ pub fn temp_name(file: &str) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let stem: String = file.chars().take(64).collect();
-    format!(".{stem}.{}-{n}.craft_tmp", std::process::id())
+    #[cfg(not(target_arch = "wasm32"))]
+    let pid = std::process::id();
+    #[cfg(target_arch = "wasm32")]
+    let pid = 0;
+    format!(".{stem}.{pid}-{n}.craft_tmp")
 }
 
 /// The end of an error message: whether an original file was left as it was.

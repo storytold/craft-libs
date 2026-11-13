@@ -828,19 +828,27 @@ mod freebsd;
 /// without starting an installer.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn msi_command(program: &Path, msi: &Path) -> Result<std::process::Command, String> {
+    msi_command_ui(program, msi, false)
+}
+
+/// [`msi_command`] with the installer's progress window hidden when `quiet`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn msi_command_ui(program: &Path, msi: &Path, quiet: bool) -> Result<std::process::Command, String> {
     let msi = msi_path(msi)?;
     let mut command = process::command(program);
     // A verbose log beside the package: Windows Installer's own errors (1603 above all) say
     // nothing without it.
-    command.arg("/i").arg(&msi).args(["/passive", "/norestart", "/l*v"]).arg(msi_log(&msi));
+    command.arg("/i").arg(&msi).args([if quiet { "/qn" } else { "/passive" }, "/norestart", "/l*v"]).arg(msi_log(&msi));
     Ok(command)
 }
 
-/// The self-update command: [`msi_command`] plus the properties that keep the installed copy's
-/// Windows Installer context (`msi_copy::update_arguments`).
+/// The self-update command: [`msi_command_ui`] plus the properties that keep the installed copy's
+/// Windows Installer context (`msi_copy::update_arguments`). `quiet` hides the installer's progress
+/// window of a per-user install.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn reinstall_command(program: &Path, msi: &Path, context: &[&str]) -> Result<std::process::Command, String> {
-    let mut command = msi_command(program, msi)?;
+fn reinstall_command_ui(program: &Path, msi: &Path, context: &[&str], quiet: bool) -> Result<std::process::Command, String> {
+    // A per-machine /qn install cannot request elevation. Keep its existing visible route.
+    let mut command = msi_command_ui(program, msi, quiet && !context.contains(&"ALLUSERS=1"))?;
     command.args(context);
     Ok(command)
 }

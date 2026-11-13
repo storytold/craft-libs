@@ -16,7 +16,8 @@ fn the_update_helper_reads_back_its_arguments() {
     let msi = Finish::Msi(PathBuf::from(r"C:\Users\O'Brien\AppData\Local\ArtCraft Launcher\cache\artcraft-launcher-0.7.0-windows-x64.msi"));
     let portable =
         Finish::Portable { zip: PathBuf::from(r"D:\Tools\x 1.zip"), tmp: PathBuf::from(r"D:\Tools\ArtCraftLauncherData\cache\launcher-update") };
-    for finish in [msi, portable] {
+    let quiet = Finish::QuietMsi(PathBuf::from(r"C:\Updates\a b.msi"));
+    for finish in [msi, quiet, portable] {
         let args = helper_args(4242, exe, &finish);
         assert_eq!(args.first().map(OsString::as_os_str), Some(std::ffi::OsStr::new(FINISH_FLAG)));
         assert_eq!(parse_helper_args(&args), Some((4242, exe.to_path_buf(), finish)));

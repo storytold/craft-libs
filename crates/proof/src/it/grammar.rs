@@ -172,7 +172,7 @@ fn ends_sentence(gap: &str, prev: &str) -> bool {
         return false;
     }
     rest.starts_with(char::is_whitespace)
-        && rest.trim_start().chars().all(|c| c.is_whitespace() || matches!(c, '"' | '“' | '«' | '(' | '[' | '\'' | '—'))
+        && rest.trim_start().chars().all(|c| c.is_whitespace() || matches!(c, '"' | '“' | '‘' | '«' | '(' | '[' | '\'' | '—'))
 }
 
 fn repeated_words(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {

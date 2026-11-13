@@ -37,12 +37,16 @@ pub struct Group<P> {
     /// Width in points of the group's flyout, set when the user resizes it; `None` takes the column's expanded width.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flyout_width: Option<f32>,
+    /// Offset in points of the flyout's top from its icons' top (negative is above), set when the user
+    /// resizes the flyout from its top edge; `None` aligns the flyout with its icons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flyout_offset: Option<f32>,
 }
 
 impl<P> Group<P> {
-    /// A group of `panels` with tab `active` selected, expanded and with no preferred height or flyout width.
+    /// A group of `panels` with tab `active` selected, expanded and with no preferred height or flyout geometry.
     pub fn new(panels: Vec<P>, active: usize) -> Self {
-        Self { panels, active, minimized: false, height: None, flyout_width: None }
+        Self { panels, active, minimized: false, height: None, flyout_width: None, flyout_offset: None }
     }
 
     /// The selected panel, or `None` when `active` is out of range.
@@ -72,13 +76,20 @@ pub struct Column<P> {
 impl GroupLocation {
     /// A group location with the given state and column.
     pub const fn new(minimized: bool, height: Option<f32>, column: Option<ColumnLocation>) -> Self {
-        Self { minimized, height, flyout_width: None, column }
+        Self { minimized, height, flyout_width: None, flyout_offset: None, column }
     }
 
     /// The location with the group's flyout `width` points wide.
     #[must_use]
     pub const fn with_flyout_width(mut self, width: Option<f32>) -> Self {
         self.flyout_width = width;
+        self
+    }
+
+    /// The location with the group's flyout top `offset` points from its icons' top.
+    #[must_use]
+    pub const fn with_flyout_offset(mut self, offset: Option<f32>) -> Self {
+        self.flyout_offset = offset;
         self
     }
 }
@@ -185,6 +196,9 @@ pub struct GroupLocation {
     /// The width in points of the group's flyout, if the user had resized it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flyout_width: Option<f32>,
+    /// The offset in points of the group's flyout top from its icons' top, if the user had moved it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flyout_offset: Option<f32>,
     /// The column, when the group was docked.
     pub column: Option<ColumnLocation>,
 }

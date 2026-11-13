@@ -185,12 +185,31 @@ pub(super) fn decode_scan(frame: &mut Frame, tables: &Tables, scan: &Scan, d: &[
     } else {
         let mut sel = Vec::with_capacity(scan.comps.len());
         for &(_, td, ta) in &scan.comps {
-            let dc = tables.dc.get(td).and_then(Option::as_ref).ok_or_else(|| err("scan uses an undefined Huffman table"))?;
-            let ac = tables.ac.get(ta).and_then(Option::as_ref).ok_or_else(|| err("scan uses an undefined Huffman table"))?;
+            let dc = tables.dc.get(td).and_then(Option::as_ref);
+            let ac = tables.ac.get(ta).and_then(Option::as_ref);
+            let (dc, ac) = if frame.progressive && scan.ss != 0 {
+                let ac = ac.ok_or_else(|| err("scan uses an undefined AC Huffman table"))?;
+                (dc.unwrap_or(ac), ac)
+            } else {
+                let dc = dc.ok_or_else(|| err("scan uses an undefined DC Huffman table"))?;
+                (dc, ac.unwrap_or(dc))
+            };
             sel.push((dc, ac));
         }
-        let mut dec = HuffmanScan { bits: Bits::new(d), tables: sel, pred: [0; 4] };
-        walk_scan(frame, scan, tables.restart, &mut dec, done)
+        if frame.progressive {
+            let mode = match (scan.ss, scan.ah) {
+                (0, 0) => ArithMode::DcFirst,
+                (0, _) => ArithMode::DcRefine,
+                (_, 0) => ArithMode::AcFirst,
+                (_, _) => ArithMode::AcRefine,
+            };
+            let mut dec =
+                ProgressiveHuffmanScan { bits: Bits::new(d), tables: sel, mode, ss: scan.ss, se: scan.se, al: scan.al, pred: [0; 4], eob_run: 0 };
+            walk_scan(frame, scan, tables.restart, &mut dec, done)
+        } else {
+            let mut dec = HuffmanScan { bits: Bits::new(d), tables: sel, pred: [0; 4] };
+            walk_scan(frame, scan, tables.restart, &mut dec, done)
+        }
     }
 }
 

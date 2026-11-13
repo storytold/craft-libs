@@ -1656,6 +1656,26 @@ fn emfplus_linear_gradient_fills_with_a_shaded_tile() {
 }
 
 #[test]
+#[test]
+fn gdi_plus_percentage_hatch_styles_keep_the_documented_coverage() {
+    const PERCENT: [usize; 12] = [5, 10, 20, 25, 30, 40, 50, 60, 70, 75, 80, 90];
+    let fg = [0, 0, 0, 255];
+    let bg = [255, 255, 255, 255];
+    for style in 0..=17 {
+        let tile = crate::canvas::emfplus_hatch_tile(style, fg, Some(bg)).expect("supported GDI+ hatch style");
+        let foreground = tile.as_chunks::<4>().0.iter().filter(|px| **px == fg).count();
+        assert!((1..64).contains(&foreground), "style {style} should mix both colours");
+        if (6..=17).contains(&style) {
+            let percent = PERCENT[(style - 6) as usize];
+            assert_eq!(foreground, (percent * 64 + 50) / 100, "percentage style {style}");
+        }
+    }
+    for style in 18..=52 {
+        assert!(crate::canvas::emfplus_hatch_tile(style, fg, Some(bg)).is_none(), "style {style} has no confirmed tile mapping");
+    }
+    assert!(crate::canvas::emfplus_hatch_tile(53, fg, Some(bg)).is_none(), "out-of-range values stay unsupported");
+    assert!(crate::canvas::hatch_tile(9, fg, Some(bg)).is_none(), "GDI's six-style range is unchanged");
+}
 fn emfplus_clip_rect_cuts_fills_strokes_and_images() {
     let clip = prec(0x4032, 0, &f32s(&[0.0, 0.0, 50.0, 50.0]));
     let fill = prec(0x400A, 0x8000, &cat(vec![h32(0xFF00_0000), h32(1), f32s(&[25.0, 25.0, 50.0, 50.0])]));

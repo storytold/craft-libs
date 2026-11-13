@@ -83,6 +83,19 @@ pub enum Action {
 
 type Checked = Result<Option<Release>, String>;
 
+/// What the check's thread sends: the release it found, if any, with whether this copy can install
+/// it itself ([`can_install_itself`]).
+type Found = Result<Option<(Release, bool)>, String>;
+
+/// Says whether this copy can install a release itself (tests stand in for the files with one).
+type InstallProbe = Arc<dyn Fn(&'static App, &Release) -> bool + Send + Sync>;
+
+/// Whether this copy can install `release` itself. It reads the installed files, which can take
+/// long on slow storage, so the check's thread calls it, never a pass.
+fn can_install_itself(app: &'static App, release: &Release) -> bool {
+    self_update::is_self_updating(app) && self_update::release_installs(app, release)
+}
+
 /// The seconds between passes while a check or an installation runs; the poll is what picks up a finished worker.
 const POLL_SECONDS: f64 = 0.1;
 
@@ -97,17 +110,27 @@ enum Message {
 #[derive(Debug)]
 struct Offer {
     release: Release,
+    /// This copy can install the release itself ([`can_install_itself`]): the prompt offers Update
+    /// and Restart.
+    installs_itself: bool,
     /// The prompt is on the host's startup queue or open.
     shown: bool,
     message: Option<Message>,
     /// The update is ready and waits for the app to close: the main button reads Restart to
     /// Update.
     ready: bool,
+    /// The app holds unsaved work it can save: the update button reads Save and Update and asks
+    /// for that save first.
+    offer_save: bool,
+    /// The app is saving the work; the update starts once it is done.
+    saving: bool,
+    /// The user chose Save and Update and the app has not taken the request yet.
+    save_wanted: bool,
 }
 
 impl Offer {
-    fn new(release: Release) -> Self {
-        Self { release, shown: false, message: None, ready: false }
+    fn new(release: Release, installs_itself: bool) -> Self {
+        Self { release, installs_itself, shown: false, message: None, ready: false, offer_save: false, saving: false, save_wanted: false }
     }
 
     fn text(&self, translate: Translate) -> Option<String> {
@@ -115,6 +138,15 @@ impl Offer {
             Message::Installer(text) => text.clone(),
             Message::Note(note) => note.translated(translate),
         })
+    }
+
+    /// Gives the prompt on the host this pass's state.
+    fn feed(&self, dialog: &mut UpdatePromptDialog, installing: bool, message: Option<String>) {
+        dialog.set_installing(installing);
+        dialog.set_ready(self.ready);
+        dialog.set_offer_save(self.offer_save);
+        dialog.set_saving(self.saving);
+        dialog.set_status(message);
     }
 }
 
@@ -177,14 +209,19 @@ pub struct Updater {
     /// The check running (or queued behind it) was asked for by the user.
     requested: bool,
     started: bool,
-    check: Option<Receiver<Checked>>,
+    check: Option<Receiver<Found>>,
+    /// Replaces [`can_install_itself`] on the check's thread (tests).
+    probe: Option<InstallProbe>,
+    /// Whether the copy could install the release that is installing itself, as the prompt that
+    /// started the installation said. A failed installation reopens the prompt with it.
+    installing_itself: bool,
     install: Option<(Receiver<Result<Restart, Failure>>, Release)>,
     prompt: Option<Offer>,
     /// A prompt the updater dropped is still on the host; it is withdrawn when it shows.
     stale: bool,
-    /// The newest release a check found or the app offered; [`Updater::request_install`] works
-    /// from it after the prompt closed.
-    known: Option<Release>,
+    /// The newest release a check found or the app offered, with whether this copy can install it
+    /// itself; [`Updater::request_install`] works from it after the prompt closed.
+    known: Option<(Release, bool)>,
     /// A finished installation waiting for the app to exit: what still has to start then, and
     /// the release it installs.
     restart: Option<(Restart, Release)>,
@@ -224,6 +261,8 @@ impl Updater {
             requested: false,
             started: false,
             check: None,
+            probe: None,
+            installing_itself: false,
             install: None,
             prompt: None,
             stale: false,
@@ -249,10 +288,11 @@ impl Updater {
         self
     }
 
-    /// Opens the prompt offering `release`. A failed update offered again says why the last
-    /// attempt failed, once.
-    fn open_offer(&mut self, release: Release) {
-        let mut offer = Offer::new(release);
+    /// Opens the prompt offering `release`; `installs_itself` says whether this copy can install it
+    /// itself ([`can_install_itself`]). A failed update offered again says why the last attempt
+    /// failed, once.
+    fn open_offer(&mut self, release: Release, installs_itself: bool) {
+        let mut offer = Offer::new(release, installs_itself);
         if let Some(reason) = self.failed_reason.take() {
             offer.message = Some(Message::Note(failed_note(&reason)));
         }
@@ -274,6 +314,14 @@ impl Updater {
     /// Replaces the network with `source` (tests).
     pub fn with_source(mut self, source: CheckSource) -> Self {
         self.source = Some(source);
+        self
+    }
+
+    /// Replaces [`can_install_itself`], which the check's thread calls for a release it found
+    /// (tests).
+    #[cfg(test)]
+    fn with_probe(mut self, probe: InstallProbe) -> Self {
+        self.probe = Some(probe);
         self
     }
 
@@ -364,12 +412,15 @@ impl Updater {
 
     /// Opens the startup prompt for a release the app found itself. After a failed update the
     /// prompt says why it failed, like the one a check opens. Opening the prompt sets
-    /// [`Self::status`] to [`Status::Idle`].
+    /// [`Self::status`] to [`Status::Idle`]. It reads the installed files on the calling thread to
+    /// decide whether the prompt offers Update and Restart; a release found by a check is
+    /// inspected on the check's thread instead.
     pub fn offer(&mut self, release: Release) {
-        self.known = Some(release.clone());
+        let installs_itself = can_install_itself(self.app, &release);
+        self.known = Some((release.clone(), installs_itself));
         if self.install.is_none() && !self.installed && !self.read_choice() {
             self.drop_prompt();
-            self.open_offer(release);
+            self.open_offer(release, installs_itself);
             self.status = Status::Idle;
         }
     }
@@ -423,11 +474,22 @@ impl Updater {
             return;
         }
         let (tx, rx) = channel();
-        let (source, app, version) = (self.source.clone(), self.app, self.version.clone());
+        let (source, probe, app, version) = (self.source.clone(), self.probe.clone(), self.app, self.version.clone());
         let spawned = std::thread::Builder::new().name("update-check".into()).spawn(move || {
-            let ask = || match source {
-                Some(ask) => ask(),
-                None => Http::new(&format!("{}/Update", app.name)).and_then(|http| check_for_update(app, &http, &version)),
+            let ask = || -> Found {
+                let checked: Checked = match source {
+                    Some(ask) => ask(),
+                    None => Http::new(&format!("{}/Update", app.name)).and_then(|http| check_for_update(app, &http, &version)),
+                };
+                // Whether the copy installs the release itself is read from the installed files
+                // here, on the check's thread, and not in a pass.
+                Ok(checked?.map(|release| {
+                    let installs_itself = match &probe {
+                        Some(probe) => probe(app, &release),
+                        None => can_install_itself(app, &release),
+                    };
+                    (release, installs_itself)
+                }))
             };
             let answer =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(ask)).unwrap_or_else(|_| Err("the update check failed unexpectedly".into()));
@@ -469,13 +531,13 @@ impl Updater {
 
     /// Sets the outcome of a check. The check at start leaves the status as it is: nothing, or
     /// the outcome of the last update ([`Self::read_outcome`]).
-    fn finish_check(&mut self, answer: Checked) {
+    fn finish_check(&mut self, answer: Found) {
         let requested = std::mem::take(&mut self.requested);
         // A check that was running when an installation started answers with the installation's
         // state: the update installing, ready, or the recorded helper failure.
         if self.install.is_some() || self.installed {
             match &answer {
-                Ok(Some(release)) => log::info!("{} update check found {} while an update installs", self.app.name, release.tag),
+                Ok(Some((release, _))) => log::info!("{} update check found {} while an update installs", self.app.name, release.tag),
                 Ok(None) => log::info!("{} update check found nothing newer while an update installs", self.app.name),
                 Err(e) => log::warn!("{} update check failed while an update installs: {e}", self.app.name),
             }
@@ -496,10 +558,10 @@ impl Updater {
             return;
         }
         match answer {
-            Ok(Some(release)) => {
-                self.known = Some(release.clone());
+            Ok(Some((release, installs_itself))) => {
+                self.known = Some((release.clone(), installs_itself));
                 match &mut self.prompt {
-                    None => self.open_offer(release),
+                    None => self.open_offer(release, installs_itself),
                     // A prompt the app opened before (`offer`) says why the last update failed.
                     Some(offer) => {
                         if let Some(reason) = self.failed_reason.take() {
@@ -574,7 +636,7 @@ impl Updater {
                         if self.prompt.is_none()
                             && let Some(release) = release
                         {
-                            self.prompt = Some(Offer::new(release));
+                            self.prompt = Some(Offer::new(release, self.installing_itself));
                         }
                         if let Some(offer) = &mut self.prompt {
                             offer.message = Some(match failure {
@@ -597,7 +659,11 @@ impl Updater {
     /// ([`start_pending_update`](Self::start_pending_update)), so a close the user cancels leaves
     /// the update ready.
     pub fn take_close(&mut self, can_start: bool) -> bool {
-        can_start && self.restart.is_some() && std::mem::take(&mut self.close_wanted)
+        let close = can_start && self.restart.is_some() && std::mem::take(&mut self.close_wanted);
+        if close {
+            self.stop_saving();
+        }
+        close
     }
 
     /// Puts the startup prompt on `dialogs` at [`StartupStage::Update`] when one is due, feeds the open one the
@@ -605,10 +671,34 @@ impl Updater {
     /// asks the app to close, when `can_start` is true: an app passes `false` while it holds unsaved work. The app
     /// calls this before `DialogHost::run`.
     pub fn run(&mut self, dialogs: &mut DialogHost, can_start: bool) -> Action {
+        self.run_with_save(dialogs, can_start, false)
+    }
+
+    /// Like [`Self::run`], and offers Save and Update while `can_save` is true. It is true only
+    /// when a successful save alone makes `can_start` true: every piece of unsaved work is in a
+    /// document the app can save without asking the user, and nothing else holds the install back
+    /// (a print job, a comment draft). It stays true during the save. After a click,
+    /// [`Self::take_save_request`] tells the app to save, the install starts (or a ready update
+    /// asks the app to close) once `can_start` is true, and [`Self::save_stopped`] reports a save
+    /// that did not get there.
+    pub fn run_with_save(&mut self, dialogs: &mut DialogHost, can_start: bool, can_save: bool) -> Action {
+        // A save the user asked for ended with nothing unsaved: go on as the click would have.
+        // For a ready update that sets `close_wanted`, so the close below happens in this pass.
+        if self.prompt.as_ref().is_some_and(|offer| offer.saving) {
+            if can_start {
+                self.stop_saving();
+                self.start_install();
+            } else if !can_save {
+                self.save_stopped(None);
+            }
+        }
         // The close waits for the app to hold no unsaved work: the user may have edited while the
         // update installed.
         if self.take_close(can_start) {
             return Action::Close;
+        }
+        if let Some(offer) = &mut self.prompt {
+            offer.offer_save = can_save && !can_start;
         }
         // Update and Restart leaves the prompt open to show the progress; the pick comes through the dialog.
         if self.prompt.is_some() && dialogs.get_mut_by_id::<UpdatePromptDialog>(prompt_id()).is_some_and(UpdatePromptDialog::take_update_request) {
@@ -649,16 +739,11 @@ impl Updater {
         let (installing, message) = (self.install.is_some(), offer.text(self.translate));
         if offer.shown {
             if let Some(dialog) = dialogs.get_mut_by_id::<UpdatePromptDialog>(prompt_id()) {
-                dialog.set_installing(installing);
-                dialog.set_ready(offer.ready);
-                dialog.set_status(message);
+                offer.feed(dialog, installing, message);
             }
         } else if !self.stale {
-            let self_updating = self_update::is_self_updating(self.app) && self_update::release_installs(self.app, &offer.release);
-            let mut dialog = UpdatePromptDialog::new(offer.release.clone(), self.version.clone(), self_updating);
-            dialog.set_installing(installing);
-            dialog.set_ready(offer.ready);
-            dialog.set_status(message);
+            let mut dialog = UpdatePromptDialog::new(offer.release.clone(), self.version.clone(), offer.installs_itself);
+            offer.feed(&mut dialog, installing, message);
             dialogs.enqueue(StartupStage::Update, dialog);
             if let Some(offer) = &mut self.prompt {
                 offer.shown = true;
@@ -705,6 +790,41 @@ impl Updater {
         }
     }
 
+    /// True once after the user chose Save and Update: the app then saves its work.
+    #[must_use]
+    pub fn take_save_request(&mut self) -> bool {
+        self.prompt.as_mut().is_some_and(|offer| std::mem::take(&mut offer.save_wanted))
+    }
+
+    /// The save ended and the work is still not all saved: it failed, was cancelled, or more was
+    /// typed meanwhile. The prompt says why (`error`) or goes back to asking for the work to be
+    /// saved, and nothing installs by itself. An update that is already ready stays ready: the app
+    /// is asked to close once the work is saved only while that close is still pending, otherwise
+    /// Restart to Update asks again. A save that leaves nothing unsaved needs no call.
+    /// A call while the prompt isn't saving (after Later, or after `can_save` fell) changes
+    /// nothing, so the app also reports a failed save the way it always does.
+    pub fn save_stopped(&mut self, error: Option<String>) {
+        if !self.prompt.as_ref().is_some_and(|offer| offer.saving) {
+            return;
+        }
+        self.stop_saving();
+        let note = if self.installed { self.installed_note() } else { save_first_note() };
+        if let Some(offer) = &mut self.prompt {
+            offer.message = Some(match error {
+                Some(error) => Message::Installer(error),
+                None => Message::Note(note),
+            });
+        }
+    }
+
+    /// The prompt no longer waits for a save.
+    fn stop_saving(&mut self) {
+        if let Some(offer) = &mut self.prompt {
+            offer.saving = false;
+            offer.save_wanted = false;
+        }
+    }
+
     /// Starts installing the newest release the updater knows of, as the prompt's Update and
     /// Restart does: the one a check found or [`offer`](Self::offer) was given, whether or not
     /// the prompt is still open (a closed one is made again to hold the progress). Returns false
@@ -715,10 +835,10 @@ impl Updater {
     /// install ends in [`Action::Close`] from [`run`](Self::run).
     pub fn request_install(&mut self, can_start: bool) -> bool {
         if self.prompt.is_none()
-            && let Some(release) = self.known.clone()
+            && let Some((release, installs_itself)) = self.known.clone()
             && !self.read_choice()
         {
-            self.prompt = Some(Offer::new(release));
+            self.prompt = Some(Offer::new(release, installs_itself));
         }
         if self.prompt.is_none() {
             return false;
@@ -726,7 +846,13 @@ impl Updater {
         if can_start {
             self.start_install();
         } else if let Some(offer) = &mut self.prompt {
-            offer.message = Some(Message::Note(Note::new("Save or close your open work first; the update restarts the app.", &[])));
+            if offer.offer_save {
+                offer.saving = true;
+                offer.save_wanted = true;
+                offer.message = None;
+            } else {
+                offer.message = Some(Message::Note(save_first_note()));
+            }
         }
         true
     }
@@ -754,6 +880,7 @@ impl Updater {
         };
         offer.message = None;
         self.failed_reason = None;
+        self.installing_itself = offer.installs_itself;
         let (tx, rx) = channel();
         let (app, version, release) = (self.app, self.version.clone(), offer.release.clone());
         let worker_release = release.clone();
@@ -808,6 +935,11 @@ fn deliver(app: &App, tx: &Sender<Result<Restart, Failure>>, exiting: &Mutex<boo
         Some(Err(failure)) => record(app, paths, &failure.reason()),
         None => {}
     }
+}
+
+/// The prompt's answer to Update and Restart while the app holds unsaved work.
+fn save_first_note() -> Note {
+    Note::new("Save or close your open work first; the update restarts the app.", &[])
 }
 
 /// "The update could not be installed: …", for a prompt that offers a failed update again.

@@ -17,11 +17,40 @@ A Cargo workspace (edition 2024, resolver 3). Each library is a crate under `cra
 (`license.workspace = true`, and so on) and `[lints] workspace = true`. Register each crate in
 `[workspace.dependencies]` in the root `Cargo.toml`.
 
-Apps depend on a crate by git:
+## Use a released version
+
+The first coordinated release is **[v0.1.0](https://github.com/storytold/craft-libs/releases/tag/v0.1.0)**.
+It gives consumers a fixed baseline while development continues on `main`. All five crates
+share this version. They require Rust 1.95 or later; the UI integrations use egui 0.36.
+
+Add only the crates you need, using the same tag for every craft-libs dependency:
 
 ```toml
-craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit>" }
+[dependencies]
+craft-ui = { git = "https://github.com/storytold/craft-libs", tag = "v0.1.0" }
+craft-settings = { git = "https://github.com/storytold/craft-libs", tag = "v0.1.0" }
+# Optional, for egui close handling and the macOS application menu:
+craft-quit = { git = "https://github.com/storytold/craft-libs", tag = "v0.1.0", features = ["menu"] }
 ```
+
+`craft-atomic` and `craft-print` use the same dependency syntax. Enable `craft-ui`'s
+`serde` feature if you need to serialize its docking layout. These are Git releases;
+crates.io publication is deferred.
+
+Release tags are never moved or reused. For a commit pin, resolve the tag with
+`git ls-remote https://github.com/storytold/craft-libs 'refs/tags/v0.1.0^{}'` and replace
+`tag = "v0.1.0"` with `rev = "<full commit SHA>"` on every craft-libs dependency.
+Use either `tag` or `rev`, not both. An existing commit pin keeps working; switching to this
+release may require adapting to changes since that commit.
+
+Commit your application's `Cargo.lock` and build with `cargo build --locked` for reproducible
+Rust dependency resolution. A Git pin fixes craft-libs source, not every transitive dependency.
+A library's own lockfile does not constrain its downstream consumers. Upgrade deliberately:
+read the release notes, update all craft-libs pins together, refresh the lockfile with
+`cargo check`, and run your application's tests and affected workflows before committing.
+
+See the [release notes](CHANGELOG.md) for included functionality and known limits, and the
+[versioning policy](docs/versioning.md) for compatibility guarantees and release checks.
 
 ## Libraries
 
@@ -123,6 +152,7 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   and channel names, the channels that make a colour picture, and Cryptomatte IDs, metadata keys,
   manifests and rank channels. The optional `decode` feature adds bounded part listing, flat
   decoding (scan lines, tiles, every compression of the `exr` crate) and writing.
+- [`craft-flags`](crates/flags/README.md): Feature flags shared by the Craft apps and the ArtCraft Launcher: one per-user `ArtCraft/flags.toml`, a `CRAFT_FLAGS` override, every flag off by default (`AI-MCP`, `AI-MODELS`).
 - [`craft-flow`](crates/flow/README.md): the flow model every text format maps to (paragraphs with a kind, lists and formatted spans; tables; pictures, fields, notes, equations), converted to and from a craft-wordmodel `Document`.
 - [`craft-imaging`](crates/imaging/README.md): raster image editing; the scope counting (every
   target) and, with the `ui` feature, the warp grid, the levels editor, the Channels panel and the
@@ -187,6 +217,8 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   CCITT Group 3 and 4 decoding and Group 4 encoding, JBIG2 decoding and lossless encoding. Every
   decoder is bounded and returns its partial output on damage. From PdfCraft; a PDF filter chain
   is built on it in `craft-pdf`.
+- [`craft-time`](crates/time/README.md): exact rational ticks and SMPTE time across media, with a `soundcraft` compatibility module retaining SoundCraft's sample-index timebase, tempo maps, grids and session serialization semantics.
+- [`craft-scraft-format`](crates/scraft-format/README.md): SoundCraft's typed `.scraft` session schema, versioned reader/writer, hostile-input validation, and `.scraftz` bundle reader/writer. Engine and UI mapping stays in SoundCraft.
 - [`craft-tiff`](crates/tiff/README.md): TIFF and BigTIFF IFD reader and writer, from LightCraft:
   every field type, the IFD chain, SubIFDs and Exif/GPS/Interop pointer IFDs, maker-note IFDs
   (Canon, Nikon, Sony, Fujifilm, Olympus, Panasonic, Pentax), strip and tile layout. Bounded and
@@ -254,6 +286,9 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
   header fields, MIME parts and multiparts, encoded-words, RFC 2231 parameters, base64 and
   quoted-printable, character sets, address lists, dates, mbox files and the `multipart/related`
   lookups of MHT web archives. What a message means (body, attachments, flags) stays in each app.
+- [`craft-openpgp`](crates/openpgp/README.md): OpenPGP as mail carries it: PGP/MIME and cleartext
+  Digital signatures checked, attached Public keys and `Autocrypt:` headers read, a secret key
+  file inspected without using it. Built on rPGP; no I/O, and every size and count is capped.
 - [`craft-odf`](crates/odf/README.md): OpenDocument packages (ODF 1.3 Part 2), read and written: the ZIP container with its `mimetype` and manifest within limits, password protection (AES-256-CBC with PBKDF2, as LibreOffice writes it) and flat single-file documents. With the `text` feature, OpenDocument Text documents read into and written from the craft-flow model.
 - [`craft-prc`](crates/prc/README.md): a reader for PRC (ISO 14739-1), the 3D model format of PDF 3D
   annotations: container, bit-level primitives, schema, tessellations and the product tree as
@@ -271,6 +306,10 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-pcraft-format`](crates/pcraft-format/README.md): the envelope of PhotoCraft's `.pcraft`
   bundle: `Manifest<D>` with the document as a type parameter, `TileRef`, the entry paths, the
   manifest decode limits and the migration runner. The document model stays in PhotoCraft.
+- [`craft-pkcs7`](crates/pkcs7/README.md): the formats of digital signatures, read, verified and
+  written: ASN.1 DER, X.509 certificates and chains, CMS SignedData (PKCS #7), PKCS #12 identity
+  files, RFC 3161 timestamps, and CRL / OCSP revocation evidence. What a signature means for a
+  document or a message stays in each app.
 - [`craft-penpot`](crates/penpot/README.md): clean-room reader and writer for the Penpot 2.x export
   container (`.penpot`): the ZIP archive, its manifest, the per-file, per-page and per-shape JSON
   members and media objects, as the JSON the file holds. Bounded on hostile input. Carved from
@@ -308,6 +347,8 @@ craft-<name> = { git = "https://github.com/storytold/craft-libs", rev = "<commit
 - [`craft-sheet`](crates/sheet/README.md): spreadsheet vocabulary shared by `craft-xls`, `craft-xlsx` and `craft-ods`: cell positions and A1 text, cell values and error values, sheet-name quoting, Excel's built-in number formats and indexed colour palette. Not a file format; no dependencies.
 - [`craft-sf2`](crates/sf2/README.md): SoundFont 2 (`.sf2`) reader: the sample pool and, per preset, the key and velocity regions a note sounds, with tuning, loop points, pan, level and volume envelope resolved from the preset and instrument zones. Bounded on hostile input. From LoopCraft.
 - [`craft-silhouette-studio`](crates/silhouette-studio/src/lib.rs): bounded, fail-closed reader for Silhouette Studio `.studio` and `.studio3` documents: outlines, line colours and page size in millimetres. Protected designs are refused.
+- [`craft-stencilcraft-format`](crates/stencilcraft-format/README.md): the versioned `.stencilcraft` JSON wire schema and envelope: required members, version 1 defaults, optional fields, and header checks.
+- `craft-stencilcraft-document`: StencilCraft's typed document model, geometry helpers, validation, and native `.stencilcraft` codec.
 - [`craft-sketch`](crates/sketch/README.md): clean-room reader for the `.sketch` container (Sketch 48 and newer): the ZIP archive, the version cut, `document.json`, the pages in document order and images, as the JSON the file holds. Bounded on hostile input. Carved from FigCraft.
 - [`craft-svg`](crates/svg/src/lib.rs): SVG. `sniff` recognises SVG and SVGZ data; `svgz` unpacks
   SVGZ within a byte limit, decodes UTF-8, UTF-16 and ISO 8859-1, and compresses; `guard` bounds

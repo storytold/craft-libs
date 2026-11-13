@@ -1,0 +1,98 @@
+{
+  "board": {
+    "height_mm": 400.0,
+    "width_mm": 500.0
+  },
+  "kerf": {
+    "apply_to_exports": false,
+    "width_mm": 0.0
+  },
+  "layers": [
+    {
+      "kind": "cut",
+      "name": "cut",
+      "shapes": [
+        {
+          "id": 1,
+          "path": [
+            {
+              "MoveTo": {
+                "x": 10.0,
+                "y": 20.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 70.0,
+                "y": 20.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 70.0,
+                "y": 80.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 10.0,
+                "y": 80.0
+              }
+            },
+            "ClosePath"
+          ],
+          "style": "cut"
+        },
+        {
+          "id": 2,
+          "path": [
+            {
+              "MoveTo": {
+                "x": 10.0,
+                "y": 390.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 490.0,
+                "y": 10.0
+              }
+            }
+          ],
+          "style": "cut"
+        }
+      ],
+      "visible": true
+    },
+    {
+      "kind": "engrave",
+      "name": "engrave",
+      "shapes": [
+        {
+          "id": 3,
+          "path": [
+            {
+              "MoveTo": {
+                "x": 100.0,
+                "y": 200.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 400.0,
+                "y": 200.0
+              }
+            }
+          ],
+          "style": "engrave"
+        }
+      ],
+      "visible": true
+    }
+  ],
+  "next-shape-id": 4,
+  "stencilcraft": {
+    "name": "stencilcraft",
+    "version": 1
+  }
+}

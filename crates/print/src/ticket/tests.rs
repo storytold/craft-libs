@@ -207,3 +207,224 @@ fn grey_pages_print_on_a_driver_that_has_no_grey_option() {
     assert!(verify_job_options(&color, &copies, 3, caps(&["psk:Color"])).is_err(), "copy count");
     assert!(!Job::default().grey_pages, "off unless the caller says so");
 }
+
+/// A ticket written for these tests in the shape of a converted driver dialog's settings: the
+/// job-scope schema features, a custom paper with its parameters, pages per sheet, binding
+/// and a poster, a media type, a vendor's quality and the driver's private settings.
+fn converted_settings() -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:ns0000="http://example.com/vendor" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+<psf:ParameterInit name="psk:JobCopiesAllDocuments"><psf:Value xsi:type="xsd:integer">4</psf:Value></psf:ParameterInit>
+<psf:Feature name="psk:DocumentCollate"><psf:Option name="psk:Uncollated"/></psf:Feature>
+<psf:Feature name="psk:JobDuplexAllDocumentsContiguously"><psf:Option name="psk:TwoSidedShortEdge"/></psf:Feature>
+<psf:Feature name="psk:DocumentDuplex"><psf:Option name="psk:TwoSidedShortEdge"/></psf:Feature>
+<psf:Feature name="psk:PageMediaSize"><psf:Option name="psk:CustomMediaSize">
+<psf:ScoredProperty name="psk:MediaSizeWidth"><psf:ParameterRef name="psk:PageMediaSizeMediaSizeWidth"/></psf:ScoredProperty>
+</psf:Option></psf:Feature>
+<psf:ParameterInit name="psk:PageMediaSizeMediaSizeWidth"><psf:Value xsi:type="xsd:integer">914400</psf:Value></psf:ParameterInit>
+<psf:Feature name="psk:PageOrientation"><psf:Option name="psk:Landscape"/></psf:Feature>
+<psf:Feature name="psk:PageScaling"><psf:Option name="psk:CustomSquare"/></psf:Feature>
+<psf:ParameterInit name="psk:PageScalingScale"><psf:Value xsi:type="xsd:integer">50</psf:Value></psf:ParameterInit>
+<psf:Feature name="psk:DocumentNUp"><psf:Option><psf:ScoredProperty name="psk:PagesPerSheet"><psf:Value xsi:type="xsd:integer">2</psf:Value></psf:ScoredProperty></psf:Option></psf:Feature>
+<psf:Feature name="psk:JobBindAllDocuments"><psf:Option name="psk:Booklet"/></psf:Feature>
+<psf:ParameterInit name="psk:JobBindAllDocumentsGutter"><psf:Value xsi:type="xsd:integer">0</psf:Value></psf:ParameterInit>
+<psf:Feature name="psk:PagePoster"><psf:Option><psf:ScoredProperty name="psk:SheetsPerPage"><psf:Value xsi:type="xsd:integer">4</psf:Value></psf:ScoredProperty></psf:Option></psf:Feature>
+<psf:Feature name="psk:PageOutputColor"><psf:Option name="psk:Color"/></psf:Feature>
+<psf:Feature name="psk:PageMediaType"><psf:Option name="psk:PhotographicGlossy"/></psf:Feature>
+<psf:Feature name="psk:PageResolution"><psf:Option name="ns0000:Fine"/></psf:Feature>
+<psf:Feature name="ns0000:PageMediaSizeSource"><psf:Option name="ns0000:Roll"/></psf:Feature>
+<psf:ParameterInit name="ns0000:PageDevmodeSnapshot"><psf:Value xsi:type="xsd:string">AAECAw==</psf:Value></psf:ParameterInit>
+</psf:PrintTicket>"#
+    )
+}
+
+/// The top-level schema names left in a ticket.
+fn schema_names(xml: &str) -> Vec<String> {
+    let document = roxmltree::Document::parse(xml).unwrap();
+    document.root_element().children().filter(|n| named_in(*n, NS_PSK)).map(|n| n.attribute("name").unwrap_or_default().to_string()).collect()
+}
+
+fn named_in(node: roxmltree::Node<'_, '_>, namespace: &str) -> bool {
+    node.attribute("name").and_then(|v| v.split_once(':')).is_some_and(|(prefix, _)| node.lookup_namespace_uri(Some(prefix)) == Some(namespace))
+}
+
+#[trial]
+fn the_driver_dialogs_settings_keep_what_the_job_leaves_open() {
+    let settings = converted_settings();
+    let kept = driver_settings_xml(&settings, &Job::default()).unwrap();
+    assert_eq!(
+        schema_names(&kept),
+        ["psk:JobDuplexAllDocumentsContiguously", "psk:DocumentDuplex", "psk:PageOutputColor", "psk:PageMediaType", "psk:PageResolution"],
+        "without a two-sided or grayscale choice of the job, the dialog's apply"
+    );
+    for vendor in ["ns0000:Fine", "ns0000:PageMediaSizeSource", "ns0000:PageDevmodeSnapshot", "AAECAw=="] {
+        assert!(kept.contains(vendor), "{vendor} is kept");
+    }
+    for job_owned in [
+        "JobCopiesAllDocuments",
+        "DocumentCollate",
+        "PageMediaSize\"",
+        "MediaSizeWidth",
+        "Landscape",
+        "CustomSquare",
+        "PageScalingScale",
+        "PagesPerSheet",
+        "Booklet",
+        "JobBindAllDocumentsGutter",
+        "SheetsPerPage",
+    ] {
+        assert!(!kept.contains(job_owned), "{job_owned} is the job's");
+    }
+    // Everything kept is the driver's own text, unchanged.
+    let line = r#"<psf:Feature name="psk:PageMediaType"><psf:Option name="psk:PhotographicGlossy"/></psf:Feature>"#;
+    assert!(kept.contains(line));
+
+    let job = Job { duplex: Some(Duplex::Off), grayscale: true, ..Job::default() };
+    assert_eq!(
+        schema_names(&driver_settings_xml(&settings, &job).unwrap()),
+        ["psk:PageMediaType", "psk:PageResolution"],
+        "the job's two-sided and grayscale win"
+    );
+}
+
+#[trial]
+fn the_dialogs_settings_are_matched_by_namespace_not_by_prefix() {
+    // The schema keywords under another prefix, or unprefixed in the schema's default
+    // namespace, are still the job's; a vendor feature with a schema-like name is the driver's.
+    let settings = format!(
+        r#"<PrintTicket version="1" xmlns="{NS_PSF}" xmlns:k="{NS_PSK}" xmlns:v="http://example.com/vendor">
+<Feature name="k:PageOrientation"><Option name="k:Landscape"/></Feature>
+<Feature name="v:PageOrientation"><Option name="v:Mirrored"/></Feature>
+<p:Feature xmlns:p="{NS_PSF}" xmlns="{NS_PSK}" name="PageMediaSize"/>
+</PrintTicket>"#
+    );
+    let kept = driver_settings_xml(&settings, &Job::default()).unwrap();
+    assert!(!kept.contains("k:Landscape"));
+    assert!(kept.contains("v:Mirrored"));
+    assert!(!kept.contains("name=\"PageMediaSize\""), "{kept}");
+    assert!(roxmltree::Document::parse(&kept).is_ok());
+}
+
+#[trial]
+fn a_media_type_or_quality_the_driver_replaced_refuses_the_job() {
+    let chosen = driver_settings_xml(&converted_settings(), &Job::default()).unwrap();
+    // The vendor's namespace under another prefix than the dialog's `ns0000`.
+    let ticket = |media: &str, resolution: &str, quality: &str| {
+        format!(
+            r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:ns0001="http://example.com/vendor">
+<psf:Feature name="psk:PageMediaType"><psf:Option name="{media}"/></psf:Feature>
+<psf:Feature name="psk:PageResolution"><psf:Option name="{resolution}"/></psf:Feature>{quality}
+</psf:PrintTicket>"#
+        )
+    };
+    assert!(verify_chosen_options(&chosen, &ticket("psk:PhotographicGlossy", "ns0001:Fine", "")).is_ok());
+    let respelled = format!(
+        r#"<PrintTicket version="1" xmlns="{NS_PSF}" xmlns:k="{NS_PSK}"><Feature name="k:PageMediaType"><Option name="k:PhotographicGlossy"/></Feature><Feature name="k:PageResolution"><Option xmlns:v="http://example.com/vendor" name="v:Fine"/></Feature></PrintTicket>"#
+    );
+    assert!(verify_chosen_options(&chosen, &respelled).is_ok(), "the same options under other prefixes");
+    let replaced = [
+        (ticket("psk:Plain", "ns0001:Fine", ""), "media type"),
+        (ticket("ns0001:PhotographicGlossy", "ns0001:Fine", ""), "media type"),
+        (ticket("psk:Plain", "ns0001:Fine", "").replace("PageMediaType", "Other"), "media type"),
+        (ticket("psk:PhotographicGlossy", "ns0001:Draft", ""), "resolution"),
+        (ticket("psk:PhotographicGlossy", "psk:Fine", ""), "resolution"),
+    ];
+    for (replaced, words) in replaced {
+        let refused = verify_chosen_options(&chosen, &replaced);
+        assert!(matches!(&refused, Err(Error::Spool(m)) if m.contains(words) && m.contains("nothing was sent")), "{replaced}: {refused:?}");
+    }
+
+    let with_quality = format!(
+        r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}"><psf:Feature name="psk:PageOutputQuality"><psf:Option name="psk:High"/></psf:Feature></psf:PrintTicket>"#
+    );
+    let quality = |option: &str| {
+        ticket("psk:Plain", "psk:Other", &format!(r#"<psf:Feature name="psk:PageOutputQuality"><psf:Option name="{option}"/></psf:Feature>"#))
+    };
+    assert!(verify_chosen_options(&with_quality, &quality("psk:High")).is_ok(), "no media type or resolution chosen: not checked");
+    let refused = verify_chosen_options(&with_quality, &quality("psk:Draft"));
+    assert!(matches!(&refused, Err(Error::Spool(m)) if m.contains("print quality")), "{refused:?}");
+
+    // A resolution is also its dots per inch, with or without an option name.
+    let resolution = |name: &str, x: u32, y: u32| {
+        format!(
+            r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"><psf:Feature name="psk:PageResolution"><psf:Option{name}>
+<psf:ScoredProperty name="psk:ResolutionX"><psf:Value xsi:type="xsd:integer">{x}</psf:Value></psf:ScoredProperty>
+<psf:ScoredProperty name="psk:ResolutionY"><psf:Value xsi:type="xsd:integer"> {y} </psf:Value></psf:ScoredProperty>
+</psf:Option></psf:Feature></psf:PrintTicket>"#
+        )
+    };
+    for name in ["", r#" name="psk:Fine""#] {
+        let chosen = resolution(name, 600, 600);
+        assert!(verify_chosen_options(&chosen, &resolution(name, 600, 600)).is_ok(), "{name}");
+        assert!(verify_chosen_options(&chosen, &resolution(name, 600, 600).replace(">600<", ">+0600<")).is_ok(), "{name}: the same number");
+        for replaced in [resolution(name, 300, 300), resolution(name, 600, 300), quality("psk:High")] {
+            let refused = verify_chosen_options(&chosen, &replaced);
+            assert!(matches!(&refused, Err(Error::Spool(m)) if m.contains("resolution")), "{name} {replaced}: {refused:?}");
+        }
+    }
+    assert!(verify_chosen_options(&resolution(r#" name="psk:Fine""#, 600, 600), &resolution("", 600, 600)).is_err(), "the name was dropped");
+
+    // Values the option refers to as parameters.
+    let by_reference = |x: u32| {
+        format!(
+            r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:v="http://example.com/vendor" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"><psf:Feature name="psk:PageResolution"><psf:Option name="v:Custom">
+<psf:ScoredProperty name="psk:ResolutionX"><psf:ParameterRef name="v:Dpi"/></psf:ScoredProperty>
+</psf:Option></psf:Feature><psf:ParameterInit name="v:Dpi"><psf:Value xsi:type="xsd:integer">{x}</psf:Value></psf:ParameterInit></psf:PrintTicket>"#
+        )
+    };
+    assert!(verify_chosen_options(&by_reference(600), &by_reference(600)).is_ok());
+    assert!(verify_chosen_options(&by_reference(600), &by_reference(300)).is_err(), "the parameter's value changed");
+
+    // A QName value under another prefix is the same value.
+    let qname = |prefix: &str, value: &str| {
+        format!(
+            r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:{prefix}="http://example.com/vendor" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"><psf:Feature name="psk:PageOutputQuality"><psf:Option name="psk:High">
+<psf:ScoredProperty name="{prefix}:Mode"><psf:Value xsi:type="xsd:QName">{prefix}:{value}</psf:Value></psf:ScoredProperty>
+</psf:Option></psf:Feature></psf:PrintTicket>"#
+        )
+    };
+    assert!(verify_chosen_options(&qname("ns0000", "Photo"), &qname("brpsk", "Photo")).is_ok());
+    assert!(verify_chosen_options(&qname("ns0000", "Photo"), &qname("brpsk", "Text")).is_err());
+}
+
+#[trial]
+fn settings_that_are_not_a_ticket_are_refused() {
+    for bad in ["", "<not xml", r#"<psf:PrintCapabilities xmlns:psf="http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework"/>"#]
+    {
+        let refused = driver_settings_xml(bad, &Job::default());
+        assert!(matches!(&refused, Err(Error::Spool(m)) if m.contains("choose them again")), "{bad:?}: {refused:?}");
+    }
+}
+
+#[trial]
+fn the_driver_dialog_opens_on_the_jobs_copies_and_collation() {
+    let job = Job { copies: 3, collate: false, duplex: Some(Duplex::LongEdge), grayscale: true, ..Job::default() };
+    let xml = dialog_xml(&job).unwrap();
+    assert_eq!(schema_names(&xml), ["psk:JobCopiesAllDocuments", "psk:DocumentCollate"]);
+    for value in [">3<", "psk:Uncollated"] {
+        assert!(xml.contains(value), "missing {value}");
+    }
+    // The job's two-sided and grayscale choices stay out of the settings the dialog returns,
+    // so they do not outlast the job's own choice.
+    for value in ["TwoSided", "Grayscale", "Monochrome"] {
+        assert!(!xml.contains(value), "{value} is the job's");
+    }
+    assert_eq!(schema_names(&dialog_xml(&Job::default()).unwrap()), ["psk:JobCopiesAllDocuments", "psk:DocumentCollate"]);
+}
+
+/// A `name` with more than 255 spaces around its `=`, and an `xsi` attribute with a name over
+/// 64 KiB, are respelled where their values are, not where roxmltree's `range_value` says.
+#[trial]
+fn values_past_a_long_name_or_many_spaces_are_respelled_in_place() {
+    let spaced = |prefix: &str| {
+        let pad = " ".repeat(200);
+        brother(prefix).replace(&format!(r#"name="{prefix}:JobPrintSpeed""#), &format!(r#"name{pad}={pad}"{prefix}:JobPrintSpeed""#))
+    };
+    assert_eq!(respell(&spaced("ns0000"), &brother("brpsk")), Some(spaced("brpsk")));
+    let long = |prefix: &str| {
+        let p = "x".repeat(65_536);
+        brother(prefix).replace("</psf:PrintTicket>", &format!(r#"<psf:Value xmlns:{p}="{NS_XSI}" {p}:type="{prefix}:Custom"/></psf:PrintTicket>"#))
+    };
+    assert_eq!(respell(&long("ns0000"), &brother("brpsk")), Some(long("brpsk")));
+}

@@ -20,6 +20,11 @@ pub(super) fn valid_width(width: f32) -> bool {
     width.is_finite() && width > 0.0 && width <= MAX_EXTENT
 }
 
+/// A flyout's top offset from its icons: finite and within the largest extent either way.
+pub(super) fn valid_offset(offset: f32) -> bool {
+    offset.is_finite() && offset.abs() <= MAX_EXTENT
+}
+
 pub(super) fn valid_size(size: SplitSize) -> bool {
     match size {
         SplitSize::Ratio(r) => r.is_finite() && (0.0..=1.0).contains(&r),

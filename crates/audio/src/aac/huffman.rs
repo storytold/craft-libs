@@ -62,12 +62,12 @@ const SUB: u32 = 1 << 31;
 /// entry with `SUB` set is `SUB | offset << 5 | width` and selects a sub-table of `1 << width`
 /// leaves indexed by the next `width` bits. An entry of 0 is a bit pattern that no codeword starts
 /// with (the codebooks are complete, so this does not occur).
-struct Lut {
+pub(crate) struct Lut {
     t: Vec<u32>,
 }
 
 impl Lut {
-    fn build(codes: &[(u32, u8)]) -> Lut {
+    pub(crate) fn build(codes: &[(u32, u8)]) -> Lut {
         let mut t = vec![0u32; 1 << L1];
         // sub-table width per first-level prefix
         let mut width = vec![0u32; 1 << L1];
@@ -103,7 +103,7 @@ impl Lut {
 
     /// The symbol of the codeword at the reader position; `Eof` if the codeword is cut off.
     #[inline]
-    fn decode(&self, br: &mut BitReader) -> Result<u32> {
+    pub(crate) fn decode(&self, br: &mut BitReader) -> Result<u32> {
         let bits = br.peek(32);
         let mut e = self.t[(bits >> (32 - L1)) as usize];
         if e & SUB != 0 {

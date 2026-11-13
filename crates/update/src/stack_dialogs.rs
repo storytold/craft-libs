@@ -41,6 +41,10 @@ craft_ui::words! {
         update_and_restart: "updateDialog.updateAndRestart" = "Update and Restart";
         /// The prompt's and the check dialog's button once an update is ready and waits for the app to close.
         restart_to_update: "updateDialog.restartToUpdate" = "Restart to Update";
+        /// The prompt's update button while the app holds unsaved work it can save first.
+        save_and_update: "updateDialog.saveAndUpdate" = "Save and Update";
+        /// The prompt's status line while the app saves its work before the update.
+        saving: "updateDialog.saving" = "Saving your work…";
         download: "updateDialog.download" = "Download";
         later: "updateDialog.later" = "Later";
         whats_new: "updateDialog.whatsNew" = "What's New";
@@ -151,10 +155,11 @@ fn busy(ui: &mut Ui, label: &Label) {
 /// "Update available", on the startup queue at [`StartupStage::Update`](craft_ui::dialog::StartupStage::Update)
 /// so it never overlaps the GPU warning or recovery, or opened by a manual check that found a release. The user
 /// sees the app's icon and name, the developer, the new and running versions, the release notes link, and Update
-/// and Restart / Download / Later in the platform order; while an install runs the install buttons are disabled
-/// and a status line shows. Enter takes the default, Esc is Later. Update and Restart keeps the prompt open to show the install's progress
+/// and Restart (Save and Update while the app holds work it can save first) / Download / Later in the platform
+/// order; while an install or that save runs the install buttons are disabled and a status line shows. Enter takes
+/// the default, Esc is Later. Update and Restart keeps the prompt open to show the install's progress
 /// ([`take_update_request`](UpdatePromptDialog::take_update_request)). Later and Esc stay available while the install
-/// runs. Result: [`UpdateChoice`].
+/// or the save runs. Result: [`UpdateChoice`].
 #[derive(craft_ui::contract::Pattern)]
 pub struct UpdatePromptDialog {
     id: DialogId,
@@ -165,6 +170,10 @@ pub struct UpdatePromptDialog {
     installing: bool,
     /// The update is ready and waits for the app to close: the main button reads Restart to Update.
     ready: bool,
+    /// The app holds unsaved work it can save: the main button reads Save and Update.
+    offer_save: bool,
+    /// The app is saving its work before the update.
+    saving: bool,
     open: bool,
     /// Update and Restart was picked; the dialog stays open to show the install's progress.
     requested: bool,
@@ -182,6 +191,8 @@ impl UpdatePromptDialog {
             status: None,
             installing: false,
             ready: false,
+            offer_save: false,
+            saving: false,
             open: true,
             requested: false,
             icon: IconCell::new(),
@@ -211,6 +222,18 @@ impl UpdatePromptDialog {
         self.ready = ready;
     }
 
+    /// Labels the main button Save and Update, for an app that holds unsaved work it can save before
+    /// the update.
+    pub fn set_offer_save(&mut self, offer_save: bool) {
+        self.offer_save = offer_save;
+    }
+
+    /// Shows the save the app runs before the update: the status line says so and the install
+    /// buttons are disabled, so the second click of a double click on Save and Update does nothing.
+    pub fn set_saving(&mut self, saving: bool) {
+        self.saving = saving;
+    }
+
     /// Closes the prompt on the next pass with [`UpdateChoice::Later`], for a prompt the updater withdraws.
     pub fn withdraw(&mut self) {
         self.open = false;
@@ -229,11 +252,17 @@ impl UpdatePromptDialog {
         let version = self.release.version_label();
         let message = words.available_message.fill(&[("app", subject.name), ("version", &version), ("running", &self.running_version)]);
         let version_line = words.version_line.fill(&[("running", &self.running_version), ("version", &version)]);
-        let enabled = !self.installing;
+        let enabled = !self.installing && !self.saving;
         let mut choices = Vec::new();
         let mut buttons = Vec::new();
         if self.self_updating || self.ready {
-            let label = if self.ready { words.restart_to_update.clone() } else { words.update_and_restart.clone() };
+            let label = if self.offer_save {
+                words.save_and_update.clone()
+            } else if self.ready {
+                words.restart_to_update.clone()
+            } else {
+                words.update_and_restart.clone()
+            };
             choices.push(UpdateChoice::UpdateAndRestart);
             buttons.push(FooterButton::new(label, DialogRole::Accept).enabled(enabled).stays_open(true));
             choices.push(UpdateChoice::Download);
@@ -247,8 +276,14 @@ impl UpdatePromptDialog {
         // A blocked default button leaves the focus off the buttons: landing on another one would let Enter
         // answer with it.
         let initial = if enabled { Initial::Default } else { Initial::Keep };
-        let (status, installing, release, icon) = (&self.status, self.installing, &self.release, &self.icon);
-        let installing_label = words.installing.clone();
+        let (status, release, icon) = (&self.status, &self.release, &self.icon);
+        let busy_label = if self.saving {
+            Some(words.saving.clone())
+        } else if self.installing {
+            Some(words.installing.clone())
+        } else {
+            None
+        };
         let shown = Dialog::prompt(words.available_title.clone())
             .buttons(buttons)
             .initial_focus(initial)
@@ -260,10 +295,11 @@ impl UpdatePromptDialog {
                     if let Some(status) = status {
                         Notice::new(Tone::Warn, status.clone()).show(ui);
                     }
-                    if installing {
-                        busy(ui, &installing_label);
-                    } else {
-                        Text::new(message.clone()).show(ui);
+                    match &busy_label {
+                        Some(label) => busy(ui, label),
+                        None => {
+                            Text::new(message.clone()).show(ui);
+                        }
                     }
                     if safe_web_link(&release.html_url) {
                         Link::new(words.whats_new.clone()).url(release.html_url.clone()).show(ui);
