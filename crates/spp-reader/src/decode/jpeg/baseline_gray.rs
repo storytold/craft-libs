@@ -237,13 +237,13 @@ pub fn decode(jpeg: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
         let (bx, by) = (block % columns, block / columns);
         let mut rows_done = [0f64; 64];
         if !flat {
-            for (row, basis_y) in rows_done.chunks_exact_mut(8).zip(&basis) {
+            for (row, basis_y) in rows_done.as_chunks_mut::<8>().0.iter_mut().zip(&basis) {
                 for (u, out) in row.iter_mut().enumerate() {
-                    *out = basis_y.iter().zip(c.chunks_exact(8)).map(|(b, cv)| b * cv.get(u).copied().unwrap_or(0.0)).sum();
+                    *out = basis_y.iter().zip(c.as_chunks::<8>().0).map(|(b, cv)| b * cv.get(u).copied().unwrap_or(0.0)).sum();
                 }
             }
         }
-        for (y, row) in rows_done.chunks_exact(8).enumerate() {
+        for (y, row) in rows_done.as_chunks::<8>().0.iter().enumerate() {
             let py = by * 8 + y;
             if py >= h {
                 break;

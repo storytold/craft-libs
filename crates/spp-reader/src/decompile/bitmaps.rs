@@ -46,7 +46,7 @@ pub fn add_raw(bitmaps: &mut Vec<(String, Vec<u8>)>, offset: u32, w: usize, h: u
     if !bitmaps.iter().any(|(name, _)| *name == file) {
         let color = color_type(layout.channels);
         let png = if layout.bytes == 2 {
-            let big_endian: Vec<u8> = samples.chunks_exact(2).flat_map(|s| s.iter().rev().copied()).collect();
+            let big_endian: Vec<u8> = samples.as_chunks::<2>().0.iter().flat_map(|&[low, high]| [high, low]).collect();
             encode_raw(w, h, color, 16, &big_endian)
         } else {
             encode_raw(w, h, color, 8, samples)
