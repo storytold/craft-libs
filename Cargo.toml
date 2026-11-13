@@ -46,9 +46,17 @@ craft-design-lint = { path = "crates/design-lint" }
 craft-dialogs = { path = "crates/dialogs" }
 craft-doc-binary = { path = "crates/doc-binary" }
 craft-docx = { path = "crates/docx" }
+craft-document-bundle = { path = "crates/document-bundle" }
+craft-designcraft-format = { path = "crates/designcraft-format" }
 craft-dxf = { path = "crates/dxf" }
 craft-drawingml = { path = "crates/drawingml" }
 craft-eps = { path = "crates/eps" }
+craft-file-formats = { path = "crates/file-formats" }
+craft-file-import = { path = "crates/file-import" }
+vectorcraft-doc = { git = "https://github.com/storytold/vectorcraft.git", rev = "6b3a6b8788ebcb420d69449199cbdf323888d27e" }
+vectorcraft-eps = { git = "https://github.com/storytold/vectorcraft.git", rev = "6b3a6b8788ebcb420d69449199cbdf323888d27e" }
+vectorcraft-geom = { git = "https://github.com/storytold/vectorcraft.git", rev = "6b3a6b8788ebcb420d69449199cbdf323888d27e" }
+vectorcraft-pathops = { git = "https://github.com/storytold/vectorcraft.git", rev = "6b3a6b8788ebcb420d69449199cbdf323888d27e" }
 craft-doc = { path = "crates/doc" }
 craft-docpath = { path = "crates/docpath" }
 craft-dpx = { path = "crates/dpx" }
@@ -56,6 +64,7 @@ craft-draw = { path = "crates/draw" }
 craft-ecproj-format = { path = "crates/ecproj-format" }
 craft-figma-rest = { path = "crates/figma-rest" }
 craft-exr = { path = "crates/exr" }
+craft-flags = { path = "crates/flags" }
 craft-font-catalog = { path = "crates/font-catalog" }
 craft-font-manager = { path = "crates/font-manager" }
 craft-font-store = { path = "crates/font-store" }
@@ -74,6 +83,7 @@ harfbuzz-subset-sys = { path = "crates/harfbuzz-subset-sys" }
 craft-host = { path = "crates/host" }
 craft-i18n = { path = "crates/i18n" }
 craft-idml = { path = "crates/idml" }
+craft-indd = { path = "crates/indd" }
 craft-jmap = { path = "crates/jmap" }
 craft-ical = { path = "crates/ical" }
 craft-imaging = { path = "crates/imaging" }
@@ -89,6 +99,7 @@ craft-latex = { path = "crates/latex" }
 craft-markdown = { path = "crates/markdown" }
 craft-math = { path = "crates/math" }
 craft-media = { path = "crates/media", default-features = false }
+craft-materialx = { path = "crates/materialx" }
 craft-media-testkit = { path = "crates/media-testkit" }
 craft-midi = { path = "crates/midi" }
 craft-sf2 = { path = "crates/sf2" }
@@ -101,10 +112,13 @@ craft-menu = { path = "crates/menu" }
 craft-metafile = { path = "crates/metafile" }
 craft-offcrypto = { path = "crates/offcrypto" }
 craft-opc = { path = "crates/opc" }
+craft-openpgp = { path = "crates/openpgp" }
 craft-ora = { path = "crates/ora" }
 craft-pptx = { path = "crates/pptx" }
 craft-penpot = { path = "crates/penpot" }
 craft-pcraft-format = { path = "crates/pcraft-format" }
+craft-pcraft-bundle = { path = "crates/pcraft-bundle" }
+craft-pkcs7 = { path = "crates/pkcs7" }
 craft-plotter = { path = "crates/plotter" }
 craft-prepress = { path = "crates/prepress" }
 craft-pages = { path = "crates/pages" }
@@ -120,8 +134,12 @@ craft-sheet = { path = "crates/sheet" }
 craft-sketch = { path = "crates/sketch" }
 craft-review = { path = "crates/review" }
 craft-settings = { path = "crates/settings" }
+craft-scraft-format = { path = "crates/scraft-format" }
+craft-time = { path = "crates/time" }
 craft-silhouette-studio = { path = "crates/silhouette-studio" }
 craft-svg = { path = "crates/svg" }
+craft-stencilcraft-format = { path = "crates/stencilcraft-format" }
+craft-stencilcraft-document = { path = "crates/stencilcraft-document" }
 craft-svg-paths = { path = "crates/svg-paths" }
 craft-stream-codecs = { path = "crates/stream-codecs" }
 craft-text = { path = "crates/text" }
@@ -148,6 +166,7 @@ craft-vectordrawable = { path = "crates/vectordrawable" }
 craft-xls = { path = "crates/xls" }
 craft-wordmodel = { path = "crates/wordmodel" }
 craft-xlsx = { path = "crates/xlsx" }
+indd = { git = "https://github.com/storytold/indd-utils", rev = "7f3060e5bce78d21ea70e0d5eacb96edce15dfbe" }
 craft-xcf = { path = "crates/xcf" }
 craft-xml = { path = "crates/xml" }
 craft-zip = { path = "crates/zip" }
@@ -179,11 +198,13 @@ unsafe_code = "forbid"
 # Every public item has a doc comment; a self-evident field or variant carries
 # `#[allow(missing_docs)]` instead.
 missing_docs = "warn"
+unused_workspace_dependencies = "allow"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(craft_pdf_unicode_fixtures)"] }
 
 [workspace.lints.clippy]
 cognitive_complexity = "deny"
 too_many_arguments = "deny"
+unused_workspace_dependencies = "allow"
 wildcard_imports = "deny"
 dbg_macro = "warn"
 todo = "warn"

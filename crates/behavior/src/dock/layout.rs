@@ -12,7 +12,7 @@ use super::{
     inner::{
         check_group, check_leaf, group_location, node_location, restore_around_subtree, restore_parent_size, restore_stack_kind, stack_entry_mut,
     },
-    limits::{MAX_DEPTH, MAX_NODES, MAX_PANELS, valid_height, valid_rect, valid_size, valid_width},
+    limits::{MAX_DEPTH, MAX_NODES, MAX_PANELS, valid_height, valid_offset, valid_rect, valid_size, valid_width},
     node::{Floating, Node},
     policy::{DockError, Permissions},
     split::SplitSize,
@@ -216,7 +216,13 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         };
         let own = groups.get(group).ok_or(DockError::MissingPanel)?;
         let mut location = group_location(&own.panels, panel).ok_or(DockError::MissingPanel)?;
-        location.group = Some(GroupLocation { minimized: own.minimized, height: own.height, flyout_width: own.flyout_width, column });
+        location.group = Some(GroupLocation {
+            minimized: own.minimized,
+            height: own.height,
+            flyout_width: own.flyout_width,
+            flyout_offset: own.flyout_offset,
+            column,
+        });
         if location.anchor.is_some() {
             return Ok(location);
         }
@@ -281,6 +287,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         if state.is_some_and(|s| {
             !valid_height(s.height)
                 || s.flyout_width.is_some_and(|w| !valid_width(w))
+                || s.flyout_offset.is_some_and(|o| !valid_offset(o))
                 || s.column.is_some_and(|c| c.width.is_some_and(|w| !valid_width(w)) || c.iconic_width.is_some_and(|w| !valid_width(w)))
         }) {
             return Err(DockError::InvalidGeometry);
@@ -293,6 +300,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 minimized: state.is_some_and(|s| s.minimized),
                 height: state.and_then(|s| s.height),
                 flyout_width: state.and_then(|s| s.flyout_width),
+                flyout_offset: state.and_then(|s| s.flyout_offset),
             };
             let column = state.and_then(|s| s.column);
             Moving {

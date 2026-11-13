@@ -18,6 +18,8 @@ pub const FINISH_FLAG: &str = "--finish-update";
 pub(super) enum Finish {
     /// Run the new MSI, which reinstalls into the same folder.
     Msi(PathBuf),
+    /// Per-user MSI with no installer progress window.
+    QuietMsi(PathBuf),
     /// Unpack the new portable zip into `tmp` and copy it over the launcher's folder.
     Portable { zip: PathBuf, tmp: PathBuf },
 }
@@ -29,6 +31,7 @@ pub(super) fn helper_args(pid: u32, exe: &Path, finish: &Finish) -> Vec<OsString
     let mut args: Vec<OsString> = vec![FINISH_FLAG.into(), pid.to_string().into(), exe.into()];
     match finish {
         Finish::Msi(msi) => args.extend(["msi".into(), msi.into()]),
+        Finish::QuietMsi(msi) => args.extend(["msi-quiet".into(), msi.into()]),
         Finish::Portable { zip, tmp } => args.extend(["portable".into(), zip.into(), tmp.into()]),
     }
     args
@@ -44,6 +47,7 @@ pub(super) fn parse_helper_args(args: &[OsString]) -> Option<(u32, PathBuf, Fini
     let pid = pid.to_str()?.parse().ok()?;
     let finish = match step {
         [kind, msi] if kind == "msi" => Finish::Msi(msi.into()),
+        [kind, msi] if kind == "msi-quiet" => Finish::QuietMsi(msi.into()),
         [kind, zip, tmp] if kind == "portable" => Finish::Portable { zip: zip.into(), tmp: tmp.into() },
         _ => return None,
     };
@@ -51,8 +55,8 @@ pub(super) fn parse_helper_args(args: &[OsString]) -> Option<(u32, PathBuf, Fini
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
-pub(super) fn msi_finish(file: &Path) -> Result<Finish, String> {
-    install::msi_path(file).map(Finish::Msi)
+pub(super) fn msi_finish(file: &Path, quiet: bool) -> Result<Finish, String> {
+    install::msi_path(file).map(|file| if quiet { Finish::QuietMsi(file) } else { Finish::Msi(file) })
 }
 
 /// The cache folder the update helper is copied into.
@@ -106,8 +110,8 @@ pub fn finish(app: &App, args: &[OsString]) -> Option<Result<(), String>> {
         return Some(Err(e));
     }
     // Read before the step: the update may move or replace the old exe.
-    let registered =
-        matches!(step, Finish::Msi(_)) && matches!(crate::msi_copy::windows::find(app, &exe), Some(crate::msi_copy::MsiCopy::Registered { .. }));
+    let registered = matches!(step, Finish::Msi(_) | Finish::QuietMsi(_))
+        && matches!(crate::msi_copy::windows::find(app, &exe), Some(crate::msi_copy::MsiCopy::Registered { .. }));
     let wait = |pid| process::wait_for_exit(pid, std::time::Duration::from_secs(60));
     let start = |exe: &Path| {
         signed_like(app, &me, exe)
@@ -421,7 +425,7 @@ pub(super) fn check_helper(app: &App, me: &Path, paths: &Paths, exe: &Path, step
     let downloads = canonical(&paths.downloads())?;
     let in_downloads = |file: &Path| canonical(file).map(|f| f.parent() == Some(downloads.as_path()));
     let allowed = match (detect(app, &exe), step) {
-        (Some(Install::Msi(installed)), Finish::Msi(msi)) => installed == exe && in_downloads(msi)?,
+        (Some(Install::Msi(installed)), Finish::Msi(msi) | Finish::QuietMsi(msi)) => installed == exe && in_downloads(msi)?,
         (Some(Install::Portable(installed) | Install::Standalone(installed)), Finish::Portable { zip, tmp }) => {
             installed == exe
                 && in_downloads(zip)?
@@ -455,8 +459,11 @@ pub(super) fn step_after_wait(app: &App, reference: &Path, pid: u32, exe: &Path,
     let waited = wait(pid);
     let result = if waited {
         match step {
-            Finish::Msi(msi) => {
-                signed_like(app, reference, msi).and_then(|()| msi_step(app, exe)).and_then(|step| crate::msi_migrate::windows::run(msi, &step))
+            Finish::Msi(msi) | Finish::QuietMsi(msi) => {
+                let quiet = matches!(step, Finish::QuietMsi(_));
+                signed_like(app, reference, msi)
+                    .and_then(|()| msi_step(app, exe))
+                    .and_then(|step| crate::msi_migrate::windows::run_with_ui(msi, &step, quiet))
             }
             Finish::Portable { zip, tmp } => match (exe.parent(), exe.file_name()) {
                 (Some(dir), Some(executable)) => crate::portable::unpack_over(zip, tmp, dir, executable, &|file| {
@@ -470,7 +477,7 @@ pub(super) fn step_after_wait(app: &App, reference: &Path, pid: u32, exe: &Path,
         Err(format!("{} was still running after a minute, so the update wasn't installed", app.name))
     };
     match step {
-        Finish::Msi(msi) => {
+        Finish::Msi(msi) | Finish::QuietMsi(msi) => {
             let _ = std::fs::remove_file(msi);
         }
         // `unpack_over` removes the staging folder, unless it holds files it couldn't put back.

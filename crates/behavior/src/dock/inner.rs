@@ -11,7 +11,7 @@ use super::{
     edit::{node_at, split_frame, split_frame_sized},
     groups::{Column, DockEdge, Group, Moving, PanelPlace, Target, Unit},
     layout::Layout,
-    limits::{MAX_DEPTH, MAX_PANELS, valid_active, valid_height, valid_rect, valid_size, valid_width},
+    limits::{MAX_DEPTH, MAX_PANELS, valid_active, valid_height, valid_offset, valid_rect, valid_size, valid_width},
     node::{Floating, Node, StackEntry},
     policy::{DockError, Permissions},
     split::SplitSize,
@@ -201,6 +201,14 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 self.group_mut(&place).ok_or(DockError::InvalidPlacement)?.flyout_width = width;
                 Ok(())
             }
+            Action::MoveFlyoutTop { panel, offset } => {
+                if offset.is_some_and(|o| !valid_offset(o)) {
+                    return Err(DockError::InvalidGeometry);
+                }
+                let place = self.place(&panel).ok_or(DockError::MissingPanel)?;
+                self.group_mut(&place).ok_or(DockError::InvalidPlacement)?.flyout_offset = offset;
+                Ok(())
+            }
             Action::SetIconic { panel, iconic } => {
                 self.column_of(&panel)?.iconic = iconic;
                 Ok(())
@@ -369,7 +377,11 @@ pub(super) fn check_leaf<'a, P: Eq + Hash>(node: &'a Node<P>, seen: &mut HashSet
 }
 
 pub(super) fn check_group<'a, P: Eq + Hash>(group: &'a Group<P>, seen: &mut HashSet<&'a P>) -> Result<(), DockError> {
-    if group.panels.is_empty() || !valid_height(group.height) || group.flyout_width.is_some_and(|w| !valid_width(w)) {
+    if group.panels.is_empty()
+        || !valid_height(group.height)
+        || group.flyout_width.is_some_and(|w| !valid_width(w))
+        || group.flyout_offset.is_some_and(|o| !valid_offset(o))
+    {
         return Err(DockError::InvalidGeometry);
     }
     check_tabs(&group.panels, group.active, seen)

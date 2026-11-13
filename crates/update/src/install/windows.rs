@@ -2,7 +2,9 @@
 
 use crate::protocol::CANCELLED;
 
-use super::{App, INSTALLER, JobPhase, Path, PathBuf, Stop, cancelled, msi_command, msi_folder_argument, msi_log, process, reinstall_command, turn};
+use super::{
+    App, INSTALLER, JobPhase, Path, PathBuf, Stop, cancelled, msi_command, msi_folder_argument, msi_log, process, reinstall_command_ui, turn,
+};
 
 fn msiexec() -> PathBuf {
     std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from).join(r"System32\msiexec.exe")
@@ -40,8 +42,13 @@ pub fn run_msi(msi: &Path, destination: Option<&Path>, stop: &Stop, phase: &mut 
 /// context; `folder`, when given, is where it goes. A failure names the installer's log,
 /// which is the only place 1603 is explained.
 pub fn reinstall(msi: &Path, context: &[&str], folder: Option<&Path>) -> Result<(), String> {
+    reinstall_with_ui(msi, context, folder, false)
+}
+
+/// [`reinstall`]; `quiet` hides the progress window of a per-user install.
+pub(crate) fn reinstall_with_ui(msi: &Path, context: &[&str], folder: Option<&Path>, quiet: bool) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
-    let mut command = reinstall_command(&msiexec(), msi, context)?;
+    let mut command = reinstall_command_ui(&msiexec(), msi, context, quiet)?;
     if let Some(dir) = folder {
         command.raw_arg(msi_folder_argument(dir)?);
     }

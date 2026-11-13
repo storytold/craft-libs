@@ -7,7 +7,11 @@ struct TempDir(PathBuf);
 impl TempDir {
     fn new(tag: &str) -> Self {
         static N: AtomicU64 = AtomicU64::new(0);
-        let d = std::env::temp_dir().join(format!("craft-atomic-{tag}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        #[cfg(not(target_arch = "wasm32"))]
+        let pid = std::process::id();
+        #[cfg(target_arch = "wasm32")]
+        let pid = 0;
+        let d = std::env::temp_dir().join(format!("craft-atomic-{tag}-{pid}-{}", N.fetch_add(1, Ordering::Relaxed)));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).ok();
         Self(d)
@@ -187,4 +191,18 @@ fn distinguishes_atomicity_and_durability_order() {
             "Durability invariant violated: parent directory must be flushed after rename (rename={rename_idx}, sync_dir={sync_dir_idx})"
         );
     }
+}
+
+#[test]
+fn temp_name_format_is_valid() {
+    let name = temp_name("document.craft");
+    assert!(name.starts_with(".document.craft."));
+    assert!(name.ends_with(".craft_tmp"));
+}
+
+#[cfg(target_arch = "wasm32")]
+#[test]
+fn wasm_atomic_write_returns_unsupported() {
+    let err = atomic_write(Path::new("dummy.craft"), b"data").unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::Unsupported);
 }

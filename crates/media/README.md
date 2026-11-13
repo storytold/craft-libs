@@ -1,8 +1,8 @@
 # craft-media
 
 Media containers and bit-level I/O for the Craft apps: an MSB-first bit reader and writer,
-clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) and MXF demuxers and muxers, and
-Ogg, AVI and MPEG-2 Systems (transport and program stream) demuxers, written from the public specifications. No `unsafe`, no panics on malformed
+clean-room ISO BMFF (MP4), QuickTime (MOV), Matroska (MKV, WebM), MXF and AVI demuxers and muxers, and
+Ogg and MPEG-2 Systems (transport and program stream) demuxers, written from the public specifications. No `unsafe`, no panics on malformed
 input, builds for `wasm32-unknown-unknown`. Dependencies: `thiserror` (for `isobmff`), `chrono`
 (for `mxf`), `serde` (optional).
 
@@ -44,8 +44,7 @@ craft-media = { git = "https://github.com/storytold/craft-libs", rev = "<commit>
 - In scope: bit-level reading and writing, and container demuxing and muxing (boxes, sample
   tables, sample entries and codec configuration records) for audio and video tracks.
 - Out of scope: codecs. Audio codecs are in `craft-audio`; video codecs (H.264, HEVC, ProRes,
-  DNx, VP8, VP9, AV1) are in `craft-video`. Containers only FilmCraft reads (MXF,
-  MPEG-TS/PS, AVI) are not here yet.
+  DNx, VP8, VP9, AV1, MPEG-4 Part 2) are in `craft-video`.
 - Anything both the audio and the video codec crates need belongs here, so the two never depend
   on each other.
 
@@ -448,10 +447,10 @@ No muxer.
 
 ## `avi`
 
-A clean-room AVI demuxer from FilmCraft's `filmcraft-avi` (storytold/filmcraft@4bec22b), written
-from Microsoft's published AVI RIFF file reference and the OpenDML AVI File Format Extensions 1.02.
-No FFmpeg, libavformat or other AVI implementation was read; ffmpeg and ffprobe are test oracles
-only. No muxer.
+A clean-room AVI demuxer from FilmCraft's `filmcraft-avi` (storytold/filmcraft@4bec22b), and a
+muxer, both written from Microsoft's published AVI RIFF file reference and the OpenDML AVI File
+Format Extensions 1.02. No FFmpeg, libavformat or other AVI implementation was read; ffmpeg and
+ffprobe are test oracles only.
 
 ```rust
 use craft_media::avi::{open, StreamKind};
@@ -496,6 +495,44 @@ Tests: hand-built files for every index path, truncation, every single-byte muta
 multi-byte damage (never a panic). `tests/oracle_avi.rs` checks ffmpeg-made files (Motion JPEG,
 H.264 with B-frames, BGR24, YUY2; PCM and MP3) against ffprobe; the ignored `opendml_file_past_1_gb`
 checks a 1.16 GB OpenDML file with `AVIX` extensions.
+
+### Muxer
+
+```rust
+use craft_media::avi::{AudioSpec, AviWriter, MuxOptions, StreamSpec, VideoSpec};
+
+let video = VideoSpec::new(*b"XVID", 640, 360, 25, 1); // or VideoSpec::for_codec(&encoder.codec_params(), 25, 1)
+let audio = AudioSpec::pcm(48_000, 2, 16);
+let mut w = AviWriter::new(file, vec![StreamSpec::Video(video), StreamSpec::Audio(audio)], MuxOptions::default())?;
+w.write_chunk(0, &frame, keyframe)?; // chunks go in the order written: the caller interleaves
+w.write_chunk(1, &pcm, true)?;
+let file = w.finish()?; // Write + Seek: sizes and the header list are rewritten at the end
+```
+
+- Layout: `RIFF AVI ` with `hdrl` (`avih`; per stream `strh`, `strf`, `strn` and an OpenDML
+  `indx`; `odml`/`dmlh`), `LIST movi`, `idx1`. Chunks are `NNdc` (video) and `NNwb` (audio) with
+  decimal stream numbers, padded to even sizes. Empty video chunks (repeat the previous picture)
+  are allowed.
+- Large files: when a RIFF would pass `MuxOptions::riff_limit` (1 GiB by default, 16 KiB to
+  2 GiB) the file continues in a `RIFF AVIX`. Every RIFF ends its `movi` with an `ix##` standard
+  index per stream, listed in that stream's `indx`; `idx1` covers the first RIFF only, and
+  `avih` counts the first RIFF's frames while `dmlh` and `strh` count all of them, as OpenDML
+  asks. The `indx` has room for `MuxOptions::max_riffs` (256) RIFFs, reserved in the header.
+- Streams: video with any `BITMAPINFOHEADER` (`VideoSpec::for_codec` picks the FourCC of an
+  encoder's `CodecParams`: `FMP4`, `H264`, `HEVC`, `MJPG`, `MPG2`, `VP80`, `VP90`, `AV01`; `FMP4` and
+  not `XVID` for MPEG-4 Part 2, which decoders take to name the encoder), and audio
+  with any `WAVEFORMATEX`, timed by its bytes (`AudioTiming::Bytes`: PCM and other fixed-size
+  sample frames) or a packet a chunk (`AudioTiming::Packets`: MP3, AAC, AC-3). Up to 100 streams.
+- Errors, not panics: no streams, a zero rate, a chunk that does not fit in a RIFF, more RIFFs
+  than `max_riffs` (what was written still closes into a readable file).
+
+Tests: `mux_tests.rs` reads files back through the demuxer on every index path (OpenDML, `idx1`
+with the `AVIX` extensions scanned, a scan), with odd and empty chunks, several `AVIX`
+extensions, a file starting inside its output, packet-timed audio and the error cases.
+`tests/oracle_avi_mux.rs` muxes an ffmpeg-made MPEG-4 Part 2 stream and PCM, in one RIFF and
+across `AVIX` extensions: ffmpeg decodes the AVI to exactly the pictures and samples of the
+sources, seeking through the index lands on the right picture, and ffprobe reads the codec,
+FourCC, size, frame rate, packet count, audio format and duration.
 ## `mpegts`
 
 A clean-room MPEG-2 Systems demuxer from FilmCraft's `filmcraft-mpegts`

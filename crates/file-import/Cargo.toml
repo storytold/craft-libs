@@ -1,0 +1,22 @@
+[package]
+name = "craft-file-import"
+description = "Shared format registry and bounded neutral scene import dispatch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+craft-file-formats = { workspace = true }
+craft-raster-codecs = { workspace = true }
+craft-svg = { workspace = true }
+craft-dxf = { workspace = true }
+craft-pdf = { workspace = true, features = ["paths", "write"] }
+craft-eps = { workspace = true, features = ["paths"] }
+kurbo = { workspace = true }
+thiserror = { workspace = true }
+vectorcraft-geom = { workspace = true }
+
+[lints]
+workspace = true

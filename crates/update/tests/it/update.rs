@@ -2,10 +2,11 @@
 //! the check dialog's states, the install flow and the launcher's version choice.
 
 use craft_host::{AppInfo, Host};
-use craft_ui::dialog::DialogHost;
+use craft_ui::dialog::{DialogHost, dialog_id};
 use craft_ui::testing::{Fixture, trial};
 use craft_update::pins::{Pins, VersionTrack};
 use craft_update::release::Release;
+use craft_update::stack_dialogs::UpdatePromptDialog;
 use craft_update::suite::PHOTOCRAFT;
 use craft_update::updater::{CheckSource, Status, Updater};
 use std::cell::RefCell;
@@ -120,4 +121,79 @@ fn a_pin_made_while_the_check_runs_still_holds_its_answer() {
     u.settle_for_tests(&ctx);
     assert!(!u.prompt_open());
     assert_eq!(u.status(), &Status::Managed);
+}
+
+/// The update prompt for `self_updating`, set up by `set`, open on a host in a fixture.
+fn prompt(self_updating: bool, set: impl FnOnce(&mut UpdatePromptDialog)) -> (Fixture, Dialogs) {
+    let mut dialog = UpdatePromptDialog::new(newer(), "0.1.0", self_updating);
+    set(&mut dialog);
+    let mut dialogs = DialogHost::new();
+    dialogs.open(dialog);
+    rig(dialogs)
+}
+
+fn prompt_dialog(dialogs: &Dialogs, read: impl FnOnce(&mut UpdatePromptDialog) -> bool) -> bool {
+    dialogs.borrow_mut().get_mut_by_id::<UpdatePromptDialog>(dialog_id("updateDialog.prompt")).is_some_and(read)
+}
+
+/// Work the app can save: the main button says so, and a click answers as the update button does.
+#[trial]
+fn a_prompt_with_work_to_save_offers_save_and_update() {
+    let (mut fixture, dialogs) = prompt(true, |d| d.set_offer_save(true));
+    assert!(fixture.by_label("Save and Update").is_some() && fixture.by_label("Later").is_some());
+    assert!(fixture.by_label("Update and Restart").is_none());
+    click(&mut fixture, "Save and Update");
+    assert!(prompt_dialog(&dialogs, UpdatePromptDialog::take_update_request));
+}
+
+/// A ready update with work to save offers Save and Update, not Restart to Update.
+#[trial]
+fn a_ready_prompt_with_work_to_save_offers_save_and_update() {
+    let (mut fixture, dialogs) = prompt(false, |d| {
+        d.set_ready(true);
+        d.set_offer_save(true);
+    });
+    assert!(fixture.by_label("Save and Update").is_some());
+    assert!(fixture.by_label("Restart to Update").is_none());
+    click(&mut fixture, "Save and Update");
+    assert!(prompt_dialog(&dialogs, UpdatePromptDialog::take_update_request));
+}
+
+/// A copy that can't update itself keeps its Download button, whatever the app can save.
+#[trial]
+fn a_download_prompt_never_offers_save_and_update() {
+    let (fixture, _dialogs) = prompt(false, |d| d.set_offer_save(true));
+    assert!(fixture.by_label("Download").is_some() && fixture.by_label("Save and Update").is_none());
+}
+
+/// While the app saves, the prompt says that, and Save and Update, where the second click of a
+/// double click would land, takes no click.
+#[trial]
+fn a_saving_prompt_says_so_and_offers_no_second_click() {
+    let (fixture, _dialogs) = prompt(true, |d| {
+        d.set_offer_save(true);
+        d.set_saving(true);
+    });
+    assert!(fixture.by_label("Saving your work…").is_some());
+    assert!(fixture.by_label("Installing…").is_none());
+    let button = fixture.by_label("Save and Update").expect("Save and Update is on screen");
+    assert!(fixture.tree().is_disabled_key(button.node));
+}
+
+/// The second click of a double click lands where Save and Update was: it must not dismiss or
+/// ask again.
+#[trial]
+fn a_second_click_during_the_save_leaves_the_prompt_open() {
+    let (mut fixture, dialogs) = prompt(true, |d| d.set_offer_save(true));
+    let button = fixture.by_label("Save and Update").expect("Save and Update is on screen");
+    assert!(prompt_dialog(&dialogs, |d| {
+        d.set_saving(true);
+        true
+    }));
+    fixture.idle(3);
+    fixture.click(&button);
+    fixture.idle(3);
+    assert!(!prompt_dialog(&dialogs, UpdatePromptDialog::take_update_request), "no second request");
+    assert!(dialogs.borrow_mut().take::<UpdatePromptDialog>().is_none(), "the prompt stays open");
+    assert!(dialogs.borrow().is_open::<UpdatePromptDialog>());
 }

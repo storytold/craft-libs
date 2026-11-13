@@ -28,6 +28,21 @@ fn prompt_installing(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 }
 
 #[story(UpdatePromptDialog, covers = [], drive = Drive::Never)]
+fn prompt_save_and_update(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let mut dialog = UpdatePromptDialog::new(release(), "1.0.0", true);
+    dialog.set_offer_save(true);
+    dialog.present(ui).0.into()
+}
+
+#[story(UpdatePromptDialog, covers = [], drive = Drive::Never)]
+fn prompt_saving(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let mut dialog = UpdatePromptDialog::new(release(), "1.0.0", true);
+    dialog.set_offer_save(true);
+    dialog.set_saving(true);
+    dialog.present(ui).0.into()
+}
+
+#[story(UpdatePromptDialog, covers = [], drive = Drive::Never)]
 fn prompt_failed(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let mut dialog = UpdatePromptDialog::new(release(), "1.0.0", true);
     dialog.set_status(Some("Not enough disk space to install the update.".into()));

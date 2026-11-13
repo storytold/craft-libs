@@ -293,6 +293,15 @@ pub enum Action<P> {
         /// Width in points.
         width: Option<f32>,
     },
+    /// Set the offset in points of the flyout's top from its icons' top, for the dock group holding the panel;
+    /// `None` aligns the flyout with its icons.
+    #[non_exhaustive]
+    MoveFlyoutTop {
+        /// The panel the action applies to.
+        panel: P,
+        /// Offset in points; negative is above the icons.
+        offset: Option<f32>,
+    },
     /// Set the width in points of the panel's dock column while iconic; `None` clears it.
     #[non_exhaustive]
     ResizeIconic {
@@ -442,6 +451,11 @@ impl<P> Action<P> {
     /// Builds [`Action::ResizeFlyoutWidth`].
     pub fn resize_flyout_width(panel: P, width: Option<f32>) -> Self {
         Self::ResizeFlyoutWidth { panel, width }
+    }
+
+    /// Builds [`Action::MoveFlyoutTop`].
+    pub fn move_flyout_top(panel: P, offset: Option<f32>) -> Self {
+        Self::MoveFlyoutTop { panel, offset }
     }
 
     /// Builds [`Action::ResizeIconic`].

@@ -23,6 +23,27 @@ fn swap_keeps_the_old_copy_until_the_new_one_is_in_place() {
 }
 
 #[trial]
+fn quiet_self_update_keeps_logs_context_and_required_permission_ui() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("launcher update.msi");
+    std::fs::write(&file, b"test package").unwrap();
+    for (context, quiet, expected) in [
+        (&[][..], false, "/passive"),
+        (&[][..], true, "/qn"),
+        (&["ALLUSERS=2", "MSIINSTALLPERUSER=1"][..], true, "/qn"),
+        (&["ALLUSERS=1"][..], true, "/passive"),
+    ] {
+        let cmd = reinstall_command_ui(Path::new("msiexec.exe"), &file, context, quiet).unwrap();
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(args[2], expected);
+        assert_eq!(&args[3..5], ["/norestart", "/l*v"]);
+        assert!(args[5].ends_with("launcher update.log"));
+        assert_eq!(&args[6..], context);
+        assert_eq!(args.iter().filter(|a| a.as_str() == "/qn" || a.as_str() == "/passive").count(), 1);
+    }
+}
+
+#[trial]
 fn a_release_without_a_checksum_is_refused_before_anything_is_fetched() {
     use crate::http::tests::{Reply, body, serve};
     let base = App::by_id("wordcraft").unwrap();

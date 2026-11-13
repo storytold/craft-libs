@@ -9,6 +9,7 @@
 //! | `ready` | app → host | `version`, `appVersion?`, `file?` (`true`: it reads a `File`/`Blob` in slices) |
 //! | `host` | host → app | `version`, `handoff?` (`true`: the host routes hand-offs) |
 //! | `open` | host → app | `name`, and `bytes` or `file` + `size` |
+//! | `attach-pdf` | host → app | `name`, `bytes`, `page` (from 1), `insertion` ([x,y,z]), `width`, `height` in drawing units |
 //! | `save` | app → host | `name`, `bytes`, `id?`, `saveAs?` |
 //! | `saved` | host → app | `id` |
 //! | `dirty` | app → host | `dirty` |
@@ -88,6 +89,8 @@ pub enum Incoming {
     Host,
     /// The host sends a file for the app to open.
     Open,
+    /// The host sends a page of a PDF for the app to attach.
+    AttachPdf,
     /// The host confirms a save that carried an `id`.
     Saved,
     /// The host confirms a hand-off is complete.
@@ -109,13 +112,14 @@ impl Outgoing {
 
 impl Incoming {
     /// Every incoming kind.
-    pub const ALL: [Self; 4] = [Self::Host, Self::Open, Self::Saved, Self::HandoffDone];
+    pub const ALL: [Self; 5] = [Self::Host, Self::Open, Self::AttachPdf, Self::Saved, Self::HandoffDone];
 
     /// The message kind, the part of the `type` field after `<app>:`.
     pub const fn kind(self) -> &'static str {
         match self {
             Self::Host => "host",
             Self::Open => "open",
+            Self::AttachPdf => "attach-pdf",
             Self::Saved => "saved",
             Self::HandoffDone => "handoff-done",
         }

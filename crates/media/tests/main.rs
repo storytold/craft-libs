@@ -8,6 +8,8 @@ mod fuzz;
 mod fuzz_matroska;
 #[cfg(feature = "avi")]
 mod oracle_avi;
+#[cfg(feature = "avi")]
+mod oracle_avi_mux;
 #[cfg(feature = "isobmff")]
 mod oracle_demux;
 #[cfg(feature = "matroska")]

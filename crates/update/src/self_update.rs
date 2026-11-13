@@ -161,8 +161,16 @@ impl std::fmt::Debug for Restart {
     }
 }
 
-/// [`update`] without starting the helper: the caller starts the returned [`Restart`] when the
-/// app's exit is certain. On macOS and Linux the update is in place when this returns.
+/// Options for an explicitly opted-in background update. Other platforms keep their existing
+/// installation behaviour; permission prompts are never suppressed.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UpdateOptions {
+    /// Hide progress for a per-user Windows MSI. Machine installs retain their permission UI.
+    pub quiet_msi: bool,
+}
+
+/// [`update`] without starting the helper: start the returned [`Restart`] when exit is certain.
+/// On macOS and Linux the update is already in place when this returns.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_update(
     app: &App,
@@ -176,6 +184,27 @@ pub fn prepare_update(
     last: &dyn Fn() -> Result<(), String>,
     running_version: Option<&str>,
 ) -> Result<Restart, String> {
+    prepare_update_with_options(app, install, release, platform, http, paths, stop, phase, last, running_version, UpdateOptions::default())
+}
+
+/// Like [`prepare_update`], with an explicit choice of Windows Installer progress UI.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_update_with_options(
+    app: &App,
+    install: &Install,
+    release: &Release,
+    platform: Platform,
+    http: &Http,
+    paths: &Paths,
+    stop: &Stop,
+    phase: &mut dyn FnMut(JobPhase),
+    last: &dyn Fn() -> Result<(), String>,
+    running_version: Option<&str>,
+    options: UpdateOptions,
+) -> Result<Restart, String> {
+    // The option only changes Windows MSI helpers.
+    #[cfg(not(windows))]
+    let _ = options;
     let cur_v = running_version.and_then(|v| current_version(app, v));
     if let (Some(rel_v), Some(cur_v)) = (release.version.as_ref(), cur_v.as_ref())
         && !version::offers_update(rel_v, cur_v)
@@ -248,7 +277,7 @@ pub fn prepare_update(
                 relaunch_flatpak_after_exit(app)
             }
             #[cfg(windows)]
-            Install::Msi(exe) => windows_helper(app, paths, release, pid, exe, &msi_finish(&file)?),
+            Install::Msi(exe) => windows_helper(app, paths, release, pid, exe, &msi_finish(&file, options.quiet_msi)?),
             #[cfg(windows)]
             Install::Portable(exe) => {
                 exe.parent().ok_or_else(|| format!("{} isn't in a folder", app.name))?;

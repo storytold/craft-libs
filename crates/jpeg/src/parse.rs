@@ -162,7 +162,7 @@ pub(super) fn parse_header(marker: u8, seg: &[u8]) -> Result<Header, Error> {
         0xC0 | 0xC1 => (false, false),
         0xC9 => (true, false),
         0xCA => (true, true),
-        0xC2 => return Err(unsupported("progressive Huffman-coded JPEG is not supported")),
+        0xC2 => (false, true),
         0xC3 | 0xCB => return Err(unsupported("lossless JPEG is not supported")),
         _ => return Err(unsupported("hierarchical JPEG is not supported")),
     };

@@ -107,6 +107,37 @@ fn a_flyout_width_is_validated_restored_and_saved_only_when_set() {
     assert_eq!(layout, original);
 }
 
+/// A flyout's top offset is validated, survives a close and restore (a restore refuses an invalid one), and
+/// clearing it gives back the untouched layout.
+#[test]
+fn flyout_offset_rejects_invalid_geometry_without_mutating_the_layout() {
+    let mut iconic = Column::new(vec![g(&[1], 0)]);
+    iconic.iconic = true;
+    let mut layout = with_column(iconic);
+    let original = layout.clone();
+    assert!(!serde_json::to_string(&original).unwrap().contains("flyout_offset"), "an untouched offset is not saved");
+    for offset in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 2_000_000.0, -2_000_000.0] {
+        assert_eq!(layout.apply(Action::move_flyout_top(1, Some(offset))), Err(DockError::InvalidGeometry), "{offset}");
+        assert_eq!(layout, original);
+    }
+    layout.apply(Action::move_flyout_top(1, Some(-120.0))).unwrap();
+    let offset = |layout: &Layout<u32>| match layout.root.as_ref() {
+        Some(Node::Dock { columns, .. }) => columns[0].groups[0].flyout_offset,
+        root => panic!("{root:?}"),
+    };
+    let location = layout.location(&1).unwrap();
+    layout.apply(Action::close(1)).unwrap();
+    layout.restore(1, &location).unwrap();
+    assert_eq!(offset(&layout), Some(-120.0), "a restore gives the group its flyout offset back");
+    let mut bad = location.clone();
+    bad.group.as_mut().unwrap().flyout_offset = Some(f32::NAN);
+    layout.apply(Action::close(1)).unwrap();
+    assert_eq!(layout.restore(1, &bad), Err(DockError::InvalidGeometry));
+    layout.restore(1, &location).unwrap();
+    layout.apply(Action::move_flyout_top(1, None)).unwrap();
+    assert_eq!(layout, original);
+}
+
 /// The layout of `restore_returns_each_panel_to_the_place_it_was_in` with `skip` absent.
 fn without(skip: Option<u32>) -> Layout<u32> {
     let group = |panels: &[u32], active: usize| {
