@@ -47,12 +47,16 @@ pub fn import(bytes: &[u8], limits: Limits) -> Result<Imported, Error> {
     }
     let source = vectorcraft_eps::import(bytes).map_err(Error::Parse)?;
     let page_bounds = vectorcraft_eps::page(bytes).map_err(Error::Parse)?;
+    // Illustrator's editable copy is expressed in its art-box document coordinates. The page
+    // reader, in contrast, returns a page at the origin. Normalize extracted paths to match it.
+    let origin = source.document.artboards.first().map(|board| board.rect.origin()).unwrap_or_default();
+    let to_page = kurbo::Affine::translate((-origin.x, -origin.y));
     let mut paths = Vec::new();
     let mut total_elements = 0usize;
     let mut clipped = false;
     let mut omitted = false;
     for layer in &source.document.layers {
-        collect(layer, &mut paths, &mut total_elements, limits, &mut clipped, &mut omitted)?;
+        collect(layer, &mut paths, &mut total_elements, limits, to_page, &mut clipped, &mut omitted)?;
     }
     let mut warnings = source.warnings;
     if clipped {
@@ -69,6 +73,7 @@ fn collect(
     paths: &mut Vec<BezPath>,
     elements: &mut usize,
     limits: Limits,
+    to_page: kurbo::Affine,
     clipped: &mut bool,
     omitted: &mut bool,
 ) -> Result<(), Error> {
@@ -85,7 +90,7 @@ fn collect(
             if paths.len() >= limits.max_paths || *elements > limits.max_path_elements {
                 return Err(Error::OutputLimit);
             }
-            paths.push(path);
+            paths.push(to_page * path);
         }
     } else if let Some(children) = node.children() {
         let is_clip = matches!(node.kind, vectorcraft_doc::NodeKind::Group { clip: true, .. } | vectorcraft_doc::NodeKind::Layer { clip: true, .. });
@@ -94,7 +99,7 @@ fn collect(
             if is_clip && index == 0 {
                 continue;
             }
-            collect(child, paths, elements, limits, clipped, omitted)?;
+            collect(child, paths, elements, limits, to_page, clipped, omitted)?;
         }
     } else {
         *omitted = true;

@@ -166,10 +166,13 @@ fn write_svg(scene: &OutputScene) -> Result<String, Error> {
 
 fn write_pdf(scene: &OutputScene) -> Result<Vec<u8>, Error> {
     validate_scene(scene)?;
+    // Match SVG's painter order: layers in order, then paths in source order within each layer.
     let paths = scene
-        .paths
+        .layers
         .iter()
-        .filter(|path| scene.layers.get(path.layer).is_some_and(|layer| layer.visible))
+        .enumerate()
+        .filter(|(_, layer)| layer.visible)
+        .flat_map(|(layer_index, _)| scene.paths.iter().filter(move |path| path.layer == layer_index))
         .map(|path| PdfPath { path: path.path.clone(), color_rgb: path.color_rgb, stroke_width_mm: Some(path.stroke_width_mm) })
         .collect();
     write_pdf_pages(&[PdfPage { width_mm: scene.width_mm, height_mm: scene.height_mm, view_box: scene.view_box, paths }])

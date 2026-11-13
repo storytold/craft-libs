@@ -178,7 +178,9 @@ fn clip_path_to_region(
         .map_err(|e| e.to_string())?;
         out.extend(kept.to_bezpath());
     }
-    if has_stroke {
+    // Some callers deliberately retain geometry even when the source has no paint. Keep that
+    // geometry clip-able as linework instead of silently deleting it.
+    if has_stroke || (!has_fill && !has_stroke) {
         let polygons: Vec<Vec<Point>> =
             flatten_contours(region)?.into_iter().filter(|(points, closed)| *closed && points.len() >= 3).map(|(points, _)| points).collect();
         for (mut points, closed) in flatten_contours(path)? {
@@ -330,6 +332,25 @@ fn inside_even_odd(polygons: &[Vec<Point>], point: Point, work_left: &mut usize)
             let (Some(a), Some(b)) = (polygon.get(index), polygon.get((index + 1) % polygon.len())) else {
                 continue;
             };
+            let edge = *b - *a;
+            let relative = point - *a;
+            let length_squared = edge.dot(edge);
+            let edge_length = length_squared.sqrt();
+            if edge_length <= f64::EPSILON {
+                if relative.x.hypot(relative.y) <= 1e-9 {
+                    return Ok(true);
+                }
+                continue;
+            }
+            let tolerance = 1e-9 * edge_length.max(1.0);
+            let projection = relative.dot(edge);
+            let projection_tolerance = tolerance * edge_length;
+            if edge.cross(relative).abs() <= projection_tolerance
+                && projection >= -projection_tolerance
+                && projection <= length_squared + projection_tolerance
+            {
+                return Ok(true);
+            }
             if (a.y > point.y) != (b.y > point.y) && point.x < a.x + (point.y - a.y) / (b.y - a.y) * (b.x - a.x) {
                 odd = !odd;
             }
@@ -2238,6 +2259,8 @@ mod tests {
           <rect id="evenodd-ring" width="20" height="20" clip-path="url(#ring)"/>
           <g clip-path="url(#left)"><line id="nested-open" x1="0" y1="5" x2="20" y2="5" stroke="black" clip-path="url(#right)"/></g>
           <line id="open" x1="0" y1="5" x2="20" y2="5" stroke="black" clip-path="url(#left)"/>
+          <line id="boundary" x1="15" y1="2" x2="15" y2="8" stroke="black" clip-path="url(#pieces)"/>
+          <path id="unpainted" d="M0 5H20" data-kind="engrave" fill="none" stroke="none" clip-path="url(#left)"/>
           <rect id="empty-result" width="20" height="10" clip-path="url(#empty)"/>
         </svg>"##,
         );
@@ -2258,6 +2281,10 @@ mod tests {
         assert!(near(nested.bounding_box().x0, 10.0) && near(nested.bounding_box().x1, 15.0));
         let open = clipped(r#"<line id="open">"#);
         assert!(near(open.bounding_box().x0, 0.0) && near(open.bounding_box().x1, 15.0));
+        let boundary = clipped(r#"<line id="boundary">"#);
+        assert!(near(boundary.bounding_box().x0, 15.0) && near(boundary.bounding_box().x1, 15.0));
+        let unpainted = clipped(r#"<path id="unpainted">"#);
+        assert!(near(unpainted.bounding_box().x0, 0.0) && near(unpainted.bounding_box().x1, 15.0));
         assert!(clipped(r#"<rect id="empty-result">"#).elements().is_empty());
 
         let mut invalid = got.clone();

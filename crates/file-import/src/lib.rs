@@ -195,6 +195,7 @@ pub fn format_for(name: &str, bytes: &[u8]) -> Option<ImportFormat> {
         F::Svgz => Some(ImportFormat::Svgz),
         F::Dxf => Some(ImportFormat::Dxf),
         F::Pdf => Some(ImportFormat::Pdf),
+        F::Illustrator if bytes.starts_with(b"%PDF-") => Some(ImportFormat::Pdf),
         F::Eps | F::PostScript | F::Illustrator => Some(ImportFormat::Eps),
         F::Png | F::Jpeg | F::Bmp | F::Gif | F::Tiff | F::WebP => Some(ImportFormat::Raster),
         _ => None,
@@ -390,4 +391,15 @@ fn path_is_finite(path: &BezPath) -> bool {
             PathEl::ClosePath => true,
         }
     })
+}
+
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+
+    #[test]
+    fn pdf_based_illustrator_is_routed_to_pdf_reader() {
+        let bytes = b"%PDF-1.7\n/AIPrivateData";
+        assert_eq!(format_for("illustration.ai", bytes), Some(ImportFormat::Pdf));
+    }
 }
