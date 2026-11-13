@@ -110,14 +110,48 @@ pub enum ObjectKind {
 
 /// Hashes and compresses an object, returning the path to record in the manifest.
 pub fn encode_object(kind: ObjectKind, bytes: &[u8]) -> StoredObject {
-    let hash = blake3::hash(bytes).to_hex().to_string();
+    let hash = hash_content(bytes);
     let path = match kind {
         ObjectKind::Tile => craft_pcraft_format::tile_path(&hash),
         ObjectKind::Blob => craft_pcraft_format::blob_path(&hash),
     }
     .unwrap_or_default();
-    let compressed = ruzstd::encoding::compress_to_vec(bytes, ruzstd::encoding::CompressionLevel::Fastest);
+    let compressed = encode_frame(bytes);
     StoredObject { path, hash, compressed }
+}
+
+/// BLAKE3 hash of object bytes, in the canonical lowercase hexadecimal form used by entry paths.
+pub fn hash_content(bytes: &[u8]) -> String {
+    blake3::hash(bytes).to_hex().to_string()
+}
+
+/// Encodes one bounded zstd frame at the format's fixed fastest compression level.
+pub fn encode_frame(bytes: &[u8]) -> Vec<u8> {
+    ruzstd::encoding::compress_to_vec(bytes, ruzstd::encoding::CompressionLevel::Fastest)
+}
+
+/// Decodes one zstd frame under a byte limit and optional exact output length.
+pub fn decode_frame(data: &[u8], max_bytes: usize, exact_bytes: Option<usize>, name: &str) -> Result<Vec<u8>> {
+    let window = u64::try_from(exact_bytes.unwrap_or(max_bytes)).unwrap_or(u64::MAX).max(8 << 20);
+    let mut decoder = match ruzstd::decoding::StreamingDecoder::new_with_max_window_size(data, window) {
+        Ok(decoder) => decoder,
+        Err(ruzstd::decoding::errors::FrameDecoderError::WindowSizeTooBig { requested, .. }) => {
+            return Err(Error::LimitExceeded { entry: format!("{name} zstd window ({requested})"), limit: window });
+        }
+        Err(error) => return Err(Error::Io(format!("{name}: zstd: {error}"))),
+    };
+    let mut out = Vec::new();
+    let read_limit = u64::try_from(max_bytes).unwrap_or(u64::MAX).saturating_add(1);
+    (&mut decoder).take(read_limit).read_to_end(&mut out).map_err(|error| Error::Io(format!("{name}: zstd: {error}")))?;
+    if out.len() > max_bytes {
+        return Err(Error::LimitExceeded { entry: name.to_owned(), limit: max_bytes as u64 });
+    }
+    if let Some(expected) = exact_bytes
+        && out.len() != expected
+    {
+        return Err(Error::InvalidBundle(format!("{name}: expected {expected} bytes, got {}", out.len())));
+    }
+    Ok(out)
 }
 
 /// Decompresses a stored object within `max_decoded_bytes` and checks its content hash.
@@ -133,7 +167,7 @@ pub fn decode_object(path: &str, compressed: &[u8], max_decoded_bytes: u64) -> R
         return Err(Error::LimitExceeded { entry: path.to_owned(), limit: max_decoded_bytes });
     }
     let expected = path.rsplit('/').next().unwrap_or_default().trim_end_matches(craft_pcraft_format::OBJECT_SUFFIX);
-    if blake3::hash(&bytes).to_hex().as_str() != expected {
+    if hash_content(&bytes) != expected {
         return Err(Error::HashMismatch(path.to_owned()));
     }
     Ok(bytes)
