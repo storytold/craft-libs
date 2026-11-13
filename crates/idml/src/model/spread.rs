@@ -698,6 +698,21 @@ pub struct TextPath {
 }
 
 impl TextPath {
+    /// Writes IDML type-on-a-path settings for a frame and its story.
+    pub fn to_el(frame_self: &str, parent_story: &str, alignment: &str, flipped: bool, start: f64, end: f64) -> El {
+        El::new("TextPath")
+            .with_attr("Self", format!("{frame_self}tp"))
+            .with_attr("ParentStory", parent_story)
+            .with_attr("PreviousTextFrame", "n")
+            .with_attr("NextTextFrame", "n")
+            .with_attr("PathEffect", "RainbowPathEffect")
+            .with_attr("PathAlignment", "CenterPathAlignment")
+            .with_attr("TextAlignment", alignment)
+            .with_attr("FlipPathEffect", if flipped { "Flipped" } else { "NotFlipped" })
+            .with_attr("StartBracket", crate::value::num(start))
+            .with_attr("EndBracket", crate::value::num(end))
+    }
+
     pub fn parent_story(&self) -> Option<&str> {
         self.values.get("ParentStory").filter(|s| *s != "n")
     }
