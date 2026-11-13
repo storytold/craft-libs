@@ -256,3 +256,109 @@ mod streaming_writer_tests {
 
 /// ZIP compression modes for native archive members.
 pub use craft_zip::Compression;
+
+/// A native ZIP reader for seekable sources that should not be copied into memory first.
+pub struct SeekArchive<R: std::io::Read + std::io::Seek> {
+    inner: zip::ZipArchive<R>,
+}
+
+impl<R: std::io::Read + std::io::Seek> SeekArchive<R> {
+    pub fn open(reader: R, max_entries: u64) -> Result<Self, craft_zip::Error> {
+        let inner = zip::ZipArchive::new(reader).map_err(|e| craft_zip::Error::NotZip(e.to_string()))?;
+        let count = inner.len() as u64;
+        if count > max_entries {
+            return Err(craft_zip::Error::TooManyEntries { declared: count, limit: max_entries });
+        }
+        Ok(Self { inner })
+    }
+
+    pub fn contains(&self, name: &str) -> bool {
+        self.inner.index_for_name(name).is_some()
+    }
+
+    pub fn names(&self) -> Vec<String> {
+        self.inner.file_names().filter_map(Result::ok).map(|n| n.into_owned()).collect()
+    }
+
+    pub fn declared_size(&mut self, name: &str) -> Option<u64> {
+        self.inner.index_for_name(name).and_then(|i| self.inner.by_index_raw(i).ok().map(|f| f.size()))
+    }
+
+    pub fn read(&mut self, name: &str, max_bytes: u64) -> Result<Option<Vec<u8>>, craft_zip::Error> {
+        let Some(index) = self.inner.index_for_name(name) else { return Ok(None) };
+        let mut file = self.inner.by_index(index).map_err(|e| craft_zip::Error::Entry { name: name.to_owned(), msg: e.to_string() })?;
+        if file.size() > max_bytes {
+            return Err(craft_zip::Error::EntryTooLarge { name: name.to_owned(), limit: max_bytes });
+        }
+        let mut bytes = Vec::new();
+        let mut limited = std::io::Read::take(&mut file, max_bytes.saturating_add(1));
+        let read = std::io::Read::read_to_end(&mut limited, &mut bytes);
+        if let Err(error) = read {
+            return Err(craft_zip::Error::Entry { name: name.to_owned(), msg: error.to_string() });
+        }
+        if bytes.len() as u64 > max_bytes {
+            return Err(craft_zip::Error::EntryTooLarge { name: name.to_owned(), limit: max_bytes });
+        }
+        Ok(Some(bytes))
+    }
+}
+
+/// Shared access contract implemented by in-memory and seekable native archive readers.
+pub trait NativeArchive {
+    fn contains(&self, name: &str) -> bool;
+    fn names(&self) -> Vec<String>;
+    fn declared_size(&mut self, name: &str) -> Option<u64>;
+    fn compressed_size(&mut self, name: &str) -> Option<u64>;
+    fn read_member(&mut self, name: &str, max_bytes: u64) -> Result<Option<Vec<u8>>, craft_zip::Error>;
+}
+
+impl NativeArchive for Archive<'_> {
+    fn contains(&self, name: &str) -> bool {
+        Archive::contains(self, name)
+    }
+    fn names(&self) -> Vec<String> {
+        Archive::names(self).map(|n| n.into_owned()).collect()
+    }
+    fn declared_size(&mut self, name: &str) -> Option<u64> {
+        Archive::declared_size(self, name)
+    }
+    fn compressed_size(&mut self, name: &str) -> Option<u64> {
+        Archive::compressed_size(self, name)
+    }
+    fn read_member(&mut self, name: &str, max_bytes: u64) -> Result<Option<Vec<u8>>, craft_zip::Error> {
+        Archive::read(self, name, max_bytes)
+    }
+}
+
+impl<R: std::io::Read + std::io::Seek> NativeArchive for SeekArchive<R> {
+    fn contains(&self, name: &str) -> bool {
+        SeekArchive::contains(self, name)
+    }
+    fn names(&self) -> Vec<String> {
+        SeekArchive::names(self)
+    }
+    fn declared_size(&mut self, name: &str) -> Option<u64> {
+        SeekArchive::declared_size(self, name)
+    }
+    fn compressed_size(&mut self, name: &str) -> Option<u64> {
+        self.inner.index_for_name(name).and_then(|i| self.inner.by_index_raw(i).ok().map(|f| f.compressed_size()))
+    }
+    fn read_member(&mut self, name: &str, max_bytes: u64) -> Result<Option<Vec<u8>>, craft_zip::Error> {
+        SeekArchive::read(self, name, max_bytes)
+    }
+}
+
+#[cfg(test)]
+mod seek_archive_tests {
+    use super::*;
+
+    #[test]
+    fn seekable_reader_matches_bounded_in_memory_reader() {
+        let bytes = write_archive([Member { name: "document.json", bytes: b"payload", compression: Compression::Stored }]).unwrap();
+        let mut reader = SeekArchive::open(std::io::Cursor::new(bytes), 4).unwrap();
+        assert!(reader.contains("document.json"));
+        assert_eq!(reader.read_member("document.json", 16).unwrap(), Some(b"payload".to_vec()));
+        assert_eq!(reader.declared_size("document.json"), Some(7));
+        assert!(reader.read_member("document.json", 3).is_err());
+    }
+}
