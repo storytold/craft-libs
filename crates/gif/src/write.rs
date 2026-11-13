@@ -74,6 +74,7 @@ pub struct AnimationWriter<W: Write> {
     width: u16,
     height: u16,
     options: Options,
+    frames_written: usize,
 }
 
 impl<W: Write> AnimationWriter<W> {
@@ -89,7 +90,7 @@ impl<W: Write> AnimationWriter<W> {
         let height = height as u16;
         let mut encoder = gif::Encoder::new(output, width, height, &[]).map_err(Error::from)?;
         encoder.set_repeat(if options.loop_forever { gif::Repeat::Infinite } else { gif::Repeat::Finite(0) }).map_err(Error::from)?;
-        Ok(Self { encoder, width, height, options })
+        Ok(Self { encoder, width, height, options, frames_written: 0 })
     }
 
     /// Encode and append one full-canvas RGBA8 frame.
@@ -99,7 +100,7 @@ impl<W: Write> AnimationWriter<W> {
             .and_then(|pixels| pixels.checked_mul(4))
             .ok_or(Error::Dimensions { width: u32::from(self.width), height: u32::from(self.height) })?;
         if frame.pixels.len() != expected {
-            return Err(Error::FrameLength { index: 0, actual: frame.pixels.len(), expected });
+            return Err(Error::FrameLength { index: self.frames_written, actual: frame.pixels.len(), expected });
         }
         let mut pixels = frame.pixels.to_vec();
         let mut encoded = gif::Frame::from_rgba_speed(self.width, self.height, &mut pixels, self.options.speed);
@@ -108,11 +109,16 @@ impl<W: Write> AnimationWriter<W> {
             Disposal::Unspecified => gif::DisposalMethod::Any,
             Disposal::Background => gif::DisposalMethod::Background,
         };
-        self.encoder.write_frame(&encoded).map_err(Error::from)
+        self.encoder.write_frame(&encoded).map_err(Error::from)?;
+        self.frames_written = self.frames_written.saturating_add(1);
+        Ok(())
     }
 
     /// Finish the GIF and return the underlying output.
     pub fn finish(self) -> Result<W, Error> {
+        if self.frames_written == 0 {
+            return Err(Error::NoFrames);
+        }
         self.encoder.into_inner().map_err(Error::from)
     }
 }
@@ -127,11 +133,8 @@ pub fn animation(width: u32, height: u32, frames: &[RgbaFrame<'_>], options: Opt
         return Err(Error::NoFrames);
     }
     let mut writer = AnimationWriter::new(Vec::new(), width, height, options)?;
-    for (index, frame) in frames.iter().enumerate() {
-        writer.write_frame(*frame).map_err(|error| match error {
-            Error::FrameLength { actual, expected, .. } => Error::FrameLength { index, actual, expected },
-            other => other,
-        })?;
+    for frame in frames {
+        writer.write_frame(*frame)?;
     }
     writer.finish()
 }
@@ -168,6 +171,14 @@ mod tests {
         assert!(matches!(
             animation(1, 1, &[RgbaFrame { pixels: &[0; 4], delay_cs: 1 }], Options { speed: 0, ..Options::default() }),
             Err(super::Error::InvalidSpeed(0))
+        ));
+        assert!(matches!(
+            animation(1, 1, &[RgbaFrame { pixels: &[0; 4], delay_cs: 1 }, RgbaFrame { pixels: &[0; 3], delay_cs: 1 }], Options::default()),
+            Err(super::Error::FrameLength { index: 1, .. })
+        ));
+        assert!(matches!(
+            super::AnimationWriter::new(Vec::new(), 1, 1, Options::default()).and_then(|writer| writer.finish()),
+            Err(super::Error::NoFrames)
         ));
     }
 
