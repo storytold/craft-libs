@@ -1,6 +1,6 @@
 //! The preset library's rules, the open-group state and the nesting rule, the panel menu and the file entries.
 
-use craft_ui::patterns::presets::{GroupPath, PresetChange, PresetId, PresetKey, PresetLibrary, children_end};
+use craft_ui::patterns::presets::{GroupPath, PresetChange, PresetFiles, PresetId, PresetKey, PresetLibrary, children_end};
 use craft_ui::testing::trial;
 
 type Key = PresetKey<PresetId>;
@@ -51,4 +51,28 @@ fn reordering_a_group_changes_its_parent_and_keeps_its_presets() {
     let end = lib.rows().len();
     lib.reorder(std::slice::from_ref(&a), end).unwrap();
     assert!(lib.group(&GroupPath::new(["B", "A"])).is_some(), "after Cyan, which is in B");
+}
+
+/// The panel menu checks the current view, enables Save… only as the files allow it for the selection, and its states
+/// say the same as the per-command answers a host that draws the menu reads.
+#[trial]
+fn the_panel_menu_checks_the_view_and_gates_save_by_the_selection() {
+    use craft_ui::patterns::presets::{PresetCommands, PresetPanelMenu, PresetView};
+    use craft_ui::runtime::commands::CommandState;
+    let files = PresetFiles::<u32>::new("styles", "Style Library", &["asl"]).export(|_| None).can_export(|selected| selected.is_some());
+    let picked = 7;
+    for selected in [None, Some(&picked)] {
+        let menu = PresetPanelMenu::new(PresetView::List).new_group(true).files(&files).selected(selected);
+        assert_eq!(menu.checked(PresetCommands::ListView), Some(true));
+        assert_eq!(menu.checked(PresetCommands::GridView), Some(false));
+        assert_eq!(menu.checked(PresetCommands::Save), None);
+        assert_eq!(menu.enabled(PresetCommands::Save), selected.is_some());
+        for (command, state) in menu.states() {
+            let mut expected = CommandState::new().enabled(menu.enabled(command));
+            if let Some(on) = menu.checked(command) {
+                expected = expected.checked(on);
+            }
+            assert_eq!(state, expected, "{command:?}");
+        }
+    }
 }
