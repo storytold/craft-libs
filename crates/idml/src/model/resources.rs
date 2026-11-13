@@ -11,6 +11,69 @@ fn others(el: &El) -> impl Iterator<Item = &El> {
     el.elements().filter(|e| !e.is(Local("Properties")))
 }
 
+/// OpenType feature tags represented by IDML character attributes.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OpenTypeFeatureValues {
+    pub features: Vec<String>,
+    pub present: bool,
+}
+
+impl OpenTypeFeatureValues {
+    /// Reads IDML OTF toggle, figure style and stylistic-set attributes into feature tags.
+    pub fn from_el(el: &El) -> Self {
+        const TOGGLES: &[(&str, &str)] = &[
+            ("dlig", "OTFDiscretionaryLigature"),
+            ("frac", "OTFFraction"),
+            ("ordn", "OTFOrdinal"),
+            ("swsh", "OTFSwash"),
+            ("titl", "OTFTitling"),
+            ("calt", "OTFContextualAlternate"),
+            ("zero", "OTFSlashedZero"),
+            ("palt", "OTFProportionalMetrics"),
+            ("hkna", "OTFHVKana"),
+            ("locl", "OTFLocale"),
+            ("mark", "OTFMark"),
+            ("hist", "OTFHistorical"),
+            ("salt", "OTFStylisticAlternate"),
+            ("jalt", "OTFJustificationAlternate"),
+            ("ital", "OTFRomanItalics"),
+        ];
+        let values = Values::of(el);
+        let mut result = Self::default();
+        for (tag, attribute) in TOGGLES {
+            let Some(on) = values.boolean(attribute) else { continue };
+            let default_on = matches!(*tag, "calt" | "liga" | "locl" | "mark");
+            result.features.retain(|feature| feature != tag && feature.strip_prefix('-') != Some(*tag));
+            if on != default_on {
+                result.features.push(if on { (*tag).to_owned() } else { format!("-{tag}") });
+            }
+            result.present = true;
+        }
+        if let Some(style) = values.value("OTFFigureStyle") {
+            let tags: &[&str] = match style.as_str() {
+                "TabularLining" => &["tnum", "lnum"],
+                "ProportionalOldstyle" => &["pnum", "onum"],
+                "ProportionalLining" => &["pnum", "lnum"],
+                "TabularOldstyle" => &["tnum", "onum"],
+                "Default" => &[],
+                _ => &[],
+            };
+            if matches!(style.as_str(), "TabularLining" | "ProportionalOldstyle" | "ProportionalLining" | "TabularOldstyle" | "Default") {
+                result.features.retain(|feature| !matches!(feature.as_str(), "tnum" | "pnum" | "lnum" | "onum"));
+                result.features.extend(tags.iter().map(|tag| (*tag).to_owned()));
+                result.present = true;
+            }
+        }
+        if let Some(mask) = values.num("OTFStylisticSets") {
+            let mask = mask.max(0.0) as u32;
+            result.features.retain(|feature| !(feature.len() == 4 && feature.starts_with("ss") && feature[2..].parse::<u32>().is_ok()));
+            result.features.extend((1..=20).filter(|number| mask & (1 << (number - 1)) != 0).map(|number| format!("ss{number:02}")));
+            result.present = true;
+        }
+        result
+    }
+}
+
 /// Raw character-level Japanese composition and emphasis properties from an IDML text range.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CjkCharacterValues {
