@@ -19,4 +19,4 @@ pub use coverage::{Above, Coverage, InkStats, MAX_REGIONS, Region, Stats};
 pub use ink::{Alternate, Ink, InkColor, InkId, InkSet, Overprint, Process, Spot, normalize_name, to_pdf_color};
 pub use marks::{MarkOptions, Marks, MarksError};
 pub use output::{Output, OutputError};
-pub use plates::{Conversion, Error, Fallback, MAX_PLATE_PIXELS, MAX_SPOT_INKS, Options, Plates, plates};
+pub use plates::{Band, Conversion, Error, Fallback, MAX_BANDED_PIXELS, MAX_PLATE_PIXELS, MAX_SPOT_INKS, Options, Plates, plates, plates_in_bands};
