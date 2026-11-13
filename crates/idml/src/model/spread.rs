@@ -188,6 +188,16 @@ impl Guide {
     pub fn liquid(&self) -> bool {
         self.values.get("GuideType") == Some("Liquid")
     }
+
+    /// `Locked` is true.
+    pub fn locked(&self) -> bool {
+        self.values.boolean("Locked") == Some(true)
+    }
+
+    /// `ItemLayer`: the identifier of the layer the guide belongs to.
+    pub fn item_layer(&self) -> Option<&str> {
+        self.values.item_layer()
+    }
 }
 
 /// What a page item is.
