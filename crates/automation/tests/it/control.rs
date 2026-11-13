@@ -5,7 +5,7 @@ use std::net::TcpStream;
 use std::sync::mpsc::channel;
 use std::time::Duration;
 
-use craft_automation::control::{ControlChannel, ControlRequest, expired_error, timeout_error};
+use craft_automation::control::{ControlChannel, ControlRequest, Reply, expired_error, result_reply, timeout_error};
 use craft_automation::security::MAX_REQUEST_BYTES;
 use craft_automation::server;
 use craft_ui::runtime::motion;
@@ -43,6 +43,27 @@ fn deadlines_distinguish_expired_from_timed_out() {
     tx.send(abandoned).expect("sent");
     assert!(channel.next_request().is_none());
     assert_eq!(abandoned_reply.try_recv().expect("a reply")["error"], json!(expired_error()));
+}
+
+/// A job's reply goes to the requests waiting on that job only, as the app built it (an error with partial results
+/// keeps both); the other job's waiter keeps waiting.
+#[trial]
+fn a_finished_job_answers_only_its_own_waiters() {
+    let (_tx, rx) = channel();
+    let mut channel = ControlChannel::new(rx);
+    let (first, first_reply) = ControlRequest::new("engine.execute", json!({}));
+    let (second, second_reply) = ControlRequest::new("engine.execute", json!({}));
+    channel.settle(first, Reply::AfterJob(1), None, 0.0);
+    channel.settle(second, Reply::AfterJob(2), None, 0.0);
+
+    let partial = json!({"ok": false, "error": "cancelled", "result": {"files": ["done.png"]}});
+    channel.job_finished(1, &partial);
+    assert_eq!(first_reply.try_recv().expect("job 1 replied"), partial);
+    assert!(second_reply.try_recv().is_err(), "job 2 still runs");
+    assert_eq!(channel.waiting(), 1);
+
+    channel.job_finished(2, &result_reply(Ok(json!(7))));
+    assert_eq!(second_reply.try_recv().expect("job 2 replied"), json!({"ok": true, "result": 7}));
 }
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";

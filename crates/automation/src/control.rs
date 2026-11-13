@@ -133,12 +133,18 @@ impl Reply {
         Self::Screenshot { token, path }
     }
 
-    /// `Done` with an `ok` or `error` reply from a method's result.
+    /// `Done` with the [`result_reply`] of a method's result.
     pub fn from_result(r: Result<Value, String>) -> Self {
-        match r {
-            Ok(result) => Self::Done(json!({"ok": true, "result": result})),
-            Err(e) => Self::Done(json!({"ok": false, "error": e})),
-        }
+        Self::Done(result_reply(r))
+    }
+}
+
+/// The reply for a method's result: `{"ok": true, "result": value}` for `Ok(value)`,
+/// `{"ok": false, "error": e}` for `Err(e)`.
+pub fn result_reply(r: Result<Value, String>) -> ControlResponse {
+    match r {
+        Ok(result) => json!({"ok": true, "result": result}),
+        Err(e) => json!({"ok": false, "error": e}),
     }
 }
 
@@ -236,13 +242,10 @@ impl ControlChannel {
         pending
     }
 
-    /// Job `job` ended: reply to its waiters with `{"ok": true, "result": value}` for `Ok(value)`
-    /// and `{"ok": false, "error": e}` for `Err(e)` (a cancelled job is `Err("cancelled")`).
-    pub fn job_finished(&mut self, job: JobId, result: &Result<Value, String>) {
-        let reply = match result {
-            Ok(value) => json!({"ok": true, "result": value}),
-            Err(e) => json!({"ok": false, "error": e}),
-        };
+    /// Job `job` ended: send `reply` to its waiters. It is the reply the command would have given
+    /// had it run in place, usually [`result_reply`] of the job's result (a cancelled job's error
+    /// is `cancelled`); a job that ends with an error and partial results carries both.
+    pub fn job_finished(&mut self, job: JobId, reply: &ControlResponse) {
         self.job_waiters.retain(|(waiting, tx)| {
             if *waiting == job {
                 let _ = tx.send(reply.clone());
