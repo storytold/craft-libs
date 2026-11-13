@@ -75,7 +75,7 @@ impl Component for PopupList<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> PopoverOutput {
-        PopoverOutput::of(&cx, self.closed)
+        PopoverOutput::of(cx, self.closed, self.open)
     }
 }
 

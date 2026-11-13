@@ -20,8 +20,8 @@ use super::words::PresetWords;
 use crate::bars::{Bar, BarKind};
 use crate::choice::Segmented;
 use crate::contract::{
-    Bind, BodyCx, CollectionEvent, DropMark, DropTarget, DropZone, Entry, LeadSource, ListDrag, OpenChange, Pattern, Props, Rename, ReorderMove,
-    ReorderRule, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, request_rename,
+    Bind, BodyCx, CollectionEvent, DropMark, DropTarget, DropZone, Entry, ListDrag, OpenChange, Pattern, Props, Rename, ReorderMove, ReorderRule,
+    SelectMode, Show as _, ShowCollection as _, ShowContainer as _, request_rename,
 };
 use crate::display::Divider;
 use crate::layout_components::Stack;
@@ -206,6 +206,10 @@ pub struct PresetBrowser<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// A row above the presets with the search field and the grid and list buttons.
     #[prop]
     toolbar: bool,
+    /// The toolbar's search field; off, the toolbar keeps the view buttons and the host's tools, and the search is
+    /// cleared.
+    #[prop]
+    search: bool,
     /// The host's controls at the reading end of the toolbar.
     #[prop(func = "FnMut(&mut Ui)")]
     tools: Option<BrowserTools<'a>>,
@@ -266,6 +270,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
             thumb_range: TileZoom::Ladder,
             default_open: DefaultOpen::All,
             toolbar: false,
+            search: true,
             tools: None,
             row_menu: true,
             view_lock: None,
@@ -473,7 +478,6 @@ enum Seen<K> {
     Activate(K),
     Open(OpenChange<K>),
     Menu(K),
-    Pointer(K),
     Reorder(EditEvent<ReorderMove<K>>),
     Rename(EditEvent<Rename<K>>),
 }
@@ -487,7 +491,6 @@ fn seen<K, E>(events: Vec<CollectionEvent<K, E>>) -> Vec<Seen<K>> {
             CollectionEvent::Activate(key) => Some(Seen::Activate(key)),
             CollectionEvent::Open(change) => Some(Seen::Open(change)),
             CollectionEvent::ContextMenu(request) => Some(Seen::Menu(request.key)),
-            CollectionEvent::LeadMoved { key, by: LeadSource::Pointer } => Some(Seen::Pointer(key)),
             CollectionEvent::Reorder(edit) => Some(Seen::Reorder(edit)),
             CollectionEvent::Rename(edit) => Some(Seen::Rename(edit)),
             _ => None,
@@ -546,6 +549,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             thumb_range,
             default_open,
             toolbar,
+            search,
             mut tools,
             row_menu,
             view_lock,
@@ -595,13 +599,20 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                     bar = bar.trailing(|ui, _| tools.show(ui));
                 }
                 let _ = bar.show(ui, |ui, _| {
-                    let field = TextField::search(words.search.clone(), Bind::bound(&mut local.filter)).placeholder(words.search.clone());
-                    let field = field.drives(list_id);
-                    field.show(ui);
+                    if search {
+                        let field = TextField::search(words.search.clone(), Bind::bound(&mut local.filter)).placeholder(words.search.clone());
+                        let field = field.drives(list_id);
+                        field.show(ui);
+                    }
                     if !locked {
                         Segmented::new(words.view.clone(), Bind::bound(&mut local.view), &modes).show(ui);
                     }
                 });
+            }
+            // A hidden search field filters nothing: a search typed before hiding it would otherwise keep presets
+            // out of the list with no field to show why.
+            if toolbar && !search {
+                local.filter.clear();
             }
             let view = view_lock.unwrap_or(local.view);
 
@@ -645,7 +656,6 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                 }
             };
 
-            let mut hovered: Option<K> = None;
             let (response, displayed, pass) = if shown.is_empty() && actions.is_empty() {
                 let message = if query.is_empty() { words.empty.clone() } else { words.no_match.clone() };
                 let response = Notice::new(Tone::Neutral, message).layout(NoticeLayout::Centred).show(ui).response;
@@ -852,7 +862,6 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                             menu_target = Some(key);
                         }
                     }
-                    Seen::Pointer(key) => hovered = key.preset().filter(|key| row_of(key).is_some_and(|at| !rows[at].is_group())).cloned(),
                     Seen::Reorder(edit) => {
                         let moved = |mv: ReorderMove<BrowserKey<K>>| {
                             let mv = app_move(mv)?;
@@ -932,7 +941,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             if !has_footer {
                 commit(cx, &state, rows, &name);
             }
-            (response, hovered, events)
+            (response, events)
         };
 
         let footer_region = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
@@ -948,10 +957,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
         let stack = room_height.map_or_else(|| Stack::new().fill(), |height| Stack::new().fill_width().room_height(height));
         let stack = if has_footer { stack.footer(footer_region) } else { stack };
         let shown = stack.show(ui, body);
-        let (response, hovered, mut events) = shown.inner.unwrap_or_else(|| (shown.output.clone(), None, Vec::new()));
+        let (response, mut events) = shown.inner.unwrap_or_else(|| (shown.output.clone(), Vec::new()));
         events.extend(footer_events.take().into_iter().map(PresetEvent::Footer));
         let drag = crate::runtime::drag::active::<ListDrag<K>>(ui.ctx()).filter(|drag| drag.list == list_id).map(|drag| (*drag).clone());
-        PresetOutput::new(response, events, drag, hovered)
+        PresetOutput::new(response, events, drag)
     }
 }
 

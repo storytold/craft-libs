@@ -132,7 +132,7 @@ fn popover(
         }
         picker.show(ui)
     });
-    let open = shown.inner.is_some() && shown.output.closed.is_none();
+    let open = shown.output.open;
     match shown.inner {
         Some(ColorPickerOutput { events, screen_pick, .. }) => (events, screen_pick, open),
         None => (EditEvents::new(), None, open),

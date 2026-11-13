@@ -2,7 +2,7 @@
 
 use super::{PickerField, PresetPicker};
 use crate::choice::SwatchFace;
-use crate::contract::{Bind, Props as _, Role, Show as _, Validity};
+use crate::contract::{Bind, Role, Validity};
 use crate::list::ThumbAspect;
 use crate::patterns::presets::{PresetRow, PresetState};
 use crate::runtime::env::Message;

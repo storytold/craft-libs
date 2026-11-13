@@ -115,15 +115,12 @@ pub struct PresetOutput<K> {
     /// While a preset or group is dragged, its payload, so the host can draw its own drop highlight; `None`
     /// otherwise.
     pub drag: Option<ListDrag<K>>,
-    /// The preset under the pointer this pass, for a hover preview; `None` off the list, over a header, or while a
-    /// drag is under way.
-    pub hovered: Option<K>,
 }
 
 impl<K> PresetOutput<K> {
     /// The output of a browser pass.
-    pub fn new(response: Response, events: Vec<PresetEvent<K>>, drag: Option<ListDrag<K>>, hovered: Option<K>) -> Self {
-        PresetOutput { response, events, drag, hovered }
+    pub fn new(response: Response, events: Vec<PresetEvent<K>>, drag: Option<ListDrag<K>>) -> Self {
+        PresetOutput { response, events, drag }
     }
 }
 

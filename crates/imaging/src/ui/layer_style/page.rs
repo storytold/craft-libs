@@ -278,13 +278,13 @@ fn field_row(ui: &mut Ui, input: &PageInput<'_>, field: &EffectField, shown: &St
             let current = stored.map(str::to_owned).or(first.clone());
             let picker = Field::new(label.clone())
                 .id_salt(key)
-                .show(ui, |ui, _| PresetPicker::new(label.clone(), Bind::given(current.clone()), input.patterns, Bind::kept()).show(ui))
+                .show(ui, |ui, _| PresetPicker::new(label.clone(), Bind::given(current.clone()), input.patterns, Bind::kept()).show(ui).edit)
                 .inner;
-            if let Some(picker) = picker {
-                if picker.edit.events.is_empty() && stored.is_none() && first.is_some() {
+            if let Some(edit) = picker {
+                if edit.events.is_empty() && stored.is_none() && first.is_some() {
                     out.fill_default = current.map(|text| (key.to_owned(), StyleValue::Text(text)));
                 }
-                let edit = picker.edit.map(Option::unwrap_or_default);
+                let edit = edit.map(Option::unwrap_or_default);
                 push_edit(&mut out.edit, style_edit(&edit, input.style, |v| param(StyleValue::Text(v.clone()))));
             }
         }

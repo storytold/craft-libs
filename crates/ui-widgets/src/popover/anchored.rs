@@ -8,7 +8,7 @@ use crate::runtime::env::Label;
 use crate::runtime::focus::{FocusPolicy, Initial};
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
-use craft_behavior::{CancelRule, Metrics, Sense};
+use craft_behavior::{CancelRule, Metrics, Mixed, Sense};
 use egui::{Pos2, Response};
 
 /// The style of a popover: the surface and padding come from the container.
@@ -27,16 +27,20 @@ pub struct PopoverOutput {
     pub response: Response,
     /// How the popover closed in this pass; `None` while it stays open. Reported once for each close.
     pub closed: Option<CloseReason>,
+    /// Whether the popover is open after this pass: its binding as the close rules left it. False through the exit
+    /// fade, while the closed popover's body still runs.
+    pub open: bool,
     /// A press landed outside the popover, its opener and the popups opened from it while an
     /// [`Outside::Keep`] rule kept it open: the caller decides whether that closes it.
     pub pressed_outside: bool,
 }
 
 impl PopoverOutput {
-    /// The output of the container `cx` that closed as `closed` in this pass.
-    pub(super) fn of<C: Component>(cx: &Cx<'_, C>, closed: Option<CloseReason>) -> Self {
+    /// The output of the container `cx` that closed as `closed` in this pass, open while `open` holds true.
+    pub(super) fn of<C: Component>(mut cx: Cx<'_, C>, closed: Option<CloseReason>, mut open: Bind<'_, bool>) -> Self {
         let pressed_outside = crate::runtime::overlay::pressed_outside(&cx.core.ctx, cx.core.id);
-        PopoverOutput { response: cx.response.clone(), closed, pressed_outside }
+        let open = matches!(open.reborrow().read(&mut cx), Some(Mixed::Same(true)));
+        PopoverOutput { response: cx.response.clone(), closed, open, pressed_outside }
     }
 }
 
@@ -48,7 +52,7 @@ impl Outcome for PopoverOutput {
     }
 
     fn unshown(response: Response) -> Option<Self> {
-        Some(PopoverOutput { response, closed: None, pressed_outside: false })
+        Some(PopoverOutput { response, closed: None, open: false, pressed_outside: false })
     }
 }
 
@@ -188,7 +192,7 @@ impl Component for Popover<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> PopoverOutput {
-        PopoverOutput::of(&cx, self.closed)
+        PopoverOutput::of(cx, self.closed, self.open)
     }
 }
 
