@@ -73,6 +73,16 @@ pub fn encode_jpeg(pixels: &RgbaImage, quality: u8) -> Result<Vec<u8>, CodecErro
     Ok(out.into_inner())
 }
 
+/// Encode pixels according to a destination filename's extension (`png`, `jpg`, or `jpeg`).
+pub fn encode_for_path(path: impl AsRef<std::path::Path>, pixels: &RgbaImage) -> Result<Vec<u8>, CodecError> {
+    let extension = path.as_ref().extension().and_then(std::ffi::OsStr::to_str).unwrap_or_default();
+    match extension.to_ascii_lowercase().as_str() {
+        "png" => encode_png(pixels),
+        "jpg" | "jpeg" => encode_jpeg(pixels, 90),
+        other => Err(CodecError::unsupported("image", format!("cannot encode files with the .{other} extension"))),
+    }
+}
+
 fn is_heif(bytes: &[u8]) -> bool {
     bytes.get(4..8) == Some(b"ftyp") && matches!(bytes.get(8..12), Some(b"heic" | b"heix" | b"hevc" | b"mif1" | b"msf1" | b"avif"))
 }
