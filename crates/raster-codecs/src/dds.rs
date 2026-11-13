@@ -91,6 +91,7 @@ impl Field {
     }
 }
 
+#[derive(Clone, Copy)]
 enum Encoding {
     /// Uncompressed: bytes per pixel, then red (or luminance), green, blue and alpha.
     Masks {
@@ -202,7 +203,25 @@ fn dx10_encoding(b: &[u8]) -> Result<Encoding, CodecError> {
     }
 }
 
-pub fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DdsInfo {
+    pub width: u32,
+    pub height: u32,
+    pub levels: u32,
+    pub alpha: bool,
+    pub compression: Option<DdsCompression>,
+}
+
+struct Parsed<'a> {
+    encoding: Encoding,
+    data: &'a [u8],
+    width: u32,
+    height: u32,
+    levels: u32,
+    pitch: Option<u32>,
+}
+
+fn parse(b: &[u8]) -> Result<Parsed<'_>, CodecError> {
     if !b.starts_with(b"DDS ") {
         return Err(bad("missing the `DDS ` signature"));
     }
@@ -218,17 +237,63 @@ pub fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     }
     let dx10 = le32(b, 80)? & DDPF_FOURCC != 0 && &le32(b, 84)?.to_le_bytes() == b"DX10";
     let (encoding, start) = if dx10 { (dx10_encoding(b)?, HEADER + DX10_HEADER) } else { (legacy_encoding(b)?, HEADER) };
-    let layout = encoding.layout();
-    limits.check(width, height, layout, SampleType::U8)?;
+    let declared = le32(b, 28)?.max(1);
+    let levels = declared.min(mip_levels(width, height));
     // The same header field is a total level size for BC, but a row stride when DDSD_PITCH is set.
     let pitch = if flags & DDSD_PITCH != 0 { Some(le32(b, 20)?) } else { None };
+    Ok(Parsed { encoding, data: b.get(start..).unwrap_or_default(), width, height, levels, pitch })
+}
+
+pub fn info(b: &[u8]) -> Result<DdsInfo, CodecError> {
+    let p = parse(b)?;
+    let compression = match p.encoding {
+        Encoding::Masks { .. } => DdsCompression::None,
+        Encoding::Bc1 => DdsCompression::Bc1,
+        Encoding::Bc2 => DdsCompression::Bc2,
+        Encoding::Bc3 => DdsCompression::Bc3,
+    };
+    let alpha = match p.encoding {
+        Encoding::Masks { fields, .. } => fields[3].is_some(),
+        _ => true,
+    };
+    Ok(DdsInfo { width: p.width, height: p.height, levels: p.levels, alpha, compression: Some(compression) })
+}
+
+pub fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
+    let p = parse(b)?;
+    level_image(p.encoding, p.data, p.width, p.height, p.pitch, limits).map(|(img, _)| img)
+}
+
+pub fn decode_levels(b: &[u8], limits: &Limits, cancel: &dyn Fn() -> bool) -> Result<Vec<Image>, CodecError> {
+    let p = parse(b)?;
+    let (mut data, mut width, mut height, mut remaining) = (p.data, p.width, p.height, limits.max_alloc);
+    let mut levels = Vec::with_capacity(p.levels as usize);
+    for i in 0..p.levels {
+        if cancel() {
+            return Err(bad("DDS import cancelled"));
+        }
+        let level_limits = Limits { max_alloc: remaining, ..*limits };
+        let (img, size) = level_image(p.encoding, data, width, height, if i == 0 { p.pitch } else { None }, &level_limits)?;
+        remaining =
+            remaining.checked_sub(img.data().len() as u64).ok_or_else(|| CodecError::LimitExceeded("DDS mip chain exceeds max_alloc".into()))?;
+        levels.push(img);
+        data = data.get(size..).ok_or_else(|| bad("truncated mip data"))?;
+        width = (width / 2).max(1);
+        height = (height / 2).max(1);
+    }
+    Ok(levels)
+}
+
+fn level_image(encoding: Encoding, data: &[u8], width: u32, height: u32, pitch: Option<u32>, limits: &Limits) -> Result<(Image, usize), CodecError> {
+    let layout = encoding.layout();
+    limits.check(width, height, layout, SampleType::U8)?;
     let (row_pitch, size) = encoding.level_layout(width, height, pitch)?;
-    let data = b.get(start..).and_then(|d| d.get(..size)).ok_or_else(|| bad(format!("truncated pixel data: {size} bytes needed")))?;
+    let data = data.get(..size).ok_or_else(|| bad(format!("truncated pixel data: {size} bytes needed")))?;
     let (w, h) = (width as usize, height as usize);
     let channels = layout.channels();
     let row_size = w.checked_mul(channels).ok_or_else(|| bad("pixel size overflow"))?;
     let total = row_size.checked_mul(h).ok_or_else(|| bad("pixel size overflow"))?;
-    let mut pixels = vec![0u8; total];
+    let mut pixels = crate::alloc_zeroed::<u8>(total)?;
     match encoding {
         Encoding::Masks { bytes, gray, fields } => {
             for (src_row, dst_row) in data.chunks_exact(row_pitch).zip(pixels.chunks_exact_mut(row_size)) {
@@ -263,7 +328,7 @@ pub fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
             }
         }
     }
-    Image::from_u8(width, height, layout, pixels)
+    Ok((Image::from_u8(width, height, layout, pixels)?, size))
 }
 
 /// A BC1 colour block. BC2 and BC3 colour blocks always have four colours; only BC1's
