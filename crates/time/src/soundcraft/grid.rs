@@ -219,15 +219,15 @@ impl FeetFramesValue {
         }
     }
 
-    /// Apply the counter origin in frames before rounding once to the nearest sample.
+    /// Apply the counter origin in frames before rounding once to the first sample at the frame
+    /// boundary. This matches `FrameRate::samples_at_frame` and typed Feet+Frames positions.
     fn sample_line(self, index: i128, sr: SampleRate, rate: FrameRate, origin: i64) -> Samples {
         let (num, den) = self.frame_ratio();
         let (rate_num, rate_den) = rate.rational();
         let frames = index * num - i128::from(origin) * den;
         let samples = frames * i128::from(sr.hz().max(1)) * i128::from(rate_den);
         let divisor = den * i128::from(rate_num);
-        let magnitude = (samples.abs() + divisor / 2) / divisor;
-        let rounded = if samples < 0 { -magnitude } else { magnitude };
+        let rounded = samples.div_euclid(divisor) + i128::from(samples.rem_euclid(divisor) != 0);
         i64::try_from(rounded).unwrap_or(if rounded < 0 { i64::MIN } else { i64::MAX })
     }
 
@@ -588,6 +588,7 @@ fn step_enum<T: Copy + PartialEq>(values: &[T], value: T, larger: bool) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::soundcraft::TimeFormat;
 
     /// Frame origins are subtracted before rounding whole frames, quarter frames and subframes.
     #[test]
@@ -599,6 +600,24 @@ mod tests {
         }
         assert_eq!(FeetFramesValue::QuarterFrame.snap(50_049, sr, rate, 1), 50_050);
         assert_eq!(FeetFramesValue::SubFrame.lines(49_665, 49_667, sr, rate, 1, 4), [49_666]);
+    }
+
+    /// Grid lines use the same ceil-rounded sample boundary as typed positions at fractional rates.
+    #[test]
+    fn feet_frames_grid_lines_match_typed_positions_at_fractional_rates() {
+        let sr = SampleRate::HZ_48000;
+        let map = TempoMap::default();
+        for rate in [FrameRate::Fps23_976, FrameRate::Fps29_97, FrameRate::Fps29_97Drop, FrameRate::Fps59_94Drop] {
+            for origin in [-17, -1, 1, 17] {
+                for feet in [-64, -2, 0, 1, 2, 4, 7, 12, 128] {
+                    let text = format!("{feet}+00");
+                    let at = crate::soundcraft::format::parse_position(&text, TimeFormat::FeetFrames, sr, &map, rate, 0, origin).unwrap();
+                    for value in FeetFramesValue::ALL {
+                        assert_eq!(value.line_at_or_before(at, sr, rate, origin), at, "{rate:?} {value:?} origin {origin}, {text}");
+                    }
+                }
+            }
+        }
     }
 
     /// Dense subframes retain distinct sample lines and remain bounded with extreme signed origins.
