@@ -44,6 +44,8 @@ pub struct SliderStyle {
     ring: ThumbRing,
     /// The size of the drawn thumb.
     thumb: Vec2,
+    /// The thickness of a colour channel's band, the track face over a triangle pointer: `size.ramp.bar`.
+    band: f32,
     /// The length a slider asks for along its axis.
     length: f32,
     /// The lines at the ends of a trimmed span.
@@ -103,7 +105,8 @@ pub enum SliderThumb {
     /// A knob on the track.
     #[default]
     Round,
-    /// A pointer under the track, as colour channel sliders draw it.
+    /// A pointer under the track, as colour channel sliders draw it: a track face shows as a colour band
+    /// (`size.ramp.bar`) over the pointer, not at the groove's thickness.
     Triangle,
 }
 
@@ -161,6 +164,14 @@ impl<'a> Slider<'a> {
         Scale::new(&self.range, self.step, self.scale)
     }
 
+    /// Where the track face paints: the faced groove, or a colour band under a triangle pointer.
+    fn face_rect(&self, style: &SliderStyle, along: Along) -> Rect {
+        match self.thumb {
+            SliderThumb::Triangle => Rect::from_center_size(along.span().center(), Vec2::new(along.span().width(), style.band)),
+            SliderThumb::Round => track::ramp_rect(&style.track, along),
+        }
+    }
+
     /// The track in `rect` for a thumb of `style`, less the room of the mark labels.
     fn along(&self, rect: Rect, style: &SliderStyle, flow: Flow) -> Along {
         Along { area: self.marks.area(rect, &style.track), flow, thumb: style.thumb.x }
@@ -187,6 +198,7 @@ impl Component for Slider<'_> {
             knob: track::knob(cx),
             ring: ThumbRing::new(cx),
             thumb: track::knob_size(cx),
+            band: cx.tokens.size.ramp.bar,
             length,
             trim: cx.color(cx.tokens.color.status.warn.fg),
         }
@@ -209,7 +221,7 @@ impl Component for Slider<'_> {
         let value = cx.value().copied().unwrap_or_else(|| scale.place(f64::NAN));
         let thumb = along.thumb_rect(scale.position(value));
         if self.track_face.is_some() {
-            cx.part(track::GROOVE, track::ramp_rect(&cx.style.track, along));
+            cx.part(track::GROOVE, self.face_rect(cx.style, along));
         }
         cx.part(TRACK, along.area).sense(Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS).value_part().pointer_only("the arrow keys step the value");
         cx.part(Self::THUMB, thumb)
@@ -348,7 +360,7 @@ impl Component for Slider<'_> {
             }
             SliderThumb::Triangle => {
                 // The pointer starts under the band it points at: the colour face, or the plain groove.
-                let band = if faced { track::ramp_rect(&style.track, along) } else { track::groove_rect(&style.track, along.area) };
+                let band = if faced { self.face_rect(style, along) } else { track::groove_rect(&style.track, along.area) };
                 let (half, top, x) = (style.thumb.x / 2.0, band.bottom(), centre.x);
                 let points = vec![Pos2::new(x, top), Pos2::new(x + half, top + half), Pos2::new(x - half, top + half)];
                 style.ring.paint_pointer(&draw, &points, ring);
