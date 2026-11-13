@@ -152,6 +152,9 @@ pub fn read_with_limits(bytes: &[u8], supported_version: u32, spec: Spec<'_>, li
     let source_size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     let mut archive = Archive::open(bytes, Limits { max_entries: MAX_ENTRIES, max_total_bytes: source_size.saturating_add(limits.expansion_bytes) })
         .map_err(|e| Error::NotBundle(e.to_string()))?;
+    if archive.has_duplicate_names() {
+        return Err(Error::NotBundle("the archive has duplicate member names".into()));
+    }
     let version = archive
         .read(spec.metadata_entry, limits.json_bytes)
         .map_err(|e| Error::Read(e.to_string()))?
@@ -209,12 +212,21 @@ pub fn read_preview_from<R: Read + Seek>(reader: R, preview_entry: &str) -> Opti
 fn read_legacy(bytes: &[u8], spec: Spec<'_>) -> Result<Package, Error> {
     let mut document: Value = serde_json::from_slice(bytes).map_err(|e| Error::NotBundle(e.to_string()))?;
     let mut assets = Vec::new();
+    let mut total = 0u64;
     if let Some(field) = spec.legacy_assets_field {
         if let Some(inline) = document.get(field).and_then(Value::as_object) {
             for (id, value) in inline {
                 if id.parse::<u64>().is_ok()
                     && let Some(encoded) = value.as_str()
                 {
+                    let decoded_size = u64::try_from(encoded.len()).unwrap_or(u64::MAX).saturating_mul(3) / 4;
+                    if decoded_size > ASSET_LIMIT {
+                        return Err(Error::Read(format!("legacy asset {id} exceeds the {ASSET_LIMIT}-byte limit")));
+                    }
+                    total = total.saturating_add(decoded_size);
+                    if total > EXPANSION_LIMIT {
+                        return Err(Error::Read(format!("legacy assets exceed the {EXPANSION_LIMIT}-byte total limit")));
+                    }
                     assets.push((id.clone(), decode_base64(encoded)));
                 }
             }
@@ -288,5 +300,18 @@ mod tests {
     fn refuses_newer_versions() {
         let bytes = write(b"{}", 9, "future", None, &[], SPEC).unwrap();
         assert_eq!(read(&bytes, 4, SPEC), Err(Error::TooNew(9)));
+    }
+
+    #[test]
+    fn stored_assets_use_source_size_and_deflated_assets_use_their_limit() {
+        let bytes = vec![7u8; 128];
+        let document = br#"{"assets":{"7":{}}}"#;
+        let limits = ReadLimits { json_bytes: 1 << 20, compressed_asset_bytes: 8, expansion_bytes: 1 << 20 };
+        let stored = write(document, 4, "test", None, &[Asset { id: "7", mime: "image/png", data: &bytes }], SPEC).unwrap();
+        let package = read_with_limits(&stored, 4, SPEC, limits).unwrap();
+        assert_eq!(package.assets, [("7".to_owned(), bytes.clone())]);
+
+        let compressed = write(document, 4, "test", None, &[Asset { id: "7", mime: "application/octet-stream", data: &bytes }], SPEC).unwrap();
+        assert!(read_with_limits(&compressed, 4, SPEC, limits).is_err());
     }
 }
