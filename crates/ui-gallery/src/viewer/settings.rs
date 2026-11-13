@@ -63,7 +63,7 @@ impl GallerySettings {
         let env = &viewer.env;
         let browser = &viewer.browser;
         GallerySettings {
-            theme: env.theme.as_str().to_owned(),
+            theme: env.theme_id().as_str().to_owned(),
             mode: MODES.name(env.mode).to_owned(),
             contrast: CONTRASTS.name(env.contrast).to_owned(),
             text_size: TEXT_SIZES.name(env.text_size).to_owned(),
@@ -86,7 +86,7 @@ impl GallerySettings {
     /// Sets the root values these settings name on `env`; a field with an unknown name takes its default.
     pub fn restore_env(&self, env: &mut RootEnv) {
         let default = RootEnv::default();
-        env.theme = theme_named(&self.theme).unwrap_or(default.theme);
+        env.set_theme(theme_named(&self.theme).unwrap_or_else(|| default.theme_id().clone()));
         env.mode = MODES.parse(&self.mode).unwrap_or(default.mode);
         env.contrast = CONTRASTS.parse(&self.contrast).unwrap_or(default.contrast);
         env.text_size = TEXT_SIZES.parse(&self.text_size).unwrap_or(default.text_size);

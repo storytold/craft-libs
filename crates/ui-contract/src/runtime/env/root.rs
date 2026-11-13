@@ -37,7 +37,8 @@ pub struct RootEnv {
     /// Whether a bare Tab toggles the window's chrome in place of moving focus where the key stage's gate allows it.
     pub tab_toggles_chrome: bool,
     /// The theme the tokens resolve from; an id no built-in theme has resolves to the suite default.
-    pub theme: ThemeId,
+    /// Private with `theme_def`, so the two change together.
+    pub(super) theme: ThemeId,
     /// The definition of `theme` when it is a library theme: no built-in has its id, so the tokens resolve from this.
     /// Set only with `theme`, by `library_theme`; `theme(id)` clears it.
     pub(super) theme_def: Option<Arc<ThemeDef>>,
@@ -111,9 +112,19 @@ impl RootEnv {
 
     /// Sets the theme.
     pub fn theme(mut self, theme: ThemeId) -> Self {
+        self.set_theme(theme);
+        self
+    }
+
+    /// Sets the theme in place.
+    pub fn set_theme(&mut self, theme: ThemeId) {
         self.theme = theme;
         self.theme_def = None;
-        self
+    }
+
+    /// The theme the tokens resolve from.
+    pub fn theme_id(&self) -> &ThemeId {
+        &self.theme
     }
 
     /// Sets a library theme: `def` is the theme and its id the root's theme.

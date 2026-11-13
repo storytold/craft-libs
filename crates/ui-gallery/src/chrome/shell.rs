@@ -78,7 +78,7 @@ fn read_dropped(file: &OsFile) -> Result<AppSizes, String> {
 /// The dock of the shown workspace over the viewer's state.
 fn body(ui: &mut Ui, _: &mut BodyCx<'_>, viewer: &mut Viewer) {
     let Viewer { env, workspace, preview, browser, themes, theme_dock, mock, variants, variants_tab, inspect_layers, .. } = viewer;
-    let subject = ThemeSubject::new(theme_of(&env.theme), env.appearance(ui.ctx()));
+    let subject = ThemeSubject::new(theme_of(env.theme_id()), env.appearance(ui.ctx()));
     let in_theme = *workspace == Workspace::Theme;
     let Browser { catalog, filter, selection, open, dock, story_of, generation, cells, open_request, followed, tree_seen, level, .. } = browser;
     let dock: &mut Dock<_> = if in_theme { theme_dock } else { dock };

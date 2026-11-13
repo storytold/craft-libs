@@ -78,7 +78,11 @@ pub fn options_bar(ui: &mut Ui, viewer: &mut Viewer) {
             choose(ui, "Workspace", shown, &workspaces);
         })
         .show(ui, |ui, _| {
-            pick(ui, "Theme", &mut env.theme, &themes);
+            let mut theme = env.theme_id().clone();
+            pick(ui, "Theme", &mut theme, &themes);
+            if theme != *env.theme_id() {
+                env.set_theme(theme);
+            }
             choose(ui, "Mode", &mut env.mode, &modes);
             let button = IconButton::new(IconId::new("more")).label("More appearance settings").selected(*more_open).show(ui);
             if button.clicks > 0 {
