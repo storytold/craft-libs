@@ -10,7 +10,7 @@ use image::{ImageReader, Limits as ImageLimits, RgbaImage};
 
 use crate::CodecError;
 
-pub use image::RgbaImage as Pixels;
+pub use image::{Rgba as Pixel, RgbaImage as Pixels};
 
 /// Limits applied before allocating the decoded image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
