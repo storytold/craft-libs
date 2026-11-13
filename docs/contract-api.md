@@ -3350,13 +3350,16 @@ One-shot screenshot slots and the facts a screenshot is measured against.
   - `pub const fn points_per_inch(self) -> f64`. How many points make an inch.
 - `craft_ui::runtime::env::ResolvedRoot`: `pub struct ResolvedRoot { pub mode: Mode, pub contrast: Contrast, pub motion: MotionMode }`. The mode, contrast and motion of a pass, with `System` resolved.
 - `craft_ui::runtime::env::RevealEdge`: `pub enum RevealEdge { Top, Start, End }`. An edge of the window whose slots a pointer at the edge reveals in body-only mode. The bottom edge and the centre
-- `craft_ui::runtime::env::RootEnv`: `pub struct RootEnv { pub sizes: Arc<AppSizes>, pub text_size: TextSize, pub direction: Direction, pub motion: MotionChoice, pub mode: ModeChoice, pub contrast: ContrastChoice, pub density: Size, pub scale: Scale, pub tab_all_controls: bool, pub tab_toggles_chrome: bool, pub theme: ThemeId, pub values: AppValues, pub today: Option<CalendarDate> }`. The app's root values each frame.
+- `craft_ui::runtime::env::RootEnv`: `pub struct RootEnv { pub sizes: Arc<AppSizes>, pub text_size: TextSize, pub direction: Direction, pub motion: MotionChoice, pub mode: ModeChoice, pub contrast: ContrastChoice, pub density: Size, pub scale: Scale, pub tab_all_controls: bool, pub tab_toggles_chrome: bool, pub values: AppValues, pub today: Option<CalendarDate> }`. The app's root values each frame.
   - `pub fn new() -> Self`. A root with every value at its default.
   - `pub fn scale(mut self, scale: Scale) -> Self`. Sets the interface scale.
   - `pub fn direction(mut self, direction: Direction) -> Self`. Sets the layout direction.
   - `pub fn motion(mut self, motion: MotionMode) -> Self`. Sets the motion choice from a motion mode.
   - `pub fn mode(mut self, mode: impl Into<ModeChoice>) -> Self`. Sets the mode choice.
   - `pub fn theme(mut self, theme: ThemeId) -> Self`. Sets the theme.
+  - `pub fn set_theme(&mut self, theme: ThemeId)`. Sets the theme in place.
+  - `pub fn theme_id(&self) -> &ThemeId`. The theme the tokens resolve from.
+  - `pub fn library_theme(mut self, def: Arc<ThemeDef>) -> Self`. Sets a library theme: `def` is the theme and its id the root's theme.
   - `pub fn resolved(&self, ctx: &Context) -> ResolvedRoot`. What the choices resolve to on `ctx`'s pass: the one place `System` is replaced by the OS's answer, as
   - `pub fn resolved_for(&self, system: SystemAppearance) -> ResolvedRoot`. What the choices resolve to when the OS reports `system`.
   - `pub fn appearance(&self, ctx: &Context) -> Appearance`. The appearance the root's tokens resolve under on `ctx`: the mode, contrast, density and text size.
