@@ -5,6 +5,7 @@ mod words;
 mod area;
 mod hide;
 mod switcher;
+mod workspace_dialogs;
 // Task panes: docked panes as shell panes, floating panes as floating frames.
 mod panes;
 
@@ -14,3 +15,5 @@ pub use panes::{
     SidePolicy,
 };
 pub use switcher::{WorkspaceSwitcher, WorkspaceSwitcherOutput};
+pub use words::WorkspaceDialogWords;
+pub use workspace_dialogs::{DeleteWorkspaceDialog, DeleteWorkspaceDialogOutput, NewWorkspace, NewWorkspaceDialog, NewWorkspaceDialogOutput};
