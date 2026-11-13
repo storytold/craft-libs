@@ -100,6 +100,16 @@ pub enum Error {
     /// The image exceeds a caller supplied size or allocation limit.
     #[error("JPEG XL: limit exceeded: {0}")]
     LimitExceeded(String),
+    /// The encoded dimensions exceed the caller's pixel-count limit.
+    #[error("JPEG XL: image dimensions {width}×{height} exceed the {max_pixels} pixel limit")]
+    PixelLimitExceeded {
+        /// Encoded image width.
+        width: u32,
+        /// Encoded image height.
+        height: u32,
+        /// Maximum accepted pixel count.
+        max_pixels: u64,
+    },
     /// The image layout or samples are unsupported.
     #[error("JPEG XL: invalid image: {0}")]
     InvalidImage(String),

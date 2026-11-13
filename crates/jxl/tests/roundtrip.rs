@@ -70,7 +70,7 @@ fn decoder_enforces_input_and_pixel_limits() {
     let input_limit = DecodeLimits { max_input_bytes: encoded.len() - 1, ..DecodeLimits::default() };
     assert!(matches!(decode(&encoded, input_limit), Err(craft_jxl::Error::LimitExceeded(_))));
     let pixel_limit = DecodeLimits { max_pixels: 0, ..DecodeLimits::default() };
-    assert!(matches!(decode(&encoded, pixel_limit), Err(craft_jxl::Error::LimitExceeded(_))));
+    assert!(matches!(decode(&encoded, pixel_limit), Err(craft_jxl::Error::PixelLimitExceeded { width: 1, height: 1, max_pixels: 0 })));
 }
 
 #[test]

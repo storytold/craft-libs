@@ -56,7 +56,7 @@ fn decode_inner(bytes: &[u8], limits: DecodeLimits, output_color: OutputColor) -
     }
     let pixels = u64::from(width).saturating_mul(u64::from(height));
     if pixels > limits.max_pixels {
-        return Err(Error::LimitExceeded(format!("{width}×{height} image exceeds the {} pixel limit", limits.max_pixels)));
+        return Err(Error::PixelLimitExceeded { width, height, max_pixels: limits.max_pixels });
     }
 
     // `JxlImageBuilder::read` feeds the full input. Continue in bounded chunks so trailing frame
