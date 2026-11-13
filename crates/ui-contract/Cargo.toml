@@ -54,7 +54,7 @@ serde = { workspace = true }
 skrifa = { version = "0.44", default-features = false, features = ["std"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 # The installed font folders, for the on-demand font candidates (`fonts::SystemCandidates`).
-craft-font-catalog = { workspace = true, default-features = false }
+craft-font-catalog = { path = "../font-catalog", default-features = false }
 # The craft-fonts faces (`fonts::EmbeddedFace`, `fonts::ServedFace`).
 craft-fonts-build = { workspace = true }
 # Only `color_fonts` reads it: the feature turns on epaint's colour glyphs.

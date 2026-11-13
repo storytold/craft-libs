@@ -25,7 +25,7 @@ screen-testing = ["ui", "craft-ui/testing"]
 
 [dependencies]
 # `numbering` formats page numbers with craft-text's list number styles.
-craft-text = { workspace = true, default-features = false }
+craft-text = { path = "../text", default-features = false }
 kurbo = { workspace = true }
 serde = { workspace = true }
 craft-behavior = { workspace = true, optional = true }
