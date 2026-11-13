@@ -31,11 +31,13 @@ pub fn decode_rgba(bytes: &[u8], limits: DecodeLimits) -> Result<RgbaImage, Code
     if bytes.len() > limits.max_file_bytes {
         return Err(CodecError::LimitExceeded(format!("{} encoded bytes exceed max {}", bytes.len(), limits.max_file_bytes)));
     }
-    let mut decode_limits = craft_image_codecs::Limits::default();
-    decode_limits.max_width = limits.max_width;
-    decode_limits.max_height = limits.max_height;
-    decode_limits.max_pixels = limits.max_pixels;
-    decode_limits.max_alloc = limits.max_alloc_bytes;
+    let decode_limits = craft_image_codecs::Limits {
+        max_width: limits.max_width,
+        max_height: limits.max_height,
+        max_pixels: limits.max_pixels,
+        max_alloc: limits.max_alloc_bytes,
+        ..Default::default()
+    };
     let decoded = craft_image_codecs::decode_with(bytes, &craft_image_codecs::DecodeOptions { limits: decode_limits, ..Default::default() })
         .map_err(map_codec_error)?;
     let output_bytes = u64::from(decoded.width()).saturating_mul(u64::from(decoded.height())).saturating_mul(4);
