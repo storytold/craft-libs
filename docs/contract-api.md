@@ -1277,7 +1277,7 @@ The one-press-per-pass rule: a pass carries at most one press, as its last point
 
 - `craft_behavior::overlay::Align`: `pub enum Align { Start, Center, End }`. How the overlay lines up with the anchor along the edge it hangs from.
 - `craft_behavior::overlay::MinWidth`: `pub enum MinWidth { None, Anchor, Points(f32) }`. The narrowest an overlay may be.
-  - `pub fn points(self, anchor_width: f32, side: Side) -> f32`. The width in points, given the anchor's width and the side the overlay takes: beside its anchor (`Start`, `End`) an overlay shares no horizontal edge with it, so `Anchor` asks for nothing there.
+  - `pub fn points(self, anchor_width: f32, side: Side) -> f32`. The width in points, given the anchor's width and the side the overlay takes: beside its anchor (`Start`,
 - `craft_behavior::overlay::PlaceRequest`: `pub struct PlaceRequest { pub anchor: Rect, pub size: Vec2, pub side: Side, pub align: Align, pub rtl: bool, pub gap: f32, pub min_width: MinWidth, pub bounds: Rect, pub kept: Option<Side>, pub flips_across: bool }`. What `place` reads.
   - `pub const fn new(anchor: Rect, size: Vec2, bounds: Rect) -> Self`. A request for `size` around `anchor` inside `bounds`: below, aligned to the start, no gap, free width.
   - `pub const fn size(mut self, size: Vec2) -> Self`. Sets the content size.
@@ -2164,7 +2164,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `fn value_text(&self) -> Option<&str>`. The shown value as the component words it to assistive technology; `None` for a component that gives none.
   - `fn story_facts(&self) -> crate::testing::StoryOutput`. The facts a story reports about this output: its id, click, edit kinds, collection kinds and visible range.
 - `craft_ui::contract::Overlay`: `pub struct Overlay { pub place: Place, pub fit: OverlayFit, pub min_width: MinWidth, pub movable: bool, pub resize: Resize, pub rank: Rank, pub keys: OwnerClass, pub focus: FocusPolicy, pub dismiss: Dismiss, pub motion: MotionSpec, pub opener: Option<Opener>, pub popup: PopupKind, pub size: Option<Vec2>, pub size_limits: SizeLimits, pub placed: Option<Rect>, pub placed_at: Option<Pos2>, pub bounds: Option<Rect>, pub opacity: f32, pub body_scroll: bool, pub moves_window: bool }`. Data describing an egui layer. Presets fill focus and dismissal; builders change single fields.
-  - `pub fn popover() -> Overlay`. A popover: a popup anchored below, from its content, at least as wide as its anchor and capped by the window, taking focus in. It closes when the focus moves out of it.
+  - `pub fn popover() -> Overlay`. A popover: a popup anchored below, from its content, at least as wide as its anchor and capped by the window,
   - `pub fn dropdown() -> Overlay`. A dropdown list: from its content, at least as wide as its anchor and capped, focus stays on the anchor. It
   - `pub fn menu() -> Overlay`. A menu: a popup the arrow keys move through. A press outside closes it and goes no further.
   - `pub fn submenu() -> Overlay`. A submenu: beside its parent entry, opening upward from a low entry when it fits there and not below.
@@ -2439,7 +2439,7 @@ Chapter 15: the `Overlay` data, its presets, popup handles, `OverlayUi` and the 
 - `craft_ui::contract::overlay::Opener`: `pub struct Opener { pub id: Id, pub rect: Rect, pub layer: areas::Layer, pub trigger: Trigger, pub enabled: bool, pub anchor: Option<Anchor>, pub others: Vec<Opener> }`. A component that opens a free-standing popup, and how. A layer with several openers keeps the first as its
 - `craft_ui::contract::overlay::Outside`: `pub enum Outside { Close, Keep, Absorb }`. What a press outside the layer and its anchor does.
 - `craft_ui::contract::overlay::Overlay`: `pub struct Overlay { pub place: Place, pub fit: OverlayFit, pub min_width: MinWidth, pub movable: bool, pub resize: Resize, pub rank: Rank, pub keys: OwnerClass, pub focus: FocusPolicy, pub dismiss: Dismiss, pub motion: MotionSpec, pub opener: Option<Opener>, pub popup: PopupKind, pub size: Option<Vec2>, pub size_limits: SizeLimits, pub placed: Option<Rect>, pub placed_at: Option<Pos2>, pub bounds: Option<Rect>, pub opacity: f32, pub body_scroll: bool, pub moves_window: bool }`. Data describing an egui layer. Presets fill focus and dismissal; builders change single fields.
-  - `pub fn popover() -> Overlay`. A popover: a popup anchored below, from its content, at least as wide as its anchor and capped by the window, taking focus in. It closes when the focus moves out of it.
+  - `pub fn popover() -> Overlay`. A popover: a popup anchored below, from its content, at least as wide as its anchor and capped by the window,
   - `pub fn dropdown() -> Overlay`. A dropdown list: from its content, at least as wide as its anchor and capped, focus stays on the anchor. It
   - `pub fn menu() -> Overlay`. A menu: a popup the arrow keys move through. A press outside closes it and goes no further.
   - `pub fn submenu() -> Overlay`. A submenu: beside its parent entry, opening upward from a low entry when it fits there and not below.

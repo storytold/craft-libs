@@ -204,6 +204,8 @@ pub(crate) struct Pass {
     last: Vec<OpenEntry>,
     /// The layers whose bodies are running, innermost last.
     drawing: Vec<Id>,
+    /// The side of its anchor each anchored layer was placed on this pass, set before its body runs.
+    sides: Vec<(Id, Side)>,
     /// Each activation of this pass: the component and a layer whose body was running around it.
     activated: Vec<(Id, Id)>,
     /// The components whose activation this pass opened or closed a popup (`claim_activation`).
@@ -264,6 +266,7 @@ fn with_pass<R>(ctx: &Context, f: impl FnOnce(&mut Pass) -> R) -> R {
                 pass.last.clear();
             }
             pass.drawing.clear();
+            pass.sides.clear();
             pass.activated.clear();
             pass.claimed.clear();
             pass.pressed_outside.clear();
@@ -398,6 +401,11 @@ pub fn entry(ctx: &Context, id: Id) -> Option<OpenEntry> {
     with_pass(ctx, |pass| pass.last.iter().find(|entry| entry.id == id).cloned())
 }
 
+/// The side of its anchor the layer `id` was placed on in this pass, once its host placed it by a known size.
+pub(crate) fn placed_side(ctx: &Context, id: Id) -> Option<Side> {
+    with_pass(ctx, |pass| pass.sides.iter().rev().find(|(layer, _)| *layer == id).map(|(_, side)| *side))
+}
+
 /// The parent a layer opened now has: the layer whose body is running.
 #[doc(hidden)]
 pub fn drawing_parent(ctx: &Context) -> Option<Id> {
@@ -416,12 +424,17 @@ pub(crate) fn appears(ctx: &Context, id: Id, exiting: bool) -> bool {
     reopened(ctx, id, exiting) || with_persist(ctx, pass::current_viewport(ctx), |persist| !persist.appeared.contains_key(&id))
 }
 
-/// Marks the layer `id`'s body as running, so layers opened from inside it become its children. A layer shown
-/// again while it fades out opens anew: it appears in this frame and pass.
-pub(crate) fn begin_layer(ctx: &Context, id: Id, exiting: bool) {
+/// Marks the layer `id`'s body as running, so layers opened from inside it become its children, with the `side` of
+/// its anchor it was placed on. A layer shown again while it fades out opens anew: it appears in this frame and pass.
+pub(crate) fn begin_layer(ctx: &Context, id: Id, exiting: bool, side: Option<Side>) {
     crate::runtime::replay::block(ctx);
     let reopened = reopened(ctx, id, exiting);
-    with_pass(ctx, |pass| pass.drawing.push(id));
+    with_pass(ctx, |pass| {
+        pass.drawing.push(id);
+        if let Some(side) = side {
+            pass.sides.push((id, side));
+        }
+    });
     let viewport = pass::current_viewport(ctx);
     let first = (pass::root_frame_nr(ctx), pass::pass_nr(ctx, viewport));
     let (down, released) = pointer::with_pass_pointer(ctx, |read| {

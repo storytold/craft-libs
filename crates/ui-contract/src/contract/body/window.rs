@@ -204,6 +204,54 @@ const GRIPS: [(i8, i8, CursorIcon); 8] = [
     (-1, 1, CursorIcon::ResizeNeSw),
 ];
 
+/// The edges of a layer its placement holds in place, by screen side (`-1` left or top, `1` right or bottom). A layer
+/// hung from its anchor that the user cannot move keeps only its size, so its placement holds the edge that faces the
+/// anchor and the edge it aligns to the anchor's: a grip on such an edge would move the opposite one. A centred layer
+/// has both edges across its side held.
+#[derive(Clone, Copy)]
+struct Pinned {
+    x: [bool; 2],
+    y: [bool; 2],
+}
+
+impl Pinned {
+    const NONE: Pinned = Pinned { x: [false; 2], y: [false; 2] };
+
+    fn of(overlay: &crate::contract::Overlay, ctx: &Context, id: Id, rtl: bool) -> Pinned {
+        use craft_behavior::overlay::{Align, Side};
+        let crate::contract::overlay::Place::Anchored { side, align, .. } = &overlay.place else { return Pinned::NONE };
+        if overlay.movable {
+            return Pinned::NONE;
+        }
+        let side = crate::runtime::overlay::placed_side(ctx, id).unwrap_or(*side);
+        // Index 0 is the left or top edge, 1 the right or bottom one; reading order flips the horizontal ones.
+        let (start, end) = if rtl { (1, 0) } else { (0, 1) };
+        let edge = |at: usize| {
+            let mut held = [false; 2];
+            held[at] = true;
+            held
+        };
+        let aligned = |start: usize, end: usize| match align {
+            Align::Start => edge(start),
+            Align::End => edge(end),
+            _ => [true; 2],
+        };
+        match side {
+            Side::Below => Pinned { x: aligned(start, end), y: edge(0) },
+            Side::Above => Pinned { x: aligned(start, end), y: edge(1) },
+            Side::Start => Pinned { x: edge(end), y: aligned(0, 1) },
+            Side::End => Pinned { x: edge(start), y: aligned(0, 1) },
+            _ => Pinned::NONE,
+        }
+    }
+
+    /// Whether the grip that moves the edges `dx`, `dy` moves a held edge.
+    fn holds(self, dx: i8, dy: i8) -> bool {
+        let held = |edges: [bool; 2], d: i8| d != 0 && edges[usize::from(d > 0)];
+        held(self.x, dx) || held(self.y, dy)
+    }
+}
+
 impl BodyHooks<'_> {
     /// The `window.Move` and `window.Size` commands and the keys of the mode they start (16.3): arrows move or
     /// resize by a step (Shift: four steps), Enter, the command again or a primary press keeps the placement, Escape
@@ -518,7 +566,11 @@ impl BodyHooks<'_> {
         if !grips || !stands.grips {
             return;
         }
+        let pinned = overlay_of(props).map_or(Pinned::NONE, |overlay| Pinned::of(overlay, &ctx, pcx.id, pcx.env.direction().is_rtl()));
         for (index, (dx, dy, cursor)) in GRIPS.into_iter().enumerate() {
+            if pinned.holds(dx, dy) {
+                continue;
+            }
             let along = |edge: i8, low: f32, high: f32| match edge {
                 -1 => (low - handle / 2.0 + inset, low + handle / 2.0 + inset),
                 1 => (high - handle / 2.0 - inset, high + handle / 2.0 - inset),

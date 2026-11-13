@@ -256,6 +256,7 @@ impl<'a> ContourField<'a> {
             Row::new().show(ui, |ui, root| {
                 let picker = PresetPicker::new(label.clone(), Bind::bound(&mut key), rows, state.reborrowed())
                     .field(PickerField::Thumbnail)
+                    .columns(4)
                     .can_delete(|key| matches!(key, ContourKey::User(_)))
                     .edit_face()
                     .show(ui);

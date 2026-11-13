@@ -43,17 +43,20 @@ pub(crate) fn placement_id(id: Id) -> Id {
 
 /// The one store of a layer's placement: the saved tier when `save` is set, else shown memory. A layer whose overlay
 /// is `placed` has the caller's rect instead: the slot reads it and writes nothing, since the caller owns the
-/// placement and learns of the user's changes from `PlacementChange` reports.
+/// placement and learns of the user's changes from `PlacementChange` reports. A layer hung from its anchor that the
+/// user cannot move keeps only its size: each opening places it from its anchor at that size.
 pub(super) struct PlacementSlot<'s> {
     stage: &'s mut MemoryStage,
     id: Id,
     save: Option<&'s SaveKey>,
     controlled: Option<Placement>,
+    anchored: bool,
 }
 
 impl<'s> PlacementSlot<'s> {
     pub(super) fn new(stage: &'s mut MemoryStage, id: Id, save: Option<&'s SaveKey>, overlay: &crate::contract::Overlay) -> Self {
-        PlacementSlot { stage, id, save, controlled: Placement::given(overlay) }
+        let anchored = matches!(overlay.place, Place::Anchored { .. }) && !overlay.movable;
+        PlacementSlot { stage, id, save, controlled: Placement::given(overlay), anchored }
     }
 
     fn stored(&mut self) -> &mut Placement {
@@ -72,7 +75,8 @@ impl<'s> PlacementSlot<'s> {
 
     pub(super) fn write(&mut self, placement: Placement) {
         if self.controlled.is_none() {
-            *self.stored() = placement;
+            let pos = if self.anchored { None } else { placement.pos };
+            *self.stored() = Placement { pos, ..placement };
         }
     }
 }
@@ -88,7 +92,8 @@ fn placement_of(ctx: &Context, id: Id, save: Option<&SaveKey>) -> Placement {
 
 /// The placement a layer is shown at: the caller's `placed` rect or `placed_at` position, else the saved or session placement, else for a
 /// floating resizable layer with a default size (`Overlay::size`) that size, within the screen less `screen_inset` on
-/// each side, centred or at the overlay's float position. A saved size and position win over the default.
+/// each side, centred or at the overlay's float position. A saved size and position win over the default. A size with
+/// no position places an anchored layer from its anchor at that size.
 pub(crate) fn shown_placement(
     ctx: &Context,
     id: Id,

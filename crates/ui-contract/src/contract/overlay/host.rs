@@ -181,7 +181,7 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
         let recorded = overlay.opener.as_ref().and_then(|first| focus::stop_rec(ctx, (first.id, None))).map(|rec| rec.stop.key());
         owned.map(|rec| rec.stop.key()).or(pressed).or(recorded).or_else(|| focus::focused_stop(ctx))
     });
-    overlay::begin_layer(ctx, layer.id, layer.exiting);
+    overlay::begin_layer(ctx, layer.id, layer.exiting, placed.side);
     let shown = areas::show_layer(ctx, &spec, |ui| {
         if let Some(region) = layer.region {
             ui.set_clip_rect(ui.clip_rect().intersect(region));
@@ -260,7 +260,7 @@ pub fn show_beside_modal<T>(ctx: &Context, id: Id, modal: egui::Modal, body: imp
         let real = !ui.is_sizing_pass();
         if real {
             focus::push_scope(ctx, id, BESIDE, None);
-            overlay::begin_layer(ctx, id, false);
+            overlay::begin_layer(ctx, id, false, None);
         }
         let out = body(ui);
         if real {

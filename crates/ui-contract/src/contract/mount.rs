@@ -222,18 +222,23 @@ impl Host for LayerHost {
         if let Some(pos) = placement.pos {
             overlay.place = Place::Float(FloatPlace::at(Pos2::from(pos)));
         }
-        let at = placement.pos.zip(placement.size).map(|(pos, size)| ShowAt::Rect(Rect::from_min_size(Pos2::from(pos), Vec2::from(size))));
+        let sized = placement.size.map(Vec2::from);
+        let at = placement.pos.zip(sized).map(|(pos, size)| ShowAt::Rect(Rect::from_min_size(Pos2::from(pos), size)));
         // Without an opener, an anchor given as a rect or point is in the parent's layer, and `Response` is the
         // parent's cursor.
         let own = Rect::from_min_max(parent.cursor().min, parent.cursor().min);
         let anchor = overlay::resolve_anchor(&ctx, id, &overlay, own, areas::layer_to_screen(&ctx, parent.layer_id()));
-        // The layer is placed by the size the container takes in this pass: its placed rect, else what it measured.
-        let size = at.map_or(self.size, |shown| match shown {
+        // The layer is placed by the size the container takes in this pass: its placed rect or the size the user gave
+        // it, else what it measured.
+        let size = at.map_or(sized.unwrap_or(self.size), |shown| match shown {
             ShowAt::Rect(rect) => rect.size(),
             ShowAt::Flow => self.size,
         });
         let layer = Layer { id, owner: id, overlay: &overlay, anchor, env, exiting: self.exiting, fade: self.fade, size: Some(size), region };
         let out = overlay::host(&ctx, &layer, &mut |ui| {
+            // A layer the user sized with no position of its own shows at that size where the host placed it from its
+            // anchor, within the room the host leaves it.
+            let at = at.or_else(|| sized.map(|size| ShowAt::Rect(Rect::from_min_size(ui.max_rect().min, size.min(ui.max_rect().size())))));
             // The container runs in the env the layer installed, not in its opener's.
             pass(ui, Some(at.unwrap_or(ShowAt::Flow)), Some(&Env::of(ui)));
             // A body shown at a rect takes no room in the layer's flow: the layer covers the rect, so the pointer
@@ -349,7 +354,7 @@ impl Host for ViewportHost {
                 crate::runtime::focus::push_scope(&ctx, id, focus, None);
             }
             if real {
-                crate::runtime::overlay::begin_layer(&ctx, id, false);
+                crate::runtime::overlay::begin_layer(&ctx, id, false, None);
             }
             pass(ui, Some(ShowAt::Rect(window)), Some(&scoped_env));
             if real {

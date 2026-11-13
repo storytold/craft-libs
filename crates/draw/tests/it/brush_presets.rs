@@ -64,6 +64,10 @@ struct Opened {
     values: BrushPickerValues,
     open: bool,
     tip_edits: usize,
+    /// Where the app opens the picker without its field; `None` shows the field.
+    at: Option<Pos2>,
+    /// The space above the field.
+    offset: f32,
 }
 
 const POINT: Pos2 = Pos2::new(160.0, 120.0);
@@ -72,21 +76,31 @@ const OPENED: BrushPickerValues = BrushPickerValues::new(12.0, Some(0.5)).with_t
 /// A picker over two presets showing `opened`'s values, opened by the app at [`POINT`] when `at_point`, else from its
 /// field; with `remember`, resizable with its size saved. The host applies every edit and Escape's revert.
 fn opened_rig(at_point: bool, remember: bool) -> (Fixture, Rc<RefCell<Opened>>) {
-    let host = Rc::new(RefCell::new(Opened { current: Some(HARD), state: BrushPickerState::new(), values: OPENED, open: at_point, tip_edits: 0 }));
+    let at = at_point.then_some(POINT);
+    let host = Rc::new(RefCell::new(Opened {
+        current: Some(HARD),
+        state: BrushPickerState::new(),
+        values: OPENED,
+        open: at_point,
+        tip_edits: 0,
+        at,
+        offset: 0.0,
+    }));
     let shown = Rc::clone(&host);
     let mut fixture = Fixture::new(move |ui| {
         let env = Env::of(ui);
         let paint = BrushRowPaint::new(|_, _| {}, |_, _| {});
         let mut host = shown.borrow_mut();
-        let Opened { current, state, values, open, tip_edits } = &mut *host;
+        let Opened { current, state, values, open, tip_edits, at, offset } = &mut *host;
+        ui.add_space(*offset);
         let rows =
             vec![brush_row(1, "Soft Round", 0, 45.0, state.parts, &env, &paint), brush_row(HARD, "Hard Round", 0, 12.0, state.parts, &env, &paint)];
         let mut picker = BrushPresetPicker::new("Brush Preset picker", Bind::bound(current), &rows, Bind::bound(state), *values);
         if remember {
             picker = picker.resizable(SaveKey::new("craft_draw_tests.brush_picker"));
         }
-        if at_point {
-            picker = picker.open_at(POINT, Bind::bound(open));
+        if let Some(at) = *at {
+            picker = picker.open_at(at, Bind::bound(open));
         }
         let out = picker.show(ui);
         if let Some(diameter) = out.diameter.landed() {
@@ -125,13 +139,19 @@ fn the_app_opens_the_picker_at_a_point_without_its_field() {
     assert!(fixture.by_role(Role::DIALOG).is_empty(), "the popover is gone");
 }
 
+/// A resized popover keeps only its size: each opening places it from its field or point at that size. Its grips
+/// stand only on the edges its anchor leaves free.
 #[trial]
 fn a_resized_picker_reopens_at_the_size_its_grip_left() {
-    let (mut fixture, _host) = opened_rig(false, true);
+    let (mut fixture, host) = opened_rig(false, true);
     let field = fixture.by_role(Role::COMBO_BOX).first().copied().expect("the closed field shows");
     fixture.click(&field);
     fixture.idle(3);
     let first = popover(&fixture);
+    fixture.drag_at(first.left_center() + Vec2::new(1.0, 0.0), Vec2::new(-60.0, 0.0));
+    fixture.idle(3);
+    let held = popover(&fixture);
+    assert!((held.width() - first.width()).abs() < 1.0, "the edge at the field's start has no grip: {first:?} -> {held:?}");
     fixture.drag_at(first.right_bottom() - Vec2::splat(1.0), Vec2::new(60.0, 80.0));
     fixture.idle(3);
     let resized = popover(&fixture);
@@ -139,10 +159,34 @@ fn a_resized_picker_reopens_at_the_size_its_grip_left() {
     fixture.key(Key::Escape, Modifiers::NONE);
     fixture.idle(3);
     assert!(fixture.by_role(Role::DIALOG).is_empty(), "Escape closes the popover");
-    fixture.click(&field);
+
+    host.borrow_mut().offset = 120.0;
+    fixture.idle(3);
+    let moved = fixture.by_role(Role::COMBO_BOX).first().copied().expect("the field shows");
+    assert!(moved.rect.min.y > field.rect.min.y + 100.0, "the field moved down: {:?} -> {:?}", field.rect, moved.rect);
+    fixture.click(&moved);
     fixture.idle(3);
     let reopened = popover(&fixture);
     assert!((reopened.size() - resized.size()).abs().max_elem() < 1.0, "the reopened popover keeps the size: {resized:?} -> {reopened:?}");
+    let under = reopened.min.y - moved.rect.max.y;
+    assert!(
+        (-1.0..16.0).contains(&under) && (reopened.min.x - moved.rect.min.x).abs() < 16.0,
+        "it hangs under the moved field: {:?} / {reopened:?}",
+        moved.rect
+    );
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.idle(3);
+
+    let point = Pos2::new(220.0, 60.0);
+    {
+        let mut host = host.borrow_mut();
+        host.at = Some(point);
+        host.open = true;
+    }
+    fixture.idle(3);
+    let at_point = popover(&fixture);
+    assert!((at_point.size() - resized.size()).abs().max_elem() < 1.0, "opened at a point it keeps the size: {resized:?} -> {at_point:?}");
+    assert!((at_point.min - point).length() < 32.0, "it hangs from the new point: {at_point:?}");
 }
 
 #[trial]

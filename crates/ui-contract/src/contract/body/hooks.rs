@@ -171,7 +171,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                     let screen = crate::contract::overlay::screen_for(&ctx, &env, overlay);
                     shown_placement(&ctx, id, save.as_ref(), overlay, screen, env.tokens.space.inset.screen)
                 });
-                placement.pos.is_some() && placement.size.is_some()
+                // A layer the user sized takes that size, at its saved position or where its anchor places it.
+                placement.size.is_some()
             }
             _ => false,
         };
