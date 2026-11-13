@@ -227,8 +227,11 @@ impl Outcome for RasterDisplayOutput {
 ///   Without it the document draws straight on the canvas (an opaque document, a video frame).
 /// - **Extent.** [`extent`](Self::extent) lets the picture reach past the document's edge: out to a larger region,
 ///   or as copies around it ([`Extent`]).
-/// - **Edge.** [`outlined`](Self::outlined) draws the divider rule just outside the document's edge, so an image
-///   reads apart from the surface around it; a mapped display draws none.
+/// - **Area.** The picture covers the document, 0..size, unless [`mapped`](Self::mapped) places it elsewhere in
+///   document space (a size-changing preview centred off the document's origin, a plane in perspective): the
+///   checkerboard and the edge then lie on the mapped area, for a source and a painted picture alike.
+/// - **Edge.** [`outlined`](Self::outlined) draws the divider rule just outside the picture's area, so an image
+///   reads apart from the surface around it.
 /// - **Turned views.** A rotated or mirrored view draws each texture as one quad on the view's mapped corners.
 /// - **Memory.** The textures live in two `TextureStore`s per display id and go with the store's budget; a
 ///   detail texture of a plan no longer in use is dropped in the pass the plan changes.
@@ -252,13 +255,28 @@ pub struct RasterDisplay<'a> {
     mapping: Option<Mapping>,
 }
 
-/// A display drawn through a homography on a mesh of cells instead of as a flat quad.
+/// Where a mapped display's picture lies in document space; a source picture is drawn through the homography on a
+/// mesh of cells instead of as a flat quad.
 #[derive(Clone, Copy, Debug)]
 struct Mapping {
     frame: Homography,
     cells: u32,
     /// Where the image lies in the frame's unit square.
     placed: Rect64,
+}
+
+impl Mapping {
+    /// The picture's area on screen through `view`, clockwise from the top left: the frame's image of `placed`
+    /// clipped to the unit square, where the checkerboard and the edge go. `None` when nothing of `placed` lies in
+    /// the unit square.
+    fn corners(&self, view: &CanvasView) -> Option<[Pos2; 4]> {
+        let area = self.placed.intersect(Rect64::new(0.0, 0.0, 1.0, 1.0));
+        if area.width() <= 0.0 || area.height() <= 0.0 {
+            return None;
+        }
+        let corners = [(area.x0, area.y0), (area.x1, area.y0), (area.x1, area.y1), (area.x0, area.y1)];
+        Some(corners.map(|(x, y)| view.to_screen(self.frame.apply(Point64::new(x, y)))))
+    }
 }
 
 impl<'a> RasterDisplay<'a> {
@@ -270,7 +288,8 @@ impl<'a> RasterDisplay<'a> {
 
     /// A display named `label` of a document of `size` pixels that the app paints itself with `paint`, given the view
     /// on screen (its `rect` is the canvas rect). The app draws the document's pixels only: the display draws the
-    /// checkerboard under them and the edge around them, as for a source.
+    /// checkerboard under them and the edge around them, as for a source. A picture that covers another area than
+    /// 0..size says where with [`mapped`](Self::mapped).
     pub fn painted(label: impl Into<Label>, size: PixelSize, paint: AppPaint<'a, CanvasView>) -> Self {
         Self::of(label, Picture::Painted { size, paint })
     }
@@ -289,12 +308,13 @@ impl<'a> RasterDisplay<'a> {
         .label(label)
     }
 
-    /// Draws the image through `frame` (the unit square onto the document) on a `cells` by `cells` mesh, so a
-    /// perspective frame shows the image foreshortened. The image fills the unit square unless
-    /// [`placed`](Self::placed) says otherwise; a cell whose centre lies outside the unit square is left out. A
-    /// mapped display draws its whole-document texture alone: the detail texture of a flat display has no place on
-    /// a mesh, and neither has the region or the copies of an [`Extent`]: a mapped display shows the document alone.
-    /// A source display only: a painted one draws through the view as the app paints it.
+    /// Places the picture at `frame` (the unit square onto document space): the image fills the unit square unless
+    /// [`placed`](Self::placed) says otherwise, and the checkerboard and the edge lie on that area, clipped to the
+    /// unit square. A source picture is drawn through the frame on a `cells` by `cells` mesh, so a perspective
+    /// frame shows it foreshortened; a cell whose centre lies outside the unit square is left out. A painted
+    /// picture is painted through the view as the app paints it, and `cells` does not apply. A mapped display draws
+    /// its whole-document texture alone: the detail texture of a flat display has no place on a mesh, and neither
+    /// has the region or the copies of an [`Extent`]: a mapped display shows its area alone.
     #[must_use]
     pub fn mapped(mut self, frame: Homography, cells: u32) -> Self {
         let placed = self.mapping.map_or(Rect64::new(0.0, 0.0, 1.0, 1.0), |mapping| mapping.placed);
@@ -456,39 +476,51 @@ impl Component for RasterDisplay<'_> {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let Some(shown) = &self.shown else { return };
         let painter = ui.content_painter(cx);
-        let corners = shown.view.quad(Rect64::new(0.0, 0.0, f64::from(shown.size.width), f64::from(shown.size.height)));
+        // The picture's area on screen: the document, or the mapped area. A mapped area with nothing of the unit
+        // square in it has no checkerboard and no edge.
+        let corners = match &self.mapping {
+            Some(mapping) => mapping.corners(&shown.view),
+            None => Some(shown.view.quad(Rect64::new(0.0, 0.0, f64::from(shown.size.width), f64::from(shown.size.height)))),
+        };
         if let Some(checker) = &self.checkerboard {
             let bounds = shown.bounds;
             let bounds = Rect64::new(f64::from(bounds.x0), f64::from(bounds.y0), f64::from(bounds.x1), f64::from(bounds.y1));
-            for area in checker_areas(bounds, shown.tiles.run(shown.size)) {
-                painter.painter.add(checker.shape(
-                    painter.painter.ctx(),
-                    &ui.env.tokens,
-                    CheckerArea::Quad(shown.view.quad(area)),
-                    shown.view.rect.min,
-                ));
+            let areas = match self.mapping {
+                Some(_) => [corners, None],
+                None => {
+                    let mut areas = checker_areas(bounds, shown.tiles.run(shown.size)).map(|area| shown.view.quad(area));
+                    [areas.next(), areas.next()]
+                }
+            };
+            for area in areas.into_iter().flatten() {
+                painter.painter.add(checker.shape(painter.painter.ctx(), &ui.env.tokens, CheckerArea::Quad(area), shown.view.rect.min));
             }
         }
-        if let (Picture::Source(_), Some(textures), Some(mapping)) = (&self.picture, &shown.textures, &self.mapping) {
-            let (texture, factor) = textures.base;
-            painter.painter.add(mapped_mesh(&shown.view, texture, factor, shown.size, mapping));
-            return;
-        }
-        for offset in shown.tiles.offsets(shown.size) {
-            let view = shifted(shown.view, offset);
-            match (&mut self.picture, &shown.textures) {
-                (Picture::Painted { paint, .. }, _) => paint.paint(&painter, view),
-                (Picture::Source(_), Some(textures)) => {
-                    let (texture, factor) = textures.base;
-                    painter.painter.add(textured_quad(&view, texture, factor, shown.bounds));
-                    if let Some((texture, plan)) = textures.detail {
-                        painter.painter.add(textured_quad(&view, texture, plan.factor, plan.region));
+        match (&mut self.picture, &shown.textures, &self.mapping) {
+            (Picture::Source(_), Some(textures), Some(mapping)) => {
+                let (texture, factor) = textures.base;
+                painter.painter.add(mapped_mesh(&shown.view, texture, factor, shown.size, mapping));
+            }
+            (picture, textures, _) => {
+                for offset in shown.tiles.offsets(shown.size) {
+                    let view = shifted(shown.view, offset);
+                    match (&mut *picture, textures) {
+                        (Picture::Painted { paint, .. }, _) => paint.paint(&painter, view),
+                        (Picture::Source(_), Some(textures)) => {
+                            let (texture, factor) = textures.base;
+                            painter.painter.add(textured_quad(&view, texture, factor, shown.bounds));
+                            if let Some((texture, plan)) = textures.detail {
+                                painter.painter.add(textured_quad(&view, texture, plan.factor, plan.region));
+                            }
+                        }
+                        (Picture::Source(_), None) => {}
                     }
                 }
-                (Picture::Source(_), None) => {}
             }
         }
-        if self.outlined {
+        if self.outlined
+            && let Some(corners) = corners
+        {
             painter.with_draw(|draw| edge(draw, corners));
         }
     }

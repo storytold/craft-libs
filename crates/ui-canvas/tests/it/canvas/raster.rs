@@ -1,5 +1,6 @@
 //! `RasterDisplay` and `Thumbnails`: what is read again, the detail plan, the fit maths and the request rules.
 
+use craft_behavior::geometry::quad::Homography;
 use craft_behavior::kurbo::{Point, Rect as Rect64};
 use craft_behavior::{CanvasView, PixelSize};
 use craft_ui::canvas::{AppPaint, Canvas, Extent, PageFrame, Pasteboard, PixelRect, RasterDisplay, RasterSource};
@@ -194,14 +195,15 @@ fn a_painted_display_paints_once_a_frame() {
     }
 }
 
-/// A canvas looking at `center` at `zoom` that shows a display of `document` with the checkerboard, the edge and
-/// `extent`: a source display, or, while `painted` is set, a painted one whose paint adds a GPU paint callback and
-/// records the view of each call in `paints`.
+/// A canvas looking at `center` at `zoom` that shows a display of `document` with the checkerboard, the edge,
+/// `extent` and, if given, mapped through `frame`: a source display, or, while `painted` is set, a painted one whose
+/// paint adds a GPU paint callback and records the view of each call in `paints`.
 fn extent_canvas(
     document: Rc<Document>,
     center: Point,
     zoom: f64,
     extent: Rc<Cell<Extent>>,
+    frame: Option<Homography>,
     painted: bool,
     paints: Rc<RefCell<Vec<CanvasView>>>,
 ) -> Fixture {
@@ -217,6 +219,10 @@ fn extent_canvas(
                 RasterDisplay::painted("Picture", document.size, paint)
             } else {
                 RasterDisplay::new("Picture", &*document)
+            };
+            let display = match frame {
+                Some(frame) => display.mapped(frame, 4),
+                None => display,
             };
             display.checkerboard(Checker::new()).outlined().extent(extent.get()).show_at(ui, body.rect);
         });
@@ -250,9 +256,16 @@ fn near(a: Rect, b: Rect) -> bool {
 /// checkerboard's bounds, and the bounds of everything painted after the pictures (the edge).
 /// The pictures a frame places, the checkerboard's areas (the meshes drawn with the first textured mesh's texture), and
 /// the bounds of what is drawn after the last picture.
-fn pictures(document: &Rc<Document>, center: Point, zoom: f64, extent: Extent, painted: bool) -> (Vec<Rect>, Vec<Rect>, Rect) {
+fn pictures(
+    document: &Rc<Document>,
+    center: Point,
+    zoom: f64,
+    extent: Extent,
+    frame: Option<Homography>,
+    painted: bool,
+) -> (Vec<Rect>, Vec<Rect>, Rect) {
     let paints = Rc::new(RefCell::new(Vec::new()));
-    let mut fixture = extent_canvas(Rc::clone(document), center, zoom, Rc::new(Cell::new(extent)), painted, Rc::clone(&paints));
+    let mut fixture = extent_canvas(Rc::clone(document), center, zoom, Rc::new(Cell::new(extent)), frame, painted, Rc::clone(&paints));
     paints.borrow_mut().clear();
     let shapes = fixture.frame_shapes();
     let meshes = textured(&shapes);
@@ -283,7 +296,7 @@ fn tiled_copies_fill_the_canvas_a_document_apart() {
         |i: i32, j: i32| doc_rect(&view, Rect64::new(f64::from(i) * 100.0, f64::from(j) * 70.0, f64::from(i + 1) * 100.0, f64::from(j + 1) * 70.0));
     let in_view: Vec<Rect> = (-40..40).flat_map(|j| (-40..40).map(move |i| (i, j))).map(|(i, j)| at(i, j)).filter(|r| r.intersects(canvas)).collect();
     for painted in [false, true] {
-        let (placed, checker, edge) = pictures(&document, center, 0.5, Extent::Tiled, painted);
+        let (placed, checker, edge) = pictures(&document, center, 0.5, Extent::Tiled, None, painted);
         assert_eq!(placed.len(), in_view.len(), "painted {painted}: one picture for each document-sized tile the canvas shows");
         assert!(in_view.iter().all(|tile| placed.iter().any(|r| near(*r, *tile))), "painted {painted}: every tile in view has its copy");
         assert!(near(placed[0], at(0, 0)), "painted {painted}: the document draws first, in its place");
@@ -294,11 +307,11 @@ fn tiled_copies_fill_the_canvas_a_document_apart() {
             "painted {painted}: the edge stays on the document: {edge:?}"
         );
 
-        let (filled, _, _) = pictures(&document, center, 20.0, Extent::Tiled, painted);
+        let (filled, _, _) = pictures(&document, center, 20.0, Extent::Tiled, None, painted);
         assert_eq!(filled.len(), 1, "painted {painted}: a document filling the canvas has no copies");
 
         // A one-pixel document far out would need thousands of copies; the run stops at 31 a side, centred on the view.
-        let (capped, _, _) = pictures(&Document::new(1, 1), Point::new(0.5, 0.5), 0.5, Extent::Tiled, painted);
+        let (capped, _, _) = pictures(&Document::new(1, 1), Point::new(0.5, 0.5), 0.5, Extent::Tiled, None, painted);
         assert_eq!(capped.len(), 31 * 31, "painted {painted}: copies are capped");
         let middle = capped.iter().fold(Rect::NOTHING, |all, r| all.union(*r)).center();
         assert!((middle - canvas.center()).length() < 1.0, "painted {painted}: the capped run is centred on the view: {middle:?}");
@@ -308,7 +321,7 @@ fn tiled_copies_fill_the_canvas_a_document_apart() {
         let tiny = Document::new(1, 1);
         let center = Point::new(500.5, 0.5);
         let panned = CanvasView::new(Rect::from_min_size(Pos2::ZERO, CANVAS), center, 0.5);
-        let (capped, checker, _) = pictures(&tiny, center, 0.5, Extent::Tiled, painted);
+        let (capped, checker, _) = pictures(&tiny, center, 0.5, Extent::Tiled, None, painted);
         assert_eq!(capped.len(), 31 * 31 + 1, "painted {painted}: the capped run and the document");
         let run = doc_rect(&panned, Rect64::new(485.0, -15.0, 516.0, 16.0));
         let page = doc_rect(&panned, Rect64::new(0.0, 0.0, 1.0, 1.0));
@@ -330,7 +343,7 @@ fn a_region_past_the_document_draws_out_to_the_region() {
     let page = on_screen(PixelRect::new(0, 0, 100, 70));
     for painted in [false, true] {
         document.reads.borrow_mut().clear();
-        let (placed, checker, edge) = pictures(&document, center, 2.0, Extent::Region(region), painted);
+        let (placed, checker, edge) = pictures(&document, center, 2.0, Extent::Region(region), None, painted);
         assert!(matches!(checker[..], [c] if near(c, on_screen(region))), "painted {painted}: the checkerboard covers the region: {checker:?}");
         assert!(
             edge.expand(-3.0).contains_rect(page.expand(-6.0)) && page.expand(3.0).contains_rect(edge),
@@ -348,10 +361,40 @@ fn a_region_past_the_document_draws_out_to_the_region() {
 
     // The same size of region moved: read again, never shown from the texture of the old place.
     let extent = Rc::new(Cell::new(Extent::Region(region)));
-    let mut fixture = extent_canvas(Rc::clone(&document), center, 2.0, Rc::clone(&extent), false, Rc::new(RefCell::new(Vec::new())));
+    let mut fixture = extent_canvas(Rc::clone(&document), center, 2.0, Rc::clone(&extent), None, false, Rc::new(RefCell::new(Vec::new())));
     let moved = PixelRect::new(-50, -30, 210, 120);
     document.reads.borrow_mut().clear();
     extent.set(Extent::Region(moved));
     fixture.frame(Vec::new());
     assert!(document.reads.borrow().contains(&(moved, 1)), "a moved region is read: {:?}", document.reads.borrow());
+}
+
+#[trial]
+fn a_picture_whose_area_is_off_the_document_has_its_checkerboard_and_edge_there() {
+    // A 100 x 70 document; its picture turned a quarter about the document's centre (70 x 100), then moved past the
+    // document's bottom right corner.
+    let document = Document::new(100, 70);
+    let center = Point::new(50.0, 35.0);
+    let view = CanvasView::new(Rect::from_min_size(Pos2::ZERO, CANVAS), center, 2.0);
+    let page = doc_rect(&view, Rect64::new(0.0, 0.0, 100.0, 70.0));
+    for area in [Rect64::new(15.0, -15.0, 85.0, 85.0), Rect64::new(50.0, 35.0, 150.0, 105.0)] {
+        let corners = [Point::new(area.x0, area.y0), Point::new(area.x1, area.y0), Point::new(area.x1, area.y1), Point::new(area.x0, area.y1)];
+        let frame = Homography::unit_to_quad(corners).expect("a rectangle");
+        let on_screen = doc_rect(&view, area);
+        for painted in [false, true] {
+            let (placed, checker, edge) = pictures(&document, center, 2.0, Extent::Document, Some(frame), painted);
+            assert!(matches!(checker[..], [c] if near(c, on_screen)), "painted {painted}: the checkerboard lies under {area:?}: {checker:?}");
+            assert!(
+                edge.expand(-3.0).contains_rect(on_screen.expand(-6.0)) && on_screen.expand(3.0).contains_rect(edge),
+                "painted {painted}: the edge lies around {area:?}: {edge:?}"
+            );
+            assert_eq!(placed.len(), 1, "painted {painted}: one picture");
+            let picture = if painted { page } else { on_screen };
+            assert!(
+                near(placed[0], picture),
+                "painted {painted}: the app paints through the view as given, a source fills the area: {:?}",
+                placed[0]
+            );
+        }
+    }
 }

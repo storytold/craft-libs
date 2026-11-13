@@ -8,6 +8,7 @@ use crate::canvas_controls::PixelGrid;
 use crate::contract::Show as _;
 use crate::primitives::{Checker, ContentPainterCx};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
+use craft_behavior::geometry::quad::Homography;
 use craft_behavior::kurbo::{Point, Rect as Rect64};
 use craft_behavior::{CanvasView, PixelSize};
 use egui::epaint::{Mesh, Vertex};
@@ -36,6 +37,11 @@ fn gradient_pixel(p: Point) -> Color32 {
 /// The gradient as the app paints it: one colour mesh per seen part of the document through `view`. The colours are
 /// linear in the document point, so the mesh's interpolation gives `gradient_pixel`'s pixels.
 fn paint_gradient(painter: &ContentPainterCx<'_>, view: CanvasView) {
+    paint_gradient_moved(painter, view, |p| p);
+}
+
+/// The gradient painted with each document point moved by `moved` before it goes on screen.
+fn paint_gradient_moved(painter: &ContentPainterCx<'_>, view: CanvasView, moved: impl Fn(Point) -> Point) {
     let (width, height) = (f64::from(DOCUMENT.width), f64::from(DOCUMENT.height));
     let seen = [Rect64::new(width / 2.0, 0.0, width, height), Rect64::new(0.0, height / 2.0, width / 2.0, height)];
     let shapes = seen.map(|part| {
@@ -43,7 +49,7 @@ fn paint_gradient(painter: &ContentPainterCx<'_>, view: CanvasView) {
         let mut mesh = Mesh::default();
         let level = |p: Point| ((p.x / width + p.y / height) * 127.0) as u8;
         mesh.vertices.extend(corners.map(|p| Vertex {
-            pos: view.to_screen(p),
+            pos: view.to_screen(moved(p)),
             uv: egui::epaint::WHITE_UV,
             color: Color32::from_rgb(level(p), 160, u8::MAX - level(p)),
         }));
@@ -176,6 +182,38 @@ fn beyond(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     on_canvas_view(ui, view, None, |ui, at, _| {
         let source = StoryPicture::new(DOCUMENT.width, DOCUMENT.height, beyond_pixel);
         let display = RasterDisplay::new("Picture", &source).outlined().extent(Extent::Region(PixelRect::new(-40, -40, 840, 480)));
+        match checker {
+            Some(checker) => display.checkerboard(checker),
+            None => display,
+        }
+        .show_at(ui, at)
+    })
+}
+
+/// The gradient turned 90 degrees clockwise about the document's centre, as Image > Rotation previews it before the
+/// canvas changes size: the 400 x 640 picture lies off the document's origin, centred on it.
+fn turned_a_quarter(p: Point) -> Point {
+    Point::new(CENTER.x - (p.y - CENTER.y), CENTER.y + (p.x - CENTER.x))
+}
+
+/// The area the quarter-turned gradient covers, in document pixels.
+const QUARTER_TURNED: [Point; 4] = {
+    let (half_width, half_height) = (DOCUMENT.height as f64 / 2.0, DOCUMENT.width as f64 / 2.0);
+    let (x0, y0, x1, y1) = (CENTER.x - half_width, CENTER.y - half_height, CENTER.x + half_width, CENTER.y + half_height);
+    [Point::new(x0, y0), Point::new(x1, y0), Point::new(x1, y1), Point::new(x0, y1)]
+};
+
+/// A size-changing preview the app paints itself: the gradient turned a quarter about the document's centre. The
+/// display is mapped onto the turned picture's area, so the checkerboard and the edge lie under the preview, not on
+/// the document.
+#[story(RasterDisplay<'static>, covers = [Default], drive = Drive::Never)]
+fn rotated(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let view = view_values(data, 60.0, 0.0);
+    let checker = checker_of(data);
+    let frame = Homography::unit_to_quad(QUARTER_TURNED).expect("the turned area is a rectangle");
+    on_canvas_view(ui, view, None, |ui, at, _| {
+        let paint = AppPaint::new(|painter: &ContentPainterCx<'_>, view| paint_gradient_moved(painter, view, turned_a_quarter));
+        let display = RasterDisplay::painted("Picture", DOCUMENT, paint).mapped(frame, 1).outlined();
         match checker {
             Some(checker) => display.checkerboard(checker),
             None => display,
