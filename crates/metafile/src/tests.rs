@@ -2237,10 +2237,35 @@ fn emfplus_linear_gradient_fills_with_a_shaded_tile() {
 
 #[test]
 fn emfplus_hatch_brush_fills_with_an_8x8_tile() {
-    let brush = cat(vec![h32(0xDBC0_1002), h32(1), h32(4), h32(0xFF00_0000), h32(0xFFFF_FFFF)]);
+    // GDI+ HatchStyle.Percent50 (12), as used by System.Drawing's HatchBrush.
+    let brush = cat(vec![h32(0xDBC0_1002), h32(1), h32(12), h32(0xFF00_0000), h32(0xFFFF_FFFF)]);
     let fill = prec(0x400A, 0, &cat(vec![h32(0), h32(1), f32s(&[0.0, 0.0, 16.0, 16.0])]));
     let p = plus_pic(vec![prec(0x4008, 0x0100, &brush), fill]);
-    assert!(matches!(&p.items[0], Item::Pattern { tile, .. } if tile.width == 8 && tile.height == 8));
+    let tile = pattern_of(&p.items[0]);
+    assert_eq!((tile.width, tile.height), (8, 8));
+    let foreground = tile.rgba.as_chunks::<4>().0.iter().filter(|px| **px == [0, 0, 0, 255]).count();
+    assert_eq!(foreground, 32, "Percent50 uses equal foreground and background coverage");
+}
+
+#[test]
+fn gdi_plus_percentage_hatch_styles_keep_the_documented_coverage() {
+    const PERCENT: [usize; 12] = [5, 10, 20, 25, 30, 40, 50, 60, 70, 75, 80, 90];
+    let fg = [0, 0, 0, 255];
+    let bg = [255, 255, 255, 255];
+    for style in 0..=17 {
+        let tile = crate::canvas::emfplus_hatch_tile(style, fg, Some(bg)).expect("supported GDI+ hatch style");
+        let foreground = tile.as_chunks::<4>().0.iter().filter(|px| **px == fg).count();
+        assert!((1..64).contains(&foreground), "style {style} should mix both colours");
+        if (6..=17).contains(&style) {
+            let percent = PERCENT[(style - 6) as usize];
+            assert_eq!(foreground, (percent * 64 + 50) / 100, "percentage style {style}");
+        }
+    }
+    for style in 18..=52 {
+        assert!(crate::canvas::emfplus_hatch_tile(style, fg, Some(bg)).is_none(), "style {style} has no confirmed tile mapping");
+    }
+    assert!(crate::canvas::emfplus_hatch_tile(53, fg, Some(bg)).is_none(), "out-of-range values stay unsupported");
+    assert!(crate::canvas::hatch_tile(9, fg, Some(bg)).is_none(), "GDI's six-style range is unchanged");
 }
 
 #[test]
