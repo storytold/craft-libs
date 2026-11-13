@@ -113,6 +113,7 @@ craft-raw = { path = "crates/raw" }
 craft-sheet = { path = "crates/sheet" }
 craft-sketch = { path = "crates/sketch" }
 craft-settings = { path = "crates/settings" }
+craft-time = { path = "crates/time" }
 craft-silhouette-studio = { path = "crates/silhouette-studio" }
 craft-svg = { path = "crates/svg" }
 craft-stencilcraft-format = { path = "crates/stencilcraft-format" }

@@ -203,6 +203,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   decoder is bounded and returns its partial output on damage. From PdfCraft; a PDF filter chain
   is built on it in `craft-pdf`.
 - [`craft-timeline`](crates/timeline/README.md): editorial timeline interchange: exact media time and SMPTE timecode, import/export reports, media path and `file://` URL handling, Avid Log Exchange (ALE) and CMX 3600 EDL documents, format detection. From FilmCraft.
+- [`craft-time`](crates/time/README.md): exact rational ticks and SMPTE time across media, with a `soundcraft` compatibility module retaining SoundCraft's sample-index timebase, tempo maps, grids and session serialization semantics.
 - [`craft-metadata`](crates/metadata/README.md): photo metadata, from LightCraft: EXIF (read and write,
   maker-note lens and focus point, every tag by name), IPTC-IIM, XMP packets (read, write, and a merge
   that keeps what another program wrote), GPX track logs, and the blocks that carry them in JPEG, PNG,

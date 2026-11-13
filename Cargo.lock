@@ -2311,9 +2311,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-time"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-timeline"
 version = "0.1.0"
 dependencies = [
+ "craft-time",
  "craft-xml",
  "proptest",
  "serde",
