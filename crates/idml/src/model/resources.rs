@@ -11,6 +11,57 @@ fn others(el: &El) -> impl Iterator<Item = &El> {
     el.elements().filter(|e| !e.is(Local("Properties")))
 }
 
+/// Raw bullet and numbering properties on an IDML paragraph style or range.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ParagraphListValues {
+    pub list_type: Option<String>,
+    pub numbering_format: Option<String>,
+    pub expression: Option<String>,
+    pub separator: Option<String>,
+    pub bullet_type: Option<String>,
+    pub bullet_value: Option<String>,
+    pub balance_ragged: Option<String>,
+    pub level: Option<f64>,
+    pub bullet_character_style: Option<String>,
+    pub numbering_character_style: Option<String>,
+    pub bullet_alignment: Option<String>,
+    pub numbering_alignment: Option<String>,
+    pub restart_numbers: Option<bool>,
+    pub restart_after_level: Option<u32>,
+    pub restart_after_specific_level: bool,
+    pub bullet_font: Option<String>,
+    pub bullet_font_style: Option<String>,
+}
+
+impl ParagraphListValues {
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        let restart = values.prop_el("NumberingRestartPolicies");
+        let restart_after_level = restart.map(|policy| policy.attr("LowerLevel").and_then(|value| value.trim().parse::<u32>().ok()).unwrap_or(0));
+        let restart_after_specific_level = restart.is_some_and(|policy| policy.attr("RestartPolicy").map(str::trim) == Some("SpecificPreviousLevel"));
+        let bullet = values.prop_el("BulletChar");
+        Self {
+            list_type: values.prop("BulletsAndNumberingListType"),
+            numbering_format: values.prop("NumberingFormat"),
+            expression: values.prop("NumberingExpression"),
+            separator: values.prop("BulletsTextAfter"),
+            bullet_type: bullet.and_then(|value| value.attr("BulletCharacterType")).map(str::to_owned),
+            bullet_value: bullet.and_then(|value| value.attr("BulletCharacterValue")).map(str::to_owned),
+            balance_ragged: values.prop("BalanceRaggedLines"),
+            level: values.num("NumberingLevel"),
+            bullet_character_style: values.prop("BulletsCharacterStyle"),
+            numbering_character_style: values.prop("NumberingCharacterStyle"),
+            bullet_alignment: values.prop("BulletsAlignment"),
+            numbering_alignment: values.prop("NumberingAlignment"),
+            restart_numbers: values.boolean("NumberingApplyRestartPolicy"),
+            restart_after_level,
+            restart_after_specific_level,
+            bullet_font: values.prop("BulletsFont"),
+            bullet_font_style: values.prop("BulletsFontStyle"),
+        }
+    }
+}
+
 /// One IDML nested paragraph style entry, before the caller resolves its character style.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NestedStyleValue {

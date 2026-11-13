@@ -29,8 +29,9 @@ pub use resources::{
     CjkCharacterValues, ColorDefinition, ColorGroup, ColorGroupDefinition, ColorGroupMember, ColorSpace, CompositeFontDefinition,
     CompositeFontEntryDefinition, EpubExportTagMap, FontDefinition, FontFamilyDefinition, FontsPart, GradientDefinition, GradientStop,
     GradientStopDefinition, GradientStopValue, GraphicPart, GrepStyleValue, Ink, InkDefinition, MojikumiRow, NestedLineStyleValue, NestedStyleValue,
-    NestedStyleValues, OpenTypeFeatureValues, StrokeDefinition, StrokeStyle, StrokeStyleKind, Style, StyleGroup, StyleGroupWriter, StyleKind,
-    StyleNode, Swatch, SwatchKind, TabStopValues, TintDefinition, color_groups, inks, named, preference, stroke_styles, style_groups, swatches,
+    NestedStyleValues, OpenTypeFeatureValues, ParagraphListValues, StrokeDefinition, StrokeStyle, StrokeStyleKind, Style, StyleGroup,
+    StyleGroupWriter, StyleKind, StyleNode, Swatch, SwatchKind, TabStopValues, TintDefinition, color_groups, inks, named, preference, stroke_styles,
+    style_groups, swatches,
 };
 pub use spread::{
     Graphic, GraphicChild, GraphicKind, Guide, ItemChild, ItemKind, Link, MarginPreference, Page, PageChild, PageItem, Spread, SpreadChild, TextPath,
