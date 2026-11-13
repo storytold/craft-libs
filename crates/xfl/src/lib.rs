@@ -39,9 +39,9 @@ pub enum ZipError {
     Damaged(&'static str),
     #[error("the archive is damaged: '{0}' {1}")]
     DamagedEntry(String, &'static str),
-    #[error("the archive uses a zip feature AniCraft can't read ({0})")]
+    #[error("the archive uses a zip feature this XFL reader can't read ({0})")]
     UnsupportedArchive(&'static str),
-    #[error("'{0}' uses a zip feature AniCraft can't read ({1})")]
+    #[error("'{0}' uses a zip feature this XFL reader can't read ({1})")]
     Unsupported(String, &'static str),
     #[error("'{0}' is too large to read")]
     TooLarge(String),
