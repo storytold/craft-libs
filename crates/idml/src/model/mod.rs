@@ -17,6 +17,7 @@ mod resources;
 mod spread;
 mod story;
 
+use craft_xml::{El, Local, Node};
 pub use geometry::{MAX_PATH_POINTS, PathGeometry, PathGeometryError, PathPoint, SubPath};
 pub use resources::{
     ColorGroup, ColorSpace, GradientStop, GradientStopValue, Ink, StrokeStyle, StrokeStyleKind, Style, StyleGroup, StyleKind, StyleNode, Swatch,
@@ -27,8 +28,6 @@ pub use spread::{
     spreads,
 };
 pub use story::{Ace, CONTAINERS, Cell, CellOptions, Container, ContentPart, Range, Story, StoryPreference, Table, TableChild, TextNode, stories};
-
-use craft_xml::{El, Local, Node};
 
 use crate::value::{matrix, nums};
 
@@ -44,6 +43,17 @@ pub struct Values {
     pub attrs: Vec<(String, String)>,
     /// The children of `<Properties>`, in order.
     pub properties: Vec<El>,
+}
+
+/// Raw IDML stroke values before the caller maps swatches and stroke styles into its model.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StrokeValues {
+    pub weight: Option<f64>,
+    pub color: Option<String>,
+    pub tint: Option<f64>,
+    pub kind: Option<String>,
+    pub gap_color: Option<String>,
+    pub gap_tint: Option<f64>,
 }
 
 impl Values {
@@ -163,6 +173,19 @@ impl Values {
             el.push(p);
         }
         el
+    }
+
+    /// Read an IDML stroke attribute family such as `TopEdgeStrokeWeight` or
+    /// `StartRowStrokeColor`.
+    pub fn stroke_values(&self, prefix: &str) -> StrokeValues {
+        StrokeValues {
+            weight: self.num(&format!("{prefix}StrokeWeight")).map(|v| v.max(0.0)),
+            color: self.value(&format!("{prefix}StrokeColor")),
+            tint: self.num(&format!("{prefix}StrokeTint")),
+            kind: self.value(&format!("{prefix}StrokeType")),
+            gap_color: self.value(&format!("{prefix}StrokeGapColor")),
+            gap_tint: self.num(&format!("{prefix}StrokeGapTint")),
+        }
     }
 }
 
