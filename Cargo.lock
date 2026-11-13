@@ -1710,6 +1710,7 @@ version = "0.1.0"
 dependencies = [
  "craft-xml",
  "proptest",
+ "roxmltree 0.21.2",
  "serde",
  "serde_json",
 ]

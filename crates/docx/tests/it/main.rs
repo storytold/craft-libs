@@ -20,6 +20,7 @@ mod emphasis_marks;
 mod fixtures;
 mod glossary;
 mod heading_levels;
+mod kept_omml_check;
 mod legacy_forms;
 mod ligatures;
 mod line_numbering;

@@ -44,7 +44,7 @@ pub fn write_equation(w: &mut W, linear: &str, display: bool, math: &Math, color
             w.close("m:oMathParaPr");
         }
     }
-    if !math.omml.is_empty() && math.omml.starts_with("<m:oMath") && is_well_formed(&math.omml) {
+    if is_well_formed(&math.omml) {
         w.raw(&math.omml);
     } else {
         let parsed;
