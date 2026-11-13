@@ -14,7 +14,13 @@ pub enum Format {
     Illustrator,
     Dxf,
     Svg,
-    Raster,
+    Png,
+    Jpeg,
+    Bmp,
+    Gif,
+    Tiff,
+    WebP,
+    Heif,
     Gcode,
     Studio,
     StencilCraft,
@@ -31,8 +37,8 @@ pub fn detect(name: &str, bytes: &[u8]) -> Option<Format> {
             (craft_eps::Kind::PostScript, _) => Format::PostScript,
         });
     }
-    if raster_signature(bytes) {
-        return Some(Format::Raster);
+    if let Some(raster) = raster_signature(bytes) {
+        return Some(raster);
     }
     if bytes.starts_with(b"silhouette04;") || bytes.starts_with(b"silhouette05;") {
         return Some(Format::Studio);
@@ -62,7 +68,13 @@ pub fn from_extension(ext: &str) -> Option<Format> {
         "ai" => Some(Format::Illustrator),
         "dxf" => Some(Format::Dxf),
         "svg" | "svgz" => Some(Format::Svg),
-        "png" | "jpg" | "jpeg" | "bmp" | "gif" | "tif" | "tiff" | "webp" | "heic" | "heif" => Some(Format::Raster),
+        "png" => Some(Format::Png),
+        "jpg" | "jpeg" => Some(Format::Jpeg),
+        "bmp" => Some(Format::Bmp),
+        "gif" => Some(Format::Gif),
+        "tif" | "tiff" => Some(Format::Tiff),
+        "webp" => Some(Format::WebP),
+        "heic" | "heif" => Some(Format::Heif),
         "studio" | "studio3" => Some(Format::Studio),
         "stencilcraft" => Some(Format::StencilCraft),
         "gcode" | "nc" => Some(Format::Gcode),
@@ -80,16 +92,25 @@ fn dxf_ascii_prefix(bytes: &[u8]) -> bool {
     matches!((lines.next(), lines.next(), lines.next(), lines.next()), (Some("0"), Some("SECTION"), Some("2"), Some(section)) if matches!(section, "HEADER" | "CLASSES" | "TABLES" | "BLOCKS" | "ENTITIES" | "OBJECTS"))
 }
 
-fn raster_signature(bytes: &[u8]) -> bool {
+fn raster_signature(bytes: &[u8]) -> Option<Format> {
     let head = bytes.get(..16).unwrap_or(bytes);
-    head.starts_with(b"\x89PNG\r\n\x1a\n")
-        || head.starts_with(b"\xff\xd8\xff")
-        || head.starts_with(b"BM")
-        || head.starts_with(b"GIF87a")
-        || head.starts_with(b"GIF89a")
-        || head.starts_with(b"II*\0")
-        || head.starts_with(b"MM\0*")
-        || head.starts_with(b"II+\0")
-        || head.starts_with(b"MM\0+")
-        || (head.starts_with(b"RIFF") && head.get(8..12) == Some(b"WEBP"))
+    if head.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some(Format::Png);
+    }
+    if head.starts_with(b"\xff\xd8\xff") {
+        return Some(Format::Jpeg);
+    }
+    if head.starts_with(b"BM") {
+        return Some(Format::Bmp);
+    }
+    if head.starts_with(b"GIF87a") || head.starts_with(b"GIF89a") {
+        return Some(Format::Gif);
+    }
+    if head.starts_with(b"II*\0") || head.starts_with(b"MM\0*") || head.starts_with(b"II+\0") || head.starts_with(b"MM\0+") {
+        return Some(Format::Tiff);
+    }
+    if head.starts_with(b"RIFF") && head.get(8..12) == Some(b"WEBP") {
+        return Some(Format::WebP);
+    }
+    None
 }
