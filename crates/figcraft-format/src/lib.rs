@@ -236,6 +236,16 @@ mod tests {
         assert_eq!(encoded["branches"][0]["baseImages"][0], "a");
         assert!(encoded["branches"][0].get("base_images").is_none());
     }
+
+    #[test]
+    fn document_limit_keeps_compressible_files_and_caps_expansion() {
+        const MB: u64 = 1024 * 1024;
+        assert_eq!(document_limit(0, 0), MAX_MEMBER);
+        assert_eq!(document_limit(MB, 2 * MB), MAX_MEMBER);
+        assert_eq!(document_limit(u64::MAX, MB), MAX_MEMBER);
+        assert_eq!(document_limit(MAX_DOCUMENT, MAX_DOCUMENT), MAX_DOCUMENT);
+        assert_eq!(document_limit(244_362_923, 260 * MB), 244_362_923 * DOCUMENT_RATIO);
+    }
     #[test]
     fn newer_version_is_reported_before_document_decode() {
         assert_eq!(check_version(&Header { version: Some(2), images: None }), Err(NewerVersion(2)));
@@ -515,6 +525,13 @@ pub const DOCUMENT_RATIO: u64 = 16;
 pub const MAX_DOCUMENT: u64 = 4 * 1024 * 1024 * 1024;
 #[cfg(target_pointer_width = "32")]
 pub const MAX_DOCUMENT: u64 = 1024 * 1024 * 1024;
+
+/// Upper bound for the expanded document member based on both the archive and member policy.
+/// The floor preserves support for large but highly compressible documents; the ceiling prevents
+/// a tiny archive from claiming an unbounded expansion.
+pub fn document_limit(packed: u64, archive_bytes: u64) -> u64 {
+    packed.min(archive_bytes).saturating_mul(DOCUMENT_RATIO).clamp(MAX_MEMBER, MAX_DOCUMENT)
+}
 /// Most version snapshots kept on save and read on open.
 pub const MAX_VERSIONS: usize = 100;
 /// Maximum version and branch name lengths, in Unicode scalar values.
