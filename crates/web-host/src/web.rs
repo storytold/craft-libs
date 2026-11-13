@@ -50,7 +50,7 @@ pub enum Message {
 }
 
 enum Transport {
-    /// The same-origin parent window; only it is heard and answered.
+    /// The parent window, on this origin or on a listed one; only it is heard and answered.
     Parent { window: web_sys::Window, parent: web_sys::Window, origin: String },
     /// The app's canvas; messages are `CustomEvent`s on it.
     Page { canvas: web_sys::EventTarget },
@@ -66,7 +66,7 @@ pub struct Host {
 impl Host {
     /// The host for `app` (its id, as in `<app>:ready`) running on `canvas`, or `None` when the
     /// app is not hosted: no `?host=parent` and no `data-host="page"`, no framing parent, or a
-    /// parent on another origin (messages only go to this origin, so the browser would drop them).
+    /// parent on another origin that the canvas's `data-host-origins` doesn't list.
     pub fn connect(app: &'static str, canvas: &web_sys::Element) -> Option<Self> {
         let window = web_sys::window()?;
         let query = window.location().search().unwrap_or_default();
@@ -76,11 +76,21 @@ impl Host {
                 if js_sys::Object::is(&parent, &window) {
                     return None;
                 }
-                let origin = window.location().origin().ok()?;
-                // Reading another origin's location throws, which is `None` too.
-                if parent.location().origin().ok()? != origin {
-                    return None;
-                }
+                let own = window.location().origin().ok()?;
+                // Reading another origin's location throws.
+                let origin = match parent.location().origin() {
+                    Ok(theirs) if theirs == own => own,
+                    _ => {
+                        let allowed = canvas.get_attribute(crate::HOST_ORIGINS_ATTRIBUTE)?;
+                        let theirs = parent_origin(&window)?;
+                        if !crate::origin_allowed(&theirs, &allowed) {
+                            return None;
+                        }
+                        // Messages are posted to this origin only and heard from it only, so if
+                        // the parent is not really on it, the browser drops them both ways.
+                        theirs
+                    }
+                };
                 Transport::Parent { window, parent, origin }
             }
             Mode::Page => Transport::Page { canvas: canvas.clone().into() },
@@ -199,6 +209,18 @@ impl Host {
             }
         }
     }
+}
+
+/// The framing page's origin, which a frame on another origin can't read from its parent: the
+/// first of `location.ancestorOrigins` where the browser has it (Chromium, WebKit), else the origin
+/// of `document.referrer` (Firefox; empty when the parent's referrer policy sends none).
+fn parent_origin(window: &web_sys::Window) -> Option<String> {
+    let ancestors = get(&JsValue::from(window.location()), "ancestorOrigins");
+    if !ancestors.is_undefined() && !ancestors.is_null() {
+        return string(&ancestors, "0");
+    }
+    let referrer = string(&get(window.as_ref(), "document"), "referrer")?;
+    crate::origin_of(&referrer)
 }
 
 /// The message a host's object describes, or `None` when a required field is missing.
