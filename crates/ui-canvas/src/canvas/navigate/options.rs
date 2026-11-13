@@ -20,6 +20,8 @@ pub struct NavigationOptions {
     pub overscroll: bool,
     /// The Zoom tool's Scrubby Zoom option: a Zoom tool drag zooms continuously instead of drawing a rectangle. On.
     pub scrubby_zoom: bool,
+    /// The Hand tool's Scroll All Windows option: a Hand drag scrolls every open document's view by the same amount. Off.
+    pub scroll_all_windows: bool,
     /// Enhanced Controls, Zoom with Trackpad Pinch. On.
     pub pinch_zooms: bool,
     /// Enhanced Controls, Rotate View with Trackpad. Off.
@@ -38,6 +40,7 @@ impl Default for NavigationOptions {
             flick_panning: true,
             overscroll: false,
             scrubby_zoom: true,
+            scroll_all_windows: false,
             pinch_zooms: true,
             trackpad_rotate: false,
             touch_gestures: true,

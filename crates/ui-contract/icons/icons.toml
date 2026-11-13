@@ -171,6 +171,14 @@ carbon = "zoom--in"
 tabler = "zoom-in"
 
 [[icon]]
+name = "zoom_out"
+directional = false
+lucide = "zoom-out"
+phosphor = "magnifying-glass-minus"
+carbon = "zoom--out"
+tabler = "zoom-out"
+
+[[icon]]
 name = "settings"
 directional = false
 lucide = "settings"

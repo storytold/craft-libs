@@ -101,6 +101,7 @@ pub(super) const SURFACES: &[(&str, &str, Surface)] = &[
     ("craft_ui", "Marquee", Canvas),
     ("craft_ui", "MenuBar", Chrome),
     ("craft_ui", "ModalDragStrip", Own),
+    ("craft_ui", "NavigateBar", Chrome),
     ("craft_ui", "Navigator", Canvas),
     ("craft_ui", "NavigatorOptionsDialog", Own),
     ("craft_ui", "NavigatorZoomRow", Canvas),

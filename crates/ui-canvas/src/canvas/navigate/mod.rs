@@ -6,12 +6,14 @@
 //! `craft_behavior::canvas::zoom` and clamp to the [`ZoomLadder`](craft_behavior::ZoomLadder). With Overscroll off
 //! the caller clamps the result with the canvas's scroll limits.
 
+mod bar;
 mod keys;
 mod options;
 #[cfg(feature = "testing")]
 mod stories;
 mod wheel;
 
+pub use bar::{NavigateBar, NavigateBarOutput};
 pub use keys::PageKey;
 pub use options::NavigationOptions;
 pub use wheel::{WheelAction, WheelInput, WheelNavigation};

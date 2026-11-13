@@ -28,6 +28,18 @@ craft_ui::words! {
         scroll_horizontal: "canvasScrollbars.horizontal" = "Horizontal scroll bar";
         scroll_vertical: "canvasScrollbars.vertical" = "Vertical scroll bar";
 
+        navigate_zoom: "navigateBar.zoom" = "Zoom";
+        navigate_direction: "navigateBar.direction" = "Zoom direction";
+        navigate_zoom_in: "navigateBar.zoomIn" = "Zoom In";
+        navigate_zoom_out: "navigateBar.zoomOut" = "Zoom Out";
+        navigate_resize_windows: "navigateBar.resizeWindows" = "Resize Windows to Fit";
+        navigate_scrubby_zoom: "navigateBar.scrubbyZoom" = "Scrubby Zoom";
+        navigate_scroll_all: "navigateBar.scrollAllWindows" = "Scroll All Windows";
+        navigate_angle: "navigateBar.angle" = "Angle";
+        navigate_reset_view: "navigateBar.resetView" = "Reset View";
+        navigate_fit_screen: "navigateBar.fitScreen" = "Fit Screen";
+        navigate_fill_screen: "navigateBar.fillScreen" = "Fill Screen";
+
         // canvas-navigator-a
         navigator_horizontal: "navigator.horizontal" = "Visible area horizontal position";
         navigator_vertical: "navigator.vertical" = "Visible area vertical position";

@@ -50,8 +50,8 @@ pub fn proxy_quad(view: &CanvasView, size: Size, preview: Rect) -> [Pos2; 4] {
 /// - `doc_rect` is intersected with the document `(0, 0)..size`; a negative width or height after that (a rectangle
 ///   off the document) does nothing.
 /// - Under 2 document units on a side, or an empty canvas: one ladder rung in ([`ZoomLadder::step`] with `dir` 1).
-/// - Otherwise the point zoom is `min(canvas.w / (r.w * aspect), canvas.h / r.h)`, converted to the ladder's device
-///   zoom with `pixels_per_point` and clamped with [`ZoomLadder::clamp`]; a zoom that is not finite does nothing.
+/// - Otherwise [`zoom::fit_rect`] with no margin: the whole clipped rectangle shows, with the view's pixel aspect and
+///   rotation.
 /// - The centre becomes the clipped rectangle's centre.
 pub fn zoom_to_document_rect(view: &mut CanvasView, doc_rect: DocRect, size: Size, pixels_per_point: f32) -> bool {
     let edges = [doc_rect.x0, doc_rect.y0, doc_rect.x1, doc_rect.y1];
@@ -65,21 +65,19 @@ pub fn zoom_to_document_rect(view: &mut CanvasView, doc_rect: DocRect, size: Siz
     if width < 0.0 || height < 0.0 {
         return false;
     }
-    let aspect = if view.aspect.is_finite() && view.aspect > 0.0 { view.aspect } else { 1.0 };
     let ppp = if pixels_per_point.is_finite() && pixels_per_point > 0.0 { pixels_per_point } else { 1.0 };
     let canvas = view.rect.size();
-    let device = if width < MIN_ZOOM_BOX || height < MIN_ZOOM_BOX || canvas.x <= 0.0 || canvas.y <= 0.0 {
-        ZoomLadder::step(zoom::device(view, ppp), 1, size)
-    } else {
-        let point_zoom = (f64::from(canvas.x) / (width * aspect)).min(f64::from(canvas.y) / height);
-        point_zoom * f64::from(ppp)
-    };
-    if !device.is_finite() {
-        return false;
-    }
     let before = *view;
-    view.zoom = CanvasView::points_per_unit(ZoomLadder::clamp(device, size), ppp);
-    view.center = Point::new(x0 + width / 2.0, y0 + height / 2.0);
+    if width < MIN_ZOOM_BOX || height < MIN_ZOOM_BOX || canvas.x <= 0.0 || canvas.y <= 0.0 {
+        let device = ZoomLadder::step(zoom::device(view, ppp), 1, size);
+        if !device.is_finite() {
+            return false;
+        }
+        view.zoom = CanvasView::points_per_unit(device, ppp);
+        view.center = Point::new(x0 + width / 2.0, y0 + height / 2.0);
+    } else {
+        zoom::fit_rect(view, DocRect::new(x0, y0, x1, y1), size, ppp, 0.0);
+    }
     *view != before
 }
 

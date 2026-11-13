@@ -72,9 +72,9 @@ mod tools;
 mod zoom_motion;
 
 pub use momentary::{Momentary, MomentaryCommands, MomentaryTool};
-pub use navigate::{Autoscroll, FlickPan, NavigationOptions, PageKey, TouchpadGlide, WheelAction, WheelInput, WheelNavigation, pan};
+pub use navigate::{Autoscroll, FlickPan, NavigateBar, NavigateBarOutput, NavigationOptions, PageKey, TouchpadGlide, WheelAction, WheelInput, WheelNavigation, pan};
 pub use rotate::{RotateView, RotateViewOutput, RotateViewStyle, ViewTurn};
-pub use tools::{HandTool, RotateViewTool, ViewCommands, ZoomTool};
+pub use tools::{HandTool, RotateViewTool, ViewCommands, ViewTarget, ZoomTool};
 pub use zoom_motion::{HoldZoom, ZoomAnimation, ZoomDrag};
 
 mod rulers;
@@ -112,18 +112,6 @@ use egui::{Pos2, Rect, Response, Vec2};
 use zoom_motion::{Steer, ViewMotion};
 
 const BACKGROUND: PartKey = PartKey::new("background");
-
-/// The view commands a canvas publishes the state of.
-const VIEW_COMMANDS: [ViewCommands; 8] = [
-    ViewCommands::ZoomIn,
-    ViewCommands::ZoomOut,
-    ViewCommands::FitOnScreen,
-    ViewCommands::FillScreen,
-    ViewCommands::ActualPixels,
-    ViewCommands::RotateClockwise,
-    ViewCommands::RotateCounterclockwise,
-    ViewCommands::ResetRotation,
-];
 
 /// Why the background part is pointer-only: the keyboard path of the running tool is its command form
 /// ([`CanvasTool::command_form`]), the one owner of that fact.
@@ -163,12 +151,13 @@ pub struct Canvas<'a> {
     view: Option<Bind<'a, CanvasView>>,
     /// The view the binding held when the pass began.
     given: Option<CanvasView>,
-    /// The document the view shows, in document units. With a view and a document, the canvas fits a view never
-    /// shown, keeps the wheel's zoom inside the document's zoom range, keeps the document in view with Overscroll off,
-    /// and applies the view commands routed to it ([`ViewCommands`]); without either, the view commands are disabled
-    /// for it.
-    #[prop(quantity = "document units")]
-    document: Option<Size>,
+    /// The document the view shows: its size in document units (a `Size` is enough), and the artboard, layer bounds
+    /// and resolution some view commands need ([`ViewTarget`]). With a view and a document, the canvas fits a view
+    /// never shown, keeps the wheel's zoom inside the document's zoom range, keeps the document in view with Overscroll
+    /// off, and applies the view commands routed to it ([`ViewCommands`]); without either, the view commands are
+    /// disabled for it, and so is each command whose fact the target lacks.
+    #[prop(into)]
+    document: Option<ViewTarget>,
     /// The user's navigation options: how the wheel and a pinch move the view ([`WheelNavigation`]), whether a zoom
     /// eases (Animated Zoom) and whether the view may leave the document (Overscroll).
     #[prop]
@@ -267,21 +256,21 @@ impl<'a> Canvas<'a> {
         self.props.command_scope?;
         let pixels_per_point = cx.env.scale().0;
         let target = view.zip(self.document);
-        for command in VIEW_COMMANDS {
-            // Zoom In and Zoom Out are disabled at the ends of the zoom range.
-            let enabled = target.is_some_and(|(mut view, document)| match command {
-                ViewCommands::ZoomIn | ViewCommands::ZoomOut => command.apply(&mut view, document, pixels_per_point),
-                _ => true,
-            });
+        for command in ViewCommands::ALL {
+            let enabled = target.is_some_and(|(view, document)| command.available(&view, &document, pixels_per_point));
             cx.publish(command, CommandState::new().enabled(enabled));
         }
         let (view, document) = target?;
         let (mut next, mut zoomed) = (view, false);
         while let Some((command, _)) = cx.take_command::<ViewCommands>() {
-            command.apply(&mut next, document, pixels_per_point);
-            zoomed |= !matches!(command, ViewCommands::RotateClockwise | ViewCommands::RotateCounterclockwise | ViewCommands::ResetRotation);
+            zoomed |= command.apply(&mut next, &document, pixels_per_point) && command.zooms();
         }
         (next != view).then_some((next, zoomed))
+    }
+
+    /// The document's size, from the target the app gave.
+    fn document_size(&self) -> Option<Size> {
+        self.document.map(|target| target.document)
     }
 
     /// The rect the view lies in: the canvas's own, inside the rulers while they show.
@@ -296,14 +285,14 @@ impl<'a> Canvas<'a> {
         let id = cx.core.id;
         let mut motion = ViewMotion::take(&ctx, id);
         let pixels_per_point = cx.env.scale().0;
-        let size = self.document.unwrap_or(Size::ZERO);
+        let size = self.document_size().unwrap_or(Size::ZERO);
         let mut view = given;
         let area = self.view_rect(cx.content_rect, cx.style);
         if area.width() > 0.0 && area.height() > 0.0 {
             let never_shown = !(view.rect.width() > 0.0 && view.rect.height() > 0.0);
             view.rect = area;
             if never_shown && let Some(document) = self.document {
-                ViewCommands::FitOnScreen.apply(&mut view, document, pixels_per_point);
+                ViewCommands::FitOnScreen.apply(&mut view, &document, pixels_per_point);
             }
         }
         let mut jumped = false;
@@ -334,7 +323,7 @@ impl<'a> Canvas<'a> {
         for (step, mods) in moves {
             if self.keys_to_body {
                 keys.page = Some((step, mods));
-            } else if let (Some(document), Some(key)) = (self.document, PageKey::of(step, mods, area.size())) {
+            } else if let (Some(document), Some(key)) = (self.document_size(), PageKey::of(step, mods, area.size())) {
                 jumped |= key.apply(&mut view, document);
             }
         }
@@ -355,7 +344,7 @@ impl<'a> Canvas<'a> {
                 steer = Some(Steer::Ease { from: before, anchor });
             }
         }
-        let target = clamped(view, self.document, &self.navigation);
+        let target = clamped(view, self.document_size(), &self.navigation);
         let mut progress = cx.anim("zoom", motion.animation.target(), spec::MOVE);
         match steer {
             Some(Steer::Ease { mut from, anchor }) => {
@@ -387,7 +376,7 @@ impl<'a> Canvas<'a> {
             None => (self.given?, self.given?, BodyKeys::default()),
         };
         let space = CanvasSpace::new(shown, pixels_per_point).with_target(target).with_keys(keys);
-        Some(space.with_document(self.document).with_rulers(self.rulers).with_background(background).with_canvas(id))
+        Some(space.with_document(self.document_size()).with_rulers(self.rulers).with_background(background).with_canvas(id))
     }
 
     /// The press on the background part as the canvas reports it, and the pan of a middle-button drag: a middle press
@@ -436,7 +425,7 @@ impl CanvasOutput {
     /// `view` as the canvas keeps it: inside the document's edges with Overscroll off. The tool host passes a tool's
     /// view through it.
     pub(crate) fn clamped(&self, view: CanvasView) -> CanvasView {
-        clamped(view, self.document, &self.navigation)
+        clamped(view, self.document_size(), &self.navigation)
     }
 
     /// Where a press on the background was released without a drag. A tool that creates geometry opens its command
@@ -514,7 +503,7 @@ impl Component for Canvas<'_> {
         let press = Self::background_press(&cx).0;
         let space = self.space(cx.response.id, cx.env.scale().0, BackgroundPress::of(&press, self.context_key));
         let view = self.settled.map(|settled| settled.target).filter(|target| Some(*target) != self.given);
-        CanvasOutput { response: cx.response.clone(), press, space, view, snap: self.snap, document: self.document, navigation: self.navigation }
+        CanvasOutput { response: cx.response.clone(), press, space, view, snap: self.snap, document: self.document_size(), navigation: self.navigation }
     }
 }
 

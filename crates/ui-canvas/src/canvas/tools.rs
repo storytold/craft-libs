@@ -13,7 +13,7 @@ use super::{CanvasTool, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer}
 use crate::primitives::Draw;
 use craft_behavior::canvas::zoom;
 use craft_behavior::geometry::crop::normalized_angle;
-use craft_behavior::kurbo::Size;
+use craft_behavior::kurbo::{Rect, Size};
 use craft_behavior::{CancelReason, CanvasView, Cursor, PaintedCursor, ZoomLadder};
 use craft_keymap::Mods;
 use egui::Pos2;
@@ -21,11 +21,90 @@ use egui::Pos2;
 /// The rotation step of the Rotate View commands, in degrees.
 const ROTATE_STEP_DEG: f64 = 15.0;
 
-/// The view commands: the keyboard path of the view tools and of the navigation menu. [`apply`](Self::apply) is the
-/// one place that says what each does to a view. The commands are scoped: a canvas container and a full-window
-/// dialog can be instances of the `canvasView` scope, and a fired command goes to the instance that holds the key focus,
-/// else the one that held it last, so a chord acts on the dialog's view while the dialog is open. The zoom commands
-/// also fire inside a dialog.
+/// The room Fit Artboard on Screen leaves around the board, in points: the board's name sits above it.
+const ARTBOARD_MARGIN: f64 = 40.0;
+
+/// The room Fit Layers on Screen leaves around the layers' bounds, in points.
+const LAYERS_MARGIN: f64 = 20.0;
+
+/// Photoshop's default Screen Resolution (Preferences, Units & Rulers), in pixels per inch.
+const SCREEN_PPI: f64 = 72.0;
+
+/// What the view commands act on: the document's size and the facts some commands need. The app gives it to
+/// [`Canvas::document`](super::Canvas::document); a command whose fact is absent is disabled
+/// ([`ViewCommands::available`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ViewTarget {
+    /// The document's size, in document units.
+    pub document: Size,
+    /// The artboard Fit Artboard on Screen shows (the active layer's board, else the last one), in document units.
+    pub artboard: Option<Rect>,
+    /// The bounds Fit Layer(s) on Screen shows (the selected layers' content), in document units.
+    pub layers: Option<Rect>,
+    /// The document's resolution in pixels per inch, for Print Size.
+    pub ppi: Option<f64>,
+    /// The screen resolution Print Size shows the document at, in pixels per inch (Preferences, Units & Rulers).
+    /// Default: 72.
+    pub screen_ppi: f64,
+}
+
+impl ViewTarget {
+    /// A document of `size` with no artboard, no layer bounds and no resolution.
+    pub fn new(document: Size) -> Self {
+        Self { document, artboard: None, layers: None, ppi: None, screen_ppi: SCREEN_PPI }
+    }
+
+    /// The artboard Fit Artboard on Screen shows.
+    #[must_use]
+    pub fn artboard(mut self, artboard: Rect) -> Self {
+        self.artboard = Some(artboard);
+        self
+    }
+
+    /// The bounds Fit Layer(s) on Screen shows.
+    #[must_use]
+    pub fn layers(mut self, layers: Rect) -> Self {
+        self.layers = Some(layers);
+        self
+    }
+
+    /// The document's resolution, for Print Size.
+    #[must_use]
+    pub fn ppi(mut self, ppi: f64) -> Self {
+        self.ppi = Some(ppi);
+        self
+    }
+
+    /// The screen resolution Print Size shows the document at.
+    #[must_use]
+    pub fn screen_ppi(mut self, screen_ppi: f64) -> Self {
+        self.screen_ppi = screen_ppi;
+        self
+    }
+
+    /// Print Size's device zoom: the screen resolution over the document's.
+    fn print_zoom(&self) -> Option<f64> {
+        self.ppi.filter(|ppi| ppi.is_finite() && *ppi > 0.0).map(|ppi| self.screen_ppi / ppi).filter(|zoom| zoom.is_finite() && *zoom > 0.0)
+    }
+}
+
+impl From<Size> for ViewTarget {
+    fn from(document: Size) -> Self {
+        Self::new(document)
+    }
+}
+
+/// A rect with area, or none.
+fn with_area(rect: Option<Rect>) -> Option<Rect> {
+    rect.map(|rect| rect.abs()).filter(|rect| rect.width() > 0.0 && rect.height() > 0.0)
+}
+
+/// The view commands: the keyboard path of the view tools, of the navigation menu and of the navigation bar's buttons.
+/// [`apply`](Self::apply) is the one place that says what each does to a view, and [`available`](Self::available) when
+/// each can run. The commands are scoped: a canvas container and a full-window dialog can be instances of the
+/// `canvasView` scope, and a fired command goes to the instance that holds the key focus, else the one that held it
+/// last, so a chord acts on the dialog's view while the dialog is open. The zoom commands also fire inside a dialog.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui_macros::CommandSet)]
 #[command(prefix = "canvasView", scope = "canvasView")]
 #[non_exhaustive]
@@ -45,6 +124,19 @@ pub enum ViewCommands {
     /// Show the document at 100 percent: one document pixel per device pixel, about the view's centre.
     #[command(label = "100%", modal = "in_dialogs", default = "Cmd+1")]
     ActualPixels,
+    /// Show the document at 200 percent about the view's centre.
+    #[command(label = "200%")]
+    TwoHundredPercent,
+    /// Show the document at its print size: the screen resolution over the document's, about the view's centre.
+    /// Disabled without the document's resolution.
+    #[command(label = "Print Size")]
+    PrintSize,
+    /// Show the whole artboard, centred, with room for its name. Disabled without an artboard.
+    #[command(label = "Fit Artboard on Screen")]
+    FitArtboard,
+    /// Show the selected layers' bounds, centred. Disabled without them.
+    #[command(label = "Fit Layer(s) on Screen")]
+    FitLayers,
     /// Turn the view clockwise by 15 degrees.
     #[command(label = "Rotate View Clockwise")]
     RotateClockwise,
@@ -57,10 +149,30 @@ pub enum ViewCommands {
 }
 
 impl ViewCommands {
-    /// Applies the command to `view` for a document of `size` at `pixels_per_point`. Returns whether the view
-    /// changed.
-    pub fn apply(self, view: &mut CanvasView, size: Size, pixels_per_point: f32) -> bool {
+    /// Every view command, in menu order.
+    pub const ALL: [ViewCommands; 12] = [
+        ViewCommands::ZoomIn,
+        ViewCommands::ZoomOut,
+        ViewCommands::FitOnScreen,
+        ViewCommands::FillScreen,
+        ViewCommands::ActualPixels,
+        ViewCommands::TwoHundredPercent,
+        ViewCommands::PrintSize,
+        ViewCommands::FitArtboard,
+        ViewCommands::FitLayers,
+        ViewCommands::RotateClockwise,
+        ViewCommands::RotateCounterclockwise,
+        ViewCommands::ResetRotation,
+    ];
+
+    /// Applies the command to `view` for `target` at `pixels_per_point`. Returns whether the view changed: a command
+    /// whose fact `target` lacks changes nothing.
+    pub fn apply(self, view: &mut CanvasView, target: &ViewTarget, pixels_per_point: f32) -> bool {
         let before = *view;
+        let size = target.document;
+        let zoom_about_centre = |view: &mut CanvasView, device: f64| {
+            zoom::about(view, view.rect.center(), ZoomLadder::clamp(device, size), false, pixels_per_point);
+        };
         match self {
             ViewCommands::ZoomIn => {
                 zoom::step(view, 1, size, pixels_per_point);
@@ -71,14 +183,46 @@ impl ViewCommands {
             // Photoshop fits the image to the view, with no margin.
             ViewCommands::FitOnScreen => zoom::fit(view, size, pixels_per_point, 0.0),
             ViewCommands::FillScreen => zoom::fill(view, size, pixels_per_point),
-            ViewCommands::ActualPixels => {
-                zoom::about(view, view.rect.center(), ZoomLadder::clamp(1.0, size), false, pixels_per_point);
+            ViewCommands::ActualPixels => zoom_about_centre(view, 1.0),
+            ViewCommands::TwoHundredPercent => zoom_about_centre(view, 2.0),
+            ViewCommands::PrintSize => {
+                if let Some(device) = target.print_zoom() {
+                    zoom_about_centre(view, device);
+                }
+            }
+            ViewCommands::FitArtboard => {
+                if let Some(board) = with_area(target.artboard) {
+                    zoom::fit_rect(view, board, size, pixels_per_point, ARTBOARD_MARGIN);
+                }
+            }
+            ViewCommands::FitLayers => {
+                if let Some(bounds) = with_area(target.layers) {
+                    zoom::fit_rect(view, bounds, size, pixels_per_point, LAYERS_MARGIN);
+                }
             }
             ViewCommands::RotateClockwise => view.rotation = normalized_angle(view.rotation + ROTATE_STEP_DEG),
             ViewCommands::RotateCounterclockwise => view.rotation = normalized_angle(view.rotation - ROTATE_STEP_DEG),
             ViewCommands::ResetRotation => view.rotation = 0.0,
         }
         *view != before
+    }
+
+    /// Whether the command can run on `view` for `target`: Zoom In and Zoom Out stop at the ends of the zoom range,
+    /// Print Size needs the document's resolution, Fit Artboard an artboard and Fit Layers the layers' bounds.
+    pub fn available(self, view: &CanvasView, target: &ViewTarget, pixels_per_point: f32) -> bool {
+        match self {
+            ViewCommands::ZoomIn | ViewCommands::ZoomOut => self.apply(&mut view.clone(), target, pixels_per_point),
+            ViewCommands::PrintSize => target.print_zoom().is_some(),
+            ViewCommands::FitArtboard => with_area(target.artboard).is_some(),
+            ViewCommands::FitLayers => with_area(target.layers).is_some(),
+            _ => true,
+        }
+    }
+
+    /// Whether the command changes the zoom or the centre, so it eases under Animated Zoom; the rotate commands only
+    /// turn the view.
+    pub fn zooms(self) -> bool {
+        !matches!(self, ViewCommands::RotateClockwise | ViewCommands::RotateCounterclockwise | ViewCommands::ResetRotation)
     }
 }
 

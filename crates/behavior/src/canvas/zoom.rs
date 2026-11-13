@@ -11,7 +11,7 @@
 
 use super::view::CanvasView;
 use emath::Pos2;
-use kurbo::{Point, Size};
+use kurbo::{Point, Rect, Size};
 use std::ops::RangeInclusive;
 
 /// A zoom within 0.1 % of a rung counts as on it.
@@ -139,12 +139,24 @@ pub fn fit(view: &mut CanvasView, size: Size, pixels_per_point: f32, margin: f64
 /// [`fit`] with the device zoom allowed up to `max_device` (1 = 100 %) instead of 100 %: a small document is
 /// magnified to fill the canvas, as Photoshop's Fit on Screen does.
 pub fn fit_up_to(view: &mut CanvasView, size: Size, pixels_per_point: f32, max_device: f64, margin: f64) {
-    let (shown_w, shown_h, sin, cos) = shown_extent(view, size);
+    fit_rect_up_to(view, Rect::from_origin_size(Point::ORIGIN, size), size, pixels_per_point, max_device, margin);
+}
+
+/// Fit a part of the document on screen (an artboard, the selected layers' bounds): centre `rect`, in document
+/// units, and zoom so all of it shows inside `view.rect` less `margin` points on each side, up to the zoom ceiling.
+/// The zoom stays inside the range of a document of `size`; an empty `rect` zooms to that ceiling about its centre.
+pub fn fit_rect(view: &mut CanvasView, rect: Rect, size: Size, pixels_per_point: f32, margin: f64) {
+    fit_rect_up_to(view, rect, size, pixels_per_point, ZoomLadder::MAX, margin);
+}
+
+fn fit_rect_up_to(view: &mut CanvasView, rect: Rect, size: Size, pixels_per_point: f32, max_device: f64, margin: f64) {
+    let rect = rect.abs();
+    let (shown_w, shown_h, sin, cos) = shown_extent(view, rect.size());
     let (bw, bh) = (shown_w * cos + shown_h * sin, shown_w * sin + shown_h * cos);
     let scale = ((f64::from(view.rect.width()) - 2.0 * margin) / bw).min((f64::from(view.rect.height()) - 2.0 * margin) / bh);
     let device = ZoomLadder::clamp((scale * f64::from(pixels_per_point)).min(max_device), size);
     view.zoom = CanvasView::points_per_unit(device, pixels_per_point);
-    view.center = Point::new(size.width / 2.0, size.height / 2.0);
+    view.center = rect.center();
 }
 
 /// Fill Screen: centre the document and zoom until it covers `view.rect`; one axis may extend

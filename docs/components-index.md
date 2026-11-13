@@ -180,6 +180,7 @@ Grouped by gallery level, then shape, then name.
 | `MetadataTable` | Pattern | `craft_ui_widgets::table::metadata` | A key and value table in groups: a search field over the rows keeps the fields whose name or value matches the typed text, and a check column marks the keys the app shows as columns |
 | `NamedPresetRow` | Pattern | `craft_ui_patterns::patterns::presets::named` | A preset picker with the commands that make, rename and delete presets |
 | `NavigatorOptionsDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::navigator_options` | Panel Options of the Navigator: the colour of the proxy rectangle |
+| `NavigateBar` | Pattern | `craft_ui_canvas::canvas::navigate::bar` | The options of a navigation tool (Zoom, Rotate View, Hand), shown as children of the app's options bar, as in Photoshop |
 | `NavigatorPanel` | Pattern | `craft_ui_canvas::canvas::navigator_panel` | The Navigator panel (Photoshop's Window, Navigator): the [`Navigator`] preview box over the [`NavigatorZoomRow`], both bound to one view |
 | `NavigatorZoomRow` | Pattern | `craft_ui_canvas::canvas::navigator::zoom_row` | The Navigator's zoom row: a percent field, Zoom Out, a slider over the whole zoom range and Zoom In, in reading order |
 | `NewDocumentDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::new_document` | File > New: category tabs over a grid of preset cards, a details column and Create and Close |
