@@ -34,8 +34,8 @@ pub use resources::{
     style_groups, swatches,
 };
 pub use spread::{
-    ClippingPathValues, Graphic, GraphicChild, GraphicKind, Guide, ItemChild, ItemKind, Link, MarginPreference, Page, PageChild, PageItem, Spread,
-    SpreadChild, TextPath, TextWrapPreference, spreads,
+    ClippingPathValues, Graphic, GraphicChild, GraphicKind, GraphicLayerOptions, Guide, ItemChild, ItemKind, Link, MarginPreference, Page, PageChild,
+    PageItem, PdfAttribute, Spread, SpreadChild, TextPath, TextWrapPreference, spreads,
 };
 pub use story::{
     Ace, CONTAINERS, Cell, CellOptions, Container, ContainerKind, ContentPart, PageReference, Range, SavedCrossReference, SavedCrossReferencePart,

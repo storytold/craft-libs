@@ -705,6 +705,114 @@ impl Link {
     }
 }
 
+/// A placed graphic's layer choices, independent of the document model that stores them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GraphicLayerOptions {
+    pub attributes: Vec<(String, String)>,
+    pub layers: Vec<Vec<(String, String)>>,
+    /// Parent indices in pre-order. Missing entries and invalid parents are treated as top-level.
+    pub parents: Vec<Option<usize>>,
+}
+
+impl GraphicLayerOptions {
+    /// Reads a `GraphicLayerOption` subtree while preserving layer order and hierarchy.
+    pub fn from_el(option: &El) -> Self {
+        let attributes = option.attrs.iter().filter(|(key, _)| key != "Self").cloned().collect();
+        let mut roots: Vec<_> = option.children("GraphicLayer").collect();
+        roots.reverse();
+        let mut pending: Vec<_> = roots.into_iter().map(|layer| (layer, None)).collect();
+        let mut layers = Vec::new();
+        let mut parents = Vec::new();
+        while let Some((layer, parent)) = pending.pop() {
+            let index = layers.len();
+            layers.push(layer.attrs.iter().filter(|(key, _)| key != "Self").cloned().collect());
+            parents.push(parent);
+            let mut children: Vec<_> = layer.children("GraphicLayer").collect();
+            children.reverse();
+            pending.extend(children.into_iter().map(|child| (child, Some(index))));
+        }
+        Self { attributes, layers, parents }
+    }
+
+    /// Serializes this layer tree, generating fresh IDs for the option and each layer.
+    pub fn to_el(&self, self_id: &str, mut fresh: impl FnMut() -> String) -> El {
+        let mut option = El::new("GraphicLayerOption").with_attr("Self", self_id);
+        for (key, value) in &self.attributes {
+            if valid_layer_attribute(key) {
+                option.set_attr(key, value);
+            }
+        }
+        // A parent must still be open in the pre-order walk. IDML layer groups have a depth cap.
+        let mut open = Vec::new();
+        let mut parents = Vec::with_capacity(self.layers.len());
+        for index in 0..self.layers.len() {
+            let parent = self.parents.get(index).copied().flatten();
+            if let Some(at) = parent.and_then(|parent| open.iter().position(|id| *id == parent)).filter(|at| *at < 239) {
+                open.truncate(at + 1);
+                parents.push(parent);
+            } else {
+                open.clear();
+                parents.push(None);
+            }
+            open.push(index);
+        }
+        let mut children: Vec<Vec<El>> = (0..self.layers.len()).map(|_| Vec::new()).collect();
+        let mut roots = Vec::new();
+        for (index, attributes) in self.layers.iter().enumerate().rev() {
+            let mut layer = El::new("GraphicLayer").with_attr("Self", fresh());
+            for (key, value) in attributes {
+                if valid_layer_attribute(key) {
+                    layer.set_attr(key, value);
+                }
+            }
+            if let Some(nested) = children.get_mut(index) {
+                for child in std::mem::take(nested).into_iter().rev() {
+                    layer.push(child);
+                }
+            }
+            if let Some(nested) = parents.get(index).copied().flatten().and_then(|parent| children.get_mut(parent)) {
+                nested.push(layer);
+            } else {
+                roots.push(layer);
+            }
+        }
+        for layer in roots.into_iter().rev() {
+            option.push(layer);
+        }
+        option
+    }
+}
+
+fn valid_layer_attribute(key: &str) -> bool {
+    !key.is_empty()
+        && key != "Self"
+        && key != "xmlns"
+        && key
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| byte.is_ascii_alphabetic() || byte == b'_' || (index > 0 && (byte.is_ascii_digit() || matches!(byte, b'.' | b'-'))))
+}
+
+/// A placed PDF's import options.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PdfAttribute {
+    values: Values,
+}
+
+impl PdfAttribute {
+    pub fn page_index(&self) -> u32 {
+        self.values
+            .get("PageNumber")
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .and_then(|page| u32::try_from(page.saturating_sub(1)).ok())
+            .unwrap_or(0)
+    }
+
+    pub fn crop(&self) -> Option<&str> {
+        self.values.get("PDFCrop")
+    }
+}
+
 impl Graphic {
     pub fn from_el(el: &El) -> Option<Graphic> {
         let kind = GraphicKind::of(el.local())?;
@@ -732,6 +840,23 @@ impl Graphic {
 
     pub fn link(&self) -> Option<&Link> {
         self.children.iter().find_map(|c| if let GraphicChild::Link(l) = c { Some(l) } else { None })
+    }
+
+    pub fn layer_options(&self) -> Option<GraphicLayerOptions> {
+        self.children.iter().find_map(|child| match child {
+            GraphicChild::Other(el) if el.local() == "GraphicLayerOption" => Some(GraphicLayerOptions::from_el(el)),
+            _ => None,
+        })
+    }
+
+    pub fn pdf_attribute(&self) -> Option<PdfAttribute> {
+        self.children
+            .iter()
+            .find_map(|child| match child {
+                GraphicChild::Other(el) if el.local() == "PDFAttribute" => Some(PdfAttribute { values: Values::of(el) }),
+                _ => None,
+            })
+            .or_else(|| self.values.prop_el("PDFAttribute").map(|el| PdfAttribute { values: Values::of(el) }))
     }
 
     /// `Properties/GraphicBounds`: `top left bottom right` in the graphic's inner coordinates.
