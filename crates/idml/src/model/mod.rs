@@ -24,7 +24,7 @@ use craft_xml::{El, Local, Node};
 pub use document::{ModelDocument, TopLevelKind, TopLevelNode};
 pub use effects::{DirectionalFeatherValues, DropShadowValues, FeatherValues, GradientFeatherValues, OpacityStopValues, TransparencySetting};
 pub use geometry::{MAX_PATH_POINTS, PathGeometry, PathGeometryError, PathPoint, SubPath};
-pub use preferences::{DocumentPreferences, GridPreferences, TextFramePreferences};
+pub use preferences::{DocumentPreferences, FootnotePreferences, GridPreferences, TextFramePreferences};
 pub use resources::{
     CharacterAppearanceValues, CharacterSpecialValues, CharacterTypographyValues, CjkCharacterValues, CjkParagraphValues, ColorDefinition,
     ColorGroup, ColorGroupDefinition, ColorGroupMember, ColorSpace, CompositeFontDefinition, CompositeFontEntryDefinition, EpubExportTagMap,

@@ -135,6 +135,64 @@ pub struct GridPreferences {
     pub grids_in_back: Option<bool>,
 }
 
+/// Parsed values from IDML `FootnoteOption` elements.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FootnotePreferences {
+    pub start_at: Option<f64>,
+    pub prefix: Option<String>,
+    pub suffix: Option<String>,
+    pub paragraph_style: Option<String>,
+    pub marker_style: Option<String>,
+    pub separator: Option<String>,
+    pub space_between: Option<f64>,
+    pub space_before: Option<f64>,
+    pub first_baseline: Option<String>,
+    pub first_baseline_minimum: Option<f64>,
+    pub span_columns: Option<bool>,
+    pub rule_on: Option<bool>,
+    pub rule_weight: Option<f64>,
+    pub rule_tint: Option<f64>,
+    pub rule_left_indent: Option<f64>,
+    pub rule_width: Option<f64>,
+    pub rule_offset: Option<f64>,
+    pub rule_color: Option<String>,
+    pub numbering_style: Option<String>,
+    pub restart_numbering: Option<String>,
+    pub show_prefix_suffix: Option<String>,
+    pub marker_positioning: Option<String>,
+}
+
+impl FootnotePreferences {
+    /// Reads footnote preference attributes and properties from IDML.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        Self {
+            start_at: values.num("StartAt"),
+            prefix: values.get("Prefix").map(str::to_owned),
+            suffix: values.get("Suffix").map(str::to_owned),
+            paragraph_style: values.get("FootnoteTextStyle").map(str::to_owned),
+            marker_style: values.get("FootnoteMarkerStyle").map(str::to_owned),
+            separator: values.get("SeparatorText").map(str::to_owned),
+            space_between: values.num("SpaceBetween"),
+            space_before: values.num("Spacer"),
+            first_baseline: values.prop("FootnoteFirstBaselineOffset"),
+            first_baseline_minimum: values.num("FootnoteMinimumFirstBaselineOffset"),
+            span_columns: values.boolean("EnableStraddling"),
+            rule_on: values.boolean("RuleOn"),
+            rule_weight: values.num("RuleLineWeight"),
+            rule_tint: values.num("RuleTint"),
+            rule_left_indent: values.num("RuleLeftIndent"),
+            rule_width: values.num("RuleWidth"),
+            rule_offset: values.num("RuleOffset"),
+            rule_color: values.prop("RuleColor"),
+            numbering_style: values.prop("FootnoteNumberingStyle"),
+            restart_numbering: values.prop("RestartNumbering"),
+            show_prefix_suffix: values.prop("ShowPrefixSuffix"),
+            marker_positioning: values.prop("MarkerPositioning"),
+        }
+    }
+}
+
 impl GridPreferences {
     /// Reads baseline and document-grid values.
     pub fn from_el(el: &El) -> Self {
