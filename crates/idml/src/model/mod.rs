@@ -56,6 +56,28 @@ pub struct StrokeValues {
     pub gap_tint: Option<f64>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AlternatingFillValues {
+    pub first_count: Option<f64>,
+    pub first_color: Option<String>,
+    pub first_tint: Option<f64>,
+    pub next_count: Option<f64>,
+    pub next_color: Option<String>,
+    pub next_tint: Option<f64>,
+    pub skip_first: Option<f64>,
+    pub skip_last: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AlternatingStrokeValues {
+    pub first_count: Option<f64>,
+    pub next_count: Option<f64>,
+    pub first: StrokeValues,
+    pub next: StrokeValues,
+    pub skip_first: Option<f64>,
+    pub skip_last: Option<f64>,
+}
+
 impl Values {
     /// The attributes and `<Properties>` of `el`.
     pub fn of(el: &El) -> Values {
@@ -185,6 +207,37 @@ impl Values {
             kind: self.value(&format!("{prefix}StrokeType")),
             gap_color: self.value(&format!("{prefix}StrokeGapColor")),
             gap_tint: self.num(&format!("{prefix}StrokeGapTint")),
+        }
+    }
+
+    pub fn alternating_fill_values(&self, kind: &str) -> AlternatingFillValues {
+        let num = |key: &str| self.num(key).map(|v| v.max(0.0));
+        AlternatingFillValues {
+            first_count: num(&format!("Start{kind}FillCount")),
+            first_color: self.value(&format!("Start{kind}FillColor")),
+            first_tint: self.num(&format!("Start{kind}FillTint")),
+            next_count: num(&format!("End{kind}FillCount")),
+            next_color: self.value(&format!("End{kind}FillColor")),
+            next_tint: self.num(&format!("End{kind}FillTint")),
+            skip_first: num(&format!("SkipFirstAlternatingFill{kind}s")),
+            skip_last: num(&format!("SkipLastAlternatingFill{kind}s")),
+        }
+    }
+
+    pub fn alternating_stroke_values(&self, kind: &str) -> AlternatingStrokeValues {
+        let num = |key: &str| self.num(key).map(|v| v.max(0.0));
+        let mut next = self.stroke_values(&format!("End{kind}"));
+        // IDML writes this one table-column value as LineStyle rather than StrokeType.
+        if kind == "Column" {
+            next.kind = self.value("EndColumnLineStyle").or(next.kind);
+        }
+        AlternatingStrokeValues {
+            first_count: num(&format!("Start{kind}StrokeCount")),
+            next_count: num(&format!("End{kind}StrokeCount")),
+            first: self.stroke_values(&format!("Start{kind}")),
+            next,
+            skip_first: num(&format!("SkipFirstAlternatingStroke{kind}s")),
+            skip_last: num(&format!("SkipLastAlternatingStroke{kind}s")),
         }
     }
 }
