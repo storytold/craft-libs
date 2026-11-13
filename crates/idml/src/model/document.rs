@@ -2,7 +2,7 @@
 
 use craft_xml::El;
 
-use super::{Spread, Story, Values};
+use super::{AlternatingFillValues, AlternatingStrokeValues, Spread, Story, StrokeValues, Values};
 
 /// One IDML table-of-contents style entry before document style names are resolved.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -212,6 +212,7 @@ pub struct CellStyleValues {
     pub first_baseline: Option<String>,
     pub first_baseline_min: Option<f64>,
     pub paragraph_style: Option<String>,
+    pub edge_strokes: [StrokeValues; 4],
 }
 
 impl CellStyleValues {
@@ -235,6 +236,7 @@ impl CellStyleValues {
             first_baseline: values.get("FirstBaselineOffset").map(str::to_owned),
             first_baseline_min: values.num("MinimumFirstBaselineOffset").filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 8640.0)),
             paragraph_style: values.get("AppliedParagraphStyle").map(str::to_owned),
+            edge_strokes: ["TopEdge", "LeftEdge", "BottomEdge", "RightEdge"].map(|edge| values.stroke_values(edge)),
         }
     }
 }
@@ -255,6 +257,11 @@ pub struct TableStyleValues {
     pub right_column_same_as_body: Option<bool>,
     pub space_before: Option<f64>,
     pub space_after: Option<f64>,
+    pub border_strokes: [StrokeValues; 4],
+    pub row_fills: AlternatingFillValues,
+    pub column_fills: AlternatingFillValues,
+    pub row_strokes: AlternatingStrokeValues,
+    pub column_strokes: AlternatingStrokeValues,
 }
 
 impl TableStyleValues {
@@ -275,6 +282,11 @@ impl TableStyleValues {
             right_column_same_as_body: values.boolean("RightColumnRegionSameAsBodyRegion"),
             space_before: values.num("SpaceBefore"),
             space_after: values.num("SpaceAfter"),
+            border_strokes: ["TopBorder", "LeftBorder", "BottomBorder", "RightBorder"].map(|border| values.stroke_values(border)),
+            row_fills: values.alternating_fill_values("Row"),
+            column_fills: values.alternating_fill_values("Column"),
+            row_strokes: values.alternating_stroke_values("Row"),
+            column_strokes: values.alternating_stroke_values("Column"),
         }
     }
 }
