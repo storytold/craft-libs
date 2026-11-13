@@ -135,6 +135,57 @@ pub struct Table {
     pub children: Vec<TableChild>,
 }
 
+/// The row and column grid of an IDML table, read without allocating cell models.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TableLayout {
+    pub rows: Vec<TableRow>,
+    pub columns: Vec<TableColumn>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TableRow {
+    pub values: Values,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TableColumn {
+    pub values: Values,
+}
+
+impl TableLayout {
+    pub fn from_el(el: &El) -> TableLayout {
+        let mut layout = TableLayout::default();
+        for child in el.elements() {
+            match child.local() {
+                "Row" => layout.rows.push(TableRow { values: Values::of(child) }),
+                "Column" => layout.columns.push(TableColumn { values: Values::of(child) }),
+                _ => {}
+            }
+        }
+        layout
+    }
+}
+
+impl TableRow {
+    pub fn auto_grow(&self) -> Option<bool> {
+        self.values.boolean("AutoGrow")
+    }
+
+    pub fn minimum_height(&self) -> Option<f64> {
+        self.values.num("MinimumHeight")
+    }
+
+    pub fn single_row_height(&self) -> Option<f64> {
+        self.values.num("SingleRowHeight")
+    }
+}
+
+impl TableColumn {
+    pub fn single_column_width(&self) -> Option<f64> {
+        self.values.num("SingleColumnWidth")
+    }
+}
+
 /// A child of a table, in document order.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TableChild {

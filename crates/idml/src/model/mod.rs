@@ -27,7 +27,10 @@ pub use spread::{
     Graphic, GraphicChild, GraphicKind, Guide, ItemChild, ItemKind, Link, MarginPreference, Page, PageChild, PageItem, Spread, SpreadChild, TextPath,
     spreads,
 };
-pub use story::{Ace, CONTAINERS, Cell, CellOptions, Container, ContentPart, Range, Story, StoryPreference, Table, TableChild, TextNode, stories};
+pub use story::{
+    Ace, CONTAINERS, Cell, CellOptions, Container, ContentPart, Range, Story, StoryPreference, Table, TableChild, TableColumn, TableLayout, TableRow,
+    TextNode, stories,
+};
 
 use crate::value::{matrix, nums};
 
