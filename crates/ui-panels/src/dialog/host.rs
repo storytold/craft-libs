@@ -88,6 +88,14 @@ pub trait StackDialog: Any + Send {
         Err(format!("unknown field `{field}`: this dialog has no fields"))
     }
 
+    /// The facts a story reports about the dialog's last pass, as [`Outcome::story_facts`](crate::contract::Outcome)
+    /// reports a component's: hosted forms keep their component's. Empty by default.
+    #[cfg(feature = "testing")]
+    #[doc(hidden)]
+    fn story_facts(&self) -> crate::testing::StoryOutput {
+        crate::testing::StoryOutput::default()
+    }
+
     /// Called when the host closes the dialog from outside with [`DialogResult::Cancel`]
     /// ([`DialogHost::cancel`], a dialog of the same type opened over it, or its parent closing),
     /// so it can release what it holds: a pick ticket (`Files::forget`), an armed dropper. The

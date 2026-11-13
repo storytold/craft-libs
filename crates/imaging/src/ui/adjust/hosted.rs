@@ -39,6 +39,8 @@ pub struct HostedAdjustDialog<V, E = ()> {
     remember: Option<SaveKey>,
     editor: Box<Editor<V, E>>,
     asks: Vec<E>,
+    #[cfg(feature = "screen-testing")]
+    facts: craft_ui::testing::StoryOutput,
 }
 
 impl<V: Value + Default, E: Send + 'static> HostedAdjustDialog<V, E> {
@@ -65,6 +67,8 @@ impl<V: Value + Default, E: Send + 'static> HostedAdjustDialog<V, E> {
             remember: None,
             editor: Box::new(editor),
             asks: Vec::new(),
+            #[cfg(feature = "screen-testing")]
+            facts: craft_ui::testing::StoryOutput::default(),
         }
     }
 
@@ -147,11 +151,20 @@ impl<V: Value + Default, E: Send + 'static> StackDialog for HostedAdjustDialog<V
                 true
             });
         *comparing = shown.comparing;
+        #[cfg(feature = "screen-testing")]
+        {
+            self.facts = craft_ui::contract::Outcome::story_facts(&shown.response);
+        }
         let accepted = shown.accepted.map(DialogResult::Ok);
         accepted.or(shown.closed.map(|_| DialogResult::Cancel))
     }
 
     fn key(&self) -> Option<&str> {
         Some(&self.key)
+    }
+
+    #[cfg(feature = "screen-testing")]
+    fn story_facts(&self) -> craft_ui::testing::StoryOutput {
+        self.facts.clone()
     }
 }

@@ -469,12 +469,23 @@ pub struct HostedAbout {
     tab: Option<AboutTab>,
     link: Option<String>,
     open: bool,
+    #[cfg(feature = "testing")]
+    facts: crate::testing::StoryOutput,
 }
 
 impl HostedAbout {
     /// The dialog over `info` and `credits`, opening on the About tab.
     pub fn new(info: AboutInfo, credits: Credits) -> Self {
-        HostedAbout { id: dialog_id(ABOUT_KEY), info, credits, tab: None, link: None, open: true }
+        HostedAbout {
+            id: dialog_id(ABOUT_KEY),
+            info,
+            credits,
+            tab: None,
+            link: None,
+            open: true,
+            #[cfg(feature = "testing")]
+            facts: crate::testing::StoryOutput::default(),
+        }
     }
 
     /// The tab the dialog opens on.
@@ -502,6 +513,10 @@ impl StackDialog for HostedAbout {
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<()>> {
         let shown = AboutDialog { info: &self.info, credits: &self.credits, open: Some(Bind::bound(&mut self.open)), tab: self.tab }.show(ui);
+        #[cfg(feature = "testing")]
+        {
+            self.facts = crate::contract::Outcome::story_facts(&shown);
+        }
         if let Some(link) = shown.link {
             self.link = Some(link);
         }
@@ -510,5 +525,10 @@ impl StackDialog for HostedAbout {
 
     fn key(&self) -> Option<&str> {
         Some(ABOUT_KEY)
+    }
+
+    #[cfg(feature = "testing")]
+    fn story_facts(&self) -> crate::testing::StoryOutput {
+        self.facts.clone()
     }
 }

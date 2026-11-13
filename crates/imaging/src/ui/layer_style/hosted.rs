@@ -85,6 +85,8 @@ pub struct HostedLayerStyle {
     styles: Option<(Vec<PresetRow<String>>, Box<Thumb>)>,
     asks: Vec<LayerStyleAsk>,
     comparing: bool,
+    #[cfg(feature = "screen-testing")]
+    facts: craft_ui::testing::StoryOutput,
 }
 
 /// The key of the hosted Layer Style dialog.
@@ -109,6 +111,8 @@ impl HostedLayerStyle {
             styles: None,
             asks: Vec::new(),
             comparing: false,
+            #[cfg(feature = "screen-testing")]
+            facts: craft_ui::testing::StoryOutput::default(),
         }
     }
 
@@ -223,6 +227,8 @@ impl StackDialog for HostedLayerStyle {
             styles,
             asks,
             comparing,
+            #[cfg(feature = "screen-testing")]
+            facts,
             ..
         } = self;
         // The draft holds Preview: the box edits a copy, written back only when the box changed it, so a Reset that
@@ -247,6 +253,10 @@ impl StackDialog for HostedLayerStyle {
                     body = body.style_presets(StylePresets::new(rows, |cx, rect, info| thumb(cx, rect, info)));
                 }
                 let out = body.show(ui);
+                #[cfg(feature = "screen-testing")]
+                {
+                    *facts = craft_ui::contract::Outcome::story_facts(&out);
+                }
                 out.apply_view(draft);
                 if let Some(style) = out.edit.value() {
                     draft.style = style.clone();
@@ -265,5 +275,10 @@ impl StackDialog for HostedLayerStyle {
 
     fn key(&self) -> Option<&str> {
         Some(KEY)
+    }
+
+    #[cfg(feature = "screen-testing")]
+    fn story_facts(&self) -> craft_ui::testing::StoryOutput {
+        self.facts.clone()
     }
 }

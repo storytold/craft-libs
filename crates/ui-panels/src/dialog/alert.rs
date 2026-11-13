@@ -121,12 +121,19 @@ impl AlertContent {
 pub struct HostedAlert {
     content: AlertContent,
     open: bool,
+    #[cfg(feature = "testing")]
+    facts: crate::testing::StoryOutput,
 }
 
 impl HostedAlert {
     /// `alert` on the host; its own `opened` binding is not used.
     pub fn new(alert: Alert<'_>) -> Self {
-        HostedAlert { content: alert.split().0, open: true }
+        HostedAlert {
+            content: alert.split().0,
+            open: true,
+            #[cfg(feature = "testing")]
+            facts: crate::testing::StoryOutput::default(),
+        }
     }
 }
 
@@ -142,10 +149,19 @@ impl StackDialog for HostedAlert {
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<()>> {
         let shown = self.content.prompt(&Env::of(ui)).opened(Bind::bound(&mut self.open)).show(ui);
+        #[cfg(feature = "testing")]
+        {
+            self.facts = crate::contract::Outcome::story_facts(&shown);
+        }
         shown.closed.map(|_| DialogResult::Ok(()))
     }
 
     fn key(&self) -> Option<&str> {
         Some(ALERT_KEY)
+    }
+
+    #[cfg(feature = "testing")]
+    fn story_facts(&self) -> crate::testing::StoryOutput {
+        self.facts.clone()
     }
 }

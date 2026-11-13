@@ -21,7 +21,8 @@ pub fn body(ui: &mut Ui, checks: &mut [bool; 2]) {
 /// A story of a hosted dialog: `open()` on the story's [`DialogHost`] (a story note), which runs every pass. The story's `open` value
 /// is the dialog's open state, so the card holds the dialog behind its button as it holds any story dialog: the
 /// dialog opens while the value is on, and the value goes off when the dialog closes. `knobs` holds the story values
-/// `open` reads; when they change, `open()` replaces the open dialog, so a knob reaches the dialog on screen.
+/// `open` reads; when they change, `open()` replaces the open dialog, so a knob reaches the dialog on screen. The
+/// story reports the open dialog's [`story_facts`](StackDialog::story_facts).
 #[doc(hidden)]
 pub fn hosted<D: StackDialog, K: PartialEq + 'static>(ui: &mut Ui, data: &mut StoryData, knobs: K, open: impl FnOnce() -> D) -> StoryOutput {
     hosted_with(ui, data, knobs, open, |_| {})
@@ -53,11 +54,12 @@ pub fn hosted_with<D: StackDialog, K: PartialEq + 'static>(
     pass(host);
     host.run(ui);
     let is_open = host.is_open::<D>();
+    let facts = host.get::<D>().map(StackDialog::story_facts).unwrap_or_default();
     if opened {
         *data.note::<Option<K>>("knobs", None) = Some(knobs);
     }
     *data.value("open", true) = is_open;
-    StoryOutput::default()
+    facts
 }
 
 /// The opener of the Grid options dialogs.

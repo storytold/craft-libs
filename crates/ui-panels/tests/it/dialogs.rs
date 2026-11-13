@@ -67,6 +67,7 @@ fn a_story_knob_reaches_its_open_hosted_dialog() {
     let mut fixture = Fixture::story(&Story::new("titled_alert", titled_alert));
     fixture.idle(6);
     assert!(fixture.by_label("Could not open").is_some(), "the story opens its dialog");
+    assert!(fixture.take_outputs().last().is_some_and(|output| output.id.is_some()), "the story reports the open dialog's facts");
     *fixture.data().value("title", "Could not open") = "Could not save";
     fixture.idle(6);
     assert!(fixture.by_label("Could not save").is_some(), "the changed knob shows in the open dialog");

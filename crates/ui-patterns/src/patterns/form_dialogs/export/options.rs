@@ -373,12 +373,21 @@ pub struct HostedFormatOptions {
     kind: ExportOptionsKind,
     initial: Option<FormatOptions>,
     open: bool,
+    #[cfg(feature = "testing")]
+    facts: crate::testing::StoryOutput,
 }
 
 impl HostedFormatOptions {
     /// The options dialog of `kind`.
     pub fn new(kind: ExportOptionsKind) -> Self {
-        HostedFormatOptions { id: dialog_id(options_key(kind)), kind, initial: None, open: true }
+        HostedFormatOptions {
+            id: dialog_id(options_key(kind)),
+            kind,
+            initial: None,
+            open: true,
+            #[cfg(feature = "testing")]
+            facts: crate::testing::StoryOutput::default(),
+        }
     }
 
     /// The options the dialog opens with, when they are the options of its format.
@@ -403,6 +412,10 @@ impl StackDialog for HostedFormatOptions {
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<FormatOptions>> {
         let shown = FormatOptionsDialog { kind: self.kind, open: Some(Bind::bound(&mut self.open)), initial: self.initial }.show(ui);
+        #[cfg(feature = "testing")]
+        {
+            self.facts = crate::contract::Outcome::story_facts(&shown);
+        }
         match (shown.result, shown.closed) {
             (Some(options), _) => Some(DialogResult::Ok(options)),
             (None, Some(_)) => Some(DialogResult::Cancel),
@@ -412,6 +425,11 @@ impl StackDialog for HostedFormatOptions {
 
     fn key(&self) -> Option<&str> {
         Some(options_key(self.kind))
+    }
+
+    #[cfg(feature = "testing")]
+    fn story_facts(&self) -> crate::testing::StoryOutput {
+        self.facts.clone()
     }
 }
 

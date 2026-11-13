@@ -251,6 +251,8 @@ pub struct HostedExportAs {
     requests: HostRequests,
     saving: bool,
     open: bool,
+    #[cfg(feature = "testing")]
+    facts: crate::testing::StoryOutput,
 }
 
 impl HostedExportAs {
@@ -268,6 +270,8 @@ impl HostedExportAs {
             requests: HostRequests::new(),
             saving: false,
             open: true,
+            #[cfg(feature = "testing")]
+            facts: crate::testing::StoryOutput::default(),
         }
     }
 
@@ -340,6 +344,10 @@ impl StackDialog for HostedExportAs {
             ..ExportAsDialog::new(self.file_name.clone(), self.source, Bind::bound(&mut self.options))
         };
         let mut shown = dialog.show(ui);
+        #[cfg(feature = "testing")]
+        {
+            self.facts = crate::contract::Outcome::story_facts(&shown);
+        }
         if let Some(wanted) = shown.wanted_preview {
             self.wanted = Some(wanted);
         }
@@ -359,6 +367,11 @@ impl StackDialog for HostedExportAs {
 
     fn key(&self) -> Option<&str> {
         Some(EXPORT_KEY)
+    }
+
+    #[cfg(feature = "testing")]
+    fn story_facts(&self) -> crate::testing::StoryOutput {
+        self.facts.clone()
     }
 
     fn cancelled(&mut self, _: &egui::Context) {

@@ -220,12 +220,21 @@ pub struct HostedImageSize {
     open: bool,
     values: ImageSizeValues,
     build: Box<Build>,
+    #[cfg(feature = "testing")]
+    facts: crate::testing::StoryOutput,
 }
 
 impl HostedImageSize {
     /// A dialog opening with `values`; `build` makes it over the values (`ImageSize::new` with its settings).
     pub fn new(values: ImageSizeValues, build: impl for<'b> Fn(Bind<'b, ImageSizeValues>) -> ImageSize<'b> + Send + 'static) -> Self {
-        HostedImageSize { id: dialog_id(KEY), open: true, values, build: Box::new(build) }
+        HostedImageSize {
+            id: dialog_id(KEY),
+            open: true,
+            values,
+            build: Box::new(build),
+            #[cfg(feature = "testing")]
+            facts: crate::testing::StoryOutput::default(),
+        }
     }
 
     /// The values the dialog shows.
@@ -245,10 +254,20 @@ impl StackDialog for HostedImageSize {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<ImageSizeResult>> {
-        (self.build)(Bind::bound(&mut self.values)).opened(Bind::bound(&mut self.open)).show(ui).hosted()
+        let shown = (self.build)(Bind::bound(&mut self.values)).opened(Bind::bound(&mut self.open)).show(ui);
+        #[cfg(feature = "testing")]
+        {
+            self.facts = crate::contract::Outcome::story_facts(&shown);
+        }
+        shown.hosted()
     }
 
     fn key(&self) -> Option<&str> {
         Some(KEY)
+    }
+
+    #[cfg(feature = "testing")]
+    fn story_facts(&self) -> crate::testing::StoryOutput {
+        self.facts.clone()
     }
 }
