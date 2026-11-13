@@ -1455,6 +1455,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-file-formats"
+version = "0.1.0"
+dependencies = [
+ "craft-eps",
+]
+
+[[package]]
 name = "craft-flags"
 version = "0.1.0"
 dependencies = [
