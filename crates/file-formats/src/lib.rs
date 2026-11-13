@@ -201,7 +201,7 @@ impl Format {
             Self::Dicom => &["dcm", "dicom", "dc3"],
             Self::Iff => &["iff", "lbm", "ilbm"],
             Self::Ase => &["ase"],
-            Self::Psd => &["psd", "psb"],
+            Self::Psd => &["psd", "psb", "psdt"],
             Self::Affinity => &["afdesign", "afphoto", "afpub"],
             Self::Ora => &["ora"],
             Self::Kra => &["kra"],
@@ -416,6 +416,20 @@ impl Format {
 /// Resolve a name and file bytes to a format. Strong signatures take precedence over
 /// extension hints. Only format-specific bounded probes and extension tables live here.
 pub fn detect(name: &str, bytes: &[u8]) -> Option<Format> {
+    // Container identifiers are stronger than generic ZIP signatures and filenames. The shared
+    // readers own their bounded, format-specific directory/mimetype probes.
+    #[cfg(feature = "pcraft")]
+    if craft_pcraft_bundle::is_pcraft_zip(bytes) {
+        return Some(Format::Pcraft);
+    }
+    #[cfg(feature = "ora")]
+    if craft_ora::is_ora(bytes) {
+        return Some(Format::Ora);
+    }
+    #[cfg(feature = "kra")]
+    if craft_kra::is_kra(bytes) {
+        return Some(Format::Kra);
+    }
     if craft_idml::is_idml(bytes) {
         return Some(Format::Idml);
     }
@@ -447,6 +461,13 @@ pub fn detect(name: &str, bytes: &[u8]) -> Option<Format> {
     }
     if bytes.starts_with(b"gimp xcf ") || gzipped_xcf(name, bytes) {
         return Some(Format::Xcf);
+    }
+    // Several camera formats use TIFF containers. Ask the shared RAW parser before the generic
+    // raster signature so TIFF-based RAW files reach the RAW adapter, while ordinary TIFF files
+    // retain the raster classification.
+    #[cfg(feature = "raw")]
+    if craft_raw::probe(bytes).is_some() {
+        return Some(Format::Raw);
     }
     if bytes.starts_with(b"\0\xffKA") {
         return Some(Format::Affinity);
