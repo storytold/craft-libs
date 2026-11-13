@@ -257,6 +257,8 @@ mod tests {
         let mut archive = Archive::open(&bytes, ArchiveLimits { max_entries: 4, max_total_bytes: 128 }).unwrap();
         let mut budget = ReadBudget::new(10);
         assert_eq!(budget.read(&mut archive, "one", 16).unwrap(), b"12345678");
+        assert!(budget.exceeds_remaining(&mut archive, "two"));
+        assert!(budget.exhausted_message().contains("contents together pass 10 bytes"));
         assert!(budget.read(&mut archive, "two", 16).unwrap_err().to_string().contains("contents together pass 10 bytes"));
 
         let mut member_budget = ReadBudget::new(100);
@@ -612,6 +614,16 @@ impl ReadBudget {
             0 => format!("too large: the file's contents together pass {} bytes", self.total),
             mb => format!("too large: the file's contents together pass {mb} MB"),
         }
+    }
+
+    /// Whether the member's declared uncompressed size exceeds what remains in this budget.
+    pub fn exceeds_remaining(&self, archive: &mut impl NativeArchive, name: &str) -> bool {
+        archive.declared_size(name).is_some_and(|size| size > self.left)
+    }
+
+    /// Human-readable reason for leaving out a member after the archive-wide limit is spent.
+    pub fn exhausted_message(&self) -> String {
+        self.passed()
     }
 
     /// Read one native member within its own size limit and the remaining archive-wide budget.
