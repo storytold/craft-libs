@@ -16,6 +16,9 @@ const _: bool = backend::CRAFT_OPTIONAL_CONTENT;
 
 pub mod print;
 
+#[cfg(feature = "write-raster")]
+pub mod raster;
+
 use backend::configure::{Archival, Configuration, ConfigurationBuilder, ConfigurationError, PdfVersion};
 use backend::text::{Font, Tag};
 
