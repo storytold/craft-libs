@@ -188,3 +188,60 @@ mod archive_tests {
         assert!(small_total.read("document.json", 100).is_err());
     }
 }
+
+/// A native archive writer that keeps the streaming document serializer out of the consumer.
+pub struct ArchiveWriter {
+    inner: craft_zip::Writer,
+}
+
+impl ArchiveWriter {
+    pub fn new() -> Self {
+        Self { inner: craft_zip::Writer::new() }
+    }
+
+    pub fn add(&mut self, name: &str, bytes: &[u8], compression: craft_zip::Compression) -> Result<(), craft_zip::Error> {
+        self.inner.add(name, bytes, compression)
+    }
+
+    pub fn add_document_json<D: Serialize>(&mut self, name: &str, document: &D, images: &[ImageIndexEntry]) -> Result<(), ArchiveWriteError> {
+        self.inner
+            .add_with(name, craft_zip::Compression::Level(3), |w| write_document_json(document, images, w).map_err(std::io::Error::other))
+            .map_err(ArchiveWriteError::Archive)
+    }
+
+    pub fn finish(self) -> Result<Vec<u8>, craft_zip::Error> {
+        self.inner.finish()
+    }
+}
+
+impl Default for ArchiveWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ArchiveWriteError {
+    #[error("could not serialize native document JSON: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("could not write native archive: {0}")]
+    Archive(#[from] craft_zip::Error),
+}
+
+#[cfg(test)]
+mod streaming_writer_tests {
+    use super::*;
+
+    #[test]
+    fn native_writer_streams_flat_document_into_archive() {
+        let document = serde_json::json!({"name":"streamed"});
+        let mut writer = ArchiveWriter::new();
+        writer.add_document_json("document.json", &document, &[]).unwrap();
+        let bytes = writer.finish().unwrap();
+        let mut archive = Archive::open(&bytes, ArchiveLimits { max_entries: 4, max_total_bytes: 4096 }).unwrap();
+        let json = archive.read("document.json", 1024).unwrap().unwrap();
+        let value: Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(value["name"], "streamed");
+        assert_eq!(value["format"], FORMAT);
+    }
+}
