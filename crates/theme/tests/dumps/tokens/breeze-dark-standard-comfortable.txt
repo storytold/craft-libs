@@ -114,6 +114,7 @@ shape.radius.pill = 999
 shape.edge = flat
 shape.rows = rounded
 shape.knob = round
+shape.wells = round
 space.gap.tight = 3
 space.gap.inline = 6
 space.gap.row = 6

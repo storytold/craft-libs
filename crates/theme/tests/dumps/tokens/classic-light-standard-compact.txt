@@ -114,6 +114,7 @@ shape.radius.pill = 0
 shape.edge = bevel #ffffffff #404040ff 1
 shape.rows = rounded
 shape.knob = tab
+shape.wells = square
 space.gap.tight = 2
 space.gap.inline = 4
 space.gap.row = 4
