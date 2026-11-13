@@ -136,6 +136,12 @@ pub enum ParamKind {
         /// The most digits shown after the decimal mark; 0 for an integer.
         decimals: u32,
     },
+    /// Read-only text the user can select and copy: see [`Param::read_only_text`]. It has no value.
+    #[non_exhaustive]
+    ReadOnlyText {
+        /// The text shown; line breaks start new lines.
+        text: Label,
+    },
     /// A row the host draws: see [`Param::custom`]. It has no value of its own.
     Custom(CustomRow),
     /// A section heading over the rows that follow it: see [`Param::section`]. It has no value.
@@ -239,7 +245,7 @@ impl ParamKind {
             ParamKind::Channel { default, .. } => FieldValue::Int(i64::try_from(*default).unwrap_or(0)),
             ParamKind::Text { default } => FieldValue::Text(default.clone()),
             ParamKind::OptionalNumber { default, .. } => FieldValue::Number((*default)?),
-            ParamKind::Custom(_) | ParamKind::Section => return None,
+            ParamKind::ReadOnlyText { .. } | ParamKind::Custom(_) | ParamKind::Section => return None,
         })
     }
 
@@ -364,6 +370,8 @@ pub(crate) struct RowOptions {
     eyedropper_armed: bool,
     full_width: bool,
     not_remembered: bool,
+    /// The lines a multi-line text row shows.
+    lines: Option<usize>,
     units: Option<UnitChoices>,
 }
 
@@ -447,6 +455,13 @@ impl Param {
         draw: impl Fn(&mut Ui, &mut DialogFields, &mut CustomContext) -> Response + Send + Sync + 'static,
     ) -> Self {
         Self::new(key, label, ParamKind::Custom(CustomRow::new(draw)))
+    }
+
+    /// A row of read-only `text` beside the label, wrapped to the form's width: the user can select and copy it, and
+    /// Tab passes over it. It has no value, so nothing is remembered or in the result. With
+    /// [`full_width`](Param::full_width) it has no label and spans the form (a note over the rows).
+    pub fn read_only_text(key: impl Into<String>, label: impl Into<Label>, text: impl Into<Label>) -> Self {
+        Self::new(key, label, ParamKind::ReadOnlyText { text: text.into() })
     }
 
     /// A section heading: the label as the title of a section whose body is the rows that follow, up to the next
@@ -563,10 +578,19 @@ impl Param {
         self
     }
 
-    /// For a [`Param::custom`] row: no label, and the body spans the width of the form; other kinds are unchanged.
+    /// For a [`Param::custom`] or [`Param::read_only_text`] row: no label, and the body spans the width of the form;
+    /// other kinds are unchanged.
     #[must_use]
     pub fn full_width(mut self) -> Self {
         self.options.get_or_insert_default().full_width = true;
+        self
+    }
+
+    /// A [`ParamKind::Text`] row without a Browse button edits multi-line text in a field `lines` lines tall: Enter
+    /// inserts a line break and the dialog's default button leaves it to the field. Other kinds are unchanged.
+    #[must_use]
+    pub fn multiline(mut self, lines: usize) -> Self {
+        self.options.get_or_insert_default().lines = Some(lines);
         self
     }
 
@@ -669,6 +693,11 @@ impl RowOptions {
     /// Whether a custom row spans the width of the form.
     pub(crate) fn full_width(&self) -> bool {
         self.full_width
+    }
+
+    /// The lines of a multi-line text row; `None` for a single line.
+    pub(crate) fn lines(&self) -> Option<usize> {
+        self.lines
     }
 
     /// The units of a number row.

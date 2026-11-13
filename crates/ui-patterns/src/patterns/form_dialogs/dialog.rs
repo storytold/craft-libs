@@ -26,7 +26,7 @@ use crate::runtime::words::CommonWords;
 use crate::sections::{DialogRole, FooterButton};
 
 use egui::load::SizedTexture;
-use egui::{Context, Response, Ui};
+use egui::{Context, Pos2, Response, Ui};
 use serde_json::Value;
 
 use std::borrow::Cow;
@@ -102,6 +102,9 @@ pub struct ParamDialogOutput {
     /// Whether the Preview check box is on and held: the host shows the unfiltered picture in the preview pane while
     /// it is.
     pub comparing: bool,
+    /// The point of the preview picture a click landed on this pass (`PreviewOutput::clicked`): an eyedropper on the
+    /// preview samples there.
+    pub preview_click: Option<Pos2>,
 }
 
 impl Outcome for ParamDialogOutput {
@@ -176,6 +179,10 @@ pub struct ParamDialog<'a> {
     /// The picture the preview pane shows; without one the dialog has no preview.
     #[prop]
     preview: Option<SizedTexture>,
+    /// Whether a click on the preview centres it on the point clicked (`PreviewPane::click_centres`); a dialog whose
+    /// preview clicks pick a colour turns it off. The default is true.
+    #[prop]
+    click_centres: bool,
     /// Controls before the buttons in the footer (Color Table's Load and Save).
     #[prop(func = "FnMut(&mut Ui)")]
     footer_extra: Option<FooterExtra<'a>>,
@@ -237,6 +244,7 @@ impl<'a> ParamDialog<'a> {
             layout: ParamLayout::default(),
             closable: true,
             preview: None,
+            click_centres: true,
             footer_extra: None,
             below: None,
             shaped: None,
@@ -326,6 +334,7 @@ impl<'a> ParamDialog<'a> {
             layout,
             closable,
             preview,
+            click_centres,
             footer_extra,
             below,
             shaped,
@@ -377,6 +386,7 @@ impl<'a> ParamDialog<'a> {
 
         let mut live = Live::default();
         let mut rows = None;
+        let mut preview_click = None;
         let shown = form.show(ui, |ui, cx, values| {
             if cx.first() && !values_opened {
                 let saved = remember.as_ref().and_then(|key| cx.saved::<Option<DialogFields>>(key).clone());
@@ -396,13 +406,13 @@ impl<'a> ParamDialog<'a> {
                 (Some(texture), ParamLayout::Beside) => {
                     Row::new().show(ui, |ui, _| {
                         show_rows(ui, values);
-                        Stack::new().show(ui, |ui, _| show_preview(ui, &preview_label, texture, &mut live));
+                        Stack::new().show(ui, |ui, _| preview_click = show_preview(ui, &preview_label, texture, click_centres, &mut live));
                     });
                 }
                 (Some(texture), ParamLayout::Below) => {
                     Stack::new().show(ui, |ui, _| {
                         show_rows(ui, values);
-                        show_preview(ui, &preview_label, texture, &mut live);
+                        preview_click = show_preview(ui, &preview_label, texture, click_centres, &mut live);
                     });
                 }
                 (None, _) => show_rows(ui, values),
@@ -423,6 +433,7 @@ impl<'a> ParamDialog<'a> {
             values: shown.value,
             preview_on: shown.preview_on,
             comparing: shown.comparing,
+            preview_click,
         }
     }
 }
@@ -557,11 +568,12 @@ impl ResetFooter {
     }
 }
 
-/// The zoom row and the pane.
-fn show_preview(ui: &mut Ui, label: &Label, texture: &SizedTexture, live: &mut Live) {
+/// The zoom row and the pane; returns the picture point a click landed on.
+fn show_preview(ui: &mut Ui, label: &Label, texture: &SizedTexture, click_centres: bool, live: &mut Live) -> Option<Pos2> {
     let zoom = PreviewZoom::new(&live.view).show(ui);
-    let pane = PreviewPane::new(label.clone(), *texture, &live.view).show(ui);
+    let pane = PreviewPane::new(label.clone(), *texture, &live.view).click_centres(click_centres).show(ui);
     live.view = zoom.view.or(pane.view).unwrap_or(pane.shown);
+    pane.clicked
 }
 
 /// Builds the dialog over the host-owned values of a [`HostedParamDialog`] for one pass.
@@ -638,6 +650,11 @@ impl HostedParamDialog {
         self.requests.take_path()
     }
 
+    /// The point of the preview picture the last click landed on (`ParamDialogOutput::preview_click`), once.
+    pub fn take_preview_click(&mut self) -> Option<Pos2> {
+        self.requests.take_preview_click()
+    }
+
     /// Answers the colour request `key`: the dialog writes the colour into its values in its next pass.
     pub fn answer_color(&mut self, key: impl Into<String>, color: craft_theme::Srgba) {
         self.requests.answer_color(key, color);
@@ -682,7 +699,7 @@ fn read_value(kind: &ParamKind, value: Value) -> Option<FieldValue> {
         ParamKind::Color { .. } => FieldValue::Color(serde_json::from_value(value).ok()?),
         ParamKind::Point { .. } => FieldValue::Point(serde_json::from_value(value).ok()?),
         ParamKind::Grid { .. } => FieldValue::Grid(serde_json::from_value(value).ok()?),
-        ParamKind::Custom(_) | ParamKind::Section => return None,
+        ParamKind::ReadOnlyText { .. } | ParamKind::Custom(_) | ParamKind::Section => return None,
     })
 }
 
@@ -699,6 +716,9 @@ impl StackDialog for HostedParamDialog {
         let shown = (self.build)(&mut self.fields).values_opened().answers(answers).show(ui);
         if let Some(mut rows) = shown.rows {
             self.requests.absorb(&mut rows);
+        }
+        if let Some(point) = shown.preview_click {
+            self.requests.request_preview_click(point);
         }
         match (shown.result, shown.closed) {
             (Some(result), _) => Some(DialogResult::Ok(result)),

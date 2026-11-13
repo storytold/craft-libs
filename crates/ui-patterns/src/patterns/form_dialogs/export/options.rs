@@ -4,7 +4,6 @@
 
 use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
 use crate::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
-use crate::display::Text;
 use crate::form::Field;
 use crate::layout_components::{Row, Stack};
 use crate::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamResult};
@@ -438,11 +437,7 @@ fn params(words: &FormatOptionsWords, start: FormatOptions) -> Vec<Param> {
     match start {
         FormatOptions::Jpeg(options) => jpeg_params(words, options),
         FormatOptions::Tiff(options) => vec![
-            Param::custom("note", words.layers_note.clone(), {
-                let note = words.layers_note.clone();
-                move |ui, _, _| Text::new(note.clone()).show(ui)
-            })
-            .full_width(),
+            Param::read_only_text("note", words.layers_note.clone(), words.layers_note.clone()).full_width(),
             Param::new(DISCARD, words.discard_layers.clone(), ParamKind::bool(options.discard_layers)),
             Param::new(DONT_SHOW, words.dont_show.clone(), ParamKind::bool(options.dont_show_again)),
         ],

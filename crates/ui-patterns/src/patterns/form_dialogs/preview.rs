@@ -16,7 +16,7 @@ use crate::style::{ComponentStyle, FocusLook, StyleCx};
 use crate::text::NumberField;
 use craft_behavior::{AccessAction, AccessData, CanvasTransform, CursorIcon, CursorPriority, IconId, Metrics, NavMove, PartKey, PressPhase, Sense};
 use egui::load::SizedTexture;
-use egui::{Rect, Response, Ui, Vec2, pos2};
+use egui::{Pos2, Rect, Response, Ui, Vec2, pos2};
 use std::ops::RangeInclusive;
 
 #[cfg(feature = "testing")]
@@ -202,6 +202,10 @@ pub struct PreviewOutput {
     /// The well took the second press of a double click this pass. The pane returns to fit on it; a caller may
     /// also act on it (open the picture larger, say).
     pub double_clicked: bool,
+    /// The point of the picture a single click landed on this pass, in the picture's own units (its pixels when the
+    /// texture's size is its pixel size) from its top-left corner; `None` when there was no click or it missed the
+    /// picture. It is reported whether or not the click centres the view: an eyedropper or a locator reads it.
+    pub clicked: Option<Pos2>,
 }
 
 impl Outcome for PreviewOutput {
@@ -219,6 +223,7 @@ impl Outcome for PreviewOutput {
 ///   wheel pans where the picture overflows the well and Ctrl or Cmd with the wheel zooms about the pointer, so the
 ///   point under it stays. On an axis where the picture fits the well the wheel does not scroll the pane, so the
 ///   scroll region around it takes it; zoom is always the pane's.
+/// - A click reports the picture point under it in `PreviewOutput::clicked`, centring or not.
 /// - While the [`PreviewView`] is `fit` the zoom is the one that shows the whole picture in the well, recomputed when
 ///   the well changes. A pan or zoom leaves fit and a double click returns to it.
 /// - The pane keeps no view: it shows the one given and reports the next in `PreviewOutput::view`. `PreviewZoom`
@@ -243,6 +248,8 @@ pub struct PreviewPane<'a> {
     moved: Option<PreviewView>,
     /// The well took the second press of a double click this pass.
     double_clicked: bool,
+    /// The picture point a single click landed on this pass.
+    clicked: Option<Pos2>,
     /// The host's drawing over the picture of a `Ready` pane.
     #[prop(func = "FnOnce(&ContentPainterCx, CanvasTransform, Rect)")]
     overlay: Option<PaneOverlay<'a>>,
@@ -271,6 +278,7 @@ impl PreviewPane<'_> {
             aspect: None,
             moved: None,
             double_clicked: false,
+            clicked: None,
             overlay: None,
             overflow: (false, false),
             fixed: view.fixed,
@@ -447,8 +455,13 @@ impl Component for PreviewPane<'_> {
                 refit = true;
                 self.double_clicked = true;
             }
-            PressPhase::Release { start, pos, click: true, .. } if self.click_centres && start.clicks < 2 => {
-                next.offset += well.center() - pos;
+            PressPhase::Release { start, pos, click: true, .. } if start.clicks < 2 => {
+                let point = (pos - well.center() - shown.offset) / shown.scale + texture.size / 2.0;
+                let on_picture = (0.0..=texture.size.x).contains(&point.x) && (0.0..=texture.size.y).contains(&point.y);
+                self.clicked = on_picture.then(|| point.to_pos2());
+                if self.click_centres {
+                    next.offset += well.center() - pos;
+                }
             }
             _ => {}
         }
@@ -548,7 +561,7 @@ impl Component for PreviewPane<'_> {
 
     fn finish(self, cx: Cx<'_, Self>) -> PreviewOutput {
         let shown = PreviewView { transform: self.shown(cx.rect.size()), ..self.view.clone() };
-        PreviewOutput { response: cx.response.clone(), view: self.moved, shown, double_clicked: self.double_clicked }
+        PreviewOutput { response: cx.response.clone(), view: self.moved, shown, double_clicked: self.double_clicked, clicked: self.clicked }
     }
 }
 

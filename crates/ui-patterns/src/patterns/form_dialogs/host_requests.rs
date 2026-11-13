@@ -3,6 +3,7 @@
 use super::rows::ParamRowsOutput;
 use crate::runtime::requests::{ColorRequest, EyedropperRequest, HostAnswer, PathRequest};
 use craft_theme::Srgba;
+use egui::Pos2;
 use std::path::PathBuf;
 
 /// A request to render a preview of `options`, numbered so the host's answer can be matched to the settings it was
@@ -23,14 +24,15 @@ impl<O> PreviewRequest<O> {
     }
 }
 
-/// The requests of parameter rows that the host answers: the colour picker, the file dialog and the eyedropper. A
-/// hosted dialog embeds one, feeds it each pass's rows with [`absorb`](HostRequests::absorb) and offers the
+/// The requests of parameter rows that the host answers: the colour picker, the file dialog and the eyedropper, and
+/// the click on a dialog's preview picture (an eyedropper there samples it). A hosted dialog embeds one, feeds it each pass's rows with [`absorb`](HostRequests::absorb) and offers the
 /// `take_*` methods to its host. A request stays until it is taken; a newer one of the same kind replaces it.
 #[derive(Clone, Debug, Default)]
 pub struct HostRequests {
     color: Option<ColorRequest>,
     path: Option<PathRequest>,
     eyedropper: Option<EyedropperRequest>,
+    preview_click: Option<Pos2>,
     answers: Vec<HostAnswer>,
 }
 
@@ -68,6 +70,11 @@ impl HostRequests {
         self.eyedropper = Some(request);
     }
 
+    /// Files a click on the preview picture at `point`, in the picture's units; it replaces one not taken yet.
+    pub fn request_preview_click(&mut self, point: Pos2) {
+        self.preview_click = Some(point);
+    }
+
     /// The colour parameter whose button was pressed, once.
     pub fn take_color(&mut self) -> Option<ColorRequest> {
         self.color.take()
@@ -81,6 +88,11 @@ impl HostRequests {
     /// The eyedropper toggle that was pressed, once.
     pub fn take_eyedropper(&mut self) -> Option<EyedropperRequest> {
         self.eyedropper.take()
+    }
+
+    /// The preview picture's point the last click landed on, once.
+    pub fn take_preview_click(&mut self) -> Option<Pos2> {
+        self.preview_click.take()
     }
 
     /// Answers the colour request `key` with `color`: the dialog writes it into its values in its next pass.
@@ -107,10 +119,11 @@ impl HostRequests {
 
     /// Moves the requests and answers of `other` in; its requests replace the ones not taken yet.
     pub fn extend(&mut self, other: HostRequests) {
-        let HostRequests { color, path, eyedropper, answers } = other;
+        let HostRequests { color, path, eyedropper, preview_click, answers } = other;
         self.color = color.or(self.color.take());
         self.path = path.or(self.path.take());
         self.eyedropper = eyedropper.or(self.eyedropper.take());
+        self.preview_click = preview_click.or(self.preview_click.take());
         self.answers.extend(answers);
     }
 

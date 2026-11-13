@@ -12,7 +12,8 @@ use egui::Ui;
 
 const SPEC: &str = r#"{"radius":0.1..1000=1,"method":"spin|zoom","smooth":bool,"seed":u32=0,"tint":color=#336699}"#;
 
-/// One row of every kind the rows show, a section, a row that waits for a check box and a row with a unit menu.
+/// One row of every kind the rows show, a section, a row that waits for a check box, a row with a unit menu, a
+/// multi-line text row and a section of read-only rows.
 fn params() -> Vec<Param> {
     let mut params = Param::parse_list(SPEC);
     params.push(Param::new("angle", "Angle", ParamKind::angle(30.0)));
@@ -35,6 +36,10 @@ fn params() -> Vec<Param> {
     params.push(Param::new("kernel", "Kernel", ParamKind::grid(9, 0)));
     params.push(Param::new("sharpen", "Sharpen", ParamKind::bool(false)));
     params.push(Param::new("amount", "Amount", ParamKind::range(0.0, 100.0, 50.0, Default::default())).enabled_when("sharpen", true));
+    params.push(Param::new("notes", "Notes", ParamKind::text("")).multiline(3));
+    params.push(Param::section("Camera Data"));
+    params.push(Param::read_only_text("make", "Make", "Canon"));
+    params.push(Param::read_only_text("exposure", "Exposure", "1/250 s at f/8"));
     params
 }
 

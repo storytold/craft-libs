@@ -20,7 +20,7 @@ use crate::pickers::{Select, UnitSelect};
 use crate::runtime::env::{Env, Label, UnitKind, Units, with_env};
 
 use crate::sections::{HeaderStrength, Section};
-use crate::text::{NumberField, TextField};
+use crate::text::{NumberField, SelectableText, TextField};
 
 use crate::value_drag::{AngleDial, PointPicker, SliderScale};
 
@@ -290,6 +290,7 @@ impl<'p> Pass<'p> {
             ParamKind::Channel { names, default } => self.channel(ui, &line, names, *default),
             ParamKind::Text { default } => self.text(ui, &line, default),
             ParamKind::OptionalNumber { min, max, initial, decimals, .. } => self.optional(ui, &line, *min..=*max, *initial, *decimals),
+            ParamKind::ReadOnlyText { text } => read_only_text(ui, &line, text),
             ParamKind::Custom(_) => self.custom(ui, &line),
             ParamKind::Section => {}
         }
@@ -563,6 +564,9 @@ impl<'p> Pass<'p> {
                 }
                 None => {
                     let mut field = TextField::new(line.name.clone(), Bind::given(value.clone())).id_salt("text");
+                    if let Some(lines) = line.param.option().lines() {
+                        field = field.lines(lines);
+                    }
                     if let Some(hint) = line.param.hint_text() {
                         field = field.placeholder(hint.clone());
                     }
@@ -615,6 +619,19 @@ impl<'p> Pass<'p> {
         if let Some(request) = context.take_request() {
             self.color = Some(request);
         }
+    }
+}
+
+/// Read-only text beside the row's label, or across the form for a full-width row.
+fn read_only_text(ui: &mut Ui, line: &Line<'_>, text: &Label) {
+    let shown = Env::of(ui).view().resolve(text);
+    let body = |ui: &mut Ui| {
+        SelectableText::new(line.name.clone(), shown.as_str()).multiline().show(ui);
+    };
+    if line.param.option().full_width() {
+        Row::new().id_salt(line.key).enabled(line.enabled).fill().show(ui, |ui, _| body(ui));
+    } else {
+        line.show(ui, body);
     }
 }
 

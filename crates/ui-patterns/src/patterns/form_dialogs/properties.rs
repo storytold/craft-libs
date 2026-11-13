@@ -10,7 +10,6 @@ use crate::runtime::overlay::CloseReason;
 use crate::runtime::words::CommonWords;
 use crate::sections::{DialogRole, FooterButton};
 use crate::tabs::{Tab, TabKind, TabStrip};
-use crate::text::SelectableText;
 use craft_behavior::{DisplayOrder, ItemSource, SelectionChange};
 use egui::{Response, Ui};
 use std::borrow::Cow;
@@ -77,19 +76,13 @@ impl PropertiesTab {
         PropertiesTab { title: title.into(), rows }
     }
 
-    /// The parameters the rows are: a read-only row draws its text, a heading is a section.
+    /// The parameters the rows are: a value is a read-only text row, a heading is a section.
     fn params(&self, at: usize) -> Vec<Param> {
         self.rows
             .iter()
             .enumerate()
             .map(|(row, entry)| match entry {
-                PropertyRow::Value { label, text } => {
-                    let (name, text) = (label.clone(), text.clone());
-                    Param::custom(format!("properties.{at}.{row}"), label.clone(), move |ui, _, _| {
-                        let shown = Env::of(ui).view().resolve(&text);
-                        SelectableText::new(name.clone(), shown.as_str()).multiline().show(ui)
-                    })
-                }
+                PropertyRow::Value { label, text } => Param::read_only_text(format!("properties.{at}.{row}"), label.clone(), text.clone()),
                 PropertyRow::Field(param) => (**param).clone(),
                 PropertyRow::Heading(label) => Param::section(label.clone()),
                 PropertyRow::Space => Param::custom(format!("properties.{at}.{row}"), Label::Empty, |ui, _, _| Text::new(Label::Empty).show(ui)),
