@@ -136,14 +136,29 @@ impl<'a> Iterator for ResourceIter<'a> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        // The smallest record has a four-byte signature, two-byte id, one-byte empty name
-        // (plus its pad), and four-byte data length. This bounds iteration even for a section
-        // containing millions of empty records, without imposing an arbitrary format limit.
-        (0, Some(self.reader.remaining() / 12))
+        // There can be at most one more item than the number of bytes: valid records consume
+        // bytes, and a malformed record or an exhausted caller limit can yield one final error
+        // without consuming any. Use a conservative bound so even a short truncated record has
+        // room for its error item.
+        let upper = if self.failed || self.reader.is_empty() { 0 } else { self.reader.remaining().saturating_add(1) };
+        (0, Some(upper))
     }
 }
 
 impl std::iter::FusedIterator for ResourceIter<'_> {}
+
+#[cfg(test)]
+mod view_tests {
+    use super::ResourceIter;
+
+    #[test]
+    fn truncated_resource_size_hint_includes_error_item() {
+        let mut iter = ResourceIter::new(b"JUNK");
+        assert!(iter.size_hint().1.unwrap() >= 1);
+        assert!(iter.next().unwrap().is_err());
+        assert_eq!(iter.size_hint(), (0, Some(0)));
+    }
+}
 
 /// Fixed-point resolution info (resource 1005).
 ///

@@ -241,6 +241,7 @@ mod tests {
         assert!(all.len() > 1);
         let mut limited = view.resources_limited(1);
         assert!(limited.next().unwrap().is_ok());
+        assert!(limited.size_hint().1.unwrap() >= 1, "limit error is included in the upper bound");
         assert!(limited.next().unwrap().is_err());
         assert!(limited.next().is_none());
     }
