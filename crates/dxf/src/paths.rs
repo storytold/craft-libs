@@ -128,6 +128,9 @@ fn estimated_elements(kind: &crate::model::EntityKind) -> usize {
             polyline_count(&vertices, poly.closed())
         }
         E::Ellipse { start, end, .. } => 1usize.saturating_add(arc_count(end - start)),
+        // `spline_path` already caps subdivision at MAX_SPLINE_ELEMENTS. Its actual output is
+        // checked against the drawing-wide budget after conversion.
+        E::Spline(_) => 0,
         _ => 0,
     }
 }
@@ -187,8 +190,186 @@ fn entity_paths(kind: &crate::model::EntityKind, normal: crate::model::Point) ->
         E::Ellipse { center, major, ratio, start, end } if ratio.is_finite() && *ratio > 0.0 => {
             vec![ellipse(*center, *major, normal, *ratio, *start, *end)]
         }
+        E::Spline(spline) => spline_path(spline).into_iter().collect(),
         _ => Vec::new(),
     }
+}
+
+const MAX_SPLINE_ELEMENTS: usize = 200_000;
+const SPLINE_TOLERANCE: f64 = 1e-6;
+const MAX_SPLINE_DEPTH: u32 = 12;
+const MAX_SPLINE_DEGREE: usize = 11;
+const MIN_RELATIVE_WEIGHT: f64 = 1e-100;
+
+#[derive(Clone, Copy)]
+struct Homogeneous {
+    x: f64,
+    y: f64,
+    w: f64,
+}
+
+impl Homogeneous {
+    fn lerp(self, other: Self, t: f64) -> Self {
+        let s = 1.0 - t;
+        Self { x: self.x * s + other.x * t, y: self.y * s + other.y * t, w: self.w * s + other.w * t }
+    }
+    fn point(self) -> Option<Point> {
+        (self.w.abs() > 1e-300).then(|| Point::new(self.x / self.w, self.y / self.w)).filter(|point| point.x.is_finite() && point.y.is_finite())
+    }
+}
+
+// Keep the NURBS conversion semantics of the previous importer: exact polynomial Bezier
+// spans through cubic degree, tolerance-bounded rational/high-degree spans, invalid-weight
+// fallback, and fit-point fallback when control data is malformed.
+fn spline_path(spline: &crate::model::Spline) -> Option<BezPath> {
+    let degree = usize::try_from(spline.degree).ok()?;
+    let points: Vec<Point> = spline.control.iter().map(|p| Point::new(p[0], p[1])).collect();
+    let weights = (spline.flags & 4 != 0 && spline.weights.len() == points.len()).then_some(spline.weights.as_slice());
+    nurbs(degree, &spline.knots, &points, weights)
+        .map(|mut path| {
+            if spline.flags & 1 != 0 {
+                path.close_path();
+            }
+            path
+        })
+        .or_else(|| through(&spline.fit.iter().map(|p| Point::new(p[0], p[1])).collect::<Vec<_>>(), spline.flags & 1 != 0))
+}
+
+fn nurbs(degree: usize, knots: &[f64], control: &[Point], weights: Option<&[f64]>) -> Option<BezPath> {
+    let n = control.len();
+    if !(1..=MAX_SPLINE_DEGREE).contains(&degree)
+        || n <= degree
+        || knots.len() != n + degree + 1
+        || knots.windows(2).any(|w| w[1] < w[0])
+        || control.iter().any(|p| !p.x.is_finite() || !p.y.is_finite())
+        || knots.iter().any(|k| !k.is_finite())
+    {
+        return None;
+    }
+    let raw = |i: usize| weights.and_then(|w| w.get(i)).copied().filter(|w| *w > 0.0 && w.is_finite()).unwrap_or(1.0);
+    let max_w = (0..n).map(raw).fold(0.0, f64::max);
+    if max_w == 0.0 {
+        return None;
+    }
+    let weight = |i: usize| (raw(i) / max_w).max(MIN_RELATIVE_WEIGHT);
+    let homogeneous: Vec<_> = control.iter().enumerate().map(|(i, p)| Homogeneous { x: p.x * weight(i), y: p.y * weight(i), w: weight(i) }).collect();
+    let rational = (0..n).any(|i| (weight(i) - weight(0)).abs() > 1e-12);
+    let (lo, hi) = control.iter().fold((Point::new(f64::MAX, f64::MAX), Point::new(f64::MIN, f64::MIN)), |(lo, hi), p| {
+        (Point::new(lo.x.min(p.x), lo.y.min(p.y)), Point::new(hi.x.max(p.x), hi.y.max(p.y)))
+    });
+    let tolerance = ((hi - lo).hypot() * SPLINE_TOLERANCE).max(1e-12);
+    let mut path = BezPath::new();
+    for span in degree..n {
+        let (Some(&t0), Some(&t1)) = (knots.get(span), knots.get(span + 1)) else { continue };
+        if t1 - t0 <= 1e-12 * (1.0 + t0.abs()) {
+            continue;
+        }
+        let bezier: Vec<Homogeneous> = (0..=degree)
+            .map(|j| {
+                let args: Vec<_> = (0..degree).map(|k| if k < degree - j { t0 } else { t1 }).collect();
+                blossom(degree, knots, &homogeneous, span, &args)
+            })
+            .collect::<Option<_>>()?;
+        if path.elements().is_empty() {
+            path.move_to(bezier.first()?.point()?);
+        }
+        let polynomial: Option<Vec<Point>> = if rational { None } else { bezier.iter().map(|p| p.point()).collect() };
+        match polynomial.as_deref() {
+            Some([_, p]) => path.line_to(*p),
+            Some([_, q, p]) => path.quad_to(*q, *p),
+            Some([_, a, b, p]) => path.curve_to(*a, *b, *p),
+            _ => fit_spline(&mut path, &bezier, 0.0, 1.0, tolerance, 0)?,
+        }
+        if path.elements().len() > MAX_SPLINE_ELEMENTS {
+            return None;
+        }
+    }
+    (path.elements().len() > 1).then_some(path)
+}
+
+fn blossom(degree: usize, knots: &[f64], control: &[Homogeneous], span: usize, args: &[f64]) -> Option<Homogeneous> {
+    let mut points = control.get(span - degree..=span)?.to_vec();
+    for r in 1..=degree {
+        let u = *args.get(r - 1)?;
+        for j in (r..=degree).rev() {
+            let i = span - degree + j;
+            let (a, b) = (*knots.get(i)?, *knots.get(i + degree + 1 - r)?);
+            let alpha = if b - a > 1e-300 { (u - a) / (b - a) } else { 0.0 };
+            let previous = *points.get(j - 1)?;
+            let current = points.get_mut(j)?;
+            *current = previous.lerp(*current, alpha);
+        }
+    }
+    points.get(degree).copied()
+}
+
+fn eval_spline_bezier(bezier: &[Homogeneous], t: f64) -> Option<(Point, kurbo::Vec2)> {
+    let mut points = bezier.to_vec();
+    let n = points.len().checked_sub(1)?;
+    for level in (1..=n).rev() {
+        if level == 1 {
+            let (a, b) = (*points.first()?, *points.get(1)?);
+            let p = a.lerp(b, t);
+            let point = p.point()?;
+            let k = n as f64;
+            let (dx, dy, dw) = (k * (b.x - a.x), k * (b.y - a.y), k * (b.w - a.w));
+            let w2 = p.w * p.w;
+            return Some((point, kurbo::Vec2::new((dx * p.w - p.x * dw) / w2, (dy * p.w - p.y * dw) / w2)));
+        }
+        for i in 0..level {
+            let next = *points.get(i + 1)?;
+            let current = points.get_mut(i)?;
+            *current = current.lerp(next, t);
+        }
+    }
+    Some((points.first()?.point()?, kurbo::Vec2::ZERO))
+}
+
+fn fit_spline(path: &mut BezPath, bezier: &[Homogeneous], t0: f64, t1: f64, tolerance: f64, depth: u32) -> Option<()> {
+    let (p0, d0) = eval_spline_bezier(bezier, t0)?;
+    let (p3, d3) = eval_spline_bezier(bezier, t1)?;
+    let h = (t1 - t0) / 3.0;
+    let (c1, c2) = (p0 + d0 * h, p3 - d3 * h);
+    if ![c1, c2].iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
+        path.line_to(p3);
+        return Some(());
+    }
+    let cubic = kurbo::CubicBez::new(p0, c1, c2, p3);
+    let close = (1..8).all(|i| {
+        let s = f64::from(i) / 8.0;
+        eval_spline_bezier(bezier, t0 + (t1 - t0) * s).is_some_and(|(p, _)| kurbo::ParamCurve::eval(&cubic, s).distance(p) <= tolerance)
+    });
+    if close || depth >= MAX_SPLINE_DEPTH || path.elements().len() >= MAX_SPLINE_ELEMENTS {
+        path.curve_to(c1, c2, p3);
+        return Some(());
+    }
+    let mid = (t0 + t1) / 2.0;
+    fit_spline(path, bezier, t0, mid, tolerance, depth + 1)?;
+    fit_spline(path, bezier, mid, t1, tolerance, depth + 1)
+}
+
+fn through(points: &[Point], closed: bool) -> Option<BezPath> {
+    let n = points.len();
+    let first = *points.first()?;
+    if n < 2 {
+        return None;
+    }
+    let at = |i: isize| {
+        let len = n as isize;
+        let j = if closed { i.rem_euclid(len) } else { i.clamp(0, len - 1) };
+        points.get(j as usize).copied().unwrap_or(first)
+    };
+    let mut path = BezPath::new();
+    path.move_to(first);
+    let segments = if closed { n } else { n - 1 };
+    for i in 0..segments as isize {
+        let (p0, p1, p2, p3) = (at(i - 1), at(i), at(i + 1), at(i + 2));
+        path.curve_to(p1 + (p2 - p0) / 6.0, p2 - (p3 - p1) / 6.0, p2);
+    }
+    if closed {
+        path.close_path();
+    }
+    Some(path)
 }
 
 fn map_ocs_path(path: BezPath, normal: crate::model::Point, z: f64) -> BezPath {
@@ -318,4 +499,79 @@ fn ellipse(center: crate::model::Point, major: crate::model::Point, normal: crat
 
 fn cross(a: crate::model::Point, b: crate::model::Point) -> crate::model::Point {
     [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+#[cfg(test)]
+mod spline_tests {
+    use super::*;
+    use crate::model::Spline;
+
+    fn cubic() -> Spline {
+        Spline {
+            degree: 3,
+            flags: 8,
+            knots: vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            control: vec![[0.0, 0.0, 0.0], [1.0, 2.0, 0.0], [2.0, 2.0, 0.0], [3.0, 0.0, 0.0]],
+            weights: Vec::new(),
+            fit: Vec::new(),
+            start_tangent: None,
+            end_tangent: None,
+            fit_tolerance: 0.0,
+        }
+    }
+
+    #[test]
+    fn spline_path_follows_clamped_control_curve_and_bounds_work() {
+        let path = spline_path(&cubic()).expect("valid cubic spline");
+        assert_eq!(path.elements().len(), 2);
+        assert!(matches!(path.elements()[0], kurbo::PathEl::MoveTo(p) if p == Point::new(0.0, 0.0)));
+        assert!(matches!(path.elements()[1], kurbo::PathEl::CurveTo(a, b, p)
+            if a == Point::new(1.0, 2.0) && b == Point::new(2.0, 2.0) && p == Point::new(3.0, 0.0)));
+        assert_eq!(estimated_elements(&crate::model::EntityKind::Spline(cubic())), 0);
+    }
+
+    #[test]
+    fn rational_closed_periodic_and_fit_point_splines_keep_compatibility() {
+        let mut rational = cubic();
+        rational.flags |= 4;
+        rational.weights = vec![1.0, 0.5, 0.5, 1.0];
+        let rational_path = spline_path(&rational).expect("rational spline");
+        assert!(rational_path.elements().iter().any(|el| matches!(el, kurbo::PathEl::CurveTo(..))));
+
+        let mut closed = cubic();
+        closed.flags |= 1;
+        assert!(matches!(spline_path(&closed).unwrap().elements().last(), Some(kurbo::PathEl::ClosePath)));
+        let mut periodic = cubic();
+        periodic.flags |= 2;
+        assert!(!matches!(spline_path(&periodic).unwrap().elements().last(), Some(kurbo::PathEl::ClosePath)));
+
+        let mut fit = cubic();
+        fit.knots.clear();
+        fit.fit = vec![[0.0, 0.0, 0.0], [1.0, 2.0, 0.0], [3.0, 0.0, 0.0]];
+        let path = spline_path(&fit).expect("fit-point fallback");
+        assert!(matches!(path.elements()[0], kurbo::PathEl::MoveTo(p) if p == Point::new(0.0,0.0)));
+        assert!(matches!(path.elements().last(), Some(kurbo::PathEl::CurveTo(_, _, p)) if *p == Point::new(3.0,0.0)));
+    }
+
+    #[test]
+    fn spline_path_rejects_malformed_knots_and_defaults_invalid_weights() {
+        let mut spline = cubic();
+        spline.knots[4] = f64::NAN;
+        assert!(spline_path(&spline).is_none());
+        let mut spline = cubic();
+        spline.flags |= 4;
+        spline.weights = vec![1.0, 0.0, 1.0, 1.0];
+        assert!(spline_path(&spline).is_some(), "invalid weights historically fall back to unit weights");
+    }
+
+    #[test]
+    fn ascii_document_import_keeps_spline_as_supported_geometry() {
+        let bytes = b"0\nSECTION\n2\nENTITIES\n0\nSPLINE\n8\n0\n70\n8\n71\n3\n72\n8\n73\n4\n40\n0\n40\n0\n40\n0\n40\n0\n40\n1\n40\n1\n40\n1\n40\n1\n10\n0\n20\n0\n10\n1\n20\n2\n10\n2\n20\n2\n10\n3\n20\n0\n0\nENDSEC\n0\nEOF\n";
+        let imported = import(bytes).expect("valid spline drawing");
+        assert_eq!(imported.paths.len(), 1);
+        assert!(imported.warnings.is_empty());
+        let bounds = imported.bounds.expect("spline bounds");
+        assert!((bounds.x0 - 0.0).abs() < 1e-12 && (bounds.x1 - 3.0).abs() < 1e-12);
+        assert!((bounds.y0 - 0.0).abs() < 1e-12 && (bounds.y1 - 1.5).abs() < 1e-12);
+    }
 }
