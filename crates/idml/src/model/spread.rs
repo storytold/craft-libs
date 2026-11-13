@@ -153,6 +153,9 @@ pub struct MarginPreference {
 }
 
 impl MarginPreference {
+    pub fn from_el(el: &El) -> Self {
+        Self { values: Values::of(el) }
+    }
     pub fn top(&self) -> Option<f64> {
         self.values.num("Top")
     }
