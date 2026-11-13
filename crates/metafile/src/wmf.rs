@@ -105,6 +105,15 @@ fn record(cv: &mut Canvas, func: u16, r: Bytes) {
         0x020C => xy16(r, 6).map(|p| cv.set_window_ext(p)),
         0x020D => xy16(r, 6).map(|p| cv.set_viewport_org(p)),
         0x020E => xy16(r, 6).map(|p| cv.set_viewport_ext(p)),
+        // OFFSETWINDOWORG and OFFSETVIEWPORTORG: yOffset, xOffset, added to the origin.
+        0x020F | 0x0211 => xy16(r, 6).map(|d| cv.offset_org(func == 0x020F, d)),
+        // SCALEWINDOWEXT and SCALEVIEWPORTEXT: yDenom, yNum, xDenom, xNum ([MS-WMF] 2.3.5). A
+        // sub-picture drawn into part of the frame halves the viewport this way (deckcraft#2069).
+        0x0410 | 0x0412 => (|| {
+            let [y_den, y_num, x_den, x_num] = [r.i16(6)?, r.i16(8)?, r.i16(10)?, r.i16(12)?].map(f64::from);
+            cv.scale_ext(func == 0x0410, (x_num, x_den), (y_num, y_den));
+            Some(())
+        })(),
         0x001E => {
             cv.save_dc();
             Some(())
