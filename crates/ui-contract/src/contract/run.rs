@@ -523,6 +523,8 @@ pub(crate) trait ErasedPass<'a> {
     fn sense(&self) -> Sense;
     /// The component's own sense.
     fn comp_sense(&self) -> Sense;
+    /// `Component::wheel_notch`.
+    fn wheel_notch(&self) -> craft_behavior::WheelNotch;
     /// Whether the component is bound, and whether its binding has a reset value.
     fn bound(&mut self) -> (bool, bool);
     fn paint_outset(&self, tokens: &crate::style::UiTokens) -> f32;
@@ -901,7 +903,8 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
         ShapeKind::Item => !own.intersects(Sense::WHEELS),
     };
     if !inert && registers {
-        steps::register_wheel(&ctx, id, rect, own, e.bound().0 && !facts.binds_view, env.wheel);
+        let sensed = craft_behavior::WheelTaker::for_sense(id, rect, own).map(|taker| taker.notch(e.wheel_notch()));
+        steps::register_wheel(&ctx, id, rect, sensed, e.bound().0 && !facts.binds_view, facts.text(), env.wheel);
     }
     // 8 sense
     p.trace.mark(Step::Sense);

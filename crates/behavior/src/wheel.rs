@@ -98,6 +98,9 @@ pub struct WheelTaker<O> {
     /// A zoom zone: a vertical wheel over it goes to the innermost enclosing open taker of the zoom share, with
     /// `Wheel::zooms` set. A zone that takes no axis itself never takes a share.
     pub zooms_view: bool,
+    /// A value field: while it holds key focus it takes the field's share of the wheel wherever the pointer is
+    /// (`split`).
+    pub field: bool,
 }
 
 /// The scroll left in a region, in points of wheel scroll: `positive` is what a wheel with positive `scroll` can
@@ -155,6 +158,7 @@ impl<O> WheelTaker<O> {
             notch: WheelNotch::DEFAULT,
             room: None,
             zooms_view: false,
+            field: false,
         }
     }
 
@@ -175,6 +179,13 @@ impl<O> WheelTaker<O> {
     #[must_use]
     pub const fn zooms_view(mut self, on: bool) -> Self {
         self.zooms_view = on;
+        self
+    }
+
+    /// Whether it is a value field (`WheelTaker::field`).
+    #[must_use]
+    pub const fn field(mut self, on: bool) -> Self {
+        self.field = on;
         self
     }
 
@@ -241,12 +252,63 @@ impl<O> WheelTaker<O> {
     }
 }
 
-/// The split rule: each axis of `wheel` goes to the innermost taker under `at` that takes it; a share no taker
+/// Who holds key focus, as the split reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[non_exhaustive]
+pub struct WheelFocus<O> {
+    /// The taker that holds key focus.
+    pub taker: Option<O>,
+    /// Key focus is in a text field the app drew itself, which reads its own wheel: its share goes to no taker.
+    pub app_field: bool,
+}
+
+impl<O> WheelFocus<O> {
+    /// Focus on `taker`, or on nothing that takes the wheel.
+    pub const fn new(taker: Option<O>) -> Self {
+        WheelFocus { taker, app_field: false }
+    }
+
+    /// The same focus, in a text field the app drew itself when `on`.
+    #[must_use]
+    pub const fn app_field(mut self, on: bool) -> Self {
+        self.app_field = on;
+        self
+    }
+}
+
+/// Whether `wheel` is a field's: a vertical scroll, or Shift's (which some devices send sideways), without Alt or
+/// Cmd/Ctrl, which stay the view's.
+fn for_field(wheel: &Wheel) -> bool {
+    let mods = wheel.mods;
+    !(mods.alt || mods.cmd || mods.ctrl) && (wheel.scroll.y != 0.0 || (mods.shift && wheel.scroll.x != 0.0))
+}
+
+/// The split rule. A focused field (a `WheelTaker::field` taker that holds `focus`, or an app's own text field) takes
+/// the field's share of the scroll wherever the pointer is: a vertical or Shift wheel without Alt or Cmd/Ctrl; an app's
+/// field reads it itself, so no taker gets it. The rest splits by position: each axis of `wheel` goes to the innermost
+/// taker under `at` that takes it; a share no taker
 /// takes, or that a scroll region at its end in that direction cannot move, passes to the next enclosing one. A gated taker takes no axis unless it is `focused` or
 /// `armed`. Shift turns a vertical wheel sideways when its vertical owner is a scroll region. When the innermost open
 /// taker under `at` for the vertical share is a zoom zone, the share goes to the innermost open zoom taker enclosing it,
 /// with `Wheel::zooms` set; without one the zone is passed over. Shares of one owner merge.
-pub fn split<O: Copy + PartialEq>(takers: &[WheelTaker<O>], at: Pos2, wheel: Wheel, focused: Option<O>, armed: Option<O>) -> Vec<(O, Wheel)> {
+pub fn split<O: Copy + PartialEq>(takers: &[WheelTaker<O>], at: Pos2, wheel: Wheel, focus: WheelFocus<O>, armed: Option<O>) -> Vec<(O, Wheel)> {
+    let field = focus.taker.filter(|focused| takers.iter().any(|taker| taker.field && taker.owner == *focused));
+    if (field.is_some() || focus.app_field) && wheel.scroll != Vec2::ZERO && for_field(&wheel) {
+        let mut shares = if wheel.zoom == 1.0 { Vec::new() } else { split_at(takers, at, Wheel { scroll: Vec2::ZERO, ..wheel }, focus.taker, armed) };
+        if let Some(owner) = field {
+            let scroll = Wheel { zoom: 1.0, ..wheel };
+            match shares.iter_mut().find(|(o, _)| *o == owner) {
+                Some((_, share)) => share.scroll += scroll.scroll,
+                None => shares.push((owner, scroll)),
+            }
+        }
+        return shares;
+    }
+    split_at(takers, at, wheel, focus.taker, armed)
+}
+
+/// The split by position.
+fn split_at<O: Copy + PartialEq>(takers: &[WheelTaker<O>], at: Pos2, wheel: Wheel, focused: Option<O>, armed: Option<O>) -> Vec<(O, Wheel)> {
     // Takers register outer first, so among equal areas the later one is the deeper (or the upper) and goes first.
     let mut under: Vec<&WheelTaker<O>> = takers.iter().rev().filter(|taker| taker.rect.contains(at)).collect();
     under.sort_by(|a, b| a.rect.area().total_cmp(&b.rect.area()));
@@ -308,9 +370,28 @@ mod tests {
         let outer = WheelTaker::new(1u8, rect(200.0)).vertical(true).scrolls(true).room(WheelRoom::new(Vec2::splat(50.0), Vec2::splat(50.0)));
         let inner = WheelTaker::new(2u8, rect(100.0)).vertical(true).scrolls(true).room(WheelRoom::new(Vec2::ZERO, Vec2::splat(30.0)));
         let at = pos2(10.0, 10.0);
-        let owner = |y| split(&[outer, inner], at, wheel(0.0, y), None, None).first().map(|(o, _)| *o);
+        let owner = |y| split(&[outer, inner], at, wheel(0.0, y), WheelFocus::new(None), None).first().map(|(o, _)| *o);
         assert_eq!(owner(7.0), Some(1), "no room toward positive: the outer takes it");
         assert_eq!(owner(-7.0), Some(2), "room toward negative: the inner keeps it");
+    }
+
+    #[test]
+    fn a_focused_field_takes_the_plain_wheel_wherever_the_pointer_is() {
+        let canvas = WheelTaker::new(1u8, rect(300.0)).horizontal(true).vertical(true).zoom(true);
+        let field = WheelTaker::new(2u8, Rect::from_min_size(pos2(400.0, 0.0), Vec2::splat(20.0))).vertical(true).gated(true).field(true);
+        let at = pos2(10.0, 10.0);
+        let owners =
+            |wheel: Wheel, focus: WheelFocus<u8>| split(&[canvas, field], at, wheel, focus, None).iter().map(|(o, _)| *o).collect::<Vec<_>>();
+        let focused = WheelFocus::new(Some(2));
+        assert_eq!(owners(wheel(0.0, 5.0), WheelFocus::new(None)), [1], "no focus: the canvas under the pointer");
+        assert_eq!(owners(wheel(0.0, 5.0), focused), [2], "the focused field, away from the pointer");
+        let alt = Wheel { mods: Mods::ALT, ..wheel(0.0, 5.0) };
+        let cmd = Wheel { mods: Mods::CMD, ..wheel(0.0, 5.0) };
+        assert_eq!(owners(alt, focused), [1], "Alt stays the view's");
+        assert_eq!(owners(cmd, focused), [1], "Cmd/Ctrl stays the view's");
+        assert_eq!(owners(wheel(5.0, 0.0), focused), [1], "a sideways swipe stays the view's");
+        assert_eq!(owners(wheel(0.0, 5.0), WheelFocus::new(None).app_field(true)), [] as [u8; 0], "an app's field reads its own");
+        assert_eq!(owners(alt, WheelFocus::new(None).app_field(true)), [1]);
     }
 
     #[test]
@@ -319,12 +400,12 @@ mod tests {
         let view = WheelTaker::new(2u8, rect(200.0)).horizontal(true).zoom(true);
         let zone = WheelTaker::new(3u8, rect(100.0)).zooms_view(true);
         let at = pos2(10.0, 10.0);
-        let shares = split(&[region, view, zone], at, wheel(0.0, 5.0), None, None);
+        let shares = split(&[region, view, zone], at, wheel(0.0, 5.0), WheelFocus::new(None), None);
         assert_eq!(shares.len(), 1);
         assert_eq!((shares[0].0, shares[0].1.scroll.y, shares[0].1.zooms), (2, 5.0, true), "the view zooms by the vertical share");
-        let shares = split(&[region, zone], at, wheel(0.0, 5.0), None, None);
+        let shares = split(&[region, zone], at, wheel(0.0, 5.0), WheelFocus::new(None), None);
         assert_eq!(shares.iter().map(|(o, w)| (*o, w.zooms)).collect::<Vec<_>>(), [(1, false)], "no zoom taker: the zone is passed over");
-        let shares = split(&[region, view, zone], at, wheel(4.0, 0.0), None, None);
+        let shares = split(&[region, view, zone], at, wheel(4.0, 0.0), WheelFocus::new(None), None);
         assert_eq!(shares.iter().map(|(o, w)| (*o, w.zooms)).collect::<Vec<_>>(), [(2, false)], "the horizontal share passes the zone");
     }
 }

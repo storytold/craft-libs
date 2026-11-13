@@ -244,6 +244,10 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
         self.comp.sense()
     }
 
+    fn wheel_notch(&self) -> craft_behavior::WheelNotch {
+        self.comp.wheel_notch()
+    }
+
     fn bound(&mut self) -> (bool, bool) {
         self.comp.bind().map_or((false, false), |bind| (true, bind.reset_value().is_some()))
     }

@@ -3,12 +3,16 @@
 use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::{Axis, CanvasView, Wheel, WheelPhase, WheelUnit};
 use craft_keymap::{Mods, Platform};
-use craft_ui::canvas::{Canvas, Guide, GuideKey, Momentary, MomentaryCommands, MomentaryTool, NavigationOptions, TouchpadGlide};
+use craft_ui::canvas::{
+    Canvas, Guide, GuideKey, Momentary, MomentaryCommands, MomentaryTool, NavigationOptions, TouchpadGlide, ViewCommands, WheelNavigation,
+};
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::runtime::access::Role;
-use craft_ui::runtime::commands::FirePhase;
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::runtime::commands::{self, CommandRef, FirePhase, FireSource};
+use craft_ui::runtime::frame;
+use craft_ui::testing::{Fixture, pointer, trial};
+use craft_ui::text::NumberField;
 use egui::{Key, Modifiers, Vec2};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -161,4 +165,113 @@ fn at_a_whole_device_zoom_with_no_rotation_the_shown_view_puts_document_pixels_o
     assert_eq!(set.target(), moved, "the target follows the view set");
     let p = set.view.to_screen(Point::new(17.0, 29.0)) * set.pixels_per_point;
     assert!((p.x - p.x.round()).abs() < 1e-3 && (p.y - p.y.round()).abs() < 1e-3, "a view set at a whole zoom is shown aligned: {p:?}");
+}
+
+/// A canvas over a large document at zoom 1 below a framework number field and an app's own text field, on `os`: the
+/// fixture, the view it shows, the number and where the app's field is.
+fn wheel_rig(os: Platform) -> (Fixture, Rc<Cell<CanvasView>>, Rc<Cell<Option<f64>>>, Rc<Cell<egui::Rect>>) {
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+    let number = Rc::new(Cell::new(Some(10.0)));
+    let app_field = Rc::new(Cell::new(egui::Rect::NOTHING));
+    let (shown, value, field_at) = (Rc::clone(&view), Rc::clone(&number), Rc::clone(&app_field));
+    let mut text = String::from("Layer 1");
+    let mut fixture = Fixture::new(move |ui| {
+        let mut current = value.get();
+        NumberField::new("Smoothing", Bind::bound(&mut current)).show(ui);
+        value.set(current);
+        field_at.set(ui.add(egui::TextEdit::singleline(&mut text)).rect);
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).view(given).show(ui, |_, _| {});
+        shown.set(canvas.output.view.unwrap_or(given));
+    });
+    fixture.os(os);
+    // As an app that gives ⌘/Ctrl + wheel to the canvas sets egui: no wheel modifier is egui's own zoom.
+    fixture.ctx().options_mut(|options| options.input_options.zoom_modifier = Modifiers::NONE);
+    fixture.settle();
+    (fixture, view, number, app_field)
+}
+
+/// One wheel line of `dy` with `modifiers` over the middle of the canvas.
+fn wheel_line(fixture: &mut Fixture, view: &Cell<CanvasView>, dy: f32, modifiers: Modifiers) {
+    let at = view.get().rect.center();
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.frame(vec![egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: Vec2::new(0.0, dy),
+        phase: egui::TouchPhase::Move,
+        modifiers,
+        source: egui::MouseWheelSource::Wheel,
+    }]);
+}
+
+#[trial]
+fn a_wheel_line_pans_the_canvas_photoshops_line_and_ctrl_alt_zooms_as_alt_does() {
+    for os in [Platform::Mac, Platform::Windows, Platform::Linux] {
+        let (mut fixture, view, _, _) = wheel_rig(os);
+        let before = view.get();
+        wheel_line(&mut fixture, &view, -1.0, Modifiers::NONE);
+        let panned = view.get();
+        assert!((panned.center.y - before.center.y - f64::from(WheelNavigation::LINE)).abs() < 1e-3, "{os:?}: {before:?} -> {panned:?}");
+        wheel_line(&mut fixture, &view, 1.0, Modifiers::ALT);
+        let alt = view.get().zoom / panned.zoom;
+        assert!((alt - WheelNavigation::NOTCH).abs() < 1e-3, "{os:?}: Alt + a line zooms a notch: {alt}");
+        // egui reports Ctrl as `ctrl` with `command` off macOS, and the Control key as `ctrl` alone on macOS.
+        let ctrl_alt = if os.is_mac() {
+            Modifiers { alt: true, ctrl: true, ..Modifiers::NONE }
+        } else {
+            Modifiers { alt: true, ctrl: true, command: true, ..Modifiers::NONE }
+        };
+        let at = view.get();
+        wheel_line(&mut fixture, &view, 1.0, ctrl_alt);
+        assert!((view.get().zoom / at.zoom - WheelNavigation::NOTCH).abs() < 1e-3, "{os:?}: Ctrl + Alt zooms as Alt does");
+        if os.is_mac() {
+            let at = view.get();
+            wheel_line(&mut fixture, &view, 1.0, Modifiers { alt: true, mac_cmd: true, command: true, ..Modifiers::NONE });
+            assert_eq!(view.get().zoom, at.zoom, "⌘ + ⌥ is no zoom");
+        }
+    }
+}
+
+#[trial]
+fn a_focused_field_takes_the_plain_wheel_over_the_canvas_and_leaves_it_the_view_keys() {
+    let (mut fixture, view, number, _) = wheel_rig(Platform::Linux);
+    let field = fixture.by_label("Smoothing").expect("the number field");
+    fixture.click(&field);
+    let before = view.get();
+    wheel_line(&mut fixture, &view, 1.0, Modifiers::NONE);
+    assert_eq!(view.get(), before, "the canvas neither pans nor zooms");
+    assert_eq!(number.get(), Some(11.0), "the field stepped");
+    wheel_line(&mut fixture, &view, 1.0, Modifiers::ALT);
+    assert!(view.get().zoom > before.zoom, "Alt + wheel is still the view's zoom");
+    let zoomed = view.get();
+    wheel_line(&mut fixture, &view, 1.0, Modifiers::COMMAND);
+    assert!(view.get().center.x != zoomed.center.x, "Cmd/Ctrl + wheel still scrolls the view sideways");
+    assert_eq!(number.get(), Some(11.0), "the view's wheel does not step the field");
+
+    let (mut fixture, view, _, app_field) = wheel_rig(Platform::Linux);
+    fixture.click_at(app_field.get().center());
+    let before = view.get();
+    wheel_line(&mut fixture, &view, 1.0, Modifiers::NONE);
+    assert_eq!(view.get(), before, "an app's own focused text field keeps the plain wheel from the canvas");
+    wheel_line(&mut fixture, &view, 1.0, Modifiers::ALT);
+    assert!(view.get().zoom > before.zoom, "Alt + wheel is still the view's zoom");
+}
+
+#[trial]
+fn the_view_commands_a_canvas_runs_are_in_the_frame_output_whatever_fired_them() {
+    let (mut fixture, view, _, _) = wheel_rig(Platform::Linux);
+    let canvas = fixture.by_role(Role::CANVAS)[0];
+    fixture.click(&canvas);
+    frame::take_output(fixture.ctx());
+    let before = view.get();
+    fixture.key(Key::Num0, Modifiers::COMMAND);
+    assert!(commands::fire(fixture.ctx(), ViewCommands::ZoomIn, FireSource::Menu), "a menu row fires the canvas's command");
+    fixture.frame(vec![]);
+    assert_ne!(view.get(), before, "the canvas ran them");
+    let delivered: Vec<_> = frame::take_output(fixture.ctx()).delivered.into_iter().map(|fired| (fired.command, fired.source)).collect();
+    assert_eq!(
+        delivered,
+        [(CommandRef::from(ViewCommands::FitOnScreen), FireSource::Key), (CommandRef::from(ViewCommands::ZoomIn), FireSource::Menu)]
+    );
 }

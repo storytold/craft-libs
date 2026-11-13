@@ -406,7 +406,8 @@ impl Component for Navigator<'_> {
             && !running
         {
             let options = NavigationOptions { zoom_with_wheel: true, ..self.navigation };
-            let action = cx.memory::<WheelNavigation>().read(&wheel, &options);
+            let (line, os) = (craft_behavior::WheelNotch::DEFAULT.points(0.0), cx.env.shell().os);
+            let action = cx.memory::<WheelNavigation>().read(&wheel, line, os, &options);
             if let Some(action @ (WheelAction::Zoom(_) | WheelAction::SnapZoom(_))) = action {
                 let before = next;
                 WheelNavigation::apply(&mut next, action, before.rect.center(), document, ppp);

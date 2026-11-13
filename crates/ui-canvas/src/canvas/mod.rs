@@ -110,6 +110,7 @@ use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{
     CanvasTransform, CanvasView, EditEvent, HitLevel, HitPriority, Intent, Metrics, Mixed, PartKey, PointerButton, PressPhase, PressState, Sense,
+    WheelNotch,
 };
 use egui::{Pos2, Rect, Response, Vec2};
 use zoom_motion::{Steer, ViewMotion};
@@ -336,7 +337,7 @@ impl<'a> Canvas<'a> {
         }
         let mut jumped = false;
         if let Some(wheel) = cx.take_wheel()
-            && let Some(action) = motion.wheel.read(&wheel, &self.navigation)
+            && let Some(action) = motion.wheel.read(&wheel, WheelNavigation::LINE, cx.env.shell().os, &self.navigation)
         {
             let at = cx.response.hover_pos().unwrap_or_else(|| view.rect.center());
             jumped |= WheelNavigation::apply(&mut view, action, at, size, pixels_per_point);
@@ -508,6 +509,10 @@ impl Component for Canvas<'_> {
 
     fn sense(&self) -> Sense {
         Sense::FOCUS | Sense::TAKE_FOCUS | Sense::WHEEL
+    }
+
+    fn wheel_notch(&self) -> WheelNotch {
+        WheelNotch::Points(WheelNavigation::LINE)
     }
 
     /// The view of this pass, kept for the body and `finish`.

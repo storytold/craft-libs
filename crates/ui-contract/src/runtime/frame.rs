@@ -92,6 +92,9 @@ pub enum OuterEdit {
 pub struct FrameOutput {
     /// The app-scope commands fired since the last call, in order.
     pub fired: Vec<Fired>,
+    /// The commands components took since the last call, in order, whatever fired them (a key, a menu row, the
+    /// palette): what ran inside the framework, for an app that records the commands it runs (an action recorder).
+    pub delivered: Vec<Fired>,
     /// Text for the live announcement region.
     pub announcements: Vec<String>,
     /// The chrome toggles the windows asked for since the last call, in order: each names its viewport and whether the
@@ -335,6 +338,7 @@ pub(crate) fn in_pass(ctx: &Context) -> bool {
 pub fn take_output(ctx: &Context) -> FrameOutput {
     let mut output = pass_state::with::<FrameState, _>(ctx, |state| std::mem::take(&mut state.output));
     output.fired = commands::take_fired(ctx);
+    output.delivered = commands::take_delivered(ctx);
     // The menu, palette and automation fires of the chrome and nav commands reach the app as ordinary fires with no
     // window: the focused window's shell takes a toggle, and its focus service a pane move, in the next pass. A key fire
     // already acted in the key stage.

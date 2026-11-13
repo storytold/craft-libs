@@ -3,22 +3,29 @@
 use crate::runtime::env::WheelScope;
 use crate::runtime::wheel;
 use crate::style::{Flags, StateSet};
-use craft_behavior::Sense;
 use craft_theme::{State, StateMix};
 use egui::{Context, Id, Rect};
 
-/// Registers a wheel taker for next pass's split (8.6) from the wheel bits of `sense` (`WheelTaker::for_sense`). A
+/// Registers a wheel taker for next pass's split (8.6): `sensed`, the taker the wheel bits of the component's sense
+/// make (`WheelTaker::for_sense`). A value control with a text part is a field (`WheelTaker::field`). A
 /// value control takes the wheel only while focused or armed, on the axes it senses (the vertical one when it senses
 /// none); inside a `WheelScope::Free` scope one that senses the wheel takes it without focus. Inside a
 /// `WheelScope::Gated` scope every taker waits for focus or arming. A zoom zone that takes no axis itself waits only
 /// for a gated scope: its wheel goes to the view around it.
-pub(crate) fn register_wheel(ctx: &Context, id: Id, rect: Rect, sense: Sense, value_control: bool, scope: WheelScope) {
-    let sensed = craft_behavior::WheelTaker::for_sense(id, rect, sense);
+pub(crate) fn register_wheel(
+    ctx: &Context,
+    id: Id,
+    rect: Rect,
+    sensed: Option<craft_behavior::WheelTaker<Id>>,
+    value_control: bool,
+    text: bool,
+    scope: WheelScope,
+) {
     let free = sensed.is_some() && scope == WheelScope::Free;
     let zone = sensed.is_some_and(|taker| taker.zooms_view && !(taker.horizontal || taker.vertical || taker.zoom));
     let taker = sensed.or_else(|| value_control.then(|| craft_behavior::WheelTaker::new(id, rect).vertical(true)));
     if let Some(taker) = taker {
-        wheel::register(ctx, taker.gated(scope == WheelScope::Gated || (value_control && !free && !zone)));
+        wheel::register(ctx, taker.field(value_control && text).gated(scope == WheelScope::Gated || (value_control && !free && !zone)));
     }
 }
 

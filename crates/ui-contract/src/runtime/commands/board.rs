@@ -74,6 +74,8 @@ pub(crate) struct Board {
     queue: Vec<Fired>,
     /// App-scope commands for the next `FrameOutput`.
     out: Vec<Fired>,
+    /// The commands instances took since the last `FrameOutput`, in order.
+    delivered: Vec<Fired>,
     instances: Vec<Instance>,
     /// The focused component of each viewport's last step 12 and the instances around it.
     chains: HashMap<ViewportId, (Id, CommandChain)>,
@@ -502,6 +504,11 @@ pub(crate) fn take_fired(ctx: &Context) -> Vec<Fired> {
     with(ctx, |board| std::mem::take(&mut board.out))
 }
 
+/// The commands instances took since the last call.
+pub(crate) fn take_delivered(ctx: &Context) -> Vec<Fired> {
+    with(ctx, |board| std::mem::take(&mut board.delivered))
+}
+
 /// Whether the component that holds key focus sits inside the instance `id`.
 #[doc(hidden)]
 pub fn focus_within(ctx: &Context, id: Id) -> bool {
@@ -776,13 +783,14 @@ pub(crate) fn take<S>(ctx: &Context, instance: Option<Id>, app: bool, from_ref: 
         return None;
     }
     with(ctx, |board| {
-        if app {
+        let fired = if app {
             let at = board.out.iter().position(|fired| from_ref(&fired.command).is_some())?;
-            let fired = board.out.remove(at);
-            return Some((from_ref(&fired.command)?, fired));
-        }
-        let at = board.queue.iter().position(|fired| fired.target == Some(instance) && from_ref(&fired.command).is_some())?;
-        let fired = board.queue.remove(at);
+            board.out.remove(at)
+        } else {
+            let at = board.queue.iter().position(|fired| fired.target == Some(instance) && from_ref(&fired.command).is_some())?;
+            board.queue.remove(at)
+        };
+        board.delivered.push(fired.clone());
         Some((from_ref(&fired.command)?, fired))
     })
 }

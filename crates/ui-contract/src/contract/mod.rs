@@ -408,6 +408,12 @@ pub trait Component: Meta + Sized {
         if Self::CANVAS_CONTROL { Sense::empty() } else { <Self::Shape as ShowShape>::DEFAULT_SENSE }
     }
 
+    /// The distance one wheel line scrolls the component when it senses the wheel itself: the service converts the
+    /// device's lines to points with it. A scroll region and a collection state theirs in their props.
+    fn wheel_notch(&self) -> craft_behavior::WheelNotch {
+        craft_behavior::WheelNotch::DEFAULT
+    }
+
     /// Named sub-rects: thumbs, chevrons, handles, segments and the roving groups over them.
     fn parts(&mut self, _rect: Rect, _cx: &mut PartsCx<'_, Self>) {}
 

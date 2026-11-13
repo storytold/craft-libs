@@ -8,7 +8,7 @@ use crate::runtime::frame::PerViewport;
 use crate::runtime::pointer;
 use crate::runtime::sampler;
 use craft_behavior::wheel::split;
-use craft_behavior::{PointerButton, PointerEvent, Wheel, WheelPhase, WheelTaker, WheelUnit};
+use craft_behavior::{PointerButton, PointerEvent, Wheel, WheelFocus, WheelPhase, WheelTaker, WheelUnit};
 use egui::{Context, Id, Pos2, Rect, Vec2};
 
 #[derive(Default)]
@@ -50,6 +50,8 @@ pub(crate) fn begin(ctx: &Context) {
     let frame = pass_pointer.frame.clone();
     let wheel_in = input::wheel_read(ctx, 1.0, 1.0);
     let focused = focus::focused_stop(ctx).map(|(owner, _)| owner);
+    // A text field the app drew itself holds key focus: it reads its own wheel.
+    let app_field = wheel_in.is_some() && focus::record(ctx, viewport).host_focus && ctx.text_edit_focused();
     let hover = pass_pointer.hover.or(frame.as_ref().and_then(|frame| frame.pos));
     let pressed_on = pass_pointer
         .events
@@ -89,7 +91,7 @@ pub(crate) fn begin(ctx: &Context) {
         }
         let share = Wheel::new(scroll, mods, unit, phase).zoom(frame.zoom).at(at);
         // The device's lines and pages become points of each taker: the notch is the scroll owner's to choose.
-        let shares = split(&state.last, at, share, focused, state.armed);
+        let shares = split(&state.last, at, share, WheelFocus::new(focused).app_field(app_field), state.armed);
         state.shares = shares
             .into_iter()
             .map(|(owner, mut share)| {

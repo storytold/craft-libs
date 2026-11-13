@@ -8,8 +8,8 @@
 use super::NavigationOptions;
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::Size;
-use craft_behavior::{CanvasView, Wheel, WheelNotch, ZoomLadder};
-use craft_keymap::Mods;
+use craft_behavior::{CanvasView, Wheel, WheelNotch, WheelUnit, ZoomLadder};
+use craft_keymap::{Mods, Platform};
 use egui::{Pos2, Vec2};
 
 /// What the wheel or a pinch does to the view this pass.
@@ -34,18 +34,19 @@ pub struct WheelInput {
     pub zoom: f32,
     /// The modifiers held.
     pub mods: Mods,
-    /// Points per wheel notch.
+    /// Points per zoom notch.
     pub notch: f32,
+    /// The OS, which decides where the Control key is among the modifiers.
+    pub os: Platform,
 }
 
 impl WheelInput {
-    /// The input of `wheel`, whose notch is the service's default distance.
-    pub fn of(wheel: &Wheel) -> Self {
-        let notch = match WheelNotch::DEFAULT {
-            WheelNotch::Points(points) => points,
-            _ => 1.0,
-        };
-        WheelInput { scroll: wheel.scroll, zoom: wheel.zoom, mods: wheel.mods, notch }
+    /// The input of `wheel` for a taker whose wheel line is `line` points, on `os`. A line is one zoom notch; a
+    /// device that scrolls in points zooms a notch every default line ([`WheelNotch::DEFAULT`]), whatever the taker's
+    /// line.
+    pub fn of(wheel: &Wheel, line: f32, os: Platform) -> Self {
+        let notch = if wheel.unit == WheelUnit::Line { line } else { WheelNotch::DEFAULT.points(0.0) };
+        WheelInput { scroll: wheel.scroll, zoom: wheel.zoom, mods: wheel.mods, notch, os }
     }
 
     /// The scroll along the wheel's axis whichever one the device reported it on (some systems send a modified wheel
@@ -58,7 +59,9 @@ impl WheelInput {
 /// Mouse wheel and trackpad navigation, as in Photoshop:
 ///
 /// - The wheel scrolls up and down; Shift or Cmd/Ctrl + wheel scrolls sideways.
-/// - Alt + wheel zooms about the pointer, 1.1 a notch; Shift + Alt + wheel steps the ladder.
+/// - Alt + wheel zooms about the pointer, 1.1 a notch; Shift + Alt + wheel steps the ladder. Alt with the Control
+///   key is the same zoom: on macOS Control may join it, elsewhere Ctrl (cmd) without Shift (production's #10488).
+/// - A wheel line pans the canvas [`WheelNavigation::LINE`] points.
 /// - Zoom with Scroll Wheel swaps them: the wheel zooms, Alt + wheel scrolls, Shift + wheel steps the ladder.
 /// - A trackpad pinch zooms about the pointer (Zoom with Trackpad Pinch).
 ///
@@ -72,12 +75,22 @@ impl WheelNavigation {
     /// The zoom factor of one wheel notch.
     pub const NOTCH: f64 = 1.1;
 
+    /// The points one wheel line pans the canvas: Photoshop's 16 (production's #12028).
+    pub const LINE: f32 = 16.0;
+
     /// The most ladder steps one pass takes.
     const MOST_STEPS: f32 = 10.0;
 
-    /// The view change for `wheel` under `options`, if any.
-    pub fn read(&mut self, wheel: &Wheel, options: &NavigationOptions) -> Option<WheelAction> {
-        self.classify(WheelInput::of(wheel), options)
+    /// The view change for `wheel`, given to a taker whose wheel line is `line` points, on `os`, under `options`, if
+    /// any.
+    pub fn read(&mut self, wheel: &Wheel, line: f32, os: Platform, options: &NavigationOptions) -> Option<WheelAction> {
+        self.classify(WheelInput::of(wheel, line, os), options)
+    }
+
+    /// Whether `mods` make the Alt zoom gesture on `os`: Alt, with the Control key allowed, which is `ctrl` on macOS
+    /// (⌘ keeps the wheel out of it) and `cmd` elsewhere, where Shift with it keeps the wheel a scroll.
+    fn alt_gesture(mods: Mods, os: Platform) -> bool {
+        mods.alt && (!mods.cmd || (!os.is_mac() && !mods.shift))
     }
 
     /// The view change for one pass of `input` under `options`, if any.
@@ -90,7 +103,7 @@ impl WheelNavigation {
         }
         let scroll_finite = input.scroll.x.is_finite() && input.scroll.y.is_finite();
         let plain = !input.mods.cmd && !input.mods.ctrl;
-        let zooms = plain && input.mods.alt != options.zoom_with_wheel;
+        let zooms = if options.zoom_with_wheel { plain && !input.mods.alt } else { Self::alt_gesture(input.mods, input.os) };
         if zooms && input.mods.shift {
             return scroll_finite.then(|| self.snap(input.along(), notch)).flatten().map(WheelAction::SnapZoom);
         }

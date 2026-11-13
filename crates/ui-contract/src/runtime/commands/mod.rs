@@ -24,7 +24,7 @@ pub(crate) use board::take as take_for_instance;
 #[doc(hidden)]
 pub use board::take_around;
 pub(crate) use board::{
-    begin, binds_scoped, edit_chords, end, install, note_focus, platform, register_instance, set_input, take_fired, window_shortcuts,
+    begin, binds_scoped, edit_chords, end, install, note_focus, platform, register_instance, set_input, take_delivered, take_fired, window_shortcuts,
 };
 pub(crate) use board::{fire_bound, fire_resolved, resolve_bound, resolve_scoped};
 
