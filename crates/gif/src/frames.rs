@@ -22,9 +22,10 @@ pub struct FrameLimits {
     pub max_bytes: u64,
     /// Largest canvas (logical screen) in bytes at 4 bytes a pixel. Default 512 MiB.
     pub max_canvas_bytes: u64,
-    /// Largest single decoder allocation. `None` uses twice `max_canvas_bytes`, matching the
-    /// decoder's working-buffer allowance. Set this when an application has a tighter allocator
-    /// budget. Default `None`.
+    /// Combined decoder working-allocation budget. The persistent canvas reserves budget before
+    /// the frame buffer. `None` uses twice `max_canvas_bytes`, matching the decoder's working
+    /// buffer allowance. Set this when an application has a tighter allocator budget. Default
+    /// `None`.
     pub max_decode_bytes: Option<u64>,
     /// Merge a frame identical to the one before into it (its delay added). Default off.
     pub merge_identical: bool,
