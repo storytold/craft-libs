@@ -2513,11 +2513,13 @@ Chapter 15: the `Overlay` data, its presets, popup handles, `OverlayUi` and the 
 - `craft_ui::contract::overlay::ViewportShare`: `pub struct ViewportShare { pub x: f32, pub y: f32 }`. A fraction of the viewport per axis.
   - `pub const fn new(x: f32, y: f32) -> Self`. A share of `x` of the width and `y` of the height.
 - `craft_ui::contract::overlay::any_open`: re-export of `craft_ui::runtime::overlay::any_open`.
+- `craft_ui::contract::overlay::close_beside_modal`: `pub fn close_beside_modal(ctx: &Context, id: Id)`. The modal the app drew with [`show_beside_modal`] as `id` closed: the layers opened from inside it close too.
 - `craft_ui::contract::overlay::close_popups`: re-export of `craft_ui::runtime::overlay::close_popups`.
 - `craft_ui::contract::overlay::family`: re-export of `craft_ui::runtime::overlay::family`.
 - `craft_ui::contract::overlay::is_open`: re-export of `craft_ui::runtime::overlay::is_open`.
 - `craft_ui::contract::overlay::paint_frame_layers`: `pub fn paint_frame_layers(ctx: &Context)`. Paints the ghost egui layer from runtime data: the drag preview and drop mark, and the painted cursor the cursor
 - `craft_ui::contract::overlay::request_close`: re-export of `craft_ui::runtime::overlay::request_close`.
+- `craft_ui::contract::overlay::show_beside_modal`: `pub fn show_beside_modal<T>(ctx: &Context, id: Id, modal: egui::Modal, body: impl FnOnce(&mut Ui) -> T) -> egui::ModalResponse<T>`. Shows `modal`, a modal dialog the app draws itself beside a dialog host's, as a modal layer of the layer stack:
 - `craft_ui::contract::overlay::top`: re-export of `craft_ui::runtime::overlay::top`.
 
 ## `craft_ui::contract::shape`
