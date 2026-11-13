@@ -13,7 +13,7 @@ permissions:
 jobs:
   native:
     name: Workspace (${{ matrix.os }})
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -21,6 +21,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       CRAFT_FONTS_DIR: ${{ github.workspace }}/.test-inputs/craft-fonts
+      CRAFT_PSD_CORPUS: ${{ github.workspace }}/.test-inputs/photocraft/corpus
     steps:
       - uses: actions/checkout@v4
       - name: Checkout pinned test fonts
@@ -30,6 +31,16 @@ jobs:
           ref: b076417b5880bd4154bd22f00695b1d28c6bea83
           path: .test-inputs/craft-fonts
           persist-credentials: false
+      - name: Checkout pinned PSD corpus fetcher
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/photocraft
+          ref: e052eabf4be74612725400955d184f85d208c0f0
+          path: .test-inputs/photocraft
+          persist-credentials: false
+      - name: Fetch pinned PSD and ATN corpora
+        working-directory: .test-inputs/photocraft
+        run: cargo xtask corpus --psd --psd-tools --atn
       - name: Install software Vulkan renderer
         if: runner.os == 'Linux'
         run: |
