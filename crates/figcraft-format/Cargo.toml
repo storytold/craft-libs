@@ -13,4 +13,5 @@ workspace = true
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+craft-zip = { workspace = true }
 thiserror = { workspace = true }

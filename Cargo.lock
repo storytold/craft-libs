@@ -1446,6 +1446,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-figcraft-format"
+version = "0.1.0"
+dependencies = [
+ "craft-zip",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-figma-rest"
 version = "0.1.0"
 dependencies = [
