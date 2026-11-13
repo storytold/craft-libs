@@ -221,6 +221,35 @@ impl CharacterTypographyValues {
 }
 
 impl ParagraphFlowValues {
+    /// Reads paragraph hyphenation and flow properties from IDML.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        Self {
+            hyphenate: values.boolean("Hyphenation"),
+            hyphenate_min_word: values.num("HyphenateWordsLongerThan"),
+            hyphenate_after_first: values.num("HyphenateAfterFirst"),
+            hyphenate_before_last: values.num("HyphenateBeforeLast"),
+            hyphenate_ladder_limit: values.num("HyphenateLadderLimit"),
+            hyphenation_zone: values.num("HyphenationZone"),
+            hyphenate_capitalized: values.boolean("HyphenateCapitalizedWords"),
+            hyphenate_last_word: values.boolean("HyphenateLastWord"),
+            hyphenate_across_columns: values.boolean("HyphenateAcrossColumns"),
+            hyphen_weight: values.num("HyphenWeight"),
+            word_spacing: [values.num("MinimumWordSpacing"), values.num("DesiredWordSpacing"), values.num("MaximumWordSpacing")],
+            letter_spacing: [values.num("MinimumLetterSpacing"), values.num("DesiredLetterSpacing"), values.num("MaximumLetterSpacing")],
+            glyph_scaling: [values.num("MinimumGlyphScaling"), values.num("DesiredGlyphScaling"), values.num("MaximumGlyphScaling")],
+            auto_leading: values.num("AutoLeading"),
+            single_word_justification: values.prop("SingleWordJustification"),
+            keep_with_next: values.num("KeepWithNext"),
+            keep_lines_together: values.boolean("KeepLinesTogether"),
+            ignore_edge_alignment: values.boolean("IgnoreEdgeAlignment"),
+            keep_all_lines_together: values.boolean("KeepAllLinesTogether"),
+            keep_first_lines: values.num("KeepFirstLines"),
+            keep_last_lines: values.num("KeepLastLines"),
+            start_paragraph: values.prop("StartParagraph"),
+        }
+    }
+
     /// Writes IDML attributes for paragraph hyphenation and flow.
     pub fn to_attrs(&self) -> Vec<(String, String)> {
         let mut attrs = Vec::new();
@@ -272,6 +301,31 @@ impl ParagraphFlowValues {
 }
 
 impl ParagraphAlignmentValues {
+    /// Reads paragraph alignment and spacing properties from IDML.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        Self {
+            justification: values.prop("Justification"),
+            direction: values.prop("ParagraphDirection"),
+            kashidas: values.prop("Kashidas"),
+            paragraph_justification: values.prop("ParagraphJustification"),
+            paragraph_kashida_width: values.num("ParagraphKashidaWidth"),
+            left_indent: values.num("LeftIndent"),
+            right_indent: values.num("RightIndent"),
+            first_line_indent: values.num("FirstLineIndent"),
+            last_line_indent: values.num("LastLineIndent"),
+            space_before: values.num("SpaceBefore"),
+            space_after: values.num("SpaceAfter"),
+            same_para_style_spacing: values.prop("SameParaStyleSpacing").map(|value| value.trim().parse::<f64>().ok().filter(|v| v.is_finite())),
+            drop_cap_lines: values.num("DropCapLines"),
+            drop_cap_chars: values.num("DropCapCharacters"),
+            dropcap_detail: values.num("DropcapDetail").filter(|value| *value >= 0.0).map(|value| value as u32),
+            grid_alignment: values.prop("GridAlignment"),
+            grid_align_first_line_only: values.boolean("GridAlignFirstLineOnly"),
+            composer: values.prop("Composer"),
+        }
+    }
+
     /// Writes the IDML attributes for paragraph alignment and spacing.
     pub fn to_attrs(&self) -> Vec<(String, String)> {
         let mut attrs = Vec::new();
