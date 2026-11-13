@@ -3,7 +3,7 @@
 //! comparison is in `tests/mpeg2/encode.rs`.
 
 use super::*;
-use crate::mpeg2::{Decoder, access_units, probe};
+use crate::mpeg2::{Decoder, probe};
 
 /// A moving, textured test sequence: a gradient with a sharp pattern drifting by a fraction of a
 /// sample per picture, and a block moving across it.
@@ -54,16 +54,21 @@ fn encode(cfg: EncoderConfig, frames: usize) -> (Vec<u8>, Vec<ReconFrame>, Vec<P
             packets.push(p);
         }
     }
-    packets.extend(enc.flush());
+    for p in enc.flush() {
+        es.extend_from_slice(&p.data);
+        packets.push(p);
+    }
     es.extend_from_slice(enc.end_of_sequence());
     (es, enc.take_recon(), packets)
 }
 
-fn decode(es: &[u8]) -> Vec<crate::mpeg2::Picture> {
+/// Decode packets (each tagged with its presentation time); returns the pictures in display
+/// order.
+fn decode(packets: &[Packet]) -> Vec<crate::mpeg2::Picture> {
     let mut d = Decoder::new();
     let mut out = Vec::new();
-    for (i, r) in access_units(es).into_iter().enumerate() {
-        out.extend(d.decode(&es[r], i as i64).unwrap());
+    for p in packets {
+        out.extend(d.decode(&p.data, p.pts).unwrap());
     }
     out.extend(d.flush());
     assert_eq!(d.errors(), 0, "decoder errors: {:?}", d.last_error());
@@ -71,8 +76,9 @@ fn decode(es: &[u8]) -> Vec<crate::mpeg2::Picture> {
 }
 
 fn assert_decodes_to_recon(name: &str, cfg: EncoderConfig, frames: usize) -> Vec<Packet> {
-    let (es, recon, packets) = encode(cfg, frames);
-    let pics = decode(&es);
+    let (_, recon, packets) = encode(cfg, frames);
+    assert!(packets.windows(2).all(|w| w[0].dts < w[1].dts) && packets.iter().all(|p| p.dts <= p.pts), "{name}: decoding times");
+    let pics = decode(&packets);
     assert_eq!(pics.len(), frames, "{name}: picture count");
     for (i, (p, r)) in pics.iter().zip(&recon).enumerate() {
         assert_eq!(p.pts, i as i64, "{name}: display order");
@@ -101,6 +107,7 @@ fn intra_only_decodes_to_the_reconstruction() {
 fn long_p_gop_does_not_drift() {
     let mut cfg = EncoderConfig::new(96, 64, 25, 1);
     cfg.gop_size = 30;
+    cfg.b_pictures = 0;
     let packets = assert_decodes_to_recon("long gop", cfg, 30);
     assert_eq!(packets.iter().filter(|p| p.keyframe).count(), 1);
     assert!(packets[1..].iter().all(|p| p.picture_type == PictureType::P));
@@ -127,7 +134,131 @@ fn every_coding_option_decodes_to_the_reconstruction() {
         ("422 odd size", EncoderConfig { width: 70, height: 30, chroma: ChromaFormat::Yuv422, ..base.clone() }),
     ];
     for (name, cfg) in cases {
-        assert_decodes_to_recon(name, cfg, 8);
+        assert_decodes_to_recon(name, cfg.clone(), 8);
+        assert_decodes_to_recon(name, EncoderConfig { b_pictures: 0, ..cfg }, 8);
+    }
+}
+
+#[test]
+fn b_pictures_decode_to_the_reconstruction() {
+    let base = EncoderConfig::new(96, 64, 25, 1);
+    for b in 1..=4 {
+        for closed in [true, false] {
+            for (gop, frames) in [(12, 30), (7, 17), (2, 6), (1, 4), (15, 16)] {
+                let name = format!("b {b} closed {closed} gop {gop} frames {frames}");
+                let cfg = EncoderConfig { b_pictures: b, closed_gop: closed, gop_size: gop, ..base.clone() };
+                let packets = assert_decodes_to_recon(&name, cfg, frames);
+                if gop > 1 {
+                    assert!(packets.iter().any(|p| p.picture_type == PictureType::B), "{name}: no B pictures");
+                }
+            }
+        }
+    }
+    let cases = [
+        ("422", EncoderConfig { chroma: ChromaFormat::Yuv422, ..base.clone() }),
+        ("abr", EncoderConfig { rate: RateControl::Abr { kbps: 400 }, ..base.clone() }),
+        ("odd size", EncoderConfig { width: 50, height: 34, ..base.clone() }),
+        ("small range", EncoderConfig { search_range: 2, ..base.clone() }),
+        ("linear coarse", EncoderConfig { nonlinear_quant: false, rate: RateControl::Quantiser(25), ..base.clone() }),
+    ];
+    for (name, cfg) in cases {
+        assert_decodes_to_recon(name, cfg, 14);
+    }
+}
+
+#[test]
+fn pictures_are_reordered_into_decoding_order() {
+    let cfg = EncoderConfig { gop_size: 12, b_pictures: 2, ..EncoderConfig::new(64, 48, 25, 1) };
+    let (_, _, packets) = encode(cfg, 15);
+    let order: Vec<(PictureType, i64)> = packets.iter().map(|p| (p.picture_type, p.pts)).collect();
+    use PictureType::{B, I, P};
+    #[rustfmt::skip]
+    let want = [(I, 0), (P, 3), (B, 1), (B, 2), (P, 6), (B, 4), (B, 5), (P, 9), (B, 7), (B, 8),
+        // B10 and B11 lead the second GOP; at the end the last held picture becomes a P picture
+        (I, 12), (B, 10), (B, 11), (P, 14), (B, 13)];
+    assert_eq!(order, want);
+    // decoding times: the presentation times in order, one interval early
+    let dts: Vec<i64> = packets.iter().map(|p| p.dts).collect();
+    assert_eq!(dts, (-1..14).collect::<Vec<_>>());
+    // temporal_reference counts display order from each GOP's first picture
+    let pics = decode(&packets);
+    let tr: Vec<u16> = pics.iter().map(|p| p.temporal_reference).collect();
+    assert_eq!(tr, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4]);
+}
+
+#[test]
+fn a_closed_gop_decodes_on_its_own() {
+    for closed in [true, false] {
+        let cfg = EncoderConfig { gop_size: 6, b_pictures: 2, closed_gop: closed, ..EncoderConfig::new(64, 48, 25, 1) };
+        let (_, recon, packets) = encode(cfg, 12);
+        // start decoding at the second GOP's I picture (display 6): B4 and B5 lead it
+        let at = packets.iter().position(|p| p.pts == 6).unwrap();
+        assert!(packets[at].keyframe);
+        let mut d = Decoder::new();
+        let mut pics = Vec::new();
+        for p in &packets[at..] {
+            pics.extend(d.decode(&p.data, p.pts).unwrap());
+        }
+        pics.extend(d.flush());
+        let shown: Vec<i64> = pics.iter().map(|p| p.pts).collect();
+        if closed {
+            assert_eq!(shown, (4..12).collect::<Vec<_>>());
+            for p in &pics {
+                assert_eq!(p.y, recon[p.pts as usize].y, "closed GOP: picture {}", p.pts);
+            }
+        } else {
+            // the leading B pictures need the previous GOP's last P picture
+            assert_eq!(shown, (6..12).collect::<Vec<_>>());
+        }
+    }
+}
+
+#[test]
+fn b_pictures_are_smaller_than_p_pictures() {
+    let cfg = EncoderConfig { gop_size: 12, b_pictures: 2, ..EncoderConfig::new(128, 96, 25, 1) };
+    let (_, _, packets) = encode(cfg, 12);
+    let avg = |t: PictureType| {
+        let s: Vec<usize> = packets.iter().filter(|p| p.picture_type == t).map(|p| p.data.len()).collect();
+        s.iter().sum::<usize>() as f64 / s.len().max(1) as f64
+    };
+    let (p, b) = (avg(PictureType::P), avg(PictureType::B));
+    assert!(b * 1.5 < p, "P {p:.0} bytes, B {b:.0} bytes");
+    // static content: the B pictures skip every macroblock but the first and last of a slice
+    let mut enc = Encoder::new(EncoderConfig { gop_size: 12, b_pictures: 2, ..EncoderConfig::new(128, 64, 25, 1) }).unwrap();
+    let (y, cb, cr) = scene(128, 64, 64, 32, 0);
+    let f = YuvFrame { y: &y, cb: &cb, cr: &cr, y_stride: 128, c_stride: 64 };
+    let mut packets = Vec::new();
+    for t in 0..7 {
+        packets.extend(enc.encode(&f, t).unwrap());
+    }
+    let i = packets[0].data.len();
+    let bs: Vec<&Packet> = packets.iter().filter(|p| p.picture_type == PictureType::B).collect();
+    assert_eq!(bs.len(), 4);
+    for p in bs {
+        // a picture header, four slice headers and eight edge macroblocks
+        assert!(p.data.len() < 64, "static B picture {} of {} bytes (I {i})", p.pts, p.data.len());
+    }
+}
+
+#[test]
+fn presentation_times_must_step_evenly_with_b_pictures() {
+    let mut enc = Encoder::new(EncoderConfig::new(32, 32, 25, 1)).unwrap();
+    let (y, c) = (vec![0u8; 32 * 32], vec![0u8; 16 * 16]);
+    let f = YuvFrame { y: &y, cb: &c, cr: &c, y_stride: 32, c_stride: 16 };
+    // the I picture waits for the second time, which sets the step
+    assert!(enc.encode(&f, 10).unwrap().is_empty());
+    let mut packets = enc.encode(&f, 12).unwrap();
+    for bad in [12, 11, 15] {
+        assert!(matches!(enc.encode(&f, bad), Err(EncodeError::BadTimestamp(_))), "{bad}");
+    }
+    packets.extend(enc.encode(&f, 14).unwrap());
+    packets.extend(enc.flush());
+    assert_eq!(packets.iter().map(|p| (p.pts, p.dts)).collect::<Vec<_>>(), [(10, 8), (14, 10), (12, 12)]);
+    // without B pictures any increasing (or not) times pass through
+    let mut enc = Encoder::new(EncoderConfig { b_pictures: 0, ..EncoderConfig::new(32, 32, 25, 1) }).unwrap();
+    for pts in [5, 3, 9] {
+        let p = enc.encode(&f, pts).unwrap().remove(0);
+        assert_eq!((p.pts, p.dts), (pts, pts));
     }
 }
 
@@ -161,7 +292,7 @@ fn quality_follows_the_quantiser() {
 
 #[test]
 fn p_pictures_are_smaller_and_static_content_skips() {
-    let cfg = EncoderConfig { gop_size: 8, ..EncoderConfig::new(128, 64, 25, 1) };
+    let cfg = EncoderConfig { gop_size: 8, b_pictures: 0, ..EncoderConfig::new(128, 64, 25, 1) };
     let mut enc = Encoder::new(cfg).unwrap();
     let (y, cb, cr) = scene(128, 64, 64, 32, 0);
     let f = YuvFrame { y: &y, cb: &cb, cr: &cr, y_stride: 128, c_stride: 64 };
@@ -191,7 +322,7 @@ fn the_sequence_header_describes_the_stream() {
         let enc = Encoder::new(cfg).unwrap();
         assert_eq!(enc.profile_and_level(), pli, "{name}");
         let info = probe(enc.sequence_header()).unwrap();
-        assert_eq!((info.width, info.height, info.mpeg2, info.progressive_sequence, info.low_delay), (w, h, true, true, true));
+        assert_eq!((info.width, info.height, info.mpeg2, info.progressive_sequence, info.low_delay), (w, h, true, true, false));
         assert_eq!(info.codec_name(), format!("MPEG-2 Video ({name})"));
         assert_eq!(aspect, AspectRatio::Square);
         assert_eq!(info.sar, (1, 1));
@@ -199,6 +330,9 @@ fn the_sequence_header_describes_the_stream() {
     let enc = Encoder::new(EncoderConfig { aspect: AspectRatio::Dar16x9, ..EncoderConfig::new(720, 576, 30000, 1001) }).unwrap();
     let info = probe(enc.sequence_header()).unwrap();
     assert_eq!((info.dar, info.frame_rate), (Some((16, 9)), Some((30000, 1001))));
+    // without B pictures the stream is low delay
+    let enc = Encoder::new(EncoderConfig { b_pictures: 0, ..EncoderConfig::new(720, 576, 25, 1) }).unwrap();
+    assert!(probe(enc.sequence_header()).unwrap().low_delay);
 }
 
 #[test]
@@ -214,6 +348,8 @@ fn bad_configurations_are_refused() {
         EncoderConfig { fps_den: 0, ..ok.clone() },
         EncoderConfig { gop_size: 0, ..ok.clone() },
         EncoderConfig { gop_size: 1024, ..ok.clone() },
+        EncoderConfig { b_pictures: 5, ..ok.clone() },
+        EncoderConfig { gop_size: 1023, b_pictures: 2, ..ok.clone() },
         EncoderConfig { rate: RateControl::Quantiser(0), ..ok.clone() },
         EncoderConfig { rate: RateControl::Quantiser(32), ..ok.clone() },
         EncoderConfig { rate: RateControl::Abr { kbps: 0 }, ..ok.clone() },
@@ -231,7 +367,7 @@ fn bad_configurations_are_refused() {
 
 #[test]
 fn short_or_inconsistent_planes_are_refused() {
-    let mut enc = Encoder::new(EncoderConfig::new(32, 32, 25, 1)).unwrap();
+    let mut enc = Encoder::new(EncoderConfig { b_pictures: 0, ..EncoderConfig::new(32, 32, 25, 1) }).unwrap();
     let (y, c) = (vec![0u8; 32 * 32], vec![0u8; 16 * 16]);
     let ok = YuvFrame { y: &y, cb: &c, cr: &c, y_stride: 32, c_stride: 16 };
     assert!(enc.encode(&ok, 0).is_ok());

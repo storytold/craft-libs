@@ -1,7 +1,7 @@
 # MPEG-2 and MPEG-1 video decoder, MPEG-2 encoder (`craft_video::mpeg2`, features `mpeg2-decode`, `mpeg2-encode`)
 
-Clean-room MPEG-2 video and MPEG-1 video decoder, and the first step of an MPEG-2 video encoder
-(I and P pictures, see "Encoder"), in pure Rust. Depends only on
+Clean-room MPEG-2 video and MPEG-1 video decoder, and the first steps of an MPEG-2 video encoder
+(I, P and B pictures, see "Encoder"), in pure Rust. Depends only on
 `thiserror` and (optional, feature `threads`) `rayon`. Builds for
 `wasm32-unknown-unknown`; no `unsafe`. No GPL/LGPL code (FFmpeg, libmpeg2, libavcodec) was
 consulted; FFmpeg is used only as an external fixture generator and test oracle.
@@ -77,8 +77,8 @@ the synthetic-stream tests confirmed against FFmpeg:
 
 ## Encoder (feature `mpeg2-encode`)
 
-The encoder is the first step of MPEG-2 encoding in this crate, tracked in
-storytold/craft-libs#1133. It writes valid MPEG-2 elementary streams, but not yet DVD or
+The encoder is built in steps, tracked in storytold/craft-libs#1133: I and P pictures came in
+#1136, B pictures in the second step. It writes valid MPEG-2 elementary streams, but not yet DVD or
 broadcast deliverables: those need the later steps listed below.
 
 ```rust
@@ -86,13 +86,15 @@ use craft_video::mpeg2::{Encoder, EncoderConfig, RateControl, YuvFrame};
 
 let mut cfg = EncoderConfig::new(720, 576, 25, 1);
 cfg.rate = RateControl::Abr { kbps: 6000 };   // or RateControl::Quantiser(1..=31)
-cfg.gop_size = 12;                            // one I picture, then P pictures
+cfg.gop_size = 12;                            // pictures from one I picture to the next
+cfg.b_pictures = 2;                           // I B B P B B P ...; 0 for I and P only
+cfg.closed_gop = true;                        // or open GOPs
 let mut enc = Encoder::new(cfg)?;
 for (i, f) in frames.iter().enumerate() {
     let frame = YuvFrame { y: &f.y, cb: &f.cb, cr: &f.cr, y_stride: 720, c_stride: 360 };
     for p in enc.encode(&frame, i as i64)? { /* p.data, p.pts, p.dts, p.keyframe, p.picture_type */ }
 }
-for p in enc.flush() { /* none yet: no B pictures */ }
+for p in enc.flush() { /* the pictures held for reordering */ }
 es.extend_from_slice(enc.end_of_sequence());
 ```
 
@@ -101,9 +103,16 @@ What it does:
 - Main Profile (4:2:0) at Low, Main, High-1440 and High Level, and 4:2:2 Profile at Main and
   High Level. The lowest level that holds the size, frame rate and (average) bitrate is chosen;
   sizes beyond High Level are refused. Any even picture size; edges are padded by repetition.
-- Progressive frame pictures, I and P, in closed GOPs. Every GOP starts with a sequence header,
-  sequence extension and GOP header (with a time code), so every I picture is a random access
-  point. Packets come out in decoding order, which equals display order without B pictures.
+- Progressive frame pictures, I, P and B. Every GOP starts with a sequence header, sequence
+  extension and GOP header (with a time code), so every I picture is a random access point.
+- B pictures (0-4 between anchors) and reordering: pictures go in in display order and packets
+  come out in decoding order; a B picture is held until the anchor after it is coded, and
+  `flush` codes the last held picture as a P picture. With B pictures, `dts` is the presentation
+  times in decoding order one picture interval earlier, so presentation times must step evenly.
+  `low_delay` is set only without B pictures.
+- GOPs are closed or open. The B pictures shown before a GOP's I picture (coded after it) predict
+  backward only in a closed GOP, and from the previous GOP's last anchor too in an open one.
+  temporal_reference counts display order from the GOP's first picture.
 - Forward DCT on the transpose of the decoder's IDCT basis; intra quantisation with a small
   dead zone, non-intra quantisation by truncation; default or custom quantiser matrices
   (sequence header); linear or non-linear quantiser scale; intra DC precision 8-10 bits;
@@ -112,9 +121,14 @@ What it does:
   predictor, the previous picture's vectors), then half-sample refinement; cost SAD + λ·bits.
   Each macroblock is coded intra, motion-compensated with or without residual, "no MC" with
   residual, or skipped. The search range sets f_code (1-4).
+- B pictures: a search per direction (candidates include the P picture's vectors scaled to the
+  B picture's distance), then forward, backward, interpolated or the skip prediction (the
+  previous macroblock's directions with the predictors), whichever costs least, or intra.
+  Interpolated predictions are averaged in the decoder's order.
 - Adaptive quantisation by macroblock activity (Test Model 5 §5.2.3).
-- Rate control: a constant quantiser, or single-pass average bitrate with Test Model 5's
-  target bit allocation at picture level. Streams are signalled as variable bitrate
+- Rate control: a constant quantiser (B pictures at 1.25 times it), or single-pass average
+  bitrate with Test Model 5's target bit allocation at picture level (B pictures weighted by
+  K_b = 1.4). Streams are signalled as variable bitrate
   (`vbv_delay` 0xFFFF, the level's maximum bitrate and VBV size in the sequence header); the VBV
   buffer is not modelled.
 - The reconstruction uses the decoder's own dequantisation, mismatch control, IDCT and motion
@@ -122,7 +136,7 @@ What it does:
 - Slices (one per macroblock row) are coded in parallel on rayon with `threads`; the stream is
   identical either way.
 
-Later steps (#1133): B pictures and reordering; CBR and VBR with a VBV guarantee; DVD presets
+Later steps (#1133): CBR and VBR with a VBV guarantee; DVD presets
 (sizes, aspect, GOP length, 9.8 Mb/s, 23.976 soft telecine); interlaced coding (field/frame DCT,
 field prediction, alternate scan) and 4:2:2 High Level CBR for XDCAM HD422. MPEG-2 essence in the
 MXF writer and a program stream muxer belong to `craft-media`.
@@ -191,9 +205,15 @@ fell to 77–150 fps). These are lower bounds.
   rate control converges on its target. `encode/tests.rs`: our decoder outputs exactly the
   encoder's reconstruction (intra only, a 30-picture P GOP, 4:2:2, linear and non-linear
   quantisers, quantisers 1 and 31, DC precision 8 and 10, custom matrices, odd macroblock counts,
-  average bitrate); quality and size follow the quantiser; repeated pictures skip; levels and
-  aspect in the sequence header; bad configurations and short or inconsistent planes are refused.
-- `tests/mpeg2/encode.rs`: FFmpeg decodes our streams of `testsrc2` (CIF and 576-line 4:2:2)
-  without errors and within the decoder suite's tolerance of our reconstruction, ffprobe reports
-  the profile, level, pixel format and I/P picture types, and average bitrate lands within 10 % of
-  800 and 2500 kbit/s targets.
+  average bitrate, each with and without B pictures; 1-4 B pictures with closed and open GOPs,
+  GOP lengths that are and are not multiples of the anchor distance, and streams that end inside
+  a group of B pictures); decoding order, decoding times and temporal_reference; a closed GOP
+  decodes from its I picture with its leading B pictures and an open one without them; B pictures
+  are smaller than P pictures; uneven presentation times are refused with B pictures; quality and
+  size follow the quantiser; repeated pictures skip; levels and aspect in the sequence header;
+  bad configurations and short or inconsistent planes are refused.
+- `tests/mpeg2/encode.rs`: FFmpeg decodes our streams of `testsrc2` (CIF and 576-line 4:2:2;
+  without B pictures, with 2 and 4, closed and open GOPs) without errors and within the decoder
+  suite's tolerance of our reconstruction, ffprobe reports the profile, level, pixel format and
+  picture types in display order, and average bitrate lands within 10 % of 800 and 2500 kbit/s
+  targets.

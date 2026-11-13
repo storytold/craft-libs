@@ -1,11 +1,11 @@
 //! Slices and macroblocks of one frame picture (H.262 §6.2.4-§6.2.6), with a reconstruction
 //! that matches the decoder exactly. One slice per macroblock row; slices only depend on the
-//! reference picture, so rows can be coded in parallel.
+//! reference pictures, so rows can be coded in parallel.
 
-use crate::mpeg2::headers::SCAN;
+use crate::mpeg2::headers::{PictureType, SCAN};
 use crate::mpeg2::mc::{Block, Frame, predict};
 use crate::mpeg2::slice::NON_LINEAR_Q;
-use crate::mpeg2::vlc::{MB_FWD, MB_INTRA, MB_PATTERN, MB_QUANT};
+use crate::mpeg2::vlc::{MB_BWD, MB_FWD, MB_INTRA, MB_PATTERN, MB_QUANT};
 
 use super::bitwriter::BitWriter;
 use super::motion::Search;
@@ -35,12 +35,17 @@ pub(crate) fn qcode_for(nonlinear: bool, qs: f64) -> u8 {
 
 /// What every slice of one picture shares (read-only).
 pub(crate) struct PicCtx<'a> {
+    /// I, P or B.
+    pub ptype: PictureType,
     /// The padded source picture.
     pub src: &'a Frame,
-    /// The reconstructed previous picture (P pictures); `None` codes an I picture.
-    pub reference: Option<&'a Frame>,
-    /// Vectors of the previous picture (motion search candidates), one per macroblock.
-    pub prev_mvs: &'a [[i32; 2]],
+    /// The reconstructed reference pictures: forward (P and B pictures) and backward (B
+    /// pictures). A B picture without a forward reference (the leading B pictures of a closed
+    /// GOP) predicts backward only.
+    pub fwd: Option<&'a Frame>,
+    pub bwd: Option<&'a Frame>,
+    /// Motion search candidates per macroblock, forward and backward (empty: none).
+    pub cand: [&'a [[i32; 2]]; 2],
     pub mb_w: usize,
     pub shx: u32,
     pub shy: u32,
@@ -166,11 +171,22 @@ impl MbPix {
 struct SliceSt {
     qcode: u8,
     dc: [i32; 3],
-    pmv: [i32; 2],
+    /// Motion vector predictors, forward and backward.
+    pmv: [[i32; 2]; 2],
     /// Skipped macroblocks not yet covered by an address increment.
     skipped: usize,
-    /// The vector of the macroblock to the left (motion search candidate).
-    left_mv: [i32; 2],
+    /// The vectors of the macroblock to the left (motion search candidates).
+    left_mv: [[i32; 2]; 2],
+    /// Prediction directions (`MB_FWD` / `MB_BWD`) of the previous macroblock, or `MB_INTRA`:
+    /// a skipped macroblock in a B picture repeats them.
+    last_dirs: i16,
+}
+
+/// A B macroblock's prediction: its directions and a vector per direction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BPred {
+    dirs: i16,
+    mvs: [[i32; 2]; 2],
 }
 
 /// One macroblock being coded.
@@ -188,7 +204,7 @@ pub(crate) fn encode_row(ctx: &PicCtx, row: usize, out: &mut RowPlanes) -> RowOu
     let q0 = ctx.mb_qcode.get(row * ctx.mb_w).copied().unwrap_or(1);
     w.put(u32::from(q0), 5);
     w.bit(false); // extra_bit_slice
-    let mut st = SliceSt { qcode: q0, dc: [ctx.dc_reset(); 3], pmv: [0; 2], skipped: 0, left_mv: [0; 2] };
+    let mut st = SliceSt { qcode: q0, dc: [ctx.dc_reset(); 3], pmv: [[0; 2]; 2], skipped: 0, left_mv: [[0; 2]; 2], last_dirs: MB_INTRA };
     let mut ro = RowOut { bytes: Vec::new(), mvs: vec![[0; 2]; ctx.mb_w], stats: RowStats::default() };
     for mbx in 0..ctx.mb_w {
         macroblock(ctx, &mut st, &mut w, (mbx, row), out, &mut ro);
@@ -205,31 +221,105 @@ fn macroblock(ctx: &PicCtx, st: &mut SliceSt, w: &mut BitWriter, (mbx, mby): (us
     let qs = qscale(ctx.nonlinear, qcode);
     ro.stats.qsum += qs as u64;
     let planes = (ctx.src.w, ctx.src.cw);
-    let Some(reference) = ctx.reference else {
-        intra_mb(ctx, st, w, &mb).put(out, mbx, ctx.cmb(), planes);
-        ro.stats.intra += 1;
-        return;
+    let lambda = ((qs * 3 + 4) / 8).max(1) as u32;
+    let rec = match (ctx.ptype, ctx.fwd) {
+        (PictureType::P, Some(reference)) => {
+            let search = Search { reference, src: &src.y, mbx, mby, f_code: ctx.f_code, range: ctx.search, pmv: st.pmv[0], lambda };
+            let found = search.run(&candidates(ctx, st, addr, 0));
+            if intra_cost(&src.y).saturating_add(INTRA_BIAS) < found.sad {
+                None
+            } else {
+                let (rec, skipped) = inter_mb(ctx, st, w, &mb, reference, found.mv);
+                ro.stats.skipped += skipped as u32;
+                ro.mvs[mbx] = found.mv;
+                st.left_mv[0] = found.mv;
+                Some(rec)
+            }
+        }
+        (PictureType::B, _) if ctx.bwd.is_some() => b_decision(ctx, st, &mb, lambda).map(|pred| {
+            let (rec, skipped) = b_mb(ctx, st, w, &mb, pred);
+            ro.stats.skipped += skipped as u32;
+            st.left_mv = pred.mvs;
+            rec
+        }),
+        _ => None,
     };
-    let mut candidates = vec![st.left_mv, st.pmv];
+    let rec = rec.unwrap_or_else(|| {
+        ro.stats.intra += 1;
+        st.left_mv = [[0; 2]; 2];
+        intra_mb(ctx, st, w, &mb)
+    });
+    rec.put(out, mbx, ctx.cmb(), planes);
+}
+
+/// Motion search candidates for direction `s` of macroblock `addr`: the left neighbour's vector,
+/// the predictor, and the co-located and neighbouring candidates of the picture.
+fn candidates(ctx: &PicCtx, st: &SliceSt, addr: usize, s: usize) -> Vec<[i32; 2]> {
+    let mut c = vec![st.left_mv[s], st.pmv[s]];
     for a in [Some(addr), addr.checked_sub(ctx.mb_w), Some(addr + 1), Some(addr + ctx.mb_w)].into_iter().flatten() {
-        if let Some(&v) = ctx.prev_mvs.get(a) {
-            candidates.push(v);
+        if let Some(&v) = ctx.cand[s].get(a) {
+            c.push(v);
         }
     }
-    let lambda = ((qs * 3 + 4) / 8).max(1) as u32;
-    let search = Search { reference, src: &src.y, mbx, mby, f_code: ctx.f_code, range: ctx.search, pmv: st.pmv, lambda };
-    let found = search.run(&candidates);
-    if intra_cost(&src.y).saturating_add(INTRA_BIAS) < found.sad {
-        intra_mb(ctx, st, w, &mb).put(out, mbx, ctx.cmb(), planes);
-        ro.stats.intra += 1;
-        st.left_mv = [0; 2];
-        return;
+    c
+}
+
+/// Luma SAD of a prediction against the source.
+fn sad(a: &[u8; 256], b: &[u8; 256]) -> u32 {
+    a.iter().zip(b).map(|(x, y)| u32::from(x.abs_diff(*y))).sum()
+}
+
+/// Choose a B macroblock's prediction: forward, backward or interpolated, from a motion search
+/// per direction, or the skip prediction (the previous macroblock's directions with the
+/// predictors). `None`: code it intra.
+fn b_decision(ctx: &PicCtx, st: &SliceSt, mb: &MbIn, lambda: u32) -> Option<BPred> {
+    let addr = mb.mby * ctx.mb_w + mb.mbx;
+    let mut found = [None, None];
+    for (s, r) in [ctx.fwd, ctx.bwd].into_iter().enumerate() {
+        if let Some(reference) = r {
+            let search =
+                Search { reference, src: &mb.src.y, mbx: mb.mbx, mby: mb.mby, f_code: ctx.f_code, range: ctx.search, pmv: st.pmv[s], lambda };
+            let f = search.run(&candidates(ctx, st, addr, s));
+            found[s] = Some((f.mv, f.sad, search.mv_cost(f.mv)));
+        }
     }
-    let (rec, skipped) = inter_mb(ctx, st, w, &mb, reference, found.mv);
-    rec.put(out, mbx, ctx.cmb(), planes);
-    ro.stats.skipped += skipped as u32;
-    ro.mvs[mbx] = found.mv;
-    st.left_mv = found.mv;
+    let mut best: Option<(BPred, u32)> = None;
+    let mut consider = |pred: BPred, cost: u32| {
+        if best.is_none_or(|(_, c)| cost < c) {
+            best = Some((pred, cost));
+        }
+    };
+    for (s, dir) in [(0, MB_FWD), (1, MB_BWD)] {
+        if let Some((mv, sad, bits)) = found[s] {
+            let mut mvs = [[0; 2]; 2];
+            mvs[s] = mv;
+            consider(BPred { dirs: dir, mvs }, sad.saturating_add(bits));
+        }
+    }
+    if let (Some((f, _, bits_f)), Some((b, _, bits_b))) = (found[0], found[1]) {
+        let pred = BPred { dirs: MB_FWD | MB_BWD, mvs: [f, b] };
+        let p = predict_b(ctx, pred, mb.mbx, mb.mby);
+        consider(pred, sad(&p.y, &mb.src.y).saturating_add(bits_f).saturating_add(bits_b));
+    }
+    // the skip prediction costs no vector bits; the predictors came from the macroblock to the
+    // left, so they must be checked to stay inside the reference from here
+    let edge = mb.mbx == 0 || mb.mbx + 1 == ctx.mb_w;
+    if !edge && st.last_dirs & MB_INTRA == 0 && st.last_dirs != 0 {
+        let pred = BPred { dirs: st.last_dirs, mvs: st.pmv };
+        let usable = [(0, MB_FWD, ctx.fwd), (1, MB_BWD, ctx.bwd)].into_iter().all(|(s, dir, r)| {
+            st.last_dirs & dir == 0
+                || r.is_some_and(|reference| {
+                    let search =
+                        Search { reference, src: &mb.src.y, mbx: mb.mbx, mby: mb.mby, f_code: ctx.f_code, range: ctx.search, pmv: st.pmv[s], lambda };
+                    search.valid(st.pmv[s])
+                })
+        });
+        if usable {
+            consider(pred, sad(&predict_b(ctx, pred, mb.mbx, mb.mby).y, &mb.src.y));
+        }
+    }
+    let (pred, cost) = best?;
+    (intra_cost(&mb.src.y).saturating_add(INTRA_BIAS) >= cost).then_some(pred)
 }
 
 /// Σ |sample − block mean| over the four luma blocks: the cost of coding them intra.
@@ -270,8 +360,12 @@ fn put_coefficients(w: &mut BitWriter, t: &EncTables, levels: &[i32; 64], table:
     t.dct_eob[table].put(w);
 }
 
-fn put_mb_type(w: &mut BitWriter, t: &EncTables, predicted: bool, flags: i16) {
-    let table = if predicted { &t.mbtype_p } else { &t.mbtype_i };
+fn put_mb_type(w: &mut BitWriter, t: &EncTables, ptype: PictureType, flags: i16) {
+    let table = match ptype {
+        PictureType::P => &t.mbtype_p,
+        PictureType::B => &t.mbtype_b,
+        _ => &t.mbtype_i,
+    };
     if let Some(c) = table.get(flags as usize).copied().flatten() {
         c.put(w);
     }
@@ -283,12 +377,13 @@ fn intra_mb(ctx: &PicCtx, st: &mut SliceSt, w: &mut BitWriter, mb: &MbIn) -> MbP
     let quant = mb.qcode != st.qcode;
     put_increment(w, t, st.skipped + 1);
     st.skipped = 0;
-    put_mb_type(w, t, ctx.reference.is_some(), if quant { MB_INTRA | MB_QUANT } else { MB_INTRA });
+    put_mb_type(w, t, ctx.ptype, if quant { MB_INTRA | MB_QUANT } else { MB_INTRA });
     if quant {
         w.put(u32::from(mb.qcode), 5);
         st.qcode = mb.qcode;
     }
-    st.pmv = [0; 2];
+    st.pmv = [[0; 2]; 2];
+    st.last_dirs = MB_INTRA;
     let qs = qscale(ctx.nonlinear, st.qcode);
     let dc_mult = 8 >> ctx.dc_prec;
     let dc_max = (1 << (8 + ctx.dc_prec)) - 1;
@@ -321,28 +416,16 @@ fn intra_mb(ctx: &PicCtx, st: &mut SliceSt, w: &mut BitWriter, mb: &MbIn) -> MbP
 /// whether it was skipped.
 fn inter_mb(ctx: &PicCtx, st: &mut SliceSt, w: &mut BitWriter, mb: &MbIn, reference: &Frame, mv: [i32; 2]) -> (MbPix, bool) {
     let t = enc_tables();
-    let mut rec = predict_mb(ctx, reference, mv, mb.mbx, mb.mby);
+    let mut rec = predict_mb(ctx, Some(reference), mv, mb.mbx, mb.mby);
     let qs = qscale(ctx.nonlinear, mb.qcode);
-    let (cbw, _) = ctx.cmb();
-    let n = ctx.blocks();
-    let mut levels = [[0i32; 64]; 8];
-    let mut cbp = 0u32;
-    for i in 0..n {
-        let (s, p) = (mb.src.block(i, cbw), rec.block(i, cbw));
-        let f = fdct(&std::array::from_fn(|k| s[k] - p[k]));
-        for pos in 0..64 {
-            levels[i][pos] = quant_inter(f[pos], ctx.inter_matrix[pos], qs);
-        }
-        if levels[i].iter().any(|&l| l != 0) {
-            cbp |= 1 << (n - 1 - i);
-        }
-    }
+    let (levels, cbp) = residual(ctx, mb, &rec, qs);
     st.dc = [ctx.dc_reset(); 3];
+    st.last_dirs = MB_FWD;
     // the first and last macroblock of a slice are always coded
     let edge = mb.mbx == 0 || mb.mbx + 1 == ctx.mb_w;
     if mv == [0, 0] && cbp == 0 && !edge {
         st.skipped += 1;
-        st.pmv = [0; 2];
+        st.pmv = [[0; 2]; 2];
         return (rec, true);
     }
     put_increment(w, t, st.skipped + 1);
@@ -358,44 +441,140 @@ fn inter_mb(ctx: &PicCtx, st: &mut SliceSt, w: &mut BitWriter, mb: &MbIn, refere
     if quant {
         flags |= MB_QUANT;
     }
-    put_mb_type(w, t, true, flags);
+    put_mb_type(w, t, PictureType::P, flags);
     if quant {
         w.put(u32::from(mb.qcode), 5);
         st.qcode = mb.qcode;
     }
     if flags & MB_FWD != 0 {
         for c in 0..2 {
-            t.put_motion(w, wrap_delta(mv[c], st.pmv[c], ctx.f_code), ctx.f_code);
+            t.put_motion(w, wrap_delta(mv[c], st.pmv[0][c], ctx.f_code), ctx.f_code);
         }
-        st.pmv = mv;
+        st.pmv[0] = mv;
     } else {
-        st.pmv = [0; 2]; // "No MC" resets the predictors
+        st.pmv = [[0; 2]; 2]; // "No MC" resets the predictors
     }
-    if cbp != 0 {
-        if n == 8 {
-            t.cbp[(cbp >> 2) as usize].put(w);
-            w.put(cbp & 3, 2);
-        } else {
-            t.cbp[cbp as usize].put(w);
-        }
-        for i in 0..n {
-            if cbp & (1 << (n - 1 - i)) != 0 {
-                put_coefficients(w, t, &levels[i], 0, 0);
-                rec.store(i, cbw, &reconstruct(&levels[i], ctx.inter_matrix, qs, false, 0), true);
-            }
-        }
-    }
+    put_residual(ctx, w, &levels, cbp, &mut rec, qs);
     (rec, false)
 }
 
-/// The frame prediction of a macroblock from `f` with vector `mv`, formed as the decoder forms
-/// it (§7.6.4: chroma vectors are the luma ones halved towards zero).
-fn predict_mb(ctx: &PicCtx, f: &Frame, mv: [i32; 2], mbx: usize, mby: usize) -> MbPix {
-    let (cbw, cbh) = ctx.cmb();
+/// Quantised residual of every block of `mb` against `pred`, and the coded_block_pattern.
+fn residual(ctx: &PicCtx, mb: &MbIn, pred: &MbPix, qs: i32) -> ([[i32; 64]; 8], u32) {
+    let (cbw, _) = ctx.cmb();
+    let n = ctx.blocks();
+    let mut levels = [[0i32; 64]; 8];
+    let mut cbp = 0u32;
+    for i in 0..n {
+        let (s, p) = (mb.src.block(i, cbw), pred.block(i, cbw));
+        let f = fdct(&std::array::from_fn(|k| s[k] - p[k]));
+        for pos in 0..64 {
+            levels[i][pos] = quant_inter(f[pos], ctx.inter_matrix[pos], qs);
+        }
+        if levels[i].iter().any(|&l| l != 0) {
+            cbp |= 1 << (n - 1 - i);
+        }
+    }
+    (levels, cbp)
+}
+
+/// Write coded_block_pattern and the coded blocks, adding their reconstruction to `rec`.
+fn put_residual(ctx: &PicCtx, w: &mut BitWriter, levels: &[[i32; 64]; 8], cbp: u32, rec: &mut MbPix, qs: i32) {
+    if cbp == 0 {
+        return;
+    }
+    let t = enc_tables();
+    let (cbw, _) = ctx.cmb();
+    let n = ctx.blocks();
+    if n == 8 {
+        t.cbp[(cbp >> 2) as usize].put(w);
+        w.put(cbp & 3, 2);
+    } else {
+        t.cbp[cbp as usize].put(w);
+    }
+    for i in 0..n {
+        if cbp & (1 << (n - 1 - i)) != 0 {
+            put_coefficients(w, t, &levels[i], 0, 0);
+            rec.store(i, cbw, &reconstruct(&levels[i], ctx.inter_matrix, qs, false, 0), true);
+        }
+    }
+}
+
+/// Code a B macroblock with prediction `pred` (or skip it); returns its reconstruction and
+/// whether it was skipped.
+fn b_mb(ctx: &PicCtx, st: &mut SliceSt, w: &mut BitWriter, mb: &MbIn, pred: BPred) -> (MbPix, bool) {
+    let t = enc_tables();
+    let mut rec = predict_b(ctx, pred, mb.mbx, mb.mby);
+    let qs = qscale(ctx.nonlinear, mb.qcode);
+    let (levels, cbp) = residual(ctx, mb, &rec, qs);
+    st.dc = [ctx.dc_reset(); 3];
+    // a skipped B macroblock repeats the previous one's directions with the predictors as its
+    // vectors (§7.6.6.3); the first and last macroblock of a slice are always coded
+    let edge = mb.mbx == 0 || mb.mbx + 1 == ctx.mb_w;
+    let same = |s: usize, dir: i16| pred.dirs & dir == 0 || pred.mvs[s] == st.pmv[s];
+    if cbp == 0 && !edge && st.last_dirs & MB_INTRA == 0 && pred.dirs == st.last_dirs && same(0, MB_FWD) && same(1, MB_BWD) {
+        st.skipped += 1;
+        return (rec, true);
+    }
+    put_increment(w, t, st.skipped + 1);
+    st.skipped = 0;
+    let quant = cbp != 0 && mb.qcode != st.qcode;
+    let mut flags = pred.dirs;
+    if cbp != 0 {
+        flags |= MB_PATTERN;
+    }
+    if quant {
+        flags |= MB_QUANT;
+    }
+    put_mb_type(w, t, PictureType::B, flags);
+    if quant {
+        w.put(u32::from(mb.qcode), 5);
+        st.qcode = mb.qcode;
+    }
+    for (s, dir) in [(0, MB_FWD), (1, MB_BWD)] {
+        if pred.dirs & dir != 0 {
+            for c in 0..2 {
+                t.put_motion(w, wrap_delta(pred.mvs[s][c], st.pmv[s][c], ctx.f_code), ctx.f_code);
+            }
+            st.pmv[s] = pred.mvs[s];
+        }
+    }
+    st.last_dirs = pred.dirs;
+    put_residual(ctx, w, &levels, cbp, &mut rec, qs);
+    (rec, false)
+}
+
+/// The prediction of a B macroblock: forward, backward, or the average of both, formed in the
+/// decoder's order (forward first, then the backward prediction averaged in).
+fn predict_b(ctx: &PicCtx, pred: BPred, mbx: usize, mby: usize) -> MbPix {
     let mut p = MbPix { y: [0; 256], c: [[0; 256]; 2] };
+    let mut avg = false;
+    for (s, dir, r) in [(0, MB_FWD, ctx.fwd), (1, MB_BWD, ctx.bwd)] {
+        if pred.dirs & dir != 0 {
+            if let Some(f) = r {
+                predict_into(ctx, &mut p, f, pred.mvs[s], (mbx, mby), avg);
+            }
+            avg = true;
+        }
+    }
+    p
+}
+
+/// The frame prediction of a macroblock from `f` with vector `mv` (gray without a reference).
+fn predict_mb(ctx: &PicCtx, f: Option<&Frame>, mv: [i32; 2], mbx: usize, mby: usize) -> MbPix {
+    let mut p = MbPix { y: [128; 256], c: [[128; 256]; 2] };
+    if let Some(f) = f {
+        predict_into(ctx, &mut p, f, mv, (mbx, mby), false);
+    }
+    p
+}
+
+/// Form the frame prediction from `f` with vector `mv` into `p`, or average it with what `p`
+/// holds, as the decoder forms it (§7.6.4: chroma vectors are the luma ones halved towards zero).
+fn predict_into(ctx: &PicCtx, p: &mut MbPix, f: &Frame, mv: [i32; 2], (mbx, mby): (usize, usize), avg: bool) {
+    let (cbw, cbh) = ctx.cmb();
     let blk =
         Block { x: (mbx * 16) as i32 + (mv[0] >> 1), y: (mby * 16) as i32 + (mv[1] >> 1), hx: mv[0] & 1 != 0, hy: mv[1] & 1 != 0, bw: 16, bh: 16 };
-    predict(&mut p.y, 0, 16, f.plane(0, None), blk, false);
+    predict(&mut p.y, 0, 16, f.plane(0, None), blk, avg);
     let cmv = [if ctx.shx == 1 { mv[0] / 2 } else { mv[0] }, if ctx.shy == 1 { mv[1] / 2 } else { mv[1] }];
     let cb = Block {
         x: (mbx * cbw) as i32 + (cmv[0] >> 1),
@@ -406,7 +585,45 @@ fn predict_mb(ctx: &PicCtx, f: &Frame, mv: [i32; 2], mbx: usize, mby: usize) -> 
         bh: cbh,
     };
     for c in 0..2 {
-        predict(&mut p.c[c], 0, cbw, f.plane(1 + c, None), cb, false);
+        predict(&mut p.c[c], 0, cbw, f.plane(1 + c, None), cb, avg);
     }
-    p
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_skip_prediction_never_leaves_the_reference() {
+        // three macroblocks across; the left neighbour's forward vector (+17 samples) fits its
+        // own position but points past the right edge from the middle macroblock
+        let mut f = Frame::new(48, 16, 24, 8);
+        for (i, v) in f.planes[0].iter_mut().enumerate() {
+            *v = ((i % 48) * 5 + (i / 48) * 11) as u8;
+        }
+        let ctx = PicCtx {
+            ptype: PictureType::B,
+            src: &f,
+            fwd: Some(&f),
+            bwd: Some(&f),
+            cand: [&[], &[]],
+            mb_w: 3,
+            shx: 1,
+            shy: 1,
+            intra_matrix: &crate::mpeg2::headers::DEFAULT_INTRA,
+            inter_matrix: &[16; 64],
+            nonlinear: true,
+            dc_prec: 1,
+            f_code: 2,
+            search: 15,
+            mb_qcode: &[4; 3],
+        };
+        let bad = BPred { dirs: MB_FWD, mvs: [[34, 0], [0, 0]] };
+        // a source that the out-of-range (edge-clamped) prediction would match exactly
+        let src = predict_b(&ctx, bad, 1, 0);
+        let st = SliceSt { qcode: 4, dc: [256; 3], pmv: bad.mvs, skipped: 0, left_mv: bad.mvs, last_dirs: MB_FWD };
+        let mb = MbIn { src: &src, mbx: 1, mby: 0, qcode: 4 };
+        let pred = b_decision(&ctx, &st, &mb, 1);
+        assert_ne!(pred, Some(bad));
+    }
 }
