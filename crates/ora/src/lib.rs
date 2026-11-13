@@ -189,28 +189,63 @@ fn props(el: &El) -> Result<Props> {
     })
 }
 
-/// The elements of `stack`. Recursion is bounded by [`MAX_XML_DEPTH`].
+/// The elements of `stack`, walked with an explicit stack: a stack can nest up to
+/// [`MAX_XML_DEPTH`] deep, more than a small thread stack can recurse.
 fn stack(el: &El, count: &mut usize) -> Result<Vec<Node>> {
+    struct Frame<'a> {
+        props: Props,
+        isolation: Option<String>,
+        children: Vec<Node>,
+        rest: std::vec::IntoIter<&'a El>,
+    }
+    let mut root = el.elements().collect::<Vec<_>>().into_iter();
+    let mut frames: Vec<Frame> = Vec::new();
     let mut out = Vec::new();
-    for child in el.elements() {
+    loop {
+        let next = match frames.last_mut() {
+            Some(frame) => frame.rest.next(),
+            None => root.next(),
+        };
+        let Some(child) = next else {
+            let Some(frame) = frames.pop() else { break };
+            let node = Node::Stack(Stack { props: frame.props, isolation: frame.isolation, children: frame.children });
+            match frames.last_mut() {
+                Some(parent) => parent.children.push(node),
+                None => out.push(node),
+            }
+            continue;
+        };
         *count += 1;
         if *count > MAX_NODES {
             return Err(invalid(format!("more than {MAX_NODES} layers")));
         }
-        out.push(match child.name.as_str() {
-            "layer" => Node::Layer(Layer {
-                props: props(child)?,
-                x: int(child, "x")?,
-                y: int(child, "y")?,
-                src: child.attr("src").map(|s| s.trim().to_string()),
-            }),
-            "stack" => Node::Stack(Stack {
+        match child.name.as_str() {
+            "layer" => {
+                let node = Node::Layer(Layer {
+                    props: props(child)?,
+                    x: int(child, "x")?,
+                    y: int(child, "y")?,
+                    src: child.attr("src").map(|s| s.trim().to_string()),
+                });
+                match frames.last_mut() {
+                    Some(parent) => parent.children.push(node),
+                    None => out.push(node),
+                }
+            }
+            "stack" => frames.push(Frame {
                 props: props(child)?,
                 isolation: child.attr("isolation").map(|s| s.trim().to_string()),
-                children: stack(child, count)?,
+                children: Vec::new(),
+                rest: child.elements().collect::<Vec<_>>().into_iter(),
             }),
-            other => Node::Other { tag: other.to_string(), name: child.attr("name").map(str::to_string) },
-        });
+            other => {
+                let node = Node::Other { tag: other.to_string(), name: child.attr("name").map(str::to_string) };
+                match frames.last_mut() {
+                    Some(parent) => parent.children.push(node),
+                    None => out.push(node),
+                }
+            }
+        }
     }
     Ok(out)
 }
