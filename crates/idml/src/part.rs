@@ -106,10 +106,15 @@ pub fn part_xml(root: &El) -> Vec<u8> {
 /// `designmap.xml` as bytes: [`part_xml`] with the `<?aid …?>` instruction that tells InDesign
 /// what the file is.
 pub fn designmap_xml(root: &El) -> Vec<u8> {
+    let pi = format!("<?aid style=\"50\" type=\"document\" readerVersion=\"6.0\" featureSet=\"257\" product=\"{}(1)\" ?>", DOM_VERSION);
+    designmap_xml_with_pi(root, &pi)
+}
+
+/// A designmap part with the caller's `<?aid …?>` metadata instruction.
+pub fn designmap_xml_with_pi(root: &El, pi: &str) -> Vec<u8> {
     let mut s = String::from(DECL_STANDALONE);
-    s.push_str("<?aid style=\"50\" type=\"document\" readerVersion=\"6.0\" featureSet=\"257\" product=\"");
-    s.push_str(DOM_VERSION);
-    s.push_str("(1)\" ?>\n");
+    s.push_str(pi);
+    s.push('\n');
     root.write_xml_pretty(&mut s, "\t");
     s.into_bytes()
 }

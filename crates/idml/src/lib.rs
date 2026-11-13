@@ -39,7 +39,7 @@ pub mod value;
 
 pub use craft_xml::{El, Local, Node};
 pub use package::{Document, Limits, Package, write_package};
-pub use part::{CONTAINER_XML, Props, designmap_xml, parse_part, part_root, part_xml, prop, with_props, xml_limits};
+pub use part::{CONTAINER_XML, Props, designmap_xml, designmap_xml_with_pi, parse_part, part_root, part_xml, prop, with_props, xml_limits};
 
 /// The IDML package mimetype (content of the first, stored `mimetype` entry).
 pub const MIMETYPE: &str = "application/vnd.adobe.indesign-idml-package";
