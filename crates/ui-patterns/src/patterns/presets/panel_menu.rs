@@ -111,10 +111,13 @@ impl<'a, K> PresetPanelMenu<'a, K> {
             .into_iter()
             .map(|command| {
                 let state = CommandState::new().enabled(self.enabled(command));
-                (command, match self.checked(command) {
-                    Some(on) => state.checked(on),
-                    None => state,
-                })
+                (
+                    command,
+                    match self.checked(command) {
+                        Some(on) => state.checked(on),
+                        None => state,
+                    },
+                )
             })
             .collect()
     }
