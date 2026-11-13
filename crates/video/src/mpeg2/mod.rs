@@ -1,5 +1,6 @@
 //! Clean-room MPEG-2 video (ITU-T H.262 | ISO/IEC 13818-2) and MPEG-1 video (ISO/IEC 11172-2)
-//! decoder.
+//! decoder, and the start of an MPEG-2 encoder ([`encode`], feature `mpeg2-encode`: I and P
+//! pictures).
 //!
 //! - Main Profile at Low/Main/High-1440/High Level, 4:2:2 Profile (XDCAM HD422, IMX / D-10),
 //!   Simple Profile, and MPEG-1 (including D pictures and constrained-parameters streams).
@@ -26,11 +27,16 @@
 #![allow(clippy::needless_range_loop, clippy::type_complexity)]
 
 mod bits;
+#[cfg(feature = "mpeg2-encode")]
+pub mod encode;
 pub mod headers;
 mod idct;
 mod mc;
 mod slice;
 mod vlc;
+
+#[cfg(feature = "mpeg2-encode")]
+pub use encode::{AspectRatio, EncodeError, Encoder, EncoderConfig, Packet, RateControl, ReconFrame, YuvFrame};
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
