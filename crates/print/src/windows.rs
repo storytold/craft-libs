@@ -224,7 +224,28 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
         .collect();
     let media = ticket::matching_paper(&papers, sheet.0, sheet.1).and_then(|i| medias.get(i));
     let wanted = match (media, job.scaling) {
-        (Some(m), _) => Some((m.size().width_in_micron(), m.size().height_in_micron())),
+        (Some(m), _) => {
+            let size = (m.size().width_in_micron(), m.size().height_in_micron());
+            // INV-6: a driver that keeps one side of the paper metric in its DEVMODE extension
+            // (storytold/craft-libs#7230) reports a zero side; the wanted size then is the sheet
+            // the job asked for, not the zero record, which would poison the cross-check and hand
+            // `sheets::plan` a width of zero.
+            if size.0 == 0 || size.1 == 0 {
+                match (ticket::micrometres(sheet.0), ticket::micrometres(sheet.1)) {
+                    (Some(w), Some(h)) => Some((w, h)),
+                    _ => {
+                        return Err(spool_error(format!(
+                            "{} has no {:.2} × {:.2} inch paper; choose a paper size it has, or add this one in its driver",
+                            device.name(),
+                            sheet.0 / 72.0,
+                            sheet.1 / 72.0
+                        )));
+                    }
+                }
+            } else {
+                Some(size)
+            }
+        }
         (None, Scaling::ShrinkToFit) => None,
         (None, Scaling::Exact) => {
             return Err(spool_error(format!(
