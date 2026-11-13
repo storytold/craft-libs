@@ -6,6 +6,7 @@
 
 use std::io::Cursor;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{ImageReader, Limits as ImageLimits, RgbaImage};
 
 use crate::CodecError;
@@ -60,6 +61,29 @@ pub fn encode_png(pixels: &RgbaImage) -> Result<Vec<u8>, CodecError> {
     let mut out = Cursor::new(Vec::new());
     pixels.write_to(&mut out, image::ImageFormat::Png).map_err(|e| CodecError::encode("PNG", e))?;
     Ok(out.into_inner())
+}
+
+/// Encode an RGBA image as standard Base64 containing PNG bytes, for a document field that stores
+/// an inline PNG image.
+pub fn encode_png_base64(pixels: &RgbaImage) -> Result<String, CodecError> {
+    encode_png(pixels).map(|bytes| STANDARD.encode(bytes))
+}
+
+/// Decode standard Base64 containing one PNG into straight-alpha RGBA pixels.
+///
+/// The encoded length is checked before Base64 allocates the decoded buffer, and the decoded PNG
+/// then passes through the same file, dimension, pixel-count, and allocation limits as any other
+/// raster input.
+pub fn decode_png_base64(text: &str, limits: DecodeLimits) -> Result<RgbaImage, CodecError> {
+    let max_encoded_bytes = limits.max_file_bytes.div_ceil(3).saturating_mul(4);
+    if text.len() > max_encoded_bytes {
+        return Err(CodecError::LimitExceeded(format!("{} Base64 characters exceed max {max_encoded_bytes}", text.len())));
+    }
+    let bytes = STANDARD.decode(text).map_err(|e| CodecError::malformed("PNG Base64", e))?;
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err(CodecError::malformed("PNG Base64", "decoded data has no PNG signature"));
+    }
+    decode_rgba(&bytes, limits)
 }
 
 /// Encode RGBA pixels as JPEG at the requested quality (1–100).
