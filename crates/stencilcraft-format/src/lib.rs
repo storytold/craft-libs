@@ -363,6 +363,13 @@ mod tests {
     }
 
     #[test]
+    fn scalar_roots_are_not_documents() {
+        for text in ["false", "-1", "1", "1.5", "\"scalar\"", "null"] {
+            assert!(matches!(File::read(text), Err(Error::NotStencilCraft)));
+        }
+    }
+
+    #[test]
     fn refuses_versions_other_than_the_current_version() {
         assert!(matches!(File::read(r#"{"stencilcraft":{"name":"stencilcraft","version":2}}"#), Err(Error::Version { found: 2, supported: 1 })));
     }
