@@ -137,6 +137,9 @@ impl<R: Read + Seek> Decoder<R> {
         if w == 0 || h == 0 || w > 1 << 18 || h > 1 << 18 {
             return Err(limit("EXR dimensions exceed the streaming limit of 262144"));
         }
+        if (w as u64).saturating_mul(h as u64) > 1 << 30 {
+            return Err(limit("EXR pixel count exceeds the streaming limit of 1073741824"));
+        }
         let list = &header.channels.list;
         if list.is_empty() || list.len() > 64 || list.iter().any(|c| c.sampling.0 != 1 || c.sampling.1 != 1) {
             return Err(unsupported("EXR channel count or subsampling"));

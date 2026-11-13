@@ -39,7 +39,7 @@ const MAX_PATTERN_DEPTH: usize = 8;
 /// Embedded SVG images inside embedded SVG images. Each draws on a pixmap of the enclosing
 /// layer, which the live-bytes check charges, so deep chains of small images are harmless and
 /// chains of big ones stop at the budget long before this.
-const MAX_IMAGE_DEPTH: usize = 32;
+const MAX_IMAGE_DEPTH: usize = 24;
 /// Nested isolated groups, patterns, embedded images and filter images followed. It keeps this
 /// walk, and resvg's own recursion, far from a stack overflow; real drawings stay under a few dozen.
 const MAX_DEPTH: usize = 200;
