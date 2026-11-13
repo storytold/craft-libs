@@ -103,7 +103,9 @@ impl<'a> NavigateBar<'a> {
                         .range(ZoomLadder::percent_range(device, document))
                         .stepper(ladder)
                         .show(ui);
-                    let at = |percent: Option<f64>| percent.map_or(current, |percent| zoom::with_device(&current, percent / 100.0, document, pixels_per_point));
+                    let at = |percent: Option<f64>| {
+                        percent.map_or(current, |percent| zoom::with_device(&current, percent / 100.0, document, pixels_per_point))
+                    };
                     events = write(&mut view, cx, field.edit.events.clone().map(at));
                 }
                 Divider::vertical().show(ui);

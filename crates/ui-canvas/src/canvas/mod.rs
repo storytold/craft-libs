@@ -72,7 +72,9 @@ mod tools;
 mod zoom_motion;
 
 pub use momentary::{Momentary, MomentaryCommands, MomentaryTool};
-pub use navigate::{Autoscroll, FlickPan, NavigateBar, NavigateBarOutput, NavigationOptions, PageKey, TouchpadGlide, WheelAction, WheelInput, WheelNavigation, pan};
+pub use navigate::{
+    Autoscroll, FlickPan, NavigateBar, NavigateBarOutput, NavigationOptions, PageKey, TouchpadGlide, WheelAction, WheelInput, WheelNavigation, pan,
+};
 pub use rotate::{RotateView, RotateViewOutput, RotateViewStyle, ViewTurn};
 pub use tools::{HandTool, RotateViewTool, ViewCommands, ViewTarget, ZoomTool};
 pub use zoom_motion::{HoldZoom, ZoomAnimation, ZoomDrag};

@@ -1,8 +1,8 @@
 //! Stories of the compass and the navigate bar.
 
+use crate::bars::{Bar, BarKind};
 use crate::canvas::rotate::RIM;
 use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas_with};
-use crate::bars::{Bar, BarKind};
 use crate::canvas::{Canvas, NavigateBar, NavigationOptions, RotateView, RotateViewOutput};
 use crate::contract::{Bind, Show as _, ShowContainer as _, Validity};
 use crate::runtime::env::Message;
@@ -66,7 +66,9 @@ fn bar_over_canvas(ui: &mut Ui, view: &mut CanvasView, mut bar: impl FnMut(&mut 
     let shown = Bar::new("Options", BarKind::Options).show(ui, |ui, _| bar(ui, Bind::bound(&mut *view)));
     let room = crate::testing::stage(ui);
     let document = StoryDocument::STANDARD.rect().size();
-    on_canvas_with(ui, room, Canvas::new("Document").view(Bind::bound(view)).document(document), Some(&StoryDocument::STANDARD), |_, _| StoryOutput::default());
+    on_canvas_with(ui, room, Canvas::new("Document").view(Bind::bound(view)).document(document), Some(&StoryDocument::STANDARD), |_, _| {
+        StoryOutput::default()
+    });
     shown.inner.unwrap_or_default()
 }
 
