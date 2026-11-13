@@ -29,9 +29,9 @@ struct Capture {
     meshes: Option<Vec<Mesh>>,
 }
 
-/// Lets one test at a time hold a wgpu renderer. With Mesa's software Vulkan driver, a test
-/// binary that renders on two devices at once from parallel test threads now and then crashes
-/// with SIGSEGV.
+/// Lets one test at a time hold a wgpu renderer. Each renderer creates its own Vulkan instance and
+/// device. When one test uses its device while a test on another thread creates or destroys one,
+/// the Vulkan loader now and then crashes the test binary with SIGSEGV.
 static GPU_LOCK: Mutex<()> = Mutex::new(());
 
 /// Take this before creating a renderer (`let _gpu = gpu_lock();`), so it is released after the
