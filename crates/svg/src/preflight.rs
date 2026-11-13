@@ -71,6 +71,11 @@ pub fn text<'a>(bytes: &'a [u8], limits: &Limits) -> Result<Cow<'a, str>, Error>
 
 /// Parses already-decoded SVG text and checks it against `limits`.
 pub fn parse_text<'a>(svg: &'a str, limits: &Limits) -> Result<roxmltree::Document<'a>, Error> {
+    parse_text_with_depth(svg, limits).map(|(xml, _, _)| xml)
+}
+
+/// Parses and validates SVG text, returning its source nesting depth as well as its XML tree.
+pub fn parse_text_with_depth<'a>(svg: &'a str, limits: &Limits) -> Result<(roxmltree::Document<'a>, usize, usize), Error> {
     if svg.len() > limits.bytes {
         return Err(Error::Text(crate::svgz::Error::TooLarge(limits.bytes)));
     }
@@ -83,9 +88,37 @@ pub fn parse_text<'a>(svg: &'a str, limits: &Limits) -> Result<roxmltree::Docume
     if crate::guard::too_wide(svg, limits.attributes, limits.attribute_work) {
         return Err(Error::TooWide(limits.attributes));
     }
-    if crate::guard::deeper_than(svg, limits.depth) {
+    let prescan = crate::guard::prescan(svg, limits.depth);
+    if prescan.too_deep {
         return Err(Error::TooDeep(limits.depth));
     }
     let options = roxmltree::ParsingOptions { allow_dtd: true, nodes_limit: limits.xml_nodes, ..Default::default() };
-    roxmltree::Document::parse_with_options(svg, options).map_err(|e| Error::Xml(e.to_string()))
+    let xml = roxmltree::Document::parse_with_options(svg, options).map_err(|e| Error::Xml(e.to_string()))?;
+    Ok((xml, prescan.depth, prescan.open_depth))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parsed_tree_reports_source_nesting_depth() -> Result<(), Error> {
+        let limits = Limits { depth: 4, ..Default::default() };
+        let (document, depth, open_depth) = parse_text_with_depth("<svg><g><path/></g></svg>", &limits)?;
+        assert!(document.root_element().has_tag_name("svg"));
+        assert_eq!(depth, 2);
+        assert_eq!(open_depth, 0);
+        let simple = parse_text("<svg/>", &limits)?;
+        assert!(simple.root_element().has_tag_name("svg"));
+        Ok(())
+    }
+
+    #[test]
+    fn source_depth_and_xml_errors_keep_their_specific_kind() {
+        let shallow = Limits { depth: 1, ..Default::default() };
+        assert!(matches!(parse_text_with_depth("<svg><g></g></svg>", &shallow), Err(Error::TooDeep(1))));
+
+        let normal = Limits::default();
+        assert!(matches!(parse_text_with_depth("<svg><g></svg>", &normal), Err(Error::Xml(_))));
+    }
 }
