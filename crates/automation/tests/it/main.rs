@@ -4,3 +4,4 @@ mod actions;
 mod control;
 mod dialogs;
 mod screenshot;
+mod synthetic;

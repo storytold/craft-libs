@@ -6,9 +6,10 @@ use super::placement::placement_of;
 use super::shell::{base_shell, shell_of, window_info};
 use super::spec::frame_of;
 use super::{Record, shared};
+use crate::runtime::egui::injected::{self, Released};
 use crate::runtime::egui::input_filter;
 use crate::runtime::egui::screenshot::{ScreenshotFacts, ScreenshotSlot};
-use crate::runtime::egui::{injected, pass, screenshot, viewports};
+use crate::runtime::egui::{pass, screenshot, viewports};
 use crate::runtime::frame::PerViewport;
 use craft_behavior::placement::Placement;
 use craft_behavior::{Monitor, PointerButton};
@@ -103,20 +104,48 @@ impl WindowHost {
         screenshot::facts(&self.ctx)
     }
 
-    /// Queues a pointer move to `at` in `viewport`, delivered on a pass of its own.
-    pub fn inject_move(&self, viewport: ViewportId, at: Pos2) {
-        injected::inject_move(&self.ctx, viewport, at);
+    /// Queues a pointer move to `at` in `viewport` with `mods` held, delivered on a pass of its own; the modifiers
+    /// stay held after it, and a button held by earlier injected input stays down, so the move drags. With `rest`
+    /// (seconds) the input counts as processed only once the pointer has rested that long.
+    pub fn inject_move(&self, viewport: ViewportId, at: Pos2, mods: Mods, rest: f64) {
+        injected::inject_move(&self.ctx, viewport, at, mods, rest);
     }
 
-    /// Queues a move to `at`, then `count` presses and releases of `button`, one pass each; a button egui has no
+    /// Queues a move to `at`, then `count` presses and releases of `button` with `mods` held, one pass each. With
+    /// `hold` the last press stays down until [`inject_release`](Self::inject_release). A button egui has no
     /// counterpart for queues nothing.
-    pub fn inject_click(&self, viewport: ViewportId, at: Pos2, button: PointerButton, count: u32) {
-        injected::inject_click(&self.ctx, viewport, at, button, count);
+    pub fn inject_click(&self, viewport: ViewportId, at: Pos2, button: PointerButton, count: u32, mods: Mods, hold: bool) {
+        injected::inject_click(&self.ctx, viewport, at, button, count, mods, hold);
     }
 
-    /// Queues `key` pressed and released with `mods` held, as the platform reports them.
-    pub fn inject_key(&self, viewport: ViewportId, key: Key, mods: Mods) {
-        injected::inject_key(&self.ctx, viewport, key, mods);
+    /// Queues `key` pressed with `mods` held, as the platform reports them, and released unless `hold`.
+    pub fn inject_key(&self, viewport: ViewportId, key: Key, mods: Mods, hold: bool) {
+        injected::inject_key(&self.ctx, viewport, key, mods, hold);
+    }
+
+    /// Queues a move to `at`, then a wheel turn of `delta` points with `mods` held.
+    pub fn inject_wheel(&self, viewport: ViewportId, at: Pos2, delta: Vec2, mods: Mods) {
+        injected::inject_wheel(&self.ctx, viewport, at, delta, mods);
+    }
+
+    /// Queues the release of what `released` names, at `at` or where the injected pointer is.
+    pub fn inject_release(&self, viewport: ViewportId, at: Option<Pos2>, released: Released) {
+        injected::inject_release(&self.ctx, viewport, at, released);
+    }
+
+    /// Holds Caps Lock on or off in place of the platform's state; `None` returns to the platform's.
+    pub fn set_caps_lock(&self, on: Option<bool>) {
+        injected::set_caps_lock(&self.ctx, on);
+    }
+
+    /// The Caps Lock state injected input holds, when it holds one.
+    pub fn injected_caps_lock(&self) -> Option<bool> {
+        injected::caps_lock(&self.ctx)
+    }
+
+    /// Whether the running pass's input carries injected input: what it triggers acts for an automation client.
+    pub fn injected_pass(&self) -> bool {
+        injected::in_pass(&self.ctx)
     }
 
     /// Adds `equivalent` to the next input of `viewport`: a key equivalent the platform's menu took from the window

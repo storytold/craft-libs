@@ -18,6 +18,7 @@ use craft_window::system::WindowSystem;
 use egui::{Context, Id, Pos2, Rect, Vec2, ViewportId};
 use std::sync::{Arc, Mutex};
 
+pub use crate::runtime::egui::injected::Released;
 pub use crate::runtime::egui::screenshot::{ScreenshotError, ScreenshotFacts, ScreenshotSlot};
 
 mod hit;
