@@ -931,6 +931,42 @@ impl Graphic {
         self.children.iter().find_map(|c| if let GraphicChild::Link(l) = c { Some(l) } else { None })
     }
 
+    pub fn self_id(&self) -> Option<&str> {
+        self.values.self_id()
+    }
+
+    pub fn applied_object_style(&self) -> Option<&str> {
+        self.values.get("AppliedObjectStyle")
+    }
+
+    pub fn item_transform(&self) -> Matrix {
+        self.values.item_transform()
+    }
+
+    /// GraphicBounds in IDML's `Left`, `Top`, `Right`, `Bottom` order.
+    pub fn bounds(&self) -> [f64; 4] {
+        self.values
+            .prop_el("GraphicBounds")
+            .map(Values::of)
+            .map(|values| ["Left", "Top", "Right", "Bottom"].map(|key| values.num(key).unwrap_or(0.0)))
+            .unwrap_or([0.0; 4])
+    }
+
+    /// Two finite values from InDesign's `ActualPpi` field.
+    pub fn actual_ppi(&self) -> Option<[f64; 2]> {
+        let source = self.values.get("ActualPpi")?;
+        let numbers: Vec<f64> = source.split_whitespace().take(3).filter_map(|value| value.parse().ok()).collect();
+        <[f64; 2]>::try_from(numbers).ok().filter(|values| values.iter().all(|value| value.is_finite()))
+    }
+
+    pub fn fill_color(&self) -> Option<&str> {
+        self.values.get("FillColor")
+    }
+
+    pub fn fill_tint(&self) -> Option<f64> {
+        self.values.num("FillTint")
+    }
+
     pub fn layer_options(&self) -> Option<GraphicLayerOptions> {
         self.children
             .iter()
