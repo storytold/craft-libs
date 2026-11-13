@@ -9,6 +9,8 @@
 //! testable with no service running. A host supplies the half that does. This
 //! crate never learns what it reaches.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 
 use craft_cloud::{Capability, Conversation, Entry};
@@ -76,20 +78,36 @@ pub enum Event {
 /// the user finished there. A send after the window closed is not a failure.
 pub struct Post {
     tx: Sender<Event>,
+    /// The window's account generation as of the moment the job this answers
+    /// was issued, beside a handle to what it is now. A sign-out or a new
+    /// sign-in bumps the live value; a reply that arrives after is for a
+    /// session that is gone, and must not land on the one that replaced it.
+    generation: Arc<AtomicU64>,
+    issued: u64,
 }
 
 impl Post {
-    pub(crate) fn new(tx: Sender<Event>) -> Post {
-        Post { tx }
+    pub(crate) fn new(tx: Sender<Event>, generation: Arc<AtomicU64>) -> Post {
+        let issued = generation.load(Ordering::Relaxed);
+        Post { tx, generation, issued }
     }
 
     /// Another handle to the same place, for a worker that answers more than
-    /// once or hands the job on.
+    /// once or hands the job on. Carries the same generation: every answer to
+    /// one job was issued at the same moment, however many of them there are.
     pub fn dup(&self) -> Post {
-        Post { tx: self.tx.clone() }
+        Post { tx: self.tx.clone(), generation: self.generation.clone(), issued: self.issued }
     }
 
+    /// Delivers the event, unless the window has signed out or signed in
+    /// again since the job this answers was issued. Silently dropping it
+    /// there, rather than delivering it, is what keeps a late reply from
+    /// restoring the previous session's account, files or busy state on top
+    /// of whatever replaced it.
     pub fn send(&self, event: Event) {
+        if self.generation.load(Ordering::Relaxed) != self.issued {
+            return;
+        }
         let _ = self.tx.send(event);
     }
 }

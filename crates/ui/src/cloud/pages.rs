@@ -9,8 +9,8 @@ use craft_cloud::{Capability, Entry, EntryKind};
 use egui::{RichText, Ui};
 
 use super::{
-    CloudApp, Link, Source, browse, column, converse, dim, document_name, entry_row, fill, link, load_shared, open_entry, opens, parent_of,
-    reload_active, save_as, size_text, start, stem_of,
+    CloudApp, Link, Source, browse, column, converse, dim, document_name, entry_row, fill, link, load_shared, open_entry, opens, parent_of, save_as,
+    size_text, start, stem_of,
 };
 
 /// The character a label ends with when choosing it opens a dialog.
@@ -485,15 +485,21 @@ pub fn conflict_modal<A: CloudApp>(app: &mut A, ctx: &egui::Context) {
         });
     });
     if reload {
+        // Reads the conflicted document back, never whichever tab happens to
+        // be active. `reload_active` acts on the active document, which is
+        // right for a host's own Reload command but wrong here: the window
+        // that triggered this modal may have moved on to another document
+        // while the refused save was on the wire.
         app.cloud_mut().conflict = None;
-        if let Err(error) = reload_active(app) {
-            app.say(error);
-        }
+        open_entry(app, conflict.entry, Some(conflict.uid));
     } else if copy {
         let name = document_name(&format!("{} (copy)", stem_of(&conflict.entry.name)), app.kind());
         let cloud = app.cloud_mut();
         cloud.conflict = None;
         cloud.save_name = name;
+        // Save As must encode the conflicted document too, not whatever is
+        // active once the user actually clicks Save on that page.
+        cloud.save_as_target = Some(conflict.uid);
         app.go_to_save_as();
     } else if dismiss {
         app.cloud_mut().conflict = None;
