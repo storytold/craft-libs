@@ -95,7 +95,6 @@ Grouped by gallery level, then shape, then name.
 | `MenuItem` | Leaf | `craft_ui_widgets::menu::item` | A row of a menu: a label, an optional icon, a check or radio mark, shortcut text and a detail line under the label |
 | `Node` | Leaf | `craft_ui_widgets::graph::node` | A node of a kind: a title, ports, the kind's inline controls and its body paint |
 | `Notice` | Leaf | `craft_ui_widgets::notices::notice` | A message in a tone |
-| `PresetPicker` | Leaf | `craft_ui_patterns::patterns::presets::picker` | A field that shows the current preset and opens its presets |
 | `RowThumb` | Leaf | `craft_ui_widgets::list::row::thumb` | The picture of a row's thumbnail, painted by the host through the content painter, which is clipped to the thumbnail's rect |
 | `SliderField` | Leaf | `craft_ui_widgets::form::slider_field` | A caption and number field over a full-width slider, on one value |
 | `Tab` | Leaf | `craft_ui_widgets::tabs::tab` | One tab of a strip |
@@ -198,6 +197,7 @@ Grouped by gallery level, then shape, then name.
 | `PreferencesWindow` | Pattern | `craft_ui_patterns::patterns::preferences::window` | The preferences window: a search field over a page list and the shown page, with OK, Cancel and Apply under them |
 | `PresetBrowser` | Pattern | `craft_ui_patterns::patterns::presets::browser` | A library of named presets shown as thumbnails |
 | `PresetFooter` | Pattern | `craft_ui_patterns::patterns::presets::footer` | The footer of a preset panel: the host's own controls, the thumbnail size slider and the count, then the action buttons Delete, New and New Group and the host's own actions |
+| `PresetPicker` | Pattern | `craft_ui_patterns::patterns::presets::picker` | A field that shows the current preset and opens its presets |
 | `PreviewZoom` | Pattern | `craft_ui_patterns::patterns::form_dialogs::preview` | The zoom row of a preview: a zoom-out button, the zoom as a percentage field and a zoom-in button |
 | `Prompt` | Pattern | `craft_ui_panels::dialog::prompt` | A question with answers: a dialog on the modal preset, centred and not movable, with a message, optional extras and one footer button per answer |
 | `PropertiesDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::properties` | A properties dialog: a `TabStrip` over the tabs (none with one tab) and the rows of the shown tab as one `ParamRows` over the values of all of them |
