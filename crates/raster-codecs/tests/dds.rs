@@ -422,6 +422,31 @@ fn mip_chain() -> Vec<u8> {
 }
 
 #[test]
+fn import_info_rejects_truncated_legacy_headers() {
+    let b = compressed(4, 4, b"DXT1");
+    for n in 0..b.len() {
+        assert!(matches!(dds::info(&b[..n]), Err(CodecError::Malformed { .. })), "accepted {n} of {} header bytes", b.len());
+    }
+}
+
+#[test]
+fn import_info_rejects_truncated_dx10_headers() {
+    let b = dx10(4, 4, 71, 3, 0, 1);
+    for n in 0..b.len() {
+        assert!(matches!(dds::info(&b[..n]), Err(CodecError::Malformed { .. })), "accepted {n} of {} header bytes", b.len());
+    }
+}
+
+#[test]
+fn import_info_accepts_complete_headers_without_pixel_data() {
+    for b in [compressed(4, 4, b"DXT1"), dx10(4, 4, 71, 3, 0, 1)] {
+        assert_eq!(dds::info(&b).unwrap(), dds::DdsInfo { width: 4, height: 4, levels: 1, alpha: true, compression: Some(dds::DdsCompression::Bc1) });
+        assert!(matches!(decode(&b), Err(CodecError::Malformed { .. })));
+        assert!(matches!(dds::decode_levels(&b, &Limits::default(), &|| false), Err(CodecError::Malformed { .. })));
+    }
+}
+
+#[test]
 fn import_info_and_all_mips_use_the_shared_decoder() {
     let b = mip_chain();
     let info = dds::info(&b[..128]).unwrap();

@@ -241,7 +241,8 @@ fn parse(b: &[u8]) -> Result<Parsed<'_>, CodecError> {
     let levels = declared.min(mip_levels(width, height));
     // The same header field is a total level size for BC, but a row stride when DDSD_PITCH is set.
     let pitch = if flags & DDSD_PITCH != 0 { Some(le32(b, 20)?) } else { None };
-    Ok(Parsed { encoding, data: b.get(start..).unwrap_or_default(), width, height, levels, pitch })
+    let data = b.get(start..).ok_or_else(|| bad("truncated header"))?;
+    Ok(Parsed { encoding, data, width, height, levels, pitch })
 }
 
 pub fn info(b: &[u8]) -> Result<DdsInfo, CodecError> {
