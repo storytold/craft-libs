@@ -1,7 +1,7 @@
 //! The egui fork the library is built with, and the check that an app's lockfile uses it.
 
 /// The egui fork the library is built and tested with. Apps patch egui to exactly this.
-pub const GIT: &str = "https://github.com/aiongg/egui.git";
+pub const GIT: &str = "https://github.com/storytold/egui.git";
 /// The commit of [`GIT`].
 pub const REV: &str = "dcd4de1fbc7502c3a2d69476d9665610947440df";
 

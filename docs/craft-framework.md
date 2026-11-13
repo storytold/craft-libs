@@ -340,24 +340,26 @@ Content runs in every pass, and its sizes come from this pass. Layouts also read
 
 `craft-libs` pins one revision of an egui fork for every egui crate (`[patch.crates-io]` in the root `Cargo.toml`). Two revisions in one build would give two incompatible `Tokens` and `Ui` types. `craft::egui_fork::{GIT, REV}` name the fork and revision, and `craft::egui_fork::check_lockfile` checks that an app's `Cargo.lock` takes every egui package from them; an app's `xtask` calls it. An app must also patch egui to the same fork, because `[patch]` applies only at the workspace root.
 
-**The fork.** This branch pins `github.com/aiongg/egui` at `5493e3aa`. That revision is the storytold egui fork's pinned revision (`6d518fc7`, the pin on storytold `craft-libs` main) plus 22 commits the framework needs:
+**The fork.** The library pins `github.com/storytold/egui` branch `next` at `dcd4de1f`. That revision is the storytold egui fork's revision on craft-libs `main` (`6d518fc7`) plus 28 commits the framework needs:
 
 - `TextEditState::preedit`, and a new IME context ends the old composition
+- `Event::ImeResetRetired`: the integration reports a reset request it dropped (native and web)
 - `InteractOptions::enabled` (disable one widget of an enabled `Ui`) and `InteractOptions::activate_on_space`
-- `Memory::request_focus_with_filter`
+- `Memory::request_focus_with_filter` and `Memory::set_focus_surrender` (a focused widget's own rule for a press or click elsewhere)
 - `Response::describe_for_accessibility` public, accessible names for `ScrollArea` scroll bars, `Context::set_accesskit_focus`, `Context::register_accesskit_parent` public
 - a pointer press goes to the widget under the press position
 - `DragAndDrop::aborted_by_escape`
-- `Popup` swallows the press outside it that closes it
-- `Context::set_layer_order`
+- `Popup` swallows the press outside it that closes it, and stays directly above the layer it opened from
+- `Context::set_layer_order`, which moves unlisted sublayers with their listed parent
 - OpenType features per text section (epaint)
 - `IdTypeMap::insert_temp_boxed` keeps the allocation of a value taken out, and `Context::ptr_eq`
 - `Context::pass_mark`, `pass_records_since` and `replay_pass_records`: a settled region replays its last pass's records
+- `Event::SystemTheme` reports the OS's light or dark preference
 - `egui_kittest`'s eframe harness runs `App::raw_input_hook` before each pass, as eframe does, so an app's `embed::before_input` runs in its tests
 
 The fork's `PATCHES.md` describes each patch and whether it is proposed upstream.
 
-**What it means for landing.** Before craft-libs main can take the framework, these commits must be on the storytold egui fork and craft-libs must pin that revision; until then a build of this branch fetches egui from `github.com/aiongg/egui`. The storytold fork's `main` has commits the pin lacks, so the commits move onto whichever storytold revision the team picks, and `craft::egui_fork::GIT` changes with the pin ([9.7](#97-landing-strategy)).
+**What it means for landing.** The fork's `next` branch moves with the framework's `next` branch: a framework change that needs an egui change lands on egui `next` first, and `craft::egui_fork::REV` names the new revision. When craft-libs `next` merges to `main`, `main` pins egui `next` as well.
 
 ## 4. Design system
 
@@ -878,7 +880,7 @@ The library replaces upstream's `craft-ui` crate, and changes public items in `c
 | --- | --- |
 | Landing order | Is the bottom-up order right, or should the token model and the library core land together? Should the apps' PRs follow each layer, or wait for the whole series? |
 | Deprecated aliases | No old path has a deprecated alias today; apps move with the API map in the pin bump that takes the library. Should the landing PRs add `#[deprecated]` aliases for the paths apps use (the icon-button and combo-box modules, the old rail and number-field types), and for how long: until every app has moved past them, or a fixed number of releases? |
-| egui fork | The library builds against `github.com/aiongg/egui` (19 commits over the storytold fork's pin, [3.7](#37-one-egui-revision)). Which of them go to upstream egui, which stay in the storytold fork, and onto which storytold revision do they move? |
+| egui fork | The library builds against storytold egui `next` (28 commits over the fork's pin on `main`, [3.7](#37-one-egui-revision)). Which of them should go to upstream egui? |
 | Facade name | `craft` is the facade's name. If it clashes with an app crate, the alternative is `craft-kit` |
 | Crate granularity | The layout adds 28 crates to upstream's 42, seven of them the UI library and its facade. Is there a family that should merge, or a crate that should split? |
 | Review load | Is a series of about 508,000 added lines, much of it moved, generated or data, reviewable as laid out, or should it split further? |
