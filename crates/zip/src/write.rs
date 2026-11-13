@@ -35,7 +35,19 @@ impl Writer {
 
     /// Adds an entry from a byte slice. A name the archive already has is an error.
     pub fn add(&mut self, name: &str, data: &[u8], compression: Compression) -> Result<(), Error> {
-        self.add_with(name, compression, |writer| writer.write_all(data))
+        let (method, level) = match compression {
+            Compression::Stored => (zip::CompressionMethod::Stored, None),
+            Compression::Deflated => (zip::CompressionMethod::Deflated, Some(6)),
+            Compression::Level(l) => (zip::CompressionMethod::Deflated, Some(i64::from(l.min(9)))),
+        };
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(method)
+            .compression_level(level)
+            .last_modified_time(zip::DateTime::default())
+            .large_file(data.len() as u64 >= u64::from(u32::MAX) / 2);
+        let fail = |e: &dyn std::fmt::Display| Error::Write(format!("{name}: {e}"));
+        self.zip.start_file(name, options).map_err(|e| fail(&e))?;
+        self.zip.write_all(data).map_err(|e| fail(&e))
     }
 
     /// Adds an entry by streaming it into the compressor, so large generated entries need not
@@ -46,8 +58,11 @@ impl Writer {
             Compression::Deflated => (zip::CompressionMethod::Deflated, Some(6)),
             Compression::Level(l) => (zip::CompressionMethod::Deflated, Some(i64::from(l.min(9)))),
         };
-        let options =
-            zip::write::SimpleFileOptions::default().compression_method(method).compression_level(level).last_modified_time(zip::DateTime::default());
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(method)
+            .compression_level(level)
+            .last_modified_time(zip::DateTime::default())
+            .large_file(true);
         let fail = |e: &dyn std::fmt::Display| Error::Write(format!("{name}: {e}"));
         self.zip.start_file(name, options).map_err(|e| fail(&e))?;
         write(&mut self.zip).map_err(|e| fail(&e))

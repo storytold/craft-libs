@@ -253,3 +253,6 @@ mod streaming_writer_tests {
         assert_eq!(value["format"], FORMAT);
     }
 }
+
+/// ZIP compression modes for native archive members.
+pub use craft_zip::Compression;
