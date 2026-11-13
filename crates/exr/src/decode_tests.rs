@@ -118,6 +118,18 @@ fn display_window_placement() {
     assert_eq!(to_display_window(&[1.0, 2.0, 3.0, 4.0], far, display, 0.0, 100).unwrap(), [0.0; 6]);
 }
 
+#[test]
+fn decoded_display_part_places_selected_channels_and_checks_total_budget() {
+    let bytes = file(vec![layer(None, 2, 2, &["R", "G"], false, exr::prelude::Compression::ZIP1)], (3, 2));
+    let part = decode_display_part(&bytes, 0, &|name| name == "R", &|_| 9.0, &Limits::default()).unwrap();
+    assert_eq!(part.channels.len(), 1);
+    assert_eq!(part.channels[0].name, "R");
+    assert_eq!(part.channels[0].samples, [0.0, 1.0, 9.0, 2.0, 3.0, 9.0]);
+
+    let limits = Limits { max_bytes: 6 * 4 - 1, ..Limits::default() };
+    assert!(matches!(decode_display_part(&bytes, 0, &all, &|_| 0.0, &limits), Err(Error::LimitExceeded(_))));
+}
+
 /// A 2x2 single-part file whose layer carries a 2x1 preview.
 fn with_preview() -> Vec<u8> {
     let mut attrs = LayerAttributes::named("rgb");
