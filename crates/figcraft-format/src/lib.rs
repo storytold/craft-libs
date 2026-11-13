@@ -275,14 +275,22 @@ pub fn read_preview_thumbnail<R: std::io::Read + std::io::Seek>(reader: R) -> Re
 /// retain the separate limits used by the app's recent-file preview.
 pub fn read_preview_archive<R: std::io::Read + std::io::Seek>(reader: R) -> Result<PreviewArchive, FormatError> {
     let mut archive = SeekArchive::open(reader, u64::MAX).map_err(|error| FormatError::Corrupt(error.to_string()))?;
+    Ok(read_preview_archive_from(&mut archive))
+}
+
+/// Read bounded native preview members from an already-open shared archive reader.
+///
+/// This lets callers preserve fallback handling for other ZIP formats without implementing ZIP
+/// member access themselves.
+pub fn read_preview_archive_from(archive: &mut impl NativeArchive) -> PreviewArchive {
     let has_document = archive.contains("document.json");
-    let thumbnail_png = archive.read("thumbnail.png", MAX_PREVIEW_THUMBNAIL_BYTES).ok().flatten();
+    let thumbnail_png = archive.read_member("thumbnail.png", MAX_PREVIEW_THUMBNAIL_BYTES).ok().flatten();
     let document = if has_document {
-        archive.read("document.json", MAX_PREVIEW_DOCUMENT_BYTES).ok().flatten().and_then(|bytes| read_preview_document(&bytes).ok())
+        archive.read_member("document.json", MAX_PREVIEW_DOCUMENT_BYTES).ok().flatten().and_then(|bytes| read_preview_document(&bytes).ok())
     } else {
         None
     };
-    Ok(PreviewArchive { has_document, thumbnail_png, document })
+    PreviewArchive { has_document, thumbnail_png, document }
 }
 
 pub fn check_version(h: &Header) -> Result<(), NewerVersion> {
