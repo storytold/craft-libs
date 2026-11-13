@@ -115,26 +115,42 @@ enum Frame {
     /// `early`: per column, the narrowest width a row of a `sized` Through frame inside read in a measuring run.
     /// `depth`: the measuring runs open when the group opened (`layout_memory::depth`).
     Group { id: Id, widest: Columns, beyond: HashMap<Vec<ColumnKey>, f32>, early: Columns, room: Option<f32>, depth: usize },
-    /// A plain container's body in the group `group`: its rows read and report that group's widths, as the rows
+    /// A plain container's body in the group around it: its rows read and report that group's widths, as the rows
     /// directly in the group do. Their reaches past the columns stay here, and the container hands them on to the
     /// frame around it (`Reached`). `room`: the width the container was offered. `sized`: the container shows at the
     /// width it measured (content-sized and not held by a content column), so a measure of it at a column narrower
     /// than the group's final one would stand in the real run; a held body shows across the column whatever it
     /// measured, and a body given its width takes the room.
-    Through { id: Id, group: Id, beyond: HashMap<Vec<ColumnKey>, f32>, room: f32, sized: bool },
+    Through { id: Id, beyond: HashMap<Vec<ColumnKey>, f32>, room: f32, sized: bool },
+    /// A labelled container's body: the field's control. Its labels stay its own, so rows inside read no label
+    /// column; every other column (a content-sized number field's value and unit) they share with the group around.
+    Field,
     /// No group: rows inside read none, whatever group is open outside.
     Barrier,
 }
 
+/// Whether `column` is one the label step puts labels in.
+fn labels(column: &ColumnKey) -> bool {
+    *column == LABELS || *column == GLYPHS
+}
+
 impl Open {
-    /// The group a row in the innermost open frame reads its widths from, and the frame its reaches past the columns
-    /// go to; `None` when no group is open or a barrier is.
-    fn innermost(&self) -> Option<(Id, Id)> {
-        match self.0.last()? {
-            Frame::Group { id, .. } => Some((*id, *id)),
-            Frame::Through { id, group, .. } => Some((*group, *id)),
-            Frame::Barrier => None,
+    /// The group a row in the innermost open frame reads `columns` from, and the frame its reaches past them go to;
+    /// `None` when no group is open, a barrier is, or a field's body is and `columns` holds a label column.
+    fn innermost(&self, columns: &[ColumnKey]) -> Option<(Id, Id)> {
+        let mut frame = None;
+        for open in self.0.iter().rev() {
+            match open {
+                Frame::Group { id, .. } => return Some((*id, frame.unwrap_or(*id))),
+                Frame::Through { id, .. } => {
+                    frame.get_or_insert(*id);
+                }
+                Frame::Field if columns.iter().any(labels) => return None,
+                Frame::Field => {}
+                Frame::Barrier => return None,
+            }
         }
+        None
     }
 }
 
@@ -224,8 +240,18 @@ impl ColumnGroup {
     /// Runs `rows` with no group open: a labelled row inside reads no column, whatever group is open outside. A
     /// component's own label steps run in one, and the bodies that lay out apart from the group (`shared_labels`).
     pub fn barrier<R>(ui: &mut Ui, rows: impl FnOnce(&mut Ui) -> R) -> R {
+        Self::framed(ui, Frame::Barrier, rows)
+    }
+
+    /// Runs the `rows` of a labelled container's body: they read no label column, and share every other column with
+    /// the group around, so the values of content-sized fields line up across the group's fields.
+    pub(crate) fn field<R>(ui: &mut Ui, rows: impl FnOnce(&mut Ui) -> R) -> R {
+        Self::framed(ui, Frame::Field, rows)
+    }
+
+    fn framed<R>(ui: &mut Ui, frame: Frame, rows: impl FnOnce(&mut Ui) -> R) -> R {
         let ctx = ui.ctx().clone();
-        pass_state::with::<Open, _>(&ctx, |open| open.0.push(Frame::Barrier));
+        pass_state::with::<Open, _>(&ctx, |open| open.0.push(frame));
         let result = rows(ui);
         pass_state::with::<Open, _>(&ctx, |open| open.0.pop());
         result
@@ -237,16 +263,19 @@ impl ColumnGroup {
     /// measuring run returns how far the rows reached past the columns.
     pub(crate) fn through<R>(ui: &mut Ui, id: Id, room: f32, sized: bool, rows: impl FnOnce(&mut Ui) -> R) -> (R, Option<Reached>) {
         let ctx = ui.ctx().clone();
-        let Some((group, _)) = pass_state::with::<Open, _>(&ctx, |open| open.innermost()) else { return (Self::barrier(ui, rows), None) };
-        pass_state::with::<Open, _>(&ctx, |open| open.0.push(Frame::Through { id, group, beyond: HashMap::new(), room, sized }));
+        if pass_state::with::<Open, _>(&ctx, |open| open.innermost(&[])).is_none() {
+            return (Self::barrier(ui, rows), None);
+        }
+        pass_state::with::<Open, _>(&ctx, |open| open.0.push(Frame::Through { id, beyond: HashMap::new(), room, sized }));
         let result = rows(ui);
         let Some(Frame::Through { beyond, .. }) = pass_state::with::<Open, _>(&ctx, |open| open.0.pop()) else { return (result, None) };
         if !crate::runtime::measure::active(&ctx) || beyond.is_empty() {
             return (result, None);
         }
-        let reached = beyond.into_iter().map(|(columns, past)| {
+        let reached = beyond.into_iter().filter_map(|(columns, past)| {
+            let (group, _) = pass_state::with::<Open, _>(&ctx, |open| open.innermost(&columns))?;
             let width = columns.iter().map(|column| current_width(&ctx, group, column)).sum();
-            (columns, width, past)
+            Some((columns, width, past))
         });
         (result, Some(Reached(reached.collect())))
     }
@@ -277,16 +306,18 @@ impl ColumnGroup {
 /// The row reports `content`.
 #[doc(hidden)]
 pub fn ambient_width(ctx: &Context, column: &ColumnKey, content: f32) -> Option<f32> {
-    let (group, _) = pass_state::with::<Open, _>(ctx, |open| open.innermost())?;
+    let (group, _) = pass_state::with::<Open, _>(ctx, |open| open.innermost(std::slice::from_ref(column)))?;
     let width = shared_width(ctx, group, column, content);
     // A row of a body that shows at its measured width reads the column into that measure: the group notes how
-    // narrow, so its scope can tell the measure from one at its final width.
+    // narrow, so its scope can tell the measure from one at its final width. A field's control read through its
+    // body is such a row: it shows at the width it measured.
     if crate::runtime::measure::active(ctx) {
         pass_state::with::<Open, _>(ctx, |open| {
             let mut sized = false;
             for frame in open.0.iter_mut().rev() {
                 match frame {
                     Frame::Through { sized: through, .. } => sized |= *through,
+                    Frame::Field => sized = true,
                     Frame::Group { id, early, .. } if *id == group => {
                         if sized {
                             let read = early.entry(column.clone()).or_insert(width);
@@ -302,10 +333,10 @@ pub fn ambient_width(ctx: &Context, column: &ColumnKey, content: f32) -> Option<
     Some(width)
 }
 
-/// The width the innermost open frame's container was offered, `None` when no group is open or a barrier is, or the
-/// container recorded none.
+/// The width the innermost open frame's container was offered, `None` when no label group is open, a barrier or a
+/// field's body is, or the container recorded none.
 pub(crate) fn ambient_room(ctx: &Context) -> Option<f32> {
-    pass_state::with::<Open, _>(ctx, |open| match open.0.last() {
+    pass_state::with::<Open, _>(ctx, |open| match open.0.last().filter(|_| open.innermost(std::slice::from_ref(&LABELS)).is_some()) {
         Some(Frame::Group { room, .. }) => *room,
         Some(Frame::Through { room, .. }) => Some(*room),
         _ => None,
@@ -318,7 +349,7 @@ pub(crate) fn ambient_room(ctx: &Context) -> Option<f32> {
 /// happens where no group is open or a barrier is.
 #[doc(hidden)]
 pub fn report_beyond(ctx: &Context, columns: &[ColumnKey], past: f32) {
-    if let Some((_, frame)) = pass_state::with::<Open, _>(ctx, |open| open.innermost()) {
+    if let Some((_, frame)) = pass_state::with::<Open, _>(ctx, |open| open.innermost(columns)) {
         report(ctx, frame, Report::Beyond(columns.to_vec(), past));
     }
 }

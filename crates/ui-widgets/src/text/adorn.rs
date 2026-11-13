@@ -7,7 +7,7 @@ use crate::contract::{MeasureCx, PaintUi, Props as _};
 use crate::primitives::{IconSpec, Span, TextRun};
 use crate::runtime::env::Label;
 use crate::style::{StyleColor, TypeRole};
-use craft_behavior::{Flow, PartKey};
+use craft_behavior::{ColumnKey, Flow, PartKey};
 use craft_theme::ControlSize;
 use egui::{Rect, Vec2, vec2};
 use smallvec::SmallVec;
@@ -63,6 +63,18 @@ impl Adornment {
     pub fn apart(mut self) -> Adornment {
         if let Kind::Text { apart, .. } = &mut self.kind {
             *apart = true;
+        }
+        self
+    }
+
+    /// A text adornment that takes the width of `column` in the column group open around the field, at least its own
+    /// run, so a column of fields gives it one width and its text starts at one place. Outside a group, and for a
+    /// glyph or a button, it is returned as it is. Measure it first ([`Adornment::measured`]).
+    pub fn in_column(mut self, ctx: &egui::Context, column: &ColumnKey) -> Adornment {
+        if let Kind::Text { size, .. } = &mut self.kind
+            && let Some(width) = crate::layout::ambient_width(ctx, column, size.x)
+        {
+            size.x = size.x.max(width);
         }
         self
     }

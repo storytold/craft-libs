@@ -20,7 +20,7 @@ use crate::runtime::env::{Label, LengthUnits, UnitKind, Units};
 use crate::style::{ComponentStyle, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole};
 use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps};
 use craft_behavior::{
-    Codec, HitLevel, HitPriority, Metrics, NavMove, NumberCodec, PartKey, PressPhase, Sense, ValueDrag, decimals_for_step, wheel_step,
+    Codec, ColumnKey, HitLevel, HitPriority, Metrics, NavMove, NumberCodec, PartKey, PressPhase, Sense, ValueDrag, decimals_for_step, wheel_step,
 };
 use craft_theme::{Stateful, States};
 use egui::{Rect, Vec2};
@@ -38,6 +38,12 @@ pub use value::{NamedOr, NumberName, NumberOutput, NumberPick, NumberValue};
 
 /// The step of an arrow press, the wheel and a scrub when the field sets none.
 const DEFAULT_STEP: f64 = 1.0;
+
+/// The columns content-sized fields share in a column group (a `FieldGroup`): the widest value and the widest unit,
+/// so their values and units line up across the group's fields.
+const VALUES: ColumnKey = ColumnKey::new("number_values");
+const UNITS: ColumnKey = ColumnKey::new("number_units");
+
 /// The placeholder of a mixed field.
 const BLANK: &str = "\u{2014}";
 
@@ -49,6 +55,11 @@ const ON_GRID: f64 = 1e-9;
 /// Whether the value is a number that is not finite; the field shows the dash for it, as for a mixed value.
 fn non_finite<V: NumberValue>(value: Option<&V>) -> bool {
     value.is_some_and(|v| v.named().is_none() && v.number().is_some_and(|number| !number.is_finite()))
+}
+
+/// Whether the host sized the field to its content (`Sizing::Content`).
+fn content_sized<C: Component>(cx: &MeasureCx<'_, C>) -> bool {
+    cx.resolved.sizing() == Some(Sizing::Content)
 }
 
 /// The chevron that opens the presets list.
@@ -304,9 +315,14 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     }
 
     /// The unit, measured, then the chevrons: what sits after the text. The unit stands apart at the end of the value
-    /// area, so units line up in a column of fields and the number centres in the room before its unit.
+    /// area, so units line up in a column of fields and the number centres in the room before its unit. A
+    /// content-sized field's unit is as wide as the widest of its column group's.
     fn after_text(&self, cx: &MeasureCx<'_, Self>, chevrons: &[(PartKey, Label)]) -> Vec<Adornment> {
-        let unit = self.unit.iter().map(|unit| Adornment::text(unit.clone(), cx.style.unit.role).apart().measured(cx));
+        let shared = content_sized(cx);
+        let unit = self.unit.iter().map(|unit| {
+            let unit = Adornment::text(unit.clone(), cx.style.unit.role).apart().measured(cx);
+            if shared { unit.in_column(cx.ui.ctx(), &UNITS) } else { unit }
+        });
         let chevrons =
             chevrons.iter().map(|(key, name)| Adornment::button(*key, crate::controls::disclosure::DisclosureGlyph::dropdown(), name.clone()));
         unit.chain(chevrons).collect()
@@ -366,10 +382,13 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         // value when the range is open) with the caret and the unit, at most one number cell; a longer value scrolls
         // inside it. The inside label and the chevrons take their own room beside it, each as `place` gives it. The
         // field is never narrower than a cell, so a column of short fields ends at one edge. A content-sized field
-        // takes its whole value and has no floor.
-        let content = cx.resolved.sizing() == Some(Sizing::Content);
+        // takes its whole value and has no floor; in a column group its value area is the group's widest.
+        let content = content_sized(cx);
         let sample = cx.value().map_or(Cow::Borrowed(""), |value| codec.sample(value));
-        let text = cx.field_text(&TextRun::new(sample.as_ref()).role(TypeRole::Mono));
+        let mut text = cx.field_text(&TextRun::new(sample.as_ref()).role(TypeRole::Mono));
+        if content {
+            text.x = crate::layout::ambient_width(cx.ui.ctx(), &VALUES, text.x).map_or(text.x, |width| width.max(text.x));
+        }
         let chevrons = self.chevrons(&cx.words::<TextWords>());
         self.leading = Self::before_text(cx);
         self.trailing = self.after_text(cx, &chevrons);

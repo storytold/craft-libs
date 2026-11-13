@@ -497,26 +497,30 @@ pub(super) enum LabelColumns {
     /// The body's rows read the group around the container, as the rows directly in the group do. `sized`: the
     /// container shows at the width it measures (`ColumnGroup::through`).
     Through { sized: bool },
+    /// A labelled container's body: its rows read no label column of the group around, and share its other columns
+    /// (`ColumnGroup::field`).
+    Field,
     /// The body lays out apart from the group around it, and its rows read none.
     Apart,
 }
 
 impl LabelColumns {
-    /// The part `props`'s body takes. A labelled container's body is its field's control, whose labels stay its own, as
-    /// is a roving group's (one control over its members: a radio group); a body on a mount of its own (a popup, a
-    /// dialog, a pane), one with a scroll region (a view of its own, as a bar's) and a grid (whose columns align its
-    /// cells) lay out apart. Every other body (a section, a box, a stack, a row)
-    /// passes the group through.
+    /// The part `props`'s body takes. A labelled container's body is its field's control, whose labels stay its own
+    /// while its other columns are the group's. A roving group's body (one control over its members: a radio group),
+    /// a body on a mount of its own (a popup, a dialog, a pane), one with a scroll region (a view of its own, as a
+    /// bar's) and a grid (whose columns align its cells) lay out apart. Every other body (a section, a box, a stack, a
+    /// row) passes the group through.
     pub(super) fn of(props: &ContainerProps, sized: bool) -> Self {
-        if props.label_column {
-            LabelColumns::Own
-        } else if props.label.is_some()
-            || props.roving.is_some()
+        let apart = props.roving.is_some()
             || props.mount != Mount::Inline
             || props.scroll.is_some()
-            || matches!(props.layout, crate::layout::BodyLayout::Grid { .. })
-        {
+            || matches!(props.layout, crate::layout::BodyLayout::Grid { .. });
+        if props.label_column {
+            LabelColumns::Own
+        } else if apart {
             LabelColumns::Apart
+        } else if props.label.is_some() {
+            LabelColumns::Field
         } else {
             LabelColumns::Through { sized }
         }
@@ -536,7 +540,8 @@ pub(super) struct LabelsFound {
 }
 
 /// Runs `body`, offered `room`, under the label columns `columns`: in a column group named `labels` under the container
-/// `id`, so the labelled rows directly inside share the widest label; through to the group around; or behind a barrier.
+/// `id`, so the labelled rows directly inside share the widest label; through to the group around; as a field's
+/// control, which shares the group's columns other than its labels; or behind a barrier.
 /// An own group opens at the `seed` widths a first run of the rows settled.
 pub(super) fn shared_labels<R>(
     ui: &mut Ui,
@@ -561,6 +566,7 @@ pub(super) fn shared_labels<R>(
             found.reached = reached;
             result
         }
+        LabelColumns::Field => ColumnGroup::field(ui, body),
         LabelColumns::Apart => ColumnGroup::barrier(ui, body),
     }
 }

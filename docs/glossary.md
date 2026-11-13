@@ -38,7 +38,7 @@ One row per name in the author table (Overview) and per `pub` item a component a
 | `CollectionProps` | A collection's plain data | `craft_ui::contract` | 17.1 |
 | `CollectionResponse` | A collection's output | `craft_ui::contract` | 17.6 |
 | Column, `ColumnSpec` | A `ColumnSpec` in `CollectionProps.columns` | `craft_ui::contract` | 17.1 |
-| `ColumnGroup` | Rows that are not one `Grid` (`Field` rows) sharing the widest label per column key, by the same function as a `Grid` `Content` column | `craft_ui::layout` | 6.3 |
+| `ColumnGroup` | Rows that are not one `Grid` (`Field` rows) sharing the widest label per column key, by the same function as a `Grid` `Content` column. A field's control keeps its own labels and shares the group's other columns: content-sized number fields line up their values and units across the group | `craft_ui::layout` | 6.3 |
 | `ColumnWidth`, `ColumnKey` | A column's width rule | craft-behavior | 17.1, 6.3 |
 | Command scope | A `CommandScope`, live while a container declaring it is live | craft-keymap | 11.3 |
 | `CommandRef`, `CommandKind`, `ModalRule` | A command's id, its kind (`Command`, `Toggle`, `Radio`, `Tool`, `Momentary`) and whether it fires while a dialog is open | craft-keymap | 11.2 |
