@@ -91,6 +91,84 @@ pub struct ParagraphAlignmentValues {
     pub composer: Option<String>,
 }
 
+/// Paragraph hyphenation, justification spacing and keep options after caller enum mapping.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ParagraphFlowValues {
+    pub hyphenate: Option<bool>,
+    pub hyphenate_min_word: Option<f64>,
+    pub hyphenate_after_first: Option<f64>,
+    pub hyphenate_before_last: Option<f64>,
+    pub hyphenate_ladder_limit: Option<f64>,
+    pub hyphenation_zone: Option<f64>,
+    pub hyphenate_capitalized: Option<bool>,
+    pub hyphenate_last_word: Option<bool>,
+    pub hyphenate_across_columns: Option<bool>,
+    pub hyphen_weight: Option<f64>,
+    pub word_spacing: [Option<f64>; 3],
+    pub letter_spacing: [Option<f64>; 3],
+    pub glyph_scaling: [Option<f64>; 3],
+    pub auto_leading: Option<f64>,
+    pub single_word_justification: Option<String>,
+    pub keep_with_next: Option<f64>,
+    pub keep_lines_together: Option<bool>,
+    pub ignore_edge_alignment: Option<bool>,
+    pub keep_all_lines_together: Option<bool>,
+    pub keep_first_lines: Option<f64>,
+    pub keep_last_lines: Option<f64>,
+    pub start_paragraph: Option<String>,
+}
+
+impl ParagraphFlowValues {
+    /// Writes IDML attributes for paragraph hyphenation and flow.
+    pub fn to_attrs(&self) -> Vec<(String, String)> {
+        let mut attrs = Vec::new();
+        for (key, value) in [
+            ("Hyphenation", self.hyphenate),
+            ("HyphenateCapitalizedWords", self.hyphenate_capitalized),
+            ("HyphenateLastWord", self.hyphenate_last_word),
+            ("HyphenateAcrossColumns", self.hyphenate_across_columns),
+            ("KeepLinesTogether", self.keep_lines_together),
+            ("IgnoreEdgeAlignment", self.ignore_edge_alignment),
+            ("KeepAllLinesTogether", self.keep_all_lines_together),
+        ] {
+            if let Some(value) = value {
+                attrs.push((key.to_string(), if value { "true" } else { "false" }.to_string()));
+            }
+        }
+        for (key, value) in [
+            ("HyphenateWordsLongerThan", self.hyphenate_min_word),
+            ("HyphenateAfterFirst", self.hyphenate_after_first),
+            ("HyphenateBeforeLast", self.hyphenate_before_last),
+            ("HyphenateLadderLimit", self.hyphenate_ladder_limit),
+            ("HyphenationZone", self.hyphenation_zone),
+            ("HyphenWeight", self.hyphen_weight),
+            ("MinimumWordSpacing", self.word_spacing[0]),
+            ("DesiredWordSpacing", self.word_spacing[1]),
+            ("MaximumWordSpacing", self.word_spacing[2]),
+            ("MinimumLetterSpacing", self.letter_spacing[0]),
+            ("DesiredLetterSpacing", self.letter_spacing[1]),
+            ("MaximumLetterSpacing", self.letter_spacing[2]),
+            ("MinimumGlyphScaling", self.glyph_scaling[0]),
+            ("DesiredGlyphScaling", self.glyph_scaling[1]),
+            ("MaximumGlyphScaling", self.glyph_scaling[2]),
+            ("AutoLeading", self.auto_leading),
+            ("KeepWithNext", self.keep_with_next),
+            ("KeepFirstLines", self.keep_first_lines),
+            ("KeepLastLines", self.keep_last_lines),
+        ] {
+            if let Some(value) = value {
+                attrs.push((key.to_string(), crate::value::num(value)));
+            }
+        }
+        for (key, value) in [("SingleWordJustification", &self.single_word_justification), ("StartParagraph", &self.start_paragraph)] {
+            if let Some(value) = value {
+                attrs.push((key.to_string(), value.clone()));
+            }
+        }
+        attrs
+    }
+}
+
 impl ParagraphAlignmentValues {
     /// Writes the IDML attributes for paragraph alignment and spacing.
     pub fn to_attrs(&self) -> Vec<(String, String)> {
