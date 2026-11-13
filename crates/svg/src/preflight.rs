@@ -71,6 +71,11 @@ pub fn text<'a>(bytes: &'a [u8], limits: &Limits) -> Result<Cow<'a, str>, Error>
 
 /// Parses already-decoded SVG text and checks it against `limits`.
 pub fn parse_text<'a>(svg: &'a str, limits: &Limits) -> Result<roxmltree::Document<'a>, Error> {
+    parse_text_with_depth(svg, limits).map(|(xml, _, _)| xml)
+}
+
+/// Parses and validates SVG text, returning its source nesting depth as well as its XML tree.
+pub fn parse_text_with_depth<'a>(svg: &'a str, limits: &Limits) -> Result<(roxmltree::Document<'a>, usize, usize), Error> {
     if svg.len() > limits.bytes {
         return Err(Error::Text(crate::svgz::Error::TooLarge(limits.bytes)));
     }
@@ -83,9 +88,11 @@ pub fn parse_text<'a>(svg: &'a str, limits: &Limits) -> Result<roxmltree::Docume
     if crate::guard::too_wide(svg, limits.attributes, limits.attribute_work) {
         return Err(Error::TooWide(limits.attributes));
     }
-    if crate::guard::deeper_than(svg, limits.depth) {
+    let prescan = crate::guard::prescan(svg, limits.depth);
+    if prescan.too_deep {
         return Err(Error::TooDeep(limits.depth));
     }
     let options = roxmltree::ParsingOptions { allow_dtd: true, nodes_limit: limits.xml_nodes, ..Default::default() };
-    roxmltree::Document::parse_with_options(svg, options).map_err(|e| Error::Xml(e.to_string()))
+    let xml = roxmltree::Document::parse_with_options(svg, options).map_err(|e| Error::Xml(e.to_string()))?;
+    Ok((xml, prescan.depth, prescan.open_depth))
 }

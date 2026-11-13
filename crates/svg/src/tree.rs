@@ -112,13 +112,19 @@ pub enum Error {
     /// usvg's own error.
     #[error("invalid SVG: {0}")]
     Parse(String),
+    /// The root viewport is missing or has dimensions this SVG helper cannot preserve.
+    #[error("invalid SVG root viewport: {0}")]
+    Viewport(String),
+    /// The rewritten SVG would exceed the caller's output byte budget.
+    #[error("rewritten SVG exceeds {0} bytes")]
+    OutputTooLarge(usize),
 }
 
 /// The SVG text of the bytes of an SVG or SVGZ file, checked against `limits`: what [`parse`]
 /// hands usvg. For a caller that edits the text before it parses ([`parse_text`]).
 pub fn text<'a>(bytes: &'a [u8], limits: &Limits) -> Result<Cow<'a, str>, Error> {
     let text = svgz::text(bytes, limits.bytes)?;
-    checked(&text, limits)?;
+    preflight(&text, limits)?;
     Ok(text)
 }
 
@@ -130,12 +136,30 @@ pub fn parse(bytes: &[u8], limits: &Limits, options: &usvg::Options<'_>) -> Resu
 
 /// [`parse`] for SVG text the caller already holds.
 pub fn parse_text(svg: &str, limits: &Limits, options: &usvg::Options<'_>) -> Result<usvg::Tree, Error> {
-    let xml = checked(svg, limits)?;
-    usvg::Tree::from_xmltree(&xml, options).map_err(|e| Error::Parse(e.to_string()))
+    preflight(svg, limits)?.parse(options)
 }
 
-/// Every check on SVG text, cheapest first; the XML it parses to on the way.
-fn checked<'s>(svg: &'s str, limits: &Limits) -> Result<roxmltree::Document<'s>, Error> {
+/// SVG text after shared byte, entity, attribute, XML and expansion-depth checks.
+/// Keep it opaque so consumers use the same checked tree and don't reparse XML locally.
+pub struct Preflight<'s> {
+    xml: roxmltree::Document<'s>,
+    depth: usize,
+}
+
+impl Preflight<'_> {
+    /// Maximum source nesting depth before following references.
+    pub fn depth(&self) -> usize {
+        self.depth
+    }
+
+    /// Converts this already-checked XML into the configured usvg tree.
+    pub fn parse(self, options: &usvg::Options<'_>) -> Result<usvg::Tree, Error> {
+        usvg::Tree::from_xmltree(&self.xml, options).map_err(|e| Error::Parse(e.to_string()))
+    }
+}
+
+/// Checks already-decoded SVG text once, retaining the parsed XML for both depth policy and tree conversion.
+pub fn preflight<'s>(svg: &'s str, limits: &Limits) -> Result<Preflight<'s>, Error> {
     let preflight_limits = crate::preflight::Limits {
         bytes: limits.bytes,
         depth: limits.depth,
@@ -145,7 +169,7 @@ fn checked<'s>(svg: &'s str, limits: &Limits) -> Result<roxmltree::Document<'s>,
         attribute_work: limits.attribute_work,
         xml_nodes: limits.xml_nodes,
     };
-    let xml = crate::preflight::parse_text(svg, &preflight_limits).map_err(|e| match e {
+    let (xml, _depth, depth) = crate::preflight::parse_text_with_depth(svg, &preflight_limits).map_err(|e| match e {
         crate::preflight::Error::Text(e) => Error::Text(e),
         crate::preflight::Error::Entities => Error::Entities,
         crate::preflight::Error::EntityMarkup => Error::EntityMarkup,
@@ -156,7 +180,58 @@ fn checked<'s>(svg: &'s str, limits: &Limits) -> Result<roxmltree::Document<'s>,
     if height(&xml, limits.tree_depth)?.is_none() {
         return Err(Error::TooDeep(limits.tree_depth));
     }
-    Ok(xml)
+    Ok(Preflight { xml, depth })
+}
+
+/// Dimensions of an SVG viewport in SVG user units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Viewport {
+    pub width: f64,
+    pub height: f64,
+}
+
+/// Wraps a validated SVG root in a new viewport while preserving the original root as content.
+/// The original root must have finite, positive pixel or point dimensions.
+pub fn rewrite_root_viewport(svg: &str, target: Viewport, limits: &Limits, output_limit: usize) -> Result<String, Error> {
+    if !target.width.is_finite() || !target.height.is_finite() || target.width <= 0.0 || target.height <= 0.0 {
+        return Err(Error::Viewport("target dimensions must be finite and positive".into()));
+    }
+    let checked = preflight(svg, limits)?;
+    let root = checked.xml.root_element();
+    if root.tag_name().name() != "svg" {
+        return Err(Error::Viewport("root element is not svg".into()));
+    }
+    let root_dimension = |key: &str| {
+        let value = root.attribute(key)?;
+        let (number, scale) = value.strip_suffix("pt").map_or((value, 1.0), |n| (n, 4.0 / 3.0));
+        number.parse::<f64>().ok().map(|n| n * scale).filter(|n| n.is_finite() && *n > 0.0)
+    };
+    let (width, height) = root_dimension("width")
+        .zip(root_dimension("height"))
+        .ok_or_else(|| Error::Viewport("source has no finite pixel or point dimensions".into()))?;
+    let range = root.range();
+    let preamble = svg.get(..range.start).ok_or_else(|| Error::Viewport("invalid XML preamble range".into()))?;
+    let inner = svg.get(range).ok_or_else(|| Error::Viewport("invalid root element range".into()))?;
+    let prefix = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" viewBox="0 0 {} {}" preserveAspectRatio="none">"#,
+        target.width, target.height, width, height
+    );
+    let len = preamble
+        .len()
+        .checked_add(prefix.len())
+        .and_then(|n| n.checked_add(inner.len()))
+        .and_then(|n| n.checked_add(6))
+        .ok_or(Error::OutputTooLarge(output_limit))?;
+    if len > output_limit {
+        return Err(Error::OutputTooLarge(output_limit));
+    }
+    let mut output = String::new();
+    output.try_reserve_exact(len).map_err(|_| Error::OutputTooLarge(output_limit))?;
+    output.push_str(preamble);
+    output.push_str(&prefix);
+    output.push_str(inner);
+    output.push_str("</svg>");
+    Ok(output)
 }
 
 /// Properties whose value an element's descendants use too: the paint server they name is
