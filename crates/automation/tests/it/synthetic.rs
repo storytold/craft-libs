@@ -198,3 +198,43 @@ fn document_points_need_a_canvas() {
     let screen = input_method("ui.move", &json!({"x": 1, "y": 1}), &host, ViewportId::ROOT, &none);
     assert_eq!(screen, Some(Ok(())));
 }
+
+/// A step handed to the input whose pass has not run is withdrawn when the focus moved: the integration's preserved
+/// copy leaves the input, and the waiters fail with `TARGET_CHANGED`. The application's document withdraw does the
+/// same for what is queued.
+#[trial]
+fn queued_input_is_withdrawn_when_its_target_changes() {
+    use craft_automation::control::{ControlChannel, ControlRequest, Reply};
+    use craft_automation::synthetic::TARGET_CHANGED;
+    use craft_ui::runtime::egui::injected::{hook_without_pass, move_focus_without_pass};
+
+    let waiting = |channel: &mut ControlChannel| {
+        let (req, reply) = ControlRequest::new("ui.key", json!({"key": "A"}));
+        channel.settle(req, Reply::AfterInput, None, 0.0);
+        reply
+    };
+    let (_transport, requests) = std::sync::mpsc::channel();
+    let mut channel = ControlChannel::new(requests);
+    let mut rig = Rig::new();
+    let (host, ctx) = (rig.host(), rig.fx.ctx().clone());
+
+    input_method("ui.key", &json!({"key": "A"}), &host, ViewportId::ROOT, &map).expect("a method").expect("valid");
+    let reply = waiting(&mut channel);
+    let handed = hook_without_pass(&ctx, ViewportId::ROOT);
+    assert!(!handed.is_empty(), "the press was handed to the input");
+    move_focus_without_pass(&ctx, ViewportId::ROOT, egui::Id::new("elsewhere"));
+    rig.take();
+    rig.fx.frame(handed);
+    assert!(rig.take().iter().flat_map(|pass| &pass.events).all(|event| !matches!(event, Event::Key { .. })), "the preserved press is removed");
+    channel.poll_input(&host);
+    let answer = reply.try_recv().expect("the waiter is answered");
+    assert!(answer["error"].as_str().is_some_and(|error| error.contains(TARGET_CHANGED)), "{answer}");
+
+    input_method("ui.key", &json!({"key": "A"}), &host, ViewportId::ROOT, &map).expect("a method").expect("valid");
+    let reply = waiting(&mut channel);
+    host.withdraw_injected(ViewportId::ROOT);
+    channel.poll_input(&host);
+    let answer = reply.try_recv().expect("the waiter is answered");
+    assert!(answer["error"].as_str().is_some_and(|error| error.contains(TARGET_CHANGED)), "{answer}");
+    assert!(host.injected_idle());
+}
