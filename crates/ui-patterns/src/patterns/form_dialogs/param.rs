@@ -587,7 +587,8 @@ impl Param {
     }
 
     /// A [`ParamKind::Text`] row without a Browse button edits multi-line text in a field `lines` lines tall: Enter
-    /// inserts a line break and the dialog's default button leaves it to the field. Other kinds are unchanged.
+    /// inserts a line break and the dialog's default button leaves it to the field. `lines` below 2 keeps a
+    /// single-line field, whose Enter answers the default button. Other kinds are unchanged.
     #[must_use]
     pub fn multiline(mut self, lines: usize) -> Self {
         self.options.get_or_insert_default().lines = Some(lines);

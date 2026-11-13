@@ -218,6 +218,15 @@ impl Line<'_> {
         }
         field.show(ui, |ui, _| body(ui));
     }
+
+    /// Shows `body` across the form for a full-width row, without a label, or else beside the row's label.
+    fn show_body(&self, ui: &mut Ui, mut body: impl FnMut(&mut Ui)) {
+        if self.param.option().full_width() {
+            Row::new().id_salt(self.key).enabled(self.enabled).fill().show(ui, |ui, _| body(ui));
+        } else {
+            self.show(ui, body);
+        }
+    }
 }
 
 impl<'p> Pass<'p> {
@@ -607,15 +616,9 @@ impl<'p> Pass<'p> {
     fn custom(&mut self, ui: &mut Ui, line: &Line<'_>) {
         let ParamKind::Custom(row) = &line.param.kind else { return };
         let mut context = CustomContext::new(line.name.clone(), self.work.clone());
-        if line.param.option().full_width() {
-            Row::new().id_salt(line.key).enabled(line.enabled).fill().show(ui, |ui, _| {
-                let _ = row.draw(ui, &mut self.work, &mut context);
-            });
-        } else {
-            line.show(ui, |ui| {
-                let _ = row.draw(ui, &mut self.work, &mut context);
-            });
-        }
+        line.show_body(ui, |ui| {
+            let _ = row.draw(ui, &mut self.work, &mut context);
+        });
         if let Some(request) = context.take_request() {
             self.color = Some(request);
         }
@@ -625,14 +628,9 @@ impl<'p> Pass<'p> {
 /// Read-only text beside the row's label, or across the form for a full-width row.
 fn read_only_text(ui: &mut Ui, line: &Line<'_>, text: &Label) {
     let shown = Env::of(ui).view().resolve(text);
-    let body = |ui: &mut Ui| {
+    line.show_body(ui, |ui| {
         SelectableText::new(line.name.clone(), shown.as_str()).multiline().show(ui);
-    };
-    if line.param.option().full_width() {
-        Row::new().id_salt(line.key).enabled(line.enabled).fill().show(ui, |ui, _| body(ui));
-    } else {
-        line.show(ui, body);
-    }
+    });
 }
 
 /// Shows `body` as one row of controls side by side.

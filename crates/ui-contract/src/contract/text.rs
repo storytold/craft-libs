@@ -473,7 +473,8 @@ pub(crate) fn run<C: Component>(
     apply_events(cx, resolved.events);
     cx.core.memory.shown::<TextState>(state_id).seen = shown_copy(cx);
     cx.core.submitted |= resolved.submitted;
-    if keys.submits {
+    // A read-only multi-line part makes no line break, so its Enter goes on to the default button.
+    if keys.submits && !(read_only && decl.options.multiline()) {
         cx.core.intents.take(craft_behavior::Intent::Submit);
     }
     cx.core.escaped |= resolved.escaped;

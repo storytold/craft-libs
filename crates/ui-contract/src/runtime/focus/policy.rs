@@ -280,8 +280,9 @@ pub struct KeyUse {
     /// control's object). A component that does not leaves them to the commands around the focus; a canvas tool claims
     /// them instead (`CanvasTool::claims`).
     pub deletes: bool,
-    /// The component acts on Enter itself (a text field that saves or searches on it): it takes the `Submit` intent, so
-    /// the enclosing dialog's default button does not receive it. A component that does not leaves Enter to that button.
+    /// The component acts on Enter itself (a text field that saves or searches on it, a multi-line field that makes it a
+    /// line break): it takes the `Submit` intent, so the enclosing dialog's default button does not receive it. A
+    /// component that does not leaves Enter to that button.
     pub submits: bool,
     /// What a bare End means for the component.
     pub end: EndKey,

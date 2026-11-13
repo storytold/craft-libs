@@ -95,7 +95,8 @@ pub(crate) fn keys_of(base: KeyUse, options: &TextOptions) -> KeyUse {
         base
     };
     let keys = keys.with_value(base.value || options.steps_value);
-    if options.submits { keys.with_submits() } else { keys }
+    // A multi-line part makes a plain Enter a line break.
+    if options.submits || options.multiline() { keys.with_submits() } else { keys }
 }
 
 pub(crate) struct AdapterIn<'a> {
@@ -339,10 +340,6 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         }
         Some(DraftChange::Revert) => state.end = Some(End::Revert),
         None => {}
-    }
-    // A plain Enter in an editable multi-line field inserts a line, so no default button around the field takes it.
-    if focused_before && input.options.multiline() && !input.read_only && state.preedit.is_none() {
-        input.intents.take(Intent::Submit);
     }
     // A clearing field takes Escape while it shows text, with or without a draft, and passes it on once it is empty.
     let takes_escape =
