@@ -135,6 +135,31 @@ impl ParagraphSpanValues {
             space_after: values.num("SpanColumnMinSpaceAfter"),
         }
     }
+
+    /// Writes paragraph span and split-column attributes and properties.
+    pub fn to_parts(&self) -> (Vec<(String, String)>, Vec<El>) {
+        let mut attrs = Vec::new();
+        let mut properties = Vec::new();
+        if let Some(kind) = &self.kind {
+            attrs.push(("SpanColumnType".into(), kind.clone()));
+        }
+        if let Some(count) = self.split_column_count {
+            properties.push(if count == 0 {
+                property("SpanSplitColumnCount", "enumeration", "All")
+            } else {
+                property("SpanSplitColumnCount", "long", count.to_string())
+            });
+        }
+        for (key, value) in [
+            ("SplitColumnInsideGutter", self.inside_gutter),
+            ("SplitColumnOutsideGutter", self.outside_gutter),
+            ("SpanColumnMinSpaceBefore", self.space_before),
+            ("SpanColumnMinSpaceAfter", self.space_after),
+        ] {
+            push_number(&mut attrs, key, value);
+        }
+        (attrs, properties)
+    }
 }
 
 /// Paragraph alignment, spacing, drop cap, baseline grid and composer values after the caller
@@ -744,9 +769,21 @@ impl ParagraphListValues {
         }
     }
 
+    /// Encodes a semantic paragraph-list name as its IDML object reference.
+    pub fn numbering_list_reference(name: &str) -> String {
+        if name.is_empty() { "NumberingList/$ID/[Default]".into() } else { format!("NumberingList/{}", crate::value::escape_id(name)) }
+    }
+
     /// IDML attributes represented by a paragraph's list settings.
     pub fn to_attrs(&self) -> Vec<(String, String)> {
         let mut attrs = Vec::new();
+        if let Some(value) = &self.applied_list {
+            attrs.push(("AppliedNumberingList".into(), value.clone()));
+        }
+        if let Some(value) = self.numbering_continue {
+            attrs.push(("NumberingContinue".into(), if value { "true" } else { "false" }.into()));
+        }
+        push_number(&mut attrs, "NumberingStartAt", self.numbering_start_at);
         for (key, value) in [
             ("BulletsAndNumberingListType", &self.list_type),
             ("NumberingExpression", &self.expression),
