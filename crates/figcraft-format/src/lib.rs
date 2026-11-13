@@ -1,0 +1,77 @@
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+//! The neutral JSON header and version contract for FigCraft's native project format.
+//! App-specific document fields remain a generic flattened payload.
+use serde::de::{IgnoredAny, MapAccess, Visitor};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+pub const EXTENSION: &str = "figcraft";
+pub const FORMAT: &str = "figcraft";
+pub const VERSION: u32 = 1;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Header { pub version: Option<u64>, pub images: Option<Vec<String>> }
+
+pub fn read_header(text: &str) -> Result<Header, serde_json::Error> { serde_json::from_str(text) }
+
+impl<'de> Deserialize<'de> for Header {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = Header;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("a FigCraft document object") }
+            fn visit_map<A: MapAccess<'de>>(self, mut m: A) -> Result<Header, A::Error> {
+                let mut h = Header::default();
+                while let Some(k) = m.next_key::<String>()? {
+                    match k.as_str() {
+                        "version" => h.version = m.next_value::<Value>()?.as_u64(),
+                        "imageIndex" => h.images = m.next_value::<Value>()?.as_array().map(|a| a.iter().filter_map(|v| v.get("hash").and_then(Value::as_str).map(str::to_owned)).collect()),
+                        _ => { m.next_value::<IgnoredAny>()?; }
+                    }
+                }
+                Ok(h)
+            }
+        }
+        d.deserialize_map(V)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("this file was saved by a newer FigCraft (format version {0})")]
+pub struct NewerVersion(pub u32);
+
+pub fn check_version(h: &Header) -> Result<(), NewerVersion> {
+    if let Some(v) = h.version && v > u64::from(VERSION) { return Err(NewerVersion(u32::try_from(v).unwrap_or(u32::MAX))); }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ImageIndexEntry { pub hash: String, pub width: u32, pub height: u32 }
+
+pub fn write_document_json<D: Serialize, W: std::io::Write>(doc: &D, images: &[ImageIndexEntry], w: W) -> Result<(), serde_json::Error> {
+    #[derive(Serialize)]
+    struct Flat<'a, D: ?Sized> { format: &'static str, version: u32, #[serde(rename="imageIndex")] images: &'a [ImageIndexEntry], #[serde(flatten)] document: &'a D }
+    Flat { format: FORMAT, version: VERSION, images, document: doc }.serialize(&mut serde_json::Serializer::new(w))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn header_skips_app_fields() {
+        let h = read_header(r#"{"version":1,"imageIndex":[{"hash":"abc"}],"nested":{"unused":true}}"#).unwrap();
+        assert_eq!(h.version, Some(1)); assert_eq!(h.images, Some(vec!["abc".into()]));
+    }
+    #[test]
+    fn newer_version_is_reported_before_document_decode() {
+        assert_eq!(check_version(&Header { version: Some(2), images: None }), Err(NewerVersion(2)));
+        assert_eq!(check_version(&Header { version: Some(u64::MAX), images: None }), Err(NewerVersion(u32::MAX)));
+    }
+    #[test]
+    fn writer_flattens_document_fields() {
+        let doc = serde_json::json!({"name":"example"}); let mut bytes=Vec::new();
+        write_document_json(&doc, &[], &mut bytes).unwrap();
+        let v: Value=serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["format"], FORMAT); assert_eq!(v["version"], VERSION); assert_eq!(v["name"], "example");
+    }
+}
