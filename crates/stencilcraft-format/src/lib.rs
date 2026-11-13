@@ -364,6 +364,7 @@ pub enum Error {
 mod tests {
     use std::io::{self, Cursor, Read};
 
+    use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
 
     use super::{DocumentFields, Error, FORMAT_VERSION, File};
@@ -468,5 +469,44 @@ mod tests {
     fn separates_json_errors_from_wire_schema_errors() {
         assert!(matches!(File::read("{"), Err(Error::Json(_))));
         assert!(matches!(File::read(r#"{"stencilcraft":{"name":"stencilcraft","version":1}}"#), Err(Error::Document { .. })));
+    }
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct TypedBoard {
+        width_mm: f64,
+        height_mm: f64,
+    }
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct TypedFields {
+        board: TypedBoard,
+        #[serde(default, rename = "board-setup", skip_serializing_if = "Option::is_none")]
+        board_setup: Option<TypedBoard>,
+    }
+
+    fn typed_fields() -> TypedFields {
+        TypedFields { board: TypedBoard { width_mm: 100.0, height_mm: 150.0 }, board_setup: None }
+    }
+
+    #[test]
+    fn typed_readers_round_trip_typed_fields_and_preserve_header_errors() -> Result<(), Error> {
+        let file = File::new(typed_fields());
+        let text = file.to_json_pretty()?;
+        assert!(!text.contains("board-setup"));
+        assert_eq!(File::read_typed(&text)?, file);
+        assert_eq!(File::read_typed_from(Cursor::new(text.as_bytes()))?, file);
+
+        let malformed = r#"{"stencilcraft":{"name":"stencilcraft","version":1},"board":"wrong"}"#;
+        assert!(matches!(File::<TypedFields>::read_typed(malformed), Err(Error::Document { .. })));
+        assert!(matches!(File::<TypedFields>::read_typed_from(Cursor::new(malformed)), Err(Error::Document { .. })));
+
+        let wrong_header = r#"{"stencilcraft":{"name":"other","version":1},"board":{}}"#;
+        assert!(matches!(File::<TypedFields>::read_typed(wrong_header), Err(Error::NotStencilCraft)));
+        assert!(matches!(File::<TypedFields>::read_typed_from(Cursor::new(wrong_header)), Err(Error::NotStencilCraft)));
+
+        let future_version = r#"{"stencilcraft":{"name":"stencilcraft","version":2},"board":{}}"#;
+        assert!(matches!(File::<TypedFields>::read_typed(future_version), Err(Error::Version { found: 2, supported: 1 })));
+        assert!(matches!(File::<TypedFields>::read_typed_from(Cursor::new(future_version)), Err(Error::Version { found: 2, supported: 1 })));
+        Ok(())
     }
 }
