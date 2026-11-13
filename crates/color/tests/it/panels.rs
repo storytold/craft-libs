@@ -111,11 +111,7 @@ fn the_cubes_take_the_room_the_readout_and_the_strip_leave() {
                 strip.rect
             );
             assert!(area.rect.bottom() <= readout.rect.top(), "{case}: the readout under the field");
-            assert!(
-                readout.rect.bottom() <= room.y + 0.5,
-                "{case}: the readout in view ({:?})",
-                readout.rect
-            );
+            assert!(readout.rect.bottom() <= room.y + 0.5, "{case}: the readout in view ({:?})", readout.rect);
             assert!((area.rect.height() - strip.rect.height()).abs() < 1.0, "{case}: the strip as tall as the field");
             heights.push(area.rect.height());
         }
