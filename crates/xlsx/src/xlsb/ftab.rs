@@ -3,6 +3,10 @@
 //! which craft-xls also carries. The entries from 380 (0x17C) on are the rest of the XLSB table:
 //! XLSB files call these functions by number, where `.xls` files call them by name. Kept apart from
 //! craft-xls's copy: the two formats follow separate specifications.
+//!
+//! One entry is not in the specification's table: 468 (0x1D4) is CONVERT. The table has no row
+//! for it, but its grammar lists `convert-params` among the fixed-argument functions, and Excel
+//! writes `=CONVERT(1,"m","ft")` in `.xlsb` as a `PtgFunc` calling 0x1D4.
 
 /// (iftab, name, fixed argument count or -1 when the function takes a variable number of
 /// arguments), sorted by number.
@@ -467,6 +471,7 @@ const FTAB: &[(u16, &str, i8)] = &[
     (465, "WEEKNUM", -1),
     (466, "AMORDEGRC", -1),
     (467, "AMORLINC", -1),
+    (468, "CONVERT", 3),
     (469, "ACCRINT", -1),
     (470, "ACCRINTM", -1),
     (471, "WORKDAY", -1),
@@ -508,7 +513,9 @@ mod tests {
         assert_eq!(function(449), Some(("EDATE", 2)));
         assert_eq!(function(480), Some(("IFERROR", 2)));
         assert_eq!(function(482), Some(("SUMIFS", -1)));
-        assert_eq!(function(0x1D4), None, "unassigned");
+        // Not in the specification's table, but what Excel writes for CONVERT.
+        assert_eq!(function(0x1D4), Some(("CONVERT", 3)));
+        assert_eq!(function(0x17B), Some(("RTD", -1)));
         assert_eq!(function(0x1E5), None);
     }
 }

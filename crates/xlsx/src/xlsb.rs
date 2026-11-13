@@ -542,11 +542,14 @@ fn kept(warnings: &mut Warnings, why: &str) {
 }
 
 /// A `BrtShrFmla`: the cells it may cover, its tokens, its first cell's text length (what a copy
-/// is expected to cost) and the group's index (`si`).
-struct SharedFormula {
+/// is expected to cost) and the group's index (`si`). The tokens are borrowed from the worksheet
+/// part, which outlives the sheet's read: a record can be up to 256 MiB, and copying every
+/// shared formula's would cost as much again as the part.
+#[derive(Clone, Copy)]
+struct SharedFormula<'a> {
     range: Range,
-    rgce: Vec<u8>,
-    rgcb: Vec<u8>,
+    rgce: &'a [u8],
+    rgcb: &'a [u8],
     len: usize,
     si: u32,
 }
@@ -576,12 +579,12 @@ fn part_of(rgce: &[u8], rgcb: &[u8], at: CellRef) -> Option<Result<Part, &'stati
 /// One sheet's shared and array formulas, by first cell, as the reader meets them. `None` when
 /// the formula keeps its values (so its other cells keep theirs).
 #[derive(Default)]
-struct RangeFormulas {
-    shared: HashMap<CellRef, Option<Arc<SharedFormula>>>,
+struct RangeFormulas<'a> {
+    shared: HashMap<CellRef, Option<SharedFormula<'a>>>,
     arrays: HashMap<CellRef, Option<Range>>,
 }
 
-impl RangeFormulas {
+impl<'a> RangeFormulas<'a> {
     /// The formula of another cell `at` of the shared or array formula starting at `first`. A
     /// shared formula's copy is decoded from the shared tokens at its own cell, as [MS-XLSB]
     /// defines it (relative offsets wrap around the grid), and checked like any formula: its text
@@ -598,7 +601,7 @@ impl RangeFormulas {
         warnings: &mut Warnings,
     ) -> Option<CellFormula> {
         if let Some(shared) = self.shared.get(&first) {
-            let sh = shared.clone()?;
+            let sh = (*shared)?;
             if !sh.range.contains(at) {
                 kept(warnings, "malformed shared or array formula references");
                 return None;
@@ -607,7 +610,7 @@ impl RangeFormulas {
                 kept(warnings, "more formula text than the limits allow");
                 return None;
             }
-            let Some(text) = decode_formula(&sh.rgce, &sh.rgcb, Mode::Shared(at), links, limits, budget, warnings) else {
+            let Some(text) = decode_formula(sh.rgce, sh.rgcb, Mode::Shared(at), links, limits, budget, warnings) else {
                 // A copy that was decoded but kept as its value charged nothing: one past the
                 // allowance (it may be longer than the first cell's estimate) or one that can't be
                 // decoded. The group's later copies would fail the same way, so they keep their
@@ -634,14 +637,14 @@ impl RangeFormulas {
     fn range_formula(
         &mut self,
         id: u16,
-        payload: &[u8],
+        payload: &'a [u8],
         first: CellRef,
         links: Option<&Links>,
         limits: &Limits,
         budget: &Budget,
         warnings: &mut Warnings,
     ) -> Option<CellFormula> {
-        let read = |b: &mut Bytes<'_>| -> Result<(Range, Vec<u8>, Vec<u8>), Error> {
+        let read = |b: &mut Bytes<'a>| -> Result<(Range, &'a [u8], &'a [u8]), Error> {
             let (r0, r1, c0, c1) = (b.u32()?, b.u32()?, b.u32()?, b.u32()?);
             if id == 426 {
                 b.u8()?; // Only fAlwaysCalc, the calculator's to know.
@@ -650,9 +653,9 @@ impl RangeFormulas {
             if !(1..=16384).contains(&cce) {
                 return Err(invalid("invalid formula token length"));
             }
-            let rgce = b.take(cce as usize)?.to_vec();
+            let rgce = b.take(cce as usize)?;
             let cb = b.u32()?;
-            let rgcb = b.take(cb as usize)?.to_vec();
+            let rgcb = b.take(cb as usize)?;
             if r0 > r1 || c0 > c1 || r1 >= MAX_ROWS || c1 >= MAX_COLS {
                 return Err(invalid("invalid formula range"));
             }
@@ -673,9 +676,9 @@ impl RangeFormulas {
             return None;
         };
         if id == 427 {
-            let text = decode_formula(&rgce, &rgcb, Mode::Shared(first), links, limits, budget, warnings);
+            let text = decode_formula(rgce, rgcb, Mode::Shared(first), links, limits, budget, warnings);
             let si = u32::try_from(self.shared.len()).unwrap_or(u32::MAX);
-            let shared = text.as_ref().map(|t| Arc::new(SharedFormula { range, rgce, rgcb, len: t.len(), si }));
+            let shared = text.as_ref().map(|t| SharedFormula { range, rgce, rgcb, len: t.len(), si });
             self.shared.insert(first, shared);
             return text.map(|text| CellFormula {
                 kind: FormulaKind::Shared,
@@ -685,7 +688,7 @@ impl RangeFormulas {
                 ..CellFormula::default()
             });
         }
-        let text = decode_formula(&rgce, &rgcb, Mode::Cell, links, limits, budget, warnings);
+        let text = decode_formula(rgce, rgcb, Mode::Cell, links, limits, budget, warnings);
         self.arrays.insert(first, text.as_ref().map(|_| range));
         text.map(|text| CellFormula { kind: FormulaKind::Array, text, range: Some(range), ..CellFormula::default() })
     }
@@ -761,6 +764,11 @@ pub(crate) fn worksheet(
             if matches!(id, 426 | 427) {
                 let f = ranges.range_formula(id, payload, at, links, limits, budget, warnings);
                 if let Some(cell) = row.as_mut().and_then(|r| r.cells.last_mut()).filter(|c| c.at == at) {
+                    // A dynamic array's cell metadata describes its formula: with none kept, the
+                    // cell is a value, and `cm` on it would mark a formula that isn't there.
+                    if f.is_none() {
+                        cell.cell_metadata = None;
+                    }
                     cell.formula = f;
                 }
                 continue;
@@ -856,6 +864,12 @@ pub(crate) fn worksheet(
                 if value != CellValue::Empty {
                     budget.cell(limits)?;
                 }
+                // A formula record's cell metadata describes its formula (a dynamic array), so a
+                // formula kept as its value drops it; the first cell of a shared or array formula
+                // keeps it until its formula record is read. Other cells keep theirs as the file
+                // has it.
+                let formula_kept = !(8..=11).contains(&id) || formula.is_some() || first == Some(at);
+                let cell_metadata = cell_metadata.filter(|_| formula_kept);
                 current.cells.push(Cell {
                     at,
                     style: style & 0x00FF_FFFF,

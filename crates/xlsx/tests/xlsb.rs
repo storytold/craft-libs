@@ -885,3 +885,36 @@ fn a_shared_formula_stops_decoding_copies_once_one_is_kept_as_its_value() {
     assert_eq!((text("A1"), text("Z1"), text("B2")), (Some("B1"), None, None));
     assert!(warned(&wb, "more formula text than the limits allow"), "{:?}", wb.warnings);
 }
+
+#[test]
+fn convert_is_called_by_its_number_as_excel_writes_it() {
+    // Excel's tokens for `=CONVERT(1,"m","ft")` in .xlsb: PtgFunc 0x1D4, which the
+    // specification's Ftab table leaves out.
+    let rgce = [0x1E, 0x01, 0x00, 0x17, 0x01, 0x00, 0x6D, 0x00, 0x17, 0x02, 0x00, 0x66, 0x00, 0x74, 0x00, 0x41, 0xD4, 0x01];
+    let wb = read(&file(&worksheet(&[row(0), formula_cell(0, &rgce, &[])].concat(), &[]))).unwrap();
+    assert_eq!(wb.sheets[0].formula(CellRef::new(0, 0)), Some("CONVERT(1,\"m\",\"ft\")"));
+}
+
+#[test]
+fn a_dynamic_array_kept_as_its_value_has_no_cell_metadata() {
+    let meta = record(49, &1u32.to_le_bytes());
+    let table_ref = [0x18, 0x19, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0];
+    let data = [
+        row(0),
+        // A1: a dynamic-array formula the reader can't decode (a table reference).
+        meta.clone(),
+        formula_cell(0, &table_ref, &[]),
+        // B1:B2: a dynamic array whose BrtArrFmla holds an unknown token.
+        meta.clone(),
+        part(1, (0, 1)),
+        range_formula(426, (0, 1, 1, 1), &[0xFF]),
+        // C1: a value with cell metadata keeps it, as the file has it.
+        meta,
+        cell(5, 2, &1.0f64.to_le_bytes()),
+    ]
+    .concat();
+    let wb = read(&file(&worksheet(&data, &[]))).unwrap();
+    let sheet = &wb.sheets[0];
+    assert_eq!((sheet.formula(at("A1")), sheet.formula(at("B1"))), (None, None));
+    assert_eq!(sheet.cell_metadata.iter().collect::<Vec<_>>(), [(&at("C1"), &1)]);
+}
