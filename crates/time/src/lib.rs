@@ -35,8 +35,7 @@ impl Tick {
 
     /// Seconds to ticks, clamped to [`Tick::MIN`]..=[`Tick::MAX`].
     pub fn from_seconds_f64(s: f64) -> Tick {
-        let t = (s * TICKS_PER_SECOND as f64).round();
-        Tick((t as i64).clamp(Tick::MIN.0, Tick::MAX.0))
+        Tick((s * TICKS_PER_SECOND as f64).round() as i64)
     }
 
     pub fn seconds(self) -> f64 {
@@ -246,7 +245,7 @@ impl TimeRange {
     }
 
     pub fn overlaps(&self, o: &TimeRange) -> bool {
-        self.start < o.end() && o.start < self.end()
+        !self.is_empty() && !o.is_empty() && self.start < o.end() && o.start < self.end()
     }
 
     pub fn intersect(&self, o: &TimeRange) -> Option<TimeRange> {
@@ -316,6 +315,19 @@ impl FrameRate {
         FrameRate::new((fps * 1000.0).round() as i64, 1000)
     }
 
+    /// Closest standard rate when `fps` is within `tolerance` of it, otherwise the nearest
+    /// 1/1000 rate. This retains the timeline API's coarse-timebase compatibility behavior.
+    pub fn from_f64_within(fps: f64, tolerance: f64) -> Self {
+        let mut best: Option<(f64, FrameRate)> = None;
+        for rate in Self::COMMON {
+            let off = (rate.as_f64() - fps).abs();
+            if off <= tolerance * rate.as_f64() && best.is_none_or(|(closest, _)| off < closest) {
+                best = Some((off, rate));
+            }
+        }
+        best.map_or_else(|| Self::from_f64(fps), |(_, rate)| rate)
+    }
+
     /// Returns this frame rate if positive, or the default rate ([`FrameRate::FPS_23_976`]).
     ///
     /// ### Application Compatibility Note
@@ -339,6 +351,11 @@ impl FrameRate {
     /// Index of the frame containing `t` (floor).
     pub fn frame_at(self, t: Tick) -> i64 {
         clamp_i64(frame_index(self.sane(), t))
+    }
+
+    /// Frames from `start` to `end`, counted between their frame indices.
+    pub fn frames_between(self, start: Tick, end: Tick) -> i64 {
+        self.frame_at(end).saturating_sub(self.frame_at(start))
     }
 
     /// Start tick of frame `f` (ceiling division).
@@ -432,6 +449,9 @@ impl TimeDisplay {
     pub const ALL: [TimeDisplay; 6] =
         [TimeDisplay::Timecode, TimeDisplay::Feet35, TimeDisplay::Feet16, TimeDisplay::Frames, TimeDisplay::AudioSamples, TimeDisplay::Seconds];
 
+    /// The video display formats (Sequence Settings ▸ Display Format, the burn-in's Time Format).
+    pub const VIDEO: [TimeDisplay; 4] = [TimeDisplay::Timecode, TimeDisplay::Feet35, TimeDisplay::Feet16, TimeDisplay::Frames];
+
     pub fn label(self) -> &'static str {
         match self {
             TimeDisplay::Timecode => "Timecode",
@@ -440,6 +460,32 @@ impl TimeDisplay {
             TimeDisplay::Feet35 => "Feet + Frames 35mm",
             TimeDisplay::AudioSamples => "Audio Samples",
             TimeDisplay::Seconds => "Seconds",
+        }
+    }
+
+    /// Stable id used by commands and the UI.
+    pub fn id(self) -> &'static str {
+        match self {
+            TimeDisplay::Timecode => "timecode",
+            TimeDisplay::Frames => "frames",
+            TimeDisplay::Feet16 => "feet16",
+            TimeDisplay::Feet35 => "feet35",
+            TimeDisplay::AudioSamples => "samples",
+            TimeDisplay::Seconds => "seconds",
+        }
+    }
+
+    /// The display with this [`id`](Self::id), ignoring case.
+    pub fn from_id(id: &str) -> Option<TimeDisplay> {
+        TimeDisplay::ALL.into_iter().find(|display| display.id().eq_ignore_ascii_case(id))
+    }
+
+    /// Frames per foot for the Feet + Frames displays.
+    pub fn frames_per_foot(self) -> Option<i64> {
+        match self {
+            TimeDisplay::Feet35 => Some(16),
+            TimeDisplay::Feet16 => Some(40),
+            _ => None,
         }
     }
 }
@@ -509,35 +555,33 @@ pub fn format_time(t: Tick, rate: FrameRate, drop_frame: bool, display: TimeDisp
     match display {
         TimeDisplay::Timecode => format_timecode_frames(frame, rate, drop_frame),
         TimeDisplay::Frames => format!("{frame}"),
-        TimeDisplay::Feet35 | TimeDisplay::Feet16 => {
-            let per_ft = if display == TimeDisplay::Feet35 { 16 } else { 40 };
-            let neg = frame < 0;
-            let a = frame.unsigned_abs();
-            format!("{}{}+{:02}", if neg { "-" } else { "" }, a / per_ft, a % per_ft)
-        }
+        TimeDisplay::Feet35 | TimeDisplay::Feet16 => format_feet_frames(frame, display.frames_per_foot().unwrap_or(16)),
         TimeDisplay::AudioSamples => {
             let neg = t.0 < 0;
             let abs_ticks = t.0.unsigned_abs();
             let total_secs = abs_ticks / (TICKS_PER_SECOND as u64);
             let rem_ticks = abs_ticks % (TICKS_PER_SECOND as u64);
-            let rem_samples = (rem_ticks as u128 * sample_rate as u128) / (TICKS_PER_SECOND as u128);
+            let rem_samples = Tick(rem_ticks as i64).to_units_floor(sample_rate);
             let h = total_secs / 3600;
             let m = (total_secs / 60) % 60;
             let s = total_secs % 60;
             format!("{}{:02}:{:02}:{:02}:{:05}", if neg { "-" } else { "" }, h, m, s, rem_samples)
         }
-        TimeDisplay::Seconds => format!("{:.3}", t.seconds()),
+        TimeDisplay::Seconds => {
+            let seconds = format!("{:.3}", t.seconds());
+            if seconds == "-0.000" { "0.000".into() } else { seconds }
+        }
     }
 }
 
 /// Format a frame count as Feet + Frames (film footage counting).
 pub fn format_feet_frames(frame: i64, per_foot: i64) -> String {
-    let pf = per_foot.max(1);
+    let per_foot = per_foot.max(1);
     let sign = if frame < 0 { "-" } else { "" };
-    let a = frame.unsigned_abs();
-    let pf = pf as u64;
-    let w = if pf > 100 { 3 } else { 2 };
-    format!("{sign}{:04}+{:0w$}", a / pf, a % pf)
+    let frames = frame.unsigned_abs();
+    let per_foot = per_foot as u64;
+    let width = if per_foot > 100 { 3 } else { 2 };
+    format!("{sign}{:04}+{:0width$}", frames / per_foot, frames % per_foot)
 }
 
 /// Error from timecode parsing.
@@ -561,6 +605,22 @@ impl std::error::Error for ParseError {}
 /// saturates to `i64::MAX` (or `i64::MIN`) to keep calculations total without errors.
 /// In contrast, EffectCraft returns `Err(ParseError("timecode too large"))`.
 pub fn parse_timecode(input: &str, rate: FrameRate, drop_frame: bool, current: i64) -> Result<i64, ParseError> {
+    parse_timecode_with_negative_policy(input, rate, drop_frame, current, true)
+}
+
+/// Parse timecode with the relative-negative policy used by the historical timeline API.
+/// A leading minus offsets from `current`, including a complete four-field timecode.
+pub fn parse_timecode_relative(input: &str, rate: FrameRate, drop_frame: bool, current: i64) -> Result<i64, ParseError> {
+    parse_timecode_with_negative_policy(input, rate, drop_frame, current, false)
+}
+
+fn parse_timecode_with_negative_policy(
+    input: &str,
+    rate: FrameRate,
+    drop_frame: bool,
+    current: i64,
+    full_negative_is_absolute: bool,
+) -> Result<i64, ParseError> {
     let s = input.trim();
     if s.is_empty() {
         return Err(ParseError("empty timecode".into()));
@@ -615,7 +675,10 @@ pub fn parse_timecode(input: &str, rate: FrameRate, drop_frame: bool, current: i
     let base = rate.timecode_base();
     let frames = if nums.len() == 1 && sign_char.is_some() {
         fr
-    } else if drop_frame && rate.supports_drop_frame() && m < 60 && sec < 60 && fr < base {
+    } else if drop_frame && rate.supports_drop_frame() {
+        let (sec, fr) = (sec.saturating_add(fr / base), fr % base);
+        let (m, sec) = (m.saturating_add(sec / 60), sec % 60);
+        let (h, m) = (h.saturating_add(m / 60), m % 60);
         fields_to_frames(h, m, sec, fr, rate, true)
     } else {
         h.saturating_mul(3600).saturating_add(m.saturating_mul(60)).saturating_add(sec).saturating_mul(base).saturating_add(fr)
@@ -623,10 +686,11 @@ pub fn parse_timecode(input: &str, rate: FrameRate, drop_frame: bool, current: i
 
     match sign_char {
         Some('+') => Ok(current.saturating_add(frames)),
+        Some('-') if full_negative_is_absolute && nums.len() == 4 => Ok(-frames),
         Some('-') => {
             // A full 4-field timecode with leading '-' represents an absolute negative timecode (e.g. preroll).
-            // Single-number or partial relative offsets (e.g. -15 or -1.00) offset from current.
-            if nums.len() == 4 { Ok(-frames) } else { Ok(current.saturating_sub(frames)) }
+            // The timeline compatibility path treats every leading minus as an offset instead.
+            Ok(current.saturating_sub(frames))
         }
         None | Some(_) => Ok(frames),
     }
@@ -669,6 +733,65 @@ pub fn parse_feet_frames(input: &str, per_foot: i64, current: i64) -> Result<i64
             })
         }
     }
+}
+
+/// Parse text using a [`TimeDisplay`] representation.
+pub fn parse_time_display(input: &str, rate: FrameRate, drop_frame: bool, display: TimeDisplay, current: i64) -> Result<i64, ParseError> {
+    parse_time_display_with_negative_policy(input, rate, drop_frame, display, current, true)
+}
+
+/// Parse text using a [`TimeDisplay`] representation and the historical timeline relative-minus rule.
+pub fn parse_time_display_relative(input: &str, rate: FrameRate, drop_frame: bool, display: TimeDisplay, current: i64) -> Result<i64, ParseError> {
+    parse_time_display_with_negative_policy(input, rate, drop_frame, display, current, false)
+}
+
+fn parse_time_display_with_negative_policy(
+    input: &str,
+    rate: FrameRate,
+    drop_frame: bool,
+    display: TimeDisplay,
+    current: i64,
+    full_negative_is_absolute: bool,
+) -> Result<i64, ParseError> {
+    let per_foot = match display {
+        TimeDisplay::Frames => 1,
+        TimeDisplay::Feet35 | TimeDisplay::Feet16 => display.frames_per_foot().unwrap_or(16),
+        _ => {
+            return if full_negative_is_absolute {
+                parse_timecode(input, rate, drop_frame, current)
+            } else {
+                parse_timecode_relative(input, rate, drop_frame, current)
+            };
+        }
+    };
+    let text = input.trim();
+    if text.is_empty() {
+        return Err(ParseError("empty time".into()));
+    }
+    let (relative, body) = match text.as_bytes()[0] {
+        b'+' => (Some(1), &text[1..]),
+        b'-' => (Some(-1), &text[1..]),
+        _ => (None, text),
+    };
+    let field = |part: &str| -> Result<i64, ParseError> {
+        if part.is_empty() {
+            Ok(0)
+        } else if !part.bytes().all(|byte| byte.is_ascii_digit()) {
+            Err(ParseError(format!("not a time: `{input}`")))
+        } else {
+            part.parse::<i64>().map_err(|_| ParseError("number too large".into()))
+        }
+    };
+    let parts: Vec<&str> = body.split(['+', ':', ';', '.', ',']).collect();
+    let frames = match parts.as_slice() {
+        [number] => field(number)?,
+        [feet, frames] if per_foot > 1 => field(feet)?.saturating_mul(per_foot).saturating_add(field(frames)?),
+        _ => return Err(ParseError(format!("not a time: `{input}`"))),
+    };
+    Ok(match relative {
+        Some(sign) => current.saturating_add(frames.saturating_mul(sign)),
+        None => frames,
+    })
 }
 
 /// Common audio sample rates offered in sequence settings.
