@@ -284,8 +284,9 @@ impl Component for SliderField<'_> {
         let name = cx.label();
         let look = self.look();
         let (track, field) = match self.layout {
-            // The field takes the width its own measure gives (a number cell, or its widest value when content-sized),
-            // so every row of a column with the same range ends its slider at one place.
+            // The field takes the width its own measure gives: a number cell, or its widest value and unit when
+            // content-sized, which in a column group are the group's widest. So every row of the column ends its slider
+            // at one place.
             SliderFieldLayout::Inline => arrange(cx.rect.size(), cx.style.inline_gap, self.field_width),
             SliderFieldLayout::Stacked => stack(cx.rect.size(), cx.style.metrics.gap, cx.style.row),
         };
