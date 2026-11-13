@@ -97,18 +97,24 @@ impl Tiles {
         std::iter::once((0, 0)).chain(copies).map(move |(i, j)| Vec2::new(i as f32 * width, j as f32 * height))
     }
 
-    /// The area the copies and the document cover, in document pixels.
-    fn cover(&self, size: PixelSize) -> Rect64 {
+    /// The area the run of copies covers, in document pixels. A capped run may leave out the document.
+    fn run(&self, size: PixelSize) -> Rect64 {
         let (width, height) = (f64::from(size.width), f64::from(size.height));
-        let (columns, rows) =
-            ((*self.columns.start()).min(0)..=(*self.columns.end()).max(0), (*self.rows.start()).min(0)..=(*self.rows.end()).max(0));
         Rect64::new(
-            f64::from(*columns.start()) * width,
-            f64::from(*rows.start()) * height,
-            f64::from(*columns.end() + 1) * width,
-            f64::from(*rows.end() + 1) * height,
+            f64::from(*self.columns.start()) * width,
+            f64::from(*self.rows.start()) * height,
+            f64::from(*self.columns.end() + 1) * width,
+            f64::from(*self.rows.end() + 1) * height,
         )
     }
+}
+
+/// The checkerboard's areas in document pixels: what the picture covers (`bounds`) and the run of copies (`run`), as one
+/// rect when one holds the other and as two otherwise, so no checkerboard shows where nothing is drawn over it.
+fn checker_areas(bounds: Rect64, run: Rect64) -> impl Iterator<Item = Rect64> {
+    let hull = bounds.union(run);
+    let areas = if hull == bounds || hull == run { [Some(hull), None] } else { [Some(run), Some(bounds)] };
+    areas.into_iter().flatten()
 }
 
 /// The tiles `len` pixels long along one axis that overlap `lo..hi`, at most [`MOST_COPIES`] of them, centred on the
@@ -453,14 +459,15 @@ impl Component for RasterDisplay<'_> {
         let corners = shown.view.quad(Rect64::new(0.0, 0.0, f64::from(shown.size.width), f64::from(shown.size.height)));
         if let Some(checker) = &self.checkerboard {
             let bounds = shown.bounds;
-            let covered = Rect64::new(f64::from(bounds.x0), f64::from(bounds.y0), f64::from(bounds.x1), f64::from(bounds.y1))
-                .union(shown.tiles.cover(shown.size));
-            painter.painter.add(checker.shape(
-                painter.painter.ctx(),
-                &ui.env.tokens,
-                CheckerArea::Quad(shown.view.quad(covered)),
-                shown.view.rect.min,
-            ));
+            let bounds = Rect64::new(f64::from(bounds.x0), f64::from(bounds.y0), f64::from(bounds.x1), f64::from(bounds.y1));
+            for area in checker_areas(bounds, shown.tiles.run(shown.size)) {
+                painter.painter.add(checker.shape(
+                    painter.painter.ctx(),
+                    &ui.env.tokens,
+                    CheckerArea::Quad(shown.view.quad(area)),
+                    shown.view.rect.min,
+                ));
+            }
         }
         if let (Picture::Source(_), Some(textures), Some(mapping)) = (&self.picture, &shown.textures, &self.mapping) {
             let (texture, factor) = textures.base;
