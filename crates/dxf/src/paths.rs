@@ -9,6 +9,11 @@ use kurbo::{BezPath, Point, Rect, Shape as _};
 pub const MAX_PATHS: usize = 200_000;
 /// Aggregate number of Bézier elements a drawing may generate during conversion.
 pub const MAX_PATH_ELEMENTS: usize = 2_000_000;
+/// Maximum line segments used to approximate one DXF spline.
+pub const MAX_SPLINE_SEGMENTS: usize = 4096;
+const MAX_SPLINE_DEPTH: u8 = 12;
+const MAX_SPLINE_DEGREE: usize = 16;
+const DEFAULT_SPLINE_TOLERANCE: f64 = 0.01;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -55,7 +60,7 @@ pub fn import(bytes: &[u8]) -> Result<Imported, Error> {
         if estimated_elements(&entity.kind) > remaining {
             return Err(Error::TooManySegments);
         }
-        let converted = entity_paths(&entity.kind, entity.common.extrusion);
+        let converted = entity_paths(&entity.kind, entity.common.extrusion)?;
         if converted.iter().flat_map(|path| path.elements()).any(|element| {
             let finite = |p: Point| p.x.is_finite() && p.y.is_finite();
             match *element {
@@ -128,6 +133,7 @@ fn estimated_elements(kind: &crate::model::EntityKind) -> usize {
             polyline_count(&vertices, poly.closed())
         }
         E::Ellipse { start, end, .. } => 1usize.saturating_add(arc_count(end - start)),
+        E::Spline(spline) => spline_spans(spline).map_or(0, |spans| spans.saturating_mul(8)),
         _ => 0,
     }
 }
@@ -162,9 +168,9 @@ fn units_to_mm(code: i64, _measurement: Option<i64>) -> f64 {
     }
 }
 
-fn entity_paths(kind: &crate::model::EntityKind, normal: crate::model::Point) -> Vec<BezPath> {
+fn entity_paths(kind: &crate::model::EntityKind, normal: crate::model::Point) -> Result<Vec<BezPath>, Error> {
     use crate::model::EntityKind as E;
-    match kind {
+    Ok(match kind {
         E::Line { start, end } => vec![line(*start, *end)],
         E::Circle { center, radius } if radius.is_finite() && *radius > 0.0 => {
             vec![map_ocs_path(circle(Point::new(center[0], center[1]), *radius), normal, center[2])]
@@ -187,8 +193,162 @@ fn entity_paths(kind: &crate::model::EntityKind, normal: crate::model::Point) ->
         E::Ellipse { center, major, ratio, start, end } if ratio.is_finite() && *ratio > 0.0 => {
             vec![ellipse(*center, *major, normal, *ratio, *start, *end)]
         }
+        E::Spline(spline) => spline_path(spline)?.into_iter().collect(),
         _ => Vec::new(),
+    })
+}
+
+fn spline_spans(spline: &crate::model::Spline) -> Option<usize> {
+    let degree = usize::try_from(spline.degree).ok()?;
+    let count = spline.control.len();
+    if degree == 0 || degree > MAX_SPLINE_DEGREE || degree >= count || spline.knots.len() != count.checked_add(degree)?.checked_add(1)? {
+        return None;
     }
+    let start = spline.knots[degree];
+    let end = spline.knots[count];
+    if !(start.is_finite() && end.is_finite() && start < end) {
+        return None;
+    }
+    let spans = (degree..count).filter(|&i| spline.knots[i].is_finite() && spline.knots[i] < spline.knots[i + 1]).count();
+    (spans > 0).then_some(spans)
+}
+
+fn spline_path(spline: &crate::model::Spline) -> Result<Option<BezPath>, Error> {
+    let Some(spans) = spline_spans(spline) else {
+        // Fit-point-only and malformed splines are reported as unsupported by the caller.
+        return Ok(None);
+    };
+    if spans > MAX_SPLINE_SEGMENTS {
+        return Err(Error::TooManySegments);
+    }
+    let degree = usize::try_from(spline.degree).map_err(|_| Error::TooManySegments)?;
+    let count = spline.control.len();
+    if !spline.weights.is_empty() && spline.weights.len() != count {
+        return Ok(None);
+    }
+    if spline.knots.iter().any(|knot| !knot.is_finite())
+        || spline.control.iter().flatten().any(|coordinate| !coordinate.is_finite())
+        || spline.weights.iter().any(|weight| !weight.is_finite())
+    {
+        return Err(Error::NonFinite);
+    }
+    if spline.knots.windows(2).any(|pair| pair[0] > pair[1]) {
+        return Ok(None);
+    }
+    let tolerance = if spline.fit_tolerance.is_finite() && spline.fit_tolerance > 0.0 { spline.fit_tolerance } else { DEFAULT_SPLINE_TOLERANCE };
+    let mut path = BezPath::new();
+    let mut sampler = SplineSampler { spline, tolerance, segments: 0, output: Vec::new() };
+    let mut first = None;
+    let mut last_point: Option<[f64; 3]> = None;
+    for span in degree..count {
+        let t0 = spline.knots[span];
+        let t1 = spline.knots[span + 1];
+        if !(t0.is_finite() && t1.is_finite() && t0 < t1) {
+            continue;
+        }
+        let Some(p0) = spline_point(spline, span, t0) else {
+            return Ok(None);
+        };
+        let Some(p1) = spline_point(spline, span, t1) else {
+            return Ok(None);
+        };
+        if p0.iter().any(|coordinate| !coordinate.is_finite()) || p1.iter().any(|coordinate| !coordinate.is_finite()) {
+            return Err(Error::NonFinite);
+        }
+        if first.is_none() {
+            first = Some(p0);
+            path.move_to((p0[0], p0[1]));
+        } else if last_point.is_some_and(|previous| (previous[0] - p0[0]).abs() > tolerance || (previous[1] - p0[1]).abs() > tolerance) {
+            // Discontinuous knot spans form distinct open contours.
+            path.move_to((p0[0], p0[1]));
+        }
+        sampler.append(span, t0, p0, t1, p1, 0)?;
+        for point in sampler.output.drain(..) {
+            path.line_to((point[0], point[1]));
+            last_point = Some(point);
+        }
+    }
+    if spline.flags & 1 != 0
+        && let Some(first) = first
+    {
+        path.line_to((first[0], first[1]));
+        path.close_path();
+    }
+    if path.elements().is_empty() { Ok(None) } else { Ok(Some(path)) }
+}
+
+struct SplineSampler<'a> {
+    spline: &'a crate::model::Spline,
+    tolerance: f64,
+    segments: usize,
+    output: Vec<[f64; 3]>,
+}
+
+impl SplineSampler<'_> {
+    fn append(&mut self, span: usize, t0: f64, p0: [f64; 3], t1: f64, p1: [f64; 3], depth: u8) -> Result<(), Error> {
+        let quarter_t = t0 + (t1 - t0) * 0.25;
+        let middle_t = t0 + (t1 - t0) * 0.5;
+        let three_quarter_t = t0 + (t1 - t0) * 0.75;
+        let Some(quarter) = spline_point(self.spline, span, quarter_t) else { return Err(Error::NonFinite) };
+        let Some(middle) = spline_point(self.spline, span, middle_t) else { return Err(Error::NonFinite) };
+        let Some(three_quarter) = spline_point(self.spline, span, three_quarter_t) else { return Err(Error::NonFinite) };
+        if [quarter, middle, three_quarter].iter().flatten().any(|coordinate| !coordinate.is_finite()) {
+            return Err(Error::NonFinite);
+        }
+        let flatness = [quarter, middle, three_quarter]
+            .iter()
+            .map(|point| distance_to_segment(Point::new(point[0], point[1]), Point::new(p0[0], p0[1]), Point::new(p1[0], p1[1])))
+            .fold(0.0_f64, f64::max);
+        if flatness <= self.tolerance {
+            self.segments = self.segments.saturating_add(1);
+            if self.segments > MAX_SPLINE_SEGMENTS {
+                return Err(Error::TooManySegments);
+            }
+            self.output.push(p1);
+            return Ok(());
+        }
+        if depth >= MAX_SPLINE_DEPTH || self.segments >= MAX_SPLINE_SEGMENTS {
+            return Err(Error::TooManySegments);
+        }
+        self.append(span, t0, p0, middle_t, middle, depth + 1)?;
+        self.append(span, middle_t, middle, t1, p1, depth + 1)
+    }
+}
+
+fn distance_to_segment(point: Point, start: Point, end: Point) -> f64 {
+    let chord = end - start;
+    let length_sq = chord.hypot2();
+    if length_sq == 0.0 {
+        return (point - start).hypot();
+    }
+    let t = ((point - start).dot(chord) / length_sq).clamp(0.0, 1.0);
+    (point - (start + chord * t)).hypot()
+}
+
+fn spline_point(spline: &crate::model::Spline, span: usize, t: f64) -> Option<[f64; 3]> {
+    let degree = usize::try_from(spline.degree).ok()?;
+    let mut values = Vec::with_capacity(degree + 1);
+    for j in 0..=degree {
+        let index = span.checked_sub(degree)?.checked_add(j)?;
+        let weight = spline.weights.get(index).copied().unwrap_or(1.0);
+        let point = *spline.control.get(index)?;
+        values.push([point[0] * weight, point[1] * weight, point[2] * weight, weight]);
+    }
+    for level in 1..=degree {
+        for j in (level..=degree).rev() {
+            let index = span.checked_sub(degree)?.checked_add(j)?;
+            let left = *spline.knots.get(index)?;
+            let right = *spline.knots.get(index + degree + 1 - level)?;
+            let denominator = right - left;
+            let alpha = if denominator == 0.0 { 0.0 } else { (t - left) / denominator };
+            let (before, after) = values.split_at_mut(j);
+            for (previous, current) in before[j - 1].iter().copied().zip(after[0].iter_mut()) {
+                *current = (1.0 - alpha) * previous + alpha * *current;
+            }
+        }
+    }
+    let value = values[degree];
+    (value[3].is_finite() && value[3].abs() > f64::EPSILON).then(|| [value[0] / value[3], value[1] / value[3], value[2] / value[3]])
 }
 
 fn map_ocs_path(path: BezPath, normal: crate::model::Point, z: f64) -> BezPath {
