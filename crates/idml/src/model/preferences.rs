@@ -69,6 +69,55 @@ impl TextFramePreferences {
             column_rule_bottom_inset: num("ColumnRuleBottomInset"),
         }
     }
+
+    /// Writes one IDML `TextFramePreference`, including its inset list and column-rule
+    /// properties. Enumeration strings are supplied by the caller because they are model policy.
+    pub fn to_el(&self, column_rule_color: &str) -> El {
+        use crate::value::num;
+
+        let mut inset = El::new("InsetSpacing").with_attr("type", "list");
+        for value in self.inset.unwrap_or([0.0; 4]) {
+            inset.push(El::new("ListItem").with_attr("type", "unit").with_text(num(value)));
+        }
+        let el = El::new("TextFramePreference")
+            .with_attr("TextColumnCount", num(self.column_count.unwrap_or(1.0).max(1.0)))
+            .with_attr("TextColumnGutter", num(self.column_gutter.unwrap_or(0.0)))
+            .with_attr("UseFixedColumnWidth", bool_text(self.fixed_width))
+            .with_attr("UseFlexibleColumnWidth", bool_text(self.flexible_width))
+            .with_attr("VerticalBalanceColumns", bool_text(self.balance_columns))
+            .with_attr("FirstBaselineOffset", self.first_baseline.as_deref().unwrap_or("Ascent"))
+            .with_attr("MinimumFirstBaselineOffset", num(self.minimum_first_baseline.unwrap_or(0.0)))
+            .with_attr("VerticalJustification", self.vertical_justification.as_deref().unwrap_or("TopAlign"))
+            .with_attr("VerticalThreshold", num(self.vertical_threshold.unwrap_or(0.0)))
+            .with_attr("IgnoreWrap", bool_text(self.ignore_wrap))
+            .with_attr("AutoSizingType", self.auto_sizing_type.as_deref().unwrap_or("Off"))
+            .with_attr("AutoSizingReferencePoint", self.auto_sizing_reference.as_deref().unwrap_or("CenterPoint"))
+            .with_attr("UseMinimumHeightForAutoSizing", bool_text(self.use_minimum_height))
+            .with_attr("MinimumHeightForAutoSizing", num(self.minimum_height.unwrap_or(0.0)))
+            .with_attr("UseMinimumWidthForAutoSizing", bool_text(self.use_minimum_width))
+            .with_attr("MinimumWidthForAutoSizing", num(self.minimum_width.unwrap_or(0.0)))
+            .with_attr("UseNoLineBreaksForAutoSizing", bool_text(self.no_line_breaks));
+        let el = if let Some(width) = self.fixed_column_width.filter(|width| *width > 0.0) {
+            el.with_attr("TextColumnFixedWidth", num(width))
+        } else {
+            el
+        };
+        let el = el
+            .with_attr("ColumnRuleOverride", bool_text(self.column_rule_override))
+            .with_attr("ColumnRuleStrokeWidth", num(self.column_rule_width.unwrap_or(0.0)))
+            .with_attr("ColumnRuleStrokeColor", column_rule_color)
+            .with_attr("ColumnRuleStrokeTint", num(self.column_rule_tint.unwrap_or(0.0)))
+            .with_attr("ColumnRuleOffset", num(self.column_rule_offset.unwrap_or(0.0)))
+            .with_attr("ColumnRuleTopInset", num(self.column_rule_top_inset.unwrap_or(0.0)))
+            .with_attr("ColumnRuleBottomInset", num(self.column_rule_bottom_inset.unwrap_or(0.0)))
+            .with_attr("ColumnRuleInsetChainOverride", bool_text(self.column_rule_top_inset == self.column_rule_bottom_inset));
+        el.push(El::new("Properties").with_child(inset));
+        el
+    }
+}
+
+fn bool_text(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
 }
 
 fn inset(elements: &[&El]) -> Option<[f64; 4]> {
