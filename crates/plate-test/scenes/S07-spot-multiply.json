@@ -1,0 +1,45 @@
+{
+  "id": "S07",
+  "title": "Gold 100 Multiply over Teal 100 and over C100",
+  "source": "research S7, DesignCraft DC02",
+  "page": [360, 216],
+  "inks": [{"name": "Gold", "cmyk": [0, 20, 60, 20]}, {"name": "Teal", "cmyk": [80, 0, 30, 0]}],
+  "settings": {"group_cs": "cmyk"},
+  "objects": [
+    {"type": "rect", "rect": [20, 20, 150, 176], "fill": {"spot": "Teal", "tint": 100}},
+    {"type": "rect", "rect": [190, 20, 150, 176], "fill": {"cmyk": [100, 0, 0, 0]}},
+    {
+      "type": "rect",
+      "rect": [60, 60, 240, 96],
+      "fill": {"spot": "Gold", "tint": 100},
+      "blend": "multiply"
+    }
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black", "Gold", "Teal"],
+    "points": [
+      {"at": [40, 108], "inks": {"Teal": 100}, "tol": 2, "note": "Teal only"},
+      {
+        "at": [100, 108],
+        "inks": {"Teal": 100, "Gold": 100},
+        "tol": 6,
+        "note": "both spots kept"
+      },
+      {"at": [180, 108], "inks": {"Gold": 100}, "tol": 6, "note": "Gold over paper"},
+      {
+        "at": [260, 108],
+        "inks": {"Cyan": 100, "Gold": 100},
+        "tol": 6,
+        "note": "cyan kept under the spot"
+      },
+      {"at": [330, 108], "inks": {"Cyan": 100}, "tol": 2, "note": "cyan only"}
+    ]
+  },
+  "structure": {
+    "page_group": "DeviceCMYK",
+    "blend_modes": ["Multiply"],
+    "color_spaces": ["DeviceCMYK", "Separation(Gold, alt DeviceCMYK)", "Separation(Teal, alt DeviceCMYK)"],
+    "device_rgb": false,
+    "output_intents": []
+  }
+}

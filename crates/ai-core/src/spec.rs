@@ -37,8 +37,11 @@ pub const SPEC_VERSION: u32 = 1;
 pub const MAX_SPEC_BYTES: usize = 32 * 1024;
 /// Most models one spec may offer.
 pub const MAX_MODELS: usize = 16;
-/// Largest rendered or stored template (a body, serialized).
+/// Largest stored template (a body, serialized).
 pub const MAX_TEMPLATE_BYTES: usize = 4 * 1024;
+/// Most text one rendered template may hold, summed over its strings with every substitution made.
+/// A slot may repeat, so this, not [`MAX_TEMPLATE_BYTES`], bounds what a prompt can grow to.
+pub const MAX_RENDERED_BYTES: usize = 4 * 1024 * 1024;
 /// Deepest JSON pointer.
 pub const MAX_POINTER_DEPTH: usize = 8;
 /// Most entries in a status table.

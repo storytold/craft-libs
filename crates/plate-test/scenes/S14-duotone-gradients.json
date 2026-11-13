@@ -1,0 +1,75 @@
+{
+  "id": "S14",
+  "title": "DeviceN [Black Gold] duotone ramp, Gold-to-paper and Gold-to-cyan gradients",
+  "source": "research S14, DesignCraft DC07",
+  "page": [360, 216],
+  "inks": [{"name": "Gold", "cmyk": [0, 20, 60, 20]}],
+  "objects": [
+    {
+      "type": "image",
+      "rect": [20, 20, 320, 80],
+      "image": {
+        "px": [320, 8],
+        "ramp": [{"inks": {"Black": 0, "Gold": 0}}, {"inks": {"Black": 100, "Gold": 60}}]
+      }
+    },
+    {
+      "type": "rect",
+      "rect": [20, 120, 150, 76],
+      "fill": {
+        "linear": {
+          "from": [20, 0],
+          "to": [170, 0],
+          "stops": [
+            {"at": 0, "paint": {"spot": "Gold", "tint": 100}},
+            {"at": 1, "paint": {"spot": "Gold", "tint": 0}}
+          ]
+        }
+      }
+    },
+    {
+      "type": "rect",
+      "rect": [190, 120, 150, 76],
+      "fill": {
+        "linear": {
+          "from": [190, 0],
+          "to": [340, 0],
+          "stops": [
+            {"at": 0, "paint": {"spot": "Gold", "tint": 100}},
+            {"at": 1, "paint": {"cmyk": [100, 0, 0, 0]}}
+          ]
+        }
+      }
+    }
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black", "Gold"],
+    "points": [
+      {"at": [100, 60], "inks": {"Black": 25, "Gold": 15}, "tol": 10, "note": "duotone at 25%"},
+      {"at": [260, 60], "inks": {"Black": 75, "Gold": 45}, "tol": 10, "note": "duotone at 75%"},
+      {"at": [57.5, 158], "inks": {"Gold": 75}, "tol": 10, "note": "spot>paper at 25%"},
+      {"at": [95, 158], "inks": {"Gold": 50}, "tol": 10, "note": "spot>paper at 50%"},
+      {"at": [132.5, 158], "inks": {"Gold": 25}, "tol": 10, "note": "spot>paper at 75%"},
+      {
+        "at": [227.5, 158],
+        "inks": {"Gold": 75, "Cyan": 25},
+        "tol": 10,
+        "note": "spot>cyan at 25%"
+      },
+      {
+        "at": [265, 158],
+        "inks": {"Gold": 50, "Cyan": 50},
+        "tol": 10,
+        "note": "spot>cyan at 50%"
+      }
+    ]
+  },
+  "structure": {
+    "page_group": "none",
+    "smask": false,
+    "color_spaces_include": ["DeviceN(Black,Gold, alt DeviceCMYK)", "Separation(Gold, alt DeviceCMYK)"],
+    "device_rgb": false,
+    "output_intents": []
+  },
+  "note": "DeviceN colorants follow process order (Cyan, Magenta, Yellow, Black), then the scene's inks."
+}

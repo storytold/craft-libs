@@ -1,0 +1,156 @@
+[package]
+name = "craft-text"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Text processing below the Craft composer: hyphenation with a bundled US English dictionary and patterns, other languages through hypher"
+
+[lints]
+workspace = true
+
+[dependencies]
+hypher = { version = "0.1.8", default-features = false, features = ["alloc"], optional = true }
+miniz_oxide = { version = "0.8", optional = true }
+unicode-general-category = { version = "1.1", optional = true }
+unicode-linebreak = { version = "0.1.5", optional = true }
+unicode-segmentation = { version = "1.13", optional = true }
+icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"], optional = true }
+unicode-bidi = { version = "0.3.18", optional = true }
+unicode-bidi-mirroring = { version = "0.4.0", optional = true }
+
+[dev-dependencies]
+unicode-segmentation = "1.13"
+
+[[example]]
+name = "hyphgen"
+required-features = ["generator"]
+
+[features]
+default = ["hyphen", "bidi", "segment", "linebreak"]
+# Hyphenation points; English (bundled dictionary and patterns) needs no further feature.
+hyphen = ["dep:hypher", "dep:miniz_oxide", "dep:unicode-general-category"]
+# Bidirectional text: embedding levels, line reordering and mirroring (UAX #9).
+bidi = ["dep:unicode-bidi", "dep:unicode-bidi-mirroring"]
+# Line breaking on a box/glue/penalty model (Knuth–Plass, greedy, balanced); no dependencies.
+linebreak = []
+# The dictionary writer (`hyphen::dict`) and pattern trainer (`hyphen::patgen`) used by
+# examples/hyphgen.rs.
+generator = ["hyphen"]
+# Line-break opportunities (UAX #14 with kinsoku) and grapheme-cluster emergency breaks; Thai, Lao,
+# Khmer and Burmese words need their language feature.
+segment = ["dep:unicode-linebreak", "dep:unicode-segmentation"]
+# With `thai`, `lao`, `khmer` or `burmese`: find their words with ICU4X's LSTM models instead of its
+# dictionaries. Much smaller (for web builds), slower to run, and its words differ slightly.
+lstm = ["segment", "icu_segmenter?/lstm"]
+# Each feature below adds the data for one more language: for `hyphen`, hypher's patterns (see
+# NOTICE for their licenses; Slovak is `slovak-gpl`, outside `all-languages`); for `segment`, ICU4X's word data for Thai, Lao, Khmer and Burmese
+# (one shared data set, Unicode License v3).
+all-languages = [
+    "afrikaans",
+    "albanian",
+    "assamese",
+    "belarusian",
+    "bengali",
+    "bulgarian",
+    "burmese",
+    "catalan",
+    "croatian",
+    "czech",
+    "danish",
+    "dutch",
+    "estonian",
+    "finnish",
+    "french",
+    "galician",
+    "georgian",
+    "german",
+    "greek",
+    "gujarati",
+    "hindi",
+    "hungarian",
+    "icelandic",
+    "italian",
+    "kannada",
+    "khmer",
+    "kurmanji",
+    "lao",
+    "latin",
+    "lithuanian",
+    "malayalam",
+    "marathi",
+    "mongolian",
+    "norwegian",
+    "oriya",
+    "panjabi",
+    "polish",
+    "portuguese",
+    "russian",
+    "sanskrit",
+    "serbian",
+    "slovenian",
+    "spanish",
+    "swedish",
+    "tamil",
+    "telugu",
+    "thai",
+    "turkish",
+    "turkmen",
+    "ukrainian",
+]
+afrikaans = ["hyphen", "hypher/afrikaans"]
+albanian = ["hyphen", "hypher/albanian"]
+assamese = ["hyphen", "hypher/assamese"]
+belarusian = ["hyphen", "hypher/belarusian"]
+bengali = ["hyphen", "hypher/bengali"]
+bulgarian = ["hyphen", "hypher/bulgarian"]
+catalan = ["hyphen", "hypher/catalan"]
+croatian = ["hyphen", "hypher/croatian"]
+czech = ["hyphen", "hypher/czech"]
+danish = ["hyphen", "hypher/danish"]
+dutch = ["hyphen", "hypher/dutch"]
+estonian = ["hyphen", "hypher/estonian"]
+finnish = ["hyphen", "hypher/finnish"]
+french = ["hyphen", "hypher/french"]
+galician = ["hyphen", "hypher/galician"]
+georgian = ["hyphen", "hypher/georgian"]
+german = ["hyphen", "hypher/german"]
+greek = ["hyphen", "hypher/greek"]
+gujarati = ["hyphen", "hypher/gujarati"]
+hindi = ["hyphen", "hypher/hindi"]
+hungarian = ["hyphen", "hypher/hungarian"]
+icelandic = ["hyphen", "hypher/icelandic"]
+italian = ["hyphen", "hypher/italian"]
+kannada = ["hyphen", "hypher/kannada"]
+kurmanji = ["hyphen", "hypher/kurmanji"]
+latin = ["hyphen", "hypher/latin"]
+lithuanian = ["hyphen", "hypher/lithuanian"]
+malayalam = ["hyphen", "hypher/malayalam"]
+marathi = ["hyphen", "hypher/marathi"]
+mongolian = ["hyphen", "hypher/mongolian"]
+norwegian = ["hyphen", "hypher/norwegian"]
+oriya = ["hyphen", "hypher/oriya"]
+panjabi = ["hyphen", "hypher/panjabi"]
+polish = ["hyphen", "hypher/polish"]
+portuguese = ["hyphen", "hypher/portuguese"]
+russian = ["hyphen", "hypher/russian"]
+sanskrit = ["hyphen", "hypher/sanskrit"]
+serbian = ["hyphen", "hypher/serbian"]
+# Slovak patterns are under the GPL, version 2 or later (hyph-sk.tex), unlike every other language
+# here, so `all-languages` leaves them out. A build that enables this ships GPL-licensed data. Any
+# other dependency that enables `hypher/slovak` (hypher's defaults do) embeds them too, through
+# feature unification.
+slovak-gpl = ["hyphen", "hypher/slovak"]
+slovenian = ["hyphen", "hypher/slovenian"]
+spanish = ["hyphen", "hypher/spanish"]
+swedish = ["hyphen", "hypher/swedish"]
+tamil = ["hyphen", "hypher/tamil"]
+telugu = ["hyphen", "hypher/telugu"]
+turkish = ["hyphen", "hypher/turkish"]
+turkmen = ["hyphen", "hypher/turkmen"]
+ukrainian = ["hyphen", "hypher/ukrainian"]
+burmese = ["segment", "dep:icu_segmenter"]
+khmer = ["segment", "dep:icu_segmenter"]
+lao = ["segment", "dep:icu_segmenter"]
+thai = ["segment", "dep:icu_segmenter"]

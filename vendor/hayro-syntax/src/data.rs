@@ -68,6 +68,10 @@ pub(crate) struct Data {
     decoded: SegmentList<Option<Vec<u8>>, 32>,
     map: Mutex<HashMap<ObjectIdentifier, usize>>,
     loading: LoadGate,
+    // PdfCraft patch: each object stream's header pairs, parsed once. Looking up every object of
+    // a stream otherwise reparsed all /N pairs per lookup, quadratic in /N. An entry is at most
+    // one pair per four decoded bytes, and decoded streams are kept for the document anyway.
+    object_offsets: Mutex<HashMap<ObjectIdentifier, Arc<Vec<(u32, usize)>>>>,
 }
 
 impl Debug for Data {
@@ -84,12 +88,27 @@ impl Data {
             decoded: SegmentList::new(),
             map: Mutex::new(HashMap::new()),
             loading: LoadGate::default(),
+            object_offsets: Mutex::new(HashMap::new()),
         }
     }
 
     /// Get access to the original data of the PDF.
     pub(crate) fn get(&self) -> &PdfData {
         &self.data
+    }
+
+    /// PdfCraft patch: the header pairs of object stream `id`, from `parse` on first use.
+    pub(crate) fn object_offsets(
+        &self,
+        id: ObjectIdentifier,
+        parse: impl FnOnce() -> Option<Vec<(u32, usize)>>,
+    ) -> Option<Arc<Vec<(u32, usize)>>> {
+        if let Some(offsets) = self.object_offsets.get().get(&id) {
+            return Some(offsets.clone());
+        }
+        // Parsed without the lock held; a racing parse of the same stream gives the same table.
+        let parsed = Arc::new(parse()?);
+        Some(self.object_offsets.get().entry(id).or_insert(parsed).clone())
     }
 
     /// Get access to the data of a decoded object stream.

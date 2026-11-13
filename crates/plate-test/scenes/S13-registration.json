@@ -1,0 +1,45 @@
+{
+  "id": "S13",
+  "title": "Registration marks print on every plate, spots included",
+  "source": "research S13",
+  "page": [360, 216],
+  "inks": [{"name": "Gold", "cmyk": [0, 20, 60, 20]}],
+  "objects": [
+    {"type": "rect", "rect": [40, 40, 80, 80], "fill": "registration"},
+    {
+      "type": "ellipse",
+      "rect": [200, 40, 80, 80],
+      "stroke": {"paint": "registration", "width": 6}
+    },
+    {"type": "rect", "rect": [160, 140, 60, 40], "fill": {"spot": "Gold", "tint": 100}}
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black", "Gold"],
+    "points": [
+      {
+        "at": [80, 80],
+        "inks": {"Cyan": 100, "Magenta": 100, "Yellow": 100, "Black": 100, "Gold": 100},
+        "tol": 2,
+        "note": "registration fill"
+      },
+      {
+        "at": [240, 40],
+        "inks": {"Cyan": 100, "Magenta": 100, "Yellow": 100, "Black": 100, "Gold": 100},
+        "tol": 2,
+        "note": "registration stroke (top of the circle)"
+      },
+      {"at": [240, 80], "inks": {}, "tol": 2, "note": "inside the circle"},
+      {"at": [190, 160], "inks": {"Gold": 100}, "tol": 2, "note": "Gold"}
+    ]
+  },
+  "structure": {
+    "page_group": "none",
+    "group_cs": [],
+    "overprint": false,
+    "smask": false,
+    "blend_modes": [],
+    "color_spaces": ["Separation(All, alt DeviceCMYK)", "Separation(Gold, alt DeviceCMYK)"],
+    "device_rgb": false,
+    "output_intents": []
+  }
+}

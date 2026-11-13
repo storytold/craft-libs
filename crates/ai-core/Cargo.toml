@@ -10,6 +10,9 @@ repository.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+# History day/month grouping and ISO/CSV timestamps go through chrono (no hand-rolled calendar
+# code); std-only, so ai-core still compiles for wasm.
+chrono = { workspace = true }
 
 [lints]
 workspace = true

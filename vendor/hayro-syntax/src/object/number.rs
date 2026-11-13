@@ -70,6 +70,13 @@ impl Number {
 impl Skippable for Number {
     fn skip(r: &mut Reader<'_>, _: bool) -> Option<()> {
         let has_sign = r.forward_if(|b| b == b'+' || b == b'-').is_some();
+        // PdfCraft patch: one more sign, so that skipping a number covers what `read_inner`
+        // reads. `--280` was already covered by the `b'-'` arm below, but `-+280` and `++280`
+        // were not, and a skip that fails where a read succeeds puts the reader back where it
+        // started (#3630 review).
+        if has_sign {
+            r.forward_if(|b| b == b'+' || b == b'-');
+        }
 
         // Some PDFs have weird trailing minuses, so try to accept those as well.
         match r.peek_byte()? {
@@ -113,19 +120,25 @@ impl Readable<'_> for Number {
 
 #[inline(always)]
 fn read_inner(r: &mut Reader<'_>) -> Option<Number> {
-    let first = r.peek_byte()?;
-    let has_sign = matches!(first, b'+' | b'-');
-    let negative = match first {
-        b'-' => {
-            r.forward();
-            true
-        }
-        b'+' => {
-            r.forward();
-            false
-        }
-        _ => false,
-    };
+    // PdfCraft patch: a doubled sign is one number, not two. `--280` left `negative` set with no
+    // digits read, so it returned 0 and the reader stopped on `-280`, which became a second
+    // number: a `cm` with it got seven operands, kept the last six, and the matrix
+    // `0 0 1 0 -280 10` hid everything drawn under it (#3565). `Number::skip` above already
+    // consumes the whole token, so read and skip disagreed about where the number ended.
+    //
+    // One extra sign is absorbed and the value is negative if either sign was a minus, which is
+    // what the COS lexer does since #3299 (`--280` and `+-280` are both -280). A third sign is
+    // left to the digit loop's trailing-minus arm, as before.
+    let mut negative = false;
+    let mut signs = 0;
+    while signs < 2
+        && let Some(b @ (b'-' | b'+')) = r.peek_byte()
+    {
+        r.forward();
+        negative |= b == b'-';
+        signs += 1;
+    }
+    let has_sign = signs > 0;
 
     // PdfCraft patch: high-precision float mantissa overflow (jsPDF double-precision coordinates).
     // Digits that don't fit in `mantissa` are dropped: past the dot they are only precision;
@@ -349,6 +362,39 @@ mod tests {
     use crate::object::Number;
     use crate::reader::Reader;
     use crate::reader::ReaderExt;
+
+    /// PdfCraft patch: a doubled sign is one number. `--280` returned 0 and left `-280` to be
+    /// read as a second number, so a `cm` carrying it got seven operands and a degenerate matrix
+    /// (#3565). The COS lexer reads these the same way since #3299.
+    #[test]
+    fn a_doubled_sign_is_one_number() {
+        for (src, want) in [("--280", -280), ("+-280", -280), ("-+280", -280), ("++280", 280), ("-280", -280), ("+280", 280)] {
+            let mut r = Reader::new(src.as_bytes());
+            assert_eq!(r.read_without_context::<i32>().unwrap(), want, "{src}");
+            assert!(r.at_end(), "{src}: the whole number was read, leaving nothing for a second one");
+        }
+        // The fraction too, and a lone sign is still zero.
+        assert_eq!(Reader::new("--280.5".as_bytes()).read_without_context::<f64>().unwrap(), -280.5);
+        assert_eq!(Reader::new("-".as_bytes()).read_without_context::<i32>().unwrap(), 0);
+
+        // Skipping covers what reading accepts: a skip that fails where a read succeeds puts the
+        // reader back where it started, so `Object::skip` would leave the number in place
+        // (#3630 review).
+        for src in ["--280", "+-280", "-+280", "++280", "-280", "+280", "--280.5"] {
+            let mut r = Reader::new(src.as_bytes());
+            assert!(r.skip::<Number>(false).is_some(), "{src}: not skipped");
+            assert!(r.at_end(), "{src}: only part of the number was skipped");
+        }
+        // A doubled sign alone is a zero token, like a single one.
+        for token in ["--", "+-", "-+", "++"] {
+            let bytes = format!("{token} 3");
+            let mut skipped = Reader::new(bytes.as_bytes());
+            assert!(skipped.skip::<Number>(false).is_some(), "{token}");
+            let mut read = Reader::new(bytes.as_bytes());
+            assert_eq!(read.read_without_context::<Number>().unwrap().as_f64(), 0.0, "{token}");
+            assert_eq!(read.offset(), skipped.offset(), "{token}");
+        }
+    }
 
     #[test]
     fn tolerant_signed_and_dot_zero_tokens_match_skip() {

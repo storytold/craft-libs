@@ -88,6 +88,15 @@ assert_eq!(format_feet_frames(95, 40), "0002+15");
 assert_eq!(parse_feet_frames("2+15", 40, 0), Ok(95));
 ```
 
+## SoundCraft Sample-Time Compatibility
+
+The `soundcraft` module carries SoundCraft's existing sample-index clock (`i64` samples at the
+session sample rate), `SampleRate`, `TempoMap`, grid calculations and five timebase parsers and
+formatters. It keeps the serialized representation and existing saturation, sanitization and
+rounding behavior intact while the rest of the suite can use exact `Tick` values. SoundCraft's
+session model imports these types from `craft_time::soundcraft`; the APIs in that module retain
+the original SoundCraft names and meanings.
+
 ## EffectCraft & FilmCraft Compatibility Differences
 
 `craft-time` unifies time representation across the Craft suite while explicitly documenting application-specific design choices:
