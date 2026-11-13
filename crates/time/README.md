@@ -35,7 +35,7 @@ assert_eq!(audio_sample, one_sec);
 Frame rates are represented as exact fractions (`num / den`):
 
 ```rust
-use craft_time::FrameRate;
+use craft_time::{FrameRate, Tick};
 
 // Standard NTSC and PAL rates
 let ntsc_24 = FrameRate::FPS_23_976; // 24000 / 1001

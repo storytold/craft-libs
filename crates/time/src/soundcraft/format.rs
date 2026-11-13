@@ -76,7 +76,7 @@ pub fn format_length(start: Samples, len: Samples, fmt: TimeFormat, sr: SampleRa
             let t0 = map.samples_to_ticks(start, sr);
             let t1 = map.samples_to_ticks(start.saturating_add(len), sr);
             let m = map.meter_at_tick(t0);
-            let d = (t1 - t0).max(0);
+            let d = t1.saturating_sub(t0).max(0);
             let bars = d / m.ticks_per_bar().max(1);
             let rem = d % m.ticks_per_bar().max(1);
             format!("{bars}| {}| {:03}", rem / m.ticks_per_beat().max(1), rem % m.ticks_per_beat().max(1))

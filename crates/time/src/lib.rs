@@ -561,7 +561,7 @@ pub fn format_time(t: Tick, rate: FrameRate, drop_frame: bool, display: TimeDisp
             let abs_ticks = t.0.unsigned_abs();
             let total_secs = abs_ticks / (TICKS_PER_SECOND as u64);
             let rem_ticks = abs_ticks % (TICKS_PER_SECOND as u64);
-            let rem_samples = Tick(rem_ticks as i64).to_units_floor(sample_rate);
+            let rem_samples = Tick(rem_ticks as i64).to_units_floor(sample_rate.max(0));
             let h = total_secs / 3600;
             let m = (total_secs / 60) % 60;
             let s = total_secs % 60;
@@ -625,11 +625,22 @@ fn parse_timecode_with_negative_policy(
     if s.is_empty() {
         return Err(ParseError("empty timecode".into()));
     }
+    if s.len() > 80 {
+        return Err(ParseError("timecode is too long".into()));
+    }
     let (sign_char, body) = match s.as_bytes()[0] {
         b'+' => (Some('+'), &s[1..]),
         b'-' => (Some('-'), &s[1..]),
         _ => (None, s),
     };
+    // Four fields is the complete timecode grammar. Check limits before allocating split vectors.
+    let separators = body.bytes().filter(|b| matches!(b, b':' | b';' | b'.' | b',')).count();
+    if separators > 3 {
+        return Err(ParseError("too many timecode fields".into()));
+    }
+    if separators == 0 && body.len() > if sign_char.is_some() { 19 } else { 8 } {
+        return Err(ParseError("timecode is too long".into()));
+    }
     let parts: Vec<&str> = body.split([':', ';', '.', ',']).collect();
     let nums: Vec<i64> = if parts.len() == 1 {
         let digits = parts[0];
@@ -825,6 +836,15 @@ mod tests {
     }
 
     #[test]
+    fn timecode_parser_rejects_oversized_inputs_before_field_collection() {
+        let too_many_fields = ":".repeat(100_000);
+        assert!(parse_timecode(&too_many_fields, FrameRate::FPS_30, false, 0).is_err());
+        let compact = "1".repeat(9);
+        assert!(parse_timecode(&compact, FrameRate::FPS_30, false, 0).is_err());
+        assert!(parse_timecode_relative("+12345678901234567890", FrameRate::FPS_30, false, 0).is_err());
+    }
+
+    #[test]
     fn test_broadcast_frame_rates() {
         for r in FrameRate::COMMON {
             assert_eq!(r.frame_at(r.tick_of(100)), 100);
@@ -858,6 +878,7 @@ mod tests {
         assert_eq!(format_time(neg_complex, r, false, TimeDisplay::AudioSamples, 48_000), "-01:01:01:00000");
 
         let zero = Tick::ZERO;
+        assert_eq!(format_time(Tick(2), r, false, TimeDisplay::AudioSamples, -1), "00:00:00:00000");
         assert_eq!(format_time(zero, r, false, TimeDisplay::AudioSamples, 48_000), "00:00:00:00000");
     }
 

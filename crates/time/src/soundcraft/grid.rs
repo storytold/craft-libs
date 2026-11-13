@@ -430,7 +430,7 @@ impl GridValue {
                 // always four quarter notes and therefore keeps a continuous tick origin.
                 let bb = map.bar_beat_at_tick(t);
                 let bar_tick = map.bar_start_tick(bb.bar);
-                let origin = if value == NoteValue::Whole { 0 } else { bar_tick };
+                let origin = if value == NoteValue::Whole || (value == NoteValue::Bar && dotted) { 0 } else { bar_tick };
                 let step = Self::note_ticks(value, dotted, triplet, map, origin);
                 let k = (t - origin).div_euclid(step);
                 map.tick_to_samples(origin + k * step, sr)
@@ -547,7 +547,14 @@ impl GridValue {
         }
         let step = self.step_samples(line, sr, map, rate);
         let candidate = self.line_at_or_before(line.saturating_add(step), sr, map, rate);
-        if candidate > line { candidate } else { line.saturating_add(step) }
+        let next = if candidate > line { candidate } else { line.saturating_add(step) };
+        if matches!(self, GridValue::Note { value: NoteValue::Bar, .. }) {
+            return next;
+        }
+        let tick = map.samples_to_ticks(line, sr);
+        let bar = map.bar_beat_at_tick(tick).bar;
+        let next_bar = map.tick_to_samples(map.bar_start_tick(bar.saturating_add(1)), sr);
+        if next_bar > line { next.min(next_bar) } else { next }
     }
 
     /// All grid lines within `[start, end)`, capped at `max` lines.
@@ -682,6 +689,27 @@ mod tests {
     }
 
     #[test]
+    fn dotted_bar_grid_keeps_its_spacing_across_bars() {
+        let (sr, map, rate) = (SampleRate::HZ_48000, TempoMap::default(), FrameRate::Fps25);
+        let grid = GridValue::Note { value: NoteValue::Bar, dotted: true, triplet: false };
+        assert_eq!(grid.line_at_or_before(143_999, sr, &map, rate), 0);
+        assert_eq!(grid.line_at_or_before(144_000, sr, &map, rate), 144_000);
+        assert_eq!(grid.next_line(0, sr, &map, rate), 144_000);
+    }
+
+    #[test]
+    fn dotted_note_does_not_skip_a_meter_change_boundary() {
+        let sr = SampleRate::HZ_48000;
+        let mut map = TempoMap::default();
+        map.set_meter(TICKS_PER_QUARTER * 4, 2, 4).unwrap();
+        let rate = FrameRate::Fps25;
+        let grid = GridValue::Note { value: NoteValue::Half, dotted: true, triplet: false };
+        assert_eq!(grid.next_line(72_000, sr, &map, rate), 96_000);
+        assert!(grid.lines(72_000, 120_000, sr, &map, rate, 10).contains(&96_000));
+        assert_eq!(grid.snap(90_000, sr, &map, rate), 96_000);
+    }
+
+    #[test]
     fn seconds_grid_lines_land_on_whole_seconds() {
         let (sr, map, rate) = (SampleRate::HZ_44100, TempoMap::default(), FrameRate::Fps30);
         for g in [GridValue::Seconds(0.001), GridValue::Seconds(0.01)] {
@@ -745,7 +773,8 @@ mod tests {
                 let frame = GridValue::drop_second_frame(seconds, rate);
                 let line = rate.samples_at_frame(frame, sr);
                 assert_eq!(grid.line_at_or_before(line, sr, &map, rate), line, "{rate:?} second {seconds}");
-                assert_eq!(grid.line_at_or_before(-line, sr, &map, rate), -line, "{rate:?} second -{seconds}");
+                let negative_line = rate.samples_at_frame(-frame, sr);
+                assert_eq!(grid.line_at_or_before(negative_line, sr, &map, rate), negative_line, "{rate:?} second -{seconds}");
                 for offset in -2..=rate.nominal() + 2 {
                     let position = rate.samples_at_frame(frame.saturating_add(offset), sr);
                     let before = grid.line_at_or_before(position, sr, &map, rate);
@@ -761,8 +790,9 @@ mod tests {
             let boundary = rate.samples_at_frame(minute_frame, sr);
             assert_eq!(grid.line_at_or_before(boundary, sr, &map, rate), boundary, "{rate:?} positive minute boundary");
             assert_eq!(grid.snap(boundary, sr, &map, rate), boundary, "{rate:?} positive minute snap");
-            assert_eq!(grid.line_at_or_before(-boundary, sr, &map, rate), -boundary, "{rate:?} negative minute boundary");
-            assert_eq!(grid.snap(-boundary, sr, &map, rate), -boundary, "{rate:?} negative minute snap");
+            let negative_boundary = rate.samples_at_frame(-minute_frame, sr);
+            assert_eq!(grid.line_at_or_before(negative_boundary, sr, &map, rate), negative_boundary, "{rate:?} negative minute boundary");
+            assert_eq!(grid.snap(negative_boundary, sr, &map, rate), negative_boundary, "{rate:?} negative minute snap");
         }
     }
 

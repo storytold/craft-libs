@@ -108,9 +108,12 @@ impl FrameRate {
         if n == 0 {
             return 0;
         }
-        // Round half away from zero so negative frames mirror positive ones.
-        let mag = (i128::from(f.unsigned_abs()) * i128::from(sr.hz()) * i128::from(d) + i128::from(n) / 2) / i128::from(n);
-        let v = if f < 0 { -mag } else { mag };
+        // Use the first integer sample whose floored frame lookup is `f`; nearest rounding
+        // can put fractional-rate frame starts just before their own lookup interval.
+        let numerator = i128::from(f) * i128::from(sr.hz()) * i128::from(d);
+        let denominator = i128::from(n);
+        let floor = numerator.div_euclid(denominator);
+        let v = floor + i128::from(numerator.rem_euclid(denominator) != 0);
         i64::try_from(v).unwrap_or(if v < 0 { i64::MIN } else { i64::MAX })
     }
 
@@ -194,6 +197,12 @@ impl Timecode {
             Some(r) => (true, r),
             None => (false, t),
         };
+        if t.len() > 80 {
+            return Err(TimeError::Parse("timecode is too long".into(), "timecode"));
+        }
+        if t.bytes().filter(|b| matches!(b, b':' | b';' | b'.')).count() > 3 {
+            return Err(TimeError::Parse(text.to_string(), "timecode"));
+        }
         let parts: Vec<&str> = t.split([':', ';', '.']).collect();
         if parts.is_empty() || parts.len() > 4 {
             return Err(TimeError::Parse(text.to_string(), "timecode"));
@@ -232,15 +241,16 @@ mod tests {
     }
 
     #[test]
-    fn negative_timecode_rounds_symmetrically() {
+    fn fractional_frame_starts_match_floored_lookup_on_both_sides_of_zero() {
         let sr = SampleRate::HZ_48000;
         let tc = Timecode::parse("-00:00:01:00").unwrap();
         assert_eq!(tc.to_samples(FrameRate::Fps25, sr), -48_000);
         for r in [FrameRate::Fps25, FrameRate::Fps29_97, FrameRate::Fps29_97Drop, FrameRate::Fps23_976] {
-            for f in [1i64, 7, 25, 1799, 107_892] {
-                assert_eq!(r.samples_at_frame(-f, sr), -r.samples_at_frame(f, sr), "{r:?} frame {f}");
+            for f in [-107_892i64, -25, -7, -1, 0, 1, 2, 7, 25, 1799, 107_892] {
+                assert_eq!(r.frames_at(r.samples_at_frame(f, sr), sr), f, "{r:?} frame {f}");
             }
         }
+        assert_eq!(FrameRate::Fps29_97.frames_at(FrameRate::Fps29_97.samples_at_frame(2, sr), sr), 2);
     }
 
     #[test]
@@ -299,6 +309,7 @@ mod tests {
         assert_eq!((tc.seconds, tc.frames), (3, 4));
         assert!(Timecode::parse("a:b").is_err());
         assert!(Timecode::parse("1:2:3:4:5").is_err());
+        assert!(Timecode::parse(&format!("{}:", "1".repeat(100_000))).is_err());
     }
 
     #[test]
