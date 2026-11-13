@@ -18,7 +18,7 @@ default = ["isobmff"]
 bitstream = []
 isobmff = ["bitstream", "dep:thiserror"]
 matroska = []
-# AVI (RIFF) and OpenDML demuxer (`craft_media::avi`).
+# AVI (RIFF) and OpenDML demuxer and muxer (`craft_media::avi`).
 avi = []
 # MXF demuxer and writer (`craft_media::mxf`); the writer formats dates with chrono.
 mxf = ["dep:chrono"]
@@ -49,6 +49,10 @@ required-features = ["matroska"]
 
 [[test]]
 name = "oracle_avi"
+required-features = ["avi"]
+
+[[test]]
+name = "oracle_avi_mux"
 required-features = ["avi"]
 
 [[test]]

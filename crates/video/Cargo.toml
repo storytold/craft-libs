@@ -58,6 +58,8 @@ rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
 craft-media-testkit = { workspace = true }
+# The AVI muxer, for the MPEG-4 Part 2 encoder's end-to-end test.
+craft-media = { workspace = true, features = ["avi"] }
 
 [[test]]
 name = "dnx"
