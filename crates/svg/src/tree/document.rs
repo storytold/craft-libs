@@ -21,8 +21,39 @@ pub struct Document {
 /// A group or path in document order.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Node {
-    Group { children: Vec<Node>, opacity: f32 },
-    Path(Path),
+    Group { children: Vec<Node>, opacity: f32, transform: [f64; 6], bounds: [f64; 4], features: GroupFeatures },
+    Path(Box<Path>),
+    Image(Image),
+}
+
+/// Features that need a renderer capable of SVG compositing or external resources.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GroupFeatures {
+    pub filters: bool,
+    pub clip_path: bool,
+    pub mask: bool,
+    pub non_normal_blend: bool,
+    pub isolation: bool,
+}
+
+/// An embedded image node and its bounded source data/placement.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Image {
+    pub kind: ImageKind,
+    pub visible: bool,
+    pub transform: [f64; 6],
+    pub bounds: [f64; 4],
+    pub encoded: Option<std::sync::Arc<Vec<u8>>>,
+    pub svg: Option<Box<Document>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageKind {
+    Jpeg,
+    Png,
+    Gif,
+    WebP,
+    Svg,
 }
 
 /// A transformed path with its resolved fill and stroke.
@@ -47,8 +78,28 @@ pub enum Segment {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Paint {
     Color { rgb: [u8; 3], opacity: f32 },
-    Gradient { first_rgb: Option<[u8; 3]>, opacity: f32 },
+    Gradient { kind: GradientKind, stops: Vec<GradientStop>, transform: [f64; 6], spread: Spread, opacity: f32 },
     Pattern,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum GradientKind {
+    Linear { start: [f64; 2], end: [f64; 2] },
+    Radial { center: [f64; 2], radius: f64, focus: [f64; 2], focus_radius: f64 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GradientStop {
+    pub offset: f64,
+    pub rgb: [u8; 3],
+    pub opacity: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Spread {
+    Pad,
+    Reflect,
+    Repeat,
 }
 
 /// A resolved outline.
@@ -86,15 +137,60 @@ impl Document {
     }
 }
 
+fn transform(t: usvg::Transform) -> [f64; 6] {
+    [f64::from(t.sx), f64::from(t.ky), f64::from(t.kx), f64::from(t.sy), f64::from(t.tx), f64::from(t.ty)]
+}
+
+fn rect(r: usvg::Rect) -> [f64; 4] {
+    [f64::from(r.x()), f64::from(r.y()), f64::from(r.width()), f64::from(r.height())]
+}
+
+fn spread(s: usvg::SpreadMethod) -> Spread {
+    match s {
+        usvg::SpreadMethod::Pad => Spread::Pad,
+        usvg::SpreadMethod::Reflect => Spread::Reflect,
+        usvg::SpreadMethod::Repeat => Spread::Repeat,
+    }
+}
+
 fn color(paint: &usvg::Paint, opacity: f32) -> Paint {
     match paint {
         usvg::Paint::Color(c) => Paint::Color { rgb: [c.red, c.green, c.blue], opacity },
-        usvg::Paint::LinearGradient(g) => {
-            Paint::Gradient { first_rgb: g.stops().first().map(|s| [s.color().red, s.color().green, s.color().blue]), opacity }
-        }
-        usvg::Paint::RadialGradient(g) => {
-            Paint::Gradient { first_rgb: g.stops().first().map(|s| [s.color().red, s.color().green, s.color().blue]), opacity }
-        }
+        usvg::Paint::LinearGradient(g) => Paint::Gradient {
+            kind: GradientKind::Linear { start: [f64::from(g.x1()), f64::from(g.y1())], end: [f64::from(g.x2()), f64::from(g.y2())] },
+            stops: g
+                .stops()
+                .iter()
+                .map(|s| GradientStop {
+                    offset: f64::from(s.offset().get()),
+                    rgb: [s.color().red, s.color().green, s.color().blue],
+                    opacity: s.opacity().get(),
+                })
+                .collect(),
+            transform: transform(g.transform()),
+            spread: spread(g.spread_method()),
+            opacity,
+        },
+        usvg::Paint::RadialGradient(g) => Paint::Gradient {
+            kind: GradientKind::Radial {
+                center: [f64::from(g.cx()), f64::from(g.cy())],
+                radius: f64::from(g.r().get()),
+                focus: [f64::from(g.fx()), f64::from(g.fy())],
+                focus_radius: f64::from(g.fr().get()),
+            },
+            stops: g
+                .stops()
+                .iter()
+                .map(|s| GradientStop {
+                    offset: f64::from(s.offset().get()),
+                    rgb: [s.color().red, s.color().green, s.color().blue],
+                    opacity: s.opacity().get(),
+                })
+                .collect(),
+            transform: transform(g.transform()),
+            spread: spread(g.spread_method()),
+            opacity,
+        },
         usvg::Paint::Pattern(_) => Paint::Pattern,
     }
 }
@@ -148,7 +244,7 @@ fn convert_group(group: &usvg::Group, depth: usize, max_depth: usize, doc: &mut 
                         dash_array: s.dasharray().map(|d| d.iter().map(|v| f64::from(*v) * scale).collect()),
                     }
                 });
-                result.push(Node::Path(Path { segments, fill, stroke }));
+                result.push(Node::Path(Box::new(Path { segments, fill, stroke })));
             }
             usvg::Node::Group(child) => {
                 if depth >= max_depth {
@@ -157,7 +253,19 @@ fn convert_group(group: &usvg::Group, depth: usize, max_depth: usize, doc: &mut 
                 }
                 let children = convert_group(child, depth + 1, max_depth, doc);
                 if !children.is_empty() {
-                    result.push(Node::Group { children, opacity: child.opacity().get() });
+                    result.push(Node::Group {
+                        children,
+                        opacity: child.opacity().get(),
+                        transform: transform(child.abs_transform()),
+                        bounds: rect(child.abs_layer_bounding_box().to_rect()),
+                        features: GroupFeatures {
+                            filters: !child.filters().is_empty(),
+                            clip_path: child.clip_path().is_some(),
+                            mask: child.mask().is_some(),
+                            non_normal_blend: child.blend_mode() != usvg::BlendMode::Normal,
+                            isolation: child.should_isolate(),
+                        },
+                    });
                 }
             }
             usvg::Node::Text(text) => {
@@ -167,10 +275,39 @@ fn convert_group(group: &usvg::Group, depth: usize, max_depth: usize, doc: &mut 
                 }
                 let children = convert_group(text.flattened(), depth + 1, max_depth, doc);
                 if !children.is_empty() {
-                    result.push(Node::Group { children, opacity: 1.0 });
+                    result.push(Node::Group {
+                        children,
+                        opacity: 1.0,
+                        transform: transform(text.abs_transform()),
+                        bounds: rect(text.abs_bounding_box()),
+                        features: GroupFeatures::default(),
+                    });
                 }
             }
-            usvg::Node::Image(_) => doc.images += 1,
+            usvg::Node::Image(image) => {
+                doc.images += 1;
+                let kind = match image.kind() {
+                    usvg::ImageKind::JPEG(_) => ImageKind::Jpeg,
+                    usvg::ImageKind::PNG(_) => ImageKind::Png,
+                    usvg::ImageKind::GIF(_) => ImageKind::Gif,
+                    usvg::ImageKind::WEBP(_) => ImageKind::WebP,
+                    usvg::ImageKind::SVG(_) => ImageKind::Svg,
+                };
+                let (encoded, svg) = match image.kind() {
+                    usvg::ImageKind::JPEG(data) | usvg::ImageKind::PNG(data) | usvg::ImageKind::GIF(data) | usvg::ImageKind::WEBP(data) => {
+                        (Some(data.clone()), None)
+                    }
+                    usvg::ImageKind::SVG(tree) => (None, Some(Box::new(Document::from_tree(tree, max_depth.saturating_sub(depth + 1))))),
+                };
+                result.push(Node::Image(Image {
+                    kind,
+                    visible: image.is_visible(),
+                    transform: transform(image.abs_transform()),
+                    bounds: rect(image.abs_bounding_box()),
+                    encoded,
+                    svg,
+                }));
+            }
         }
     }
     result
