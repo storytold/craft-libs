@@ -49,6 +49,16 @@ pub struct VersionIndex {
     pub versions: Vec<VersionEntry>,
 }
 
+/// Encode the native version-history index using the FigCraft wire schema.
+pub fn write_version_index(index: &VersionIndex) -> Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(index)
+}
+
+/// Decode the native version-history index using the format's lenient optional-field defaults.
+pub fn read_version_index(bytes: &[u8]) -> Result<VersionIndex, serde_json::Error> {
+    serde_json::from_slice(bytes)
+}
+
 impl<'de> Deserialize<'de> for VersionIndex {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = Value::deserialize(deserializer)?;
@@ -110,6 +120,16 @@ impl<'de> Deserialize<'de> for BranchEntry {
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct BranchIndex {
     pub branches: Vec<BranchEntry>,
+}
+
+/// Encode the native branch index using the FigCraft wire schema.
+pub fn write_branch_index(index: &BranchIndex) -> Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(index)
+}
+
+/// Decode the native branch index using the format's lenient optional-field defaults.
+pub fn read_branch_index(bytes: &[u8]) -> Result<BranchIndex, serde_json::Error> {
+    serde_json::from_slice(bytes)
 }
 
 impl<'de> Deserialize<'de> for BranchIndex {
@@ -212,22 +232,20 @@ mod tests {
 
     #[test]
     fn version_index_preserves_lenient_defaults_and_writes_compact_auto_flag() {
-        let index: VersionIndex =
-            serde_json::from_str(r#"{"extra":true,"versions":[{"id":"v1","time":7,"auto":false,"images":["a",3]},{}]}"#).unwrap();
+        let index = read_version_index(br#"{"extra":true,"versions":[{"id":"v1","time":7,"auto":false,"images":["a",3]},{}]}"#).unwrap();
         assert_eq!(index.versions.len(), 2);
         assert_eq!(index.versions[0].images, vec!["a"]);
         assert_eq!(index.versions[1], VersionEntry::default());
-        let encoded = serde_json::to_value(&index).unwrap();
+        let encoded: Value = serde_json::from_slice(&write_version_index(&index).unwrap()).unwrap();
         assert!(encoded["versions"][0].get("auto").is_none());
         assert_eq!(encoded["versions"][0]["time"], 7);
     }
 
     #[test]
     fn branch_index_uses_native_camel_case_and_tolerates_invalid_optional_fields() {
-        let index: BranchIndex = serde_json::from_str(
-            r#"{"branches":[{"id":"b1","client":4294967296,"state":"unknown","baseImages":["a",false],"headImages":["b"]},{}]}"#,
-        )
-        .unwrap();
+        let index =
+            read_branch_index(br#"{"branches":[{"id":"b1","client":4294967296,"state":"unknown","baseImages":["a",false],"headImages":["b"]},{}]}"#)
+                .unwrap();
         let first = &index.branches[0];
         assert_eq!(first.client, 0);
         assert_eq!(first.state, BranchState::Active);
