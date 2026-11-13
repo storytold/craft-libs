@@ -2236,8 +2236,8 @@ mod tests {
           </defs>
           <rect id="piece-union" width="20" height="10" clip-path="url(#pieces)"/>
           <rect id="evenodd-ring" width="20" height="20" clip-path="url(#ring)"/>
-          <g clip-path="url(#left)"><line id="nested-open" x1="0" y1="5" x2="20" y2="5" clip-path="url(#right)"/></g>
-          <line id="open" x1="0" y1="5" x2="20" y2="5" clip-path="url(#left)"/>
+          <g clip-path="url(#left)"><line id="nested-open" x1="0" y1="5" x2="20" y2="5" stroke="black" clip-path="url(#right)"/></g>
+          <line id="open" x1="0" y1="5" x2="20" y2="5" stroke="black" clip-path="url(#left)"/>
           <rect id="empty-result" width="20" height="10" clip-path="url(#empty)"/>
         </svg>"##,
         );
