@@ -19,12 +19,14 @@ pub use document::{
     FlattenDocumentError, FlattenDocumentOptions, FlattenDocumentReport, FlattenTotals, Unreadable, flatten_document, flatten_document_with_progress,
 };
 pub use geom::FillRule;
+pub use overprint::PageOverprint;
 pub use raster::{FlattenPageError, FlattenPageOptions, FlattenPageReport, flatten_page};
 
 mod compose;
 mod document;
 pub mod font;
 pub mod geom;
+mod overprint;
 pub mod pdf;
 pub mod raster;
 mod shade;
