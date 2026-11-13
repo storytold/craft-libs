@@ -73,14 +73,24 @@ pub fn encode_jpeg(pixels: &RgbaImage, quality: u8) -> Result<Vec<u8>, CodecErro
     Ok(out.into_inner())
 }
 
-/// Encode pixels according to a destination filename's extension (`png`, `jpg`, or `jpeg`).
+/// Encode pixels according to a destination filename's extension.
 pub fn encode_for_path(path: impl AsRef<std::path::Path>, pixels: &RgbaImage) -> Result<Vec<u8>, CodecError> {
     let extension = path.as_ref().extension().and_then(std::ffi::OsStr::to_str).unwrap_or_default();
     match extension.to_ascii_lowercase().as_str() {
         "png" => encode_png(pixels),
         "jpg" | "jpeg" => encode_jpeg(pixels, 90),
+        "bmp" => encode_dynamic(pixels, image::ImageFormat::Bmp),
+        "gif" => encode_dynamic(pixels, image::ImageFormat::Gif),
+        "tif" | "tiff" => encode_dynamic(pixels, image::ImageFormat::Tiff),
+        "webp" => encode_dynamic(pixels, image::ImageFormat::WebP),
         other => Err(CodecError::unsupported("image", format!("cannot encode files with the .{other} extension"))),
     }
+}
+
+fn encode_dynamic(pixels: &RgbaImage, format: image::ImageFormat) -> Result<Vec<u8>, CodecError> {
+    let mut out = Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(pixels.clone()).write_to(&mut out, format).map_err(|e| CodecError::encode("image", e))?;
+    Ok(out.into_inner())
 }
 
 fn is_heif(bytes: &[u8]) -> bool {
