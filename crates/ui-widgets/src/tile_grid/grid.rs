@@ -142,7 +142,8 @@ struct GridSizes {
     thumbs: [f32; 3],
     /// What a tile adds around its picture.
     around: AroundPicture,
-    /// The gaps of the arrangement and the height of a group header, for captioned tiles and for bare ones.
+    /// The gaps of the arrangement and the height of a group header (a heading row, as high as the grid's other rows),
+    /// for captioned tiles and for bare ones.
     spacing: ArrangeSpacing,
     bare_spacing: ArrangeSpacing,
 }
@@ -152,7 +153,7 @@ impl GridSizes {
         let spacing = ArrangeSpacing::new(
             if card { cx.tokens.space.gap.section } else { cx.tokens.space.gap.stack },
             cx.tokens.space.gap.inline,
-            cx.tokens.size.panel_header,
+            ListRow::row_height(cx, ThumbSize::None, false),
         );
         GridSizes {
             card: cx.tokens.size.thumb.card,
