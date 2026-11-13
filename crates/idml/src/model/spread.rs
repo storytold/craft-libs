@@ -605,6 +605,30 @@ impl TextWrapPreference {
     pub fn offsets(&self) -> Option<[f64; 4]> {
         self.offsets
     }
+
+    /// Writes the IDML preference structure around caller-supplied enum values and path geometry.
+    pub fn to_el(mode: &str, inverse: bool, side: &str, contour: &str, offsets: [f64; 4], paths: &[PathGeometry]) -> El {
+        use crate::value::num;
+
+        let mut properties = El::new("Properties");
+        for path in paths {
+            properties.push(path.to_el());
+        }
+        properties.push(
+            El::new("TextWrapOffset")
+                .with_attr("Top", num(offsets[0]))
+                .with_attr("Left", num(offsets[1]))
+                .with_attr("Bottom", num(offsets[2]))
+                .with_attr("Right", num(offsets[3])),
+        );
+        El::new("TextWrapPreference")
+            .with_attr("Inverse", if inverse { "true" } else { "false" })
+            .with_attr("ApplyToMasterPageOnly", "false")
+            .with_attr("TextWrapSide", side)
+            .with_attr("TextWrapMode", mode)
+            .with_child(properties)
+            .with_child(El::new("ContourOption").with_attr("ContourType", contour).with_attr("IncludeInsideEdges", "false"))
+    }
 }
 
 /// Type-on-a-path settings.
