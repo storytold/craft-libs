@@ -129,20 +129,33 @@ fn the_cubes_take_the_room_the_readout_and_the_strip_leave() {
     assert!(blue.rect.right() <= narrow.x + 0.5, "the folded readout fits the width ({:?})", blue.rect);
 }
 
-/// The slider modes show each channel on one line: its slider and its number field side by side.
+/// The slider modes show each channel on one line: its slider and its number field side by side, every slider starting
+/// at one x past the channels' letters. The ramp is the footer under the rows: whole and in view
+/// in a short group too, where the rows scroll above it.
 #[trial]
 fn the_slider_modes_show_a_channel_on_one_line() {
-    for (mode, channels) in [(ColorPanelMode::RgbSliders, 3), (ColorPanelMode::CmykSliders, 4), (ColorPanelMode::HsbSliders, 3)] {
-        let rig = PanelRig::new(mode);
-        let sliders = rig.fixture.by_role(Role::SLIDER);
-        let fields = rig.fixture.by_role(Role::SPIN_BUTTON);
-        assert_eq!((sliders.len(), fields.len()), (channels, channels), "{mode:?}");
-        for (slider, field) in sliders.iter().zip(&fields) {
-            let line = slider.rect.y_range();
-            assert!(
-                line.contains(field.rect.center().y) && slider.rect.right() <= field.rect.left(),
-                "{mode:?}: {slider:?} then {field:?} on one line"
-            );
+    for room in [COLOR_ROOM, Vec2::new(280.0, 96.0)] {
+        for (mode, channels) in [(ColorPanelMode::RgbSliders, 3), (ColorPanelMode::CmykSliders, 4), (ColorPanelMode::HsbSliders, 3)] {
+            let case = format!("{mode:?} in {room:?}");
+            let rig = PanelRig::in_room(mode, room);
+            let sliders = rig.fixture.by_role(Role::SLIDER);
+            let fields = rig.fixture.by_role(Role::SPIN_BUTTON);
+            assert_eq!((sliders.len(), fields.len()), (channels, channels), "{case}");
+            for (slider, field) in sliders.iter().zip(&fields) {
+                let line = slider.rect.y_range();
+                assert!(
+                    line.contains(field.rect.center().y) && slider.rect.right() <= field.rect.left(),
+                    "{case}: {slider:?} then {field:?} on one line"
+                );
+                assert!(
+                    (slider.rect.left() - sliders[0].rect.left()).abs() < 0.5,
+                    "{case}: the sliders start at one x ({slider:?}, {:?})",
+                    sliders[0]
+                );
+            }
+            let ramp = rig.fixture.by_label("Color Ramp").expect("the ramp");
+            assert!(ramp.rect.top() >= -0.5 && ramp.rect.bottom() <= room.y + 0.5, "{case}: the ramp whole and in view ({:?})", ramp.rect);
+            assert!(sliders[0].rect.top() < ramp.rect.top(), "{case}: the ramp under the rows ({:?}, {:?})", sliders[0].rect, ramp.rect);
         }
     }
 }

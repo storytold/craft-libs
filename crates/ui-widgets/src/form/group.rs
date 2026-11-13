@@ -1,6 +1,6 @@
 //! `FieldGroup` (16.3): a container whose `Field`s share one label column.
 
-use crate::contract::{Common, Component, Container, ContainerProps, Cx, LabelScheme, Props as _, Role, Sizing};
+use crate::contract::{Common, Component, Container, ContainerProps, Cx, Gap, LabelScheme, Props as _, Role, Sizing};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{Metrics, Sense};
@@ -37,6 +37,13 @@ impl FieldGroup {
     #[must_use]
     pub fn labels(mut self, scheme: LabelScheme) -> Self {
         self.props = self.props.labels(scheme);
+        self
+    }
+
+    /// The spacing between the fields: `Gap::Row` by default, `Gap::Tight` for a dense panel's channel rows.
+    #[must_use]
+    pub fn gap(mut self, gap: Gap) -> Self {
+        self.props = self.props.body_gap(gap);
         self
     }
 }

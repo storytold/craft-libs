@@ -2,6 +2,7 @@
 //! (two cubes, a wheel, five slider sets), the out-of-gamut and web-colour warnings, and the colour ramp under the
 //! sliders; the panel menu chooses the view and the ramp and copies the colour.
 
+use std::cell::RefCell;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use craft_behavior::{EditEvent, GesturePhase, IconId, Mixed};
@@ -12,6 +13,7 @@ use craft_ui::contract::{
     Bind, CommandSet, Gap, Held, LabelScheme, NoValue, Outcome, Pattern, Props as _, Remember as _, Scroll, Show as _, ShowContainer as _, Sizing,
     clicked,
 };
+use craft_ui::form::FieldGroup;
 use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::menu::{Menu, MenuItem, PanelRow};
@@ -328,7 +330,7 @@ impl<'a> ColorPanel<'a> {
         let mut shown = Stack::new().label(words.title.clone()).fill().show(ui, |ui, cx| {
             let before = held.read(cx)?;
             let target = if before.background { PanelTarget::Background } else { PanelTarget::Foreground };
-            let mut body = Body {
+            let body = Body {
                 target,
                 colors,
                 converter: cmyk.unwrap_or_else(|| CmykConverter::coated()),
@@ -341,7 +343,7 @@ impl<'a> ColorPanel<'a> {
                 pick_color: None,
                 add_to_swatches: None,
             };
-            body.show(ui);
+            let mut body = body.show(ui);
             *cx.memory::<Kept>() = std::mem::take(&mut body.kept);
             edits = body.events;
             pick_color = body.pick_color;
@@ -540,43 +542,58 @@ impl Body<'_> {
     }
 
     /// The cubes take the height the readout leaves them, as Photoshop's field fills its dock group; the slider modes and
-    /// the wheel scroll where the group is shorter than they are.
-    fn show(&mut self, ui: &mut Ui) {
+    /// the wheel scroll where the group is shorter than they are. The slider modes' ramp is the body's footer, outside the
+    /// scroll: it stays whole under the rows, as Photoshop's ramp does.
+    fn show(self, ui: &mut Ui) -> Self {
         let mode = self.now.mode;
         let cube = mode.is_cube();
-        let body = if cube { Stack::new().fill() } else { Stack::new().fill().scroll(Scroll::vertical()) };
-        body.show(ui, |ui, _| {
-            let top = if cube { Row::new().fill() } else { Row::new() };
-            top.show(ui, |ui, _| {
-                Stack::new().show(ui, |ui, _| {
-                    self.wells(ui);
-                    // The cubes show the out-of-gamut chip only: the web-colour chip is for Web Color.
-                    if mode.is_sliders() || mode.is_cube() {
-                        self.warnings(ui, mode == ColorPanelMode::WebColorSliders);
-                    }
-                });
-                match mode {
-                    ColorPanelMode::HueCube => self.cube(ui, AreaMode::Hue),
-                    ColorPanelMode::BrightnessCube => self.cube(ui, AreaMode::Brightness),
-                    _ => {
-                        // The channel rows stand as close as Photoshop's.
-                        Stack::new().fill_width().gap(Gap::Tight).labels(LabelScheme::Inspector).show(ui, |ui, _| match mode {
-                            ColorPanelMode::GrayscaleSlider => self.rows(ui, &GrayModel, false),
-                            ColorPanelMode::RgbSliders => self.rows(ui, &RgbModel, false),
-                            ColorPanelMode::CmykSliders => self.rows(ui, &CmykModel::new(self.converter.clone()), false),
-                            ColorPanelMode::LabSliders => self.rows(ui, &LabModel, false),
-                            ColorPanelMode::WebColorSliders => self.rows(ui, &RgbModel, true),
-                            _ => self.rows(ui, &HsbModel, false),
-                        });
-                    }
+        // The body and the footer both draw into the panel's pass state.
+        let this = RefCell::new(self);
+        let mut body = Stack::new().fill();
+        if !cube {
+            body = body.scroll(Scroll::vertical());
+        }
+        if mode.is_sliders() {
+            body = body.footer(|ui, _| this.borrow_mut().ramp(ui));
+        }
+        body.show(ui, |ui, _| this.borrow_mut().content(ui));
+        this.into_inner()
+    }
+
+    /// The wells with their warnings beside the view of the mode; under the cubes their readout, under the wheel its
+    /// button.
+    fn content(&mut self, ui: &mut Ui) {
+        let mode = self.now.mode;
+        let top = if mode.is_cube() { Row::new().fill() } else { Row::new() };
+        top.show(ui, |ui, _| {
+            Stack::new().show(ui, |ui, _| {
+                self.wells(ui);
+                // The cubes show the out-of-gamut chip only: the web-colour chip is for Web Color.
+                if mode.is_sliders() || mode.is_cube() {
+                    self.warnings(ui, mode == ColorPanelMode::WebColorSliders);
                 }
             });
             match mode {
-                ColorPanelMode::HueCube | ColorPanelMode::BrightnessCube => self.readout(ui),
-                ColorPanelMode::ColorWheel => self.wheel(ui),
-                _ => self.ramp(ui),
+                ColorPanelMode::HueCube => self.cube(ui, AreaMode::Hue),
+                ColorPanelMode::BrightnessCube => self.cube(ui, AreaMode::Brightness),
+                _ => {
+                    // The channel rows stand as close as Photoshop's, their letters, fields and units in shared columns.
+                    FieldGroup::new(mode.label(self.words)).labels(LabelScheme::Inspector).gap(Gap::Tight).show(ui, |ui, _| match mode {
+                        ColorPanelMode::GrayscaleSlider => self.rows(ui, &GrayModel, false),
+                        ColorPanelMode::RgbSliders => self.rows(ui, &RgbModel, false),
+                        ColorPanelMode::CmykSliders => self.rows(ui, &CmykModel::new(self.converter.clone()), false),
+                        ColorPanelMode::LabSliders => self.rows(ui, &LabModel, false),
+                        ColorPanelMode::WebColorSliders => self.rows(ui, &RgbModel, true),
+                        _ => self.rows(ui, &HsbModel, false),
+                    });
+                }
             }
         });
+        match mode {
+            ColorPanelMode::HueCube | ColorPanelMode::BrightnessCube => self.readout(ui),
+            ColorPanelMode::ColorWheel => self.wheel(ui),
+            _ => {}
+        }
     }
 
     /// The foreground over the background: a click on the other well edits it, a click on the edited one asks for the

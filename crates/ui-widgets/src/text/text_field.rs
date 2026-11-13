@@ -6,7 +6,7 @@ mod stories;
 use super::adorn::{self, Adornment};
 use super::{FieldStyle, completions, text_part, words};
 use crate::contract::{
-    Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, OverlayUi, PaintUi, PartsCx, Pointer as _, Props as _, Role,
+    Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, OverlayUi, PaintUi, PartsCx, Pointer as _, Props as _, Role, Sizing,
     Styled as _, WordSetCx as _,
 };
 use crate::primitives::{Completer, IconSpec, TextOptions, TextRun};
@@ -237,8 +237,11 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
     type Style = FieldStyle;
     type Output = EditResponse<C::Value>;
 
+    /// The field's shortest width (`size.length.short`) is `measure`'s, so a content-sized field can go without it.
     fn style(cx: &crate::style::StyleCx<'_>, _: TextFieldStyleKey<C>) -> FieldStyle {
-        FieldStyle::at(cx)
+        let mut style = FieldStyle::at(cx);
+        style.metrics = style.metrics.min_size(Vec2::new(0.0, style.metrics.min_size.y));
+        style
     }
 
     fn sense(&self) -> Sense {
@@ -266,6 +269,12 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
         let clear = self.search.then(|| Self::clear_name(&cx.words::<words::TextWords>()));
         self.leading = std::mem::take(&mut self.leading).into_iter().map(|adornment| adornment.measured(cx)).collect();
         size.x += adorn::reserve(cx.style, &self.leading, &self.trailing(clear));
+        // Short text keeps a field at `size.length.short`, so a column of fields ends at one edge; a content-sized field
+        // takes its text and adornments only, as a content-sized number field does.
+        if cx.proposal != Proposal::Min && cx.resolved.sizing() != Some(Sizing::Content) {
+            let padding = cx.style.metrics.padding;
+            size.x = size.x.max(cx.tokens.size.length.short - padding.start - padding.end);
+        }
         size
     }
 
