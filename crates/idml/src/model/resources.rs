@@ -11,6 +11,54 @@ fn others(el: &El) -> impl Iterator<Item = &El> {
     el.elements().filter(|e| !e.is(Local("Properties")))
 }
 
+/// Numeric and boolean values in an IDML `MojikumiTable` row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MojikumiRow {
+    pub target_class: i16,
+    pub side_class: i16,
+    pub after: bool,
+    pub minimum: f64,
+    pub desired: f64,
+    pub maximum: f64,
+    pub priority: i16,
+    pub does_not_float: bool,
+}
+
+impl MojikumiRow {
+    /// Parses the IDML mojikumi row attributes with bounded integer and finite-number checks.
+    pub fn from_el(el: &El) -> Result<Self, String> {
+        let values = Values::of(el);
+        let number = |key: &str| -> Result<f64, String> {
+            let Some(raw) = values.get(key) else { return Ok(0.0) };
+            raw.trim().parse::<f64>().ok().filter(|value| value.is_finite()).ok_or_else(|| format!("Mojikumi row has invalid {key}"))
+        };
+        let integer = |key: &str| -> Result<i16, String> {
+            let value = number(key)?;
+            if value.fract() != 0.0 || value < f64::from(i16::MIN) || value > f64::from(i16::MAX) {
+                return Err(format!("Mojikumi {key} must be an in-range integer"));
+            }
+            Ok(value as i16)
+        };
+        let boolean = |key: &str| -> Result<bool, String> {
+            match values.get(key).map(str::trim) {
+                None | Some("false") => Ok(false),
+                Some("true") => Ok(true),
+                _ => Err(format!("Mojikumi row has invalid {key}")),
+            }
+        };
+        Ok(Self {
+            target_class: integer("TargetMojikumiClass")?,
+            side_class: integer("SideMojikumiClass")?,
+            after: boolean("SideIsAfterTarget")?,
+            minimum: number("Minimum")?,
+            desired: number("Desired")?,
+            maximum: number("Maximum")?,
+            priority: integer("CompressionPriority")?,
+            does_not_float: boolean("AkiDoesNotFloat")?,
+        })
+    }
+}
+
 /// One IDML tab stop, before the caller maps alignment names into its text model.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TabStopValues {
