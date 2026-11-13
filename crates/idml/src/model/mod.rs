@@ -30,8 +30,8 @@ pub use resources::{
     ColorGroup, ColorGroupDefinition, ColorGroupMember, ColorSpace, CompositeFontDefinition, CompositeFontEntryDefinition, EpubExportTagMap,
     FontDefinition, FontFamilyDefinition, FontsPart, GradientDefinition, GradientStop, GradientStopDefinition, GradientStopValue, GraphicPart,
     GrepStyleValue, Ink, InkDefinition, MojikumiRow, NestedLineStyleValue, NestedStyleValue, NestedStyleValues, OpenTypeFeatureValues,
-    ParagraphAlignmentValues, ParagraphBoxValues, ParagraphFlowValues, ParagraphListValues, RubyValues, StrokeDefinition, StrokeStyle,
-    StrokeStyleKind, Style, StyleGroup, StyleGroupWriter, StyleKind, StyleNode, Swatch, SwatchKind, TabStopValues, TextDecorationValues,
+    ParagraphAlignmentValues, ParagraphBoxValues, ParagraphFlowValues, ParagraphListValues, ParagraphSpanValues, RubyValues, StrokeDefinition,
+    StrokeStyle, StrokeStyleKind, Style, StyleGroup, StyleGroupWriter, StyleKind, StyleNode, Swatch, SwatchKind, TabStopValues, TextDecorationValues,
     TintDefinition, color_groups, inks, named, preference, stroke_styles, style_groups, swatches,
 };
 pub use spread::{

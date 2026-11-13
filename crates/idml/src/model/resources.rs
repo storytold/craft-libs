@@ -14,6 +14,7 @@ fn others(el: &El) -> impl Iterator<Item = &El> {
 /// Raw bullet and numbering properties on an IDML paragraph style or range.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ParagraphListValues {
+    pub applied_list: Option<String>,
     pub list_type: Option<String>,
     pub numbering_format: Option<String>,
     pub expression: Option<String>,
@@ -29,6 +30,8 @@ pub struct ParagraphListValues {
     pub restart_numbers: Option<bool>,
     pub restart_after_level: Option<u32>,
     pub restart_after_specific_level: bool,
+    pub numbering_continue: Option<bool>,
+    pub numbering_start_at: Option<f64>,
     pub bullet_font: Option<String>,
     pub bullet_font_style: Option<String>,
 }
@@ -104,6 +107,32 @@ impl CjkParagraphValues {
             allow_arbitrary_hyphenation: values.boolean("AllowArbitraryHyphenation"),
             grid_gyoudori: bounded_count("GridGyoudori"),
             paragraph_gyoudori: values.boolean("ParagraphGyoudori"),
+        }
+    }
+}
+
+/// Paragraph span and split-column properties read from IDML.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ParagraphSpanValues {
+    pub kind: Option<String>,
+    pub split_column_count: Option<u32>,
+    pub inside_gutter: Option<f64>,
+    pub outside_gutter: Option<f64>,
+    pub space_before: Option<f64>,
+    pub space_after: Option<f64>,
+}
+
+impl ParagraphSpanValues {
+    /// Reads paragraph span and split-column properties from IDML.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        Self {
+            kind: values.prop("SpanColumnType"),
+            split_column_count: values.prop("SpanSplitColumnCount").and_then(|value| value.trim().parse().ok()),
+            inside_gutter: values.num("SplitColumnInsideGutter"),
+            outside_gutter: values.num("SplitColumnOutsideGutter"),
+            space_before: values.num("SpanColumnMinSpaceBefore"),
+            space_after: values.num("SpanColumnMinSpaceAfter"),
         }
     }
 }
@@ -692,6 +721,7 @@ impl ParagraphListValues {
         let restart_after_specific_level = restart.is_some_and(|policy| policy.attr("RestartPolicy").map(str::trim) == Some("SpecificPreviousLevel"));
         let bullet = values.prop_el("BulletChar");
         Self {
+            applied_list: values.prop("AppliedNumberingList"),
             list_type: values.prop("BulletsAndNumberingListType"),
             numbering_format: values.prop("NumberingFormat"),
             expression: values.prop("NumberingExpression"),
@@ -707,6 +737,8 @@ impl ParagraphListValues {
             restart_numbers: values.boolean("NumberingApplyRestartPolicy"),
             restart_after_level,
             restart_after_specific_level,
+            numbering_continue: values.boolean("NumberingContinue"),
+            numbering_start_at: values.num("NumberingStartAt"),
             bullet_font: values.prop("BulletsFont"),
             bullet_font_style: values.prop("BulletsFontStyle"),
         }
