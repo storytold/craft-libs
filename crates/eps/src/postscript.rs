@@ -7,6 +7,161 @@
 /// Maximum nesting depth for executable procedures in a source token.
 pub const MAX_PROCEDURE_DEPTH: usize = 100;
 
+/// A bounded PostScript operand stack.
+///
+/// The stack is deliberately generic: an interpreter owns the concrete PostScript values and
+/// graphics state, while this module provides the shared language-level stack operators. A push
+/// past `limit` is ignored, matching the bounded EPS interpreter's defensive behavior.
+#[derive(Clone, Debug)]
+pub struct OperandStack<T> {
+    values: Vec<T>,
+    limit: usize,
+}
+
+impl<T: Clone> OperandStack<T> {
+    /// Create an empty stack with a maximum number of values.
+    pub fn new(limit: usize) -> Self {
+        Self { values: Vec::new(), limit }
+    }
+
+    /// Number of values currently on the stack.
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    /// Whether the stack is empty.
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    /// Push a value if the configured limit allows it; report whether it was pushed.
+    pub fn push(&mut self, value: T) -> bool {
+        if self.values.len() >= self.limit {
+            return false;
+        }
+        self.values.push(value);
+        true
+    }
+
+    /// Pop a value, or return the caller's language-specific underflow value.
+    pub fn pop_or(&mut self, underflow: T) -> T {
+        self.values.pop().unwrap_or(underflow)
+    }
+
+    /// Borrow the top value.
+    pub fn top(&self) -> Option<&T> {
+        self.values.last()
+    }
+
+    /// PostScript `dup`: duplicate the top value if one exists.
+    pub fn duplicate(&mut self) {
+        if let Some(value) = self.values.last().cloned() {
+            let _ = self.push(value);
+        }
+    }
+
+    /// PostScript `exch`: exchange the top two values when both exist.
+    pub fn exchange(&mut self) {
+        let len = self.values.len();
+        if len >= 2 {
+            self.values.swap(len - 1, len - 2);
+        }
+    }
+
+    /// PostScript `index`: copy the value `depth` below the top onto the stack.
+    ///
+    /// Invalid or negative depths are left to the caller to validate; an out-of-range depth is a
+    /// no-op. This keeps the helper bounded even for hostile numeric operands.
+    pub fn index(&mut self, depth: usize) {
+        let len = self.values.len();
+        if depth < len && len < self.limit {
+            let value = self.values[len - depth - 1].clone();
+            self.values.push(value);
+        }
+    }
+
+    /// PostScript `n j roll`: rotate the top `count` values by signed `shift` places.
+    ///
+    /// Positive shifts move values toward the top; negative shifts move them toward the bottom.
+    /// Counts larger than the stack and empty rolls are ignored.
+    pub fn roll(&mut self, count: usize, shift: isize) {
+        let len = self.values.len();
+        if count == 0 || count > len {
+            return;
+        }
+        let places = shift.rem_euclid(count as isize) as usize;
+        self.values[len - count..].rotate_right(places);
+    }
+
+    /// PostScript `copy` for an integer operand: append a copy of the top `count` values if it
+    /// fits. Returns false when the range is invalid or the configured limit would be exceeded.
+    pub fn copy_top(&mut self, count: usize) -> bool {
+        let len = self.values.len();
+        if count > len || len.saturating_add(count) > self.limit {
+            return false;
+        }
+        let copied = self.values[len - count..].to_vec();
+        self.values.extend(copied);
+        true
+    }
+
+    /// Borrow all stack values from bottom to top.
+    pub fn values(&self) -> &[T] {
+        &self.values
+    }
+}
+
+/// Bounded execution accounting shared by PostScript interpreters.
+///
+/// EPS programs can recurse or repeatedly execute procedures. A host can use this counter to
+/// stop work before it consumes unbounded CPU, independently of its operator and graphics policy.
+#[derive(Clone, Debug)]
+pub struct ExecutionBudget {
+    remaining: usize,
+    call_depth: usize,
+    max_call_depth: usize,
+}
+
+impl ExecutionBudget {
+    /// Create a budget with an operation allowance and maximum nested procedure calls.
+    pub fn new(operations: usize, max_call_depth: usize) -> Self {
+        Self { remaining: operations, call_depth: 0, max_call_depth }
+    }
+
+    /// Units of work still available.
+    pub fn remaining(&self) -> usize {
+        self.remaining
+    }
+
+    /// Current nested procedure depth.
+    pub fn call_depth(&self) -> usize {
+        self.call_depth
+    }
+
+    /// Charge work atomically. On failure the remaining budget stays unchanged.
+    pub fn spend(&mut self, units: usize) -> bool {
+        let Some(remaining) = self.remaining.checked_sub(units) else {
+            return false;
+        };
+        self.remaining = remaining;
+        true
+    }
+
+    /// Enter a procedure call if it remains within the configured depth.
+    pub fn enter_call(&mut self) -> bool {
+        if self.call_depth >= self.max_call_depth {
+            return false;
+        }
+        self.call_depth += 1;
+        true
+    }
+
+    /// Leave a procedure call. Extra leaves are ignored to keep cleanup paths safe.
+    pub fn leave_call(&mut self) {
+        self.call_depth = self.call_depth.saturating_sub(1);
+    }
+}
+
 /// A lexical PostScript value. Names are left unevaluated for the caller's interpreter.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Token {
@@ -281,6 +436,61 @@ fn parse_number(word: &[u8]) -> Option<f64> {
     text.parse::<f64>()
         .ok()
         .or_else(|| text.trim_start_matches(['+', '-']).parse::<f64>().ok().map(|value| if text.starts_with('-') { -value } else { value }))
+}
+
+#[cfg(test)]
+mod stack_tests {
+    use super::{ExecutionBudget, OperandStack};
+
+    #[test]
+    fn stack_operators_follow_postscript_order_and_respect_limit() {
+        let mut stack = OperandStack::new(8);
+        assert!(stack.push(1));
+        assert!(stack.push(2));
+        assert!(stack.push(3));
+        stack.exchange();
+        assert_eq!(stack.values(), &[1, 3, 2]);
+        stack.duplicate();
+        assert_eq!(stack.values(), &[1, 3, 2, 2]);
+        stack.roll(4, 1);
+        assert_eq!(stack.values(), &[2, 1, 3, 2]);
+        stack.roll(4, -1);
+        assert_eq!(stack.values(), &[1, 3, 2, 2]);
+        stack.index(2);
+        assert_eq!(stack.values(), &[1, 3, 2, 2, 3]);
+        assert!(stack.copy_top(2));
+        assert_eq!(stack.values(), &[1, 3, 2, 2, 3, 2, 3]);
+        stack.duplicate();
+        assert_eq!(stack.len(), 8);
+        assert!(!stack.push(7));
+    }
+
+    #[test]
+    fn stack_underflow_and_invalid_rolls_are_safe() {
+        let mut stack = OperandStack::new(2);
+        assert_eq!(stack.pop_or(99), 99);
+        stack.roll(1, isize::MAX);
+        stack.index(usize::MAX);
+        assert_eq!(stack.values(), &[]);
+        assert!(stack.copy_top(0));
+        assert_eq!(stack.values(), &[]);
+    }
+
+    #[test]
+    fn execution_budget_charges_atomically_and_bounds_call_depth() {
+        let mut budget = ExecutionBudget::new(3, 1);
+        assert!(budget.spend(2));
+        assert_eq!(budget.remaining(), 1);
+        assert!(!budget.spend(2));
+        assert_eq!(budget.remaining(), 1);
+        assert!(budget.enter_call());
+        assert_eq!(budget.call_depth(), 1);
+        assert!(!budget.enter_call());
+        budget.leave_call();
+        budget.leave_call();
+        assert_eq!(budget.call_depth(), 0);
+        assert!(budget.enter_call());
+    }
 }
 
 #[cfg(test)]
