@@ -186,6 +186,8 @@ pub struct Canvas<'a> {
     context_key: bool,
     /// The ease the app asked for from the view it drew ([`ease_from`](Self::ease_from)).
     ease: Option<Steer>,
+    /// The app's tool moves the view with the pointer this pass ([`view_follows_pointer`](Self::view_follows_pointer)).
+    follows_pointer: bool,
 }
 
 /// A canvas's view in one pass.
@@ -220,6 +222,7 @@ impl<'a> Canvas<'a> {
             settled: None,
             context_key: false,
             ease: None,
+            follows_pointer: false,
         }
         .label(label)
         .ltr_axis()
@@ -265,6 +268,16 @@ impl<'a> Canvas<'a> {
     #[must_use]
     pub fn jumped(mut self) -> Self {
         self.ease = Some(Steer::Stop);
+        self
+    }
+
+    /// The app's tool moves the view with the pointer this pass (an image-moving crop slides the view by fractional
+    /// pointer distances under a frame that stays put): the shown view stays as given, not [`pixel_aligned`], so the
+    /// picture and the frame do not jitter by part of a pixel as the pointer moves. P-15: the tool host passes the
+    /// framework `CropTool`'s image mode.
+    #[must_use]
+    pub fn view_follows_pointer(mut self, follows: bool) -> Self {
+        self.follows_pointer = follows;
         self
     }
 
@@ -407,7 +420,7 @@ impl<'a> Canvas<'a> {
             Some(settled) => (settled.shown, settled.target, settled.easing, settled.keys),
             None => (self.given?, self.given?, false, BodyKeys::default()),
         };
-        let shown = space::pixel_aligned(shown, pixels_per_point);
+        let shown = if self.follows_pointer { shown } else { space::pixel_aligned(shown, pixels_per_point) };
         let space = CanvasSpace::new(shown, pixels_per_point).with_target(target).with_easing(easing).with_keys(keys);
         Some(space.with_document(self.document_size()).with_rulers(self.rulers).with_background(background).with_canvas(id))
     }

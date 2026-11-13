@@ -107,8 +107,8 @@ fn cmd_or_ctrl_with_page_down_on_a_focused_canvas_control_scrolls_the_canvas_sid
 }
 
 /// The space a canvas gives its body for a view of `device` device pixels per document unit turned `rotation`
-/// degrees, centred off the pixel grid.
-fn space_at(device: f64, rotation: f64) -> craft_ui::canvas::CanvasSpace {
+/// degrees, centred off the pixel grid, with the app's tool moving the view with the pointer or not.
+fn space_at(device: f64, rotation: f64, follows_pointer: bool) -> craft_ui::canvas::CanvasSpace {
     let space = Rc::new(Cell::new(None));
     let seen = Rc::clone(&space);
     let mut fixture = Fixture::new(move |ui| {
@@ -117,7 +117,12 @@ fn space_at(device: f64, rotation: f64) -> craft_ui::canvas::CanvasSpace {
         let view = CanvasView::new(room, Point::new(100.3, 77.7), zoom).rotation(rotation);
         let mut navigation = NavigationOptions::default();
         navigation.overscroll = true;
-        let shown = Canvas::new("Document").document(Size::new(400.0, 300.0)).navigation(navigation).view(view).show(ui, |_, _| {});
+        let shown = Canvas::new("Document")
+            .document(Size::new(400.0, 300.0))
+            .navigation(navigation)
+            .view_follows_pointer(follows_pointer)
+            .view(view)
+            .show(ui, |_, _| {});
         seen.set(shown.output.space);
     });
     fixture.settle();
@@ -125,9 +130,9 @@ fn space_at(device: f64, rotation: f64) -> craft_ui::canvas::CanvasSpace {
 }
 
 #[trial]
-fn at_a_whole_device_zoom_with_no_rotation_the_shown_view_puts_document_pixels_on_device_pixels() {
+fn at_a_whole_device_zoom_with_no_rotation_the_shown_view_puts_document_pixels_on_device_pixels_unless_it_follows_the_pointer() {
     for device in [2.0, 12.0] {
-        let space = space_at(device, 0.0);
+        let space = space_at(device, 0.0, false);
         let ppp = space.pixels_per_point;
         for doc in [Point::ZERO, Point::new(17.0, 29.0)] {
             let p = space.view.to_screen(doc) * ppp;
@@ -138,6 +143,8 @@ fn at_a_whole_device_zoom_with_no_rotation_the_shown_view_puts_document_pixels_o
         let moved = (space.view.to_screen(Point::ZERO) - space.target().to_screen(Point::ZERO)) * ppp;
         assert!(moved.x.abs() <= 0.501 && moved.y.abs() <= 0.501, "{device}x: moved {moved:?}");
     }
-    let turned = space_at(2.0, 30.0);
+    let turned = space_at(2.0, 30.0, false);
     assert_eq!(turned.view.center, turned.target().center, "a turned view is shown as it is");
+    let following = space_at(2.0, 0.0, true);
+    assert_eq!(following.view.center, following.target().center, "a view moving with the pointer is shown as it is");
 }
