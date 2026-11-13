@@ -342,6 +342,16 @@ pub struct LengthSizes {
     pub number: ControlSizes,
 }
 
+impl LengthSizes {
+    /// The field widths multiplied by `factor` and rounded to whole pixels: a field holds a number of characters, so
+    /// its width follows the text size. The track holds no text and keeps its length.
+    pub(crate) fn text_scaled(self, factor: f32) -> LengthSizes {
+        let round = |v: f32| (v * factor).round();
+        let sizes = |c: ControlSizes| ControlSizes { sm: round(c.sm), md: round(c.md) };
+        LengthSizes { field: sizes(self.field), short: round(self.short), number: sizes(self.number), ..self }
+    }
+}
+
 /// Row heights other than a control's, in logical pixels.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RowSizes {

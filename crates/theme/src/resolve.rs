@@ -6,7 +6,7 @@ use super::ramp::Mode;
 use super::scale::{Easing, Elevation};
 use super::sizes;
 use super::theme::{Appearance, Contrast, ContrastIntent, PinLayer, Pins, ThemeDef};
-use super::tokens::{ColorToken, Edge, ElevationTokens, Motion, MotionTokens, RadiusSet, ShapeTokens, Tokens};
+use super::tokens::{ColorToken, Edge, ElevationTokens, Motion, MotionTokens, RadiusSet, ShapeTokens, SizeTokens, Tokens};
 use super::values;
 use crate::AppId;
 
@@ -202,13 +202,14 @@ fn resolve_concrete(theme: &ThemeDef, appearance: Appearance, app: Option<&AppId
     let radius = RadiusSet { sm: (radius.control / 2.0).round(), ..radius };
     let shape =
         ShapeTokens { radius, edge, rows: seed.and_then(|s| s.rows).unwrap_or(preset.rows), knob: seed.and_then(|s| s.knob).unwrap_or_default() };
-    let typography = preset.typography.scaled(sizes.text_steps.factor(appearance.text_size), values::TYPE_ROUNDING);
+    let text_factor = sizes.text_steps.factor(appearance.text_size);
+    let typography = preset.typography.scaled(text_factor, values::TYPE_ROUNDING);
 
     let tokens = Tokens {
         color,
         shape,
         space: preset.space,
-        size: preset.size,
+        size: SizeTokens { length: preset.size.length.text_scaled(text_factor), ..preset.size },
         stroke: preset.stroke,
         typography,
         elevation,
