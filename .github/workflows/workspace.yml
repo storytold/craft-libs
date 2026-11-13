@@ -19,8 +19,17 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/.test-inputs/craft-fonts
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout pinned test fonts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          path: .test-inputs/craft-fonts
+          persist-credentials: false
       - name: Install software Vulkan renderer
         if: runner.os == 'Linux'
         run: |
