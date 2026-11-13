@@ -1,69 +1,15 @@
-//! The EXIF ColorSpace tag (0xA001, in the Exif sub-IFD that IFD0's tag 0x8769 points to):
-//! 1 = sRGB, 0xFFFF = uncalibrated (EXIF 2.3, §4.6.5).
-//!
-//! Cameras write it instead of an ICC profile. Photoshop opens a file with no embedded profile but
-//! ColorSpace = sRGB as sRGB, unless Preferences › File Handling › Ignore EXIF Profile Tag is on.
-//! Anything malformed, truncated or missing reads as no tag.
+//! Shared EXIF ColorSpace tag parsing.
 
-use crate::orientation::{Order, ifd0_entries, tiff_body};
-
-/// IFD0's pointer to the Exif sub-IFD.
-const TAG_EXIF_IFD: u16 = 0x8769;
-/// The ColorSpace tag in the Exif sub-IFD.
-const TAG_COLOR_SPACE: u16 = 0xA001;
-const TYPE_SHORT: u16 = 3;
-const TYPE_LONG: u16 = 4;
-/// TIFF type 13: an IFD offset (some writers use it for sub-IFD pointers).
-const TYPE_IFD: u16 = 13;
-/// Bytes per classic TIFF IFD entry; EXIF is never BigTIFF.
-const ENTRY: usize = 12;
-/// No IFD can start inside the 8-byte TIFF header.
-const HEADER: usize = 8;
-
-/// The ColorSpace value meaning sRGB.
-pub const EXIF_COLOR_SPACE_SRGB: u16 = 1;
-
-/// The EXIF ColorSpace value of a TIFF-structured block (an EXIF payload with or without the
-/// `Exif\0\0` prefix), or `None` when it has none or it is malformed.
-pub fn exif_color_space(exif: &[u8]) -> Option<u16> {
-    let b = tiff_body(exif);
-    let (order, first, count, entry_bytes, big_tiff) = ifd0_entries(b)?;
-    if big_tiff {
-        return None;
-    }
-    let ptr = find(order, b, first, count, entry_bytes, TAG_EXIF_IFD)?;
-    if !matches!(order.u16(b, ptr.checked_add(2)?)?, TYPE_LONG | TYPE_IFD) || order.u32(b, ptr.checked_add(4)?)? != 1 {
-        return None;
-    }
-    let ifd = usize::try_from(order.u32(b, ptr.checked_add(8)?)?).ok()?;
-    if ifd < HEADER {
-        return None;
-    }
-    let n = usize::from(order.u16(b, ifd)?);
-    let first = ifd.checked_add(2)?;
-    // The whole table must be present.
-    if first.checked_add(n.checked_mul(ENTRY)?)? > b.len() {
-        return None;
-    }
-    let e = find(order, b, first, n, ENTRY, TAG_COLOR_SPACE)?;
-    if order.u32(b, e.checked_add(4)?)? != 1 {
-        return None;
-    }
-    match order.u16(b, e.checked_add(2)?)? {
-        TYPE_SHORT => order.u16(b, e.checked_add(8)?),
-        TYPE_LONG => u16::try_from(order.u32(b, e.checked_add(8)?)?).ok(),
-        _ => None,
-    }
-}
-
-/// Offset of the first entry tagged `tag` in the IFD whose `count` entries start at `first`.
-fn find(order: Order, b: &[u8], first: usize, count: usize, entry_bytes: usize, tag: u16) -> Option<usize> {
-    (0..count).filter_map(|i| first.checked_add(i.checked_mul(entry_bytes)?)).find(|&e| order.u16(b, e) == Some(tag))
-}
+pub use craft_metadata::edit::{EXIF_COLOR_SPACE_SRGB, exif_color_space};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TAG_EXIF_IFD: u16 = 0x8769;
+    const TAG_COLOR_SPACE: u16 = 0xA001;
+    const TYPE_SHORT: u16 = 3;
+    const TYPE_LONG: u16 = 4;
 
     /// A little- or big-endian EXIF block: IFD0 holding only the Exif pointer, then an Exif IFD
     /// holding `entries` (tag, type, count, value).
