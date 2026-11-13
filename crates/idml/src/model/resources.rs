@@ -394,6 +394,41 @@ pub struct Ink {
     pub values: Values,
 }
 
+/// A neutral colour definition for writing `Graphic.xml`.
+///
+/// The caller supplies colour-space values as IDML's serialized value list; this type owns the
+/// element and attribute grammar so applications do not need to emit `Color` XML themselves.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColorDefinition {
+    pub self_id: String,
+    pub name: String,
+    pub model: String,
+    pub space: String,
+    pub value: String,
+    pub override_kind: String,
+    pub editable: bool,
+    pub removable: bool,
+    pub visible: bool,
+}
+
+impl ColorDefinition {
+    pub fn to_el(&self) -> El {
+        El::new("Color")
+            .with_attr("Self", &self.self_id)
+            .with_attr("Model", &self.model)
+            .with_attr("Space", &self.space)
+            .with_attr("ColorValue", &self.value)
+            .with_attr("ColorOverride", &self.override_kind)
+            .with_attr("AlternateSpace", "NoAlternateColor")
+            .with_attr("AlternateColorValue", "")
+            .with_attr("Name", &self.name)
+            .with_attr("ColorEditable", self.editable)
+            .with_attr("ColorRemovable", self.removable)
+            .with_attr("Visible", self.visible)
+            .with_attr("SwatchCreatorID", "7937")
+    }
+}
+
 impl Ink {
     pub fn name(&self) -> Option<&str> {
         self.values.name()

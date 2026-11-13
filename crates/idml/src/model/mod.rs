@@ -22,8 +22,8 @@ use craft_xml::{El, Local, Node};
 pub use document::{ModelDocument, TopLevelKind, TopLevelNode};
 pub use geometry::{MAX_PATH_POINTS, PathGeometry, PathGeometryError, PathPoint, SubPath};
 pub use resources::{
-    ColorGroup, ColorSpace, GradientStop, GradientStopValue, Ink, StrokeStyle, StrokeStyleKind, Style, StyleGroup, StyleKind, StyleNode, Swatch,
-    SwatchKind, color_groups, inks, named, preference, stroke_styles, style_groups, swatches,
+    ColorDefinition, ColorGroup, ColorSpace, GradientStop, GradientStopValue, Ink, StrokeStyle, StrokeStyleKind, Style, StyleGroup, StyleKind,
+    StyleNode, Swatch, SwatchKind, color_groups, inks, named, preference, stroke_styles, style_groups, swatches,
 };
 pub use spread::{
     Graphic, GraphicChild, GraphicKind, Guide, ItemChild, ItemKind, Link, MarginPreference, Page, PageChild, PageItem, Spread, SpreadChild, TextPath,
