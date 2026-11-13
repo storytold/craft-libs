@@ -89,6 +89,14 @@ The optional PDF writer bundles four CC0 ICC profiles by Clinton Ingram. See ATT
 
 Source provenance
 
+crates/image-codecs (craft-image-codecs) is moved from PhotoCraft's standalone `photocraft-codecs`
+crate, including its bounded decoders, encoders, format registry, image model, metadata handling,
+orientation, fidelity warnings, and tests, from revision 5000240c6:
+https://github.com/storytold/photocraft
+Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors. The format implementations are
+clean-room work based on their public specifications; dependency licences and X.Org's `rgb.txt`
+attribution are listed in ATTRIBUTION.md.
+
 crates/raw (craft-raw) is moved from LightCraft, with behaviour ported from two other readers:
 - LightCraft, crates/raw (src/lib.rs, dng.rs, dngwrite.rs, tiffraw.rs, unpack.rs, ljpeg.rs, jxl.rs,
   opcodes.rs, profile.rs, gaintable.rs, semantic.rs, preview.rs, vendor/crw.rs, vendor/hasselblad.rs,

@@ -4,9 +4,7 @@
 //! the source was PNG, JPEG, BMP, GIF, TIFF, or WebP. Format sniffing and codec dispatch stay
 //! inside this crate. Callers choose their own stricter file and image limits.
 
-use std::io::Cursor;
-
-use image::{ImageReader, Limits as ImageLimits, RgbaImage};
+use image::RgbaImage;
 
 use crate::CodecError;
 
@@ -33,33 +31,24 @@ pub fn decode_rgba(bytes: &[u8], limits: DecodeLimits) -> Result<RgbaImage, Code
     if bytes.len() > limits.max_file_bytes {
         return Err(CodecError::LimitExceeded(format!("{} encoded bytes exceed max {}", bytes.len(), limits.max_file_bytes)));
     }
-    if is_heif(bytes) {
-        return Err(CodecError::unsupported("image", "HEIC/HEIF is not supported by the enabled codecs"));
+    let mut decode_limits = craft_image_codecs::Limits::default();
+    decode_limits.max_width = limits.max_width;
+    decode_limits.max_height = limits.max_height;
+    decode_limits.max_pixels = limits.max_pixels;
+    decode_limits.max_alloc = limits.max_alloc_bytes;
+    let decoded = craft_image_codecs::decode_with(bytes, &craft_image_codecs::DecodeOptions { limits: decode_limits, ..Default::default() })
+        .map_err(map_codec_error)?;
+    let output_bytes = u64::from(decoded.width()).saturating_mul(u64::from(decoded.height())).saturating_mul(4);
+    if output_bytes > limits.max_alloc_bytes {
+        return Err(CodecError::LimitExceeded(format!("{output_bytes} RGBA bytes exceed max {}", limits.max_alloc_bytes)));
     }
-    let reader = || -> Result<ImageReader<Cursor<&[u8]>>, CodecError> {
-        let mut reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format().map_err(|e| CodecError::malformed("image", e))?;
-        if reader.format().is_none() {
-            return Err(CodecError::unsupported("image", "unrecognised image format"));
-        }
-        let mut image_limits = ImageLimits::default();
-        image_limits.max_image_width = Some(limits.max_width);
-        image_limits.max_image_height = Some(limits.max_height);
-        image_limits.max_alloc = Some(limits.max_alloc_bytes);
-        reader.limits(image_limits);
-        Ok(reader)
-    };
-    let (width, height) = reader()?.into_dimensions().map_err(|e| CodecError::malformed("image", e))?;
-    check_dimensions(width, height, limits)?;
-    let decoded = reader()?.decode().map_err(|e| CodecError::malformed("image", e))?;
-    check_dimensions(decoded.width(), decoded.height(), limits)?;
-    Ok(decoded.to_rgba8())
+    RgbaImage::from_raw(decoded.width(), decoded.height(), decoded.to_rgba8())
+        .ok_or_else(|| CodecError::malformed("image", "decoded RGBA dimensions do not match its pixel buffer"))
 }
 
 /// Encode an RGBA image as PNG.
 pub fn encode_png(pixels: &RgbaImage) -> Result<Vec<u8>, CodecError> {
-    let mut out = Cursor::new(Vec::new());
-    pixels.write_to(&mut out, image::ImageFormat::Png).map_err(|e| CodecError::encode("PNG", e))?;
-    Ok(out.into_inner())
+    encode(pixels, craft_image_codecs::Format::Png, craft_image_codecs::EncodeOptions::default())
 }
 
 /// Encode RGBA pixels as JPEG at the requested quality (1–100).
@@ -67,30 +56,32 @@ pub fn encode_jpeg(pixels: &RgbaImage, quality: u8) -> Result<Vec<u8>, CodecErro
     if !(1..=100).contains(&quality) {
         return Err(CodecError::InvalidImage(format!("JPEG quality {quality} is outside 1–100")));
     }
-    let rgb = image::DynamicImage::ImageRgba8(pixels.clone()).to_rgb8();
-    let mut out = Cursor::new(Vec::new());
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality).encode_image(&rgb).map_err(|e| CodecError::encode("JPEG", e))?;
-    Ok(out.into_inner())
+    encode(pixels, craft_image_codecs::Format::Jpeg, craft_image_codecs::EncodeOptions { jpeg_quality: quality, ..Default::default() })
+}
+
+fn encode(pixels: &RgbaImage, format: craft_image_codecs::Format, options: craft_image_codecs::EncodeOptions) -> Result<Vec<u8>, CodecError> {
+    let image = craft_image_codecs::Image::from_u8(pixels.width(), pixels.height(), craft_image_codecs::ChannelLayout::Rgba, pixels.as_raw().clone())
+        .map_err(map_codec_error)?;
+    craft_image_codecs::encode(&image, format, &options).map_err(map_codec_error)
 }
 
 /// Encode pixels according to a destination filename's extension (`png`, `jpg`, or `jpeg`).
 pub fn encode_for_path(path: impl AsRef<std::path::Path>, pixels: &RgbaImage) -> Result<Vec<u8>, CodecError> {
     let extension = path.as_ref().extension().and_then(std::ffi::OsStr::to_str).unwrap_or_default();
-    match extension.to_ascii_lowercase().as_str() {
-        "png" => encode_png(pixels),
-        "jpg" | "jpeg" => encode_jpeg(pixels, 90),
-        other => Err(CodecError::unsupported("image", format!("cannot encode files with the .{other} extension"))),
+    match craft_image_codecs::from_extension(extension) {
+        Some(craft_image_codecs::Format::Png) => encode_png(pixels),
+        Some(craft_image_codecs::Format::Jpeg) => encode_jpeg(pixels, 90),
+        _ => Err(CodecError::unsupported("image", format!("cannot encode files with the .{extension} extension"))),
     }
 }
 
-fn is_heif(bytes: &[u8]) -> bool {
-    bytes.get(4..8) == Some(b"ftyp") && matches!(bytes.get(8..12), Some(b"heic" | b"heix" | b"hevc" | b"mif1" | b"msf1" | b"avif"))
-}
-
-fn check_dimensions(width: u32, height: u32, limits: DecodeLimits) -> Result<(), CodecError> {
-    let pixels = u64::from(width).checked_mul(u64::from(height)).ok_or_else(|| CodecError::LimitExceeded("image dimensions overflow".into()))?;
-    if width == 0 || height == 0 || width > limits.max_width || height > limits.max_height || pixels > limits.max_pixels {
-        return Err(CodecError::LimitExceeded(format!("image dimensions {width}x{height} exceed configured limits")));
+fn map_codec_error(error: craft_image_codecs::CodecError) -> CodecError {
+    match error {
+        craft_image_codecs::CodecError::UnknownFormat => CodecError::unsupported("image", "unrecognized image format"),
+        craft_image_codecs::CodecError::Unsupported { format, reason } => CodecError::unsupported(format.name(), reason),
+        craft_image_codecs::CodecError::Malformed { format, message } => CodecError::malformed(format.name(), message),
+        craft_image_codecs::CodecError::LimitExceeded(message) => CodecError::LimitExceeded(message),
+        craft_image_codecs::CodecError::Encode { format, message } => CodecError::Encode { format: format.name(), message },
+        craft_image_codecs::CodecError::InvalidImage(message) => CodecError::InvalidImage(message),
     }
-    Ok(())
 }
