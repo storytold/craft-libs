@@ -17,6 +17,60 @@ fn with_children(mut el: El, children: impl IntoIterator<Item = El>) -> El {
     el
 }
 
+/// Raw clip-path settings attached to a placed graphic, before the caller maps type and
+/// coordinates into its scene model.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ClippingPathValues {
+    pub clipping_type: Option<String>,
+    pub geometry: PathGeometry,
+    pub invert: Option<bool>,
+    pub include_inside_edges: Option<bool>,
+    pub restrict_to_frame: Option<bool>,
+    pub use_high_resolution: Option<bool>,
+    pub threshold: Option<f64>,
+    pub tolerance: Option<f64>,
+    pub inset: Option<f64>,
+    pub source_name: Option<String>,
+    pub index: Option<f64>,
+}
+
+impl ClippingPathValues {
+    /// Reads a graphic's `ClippingPathSettings` and saved geometry, with the caller's point cap.
+    pub fn from_graphic(graphic: &El, max_points: usize) -> Option<Self> {
+        let settings = graphic.find("ClippingPathSettings")?;
+        let settings_values = Values::of(settings);
+        let graphic_values = Values::of(graphic);
+        let clipping_type = settings_values.get("ClippingType").map(str::to_owned);
+        let invert = settings_values.boolean("InvertPath");
+        let include_inside_edges = settings_values.boolean("IncludeInsideEdges");
+        let restrict_to_frame = settings_values.boolean("RestrictToFrame");
+        let use_high_resolution = settings_values.boolean("UseHighResolutionImage");
+        let threshold = settings_values.num("Threshold");
+        let tolerance = settings_values.num("Tolerance");
+        let inset = settings_values.num("InsetFrame");
+        let source_name = settings_values.get("AppliedPathName").map(str::to_owned);
+        let index = settings_values.num("Index");
+        let geometry = settings_values
+            .prop_el("ClippingPathGeometry")
+            .or_else(|| settings.find("ClippingPathGeometry"))
+            .or_else(|| graphic_values.prop_el("ClippingPathGeometry"))?;
+        let geometry = PathGeometry::from_el_capped(geometry, max_points);
+        Some(Self {
+            clipping_type,
+            geometry,
+            invert,
+            include_inside_edges,
+            restrict_to_frame,
+            use_high_resolution,
+            threshold,
+            tolerance,
+            inset,
+            source_name,
+            index,
+        })
+    }
+}
+
 /// A spread (`Spread`) or a parent spread (`MasterSpread`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Spread {
