@@ -183,6 +183,21 @@ pub fn preflight<'s>(svg: &'s str, limits: &Limits) -> Result<Preflight<'s>, Err
     Ok(Preflight { xml, depth })
 }
 
+/// Reads finite numeric root `width` and `height` values without interpreting physical units.
+pub fn root_unitless_size(svg: &str, limits: &Limits) -> Result<Option<(f64, f64)>, Error> {
+    let checked = preflight(svg, limits)?;
+    let root = checked.xml.root_element();
+    if root.tag_name().name() != "svg" {
+        return Ok(None);
+    }
+    let Some((width, height)) =
+        root.attribute("width").and_then(|value| value.parse::<f64>().ok()).zip(root.attribute("height").and_then(|value| value.parse::<f64>().ok()))
+    else {
+        return Ok(None);
+    };
+    Ok(Some((width, height)))
+}
+
 /// Dimensions of an SVG viewport in SVG user units.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Viewport {
