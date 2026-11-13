@@ -232,11 +232,11 @@ fn deeply_nested_folders_are_refused() {
 
 #[test]
 fn unsupported_features_say_what_they_are() {
-    assert_eq!(ZipError::UnsupportedArchive("split across several files").to_string(), "the archive uses a zip feature this XFL reader can't read (split across several files)");
     assert_eq!(
-        ZipError::Unsupported("a.xml".into(), "encryption").to_string(),
-        "'a.xml' uses a zip feature this XFL reader can't read (encryption)"
+        ZipError::UnsupportedArchive("split across several files").to_string(),
+        "the archive uses a zip feature this XFL reader can't read (split across several files)"
     );
+    assert_eq!(ZipError::Unsupported("a.xml".into(), "encryption").to_string(), "'a.xml' uses a zip feature this XFL reader can't read (encryption)");
     let mut r = Raw::new("a.xml", b"secret", false);
     r.flags = 1;
     assert_eq!(error(&write(&[r], false)), ZipError::Unsupported("a.xml".into(), "encryption"));
