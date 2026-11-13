@@ -214,7 +214,9 @@ impl SearchBudget {
 /// sweeps it, and the work of what the sweep does (its pieces, the scan of the line for each, the clusters it is tangled in,
 /// the ends that start together) is counted as it goes, in nanoseconds of sweep or of the memory of its pieces, whichever is the
 /// more; past the limit it stops and the operation fails as [`crate::PathOpsError::TooComplex`]. The pricing above is the first
-/// filter and this is the backstop under it. A planar map is held to a quarter of it. The star of 1,291 points counts 3.8e9.
+/// filter and this is the backstop under it. A planar map is held to a quarter of it. The star of 1,291 points counts 3.8e9. The
+/// inputs of a union, each swept on its own, are held to it together: the limit is for the sum of their counts, and the pieces
+/// of all of them count toward the 192.
 pub const MAX_SWEEP_WORK: usize = 4_200_000_000;
 
 /// Most path elements (a move, a close, and a segment each) all the paths of one operation may
@@ -291,7 +293,8 @@ pub struct Limits {
     /// Most steps of the searches a Pathfinder Outline and an inset make on curves after their sweeps, and a planar map makes
     /// for a point inside each of its faces ([`MAX_SEARCH_WORK`]).
     pub search_work: usize,
-    /// Most work the metered dry sweep counts, in nanoseconds of sweep ([`MAX_SWEEP_WORK`]); `usize::MAX` leaves the meter off.
+    /// Most work the metered dry sweep counts, in nanoseconds of sweep ([`MAX_SWEEP_WORK`]), by all the sweeps of one union together;
+    /// `usize::MAX` leaves the meter off.
     pub sweep_work: usize,
 }
 

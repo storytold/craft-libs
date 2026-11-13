@@ -879,6 +879,28 @@ pub(crate) fn normalize_bez_within(bp: &BezPath, rule: FillRule, budget: usize) 
 /// sides differ under the rule). One that is not is a piece of `bp` inside the area it fills, or
 /// outside it (two passes that cancel): an edge that bounds nothing.
 pub(crate) fn normalize_bez_counted(bp: &BezPath, rule: FillRule, budget: usize) -> Result<Option<(Contours, bool)>, PathOpsError> {
+    normalize_bez_metered(bp, rule, budget, |bp, eps| crate::meter::within([bp], eps))
+}
+
+/// [`normalize_bez_within`] for one input of an operation that sweeps several (the inputs of a union), whose dry sweep is charged to
+/// `allowance` instead of being held to the whole limit on its own ([`crate::meter::within_charging`]).
+pub(crate) fn normalize_bez_charged(
+    bp: &BezPath,
+    rule: FillRule,
+    budget: usize,
+    allowance: &mut crate::meter::Allowance,
+) -> Result<Option<Contours>, PathOpsError> {
+    let counted = normalize_bez_metered(bp, rule, budget, |bp, eps| crate::meter::within_charging([bp], eps, allowance))?;
+    Ok(counted.map(|(contours, _)| contours))
+}
+
+/// [`normalize_bez_counted`] whose dry sweep is run by `meter`, given the input as it is swept and its tolerance.
+fn normalize_bez_metered(
+    bp: &BezPath,
+    rule: FillRule,
+    budget: usize,
+    meter: impl FnOnce(&BezPath, f64) -> Result<(), PathOpsError>,
+) -> Result<Option<(Contours, bool)>, PathOpsError> {
     if !crate::budget::fits_elements([bp]) {
         return Err(PathOpsError::TooComplex);
     }
@@ -889,7 +911,7 @@ pub(crate) fn normalize_bez_counted(bp: &BezPath, rule: FillRule, budget: usize)
     if !crate::budget::sweep_fits([&bp]) {
         return Err(PathOpsError::TooComplex);
     }
-    crate::meter::within([&bp], eps)?;
+    meter(&bp, eps)?;
     // As in `Sweep::new`, a panic in the sweep on near-degenerate input becomes an error.
     work::add(Work::Sweeps, 1);
     let swept = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1246,12 +1268,15 @@ pub(crate) fn try_unite_all_upright(paths: &[(&BezPath, FillRule)], precision: f
     // The inputs as they are filled, once: the sweeps read them, and so does the tidy's index of their curves.
     let bps: Vec<BezPath> = paths.iter().map(|(p, _)| fill_bezpath(p)).collect();
     let mut swept = Swept::default();
+    // The sweep work of the inputs together is held to the limit once ([`crate::meter::Allowance`]): an input that sweeps to no contours
+    // adds no element to `swept`, so the element budget left does not shrink for the inputs after it.
+    let mut allowance = crate::meter::Allowance::new();
     for (bp, (_, r)) in bps.iter().zip(paths) {
         if bp.elements().is_empty() {
             continue;
         }
         let left = crate::budget::limits().elements.saturating_sub(swept.elements());
-        let Some(c) = normalize_bez_within(bp, *r, left)? else { return Err(PathOpsError::TooComplex) };
+        let Some(c) = normalize_bez_charged(bp, *r, left, &mut allowance)? else { return Err(PathOpsError::TooComplex) };
         swept.push(c, bp.segments().count(), crate::budget::limits().elements)?;
     }
     swept.union(bps, precision)
@@ -1397,6 +1422,8 @@ pub(crate) fn unite_all_upright(paths: &[(&BezPath, FillRule)], precision: f64) 
     }
     let precision = sane_precision(precision);
     let mut swept = Swept::default();
+    // The sweep work of the inputs together is held to the limit once, as in [`try_unite_all_upright`].
+    let mut allowance = crate::meter::Allowance::new();
     // The paths the union is made of, as they were filled: the tidy's index of input curves is made of these
     // and no others, or a boundary piece near a curve of a path that was left out would be rebuilt as it.
     let mut made: Vec<BezPath> = Vec::new();
@@ -1411,10 +1438,12 @@ pub(crate) fn unite_all_upright(paths: &[(&BezPath, FillRule)], precision: f64) 
             continue;
         }
         let left = crate::budget::limits().elements.saturating_sub(swept.elements());
-        let c = match normalize_bez_within(&bp, *r, left) {
+        let c = match normalize_bez_charged(&bp, *r, left, &mut allowance) {
             Ok(Some(c)) => c,
             // Past the limit the union would be refused as too complex when swept: it is not made.
             Ok(None) => return BezPath::new(),
+            // The inputs before it took the work the limit allows, and this one more than is left: no union, as `try_unite_all` refuses it.
+            Err(_) if allowance.exhausted() => return BezPath::new(),
             Err(_) => continue,
         };
         // Past the limit the union would be refused as too complex when swept: it is not made.
@@ -2648,6 +2677,213 @@ mod tests {
         pts.push(Point::new(n as f64 * 4.0, 20.0));
         pts.push(Point::new(0.0, 20.0));
         crate::testutil::polyline_pts(&pts, true)
+    }
+
+    /// A polygon of `n` corners (on an ellipse, `n` pieces and no crossing) and the same polygon walked back as a second subpath, mirrored left to
+    /// right when `mirror`: under the non-zero rule the two cancel, so it sweeps to no contour at all and adds no element to a union, while its
+    /// sweep counts work for twice `n` pieces (every edge has its own copy on it).
+    fn cancelling_polygon(n: usize, mirror: bool) -> BezPath {
+        let pts: Vec<(f64, f64)> = (0..n)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / n as f64 + 0.1;
+                let x = 130.0 * a.cos();
+                (if mirror { -x } else { x }, 100.0 * a.sin())
+            })
+            .collect();
+        let mut back = pts.clone();
+        back.reverse();
+        let mut bp = crate::testutil::polyline(&pts, true);
+        bp.extend(crate::testutil::polyline(&back, true).iter());
+        bp
+    }
+
+    /// A union that gives the elements of what it made, or the error it was refused with.
+    type UnionOf<'a> = dyn Fn() -> Result<usize, PathOpsError> + 'a;
+
+    /// What `unite` made, with the dry sweeps it ran and the work they counted.
+    fn unite_metered<R>(unite: impl FnOnce() -> R) -> (R, usize, usize) {
+        work::reset();
+        let out = unite();
+        (out, work::take(Work::MeteredSweeps), work::take(Work::MeterNanos))
+    }
+
+    /// The limits `sweep_work` set to `n`.
+    fn sweep_work(n: usize) -> crate::Limits {
+        crate::Limits { sweep_work: n, ..crate::Limits::default() }
+    }
+
+    /// The inputs of a union are held to one limit on sweep work between them, not to one each: eight inputs that cancel, each counting about
+    /// a millisecond, sweep to no contour, so the union holds nothing for its element limit to refuse, and each was held to the limit alone
+    /// (so that as many as the element limit holds, each at up to a few tenths of a second, were admitted). The limit of the sum admits them and one less refuses the last,
+    /// by the work each counted, and the union stops at the input that passes it, so the sweeps after it are not run. Inputs mirrored left to
+    /// right (swept the other way, they count a little more) and in each of the four functions that unite.
+    #[test]
+    fn the_inputs_of_a_union_are_held_to_one_limit_on_sweep_work_between_them() {
+        let (plain, mirrored) = (cancelling_polygon(100, false), cancelling_polygon(100, true));
+        let inputs: Vec<(&BezPath, FillRule)> = (0..8).map(|i| (if i % 2 == 0 { &plain } else { &mirrored }, FillRule::NonZero)).collect();
+        let one = |p: &BezPath| {
+            let (out, metered, nanos) = unite_metered(|| try_unite_all_upright(&[(p, FillRule::NonZero)], DEFAULT_PRECISION));
+            assert_eq!((out.map(|b| b.elements().len()), metered), (Ok(0), 1), "an input of 200 pieces is swept by one dry sweep and made nothing");
+            nanos
+        };
+        let (w, wm) = (one(&plain), one(&mirrored));
+        assert!(w > 1_000_000 && wm > 1_000_000, "{w} {wm}: more than a millisecond of sweep each");
+        let total = 4 * (w + wm);
+        // What each union does, with its limit: the sum admits all eight (and each is held to its own work alone as before), a count less
+        // refuses the eighth after the seven before it, and three and a half inputs stop at the fourth.
+        let unions: [(&str, &UnionOf<'_>); 4] = [
+            ("try_unite_all_upright", &|| try_unite_all_upright(&inputs, DEFAULT_PRECISION).map(|b| b.elements().len())),
+            ("try_unite_all_with", &|| try_unite_all_with(&inputs, DEFAULT_PRECISION).map(|b| b.elements().len())),
+            ("unite_all_upright", &|| Ok(unite_all_upright(&inputs, DEFAULT_PRECISION).elements().len())),
+            ("unite_all_with", &|| Ok(unite_all_with(&inputs, DEFAULT_PRECISION).elements().len())),
+        ];
+        for (name, unite) in unions {
+            let (out, metered, nanos) = unite_metered(|| crate::with_limits(sweep_work(total), unite));
+            assert_eq!((out, metered, nanos), (Ok(0), 8, total), "{name}: the limit of the sum admits the eight");
+            let (out, metered, _) = unite_metered(|| crate::with_limits(sweep_work(total - 1), unite));
+            let refused = name.starts_with("try");
+            assert_eq!(out, if refused { Err(PathOpsError::TooComplex) } else { Ok(0) }, "{name}: one less refuses the last");
+            assert_eq!(metered, 8, "{name}: all eight are swept, the last is refused");
+            let (out, metered, nanos) = unite_metered(|| crate::with_limits(sweep_work(3 * (w + wm) / 2 + w / 2), unite));
+            assert_eq!(out, if refused { Err(PathOpsError::TooComplex) } else { Ok(0) }, "{name}: three and a half inputs");
+            assert_eq!(metered, 4, "{name}: stops at the input that passes the limit");
+            assert!(nanos > 3 * (w + wm) / 2, "{name}: {nanos}: the three before it were counted, and the fourth up to the limit");
+        }
+    }
+
+    /// The gate counts the pieces of the inputs of a union together: inputs that make the gate's size or fewer are not swept, as one input of
+    /// that size is not, and every input after them is, however small it is, so that inputs just under the gate (190 pieces each, which take
+    /// half a second at their worst) are charged against the limit too. The work is the dry sweep's, run by the same meter.
+    #[test]
+    fn inputs_under_the_gate_are_charged_once_the_pieces_of_the_union_pass_it() {
+        let under = cancelling_polygon(95, false);
+        let pieces = |p: &BezPath| crate::meter::segments_of([&fill_bezpath(p)]).map_or(0, |s| s.len());
+        assert_eq!(pieces(&under), 190);
+        assert!(pieces(&under) <= crate::meter::GATE_PIECES);
+        let inputs: Vec<(&BezPath, FillRule)> = vec![(&under, FillRule::NonZero); 8];
+        // One alone is not swept, and two are: the first is not charged, the second passes the gate.
+        let alone = unite_metered(|| try_unite_all_upright(&inputs[..1], DEFAULT_PRECISION));
+        assert_eq!((alone.0.map(|b| b.elements().len()), alone.1, alone.2), (Ok(0), 0, 0));
+        let (out, metered, w) = unite_metered(|| try_unite_all_upright(&inputs[..2], DEFAULT_PRECISION));
+        assert_eq!((out.map(|b| b.elements().len()), metered), (Ok(0), 1));
+        assert!(w > 900_000, "{w}");
+        // All eight: seven charged. The limit of their sum admits them, one less refuses the last, two and a half stop at the third.
+        let (out, metered, nanos) = unite_metered(|| try_unite_all_upright(&inputs, DEFAULT_PRECISION));
+        assert_eq!((out.map(|b| b.elements().len()), metered, nanos), (Ok(0), 7, 7 * w));
+        let (out, metered, _) = unite_metered(|| crate::with_limits(sweep_work(7 * w - 1), || try_unite_all_upright(&inputs, DEFAULT_PRECISION)));
+        assert_eq!((out.map(|b| b.elements().len()), metered), (Err(PathOpsError::TooComplex), 7));
+        let (out, metered, _) = unite_metered(|| crate::with_limits(sweep_work(5 * w / 2), || try_unite_all_upright(&inputs, DEFAULT_PRECISION)));
+        assert_eq!((out.map(|b| b.elements().len()), metered), (Err(PathOpsError::TooComplex), 3));
+        // The unions of inputs that make the gate's size are not swept: eight of 24 pieces, and one that has one more than the gate.
+        let small = cancelling_polygon(12, false);
+        let eight: Vec<(&BezPath, FillRule)> = vec![(&small, FillRule::NonZero); 8];
+        assert_eq!(pieces(&small) * 8, crate::meter::GATE_PIECES);
+        let (_, metered, _) = unite_metered(|| try_unite_all_upright(&eight, DEFAULT_PRECISION));
+        assert_eq!(metered, 0, "pieces up to the gate's are not swept");
+        let nine: Vec<(&BezPath, FillRule)> = vec![(&small, FillRule::NonZero); 9];
+        let (_, metered, _) = unite_metered(|| try_unite_all_upright(&nine, DEFAULT_PRECISION));
+        assert_eq!(metered, 1, "the first piece past the gate's is");
+    }
+
+    /// A limit lifted to the most leaves the meter off for a union, as for one sweep: the work left is not counted down from it into a
+    /// meter that is on.
+    #[test]
+    fn a_lifted_limit_leaves_the_meter_off_for_a_union() {
+        let ring = cancelling_polygon(100, false);
+        let inputs: Vec<(&BezPath, FillRule)> = vec![(&ring, FillRule::NonZero); 8];
+        let (out, metered, nanos) =
+            unite_metered(|| crate::with_limits(sweep_work(usize::MAX), || try_unite_all_upright(&inputs, DEFAULT_PRECISION)));
+        assert_eq!((out.map(|b| b.elements().len()), metered, nanos), (Ok(0), 0, 0));
+        let (_, metered, _) = unite_metered(|| try_unite_all_upright(&inputs, DEFAULT_PRECISION));
+        assert_eq!(metered, 8, "and on by default");
+    }
+
+    /// A union of many small shapes, which is what the union is for, costs the limit a small part of it: 600 rectangles are all swept once the
+    /// first of them have passed the gate (553 of them, by the pieces the sweep counts for each), and counted at 15 microseconds each, 0.2% of the limit.
+    #[test]
+    fn a_union_of_many_small_shapes_is_charged_a_small_part_of_the_limit() {
+        let rects: Vec<BezPath> = (0..600)
+            .map(|i| {
+                let (x, y) = (f64::from(i % 30) * 12.0, f64::from(i / 30) * 12.0);
+                crate::testutil::rect(x, y, x + 10.0, y + 10.0)
+            })
+            .collect();
+        let inputs: Vec<(&BezPath, FillRule)> = rects.iter().map(|r| (r, FillRule::NonZero)).collect();
+        let (out, metered, nanos) = unite_metered(|| try_unite_all_upright(&inputs, DEFAULT_PRECISION));
+        assert!(out.expect("a union of 600 rectangles").elements().len() > 4, "the rectangles are united");
+        assert_eq!(metered, 553, "all but the first 47 are swept (a rectangle is more than four pieces to the sweep)");
+        assert!((8_000_000..9_000_000).contains(&nanos), "{nanos} nanoseconds of the 4,200,000,000 the limit allows");
+    }
+
+    /// A union that has taken the work the limit allows is refused as a whole, by the function that leaves a refused input out of its union:
+    /// the input that passes what is left is not left out, with the smaller inputs after it that would still fit, as an input that is too much
+    /// for the limit alone is (nothing was spent before it).
+    #[test]
+    fn a_union_past_the_limit_is_refused_whole_and_an_input_over_it_alone_is_left_out() {
+        let (ring, square) = (cancelling_polygon(100, false), crate::testutil::rect(0.0, 0.0, 10.0, 10.0));
+        let (out, metered, w) = unite_metered(|| try_unite_all_upright(&[(&ring, FillRule::NonZero)], DEFAULT_PRECISION));
+        assert_eq!((out.map(|b| b.elements().len()), metered), (Ok(0), 1));
+        let nz = FillRule::NonZero;
+        // Two rings take 2w of 2.5w, the third is refused, and the square after it would fit in what is left.
+        let inputs = [(&ring, nz), (&ring, nz), (&ring, nz), (&square, nz)];
+        let limits = sweep_work(5 * w / 2);
+        assert_eq!(crate::with_limits(limits, || try_unite_all_upright(&inputs, DEFAULT_PRECISION)), Err(PathOpsError::TooComplex));
+        assert!(crate::with_limits(limits, || unite_all_upright(&inputs, DEFAULT_PRECISION)).elements().is_empty(), "no union");
+        assert!(crate::with_limits(limits, || unite_all_with(&inputs, DEFAULT_PRECISION)).elements().is_empty(), "no union");
+        // A ring that is too much for the limit alone is left out, and the square beside it is united: nothing was spent before it.
+        let inputs = [(&ring, nz), (&square, nz)];
+        let limits = sweep_work(w - 1);
+        let united = crate::with_limits(limits, || unite_all_upright(&inputs, DEFAULT_PRECISION));
+        assert_eq!(area(&united, nz).round(), 100.0, "the square");
+        assert_eq!(crate::with_limits(limits, || try_unite_all_upright(&inputs, DEFAULT_PRECISION)), Err(PathOpsError::TooComplex));
+    }
+
+    /// The outlines of a stroke region are held to one limit on sweep work between them, as the inputs of a union are (the same hole: eight
+    /// outlines that cancel make no contour, so the element limit never sees them, and each was held to the limit alone): the limit of the sum
+    /// admits them and one less refuses the last, by the work each counted, the sweeps stop at the outline that passes it, and the function
+    /// that leaves out what it cannot combine gives no region once the outlines before it have taken the limit, not one of the smaller outlines
+    /// after it. An outline that is too much for the limit alone is left out, as it was.
+    #[test]
+    fn the_outlines_of_a_stroke_region_are_held_to_one_limit_on_sweep_work_between_them() {
+        use crate::offset::{stroke_region_upright, try_stroke_region_upright};
+        let (plain, mirrored) = (cancelling_polygon(100, false), cancelling_polygon(100, true));
+        let square = crate::testutil::rect(0.0, 0.0, 10.0, 10.0);
+        let outlines: Vec<BezPath> = (0..8).map(|i| if i % 2 == 0 { plain.clone() } else { mirrored.clone() }).collect();
+        let one = |p: &BezPath| {
+            let (out, metered, nanos) = unite_metered(|| try_stroke_region_upright(std::slice::from_ref(p)));
+            assert_eq!((out.map(|b| b.elements().len()), metered), (Ok(0), 1), "an outline of 200 pieces is swept by one dry sweep and made nothing");
+            nanos
+        };
+        let (w, wm) = (one(&plain), one(&mirrored));
+        let total = 4 * (w + wm);
+        let unions: [(&str, &UnionOf<'_>); 2] = [
+            ("try_stroke_region_upright", &|| try_stroke_region_upright(&outlines).map(|b| b.elements().len())),
+            ("stroke_region_upright", &|| Ok(stroke_region_upright(&outlines).elements().len())),
+        ];
+        for (name, unite) in unions {
+            let refused = name.starts_with("try");
+            let (out, metered, nanos) = unite_metered(|| crate::with_limits(sweep_work(total), unite));
+            assert_eq!((out, metered, nanos), (Ok(0), 8, total), "{name}: the limit of the sum admits the eight");
+            let (out, metered, _) = unite_metered(|| crate::with_limits(sweep_work(total - 1), unite));
+            assert_eq!(out, if refused { Err(PathOpsError::TooComplex) } else { Ok(0) }, "{name}: one less refuses the last");
+            assert_eq!(metered, 8, "{name}: all eight are swept, the last is refused");
+            let (out, metered, nanos) = unite_metered(|| crate::with_limits(sweep_work(3 * (w + wm) / 2 + w / 2), unite));
+            assert_eq!(out, if refused { Err(PathOpsError::TooComplex) } else { Ok(0) }, "{name}: three and a half outlines");
+            assert_eq!(metered, 4, "{name}: stops at the outline that passes the limit");
+            assert!(nanos > 3 * (w + wm) / 2, "{name}: {nanos}: the three before it were counted, and the fourth up to the limit");
+        }
+        // Two outlines take 2w of 2.5w, the third is refused, and the square after it would fit in what is left: no region, not the square.
+        let after = [plain.clone(), plain.clone(), plain.clone(), square.clone()];
+        let limits = sweep_work(5 * w / 2);
+        assert_eq!(crate::with_limits(limits, || try_stroke_region_upright(&after)), Err(PathOpsError::TooComplex));
+        assert!(crate::with_limits(limits, || stroke_region_upright(&after)).elements().is_empty(), "no region");
+        assert!(crate::with_limits(limits, || crate::stroke_region(&after)).elements().is_empty(), "no region, by the public function");
+        // An outline that is too much for the limit alone is left out, and the square beside it is the region: nothing was spent before it.
+        let alone = [plain, square];
+        let limits = sweep_work(w - 1);
+        let region = crate::with_limits(limits, || stroke_region_upright(&alone));
+        assert_eq!(area(&region, FillRule::NonZero).round(), 100.0, "the square");
+        assert_eq!(crate::with_limits(limits, || try_stroke_region_upright(&alone)), Err(PathOpsError::TooComplex));
     }
 
     /// A lone input whose own sweep split none of its segments is swept once, and the dry sweep is run for that sweep and no other: each

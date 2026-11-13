@@ -16,6 +16,11 @@
 //! about half a second (the tests build the worst they know of and count what the dry sweep prices it at). Every input past the gate pays
 //! for the dry sweep, which costs a little less than the sweep it guards.
 //!
+//! The budget is the work of one sweep, and an operation of several (the inputs of a union, each swept on its own) is held to it once, all
+//! together ([`Allowance`]): each input's dry sweep takes the work it counted from what the inputs before it left, and the gate counts the
+//! pieces of all of them, so that a thousand inputs of 190 pieces are not a thousand sweeps under the gate. Without that the work of a union
+//! grew with its inputs and no limit held it, for inputs that sweep to nothing add no element to the union's own limit.
+//!
 //! # The units
 //!
 //! The unit is the nanosecond of sweep that a count is worth on the machine the weights were measured on (a release build, one thread),
@@ -832,17 +837,89 @@ fn within_a_part<'a>(paths: impl IntoIterator<Item = &'a BezPath>, eps: f64, par
     if segments.len() <= GATE_PIECES {
         return Ok(());
     }
+    dry_counted(&segments, eps, budget).map(|_| ())
+}
+
+/// The dry sweep of `segments` held to `budget`: the work it counted (`Ok`), or `Err(TooComplex)` when the count passes the budget. A sweep that
+/// panics counts nothing and is `Ok`: the topology reports the panic.
+fn dry_counted(segments: &Segments, eps: f64, budget: u64) -> Result<u64, PathOpsError> {
     work::add(Work::MeteredSweeps, 1);
     // The sweep panics on a few degenerate inputs, as the topology's does, and the topology reports it.
-    let Ok(verdict) = catch_unwind(AssertUnwindSafe(|| dry_sweep(&segments, eps, budget))) else { return Ok(()) };
+    let Ok(verdict) = catch_unwind(AssertUnwindSafe(|| dry_sweep(segments, eps, budget))) else { return Ok(0) };
     match verdict {
         Ok(counts) => {
             work::add(Work::MeterNanos, usize::try_from(counts.work()).unwrap_or(usize::MAX));
-            Ok(())
+            Ok(counts.work())
         }
         Err(counts) => {
             work::add(Work::MeterNanos, usize::try_from(counts.work()).unwrap_or(usize::MAX));
             Err(PathOpsError::TooComplex)
+        }
+    }
+}
+
+/// The sweep work that all the inputs of one operation may take together: [`crate::Limits::sweep_work`] once, not once for each input.
+///
+/// The inputs of a union are swept one by one, each held to the limit by [`within`], so the work an operation may do grew with the number of
+/// its inputs, and nothing held it: an input that sweeps to nothing (a stack of copies of a segment, each out and back) adds no contour to
+/// the union, so the union's own limits never see it, and an input of a few hundred pieces is held to half a second at most, though as many as the element
+/// limit holds are admitted. [`within_charging`] takes what each input's dry sweep counted from what is left here, and refuses the input that
+/// passes it.
+///
+/// The gate counts the pieces of all the inputs together ([`GATE_PIECES`]): inputs that total the gate's size or fewer are not swept, as no
+/// input of that size is, and every input after them is, however small (a union of a few shapes is charged nothing; a union of thousands is
+/// charged what each of them counts, a few microseconds for a rectangle).
+#[derive(Debug)]
+pub(crate) struct Allowance {
+    /// What the limit leaves, in nanoseconds of sweep; `None` when the limit was lifted to the most when the operation began, a meter left off.
+    left: Option<u64>,
+    /// The limit the operation began with.
+    limit: u64,
+    /// The monotone pieces of the inputs charged so far, those under the gate included.
+    pieces: usize,
+    /// Whether the last input was refused after the others had taken part of the limit: the operation is past it, and not that input alone.
+    exhausted: bool,
+}
+
+impl Allowance {
+    /// The limit now in force, whole.
+    pub(crate) fn new() -> Self {
+        let limit = limits().sweep_work;
+        let limit = if limit == usize::MAX { None } else { Some(limit as u64) };
+        Self { left: limit, limit: limit.unwrap_or(0), pieces: 0, exhausted: false }
+    }
+
+    /// Was an input refused for the work the inputs before it had taken, and not for its own?
+    pub(crate) fn exhausted(&self) -> bool {
+        self.exhausted
+    }
+
+    /// The work the inputs have taken so far.
+    #[cfg(test)]
+    pub(crate) fn spent(&self) -> u64 {
+        self.left.map_or(0, |left| self.limit.saturating_sub(left))
+    }
+}
+
+/// [`within`] for one input of an operation that sweeps several: its dry sweep is held to what `allowance` has left, and the work counted is
+/// taken from it. `Err(TooComplex)` when that is more than is left.
+///
+/// Like [`within`] it is `Ok` where the segments cannot be made, and runs nothing where the limit is lifted to the most.
+pub(crate) fn within_charging<'a>(paths: impl IntoIterator<Item = &'a BezPath>, eps: f64, allowance: &mut Allowance) -> Result<(), PathOpsError> {
+    let Some(left) = allowance.left else { return Ok(()) };
+    let Some(segments) = segments_of(paths) else { return Ok(()) };
+    allowance.pieces = allowance.pieces.saturating_add(segments.len());
+    if allowance.pieces <= GATE_PIECES {
+        return Ok(());
+    }
+    match dry_counted(&segments, eps, left) {
+        Ok(counted) => {
+            allowance.left = Some(left.saturating_sub(counted));
+            Ok(())
+        }
+        Err(e) => {
+            allowance.exhausted = left < allowance.limit;
+            Err(e)
         }
     }
 }
@@ -1029,6 +1106,58 @@ mod tests {
         let at = usize::try_from(at).expect("fits");
         assert_eq!(with_limits(limit(at), || within(paths.iter(), eps)), Ok(()));
         assert_eq!(with_limits(limit(at - 1), || within(paths.iter(), eps)), Err(PathOpsError::TooComplex));
+    }
+
+    /// The allowance of a union is charged what each dry sweep counts, exactly: a limit of the sum of two sweeps admits both and one less
+    /// refuses the second, a refused sweep takes nothing, an input alone too much for the limit is refused with the allowance whole (it is
+    /// not what the others took), and the pieces under the gate are not swept for a union that has not passed it as a whole.
+    #[test]
+    fn an_allowance_is_charged_what_each_sweep_counts_and_refuses_the_one_that_passes_it() {
+        let paths = [closed(&star(301))];
+        let eps = eps_for(paths.iter()).expect("finite");
+        let segments = segments_of(paths.iter()).expect("segments");
+        let w = dry_sweep(&segments, eps, u64::MAX).expect("no budget").work();
+        let limit = |n: u64| Limits { sweep_work: usize::try_from(n).expect("fits"), ..Limits::default() };
+        let charge = |a: &mut Allowance| within_charging(paths.iter(), eps, a);
+        // Room for two: both are charged, and the third is refused with nothing taken.
+        with_limits(limit(2 * w), || {
+            let mut a = Allowance::new();
+            work::reset();
+            assert_eq!((charge(&mut a), a.spent(), a.exhausted()), (Ok(()), w, false));
+            assert_eq!((charge(&mut a), a.spent(), a.exhausted()), (Ok(()), 2 * w, false));
+            assert_eq!((charge(&mut a), a.spent(), a.exhausted()), (Err(PathOpsError::TooComplex), 2 * w, true));
+            assert_eq!(work::take(Work::MeteredSweeps), 3);
+        });
+        // A count less than two: the second is refused, for what the first took.
+        with_limits(limit(2 * w - 1), || {
+            let mut a = Allowance::new();
+            assert_eq!((charge(&mut a), a.spent()), (Ok(()), w));
+            assert_eq!((charge(&mut a), a.spent(), a.exhausted()), (Err(PathOpsError::TooComplex), w, true));
+        });
+        // A count less than one: refused alone, as `within` refuses it, with nothing taken before it.
+        with_limits(limit(w - 1), || {
+            let mut a = Allowance::new();
+            assert_eq!((charge(&mut a), a.spent(), a.exhausted()), (Err(PathOpsError::TooComplex), 0, false));
+            assert_eq!(within(paths.iter(), eps), Err(PathOpsError::TooComplex));
+        });
+        // The pieces of the inputs count together toward the gate: 100 pieces are not swept, and 100 more are.
+        let hundred = closed(&polyline(&(0..100).map(|i| (f64::from(i), f64::from(i * i % 7))).collect::<Vec<_>>(), true));
+        let pieces = segments_of([&hundred]).expect("segments").len();
+        assert!(2 * pieces > GATE_PIECES && pieces <= GATE_PIECES, "{pieces}");
+        let mut a = Allowance::new();
+        work::reset();
+        assert_eq!((within_charging([&hundred], eps, &mut a), work::take(Work::MeteredSweeps), a.spent()), (Ok(()), 0, 0));
+        assert_eq!((within_charging([&hundred], eps, &mut a), work::take(Work::MeteredSweeps)), (Ok(()), 1));
+        assert!(a.spent() > 0);
+        // A limit lifted to the most is a meter left off, and nothing is counted down from it.
+        with_limits(limit(u64::MAX), || {
+            let mut a = Allowance::new();
+            work::reset();
+            for _ in 0..3 {
+                assert_eq!(charge(&mut a), Ok(()));
+            }
+            assert_eq!((work::take(Work::MeteredSweeps), a.spent()), (0, 0));
+        });
     }
 
     /// A limit lifted to the most leaves the meter off: nothing is swept.

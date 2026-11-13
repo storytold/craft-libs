@@ -12,7 +12,7 @@ use linesweeper::topology::{ContourIdx, Contours};
 
 use crate::boolean::{
     Arrangement, DEFAULT_PRECISION, Tidy, all_contours_to_path, append_contours, contours_to_path, ensure_size, eps_for, held_union,
-    normalize_bez_counted, normalize_bez_within, try_unite_all_with,
+    normalize_bez_charged, normalize_bez_counted, try_unite_all_with,
 };
 use crate::budget::{NEAREST_STEPS, SearchBudget};
 use crate::edit::remove_redundant_points;
@@ -78,8 +78,10 @@ fn stroke_within(bp: &BezPath, width: f64, cap: Cap, join: Join, miter_limit: f6
         return Ok(parts.pop().unwrap_or_default());
     }
     let mut laid = BezPath::new();
+    // The sweep work of the windows together is held to the limit once, as for the inputs of a union ([`crate::meter::Allowance`]).
+    let mut allowance = crate::meter::Allowance::new();
     for part in &parts {
-        let Some(c) = normalize_bez_within(part, FillRule::NonZero, budget.saturating_sub(laid.elements().len()))? else {
+        let Some(c) = normalize_bez_charged(part, FillRule::NonZero, budget.saturating_sub(laid.elements().len()), &mut allowance)? else {
             return Err(PathOpsError::TooComplex);
         };
         append_contours(&mut laid, &c, budget)?;
@@ -241,9 +243,11 @@ pub(crate) fn try_stroke_region_upright(outlines: &[BezPath]) -> Result<BezPath,
     }
     // Each outline is normalised on its own first, as in `stroke_region`.
     let mut all = BezPath::new();
+    // The sweep work of the outlines together is held to the limit once, as for the inputs of a union ([`crate::meter::Allowance`]).
+    let mut allowance = crate::meter::Allowance::new();
     for p in &parts {
         let left = crate::budget::limits().elements.saturating_sub(all.elements().len());
-        let Some(c) = normalize_bez_within(p, FillRule::NonZero, left)? else { return Err(PathOpsError::TooComplex) };
+        let Some(c) = normalize_bez_charged(p, FillRule::NonZero, left, &mut allowance)? else { return Err(PathOpsError::TooComplex) };
         append_contours(&mut all, &c, crate::budget::limits().elements)?;
     }
     if all.elements().is_empty() {
@@ -281,9 +285,11 @@ pub(crate) fn stroke_region_upright(outlines: &[BezPath]) -> BezPath {
     // Each outline is normalised on its own first: a hollow arrowhead may wind against the line
     // it overlaps, and the raw windings would cancel there under the non-zero rule.
     let mut all = BezPath::new();
+    // The sweep work of the outlines together is held to the limit once, as for the inputs of a union ([`crate::meter::Allowance`]).
+    let mut allowance = crate::meter::Allowance::new();
     for p in &parts {
         let left = crate::budget::limits().elements.saturating_sub(all.elements().len());
-        match normalize_bez_within(p, FillRule::NonZero, left) {
+        match normalize_bez_charged(p, FillRule::NonZero, left, &mut allowance) {
             Ok(Some(c)) => {
                 if append_contours(&mut all, &c, crate::budget::limits().elements).is_err() {
                     return BezPath::new();
@@ -291,6 +297,8 @@ pub(crate) fn stroke_region_upright(outlines: &[BezPath]) -> BezPath {
             }
             // Over what is left: the union would be refused as too complex.
             Ok(None) => return BezPath::new(),
+            // The outlines before it took the work the limit allows, and this one more than is left: no region, as `try_stroke_region` refuses it.
+            Err(_) if allowance.exhausted() => return BezPath::new(),
             Err(_) => {}
         }
     }
@@ -1457,6 +1465,41 @@ mod tests {
         // With room for them they are made.
         assert!(stroke_within(&path, 1.0, Cap::Butt, Join::Miter, 4.0, 100 * outline).is_ok());
         assert!(work::take(Work::ContourElements) > outline);
+    }
+
+    /// The windows of a stroke are held to one limit on sweep work between them, as the inputs of a union are: each is swept on its own to
+    /// make it clean, and each was held to the limit alone, so the work of one stroke grew with its length. The limit of the sum of their
+    /// counted work admits them all, one less refuses the last, and the sweeps stop at the window that passes it (a stroke of cubics, as it
+    /// is and mirrored left to right: each window of about a thousand pieces, none that sweeps to nothing or crosses itself).
+    #[test]
+    fn the_windows_of_a_stroke_are_held_to_one_limit_on_sweep_work_between_them() {
+        let mirror = |p: &BezPath| kurbo::Affine::scale_non_uniform(-1.0, 1.0) * p.clone();
+        let stroke = |path: &BezPath, limit: usize| {
+            work::reset();
+            let out = crate::with_limits(crate::Limits { sweep_work: limit, ..crate::Limits::default() }, || {
+                stroke_within(path, 3.0, Cap::Butt, Join::Miter, 4.0, usize::MAX)
+            });
+            (out.map(|b| b.elements().len() > 100), work::take(Work::MeteredSweeps))
+        };
+        for (name, path) in [("wavy", wavy(1_100)), ("mirrored", mirror(&wavy(1_100)))] {
+            let parts = stroke_parts(&path, 3.0, Cap::Butt, Join::Miter, 4.0, usize::MAX).unwrap();
+            assert!(parts.len() >= 5, "{name}: {} windows", parts.len());
+            // What each window takes, in the allowance of the stroke: the sum so far after each.
+            let mut allowance = crate::meter::Allowance::new();
+            let taken: Vec<usize> = parts
+                .iter()
+                .map(|p| {
+                    normalize_bez_charged(p, FillRule::NonZero, usize::MAX, &mut allowance).unwrap().unwrap();
+                    usize::try_from(allowance.spent()).unwrap()
+                })
+                .collect();
+            let (n, total) = (parts.len(), taken[parts.len() - 1]);
+            assert!(taken.windows(2).all(|w| w[1] > w[0]) && taken[0] > 1_000_000, "{name}: {taken:?}");
+            assert_eq!(stroke(&path, total), (Ok(true), n), "{name}: the limit of the sum admits every window");
+            assert_eq!(stroke(&path, total - 1), (Err(PathOpsError::TooComplex), n), "{name}: one less refuses the last");
+            // Two windows and half of the third: the third is the one that passes it, and none is swept after it.
+            assert_eq!(stroke(&path, taken[1] + (taken[2] - taken[1]) / 2), (Err(PathOpsError::TooComplex), 3), "{name}: stops at the third");
+        }
     }
 
     /// A subpath stroked in windows covers what the stroker covers in one piece, open or closed,
