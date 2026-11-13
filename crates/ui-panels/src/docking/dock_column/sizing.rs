@@ -20,23 +20,34 @@ pub fn width_bounds(least: f32, limits: impl IntoIterator<Item = SizeLimits>) ->
 /// below its floor; one without keeps its width. A dock saved on a larger screen still fits as far as the floors
 /// allow.
 pub fn fit_widths(columns: &[(f32, Option<f32>)], room: f32) -> Vec<f32> {
-    let mut widths: Vec<f32> = columns.iter().map(|(width, _)| *width).collect();
-    for _ in 0..columns.len() {
-        let total: f32 = widths.iter().sum();
-        if total <= room {
+    let total: f32 = columns.iter().map(|(width, _)| *width).sum();
+    if total <= room {
+        return columns.iter().map(|(width, _)| *width).collect();
+    }
+    let bounded: Vec<(f32, (f32, f32))> = columns.iter().map(|&(width, floor)| (width, (floor.map_or(width, |floor| floor.min(width)), width))).collect();
+    scale_widths(&bounded, room)
+}
+
+/// Column widths that add up to `total` as far as their bounds allow. Each entry is `(width, (lo, hi))`. The
+/// columns that can still move towards `total` scale by one factor; a column that reaches a bound stops there and
+/// the others take the rest, so a total past the bounds ends at their sum.
+pub fn scale_widths(columns: &[(f32, (f32, f32))], total: f32) -> Vec<f32> {
+    let bounds: Vec<(f32, f32)> = columns.iter().map(|&(_, (lo, hi))| (lo, hi.max(lo))).collect();
+    let mut widths: Vec<f32> = columns.iter().zip(&bounds).map(|((width, _), (lo, hi))| width.clamp(*lo, *hi)).collect();
+    // Every pass that misses the total pins at least one more column to a bound.
+    for _ in 0..=columns.len() {
+        let sum: f32 = widths.iter().sum();
+        let grow = total > sum;
+        let free = |(width, (lo, hi)): (&f32, &(f32, f32))| if grow { *width < *hi } else { *width > *lo };
+        let flex: f32 = widths.iter().zip(&bounds).filter(|pair| free(*pair)).map(|(width, _)| *width).sum();
+        if (total - sum).abs() < 0.01 || flex <= 0.0 {
             break;
         }
-        let flex: f32 =
-            widths.iter().zip(columns).filter(|(width, (_, floor))| floor.is_some_and(|floor| **width > floor)).map(|(width, _)| *width).sum();
-        if flex <= 0.0 {
-            break;
-        }
-        let scale = ((room - (total - flex)) / flex).max(0.0);
-        for (width, (_, floor)) in widths.iter_mut().zip(columns) {
-            if let Some(floor) = *floor
-                && *width > floor
-            {
-                *width = (*width * scale).max(floor);
+        let scale = ((total - (sum - flex)) / flex).max(0.0);
+        let free_now: Vec<bool> = widths.iter().zip(&bounds).map(free).collect();
+        for ((width, (lo, hi)), free) in widths.iter_mut().zip(&bounds).zip(free_now) {
+            if free {
+                *width = (*width * scale).clamp(*lo, *hi);
             }
         }
     }

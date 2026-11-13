@@ -32,7 +32,7 @@ use bar::panel_names;
 
 pub(super) use bar::{BarRecord, CHEVRON, bar_name, bar_slots, chevron_name, describe_chevron, paint_chevron, show_bar};
 use sizing::group_sizes;
-pub use sizing::{GroupSize, fit_widths, group_heights, stacked, width_bounds};
+pub use sizing::{GroupSize, fit_widths, group_heights, scale_widths, stacked, width_bounds};
 
 const DIVIDER: PartKey = PartKey::new("divider");
 const EDGE: PartKey = PartKey::new("edge");

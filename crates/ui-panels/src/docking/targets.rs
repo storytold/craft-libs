@@ -4,11 +4,11 @@
 //! previous pass's registry, because a drop is decided against what was on screen when the pointer moved. Every
 //! zone is a rect. A spot names a group by an anchor panel, as the dock model does.
 
-use super::{DragUnit, PanelKey, PanelSpec, width_bounds};
+use super::{DragUnit, PanelKey, PanelSpec, scale_widths, width_bounds};
 use crate::contract::DropMark;
 use crate::runtime::frame::{self, PassStep, PerViewport, Stamped, Stored};
 use crate::style::StyleCx;
-use craft_behavior::dock::{Column, ZoneSize, zones};
+use craft_behavior::dock::{Action, Column, DockEdge, Layout, Node, ZoneSize, node_at, zones};
 use craft_behavior::{DockSide, Flow};
 use egui::{Context, Id, Pos2, Rect, Vec2};
 
@@ -100,15 +100,48 @@ impl DockSizes {
         column.width.unwrap_or(self.column).clamp(lo, hi)
     }
 
+    /// The bounds [`width`](Self::width) keeps a column in: an expanded column's [`width_bounds`](Self::width_bounds);
+    /// an iconic column's rail width up to the width it expands to.
+    pub fn shown_bounds<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> (f32, f32) {
+        if column.iconic {
+            // Widening an iconic column stops at the width it expands to.
+            (self.iconic_least, self.expanded_width(column, spec).max(self.iconic_least))
+        } else {
+            self.width_bounds(column, spec)
+        }
+    }
+
     /// The width of a column before the dock's room shrinks it.
     pub fn width<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> f32 {
         if column.iconic {
-            // Widening an iconic column stops at the width it expands to.
-            let most = self.expanded_width(column, spec).max(self.iconic_least);
-            column.iconic_width.unwrap_or(self.iconic_least).clamp(self.iconic_least, most)
+            let (lo, hi) = self.shown_bounds(column, spec);
+            column.iconic_width.unwrap_or(lo).clamp(lo, hi)
         } else {
             self.expanded_width(column, spec)
         }
+    }
+
+    /// The actions that give the dock on `side` of `layout` the total width `total`, its columns scaled within
+    /// their [`shown_bounds`](Self::shown_bounds) ([`scale_widths`]): [`Action::ResizeColumn`] for an expanded column,
+    /// [`Action::ResizeIconic`] for an iconic one, which keeps its expanded width. Apply them together
+    /// ([`Workspace::apply_all`](craft_behavior::dock::Workspace::apply_all)). Empty when the side has no dock or the
+    /// columns already add up to the width; a column without panels keeps its width.
+    pub fn resize_side<P: Clone + Eq + std::hash::Hash>(&self, layout: &Layout<P>, side: DockEdge, spec: &dyn Fn(&P) -> PanelSpec, total: f32) -> Vec<Action<P>> {
+        let columns = match layout.dock_path(side).and_then(|path| node_at(layout.root.as_ref()?, &path)) {
+            Some(Node::Dock { columns, .. }) => columns,
+            _ => return Vec::new(),
+        };
+        let current: Vec<(f32, (f32, f32))> = columns.iter().map(|column| (self.width(column, spec), self.shown_bounds(column, spec))).collect();
+        let widths = scale_widths(&current, total);
+        columns
+            .iter()
+            .zip(current.iter().zip(widths))
+            .filter(|(_, ((width, _), scaled))| (scaled - width).abs() >= 0.01)
+            .filter_map(|(column, (_, width))| {
+                let panel = column.groups.iter().find_map(|group| group.panels.first())?.clone();
+                Some(if column.iconic { Action::resize_iconic(panel, Some(width)) } else { Action::resize_column(panel, width) })
+            })
+            .collect()
     }
 
     /// The `(width, floor)` of every column, for [`fit_widths`](super::fit_widths): an expanded column shrinks down to

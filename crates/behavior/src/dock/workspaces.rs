@@ -39,10 +39,37 @@ pub struct NamedWorkspace<P> {
     pub layout: Workspace<P>,
     /// Which bars show.
     pub chrome: WorkspaceChrome,
-    /// Whether Keyboard Shortcuts and Menus were saved with it (Photoshop's New Workspace boxes).
-    pub keeps_shortcuts: bool,
-    /// Whether menu customizations were saved with it.
-    pub keeps_menus: bool,
+    /// What it captured beside the panel layout.
+    #[serde(flatten)]
+    pub keeps: WorkspaceKeeps,
+}
+
+/// What a saved workspace captures beside the panel layout (the Capture boxes of New Workspace). The application
+/// stores and restores what each flag names; the set only records the choice.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct WorkspaceKeeps {
+    /// Keyboard shortcuts.
+    #[serde(rename = "keeps_shortcuts", default)]
+    pub shortcuts: bool,
+    /// Menu customizations.
+    #[serde(rename = "keeps_menus", default)]
+    pub menus: bool,
+    /// Toolbar customizations.
+    #[serde(rename = "keeps_toolbar", default)]
+    pub toolbar: bool,
+}
+
+impl WorkspaceKeeps {
+    /// Captures nothing beside the layout.
+    pub const NONE: WorkspaceKeeps = WorkspaceKeeps { shortcuts: false, menus: false, toolbar: false };
+    /// Captures shortcuts, menus and toolbar.
+    pub const ALL: WorkspaceKeeps = WorkspaceKeeps { shortcuts: true, menus: true, toolbar: true };
+
+    /// The keeps with shortcuts, menus and toolbar as given.
+    pub const fn new(shortcuts: bool, menus: bool, toolbar: bool) -> Self {
+        WorkspaceKeeps { shortcuts, menus, toolbar }
+    }
 }
 
 /// The app's workspaces: built-ins first, saved ones after, one current. It is a settings
@@ -77,9 +104,9 @@ impl<P> Default for WorkspaceSet<P> {
 }
 
 impl<P> NamedWorkspace<P> {
-    /// A workspace named `name` with the stable id `id`, showing every bar and keeping no shortcuts or menus.
+    /// A workspace named `name` with the stable id `id`, showing every bar and capturing nothing beside the layout.
     pub fn new(id: impl Into<String>, name: impl Into<String>, layout: Workspace<P>) -> Self {
-        Self { id: id.into(), name: name.into(), layout, chrome: WorkspaceChrome::default(), keeps_shortcuts: false, keeps_menus: false }
+        Self { id: id.into(), name: name.into(), layout, chrome: WorkspaceChrome::default(), keeps: WorkspaceKeeps::NONE }
     }
 }
 
@@ -132,9 +159,9 @@ impl<P: Clone + Eq + Hash> WorkspaceSet<P> {
         Ok(())
     }
 
-    /// Save `live` under `name` and make it current; a name a built-in has is refused. A saved
-    /// workspace of the same name, in any case, is replaced.
-    pub fn save(&mut self, name: &str, live: Workspace<P>, chrome: WorkspaceChrome) -> Result<String, WorkspaceError> {
+    /// Whether `name` can be saved: the trimmed name, and the id of the saved workspace it would replace (any case),
+    /// if any. An empty name and a built-in's name or id are refused.
+    pub fn check_name<'n>(&self, name: &'n str) -> Result<(&'n str, Option<&str>), WorkspaceError> {
         let name = name.trim();
         if name.is_empty() {
             return Err(WorkspaceError::EmptyName);
@@ -143,15 +170,17 @@ impl<P: Clone + Eq + Hash> WorkspaceSet<P> {
         if self.builtin.iter().any(|w| same(&w.name) || same(&w.id)) {
             return Err(WorkspaceError::NameTaken);
         }
-        let existing = self.saved.iter().position(|w| same(&w.name));
-        let id = match existing {
-            Some(i) => self.saved[i].id.clone(),
-            None => self.free_id(&slug(name)),
-        };
-        let layout = live;
-        let (keeps_shortcuts, keeps_menus) = existing.map_or((false, false), |i| (self.saved[i].keeps_shortcuts, self.saved[i].keeps_menus));
-        let workspace = NamedWorkspace { id: id.clone(), name: name.to_string(), layout, chrome, keeps_shortcuts, keeps_menus };
-        match existing {
+        Ok((name, self.saved.iter().find(|w| same(&w.name)).map(|w| w.id.as_str())))
+    }
+
+    /// Save `live` under `name`, capturing `keeps`, and make it current; [`check_name`](Self::check_name) refuses
+    /// the name or names the saved workspace it replaces.
+    pub fn save(&mut self, name: &str, live: Workspace<P>, chrome: WorkspaceChrome, keeps: WorkspaceKeeps) -> Result<String, WorkspaceError> {
+        let (name, existing) = self.check_name(name)?;
+        let existing = existing.map(str::to_owned);
+        let id = existing.clone().unwrap_or_else(|| self.free_id(&slug(name)));
+        let workspace = NamedWorkspace { id: id.clone(), name: name.to_string(), layout: live, chrome, keeps };
+        match self.saved.iter().position(|w| Some(&w.id) == existing.as_ref()) {
             Some(i) => self.saved[i] = workspace,
             None => self.saved.push(workspace),
         }
@@ -225,8 +254,8 @@ struct StoredNamed<P> {
     name: String,
     layout: StoredWorkspace<P>,
     chrome: WorkspaceChrome,
-    keeps_shortcuts: bool,
-    keeps_menus: bool,
+    #[serde(flatten)]
+    keeps: WorkspaceKeeps,
 }
 
 /// A [`Workspace`] with the fields of format version 2 it no longer has.
@@ -264,8 +293,7 @@ impl<P> From<StoredSet<P>> for WorkspaceSet<P> {
                     name: named.name,
                     layout: workspace,
                     chrome: named.chrome,
-                    keeps_shortcuts: named.keeps_shortcuts,
-                    keeps_menus: named.keeps_menus,
+                    keeps: named.keeps,
                 }
             })
             .collect();

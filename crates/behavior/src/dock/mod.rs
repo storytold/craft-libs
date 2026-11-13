@@ -47,7 +47,7 @@ pub use zones::{SIDE_ZONE_DEPTH_SHARE, SIDE_ZONE_FRACTION, ZoneSize, zones};
 pub use arrange::{Arrangement, arrange_rects};
 pub use windows::{DocumentGroup, DocumentWindows};
 pub use workspace::Workspace;
-pub use workspaces::{NamedWorkspace, WorkspaceChrome, WorkspaceError, WorkspaceSet};
+pub use workspaces::{NamedWorkspace, WorkspaceChrome, WorkspaceError, WorkspaceKeeps, WorkspaceSet};
 
 /// The side of a group a dropped panel docks on, in reading order: `Start` is the left half in a left-to-right
 /// window and the right half in a right-to-left one. Saved layouts and actions written with the physical names

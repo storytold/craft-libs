@@ -53,7 +53,7 @@ mod dock_column;
 mod flyout;
 mod iconic;
 
-pub use dock_column::{DockColumn, DockColumnOutput, DockColumnStyle, GroupSize, GroupView, fit_widths, group_heights, stacked, width_bounds};
+pub use dock_column::{DockColumn, DockColumnOutput, DockColumnStyle, GroupSize, GroupView, fit_widths, group_heights, scale_widths, stacked, width_bounds};
 pub use flyout::{Flyout, GroupAt};
 pub use iconic::{IconicColumn, IconicColumnOutput, IconicColumnStyle, IconicSizes};
 pub use window_menu::{WindowMenuRows, WindowMenuRowsOutput};
