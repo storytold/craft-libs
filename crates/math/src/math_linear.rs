@@ -93,7 +93,7 @@ pub fn is_combining(c: char) -> bool {
 }
 
 /// Characters that end an operand.
-fn is_boundary(c: char) -> bool {
+pub(crate) fn is_boundary(c: char) -> bool {
     matches!(c, ' ' | '&' | '@' | '#' | '▒' | '│' | '/' | '⁄' | '∕' | '¦' | '\u{2061}')
         || is_closer(c)
         || matches!(math_class(c), MClass::Bin | MClass::Rel | MClass::Punct)
@@ -173,6 +173,7 @@ impl P {
                     if pre {
                         out.push(self.prescript(stops));
                     } else {
+                        let group = self.after_group();
                         self.i += 1;
                         let s = self.script_chain(c, stops, 0);
                         if out.last().is_some_and(too_deep) {
@@ -180,7 +181,7 @@ impl P {
                             out.extend(s);
                         } else {
                             let base = out.pop();
-                            out.push(attach_script(base, c == '^', s));
+                            out.push(attach_script(base, c == '^', s, group));
                         }
                     }
                 }
@@ -246,6 +247,11 @@ impl P {
         }
         self.i += 1;
         vec![text(c)]
+    }
+
+    /// The character just before the cursor closed a `〖…〗` group.
+    fn after_group(&self) -> bool {
+        self.i.checked_sub(1).and_then(|k| self.c.get(k)) == Some(&'〗')
     }
 
     /// A bracket group after its opening character; `closers` end it.
@@ -453,13 +459,13 @@ impl P {
                 self.i += 1;
                 // `sin^2^3` nests to the right like any other script (#6074).
                 let s = self.script_chain(c, stops, 0);
-                let mut n = attach_script(Some(MNode::Run(MRun::plain(word.clone()))), c == '^', s);
+                let mut n = attach_script(Some(MNode::Run(MRun::plain(word.clone()))), c == '^', s, false);
                 // Only the other script joins it, and it nests the same way (`log_2^3`, `sin^2_a_b`);
                 // the same one again is what the chain left at its depth cap.
                 if let Some(c2 @ ('^' | '_')) = self.peek().filter(|&c2| c2 != c) {
                     self.i += 1;
                     let s2 = self.script_chain(c2, stops, 0);
-                    n = attach_script(Some(n), c2 == '^', s2);
+                    n = attach_script(Some(n), c2 == '^', s2, false);
                 }
                 vec![n]
             }
@@ -583,6 +589,7 @@ impl P {
             }
             // The base is already deep: the operator is text (see `too_deep`).
             let deep = if whole { any_too_deep(out) } else { out.last().is_some_and(too_deep) };
+            let group = self.after_group();
             self.i += 1;
             if deep {
                 let s = if matches!(c, '^' | '_' | '┬' | '┴') { self.script_operand(stops) } else { Vec::new() };
@@ -594,7 +601,7 @@ impl P {
                 '^' | '_' => {
                     let s = self.script_chain(c, stops, 0);
                     let b = base(out);
-                    out.push(attach_script(b, c == '^', s));
+                    out.push(attach_script(b, c == '^', s, group));
                 }
                 '┬' | '┴' => {
                     let lim = self.script_operand(stops);
@@ -717,10 +724,21 @@ pub fn strip_parens(mut a: Arg) -> Arg {
     a
 }
 
-fn attach_script(base: Option<MNode>, sup: bool, s: Arg) -> MNode {
+/// `group`: the base was just closed by `〗`, so a characterless delimiter around it is that grouping
+/// (and dropped), not an explicit `├…┤` one (kept).
+fn attach_script(base: Option<MNode>, sup: bool, s: Arg, group: bool) -> MNode {
     match base {
         Some(MNode::Script { kind: ScriptKind::Sub, base, sub, .. }) if sup => MNode::Script { kind: ScriptKind::SubSup, base, sub, sup: s },
         Some(MNode::Script { kind: ScriptKind::Sup, base, sup: sp, .. }) if !sup => MNode::Script { kind: ScriptKind::SubSup, base, sub: s, sup: sp },
+        // `〖…〗` only groups: as a script base it leaves no delimiter, as Word builds it (#6075).
+        Some(MNode::Delim { beg: None, end: None, mut elems, .. }) if group && elems.len() == 1 => {
+            let base = elems.pop().unwrap_or_default();
+            if sup {
+                MNode::Script { kind: ScriptKind::Sup, base, sub: Vec::new(), sup: s }
+            } else {
+                MNode::Script { kind: ScriptKind::Sub, base, sub: s, sup: Vec::new() }
+            }
+        }
         b => {
             let base = b.map(|b| vec![b]).unwrap_or_default();
             if sup {
