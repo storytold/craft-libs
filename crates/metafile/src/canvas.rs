@@ -1295,13 +1295,35 @@ impl Canvas {
     }
 }
 
-/// An 8×8 hatch tile (HS_HORIZONTAL, HS_VERTICAL, HS_FDIAGONAL, HS_BDIAGONAL, HS_CROSS,
-/// HS_DIAGCROSS): one-pixel lines in `fg` over `bg`, or over nothing when the background is
-/// transparent. None for an unknown style.
+/// An 8×8 GDI hatch tile (HS_HORIZONTAL through HS_DIAGCROSS). None for an unknown GDI style.
 pub(crate) fn hatch_tile(style: u32, fg: [u8; 4], bg: Option<[u8; 4]>) -> Option<Vec<u8>> {
-    if style > 5 {
+    hatch_tile_inner(style, fg, bg, false)
+}
+
+/// An 8×8 GDI+ tile for the six basic and twelve percentage HatchStyle values. Percentage styles
+/// use a Bayer tile with the specified foreground coverage. Other GDI+ styles still use the
+/// fallback in `emfplus::Painter::fill` until their patterns have been mapped.
+pub(crate) fn emfplus_hatch_tile(style: u32, fg: [u8; 4], bg: Option<[u8; 4]>) -> Option<Vec<u8>> {
+    hatch_tile_inner(style, fg, bg, true)
+}
+
+fn hatch_tile_inner(style: u32, fg: [u8; 4], bg: Option<[u8; 4]>, gdi_plus: bool) -> Option<Vec<u8>> {
+    if style > if gdi_plus { 17 } else { 5 } {
         return None;
     }
+    // An 8×8 Bayer matrix keeps percentage hatches evenly distributed in a small, repeatable
+    // tile. The twelve values are GDI+'s Percent05 through Percent90 styles.
+    const BAYER: [[u8; 8]; 8] = [
+        [0, 48, 12, 60, 3, 51, 15, 63],
+        [32, 16, 44, 28, 35, 19, 47, 31],
+        [8, 56, 4, 52, 11, 59, 7, 55],
+        [40, 24, 36, 20, 43, 27, 39, 23],
+        [2, 50, 14, 62, 1, 49, 13, 61],
+        [34, 18, 46, 30, 33, 17, 45, 29],
+        [10, 58, 6, 54, 9, 57, 5, 53],
+        [42, 26, 38, 22, 41, 25, 37, 21],
+    ];
+    const PERCENT: [u32; 12] = [5, 10, 20, 25, 30, 40, 50, 60, 70, 75, 80, 90];
     let mut px = Vec::with_capacity(8 * 8 * 4);
     for y in 0..8u32 {
         for x in 0..8u32 {
@@ -1312,7 +1334,12 @@ pub(crate) fn hatch_tile(style: u32, fg: [u8; 4], bg: Option<[u8; 4]>) -> Option
                 2 => f,
                 3 => b,
                 4 => h || v,
-                _ => f || b,
+                5 => f || b,
+                6..=17 if gdi_plus => {
+                    let count = (PERCENT[(style - 6) as usize] * 64 + 50) / 100;
+                    u32::from(BAYER[y as usize][x as usize]) < count
+                }
+                _ => return None,
             };
             px.extend(if on { fg } else { bg.unwrap_or([0, 0, 0, 0]) });
         }
