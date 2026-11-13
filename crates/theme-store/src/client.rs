@@ -126,6 +126,13 @@ impl SuiteClient {
         self.pending = Some(Pending { id, change });
     }
 
+    /// Whether the suite's selection has been read: false from an open that couldn't read
+    /// `selection.json` until the worker's first snapshot. Until then [`accepted`](Self::accepted)
+    /// is no one's choice, and changes wait in the queue.
+    pub fn selection_read(&self) -> bool {
+        !self.hold
+    }
+
     /// The suite choice to show: the accepted one with the changes on their way applied. A
     /// picked library theme the snapshot hasn't loaded yet shows in its slot only once it has,
     /// so the app never falls back to its own palette in between.
