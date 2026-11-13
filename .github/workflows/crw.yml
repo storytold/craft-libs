@@ -2,7 +2,7 @@ name: Shared CRW
 
 on:
   push:
-    branches: [main]
+    branches: [main, next]
     paths: ["crates/crw/**", "scripts/fetch-crw-samples.py", "Cargo.toml", "Cargo.lock", ".github/workflows/crw.yml"]
   pull_request:
     paths: ["crates/crw/**", "scripts/fetch-crw-samples.py", "Cargo.toml", "Cargo.lock", ".github/workflows/crw.yml"]
@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: ${{ github.ref == 'refs/heads/next' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - name: Harden runner

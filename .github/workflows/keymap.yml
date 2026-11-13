@@ -2,7 +2,7 @@ name: Keymap
 
 on:
   push:
-    branches: [main]
+    branches: [main, next]
     paths: ["crates/keymap/**", "crates/settings/**", "crates/ui/**", "crates/ui-contract/**", "crates/ui-widgets/**", "crates/ui-panels/**", "crates/ui-canvas/**", "crates/ui-patterns/**", "crates/ui-shell/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/keymap.yml"]
   pull_request:
     paths: ["crates/keymap/**", "crates/settings/**", "crates/ui/**", "crates/ui-contract/**", "crates/ui-widgets/**", "crates/ui-panels/**", "crates/ui-canvas/**", "crates/ui-patterns/**", "crates/ui-shell/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/keymap.yml"]
@@ -63,6 +63,8 @@ jobs:
       - name: Test egui dispatch and the shortcuts dialog
         run: cargo test -p craft-keymap --features ui --locked
   native:
+    # Pushes to next run Linux only.
+    if: github.ref != 'refs/heads/next' || github.event_name == 'workflow_dispatch'
     timeout-minutes: 15
     name: Keymap (${{ matrix.os }})
     strategy:

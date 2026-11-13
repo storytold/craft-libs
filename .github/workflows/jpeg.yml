@@ -2,7 +2,7 @@ name: Shared JPEG
 
 on:
   push:
-    branches: [main]
+    branches: [main, next]
     paths: ["crates/jpeg/**", "Cargo.toml", "Cargo.lock", ".github/workflows/jpeg.yml"]
   pull_request:
     paths: ["crates/jpeg/**", "Cargo.toml", "Cargo.lock", ".github/workflows/jpeg.yml"]

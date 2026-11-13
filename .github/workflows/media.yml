@@ -2,7 +2,7 @@ name: Shared media
 
 on:
   push:
-    branches: [main]
+    branches: [main, next]
     paths: ["crates/media/**", "crates/media-testkit/**", "Cargo.toml", "Cargo.lock", ".github/workflows/media.yml"]
   pull_request:
     paths: ["crates/media/**", "crates/media-testkit/**", "Cargo.toml", "Cargo.lock", ".github/workflows/media.yml"]

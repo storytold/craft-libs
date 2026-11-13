@@ -3,7 +3,7 @@ name: Suite themes
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, next]
     paths: ['crates/theme/**', 'crates/theme-store/**', 'crates/atomic/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/theme.yml']
   pull_request:
     paths: ['crates/theme/**', 'crates/theme-store/**', 'crates/atomic/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/theme.yml']

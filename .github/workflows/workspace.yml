@@ -2,7 +2,7 @@ name: Workspace
 
 on:
   push:
-    branches: [main]
+    branches: [main, next]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
@@ -15,7 +15,7 @@ jobs:
     name: Workspace
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
-      os: '["ubuntu-latest","windows-latest","macos-latest"]'
+      os: ${{ github.ref == 'refs/heads/next' && '["ubuntu-latest"]' || '["ubuntu-latest","windows-latest","macos-latest"]' }}
       timeout-minutes: 120
       tools: ""
       packages: mesa-vulkan-drivers libvulkan1

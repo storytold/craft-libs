@@ -3,7 +3,7 @@ name: Web API (page command API)
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, next]
     paths: ['crates/web-api/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/web-api.yml']
   pull_request:
     paths: ['crates/web-api/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/web-api.yml']

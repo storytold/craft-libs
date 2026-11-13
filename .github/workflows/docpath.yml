@@ -3,7 +3,7 @@ name: Document paths
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, next]
     paths: ['crates/docpath/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/docpath.yml']
   pull_request:
     paths: ['crates/docpath/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/docpath.yml']
@@ -24,7 +24,7 @@ jobs:
       fail-fast: false
       matrix:
         # macOS runners are kept for releases: macOS runs only when started by hand.
-        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["ubuntu-latest","windows-latest","macos-latest"]') || fromJSON('["ubuntu-latest","windows-latest"]') }}
+        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["ubuntu-latest","windows-latest","macos-latest"]') || github.ref == 'refs/heads/next' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - name: Harden runner
