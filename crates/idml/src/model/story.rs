@@ -418,6 +418,10 @@ impl Table {
 }
 
 impl Cell {
+    pub fn from_el(el: &El) -> Cell {
+        Cell { values: Values::of(el), children: nodes(el) }
+    }
+
     pub fn to_el(&self) -> El {
         with_children(self.values.element("Cell"), &self.children)
     }
