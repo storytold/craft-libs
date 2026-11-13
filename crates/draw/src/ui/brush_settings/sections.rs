@@ -311,11 +311,11 @@ impl<'a, K: Value + Eq + Hash> BrushSectionList<'a, K> {
                             if let Some(on) = section.enabled {
                                 row = row.toggle(ToggleCell::check(CHECK, ToggleState::of(on), enable_name.clone()).row_press());
                             }
-                            if let Some(locked) = section.locked {
-                                let tip = if locked { words.unlock_tip.clone() } else { words.lock_tip.clone() };
-                                row = row.toggle(ToggleCell::lock(LOCK, locked).name(lock_name.clone()).tooltip(tip).always_visible());
-                            }
                         }
+                    }
+                    if let Some(locked) = section.locked {
+                        let tip = if locked { words.unlock_tip.clone() } else { words.lock_tip.clone() };
+                        row = row.toggle(ToggleCell::lock(LOCK, locked).name(lock_name.clone()).tooltip(tip).always_visible());
                     }
                     row.cells(icx.cells())
                 }
