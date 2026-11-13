@@ -388,6 +388,31 @@ pub struct ColorGroup {
     pub rest: Vec<El>,
 }
 
+/// An Ink Manager entry, preserving its source values.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ink {
+    pub values: Values,
+}
+
+impl Ink {
+    pub fn name(&self) -> Option<&str> {
+        self.values.name()
+    }
+
+    pub fn convert_to_process(&self) -> bool {
+        self.values.get("ConvertToProcess") == Some("true")
+    }
+
+    pub fn alias(&self) -> Option<&str> {
+        self.values.get("AliasInkName")
+    }
+}
+
+/// Ink Manager entries among the document's top-level elements.
+pub fn inks(top: &[El]) -> Vec<Ink> {
+    top.iter().filter(|el| el.local() == "Ink").map(|el| Ink { values: Values::of(el) }).collect()
+}
+
 impl ColorGroup {
     pub fn to_el(&self) -> El {
         let mut el = self.values.element("ColorGroup");
