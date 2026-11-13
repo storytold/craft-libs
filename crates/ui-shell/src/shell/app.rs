@@ -165,7 +165,9 @@ fn create<A: ShellApp + 'static>(
     make: impl FnOnce(&Context) -> A + 'static,
 ) -> impl FnOnce(&eframe::CreationContext<'_>) -> Result<Box<dyn eframe::App>, Box<dyn std::error::Error + Send + Sync>> {
     move |cc| {
-        let mut install = InstallSpec::new(spec.shell_info, spec.window_system).placement(spec.placement);
+        let ctx = cc.egui_ctx.clone();
+        let system = crate::runtime::env::SystemReader::start(move || ctx.request_repaint());
+        let mut install = InstallSpec::new(spec.shell_info, spec.window_system).placement(spec.placement).system(system);
         if let Some(decision) = spec.frame {
             install = install.frame(decision);
         }

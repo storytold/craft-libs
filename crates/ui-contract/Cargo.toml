@@ -19,7 +19,7 @@ default = []
 # `craft_ui::testing`: the fixture and suite runner, with the snapshot renderer. One feature for all of the test kit,
 # so every test build of every crate asks the runtime for the same thing and builds it once; a crate that depends on
 # the runtime through another framework crate cannot name the runtime's features on the command line.
-testing = ["dep:libtest-mimic", "snapshot"]
+testing = ["dep:libtest-mimic", "snapshot", "craft-platform/testing"]
 # `craft_ui::testing::snapshot`: stories rendered to images offscreen (desktop only).
 snapshot = ["dep:egui_kittest", "dep:image"]
 # Draw colour glyphs (COLR, sbix, CBDT), e.g. colour emoji.
@@ -42,6 +42,8 @@ craft-host = { workspace = true }
 craft-window = { workspace = true, features = ["ui"] }
 # `quit`, which `runtime::windows::logic` routes a root close through.
 craft-quit = { workspace = true }
+# `appearance::SystemReader`, the OS appearance the root's `System` choices resolve from.
+craft-platform = { workspace = true, features = ["appearance"] }
 craft-i18n = { workspace = true, features = ["collate"] }
 log = "0.4"
 smallvec = { workspace = true }

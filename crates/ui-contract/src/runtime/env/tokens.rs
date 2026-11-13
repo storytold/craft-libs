@@ -13,12 +13,15 @@ const KEPT_ROOT_TOKENS: usize = 4;
 #[derive(Default)]
 pub(crate) struct RootTokenCache {
     entries: Vec<(TokenInputs, Arc<UiTokens>)>,
+    /// How many lookups missed the cache.
+    #[cfg(feature = "testing")]
+    misses: usize,
 }
 
-/// How many root-token entries the context holds.
+/// How many times the context resolved root tokens it had no entry for.
 #[cfg(feature = "testing")]
-pub(crate) fn root_token_entries(ctx: &Context) -> usize {
-    pass_state::with::<RootTokenCache, _>(ctx, |cache| cache.entries.len())
+pub(crate) fn root_token_resolves(ctx: &Context) -> usize {
+    pass_state::with::<RootTokenCache, _>(ctx, |cache| cache.misses)
 }
 
 /// The tokens `inputs` resolve to, cached by the inputs.
@@ -30,6 +33,10 @@ pub(super) fn tokens_for(ctx: &Context, inputs: &TokenInputs) -> Arc<UiTokens> {
     }
     let tokens = resolved(inputs);
     pass_state::with::<RootTokenCache, _>(ctx, |cache| {
+        #[cfg(feature = "testing")]
+        {
+            cache.misses += 1;
+        }
         if cache.entries.len() == KEPT_ROOT_TOKENS {
             cache.entries.remove(0);
         }

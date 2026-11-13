@@ -141,9 +141,14 @@ pub fn paint_frame(
     (shapes, Recorded { elided: record.elided, baseline: record.baseline })
 }
 
-/// How many root-token entries the root env cache of `ctx` holds.
-pub fn root_token_entries(ctx: &Context) -> usize {
-    crate::runtime::env::root_token_entries(ctx)
+/// How many times `ctx` resolved root tokens its cache had no entry for.
+pub fn root_token_resolves(ctx: &Context) -> usize {
+    crate::runtime::env::root_token_resolves(ctx)
+}
+
+/// Reports `contrast` as the OS's contrast preference on `ctx`, as a desktop source would.
+pub fn report_os_contrast(ctx: &Context, contrast: craft_theme::Contrast) {
+    crate::runtime::env::system::report_contrast(ctx, contrast);
 }
 
 /// A resolved style as the style cases read it: the variants its type lists and the looks that state colours

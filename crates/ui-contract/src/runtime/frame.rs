@@ -517,6 +517,8 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
     let viewport = input.viewport_id;
     // H0a: the next injected step joins the input and passes the stages below like real input.
     let injected = crate::runtime::egui::injected::input_hook(ctx, input);
+    // H0b: the OS colour scheme egui's integration reports reaches the system reader.
+    crate::runtime::env::system::input_hook(ctx, &input.events);
     // H0: one press per pass.
     let frame = pass::frame_nr(ctx, viewport);
     let held_back = PerViewport::<ViewportRecord>::with(ctx, viewport, |record| raw_input::hold_back_presses(input, frame, &mut record.held));

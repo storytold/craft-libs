@@ -33,17 +33,20 @@ mod app_values;
 mod host_words;
 mod overrides;
 mod root;
+pub(crate) mod system;
 pub(crate) mod tokens;
 mod values;
 mod view;
 
 pub use app_values::{AppValues, EnvValue, StyleValue};
+pub use craft_platform::appearance::SystemReader;
 use host_words::{host_dates, host_format, host_words};
 pub use overrides::{Overrides, ThemeScope, WheelScope, WordsOverride, with_env};
 pub use root::{ResolvedRoot, RootEnv};
+pub use system::{SystemState, system_appearance};
 pub(crate) use tokens::TokenInputs;
 #[cfg(feature = "testing")]
-pub(crate) use tokens::root_token_entries;
+pub(crate) use tokens::root_token_resolves;
 use tokens::tokens_for;
 pub use values::{ArenaId, MotionPolicy, Scale};
 pub use view::EnvView;

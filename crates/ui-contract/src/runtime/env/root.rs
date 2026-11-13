@@ -109,18 +109,11 @@ impl RootEnv {
         self
     }
 
-    /// What the choices resolve to on `ctx`'s pass: the one place `System` is replaced by the OS's answer.
-    ///
-    /// egui reports only the OS theme (`Context::system_theme`); an OS that reports none gives `Mode::Light`,
-    /// and contrast and reduced motion, which neither egui nor `craft-window` expose, resolve to standard
-    /// contrast and full motion.
+    /// What the choices resolve to on `ctx`'s pass: the one place `System` is replaced by the OS's answer, as
+    /// [`system_appearance`](super::system_appearance) reads it. A value the OS reports none for resolves to light,
+    /// standard contrast and full motion.
     pub fn resolved(&self, ctx: &Context) -> ResolvedRoot {
-        let system = SystemAppearance {
-            mode: ctx.system_theme().map(|theme| if theme == egui::Theme::Dark { Mode::Dark } else { Mode::Light }),
-            contrast: None,
-            reduced_motion: None,
-        };
-        self.resolved_for(system)
+        self.resolved_for(super::system_appearance(ctx).appearance)
     }
 
     /// What the choices resolve to when the OS reports `system`.

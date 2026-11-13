@@ -1,6 +1,7 @@
 //! `runtime::install`: adds the runtime plugin once and sets the egui options the runtime owns.
 
 use crate::runtime::egui::{input, plugin};
+use crate::runtime::env::{SystemReader, system};
 use crate::runtime::{commands, frame, windows};
 use crate::style::{DuplicateStyle, StyleReplacements};
 use craft_host::target::ShellInfo;
@@ -27,12 +28,23 @@ pub struct InstallSpec {
     /// The frame decided for the root window; `runtime::windows` takes its chrome and captions and keeps the
     /// caption layout current on focus gain.
     pub frame: Option<Decision>,
+    /// Where the root's `System` choices read the OS's appearance. `new` gives a reader with no desktop watcher,
+    /// which answers only the colour scheme egui's integration reports; a host passes one it started.
+    pub system: SystemReader,
 }
 
 impl InstallSpec {
     /// A spec for `shell_info` and `window_system`, with no ghost-layer painter.
     pub fn new(shell_info: ShellInfo, window_system: Arc<dyn WindowSystem>) -> Self {
-        InstallSpec { shell_info, window_system, placement: None, frame_layers: None, looks: StyleReplacements::new(), frame: None }
+        InstallSpec {
+            shell_info,
+            window_system,
+            placement: None,
+            frame_layers: None,
+            looks: StyleReplacements::new(),
+            frame: None,
+            system: SystemReader::unwatched(),
+        }
     }
 
     /// Sets the store viewport mounts save their window placement in.
@@ -44,6 +56,12 @@ impl InstallSpec {
     /// Sets the app's style replacements.
     pub fn looks(mut self, looks: impl Into<StyleReplacements>) -> Self {
         self.looks = looks.into();
+        self
+    }
+
+    /// Sets the reader of the OS's appearance; the host starts it (`SystemReader::start`) with a wake that repaints.
+    pub fn system(mut self, reader: SystemReader) -> Self {
+        self.system = reader;
         self
     }
 
@@ -94,6 +112,7 @@ pub fn install(ctx: &Context, spec: InstallSpec) -> Result<(), InstallError> {
     commands::install(ctx).map_err(InstallError::Commands)?;
     looks.store(ctx);
     input::clear_shortcuts(ctx);
+    system::install(ctx, spec.system);
     windows::install(ctx, spec.shell_info, spec.window_system, spec.placement, spec.frame);
     frame::set_frame_layers(ctx, spec.frame_layers);
     frame::seed_hooked_passes(ctx);
