@@ -11,6 +11,8 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+acadrust = "=0.6.6"
+log = "0.4"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
 craft-platform = { path = "crates/platform" }
 craft-aep = { path = "crates/aep" }
@@ -61,6 +63,7 @@ craft-doc = { path = "crates/doc" }
 craft-docpath = { path = "crates/docpath" }
 craft-dpx = { path = "crates/dpx" }
 craft-draw = { path = "crates/draw" }
+craft-dwg = { path = "crates/dwg" }
 craft-ecproj-format = { path = "crates/ecproj-format" }
 craft-figma-rest = { path = "crates/figma-rest" }
 craft-exr = { path = "crates/exr" }
