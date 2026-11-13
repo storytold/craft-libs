@@ -1414,6 +1414,8 @@ pub struct Drawing<'a> {
     pub insunits: i64,
     /// `$MEASUREMENT`: metric (R2000 and later).
     pub metric: bool,
+    /// `$LUNITS` (linear display format), when the caller needs a non-default value.
+    pub linear_units: Option<i64>,
     /// `[x0, y0, x1, y1]` of the content: `$EXTMIN`/`$EXTMAX`, and the view the file opens at.
     pub extents: [f64; 4],
     /// `$LIMMIN`/`$LIMMAX`.
@@ -1455,6 +1457,7 @@ impl Default for Drawing<'_> {
             code_page: String::new(),
             insunits: 0,
             metric: true,
+            linear_units: None,
             extents: [0.0, 0.0, 1.0, 1.0],
             limits: [0.0, 0.0, 420.0, 297.0],
             header: Vec::new(),
@@ -1623,6 +1626,9 @@ impl Drawing<'_> {
         if v.r2000() {
             vars.push(("$INSUNITS", vec![Tag::i(70, self.insunits)]));
             vars.push(("$MEASUREMENT", vec![Tag::i(70, i64::from(self.metric))]));
+        }
+        if let Some(linear_units) = self.linear_units {
+            vars.push(("$LUNITS", vec![Tag::i(70, linear_units)]));
         }
         w.section("HEADER");
         let given = |name: &str| self.header.iter().any(|(n, _)| n.eq_ignore_ascii_case(name));

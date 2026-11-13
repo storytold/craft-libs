@@ -586,6 +586,7 @@ fn the_file_around_the_content() {
         ],
         raw_entities: raw,
         extents: [0.0, 0.0, 100.0, 50.0],
+        linear_units: Some(2),
         header: vec![
             ("$LTSCALE".into(), vec![Tag::f(40, 2.0)]),
             ("$INSUNITS".into(), vec![Tag::i(70, 6)]),
@@ -617,6 +618,7 @@ fn the_file_around_the_content() {
     assert_eq!((d.header.acadver().as_deref(), d.header.ltscale(), d.header.insunits()), (Some("AC1032"), 2.0, 6));
     assert_eq!(d.header.vars.iter().filter(|(n, _)| *n == "$INSUNITS" || *n == "$ACADVER" || *n == "$HANDSEED").count(), 3);
     assert_eq!(d.header.point("$EXTMAX"), Some([100.0, 50.0, 0.0]));
+    assert_eq!(d.header.vars.iter().find(|(name, _)| *name == "$LUNITS").map(|(_, tags)| tags[0].i64()), Some(2));
     // Blocks, their records and the layouts that name them.
     let names = d.block_names();
     let block = d.block("DOOR").expect("the block");
