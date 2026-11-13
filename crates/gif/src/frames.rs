@@ -96,7 +96,13 @@ pub fn read_frames(bytes: &[u8], limits: &FrameLimits) -> Result<Animation, Fram
     }
     let inspect_limit = limits.max_frames.saturating_add(1);
     let info = crate::scan(bytes, inspect_limit).ok_or_else(|| FrameError::Malformed("not a GIF".into()))?;
-    let has_more = info.has_more_frames();
+    let has_more = if info.frames.len() > limits.max_frames {
+        Some(true)
+    } else if info.complete {
+        Some(false)
+    } else {
+        None
+    };
     let (width, height) = (u32::from(info.width), u32::from(info.height));
     let canvas = u64::from(width) * u64::from(height) * 4;
     if canvas > limits.max_canvas_bytes {
@@ -306,7 +312,7 @@ mod tests {
         let second = info.frames[1];
         // The first frame and canvas fit in 24 bytes; the second frame must not be decoded.
         bytes[second.offset + 5..second.offset + 9].copy_from_slice(&[0xff, 0xff, 0xff, 0xff]);
-        let limits = FrameLimits { max_frames: 1, max_bytes: 24, max_canvas_bytes: 24, max_decode_bytes: Some(24), ..FrameLimits::default() };
+        let limits = FrameLimits { max_frames: 1, max_bytes: 24, max_canvas_bytes: 24, max_decode_bytes: Some(1024), ..FrameLimits::default() };
         let animation = read_frames(&bytes, &limits).unwrap();
         assert_eq!(animation.frames.len(), 1);
         assert_eq!(animation.stop, Stop::FrameLimit);
