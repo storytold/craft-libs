@@ -120,6 +120,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   pages and version detection, and written back; and `model`, the drawing above the tags (header
   variables, tables, blocks, layouts, entities) and its writer (R12 to 2018), merged from CADCraft's and VectorCraft's readers. Bounded
   on hostile input. Mapping the model onto a document stays in each app.
+- [`craft-dwg`](crates/dwg/README.md): bounded byte-level DWG↔DXF conversion with diagnostics,
+  capped output and an optional child-process worker; the `acadrust` dependency remains isolated
+  behind bytes and is unavailable on wasm32 and FreeBSD/aarch64.
 - [`craft-ecproj-format`](crates/ecproj-format/README.md): the envelope of EffectCraft `.ecproj`
   project files: `savedBy`, the schema version and its check, and the file object with the
   project and its saved view as type parameters. The project model stays in EffectCraft.
