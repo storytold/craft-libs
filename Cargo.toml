@@ -39,6 +39,7 @@ craft-dav = { path = "crates/dav" }
 craft-dialogs = { path = "crates/dialogs" }
 craft-doc-binary = { path = "crates/doc-binary" }
 craft-docx = { path = "crates/docx" }
+craft-document-bundle = { path = "crates/document-bundle" }
 craft-dxf = { path = "crates/dxf" }
 craft-drawingml = { path = "crates/drawingml" }
 craft-eps = { path = "crates/eps" }

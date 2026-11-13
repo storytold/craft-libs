@@ -1337,6 +1337,16 @@ name = "craft-docpath"
 version = "0.1.0"
 
 [[package]]
+name = "craft-document-bundle"
+version = "0.1.0"
+dependencies = [
+ "craft-zip",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zip",
+]
+
+[[package]]
 name = "craft-docx"
 version = "0.1.0"
 dependencies = [

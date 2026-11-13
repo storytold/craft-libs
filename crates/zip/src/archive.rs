@@ -97,6 +97,13 @@ impl<'a> Archive<'a> {
         self.zip.by_index_raw(index).ok().map(|f| f.compressed_size())
     }
 
+    /// Is `name` stored without compression? The answer lets a format with in-memory source bytes
+    /// apply an output-size cap to compressed entries while bounding stored reads by source size.
+    pub fn is_stored(&mut self, name: &str) -> Option<bool> {
+        let index = self.zip.index_for_name(name)?;
+        self.zip.by_index_raw(index).ok().map(|f| f.compression() == zip::CompressionMethod::Stored)
+    }
+
     /// The first `n` bytes of entry `name` (all of it when it is shorter), or `None` when there
     /// is no such entry: for telling a file by its signature without inflating it. The bytes are
     /// charged to the total; a total with less left than the bytes wanted refuses before reading.
