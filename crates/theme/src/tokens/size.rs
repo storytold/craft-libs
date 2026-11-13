@@ -396,8 +396,8 @@ pub struct HitSizes {
     pub slop: f32,
     /// The least hit size of a part, in logical pixels; a thin handle or line is padded to it.
     pub target: f32,
-    /// The band inside a canvas's edge in which a tool that autoscrolls on hover (a Polygonal Lasso's rubber band)
-    /// scrolls the view.
+    /// The band inside the edge of a canvas's view in which a tool that autoscrolls on hover (a Polygonal Lasso's
+    /// rubber band) scrolls the view.
     pub edge: f32,
 }
 

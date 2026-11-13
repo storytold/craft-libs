@@ -221,7 +221,7 @@ struct HostState {
     space: Option<CanvasSpace>,
     /// The view a tool set while [`ToolHost::cancel`] ended its gesture outside a pass: the next pass reports it.
     cancelled_view: Option<CanvasView>,
-    /// The pass clock of the last pass that delivered input: an autoscroll moves by the time since.
+    /// The pass clock of the last pass that was not a measuring pass: an autoscroll moves by the time since.
     time: Option<f64>,
 }
 
