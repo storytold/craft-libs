@@ -418,6 +418,10 @@ impl Table {
 }
 
 impl Cell {
+    pub fn to_el(&self) -> El {
+        with_children(self.values.element("Cell"), &self.children)
+    }
+
     /// `Name`: `column:row` of the cell's top left (`2:0`).
     pub fn position(&self) -> Option<(u32, u32)> {
         let (c, r) = self.values.name()?.split_once(':')?;
