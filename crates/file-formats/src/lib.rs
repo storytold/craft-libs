@@ -459,6 +459,11 @@ pub fn detect(name: &str, bytes: &[u8]) -> Option<Format> {
     if bytes.starts_with(b"PDN3") {
         return Some(Format::Pdn);
     }
+    // OpenEXR's four-byte magic is its canonical signature (v2, section 2.1.1). Keep it in
+    // the shared registry so file-handle importers can route without relying on a filename.
+    if bytes.starts_with(&[0x76, 0x2f, 0x31, 0x01]) {
+        return Some(Format::OpenExr);
+    }
     if bytes.starts_with(b"gimp xcf ") || gzipped_xcf(name, bytes) {
         return Some(Format::Xcf);
     }
@@ -511,6 +516,9 @@ pub fn detect(name: &str, bytes: &[u8]) -> Option<Format> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests;
 
 /// DesignCraft's older ZIPs predate their leading `mimetype`; they are identified by the
 /// `document.json` member. The directory is bounded before it is indexed and no entry is inflated.
