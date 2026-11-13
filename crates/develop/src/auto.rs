@@ -22,6 +22,32 @@ pub struct AutoTone {
     pub saturation: f64,
 }
 
+impl AutoTone {
+    /// Writes these values to the sliders Auto sets (Exposure, Contrast, Highlights, Shadows, Whites, Blacks,
+    /// Vibrance, Saturation), leaving every other setting as it is.
+    pub fn apply(&self, s: &mut DevelopSettings) {
+        let l = &mut s.light;
+        (l.exposure, l.contrast, l.highlights, l.shadows, l.whites, l.blacks) =
+            (self.exposure, self.contrast, self.highlights, self.shadows, self.whites, self.blacks);
+        (s.color.vibrance, s.color.saturation) = (self.vibrance, self.saturation);
+    }
+}
+
+/// The white (temperature, tint) a white-balance `mode` gives `src`: the as-shot white, [`auto_wb`]'s, or a preset's
+/// (in Kelvin on a raw edited on the Kelvin scale, else relative to daylight: 6500 K is as shot). `Custom` keeps
+/// the as-shot white; the caller keeps its own values for it.
+pub fn white_balance_for(mode: craft_develop_model::WbMode, src: &Rgb32f, info: &SourceInfo) -> (f64, f64) {
+    use craft_develop_model::WbMode;
+    match mode {
+        WbMode::AsShot | WbMode::Custom => (info.as_shot_temp, info.as_shot_tint),
+        WbMode::Auto => auto_wb(src, info),
+        m => m
+            .preset()
+            .map(|(t, ti)| if info.raw && !info.relative_wb { (t, ti) } else { (6500.0 * t / 5500.0, ti) })
+            .unwrap_or((info.as_shot_temp, info.as_shot_tint)),
+    }
+}
+
 /// Exposure in EV that Auto adds per EV of the scene's log-average luminance (the slope is negative:
 /// darker scenes get more). The slope is Lightroom's: regressing the Exposure its Auto chose on 24
 /// raw photos against our own [`scene_log_mean`] of each gives -0.41 EV/EV (r = -0.92).
@@ -257,6 +283,36 @@ mod tests {
         crate::local::scene_linear_pre(&mut out, &SourceInfo::default(), &s);
         let c = out.get(0, 0);
         assert!((c[0] - c[2]).abs() < 0.02, "{c:?}");
+    }
+}
+
+#[cfg(test)]
+mod apply_tests {
+    use super::*;
+    use craft_develop_model::WbMode;
+
+    #[test]
+    fn auto_tone_applies_only_its_sliders() {
+        let a =
+            AutoTone { exposure: 0.5, contrast: 10.0, highlights: -20.0, shadows: 30.0, whites: 1.0, blacks: -2.0, vibrance: 5.0, saturation: 3.0 };
+        let mut s = DevelopSettings::default();
+        s.effects.clarity = 12.0;
+        a.apply(&mut s);
+        assert_eq!((s.light.exposure, s.light.shadows, s.color.vibrance, s.color.saturation), (0.5, 30.0, 5.0, 3.0));
+        assert_eq!(s.effects.clarity, 12.0);
+    }
+
+    #[test]
+    fn white_balance_modes_resolve_on_the_sources_scale() {
+        let img = Rgb32f::filled(8, 8, [0.18, 0.18, 0.18]);
+        let raw = SourceInfo { raw: true, as_shot_temp: 5100.0, as_shot_tint: 4.0, ..Default::default() };
+        assert_eq!(white_balance_for(WbMode::AsShot, &img, &raw), (5100.0, 4.0));
+        assert_eq!(white_balance_for(WbMode::Custom, &img, &raw), (5100.0, 4.0));
+        let daylight = WbMode::Daylight.preset().unwrap();
+        assert_eq!(white_balance_for(WbMode::Daylight, &img, &raw), daylight);
+        let rel = SourceInfo { relative_wb: true, ..raw.clone() };
+        assert!((white_balance_for(WbMode::Daylight, &img, &rel).0 - 6500.0 * daylight.0 / 5500.0).abs() < 1e-9);
+        assert_eq!(white_balance_for(WbMode::Auto, &img, &raw), auto_wb(&img, &raw));
     }
 }
 

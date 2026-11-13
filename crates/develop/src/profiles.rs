@@ -242,9 +242,72 @@ pub const LOOK_IDS: &[&str] = &[
     "lc.bw.sepia",
 ];
 
+/// A base profile as a panel lists it: its id, its English name and the group it is listed under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct ProfileInfo {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub group: &'static str,
+}
+
+/// Every base profile, in menu order: the identity `lc.color` and each of [`LOOK_IDS`], so an app's profile menu
+/// lists a look added here without a change of its own.
+pub const PROFILES: &[ProfileInfo] = &[
+    ProfileInfo { id: "lc.color", name: "Color", group: "Basic" },
+    ProfileInfo { id: "lc.neutral", name: "Neutral", group: "Basic" },
+    ProfileInfo { id: "lc.vivid", name: "Vivid", group: "Basic" },
+    ProfileInfo { id: "lc.landscape", name: "Landscape", group: "Basic" },
+    ProfileInfo { id: "lc.portrait", name: "Portrait", group: "Basic" },
+    ProfileInfo { id: "lc.mono", name: "Monochrome", group: "Basic" },
+    ProfileInfo { id: "lc.film.warm-print", name: "Warm Print", group: "Film" },
+    ProfileInfo { id: "lc.film.cool-fade", name: "Cool Fade", group: "Film" },
+    ProfileInfo { id: "lc.film.golden-hour", name: "Golden Hour", group: "Film" },
+    ProfileInfo { id: "lc.film.faded-slide", name: "Faded Slide", group: "Film" },
+    ProfileInfo { id: "lc.cine.teal-amber", name: "Teal & Amber", group: "Cinematic" },
+    ProfileInfo { id: "lc.cine.night-blue", name: "Night Blue", group: "Cinematic" },
+    ProfileInfo { id: "lc.cine.desert-heat", name: "Desert Heat", group: "Cinematic" },
+    ProfileInfo { id: "lc.cine.neon-dusk", name: "Neon Dusk", group: "Cinematic" },
+    ProfileInfo { id: "lc.muted.matte-soft", name: "Matte Soft", group: "Muted" },
+    ProfileInfo { id: "lc.muted.bleached", name: "Bleached", group: "Muted" },
+    ProfileInfo { id: "lc.muted.pastel-haze", name: "Pastel Haze", group: "Muted" },
+    ProfileInfo { id: "lc.muted.quiet-green", name: "Quiet Green", group: "Muted" },
+    ProfileInfo { id: "lc.bw.mono-rich", name: "Mono Rich", group: "B&W" },
+    ProfileInfo { id: "lc.bw.red-filter", name: "Mono Red Filter", group: "B&W" },
+    ProfileInfo { id: "lc.bw.soft", name: "Mono Soft", group: "B&W" },
+    ProfileInfo { id: "lc.bw.sepia", name: "Sepia Tone", group: "B&W" },
+];
+
+/// The groups of [`PROFILES`], in menu order.
+pub fn profile_groups() -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for p in PROFILES {
+        if !out.contains(&p.group) {
+            out.push(p.group);
+        }
+    }
+    out
+}
+
+/// A base profile by id.
+pub fn profile(id: &str) -> Option<&'static ProfileInfo> {
+    PROFILES.iter().find(|p| p.id == id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_profile_list_is_the_identity_and_every_look() {
+        let ids: Vec<&str> = PROFILES.iter().map(|p| p.id).collect();
+        let mut expected = vec!["lc.color"];
+        expected.extend_from_slice(LOOK_IDS);
+        assert_eq!(ids, expected);
+        assert!(PROFILES.iter().all(|p| !p.name.is_empty() && !p.group.is_empty()));
+        assert_eq!(profile_groups(), ["Basic", "Film", "Cinematic", "Muted", "B&W"]);
+        assert_eq!(profile("lc.vivid").map(|p| p.name), Some("Vivid"));
+        assert!(profile("nope").is_none());
+    }
 
     #[test]
     fn default_profile_is_borrowed_and_others_change_things() {
