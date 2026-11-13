@@ -2133,6 +2133,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn cell_width(&self, column: &craft_behavior::ColumnKey, width: f32)`. Reports, from the `Ideal` measure of a collection's item, the width its content in `column` takes unclipped,
   - `pub fn layout(&self, run: &TextRun<'_>) -> TextLayout`. Lays `run` out in the content's room, as `Draw::text` will paint it.
   - `pub fn layout_at(&self, run: &TextRun<'_>, width: f32) -> TextLayout`. Lays `run` out `width` wide, for a text that paints in a band narrower than the room.
+  - `pub fn least_width(&self, run: &TextRun<'_>) -> f32`. The width of `run`, a run that elides, at its readable least ([`TextRun::READABLE_CHARACTERS`]): the least
   - `pub fn field_text(&self, run: &TextRun<'_>) -> Vec2`. The room an editable text in a control sized by its text needs for `run`: the laid-out text and the caret the
   - `pub fn layout_doc(&self, text: &crate::primitives::DocText<'_>) -> TextLayout`. Lays document `text` out `text.wrap` wide, as `ContentPainterCx::layout` will paint it: the galley a content
   - `pub fn child<D: Show>(&self, key: impl Hash + Debug, child: &mut D, proposal: Proposal) -> Vec2`. Measures a child under the composite's resolved `enabled` and `size`, as `PaintUi::child` will show it.
@@ -2789,6 +2790,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
 - `craft_ui::primitives::TextOutcome`: `pub struct TextOutcome<V> { pub rect: Rect, pub draft: Option<String>, pub value: Option<V>, pub layout: Option<super::TextLayout>, pub caret_visible: bool, pub invalid: bool, pub committed_tag: Option<u32>, pub composing: bool, pub completions: Vec<super::Completion> }`. A text part's result this pass.
   - `pub const fn new(rect: Rect) -> Self`. An outcome over `rect` with no draft or value.
 - `craft_ui::primitives::TextRun`: `pub struct TextRun<'a> { pub spans: Vec<Span<'a>>, pub role: TypeRole, pub color: Option<StyleColor>, pub wrap: Wrap, pub ltr: bool, pub align: HAlign, pub rotation: f32 }`. The one description of UI text.
+  - `pub const READABLE_CHARACTERS: usize`. The characters a run that elides keeps before its ellipsis at its least, its readable least: a row narrows
   - `pub fn new(text: impl Into<Cow<'a, str>>) -> Self`. A one-span run in the label role.
   - `pub fn spans(spans: Vec<Span<'a>>) -> Self`. A run of `spans`.
   - `pub fn mnemonic(text: &'a str, at: Option<usize>) -> Self`. `text` with its character `at` underlined, as a mnemonic shows while it is in use; all of `text` plain when
