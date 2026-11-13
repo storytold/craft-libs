@@ -197,7 +197,7 @@ impl PaintUi<'_> {
         let at = LeafLabel { id, owner: self.id, parent: Some(self.id), row: rect, text: &label, side: &side, under: &under };
         let ctx = self.ui.ctx().clone();
         layout_memory::boundary(&ctx, true, || {
-            let placed = crate::layout::ColumnGroup::barrier(&mut *self.ui, |ui| label::leaf(ui, &env, &at, &mut child, None));
+            let placed = crate::layout::ColumnGroup::field(&mut *self.ui, |ui| label::leaf(ui, &env, &at, &mut child, None));
             let mut control = placed.control;
             if child.fills() != Some(craft_behavior::Axis::Y) {
                 let ideal = run::measure_under(&mut child, &*self.ui, Some(id), craft_behavior::Proposal::Ideal, Some(&under));

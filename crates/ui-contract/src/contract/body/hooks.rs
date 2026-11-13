@@ -1254,7 +1254,7 @@ impl BodyHooks<'_> {
         // measured width read a column narrower than the group's widest, the sweep is taken back and the content runs
         // once more with the group opened at the widths the first sweep found.
         if props.label_column {
-            let (unsettled, _) = layout_memory::draft(
+            let (unsettled, _) = crate::contract::draft(
                 &ctx,
                 || {
                     sweep(self, comp, cx);

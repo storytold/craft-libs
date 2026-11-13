@@ -112,7 +112,8 @@ pub(crate) struct Open(Vec<Frame>);
 enum Frame {
     /// A group: rows report their widths and read the widest this pass found. `beyond` is, per run of columns a row
     /// sits after (in order from the start edge), the widest the row reaches past them (see [`report_beyond`]).
-    /// `early`: per column, the narrowest width a row of a `sized` Through frame inside read in a measuring run.
+    /// `early`: per column, the narrowest width a row that shows at its measured width read in a measuring run: a
+    /// label column read by a row of a `sized` Through frame inside, any other column read by any row.
     /// `depth`: the measuring runs open when the group opened (`layout_memory::depth`).
     Group { id: Id, widest: Columns, beyond: HashMap<Vec<ColumnKey>, f32>, early: Columns, room: Option<f32>, depth: usize },
     /// A plain container's body in the group around it: its rows read and report that group's widths, as the rows
@@ -122,8 +123,9 @@ enum Frame {
     /// than the group's final one would stand in the real run; a held body shows across the column whatever it
     /// measured, and a body given its width takes the room.
     Through { id: Id, beyond: HashMap<Vec<ColumnKey>, f32>, room: f32, sized: bool },
-    /// A labelled container's body: the field's control. Its labels stay its own, so rows inside read no label
-    /// column; every other column (a content-sized number field's value and unit) they share with the group around.
+    /// A labelled container's body, or a component's label step for a child: the field's control. Its labels stay
+    /// its own, so rows inside read no label column; every other column (a content-sized number field's value and
+    /// unit) they share with the group around.
     Field,
     /// No group: rows inside read none, whatever group is open outside.
     Barrier,
@@ -237,14 +239,15 @@ impl ColumnGroup {
         (result, Scoped { extent, unsettled: early.then_some(widths) })
     }
 
-    /// Runs `rows` with no group open: a labelled row inside reads no column, whatever group is open outside. A
-    /// component's own label steps run in one, and the bodies that lay out apart from the group (`shared_labels`).
+    /// Runs `rows` with no group open: a labelled row inside reads no column, whatever group is open outside. The
+    /// bodies that lay out apart from the group run in one (`shared_labels`).
     pub fn barrier<R>(ui: &mut Ui, rows: impl FnOnce(&mut Ui) -> R) -> R {
         Self::framed(ui, Frame::Barrier, rows)
     }
 
-    /// Runs the `rows` of a labelled container's body: they read no label column, and share every other column with
-    /// the group around, so the values of content-sized fields line up across the group's fields.
+    /// Runs the `rows` of a labelled container's body, or a component's own label step for one of its children: they
+    /// read no label column, and share every other column with the group around, so the values of content-sized
+    /// fields line up across the group's fields.
     pub(crate) fn field<R>(ui: &mut Ui, rows: impl FnOnce(&mut Ui) -> R) -> R {
         Self::framed(ui, Frame::Field, rows)
     }
@@ -308,16 +311,15 @@ impl ColumnGroup {
 pub fn ambient_width(ctx: &Context, column: &ColumnKey, content: f32) -> Option<f32> {
     let (group, _) = pass_state::with::<Open, _>(ctx, |open| open.innermost(std::slice::from_ref(column)))?;
     let width = shared_width(ctx, group, column, content);
-    // A row of a body that shows at its measured width reads the column into that measure: the group notes how
-    // narrow, so its scope can tell the measure from one at its final width. A field's control read through its
-    // body is such a row: it shows at the width it measured.
+    // A row that shows at its measured width reads the column into that measure: the group notes how narrow, so its
+    // scope can tell the measure from one at its final width. A row of a `sized` body is such a row, and so is every
+    // reader of a column other than a label one: its own width holds the column (a field's value and unit).
     if crate::runtime::measure::active(ctx) {
         pass_state::with::<Open, _>(ctx, |open| {
-            let mut sized = false;
+            let mut sized = !labels(column);
             for frame in open.0.iter_mut().rev() {
                 match frame {
                     Frame::Through { sized: through, .. } => sized |= *through,
-                    Frame::Field => sized = true,
                     Frame::Group { id, early, .. } if *id == group => {
                         if sized {
                             let read = early.entry(column.clone()).or_insert(width);

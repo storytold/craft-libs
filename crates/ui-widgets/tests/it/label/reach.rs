@@ -5,12 +5,12 @@
 use super::group::Group;
 use super::kit::{Dial, Seen};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, ContainerProps, LabelScheme, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
+use craft_ui::contract::{Bind, ContainerProps, Entry, LabelScheme, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::env::UnitKind;
 use craft_ui::testing::{Fixture, Frames, last_pass_measuring_runs, trial};
-use craft_ui::text::NumberField;
+use craft_ui::text::{NumberField, NumberPick};
 use egui::Rect;
 use std::cell::RefCell;
 
@@ -159,11 +159,13 @@ fn content_sized_fields_line_up_their_values_and_units_across_a_group() {
 }
 
 /// A field that measured before a wider value of a later field in its group shows at the group's width, and a
-/// content-sized row around it makes room: the member after the row's stack starts clear of both fields, and a
-/// settled frame measures nothing again.
+/// content-sized row around it makes room: the member after the row's stack starts clear of both fields. A field
+/// directly in a content-sized group, with a presets chevron after its value, stays inside the group when a later
+/// field's value is wider. A settled frame measures nothing again.
 #[trial]
 fn a_field_before_the_groups_widest_value_shows_at_its_width() {
-    let mut fixture = Fixture::new(|ui| {
+    let presets = [Entry::new(NumberPick::Number(25.0), "25")];
+    let mut fixture = Fixture::new(move |ui| {
         FieldGroup::new("Channels").show(ui, |ui, _| {
             Row::new().show(ui, |ui, _| {
                 Stack::new().show(ui, |ui, _| {
@@ -173,12 +175,21 @@ fn a_field_before_the_groups_widest_value_shows_at_its_width() {
                 Button::new("Link").show(ui);
             });
         });
+        Row::new().show(ui, |ui, _| {
+            FieldGroup::new("View").show(ui, |ui, _| {
+                NumberField::new("Zoom", Bind::given(Some(8.0))).range(0.0..=100.0).sizing(Sizing::Content).presets(&presets).show(ui);
+                NumberField::new("Offset", Bind::given(Some(8.0))).range(-1_280_000.0..=1_270_000.0).sizing(Sizing::Content).show(ui);
+            });
+            Button::new("Fit").show(ui);
+        });
     });
     fixture.settle();
     let (first, wide) = (control(&fixture, "L"), control(&fixture, "a"));
     assert!((first.max.x - wide.max.x).abs() <= SLACK, "the first field takes the later field's width: {first:?} {wide:?}");
     let link = fixture.by_label("Link").expect("the link button is shown").rect;
     assert!(link.min.x >= wide.max.x - SLACK, "the row's next member starts clear of the fields: {link:?} {wide:?}");
+    let (group, zoom) = (fixture.by_label("View").expect("the group is shown").rect, control(&fixture, "Zoom"));
+    assert!(zoom.max.x <= group.max.x + SLACK, "the field with a chevron stays inside its group: {zoom:?} {group:?}");
     fixture.frame(vec![]);
     let runs = last_pass_measuring_runs(fixture.ctx());
     assert!(runs.is_empty(), "a settled frame takes the kept measurements: {runs:?}");
