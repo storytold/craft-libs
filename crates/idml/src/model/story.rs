@@ -308,12 +308,18 @@ pub struct TableColumn {
 
 impl TableLayout {
     pub fn from_el(el: &El) -> TableLayout {
+        Self::from_table(&Table::from_el(el))
+    }
+
+    pub fn from_table(table: &Table) -> TableLayout {
         let mut layout = TableLayout::default();
-        for child in el.elements() {
-            match child.local() {
-                "Row" => layout.rows.push(TableRow { values: Values::of(child) }),
-                "Column" => layout.columns.push(TableColumn { values: Values::of(child) }),
-                _ => {}
+        for child in &table.children {
+            if let TableChild::Other(element) = child {
+                match element.local() {
+                    "Row" => layout.rows.push(TableRow { values: Values::of(element) }),
+                    "Column" => layout.columns.push(TableColumn { values: Values::of(element) }),
+                    _ => {}
+                }
             }
         }
         layout
@@ -366,6 +372,7 @@ pub struct CellOptions {
     pub minimum_first_baseline_offset: Option<f64>,
     pub rotation_angle: Option<f64>,
     pub edge_stroke_priorities: [i32; 4],
+    pub edge_strokes: [super::StrokeValues; 4],
 }
 
 /// The children of `el` other than `<Properties>`, as text nodes.
@@ -712,6 +719,7 @@ impl Cell {
             minimum_first_baseline_offset: self.values.num("MinimumFirstBaselineOffset"),
             rotation_angle: self.values.num("RotationAngle"),
             edge_stroke_priorities: [priority("TopEdge"), priority("LeftEdge"), priority("BottomEdge"), priority("RightEdge")],
+            edge_strokes: ["TopEdge", "LeftEdge", "BottomEdge", "RightEdge"].map(|side| self.values.stroke_values(side)),
         }
     }
 
