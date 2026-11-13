@@ -818,7 +818,7 @@ mod tests {
     }
 
     #[test]
-    fn lossless_and_twelve_bit_progressive_are_unsupported_not_damaged() {
+    fn lossless_is_unsupported_and_twelve_bit_progressive_decodes() {
         for marker in [0xC3, 0xC2] {
             let bytes = if marker == 0xC2 {
                 // Use a valid progressive DC scan so this exercises unsupported
@@ -843,8 +843,15 @@ mod tests {
                 bytes.extend_from_slice(&[0xFF, 0xDA, 0, 8, 1, 1, 0, 0, 0x3F, 0, 0x12, 0x34, 0xFF, 0xD9]);
                 bytes
             };
-            let e = crate::decode(&bytes).unwrap_err();
-            assert!(matches!(e, CodecError::Unsupported { .. }), "{marker:#x}: {e:?}");
+            if marker == 0xC2 {
+                // craft-jpeg supports 12-bit progressive Huffman frames; keep the facade's
+                // routing contract aligned with the decoder rather than rejecting valid input.
+                let image = crate::decode(&bytes).unwrap();
+                assert_eq!((image.dimensions(), image.sample_type(), image.layout()), ((8, 8), SampleType::U16, ChannelLayout::Gray));
+            } else {
+                let error = crate::decode(&bytes).unwrap_err();
+                assert!(matches!(error, CodecError::Unsupported { .. }), "{marker:#x}: {error:?}");
+            }
         }
     }
 
