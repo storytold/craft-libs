@@ -155,6 +155,9 @@ pub struct Updater {
     /// The newest release offered while `offered` was still being inspected; it is inspected
     /// next, in place of the earlier one.
     next_offer: Option<Release>,
+    /// An installation failed while `offered` was still being inspected: its answer opens no
+    /// prompt over the one that says why the installation failed.
+    offer_outdated: bool,
     /// The app's context, from the first frame or check that passed it, so that the offer's
     /// thread can ask for a frame once it has answered.
     repaint: Option<egui::Context>,
@@ -205,6 +208,7 @@ impl Updater {
             check: None,
             offered: None,
             next_offer: None,
+            offer_outdated: false,
             repaint: None,
             probe: None,
             installing_itself: false,
@@ -360,12 +364,18 @@ impl Updater {
     /// prompt says why it failed, like the one a check opens. An offer sets [`Self::status`] to
     /// [`Status::Idle`] when it is made, and a requested check that answers afterwards reports as
     /// usual. A later offer replaces one that has not opened yet; while an inspection runs, only
-    /// the newest offer waits for the next one, so one thread at most reads the files.
+    /// the newest offer waits for the next one, so one thread at most reads the files. An offer
+    /// closes the prompt for an earlier release, which calls off a Save and Update that has not
+    /// started its installation yet. An offer still being inspected when an installation fails
+    /// opens no prompt.
     pub fn offer(&mut self, release: Release) {
         if self.install.is_some() || self.installed || self.read_choice() {
             return;
         }
         self.status = Status::Idle;
+        // The prompt for an earlier release closes while this one is inspected: nothing installs
+        // the earlier release from it, and a save it asked for installs nothing.
+        self.prompt = None;
         if self.offered.is_some() {
             self.next_offer = Some(release);
             return;
@@ -375,6 +385,7 @@ impl Updater {
 
     /// Starts the thread that reads whether this copy can install the offered `release` itself.
     fn inspect_offer(&mut self, release: Release) {
+        self.offer_outdated = false;
         let (tx, rx) = channel();
         let (probe, app, repaint) = (self.probe.clone(), self.app, self.repaint.clone());
         // Kept for the prompt in case the thread cannot start.
@@ -599,8 +610,10 @@ impl Updater {
             };
             if let Some((release, installs_itself)) = answer {
                 self.offered = None;
-                // A newer offer replaces this one before its prompt opens.
-                if self.next_offer.is_none() {
+                // A newer offer replaces this one before its prompt opens, and an installation
+                // that failed meanwhile keeps its own prompt.
+                let outdated = std::mem::take(&mut self.offer_outdated);
+                if self.next_offer.is_none() && !outdated {
                     self.finish_offer(release, installs_itself);
                 }
             }
@@ -647,6 +660,12 @@ impl Updater {
                         if matches!(self.status, Status::Installing) {
                             self.status = Status::Idle;
                         }
+                        // An offer made before the installation started, still being inspected or
+                        // waiting for it, would replace the prompt that says why: it opens nothing.
+                        if self.offered.is_some() {
+                            self.offer_outdated = true;
+                        }
+                        self.next_offer = None;
                         // The prompt may have been dismissed meanwhile: bring it back with the reason.
                         if self.prompt.is_none()
                             && let Some(release) = release
@@ -1266,6 +1285,37 @@ mod tests {
         assert!(!u.prompt_open());
     }
 
+    /// An installation that fails while an offer made before it is still inspected keeps the
+    /// prompt that says why: the offer's answer, and an offer waiting for it, open nothing.
+    #[test]
+    fn an_offer_answering_after_a_failed_install_keeps_the_failure() {
+        let ctx = egui::Context::default();
+        let (seen_tx, seen) = channel();
+        let (resume, resumed) = channel::<()>();
+        let resumed = Mutex::new(resumed);
+        let mut u = updater(Ok(None)).with_probe(Arc::new(move |_: &'static App, _: &Release| {
+            let _ = seen_tx.send(());
+            let _ = resumed.lock().unwrap_or_else(PoisonError::into_inner).recv();
+            true
+        }));
+        u.offer(newer());
+        assert!(seen.recv().is_ok(), "the offer is being inspected");
+        u.offer(Release { tag: "v9.0.2".into(), ..newer() });
+        let (tx, rx) = channel();
+        u.install = Some((rx, newer()));
+        assert!(tx.send(Err("disk full".into())).is_ok());
+        u.tick(&ctx);
+        assert_eq!(prompt_message(&u), "disk full");
+        for _ in 0..2 {
+            assert!(resume.send(()).is_ok());
+        }
+        settle_offer(&mut u);
+        assert_eq!(prompt_message(&u), "disk full", "the failure's prompt stays open");
+        u.offer(newer());
+        settle_offer(&mut u);
+        assert_eq!(prompt_message(&u), "", "a later offer opens its own prompt");
+    }
+
     #[test]
     fn a_failed_install_returns_to_the_prompt_even_after_it_was_dismissed() {
         let ctx = egui::Context::default();
@@ -1625,6 +1675,40 @@ mod tests {
         assert!(u.prompt.as_ref().is_some_and(|p| !p.is_installing));
         assert_eq!(prompt_message(&u), "");
         assert!(!u.take_save_request());
+    }
+
+    /// A save that ends while a newer offer is still inspected installs nothing either: the save
+    /// was asked for the earlier release.
+    #[test]
+    fn a_save_ending_while_a_new_offer_is_inspected_installs_nothing() {
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        offer_now(&mut u);
+        click_save(&mut u, &ctx);
+        assert!(u.take_save_request());
+        u.offer(newer());
+        assert!(!u.prompt_open(), "the earlier release's prompt closes while the new one is inspected");
+        frame_saving(&mut u, &ctx, true, false, Vec::new());
+        assert!(u.install.is_none());
+        settle_offer(&mut u);
+        assert!(u.prompt.as_ref().is_some_and(|p| !p.is_installing && !p.is_saving));
+        assert_eq!(prompt_message(&u), "", "{}", prompt_message(&u));
+        assert!(u.install.is_none());
+    }
+
+    /// The prompt for an earlier release cannot install it while a newer offer is inspected.
+    #[test]
+    fn a_new_offer_closes_the_prompt_for_the_earlier_release() {
+        let ctx = egui::Context::default();
+        let mut u = updater(Ok(None));
+        offer_now(&mut u);
+        self_updating(&mut u);
+        u.offer(Release { tag: "v9.0.2".into(), ..newer() });
+        u.request_install(&ctx, true);
+        assert!(!u.prompt_open(), "nothing is left to click for the earlier release");
+        assert!(u.install.is_none());
+        settle_offer(&mut u);
+        assert_eq!(u.prompt.as_ref().map(|p| p.release.tag.as_str()), Some("v9.0.2"));
     }
 
     /// The button only shows with unsaved work, in an app that can save it. `show_if` never offers it.
