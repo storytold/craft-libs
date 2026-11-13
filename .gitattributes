@@ -1,2 +1,10 @@
+# Font-build test fixtures are compared byte for byte: a checkout must not convert them.
+crates/fonts-build/tests/fixture/** -text
+
+# The pinned font index is hashed and compiled in as committed: a checkout must not convert its
+# line endings, or `Index::bundled` fails its checksum on Windows.
+crates/font-store/index/sources.json -text
+crates/font-store/index/indexes/*.gz binary
+
 # Copies of the vendored krilla source diff, one per patch (see vendor/krilla/README.craft.md).
 vendor/krilla/patches/*.patch linguist-generated=true
