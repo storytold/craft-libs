@@ -181,7 +181,7 @@ pub fn classify_tone(bytes: &[u8]) -> Option<ToneClass> {
         let rgba = decoded.convert(ChannelLayout::Rgba, SampleType::U8);
         let mut opaque = true;
         let mut two_level = true;
-        for p in rgba.data().chunks_exact(4) {
+        for p in rgba.data().as_chunks::<4>().0 {
             match p[3] {
                 0 => opaque = false,
                 255 if p[0] == p[1] && p[1] == p[2] => two_level &= p[0] == 0 || p[0] == 255,
