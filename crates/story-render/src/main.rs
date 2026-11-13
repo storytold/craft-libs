@@ -74,8 +74,18 @@ struct Options {
 fn options() -> Result<Options, String> {
     let mut args = std::env::args().skip(1);
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(8);
-    let mut options =
-        Options { out: PathBuf::new(), only: None, story: None, threads, width: WIDTH, room: ROOM, scale: PIXELS_PER_POINT, card: false, theme: String::new(), mode: "dark".to_owned() };
+    let mut options = Options {
+        out: PathBuf::new(),
+        only: None,
+        story: None,
+        threads,
+        width: WIDTH,
+        room: ROOM,
+        scale: PIXELS_PER_POINT,
+        card: false,
+        theme: String::new(),
+        mode: "dark".to_owned(),
+    };
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{arg} needs a value"));
         match arg.as_str() {

@@ -145,12 +145,11 @@ fn the_slider_modes_show_a_channel_on_one_line() {
         assert_eq!((sliders.len(), fields.len()), (channels, channels), "{case}");
         for (slider, field) in sliders.iter().zip(&fields) {
             let line = slider.rect.y_range();
-            assert!(line.contains(field.rect.center().y) && slider.rect.right() <= field.rect.left(), "{case}: {slider:?} then {field:?} on one line");
             assert!(
-                (slider.rect.left() - sliders[0].rect.left()).abs() < 0.5,
-                "{case}: the sliders start at one x ({slider:?}, {:?})",
-                sliders[0]
+                line.contains(field.rect.center().y) && slider.rect.right() <= field.rect.left(),
+                "{case}: {slider:?} then {field:?} on one line"
             );
+            assert!((slider.rect.left() - sliders[0].rect.left()).abs() < 0.5, "{case}: the sliders start at one x ({slider:?}, {:?})", sliders[0]);
             assert!(field.rect.bottom() <= room.y + 0.5, "{case}: every row in view ({field:?})");
         }
         let last = fields.iter().map(|field| field.rect.bottom()).fold(0.0, f32::max);
