@@ -509,17 +509,18 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'
         }
     };
     used.bytes.fetch_add(text.len(), Ordering::Relaxed);
-    let xml = match checked(&text, limits) {
-        Ok(xml) => xml,
+    let checked = match preflight(&text, limits) {
+        Ok(checked) => checked,
+        Err(Error::TooDeep(_)) => {
+            used.svg_limit.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
         Err(_) => {
             used.invalid_svg.fetch_add(1, Ordering::Relaxed);
             return None;
         }
     };
-    let Some(xml_depth) = height(&xml, limits.tree_depth).ok().flatten() else {
-        used.svg_limit.fetch_add(1, Ordering::Relaxed);
-        return None;
-    };
+    let xml_depth = checked.depth();
     let total_depth = used.xml_depth.load(Ordering::Relaxed).checked_add(xml_depth);
     let Some(total_depth) = total_depth.filter(|depth| *depth <= limits.tree_depth) else {
         used.svg_limit.fetch_add(1, Ordering::Relaxed);
@@ -528,7 +529,7 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'
     let previous_depth = used.xml_depth.swap(total_depth, Ordering::Relaxed);
     let depth = used.depth.fetch_add(1, Ordering::Relaxed).saturating_add(1);
     used.svg_depth.fetch_max(depth, Ordering::Relaxed);
-    let tree = usvg::Tree::from_xmltree(&xml, options);
+    let tree = checked.parse(options);
     used.xml_depth.store(previous_depth, Ordering::Relaxed);
     used.depth.fetch_sub(1, Ordering::Relaxed);
     match tree {
