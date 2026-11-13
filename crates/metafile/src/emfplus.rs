@@ -27,7 +27,7 @@
 use std::sync::Arc;
 
 use crate::bytes::Bytes;
-use crate::canvas::{BS_NULL, BS_SOLID, Brush, Canvas, LogFont, PS_NULL, Pen, RawTile, Xform, hatch_tile, mul};
+use crate::canvas::{BS_NULL, BS_SOLID, Brush, Canvas, LogFont, PS_NULL, Pen, RawTile, Xform, emfplus_hatch_tile, mul};
 use crate::canvas::{Raw, RawClip};
 use crate::cliprect::{MAX_AREA_CLIP_WORK, clip_polygon_within, convex, flatten, ops_bbox, pts_bbox, rect_poly};
 use crate::dib::Rgba;
@@ -845,9 +845,11 @@ impl Painter {
                 cv.set_brush(Brush::new(BS_SOLID, *c));
                 cv.shape(ops.to_vec(), true, false);
             }
-            Fill::Hatch { style, fg, bg } => match hatch_tile(*style, *fg, Some(*bg)) {
+            Fill::Hatch { style, fg, bg } => match emfplus_hatch_tile(*style, *fg, Some(*bg)) {
                 Some(px) => cv.tile_shape(ops, Arc::new(RawTile { w: 8, h: 8, px, cell: cv.pattern_px })),
-                // GDI+ has many more hatch styles than GDI: those fill with the blend of both colours.
+                // Percentage styles are tiled above. The remaining GDI+ hatch styles have no tile
+                // mapping yet, so keep the existing blended-colour fallback instead of inventing
+                // a pattern that could disagree with the file.
                 None => {
                     cv.set_brush(Brush::new(BS_SOLID, lerp(*fg, *bg, 0.5)));
                     cv.shape(ops.to_vec(), true, false);

@@ -8,10 +8,10 @@ fn scenes() -> Vec<Scene> {
     scene::load_dir(&scene::scenes_dir()).unwrap()
 }
 
-/// On CI (`CI` set) the workflow provisions the font, so a scene that left text out fails.
-/// Local runs without the font skip text and only note it.
+/// When the licensed fixture directory is configured, every scene must write its text.
+/// Workflows that do not provision those fixtures can still validate scenes without text.
 fn text_must_be_written() -> bool {
-    std::env::var_os("CI").is_some_and(|v| !v.is_empty() && v != "false")
+    std::env::var_os(reference::FONT_DIR_ENV).is_some_and(|v| !v.is_empty())
 }
 
 fn missing_font(scene: &Scene) -> String {
