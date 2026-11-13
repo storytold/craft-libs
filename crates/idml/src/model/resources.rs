@@ -67,6 +67,47 @@ pub struct ParagraphBoxValues {
     pub shading_corners: Option<[(String, f64); 4]>,
 }
 
+/// CJK paragraph composition settings read from an IDML style or text range.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CjkParagraphValues {
+    pub kinsoku_hang: Option<String>,
+    pub mojikumi: Option<String>,
+    pub kinsoku_type: Option<String>,
+    pub bunri_kinshi: Option<bool>,
+    pub rensuuji: Option<bool>,
+    pub treat_ideographic_space_as_space: Option<bool>,
+    pub kinsoku_set: Option<String>,
+    pub auto_tcy: Option<f64>,
+    pub auto_tcy_include_roman: Option<bool>,
+    pub rotate_single_byte_characters: Option<bool>,
+    pub allow_arbitrary_hyphenation: Option<bool>,
+    pub grid_gyoudori: Option<f64>,
+    pub paragraph_gyoudori: Option<bool>,
+}
+
+impl CjkParagraphValues {
+    /// Reads CJK paragraph composition properties from IDML.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        let bounded_count = |key: &str| values.num(key).map(|value| value.clamp(0.0, 1000.0));
+        Self {
+            kinsoku_hang: values.prop("KinsokuHangType"),
+            mojikumi: values.prop("Mojikumi"),
+            kinsoku_type: values.prop("KinsokuType"),
+            bunri_kinshi: values.boolean("BunriKinshi"),
+            rensuuji: values.boolean("Rensuuji"),
+            treat_ideographic_space_as_space: values.boolean("TreatIdeographicSpaceAsSpace"),
+            kinsoku_set: values.prop("KinsokuSet"),
+            auto_tcy: bounded_count("AutoTcy"),
+            auto_tcy_include_roman: values.boolean("AutoTcyIncludeRoman"),
+            rotate_single_byte_characters: values.boolean("RotateSingleByteCharacters"),
+            allow_arbitrary_hyphenation: values.boolean("AllowArbitraryHyphenation"),
+            grid_gyoudori: bounded_count("GridGyoudori"),
+            paragraph_gyoudori: values.boolean("ParagraphGyoudori"),
+        }
+    }
+}
+
 /// Paragraph alignment, spacing, drop cap, baseline grid and composer values after the caller
 /// maps application semantics to IDML enumerations.
 #[derive(Clone, Debug, Default, PartialEq)]
