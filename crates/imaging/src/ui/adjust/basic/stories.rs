@@ -4,10 +4,12 @@ use super::{
     BrightnessContrast, BrightnessContrastEditor, ColorBalance, ColorBalanceEditor, ColorBalanceTone, PhotoFilter, PhotoFilterEditor,
     PhotoFilterPreset, ThresholdEditor,
 };
+use crate::ui::adjust::HostedAdjustDialog;
 use crate::ui::curve::stories::story_bins;
 use crate::ui::histogram::{ChannelColor, HistogramData};
 use craft_theme::Srgba;
 use craft_ui::contract::Bind;
+use craft_ui::dialog::stories::hosted;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
@@ -15,6 +17,18 @@ use egui::Ui;
 fn brightness_contrast(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let value = data.value("value", BrightnessContrast { brightness: 20.0, contrast: -10.0, legacy: false });
     BrightnessContrastEditor::new("Brightness/Contrast", Bind::bound(value)).show(ui).into()
+}
+
+/// The editor in its Image › Adjustments dialog, opened from a button.
+#[story(BrightnessContrastEditor<'static>, covers = [], drive = Drive::Never, title = "In its dialog")]
+fn brightness_contrast_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let value = BrightnessContrast { brightness: 20.0, contrast: -10.0, legacy: false };
+    hosted(ui, data, || {
+        HostedAdjustDialog::new("image.adjustments.brightnessContrast", "Brightness/Contrast", value, |ui, value, cx| {
+            BrightnessContrastEditor::new("Brightness/Contrast", value).context(cx).show(ui);
+            None::<()>
+        })
+    })
 }
 
 /// The image's histogram with the marker at the level.

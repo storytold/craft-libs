@@ -8,6 +8,7 @@ mod curve;
 mod fill;
 mod filter_gallery;
 mod histogram;
+mod hosted_dialogs;
 mod layer_style;
 mod liquify;
 mod live_preview;

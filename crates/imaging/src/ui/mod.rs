@@ -49,9 +49,9 @@ pub mod wide_angle;
 pub use adjust::{
     AdjustContext, AdjustField, AdjustSession, AdjustSliders, AdjustTrack, AdjustWords, BlackWhite, BlackWhiteEditor, BrightnessContrast,
     BrightnessContrastEditor, ChannelMixer, ChannelMixerEditor, ColorBalance, ColorBalanceEditor, CurvesMode, CurvesPanel, CurvesPanelOutput,
-    HueSaturation, HueSaturationEditor, Levels, LevelsClip, LevelsEditor, LevelsEditorOutput, LevelsPanel, LevelsPanelOutput, LevelsWords,
-    PhotoFilter, PhotoFilterEditor, SelectiveColor, SelectiveColorEditor, ThresholdEditor, ToneCurves, TonePick, TonePickTool, TonePicker,
-    TonePickerRow, TonePickerRowOutput,
+    HostedAdjustDialog, HueSaturation, HueSaturationEditor, Levels, LevelsClip, LevelsEditor, LevelsEditorOutput, LevelsPanel, LevelsPanelOutput,
+    LevelsWords, PhotoFilter, PhotoFilterEditor, SelectiveColor, SelectiveColorEditor, ThresholdEditor, ToneCurves, TonePick, TonePickTool,
+    TonePicker, TonePickerRow, TonePickerRowOutput,
 };
 pub use blend_keys::{BlendKeyEntry, BlendKeyPick, BlendKeys, BlendShortcut, BlendStep};
 pub use blur_pins::{
@@ -76,7 +76,8 @@ pub use histogram::{
     PlotHeight, StaleMark,
 };
 pub use layer_style::{
-    BlendIfBar, BlendIfWords, ContourField, ContourFieldOutput, ContourWords, LayerStyleDialog, LayerStyleOutput, LayerStyleWords, StylePresets,
+    BlendIfBar, BlendIfWords, ContourField, ContourFieldOutput, ContourWords, HostedLayerStyle, LayerStyleAsk, LayerStyleDialog, LayerStyleOutput,
+    LayerStyleWords, StylePresets,
 };
 pub use liquify::{
     LiquifyCommands, LiquifyEvent, LiquifyOpen, LiquifyOutput, LiquifyPanel, LiquifyPanelOutput, LiquifySession, LiquifySettings, LiquifySource,

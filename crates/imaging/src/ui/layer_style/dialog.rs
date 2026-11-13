@@ -190,6 +190,12 @@ impl<'a> LayerStyleDialog<'a> {
         self
     }
 
+    /// [`sampler`](Self::sampler) as the host keeps it: `None` for the default.
+    pub(super) fn shared_sampler(mut self, sampler: Option<SharedSampler>) -> Self {
+        self.sampler = sampler;
+        self
+    }
+
     /// The Styles page's presets; without them the page shows only New Style….
     pub fn style_presets(mut self, presets: StylePresets<'a>) -> Self {
         self.style_presets = Some(presets);

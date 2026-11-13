@@ -16,10 +16,10 @@ use craft_behavior::PixelSize;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-pub use as_dialog::{ExportAsDialog, ExportAsOutput};
+pub use as_dialog::{ExportAsDialog, ExportAsOutput, HostedExportAs};
 pub use options::{
-    DdsCompression, DdsOptions, ExportOptionsKind, FormatOptions, FormatOptionsDialog, FormatOptionsOutput, FormatOptionsWords, JpegFormat,
-    JpegOptions, JpegPreset, TargaOptions, TiffOptions, jpeg_quality_percent,
+    DdsCompression, DdsOptions, ExportOptionsKind, FormatOptions, FormatOptionsDialog, FormatOptionsOutput, FormatOptionsWords, HostedFormatOptions,
+    JpegFormat, JpegOptions, JpegPreset, TargaOptions, TiffOptions, jpeg_quality_percent,
 };
 pub use path_row::{OutputPathOutput, OutputPathRow, OutputPathWords};
 

@@ -26,6 +26,7 @@ mod blend_if;
 mod blending;
 mod contour;
 mod dialog;
+mod hosted;
 mod labels;
 mod list;
 mod page;
@@ -39,6 +40,7 @@ pub use contour::{
     to_curve,
 };
 pub use dialog::{LayerStyleDialog, LayerStyleOutput};
+pub use hosted::{HostedLayerStyle, LayerStyleAsk};
 pub use labels::LayerStyleWords;
 pub use list::LayerStyleCommand;
 pub use styles::StylePresets;

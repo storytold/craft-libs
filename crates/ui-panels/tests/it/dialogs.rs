@@ -1,6 +1,6 @@
 //! The dialog host and stack.
 
-use craft_ui::dialog::{DialogHost, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft_ui::dialog::{Alert, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, StackDialog, dialog_id};
 use craft_ui::testing::{Frames, trial};
 use egui::Ui;
 
@@ -53,4 +53,19 @@ fn cancelling_a_parent_cancels_its_children() {
     assert!(host.is_empty() && host.stack().is_empty());
     assert_eq!(host.take::<Probe<1>>(), Some(DialogResult::Cancel));
     assert_eq!(host.take::<Probe<2>>(), Some(DialogResult::Cancel));
+}
+
+#[trial]
+fn a_hosted_alert_answers_ok_however_it_closes_and_opens_again() {
+    let host = std::rc::Rc::new(std::cell::RefCell::new(DialogHost::new()));
+    let shown = std::rc::Rc::clone(&host);
+    let mut fixture = craft_ui::testing::Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    for key in [egui::Key::Enter, egui::Key::Escape] {
+        host.borrow_mut().open(HostedAlert::new(Alert::new("Could not open", "The file is damaged.")));
+        fixture.idle(6);
+        assert!(fixture.by_label("Could not open").is_some(), "the alert shows on the host before {key:?}");
+        fixture.key(key, egui::Modifiers::NONE).idle(4);
+        assert!(host.borrow().is_empty(), "{key:?} closes the alert");
+        assert_eq!(host.borrow_mut().take::<HostedAlert>(), Some(DialogResult::Ok(())), "{key:?} answers OK");
+    }
 }

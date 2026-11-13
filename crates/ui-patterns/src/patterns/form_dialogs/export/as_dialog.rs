@@ -6,6 +6,7 @@ use super::{
     ExportAsResult, ExportFormat, ExportFormatDefaults, ExportMetadata, ExportOptions, ExportPreview, ExportProfile, ExportSize, ExportWords,
     SizeEstimate, export_file_name, size_error_label,
 };
+use crate::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use crate::runtime::requests::{HostAnswer, PathFilter, PathRequest};
 
 use crate::choice::Checkbox;
@@ -226,6 +227,142 @@ impl<'a> ExportAsDialog<'a> {
         }
         let result = accepted.zip(answered.into_inner()).map(|(options, path)| ExportAsResult { size: options.output_size(source), options, path });
         ExportAsOutput { response, closed, result, wanted_preview: wanted.into_inner(), requests }
+    }
+}
+
+/// An [`ExportAsDialog`] the [`DialogHost`](crate::dialog::DialogHost) owns. It keeps the settings and the app's
+/// preview, keeps the preview and save requests until the app takes them, and finishes with the result when the save
+/// dialog's path comes back.
+///
+/// ```ignore
+/// host.open(HostedExportAs::new("poster", PixelSize::new(1200, 800), ExportOptions::default()));
+/// // each pass: wanted_preview() -> encode -> set_preview(preview);
+/// // pick_path() -> file dialog -> answer_path(key, path), or cancel_requests() when the user cancels it
+/// ```
+pub struct HostedExportAs {
+    id: DialogId,
+    file_name: String,
+    source: PixelSize,
+    options: ExportOptions,
+    formats: Vec<ExportFormat>,
+    defaults: ExportFormatDefaults,
+    preview: Option<ExportPreview>,
+    wanted: Option<PreviewRequest<ExportOptions>>,
+    requests: HostRequests,
+    saving: bool,
+    open: bool,
+}
+
+impl HostedExportAs {
+    /// A hosted dialog for the document named `file_name` (no extension) of size `source`, opening with `options`.
+    pub fn new(file_name: impl Into<String>, source: PixelSize, options: ExportOptions) -> Self {
+        HostedExportAs {
+            id: dialog_id(EXPORT_KEY),
+            file_name: file_name.into(),
+            source,
+            options,
+            formats: ExportFormat::standard(),
+            defaults: ExportFormatDefaults::default(),
+            preview: None,
+            wanted: None,
+            requests: HostRequests::new(),
+            saving: false,
+            open: true,
+        }
+    }
+
+    /// The formats the list offers.
+    #[must_use]
+    pub fn formats(mut self, formats: Vec<ExportFormat>) -> Self {
+        self.formats = formats;
+        self
+    }
+
+    /// The quality and WebP mode a format takes when the user switches to it.
+    #[must_use]
+    pub fn defaults(mut self, defaults: ExportFormatDefaults) -> Self {
+        self.defaults = defaults;
+        self
+    }
+
+    /// The settings the dialog shows.
+    pub fn options(&self) -> &ExportOptions {
+        &self.options
+    }
+
+    /// The preview to make, when the settings changed since the last call. Returned once.
+    pub fn wanted_preview(&mut self) -> Option<PreviewRequest<ExportOptions>> {
+        self.wanted.take()
+    }
+
+    /// The app's preview and estimate; the dialog shows it unless a newer revision was asked for.
+    pub fn set_preview(&mut self, preview: ExportPreview) {
+        self.preview = Some(preview);
+    }
+
+    /// Export was pressed in the pass since the last call: the save dialog to open. Returned once; answer with
+    /// [`answer_path`](Self::answer_path).
+    pub fn pick_path(&mut self) -> Option<PathRequest> {
+        self.requests.take_path()
+    }
+
+    /// Answers the save request `key` with the chosen path, which finishes the dialog.
+    pub fn answer_path(&mut self, key: impl Into<String>, path: PathBuf) {
+        self.saving = false;
+        self.requests.answer_path(key, path);
+    }
+
+    /// The host cancelled its save dialog: the request not taken yet is dropped and Export works again.
+    pub fn cancel_requests(&mut self) {
+        self.saving = false;
+        self.requests.cancel();
+    }
+}
+
+/// The key of the hosted Export As dialog.
+const EXPORT_KEY: &str = "file.exportAs";
+
+impl StackDialog for HostedExportAs {
+    type Result = ExportAsResult;
+
+    fn id(&self) -> DialogId {
+        self.id
+    }
+
+    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<ExportAsResult>> {
+        let dialog = ExportAsDialog {
+            formats: self.formats.clone(),
+            defaults: self.defaults,
+            preview: self.preview.clone(),
+            answers: self.requests.take_answers(),
+            saving: self.saving,
+            open: Some(Bind::bound(&mut self.open)),
+            ..ExportAsDialog::new(self.file_name.clone(), self.source, Bind::bound(&mut self.options))
+        };
+        let mut shown = dialog.show(ui);
+        if let Some(wanted) = shown.wanted_preview {
+            self.wanted = Some(wanted);
+        }
+        if let Some(request) = shown.requests.take_path() {
+            self.requests.request_path(request);
+            self.saving = true;
+        }
+        match (shown.result, shown.closed) {
+            (Some(result), _) => Some(DialogResult::Ok(result)),
+            (None, Some(_)) => {
+                self.cancel_requests();
+                Some(DialogResult::Cancel)
+            }
+            (None, None) => None,
+        }
+    }
+
+    fn key(&self) -> Option<&str> {
+        Some(EXPORT_KEY)
+    }
+
+    fn cancelled(&mut self, _: &egui::Context) {
+        self.cancel_requests();
     }
 }
 

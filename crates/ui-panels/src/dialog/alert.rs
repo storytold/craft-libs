@@ -1,6 +1,8 @@
 //! `Alert` (24.4): a notice with one OK answer, a configuration of `Prompt`.
 
+use super::host::{DialogResult, StackDialog};
 use super::prompt::{Prompt, Reply, buttons};
+use super::stack::{DialogId, DialogStack, dialog_id};
 use crate::contract::{Bind, NoValue, Outcome};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
@@ -69,20 +71,81 @@ impl<'a> Alert<'a> {
 
     /// Shows the alert.
     pub fn show(self, ui: &mut Ui) -> AlertOutput {
-        let Alert { title, message, ok_label, tone, details, open } = self;
-        let env = Env::of(ui);
-        let ok = ok_label.unwrap_or_else(|| env.words::<CommonWords>().ok.clone());
-        let mut prompt = Prompt::new(title, message).alert().answers(buttons(&env, vec![Reply::plain(ok, DialogRole::Accept)]));
-        if let Some((tone, text)) = tone {
-            prompt = prompt.tone(tone, text);
-        }
-        if let Some((label, text)) = details {
-            prompt = prompt.details(label, text);
-        }
+        let (content, open) = self.split();
+        let mut prompt = content.prompt(&Env::of(ui));
         if let Some(open) = open {
             prompt = prompt.opened(open);
         }
         let shown = prompt.show(ui);
         AlertOutput { response: shown.response, closed: shown.closed }
+    }
+
+    /// What the alert shows, and its open state.
+    fn split(self) -> (AlertContent, Option<Bind<'a, bool>>) {
+        let Alert { title, message, ok_label, tone, details, open } = self;
+        (AlertContent { title, message, ok_label, tone, details }, open)
+    }
+}
+
+/// What an alert shows, without its open state.
+struct AlertContent {
+    title: Label,
+    message: Label,
+    ok_label: Option<Label>,
+    tone: Option<(Tone, Label)>,
+    details: Option<(Label, Label)>,
+}
+
+impl AlertContent {
+    /// The prompt the alert shows.
+    fn prompt<'p>(&self, env: &Env) -> Prompt<'p> {
+        let ok = self.ok_label.clone().unwrap_or_else(|| env.words::<CommonWords>().ok.clone());
+        let mut prompt =
+            Prompt::new(self.title.clone(), self.message.clone()).alert().answers(buttons(env, vec![Reply::plain(ok, DialogRole::Accept)]));
+        if let Some((tone, text)) = &self.tone {
+            prompt = prompt.tone(*tone, text.clone());
+        }
+        if let Some((label, text)) = &self.details {
+            prompt = prompt.details(label.clone(), text.clone());
+        }
+        prompt
+    }
+}
+
+/// An [`Alert`] on the [`DialogHost`](super::DialogHost): it answers `Ok(())` when it closes, however it closed. One
+/// alert is open at a time: a second one opened replaces the first.
+///
+/// ```ignore
+/// host.open(HostedAlert::new(Alert::new("Could not open", "The file is damaged.")));
+/// ```
+pub struct HostedAlert {
+    content: AlertContent,
+    open: bool,
+}
+
+impl HostedAlert {
+    /// `alert` on the host; its own `opened` binding is not used.
+    pub fn new(alert: Alert<'_>) -> Self {
+        HostedAlert { content: alert.split().0, open: true }
+    }
+}
+
+/// The key of a hosted alert.
+const ALERT_KEY: &str = "alert";
+
+impl StackDialog for HostedAlert {
+    type Result = ();
+
+    fn id(&self) -> DialogId {
+        dialog_id(ALERT_KEY)
+    }
+
+    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<()>> {
+        let shown = self.content.prompt(&Env::of(ui)).opened(Bind::bound(&mut self.open)).show(ui);
+        shown.closed.map(|_| DialogResult::Ok(()))
+    }
+
+    fn key(&self) -> Option<&str> {
+        Some(ALERT_KEY)
     }
 }

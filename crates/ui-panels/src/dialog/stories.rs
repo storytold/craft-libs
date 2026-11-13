@@ -1,7 +1,7 @@
 //! Stories of the dialog shells.
 
 use super::modal::ModalDragStrip;
-use super::{BlockingOverlay, Dialog, DialogFrame};
+use super::{BlockingOverlay, Dialog, DialogFrame, DialogHost, StackDialog};
 use crate::buttons::Button;
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
@@ -9,6 +9,7 @@ use crate::runtime::focus::Initial;
 use crate::sections::{DialogRole, FooterButton};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::Ui;
+use std::sync::{Arc, Mutex, PoisonError};
 
 /// What the story dialogs hold: two check boxes whose values the story keeps between passes.
 #[doc(hidden)]
@@ -16,6 +17,45 @@ pub fn body(ui: &mut Ui, checks: &mut [bool; 2]) {
     let [snap, rulers] = checks;
     Checkbox::new(Bind::bound(snap)).label("Snap to grid").show(ui);
     Checkbox::new(Bind::bound(rulers)).label("Show rulers").show(ui);
+}
+
+/// A story's dialog host: the runs of a story share it, and it equals only itself, so story values hold it.
+#[derive(Clone, Default)]
+struct StoryHost(Arc<Mutex<DialogHost>>);
+
+impl PartialEq for StoryHost {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// A story of a hosted dialog: `open()` on the story's [`DialogHost`], which runs every pass. The story's `open` value
+/// is the dialog's open state, so the card holds the dialog behind its button as it holds any story dialog: the
+/// dialog opens while the value is on, and the value goes off when the dialog closes.
+#[doc(hidden)]
+pub fn hosted<D: StackDialog>(ui: &mut Ui, data: &mut StoryData, open: impl FnOnce() -> D) -> StoryOutput {
+    hosted_with(ui, data, open, |_| {})
+}
+
+/// [`hosted`], with `pass` answering what the open dialog asked for (a preview, a path) before the host runs it.
+#[doc(hidden)]
+pub fn hosted_with<D: StackDialog>(ui: &mut Ui, data: &mut StoryData, open: impl FnOnce() -> D, pass: impl FnOnce(&mut DialogHost)) -> StoryOutput {
+    let host = data.value("host", StoryHost::default()).clone();
+    let mut host = host.0.lock().unwrap_or_else(PoisonError::into_inner);
+    let wanted = *data.value("open", true);
+    match (wanted, host.is_open::<D>()) {
+        (true, false) => {
+            host.open(open());
+        }
+        (false, true) => {
+            host.cancel::<D>(ui.ctx());
+        }
+        _ => {}
+    }
+    pass(&mut host);
+    host.run(ui);
+    *data.value("open", true) = host.is_open::<D>();
+    StoryOutput::default()
 }
 
 /// The opener of the Grid options dialogs.

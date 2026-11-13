@@ -16,7 +16,7 @@ use crate::contract::{
     Bind, CollectionEvent, ColumnEvent, ColumnSort, ColumnSpec, Entry, NoValue, Outcome, Props as _, Remember as _, Scroll, SelectMode, Show as _,
     ShowCollection as _, ShowContainer as _, clicked,
 };
-use crate::dialog::{Dialog, DialogOutput};
+use crate::dialog::{Dialog, DialogId, DialogOutput, DialogResult, DialogStack, StackDialog, dialog_id};
 use crate::display::{Divider, Shade, Text};
 use crate::layout::RowAlign;
 use crate::layout_components::{Row, Stack};
@@ -451,5 +451,64 @@ impl Shown<'_> {
                 row
             },
         );
+    }
+}
+
+/// An [`AboutDialog`] the [`DialogHost`](crate::dialog::DialogHost) owns, with the app's info and credits. A link the
+/// user activates waits in [`take_link`](HostedAbout::take_link) until the app opens it; the dialog answers `Ok(())`
+/// when it closes.
+///
+/// ```ignore
+/// host.open(HostedAbout::new(info, credits));
+/// // each pass: if let Some(url) = host.get_mut::<HostedAbout>().and_then(HostedAbout::take_link) { open_url(url) }
+/// ```
+pub struct HostedAbout {
+    id: DialogId,
+    info: AboutInfo,
+    credits: Credits,
+    tab: Option<AboutTab>,
+    link: Option<String>,
+    open: bool,
+}
+
+impl HostedAbout {
+    /// The dialog over `info` and `credits`, opening on the About tab.
+    pub fn new(info: AboutInfo, credits: Credits) -> Self {
+        HostedAbout { id: dialog_id(ABOUT_KEY), info, credits, tab: None, link: None, open: true }
+    }
+
+    /// The tab the dialog opens on.
+    #[must_use]
+    pub fn tab(mut self, tab: AboutTab) -> Self {
+        self.tab = Some(tab);
+        self
+    }
+
+    /// The URL of the link the user activated since the last call, once. The app opens it.
+    pub fn take_link(&mut self) -> Option<String> {
+        self.link.take()
+    }
+}
+
+/// The key of the hosted About dialog.
+const ABOUT_KEY: &str = "help.about";
+
+impl StackDialog for HostedAbout {
+    type Result = ();
+
+    fn id(&self) -> DialogId {
+        self.id
+    }
+
+    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<()>> {
+        let shown = AboutDialog { info: &self.info, credits: &self.credits, open: Some(Bind::bound(&mut self.open)), tab: self.tab }.show(ui);
+        if let Some(link) = shown.link {
+            self.link = Some(link);
+        }
+        shown.closed.map(|_| DialogResult::Ok(()))
+    }
+
+    fn key(&self) -> Option<&str> {
+        Some(ABOUT_KEY)
     }
 }

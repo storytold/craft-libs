@@ -20,7 +20,7 @@ mod trials;
 mod unsaved;
 mod words;
 
-pub use alert::{Alert, AlertOutput};
+pub use alert::{Alert, AlertOutput, HostedAlert};
 pub use blocking::{BlockingOverlay, BlockingOverlayStyle};
 pub use frame::{DialogFrame, DialogFrameStyle, DialogOutput, FooterCx, FooterHooks};
 #[doc(hidden)]

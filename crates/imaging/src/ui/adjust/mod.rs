@@ -9,6 +9,7 @@
 //! - Slider sets: [`AdjustSliders`] (Exposure, Vibrance, Posterize, any table), [`BrightnessContrastEditor`],
 //!   [`ThresholdEditor`], [`ColorBalanceEditor`], [`PhotoFilterEditor`], [`HueSaturationEditor`],
 //!   [`BlackWhiteEditor`], [`ChannelMixerEditor`], [`SelectiveColorEditor`].
+//! - The Image › Adjustments dialog around any of them on the dialog host ([`HostedAdjustDialog`]).
 //! - The Properties panel's session ([`AdjustSession`]).
 //!
 //! Gradient Map is `craft_draw::ui::gradient::map`, beside the gradient editor it builds on.
@@ -16,6 +17,7 @@
 mod basic;
 mod context;
 mod curves_panel;
+mod hosted;
 mod hue_saturation;
 mod labels;
 mod levels_editor;
@@ -32,6 +34,7 @@ pub use basic::{
 };
 pub use context::{AdjustContext, ToneChannel, ToneChannels, ToneSpace};
 pub use curves_panel::{CurvesMode, CurvesPanel, CurvesPanelOutput, ToneCurves};
+pub use hosted::HostedAdjustDialog;
 pub use hue_saturation::{HueRangeValue, HueSaturation, HueSaturationEditor, HueSaturationOutput};
 pub use labels::AdjustWords;
 pub use levels_editor::{Levels, LevelsClip, LevelsEditor, LevelsEditorOutput, LevelsWords};

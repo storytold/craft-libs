@@ -3,6 +3,7 @@
 use super::{CanvasExtension, Kit, LinkedSize, SizeForm, SizingOutput, show_form};
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use crate::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use crate::form::Field;
 use crate::pickers::{Anchor9, ReferencePoint, Select};
 use crate::runtime::env::UnitKind;
@@ -195,5 +196,55 @@ impl<'a> CanvasSize<'a> {
                 extension: state.extension.clone(),
             },
         )
+    }
+}
+
+/// Builds the dialog over the host-owned values of a [`HostedCanvasSize`] for one pass.
+type Build = dyn for<'b> Fn(Bind<'b, CanvasSizeValues>) -> CanvasSize<'b> + Send;
+
+/// A hosted Canvas Size: the `DialogHost` owns the values, and `build` makes the dialog over them each pass. The app
+/// opens it with the values of its document and takes the [`CanvasSizeResult`] from the host.
+///
+/// ```ignore
+/// host.open(HostedCanvasSize::new(CanvasSizeValues::new(document_size), |values| CanvasSize::new(values)));
+/// if let Some(DialogResult::Ok(result)) = host.take::<HostedCanvasSize>() {
+///     resize_canvas(result);
+/// }
+/// ```
+pub struct HostedCanvasSize {
+    id: DialogId,
+    open: bool,
+    values: CanvasSizeValues,
+    build: Box<Build>,
+}
+
+impl HostedCanvasSize {
+    /// A dialog opening with `values`; `build` makes it over the values (`CanvasSize::new` with its settings).
+    pub fn new(values: CanvasSizeValues, build: impl for<'b> Fn(Bind<'b, CanvasSizeValues>) -> CanvasSize<'b> + Send + 'static) -> Self {
+        HostedCanvasSize { id: dialog_id(KEY), open: true, values, build: Box::new(build) }
+    }
+
+    /// The values the dialog shows.
+    pub fn values(&self) -> &CanvasSizeValues {
+        &self.values
+    }
+}
+
+/// The key of the hosted dialog.
+const KEY: &str = "sizing.canvasSize";
+
+impl StackDialog for HostedCanvasSize {
+    type Result = CanvasSizeResult;
+
+    fn id(&self) -> DialogId {
+        self.id
+    }
+
+    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<CanvasSizeResult>> {
+        (self.build)(Bind::bound(&mut self.values)).opened(Bind::bound(&mut self.open)).show(ui).hosted()
+    }
+
+    fn key(&self) -> Option<&str> {
+        Some(KEY)
     }
 }

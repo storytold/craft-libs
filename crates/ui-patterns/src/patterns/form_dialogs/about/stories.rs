@@ -1,7 +1,7 @@
 //! Stories of `AboutDialog`: the About tab and the Contributors tab with a PR-only contributor.
 
-use super::{AboutDialog, AboutInfo, AboutLink, AboutTab, Contributor, Credits, ModelCredit};
-use crate::contract::Bind;
+use super::{AboutDialog, AboutInfo, AboutLink, AboutTab, Contributor, Credits, HostedAbout, ModelCredit};
+use crate::dialog::stories::hosted;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 use std::sync::LazyLock;
@@ -36,14 +36,12 @@ static CREDITS: LazyLock<Credits> = LazyLock::new(|| {
 fn about_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tab = *data.choice("tab", AboutTab::About, &TABS);
     let community = *data.value("community_button", true);
-    let info = info(community);
-    AboutDialog::new(&info, &CREDITS).tab(tab).opened(Bind::bound(data.value("open", true))).show(ui).into()
+    hosted(ui, data, || HostedAbout::new(info(community), CREDITS.clone()).tab(tab))
 }
 
 #[story(AboutDialog<'static>, covers = [], drive = Drive::Never)]
 fn about_dialog_contributors(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tab = *data.choice("tab", AboutTab::Contributors, &TABS);
     let community = *data.value("community_button", true);
-    let info = info(community);
-    AboutDialog::new(&info, &CREDITS).tab(tab).opened(Bind::bound(data.value("open", true))).show(ui).into()
+    hosted(ui, data, || HostedAbout::new(info(community), CREDITS.clone()).tab(tab))
 }

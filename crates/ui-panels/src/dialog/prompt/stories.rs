@@ -1,6 +1,7 @@
 //! Stories of the prompts.
 
-use super::super::{Alert, Prompt, RecoveredDocument, RecoveryDialog, StandardPrompt, UnsavedChangesDialog};
+use super::super::stories::hosted;
+use super::super::{Alert, HostedAlert, Prompt, RecoveredDocument, RecoveryDialog, StandardPrompt, UnsavedChangesDialog};
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _};
 use crate::sections::{DialogRole, FooterButton};
@@ -55,7 +56,7 @@ fn prompt_with_extras(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(Alert<'static>, covers = [], drive = Drive::Never)]
 fn alert(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    Alert::new("About", "Version 1.0").tone(Tone::Info, "A newer version is available.").opened(Bind::bound(data.value("open", true))).show(ui).into()
+    hosted(ui, data, || HostedAlert::new(Alert::new("About", "Version 1.0").tone(Tone::Info, "A newer version is available.")))
 }
 
 #[story(StandardPrompt, covers = [], drive = Drive::Never)]

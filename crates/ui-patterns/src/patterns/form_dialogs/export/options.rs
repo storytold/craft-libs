@@ -3,6 +3,7 @@
 //! `ParamDialog`, and Cancel abandons the save.
 
 use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
+use crate::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use crate::display::Text;
 use crate::form::Field;
 use crate::layout_components::{Row, Stack};
@@ -331,12 +332,13 @@ impl<'a> FormatOptionsDialog<'a> {
         let FormatOptionsDialog { kind, open, initial } = self;
         let words = Env::of(ui).words::<FormatOptionsWords>();
         let start = initial.filter(|options| options.kind() == kind).unwrap_or_else(|| FormatOptions::default_for(kind));
-        let (key, title) = match kind {
-            ExportOptionsKind::Tiff => ("tiff-options", words.tiff_title.clone()),
-            ExportOptionsKind::Targa => ("targa-options", words.targa_title.clone()),
-            ExportOptionsKind::Dds => ("dds-options", words.dds_title.clone()),
-            _ => ("jpeg-options", words.jpeg_title.clone()),
+        let title = match kind {
+            ExportOptionsKind::Tiff => words.tiff_title.clone(),
+            ExportOptionsKind::Targa => words.targa_title.clone(),
+            ExportOptionsKind::Dds => words.dds_title.clone(),
+            _ => words.jpeg_title.clone(),
         };
+        let key = options_key(kind);
         let mut dialog = ParamDialog::new(key, title, params(&words, start));
         if let Some(open) = open {
             dialog = dialog.opened(open);
@@ -344,6 +346,72 @@ impl<'a> FormatOptionsDialog<'a> {
         let shown = dialog.show(ui);
         let result = shown.result.as_ref().map(|result| answer(start, result));
         FormatOptionsOutput { response: shown.response, closed: shown.closed, result }
+    }
+}
+
+/// The key of the options dialog of `kind`: its parameter dialog's and its hosted entry's.
+fn options_key(kind: ExportOptionsKind) -> &'static str {
+    match kind {
+        ExportOptionsKind::Tiff => "tiff-options",
+        ExportOptionsKind::Targa => "targa-options",
+        ExportOptionsKind::Dds => "dds-options",
+        _ => "jpeg-options",
+    }
+}
+
+/// A [`FormatOptionsDialog`] the [`DialogHost`](crate::dialog::DialogHost) owns: the format and the options it opens
+/// with. It answers with the [`FormatOptions`] at OK; Cancel abandons the save.
+///
+/// ```ignore
+/// host.open(HostedFormatOptions::new(ExportOptionsKind::Jpeg).initial(FormatOptions::Jpeg(JpegOptions::new(10))));
+/// if let Some(DialogResult::Ok(options)) = host.take::<HostedFormatOptions>() {
+///     save_with(options);
+/// }
+/// ```
+pub struct HostedFormatOptions {
+    id: DialogId,
+    kind: ExportOptionsKind,
+    initial: Option<FormatOptions>,
+    open: bool,
+}
+
+impl HostedFormatOptions {
+    /// The options dialog of `kind`.
+    pub fn new(kind: ExportOptionsKind) -> Self {
+        HostedFormatOptions { id: dialog_id(options_key(kind)), kind, initial: None, open: true }
+    }
+
+    /// The options the dialog opens with, when they are the options of its format.
+    #[must_use]
+    pub fn initial(mut self, options: FormatOptions) -> Self {
+        self.initial = Some(options);
+        self
+    }
+
+    /// The format whose options the dialog edits.
+    pub fn kind(&self) -> ExportOptionsKind {
+        self.kind
+    }
+}
+
+impl StackDialog for HostedFormatOptions {
+    type Result = FormatOptions;
+
+    fn id(&self) -> DialogId {
+        self.id
+    }
+
+    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<FormatOptions>> {
+        let shown = FormatOptionsDialog { kind: self.kind, open: Some(Bind::bound(&mut self.open)), initial: self.initial }.show(ui);
+        match (shown.result, shown.closed) {
+            (Some(options), _) => Some(DialogResult::Ok(options)),
+            (None, Some(_)) => Some(DialogResult::Cancel),
+            (None, None) => None,
+        }
+    }
+
+    fn key(&self) -> Option<&str> {
+        Some(options_key(self.kind))
     }
 }
 

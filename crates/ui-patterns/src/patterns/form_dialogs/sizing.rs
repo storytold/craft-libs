@@ -4,6 +4,7 @@
 use super::FormDialog;
 use super::size_model::{LinkedSize, MAX_DOCUMENT_SIDE};
 use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
+use crate::dialog::DialogResult;
 use crate::display::Text;
 use crate::form::{Field, FieldGroup};
 use crate::layout_components::{Row, Stack};
@@ -22,7 +23,7 @@ mod image;
 #[cfg(feature = "testing")]
 mod stories;
 
-pub use canvas::{CanvasSize, CanvasSizeOutput, CanvasSizeResult, CanvasSizeValues};
+pub use canvas::{CanvasSize, CanvasSizeOutput, CanvasSizeResult, CanvasSizeValues, HostedCanvasSize};
 pub use image::{HostedImageSize, ImageSize, ImageSizeOutput, ImageSizeResult, ImageSizeValues};
 
 craft_ui::words! {
@@ -191,6 +192,18 @@ pub struct SizingOutput<R> {
     pub closed: Option<CloseReason>,
     /// The answer, the pass the dialog closed as OK.
     pub result: Option<R>,
+}
+
+impl<R> SizingOutput<R> {
+    /// The answer for a [`DialogHost`](crate::dialog::DialogHost) entry: `Ok` with the result the pass the dialog closed
+    /// as OK, `Cancel` the pass it closed any other way, `None` while it is open.
+    pub(crate) fn hosted(self) -> Option<DialogResult<R>> {
+        match (self.result, self.closed) {
+            (Some(result), _) => Some(DialogResult::Ok(result)),
+            (None, Some(_)) => Some(DialogResult::Cancel),
+            (None, None) => None,
+        }
+    }
 }
 
 impl<R> Outcome for SizingOutput<R> {

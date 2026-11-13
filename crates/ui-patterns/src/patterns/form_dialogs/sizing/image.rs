@@ -217,6 +217,7 @@ type Build = dyn for<'b> Fn(Bind<'b, ImageSizeValues>) -> ImageSize<'b> + Send;
 /// ```
 pub struct HostedImageSize {
     id: DialogId,
+    open: bool,
     values: ImageSizeValues,
     build: Box<Build>,
 }
@@ -224,7 +225,7 @@ pub struct HostedImageSize {
 impl HostedImageSize {
     /// A dialog opening with `values`; `build` makes it over the values (`ImageSize::new` with its settings).
     pub fn new(values: ImageSizeValues, build: impl for<'b> Fn(Bind<'b, ImageSizeValues>) -> ImageSize<'b> + Send + 'static) -> Self {
-        HostedImageSize { id: dialog_id(KEY), values, build: Box::new(build) }
+        HostedImageSize { id: dialog_id(KEY), open: true, values, build: Box::new(build) }
     }
 
     /// The values the dialog shows.
@@ -244,12 +245,7 @@ impl StackDialog for HostedImageSize {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<ImageSizeResult>> {
-        let shown = (self.build)(Bind::bound(&mut self.values)).show(ui);
-        match (shown.result, shown.closed) {
-            (Some(result), _) => Some(DialogResult::Ok(result)),
-            (None, Some(_)) => Some(DialogResult::Cancel),
-            (None, None) => None,
-        }
+        (self.build)(Bind::bound(&mut self.values)).opened(Bind::bound(&mut self.open)).show(ui).hosted()
     }
 
     fn key(&self) -> Option<&str> {

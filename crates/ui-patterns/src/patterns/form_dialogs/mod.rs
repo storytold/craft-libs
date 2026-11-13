@@ -42,8 +42,8 @@ pub use report::{ReportDialog, ReportNote, ReportOutput, ReportWords};
 mod sizing;
 
 pub use sizing::{
-    CanvasExtension, CanvasSize, CanvasSizeOutput, CanvasSizeResult, CanvasSizeValues, HostedImageSize, ImageSize, ImageSizeOutput, ImageSizeResult,
-    ImageSizeValues, Resample, SizingOutput, SizingWords,
+    CanvasExtension, CanvasSize, CanvasSizeOutput, CanvasSizeResult, CanvasSizeValues, HostedCanvasSize, HostedImageSize, ImageSize, ImageSizeOutput,
+    ImageSizeResult, ImageSizeValues, Resample, SizingOutput, SizingWords,
 };
 
 mod new_document;
@@ -56,7 +56,8 @@ pub use new_document::{
 mod about;
 
 pub use about::{
-    AboutDialog, AboutInfo, AboutLink, AboutOutput, AboutTab, AboutWords, CommitShare, Contributor, ContributorSort, Credits, ModelCredit, NameMode,
+    AboutDialog, AboutInfo, AboutLink, AboutOutput, AboutTab, AboutWords, CommitShare, Contributor, ContributorSort, Credits, HostedAbout,
+    ModelCredit, NameMode,
 };
 
 mod color_choice;
@@ -81,8 +82,8 @@ mod export;
 pub use export::{
     DdsCompression, DdsOptions, ExportAsDialog, ExportAsOutput, ExportAsResult, ExportFormat, ExportFormatDefaults, ExportMetadata, ExportOptions,
     ExportOptionsKind, ExportPreview, ExportProfile, ExportSize, ExportWords, FormatOptions, FormatOptionsDialog, FormatOptionsOutput,
-    FormatOptionsWords, JpegFormat, JpegOptions, JpegPreset, OutputPathOutput, OutputPathRow, OutputPathWords, SizeEstimate, TargaOptions,
-    TiffOptions, jpeg_quality_percent,
+    FormatOptionsWords, HostedExportAs, HostedFormatOptions, JpegFormat, JpegOptions, JpegPreset, OutputPathOutput, OutputPathRow, OutputPathWords,
+    SizeEstimate, TargaOptions, TiffOptions, jpeg_quality_percent,
 };
 
 // Save PDF.

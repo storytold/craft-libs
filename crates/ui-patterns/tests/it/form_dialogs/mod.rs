@@ -4,6 +4,7 @@
 mod about;
 mod dialog;
 mod export;
+mod hosted;
 mod new_document;
 mod params;
 mod password;
