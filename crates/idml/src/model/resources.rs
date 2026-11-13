@@ -11,6 +11,73 @@ fn others(el: &El) -> impl Iterator<Item = &El> {
     el.elements().filter(|e| !e.is(Local("Properties")))
 }
 
+/// One IDML nested paragraph style entry, before the caller resolves its character style.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NestedStyleValue {
+    pub character_style: String,
+    pub inclusive: bool,
+    pub repetition: u32,
+    pub delimiter_type: String,
+    pub delimiter: String,
+}
+
+/// One IDML nested line style entry.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NestedLineStyleValue {
+    pub character_style: String,
+    pub line_count: u32,
+}
+
+/// One IDML GREP style entry.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GrepStyleValue {
+    pub character_style: String,
+    pub expression: String,
+}
+
+/// Nested style lists stored on an IDML paragraph style or text range.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NestedStyleValues {
+    pub nested: Option<Vec<NestedStyleValue>>,
+    pub lines: Option<Vec<NestedLineStyleValue>>,
+    pub grep: Option<Vec<GrepStyleValue>>,
+}
+
+impl NestedStyleValues {
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        let text = |item: &El, name: &str| item.find(name).map(El::deep_text).unwrap_or_default();
+        let nested = values.prop_el("AllNestedStyles").map(|list| {
+            list.find_all("ListItem")
+                .map(|item| {
+                    let delimiter = item.find("Delimiter");
+                    NestedStyleValue {
+                        character_style: text(item, "AppliedCharacterStyle"),
+                        inclusive: text(item, "Inclusive").trim() != "false",
+                        repetition: text(item, "Repetition").trim().parse().unwrap_or(1),
+                        delimiter_type: delimiter.and_then(|el| el.attr("type")).unwrap_or("enumeration").to_owned(),
+                        delimiter: text(item, "Delimiter"),
+                    }
+                })
+                .collect()
+        });
+        let lines = values.prop_el("AllNestedLineStyles").map(|list| {
+            list.find_all("ListItem")
+                .map(|item| NestedLineStyleValue {
+                    character_style: text(item, "AppliedCharacterStyle"),
+                    line_count: text(item, "LineCount").trim().parse().unwrap_or(1),
+                })
+                .collect()
+        });
+        let grep = values.prop_el("AllGREPStyles").map(|list| {
+            list.find_all("ListItem")
+                .map(|item| GrepStyleValue { character_style: text(item, "AppliedCharacterStyle"), expression: text(item, "GrepExpression") })
+                .collect()
+        });
+        Self { nested, lines, grep }
+    }
+}
+
 /// OpenType feature tags represented by IDML character attributes.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OpenTypeFeatureValues {
