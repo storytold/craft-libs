@@ -60,6 +60,12 @@ pub trait WindingNumber:
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The number of scan-west links that `Topology::west_boundary` has followed on this thread.
+    static WEST_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Winding numbers for binary set operations.
 ///
 /// This is just two integers, one for each set. Segments are tagged by
@@ -1706,6 +1712,8 @@ impl<W: WindingNumber> Topology<W> {
             if let Some(known) = memo[cur.0] {
                 break known;
             }
+            #[cfg(test)]
+            WEST_STEPS.with(|n| n.set(n.get() + 1));
             match self.scan_west[cur] {
                 None => break None,
                 Some(left) if is_bdy(left) => break Some(left),
@@ -4003,20 +4011,14 @@ mod tests {
     fn contour_starts_follow_each_west_chain_once() {
         let (squares, bars) = bars_and_squares(200, 200);
         let top = Topology::from_polylines_binary(squares, bars, 1e-6);
-        let calls = std::cell::Cell::new(0usize);
-        let contours = top.contours(|w| {
-            calls.set(calls.get() + 1);
-            w.shape_a != 0 && w.shape_b == 0
-        });
+        super::WEST_STEPS.with(|n| n.set(0));
+        let contours = top.contours(|w| w.shape_a != 0 && w.shape_b == 0);
         // No bar edge is on the boundary of the squares minus the bars, so the west chain of
-        // every square passes all 400 bar edges. Walking the chain again for each square
-        // called `inside` about 2 * 400 * 200 times.
+        // every square passes all 400 bar edges. Each link is followed at most once; walking
+        // the chain again for each square follows about 400 * 200 links.
+        let steps = super::WEST_STEPS.with(|n| n.get());
         let segs = top.segment_indices().count();
-        assert!(
-            calls.get() < 10 * segs,
-            "{} calls to inside for {segs} segments",
-            calls.get()
-        );
+        assert!(steps <= segs, "{steps} scan-west links followed for {segs} segments");
         assert_eq!(contours.contours().count(), 200);
         assert!(contours.contours().all(|c| c.outer && c.parent.is_none()));
     }
