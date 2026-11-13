@@ -2,6 +2,8 @@
 
 The Craft framework is the shared layer under every Craft app: the design system, shells, canvas core, host convention and feature families, supplied by `craft-libs` as one dependency.
 
+Porting an existing app onto the framework: [porting.md](porting.md).
+
 ## Contents
 
 - [1. Overview](#1-overview)
@@ -179,7 +181,7 @@ Inside `craft-libs`, every local cargo command goes through `tools/cl`, which gi
 | One component's stories as PNG files | `cl render <crate> <Component>` (`ui` for the library's own components) |
 | The gallery | `cl build gallery` (debug), or `cargo run --profile gallery -p craft-ui-gallery` |
 
-Writing a component, its stories and its trials: [authoring.md](authoring.md).
+Writing a component, its stories and its trials: [authoring.md](authoring.md). Moving an app's UI onto the framework: [porting.md](porting.md).
 
 ## 3. Architecture
 

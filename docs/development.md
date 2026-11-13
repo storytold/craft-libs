@@ -1,6 +1,6 @@
 # Development workflow
 
-How to build, test and look at this workspace without waiting for it. The rules here exist because a cargo workspace of 62 crates, with a framework that every domain crate links, rebuilds far more than the change touched whenever two commands disagree about features or profiles.
+How to build, test and look at this workspace without waiting for it. Porting an app onto the framework is described in [porting.md](porting.md). The rules here exist because a cargo workspace of 62 crates, with a framework that every domain crate links, rebuilds far more than the change touched whenever two commands disagree about features or profiles.
 
 ## The commands
 
