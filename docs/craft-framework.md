@@ -970,6 +970,8 @@ A theme with its own shape replaces the radii or adds an offset to control, surf
 
 `shape.knob` is the shape of a value track's thumb (Slider, RangeSlider): `round`, the control's glyph across, or `tab`, an upright tab the control's icon side tall. Classic sets `tab`.
 
+`shape.wells` is the shape of a colour well that stands on its own (SwatchPair's foreground and background): `square`, with the small radius, or `round`, a circle. Adwaita, Breeze and Soft set `round`.
+
 ### Size roles
 
 | Role | Components |

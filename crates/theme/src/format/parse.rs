@@ -4,13 +4,13 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use super::{EDGE, ErrorKind, FormatError, FormatErrors, KNOB, LENGTH, MAX_THEME_BYTES, OFFSET, ROWS, SCHEMA, SCHEMA_VERSION, ThemeFile};
+use super::{EDGE, ErrorKind, FormatError, FormatErrors, KNOB, LENGTH, MAX_THEME_BYTES, OFFSET, ROWS, SCHEMA, SCHEMA_VERSION, ThemeFile, WELLS};
 use crate::color::Rgba;
 use crate::scale::Radius;
 use crate::theme::{
     AppOverrides, ContrastIntent, EdgeSeed, ModePins, ModeSeeds, Pins, RadiusOffset, SeedOverrides, Seeds, ShapeSeed, ThemeDef, Variants,
 };
-use crate::tokens::{ColorToken, KnobShape, RadiusSet, RowStyle, Status};
+use crate::tokens::{ColorToken, KnobShape, RadiusSet, RowStyle, Status, WellShape};
 use crate::{AppId, ThemeId};
 
 /// Parses and validates a theme file. Unknown keys are allowed anywhere except in colour maps, and
@@ -249,6 +249,15 @@ impl Parser {
                     None
                 }
             });
+            let wells = p.at("wells", |p| match shape.get("wells") {
+                None | Some(Value::Null) => Some(None),
+                Some(Value::String(s)) if s == "square" => Some(Some(WellShape::Square)),
+                Some(Value::String(s)) if s == "round" => Some(Some(WellShape::Round)),
+                Some(_) => {
+                    p.fail(ErrorKind::BadValue { expected: WELLS });
+                    None
+                }
+            });
             Some(Some(ShapeSeed {
                 radius: radius?,
                 radius_offset: radius_offset?,
@@ -256,6 +265,7 @@ impl Parser {
                 edge: edge?,
                 rows: rows?,
                 knob: knob?,
+                wells: wells?,
             }))
         })
     }

@@ -1,7 +1,7 @@
 //! [`SwatchPair`]: two overlapping colour wells, foreground over background or fill over stroke.
 
 use craft_behavior::{EditEvents, Flow, HitLevel, HitPriority, Metrics, Mixed, NavShape, PartKey, PressPhase, Roving, Sense};
-use craft_theme::Srgba;
+use craft_theme::{Srgba, WellShape};
 use craft_ui::buttons::IconButton;
 use craft_ui::choice::{ChoiceWords, Swatch, SwatchMetrics, SwatchStyle};
 use craft_ui::contract::{
@@ -100,7 +100,7 @@ pub struct SwatchPairStyle {
     well: f32,
     /// The offset of the secondary well from the primary one on both axes: `size.icon.sm`.
     step: f32,
-    /// The corners of a well: the swatch's.
+    /// The corners of a well: the swatch's, or half the side where the theme's wells are round (`shape.wells`).
     radius: CornerRadius,
     /// The gap in the panel's colour round the front well: `space.gap.tight`.
     gap: f32,
@@ -286,12 +286,17 @@ impl Component for SwatchPair<'_> {
 
     fn style(cx: &StyleCx<'_>, _: SwatchPairStyleKey) -> SwatchPairStyle {
         let colors = &cx.tokens.color;
+        let well = cx.tokens.size.icon.lg;
+        let radius = match cx.tokens.shape.wells {
+            WellShape::Round => UiTokens::corner(well / 2.0),
+            _ => SwatchMetrics::of(cx).radius,
+        };
         SwatchPairStyle {
             metrics: Metrics::new(),
             focus: cx.focus_look(),
-            well: cx.tokens.size.icon.lg,
+            well,
             step: cx.tokens.size.icon.sm,
-            radius: SwatchMetrics::of(cx).radius,
+            radius,
             gap: cx.tokens.space.gap.tight,
             buttons: cx.control().icon,
             edge: cx.color(colors.line.control_edge),
@@ -495,8 +500,10 @@ fn paint_ring(draw: &Draw<'_>, at: Rect, color: Srgba, style: &SwatchPairStyle) 
     draw.stroke(&PaintShape::Rect(at, style.radius), StrokeWidth::Thin, contrast);
     draw.stroke(&outline(at, style), StrokeWidth::Thin, style.edge);
     let hole = at.shrink(band);
-    draw.stroke(&PaintShape::Rect(hole.expand(2.0 * line), CornerRadius::ZERO), StrokeWidth::Thin, contrast);
-    draw.stroke(&PaintShape::Rect(hole.expand(line), CornerRadius::ZERO), StrokeWidth::Thin, style.edge);
+    // The hole's corners are concentric with the well's: square for a square well, round for a round one.
+    let corner = |grow: f32| UiTokens::corner((f32::from(style.radius.nw) - band + grow).max(0.0));
+    draw.stroke(&PaintShape::Rect(hole.expand(2.0 * line), corner(2.0 * line)), StrokeWidth::Thin, contrast);
+    draw.stroke(&PaintShape::Rect(hole.expand(line), corner(line)), StrokeWidth::Thin, style.edge);
 }
 
 /// The outline just outside the well `at`, concentric with its corners.

@@ -5,7 +5,7 @@ use serde_json::{Map, Number, Value};
 use super::{FormatErrors, SCHEMA, SCHEMA_VERSION, ThemeFile};
 use crate::scale::Radius;
 use crate::theme::{AppOverrides, ContrastIntent, EdgeSeed, ModePins, ModeSeeds, Pins, ShapeSeed, ThemeDef, Variants};
-use crate::tokens::{KnobShape, RowStyle};
+use crate::tokens::{KnobShape, RowStyle, WellShape};
 
 /// Top-level keys in the order a file lists them; other keys follow, sorted.
 const TOP_ORDER: [&str; 13] =
@@ -129,6 +129,14 @@ fn update_shape(shape: &mut Map<String, Value>, s: &ShapeSeed) {
         }
         Some(k) => {
             shape.insert("knob".to_owned(), Value::String(if k == KnobShape::Round { "round" } else { "tab" }.to_owned()));
+        }
+    }
+    match s.wells {
+        None => {
+            shape.remove("wells");
+        }
+        Some(w) => {
+            shape.insert("wells".to_owned(), Value::String(if w == WellShape::Square { "square" } else { "round" }.to_owned()));
         }
     }
 }

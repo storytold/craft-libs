@@ -72,7 +72,17 @@ pub enum KnobShape {
     Tab,
 }
 
-/// Corner radii, edge style, row style and knob shape.
+/// The shape of a colour well that stands on its own: the wells of a foreground and background pair.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WellShape {
+    /// A square with the small corner radius.
+    #[default]
+    Square,
+    /// A circle.
+    Round,
+}
+
+/// Corner radii, edge style, row style, knob shape and well shape.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShapeTokens {
     /// Corner radii.
@@ -83,6 +93,8 @@ pub struct ShapeTokens {
     pub rows: RowStyle,
     /// How the thumbs of value tracks are drawn.
     pub knob: KnobShape,
+    /// How colour wells that stand on their own are drawn.
+    pub wells: WellShape,
 }
 
 /// Gaps between neighbouring elements, in logical pixels.

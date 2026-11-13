@@ -21,7 +21,7 @@ fn full() -> Value {
         },
         "shape": {
             "radius": { "control": 3, "surface": 4, "window": 6, "panel": 0, "button": "full", "x_radius": 1 },
-            "edge": { "bevel": { "width": 1 } }, "knob": "tab", "x_shape": true
+            "edge": { "bevel": { "width": 1 } }, "knob": "tab", "wells": "round", "x_shape": true
         },
         "light": { "surface.panel": "#F0F0F0", "accent.solid": "#1062C4" },
         "dark": { "surface.panel": "#535353" },
@@ -60,6 +60,7 @@ fn round_trip_keeps_values_and_unknown_keys() {
     assert_eq!(shape.radius.unwrap().button, 999.0);
     assert_eq!(shape.edge, Some(EdgeSeed::Bevel { width: 1.0 }));
     assert_eq!(shape.knob, Some(KnobShape::Tab));
+    assert_eq!(shape.wells, Some(WellShape::Round));
     assert_eq!(t.pins.light.get(T::SurfacePanel), Some(hex("#f0f0f0")));
     assert_eq!(t.high_contrast.light.get(T::TextNormal), Some(hex("#000000")));
     let photo = &t.apps[&AppId::parse("photocraft").unwrap()];
@@ -82,6 +83,7 @@ fn round_trip_keeps_values_and_unknown_keys() {
         ("/apps/x_app_entry", &orig["apps"]["x_app_entry"]),
         ("/version", &json!(3)),
         ("/shape/knob", &json!("tab")),
+        ("/shape/wells", &json!("round")),
         ("/shape/radius/button", &json!("full")),
         ("/dark/surface.panel", &json!("#535353")),
     ] {

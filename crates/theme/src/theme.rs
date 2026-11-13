@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use super::color::Rgba;
 use super::ramp::Mode;
-use super::tokens::{ColorToken, ColorTokens, Edge, KnobShape, RadiusSet, RowStyle, Status};
+use super::tokens::{ColorToken, ColorTokens, Edge, KnobShape, RadiusSet, RowStyle, Status, WellShape};
 use crate::{AppId, ThemeId};
 
 /// A theme: seeds to derive from, values that override the derivation, and an optional shape.
@@ -190,6 +190,8 @@ pub struct ShapeSeed {
     pub rows: Option<RowStyle>,
     /// The knob shape; round when unset.
     pub knob: Option<KnobShape>,
+    /// The shape of colour wells that stand on their own; square when unset.
+    pub wells: Option<WellShape>,
 }
 
 /// Per-tier additions to the corner radii, in logical pixels.
