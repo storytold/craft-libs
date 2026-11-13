@@ -211,8 +211,9 @@ fn patches(master: &[usize], k0: usize, kx: usize, m: usize, fs: u32) -> Option<
     let (mut msb, mut usb) = (k0, kx);
     let mut out: Vec<(usize, usize)> = Vec::new();
     // each pass either adds a patch or lowers `msb` to `kx`; a stream that does neither twice
-    // running cannot finish
-    for _ in 0..2 * (MAX_PATCHES + 1) {
+    // running cannot finish. One patch over the limit may still be a short last one that is
+    // dropped below.
+    for _ in 0..2 * (MAX_PATCHES + 2) {
         // the highest master border the patch can reach from below k0
         let mut j = k + 1;
         let (sb, odd) = loop {
@@ -227,7 +228,7 @@ fn patches(master: &[usize], k0: usize, kx: usize, m: usize, fs: u32) -> Option<
         if count > 0 {
             let start = (k0 - odd).checked_sub(count)?;
             out.push((start, count));
-            if out.len() > MAX_PATCHES {
+            if out.len() > MAX_PATCHES + 1 {
                 return None;
             }
             (usb, msb) = (sb, sb);
@@ -241,7 +242,7 @@ fn patches(master: &[usize], k0: usize, kx: usize, m: usize, fs: u32) -> Option<
             if out.len() > 1 && out.last().is_some_and(|p| p.1 < 3) {
                 out.pop();
             }
-            return (!out.is_empty()).then_some(out);
+            return (!out.is_empty() && out.len() <= MAX_PATCHES).then_some(out);
         }
     }
     None
@@ -348,6 +349,15 @@ mod tests {
     fn a_start_at_channel_32_is_accepted() {
         let t = FreqTables::new(&header(15, 14, 0, 0, false, 2), 24_000).unwrap();
         assert_eq!((t.k0, t.kx, t.m), (32, 32, 32));
+    }
+
+    /// At 96 kHz this header builds patches of 6, 6, 6, 6, 5 and 2 channels: the short sixth is
+    /// dropped, as any short last patch is, and the five left are within the limit.
+    #[test]
+    fn a_short_sixth_patch_is_dropped_before_the_limit() {
+        let t = FreqTables::new(&header(3, 9, 0, 0, false, 2), 96_000).unwrap();
+        assert_eq!((t.k0, t.kx + t.m), (8, 39));
+        assert_eq!(t.patches.iter().map(|p| p.1).collect::<Vec<_>>(), [6, 6, 6, 6, 5]);
     }
 
     /// A typical 44.1 kHz header: start channel 12 + offset, stop near 64, three noise bands.
