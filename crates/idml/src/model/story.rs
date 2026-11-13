@@ -150,6 +150,19 @@ pub struct Cell {
     pub children: Vec<TextNode>,
 }
 
+/// Format-level options on an IDML table cell, before DesignCraft maps them into its model.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CellOptions {
+    pub fill_color: Option<String>,
+    pub fill_tint: Option<f64>,
+    pub insets: [Option<f64>; 4],
+    pub vertical_justification: Option<String>,
+    pub first_baseline_offset: Option<String>,
+    pub minimum_first_baseline_offset: Option<f64>,
+    pub rotation_angle: Option<f64>,
+    pub edge_stroke_priorities: [i32; 4],
+}
+
 /// The children of `el` other than `<Properties>`, as text nodes.
 fn nodes(el: &El) -> Vec<TextNode> {
     el.elements().filter(|e| !e.is(Local("Properties"))).map(TextNode::from_el).collect()
@@ -441,6 +454,26 @@ impl Cell {
     pub fn span(&self) -> (u32, u32) {
         let n = |k: &str| self.values.num(k).filter(|v| *v >= 1.0 && v.fract() == 0.0 && *v <= f64::from(u32::MAX)).map_or(1, |v| v as u32);
         (n("ColumnSpan"), n("RowSpan"))
+    }
+
+    pub fn options(&self) -> CellOptions {
+        let inset = |current: &str, legacy: &str| self.values.num(current).or_else(|| self.values.num(legacy));
+        let priority = |side: &str| self.values.prop(&format!("{side}StrokePriority")).and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+        CellOptions {
+            fill_color: self.values.value("FillColor"),
+            fill_tint: self.values.num("FillTint"),
+            insets: [
+                inset("TextTopInset", "TopInset"),
+                inset("TextLeftInset", "LeftInset"),
+                inset("TextBottomInset", "BottomInset"),
+                inset("TextRightInset", "RightInset"),
+            ],
+            vertical_justification: self.values.value("VerticalJustification"),
+            first_baseline_offset: self.values.value("FirstBaselineOffset"),
+            minimum_first_baseline_offset: self.values.num("MinimumFirstBaselineOffset"),
+            rotation_angle: self.values.num("RotationAngle"),
+            edge_stroke_priorities: [priority("TopEdge"), priority("LeftEdge"), priority("BottomEdge"), priority("RightEdge")],
+        }
     }
 
     pub fn paragraphs(&self) -> Vec<&Range> {
