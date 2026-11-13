@@ -140,6 +140,38 @@ pub enum StyleNode {
     Other(El),
 }
 
+/// EPUB export tagging stored on a style in IDML.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EpubExportTagMap {
+    pub tag: String,
+    pub class: String,
+    pub split_document: bool,
+}
+
+impl EpubExportTagMap {
+    /// Reads an EPUB `StyleExportTagMap`; other export types are not this record.
+    pub fn from_el(el: &El) -> Option<Self> {
+        let values = Values::of(el);
+        (el.local() == "StyleExportTagMap" && values.get("ExportType") == Some("EPUB")).then(|| Self {
+            tag: values.get("ExportTag").unwrap_or("").to_owned(),
+            class: values.get("ExportClass").unwrap_or("").to_owned(),
+            split_document: values.get("SplitDocument") == Some("true"),
+        })
+    }
+
+    /// Writes the EPUB tag map with its caller-assigned IDML `Self` identifier.
+    pub fn to_el(&self, self_id: &str) -> El {
+        El::new("StyleExportTagMap")
+            .with_attr("Self", self_id)
+            .with_attr("ExportType", "EPUB")
+            .with_attr("ExportTag", &self.tag)
+            .with_attr("ExportClass", &self.class)
+            .with_attr("ExportAttributes", "")
+            .with_attr("SplitDocument", if self.split_document { "true" } else { "false" })
+            .with_attr("EmitCss", "true")
+    }
+}
+
 /// A style, its values as written: `Name`, `Self`, `Properties/BasedOn`, its attributes; and its
 /// other children (an object style's `TextFramePreference`, effect settings, …).
 #[derive(Clone, Debug, PartialEq)]
