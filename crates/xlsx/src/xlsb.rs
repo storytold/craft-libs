@@ -2,6 +2,8 @@
 //! their records. Saved values only: formulas are token streams that are not decoded, and
 //! styles are not read. A record that does not parse fails the read.
 
+mod ftab;
+
 use std::sync::Arc;
 
 use craft_opc::{ContentTypes, Rels};
