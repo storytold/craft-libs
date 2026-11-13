@@ -218,10 +218,7 @@ pub fn pcx_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 
 /// The X11 color-name lookup used by XPM files, expressed as normalized sRGB.
 pub fn xpm_named_color_rgb(name: &str) -> Option<[f32; 3]> {
-    if name.is_empty() || name.len() > 64 || !name.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit()) {
-        return None;
-    }
-    let rgb = codecs::xpm::named(name)?;
+    let rgb = codecs::xpm::exact_x11_name(name)?;
     Some(rgb.map(|channel| f32::from(channel) / 255.0))
 }
 

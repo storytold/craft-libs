@@ -12,5 +12,8 @@ pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     bridge::format(Format::Fits, bytes, limits)
 }
 pub fn encode(image: &Image) -> Result<Vec<u8>, CodecError> {
+    if !matches!(image.layout(), crate::ChannelLayout::Gray | crate::ChannelLayout::Rgb) {
+        return Err(CodecError::encode("FITS", format!("FITS cannot store {:?}", image.layout())));
+    }
     bridge::encode(image, Format::Fits, &Default::default())
 }
