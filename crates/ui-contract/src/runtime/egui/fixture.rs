@@ -137,6 +137,55 @@ fn window_focus_facts(ctx: &Context, events: &[Event], native_pixels_per_point: 
 #[derive(Default)]
 struct WindowFocus(Option<bool>);
 
+/// The fixture's reset bridge, as egui-winit keeps one per window: the reset request it holds for each viewport, and
+/// the requests it dropped, which the next frame reports as `Event::ImeResetRetired`.
+#[derive(Default)]
+struct ImeResets {
+    pending: egui::ViewportIdMap<(egui::ImeResetId, (egui::Id, u64, egui::IMEPurpose))>,
+    retired: Vec<egui::ImeResetId>,
+}
+
+impl ImeResets {
+    fn retire(&mut self, viewport: egui::ViewportId) {
+        self.retired.extend(self.pending.remove(&viewport).map(|(id, _)| id));
+    }
+
+    /// The frame's input: a completion ends the request, a window focus loss drops it, and the requests dropped since
+    /// the last frame are reported after the frame's own events.
+    fn input(&mut self, viewport: egui::ViewportId, events: &mut Vec<Event>) {
+        for event in events.iter() {
+            match event {
+                Event::ImeResetCompleted { request_id } if self.pending.get(&viewport).is_some_and(|(id, _)| id == request_id) => {
+                    self.pending.remove(&viewport);
+                }
+                Event::WindowFocused(false) => self.retire(viewport),
+                _ => {}
+            }
+        }
+        events.extend(self.retired.drain(..).map(|request_id| Event::ImeResetRetired { request_id }));
+    }
+
+    /// The frame's output: egui's dropped requests, a pass with no IME output or another IME context, and a newer
+    /// request each drop the request held.
+    fn output(&mut self, viewport: egui::ViewportId, output: &egui::PlatformOutput) {
+        self.retired.extend(output.retired_ime_resets.iter().copied());
+        let Some(ime) = &output.ime else {
+            self.retire(viewport);
+            return;
+        };
+        let context = (ime.owner, ime.context_generation, ime.purpose);
+        if self.pending.get(&viewport).is_some_and(|(_, held)| *held != context) {
+            self.retire(viewport);
+        }
+        if let Some(id) = ime.reset_request
+            && self.pending.get(&viewport).is_none_or(|(held, _)| *held != id)
+        {
+            self.retire(viewport);
+            self.pending.insert(viewport, (id, context));
+        }
+    }
+}
+
 /// Runs one pass of `viewport` at `time` seconds with `events` and `files`, on a window of `native_pixels_per_point`
 /// (egui's default when `None`). A viewport other than the root is a child window of the root, which stays live.
 pub(crate) fn run_frame(
@@ -145,13 +194,14 @@ pub(crate) fn run_frame(
     screen: Vec2,
     native_pixels_per_point: Option<f32>,
     viewport: egui::ViewportId,
-    events: Vec<Event>,
+    mut events: Vec<Event>,
     files: OsFiles,
     ui: impl FnMut(&mut Ui),
 ) -> FrameResult {
     let screen = Rect::from_min_size(Pos2::ZERO, screen);
     let hovered_files = files.hovered.iter().map(|(name, mime)| egui::HoveredFile { path: Some(name.into()), mime: mime.clone() }).collect();
     let dropped_files = files.dropped.iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
+    Service::<ImeResets>::run(ctx, |resets| resets.input(viewport, &mut events));
     let mut viewports = window_focus_facts(ctx, &events, native_pixels_per_point);
     if viewport != egui::ViewportId::ROOT {
         viewports
@@ -168,6 +218,7 @@ pub(crate) fn run_frame(
         ..RawInput::default()
     };
     let mut output = drive(|| ctx.run_ui(input, ui));
+    Service::<ImeResets>::run(ctx, |resets| resets.output(viewport, &output.platform_output));
     let mut flat = Vec::new();
     for clipped in &output.shapes {
         let mut shapes = Vec::new();

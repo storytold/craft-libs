@@ -477,15 +477,6 @@ impl Component for TextEditor<'_> {
         edits.reconcile();
         let fallback = space.doc_rect(cx.rect);
 
-        match press.phase {
-            PressPhase::Down { start, .. } if start.button == craft_behavior::PointerButton::Primary => {
-                edits.press(space.doc(start.origin), press.mods.shift, start.clicks, now);
-            }
-            PressPhase::DragStart { pos, .. } | PressPhase::Drag { pos, .. } => edits.drag(space.doc(pos)),
-            PressPhase::Release { .. } | PressPhase::Cancel { .. } => edits.session.dragging = None,
-            _ => {}
-        }
-
         let mut ending: Option<Range<usize>> = None;
         for input in inputs {
             if let Some(range) = ending.take() {
@@ -535,6 +526,15 @@ impl Component for TextEditor<'_> {
         }
         if let Some(range) = ending {
             edits.drop_marked(range);
+        }
+        // A press is the pass's last pointer event (H0), so the pass's editor input came before it.
+        match press.phase {
+            PressPhase::Down { start, .. } if start.button == craft_behavior::PointerButton::Primary => {
+                edits.press(space.doc(start.origin), press.mods.shift, start.clicks, now);
+            }
+            PressPhase::DragStart { pos, .. } | PressPhase::Drag { pos, .. } => edits.drag(space.doc(pos)),
+            PressPhase::Release { .. } | PressPhase::Cancel { .. } => edits.session.dragging = None,
+            _ => {}
         }
         // A primary press elsewhere on the canvas keeps the marked text as typed, as a press on the text does. A
         // secondary press leaves the session open: the canvas menu it opens acts on the live edit.

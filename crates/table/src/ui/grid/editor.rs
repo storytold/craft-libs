@@ -67,10 +67,6 @@ impl Draft {
         self.preedit.is_some()
     }
 
-    pub(super) fn caret(&self) -> usize {
-        self.caret
-    }
-
     /// The text as shown: the composition sits at the caret.
     pub(super) fn shown(&self) -> String {
         match &self.preedit {
@@ -176,12 +172,18 @@ impl Draft {
         }
     }
 
-    /// Replaces the text from `from` to the end with `reference` (point mode).
-    pub(super) fn point_at(&mut self, from: usize, reference: &str) {
-        self.text.truncate(from.min(self.text.len()));
+    /// Replaces the text from `from` (the caret when `None`) to the end with `reference` (point mode) and returns
+    /// where the reference starts. A composition in progress ends first, its marked text kept as typed.
+    pub(super) fn point_at(&mut self, from: Option<usize>, reference: &str) -> usize {
+        if let Some(preedit) = self.preedit.take() {
+            self.insert(&preedit);
+        }
+        let from = from.unwrap_or(self.caret).min(self.text.len());
+        self.text.truncate(from);
         self.text.push_str(reference);
         self.caret = self.text.len();
         self.anchor = None;
+        from
     }
 }
 
@@ -227,13 +229,12 @@ impl EditState {
     /// Moves the reference cursor to `to` and writes its reference into the draft. `extend` grows the range from the
     /// cell the cursor started at (Shift+arrow).
     pub(super) fn point_to(&mut self, to: CellAt<u32>, extend: bool) {
-        let from = self.point.as_ref().map_or(self.draft.caret(), |point| point.from);
         let anchor = match (&self.point, extend) {
             (Some(point), true) => point.anchor,
             _ => to,
         };
         let range = CellRange::cells(anchor, to);
-        self.draft.point_at(from, &absolute_range_reference(range.clone()));
+        let from = self.draft.point_at(self.point.as_ref().map(|point| point.from), &absolute_range_reference(range.clone()));
         self.point = Some(Point { anchor, range, from });
     }
 }

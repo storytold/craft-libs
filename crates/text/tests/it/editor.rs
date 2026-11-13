@@ -90,15 +90,17 @@ struct Session {
 }
 
 fn session(text: &str, quotes: Option<QuoteStyle>) -> Session {
-    session_on(Host { text: text.to_owned(), ..Host::default() }, quotes)
+    session_on(Host { text: text.to_owned(), ..Host::default() }, quotes, false)
 }
 
-fn session_on(host: Host, quotes: Option<QuoteStyle>) -> Session {
+/// A session on `host`; with `beside`, a second editor on its own text is shown after the session's.
+fn session_on(host: Host, quotes: Option<QuoteStyle>, beside: bool) -> Session {
     let text = host.text.clone();
     let host = Rc::new(RefCell::new(host));
     let selection = Rc::new(RefCell::new(TextSelection::caret_at(text.chars().count())));
     let commits = Rc::new(Cell::new(0));
     let (shown_host, shown_selection, shown_commits) = (Rc::clone(&host), Rc::clone(&selection), Rc::clone(&commits));
+    let mut other = (Host { text: "xyz".to_owned(), ..Host::default() }, TextSelection::caret_at(0));
     let mut fixture = Fixture::new(move |ui| {
         let (mut host, mut selection) = (shown_host.borrow_mut(), shown_selection.borrow_mut());
         let room = ui.available_rect_before_wrap();
@@ -110,6 +112,10 @@ fn session_on(host: Host, quotes: Option<QuoteStyle>) -> Session {
             let output = if let Some(style) = quotes { editor.smart_quotes(style) } else { editor }.show_at(ui, bounds);
             let commits = output.edit.events.iter().filter(|event| matches!(event, craft_behavior::EditEvent::Commit { .. })).count() as u32;
             shown_commits.set(shown_commits.get() + commits);
+            if beside {
+                let (host, selection) = (&mut other.0, &mut other.1);
+                drop(TextEditor::new("Other", host, Bind::bound(selection)).show_at(ui, bounds.translate(vec2(0.0, 40.0))));
+            }
         });
     });
     fixture.settle();
@@ -173,10 +179,12 @@ fn preedit(text: &str) -> Event {
 /// Command+Enter while composing commits nothing. A click in the text that arrives with its release and a late commit
 /// in one raw frame keeps the marked text as typed and interrupts the composition once: one press per pass holds the
 /// release and the commit for the next pass, where the commit is stale. Later events of the interrupted composition
-/// are dropped until the OS completes the reset; then a new composition starts at the clicked caret.
+/// are dropped until the OS completes the reset; then a new composition starts at the clicked caret. A preedit and a
+/// press in one raw frame apply in that order: the marked text changes once and the press interrupts. A second editor
+/// shown after the composing one leaves the composing editor's report standing.
 #[trial]
 fn a_click_during_composition_keeps_the_marked_text_and_interrupts_the_composition_once() {
-    let mut editor = session("abc", None);
+    let mut editor = session_on(Host { text: "abc".to_owned(), ..Host::default() }, None, true);
     editor.focus();
     editor.fixture.frame(vec![preedit("kzk")]).settle();
     assert_eq!(editor.text(), "abckzk", "the marked text is written at the caret");
@@ -205,6 +213,16 @@ fn a_click_during_composition_keeps_the_marked_text_and_interrupts_the_compositi
     assert_eq!(editor.text(), "abckzk", "a preedit before the reset completes belongs to the interrupted composition");
     editor.fixture.frame(vec![Event::ImeResetCompleted { request_id: reset }, preedit("q")]).settle();
     assert_eq!(editor.text(), "aqbckzk", "after the reset a new composition starts at the caret");
+
+    let at = pos2(6.0, 10.0);
+    editor.fixture.frame(vec![pointer::moved(at)]);
+    editor.fixture.frame(vec![preedit("qr"), pointer::press(at), pointer::release(at)]);
+    let pressed = editor.fixture.ime().cloned().expect("the editor keeps the IME");
+    let second = pressed.reset.filter(|_| pressed.interrupt).expect("a press after a preedit in its frame interrupts the composition");
+    assert_ne!(second, reset);
+    editor.fixture.settle();
+    assert_eq!(editor.text(), "aqrbckzk", "the preedit before the press changes the marked text once");
+    assert_eq!(*editor.selection.borrow(), TextSelection::caret_at(6), "the press placed the caret after the preedit");
     assert_eq!(editor.commits.get(), 0, "a press in the text keeps the session open");
 }
 
@@ -212,13 +230,13 @@ fn a_click_during_composition_keeps_the_marked_text_and_interrupts_the_compositi
 /// Alt+Up to move the caret a line up.
 #[trial]
 fn formatting_keys_follow_the_flow_and_fall_back_to_caret_moves() {
-    let mut vertical = session_on(Host { text: "abcdefgh".to_owned(), vertical: true, formats: true, ..Host::default() }, None);
+    let mut vertical = session_on(Host { text: "abcdefgh".to_owned(), vertical: true, formats: true, ..Host::default() }, None, false);
     vertical.focus();
     vertical.fixture.key(Key::ArrowDown, Modifiers::ALT).settle();
     let asked = vertical.host.borrow().styles.last().copied();
     assert!(matches!(asked, Some(StyleKey::Kern(by) | StyleKey::Tracking(by)) if by > 0.0), "Alt+Down tracks in vertical text: {asked:?}");
 
-    let mut plain = session_on(Host { text: "abcdefgh".to_owned(), ..Host::default() }, None);
+    let mut plain = session_on(Host { text: "abcdefgh".to_owned(), ..Host::default() }, None, false);
     plain.focus();
     let before = plain.selection.borrow().caret;
     assert!(before >= LINE, "the click left the caret past the first line");

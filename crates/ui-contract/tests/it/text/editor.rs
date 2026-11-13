@@ -17,12 +17,14 @@ const AT: Rect = Rect { min: Pos2::new(10.0, 10.0), max: Pos2::new(210.0, 90.0) 
 const TEXT: &str = "fn main";
 const EDITOR: PartKey = PartKey::new("editor");
 
-/// An editor that keeps no text: it logs the inputs it receives and reports `TEXT` as its one line.
+/// An editor that keeps no text: it logs the inputs it receives and, while `report` is set, reports `TEXT` as its one
+/// line.
 #[derive(craft_ui::contract::Component)]
 struct Probe<'a> {
     #[common]
     common: Common,
     log: &'a RefCell<Vec<EditorInput>>,
+    report: bool,
 }
 
 impl Component for Probe<'_> {
@@ -49,6 +51,9 @@ impl Component for Probe<'_> {
     }
 
     fn paint(&mut self, _: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if !self.report {
+            return;
+        }
         let positions: Vec<f32> = (0..TEXT.len()).map(|at| at as f32 * 8.0).collect();
         let widths = vec![8.0; TEXT.len()];
         let runs = [EditorRun::new(0..TEXT.len(), false, &positions, &widths)];
@@ -108,7 +113,7 @@ impl Rig {
 }
 
 fn show(ui: &mut egui::Ui, log: &RefCell<Vec<EditorInput>>, id: &Cell<Id>, read_only: bool) {
-    let response = Probe { common: Common::new(), log }.label("Source").read_only(read_only).id_salt("code").show_at(ui, AT);
+    let response = Probe { common: Common::new(), log, report: true }.label("Source").read_only(read_only).id_salt("code").show_at(ui, AT);
     id.set(response.id);
 }
 
@@ -143,8 +148,8 @@ fn preedit(text: &str) -> Event {
 }
 
 /// A reset fences the interrupted composition until its own request completes. Focus leaving an editor while it
-/// composes asks for a reset; a pass with no IME output retires the request (the integration drops it with the
-/// IME), so focus coming back asks again. The retired request's completion is stale and lets nothing through; the
+/// composes asks for a reset; a pass with no IME output drops the request, which the integration reports retired, so
+/// focus coming back asks again. The retired request's completion is stale and lets nothing through; the
 /// new request's completion lets the composition that follows it in.
 #[trial]
 fn a_reset_ends_only_with_the_completion_of_its_own_request() {
@@ -170,5 +175,51 @@ fn a_reset_ends_only_with_the_completion_of_its_own_request() {
     assert!(
         matches!(inputs.as_slice(), [EditorInput::Preedit { text, .. }] if &**text == "y"),
         "the completion of the latest request ends the fence in its place in the stream: {inputs:?}"
+    );
+}
+
+/// Focus moving from a composing editor to one that reports no caret in that pass interrupts the old editor's
+/// composition. The next pass's IME output is the new editor's, a new IME context, so the integration drops the
+/// request and reports it retired; the engine then asks again, and the new request's completion gives the new editor
+/// its IME.
+#[trial]
+fn a_reset_the_integration_retires_is_asked_again() {
+    const OTHER: Rect = Rect { min: Pos2::new(10.0, 110.0), max: Pos2::new(210.0, 190.0) };
+    let (first, second) = (RefCell::new(Vec::new()), RefCell::new(Vec::new()));
+    let report = Cell::new(true);
+    let mut ui = |ui: &mut egui::Ui| {
+        Probe { common: Common::new(), log: &first, report: true }.label("First").id_salt("first").show_at(ui, AT);
+        Probe { common: Common::new(), log: &second, report: report.get() }.label("Second").id_salt("second").show_at(ui, OTHER);
+    };
+    let mut frames = Frames::new();
+    click(&mut frames, AT.center(), &mut ui);
+    frames.frame(vec![preedit("k")], &mut ui);
+    assert!(matches!(first.take().as_slice(), [EditorInput::Preedit { .. }]), "the first editor composes");
+
+    report.set(false);
+    let mut resets = Vec::new();
+    for events in [vec![moved(OTHER.center())], vec![press(OTHER.center())], vec![release(OTHER.center())], Vec::new(), Vec::new(), Vec::new()] {
+        frames.frame(events, &mut ui);
+        resets.push(frames.ime().and_then(|ime| ime.reset));
+        // The new editor reports no caret only in the pass that interrupts.
+        if resets.last().is_some_and(Option::is_some) {
+            report.set(true);
+        }
+    }
+    let asked: Vec<_> = resets.iter().skip_while(|reset| reset.is_none()).collect();
+    let [Some(interrupted), None, Some(again), ..] = asked.as_slice() else {
+        panic!(
+            "focus leaving the composition asks for a reset, the new editor's next output asks nothing, and the retired request is asked again: {resets:?}"
+        )
+    };
+    assert_ne!(again, interrupted);
+    frames.frame(Vec::new(), &mut ui);
+    second.take();
+
+    frames.frame(vec![Event::ImeResetCompleted { request_id: *again }, preedit("y")], &mut ui);
+    let inputs = second.take();
+    assert!(
+        matches!(inputs.as_slice(), [EditorInput::Preedit { text, .. }] if &**text == "y"),
+        "the new request's completion gives the new editor its IME: {inputs:?}"
     );
 }

@@ -12,6 +12,8 @@ pub(crate) enum Raw {
     Commit(String),
     /// The OS finished the reset with this request id.
     ResetCompleted(egui::ImeResetId),
+    /// The integration dropped the reset request with this id; no completion follows.
+    ResetRetired(egui::ImeResetId),
 }
 
 /// Removes the IME events from `events` and returns them in order.
@@ -30,6 +32,10 @@ pub(crate) fn take_events(events: &mut Vec<Event>) -> Vec<Raw> {
         }
         Event::ImeResetCompleted { request_id } => {
             taken.push(Raw::ResetCompleted(*request_id));
+            false
+        }
+        Event::ImeResetRetired { request_id } => {
+            taken.push(Raw::ResetRetired(*request_id));
             false
         }
         _ => true,
