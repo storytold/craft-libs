@@ -4145,7 +4145,8 @@ dependencies = [
 
 [[package]]
 name = "harfbuzz-subset-sys"
-version = "0.1.0"
+version = "0.1.0+harfbuzz-15.0.0"
+source = "git+https://github.com/storytold/harfbuzz.git?rev=2659dd807f9a48f75604ee7c76cb709f7b70b950#2659dd807f9a48f75604ee7c76cb709f7b70b950"
 dependencies = [
  "cc",
 ]

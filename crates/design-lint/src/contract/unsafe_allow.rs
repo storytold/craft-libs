@@ -1,5 +1,5 @@
-//! `contract/unsafe-allow`: no `allow(unsafe_code)` in source, except in craft-win32, harfbuzz-subset-sys and the
-//! benchmark's allocator (`ALLOWED`). Every other crate keeps the workspace `forbid`.
+//! `contract/unsafe-allow`: no `allow(unsafe_code)` in source, except in craft-win32 and the benchmark's allocator
+//! (`ALLOWED`). Every other crate keeps the workspace `forbid`.
 
 use std::path::Path;
 
@@ -13,9 +13,9 @@ use super::Cx;
 pub const ID: &str = "contract/unsafe-allow";
 
 /// The places that may allow `unsafe_code`, as path prefixes relative to the repository root, as in findings:
-/// craft-win32, which holds the Windows FFI calls (the owner's exception, 2026-11-08), harfbuzz-subset-sys, which holds
-/// the HarfBuzz subsetter's FFI calls behind craft-font-subset, and the benchmark's global allocator.
-pub(crate) const ALLOWED: [&str; 3] = ["crates/win32/src", "crates/harfbuzz-subset-sys/src", "crates/ui-bench/src/alloc.rs"];
+/// craft-win32, which holds the Windows FFI calls (the owner's exception, 2026-11-08), and the benchmark's global
+/// allocator.
+pub(crate) const ALLOWED: [&str; 2] = ["crates/win32/src", "crates/ui-bench/src/alloc.rs"];
 
 struct Allows {
     spans: Vec<proc_macro2::Span>,
@@ -42,12 +42,6 @@ pub(super) fn check(cx: &Cx<'_>, out: &mut Vec<Finding>) {
     let mut allows = Allows { spans: Vec::new() };
     allows.visit_file(cx.file);
     for span in allows.spans {
-        cx.flag_span(
-            out,
-            ID,
-            ID,
-            span,
-            "`allow(unsafe_code)`; only craft-win32, harfbuzz-subset-sys and the benchmark allocator allow it".to_owned(),
-        );
+        cx.flag_span(out, ID, ID, span, "`allow(unsafe_code)`; only craft-win32 and the benchmark allocator allow it".to_owned());
     }
 }

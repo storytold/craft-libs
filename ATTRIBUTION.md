@@ -34,7 +34,6 @@ author, source and license. Library code and original assets are under the repos
 | `crates/font-subset/tests/data/{abeezee,abel,bbhbartle,librefranklin,orbitron,sarabun}/` (unmodified; each with its `OFL.txt`) | The ABeeZee, Abel, BBH, Libre Franklin, Orbitron and Sarabun Project Authors | [google/fonts@e7db6ca `ofl/`](https://github.com/google/fonts/tree/e7db6ca/ofl) | OFL-1.1 |
 | `crates/font-subset/tests/data/ubuntu/Ubuntu-Regular.ttf` (unmodified; with `LICENCE.txt`) | Canonical Ltd. (Dalton Maag) | [google/fonts@e7db6ca `ufl/ubuntu`](https://github.com/google/fonts/tree/e7db6ca/ufl/ubuntu) | Ubuntu-font-1.0 |
 | `crates/font-subset/tests/data/notosanscjk/NotoSansCJKsc-test.otf` (subset to the test strings; with `OFL.txt`) | The Noto Project Authors (Adobe, Google) | [notofonts/noto-cjk@f8d1575 `Sans/OTF/SimplifiedChinese`](https://github.com/notofonts/noto-cjk/tree/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/SimplifiedChinese), via storytold/font-preview-service | OFL-1.1 |
-| `crates/harfbuzz-subset-sys/harfbuzz/` (HarfBuzz 15.0.0 `src/` without the files its README lists; unmodified) | The HarfBuzz authors (`harfbuzz/COPYING`) | [harfbuzz-15.0.0.tar.xz](https://github.com/harfbuzz/harfbuzz/releases/download/15.0.0/harfbuzz-15.0.0.tar.xz), sha256 in the crate's README | MIT-Modern-Variant (HarfBuzz's "Old MIT", `harfbuzz/COPYING`) |
 
 Original assets are covered by the repository licence.
 

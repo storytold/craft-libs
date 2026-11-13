@@ -70,7 +70,8 @@ craft-heif = { path = "crates/heif" }
 craft-fig = { path = "crates/fig" }
 craft-fonts-build = { path = "crates/fonts-build" }
 craft-font-subset = { path = "crates/font-subset" }
-harfbuzz-subset-sys = { path = "crates/harfbuzz-subset-sys" }
+# The HarfBuzz subsetter from storytold's HarfBuzz fork (branch rust-subset-15.0.0: HarfBuzz 15.0.0 plus rust/harfbuzz-subset-sys).
+harfbuzz-subset-sys = { git = "https://github.com/storytold/harfbuzz.git", rev = "2659dd807f9a48f75604ee7c76cb709f7b70b950" }
 craft-host = { path = "crates/host" }
 craft-i18n = { path = "crates/i18n" }
 craft-idml = { path = "crates/idml" }

@@ -10,7 +10,6 @@ pub const NOT_IN_FACADE: &[(&str, &str)] = &[
     ("design-lint", "a lint template and checker for apps' clippy.toml, run from xtask"),
     ("feature-root", "a build tool: the dependency set tools/cl resolves every local build's features with; never built"),
     ("fonts-build", "a build-script helper; apps call it from build.rs"),
-    ("harfbuzz-subset-sys", "the HarfBuzz FFI behind craft-font-subset"),
     ("media-testkit", "test support: ffmpeg discovery and fixture locations for the media crates"),
     ("plate-test", "a test harness: reference PDFs and PDF structure checks"),
     ("story-render", "a tool: renders a component's stories to PNG files offscreen"),
