@@ -69,6 +69,7 @@ craft-gcode = { path = "crates/gcode" }
 craft-gif = { path = "crates/gif" }
 craft-hdr = { path = "crates/hdr" }
 craft-mesh = { path = "crates/mesh" }
+craft-mesh-ops = { path = "crates/mesh-ops" }
 craft-html = { path = "crates/html" }
 craft-heif = { path = "crates/heif" }
 craft-fig = { path = "crates/fig" }

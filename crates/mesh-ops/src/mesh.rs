@@ -1,0 +1,1295 @@
+//! The internal triangle mesh.
+
+use glam::{Vec2, Vec3, Vec4};
+
+use crate::{Limits, MeshOpsError, Result, check_limit, try_vec};
+
+/// An edge by the bits of its two end positions, the lower one first
+type EdgePositions = ([u32; 3], [u32; 3]);
+
+/// A contiguous index range drawn with one material.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SubMesh {
+    pub name: String,
+    pub material: usize,
+    /// First index (into [`Mesh::indices`]) and index count.
+    pub start: u32,
+    pub count: u32,
+}
+
+/// Triangle mesh in world space. UVs use the glTF convention (origin top-left, v down).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Mesh {
+    pub positions: Vec<Vec3>,
+    pub normals: Vec<Vec3>,
+    /// xyz tangent, w bitangent sign.
+    pub tangents: Vec<Vec4>,
+    pub uvs: Vec<Vec2>,
+    /// RGBA vertex colors in 0..1 (glTF: linear; OBJ, PLY: as stored): one per vertex, or empty.
+    pub colors: Vec<Vec4>,
+    pub indices: Vec<u32>,
+    /// Index ranges per material and part (node / object); `name` is the part name.
+    pub submeshes: Vec<SubMesh>,
+    pub materials: Vec<String>,
+    /// Per triangle, bit `i` set when edge `i` (corner `i` to corner `i + 1`) is a diagonal the
+    /// importer added to split a polygon, which wireframes leave out. Empty: every edge is real.
+    pub diagonals: Vec<u8>,
+}
+
+/// Hard cap on mesh size accepted from files (triangles).
+pub const MAX_TRIANGLES: usize = 20_000_000;
+
+/// Positions and UVs whose largest magnitude lies between the reciprocal of this and this go
+/// into normal, tangent and unwrap arithmetic as they are. Others are divided by the largest
+/// magnitude first, so edge lengths, cross products, their products with UVs and the squares of
+/// those neither overflow nor underflow. The results depend only on directions, which a uniform
+/// scale keeps.
+const SAFE_MAGNITUDE: f32 = 1e6;
+
+/// The smallest value [`Mesh::radius`] returns.
+const MIN_RADIUS: f32 = 1e-4;
+
+/// Normals whose largest component lies between the reciprocal of this and this go to MikkTSpace
+/// as they are: every unit vector does. MikkTSpace multiplies a normal twice into products of
+/// positions and UVs, so longer normals are divided first.
+const SAFE_NORMAL_MAGNITUDE: f32 = 2.0;
+
+/// `v` at unit length, also when its squared length overflows or rounds to zero. `None` for a
+/// zero or non-finite vector.
+pub(crate) fn unit(v: Vec3) -> Option<Vec3> {
+    v.try_normalize().or_else(|| (v / v.abs().max_element()).try_normalize())
+}
+
+/// The largest absolute value, or `None` when a value is not finite.
+pub(crate) fn largest_abs(values: impl IntoIterator<Item = f32>) -> Option<f32> {
+    let mut largest = 0.0f32;
+    for v in values {
+        if !v.is_finite() {
+            return None;
+        }
+        largest = largest.max(v.abs());
+    }
+    Some(largest)
+}
+
+/// The divisor that brings positions or UVs of magnitude `largest` into the safe range: 1 when
+/// they are already in it, are all zero or are not finite.
+pub(crate) fn safe_divisor(largest: Option<f32>) -> f32 {
+    divisor_into(largest, SAFE_MAGNITUDE)
+}
+
+/// The divisor that brings values of magnitude `largest` to between `1 / limit` and `limit`: 1
+/// when they are already there, are all zero or are not finite.
+fn divisor_into(largest: Option<f32>, limit: f32) -> f32 {
+    match largest {
+        Some(m) if m > limit || (m > 0.0 && m < 1.0 / limit) => m,
+        _ => 1.0,
+    }
+}
+
+/// The index range of a submesh, when it starts and ends on a triangle boundary inside `len`
+/// indices.
+fn submesh_range(s: &SubMesh, len: usize) -> Option<std::ops::Range<usize>> {
+    let end = u64::from(s.start) + u64::from(s.count);
+    (s.start.is_multiple_of(3) && s.count.is_multiple_of(3) && end <= len as u64).then_some(s.start as usize..end as usize)
+}
+
+/// Whether an array of `len` entries has one per vertex of a mesh with `n` vertices.
+fn per_vertex(len: usize, n: usize) -> bool {
+    len == n
+}
+
+impl Mesh {
+    pub fn triangle_count(&self) -> usize {
+        self.indices.len() / 3
+    }
+
+    pub fn vertex_count(&self) -> usize {
+        self.positions.len()
+    }
+
+    /// Axis-aligned bounds of the finite positions (zero box when there are none). Non-finite
+    /// positions are left out, so one cannot turn the box into NaN or hide a coordinate.
+    pub fn bounds(&self) -> (Vec3, Vec3) {
+        self.positions
+            .iter()
+            .filter(|p| p.is_finite())
+            .fold(None, |b: Option<(Vec3, Vec3)>, p| Some(b.map_or((*p, *p), |(lo, hi)| (lo.min(*p), hi.max(*p)))))
+            .unwrap_or((Vec3::ZERO, Vec3::ZERO))
+    }
+
+    /// Bounding-sphere radius around the bounds center, at least 1e-4. Bounds wider than
+    /// `f32::MAX` give `f32::MAX`.
+    pub fn radius(&self) -> f32 {
+        let (lo, hi) = self.bounds();
+        let half = hi * 0.5 - lo * 0.5;
+        let largest = half.abs().max_element();
+        let length = if largest > SAFE_MAGNITUDE { (half / largest).length() * largest } else { (hi - lo).length() * 0.5 };
+        length.clamp(MIN_RADIUS, f32::MAX)
+    }
+
+    /// Vertex indices of triangle `t`.
+    pub fn tri(&self, t: usize) -> Option<[usize; 3]> {
+        let start = t.checked_mul(3)?;
+        let i = self.indices.get(start..start.checked_add(3)?)?;
+        Some([i[0] as usize, i[1] as usize, i[2] as usize])
+    }
+
+    /// The edges wireframes draw: each vertex pair once (smaller index first), leaving out
+    /// polygon diagonals ([`Mesh::diagonals`]) unless only one triangle has the edge (a UV seam
+    /// split it from its twin), per material in `0..materials.len().max(1)`.
+    pub fn wire_edges(&self) -> Vec<Vec<(u32, u32)>> {
+        (0..self.materials.len().max(1))
+            .map(|m| {
+                // Edge → (real in some triangle, triangles using it), in first-seen order.
+                let mut edges: Vec<((u32, u32), bool, u8)> = Vec::new();
+                let mut at: std::collections::HashMap<(u32, u32), usize> = std::collections::HashMap::new();
+                for t in self.triangles_of(m) {
+                    let Some(v) = self.indices.get(t * 3..t * 3 + 3) else { continue };
+                    let hidden = self.diagonals.get(t).copied().unwrap_or(0);
+                    for (i, (a, b)) in [(v[0], v[1]), (v[1], v[2]), (v[2], v[0])].into_iter().enumerate() {
+                        let key = (a.min(b), a.max(b));
+                        let real = hidden >> i & 1 == 0;
+                        let e = *at.entry(key).or_insert_with(|| {
+                            edges.push((key, false, 0));
+                            edges.len() - 1
+                        });
+                        if let Some((_, r, n)) = edges.get_mut(e) {
+                            *r |= real;
+                            *n = n.saturating_add(1);
+                        }
+                    }
+                }
+                edges.into_iter().filter(|(_, real, n)| *real || *n == 1).map(|(k, ..)| k).collect()
+            })
+            .collect()
+    }
+
+    /// Edges where the UV layout splits: two triangles meet there in 3D but not in UV space, per material in `0..materials.len().max(1)`
+    pub fn uv_seam_edges(&self) -> Vec<Vec<(u32, u32)>> {
+        // Signed zero denotes the same position on either side of an imported seam
+        let bits = |position: Vec3| position.to_array().map(|coordinate| if coordinate == 0.0 { 0 } else { coordinate.to_bits() });
+        let mut seams = vec![Vec::new(); self.materials.len().max(1)];
+        // Match across materials before grouping the lines for texture-set visibility
+        let mut sides: std::collections::HashMap<EdgePositions, Vec<(u32, u32, usize)>> = std::collections::HashMap::new();
+        for material in 0..seams.len() {
+            for triangle in self.triangles_of(material) {
+                let Some(corners) = self.indices.get(triangle * 3..triangle * 3 + 3) else { continue };
+
+                for (from, to) in [(corners[0], corners[1]), (corners[1], corners[2]), (corners[2], corners[0])] {
+                    let (Some(from_position), Some(to_position)) = (self.positions.get(from as usize), self.positions.get(to as usize)) else {
+                        continue;
+                    };
+
+                    let (from_bits, to_bits) = (bits(*from_position), bits(*to_position));
+                    let (edge, pair) = if from_bits <= to_bits { ((from_bits, to_bits), (from, to)) } else { ((to_bits, from_bits), (to, from)) };
+                    sides.entry(edge).or_default().push((pair.0, pair.1, material));
+                }
+            }
+        }
+
+        let uv = |index: u32| self.uvs.get(index as usize).copied();
+        for pairs in sides.into_values() {
+            let Some(&(first_from, first_to, _)) = pairs.first() else { continue };
+
+            if pairs.iter().any(|&(from, to, _)| (uv(from), uv(to)) != (uv(first_from), uv(first_to))) {
+                for (from, to, material) in pairs {
+                    if let Some(edges) = seams.get_mut(material) {
+                        edges.push((from.min(to), from.max(to)));
+                    }
+                }
+            }
+        }
+        for edges in &mut seams {
+            edges.sort_unstable();
+            edges.dedup();
+        }
+
+        seams
+    }
+
+    /// Material of triangle `t`.
+    pub fn material_of(&self, t: usize) -> Option<usize> {
+        let idx = u64::try_from(t.checked_mul(3)?).ok()?;
+        self.submeshes.iter().find(|s| idx >= u64::from(s.start) && idx < u64::from(s.start) + u64::from(s.count)).map(|s| s.material)
+    }
+
+    /// Triangle index range belonging to material `m` (all submeshes of that material), within
+    /// the index buffer.
+    pub fn triangles_of(&self, m: usize) -> impl Iterator<Item = usize> + '_ {
+        let len = self.indices.len() as u64;
+        self.submeshes.iter().filter(move |s| s.material == m).flat_map(move |s| {
+            let end = (u64::from(s.start) + u64::from(s.count)).min(len);
+            (s.start / 3) as usize..(end / 3) as usize
+        })
+    }
+
+    /// Check that attribute arrays agree, every value is finite, every index is in range and
+    /// every submesh covers whole triangles inside the index buffer.
+    pub fn validate(&self) -> Result<()> {
+        let n = self.positions.len();
+        if self.normals.len() != n || self.uvs.len() != n || self.tangents.len() != n {
+            return Err(MeshOpsError::Invalid(format!(
+                "attribute counts differ: {} positions, {} normals, {} uvs, {} tangents",
+                n,
+                self.normals.len(),
+                self.uvs.len(),
+                self.tangents.len()
+            )));
+        }
+        if !self.colors.is_empty() && self.colors.len() != n {
+            return Err(MeshOpsError::Invalid(format!("{} vertex colors for {n} vertices", self.colors.len())));
+        }
+        if !self.indices.len().is_multiple_of(3) {
+            return Err(MeshOpsError::Invalid("index count is not a multiple of 3".into()));
+        }
+        if self.triangle_count() > MAX_TRIANGLES {
+            return Err(MeshOpsError::Invalid(format!("mesh has more than {MAX_TRIANGLES} triangles")));
+        }
+        if let Some(bad) = self.indices.iter().find(|i| **i as usize >= n) {
+            return Err(MeshOpsError::Invalid(format!("index {bad} out of range ({n} vertices)")));
+        }
+        if self.positions.iter().any(|p| !p.is_finite()) {
+            return Err(MeshOpsError::Invalid("mesh has non-finite positions".into()));
+        }
+        if self.normals.iter().any(|v| !v.is_finite())
+            || self.uvs.iter().any(|v| !v.is_finite())
+            || self.tangents.iter().any(|v| !v.is_finite())
+            || self.colors.iter().any(|v| !v.is_finite())
+        {
+            return Err(MeshOpsError::Invalid("mesh has non-finite normals, UVs, tangents or colors".into()));
+        }
+        for s in &self.submeshes {
+            if submesh_range(s, self.indices.len()).is_none() || s.material >= self.materials.len().max(1) {
+                return Err(MeshOpsError::Invalid(format!("submesh {} is out of range", s.name)));
+            }
+        }
+        Ok(())
+    }
+
+    /// Area-weighted smooth normals over the index buffer.
+    pub fn compute_normals(&mut self) {
+        self.normals = self.smooth_normals();
+    }
+
+    /// The normals [`Mesh::compute_normals`] stores.
+    pub(crate) fn smooth_normals(&self) -> Vec<Vec3> {
+        let scale = safe_divisor(largest_abs(self.positions.iter().flat_map(|p| p.to_array())));
+        let mut normals = vec![Vec3::ZERO; self.positions.len()];
+        for &[a, b, c] in self.indices.as_chunks::<3>().0 {
+            let (a, b, c) = (a as usize, b as usize, c as usize);
+            let (Some(pa), Some(pb), Some(pc)) = (self.positions.get(a), self.positions.get(b), self.positions.get(c)) else { continue };
+            let (pa, pb, pc) = (*pa / scale, *pb / scale, *pc / scale);
+            let face = (pb - pa).cross(pc - pa);
+            for v in [a, b, c] {
+                if let Some(x) = normals.get_mut(v) {
+                    *x += face;
+                }
+            }
+        }
+
+        normals.into_iter().map(|v| unit(v).unwrap_or(Vec3::Y)).collect()
+    }
+
+    /// MikkTSpace tangents (falls back to per-triangle tangents if generation fails). A mesh with
+    /// an index out of range, a non-finite position, normal or UV, or only degenerate triangles
+    /// does not go to MikkTSpace.
+    pub fn compute_tangents(&mut self) {
+        self.tangents = vec![Vec4::new(1.0, 0.0, 0.0, 1.0); self.positions.len()];
+        if self.normals.len() != self.positions.len() {
+            self.compute_normals();
+        }
+        if self.uvs.len() != self.positions.len() {
+            self.uvs = vec![Vec2::ZERO; self.positions.len()];
+        }
+        let scales = Scales::of(self);
+        // mikktspace crashes (out-of-bounds) when every triangle is degenerate; skip it then. It
+        // reads the divided positions, so the check does too. Its callbacks read a missing vertex
+        // as the origin, which the degenerate check cannot see, so an index past the last vertex
+        // skips it too.
+        let n = self.positions.len();
+        let usable = scales.finite && self.indices.iter().all(|&i| (i as usize) < n) && !self.all_triangles_degenerate_divided_by(scales.position);
+        let mut g = Mikk { mesh: self, scales };
+        if !usable || !mikktspace::generate_tangents(&mut g) {
+            self.simple_tangents(scales);
+        }
+        for (t, n) in self.tangents.iter_mut().zip(&self.normals) {
+            // Normals outside the safe range are brought to unit length first, so the projection
+            // below stays finite.
+            let n = if scales.normal == 1.0 { *n } else { (*n / scales.normal).try_normalize().unwrap_or(Vec3::Y) };
+            // Orthonormalize against the normal; repair degenerate results.
+            let v = t.truncate();
+            let o = (v - n * n.dot(v)).try_normalize().unwrap_or_else(|| n.any_orthonormal_vector());
+            *t = o.extend(if t.w < 0.0 { -1.0 } else { 1.0 });
+        }
+    }
+
+    /// True when the mesh has triangles and every one of them has two corners at the same
+    /// position after the positions are divided by `divisor`.
+    fn all_triangles_degenerate_divided_by(&self, divisor: f32) -> bool {
+        let p = |i: &u32| self.positions.get(*i as usize).map(|p| *p / divisor);
+        !self.indices.is_empty()
+            && self.indices.chunks(3).all(|t| match t {
+                [a, b, c] => p(a) == p(b) || p(a) == p(c) || p(b) == p(c),
+                _ => true,
+            })
+    }
+
+    fn simple_tangents(&mut self, scales: Scales) {
+        let mut tangents = vec![Vec3::ZERO; self.positions.len()];
+        for &[a, b, c] in self.indices.as_chunks::<3>().0 {
+            let (a, b, c) = (a as usize, b as usize, c as usize);
+            let (Some(pa), Some(pb), Some(pc)) = (self.positions.get(a), self.positions.get(b), self.positions.get(c)) else { continue };
+            let (Some(ua), Some(ub), Some(uc)) = (self.uvs.get(a), self.uvs.get(b), self.uvs.get(c)) else { continue };
+            let (pa, pb, pc) = (*pa / scales.position, *pb / scales.position, *pc / scales.position);
+            let (ua, ub, uc) = (*ua / scales.uv, *ub / scales.uv, *uc / scales.uv);
+            let (e1, e2) = (pb - pa, pc - pa);
+            let (d1, d2) = (ub - ua, uc - ua);
+            let determinant = d1.x * d2.y - d2.x * d1.y;
+            if determinant.abs() < 1e-12 {
+                continue;
+            }
+
+            let tangent = (e1 * d2.y - e2 * d1.y) / determinant;
+            for v in [a, b, c] {
+                if let Some(x) = tangents.get_mut(v) {
+                    *x += tangent;
+                }
+            }
+        }
+
+        self.tangents = tangents.into_iter().map(|t| unit(t).unwrap_or(Vec3::X).extend(1.0)).collect();
+    }
+
+    /// The UV tiles material `m` covers: integer parts of its triangles' UV centroids (v down),
+    /// ascending. Non-finite UVs are skipped.
+    pub fn uv_tiles(&self, m: usize) -> std::collections::BTreeSet<(i32, i32)> {
+        self.triangles_of(m)
+            .filter_map(|t| {
+                let [a, b, c] = self.tri(t)?;
+                let uv = (*self.uvs.get(a)? + *self.uvs.get(b)? + *self.uvs.get(c)?) / 3.0;
+                uv.is_finite().then(|| (uv.x.floor() as i32, uv.y.floor() as i32))
+            })
+            .collect()
+    }
+
+    /// Remap the UVs of material `m`'s triangles with `f`. Vertices they share with other
+    /// materials are duplicated first, so the other triangles keep their UVs.
+    pub fn map_material_uvs(&mut self, m: usize, f: impl Fn(Vec2) -> Vec2) {
+        self.map_material_uvs_with(m, |_, uv| f(uv));
+    }
+
+    /// [`Mesh::map_material_uvs`] where `f` also gets the UV centroid of the first of the
+    /// material's triangles using the vertex: piecewise maps (UV tiles of different sizes) then
+    /// place a vertex on a tile border with its own triangle's tile.
+    pub fn map_material_uvs_with(&mut self, m: usize, f: impl Fn(Vec2, Vec2) -> Vec2) {
+        let material_triangles: Vec<usize> = self.triangles_of(m).collect();
+        let mut in_material = vec![false; self.triangle_count()];
+        for t in &material_triangles {
+            if let Some(x) = in_material.get_mut(*t) {
+                *x = true;
+            }
+        }
+
+        let mut shared = vec![false; self.positions.len()];
+        for (_, tri) in self.indices.as_chunks::<3>().0.iter().enumerate().filter(|(t, _)| !in_material.get(*t).copied().unwrap_or(false)) {
+            for v in tri {
+                if let Some(s) = shared.get_mut(*v as usize) {
+                    *s = true;
+                }
+            }
+        }
+
+        let mut duplicates = std::collections::HashMap::new();
+        for k in material_triangles.iter().flat_map(|t| t * 3..t * 3 + 3) {
+            let Some(&v) = self.indices.get(k) else { continue };
+            let v = if shared.get(v as usize).copied().unwrap_or(false) {
+                match duplicates.get(&v) {
+                    Some(&copy) => copy,
+                    // A vertex past u32::MAX cannot be indexed: the triangle keeps the shared one.
+                    None => match self.duplicate_vertex(v as usize) {
+                        Some(copy) => *duplicates.entry(v).or_insert(copy),
+                        None => v,
+                    },
+                }
+            } else {
+                v
+            };
+            if let Some(i) = self.indices.get_mut(k) {
+                *i = v;
+            }
+        }
+
+        // (vertex, centroid of its first triangle), each vertex once
+        let mut vertices = Vec::with_capacity(material_triangles.len().saturating_mul(3));
+        for t in &material_triangles {
+            let Some(tri) = self.tri(*t) else { continue };
+            let centroid = tri.iter().map(|v| self.uvs.get(*v).copied().unwrap_or_default()).sum::<Vec2>() / 3.0;
+            vertices.extend(tri.map(|v| (v, centroid)));
+        }
+
+        vertices.sort_by_key(|(v, _)| *v);
+        vertices.dedup_by_key(|(v, _)| *v);
+        for (v, centroid) in vertices {
+            if let Some(uv) = self.uvs.get_mut(v) {
+                *uv = f(centroid, *uv);
+            }
+        }
+    }
+
+    /// Append a copy of vertex `v`; returns its index, or `None` when the new index would not
+    /// fit in `u32`.
+    fn duplicate_vertex(&mut self, v: usize) -> Option<u32> {
+        let i = u32::try_from(self.positions.len()).ok()?;
+        self.positions.push(self.positions.get(v).copied().unwrap_or_default());
+        self.normals.push(self.normals.get(v).copied().unwrap_or(Vec3::Y));
+        self.tangents.push(self.tangents.get(v).copied().unwrap_or(Vec4::new(1.0, 0.0, 0.0, 1.0)));
+        self.uvs.push(self.uvs.get(v).copied().unwrap_or_default());
+        if !self.colors.is_empty() {
+            self.colors.push(self.colors.get(v).copied().unwrap_or(Vec4::ONE));
+        }
+        Some(i)
+    }
+
+    /// Append `other`, offsetting indices; its submeshes keep their material indices shifted by
+    /// this mesh's material count. Leaves this mesh unchanged when [`Mesh::try_append`] fails.
+    pub fn append(&mut self, other: &Mesh) {
+        let _ = self.try_append(other);
+    }
+
+    /// [`Mesh::append`], or an error when an index of `other` is out of range or a rebased
+    /// index or submesh range would not fit in `u32`. When only one side has normals, UVs or
+    /// tangents for every vertex, the other side gets them (computed normals and tangents, zero
+    /// UVs), so the attribute arrays stay as long as the positions. A side with submeshes and
+    /// no material list gets one unnamed material.
+    pub fn try_append(&mut self, other: &Mesh) -> Result<()> {
+        if let Some(bad) = other.indices.iter().find(|&&i| i as usize >= other.positions.len()) {
+            return Err(MeshOpsError::Invalid(format!("index {bad} out of range ({} vertices)", other.positions.len())));
+        }
+        let too_large = |what| MeshOpsError::Invalid(format!("the appended {what} do not fit in u32"));
+        let base = u32::try_from(self.positions.len()).map_err(|_| too_large("vertices"))?;
+        let vertices = self.positions.len().checked_add(other.positions.len()).ok_or(too_large("vertices"))?;
+        // The last vertex index is `vertices - 1`.
+        if vertices > 0 && u32::try_from(vertices - 1).is_err() {
+            return Err(too_large("vertices"));
+        }
+        let ibase = u32::try_from(self.indices.len()).map_err(|_| too_large("indices"))?;
+        let index_count = self.indices.len().checked_add(other.indices.len()).ok_or(too_large("indices"))?;
+        u32::try_from(index_count).map_err(|_| too_large("indices"))?;
+        // Submeshes of a mesh without a material list use material 0, which gets an unnamed entry
+        // so that it stays apart from the other mesh's materials.
+        let unnamed = |m: &Mesh| m.materials.is_empty() && !m.submeshes.is_empty();
+        let (self_unnamed, other_unnamed) = (unnamed(self), unnamed(other));
+        let mbase = self.materials.len() + usize::from(self_unnamed);
+        let mut submeshes = Vec::with_capacity(other.submeshes.len());
+        for s in &other.submeshes {
+            let start = s.start.checked_add(ibase).ok_or(too_large("submeshes"))?;
+            start.checked_add(s.count).ok_or(too_large("submeshes"))?;
+            let material = s.material.checked_add(mbase).ok_or(too_large("submeshes"))?;
+            submeshes.push(SubMesh { name: s.name.clone(), material, start, count: s.count });
+        }
+
+        let mut other = other.clone();
+        let complete = |m: &Mesh| {
+            (
+                per_vertex(m.normals.len(), m.positions.len()),
+                per_vertex(m.uvs.len(), m.positions.len()),
+                per_vertex(m.tangents.len(), m.positions.len()),
+            )
+        };
+        let ((sn, su, st), (on, ou, ot)) = (complete(self), complete(&other));
+        let need_tangents = st || ot;
+        let (need_normals, need_uvs) = (sn || on || need_tangents, su || ou || need_tangents);
+        for (mesh, (has_normals, has_uvs, has_tangents)) in [(&mut *self, (sn, su, st)), (&mut other, (on, ou, ot))] {
+            if !need_normals {
+                mesh.normals.clear();
+            } else if !has_normals {
+                mesh.compute_normals();
+            }
+            if !need_uvs {
+                mesh.uvs.clear();
+            } else if !has_uvs {
+                mesh.uvs = vec![Vec2::ZERO; mesh.positions.len()];
+            }
+            if !need_tangents {
+                mesh.tangents.clear();
+            } else if !has_tangents {
+                mesh.compute_tangents();
+            }
+        }
+
+        self.positions.extend_from_slice(&other.positions);
+        self.normals.extend_from_slice(&other.normals);
+        self.tangents.extend_from_slice(&other.tangents);
+        self.uvs.extend_from_slice(&other.uvs);
+        if !(self.colors.is_empty() && other.colors.is_empty()) {
+            // Vertices of the side without colors become white.
+            self.colors.resize(base as usize, Vec4::ONE);
+            self.colors.extend(other.colors.iter().copied().chain(std::iter::repeat(Vec4::ONE)).take(other.positions.len()));
+        }
+        if !(self.diagonals.is_empty() && other.diagonals.is_empty()) {
+            self.diagonals.resize(ibase as usize / 3, 0);
+            self.diagonals.extend(other.diagonals.iter().copied().chain(std::iter::repeat(0)).take(other.triangle_count()));
+        }
+        self.indices.extend(other.indices.iter().map(|i| i + base));
+        if self_unnamed {
+            self.materials.push(String::new());
+        }
+        self.materials.extend(other.materials.iter().cloned());
+        if other_unnamed {
+            self.materials.push(String::new());
+        }
+        self.submeshes.extend(submeshes);
+        Ok(())
+    }
+
+    /// Uniformly scale and translate so the mesh is centered with the given bounding radius. A
+    /// radius that is not a finite positive number, or is so large that a corner of the bounds
+    /// would pass `f32::MAX`, leaves the mesh unchanged.
+    pub fn normalize_to(&mut self, radius: f32) {
+        if !(radius.is_finite() && radius > 0.0) {
+            return;
+        }
+        let (lo, hi) = self.bounds();
+        // `Mesh::radius` is the real radius above its floor; a smaller mesh takes the second form.
+        let r = self.radius();
+        if lo.abs().max(hi.abs()).max_element() <= SAFE_MAGNITUDE && r > MIN_RADIUS {
+            let c = (lo + hi) * 0.5;
+            let s = radius / r;
+            if !(((lo - c) * s).is_finite() && ((hi - c) * s).is_finite()) {
+                return;
+            }
+            for p in &mut self.positions {
+                *p = (*p - c) * s;
+            }
+            return;
+        }
+        // Half-sums and a divided length keep every intermediate value finite near f32::MAX and
+        // nonzero for a mesh far smaller than the floor.
+        let c = lo * 0.5 + hi * 0.5;
+        let half = hi * 0.5 - lo * 0.5;
+        let largest = half.abs().max_element();
+        if largest == 0.0 {
+            // Every finite position is the center.
+            for p in &mut self.positions {
+                *p = *p * 0.5 - c * 0.5;
+            }
+            return;
+        }
+        let s = radius / (half / largest).length();
+        let moved = |p: Vec3| (p * 0.5 - c * 0.5) / largest * s * 2.0;
+        if !(moved(lo).is_finite() && moved(hi).is_finite()) {
+            return;
+        }
+        for p in &mut self.positions {
+            *p = moved(*p);
+        }
+    }
+
+    /// A single-material mesh from raw attributes; computes missing normals and tangents.
+    pub fn from_parts(positions: Vec<Vec3>, normals: Option<Vec<Vec3>>, uvs: Vec<Vec2>, indices: Vec<u32>, material: &str) -> Result<Mesh> {
+        if let Some(bad) = indices.iter().find(|&&i| i as usize >= positions.len()) {
+            return Err(MeshOpsError::Invalid(format!("index {bad} out of range ({} vertices)", positions.len())));
+        }
+        let count = u32::try_from(indices.len()).map_err(|_| MeshOpsError::Invalid("index count does not fit in u32".into()))?;
+        let mut m = Mesh {
+            normals: normals.unwrap_or_default(),
+            uvs,
+            positions,
+            indices,
+            tangents: Vec::new(),
+            colors: Vec::new(),
+            submeshes: vec![SubMesh { name: material.into(), material: 0, start: 0, count }],
+            materials: vec![material.into()],
+            diagonals: Vec::new(),
+        };
+        if m.normals.len() != m.positions.len() {
+            m.compute_normals();
+        }
+        m.compute_tangents();
+        m.validate()?;
+        Ok(m)
+    }
+
+    /// A single-material mesh from plain slices, checked against `limits`: the counts, every
+    /// index, every value finite, and normals and UVs (when given) one per position. Leaves
+    /// normals, UVs and tangents empty when they are not given.
+    pub fn from_slices(
+        positions: &[[f32; 3]],
+        normals: Option<&[[f32; 3]]>,
+        uvs: Option<&[[f32; 2]]>,
+        indices: &[u32],
+        limits: &Limits,
+    ) -> Result<Mesh> {
+        check_limit("vertex count", positions.len(), limits.max_vertices)?;
+        if !indices.len().is_multiple_of(3) {
+            return Err(MeshOpsError::Invalid("index count is not a multiple of 3".into()));
+        }
+        check_limit("triangle count", indices.len() / 3, limits.max_triangles)?;
+        let count = u32::try_from(indices.len()).map_err(|_| MeshOpsError::Invalid("index count does not fit in u32".into()))?;
+        if let Some(bad) = indices.iter().find(|&&i| i as usize >= positions.len()) {
+            return Err(MeshOpsError::Invalid(format!("index {bad} out of range ({} vertices)", positions.len())));
+        }
+        let n = positions.len();
+        for (what, len) in [("normals", normals.map(<[_]>::len)), ("UVs", uvs.map(<[_]>::len))] {
+            if let Some(len) = len.filter(|len| *len != n) {
+                return Err(MeshOpsError::Invalid(format!("{len} {what} for {n} vertices")));
+            }
+        }
+        let finite = |v: &[f32]| v.iter().all(|x| x.is_finite());
+        if !positions.iter().all(|p| finite(p)) {
+            return Err(MeshOpsError::Invalid("non-finite position".into()));
+        }
+        if !normals.unwrap_or_default().iter().all(|p| finite(p)) {
+            return Err(MeshOpsError::Invalid("non-finite normal".into()));
+        }
+        if !uvs.unwrap_or_default().iter().all(|p| finite(p)) {
+            return Err(MeshOpsError::Invalid("non-finite UV".into()));
+        }
+
+        let mut mesh = Mesh {
+            submeshes: vec![SubMesh { name: "default".into(), material: 0, start: 0, count }],
+            materials: vec!["default".into()],
+            ..Mesh::default()
+        };
+        mesh.positions = try_vec(n, "positions")?;
+        mesh.positions.extend(positions.iter().map(|p| Vec3::from_array(*p)));
+        if let Some(normals) = normals {
+            mesh.normals = try_vec(n, "normals")?;
+            mesh.normals.extend(normals.iter().map(|p| Vec3::from_array(*p)));
+        }
+        if let Some(uvs) = uvs {
+            mesh.uvs = try_vec(n, "UVs")?;
+            mesh.uvs.extend(uvs.iter().map(|p| Vec2::from_array(*p)));
+        }
+        mesh.indices = try_vec(indices.len(), "indices")?;
+        mesh.indices.extend_from_slice(indices);
+        Ok(mesh)
+    }
+
+    /// Each triangle split into four at its edge midpoints, shared between neighbors. Leaves an
+    /// unchanged copy when [`Mesh::try_subdivided`] fails.
+    pub fn subdivided(&self) -> Mesh {
+        self.try_subdivided(&Limits::default()).unwrap_or_else(|_| self.clone())
+    }
+
+    /// [`Mesh::subdivided`] for a mesh that passes the index and submesh checks of
+    /// [`Mesh::validate`], with the result checked against `limits`. Normals, tangents, UVs and
+    /// colors are interpolated when the mesh has one per vertex; submeshes keep their triangles
+    /// and polygon diagonals stay hidden on the halves of their edges.
+    pub fn try_subdivided(&self, limits: &Limits) -> Result<Mesh> {
+        let n = self.positions.len();
+        if !self.indices.len().is_multiple_of(3) {
+            return Err(MeshOpsError::Invalid("index count is not a multiple of 3".into()));
+        }
+        if let Some(bad) = self.indices.iter().find(|&&i| i as usize >= n) {
+            return Err(MeshOpsError::Invalid(format!("index {bad} out of range ({n} vertices)")));
+        }
+        for s in &self.submeshes {
+            if submesh_range(s, self.indices.len()).is_none() {
+                return Err(MeshOpsError::Invalid(format!("submesh {} is out of range", s.name)));
+            }
+        }
+        let triangles = self.triangle_count();
+        let out_triangles = triangles.checked_mul(4).ok_or(MeshOpsError::Invalid("too many triangles".into()))?;
+        check_limit("triangle count", out_triangles, limits.max_triangles)?;
+        check_limit("vertex count", n, limits.max_vertices)?;
+        // Each triangle adds at most three midpoints; shared edges add fewer.
+        let most_vertices = n.saturating_add(triangles.saturating_mul(3));
+        let out_indices = out_triangles.checked_mul(3).ok_or(MeshOpsError::Invalid("too many indices".into()))?;
+        let fits = |count: usize| u32::try_from(count).is_ok();
+        if !fits(out_indices) || !fits(most_vertices) {
+            return Err(MeshOpsError::Invalid("the subdivided mesh does not fit in u32 indices".into()));
+        }
+
+        let mut m = Mesh { indices: try_vec(out_indices, "indices")?, ..self.clone() };
+        let has = |len: usize| len == n;
+        let (has_n, has_t, has_uv, has_c) = (has(self.normals.len()), has(self.tangents.len()), has(self.uvs.len()), has(self.colors.len()));
+        let mut mids = std::collections::HashMap::new();
+        // Half-sums: (a + b) * 0.5 overflows for coordinates near f32::MAX.
+        let mut mid = |m: &mut Mesh, a: u32, b: u32| -> u32 {
+            *mids.entry((a.min(b), a.max(b))).or_insert_with(|| {
+                let (i, j) = (a as usize, b as usize);
+                let half = |x: Vec3, y: Vec3| x * 0.5 + y * 0.5;
+                m.positions.push(half(self.positions[i], self.positions[j]));
+                if has_n {
+                    m.normals.push((self.normals[i] + self.normals[j]).normalize_or_zero());
+                }
+                if has_t {
+                    let (ti, tj) = (self.tangents[i], self.tangents[j]);
+                    m.tangents.push((ti.truncate() + tj.truncate()).normalize_or_zero().extend(ti.w));
+                }
+                if has_uv {
+                    m.uvs.push(self.uvs[i] * 0.5 + self.uvs[j] * 0.5);
+                }
+                if has_c {
+                    m.colors.push(self.colors[i] * 0.5 + self.colors[j] * 0.5);
+                }
+                // At most n + 3 × triangles vertices, checked to fit above.
+                (m.positions.len() - 1) as u32
+            })
+        };
+        for &[a, b, c] in self.indices.as_chunks::<3>().0 {
+            let (ab, bc, ca) = (mid(&mut m, a, b), mid(&mut m, b, c), mid(&mut m, c, a));
+            // Checked per triangle, so the result stops growing at most three vertices past the limit.
+            check_limit("vertex count", m.positions.len(), limits.max_vertices)?;
+            m.indices.extend_from_slice(&[a, ab, ca, ab, b, bc, ca, bc, c, ab, bc, ca]);
+        }
+        // Children 0 to 2 keep the halves of the parent's edges; child 3 and the edges between
+        // children are new, real edges.
+        if !self.diagonals.is_empty() {
+            m.diagonals = Vec::with_capacity(out_triangles);
+            for t in 0..triangles {
+                let d = self.diagonals.get(t).copied().unwrap_or(0);
+                m.diagonals.extend_from_slice(&[d & 0b101, d & 0b011, d & 0b110, 0]);
+            }
+        }
+        for s in &mut m.submeshes {
+            // Validated above: whole triangles inside an index buffer that fits in u32 after × 4.
+            s.start *= 4;
+            s.count *= 4;
+        }
+        Ok(m)
+    }
+}
+
+/// The divisors that bring a mesh's positions, normals and UVs into the safe range, and whether
+/// all of them are finite.
+#[derive(Clone, Copy)]
+struct Scales {
+    position: f32,
+    normal: f32,
+    uv: f32,
+    finite: bool,
+}
+
+impl Scales {
+    fn of(mesh: &Mesh) -> Scales {
+        let positions = largest_abs(mesh.positions.iter().flat_map(|p| p.to_array()));
+        let normals = largest_abs(mesh.normals.iter().flat_map(|p| p.to_array()));
+        let uvs = largest_abs(mesh.uvs.iter().flat_map(|p| p.to_array()));
+        Scales {
+            position: safe_divisor(positions),
+            normal: divisor_into(normals, SAFE_NORMAL_MAGNITUDE),
+            uv: safe_divisor(uvs),
+            finite: positions.is_some() && normals.is_some() && uvs.is_some(),
+        }
+    }
+}
+
+struct Mikk<'a> {
+    mesh: &'a mut Mesh,
+    scales: Scales,
+}
+
+impl Mikk<'_> {
+    fn vi(&self, face: usize, vert: usize) -> usize {
+        self.mesh.indices.get(face * 3 + vert).copied().unwrap_or(0) as usize
+    }
+}
+
+impl mikktspace::Geometry for Mikk<'_> {
+    fn num_faces(&self) -> usize {
+        self.mesh.indices.len() / 3
+    }
+    fn num_vertices_of_face(&self, _face: usize) -> usize {
+        3
+    }
+    fn position(&self, face: usize, vert: usize) -> [f32; 3] {
+        (self.mesh.positions.get(self.vi(face, vert)).copied().unwrap_or_default() / self.scales.position).to_array()
+    }
+    fn normal(&self, face: usize, vert: usize) -> [f32; 3] {
+        (self.mesh.normals.get(self.vi(face, vert)).copied().unwrap_or(Vec3::Y) / self.scales.normal).to_array()
+    }
+    fn tex_coord(&self, face: usize, vert: usize) -> [f32; 2] {
+        // MikkTSpace expects OpenGL texture coordinates (v up); our UVs are glTF (v down). With
+        // v flipped, the bitangent `cross(N, T) * w` points up the image, as glTF requires.
+        let uv = self.mesh.uvs.get(self.vi(face, vert)).copied().unwrap_or_default() / self.scales.uv;
+        [uv.x, 1.0 - uv.y]
+    }
+    fn set_tangent_encoded(&mut self, tangent: [f32; 4], face: usize, vert: usize) {
+        let i = self.vi(face, vert);
+        if let Some(t) = self.mesh.tangents.get_mut(i) {
+            *t = Vec4::from_array(tangent);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn quad() -> Mesh {
+        Mesh::from_parts(
+            vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), Vec3::new(1.0, 1.0, 0.0), Vec3::new(0.0, 1.0, 0.0)],
+            None,
+            vec![Vec2::new(0.0, 1.0), Vec2::new(1.0, 1.0), Vec2::new(1.0, 0.0), Vec2::new(0.0, 0.0)],
+            vec![0, 1, 2, 0, 2, 3],
+            "Default",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn normals_and_tangents_of_a_quad() {
+        let m = quad();
+        for n in &m.normals {
+            assert!((*n - Vec3::Z).length() < 1e-5);
+        }
+        for t in &m.tangents {
+            assert!((t.truncate() - Vec3::X).length() < 1e-4, "{t:?}");
+        }
+        assert_eq!(m.material_of(1), Some(0));
+        assert_eq!(m.triangles_of(0).collect::<Vec<_>>(), vec![0, 1]);
+    }
+
+    #[test]
+    fn wire_edges_leave_out_polygon_diagonals() {
+        let mut m = quad();
+        assert_eq!(m.wire_edges(), vec![vec![(0, 1), (1, 2), (0, 2), (2, 3), (0, 3)]], "triangles show every edge");
+        // Edge 2 of (0, 1, 2) and edge 0 of (0, 2, 3) split the quad.
+        m.diagonals = vec![0b100, 0b001];
+        assert_eq!(m.wire_edges(), vec![vec![(0, 1), (1, 2), (2, 3), (0, 3)]]);
+        // A diagonal whose twin a seam split off (vertex 4 copies vertex 0) stays.
+        let mut seam = m.clone();
+        seam.indices[3] = 4;
+        assert_eq!(seam.wire_edges()[0].len(), 6);
+        // Appending keeps each side's diagonals on its own triangles.
+        let mut a = Mesh::from_parts(m.positions.clone(), None, m.uvs.clone(), vec![0, 1, 2], "A").unwrap();
+        a.append(&m);
+        assert_eq!(a.diagonals, vec![0, 0b100, 0b001]);
+        assert_eq!(crate::primitives::plane(1.0, 2).wire_edges()[0].len(), 12, "a 2×2 grid of quads has 12 edges");
+    }
+
+    #[test]
+    fn uv_seams_are_where_the_uv_layout_splits() {
+        let mesh = quad();
+        assert_eq!(mesh.uv_seam_edges(), vec![Vec::<(u32, u32)>::new()], "one UV island has no seam");
+
+        // Vertex 4 copies vertex 0's position with another UV: the diagonal (0, 2) / (4, 2) is cut
+        let mut seam = mesh.clone();
+        seam.positions.push(seam.positions[0]);
+        seam.normals.push(seam.normals[0]);
+        seam.tangents.push(seam.tangents[0]);
+        seam.uvs.push(Vec2::new(0.9, 0.9));
+        seam.indices[3] = 4;
+        assert_eq!(seam.uv_seam_edges(), vec![vec![(0, 2), (2, 4)]]);
+
+        // The same split with the same UV is a hard edge, not a seam
+        let mut hard = seam.clone();
+        hard.uvs[4] = hard.uvs[0];
+        assert_eq!(hard.uv_seam_edges(), vec![Vec::<(u32, u32)>::new()]);
+    }
+
+    #[test]
+    fn uv_seams_join_positions_with_opposite_signed_zero() {
+        let mut mesh = quad();
+        mesh.positions.push(Vec3::new(-0.0, 0.0, 0.0));
+        mesh.normals.push(mesh.normals[0]);
+        mesh.tangents.push(mesh.tangents[0]);
+        mesh.uvs.push(Vec2::new(0.9, 0.9));
+        mesh.indices[3] = 4;
+        assert_eq!(mesh.positions[0], mesh.positions[4]);
+        assert_eq!(mesh.uv_seam_edges(), vec![vec![(0, 2), (2, 4)]]);
+    }
+
+    #[test]
+    fn uv_seams_between_materials_belong_to_both_materials() {
+        let mut mesh = quad();
+        mesh.positions.push(mesh.positions[0]);
+        mesh.normals.push(mesh.normals[0]);
+        mesh.tangents.push(mesh.tangents[0]);
+        mesh.uvs.push(Vec2::new(0.9, 0.9));
+        mesh.indices[3] = 4;
+        mesh.materials.push("second".into());
+        mesh.submeshes[0].count = 3;
+        mesh.submeshes.push(SubMesh { name: "second".into(), material: 1, start: 3, count: 3 });
+
+        assert_eq!(mesh.uv_seam_edges(), vec![vec![(0, 2)], vec![(2, 4)]]);
+        mesh.uvs[4] = mesh.uvs[0];
+        assert_eq!(mesh.uv_seam_edges(), vec![Vec::<(u32, u32)>::new(); 2], "a material boundary alone is not a UV seam");
+    }
+
+    #[test]
+    fn validate_catches_bad_indices() {
+        let mut m = quad();
+        m.indices[0] = 99;
+        assert!(m.validate().is_err());
+        let mut m = quad();
+        m.uvs.pop();
+        assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn append_offsets_indices_and_materials() {
+        let mut a = quad();
+        let b = quad();
+        a.append(&b);
+        assert_eq!(a.indices[6], 4);
+        assert_eq!(a.submeshes[1].material, 1);
+        assert_eq!(a.submeshes[1].start, 6);
+        a.validate().unwrap();
+        // Colors on one side only: the other side's vertices become white.
+        let mut red = quad();
+        red.colors = vec![Vec4::new(1.0, 0.0, 0.0, 1.0); 4];
+        a.append(&red);
+        assert_eq!(a.colors.len(), 12);
+        assert_eq!((a.colors[0], a.colors[8]), (Vec4::ONE, Vec4::new(1.0, 0.0, 0.0, 1.0)));
+        a.append(&quad());
+        assert_eq!(a.colors[15], Vec4::ONE);
+        a.validate().unwrap();
+        a.colors.pop();
+        assert!(a.validate().is_err());
+    }
+
+    #[test]
+    fn material_uvs_remap_and_split_shared_vertices() {
+        // quad(): two triangles sharing an edge; put the second in its own material.
+        let mut m = quad();
+        m.materials = vec!["a".into(), "b".into()];
+        m.submeshes =
+            vec![SubMesh { name: "a".into(), material: 0, start: 0, count: 3 }, SubMesh { name: "b".into(), material: 1, start: 3, count: 3 }];
+        let before = m.clone();
+        m.map_material_uvs(1, |uv| uv + Vec2::X);
+        m.validate().unwrap();
+        assert_eq!(m.vertex_count(), 6, "the two shared vertices are split");
+        assert_eq!(&m.indices[..3], &before.indices[..3]);
+        for k in 0..3 {
+            let (old, new) = (before.indices[k] as usize, m.indices[k] as usize);
+            assert_eq!(m.uvs[new], before.uvs[old], "material a keeps its UVs");
+            let (old, new) = (before.indices[3 + k] as usize, m.indices[3 + k] as usize);
+            assert_eq!((m.uvs[new], m.positions[new]), (before.uvs[old] + Vec2::X, before.positions[old]));
+        }
+        assert_eq!(m.uv_tiles(1).into_iter().collect::<Vec<_>>(), vec![(1, 0)]);
+        assert_eq!(m.uv_tiles(0).into_iter().collect::<Vec<_>>(), vec![(0, 0)]);
+    }
+
+    #[test]
+    fn subdivision_shares_edge_midpoints() {
+        let m = quad().subdivided();
+        // 4 corners + 5 edge midpoints (the diagonal is shared), 8 triangles.
+        assert_eq!((m.positions.len(), m.triangle_count()), (9, 8));
+        assert_eq!(m.uvs.len(), 9);
+        assert_eq!((m.submeshes[0].start, m.submeshes[0].count), (0, 24));
+        m.validate().unwrap();
+    }
+
+    /// An index past the last vertex reads as the origin in MikkTSpace's callbacks. With two
+    /// positions at the origin and one missing, the degenerate-mesh guard (which sees the missing
+    /// vertex as different) let it through while MikkTSpace saw every triangle as degenerate and
+    /// underflowed: a panic in debug builds, an out-of-bounds walk in release.
+    #[test]
+    fn from_parts_refuses_an_out_of_range_index_without_crashing() {
+        let positions = vec![Vec3::ZERO, Vec3::X];
+        let uvs = vec![Vec2::ZERO, Vec2::X];
+        let e = Mesh::from_parts(positions, None, uvs, vec![0, 1, 2], "M").unwrap_err();
+        assert!(e.to_string().contains("out of range"), "{e}");
+    }
+
+    #[test]
+    fn tangents_of_a_mesh_with_an_out_of_range_index_fall_back_without_crashing() {
+        for indices in [vec![0, 1, 2], vec![0, 0, 2], vec![0, 1, 5, 0, 1, 1]] {
+            let mut m = Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::Y], None, vec![Vec2::ZERO, Vec2::X, Vec2::Y], vec![0, 1, 2], "M").unwrap();
+            m.positions.truncate(2);
+            m.normals.truncate(2);
+            m.uvs.truncate(2);
+            m.indices = indices;
+            m.compute_tangents();
+            assert_eq!(m.tangents.len(), 2);
+            assert!(m.tangents.iter().all(|t| t.is_finite()), "{:?}", m.tangents);
+        }
+    }
+
+    #[test]
+    fn submesh_ranges_and_append_reject_overflow() {
+        // A submesh whose end passes u32::MAX: no triangles, and no overflow.
+        let mut m = quad();
+        m.submeshes[0] = SubMesh { name: "far".into(), material: 0, start: u32::MAX - 2, count: 6 };
+        assert_eq!(m.triangles_of(0).count(), 0);
+        assert_eq!(m.material_of(1), None);
+
+        // Rebasing a submesh past u32::MAX is an error that leaves the mesh as it was.
+        let mut far = quad();
+        far.submeshes[0].start = u32::MAX - 5;
+        let mut a = quad();
+        let before = a.clone();
+        assert!(a.try_append(&far).is_err());
+        a.append(&far);
+        assert_eq!(a, before);
+    }
+
+    #[test]
+    fn tangents_reject_non_finite_and_survive_extreme_positions() {
+        let quad_at = |s: f32| [[0.0, 0.0, 0.0], [s, 0.0, 0.0], [s, s, 0.0], [0.0, s, 0.0]];
+        let normals = [[0.0, 0.0, 1.0]; 4];
+        let uvs = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+        let indices = [0, 1, 2, 0, 2, 3];
+        let limits = Limits::default();
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut positions = quad_at(1.0);
+            positions[2][1] = bad;
+            assert!(crate::tangents(&positions, &normals, &uvs, &indices, &limits).is_err(), "{bad}");
+            let mut normal = normals;
+            normal[1][0] = bad;
+            assert!(crate::tangents(&quad_at(1.0), &normal, &uvs, &indices, &limits).is_err(), "normal {bad}");
+            let mut uv = uvs;
+            uv[3][1] = bad;
+            assert!(crate::tangents(&quad_at(1.0), &normals, &uv, &indices, &limits).is_err(), "uv {bad}");
+            // The Mesh form falls back instead of handing the value to MikkTSpace.
+            let mut m = Mesh { positions: positions.iter().map(|p| Vec3::from_array(*p)).collect(), indices: indices.to_vec(), ..Mesh::default() };
+            m.compute_tangents();
+            assert_eq!(m.tangents.len(), 4);
+        }
+        // Near f32::MAX the edge products overflow unless the positions are scaled first.
+        for s in [3e38f32, 1e30, 1e9, 1e6, 1e-6, 1e-9, 1e-30] {
+            let t = crate::tangents(&quad_at(s), &normals, &uvs, &indices, &limits).unwrap();
+            for t in &t {
+                assert!((Vec4::from_array(*t) - Vec4::new(1.0, 0.0, 0.0, 1.0)).length() < 1e-4, "scale {s}: {t:?}");
+            }
+            let n = crate::smooth_normals(&quad_at(s), &indices, &limits).unwrap();
+            assert!(n.iter().all(|n| (Vec3::from_array(*n) - Vec3::Z).length() < 1e-5), "scale {s}: {n:?}");
+        }
+        let large_uvs = uvs.map(|uv| [uv[0] * 3e38, uv[1] * 3e38]);
+        let t = crate::tangents(&quad_at(1.0), &normals, &large_uvs, &indices, &limits).unwrap();
+        assert!(t.iter().all(|t| (Vec4::from_array(*t) - Vec4::new(1.0, 0.0, 0.0, 1.0)).length() < 1e-4), "{t:?}");
+        // The largest positions and UVs that are not divided first.
+        let edge_uvs = uvs.map(|uv| [uv[0] * 1e6, uv[1] * 1e6]);
+        let t = crate::tangents(&quad_at(1e6), &normals, &edge_uvs, &indices, &limits).unwrap();
+        assert!(t.iter().all(|t| (Vec4::from_array(*t) - Vec4::new(1.0, 0.0, 0.0, 1.0)).length() < 1e-4), "{t:?}");
+    }
+
+    #[test]
+    fn normals_of_many_large_triangles_at_one_vertex_do_not_overflow() {
+        // Twenty copies of one triangle: the summed face normal at each corner is 2e19 long, and
+        // its square is past f32::MAX.
+        let positions = [[0.0, 0.0, 0.0], [1e9, 0.0, 0.0], [0.0, 1e9, 0.0]];
+        let indices = [0u32, 1, 2].repeat(20);
+        let n = crate::smooth_normals(&positions, &indices, &Limits::default()).unwrap();
+        assert!(n.iter().all(|n| (Vec3::from_array(*n) - Vec3::Z).length() < 1e-6), "{n:?}");
+        // The same sum normalizes without the division, as it does for a vector whose square
+        // rounds to zero.
+        assert_eq!(unit(Vec3::new(0.0, 0.0, 2e19)), Some(Vec3::Z));
+        assert_eq!(unit(Vec3::new(-1e-25, 0.0, 0.0)), Some(Vec3::NEG_X));
+        assert_eq!((unit(Vec3::ZERO), unit(Vec3::new(f32::NAN, 0.0, 0.0)), unit(Vec3::new(f32::INFINITY, 0.0, 0.0))), (None, None, None));
+    }
+
+    #[test]
+    fn bounds_reject_non_finite_positions() {
+        let mut m = quad();
+        m.positions[1] = Vec3::new(f32::NAN, 5.0, 0.0);
+        m.positions[2] = Vec3::new(9.0, f32::INFINITY, 0.0);
+        assert_eq!(m.bounds(), (Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0)), "only the finite corners count");
+        assert!(crate::bounds(&[[0.0, 0.0, 0.0], [f32::NAN, 1.0, 1.0]]).is_err());
+        assert!(crate::bounds(&[[0.0, 0.0, 0.0], [1.0, f32::INFINITY, 1.0]]).is_err());
+        assert_eq!(crate::bounds(&[[1.0, -2.0, 3.0], [-1.0, 2.0, 0.0]]).unwrap(), Some(([-1.0, -2.0, 0.0], [1.0, 2.0, 3.0])));
+        assert_eq!(crate::bounds(&[]).unwrap(), None);
+    }
+
+    #[test]
+    fn validate_rejects_unaligned_and_overflowing_submeshes() {
+        for (start, count) in [(1, 3), (0, 4), (u32::MAX - 2, 6), (u32::MAX, u32::MAX), (3, 6)] {
+            let mut m = quad();
+            m.submeshes[0].start = start;
+            m.submeshes[0].count = count;
+            assert!(m.validate().is_err(), "start {start}, count {count}");
+        }
+        let mut m = quad();
+        m.normals[0] = Vec3::NAN;
+        assert!(m.validate().is_err(), "non-finite normal");
+        let mut m = quad();
+        m.uvs[0] = Vec2::new(0.0, f32::INFINITY);
+        assert!(m.validate().is_err(), "non-finite UV");
+    }
+
+    #[test]
+    fn append_keeps_attributes_aligned() {
+        // A mesh without tangents gets them; one without normals or UVs gets computed normals
+        // and zero UVs.
+        let mut bare = quad();
+        bare.tangents.clear();
+        let mut a = quad();
+        a.append(&bare);
+        a.validate().unwrap();
+        assert_eq!((a.positions.len(), a.tangents.len()), (8, 8));
+        let mut bare = quad();
+        bare.normals.clear();
+        bare.uvs.clear();
+        bare.tangents.clear();
+        let mut b = quad();
+        b.append(&bare);
+        b.validate().unwrap();
+        assert_eq!(b.uvs[4..], [Vec2::ZERO; 4]);
+        assert!((b.normals[5] - Vec3::Z).length() < 1e-5);
+        // Neither side has tangents: the result has none either.
+        let mut c = quad();
+        c.tangents.clear();
+        c.append(&bare);
+        assert_eq!((c.positions.len(), c.normals.len(), c.uvs.len(), c.tangents.len()), (8, 8, 8, 0));
+        // An index past the other mesh's vertices would point into this one after rebasing.
+        let mut broken = quad();
+        broken.indices[0] = 4;
+        assert!(quad().try_append(&broken).is_err());
+    }
+
+    #[test]
+    fn append_keeps_unnamed_materials_apart() {
+        // A submesh may use material 0 of an empty material list.
+        let mut unnamed = quad();
+        unnamed.materials.clear();
+        unnamed.validate().unwrap();
+        let mut a = unnamed.clone();
+        a.append(&quad());
+        a.validate().unwrap();
+        assert_eq!(a.materials, vec![String::new(), "Default".to_string()]);
+        assert_eq!((a.submeshes[0].material, a.submeshes[1].material), (0, 1));
+        let mut b = quad();
+        b.append(&unnamed);
+        b.validate().unwrap();
+        assert_eq!(b.materials, vec!["Default".to_string(), String::new()]);
+        assert_eq!((b.submeshes[0].material, b.submeshes[1].material), (0, 1));
+    }
+
+    #[test]
+    fn subdivision_preserves_large_finite_midpoints() {
+        let mut m = quad();
+        m.positions = vec![Vec3::new(3e38, 0.0, 0.0), Vec3::new(3e38, 3e38, 0.0), Vec3::new(-3e38, 3e38, 0.0), Vec3::new(-3e38, -3e38, 0.0)];
+        m.uvs = vec![Vec2::new(3e38, 0.0), Vec2::new(3e38, 3e38), Vec2::ZERO, Vec2::ZERO];
+        let s = m.try_subdivided(&Limits::default()).unwrap();
+        assert!(s.positions.iter().all(|p| p.is_finite()), "{:?}", s.positions);
+        assert!(s.uvs.iter().all(|p| p.is_finite()), "{:?}", s.uvs);
+        assert!(s.positions.contains(&Vec3::new(3e38, 1.5e38, 0.0)));
+    }
+
+    #[test]
+    fn subdivision_checks_submeshes_and_diagonals() {
+        // Two materials, one triangle each: each keeps its own four children.
+        let mut m = quad();
+        m.materials = vec!["a".into(), "b".into()];
+        m.submeshes =
+            vec![SubMesh { name: "a".into(), material: 0, start: 0, count: 3 }, SubMesh { name: "b".into(), material: 1, start: 3, count: 3 }];
+        m.diagonals = vec![0b100, 0b001];
+        let s = m.try_subdivided(&Limits::default()).unwrap();
+        s.validate().unwrap();
+        assert_eq!(s.triangles_of(0).collect::<Vec<_>>(), vec![0, 1, 2, 3]);
+        assert_eq!(s.triangles_of(1).collect::<Vec<_>>(), vec![4, 5, 6, 7]);
+        assert_eq!(s.diagonals.len(), s.triangle_count());
+        // The diagonal (0, 2) splits at vertex 6; both halves stay hidden. A subdivided quad has
+        // 16 edges.
+        let whole =
+            Mesh { materials: vec!["a".into()], submeshes: vec![SubMesh { name: "a".into(), material: 0, start: 0, count: 24 }], ..s.clone() };
+        let edges = &whole.wire_edges()[0];
+        assert!(!edges.contains(&(0, 6)) && !edges.contains(&(2, 6)), "{edges:?}");
+        assert_eq!(edges.len(), 16 - 2, "{edges:?}");
+
+        // A submesh that splits a triangle, ends past the indices or overflows is an error.
+        for (start, count) in [(1, 3), (0, 9), (u32::MAX - 2, 6)] {
+            let mut bad = quad();
+            bad.submeshes[0].start = start;
+            bad.submeshes[0].count = count;
+            assert!(bad.try_subdivided(&Limits::default()).is_err(), "start {start}, count {count}");
+            assert_eq!(bad.subdivided(), bad, "the infallible form leaves the mesh unchanged");
+        }
+        let mut bad = quad();
+        bad.indices[1] = 9;
+        assert!(bad.try_subdivided(&Limits::default()).is_err());
+        let small = Limits { max_triangles: 7, ..Limits::default() };
+        assert!(quad().try_subdivided(&small).is_err());
+        // The quad's two triangles share one of their six midpoints: 9 vertices, not 10.
+        let exact = Limits { max_vertices: 9, ..Limits::default() };
+        assert_eq!(quad().try_subdivided(&exact).unwrap().positions.len(), 9);
+        let under = Limits { max_vertices: 8, ..Limits::default() };
+        assert!(matches!(quad().try_subdivided(&under), Err(MeshOpsError::TooLarge { .. })));
+    }
+
+    #[test]
+    fn tri_rejects_overflowing_triangle_index() {
+        let m = quad();
+        assert_eq!(m.tri(usize::MAX), None);
+        assert_eq!(m.tri(usize::MAX / 3 + 1), None);
+        assert_eq!(m.material_of(usize::MAX), None);
+    }
+
+    #[test]
+    fn normalize_large_finite_meshes() {
+        let mut m = quad();
+        m.positions = vec![Vec3::new(-3e38, -3e38, 0.0), Vec3::new(3e38, -3e38, 0.0), Vec3::new(3e38, 3e38, 0.0), Vec3::new(-3e38, 3e38, 0.0)];
+        assert!(m.radius().is_finite());
+        m.normalize_to(2.0);
+        assert!(m.positions.iter().all(|p| p.is_finite()), "{:?}", m.positions);
+        assert!((m.radius() - 2.0).abs() < 1e-4, "{}", m.radius());
+        assert!((m.positions[2] - Vec3::new(2.0, 2.0, 0.0).normalize() * 2.0).length() < 1e-4, "{:?}", m.positions);
+        let before = m.clone();
+        m.normalize_to(f32::NAN);
+        m.normalize_to(-1.0);
+        assert_eq!(m, before);
+        // One vertex far from the origin moves to the center.
+        let mut point = Mesh { positions: vec![Vec3::splat(3e38)], ..Mesh::default() };
+        point.normalize_to(2.0);
+        assert_eq!(point.positions, vec![Vec3::ZERO]);
+    }
+
+    #[test]
+    fn normalize_handles_the_largest_radii_and_the_smallest_meshes() {
+        // The unit quad has a radius of about 0.707, so f32::MAX is past what its corners reach.
+        let mut unit = quad();
+        let before = unit.clone();
+        unit.normalize_to(f32::MAX);
+        assert_eq!(unit, before);
+        unit.normalize_to(1e30);
+        assert!(unit.positions.iter().all(|p| p.is_finite()), "{:?}", unit.positions);
+        assert!((unit.radius() / 1e30 - 1.0).abs() < 1e-4, "{}", unit.radius());
+        // A mesh smaller than the floor of `radius` reaches the requested radius too.
+        for size in [1e-5f32, 1e-30] {
+            let mut small = crate::primitives::plane(1.0, 2);
+            for p in &mut small.positions {
+                *p *= size;
+            }
+            small.normalize_to(1.0);
+            assert!((small.radius() - 1.0).abs() < 1e-4, "{size}: {}", small.radius());
+        }
+        // A mesh already near f32::MAX reaches the largest radius: its corners fit.
+        let mut wide = quad();
+        wide.positions = vec![Vec3::new(-3e38, -3e38, 0.0), Vec3::new(3e38, -3e38, 0.0), Vec3::new(3e38, 3e38, 0.0), Vec3::new(-3e38, 3e38, 0.0)];
+        wide.normalize_to(f32::MAX);
+        let corner = wide.positions[2] / f32::MAX;
+        assert!((corner - Vec3::new(1.0, 1.0, 0.0).normalize()).length() < 1e-4, "{:?}", wide.positions);
+    }
+
+    #[test]
+    fn tangents_skip_mikktspace_when_dividing_makes_every_triangle_degenerate() {
+        // Two different x coordinates near f32::MAX with the same quotient by the largest one.
+        let largest = 3.1e38f32;
+        let mut a = 1.6e38f32;
+        let mut b = f32::from_bits(a.to_bits() + 1);
+        for _ in 0..1000 {
+            if a / largest == b / largest {
+                break;
+            }
+            a = b;
+            b = f32::from_bits(a.to_bits() + 1);
+        }
+        assert!(a != b && a / largest == b / largest, "{a} {b}");
+        let positions = [[a, 0.0, 0.0], [b, 0.0, 0.0], [0.0, largest, 0.0]];
+        let uvs = [[0.0, 1.0], [1.0, 1.0], [0.0, 0.0]];
+        let t = crate::tangents(&positions, &[[0.0, 0.0, 1.0]; 3], &uvs, &[0, 1, 2], &Limits::default()).unwrap();
+        assert_eq!(t.len(), 3);
+        assert!(t.iter().flatten().all(|v| v.is_finite()), "{t:?}");
+    }
+
+    #[test]
+    fn tangents_stay_perpendicular_to_very_long_normals() {
+        let direction = Vec3::new(1.0, 0.0, 3.0).normalize();
+        let expected = (Vec3::X - direction * direction.x).normalize().extend(1.0);
+        // Normals near f32::MAX on a unit quad, and normals about 1e9 long on the largest quad
+        // and UVs that are not divided: MikkTSpace multiplies the normal twice into their product.
+        for (length, size) in [(1e38f32, 1.0f32), (3e8, 1e6)] {
+            let positions = [[0.0, 0.0, 0.0], [size, 0.0, 0.0], [size, size, 0.0], [0.0, size, 0.0]];
+            let uvs = [[0.0, size], [size, size], [size, 0.0], [0.0, 0.0]];
+            let normal = [length, 0.0, 3.0 * length];
+            let t = crate::tangents(&positions, &[normal; 4], &uvs, &[0, 1, 2, 0, 2, 3], &Limits::default()).unwrap();
+            for t in &t {
+                assert!((Vec4::from_array(*t) - expected).length() < 1e-3, "{length} {size}: {t:?}");
+            }
+        }
+    }
+}
