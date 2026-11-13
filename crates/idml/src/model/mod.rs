@@ -13,6 +13,7 @@
 //! [`spreads`]) and written back with `to_el`, then [`crate::part_xml`].
 
 mod document;
+mod effects;
 mod geometry;
 mod resources;
 mod spread;
@@ -20,6 +21,7 @@ mod story;
 
 use craft_xml::{El, Local, Node};
 pub use document::{ModelDocument, TopLevelKind, TopLevelNode};
+pub use effects::{DirectionalFeatherValues, DropShadowValues, FeatherValues, GradientFeatherValues, OpacityStopValues, TransparencySetting};
 pub use geometry::{MAX_PATH_POINTS, PathGeometry, PathGeometryError, PathPoint, SubPath};
 pub use resources::{
     ColorDefinition, ColorGroup, ColorGroupDefinition, ColorGroupMember, ColorSpace, CompositeFontDefinition, CompositeFontEntryDefinition,
