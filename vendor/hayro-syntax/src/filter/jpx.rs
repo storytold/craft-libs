@@ -2,7 +2,6 @@ use crate::bit_reader::{BitWriter, bit_mask};
 use crate::filter::FilterResult;
 use crate::object::stream::{ImageColorSpace, ImageData, ImageDecodeParams};
 use alloc::borrow::Cow;
-use alloc::vec;
 use alloc::vec::Vec;
 use hayro_jpeg2000::{ColorSpace, DecodeSettings};
 

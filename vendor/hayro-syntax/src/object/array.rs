@@ -62,7 +62,7 @@ impl Debug for Array<'_> {
             debug_list.entry(&i);
         });
 
-        Ok(())
+        debug_list.finish()
     }
 }
 
@@ -443,6 +443,25 @@ mod tests {
 
     #[test]
     fn array_with_unreadable_item() {
-        let _ = array_ref_impl(b"[true /#zz false]");
+        for bytes in [
+            b"[true false /#zz true]".as_slice(),
+            b"[true false 12-.5 true]",
+        ] {
+            let values = array_ref_impl(bytes).unwrap();
+            assert_eq!(values.len(), 2);
+            assert!(matches!(values[0], MaybeRef::NotRef(Object::Boolean(true))));
+            assert!(matches!(
+                values[1],
+                MaybeRef::NotRef(Object::Boolean(false))
+            ));
+
+            let array = Reader::new(bytes)
+                .read_with_context::<Array<'_>>(&ReaderContext::new(XRef::dummy(), false))
+                .unwrap();
+            assert_eq!(
+                alloc::format!("{array:?}"),
+                "[Boolean(true), Boolean(false)]"
+            );
+        }
     }
 }

@@ -359,7 +359,7 @@ pub(crate) fn common_color_space(colors: &[Color]) -> Option<Vec<Color>> {
         };
         match color {
             Color::Regular(RegularColor::Cmyk(c)) => inks.process = c.to_pdf_color(),
-            Color::Regular(RegularColor::Luma(l)) => inks.process[3] = 1.0 - l.to_pdf_color(),
+            Color::Regular(RegularColor::Luma(l)) => inks.process[3] = l.0.complement(),
             Color::Regular(RegularColor::Rgb(_)) => return None,
             Color::Special(SpecialColor::Separation(s)) => {
                 let SeparationColorant::Custom(name) = &s.space.colorant else {

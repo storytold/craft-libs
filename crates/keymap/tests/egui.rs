@@ -545,6 +545,25 @@ fn the_iso_key_next_to_left_shift_runs_its_bindings() {
 }
 
 #[test]
+fn a_symbol_typed_with_shift_on_the_iso_key_drops_shift() {
+    let app = |id: &str, key: &str| Bindable::new(id, id, Scope::app()).with_default(Binding::parse(key).unwrap());
+    let km = Keymap::new(vec![app("bracket", "["), app("bracket.shift", "Shift+[")], Scopes::new(), Platform::Windows);
+    // A layout on which Shift and the key next to left Shift type `[`. egui reports the physical
+    // key, so the press needs Shift to type `[` and runs `[`, as Shift on other symbol keys does.
+    // A `Shift+[` binding recorded from this key before it had a physical key does not run.
+    let shift = Modifiers::SHIFT;
+    let press = |physical_key| Event::Key { key: EguiKey::OpenBracket, physical_key, pressed: true, repeat: false, modifiers: shift };
+    let input = KeyInput::from_egui(&press(Some(EguiKey::IntlBackslash)), Platform::Windows).unwrap();
+    assert_eq!(Layout::new().resolve(&input), Some(chord("[")));
+    let mut d = Dispatcher::new();
+    let (ran, _) = run(&mut d, &km, &Active::NONE, frame(1.0, shift, vec![press(Some(EguiKey::IntlBackslash))]));
+    assert_eq!(ran, ["bracket"]);
+    // Without a physical key, Shift stays in the chord.
+    let (ran, _) = run(&mut d, &km, &Active::NONE, frame(2.0, shift, vec![press(None)]));
+    assert_eq!(ran, ["bracket.shift"]);
+}
+
+#[test]
 fn letters_follow_the_latin_layout_from_egui_winit_to_the_dispatcher() {
     let app = |id: &str, key: &str| Bindable::new(id, id, Scope::app()).with_default(Binding::parse(key).unwrap());
     let km = Keymap::new(vec![app("d", "Cmd+D"), app("e", "Cmd+E")], Scopes::new(), Platform::Linux);

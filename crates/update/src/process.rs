@@ -2,7 +2,8 @@
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 /// A `Command` that won't flash a console window on Windows, and clears AppImage-injected
@@ -57,12 +58,56 @@ pub fn run(program: &str, args: &[&str], timeout: Duration) -> Result<String, St
     run_command(cmd, program, timeout)
 }
 
+/// How a helper failed: for a check, whether the helper reached an answer at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HelperFailure {
+    /// The helper ran to its end and exited with `code`. `reason` is in its own words where it
+    /// gave them.
+    Exited { code: i32, reason: String },
+    /// The helper gave no answer: it couldn't be started or read, a signal stopped it, or it ran
+    /// past its time limit.
+    Unfinished(String),
+}
+
+impl HelperFailure {
+    /// The reason in words, as [`run`] reports it.
+    pub fn into_reason(self) -> String {
+        match self {
+            Self::Exited { reason, .. } | Self::Unfinished(reason) => reason,
+        }
+    }
+}
+
+/// [`run`], for a caller that needs to tell a helper's answer from a helper that gave none.
+pub fn run_detailed(program: &str, args: &[&str], timeout: Duration) -> Result<String, HelperFailure> {
+    let mut cmd = command(program);
+    cmd.args(args);
+    run_command_detailed(cmd, program, timeout)
+}
+
 /// Runs a configured helper with bounded output and a timeout.
-pub fn run_command(mut cmd: Command, program: &str, timeout: Duration) -> Result<String, String> {
-    let mut child =
-        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("couldn't start {program} ({e})"))?;
+pub fn run_command(cmd: Command, program: &str, timeout: Duration) -> Result<String, String> {
+    run_command_detailed(cmd, program, timeout).map_err(HelperFailure::into_reason)
+}
+
+fn run_command_detailed(mut cmd: Command, program: &str, timeout: Duration) -> Result<String, HelperFailure> {
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| HelperFailure::Unfinished(format!("couldn't start {program} ({e})")))?;
     // Read both pipes while it runs, so a chatty helper can't block on a full one.
-    let (stdout, stderr) = (read_all(child.stdout.take()), read_all(child.stderr.take()));
+    let readers = read_all(child.stdout.take()).and_then(|stdout| Ok((stdout, read_all(child.stderr.take())?)));
+    let (stdout, stderr) = match readers {
+        Ok(readers) => readers,
+        Err(e) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(HelperFailure::Unfinished(format!("couldn't read the output of {program} ({e})")));
+        }
+    };
+    let timed_out = || HelperFailure::Unfinished(format!("{program} didn't finish within {} seconds", timeout.as_secs()));
     let start = Instant::now();
     let status = loop {
         match child.try_wait() {
@@ -71,7 +116,7 @@ pub fn run_command(mut cmd: Command, program: &str, timeout: Duration) -> Result
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("{program} didn't finish within {} seconds", timeout.as_secs()));
+                return Err(timed_out());
             }
         }
     };
@@ -79,7 +124,7 @@ pub fn run_command(mut cmd: Command, program: &str, timeout: Duration) -> Result
     // under the same deadline; on timeout the readers detach, as in the child timeout path.
     while !stdout.is_finished() || !stderr.is_finished() {
         if start.elapsed() >= timeout {
-            return Err(format!("{program} didn't finish within {} seconds", timeout.as_secs()));
+            return Err(timed_out());
         }
         std::thread::sleep(Duration::from_millis(15));
     }
@@ -89,12 +134,16 @@ pub fn run_command(mut cmd: Command, program: &str, timeout: Duration) -> Result
         return Ok(out);
     }
     let reason = err.trim();
-    Err(if reason.is_empty() { format!("{program} failed ({status})") } else { reason.to_string() })
+    let reason = if reason.is_empty() { format!("{program} failed ({status})") } else { reason.to_string() };
+    Err(match status.code() {
+        Some(code) => HelperFailure::Exited { code, reason },
+        None => HelperFailure::Unfinished(reason),
+    })
 }
 
 /// Captures at most 8 MB of a child's pipe and drains the rest on its own thread.
-fn read_all<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
-    std::thread::spawn(move || {
+fn read_all<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> std::io::Result<std::thread::JoinHandle<Vec<u8>>> {
+    std::thread::Builder::new().name("helper-output".into()).spawn(move || {
         let mut out = Vec::new();
         if let Some(mut pipe) = pipe {
             let _ = std::io::Read::read_to_end(&mut std::io::Read::take(&mut pipe, 8 << 20), &mut out);
@@ -106,13 +155,61 @@ fn read_all<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> std::thread::
     })
 }
 
-/// Starts `cmd` without waiting for it, and reaps it when it exits.
+/// Starts `cmd` without waiting for it.
+///
+/// On Unix the process is reaped when it exits: a thread that waits for the process starts
+/// first and starts the process itself. When no thread can be started, the call returns an error
+/// and does not start the process. On Windows the process starts on the calling thread, and no
+/// thread waits for it.
 pub fn spawn_detached(mut cmd: Command) -> Result<(), String> {
-    let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map_err(|e| format!("couldn't start it ({e})"))?;
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-    Ok(())
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    if cfg!(windows) {
+        return cmd.spawn().map(drop).map_err(|e| format!("couldn't start it ({e})"));
+    }
+    spawn_detached_with(
+        move || cmd.spawn(),
+        |wait| {
+            std::thread::Builder::new()
+                .name("reap-child".into())
+                .spawn(move || {
+                    let _ = wait();
+                })
+                .map(drop)
+        },
+    )
+}
+
+/// The thread that [`spawn_detached`] starts on Unix: `start_thread` starts a thread that runs
+/// the closure it is given, and that closure calls `spawn` and then waits for the process.
+/// `spawn` is called on that thread only, so when `start_thread` fails nothing is started.
+#[cfg_attr(windows, allow(dead_code))]
+fn spawn_detached_with(
+    spawn: impl FnOnce() -> std::io::Result<Child> + Send + 'static,
+    start_thread: impl FnOnce(Box<dyn FnOnce() -> Option<ExitStatus> + Send>) -> std::io::Result<()>,
+) -> Result<(), String> {
+    let (started, start_result) = mpsc::channel();
+    start_thread(Box::new(move || start_and_wait(spawn, &started))).map_err(|e| format!("couldn't start a thread to wait for it ({e})"))?;
+    match start_result.recv() {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(format!("couldn't start it ({e})")),
+        Err(_) => Err("couldn't start it (its thread ended before starting it)".into()),
+    }
+}
+
+/// Calls `spawn`, sends whether that worked on `started`, and waits for the process to exit.
+/// Returns its exit status, or `None` when it didn't start or couldn't be waited for.
+#[cfg_attr(windows, allow(dead_code))]
+fn start_and_wait(spawn: impl FnOnce() -> std::io::Result<Child>, started: &mpsc::Sender<std::io::Result<()>>) -> Option<ExitStatus> {
+    match spawn() {
+        Ok(mut child) => {
+            let _ = started.send(Ok(()));
+            child.wait().ok()
+        }
+        Err(e) => {
+            let _ = started.send(Err(e));
+            None
+        }
+    }
 }
 
 /// Waits up to `timeout` for the process `pid` to exit, and says whether it has. A process that
@@ -139,6 +236,19 @@ pub fn flatpak_command() -> Command {
         cmd
     } else {
         command("flatpak")
+    }
+}
+
+/// [`flatpak_command`] in the C locale, for output this code reads: Flatpak translates its messages.
+pub fn flatpak_command_c() -> Command {
+    if in_sandbox() {
+        let mut cmd = command("flatpak-spawn");
+        cmd.args(["--host", "--env=LC_ALL=C", "flatpak"]);
+        cmd
+    } else {
+        let mut cmd = command("flatpak");
+        cmd.env("LC_ALL", "C");
+        cmd
     }
 }
 
@@ -211,17 +321,22 @@ fn opener(target: &std::ffi::OsStr) -> Result<Command, String> {
 pub fn open_url_with_fallback(primary_url: &str, fallback_url: &str) {
     let primary = primary_url.to_string();
     let fallback = fallback_url.to_string();
-    std::thread::spawn(move || {
+    let opener = std::thread::Builder::new().name("open-url".into()).spawn(move || {
         if !open_and_wait_success(&primary, Duration::from_millis(1500)) {
-            log::warn!("couldn't open {primary}; falling back to {fallback}");
+            log::warn!("couldn't open a link; opening its fallback");
             let _ = open(std::ffi::OsStr::new(&fallback));
         }
     });
+    if let Err(e) = opener {
+        log::warn!("couldn't start a thread to open a link ({e})");
+    }
 }
 
 /// Starts the default system opener for `target` and returns `true` unless it fails to start
 /// or exits in error within `timeout`. An opener still running after `timeout` counts as
-/// success and is reaped in the background.
+/// success, and the call waits for it to exit before returning. An opener whose state can't be
+/// read is stopped and waited for, and counts as a failure. [`open_url_with_fallback`] calls this
+/// on its own `open-url` thread.
 ///
 /// `explorer` exits with an error status even when it opens the target, so on Windows only a
 /// failure to start counts; the scheme check covers the rest.
@@ -229,7 +344,7 @@ fn open_and_wait_success(target: &str, timeout: Duration) -> bool {
     let mut cmd = match opener(std::ffi::OsStr::new(target)) {
         Ok(cmd) => cmd,
         Err(error) => {
-            log::warn!("couldn't resolve the system opener for {target}: {error}");
+            log::warn!("couldn't resolve the system opener: {error}");
             return false;
         }
     };
@@ -239,7 +354,7 @@ fn open_and_wait_success(target: &str, timeout: Duration) -> bool {
     let mut child = match cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
         Ok(c) => c,
         Err(e) => {
-            log::warn!("couldn't start the opener for {target}: {e}");
+            log::warn!("couldn't start the system opener: {e}");
             return false;
         }
     };
@@ -249,12 +364,14 @@ fn open_and_wait_success(target: &str, timeout: Duration) -> bool {
             Ok(Some(status)) => return status.success(),
             Ok(None) if start.elapsed() < timeout => std::thread::sleep(Duration::from_millis(25)),
             Ok(None) => {
-                std::thread::spawn(move || {
-                    let _ = child.wait();
-                });
+                let _ = child.wait();
                 return true;
             }
-            Err(_) => return false,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
         }
     }
 }
@@ -307,22 +424,42 @@ fn explorer_select_arg(path: &Path) -> Option<std::ffi::OsString> {
 
 /// Whether a process started from inside `path` (an exe, an AppImage, or a `.app`) is running.
 pub fn is_running(path: &Path) -> bool {
+    running(path).unwrap_or(false)
+}
+
+/// Whether a process started from inside `path` (an exe, an AppImage, or a `.app`) is running.
+/// On macOS, `Err` gives the reason the check got no answer. On other systems a check that gets
+/// no answer counts as "not running", since `pgrep` isn't installed on every Linux system.
+pub fn running(path: &Path) -> Result<bool, String> {
+    if cfg!(target_os = "macos") {
+        let p = path.to_str().ok_or("unusual characters in the app's path")?;
+        return pgrep_answer(run_detailed("/usr/bin/pgrep", &["-f", "--", &pgrep_pattern(p)], Duration::from_secs(30)));
+    }
     if cfg!(windows) {
-        let Some(name) = path.file_name().and_then(OsStr::to_str) else { return false };
+        let Some(name) = path.file_name().and_then(OsStr::to_str) else { return Ok(false) };
         let filter = format!("IMAGENAME eq {name}");
-        let Ok(tasklist) = windows_system_program(r"System32\tasklist.exe") else { return false };
+        let Ok(tasklist) = windows_system_program(r"System32\tasklist.exe") else { return Ok(false) };
         let mut cmd = command(tasklist);
         cmd.args(["/FI", &filter, "/NH", "/FO", "CSV"]);
-        run_command(cmd, "tasklist", Duration::from_secs(5)).ok().is_some_and(|out| out.to_ascii_lowercase().contains(&name.to_ascii_lowercase()))
+        Ok(run_command(cmd, "tasklist", Duration::from_secs(5)).ok().is_some_and(|out| out.to_ascii_lowercase().contains(&name.to_ascii_lowercase())))
     } else {
-        let Some(p) = path.to_str() else { return false };
+        let Some(p) = path.to_str() else { return Ok(false) };
         let pattern = pgrep_pattern(p);
         // pgrep exits 0 when something matches; it never matches itself.
-        if in_sandbox() {
+        Ok(if in_sandbox() {
             capture("flatpak-spawn", &["--host", "pgrep", "-f", "--", &pattern], Duration::from_secs(5)).is_some()
         } else {
             capture("pgrep", &["-f", "--", &pattern], Duration::from_secs(5)).is_some()
-        }
+        })
+    }
+}
+
+/// What a `pgrep` run says: exit 0 is a match and exit 1 is no match. Anything else gave no answer.
+fn pgrep_answer(output: Result<String, HelperFailure>) -> Result<bool, String> {
+    match output {
+        Ok(_) => Ok(true),
+        Err(HelperFailure::Exited { code: 1, .. }) => Ok(false),
+        Err(failure) => Err(failure.into_reason()),
     }
 }
 
@@ -351,16 +488,17 @@ fn pgrep_pattern(path: &str) -> String {
 
 #[cfg(test)]
 #[cfg(unix)]
-mod tests {
+pub(crate) mod tests {
     use std::io::{BufRead, BufReader};
     use std::process::Child;
 
     use super::*;
 
-    struct RunningProbe(Child);
+    /// A process whose command line is `path`, as `pgrep -f` sees it, until dropped.
+    pub(crate) struct RunningProbe(Child);
 
     impl RunningProbe {
-        fn start(path: &str) -> Self {
+        pub(crate) fn start(path: &str) -> Self {
             let child = command("/bin/sh")
                 .args(["-c", "printf 'ready\\n'; read line", path])
                 .stdin(Stdio::piped())
@@ -396,6 +534,7 @@ mod tests {
             let actual = format!("{root}/{actual}");
             let requested = format!("{root}/{requested}");
             let _probe = RunningProbe::start(&actual);
+            assert_eq!(running(Path::new(&requested)), Ok(expected), "{requested}");
             assert_eq!(is_running(Path::new(&requested)), expected, "{requested}");
         }
     }
@@ -404,6 +543,15 @@ mod tests {
 #[cfg(test)]
 mod run_tests {
     use super::*;
+
+    #[test]
+    fn flatpak_output_this_code_reads_stays_in_english() {
+        if in_sandbox() {
+            return;
+        }
+        let cmd = flatpak_command_c();
+        assert!(cmd.get_envs().any(|(name, value)| name == "LC_ALL" && value == Some(std::ffi::OsStr::new("C"))));
+    }
 
     /// A shell command line, for the platform's shell.
     fn shell(script: &str) -> (&'static str, [&str; 2]) {
@@ -441,6 +589,54 @@ mod run_tests {
         assert!(out.unwrap().is_empty());
     }
 
+    /// Long enough that no helper in these tests reaches it.
+    #[cfg(unix)]
+    const NO_LIMIT: Duration = Duration::from_secs(86_400);
+
+    #[cfg(unix)]
+    #[test]
+    fn a_helper_past_its_time_limit_gives_no_answer() {
+        // A time limit of zero expires at the first look, so the test doesn't wait for it.
+        let mut cmd = command("/bin/sh");
+        cmd.args(["-c", "exec sleep 86400"]);
+        let timed_out = run_command_detailed(cmd, "the helper", Duration::ZERO);
+        assert_eq!(timed_out, Err(HelperFailure::Unfinished("the helper didn't finish within 0 seconds".into())));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_helper_that_cannot_start_gives_no_answer() {
+        let not_found = run_detailed("/nonexistent/helper", &[], NO_LIMIT);
+        assert!(matches!(not_found, Err(HelperFailure::Unfinished(_))), "{not_found:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_helper_stopped_by_a_signal_gives_no_answer() {
+        let killed = run_detailed("/bin/sh", &["-c", "kill -9 $$"], NO_LIMIT);
+        assert!(matches!(killed, Err(HelperFailure::Unfinished(_))), "{killed:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_helper_that_exits_gives_its_code_and_its_reason() {
+        let exited = run_detailed("/bin/sh", &["-c", "echo it failed >&2; exit 3"], NO_LIMIT);
+        assert_eq!(exited, Err(HelperFailure::Exited { code: 3, reason: "it failed".into() }));
+        assert_eq!(run("/bin/sh", &["-c", "echo it failed >&2; exit 3"], NO_LIMIT), Err("it failed".into()));
+    }
+
+    #[test]
+    fn pgrep_finding_nothing_is_an_answer() {
+        assert_eq!(pgrep_answer(Ok("123\n".into())), Ok(true));
+        assert_eq!(pgrep_answer(Err(HelperFailure::Exited { code: 1, reason: "pgrep failed".into() })), Ok(false));
+    }
+
+    #[test]
+    fn a_pgrep_that_gives_no_answer_is_not_read_as_not_running() {
+        assert_eq!(pgrep_answer(Err(HelperFailure::Unfinished("too slow".into()))), Err("too slow".into()));
+        assert_eq!(pgrep_answer(Err(HelperFailure::Exited { code: 2, reason: "bad flag".into() })), Err("bad flag".into()));
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_helper_that_keeps_writing_still_times_out() {
@@ -448,6 +644,54 @@ mod run_tests {
         let err = run("yes", &[], Duration::from_millis(100)).unwrap_err();
         assert!(err.contains("didn't finish within"), "{err}");
         assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    /// The thread that starts a detached process waits for it, so the process is reaped when it
+    /// exits: only a wait gives its exit status.
+    #[test]
+    fn a_detached_process_is_waited_for() {
+        let (program, args) = shell("exit 7");
+        let mut cmd = command(program);
+        cmd.args(args);
+        let (status_sent, status) = mpsc::channel();
+        let result = spawn_detached_with(
+            move || cmd.spawn(),
+            move |wait| {
+                std::thread::Builder::new()
+                    .spawn(move || {
+                        let _ = status_sent.send(wait());
+                    })
+                    .map(drop)
+            },
+        );
+        assert_eq!(result, Ok(()));
+        assert_eq!(status.recv().ok().flatten().and_then(|status| status.code()), Some(7), "the waiting thread gets the exit status");
+    }
+
+    /// When no thread can be started to wait for a process, the process is not started and the
+    /// call says why.
+    #[test]
+    fn no_process_starts_without_a_thread_to_wait_for_it() {
+        let (program, args) = shell("exit 0");
+        let mut cmd = command(program);
+        cmd.args(args);
+        let spawned = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let spawn_called = std::sync::Arc::clone(&spawned);
+        let result = spawn_detached_with(
+            move || {
+                spawn_called.store(true, std::sync::atomic::Ordering::SeqCst);
+                cmd.spawn()
+            },
+            |_wait| Err(std::io::Error::other("no threads")),
+        );
+        assert_eq!(result, Err("couldn't start a thread to wait for it (no threads)".into()));
+        assert!(!spawned.load(std::sync::atomic::Ordering::SeqCst), "the process was started");
+    }
+
+    #[test]
+    fn a_detached_program_that_cannot_start_says_so() {
+        let result = spawn_detached(command("craft-update-test-no-such-program"));
+        assert!(matches!(&result, Err(e) if e.starts_with("couldn't start it (")), "{result:?}");
     }
 
     #[test]

@@ -182,13 +182,13 @@
       "path": "src/color.rs",
       "source_sha256": "799ce29bb5e59c8fc94db202873e48c2047dd35962e6f26efd215156c47158c1",
       "source_git_blob": "56bb04f24c04ba33ab6bf99c02a24735670959ad",
-      "sha256": "025186ea5726339068f66d39bc0f5eafb05f6223e4a9a74b9944c20d0fbe7886"
+      "sha256": "72935834f00f5f04f1baa418e12040b5a413e8620be7356337605a0ab63f5c7a"
     },
     {
       "path": "src/context.rs",
       "source_sha256": "dc2be553958ee3f5e5e644a77a0301723bae9ca027a352c13b9caaf549cc0e56",
       "source_git_blob": "d6772baa15ebb95d3ba2d1f54ce5c250ad1e8137",
-      "sha256": "98ed66aab25f1e3b8b9dfd9b6837dc0d9519a9fd7f5429b695865879abc24f6d"
+      "sha256": "221174b2b65824e1489e8d0f61ac5c81b828caf7f5c7053e27c84a6657857f4c"
     },
     {
       "path": "src/convert.rs",
@@ -434,7 +434,7 @@
       "path": "src/x_object.rs",
       "source_sha256": "e1c51e96a335c32c122011b2d05c5020c36a33c2c73342ba173c28a3e2fe0219",
       "source_git_blob": "21b134ce8cd9604399cd0776febf923d69c02673",
-      "sha256": "4d2d5a2b8ff6d75308cb4fbb606bb2135073d35e859f1b32a5be5b3276ca2c20"
+      "sha256": "bc13ae42935851fa0f2117ad74a4e6d4cf5a86aae933fb6362f911b0d6a3ce52"
     }
   ],
   "compatibility_reference": {

@@ -113,6 +113,8 @@ Raw array iteration now ends safely if validation and object parsing disagree;
 standalone sign tokens retain the reader's zero tolerance.
 `Dict::entries` and a dictionary's `Debug` output skip an entry whose value does not parse,
 as in [Hayro #1501](https://github.com/LaurenzV/hayro/pull/1501).
+The `Debug` output of an array ends with its closing bracket, and that of a dictionary
+with entries ends with its closing brace; an empty dictionary prints as `Dict`.
 Byte transfer-function samples use rounded 8-bit values; failed or non-finite evaluations
 leave the sample unchanged. Historical source hashes remain in each `SOURCE.json`,
 alongside local hashes and the compatibility reference.
@@ -233,6 +235,9 @@ precision of the indices; an image without a palette keeps its own. Tests:
 PdfCraft's raster test `a_jp2_palette_keeps_its_colours_whatever_the_index_precision` is not
 ported: the unit tests show the same behavior.
 
+The JPX reader drops an unused `alloc::vec` import; its test macros already use
+`alloc::vec!`. The local source hash records this build-only cleanup.
+
 From [PdfCraft revision 0b670caf4a090e9d83a7f41a84b4cb2144a2d33e](https://github.com/storytold/pdfcraft/tree/0b670caf4a090e9d83a7f41a84b4cb2144a2d33e/vendor),
 unledgered and marked `PdfCraft patch` in the source: hayro-syntax #3438 (issue #3107), with
 its look-ahead bound from 01af6cba3. An inline image without a filter ends at the byte
@@ -301,12 +306,26 @@ and the digest that tells its profile from a document profile is still a hash of
 decoded profile bytes. PdfCraft's two raster tests are adapted in `tests/upstream_raster.rs`
 (`icc_profile_cache`).
 
+From [PdfCraft #3327](https://github.com/storytold/pdfcraft/pull/3327) (merged as
+b84121e978e13168caeaf86a63824111f16cdb99), hayro-interpret (35), marked `PdfCraft patch (35)` in
+the source: `path_as_rect` takes a five-element path as a rectangle only when its four points are
+distinct, each step from one to the next runs along a single axis, and the last returns to the
+first (with ClosePath, or a fourth line back to the exact start). Before, the length test also
+admitted one MoveTo and four LineTo, and the corner test only asked that every corner of the
+bounding box was visited, so a five-point open polyline whose ends reached the corners was drawn
+as that box (VectorCraft #2920: an open zigzag in an `.ai` file opened as a closed rectangle), and
+a clip of that shape was dropped. Tests: `context::path_as_rect_tests` and the `rectangles`
+module of `crates/pdf/tests/interpretation.rs`, which fails without the change.
+
 Local fixes on top of these ports, marked `Craft patch` or in the comments of the ported
 code: an inflated patch-mesh triangle is rebuilt with `Triangle::new`, so its stored dot
 products match its vertices (moving the points alone skewed barycentric coordinates by about
 5 %, in `covers` and in interpolation); a stencil image puts the fill alpha back itself, since
 `restore_state` doesn't when the saved-state bound skipped the save; and a resolved JP2
 palette decodes to 8 bits whatever `/BitsPerComponent` the dictionary gives.
+
+`hayro-syntax` compiles `filter::ccitt_max_rows` and its unit tests only with the
+`images` feature, matching `filter::ccitt`.
 
 This remains the patched 0.7 backend. It retains the existing Bradford Lab conversion,
 floating component precision and codec versions, rather than claiming full 0.8
@@ -329,6 +348,18 @@ fonts without Encoding) and #1499 (byte-aligned packed TIFF predictor rows).
 Synthetic tests cover 1/2/4/8-bit RGB rows and rendering, plus embedded TrueType
 text with absent or partial ToUnicode maps and explicit encoding precedence.
 
+## Cooperative opening cancellation
+
+The syntax reader also supports cooperative cancellation scoped to one open operation through
+`Cancellation` and `Pdf::new_with_password_limits_and_cancel`. Checks cover xref searches and
+recovery, object/byte scans, ordinary ASCIIHex/ASCII85/RunLength/LZW/Flate decoding and predictors,
+and initial page-tree construction. A cancellation request stays latched and prevents repair or
+partial success. The operation releases callback captures when it returns, including unwinding;
+deferred reads on a loaded PDF do not poll the completed operation. Existing loading errors and
+constructors, decode limits, and object sizes are preserved. Cryptographic and image-codec calls
+run to completion between checkpoints. Synthetic API and backend tests cover interruption inside
+the supported stages.
+
 ## Craft patches for the flattener
 
 Local changes for craft-prepress's PDF-in adapter (`craft_prepress::flatten::pdf`), which reads
@@ -346,3 +377,70 @@ comments label them `Craft patch (flatten)`.
 | hayro-interpret `color.rs` | `color::InkSpace`, `ColorSpace::ink_space` and `ColorSpace::ink_values`: how a space's colors are kept as inks (gray, CMYK, its colorants, `All`, `None`) and colors converted in batches, process color as `Color::ink_paint` converts it. `ColorSpace::components`; `ColorSpace::is_device_cmyk` and `ColorSpace::spot_alternate` public |
 | hayro-interpret `types.rs`, `x_object.rs` | `RasterImage::with_inks`: an image's samples in its own space's inks (`InkImage`), `/Decode` and `/Matte` applied, transfer functions left out, with its alpha at the alpha's own size |
 | hayro-interpret `interpret/mod.rs` | The `sh` operator drops the shading's `/Background`, which only a shading pattern paints (ISO 32000-2 §8.7.4.5.1) |
+
+Repair scan, ported from PdfCraft [4a0b1dd1](https://github.com/storytold/pdfcraft/commit/4a0b1dd15)
+(hayro-syntax patch 34, `xref.rs`, #5580): in a table rebuilt by scanning the file, an object whose
+header names a generation the reference does not (`3 99999 obj`, or `3 18446744073709551616 obj` as in
+poppler-85140-0.pdf) is found by its object number: the header is read leniently (an unreadable
+generation is 0), each scanned object is also filed under generation 0 (a real `N 0 obj` is never
+displaced, a later header replaces a stand-in), the object is read back behind the same lenient header,
+and enumeration yields one object per location and number. Tests:
+`xref::tests::a_rebuilt_table_finds_an_object_whose_header_names_another_generation` and
+`a_rebuilt_tables_generation_0_stand_in_is_not_a_second_object`.
+Streams without a readable `endstream`, ported from PdfCraft
+[bfaa20db](https://github.com/storytold/pdfcraft/commit/bfaa20db2) and
+[9e29af78](https://github.com/storytold/pdfcraft/commit/9e29af784) (hayro-syntax patch 36, in
+`object/stream.rs`): a stream with no `endstream` after it (a producer that writes `endstrea`) is the
+bytes its `/Length` gives (ISO 32000-2 7.3.8.2), tried before the search for `endstream` so that the
+search cannot run on into a later object and take its header and data as this stream's, and only when
+the `/Length` ends where the stream would (before `endstream`, a misspelt one or `endobj` where the
+object ends too, or the end of the data). `endstream` and the search for it are whole tokens, so
+`endstreamer` in the payload does not end a stream. The search keeps this tree's cancellation checks.
+Tests: `object::stream::tests::a_stream_without_endstream_is_its_length_before_a_later_one` and
+`a_stream_does_not_end_inside_a_longer_word`.
+Legacy encryption key length, ported from [PdfCraft #1882](https://github.com/storytold/pdfcraft/pull/1882)
+(commit 344ba9f8, marked `PdfCraft patch` in `hayro-syntax/src/crypto/mod.rs`): an encryption
+dictionary of revision 2–4 whose `/Length` is above 128 bits is refused with `InvalidEncryption`.
+Those revisions take the file key from a 16-byte MD5 hash, so `/V 2 /R 3 /Length 256` sliced past
+the hash and panicked on open. Test:
+`crypto::pdfcraft_password_tests::legacy_key_length_above_128_bits_is_refused_not_a_panic`.
+
+JBIG2 decode bounds, ported from PdfCraft commits
+[85c10051](https://github.com/storytold/pdfcraft/commit/85c100514) (hayro-jbig2 patches 5 to 9),
+[82439525](https://github.com/storytold/pdfcraft/commit/824395256) (patch 10) and
+[10107d94](https://github.com/storytold/pdfcraft/commit/10107d943) (patch 12), marked `PdfCraft patch`
+in `hayro-jbig2`: a page's segments may hold at most 64 MiB (`MAX_RETAINED_WORDS`; regions,
+dictionaries, Huffman tables, retained coding contexts), a segment may refer to at most 2^20 symbols
+(`MAX_REFERRED_SYMBOLS`), a halftone grid has at most 2^25 cells, a custom Huffman table 2^16 lines,
+a stream with its globals 2^20 segments and 2^22 references; a stream may ask for 2^30 units of
+decoding work in total (`MAX_WORK`, charged item by item before each is decoded), and an image past a
+bound is refused (not drawn) like the other caps; region locations, refinement offsets, symbol corners,
+Huffman range lines and integers at the end of an `i32` no longer overflow. The `/JBIG2Globals` change
+of 85c10051 for hayro-syntax was already carried here. PdfCraft's raster tests are adapted in
+`hayro-jbig2/src/pdfcraft_tests.rs` (`jbig2_decoding_work_is_counted_item_by_item`,
+`jbig2_placements_at_the_end_of_an_i32_draw_nothing`); the unit tests in `lib.rs`, `bitmap.rs` and
+`decode/symbol.rs` come with the patches. PdfCraft's later JBIG2 follow-ups (b7ec3669, 72e763ad,
+e3bc4e85, patch 13 and later) are not part of this port.
+
+JBIG2 follow-ups, ported from PdfCraft after the decode-bound patches above, each marked
+`PdfCraft patch` in `hayro-jbig2`: [72e763ad](https://github.com/storytold/pdfcraft/commit/72e763ad1)
+(a symbol with no rows costs a step; a refined instance is charged first),
+[b7ec3669](https://github.com/storytold/pdfcraft/commit/b7ec3669c) (what an item reads is charged),
+[e3bc4e85](https://github.com/storytold/pdfcraft/commit/e3bc4e855) (a height class of no symbols
+decodes no bitmap), [0ed33990](https://github.com/storytold/pdfcraft/commit/0ed339901) (only its
+`hayro-jbig2` part: `Image::decode_within` takes the work left, so callers can share one allowance),
+[01d3479f](https://github.com/storytold/pdfcraft/commit/01d3479f2), [b9e068aa](https://github.com/storytold/pdfcraft/commit/b9e068aa3),
+[858ce960](https://github.com/storytold/pdfcraft/commit/858ce9608),
+[07f44038](https://github.com/storytold/pdfcraft/commit/07f440388),
+[e38b9d18](https://github.com/storytold/pdfcraft/commit/e38b9d182) and
+[8717a085](https://github.com/storytold/pdfcraft/commit/8717a085f) (a region past `i32::MAX` is off the page; a
+refinement refines the bitmap it is placed on, the page only in its area, and reads 0 past its
+reference's width and a reference right of it from its first column),
+[58c30af3](https://github.com/storytold/pdfcraft/commit/58c30af31) (a stream that starts with a JBIG2
+file header draws) and the `hayro-jbig2` part of
+[e2464e14](https://github.com/storytold/pdfcraft/commit/e2464e144) (a dictionary may hold 2^28 symbol
+pixels, as a real 14,642 x 8,879 scan needs; `OverflowError::BitmapLimit` and `DecodeError::is_limit` tell
+a decoder's limit from damage). Not ported from those commits: the page-wide allowance and the
+refused-mask handling in `hayro-syntax` and `hayro-interpret` (0ed33990, 4aa732ea, e2464e14), which rest on
+the decoded-image cache of 558ffd7f (a performance change). Tests: those that came with the patches in
+`hayro-jbig2`, and PdfCraft's raster tests adapted in `hayro-jbig2/src/pdfcraft_tests.rs`.

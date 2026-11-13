@@ -27,7 +27,8 @@ itself omits those texts. Its examples and four CC0 ICC profiles are retained wi
 | `patches/15-pdfx-conformance.patch` | PDF/X conformance key | `serialize.rs` |
 | `patches/16-modification-date.patch` | Modification date | `interchange/metadata.rs` |
 | `patches/17-color-precision.patch` | Color precision | `graphics/{color,shading_function}.rs` |
-| `patches/18-metadata-date.patch` | Metadata date in XMP | `interchange/metadata.rs` |
+| `patches/18-subset-os2.patch` | Embedding permissions in TrueType subsets | `text/cid.rs` |
+| `patches/19-metadata-date.patch` | Metadata date in XMP | `interchange/metadata.rs` |
 
 Each patch applies with `patch -p1` from this directory, in numeric order, to the pristine
 crate. `SOURCE.json` records, for every retained file, the upstream hash (`upstream_sha256`)
@@ -428,11 +429,31 @@ as a multiple of 1/255: C75 becomes 0.7490196 and C4 M4 Y4 K4 becomes 0.03921568
 - Gradient stops that are rewritten into one DeviceCMYK, Separation or DeviceN space keep
   their components, and a DeviceN color's CMYK alternate (annotations, tags) is no longer
   rounded.
+- A gray stop rewritten into a CMYK space becomes the black ink `1 - gray`, subtracted from the
+  shortest decimal that writes the gray, so gray 0.96 is K 0.04. An 8-bit gray `n` is K
+  `(255 - n) / 255`, as `cmyk::Color::new` writes it.
 - Mesh gradients write their corner colors and opacities at 16 bits a component instead of 8.
 
-Tests: `crates/pdf/tests/print_color.rs` (`f32_colors_*`, `mesh_*`, `rgb_mesh_is_a_device_rgb_shading`).
+Tests: `crates/pdf/tests/print_color.rs` (`f32_colors_*`, `gray_stops_keep_their_exact_black_in_cmyk_shadings`,
+`mesh_*`, `rgb_mesh_is_a_device_rgb_shading`).
 
-## 18: metadata date in XMP
+## 18: embedding permissions in TrueType subsets
+
+The subsetter writes only the tables it subsets (`glyf`/`loca`, `head`, `hmtx`, `maxp`, `name`,
+`post`, and `cvt `, `fpgm`, `prep` unchanged), so a `FontFile2` program had no `OS/2` table and
+the font's embedding permissions (`OS/2.fsType`) never reached the PDF: a Preview & Print or
+Restricted font looked unrestricted to anything reading the file later (storytold/designcraft#1781).
+
+`CIDFont` now adds the source font's `OS/2` table, byte for byte, to a TrueType subset that lacks
+one. `with_table` rewrites the table directory in tag order with its binary-search fields,
+aligns each table to four bytes with its checksum, and recomputes `head.checkSumAdjustment`. A
+font with no `OS/2` is embedded as before. CFF programs are still embedded bare (`FontFile3`
+`/CIDFontType0C`), which has no table directory to carry it.
+
+craft-pdf's `font_tables` test embeds a TrueType font with `fsType` 4 and checks the program's
+`OS/2` matches the source, its table order and checksums, and that it still parses.
+
+## 19: metadata date in XMP
 
 Upstream writes `xmp:CreateDate` and `xmp:ModifyDate` but no `xmp:MetadataDate`, so the
 shared writer's packet was missing the field two consumers already patch in after export

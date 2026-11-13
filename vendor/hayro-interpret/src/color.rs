@@ -152,12 +152,23 @@ fn icc_stream_object(array: &Array<'_>, stream: &Stream<'_>) -> Option<object::O
     dict.obj_id()
 }
 
+/// PdfCraft patch: the deepest a color space may nest inside others (`Pattern` over `Indexed`
+/// over `ICCBased` with an `/Alternate` is four). Each level can be a fresh indirect object, so
+/// without a bound a long chain of them exhausts the stack.
+const MAX_COLOR_SPACE_DEPTH: u8 = 8;
+
 impl ColorSpaceType {
-    fn new(object: Object<'_>, cache: &Cache) -> Option<Self> {
-        Self::new_inner(object, cache)
+    fn new(object: Object<'_>, cache: &Cache, depth: u8) -> Option<Self> {
+        if depth >= MAX_COLOR_SPACE_DEPTH {
+            warn!("color space nesting depth exceeded");
+
+            return None;
+        }
+
+        Self::new_inner(object, cache, depth)
     }
 
-    fn new_inner(object: Object<'_>, cache: &Cache) -> Option<Self> {
+    fn new_inner(object: Object<'_>, cache: &Cache, depth: u8) -> Option<Self> {
         if let Object::Name(name) = object {
             return Self::new_from_name(&name);
         } else if let Object::Array(color_array) = object {
@@ -195,7 +206,7 @@ impl ColorSpaceType {
                                     })
                                     .or_else(|| {
                                         dict.get::<Object<'_>>(ALTERNATE)
-                                            .and_then(|o| Self::new(o, cache))
+                                            .and_then(|o| Self::new(o, cache, depth + 1))
                                     })
                                     .or_else(|| match dict.get::<u8>(N) {
                                         Some(1) => Some(Self::DeviceGray),
@@ -232,19 +243,19 @@ impl ColorSpaceType {
                     return Some(Self::Lab(Lab::new(&lab_dict)?));
                 }
                 INDEXED | I => {
-                    return Some(Self::Indexed(Indexed::new(&color_array, cache)?));
+                    return Some(Self::Indexed(Indexed::new(&color_array, cache, depth)?));
                 }
                 SEPARATION => {
-                    return Some(Self::Separation(Separation::new(&color_array, cache)?));
+                    return Some(Self::Separation(Separation::new(&color_array, cache, depth)?));
                 }
                 DEVICE_N => {
-                    return Some(Self::DeviceN(DeviceN::new(&color_array, cache)?));
+                    return Some(Self::DeviceN(DeviceN::new(&color_array, cache, depth)?));
                 }
                 PATTERN => {
                     let _ = iter.next::<Name<'_>>();
                     let cs = iter
                         .next::<Object<'_>>()
-                        .and_then(|o| ColorSpace::new(o, cache))
+                        .and_then(|o| ColorSpace::new_nested(o, cache, depth + 1))
                         .unwrap_or(ColorSpace::device_rgb());
                     return Some(Self::Pattern(cs));
                 }
@@ -277,7 +288,12 @@ pub struct ColorSpace(Arc<ColorSpaceType>);
 impl ColorSpace {
     /// Create a new color space from the given object.
     pub(crate) fn new(object: Object<'_>, cache: &Cache) -> Option<Self> {
-        Some(Self(Arc::new(ColorSpaceType::new(object, cache)?)))
+        Self::new_nested(object, cache, 0)
+    }
+
+    /// PdfCraft patch: a color space found `depth` levels inside others.
+    fn new_nested(object: Object<'_>, cache: &Cache, depth: u8) -> Option<Self> {
+        Some(Self(Arc::new(ColorSpaceType::new(object, cache, depth)?)))
     }
 
     /// Create a new color space from the name.
@@ -1014,11 +1030,11 @@ pub(crate) struct Indexed {
 }
 
 impl Indexed {
-    fn new(array: &Array<'_>, cache: &Cache) -> Option<Self> {
+    fn new(array: &Array<'_>, cache: &Cache, depth: u8) -> Option<Self> {
         let mut iter = array.flex_iter();
         // Skip name
         let _ = iter.next::<Name<'_>>()?;
-        let base_color_space = ColorSpace::new(iter.next::<Object<'_>>()?, cache)?;
+        let base_color_space = ColorSpace::new_nested(iter.next::<Object<'_>>()?, cache, depth + 1)?;
         let hival = iter.next::<u32>()?.min(u8::MAX as u32) as u8;
 
         let values = {
@@ -1083,12 +1099,12 @@ pub(crate) struct Separation {
 }
 
 impl Separation {
-    fn new(array: &Array<'_>, cache: &Cache) -> Option<Self> {
+    fn new(array: &Array<'_>, cache: &Cache, depth: u8) -> Option<Self> {
         let mut iter = array.flex_iter();
         // Skip `/Separation`
         let _ = iter.next::<Name<'_>>()?;
         let name = iter.next::<Name<'_>>()?;
-        let alternate_space = ColorSpace::new(iter.next::<Object<'_>>()?, cache)?;
+        let alternate_space = ColorSpace::new_nested(iter.next::<Object<'_>>()?, cache, depth + 1)?;
         let tint_transform = Function::new(&iter.next::<Object<'_>>()?)?;
         // Either I did something wrong, or no other viewers properly handles
         // `All`, so let's just ignore it as well.
@@ -1134,7 +1150,7 @@ pub(crate) struct DeviceN {
 }
 
 impl DeviceN {
-    fn new(array: &Array<'_>, cache: &Cache) -> Option<Self> {
+    fn new(array: &Array<'_>, cache: &Cache, depth: u8) -> Option<Self> {
         let mut iter = array.flex_iter();
         // Skip `/DeviceN`
         let _ = iter.next::<Name<'_>>()?;
@@ -1145,7 +1161,7 @@ impl DeviceN {
             .collect::<Vec<_>>();
         let num_components = u8::try_from(names.len()).ok()?;
         let all_none = names.iter().all(|n| n.as_str() == "None");
-        let alternate_space = ColorSpace::new(iter.next::<Object<'_>>()?, cache)?;
+        let alternate_space = ColorSpace::new_nested(iter.next::<Object<'_>>()?, cache, depth + 1)?;
         let tint_transform = Function::new(&iter.next::<Object<'_>>()?)?;
 
         if num_components == 0 {
@@ -2850,5 +2866,54 @@ mod device_color_compatibility_tests {
         let space = ColorSpace::device_gray();
         assert_eq!(space.to_rgba(&[0.5], 0.5, false).to_rgba8(), [128, 128, 128, 128]);
         assert_eq!(space.to_rgba(&[], 1.0, false).to_rgba8(), [0, 0, 0, 255]);
+    }
+}
+
+#[cfg(test)]
+mod nesting_tests {
+    use super::{Cache, ColorSpace, MAX_COLOR_SPACE_DEPTH};
+    use hayro_syntax::Pdf;
+    use hayro_syntax::object::{Object, ObjectIdentifier};
+
+    /// A PDF whose object 3 starts a chain of `levels` `/Indexed` spaces, each naming the next
+    /// as its base through an indirect reference, ending in `/DeviceGray`.
+    fn indexed_chain(levels: usize) -> Pdf {
+        let mut objects = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string(), "<< /Type /Pages /Count 0 /Kids [] >>".to_string()];
+        for i in 0..levels {
+            objects.push(format!("[/Indexed {} 0 R 0 <00>]", i + 4));
+        }
+        objects.push("/DeviceGray".to_string());
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+        for offset in offsets {
+            out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+        Pdf::new(out).expect("synthetic pdf")
+    }
+
+    fn chain_space(levels: usize) -> Option<ColorSpace> {
+        let pdf = indexed_chain(levels);
+        let object = pdf.xref().get::<Object<'_>>(ObjectIdentifier::new(3, 0)).expect("chain start");
+        ColorSpace::new(object, &Cache::new())
+    }
+
+    #[test]
+    fn nested_color_spaces_stop_at_the_depth_limit() {
+        let deepest = usize::from(MAX_COLOR_SPACE_DEPTH) - 1;
+        assert!(chain_space(1).is_some());
+        assert!(chain_space(deepest).is_some(), "the base at the deepest allowed level resolves");
+        assert!(chain_space(deepest + 1).is_none());
+    }
+
+    #[test]
+    fn a_long_indirect_chain_fails_without_exhausting_the_stack() {
+        assert!(chain_space(100_000).is_none());
     }
 }

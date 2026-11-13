@@ -471,7 +471,7 @@ impl Loaded {
     /// notes why not otherwise.
     fn add(&mut self, name: &str, overrides: Option<Overrides>) {
         let shown = || name.chars().take(MAX_SET_NAME).collect::<String>();
-        if !set_name(name).is_some_and(|n| n == name) {
+        if set_name(name).is_none_or(|n| n != name) {
             self.note(SetProblem::BadName { name: shown() });
         } else if self.sets.contains_key(name) {
             self.note(SetProblem::Duplicate { name: shown() });

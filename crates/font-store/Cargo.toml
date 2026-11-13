@@ -23,8 +23,14 @@ thiserror = { workspace = true }
 
 # The store and the network are native only; the web keeps fonts elsewhere.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cap-primitives = "4.0.3"
 craft-atomic = { workspace = true }
 craft-font-catalog = { workspace = true }
+log = "0.4"
+# Language packs (`language_packs`): `<locale>.tar.zst` archives, unpacked in pure Rust.
+ruzstd = { version = "0.9", default-features = false, features = ["std"] }
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
+tar = { version = "0.4", default-features = false }
 # Blocking HTTPS with rustls and webpki roots: no async runtime, no OpenSSL.
 ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }
 

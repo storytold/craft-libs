@@ -160,7 +160,7 @@ impl Debug for Dict<'_> {
         for (key, value) in self.entries() {
             debug_struct.field(&format!("{:?}", key.as_str()), &value);
         }
-        Ok(())
+        debug_struct.finish()
     }
 }
 
@@ -371,6 +371,8 @@ where
 {
     // An inline image dictionary has no enclosing << >> pair; count only actual
     // containers. Its array/dictionary operands still enter the same depth guard.
+    crate::cancel::check(ctx.control())?;
+    r.set_control(ctx.control().cloned());
     let container = start_tag.is_some();
     if container {
         r.enter_container()?;
@@ -1258,7 +1260,7 @@ mod tests {
     use crate::object::dict::keys::{COLORSPACE, EXT_G_STATE, FONT, PROC_SET};
     use crate::object::dict::{Dict, InlineImageDict};
     use crate::object::string;
-    use crate::object::{FromBytes, Name, ObjRef};
+    use crate::object::{FromBytes, MaybeRef, Name, ObjRef, Object};
     use crate::reader::Reader;
     use crate::reader::{ReaderContext, ReaderExt};
 
@@ -1404,8 +1406,29 @@ mod tests {
 
     #[test]
     fn dict_with_unreadable_value() {
-        let dict = Dict::from_bytes(b"<< /A /#zz /B true >>").unwrap();
-        let _ = dict.entries().count();
-        let _ = alloc::format!("{dict:?}");
+        for bytes in [
+            b"<< /A false /B /#zz /C true >>".as_slice(),
+            b"<< /A false /B 12-.5 /C true >>",
+            b"<< /A false /B << /Length 3 >> stream /C true >>",
+        ] {
+            let dict = Dict::from_bytes(bytes).unwrap();
+            assert_eq!(dict.keys().count(), 3);
+            let entries = dict.entries().collect::<Vec<_>>();
+            assert_eq!(entries.len(), 2);
+            assert_eq!(entries[0].0.as_str(), "A");
+            assert!(matches!(
+                entries[0].1,
+                MaybeRef::NotRef(Object::Boolean(false))
+            ));
+            assert_eq!(entries[1].0.as_str(), "C");
+            assert!(matches!(
+                entries[1].1,
+                MaybeRef::NotRef(Object::Boolean(true))
+            ));
+            assert_eq!(
+                alloc::format!("{dict:?}"),
+                "Dict { \"A\": Boolean(false), \"C\": Boolean(true) }"
+            );
+        }
     }
 }

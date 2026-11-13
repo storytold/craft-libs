@@ -5,9 +5,9 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::io::Write as _;
+use std::path::Path;
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::Error;
 use crate::tiff::{self, Plate};
@@ -32,11 +32,17 @@ pub fn version() -> Option<String> {
 /// Separate the first page of `pdf` into plates, keyed by separation name (`Cyan`, …, spot
 /// names). Overprint is simulated as a separating RIP would print it (`-dOverprint=/enable`).
 pub fn separate(pdf: &[u8], label: &str) -> Result<BTreeMap<String, Plate>, Error> {
-    let work = WorkDir::new(label)?;
-    let input = work.0.join("in.pdf");
-    std::fs::write(&input, pdf).map_err(|e| gs_error(&work.0, e))?;
+    let work = work_dir(label)?;
+    let input = work.path().join("in.pdf");
+    // The directory is new and private; `create_new` still refuses anything already at the name.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&input)
+        .and_then(|mut file| file.write_all(pdf))
+        .map_err(|e| gs_error(&input, e))?;
     let res = format!("-r{RESOLUTION}");
-    let output_file = format!("-sOutputFile={}", work.0.join("p%d.tif").display());
+    let output_file = format!("-sOutputFile={}", work.path().join("p%d.tif").display());
     let run = Command::new(program())
         .args(["-q", "-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=tiffsep", &res, "-sCompression=none", "-dOverprint=/enable"])
         .arg(output_file)
@@ -49,8 +55,8 @@ pub fn separate(pdf: &[u8], label: &str) -> Result<BTreeMap<String, Plate>, Erro
         return Err(Error::Ghostscript(format!("{label}: {}: {}", run.status, tail.into_iter().rev().collect::<Vec<_>>().join(" / "))));
     }
     let mut plates = BTreeMap::new();
-    for entry in std::fs::read_dir(&work.0).map_err(|e| gs_error(&work.0, e))? {
-        let path = entry.map_err(|e| gs_error(&work.0, e))?.path();
+    for entry in std::fs::read_dir(work.path()).map_err(|e| gs_error(work.path(), e))? {
+        let path = entry.map_err(|e| gs_error(work.path(), e))?.path();
         let Some(name) = path.file_name().and_then(|n| n.to_str()).and_then(plate_name) else { continue };
         let data = std::fs::read(&path).map_err(|e| gs_error(&path, e))?;
         let plate = tiff::read(&data).map_err(|e| Error::Tiff(format!("{}: {e}", path.display())))?;
@@ -71,30 +77,21 @@ fn gs_error(path: &Path, e: std::io::Error) -> Error {
     Error::Ghostscript(format!("{}: {e}", path.display()))
 }
 
-/// A fresh temporary directory, removed on drop.
-struct WorkDir(PathBuf);
-
-impl WorkDir {
-    fn new(label: &str) -> Result<Self, Error> {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let safe: String = label.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("craft-plate-test-{}-{n}-{safe}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).map_err(|e| gs_error(&dir, e))?;
-        Ok(Self(dir))
-    }
-}
-
-impl Drop for WorkDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
+/// A fresh temporary directory, removed on drop: created with a random name and owner-only
+/// permissions, so another local user can't plant files or symlinks in it beforehand.
+fn work_dir(label: &str) -> Result<tempfile::TempDir, Error> {
+    let safe: String = label.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+    let prefix = format!("craft-plate-test-{safe}-");
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(&prefix);
+    #[cfg(unix)]
+    builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
+    builder.tempdir().map_err(|e| gs_error(&std::env::temp_dir(), e))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::plate_name;
+    use super::{plate_name, work_dir};
 
     #[test]
     fn names_plates_from_tiffsep_files() {
@@ -102,5 +99,22 @@ mod tests {
         assert_eq!(plate_name("p1(PANTONE 871 C).tif"), Some("PANTONE 871 C"));
         assert_eq!(plate_name("p1.tif"), None);
         assert_eq!(plate_name("p2(Cyan).tif"), None);
+    }
+
+    #[test]
+    fn work_dirs_are_fresh_and_private() {
+        let (a, b) = (work_dir("same label").unwrap(), work_dir("same label").unwrap());
+        assert_ne!(a.path(), b.path());
+        assert_eq!(std::fs::read_dir(a.path()).unwrap().count(), 0);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(a.path()).unwrap().permissions().mode();
+            assert_eq!(mode & 0o077, 0);
+            assert_ne!(mode & 0o200, 0, "owner must be able to write");
+        }
+        let path = a.path().to_path_buf();
+        drop(a);
+        assert!(!path.exists());
     }
 }

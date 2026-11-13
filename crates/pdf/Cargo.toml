@@ -18,6 +18,9 @@ raster = ["interpret", "dep:hayro", "dep:bytemuck"]
 write = ["dep:krilla", "dep:thiserror"]
 write-pdf = ["write", "krilla/pdf"]
 write-simple-text = ["write", "krilla/simple-text"]
+filters = ["dep:craft-stream-codecs", "dep:flate2", "dep:thiserror"]
+cos = ["crypt", "filters", "dep:chrono", "dep:js-sys", "dep:wasm-bindgen"]
+crypt = ["dep:aes", "dep:md-5", "dep:sha2", "dep:stringprep", "dep:zeroize", "dep:thiserror"]
 
 [dependencies]
 hayro-syntax = { workspace = true, optional = true }
@@ -26,13 +29,42 @@ hayro = { workspace = true, optional = true }
 bytemuck = { workspace = true, optional = true }
 krilla = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
+# The filter chain (`filters`). flate2 with zlib-rs, the backend the chain's Flate prices were measured on.
+craft-stream-codecs = { workspace = true, optional = true }
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"], optional = true }
+# The standard security handler (`crypt`): pure Rust, MIT OR Apache-2.0, builds for wasm.
+aes = { version = "0.9", optional = true }
+md-5 = { version = "0.11", optional = true }
+sha2 = { version = "0.11", optional = true }
+stringprep = { version = "0.1", optional = true }
+zeroize = { version = "1", optional = true }
+# PDF date strings in the object layer (`cos`).
+chrono = { workspace = true, optional = true }
+
+# On the web, a rewrite's fresh file identifier (`cos`) takes its entropy from the browser
+# (`crypto.getRandomValues`); native builds compile neither.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { version = "0.3", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 hayro-syntax = "=0.7.2"
 hayro-interpret = { version = "=0.7.0", default-features = false }
 hayro-cmap = "=0.1.0"
 kurbo = "0.13"
 ttf-parser = "=0.25.1"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+proptest = { workspace = true }
+
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
+
+[[example]]
+name = "cos_info"
+required-features = ["cos"]
+
+[[example]]
+name = "cos_protect"
+required-features = ["cos"]

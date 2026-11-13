@@ -94,6 +94,8 @@ settings.json        the network setting and the sources the user added
 manifest.json        what is installed
 indexes/             the last indexes fetched: sources.json, <source>.json.gz, user-<hash>
 <family folder>/     the font files and the licence
+language-packs/      installed Language packs, one folder per locale
+language-packs.json  which Language packs are installed
 .staging/            downloads being installed
 .lock                held while the store changes
 ```
@@ -112,6 +114,52 @@ A Google Fonts family's folder is google/fonts' own folder name (`lato/`); anoth
 ## Telling the catalog
 
 The catalog scans the store folder. With `with_catalog(catalog)`, every install and removal ends with `catalog.rescan()`, which reads only new and changed files, so the app sees the fonts at once. Other running apps notice through `Catalog::rescan_if_changed` (when their window is activated) or `Catalog::watch`.
+
+## Language packs
+
+The store's second item kind, `language-pack`: a language's spelling dictionary, hyphenation patterns and licence texts, published by [storytold/craft-i18n](https://github.com/storytold/craft-i18n) as `<locale>.tar.zst` release assets listed in an `index.json`, and read at runtime by `craft-proof` (`craft_proof::packs`). It reuses the store's folder, consent, HTTP client, staging and sha256 checks; there is no second downloader.
+
+```rust
+const PACKS: PackIndexPin = PackIndexPin { url: "https://github.com/storytold/craft-i18n/releases/download/language-packs-1/index.json", sha256: "<hex>" };
+let index = store.fetch_language_pack_index(&PACKS, &Cancel::new())?;   // or cached_language_pack_index(&PACKS)
+let nl = index.pack("nl").unwrap();
+store.install_language_pack(&index, nl, &Cancel::new(), &mut |p| ())?;  // network on, like fonts
+craft_proof::packs::set_packs_dir(Some(store.language_packs_dir()));      // then packs::reload() after each change
+store.remove_language_pack("nl")?;
+let installed = store.installed_language_packs();
+```
+
+| Call | What it does |
+|---|---|
+| `fetch_language_pack_index(pin, cancel)` | Downloads the index, checks it against the pin's sha256, saves it as `indexes/language-packs.json`. Needs the network on. |
+| `cached_language_pack_index(pin)` | The saved index, when it is the pinned one. |
+| `install_language_pack(index, pack, cancel, progress)` | Downloads the archive (at most 128 MiB), checks size and sha256, unpacks it into `.staging/` and moves it into `language-packs/<locale>/` with one rename (an older pack is replaced the same way). Records it in `language-packs.json`. |
+| `remove_language_pack(locale)` | Moves the folder out at once, updates the record, deletes the files. No network needed. |
+| `installed_language_packs()` | The recorded packs whose folder is there. |
+| `language_packs_dir()` | `<store>/language-packs`, for `craft_proof::packs::set_packs_dir`. |
+
+Removal restores the original folder if the installed-record update fails. If restoration also
+fails, the error names a preserved backup under `language-packs/.removing/`. That recovery
+folder is outside the ordinary download staging sweep; cleanup does not delete the backup.
+Committed removals record their backup IDs in the same atomic record update. On lock acquisition,
+the cleanup sweep attempts at most four previously recorded backups, completing finite rounds through
+the receipts within a live store so failed entries are revisited even as new receipts arrive.
+This bounds the number of
+deletion attempts, not the work to delete one backup. Recreating the store resets the cursor;
+backups and receipts remain available for later retries, and the next lock need not finish all
+pending cleanup. Failed rollback backups have no receipt and remain available for recovery.
+Receipts stay until cleanup succeeds and a later record write prunes them; their IDs cannot be
+reused for a new removal while they remain recorded.
+An installed record rebuilt after corruption has no cleanup receipts; unreceipted backups are
+retained for manual recovery.
+Invalid receipt names are discarded without losing readable pack metadata or other valid receipts.
+Cleanup retains open store, Language pack, and recovery-directory handles; it rejects symlinked
+recovery ancestors. Unix cleanup resolves receipt names relative to the open recovery directory;
+Windows retains ancestor handles that prevent their replacement during cleanup.
+
+**Unpacking is hostile-input safe:** pure-Rust zstd (`ruzstd`, MIT; every frame is read, and nothing but tar padding may follow the archive) and `tar` (MIT OR Apache-2.0); regular files and the `LICENCES` folder only (no links or devices). Only the contract's names are allowed: `pack.toml`, `spelling.aff`, `spelling.dic`, `hyphenation.pat` at the root and `LICENCES/<name>` (`[A-Za-z0-9._-]`, no leading or trailing dot, no Windows device names such as `CON` or `nul.txt`). Each file at most 64 MiB, 256 MiB and 256 entries per pack. `pack.toml` is required and must name the entry's locale; the files the index promises (`spelling`, `hyphenation`) must be there. Index entries need a lowercase BCP 47 locale (listed once, not a Windows device name), a sha256 and an `https://` URL; names, licences, versions, classes and the release lose control and bidi/format characters before they are stored or listed; an optional `source` must be an `https://` URL. At most 4096 zstd frames per archive. An unreadable `language-packs.json` is copied to `language-packs.json.bad` and rebuilt from the pack folders (each `pack.toml`) atomically in place, as is a missing one when pack folders are there, so no installed pack drops out of the list. Only an install or removal (under the store lock) rewrites it; listing reads the folders meanwhile and writes nothing.
+
+**Developer override (testing only — bypasses the pin):** `CRAFT_LANGUAGE_PACK_INDEX=<url or path>` replaces the pinned index URL with an `http://` URL on a loopback host (`127.0.0.1`, `localhost`, `[::1]`), an `https://` URL or a local file path (`file://` URLs are not taken), and **skips the index's sha256 pin**. Archives are still checked against the sha256 and size in that index, and may then also be loopback `http://` URLs or local paths. Off unless the variable is set; it works in release builds too (for end-to-end tests of a real build), a warning is logged whenever it is used, and `language_pack_index_overridden() -> Option<String>` returns the value so apps can show that the pin is bypassed. Never set it for users.
 
 ## Web
 

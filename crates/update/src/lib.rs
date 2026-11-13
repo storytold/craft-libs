@@ -29,6 +29,7 @@ pub mod source;
 pub mod status;
 pub mod suite;
 pub mod time;
+pub mod translate;
 pub mod version;
 
 #[cfg(feature = "egui")]
