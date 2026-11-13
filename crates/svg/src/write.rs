@@ -107,7 +107,11 @@ impl Scene {
 }
 
 fn write_attributes<'a>(mut tag: craft_xml::Tag<'a>, attributes: &'a [Attribute]) -> craft_xml::Tag<'a> {
-    for attribute in attributes {
+    // SVG consumers disagree about duplicate attributes; make the last supplied value win.
+    for (index, attribute) in attributes.iter().enumerate() {
+        if attributes[index + 1..].iter().any(|later| later.name == attribute.name) {
+            continue;
+        }
         tag = match &attribute.value {
             Value::Text(value) => tag.attr(&attribute.name, value),
             Value::Number(value) => tag.attr(&attribute.name, num(*value, 3)),
@@ -136,8 +140,9 @@ fn write_elements(writer: &mut SvgWriter, elements: &[Element], depth: usize) {
                 writer.close();
             }
             Element::Path { attributes, path } => {
-                let attributes = attributes.clone();
-                write_attributes(writer.tag("path").attr("d", path_data(path)), &attributes).empty();
+                let mut attrs = vec![Attribute::text("d", path_data(path))];
+                attrs.extend(attributes.iter().cloned());
+                write_attributes(writer.tag("path"), &attrs).empty();
             }
             Element::Rect { attributes, x, y, width, height } => {
                 let mut attrs = vec![

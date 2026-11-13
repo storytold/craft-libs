@@ -8,6 +8,10 @@ use hayro_interpret::{
     BlendMode, ClipPath, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, RectExt, SoftMask,
 };
 use kurbo::{Affine, BezPath, Rect};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 /// Limits for vector path extraction. They bound the output model, not interpreter peak memory.
 #[derive(Debug, Clone, Copy)]
@@ -61,14 +65,31 @@ pub fn import(bytes: &[u8], limits: Limits) -> Result<Imported, Error> {
         return Err(Error::Pages { limit: limits.max_pages });
     }
     let cache = InterpreterCache::new();
+    let truncated = Arc::new(AtomicBool::new(false));
+    let truncation_flag = truncated.clone();
+    let settings = InterpreterSettings {
+        warning_sink: Arc::new(move |warning| {
+            if matches!(warning, hayro_interpret::InterpreterWarning::ContentTruncated) {
+                truncation_flag.store(true, Ordering::Relaxed);
+            }
+        }),
+        ..InterpreterSettings::default()
+    };
     let mut pages = Vec::with_capacity(pdf.pages().len());
     let mut total_paths = 0usize;
     let mut total_elements = 0usize;
     for page in pdf.pages().iter() {
         let crop_box = page.intersected_crop_box().to_kurbo();
-        let mut context = hayro_interpret::Context::new(Affine::IDENTITY, crop_box, &cache, pdf.xref(), InterpreterSettings::default());
-        let mut device = Collector::default();
+        let mut context = hayro_interpret::Context::new(Affine::IDENTITY, crop_box, &cache, pdf.xref(), settings.clone());
+        let mut device = Collector {
+            max_paths: limits.max_paths.saturating_sub(total_paths),
+            max_elements: limits.max_path_elements.saturating_sub(total_elements),
+            ..Collector::default()
+        };
         crate::read::interpret_page(page, &mut context, &mut device)?;
+        if device.exceeded {
+            return Err(Error::OutputLimit);
+        }
         total_paths = total_paths.saturating_add(device.paths.len());
         total_elements = device.paths.iter().fold(total_elements, |n, path| n.saturating_add(path.elements().len()));
         if total_paths > limits.max_paths || total_elements > limits.max_path_elements {
@@ -92,6 +113,9 @@ pub fn import(bytes: &[u8], limits: Limits) -> Result<Imported, Error> {
     if pages.iter().any(|page| page.clips_seen > 0) {
         warnings.push("clip paths are not applied to extracted geometry".into());
     }
+    if truncated.load(Ordering::Relaxed) {
+        warnings.push("PDF content was truncated by the interpreter".into());
+    }
     Ok(Imported { pages, warnings })
 }
 
@@ -101,16 +125,26 @@ struct Collector {
     omitted_text: usize,
     omitted_images: usize,
     clips_seen: usize,
+    max_paths: usize,
+    max_elements: usize,
+    elements: usize,
+    exceeded: bool,
 }
 
 impl Device<'_> for Collector {
     fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
     fn set_blend_mode(&mut self, _: BlendMode) {}
     fn draw_path(&mut self, path: &BezPath, transform: Affine, _: &Paint<'_>, _: &PathDrawMode) {
-        let path = transform * path.clone();
-        if !path.is_empty() {
-            self.paths.push(path);
+        if path.is_empty() {
+            return;
         }
+        let count = path.elements().len();
+        if self.paths.len() >= self.max_paths || self.elements.saturating_add(count) > self.max_elements {
+            self.exceeded = true;
+            return;
+        }
+        self.elements = self.elements.saturating_add(count);
+        self.paths.push(transform * path.clone());
     }
     fn push_clip_path(&mut self, _: &ClipPath) {
         self.clips_seen = self.clips_seen.saturating_add(1);

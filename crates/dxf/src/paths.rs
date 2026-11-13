@@ -14,6 +14,8 @@ pub enum Error {
     Parse(#[from] crate::DxfError),
     #[error("DXF contains more than {MAX_PATHS} paths")]
     TooManyPaths,
+    #[error("DXF curve exceeds the subdivision limit")]
+    TooManySegments,
     #[error("DXF contains a non-finite path coordinate")]
     NonFinite,
 }
@@ -41,6 +43,9 @@ pub fn import(bytes: &[u8]) -> Result<Imported, Error> {
         if !entity.common.visible || record.paper_space() {
             continue;
         }
+        if excessive_sweep(&entity.kind) {
+            return Err(Error::TooManySegments);
+        }
         let converted = entity_paths(&entity.kind, entity.common.extrusion);
         if converted.iter().flat_map(|path| path.elements()).any(|element| {
             let finite = |p: Point| p.x.is_finite() && p.y.is_finite();
@@ -54,17 +59,7 @@ pub fn import(bytes: &[u8]) -> Result<Imported, Error> {
             return Err(Error::NonFinite);
         }
         if converted.is_empty() {
-            if matches!(
-                entity.kind,
-                crate::model::EntityKind::Other
-                    | crate::model::EntityKind::Text(_)
-                    | crate::model::EntityKind::MText(_)
-                    | crate::model::EntityKind::Insert(_)
-                    | crate::model::EntityKind::Dimension(_)
-                    | crate::model::EntityKind::Hatch(_)
-            ) {
-                unsupported = unsupported.saturating_add(1);
-            }
+            unsupported = unsupported.saturating_add(1);
             continue;
         }
         if paths.len().saturating_add(converted.len()) > MAX_PATHS {
@@ -117,27 +112,44 @@ fn entity_paths(kind: &crate::model::EntityKind, normal: crate::model::Point) ->
     match kind {
         E::Line { start, end } => vec![line(*start, *end)],
         E::Circle { center, radius } if radius.is_finite() && *radius > 0.0 => {
-            vec![circle(ocs(normal, *center), *radius)]
+            vec![map_ocs_path(circle(Point::new(center[0], center[1]), *radius), normal, center[2])]
         }
         E::Arc { center, radius, start_angle, end_angle }
             if radius.is_finite() && *radius > 0.0 && start_angle.is_finite() && end_angle.is_finite() =>
         {
-            vec![arc(ocs(normal, *center), *radius, start_angle.to_radians(), end_angle.to_radians())]
+            vec![map_ocs_path(arc(Point::new(center[0], center[1]), *radius, start_angle.to_radians(), end_angle.to_radians()), normal, center[2])]
         }
-        E::LwPolyline(poly) => vec![polyline(poly.vertices.iter().map(|v| (ocs(normal, [v.x, v.y, poly.elevation]), v.bulge)), poly.closed)],
+        E::LwPolyline(poly) => {
+            vec![map_ocs_path(polyline(poly.vertices.iter().map(|v| (Point::new(v.x, v.y), v.bulge)), poly.closed), normal, poly.elevation)]
+        }
         E::Polyline(poly) if !poly.is_mesh() && !poly.is_polyface() => {
-            vec![polyline(poly.vertices.iter().filter(|v| !v.is_face()).map(|v| (ocs(normal, v.location), v.bulge)), poly.closed())]
+            let is_3d = poly.flags & 8 != 0;
+            let z = if is_3d { 0.0 } else { poly.elevation };
+            let path =
+                polyline(poly.vertices.iter().filter(|v| !v.is_face()).map(|v| (Point::new(v.location[0], v.location[1]), v.bulge)), poly.closed());
+            vec![if is_3d { path } else { map_ocs_path(path, normal, z) }]
         }
         E::Ellipse { center, major, ratio, start, end } if ratio.is_finite() && *ratio > 0.0 => {
-            vec![ellipse(*center, *major, *ratio, *start, *end)]
+            vec![ellipse(*center, *major, normal, *ratio, *start, *end)]
         }
         _ => Vec::new(),
     }
 }
 
-fn ocs(normal: crate::model::Point, point: crate::model::Point) -> Point {
-    let p = crate::model::ocs_to_wcs(normal, point);
-    Point::new(p[0], p[1])
+fn map_ocs_path(path: BezPath, normal: crate::model::Point, z: f64) -> BezPath {
+    let [x, y, n] = crate::model::ocs_axes(normal);
+    let transform = kurbo::Affine::new([x[0], y[0], x[1], y[1], n[0] * z, n[1] * z]);
+    transform * path
+}
+
+fn excessive_sweep(kind: &crate::model::EntityKind) -> bool {
+    let cap = 4096.0 * std::f64::consts::FRAC_PI_2;
+    let over = |sweep: f64| !sweep.is_finite() || sweep.abs() > cap;
+    match kind {
+        crate::model::EntityKind::Arc { start_angle, end_angle, .. } => over((end_angle - start_angle).to_radians()),
+        crate::model::EntityKind::Ellipse { start, end, .. } => over(end - start),
+        _ => false,
+    }
 }
 
 fn line(start: crate::model::Point, end: crate::model::Point) -> BezPath {
@@ -220,11 +232,14 @@ fn arc_segments(path: &mut BezPath, center: Point, start: f64, sweep: f64, radiu
     }
 }
 
-fn ellipse(center: crate::model::Point, major: crate::model::Point, ratio: f64, start: f64, end: f64) -> BezPath {
-    let (cx, cy) = (center[0], center[1]);
-    let (ax, ay) = (major[0], major[1]);
-    let (bx, by) = (-ay * ratio, ax * ratio);
-    let point = |t: f64| Point::new(cx + ax * t.cos() + bx * t.sin(), cy + ay * t.cos() + by * t.sin());
+fn ellipse(center: crate::model::Point, major: crate::model::Point, normal: crate::model::Point, ratio: f64, start: f64, end: f64) -> BezPath {
+    let minor = cross(normal, major);
+    let minor_len = minor.iter().map(|v| v * v).sum::<f64>().sqrt();
+    if !(minor_len.is_finite() && minor_len > 0.0) {
+        return BezPath::new();
+    }
+    let bx = [minor[0] / minor_len * ratio, minor[1] / minor_len * ratio, minor[2] / minor_len * ratio];
+    let point = |t: f64| Point::new(center[0] + major[0] * t.cos() + bx[0] * t.sin(), center[1] + major[1] * t.cos() + bx[1] * t.sin());
     let mut path = BezPath::new();
     path.move_to(point(start));
     let sweep = if end >= start { end - start } else { end - start + std::f64::consts::TAU };
@@ -237,10 +252,14 @@ fn ellipse(center: crate::model::Point, major: crate::model::Point, ratio: f64, 
         let a = start + step * i as f64;
         let b = a + step;
         let k = 4.0 / 3.0 * (step / 4.0).tan();
-        let derivative = |t: f64| Point::new(-ax * t.sin() + bx * t.cos(), -ay * t.sin() + by * t.cos());
+        let derivative = |t: f64| Point::new(-major[0] * t.sin() + bx[0] * t.cos(), -major[1] * t.sin() + bx[1] * t.cos());
         let p1 = point(a) + derivative(a).to_vec2() * k;
         let p2 = point(b) - derivative(b).to_vec2() * k;
         path.curve_to(p1, p2, point(b));
     }
     path
+}
+
+fn cross(a: crate::model::Point, b: crate::model::Point) -> crate::model::Point {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 }

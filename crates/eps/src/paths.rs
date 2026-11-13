@@ -45,24 +45,46 @@ pub fn import(bytes: &[u8], limits: Limits) -> Result<Imported, Error> {
         return Err(Error::InputLimit { limit: limits.max_input_bytes });
     }
     let source = vectorcraft_eps::import(bytes).map_err(Error::Parse)?;
-    let page_bounds = source
-        .document
-        .artboards
-        .first()
-        .map_or(Rect::new(0.0, 0.0, 612.0, 792.0), |board| Rect::new(board.rect.x0, board.rect.y0, board.rect.x1, board.rect.y1));
+    let section = crate::sections(bytes).map_err(|e| Error::Parse(e.to_string()))?;
+    let source_box = crate::Comments::read(section.postscript).page_box().unwrap_or([0.0, 0.0, 612.0, 792.0]);
+    let [llx, _lly, urx, ury] = source_box;
+    let page_bounds = Rect::new(llx, lly, urx, ury);
     let mut paths = Vec::new();
     let mut total_elements = 0usize;
+    let mut clipped = false;
+    let mut omitted = false;
     for layer in &source.document.layers {
-        collect(layer, &mut paths, &mut total_elements, limits)?;
+        collect(layer, &mut paths, &mut total_elements, limits, &mut clipped, &mut omitted)?;
     }
-    Ok(Imported { paths, page_bounds, warnings: source.warnings, preview_fallback: source.preview })
+    let inverse_page = kurbo::Affine::new([1.0, 0.0, 0.0, -1.0, llx, ury]);
+    for path in &mut paths {
+        *path = inverse_page * path.clone();
+    }
+    let mut warnings = source.warnings;
+    if clipped {
+        warnings.push("EPS clipping groups are returned as unclipped artwork".into());
+    }
+    if omitted {
+        warnings.push("visible EPS text or image content is not returned as paths".into());
+    }
+    Ok(Imported { paths, page_bounds, warnings, preview_fallback: source.preview })
 }
 
-fn collect(node: &vectorcraft_doc::Node, paths: &mut Vec<BezPath>, elements: &mut usize, limits: Limits) -> Result<(), Error> {
+fn collect(
+    node: &vectorcraft_doc::Node,
+    paths: &mut Vec<BezPath>,
+    elements: &mut usize,
+    limits: Limits,
+    clipped: &mut bool,
+    omitted: &mut bool,
+) -> Result<(), Error> {
     if !node.visible {
         return Ok(());
     }
     if let Some(data) = node.path_data() {
+        if matches!(node.kind, vectorcraft_doc::NodeKind::Path { clipping: true, .. }) {
+            return Ok(());
+        }
         let path = data.to_bezpath();
         if !path.elements().is_empty() {
             *elements = elements.saturating_add(path.elements().len());
@@ -72,9 +94,16 @@ fn collect(node: &vectorcraft_doc::Node, paths: &mut Vec<BezPath>, elements: &mu
             paths.push(path);
         }
     } else if let Some(children) = node.children() {
-        for child in children {
-            collect(child, paths, elements, limits)?;
+        let is_clip = matches!(node.kind, vectorcraft_doc::NodeKind::Group { clip: true, .. } | vectorcraft_doc::NodeKind::Layer { clip: true, .. });
+        *clipped |= is_clip;
+        for (index, child) in children.iter().enumerate() {
+            if is_clip && index == 0 {
+                continue;
+            }
+            collect(child, paths, elements, limits, clipped, omitted)?;
         }
+    } else {
+        *omitted = true;
     }
     Ok(())
 }
