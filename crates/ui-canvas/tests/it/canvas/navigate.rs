@@ -134,6 +134,7 @@ fn at_a_whole_device_zoom_with_no_rotation_the_shown_view_puts_document_pixels_o
             assert!((p.x - p.x.round()).abs() < 1e-3 && (p.y - p.y.round()).abs() < 1e-3, "{device}x: {doc:?} at {p:?}");
         }
         assert_eq!(space.target().center, Point::new(100.3, 77.7), "the view the app keeps is not moved");
+        assert!(!space.easing(), "a settled view is not easing");
         let moved = (space.view.to_screen(Point::ZERO) - space.target().to_screen(Point::ZERO)) * ppp;
         assert!(moved.x.abs() <= 0.501 && moved.y.abs() <= 0.501, "{device}x: moved {moved:?}");
     }

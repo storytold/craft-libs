@@ -30,7 +30,7 @@ pub use crop::{CropOverlay, CropOverlayOutput, CropShield, CropStyle, ShieldColo
 pub use frame_step::{FRAME_STEP_MAX, frame_step};
 pub(crate) use march::{MARCH_SECONDS, MARCH_TICK, march_shift};
 pub use readout::readout;
-pub use space::{CanvasSpace, RulerText, canvas_space};
+pub use space::{CanvasSpace, RulerText, canvas_space, pixel_aligned};
 pub use words::CanvasWords;
 
 #[doc(hidden)]
@@ -195,6 +195,8 @@ struct Settled {
     target: CanvasView,
     /// The view on screen: the target, or a view part way to it while a zoom eases.
     shown: CanvasView,
+    /// A zoom eases: `shown` is part way to `target`.
+    easing: bool,
     /// The keys the canvas leaves to its body.
     keys: BodyKeys,
 }
@@ -385,8 +387,9 @@ impl<'a> Canvas<'a> {
             None => {}
         }
         let shown = motion.animation.shown(&target, progress);
+        let easing = motion.animation.running();
         motion.restore(&ctx, id);
-        Settled { target, shown, keys }
+        Settled { target, shown, easing, keys }
     }
 
     /// Measures the document's axes in `x` and `y`, counted from `zero` (document units). The rulers, the guides and
@@ -400,11 +403,12 @@ impl<'a> Canvas<'a> {
     }
 
     fn space(&self, id: egui::Id, pixels_per_point: f32, background: BackgroundPress) -> Option<CanvasSpace> {
-        let (shown, target, keys) = match self.settled {
-            Some(settled) => (settled.shown, settled.target, settled.keys),
-            None => (self.given?, self.given?, BodyKeys::default()),
+        let (shown, target, easing, keys) = match self.settled {
+            Some(settled) => (settled.shown, settled.target, settled.easing, settled.keys),
+            None => (self.given?, self.given?, false, BodyKeys::default()),
         };
-        let space = CanvasSpace::new(space::pixel_aligned(shown, pixels_per_point), pixels_per_point).with_target(target).with_keys(keys);
+        let shown = space::pixel_aligned(shown, pixels_per_point);
+        let space = CanvasSpace::new(shown, pixels_per_point).with_target(target).with_easing(easing).with_keys(keys);
         Some(space.with_document(self.document_size()).with_rulers(self.rulers).with_background(background).with_canvas(id))
     }
 

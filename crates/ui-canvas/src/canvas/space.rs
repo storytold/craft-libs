@@ -20,11 +20,12 @@ use std::ops::RangeInclusive;
 #[non_exhaustive]
 pub struct CanvasSpace {
     /// The view on screen: document to the canvas root's screen space, part way to [`target`](Self::target) while a
-    /// zoom eases.
+    /// zoom eases, and [`pixel_aligned`].
     pub view: CanvasView,
     /// Device pixels per point.
     pub pixels_per_point: f32,
     target: CanvasView,
+    easing: bool,
     keys: BodyKeys,
     document: Option<Size>,
     rulers: Option<CanvasRulers>,
@@ -41,6 +42,7 @@ impl CanvasSpace {
             view,
             pixels_per_point,
             target: view,
+            easing: false,
             keys: BodyKeys::default(),
             document: None,
             rulers: None,
@@ -53,6 +55,13 @@ impl CanvasSpace {
     #[must_use]
     pub fn with_target(mut self, target: CanvasView) -> Self {
         self.target = target;
+        self
+    }
+
+    /// This space with `view` part way to the target while a zoom eases (`easing`).
+    #[must_use]
+    pub fn with_easing(mut self, easing: bool) -> Self {
+        self.easing = easing;
         self
     }
 
@@ -114,9 +123,15 @@ impl CanvasSpace {
     }
 
     /// The view the canvas settled on in this pass: what the app keeps, and what a body that keeps its own view state
-    /// decides from. It differs from `view` only while a zoom eases.
+    /// decides from. It differs from `view` while a zoom eases ([`easing`](Self::easing)) and, by less than half a
+    /// device pixel, where `view` is [`pixel_aligned`].
     pub fn target(&self) -> CanvasView {
         self.target
+    }
+
+    /// Whether a zoom eases in this pass, so `view` is part way to [`target`](Self::target).
+    pub fn easing(&self) -> bool {
+        self.easing
     }
 
     /// The page and arrow keys the canvas left to its body in this pass ([`Canvas::keys_to_body`](super::Canvas)).
@@ -132,9 +147,10 @@ impl CanvasSpace {
 
 /// `view` as the canvas shows it: at a whole number of device pixels per document unit on both axes, with no rotation,
 /// moved by less than half a device pixel so the document's pixel edges land on device pixel edges. Every other view is
-/// shown as it is. The displays, the overlays and the tools all read this one view; the view the app keeps stays as it
-/// was set, so the alignment never accumulates into a pan.
-pub(crate) fn pixel_aligned(view: CanvasView, pixels_per_point: f32) -> CanvasView {
+/// shown as it is. A canvas gives its displays, overlays and tools this view as [`CanvasSpace::view`]; the view the app
+/// keeps stays as it was set, so the alignment never adds up into a pan. An app that maps through a view outside the
+/// canvas's pass maps through this one, to land where the canvas will draw.
+pub fn pixel_aligned(view: CanvasView, pixels_per_point: f32) -> CanvasView {
     let ppp = f64::from(pixels_per_point);
     if !(ppp.is_finite() && ppp > 0.0 && view.zoom.is_finite() && view.zoom > 0.0) || !(view.rotation.abs() < 1e-8) {
         return view;
