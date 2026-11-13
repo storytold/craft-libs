@@ -7,17 +7,18 @@ mod expr;
 mod formula;
 mod ftab;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use craft_opc::{ContentTypes, Rels};
 use craft_sheet::{CellError, CellRef, MAX_COLS, MAX_ROWS, Range, Visibility};
 
-use crate::sheet::{Cell, CellFormula, CellValue, Row, SheetPart};
+use crate::sheet::{Cell, CellFormula, CellValue, FormulaKind, Row, SheetPart};
 use crate::strings::StringItem;
 use crate::workbook::{SheetEntry, SheetKind, Workbook};
 use crate::{Error, Limits, Warnings};
 pub(crate) use formula::Links;
-use formula::{Book, Name, Xti};
+use formula::{Book, Mode, Name, Xti};
 
 pub(crate) const MAIN: &str = "application/vnd.ms-excel.main";
 const BINARY_MAIN: &str = "application/vnd.ms-excel.sheet.binary.macroEnabled.main";
@@ -57,6 +58,11 @@ pub(crate) struct Budget {
 impl Budget {
     /// Charges a decoded formula's text if it fits [`Limits::binary_formula_text`]; a formula
     /// that doesn't keeps its saved result.
+    /// Whether formula text of `len` bytes would still fit, without charging it.
+    fn formula_text_fits(&self, len: usize, limits: &Limits) -> bool {
+        self.formula_text.get().saturating_add(len) <= limits.binary_formula_text
+    }
+
     fn try_formula_text(&self, len: usize, limits: &Limits) -> bool {
         let total = self.formula_text.get().saturating_add(len);
         let fits = total <= limits.binary_formula_text;
@@ -506,20 +512,176 @@ fn cell_formula<'a>(b: &mut Bytes<'a>) -> Result<(&'a [u8], &'a [u8]), Error> {
 /// A formula's text, or `None` (with a warning saying why) for one that keeps its saved result:
 /// the workbook's links couldn't be read, the tokens can't be decoded, or the formula text
 /// allowance is spent.
-fn decode_formula(rgce: &[u8], rgcb: &[u8], links: Option<&Links>, limits: &Limits, budget: &Budget, warnings: &mut Warnings) -> Option<String> {
+fn decode_formula(
+    rgce: &[u8],
+    rgcb: &[u8],
+    mode: Mode,
+    links: Option<&Links>,
+    limits: &Limits,
+    budget: &Budget,
+    warnings: &mut Warnings,
+) -> Option<String> {
     let links = links?;
-    let text = match formula::decode(rgce, rgcb, links) {
+    let text = match formula::decode(rgce, rgcb, links, mode) {
         Ok(e) => expr::print(&e),
         Err(formula::Unsupported(why)) => {
-            warnings.warn(format!("XLSB: some formulas were kept as their saved results ({why})"));
+            kept(warnings, why);
             return None;
         }
     };
     if !budget.try_formula_text(text.len(), limits) {
-        warnings.warn("XLSB: some formulas were kept as their saved results (more formula text than the limits allow)");
+        kept(warnings, "more formula text than the limits allow");
         return None;
     }
     Some(text)
+}
+
+/// Warns, once per reason, that formulas were kept as their saved results.
+fn kept(warnings: &mut Warnings, why: &str) {
+    warnings.warn(format!("XLSB: some formulas were kept as their saved results ({why})"));
+}
+
+/// A `BrtShrFmla`: the cells it may cover, its tokens, its first cell's text length (what a copy
+/// is expected to cost) and the group's index (`si`).
+struct SharedFormula {
+    range: Range,
+    rgce: Vec<u8>,
+    rgcb: Vec<u8>,
+    len: usize,
+    si: u32,
+}
+
+/// A formula cell whose tokens are only `PtgExp`: part of a shared or array formula.
+enum Part {
+    /// The first cell: its formula is the `BrtShrFmla` or `BrtArrFmla` record that follows.
+    First,
+    /// Another cell of the formula whose first cell is this.
+    Of(CellRef),
+}
+
+/// `PtgExp` ([MS-XLSB] 2.5.98.40) with its `PtgExtraCol`: the first cell of the shared or array
+/// formula this cell belongs to. BIFF12 keeps only the row in the token and the column in rgcb.
+fn part_of(rgce: &[u8], rgcb: &[u8], at: CellRef) -> Option<Result<Part, &'static str>> {
+    let (&ptg, row) = rgce.split_first()?;
+    if ptg != 0x01 {
+        return None;
+    }
+    let (Ok(row), Ok(col)) = (<[u8; 4]>::try_from(row), <[u8; 4]>::try_from(rgcb)) else {
+        return Some(Err("malformed shared or array formula references"));
+    };
+    let first = CellRef::new(u32::from_le_bytes(row), u32::from_le_bytes(col));
+    Some(Ok(if first == at { Part::First } else { Part::Of(first) }))
+}
+
+/// One sheet's shared and array formulas, by first cell, as the reader meets them. `None` when
+/// the formula keeps its values (so its other cells keep theirs).
+#[derive(Default)]
+struct RangeFormulas {
+    shared: HashMap<CellRef, Option<Arc<SharedFormula>>>,
+    arrays: HashMap<CellRef, Option<Range>>,
+}
+
+impl RangeFormulas {
+    /// The formula of another cell `at` of the shared or array formula starting at `first`. A
+    /// shared formula's copy is decoded from the shared tokens at its own cell, as [MS-XLSB]
+    /// defines it (relative offsets wrap around the grid), and checked like any formula: its text
+    /// may be longer than the first cell's. That length estimates its cost, and a copy that can't
+    /// fit isn't decoded at all, so a long formula shared by a million cells stops costing once
+    /// the allowance is spent. An array formula's other cells have none, as in `.xlsx`.
+    fn follower(
+        &self,
+        at: CellRef,
+        first: CellRef,
+        links: Option<&Links>,
+        limits: &Limits,
+        budget: &Budget,
+        warnings: &mut Warnings,
+    ) -> Option<CellFormula> {
+        if let Some(shared) = self.shared.get(&first) {
+            let sh = shared.as_ref()?;
+            if !sh.range.contains(at) {
+                kept(warnings, "malformed shared or array formula references");
+                return None;
+            }
+            if !budget.formula_text_fits(sh.len, limits) {
+                kept(warnings, "more formula text than the limits allow");
+                return None;
+            }
+            let text = decode_formula(&sh.rgce, &sh.rgcb, Mode::Shared(at), links, limits, budget, warnings)?;
+            return Some(CellFormula { kind: FormulaKind::Shared, text, shared_index: Some(sh.si), ..CellFormula::default() });
+        }
+        match self.arrays.get(&first) {
+            Some(Some(range)) if range.contains(at) => {}
+            Some(Some(_)) => kept(warnings, "malformed shared or array formula references"),
+            Some(None) => {}
+            None => kept(warnings, "a shared or array formula that is missing from the file"),
+        }
+        None
+    }
+
+    /// `BrtShrFmla` (427) or `BrtArrFmla` (426) right after the first cell `first` of its range:
+    /// the formula that cell keeps, recorded for the range's other cells. A record that can't be
+    /// read leaves the whole range as values; it never fails the file, as these records were
+    /// skipped before formulas were read.
+    #[allow(clippy::too_many_arguments)]
+    fn range_formula(
+        &mut self,
+        id: u16,
+        payload: &[u8],
+        first: CellRef,
+        links: Option<&Links>,
+        limits: &Limits,
+        budget: &Budget,
+        warnings: &mut Warnings,
+    ) -> Option<CellFormula> {
+        let read = |b: &mut Bytes<'_>| -> Result<(Range, Vec<u8>, Vec<u8>), Error> {
+            let (r0, r1, c0, c1) = (b.u32()?, b.u32()?, b.u32()?, b.u32()?);
+            if id == 426 {
+                b.u8()?; // Only fAlwaysCalc, the calculator's to know.
+            }
+            let cce = b.u32()?;
+            if !(1..=16384).contains(&cce) {
+                return Err(invalid("invalid formula token length"));
+            }
+            let rgce = b.take(cce as usize)?.to_vec();
+            let cb = b.u32()?;
+            let rgcb = b.take(cb as usize)?.to_vec();
+            if r0 > r1 || c0 > c1 || r1 >= MAX_ROWS || c1 >= MAX_COLS {
+                return Err(invalid("invalid formula range"));
+            }
+            let range = Range::new(CellRef::new(r0, c0), CellRef::new(r1, c1));
+            // An array formula's first cell is its range's top-left one. A shared formula's is the
+            // first cell that uses it, which need not be: the top-left cell may not share it.
+            let start_ok = if id == 427 { range.contains(first) } else { range.first == first };
+            if !start_ok {
+                return Err(invalid("invalid formula range"));
+            }
+            Ok((range, rgce, rgcb))
+        };
+        let mut b = Bytes::new(payload);
+        let Ok((range, rgce, rgcb)) = read(&mut b).and_then(|r| b.finish().map(|()| r)) else {
+            kept(warnings, "malformed shared or array formulas");
+            self.shared.insert(first, None);
+            self.arrays.insert(first, None);
+            return None;
+        };
+        if id == 427 {
+            let text = decode_formula(&rgce, &rgcb, Mode::Shared(first), links, limits, budget, warnings);
+            let si = u32::try_from(self.shared.len()).unwrap_or(u32::MAX);
+            let shared = text.as_ref().map(|t| Arc::new(SharedFormula { range, rgce, rgcb, len: t.len(), si }));
+            self.shared.insert(first, shared);
+            return text.map(|text| CellFormula {
+                kind: FormulaKind::Shared,
+                text,
+                shared_index: Some(si),
+                range: Some(range),
+                ..CellFormula::default()
+            });
+        }
+        let text = decode_formula(&rgce, &rgcb, Mode::Cell, links, limits, budget, warnings);
+        self.arrays.insert(first, text.as_ref().map(|_| range));
+        text.map(|text| CellFormula { kind: FormulaKind::Array, text, range: Some(range), ..CellFormula::default() })
+    }
 }
 
 fn value(id: u16, b: &mut Bytes<'_>, strings: usize, limits: &Limits, budget: &Budget) -> Result<CellValue, Error> {
@@ -579,11 +741,25 @@ pub(crate) fn worksheet(
     let mut row: Option<Row> = None;
     let mut col = None;
     // BrtCellMeta applies to the cell record that follows it (a dynamic-array formula), as `cm`
-    // does in `.xlsx`: a one-based index into the metadata part's cell metadata.
+    // does in `.xlsx`: a one-based index into the metadata part's cell metadata. Excel may write
+    // the cell's BrtValueMeta (a rich value, such as a spill error) in between.
     let mut meta: Option<u32> = None;
+    let mut ranges = RangeFormulas::default();
+    // The first cell of a shared or array formula, waiting for the record holding the formula.
+    let mut first: Option<CellRef> = None;
     while let Some((id, payload)) = records.next(warnings)? {
         let mut b = Bytes::new(payload);
-        let cell_metadata = meta.take();
+        let cell_metadata = if id == 50 { meta } else { meta.take() };
+        if let Some(at) = first.take() {
+            if matches!(id, 426 | 427) {
+                let f = ranges.range_formula(id, payload, at, links, limits, budget, warnings);
+                if let Some(cell) = row.as_mut().and_then(|r| r.cells.last_mut()).filter(|c| c.at == at) {
+                    cell.formula = f;
+                }
+                continue;
+            }
+            kept(warnings, "a shared or array formula that is missing from the file");
+        }
         match id {
             49 => {
                 let icmb = b.i32()?;
@@ -648,10 +824,24 @@ pub(crate) fn worksheet(
                 }
                 let style = b.u32()?;
                 let value = value(id, &mut b, strings, limits, budget)?;
+                let at = CellRef::new(current.index, c);
                 let formula = if (8..=11).contains(&id) {
                     let (rgce, rgcb) = cell_formula(&mut b)?;
                     b.finish()?;
-                    decode_formula(rgce, rgcb, links, limits, budget, warnings).map(|text| CellFormula { text, ..CellFormula::default() })
+                    match part_of(rgce, rgcb, at) {
+                        None => decode_formula(rgce, rgcb, Mode::Cell, links, limits, budget, warnings)
+                            .map(|text| CellFormula { text, ..CellFormula::default() }),
+                        Some(Ok(Part::First)) => {
+                            first = links.map(|_| at);
+                            None
+                        }
+                        Some(Ok(Part::Of(start))) if links.is_some() => ranges.follower(at, start, links, limits, budget, warnings),
+                        Some(Ok(Part::Of(_))) => None,
+                        Some(Err(why)) => {
+                            kept(warnings, why);
+                            None
+                        }
+                    }
                 } else {
                     b.finish()?;
                     None
@@ -660,7 +850,7 @@ pub(crate) fn worksheet(
                     budget.cell(limits)?;
                 }
                 current.cells.push(Cell {
-                    at: CellRef::new(current.index, c),
+                    at,
                     style: style & 0x00FF_FFFF,
                     phonetic: style & 0x0100_0000 != 0,
                     value,

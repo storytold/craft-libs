@@ -5,7 +5,7 @@ mod common;
 
 use common::{read, read_with};
 use craft_xlsx::testing::zip;
-use craft_xlsx::{CellError, CellRef, Error, Limits, Range, SheetKind, Value, Visibility, is_xlsb};
+use craft_xlsx::{CellError, CellRef, Error, FormulaKind, Limits, Range, SheetKind, Value, Visibility, is_xlsb};
 
 const ROOT: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="book" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="records/book.bin"/></Relationships>"#;
 const RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="one" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/one.bin"/><Relationship Id="two" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/two.bin"/><Relationship Id="strings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="../text/strings.bin"/></Relationships>"#;
@@ -546,7 +546,7 @@ fn cell_formulas_are_read_in_their_xlsx_spelling() {
         // Kept as their saved results:
         (11, vec![0x43, 4, 0, 0, 0, 0x1E, 2, 0, 0x05], vec![]),
         (12, ref3d(4, 0, REL), vec![]),
-        (13, vec![0x01, 0, 0, 0, 0], vec![0, 0, 0, 0]),
+        (13, vec![0x01, 0, 0, 0, 0], vec![0, 0, 0, 0]), // Part of a shared formula at A1 that isn't one.
     ];
     let mut data = row(0);
     data.extend(cell(5, 0, &3.0f64.to_le_bytes()));
@@ -580,11 +580,11 @@ fn cell_formulas_are_read_in_their_xlsx_spelling() {
         None,
     ];
     assert_eq!(got, want);
-    assert!(sheet.formulas.values().all(|f| f.kind == craft_xlsx::FormulaKind::Normal));
+    assert!(sheet.formulas.values().all(|f| f.kind == FormulaKind::Normal));
     assert_eq!(sheet.cell_metadata.iter().collect::<Vec<_>>(), [(&CellRef::new(0, 14), &1)]);
     // Every formula cell keeps its saved result as its value.
     assert!((1..=15).all(|c| sheet.value(CellRef::new(0, c)) == Value::Number(0.0)));
-    for why in ["defined names", "other workbooks", "the shared or array formula form", "structured table references"] {
+    for why in ["defined names", "other workbooks", "missing from the file", "structured table references"] {
         assert!(warned(&wb, why), "{why}: {:?}", wb.warnings);
     }
 }
@@ -707,5 +707,167 @@ fn formula_text_past_the_allowance_keeps_the_saved_result() {
     let wb = read_with(&package(&book_with_links(&xti()), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES), &limits).unwrap();
     assert_eq!(wb.sheets[0].formula(CellRef::new(0, 0)), Some("1"));
     assert_eq!(wb.sheets[0].formula(CellRef::new(0, 1)), None);
+    assert!(warned(&wb, "more formula text than the limits allow"), "{:?}", wb.warnings);
+}
+
+fn range_formula(id: u16, (r0, c0, r1, c1): (u32, u32, u32, u32), rgce: &[u8]) -> Vec<u8> {
+    let mut data = vec![];
+    for n in [r0, r1, c0, c1] {
+        data.extend(n.to_le_bytes());
+    }
+    if id == 426 {
+        data.push(0x08); // The flags Excel writes for an ordinary array.
+    }
+    data.extend((rgce.len() as u32).to_le_bytes());
+    data.extend(rgce);
+    data.extend(0u32.to_le_bytes());
+    record(id, &data)
+}
+
+/// A cell of the shared or array formula whose first cell is `row`, `col` (PtgExp + PtgExtraCol).
+fn part(col: u32, (row, first_col): (u32, u32)) -> Vec<u8> {
+    formula_cell(col, &[&[0x01u8][..], &row.to_le_bytes()].concat(), &first_col.to_le_bytes())
+}
+
+fn ref_n(row: i32, col: u16) -> Vec<u8> {
+    [&[0x4Cu8][..], &row.to_le_bytes(), &col.to_le_bytes()].concat()
+}
+
+fn at(a1: &str) -> CellRef {
+    CellRef::parse(a1).unwrap()
+}
+
+#[test]
+fn shared_array_and_dynamic_formulas_read_as_from_xlsx() {
+    // As Excel writes them: C1:C3 share `A1*10` (PtgRefN, column offset -2 as 16382); D1:E2
+    // share `$A1+A$1`; F1:F2 hold the Ctrl+Shift+Enter array {=A1:A2*2}; G1 spills `=A1:A2`.
+    let area = [&[0x45u8][..], &0u32.to_le_bytes(), &1u32.to_le_bytes(), &REL.to_le_bytes(), &REL.to_le_bytes()].concat();
+    let mut data = row(0);
+    data.extend(cell(5, 0, &1.0f64.to_le_bytes()));
+    data.extend(part(2, (0, 2)));
+    data.extend(range_formula(427, (0, 2, 2, 2), &[ref_n(0, 16382 | REL), vec![0x1E, 10, 0, 0x05]].concat()));
+    data.extend(part(3, (0, 3)));
+    data.extend(range_formula(427, (0, 3, 1, 4), &[ref_n(0, 0x8000), ref_n(0, 16381 | 0x4000), vec![0x03]].concat()));
+    data.extend(part(4, (0, 3)));
+    data.extend(part(5, (0, 5)));
+    data.extend(range_formula(426, (0, 5, 1, 5), &[area.clone(), vec![0x1E, 2, 0, 0x05]].concat()));
+    data.extend(record(49, &1u32.to_le_bytes()));
+    data.extend(record(50, &1u32.to_le_bytes())); // BrtValueMeta in between, as Excel writes for a spill error.
+    data.extend(part(6, (0, 6)));
+    data.extend(range_formula(426, (0, 6, 1, 6), &area));
+    data.extend(row(1));
+    data.extend(cell(5, 0, &2.0f64.to_le_bytes()));
+    for (col, first) in [(2, (0, 2)), (3, (0, 3)), (4, (0, 3)), (5, (0, 5)), (6, (0, 6))] {
+        data.extend(part(col, first));
+    }
+    data.extend(row(2));
+    data.extend(part(2, (0, 2)));
+    let wb = read(&file(&worksheet(&data, &[]))).unwrap();
+    let sheet = &wb.sheets[0];
+    let formula = |a: &str| sheet.formulas.get(&at(a));
+    // Each cell of a shared formula has its own text, decoded at the cell: the first with the
+    // group's range, all with its index.
+    for (a, want, si) in [
+        ("C1", "A1*10", 0),
+        ("C2", "A2*10", 0),
+        ("C3", "A3*10", 0),
+        ("D1", "$A1+A$1", 1),
+        ("E1", "$A1+B$1", 1),
+        ("D2", "$A2+A$1", 1),
+        ("E2", "$A2+B$1", 1),
+    ] {
+        let f = formula(a).unwrap_or_else(|| panic!("{a}"));
+        assert_eq!((f.kind, f.text.as_str(), f.shared_index), (FormulaKind::Shared, want, Some(si)), "{a}");
+    }
+    assert_eq!(formula("C1").and_then(|f| f.range), Range::parse("C1:C3"));
+    assert_eq!(formula("D1").and_then(|f| f.range), Range::parse("D1:E2"));
+    assert_eq!(formula("C2").and_then(|f| f.range), None);
+    // An array formula's first cell has it, with its range; a dynamic array's has its cell
+    // metadata too, as `cm` in .xlsx, though Excel wrote a BrtValueMeta in between.
+    let f1 = formula("F1").unwrap();
+    assert_eq!((f1.kind, f1.text.as_str(), f1.range), (FormulaKind::Array, "A1:A2*2", Range::parse("F1:F2")));
+    let g1 = formula("G1").unwrap();
+    assert_eq!((g1.kind, g1.text.as_str(), g1.range), (FormulaKind::Array, "A1:A2", Range::parse("G1:G2")));
+    assert_eq!(sheet.cell_metadata.get(&at("G1")), Some(&1));
+    assert_eq!(sheet.cell_metadata.get(&at("F1")), None);
+    // Their other cells have no formula and keep their saved results, as in .xlsx.
+    for a in ["F2", "G2"] {
+        assert!(formula(a).is_none(), "{a}");
+        assert_eq!(sheet.value(at(a)), Value::Number(0.0), "{a}");
+    }
+    assert!(!wb.warnings.iter().any(|w| w.contains("kept as their saved results")), "{:?}", wb.warnings);
+}
+
+#[test]
+fn unreadable_shared_formulas_keep_their_values() {
+    // A shared formula with an unsupported token, a range that doesn't start at its first cell,
+    // a truncated record, and a first cell with no formula record after it: every cell of each
+    // keeps its saved result, and the file opens.
+    let unknown = range_formula(427, (0, 0, 1, 0), &[0xFF]);
+    let wrong_start = range_formula(427, (0, 1, 1, 1), &[0x1E, 1, 0]);
+    // A well-framed record whose payload stops before rgcb's length.
+    let short: Vec<u8> = [&[0u8; 4][..], &1u32.to_le_bytes(), &[0; 8], &3u32.to_le_bytes(), &[0x1E, 1, 0]].concat();
+    let truncated = record(427, &short);
+    for after_first in [unknown, wrong_start, truncated, cell(5, 1, &1.0f64.to_le_bytes())] {
+        let data = [row(0), part(0, (0, 0)), after_first, row(1), part(0, (0, 0))].concat();
+        let wb = read(&file(&worksheet(&data, &[]))).unwrap();
+        for r in [0, 1] {
+            assert_eq!(wb.sheets[0].formula(CellRef::new(r, 0)), None);
+            assert_eq!(wb.sheets[0].value(CellRef::new(r, 0)), Value::Number(0.0));
+        }
+        assert!(wb.warnings.iter().any(|w| w.contains("kept as their saved results")), "{:?}", wb.warnings);
+    }
+}
+
+#[test]
+fn shared_formulas_wrap_and_may_start_inside_their_range() {
+    // `=` the cell to the left (column offset -1, written 16383), shared over A1:B2 from B1: A1
+    // isn't part of it. In column A the offset wraps around the grid, as [MS-XLSB] defines it.
+    let left = ref_n(0, 16383 | REL);
+    let data = [
+        row(0),
+        cell(5, 0, &1.0f64.to_le_bytes()),
+        part(1, (0, 1)),
+        range_formula(427, (0, 0, 1, 1), &left),
+        row(1),
+        part(0, (0, 1)),
+        part(1, (0, 1)),
+    ]
+    .concat();
+    let wb = read(&file(&worksheet(&data, &[]))).unwrap();
+    let text = |a: &str| wb.sheets[0].formula(at(a));
+    assert_eq!((text("A1"), text("B1"), text("A2"), text("B2")), (None, Some("A1"), Some("XFD2"), Some("A2")));
+    assert!(!wb.warnings.iter().any(|w| w.contains("kept as their saved results")), "{:?}", wb.warnings);
+}
+
+#[test]
+fn a_shared_formula_copy_may_be_longer_than_its_first_cell() {
+    // SUM of nine SUMs of 255 references to the cell on the left: about 6,900 characters at B9,
+    // over 18,000 at B999999, where each `A9` is `A999999`. Each copy has its own text.
+    let mut rgce = vec![];
+    for _ in 0..9 {
+        for _ in 0..255 {
+            rgce.extend(ref_n(0, 16383 | REL));
+        }
+        rgce.extend([0x22, 255, 4, 0]);
+    }
+    rgce.extend([0x22, 9, 4, 0]);
+    let data = [row(8), part(1, (8, 1)), range_formula(427, (8, 1, 999_998, 1), &rgce), row(999_998), part(1, (8, 1))].concat();
+    let wb = read(&file(&worksheet(&data, &[]))).unwrap();
+    let (b9, last) = (wb.sheets[0].formula(at("B9")).unwrap(), wb.sheets[0].formula(at("B999999")).unwrap());
+    assert!(b9.len() < 8192 && last.len() > 18_000, "{} {}", b9.len(), last.len());
+    assert!(last.starts_with("SUM(SUM(A999999,A999999"), "{}", &last[..40]);
+}
+
+#[test]
+fn shared_formula_copies_are_charged_before_they_are_made() {
+    // A1:A3 share `1+1` (3 bytes); with 6 bytes allowed, the first cell and one copy fit, and the
+    // last copy keeps its value without being decoded.
+    let one_plus_one = [0x1E, 1, 0, 0x1E, 1, 0, 0x03];
+    let data = [row(0), part(0, (0, 0)), range_formula(427, (0, 0, 2, 0), &one_plus_one), row(1), part(0, (0, 0)), row(2), part(0, (0, 0))].concat();
+    let limits = Limits { binary_formula_text: 6, ..Limits::default() };
+    let wb = read_with(&file(&worksheet(&data, &[])), &limits).unwrap();
+    let got: Vec<_> = (0..3).map(|r| wb.sheets[0].formula(CellRef::new(r, 0))).collect();
+    assert_eq!(got, [Some("1+1"), Some("1+1"), None]);
     assert!(warned(&wb, "more formula text than the limits allow"), "{:?}", wb.warnings);
 }
