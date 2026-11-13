@@ -204,16 +204,26 @@ fn write_content_path(out: &mut String, path: &ContentPath) -> Option<()> {
 }
 
 fn write_device_color(out: &mut String, color: DeviceColor, stroke: bool) -> Option<()> {
-    let (values, operator): (&[f64], &str) = match color {
-        DeviceColor::Gray(value) => (&[value], if stroke { "G" } else { "g" }),
-        DeviceColor::Rgb(values) => (&values, if stroke { "RG" } else { "rg" }),
-        DeviceColor::Cmyk(values) => (&values, if stroke { "K" } else { "k" }),
-    };
-    finite(values)?;
-    for value in values {
-        write!(out, "{value} ").ok()?;
+    match color {
+        DeviceColor::Gray(value) => {
+            finite(&[value])?;
+            writeln!(out, "{value} {}", if stroke { "G" } else { "g" }).ok()?;
+        }
+        DeviceColor::Rgb(values) => {
+            finite(&values)?;
+            for value in values {
+                write!(out, "{value} ").ok()?;
+            }
+            writeln!(out, "{}", if stroke { "RG" } else { "rg" }).ok()?;
+        }
+        DeviceColor::Cmyk(values) => {
+            finite(&values)?;
+            for value in values {
+                write!(out, "{value} ").ok()?;
+            }
+            writeln!(out, "{}", if stroke { "K" } else { "k" }).ok()?;
+        }
     }
-    writeln!(out, "{operator}").ok()?;
     Some(())
 }
 
