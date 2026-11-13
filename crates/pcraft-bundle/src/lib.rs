@@ -5,10 +5,11 @@
 //! envelope, zstd object frames and content hashes. A caller supplies serialized manifest bytes
 //! and opaque tile/blob bytes; it receives their stable paths to put in its manifest.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use craft_zip::{Archive, Compression, Writer};
 
@@ -267,6 +268,15 @@ impl ZipBundleWriter {
     /// Adds an already-compressed object after checking its path/hash.
     pub fn add_stored_object(&mut self, path: &str, compressed: Vec<u8>, max_decoded_bytes: u64) -> Result<()> {
         let _ = decode_object(path, &compressed, max_decoded_bytes)?;
+        self.stage_compressed_object(path, compressed)
+    }
+
+    /// Stages an already-compressed object for a bundle write. Its path is checked now and its
+    /// frame/hash are verified by [`Self::finish`] or [`DirectoryBundleWriter::save_directory`].
+    pub fn stage_compressed_object(&mut self, path: &str, compressed: Vec<u8>) -> Result<()> {
+        if !valid_object_path(path) {
+            return Err(Error::InvalidPath(path.to_owned()));
+        }
         self.entries.insert(path.to_owned(), compressed);
         Ok(())
     }
@@ -285,6 +295,9 @@ impl ZipBundleWriter {
             if !valid_entry_path(&path) {
                 return Err(Error::InvalidPath(path));
             }
+            if is_object_path(&path) {
+                let _ = decode_object(&path, &bytes, 1 << 30)?;
+            }
             writer.add(&path, &bytes, Compression::Stored)?;
         }
         writer.finish().map_err(Into::into)
@@ -294,38 +307,133 @@ impl ZipBundleWriter {
     /// manifest, the bundle lock serializes writers, and unreferenced canonical objects are
     /// collected after the new manifest is durable.
     pub fn save_directory(self, root: &Path) -> Result<DirectoryStats> {
-        if !self.entries.contains_key(craft_pcraft_format::MANIFEST) {
+        DirectoryBundleWriter::default().save_directory(root, self)
+    }
+}
+
+/// Work performed by a directory bundle save.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DirectoryStats {
+    /// Entries atomically written, including `manifest.json`.
+    pub written: usize,
+    /// Stale content-addressed objects collected after manifest publication.
+    pub removed: usize,
+    /// Existing, verified content-addressed objects reused without writing.
+    pub reused: usize,
+    /// Canonical object paths written during this save.
+    pub written_objects: Vec<String>,
+    /// Canonical object paths reused after verification or a matching cached signature.
+    pub reused_objects: Vec<String>,
+}
+
+/// Incremental directory-bundle persistence with bounded rolling object verification.
+#[derive(Default)]
+pub struct DirectoryBundleWriter {
+    root: Option<PathBuf>,
+    generation: u64,
+    reverify_budget: u64,
+    verified: HashMap<String, CachedFile>,
+}
+
+#[derive(Clone, Copy)]
+struct CachedFile {
+    signature: FileSignature,
+    checked_at: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FileSignature {
+    len: u64,
+    modified: SystemTime,
+    #[cfg(unix)]
+    unix: (u64, u64, i64, i64),
+}
+
+impl DirectoryBundleWriter {
+    /// Compressed bytes of already-verified objects to re-read on each save.
+    /// `0` trusts unchanged signatures; `u64::MAX` rechecks all referenced objects.
+    pub fn set_reverify_budget(&mut self, bytes: u64) {
+        self.reverify_budget = bytes;
+    }
+
+    /// Saves an entry set incrementally. Existing objects are reused only after a hash check;
+    /// unchanged file signatures may skip checks until they enter the rolling verification
+    /// window. The manifest is atomically published last, then stale previews and objects are
+    /// collected while the bundle lock is held.
+    pub fn save_directory(&mut self, root: &Path, bundle: ZipBundleWriter) -> Result<DirectoryStats> {
+        if !bundle.entries.contains_key(craft_pcraft_format::MANIFEST) {
             return Err(Error::InvalidBundle("manifest not set".into()));
         }
-        for path in self.entries.keys() {
+        for path in bundle.entries.keys() {
             if !valid_entry_path(path) {
                 return Err(Error::InvalidPath(path.clone()));
             }
         }
         fs::create_dir_all(root).map_err(io_error)?;
         let root = fs::canonicalize(root).map_err(io_error)?;
+        if self.root.as_ref() != Some(&root) {
+            self.root = Some(root.clone());
+            self.verified.clear();
+            self.generation = 0;
+        }
         let lock_path = root.join(craft_pcraft_format::SAVE_LOCK);
         refuse_symlink(&lock_path)?;
         let lock = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&lock_path).map_err(io_error)?;
         lock.lock().map_err(io_error)?;
+        self.generation = self.generation.saturating_add(1);
+        let generation = self.generation;
+        let recheck = self.rolling_recheck(&bundle.entries);
+        let mut stats = DirectoryStats::default();
 
-        let mut written = 0usize;
-        for (path, bytes) in self.entries.iter().filter(|(path, _)| path.as_str() != craft_pcraft_format::MANIFEST) {
+        for (path, bytes) in bundle.entries.iter().filter(|(path, _)| is_object_path(path)) {
+            let target = safe_target(&root, path)?;
+            if let Some(parent) = target.parent() {
+                ensure_directory(parent)?;
+            }
+            refuse_symlink(&target)?;
+            if let Some(signature) = file_signature(&target)? {
+                let cached = self.verified.get(path).is_some_and(|entry| entry.signature == signature);
+                if cached && !recheck.contains(path) {
+                    stats.reused = stats.reused.saturating_add(1);
+                    stats.reused_objects.push(path.clone());
+                    continue;
+                }
+                let existing = read_bounded(&target, 1 << 30)?;
+                if decode_object(path, &existing, 1 << 30).is_ok() {
+                    if let Some(signature) = file_signature(&target)? {
+                        self.verified.insert(path.clone(), CachedFile { signature, checked_at: generation });
+                    }
+                    stats.reused = stats.reused.saturating_add(1);
+                    stats.reused_objects.push(path.clone());
+                    continue;
+                }
+            }
+            let _ = decode_object(path, bytes, 1 << 30)?;
+            craft_atomic::atomic_write(&target, bytes).map_err(io_error)?;
+            if let Some(signature) = file_signature(&target)? {
+                self.verified.insert(path.clone(), CachedFile { signature, checked_at: generation });
+            }
+            stats.written = stats.written.saturating_add(1);
+            stats.written_objects.push(path.clone());
+        }
+
+        for (path, bytes) in bundle.entries.iter().filter(|(path, _)| !is_object_path(path) && path.as_str() != craft_pcraft_format::MANIFEST) {
             let target = safe_target(&root, path)?;
             if let Some(parent) = target.parent() {
                 ensure_directory(parent)?;
             }
             refuse_symlink(&target)?;
             craft_atomic::atomic_write(&target, bytes).map_err(io_error)?;
-            written = written.saturating_add(1);
+            stats.written = stats.written.saturating_add(1);
         }
-        let manifest = self.entries.get(craft_pcraft_format::MANIFEST).ok_or_else(|| Error::InvalidBundle("manifest not set".into()))?;
+
+        let manifest = bundle.entries.get(craft_pcraft_format::MANIFEST).ok_or_else(|| Error::InvalidBundle("manifest not set".into()))?;
         let manifest_path = root.join(craft_pcraft_format::MANIFEST);
         refuse_symlink(&manifest_path)?;
         craft_atomic::atomic_write(&manifest_path, manifest).map_err(io_error)?;
-        written = written.saturating_add(1);
+        stats.written = stats.written.saturating_add(1);
 
-        let mut removed = 0usize;
+        let mut removed_paths = Vec::new();
         for kind in [craft_pcraft_format::TILES_DIR, craft_pcraft_format::BLOBS_DIR] {
             let dir = root.join(kind);
             if !dir.exists() {
@@ -335,29 +443,86 @@ impl ZipBundleWriter {
             for entry in fs::read_dir(&dir).map_err(io_error)? {
                 let entry = entry.map_err(io_error)?;
                 let name = entry.file_name();
-                let name = name.to_string_lossy();
-                let path = format!("{kind}/{name}");
-                if valid_entry_path(&path) && !self.entries.contains_key(&path) {
-                    let meta = fs::symlink_metadata(entry.path()).map_err(io_error)?;
-                    if meta.file_type().is_symlink() || !meta.is_file() {
+                let path = format!("{kind}/{}", name.to_string_lossy());
+                if is_object_path(&path) && !bundle.entries.contains_key(&path) {
+                    let metadata = fs::symlink_metadata(entry.path()).map_err(io_error)?;
+                    if metadata.file_type().is_symlink() || !metadata.is_file() {
                         return Err(Error::InvalidBundle(format!("refusing to collect non-file object {path}")));
                     }
                     fs::remove_file(entry.path()).map_err(io_error)?;
-                    removed = removed.saturating_add(1);
+                    removed_paths.push(path);
+                    stats.removed = stats.removed.saturating_add(1);
                 }
             }
         }
-        Ok(DirectoryStats { written, removed })
+        for path in [craft_pcraft_format::THUMB, craft_pcraft_format::COMPOSITE, craft_pcraft_format::FULL_COMPOSITE] {
+            if !bundle.entries.contains_key(path) {
+                let target = root.join(path);
+                refuse_symlink(&target)?;
+                if fs::symlink_metadata(&target).is_ok() {
+                    fs::remove_file(&target).map_err(io_error)?;
+                }
+            }
+        }
+        self.verified.retain(|path, _| bundle.entries.contains_key(path) && !removed_paths.contains(path));
+        Ok(stats)
+    }
+
+    fn rolling_recheck(&self, entries: &BTreeMap<String, Vec<u8>>) -> HashSet<String> {
+        if self.reverify_budget == 0 {
+            return HashSet::new();
+        }
+        let mut cached: Vec<(&String, &CachedFile)> = self.verified.iter().filter(|(path, _)| entries.contains_key(*path)).collect();
+        cached.sort_by(|a, b| a.1.checked_at.cmp(&b.1.checked_at).then_with(|| a.0.cmp(b.0)));
+        let mut out = HashSet::new();
+        let mut spent = 0u64;
+        for (path, value) in cached {
+            let next = spent.saturating_add(value.signature.len);
+            if !out.is_empty() && next > self.reverify_budget {
+                break;
+            }
+            spent = next;
+            out.insert(path.clone());
+        }
+        out
     }
 }
 
-/// Work performed by a directory bundle save.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct DirectoryStats {
-    /// Entries atomically written, including `manifest.json`.
-    pub written: usize,
-    /// Stale content-addressed objects collected after manifest publication.
-    pub removed: usize,
+fn is_object_path(path: &str) -> bool {
+    path.starts_with("tiles/") || path.starts_with("blobs/")
+}
+
+fn file_signature(path: &Path) -> Result<Option<FileSignature>> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => metadata,
+        Ok(_) => return Err(Error::InvalidBundle(format!("{} is not a regular file", path.display()))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(io_error(error)),
+    };
+    let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+    #[cfg(unix)]
+    let unix = {
+        use std::os::unix::fs::MetadataExt;
+        (metadata.dev(), metadata.ino(), metadata.ctime(), metadata.ctime_nsec())
+    };
+    Ok(Some(FileSignature {
+        len: metadata.len(),
+        modified,
+        #[cfg(unix)]
+        unix,
+    }))
+}
+
+fn read_bounded(path: &Path, max: u64) -> Result<Vec<u8>> {
+    let metadata = fs::metadata(path).map_err(io_error)?;
+    if metadata.len() > max {
+        return Err(Error::LimitExceeded { entry: path.display().to_string(), limit: max });
+    }
+    let bytes = fs::read(path).map_err(io_error)?;
+    if bytes.len() as u64 > max {
+        return Err(Error::LimitExceeded { entry: path.display().to_string(), limit: max });
+    }
+    Ok(bytes)
 }
 
 fn io_error(error: std::io::Error) -> Error {
