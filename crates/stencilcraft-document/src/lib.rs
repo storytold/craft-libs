@@ -6,6 +6,7 @@
 
 pub mod canvas;
 pub mod geom;
+pub mod metadata;
 
 use crate::geom::{GeomError, bounds_of_shape, check_finite_mm};
 pub use canvas::{Grid, Group, GroupChild, Guide, GuideAxis, Metadata, Orientation, Page, PagePreset, PageSetup, SnapSettings};
@@ -13,6 +14,7 @@ use kurbo::BezPath;
 use serde::{Deserialize, Serialize};
 
 pub mod production;
+pub use metadata::{LibraryIndex, LibraryTrashEntry, MAX_RECENT_FILES, RecentFiles};
 pub use production::{CombineOp, GroupKind, Operation, SendAssign, ShapeProduction, SourceGroup};
 
 /// Native format identity and supported version, defined by the shared wire-format crate.
