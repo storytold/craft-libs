@@ -10,6 +10,7 @@
 //! {
 //!   "stencilcraft": { "name": "stencilcraft", "version": 1 },
 //!   "board": { "width_mm": 100.0, "height_mm": 150.0 },
+//!   "kerf": { "width_mm": 0.0, "apply_to_exports": false },
 //!   "layers": []
 //! }
 //! ```
