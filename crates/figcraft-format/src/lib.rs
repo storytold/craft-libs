@@ -335,6 +335,8 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(read_preview_thumbnail(std::io::Cursor::new(bytes.clone())).unwrap().as_deref(), Some(b"png bytes".as_slice()));
+        let mut archive = SeekArchive::open(std::io::Cursor::new(bytes.clone()), u64::MAX).unwrap();
+        assert!(read_preview_archive_from(&mut archive).has_document);
         let preview = read_preview_archive(std::io::Cursor::new(bytes)).unwrap();
         assert!(preview.has_document);
         assert_eq!(preview.thumbnail_png.as_deref(), Some(b"png bytes".as_slice()));
