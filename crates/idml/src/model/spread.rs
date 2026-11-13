@@ -437,6 +437,29 @@ impl PageItem {
         self.values.boolean("Nonprinting") == Some(true)
     }
 
+    pub fn gradient_fill_angle(&self) -> Option<f64> {
+        self.values.num("GradientFillAngle")
+    }
+    pub fn gradient_fill_start(&self) -> Option<[f64; 2]> {
+        self.values.pair("GradientFillStart")
+    }
+    pub fn gradient_fill_length(&self) -> Option<f64> {
+        self.values.num("GradientFillLength")
+    }
+    pub fn gradient_stroke_angle(&self) -> Option<f64> {
+        self.values.num("GradientStrokeAngle")
+    }
+    pub fn gradient_stroke_start(&self) -> Option<[f64; 2]> {
+        self.values.pair("GradientStrokeStart")
+    }
+    pub fn gradient_stroke_length(&self) -> Option<f64> {
+        self.values.num("GradientStrokeLength")
+    }
+
+    pub fn text_path(&self) -> Option<TextPath> {
+        self.other("TextPath").map(|el| TextPath { values: Values::of(el) })
+    }
+
     /// Replaces the outline.
     pub fn set_geometry(&mut self, g: &PathGeometry) {
         self.values.set_prop_el("PathGeometry", Some(g.to_el()));
@@ -483,6 +506,30 @@ impl PageItem {
     /// `OverriddenPageItem`: the `Self` of the parent item this item overrides.
     pub fn overridden_page_item(&self) -> Option<&str> {
         self.values.get("OverriddenPageItem").filter(|s| *s != "n")
+    }
+}
+
+/// Type-on-a-path settings.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextPath {
+    pub values: Values,
+}
+
+impl TextPath {
+    pub fn parent_story(&self) -> Option<&str> {
+        self.values.get("ParentStory").filter(|s| *s != "n")
+    }
+    pub fn start_bracket(&self) -> Option<f64> {
+        self.values.num("StartBracket")
+    }
+    pub fn end_bracket(&self) -> Option<f64> {
+        self.values.num("EndBracket")
+    }
+    pub fn flipped(&self) -> bool {
+        self.values.get("FlipPathEffect") == Some("Flipped")
+    }
+    pub fn alignment(&self) -> Option<&str> {
+        self.values.get("TextAlignment")
     }
 }
 

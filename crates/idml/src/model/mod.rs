@@ -23,7 +23,8 @@ pub use resources::{
     SwatchKind, color_groups, inks, named, preference, stroke_styles, style_groups, swatches,
 };
 pub use spread::{
-    Graphic, GraphicChild, GraphicKind, Guide, ItemChild, ItemKind, Link, MarginPreference, Page, PageChild, PageItem, Spread, SpreadChild, spreads,
+    Graphic, GraphicChild, GraphicKind, Guide, ItemChild, ItemKind, Link, MarginPreference, Page, PageChild, PageItem, Spread, SpreadChild, TextPath,
+    spreads,
 };
 pub use story::{Ace, CONTAINERS, Cell, Container, ContentPart, Range, Story, Table, TableChild, TextNode, stories};
 
@@ -104,6 +105,13 @@ impl Values {
     /// A finite number; `NaN` and infinities count as absent.
     pub fn num(&self, key: &str) -> Option<f64> {
         self.prop(key).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite())
+    }
+
+    /// A two-number value (for properties such as `GradientFillStart`), bounded to three tokens.
+    pub fn pair(&self, key: &str) -> Option<[f64; 2]> {
+        let source = self.prop(key)?;
+        let values: Vec<f64> = source.split_whitespace().take(3).filter_map(|v| v.parse::<f64>().ok()).collect();
+        <[f64; 2]>::try_from(values).ok().filter(|v| v.iter().all(|n| n.is_finite()))
     }
 
     /// `true` or `false`; anything else counts as absent.
