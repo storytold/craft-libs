@@ -27,6 +27,83 @@ pub struct TocStyleValues {
     pub entries: Vec<TocStyleEntryValues>,
 }
 
+/// Date-based IDML text variable kinds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextDateKind {
+    Creation,
+    Modification,
+    Output,
+}
+
+/// Semantically classified `TextVariable` definitions before caller model mapping.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TextVariableKind {
+    CustomText { text: String },
+    LastPageNumber { section: bool },
+    ChapterNumber,
+    FileName { extension: bool },
+    Date { kind: TextDateKind, format: String },
+    RunningHeader { style: String, character: bool, last_on_page: bool },
+    CrossReference { page_number: bool },
+    Imported { variable_type: String, settings_element: String, settings: Vec<(String, String)> },
+}
+
+/// Parsed values from an IDML `TextVariable` definition.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextVariableValues {
+    pub self_id: Option<String>,
+    pub name: String,
+    pub before: String,
+    pub after: String,
+    pub kind: TextVariableKind,
+}
+
+impl TextVariableValues {
+    /// Reads a `TextVariable` and its preference record.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        let preference = el.elements().find(|child| child.name.ends_with("Preference"));
+        let attr = |key: &str| preference.and_then(|child| child.attr(key)).unwrap_or("");
+        let variable_type = values.get("VariableType").unwrap_or("");
+        let date = |kind| TextVariableKind::Date { kind, format: if attr("Format").is_empty() { "MM/dd/yy".into() } else { attr("Format").into() } };
+        let kind = match variable_type {
+            "CustomTextType" => TextVariableKind::CustomText { text: attr("Contents").into() },
+            "LastPageNumberType" => TextVariableKind::LastPageNumber { section: attr("Scope") == "SectionScope" },
+            "ChapterNumberType" => TextVariableKind::ChapterNumber,
+            "FileNameType" if attr("IncludePath") != "true" => TextVariableKind::FileName { extension: attr("IncludeExtension") == "true" },
+            "CreationDateType" => date(TextDateKind::Creation),
+            "ModificationDateType" => date(TextDateKind::Modification),
+            "OutputDateType" => date(TextDateKind::Output),
+            "MatchParagraphStyleType" | "MatchCharacterStyleType" => {
+                let character = variable_type == "MatchCharacterStyleType";
+                let style = attr(if character { "AppliedCharacterStyle" } else { "AppliedParagraphStyle" });
+                if style.is_empty() {
+                    TextVariableKind::Imported {
+                        variable_type: variable_type.into(),
+                        settings_element: preference.map(|child| child.name.clone()).unwrap_or_default(),
+                        settings: preference.map(|child| child.attrs.clone()).unwrap_or_default(),
+                    }
+                } else {
+                    TextVariableKind::RunningHeader { style: style.into(), character, last_on_page: attr("SearchStrategy") == "LastOnPage" }
+                }
+            }
+            _ if variable_type.starts_with("Xref") => TextVariableKind::CrossReference { page_number: variable_type == "XrefPageNumberType" },
+            _ => TextVariableKind::Imported {
+                variable_type: variable_type.into(),
+                settings_element: preference.map(|child| child.name.clone()).unwrap_or_default(),
+                settings: preference.map(|child| child.attrs.clone()).unwrap_or_default(),
+            },
+        };
+        Self {
+            self_id: values.self_id().map(str::to_owned),
+            name: values.get("Name").unwrap_or("").to_owned(),
+            before: values.get("TextBefore").unwrap_or("").to_owned(),
+            after: values.get("TextAfter").unwrap_or("").to_owned(),
+            kind,
+        }
+    }
+}
+
 impl TocStyleValues {
     /// Reads a `TOCStyle` element and its bounded `TOCStyleEntry` children.
     pub fn from_el(el: &El) -> Self {

@@ -21,7 +21,9 @@ mod spread;
 mod story;
 
 use craft_xml::{El, Local, Node};
-pub use document::{ModelDocument, TocStyleEntryValues, TocStyleValues, TopLevelKind, TopLevelNode};
+pub use document::{
+    ModelDocument, TextDateKind, TextVariableKind, TextVariableValues, TocStyleEntryValues, TocStyleValues, TopLevelKind, TopLevelNode,
+};
 pub use effects::{DirectionalFeatherValues, DropShadowValues, FeatherValues, GradientFeatherValues, OpacityStopValues, TransparencySetting};
 pub use geometry::{MAX_PATH_POINTS, PathGeometry, PathGeometryError, PathPoint, SubPath};
 pub use preferences::{DocumentPreferences, FootnotePreferences, GridPreferences, TextFramePreferences};
