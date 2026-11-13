@@ -18,6 +18,8 @@
 pub mod ascii85;
 mod container;
 mod dsc;
+#[cfg(feature = "paths")]
+pub mod paths;
 mod preview;
 
 pub use container::{DOS_HEADER, DOS_MAGIC, Sections, sections, wrap};
