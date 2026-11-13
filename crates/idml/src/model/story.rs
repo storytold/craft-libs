@@ -109,6 +109,54 @@ pub struct Container {
     pub children: Vec<TextNode>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContainerKind {
+    HyperlinkTextSource,
+    Change,
+    XMLElement,
+    CrossReferenceSource,
+    Footnote,
+    Note,
+    EndnoteRange,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrackedChangeKind {
+    Deleted,
+    Inserted,
+    Other,
+}
+
+impl Container {
+    pub fn to_el(&self) -> El {
+        with_children(self.values.element(&self.name), &self.children)
+    }
+
+    pub fn kind(&self) -> ContainerKind {
+        match self.name.as_str() {
+            "HyperlinkTextSource" => ContainerKind::HyperlinkTextSource,
+            "Change" => ContainerKind::Change,
+            "XMLElement" => ContainerKind::XMLElement,
+            "CrossReferenceSource" => ContainerKind::CrossReferenceSource,
+            "Footnote" => ContainerKind::Footnote,
+            "Note" => ContainerKind::Note,
+            _ => ContainerKind::EndnoteRange,
+        }
+    }
+
+    pub fn self_id(&self) -> Option<&str> {
+        self.values.self_id()
+    }
+
+    pub fn change_kind(&self) -> Option<TrackedChangeKind> {
+        (self.kind() == ContainerKind::Change).then(|| match self.values.get("ChangeType") {
+            Some("DeletedText") => TrackedChangeKind::Deleted,
+            Some("InsertedText" | "MovedText") => TrackedChangeKind::Inserted,
+            _ => TrackedChangeKind::Other,
+        })
+    }
+}
+
 /// A piece of a `Content` element.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ContentPart {

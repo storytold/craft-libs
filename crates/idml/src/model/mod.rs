@@ -28,8 +28,8 @@ pub use spread::{
     spreads,
 };
 pub use story::{
-    Ace, CONTAINERS, Cell, CellOptions, Container, ContentPart, PageReference, Range, Story, StoryAnchor, StoryPreference, Table, TableChild,
-    TableColumn, TableLayout, TableRow, TextNode, stories,
+    Ace, CONTAINERS, Cell, CellOptions, Container, ContainerKind, ContentPart, PageReference, Range, Story, StoryAnchor, StoryPreference, Table,
+    TableChild, TableColumn, TableLayout, TableRow, TextNode, TrackedChangeKind, stories,
 };
 
 use crate::value::{matrix, nums};
