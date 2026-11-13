@@ -109,6 +109,43 @@ impl CjkParagraphValues {
             paragraph_gyoudori: values.boolean("ParagraphGyoudori"),
         }
     }
+
+    /// Encodes a semantic kinsoku-set name as its IDML property value.
+    pub fn kinsoku_reference(name: &str) -> String {
+        if name.is_empty() { "Nothing".into() } else { format!("KinsokuTable/{}", crate::value::escape_id(name)) }
+    }
+
+    /// Writes CJK paragraph attributes and properties.
+    pub fn to_parts(&self) -> (Vec<(String, String)>, Vec<El>) {
+        let mut attrs = Vec::new();
+        let mut properties = Vec::new();
+        for (key, value) in [("KinsokuHangType", &self.kinsoku_hang), ("KinsokuType", &self.kinsoku_type)] {
+            if let Some(value) = value {
+                attrs.push((key.into(), value.clone()));
+            }
+        }
+        if let Some(value) = &self.mojikumi {
+            let kind = if value.starts_with("MojikumiTable/") { "object" } else { "enumeration" };
+            properties.push(property("Mojikumi", kind, value.clone()));
+        }
+        for (key, value) in [
+            ("BunriKinshi", self.bunri_kinshi),
+            ("Rensuuji", self.rensuuji),
+            ("TreatIdeographicSpaceAsSpace", self.treat_ideographic_space_as_space),
+            ("AutoTcyIncludeRoman", self.auto_tcy_include_roman),
+            ("RotateSingleByteCharacters", self.rotate_single_byte_characters),
+            ("AllowArbitraryHyphenation", self.allow_arbitrary_hyphenation),
+            ("ParagraphGyoudori", self.paragraph_gyoudori),
+        ] {
+            push_boolean(&mut attrs, key, value);
+        }
+        push_number(&mut attrs, "AutoTcy", self.auto_tcy);
+        push_number(&mut attrs, "GridGyoudori", self.grid_gyoudori);
+        if let Some(value) = &self.kinsoku_set {
+            properties.push(property("KinsokuSet", if value == "Nothing" { "enumeration" } else { "object" }, value.clone()));
+        }
+        (attrs, properties)
+    }
 }
 
 /// Paragraph span and split-column properties read from IDML.
