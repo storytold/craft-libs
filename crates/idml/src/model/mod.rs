@@ -78,6 +78,19 @@ pub struct AlternatingStrokeValues {
     pub skip_last: Option<f64>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TableOptions {
+    pub direction: Option<String>,
+    pub header_rows: Option<f64>,
+    pub footer_rows: Option<f64>,
+    pub applied_style: Option<String>,
+    pub space_before: Option<f64>,
+    pub space_after: Option<f64>,
+    pub repeat_header: bool,
+    pub repeat_footer: bool,
+    pub borders: [StrokeValues; 4],
+}
+
 impl Values {
     /// The attributes and `<Properties>` of `el`.
     pub fn of(el: &El) -> Values {
@@ -238,6 +251,25 @@ impl Values {
             next,
             skip_first: num(&format!("SkipFirstAlternatingStroke{kind}s")),
             skip_last: num(&format!("SkipLastAlternatingStroke{kind}s")),
+        }
+    }
+
+    pub fn table_options(&self) -> TableOptions {
+        TableOptions {
+            direction: self.value("TableDirection"),
+            header_rows: self.num("HeaderRowCount"),
+            footer_rows: self.num("FooterRowCount"),
+            applied_style: self.value("AppliedTableStyle"),
+            space_before: self.num("SpaceBefore"),
+            space_after: self.num("SpaceAfter"),
+            repeat_header: self.get("HeaderBehavior") != Some("RepeatOnce"),
+            repeat_footer: self.get("FooterBehavior") != Some("RepeatOnce"),
+            borders: [
+                self.stroke_values("TopBorder"),
+                self.stroke_values("LeftBorder"),
+                self.stroke_values("BottomBorder"),
+                self.stroke_values("RightBorder"),
+            ],
         }
     }
 }
