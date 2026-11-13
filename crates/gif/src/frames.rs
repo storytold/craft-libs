@@ -22,13 +22,17 @@ pub struct FrameLimits {
     pub max_bytes: u64,
     /// Largest canvas (logical screen) in bytes at 4 bytes a pixel. Default 512 MiB.
     pub max_canvas_bytes: u64,
+    /// Combined decoder working-allocation budget. The decoder reserves its persistent canvas
+    /// before the frame buffer, so both count against this limit. `None` uses twice
+    /// `max_canvas_bytes`, matching the decoder's working-buffer allowance. Default `None`.
+    pub max_decode_bytes: Option<u64>,
     /// Merge a frame identical to the one before into it (its delay added). Default off.
     pub merge_identical: bool,
 }
 
 impl Default for FrameLimits {
     fn default() -> Self {
-        FrameLimits { max_frames: 100_000, max_bytes: 1 << 30, max_canvas_bytes: 512 << 20, merge_identical: false }
+        FrameLimits { max_frames: 100_000, max_bytes: 1 << 30, max_canvas_bytes: 512 << 20, max_decode_bytes: None, merge_identical: false }
     }
 }
 
@@ -93,6 +97,10 @@ pub fn read_frames(bytes: &[u8], limits: &FrameLimits) -> Result<Animation, Fram
     if canvas > limits.max_canvas_bytes {
         return Err(FrameError::LimitExceeded(format!("a {width}x{height} canvas is over {} bytes", limits.max_canvas_bytes)));
     }
+    let max_decode_bytes = limits.max_decode_bytes.unwrap_or_else(|| limits.max_canvas_bytes.saturating_mul(2));
+    if canvas > max_decode_bytes {
+        return Err(FrameError::LimitExceeded(format!("a {width}x{height} canvas is over the {max_decode_bytes} byte decode-allocation limit")));
+    }
     // The decoder sets up the whole logical screen before the first frame: the file must back it.
     if !crate::plausible(info.bytes_to_back(4, 1 << 28), bytes.len(), 1 << 14) {
         return Err(FrameError::LimitExceeded(format!("a {} byte file cannot hold a {width}x{height} picture", bytes.len())));
@@ -100,7 +108,7 @@ pub fn read_frames(bytes: &[u8], limits: &FrameLimits) -> Result<Animation, Fram
     let malformed = |e: image::ImageError| FrameError::Malformed(e.to_string());
     let mut decoder = GifDecoder::new(Cursor::new(bytes)).map_err(malformed)?;
     let mut il = image::Limits::default();
-    il.max_alloc = Some(limits.max_canvas_bytes.saturating_mul(2));
+    il.max_alloc = Some(max_decode_bytes);
     decoder.set_limits(il).map_err(malformed)?;
     let (width, height) = decoder.dimensions();
     collect(width, height, decoder.into_frames(), limits)
@@ -114,7 +122,14 @@ fn collect(width: u32, height: u32, frames: image::Frames<'_>, limits: &FrameLim
     for frame in frames {
         let frame = match frame {
             Ok(f) => f,
-            Err(e) if out.is_empty() => return Err(FrameError::Malformed(e.to_string())),
+            Err(e) if out.is_empty() => {
+                let message = e.to_string();
+                return Err(if matches!(e, image::ImageError::Limits(_)) {
+                    FrameError::LimitExceeded(message)
+                } else {
+                    FrameError::Malformed(message)
+                });
+            }
             Err(e) => {
                 stop = Stop::Damaged(e.to_string());
                 break;
@@ -150,6 +165,7 @@ fn collect(width: u32, height: u32, frames: image::Frames<'_>, limits: &FrameLim
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
+    use std::borrow::Cow;
 
     /// An animated GIF of solid 3 × 2 frames, written by `image`: (red level, delay in hundredths).
     fn gif(frames: &[(u8, u32)]) -> Vec<u8> {
@@ -177,6 +193,39 @@ mod tests {
     }
 
     #[test]
+    fn partial_frames_composite_and_background_disposal_is_applied() {
+        let palette = [0, 0, 0, 255, 0, 0, 0, 0, 255, 0, 255, 0];
+        let (mut bytes, first, second, third) = (Vec::new(), [1], [2], [0]);
+        {
+            let mut encoder = gif::Encoder::new(&mut bytes, 2, 1, &palette).unwrap();
+            let a = gif::Frame { width: 1, height: 1, buffer: Cow::Borrowed(&first), transparent: Some(0), delay: 2, ..gif::Frame::default() };
+            encoder.write_frame(&a).unwrap();
+
+            let b = gif::Frame {
+                left: 1,
+                width: 1,
+                height: 1,
+                buffer: Cow::Borrowed(&second),
+                transparent: Some(0),
+                dispose: gif::DisposalMethod::Background,
+                delay: 3,
+                ..gif::Frame::default()
+            };
+            encoder.write_frame(&b).unwrap();
+
+            let c = gif::Frame { width: 1, height: 1, buffer: Cow::Borrowed(&third), transparent: Some(0), delay: 4, ..gif::Frame::default() };
+            encoder.write_frame(&c).unwrap();
+        }
+
+        let a = read_frames(&bytes, &FrameLimits::default()).unwrap();
+        assert_eq!((a.width, a.height, a.stop), (2, 1, Stop::End));
+        assert_eq!(a.frames.iter().map(|f| f.delay_ms).collect::<Vec<_>>(), [20, 30, 40]);
+        assert_eq!(a.frames[0].rgba, [255, 0, 0, 255, 0, 0, 0, 0]);
+        assert_eq!(a.frames[1].rgba, [255, 0, 0, 255, 0, 0, 255, 255]);
+        assert_eq!(a.frames[2].rgba, [255, 0, 0, 255, 0, 0, 0, 0]);
+    }
+
+    #[test]
     fn identical_frames_merge_when_asked() {
         let bytes = gif(&[(10, 5), (10, 7), (200, 1), (200, 1), (10, 2)]);
         let merged = read_frames(&bytes, &FrameLimits { merge_identical: true, ..FrameLimits::default() }).unwrap();
@@ -195,6 +244,22 @@ mod tests {
         assert_eq!((a.frames.len(), a.stop), (2, Stop::ByteLimit));
         assert!(matches!(read_frames(&bytes, &FrameLimits { max_canvas_bytes: 23, ..FrameLimits::default() }), Err(FrameError::LimitExceeded(_))));
         assert!(read_frames(&bytes, &FrameLimits { max_canvas_bytes: 24, ..FrameLimits::default() }).is_ok());
+        // Canvas and frame buffer each need 24 bytes; decoder allocations share this budget.
+        assert!(matches!(
+            read_frames(&bytes, &FrameLimits { max_decode_bytes: Some(24), ..FrameLimits::default() }),
+            Err(FrameError::LimitExceeded(_))
+        ));
+        assert!(read_frames(&bytes, &FrameLimits { max_decode_bytes: Some(1), ..FrameLimits::default() }).is_err());
+    }
+
+    #[test]
+    fn decoder_allocation_limit_is_not_reported_as_malformed_input() {
+        let mut bytes = gif(&[(1, 1)]);
+        // The logical screen is 1×1, while the frame data still decodes to 3×2. The canvas
+        // passes the eight-byte decode cap, but the decoder's frame allocation does not.
+        bytes[6..10].copy_from_slice(&[1, 0, 1, 0]);
+        let limits = FrameLimits { max_canvas_bytes: 4, max_decode_bytes: Some(8), ..FrameLimits::default() };
+        assert!(matches!(read_frames(&bytes, &limits), Err(FrameError::LimitExceeded(_))));
     }
 
     #[test]
