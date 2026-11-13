@@ -140,6 +140,60 @@ pub struct CharacterTypographyValues {
     pub skew: Option<f64>,
 }
 
+/// One underline or strikethrough style as written in IDML.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TextDecorationValues {
+    pub weight: Option<f64>,
+    pub offset: Option<f64>,
+    pub color: Option<String>,
+    pub tint: Option<f64>,
+}
+
+/// Character fill/stroke, decoration and toggle values before caller swatch resolution.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CharacterAppearanceValues {
+    pub fill_color: Option<String>,
+    pub fill_tint: Option<f64>,
+    pub stroke_color: Option<String>,
+    pub stroke_tint: Option<f64>,
+    pub stroke_weight: Option<f64>,
+    pub stroke_alignment: Option<String>,
+    pub underline: Option<bool>,
+    pub strikethrough: Option<bool>,
+    pub ligatures: Option<bool>,
+    pub underline_options: TextDecorationValues,
+    pub strikethrough_options: TextDecorationValues,
+}
+
+impl CharacterAppearanceValues {
+    /// Reads common character fill, stroke and decoration properties from IDML.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        let decoration = |prefix: &str| {
+            let number = |suffix: &str| values.num(&format!("{prefix}{suffix}")).filter(|value| *value > -9000.0);
+            TextDecorationValues {
+                weight: number("Weight"),
+                offset: number("Offset"),
+                color: values.prop(&format!("{prefix}Color")),
+                tint: values.num(&format!("{prefix}Tint")),
+            }
+        };
+        Self {
+            fill_color: values.prop("FillColor"),
+            fill_tint: values.num("FillTint"),
+            stroke_color: values.prop("StrokeColor"),
+            stroke_tint: values.num("StrokeTint"),
+            stroke_weight: values.num("StrokeWeight"),
+            stroke_alignment: values.prop("StrokeAlignment"),
+            underline: values.boolean("Underline"),
+            strikethrough: values.boolean("StrikeThru"),
+            ligatures: values.boolean("Ligatures"),
+            underline_options: decoration("Underline"),
+            strikethrough_options: decoration("StrikeThru"),
+        }
+    }
+}
+
 impl CharacterTypographyValues {
     /// Reads the common typography attributes and properties from an IDML character range/style.
     pub fn from_el(el: &El) -> Self {
