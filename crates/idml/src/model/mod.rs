@@ -26,7 +26,7 @@ pub use spread::{
     Graphic, GraphicChild, GraphicKind, Guide, ItemChild, ItemKind, Link, MarginPreference, Page, PageChild, PageItem, Spread, SpreadChild, TextPath,
     spreads,
 };
-pub use story::{Ace, CONTAINERS, Cell, Container, ContentPart, Range, Story, Table, TableChild, TextNode, stories};
+pub use story::{Ace, CONTAINERS, Cell, Container, ContentPart, Range, Story, StoryPreference, Table, TableChild, TextNode, stories};
 
 use craft_xml::{El, Local, Node};
 

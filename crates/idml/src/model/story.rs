@@ -12,6 +12,26 @@ pub struct Story {
     pub children: Vec<TextNode>,
 }
 
+/// The IDML `StoryPreference` element written for a story.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StoryPreference {
+    pub optical_margin_alignment: bool,
+    pub optical_margin_size: f64,
+    pub vertical: bool,
+    pub right_to_left: bool,
+}
+
+impl StoryPreference {
+    pub fn to_el(self) -> El {
+        El::new("StoryPreference")
+            .with_attr("OpticalMarginAlignment", self.optical_margin_alignment)
+            .with_attr("OpticalMarginSize", self.optical_margin_size)
+            .with_attr("FrameType", "TextFrameType")
+            .with_attr("StoryOrientation", if self.vertical { "Vertical" } else { "Horizontal" })
+            .with_attr("StoryDirection", if self.right_to_left { "RightToLeftDirection" } else { "LeftToRightDirection" })
+    }
+}
+
 /// One node of a story's text, in document order. IDML nests freely (an `XMLElement` or a
 /// `HyperlinkTextSource` can hold paragraph ranges or content), so every container holds these.
 #[derive(Clone, Debug, PartialEq)]
