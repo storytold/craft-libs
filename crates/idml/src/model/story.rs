@@ -48,11 +48,46 @@ pub enum TextNode {
     /// XML element, a cross-reference's source, a footnote, a note.
     Container(Container),
     Table(Table),
+    Anchor(StoryAnchor),
+    PageReference(PageReference),
+    TextVariable(Values),
     /// A page item anchored in the text.
     Item(PageItem),
     /// Anything else (`StoryPreference`, `HyperlinkTextDestination`, `TextVariableInstance`, …),
     /// as written.
     Other(El),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoryAnchor {
+    pub name: String,
+    pub values: Values,
+}
+
+impl StoryAnchor {
+    pub fn self_id(&self) -> Option<&str> {
+        self.values.self_id()
+    }
+    pub fn label(&self) -> Option<&str> {
+        self.values.name()
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PageReference {
+    pub values: Values,
+}
+
+impl PageReference {
+    pub fn referenced_topic(&self) -> Option<&str> {
+        self.values.get("ReferencedTopic")
+    }
+    pub fn reference_type(&self) -> Option<&str> {
+        self.values.get("PageReferenceType")
+    }
+    pub fn limit(&self) -> Option<f64> {
+        self.values.num("PageReferenceLimit")
+    }
 }
 
 /// The elements read as [`TextNode::Container`].
@@ -232,6 +267,11 @@ impl TextNode {
             "Content" => TextNode::Content(content_parts(el)),
             "Br" => TextNode::Break,
             "Table" => TextNode::Table(Table::from_el(el)),
+            "HyperlinkTextDestination" | "ParagraphDestination" => {
+                TextNode::Anchor(StoryAnchor { name: el.local().to_string(), values: Values::of(el) })
+            }
+            "PageReference" => TextNode::PageReference(PageReference { values: Values::of(el) }),
+            "TextVariableInstance" => TextNode::TextVariable(Values::of(el)),
             n if CONTAINERS.contains(&n) => TextNode::Container(Container { name: n.to_string(), values: Values::of(el), children: nodes(el) }),
             _ => PageItem::from_el(el).map_or_else(|| TextNode::Other(tidy(el)), TextNode::Item),
         }
@@ -256,6 +296,9 @@ impl TextNode {
             TextNode::Break => El::new("Br"),
             TextNode::Container(c) => with_children(c.values.element(&c.name), &c.children),
             TextNode::Table(t) => t.to_el(),
+            TextNode::Anchor(a) => a.values.element(&a.name),
+            TextNode::PageReference(r) => r.values.element("PageReference"),
+            TextNode::TextVariable(v) => v.element("TextVariableInstance"),
             TextNode::Item(i) => i.to_el(),
             TextNode::Other(e) => e.clone(),
         }
