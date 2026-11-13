@@ -376,9 +376,10 @@ pub struct RowSizes {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RampSizes {
     /// A colour band: a ramp drawn as a bar of its own (the output bar of a levels editor, a gradient's thumb row) or
-    /// as the face of a value track (the track of a colour channel slider).
+    /// as the face of a triangle-pointer channel slider (the Color panel's channels).
     pub bar: f32,
-    /// A thin band laid along a ramp: the span a gradient's thumb row draws between two thumbs.
+    /// A gradient drawn as the groove of a value track (a faced slider: hue/saturation, levels, adjustment sliders,
+    /// blend-if) and the span a gradient's thumb row draws between two thumbs.
     pub groove: f32,
 }
 

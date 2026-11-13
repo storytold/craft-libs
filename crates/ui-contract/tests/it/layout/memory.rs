@@ -1,13 +1,15 @@
 //! `LayoutMemory`: the tolerance rule, size tweens and the check of a kept transcript.
 
+use super::fill::{Held, scrolled_fixture};
 use craft_behavior::ColumnWidth;
 use craft_ui::contract::{ContainerProps, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::layout::BodyLayout;
 use craft_ui::testing::layout::{Block, body, measured_block};
-use craft_ui::testing::{Frames, last_pass_measuring_runs, trial};
+use craft_ui::testing::{Frames, last_pass_measuring_runs, pointer, trial};
 use craft_ui_test_kit::body::Slab;
-use egui::{Rect, Ui, Vec2};
+use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -72,4 +74,28 @@ fn a_settled_body_measures_each_leaf_once_and_a_changed_leaf_shows_in_its_frame(
     size.set(Vec2::new(140.0, 20.0));
     frames.frame(vec![], show);
     assert!((last.get().width() - 140.0).abs() < 0.5, "the changed leaf shows its new size in its frame: {:?}", last.get());
+}
+
+/// A container that fills a `Stack` body scrolling along y takes a share of the view through one draft run of its body.
+/// A settled frame measures it from its kept record, and a hover or a wheel frame runs its body at most once more than
+/// the same container in a `Stack` that does not scroll: the draft. With content shorter and longer than the view.
+#[trial]
+fn a_container_sharing_a_scrolled_view_runs_its_body_at_most_the_draft_more_than_in_a_plain_stack() {
+    let counts = |fixed: f32, scrolls: bool| {
+        let runs = Rc::new(Cell::new(0));
+        let mut fixture = scrolled_fixture(fixed, Held::Probe, scrolls, Rc::new(Cell::new([Rect::NOTHING; 5])), Rc::clone(&runs));
+        let mut counted = |events| {
+            runs.set(0);
+            fixture.frame(events);
+            runs.get()
+        };
+        [counted(vec![]), counted(vec![pointer::moved(Pos2::new(100.0, 100.0))]), counted(vec![pointer::wheel(-30.0)])]
+    };
+    for fixed in [40.0, 400.0] {
+        let ([settled, hover, wheel], [plain_settled, plain_hover, plain_wheel]) = (counts(fixed, true), counts(fixed, false));
+        let case = format!("block {fixed}: scrolled {settled}/{hover}/{wheel}, plain {plain_settled}/{plain_hover}/{plain_wheel}");
+        assert_eq!(settled, 0, "a settled frame takes the kept measurement: {case}");
+        assert!(hover <= plain_hover + 1, "a hover frame runs the body at most the draft more: {case}");
+        assert!(wheel <= plain_wheel + 1, "a wheel frame runs the body at most the draft more: {case}");
+    }
 }

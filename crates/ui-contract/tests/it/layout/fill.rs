@@ -4,7 +4,7 @@
 use craft_ui::contract::{ContainerProps, Props as _, Scroll, Show as _, ShowContainer as _, Sizing};
 use craft_ui::layout::BodyLayout;
 use craft_ui::testing::layout::Block;
-use craft_ui::testing::{Fixture, Frames, pointer, trial};
+use craft_ui::testing::{Fixture, Frames, is_measuring, pointer, trial};
 use craft_ui_test_kit::body::Slab;
 use craft_ui_test_kit::contract::{Panel, Probe, Seen};
 use egui::{Pos2, Rect, Vec2};
@@ -36,26 +36,56 @@ fn a_fill_width_leaf_takes_the_room_its_row_leaves_and_a_content_leaf_does_not()
     assert!(after_fill.min.x >= fill.max.x && after_fill.min.x > region.center().x, "the next member follows it at the row's end: {after_fill:?}");
 }
 
-/// The view, the fixed block, the leaf that fills and the container that fills (holding a probe at its least height),
-/// in a scrolling `Stack` body that fills a 200 by 200 room and starts with a block `fixed` tall, scrolled to its end.
-fn scrolled(fixed: f32) -> [Rect; 4] {
-    let seen = Rc::new(Cell::new([Rect::NOTHING; 4]));
-    let out = Rc::clone(&seen);
+/// What the container that fills holds in the `scrolled` rig: a probe at its least height, or a block this tall.
+#[derive(Clone, Copy)]
+pub(super) enum Held {
+    Probe,
+    Block(f32),
+}
+
+/// A `Stack` body that fills a 200 by 200 room, scrolling along y when `scrolls`, holding a block `fixed` tall, a leaf
+/// that fills and a container that fills, holding `held`. Each frame sets `seen` to the view, the block, the leaf, the
+/// container (each as shown, clipped to the view) and what it holds; `runs` counts the measuring runs of the
+/// container's body.
+pub(super) fn scrolled_fixture(fixed: f32, held: Held, scrolls: bool, seen: Rc<Cell<[Rect; 5]>>, runs: Rc<Cell<usize>>) -> Fixture {
     let mut fixture = Fixture::new(move |ui| {
         let (leaf, inner) = (RefCell::new(Seen::default()), RefCell::new(Seen::default()));
-        let body = Slab::new(ContainerProps::new().sizing(Sizing::Fill).scroll(Scroll::vertical())).id_salt("view").show(ui, |ui, _| {
+        let props = ContainerProps::new().sizing(Sizing::Fill);
+        let props = if scrolls { props.scroll(Scroll::vertical()) } else { props };
+        let body = Slab::new(props).id_salt("view").show(ui, |ui, _| {
             let block = Block::new(Vec2::new(40.0, fixed)).show(ui).rect;
             Probe::new(&leaf).sizing(Sizing::Fill).id_salt("leaf").show(ui);
             let held = Panel::new().sizing(Sizing::Fill).id_salt("held").show(ui, |ui, _| {
-                Probe::new(&inner).id_salt("inner").show(ui);
+                if is_measuring(ui.ctx()) {
+                    runs.set(runs.get() + 1);
+                }
+                match held {
+                    Held::Probe => {
+                        Probe::new(&inner).id_salt("inner").show(ui);
+                        inner.borrow().rect
+                    }
+                    // The rect the body laid the block out in, not clipped to the view.
+                    Held::Block(height) => {
+                        Block::new(Vec2::new(40.0, height)).show(ui);
+                        ui.min_rect()
+                    }
+                }
             });
-            (block, held.output.rect)
+            (block, held.output.rect, held.inner)
         });
-        if let Some((block, held)) = body.inner {
-            out.set([body.output.rect, block, leaf.borrow().rect, held]);
+        if let Some((block, held, content)) = body.inner {
+            seen.set([body.output.rect, block, leaf.borrow().rect, held, content.unwrap_or(Rect::NOTHING)]);
         }
     });
     fixture.room(Vec2::splat(200.0)).settle();
+    fixture
+}
+
+/// The view, the fixed block, the leaf, the container and what it holds, in the scrolling `scrolled_fixture` scrolled
+/// to its end.
+fn scrolled(fixed: f32, held: Held) -> [Rect; 5] {
+    let seen = Rc::new(Cell::new([Rect::NOTHING; 5]));
+    let mut fixture = scrolled_fixture(fixed, held, true, Rc::clone(&seen), Rc::new(Cell::new(0)));
     fixture.frame(vec![pointer::moved(Pos2::new(100.0, 100.0))]);
     fixture.frame(vec![pointer::wheel(-10_000.0)]).settle();
     seen.get()
@@ -63,12 +93,19 @@ fn scrolled(fixed: f32) -> [Rect; 4] {
 
 #[trial]
 fn a_scrolled_stack_gives_its_fill_children_what_the_view_leaves_and_scrolls_past_their_least() {
-    let [view, block, leaf, held] = scrolled(40.0);
+    let [view, block, leaf, held, _] = scrolled(40.0, Held::Probe);
     let dump = format!("view {view:?}, block {block:?}, leaf {leaf:?}, held {held:?}");
     assert!(leaf.height() > 40.0 && (leaf.height() - held.height()).abs() < 1.0, "shorter content: the fill children share the rest: {dump}");
     assert!((held.bottom() - view.bottom()).abs() < 1.0, "shorter content: it reaches the view's end: {dump}");
-    let [view, _, leaf, held] = scrolled(400.0);
+    let [view, _, leaf, held, _] = scrolled(400.0, Held::Probe);
     let dump = format!("view {view:?}, leaf {leaf:?}, held {held:?}");
     assert!((leaf.height() - 20.0).abs() < 1.0 && (held.height() - 20.0).abs() < 1.0, "longer content: the fill children at their least: {dump}");
     assert!((held.bottom() - view.bottom()).abs() < 1.0, "longer content: the view scrolls to the end of the last one: {dump}");
+    // A container whose own content is taller than the view lays it out whole, and the view scrolls to its end.
+    const TALL: f32 = 300.0;
+    let [view, _, _, held, content] = scrolled(40.0, Held::Block(TALL));
+    let dump = format!("view {view:?}, held {held:?}, content {content:?}");
+    assert!((content.height() - TALL).abs() < 0.5, "a taller container keeps its content height: {dump}");
+    assert!((content.bottom() - view.bottom()).abs() < 1.0, "nothing in it is cut: the view scrolls to the content's end: {dump}");
+    assert!((held.bottom() - view.bottom()).abs() < 1.0, "the container reaches the view's end: {dump}");
 }
