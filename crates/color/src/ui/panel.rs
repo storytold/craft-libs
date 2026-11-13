@@ -9,7 +9,8 @@ use craft_cms::convert::CmykConverter;
 use craft_theme::{ColorModel, HsbModel, LabModel, ModelValues, RgbModel, Srgba};
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::{
-    Bind, CommandSet, Held, LabelScheme, NoValue, Outcome, Pattern, Props as _, Remember as _, Scroll, Show as _, ShowContainer as _, Sizing, clicked,
+    Bind, CommandSet, Gap, Held, LabelScheme, NoValue, Outcome, Pattern, Props as _, Remember as _, Scroll, Show as _, ShowContainer as _, Sizing,
+    clicked,
 };
 use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::{Row, Stack};
@@ -275,14 +276,14 @@ struct Kept {
 
 /// The Color panel.
 ///
-/// - Wells: the foreground over the background (`SwatchPair`); a click on the other well makes it the edited one
-///   ([`ColorPanelState::background`]); a click on the edited one asks for the picker. The swap and default buttons
+/// - Wells: the foreground over the background (`SwatchPair`), the edited one framed; a click on the other well makes
+///   it the edited one ([`ColorPanelState::background`]); a click on the edited one asks for the picker. The swap and default buttons
 ///   are the pair's.
 /// - Views: Hue Cube and Brightness Cube are `ColorArea` and `ColorStrip` (hue or brightness in the strip); Color
 ///   Wheel is `ColorWheel`; the slider modes are the channel rows of that model (Grayscale is [`GrayModel`], CMYK is
 ///   [`CmykModel`] through the converter, Web Color is RGB with sliders that snap to web colours). Slider values show
 ///   rounded to whole numbers, as Photoshop's fields.
-/// - Warnings: in the slider modes, the out-of-gamut and web-colour chips beside the wells, the cubes the gamut chip
+/// - Warnings: in the slider modes, the out-of-gamut and web-colour chips under the wells, the cubes the gamut chip
 ///   only; a click takes the nearest colour.
 /// - Ramp: in the slider modes, a `ColorRamp` of the chosen kind; a press picks for the edited well, Alt picks for the
 ///   other; Shift-click cycles the kind. A drag keeps the Current Colors ends it began with. A secondary click opens
@@ -558,7 +559,8 @@ impl Body<'_> {
                     ColorPanelMode::HueCube => self.cube(ui, AreaMode::Hue),
                     ColorPanelMode::BrightnessCube => self.cube(ui, AreaMode::Brightness),
                     _ => {
-                        Stack::new().fill_width().labels(LabelScheme::Inspector).show(ui, |ui, _| match mode {
+                        // The channel rows stand as close as Photoshop's.
+                        Stack::new().fill_width().gap(Gap::Tight).labels(LabelScheme::Inspector).show(ui, |ui, _| match mode {
                             ColorPanelMode::GrayscaleSlider => self.rows(ui, &GrayModel, false),
                             ColorPanelMode::RgbSliders => self.rows(ui, &RgbModel, false),
                             ColorPanelMode::CmykSliders => self.rows(ui, &CmykModel::new(self.converter.clone()), false),
@@ -583,7 +585,7 @@ impl Body<'_> {
         let was = if self.now.background { Well::Secondary } else { Well::Primary };
         let mut active = was;
         let wells = [PairWell::new(self.words.foreground.clone(), self.colors[0]), PairWell::new(self.words.background.clone(), self.colors[1])];
-        let pair = SwatchPair::new(self.words.wells.clone(), wells, Bind::bound(&mut active)).popover(false).show(ui);
+        let pair = SwatchPair::new(self.words.wells.clone(), wells, Bind::bound(&mut active)).popover(false).frame_active(true).show(ui);
         self.now.background = active == Well::Secondary;
         if pair.clicked.as_ref() == Some(&was) {
             let title = match self.target {
@@ -594,7 +596,7 @@ impl Body<'_> {
         }
     }
 
-    /// The out-of-gamut chip and, for Web Color, the web-colour chip under the wells.
+    /// The out-of-gamut chip and, for Web Color, the web-colour chip under the wells, each its icon beside a small swatch.
     fn warnings(&mut self, ui: &mut Ui, web: bool) {
         let color = self.color();
         let rgb = [color.r, color.g, color.b];
@@ -606,9 +608,9 @@ impl Body<'_> {
         if web && let Some(near) = not_web_safe(rgb) {
             warnings.push(ColorWarning::web_colors(self.dialog.not_web_color.clone(), nearest(near)));
         }
-        Row::new().show(ui, |ui, _| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             for warning in warnings.clone() {
-                if ColorWarningChip::new(&warning).show(ui).clicked {
+                if ColorWarningChip::new(&warning).beside(true).show(ui).clicked {
                     let picked = PickedColor { color: warning.nearest().with_alpha(color.a), model: None };
                     let name = self.words.title.as_str();
                     self.push(self.target, EditEvent::set(Mixed::Same(PickedColor { color, model: None }), picked, name.into(), None));

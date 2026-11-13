@@ -110,6 +110,8 @@ pub struct SwatchPairStyle {
     edge: StyleColor,
     /// The outline's width: `stroke.thin`.
     outline: f32,
+    /// The frame round the active well where the pair frames it (`frame_active`).
+    frame: StyleColor,
     /// The light line just inside a well's edge, so any colour reads against the surface.
     mark: StyleColor,
     /// A swatch's look, for the lines that stand out from a ring well's colour.
@@ -180,6 +182,8 @@ impl Outcome for SwatchPairOutput {
 /// - The host holds the active well and the colours. A click on a well, or an arrow key while one has the focus,
 ///   makes it active and returns it as [`SwatchPairOutput::active`]; it is drawn in front with a gap in the colour the
 ///   pair sits on round it. The wells keep their places.
+/// - [`frame_active(true)`](SwatchPair::frame_active), as Photoshop's Color panel: the primary well stays in front
+///   and the active well, whichever it is, has a frame round it.
 /// - A double-click, or Enter on the focused well, opens a popup with the Compact picker, which edits that well's
 ///   colour (`edit`, `well`, `open`); a click outside closes it.
 /// - Host-picker mode, as PhotoCraft's tool rail: [`popover(false)`](SwatchPair::popover) turns the popup off, so a
@@ -209,6 +213,10 @@ pub struct SwatchPair<'a> {
     /// Whether a click or an arrow makes a well active.
     #[prop]
     click_activates: bool,
+    /// Whether the active well is shown by a frame round it, the primary well staying in front, instead of by being
+    /// in front.
+    #[prop]
+    frame_active: bool,
     /// The host's answer to the picker's screen eyedropper.
     #[prop]
     sampled: Option<Srgba>,
@@ -236,6 +244,7 @@ impl<'a> SwatchPair<'a> {
             default_button: None,
             popover: true,
             click_activates: true,
+            frame_active: false,
             sampled: None,
             picker: None,
             clicked: None,
@@ -256,23 +265,34 @@ impl<'a> SwatchPair<'a> {
 
     /// The buttons' rects in logical coordinates from the pair's start edge: default colours at the start, swap at the
     /// end.
-    fn button_rects(style: &SwatchPairStyle) -> [Rect; 2] {
+    fn button_rects(&self, style: &SwatchPairStyle) -> [Rect; 2] {
         let side = Vec2::splat(style.buttons);
-        [Rect::from_min_size(pos2(0.0, 0.0), side), Rect::from_min_size(pos2(Self::wells(style).x - style.buttons, 0.0), side)]
+        [Rect::from_min_size(pos2(0.0, 0.0), side), Rect::from_min_size(pos2(self.wells(style).x - style.buttons, 0.0), side)]
     }
 
-    /// The size of the two wells with the outlines round them.
-    fn wells(style: &SwatchPairStyle) -> Vec2 {
-        Vec2::splat(style.well + style.step + 2.0 * style.outline)
+    /// The room round a well's edge: its outline, and the frame a gap outside it where the pair frames the active well.
+    fn edge(&self, style: &SwatchPairStyle) -> f32 {
+        if self.frame_active { 2.0 * style.outline + style.gap } else { style.outline }
+    }
+
+    /// The size of the two wells with the room round their edges.
+    fn wells(&self, style: &SwatchPairStyle) -> Vec2 {
+        Vec2::splat(style.well + style.step + 2.0 * self.edge(style))
     }
 
     /// The wells' rects in logical coordinates from the pair's start edge, primary first, inside their outlines.
+    /// The well drawn in front, which takes the pointer where the wells overlap.
+    fn front(&self, active: Well) -> Well {
+        if self.frame_active { Well::Primary } else { active }
+    }
+
     fn well_rects(&self, style: &SwatchPairStyle, size: Vec2) -> [Rect; 2] {
         // The buttons' squares hold their glyphs with room round them, so the wells follow without a gap.
-        let top = if self.has_buttons() { style.buttons } else { 0.0 } + style.outline;
+        let edge = self.edge(style);
+        let top = if self.has_buttons() { style.buttons } else { 0.0 } + edge;
         let square = Vec2::splat(style.well);
-        let primary = Rect::from_min_size(pos2(style.outline, top), square);
-        let end = size.x.min(Self::wells(style).x) - style.outline;
+        let primary = Rect::from_min_size(pos2(edge, top), square);
+        let end = size.x.min(self.wells(style).x) - edge;
         let secondary = Rect::from_min_size(pos2(end - style.well, top + style.step), square);
         [primary, secondary]
     }
@@ -301,6 +321,7 @@ impl Component for SwatchPair<'_> {
             buttons: cx.control().icon,
             edge: cx.color(colors.line.control_edge),
             outline: cx.tokens.stroke.thin,
+            frame: cx.color(colors.text.muted),
             mark: cx.color(colors.text.normal),
             swatch: Swatch::style(cx, Swatch::new(Label::default(), Srgba::BLACK).style_key()),
         }
@@ -312,7 +333,7 @@ impl Component for SwatchPair<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let style = cx.style;
-        let wells = Self::wells(style);
+        let wells = self.wells(style);
         if self.has_buttons() { vec2(wells.x, wells.y + style.buttons) } else { wells }
     }
 
@@ -324,12 +345,14 @@ impl Component for SwatchPair<'_> {
         let flow = Flow::new(rect, cx.flow.is_rtl());
         let rects = self.well_rects(cx.style, rect.size());
         let active = cx.value().copied().unwrap_or_default();
+        let on_top = self.front(active);
         for (i, logical) in rects.into_iter().enumerate() {
-            let front = Well::of(i as u64) == active;
+            let well = Well::of(i as u64);
+            let front = well == on_top;
             let at = flow.to_physical(logical.translate(rect.min.to_vec2()));
             let mut flags = Flags::empty();
             flags.set(Flags::MIXED, self.wells[i].color.same().is_none());
-            flags.set(Flags::CHECKED, front);
+            flags.set(Flags::CHECKED, well == active);
             let part = cx
                 .part(WELL.at(i as u64), at)
                 .sense(Sense::CLICK | Sense::FOCUS)
@@ -340,7 +363,7 @@ impl Component for SwatchPair<'_> {
                 part.pointer_only("Enter opens the picker");
             }
         }
-        let buttons = Self::button_rects(cx.style);
+        let buttons = self.button_rects(cx.style);
         for (key, button, shown) in [(DEFAULT, buttons[0], self.default_button.is_some()), (SWAP, buttons[1], self.swap_button.is_some())] {
             if shown {
                 let at = flow.to_physical(button.translate(rect.min.to_vec2()));
@@ -434,8 +457,9 @@ impl Component for SwatchPair<'_> {
         let rects = self.well_rects(style, cx.rect.size());
         let active = cx.value().copied().unwrap_or_default();
         let place = |logical: Rect| flow.to_physical(logical.translate(cx.rect.min.to_vec2()));
-        // The back well first, then the front one with a gap round it: being in front is what shows the active well. The
-        // gap is a patch of the surface the pair sits on (a panel, a tool rail's chrome), fill only.
+        // The back well first, then the front one with a gap round it: being in front, or the frame, shows the active well.
+        // The gap is a patch of the surface the pair sits on (a panel, a tool rail's chrome), fill only. The back well's
+        // frame is painted before the front well, which covers it where they overlap.
         {
             let halo = UiTokens::corner(f32::from(style.radius.nw) + style.gap);
             let ground = ui.with_style(cx.resolved.variant, |scope| SurfaceStyle {
@@ -445,10 +469,11 @@ impl Component for SwatchPair<'_> {
                 ..scope.surface(cx.env.surface())
             });
             let draw = ui.draw();
-            for well in [active.other(), active] {
+            let front = self.front(active);
+            for well in [front.other(), front] {
                 let at = place(rects[well.index() as usize]);
                 let shown = &self.wells[well.index() as usize];
-                if well == active {
+                if well == front {
                     draw.surface_styled(at.expand(style.gap), &ground);
                 }
                 match shown.color.same() {
@@ -458,6 +483,9 @@ impl Component for SwatchPair<'_> {
                         draw.stroke(&PaintShape::Rect(at, style.radius), StrokeWidth::Thin, style.mark);
                         draw.stroke(&outline(at, style), StrokeWidth::Thin, style.edge);
                     }
+                }
+                if self.frame_active && well == active {
+                    draw.stroke(&frame(at, style), StrokeWidth::Thin, style.frame);
                 }
             }
         }
@@ -504,6 +532,12 @@ fn paint_ring(draw: &Draw<'_>, at: Rect, color: Srgba, style: &SwatchPairStyle) 
     let corner = |grow: f32| UiTokens::corner((f32::from(style.radius.nw) - band + grow).max(0.0));
     draw.stroke(&PaintShape::Rect(hole.expand(2.0 * line), corner(2.0 * line)), StrokeWidth::Thin, contrast);
     draw.stroke(&PaintShape::Rect(hole.expand(line), corner(line)), StrokeWidth::Thin, style.edge);
+}
+
+/// The frame round the active well `at`: a gap outside its outline, concentric with its corners.
+fn frame(at: Rect, style: &SwatchPairStyle) -> PaintShape {
+    let out = style.outline + style.gap;
+    PaintShape::Rect(at.expand(out), UiTokens::corner(f32::from(style.radius.nw) + out))
 }
 
 /// The outline just outside the well `at`, concentric with its corners.

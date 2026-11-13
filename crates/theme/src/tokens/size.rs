@@ -375,9 +375,10 @@ pub struct RowSizes {
 /// Thicknesses of gradient ramps, in logical pixels.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RampSizes {
-    /// A ramp drawn as a bar of its own: the output bar of a levels editor, a hue or saturation bar.
+    /// A colour band: a ramp drawn as a bar of its own (the output bar of a levels editor, a gradient's thumb row) or
+    /// as the face of a value track (the track of a colour channel slider).
     pub bar: f32,
-    /// A ramp drawn as the groove of a value track: the track of a colour channel slider.
+    /// A thin band laid along a ramp: the span a gradient's thumb row draws between two thumbs.
     pub groove: f32,
 }
 

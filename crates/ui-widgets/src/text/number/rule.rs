@@ -202,7 +202,11 @@ impl<V: NumberValue> Codec for Ruled<V> {
     fn sample(&self, current: &V) -> Cow<'_, str> {
         match current.named() {
             Some(_) => Cow::Owned(self.format(current)),
-            None if self.rule.low.is_finite() && self.rule.high.is_finite() => Cow::Owned(self.inner.widest(&(self.rule.low..=self.rule.high))),
+            // A field that rounds what it commits shows no more places than that.
+            None if self.rule.low.is_finite() && self.rule.high.is_finite() => {
+                let codec = self.decimals.map_or_else(|| self.inner.clone(), |places| self.inner.clone().at_most(places));
+                Cow::Owned(codec.widest(&(self.rule.low..=self.rule.high)))
+            }
             None => Cow::Owned(self.format(current)),
         }
     }

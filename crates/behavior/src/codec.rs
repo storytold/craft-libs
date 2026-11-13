@@ -208,6 +208,12 @@ impl NumberCodec {
         self
     }
 
+    /// The same codec writing at most `decimals` decimal places.
+    pub fn at_most(mut self, decimals: usize) -> Self {
+        self.decimals = self.decimals.min(decimals);
+        self
+    }
+
     /// The same codec with `parse` as a second reader: it runs when the reader rejects the text, so words of the
     /// field's context ("Auto") can stand for numbers.
     pub fn or_parse(mut self, parse: impl Fn(&str) -> Option<f64> + Send + Sync + 'static) -> Self {

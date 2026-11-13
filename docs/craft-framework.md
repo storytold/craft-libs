@@ -984,8 +984,8 @@ A theme with its own shape replaces the radii or adds an offset to control, surf
 | `size.popup_min` | Least width of a popup surface (menus only; popup lists such as Select and ComboBox take their anchor's width) |
 | `size.scroll_fade` | Length of the fade at an edge of a scroll region past which its content continues |
 | `size.groove` | Groove of a value track |
-| `size.ramp.bar` | Gradient ramp drawn as a bar of its own |
-| `size.ramp.groove` | Gradient ramp drawn as the groove of a value track |
+| `size.ramp.bar` | Colour band: a gradient ramp drawn as a bar of its own or as the face of a value track |
+| `size.ramp.groove` | Thin band along a ramp: the span between two thumbs of a gradient's thumb row |
 | `size.rail.width`, `size.rail.button` | Tool rail and panel rail |
 | `size.length.field.sm`, `size.length.field.md` | Text or value field, one width per control size: a field in a small options bar is narrower than one in a dialog |
 | `size.length.number.sm`, `size.length.number.md` | Number field and the number cell over a slider, one width per control size |

@@ -3,17 +3,14 @@
 #[cfg(feature = "screen-testing")]
 mod stories;
 
-use craft_behavior::{ColumnWidth, EditEvent, EditEvents, Mixed};
-use craft_theme::Rgba;
-use craft_ui::contract::{Bind, Outcome, Pattern, Props as _, Show as _, ShowContainer as _};
-use craft_ui::layout_components::{Grid, Stack};
+use craft_behavior::{EditEvent, EditEvents, Mixed};
+use craft_theme::{ColorModel as _, RgbModel, Rgba};
+use craft_ui::contract::{Bind, GlyphLabel, LabelKind, Outcome, Pattern, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
+use craft_ui::form::Field;
+use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::text::{NumberField, TextField};
 use egui::{Response, Ui};
-
-/// The hex field and the three channel fields share the width of the readout's column equally, so the row fits a
-/// narrow panel.
-const FIELDS: &[ColumnWidth] = &[ColumnWidth::fill(1.0); 4];
 
 /// The channels the fields edit, in field order.
 const CHANNELS: [ReadoutChannel; 3] = [ReadoutChannel::Red, ReadoutChannel::Green, ReadoutChannel::Blue];
@@ -99,7 +96,9 @@ impl Outcome for ColorReadoutOutput {
     }
 }
 
-/// A colour as a hex field and three number fields (R, G, B, each 0 to 255), in one row. An edit in any field
+/// A colour as a hex field (its digits behind the field's own "#") and three number fields (R, G, B, each 0 to 255,
+/// after their letters and as wide as their widest value), in one row that folds the R, G and B fields onto a second
+/// line where the row does not fit. An edit in any field
 /// reports the whole colour, with the other channels and the alpha as given. While the value is mixed, the hex field
 /// still sets the whole colour and a channel field reports that channel alone ([`ColorReadoutOutput::channel`]), for
 /// the host to set on each item. Each field's gesture is the readout's.
@@ -136,43 +135,51 @@ impl<'a> ColorReadout<'a> {
             let held: Mixed<Rgba> = value.reborrow().read(&mut *body).unwrap_or(Mixed::Mixed);
             let mut events: Vec<EditEvent<Rgba>> = Vec::new();
             let mut channel_edits = Vec::new();
-            Grid::new(FIELDS).show(ui, |ui, _| {
+            // A channel's letter is the glyph of the field's side label; the field keeps its name.
+            let lettered = |name: &Label, letter: &'static str| {
+                Field::new(name.clone()).side(SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(Label::from(letter))))).sizing(Sizing::Content)
+            };
+            Row::new().wrap(true).show(ui, |ui, _| {
                 events.clear();
                 channel_edits.clear();
-                events.extend(TextField::hex(words.hex.as_str().to_owned(), Bind::given(held)).show(ui).events);
-                let names = [&words.red, &words.green, &words.blue];
-                for (i, name) in names.into_iter().enumerate() {
-                    let field = || {
-                        NumberField::new(
-                            name.as_str().to_owned(),
-                            Bind::given(match held {
-                                Mixed::Same(color) => Mixed::Same(Some(f64::from(color.0[i]))),
-                                Mixed::Mixed => match shared[i] {
-                                    Mixed::Same(byte) => Mixed::Same(Some(f64::from(byte))),
-                                    Mixed::Mixed => Mixed::Mixed,
-                                },
-                            }),
-                        )
-                        .range(0.0..=255.0)
-                        .step(1.0)
-                        .snap_typed(true)
-                        .commit_decimals(0)
-                    };
-                    let byte = |number: Option<f64>| number.map(|number| number.round().clamp(0.0, 255.0) as u8);
-                    let out = field().show(ui);
-                    for event in &out.events {
-                        match held {
-                            Mixed::Same(base) => events.push(event.clone().map(move |number| {
-                                let mut mine = base;
-                                if let Some(byte) = byte(number) {
-                                    mine.0[i] = byte;
-                                }
-                                mine
-                            })),
-                            Mixed::Mixed => channel_edits.push(ChannelEdit { channel: CHANNELS[i], event: event.clone().map(byte) }),
+                events.extend(TextField::hex(words.hex.as_str().to_owned(), Bind::given(held)).sizing(Sizing::Content).show(ui).events);
+                Row::new().show(ui, |ui, _| {
+                    let names = [&words.red, &words.green, &words.blue];
+                    let channels = RgbModel.channels();
+                    for (i, name) in names.into_iter().enumerate() {
+                        let field = || {
+                            NumberField::new(
+                                name.as_str().to_owned(),
+                                Bind::given(match held {
+                                    Mixed::Same(color) => Mixed::Same(Some(f64::from(color.0[i]))),
+                                    Mixed::Mixed => match shared[i] {
+                                        Mixed::Same(byte) => Mixed::Same(Some(f64::from(byte))),
+                                        Mixed::Mixed => Mixed::Mixed,
+                                    },
+                                }),
+                            )
+                            .range(0.0..=255.0)
+                            .step(1.0)
+                            .snap_typed(true)
+                            .commit_decimals(0)
+                            .sizing(Sizing::Content)
+                        };
+                        let byte = |number: Option<f64>| number.map(|number| number.round().clamp(0.0, 255.0) as u8);
+                        let Some(out) = lettered(name, channels[i].label).show(ui, |ui, _| field().show(ui)).inner else { continue };
+                        for event in &out.events {
+                            match held {
+                                Mixed::Same(base) => events.push(event.clone().map(move |number| {
+                                    let mut mine = base;
+                                    if let Some(byte) = byte(number) {
+                                        mine.0[i] = byte;
+                                    }
+                                    mine
+                                })),
+                                Mixed::Mixed => channel_edits.push(ChannelEdit { channel: CHANNELS[i], event: event.clone().map(byte) }),
+                            }
                         }
                     }
-                }
+                });
             });
             for event in &events {
                 let _ = value.reborrow().write(&mut *body, event);

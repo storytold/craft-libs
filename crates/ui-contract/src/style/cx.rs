@@ -284,7 +284,7 @@ impl<'a> StyleCx<'a> {
             edge: Stateful::new(self.color(colors.line.control_edge)),
             edge_width: self.tokens.stroke.thin,
             thickness: self.tokens.size.groove,
-            ramp: self.tokens.size.ramp.groove,
+            ramp: self.tokens.size.ramp.bar,
             radius: UiTokens::corner(self.tokens.shape.radius.pill),
             mark_length: self.tokens.space.gap.tight,
             mark_width: self.tokens.stroke.thin,

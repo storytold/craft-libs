@@ -63,7 +63,7 @@ impl ColorWarning {
     }
 }
 
-/// The style of a warning chip: the icon over the chip, and their sizes.
+/// The style of a warning chip: the icon over the chip or beside it, and their sizes.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct ColorWarningChipStyle {
@@ -93,21 +93,25 @@ impl Outcome for ColorWarningChipOutput {
 }
 
 /// A [`ColorWarning`] as the Full picker draws it, for a host that draws it beside its own swatch: the warning's icon
-/// over a swatch of the nearest passing colour. The host applies [`ColorWarning::nearest`] when it is clicked. The tip
-/// is the tooltip and the accessible name.
+/// over a swatch of the nearest passing colour, or with [`beside`](ColorWarningChip::beside) the icon and a swatch of
+/// its size on one line, as Photoshop's Color panel shows it under the wells. The host applies
+/// [`ColorWarning::nearest`] when it is clicked. The tip is the tooltip and the accessible name.
 #[must_use = "show the chip with `show`"]
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 pub struct ColorWarningChip<'a> {
     #[common]
     common: Common,
     warning: &'a ColorWarning,
+    /// The icon and a swatch of the icon's size on one line, in place of the icon over a control-sized swatch.
+    #[prop]
+    beside: bool,
     clicked: bool,
 }
 
 impl<'a> ColorWarningChip<'a> {
     /// A chip for `warning`.
     pub fn new(warning: &'a ColorWarning) -> Self {
-        ColorWarningChip { common: Common::new(), warning, clicked: false }.label(warning.tip.clone())
+        ColorWarningChip { common: Common::new(), warning, beside: false, clicked: false }.label(warning.tip.clone())
     }
 }
 
@@ -128,13 +132,26 @@ impl Component for ColorWarningChip<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        Vec2::new(cx.style.icon.max(cx.style.chip), cx.style.icon + cx.style.gap + cx.style.chip)
+        let style = cx.style;
+        if self.beside {
+            return Vec2::new(style.icon + style.gap + style.icon, style.icon);
+        }
+        Vec2::new(style.icon.max(style.chip), style.icon + style.gap + style.chip)
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let style = cx.style;
-        let icon = Rect::from_center_size(egui::pos2(cx.rect.center().x, cx.rect.top() + style.icon / 2.0), Vec2::splat(style.icon));
-        let chip = Rect::from_center_size(egui::pos2(cx.rect.center().x, cx.rect.bottom() - style.chip / 2.0), Vec2::splat(style.chip));
+        let flow = craft_behavior::Flow::new(cx.rect, cx.flow.is_rtl());
+        let (icon, chip) = if self.beside {
+            let side = Vec2::splat(style.icon);
+            let icon = Rect::from_min_size(cx.rect.min, side);
+            let chip = Rect::from_min_size(egui::pos2(cx.rect.min.x + style.icon + style.gap, cx.rect.min.y), side);
+            (flow.to_physical(icon), flow.to_physical(chip))
+        } else {
+            let icon = Rect::from_center_size(egui::pos2(cx.rect.center().x, cx.rect.top() + style.icon / 2.0), Vec2::splat(style.icon));
+            let chip = Rect::from_center_size(egui::pos2(cx.rect.center().x, cx.rect.bottom() - style.chip / 2.0), Vec2::splat(style.chip));
+            (icon, chip)
+        };
         let _ = ui.child("icon", icon, Icon::new(IconSpec::svg(self.warning.icon.clone())));
         let swatch = Swatch::new(self.warning.tip.clone(), self.warning.nearest).tooltip(self.warning.tip.clone());
         self.clicked = ui.child("chip", chip, swatch).clicked;

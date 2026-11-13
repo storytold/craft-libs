@@ -4,7 +4,7 @@
 mod stories;
 
 use crate::contract::{
-    Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, FieldLayout, MeasureCx, PaintUi, Props as _, Role, SideLabel, Validity,
+    Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, FieldLayout, MeasureCx, PaintUi, Props as _, Role, SideLabel, Sizing, Validity,
     WordSetCx as _,
 };
 use crate::runtime::env::{Label, UnitKind};
@@ -33,14 +33,12 @@ pub enum SliderFieldLayout {
     Inline,
 }
 
-/// The style of a slider field: the gap between its parts, the line height and the number field's width.
+/// The style of a slider field: the gap between its parts, the line height and the stacked number field's width.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct SliderFieldStyle {
     #[style(metrics)]
     metrics: Metrics,
-    /// The width of the number field, the same for every row so a column of fields lines up.
-    field: f32,
     /// The gap between the number field and the slider on one line.
     inline_gap: f32,
     /// The height of the caption line.
@@ -90,6 +88,10 @@ pub struct SliderField<'a> {
     /// The shape of the slider's thumb: a knob, or the pointer under the track of a colour channel.
     #[prop]
     thumb: SliderThumb,
+    /// The number field's sizing on the `Inline` line: `Sizing::Content` sizes it to its widest value (a dense panel
+    /// row, the Color panel's channels) instead of the number cell, and the slider takes the room it leaves.
+    #[prop]
+    field_sizing: Option<Sizing>,
 }
 
 impl<'a> SliderField<'a> {
@@ -108,6 +110,7 @@ impl<'a> SliderField<'a> {
             fill: true,
             track_face: None,
             thumb: SliderThumb::Round,
+            field_sizing: None,
         }
         .label(label)
     }
@@ -124,6 +127,7 @@ impl<'a> SliderField<'a> {
             fill: self.fill,
             thumb: self.thumb,
             reset: self.value.reset_value().copied(),
+            field_sizing: self.field_sizing,
         }
     }
 }
@@ -140,6 +144,7 @@ struct Look {
     thumb: SliderThumb,
     /// The reset value of the composite's own binding, which both children restore on a double click.
     reset: Option<f64>,
+    field_sizing: Option<Sizing>,
 }
 
 /// The composite's check on a number, as a child with the same value type reads it.
@@ -204,6 +209,10 @@ impl Look {
             Some(kind) => field.unit_kind(kind),
             None => field,
         };
+        let field = match self.field_sizing {
+            Some(sizing) => field.sizing(sizing),
+            None => field,
+        };
         match &self.unit {
             Some(unit) => field.unit(unit.clone()),
             None => field,
@@ -234,7 +243,6 @@ impl Component for SliderField<'_> {
         let control = cx.control();
         SliderFieldStyle {
             metrics: Metrics::new().gap(control.gap),
-            field: control.number,
             inline_gap: cx.tokens.space.gap.section,
             row: control.height,
             width: control.field,
@@ -256,7 +264,7 @@ impl Component for SliderField<'_> {
         let slider = cx.child("slider", &mut look.slider(&name, shown, None, None), Proposal::Ideal);
         let field = cx.child("field", &mut look.field(&name, shown, None), Proposal::Ideal);
         match self.layout {
-            SliderFieldLayout::Inline => Vec2::new(slider.x + cx.style.inline_gap + cx.style.field, slider.y.max(field.y)),
+            SliderFieldLayout::Inline => Vec2::new(slider.x + cx.style.inline_gap + field.x, slider.y.max(field.y)),
             SliderFieldLayout::Stacked => Vec2::new(slider.x.max(cx.style.width), cx.style.row.max(field.y) + cx.gap() + slider.y),
         }
     }
@@ -268,15 +276,20 @@ impl Component for SliderField<'_> {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let shown = shown_of(cx.value());
         let name = cx.label();
+        let look = self.look();
         let (track, field) = match self.layout {
-            SliderFieldLayout::Inline => arrange(cx.rect.size(), cx.style.inline_gap, cx.style.field),
+            // The field takes the width its own measure gives (a number cell, or its widest value when content-sized),
+            // so every row of a column with the same range ends its slider at one place.
+            SliderFieldLayout::Inline => {
+                let width = ui.measure("field", &mut look.field(&name, shown, None), Proposal::Ideal).x;
+                arrange(cx.rect.size(), cx.style.inline_gap, width)
+            }
             SliderFieldLayout::Stacked => stack(cx.rect.size(), cx.style.metrics.gap, cx.style.row),
         };
         let flow = Flow::new(cx.rect, cx.env.direction().is_rtl());
         let place = |logical: Rect| flow.to_physical(logical.translate(cx.rect.min.to_vec2()));
         // The field is shown first, so it is the first Tab stop.
         // The group has no stop, so its tooltip, and with it the reason it is disabled, is carried by the first stop.
-        let look = self.look();
         let face = self.track_face.take();
         let bind = self.value.reborrow();
         let on_slider = |value: &f64| bind.validity(value);

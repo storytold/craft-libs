@@ -83,7 +83,8 @@ fn dragging_to_the_bottom_right_keeps_the_knob_there() {
 
 /// The cubes fill the panel's room as Photoshop's field fills its dock group: the field takes the height the readout
 /// leaves and the width the wells and the strip leave, so in a short, narrow group the strip and the readout stay in
-/// view, and a taller group gives a taller field.
+/// view, and a taller group gives a taller field. The readout is one line in a 280 pt group and folds its R, G and B
+/// fields under the hex field in a narrower one, never cut at the edge.
 #[trial]
 fn the_cubes_take_the_room_the_readout_and_the_strip_leave() {
     let mut heights = Vec::new();
@@ -113,10 +114,19 @@ fn the_cubes_take_the_room_the_readout_and_the_strip_leave() {
             assert!(area.rect.bottom() <= readout.rect.top(), "{case}: the readout under the field");
             assert!(readout.rect.bottom() <= room.y + 0.5, "{case}: the readout in view ({:?})", readout.rect);
             assert!((area.rect.height() - strip.rect.height()).abs() < 1.0, "{case}: the strip as tall as the field");
+            let hex = rig.fixture.by_label("Hex color").expect("the hex field");
+            assert!(readout.rect.right() <= room.x + 0.5, "{case}: the readout fits the width ({:?})", readout.rect);
+            assert!(hex.rect.y_range().contains(readout.rect.center().y), "{case}: the readout on one line ({:?}, {:?})", hex.rect, readout.rect);
             heights.push(area.rect.height());
         }
     }
     assert!(heights[2] > heights[0] + 200.0 && heights[3] > heights[1] + 200.0, "the field grows with the room: {heights:?}");
+    let narrow = Vec2::new(170.0, 400.0);
+    let rig = PanelRig::in_room(ColorPanelMode::HueCube, narrow);
+    let hex = rig.fixture.by_label("Hex color").expect("the hex field");
+    let blue = rig.fixture.by_label("Blue").expect("the readout's last field");
+    assert!(blue.rect.top() >= hex.rect.bottom(), "the readout folds in {narrow:?} ({:?}, {:?})", hex.rect, blue.rect);
+    assert!(blue.rect.right() <= narrow.x + 0.5, "the folded readout fits the width ({:?})", blue.rect);
 }
 
 /// The slider modes show each channel on one line: its slider and its number field side by side.

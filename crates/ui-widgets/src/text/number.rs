@@ -24,7 +24,6 @@ use craft_behavior::{
 };
 use craft_theme::{Stateful, States};
 use egui::{Rect, Vec2};
-use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::ops::RangeInclusive;
 
@@ -378,13 +377,15 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         self.settle_lengths(&cx.env.units());
         let codec = self.ruled(&cx.env.units(), false, self.names(|row| cx.env.resolve(&row.label().clone())));
-        // The value area holds the widest value the field shows (the range's ends at the codec's precision, or the
-        // value when the range is open) with the caret and the unit, at most one number cell; a longer value scrolls
+        // The value area holds the widest value the field shows (the range's ends at the codec's precision, or at the
+        // places it commits when it rounds what it commits, or the value when the range is open) with the caret and the unit, at most one number cell; a longer value scrolls
         // inside it. The inside label and the chevrons take their own room beside it, each as `place` gives it. The
         // field is never narrower than a cell, so a column of short fields ends at one edge. A content-sized field
         // takes its whole value and has no floor; in a column group its value area is the group's widest.
         let content = content_sized(cx);
-        let sample = cx.value().map_or(Cow::Borrowed(""), |value| codec.sample(value));
+        // A mixed field is sized as it is with a value, so it keeps its width when the selection changes.
+        let blank = V::blank().unwrap_or_else(|| V::of_number(self.rule().blank()));
+        let sample = codec.sample(cx.value().unwrap_or(&blank));
         let mut text = cx.field_text(&TextRun::new(sample.as_ref()).role(TypeRole::Mono));
         if content {
             text.x = crate::layout::ambient_width(cx.ui.ctx(), &VALUES, text.x).map_or(text.x, |width| width.max(text.x));

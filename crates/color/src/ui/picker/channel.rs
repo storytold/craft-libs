@@ -6,7 +6,7 @@ use std::ops::RangeInclusive;
 use craft_behavior::{Axis, Sense};
 use craft_theme::{Channel, ColorModel, Srgba};
 use craft_ui::contract::{
-    Bind, Common, Component, Cx, DisabledLook, EditResponse, GlyphLabel, LabelKind, MeasureCx, Role, Show as _, ShowContainer as _, SideLabel,
+    Bind, Common, Component, Cx, DisabledLook, EditResponse, GlyphLabel, LabelKind, MeasureCx, Role, Show as _, ShowContainer as _, SideLabel, Sizing,
 };
 use craft_ui::form::{Field, SliderField, SliderFieldLayout};
 use craft_ui::primitives::{PaintShape, StrokeWidth};
@@ -104,7 +104,7 @@ impl Component for TrackRamp {
             metrics: craft_behavior::Metrics::new(),
             edge: cx.color(cx.tokens.color.line.control_edge),
             length: cx.tokens.size.length.track,
-            thickness: cx.tokens.size.ramp.groove,
+            thickness: cx.tokens.size.ramp.bar,
         }
     }
 
@@ -157,7 +157,7 @@ pub(crate) fn channel_slider<'a>(
 
 /// One channel on one line, as Photoshop's Color panel draws it: the label at the start (the channel's short label
 /// where one is given, "C"), which scrubs the value, the slider over the channel's colours with the pointer under its
-/// track, and the number field with its unit at the end.
+/// track, and the number field with its unit at the end, as wide as its widest value.
 #[derive(craft_ui::contract::Pattern)]
 pub(crate) struct ChannelRow<'a> {
     label: Label,
@@ -211,6 +211,7 @@ impl<'a> ChannelRow<'a> {
             .show(ui, |ui, _| {
                 channel_slider(label.clone(), value.reborrowed(), &rule, unit, track.clone().map(|stops| (stops, checker)))
                     .layout(SliderFieldLayout::Inline)
+                    .field_sizing(Sizing::Content)
                     .thumb(SliderThumb::Triangle)
                     .show(ui)
             })

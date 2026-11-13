@@ -347,7 +347,9 @@ impl Component for Slider<'_> {
                 draw.surface_styled(rect, &knob);
             }
             SliderThumb::Triangle => {
-                let (half, top, x) = (style.thumb.x / 2.0, track::groove_rect(&style.track, along.area).bottom(), centre.x);
+                // The pointer starts under the band it points at: the colour face, or the plain groove.
+                let band = if faced { track::ramp_rect(&style.track, along) } else { track::groove_rect(&style.track, along.area) };
+                let (half, top, x) = (style.thumb.x / 2.0, band.bottom(), centre.x);
                 let points = vec![Pos2::new(x, top), Pos2::new(x + half, top + half), Pos2::new(x - half, top + half)];
                 style.ring.paint_pointer(&draw, &points, ring);
                 track::paint_pointer(&draw, points, &knob);

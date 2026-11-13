@@ -354,7 +354,8 @@ impl Component for ColorRamp<'_> {
     fn style(cx: &StyleCx<'_>, _: ColorRampStyleKey) -> ColorRampStyle {
         let tokens = cx.tokens;
         ColorRampStyle {
-            metrics: Metrics::new().min_size(Vec2::new(tokens.size.length.track, tokens.size.thumb.lg)),
+            // At least a control tall, as Photoshop's ramp under the channel rows of a short panel.
+            metrics: Metrics::new().min_size(Vec2::new(tokens.size.length.track, cx.control().height)),
             focus: cx.focus_look(),
             edge: cx.color(tokens.color.line.control_edge),
             boxes: tokens.size.icon.lg,
