@@ -161,6 +161,40 @@ fn children<'a>(el: &'a El, container: &'static str, tag: &'static str) -> impl 
 }
 
 fn node(el: &El, is_mask: bool, count: &mut usize) -> Result<Node> {
+    enum Task<'a> {
+        Visit(&'a El, bool),
+        Finish(&'a El, bool, usize, usize),
+    }
+    let mut tasks = vec![Task::Visit(el, is_mask)];
+    let mut built = Vec::new();
+    while let Some(task) = tasks.pop() {
+        match task {
+            Task::Visit(el, is_mask) => {
+                let layer_refs = if is_mask { Vec::new() } else { children(el, "layers", "layer").collect::<Vec<_>>() };
+                let mask_refs = if is_mask { Vec::new() } else { children(el, "masks", "mask").collect::<Vec<_>>() };
+                for _ in &layer_refs {
+                    *count += 1;
+                    if *count > MAX_NODES {
+                        return Err(invalid(format!("more than {MAX_NODES} layers")));
+                    }
+                }
+                tasks.push(Task::Finish(el, is_mask, layer_refs.len(), mask_refs.len()));
+                tasks.extend(mask_refs.into_iter().rev().map(|m| Task::Visit(m, true)));
+                tasks.extend(layer_refs.into_iter().rev().map(|child| Task::Visit(child, false)));
+            }
+            Task::Finish(el, is_mask, layer_count, mask_count) => {
+                let children_start = built.len() - layer_count - mask_count;
+                let mut children = built.split_off(children_start).into_iter();
+                let layers = children.by_ref().take(layer_count).collect();
+                let masks = children.collect();
+                built.push(make_node(el, is_mask, layers, masks)?);
+            }
+        }
+    }
+    Ok(built.pop().expect("a node visit produces one node"))
+}
+
+fn make_node(el: &El, is_mask: bool, layers: Vec<Node>, masks: Vec<Node>) -> Result<Node> {
     let owned = |name: &str| attr(el, name).map(str::to_string);
     let node_type = attr(el, "nodetype").unwrap_or("").to_string();
     // Only the kinds whose pixels are read need sound numbers; a node an application will leave
@@ -168,7 +202,7 @@ fn node(el: &El, is_mask: bool, count: &mut usize) -> Result<Node> {
     let read = matches!(node_type.as_str(), "paintlayer" | "grouplayer" | "transparencymask");
     let lenient = |v: Result<f64>, default: f64| if read { v } else { Ok(v.unwrap_or(default)) };
     let (x, y) = if is_mask && !read { (offset(el, "x").unwrap_or(0), offset(el, "y").unwrap_or(0)) } else { (offset(el, "x")?, offset(el, "y")?) };
-    let mut out = Node {
+    Ok(Node {
         node_type,
         name: owned("name"),
         visible: attr(el, "visible") != Some("0"),
@@ -184,17 +218,12 @@ fn node(el: &El, is_mask: bool, count: &mut usize) -> Result<Node> {
         filename: owned("filename"),
         passthrough: truthy(el, "passthrough"),
         collapsed: truthy(el, "collapsed"),
-        layers: Vec::new(),
-        masks: Vec::new(),
-    };
-    if !is_mask {
-        out.layers = layers(el, count)?;
-        out.masks = children(el, "masks", "mask").map(|m| node(m, true, count)).collect::<Result<_>>()?;
-    }
-    Ok(out)
+        layers,
+        masks,
+    })
 }
 
-/// The `<layers>` of `el`. Recursion is bounded by [`MAX_XML_DEPTH`].
+/// The `<layers>` of `el`.
 fn layers(el: &El, count: &mut usize) -> Result<Vec<Node>> {
     let mut out = Vec::new();
     for child in children(el, "layers", "layer") {
