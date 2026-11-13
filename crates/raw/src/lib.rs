@@ -146,8 +146,8 @@ pub use opcodes::{Opcode, OpcodeLists};
 #[cfg(feature = "arw")]
 pub use preview::embedded_preview_dynamic_range_optimized;
 pub use preview::{
-    PREVIEW_PREFIX, PreviewColorSpace, PreviewRange, bounded_preview, embedded_preview, embedded_preview_color_space, embedded_preview_covering,
-    embedded_preview_from_range,
+    DecodedPreview, PREVIEW_PREFIX, PreviewColorSpace, PreviewRange, bounded_preview, embedded_jpeg_preview, embedded_jpeg_preview_covering,
+    embedded_jxl_preview, embedded_preview, embedded_preview_color_space, embedded_preview_covering, embedded_preview_from_range,
 };
 #[cfg(feature = "dng")]
 pub use semantic::{SemanticMask, semantic_masks};
@@ -634,6 +634,11 @@ pub fn decode_reduced(bytes: &[u8], min_long: usize, limits: &Limits) -> Result<
 /// levels are not included (some formats measure them from the samples).
 pub fn probe_info(bytes: &[u8]) -> Result<RawInfo> {
     probe_info_with(bytes, &Limits::default())
+}
+
+/// Orientation of a supported raw, read through the same format parser as [`probe_info`].
+pub fn orientation(bytes: &[u8]) -> Option<u16> {
+    probe_info(bytes).ok().map(|info| info.orientation.to_exif())
 }
 
 /// [`probe_info`] within `limits`: a file that declares more than they allow fails as [`decode_with`] would.
