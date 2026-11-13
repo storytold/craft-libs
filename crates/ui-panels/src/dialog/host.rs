@@ -228,6 +228,8 @@ impl<D: StackDialog> AnyStackDialog for D {
 ///   one of them; the per-type calls reach the most recently opened `D`.
 ///   [`open_unless_open`](DialogHost::open_unless_open) refuses while any `D` is open and leaves
 ///   it alone (PhotoCraft's `confirmationPending`).
+/// - Dialogs the app still shows itself share the stack: [`sync_beside`](DialogHost::sync_beside)
+///   puts them in the one opening order, so the top dialog and the startup queue count them too.
 /// - Automation: [`get`](DialogHost::get) and [`get_mut`](DialogHost::get_mut) reach the open
 ///   dialog's value for code that knows its type. A script that doesn't goes by id:
 ///   [`open_dialogs`](DialogHost::open_dialogs) lists every open dialog with its
@@ -280,11 +282,34 @@ impl DialogHost {
         Self::default()
     }
 
-    /// The routing stack, for a [`Dialog`](super::Dialog) the app shows itself beside the host's
-    /// (`Dialog::new(..).stack(dialogs.stack())`). Push its id with [`DialogStack::push`] and
-    /// remove it on the closing outcome, as before.
+    /// The routing stack: every open dialog in opening order, the host's and the ones the app
+    /// shows beside them ([`sync_beside`](DialogHost::sync_beside)). The top one takes the input.
     pub fn stack(&self) -> &DialogStack {
         &self.stack
+    }
+
+    /// Puts the dialogs the app shows itself beside the host's on the stack: `beside` lists every
+    /// one open now, in opening order, with its parent. One not on the stack yet goes on top; one
+    /// on the stack that `beside` no longer lists leaves it, and the host's dialogs opened as its
+    /// children close with `Cancel`. A dialog on the stack that the host doesn't hold is a beside
+    /// dialog. Call it before anything reads the stack in a pass (the app's own dialogs, a
+    /// control request), so the top, the startup queue and automation see one order.
+    pub fn sync_beside(&mut self, ctx: &Context, beside: impl IntoIterator<Item = (DialogId, Option<DialogId>)>) {
+        let beside: Vec<_> = beside.into_iter().collect();
+        let closed: Vec<DialogId> = self
+            .stack
+            .ids()
+            .filter(|id| !self.open.iter().any(|dialog| dialog.id() == *id) && !beside.iter().any(|(listed, _)| listed == id))
+            .collect();
+        for id in &closed {
+            self.stack.remove_tree(*id);
+        }
+        for (id, parent) in beside {
+            self.stack.push(id, parent);
+        }
+        if !closed.is_empty() {
+            self.cancel_orphans(Some(ctx));
+        }
     }
 
     /// Opens `dialog` on top. Its id goes on the stack now; the dialog shows from the next

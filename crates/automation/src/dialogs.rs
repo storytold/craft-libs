@@ -1,7 +1,7 @@
 //! `ui.dialog.set`, `ui.dialog.confirm` and `ui.dialog.cancel` on an app's [`DialogHost`], for every dialog type.
 //!
 //! The app's method table hands these methods to [`dialog_method`] and lists [`inspect`] under `ui.inspect`'s
-//! `dialogs`. A dialog is named by the `id` `inspect` lists; its fields are its
+//! `dialogs`, or [`inspect_stack`] when it shows dialogs of its own beside the host's. A dialog is named by the `id` `inspect` lists; its fields are its
 //! [`StackDialog::json_fields`](craft_ui::dialog::StackDialog::json_fields). Opening a dialog (`ui.dialog.open`) and
 //! running the command its answer is for stay the app's: an answer waits for the app's `DialogHost::take` as a
 //! click's would.
@@ -15,10 +15,26 @@ use crate::protocol::Params;
 /// The open dialogs, the top one last: `{id, parent, key, fields}`, `null` for a missing parent, key or fields. Ids
 /// are 64-bit hashes, so they are listed as decimal strings, which every JSON reader keeps exact.
 pub fn inspect(host: &DialogHost) -> Value {
-    host.open_dialogs()
-        .into_iter()
-        .map(|dialog| {
-            json!({"id": dialog.id.value().to_string(), "parent": dialog.parent.map(|id| id.value().to_string()), "key": dialog.key, "fields": dialog.fields})
+    inspect_stack(host, |_| None)
+}
+
+/// The whole stack, the top dialog last: the host's dialogs as [`inspect`] lists them, and each dialog the app shows
+/// beside them ([`DialogHost::sync_beside`]) as `beside` describes it (`None` leaves it out).
+pub fn inspect_stack(host: &DialogHost, mut beside: impl FnMut(DialogId) -> Option<Value>) -> Value {
+    let mut hosted = host.open_dialogs();
+    host.stack()
+        .ids()
+        .filter_map(|id| match hosted.iter().position(|dialog| dialog.id == id) {
+            Some(at) => {
+                let dialog = hosted.swap_remove(at);
+                Some(json!({
+                    "id": dialog.id.value().to_string(),
+                    "parent": dialog.parent.map(|id| id.value().to_string()),
+                    "key": dialog.key,
+                    "fields": dialog.fields,
+                }))
+            }
+            None => beside(id),
         })
         .collect()
 }
