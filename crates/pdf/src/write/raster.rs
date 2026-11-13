@@ -54,6 +54,90 @@ pub struct Page {
     pub plates: Vec<SpotPlate>,
 }
 
+/// The RDF namespace used by PDF XMP packets.
+pub const RDF_NAMESPACE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+
+/// PhotoCraft spot-plate metadata namespace. The packet encoder is shared so applications pass
+/// neutral plate facts instead of assembling XML inside a PDF export path.
+pub const SPOT_PLATES_NAMESPACE: &str = "http://ns.getartcraft.com/photocraft/spot-plates/1.0/";
+
+/// Add spot-plate metadata to a PDF XMP packet. An unparseable caller packet is preserved as-is;
+/// with no caller packet a complete XMP packet is created. An empty plate list returns the
+/// caller packet unchanged, or `None` when there is no metadata to write.
+pub fn xmp_with_spot_plates(doc_xmp: Option<&str>, plates: &[SpotPlate]) -> Option<String> {
+    if plates.is_empty() {
+        return doc_xmp.map(str::to_owned);
+    }
+    let mut description = format!(
+        "  <rdf:Description rdf:about=\"\" xmlns:rdf=\"{RDF_NAMESPACE}\" xmlns:pcsp=\"{SPOT_PLATES_NAMESPACE}\">\n   <pcsp:plates>\n    <rdf:Seq>\n"
+    );
+    let two = |value: f32| {
+        let value = (value * 100.0).round() / 100.0;
+        if value == 0.0 { 0.0 } else { value }
+    };
+    for (index, plate) in plates.iter().enumerate() {
+        let hex = plate.srgb.map(|value| format!("{:02X}", (value.clamp(0.0, 1.0) * 255.0).round() as u8)).concat();
+        description.push_str(&format!(
+            "     <rdf:li rdf:parseType=\"Resource\">\n      <pcsp:index>{index}</pcsp:index>\n      <pcsp:name>{}</pcsp:name>\n      <pcsp:labL>{:.2}</pcsp:labL>\n      <pcsp:labA>{:.2}</pcsp:labA>\n      <pcsp:labB>{:.2}</pcsp:labB>\n      <pcsp:srgb>#{hex}</pcsp:srgb>\n      <pcsp:solidity>{}</pcsp:solidity>\n     </rdf:li>\n",
+            xml_text(&plate.name), two(plate.lab[0]), two(plate.lab[1]), two(plate.lab[2]), (plate.solidity * 100.0).round() as u32
+        ));
+    }
+    description.push_str("    </rdf:Seq>\n   </pcsp:plates>\n  </rdf:Description>\n");
+    if let Some(xmp) = doc_xmp {
+        let Some((at, self_closing)) = rdf_insertion(xmp) else { return Some(xmp.to_owned()) };
+        let tail_at = if self_closing.is_some() { at + 2 } else { at };
+        let (Some(head), Some(tail)) = (xmp.get(..at), xmp.get(tail_at..)) else { return Some(xmp.to_owned()) };
+        let mut out = String::with_capacity(xmp.len() + description.len() + 16);
+        out.push_str(head);
+        match self_closing {
+            Some(name) => {
+                out.push('>');
+                out.push('\n');
+                out.push_str(&description);
+                out.push_str(" </");
+                out.push_str(name);
+                out.push('>');
+            }
+            None => out.push_str(&description),
+        }
+        out.push_str(tail);
+        return Some(out);
+    }
+    Some(format!(
+        "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n <rdf:RDF xmlns:rdf=\"{RDF_NAMESPACE}\">\n{description} </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>"
+    ))
+}
+
+fn xml_text(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            ch => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn rdf_insertion(xmp: &str) -> Option<(usize, Option<&str>)> {
+    let bom = xmp.strip_prefix('\u{feff}').map_or(0, |_| '\u{feff}'.len_utf8());
+    let body = xmp.get(bom..)?;
+    let doc = roxmltree::Document::parse(body).ok()?;
+    let rdf =
+        doc.descendants().find(|node| node.is_element() && node.tag_name().namespace() == Some(RDF_NAMESPACE) && node.tag_name().name() == "RDF")?;
+    let range = rdf.range();
+    let text = body.get(range.clone())?;
+    if let Some(open) = text.strip_suffix("/>") {
+        let name = open.get(1..)?;
+        let end = name.find(|ch: char| ch.is_whitespace() || ch == '/').unwrap_or(name.len());
+        return Some((bom + range.end - 2, Some(name.get(..end)?)));
+    }
+    Some((bom + range.start + text.rfind("</")?, None))
+}
+
 /// A one-byte Unicode map for invisible, selectable text layered over vector outlines.
 #[derive(Default)]
 pub struct SelectionFont {
