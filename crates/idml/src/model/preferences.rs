@@ -56,10 +56,8 @@ impl DocumentPreferences {
             }
         }
         attrs.push(("PagesPerDocument".into(), "1".into()));
-        for (key, value) in [("FacingPages", self.facing_pages)] {
-            if let Some(value) = value {
-                attrs.push((key.into(), if value { "true" } else { "false" }.into()));
-            }
+        if let Some(value) = self.facing_pages {
+            attrs.push(("FacingPages".into(), if value { "true" } else { "false" }.into()));
         }
         for (key, value) in [
             ("DocumentBleedTopOffset", self.bleed[0]),
@@ -102,10 +100,8 @@ impl DocumentPreferences {
             attrs.push(("PageBinding".into(), value.clone()));
         }
         attrs.push(("ColumnDirection".into(), "Horizontal".into()));
-        for (key, value) in [("Intent", &self.intent)] {
-            if let Some(value) = value {
-                attrs.push((key.into(), value.clone()));
-            }
+        if let Some(value) = &self.intent {
+            attrs.push(("Intent".into(), value.clone()));
         }
         if let Some(value) = self.primary_text_frame {
             attrs.push(("CreatePrimaryTextFrame".into(), bool_string(value)));
