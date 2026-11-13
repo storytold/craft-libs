@@ -100,7 +100,8 @@ impl SystemReader {
 
     /// Rises each time a preference [`SystemReader::read`] answers from changes, as its source
     /// reports it: the watcher's theme, contrast or reduced motion, or a reported value. Read
-    /// again when it moved. On the web the browser's queries raise it in no case.
+    /// again when it moved. On the web the browser's queries raise it in no case. Read it before
+    /// [`SystemReader::read`]: the watcher stores a value before it raises the generation.
     pub fn generation(&self) -> u64 {
         self.watcher.as_ref().map_or(0, Watcher::generation) + self.reported.generation.load(Ordering::Acquire)
     }

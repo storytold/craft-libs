@@ -29,7 +29,11 @@ pub struct SystemState {
 /// What the OS reports on `ctx` now: the host's reader (`InstallSpec::system`), with the colour scheme egui's
 /// integration reports (`Event::SystemTheme`) where the reader's own watcher has none.
 pub fn system_appearance(ctx: &Context) -> SystemState {
-    Service::<Source>::run(ctx, |source| SystemState { appearance: source.0.read().into(), generation: source.0.generation() })
+    Service::<Source>::run(ctx, |source| {
+        // Generation first: a change landing between the two reads then shows again at the next read.
+        let generation = source.0.generation();
+        SystemState { appearance: source.0.read().into(), generation }
+    })
 }
 
 pub(crate) fn install(ctx: &Context, reader: SystemReader) {

@@ -171,7 +171,8 @@ impl Watcher {
         self.shared.get()
     }
     /// Rises each time the theme, [`Watcher::contrast`] or [`Watcher::reduced_motion`] changes, before the wake
-    /// callback runs; a layout or icon theme change leaves it. Read the preferences again when it moved.
+    /// callback runs; a layout or icon theme change leaves it. Read the preferences again when it moved,
+    /// after reading this: a value is stored before the generation rises.
     pub fn generation(&self) -> u64 {
         self.shared.generation.load(Ordering::Acquire)
     }
