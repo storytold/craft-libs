@@ -3,7 +3,7 @@
 //! This facade keeps the PostScript interpreter and its format decisions in shared dependencies;
 //! applications receive Bézier paths, page bounds and warnings for their own document adapters.
 
-use kurbo::BezPath;
+use kurbo::{BezPath, Rect};
 
 /// Limits on the extracted geometry. The interpreter has its own execution and allocation caps.
 #[derive(Debug, Clone, Copy)]
@@ -33,7 +33,8 @@ pub enum Error {
 #[derive(Debug, Clone)]
 pub struct Imported {
     pub paths: Vec<BezPath>,
-    pub page_points: (f64, f64),
+    /// Page bounds in source PostScript points, including a nonzero or negative origin.
+    pub page_bounds: Rect,
     pub warnings: Vec<String>,
     pub preview_fallback: bool,
 }
@@ -44,13 +45,17 @@ pub fn import(bytes: &[u8], limits: Limits) -> Result<Imported, Error> {
         return Err(Error::InputLimit { limit: limits.max_input_bytes });
     }
     let source = vectorcraft_eps::import(bytes).map_err(Error::Parse)?;
-    let page_points = source.document.artboards.first().map_or((612.0, 792.0), |board| (board.rect.width(), board.rect.height()));
+    let page_bounds = source
+        .document
+        .artboards
+        .first()
+        .map_or(Rect::new(0.0, 0.0, 612.0, 792.0), |board| Rect::new(board.rect.x0, board.rect.y0, board.rect.x1, board.rect.y1));
     let mut paths = Vec::new();
     let mut total_elements = 0usize;
     for layer in &source.document.layers {
         collect(layer, &mut paths, &mut total_elements, limits)?;
     }
-    Ok(Imported { paths, page_points, warnings: source.warnings, preview_fallback: source.preview })
+    Ok(Imported { paths, page_bounds, warnings: source.warnings, preview_fallback: source.preview })
 }
 
 fn collect(node: &vectorcraft_doc::Node, paths: &mut Vec<BezPath>, elements: &mut usize, limits: Limits) -> Result<(), Error> {
