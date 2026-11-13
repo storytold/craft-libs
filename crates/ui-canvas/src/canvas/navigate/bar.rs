@@ -13,7 +13,7 @@ use crate::text::NumberField;
 use craft_behavior::canvas::zoom;
 use craft_behavior::geometry::crop::normalized_angle;
 use craft_behavior::kurbo::Size;
-use craft_behavior::{CanvasView, EditEvent, EditEvents, IconId, Mixed, ZoomLadder};
+use craft_behavior::{CanvasView, EditEvents, IconId, Mixed, ZoomLadder};
 use egui::{Response, Ui};
 
 /// What the navigate bar reports.

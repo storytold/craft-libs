@@ -425,7 +425,7 @@ impl CanvasOutput {
     /// `view` as the canvas keeps it: inside the document's edges with Overscroll off. The tool host passes a tool's
     /// view through it.
     pub(crate) fn clamped(&self, view: CanvasView) -> CanvasView {
-        clamped(view, self.document_size(), &self.navigation)
+        clamped(view, self.document, &self.navigation)
     }
 
     /// Where a press on the background was released without a drag. A tool that creates geometry opens its command
@@ -503,7 +503,8 @@ impl Component for Canvas<'_> {
         let press = Self::background_press(&cx).0;
         let space = self.space(cx.response.id, cx.env.scale().0, BackgroundPress::of(&press, self.context_key));
         let view = self.settled.map(|settled| settled.target).filter(|target| Some(*target) != self.given);
-        CanvasOutput { response: cx.response.clone(), press, space, view, snap: self.snap, document: self.document_size(), navigation: self.navigation }
+        let document = self.document_size();
+        CanvasOutput { response: cx.response.clone(), press, space, view, snap: self.snap, document, navigation: self.navigation }
     }
 }
 
