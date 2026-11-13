@@ -125,23 +125,23 @@ pub fn parse_text(svg: &str, limits: &Limits, options: &usvg::Options<'_>) -> Re
 
 /// Every check on SVG text, cheapest first; the XML it parses to on the way.
 fn checked<'s>(svg: &'s str, limits: &Limits) -> Result<roxmltree::Document<'s>, Error> {
-    if svg.len() > limits.bytes {
-        return Err(Error::Text(svgz::Error::TooLarge(limits.bytes)));
-    }
-    if limits.refuse_entity_markup && guard::entity_holds_markup(svg) {
-        return Err(Error::EntityMarkup);
-    }
-    if guard::entities_expand_past(svg, limits.entity_bytes) {
-        return Err(Error::Entities);
-    }
-    if guard::too_wide(svg, limits.attributes, limits.attribute_work) {
-        return Err(Error::TooWide(limits.attributes));
-    }
-    if guard::deeper_than(svg, limits.depth) {
-        return Err(Error::TooDeep(limits.depth));
-    }
-    let options = roxmltree::ParsingOptions { allow_dtd: true, nodes_limit: limits.xml_nodes, ..Default::default() };
-    let xml = roxmltree::Document::parse_with_options(svg, options).map_err(|e| Error::Xml(e.to_string()))?;
+    let preflight_limits = crate::preflight::Limits {
+        bytes: limits.bytes,
+        depth: limits.depth,
+        entity_bytes: limits.entity_bytes,
+        refuse_entity_markup: limits.refuse_entity_markup,
+        attributes: limits.attributes,
+        attribute_work: limits.attribute_work,
+        xml_nodes: limits.xml_nodes,
+    };
+    let xml = crate::preflight::parse_text(svg, &preflight_limits).map_err(|e| match e {
+        crate::preflight::Error::Text(e) => Error::Text(e),
+        crate::preflight::Error::Entities => Error::Entities,
+        crate::preflight::Error::EntityMarkup => Error::EntityMarkup,
+        crate::preflight::Error::TooDeep(depth) => Error::TooDeep(depth),
+        crate::preflight::Error::TooWide(attributes) => Error::TooWide(attributes),
+        crate::preflight::Error::Xml(msg) => Error::Xml(msg),
+    })?;
     if height(&xml, limits.depth)?.is_none() {
         return Err(Error::TooDeep(limits.depth));
     }

@@ -242,7 +242,7 @@ fn score(enc: &'static Encoding, name: &[u8], hint_letters: &std::collections::B
                 // never writes this one, says the writer meant that ("état", not "Žtat").
                 let written = |c: char| c.to_lowercase().all(|l| hint_letters.contains(&l));
                 let mac = name.get(i..=i).map(|b| decode(b, MACINTOSH)).and_then(|s| s.chars().next());
-                word_initial && !(mac.is_some_and(|m| m.is_alphabetic() && written(m)) && !written(ch))
+                word_initial && (written(ch) || !mac.is_some_and(|m| m.is_alphabetic() && written(m)))
             } else if enc == WINDOWS_1251 && is_cyrillic(ch) {
                 (cyrillic_name && !lone_after_digit(&decoded, i)) || cyrillic_word(&decoded, i)
             } else {
