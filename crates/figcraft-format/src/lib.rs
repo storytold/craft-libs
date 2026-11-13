@@ -362,3 +362,60 @@ mod seek_archive_tests {
         assert!(reader.read_member("document.json", 3).is_err());
     }
 }
+
+/// Largest individual ZIP member read by the native format.
+pub const MAX_MEMBER: u64 = 512 * 1024 * 1024;
+/// Most version snapshots kept on save and read on open.
+pub const MAX_VERSIONS: usize = 100;
+/// Maximum version and branch name lengths, in Unicode scalar values.
+pub const MAX_VERSION_NAME: usize = 200;
+pub const MAX_VERSION_DESCRIPTION: usize = 2000;
+/// Maximum bytes of an index and all version snapshots read.
+pub const MAX_VERSION_INDEX: u64 = 16 * 1024 * 1024;
+pub const MAX_VERSION_BYTES: u64 = 1024 * 1024 * 1024;
+/// Maximum images read and maximum combined image bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImageBudget {
+    pub images: usize,
+    pub bytes: u64,
+}
+pub const IMAGE_BUDGET: ImageBudget = ImageBudget { images: 20_000, bytes: 4 * 1024 * 1024 * 1024 };
+/// Maximum branch histories kept.
+pub const MAX_BRANCHES: usize = 100;
+/// The branch index member.
+pub const BRANCH_INDEX: &str = "branches/index.json";
+/// Maximum uncompressed bytes read from one native archive in total.
+#[cfg(not(target_pointer_width = "32"))]
+pub const MAX_UNPACKED: u64 = 6 * 1024 * 1024 * 1024;
+#[cfg(target_pointer_width = "32")]
+pub const MAX_UNPACKED: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Native-format errors shared with the consumer's document mapping.
+#[derive(Debug, PartialEq, Eq)]
+pub enum FormatError {
+    Io(String),
+    Corrupt(String),
+    Newer(u32),
+}
+
+impl std::fmt::Display for FormatError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "{e}"),
+            Self::Corrupt(e) => write!(f, "not a valid FigCraft file: {e}"),
+            Self::Newer(v) => write!(f, "this file was saved by a newer FigCraft (format version {v})"),
+        }
+    }
+}
+
+impl std::error::Error for FormatError {}
+
+/// Whether `id` can name a version or branch: 1–64 ASCII letters, digits, `-` and `_`.
+pub fn is_valid_version_id(id: &str) -> bool {
+    (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// Clip text to at most `max` Unicode scalar values.
+pub fn clip(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
+}
