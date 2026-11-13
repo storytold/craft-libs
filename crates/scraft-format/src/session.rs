@@ -348,6 +348,7 @@ impl AutoName {
 pub struct Session {
     pub format_version: u32,
     pub name: String,
+    #[serde(deserialize_with = "sample_rate_or_default")]
     pub sample_rate: SampleRate,
     pub bit_depth: BitDepthSetting,
     pub frame_rate: FrameRate,
@@ -382,6 +383,17 @@ pub struct Session {
     /// The folder relative source paths point into: where the session was opened or last saved.
     #[serde(skip)]
     pub folder: Option<std::path::PathBuf>,
+}
+
+/// Older SoundCraft builds repaired an in-range but invalid sample rate after reading a session.
+/// `craft-time` validates `SampleRate` during serde, so keep that file compatibility at this
+/// domain boundary while retaining strict serde validation for direct `SampleRate` use.
+fn sample_rate_or_default<'de, D>(deserializer: D) -> Result<SampleRate, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let hz = <u32 as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(SampleRate::new(hz).unwrap_or_default())
 }
 
 impl Default for Session {
