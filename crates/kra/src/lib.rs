@@ -162,25 +162,25 @@ fn children<'a>(el: &'a El, container: &'static str, tag: &'static str) -> impl 
 
 fn node(el: &El, is_mask: bool, count: &mut usize) -> Result<Node> {
     enum Task<'a> {
-        Visit(&'a El, bool),
+        Visit(&'a El, bool, bool),
         Finish(&'a El, bool, usize, usize),
     }
-    let mut tasks = vec![Task::Visit(el, is_mask)];
+    let mut tasks = vec![Task::Visit(el, is_mask, false)];
     let mut built = Vec::new();
     while let Some(task) = tasks.pop() {
         match task {
-            Task::Visit(el, is_mask) => {
-                let layer_refs = if is_mask { Vec::new() } else { children(el, "layers", "layer").collect::<Vec<_>>() };
-                let mask_refs = if is_mask { Vec::new() } else { children(el, "masks", "mask").collect::<Vec<_>>() };
-                for _ in &layer_refs {
+            Task::Visit(el, is_mask, count_layer) => {
+                if count_layer {
                     *count += 1;
                     if *count > MAX_NODES {
                         return Err(invalid(format!("more than {MAX_NODES} layers")));
                     }
                 }
+                let layer_refs = if is_mask { Vec::new() } else { children(el, "layers", "layer").collect::<Vec<_>>() };
+                let mask_refs = if is_mask { Vec::new() } else { children(el, "masks", "mask").collect::<Vec<_>>() };
                 tasks.push(Task::Finish(el, is_mask, layer_refs.len(), mask_refs.len()));
-                tasks.extend(mask_refs.into_iter().rev().map(|m| Task::Visit(m, true)));
-                tasks.extend(layer_refs.into_iter().rev().map(|child| Task::Visit(child, false)));
+                tasks.extend(mask_refs.into_iter().rev().map(|m| Task::Visit(m, true, false)));
+                tasks.extend(layer_refs.into_iter().rev().map(|child| Task::Visit(child, false, true)));
             }
             Task::Finish(el, is_mask, layer_count, mask_count) => {
                 let children_start = built.len() - layer_count - mask_count;
