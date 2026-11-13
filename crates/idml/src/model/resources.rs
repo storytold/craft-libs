@@ -118,6 +118,54 @@ pub struct ParagraphFlowValues {
     pub start_paragraph: Option<String>,
 }
 
+/// Raw IDML character typography values before the caller resolves fonts and semantic enums.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CharacterTypographyValues {
+    pub applied_font: Option<String>,
+    pub font_style: Option<String>,
+    pub point_size: Option<f64>,
+    pub leading: Option<String>,
+    pub kerning_method: Option<String>,
+    pub kerning_value: Option<f64>,
+    pub tracking: Option<f64>,
+    pub leading_aki: Option<f64>,
+    pub trailing_aki: Option<f64>,
+    pub tsume: Option<f64>,
+    pub jidori: Option<f64>,
+    pub leading_model: Option<String>,
+    pub character_alignment: Option<String>,
+    pub horizontal_scale: Option<f64>,
+    pub vertical_scale: Option<f64>,
+    pub baseline_shift: Option<f64>,
+    pub skew: Option<f64>,
+}
+
+impl CharacterTypographyValues {
+    /// Reads the common typography attributes and properties from an IDML character range/style.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        Self {
+            applied_font: values.prop("AppliedFont"),
+            font_style: values.prop("FontStyle"),
+            point_size: values.num("PointSize"),
+            leading: values.prop("Leading"),
+            kerning_method: values.prop("KerningMethod"),
+            kerning_value: values.num("KerningValue"),
+            tracking: values.num("Tracking"),
+            leading_aki: values.num("LeadingAki"),
+            trailing_aki: values.num("TrailingAki"),
+            tsume: values.num("Tsume"),
+            jidori: values.num("Jidori"),
+            leading_model: values.prop("LeadingModel"),
+            character_alignment: values.prop("CharacterAlignment"),
+            horizontal_scale: values.num("HorizontalScale"),
+            vertical_scale: values.num("VerticalScale"),
+            baseline_shift: values.num("BaselineShift"),
+            skew: values.num("Skew"),
+        }
+    }
+}
+
 impl ParagraphFlowValues {
     /// Writes IDML attributes for paragraph hyphenation and flow.
     pub fn to_attrs(&self) -> Vec<(String, String)> {

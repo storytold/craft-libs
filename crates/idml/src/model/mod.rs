@@ -26,12 +26,12 @@ pub use effects::{DirectionalFeatherValues, DropShadowValues, FeatherValues, Gra
 pub use geometry::{MAX_PATH_POINTS, PathGeometry, PathGeometryError, PathPoint, SubPath};
 pub use preferences::TextFramePreferences;
 pub use resources::{
-    CjkCharacterValues, ColorDefinition, ColorGroup, ColorGroupDefinition, ColorGroupMember, ColorSpace, CompositeFontDefinition,
-    CompositeFontEntryDefinition, EpubExportTagMap, FontDefinition, FontFamilyDefinition, FontsPart, GradientDefinition, GradientStop,
-    GradientStopDefinition, GradientStopValue, GraphicPart, GrepStyleValue, Ink, InkDefinition, MojikumiRow, NestedLineStyleValue, NestedStyleValue,
-    NestedStyleValues, OpenTypeFeatureValues, ParagraphAlignmentValues, ParagraphBoxValues, ParagraphFlowValues, ParagraphListValues,
-    StrokeDefinition, StrokeStyle, StrokeStyleKind, Style, StyleGroup, StyleGroupWriter, StyleKind, StyleNode, Swatch, SwatchKind, TabStopValues,
-    TintDefinition, color_groups, inks, named, preference, stroke_styles, style_groups, swatches,
+    CharacterTypographyValues, CjkCharacterValues, ColorDefinition, ColorGroup, ColorGroupDefinition, ColorGroupMember, ColorSpace,
+    CompositeFontDefinition, CompositeFontEntryDefinition, EpubExportTagMap, FontDefinition, FontFamilyDefinition, FontsPart, GradientDefinition,
+    GradientStop, GradientStopDefinition, GradientStopValue, GraphicPart, GrepStyleValue, Ink, InkDefinition, MojikumiRow, NestedLineStyleValue,
+    NestedStyleValue, NestedStyleValues, OpenTypeFeatureValues, ParagraphAlignmentValues, ParagraphBoxValues, ParagraphFlowValues,
+    ParagraphListValues, StrokeDefinition, StrokeStyle, StrokeStyleKind, Style, StyleGroup, StyleGroupWriter, StyleKind, StyleNode, Swatch,
+    SwatchKind, TabStopValues, TintDefinition, color_groups, inks, named, preference, stroke_styles, style_groups, swatches,
 };
 pub use spread::{
     ClippingPathValues, Graphic, GraphicChild, GraphicKind, GraphicLayerOptions, Guide, ItemChild, ItemKind, Link, MarginPreference, Page, PageChild,
