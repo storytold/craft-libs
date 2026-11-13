@@ -19,7 +19,7 @@ pub fn inspect(host: &DialogHost) -> Value {
 }
 
 /// The whole stack, the top dialog last: the host's dialogs as [`inspect`] lists them, and each dialog the app shows
-/// beside them ([`DialogHost::sync_beside`]) as `beside` describes it (`None` leaves it out).
+/// beside them ([`DialogHost::open_beside`]) as `beside` describes it (`None` leaves it out).
 pub fn inspect_stack(host: &DialogHost, mut beside: impl FnMut(DialogId) -> Option<Value>) -> Value {
     let mut hosted = host.open_dialogs();
     host.stack()

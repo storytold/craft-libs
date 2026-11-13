@@ -2,11 +2,13 @@
 
 use craft_automation::dialogs::{dialog_method, inspect, inspect_stack, names_open_dialog};
 use craft_ui::contract::{Bind, SaveKey};
-use craft_ui::dialog::{DialogHost, DialogResult, PromptChoice, PromptKind, StandardPrompt, dialog_id};
+use craft_ui::dialog::{DialogHost, DialogResult, PromptChoice, PromptKind, StandardPrompt, StartupStage, dialog_id};
 use craft_ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind};
-use craft_ui::testing::trial;
+use craft_ui::testing::{Fixture, trial};
 use egui::Context;
 use serde_json::{Value, json};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 fn call(host: &mut DialogHost, ctx: &Context, method: &str, params: Value) -> Result<Value, String> {
     dialog_method(host, ctx, method, &params).expect("a ui.dialog method")
@@ -117,17 +119,18 @@ fn param_dialog_automation_follows_its_rows() {
     assert_eq!((reopened.fields.number("radius"), reopened.fields.text("method")), (Some(7.0), Some("zoom")));
 }
 
-/// Dialogs an app shows itself share the host's stack: listed in one opening order between the hosted ones, never
-/// answered by the host's methods, and closing the hosted dialogs opened over them when they leave.
+/// Dialogs an app shows itself take their place on the host's stack when they open: listed in one opening order
+/// between the hosted ones, never answered by the host's methods, and closing the dialogs opened over them, the
+/// host's with `Cancel`, when they close.
 #[trial]
 fn beside_dialogs_share_the_hosts_stack() {
     let ctx = Context::default();
     let mut host = DialogHost::new();
-    let (first, second) = (dialog_id(("app", 1)), dialog_id(("app", 2)));
+    let (first, second, third) = (dialog_id(("app", 1)), dialog_id(("app", 2)), dialog_id(("app", 3)));
     let own = |id| Some(json!({"id": if id == first { "first" } else { "second" }}));
-    host.sync_beside(&ctx, [(first, None)]);
+    host.open_beside(first, None);
     let prompt = host.open(StandardPrompt::new(PromptKind::TrashMask));
-    host.sync_beside(&ctx, [(first, None), (second, None)]);
+    host.open_beside(second, None);
     let listed = inspect_stack(&host, own);
     assert_eq!((listed[0]["id"].clone(), listed[2]["id"].clone()), (json!("first"), json!("second")));
     assert_eq!(listed[1]["id"], prompt.value().to_string());
@@ -135,13 +138,30 @@ fn beside_dialogs_share_the_hosts_stack() {
     assert!(!names_open_dialog(&host, &json!({"dialog": first.value()})));
     assert!(call(&mut host, &ctx, "ui.dialog.cancel", json!({"dialog": second.value()})).is_err());
 
-    host.sync_beside(&ctx, [(first, None)]);
+    host.close_beside(second);
     assert!(host.stack().is_top(prompt), "an app dialog that closed leaves the stack");
     assert!(host.cancel_by_id(&ctx, prompt));
     host.take::<StandardPrompt>();
     let child = host.open_child(StandardPrompt::confirm_delete(["Layer 1"], 1), first);
-    assert!(host.stack().is_top(child));
-    host.sync_beside(&ctx, []);
+    host.open_beside(third, Some(child));
+    assert!(host.stack().is_top(third));
+    host.close_beside(first);
     assert!(matches!(host.take::<StandardPrompt>(), Some(DialogResult::Cancel)), "a child closes with its app dialog");
-    assert!(host.stack().is_empty() && host.is_empty());
+    assert!(host.stack().is_empty() && host.is_empty(), "the app dialog over the child leaves with it");
+}
+
+/// A startup modal waits while a dialog the app shows itself is open, and opens once it closes.
+#[trial]
+fn the_startup_queue_waits_for_beside_dialogs() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let own = dialog_id(("app", 1));
+    host.borrow_mut().open_beside(own, None);
+    host.borrow_mut().enqueue(StartupStage::Warning, StandardPrompt::new(PromptKind::TrashMask));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.idle(2);
+    assert!(!host.borrow().is_open::<StandardPrompt>(), "the startup modal waits for the app's dialog");
+    host.borrow_mut().close_beside(own);
+    fixture.idle(2);
+    assert!(host.borrow().is_open::<StandardPrompt>(), "the startup modal opens once the app's dialog closed");
 }

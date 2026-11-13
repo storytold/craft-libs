@@ -228,8 +228,9 @@ impl<D: StackDialog> AnyStackDialog for D {
 ///   one of them; the per-type calls reach the most recently opened `D`.
 ///   [`open_unless_open`](DialogHost::open_unless_open) refuses while any `D` is open and leaves
 ///   it alone (PhotoCraft's `confirmationPending`).
-/// - Dialogs the app still shows itself share the stack: [`sync_beside`](DialogHost::sync_beside)
-///   puts them in the one opening order, so the top dialog and the startup queue count them too.
+/// - Dialogs the app still shows itself share the stack: [`open_beside`](DialogHost::open_beside) and
+///   [`close_beside`](DialogHost::close_beside), called where they open and close, give them their place in the
+///   one opening order, so the top dialog and the startup queue count them too.
 /// - Automation: [`get`](DialogHost::get) and [`get_mut`](DialogHost::get_mut) reach the open
 ///   dialog's value for code that knows its type. A script that doesn't goes by id:
 ///   [`open_dialogs`](DialogHost::open_dialogs) lists every open dialog with its
@@ -283,32 +284,23 @@ impl DialogHost {
     }
 
     /// The routing stack: every open dialog in opening order, the host's and the ones the app
-    /// shows beside them ([`sync_beside`](DialogHost::sync_beside)). The top one takes the input.
+    /// shows beside them ([`open_beside`](DialogHost::open_beside)). The top one takes the input.
     pub fn stack(&self) -> &DialogStack {
         &self.stack
     }
 
-    /// Puts the dialogs the app shows itself beside the host's on the stack: `beside` lists every
-    /// one open now, in opening order, with its parent. One not on the stack yet goes on top; one
-    /// on the stack that `beside` no longer lists leaves it, and the host's dialogs opened as its
-    /// children close with `Cancel`. A dialog on the stack that the host doesn't hold is a beside
-    /// dialog. Call it before anything reads the stack in a pass (the app's own dialogs, a
-    /// control request), so the top, the startup queue and automation see one order.
-    pub fn sync_beside(&mut self, ctx: &Context, beside: impl IntoIterator<Item = (DialogId, Option<DialogId>)>) {
-        let beside: Vec<_> = beside.into_iter().collect();
-        let closed: Vec<DialogId> = self
-            .stack
-            .ids()
-            .filter(|id| !self.open.iter().any(|dialog| dialog.id() == *id) && !beside.iter().any(|(listed, _)| listed == id))
-            .collect();
-        for id in &closed {
-            self.stack.remove_tree(*id);
-        }
-        for (id, parent) in beside {
-            self.stack.push(id, parent);
-        }
-        if !closed.is_empty() {
-            self.cancel_orphans(Some(ctx));
+    /// Puts a dialog the app shows itself beside the host's on the stack when it opens: on top, over `parent` for a
+    /// child. From then on the top dialog, the startup queue and automation count it as one of the stack's.
+    pub fn open_beside(&mut self, id: DialogId, parent: Option<DialogId>) {
+        self.stack.push(id, parent);
+    }
+
+    /// Takes the dialog the app showed beside the host's off the stack when it closes, with every dialog opened over
+    /// it: the host's among them close with `Cancel`.
+    pub fn close_beside(&mut self, id: DialogId) {
+        if self.stack.contains(id) {
+            self.stack.remove_tree(id);
+            self.cancel_orphans(None);
         }
     }
 
