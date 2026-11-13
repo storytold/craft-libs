@@ -38,6 +38,8 @@ pub(crate) struct FrameResult {
     pub closed: bool,
     /// The cursor the frame's output asked for.
     pub cursor: egui::CursorIcon,
+    /// The cursor image the frame's output asked for.
+    pub cursor_image: Option<egui::CustomCursorImage>,
     /// The wait egui asks for before the root viewport's next pass; `Duration::MAX` when it asks for none.
     pub repaint_delay: std::time::Duration,
     /// The AccessKit tree update of the frame.
@@ -208,6 +210,7 @@ pub(crate) fn run_frame(
         bounds,
         overshoot,
         cursor: output.platform_output.cursor_icon,
+        cursor_image: output.platform_output.cursor_image.clone(),
         repaint_delay,
         tree: crate::runtime::egui::access::tree_of(&mut output),
         ime: output.platform_output.ime.as_ref().map(|ime| ImeSeen {

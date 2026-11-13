@@ -38,13 +38,15 @@ pub fn painter(ctx: &Context) -> egui::Painter {
 
 /// The painted pointer the cursor service settled on: the window's cursor image where the window takes one at its
 /// size, else painted at the pointer. A brush tip too large for an image hands its centre cross and badge to the
-/// window and paints only its ring, so the pointer itself still moves with the hardware.
+/// window and paints only its ring, so the pointer itself still moves with the hardware. A badged system cursor keeps
+/// the system's arrow and has only its badge painted.
 fn paint_pointer(ctx: &Context, env: &Env, painter: &egui::Painter) {
     use craft_behavior::{Cursor, PaintedCursor};
     let Some(at) = areas::pointer_pos(ctx) else { return };
     let Some(Cursor::Painted(cursor)) = cursor::current(ctx) else { return };
     let closed = pointer::frame(ctx).buttons.contains(craft_behavior::Buttons::PRIMARY);
-    if let Some(target) = cursor::image_target(ctx) {
+    let target = cursor::image_target(ctx).filter(|_| !matches!(cursor, PaintedCursor::Badged { .. }));
+    if let Some(target) = target {
         if cursor::show_image(ctx, &pointer_art(env, &cursor, closed, false), target) {
             return;
         }

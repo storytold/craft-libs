@@ -40,11 +40,11 @@ pub use native::keeps_app_drag;
 pub use native::route_root;
 pub use native::{WindowAction, act, double_click_action};
 use placement::record_placement;
+pub(crate) use shell::base_shell;
 #[doc(hidden)]
 pub use shell::os_of;
 #[doc(hidden)]
 pub use shell::shell_of;
-pub(crate) use shell::base_shell;
 use shell::{refresh, window_info};
 #[cfg(feature = "testing")]
 pub(crate) use shell::{set_chrome, set_os};

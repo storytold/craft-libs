@@ -36,7 +36,8 @@ pub(crate) enum Mark {
 impl Mark {
     /// The rect the mark covers, its line included.
     fn bounds(&self) -> Rect {
-        let around = |points: &[Vec2], stroke: &Stroke| Rect::from_points(&points.iter().map(|p| p.to_pos2()).collect::<Vec<_>>()).expand(stroke.width / 2.0);
+        let around =
+            |points: &[Vec2], stroke: &Stroke| Rect::from_points(&points.iter().map(|p| p.to_pos2()).collect::<Vec<_>>()).expand(stroke.width / 2.0);
         match self {
             Mark::Line(a, b, stroke) => around(&[*a, *b], stroke),
             Mark::Ring(centre, radius, stroke) => Rect::from_center_size(centre.to_pos2(), Vec2::splat(2.0 * radius + stroke.width)),
@@ -192,7 +193,9 @@ fn rounded_path(rect: Rect, round: f32) -> Option<tiny_skia::Path> {
 fn draw(pixmap: &mut tiny_skia::Pixmap, mark: &Mark, transform: tiny_skia::Transform, scale: f32, origin: f32) {
     match mark {
         Mark::Line(a, b, stroke) => stroke_path(pixmap, polyline(&[*a, *b], false), *stroke, transform),
-        Mark::Ring(centre, radius, stroke) => stroke_path(pixmap, tiny_skia::PathBuilder::from_circle(centre.x, centre.y, *radius), *stroke, transform),
+        Mark::Ring(centre, radius, stroke) => {
+            stroke_path(pixmap, tiny_skia::PathBuilder::from_circle(centre.x, centre.y, *radius), *stroke, transform)
+        }
         Mark::Frame(rect, stroke) => stroke_path(pixmap, rect_path(*rect), *stroke, transform),
         Mark::Disc(centre, radius, color) => fill_path(pixmap, tiny_skia::PathBuilder::from_circle(centre.x, centre.y, *radius), *color, transform),
         Mark::Block(rect, round, color) => fill_path(pixmap, rounded_path(*rect, *round), *color, transform),

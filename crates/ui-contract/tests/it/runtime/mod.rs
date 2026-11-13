@@ -1,3 +1,4 @@
+mod cursor;
 mod env;
 mod frame;
 mod memory;

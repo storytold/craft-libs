@@ -20,6 +20,7 @@ pub struct Frames {
     time: f64,
     root: RootEnv,
     cursor: egui::CursorIcon,
+    cursor_image: Option<egui::CustomCursorImage>,
     repaint_delay: Duration,
     host: Option<Arc<Host>>,
     commands: CommandInput,
@@ -89,6 +90,7 @@ impl Frames {
             time: 0.0,
             root: RootEnv::default(),
             cursor: egui::CursorIcon::Default,
+            cursor_image: None,
             repaint_delay: Duration::MAX,
             host: None,
             commands: CommandInput::new(),
@@ -229,6 +231,7 @@ impl Frames {
             None => result.textures.clear(),
         }
         self.cursor = result.cursor;
+        self.cursor_image = result.cursor_image;
         self.repaint_delay = result.repaint_delay;
         self.tree = result.tree;
         self.ime = result.ime;
@@ -289,6 +292,11 @@ impl Frames {
     /// The system cursor the last frame's output asked for.
     pub fn cursor_icon(&self) -> egui::CursorIcon {
         self.cursor
+    }
+
+    /// The cursor image the last frame's output asked for, which the integration shows instead of the system cursor.
+    pub fn cursor_image(&self) -> Option<&egui::CustomCursorImage> {
+        self.cursor_image.as_ref()
     }
 }
 
