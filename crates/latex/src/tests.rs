@@ -353,8 +353,8 @@ fn table_borders_and_borderless_round_trip() {
     let mut doc = Document::new();
     let mut t_borderless = Table::new(2, 2, 400.0);
     t_borderless.props.style = None;
-    for row in t_borderless.rows.iter_mut().take(2) {
-        for cell in row.cells.iter_mut().take(2) {
+    for row in &mut t_borderless.rows {
+        for cell in &mut row.cells {
             cell.blocks = vec![para_block(Paragraph::with_text("cell", CharProps::default()))];
         }
     }
@@ -369,8 +369,8 @@ fn table_borders_and_borderless_round_trip() {
     let mut doc_bordered = Document::new();
     let mut t_bordered = Table::new(2, 2, 400.0);
     t_bordered.props.style = Some("TableGrid".to_string());
-    for row in t_bordered.rows.iter_mut().take(2) {
-        for cell in row.cells.iter_mut().take(2) {
+    for row in &mut t_bordered.rows {
+        for cell in &mut row.cells {
             cell.blocks = vec![para_block(Paragraph::with_text("cell", CharProps::default()))];
         }
     }

@@ -189,43 +189,65 @@ fn props(el: &El) -> Result<Props> {
     })
 }
 
-/// The elements of `stack`, converted without recursion up to [`MAX_XML_DEPTH`].
+/// The elements of `stack`, walked with an explicit stack: a stack can nest up to
+/// [`MAX_XML_DEPTH`] deep, more than a small thread stack can recurse.
 fn stack(el: &El, count: &mut usize) -> Result<Vec<Node>> {
-    enum Task<'a> {
-        Visit(&'a El),
-        FinishStack(&'a El, usize),
+    struct Frame<'a> {
+        props: Props,
+        isolation: Option<String>,
+        children: Vec<Node>,
+        rest: std::vec::IntoIter<&'a El>,
     }
-    let mut tasks: Vec<_> = el.elements().collect::<Vec<_>>().into_iter().rev().map(Task::Visit).collect();
-    let mut built = Vec::new();
-    while let Some(task) = tasks.pop() {
-        match task {
-            Task::Visit(child) => {
-                *count += 1;
-                if *count > MAX_NODES {
-                    return Err(invalid(format!("more than {MAX_NODES} layers")));
-                }
-                match child.name.as_str() {
-                    "layer" => built.push(Node::Layer(Layer {
-                        props: props(child)?,
-                        x: int(child, "x")?,
-                        y: int(child, "y")?,
-                        src: child.attr("src").map(|s| s.trim().to_string()),
-                    })),
-                    "stack" => {
-                        let children = child.elements().collect::<Vec<_>>();
-                        tasks.push(Task::FinishStack(child, children.len()));
-                        tasks.extend(children.into_iter().rev().map(Task::Visit));
-                    }
-                    other => built.push(Node::Other { tag: other.to_string(), name: child.attr("name").map(str::to_string) }),
+    let mut root = el.elements().collect::<Vec<_>>().into_iter();
+    let mut frames: Vec<Frame> = Vec::new();
+    let mut out = Vec::new();
+    loop {
+        let next = match frames.last_mut() {
+            Some(frame) => frame.rest.next(),
+            None => root.next(),
+        };
+        let Some(child) = next else {
+            let Some(frame) = frames.pop() else { break };
+            let node = Node::Stack(Stack { props: frame.props, isolation: frame.isolation, children: frame.children });
+            match frames.last_mut() {
+                Some(parent) => parent.children.push(node),
+                None => out.push(node),
+            }
+            continue;
+        };
+        *count += 1;
+        if *count > MAX_NODES {
+            return Err(invalid(format!("more than {MAX_NODES} layers")));
+        }
+        match child.name.as_str() {
+            "layer" => {
+                let node = Node::Layer(Layer {
+                    props: props(child)?,
+                    x: int(child, "x")?,
+                    y: int(child, "y")?,
+                    src: child.attr("src").map(|s| s.trim().to_string()),
+                });
+                match frames.last_mut() {
+                    Some(parent) => parent.children.push(node),
+                    None => out.push(node),
                 }
             }
-            Task::FinishStack(child, child_count) => {
-                let children = built.split_off(built.len() - child_count);
-                built.push(Node::Stack(Stack { props: props(child)?, isolation: child.attr("isolation").map(|s| s.trim().to_string()), children }));
+            "stack" => frames.push(Frame {
+                props: props(child)?,
+                isolation: child.attr("isolation").map(|s| s.trim().to_string()),
+                children: Vec::new(),
+                rest: child.elements().collect::<Vec<_>>().into_iter(),
+            }),
+            other => {
+                let node = Node::Other { tag: other.to_string(), name: child.attr("name").map(str::to_string) };
+                match frames.last_mut() {
+                    Some(parent) => parent.children.push(node),
+                    None => out.push(node),
+                }
             }
         }
     }
-    Ok(built)
+    Ok(out)
 }
 
 impl Image {

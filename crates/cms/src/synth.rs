@@ -111,9 +111,9 @@ impl CmykModel {
         // Overprints with black: multiplicative in reflectance above a first-surface floor.
         let floor = 0.006;
         let mut prim = [[0.0; 3]; 16];
-        for (m, prim_slot) in prim.iter_mut().enumerate() {
+        for (m, slot) in prim.iter_mut().enumerate() {
             let p = base[m & 7];
-            *prim_slot = if m & 8 == 0 {
+            *slot = if m & 8 == 0 {
                 p
             } else {
                 std::array::from_fn(|i| {
