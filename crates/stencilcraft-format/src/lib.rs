@@ -18,10 +18,14 @@
 //! [`DocumentFields`] owns the JSON field names, required and defaulted fields, and the
 //! flattening rule. Its values are JSON because the consuming app owns the document model,
 //! domain validation, and conversion between that model and the wire fields. The crate does not
-//! open files or set a file-size policy; callers handle bounded file I/O.
+//! open files or set a file-size policy; callers handle bounded file I/O. [`File::read_from`]
+//! lets callers parse from a reader without first buffering source bytes in a string.
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::{Map, Value};
+use std::fmt;
+use std::io::Read;
 
 /// The extension, without the leading dot.
 pub const EXTENSION: &str = "stencilcraft";
@@ -90,8 +94,21 @@ impl File {
 
     /// Parses JSON, validates the format header and version, then reads the wire fields.
     pub fn read(text: &str) -> Result<Self, Error> {
-        let value: Value = serde_json::from_str(text).map_err(Error::Json)?;
-        let header = value.get(HEADER_KEY).and_then(Value::as_object).ok_or(Error::NotStencilCraft)?;
+        let wire: RawWire = serde_json::from_str(text).map_err(Error::Json)?;
+        Self::from_wire(wire)
+    }
+
+    /// Parses JSON from a reader, without first buffering the source bytes in a string.
+    ///
+    /// Parsed document fields are still materialized as JSON values. Callers that impose a
+    /// total file-size policy should enforce it on the reader before calling this method.
+    pub fn read_from(reader: impl Read) -> Result<Self, Error> {
+        let wire: RawWire = serde_json::from_reader(reader).map_err(Error::Json)?;
+        Self::from_wire(wire)
+    }
+
+    fn from_wire(wire: RawWire) -> Result<Self, Error> {
+        let header = wire.fields.get(HEADER_KEY).and_then(Value::as_object).ok_or(Error::NotStencilCraft)?;
         if header.get("name").and_then(Value::as_str) != Some(FORMAT_NAME) {
             return Err(Error::NotStencilCraft);
         }
@@ -101,7 +118,7 @@ impl File {
         if version != FORMAT_VERSION {
             return Err(Error::Version { found: version, supported: FORMAT_VERSION });
         }
-        let raw: RawFile = serde_json::from_value(value).map_err(|source| Error::Document { source })?;
+        let raw: RawFile = serde_json::from_value(Value::Object(wire.fields)).map_err(|source| Error::Document { source })?;
         Ok(Self { document: raw.document })
     }
 
@@ -125,6 +142,132 @@ struct RawFile {
     _header: Header,
     #[serde(flatten)]
     document: DocumentFields,
+}
+
+/// A top-level streaming visitor that stores only fields owned by this wire schema.
+///
+/// Values are kept as `Value` because consumers own their document models. Unknown fields are
+/// skipped, duplicate fields retain serde_json's last-value-wins behavior, and header checks run
+/// only after the full JSON input has been parsed.
+struct RawWire {
+    fields: Map<String, Value>,
+}
+
+impl<'de> Deserialize<'de> for RawWire {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct RawWireVisitor;
+
+        impl<'de> Visitor<'de> for RawWireVisitor {
+            type Value = RawWire;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a JSON value containing a StencilCraft document")
+            }
+
+            fn visit_map<A>(self, mut access: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut fields = Map::new();
+                while let Some(key) = access.next_key::<String>()? {
+                    if is_wire_field(&key) {
+                        fields.insert(key, access.next_value()?);
+                    } else {
+                        let _ = access.next_value::<IgnoredAny>()?;
+                    }
+                }
+                Ok(RawWire { fields })
+            }
+
+            fn visit_seq<A>(self, mut access: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                while access.next_element::<IgnoredAny>()?.is_some() {}
+                Ok(RawWire { fields: Map::new() })
+            }
+
+            fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(RawWire { fields: Map::new() })
+            }
+
+            fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(RawWire { fields: Map::new() })
+            }
+
+            fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(RawWire { fields: Map::new() })
+            }
+
+            fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(RawWire { fields: Map::new() })
+            }
+
+            fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(RawWire { fields: Map::new() })
+            }
+
+            fn visit_string<E>(self, _value: String) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(RawWire { fields: Map::new() })
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(RawWire { fields: Map::new() })
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(RawWire { fields: Map::new() })
+            }
+        }
+
+        deserializer.deserialize_any(RawWireVisitor)
+    }
+}
+
+fn is_wire_field(name: &str) -> bool {
+    matches!(
+        name,
+        HEADER_KEY
+            | "board"
+            | "kerf"
+            | "layers"
+            | "next-shape-id"
+            | "images"
+            | "board-setup"
+            | "pages"
+            | "guides"
+            | "grid"
+            | "snap"
+            | "groups"
+            | "meta"
+    )
 }
 
 #[derive(Serialize)]
@@ -161,6 +304,8 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{self, Cursor, Read};
+
     use serde_json::{Value, json};
 
     use super::{DocumentFields, Error, FORMAT_VERSION, File};
@@ -220,6 +365,37 @@ mod tests {
     #[test]
     fn refuses_versions_other_than_the_current_version() {
         assert!(matches!(File::read(r#"{"stencilcraft":{"name":"stencilcraft","version":2}}"#), Err(Error::Version { found: 2, supported: 1 })));
+    }
+
+    #[test]
+    fn reader_preserves_duplicate_key_and_error_precedence_behavior() -> Result<(), Error> {
+        let duplicate = r#"{"stencilcraft":{"name":"wrong","version":1},"stencilcraft":{"name":"stencilcraft","version":1},"board":{"first":true},"board":{"width_mm":100,"height_mm":150},"kerf":{},"layers":[]}"#;
+        let file = File::read_from(Cursor::new(duplicate))?;
+        assert_eq!(file.document.board, json!({"width_mm":100,"height_mm":150}));
+
+        let malformed_after_bad_header = Cursor::new(br#"{"stencilcraft":{"name":"other","version":1},"board": "#);
+        assert!(matches!(File::read_from(malformed_after_bad_header), Err(Error::Json(_))));
+        assert!(matches!(File::read_from(Cursor::new(b"[]")), Err(Error::NotStencilCraft)));
+        Ok(())
+    }
+
+    #[test]
+    fn reader_accepts_large_input_in_short_reads() -> Result<(), Error> {
+        struct ShortReads<R>(R);
+        impl<R: Read> Read for ShortReads<R> {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                let length = buffer.len().min(1024);
+                self.0.read(&mut buffer[..length])
+            }
+        }
+
+        let text = format!(
+            r#"{{"stencilcraft":{{"name":"stencilcraft","version":1}},"board":{{}},"kerf":{{}},"layers":[],"future-field":"{}"}}"#,
+            "x".repeat(8 * 1024 * 1024)
+        );
+        let file = File::read_from(ShortReads(Cursor::new(text.as_bytes())))?;
+        assert_eq!(file.document.layers, json!([]));
+        Ok(())
     }
 
     #[test]
