@@ -2199,6 +2199,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-stencilcraft-document"
+version = "0.1.0"
+dependencies = [
+ "craft-atomic",
+ "craft-stencilcraft-format",
+ "craft-svg",
+ "kurbo 0.13.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-stencilcraft-format"
 version = "0.1.0"
 dependencies = [
