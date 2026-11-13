@@ -58,7 +58,8 @@ pub enum Extent {
     /// the region; the edge stays at the document's edge.
     Region(PixelRect),
     /// Copies of the document a whole document size apart, filling the canvas around it (Pattern Preview), at most
-    /// 31 along each axis, centred on the view. A source picture draws its textures again for each copy; a painted picture is
+    /// 31 along each axis, centred on the view. A [mapped](RasterDisplay::mapped) picture repeats its area instead, a
+    /// whole area apart. A source picture draws its textures again for each copy; a painted picture is
     /// called once per copy with the view shifted by the copy's offset. The checkerboard covers the copies; the edge
     /// stays at the document's edge.
     Tiled,
@@ -68,43 +69,53 @@ pub enum Extent {
 /// otherwise need thousands of copies per pass; past this the pattern stops, and the run is centred on the view.
 const MOST_COPIES: i32 = 31;
 
-/// The copies a tiled display draws, as columns and rows of whole document sizes from the document: copy `(i, j)` is
-/// the document moved by `i` widths and `j` heights. The document itself is drawn whether or not it is in the run.
+/// The copies a tiled display draws, as columns and rows of whole picture areas from the picture: copy `(i, j)` is
+/// the picture moved by `i` widths and `j` heights of its area. The picture itself is drawn whether or not it is in
+/// the run.
 #[derive(Clone, Debug, PartialEq)]
 struct Tiles {
     columns: RangeInclusive<i32>,
     rows: RangeInclusive<i32>,
+    /// The picture's area, in document pixels: the document, or a mapped picture's area. Copies lie a whole area apart.
+    cell: Rect64,
 }
 
 impl Tiles {
-    /// The document alone.
-    fn document() -> Self {
-        Tiles { columns: 0..=0, rows: 0..=0 }
+    /// The picture alone.
+    fn single() -> Self {
+        Tiles { columns: 0..=0, rows: 0..=0, cell: Rect64::ZERO }
     }
 
-    /// The copies of a document of `size` that cover `visible`, the document area a view shows.
-    fn covering(visible: Rect64, size: PixelSize) -> Self {
-        match (tile_run(visible.x0, visible.x1, size.width), tile_run(visible.y0, visible.y1, size.height)) {
-            (Some(columns), Some(rows)) => Tiles { columns, rows },
-            _ => Self::document(),
+    /// The copies of the picture covering `cell` that cover `visible`, the document area a view shows.
+    fn covering(visible: Rect64, cell: Rect64) -> Self {
+        let columns = tile_run(visible.x0 - cell.x0, visible.x1 - cell.x0, cell.width());
+        let rows = tile_run(visible.y0 - cell.y0, visible.y1 - cell.y0, cell.height());
+        match (columns, rows) {
+            (Some(columns), Some(rows)) => Tiles { columns, rows, cell },
+            _ => Self::single(),
         }
     }
 
-    /// The offset in document pixels of each copy to draw, the document's own first.
-    fn offsets(&self, size: PixelSize) -> impl Iterator<Item = Vec2> + '_ {
-        let (width, height) = (size.width as f32, size.height as f32);
+    /// Whether only the picture itself is drawn.
+    fn is_single(&self) -> bool {
+        self.columns == (0..=0) && self.rows == (0..=0)
+    }
+
+    /// The offset in document pixels of each copy to draw, the picture's own first.
+    fn offsets(&self) -> impl Iterator<Item = Vec2> + '_ {
+        let (width, height) = (self.cell.width() as f32, self.cell.height() as f32);
         let copies = self.rows.clone().flat_map(move |j| self.columns.clone().map(move |i| (i, j))).filter(|&copy| copy != (0, 0));
         std::iter::once((0, 0)).chain(copies).map(move |(i, j)| Vec2::new(i as f32 * width, j as f32 * height))
     }
 
-    /// The area the run of copies covers, in document pixels. A capped run may leave out the document.
-    fn run(&self, size: PixelSize) -> Rect64 {
-        let (width, height) = (f64::from(size.width), f64::from(size.height));
+    /// The area the run of copies covers, in document pixels. A capped run may leave out the picture.
+    fn run(&self) -> Rect64 {
+        let (width, height) = (self.cell.width(), self.cell.height());
         Rect64::new(
-            f64::from(*self.columns.start()) * width,
-            f64::from(*self.rows.start()) * height,
-            f64::from(*self.columns.end() + 1) * width,
-            f64::from(*self.rows.end() + 1) * height,
+            self.cell.x0 + f64::from(*self.columns.start()) * width,
+            self.cell.y0 + f64::from(*self.rows.start()) * height,
+            self.cell.x0 + f64::from(*self.columns.end() + 1) * width,
+            self.cell.y0 + f64::from(*self.rows.end() + 1) * height,
         )
     }
 }
@@ -119,11 +130,11 @@ fn checker_areas(bounds: Rect64, run: Rect64) -> impl Iterator<Item = Rect64> {
 
 /// The tiles `len` pixels long along one axis that overlap `lo..hi`, at most [`MOST_COPIES`] of them, centred on the
 /// middle of `lo..hi` when more would fit; `None` for an empty or non-finite span.
-fn tile_run(lo: f64, hi: f64, len: u32) -> Option<RangeInclusive<i32>> {
-    if len == 0 || !lo.is_finite() || !hi.is_finite() || hi <= lo {
+fn tile_run(lo: f64, hi: f64, len: f64) -> Option<RangeInclusive<i32>> {
+    if !(len > 0.0 && len.is_finite()) || !lo.is_finite() || !hi.is_finite() || hi <= lo {
         return None;
     }
-    let n = f64::from(len);
+    let n = len;
     // Far past any real view; keeps the ± MOST_COPIES arithmetic inside i32.
     let index = |v: f64| v.clamp(-1e9, 1e9) as i32;
     let (first, last) = (index((lo / n).floor()), index((hi / n).ceil()) - 1);
@@ -270,12 +281,24 @@ impl Mapping {
     /// clipped to the unit square, where the checkerboard and the edge go. `None` when nothing of `placed` lies in
     /// the unit square.
     fn corners(&self, view: &CanvasView) -> Option<[Pos2; 4]> {
+        Some(self.doc_corners()?.map(|corner| view.to_screen(corner)))
+    }
+
+    /// The picture's area in document space, clockwise from the top left; `None` as for [`corners`](Self::corners).
+    fn doc_corners(&self) -> Option<[Point64; 4]> {
         let area = self.placed.intersect(Rect64::new(0.0, 0.0, 1.0, 1.0));
         if area.width() <= 0.0 || area.height() <= 0.0 {
             return None;
         }
         let corners = [(area.x0, area.y0), (area.x1, area.y0), (area.x1, area.y1), (area.x0, area.y1)];
-        Some(corners.map(|(x, y)| view.to_screen(self.frame.apply(Point64::new(x, y)))))
+        Some(corners.map(|(x, y)| self.frame.apply(Point64::new(x, y))))
+    }
+
+    /// The bounds of the picture's area in document space: the cell its Pattern Preview copies repeat.
+    fn area(&self) -> Option<Rect64> {
+        let corners = self.doc_corners()?;
+        let area = corners[1..].iter().fold(Rect64::from_points(corners[0], corners[0]), |area, corner| area.union_pt(*corner));
+        (area.width() > 0.0 && area.height() > 0.0 && area.area().is_finite()).then_some(area)
     }
 }
 
@@ -313,8 +336,8 @@ impl<'a> RasterDisplay<'a> {
     /// unit square. A source picture is drawn through the frame on a `cells` by `cells` mesh, so a perspective
     /// frame shows it foreshortened; a cell whose centre lies outside the unit square is left out. A painted
     /// picture is painted through the view as the app paints it, and `cells` does not apply. A mapped display draws
-    /// its whole-document texture alone: the detail texture of a flat display has no place on a mesh, and neither
-    /// has the region or the copies of an [`Extent`]: a mapped display shows its area alone.
+    /// its whole-document texture alone: the detail texture of a flat display has no place on a mesh, and neither has
+    /// the region of [`Extent::Region`]. [`Extent::Tiled`] repeats the area.
     #[must_use]
     pub fn mapped(mut self, frame: Homography, cells: u32) -> Self {
         let placed = self.mapping.map_or(Rect64::new(0.0, 0.0, 1.0, 1.0), |mapping| mapping.placed);
@@ -441,10 +464,14 @@ impl Component for RasterDisplay<'_> {
         let (ctx, id) = (cx.ctx.clone(), cx.id);
         let size = self.picture.size();
         let document = PixelRect::of_size(size);
+        let whole = Rect64::new(0.0, 0.0, f64::from(size.width), f64::from(size.height));
         let (bounds, tiles) = match (self.mapping, self.extent) {
-            (Some(_), _) | (None, Extent::Document) => (document, Tiles::document()),
-            (None, Extent::Region(region)) => (region.union(&document), Tiles::document()),
-            (None, Extent::Tiled) => (document, Tiles::covering(space.view.visible(), size)),
+            (Some(mapping), Extent::Tiled) => {
+                (document, mapping.area().map_or_else(Tiles::single, |area| Tiles::covering(space.view.visible(), area)))
+            }
+            (Some(_), _) | (None, Extent::Document) => (document, Tiles::single()),
+            (None, Extent::Region(region)) => (region.union(&document), Tiles::single()),
+            (None, Extent::Tiled) => (document, Tiles::covering(space.view.visible(), whole)),
         };
         let mut held = std::mem::take(cx.keep::<Held>());
         let source = match &self.picture {
@@ -485,10 +512,12 @@ impl Component for RasterDisplay<'_> {
         if let Some(checker) = &self.checkerboard {
             let bounds = shown.bounds;
             let bounds = Rect64::new(f64::from(bounds.x0), f64::from(bounds.y0), f64::from(bounds.x1), f64::from(bounds.y1));
-            let areas = match self.mapping {
-                Some(_) => [corners, None],
-                None => {
-                    let mut areas = checker_areas(bounds, shown.tiles.run(shown.size)).map(|area| shown.view.quad(area));
+            // A mapped picture's copies are laid out from its area's bounds.
+            let tiled = self.mapping.and_then(|mapping| mapping.area()).filter(|_| !shown.tiles.is_single());
+            let areas = match (self.mapping, tiled) {
+                (Some(_), None) => [corners, None],
+                (_, area) => {
+                    let mut areas = checker_areas(area.unwrap_or(bounds), shown.tiles.run()).map(|area| shown.view.quad(area));
                     [areas.next(), areas.next()]
                 }
             };
@@ -499,10 +528,12 @@ impl Component for RasterDisplay<'_> {
         match (&mut self.picture, &shown.textures, &self.mapping) {
             (Picture::Source(_), Some(textures), Some(mapping)) => {
                 let (texture, factor) = textures.base;
-                painter.painter.add(mapped_mesh(&shown.view, texture, factor, shown.size, mapping));
+                for offset in shown.tiles.offsets() {
+                    painter.painter.add(mapped_mesh(&shifted(shown.view, offset), texture, factor, shown.size, mapping));
+                }
             }
             (picture, textures, _) => {
-                for offset in shown.tiles.offsets(shown.size) {
+                for offset in shown.tiles.offsets() {
                     let view = shifted(shown.view, offset);
                     match (&mut *picture, textures) {
                         (Picture::Painted { paint, .. }, _) => paint.paint(&painter, view),

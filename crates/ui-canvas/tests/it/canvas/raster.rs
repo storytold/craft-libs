@@ -334,6 +334,34 @@ fn tiled_copies_fill_the_canvas_a_document_apart() {
 }
 
 #[trial]
+fn a_mapped_picture_tiles_its_area_a_whole_area_apart() {
+    // A 100 x 70 document whose picture covers 140 x 90 from (-20, -10) (a preview that grew the image), at 50 percent.
+    let document = Document::new(100, 70);
+    let area = Rect64::new(-20.0, -10.0, 120.0, 80.0);
+    let corners = [Point::new(area.x0, area.y0), Point::new(area.x1, area.y0), Point::new(area.x1, area.y1), Point::new(area.x0, area.y1)];
+    let frame = Homography::unit_to_quad(corners).expect("a rectangle");
+    let center = Point::new(50.0, 35.0);
+    let view = CanvasView::new(Rect::from_min_size(Pos2::ZERO, CANVAS), center, 0.5);
+    let at = |i: i32, j: i32| doc_rect(&view, area + craft_behavior::kurbo::Vec2::new(f64::from(i) * 140.0, f64::from(j) * 90.0));
+    let in_view: Vec<Rect> =
+        (-40..40).flat_map(|j| (-40..40).map(move |i| (i, j))).map(|(i, j)| at(i, j)).filter(|r| r.intersects(view.rect)).collect();
+    for painted in [false, true] {
+        let (placed, checker, edge) = pictures(&document, center, 0.5, Extent::Tiled, Some(frame), painted);
+        assert_eq!(placed.len(), in_view.len(), "painted {painted}: one picture for each area-sized tile the canvas shows");
+        let all = in_view.iter().fold(Rect::NOTHING, |all, r| all.union(*r));
+        assert!(matches!(checker[..], [c] if near(c, all)), "painted {painted}: the checkerboard lies under the copies: {checker:?} vs {all:?}");
+        assert!(
+            edge.expand(-3.0).contains_rect(at(0, 0).expand(-6.0)) && at(0, 0).expand(3.0).contains_rect(edge),
+            "painted {painted}: the edge stays on the picture's area: {edge:?}"
+        );
+        if !painted {
+            assert!(in_view.iter().all(|tile| placed.iter().any(|r| near(*r, *tile))), "every tile in view has its copy");
+            assert!(near(placed[0], at(0, 0)), "the picture draws first, in its area");
+        }
+    }
+}
+
+#[trial]
 fn a_region_past_the_document_draws_out_to_the_region() {
     let document = Document::new(100, 70);
     let region = PixelRect::new(-60, -30, 200, 120);
