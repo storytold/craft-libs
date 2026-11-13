@@ -23,6 +23,7 @@ pub enum Format {
     Tiff,
     WebP,
     Heif,
+    Ase,
     Psd,
     Affinity,
     Ora,
@@ -64,6 +65,9 @@ pub fn detect(name: &str, bytes: &[u8]) -> Option<Format> {
     if bytes.starts_with(b"8BPS") {
         return Some(Format::Psd);
     }
+    if bytes.starts_with(b"ASEF") {
+        return Some(Format::Ase);
+    }
     if bytes.starts_with(b"PDN3") {
         return Some(Format::Pdn);
     }
@@ -86,20 +90,19 @@ pub fn detect(name: &str, bytes: &[u8]) -> Option<Format> {
     if bytes.trim_ascii_start().starts_with(b"{\\rtf") {
         return Some(Format::Rtf);
     }
-    if craft_svg::sniff::is_svgz(bytes) {
-        if let Ok(text) = craft_svg::svgz::text(bytes, 64 * 1024 * 1024)
-            && craft_svg::sniff::is_svg(text.as_bytes())
-        {
-            return Some(Format::Svgz);
-        }
+    if craft_svg::sniff::is_svgz(bytes)
+        && let Ok(text) = craft_svg::svgz::text(bytes, 64 * 1024 * 1024)
+        && craft_svg::sniff::is_svg(text.as_bytes())
+    {
+        return Some(Format::Svgz);
     }
     if craft_svg::sniff::is_svg(bytes) {
         return Some(Format::Svg);
     }
-    if let Some(ext) = extension(name) {
-        if let Some(format) = from_extension(ext) {
-            return Some(format);
-        }
+    if let Some(ext) = extension(name)
+        && let Some(format) = from_extension(ext)
+    {
+        return Some(format);
     }
     let head = bytes.get(..4096).unwrap_or(bytes);
     if dxf_ascii_prefix(head) || head.starts_with(b"AutoCAD Binary DXF\r\n\x1a\0") {
@@ -125,6 +128,7 @@ pub fn from_extension(ext: &str) -> Option<Format> {
         "tif" | "tiff" => Some(Format::Tiff),
         "webp" => Some(Format::WebP),
         "heic" | "heif" => Some(Format::Heif),
+        "ase" => Some(Format::Ase),
         "psd" | "psb" => Some(Format::Psd),
         "afdesign" | "afphoto" | "afpub" => Some(Format::Affinity),
         "ora" => Some(Format::Ora),
