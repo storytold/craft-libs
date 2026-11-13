@@ -369,6 +369,22 @@ impl TabStopValues {
             })
             .collect()
     }
+
+    /// Writes tab-stop records in a `TabList` property.
+    pub fn to_list(stops: &[Self]) -> El {
+        let mut list = El::new("TabList").with_attr("type", "list");
+        for stop in stops {
+            list.push(
+                El::new("ListItem")
+                    .with_attr("type", "record")
+                    .with_child(property("Alignment", "enumeration", stop.alignment.clone()))
+                    .with_child(property("AlignmentCharacter", "string", stop.alignment_character.clone()))
+                    .with_child(property("Leader", "string", stop.leader.clone()))
+                    .with_child(property("Position", "unit", crate::value::num(stop.position))),
+            );
+        }
+        list
+    }
 }
 
 /// What a style styles.
