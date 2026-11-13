@@ -466,12 +466,27 @@ impl ColorPanelMenu {
 
     /// The state of each command: the current view and ramp checked, Make Ramp Web Safe checked when on.
     pub fn states(state: &ColorPanelState) -> Vec<(ColorPanelCommand, CommandState)> {
-        let mut states: Vec<(ColorPanelCommand, CommandState)> =
-            ColorPanelMode::ALL.iter().map(|mode| (mode.command(), CommandState::new().checked(state.mode == *mode))).collect();
-        states.extend([(ColorPanelCommand::CopyHtml, CommandState::new()), (ColorPanelCommand::CopyHex, CommandState::new())]);
-        states.extend(ColorPanelRamp::ALL.iter().map(|ramp| (ramp.command(), CommandState::new().checked(state.ramp == *ramp))));
-        states.push((ColorPanelCommand::WebSafeRamp, CommandState::new().checked(state.web_safe_ramp)));
-        states
+        let commands = ColorPanelMode::ALL.iter().map(|mode| mode.command());
+        let commands = commands.chain([ColorPanelCommand::CopyHtml, ColorPanelCommand::CopyHex]);
+        let commands = commands.chain(ColorPanelRamp::ALL.iter().map(|ramp| ramp.command())).chain([ColorPanelCommand::WebSafeRamp]);
+        commands
+            .map(|command| {
+                let checked = Self::checked(state, command);
+                (command, checked.map_or_else(CommandState::new, |on| CommandState::new().checked(on)))
+            })
+            .collect()
+    }
+
+    /// Whether `command`'s row is checked: `Some` for the views, the ramps and Make Ramp Web Safe, `None` for the copy
+    /// commands, which have no check.
+    pub fn checked(state: &ColorPanelState, command: ColorPanelCommand) -> Option<bool> {
+        if let Some(mode) = ColorPanelMode::ALL.into_iter().find(|mode| mode.command() == command) {
+            return Some(state.mode == mode);
+        }
+        if let Some(ramp) = ColorPanelRamp::ALL.into_iter().find(|ramp| ramp.command() == command) {
+            return Some(state.ramp == ramp);
+        }
+        (command == ColorPanelCommand::WebSafeRamp).then_some(state.web_safe_ramp)
     }
 
     /// Carries out `command`: sets the view or the ramp, toggles Make Ramp Web Safe, or returns the text of `edited`
