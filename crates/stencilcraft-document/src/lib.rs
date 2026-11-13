@@ -772,9 +772,12 @@ mod tests {
 
     #[test]
     fn version_1_files_without_canvas_fields_still_load() {
-        for name in ["starter", "poster", "stencil-frame"] {
-            let path = format!("{}/../../examples/{name}.stencilcraft", env!("CARGO_MANIFEST_DIR"));
-            let doc = load_from(&path).unwrap();
+        for json in [
+            include_str!("../tests/fixtures/starter.stencilcraft"),
+            include_str!("../tests/fixtures/poster.stencilcraft"),
+            include_str!("../tests/fixtures/stencil-frame.stencilcraft"),
+        ] {
+            let doc = Document::load_json(json).unwrap();
             assert!(doc.pages.is_empty() && doc.groups.is_empty() && doc.guides.is_empty());
             assert_eq!(doc.grid, Grid::default());
             assert!(doc.layers.iter().all(|l| !l.template && !l.locked));
