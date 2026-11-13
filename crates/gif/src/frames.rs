@@ -22,13 +22,17 @@ pub struct FrameLimits {
     pub max_bytes: u64,
     /// Largest canvas (logical screen) in bytes at 4 bytes a pixel. Default 512 MiB.
     pub max_canvas_bytes: u64,
+    /// Largest single decoder allocation. `None` uses twice `max_canvas_bytes`, matching the
+    /// decoder's working-buffer allowance. Set this when an application has a tighter allocator
+    /// budget. Default `None`.
+    pub max_decode_bytes: Option<u64>,
     /// Merge a frame identical to the one before into it (its delay added). Default off.
     pub merge_identical: bool,
 }
 
 impl Default for FrameLimits {
     fn default() -> Self {
-        FrameLimits { max_frames: 100_000, max_bytes: 1 << 30, max_canvas_bytes: 512 << 20, merge_identical: false }
+        FrameLimits { max_frames: 100_000, max_bytes: 1 << 30, max_canvas_bytes: 512 << 20, max_decode_bytes: None, merge_identical: false }
     }
 }
 
@@ -93,6 +97,10 @@ pub fn read_frames(bytes: &[u8], limits: &FrameLimits) -> Result<Animation, Fram
     if canvas > limits.max_canvas_bytes {
         return Err(FrameError::LimitExceeded(format!("a {width}x{height} canvas is over {} bytes", limits.max_canvas_bytes)));
     }
+    let max_decode_bytes = limits.max_decode_bytes.unwrap_or_else(|| limits.max_canvas_bytes.saturating_mul(2));
+    if canvas > max_decode_bytes {
+        return Err(FrameError::LimitExceeded(format!("a {width}x{height} canvas is over the {max_decode_bytes} byte decode-allocation limit")));
+    }
     // The decoder sets up the whole logical screen before the first frame: the file must back it.
     if !crate::plausible(info.bytes_to_back(4, 1 << 28), bytes.len(), 1 << 14) {
         return Err(FrameError::LimitExceeded(format!("a {} byte file cannot hold a {width}x{height} picture", bytes.len())));
@@ -100,7 +108,7 @@ pub fn read_frames(bytes: &[u8], limits: &FrameLimits) -> Result<Animation, Fram
     let malformed = |e: image::ImageError| FrameError::Malformed(e.to_string());
     let mut decoder = GifDecoder::new(Cursor::new(bytes)).map_err(malformed)?;
     let mut il = image::Limits::default();
-    il.max_alloc = Some(limits.max_canvas_bytes.saturating_mul(2));
+    il.max_alloc = Some(max_decode_bytes);
     decoder.set_limits(il).map_err(malformed)?;
     let (width, height) = decoder.dimensions();
     collect(width, height, decoder.into_frames(), limits)
@@ -195,6 +203,7 @@ mod tests {
         assert_eq!((a.frames.len(), a.stop), (2, Stop::ByteLimit));
         assert!(matches!(read_frames(&bytes, &FrameLimits { max_canvas_bytes: 23, ..FrameLimits::default() }), Err(FrameError::LimitExceeded(_))));
         assert!(read_frames(&bytes, &FrameLimits { max_canvas_bytes: 24, ..FrameLimits::default() }).is_ok());
+        assert!(read_frames(&bytes, &FrameLimits { max_decode_bytes: Some(1), ..FrameLimits::default() }).is_err());
     }
 
     #[test]
