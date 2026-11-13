@@ -191,6 +191,41 @@ impl FootnotePreferences {
             marker_positioning: values.prop("MarkerPositioning"),
         }
     }
+
+    /// Writes one canonical IDML `FootnoteOption` using caller-resolved style, colour, and enum
+    /// references.
+    pub fn to_el(&self) -> El {
+        let mut el = El::new("FootnoteOption")
+            .with_attr("StartAt", crate::value::num(self.start_at.unwrap_or(1.0)))
+            .with_attr("Prefix", self.prefix.as_deref().unwrap_or(""))
+            .with_attr("Suffix", self.suffix.as_deref().unwrap_or(""))
+            .with_attr("FootnoteTextStyle", self.paragraph_style.as_deref().unwrap_or("$ID/NormalParagraphStyle"))
+            .with_attr("FootnoteMarkerStyle", self.marker_style.as_deref().unwrap_or("$ID/[None]"))
+            .with_attr("SeparatorText", self.separator.as_deref().unwrap_or(""))
+            .with_attr("SpaceBetween", crate::value::num(self.space_between.unwrap_or(0.0)))
+            .with_attr("Spacer", crate::value::num(self.space_before.unwrap_or(0.0)))
+            .with_attr("FootnoteFirstBaselineOffset", self.first_baseline.as_deref().unwrap_or("Ascent"))
+            .with_attr("FootnoteMinimumFirstBaselineOffset", crate::value::num(self.first_baseline_minimum.unwrap_or(0.0)))
+            .with_attr("EnableStraddling", bool_text(self.span_columns.unwrap_or(false)))
+            .with_attr("RuleOn", bool_text(self.rule_on.unwrap_or(true)))
+            .with_attr("RuleLineWeight", crate::value::num(self.rule_weight.unwrap_or(1.0)))
+            .with_attr("RuleTint", crate::value::num(self.rule_tint.unwrap_or(1.0)))
+            .with_attr("RuleLeftIndent", crate::value::num(self.rule_left_indent.unwrap_or(0.0)))
+            .with_attr("RuleWidth", crate::value::num(self.rule_width.unwrap_or(72.0)))
+            .with_attr("RuleOffset", crate::value::num(self.rule_offset.unwrap_or(0.0)));
+        let mut properties = El::new("Properties");
+        for (name, value) in [
+            ("FootnoteNumberingStyle", self.numbering_style.as_deref().unwrap_or("Arabic")),
+            ("RestartNumbering", self.restart_numbering.as_deref().unwrap_or("DontRestart")),
+            ("ShowPrefixSuffix", self.show_prefix_suffix.as_deref().unwrap_or("NoPrefixSuffix")),
+            ("MarkerPositioning", self.marker_positioning.as_deref().unwrap_or("Superscript")),
+        ] {
+            properties.push(El::new(name).with_attr("type", "enumeration").with_text(value));
+        }
+        properties.push(El::new("RuleColor").with_attr("type", "object").with_text(self.rule_color.as_deref().unwrap_or("Swatch/Black")));
+        el.push(properties);
+        el
+    }
 }
 
 impl GridPreferences {
