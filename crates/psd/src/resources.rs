@@ -136,11 +136,10 @@ impl<'a> Iterator for ResourceIter<'a> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        // There can be at most one more item than the number of bytes: valid records consume
-        // bytes, and a malformed record or an exhausted caller limit can yield one final error
-        // without consuming any. Use a conservative bound so even a short truncated record has
-        // room for its error item.
-        let upper = if self.failed || self.reader.is_empty() { 0 } else { self.reader.remaining().saturating_add(1) };
+        // A valid record consumes at least 12 bytes. A truncated record or exhausted limit can
+        // produce one final error without consuming a full record.
+        let upper =
+            if self.failed || self.reader.is_empty() { 0 } else { (self.reader.remaining() / 12).min(self.remaining_records).saturating_add(1) };
         (0, Some(upper))
     }
 }
@@ -150,6 +149,13 @@ impl std::iter::FusedIterator for ResourceIter<'_> {}
 #[cfg(test)]
 mod view_tests {
     use super::ResourceIter;
+
+    #[test]
+    fn resource_size_hint_respects_the_record_limit() {
+        let data = vec![0; 12_000];
+        let iter = ResourceIter::with_limit(&data, 3);
+        assert_eq!(iter.size_hint(), (0, Some(4)));
+    }
 
     #[test]
     fn truncated_resource_size_hint_includes_error_item() {
