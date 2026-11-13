@@ -53,7 +53,7 @@ discard work: the app runs its normal close policy again afterward.
 the first read. ReadOne/legacy Read, the standard namespace and GNOME fallback are handled together;
 on GNOME the "default" (Light) setting and portal value 0 read as light; elsewhere 0 is no preference.
 Malformed values retain the last valid answer, and explicit no-preference clears it.
-`SystemReader::read()` gives colour scheme, contrast and reduced motion in one call on every target: the watcher on Linux/BSD, the browser media queries on the web, no answers elsewhere.
+`SystemReader::read()` gives colour scheme, contrast and reduced motion in one call on every target: the watcher on Linux/BSD, the browser's contrast and motion queries on the web, and the colour scheme the host reports from its windowing integration (`report_theme`; the watcher's answer wins where it has one). macOS and Windows have no contrast or motion source yet. `SystemReader::generation()` rises on each change a source reports (the watcher's theme, contrast or motion, a reported theme), the change notice the craft-ui runtime and apps re-resolve themes on.
 
 `Watcher::wait_first(timeout)` blocks until the first answer, a known absence, or the timeout (about 250 ms in an eframe creator), so the first frame uses the desktop theme. Disconnection
 retains the last valid value until a fresh answer. A later service owner triggers a reread; session

@@ -391,6 +391,36 @@ mod tests {
         assert!(!gnome(&[]));
     }
     #[test]
+    fn the_generation_rises_once_per_appearance_change_and_never_for_the_layout() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::appearance::{Contrast, SystemReader};
+        let (done, finished) = std::sync::mpsc::channel();
+        let watcher = Watcher::spawn(
+            false,
+            || {},
+            move |shared| async move {
+                shared.publish(Some(Theme::Dark));
+                shared.publish(Some(Theme::Dark));
+                shared.publish_contrast(Contrast::High);
+                shared.publish_contrast(Contrast::High);
+                shared.publish_motion(true);
+                shared.publish_layout("appmenu:close".to_owned());
+                let _ = done.send(());
+            },
+        )
+        .ok_or("worker creation failed")?;
+        finished.recv_timeout(Duration::from_secs(2))?;
+        assert_eq!(watcher.generation(), 3, "theme, contrast and motion each changed once");
+        assert_eq!((watcher.current(), watcher.contrast()), (Some(Theme::Dark), Some(Contrast::High)));
+
+        let reader = SystemReader::unwatched();
+        let before = reader.generation();
+        reader.report_theme(Theme::Dark);
+        reader.report_theme(Theme::Dark);
+        assert_eq!(reader.generation(), before + 1, "a repeated report is no change");
+        assert_eq!(reader.read().theme, Some(Theme::Dark));
+        Ok(())
+    }
+    #[test]
     fn drop_does_not_wait_for_a_synchronously_blocked_source() -> Result<(), Box<dyn std::error::Error>> {
         let (started, ready) = std::sync::mpsc::channel();
         let (release, blocked) = std::sync::mpsc::channel();

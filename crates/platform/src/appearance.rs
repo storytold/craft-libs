@@ -9,7 +9,7 @@ pub use reader::{Reading, SystemReader};
 use std::{
     sync::{
         Arc, Condvar, Mutex, PoisonError,
-        atomic::{AtomicBool, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -38,6 +38,8 @@ struct Shared {
     contrast: AtomicU8,
     /// 0 unknown, 1 animations allowed, 2 reduced motion.
     motion: AtomicU8,
+    /// Raised each time the theme, contrast or reduced motion changes; layout and icon changes leave it.
+    generation: AtomicU64,
     active: AtomicBool,
     /// True once the source has answered, found no answer, or been cancelled.
     settled: Mutex<bool>,
@@ -73,6 +75,9 @@ impl Shared {
             None => 0,
         };
         let changed = self.value.swap(code, Ordering::AcqRel) != code;
+        if changed {
+            self.generation.fetch_add(1, Ordering::AcqRel);
+        }
         self.settle();
         if changed && self.active.load(Ordering::Acquire) {
             (self.wake)();
@@ -80,7 +85,11 @@ impl Shared {
     }
     #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
     fn publish_code(&self, slot: &AtomicU8, code: u8) {
-        if slot.swap(code, Ordering::AcqRel) != code && self.active.load(Ordering::Acquire) {
+        if slot.swap(code, Ordering::AcqRel) == code {
+            return;
+        }
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        if self.active.load(Ordering::Acquire) {
             (self.wake)();
         }
     }
@@ -160,6 +169,11 @@ impl Watcher {
     /// Read the cached preference without blocking; `None` means no known preference.
     pub fn current(&self) -> Option<Theme> {
         self.shared.get()
+    }
+    /// Rises each time the theme, [`Watcher::contrast`] or [`Watcher::reduced_motion`] changes, before the wake
+    /// callback runs; a layout or icon theme change leaves it. Read the preferences again when it moved.
+    pub fn generation(&self) -> u64 {
+        self.shared.generation.load(Ordering::Acquire)
     }
     /// GNOME's `org.gnome.desktop.wm.preferences` `button-layout` as the desktop reports it, such
     /// as `appmenu:minimize,close`; an empty string is an answer too. `None` until the portal or
@@ -243,6 +257,7 @@ impl Watcher {
             value: AtomicU8::new(0),
             contrast: AtomicU8::new(0),
             motion: AtomicU8::new(0),
+            generation: AtomicU64::new(0),
             active: AtomicBool::new(active),
             settled: Mutex::new(false),
             settled_changed: Condvar::new(),

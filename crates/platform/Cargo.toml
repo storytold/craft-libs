@@ -15,6 +15,8 @@ workspace = true
 default = []
 appearance = ["dep:zbus", "dep:futures-lite", "dep:async-channel", "dep:async-io", "dep:async-process", "dep:web-sys"]
 browser = ["dep:wasm-bindgen", "dep:js-sys", "dep:web-sys"]
+# `SystemReader::report_contrast` and `report_reduced_motion`: preferences a test sets in place of an OS source.
+testing = ["appearance"]
 # Moving the system pointer (a scrub's screen-edge wrap).
 pointer = ["dep:core-graphics"]
 # `usage`: the process's memory use.
