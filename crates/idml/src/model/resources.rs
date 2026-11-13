@@ -199,6 +199,66 @@ pub struct RubyValues {
     pub overprint_stroke: Option<String>,
 }
 
+/// Raw remaining character attributes and properties before semantic enum and condition mapping.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CharacterSpecialValues {
+    pub capitalization: Option<String>,
+    pub position: Option<String>,
+    pub glyph_form: Option<String>,
+    pub no_break: Option<bool>,
+    pub tate_chu_yoko: Option<bool>,
+    pub tate_chu_yoko_x_offset: Option<f64>,
+    pub tate_chu_yoko_y_offset: Option<f64>,
+    pub warichu: Option<bool>,
+    pub warichu_lines: Option<f64>,
+    pub warichu_size: Option<f64>,
+    pub warichu_line_spacing: Option<f64>,
+    pub warichu_alignment: Option<String>,
+    pub warichu_chars_before_break: Option<f64>,
+    pub warichu_chars_after_break: Option<f64>,
+    pub digits: Option<String>,
+    pub character_direction: Option<String>,
+    pub allow_kashidas: Option<String>,
+    pub diacritic_position: Option<String>,
+    pub diacritic_x_offset: Option<f64>,
+    pub diacritic_y_offset: Option<f64>,
+    pub positional_form: Option<String>,
+    pub applied_conditions: Option<String>,
+    pub applied_language: Option<String>,
+}
+
+impl CharacterSpecialValues {
+    /// Reads remaining character ranges/style fields from IDML.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        Self {
+            capitalization: values.prop("Capitalization"),
+            position: values.prop("Position"),
+            glyph_form: values.prop("GlyphForm"),
+            no_break: values.boolean("NoBreak"),
+            tate_chu_yoko: values.boolean("Tatechuyoko"),
+            tate_chu_yoko_x_offset: values.num("TatechuyokoXOffset"),
+            tate_chu_yoko_y_offset: values.num("TatechuyokoYOffset"),
+            warichu: values.boolean("Warichu"),
+            warichu_lines: values.num("WarichuLines"),
+            warichu_size: values.num("WarichuSize"),
+            warichu_line_spacing: values.num("WarichuLineSpacing"),
+            warichu_alignment: values.prop("WarichuAlignment"),
+            warichu_chars_before_break: values.num("WarichuCharsBeforeBreak"),
+            warichu_chars_after_break: values.num("WarichuCharsAfterBreak"),
+            digits: values.prop("DigitsType"),
+            character_direction: values.prop("CharacterDirection"),
+            allow_kashidas: values.prop("Kashidas"),
+            diacritic_position: values.prop("DiacriticPosition"),
+            diacritic_x_offset: values.num("XOffsetDiacritic"),
+            diacritic_y_offset: values.num("YOffsetDiacritic"),
+            positional_form: values.prop("PositionalForm"),
+            applied_conditions: values.prop("AppliedConditions"),
+            applied_language: values.prop("AppliedLanguage"),
+        }
+    }
+}
+
 impl RubyValues {
     /// Reads Ruby text and formatting values from an IDML character range/style.
     pub fn from_el(el: &El) -> Self {
