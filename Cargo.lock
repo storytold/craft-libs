@@ -1474,6 +1474,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-file-import"
+version = "0.1.0"
+dependencies = [
+ "craft-dxf",
+ "craft-eps",
+ "craft-file-formats",
+ "craft-pdf 0.1.0",
+ "craft-raster-codecs",
+ "craft-svg",
+ "kurbo 0.13.1",
+ "thiserror 2.0.21",
+ "vectorcraft-geom",
+]
+
+[[package]]
 name = "craft-flags"
 version = "0.1.0"
 dependencies = [
@@ -2271,6 +2286,8 @@ dependencies = [
  "roxmltree 0.21.2",
  "thiserror 2.0.21",
  "usvg 0.48.1",
+ "vectorcraft-geom",
+ "vectorcraft-pathops",
 ]
 
 [[package]]
