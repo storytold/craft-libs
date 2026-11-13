@@ -278,7 +278,7 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                             })
                             .sizing(Sizing::Content);
                         let out = list.show_items(ui, &rows, &mut |key, _| match *key {
-                            DrawerKey::Group(group) => ListRow::new(groups[group].label.clone()).heading(),
+                            DrawerKey::Group(group) => ListRow::new(groups[group].label.clone()).section_heading(),
                             DrawerKey::Tool { group, tool } => {
                                 let command = &resolved[group][tool];
                                 let mut row = ListRow::new(command.label.to_string());
