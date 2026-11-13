@@ -64,6 +64,17 @@ fn word_unknown_namespaces_read_behind_a_question_mark_and_are_not_written() {
     assert_eq!(body.to_xml(), r#"<w:body><w:p w:old="2"><w:r>t</w:r></w:p><x/><plain/></w:body>"#);
 }
 
+/// A vocabulary's own namespace listed with the empty prefix reads unprefixed (SpreadsheetML
+/// keeps its main namespace as the default one), whatever prefix the document used.
+#[test]
+fn an_empty_canonical_prefix_reads_unprefixed() {
+    const MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+    let canon = Canonical::new(&[("", MAIN), ("x14", "urn:x14")]);
+    let x = format!(r#"<x:worksheet xmlns:x="{MAIN}" xmlns:e="urn:x14"><x:sheetData x:a="1" e:b="2"/><e:id/><row xmlns="{MAIN}"/></x:worksheet>"#);
+    let root = Options::canonical(&canon).parse(x.as_bytes()).unwrap();
+    assert_eq!(root.to_xml(), r#"<worksheet><sheetData a="1" x14:b="2"/><x14:id/><row/></worksheet>"#);
+}
+
 /// WordCraft reads the one Strict WordprocessingDrawing namespace as Word 2010's several, by
 /// element and parent: the element hook.
 #[test]

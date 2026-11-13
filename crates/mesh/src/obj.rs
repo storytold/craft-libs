@@ -14,7 +14,7 @@
 //! `map_Kd`, `map_Ke`, `map_Bump`/`bump`/`norm` name base colour, emissive and normal images.
 //! An image is only named ([`Image::uri`]); reading and decoding it is the caller's.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use crate::{
@@ -32,10 +32,42 @@ pub fn sibling_name(name: &str) -> Option<&str> {
     (!file.is_empty() && file.len() < name.len()).then_some(file)
 }
 
-/// The image a `map_*` line names: the rest of the line (a name with spaces is one name),
-/// or its final token when the line carries options (`-bm 1 file.png`).
-fn map_name(rest: &str) -> &str {
-    if rest.starts_with('-') { rest.split_whitespace().last().unwrap_or(rest) } else { rest }
+/// The image a `map_*` line names: the rest of the line after its options
+/// (`-bm 1 -o 0.5 0.5 my file.png`). Options are passed over by their argument counts, so a
+/// name with spaces is one name; after an option this reader does not know, the name is the
+/// final token.
+fn map_name(args: &str) -> &str {
+    fn split(s: &str) -> (&str, &str) {
+        s.split_once(char::is_whitespace).map_or((s, ""), |(a, b)| (a, b.trim_start()))
+    }
+    let mut rest = args.trim();
+    loop {
+        let (token, after) = split(rest);
+        if after.is_empty() {
+            break;
+        }
+        // How many arguments the option takes, and from which one they may be left out:
+        // `-o`, `-s` and `-t` take one to three numbers.
+        let (count, optional_from) = match token {
+            "-blendu" | "-blendv" | "-bm" | "-boost" | "-cc" | "-clamp" | "-imfchan" | "-texres" | "-type" => (1, 1),
+            "-mm" => (2, 2),
+            "-o" | "-s" | "-t" => (3, 1),
+            t if t.strip_prefix('-').is_some_and(|o| o.starts_with(|c: char| c.is_ascii_alphabetic())) => {
+                return args.split_whitespace().last().unwrap_or(args);
+            }
+            _ => break,
+        };
+        rest = after;
+        for i in 0..count {
+            let (arg, after) = split(rest);
+            // The last token is always the name.
+            if after.is_empty() || (i >= optional_from && arg.parse::<f32>().is_err()) {
+                break;
+            }
+            rest = after;
+        }
+    }
+    rest.trim_end()
 }
 
 /// Materials of an MTL library and the images they name. `TextureRef::image` indexes the
@@ -144,6 +176,8 @@ struct Reader<'a> {
     objects: Vec<Object>,
     scene: Scene,
     material_ids: HashMap<String, usize>,
+    /// The `mtllib` names already read: exporters repeat the line for every object.
+    libraries: HashSet<String>,
     material: Option<usize>,
     group: String,
     smoothing: u32,
@@ -202,6 +236,13 @@ impl Reader<'_> {
 
     fn use_material(&mut self, name: &str) -> Result<()> {
         self.slot = None;
+        if name.trim().is_empty() {
+            // A bare `usemtl` selects no named material. In particular, do not create a
+            // material with an empty name: callers can map the missing material to their own
+            // default, and writers need not emit a meaningless empty material name.
+            self.material = None;
+            return Ok(());
+        }
         self.material = match self.material_ids.get(name) {
             Some(i) => Some(*i),
             None if self.scene.materials.len() >= self.limits.max_materials => {
@@ -218,7 +259,9 @@ impl Reader<'_> {
     }
 
     fn library(&mut self, name: &str, resolve: Resolver) -> Result<()> {
-        if name.is_empty() {
+        // A library named again is already read: reading it again would add its materials and
+        // images a second time and count its bytes against the limit once per line.
+        if name.is_empty() || !self.libraries.insert(name.to_string()) {
             return Ok(());
         }
         if self.scene.external.len() >= self.limits.max_materials {
@@ -412,6 +455,7 @@ pub fn read(bytes: &[u8], limits: &Limits, resolve: Resolver) -> Result<Scene> {
         objects: vec![],
         scene: Scene::default(),
         material_ids: HashMap::new(),
+        libraries: HashSet::new(),
         material: None,
         group: String::new(),
         smoothing: 0,
@@ -481,6 +525,7 @@ pub fn write(scene: &Scene, mtllib: Option<&str>, limits: &Limits) -> Result<Str
     // OBJ indices run on across objects.
     let (mut vbase, mut tbase, mut nbase) = (1u64, 1u64, 1u64);
     let mut smoothing = 0;
+    let mut current_material: Option<Option<usize>> = None;
     for (index, world) in scene.instances(limits)? {
         let Some(mesh) = scene.meshes.get(index) else { continue };
         mesh.validate()?;
@@ -509,8 +554,17 @@ pub fn write(scene: &Scene, mtllib: Option<&str>, limits: &Limits) -> Result<Str
             if !part.name.trim().is_empty() {
                 let _ = writeln!(text, "g {}", part.name.trim().replace(|c: char| c.is_control(), " "));
             }
-            if let Some(m) = part.material.and_then(|m| materials.get(m)) {
-                let _ = writeln!(text, "usemtl {m}");
+            if current_material != Some(part.material) {
+                match part.material.and_then(|m| materials.get(m)) {
+                    Some(m) => {
+                        let _ = writeln!(text, "usemtl {m}");
+                    }
+                    None if current_material.is_some() => {
+                        let _ = writeln!(text, "usemtl");
+                    }
+                    None => {}
+                }
+                current_material = Some(part.material);
             }
             if part.smoothing != smoothing {
                 smoothing = part.smoothing;

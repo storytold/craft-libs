@@ -902,4 +902,19 @@ mod tests {
         d.decode(None, LostFlag::Lost, true, 20, &mut [0.0; 2 * 960]).unwrap();
         assert!(d.ch[1].first_frame_after_reset, "a lost frame codes no mid-only flag, so the side channel restarts");
     }
+
+    /// The same after a frame that codes the flag: a flag kept from one frame to the next would
+    /// still be set at the lost frame, and the side channel would not restart.
+    #[test]
+    fn a_lost_frame_after_a_coded_mid_only_frame_resets_the_side_channel() {
+        let mut d = SilkDecoder::new(48000, 2);
+        d.set_stream(2, 16000);
+        // A stereo frame with no voice activity in the side channel and the mid-only flag set.
+        let frame = [0xCB, 0xEE, 0x02, 0x07];
+        d.decode(Some(&mut RangeDecoder::new(&frame)), LostFlag::Normal, true, 20, &mut [0.0; 2 * 960]).unwrap();
+        assert!(d.prev_decode_only_middle, "the frame codes the mid channel only");
+        d.ch[1].first_frame_after_reset = false;
+        d.decode(None, LostFlag::Lost, true, 20, &mut [0.0; 2 * 960]).unwrap();
+        assert!(d.ch[1].first_frame_after_reset, "the lost frame starts out coding the side channel, so the side channel restarts");
+    }
 }

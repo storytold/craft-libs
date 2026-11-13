@@ -260,6 +260,18 @@ impl El {
     pub fn child_text(&self, pat: impl Pat) -> Option<Cow<'_, str>> {
         self.child(pat).map(El::text)
     }
+    /// How many nodes this element is, itself included: what [`crate::Limits::max_nodes`]
+    /// counted when it was read. A reader of many parts charges this against a budget for the
+    /// whole package and reads the next part with what is left as its `max_nodes`.
+    pub fn node_count(&self) -> usize {
+        let mut count = 1_usize;
+        let mut open = vec![self];
+        while let Some(el) = open.pop() {
+            count = count.saturating_add(el.children.len());
+            open.extend(el.elements());
+        }
+        count
+    }
     /// Every descendant element, depth first in document order, without this element.
     pub fn descendants(&self) -> Descendants<'_> {
         Descendants { stack: vec![self.children.iter()] }

@@ -47,6 +47,9 @@ pub struct Spec<'a> {
     pub thumbnail: Option<Sampler<'a>>,
     /// Auxiliary images of these types the decoder must ignore (HDR gain map, depth…).
     pub ignored_aux: Vec<&'static str>,
+    /// A stereo pair (a spatial photo): a second image of the same size and samples (the
+    /// right eye) and a `grpl` box with a `ster` entity group naming the primary image (left) and it.
+    pub stereo: bool,
     /// When nonzero, the alpha image is instead a grid of `n` × `n` references to one alpha tile
     /// (a hostile file: the same stored picture rebuilt for every reference).
     pub alpha_tile_repeats: u8,
@@ -67,6 +70,7 @@ impl<'a> Spec<'a> {
             alpha: None,
             thumbnail: None,
             ignored_aux: Vec::new(),
+            stereo: false,
             alpha_tile_repeats: 0,
             thumbnail_tile_repeats: 0,
         }
@@ -396,6 +400,8 @@ struct File {
     items: Vec<Item>,
     props: Vec<Vec<u8>>,
     refs: Vec<(&'static [u8; 4], u16, Vec<u16>)>,
+    /// Entity groups for `grpl`: type, group id, entity ids.
+    groups: Vec<(&'static [u8; 4], u32, Vec<u32>)>,
 }
 
 impl File {
@@ -491,7 +497,18 @@ impl File {
             }
             full_box(b"iloc", 1, &l)
         };
-        let meta = |base| full_box(b"meta", 0, &[hdlr.clone(), pitm.clone(), iloc(base), iinf.clone(), iref.clone(), iprp.clone()].concat());
+        let mut grpl = Vec::new();
+        for (kind, group_id, ids) in &self.groups {
+            let mut g = group_id.to_be_bytes().to_vec();
+            g.extend_from_slice(&(ids.len() as u32).to_be_bytes());
+            for id in ids {
+                g.extend_from_slice(&id.to_be_bytes());
+            }
+            grpl.extend_from_slice(&full_box(kind, 0, &g));
+        }
+        let grpl = if self.groups.is_empty() { Vec::new() } else { bx(b"grpl", &grpl) };
+        let meta =
+            |base| full_box(b"meta", 0, &[hdlr.clone(), pitm.clone(), iloc(base), iinf.clone(), iref.clone(), iprp.clone(), grpl.clone()].concat());
         let start = (ftyp.len() + meta(0).len() + 8) as u32;
         let mdat = bx(b"mdat", &self.items.iter().flat_map(|i| i.data.iter().copied()).collect::<Vec<u8>>());
         [ftyp, meta(start), mdat].concat()
@@ -568,6 +585,11 @@ pub fn build(spec: &Spec<'_>) -> Vec<u8> {
             it.props.extend(assoc.iter().filter(|a| !a.2).map(|&(i, e, _)| (i, e)));
         }
         f.refs.push((b"thmb", id, vec![primary]));
+    }
+    if spec.stereo {
+        // The right eye: another image of the primary's size (the decoder still picks `pitm`)
+        let right = f.image(spec.width, spec.height, spec.bit_depth, false, spec.sample);
+        f.groups.push((b"ster", 1000, vec![u32::from(primary), u32::from(right)]));
     }
     if let n @ 1.. = spec.thumbnail_tile_repeats {
         let tile = f.image(TILE, TILE, bd, false, spec.sample);

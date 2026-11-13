@@ -106,6 +106,24 @@ fn glb_quad_with_a_node_tree_and_a_material() {
     assert!((p[0] - -9.0).abs() < 1e-9 && (p[1] - 2.0).abs() < 1e-9 && p[2].abs() < 1e-9, "{p:?}");
 }
 
+#[test]
+fn gltf_preserves_authored_tangents_on_the_mesh_positions() {
+    let mut b = B::default();
+    let p = b.f32s(&QUAD[..9], "VEC3", 3);
+    let tangent = [1.0, 0.0, 0.0, -1.0].repeat(3);
+    let t = b.f32s(&tangent, "VEC4", 4);
+    let i = b.u16s(&[0, 1, 2]);
+    let scene = parse(&b.glb(json!({
+        "meshes": [{ "primitives": [{ "attributes": { "POSITION": p, "TANGENT": t }, "indices": i }] }]
+    })))
+    .unwrap();
+
+    scene.validate().unwrap();
+    let mesh = scene.meshes.first().unwrap();
+    assert_eq!(mesh.tangents, vec![[1.0, 0.0, 0.0, -1.0]; 3]);
+    assert!(mesh.parts.first().unwrap().has_tangents);
+}
+
 fn base64(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
@@ -401,11 +419,6 @@ fn what_is_not_read_is_refused_or_named() {
     ))
     .unwrap();
     assert_eq!(s.warnings.len(), 2);
-    // Sparse accessors.
-    let mut sparse = B::default();
-    let p = sparse.f32s(&QUAD, "VEC3", 3);
-    sparse.accessors[p]["sparse"] = json!({ "count": 1 });
-    assert!(matches!(parse(&one_mesh(&sparse, json!({ "attributes": { "POSITION": p } }))), Err(Error::Unsupported(_))));
     assert!(parse(b"{ not json").is_err());
     assert!(parse(b"").is_err());
 }
@@ -715,4 +728,80 @@ fn writer_refuses_what_is_not_gltf() {
     assert_eq!(back.nodes[0].transform[0], -1.0);
     let t = back.meshes[0].unified().parts[0][0].map(|i| back.meshes[0].positions[i as usize]);
     assert_eq!(face_normal(t), Some([0.0, 0.0, 1.0]));
+}
+
+#[test]
+fn sparse_accessors_replace_the_elements_they_name() {
+    let mut b = B::default();
+    let p = b.f32s(&QUAD, "VEC3", 3);
+    let indices = b.view(&[3u8, 1]);
+    let far = b.view(&[4u8, 1]);
+    let values = b.view(&[0.0f32, 5.0, 0.0, 2.0, 0.0, 0.0].iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<_>>());
+    b.accessors[p]["sparse"] = json!({ "count": 2, "indices": { "bufferView": indices, "componentType": 5121 }, "values": { "bufferView": values } });
+    // The same over an accessor without a buffer view: zeros, then the sparse values.
+    b.accessors.push(json!({ "componentType": 5126, "count": 4, "type": "VEC3", "sparse": b.accessors[p]["sparse"] }));
+    let prims = json!([{ "attributes": { "POSITION": p } }, { "attributes": { "POSITION": p + 1 } }]);
+    let s = parse(&b.glb(json!({ "nodes": [{ "mesh": 0 }], "meshes": [{ "primitives": prims }] }))).unwrap();
+    s.validate().unwrap();
+    let pos = &s.meshes[0].positions;
+    assert_eq!(pos[..4], [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 5.0, 0.0]]);
+    assert_eq!(pos[4..], [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 5.0, 0.0]]);
+
+    // What a sparse accessor may not do: name an element past the accessor, hold more entries
+    // than it, read past a view, or leave its indices or values out.
+    let broken = |change: &dyn Fn(&mut Value)| {
+        let mut b2 = B { bin: b.bin.clone(), views: b.views.clone(), accessors: b.accessors.clone() };
+        change(&mut b2.accessors[p]["sparse"]);
+        parse(&one_mesh(&b2, json!({ "attributes": { "POSITION": p } })))
+    };
+    assert!(broken(&|_| {}).is_ok());
+    for change in [
+        (&|s: &mut Value| s["indices"]["bufferView"] = json!(far)) as &dyn Fn(&mut Value),
+        &|s| s["count"] = json!(5),
+        &|s| s["count"] = json!(3),
+        &|s| s["values"]["byteOffset"] = json!(4),
+        &|s| s["indices"]["componentType"] = json!(5126),
+        &|s| *s = json!({ "count": 1 }),
+    ] {
+        assert!(matches!(broken(change), Err(Error::Malformed(_))));
+    }
+    hammer(&one_mesh(&b, json!({ "attributes": { "POSITION": p } })), &parse);
+}
+
+#[test]
+fn specular_glossiness_and_webp_textures() {
+    let mut b = B::default();
+    let p = b.f32s(&QUAD[..9], "VEC3", 3);
+    let doc = b.glb(json!({
+        "extensionsRequired": ["KHR_materials_pbrSpecularGlossiness", "EXT_texture_webp"],
+        "nodes": [{ "mesh": 0 }],
+        "meshes": [{ "primitives": [{ "attributes": { "POSITION": p }, "material": 0 }] }],
+        "images": [{ "uri": "fallback.png" }, { "uri": "only.webp" }, { "uri": "better.webp" }],
+        "textures": [
+            { "extensions": { "EXT_texture_webp": { "source": 1 } } },
+            { "source": 0, "extensions": { "EXT_texture_webp": { "source": 2 } } },
+        ],
+        "materials": [
+            {
+                "pbrMetallicRoughness": { "baseColorFactor": [0.0, 0.0, 0.0, 1.0], "metallicRoughnessTexture": { "index": 1 } },
+                "normalTexture": { "index": 1 },
+                "extensions": { "KHR_materials_pbrSpecularGlossiness": {
+                    "diffuseFactor": [0.5, 0.25, 1.0, 0.75], "diffuseTexture": { "index": 0, "texCoord": 1 }, "glossinessFactor": 0.25,
+                } },
+            },
+            { "extensions": { "KHR_materials_pbrSpecularGlossiness": {} } },
+        ],
+    }));
+    let s = parse(&doc).unwrap();
+    s.validate().unwrap();
+    // Both extensions are read, so neither is named in a warning.
+    assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+    let m = &s.materials[0];
+    assert_eq!((m.base_color, m.metallic, m.roughness), ([0.5, 0.25, 1.0, 0.75], 0.0, 0.75));
+    // A texture with only a WebP image uses it; one with a fallback keeps the fallback.
+    assert_eq!(m.base_color_texture, Some(TextureRef { image: 1, uv_set: 1, ..TextureRef::default() }));
+    assert_eq!(m.normal_texture.map(|t| t.image), Some(0));
+    assert_eq!(m.metallic_roughness_texture, None);
+    let plain = &s.materials[1];
+    assert_eq!((plain.base_color, plain.metallic, plain.roughness, plain.base_color_texture), ([1.0; 4], 0.0, 0.0, None));
 }

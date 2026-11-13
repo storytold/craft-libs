@@ -23,6 +23,8 @@ pub struct Font {
 
 /// SYMBOL_CHARSET: byte codes are the font's own symbol codes.
 pub const SYMBOL_CHARSET: u8 = 2;
+/// DEFAULT_CHARSET: the font decides.
+const DEFAULT_CHARSET: u8 = 1;
 
 /// Where the reference point sits on the string horizontally (TA_LEFT, TA_CENTER, TA_RIGHT).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -98,24 +100,78 @@ pub(crate) fn align(ta: u32) -> (HAlign, VAlign) {
     (h, v)
 }
 
-/// Decodes 8-bit text in `charset` to one character per byte, and merges `dx` to match: a
-/// double-byte character set's lead and trail bytes become one blank (its glyphs are not
-/// decoded) whose advance is the sum of both. `dx` may be empty.
+/// Decodes 8-bit text in `charset` and merges `dx` to match, one entry per character. In a
+/// double-byte character set (Shift_JIS, UHC, GBK, Big5) a lead and trail byte are one character
+/// whose advance is the sum of both; a lead byte without a trail byte it pairs with is one
+/// undefined byte (U+FFFD). Johab is not decoded: its pairs become blanks. `dx` may be empty.
 pub(crate) fn decode_bytes(bytes: &[u8], charset: u8, dx: &[f32]) -> (String, Vec<f32>) {
     let mut s = String::with_capacity(bytes.len());
     let mut out_dx = Vec::with_capacity(dx.len().min(bytes.len()));
-    let dbcs = matches!(charset, 128 | 129 | 130 | 134 | 136);
     let mut i = 0;
     while let Some(&b) = bytes.get(i) {
-        let n = if dbcs && b >= 0x81 && i + 1 < bytes.len() { 2 } else { 1 };
-        let c = if n == 2 { ' ' } else { byte_char(b, charset) };
-        s.push(c);
+        let pair = bytes.get(i + 1).and_then(|t| pair_char(b, *t, charset));
+        let n = if pair.is_some() { 2 } else { 1 };
+        s.push(pair.unwrap_or_else(|| byte_char(b, charset)));
         if !dx.is_empty() {
             out_dx.push((i..i + n).filter_map(|k| dx.get(k)).sum());
         }
         i += n;
     }
     (s, out_dx)
+}
+
+/// The character set 8-bit text in `font` is decoded in. DEFAULT_CHARSET leaves the choice to the
+/// font, and the Symbol font's bytes are its own codes.
+pub(crate) fn text_charset(font: &Font) -> u8 {
+    let symbol = ["Symbol", "Symbol (PCL6)"].iter().any(|n| font.family.eq_ignore_ascii_case(n));
+    if font.charset == DEFAULT_CHARSET && symbol { SYMBOL_CHARSET } else { font.charset }
+}
+
+/// The encoding of a character set this module has no table of its own for.
+fn encoding(charset: u8) -> Option<&'static encoding_rs::Encoding> {
+    Some(match charset {
+        // SHIFTJIS_CHARSET, HANGUL_CHARSET, GB2312_CHARSET, CHINESEBIG5_CHARSET.
+        128 => encoding_rs::SHIFT_JIS,
+        129 => encoding_rs::EUC_KR,
+        134 => encoding_rs::GBK,
+        136 => encoding_rs::BIG5,
+        // GREEK, TURKISH, VIETNAMESE, HEBREW, ARABIC, BALTIC and THAI_CHARSET.
+        161 => encoding_rs::WINDOWS_1253,
+        162 => encoding_rs::WINDOWS_1254,
+        163 => encoding_rs::WINDOWS_1258,
+        177 => encoding_rs::WINDOWS_1255,
+        178 => encoding_rs::WINDOWS_1256,
+        186 => encoding_rs::WINDOWS_1257,
+        222 => encoding_rs::WINDOWS_874,
+        _ => return None,
+    })
+}
+
+/// The one character that `enc` decodes `bytes` to; None when they are not exactly one.
+fn one_char(enc: &'static encoding_rs::Encoding, bytes: &[u8]) -> Option<char> {
+    let (text, bad) = enc.decode_without_bom_handling(bytes);
+    let mut chars = text.chars();
+    let c = chars.next()?;
+    (!bad && chars.next().is_none()).then_some(c)
+}
+
+/// The character of a lead and trail byte in a double-byte character set; None when the bytes
+/// are not a pair there. The ranges differ: Shift_JIS leaves its half-width katakana (0xA1..=0xDF)
+/// as single bytes, and GBK has no trail byte 0x7F.
+fn pair_char(lead: u8, trail: u8, charset: u8) -> Option<char> {
+    let (is_lead, is_trail) = match charset {
+        128 => (matches!(lead, 0x81..=0x9F | 0xE0..=0xFC), matches!(trail, 0x40..=0x7E | 0x80..=0xFC)),
+        129 => (matches!(lead, 0x81..=0xFE), matches!(trail, 0x41..=0xFE)),
+        134 => (matches!(lead, 0x81..=0xFE), matches!(trail, 0x40..=0x7E | 0x80..=0xFE)),
+        136 => (matches!(lead, 0x81..=0xFE), matches!(trail, 0x40..=0x7E | 0xA1..=0xFE)),
+        // JOHAB_CHARSET: not decoded.
+        130 => return (lead >= 0x81).then_some(' '),
+        _ => return None,
+    };
+    if !(is_lead && is_trail) {
+        return None;
+    }
+    one_char(encoding(charset)?, &[lead, trail])
 }
 
 /// UTF-16 text to a string with one dx entry per character: a surrogate pair takes the sum of
@@ -136,7 +192,7 @@ pub(crate) fn decode_utf16(units: &[u16], dx: &[f32]) -> (String, Vec<f32>) {
     (s, out_dx)
 }
 
-/// One byte in a single-byte Windows code page. Symbol fonts keep their codes in the private-use
+/// One byte that is not part of a double-byte pair, in its Windows code page. Symbol fonts keep their codes in the private-use
 /// range (U+F000 + code), where symbol fonts map them.
 fn byte_char(b: u8, charset: u8) -> char {
     if b < 0x80 && charset != SYMBOL_CHARSET {
@@ -146,7 +202,11 @@ fn byte_char(b: u8, charset: u8) -> char {
         SYMBOL_CHARSET => 0xF000 | u32::from(b),
         238 => high(b, &CP1250),
         204 => high(b, &CP1251),
-        _ => high(b, &CP1252),
+        _ => match encoding(charset) {
+            // An undefined byte, and a lead byte with no trail byte, are U+FFFD.
+            Some(enc) => return one_char(enc, &[b]).unwrap_or(char::REPLACEMENT_CHARACTER),
+            None => high(b, &CP1252),
+        },
     };
     char::from_u32(cp).unwrap_or(char::REPLACEMENT_CHARACTER)
 }

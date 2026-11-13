@@ -7,11 +7,13 @@ Windows metafiles for the Craft apps: one reader for WMF, EMF and EMF+, and writ
 - `size(bytes)` gives the picture's size from the header alone when the header decides it.
 - `sniff(bytes) -> Option<Kind>` and `is_metafile(bytes)` recognise the formats.
 - `Picture::fit` and `Picture::place` fit a picture (with crop fractions) into a rectangle for
-  callers that draw it; `crop_window` is the crop rule they share with bitmaps.
+  callers that draw it; `crop_window` is the crop rule they share with bitmaps (a negative crop
+  side pads the picture).
 - `write::emf` and `write::wmf` (feature `write`) write a list of drawing operations.
 
-The crate depends on `kurbo`, `thiserror` and `image` (PNG, JPEG, GIF, TIFF and BMP decoders, for
-the image files that EMF+ and `BI_JPEG`/`BI_PNG` bitmaps carry). It knows no fonts, no file system
+The crate depends on `kurbo`, `thiserror`, `encoding_rs` (the code pages of 8-bit text) and `image`
+(PNG, JPEG, GIF, TIFF and BMP decoders, for the image files that EMF+ and `BI_JPEG`/`BI_PNG`
+bitmaps carry). It knows no fonts, no file system
 and no application.
 
 ## The model
@@ -56,7 +58,7 @@ decoder is where the size, pixel and work limits have to be enforced.
 | Objects | `CREATEPENINDIRECT` (style, cap and join bits), `CREATEBRUSHINDIRECT` (solid, null, hatched), `DIBCREATEPATTERNBRUSH`, `CREATEFONTINDIRECT`, `SELECTOBJECT`, `DELETEOBJECT`, stock objects. `CREATEPALETTE`, `CREATEPATTERNBRUSH` and `CREATEREGION` take their handle slot. |
 | Drawing | `MOVETO`, `LINETO`, `POLYLINE`, `POLYGON`, `POLYPOLYGON`, `RECTANGLE`, `ROUNDRECT`, `ELLIPSE`, `ARC`, `PIE`, `CHORD`, `PATBLT`. |
 | Bitmaps | `STRETCHDIB`, `DIBSTRETCHBLT`, `DIBBITBLT` (with or without a source). |
-| Text | `EXTTEXTOUT` (rectangle, opaque, clipped, dx), `TEXTOUT`; code pages 1250, 1251, 1252, the symbol character set, double-byte lead bytes as blanks. |
+| Text | `EXTTEXTOUT` (rectangle, opaque, clipped, dx), `TEXTOUT`, decoded in the selected font's character set: code pages 1250 to 1258 and 874, Shift_JIS, UHC, GBK and Big5 (a double-byte character takes the advances of both its bytes), and the symbol character set (also the Symbol font under `DEFAULT_CHARSET`), whose codes stay in the private-use area at U+F000. Face names are read in the font's code page. Johab pairs are blanks. |
 | Clipping | `INTERSECTCLIPRECT`, `EXCLUDECLIPRECT`. |
 | Not read | `OFFSETWINDOWORG`, `OFFSETVIEWPORTORG`, `SCALEWINDOWEXT`, `SCALEVIEWPORTEXT`, flood fills, `SETPIXEL`, region records (`FILLREGION`, `FRAMEREGION`, `PAINTREGION`, `INVERTREGION`, `SELECTCLIPREGION`, `OFFSETCLIPRGN`), the device-dependent `BITBLT`, `STRETCHBLT` and `SETDIBTODEV`. They are counted in `skipped_records`. |
 
@@ -71,13 +73,16 @@ decoder is where the size, pixel and work limits have to be enforced.
 | Drawing | `MOVETOEX`, `LINETO`, `POLYLINE(16)`, `POLYLINETO(16)`, `POLYGON(16)`, `POLYBEZIER(16)`, `POLYBEZIERTO(16)`, `POLYPOLYLINE(16)`, `POLYPOLYGON(16)`, `RECTANGLE`, `ROUNDRECT`, `ELLIPSE`, `ARC`, `CHORD`, `PIE`. |
 | Paths | `BEGINPATH`, `ENDPATH`, `CLOSEFIGURE`, `FILLPATH`, `STROKEPATH`, `STROKEANDFILLPATH`, `ABORTPATH`, `SELECTCLIPPATH` (`RGN_AND`, `RGN_COPY`). |
 | Bitmaps | `BITBLT`, `STRETCHBLT`, `STRETCHDIBITS`, `SETDIBITSTODEVICE`, `ALPHABLEND` (constant and per-pixel alpha); source-less raster operations fill with the brush, black or white; `SRCAND`, `SRCPAINT` and `SRCINVERT` are drawn as they look over white. |
-| Text | `EXTTEXTOUTA`, `EXTTEXTOUTW`, `SMALLTEXTOUT`; glyph-index strings are left out. |
+| Text | `EXTTEXTOUTA`, `EXTTEXTOUTW`, `SMALLTEXTOUT`; 8-bit strings are decoded as WMF text is; glyph-index strings are left out. |
 | Clipping | `INTERSECTCLIPRECT`, `EXCLUDECLIPRECT`, `EXTSELECTCLIPRGN` (all five modes, on rectangles), `SELECTCLIPPATH`. |
 | Not read | `ANGLEARC`, `ARCTO`, `POLYDRAW(16)`, `SETPIXELV`, flood fills, region paints, `MASKBLT`, `PLGBLT`, `TRANSPARENTBLT`, `GRADIENTFILL`, `POLYTEXTOUT`, `WIDENPATH`, `SETMETARGN`, `OFFSETCLIPRGN`, `SETLAYOUT`, `SELECTCLIPPATH` with `RGN_OR`, `RGN_XOR` or `RGN_DIFF` (the clip stays as it was). Unknown types are counted in `skipped_records`. |
 
 ### EMF+ (MS-EMFPLUS)
 
-An EMF+ only file is played from its EMF+ records. A dual file is played from its EMF records.
+A file with EMF+ records is played from them, as GDI+ plays it. In a dual file (one that also
+draws the picture with plain EMF records, as a fallback for GDI) the plain records are skipped,
+except those between an `EmfPlusGetDC` record and the next EMF+ record. What the EMF+ reader does
+not read (the table's last row) is therefore lost in a dual file even where its EMF records carry it.
 
 | Feature | Read |
 |---|---|
@@ -121,7 +126,7 @@ it never panics and never allocates from an unchecked count. Each limit has a te
 | Limit | Value | Past it |
 |---|---|---|
 | Items in a picture | 200,000 | The parse stops. |
-| Bytes of path points and pixels kept (pattern brushes and clip paths included) | 256 MiB | The parse stops. |
+| Bytes of path points and pixels kept (pattern brushes, clip paths, EMF+ objects with the nested pictures they hold, and EMF+ clips included) | 256 MiB | The parse stops; an EMF+ object past it is not stored. |
 | Points in one path bracket; points in one record | 2,000,000 | The bracket stops growing; the record is left out. |
 | Object table slots | 4,096 | The object is not stored. |
 | `SAVEDC` depth | 1,024 | The parse stops. |
@@ -142,8 +147,9 @@ it never panics and never allocates from an unchecked count. Each limit has a te
 | Nested metafiles | 3 levels | The inner picture is not read. |
 | Clipping work per item, and per clip area | 1,000,000 and 4,000,000 steps | The item is left out; the clip keeps its previous area. |
 | Masking a bitmap to a clip that is not a rectangle | 5,000,000 point tests | The bitmap is left out. |
-| Placed path elements (`Picture::place`) | 500,000 | Placing stops. |
+| Placed path elements, clip regions included (`Picture::place`) | 500,000 | Placing stops. |
 | Placed coordinates (`Picture::place`) | ±1,000,000 | The item is left out. |
+| Placed pen width (`Picture::place`) | Twice the diagonal of the frame and the path together | The width is held there. |
 | Writers: dashes cut from one stroke | 100,000 | The stroke is written solid. |
 | Writers: segments from one curve | about 4,096 | The tolerance is raised. |
 

@@ -281,10 +281,15 @@ fn decode_unit(h: &FrameHeader, data: &[u8], opts: &DecodeOptions) -> Result<Cod
         let st = hs.checked_add(idx).filter(|&v| v < data.len()).ok_or(Error::Truncated)?;
         starts.push(st);
     }
+    // Each scan line owns its own, non-empty byte range: repeated or decreasing offsets would let
+    // one coded row stand in for many, so a tiny payload could fill a whole raster (filmcraft #4101).
+    if starts.windows(2).any(|w| w[1] <= w[0]) {
+        return Err(Error::Invalid("macroblock scan line offsets are not increasing"));
+    }
     let ranges: Vec<(usize, usize)> = (0..ns)
         .map(|s| {
             let st = starts[s];
-            let end = starts.get(s + 1).copied().filter(|&e| e > st).unwrap_or(data.len());
+            let end = starts.get(s + 1).copied().unwrap_or(data.len());
             (st, end)
         })
         .collect();
