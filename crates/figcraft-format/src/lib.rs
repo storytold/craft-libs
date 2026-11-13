@@ -246,6 +246,23 @@ mod tests {
         assert_eq!(document_limit(MAX_DOCUMENT, MAX_DOCUMENT), MAX_DOCUMENT);
         assert_eq!(document_limit(244_362_923, 260 * MB), 244_362_923 * DOCUMENT_RATIO);
     }
+
+    #[test]
+    fn read_budget_enforces_member_and_archive_totals() {
+        let bytes = write_archive([
+            Member { name: "one", bytes: b"12345678", compression: Compression::Stored },
+            Member { name: "two", bytes: b"abcdefgh", compression: Compression::Stored },
+        ])
+        .unwrap();
+        let mut archive = Archive::open(&bytes, ArchiveLimits { max_entries: 4, max_total_bytes: 128 }).unwrap();
+        let mut budget = ReadBudget::new(10);
+        assert_eq!(budget.read(&mut archive, "one", 16).unwrap(), b"12345678");
+        assert!(budget.read(&mut archive, "two", 16).unwrap_err().to_string().contains("contents together pass 10 bytes"));
+
+        let mut member_budget = ReadBudget::new(100);
+        assert!(member_budget.read(&mut archive, "two", 4).unwrap_err().to_string().contains("two is too large"));
+        assert_eq!(member_budget.read(&mut archive, "two", 16).unwrap(), b"abcdefgh");
+    }
     #[test]
     fn newer_version_is_reported_before_document_decode() {
         assert_eq!(check_version(&Header { version: Some(2), images: None }), Err(NewerVersion(2)));
@@ -576,6 +593,48 @@ impl std::fmt::Display for FormatError {
 }
 
 impl std::error::Error for FormatError {}
+
+/// Tracks the total bytes unpacked from one native archive across its document, images, library,
+/// history, and branch members.
+#[derive(Clone, Debug)]
+pub struct ReadBudget {
+    left: u64,
+    total: u64,
+}
+
+impl ReadBudget {
+    pub fn new(total: u64) -> Self {
+        Self { left: total, total }
+    }
+
+    fn passed(&self) -> String {
+        match self.total / (1024 * 1024) {
+            0 => format!("too large: the file's contents together pass {} bytes", self.total),
+            mb => format!("too large: the file's contents together pass {mb} MB"),
+        }
+    }
+
+    /// Read one native member within its own size limit and the remaining archive-wide budget.
+    /// A failed read that consumed a member is charged at its declared size.
+    pub fn read(&mut self, archive: &mut impl NativeArchive, name: &str, limit: u64) -> Result<Vec<u8>, FormatError> {
+        let declared = archive.declared_size(name);
+        if declared.is_some_and(|size| size > self.left && size <= limit) {
+            return Err(FormatError::Corrupt(format!("{name}: {}", self.passed())));
+        }
+        let cap = limit.min(self.left);
+        let size = declared.unwrap_or(0);
+        let result = match archive.read_member(name, cap) {
+            Ok(Some(bytes)) => Ok(bytes),
+            Ok(None) => Err(FormatError::Corrupt(format!("{name}: not found"))),
+            Err(error) if error.is_limit() => Err(FormatError::Corrupt(format!("{name} is too large"))),
+            Err(error) => Err(FormatError::Corrupt(format!("{name}: {error}"))),
+        };
+        if size <= cap {
+            self.left = self.left.saturating_sub(result.as_ref().map_or(size, |bytes| bytes.len() as u64));
+        }
+        result
+    }
+}
 
 /// Whether `id` can name a version or branch: 1–64 ASCII letters, digits, `-` and `_`.
 pub fn is_valid_version_id(id: &str) -> bool {
