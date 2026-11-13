@@ -165,6 +165,78 @@ pub struct CharacterAppearanceValues {
     pub strikethrough_options: TextDecorationValues,
 }
 
+/// Raw Ruby attributes and properties on an IDML character range or style.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RubyValues {
+    pub flag: Option<bool>,
+    pub text: Option<String>,
+    pub kind: Option<String>,
+    pub alignment: Option<String>,
+    pub position: Option<String>,
+    pub x_offset: Option<f64>,
+    pub y_offset: Option<f64>,
+    pub font: Option<String>,
+    pub font_style: Option<String>,
+    pub font_size: Option<f64>,
+    pub x_scale: Option<f64>,
+    pub y_scale: Option<f64>,
+    pub open_type_pro: Option<bool>,
+    pub auto_tcy_digits: Option<f64>,
+    pub auto_tcy_include_roman: Option<bool>,
+    pub auto_tcy_auto_scale: Option<bool>,
+    pub overhang: Option<bool>,
+    pub parent_overhang: Option<String>,
+    pub parent_spacing: Option<String>,
+    pub auto_align: Option<bool>,
+    pub auto_scaling: Option<bool>,
+    pub parent_scaling: Option<f64>,
+    pub fill: Option<String>,
+    pub stroke: Option<String>,
+    pub fill_tint: Option<f64>,
+    pub stroke_tint: Option<f64>,
+    pub stroke_weight: Option<f64>,
+    pub overprint_fill: Option<String>,
+    pub overprint_stroke: Option<String>,
+}
+
+impl RubyValues {
+    /// Reads Ruby text and formatting values from an IDML character range/style.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        Self {
+            flag: values.boolean("RubyFlag").or_else(|| values.num("RubyFlag").map(|value| value != 0.0)),
+            text: values.prop("RubyString"),
+            kind: values.prop("RubyType"),
+            alignment: values.prop("RubyAlignment"),
+            position: values.prop("RubyPosition"),
+            x_offset: values.num("RubyXOffset"),
+            y_offset: values.num("RubyYOffset"),
+            font: values.prop("RubyFont"),
+            font_style: values.prop("RubyFontStyle"),
+            font_size: values.num("RubyFontSize"),
+            x_scale: values.num("RubyXScale"),
+            y_scale: values.num("RubyYScale"),
+            open_type_pro: values.boolean("RubyOpenTypePro"),
+            auto_tcy_digits: values.num("RubyAutoTcyDigits"),
+            auto_tcy_include_roman: values.boolean("RubyAutoTcyIncludeRoman"),
+            auto_tcy_auto_scale: values.boolean("RubyAutoTcyAutoScale"),
+            overhang: values.boolean("RubyOverhang"),
+            parent_overhang: values.prop("RubyParentOverhangAmount"),
+            parent_spacing: values.prop("RubyParentSpacing"),
+            auto_align: values.boolean("RubyAutoAlign"),
+            auto_scaling: values.boolean("RubyAutoScaling"),
+            parent_scaling: values.num("RubyParentScalingPercent"),
+            fill: values.prop("RubyFill"),
+            stroke: values.prop("RubyStroke"),
+            fill_tint: values.num("RubyTint"),
+            stroke_tint: values.num("RubyStrokeTint"),
+            stroke_weight: values.num("RubyWeight"),
+            overprint_fill: values.prop("RubyOverprintFill"),
+            overprint_stroke: values.prop("RubyOverprintStroke"),
+        }
+    }
+}
+
 impl CharacterAppearanceValues {
     /// Reads common character fill, stroke and decoration properties from IDML.
     pub fn from_el(el: &El) -> Self {
