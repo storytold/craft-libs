@@ -110,6 +110,50 @@ impl CrossReferenceFormatValues {
         }
         result
     }
+
+    /// Builds an IDML cross-reference format from DesignCraft's stored token definition.
+    pub fn to_el(self_id: &str, name: &str, definition: &str) -> El {
+        let mut root = El::new("CrossReferenceFormat").with_attr("Self", self_id).with_attr("Name", name).with_attr("AppliedCharacterStyle", "n");
+        let mut index = 0;
+        let mut block = |root: &mut El, kind: &str, text: &str, delimiter: &str, include: bool| {
+            root.push(
+                El::new("BuildingBlock")
+                    .with_attr("Self", format!("{self_id}BuildingBlock{index}"))
+                    .with_attr("BlockType", kind)
+                    .with_attr("AppliedCharacterStyle", "n")
+                    .with_attr("CustomText", if text.is_empty() { "$ID/" } else { text })
+                    .with_attr("AppliedDelimiter", if delimiter.is_empty() { "$ID/" } else { delimiter })
+                    .with_attr("IncludeDelimiter", if include { "true" } else { "false" }),
+            );
+            index += 1;
+        };
+        let mut rest = definition;
+        while let Some(start) = rest.find('<') {
+            let Some(end) = rest[start..].find('>') else { break };
+            if start > 0 {
+                block(&mut root, "CustomStringBuildingBlock", &rest[..start], "", false);
+            }
+            let tag = rest[start + 1..start + end].trim().trim_end_matches('/').trim();
+            let attr =
+                |key: &str| tag.find(&format!("{key}=\"")).and_then(|position| tag[position + key.len() + 2..].split('"').next()).unwrap_or("");
+            match tag.split_whitespace().next().unwrap_or("") {
+                "fullPara" => block(&mut root, "FullParagraphBuildingBlock", "", "", false),
+                "paraText" => block(&mut root, "ParagraphTextBuildingBlock", "", "", false),
+                "paraNum" => block(&mut root, "ParagraphNumberBuildingBlock", "", "", false),
+                "pageNum" => block(&mut root, "PageNumberBuildingBlock", "", "", false),
+                "txtAnchrName" => block(&mut root, "BookmarkNameBuildingBlock", "", "", false),
+                "chapNum" => block(&mut root, "ChapterNumberBuildingBlock", "", "", false),
+                "fileName" => block(&mut root, "FileNameBuildingBlock", "", "", false),
+                "partialPara" => block(&mut root, "PartialParagraphBuildingBlock", "", attr("delim"), attr("includeDelim") == "true"),
+                _ => block(&mut root, "CustomStringBuildingBlock", &rest[start..start + end + 1], "", false),
+            }
+            rest = &rest[start + end + 1..];
+        }
+        if !rest.is_empty() {
+            block(&mut root, "CustomStringBuildingBlock", rest, "", false);
+        }
+        root
+    }
 }
 
 /// Parsed EPUB document-splitting preference.
