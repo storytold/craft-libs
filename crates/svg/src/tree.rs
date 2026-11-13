@@ -269,6 +269,7 @@ pub fn height(xml: &roxmltree::Document<'_>, most: usize) -> Result<Option<usize
 struct Used {
     bytes: AtomicUsize,
     depth: AtomicUsize,
+    xml_depth: AtomicUsize,
     svg_count: AtomicUsize,
     svg_depth: AtomicUsize,
     raster_pixels: AtomicU64,
@@ -316,6 +317,7 @@ impl ImageResolver {
             used: Arc::new(Used {
                 bytes: AtomicUsize::new(0),
                 depth: AtomicUsize::new(0),
+                xml_depth: AtomicUsize::new(0),
                 svg_count: AtomicUsize::new(0),
                 svg_depth: AtomicUsize::new(0),
                 raster_pixels: AtomicU64::new(0),
@@ -331,6 +333,12 @@ impl ImageResolver {
     /// Resolver to put in `usvg::Options::image_href_resolver`.
     pub fn resolver(&self) -> usvg::ImageHrefResolver<'static> {
         image_resolver_for(self.limits, Arc::clone(&self.used))
+    }
+
+    /// Record the already-checked depth of the outer SVG before parsing it. Embedded SVGs then
+    /// share the same total XML recursion budget instead of each receiving a fresh allowance.
+    pub fn set_document_depth(&self, depth: usize) {
+        self.used.xml_depth.store(depth, Ordering::Relaxed);
     }
 
     /// Snapshot accounting after parsing has finished.
@@ -427,9 +435,20 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'
             return None;
         }
     };
+    let Some(xml_depth) = height(&xml, limits.depth).ok().flatten() else {
+        used.svg_limit.fetch_add(1, Ordering::Relaxed);
+        return None;
+    };
+    let total_depth = used.xml_depth.load(Ordering::Relaxed).checked_add(xml_depth);
+    let Some(total_depth) = total_depth.filter(|depth| *depth <= limits.depth) else {
+        used.svg_limit.fetch_add(1, Ordering::Relaxed);
+        return None;
+    };
+    let previous_depth = used.xml_depth.swap(total_depth, Ordering::Relaxed);
     let depth = used.depth.fetch_add(1, Ordering::Relaxed).saturating_add(1);
     used.svg_depth.fetch_max(depth, Ordering::Relaxed);
     let tree = usvg::Tree::from_xmltree(&xml, options);
+    used.xml_depth.store(previous_depth, Ordering::Relaxed);
     used.depth.fetch_sub(1, Ordering::Relaxed);
     match tree {
         Ok(tree) => {
