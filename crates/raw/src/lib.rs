@@ -638,7 +638,15 @@ pub fn probe_info(bytes: &[u8]) -> Result<RawInfo> {
 
 /// Orientation of a supported raw, read through the same format parser as [`probe_info`].
 pub fn orientation(bytes: &[u8]) -> Option<u16> {
-    probe_info(bytes).ok().map(|info| info.orientation.to_exif())
+    if let Ok(info) = probe_info(bytes) {
+        return Some(info.orientation.to_exif());
+    }
+    // A damaged/unsupported pixel IFD must not hide usable orientation metadata from preview
+    // fallback. CR3 keeps IFD0 in its CMT1 box; TIFF-based raws keep it at the file start.
+    if probe(bytes) == Some(RawFormat::Cr3) {
+        return cr3::orientation(bytes);
+    }
+    craft_tiff::Tiff::parse(bytes).ok()?.ifds.first()?.u16(craft_tiff::tags::ORIENTATION).or(Some(1))
 }
 
 /// [`probe_info`] within `limits`: a file that declares more than they allow fails as [`decode_with`] would.
