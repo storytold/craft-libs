@@ -22,6 +22,69 @@ pub struct AnchoredObjectValues {
     pub y_offset: f64,
 }
 
+/// An IDML `AnchoredObjectSetting` element.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnchoredObjectSetting {
+    attributes: Vec<(String, String)>,
+}
+
+impl AnchoredObjectSetting {
+    pub fn inline_position(y_offset: f64) -> Self {
+        Self { attributes: vec![("AnchoredPosition".into(), "InlinePosition".into()), ("AnchorYoffset".into(), crate::value::num(y_offset))] }
+    }
+
+    pub fn above_line(horizontal_alignment: &str, space_above: f64, y_offset: f64) -> Self {
+        Self {
+            attributes: vec![
+                ("AnchoredPosition".into(), "AboveLine".into()),
+                ("HorizontalAlignment".into(), horizontal_alignment.into()),
+                ("AnchorSpaceAbove".into(), crate::value::num(space_above)),
+                ("AnchorYoffset".into(), crate::value::num(y_offset)),
+            ],
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn anchored(
+        anchor_point: &str,
+        horizontal_reference: &str,
+        vertical_reference: &str,
+        horizontal_alignment: &str,
+        vertical_alignment: &str,
+        x_offset: f64,
+        y_offset: f64,
+        pin_position: bool,
+        spine_relative: bool,
+    ) -> Self {
+        Self {
+            attributes: vec![
+                ("AnchoredPosition".into(), "Anchored".into()),
+                ("AnchorPoint".into(), anchor_point.into()),
+                ("HorizontalReferencePoint".into(), horizontal_reference.into()),
+                ("VerticalReferencePoint".into(), vertical_reference.into()),
+                ("HorizontalAlignment".into(), horizontal_alignment.into()),
+                ("VerticalAlignment".into(), vertical_alignment.into()),
+                ("AnchorXoffset".into(), crate::value::num(x_offset)),
+                ("AnchorYoffset".into(), crate::value::num(y_offset)),
+                ("PinPosition".into(), bool_string(pin_position)),
+                ("SpineRelative".into(), bool_string(spine_relative)),
+            ],
+        }
+    }
+
+    pub fn to_el(&self) -> El {
+        let mut element = El::new("AnchoredObjectSetting");
+        for (key, value) in &self.attributes {
+            element.set_attr(key, value);
+        }
+        element
+    }
+}
+
+fn bool_string(value: bool) -> String {
+    if value { "true" } else { "false" }.into()
+}
+
 impl AnchoredObjectValues {
     /// Resolves attributes item-first from `AnchoredObjectSetting` children.
     pub fn from_elements(elements: &[&El]) -> Self {
