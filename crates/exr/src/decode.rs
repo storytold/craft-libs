@@ -432,6 +432,8 @@ pub fn decode_display_part(
     // Only the caller-selected display planes are allocated here. Keep the shared header and
     // expansion-ratio checks, but do not charge ignored channel data against the output budget.
     let mut header_limits = *limits;
+    header_limits.max_width = u32::MAX;
+    header_limits.max_height = u32::MAX;
     header_limits.max_pixels = u64::MAX;
     header_limits.max_bytes = u64::MAX;
     let meta = read_meta(bytes, &header_limits)?;

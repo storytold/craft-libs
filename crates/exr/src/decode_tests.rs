@@ -130,6 +130,15 @@ fn decoded_display_part_places_selected_channels_and_checks_total_budget() {
     assert!(matches!(decode_display_part(&bytes, 0, &all, &|_| 0.0, &limits), Err(Error::LimitExceeded(_))));
 }
 
+#[test]
+fn decoded_display_part_clips_a_wide_data_window_to_the_small_display() {
+    let width = (Limits::default().max_width as usize) + 1;
+    let bytes = file(vec![layer(None, width, 1, &["R"], false, exr::prelude::Compression::ZIP1)], (1, 1));
+    let part = decode_display_part(&bytes, 0, &all, &|_| 9.0, &Limits::default()).unwrap();
+    assert_eq!(part.channels.len(), 1);
+    assert_eq!(part.channels[0].samples, [0.0]);
+}
+
 /// A 2x2 single-part file whose layer carries a 2x1 preview.
 fn with_preview() -> Vec<u8> {
     let mut attrs = LayerAttributes::named("rgb");
