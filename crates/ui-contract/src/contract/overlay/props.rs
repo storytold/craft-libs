@@ -176,10 +176,12 @@ impl Overlay {
         Place::anchored(Anchor::Response, Side::Below, Align::Start)
     }
 
-    /// A popover: a popup anchored below, taking focus in. It closes when the focus moves out of it.
+    /// A popover: a popup anchored below, from its content, at least as wide as its anchor and capped by the window,
+    /// taking focus in. It closes when the focus moves out of it.
     pub fn popover() -> Overlay {
         let mut overlay = Overlay::base(Rank::Popup, Overlay::below(), OverlayFit::Content, OwnerClass::Popup, FocusPolicy::POPUP);
         overlay.dismiss = Dismiss::new().focus_left(true);
+        overlay.min_width = MinWidth::Anchor;
         overlay
     }
 
@@ -357,6 +359,16 @@ impl Overlay {
     pub fn min_width(mut self, min_width: MinWidth) -> Overlay {
         self.min_width = min_width;
         self
+    }
+
+    /// The narrowest the layer may be beside an anchor `anchor_width` wide, on the side its place prefers (below for
+    /// a layer that is not anchored).
+    pub(crate) fn least_width(&self, anchor_width: f32) -> f32 {
+        let side = match &self.place {
+            Place::Anchored { side, .. } => *side,
+            _ => Side::Below,
+        };
+        self.min_width.points(anchor_width, side)
     }
 
     /// Sets whether the user may move it.

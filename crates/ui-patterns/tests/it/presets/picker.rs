@@ -1,5 +1,6 @@
-//! `PresetPicker`: a click on a preset in the popover picks it and closes; Escape closes and keeps the value; inside a
-//! popover, the picker's own popover nests in the parent, which stays open through the pick.
+//! `PresetPicker`: the popover hangs under its field at its grid's width; a click on a preset in it picks it and
+//! closes; Escape closes and keeps the value; inside a popover, the picker's own popover nests in the parent, which
+//! stays open through the pick.
 
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, Role, Show as _, ShowContainer as _};
@@ -24,7 +25,9 @@ struct Host {
 fn a_click_picks_and_closes_and_escape_closes_keeping_the_value() {
     let host = Rc::new(RefCell::new(Host { value: Some(CORAL), state: PresetState::new(), picked: Vec::new(), open: false }));
     let shown = Rc::clone(&host);
-    let rows = vec![PresetRow::item(CORAL, "Coral", 0), PresetRow::item(TEAL, "Teal", 0)];
+    // A library longer than a row of the grid, so the room would hold every tile on one line.
+    let mut rows = vec![PresetRow::item(CORAL, "Coral", 0), PresetRow::item(TEAL, "Teal", 0)];
+    rows.extend((100..130).map(|key| PresetRow::item(key, format!("Preset {key}"), 0)));
     let mut fixture = Fixture::new(move |ui| {
         let mut host = shown.borrow_mut();
         let Host { value, state, picked, open } = &mut *host;
@@ -32,13 +35,20 @@ fn a_click_picks_and_closes_and_escape_closes_keeping_the_value() {
         picked.extend(out.picked);
         *open = out.open;
     });
-    fixture.room(Vec2::new(480.0, 480.0));
+    let room = Vec2::new(1200.0, 800.0);
+    fixture.room(room);
     fixture.settle();
     let field = fixture.by_role(Role::COMBO_BOX).first().copied().expect("the field shows");
 
     fixture.click(&field);
     fixture.idle(3);
     assert!(fixture.by_label("Teal").is_some(), "the field opens the popover with the presets");
+    let popover = fixture.by_role(Role::DIALOG).first().map(|popover| popover.rect).expect("the popover shows");
+    assert!(popover.width() < room.x / 2.0, "the popover takes its grid's width, not the room's: {popover:?}");
+    assert!(popover.width() >= field.rect.width(), "and is at least as wide as its field: {popover:?} {:?}", field.rect);
+    assert!(popover.top() >= field.rect.bottom() && (popover.left() - field.rect.left()).abs() < 1.0, "it hangs under its field: {popover:?}");
+    let last = fixture.by_label("Preset 129").expect("the last preset shows").rect;
+    assert!(popover.contains_rect(last), "the popover is as tall as its grid's rows at that width: {popover:?} {last:?}");
     fixture.key(Key::Escape, Modifiers::NONE);
     fixture.idle(3);
     assert_eq!(host.borrow().value, Some(CORAL), "Escape keeps the value");

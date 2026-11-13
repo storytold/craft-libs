@@ -159,7 +159,7 @@ pub(crate) fn opener_floor(overlay: &Overlay) -> f32 {
         Some(Anchor::Response) | None => opener.rect.width(),
         Some(_) => return 0.0,
     };
-    overlay.min_width.points(width)
+    overlay.least_width(width)
 }
 
 /// The anchor a layer opened by `opener` hangs from: the opener's own, else the layer's `Pointer` or `Corner`

@@ -53,18 +53,20 @@ pub enum MinWidth {
     /// The content decides.
     #[default]
     None,
-    /// At least as wide as the anchor.
+    /// At least as wide as the anchor, when it hangs below or above it.
     Anchor,
     /// At least this many points.
     Points(f32),
 }
 
 impl MinWidth {
-    /// The width in points, given the anchor's width.
-    pub fn points(self, anchor_width: f32) -> f32 {
+    /// The width in points, given the anchor's width and the side the overlay takes: beside its anchor (`Start`,
+    /// `End`) an overlay shares no horizontal edge with it, so `Anchor` asks for nothing there.
+    pub fn points(self, anchor_width: f32, side: Side) -> f32 {
         match self {
             MinWidth::None => 0.0,
-            MinWidth::Anchor => anchor_width,
+            MinWidth::Anchor if side.vertical() => anchor_width,
+            MinWidth::Anchor => 0.0,
             MinWidth::Points(points) => finite(points).max(0.0),
         }
     }
@@ -205,7 +207,7 @@ pub fn place(request: &PlaceRequest) -> Placement {
     let anchor = clean(request.anchor);
     let bounds = clean(request.bounds);
     let gap = finite(request.gap).max(0.0);
-    let min_width = request.min_width.points(anchor.width());
+    let min_width = request.min_width.points(anchor.width(), request.side);
     let wanted = Vec2::new(finite(request.size.x).max(min_width).max(0.0), finite(request.size.y).max(0.0));
     let rtl = request.rtl;
     let need = if request.side.vertical() { wanted.y } else { wanted.x };
@@ -271,6 +273,14 @@ mod tests {
         let mid = rect(100.0, 250.0, 200.0, 24.0);
         let neither = place(&PlaceRequest { anchor: mid, ..request }.size(Vec2::new(150.0, 400.0))).rect;
         assert_eq!(neither.bottom(), BOUNDS.bottom(), "fits neither way: slides up to stay inside");
+    }
+
+    #[test]
+    fn an_overlay_at_least_as_wide_as_its_anchor_takes_that_width_below_it_but_not_beside_it() {
+        let field = rect(100.0, 100.0, 300.0, 24.0);
+        let request = PlaceRequest::new(field, Vec2::new(120.0, 200.0), BOUNDS).min_width(MinWidth::Anchor);
+        assert_eq!(place(&request).rect.width(), 300.0, "below the field: the field's width");
+        assert_eq!(place(&request.side(Side::End)).rect.width(), 120.0, "beside it: its own width");
     }
 
     #[test]

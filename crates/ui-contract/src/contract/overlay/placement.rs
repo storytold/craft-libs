@@ -160,7 +160,7 @@ pub(crate) fn measuring_room(
 fn cap(overlay: &Overlay, bounds: Rect, anchor: Rect) -> egui::Vec2 {
     match overlay.fit {
         OverlayFit::ContentCapped(share) => {
-            egui::Vec2::new((bounds.width() * share.x).max(overlay.min_width.points(anchor.width())), bounds.height() * share.y)
+            egui::Vec2::new((bounds.width() * share.x).max(overlay.least_width(anchor.width())), bounds.height() * share.y)
         }
         _ => bounds.size(),
     }

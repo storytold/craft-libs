@@ -254,6 +254,10 @@ pub struct PresetBrowser<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// height: for a host that sizes to its content, such as a floating panel.
     #[prop]
     room_height: Option<f32>,
+    /// The columns of tiles the grid asks for where it takes its width from its content (a popover): its width holds
+    /// this many tiles. 0 asks for none.
+    #[prop]
+    columns: u16,
 }
 
 impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
@@ -285,6 +289,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
             footer: None,
             max_rows: None,
             room_height: None,
+            columns: 0,
         }
     }
 
@@ -564,6 +569,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             footer,
             max_rows,
             room_height,
+            columns,
         } = self;
         let env = Env::of(ui);
         let words = env.words::<PresetWords>();
@@ -682,7 +688,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                     .rows_stamp(stamp)
                     .can_rename(rename_row)
                     .can_drag(can_drag)
-                    .accepts(accepts);
+                    .accepts(accepts)
+                    .card_columns(usize::from(columns));
                 if reorder.is_some() {
                     grid = grid.reorder(ReorderRule::new());
                 }

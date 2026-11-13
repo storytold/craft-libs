@@ -190,8 +190,12 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         self.header.read_content(ui.ctx(), id);
         let bounded = room.x.is_finite();
         let item = comp.measures_items().then(|| layout_memory::measured(ui.ctx(), sub(id, "largest")).map(|measured| measured.took)).flatten();
+        // Under a body that does not give the width, the measuring run lays the rows out at the width the collection
+        // asks for, so the height it reports is the one it has at that width (a grid's rows at its columns).
+        let from_content = self.from_content.0 && !self.content_sized(comp);
+        let asked = (from_content && !self.source.is_empty()).then(|| self.width_from_content(comp, ui, id, room, item, scx));
         let width = match (bounded, self.content_sized(comp)) {
-            (true, false) => room.x,
+            (true, false) => asked.unwrap_or(room.x),
             // No rows: the empty state has no ideal width, so it takes the room, or none where the room is unbounded.
             (_, _) if self.source.is_empty() => {
                 if bounded {
@@ -237,18 +241,15 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let empty = if self.source.is_empty() { comp.empty_height(width, ui, scx) } else { 0.0 };
         let rows = self.content.y.max(empty).max(floor);
         let height = cap.map_or(rows, |cap| rows.min(cap)) + self.header.height;
-        // Under a body that does not give the width, the layout above was made at the enclosing room: the measuring
-        // run offers the width from content instead.
-        let from_content = self.from_content.0 && !self.content_sized(comp);
         if !(self.scrolls && room.y.is_finite()) {
-            let wide = if from_content { self.width_from_content(comp, ui, id, room, item, scx) } else { self.content.x };
+            let wide = if from_content { asked.unwrap_or_else(|| self.width_from_content(comp, ui, id, room, item, scx)) } else { self.content.x };
             return Vec2::new(wide, height);
         }
         // A scrolling collection in a bounded room: `Content` takes its rows up to the room, `Fill` the room.
         let wide = if self.content_sized(comp) {
             self.content.x
         } else if from_content {
-            self.width_from_content(comp, ui, id, room, item, scx)
+            asked.unwrap_or_else(|| self.width_from_content(comp, ui, id, room, item, scx))
         } else {
             0.0
         };

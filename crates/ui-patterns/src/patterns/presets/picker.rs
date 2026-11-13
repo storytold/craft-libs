@@ -213,6 +213,9 @@ pub struct PresetPicker<'a, K: Value + Eq + Hash + 'static> {
     /// Paints the popover's thumbnails (a swatch, a gradient ramp, a brush tip) in place of each row's own `preview`.
     #[prop(func = "Fn(&ContentPainterCx, Rect, ThumbInfo<'_, K>)")]
     preview: Option<ThumbPainter<'a, K>>,
+    /// The columns of the popover's grid: the popover is as wide as this many tiles, at least its field.
+    #[prop]
+    columns: u16,
     /// Edge grips resize the popover, and the size the user leaves it at is saved under this key.
     #[prop]
     resizable: Option<SaveKey>,
@@ -257,6 +260,7 @@ impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
             create_row: None,
             detach_row: None,
             preview: None,
+            columns: 6,
             resizable: None,
             opened_at: None,
         }
@@ -313,6 +317,7 @@ impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
             create_row,
             detach_row,
             preview,
+            columns,
             resizable,
             mut opened_at,
         } = self;
@@ -370,6 +375,7 @@ impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
                     .search(search)
                     .row_menu(row_menu)
                     .thumb_range(thumb_range)
+                    .columns(columns)
                     .actions(action_labels.clone());
                 if let Some(options) = footer.as_ref() {
                     browser = browser.footer(options.clone());
