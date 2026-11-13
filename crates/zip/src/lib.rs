@@ -203,4 +203,20 @@ mod tests {
         assert_eq!(budget.remaining(), 0);
         assert!(budget.charge(u64::MAX).is_err());
     }
+
+    #[test]
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    fn archive_reports_entries_that_alias_the_same_payload() {
+        use std::io::Write as _;
+
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("first", opts).unwrap();
+        zip.write_all(b"payload").unwrap();
+        zip.shallow_copy_file("first", "alias").unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+
+        let mut archive = Archive::open(&bytes, Limits { max_entries: 2, max_total_bytes: 100 }).unwrap();
+        assert!(archive.has_overlapping_files().unwrap());
+    }
 }

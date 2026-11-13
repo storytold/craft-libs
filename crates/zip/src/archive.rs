@@ -73,6 +73,12 @@ impl<'a> Archive<'a> {
         self.duplicates
     }
 
+    /// Do two entries' compressed data ranges overlap? A format that stores many files in one
+    /// archive can refuse aliases so one payload cannot be expanded and retained repeatedly.
+    pub fn has_overlapping_files(&mut self) -> Result<bool, Error> {
+        self.zip.has_overlapping_files().map_err(|e| Error::NotZip(e.to_string()))
+    }
+
     /// The entry names in the archive's order, folders included. A name that is not text is
     /// left out.
     pub fn names(&self) -> impl Iterator<Item = Cow<'_, str>> {
