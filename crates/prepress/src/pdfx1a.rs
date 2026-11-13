@@ -72,7 +72,7 @@ pub fn flatten_x1a(pdf: &[u8], dpi: f32, pages: &[PageGraphics]) -> Result<(Vec<
         ));
     }
     let mut warnings = flatten_warnings(&report.totals, dpi);
-    let bytes = finish(&bytes)?;
+    let bytes = finish_x1a(&bytes)?;
     let (fatal, other) = checks(&bytes);
     if !fatal.is_empty() {
         return Err(format!("PDF/X-1a: after flattening, {}", fatal.join("; ")));
@@ -83,7 +83,7 @@ pub fn flatten_x1a(pdf: &[u8], dpi: f32, pages: &[PageGraphics]) -> Result<(Vec<
 
 /// What the flattener's `t` (at `dpi`) tells the user: rasterized transparency, and spot inks past
 /// the ink set's capacity, whose tints the flattener drops.
-pub(crate) fn flatten_warnings(t: &FlattenTotals, dpi: f32) -> Vec<String> {
+pub fn flatten_warnings(t: &FlattenTotals, dpi: f32) -> Vec<String> {
     let mut out = Vec::new();
     if t.complex_regions > 0 || t.complex_groups > 0 {
         let at = t.lowest_dpi.map(|d| format!(", some below {dpi:.0} ppi (lowest {d:.0} ppi)")).unwrap_or_default();
@@ -280,7 +280,7 @@ fn intent_issues(file: &craft_pdf::syntax::Pdf) -> Vec<String> {
 /// revision: `GTS_PDFXConformance` in the document information and the XMP, and the output intent
 /// of a registered printing condition without `/DestOutputProfile` (its profile is left out of
 /// the file). An unregistered condition keeps its profile, which must then be ICC v2.
-pub(crate) fn finish(pdf: &[u8]) -> Result<Vec<u8>, String> {
+pub fn finish_x1a(pdf: &[u8]) -> Result<Vec<u8>, String> {
     let unreadable = || "the flattened file couldn't be read to add the PDF/X-1a identification".to_string();
     let layout = Layout::read(pdf).ok_or_else(unreadable)?;
     let file = craft_pdf::syntax::Pdf::new(pdf.to_vec()).map_err(|_| unreadable())?;
