@@ -29,44 +29,78 @@ pub mod sylk;
 
 pub use decode::decode_text;
 
-/// Picks comma, semicolon or tab: the candidate with the most consistent count per line
-/// (outside quotes) over the first non-blank lines. A candidate must appear on every such line, otherwise comma wins.
+/// Picks comma, semicolon or tab by consistent field counts in the first non-blank records.
+/// Quotes start only at a candidate field boundary; candidates with incoherent quoted fields
+/// are discarded when another coherent candidate separates the records. Ties prefer tab,
+/// then comma, then semicolon. Comma is the fallback when no candidate separates the text.
 pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
-    let mut best = (b',', 0usize, 0usize);
-    for d in [',', ';', '\t'] {
-        let mut counts = vec![];
-        let mut n = 0usize;
-        let mut in_q = false;
-        let mut blank = true;
-        for ch in text.chars().take(64 * 1024) {
-            if !in_q && ch == '\n' {
-                // Blank lines carry no delimiter evidence.
-                if !blank {
-                    counts.push(n);
-                }
-                n = 0;
-                blank = true;
-                if counts.len() >= 20 {
-                    break;
+    let mut candidates = [(b'\t', 0usize, 0usize, true), (b',', 0, 0, true), (b';', 0, 0, true)];
+    for (delimiter, min_count, total, coherent) in &mut candidates {
+        let mut counts = Vec::new();
+        let mut count = 0usize;
+        let mut quoted = false;
+        let mut after_quote = false;
+        let mut field_start = true;
+        let mut nonempty = false;
+        let mut chars = text.chars().take(64 * 1024).peekable();
+        while let Some(ch) = chars.next() {
+            if quoted {
+                if ch == quote {
+                    if chars.peek() == Some(&quote) {
+                        chars.next();
+                        nonempty = true;
+                    } else {
+                        quoted = false;
+                        after_quote = true;
+                    }
+                } else if !ch.is_whitespace() {
+                    nonempty = true;
                 }
                 continue;
             }
-            if ch != '\r' {
-                blank = false;
+            if ch == '\r' || ch == '\n' {
+                if ch == '\r' && chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                if nonempty {
+                    counts.push(count);
+                    if counts.len() >= 20 {
+                        break;
+                    }
+                }
+                count = 0;
+                quoted = false;
+                after_quote = false;
+                field_start = true;
+                nonempty = false;
+                continue;
             }
-            if ch == quote {
-                in_q = !in_q;
-            } else if !in_q && ch == d {
-                n += 1;
+            if ch == quote && field_start {
+                quoted = true;
+                field_start = false;
+            } else if ch == char::from(*delimiter) {
+                count += 1;
+                field_start = true;
+                after_quote = false;
+                nonempty = true;
+            } else {
+                *coherent &= !after_quote || ch.is_whitespace();
+                nonempty |= !ch.is_whitespace();
+                field_start = false;
             }
         }
-        if !blank {
-            counts.push(n);
+        if nonempty {
+            counts.push(count);
         }
-        let min = counts.iter().copied().min().unwrap_or(0);
-        let total: usize = counts.iter().sum();
-        if min > 0 && (min, total) > (best.1, best.2) {
-            best = (d as u8, min, total);
+        *min_count = counts.iter().copied().min().unwrap_or(0);
+        *total = counts.iter().sum();
+        *coherent &= !quoted;
+    }
+    let prefer_coherent = candidates.iter().any(|(_, min, _, coherent)| *min > 0 && *coherent);
+    let mut best = (b',', 0usize, 0usize);
+    for (delimiter, min, total, coherent) in candidates {
+        if min > 0 && (!prefer_coherent || coherent) && (min, total) > (best.1, best.2) {
+            best = (delimiter, min, total);
         }
     }
     best.0
@@ -209,6 +243,21 @@ mod tests {
         assert_eq!(sniff_delimiter("alpha\tbeta\r\ngamma\r\n", '"'), b',');
         assert_eq!(sniff_delimiter("a;b\r\n\r\nc;d\r\n", '"'), b';');
         assert_eq!(sniff_delimiter("x;y\n1,5;2", '"'), b';');
+    }
+
+    #[test]
+    fn delimiter_sniffing_preserves_candidate_quote_boundaries() {
+        for ending in ["\n", "\r\n", "\r"] {
+            for (text, expected) in [
+                (format!("Name,\"preferred\tCity\"{ending}Ada\tLondon{ending}"), b'\t'),
+                (format!("\"Last, First\";City{ending}Ada;London{ending}"), b';'),
+                (format!("\"Name\";\"Last, First\"{ending}\"Ada\";\"Lovelace, Countess\"{ending}\"Grace\";\"Hopper, Admiral\"{ending}"), b';'),
+                (format!("\"Name\"suffix,Title\tCity{ending}\"Ada\"suffix,Analyst\tLondon\tignored{ending}"), b'\t'),
+                (format!("\r\n \r\n\"Name\";City{ending}Ada;London{ending}"), b';'),
+            ] {
+                assert_eq!(sniff_delimiter(&text, '"'), expected, "{text:?}");
+            }
+        }
     }
 
     #[test]
