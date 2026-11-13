@@ -71,6 +71,22 @@ pub struct OpacityStopValues {
     pub opacity: Option<f64>,
 }
 
+impl OpacityStopValues {
+    pub fn to_el(&self, self_id: &str, midpoint: bool) -> El {
+        let mut element = El::new("OpacityGradientStop").with_attr("Self", self_id);
+        if let Some(value) = self.opacity {
+            element.set_attr("Opacity", crate::value::num(value));
+        }
+        if let Some(value) = self.location {
+            element.set_attr("Location", crate::value::num(value));
+        }
+        if midpoint {
+            element.set_attr("Midpoint", "50");
+        }
+        element
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GradientFeatherValues {
     pub applied: bool,
@@ -81,10 +97,45 @@ pub struct GradientFeatherValues {
     pub stops: Vec<OpacityStopValues>,
 }
 
+impl GradientFeatherValues {
+    pub fn to_el(&self, id_prefix: &str) -> El {
+        let mut element =
+            El::new("GradientFeatherSetting").with_attr("Applied", "true").with_attr("Type", if self.radial { "Radial" } else { "Linear" });
+        if let Some(value) = self.angle {
+            element.set_attr("Angle", crate::value::num(value));
+        }
+        if let Some(value) = self.length {
+            element.set_attr("Length", crate::value::num(value));
+        }
+        if let Some([x, y]) = self.start {
+            element.set_attr("GradientStart", format!("{} {}", crate::value::num(x), crate::value::num(y)));
+        }
+        for (index, stop) in self.stops.iter().enumerate() {
+            let stop_id = format!("{id_prefix}TransparencySetting1GradientFeatherSetting1OpacityGradientStop{index}");
+            element.push(stop.to_el(&stop_id, index > 0));
+        }
+        element
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DirectionalFeatherValues {
     pub applied: bool,
     pub widths: [Option<f64>; 4],
+}
+
+impl DirectionalFeatherValues {
+    pub fn to_el(&self) -> El {
+        let mut element = El::new("DirectionalFeatherSetting").with_attr("Applied", "true");
+        for (key, value) in
+            [("LeftWidth", self.widths[1]), ("RightWidth", self.widths[3]), ("TopWidth", self.widths[0]), ("BottomWidth", self.widths[2])]
+        {
+            if let Some(value) = value {
+                element.set_attr(key, crate::value::num(value));
+            }
+        }
+        element
+    }
 }
 
 /// A typed view of an IDML `TransparencySetting` and its effect elements.
@@ -99,6 +150,33 @@ pub struct TransparencySetting {
 }
 
 impl TransparencySetting {
+    pub fn to_el(&self, id_prefix: &str) -> El {
+        let mut element = El::new("TransparencySetting");
+        if self.blend_mode.is_some() || self.opacity.is_some() {
+            let mut blending = El::new("BlendingSetting");
+            if let Some(value) = &self.blend_mode {
+                blending.set_attr("BlendMode", value);
+            }
+            if let Some(value) = self.opacity {
+                blending.set_attr("Opacity", crate::value::num(value));
+            }
+            element.push(blending);
+        }
+        if let Some(effect) = &self.drop_shadow {
+            element.push(effect.to_el());
+        }
+        if let Some(effect) = &self.feather {
+            element.push(effect.to_el());
+        }
+        if let Some(effect) = &self.directional_feather {
+            element.push(effect.to_el());
+        }
+        if let Some(effect) = &self.gradient_feather {
+            element.push(effect.to_el(id_prefix));
+        }
+        element
+    }
+
     pub fn from_el(el: &El) -> Self {
         let child = |name: &str| el.child(Local(name));
         let blending = child("BlendingSetting").map(Values::of);
