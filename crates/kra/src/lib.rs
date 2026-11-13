@@ -248,7 +248,7 @@ impl Image {
             ..craft_xml::Options::local().strict()
         };
         let root = options.parse(maindoc).map_err(|e| match e {
-            craft_xml::Error::Doctype => invalid("maindoc.xml: an internal DTD is not accepted"),
+            craft_xml::Error::Doctype => invalid("maindoc.xml: a document type with an internal DTD subset is not accepted"),
             other => invalid(format!("maindoc.xml: {other}")),
         })?;
         let image = root.child("IMAGE").ok_or_else(|| invalid("maindoc.xml has no IMAGE"))?;
