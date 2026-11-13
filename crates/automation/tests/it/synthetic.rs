@@ -224,7 +224,7 @@ fn queued_input_is_withdrawn_when_its_target_changes() {
     let reply = waiting(&mut channel);
     let handed = hook_without_pass(&ctx, ViewportId::ROOT);
     assert!(!handed.is_empty(), "the press was handed to the input");
-    move_focus_without_pass(&ctx, ViewportId::ROOT, egui::Id::new("elsewhere"));
+    move_focus_without_pass(&ctx, ViewportId::ROOT, egui::Id::unique("elsewhere"));
     rig.take();
     rig.fx.frame(handed);
     assert!(rig.take().iter().flat_map(|pass| &pass.events).all(|event| !matches!(event, Event::Key { .. })), "the preserved press is removed");
