@@ -166,6 +166,12 @@ pub fn check(nodes: &[usvg::Node], ts: Transform, width: u32, height: u32, held:
 #[cfg(feature = "tree-render")]
 pub fn render(tree: &usvg::Tree, ts: Transform, width: u32, height: u32, held: u64, budget: u64) -> Result<tiny_skia::Pixmap, Refusal> {
     check_filter_cost(tree, ts, 2_000_000_000, 10_000_000, 200)?;
+    // Even an empty tree allocates the target. `check` only walks buffers added by nodes, so
+    // enforce the target allocation here before `Pixmap::new` (whose OOM handler aborts).
+    let target = u64::from(width).saturating_mul(u64::from(height)).saturating_mul(4).saturating_add(held);
+    if target > budget {
+        return Err(memory("the target pixmap", target as f64, budget as f64));
+    }
     check(tree.root().children(), ts, width, height, held, budget)?;
     let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or_else(|| Refusal {
         complex: false,
