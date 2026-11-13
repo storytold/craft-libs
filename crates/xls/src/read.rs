@@ -598,7 +598,7 @@ fn resolve_pending(
                 st.unsupported(TOO_MUCH);
                 continue;
             }
-            if !st.formula_at(p.pos).is_some_and(|f| f.text.chars().count() <= MAX_SHARED_TEMPLATE) {
+            if st.formula_at(p.pos).is_none_or(|f| f.text.chars().count() > MAX_SHARED_TEMPLATE) {
                 failed.insert(p.anchor);
             }
         } else {
@@ -902,11 +902,8 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
                 report.warn(Warning::ConditionalFormattingSkipped);
             }
         },
-        0x01B1 => {
-            if conditional_format(&mut c, st).is_none() {
-                report.warn(Warning::ConditionalFormattingSkipped);
-            }
-        }
+        0x01B1 if conditional_format(&mut c, st).is_none() => report.warn(Warning::ConditionalFormattingSkipped),
+        0x01B1 => {}
         0x0879 => report.warn(Warning::ConditionalFormatting12),
         // A short DVal starts no rules.
         0x01B2 => st.dv_left = crate::dv::dval(&mut c).unwrap_or(0),
