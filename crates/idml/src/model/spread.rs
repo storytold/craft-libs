@@ -409,6 +409,34 @@ impl PageItem {
         self.values.prop_el("PathGeometry").map(PathGeometry::from_el).unwrap_or_default()
     }
 
+    pub fn self_id(&self) -> Option<&str> {
+        self.values.self_id()
+    }
+
+    pub fn item_layer(&self) -> Option<&str> {
+        self.values.item_layer()
+    }
+
+    pub fn item_transform(&self) -> Matrix {
+        self.values.item_transform()
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        self.values.name()
+    }
+
+    pub fn locked(&self) -> bool {
+        self.values.locked()
+    }
+
+    pub fn hidden(&self) -> bool {
+        !self.values.visible()
+    }
+
+    pub fn nonprinting(&self) -> bool {
+        self.values.boolean("Nonprinting") == Some(true)
+    }
+
     /// Replaces the outline.
     pub fn set_geometry(&mut self, g: &PathGeometry) {
         self.values.set_prop_el("PathGeometry", Some(g.to_el()));
