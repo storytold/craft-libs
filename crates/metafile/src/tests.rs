@@ -2654,3 +2654,76 @@ fn canvas_budget_counts_bytes_held_elsewhere() {
     assert!(cv.full());
     assert!(cv.items.is_empty());
 }
+
+/// The box through a path's segment ends (an ellipse's four cubics end on its box).
+fn end_extent(item: &Item) -> (f32, f32, f32, f32) {
+    let (segs, ..) = path_segs(item);
+    let (xs, ys): (Vec<f32>, Vec<f32>) = segs
+        .iter()
+        .filter_map(|s| match s {
+            Seg::Move(x, y) | Seg::Line(x, y) | Seg::Cubic(.., x, y) => Some((*x, *y)),
+            Seg::Close => None,
+        })
+        .unzip();
+    let lo = |v: &[f32]| v.iter().copied().fold(f32::MAX, f32::min);
+    let hi = |v: &[f32]| v.iter().copied().fold(f32::MIN, f32::max);
+    (lo(&xs), lo(&ys), hi(&xs), hi(&ys))
+}
+
+/// Two sub-pictures drawn into halves of the frame, as charts pasted from older Office versions
+/// are stored (deckcraft#2069): each saves the DC, halves the viewport with SCALEVIEWPORTEXT, sets
+/// its own 400 x 400 window (the second shifted 400 to the left, so it lands in the right half),
+/// draws a circle and restores the DC. The left circle stays in the left half and the right one
+/// lands in the right half of the 800 x 400 frame.
+#[test]
+fn wmf_scale_viewport_ext_draws_sub_pictures_into_parts_of_the_frame() {
+    let sub = |org_x: i32| {
+        vec![
+            wrec(0x001E, &[]),
+            wrec(0x0103, &h16(8)),
+            // yDenom, yNum, xDenom, xNum: x * 1/2, y * 1/1.
+            wrec(0x0412, &cat(vec![h16(1), h16(1), h16(2), h16(1)])),
+            wrec(0x020B, &cat(vec![h16(0), h16(org_x)])),
+            wrec(0x020C, &cat(vec![h16(400), h16(400)])),
+            wrec(0x0418, &cat(vec![h16(380), h16(380), h16(20), h16(20)])),
+            wrec(0x0127, &h16(-1)),
+        ]
+    };
+    let mut recs = vec![wrec(0x020B, &cat(vec![h16(0), h16(0)])), wrec(0x020C, &cat(vec![h16(400), h16(800)]))];
+    recs.extend(sub(0));
+    recs.extend(sub(-400));
+    let p = parse(&wmf(&recs, None)).unwrap();
+    assert_eq!((p.width, p.height), (800.0, 400.0));
+    assert_eq!((p.items.len(), p.skipped_records), (2, 0), "both circles, and every record played");
+    for (item, want) in p.items.iter().zip([(20.0, 20.0, 380.0, 380.0), (420.0, 20.0, 780.0, 380.0)]) {
+        let got = end_extent(item);
+        assert!(close(got.0, want.0) && close(got.1, want.1) && close(got.2, want.2) && close(got.3, want.3), "{got:?}, want {want:?}");
+    }
+}
+
+/// SCALEWINDOWEXT scales the window extent, and OFFSETWINDOWORG and OFFSETVIEWPORTORG move the
+/// window and viewport origins by their offsets, on top of what the SET records gave them. The
+/// 100 x 100 window of a plain WMF is the frame, and the records after it place a rectangle in it.
+#[test]
+fn wmf_scale_window_ext_and_offset_origins_change_the_mapping() {
+    let rect = || wrec(0x041B, &cat(vec![h16(20), h16(20), h16(10), h16(10)]));
+    let base = || vec![wrec(0x0103, &h16(8)), wrec(0x020B, &cat(vec![h16(0), h16(0)])), wrec(0x020C, &cat(vec![h16(100), h16(100)]))];
+    let extent = |extra: Vec<Vec<u8>>| {
+        let mut recs = base();
+        recs.extend(extra);
+        recs.push(rect());
+        rect_extent(&parse(&wmf(&recs, None)).unwrap().items[0])
+    };
+    // The window doubled (x * 2/1, y * 4/2): the rectangle shows at half size.
+    let got = extent(vec![wrec(0x0410, &cat(vec![h16(2), h16(4), h16(1), h16(2)]))]);
+    assert!(close(got.0, 5.0) && close(got.1, 5.0) && close(got.2, 10.0) && close(got.3, 10.0), "scaled window: {got:?}");
+    // The window origin moved by (5, 10): the rectangle moves the other way.
+    let got = extent(vec![wrec(0x020F, &cat(vec![h16(10), h16(5)]))]);
+    assert!(close(got.0, 5.0) && close(got.1, 0.0) && close(got.2, 15.0) && close(got.3, 10.0), "window origin: {got:?}");
+    // The viewport origin moved by (30, -5): the rectangle moves with it.
+    let got = extent(vec![wrec(0x0211, &cat(vec![h16(-5), h16(30)]))]);
+    assert!(close(got.0, 40.0) && close(got.1, 5.0) && close(got.2, 50.0) && close(got.3, 15.0), "viewport origin: {got:?}");
+    // A zero denominator leaves the extent alone.
+    let got = extent(vec![wrec(0x0412, &cat(vec![h16(0), h16(1), h16(0), h16(1)]))]);
+    assert!(close(got.0, 10.0) && close(got.1, 10.0) && close(got.2, 20.0) && close(got.3, 20.0), "zero denominator: {got:?}");
+}
