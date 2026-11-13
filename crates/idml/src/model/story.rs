@@ -259,6 +259,11 @@ pub enum Ace {
 }
 
 impl Ace {
+    /// Parses an IDML ACE instruction's decimal code.
+    pub fn from_decimal(value: &str) -> Option<Ace> {
+        value.trim().parse::<u32>().ok().map(Ace::from_code)
+    }
+
     pub fn from_code(code: u32) -> Ace {
         match code {
             4 => Ace::FootnoteNumber,
