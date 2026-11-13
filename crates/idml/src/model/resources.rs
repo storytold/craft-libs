@@ -73,6 +73,65 @@ pub struct StyleGroup {
     pub children: Vec<StyleNode>,
 }
 
+/// Builds the nested style-folder tree written under an IDML root style group.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StyleGroupWriter {
+    kind: Option<StyleKind>,
+    root_self_id: String,
+    styles: Vec<El>,
+    groups: Vec<(String, StyleGroupWriter)>,
+}
+
+impl StyleGroupWriter {
+    pub fn new(kind: StyleKind, root_self_id: impl Into<String>) -> Self {
+        Self { kind: Some(kind), root_self_id: root_self_id.into(), ..Self::default() }
+    }
+
+    /// Adds a style at its slash-separated folder path. Built-in names in brackets remain at
+    /// the root, and folder nesting is capped at 32 levels.
+    pub fn insert(&mut self, name: &str, style: El) {
+        let builtin = name.starts_with('[');
+        let mut segments: Vec<&str> = if builtin { vec![name] } else { name.split('/').collect() };
+        segments.pop();
+        let mut group = self;
+        for segment in segments.into_iter().take(32) {
+            let index = match group.groups.iter().position(|(name, _)| name == segment) {
+                Some(index) => index,
+                None => {
+                    group.groups.push((segment.to_string(), StyleGroupWriter { kind: group.kind, ..Self::default() }));
+                    group.groups.len() - 1
+                }
+            };
+            group = &mut group.groups[index].1;
+        }
+        group.styles.push(style);
+    }
+
+    /// The complete root style group and its nested groups.
+    pub fn to_el(self) -> El {
+        let Some(kind) = self.kind else {
+            return El::new("RootStyleGroup");
+        };
+        let root_self_id = self.root_self_id.clone();
+        self.emit(kind.root(), &root_self_id, kind.group(), "")
+    }
+
+    fn emit(self, root_name: &str, self_id: &str, group_name: &str, path: &str) -> El {
+        let mut element = El::new(root_name).with_attr("Self", self_id);
+        for style in self.styles {
+            element.push(style);
+        }
+        for (name, group) in self.groups {
+            let full = if path.is_empty() { name.clone() } else { format!("{path}:{name}") };
+            let nested = group.emit(group_name, &format!("{group_name}/{}", crate::value::escape_id(&full)), group_name, &full);
+            let mut nested = nested;
+            nested.set_attr("Name", name);
+            element.push(nested);
+        }
+        element
+    }
+}
+
 /// A child of a style group, in document order.
 #[derive(Clone, Debug, PartialEq)]
 pub enum StyleNode {
