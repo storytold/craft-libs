@@ -211,6 +211,20 @@ pub fn probe_size(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
     Ok(if (5..=8).contains(&o) { (h, w) } else { (w, h) })
 }
 
+/// PCX's dimensions are available from its fixed-size header without decoding the RLE rows.
+pub fn pcx_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    codecs::pcx::dimensions(bytes)
+}
+
+/// The X11 color-name lookup used by XPM files, expressed as normalized sRGB.
+pub fn xpm_named_color_rgb(name: &str) -> Option<[f32; 3]> {
+    if name.is_empty() || name.len() > 64 || !name.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit()) {
+        return None;
+    }
+    let rgb = codecs::xpm::named(name)?;
+    Some(rgb.map(|channel| f32::from(channel) / 255.0))
+}
+
 /// The colour table of a GIF's first frame (its Local Color Table, else the Global one) and the
 /// entry its Graphic Control Extension makes transparent, read without decoding pixels.
 pub fn gif_palette(bytes: &[u8]) -> Option<(Vec<[u8; 3]>, Option<u8>)> {

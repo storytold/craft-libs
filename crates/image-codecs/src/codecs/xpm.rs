@@ -96,7 +96,7 @@ fn channel(hex: &str) -> Option<u8> {
     Some(((v * 255 + max / 2) / max) as u8)
 }
 
-fn named(name: &str) -> Option<[u8; 3]> {
+pub(crate) fn named(name: &str) -> Option<[u8; 3]> {
     let s = name.to_ascii_lowercase().replace([' ', '-', '_'], "");
     // XPM imports X11 names, whose RGB values differ from CSS for names
     // such as gray, maroon and purple. Keep these exact rather than guessing.
