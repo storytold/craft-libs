@@ -25,7 +25,8 @@ use exr::meta::MetaData;
 use exr::meta::attribute::{AttributeValue, SampleType as ExrSample};
 use exr::meta::header::Header;
 use exr::prelude::{
-    AnyChannel, AnyChannels, Blocks, Compression as ExrCompression, Encoding, FlatSamples, Layer, LayerAttributes, LineOrder, WritableImage,
+    AnyChannel, AnyChannels, Blocks, Compression as ExrCompression, Encoding, FlatSamples, ImageAttributes, IntegerBounds, Layer, LayerAttributes,
+    LineOrder, Vec2, WritableImage,
 };
 pub use half::f16;
 
@@ -758,12 +759,39 @@ pub enum Compression {
     Piz,
 }
 
-/// Writes one scan-line part of `width × height` with these channels (each `width × height`
-/// samples, top row first; the order given does not matter, the file stores them sorted).
+/// Writes one scan-line part of `width × height` at the origin, with the display window equal to
+/// the data window. See [`write_with_windows`] to preserve cropped render offsets.
 pub fn write(width: u32, height: u32, channels: &[Channel], compression: Compression) -> Result<Vec<u8>> {
+    write_with_windows(width, height, channels, (0, 0), Window { x: 0, y: 0, width, height }, compression)
+}
+
+/// Writes one scan-line part with an explicit data-window position and display window.
+///
+/// `channels` contain exactly `width × height` samples, top row first. The data window starts at
+/// `data_position`; `display_window` describes the full stage, and may extend beyond or clip the
+/// data region. Coordinates are absolute EXR coordinates. The channel order does not matter; the
+/// file stores channels sorted by name.
+pub fn write_with_windows(
+    width: u32,
+    height: u32,
+    channels: &[Channel],
+    data_position: (i32, i32),
+    display_window: Window,
+    compression: Compression,
+) -> Result<Vec<u8>> {
     let enc = |m: &str| Error::Encode(m.into());
     if width == 0 || height == 0 || channels.is_empty() {
         return Err(enc("empty picture"));
+    }
+    if display_window.width == 0 || display_window.height == 0 {
+        return Err(enc("empty display window"));
+    }
+    let valid_end =
+        |x: i32, y: i32, w: u32, h: u32| i64::from(x) + i64::from(w) <= i64::from(i32::MAX) && i64::from(y) + i64::from(h) <= i64::from(i32::MAX);
+    if !valid_end(data_position.0, data_position.1, width, height)
+        || !valid_end(display_window.x, display_window.y, display_window.width, display_window.height)
+    {
+        return Err(enc("window coordinates exceed the OpenEXR range"));
     }
     let n = (width as usize).checked_mul(height as usize).ok_or_else(|| enc("picture too large"))?;
     if channels.iter().any(|c| c.samples.len() != n) {
@@ -787,8 +815,13 @@ pub fn write(width: u32, height: u32, channels: &[Channel], compression: Compres
         Compression::Piz => ExrCompression::PIZ,
     };
     let encoding = Encoding { compression, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing };
-    let layer = Layer::new((width as usize, height as usize), LayerAttributes::default(), encoding, AnyChannels::sort(list.into_iter().collect()));
+    let attributes = LayerAttributes { layer_position: Vec2(data_position.0, data_position.1), ..LayerAttributes::default() };
+    let layer = Layer::new((width as usize, height as usize), attributes, encoding, AnyChannels::sort(list.into_iter().collect()));
+    let image_attributes = ImageAttributes::new(IntegerBounds::new(
+        Vec2(display_window.x, display_window.y),
+        Vec2(display_window.width as usize, display_window.height as usize),
+    ));
     let mut out = Cursor::new(Vec::new());
-    exr::image::Image::from_layer(layer).write().to_buffered(&mut out).map_err(|e| Error::Encode(e.to_string()))?;
+    exr::image::Image::new(image_attributes, layer).write().to_buffered(&mut out).map_err(|e| Error::Encode(e.to_string()))?;
     Ok(out.into_inner())
 }
