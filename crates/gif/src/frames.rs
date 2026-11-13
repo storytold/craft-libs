@@ -143,8 +143,10 @@ fn collect(
 ) -> Result<Animation, FrameError> {
     let frame_bytes = u64::from(width) * u64::from(height) * 4;
     let mut out: Vec<AnimFrame> = Vec::new();
+    let mut decoded_frames = 0;
     let mut stop = Stop::End;
     for frame in frames {
+        decoded_frames += 1;
         let frame = match frame {
             Ok(f) => f,
             Err(e) if out.is_empty() => {
@@ -180,7 +182,7 @@ fn collect(
         }
         out.push(AnimFrame { rgba, delay_ms });
     }
-    if stop == Stop::End && out.len() == limits.max_frames {
+    if stop == Stop::End && decoded_frames == limits.max_frames {
         stop = match has_more {
             Some(true) => Stop::FrameLimit,
             Some(false) => Stop::End,
@@ -309,6 +311,14 @@ mod tests {
         assert!(
             matches!(read_frames(&bytes, &FrameLimits { max_frames: 0, ..FrameLimits::default() }), Err(FrameError::LimitExceeded(message)) if message.contains("frame limit is zero"))
         );
+    }
+
+    #[test]
+    fn merged_frames_still_report_the_decode_frame_limit() {
+        let bytes = gif(&[(10, 5), (10, 7), (200, 1)]);
+        let animation = read_frames(&bytes, &FrameLimits { max_frames: 2, merge_identical: true, ..FrameLimits::default() }).unwrap();
+        assert_eq!(reds(&animation), [(10, 120)]);
+        assert_eq!(animation.stop, Stop::FrameLimit);
     }
 
     #[test]
