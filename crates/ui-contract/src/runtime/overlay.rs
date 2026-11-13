@@ -154,6 +154,8 @@ pub struct OpenEntry {
     pub(crate) window: bool,
     /// The screen rect the layer is contained in: its scrim, placement, clip and input blocking stop at it.
     pub(crate) region: Option<Rect>,
+    /// The layer's place on its dialog stack (`stack_place`): the modal families of one stack stack in its order.
+    pub(crate) place: Option<usize>,
 }
 
 impl OpenEntry {
@@ -175,6 +177,7 @@ impl OpenEntry {
             absorbs: false,
             window: false,
             region: None,
+            place: None,
         }
     }
 
@@ -209,6 +212,8 @@ pub(crate) struct Pass {
     pressed_outside: Vec<Id>,
     /// The popup a press that opened it ended on, and where, this pass.
     dragged_release: Option<(Id, Pos2)>,
+    /// The dialog stack place of the layers recorded now (`stack_place`).
+    place: Option<usize>,
 }
 
 /// The top modal layer of a viewport: its id and the scrim under it.
@@ -263,6 +268,7 @@ fn with_pass<R>(ctx: &Context, f: impl FnOnce(&mut Pass) -> R) -> R {
             pass.claimed.clear();
             pass.pressed_outside.clear();
             pass.dragged_release = None;
+            pass.place = None;
         },
         f,
     )
@@ -557,12 +563,24 @@ pub(crate) fn note_peers(ctx: &Context, id: Id, peers: Vec<Rect>) {
     });
 }
 
+/// Runs `show` with the layers it records at `place` on the dialog stack: a dialog host shows each open dialog
+/// inside its stack place, bottom first, and the modal families of the stack then stack in that order whatever
+/// opened, appeared or was pressed last. Families without a place keep their raise order.
+#[doc(hidden)]
+pub fn stack_place<R>(ctx: &Context, place: usize, show: impl FnOnce() -> R) -> R {
+    let outer = with_pass(ctx, |pass| pass.place.replace(place));
+    let out = show();
+    with_pass(ctx, |pass| pass.place = outer);
+    out
+}
+
 /// Records the layer shown in this pass, parent first: a layer is recorded once its body ran, after the layers opened
 /// from inside it, so it goes in front of them, and every layer then stacks above the layer it was opened from. A
 /// layer shown again in a discarded pass replaces its entry.
-pub(crate) fn record(ctx: &Context, entry: OpenEntry) {
+pub(crate) fn record(ctx: &Context, mut entry: OpenEntry) {
     crate::runtime::replay::block(ctx);
     with_pass(ctx, |pass| {
+        entry.place = entry.place.or(pass.place);
         if let Some(at) = pass.current.iter().position(|recorded| recorded.id == entry.id) {
             pass.current[at] = entry;
             return;
@@ -602,6 +620,16 @@ fn families(entries: &[OpenEntry], raised: &HashMap<Id, u64>) -> Vec<Vec<OpenEnt
     // A modal opened from a floating panel lifts the whole family: the family sorts by its highest member.
     let class = |members: &Vec<OpenEntry>| members.iter().map(|member| member.rank.class()).max().unwrap_or(0);
     groups.sort_by_key(|(root, members)| (class(members), raised.get(root).copied().unwrap_or(0)));
+    // The modal families on a dialog stack take the slots the raise order gave them in the stack's order: a press
+    // on a lower dialog or a dialog replaced in place never reorders the stack's dialogs.
+    let place = |members: &Vec<OpenEntry>| members.iter().filter_map(|member| member.place).min();
+    let slots: Vec<usize> =
+        (0..groups.len()).filter(|&at| class(&groups[at].1) == Rank::modal(Backdrop::None).class() && place(&groups[at].1).is_some()).collect();
+    let mut stacked: Vec<Vec<OpenEntry>> = slots.iter().map(|&at| std::mem::take(&mut groups[at].1)).collect();
+    stacked.sort_by_key(place);
+    for (at, members) in slots.into_iter().zip(stacked) {
+        groups[at].1 = members;
+    }
     groups.into_iter().map(|(_, members)| members).collect()
 }
 
