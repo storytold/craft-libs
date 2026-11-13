@@ -1,6 +1,6 @@
 //! Whether a page uses overprint, read from its display list ([`DisplayList::overprint`]).
 
-use super::{DisplayList, ImageSpace, Item, Paint};
+use super::{DisplayList, ImageItem, ImageSpace, Item, Paint};
 use crate::ink::{InkColor, InkId, InkSet, Overprint};
 
 /// Whether a page's paints use overprint, two ways (ISO 32000-2 §8.6.7, §11.7.4).
@@ -14,35 +14,40 @@ pub struct PageOverprint {
     /// At least one of those leaves a plate to the backdrop that a knockout would clear: a
     /// paint that doesn't name every plate on the page. A Separation or DeviceN color that
     /// names only some inks, a DeviceCMYK color under nonzero overprint mode with a zero
-    /// component, or any process color on a page with a spot plate.
+    /// component, or any process color on a page that paints a spot plate.
     pub takes_effect: bool,
 }
 
 impl DisplayList {
     /// Whether this page's paints use overprint, as [`plates`](crate::plates) separates them.
     /// Items inside a soft mask paint no ink and don't count. Nonzero overprint mode applies to
-    /// solid process colors only; a gradient or image names every ink its color space has
-    /// (§8.6.7). The `None` colorant paints nothing; a color listing no ink leaves every plate.
+    /// solid process colors only, including a stencil mask's; a gradient or image names every
+    /// ink its color space has (§8.6.7). The `None` colorant paints nothing; a color listing no
+    /// ink leaves every plate. An `All` image is read as the inks known when it was painted.
     pub fn overprint(&self) -> PageOverprint {
-        let plates = Plates::new(&self.inks);
-        let mut found = PageOverprint::default();
+        let mut painted = Vec::new();
         // An explicit stack: group nesting comes from the file.
         let mut stack: Vec<&Item> = self.items.iter().rev().collect();
         while let Some(item) = stack.pop() {
-            let (overprint, named) = match item {
+            let named = match item {
                 Item::Group(g) => {
                     stack.extend(g.children.iter().rev());
                     continue;
                 }
                 Item::Fill(f) => (f.overprint, paint_inks(&f.paint, f.overprint)),
                 Item::Text(t) => (t.overprint, paint_inks(&t.paint, t.overprint)),
-                Item::Image(im) => (im.overprint, image_inks(&im.space)),
+                Item::Image(im) => (im.overprint, image_inks(im)),
             };
+            painted.push(named);
+        }
+        let plates = Plates::new(&self.inks, painted.iter().map(|(_, named)| named));
+        let mut found = PageOverprint::default();
+        for (overprint, named) in &painted {
             if !(overprint.fill || overprint.stroke) {
                 continue;
             }
             found.set = true;
-            if plates.left_out(&named, &self.inks) {
+            if plates.left_out(named, &self.inks) {
                 found.takes_effect = true;
                 break;
             }
@@ -86,10 +91,17 @@ fn paint_inks(paint: &Paint, overprint: Overprint) -> Named {
     }
 }
 
-fn image_inks(space: &ImageSpace) -> Named {
-    match space {
+fn image_inks(image: &ImageItem) -> Named {
+    match &image.space {
         // Gray and RGB samples print as process color on all four plates.
         ImageSpace::Gray | ImageSpace::Rgb | ImageSpace::Cmyk => Named::Inks(PROCESS.to_vec()),
+        // Only a stencil mask's image of a DeviceCMYK paint has `nonzero`; its zero
+        // components are left as a solid paint's are.
+        ImageSpace::Inks(ids) if image.overprint.nonzero => {
+            let n = ids.len();
+            let used = |i: usize| image.samples.iter().skip(i).step_by(n.max(1)).any(|&v| v > 0);
+            Named::Inks(ids.iter().enumerate().filter(|&(i, _)| used(i)).map(|(_, id)| *id).collect())
+        }
         ImageSpace::Inks(ids) => Named::Inks(ids.clone()),
     }
 }
@@ -101,15 +113,39 @@ const PROCESS: [InkId; 4] = [
     InkId::process(crate::ink::Process::Black),
 ];
 
-/// The plates of a page: the process plates and each spot ink that prints on its own plate.
+/// The plates of a page: the process plates and each spot plate some paint outside a soft mask
+/// names. A spot only a soft mask uses leaves its plate blank, so overprint can't change it.
 struct Plates {
     own: Vec<InkId>,
 }
 
 impl Plates {
-    fn new(inks: &InkSet) -> Self {
-        let spots = inks.spots().filter(|(id, _)| inks.plate_of(*id) == Some(*id)).map(|(id, _)| id);
-        Self { own: PROCESS.into_iter().chain(spots).collect() }
+    fn new<'n>(inks: &InkSet, painted: impl Iterator<Item = &'n Named>) -> Self {
+        let mut own = PROCESS.to_vec();
+        let mut every_spot = false;
+        for named in painted {
+            match named {
+                Named::All => every_spot = true,
+                Named::Nothing => {}
+                Named::Inks(ids) => {
+                    for &id in ids {
+                        if let Some(plate) = inks.plate_of(id)
+                            && !own.contains(&plate)
+                        {
+                            own.push(plate);
+                        }
+                    }
+                }
+            }
+        }
+        if every_spot {
+            for (id, _) in inks.spots() {
+                if inks.plate_of(id) == Some(id) && !own.contains(&id) {
+                    own.push(id);
+                }
+            }
+        }
+        Self { own }
     }
 
     /// Whether some plate is left to the backdrop by a paint naming `named`. A spot printed on
@@ -193,7 +229,8 @@ mod tests {
         assert_eq!(separation.overprint(), answer(true, true), "a Separation names one ink");
 
         let (inks, gold) = spot_set();
-        let over_spot = list(inks.clone(), vec![fill(cmyk(0.0, 0.0, 0.0, 1.0), ON)]);
+        let gold_knockout = || fill(InkColor::Tints(vec![(gold, 1.0)]), Overprint::default());
+        let over_spot = list(inks.clone(), vec![gold_knockout(), fill(cmyk(0.0, 0.0, 0.0, 1.0), ON)]);
         assert_eq!(over_spot.overprint(), answer(true, true), "a process color leaves the spot plate");
 
         let all = list(inks.clone(), vec![fill(InkColor::All(1.0), ON), fill(InkColor::None, ON)]);
@@ -210,6 +247,13 @@ mod tests {
             transfer: None,
         }));
         assert_eq!(list(process(), vec![Item::Group(masked)]).overprint(), answer(false, false), "a soft mask paints no ink");
+
+        let mut gold_mask = group(vec![fill(cmyk(0.0, 0.0, 0.0, 1.0), ON)]);
+        gold_mask.mask = Some(Box::new(Mask { kind: MaskKind::Alpha, group: group(vec![gold_knockout()]), backdrop: None, transfer: None }));
+        let mask_only = list(inks.clone(), vec![Item::Group(gold_mask)]);
+        assert_eq!(mask_only.overprint(), answer(true, false), "a spot only a soft mask uses has a blank plate");
+        let registration = list(inks.clone(), vec![fill(InkColor::All(1.0), Overprint::default()), fill(cmyk(0.0, 0.0, 0.0, 1.0), ON)]);
+        assert_eq!(registration.overprint(), answer(true, true), "All paints the spot plate");
     }
 
     #[test]
@@ -254,21 +298,19 @@ mod tests {
 
     #[test]
     fn images_name_the_inks_of_their_space() {
-        let image = |space: ImageSpace| {
-            Item::Image(ImageItem {
-                space,
-                size: (1, 1),
-                samples: vec![0; 4].into(),
-                transform: Affine::IDENTITY,
-                smask: None,
-                overprint: ON,
-                jpeg: None,
-            })
+        let image_of = |space: ImageSpace, samples: Vec<u8>, overprint| {
+            Item::Image(ImageItem { space, size: (1, 1), samples: samples.into(), transform: Affine::IDENTITY, smask: None, overprint, jpeg: None })
         };
+        let image = |space| image_of(space, vec![0; 4], ON);
         assert_eq!(list(InkSet::new(), vec![image(ImageSpace::Rgb)]).overprint(), answer(true, false), "RGB prints on every process plate");
         assert_eq!(list(InkSet::new(), vec![image(ImageSpace::Gray)]).overprint(), answer(true, false), "so does gray");
-        let (inks, _) = spot_set();
-        assert_eq!(list(inks, vec![image(ImageSpace::Cmyk)]).overprint(), answer(true, true), "a CMYK image leaves the spot plate");
+        let (inks, gold) = spot_set();
+        let gold_knockout = fill(InkColor::Tints(vec![(gold, 1.0)]), Overprint::default());
+        assert_eq!(list(inks, vec![gold_knockout, image(ImageSpace::Cmyk)]).overprint(), answer(true, true), "a CMYK image leaves the spot plate");
         assert_eq!(list(InkSet::new(), vec![image(ImageSpace::Inks(vec![K]))]).overprint(), answer(true, true), "a DeviceN image names its inks");
+
+        let stencil = |overprint| list(InkSet::new(), vec![image_of(ImageSpace::Inks(vec![C, M, Y, K]), vec![0, 0, 0, 255], overprint)]).overprint();
+        assert_eq!(stencil(OPM1), answer(true, true), "a stencil of DeviceCMYK black leaves the zero components");
+        assert_eq!(stencil(ON), answer(true, false), "at mode 0 it names all four");
     }
 }
