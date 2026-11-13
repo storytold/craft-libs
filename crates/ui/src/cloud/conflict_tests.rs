@@ -144,7 +144,7 @@ fn conflict_on_a_while_b_is_active() -> (Tabs, Held, Arc<Mutex<Log>>) {
     save(&mut app).unwrap();
     app.active = 2;
     let (job, post) = held.take(|j| matches!(j, Job::Write { .. })).unwrap();
-    let Job::Write { uid, .. } = job else { unreachable!() };
+    let Job::Write { uid, .. } = job else { panic!("expected Job::Write") };
     post.send(Event::Saved { uid, entry: Err(Fault::Conflict) });
     let ctx = egui::Context::default();
     drain(&mut app, &ctx);
@@ -167,7 +167,7 @@ fn conflict_reload_acts_on_the_conflicted_document_even_when_another_tab_is_acti
     let (app, held, log) = conflict_on_a_while_b_is_active();
     let mut app = click_in_conflict_modal(app, "Reload from the cloud");
     let (job, post) = held.take(|j| matches!(j, Job::Read { .. })).expect("Reload submitted a read");
-    let Job::Read { entry: read, into } = job else { unreachable!() };
+    let Job::Read { entry: read, into } = job else { panic!("expected Job::Read") };
     let read_name = read.name.clone();
     post.send(Event::Read { entry: read, into, bytes: Ok(b"stored".to_vec()) });
     drain(&mut app, &egui::Context::default());
@@ -188,7 +188,7 @@ fn conflict_save_as_copy_encodes_the_conflicted_document_even_when_another_tab_i
     let name = app.cloud.save_name.clone();
     save_as(&mut app, "", &name).unwrap(); // what the Save As page does with that name
     let (job, _) = held.take(|j| matches!(j, Job::Create { .. })).unwrap();
-    let Job::Create { uid, name, bytes, .. } = job else { unreachable!() };
+    let Job::Create { uid, name, bytes, .. } = job else { panic!("expected Job::Create") };
     assert_eq!(
         (uid, String::from_utf8_lossy(&bytes).into_owned()),
         (1, "bytes of 1".to_owned()),
