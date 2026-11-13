@@ -35,6 +35,7 @@ pub fn import(bytes: &[u8]) -> Result<Imported, Error> {
     let unit_to_mm = units_to_mm(drawing.header.insunits(), drawing.header.measurement());
     let mut paths = Vec::new();
     let mut warnings = Vec::new();
+    let mut unsupported = 0usize;
     for record in &drawing.entities {
         let entity = crate::model::Entity::read(record);
         if !entity.common.visible || record.paper_space() {
@@ -53,12 +54,26 @@ pub fn import(bytes: &[u8]) -> Result<Imported, Error> {
             return Err(Error::NonFinite);
         }
         if converted.is_empty() {
+            if matches!(
+                entity.kind,
+                crate::model::EntityKind::Other
+                    | crate::model::EntityKind::Text(_)
+                    | crate::model::EntityKind::MText(_)
+                    | crate::model::EntityKind::Insert(_)
+                    | crate::model::EntityKind::Dimension(_)
+                    | crate::model::EntityKind::Hatch(_)
+            ) {
+                unsupported = unsupported.saturating_add(1);
+            }
             continue;
         }
         if paths.len().saturating_add(converted.len()) > MAX_PATHS {
             return Err(Error::TooManyPaths);
         }
         paths.extend(converted);
+    }
+    if unsupported > 0 {
+        warnings.push(format!("{unsupported} visible DXF entities are unsupported and were omitted"));
     }
     if drawing.skipped.iter().any(|(_, n)| *n > 0) {
         warnings.push("some unsupported or stray DXF records were skipped".into());
@@ -67,9 +82,9 @@ pub fn import(bytes: &[u8]) -> Result<Imported, Error> {
     Ok(Imported { paths, bounds, unit_to_mm, warnings })
 }
 
-fn units_to_mm(code: i64, measurement: Option<i64>) -> f64 {
+fn units_to_mm(code: i64, _measurement: Option<i64>) -> f64 {
     match code {
-        0 if measurement == Some(0) => 25.4,
+        0 => 1.0,
         1 => 25.4,
         2 => 304.8,
         3 => 1_609_344.0,
@@ -86,6 +101,13 @@ fn units_to_mm(code: i64, measurement: Option<i64>) -> f64 {
         15 => 10_000.0,
         16 => 100_000.0,
         17 => 1e9,
+        18 => 149_597_870_700.0,
+        19 => 9.460_730_472_580_8e18,
+        20 => 3.085_677_581_491_367e19,
+        21 => 1200.0 / 3937.0 * 1000.0,
+        22 => 1200.0 / 3937.0 * 1000.0 / 12.0,
+        23 => 1200.0 / 3937.0 * 1000.0 * 3.0,
+        24 => 1200.0 / 3937.0 * 1000.0 * 5280.0,
         _ => 1.0,
     }
 }
@@ -183,6 +205,9 @@ fn arc(center: Point, radius: f64, start: f64, end: f64) -> BezPath {
 
 fn arc_segments(path: &mut BezPath, center: Point, start: f64, sweep: f64, radius: f64) {
     let count = (sweep.abs() / (std::f64::consts::FRAC_PI_2)).ceil().max(1.0) as usize;
+    if count > 4096 {
+        return;
+    }
     let step = sweep / count as f64;
     for i in 0..count {
         let a = start + step * i as f64;
@@ -204,6 +229,9 @@ fn ellipse(center: crate::model::Point, major: crate::model::Point, ratio: f64, 
     path.move_to(point(start));
     let sweep = if end >= start { end - start } else { end - start + std::f64::consts::TAU };
     let count = (sweep.abs() / std::f64::consts::FRAC_PI_2).ceil().max(1.0) as usize;
+    if count > 4096 {
+        return path;
+    }
     let step = sweep / count as f64;
     for i in 0..count {
         let a = start + step * i as f64;

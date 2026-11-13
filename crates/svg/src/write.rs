@@ -114,11 +114,15 @@ fn write_attributes<'a>(mut tag: craft_xml::Tag<'a>, attributes: &'a [Attribute]
             Value::Millimetres(value) => tag.attr(&attribute.name, format!("{}mm", num(*value, 3))),
             Value::ViewBox(bounds) => tag.attr(&attribute.name, view_box_data(*bounds)),
             Value::TranslateScale { x, y, scale_x, scale_y } => {
-                tag.attr(&attribute.name, format!("translate({} {}) scale({} {})", num(*x, 3), num(*y, 3), num(*scale_x, 4), num(*scale_y, 4)))
+                tag.attr(&attribute.name, format!("translate({} {}) scale({} {})", num(*x, 3), num(*y, 3), shortest(*scale_x), shortest(*scale_y)))
             }
         };
     }
     tag
+}
+
+fn shortest(value: f64) -> String {
+    if value.is_finite() { value.to_string() } else { "0".into() }
 }
 
 fn write_elements(writer: &mut SvgWriter, elements: &[Element], depth: usize) {
