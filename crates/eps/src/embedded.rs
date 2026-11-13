@@ -25,7 +25,7 @@ pub fn embedded_font_programs(ps: &[u8]) -> Vec<EmbeddedFontProgram> {
     let names = positions(ps, b"/FontName");
     let mut from = 0;
     let mut used = 0;
-    while let Some(ee) = find_from(ps, b"eexec", from) {
+    while let Some(ee) = find_eexec(ps, from) {
         from = ee + 5;
         let last_before = |v: &[usize]| v[..v.partition_point(|&p| p < ee)].last().copied().filter(|&p| p >= used);
         // The fallback look-back stops at the previous font's end, so it cannot pick up its header.
@@ -56,6 +56,110 @@ fn find_from(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     hay.get(from..)?.windows(needle.len()).position(|w| w == needle).map(|p| p + from)
 }
 
+/// Find an executable `eexec` operator, ignoring comments, literal strings and names.
+fn find_eexec(ps: &[u8], from: usize) -> Option<usize> {
+    let mut pos = from.min(ps.len());
+    while pos < ps.len() {
+        let c = ps[pos];
+        if is_white(c) {
+            pos += 1;
+            continue;
+        }
+        if c == b'%' {
+            let start = pos;
+            while pos < ps.len() && !matches!(ps[pos], b'\n' | b'\r') {
+                pos += 1;
+            }
+            let line = &ps[start..pos];
+            let marker: Option<&[u8]> = if line.starts_with(b"%%BeginData:") {
+                Some(b"%%EndData")
+            } else if line.starts_with(b"%%BeginBinary:") {
+                Some(b"%%EndBinary")
+            } else if line.starts_with(b"%%BeginPreview") {
+                Some(b"%%EndPreview")
+            } else {
+                None
+            };
+            if let Some(marker) = marker {
+                let rest = ps.get(pos..)?;
+                pos = rest.windows(marker.len()).position(|window| window == marker).map_or(ps.len(), |offset| pos + offset);
+            }
+            continue;
+        }
+        if c == b'(' {
+            pos += 1;
+            let mut depth = 1usize;
+            while pos < ps.len() && depth > 0 {
+                match ps[pos] {
+                    b'\\' => pos = pos.saturating_add(2).min(ps.len()),
+                    b'(' => {
+                        depth = depth.saturating_add(1);
+                        pos += 1;
+                    }
+                    b')' => {
+                        depth -= 1;
+                        pos += 1;
+                    }
+                    _ => pos += 1,
+                }
+            }
+            continue;
+        }
+        if c == b'<' {
+            match ps.get(pos + 1) {
+                Some(b'<') => pos += 2,
+                Some(b'~') => {
+                    pos += 2;
+                    pos = ps
+                        .get(pos..)
+                        .and_then(|rest| {
+                            rest.windows(2).position(|window| window == b"~>").map(|offset| pos.saturating_add(offset).saturating_add(2))
+                        })
+                        .unwrap_or(ps.len());
+                }
+                _ => {
+                    pos += 1;
+                    while pos < ps.len() && ps[pos] != b'>' {
+                        pos += 1;
+                    }
+                    pos = pos.saturating_add(1).min(ps.len());
+                }
+            }
+            continue;
+        }
+        if c == b'/' {
+            pos += 1;
+            if ps.get(pos) == Some(&b'/') {
+                pos += 1;
+            }
+            while pos < ps.len() && !is_white(ps[pos]) && !is_delimiter(ps[pos]) {
+                pos += 1;
+            }
+            continue;
+        }
+        if is_delimiter(c) {
+            pos += 1;
+            continue;
+        }
+        let start = pos;
+        while pos < ps.len() && !is_white(ps[pos]) && !is_delimiter(ps[pos]) {
+            pos += 1;
+        }
+        if &ps[start..pos] == b"eexec" {
+            return Some(start);
+        }
+    }
+    None
+}
+
+fn is_white(c: u8) -> bool {
+    matches!(c, 0 | 9 | 10 | 12 | 13 | 32)
+}
+
+fn is_delimiter(c: u8) -> bool {
+    matches!(c, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%')
+}
+
 fn positions(hay: &[u8], needle: &[u8]) -> Vec<usize> {
     let mut out = vec![];
     let mut from = 0;
@@ -70,7 +174,7 @@ fn name_after(b: &[u8], key: &[u8]) -> Option<String> {
     let p = find_from(b, key, 0)? + key.len();
     let rest = &b[p..];
     let s = rest.iter().position(|c| *c == b'/')? + 1;
-    let e = rest[s..].iter().position(|c| c.is_ascii_whitespace() || matches!(c, b'/' | b'[' | b'(' | b'{')).map_or(rest.len(), |q| s + q);
+    let e = rest[s..].iter().position(|c| is_white(*c) || is_delimiter(*c)).map_or(rest.len(), |q| s + q);
     (e > s).then(|| String::from_utf8_lossy(&rest[s..e]).into_owned())
 }
 
@@ -127,5 +231,39 @@ mod tests {
         assert_eq!(fonts.len(), 2);
         let b = fonts.iter().find(|font| font.name.as_deref() == Some("B")).unwrap();
         assert!(!String::from_utf8_lossy(&b.program).contains("AdobeFont"));
+    }
+
+    #[test]
+    fn eexec_in_comments_strings_names_and_font_names_is_not_an_operator() {
+        let ps = b"%!PS-Adobe-3.0 EPSF-3.0\n%!PS-AdobeFont-1.0: Test\n%% eexec in a comment\n%%BeginBinary: 10\neexec junk\n%%EndBinary\n/FontName /eexecTest def\n(nested (ignored eexec)) pop\n<6565786563> pop\n<~eexec~> pop\n/eexec def\ncurrentfile eexec\n0000\ncleartomark\n";
+        let fonts = embedded_font_programs(ps);
+        assert_eq!(fonts.len(), 1);
+        assert_eq!(fonts[0].name.as_deref(), Some("eexecTest"));
+    }
+
+    #[test]
+    fn font_name_stops_at_postscript_delimiters_and_comments() {
+        let ps = b"%!PS-AdobeFont-1.0: Test\n/FontName /Test%comment\n def\ncurrentfile eexec\n0000\ncleartomark\n";
+        let fonts = embedded_font_programs(ps);
+        assert_eq!(fonts.len(), 1);
+        assert_eq!(fonts[0].name.as_deref(), Some("Test"));
+    }
+
+    #[test]
+    fn font_names_stop_at_every_postscript_delimiter() {
+        for delimiter in b"()<>[]{}/%" {
+            let mut source = b"/FontName /Test".to_vec();
+            source.push(*delimiter);
+            source.extend_from_slice(b"ignored");
+            assert_eq!(super::name_after(&source, b"/FontName").as_deref(), Some("Test"));
+        }
+    }
+
+    #[test]
+    fn literal_name_backslash_does_not_escape_a_comment_delimiter() {
+        let ps = b"%!PS-AdobeFont-1.0: Test\n/FontName /Test def\n/unused\\%(\npop\ncurrentfile eexec\n0000\ncleartomark\n";
+        let fonts = embedded_font_programs(ps);
+        assert_eq!(fonts.len(), 1);
+        assert_eq!(fonts[0].name.as_deref(), Some("Test"));
     }
 }
