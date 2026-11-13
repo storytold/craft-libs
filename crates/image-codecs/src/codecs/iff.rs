@@ -190,7 +190,8 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     for row in stored.chunks_mut(plane_row.max(1)).take(total_rows) {
         match h.compression {
             0 => {
-                let src = body.get(cursor..cursor.checked_add(plane_row).ok_or_else(|| bad("BODY overflow"))?).ok_or_else(|| bad("truncated BODY data"))?;
+                let src =
+                    body.get(cursor..cursor.checked_add(plane_row).ok_or_else(|| bad("BODY overflow"))?).ok_or_else(|| bad("truncated BODY data"))?;
                 let n = row.len().min(src.len());
                 row[..n].copy_from_slice(&src[..n]);
                 cursor += plane_row;
@@ -203,7 +204,8 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     }
 
     let mut out = Vec::new();
-    out.try_reserve_exact(w.saturating_mul(hh).saturating_mul(layout.channels())).map_err(|_| CodecError::LimitExceeded("cannot allocate the image".into()))?;
+    out.try_reserve_exact(w.saturating_mul(hh).saturating_mul(layout.channels()))
+        .map_err(|_| CodecError::LimitExceeded("cannot allocate the image".into()))?;
     let planes = usize::from(h.planes);
     for y in 0..hh {
         for x in 0..w {
@@ -215,7 +217,8 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
             let c = if h.planes == DEEP_PLANES { [index as u8, (index >> 8) as u8, (index >> 16) as u8] } else { palette(index) };
             out.extend_from_slice(&c);
             if h.masking != 0 {
-                let opaque = if h.masking == 1 { bit_at(&stored, (y * rows_planes + planes) * plane_row, x) } else { index != usize::from(h.transparent) };
+                let opaque =
+                    if h.masking == 1 { bit_at(&stored, (y * rows_planes + planes) * plane_row, x) } else { index != usize::from(h.transparent) };
                 out.push(if opaque { 255 } else { 0 });
             }
         }

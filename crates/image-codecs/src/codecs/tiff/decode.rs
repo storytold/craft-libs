@@ -4,8 +4,8 @@ use super::bands::{Tally, convert_ab, decode_bands, extra_sample_indices, refill
 use super::tags::{F, TAG_IMAGE_SOURCE_DATA, TAG_PHOTOSHOP, TAG_XMP, TEXT_TAGS, photoshop_tags};
 use super::ycbcr::YCbCr;
 use super::{
-    ChannelLayout, ChunkType, CodecError, DecodeWarning, Decoder, ExifDirs, File, Ifd, Image, Limits, Metadata, Read, SampleType, Seek, SeekFrom, Tag,
-    camera_raw, err, ifd, io, map_err, tiff_exif,
+    ChannelLayout, ChunkType, CodecError, DecodeWarning, Decoder, ExifDirs, File, Ifd, Image, Limits, Metadata, Read, SampleType, Seek, SeekFrom,
+    Tag, camera_raw, err, ifd, io, map_err, tiff_exif,
 };
 
 /// Decodes the page Photoshop would open: the first full-resolution directory.
@@ -46,7 +46,10 @@ pub(crate) fn has_unretained_samples(bytes: &[u8], offset: u64) -> Result<bool, 
 /// [`DecodeWarning::MorePages`] the page opens with when the file holds more.
 fn open_page(bytes: &[u8], page: Option<usize>) -> Result<(File<'_>, Ifd, Option<DecodeWarning>), CodecError> {
     if camera_raw(bytes) {
-        return Err(CodecError::unsupported(F, "camera raw files (such as CR2, NEF, ARW or DNG) are not flat images; decode them with photocraft-raw"));
+        return Err(CodecError::unsupported(
+            F,
+            "camera raw files (such as CR2, NEF, ARW or DNG) are not flat images; decode them with photocraft-raw",
+        ));
     }
     let file = File::parse(bytes).ok_or_else(|| err("not a TIFF or BigTIFF header"))?;
     let info = ifd::info_of(&file)?;
@@ -262,7 +265,10 @@ fn scratch_bound(direct: bool, chunk_bytes: u64, band_rows: usize, h: u32, worke
 pub(crate) fn orientation(bytes: &[u8], page: Option<usize>) -> u16 {
     let Some(file) = File::parse(bytes) else { return 1 };
     let Ok(info) = ifd::info_of(&file) else { return 1 };
-    page.or_else(|| info.default_page()).and_then(|i| info.pages.get(i)).and_then(|p| file.ifd(p.ifd_offset)).map_or(1, |d| ifd::orientation_of(&file, &d))
+    page.or_else(|| info.default_page())
+        .and_then(|i| info.pages.get(i))
+        .and_then(|p| file.ifd(p.ifd_offset))
+        .map_or(1, |d| ifd::orientation_of(&file, &d))
 }
 
 /// The page's metadata; the ICC profile goes to `icc`.

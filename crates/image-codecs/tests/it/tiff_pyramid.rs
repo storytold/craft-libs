@@ -51,8 +51,15 @@ fn off_by_default_and_none_for_small_images() {
 
 #[test]
 fn every_depth_layout_and_compression() {
-    let layouts =
-        [ChannelLayout::Gray, ChannelLayout::GrayA, ChannelLayout::Rgb, ChannelLayout::Rgba, ChannelLayout::Cmyk, ChannelLayout::CmykA, ChannelLayout::Lab];
+    let layouts = [
+        ChannelLayout::Gray,
+        ChannelLayout::GrayA,
+        ChannelLayout::Rgb,
+        ChannelLayout::Rgba,
+        ChannelLayout::Cmyk,
+        ChannelLayout::CmykA,
+        ChannelLayout::Lab,
+    ];
     for layout in layouts {
         for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
             for compression in [TiffCompression::None, TiffCompression::Lzw, TiffCompression::Deflate, TiffCompression::PackBits] {
@@ -100,7 +107,10 @@ fn first_level_pixel(layout: ChannelLayout, tile: [&[u8]; 4]) -> Vec<u8> {
 fn colour_is_weighted_by_alpha() {
     // One opaque pixel and three transparent ones of another colour: the level keeps the opaque
     // colour at a quarter alpha. Unweighted, the transparent colour would bleed in (pink, not red).
-    assert_eq!(first_level_pixel(ChannelLayout::Rgba, [&[255, 0, 0, 255], &[255, 255, 255, 0], &[255, 255, 255, 0], &[255, 255, 255, 0]]), [255, 0, 0, 64]);
+    assert_eq!(
+        first_level_pixel(ChannelLayout::Rgba, [&[255, 0, 0, 255], &[255, 255, 255, 0], &[255, 255, 255, 0], &[255, 255, 255, 0]]),
+        [255, 0, 0, 64]
+    );
     // Gray and CMYK reach the same path with other channel counts.
     assert_eq!(first_level_pixel(ChannelLayout::GrayA, [&[40, 255], &[255, 0], &[255, 0], &[255, 0]]), [40, 64]);
     assert_eq!(first_level_pixel(ChannelLayout::CmykA, [&[200, 10, 30, 90, 255], &[0; 5], &[0; 5], &[0; 5]]), [200, 10, 30, 90, 64]);

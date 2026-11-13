@@ -23,7 +23,8 @@ fn jpeg_xl_is_export_only_and_detects_both_signatures() {
 #[test]
 fn jpeg_xl_encoding_is_deterministic_and_converts_float_to_integer() {
     let input =
-        Image::from_u8(3, 2, ChannelLayout::Rgba, vec![0, 255, 17, 127, 20, 40, 80, 255, 255, 0, 2, 0, 10, 20, 30, 64, 0, 0, 0, 1, 90, 80, 70, 128]).unwrap();
+        Image::from_u8(3, 2, ChannelLayout::Rgba, vec![0, 255, 17, 127, 20, 40, 80, 255, 255, 0, 2, 0, 10, 20, 30, 64, 0, 0, 0, 1, 90, 80, 70, 128])
+            .unwrap();
     let opts = EncodeOptions::default();
     let one = encode(&input, Format::Jxl, &opts).unwrap();
     let two = encode(&input, Format::Jxl, &opts).unwrap();

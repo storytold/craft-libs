@@ -40,8 +40,8 @@ const ANNEX_K_CHROMA: [u16; 64] = [
 /// The natural-order index of the k-th coefficient in zig-zag order (T.81 Figure A.6): DQT
 /// stores its 64 values in this order.
 const ZIGZAG: [usize; 64] = [
-    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29,
-    22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
+    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43,
+    36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];
 
 /// One quantisation table from a DQT segment, in natural order, with its precision.
@@ -129,7 +129,11 @@ fn read_dqt(mut seg: &[u8], tables: &mut [Option<Table>; 4]) {
         let Some(data) = rest.get(..n) else { return };
         let mut values = [0u16; 64];
         for (k, &natural) in ZIGZAG.iter().enumerate() {
-            let v = if wide { data.get(2 * k..2 * k + 2).map_or(0, |p| u16::from_be_bytes([p[0], p[1]])) } else { data.get(k).map_or(0, |&p| u16::from(p)) };
+            let v = if wide {
+                data.get(2 * k..2 * k + 2).map_or(0, |p| u16::from_be_bytes([p[0], p[1]]))
+            } else {
+                data.get(k).map_or(0, |&p| u16::from(p))
+            };
             if let Some(dst) = values.get_mut(natural) {
                 *dst = v;
             }

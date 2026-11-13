@@ -3,13 +3,13 @@
 //! listing, the colour-ranked auto-pick and part-by-index decoding, and malformed
 //! inputs must error, never panic.
 
-use exr::prelude::{
-    AnyChannel, AnyChannels, Blocks, Compression, Encoding, FlatSamples, Image, ImageAttributes, IntegerBounds, Layer, LayerAttributes, LineOrder,
-    WritableImage,
-};
 use craft_image_codecs::f16;
 use craft_image_codecs::{
     ChannelLayout, DecodeOptions, DecodeWarning, Format, Limits, SampleType, decode, decode_as_with, decode_exr_part, exr_info, probe_size,
+};
+use exr::prelude::{
+    AnyChannel, AnyChannels, Blocks, Compression, Encoding, FlatSamples, Image, ImageAttributes, IntegerBounds, Layer, LayerAttributes, LineOrder,
+    WritableImage,
 };
 
 fn layer_f32(name: &str, comp: Compression, chans: &[(&str, Vec<f32>)]) -> Layer<AnyChannels<FlatSamples>> {
@@ -49,7 +49,11 @@ fn aov_file() -> Vec<u8> {
     let diffuse: [Vec<f32>; 3] = std::array::from_fn(|c| (0..n).map(|_| [0.3, 0.6, 0.9][c]).collect());
     let layers = vec![
         layer_f32("Z", Compression::Uncompressed, &[("Z", z)]),
-        layer_f32("beauty", Compression::ZIP1, &[("R", beauty[0].clone()), ("G", beauty[1].clone()), ("B", beauty[2].clone()), ("A", beauty[3].clone())]),
+        layer_f32(
+            "beauty",
+            Compression::ZIP1,
+            &[("R", beauty[0].clone()), ("G", beauty[1].clone()), ("B", beauty[2].clone()), ("A", beauty[3].clone())],
+        ),
         layer_f32("diffuse", Compression::RLE, &[("R", diffuse[0].clone()), ("G", diffuse[1].clone()), ("B", diffuse[2].clone())]),
     ];
     write_image(layers)
@@ -291,8 +295,15 @@ fn auto_pick_and_probe_skip_incoherent_rgb_parts() {
 
 #[test]
 fn flat_decode_prefers_the_highest_ranked_complete_group() {
-    let bytes =
-        channel_group_file(&[("aaa.R", 9.0), ("aaa.G", 8.0), ("aaa.B", 7.0), ("beauty.R", 0.25), ("beauty.G", 0.5), ("beauty.B", 2.0), ("beauty.A", 0.75)]);
+    let bytes = channel_group_file(&[
+        ("aaa.R", 9.0),
+        ("aaa.G", 8.0),
+        ("aaa.B", 7.0),
+        ("beauty.R", 0.25),
+        ("beauty.G", 0.5),
+        ("beauty.B", 2.0),
+        ("beauty.A", 0.75),
+    ]);
     assert_channel_group(&bytes, ChannelLayout::Rgba, &[0.25, 0.5, 2.0, 0.75]);
     let bytes = channel_group_file(&[("aaa.Y", 9.0), ("beauty.Y", 0.5), ("beauty.A", 0.75)]);
     assert_channel_group(&bytes, ChannelLayout::GrayA, &[0.5, 0.75]);

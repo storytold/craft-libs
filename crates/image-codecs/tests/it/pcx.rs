@@ -112,7 +112,8 @@ fn rejects_truncated_and_overshooting_rle_without_panicking() {
 fn refuses_headers_that_exceed_allocation_budget() {
     let mut b = header(8, 3, 3000, 3000, 3000);
     // The default decoder rejects the allocation before reading any scanline.
-    let opts = craft_image_codecs::DecodeOptions { limits: craft_image_codecs::Limits { max_alloc: 1024, ..Default::default() }, ..Default::default() };
+    let opts =
+        craft_image_codecs::DecodeOptions { limits: craft_image_codecs::Limits { max_alloc: 1024, ..Default::default() }, ..Default::default() };
     assert!(matches!(craft_image_codecs::decode_as_with(Format::Pcx, &b, &opts), Err(CodecError::LimitExceeded(_))));
     b[2] = 0;
     assert_eq!(detect(&b), None, "unsupported uncompressed encoding");

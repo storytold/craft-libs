@@ -39,8 +39,8 @@ const MAX_HDUS: usize = 1000;
 /// Keywords that describe the data layout. They are written from the image, never copied from
 /// (or kept as) text metadata: after decoding they no longer describe the pixels.
 const STRUCTURAL: &[&str] = &[
-    "SIMPLE", "BITPIX", "NAXIS", "EXTEND", "BZERO", "BSCALE", "BLANK", "END", "XTENSION", "PCOUNT", "GCOUNT", "ROWORDER", "CHECKSUM", "DATASUM", "DATAMIN",
-    "DATAMAX", "ZIMAGE",
+    "SIMPLE", "BITPIX", "NAXIS", "EXTEND", "BZERO", "BSCALE", "BLANK", "END", "XTENSION", "PCOUNT", "GCOUNT", "ROWORDER", "CHECKSUM", "DATASUM",
+    "DATAMIN", "DATAMAX", "ZIMAGE",
 ];
 
 fn err(msg: impl std::fmt::Display) -> CodecError {
@@ -192,7 +192,9 @@ fn axes(h: &Header) -> Result<Vec<u64>, CodecError> {
     if !(0..=999).contains(&n) {
         return Err(err(format!("invalid NAXIS {n}")));
     }
-    (1..=n).map(|i| h.int(&format!("NAXIS{i}")).and_then(|v| u64::try_from(v).ok()).ok_or_else(|| err(format!("missing or negative NAXIS{i}")))).collect()
+    (1..=n)
+        .map(|i| h.int(&format!("NAXIS{i}")).and_then(|v| u64::try_from(v).ok()).ok_or_else(|| err(format!("missing or negative NAXIS{i}"))))
+        .collect()
 }
 
 /// Bytes in the data unit (before padding to a block).
@@ -433,7 +435,9 @@ fn ascii(s: &str) -> String {
 
 /// A FITS literal (number or logical) that can be written unquoted.
 fn literal(v: &str) -> bool {
-    v == "T" || v == "F" || (v.replace(['D', 'd'], "E").parse::<f64>().is_ok_and(|f| f.is_finite()) && v.bytes().all(|b| b"0123456789+-.EeDd".contains(&b)))
+    v == "T"
+        || v == "F"
+        || (v.replace(['D', 'd'], "E").parse::<f64>().is_ok_and(|f| f.is_finite()) && v.bytes().all(|b| b"0123456789+-.EeDd".contains(&b)))
 }
 
 fn quoted(v: &str, room: usize) -> String {

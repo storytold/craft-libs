@@ -382,7 +382,8 @@ pub(crate) fn decode_cineon(bytes: &[u8], limits: &Limits) -> Result<Image, Code
     }
     let o = Order::Big;
     let missing = |what: &str| err(format!("the header ends before {what}"));
-    let image_offset = usize::try_from(o.u32(bytes, 4).ok_or_else(|| missing("the image data offset"))?).map_err(|_| err("image data offset out of range"))?;
+    let image_offset =
+        usize::try_from(o.u32(bytes, 4).ok_or_else(|| missing("the image data offset"))?).map_err(|_| err("image data offset out of range"))?;
     let channels = *bytes.get(193).ok_or_else(|| missing("the channel count"))?;
     let bits = *bytes.get(198).ok_or_else(|| missing("the bits per pixel"))?;
     if bits != 10 {
@@ -442,8 +443,10 @@ pub(crate) fn encode_cineon(src: &Image, plan: Plan) -> Result<Vec<u8>, CodecErr
         return Err(enc("the image has the wrong number of samples".into()));
     }
     let data_len = line_bytes(per_line, 10, 1).and_then(|l| l.checked_mul(h as usize)).ok_or_else(|| enc("image too large".into()))?;
-    let total =
-        CINEON_HEADER_LEN.checked_add(data_len).and_then(|t| u32::try_from(t).ok()).ok_or_else(|| enc("image too large for a Cineon file (4 GiB)".into()))?;
+    let total = CINEON_HEADER_LEN
+        .checked_add(data_len)
+        .and_then(|t| u32::try_from(t).ok())
+        .ok_or_else(|| enc("image too large for a Cineon file (4 GiB)".into()))?;
 
     let mut wr = Writer { h: vec![0; CINEON_HEADER_LEN] };
     // File information.
@@ -731,8 +734,10 @@ mod tests {
     /// A minimal header for `w`×`h` with element 0 set; image data at 2048.
     fn header(o: Order, w: u32, h: u32, descriptor: u8, bits: u8, packing: u16) -> Vec<u8> {
         let mut b = vec![0u8; HEADER_LEN];
-        let put32 = |b: &mut Vec<u8>, at: usize, v: u32| b[at..at + 4].copy_from_slice(&if o == Order::Big { v.to_be_bytes() } else { v.to_le_bytes() });
-        let put16 = |b: &mut Vec<u8>, at: usize, v: u16| b[at..at + 2].copy_from_slice(&if o == Order::Big { v.to_be_bytes() } else { v.to_le_bytes() });
+        let put32 =
+            |b: &mut Vec<u8>, at: usize, v: u32| b[at..at + 4].copy_from_slice(&if o == Order::Big { v.to_be_bytes() } else { v.to_le_bytes() });
+        let put16 =
+            |b: &mut Vec<u8>, at: usize, v: u16| b[at..at + 2].copy_from_slice(&if o == Order::Big { v.to_be_bytes() } else { v.to_le_bytes() });
         b[..4].copy_from_slice(if o == Order::Big { b"SDPX" } else { b"XPDS" });
         put32(&mut b, 4, HEADER_LEN as u32);
         put32(&mut b, 28, INDUSTRY_LEN);

@@ -8,7 +8,8 @@ use std::io::Cursor;
 
 use exr::meta::MetaData;
 use exr::prelude::{
-    AnyChannel, AnyChannels, Blocks, Compression, Encoding, FlatSamples, Layer, LayerAttributes, LineOrder, ReadChannels, ReadLayers, WritableImage, read,
+    AnyChannel, AnyChannels, Blocks, Compression, Encoding, FlatSamples, Layer, LayerAttributes, LineOrder, ReadChannels, ReadLayers, WritableImage,
+    read,
 };
 use half::f16;
 
@@ -71,8 +72,10 @@ pub(crate) fn check_previews(b: &[u8]) -> Result<(), CodecError> {
                 _ => return Ok(()),
             };
             if kind == b"preview" {
-                let declared =
-                    u32_at(value).zip(u32_at(value + 4)).and_then(|(w, h)| u64::from(w).checked_mul(u64::from(h))?.checked_mul(4)).filter(|_| size >= 8);
+                let declared = u32_at(value)
+                    .zip(u32_at(value + 4))
+                    .and_then(|(w, h)| u64::from(w).checked_mul(u64::from(h))?.checked_mul(4))
+                    .filter(|_| size >= 8);
                 if declared.is_none_or(|n| n > (size - 8) as u64) {
                     return Err(err("a preview attribute declares more pixels than it holds"));
                 }
@@ -201,7 +204,8 @@ fn layer_to_image(layer: &Layer<AnyChannels<FlatSamples>>) -> Result<Image, Code
     let (w, h) = (layer.size.0, layer.size.1);
     let channels = &layer.channel_data.list;
     let names: Vec<_> = channels.iter().map(|c| c.name.to_string()).collect();
-    let (layout, selected) = exr_color_channels(names.iter().map(String::as_str)).ok_or_else(|| CodecError::unsupported(F, "no R/G/B or Y channels"))?;
+    let (layout, selected) =
+        exr_color_channels(names.iter().map(String::as_str)).ok_or_else(|| CodecError::unsupported(F, "no R/G/B or Y channels"))?;
     let color: Vec<_> = selected.iter().map(|i| channels.get(*i).ok_or_else(|| err("selected channel is missing"))).collect::<Result<_, _>>()?;
     let all_f16 = color.iter().all(|c| matches!(c.sample_data, FlatSamples::F16(_)));
     let sample = if all_f16 { SampleType::F16 } else { SampleType::F32 };
@@ -273,7 +277,10 @@ pub(crate) fn probe(bytes: &[u8], limits: &Limits) -> Result<(u32, u32), CodecEr
 pub(crate) fn decode_part(bytes: &[u8], index: usize, limits: &Limits) -> Result<Image, CodecError> {
     let meta = read_meta(bytes, limits)?;
     if meta.requirements.has_deep_data {
-        return Err(CodecError::unsupported(F, "this file has deep parts; the deep decoder composites those (mixing flat and deep parts is not supported)"));
+        return Err(CodecError::unsupported(
+            F,
+            "this file has deep parts; the deep decoder composites those (mixing flat and deep parts is not supported)",
+        ));
     }
     if index >= meta.headers.len() {
         return Err(err(format!("part index {index} is out of range ({} parts)", meta.headers.len())));
@@ -287,7 +294,10 @@ pub(crate) fn decode_part(bytes: &[u8], index: usize, limits: &Limits) -> Result
 pub(crate) fn decode_channels(bytes: &[u8], index: usize, names: &[&str], limits: &Limits) -> Result<Image, CodecError> {
     let meta = read_meta(bytes, limits)?;
     if meta.requirements.has_deep_data {
-        return Err(CodecError::unsupported(F, "this file has deep parts; the deep decoder composites those (mixing flat and deep parts is not supported)"));
+        return Err(CodecError::unsupported(
+            F,
+            "this file has deep parts; the deep decoder composites those (mixing flat and deep parts is not supported)",
+        ));
     }
     if index >= meta.headers.len() {
         return Err(err(format!("part index {index} is out of range ({} parts)", meta.headers.len())));

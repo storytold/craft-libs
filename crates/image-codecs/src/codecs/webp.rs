@@ -186,7 +186,8 @@ pub(crate) fn export_exif(img: &Image) -> Option<Vec<u8>> {
 pub(crate) fn keeps_dpi(img: &Image) -> bool {
     let bare_default = img.meta.exif.as_deref().is_none_or(<[u8]>::is_empty) && img.meta.dpi.is_none_or(is_default_ppi);
     // The XMP written beside it carries the resolution too, and readers look there first.
-    let in_xmp = img.meta.xmp.as_deref().is_some_and(|x| crate::resolution::xmp_resolution(&crate::resolution::export_xmp(x, img.meta.dpi)).is_some());
+    let in_xmp =
+        img.meta.xmp.as_deref().is_some_and(|x| crate::resolution::xmp_resolution(&crate::resolution::export_xmp(x, img.meta.dpi)).is_some());
     bare_default || in_xmp || export_exif(img).is_some_and(|e| crate::resolution::exif_resolution(&e).is_some())
 }
 

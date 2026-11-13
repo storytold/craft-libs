@@ -143,7 +143,8 @@ impl<R: Read + Seek> Decoder<R> {
         }
         // The same channels the whole-file decoder shows, so both routes open the same image.
         let names: Vec<String> = list.iter().map(|c| c.name.to_string()).collect();
-        let (layout, picked) = crate::image::exr_color_channels(names.iter().map(String::as_str)).ok_or_else(|| unsupported("no R/G/B or Y channels"))?;
+        let (layout, picked) =
+            crate::image::exr_color_channels(names.iter().map(String::as_str)).ok_or_else(|| unsupported("no R/G/B or Y channels"))?;
         let gray = matches!(layout, crate::ChannelLayout::Gray | crate::ChannelLayout::GrayA);
         let mut selected: Vec<Option<usize>> = picked.into_iter().map(Some).collect();
         if !matches!(layout, crate::ChannelLayout::GrayA | crate::ChannelLayout::Rgba) {
@@ -241,8 +242,10 @@ impl<R: Read + Seek> Decoder<R> {
             }
             self.source.read_exact(bytes).map_err(invalid)?;
         }
-        let chunk =
-            Chunk { layer_index: 0, compressed_block: CompressedBlock::ScanLine(CompressedScanLineBlock { y_coordinate: y, compressed_pixels_le: packed }) };
+        let chunk = Chunk {
+            layer_index: 0,
+            compressed_block: CompressedBlock::ScanLine(CompressedScanLineBlock { y_coordinate: y, compressed_pixels_le: packed }),
+        };
         let block = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| UncompressedBlock::decompress_chunk(chunk, &self.meta, false)))
             .map_err(|_| invalid("invalid EXR compression block"))?
             .map_err(invalid)?;

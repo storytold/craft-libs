@@ -252,7 +252,8 @@ fn least_squares(block: &Block, opaque: Mask, bytes: &[u8; 8]) -> Option<(u16, u
 /// between the extremes other than 0 and 255, plus exact 0 and 255) fits better.
 fn alpha_block(block: &Block, inside: Mask) -> [u8; 8] {
     let alphas = || block.iter().enumerate().filter(move |(t, _)| inside >> t & 1 != 0).map(|(_, texel)| texel[3]);
-    let range = |values: &mut dyn Iterator<Item = u8>| values.fold(None, |r: Option<(u8, u8)>, a| Some(r.map_or((a, a), |(lo, hi)| (lo.min(a), hi.max(a)))));
+    let range =
+        |values: &mut dyn Iterator<Item = u8>| values.fold(None, |r: Option<(u8, u8)>, a| Some(r.map_or((a, a), |(lo, hi)| (lo.min(a), hi.max(a)))));
     let (lo, hi) = range(&mut alphas()).unwrap_or((0, 0));
     // Eight values need a0 > a1; equal ends fall to the six-value mode, which starts with a0 too.
     let eight = alpha_fit(block, inside, hi, lo);

@@ -231,8 +231,10 @@ pub(crate) fn decode(bytes: &[u8], layer_name: &str, limits: &Limits) -> Result<
     // returned per-pixel vectors could exceed the caller's max_alloc budget.
     let ranks = layer.channels.len().saturating_mul(2);
     let pair_capacity = (ranks as u64).saturating_mul(std::mem::size_of::<(f32, f32)>() as u64);
-    let per_pixel =
-        (layer.channels.len().max(1) as u64).saturating_mul(16).saturating_add(std::mem::size_of::<Vec<(f32, f32)>>() as u64).saturating_add(pair_capacity);
+    let per_pixel = (layer.channels.len().max(1) as u64)
+        .saturating_mul(16)
+        .saturating_add(std::mem::size_of::<Vec<(f32, f32)>>() as u64)
+        .saturating_add(pair_capacity);
     limits.check_bytes(w32, h32, per_pixel)?;
 
     let ex_layer = super::exr::read_layer(bytes, layer.part)?;

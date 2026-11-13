@@ -4,11 +4,12 @@
 //! the manifest round trip and the per-pixel pairs. Malformed inputs must error or
 //! degrade, never panic.
 
+use craft_image_codecs::{Limits, cryptomatte_id, cryptomatte_key, cryptomatte_layers, cryptomatte_preview_color, decode_cryptomatte};
 use exr::meta::attribute::{AttributeValue, Text};
 use exr::prelude::{
-    AnyChannel, AnyChannels, Blocks, Compression, Encoding, FlatSamples, ImageAttributes, IntegerBounds, Layer, LayerAttributes, LineOrder, WritableImage,
+    AnyChannel, AnyChannels, Blocks, Compression, Encoding, FlatSamples, ImageAttributes, IntegerBounds, Layer, LayerAttributes, LineOrder,
+    WritableImage,
 };
-use craft_image_codecs::{Limits, cryptomatte_id, cryptomatte_key, cryptomatte_layers, cryptomatte_preview_color, decode_cryptomatte};
 
 // -------------------------------------------------------------------------------------------
 // The official hash test vectors (cryptomatte_utilities_tests.py, CryptoHashing).
@@ -77,7 +78,12 @@ fn cryptomatte_file(name: &str) -> Vec<u8> {
     let s1: Vec<f32> = (0..w * h).map(|p| if p % w == 0 { sphere } else { 0.0 }).collect();
     let s1c: Vec<f32> = (0..w * h).map(|p| if p % w == 0 { 0.25 } else { 0.0 }).collect();
     let mk = |n: String, v: Vec<f32>| AnyChannel::new(n.as_str(), FlatSamples::F32(v));
-    let list = vec![mk(format!("{name}00.red"), s0), mk(format!("{name}00.green"), s0c), mk(format!("{name}01.red"), s1), mk(format!("{name}01.green"), s1c)];
+    let list = vec![
+        mk(format!("{name}00.red"), s0),
+        mk(format!("{name}00.green"), s0c),
+        mk(format!("{name}01.red"), s1),
+        mk(format!("{name}01.green"), s1c),
+    ];
     let key = cryptomatte_key("CryptoAsset"); // attributes always use the canonical name
     let manifest = format!("{{\"cube\":\"{:08x}\",\"sphere\":\"{:08x}\"}}", cube.to_bits(), sphere.to_bits());
     let mut attrs = LayerAttributes::named(name);

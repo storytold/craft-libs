@@ -278,7 +278,8 @@ fn png_rows_take_one_call_per_row_and_report_progress() {
 
 #[test]
 fn png_rows_share_their_bytes_without_copying_them() {
-    let bytes = std::sync::Arc::new(encode(&synth(20, 20, ChannelLayout::Rgba, SampleType::U8, 3, 0.2), Format::Png, &EncodeOptions::default()).unwrap());
+    let bytes =
+        std::sync::Arc::new(encode(&synth(20, 20, ChannelLayout::Rgba, SampleType::U8, 3, 0.2), Format::Png, &EncodeOptions::default()).unwrap());
     let mut rows = PngDecodeRows::new(SharedBytes(bytes.clone()), &Limits::default()).unwrap();
     let img = rows.step(&mut || true).unwrap().unwrap();
     assert_eq!(img, decode(&bytes).unwrap());

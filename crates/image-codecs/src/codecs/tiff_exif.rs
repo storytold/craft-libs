@@ -157,7 +157,8 @@ pub(crate) fn block(dirs: &ExifDirs) -> Vec<u8> {
         ifd0.push(pointer(TAG_GPS_IFD));
     }
     // Layout: header, then each directory followed by its out-of-line values.
-    let size = |fs: &[Field]| 2 + 12 * fs.len() + 4 + fs.iter().filter(|f| f.value.len() > 4).map(|f| f.value.len().next_multiple_of(2)).sum::<usize>();
+    let size =
+        |fs: &[Field]| 2 + 12 * fs.len() + 4 + fs.iter().filter(|f| f.value.len() > 4).map(|f| f.value.len().next_multiple_of(2)).sum::<usize>();
     let at0 = 8;
     let at_exif = at0 + size(&ifd0);
     let at_gps = at_exif + if dirs.exif.is_empty() { 0 } else { size(&dirs.exif) };

@@ -393,7 +393,9 @@ fn pnm_header_alone_reserves_nothing_without_limits() {
     // 2⁶² bytes before finding the raster missing (an abort).
     let none = opts(Limits::none());
     let side = 1u32 << 31;
-    for f in [format!("P1\n{side} {side}\n"), format!("P2\n{side} {side}\n255\n"), format!("P3\n{side} {side}\n255\n"), format!("P4\n{side} {side}\n")] {
+    for f in
+        [format!("P1\n{side} {side}\n"), format!("P2\n{side} {side}\n255\n"), format!("P3\n{side} {side}\n255\n"), format!("P4\n{side} {side}\n")]
+    {
         assert!(decode_with(f.as_bytes(), &none).is_err(), "{f:?}");
     }
 }
@@ -440,7 +442,8 @@ fn jpeg_bomb_header_rejected() {
 fn tiff_bomb_header_rejected() {
     // Minimal little-endian TIFF claiming 1_000_000 x 1_000_000 8-bit gray.
     let mut b = b"II*\0\x08\0\0\0".to_vec();
-    let entries: [(u16, u16, u32, u32); 6] = [(256, 4, 1, 1_000_000), (257, 4, 1, 1_000_000), (258, 3, 1, 8), (262, 3, 1, 1), (273, 4, 1, 0), (279, 4, 1, 0)];
+    let entries: [(u16, u16, u32, u32); 6] =
+        [(256, 4, 1, 1_000_000), (257, 4, 1, 1_000_000), (258, 3, 1, 8), (262, 3, 1, 1), (273, 4, 1, 0), (279, 4, 1, 0)];
     b.extend_from_slice(&(entries.len() as u16).to_le_bytes());
     for (tag, ty, count, val) in entries {
         b.extend_from_slice(&tag.to_le_bytes());

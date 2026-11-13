@@ -364,7 +364,9 @@ fn jpeg_opens_upright_for_every_orientation() {
 
 #[test]
 fn rgb_jpeg_with_dpi_swaps_resolution_on_a_quarter_turn() {
-    let img = Image::from_u8(16, 8, ChannelLayout::Rgb, vec![128; 16 * 8 * 3]).unwrap().with_meta(Metadata { dpi: Some((300.0, 150.0)), ..Default::default() });
+    let img = Image::from_u8(16, 8, ChannelLayout::Rgb, vec![128; 16 * 8 * 3])
+        .unwrap()
+        .with_meta(Metadata { dpi: Some((300.0, 150.0)), ..Default::default() });
     let jpeg = encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
     let back = decode(&jpeg_with_exif(&jpeg, &exif(6, false, false))).unwrap();
     assert_eq!(back.dimensions(), (8, 16));
@@ -584,7 +586,11 @@ fn upright_exif_keeps_every_other_byte() {
         tail.extend_from_slice(&u32b(4));
         tail.extend_from_slice(b"0232");
         tail.extend_from_slice(&u32b(0));
-        let e = ifd(big, &[(0x010F, 2, 12, u32b(make_at)), (0x0112, 3, 1, short(6, big)), (0x0131, 2, 4, *b"PC1\0"), (0x8769, 4, 1, u32b(sub_at))], &tail);
+        let e = ifd(
+            big,
+            &[(0x010F, 2, 12, u32b(make_at)), (0x0112, 3, 1, short(6, big)), (0x0131, 2, 4, *b"PC1\0"), (0x8769, 4, 1, u32b(sub_at))],
+            &tail,
+        );
         let mut prefixed = b"Exif\0\0".to_vec();
         prefixed.extend_from_slice(&e);
         let fixed = upright_exif(&prefixed).into_owned();

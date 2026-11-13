@@ -78,9 +78,11 @@ fn time(name: &str, bytes: &[u8]) {
 fn decode_30mp() {
     let rgb = pixels(3);
     let img = Image::from_u8(W, H, ChannelLayout::Rgb, rgb.clone()).unwrap();
-    for (name, c) in
-        [("strips, none", TiffCompression::None), ("strips, LZW + predictor", TiffCompression::Lzw), ("strips, Deflate + predictor", TiffCompression::Deflate)]
-    {
+    for (name, c) in [
+        ("strips, none", TiffCompression::None),
+        ("strips, LZW + predictor", TiffCompression::Lzw),
+        ("strips, Deflate + predictor", TiffCompression::Deflate),
+    ] {
         let bytes = encode(&img, Format::Tiff, &EncodeOptions { tiff_compression: c, ..Default::default() }).unwrap();
         time(&format!("RGB 8 {name}"), &bytes);
     }

@@ -103,7 +103,11 @@ fn every_layout_matches_the_whole_image_decoder() {
         ),
         (
             "palette 4-bit",
-            strips(W, H, 4, 1, 3, rows, &noise((W as usize).div_ceil(2) * H as usize, 8)).tag(320, SHORT, &(0..48u64).map(|i| i * 1365).collect::<Vec<_>>()),
+            strips(W, H, 4, 1, 3, rows, &noise((W as usize).div_ceil(2) * H as usize, 8)).tag(
+                320,
+                SHORT,
+                &(0..48u64).map(|i| i * 1365).collect::<Vec<_>>(),
+            ),
             row(3, 1) * rows as usize,
         ),
         ("gray 1-bit", strips(W, H, 1, 1, 1, rows, &noise((W as usize).div_ceil(8) * H as usize, 9)), row(1, 1) * rows as usize),
@@ -122,11 +126,9 @@ fn tiles_and_planar_data_match() {
     let (w, h) = (W as usize, H as usize);
     let px = noise(w * h * 3 * 2, 11);
     let tiled = |planar: bool| {
-        let mut d = Dir { entries: base(W, H, 16, 3, 2), chunks: tile_split(&px, w, h, 3, 2, 16, 16, planar), tiled: true }.tag(322, SHORT, &[16]).tag(
-            323,
-            SHORT,
-            &[16],
-        );
+        let mut d = Dir { entries: base(W, H, 16, 3, 2), chunks: tile_split(&px, w, h, 3, 2, 16, 16, planar), tiled: true }
+            .tag(322, SHORT, &[16])
+            .tag(323, SHORT, &[16]);
         if planar {
             d = d.tag(284, SHORT, &[2]);
         }
@@ -135,7 +137,8 @@ fn tiles_and_planar_data_match() {
     let band = w * 3 * 2 * 16;
     assert_same(&build(true, false, &[tiled(false)], &[0]).bytes, band, "chunky tiles");
     assert_same(&build(true, true, &[tiled(true)], &[0]).bytes, band, "planar tiles, BigTIFF");
-    let planar = Dir { entries: base(W, H, 16, 3, 2), chunks: planar_strips(&px, w, h, 3, 2, 5), tiled: false }.tag(278, LONG, &[5]).tag(284, SHORT, &[2]);
+    let planar =
+        Dir { entries: base(W, H, 16, 3, 2), chunks: planar_strips(&px, w, h, 3, 2, 5), tiled: false }.tag(278, LONG, &[5]).tag(284, SHORT, &[2]);
     assert_same(&build(true, false, &[planar], &[0]).bytes, w * 3 * 2 * 5, "planar strips");
 }
 

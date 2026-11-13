@@ -164,7 +164,9 @@ pub(crate) fn plan(image: &Image, format: Format, opts: &EncodeOptions) -> Plan 
     match format {
         // PNM: integer data can use any layout (PAM); float goes to PFM
         // which only has gray and RGB.
-        Format::Pnm if sample.is_float() => Plan { layout: pick_layout(layout, &[ChannelLayout::Gray, ChannelLayout::Rgb], false), sample: SampleType::F32 },
+        Format::Pnm if sample.is_float() => {
+            Plan { layout: pick_layout(layout, &[ChannelLayout::Gray, ChannelLayout::Rgb], false), sample: SampleType::F32 }
+        }
         // DPX has no luma + alpha descriptor: gray with alpha is written as luma, alpha dropped.
         // The sample type follows the chosen bits (U8 for 8, U16 for 10, 12 and 16).
         Format::Dpx => Plan {

@@ -111,7 +111,8 @@ macro_rules! write_extras {
 /// is an error, not an abort.
 pub(super) fn try_with_capacity<T>(len: usize) -> io::Result<Vec<T>> {
     let mut v = Vec::new();
-    v.try_reserve_exact(len).map_err(|_| io::Error::new(io::ErrorKind::OutOfMemory, format!("cannot allocate {len} samples for the extra samples")))?;
+    v.try_reserve_exact(len)
+        .map_err(|_| io::Error::new(io::ErrorKind::OutOfMemory, format!("cannot allocate {len} samples for the extra samples")))?;
     Ok(v)
 }
 
@@ -411,7 +412,8 @@ pub(super) fn half_size(img: &Image) -> Result<Image, CodecError> {
     let ch = layout.channels();
     let bps = sample.bytes();
     let src_row = (w as usize).checked_mul(ch).and_then(|n| n.checked_mul(bps)).ok_or_else(|| CodecError::encode(F, "image row size overflows"))?;
-    let out_row = (nw as usize).checked_mul(ch).and_then(|n| n.checked_mul(bps)).ok_or_else(|| CodecError::encode(F, "pyramid row size overflows"))?;
+    let out_row =
+        (nw as usize).checked_mul(ch).and_then(|n| n.checked_mul(bps)).ok_or_else(|| CodecError::encode(F, "pyramid row size overflows"))?;
     let len = out_row.checked_mul(nh as usize).ok_or_else(|| CodecError::encode(F, "pyramid level size overflows"))?;
     if img.data().len() < src_row.saturating_mul(h as usize) {
         return Err(CodecError::encode(F, "image buffer is shorter than its dimensions"));

@@ -355,7 +355,9 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
                 let at = held.checked_mul(self.line).ok_or_else(|| err("image too large"))?;
                 let end = at.checked_add(self.line).ok_or_else(|| err("image too large"))?;
                 if self.buf.len() < end {
-                    self.buf.try_reserve_exact(end - self.buf.len()).map_err(|_| CodecError::LimitExceeded("cannot allocate a group of rows".into()))?;
+                    self.buf
+                        .try_reserve_exact(end - self.buf.len())
+                        .map_err(|_| CodecError::LimitExceeded("cannot allocate a group of rows".into()))?;
                     self.buf.resize(end, 0);
                 }
                 let row = self.buf.get_mut(at..end).ok_or_else(|| err("invalid PNG row group"))?;
@@ -990,7 +992,14 @@ fn inflate_text(mut p: PendingText, bytes: &[u8]) -> Result<TextBatch, CodecErro
 /// An uncompressed iTXt value is UTF-8 checked batch by batch before it is charged: an invalid
 /// value is dropped even when it is over the budget, as the previous whole-value check did.
 /// Its budget error is deferred until every byte has been seen and found valid.
-fn append_checked(out: &mut Vec<u8>, utf8: &mut Option<Utf8Check>, over: &mut bool, bytes: &[u8], latin1: bool, limit: usize) -> Result<bool, CodecError> {
+fn append_checked(
+    out: &mut Vec<u8>,
+    utf8: &mut Option<Utf8Check>,
+    over: &mut bool,
+    bytes: &[u8],
+    latin1: bool,
+    limit: usize,
+) -> Result<bool, CodecError> {
     if let Some(check) = utf8.as_mut()
         && !check.feed(bytes)
     {
@@ -1112,8 +1121,11 @@ fn start<W: Write>(
             && x > 0.0
             && y > 0.0
         {
-            info.pixel_dims =
-                Some(png::PixelDimensions { xppu: (x / METERS_PER_INCH).round() as u32, yppu: (y / METERS_PER_INCH).round() as u32, unit: png::Unit::Meter });
+            info.pixel_dims = Some(png::PixelDimensions {
+                xppu: (x / METERS_PER_INCH).round() as u32,
+                yppu: (y / METERS_PER_INCH).round() as u32,
+                unit: png::Unit::Meter,
+            });
         }
     }
     let mut encoder = png::Encoder::with_info(out, info).map_err(|e| CodecError::encode(F, e))?;
@@ -1136,7 +1148,9 @@ fn start<W: Write>(
             res.map_err(|e| CodecError::encode(F, e))?;
         }
         if let Some(xmp) = &meta.xmp {
-            encoder.add_itxt_chunk(XMP_KEYWORD.into(), crate::resolution::export_xmp(xmp, meta.dpi).into_owned()).map_err(|e| CodecError::encode(F, e))?;
+            encoder
+                .add_itxt_chunk(XMP_KEYWORD.into(), crate::resolution::export_xmp(xmp, meta.dpi).into_owned())
+                .map_err(|e| CodecError::encode(F, e))?;
         }
     }
     let mut writer = encoder.write_header().map_err(|e| CodecError::encode(F, e))?;
@@ -1195,7 +1209,18 @@ impl<W: Write> PngRows<W> {
         }
         let plan = crate::fidelity::plan(first, F, opts);
         let writer = start(out, (width, height), (plan.layout, plan.sample), first.icc.as_ref(), &first.meta, opts)?;
-        Ok(Self { writer, plan, width, height, rows: 0, level: opts.png_compression, pending: Vec::new(), prev: Vec::new(), adler: 1, started: false })
+        Ok(Self {
+            writer,
+            plan,
+            width,
+            height,
+            rows: 0,
+            level: opts.png_compression,
+            pending: Vec::new(),
+            prev: Vec::new(),
+            adler: 1,
+            started: false,
+        })
     }
 
     /// Encodes the next rows of the image: `band` is as wide as the image, in any layout and
@@ -1235,7 +1260,8 @@ impl<W: Write> PngRows<W> {
         let parts = deflate_rows(rows, prev, stride, bpp, per_band, deflate_level(self.level), finish, encode_threads())
             .ok_or_else(|| CodecError::encode(F, "a band of rows could not be compressed"))?;
         let mut zlib = Vec::new();
-        zlib.try_reserve_exact(parts.iter().map(|p| p.z.len()).sum::<usize>() + 6).map_err(|_| CodecError::encode(F, "not enough memory for PNG data"))?;
+        zlib.try_reserve_exact(parts.iter().map(|p| p.z.len()).sum::<usize>() + 6)
+            .map_err(|_| CodecError::encode(F, "not enough memory for PNG data"))?;
         if !self.started {
             zlib.extend_from_slice(&zlib_header(self.level));
             self.started = true;
@@ -1266,7 +1292,8 @@ impl<W: Write> PngRows<W> {
 /// Build the zlib stream for an Adam7-interlaced image (filter type 0).
 fn adam7_idat(data: &[u8], w: usize, h: usize, bpp: usize, level: PngCompression) -> Result<Vec<u8>, CodecError> {
     // (x0, y0, dx, dy) per pass.
-    const PASSES: [(usize, usize, usize, usize); 7] = [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)];
+    const PASSES: [(usize, usize, usize, usize); 7] =
+        [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)];
     let mut raw = Vec::new();
     raw.try_reserve_exact(data.len() + h * 7).map_err(|_| CodecError::encode(F, "not enough memory for PNG rows"))?;
     for (x0, y0, dx, dy) in PASSES {
@@ -1553,8 +1580,11 @@ pub fn encode_indexed(
         && x > 0.0
         && y > 0.0
     {
-        info.pixel_dims =
-            Some(png::PixelDimensions { xppu: (x / METERS_PER_INCH).round() as u32, yppu: (y / METERS_PER_INCH).round() as u32, unit: png::Unit::Meter });
+        info.pixel_dims = Some(png::PixelDimensions {
+            xppu: (x / METERS_PER_INCH).round() as u32,
+            yppu: (y / METERS_PER_INCH).round() as u32,
+            unit: png::Unit::Meter,
+        });
     }
     let mut out = Vec::new();
     {
@@ -1880,7 +1910,8 @@ mod parallel_tests {
         for (layout, sample, ch, bytes) in [(ChannelLayout::Rgb, SampleType::U8, 3usize, 1usize), (ChannelLayout::Rgba, SampleType::U16, 4, 2)] {
             let (w, h) = (1531u32, 977u32);
             let n = w as usize * h as usize * ch * bytes;
-            let px: Vec<u8> = (0..n).map(|i| ((i / 3) as u32).wrapping_mul(2_654_435_761).rotate_left(i as u32 % 7) as u8 / 3 + (i % 97) as u8).collect();
+            let px: Vec<u8> =
+                (0..n).map(|i| ((i / 3) as u32).wrapping_mul(2_654_435_761).rotate_left(i as u32 % 7) as u8 / 3 + (i % 97) as u8).collect();
             let img = Image::from_raw(w, h, layout, sample, px.clone()).unwrap();
             assert!(n >= PARALLEL_MIN_BYTES || sample == SampleType::U8);
             for level in [PngCompression::Fast, PngCompression::Default] {
@@ -2088,7 +2119,8 @@ mod rows_tests {
     #[test]
     fn metadata_yields_do_not_finalize_the_pixels_again() {
         let text = "A".repeat(20_000);
-        let img = image(8, 6, ChannelLayout::Rgb, SampleType::U8).with_meta(Metadata { text: vec![("Comment".into(), text.clone())], ..Default::default() });
+        let img = image(8, 6, ChannelLayout::Rgb, SampleType::U8)
+            .with_meta(Metadata { text: vec![("Comment".into(), text.clone())], ..Default::default() });
         let bytes = crate::encode(&img, Format::Png, &EncodeOptions::default()).unwrap();
         let mut rows = PngDecodeRows::new(bytes.as_slice(), &Limits::default()).unwrap();
         let mut calls = 0;

@@ -383,8 +383,9 @@ fn opaque_front_hides_back() {
 fn hdr_colour_is_kept_and_edge_tiles_match_scanlines() {
     let (w, h) = (7, 5);
     let counts: Vec<u32> = (0..w * h).map(|p| (p as u32 * 3) % 4).collect();
-    let sample =
-        |p: usize, ci: usize| -> Vec<f32> { (0..(p as u32 * 3) % 4).map(|k| [1.0, 0.25 * k as f32, 0.5, 2.0 + p as f32 / 8.0, 10.0 - k as f32][ci]).collect() };
+    let sample = |p: usize, ci: usize| -> Vec<f32> {
+        (0..(p as u32 * 3) % 4).map(|k| [1.0, 0.25 * k as f32, 0.5, 2.0 + p as f32 / 8.0, 10.0 - k as f32][ci]).collect()
+    };
     for compression in [0u8, 1, 2] {
         let scan = rgba_flat(&gen_deep(w, h, &RGBAZ, compression, None, &counts, &sample));
         let tiled = rgba_flat(&gen_deep(w, h, &RGBAZ, compression, Some((3, 2)), &counts, &sample));
@@ -482,7 +483,8 @@ fn tiles_match_scanlines() {
 /// Half-float channels come back as F16 samples with exact values.
 #[test]
 fn half_channels_round_trip() {
-    let channels = [Chan { name: "A", ty: 1 }, Chan { name: "B", ty: 1 }, Chan { name: "G", ty: 1 }, Chan { name: "R", ty: 1 }, Chan { name: "Z", ty: 1 }];
+    let channels =
+        [Chan { name: "A", ty: 1 }, Chan { name: "B", ty: 1 }, Chan { name: "G", ty: 1 }, Chan { name: "R", ty: 1 }, Chan { name: "Z", ty: 1 }];
     let bytes = gen_deep(4, 4, &channels, 2, None, COUNTS_ONE, &|p, _ci| {
         let v = f16::from_f32(0.5).to_f32();
         vec![v * (p as f32 + 1.0) / 4.0]
@@ -661,7 +663,11 @@ fn deep_tile_count_table_is_admitted_against_max_alloc() {
         // The table and its scratch copy are admitted together: 8 MiB.
         assert_eq!(decode_deep_exr(&big, &budget(2 * table)).expect("room for the table and its copy"), scan, "compression {compression}");
         let got = decode_deep_exr(&big, &budget(2 * table - 1));
-        assert!(matches!(got, Err(CodecError::LimitExceeded(_))), "compression {compression}: one byte short gave {:?}", got.map(|d| d.total_samples()));
+        assert!(
+            matches!(got, Err(CodecError::LimitExceeded(_))),
+            "compression {compression}: one byte short gave {:?}",
+            got.map(|d| d.total_samples())
+        );
     }
     // Ordinary tiles: full-size edge tables decode under the small budget, like clipped ones.
     let counts: Vec<u32> = (0..35).map(|p| (p * 3) % 4).collect();
@@ -729,7 +735,8 @@ fn clipped_count_tables_include_scratch_in_the_budget() {
             let required = if compression == 0 { 256 } else { 512 };
             assert_eq!(decode_deep_exr(&bytes, &budget(required)).expect("table and any scratch fit exactly"), want, "{what}");
             assert!(matches!(decode_deep_exr(&bytes, &budget(required - 1)), Err(CodecError::LimitExceeded(_))), "{what}");
-            let flat = craft_image_codecs::decode_with(&bytes, &craft_image_codecs::DecodeOptions { limits: budget(required - 1), ..Default::default() });
+            let flat =
+                craft_image_codecs::decode_with(&bytes, &craft_image_codecs::DecodeOptions { limits: budget(required - 1), ..Default::default() });
             assert!(matches!(flat, Err(CodecError::LimitExceeded(_))), "{what}");
             if compression == 0 {
                 assert_eq!(decode_deep_exr(&bytes, &budget(511)).expect("raw table needs no scratch"), want, "{what}");
@@ -802,9 +809,10 @@ type RealFile = (&'static str, u64, u64, &'static [(&'static str, &'static [u32]
 
 #[cfg(feature = "corpus")]
 const MULTIVARIATE_IDS: &[u32] = &[
-    127035619, 147085119, 319332210, 409096490, 523461226, 678492822, 683859976, 1058109025, 1193275200, 1503246798, 1552124883, 1613501244, 1672208113,
-    1687665471, 1741895317, 1841370478, 1863854195, 1865183722, 2056745377, 2202049807, 2303547305, 2369798380, 2433329986, 2439705590, 2505186565, 2698909330,
-    2862333315, 2898564507, 2979371527, 3007860936, 3182339638, 3236172513, 3497437340, 3626859046, 3656820528, 3693645783, 3739501011, 3936563811, 4048943790,
+    127035619, 147085119, 319332210, 409096490, 523461226, 678492822, 683859976, 1058109025, 1193275200, 1503246798, 1552124883, 1613501244,
+    1672208113, 1687665471, 1741895317, 1841370478, 1863854195, 1865183722, 2056745377, 2202049807, 2303547305, 2369798380, 2433329986, 2439705590,
+    2505186565, 2698909330, 2862333315, 2898564507, 2979371527, 3007860936, 3182339638, 3236172513, 3497437340, 3626859046, 3656820528, 3693645783,
+    3739501011, 3936563811, 4048943790,
 ];
 
 #[cfg(feature = "corpus")]
@@ -813,7 +821,10 @@ const REAL_FILES: &[RealFile] = &[
         "11.deep.exr",
         6056,
         2,
-        &[("id", &[523461226, 683859976, 1552124883, 2202049807, 2303547305, 2433329986, 2698909330, 3182339638, 3236172513, 3626859046, 3739501011])],
+        &[(
+            "id",
+            &[523461226, 683859976, 1552124883, 2202049807, 2303547305, 2433329986, 2698909330, 3182339638, 3236172513, 3626859046, 3739501011],
+        )],
     ),
     (
         "42.deep.exr",

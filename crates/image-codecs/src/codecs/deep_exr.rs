@@ -53,7 +53,12 @@ fn read_exact<'a>(cur: &mut Cursor<&'a [u8]>, n: usize, what: &str) -> Result<&'
 
 fn i32(cur: &mut Cursor<&[u8]>) -> Result<i32, CodecError> {
     let b = read_exact(cur, 4, "an i32")?;
-    Ok(i32::from_le_bytes([b.first().copied().unwrap_or(0), b.get(1).copied().unwrap_or(0), b.get(2).copied().unwrap_or(0), b.get(3).copied().unwrap_or(0)]))
+    Ok(i32::from_le_bytes([
+        b.first().copied().unwrap_or(0),
+        b.get(1).copied().unwrap_or(0),
+        b.get(2).copied().unwrap_or(0),
+        b.get(3).copied().unwrap_or(0),
+    ]))
 }
 
 fn u64(cur: &mut Cursor<&[u8]>) -> Result<u64, CodecError> {
@@ -125,7 +130,8 @@ fn reserve_up_to(out: &mut Vec<u8>, extra: usize, limit: usize, what: &str) -> R
     }
     if need > out.capacity() {
         let target = out.capacity().saturating_mul(2).max(need).min(limit);
-        out.try_reserve_exact(target.saturating_sub(out.len())).map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {target} bytes for {what}")))?;
+        out.try_reserve_exact(target.saturating_sub(out.len()))
+            .map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {target} bytes for {what}")))?;
     }
     Ok(())
 }
@@ -344,30 +350,31 @@ pub(crate) fn decode_deep(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Res
         // Block coordinates → the block's pixel bounds and its slot. The per-pixel index is
         // built only after the chunk's declared payload sizes are validated below, so a
         // truncated or lying chunk cannot drive a large index allocation first.
-        let (block_rows, block_cols, slot, row_w, scanline_row): (std::ops::Range<usize>, std::ops::Range<usize>, usize, usize, bool) = match &header.blocks {
-            BlockDescription::ScanLines => {
-                let y = i32(&mut cur)?;
-                let row = match y.checked_sub(y0) {
-                    Some(d) if d >= 0 && (d as usize) < h => d as usize,
-                    _ => return Err(err(format!("scan line block y={y} is outside the data window"))),
-                };
-                (row..row + 1, 0..w, row, w, true)
-            }
-            BlockDescription::Tiles(_) => {
-                let (tx, ty, lx, ly) = (i32(&mut cur)?, i32(&mut cur)?, i32(&mut cur)?, i32(&mut cur)?);
-                if (lx, ly) != (0, 0) {
-                    return Err(err(format!("deep tile at level ({lx},{ly}); only level 0 exists in a single-level file")));
+        let (block_rows, block_cols, slot, row_w, scanline_row): (std::ops::Range<usize>, std::ops::Range<usize>, usize, usize, bool) =
+            match &header.blocks {
+                BlockDescription::ScanLines => {
+                    let y = i32(&mut cur)?;
+                    let row = match y.checked_sub(y0) {
+                        Some(d) if d >= 0 && (d as usize) < h => d as usize,
+                        _ => return Err(err(format!("scan line block y={y} is outside the data window"))),
+                    };
+                    (row..row + 1, 0..w, row, w, true)
                 }
-                if tx < 0 || ty < 0 || (tx as usize) >= tiles_x || (ty as usize) * tile_h >= h {
-                    return Err(err(format!("tile ({tx},{ty}) is outside the data window")));
+                BlockDescription::Tiles(_) => {
+                    let (tx, ty, lx, ly) = (i32(&mut cur)?, i32(&mut cur)?, i32(&mut cur)?, i32(&mut cur)?);
+                    if (lx, ly) != (0, 0) {
+                        return Err(err(format!("deep tile at level ({lx},{ly}); only level 0 exists in a single-level file")));
+                    }
+                    if tx < 0 || ty < 0 || (tx as usize) >= tiles_x || (ty as usize) * tile_h >= h {
+                        return Err(err(format!("tile ({tx},{ty}) is outside the data window")));
+                    }
+                    let (bx, by) = ((tx as usize) * tile_w, (ty as usize) * tile_h);
+                    let rows = (by + tile_h).min(h);
+                    let cols = (bx + tile_w).min(w);
+                    let slot = (ty as usize).saturating_mul(tiles_x) + tx as usize;
+                    (by..rows, bx..cols, slot, cols - bx, false)
                 }
-                let (bx, by) = ((tx as usize) * tile_w, (ty as usize) * tile_h);
-                let rows = (by + tile_h).min(h);
-                let cols = (bx + tile_w).min(w);
-                let slot = (ty as usize).saturating_mul(tiles_x) + tx as usize;
-                (by..rows, bx..cols, slot, cols - bx, false)
-            }
-        };
+            };
         let block_len = block_rows.len().saturating_mul(block_cols.len());
         if seen.get(slot).copied().unwrap_or(true) {
             return Err(err(format!("two chunks cover block {slot}")));

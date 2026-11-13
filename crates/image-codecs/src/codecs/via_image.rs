@@ -327,7 +327,9 @@ fn to_dynamic(img: &Image) -> Result<DynamicImage, CodecError> {
     let bad = || CodecError::InvalidImage("buffer size mismatch".into());
     Ok(match (img.layout(), img.sample_type()) {
         (ChannelLayout::Gray, SampleType::U8) => DynamicImage::ImageLuma8(image::GrayImage::from_raw(w, h, img.data().to_vec()).ok_or_else(bad)?),
-        (ChannelLayout::GrayA, SampleType::U8) => DynamicImage::ImageLumaA8(image::GrayAlphaImage::from_raw(w, h, img.data().to_vec()).ok_or_else(bad)?),
+        (ChannelLayout::GrayA, SampleType::U8) => {
+            DynamicImage::ImageLumaA8(image::GrayAlphaImage::from_raw(w, h, img.data().to_vec()).ok_or_else(bad)?)
+        }
         (ChannelLayout::Rgb, SampleType::U8) => DynamicImage::ImageRgb8(image::RgbImage::from_raw(w, h, img.data().to_vec()).ok_or_else(bad)?),
         (ChannelLayout::Rgba, SampleType::U8) => DynamicImage::ImageRgba8(image::RgbaImage::from_raw(w, h, img.data().to_vec()).ok_or_else(bad)?),
         (ChannelLayout::Rgb, SampleType::F32) => {

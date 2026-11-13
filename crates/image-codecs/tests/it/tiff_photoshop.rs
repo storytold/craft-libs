@@ -8,7 +8,8 @@ use craft_image_codecs::*;
 
 fn with_tags(layout: ChannelLayout, sample: SampleType) -> Image {
     let mut img = synth(9, 7, layout, sample, 5, 0.3);
-    img.meta.photoshop_resources = Some(b"8BIM\x03\xed\x00\x00\x00\x00\x00\x10\x00\x48\x00\x00\x00\x01\x00\x01\x00\x48\x00\x00\x00\x01\x00\x01".to_vec());
+    img.meta.photoshop_resources =
+        Some(b"8BIM\x03\xed\x00\x00\x00\x00\x00\x10\x00\x48\x00\x00\x00\x01\x00\x01\x00\x48\x00\x00\x00\x01\x00\x01".to_vec());
     let mut layers = b"Adobe Photoshop Document Data Block\0".to_vec();
     layers.extend_from_slice(b"MIB8ryaL");
     layers.extend_from_slice(&4u32.to_le_bytes());

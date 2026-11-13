@@ -48,8 +48,8 @@ pub use crate::image::{
     MAX_EXTRA_SAMPLES, Metadata, SampleType, convert_samples,
 };
 pub use crate::options::{
-    DdsCompression, DdsOptions, DecodeOptions, DpxBits, EncodeOptions, ExrCompression, JpegFormat, Limits, PngCompression, PngStereo, TIFF_PYRAMID_MIN,
-    TiffCompression,
+    DdsCompression, DdsOptions, DecodeOptions, DpxBits, EncodeOptions, ExrCompression, JpegFormat, Limits, PngCompression, PngStereo,
+    TIFF_PYRAMID_MIN, TiffCompression,
 };
 pub use crate::orientation::{OrientSteps, exif_orientation, upright_exif, upright_xmp};
 pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_resolution, xmp_resolution};
@@ -284,7 +284,10 @@ pub fn has_unretained_source_data(bytes: &[u8]) -> Result<bool, CodecError> {
             retained.and_then(|index| info.pages.get(index)).map_or(Ok(false), |page| tiff::has_unretained_samples(bytes, page.ifd_offset))
         }
         Some(Format::Ico) => {
-            let count = bytes.get(4..6).and_then(|b| <[u8; 2]>::try_from(b).ok()).ok_or_else(|| CodecError::malformed(Format::Ico, "truncated image count"))?;
+            let count = bytes
+                .get(4..6)
+                .and_then(|b| <[u8; 2]>::try_from(b).ok())
+                .ok_or_else(|| CodecError::malformed(Format::Ico, "truncated image count"))?;
             Ok(u16::from_le_bytes(count) > 1)
         }
         Some(Format::Dds) => dds::has_additional_images(bytes),
@@ -416,6 +419,8 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
         Format::OpenExr => exr::encode(image, plan, opts),
         Format::Heif => Err(CodecError::unsupported(format, "encoding is not available in this build")),
         Format::Jxl => jxl::encode(image, plan),
-        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::encode(format, image, plan, opts),
+        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => {
+            via_image::encode(format, image, plan, opts)
+        }
     }
 }

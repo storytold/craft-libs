@@ -97,7 +97,10 @@ impl ChannelLayout {
 
     /// `true` if both layouts share a colour model (ignoring alpha).
     pub const fn same_model(self, other: Self) -> bool {
-        (self.is_gray() && other.is_gray()) || (self.is_rgb() && other.is_rgb()) || (self.is_cmyk() && other.is_cmyk()) || (self.is_lab() && other.is_lab())
+        (self.is_gray() && other.is_gray())
+            || (self.is_rgb() && other.is_rgb())
+            || (self.is_cmyk() && other.is_cmyk())
+            || (self.is_lab() && other.is_lab())
     }
 }
 
@@ -521,7 +524,10 @@ impl Image {
     pub fn from_raw(width: u32, height: u32, layout: ChannelLayout, sample: SampleType, data: Vec<u8>) -> Result<Self, CodecError> {
         let expected = byte_len(width, height, layout, sample).ok_or_else(|| CodecError::InvalidImage("image size overflows usize".into()))?;
         if data.len() != expected {
-            return Err(CodecError::InvalidImage(format!("buffer has {} bytes, expected {expected} for {width}x{height} {layout:?} {sample:?}", data.len())));
+            return Err(CodecError::InvalidImage(format!(
+                "buffer has {} bytes, expected {expected} for {width}x{height} {layout:?} {sample:?}",
+                data.len()
+            )));
         }
         Ok(Image { width, height, layout, sample, data, icc: None, cicp: None, meta: Metadata::default(), warnings: Vec::new() })
     }
@@ -607,7 +613,8 @@ impl Image {
 
     /// Copy samples out as `f16` (only when the sample type is `F16`).
     pub fn to_f16_samples(&self) -> Option<Vec<f16>> {
-        (self.sample == SampleType::F16).then(|| self.data.as_chunks::<2>().0.iter().map(|c| f16::from_bits(u16::from_ne_bytes([c[0], c[1]]))).collect())
+        (self.sample == SampleType::F16)
+            .then(|| self.data.as_chunks::<2>().0.iter().map(|c| f16::from_bits(u16::from_ne_bytes([c[0], c[1]]))).collect())
     }
 
     /// Copy samples out as `f32` (only when the sample type is `F32`).
@@ -688,7 +695,11 @@ impl Image {
     /// [`Image::convert`], borrowing `self` when it already has that layout and sample type
     /// (encoders use it so a full-size image isn't copied for nothing).
     pub fn converted(&self, layout: ChannelLayout, sample: SampleType) -> std::borrow::Cow<'_, Image> {
-        if layout == self.layout && sample == self.sample { std::borrow::Cow::Borrowed(self) } else { std::borrow::Cow::Owned(self.convert(layout, sample)) }
+        if layout == self.layout && sample == self.sample {
+            std::borrow::Cow::Borrowed(self)
+        } else {
+            std::borrow::Cow::Owned(self.convert(layout, sample))
+        }
     }
 
     /// Interleaved RGBA, 8 bits per sample.
@@ -742,10 +753,21 @@ fn convert_data(data: &[u8], from: ChannelLayout, from_sample: SampleType, layou
 /// [`Image::convert`] on borrowed pixels: `rows` rows of `width` pixels in `from` (layout, sample
 /// type) become the same pixels in `to`, bit for bit what the image conversion gives. Lets a
 /// caller convert a band of a decoded image without copying it into an [`Image`] first.
-pub fn convert_samples(src: &[u8], width: u32, rows: u32, from: (ChannelLayout, SampleType), to: (ChannelLayout, SampleType)) -> Result<Vec<u8>, CodecError> {
+pub fn convert_samples(
+    src: &[u8],
+    width: u32,
+    rows: u32,
+    from: (ChannelLayout, SampleType),
+    to: (ChannelLayout, SampleType),
+) -> Result<Vec<u8>, CodecError> {
     let expected = byte_len(width, rows, from.0, from.1).ok_or_else(|| CodecError::InvalidImage("image size overflows usize".into()))?;
     if src.len() != expected {
-        return Err(CodecError::InvalidImage(format!("buffer has {} bytes, expected {expected} for {width}x{rows} {:?} {:?}", src.len(), from.0, from.1)));
+        return Err(CodecError::InvalidImage(format!(
+            "buffer has {} bytes, expected {expected} for {width}x{rows} {:?} {:?}",
+            src.len(),
+            from.0,
+            from.1
+        )));
     }
     Ok(convert_data(src, from.0, from.1, to.0, to.1))
 }
@@ -919,7 +941,9 @@ mod tests {
                 let got = convert_samples(img.data(), 5, 2, (ChannelLayout::Rgb, sample), (layout, to)).unwrap();
                 assert_eq!(got, want.data(), "{sample:?} to {layout:?} {to:?}");
             }
-            assert!(convert_samples(img.data().get(1..).unwrap_or_default(), 5, 2, (ChannelLayout::Rgb, sample), (ChannelLayout::Rgba, sample)).is_err());
+            assert!(
+                convert_samples(img.data().get(1..).unwrap_or_default(), 5, 2, (ChannelLayout::Rgb, sample), (ChannelLayout::Rgba, sample)).is_err()
+            );
         }
     }
 
@@ -933,9 +957,12 @@ mod tests {
         // Every U8 and every U16 value through every depth pair (alpha goes through the same per-sample conversion; covered by the layout test).
         let all8: Vec<u8> = (0..=255).collect();
         let all16: Vec<u16> = (0..=65535).collect();
-        for (src, to) in
-            [(SampleType::U8, SampleType::U8), (SampleType::U8, SampleType::U16), (SampleType::U16, SampleType::U8), (SampleType::U16, SampleType::U16)]
-        {
+        for (src, to) in [
+            (SampleType::U8, SampleType::U8),
+            (SampleType::U8, SampleType::U16),
+            (SampleType::U16, SampleType::U8),
+            (SampleType::U16, SampleType::U16),
+        ] {
             let img = if src == SampleType::U8 {
                 Image::from_u8(256, 1, ChannelLayout::Gray, all8.clone()).unwrap()
             } else {

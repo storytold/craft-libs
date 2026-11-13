@@ -1,7 +1,9 @@
 //! Writing DDS textures: every storage read back through the reader, the header fields, sizes
 //! that aren't a multiple of four, the mip chain, and the block-compression error on ramps.
 
-use craft_image_codecs::{ChannelLayout, DdsCompression, DdsOptions, EncodeOptions, FidelityWarning, Format, Image, decode, encode, fidelity_warnings_with};
+use craft_image_codecs::{
+    ChannelLayout, DdsCompression, DdsOptions, EncodeOptions, FidelityWarning, Format, Image, decode, encode, fidelity_warnings_with,
+};
 
 const DDSD_PITCH: u32 = 0x8;
 const DDSD_MIPMAPCOUNT: u32 = 0x2_0000;
@@ -65,7 +67,8 @@ fn max_colour_diff(a: &Image, b: &Image) -> u8 {
 
 /// A 2D gradient: red across, green down and blue along the diagonal, opaque.
 fn gradient(w: u32, h: u32) -> Image {
-    let data = (0..h).flat_map(|y| (0..w).flat_map(move |x| [(x * 4).min(255) as u8, (y * 4).min(255) as u8, ((x + y) * 2).min(255) as u8, 255])).collect();
+    let data =
+        (0..h).flat_map(|y| (0..w).flat_map(move |x| [(x * 4).min(255) as u8, (y * 4).min(255) as u8, ((x + y) * 2).min(255) as u8, 255])).collect();
     Image::from_u8(w, h, ChannelLayout::Rgba, data).unwrap()
 }
 
@@ -163,7 +166,9 @@ fn block_compressed_textures_round_trip_through_the_reader() {
             assert!(colour <= 24, "{compression:?} {w}x{h}: colour off by {colour}");
             let alpha = max_diff_channel(&img, &back, 3);
             match compression {
-                DdsCompression::Bc1 => assert!(back.data().chunks(4).zip(img.data().chunks(4)).all(|(b, i)| b[3] == if i[3] < 128 { 0 } else { 255 })),
+                DdsCompression::Bc1 => {
+                    assert!(back.data().chunks(4).zip(img.data().chunks(4)).all(|(b, i)| b[3] == if i[3] < 128 { 0 } else { 255 }))
+                }
                 _ => assert!(alpha <= 8, "{compression:?} {w}x{h}: alpha off by {alpha}"),
             }
         }
@@ -201,7 +206,9 @@ fn block_compression_error_on_gradients_is_bounded() {
         assert!(plane_err <= 10, "{compression:?}: 2D gradient off by {plane_err}");
         assert!(p >= 38.0, "{compression:?}: 2D gradient PSNR {p:.1} dB");
         match compression {
-            DdsCompression::Bc1 => assert!(line_back.data().chunks(4).zip(line.data().chunks(4)).all(|(b, i)| b[3] == if i[3] < 128 { 0 } else { 255 })),
+            DdsCompression::Bc1 => {
+                assert!(line_back.data().chunks(4).zip(line.data().chunks(4)).all(|(b, i)| b[3] == if i[3] < 128 { 0 } else { 255 }))
+            }
             // Four bits: within half a step of 17.
             DdsCompression::Bc2 => assert!(alpha <= 8, "BC2 alpha off by {alpha}"),
             // Eight values across a block's few levels of alpha.

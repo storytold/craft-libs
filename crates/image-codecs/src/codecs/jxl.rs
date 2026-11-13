@@ -141,7 +141,11 @@ pub(crate) fn encode(image: &Image, plan: Plan) -> Result<Vec<u8>, CodecError> {
         let options = ZuneOptions::new(width as usize, height as usize, space, depth);
         let mut output = Vec::new();
         JxlSimpleEncoder::new(image.data(), options).encode(&mut output).map_err(|e| CodecError::encode(F, e.to_string()))?;
-        if depth == BitDepth::Sixteen && image.layout() == ChannelLayout::Rgba { correct_16_bit_alpha_header(&output, width, height) } else { Ok(output) }
+        if depth == BitDepth::Sixteen && image.layout() == ChannelLayout::Rgba {
+            correct_16_bit_alpha_header(&output, width, height)
+        } else {
+            Ok(output)
+        }
     }))
     .unwrap_or_else(|_| Err(CodecError::encode(F, "the JPEG XL encoder failed")))
 }

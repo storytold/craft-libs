@@ -185,9 +185,18 @@ fn overlapping_tiff(entries: usize, count: u32) -> Vec<u8> {
     out.extend(42u16.to_le_bytes());
     out.extend(8u32.to_le_bytes());
     out.extend(10u16.to_le_bytes());
-    for (tag, ty, value) in
-        [(256, 3, 1), (257, 3, 1), (258, 3, 8), (259, 3, 1), (262, 3, 1), (273, 4, 0), (277, 3, 1), (278, 3, 1), (279, 4, 1), (34665, 4, at_exif as u32)]
-    {
+    for (tag, ty, value) in [
+        (256, 3, 1),
+        (257, 3, 1),
+        (258, 3, 8),
+        (259, 3, 1),
+        (262, 3, 1),
+        (273, 4, 0),
+        (277, 3, 1),
+        (278, 3, 1),
+        (279, 4, 1),
+        (34665, 4, at_exif as u32),
+    ] {
         out.extend(entry(tag, ty, 1, value));
     }
     out.extend(0u32.to_le_bytes());

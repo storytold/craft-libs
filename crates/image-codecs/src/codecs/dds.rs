@@ -437,8 +437,9 @@ fn header(width: u32, height: u32, store: Store, levels: u32, top: usize) -> Res
     };
     // Uncompressed: the pitch of one row. Compressed: the whole top level (its "linear size").
     let (size_flag, pitch_or_size) = if store.is_block() { (DDSD_LINEARSIZE, Some(top)) } else { (DDSD_PITCH, store.row_bytes(width as usize)) };
-    let pitch_or_size =
-        pitch_or_size.and_then(|v| u32::try_from(v).ok()).ok_or_else(|| encode_err(format!("a {width}x{height} level is too large for a DDS header")))?;
+    let pitch_or_size = pitch_or_size
+        .and_then(|v| u32::try_from(v).ok())
+        .ok_or_else(|| encode_err(format!("a {width}x{height} level is too large for a DDS header")))?;
     let mipmapped = levels > 1;
     put(4, 124);
     put(8, DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT | size_flag | if mipmapped { DDSD_MIPMAPCOUNT } else { 0 });

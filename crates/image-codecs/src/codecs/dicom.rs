@@ -254,7 +254,8 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
         .get(pixel.start..pixel.start.checked_add(need).ok_or_else(|| CodecError::LimitExceeded("pixel data too large".into()))?)
         .ok_or_else(|| bad("pixel data is truncated"))?;
     let out_channels = layout.channels();
-    let out_len = pixels.checked_mul(out_channels).and_then(|k| k.checked_mul(bytes_per)).ok_or_else(|| CodecError::LimitExceeded("image too large".into()))?;
+    let out_len =
+        pixels.checked_mul(out_channels).and_then(|k| k.checked_mul(bytes_per)).ok_or_else(|| CodecError::LimitExceeded("image too large".into()))?;
     let mut out = Vec::new();
     out.try_reserve_exact(out_len).map_err(|_| CodecError::LimitExceeded("cannot allocate the image".into()))?;
     // Raw sample of channel `ch` at pixel `p`, honouring the planar configuration.
@@ -367,7 +368,18 @@ mod tests {
 
     /// A DICOM with the given transfer syntax UID and data-set encoding.
     #[allow(clippy::too_many_arguments)]
-    fn synth(ts: &str, explicit: bool, big: bool, planar: u16, rows: u16, cols: u16, samples: u16, bits: u16, photometric: &str, pixels: &[u8]) -> Vec<u8> {
+    fn synth(
+        ts: &str,
+        explicit: bool,
+        big: bool,
+        planar: u16,
+        rows: u16,
+        cols: u16,
+        samples: u16,
+        bits: u16,
+        photometric: &str,
+        pixels: &[u8],
+    ) -> Vec<u8> {
         let mut b = vec![0u8; 128];
         b.extend_from_slice(b"DICM");
         // One extra meta element before the syntax, so a reader that only looks at the last

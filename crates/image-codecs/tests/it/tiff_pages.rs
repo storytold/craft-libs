@@ -338,7 +338,8 @@ fn alpha_after_an_unspecified_extra_sample_is_kept() {
                 // The colour samples, then the second extra sample (the alpha).
                 let want: Vec<u8> = want_all.chunks(spp * bps).flat_map(|p| [&p[..color * bps], &p[(color + 1) * bps..]].concat()).collect();
                 for planar in [false, true] {
-                    let chunks = if planar { planar_strips(&file, w, h, spp, bps, 2) } else { file.chunks(w * spp * bps * 2).map(<[u8]>::to_vec).collect() };
+                    let chunks =
+                        if planar { planar_strips(&file, w, h, spp, bps, 2) } else { file.chunks(w * spp * bps * 2).map(<[u8]>::to_vec).collect() };
                     let mut d = Dir { entries: base(w as u32, h as u32, bits, spp as u16, photometric), chunks, tiled: false }
                         .tag(278, LONG, &[2])
                         .tag(339, SHORT, &vec![u64::from(format); spp])
@@ -509,7 +510,14 @@ fn every_ifd_and_subifd_is_listed_and_decodable() {
         use TiffPageKind::*;
         assert_eq!(
             summary,
-            [(4, None, ReducedResolution), (9, None, Page), (3, Some(1), ReducedResolution), (2, Some(1), ReducedResolution), (9, None, Mask), (5, None, Page)]
+            [
+                (4, None, ReducedResolution),
+                (9, None, Page),
+                (3, Some(1), ReducedResolution),
+                (2, Some(1), ReducedResolution),
+                (9, None, Mask),
+                (5, None, Page)
+            ]
         );
         assert_eq!(info.pages[1].ifd_offset, b.ifd_at[1]);
         assert_eq!((info.default_page(), info.page_count()), (Some(1), 2));

@@ -280,7 +280,9 @@ fn truncated_metadata_never_panics_and_falls_back() {
         assert_eq!(photoshop_resolution(&r[..n]), None, "{n}");
         near(dpi_of(&jpeg_with(&[jfif(1, 72, 72), app13(&r[..n])])), 72.0);
     }
-    for x in ["tiff:XResolution=", "tiff:XResolution=\"", "tiff:XResolution=\"\" tiff:YResolution=\"5/0\"", "<tiff:XResolution>", "</tiff:XResolution>9<"] {
+    for x in
+        ["tiff:XResolution=", "tiff:XResolution=\"", "tiff:XResolution=\"\" tiff:YResolution=\"5/0\"", "<tiff:XResolution>", "</tiff:XResolution>9<"]
+    {
         assert_eq!(xmp_resolution(x), None, "{x}");
         let _ = xmp_with_resolution(x, (1.0, 1.0));
     }
@@ -375,7 +377,10 @@ fn xmp_resolution_is_rewritten() {
         r#"<rdf:Description tiff:XResolution="240/1" tiff:YResolution='240/1' tiff:ResolutionUnit="2" tiff:Make="X"/>"#
     );
     let elem = "<tiff:XResolution>300/1</tiff:XResolution><tiff:YResolution>300/1</tiff:YResolution>";
-    assert_eq!(xmp_with_resolution(elem, (72.5, 72.5)), "<tiff:XResolution>72500/1000</tiff:XResolution><tiff:YResolution>72500/1000</tiff:YResolution>");
+    assert_eq!(
+        xmp_with_resolution(elem, (72.5, 72.5)),
+        "<tiff:XResolution>72500/1000</tiff:XResolution><tiff:YResolution>72500/1000</tiff:YResolution>"
+    );
     for same in [r#"tiff:XResolution="240" tiff:YResolution="240/1""#, "<x/>"] {
         assert!(matches!(xmp_with_resolution(same, (240.0, 240.0)), Cow::Borrowed(_)), "{same}");
     }

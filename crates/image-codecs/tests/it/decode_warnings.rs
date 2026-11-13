@@ -159,7 +159,8 @@ fn apng(frames: u32, sixteen: bool, separate_default: bool) -> Vec<u8> {
     }
     let mut w = enc.write_header().unwrap();
     for c in COLOURS.iter().cycle().take(images.max(1) as usize) {
-        let px: Vec<u8> = if sixteen { c.iter().flat_map(|&v| [v, v]).collect::<Vec<u8>>().repeat((W * H) as usize) } else { c.repeat((W * H) as usize) };
+        let px: Vec<u8> =
+            if sixteen { c.iter().flat_map(|&v| [v, v]).collect::<Vec<u8>>().repeat((W * H) as usize) } else { c.repeat((W * H) as usize) };
         w.write_image_data(&px).unwrap();
     }
     w.finish().unwrap();

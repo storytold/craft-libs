@@ -268,7 +268,8 @@ fn jpeg_format_options_round_trip() {
     let sof = |b: &[u8], m: u8| b.windows(2).any(|w| w == [0xFF, m]);
     for subsampled in [false, true] {
         let enc = |f| {
-            encode(&img, Format::Jpeg, &EncodeOptions { jpeg_format: f, jpeg_chroma_subsampling: subsampled, jpeg_quality: 90, ..Default::default() }).unwrap()
+            encode(&img, Format::Jpeg, &EncodeOptions { jpeg_format: f, jpeg_chroma_subsampling: subsampled, jpeg_quality: 90, ..Default::default() })
+                .unwrap()
         };
         let (base, opt, prog) = (enc(JpegFormat::Baseline), enc(JpegFormat::Optimized), enc(JpegFormat::Progressive));
         // The scan layout only changes how the same quantized coefficients are stored, so every
@@ -309,7 +310,8 @@ fn webp_lossy_request_is_a_lossy_file() {
     let back = decode(&bytes).unwrap();
     assert_eq!(back.dimensions(), img.dimensions());
     assert!(
-        fidelity_warnings_with(&img, Format::WebP, &EncodeOptions { webp_lossless: false, ..Default::default() }).contains(&FidelityWarning::LossyCompression)
+        fidelity_warnings_with(&img, Format::WebP, &EncodeOptions { webp_lossless: false, ..Default::default() })
+            .contains(&FidelityWarning::LossyCompression)
     );
 }
 

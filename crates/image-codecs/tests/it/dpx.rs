@@ -346,7 +346,10 @@ fn saving_sixteen_bits_at_ten_or_twelve_warns_with_the_stored_bits() {
     }
     assert_eq!(depth_warnings(&img, Format::Dpx, &opts(Some(DpxBits::Bits16))), []);
     assert_eq!(depth_warnings(&img, Format::Dpx, &opts(None)), []);
-    assert_eq!(depth_warnings(&img, Format::Dpx, &opts(Some(DpxBits::Bits8))), [FidelityWarning::DepthReduced { from: SampleType::U16, to: SampleType::U8 }]);
+    assert_eq!(
+        depth_warnings(&img, Format::Dpx, &opts(Some(DpxBits::Bits8))),
+        [FidelityWarning::DepthReduced { from: SampleType::U16, to: SampleType::U8 }]
+    );
     assert_eq!(depth_warnings(&img, Format::Cineon, &EncodeOptions::default()), [FidelityWarning::BitsReduced { from: SampleType::U16, bits: 10 }]);
 }
 
@@ -360,7 +363,10 @@ fn a_frame_opened_at_ten_or_twelve_bits_saves_back_without_a_warning() {
     }
     // A 12-bit frame saved at 10 bits does lose its two low bits.
     let twelve = decode(&encode(&img, Format::Dpx, &opts(Some(DpxBits::Bits12))).unwrap()).unwrap();
-    assert_eq!(depth_warnings(&twelve, Format::Dpx, &opts(Some(DpxBits::Bits10))), [FidelityWarning::BitsReduced { from: SampleType::U16, bits: 10 }]);
+    assert_eq!(
+        depth_warnings(&twelve, Format::Dpx, &opts(Some(DpxBits::Bits10))),
+        [FidelityWarning::BitsReduced { from: SampleType::U16, bits: 10 }]
+    );
     let cineon = decode(&cineon_bytes(3, 4, 2, &cineon_codes(24))).unwrap();
     assert_eq!(depth_warnings(&cineon, Format::Cineon, &EncodeOptions::default()), []);
     assert_eq!(depth_warnings(&cineon, Format::Dpx, &opts(Some(DpxBits::Bits10))), []);

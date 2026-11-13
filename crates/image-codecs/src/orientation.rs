@@ -177,8 +177,10 @@ pub fn upright_exif(exif: &[u8]) -> Cow<'_, [u8]> {
     let Some((order, first, count, entry_bytes, big_tiff)) = ifd0_entries(body) else {
         return Cow::Borrowed(exif);
     };
-    let values: Vec<Value> =
-        (0..count).filter_map(|i| first.checked_add(i.checked_mul(entry_bytes)?)).filter_map(|e| orientation_value(order, body, e, big_tiff)).collect();
+    let values: Vec<Value> = (0..count)
+        .filter_map(|i| first.checked_add(i.checked_mul(entry_bytes)?))
+        .filter_map(|e| orientation_value(order, body, e, big_tiff))
+        .collect();
     if values.iter().all(|v| v.read(order, body) == Some(1)) {
         return Cow::Borrowed(exif);
     }

@@ -177,7 +177,11 @@ fn jpeg_multi_segment_icc() {
 fn jpeg_with_oversized_metadata_still_encodes() {
     let ancestors: String = (0..3000).map(|i| format!("<rdf:li>xmp.did:{i:032x}</rdf:li>")).collect();
     let texts: String = (0..400)
-        .map(|i| format!("<rdf:li rdf:parseType=\"Resource\"><ps:LayerName>Layer {i}</ps:LayerName><ps:LayerText>Words on layer {i}</ps:LayerText></rdf:li>"))
+        .map(|i| {
+            format!(
+                "<rdf:li rdf:parseType=\"Resource\"><ps:LayerName>Layer {i}</ps:LayerName><ps:LayerText>Words on layer {i}</ps:LayerText></rdf:li>"
+            )
+        })
         .collect();
     let xmp = format!(
         "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?><x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" xmlns:ps=\"http://example.com/ps/1.0/\" xmp:CreatorTool=\"synthetic\"><ps:DocumentAncestors>\n<rdf:Bag>{ancestors}</rdf:Bag></ps:DocumentAncestors><ps:TextLayers><rdf:Bag>{texts}</rdf:Bag></ps:TextLayers><ps:DocumentAncestorsNote/></rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end=\"w\"?>"
@@ -218,7 +222,9 @@ fn embed_flags_disable_metadata() {
         assert!(back.icc.is_none(), "{f:?}");
         assert!(back.meta.exif.is_none() && back.meta.xmp.is_none(), "{f:?}");
         assert!(back.meta.text.is_empty(), "{f:?}");
-        assert!(fidelity_warnings_with(&img, Format::Bmp, &opts).iter().all(|w| !matches!(w, FidelityWarning::IccDropped | FidelityWarning::ExifDropped)));
+        assert!(
+            fidelity_warnings_with(&img, Format::Bmp, &opts).iter().all(|w| !matches!(w, FidelityWarning::IccDropped | FidelityWarning::ExifDropped))
+        );
     }
 }
 
@@ -322,7 +328,8 @@ fn webp_keeps_dpi_without_source_exif() {
     let back = decode(&encode(&img, Format::WebP, &EncodeOptions::default()).unwrap()).unwrap();
     assert!(back.meta.exif.is_some());
     // ...unless the XMP written beside it records the resolution, which readers look at first.
-    img.meta.xmp = Some(r#"<x:xmpmeta><rdf:Description tiff:XResolution="300/1" tiff:YResolution="150/1" tiff:ResolutionUnit="2"/></x:xmpmeta>"#.into());
+    img.meta.xmp =
+        Some(r#"<x:xmpmeta><rdf:Description tiff:XResolution="300/1" tiff:YResolution="150/1" tiff:ResolutionUnit="2"/></x:xmpmeta>"#.into());
     assert!(!fidelity_warnings(&img, Format::WebP).contains(&FidelityWarning::DpiDropped));
     let back = decode(&encode(&img, Format::WebP, &EncodeOptions::default()).unwrap()).unwrap();
     let (x, y) = back.meta.dpi.expect("dpi from XMP");

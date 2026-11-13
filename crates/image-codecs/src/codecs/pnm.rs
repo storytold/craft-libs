@@ -338,7 +338,9 @@ pub(crate) fn encode(src: &Image, plan: Plan, _opts: &EncodeOptions) -> Result<V
                         ChannelLayout::Cmyk => "CMYK",
                         _ => "CMYK_ALPHA",
                     };
-                    out.extend_from_slice(format!("P7\nWIDTH {w}\nHEIGHT {h}\nDEPTH {}\nMAXVAL {maxval}\nTUPLTYPE {t}\nENDHDR\n", l.channels()).as_bytes());
+                    out.extend_from_slice(
+                        format!("P7\nWIDTH {w}\nHEIGHT {h}\nDEPTH {}\nMAXVAL {maxval}\nTUPLTYPE {t}\nENDHDR\n", l.channels()).as_bytes(),
+                    );
                 }
             }
             if sample == SampleType::U8 {
