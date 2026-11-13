@@ -288,13 +288,7 @@ impl<P> From<StoredSet<P>> for WorkspaceSet<P> {
                 if let Some(layout) = saved {
                     workspace.layout = layout;
                 }
-                NamedWorkspace {
-                    id: named.id,
-                    name: named.name,
-                    layout: workspace,
-                    chrome: named.chrome,
-                    keeps: named.keeps,
-                }
+                NamedWorkspace { id: named.id, name: named.name, layout: workspace, chrome: named.chrome, keeps: named.keeps }
             })
             .collect();
         let mut edited = BTreeMap::new();

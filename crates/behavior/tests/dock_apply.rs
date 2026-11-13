@@ -126,7 +126,8 @@ fn a_workspace_set_with_a_floating_group_round_trips_through_json() {
 fn a_workspace_with_a_bottom_pane_opens_and_closes_it_on_switch() {
     const TIMELINE: u32 = 9;
     let photography = Workspace::new(Layout::new(Some(tabs(&[1, 2], 0)), Vec::new()));
-    let motion = Workspace::new(Layout::new(Some(Node::split(Axis::Y, SplitSize::FixedSecond(200.0), tabs(&[1, 2], 0), tabs(&[TIMELINE], 0))), Vec::new()));
+    let motion =
+        Workspace::new(Layout::new(Some(Node::split(Axis::Y, SplitSize::FixedSecond(200.0), tabs(&[1, 2], 0), tabs(&[TIMELINE], 0))), Vec::new()));
     let mut set = WorkspaceSet::new(vec![
         NamedWorkspace::new("photography", "Photography", photography.clone()),
         NamedWorkspace::new("motion", "Motion", motion),

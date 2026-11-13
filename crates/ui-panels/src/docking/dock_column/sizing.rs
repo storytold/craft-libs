@@ -24,7 +24,8 @@ pub fn fit_widths(columns: &[(f32, Option<f32>)], room: f32) -> Vec<f32> {
     if total <= room {
         return columns.iter().map(|(width, _)| *width).collect();
     }
-    let bounded: Vec<(f32, (f32, f32))> = columns.iter().map(|&(width, floor)| (width, (floor.map_or(width, |floor| floor.min(width)), width))).collect();
+    let bounded: Vec<(f32, (f32, f32))> =
+        columns.iter().map(|&(width, floor)| (width, (floor.map_or(width, |floor| floor.min(width)), width))).collect();
     scale_widths(&bounded, room)
 }
 

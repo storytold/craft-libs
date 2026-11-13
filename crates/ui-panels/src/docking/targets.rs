@@ -126,7 +126,13 @@ impl DockSizes {
     /// [`Action::ResizeIconic`] for an iconic one, which keeps its expanded width. Apply them together
     /// ([`Workspace::apply_all`](craft_behavior::dock::Workspace::apply_all)). Empty when the side has no dock or the
     /// columns already add up to the width; a column without panels keeps its width.
-    pub fn resize_side<P: Clone + Eq + std::hash::Hash>(&self, layout: &Layout<P>, side: DockEdge, spec: &dyn Fn(&P) -> PanelSpec, total: f32) -> Vec<Action<P>> {
+    pub fn resize_side<P: Clone + Eq + std::hash::Hash>(
+        &self,
+        layout: &Layout<P>,
+        side: DockEdge,
+        spec: &dyn Fn(&P) -> PanelSpec,
+        total: f32,
+    ) -> Vec<Action<P>> {
         let columns = match layout.dock_path(side).and_then(|path| node_at(layout.root.as_ref()?, &path)) {
             Some(Node::Dock { columns, .. }) => columns,
             _ => return Vec::new(),

@@ -36,7 +36,8 @@ fn default_heights_give_way_to_the_group_that_fills_before_it_gets_less() {
 fn end_dock_layout() -> Layout<u32> {
     let mut iconic = Column::new(vec![Group::new(vec![4], 0)]).with_width(300.0);
     iconic.iconic = true;
-    let columns = vec![Column::new(vec![Group::new(vec![2], 0)]).with_width(250.0), Column::new(vec![Group::new(vec![3], 0)]).with_width(250.0), iconic];
+    let columns =
+        vec![Column::new(vec![Group::new(vec![2], 0)]).with_width(250.0), Column::new(vec![Group::new(vec![3], 0)]).with_width(250.0), iconic];
     Layout::new(Some(Node::split(Axis::X, SplitSize::Ratio(0.7), Node::tabs(vec![1], 0), Node::dock(DockEdge::End, columns))), Vec::new())
 }
 
@@ -63,10 +64,12 @@ fn a_dock_sides_total_width_scales_its_columns_within_their_bounds() {
     let spec: &dyn Fn(&u32) -> PanelSpec = &spec;
     let mut live = Workspace::new(end_dock_layout());
     let widths = |live: &Workspace<u32>| end_columns(&live.layout).iter().map(|column| sizes.width(column, spec)).collect::<Vec<f32>>();
-    let within = |live: &Workspace<u32>| end_columns(&live.layout).iter().zip(widths(live)).all(|(column, width)| {
-        let (lo, hi) = sizes.shown_bounds(column, spec);
-        (lo - 0.01..=hi + 0.01).contains(&width)
-    });
+    let within = |live: &Workspace<u32>| {
+        end_columns(&live.layout).iter().zip(widths(live)).all(|(column, width)| {
+            let (lo, hi) = sizes.shown_bounds(column, spec);
+            (lo - 0.01..=hi + 0.01).contains(&width)
+        })
+    };
     let start = widths(&live);
 
     for total in [sum(&start) + 120.0, sum(&start) - 60.0] {

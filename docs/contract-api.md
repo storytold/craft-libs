@@ -529,8 +529,8 @@ The dock model: the tree of splits over panel frames, the side of a group a drop
   - `pub fn new(anchor: Option<P>, placement: DockPlacement<P>) -> Self`. A location relative to `anchor` by `placement`, with no recorded sizes or siblings.
 - `craft_behavior::dock::MAX_DEPTH`: `pub const MAX_DEPTH: usize`. Limits are checked before cloning or recursively modifying an application layout.
 - `craft_behavior::dock::MAX_PANELS`: `pub const MAX_PANELS: usize`. Most panels a layout may hold. Larger layouts fail with [`DockError::LimitExceeded`](super::DockError::LimitExceeded).
-- `craft_behavior::dock::NamedWorkspace`: `pub struct NamedWorkspace<P> { pub id: String, pub name: String, pub layout: Workspace<P>, pub chrome: WorkspaceChrome, pub keeps_shortcuts: bool, pub keeps_menus: bool }`. One named workspace.
-  - `pub fn new(id: impl Into<String>, name: impl Into<String>, layout: Workspace<P>) -> Self`. A workspace named `name` with the stable id `id`, showing every bar and keeping no shortcuts or menus.
+- `craft_behavior::dock::NamedWorkspace`: `pub struct NamedWorkspace<P> { pub id: String, pub name: String, pub layout: Workspace<P>, pub chrome: WorkspaceChrome, pub keeps: WorkspaceKeeps }`. One named workspace.
+  - `pub fn new(id: impl Into<String>, name: impl Into<String>, layout: Workspace<P>) -> Self`. A workspace named `name` with the stable id `id`, showing every bar and capturing nothing beside the layout.
 - `craft_behavior::dock::Node`: `pub enum Node<P> { Split { axis: Axis, size: SplitSize, first: Box<Node<P>>, second: Box<Node<P>> }, Tabs { panels: Vec<P>, active: usize }, Stack { entries: Vec<StackEntry<P>> }, Dock { side: DockEdge, columns: Vec<Column<P>> } }`. A node of a layout tree.
   - `pub fn tabs(panels: Vec<P>, active: usize) -> Self`. A group of tabs with tab `active` selected.
   - `pub fn split(axis: Axis, size: SplitSize, first: Node<P>, second: Node<P>) -> Self`. Two children along `axis`, sharing the room by `size`.
@@ -566,13 +566,18 @@ The dock model: the tree of splits over panel frames, the side of a group a drop
   - `pub fn apply_all(&mut self, actions: impl IntoIterator<Item = Action<P>>, locked: bool, permissions: impl Fn(&P) -> Permissions,) -> Result<Vec<P>, DockError>`. Apply every action in order, or none, as [`Self::apply`] does. Returns the panels the
 - `craft_behavior::dock::WorkspaceChrome`: `pub struct WorkspaceChrome { pub menu_bar: bool, pub tool_rail: bool, pub options_bar: bool, pub status_bar: bool }`. Chrome a workspace remembers beside the dock layout: which bars show. The default shows every bar.
 - `craft_behavior::dock::WorkspaceError`: `pub enum WorkspaceError { UnknownId, NameTaken, EmptyName, CurrentCannotBeDeleted }`. Why a [`WorkspaceSet`] edit was refused.
+- `craft_behavior::dock::WorkspaceKeeps`: `pub struct WorkspaceKeeps { pub shortcuts: bool, pub menus: bool, pub toolbar: bool }`. What a saved workspace captures beside the panel layout (the Capture boxes of New Workspace). The application
+  - `pub const NONE: WorkspaceKeeps`. Captures nothing beside the layout.
+  - `pub const ALL: WorkspaceKeeps`. Captures shortcuts, menus and toolbar.
+  - `pub const fn new(shortcuts: bool, menus: bool, toolbar: bool) -> Self`. The keeps with shortcuts, menus and toolbar as given.
 - `craft_behavior::dock::WorkspaceSet`: `pub struct WorkspaceSet<P> { pub builtin: Vec<NamedWorkspace<P>>, pub saved: Vec<NamedWorkspace<P>>, pub current: String, pub locked: bool, pub edited: BTreeMap<String, Workspace<P>> }`. The app's workspaces: built-ins first, saved ones after, one current. It is a settings
   - `pub fn new(builtin: Vec<NamedWorkspace<P>>) -> Self`. A set of `builtin` workspaces with the first one current.
   - `pub fn current(&self) -> Option<&NamedWorkspace<P>>`. The current workspace, or `None` when `current` names none.
   - `pub fn find(&self, id: &str) -> Option<&NamedWorkspace<P>>`. The workspace with this id.
   - `pub fn layout(&self) -> Option<&Workspace<P>>`. The layout the current workspace shows: what it was left with, else its stored one.
   - `pub fn select(&mut self, id: &str, live: &mut Workspace<P>) -> Result<(), WorkspaceError>`. Switch to `id` and replace `live` with the layout it shows; the current workspace's live
-  - `pub fn save(&mut self, name: &str, live: Workspace<P>, chrome: WorkspaceChrome) -> Result<String, WorkspaceError>`. Save `live` under `name` and make it current; a name a built-in has is refused. A saved
+  - `pub fn check_name<'n>(&self, name: &'n str) -> Result<(&'n str, Option<&str>), WorkspaceError>`. Whether `name` can be saved: the trimmed name, and the id of the saved workspace it would replace (any case),
+  - `pub fn save(&mut self, name: &str, live: Workspace<P>, chrome: WorkspaceChrome, keeps: WorkspaceKeeps) -> Result<String, WorkspaceError>`. Save `live` under `name`, capturing `keeps`, and make it current; [`check_name`](Self::check_name) refuses
   - `pub fn delete(&mut self, id: &str) -> Result<(), WorkspaceError>`. Delete a saved workspace; the current one can't be deleted (Photoshop greys it).
   - `pub fn reset(&mut self, live: &mut Workspace<P>) -> Result<(), WorkspaceError>`. Reset the current workspace: drop what it was left with and replace `live` with its stored
 - `craft_behavior::dock::ZoneSize`: `pub enum ZoneSize { Depth(f32), Fraction }`. How deep the side zones of a body are.

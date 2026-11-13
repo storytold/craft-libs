@@ -8,11 +8,12 @@ use super::words::WorkspaceDialogWords;
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
 use crate::display::{Shade, Text};
-use crate::form::{Field, FieldGroup, Help};
+use crate::form::{Field, Help};
 use crate::patterns::form_dialogs::FormDialog;
 use crate::pickers::Select;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
+use crate::sections::GroupBox;
 use crate::style::TypeRole;
 use crate::text::TextField;
 use craft_behavior::dock::{WorkspaceError, WorkspaceKeeps, WorkspaceSet};
@@ -102,7 +103,7 @@ impl<'a, P: Clone + Eq + Hash> NewWorkspaceDialog<'a, P> {
             });
             if offered != WorkspaceKeeps::NONE {
                 let keeps = &mut value.keeps;
-                FieldGroup::new(words.capture.clone()).show(ui, |ui, _| {
+                GroupBox::new(words.capture.clone(), None).show(ui, |ui, _| {
                     Text::new(words.capture_note.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
                     let boxes = [
                         (offered.shortcuts, &words.shortcuts, &mut keeps.shortcuts),
