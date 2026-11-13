@@ -1020,10 +1020,11 @@ fn a_double_click_selects_the_row_activates_it_once_and_changes_nothing_after() 
 #[trial]
 fn a_group_header_is_regular_and_a_section_heading_strong() {
     use craft_theme::{Contrast, ControlSize, Mode, TypeRole, Variant};
-    use craft_ui::contract::Component as _;
+    use craft_ui::contract::{Component as _, Meta as _};
+    use craft_ui::style::ComponentStyle as _;
     use craft_ui::testing::style::{tokens, with_cx};
     with_cx(&egui::Context::default(), &tokens(Mode::Light, Contrast::Standard), Variant::SECONDARY, ControlSize::Md, |cx| {
-        let role = |row: ListRow<'_>| ListRow::style(cx, row.style_key()).text.role;
+        let role = |row: ListRow<'_>| ListRow::style(cx, row.style_key()).texts()[0].role;
         assert_eq!(role(ListRow::new("Folder").heading()), TypeRole::Body, "a group header");
         assert_eq!(role(ListRow::new("Camera").section_heading()), TypeRole::BodyStrong, "a section heading");
     });
