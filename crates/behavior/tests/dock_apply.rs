@@ -3,7 +3,7 @@
 use craft_behavior::Axis;
 use craft_behavior::dock::{
     Action, Column, DockEdge, DockError, DockPlacement, Floating, Group, Layout, NamedWorkspace, Node, PanelPlace, Permissions, SplitSize, Workspace,
-    WorkspaceChrome, WorkspaceSet, node_at,
+    WorkspaceChrome, WorkspaceKeeps, WorkspaceSet, node_at,
 };
 use emath::{Rect, pos2, vec2};
 
@@ -106,12 +106,39 @@ fn reconcile_drops_unknown_panels_and_places_missing_registered_ones() {
 fn a_workspace_set_with_a_floating_group_round_trips_through_json() {
     let layout = Layout::new(Some(Node::tabs(vec![1u32, 2], 0)), vec![Floating::single(vec![3u32], 0, rect(1.0, 2.0, 300.0, 200.0)).with_id(5)]);
     let mut set = WorkspaceSet::new(vec![NamedWorkspace::new("essentials", "Essentials", Workspace::default())]);
-    set.save("Mine", Workspace::new(layout), WorkspaceChrome::default()).unwrap();
+    set.save("Mine", Workspace::new(layout), WorkspaceChrome::default(), WorkspaceKeeps::new(false, true, true)).unwrap();
     let saved = serde_json::to_string(&set).unwrap();
     let mut loaded: WorkspaceSet<u32> = serde_json::from_str(&saved).unwrap();
     assert!(loaded.builtin.is_empty(), "built-ins are code, not stored");
     loaded.builtin = set.builtin.clone();
     assert_eq!(loaded, set);
+    assert!(loaded.saved[0].keeps.toolbar && loaded.saved[0].keeps.menus, "the captures are stored with the workspace");
+
+    let older = saved.replace(",\"keeps_toolbar\":true", "");
+    assert_ne!(older, saved, "the file names keeps_toolbar");
+    let older: WorkspaceSet<u32> = serde_json::from_str(&older).unwrap();
+    assert_eq!(older.saved[0].keeps, WorkspaceKeeps::new(false, true, false), "a file from before the toolbar box loads with it off");
+}
+
+/// A workspace whose layout has a bottom frame (Motion's Timeline) shows it when selected and drops it when another
+/// workspace is selected; the host sees the switch in the live layout.
+#[test]
+fn a_workspace_with_a_bottom_pane_opens_and_closes_it_on_switch() {
+    const TIMELINE: u32 = 9;
+    let photography = Workspace::new(Layout::new(Some(tabs(&[1, 2], 0)), Vec::new()));
+    let motion = Workspace::new(Layout::new(Some(Node::split(Axis::Y, SplitSize::FixedSecond(200.0), tabs(&[1, 2], 0), tabs(&[TIMELINE], 0))), Vec::new()));
+    let mut set = WorkspaceSet::new(vec![
+        NamedWorkspace::new("photography", "Photography", photography.clone()),
+        NamedWorkspace::new("motion", "Motion", motion),
+    ]);
+    let mut live = photography;
+    set.select("motion", &mut live).unwrap();
+    let bottom = live.layout.place(&TIMELINE).unwrap();
+    assert_eq!(bottom, PanelPlace::Node(vec![true]), "the Timeline is the second (bottom) frame of the split");
+    set.select("photography", &mut live).unwrap();
+    assert!(!live.layout.contains(&TIMELINE), "leaving Motion closes the Timeline");
+    set.select("motion", &mut live).unwrap();
+    assert!(live.layout.contains(&TIMELINE), "coming back opens it again");
 }
 
 /// Switching and resetting replace the live workspace and move it to a new revision; edits and selecting the shown

@@ -18,6 +18,7 @@ mod floating;
 mod floating_area;
 
 mod columns;
+mod workspace_dialogs;
 
 mod native;
 
