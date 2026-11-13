@@ -60,6 +60,58 @@ impl ParagraphListValues {
             bullet_font_style: values.prop("BulletsFontStyle"),
         }
     }
+
+    /// IDML attributes represented by a paragraph's list settings.
+    pub fn to_attrs(&self) -> Vec<(String, String)> {
+        let mut attrs = Vec::new();
+        for (key, value) in [
+            ("BulletsAndNumberingListType", &self.list_type),
+            ("NumberingExpression", &self.expression),
+            ("BulletsTextAfter", &self.separator),
+            ("NumberingLevel", &self.level.map(crate::value::num)),
+            ("BulletsAlignment", &self.bullet_alignment),
+            ("NumberingAlignment", &self.numbering_alignment),
+            ("NumberingApplyRestartPolicy", &self.restart_numbers.map(|value| if value { "true".to_string() } else { "false".to_string() })),
+        ] {
+            if let Some(value) = value {
+                attrs.push((key.to_string(), value.clone()));
+            }
+        }
+        attrs
+    }
+
+    /// IDML property elements represented by a paragraph's list settings.
+    pub fn to_els(&self) -> Vec<El> {
+        let mut properties = Vec::new();
+        if let Some(format) = &self.numbering_format {
+            properties.push(property("NumberingFormat", "string", format.clone()));
+        }
+        if let (Some(kind), Some(value)) = (&self.bullet_type, &self.bullet_value) {
+            properties.push(El::new("BulletChar").with_attr("BulletCharacterType", kind).with_attr("BulletCharacterValue", value));
+        }
+        if let Some(balance) = &self.balance_ragged {
+            properties.push(property("BalanceRaggedLines", "enumeration", balance.clone()));
+        }
+        for (name, style) in [("BulletsCharacterStyle", &self.bullet_character_style), ("NumberingCharacterStyle", &self.numbering_character_style)] {
+            if let Some(style) = style {
+                properties.push(property(name, "object", style.clone()));
+            }
+        }
+        if let Some(level) = self.restart_after_level {
+            let mut restart = El::new("NumberingRestartPolicies")
+                .with_attr("RestartPolicy", if self.restart_after_specific_level { "SpecificPreviousLevel" } else { "AnyPreviousLevel" })
+                .with_attr("LowerLevel", level.to_string());
+            restart.set_attr("UpperLevel", level.to_string());
+            properties.push(restart);
+        }
+        if let Some(font) = &self.bullet_font {
+            properties.push(property("BulletsFont", "string", if font.is_empty() { "$ID/".into() } else { font.clone() }));
+        }
+        if let Some(style) = self.bullet_font_style.as_ref().filter(|style| !style.is_empty()) {
+            properties.push(property("BulletsFontStyle", "string", style.clone()));
+        }
+        properties
+    }
 }
 
 /// One IDML nested paragraph style entry, before the caller resolves its character style.
