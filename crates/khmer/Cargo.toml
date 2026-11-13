@@ -1,0 +1,24 @@
+[package]
+name = "craft-khmer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+brotli-decompressor = "5.0.0"
+crc32fast = "1.5.2"
+
+[build-dependencies]
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+sha2 = "0.10"
+regex = "1"
+brotli = "8.0.4"
+crc32fast = "1.5.2"
+
+[dev-dependencies]
+brotli = "8.0.4"
