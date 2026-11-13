@@ -2,6 +2,7 @@
 //! anchored page items, hyperlink and change containers).
 
 use craft_xml::{El, Local, Node};
+use std::collections::BTreeMap;
 
 use super::{PageItem, Values, tidy};
 
@@ -125,6 +126,72 @@ impl StoryAnchor {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PageReference {
     pub values: Values,
+}
+
+/// Nested index topics and their See / See also references for one IDML `Index`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct IndexValues {
+    pub topics: BTreeMap<Vec<String>, String>,
+    pub cross_references: Vec<IndexCrossReferenceValues>,
+}
+
+/// An index cross-reference attached to a topic path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IndexCrossReferenceValues {
+    pub from: Vec<String>,
+    pub reference_type: String,
+    pub target: String,
+}
+
+impl IndexValues {
+    /// Builds the IDML `Self` value for a topic path.
+    pub fn topic_self(path: &[String]) -> String {
+        let mut id = String::from("ix");
+        for part in path {
+            id.push_str("Topicn");
+            id.push_str(&crate::value::escape_id(part));
+        }
+        id
+    }
+
+    /// Writes the nested IDML index grammar, assigning a fresh ID to each cross-reference.
+    pub fn to_el(&self, mut fresh: impl FnMut() -> String) -> El {
+        let mut topics = self.topics.clone();
+        for reference in &self.cross_references {
+            topics.entry(vec![reference.target.clone()]).or_default();
+        }
+
+        fn build(
+            topics: &BTreeMap<Vec<String>, String>,
+            references: &[IndexCrossReferenceValues],
+            prefix: &[String],
+            fresh: &mut impl FnMut() -> String,
+        ) -> Vec<El> {
+            let mut out = Vec::new();
+            for (path, sort_order) in topics.iter().filter(|(path, _)| path.len() == prefix.len() + 1 && path.starts_with(prefix)) {
+                let mut element = El::new("Topic")
+                    .with_attr("Self", IndexValues::topic_self(path))
+                    .with_attr("SortOrder", sort_order)
+                    .with_attr("Name", path.last().map_or("", String::as_str));
+                for reference in references.iter().filter(|reference| reference.from == *path) {
+                    element.push(
+                        El::new("CrossReference")
+                            .with_attr("Self", fresh())
+                            .with_attr("ReferencedTopic", IndexValues::topic_self(std::slice::from_ref(&reference.target)))
+                            .with_attr("CrossReferenceType", &reference.reference_type)
+                            .with_attr("CustomTypeString", ""),
+                    );
+                }
+                element.children.extend(build(topics, references, path, fresh).into_iter().map(Node::El));
+                out.push(element);
+            }
+            out
+        }
+
+        let mut element = El::new("Index").with_attr("Self", "ix");
+        element.children = build(&topics, &self.cross_references, &[], &mut fresh).into_iter().map(Node::El).collect();
+        element
+    }
 }
 
 /// Text saved inside an IDML `CrossReferenceSource` before the application regenerates it from
