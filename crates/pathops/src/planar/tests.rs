@@ -1370,6 +1370,29 @@ fn a_fill_of_many_subpaths_is_tested_against_the_few_that_hold_the_point() {
     assert!(work::take(Work::FillSubpaths) <= 2 * 2_000, "a face winds the few subpaths near it");
 }
 
+/// The results of a map are snapped back onto the inputs' anchors by their place in both coordinates: a column of squares has thousands of
+/// anchors with one x, and a list searched on x alone read all of them for each point of each face (the square of the squares).
+#[test]
+fn snapping_results_to_the_anchors_of_a_column_reads_the_few_near_each_point() {
+    let column = |n: usize| {
+        let mut col = BezPath::new();
+        for j in 0..n {
+            col.extend(rect_path(5_000.0, 3.0 * j as f64, 5_001.0, 3.0 * j as f64 + 1.0).iter());
+        }
+        Shape::new(col, FillRule::NonZero, 0)
+    };
+    let mut reads = Vec::new();
+    for n in [1_000usize, 4_000] {
+        work::reset();
+        let (faces, _) = live_paint(&[column(n)]);
+        assert_eq!(faces.len(), n);
+        let read = work::take(Work::AnchorReads);
+        assert!(read > 0 && read <= 100 * n, "{read} anchors read for {n} squares, a scan of the column's x would read {}", 4 * n * n);
+        reads.push(read);
+    }
+    assert!(reads[1] <= 5 * reads[0], "1,000 squares {}, 4,000 squares {}: linear, four times as many", reads[0], reads[1]);
+}
+
 /// A path of parts far apart, each a unit high, is missed by the first heights tried; the search
 /// goes on over a bounded number of the stretches between the heights of its vertices, and so finds
 /// a part, whatever the number of parts.

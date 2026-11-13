@@ -121,6 +121,8 @@ pub(crate) enum Work {
     LoneUnions,
     /// Elements of the contours of an inset's boundary that were copied into it, counted before each contour is.
     BoundaryCopied,
+    /// Anchors of the inputs that a snap of a result's point looked at (those within a tolerance of it in both coordinates, and their cells' others).
+    AnchorReads,
     /// Not a counter: the number of counters, which must fit the slots of the counts (`SLOTS`). Keep it the last.
     #[cfg_attr(not(test), allow(dead_code))]
     Count,

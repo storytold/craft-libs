@@ -260,7 +260,7 @@ fn an_interior_point_is_found_in_a_unit_square_at_a_quadrillion() {
 /// A point strictly inside the bulge of the tests below, a triangle from (0, y + 4e11) to (0.1, y + 4.005e11) to (0, y + 4.01e11): above
 /// the first and below the third, and left of the edges that meet at its tip.
 pub(crate) fn strictly_in_the_bulge(p: kurbo::Point, y: f64) -> bool {
-    let right = 0.1 - 0.1 * (p.y - (y + 4.005e11)).abs() / 5e9;
+    let right = 0.1 - 0.1 * (p.y - (y + 4.005e11)).abs() / 5e8;
     p.x > 0.0 && p.y > y + 4e11 && p.y < y + 4.01e11 && p.x < right
 }
 

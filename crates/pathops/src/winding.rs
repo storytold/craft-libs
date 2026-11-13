@@ -37,7 +37,8 @@ const NEWTON_DONE: f64 = 1e-13;
 /// from `p` to the left counts -1 where the segment rises and +1 where it falls. It is `kurbo::Shape::winding`,
 /// made right for cubics (see the module).
 pub(crate) fn winding(path: &BezPath, p: Point) -> i32 {
-    path.segments().fold(0_i32, |w, seg| w.saturating_add(segment_winding(seg, p)))
+    // `Region::contains` takes a path a caller made, and kurbo's `segments` panics on one that begins with a close.
+    crate::path::without_leading_closes(path).segments().fold(0_i32, |w, seg| w.saturating_add(segment_winding(seg, p)))
 }
 
 /// The winding of one segment round `p`: the crossing of the ray to the left of `p` with it, -1, 0 or +1 for each

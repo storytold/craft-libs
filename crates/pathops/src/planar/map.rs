@@ -2,7 +2,7 @@
 // Copyright (c) 2026 ArtCraft Team and the VectorCraft contributors. MIT OR Apache-2.0.
 
 use super::graph::{
-    Edge, Fill, FillWork, Outlines, cycle_bezpath, far_end, find, half_segs, leaving_angle, origin, pin_ends, twin, unshear, without_spurs,
+    Anchors, Edge, Fill, FillWork, Outlines, cycle_bezpath, far_end, find, half_segs, leaving_angle, origin, pin_ends, twin, unshear, without_spurs,
 };
 use super::index::{Crossings, Frame, RectIndex, mid, try_frame_for};
 use super::*;
@@ -25,8 +25,7 @@ pub(crate) struct Map {
     hole_at: Vec<(Option<Point>, Option<usize>)>,
     tidy: Tidy,
     /// The inputs' anchors (sorted by x) and how close results snap back onto them.
-    anchors: Vec<Point>,
-    snap: f64,
+    anchors: Anchors,
     /// The shear's inverse: from the sweep's frame back to the document.
     back: kurbo::Affine,
 }
@@ -137,7 +136,7 @@ fn try_map_with(shapes: &[Shape], precision: f64) -> Result<Option<Map>, PathOps
     let snap = 2.0 * eps;
     let mut anchors: Vec<Point> = shapes.iter().flat_map(|s| s.path.elements().iter().filter_map(kurbo::PathEl::end_point)).collect();
     anchors.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
-    Ok(Some(Map { edges, around, faces, face_piece, holes, hole_at, tidy, anchors, snap, back }))
+    Ok(Some(Map { edges, around, faces, face_piece, holes, hole_at, tidy, anchors: Anchors::new(anchors, snap), back }))
 }
 
 /// The holes of each face of `m`: each hole goes in the smallest face of another piece around it.
@@ -258,7 +257,7 @@ fn sweep_graph(inputs: &[(BezPath, usize)], eps: f64, precision: f64) -> Option<
     // tidied to, below which no edge is drawn anyway. A vertex's cluster stays within those bounds
     // as a whole: a run of short, nearly level segments (a finely flattened or traced path) is real
     // geometry, not one stub after another, and must not collapse into one vertex.
-    let (stub_y, stub_x) = (4.0 * eps, (DEFAULT_PRECISION / 16.0).max(4.0 * eps));
+    let (stub_y, stub_x) = (4.0 * eps, (precision / 16.0).max(4.0 * eps));
     let mut extent: Vec<kurbo::Rect> = points.iter().map(|&p| kurbo::Rect::from_points(p, p)).collect();
     for (segs, [v0, v1]) in &pieces {
         let Some(&p0) = points.get(*v0) else { continue };
@@ -378,8 +377,7 @@ pub(super) fn try_build(shapes: &[Shape], precision: f64, strict: bool) -> Resul
     // the square of their depth, and past the limit there is no map.
     let work = FillWork::new();
     let face_holes = place_holes(&m, &work).ok_or(PathOpsError::TooComplex)?;
-    let Map { edges, around, faces, holes, tidy, anchors, snap, back, .. } = &m;
-    let snap = *snap;
+    let Map { edges, around, faces, holes, tidy, anchors, back, .. } = &m;
     let fills: Vec<Fill> = shapes.iter().map(Fill::new).collect();
     // The fills whose bounds hold a point, in the order of the shapes: not every fill is tested for every face.
     let fill_index = RectIndex::new(fills.iter().enumerate().map(|(i, f)| (f.bounds, i)).collect());
@@ -395,7 +393,7 @@ pub(super) fn try_build(shapes: &[Shape], precision: f64, strict: bool) -> Resul
         for sp in hs.iter().filter_map(|&k| holes.get(k)).filter_map(|(c, _)| subpath(c)) {
             path.extend(sp.iter());
         }
-        let path = unshear(path, anchors, snap, *back);
+        let path = unshear(path, anchors, *back);
         // A face thinner than the flattening the point is looked for in (a thousandth of its size: a lens a
         // hundred long and 0.03 wide between two curves has none of its middles in it) needs a finer outline: the
         // outline's flattening is made a quarter of the precision, or an eighth of what it was where that is less.
@@ -436,7 +434,7 @@ pub(super) fn try_build(shapes: &[Shape], precision: f64, strict: bool) -> Resul
             .into_iter()
             .filter_map(|(segs, closed, source)| {
                 let sp = segs_to_bezpath(&tidy_segments(segs, closed, tidy), closed)?;
-                Some(Shape::new(unshear(sp, anchors, snap, *back), FillRule::NonZero, shapes.get(source)?.key))
+                Some(Shape::new(unshear(sp, anchors, *back), FillRule::NonZero, shapes.get(source)?.key))
             })
             .collect()
     };

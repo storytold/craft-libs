@@ -92,6 +92,22 @@ fn a_region_of_level_handles_contains_what_is_under_its_arch() {
     assert!(!region.contains(Point::new(2.929, 2.385)));
 }
 
+/// A path a caller made can begin with a close (`BezPath::extend` takes it where `push` refuses): kurbo's `segments` panics on one, so
+/// a region of closes alone contains nothing, and closes before a real subpath change nothing.
+#[test]
+fn a_region_whose_path_begins_with_closes_is_read_without_them() {
+    use kurbo::PathEl;
+    let mut only_closes = BezPath::new();
+    only_closes.extend([PathEl::ClosePath, PathEl::ClosePath]);
+    assert!(!Region { path: only_closes, sources: Vec::new() }.contains(Point::new(0.5, 0.5)));
+    let mut before_a_square = BezPath::new();
+    before_a_square.extend([PathEl::ClosePath]);
+    before_a_square.extend(rectangle(kurbo::Rect::new(0.0, 0.0, 1.0, 1.0)).elements().iter().copied());
+    let region = Region { path: before_a_square, sources: Vec::new() };
+    assert!(region.contains(Point::new(0.5, 0.5)));
+    assert!(!region.contains(Point::new(1.5, 0.5)));
+}
+
 // ---- the sources of a face (Fill::contains)
 
 /// Two shapes under arches from the same two points, the upper a few hundredths above the lower: the lens between them is

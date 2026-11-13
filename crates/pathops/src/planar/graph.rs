@@ -320,13 +320,54 @@ pub(super) fn there_and_back(open: &BezPath, out: &mut BezPath) {
     out.close_path();
 }
 
-/// `path` back from the sweep's frame, its on-curve points within `tol` of an input anchor (`sorted`
-/// by x) put exactly on it, the control points next to it moving along.
-pub(super) fn unshear(path: BezPath, sorted: &[Point], tol: f64, back: Affine) -> BezPath {
-    let snap = |p: Point| -> Point {
-        let lo = sorted.partition_point(|q| q.x < p.x - tol);
-        sorted.get(lo..).unwrap_or_default().iter().take_while(|q| q.x <= p.x + tol).find(|q| (q.y - p.y).abs() <= tol).copied().unwrap_or(p)
-    };
+/// The inputs' anchors (sorted by x, then y), filed by the cell of side `tol` each lies in, so that the one a point snaps to is found among
+/// the nine cells round it: a list searched on x alone reads every anchor of a column (thousands that share an x) for each lookup.
+pub(super) struct Anchors {
+    sorted: Vec<Point>,
+    tol: f64,
+    cell: f64,
+    cells: HashMap<(i64, i64), Vec<usize>>,
+}
+
+impl Anchors {
+    pub(super) fn new(sorted: Vec<Point>, tol: f64) -> Self {
+        let cell = tol.max(f64::MIN_POSITIVE);
+        let mut cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+        for (i, p) in sorted.iter().enumerate() {
+            cells.entry(Self::cell_of(cell, *p)).or_default().push(i);
+        }
+        Self { sorted, tol, cell, cells }
+    }
+
+    /// The cell of `p` (a saturating cast: points that far out share a cell, and are checked against each other all the same).
+    fn cell_of(cell: f64, p: Point) -> (i64, i64) {
+        ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64)
+    }
+
+    /// The first anchor, in order, within `tol` of `p` in both coordinates, or `p`.
+    fn snap(&self, p: Point) -> Point {
+        let (cx, cy) = Self::cell_of(self.cell, p);
+        let mut best: Option<usize> = None;
+        for x in cx.saturating_sub(1)..=cx.saturating_add(1) {
+            for y in cy.saturating_sub(1)..=cy.saturating_add(1) {
+                let Some(found) = self.cells.get(&(x, y)) else { continue };
+                crate::work::add(crate::work::Work::AnchorReads, found.len());
+                for &i in found {
+                    let Some(q) = self.sorted.get(i) else { continue };
+                    if (q.x - p.x).abs() <= self.tol && (q.y - p.y).abs() <= self.tol && best.is_none_or(|b| i < b) {
+                        best = Some(i);
+                    }
+                }
+            }
+        }
+        best.and_then(|i| self.sorted.get(i)).copied().unwrap_or(p)
+    }
+}
+
+/// `path` back from the sweep's frame, its on-curve points within the tolerance of an input anchor put exactly on it, the control points next
+/// to it moving along.
+pub(super) fn unshear(path: BezPath, anchors: &Anchors, back: Affine) -> BezPath {
+    let snap = |p: Point| -> Point { anchors.snap(p) };
     let mut out = BezPath::new();
     // How far the point the next segment leaves from moved, and how far the subpath's start did.
     let (mut shift, mut start_shift) = (kurbo::Vec2::ZERO, kurbo::Vec2::ZERO);

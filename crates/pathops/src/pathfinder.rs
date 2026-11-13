@@ -951,19 +951,19 @@ fn outline_edges(junctions: Vec<Point>, shapes: &[Shape], validate: bool) -> Opt
     // match has its midpoint within `near` of this one's, so only the chains in the grid cells
     // around it are candidates; the first of them in `out` order is the one a scan would find.
     let mut out: Vec<(Vec<Seg>, u64)> = Vec::new();
-    let mut sigs: Vec<(Point, Point, Point)> = Vec::new();
-    let sig = |c: &[Seg]| -> (Point, Point, Point) {
+    let mut sigs: Vec<(Point, Point, [Point; CHAIN_SAMPLES])> = Vec::new();
+    let sig = |c: &[Seg]| -> (Point, Point, [Point; CHAIN_SAMPLES]) {
         let a = c[0].c.p0;
         let b = c[c.len() - 1].c.p3;
-        let mid = mid_point(c);
-        (a, b, mid)
+        (a, b, chain_points(c))
     };
     let d = reach * 10.0;
     let near = |p: Point, q: Point| p.distance(q) <= d;
     let cell = |p: Point| ((p.x / d).floor() as i64, (p.y / d).floor() as i64);
     let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
     for (chain, key) in chains {
-        let (a, b, m) = sig(&chain);
+        let (a, b, samples) = sig(&chain);
+        let m = samples[CHAIN_SAMPLES / 2];
         let (cx, cy) = cell(m);
         // The chains in the cells round it, each compared with this one: charged before it is, as chains
         // with distinct ends and one midpoint (a fan of long ones) all lie in one cell.
@@ -976,15 +976,18 @@ fn outline_edges(junctions: Vec<Point>, shapes: &[Shape], validate: bool) -> Opt
         let found = candidates
             .into_iter()
             .filter(|&i| {
-                let (a2, b2, m2) = sigs[i];
-                near(m, m2) && ((near(a, a2) && near(b, b2)) || (near(a, b2) && near(b, a2)))
+                // The ends and the midpoint only pick the candidates: two chains with the same ends and middles can part
+                // between them, so the points along the whole of each are compared too, from the same end or from the other.
+                let (a2, b2, s2) = &sigs[i];
+                let same = |rev: bool| samples.iter().enumerate().all(|(k, p)| near(*p, s2[if rev { CHAIN_SAMPLES - 1 - k } else { k }]));
+                (near(a, *a2) && near(b, *b2) && same(false)) || (near(a, *b2) && near(b, *a2) && same(true))
             })
             .min();
         match found {
             Some(i) => out[i].1 = key,
             None => {
                 grid.entry((cx, cy)).or_default().push(out.len());
-                sigs.push((a, b, m));
+                sigs.push((a, b, samples));
                 out.push((chain, key));
             }
         }
@@ -1001,10 +1004,14 @@ fn outline_edges(junctions: Vec<Point>, shapes: &[Shape], validate: bool) -> Opt
 }
 
 /// What comparing a chain of an Outline with one found beside it costs, in the steps of
-/// [`crate::MAX_SEARCH_WORK`]: three distances and a few comparisons.
-const CHAIN_COMPARE_STEPS: usize = 4;
+/// [`crate::MAX_SEARCH_WORK`]: the distances between their points ([`CHAIN_SAMPLES`] and the two ends) and a few comparisons.
+const CHAIN_COMPARE_STEPS: usize = 12;
 
-/// The point halfway along the chain `c`, by length.
+/// The points of a chain of an Outline that are compared with another's to tell whether they coincide: at a tenth of its length, two tenths and
+/// so on (the middle one is the fifth). An odd number, so that one is the midpoint.
+const CHAIN_SAMPLES: usize = 9;
+
+/// The points of the chain `c` at each tenth of its length (the ninth of them, a tenth from the end), the fifth halfway.
 ///
 /// Each segment is measured to a millionth, or to a billionth of its control polygon where that is
 /// coarser. kurbo's solver for where a length runs out steps by the accuracy over the length, and
@@ -1012,19 +1019,25 @@ const CHAIN_COMPARE_STEPS: usize = 4;
 /// more on a curve longer than about 9e12 (a shift past the width of its integer, a panic where
 /// arithmetic is checked), and a relative accuracy keeps them to about thirty at any size, and the
 /// measuring of each segment to a few levels (the same 1e-6 for a segment up to a thousand long).
-fn mid_point(c: &[Seg]) -> Point {
+fn chain_points(c: &[Seg]) -> [Point; CHAIN_SAMPLES] {
     let accuracy = |s: &CubicBez| (1e-9 * (s.p0.distance(s.p1) + s.p1.distance(s.p2) + s.p2.distance(s.p3))).max(1e-6);
     let lens: Vec<f64> = c.iter().map(|s| kurbo::ParamCurveArclen::arclen(&s.c, accuracy(&s.c))).collect();
     let total: f64 = lens.iter().sum();
-    let mut acc = 0.0;
-    for (s, l) in c.iter().zip(&lens) {
-        if acc + l >= total / 2.0 && *l > 0.0 {
-            let t = kurbo::ParamCurveArclen::inv_arclen(&s.c, total / 2.0 - acc, accuracy(&s.c));
-            return s.c.eval(t);
+    let start = c.first().map_or(Point::ZERO, |s| s.c.p0);
+    let mut out = [start; CHAIN_SAMPLES];
+    for (k, slot) in out.iter_mut().enumerate() {
+        let target = total * (k + 1) as f64 / (CHAIN_SAMPLES + 1) as f64;
+        let mut acc = 0.0;
+        for (s, l) in c.iter().zip(&lens) {
+            if acc + l >= target && *l > 0.0 {
+                let t = kurbo::ParamCurveArclen::inv_arclen(&s.c, target - acc, accuracy(&s.c));
+                *slot = s.c.eval(t);
+                break;
+            }
+            acc += l;
         }
-        acc += l;
     }
-    c.first().map_or(Point::ZERO, |s| s.c.p0)
+    out
 }
 
 /// The two parameters, `s < t` inside `c`, at which the cubic `c` passes through one point (where it
@@ -1869,6 +1882,23 @@ mod tests {
         let cut = pathfinder(PathfinderOp::Outline, &[Shape::new(v, FillRule::NonZero, 1), Shape::new(cutter, FillRule::NonZero, 2)]);
         assert_eq!(cut.iter().filter(|s| s.key == 1).count(), 2);
         assert!((cut.iter().filter(|s| s.key == 1).map(|s| length(&s.path)).sum::<f64>() - 2.0 * 500f64.sqrt()).abs() < 1e-9);
+    }
+
+    /// Two open paths with one pair of ends and one midpoint (0.0001 apart) but between them parting by up to a hundred are two edges, not
+    /// copies of one: the Outline keeps both, where it took the second for the first (the chains' ends and halves were all it compared).
+    #[test]
+    fn outline_keeps_open_paths_that_share_ends_and_midpoints_but_part_between() {
+        let a = polyline(&[(0.0, 0.0), (10.0, 200.0), (50.0, 1.0001), (90.0, 200.0), (100.0, 0.0)], false);
+        let b = polyline(&[(0.0, 0.0), (20.0, 100.0), (50.0, 1.0), (80.0, 100.0), (100.0, 0.0)], false);
+        let out = pathfinder(PathfinderOp::Outline, &[Shape::new(a.clone(), FillRule::NonZero, 1), Shape::new(b.clone(), FillRule::NonZero, 2)]);
+        for (key, path) in [(1, &a), (2, &b)] {
+            let kept: f64 = out.iter().filter(|s| s.key == key).map(|s| length(&s.path)).sum();
+            assert!((kept - length(path)).abs() <= 1e-3, "key {key}: {kept} of {} kept", length(path));
+        }
+        // Copies of one path are still one edge: the front-most key stays.
+        let twice = pathfinder(PathfinderOp::Outline, &[Shape::new(a.clone(), FillRule::NonZero, 1), Shape::new(a, FillRule::NonZero, 2)]);
+        assert_eq!(twice.len(), 1);
+        assert_eq!(twice[0].key, 2);
     }
 
     // ---- the work after the map
