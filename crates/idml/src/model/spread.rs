@@ -86,6 +86,52 @@ impl Spread {
     pub fn parent_name(&self) -> Option<(&str, &str)> {
         Some((self.values.get("NamePrefix")?, self.values.get("BaseName")?))
     }
+
+    /// Parent spread's prefix, using the prefix of `Name` or `A` when absent.
+    pub fn parent_prefix(&self) -> String {
+        self.values.get("NamePrefix").map(str::to_string).unwrap_or_else(|| self.name().split('-').next().unwrap_or("A").to_string())
+    }
+
+    /// Parent spread's base name, using the suffix of `Name` or `Parent` when absent.
+    pub fn base_name(&self) -> String {
+        self.values
+            .get("BaseName")
+            .map(str::to_string)
+            .unwrap_or_else(|| self.name().split_once('-').map(|(_, b)| b.to_string()).unwrap_or_else(|| self.name().to_string()))
+    }
+
+    pub fn name(&self) -> &str {
+        self.values.name().unwrap_or("Parent")
+    }
+
+    /// Whether master page items are shown.
+    pub fn show_master_items(&self) -> bool {
+        self.values.boolean("ShowMasterItems") != Some(false)
+    }
+
+    /// Whether page shuffle is allowed.
+    pub fn allow_shuffle(&self) -> bool {
+        self.values.boolean("AllowPageShuffle") != Some(false)
+    }
+
+    /// Exact quarter-turn view rotation encoded by the spread transform, clockwise on screen.
+    pub fn view_rotation(&self) -> u8 {
+        if self.master {
+            return 0;
+        }
+        let [a, b, c, d, _, _] = self.values.item_transform();
+        let is = |x: f64, y: f64| (x - y).abs() < 1e-6;
+        let quarter = |m: [f64; 4]| is(a, m[0]) && is(b, m[1]) && is(c, m[2]) && is(d, m[3]);
+        if quarter([0.0, 1.0, -1.0, 0.0]) {
+            1
+        } else if quarter([-1.0, 0.0, 0.0, -1.0]) {
+            2
+        } else if quarter([0.0, -1.0, 1.0, 0.0]) {
+            3
+        } else {
+            0
+        }
+    }
 }
 
 /// The spreads and parent spreads of a document, in its order.
@@ -140,6 +186,20 @@ impl Page {
     /// `AppliedMaster`: the `Self` of the parent spread, or `None` for none (`n`).
     pub fn applied_master(&self) -> Option<&str> {
         self.values.get("AppliedMaster").filter(|m| *m != "n")
+    }
+
+    pub fn self_id(&self) -> Option<&str> {
+        self.values.self_id()
+    }
+
+    /// `ItemTransform`; the identity when absent or malformed.
+    pub fn item_transform(&self) -> Matrix {
+        self.values.item_transform()
+    }
+
+    /// `LayoutRule`, defaulting to `Off`.
+    pub fn layout_rule(&self) -> &str {
+        self.values.get("LayoutRule").unwrap_or("Off")
     }
 
     /// `OverrideList`: the `Self`s of the parent items overridden on this page.
