@@ -229,17 +229,29 @@ fn spline_path(spline: &crate::model::Spline) -> Result<Option<BezPath>, Error> 
     let weights = (spline.flags & 4 != 0 && spline.weights.len() == points.len()).then_some(spline.weights.as_slice());
     let mut limit_hit = false;
     let converted = usize::try_from(spline.degree).ok().and_then(|degree| nurbs(degree, &spline.knots, &points, weights, &mut limit_hit));
-    if limit_hit {
-        return Err(Error::TooManySegments);
-    }
-    Ok(converted
+    let path = converted
         .map(|mut path| {
             if spline.flags & 1 != 0 {
                 path.close_path();
             }
             path
         })
-        .or_else(|| through(&spline.fit.iter().map(|p| Point::new(p[0], p[1])).collect::<Vec<_>>(), spline.flags & 1 != 0)))
+        .or_else(|| {
+            let closed = spline.flags & 1 != 0;
+            // `through` emits one move, n-1 (open) or n (closed) cubics, and
+            // an additional close element for closed paths. Check before allocating
+            // its converted point vector.
+            let max_points = MAX_SPLINE_ELEMENTS.saturating_sub(if closed { 2 } else { 0 });
+            if spline.fit.len() > max_points {
+                limit_hit = true;
+                return None;
+            }
+            through(&spline.fit.iter().map(|p| Point::new(p[0], p[1])).collect::<Vec<_>>(), closed)
+        });
+    if limit_hit {
+        return Err(Error::TooManySegments);
+    }
+    Ok(path)
 }
 
 fn nurbs(degree: usize, knots: &[f64], control: &[Point], weights: Option<&[f64]>, limit_hit: &mut bool) -> Option<BezPath> {
@@ -268,7 +280,7 @@ fn nurbs(degree: usize, knots: &[f64], control: &[Point], weights: Option<&[f64]
     let mut path = BezPath::new();
     for span in degree..n {
         let (Some(&t0), Some(&t1)) = (knots.get(span), knots.get(span + 1)) else { continue };
-        if t1 - t0 <= 1e-12 * (1.0 + t0.abs()) {
+        if t1 <= t0 {
             continue;
         }
         let bezier: Vec<Homogeneous> = (0..=degree)
@@ -712,6 +724,26 @@ mod spline_tests {
         assert!(!limit_hit);
         assert!(matches!(path.elements(), [kurbo::PathEl::MoveTo(a), kurbo::PathEl::LineTo(b), kurbo::PathEl::MoveTo(c), kurbo::PathEl::LineTo(d)]
             if *a == Point::new(0.0,0.0) && *b == Point::new(1.0,0.0) && *c == Point::new(5.0,5.0) && *d == Point::new(6.0,5.0)));
+    }
+
+    #[test]
+    fn positive_knot_spans_at_large_offsets_are_kept() {
+        let start = 1.0e12;
+        let delta = 1.0e-3;
+        let mut limit_hit = false;
+        let path = nurbs(1, &[start, start, start + delta, start + delta], &[Point::new(2.0, 3.0), Point::new(5.0, 7.0)], None, &mut limit_hit)
+            .expect("positive-width span");
+        assert!(!limit_hit);
+        assert!(matches!(path.elements(), [kurbo::PathEl::MoveTo(a), kurbo::PathEl::LineTo(b)]
+            if *a == Point::new(2.0, 3.0) && *b == Point::new(5.0, 7.0)));
+    }
+
+    #[test]
+    fn fit_point_fallback_checks_element_budget_before_collecting() {
+        let mut spline = cubic();
+        spline.degree = -1;
+        spline.fit = vec![[0.0, 0.0, 0.0]; MAX_SPLINE_ELEMENTS + 1];
+        assert!(matches!(spline_path(&spline), Err(Error::TooManySegments)));
     }
 
     #[test]
