@@ -322,3 +322,37 @@ fn extreme_content_at_the_finest_quantiser() {
         assert!(d >= 45.0, "frame {i}: {d:.1} dB from the reconstruction");
     }
 }
+
+/// The encoder's packets in an AVI (the track description through `VideoSpec::for_codec`) decode
+/// in ffmpeg to exactly what the raw stream decodes to. Tagged `XVID` they would not: ffmpeg then
+/// decodes with Xvid's IDCT.
+#[test]
+fn packets_play_from_an_avi_file() {
+    use craft_media::avi::{AviWriter, MuxOptions, StreamSpec, VideoSpec};
+    let Some(ff) = ffmpeg() else { return };
+    let mut cfg = EncoderConfig::new(160, 96, 25, 1);
+    cfg.keyint = 10;
+    let Encoded { enc, packets, .. } = encode(cfg, 30);
+    let spec = VideoSpec::for_codec(&enc.codec_params(), 25, 1).expect("an AVI FourCC for MPEG-4 Part 2");
+    assert_eq!(spec.format.compression, *b"FMP4");
+    let mut w = AviWriter::new(std::io::Cursor::new(Vec::new()), vec![StreamSpec::Video(spec)], MuxOptions::default()).expect("writer");
+    for p in &packets {
+        w.write_chunk(0, &p.data, p.keyframe).expect("chunk");
+    }
+    let avi = w.finish().expect("finish").into_inner();
+    let dir = out_dir("avi");
+    let (avi_path, es_path) = (dir.join("stream.avi"), dir.join("stream.m4v"));
+    std::fs::write(&avi_path, avi).expect("write avi");
+    write_stream(&es_path, &packets);
+    let (_, want) = ffmpeg_decode(&ff, &es_path);
+    let out = Command::new(&ff)
+        .args(["-hide_banner", "-nostdin", "-v", "warning", "-i"])
+        .arg(&avi_path)
+        .args(["-f", "rawvideo", "-pix_fmt", "yuv420p", "-"])
+        .output()
+        .expect("run ffmpeg");
+    let diag = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success() && diag.trim().is_empty(), "{diag}");
+    assert_eq!(out.stdout.len(), 160 * 96 * 3 / 2 * 30);
+    assert!(out.stdout == want, "the AVI decodes differently from the raw stream");
+}

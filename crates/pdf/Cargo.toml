@@ -14,6 +14,7 @@ workspace = true
 default = []
 read = ["dep:hayro-syntax", "dep:thiserror"]
 interpret = ["read", "dep:hayro-interpret"]
+paths = ["interpret", "dep:kurbo"]
 raster = ["interpret", "dep:hayro", "dep:bytemuck"]
 write = ["dep:krilla", "dep:thiserror"]
 write-pdf = ["write", "krilla/pdf"]
@@ -40,6 +41,7 @@ stringprep = { version = "0.1", optional = true }
 zeroize = { version = "1", optional = true }
 # PDF date strings in the object layer (`cos`).
 chrono = { workspace = true, optional = true }
+kurbo = { workspace = true, optional = true }
 
 # On the web, a rewrite's fresh file identifier (`cos`) takes its entropy from the browser
 # (`crypto.getRandomValues`); native builds compile neither.

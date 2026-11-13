@@ -7,8 +7,12 @@ use craft_video::h264::*;
 
 /// FNV-1a over the slice NAL units of `n` frames of [`synth`] encoded with `c`.
 fn slices_hash(c: EncoderConfig, n: usize) -> u64 {
+    slices_hash_with_starts(c, n, MotionSearchStarts::Extended)
+}
+
+fn slices_hash_with_starts(c: EncoderConfig, n: usize, starts: MotionSearchStarts) -> u64 {
     let (w, h) = (c.width as usize, c.height as usize);
-    let mut enc = Encoder::new(c).unwrap();
+    let mut enc = Encoder::new_with_motion_search_starts(c, starts).unwrap();
     let mut stream = Vec::new();
     for t in 0..n {
         let f = synth(w, h, t);
@@ -59,5 +63,29 @@ fn coded_slices_are_pinned() {
     }
     for ((name, _, want), got) in cases.iter().zip(&got) {
         assert_eq!(*got, *want, "{name}: the coded slices changed");
+    }
+}
+
+#[test]
+fn filmcraft_writer_keeps_shared_search_decisions_pinned() {
+    let cases = [
+        ("high balanced crf", cfg(Profile::High, Preset::Balanced, RateControl::Crf(23.0)), 0x6223_db82_41eb_7da1u64),
+        ("high quality vbr", cfg(Profile::High, Preset::Quality, RateControl::Vbr { target_kbps: 800, max_kbps: 1200 }), 0x721d_6e68_3f96_5bf1),
+        ("main speed qp", cfg(Profile::Main, Preset::Speed, RateControl::Qp(30)), 0x7772_91d5_4c75_c320),
+        ("baseline balanced cbr", cfg(Profile::Baseline, Preset::Balanced, RateControl::Cbr { kbps: 600 }), 0x72ff_5e78_a3f0_e46e),
+    ];
+    let got: Vec<u64> = cases
+        .iter()
+        .map(|(_, c, _)| {
+            let mut c = c.clone();
+            c.writer = "filmcraft-h264enc 0.20.1".into();
+            slices_hash_with_starts(c, 20, MotionSearchStarts::SeedAndNeighbour)
+        })
+        .collect();
+    for ((name, _, _), got) in cases.iter().zip(&got) {
+        eprintln!("FilmCraft {name}: {got:#018x}");
+    }
+    for ((name, _, want), got) in cases.iter().zip(&got) {
+        assert_eq!(*got, *want, "{name}: FilmCraft's coded slices changed");
     }
 }

@@ -19,4 +19,5 @@ image = { version = "0.25", default-features = false, features = ["gif"], option
 
 [dev-dependencies]
 # Writes the animated test files the scan is checked against; not a product dependency.
+gif = "0.14"
 image = { version = "0.25", default-features = false, features = ["gif"] }
