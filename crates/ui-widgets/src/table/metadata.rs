@@ -276,7 +276,7 @@ impl<'a> MetadataTable<'a> {
                 .rows_stamp(query_stamp(query.as_str()))
                 .empty(empty)
                 .show_items(ui, &source, &mut |_, icx| match &source.entries[icx.at] {
-                    Entry::Group(group) => ListRow::new(group.name.clone()).cells(icx.cells()).heading().space_above(icx.at > 0),
+                    Entry::Group(group) => ListRow::new(group.name.clone()).cells(icx.cells()).section_heading().space_above(icx.at > 0),
                     Entry::Field(row) => {
                         let line = ListRow::new(row.name.clone())
                             .cells(icx.cells())

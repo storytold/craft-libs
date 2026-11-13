@@ -122,7 +122,7 @@ struct PlacedHeader {
 /// The look of the group header `name`: a heading row with the group's disclosure, which the table declares and
 /// paints.
 fn header_row(name: &str, open: bool) -> ListRow<'static> {
-    ListRow::new(name.to_owned()).heading().node(false).group(open).disclosure_by_host()
+    ListRow::new(name.to_owned()).section_heading().node(false).group(open).disclosure_by_host()
 }
 
 /// A table of commands with their shortcuts.
@@ -171,7 +171,7 @@ impl Component for ShortcutTable<'_> {
     type Output = CollectionResponse<usize, RowAct>;
 
     fn style(cx: &StyleCx<'_>, _: ShortcutTableStyleKey) -> ShortcutTableStyle {
-        ShortcutTableStyle { metrics: Metrics::new(), header: ListRow::style(cx, ListRow::new(Label::default()).heading().style_key()) }
+        ShortcutTableStyle { metrics: Metrics::new(), header: ListRow::style(cx, ListRow::new(Label::default()).section_heading().style_key()) }
     }
 
     /// A sense-less part over each group header in view, and one over its disclosure column: they only carry the

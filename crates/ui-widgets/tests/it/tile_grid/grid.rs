@@ -1,6 +1,6 @@
 //! The tile grid's layout: justified rows fill the width with whole cards (picture and what the tile adds around it).
 
-use craft_ui::tile_grid::{Around, ArrangeSpacing, Tiling, arrange};
+use craft_ui::tile_grid::{Around, ArrangeSpacing, TileGroup, Tiling, arrange};
 
 const WIDTH: f32 = 400.0;
 const ROW: f32 = 100.0;
@@ -28,4 +28,16 @@ fn a_justified_row_but_the_last_fills_the_width_exactly() {
     }
     let last = laid.rows.last().expect("rows");
     assert!((last.height - ROW - around.height()).abs() < EPS, "the last row keeps the row height");
+}
+
+#[craft_ui::testing::trial]
+fn a_leading_group_header_sits_at_the_top_edge_and_ungrouped_tiles_keep_the_inset() {
+    let aspects = [1.0; 4];
+    let groups = [TileGroup::new(0usize, 0, 4, "Folder")];
+    let laid = arrange(&aspects, &groups, WIDTH, Tiling::justified(ROW), spacing(), Around::default());
+    let header = laid.headers[0];
+    assert!(header.top().abs() < EPS, "no inset above the first header");
+    assert!((header.left() - INSET).abs() < EPS && (WIDTH - header.right() - INSET).abs() < EPS, "the header keeps the side insets");
+    let loose = arrange::<usize>(&aspects, &[], WIDTH, Tiling::justified(ROW), spacing(), Around::default());
+    assert!((loose.rows[0].top - INSET).abs() < EPS, "tiles that open the grid keep the inset above them");
 }

@@ -82,8 +82,7 @@ impl Component for ListRow<'_> {
             RowInk::Muted => text.muted,
             RowInk::Dimmed => text.faint,
         };
-        let weight = key.strong || key.heading;
-        let role = key.role.unwrap_or(if weight { TypeRole::BodyStrong } else { TypeRole::Body });
+        let role = key.role.unwrap_or(if key.strong { TypeRole::BodyStrong } else { TypeRole::Body });
         let sizes = Sizes::of(cx, role, key.rows, key.sub_row);
         let muted = if key.ink == RowInk::Dimmed { text.faint } else { text.muted };
         ListRowStyle {

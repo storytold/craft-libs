@@ -1015,3 +1015,16 @@ fn a_double_click_selects_the_row_activates_it_once_and_changes_nothing_after() 
         assert!(last_change.is_some_and(|at| at < activations[0]), "{select:?}: selected before the activation, not after: {events:?}");
     }
 }
+
+/// A collection's group header reads in the body weight; a table's section heading in the strong weight.
+#[trial]
+fn a_group_header_is_regular_and_a_section_heading_strong() {
+    use craft_theme::{Contrast, ControlSize, Mode, TypeRole, Variant};
+    use craft_ui::contract::Component as _;
+    use craft_ui::testing::style::{tokens, with_cx};
+    with_cx(&egui::Context::default(), &tokens(Mode::Light, Contrast::Standard), Variant::SECONDARY, ControlSize::Md, |cx| {
+        let role = |row: ListRow<'_>| ListRow::style(cx, row.style_key()).text.role;
+        assert_eq!(role(ListRow::new("Folder").heading()), TypeRole::Body, "a group header");
+        assert_eq!(role(ListRow::new("Camera").section_heading()), TypeRole::BodyStrong, "a section heading");
+    });
+}

@@ -106,8 +106,8 @@ pub struct ListRow<'a> {
     #[style_key]
     #[prop]
     pub(super) strong: bool,
-    /// The row heads a group of rows: the title strong, on no band, the detail at the end of the same line and
-    /// the disclosure of a group.
+    /// The row heads a group of rows: the title on no band, in the body weight, the detail at the end of the same
+    /// line and the disclosure of a group. A table's section heading also sets `strong` (`section_heading`).
     #[style_key]
     #[prop(flag)]
     pub(super) heading: bool,
@@ -144,7 +144,7 @@ pub struct ListRow<'a> {
     #[style_key]
     #[prop]
     pub(super) striped: bool,
-    /// The type role of the label and the text cells; the weight of `strong` and `heading` when unset. A role taller
+    /// The type role of the label and the text cells; the weight of `strong` when unset. A role taller
     /// than a control makes the row as tall as its line.
     #[style_key]
     #[prop]
@@ -346,6 +346,12 @@ impl<'a> ListRow<'a> {
             label_rect: Rect::NOTHING,
         }
         .label(label)
+    }
+
+    /// A heading row in the strong weight: the section heading of a table, where a collection's group header
+    /// (`heading` alone) reads in the body weight.
+    pub fn section_heading(self) -> Self {
+        self.heading().strong(true)
     }
 
     /// Empty room in a list: a row that takes its height but draws nothing, senses nothing and has no AccessKit

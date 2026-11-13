@@ -390,6 +390,8 @@ pub fn aspects_of<K>(source: &dyn ItemSource<K>) -> Vec<f32> {
 /// - `Cards`: as many columns as fit; each group starts a new row below its header.
 /// - `groups` are in display order and cover only the tiles they name; tiles outside every group sit in rows
 ///   without a header. A closed group has its header only.
+/// - `inset` pads the sides and the bottom, and the top unless a group header opens the grid: that header sits at
+///   the top edge.
 pub fn arrange<K>(aspects: &[f32], groups: &[TileGroup<K>], width: f32, tiling: Tiling, spacing: ArrangeSpacing, around: Around) -> TileArrangement {
     let sanitized: Vec<f32> = aspects.iter().map(|a| if a.is_finite() && *a > 0.0 { *a } else { 1.0 }).collect();
     let n = sanitized.len();
@@ -412,7 +414,8 @@ pub fn arrange<K>(aspects: &[f32], groups: &[TileGroup<K>], width: f32, tiling: 
     }
     out.starts = spans.iter().map(|span| span.start).collect();
 
-    let mut y = inset;
+    // A leading group header sits at the top edge, as the old grids put it; tiles that open the grid keep the inset.
+    let mut y = if segments.first().is_some_and(|(group, _)| group.is_some()) { 0.0 } else { inset };
     let mut started = false;
     for (group, range) in segments {
         if started {
