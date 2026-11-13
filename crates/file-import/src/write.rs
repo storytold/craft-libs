@@ -123,15 +123,14 @@ fn write_svg(scene: &OutputScene) -> Result<String, Error> {
     if !(view_scale.is_finite() && view_scale > 0.0) {
         return Err(Error::InvalidGeometry);
     }
+    let paths_by_layer = paths_by_layer(scene);
     let elements = scene
         .layers
         .iter()
         .enumerate()
         .map(|(layer_index, layer)| {
-            let paths = scene
-                .paths
+            let paths = paths_by_layer[layer_index]
                 .iter()
-                .filter(|path| path.layer == layer_index)
                 .map(|path| {
                     let color = path.color_rgb;
                     let mut attributes = vec![
@@ -166,16 +165,28 @@ fn write_svg(scene: &OutputScene) -> Result<String, Error> {
 
 fn write_pdf(scene: &OutputScene) -> Result<Vec<u8>, Error> {
     validate_scene(scene)?;
+    let paths_by_layer = paths_by_layer(scene);
     // Match SVG's painter order: layers in order, then paths in source order within each layer.
     let paths = scene
         .layers
         .iter()
         .enumerate()
         .filter(|(_, layer)| layer.visible)
-        .flat_map(|(layer_index, _)| scene.paths.iter().filter(move |path| path.layer == layer_index))
+        .flat_map(|(layer_index, _)| paths_by_layer[layer_index].iter().copied())
         .map(|path| PdfPath { path: path.path.clone(), color_rgb: path.color_rgb, stroke_width_mm: Some(path.stroke_width_mm) })
         .collect();
     write_pdf_pages(&[PdfPage { width_mm: scene.width_mm, height_mm: scene.height_mm, view_box: scene.view_box, paths }])
+}
+
+/// Group the neutral paths once so writing does not rescan all paths for every layer.
+fn paths_by_layer(scene: &OutputScene) -> Vec<Vec<&OutputPath>> {
+    let mut grouped: Vec<Vec<&OutputPath>> = (0..scene.layers.len()).map(|_| Vec::new()).collect();
+    for path in &scene.paths {
+        if let Some(layer) = grouped.get_mut(path.layer) {
+            layer.push(path);
+        }
+    }
+    grouped
 }
 
 /// Encode a neutral list of laid-out pages with vector paths as PDF.
