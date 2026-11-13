@@ -238,6 +238,9 @@ mod tests {
         assert_eq!(sniff_delimiter("a\tb\n1\t2\n", '"'), b'\t');
         assert_eq!(sniff_delimiter("a,b\n\"x;y;z\",2\n", '"'), b',');
         assert_eq!(sniff_delimiter("single", '"'), b',');
+        assert_eq!(sniff_delimiter("a,b\tc\n1,2\td\n", '"'), b'\t');
+        assert_eq!(sniff_delimiter("a,b;c\n1,2;c\n", '"'), b',');
+        assert_eq!(sniff_delimiter("a;b\tc\n1;2\td\n", '"'), b'\t');
         // A delimiter missing from some lines is text, not a separator (single-column export round trip).
         assert_eq!(sniff_delimiter("alpha;beta\r\ngamma\r\n", '"'), b',');
         assert_eq!(sniff_delimiter("alpha\tbeta\r\ngamma\r\n", '"'), b',');
