@@ -1,11 +1,11 @@
 //! Bounded extraction of page vector paths from PDF content streams.
 //!
-//! Paths remain in PDF user-space points. Text glyphs and raster images are counted as omitted
-//! content; clipping and paint are not applied. Applications own page selection and model mapping.
+//! Paths are returned in page-oriented points with `/UserUnit`, rotation and crop origin applied.
+//! Text glyphs and raster images are counted as omitted content; clipping and paint are not applied.
 
 use hayro_interpret::font::Glyph;
 use hayro_interpret::{
-    BlendMode, ClipPath, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, RectExt, SoftMask,
+    BlendMode, ClipPath, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, RectExt, SoftMask, TransformExt,
 };
 use kurbo::{Affine, BezPath, Rect};
 use std::sync::{
@@ -36,11 +36,13 @@ pub enum Error {
     Interpret(#[from] crate::read::ExecutionError),
     #[error("PDF contains more than {limit} pages")]
     Pages { limit: usize },
+    #[error("PDF has no page at index {index}")]
+    PageIndex { index: usize },
     #[error("PDF path output exceeds configured limit")]
     OutputLimit,
 }
 
-/// Extracted paths for one PDF page, with its intersected crop box in user-space points.
+/// Extracted paths for one PDF page, normalized to an origin-zero page in physical points.
 #[derive(Debug, Clone)]
 pub struct Page {
     pub crop_box: Rect,
@@ -59,10 +61,22 @@ pub struct Imported {
 
 /// Open and interpret vector content using shared PDF parsing and interpreter APIs.
 pub fn import(bytes: &[u8], limits: Limits) -> Result<Imported, Error> {
+    import_selected(bytes, limits, None)
+}
+
+/// Interpret only the requested page and apply path and element limits to that page's output.
+pub fn import_page(bytes: &[u8], page_index: usize, limits: Limits) -> Result<Imported, Error> {
+    import_selected(bytes, limits, Some(page_index))
+}
+
+fn import_selected(bytes: &[u8], limits: Limits, selected: Option<usize>) -> Result<Imported, Error> {
     let options = crate::read::OpenOptions { max_input_bytes: limits.max_input_bytes, ..Default::default() };
     let pdf = crate::read::open_slice_with_options(bytes, None, &options)?;
     if pdf.pages().len() > limits.max_pages {
         return Err(Error::Pages { limit: limits.max_pages });
+    }
+    if selected.is_some_and(|index| index >= pdf.pages().len()) {
+        return Err(Error::PageIndex { index: selected.unwrap_or_default() });
     }
     let cache = InterpreterCache::new();
     let truncated = Arc::new(AtomicBool::new(false));
@@ -78,20 +92,29 @@ pub fn import(bytes: &[u8], limits: Limits) -> Result<Imported, Error> {
     let mut pages = Vec::with_capacity(pdf.pages().len());
     let mut total_paths = 0usize;
     let mut total_elements = 0usize;
-    for page in pdf.pages().iter() {
-        let crop_box = page.intersected_crop_box().to_kurbo();
-        let mut context = hayro_interpret::Context::new(Affine::IDENTITY, crop_box, &cache, pdf.xref(), settings.clone());
+    for (page_index, page) in pdf.pages().iter().enumerate() {
+        if selected.is_some_and(|index| index != page_index) {
+            continue;
+        }
+        let source_crop_box = page.intersected_crop_box().to_kurbo();
+        let (width, height) = page.render_dimensions();
+        let crop_box = Rect::new(0.0, 0.0, f64::from(width), f64::from(height));
+        let initial_transform = page.initial_transform(true).to_kurbo();
+        let mut context = hayro_interpret::Context::new(initial_transform, source_crop_box, &cache, pdf.xref(), settings.clone());
         let mut device = Collector {
-            max_paths: limits.max_paths.saturating_sub(total_paths),
-            max_elements: limits.max_path_elements.saturating_sub(total_elements),
+            max_paths: if selected.is_some() { limits.max_paths } else { limits.max_paths.saturating_sub(total_paths) },
+            max_elements: if selected.is_some() { limits.max_path_elements } else { limits.max_path_elements.saturating_sub(total_elements) },
             ..Collector::default()
         };
         crate::read::interpret_page(page, &mut context, &mut device)?;
         if device.exceeded {
             return Err(Error::OutputLimit);
         }
+        if device.paths.len() > limits.max_paths || device.paths.iter().map(|path| path.elements().len()).sum::<usize>() > limits.max_path_elements {
+            return Err(Error::OutputLimit);
+        }
         total_paths = total_paths.saturating_add(device.paths.len());
-        total_elements = device.paths.iter().fold(total_elements, |n, path| n.saturating_add(path.elements().len()));
+        total_elements = device.paths.iter().fold(total_elements, |count, path| count.saturating_add(path.elements().len()));
         if total_paths > limits.max_paths || total_elements > limits.max_path_elements {
             return Err(Error::OutputLimit);
         }

@@ -182,7 +182,7 @@ fn write_elements(writer: &mut SvgWriter, elements: &[Element], depth: usize) {
 }
 
 fn view_box_data(bounds: [f64; 4]) -> String {
-    format!("{} {} {} {}", num(bounds[0], 3), num(bounds[1], 3), num(bounds[2], 3), num(bounds[3], 3))
+    format!("{} {} {} {}", shortest(bounds[0]), shortest(bounds[1]), shortest(bounds[2]), shortest(bounds[3]))
 }
 
 /// A number written with a fixed count of decimals. A value that is not finite is written as

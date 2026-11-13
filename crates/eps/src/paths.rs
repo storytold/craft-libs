@@ -29,11 +29,12 @@ pub enum Error {
     OutputLimit,
 }
 
-/// First-page path geometry in PostScript points, plus the page size and import notes.
+/// First-page path geometry normalized to the top-left origin in PostScript points, plus notes.
 #[derive(Debug, Clone)]
 pub struct Imported {
     pub paths: Vec<BezPath>,
-    /// Page bounds in source PostScript points, including a nonzero or negative origin.
+    /// Origin-zero page bounds in PostScript points, using the same accepted DSC box as the
+    /// interpreter.
     pub page_bounds: Rect,
     pub warnings: Vec<String>,
     pub preview_fallback: bool,
@@ -45,20 +46,13 @@ pub fn import(bytes: &[u8], limits: Limits) -> Result<Imported, Error> {
         return Err(Error::InputLimit { limit: limits.max_input_bytes });
     }
     let source = vectorcraft_eps::import(bytes).map_err(Error::Parse)?;
-    let section = crate::sections(bytes).map_err(|e| Error::Parse(e.to_string()))?;
-    let source_box = crate::Comments::read(section.postscript).page_box().unwrap_or([0.0, 0.0, 612.0, 792.0]);
-    let [llx, lly, urx, ury] = source_box;
-    let page_bounds = Rect::new(llx, lly, urx, ury);
+    let page_bounds = vectorcraft_eps::page(bytes).map_err(Error::Parse)?;
     let mut paths = Vec::new();
     let mut total_elements = 0usize;
     let mut clipped = false;
     let mut omitted = false;
     for layer in &source.document.layers {
         collect(layer, &mut paths, &mut total_elements, limits, &mut clipped, &mut omitted)?;
-    }
-    let inverse_page = kurbo::Affine::new([1.0, 0.0, 0.0, -1.0, llx, ury]);
-    for path in &mut paths {
-        *path = inverse_page * path.clone();
     }
     let mut warnings = source.warnings;
     if clipped {

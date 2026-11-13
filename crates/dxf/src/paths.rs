@@ -7,6 +7,8 @@ use kurbo::{BezPath, Point, Rect, Shape as _};
 
 /// Limits on the number of paths returned by [`import`]. Parsing also uses the crate's tag cap.
 pub const MAX_PATHS: usize = 200_000;
+/// Aggregate number of Bézier elements a drawing may generate during conversion.
+pub const MAX_PATH_ELEMENTS: usize = 2_000_000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -35,15 +37,22 @@ pub fn import(bytes: &[u8]) -> Result<Imported, Error> {
     let tags = crate::parse_with_limit(bytes, crate::max_tags())?;
     let drawing = crate::model::Document::read(&tags);
     let unit_to_mm = units_to_mm(drawing.header.insunits(), drawing.header.measurement());
+    let layer_visibility: std::collections::HashMap<_, _> =
+        drawing.layers().into_iter().map(|layer| (layer.name, layer.on && !layer.frozen)).collect();
     let mut paths = Vec::new();
     let mut warnings = Vec::new();
     let mut unsupported = 0usize;
+    let mut elements = 0usize;
     for record in &drawing.entities {
         let entity = crate::model::Entity::read(record);
-        if !entity.common.visible || record.paper_space() {
+        if !entity.common.visible || record.paper_space() || layer_visibility.get(&entity.common.layer) == Some(&false) {
             continue;
         }
         if excessive_sweep(&entity.kind) {
+            return Err(Error::TooManySegments);
+        }
+        let remaining = MAX_PATH_ELEMENTS.saturating_sub(elements);
+        if estimated_elements(&entity.kind) > remaining {
             return Err(Error::TooManySegments);
         }
         let converted = entity_paths(&entity.kind, entity.common.extrusion);
@@ -62,6 +71,10 @@ pub fn import(bytes: &[u8]) -> Result<Imported, Error> {
             unsupported = unsupported.saturating_add(1);
             continue;
         }
+        elements = elements.saturating_add(converted.iter().map(|path| path.elements().len()).sum::<usize>());
+        if elements > MAX_PATH_ELEMENTS {
+            return Err(Error::TooManySegments);
+        }
         if paths.len().saturating_add(converted.len()) > MAX_PATHS {
             return Err(Error::TooManyPaths);
         }
@@ -75,6 +88,48 @@ pub fn import(bytes: &[u8]) -> Result<Imported, Error> {
     }
     let bounds = paths.iter().map(|path| path.bounding_box()).reduce(|a, b| a.union(b));
     Ok(Imported { paths, bounds, unit_to_mm, warnings })
+}
+
+fn estimated_elements(kind: &crate::model::EntityKind) -> usize {
+    use crate::model::EntityKind as E;
+    let arc_count = |sweep: f64| (sweep.abs() / std::f64::consts::FRAC_PI_2).ceil().max(1.0) as usize;
+    let bulge_count = |bulge: f64| {
+        if bulge.is_finite() && bulge.abs() > 1e-12 { arc_count(4.0 * bulge.atan()) } else { 1 }
+    };
+    let polyline_count = |vertices: &[(Point, f64)], closed: bool| {
+        if vertices.is_empty() {
+            return 0;
+        }
+        let mut count = 1usize;
+        for pair in vertices.windows(2) {
+            count = count.saturating_add(bulge_count(pair[0].1));
+        }
+        if closed && vertices.len() > 1 {
+            count = count.saturating_add(bulge_count(vertices.last().map_or(0.0, |vertex| vertex.1)));
+            count = count.saturating_add(1);
+        }
+        count
+    };
+    match kind {
+        E::Line { .. } => 2,
+        E::Circle { .. } => 6,
+        E::Arc { start_angle, end_angle, .. } => 1usize.saturating_add(arc_count((end_angle - start_angle).to_radians())),
+        E::LwPolyline(poly) => {
+            let vertices: Vec<_> = poly.vertices.iter().map(|v| (Point::new(v.x, v.y), v.bulge)).collect();
+            polyline_count(&vertices, poly.closed)
+        }
+        E::Polyline(poly) if !poly.is_mesh() && !poly.is_polyface() => {
+            let vertices: Vec<_> = poly
+                .vertices
+                .iter()
+                .filter(|vertex| !vertex.is_face())
+                .map(|vertex| (Point::new(vertex.location[0], vertex.location[1]), vertex.bulge))
+                .collect();
+            polyline_count(&vertices, poly.closed())
+        }
+        E::Ellipse { start, end, .. } => 1usize.saturating_add(arc_count(end - start)),
+        _ => 0,
+    }
 }
 
 fn units_to_mm(code: i64, _measurement: Option<i64>) -> f64 {
@@ -96,7 +151,7 @@ fn units_to_mm(code: i64, _measurement: Option<i64>) -> f64 {
         15 => 10_000.0,
         16 => 100_000.0,
         17 => 1e9,
-        18 => 149_597_870_700.0,
+        18 => 149_597_870_700_000.0,
         19 => 9.460_730_472_580_8e18,
         20 => 3.085_677_581_491_367e19,
         21 => 1200.0 / 3937.0 * 1000.0,
@@ -138,7 +193,7 @@ fn entity_paths(kind: &crate::model::EntityKind, normal: crate::model::Point) ->
 
 fn map_ocs_path(path: BezPath, normal: crate::model::Point, z: f64) -> BezPath {
     let [x, y, n] = crate::model::ocs_axes(normal);
-    let transform = kurbo::Affine::new([x[0], y[0], x[1], y[1], n[0] * z, n[1] * z]);
+    let transform = kurbo::Affine::new([x[0], x[1], y[0], y[1], n[0] * z, n[1] * z]);
     transform * path
 }
 
@@ -238,7 +293,8 @@ fn ellipse(center: crate::model::Point, major: crate::model::Point, normal: crat
     if !(minor_len.is_finite() && minor_len > 0.0) {
         return BezPath::new();
     }
-    let bx = [minor[0] / minor_len * ratio, minor[1] / minor_len * ratio, minor[2] / minor_len * ratio];
+    let major_len = major.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let bx = [minor[0] / minor_len * major_len * ratio, minor[1] / minor_len * major_len * ratio, minor[2] / minor_len * major_len * ratio];
     let point = |t: f64| Point::new(center[0] + major[0] * t.cos() + bx[0] * t.sin(), center[1] + major[1] * t.cos() + bx[1] * t.sin());
     let mut path = BezPath::new();
     path.move_to(point(start));
