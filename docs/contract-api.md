@@ -1963,6 +1963,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn get<P: 'static>(&self) -> Option<&P>`. The payload, when it is a `P`.
 - `craft_ui::contract::DropPlace`: `pub enum DropPlace { Between, Onto }`. Where a drop kind takes its drops.
 - `craft_ui::contract::DropTarget`: re-export of `craft_ui::runtime::drag::DropTarget`.
+- `craft_ui::contract::DropZone`: re-export of `craft_ui::runtime::drag::DropZone`.
 - `craft_ui::contract::EDIT_MENU`: `pub const EDIT_MENU: &str`. The popup name of a text part's edit menu: step 8b registers it for every text part, and the text control opens
 - `craft_ui::contract::EdgePress`: `pub struct EdgePress<'a, K>`. The line between two adjacent rows as a target of its own while `mods` are held (Photoshop's Alt-click between two
   - `pub fn new(mods: Mods, test: impl Fn(&K, &K) -> Option<Cursor> + 'a) -> Self`. The edge press while exactly `mods` are held, on the lines `test` takes.
@@ -3169,6 +3170,9 @@ The drag session (8.4): one per context. It holds the payload, the preview, the 
   - `type Drop`. What a drop on this target carries to the component's caller.
   - `fn accept(&self, payload: &P, at: Pos2, op: DropOperation) -> Option<Self::Drop>`. `None` rejects. `at` is the pointer in the component's egui layer space, so a target picks its sub-area (a port,
   - `fn mark(&self, drop: &Self::Drop) -> DropMark`. Where `drop` would land, a value the ghost layer paints.
+- `craft_ui::runtime::drag::DropZone`: `pub struct DropZone`. Where a drop target lies: a rect on an egui layer, in that layer's space. A component's own target lies over its
+  - `pub const fn new(layer: egui::LayerId, rect: Rect) -> Self`. The zone `rect` on `layer` (the `layer_id` of the `Ui` that draws the area), in that layer's space.
+  - `pub const fn rect(&self) -> Rect`. The zone's rect, in its layer's space.
 - `craft_ui::runtime::drag::OsFile`: `pub struct OsFile { pub name: String, pub path: Option<PathBuf>, pub mime: String, pub bytes: Option<Arc<[u8]>> }`. A file the OS drags over the window or drops on it.
 - `craft_ui::runtime::drag::OsFiles`: `pub struct OsFiles { pub files: Vec<OsFile> }`. The payload of a drag that comes from the OS: files held over the window, then the files dropped. Targets take it
 - `craft_ui::runtime::drag::WindowDropTarget`: `pub trait WindowDropTarget<P>`. What a component registers with `Pointer::window_drop_target`: a target over the whole window, which needs no
@@ -3178,6 +3182,7 @@ The drag session (8.4): one per context. It holds the payload, the preview, the 
 - `craft_ui::runtime::drag::active`: `pub fn active<P: Send + Sync + 'static>(ctx: &Context) -> Option<Arc<P>>`. The active drag payload of type `P`, from any viewport. For code without a `Cx`.
 - `craft_ui::runtime::drag::amend`: `pub fn amend<P: Clone + Send + Sync + 'static>(ctx: &Context, change: impl FnOnce(&mut P)) -> bool`. Changes the running session's payload of type `P` (or its second payload of that type) with `change`, in the frame
 - `craft_ui::runtime::drag::cancel`: `pub fn cancel(ctx: &Context, reason: CancelReason)`. Ends the session without a drop; the source's press ends with it, so nobody gets a drop.
+- `craft_ui::runtime::drag::zone_target`: `pub fn zone_target<P: Send + Sync + 'static, T: DropTarget<P>>(ctx: &Context, owner: Id, zone: DropZone, target: &T) -> Option<T::Drop>`. `Pointer::drop_target` over a zone the caller names instead of its own visible rect: the drop of a payload of type
 
 ## `craft_ui::runtime::edit`
 
@@ -3347,7 +3352,7 @@ One-shot screenshot slots and the facts a screenshot is measured against.
   - `pub fn motion(mut self, motion: MotionMode) -> Self`. Sets the motion choice from a motion mode.
   - `pub fn mode(mut self, mode: impl Into<ModeChoice>) -> Self`. Sets the mode choice.
   - `pub fn theme(mut self, theme: ThemeId) -> Self`. Sets the theme.
-  - `pub fn resolved(&self, ctx: &Context) -> ResolvedRoot`. What the choices resolve to on `ctx`'s pass: the one place `System` is replaced by the OS's answer.
+  - `pub fn resolved(&self, ctx: &Context) -> ResolvedRoot`. What the choices resolve to on `ctx`'s pass: the one place `System` is replaced by the OS's answer, as
   - `pub fn resolved_for(&self, system: SystemAppearance) -> ResolvedRoot`. What the choices resolve to when the OS reports `system`.
   - `pub fn appearance(&self, ctx: &Context) -> Appearance`. The appearance the root's tokens resolve under on `ctx`: the mode, contrast, density and text size.
   - `pub fn contrast(mut self, contrast: impl Into<ContrastChoice>) -> Self`. Sets the contrast choice.
@@ -3381,6 +3386,8 @@ One-shot screenshot slots and the facts a screenshot is measured against.
   - `pub fn with_slot(mut self, key: SlotKey, rect: Rect) -> Self`. The layout with the shown slot `key` at `rect`, after the slots already listed.
 - `craft_ui::runtime::env::SlotKey`: `pub type SlotKey = &'static str`. The stable key of a slot.
 - `craft_ui::runtime::env::StyleValue`: `pub trait StyleValue: EnvValue + Hash`. Marker for values `style` may read. `Hash`, because the value is folded into the style key.
+- `craft_ui::runtime::env::SystemReader`: re-export of `craft_platform::appearance::SystemReader` (outside these crates).
+- `craft_ui::runtime::env::SystemState`: `pub struct SystemState { pub appearance: SystemAppearance, pub generation: u64 }`. The OS's appearance now, and the generation that rises each time it changes.
 - `craft_ui::runtime::env::ThemeScope`: `pub struct ThemeScope`. Token-changing values for a container's body: the body and everything under it resolve their styles from the
   - `pub fn mode(mode: Mode) -> Self`. A scope whose body resolves the inherited theme, contrast, density and text size in `mode`: a plot that is dark
 - `craft_ui::runtime::env::UnitKind`: `pub enum UnitKind { Pixels, Percent, Degrees, Points, Times, Inches, Centimetres, Millimetres, Picas, PixelsPerInch, PixelsPerCentimetre, Minutes }`. What a number counts.
@@ -3424,6 +3431,7 @@ One-shot screenshot slots and the facts a screenshot is measured against.
 - `craft_ui::runtime::env::WordTemplate`: re-export of `craft_i18n::WordTemplate` (outside these crates).
 - `craft_ui::runtime::env::Words`: re-export of `craft_i18n::Words` (outside these crates).
 - `craft_ui::runtime::env::WordsOverride`: `pub enum WordsOverride { Replace(Arc<Words>), Overlay(WordRows) }`. How a scope changes the built-in text: the only override path for words.
+- `craft_ui::runtime::env::system_appearance`: `pub fn system_appearance(ctx: &Context) -> SystemState`. What the OS reports on `ctx` now: the host's reader (`InstallSpec::system`), with the colour scheme egui's
 - `craft_ui::runtime::env::with_env`: `pub fn with_env<R>(ui: &mut Ui, set: impl FnOnce(&mut Overrides), body: impl FnOnce(&mut Ui) -> R) -> R`. Runs `body` in a child `Ui` with `set`'s changes applied to the inherited values. A scope that disables
 
 ## `craft_ui::runtime::focus`
@@ -3546,10 +3554,11 @@ Decision records and findings: what each pipeline step did, kept in frames a tes
 `runtime::install`: adds the runtime plugin once and sets the egui options the runtime owns.
 
 - `craft_ui::runtime::install::InstallError`: `pub enum InstallError { AlreadyInstalled, DuplicateStyle(DuplicateStyle), Commands(commands::CommandDefError) }`. Why `install` refused a spec.
-- `craft_ui::runtime::install::InstallSpec`: `pub struct InstallSpec { pub shell_info: ShellInfo, pub window_system: Arc<dyn WindowSystem>, pub placement: Option<Arc<Mutex<Store>>>, pub frame_layers: Option<fn(&Context)>, pub looks: StyleReplacements, pub frame: Option<Decision> }`. What `install` takes.
+- `craft_ui::runtime::install::InstallSpec`: `pub struct InstallSpec { pub shell_info: ShellInfo, pub window_system: Arc<dyn WindowSystem>, pub placement: Option<Arc<Mutex<Store>>>, pub frame_layers: Option<fn(&Context)>, pub looks: StyleReplacements, pub frame: Option<Decision>, pub system: SystemReader }`. What `install` takes.
   - `pub fn new(shell_info: ShellInfo, window_system: Arc<dyn WindowSystem>) -> Self`. A spec for `shell_info` and `window_system`, with no ghost-layer painter.
   - `pub fn placement(mut self, store: Arc<Mutex<Store>>) -> Self`. Sets the store viewport mounts save their window placement in.
   - `pub fn looks(mut self, looks: impl Into<StyleReplacements>) -> Self`. Sets the app's style replacements.
+  - `pub fn system(mut self, reader: SystemReader) -> Self`. Sets the reader of the OS's appearance; the host starts it (`SystemReader::start`) with a wake that repaints.
   - `pub fn frame(mut self, decision: Decision) -> Self`. Sets the root window's decided frame (`craft_window::policy::decide_for`).
   - `pub fn frame_layers(mut self, painter: Option<fn(&Context)>) -> Self`. Sets the end hook's ghost-layer painter.
 - `craft_ui::runtime::install::install`: `pub fn install(ctx: &Context, spec: InstallSpec) -> Result<(), InstallError>`. Adds the runtime plugin to `ctx` and sets the egui options the runtime owns: interface scale is a command, and
@@ -4451,7 +4460,8 @@ Style and paint helpers: token sets, a `StyleCx`, the style cache and a `Draw` o
 - `craft_ui::testing::style::env_key`: `pub fn env_key(tokens: &UiTokens) -> EnvKey`. The `EnvKey` of `tokens` in a left-to-right Linux window at scale 1 with no style-affecting app values.
 - `craft_ui::testing::style::face_id`: `pub fn face_id(composite: &str, part: craft_behavior::PartRef) -> egui::Id`. The base id of the face painted for `part` of the composite `id`.
 - `craft_ui::testing::style::paint_frame`: `pub fn paint_frame(frames: &mut Frames, tokens: &UiTokens, direction: Direction, ink: Ink, mut paint: impl FnMut(&Draw<'_>),) -> (Vec<Shape>, Recorded)`. Runs one frame in which `paint` draws through a `Draw` over the root `Ui`'s painter, in `direction` and on
-- `craft_ui::testing::style::root_token_entries`: `pub fn root_token_entries(ctx: &Context) -> usize`. How many root-token entries the root env cache of `ctx` holds.
+- `craft_ui::testing::style::report_os_contrast`: `pub fn report_os_contrast(ctx: &Context, contrast: craft_theme::Contrast)`. Reports `contrast` as the OS's contrast preference on `ctx`, as a desktop source would.
+- `craft_ui::testing::style::root_token_resolves`: `pub fn root_token_resolves(ctx: &Context) -> usize`. How many times `ctx` resolved root tokens its cache had no entry for.
 - `craft_ui::testing::style::style_of`: `pub fn style_of<K: StyleKey, S: ComponentStyle>(ctx: &Context, cx: &StyleCx<'_>, key: K, default: for<'a> fn(&StyleCx<'a>, K) -> S) -> Arc<S>`. The cached style for `key` in `cx`, built by `default` on a miss.
 - `craft_ui::testing::style::themes_at`: `pub fn themes_at(contrast: Contrast) -> Vec<(String, UiTokens)>`. Every built-in theme in each mode it has, at `contrast`, as (`<theme>.<mode>`, tokens). Built once per thread and
 - `craft_ui::testing::style::tokens`: `pub fn tokens(mode: Mode, contrast: Contrast) -> UiTokens`. The suite's default built-in theme resolved for `mode` and `contrast`.
