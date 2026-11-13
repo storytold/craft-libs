@@ -1439,6 +1439,16 @@ name = "craft-docpath"
 version = "0.1.0"
 
 [[package]]
+name = "craft-document-bundle"
+version = "0.1.0"
+dependencies = [
+ "craft-zip",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zip",
+]
+
+[[package]]
 name = "craft-docx"
 version = "0.1.0"
 dependencies = [
@@ -1554,6 +1564,18 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-file-formats"
+version = "0.1.0"
+dependencies = [
+ "craft-eps",
+ "craft-idml",
+ "craft-svg",
+ "craft-zip",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1752,6 +1774,13 @@ dependencies = [
  "zune-core",
  "zune-jpeg",
  "zune-jpegxl",
+]
+
+[[package]]
+name = "craft-indd"
+version = "0.1.0"
+dependencies = [
+ "indd",
 ]
 
 [[package]]
@@ -2017,6 +2046,18 @@ dependencies = [
  "craft-zip",
  "thiserror 2.0.21",
  "zip",
+]
+
+[[package]]
+name = "craft-pcraft-bundle"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "craft-atomic",
+ "craft-pcraft-format",
+ "craft-zip",
+ "ruzstd",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4897,6 +4938,11 @@ name = "imagesize"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65b27460c2c92b037f3f94c538ed9a3342f3fdf923606781629ccb35f82d042a"
+
+[[package]]
+name = "indd"
+version = "0.1.0"
+source = "git+https://github.com/storytold/indd-utils?rev=7f3060e5bce78d21ea70e0d5eacb96edce15dfbe#7f3060e5bce78d21ea70e0d5eacb96edce15dfbe"
 
 [[package]]
 name = "imgref"
