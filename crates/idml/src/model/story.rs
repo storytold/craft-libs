@@ -44,6 +44,12 @@ pub enum TextNode {
     Content(Vec<ContentPart>),
     /// `Br`: the end of a paragraph.
     Break,
+    /// A processing instruction at a structural story position. The parent serializer preserves
+    /// it in place; `to_el` represents it as a one-instruction `Content` fragment.
+    ProcessingInstruction {
+        target: String,
+        data: String,
+    },
     /// Text inside another element ([`CONTAINERS`]): a hyperlink's source, a tracked change, an
     /// XML element, a cross-reference's source, a footnote, a note.
     Container(Container),
@@ -354,11 +360,18 @@ pub struct CellOptions {
 
 /// The children of `el` other than `<Properties>`, as text nodes.
 fn nodes(el: &El) -> Vec<TextNode> {
-    el.elements().filter(|e| !e.is(Local("Properties"))).map(TextNode::from_el).collect()
+    el.children
+        .iter()
+        .filter_map(|node| match node {
+            Node::El(e) if !e.is(Local("Properties")) => Some(TextNode::from_el(e)),
+            Node::Pi { target, data } => Some(TextNode::ProcessingInstruction { target: target.clone(), data: data.clone() }),
+            _ => None,
+        })
+        .collect()
 }
 
 fn with_children(mut el: El, children: &[TextNode]) -> El {
-    el.children.extend(children.iter().map(|c| Node::El(c.to_el())));
+    el.children.extend(children.iter().map(TextNode::to_node));
     el
 }
 
@@ -397,6 +410,11 @@ impl TextNode {
                 c
             }
             TextNode::Break => El::new("Br"),
+            TextNode::ProcessingInstruction { target, data } => {
+                let mut content = El::new("Content");
+                content.children.push(Node::Pi { target: target.clone(), data: data.clone() });
+                content
+            }
             TextNode::Container(c) => with_children(c.values.element(&c.name), &c.children),
             TextNode::Table(t) => t.to_el(),
             TextNode::Anchor(a) => a.values.element(&a.name),
@@ -404,6 +422,15 @@ impl TextNode {
             TextNode::TextVariable(v) => v.element("TextVariableInstance"),
             TextNode::Item(i) => i.to_el(),
             TextNode::Other(e) => e.clone(),
+        }
+    }
+
+    /// Serializes this node in its parent position, preserving processing instructions as XML
+    /// instructions rather than wrapping them in an element.
+    pub fn to_node(&self) -> Node {
+        match self {
+            TextNode::ProcessingInstruction { target, data } => Node::Pi { target: target.clone(), data: data.clone() },
+            _ => Node::El(self.to_el()),
         }
     }
 
@@ -525,6 +552,11 @@ fn text(nodes: &[TextNode], ace: &dyn Fn(Ace) -> Option<char>) -> String {
                 }
             }
             TextNode::Break => out.push('\n'),
+            TextNode::ProcessingInstruction { target, data } if target == "ACE" => {
+                if let Ok(code) = data.trim().parse::<u32>() {
+                    out.extend(ace(Ace::from_code(code)));
+                }
+            }
             TextNode::Paragraph(r) | TextNode::Character(r) => stack.extend(r.children.iter().rev()),
             TextNode::Container(c) if inline_container(&c.name) => stack.extend(c.children.iter().rev()),
             _ => {}
