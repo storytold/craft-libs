@@ -12,12 +12,14 @@
 //! Nodes are built from the elements [`crate::Package::document`] gives ([`Spread::from_el`],
 //! [`spreads`]) and written back with `to_el`, then [`crate::part_xml`].
 
+mod document;
 mod geometry;
 mod resources;
 mod spread;
 mod story;
 
 use craft_xml::{El, Local, Node};
+pub use document::{ModelDocument, TopLevelKind, TopLevelNode};
 pub use geometry::{MAX_PATH_POINTS, PathGeometry, PathGeometryError, PathPoint, SubPath};
 pub use resources::{
     ColorGroup, ColorSpace, GradientStop, GradientStopValue, Ink, StrokeStyle, StrokeStyleKind, Style, StyleGroup, StyleKind, StyleNode, Swatch,
