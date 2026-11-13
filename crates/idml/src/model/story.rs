@@ -178,6 +178,20 @@ pub struct StoryAnchor {
 }
 
 impl StoryAnchor {
+    /// Builds the IDML `Self` value for a hyperlink text destination.
+    pub fn destination_self(id: u64) -> String {
+        format!("HyperlinkTextDestination/a{id}")
+    }
+
+    /// Writes an IDML `HyperlinkTextDestination` from a DesignCraft-independent anchor identity.
+    pub fn destination_el(id: u64, name: &str) -> El {
+        El::new("HyperlinkTextDestination")
+            .with_attr("Self", Self::destination_self(id))
+            .with_attr("Name", name)
+            .with_attr("Hidden", "false")
+            .with_attr("DestinationUniqueKey", id & 0xFFFF_FFFF)
+    }
+
     pub fn self_id(&self) -> Option<&str> {
         self.values.self_id()
     }
