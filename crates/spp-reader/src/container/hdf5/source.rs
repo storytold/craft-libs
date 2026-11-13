@@ -54,7 +54,8 @@ impl ReadAt for FileSource {
             match self.file.seek_read(buf, offset) {
                 Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
                 Ok(n) => {
-                    buf = &mut buf[n..];
+                    // `seek_read` never reports more than it was given; a short count is the only way past
+                    buf = std::mem::take(&mut buf).get_mut(n..).ok_or(io::ErrorKind::InvalidData)?;
                     offset += n as u64;
                 }
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
