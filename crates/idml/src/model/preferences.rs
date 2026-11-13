@@ -4,6 +4,80 @@ use craft_xml::El;
 
 use super::Values;
 
+/// Parsed values from IDML `DocumentPreference` elements.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DocumentPreferences {
+    pub overprint_black: Option<bool>,
+    pub page_width: Option<f64>,
+    pub page_height: Option<f64>,
+    pub facing_pages: Option<bool>,
+    pub page_binding: Option<String>,
+    pub bleed: [Option<f64>; 4],
+    pub slug: [Option<f64>; 4],
+    pub intent: Option<String>,
+    pub primary_text_frame: Option<bool>,
+    pub column_guides_locked: Option<bool>,
+}
+
+impl DocumentPreferences {
+    /// Reads the document-level page, bleed, slug, and intent values.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        Self {
+            overprint_black: values.get("OverprintBlack").map(|value| value != "false"),
+            page_width: values.num("PageWidth"),
+            page_height: values.num("PageHeight"),
+            facing_pages: values.boolean("FacingPages"),
+            page_binding: values.prop("PageBinding"),
+            bleed: [
+                values.num("DocumentBleedTopOffset"),
+                values.num("DocumentBleedBottomOffset"),
+                values.num("DocumentBleedInsideOrLeftOffset"),
+                values.num("DocumentBleedOutsideOrRightOffset"),
+            ],
+            slug: [
+                values.num("SlugTopOffset"),
+                values.num("SlugBottomOffset"),
+                values.num("SlugInsideOrLeftOffset"),
+                values.num("SlugRightOrOutsideOffset"),
+            ],
+            intent: values.prop("Intent"),
+            primary_text_frame: values.boolean("CreatePrimaryTextFrame"),
+            column_guides_locked: values.boolean("ColumnGuideLocked"),
+        }
+    }
+}
+
+/// Parsed document and baseline-grid preference values.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GridPreferences {
+    pub baseline_start: Option<f64>,
+    pub baseline_division: Option<f64>,
+    pub baseline_view_threshold: Option<f64>,
+    pub baseline_relative_option: Option<String>,
+    pub horizontal_division: Option<f64>,
+    pub vertical_division: Option<f64>,
+    pub horizontal_subdivision: Option<f64>,
+    pub grids_in_back: Option<bool>,
+}
+
+impl GridPreferences {
+    /// Reads baseline and document-grid values.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        Self {
+            baseline_start: values.num("BaselineStart"),
+            baseline_division: values.num("BaselineDivision"),
+            baseline_view_threshold: values.num("BaselineViewThreshold"),
+            baseline_relative_option: values.prop("BaselineGridRelativeOption"),
+            horizontal_division: values.num("HorizontalGridlineDivision"),
+            vertical_division: values.num("VerticalGridlineDivision"),
+            horizontal_subdivision: values.num("HorizontalGridSubdivision"),
+            grids_in_back: values.boolean("GridsInBack"),
+        }
+    }
+}
+
 /// Parsed `TextFramePreference` values in nearest-to-farthest precedence order.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TextFramePreferences {
