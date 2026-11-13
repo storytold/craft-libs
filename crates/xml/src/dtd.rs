@@ -492,3 +492,257 @@ pub fn validate(dtd: &Dtd, xml: &str) -> Vec<Problem> {
         Err(e) => vec![Problem { path: String::new(), message: format!("not well-formed XML: {e}") }],
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DTD: &str = r##"<!-- an article -->
+<!ENTITY % inline "#PCDATA | em | term">
+<!ELEMENT Root (story+, figure*)>
+<!ELEMENT story (title, (para | list)*)>
+<!ELEMENT title (%inline;)*>
+<!ELEMENT para (%inline;)*>
+<!ELEMENT list (para+)>
+<!ELEMENT em (#PCDATA)>
+<!ELEMENT term (#PCDATA)>
+<!ELEMENT figure EMPTY>
+<!ATTLIST figure href CDATA #REQUIRED alt CDATA "a > b" kind (photo|chart) "photo">"##;
+
+    #[test]
+    fn content_models_and_required_attributes() {
+        let dtd = parse(DTD).unwrap();
+        assert_eq!(dtd.element_names().count(), 8);
+        let ok = r#"<Root><story><title>T <em>x</em></title><para>a</para><list><para>b</para></list></story><figure href="a.png"/></Root>"#;
+        assert_eq!(validate(&dtd, ok), vec![]);
+        let bad = r#"<Root><story><para>no title</para></story><figure/><figure href="b"><em>x</em></figure><aside/></Root>"#;
+        let p = validate(&dtd, bad);
+        let msgs: Vec<String> = p.iter().map(|p| format!("{}: {}", p.path, p.message)).collect();
+        assert!(msgs.iter().any(|m| m.starts_with("Root/story[1]: `story` contains para; the DTD asks for (title, (para | list)*)")), "{msgs:?}");
+        assert!(msgs.iter().any(|m| m == "Root/figure[1]: `figure` is missing the required attribute `href`"), "{msgs:?}");
+        assert!(msgs.iter().any(|m| m == "Root/figure[2]: `figure` should be empty"), "{msgs:?}");
+        assert!(msgs.iter().any(|m| m == "Root/aside[1]: `aside` isn't declared in the DTD"), "{msgs:?}");
+        // The root's model fails too (aside isn't in it).
+        assert!(msgs.iter().any(|m| m.starts_with("Root: ")), "{msgs:?}");
+        // Text where only elements are allowed; an element not in a mixed model.
+        let p = validate(&dtd, "<Root><story>loose<title><list/></title></story></Root>");
+        assert!(p.iter().any(|p| p.message == "`story` can't contain text"), "{p:?}");
+        assert!(p.iter().any(|p| p.message == "`list` isn't allowed in `title`"), "{p:?}");
+        assert!(parse("<!ELEMENT a (b, c | d)>").is_err());
+        assert!(parse("just text").is_err());
+    }
+
+    /// A few hundred bytes of nested parameter entities used to inflate multiplicatively across
+    /// the eight wholly-string-replacing passes (#713); expansion is capped.
+    #[test]
+    fn parameter_entities_cannot_expand_without_a_budget() {
+        let mut src = String::from("<!ENTITY % e1 \"xx\">\n");
+        for i in 2..=6 {
+            src.push_str(&format!("<!ENTITY % e{i} \"{}\">\n", format!("%e{};", i - 1).repeat(16)));
+        }
+        src.push_str("<!ELEMENT r (%e6;)>");
+        assert!(src.len() < 500, "the payload is small: {} bytes", src.len());
+        let err = parse(&src).unwrap_err();
+        assert!(err.contains("expand the DTD beyond"), "{err}");
+        // Entities that expand a little still parse.
+        let dtd = parse("<!ENTITY % inline \"#PCDATA | em\">\n<!ELEMENT r (%inline;)*>").unwrap();
+        assert_eq!(dtd.element_names().collect::<Vec<_>>(), ["r"]);
+    }
+
+    #[test]
+    fn repetition_matches_like_a_regular_expression() {
+        let dtd = parse("<!ELEMENT r ((a, b?)+, c*)><!ELEMENT a EMPTY><!ELEMENT b EMPTY><!ELEMENT c EMPTY>").unwrap();
+        for (xml, ok) in [
+            ("<r><a/></r>", true),
+            ("<r><a/><b/><a/><c/><c/></r>", true),
+            ("<r><a/><a/><b/></r>", true),
+            ("<r><b/></r>", false),
+            ("<r><a/><b/><b/></r>", false),
+            ("<r><a/><c/><a/></r>", false),
+            ("<r/>", false),
+        ] {
+            assert_eq!(validate(&dtd, xml).is_empty(), ok, "{xml}");
+        }
+    }
+
+    #[test]
+    fn parameter_entity_bomb_is_rejected() {
+        let mut src = String::new();
+        for i in (0..10).rev() {
+            let value = if i == 0 { "x".to_string() } else { format!("%e{};", i - 1).repeat(8) };
+            src.push_str(&format!("<!ENTITY % e{i} \"{value}\">\n"));
+        }
+        src.push_str("<!ELEMENT root (%e9;)>");
+        match parse(&src) {
+            Err(error) => assert!(error.contains("parameter entities expand"), "{error}"),
+            Ok(_) => panic!("parameter entity expansion bomb was accepted"),
+        }
+    }
+
+    /// `n` parameter entities, `e{i}` referring to `e{i-1}` and `e0` being `x`, declared in ascending
+    /// or descending order, and an element `root` whose model uses the last one.
+    fn entity_chain(n: usize, ascending: bool) -> String {
+        let mut order: Vec<usize> = (0..n).collect();
+        if !ascending {
+            order.reverse();
+        }
+        let mut src = String::new();
+        for i in order {
+            let value = if i == 0 { "x".to_string() } else { format!("%e{};", i - 1) };
+            src.push_str(&format!("<!ENTITY % e{i} \"{value}\">\n"));
+        }
+        src.push_str(&format!("<!ELEMENT root (%e{};)><!ELEMENT x EMPTY>", n - 1));
+        src
+    }
+
+    #[test]
+    fn parameter_entity_reverse_chain_expands_completely() {
+        let dtd = parse(&entity_chain(20, false)).unwrap();
+        assert_eq!(validate(&dtd, "<root><x/></root>"), vec![]);
+    }
+
+    #[test]
+    fn parameter_entity_ascending_chain_expands_completely() {
+        // With `e0` declared first, replacing the entities in declaration order resolves one level per pass.
+        let dtd = parse(&entity_chain(20, true)).unwrap();
+        assert_eq!(validate(&dtd, "<root><x/></root>"), vec![]);
+    }
+
+    #[test]
+    fn parameter_entity_cycle_is_refused() {
+        // Two entities that refer to each other, and one whose value is its own reference.
+        for src in ["<!ENTITY % a \"%b;\"><!ENTITY % b \"%a;\"><!ELEMENT root (%a;)>", "<!ENTITY % a \"%a;\"><!ELEMENT root (%a;)>"] {
+            match parse(src) {
+                Err(error) => assert!(error.contains("refer to themselves"), "{src}: {error}"),
+                Ok(dtd) => panic!("a cycle was accepted ({src}): {:?}", dtd.model("root")),
+            }
+        }
+    }
+
+    #[test]
+    fn parameter_entity_chain_deeper_than_the_limit_is_refused() {
+        for ascending in [true, false] {
+            for n in [65, 70] {
+                match parse(&entity_chain(n, ascending)) {
+                    Err(error) => assert!(error.contains("deeper than 64 levels"), "{n}, {ascending}: {error}"),
+                    Ok(dtd) => panic!("a chain of {n} ({ascending}) was accepted: {:?}", dtd.model("root")),
+                }
+            }
+            let dtd = parse(&entity_chain(64, ascending)).unwrap();
+            assert_eq!(validate(&dtd, "<root><x/></root>"), vec![], "{ascending}");
+        }
+    }
+
+    #[test]
+    fn parameter_entity_name_scan_stops_at_the_next_percent() {
+        // A name never contains `%`, so the search for the closing `;` stops at the next one: the
+        // searches of a run of `%` don't overlap and a round stays linear. (Looking past the next
+        // `%` would expand this reference to an entity that is named `a%b`.)
+        let entities = [("a%b".to_string(), "X".to_string())];
+        assert_eq!(expand_parameter_entities("%a%b;", &entities), Ok("%a%b;".to_string()));
+        // A run of `%` around a real reference still finds it.
+        let entities = [("model".to_string(), "EMPTY".to_string())];
+        assert_eq!(expand_parameter_entities("%%%model;%%", &entities), Ok("%%EMPTY%%".to_string()));
+    }
+
+    #[test]
+    fn parameter_entity_with_a_long_name_expands() {
+        // A name can be any length: the search for the closing `;` has no window.
+        let name = "n".repeat(300);
+        let dtd = parse(&format!("<!ENTITY % {name} \"EMPTY\"><!ELEMENT root %{name};>")).unwrap();
+        assert_eq!(dtd.model("root"), Some(&Model::Empty));
+    }
+
+    #[test]
+    fn percent_in_text_without_a_reference_is_left_alone() {
+        // `100% sure` (a space ends the search) and a `%` followed by 1 MiB without a `;` are text.
+        let text = format!("100% sure, %{}", "a".repeat(1 << 20));
+        let entities = [("a".to_string(), "X".to_string())];
+        assert_eq!(expand_parameter_entities(&text, &entities), Ok(text.clone()));
+    }
+
+    /// `a` inside `levels` groups, each repeated: `((a)*)*…`.
+    fn nested_repetitions(levels: usize) -> String {
+        format!("{}a{}", "(".repeat(levels), ")*".repeat(levels))
+    }
+
+    #[test]
+    fn nested_repetitions_validate_without_going_exponential() {
+        // Ten levels over 100 children: each level asked the one below for the same positions again
+        // and again, about 10^14 steps without the memo of `ends`.
+        let dtd = parse(&format!("<!ELEMENT root {}><!ELEMENT a EMPTY><!ELEMENT b EMPTY>", nested_repetitions(10))).unwrap();
+        assert_eq!(validate(&dtd, &format!("<root>{}</root>", "<a/>".repeat(100))), vec![]);
+        let problems = validate(&dtd, &format!("<root>{}<b/></root>", "<a/>".repeat(100)));
+        assert_eq!(problems.len(), 1, "{problems:?}");
+    }
+
+    #[test]
+    fn repetition_of_a_sequence_of_optional_elements_validates() {
+        // `(a, a?, a?, a?, a?, a?)*` over 90 children: every way to split the children among the
+        // repetitions reaches the same positions, and the paths used to be kept apart in each round.
+        let dtd = parse("<!ELEMENT r (a, a?, a?, a?, a?, a?)*><!ELEMENT a EMPTY><!ELEMENT b EMPTY>").unwrap();
+        assert_eq!(validate(&dtd, &format!("<r>{}</r>", "<a/>".repeat(90))), vec![]);
+        let problems = validate(&dtd, &format!("<r>{}<b/></r>", "<a/>".repeat(90)));
+        assert_eq!(problems.len(), 1, "{problems:?}");
+    }
+
+    #[test]
+    fn parameter_entity_first_declaration_wins() {
+        let dtd = parse("<!ENTITY % model \"EMPTY\"><!ENTITY % model \"ANY\"><!ELEMENT root %model;>").unwrap();
+        assert_eq!(dtd.model("root"), Some(&Model::Empty));
+    }
+
+    #[test]
+    fn parameter_entity_unknown_and_lone_percent_are_preserved() {
+        let src = "%nothing; <!ELEMENT root EMPTY> %";
+        let dtd = parse(src).unwrap();
+        assert_eq!(dtd.model("root"), Some(&Model::Empty));
+        assert_eq!(expand_parameter_entities("%nothing; %", &[]), Ok("%nothing; %".to_string()));
+    }
+
+    #[test]
+    fn parameter_entity_many_flat_declarations_parse() {
+        let mut src = String::new();
+        for i in 0..5000 {
+            src.push_str(&format!("<!ENTITY % e{i} \"x\">\n"));
+        }
+        src.push_str("<!ELEMENT root (%e0;, %e2499;, %e4999;)><!ELEMENT x EMPTY>");
+        let dtd = parse(&src).unwrap();
+        assert_eq!(validate(&dtd, "<root><x/><x/><x/></root>"), vec![]);
+    }
+
+    /// An element `root` whose content model is `a` inside `depth` nested groups.
+    fn nested_model(depth: usize) -> String {
+        format!("<!ELEMENT root {}a{}><!ELEMENT a EMPTY>", "(".repeat(depth), ")".repeat(depth))
+    }
+
+    #[test]
+    fn content_model_nested_100000_deep_is_refused() {
+        // One recursion per `(` overflowed the stack: an abort, not a panic.
+        match parse(&nested_model(100_000)) {
+            Err(error) => assert!(error.contains("nested more than 64 levels"), "{error}"),
+            Ok(_) => panic!("a content model nested 100000 deep was accepted"),
+        }
+    }
+
+    #[test]
+    fn content_model_nesting_limit() {
+        let dtd = parse(&nested_model(64)).unwrap();
+        assert_eq!(validate(&dtd, "<root><a/></root>"), vec![]);
+        assert_eq!(validate(&dtd, "<root/>").len(), 1);
+        match parse(&nested_model(65)) {
+            Err(error) => assert_eq!(error, "<!ELEMENT root>: content model nested more than 64 levels"),
+            Ok(_) => panic!("a content model nested 65 deep was accepted"),
+        }
+    }
+
+    #[test]
+    fn sequence_of_40_optional_elements_validates() {
+        // Keeping every path through the sequence meant 2^40 positions here.
+        let dtd = parse(&format!("<!ELEMENT r ({})><!ELEMENT a EMPTY>", ["a?"; 40].join(", "))).unwrap();
+        assert_eq!(validate(&dtd, &format!("<r>{}</r>", "<a/>".repeat(40))), vec![]);
+        let problems = validate(&dtd, &format!("<r>{}</r>", "<a/>".repeat(41)));
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].message.starts_with("`r` contains a, a, a"), "{problems:?}");
+    }
+}
