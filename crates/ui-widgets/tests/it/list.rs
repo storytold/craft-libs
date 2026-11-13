@@ -528,6 +528,41 @@ fn a_rows_label_takes_the_empty_toggle_columns_next_to_it() {
     assert!(start("Step") > dialog, "a row with both toggles starts its label past them");
 }
 
+/// In a list of toggle columns only, the label takes the room past the last column: it shows whole, as measure counts
+/// it, and starts past its toggle.
+#[trial]
+fn a_label_in_a_list_of_toggle_columns_only_shows_whole_past_them() {
+    use craft_behavior::ColumnKey;
+    use craft_ui::contract::{ColumnSpec, ToggleColumn};
+    use craft_ui::list::{ToggleCell, ToggleState};
+    use std::cell::Cell;
+    const CHECK: ColumnKey = ColumnKey::new("check");
+    const LABEL: &str = "Order date and shipping region";
+    let end = Rc::new(Cell::new(0.0_f32));
+    let held = end.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key);
+        let columns = vec![ColumnSpec::toggle(CHECK, "", ToggleColumn::default())];
+        let _ = List::new("Fields").columns(columns).show_items(ui, &source, &mut |_, icx| {
+            held.set(icx.cell(&CHECK).map_or(0.0, |cell| cell.right()));
+            ListRow::new(LABEL).cells(icx.cells()).toggle(ToggleCell::check(CHECK, ToggleState::On, "{row}"))
+        });
+    });
+    fixture.room(Vec2::new(400.0, 200.0));
+    fixture.settle();
+    let label = fixture
+        .frame_shapes()
+        .iter()
+        .find_map(|shape| match shape {
+            egui::Shape::Text(text) if text.galley.job.text == LABEL => Some(text.clone()),
+            _ => None,
+        })
+        .expect("the label paints");
+    assert!(!label.galley.elided, "the label shows whole");
+    assert!(label.pos.x > end.get(), "the label starts past the toggle column");
+}
+
 /// A toggle column holds one control-high toggle with room on each side: wider than its control-high row, narrower
 /// than two toggles.
 #[trial]

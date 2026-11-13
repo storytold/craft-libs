@@ -329,7 +329,8 @@ impl ListRow<'_> {
     /// The offsets from the reading start of the row of the label band's near edge and of what lies past its far
     /// edge (the band spans the columns of `label_span`), and the toggle cells and text cells with whether each
     /// leads. A cell leads when it displays before the label column. A row without columns keeps the whole width for
-    /// the label band; a row whose columns are all claimed has an empty label band and every cell leads.
+    /// the label band; a row whose columns are all claimed (a list of toggle columns only) has its label band past
+    /// the last column, and every cell leads.
     fn bands(&self, cells_of: &[(ColumnKey, Rect)], rect: Rect, rtl: bool) -> Bands {
         let start = if rtl { rect.right() } else { rect.left() };
         let span = |cell: Rect| {
@@ -344,11 +345,7 @@ impl ListRow<'_> {
                 let (near, far) = spans.fold((f32::INFINITY, f32::NEG_INFINITY), |(near, far), (a, b)| (near.min(a), far.max(b)));
                 (near, (rect.width() - far).max(0.0))
             }
-            None if cells_of.is_empty() => (0.0, 0.0),
-            None => {
-                let end = cells_of.iter().map(|(_, cell)| span(*cell).1).fold(0.0, f32::max);
-                (end, (rect.width() - end).max(0.0))
-            }
+            None => (cells_of.iter().map(|(_, cell)| span(*cell).1).fold(0.0, f32::max), 0.0),
         };
         let leads = |position: usize| label_at.is_none_or(|at| position < at);
         let mut toggles = Vec::new();
