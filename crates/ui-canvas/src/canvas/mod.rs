@@ -404,7 +404,7 @@ impl<'a> Canvas<'a> {
             Some(settled) => (settled.shown, settled.target, settled.keys),
             None => (self.given?, self.given?, BodyKeys::default()),
         };
-        let space = CanvasSpace::new(shown, pixels_per_point).with_target(target).with_keys(keys);
+        let space = CanvasSpace::new(space::pixel_aligned(shown, pixels_per_point), pixels_per_point).with_target(target).with_keys(keys);
         Some(space.with_document(self.document_size()).with_rulers(self.rulers).with_background(background).with_canvas(id))
     }
 

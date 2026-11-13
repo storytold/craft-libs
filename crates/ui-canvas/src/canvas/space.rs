@@ -130,6 +130,30 @@ impl CanvasSpace {
     }
 }
 
+/// `view` as the canvas shows it: at a whole number of device pixels per document unit on both axes, with no rotation,
+/// moved by less than half a device pixel so the document's pixel edges land on device pixel edges. Every other view is
+/// shown as it is. The displays, the overlays and the tools all read this one view; the view the app keeps stays as it
+/// was set, so the alignment never accumulates into a pan.
+pub(crate) fn pixel_aligned(view: CanvasView, pixels_per_point: f32) -> CanvasView {
+    let ppp = f64::from(pixels_per_point);
+    if !(ppp.is_finite() && ppp > 0.0 && view.zoom.is_finite() && view.zoom > 0.0) || !(view.rotation.abs() < 1e-8) {
+        return view;
+    }
+    let whole = |scale: f64| scale.is_finite() && scale.round() >= 1.0 && (scale - scale.round()).abs() <= 1e-5;
+    if !(whole(view.zoom_x() * ppp) && whole(view.zoom * ppp)) {
+        return view;
+    }
+    let origin = view.affine() * Point::ZERO;
+    let aligned = Point::new((origin.x * ppp).round() / ppp, (origin.y * ppp).round() / ppp);
+    let shift = aligned - origin;
+    let center = view.center - view.unmap_vec(Vec2::new(shift.x as f32, shift.y as f32));
+    let mut shown = view;
+    if center.x.is_finite() && center.y.is_finite() {
+        shown.center = center;
+    }
+    shown
+}
+
 /// The units and the zero point a canvas measures its document in: the one place the rulers, the guides and the
 /// measures read them from.
 #[derive(Clone, Copy, Debug, PartialEq)]

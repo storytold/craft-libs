@@ -105,3 +105,38 @@ fn cmd_or_ctrl_with_page_down_on_a_focused_canvas_control_scrolls_the_canvas_sid
     assert!(sideways.x > before.x && sideways.y == before.y, "the guide leaves Cmd/Ctrl+Page Down to the canvas: {before:?} -> {sideways:?}");
     assert_eq!(fixture.focused_stop(), guide, "focus stays on the guide");
 }
+
+/// The space a canvas gives its body for a view of `device` device pixels per document unit turned `rotation`
+/// degrees, centred off the pixel grid.
+fn space_at(device: f64, rotation: f64) -> craft_ui::canvas::CanvasSpace {
+    let space = Rc::new(Cell::new(None));
+    let seen = Rc::clone(&space);
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let zoom = CanvasView::points_per_unit(device, ui.ctx().pixels_per_point());
+        let view = CanvasView::new(room, Point::new(100.3, 77.7), zoom).rotation(rotation);
+        let mut navigation = NavigationOptions::default();
+        navigation.overscroll = true;
+        let shown = Canvas::new("Document").document(Size::new(400.0, 300.0)).navigation(navigation).view(view).show(ui, |_, _| {});
+        seen.set(shown.output.space);
+    });
+    fixture.settle();
+    space.get().expect("a canvas given a view publishes its space")
+}
+
+#[trial]
+fn at_a_whole_device_zoom_with_no_rotation_the_shown_view_puts_document_pixels_on_device_pixels() {
+    for device in [2.0, 12.0] {
+        let space = space_at(device, 0.0);
+        let ppp = space.pixels_per_point;
+        for doc in [Point::ZERO, Point::new(17.0, 29.0)] {
+            let p = space.view.to_screen(doc) * ppp;
+            assert!((p.x - p.x.round()).abs() < 1e-3 && (p.y - p.y.round()).abs() < 1e-3, "{device}x: {doc:?} at {p:?}");
+        }
+        assert_eq!(space.target().center, Point::new(100.3, 77.7), "the view the app keeps is not moved");
+        let moved = (space.view.to_screen(Point::ZERO) - space.target().to_screen(Point::ZERO)) * ppp;
+        assert!(moved.x.abs() <= 0.501 && moved.y.abs() <= 0.501, "{device}x: moved {moved:?}");
+    }
+    let turned = space_at(2.0, 30.0);
+    assert_eq!(turned.view.center, turned.target().center, "a turned view is shown as it is");
+}

@@ -273,7 +273,8 @@ impl CanvasTool for HandTool {
             return;
         }
         let Some(space) = cx.space() else { return };
-        if let Some(view) = self.glide(&space.view, cx.time) {
+        // The glide steps from the view it set, not the shown one, so steps under half a device pixel add up.
+        if let Some(view) = self.glide(&space.target(), cx.time) {
             cx.set_view(view);
         }
         if self.flick.gliding() {
