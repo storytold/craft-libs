@@ -107,7 +107,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                         SelectMode::Single => props.allow_empty,
                         _ => false,
                     };
-                    let hold = primary && !mods.shift && !mods.cmd && holds && self.holds(at);
+                    let plain = primary && !mods.shift && !mods.cmd;
+                    let hold = plain && holds && self.holds(at);
+                    let again = plain && self.keeps_pick(at, start.clicks);
                     let slow = primary
                         && start.clicks == 1
                         && mods == craft_keymap::Mods::NONE
@@ -124,6 +126,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     let keep = !primary && matches!(Self::select_mode(comp), SelectMode::Multi) && self.holds(at);
                     match column {
                         Some(column) => self.cell_press(comp, layout, at, column, mods.shift, mods.cmd),
+                        None if again => {}
                         None if hold => self.drags.collapse = Some(key.clone()),
                         None if keep => {}
                         None => self.pick(comp, at, mods.shift, mods.cmd),
@@ -200,7 +203,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             // A modified click is a command on the thumbnail (load as selection, and so on), not a pick.
             let mods = crate::runtime::pointer::frame(&ctx).mods;
             if !(mods.shift || mods.cmd || mods.alt) {
-                self.pick(comp, at, false, false);
+                if !self.keeps_pick(at, start.clicks) {
+                    self.pick(comp, at, false, false);
+                }
             } else if props.command_click && mods.cmd {
                 self.events.push(CollectionEvent::CommandClick { key: self.source.key(at), mods });
             }

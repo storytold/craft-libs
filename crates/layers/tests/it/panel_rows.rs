@@ -228,7 +228,8 @@ fn a_double_click_on_a_thumbnail_activates_it_once() {
 }
 
 /// A double click whose two clicks arrive in one frame, on a Smart Filter row of a smart object that is not active,
-/// selects the row and then activates it, as two clicks in two frames do.
+/// selects the row and then activates it, as two clicks in two frames do. No selection follows the activation: the app
+/// opens the filter's editor on the selection the activation found.
 #[trial]
 fn a_double_click_in_one_frame_selects_a_smart_filter_row_and_activates_it() {
     let (mut fixture, app) = rig(tree());
@@ -241,6 +242,46 @@ fn a_double_click_in_one_frame_selects_a_smart_filter_row_and_activates_it() {
     let selected = events.iter().position(|event| matches!(event, LayersEvent::Select(select) if select.row.as_ref() == Some(&row)));
     let activated = events.iter().position(|event| matches!(event, LayersEvent::Activate { row: on, on: ActivateOn::Row, .. } if *on == row));
     assert!(selected.is_some() && activated.is_some() && selected < activated, "selected, then activated: {events:?}");
+    let last_select = events.iter().rposition(|event| matches!(event, LayersEvent::Select(_)));
+    assert!(last_select < activated, "no selection after the activation: {events:?}");
+}
+
+/// The thumbnail parts the selections among `events` name.
+fn picked_parts(events: &[LayersEvent<u32>]) -> Vec<Option<LayerPart>> {
+    events.iter().filter_map(|event| if let LayersEvent::Select(select) = event { Some(select.part) } else { None }).collect()
+}
+
+/// A double click on the picture thumbnail of a fill layer with a mask, under the active layer, selects the layer on its
+/// picture and activates the picture: no selection names no part, which would target the mask. The same holds when the
+/// app has not taken the first click's selection by the second click, so the second click selects again.
+#[trial]
+fn a_double_click_on_a_fill_thumbnail_selects_its_picture() {
+    let mut tree = FakeLayers::default();
+    tree.add(None, LayerInfo::new("Top", LayerKind::Pixel), false);
+    let mut fill = LayerInfo::new("Color Fill 1", LayerKind::Fill);
+    fill.masks.push(MaskInfo::new(LayerPart::LayerMask, true, true));
+    let id = tree.add(None, fill.clone(), false);
+    tree.selection = LayerSelection::new(vec![1], Some(1), LayerPart::Pixels);
+    let (mut fixture, app) = rig(tree);
+    take(&app);
+    let row = node(&fixture, "Color Fill 1").node.into();
+    let thumb = testing::thumb_rect(fixture.ctx(), row, &fill, LayerPart::Pixels).expect("the fill's picture thumbnail").center();
+    fixture.click_at(thumb).settle();
+    fixture.click_at(thumb).settle();
+    let events = take(&app);
+    assert!(!picked_parts(&events).is_empty(), "the double click selects the fill: {events:?}");
+    assert!(picked_parts(&events).iter().all(|part| *part == Some(LayerPart::Pixels)), "on its picture: {events:?}");
+    assert_eq!(thumb_activations(&events), [(LayerRowKey::Layer(id), LayerPart::Pixels)], "and activates the picture: {events:?}");
+
+    app.borrow_mut().tree.selection = LayerSelection::new(vec![1], Some(1), LayerPart::Pixels);
+    fixture.advance(1.0).idle(1);
+    take(&app);
+    fixture.click_at(thumb).settle();
+    app.borrow_mut().tree.selection = LayerSelection::new(vec![1], Some(1), LayerPart::Pixels);
+    fixture.click_at(thumb).settle();
+    let events = take(&app);
+    assert_eq!(picked_parts(&events), [Some(LayerPart::Pixels); 2], "each click selects the picture: {events:?}");
+    assert_eq!(thumb_activations(&events), [(LayerRowKey::Layer(id), LayerPart::Pixels)], "and the double click activates it: {events:?}");
 }
 
 /// A Smart Filter row dragged onto another smart object's row moves the filter there, with the active layer changing to

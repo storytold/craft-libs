@@ -56,14 +56,16 @@ pub(super) fn map_events<T: LayerTree>(
                     SelectionChange::Clear => (None, false, SelectionChange::Clear),
                     _ => continue,
                 };
+                // The selection names the thumbnail part its click hit, a double click's included: a double click still
+                // reports its activation below, and only a single click acts in place of the select.
                 let mut part = None;
                 if let Some(row) = &row
-                    && let Some(at) = clicks.iter().enumerate().position(|(i, click)| click.0 == *row && click.3 < 2 && !used[i])
+                    && let Some(at) = clicks.iter().enumerate().position(|(i, click)| click.0 == *row && !used[i])
                 {
                     used[at] = true;
                     let info = tree.info(row.layer());
                     let hit = thumb_part(row, &info, clicks[at].1);
-                    if thumb_click_replaces_select(hit, clicks[at].2, &info) {
+                    if clicks[at].3 < 2 && thumb_click_replaces_select(hit, clicks[at].2, &info) {
                         events.push(LayersEvent::ThumbClick { layer: row.layer().clone(), part: hit, mods: clicks[at].2 });
                         continue;
                     }
@@ -166,9 +168,9 @@ pub(super) fn map_events<T: LayerTree>(
             _ => {}
         }
     }
-    // A thumbnail click that selected nothing new still acts.
+    // A thumbnail's double click activates it; a single click that selected nothing new still acts.
     for (i, (row, target, mods, count)) in clicks.iter().enumerate() {
-        if used[i] || (activated.contains(row) && *count < 2) {
+        if *count < 2 && (used[i] || activated.contains(row)) {
             continue;
         }
         let info = tree.info(row.layer());

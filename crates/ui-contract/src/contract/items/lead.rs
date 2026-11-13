@@ -40,6 +40,13 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
         self.selection.anchor().and_then(|key| self.index_of(key)).unwrap_or(lead)
     }
 
+    /// Whether a later click of a multi-click (`clicks` above one) on the row at `at` leaves the selection as the earlier
+    /// click left it: it does when the selection holds the row. What the multi-click activates then acts on that
+    /// selection, and no selection change follows the activation.
+    pub(super) fn keeps_pick(&self, at: usize, clicks: u32) -> bool {
+        clicks > 1 && self.holds(at)
+    }
+
     /// A press or key that selects row `at` the way the modifiers say.
     pub(super) fn pick(&mut self, comp: &C, at: usize, extend: bool, toggle: bool) {
         if self.source.section_stop(at) {
