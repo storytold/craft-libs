@@ -232,11 +232,18 @@ fn lp_args_for(job: &Job, apple: bool) -> Vec<String> {
     if job.grayscale {
         opt("print-color-mode=monochrome");
     }
-    opt(match job.scaling {
-        Scaling::Exact => "fit-to-page=false",
+    match job.scaling {
+        // `fit-to-page` is the older CUPS option and does not override the IPP `print-scaling`
+        // job attribute, so a queue defaulting to `auto` (IPP Everywhere's default) would still
+        // shrink a paper-sized sheet into the printable area: A4 with 3 mm margins prints at
+        // 97 % (storytold/pdfcraft#7207). `none` keeps the sheet at its size; hardware margins clip it.
+        Scaling::Exact => {
+            opt("fit-to-page=false");
+            opt("print-scaling=none");
+        }
         // PWG 5100.13 §6.2.5: auto-fit fits oversized pages and leaves smaller pages unscaled.
-        Scaling::ShrinkToFit => "print-scaling=auto-fit",
-    });
+        Scaling::ShrinkToFit => opt("print-scaling=auto-fit"),
+    }
     let mut tray_named = false;
     for (key, value) in &job.options {
         // Driver options are PPD keywords; anything else is not something lp can be given.
