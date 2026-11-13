@@ -11,7 +11,9 @@
 //!
 //! Input is treated as hostile: the header length and the picture size are capped by [`Limits`],
 //! and every scan line is validated before the float picture is allocated, so a short file cannot
-//! ask for a large allocation.
+//! ask for a large allocation. Whatever the limits, no buffer is requested past the target's
+//! largest allocation (`isize::MAX` bytes), so raised limits on a 32-bit target such as `wasm32`
+//! give [`Error::LimitExceeded`] instead of a panic.
 
 #[cfg(test)]
 mod tests;
@@ -42,6 +44,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[non_exhaustive]
 pub struct Limits {
     /// Most pixels (width × height) a picture may have; each takes 12 bytes decoded. Default 2^26.
+    /// A picture over the target's largest allocation is refused at any setting.
     pub max_pixels: u64,
     /// Longest header read, in bytes (real ones are a few hundred). Default 64 KiB.
     pub max_header: usize,
@@ -60,6 +63,27 @@ pub struct Picture {
     pub height: u32,
     /// Scene-linear RGB, three floats a pixel, top row first.
     pub rgb: Vec<f32>,
+}
+
+/// The largest allocation in bytes that a `Vec` or `String` can make on the target.
+const MAX_ALLOC_BYTES: u64 = isize::MAX as u64;
+
+/// Bytes taken by `count` elements of `element_bytes` each, or `None` when the count overflows `u64`.
+fn checked_byte_len(count: u64, element_bytes: usize) -> Option<u64> {
+    count.checked_mul(element_bytes as u64)
+}
+
+/// `count` as a length when `count` elements of `element_bytes` each fit in `max_alloc_bytes`.
+fn alloc_len(count: u64, element_bytes: usize, max_alloc_bytes: u64) -> Option<usize> {
+    checked_byte_len(count, element_bytes).filter(|&bytes| bytes <= max_alloc_bytes).and_then(|_| usize::try_from(count).ok())
+}
+
+/// Bytes of `String::from_utf8_lossy(bytes)`: each invalid sequence becomes one U+FFFD (3 bytes).
+fn lossy_len(bytes: &[u8]) -> Option<u64> {
+    bytes.utf8_chunks().try_fold(0u64, |n, chunk| {
+        let invalid = if chunk.invalid().is_empty() { 0 } else { '\u{FFFD}'.len_utf8() };
+        n.checked_add(chunk.valid().len() as u64)?.checked_add(invalid as u64)
+    })
 }
 
 /// Whether `bytes` starts like a Radiance picture.
@@ -158,6 +182,11 @@ fn scanline(b: &[u8], pos: &mut usize, line: &mut [[u8; 4]]) -> Result<()> {
 
 /// Decodes a Radiance picture to linear float RGB, top row first.
 pub fn decode(b: &[u8], limits: &Limits) -> Result<Picture> {
+    decode_within(b, limits, MAX_ALLOC_BYTES)
+}
+
+/// [`decode`] with `max_alloc_bytes` as the largest allocation the target allows.
+fn decode_within(b: &[u8], limits: &Limits, max_alloc_bytes: u64) -> Result<Picture> {
     if !sniff(b) {
         return Err(Error::NotHdr);
     }
@@ -166,7 +195,11 @@ pub fn decode(b: &[u8], limits: &Limits) -> Result<Picture> {
     let line = |pos: &mut usize| -> Result<String> {
         let rest = b.get(*pos..).ok_or(Error::Malformed("truncated header"))?;
         let end = rest.iter().take(limits.max_header).position(|&c| c == b'\n').ok_or(Error::Malformed("truncated header"))?;
-        let s = String::from_utf8_lossy(rest.get(..end).unwrap_or_default()).trim_end_matches('\r').to_string();
+        let raw = rest.get(..end).unwrap_or_default();
+        if lossy_len(raw).is_none_or(|n| n > max_alloc_bytes) {
+            return Err(Error::LimitExceeded("header length"));
+        }
+        let s = String::from_utf8_lossy(raw).trim_end_matches('\r').to_string();
         *pos += end + 1;
         Ok(s)
     };
@@ -188,8 +221,9 @@ pub fn decode(b: &[u8], limits: &Limits) -> Result<Picture> {
     }
     let res = line(&mut pos)?;
     let bad = Error::Malformed("bad resolution line");
-    let t: Vec<&str> = res.split_whitespace().collect();
-    let &[a1, n1, a2, n2] = t.as_slice().first_chunk::<4>().ok_or(bad.clone())?;
+    // Tokens after the fourth are ignored, so they are not collected.
+    let mut t = res.split_whitespace();
+    let (Some(a1), Some(n1), Some(a2), Some(n2)) = (t.next(), t.next(), t.next(), t.next()) else { return Err(bad) };
     let ((x1, p1), (x2, p2)) = (axis(a1).ok_or(bad.clone())?, axis(a2).ok_or(bad.clone())?);
     if x1 == x2 {
         return Err(Error::Malformed("resolution line names one axis twice"));
@@ -205,6 +239,10 @@ pub fn decode(b: &[u8], limits: &Limits) -> Result<Picture> {
     if pixels > limits.max_pixels {
         return Err(Error::LimitExceeded("pixel count"));
     }
+    // One scan line of RGBE pixels and the float picture, each within the target's largest allocation.
+    let scan_len = alloc_len(u64::from(if x1 { height } else { width }), size_of::<[u8; 4]>(), max_alloc_bytes);
+    let rgb_len = pixels.checked_mul(3).and_then(|floats| alloc_len(floats, size_of::<f32>(), max_alloc_bytes));
+    let (Some(scan_len), Some(total)) = (scan_len, rgb_len) else { return Err(Error::LimitExceeded("pixel count")) };
     // A scan line takes at least a few bits of file, so a header cannot ask for more than the data has.
     if (b.len().saturating_sub(pos) as u64).saturating_mul(4096) < pixels {
         return Err(Error::Malformed("truncated pixel data"));
@@ -212,12 +250,11 @@ pub fn decode(b: &[u8], limits: &Limits) -> Result<Picture> {
     // Validate every encoded scan line before allocating the float picture: a short file could
     // otherwise ask for the whole limit of zeroed pixels and only then fail on its first line.
     let pixel_data = pos;
-    let mut scan = vec![[0u8; 4]; n2];
+    let mut scan = vec![[0u8; 4]; scan_len];
     for _ in 0..n1 {
         scanline(b, &mut pos, &mut scan)?;
     }
 
-    let total = w.checked_mul(h).and_then(|n| n.checked_mul(3)).ok_or(Error::LimitExceeded("pixel count"))?;
     let mut rgb = vec![0f32; total];
     pos = pixel_data;
     for i in 0..n1 {
