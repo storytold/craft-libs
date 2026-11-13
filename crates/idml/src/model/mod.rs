@@ -45,7 +45,7 @@ pub use spread::{
     TextWrapPreference, spreads,
 };
 pub use story::{
-    Ace, AnchoredObjectSetting, AnchoredObjectValues, CONTAINERS, Cell, CellOptions, Container, ContainerKind, ContentPart,
+    Ace, AnchoredObjectSetting, AnchoredObjectValues, CONTAINERS, Cell, CellOptions, Container, ContainerKind, ContentPart, CrossReferenceSource,
     IndexCrossReferenceValues, IndexDocument, IndexReference, IndexTopicPath, IndexValues, PageReference, Range, SavedCrossReference,
     SavedCrossReferencePart, Story, StoryAnchor, StoryPreference, Table, TableChild, TableColumn, TableLayout, TableRow, TextNode, TrackedChangeKind,
     stories,

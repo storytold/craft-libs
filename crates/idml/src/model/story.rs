@@ -337,6 +337,20 @@ pub struct SavedCrossReference {
     pub character_range: Option<Range>,
 }
 
+/// The IDML cross-reference source wrapper around its saved character range.
+pub struct CrossReferenceSource;
+
+impl CrossReferenceSource {
+    pub fn to_el(self_id: &str, applied_format: &str, name: &str, character_range: El) -> El {
+        El::new("CrossReferenceSource")
+            .with_attr("Self", self_id)
+            .with_attr("AppliedFormat", applied_format)
+            .with_attr("Name", name)
+            .with_attr("Hidden", "false")
+            .with_child(character_range)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum SavedCrossReferencePart {
     Text(String),
