@@ -9,8 +9,7 @@ use craft_cms::convert::CmykConverter;
 use craft_theme::{ColorModel, HsbModel, LabModel, ModelValues, RgbModel, Srgba};
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::{
-    Bind, CommandSet, Held, LabelScheme, NoValue, Outcome, Pattern, Props as _, Remember as _, Scroll, Show as _, ShowContainer as _, Sizing,
-    clicked,
+    Bind, CommandSet, Held, LabelScheme, NoValue, Outcome, Pattern, Props as _, Remember as _, Scroll, Show as _, ShowContainer as _, Sizing, clicked,
 };
 use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::{Row, Stack};

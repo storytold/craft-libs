@@ -34,6 +34,10 @@ struct PanelRig {
 
 impl PanelRig {
     fn new(mode: ColorPanelMode) -> Self {
+        Self::in_room(mode, COLOR_ROOM)
+    }
+
+    fn in_room(mode: ColorPanelMode, room: Vec2) -> Self {
         let mut start = ColorPanelState::default();
         start.mode = mode;
         let state = Rc::new(RefCell::new(start));
@@ -49,7 +53,7 @@ impl PanelRig {
             o.borrow_mut().extend(shown.pick_color);
             a.borrow_mut().extend(shown.add_to_swatches);
         });
-        fixture.room(COLOR_ROOM);
+        fixture.room(room);
         fixture.settle();
         PanelRig { fixture, colors, edits }
     }
@@ -75,6 +79,66 @@ fn dragging_to_the_bottom_right_keeps_the_knob_there() {
     let area = rig.fixture.focused().expect("the dragged area keeps the focus");
     let value = rig.fixture.tree().value(area).expect("the area reports its value");
     assert!(value.contains("Saturation 100") && value.contains("Brightness 0"), "the knob stays at the corner: {value}");
+}
+
+/// The cubes fill the panel's room as Photoshop's field fills its dock group: the field takes the height the readout
+/// leaves and the width the wells and the strip leave, so in a short, narrow group the strip and the readout stay in
+/// view, and a taller group gives a taller field.
+#[trial]
+fn the_cubes_take_the_room_the_readout_and_the_strip_leave() {
+    let mut heights = Vec::new();
+    for room in [Vec2::new(280.0, 110.0), Vec2::new(280.0, 400.0)] {
+        for (mode, name, strip) in
+            [(ColorPanelMode::HueCube, "Saturation and brightness", "Hue"), (ColorPanelMode::BrightnessCube, "Hue and saturation", "Brightness")]
+        {
+            let rig = PanelRig::in_room(mode, room);
+            let area = rig.fixture.by_label(name).expect("the field");
+            let strip = rig.fixture.by_label(strip).expect("the strip");
+            let readout = rig.fixture.by_label("Blue").expect("the readout's last field");
+            let case = format!("{mode:?} in {room:?}");
+            assert!(
+                area.rect.right() <= strip.rect.left(),
+                "{case}: the strip beside the field ({:?}, {:?}, readout {:?})",
+                area.rect,
+                strip.rect,
+                readout.rect
+            );
+            assert!(strip.rect.right() <= room.x + 0.5, "{case}: the strip in view ({:?})", strip.rect);
+            assert!(
+                room.x - strip.rect.right() < 24.0,
+                "{case}: the field takes the width the wells and the strip leave ({:?}, {:?})",
+                area.rect,
+                strip.rect
+            );
+            assert!(area.rect.bottom() <= readout.rect.top(), "{case}: the readout under the field");
+            assert!(
+                readout.rect.bottom() <= room.y + 0.5,
+                "{case}: the readout in view ({:?})",
+                readout.rect
+            );
+            assert!((area.rect.height() - strip.rect.height()).abs() < 1.0, "{case}: the strip as tall as the field");
+            heights.push(area.rect.height());
+        }
+    }
+    assert!(heights[2] > heights[0] + 200.0 && heights[3] > heights[1] + 200.0, "the field grows with the room: {heights:?}");
+}
+
+/// The slider modes show each channel on one line: its slider and its number field side by side.
+#[trial]
+fn the_slider_modes_show_a_channel_on_one_line() {
+    for (mode, channels) in [(ColorPanelMode::RgbSliders, 3), (ColorPanelMode::CmykSliders, 4), (ColorPanelMode::HsbSliders, 3)] {
+        let rig = PanelRig::new(mode);
+        let sliders = rig.fixture.by_role(Role::SLIDER);
+        let fields = rig.fixture.by_role(Role::SPIN_BUTTON);
+        assert_eq!((sliders.len(), fields.len()), (channels, channels), "{mode:?}");
+        for (slider, field) in sliders.iter().zip(&fields) {
+            let line = slider.rect.y_range();
+            assert!(
+                line.contains(field.rect.center().y) && slider.rect.right() <= field.rect.left(),
+                "{mode:?}: {slider:?} then {field:?} on one line"
+            );
+        }
+    }
 }
 
 const SWATCHES: [(&str, [f32; 3]); 6] = [

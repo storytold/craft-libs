@@ -5,8 +5,7 @@ use crate::AreaMode;
 use craft_behavior::{Metrics, Mixed, Sense};
 use craft_theme::ModelValues;
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, MeasureCx, PaintUi, Props as _, Role, Sizing,
-    WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, MeasureCx, PaintUi, Props as _, Role, Sizing, WordSetCx as _,
 };
 use craft_ui::primitives::ContentPainterCx;
 use craft_ui::runtime::env::Label;

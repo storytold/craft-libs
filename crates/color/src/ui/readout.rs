@@ -11,7 +11,8 @@ use craft_ui::runtime::env::{Env, Label};
 use craft_ui::text::{NumberField, TextField};
 use egui::{Response, Ui};
 
-/// The hex field and the three channel fields share the room equally, so the row fits a narrow panel.
+/// The hex field and the three channel fields share the width of the readout's column equally, so the row fits a
+/// narrow panel.
 const FIELDS: &[ColumnWidth] = &[ColumnWidth::fill(1.0); 4];
 
 /// The channels the fields edit, in field order.
@@ -131,7 +132,7 @@ impl<'a> ColorReadout<'a> {
     pub fn show(self, ui: &mut Ui) -> ColorReadoutOutput {
         let ColorReadout { label, mut value, shared } = self;
         let words = Env::of(ui).words::<ColorReadoutWords>();
-        let shown = Stack::new().label(label).show(ui, |ui, body| {
+        let shown = Stack::new().label(label).fill_width().show(ui, |ui, body| {
             let held: Mixed<Rgba> = value.reborrow().read(&mut *body).unwrap_or(Mixed::Mixed);
             let mut events: Vec<EditEvent<Rgba>> = Vec::new();
             let mut channel_edits = Vec::new();
@@ -141,22 +142,24 @@ impl<'a> ColorReadout<'a> {
                 events.extend(TextField::hex(words.hex.as_str().to_owned(), Bind::given(held)).show(ui).events);
                 let names = [&words.red, &words.green, &words.blue];
                 for (i, name) in names.into_iter().enumerate() {
-                    let field = NumberField::new(
-                        name.as_str().to_owned(),
-                        Bind::given(match held {
-                            Mixed::Same(color) => Mixed::Same(Some(f64::from(color.0[i]))),
-                            Mixed::Mixed => match shared[i] {
-                                Mixed::Same(byte) => Mixed::Same(Some(f64::from(byte))),
-                                Mixed::Mixed => Mixed::Mixed,
-                            },
-                        }),
-                    )
-                    .range(0.0..=255.0)
-                    .step(1.0)
-                    .snap_typed(true)
-                    .commit_decimals(0);
+                    let field = || {
+                        NumberField::new(
+                            name.as_str().to_owned(),
+                            Bind::given(match held {
+                                Mixed::Same(color) => Mixed::Same(Some(f64::from(color.0[i]))),
+                                Mixed::Mixed => match shared[i] {
+                                    Mixed::Same(byte) => Mixed::Same(Some(f64::from(byte))),
+                                    Mixed::Mixed => Mixed::Mixed,
+                                },
+                            }),
+                        )
+                        .range(0.0..=255.0)
+                        .step(1.0)
+                        .snap_typed(true)
+                        .commit_decimals(0)
+                    };
                     let byte = |number: Option<f64>| number.map(|number| number.round().clamp(0.0, 255.0) as u8);
-                    let out = field.show(ui);
+                    let out = field().show(ui);
                     for event in &out.events {
                         match held {
                             Mixed::Same(base) => events.push(event.clone().map(move |number| {
