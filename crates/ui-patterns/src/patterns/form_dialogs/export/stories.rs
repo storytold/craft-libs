@@ -59,14 +59,15 @@ fn export_dialog(ui: &mut Ui, data: &mut StoryData, preview_ready: bool) -> Stor
     let ready = *data.value("preview_ready", preview_ready);
     let exact = *data.value("exact_size", false);
     let texture = picture(ui);
+    let knobs = (format.clone(), exact);
     let open = || {
         let mut options = ExportOptions::default();
         options.format = format;
         HostedExportAs::new("Poster", DOCUMENT, options)
     };
-    hosted_with(ui, data, open, |host| {
-        let Some(dialog) = host.get_mut::<HostedExportAs>() else { return };
-        if let (true, Some(wanted)) = (ready, dialog.wanted_preview()) {
+    hosted_with(ui, data, knobs, open, |host| {
+        let Some(dialog) = host.get_mut::<HostedExportAs>().filter(|_| ready) else { return };
+        if let Some(wanted) = dialog.wanted_preview() {
             let bytes = if exact { SizeEstimate::Exact(ESTIMATE) } else { SizeEstimate::Proxy(ESTIMATE) };
             dialog.set_preview(ExportPreview::new(wanted.revision, PreviewState::Ready(texture)).estimate(bytes));
         }
@@ -86,25 +87,25 @@ fn export_as_rendering(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(FormatOptionsDialog<'static>, covers = [], drive = Drive::Never)]
 fn jpeg_options(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let quality = *data.ranged("quality", 6_u8, 0.0..=12.0);
-    hosted(ui, data, || HostedFormatOptions::new(ExportOptionsKind::Jpeg).initial(FormatOptions::Jpeg(JpegOptions::new(quality))))
+    hosted(ui, data, quality, || HostedFormatOptions::new(ExportOptionsKind::Jpeg).initial(FormatOptions::Jpeg(JpegOptions::new(quality))))
 }
 
 #[story(FormatOptionsDialog<'static>, covers = [], drive = Drive::Never)]
 fn tiff_options(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    hosted(ui, data, || HostedFormatOptions::new(ExportOptionsKind::Tiff))
+    hosted(ui, data, (), || HostedFormatOptions::new(ExportOptionsKind::Tiff))
 }
 
 #[story(FormatOptionsDialog<'static>, covers = [], drive = Drive::Never)]
 fn targa_options(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let alpha = *data.value("alpha", true);
-    hosted(ui, data, || {
+    hosted(ui, data, alpha, || {
         HostedFormatOptions::new(ExportOptionsKind::Targa).initial(FormatOptions::Targa(TargaOptions::new(if alpha { 32 } else { 24 })))
     })
 }
 
 #[story(FormatOptionsDialog<'static>, covers = [], drive = Drive::Never)]
 fn dds_options(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    hosted(ui, data, || HostedFormatOptions::new(ExportOptionsKind::Dds))
+    hosted(ui, data, (), || HostedFormatOptions::new(ExportOptionsKind::Dds))
 }
 
 const TEMPLATE_PATH: &str = "[Comp Name].[fileExtension]";

@@ -4,7 +4,8 @@
 
 use super::dialog::ResetFooter;
 use super::host_requests::HostRequests;
-use crate::contract::{Bind, BodyCx, Remember as _, ShowContainer as _};
+use crate::choice::Checkbox;
+use crate::contract::{Bind, BodyCx, Props as _, Remember as _, Show as _, ShowContainer as _, pressed};
 use crate::runtime::commands::Commands as _;
 use crate::runtime::requests::HostAnswer;
 
@@ -31,6 +32,13 @@ use std::sync::Arc;
 
 #[cfg(feature = "testing")]
 mod stories;
+
+craft_ui::words! {
+    /// The words a form dialog adds beside the common OK and Cancel.
+    pub struct FormDialogWords {
+        preview: "formDialog.preview" = "Preview";
+    }
+}
 
 /// The dialog's own undo history of its value while it is open: made on the opening pass, stepped by Undo and Redo.
 #[derive(Clone)]
@@ -110,6 +118,11 @@ pub struct FormOutput<V> {
     pub value: Option<V>,
     /// What the body asked of the host in this pass.
     pub requests: HostRequests,
+    /// Whether the [`preview`](FormDialog::preview) check box is on after the pass; false without one. Holding the
+    /// box to compare leaves it as it was until the release.
+    pub preview_on: bool,
+    /// Whether the Preview check box is on and held: the host shows the unfiltered picture while it is.
+    pub comparing: bool,
 }
 
 type FooterExtraFn<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
@@ -129,6 +142,8 @@ type ResetWithFn<'a, V> = Box<dyn Fn(&V, &V) -> V + 'a>;
 /// - The body returns whether the value can be accepted; OK is enabled while it can and `ok_enabled` is true.
 /// - With [`history`](FormDialog::history), Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z step the dialog's own value; a drag or a
 ///   typing run is one step.
+/// - With [`preview`](FormDialog::preview), the buttons stand in a column beside the body, with the Preview check box
+///   and the footer controls under them.
 #[must_use = "show the dialog with `show`"]
 #[derive(crate::contract::Pattern)]
 #[pattern(probe(FormDialog<'static, bool>))]
@@ -149,6 +164,7 @@ pub struct FormDialog<'a, V: Value + Default> {
     accept_stays_open: bool,
     footer_extra: Option<FooterExtraFn<'a>>,
     footer_value: Option<FooterValueFn<'a, V>>,
+    preview: Option<Bind<'a, bool>>,
     extra_buttons: Vec<FooterButton>,
     shaped: Option<Box<dyn FnOnce(Dialog<'a>) -> Dialog<'a> + 'a>>,
     answers: Vec<HostAnswer>,
@@ -176,6 +192,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             accept_stays_open: false,
             footer_extra: None,
             footer_value: None,
+            preview: None,
             extra_buttons: Vec::new(),
             shaped: None,
             answers: Vec::new(),
@@ -264,10 +281,17 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         self
     }
 
-    /// Controls in the footer that edit the value (a Preview check box under side buttons): they run after the body
-    /// and before the footer extra, and what they change is written to the bind as the body's edits are.
+    /// Controls in the footer that edit the value: they run after the body and before the footer extra, and what they change is written to the bind as the body's edits are.
     pub fn footer_value(mut self, edit: impl FnMut(&mut Ui, &mut V) + 'a) -> Self {
         self.footer_value = Some(Box::new(edit));
+        self
+    }
+
+    /// The Preview check box over `on`, first under the buttons, which stand beside the body: the host previews the
+    /// value while it is on, and the unfiltered picture while it is held ([`FormOutput::comparing`]). A kept bind
+    /// starts on.
+    pub fn preview(mut self, on: Bind<'a, bool>) -> Self {
+        self.preview = Some(on);
         self
     }
 
@@ -322,6 +346,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             accept_stays_open,
             footer_extra,
             footer_value,
+            preview,
             extra_buttons,
             shaped,
             mut answers,
@@ -366,10 +391,30 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             dialog = dialog.collection_body();
         }
         let changed = Rc::new(RefCell::new(None::<V>));
-        if footer_extra.is_some() || footer_value.is_some() {
+        let (preview_on, comparing) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(false)));
+        if preview.is_some() {
+            dialog = dialog.side_buttons(true);
+        }
+        if footer_extra.is_some() || footer_value.is_some() || preview.is_some() {
             let (bind, changed, name) = (Rc::clone(&bind), Rc::clone(&changed), name.clone());
-            let (mut extra, mut edit) = (footer_extra, footer_value);
+            let (on, held, label) = (Rc::clone(&preview_on), Rc::clone(&comparing), env.words::<FormDialogWords>().preview.clone());
+            let (mut extra, mut edit, mut preview) = (footer_extra, footer_value, preview);
             dialog = dialog.footer(move |ui, footer| {
+                if let Some(preview) = preview.as_mut() {
+                    let cx = footer.bar();
+                    let before = match preview.reborrow().read(cx) {
+                        Some(Mixed::Same(value)) => value,
+                        _ => true,
+                    };
+                    let mut value = before;
+                    let shown = Checkbox::new(Bind::bound(&mut value)).label(label.clone()).show(ui);
+                    if value != before {
+                        let _ = preview.reborrow().write(cx, &EditEvent::set(Mixed::Same(before), value, label.as_str().into(), None));
+                    }
+                    on.set(value);
+                    // The box toggles at the release: while it is held it still shows its value.
+                    held.set(value && pressed(&shown.response));
+                }
                 if let Some(edit) = edit.as_mut() {
                     let cx = footer.dialog();
                     let mut held = bind.borrow_mut();
@@ -452,6 +497,15 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             Some(CloseReason::Enter | CloseReason::Activated) if accepts.get() => work.into_inner(),
             _ => None,
         };
-        FormOutput { response, closed, picked, accepted, value: changed.take(), requests: requests.into_inner() }
+        FormOutput {
+            response,
+            closed,
+            picked,
+            accepted,
+            value: changed.take(),
+            requests: requests.into_inner(),
+            preview_on: preview_on.get(),
+            comparing: comparing.get(),
+        }
     }
 }

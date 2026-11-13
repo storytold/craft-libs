@@ -31,21 +31,31 @@ impl PartialEq for StoryHost {
 
 /// A story of a hosted dialog: `open()` on the story's [`DialogHost`], which runs every pass. The story's `open` value
 /// is the dialog's open state, so the card holds the dialog behind its button as it holds any story dialog: the
-/// dialog opens while the value is on, and the value goes off when the dialog closes.
+/// dialog opens while the value is on, and the value goes off when the dialog closes. `knobs` holds the story values
+/// `open` reads; when they change, `open()` replaces the open dialog, so a knob reaches the dialog on screen.
 #[doc(hidden)]
-pub fn hosted<D: StackDialog>(ui: &mut Ui, data: &mut StoryData, open: impl FnOnce() -> D) -> StoryOutput {
-    hosted_with(ui, data, open, |_| {})
+pub fn hosted<D: StackDialog, K: PartialEq + 'static>(ui: &mut Ui, data: &mut StoryData, knobs: K, open: impl FnOnce() -> D) -> StoryOutput {
+    hosted_with(ui, data, knobs, open, |_| {})
 }
 
 /// [`hosted`], with `pass` answering what the open dialog asked for (a preview, a path) before the host runs it.
 #[doc(hidden)]
-pub fn hosted_with<D: StackDialog>(ui: &mut Ui, data: &mut StoryData, open: impl FnOnce() -> D, pass: impl FnOnce(&mut DialogHost)) -> StoryOutput {
+pub fn hosted_with<D: StackDialog, K: PartialEq + 'static>(
+    ui: &mut Ui,
+    data: &mut StoryData,
+    knobs: K,
+    open: impl FnOnce() -> D,
+    pass: impl FnOnce(&mut DialogHost),
+) -> StoryOutput {
     let host = data.value("host", StoryHost::default()).clone();
     let mut host = host.0.lock().unwrap_or_else(PoisonError::into_inner);
     let wanted = *data.value("open", true);
+    let shown = data.note::<Option<K>>("knobs", None);
+    let stale = shown.as_ref() != Some(&knobs);
     match (wanted, host.is_open::<D>()) {
-        (true, false) => {
+        (true, is_open) if stale || !is_open => {
             host.open(open());
+            *shown = Some(knobs);
         }
         (false, true) => {
             host.cancel::<D>(ui.ctx());

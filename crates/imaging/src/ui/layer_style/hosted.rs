@@ -3,18 +3,17 @@
 use std::collections::HashMap;
 
 use craft_theme::Srgba;
-use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft_ui::contract::{Bind, Entry};
 use craft_ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::patterns::form_dialogs::FormDialog;
 use craft_ui::patterns::presets::{PresetRow, ThumbInfo};
 use craft_ui::primitives::ContentPainterCx;
-use craft_ui::runtime::env::{Env, Label};
+use craft_ui::runtime::env::Label;
 use craft_ui::runtime::requests::ColorRequest;
 use egui::{Rect, Ui};
 
 use super::contour::SharedSampler;
-use super::{ContourAction, ContourRequest, LayerStyleDialog, LayerStyleOutput, LayerStyleWords, StylePresets};
+use super::{ContourAction, ContourRequest, LayerStyleDialog, LayerStyleOutput, StylePresets};
 use crate::layer_style::{Contour, EffectId, EffectKind, EffectSpec, LayerStyle, LayerStyleDraft, StyleParams};
 
 /// What the open Layer Style dialog asks of the app in a pass; [`HostedLayerStyle::take_asks`] hands them over in the
@@ -85,6 +84,7 @@ pub struct HostedLayerStyle {
     sampler: Option<SharedSampler>,
     styles: Option<(Vec<PresetRow<String>>, Box<Thumb>)>,
     asks: Vec<LayerStyleAsk>,
+    comparing: bool,
 }
 
 /// The key of the hosted Layer Style dialog.
@@ -108,6 +108,7 @@ impl HostedLayerStyle {
             sampler: None,
             styles: None,
             asks: Vec::new(),
+            comparing: false,
         }
     }
 
@@ -169,6 +170,11 @@ impl HostedLayerStyle {
         &self.draft
     }
 
+    /// Whether the Preview box is ticked and held: the app shows the layer without the style while it is.
+    pub fn is_comparing(&self) -> bool {
+        self.comparing
+    }
+
     /// The draft, for the app's answers to [`LayerStyleAsk`]s (an applied style preset, stored defaults).
     pub fn draft_mut(&mut self) -> &mut LayerStyleDraft {
         &mut self.draft
@@ -216,18 +222,16 @@ impl StackDialog for HostedLayerStyle {
             sampler,
             styles,
             asks,
+            comparing,
             ..
         } = self;
-        let preview = Env::of(ui).words::<LayerStyleWords>().preview.clone();
-        let shown = FormDialog::new(label.clone(), Bind::bound(draft))
-            .opened(Bind::bound(open))
-            .shaped(|dialog| dialog.side_buttons(true))
-            .footer_value(move |ui, draft| {
-                if let Some(on) = Checkbox::new(Bind::given(draft.preview)).label(preview.clone()).show(ui).value().copied() {
-                    draft.preview = on;
-                }
-            })
-            .show(ui, |ui, _, draft| {
+        // The draft holds Preview: the box edits a copy, written back only when the box changed it, so a Reset that
+        // restores the draft keeps the restored Preview.
+        let previewing = draft.preview;
+        let mut preview = previewing;
+        let shown = FormDialog::new(label.clone(), Bind::bound(&mut *draft)).opened(Bind::bound(open)).preview(Bind::bound(&mut preview)).show(
+            ui,
+            |ui, _, draft| {
                 let mut body = LayerStyleDialog::new(label.clone(), draft, channel_names.as_slice())
                     .blend_modes(blend_modes.as_slice())
                     .patterns(patterns.as_slice())
@@ -249,7 +253,12 @@ impl StackDialog for HostedLayerStyle {
                 }
                 asks.extend(out.asks());
                 true
-            });
+            },
+        );
+        if preview != previewing {
+            draft.preview = preview;
+        }
+        *comparing = shown.comparing;
         let accepted = shown.accepted.map(|draft| DialogResult::Ok(draft.style));
         accepted.or(shown.closed.map(|_| DialogResult::Cancel))
     }

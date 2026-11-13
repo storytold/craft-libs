@@ -31,8 +31,6 @@ craft_ui::words! {
         remove_instance: template "layerStyle.removeInstance" = "Remove this {effect}";
         /// The name of the instance `{number}` of an effect that has several: "Drop Shadow 2".
         instance_name: template "layerStyle.instanceName" = "{effect} {number}";
-        /// The Preview check box the host shows in its button column.
-        preview: "layerStyle.preview" = "Preview";
         new_style: "layerStyle.newStyle" = "New Style…";
         make_default: "layerStyle.makeDefault" = "Make Default";
         reset_to_default: "layerStyle.resetToDefault" = "Reset to Default";

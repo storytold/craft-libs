@@ -4,15 +4,14 @@
 use super::fields::{DialogFields, FieldValue};
 use crate::runtime::requests::{ColorRequest, HostAnswer, PathRequest};
 
-use super::form::FormDialog;
+use super::form::{FormDialog, FormDialogWords};
 use super::host_requests::HostRequests;
 use super::param::{Param, ParamKind, open_fields, set_color_field};
 use super::preview::{PreviewPane, PreviewView, PreviewZoom};
 
 use super::rows::{ParamRows, ParamRowsOutput};
 
-use crate::choice::Checkbox;
-use crate::contract::{Bind, BodyCx, NoValue, Outcome, Props as _, Remember as _, SaveKey, Show as _, ShowContainer as _, pressed};
+use crate::contract::{Bind, BodyCx, NoValue, Outcome, Remember as _, SaveKey, Show as _, ShowContainer as _};
 
 use crate::dialog::{Dialog, DialogId, DialogResult, DialogStack, FooterHooks, StackDialog, dialog_id};
 
@@ -31,8 +30,6 @@ use egui::{Context, Response, Ui};
 use serde_json::Value;
 
 use std::borrow::Cow;
-use std::cell::Cell;
-use std::rc::Rc;
 
 #[cfg(feature = "testing")]
 mod stories;
@@ -41,7 +38,6 @@ craft_ui::words! {
     /// The words of the parameter dialog beside the common OK and Cancel.
     pub struct ParamDialogWords {
         reset: "paramDialog.reset" = "Reset";
-        preview: "paramDialog.preview" = "Preview";
     }
 }
 
@@ -84,10 +80,6 @@ impl ParamResult {
 struct Live {
     view: PreviewView,
 }
-
-/// What the footer of a dialog with a preview keeps while it is open: the Preview check box is off.
-#[derive(Clone, Default)]
-struct PreviewOff(bool);
 
 /// What a parameter dialog reports.
 #[derive(Debug)]
@@ -334,13 +326,13 @@ impl<'a> ParamDialog<'a> {
             layout,
             closable,
             preview,
-            mut footer_extra,
+            footer_extra,
             below,
-            mut shaped,
+            shaped,
             answers,
             values_opened,
         } = self;
-        let words = Env::of(ui).words::<ParamDialogWords>();
+        let preview_label = Env::of(ui).words::<FormDialogWords>().preview.clone();
 
         let mut form = match bound {
             Some(bind) => FormDialog::new(title.clone(), bind),
@@ -373,29 +365,8 @@ impl<'a> ParamDialog<'a> {
         if let Some(open) = open {
             form = form.opened(open);
         }
-        // With a preview the buttons stand beside the body, and the Preview check box and the extras under them.
-        let (preview_on, comparing) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(false)));
         if preview.is_some() {
-            let (on, held, label) = (Rc::clone(&preview_on), Rc::clone(&comparing), words.preview.clone());
-            let mut extra = footer_extra.take();
-            let caller = shaped.take();
-            form = form.shaped(move |dialog| {
-                let dialog = dialog.side_buttons(true).footer(move |ui, cx| {
-                    let mut value = !cx.bar().memory::<PreviewOff>().0;
-                    let shown = Checkbox::new(Bind::bound(&mut value)).label(label.clone()).show(ui);
-                    cx.bar().memory::<PreviewOff>().0 = !value;
-                    on.set(value);
-                    // The box toggles at the release: while it is held it still shows its value.
-                    held.set(value && pressed(&shown.response));
-                    if let Some(FooterExtra(extra)) = extra.as_mut() {
-                        extra(ui);
-                    }
-                });
-                match caller {
-                    Some(Shaped(shape)) => shape(dialog),
-                    None => dialog,
-                }
-            });
+            form = form.preview(Bind::kept());
         }
         if let Some(FooterExtra(extra)) = footer_extra {
             form = form.footer_extra(extra);
@@ -425,13 +396,13 @@ impl<'a> ParamDialog<'a> {
                 (Some(texture), ParamLayout::Beside) => {
                     Row::new().show(ui, |ui, _| {
                         show_rows(ui, values);
-                        Stack::new().show(ui, |ui, _| show_preview(ui, &words, texture, &mut live));
+                        Stack::new().show(ui, |ui, _| show_preview(ui, &preview_label, texture, &mut live));
                     });
                 }
                 (Some(texture), ParamLayout::Below) => {
                     Stack::new().show(ui, |ui, _| {
                         show_rows(ui, values);
-                        show_preview(ui, &words, texture, &mut live);
+                        show_preview(ui, &preview_label, texture, &mut live);
                     });
                 }
                 (None, _) => show_rows(ui, values),
@@ -450,8 +421,8 @@ impl<'a> ParamDialog<'a> {
             result,
             rows,
             values: shown.value,
-            preview_on: preview.is_some() && preview_on.get(),
-            comparing: preview.is_some() && comparing.get(),
+            preview_on: shown.preview_on,
+            comparing: shown.comparing,
         }
     }
 }
@@ -587,9 +558,9 @@ impl ResetFooter {
 }
 
 /// The zoom row and the pane.
-fn show_preview(ui: &mut Ui, words: &ParamDialogWords, texture: &SizedTexture, live: &mut Live) {
+fn show_preview(ui: &mut Ui, label: &Label, texture: &SizedTexture, live: &mut Live) {
     let zoom = PreviewZoom::new(&live.view).show(ui);
-    let pane = PreviewPane::new(words.preview.clone(), *texture, &live.view).show(ui);
+    let pane = PreviewPane::new(label.clone(), *texture, &live.view).show(ui);
     live.view = zoom.view.or(pane.view).unwrap_or(pane.shown);
 }
 

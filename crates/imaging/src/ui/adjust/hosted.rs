@@ -1,15 +1,14 @@
 //! [`HostedAdjustDialog`]: an Image › Adjustments dialog on the dialog host, around any adjustment editor.
 
 use craft_behavior::Value;
-use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Props as _, Show as _};
+use craft_ui::contract::Bind;
 use craft_ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::patterns::form_dialogs::FormDialog;
-use craft_ui::runtime::env::{Env, Label};
+use craft_ui::runtime::env::Label;
 use craft_ui::runtime::memory::SaveKey;
 use egui::Ui;
 
-use super::{AdjustContext, AdjustWords};
+use super::AdjustContext;
 
 /// Shows the editor over the dialog's value for one pass; `Some` carries what the editor asks of the app this pass.
 type Editor<V, E> = dyn for<'b> Fn(&mut Ui, Bind<'b, V>, AdjustContext) -> Option<E> + Send;
@@ -34,6 +33,7 @@ pub struct HostedAdjustDialog<V, E = ()> {
     open: bool,
     value: V,
     preview: bool,
+    comparing: bool,
     context: AdjustContext,
     resizable: bool,
     remember: Option<SaveKey>,
@@ -59,6 +59,7 @@ impl<V: Value + Default, E: Send + 'static> HostedAdjustDialog<V, E> {
             open: true,
             value,
             preview: true,
+            comparing: false,
             context: AdjustContext::dialog(true),
             resizable: false,
             remember: None,
@@ -110,6 +111,11 @@ impl<V: Value + Default, E: Send + 'static> HostedAdjustDialog<V, E> {
         self.preview
     }
 
+    /// Whether the Preview box is ticked and held: the app shows the unadjusted picture while it is.
+    pub fn is_comparing(&self) -> bool {
+        self.comparing
+    }
+
     /// What the editor asked of the app since the last call, in order.
     pub fn take_asks(&mut self) -> Vec<E> {
         std::mem::take(&mut self.asks)
@@ -124,25 +130,23 @@ impl<V: Value + Default, E: Send + 'static> StackDialog for HostedAdjustDialog<V
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<V>> {
-        let HostedAdjustDialog { title, open, value, preview, context, resizable, remember, editor, asks, .. } = self;
+        let HostedAdjustDialog { title, open, value, preview, comparing, context, resizable, remember, editor, asks, .. } = self;
         let (context, resizable, remember) = (*context, *resizable, remember.clone());
-        let label = Env::of(ui).words::<AdjustWords>().preview.clone();
         let shown = FormDialog::new(title.clone(), Bind::bound(value))
             .opened(Bind::bound(open))
+            .preview(Bind::bound(&mut *preview))
             .shaped(move |dialog| {
-                let dialog = dialog.side_buttons(true).resizable(resizable);
+                let dialog = dialog.resizable(resizable);
                 match remember {
                     Some(key) => dialog.remember(key),
                     None => dialog,
                 }
             })
-            .footer_extra(|ui| {
-                Checkbox::new(Bind::bound(&mut *preview)).label(label.clone()).show(ui);
-            })
             .show(ui, |ui, _, value| {
                 asks.extend(editor(ui, Bind::bound(value), context));
                 true
             });
+        *comparing = shown.comparing;
         let accepted = shown.accepted.map(DialogResult::Ok);
         accepted.or(shown.closed.map(|_| DialogResult::Cancel))
     }

@@ -1,7 +1,8 @@
 //! The dialog host and stack.
 
+use craft_ui::dialog::stories::hosted;
 use craft_ui::dialog::{Alert, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, StackDialog, dialog_id};
-use craft_ui::testing::{Frames, trial};
+use craft_ui::testing::{Fixture, Frames, Story, StoryData, StoryOutput, trial};
 use egui::Ui;
 
 /// A dialog with no content: it records whether it was the top of the stack when shown and finishes with
@@ -53,6 +54,23 @@ fn cancelling_a_parent_cancels_its_children() {
     assert!(host.is_empty() && host.stack().is_empty());
     assert_eq!(host.take::<Probe<1>>(), Some(DialogResult::Cancel));
     assert_eq!(host.take::<Probe<2>>(), Some(DialogResult::Cancel));
+}
+
+/// A story of a hosted alert whose title is the story's `title` knob.
+fn titled_alert(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let title = *data.value("title", "Could not open");
+    hosted(ui, data, title, || HostedAlert::new(Alert::new(title, "The file is damaged.")))
+}
+
+#[trial]
+fn a_story_knob_reaches_its_open_hosted_dialog() {
+    let mut fixture = Fixture::story(&Story::new("titled_alert", titled_alert));
+    fixture.idle(6);
+    assert!(fixture.by_label("Could not open").is_some(), "the story opens its dialog");
+    *fixture.data().value("title", "Could not open") = "Could not save";
+    fixture.idle(6);
+    assert!(fixture.by_label("Could not save").is_some(), "the changed knob shows in the open dialog");
+    assert!(fixture.by_label("Could not open").is_none(), "the dialog of the old knob value is gone");
 }
 
 #[trial]

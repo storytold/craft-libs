@@ -84,7 +84,7 @@ fn style_of(kinds: &[EffectKind]) -> LayerStyle {
 fn host(ui: &mut Ui, data: &mut StoryData, start: impl FnOnce() -> LayerStyleDraft, channels: &[Label]) -> StoryOutput {
     let words = Env::of(ui).words::<LayerStyleStoryWords>();
     let names: Vec<String> = channels.iter().map(|name| name.as_str().to_owned()).collect();
-    hosted(ui, data, || {
+    hosted(ui, data, (), || {
         HostedLayerStyle::new("Layer Style", start(), names)
             .blend_modes(blend_modes(&words))
             .patterns(patterns(&words))

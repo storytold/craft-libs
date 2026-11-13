@@ -20,7 +20,7 @@ mod preview;
 pub use dialog::{
     BelowRows, FooterExtra, HostedParamDialog, ParamDialog, ParamDialogOutput, ParamDialogWords, ParamLayout, ParamResult, ResetFooter, ResetPick,
 };
-pub use form::{FormCx, FormDialog, FormOutput};
+pub use form::{FormCx, FormDialog, FormDialogWords, FormOutput};
 pub use host_requests::{HostRequests, PreviewRequest};
 pub use path_row::{PathRow, PathRowOutput, PathRowWords};
 pub use preview::{

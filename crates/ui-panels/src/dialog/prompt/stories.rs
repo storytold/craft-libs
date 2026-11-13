@@ -56,7 +56,7 @@ fn prompt_with_extras(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(Alert<'static>, covers = [], drive = Drive::Never)]
 fn alert(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    hosted(ui, data, || HostedAlert::new(Alert::new("About", "Version 1.0").tone(Tone::Info, "A newer version is available.")))
+    hosted(ui, data, (), || HostedAlert::new(Alert::new("About", "Version 1.0").tone(Tone::Info, "A newer version is available.")))
 }
 
 #[story(StandardPrompt, covers = [], drive = Drive::Never)]

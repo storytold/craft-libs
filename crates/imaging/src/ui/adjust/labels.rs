@@ -25,8 +25,6 @@ craft_ui::words! {
         gray: "adjust.gray" = "Gray";
         /// The Levels panel's Auto button.
         auto: "adjust.auto" = "Auto";
-        /// The adjustment dialogs' Preview box.
-        preview: "adjust.preview" = "Preview";
         /// The Levels panel's group name (AccessKit) and Posterize's slider.
         levels: "adjust.levels" = "Levels";
         /// The Curves panel's group name (AccessKit).

@@ -61,7 +61,7 @@ use craft_ui::canvas_controls::{Marquee, MarqueeLook};
 use craft_ui::contract::{Bind, BodyCx, NoValue, Outcome, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
 use craft_ui::dialog::{DialogWords, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowTitle, FullWindowView, RasterOverlay, SideFooter};
 use craft_ui::layout_components::Row;
-use craft_ui::patterns::form_dialogs::ParamDialogWords;
+use craft_ui::patterns::form_dialogs::{FormDialogWords, ParamDialogWords};
 use craft_ui::primitives::{Checker, IconSpec};
 use craft_ui::rails::{LastUsed, RailTool, ToolRail, ToolSlot};
 use craft_ui::runtime::commands::{CommandSet as _, Commands as _};
@@ -467,7 +467,7 @@ impl ContentAwareFillWorkspace {
     /// The two side columns: the panel with the footer's content, and the Preview.
     fn show_sides(&mut self, ui: &mut Ui, env: &Env, source: &dyn FillSource) {
         let words = env.words::<FillWords>();
-        let params = env.words::<ParamDialogWords>();
+        let preview = env.words::<FormDialogWords>().preview.clone();
         let error = self.error.as_ref().map(|issue| issue.text(env));
         let sampling = self.session.sampling;
         let panel = FullWindowSide::new(words.name.clone())
@@ -476,7 +476,7 @@ impl ContentAwareFillWorkspace {
         if let Some(panel) = panel {
             self.absorb_panel(panel);
         }
-        FullWindowSide::new(params.preview.clone()).unscrolled().show(ui, |ui, _| {
+        FullWindowSide::new(preview).unscrolled().show(ui, |ui, _| {
             let image = source.preview().unwrap_or_else(|| source.image());
             FillPreviewPane::new(&mut self.preview_view, &mut self.framing, &self.preview, image)
                 .frame(source.sampling_window())

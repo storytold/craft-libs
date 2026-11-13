@@ -22,7 +22,7 @@ pub use new_guide::{HostedNewGuideDialog, NewGuideDialog, NewGuideOutput, NewGui
 use super::color_choice::{self, ColorChoice, ColorRowTexts, apply_color_answers};
 use crate::runtime::requests::HostAnswer;
 
-use super::{FormDialog, HostRequests, ParamDialogWords};
+use super::{FormDialog, FormDialogWords, HostRequests};
 use crate::canvas_data::{Guide, GuideColor};
 
 use crate::choice::Checkbox;
@@ -318,7 +318,7 @@ impl<'a> GuideLayoutDialog<'a> {
         let GuideLayoutDialog { units, document, values, artboards, existing, first_key, answers, open } = self;
         let env = Env::of(ui);
         let words = env.words::<GuideDialogWords>();
-        let preview_word = env.words::<ParamDialogWords>().preview.clone();
+        let preview_word = env.words::<FormDialogWords>().preview.clone();
         let number_units = env.units();
         let mut dialog = FormDialog::new(words.layout_title.clone(), values)
             .outer_gesture(true)

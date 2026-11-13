@@ -36,12 +36,12 @@ static CREDITS: LazyLock<Credits> = LazyLock::new(|| {
 fn about_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tab = *data.choice("tab", AboutTab::About, &TABS);
     let community = *data.value("community_button", true);
-    hosted(ui, data, || HostedAbout::new(info(community), CREDITS.clone()).tab(tab))
+    hosted(ui, data, (tab, community), || HostedAbout::new(info(community), CREDITS.clone()).tab(tab))
 }
 
 #[story(AboutDialog<'static>, covers = [], drive = Drive::Never)]
 fn about_dialog_contributors(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tab = *data.choice("tab", AboutTab::Contributors, &TABS);
     let community = *data.value("community_button", true);
-    hosted(ui, data, || HostedAbout::new(info(community), CREDITS.clone()).tab(tab))
+    hosted(ui, data, (tab, community), || HostedAbout::new(info(community), CREDITS.clone()).tab(tab))
 }
