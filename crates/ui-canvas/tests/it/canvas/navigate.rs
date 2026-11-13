@@ -234,6 +234,33 @@ fn a_wheel_line_pans_the_canvas_photoshops_line_and_ctrl_alt_zooms_as_alt_does()
 }
 
 #[trial]
+fn a_held_alt_key_is_in_the_wheels_modifiers_when_the_wheel_events_miss_it() {
+    // Windows can report a held Alt in its key events and not in the wheel's modifier state.
+    let alt_key = |pressed: bool, repeat: bool| egui::Event::Key {
+        key: Key::AltLeft,
+        physical_key: Some(Key::AltLeft),
+        pressed,
+        repeat,
+        modifiers: Modifiers::NONE,
+    };
+    let (mut fixture, view, _, _) = wheel_rig(Platform::Windows);
+    fixture.frame(vec![alt_key(true, false)]);
+    let before = view.get();
+    wheel_line(&mut fixture, &view, 1.0, Modifiers::NONE);
+    assert!((view.get().zoom / before.zoom - WheelNavigation::NOTCH).abs() < 1e-3, "Alt held from its press: the wheel zooms");
+    // A pass whose first Alt event is a repeat: Alt was already down.
+    fixture.frame(vec![alt_key(true, true)]);
+    let held = view.get();
+    wheel_line(&mut fixture, &view, 1.0, Modifiers::NONE);
+    assert!(view.get().zoom > held.zoom, "Alt still held: the wheel zooms");
+    fixture.frame(vec![alt_key(false, false)]);
+    let released = view.get();
+    wheel_line(&mut fixture, &view, -1.0, Modifiers::NONE);
+    assert_eq!(view.get().zoom, released.zoom, "Alt released: a plain wheel line does not zoom");
+    assert_ne!(view.get().center, released.center, "it pans");
+}
+
+#[trial]
 fn a_focused_field_takes_the_plain_wheel_over_the_canvas_and_leaves_it_the_view_keys() {
     let (mut fixture, view, number, _) = wheel_rig(Platform::Linux);
     let field = fixture.by_label("Smoothing").expect("the number field");
@@ -304,4 +331,21 @@ fn a_wheel_zoom_keeps_the_point_under_the_pointer_where_an_app_widget_covers_the
     let after = view.get();
     assert!(after.zoom > before.zoom, "Alt + wheel zooms");
     assert!(after.to_screen(under).distance(at) < 0.5, "the document point stays under the pointer: {before:?} -> {after:?}");
+}
+
+#[trial]
+fn a_canvas_in_a_sizing_pass_of_its_parent_shows_nothing_and_reports_an_idle_press() {
+    // An egui window lays its contents out in a sizing pass in its first frame, as a document window in the app's
+    // main window does.
+    let idle = Rc::new(Cell::new(None));
+    let seen = Rc::clone(&idle);
+    let mut fixture = Fixture::new(move |ui| {
+        ui.scope_builder(egui::UiBuilder::new().sizing_pass(), |ui| {
+            let given = CanvasView::new(ui.available_rect_before_wrap(), Point::new(50.0, 50.0), 1.0);
+            let canvas = Canvas::new("Document").document(Size::new(100.0, 100.0)).view(given).show(ui, |_, _| {});
+            seen.set(Some(canvas.output.press.phase.start().is_none()));
+        });
+    });
+    fixture.settle();
+    assert_eq!(idle.get(), Some(true), "the canvas ran and its press is idle");
 }

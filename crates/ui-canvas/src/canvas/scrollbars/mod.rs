@@ -133,8 +133,11 @@ fn moved(view: &CanvasView, doc: DocRect, axis: Axis, range: &Range<f64>) -> Can
     next
 }
 
-/// Clamp one axis of the view centre with overscroll off, as Photoshop 25.4 does: a document larger than the view
-/// can't leave its edges, and one smaller than the view stays inside it, where zooming put it.
+/// Clamp one axis of the view centre with overscroll off: a document larger than the view can't leave its edges, and
+/// one smaller than the view (or exactly its size) is centred in it, so zooming out around the pointer keeps it in the
+/// middle. Photoshop 25.4 was measured leaving a smaller document where zooming put it; reports of Photoshop itself
+/// say it stays centred with Overscroll off, which is what turning Overscroll off asks for. Overscroll on keeps the
+/// free view.
 fn clamp_axis(center: f64, len: f64, size: f64, zoom: f64) -> f64 {
     if !(zoom.is_finite() && zoom > 0.0 && len.is_finite() && len > 0.0 && size.is_finite() && size > 0.0) {
         return center;
@@ -143,8 +146,10 @@ fn clamp_axis(center: f64, len: f64, size: f64, zoom: f64) -> f64 {
         return len / 2.0;
     }
     let half = size / zoom / 2.0;
-    let (a, b) = (half, len - half);
-    center.clamp(a.min(b), a.max(b))
+    if 2.0 * half >= len {
+        return len / 2.0;
+    }
+    center.clamp(half, len - half)
 }
 
 /// The four corners of a document rectangle.
@@ -180,7 +185,7 @@ impl<'a> CanvasScrollbars<'a> {
     }
 
     /// Applies overscroll off to `view` over the document `doc`: the view can't leave the document's edges, and a
-    /// document smaller than the view stays inside it. True when the view moved (then repaint).
+    /// document smaller than the view is centred in it. True when the view moved (then repaint).
     pub fn clamp(view: &mut CanvasView, doc: DocRect) -> bool {
         if !(doc.width() > 0.0 && doc.height() > 0.0) || !view.zoom.is_finite() || view.zoom <= 0.0 {
             return false;

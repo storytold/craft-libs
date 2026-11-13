@@ -358,6 +358,7 @@ fn blank_core<'a>(
         command,
         state: StateSet::default(),
         stated: false,
+        parted: false,
         ink,
         intents: keys::Intents::default(),
         memory,
@@ -866,6 +867,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     p.real = true;
     let inspected = p.trace.recording() && inspect::open_element(ui, id, facts.name);
     let e = &mut *p.p;
+    e.core().parted = true;
     // 7 parts
     p.trace.mark(Step::Parts);
     let flow = Flow::new(rect, rtl);
