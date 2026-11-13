@@ -3,11 +3,11 @@
 use crate::bars::{Bar, BarKind};
 use crate::canvas::rotate::RIM;
 use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas_with};
-use crate::canvas::{Canvas, NavigateBar, NavigationOptions, RotateView, RotateViewOutput};
+use crate::canvas::{Canvas, NavigateBar, NavigationOptions, RotateView, RotateViewOutput, ViewTarget};
 use crate::contract::{Bind, Show as _, ShowContainer as _, Validity};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
-use craft_behavior::kurbo::{Point, Size};
+use craft_behavior::kurbo::Point;
 use craft_behavior::{CanvasView, Mixed};
 use egui::{Rect, Ui, Vec2};
 
@@ -59,14 +59,14 @@ fn too_far(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     })
 }
 
-/// Shows a navigation tool's options bar from `bar` over the view `view` above a canvas on the story document that
-/// shows the same view, and returns the bar's output. The canvas fits the view on its first pass and is the instance
-/// the bar's view commands reach.
-fn bar_over_canvas(ui: &mut Ui, view: &mut CanvasView, mut bar: impl FnMut(&mut Ui, Bind<'_, CanvasView>) -> StoryOutput) -> StoryOutput {
-    let shown = Bar::new("Options", BarKind::Options).show(ui, |ui, _| bar(ui, Bind::bound(&mut *view)));
+/// Shows a navigation tool's options bar from `bar` over the view `view` and the story document's target above a canvas
+/// that shows the same view of the same target, and returns the bar's output. The canvas fits the view on its first
+/// pass and is the instance the bar's view commands reach.
+fn bar_over_canvas(ui: &mut Ui, view: &mut CanvasView, mut bar: impl FnMut(&mut Ui, Bind<'_, CanvasView>, ViewTarget) -> StoryOutput) -> StoryOutput {
+    let target = ViewTarget::new(StoryDocument::STANDARD.rect().size());
+    let shown = Bar::new("Options", BarKind::Options).show(ui, |ui, _| bar(ui, Bind::bound(&mut *view), target));
     let room = crate::testing::stage(ui);
-    let document = StoryDocument::STANDARD.rect().size();
-    on_canvas_with(ui, room, Canvas::new("Document").view(Bind::bound(view)).document(document), Some(&StoryDocument::STANDARD), |_, _| {
+    on_canvas_with(ui, room, Canvas::new("Document").view(Bind::bound(view)).document(target), Some(&StoryDocument::STANDARD), |_, _| {
         StoryOutput::default()
     });
     shown.inner.unwrap_or_default()
@@ -90,18 +90,17 @@ impl Default for Navigation {
 #[story(NavigateBar<'static>, covers = [], drive = Drive::Never)]
 fn zoom_bar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let Navigation { view, options, out } = data.value("navigation", Navigation::default());
-    let document: Size = StoryDocument::STANDARD.rect().size();
-    bar_over_canvas(ui, view, |ui, bound| NavigateBar::zoom(bound, document, &mut *options, Bind::bound(&mut *out)).show(ui).into())
+    bar_over_canvas(ui, view, |ui, bound, target| NavigateBar::zoom(bound, target, &mut *options, Bind::bound(&mut *out)).show(ui).into())
 }
 
 #[story(NavigateBar<'static>, covers = [], drive = Drive::Never)]
 fn rotate_view_bar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let Navigation { view, .. } = data.value("navigation", Navigation::default());
-    bar_over_canvas(ui, view, |ui, bound| NavigateBar::rotate_view(bound).show(ui).into())
+    bar_over_canvas(ui, view, |ui, bound, _| NavigateBar::rotate_view(bound).show(ui).into())
 }
 
 #[story(NavigateBar<'static>, covers = [], drive = Drive::Never)]
 fn hand_bar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let Navigation { view, options, .. } = data.value("navigation", Navigation::default());
-    bar_over_canvas(ui, view, |ui, _| NavigateBar::hand(&mut *options).show(ui).into())
+    bar_over_canvas(ui, view, |ui, _, _| NavigateBar::hand(&mut *options).show(ui).into())
 }

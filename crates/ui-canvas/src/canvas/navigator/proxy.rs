@@ -3,7 +3,7 @@
 //! artboards-only preview).
 
 use craft_behavior::canvas::zoom;
-use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
+use craft_behavior::kurbo::{Point, Rect as DocRect, Size, Vec2 as DocVec};
 use craft_behavior::{CanvasView, ZoomLadder};
 use egui::{Pos2, Rect, pos2, vec2};
 
@@ -76,7 +76,7 @@ pub fn zoom_to_document_rect(view: &mut CanvasView, doc_rect: DocRect, size: Siz
         view.zoom = CanvasView::points_per_unit(device, ppp);
         view.center = Point::new(x0 + width / 2.0, y0 + height / 2.0);
     } else {
-        zoom::fit_rect(view, DocRect::new(x0, y0, x1, y1), size, ppp, 0.0);
+        zoom::fit_rect(view, DocRect::new(x0, y0, x1, y1), size, ppp, DocVec::ZERO);
     }
     *view != before
 }

@@ -69,6 +69,7 @@ mod momentary;
 mod navigate;
 mod rotate;
 mod tools;
+mod zoom_field;
 mod zoom_motion;
 
 pub use momentary::{Momentary, MomentaryCommands, MomentaryTool};

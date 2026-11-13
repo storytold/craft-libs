@@ -8,7 +8,7 @@ use crate::display::{Elide, Text};
 use crate::form::Field;
 use crate::layout_components::Row;
 use crate::runtime::commands::{self, CommandRef};
-use crate::runtime::env::{Env, Label, Units};
+use crate::runtime::env::{Env, Label, UnitKind, Units};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::Size;
 use craft_behavior::{CanvasView, EditEvents, IconId, Mixed, PixelSize, ZoomLadder};
@@ -212,6 +212,7 @@ impl<'a> StatusReadout<'a> {
             let field = Field::new(words.readout_zoom.clone()).side(glyph).sizing(Sizing::Content).show(ui, |ui, _| {
                 let mut number = crate::text::NumberField::new(words.readout_zoom.clone(), Bind::given(device.map(|device| device * 100.0)))
                     .codec(env.units().zoom_codec())
+                    .unit_kind(UnitKind::Percent)
                     .scrub_by_label()
                     .enabled(current.is_some());
                 if let Some(device) = device {

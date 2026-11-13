@@ -10,7 +10,7 @@ use crate::display::{Progress, Text};
 use crate::layout_components::Row;
 use crate::primitives::ContentPainterCx;
 use crate::runtime::access::Access;
-use crate::runtime::env::{Env, Label};
+use crate::runtime::env::{Env, Label, UnitKind};
 use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use crate::style::{ComponentStyle, FocusLook, StyleCx};
 use crate::text::NumberField;
@@ -596,6 +596,7 @@ impl PreviewZoom {
             let out = IconButton::new(IconId::new("minus")).label(words.zoom_out.clone()).enabled(self.view.can_zoom_out()).show(ui);
             let field = NumberField::new(words.zoom.clone(), Bind::given(Some(percent(self.view.transform.scale))))
                 .codec(env.units().zoom_codec())
+                .unit_kind(UnitKind::Percent)
                 .range(range.clone())
                 .enabled(!self.view.fixed)
                 .show(ui);

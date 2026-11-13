@@ -2,7 +2,8 @@
 
 use super::NavigationOptions;
 use crate::buttons::Button;
-use crate::canvas::{CanvasWords, ViewCommands};
+use crate::canvas::zoom_field::show_zoom_field;
+use crate::canvas::{CanvasWords, ViewCommands, ViewTarget};
 use crate::choice::{Checkbox, Segmented};
 use crate::contract::{Bind, BodyCx, Entry, Gap, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
 use crate::display::Divider;
@@ -10,10 +11,8 @@ use crate::form::Field;
 use crate::layout_components::Row;
 use crate::runtime::env::{Env, UnitKind};
 use crate::text::NumberField;
-use craft_behavior::canvas::zoom;
 use craft_behavior::geometry::crop::normalized_angle;
-use craft_behavior::kurbo::Size;
-use craft_behavior::{CanvasView, EditEvents, IconId, Mixed, ZoomLadder};
+use craft_behavior::{CanvasView, EditEvents, IconId, Mixed};
 use egui::{Response, Ui};
 
 /// What the navigate bar reports.
@@ -36,7 +35,7 @@ impl Outcome for NavigateBarOutput {
 
 /// The members of one tool's bar.
 enum Members<'a> {
-    Zoom { view: Bind<'a, CanvasView>, document: Size, options: &'a mut NavigationOptions, out: Bind<'a, bool> },
+    Zoom { view: Bind<'a, CanvasView>, target: ViewTarget, options: &'a mut NavigationOptions, out: Bind<'a, bool> },
     RotateView { view: Bind<'a, CanvasView> },
     Hand { options: &'a mut NavigationOptions },
 }
@@ -51,8 +50,8 @@ enum Members<'a> {
 /// - **Rotate View:** the Angle field, then Reset View.
 /// - **Hand:** Scroll All Windows, then 100%, Fit Screen and Fill Screen.
 ///
-/// The fields edit the bound view: Zoom in percent, its range the document's zoom range widened to include the current
-/// zoom, its arrows stepping the zoom ladder, the centre kept; Angle in degrees from -180 to 180. The buttons are the
+/// The fields edit the bound view: Zoom is the canvas view's zoom field (percent, the document's range widened to the
+/// current zoom, ladder steps, the centre kept); Angle is in degrees from -180 to 180. The buttons are the
 /// [`ViewCommands`]: they act on the canvas that holds the key focus (else the one that held it last), which applies
 /// them with its document and eases them under Animated Zoom; their enabled state comes from that canvas. The check
 /// boxes write into the [`NavigationOptions`].
@@ -63,10 +62,10 @@ pub struct NavigateBar<'a> {
 }
 
 impl<'a> NavigateBar<'a> {
-    /// The Zoom tool's options over `view`, a document of `document` units, the user's `options` and the tool's
-    /// direction `out` (Zoom Out picked).
-    pub fn zoom(view: Bind<'a, CanvasView>, document: Size, options: &'a mut NavigationOptions, out: Bind<'a, bool>) -> Self {
-        NavigateBar { members: Members::Zoom { view, document, options, out } }
+    /// The Zoom tool's options over `view`, the user's `options` and the tool's direction `out` (Zoom Out picked).
+    /// `target` is the document the view shows, the one the canvas is given ([`Canvas::document`](crate::canvas::Canvas::document)).
+    pub fn zoom(view: Bind<'a, CanvasView>, target: impl Into<ViewTarget>, options: &'a mut NavigationOptions, out: Bind<'a, bool>) -> Self {
+        NavigateBar { members: Members::Zoom { view, target: target.into(), options, out } }
     }
 
     /// The Rotate View tool's options over `view`.
@@ -84,29 +83,17 @@ impl<'a> NavigateBar<'a> {
         let NavigateBar { members } = self;
         let env = Env::of(ui);
         let words = env.words::<CanvasWords>();
-        let units = env.units();
-        let pixels_per_point = env.scale.0;
         let mut events = EditEvents::new();
         let row = Row::new().gap(Gap::Item);
         let shown = match members {
-            Members::Zoom { mut view, document, options, mut out } => row.show(ui, |ui, cx| {
+            Members::Zoom { mut view, target, options, mut out } => row.show(ui, |ui, cx| {
                 let directions = [
                     Entry::new(false, words.navigate_zoom_in.clone()).icon(IconId::new("zoom_in")),
                     Entry::new(true, words.navigate_zoom_out.clone()).icon(IconId::new("zoom_out")),
                 ];
                 Segmented::new(words.navigate_direction.clone(), out.reborrowed(), &directions).show(ui);
                 if let Some(Mixed::Same(current)) = view.reborrow().read(cx) {
-                    let device = zoom::device(&current, pixels_per_point);
-                    let ladder = |percent: f64, dir: i32| ZoomLadder::step(percent / 100.0, dir, document) * 100.0;
-                    let field = NumberField::new(words.navigate_zoom.clone(), Bind::given(Some(device * 100.0)))
-                        .codec(units.zoom_codec())
-                        .range(ZoomLadder::percent_range(device, document))
-                        .stepper(ladder)
-                        .show(ui);
-                    let at = |percent: Option<f64>| {
-                        percent.map_or(current, |percent| zoom::with_device(&current, percent / 100.0, document, pixels_per_point))
-                    };
-                    events = write(&mut view, cx, field.edit.events.clone().map(at));
+                    events = write(&mut view, cx, show_zoom_field(ui, words.navigate_zoom.clone(), current, target.document));
                 }
                 Divider::vertical().show(ui);
                 Checkbox::new(Bind::bound(&mut options.zoom_resizes_windows)).label(words.navigate_resize_windows.clone()).show(ui);

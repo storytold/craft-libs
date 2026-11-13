@@ -1,11 +1,11 @@
 //! `NavigatorZoomRow`: the Navigator's percent field, Zoom Out, slider and Zoom In.
 
 use crate::buttons::IconButton;
+use crate::canvas::zoom_field::show_zoom_field;
 use crate::canvas::{CanvasWords, ViewCommands};
 use crate::contract::{Bind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
 use crate::layout_components::Row;
 use crate::runtime::env::Env;
-use crate::text::NumberField;
 use crate::value_drag::{Slider, SliderScale};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::Size;
@@ -34,10 +34,8 @@ impl Outcome for NavigatorZoomRowOutput {
 /// The Navigator's zoom row: a percent field, Zoom Out, a slider over the whole zoom range and Zoom In, in reading
 /// order.
 ///
-/// - The field shows the zoom in percent, its range the document's zoom range widened to include the current zoom, so
-///   the field never pulls the zoom back. A typed value applies without animation; Escape in the field restores the
-///   zoom from before the edit.
-/// - The field shows up to two decimals, and its arrows and wheel step the zoom ladder.
+/// - The field is the canvas view's zoom field: percent, the document's range widened to the current zoom, ladder
+///   steps. A typed value applies without animation; Escape in the field restores the zoom from before the edit.
 /// - Zoom Out and Zoom In are the [`ViewCommands::ZoomOut`] and [`ViewCommands::ZoomIn`] commands: label, chord, enabled
 ///   state and action come from the active canvas, which steps its view and reports the ease under Animated Zoom in
 ///   [`CanvasOutput`](crate::canvas::CanvasOutput).
@@ -72,17 +70,10 @@ impl<'a> NavigatorZoomRow<'a> {
         let shown = Row::new().show(ui, |ui, cx| {
             let Some(Mixed::Same(current)) = view.reborrow().read(cx) else { return };
             let device = zoom::device(&current, pixels_per_point);
-            let range = ZoomLadder::percent_range(device, document);
             let at = |device: f64| zoom::with_device(&current, device, document, pixels_per_point);
             let mut edits: Vec<EditEvent<CanvasView>> = Vec::new();
 
-            let ladder = |percent: f64, dir: i32| ZoomLadder::step(percent / 100.0, dir, document) * 100.0;
-            let field = NumberField::new(zoom_label.clone(), Bind::given(Some(device * 100.0)))
-                .codec(units.zoom_codec())
-                .range(range.clone())
-                .stepper(ladder)
-                .show(ui);
-            edits.extend(field.edit.events.clone().map(|percent| percent.map_or(current, |percent| at(percent / 100.0))));
+            edits.extend(show_zoom_field(ui, zoom_label.clone(), current, document));
 
             IconButton::command(IconId::new("minus"), ViewCommands::ZoomOut).show(ui);
 
