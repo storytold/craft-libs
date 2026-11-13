@@ -5,6 +5,7 @@
 //! their own material models.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![forbid(unsafe_code)]
 
 use std::collections::HashMap;
 
@@ -57,7 +58,8 @@ pub enum Shader {
 /// The value connected to a shader input.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
-    /// A finite numeric literal, kept in the source color space.
+    /// A finite numeric literal, kept in the source color space. `colorspace` is the input's
+    /// explicit tag; document-level defaults remain available on [`Document::root`].
     Constant { values: Vec<f32>, colorspace: Option<String> },
     /// A file path from an image node, with the effective file prefix applied.
     Image(String),
@@ -358,10 +360,8 @@ fn resolve_value(
         return None;
     }
     if let Some(value) = input.attr("value") {
-        return parse_numbers(value).map(|values| Found {
-            value: Value::Constant { values, colorspace: input.attr("colorspace").or_else(|| root.attr("colorspace")).map(str::to_owned) },
-            tiling: None,
-        });
+        return parse_numbers(value)
+            .map(|values| Found { value: Value::Constant { values, colorspace: input.attr("colorspace").map(str::to_owned) }, tiling: None });
     }
     let target = if let Some(graph) = input.attr("nodegraph") {
         let selected = match input.attr("output") {
