@@ -3149,8 +3149,9 @@ The command board: the registry and typed sets, per-frame state, the queue, firi
 
 ## `craft_ui::runtime::cursor`
 
-The cursor service (8.5): requests of a pass collect here, the end hook picks the winner and records it.
+The cursor service (8.5): requests of a pass collect here, the end hook picks the winner and records it, and a
 
+- `craft_ui::runtime::cursor::CursorBitmap`: `pub struct CursorBitmap { pub rgba: Arc<[u8]>, pub size: [u16; 2], pub hotspot: [u16; 2] }`. A cursor image in straight (not premultiplied) RGBA, row by row, its hotspot on the centre pixel.
 - `craft_ui::runtime::cursor::current`: `pub fn current(ctx: &Context) -> Option<Cursor>`. The cursor the last pass of the running viewport settled on; `None` is the default arrow.
 
 ## `craft_ui::runtime::drag`
@@ -4215,9 +4216,9 @@ A fixed-rate frame driver over a context.
   - `pub fn host(&mut self, host: Arc<Host>)`. The host every following frame is given.
   - `pub fn root(&mut self, root: RootEnv)`. The root values every following frame is given.
   - `pub fn commands(&mut self, commands: CommandInput)`. The command input every following frame is given.
-  - `pub fn frame(&mut self, events: Vec<Event>, mut ui: impl FnMut(&mut Ui)) -> usize`. One frame with `events`; `ui` runs once per pass. Returns the number of passes.
+  - `pub fn frame(&mut self, events: Vec<Event>, ui: impl FnMut(&mut Ui)) -> usize`. One frame with `events`; `ui` runs once per pass. Returns the number of passes.
+  - `pub fn frame_in_viewport(&mut self, viewport: egui::ViewportId, events: Vec<Event>, mut ui: impl FnMut(&mut Ui)) -> usize`. One frame of `viewport`, a child window of the root while the root stays live, with `events`; `ui` runs once
   - `pub fn frame_without_input(&mut self, events: Vec<Event>, ui: impl FnMut(&mut Ui)) -> bool`. One frame with no `set_input`, as an app that never calls it would drive it: the root values and the
-  - `pub fn frame_in_viewport(&mut self, viewport: egui::ViewportId, ui: impl FnMut(&mut Ui))`. One pass with no events in `viewport`, a child window of the root, between two frames of the root.
   - `pub fn frame_shapes(&mut self, mut ui: impl FnMut(&mut Ui)) -> Vec<egui::Shape>`. One frame with no events; returns the shapes it painted, nested shapes flattened.
   - `pub fn hold(&mut self, modifiers: egui::Modifiers)`. The modifiers held in every following frame.
   - `pub fn hover_files(&mut self, names: &[&str])`. Files named `names` are dragged over the window from the OS, in this frame and every following one until they
@@ -4236,6 +4237,7 @@ A fixed-rate frame driver over a context.
   - `pub fn repaint_delay(&self) -> Option<Duration>`. The wait the last frame asked for before the next pass: `Duration::ZERO` for an immediate repaint,
   - `pub fn repaint_requested(&self) -> bool`. Whether anything asked for a pass since the last frame ended.
   - `pub fn cursor_icon(&self) -> egui::CursorIcon`. The system cursor the last frame's output asked for.
+  - `pub fn cursor_image(&self) -> Option<&egui::CustomCursorImage>`. The cursor image the last frame's output asked for, which the integration shows instead of the system cursor.
 - `craft_ui::testing::frames::announce_text`: `pub fn announce_text(ctx: &Context, text: &str)`. Adds `text` to the next frame output's announcements, as the runtime's access service does.
 - `craft_ui::testing::frames::show_area`: `pub fn show_area<R>(ctx: &Context, name: &'static str, body: impl FnOnce(&mut Ui) -> R) -> R`. Shows an egui `Area` and runs `body` on its `Ui`.
 - `craft_ui::testing::frames::widest_layer`: `pub fn widest_layer(ctx: &Context) -> f32`. The width of the widest layer above the background, 0 when there is none.
