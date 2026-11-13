@@ -26,6 +26,8 @@
 //! shows them in.
 
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
@@ -35,6 +37,8 @@ use serde_json::{Value as Json, json};
 
 mod app;
 mod backend;
+#[cfg(test)]
+mod conflict_tests;
 mod pages;
 #[cfg(test)]
 mod tests;
@@ -210,6 +214,16 @@ pub struct CloudFiles {
     /// popup from this gesture instead of inferring it from `status`, which can
     /// stay set after a failed sign-in.
     sign_in_from_menu: bool,
+    /// Bumped on sign-out and on a new sign-in. Stamped onto every [`Post`]
+    /// handed out by [`submit`] so a reply to a job issued before the bump is
+    /// dropped rather than applied to the session that replaced it.
+    account_generation: Arc<AtomicU64>,
+    /// The document Save As must act on, when it is not the active one.
+    ///
+    /// Set only by the conflict modal's "Save as a copy", so the copy it asks
+    /// for is made from the conflicted document even if the user has since
+    /// switched to another tab. Consumed by the next [`save_as`] call.
+    save_as_target: Option<u64>,
 }
 
 impl Default for CloudFiles {
@@ -240,6 +254,8 @@ impl CloudFiles {
             sharing_save: false,
             guest: None,
             sign_in_from_menu: false,
+            account_generation: Arc::new(AtomicU64::new(0)),
+            save_as_target: None,
         }
     }
 
@@ -315,7 +331,7 @@ pub fn can_converse<A: CloudApp>(app: &A) -> bool {
 pub fn submit<A: CloudApp>(app: &A, job: Job) {
     let cloud = app.cloud();
     if let Some(backend) = &cloud.backend {
-        backend.submit(job, Post::new(cloud.events.0.clone()));
+        backend.submit(job, Post::new(cloud.events.0.clone(), cloud.account_generation.clone()));
     }
 }
 
@@ -353,6 +369,12 @@ pub fn sign_in<A: CloudApp>(app: &mut A) {
     cloud.asked_account = true;
     cloud.link = None;
     cloud.status = Some(working);
+    // A new session. A job the previous one left outstanding may never
+    // answer, and if it does, that answer is not about this account: see
+    // `Post::send`. Busy goes with it, or a stuck read from before this
+    // sign-in would leave Save refused for a session that never asked for it.
+    cloud.account_generation.fetch_add(1, Ordering::Relaxed);
+    cloud.busy = None;
     submit(app, Job::SignIn);
 }
 
@@ -371,6 +393,13 @@ pub fn sign_out<A: CloudApp>(app: &mut A) {
     cloud.shared = Folder::default();
     cloud.origins.clear();
     cloud.status = Some(signed_out);
+    // The session this window had ends here. A job it started may never
+    // answer, and a reply that does arrive late must not land on whatever
+    // comes next: see `Post::send`. Busy goes with it, so an open or a save
+    // that never heard back does not refuse every one after it forever.
+    cloud.account_generation.fetch_add(1, Ordering::Relaxed);
+    cloud.busy = None;
+    cloud.save_as_target = None;
     submit(app, Job::SignOut);
 }
 
@@ -552,9 +581,14 @@ pub fn save<A: CloudApp>(app: &mut A) -> Result<Json, String> {
 }
 
 /// Save As: writes a new document into `folder` under `name`.
+///
+/// Acts on [`CloudFiles::save_as_target`] when the conflict modal's "Save as
+/// a copy" set one, so the copy is made from the document that conflicted
+/// even if another tab is active by the time this runs. Otherwise, the
+/// active document, same as every other ordinary Save As.
 pub fn save_as<A: CloudApp>(app: &mut A, folder: &str, name: &str) -> Result<Json, String> {
     let kind = app.kind();
-    let uid = app.active().ok_or(format!("no {} open", kind.noun))?;
+    let uid = app.cloud_mut().save_as_target.take().or_else(|| app.active()).ok_or(format!("no {} open", kind.noun))?;
     let name = document_name(name, kind);
     if name.is_empty() {
         return Err("type a file name".to_owned());
