@@ -367,6 +367,7 @@ mod tests {
         for text in ["false", "-1", "1", "1.5", "\"scalar\"", "null"] {
             assert!(matches!(File::read(text), Err(Error::NotStencilCraft)));
         }
+        assert!(matches!(File::read_from(Cursor::new(br#""scalar""#)), Err(Error::NotStencilCraft)));
     }
 
     #[test]
