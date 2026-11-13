@@ -1894,6 +1894,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-pcraft-bundle"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "craft-atomic",
+ "craft-pcraft-format",
+ "craft-zip",
+ "ruzstd",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-pcraft-format"
 version = "0.1.0"
 dependencies = [
