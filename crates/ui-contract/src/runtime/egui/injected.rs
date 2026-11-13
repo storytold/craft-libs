@@ -4,8 +4,8 @@
 //! A request appends frames of events to its viewport's queue. Each pass's input hook ([`input_hook`]) appends
 //! the next frame, so a move, a press, a release and a key's down and up land on separate passes as real input
 //! does, and pass through the same input stages. A step stays in flight until a pass of its viewport has run. A
-//! step whose pass has not run is withdrawn when the focus changed since it was injected, and the application
-//! withdraws a viewport's queue when its document changed ([`withdraw`]). Screen points are egui points.
+//! step whose pass has not run is withdrawn when the focus changed since it was injected, and when the application
+//! withdraws the viewport's input because its document changed ([`withdraw`]). Screen points are egui points.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -228,6 +228,8 @@ struct Flight {
 struct Lane {
     queue: VecDeque<Step>,
     flight: Option<Flight>,
+    /// The application withdrew the lane's input ([`withdraw`]); the next input hook carries it out.
+    withdrawn: bool,
 }
 
 /// The queues of injected input, one per viewport that has any, and what injected input holds in each viewport.
@@ -269,6 +271,17 @@ impl Injected {
     }
 }
 
+/// Withdraws the step in flight of `viewport`, whose pass has not run, and the queue behind it: the integration's
+/// preserved copy of the step leaves `events`, and what was held before the step is held again.
+fn withdraw_flight(injected: &mut Injected, viewport: ViewportId, events: &mut Vec<Event>) {
+    let Some(lane) = injected.lanes.remove(&viewport) else { return };
+    if let Some(flight) = lane.flight {
+        remove_event_run(events, &flight.step.events);
+        injected.held.insert(viewport, flight.before);
+    }
+    injected.withdrawn = true;
+}
+
 /// Removes one contiguous run equal to `step` from `events` (the integration preserves events of a pass it
 /// skipped). A no-op when the run is not present.
 fn remove_event_run(events: &mut Vec<Event>, step: &[Event]) {
@@ -289,6 +302,21 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut egui::RawInput) -> bool {
     let mut wake = None;
     let follow = Service::<Injected>::run(ctx, |injected| {
         let Some(lane) = injected.lanes.get_mut(&viewport) else { return false };
+        if lane.withdrawn {
+            if lane.flight.as_ref().is_some_and(|flight| flight.pass >= pass_nr) {
+                withdraw_flight(injected, viewport, &mut input.events);
+                return false;
+            }
+            lane.withdrawn = false;
+            if !lane.queue.is_empty() {
+                lane.queue.clear();
+                injected.withdrawn = true;
+            }
+            if lane.flight.is_none() {
+                injected.lanes.remove(&viewport);
+                return false;
+            }
+        }
         if let Some(flight) = &lane.flight {
             if flight.pass < pass_nr {
                 if let (Some(until), Some(now)) = (flight.until, input.time)
@@ -299,11 +327,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut egui::RawInput) -> bool {
                 }
                 lane.flight = None;
             } else if flight.focus != focused {
-                remove_event_run(&mut input.events, &flight.step.events);
-                let before = flight.before.clone();
-                injected.held.insert(viewport, before);
-                injected.withdrawn = true;
-                injected.lanes.remove(&viewport);
+                withdraw_flight(injected, viewport, &mut input.events);
                 return false;
             } else {
                 return !lane.queue.is_empty();
@@ -454,14 +478,15 @@ pub(crate) fn in_pass(ctx: &Context) -> bool {
     })
 }
 
-/// Drops the queue of `viewport`: the application's document changed. A pending queue counts as withdrawn
-/// ([`take_withdrawn`]).
+/// Withdraws the injected input of `viewport`: the application's document changed. The viewport's next input hook
+/// carries it out per step: a step handed to the input whose pass has not run leaves the input with the queue behind
+/// it, and what was held before it is held again; after a step whose pass has run, only the queue is dropped.
+/// Anything dropped counts as withdrawn ([`take_withdrawn`]). The application withdraws from its raw input hook,
+/// which runs right before the framework's, so every request queued before that hook is dropped with the rest.
 pub(crate) fn withdraw(ctx: &Context, viewport: ViewportId) {
     Service::<Injected>::run(ctx, |injected| {
-        if let Some(lane) = injected.lanes.remove(&viewport)
-            && (lane.flight.is_some() || !lane.queue.is_empty())
-        {
-            injected.withdrawn = true;
+        if let Some(lane) = injected.lanes.get_mut(&viewport) {
+            lane.withdrawn = true;
         }
     });
 }

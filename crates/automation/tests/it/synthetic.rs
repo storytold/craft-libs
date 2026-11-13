@@ -18,6 +18,7 @@ struct Seen {
     alt: bool,
     shift: bool,
     space_down: bool,
+    any_key_down: bool,
     events: Vec<Event>,
     injected: bool,
 }
@@ -44,6 +45,7 @@ impl Rig {
                 alt: i.modifiers.alt,
                 shift: i.modifiers.shift,
                 space_down: i.keys_down.contains(&Key::Space),
+                any_key_down: !i.keys_down.is_empty(),
                 events: i.events.clone(),
                 injected,
             }));
@@ -199,9 +201,9 @@ fn document_points_need_a_canvas() {
     assert_eq!(screen, Some(Ok(())));
 }
 
-/// A step handed to the input whose pass has not run is withdrawn when the focus moved: the integration's preserved
-/// copy leaves the input, and the waiters fail with `TARGET_CHANGED`. The application's document withdraw does the
-/// same for what is queued.
+/// A step handed to the input whose pass has not run is withdrawn when the focus moved, and when the application
+/// withdraws the input because its document changed: the integration's preserved copy leaves the input, no key
+/// stays down, and the waiters fail with `TARGET_CHANGED`.
 #[trial]
 fn queued_input_is_withdrawn_when_its_target_changes() {
     use craft_automation::control::{ControlChannel, ControlRequest, Reply};
@@ -232,7 +234,14 @@ fn queued_input_is_withdrawn_when_its_target_changes() {
 
     input_method("ui.key", &json!({"key": "A"}), &host, ViewportId::ROOT, &map).expect("a method").expect("valid");
     let reply = waiting(&mut channel);
+    let handed = hook_without_pass(&ctx, ViewportId::ROOT);
+    assert!(!handed.is_empty(), "the press was handed to the input");
     host.withdraw_injected(ViewportId::ROOT);
+    rig.take();
+    rig.fx.frame(handed);
+    let passes = rig.take();
+    assert!(passes.iter().flat_map(|pass| &pass.events).all(|event| !matches!(event, Event::Key { .. })), "the preserved press is removed");
+    assert!(passes.iter().all(|pass| !pass.any_key_down), "no key stays down");
     channel.poll_input(&host);
     let answer = reply.try_recv().expect("the waiter is answered");
     assert!(answer["error"].as_str().is_some_and(|error| error.contains(TARGET_CHANGED)), "{answer}");

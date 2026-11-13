@@ -170,8 +170,10 @@ impl WindowHost {
         injected::inject_text(&self.ctx, viewport, text);
     }
 
-    /// Drops the injected queue of `viewport` (the document changed); a pending queue counts as withdrawn
-    /// ([`take_injected_withdrawn`](Self::take_injected_withdrawn)).
+    /// Withdraws the injected input of `viewport` (the document changed) at its next input hook: a step whose pass
+    /// has not run and the queue behind it; what is dropped counts as withdrawn
+    /// ([`take_injected_withdrawn`](Self::take_injected_withdrawn)). Called from the raw input hook, so every
+    /// request queued before the framework's input hook is dropped with the rest.
     pub fn withdraw_injected(&self, viewport: ViewportId) {
         injected::withdraw(&self.ctx, viewport);
     }
