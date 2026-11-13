@@ -22,6 +22,7 @@
 //! megabyte document would freeze the window that called it.
 
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use craft_cloud::{Capability, Entry, EntryKind};
@@ -82,9 +83,9 @@ impl CloudBackend for LocalBackend {
                 std::thread::spawn(move || post.send(Event::Shared(Ok(Vec::new()))));
             }
             Job::Read { entry, into } => {
-                std::thread::spawn(move || {
-                    let bytes = read(&root, &entry);
-                    post.send(Event::Read { entry, into, bytes });
+                std::thread::spawn(move || match read(&root, &entry) {
+                    Ok((entry, bytes)) => post.send(Event::Read { entry, into, bytes: Ok(bytes) }),
+                    Err(fault) => post.send(Event::Read { entry, into, bytes: Err(fault) }),
                 });
             }
             Job::Write { uid, entry, bytes } => {
@@ -180,9 +181,19 @@ fn list(root: &Path, path: &str) -> Result<Vec<Entry>, Fault> {
     Ok(entries)
 }
 
-fn read(root: &Path, entry: &Entry) -> Result<Vec<u8>, Fault> {
+/// Reads a file's bytes together with the entry for the version just read.
+///
+/// The entry is built from a fresh [`fs::metadata`] call here, not handed back
+/// unchanged from what the caller already believed. A reload after a conflict
+/// hands in the stale entry it is trying to get past; echoing that back would
+/// carry the old etag into the reloaded document, so the very next save would
+/// conflict again on a copy that is actually current.
+fn read(root: &Path, entry: &Entry) -> Result<(Entry, Vec<u8>), Fault> {
     let file = resolve(root, &entry.id)?;
-    fs::read(&file).map_err(|error| io_fault(&error))
+    let bytes = fs::read(&file).map_err(|error| io_fault(&error))?;
+    let meta = fs::metadata(&file).map_err(|error| io_fault(&error))?;
+    let fresh = Entry { size: Some(meta.len()), etag: Some(etag_of(&meta)), ..entry.clone() };
+    Ok((fresh, bytes))
 }
 
 /// Saves back over `entry`, refusing the write when the file moved on since
@@ -207,10 +218,20 @@ fn create(root: &Path, folder: &str, name: &str, bytes: &[u8]) -> Result<Entry, 
     let dir = resolve(root, folder)?;
     fs::create_dir_all(&dir).map_err(|error| io_fault(&error))?;
     let file = dir.join(name);
-    if file.exists() {
-        return Err(Fault::Refused(format!("{name} already exists")));
-    }
-    fs::write(&file, bytes).map_err(|error| io_fault(&error))?;
+    // Exclusive creation, not an `exists` check ahead of a separate write: two
+    // creates of the same name racing both see "not there yet" otherwise, and
+    // the second write silently replaces the first with neither ever refused.
+    // `create_new` asks the filesystem to open and create in one step, so the
+    // loser gets an error instead of a chance to overwrite the winner.
+    let mut handle = match fs::OpenOptions::new().write(true).create_new(true).open(&file) {
+        Ok(handle) => handle,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(Fault::Refused(format!("{name} already exists")));
+        }
+        Err(error) => return Err(io_fault(&error)),
+    };
+    handle.write_all(bytes).map_err(|error| io_fault(&error))?;
+    drop(handle);
     let meta = fs::metadata(&file).map_err(|error| io_fault(&error))?;
     let id = child_path(folder, name);
     Ok(Entry {
