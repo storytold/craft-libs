@@ -48,7 +48,7 @@ pub use crate::image::{
     ChannelLayout, CryptomatteBuffer, CryptomatteLayer, DecodeWarning, DeepChannel, DeepImage, ExrChannelInfo, ExrPartInfo, ExtraSample, Image,
     MAX_EXTRA_SAMPLES, Metadata, SampleType, convert_samples,
 };
-pub use crate::inspection::{RasterColorType, RasterInspection, ToneClass, classify_tone, inspect_raster};
+pub use crate::inspection::{RasterColorType, RasterInspection, ToneClass, classify_tone, embedded_icc, inspect_raster};
 pub use crate::options::{
     DdsCompression, DdsOptions, DecodeOptions, DpxBits, EncodeOptions, ExrCompression, JpegFormat, Limits, PngCompression, PngStereo,
     TIFF_PYRAMID_MIN, TiffCompression,

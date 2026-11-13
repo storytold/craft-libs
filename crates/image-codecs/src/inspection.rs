@@ -3,6 +3,14 @@
 use crate::error::CodecError;
 use crate::{ChannelLayout, DecodeOptions, Format, Limits, SampleType, decode_with};
 
+/// Return an embedded ICC profile using the selected format decoder.
+///
+/// This fully decodes the image; callers that already need the pixels should read `Image::meta.icc`
+/// from that decode instead of invoking this helper separately.
+pub fn embedded_icc(bytes: &[u8]) -> Result<Option<Vec<u8>>, CodecError> {
+    Ok(decode_with(bytes, &DecodeOptions::default())?.icc)
+}
+
 /// The source pixel model reported by an image container, before decode normalizes it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RasterColorType {
