@@ -61,8 +61,75 @@ pub struct StrokeValues {
     pub color: Option<String>,
     pub tint: Option<f64>,
     pub kind: Option<String>,
+    pub alignment: Option<String>,
+    pub cap: Option<String>,
+    pub join: Option<String>,
+    pub miter_limit: Option<f64>,
+    pub start: Option<String>,
+    pub end: Option<String>,
     pub gap_color: Option<String>,
     pub gap_tint: Option<f64>,
+    pub overprint: Option<bool>,
+    pub gap_overprint: Option<bool>,
+}
+
+impl StrokeValues {
+    /// Reads stroke properties from elements in precedence order (item first, then nearer styles).
+    pub fn from_elements(elements: &[&El]) -> StrokeValues {
+        let mut result = StrokeValues::default();
+        for el in elements {
+            let values = Values::of(el);
+            let num_attr = |key: &str| values.get(key).and_then(|value| value.parse::<f64>().ok()).filter(|value| value.is_finite());
+            let bool_attr = |key: &str| match values.get(key) {
+                Some("true") => Some(true),
+                Some("false") => Some(false),
+                _ => None,
+            };
+            if result.weight.is_none() {
+                result.weight = num_attr("StrokeWeight");
+            }
+            if result.color.is_none() {
+                result.color = values.get("StrokeColor").map(str::to_owned);
+            }
+            if result.tint.is_none() {
+                result.tint = num_attr("StrokeTint");
+            }
+            if result.kind.is_none() {
+                result.kind = values.get("StrokeType").map(str::to_owned);
+            }
+            if result.alignment.is_none() {
+                result.alignment = values.get("StrokeAlignment").map(str::to_owned);
+            }
+            if result.cap.is_none() {
+                result.cap = values.get("EndCap").map(str::to_owned);
+            }
+            if result.join.is_none() {
+                result.join = values.get("EndJoin").map(str::to_owned);
+            }
+            if result.miter_limit.is_none() {
+                result.miter_limit = num_attr("MiterLimit");
+            }
+            if result.start.is_none() {
+                result.start = values.get("LeftLineEnd").map(str::to_owned);
+            }
+            if result.end.is_none() {
+                result.end = values.get("RightLineEnd").map(str::to_owned);
+            }
+            if result.gap_color.is_none() {
+                result.gap_color = values.get("GapColor").map(str::to_owned);
+            }
+            if result.gap_tint.is_none() {
+                result.gap_tint = num_attr("GapTint");
+            }
+            if result.overprint.is_none() {
+                result.overprint = bool_attr("OverprintStroke");
+            }
+            if result.gap_overprint.is_none() {
+                result.gap_overprint = bool_attr("OverprintGap");
+            }
+        }
+        result
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -235,6 +302,7 @@ impl Values {
             kind: self.value(&format!("{prefix}StrokeType")),
             gap_color: self.value(&format!("{prefix}StrokeGapColor")),
             gap_tint: self.num(&format!("{prefix}StrokeGapTint")),
+            ..StrokeValues::default()
         }
     }
 
