@@ -3,6 +3,8 @@
 //! Timing and frame production remain the caller's choice. This module owns the GIF-specific
 //! encoding rules: palette quantization, loop extension, transparency and disposal metadata.
 
+use std::io::Write;
+
 /// Disposal behavior to write for every frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Disposal {
@@ -66,48 +68,72 @@ impl From<gif::EncodingError> for Error {
     }
 }
 
+/// A writer that appends encoded frames to an output incrementally.
+pub struct AnimationWriter<W: Write> {
+    encoder: gif::Encoder<W>,
+    width: u16,
+    height: u16,
+    options: Options,
+}
+
+impl<W: Write> AnimationWriter<W> {
+    /// Start an animation on `output`; subsequent calls write one frame at a time.
+    pub fn new(output: W, width: u32, height: u32, options: Options) -> Result<Self, Error> {
+        if width == 0 || height == 0 || width > u32::from(u16::MAX) || height > u32::from(u16::MAX) {
+            return Err(Error::Dimensions { width, height });
+        }
+        if !(1..=30).contains(&options.speed) {
+            return Err(Error::InvalidSpeed(options.speed));
+        }
+        let width = width as u16;
+        let height = height as u16;
+        let mut encoder = gif::Encoder::new(output, width, height, &[]).map_err(Error::from)?;
+        encoder.set_repeat(if options.loop_forever { gif::Repeat::Infinite } else { gif::Repeat::Finite(0) }).map_err(Error::from)?;
+        Ok(Self { encoder, width, height, options })
+    }
+
+    /// Encode and append one full-canvas RGBA8 frame.
+    pub fn write_frame(&mut self, frame: RgbaFrame<'_>) -> Result<(), Error> {
+        let expected = usize::from(self.width)
+            .checked_mul(usize::from(self.height))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or(Error::Dimensions { width: u32::from(self.width), height: u32::from(self.height) })?;
+        if frame.pixels.len() != expected {
+            return Err(Error::FrameLength { index: 0, actual: frame.pixels.len(), expected });
+        }
+        let mut pixels = frame.pixels.to_vec();
+        let mut encoded = gif::Frame::from_rgba_speed(self.width, self.height, &mut pixels, self.options.speed);
+        encoded.delay = frame.delay_cs;
+        encoded.dispose = match self.options.disposal {
+            Disposal::Unspecified => gif::DisposalMethod::Any,
+            Disposal::Background => gif::DisposalMethod::Background,
+        };
+        self.encoder.write_frame(&encoded).map_err(Error::from)
+    }
+
+    /// Finish the GIF and return the underlying output.
+    pub fn finish(self) -> Result<W, Error> {
+        self.encoder.into_inner().map_err(Error::from)
+    }
+}
+
 /// Encode an animation into a complete GIF file.
 ///
 /// Every input frame must cover the whole canvas and contain exactly `width * height * 4` bytes.
 /// At most one mutable frame copy is made at a time for the quantizer. This is intentionally a
 /// streaming writer so callers can render and encode frames incrementally.
 pub fn animation(width: u32, height: u32, frames: &[RgbaFrame<'_>], options: Options) -> Result<Vec<u8>, Error> {
-    if width == 0 || height == 0 || width > u32::from(u16::MAX) || height > u32::from(u16::MAX) {
-        return Err(Error::Dimensions { width, height });
-    }
     if frames.is_empty() {
         return Err(Error::NoFrames);
     }
-    if !(1..=30).contains(&options.speed) {
-        return Err(Error::InvalidSpeed(options.speed));
-    }
-    let expected = usize::try_from(width)
-        .ok()
-        .and_then(|w| usize::try_from(height).ok().and_then(|h| w.checked_mul(h)))
-        .and_then(|pixels| pixels.checked_mul(4))
-        .ok_or(Error::Dimensions { width, height })?;
+    let mut writer = AnimationWriter::new(Vec::new(), width, height, options)?;
     for (index, frame) in frames.iter().enumerate() {
-        if frame.pixels.len() != expected {
-            return Err(Error::FrameLength { index, actual: frame.pixels.len(), expected });
-        }
+        writer.write_frame(*frame).map_err(|error| match error {
+            Error::FrameLength { actual, expected, .. } => Error::FrameLength { index, actual, expected },
+            other => other,
+        })?;
     }
-
-    let mut bytes = Vec::new();
-    {
-        let mut encoder = gif::Encoder::new(&mut bytes, width as u16, height as u16, &[]).map_err(Error::from)?;
-        encoder.set_repeat(if options.loop_forever { gif::Repeat::Infinite } else { gif::Repeat::Finite(0) }).map_err(Error::from)?;
-        for frame in frames {
-            let mut pixels = frame.pixels.to_vec();
-            let mut encoded = gif::Frame::from_rgba_speed(width as u16, height as u16, &mut pixels, options.speed);
-            encoded.delay = frame.delay_cs;
-            encoded.dispose = match options.disposal {
-                Disposal::Unspecified => gif::DisposalMethod::Any,
-                Disposal::Background => gif::DisposalMethod::Background,
-            };
-            encoder.write_frame(&encoded).map_err(Error::from)?;
-        }
-    }
-    Ok(bytes)
+    writer.finish()
 }
 
 #[cfg(test)]
