@@ -8,3 +8,9 @@ crates/font-store/index/indexes/*.gz binary
 
 # Copies of the vendored krilla source diff, one per patch (see vendor/krilla/README.craft.md).
 vendor/krilla/patches/*.patch linguist-generated=true
+
+# Has a pinned digest and is embedded as bytes by craft-font-store.
+crates/font-store/index/sources.json -text
+
+# The build fixture verifies these license files are copied byte-for-byte.
+crates/fonts-build/tests/fixture/craft-fonts/fonts/**/OFL.txt -text

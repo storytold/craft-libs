@@ -105,13 +105,13 @@ pub use descriptor::{Descriptor, VersionedDescriptor};
 pub use error::{PsdError, Result};
 pub use file::{GlobalLayerMask, LayerInfoPlacement, PsdFile};
 pub use float::FloatImage;
-pub use head::Head;
+pub use head::{Head, HeadView};
 pub use header::{ColorMode, Header, Version};
 pub use image_data::ImageData;
 pub use layer::{BlendingRanges, ChannelData, LayerFlags, LayerInfo, LayerMask, LayerRecord, MaskData, MaskParameters, RealMask, Rect};
 pub use pixels::{GrayImage, Layer, RgbaImage};
 pub use preview::Preview;
-pub use resources::{ImageResource, ResolutionInfo, ResourceData};
+pub use resources::{ImageResource, ImageResourceView, ResolutionInfo, ResourceData, ResourceIter};
 pub use rows::RowDecoder;
 #[cfg(any(unix, windows))]
 pub use source::FileSource;

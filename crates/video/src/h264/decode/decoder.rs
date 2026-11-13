@@ -115,6 +115,8 @@ pub struct Decoder {
     /// Bytes the picture store may take ([`crate::budget`]).
     memory_budget: u64,
     threads: usize,
+    /// Maximum reconstructed luma samples in one picture.
+    max_luma_samples: u64,
     /// Draft mode: skip deblocking of non-reference pictures ([`Decoder::set_draft`]).
     draft: bool,
 }
@@ -179,6 +181,7 @@ impl Decoder {
             max_in_flight: threads.max(1) + 2,
             memory_budget: crate::budget::DECODE_MEMORY_BUDGET,
             threads: workers,
+            max_luma_samples: super::params::MAX_LUMA_SAMPLES,
             draft: false,
         }
     }
@@ -391,7 +394,7 @@ impl Decoder {
             // Before the header fields that depend on the SPS: they are validated for the streams
             // we decode (a 10-bit slice may have a QP below 0), so a stream we cannot decode must
             // fail as unsupported here, not as invalid there (#626).
-            sps.check_supported()?;
+            sps.check_supported_with_limit(self.max_luma_samples)?;
             found = Some((pps.clone(), sps.clone()));
             Ok((&**pps, &**sps))
         })?;
@@ -466,6 +469,14 @@ impl Decoder {
     /// Cap the bytes of decoded pictures (current, references, in flight) this decoder may hold.
     pub fn set_memory_budget(&mut self, bytes: u64) {
         self.memory_budget = bytes;
+    }
+
+    /// Set the maximum luma sample count allowed in a single decoded picture.
+    ///
+    /// The default is 2^25 samples. This is a per-picture geometry guard; the separate
+    /// memory budget controls aggregate decoded picture storage.
+    pub fn set_max_picture_luma_samples(&mut self, samples: u64) {
+        self.max_luma_samples = samples;
     }
 
     /// Refuse an SPS whose pictures would not fit the memory budget, before anything is allocated.

@@ -38,7 +38,15 @@ pub enum TimeError {
 
 /// Sample rates supported by sessions (Pro Tools offers 44.1 k – 192 k; we accept 8 k – 768 k).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "u32")]
 pub struct SampleRate(u32);
+
+impl TryFrom<u32> for SampleRate {
+    type Error = TimeError;
+    fn try_from(hz: u32) -> Result<Self, Self::Error> {
+        Self::new(hz)
+    }
+}
 
 impl SampleRate {
     pub const HZ_44100: SampleRate = SampleRate(44_100);
@@ -107,7 +115,7 @@ impl Range {
         s >= self.start && s < self.end
     }
     pub fn overlaps(&self, o: &Range) -> bool {
-        self.start < o.end && o.start < self.end
+        !self.is_empty() && !o.is_empty() && self.start < o.end && o.start < self.end
     }
     pub fn intersect(&self, o: &Range) -> Option<Range> {
         let s = self.start.max(o.start);
@@ -122,6 +130,24 @@ impl Range {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sample_rate_serde_validates_nonzero_bounds() {
+        assert!(serde_json::from_str::<SampleRate>("0").is_err());
+        assert!(serde_json::from_str::<SampleRate>("7999").is_err());
+        let rate = SampleRate::new(48_000).unwrap();
+        assert_eq!(serde_json::to_string(&rate).unwrap(), "48000");
+        assert_eq!(serde_json::from_str::<SampleRate>("48000").unwrap(), rate);
+    }
+
+    #[test]
+    fn empty_ranges_never_overlap() {
+        let point = Range::point(5);
+        let span = Range::new(0, 10);
+        assert!(!point.overlaps(&span));
+        assert!(!span.overlaps(&point));
+        assert!(Range::new(0, 5).overlaps(&span));
+    }
 
     #[test]
     fn sample_rate_bounds() {

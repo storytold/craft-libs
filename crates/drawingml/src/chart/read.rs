@@ -443,7 +443,7 @@ fn read_axes<'a>(c: &mut Chart, pa: &'a El, primary_val: &Option<String>) -> (Op
     // A gridline whose `c:spPr/a:ln` has `a:noFill` is not drawn, though the element is there.
     let grid = |a: &El, k: &str| {
         a.child(Local(k))
-            .is_some_and(|g| !g.child(Local("spPr")).and_then(|p| p.child(Local("ln"))).is_some_and(|l| l.child(Local("noFill")).is_some()))
+            .is_some_and(|g| g.child(Local("spPr")).and_then(|p| p.child(Local("ln"))).is_none_or(|l| l.child(Local("noFill")).is_none()))
     };
     if c.kind == ChartType::Combo && c.series.iter().any(|s| s.secondary_axis) {
         let primary_id = val_ax.and_then(|a| a.child(Local("axId")).and_then(|c| c.attr_local("val")));
