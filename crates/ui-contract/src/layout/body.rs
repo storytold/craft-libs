@@ -239,7 +239,8 @@ pub(crate) fn report_least(ctx: &egui::Context, row: Id, body: Id, least: f32) {
     });
 }
 
-/// The width the shrink step of the row `row` gave its leaf `leaf` in this pass's measuring run.
+/// The width the shrink step of the row `row` gave its leaf `leaf` in this pass's measuring run. A leaf given no
+/// width has dropped out of the row (`shrink_or_drop`): it shows nothing and takes no place.
 pub(crate) fn shrink_cap(ctx: &egui::Context, row: Id, leaf: Id) -> Option<f32> {
     layout_memory::measured(ctx, shrink_key(row, leaf)).map(|found| found.took.x)
 }
@@ -316,6 +317,37 @@ fn shrink_in_turns(units: &[ShrinkUnit], whole: &[f32], first: &[bool], fixed: f
     shrink_widths_in_turn(&cut, first, fixed, room, order)
 }
 
+/// The widths of the units of a row too long for its room, as `shrink_in_turns` gives them, in a row that `drops`
+/// (one whose body does not scroll): when the units do not fit even at their least, the units whose content is made
+/// to be cut (`first`) drop out from the end, each with one `gap`, until the rest fits at their least. A unit that
+/// drops gets no width and takes no place, so nothing overflows into a neighbour; controls never drop. A row that
+/// scrolls keeps every unit and scrolls instead.
+fn shrink_or_drop(
+    units: &[ShrinkUnit],
+    whole: &[f32],
+    first: &[bool],
+    (fixed, gap): (f32, f32),
+    room: f32,
+    order: ShrinkOrder,
+    drops: bool,
+) -> Vec<f32> {
+    let mut kept = vec![true; units.len()];
+    let mut fixed = fixed;
+    // Half a point: less than a pixel shows at any scale the box runs.
+    let fits =
+        |kept: &[bool], fixed: f32| fixed + units.iter().zip(kept).filter(|(_, kept)| **kept).map(|(unit, _)| unit.least).sum::<f32>() - room < 0.5;
+    while drops && !fits(&kept, fixed) {
+        let Some(at) = (0..units.len()).rev().find(|at| kept[*at] && first[*at]) else { break };
+        kept[at] = false;
+        fixed -= gap;
+    }
+    let pick = |all: &[f32]| -> Vec<f32> { all.iter().zip(&kept).filter(|(_, kept)| **kept).map(|(value, _)| *value).collect() };
+    let shown: Vec<ShrinkUnit> = units.iter().zip(&kept).filter(|(_, kept)| **kept).map(|(unit, _)| *unit).collect();
+    let shown_first: Vec<bool> = first.iter().zip(&kept).filter(|(_, kept)| **kept).map(|(first, _)| *first).collect();
+    let mut widths = shrink_in_turns(&shown, &pick(whole), &shown_first, fixed, room, order).into_iter();
+    kept.iter().map(|kept| if *kept { widths.next().unwrap_or_default() } else { 0.0 }).collect()
+}
+
 /// `shrink_widths` in two turns: the units whose content is made to be cut (`first`) give what they can of the
 /// shortfall, and the others give only the rest. A row that does not fit even with every unit at its least keeps the
 /// natural widths, as `shrink_widths` does.
@@ -340,7 +372,8 @@ fn shrink_widths_in_turn(units: &[ShrinkUnit], first: &[bool], fixed: f32, room:
 /// Runs `body`, the children of the unwrapped `Row` body `id`, in `ui`, the block they are placed in, with the row's
 /// shrink step: a row fits its room by narrowing its units, first by the room they hold beyond their content (a leaf's
 /// measure past its whole width), then by their content, never past the least each reports, evenly or, in a bar, from
-/// its end, and a row that cannot fit even at its units' leasts keeps their natural widths. A unit is a leaf that
+/// its end, and a row that cannot fit even at its units' leasts keeps their natural widths, except that a row whose
+/// body does not scroll first drops its units made to be cut, from the end (`shrink_or_drop`). A unit is a leaf that
 /// can shrink (elidable text, fields, selects), whose least is its `Proposal::Min`, or a body that does not fill the
 /// row (a captioned field, a nested row), whose least is what its content takes unbounded with every leaf at its least.
 ///
@@ -374,13 +407,14 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
     }
     let room = shrink_room(ui);
     let order = if Env::of(ui).values.get::<InBar>().0 { ShrinkOrder::FromEnd } else { ShrinkOrder::Even };
+    let (drops, gap) = (view_room(ui).is_none(), ui.spacing().item_spacing.x);
     // Records the width each unit gets, and returns whether one took another width in the first sweep.
     let settle = |leaves: &[Reported], fixed: f32| {
         let units: Vec<ShrinkUnit> = leaves.iter().map(|leaf| leaf.widths).collect();
         let whole: Vec<f32> = leaves.iter().map(|leaf| leaf.whole).collect();
         let first: Vec<bool> = leaves.iter().map(|leaf| leaf.cut_first).collect();
         let widths = if room.is_finite() {
-            shrink_in_turns(&units, &whole, &first, fixed, room, order)
+            shrink_or_drop(&units, &whole, &first, (fixed, gap), room, order, drops)
         } else {
             units.iter().map(|unit| unit.ideal).collect()
         };

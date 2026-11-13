@@ -632,6 +632,8 @@ struct Pass<'p, 'r, 'a> {
     /// The parent `Ui`: a host that runs the pass in a `Ui` of its own gives the room the root fills there.
     parent: Id,
     inert: bool,
+    /// The row around the leaf gave it no width: it takes no place in the flow (`layout::shrink_cap`).
+    dropped: bool,
     /// The parent `Ui` was in a sizing pass.
     sizing: bool,
     /// Set by a pass that ran past the sizing check.
@@ -792,6 +794,9 @@ fn sense_root(ui: &Ui, member: Option<crate::runtime::env::ArenaId>, spec: RootS
 /// Step 6: the rect the root takes in `ui`, and whether it is a fill-width root held at its measured width.
 fn place_root(p: &Pass<'_, '_, '_>, ui: &mut Ui, at: ShowAt, env: &Env, size: Vec2, inert: bool, rtl: bool) -> (Rect, bool) {
     let (ctx, id) = (ui.ctx().clone(), p.resolved.id);
+    if p.dropped {
+        return (Rect::from_min_size(ui.cursor().min, Vec2::ZERO), false);
+    }
     let first = |height: f32| p.p.first_line(&ctx, id, height);
     // In a content-sized column a fill-width child takes its measured width in the flow and shows across the width
     // the column settles on, so it never sets that width.
@@ -1316,6 +1321,7 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
         Some(crate::layout::Shrink::Apply(row)) if shape == ShapeKind::Leaf => crate::layout::shrink_cap(&ctx, row, id),
         _ => None,
     };
+    let dropped = cap == Some(0.0);
     let room = match cap {
         Some(cap) => Some(room.map_or(cap, |room| room.min(cap))),
         None => room,
@@ -1453,7 +1459,8 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
             measured,
             size,
             parent,
-            inert,
+            inert: inert || dropped,
+            dropped,
             sizing,
             real: false,
             activated: false,

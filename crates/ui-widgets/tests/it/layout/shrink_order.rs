@@ -1,9 +1,10 @@
 //! How a row too short for its children shares the shortfall: blank room in fields and selects goes before any
-//! content, content made to be cut gives way before labels, and a wrapping text keeps its words whole.
+//! content, content made to be cut gives way before labels, and a wrapping text keeps its words whole; a row that
+//! does not scroll drops a text it cannot show at its readable least.
 
 use craft_ui::buttons::{Button, Link};
 use craft_ui::contract::{Bind, Entry, Show as _, ShowContainer as _};
-use craft_ui::display::Text;
+use craft_ui::display::{Elide, Text};
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
@@ -108,4 +109,39 @@ fn a_field_gives_its_blank_length_before_a_readout_beside_it_wraps() {
     assert!((line.height() - count.height()).abs() <= SLACK && line.width() >= count.width() - SLACK, "the count {line:?} wraps");
     assert!(line.right() <= width + SLACK, "the count ends at {} past the room {width}", line.right());
     assert!(!measured, "a settled frame measures");
+}
+
+const COUNT: &str = "1,234 presets";
+
+/// The rects of the New and Edit buttons around a count that elides, in a row `width` wide, and the count's painted
+/// rect, if it was painted.
+fn count_row(width: f32) -> (Rect, Rect, Option<Rect>) {
+    let mut fixture = Fixture::new(|ui| {
+        Row::new().show(ui, |ui, _| {
+            Button::new("New").show(ui);
+            Text::new(COUNT).elide(Elide::End).show(ui);
+            Button::new("Edit").show(ui);
+        });
+    });
+    fixture.room(Vec2::new(width, ROOM.y)).settle();
+    let rect = |label: &str| fixture.by_label(label).map_or(Rect::NOTHING, |target| target.rect);
+    let count = fixture.texts().iter().find(|text| text.text == COUNT).map(|text| text.rect);
+    (rect("New"), rect("Edit"), count)
+}
+
+/// A row that does not scroll and cannot show an elided text at its readable least drops the text: the controls
+/// keep their width inside the room and nothing overlaps.
+#[trial]
+fn a_row_drops_a_text_it_cannot_show_at_its_readable_least() {
+    let (new, edit, count) = count_row(ROOM.x);
+    let count = count.expect("the count shows in a wide row");
+    // Room for the buttons and a sliver of the count, less than any readable least.
+    let width = edit.right() - count.width() + 6.0;
+    let (short_new, short_edit, dropped) = count_row(width);
+    assert!(dropped.is_none(), "the count shows at {dropped:?} in a row {width} wide");
+    assert!((short_new.width() - new.width()).abs() <= SLACK && (short_edit.width() - edit.width()).abs() <= SLACK, "a button narrowed");
+    assert!(
+        short_new.right() <= short_edit.left() && short_edit.right() <= width + SLACK,
+        "the buttons {short_new:?} {short_edit:?} overlap or leave the room"
+    );
 }
