@@ -5,8 +5,6 @@
 //! calling [`probe`]. Re-probing the GPU would double the surface for a
 //! bug that reports nonsense VRAM on hybrid laptops.
 
-use std::path::Path;
-
 /// What this machine can comfortably run.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MachineCaps {
@@ -39,7 +37,8 @@ impl MachineCaps {
 /// Probe the real machine once. `cache_dir` is the future model-cache
 /// location — disk space is measured on *its* volume, which may not be
 /// the OS volume.
-pub fn probe(cache_dir: &Path) -> MachineCaps {
+#[cfg(not(target_arch = "wasm32"))]
+pub fn probe(cache_dir: &std::path::Path) -> MachineCaps {
     let mut sys = sysinfo::System::new();
     sys.refresh_memory();
     let ram_gb = sys.total_memory() as f32 / (1 << 30) as f32;
@@ -49,12 +48,12 @@ pub fn probe(cache_dir: &Path) -> MachineCaps {
     MachineCaps { ram_gb, disk_free_gb, threads: std::thread::available_parallelism().map_or(1, |n| n.get()), avx2: avx2(), vram_gb: None }
 }
 
-#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+#[cfg(all(not(target_arch = "wasm32"), any(target_arch = "x86_64", target_arch = "x86")))]
 fn avx2() -> bool {
     std::arch::is_x86_feature_detected!("avx2")
 }
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
+#[cfg(all(not(target_arch = "wasm32"), not(any(target_arch = "x86_64", target_arch = "x86"))))]
 fn avx2() -> bool {
     // AArch64 NEON is mandatory, so the honest answer is "fast enough".
     true
@@ -62,8 +61,12 @@ fn avx2() -> bool {
 
 /// Free bytes on the volume containing `dir`, walking up to the nearest
 /// existing ancestor if `dir` doesn't exist yet (the common case).
-fn disk_free(dir: &Path) -> f32 {
-    let probe: &Path = dir.ancestors().find(|p| p.exists()).unwrap_or_else(|| Path::new("."));
+#[cfg(not(target_arch = "wasm32"))]
+fn disk_free(dir: &std::path::Path) -> f32 {
+    // Canonicalize the existing ancestor: a relative or symlinked
+    // `cache_dir` must still match an absolute mount point.
+    let probe: std::path::PathBuf =
+        dir.ancestors().find(|p| p.exists()).and_then(|p| p.canonicalize().ok()).unwrap_or_else(|| std::path::PathBuf::from("."));
     let disks = sysinfo::Disks::new_with_refreshed_list();
     // The longest mount point that prefixes our dir owns it.
     let best = disks.iter().filter(|d| probe.starts_with(d.mount_point())).max_by_key(|d| d.mount_point().as_os_str().len());
@@ -73,6 +76,7 @@ fn disk_free(dir: &Path) -> f32 {
 /// The suite-shared model cache (`%LOCALAPPDATA%\artcraft\models` etc.).
 /// `None` on platforms without a cache dir — the caller should refuse
 /// local models rather than splashing files into the cwd.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn models_dir() -> Option<std::path::PathBuf> {
     dirs::cache_dir().map(|d| d.join("artcraft").join("models"))
 }

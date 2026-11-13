@@ -51,7 +51,12 @@ impl LocalGguf {
     pub fn load(entry: &'static ModelEntry, gguf_path: &Path, tokenizer_path: &Path) -> Result<Self, AiError> {
         let device = Device::Cpu;
         let mut file = File::open(gguf_path).map_err(AiError::Io)?;
-        let content = gguf_file::Content::read(&mut file).map_err(|e| AiError::Inference(format!("bad GGUF: {e}")))?;
+        // Malformed GGUF metadata (e.g. `general.alignment = 0`) makes
+        // candle's parser panic on a division — hostile input must come
+        // back as an error, not a crash.
+        let content = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gguf_file::Content::read(&mut file)))
+            .map_err(|_| AiError::Inference("GGUF parser panicked on malformed metadata".to_owned()))?
+            .map_err(|e| AiError::Inference(format!("bad GGUF: {e}")))?;
         let weights = match entry.arch {
             Arch::Qwen2 => Weights::Qwen2(
                 quantized_qwen2::ModelWeights::from_gguf(content, &mut file, &device)
@@ -83,25 +88,34 @@ impl LocalGguf {
         let mut sampler = LogitsProcessor::new(SEED, temp, None);
 
         let mut pos = 0usize;
-        let mut out = String::new();
+        let mut generated: Vec<u32> = Vec::with_capacity(opts.max_tokens.min(4096) as usize);
+        let mut hit_eos = false;
         for _ in 0..opts.max_tokens {
             let input_len = tokens.len() - pos;
             let input =
                 Tensor::new(&tokens[pos..], &self.device).and_then(|t| t.reshape((1, t.dims1()?))).map_err(|e| AiError::Inference(e.to_string()))?;
             let logits = self.weights.forward(&input, pos).map_err(|e| AiError::Inference(e.to_string()))?;
             pos += input_len;
-            // logits [1, seq, vocab] → last position's [vocab] row.
-            let logits = logits.i((0, input_len - 1)).map_err(|e| AiError::Inference(e.to_string()))?;
+            // `forward` already returns the last sequence position's
+            // logits [batch, vocab] — index the batch row only.
+            let logits = logits.i(0).map_err(|e| AiError::Inference(e.to_string()))?;
             let next = sampler.sample(&logits).map_err(|e| AiError::Inference(e.to_string()))?;
             if next == self.eos {
+                hit_eos = true;
                 break;
             }
             tokens.push(next);
-            if let Some(piece) = self.tokenizer.id_to_token(next) {
-                out.push_str(&piece.replace('\u{2581}', " "));
-            }
+            generated.push(next);
         }
-        Ok(out)
+        // No EOS inside the budget → the reply was cut mid-translation;
+        // partial output would silently truncate the document.
+        if !hit_eos {
+            return Err(AiError::Inference(format!("generation hit max_tokens ({}) without EOS", opts.max_tokens)));
+        }
+        // Decode the generated ids through the tokenizer: byte-level BPE
+        // vocab strings can't be concatenated (spaces/newlines/non-ASCII
+        // bytes stay encoded, and UTF-8 can split across tokens).
+        self.tokenizer.decode(&generated, true).map_err(|e| AiError::Inference(format!("decode failed: {e}")))
     }
 }
 

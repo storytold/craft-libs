@@ -104,21 +104,9 @@ pub static MODELS: &[ModelEntry] = &[
         arch: Arch::Qwen2,
         langs: "29+ languages incl. EN/ZH/FR/DE/ES/JA/KO/RU",
     },
-    ModelEntry {
-        id: "qwen2.5-3b-q4km",
-        name: "Qwen2.5 3B Instruct (Q4_K_M)",
-        url: "https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf",
-        file: "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
-        tokenizer_url: "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct/resolve/main/tokenizer.json",
-        sha256: None,
-        size_mb: 1980,
-        min_ram_gb: 8.0,
-        rec_ram_gb: 16.0,
-        license: "Apache-2.0",
-        quality: Quality::Medium,
-        arch: Arch::Qwen2,
-        langs: "29+ languages incl. EN/ZH/FR/DE/ES/JA/KO/RU",
-    },
+    // NOTE: Qwen2.5-3B was removed — its `qwen-research` license is
+    // non-commercial and breaks the permissive-only rule above. No
+    // permissively-licensed Medium-tier candidate is currently curated.
 ];
 
 /// Look up a model by stable id.

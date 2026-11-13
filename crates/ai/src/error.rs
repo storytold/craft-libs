@@ -22,6 +22,9 @@ pub enum AiError {
     Inference(String),
     /// The operation was cancelled by the user.
     Cancelled,
+    /// The same cache entry is already being downloaded by another
+    /// caller — only one may hold the `.part` file at a time.
+    Busy,
 }
 
 impl fmt::Display for AiError {
@@ -35,6 +38,7 @@ impl fmt::Display for AiError {
             Self::NotConfigured => write!(f, "no AI provider configured"),
             Self::Inference(m) => write!(f, "local model error: {m}"),
             Self::Cancelled => write!(f, "cancelled"),
+            Self::Busy => write!(f, "a download of this model is already in progress"),
         }
     }
 }

@@ -64,7 +64,10 @@ pub fn is_protected_token(token: &str) -> bool {
 }
 
 /// Split `text` into segments on whitespace boundaries, grouping
-/// consecutive protected or translatable tokens.
+/// consecutive protected or translatable tokens. `<markup>` spans are
+/// carved out first — a tag with attributes contains whitespace, and a
+/// whole `<em>Hello</em>` run must keep "Hello" translatable while the
+/// tags themselves stay byte-identical.
 pub fn segment(text: &str, grammar: &dyn TranslateGrammar) -> Vec<Segment> {
     fn flush(out: &mut Vec<Segment>, buf: &mut String, protected: bool) {
         if buf.is_empty() {
@@ -79,10 +82,11 @@ pub fn segment(text: &str, grammar: &dyn TranslateGrammar) -> Vec<Segment> {
     let mut buf_protected = false;
     let mut started = false;
 
-    for token in split_words_ws(text) {
+    for (token, is_tag) in split_tokens(text) {
         let ws = token.chars().all(char::is_whitespace);
-        // Whitespace glues to whatever the current run is.
-        let this_protected = if ws { buf_protected } else { grammar.is_protected(token) };
+        // Whitespace glues to whatever the current run is; markup tags
+        // are always protected.
+        let this_protected = if ws { buf_protected } else { is_tag || grammar.is_protected(token) };
         if started && this_protected != buf_protected {
             flush(&mut out, &mut buf, buf_protected);
         }
@@ -92,6 +96,55 @@ pub fn segment(text: &str, grammar: &dyn TranslateGrammar) -> Vec<Segment> {
     }
     flush(&mut out, &mut buf, buf_protected);
     out
+}
+
+/// Tokenize into `(slice, is_tag)`: markup tags are whole `<…>` spans
+/// (attributes included), everything else alternates between maximal
+/// whitespace and non-whitespace runs.
+fn split_tokens(text: &str) -> Vec<(&str, bool)> {
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    let bytes = text.as_bytes();
+    while pos < bytes.len() {
+        if bytes[pos] == b'<'
+            && let Some(tag_len) = tag_len(&text[pos..])
+        {
+            out.push((&text[pos..pos + tag_len], true));
+            pos += tag_len;
+            continue;
+        }
+        // Advance a non-tag run up to the next '<' that starts a tag;
+        // bare '<' characters just stay inside the run.
+        let mut scan = pos;
+        let mut run_end = bytes.len();
+        while let Some(lt) = bytes[scan..].iter().position(|&b| b == b'<') {
+            let at = scan + lt;
+            if tag_len(&text[at..]).is_some() {
+                run_end = at;
+                break;
+            }
+            scan = at + 1;
+        }
+        for piece in split_words_ws(&text[pos..run_end]) {
+            out.push((piece, false));
+        }
+        pos = run_end;
+    }
+    out
+}
+
+/// Length of a `<…>` tag starting at `s[0]`, or `None` when `<` does not
+/// begin markup (bare `<`, `<3`, `< hello`). Tags start `</`, `<?`, `<!`
+/// or `<`+letter and close at the first `>` before any `<` or newline;
+/// the scan is capped so pathological input can't stall it.
+fn tag_len(s: &str) -> Option<usize> {
+    const MAX_TAG: usize = 512;
+    let second = s.as_bytes().get(1)?;
+    let opener_ok = second.is_ascii_alphabetic() || matches!(second, b'/' | b'!' | b'?');
+    if !opener_ok {
+        return None;
+    }
+    s.char_indices().skip(2).take(MAX_TAG).find(|(_, c)| matches!(c, '>' | '<' | '\n')).and_then(|(i, c)| (c == '>').then_some(i + 1))
 }
 
 /// Split into alternating word/whitespace runs (like `split_inclusive`
@@ -119,27 +172,107 @@ fn split_words_ws(text: &str) -> Vec<&str> {
 /// How many segments one prompt carries — keeps responses snappy and
 /// makes a numbering slip cheap to retry.
 const BATCH: usize = 20;
+/// …and how many bytes one prompt carries. A document with no protected
+/// tokens is one `Text` segment of arbitrary length — without a size
+/// bound the request can exceed `max_tokens` and come back truncated
+/// (which providers must reject, not return as success).
+const BATCH_BYTES: usize = 4 * 1024;
+/// A single `Text` run larger than this is chopped into pieces before
+/// batching, so no one request is unbounded.
+const RUN_BYTES: usize = 3 * 1024;
+
+/// A translatable piece of one segment: the whitespace-stripped `core`
+/// is sent to the model, `lead`/`trail` are restored verbatim around the
+/// translation so `Visitez` never glues to `https://a.io`.
+struct Run<'a> {
+    seg: usize,
+    lead: &'a str,
+    core: &'a str,
+    trail: &'a str,
+}
+
+/// `(leading ws, core, trailing ws)` of `s`, all on char boundaries.
+fn ws_edges(s: &str) -> (&str, &str, &str) {
+    let lead = s.len() - s.trim_start().len();
+    let tail = s.len() - s.trim_end().len();
+    if lead + tail >= s.len() {
+        return (s, "", ""); // all-whitespace run: nothing to translate
+    }
+    (&s[..lead], &s[lead..s.len() - tail], &s[s.len() - tail..])
+}
+
+/// Chop `s` into ≤ `max`-byte pieces on whitespace boundaries (the last
+/// ws before the limit; a run with no ws is hard-cut at the limit). The
+/// boundary whitespace stays inside the pieces — nothing is lost.
+fn split_run(s: &str, max: usize) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = s;
+    while rest.len() > max {
+        let mut ws_cut = None;
+        let mut boundary = 0usize;
+        for (i, c) in rest.char_indices() {
+            if i >= max {
+                break;
+            }
+            boundary = i + c.len_utf8();
+            if c.is_whitespace() {
+                ws_cut = Some(i); // cut *before* the ws — it leads the next piece
+            }
+        }
+        let cut = match ws_cut.filter(|w| *w > max / 4) {
+            Some(w) => w,
+            None => boundary.max(1),
+        };
+        out.push(&rest[..cut]);
+        rest = &rest[cut..];
+    }
+    if !rest.is_empty() {
+        out.push(rest);
+    }
+    out
+}
 
 /// Translate every `Text` segment to `target_lang`, leaving `Protected`
 /// untouched. Batched with numbered items; a count mismatch retries the
 /// offending half rather than misaligning the whole document.
 pub fn translate_segments(provider: &mut dyn Provider, segs: &[Segment], target_lang: &str) -> Result<Vec<String>, AiError> {
-    // Collect (index → source) for translatable segments only.
-    let items: Vec<(usize, &str)> = segs
-        .iter()
-        .enumerate()
-        .filter_map(|(i, s)| match s {
-            Segment::Text(t) => Some((i, t.as_str())),
-            Segment::Protected(_) => None,
-        })
-        .collect();
+    // Source whitespace never reaches the model: each Text segment is
+    // split edge-to-edge, and oversized runs are chopped further.
+    let mut runs: Vec<Run<'_>> = Vec::new();
+    for (i, s) in segs.iter().enumerate() {
+        let Segment::Text(src) = s else { continue };
+        for piece in split_run(src, RUN_BYTES) {
+            let (lead, core, trail) = ws_edges(piece);
+            if core.is_empty() {
+                continue; // pure whitespace: preserved verbatim already
+            }
+            runs.push(Run { seg: i, lead, core, trail });
+        }
+    }
+    let run_segs: std::collections::HashSet<usize> = runs.iter().map(|r| r.seg).collect();
 
     let mut out: Vec<String> = segs.iter().map(|s| s.source().to_string()).collect();
-    for chunk in items.chunks(BATCH) {
-        let sources: Vec<&str> = chunk.iter().map(|(_, s)| *s).collect();
-        let translated = translate_batch(provider, &sources, target_lang)?;
-        for ((i, _), t) in chunk.iter().zip(translated) {
-            out[*i] = t;
+    for &i in &run_segs {
+        out[i].clear(); // rebuilt from translated runs below
+    }
+    let mut i = 0;
+    while i < runs.len() {
+        // A batch is bounded by item count *and* total prompt bytes.
+        let mut bytes = 0usize;
+        let start = i;
+        while i < runs.len() && i - start < BATCH && bytes + runs[i].core.len() <= BATCH_BYTES {
+            bytes += runs[i].core.len();
+            i += 1;
+        }
+        if i == start {
+            i += 1; // never spin on an oversized single item
+        }
+        let chunk = &runs[start..i];
+        let translated = translate_batch(provider, chunk, target_lang)?;
+        for (run, t) in chunk.iter().zip(translated) {
+            out[run.seg].push_str(run.lead);
+            out[run.seg].push_str(&t);
+            out[run.seg].push_str(run.trail);
         }
     }
     Ok(out)
@@ -147,18 +280,18 @@ pub fn translate_segments(provider: &mut dyn Provider, segs: &[Segment], target_
 
 /// One numbered batch; splits recursively on count mismatch so a single
 /// malformed reply can't corrupt neighbors.
-fn translate_batch(provider: &mut dyn Provider, sources: &[&str], lang: &str) -> Result<Vec<String>, AiError> {
-    if sources.len() == 1 {
-        return Ok(vec![translate_one(provider, sources[0], lang)?]);
+fn translate_batch(provider: &mut dyn Provider, runs: &[Run<'_>], lang: &str) -> Result<Vec<String>, AiError> {
+    if runs.len() == 1 {
+        return Ok(vec![translate_one(provider, runs[0].core, lang)?]);
     }
-    let prompt = numbered_prompt(&sources.iter().map(|s| s.to_string()).collect::<Vec<_>>(), lang);
+    let prompt = numbered_prompt(&runs.iter().map(|r| r.core.to_string()).collect::<Vec<_>>(), lang);
     let reply = provider.complete(&prompt, &GenOpts::default())?;
-    match parse_numbered(&reply, sources.len()) {
+    match parse_numbered(&reply, runs.len()) {
         Some(v) => Ok(v),
         None => {
-            let mid = sources.len() / 2;
-            let mut a = translate_batch(provider, &sources[..mid], lang)?;
-            let b = translate_batch(provider, &sources[mid..], lang)?;
+            let mid = runs.len() / 2;
+            let mut a = translate_batch(provider, &runs[..mid], lang)?;
+            let b = translate_batch(provider, &runs[mid..], lang)?;
             a.extend(b);
             Ok(a)
         }
@@ -184,29 +317,55 @@ fn numbered_prompt(sources: &[String], lang: &str) -> String {
     p
 }
 
-/// Parse `"1. …\n2. …"` back into items; `None` when the count or
-/// numbering is wrong (caller retries).
+/// Parse `"1. …\n2. …"` back into items; `None` when the reply is
+/// malformed — duplicates, out-of-range numbers, or a missing item all
+/// mean the numbering slipped, and the caller retries/splits rather
+/// than accepting corrupted text. Non-numbered lines after an item are
+/// continuations of it; non-numbered chatter before item 1 is rejected
+/// the same way, so nothing is silently dropped.
 fn parse_numbered(reply: &str, want: usize) -> Option<Vec<String>> {
     let mut out = vec![String::new(); want];
-    let mut seen = 0usize;
+    let mut seen = vec![false; want];
+    let mut current: Option<usize> = None;
     for line in reply.lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let Some((num, rest)) = line.split_once('.').or_else(|| line.split_once(')')) else {
-            continue; // chatter without a number — not ours
-        };
-        let Ok(idx) = num.trim().trim_matches(|c: char| !c.is_ascii_digit()).parse::<usize>() else {
-            continue;
-        };
-        if idx == 0 || idx > want {
-            continue; // stray numbered line — ignore
+        match numbered_line(line) {
+            Some(idx) if idx >= 1 && idx <= want => {
+                if seen[idx - 1] {
+                    return None; // "1. un\n2. deux\n1. trois" overwrites — reject
+                }
+                seen[idx - 1] = true;
+                let rest = line.split_once(['.', ')']).map_or("", |(_, r)| r).trim().to_string();
+                out[idx - 1] = rest;
+                current = Some(idx - 1);
+            }
+            Some(_) => return None, // numbered but out of range — malformed reply
+            // A wrapped/multi-line item: keep the continuation, not
+            // "1. Première phrase.\nSuite" dropping "Suite". Unnumbered
+            // preamble is rejected — not our format.
+            None => {
+                let i = current?;
+                out[i].push('\n');
+                out[i].push_str(line);
+            }
         }
-        out[idx - 1] = rest.trim().to_string();
-        seen += 1;
     }
-    (seen >= want && out.iter().all(|s| !s.is_empty())).then_some(out)
+    (seen.iter().all(|s| *s) && out.iter().all(|s| !s.is_empty())).then_some(out)
+}
+
+/// `Some(idx)` when `line` opens as `"12."` / `"12)"` — a 1-3 digit
+/// number followed by `'.'` or `')'`. Anything else is `None`, so
+/// "Section 2. notes" is a continuation, not item 2.
+fn numbered_line(line: &str) -> Option<usize> {
+    let (num, _) = line.split_once('.').or_else(|| line.split_once(')'))?;
+    let num = num.trim();
+    if num.len() > 3 || num.is_empty() || !num.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    num.parse().ok()
 }
 
 #[cfg(test)]
@@ -242,5 +401,96 @@ mod tests {
         let r = "1. un\n2. deux\n3. trois";
         assert_eq!(parse_numbered(r, 3), Some(vec!["un".into(), "deux".into(), "trois".into()]));
         assert_eq!(parse_numbered("1. un\n3. trois", 3), None);
+    }
+
+    #[test]
+    fn numbered_parse_rejects_duplicates_and_overflow() {
+        assert_eq!(parse_numbered("1. un\n2. deux\n1. trois", 2), None);
+        assert_eq!(parse_numbered("1. un\n2. deux\n3. trois", 2), None);
+        assert_eq!(parse_numbered("0. zero\n1. un\n2. deux", 2), None);
+    }
+
+    #[test]
+    fn numbered_parse_keeps_continuation_lines() {
+        let r = "1. Première phrase.\nSuite du paragraphe\n2. Deuxième élément.";
+        assert_eq!(parse_numbered(r, 2), Some(vec!["Première phrase.\nSuite du paragraphe".into(), "Deuxième élément.".into()]));
+        // Preamble chatter that isn't a numbered item is rejected, not
+        // silently dropped.
+        assert_eq!(parse_numbered("Sure, here you go:\n1. un\n2. deux", 2), None);
+        // "Section 2. notes" looks numbered but isn't → continuation.
+        let r2 = "1. un\nSection 2. notes\n2. deux";
+        assert_eq!(parse_numbered(r2, 2), Some(vec!["un\nSection 2. notes".into(), "deux".into()]));
+    }
+
+    #[test]
+    fn markup_tags_split_from_their_text() {
+        let segs = segment("<em>Hello</em> world", &PdfGrammar);
+        assert!(segs.iter().any(|s| matches!(s, Segment::Protected(p) if p == "<em>")));
+        assert!(segs.iter().any(|s| matches!(s, Segment::Protected(p) if p.trim() == "</em>")));
+        assert!(segs.iter().any(|s| matches!(s, Segment::Text(t) if t.contains("Hello"))));
+        assert!(segs.iter().any(|s| matches!(s, Segment::Text(t) if t.contains("world"))));
+        // Tags containing spaces stay whole and protected.
+        let segs = segment("<a href=\"x\">link</a>", &PdfGrammar);
+        assert!(segs.iter().any(|s| matches!(s, Segment::Protected(p) if p == "<a href=\"x\">")));
+        // A bare '<' is text, not a tag opener — words around it stay
+        // translatable (the lone '<' itself is protected as punctuation).
+        let segs = segment("a < b and <3 hearts", &PdfGrammar);
+        assert!(segs.iter().any(|s| matches!(s, Segment::Text(t) if t.contains("hearts"))));
+        assert!(!segs.iter().any(|s| matches!(s, Segment::Protected(p) if p.contains('<') && p.contains('>'))));
+    }
+
+    #[test]
+    fn ws_edges_and_split_run_preserve_every_byte() {
+        assert_eq!(ws_edges("  héllo \n"), ("  ", "héllo", " \n"));
+        assert_eq!(ws_edges("   "), ("   ", "", ""));
+        let s = "alpha beta gamma delta epsilon";
+        let pieces = split_run(s, 12);
+        assert!(pieces.iter().all(|p| p.len() <= 12));
+        assert_eq!(pieces.concat(), s); // boundary whitespace survives
+        // A run with no whitespace is hard-cut at a char boundary.
+        let long = "x".repeat(50);
+        let pieces = split_run(&long, 20);
+        assert!(pieces.iter().all(|p| p.len() <= 20));
+        assert_eq!(pieces.concat(), long);
+    }
+
+    /// A provider that echoes numbered replies — exercises the batching,
+    /// whitespace restore and reassembly end to end without a network.
+    struct Echo;
+
+    impl Provider for Echo {
+        fn name(&self) -> String {
+            "echo".into()
+        }
+
+        fn complete(&mut self, prompt: &str, _opts: &GenOpts) -> Result<String, AiError> {
+            if prompt.starts_with("Translate each numbered item") {
+                // Parse our own prompt's numbering and echo each item.
+                let body = prompt.split("\n\n").nth(1).unwrap_or("");
+                let mut out = String::new();
+                for line in body.lines() {
+                    out.push_str(line);
+                    out.push('\n');
+                }
+                return Ok(out);
+            }
+            Ok(prompt.rsplit("\n\n").next().unwrap_or(prompt).to_string())
+        }
+
+        fn test(&mut self) -> Result<crate::provider::ProviderInfo, AiError> {
+            Ok(crate::provider::ProviderInfo { label: "echo".into(), models: vec![] })
+        }
+
+        fn is_local(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn translate_restores_whitespace_around_protected_spans() {
+        let segs = segment("Visit https://a.io now", &PdfGrammar);
+        let mut echo = Echo;
+        let out = translate_segments(&mut echo, &segs, "fr").unwrap_or_default();
+        assert_eq!(out.concat(), "Visit https://a.io now");
     }
 }
