@@ -2046,3 +2046,150 @@ fn the_search_for_a_point_looks_at_the_heights_it_is_documented_to() {
     let p = interior_point_charged(&path, 0.01, &|_| true).ok().flatten().expect("the speck");
     assert!(p.y > 9_999.0 && p.y < 10_000.0, "{p:?}");
 }
+
+/// The two curves of a lens: both go from (0, 0) to (0, 100) and run straight up at (75, 50), where they are 0.00075 apart (the precision is
+/// 0.01), but the first is 11 from the second a quarter of the way along (56.25 across and 29.4 up, the other at 18.4). The curves are moved
+/// by `(dx, 0)` and turned about the vertical axis when `mirror` is set.
+fn lens_curves(dx: f64, mirror: bool) -> [[Point; 4]; 2] {
+    let at = |x: f64, y: f64| Point::new(dx + if mirror { -x } else { x }, y);
+    [[at(0.0, 0.0), at(99.999, 49.0), at(99.999, 51.0), at(0.0, 100.0)], [at(0.0, 100.0), at(100.0, 90.0), at(100.0, 10.0), at(0.0, 0.0)]]
+}
+
+/// The lens as one open path of its two curves, as that path closed, or as two open paths (the second drawn from the top, as it is
+/// in the first).
+fn lens(whole: bool, closed: bool, dx: f64, mirror: bool) -> Vec<Shape> {
+    let [a, b] = lens_curves(dx, mirror);
+    let mut first = BezPath::new();
+    first.move_to(a[0]);
+    first.curve_to(a[1], a[2], a[3]);
+    if !whole {
+        let mut second = BezPath::new();
+        second.move_to(b[0]);
+        second.curve_to(b[1], b[2], b[3]);
+        return vec![Shape::new(first, FillRule::NonZero, 0), Shape::new(second, FillRule::NonZero, 1)];
+    }
+    first.curve_to(b[1], b[2], b[3]);
+    if closed {
+        first.close_path();
+    }
+    vec![Shape::new(first, FillRule::NonZero, 0)]
+}
+
+/// Pieces with the same ends and middles are copies of one edge only if the points along them agree: two curves that meet at their middles
+/// to within the precision (0.00075 apart, of 0.01) and part between are the sides of a lens, and the second was dropped: the lens, 1,170
+/// across, was no face, and the outline of the closed path had one of its curves.
+#[test]
+fn curves_with_the_same_ends_and_middles_that_part_between_are_not_copies_of_one_edge() {
+    let lens_area = {
+        let [a, b] = lens_curves(0.0, false);
+        let mut closed = BezPath::new();
+        closed.move_to(a[0]);
+        closed.curve_to(a[1], a[2], a[3]);
+        closed.curve_to(b[1], b[2], b[3]);
+        closed.close_path();
+        closed.area().abs()
+    };
+    assert!((lens_area - 1170.0453).abs() < 1e-3, "{lens_area}");
+    // Moved a million to a hundred billion along (the sweep's tolerance grows with the coordinates), and turned about the vertical axis.
+    for (dx, mirror) in [(0.0, false), (0.0, true), (1e6, false), (-1e6, true), (1e8, false), (1e10, true), (1e11, false), (-1e11, true)] {
+        let label = format!("moved {dx:e}, mirrored {mirror}");
+        let covers = |arr: &BuilderArrangement| arr.regions.len() == 1 && (area(&arr.regions[0]).abs() - lens_area).abs() < 1e-3 * lens_area;
+        // One open path: the lens is a face (the map's faces are all there are), and its piece has both curves.
+        let arr = shape_builder(&lens(true, false, dx, mirror), true);
+        assert!(covers(&arr), "{label}: {:?}", arr.regions);
+        assert_eq!((arr.lines.len(), arr.lines.first().map(|l| l.path.segments().count())), (1, Some(2)), "{label}: one line, two curves");
+        // The same closed: the outline has both curves.
+        let arr = shape_builder(&lens(true, true, dx, mirror), true);
+        assert!(covers(&arr), "{label}: {:?}", arr.regions);
+        assert_eq!(arr.edges.iter().map(|e| e.path.segments().count()).collect::<Vec<_>>(), [2], "{label}");
+        // Two open paths, each a curve of its own: neither is under the other (from 1e10 on the second is listed under the first, as it was
+        // before the points along were compared: the face is there all the same).
+        let arr = shape_builder(&lens(false, false, dx, mirror), true);
+        assert!(covers(&arr), "{label}: {:?}", arr.regions);
+        if dx.abs() < 1e10 {
+            assert_eq!((arr.lines.len(), arr.lines_under.len()), (2, 0), "{label}");
+        }
+    }
+}
+
+/// A chain of three cubics (an S, crossing the line along its ends), drawn from one end or the other.
+fn s_chain(reversed: bool) -> BezPath {
+    let pts = [(0.0, 0.0), (20.0, 40.0), (40.0, 40.0), (60.0, 0.0), (80.0, -40.0), (100.0, -40.0), (120.0, 0.0)];
+    let mut p = BezPath::new();
+    p.move_to(pts[0]);
+    for w in pts[1..].chunks(3) {
+        p.curve_to(w[0], w[1], w[2]);
+    }
+    if reversed { p.reverse_subpaths() } else { p }
+}
+
+/// Copies of one edge are still one edge, drawn the same way or the other, and the points along each are taken once for it: the cost of
+/// comparing them with the edge they are copies of is a measure of the segments of each, not of the edge again for every copy. (In the maps
+/// these tests build, and in all 762 candidates of the planar tests, a piece is one cubic and the ends of copies come in one order; [`agree_along`]
+/// has its own test for the other.)
+///
+/// The fixture is copies of one chain; what it lacks is many different edges with the same ends and middles, which are each compared with
+/// each (and each is measured once).
+#[test]
+fn copies_of_one_edge_drawn_either_way_are_one_edge_and_are_measured_once() {
+    let measured = |copies: usize| {
+        let shapes: Vec<Shape> = (0..copies).map(|k| Shape::new(s_chain(k % 2 == 1), FillRule::NonZero, k as u64)).collect();
+        work::reset();
+        let arr = shape_builder(&shapes, true);
+        // The front-most input has the edge, and every other is under it: the pieces of the first copy, and of each of the others.
+        let pieces = arr.lines.len();
+        assert_eq!(arr.lines_under.len(), pieces * (copies - 1), "{copies} copies");
+        (pieces, work::take(Work::TwinSamples))
+    };
+    let ((pieces, two), (_, eight), (_, thirty_two)) = (measured(2), measured(8), measured(32));
+    // Each piece of each copy is measured once, and the first copy's too (as the edge the others are compared with): 5.5 segments for each copy
+    // (measured: 11 for two copies of three pieces), however many there are.
+    assert_eq!(pieces, 3);
+    assert_eq!((two, eight, thirty_two), (11, 44, 176));
+}
+
+/// Copies of an edge are one edge far from the origin too, where the sweep cuts them further apart (the join of their ends is 16 of its
+/// tolerances, 0.024 at 1e11): the points along a piece are held to that as well as to the precision. Four copies of a chain of three cubics,
+/// drawn either way, and an open line across a rectangle (whose two passes are copies of each other), come out as the same pieces at every
+/// distance, turned about the vertical axis too, as they did before the points along them were compared (measured, with that comparison
+/// taken out). The fixtures lack copies the sweep cut further apart than the precision: none was found where the comparison decides.
+#[test]
+fn copies_of_one_edge_are_one_edge_far_from_the_origin_too() {
+    for dx in [0.0, 1e6, 1e9, 1e10, 1e11] {
+        for mirror in [false, true] {
+            let moved = |p: &BezPath| {
+                let flip = if mirror { kurbo::Affine::FLIP_X } else { kurbo::Affine::IDENTITY };
+                kurbo::Affine::translate((dx, 0.0)) * flip * p
+            };
+            let copies: Vec<Shape> = (0..4).map(|k| Shape::new(moved(&s_chain(k % 2 == 1)), FillRule::NonZero, k as u64)).collect();
+            let arr = shape_builder(&copies, true);
+            assert_eq!((arr.lines.len(), arr.lines_under.len()), (3, 9), "copies, moved {dx:e}, mirrored {mirror}");
+            let across = [
+                Shape::new(moved(&rect_path(0.0, 0.0, 100.0, 50.0)), FillRule::NonZero, 0),
+                Shape::new(moved(&polyline(&[(-10.0, 20.0), (60.0, 25.0), (110.0, 30.0)], false)), FillRule::NonZero, 1),
+            ];
+            let arr = shape_builder(&across, true);
+            assert_eq!((arr.regions.len(), arr.lines.len(), arr.edges.len()), (2, 3, 2), "line across, moved {dx:e}, mirrored {mirror}");
+        }
+    }
+}
+
+/// The points along two pieces are compared from the same end or from the other. (In the maps the tests above build, the pieces of copies
+/// run one way, whichever way the paths were drawn, so they are compared the one way only.)
+#[test]
+fn the_points_along_two_pieces_are_compared_from_the_same_end_or_the_other() {
+    use super::map::agree_along;
+    let along: [Point; crate::pathfinder::CHAIN_SAMPLES] = std::array::from_fn(|k| Point::new(k as f64 * 10.0, 0.0));
+    let back: [Point; crate::pathfinder::CHAIN_SAMPLES] = std::array::from_fn(|k| along[along.len() - 1 - k]);
+    assert!(agree_along(&along, &along, false, 0.01) && agree_along(&along, &back, true, 0.01));
+    assert!(!agree_along(&along, &back, false, 0.01) && !agree_along(&along, &along, true, 0.01), "the other way is no copy");
+    // One point of nine off by 0.02 of the 0.01 allowed (the first, the middle and the last), run either way.
+    for k in [0, along.len() / 2, along.len() - 1] {
+        let mut off = along;
+        off[k].y = 0.02;
+        assert!(!agree_along(&along, &off, false, 0.01) && agree_along(&along, &off, false, 0.03), "point {k}");
+        let mut off = back;
+        off[along.len() - 1 - k].y = 0.02;
+        assert!(!agree_along(&along, &off, true, 0.01) && agree_along(&along, &off, true, 0.03), "point {k} reversed");
+    }
+}

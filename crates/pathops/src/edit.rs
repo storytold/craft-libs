@@ -22,7 +22,7 @@ use crate::work::{self, Work};
 #[non_exhaustive]
 pub struct SimplifyOptions {
     /// Maximum distance (path units) between the original and simplified path (with `smooth`, between the
-    /// smoothed and simplified path).
+    /// smoothed and simplified path). A tolerance under 1e-6, or none that is a number, is taken as 1e-6.
     pub tolerance: f64,
     /// Anchors where the path turns by more than this many degrees stay corners.
     pub corner_angle_deg: f64,
@@ -77,9 +77,13 @@ pub fn simplify(path: &BezPath, tolerance: f64) -> BezPath {
     simplify_with(path, &SimplifyOptions { tolerance, ..Default::default() })
 }
 
-/// Simplify never adds anchors: keep whichever subpath is smaller.
-fn no_worse(original: &Sub, fitted: BezPath, fitted_anchors: usize) -> BezPath {
+/// Simplify never adds anchors: keep whichever subpath is smaller. A fit that is not kept is given back what it was charged
+/// ([`Fit::made`], which `made_before` is the value of before the subpath was fitted), as a piece left as it was is: the room the call
+/// has is for what its result holds, and a run of subpaths that refit to more anchors than they had would use it up and leave the
+/// subpaths after them unsimplified.
+fn no_worse(original: &Sub, fitted: BezPath, fitted_anchors: usize, (fit, made_before): (&mut Fit, usize)) -> BezPath {
     if fitted_anchors > original.anchors() {
+        fit.made = made_before;
         let mut out = BezPath::new();
         if original.closed {
             original.push_closed(&mut out)
@@ -130,6 +134,7 @@ struct Fit {
     max_points: usize,
     /// The segments made by the fits and the lines of the whole call so far (the pieces that stay as they were are not counted),
     /// charged as they are or may be made, and held to [`crate::Limits::elements`] in all, over every run of every subpath ([`Fit::room`]).
+    /// A subpath that is left as it was, its fit having more anchors than it had, is given back what its fit made ([`no_worse`]).
     made: usize,
 }
 
@@ -168,6 +173,7 @@ impl Fit {
 
 /// [`simplify_with`] for one subpath; `None` when the refit leaves nothing of it.
 fn simplify_subpath(sub: &Sub, opts: &SimplifyOptions, fit: &mut Fit) -> Option<BezPath> {
+    let made_before = fit.made;
     let mut segs = sub.chain();
     let n = segs.len();
     if n == 0 {
@@ -188,7 +194,7 @@ fn simplify_subpath(sub: &Sub, opts: &SimplifyOptions, fit: &mut Fit) -> Option<
         return Some(s);
     }
     let anchors = result.len() + usize::from(!sub.closed);
-    Some(no_worse(sub, s, anchors))
+    Some(no_worse(sub, s, anchors, (fit, made_before)))
 }
 
 /// Most points sampled from one part of a run of segments to refit: 1,048,576 (the default of [`crate::Limits::fit_points`]). A longer
@@ -617,7 +623,8 @@ fn rdp(pts: &[Point], tol: f64, fit: &mut Fit) -> Option<Vec<Point>> {
 }
 
 /// Remove anchors that can be deleted without changing the shape by more than `tolerance`
-/// (collinear corner points, duplicate points, and curve joints that one cubic can replace).
+/// (collinear corner points, duplicate points, and curve joints that one cubic can replace). A tolerance under 1e-9, or none
+/// that is a number, is taken as 1e-9.
 ///
 /// A path of more than [`crate::MAX_ELEMENTS`] elements is returned as it is. The search for what
 /// one pass along each subpath leaves (at a closed subpath's start), the checks of a run against
@@ -945,12 +952,15 @@ fn witness_points(originals: &Originals, first: usize, count: usize, steps: usiz
 /// guess at the second difference of the cubic, for the number of points; they are taken again when the
 /// cubic needs more. Each point is charged to `work` ([`WITNESS_COST`]) before the fit.
 fn refit_run(originals: &Originals, first: usize, count: usize, tol: f64, seed: f64, work: &mut usize) -> Option<(CubicBez, f64)> {
-    if count == 0 {
+    // With no work left no refit is made, and the sum of the run's lengths below is not charged until the refit is: asked at every
+    // segment after the work ran out (a long run whose merges pass the bound but not the tolerance), it would read the run each time.
+    if count == 0 || *work == 0 {
         return None;
     }
     let (head, tail) = (originals.seg(first)?, originals.seg(first.checked_add(count - 1)?)?);
     let (t0, t1) = (start_tangent(&head.c), end_tangent(&tail.c));
     // The least intervals that keep the lens of each within a share of the tolerance, however straight the run is.
+    work::add(Work::RefitFloors, count);
     let floor = lens_floor(originals.polygon_length(first, count)?, tol);
     let mut sd = seed;
     for round in 0..2 {
@@ -2304,5 +2314,70 @@ mod tests {
         assert!(lens_floor(1e9, 0.01) > lens_floor(1e8, 0.01) && lens_floor(1e8, 0.01) > lens_floor(1e8, 0.1));
         assert_eq!(lens_floor(f64::NAN, 0.01), 0);
         assert!(lens_floor(1e4, 0.01) <= 1, "a segment of ordinary length asks for nothing more than the eight");
+    }
+
+    /// With no work left a refit reads none of its run: the lengths of its segments are summed before the refit is charged, and a long run
+    /// whose merges pass the bound but not the tolerance asks for a refit at every segment after the work has run out (a circle of 20,000
+    /// cubics at a tolerance of 1 read 12,428,562 lengths with none left, 620 a segment, and 569,103 with all it needed). The result is
+    /// what it was.
+    ///
+    /// The fixture is one closed run of smooth cubics; it has no corners, other subpaths or lines.
+    #[test]
+    fn a_refit_with_no_work_left_reads_none_of_its_run() {
+        let circle = cut_circle(20_000, 1000.0);
+        work::reset();
+        let mut left = BIG_WORK;
+        let free = remove_redundant_within(&circle, 1.0, &mut left);
+        let free_reads = work::take(Work::RefitFloors);
+        assert!(free_reads > 0, "the run is refitted when there is work");
+        let mut none = 0;
+        let cut = remove_redundant_within(&circle, 1.0, &mut none);
+        assert_eq!(work::take(Work::RefitFloors), 0, "no work, no reads (there were {free_reads} with it)");
+        assert!(anchor_count(&free) < anchor_count(&cut) && anchor_count(&cut) == 64, "{} and {} anchors", anchor_count(&free), anchor_count(&cut));
+        // A refit the work is too little for reads its run once, the work then being none.
+        let segs = chain_of(&circle);
+        let originals = Originals::new(&segs);
+        let count = 3_000;
+        let mut work = 1_000;
+        assert!(refit_run(&originals, 0, count, 1.0, 0.0, &mut work).is_none());
+        assert_eq!((work, work::take(Work::RefitFloors)), (0, count), "one read of the run, for the work that was too little");
+        assert!(refit_run(&originals, 0, count, 1.0, 0.0, &mut work).is_none());
+        assert_eq!(work::take(Work::RefitFloors), 0, "and none after");
+    }
+
+    /// A cubic that refits to more cubics than it is (found by search, at a tolerance of 0.1: five), so that `no_worse` leaves it as it was.
+    fn a_cubic_that_refits_to_five() -> BezPath {
+        let mut p = BezPath::new();
+        p.move_to((189.10761382430792, -187.0988787151873));
+        p.curve_to((293.9970795996487, 289.83426271006465), (-203.01429787650704, 195.66607922315598), (-13.228380773216486, -100.35774372518063));
+        p
+    }
+
+    /// A subpath whose fit has more anchors than it had is left as it was, and what its fit made is given back to the room the call makes
+    /// segments in ([`Fit::room`]), as it is for a piece the fit leaves as it was. A run of them used the room up (each was charged the
+    /// cubics it was refitted to, and none was in the result), and the subpaths after them were not fitted as a whole, or not at all.
+    ///
+    /// The fixture is ten such cubics, each sampled at 257 points, and a line through 70 points; what it lacks is subpaths that are refitted
+    /// and kept among the rejected ones (they are charged as they are made, and the room is for what is kept).
+    #[test]
+    fn a_subpath_left_as_it_was_gives_back_what_its_fit_made() {
+        let opts = SimplifyOptions::default().tolerance(0.1);
+        let one = a_cubic_that_refits_to_five();
+        let mut fit = Fit::new(BIG_WORK, MAX_FIT_POINTS);
+        assert_eq!(simplify_within(&one, &opts, &mut fit), one, "left as it was");
+        assert_eq!(fit.made, 0, "none of the five is in the result");
+        // The call has room for 300 segments, and a fit is charged the samples it is made from (257 for one of these, 277 for the line): after
+        // the ten of them the call had been charged 47 (measured, with nothing given back), room for 253 samples, and the line was fitted in two
+        // parts (a joint between them) and not whole.
+        let mut path = BezPath::new();
+        for _ in 0..10 {
+            path.extend(one.iter());
+        }
+        path.extend(polyline(&(0..70).map(|i| (0.1 * f64::from(i), 10.0)).collect::<Vec<_>>(), false).iter());
+        assert!(path.elements().len() <= 300);
+        let limits = crate::Limits { elements: 300, ..crate::Limits::default() };
+        let simplified = crate::with_limits(limits, || simplify_with(&path, &opts));
+        let anchors: Vec<usize> = subs(&simplified).iter().map(Sub::anchors).collect();
+        assert_eq!(anchors, vec![2; 11], "the cubics as they were, the line as one segment");
     }
 }

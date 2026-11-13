@@ -179,8 +179,22 @@ pub fn ends(path: &BezPath) -> (Point, Point) {
 
 // ---------------------------------------------------------------- measures
 
+/// Whether `a` and `b` are numbers within `rel` of each other, relative to the larger of them (or to 1, where both are smaller): an
+/// infinity is no number a result may be, and passed against anything (`inf - 175` is `inf`, which is `<= rel * inf`).
 pub fn rel_close(a: f64, b: f64, rel: f64) -> bool {
-    (a - b).abs() <= rel * a.abs().max(b.abs()).max(1.0)
+    a.is_finite() && b.is_finite() && (a - b).abs() <= rel * a.abs().max(b.abs()).max(1.0)
+}
+
+#[test]
+fn rel_close_takes_no_value_that_is_not_a_number_for_close_to_anything() {
+    assert!(rel_close(175.0, 175.0 + 1e-8, 1e-9) && !rel_close(175.0, 176.0, 1e-9), "numbers are compared as they were");
+    assert!(rel_close(0.0, 5e-10, 1e-9), "relative to 1 where both are small");
+    for bad in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+        assert!(!rel_close(bad, 175.0, 1e-9), "{bad} first");
+        assert!(!rel_close(175.0, bad, 1e-9), "{bad} second");
+        assert!(!rel_close(bad, bad, 1e-9), "{bad} twice");
+        assert!(!rel_close(bad, 175.0, f64::INFINITY), "{bad} against a tolerance of infinity");
+    }
 }
 
 /// The distance from `p` to the nearest point of `bp`'s outline.

@@ -1009,7 +1009,7 @@ const CHAIN_COMPARE_STEPS: usize = 12;
 
 /// The points of a chain of an Outline that are compared with another's to tell whether they coincide: at a tenth of its length, two tenths and
 /// so on (the middle one is the fifth). An odd number, so that one is the midpoint.
-const CHAIN_SAMPLES: usize = 9;
+pub(crate) const CHAIN_SAMPLES: usize = 9;
 
 /// The points of the chain `c` at each tenth of its length (the ninth of them, a tenth from the end), the fifth halfway.
 ///
@@ -1019,7 +1019,7 @@ const CHAIN_SAMPLES: usize = 9;
 /// more on a curve longer than about 9e12 (a shift past the width of its integer, a panic where
 /// arithmetic is checked), and a relative accuracy keeps them to about thirty at any size, and the
 /// measuring of each segment to a few levels (the same 1e-6 for a segment up to a thousand long).
-fn chain_points(c: &[Seg]) -> [Point; CHAIN_SAMPLES] {
+pub(crate) fn chain_points(c: &[Seg]) -> [Point; CHAIN_SAMPLES] {
     let accuracy = |s: &CubicBez| (1e-9 * (s.p0.distance(s.p1) + s.p1.distance(s.p2) + s.p2.distance(s.p3))).max(1e-6);
     let lens: Vec<f64> = c.iter().map(|s| kurbo::ParamCurveArclen::arclen(&s.c, accuracy(&s.c))).collect();
     let total: f64 = lens.iter().sum();

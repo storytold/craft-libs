@@ -656,6 +656,9 @@ fn without_spurious(c: &Contours, drop_outer: bool, d: f64, within: impl Fn(kurb
 pub fn offset_path(path: &BezPath, delta: f64, join: Join, miter_limit: f64) -> BezPath {
     try_offset_path(path, delta, join, miter_limit).unwrap_or_else(|e| match e {
         PathOpsError::NonFinite => BezPath::new(),
+        // A path past the element limit is refused for its size before its coordinates are looked at ([`try_offset_path`]), so one that is no
+        // path (or a distance that is no number) is found out here, where the path is read to be given back anyway.
+        PathOpsError::TooComplex if !delta.is_finite() || !is_finite(path) => BezPath::new(),
         _ => path.clone(),
     })
 }

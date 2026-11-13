@@ -210,3 +210,19 @@ fn offsets_strokes_and_edits_refuse_paths_past_the_segment_cap() {
     assert_eq!(remove_redundant_points(&huge, 0.5), huge);
     assert_eq!(join(&[huge.clone(), ok.clone()], 1.0).elements().len(), huge.elements().len() + ok.elements().len());
 }
+
+/// The size is checked before the coordinates ([`try_offset_path`] says `TooComplex` for any path past the cap), and `offset_path`, which
+/// gives a path that fails back as it was and a path that is no numbers as nothing, gives nothing for one that is both.
+#[test]
+fn an_offset_of_a_path_past_the_cap_that_is_no_numbers_is_nothing() {
+    let huge = past_the_cap();
+    let mut broken = huge.clone();
+    broken.line_to((f64::NAN, 0.0));
+    assert_eq!(try_offset_path(&broken, 1.0, Join::Round, 4.0), Err(TOO_COMPLEX), "refused for its size first");
+    assert!(offset_path(&broken, 1.0, Join::Round, 4.0).elements().is_empty(), "a coordinate that is no number");
+    for delta in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert_eq!(try_offset_path(&huge, delta, Join::Round, 4.0), Err(TOO_COMPLEX), "{delta}");
+        assert!(offset_path(&huge, delta, Join::Round, 4.0).elements().is_empty(), "a distance of {delta}");
+    }
+    assert_eq!(offset_path(&huge, 1.0, Join::Round, 4.0), huge, "and numbers are left as they were");
+}

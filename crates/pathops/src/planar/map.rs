@@ -8,6 +8,7 @@ use super::index::{Crossings, Frame, RectIndex, mid, try_frame_for};
 use super::*;
 use crate::PathOpsError;
 use crate::budget::SearchBudget;
+use crate::pathfinder::{CHAIN_SAMPLES, chain_points};
 use crate::work::{self, Work};
 
 /// The planar graph of `shapes` (in the sweep's frame) with its faces walked: what [`build`] makes
@@ -304,6 +305,8 @@ fn sweep_graph(inputs: &[(BezPath, usize)], eps: f64, precision: f64) -> Option<
     }
     let mut edges: Vec<Edge> = Vec::new();
     let mut between: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+    // The points along the edges that were compared with a piece, by edge.
+    let mut edge_points: HashMap<usize, [Point; CHAIN_SAMPLES]> = HashMap::new();
     let outlines = Outlines::new(inputs, eps);
     for (mut segs, ends) in pieces {
         let ends = ends.map(|v| find(&mut joined, v));
@@ -323,13 +326,35 @@ fn sweep_graph(inputs: &[(BezPath, usize)], eps: f64, precision: f64) -> Option<
         }
         let Some(&source) = sources.last() else { continue };
         // Coincident pieces the sweep left apart are one edge (the front-most input's), lying on
-        // the inputs of both.
+        // the inputs of both. Two pieces with the same ends and middles are coincident only if the points
+        // along them agree too (nine along each, as the Outline compares its chains): two curves can part
+        // between their ends and meet again at the middle to within the precision, the lens between them
+        // a face, and the second would be dropped. The points are taken once for a piece, and only for one
+        // that has the ends and the middle of another.
         let key = (ends[0].min(ends[1]), ends[0].max(ends[1]));
         let here = mid(&segs);
+        // As far as the sweep may have cut copies apart (their ends are joined within 16 of its tolerances), which is more than the
+        // precision from 4e10 on.
+        let near = precision.max(16.0 * eps).max(1e-5);
+        let mut along: Option<[Point; CHAIN_SAMPLES]> = None;
         let twin_of = between.get(&key).and_then(|v| {
             v.iter().copied().find(|&e| {
-                let other = edges.get(e).and_then(|e| mid(&e.segs));
-                matches!((here, other), (Some(a), Some(b)) if a.distance(b) < precision)
+                let Some(edge) = edges.get(e) else { return false };
+                let (Some(a), Some(b)) = (here, mid(&edge.segs)) else { return false };
+                let middles_meet = a.distance(b) < precision;
+                if !middles_meet {
+                    return false;
+                }
+                let mine = *along.get_or_insert_with(|| {
+                    work::add(Work::TwinSamples, segs.len());
+                    chain_points(&segs)
+                });
+                let theirs = edge_points.entry(e).or_insert_with(|| {
+                    work::add(Work::TwinSamples, edge.segs.len());
+                    chain_points(&edge.segs)
+                });
+                // The same pair of ends, run the same way or the other.
+                agree_along(&mine, theirs, edge.ends[0] != ends[0], near)
             })
         });
         if let Some(e) = twin_of {
@@ -345,6 +370,12 @@ fn sweep_graph(inputs: &[(BezPath, usize)], eps: f64, precision: f64) -> Option<
         edges.push(Edge { segs, ends, source, sources });
     }
     Some((points, edges))
+}
+
+/// Whether the points along two pieces agree: each of `a` is within `near` of the one of `b` at the same place along it, counted from
+/// the other end of `b` when the pieces are run the other way (`reversed`).
+pub(super) fn agree_along(a: &[Point; CHAIN_SAMPLES], b: &[Point; CHAIN_SAMPLES], reversed: bool, near: f64) -> bool {
+    a.iter().enumerate().all(|(k, p)| b.get(if reversed { CHAIN_SAMPLES - 1 - k } else { k }).is_some_and(|q| p.distance(*q) < near))
 }
 
 /// What [`build`] gives: the faces, the edges, and the pieces of the open paths under other paths.

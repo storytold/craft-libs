@@ -188,8 +188,13 @@ fn fit_rec(
     let Some(pts) = all.get(start..=end) else { return Err(FitStop::Depth) };
     let n = pts.len();
     if n == 2 {
-        // (A handle that points away from the chord is `d` from its end, so `d` is held a hair under the tolerance, for the rounding.)
-        let d = (pts[0].distance(pts[1]) / 3.0).min(tol * (1.0 - 1e-9));
+        // (A handle that points away from the chord is `d` from its end, so `d` is held a hair under the tolerance, for the rounding.
+        // The hair is a billionth of the tolerance, and where the coordinates are large a handle's end is rounded to more than that
+        // (1.2e-7 at 1e9, on a tolerance of 0.1: the handle came out longer than the tolerance and no fit was found): so where a few
+        // last places of the largest coordinate are more than the hair, `d` is held under the tolerance by them.)
+        let places = 4.0 * f64::EPSILON * pts.iter().fold(0.0f64, |m, p| m.max(p.x.abs()).max(p.y.abs()));
+        let held = if places > tol * 1e-9 { (tol - places).max(0.0) } else { tol * (1.0 - 1e-9) };
+        let d = (pts[0].distance(pts[1]) / 3.0).min(held);
         let c = CubicBez::new(pts[0], pts[0] + t0 * d, pts[1] - t1 * d, pts[1]);
         // Through both points: within the tolerance of their chord by where its handles lie (the hull), or no fit.
         let off = chord_distance(&c);
@@ -560,6 +565,25 @@ mod tests {
             fit_cubics(&pts, start_tangent(&c), end_tangent(&c), (0.05, 0.0), &mut work).unwrap().into_iter().map(|f| f.0).collect();
         assert_eq!(out.len(), 1);
         assert!(out[0].p1.distance(c.p1) < 1.0, "{:?}", out[0]);
+    }
+
+    /// A piece of two points far from the origin: the handles are rounded to the last place of the coordinates (1.2e-7 at 1e9), which is
+    /// more than the hair the tolerance is held under (a billionth of it), so a handle of the tolerance came out longer than it
+    /// (0.10000002384185791 for 0.1, the points (0, 1e9) and (300, 1e9) and both tangents up) and no fit was found for two points
+    /// that shorter handles fit. The handles are held under the tolerance by the last places of the coordinates too.
+    #[test]
+    fn two_points_far_from_the_origin_are_fitted_with_handles_the_rounding_does_not_lengthen() {
+        let up = Vec2::new(0.0, 1.0);
+        for height in [0.0, 1e3, 1e6, 1e8, 1e9, 1e10, 1e11] {
+            let pts = [Point::new(0.0, height), Point::new(300.0, height)];
+            let mut work = usize::MAX;
+            let fitted = fit_cubics(&pts, up, up, (0.1, 0.0), &mut work).unwrap_or_else(|stop| panic!("no fit at {height:e}: {stop:?}"));
+            let [(c, off)] = fitted[..] else { panic!("one cubic at {height:e}, not {}", fitted.len()) };
+            assert!(chord_distance(&c) <= 0.1 && off <= 0.1, "at {height:e}: {} from the chord, bound {off}", chord_distance(&c));
+            // Held under the tolerance by a few last places and no more: the handles are not shortened to nothing.
+            let places = 8.0 * f64::EPSILON * height.max(300.0);
+            assert!(chord_distance(&c) > 0.1 - places - 1e-9, "at {height:e}: handles of {}", chord_distance(&c));
+        }
     }
 
     #[test]

@@ -53,6 +53,9 @@ pub(crate) enum Work {
     RunChecks,
     /// Points of a run that a cubic replacing it was refitted from.
     Witnesses,
+    /// Segments of a run whose control polygons a refit added up to find the fewest points to take of it, counted before they are (and so before the refit
+    /// is charged: with no work left the sum is not made).
+    RefitFloors,
     /// Tables of the corners of a subpath made (for the strides of a refit).
     CornerTables,
     /// Curves put in the tidy's index of the input curves a result's boundary is rebuilt from.
@@ -93,6 +96,9 @@ pub(crate) enum Work {
     JunctionSteps,
     /// Chains of an Outline that were compared with a chain found beside them, for edges that coincide.
     ChainCompares,
+    /// Segments of the pieces of a planar map that were measured to take the points along them, which a piece is compared at with another
+    /// that has its ends and its midpoint (counted before they are, and once for a piece however many it is compared with).
+    TwinSamples,
     /// Places where segments were found to cross, by testing the pairs whose bounds overlap (the check of a sweep's crossings).
     Crossings,
     /// Faces of an offset whose point deep inside was looked for among the crossings of the curves themselves, the
