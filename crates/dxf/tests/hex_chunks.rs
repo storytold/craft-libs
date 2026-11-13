@@ -2,7 +2,6 @@
 //! 1004 specify at most 127 payload bytes per chunk, even though a length byte represents 255.
 //! Inspect writer bytes without our parser; accept any compliant partition preserving payload,
 //! code and following-record framing. Oversized binary read fixtures test tolerance only.
-//! Pending writer regressions extend the chunk-size finding in issue #1025.
 //! Public DXF Reference, Group Codes in Numerical Order and Binary DXF Files:
 //! <https://help.autodesk.com/cloudhelp/2025/ENU/AutoCAD-DXF/files/GUID-3F0380A5-1C15-464D-BC66-2C5F094BCFB9.htm>
 //! <https://help.autodesk.com/cloudhelp/2025/ENU/AutoCAD-DXF/files/GUID-FC1C3C69-DBC2-49E4-893A-000D6538C0FE.htm>
@@ -100,7 +99,6 @@ fn binary_reader_tolerates_the_full_length_byte_domain() {
 }
 
 #[test]
-#[ignore = "Confirmed ASCII DXF writer nonconformance: hex payloads above 127 bytes are emitted as one oversized chunk"]
 fn ascii_writer_splits_large_payloads_into_conforming_chunks() {
     for code in (310..=319).chain([1004]) {
         for length in [128, 254, 255, 256, 1024] {
@@ -112,7 +110,6 @@ fn ascii_writer_splits_large_payloads_into_conforming_chunks() {
 }
 
 #[test]
-#[ignore = "Confirmed binary DXF writer nonconformance: 255-byte partitioning exceeds the documented 127-byte group limit"]
 fn binary_writer_splits_large_payloads_into_conforming_chunks() {
     for code in (310..=319).chain([1004]) {
         for length in [128, 254, 255, 256, 1024] {
