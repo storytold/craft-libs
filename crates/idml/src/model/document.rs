@@ -4,6 +4,57 @@ use craft_xml::El;
 
 use super::{Spread, Story, Values};
 
+/// One IDML table-of-contents style entry before document style names are resolved.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TocStyleEntryValues {
+    pub style: Option<String>,
+    pub level: Option<u8>,
+    pub page_number_position: Option<String>,
+    pub separator: Option<String>,
+    pub entry_style: Option<String>,
+    pub page_number_style: Option<String>,
+    pub separator_style: Option<String>,
+    pub sort: Option<bool>,
+}
+
+/// An IDML table-of-contents style and its entry grammar.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TocStyleValues {
+    pub self_id: Option<String>,
+    pub title: Option<String>,
+    pub title_style: Option<String>,
+    pub create_bookmarks: Option<bool>,
+    pub entries: Vec<TocStyleEntryValues>,
+}
+
+impl TocStyleValues {
+    /// Reads a `TOCStyle` element and its bounded `TOCStyleEntry` children.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        let mut result = Self {
+            self_id: values.self_id().map(str::to_owned),
+            title: values.get("Title").map(str::to_owned),
+            title_style: values.get("TitleStyle").map(str::to_owned),
+            create_bookmarks: values.get("CreateBookmarks").or_else(|| values.get("CreatePdfBookmarks")).map(|value| value == "true"),
+            entries: Vec::new(),
+        };
+        result.entries.extend(el.elements().filter(|entry| entry.local() == "TOCStyleEntry").take(64).map(|entry| {
+            let values = Values::of(entry);
+            TocStyleEntryValues {
+                style: values.get("Name").map(str::to_owned),
+                level: values.get("Level").and_then(|value| value.trim().parse().ok()),
+                page_number_position: values.get("PageNumberPosition").map(str::to_owned),
+                separator: values.get("Separator").map(str::to_owned),
+                entry_style: values.prop("FormatStyle"),
+                page_number_style: values.prop("PageNumberStyle"),
+                separator_style: values.prop("SeparatorStyle"),
+                sort: values.get("Sort").map(|value| value.trim() == "true"),
+            }
+        }));
+        result
+    }
+}
+
 /// The top-level IDML elements consumed by document importers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TopLevelKind {
