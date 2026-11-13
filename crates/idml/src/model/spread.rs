@@ -146,6 +146,41 @@ pub struct Page {
     pub children: Vec<PageChild>,
 }
 
+/// Parsed layout values of an IDML `MarginPreference`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MarginPreference {
+    pub values: Values,
+}
+
+impl MarginPreference {
+    pub fn top(&self) -> Option<f64> {
+        self.values.num("Top")
+    }
+    pub fn left(&self) -> Option<f64> {
+        self.values.num("Left")
+    }
+    pub fn bottom(&self) -> Option<f64> {
+        self.values.num("Bottom")
+    }
+    pub fn right(&self) -> Option<f64> {
+        self.values.num("Right")
+    }
+    pub fn column_count(&self) -> Option<f64> {
+        self.values.num("ColumnCount")
+    }
+    pub fn column_gutter(&self) -> Option<f64> {
+        self.values.num("ColumnGutter")
+    }
+
+    /// Parse at most `limit` whitespace-separated `ColumnsPositions` values; malformed or
+    /// non-finite values invalidate the list.
+    pub fn column_positions(&self, limit: usize) -> Option<Vec<f64>> {
+        let source = self.values.get("ColumnsPositions")?;
+        let values: Option<Vec<f64>> = source.split_whitespace().take(limit).map(|v| v.parse::<f64>().ok().filter(|v| v.is_finite())).collect();
+        values.filter(|values| !values.is_empty())
+    }
+}
+
 /// A child of a page, in document order.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PageChild {
@@ -213,6 +248,10 @@ impl Page {
             PageChild::Other(e) if e.local() == "MarginPreference" => Some(Values::of(e)),
             _ => None,
         })
+    }
+
+    pub fn margin_settings(&self) -> Option<MarginPreference> {
+        self.margin_preference().map(|values| MarginPreference { values })
     }
 
     pub fn guides(&self) -> impl DoubleEndedIterator<Item = &Guide> {

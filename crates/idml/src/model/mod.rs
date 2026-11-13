@@ -22,7 +22,9 @@ pub use resources::{
     ColorGroup, ColorSpace, GradientStop, GradientStopValue, Ink, StrokeStyle, StrokeStyleKind, Style, StyleGroup, StyleKind, StyleNode, Swatch,
     SwatchKind, color_groups, inks, named, preference, stroke_styles, style_groups, swatches,
 };
-pub use spread::{Graphic, GraphicChild, GraphicKind, Guide, ItemChild, ItemKind, Link, Page, PageChild, PageItem, Spread, SpreadChild, spreads};
+pub use spread::{
+    Graphic, GraphicChild, GraphicKind, Guide, ItemChild, ItemKind, Link, MarginPreference, Page, PageChild, PageItem, Spread, SpreadChild, spreads,
+};
 pub use story::{Ace, CONTAINERS, Cell, Container, ContentPart, Range, Story, Table, TableChild, TextNode, stories};
 
 use craft_xml::{El, Local, Node};
