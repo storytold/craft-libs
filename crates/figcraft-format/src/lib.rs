@@ -191,6 +191,25 @@ impl<'de> Deserialize<'de> for Header {
 #[error("this file was saved by a newer FigCraft (format version {0})")]
 pub struct NewerVersion(pub u32);
 
+/// Failure while reading the native document envelope or its app-supplied payload type.
+#[derive(Debug, thiserror::Error)]
+pub enum ReadDocumentError {
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    NewerVersion(#[from] NewerVersion),
+}
+
+/// Read a document payload after checking the native header and version first.
+///
+/// The payload type is supplied by the consumer, keeping app model conversion outside this crate.
+pub fn read_document_json<D: serde::de::DeserializeOwned>(text: &str) -> Result<(D, Header), ReadDocumentError> {
+    let header = read_header(text)?;
+    check_version(&header)?;
+    let document = serde_json::from_str(text)?;
+    Ok((document, header))
+}
+
 pub fn check_version(h: &Header) -> Result<(), NewerVersion> {
     if let Some(v) = h.version
         && v > u64::from(VERSION)
@@ -288,6 +307,16 @@ mod tests {
     fn newer_version_is_reported_before_document_decode() {
         assert_eq!(check_version(&Header { version: Some(2), images: None }), Err(NewerVersion(2)));
         assert_eq!(check_version(&Header { version: Some(u64::MAX), images: None }), Err(NewerVersion(u32::MAX)));
+
+        #[derive(Deserialize)]
+        struct Payload {
+            document: u32,
+        }
+        let text = r#"{"version":2,"document":{"wrong":"type"}}"#;
+        assert!(matches!(read_document_json::<Payload>(text), Err(ReadDocumentError::NewerVersion(NewerVersion(2)))));
+        let (payload, header) = read_document_json::<Payload>(r#"{"version":1,"imageIndex":[{"hash":"a"}],"document":5}"#).unwrap();
+        assert_eq!(payload.document, 5);
+        assert_eq!(header.images, Some(vec!["a".into()]));
     }
     #[test]
     fn writer_flattens_document_fields() {
