@@ -40,6 +40,11 @@ impl PixelRect {
         (self.y1 - self.y0).max(0)
     }
 
+    /// Width and height in pixels.
+    pub fn size(&self) -> PixelSize {
+        PixelSize::new(self.width().unsigned_abs(), self.height().unsigned_abs())
+    }
+
     /// Whether the rectangle covers no pixel.
     pub fn is_empty(&self) -> bool {
         self.width() == 0 || self.height() == 0
@@ -81,6 +86,9 @@ pub trait RasterSource {
 
     /// Writes the composite of `region` into `out` (sRGBA, unmultiplied), one texel per `factor` pixels each way
     /// (`factor` is a power of two for a detail texture and `texture_factor` of `primitives::textures` for the base
-    /// one; 1 is full resolution). `out` is already `region / factor` texels, rounded up.
+    /// one; 1 is full resolution). `out` is already `region / factor` texels, rounded up. The region lies inside the
+    /// document unless the display reaches past it ([`Extent::Region`](super::Extent::Region)): then it may start
+    /// left of or above the origin and end past the size, and the source writes what it has there (layers' pixels
+    /// past the canvas, transparency elsewhere).
     fn read(&self, region: PixelRect, factor: u32, out: &mut ColorImage);
 }

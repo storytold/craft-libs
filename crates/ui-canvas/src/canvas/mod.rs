@@ -51,7 +51,7 @@ pub use words::SplitWords;
 mod app_paint;
 mod raster;
 pub use app_paint::AppPaint;
-pub use raster::{DetailPlan, RasterDisplay, RasterDisplayOutput, RasterStyle, snap_to_texels};
+pub use raster::{DetailPlan, Extent, RasterDisplay, RasterDisplayOutput, RasterStyle, snap_to_texels};
 
 // l4d-space
 mod opacity_keys;

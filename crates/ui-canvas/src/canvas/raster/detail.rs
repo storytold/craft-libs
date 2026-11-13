@@ -3,7 +3,7 @@
 
 use crate::canvas::PixelRect;
 use crate::primitives::texture_factor;
-use craft_behavior::{CanvasView, PixelSize};
+use craft_behavior::CanvasView;
 
 /// The detail region snaps outward to multiples of this many texels.
 const DETAIL_QUANTUM: i32 = 256;
@@ -38,14 +38,13 @@ fn proxy_factor(device_zoom: f64) -> u32 {
 
 impl DetailPlan {
     /// The plan for a view at `device_zoom` (device pixels per document pixel) over `visible`, or `None` when the
-    /// base texture is already as fine as the screen or nothing is in view. `size` is the document and `side` the
-    /// device's texture side.
-    pub fn of(size: PixelSize, side: u32, device_zoom: f64, visible: PixelRect) -> Option<DetailPlan> {
+    /// base texture is already as fine as the screen or nothing is in view. `bounds` is what the base texture holds
+    /// (the document, or a region reaching past it) and `side` the device's texture side.
+    pub fn of(bounds: PixelRect, side: u32, device_zoom: f64, visible: PixelRect) -> Option<DetailPlan> {
         if !device_zoom.is_finite() || device_zoom <= 0.0 {
             return None;
         }
-        let base = texture_factor(size, side);
-        let bounds = PixelRect::of_size(size);
+        let base = texture_factor(bounds.size(), side);
         let seen = visible.intersect(&bounds);
         if seen.is_empty() {
             return None;
@@ -69,17 +68,17 @@ impl DetailPlan {
         None
     }
 
-    /// The plan for `view` over a document of `size`: the document pixels it shows, and the device zoom of its
-    /// finer axis at `pixels_per_point`.
-    pub fn in_view(view: &CanvasView, size: PixelSize, side: u32, pixels_per_point: f32) -> Option<DetailPlan> {
+    /// The plan for `view` over a base texture of `bounds`: the pixels of it the view shows, and the device zoom of
+    /// its finer axis at `pixels_per_point`.
+    pub fn in_view(view: &CanvasView, bounds: PixelRect, side: u32, pixels_per_point: f32) -> Option<DetailPlan> {
         let device_zoom = view.zoom.max(view.zoom_x()) * f64::from(pixels_per_point);
-        Self::of(size, side, device_zoom, visible_pixels(view, size))
+        Self::of(bounds, side, device_zoom, visible_pixels(view, bounds))
     }
 }
 
 /// The document pixels `view` shows (its bounding box when turned), rounded outward with a margin for filtering and
-/// clipped to a document of `size`.
-fn visible_pixels(view: &CanvasView, size: PixelSize) -> PixelRect {
+/// clipped to `bounds`.
+fn visible_pixels(view: &CanvasView, bounds: PixelRect) -> PixelRect {
     let shown = view.visible();
     let clamp = |n: f64| n.clamp(-1e9, 1e9) as i32;
     let seen = PixelRect::new(
@@ -88,7 +87,7 @@ fn visible_pixels(view: &CanvasView, size: PixelSize) -> PixelRect {
         clamp(shown.x1.ceil()) + FILTER_MARGIN,
         clamp(shown.y1.ceil()) + FILTER_MARGIN,
     );
-    seen.intersect(&PixelRect::of_size(size))
+    seen.intersect(&bounds)
 }
 
 /// `region` grown outward to whole texels of `factor` pixels counted from `origin`, the document pixel where the

@@ -246,7 +246,7 @@ impl Detail {
             px(seen.max.y, page.min.y, true),
         );
         // One page pixel is one device pixel, so the plan's zoom is 1.
-        let plan = DetailPlan::of(size, side, 1.0, visible)?;
+        let plan = DetailPlan::of(PixelRect::of_size(size), side, 1.0, visible)?;
         let r = plan.region;
         let (w, h) = (size.width as f32, size.height as f32);
         let part = Rect::from_min_max(pos2(r.x0 as f32 / w, r.y0 as f32 / h), pos2(r.x1 as f32 / w, r.y1 as f32 / h));

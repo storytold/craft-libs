@@ -9,6 +9,9 @@
 //! pixels at 100 percent and the cost follows the window, not the document. Pixels are drawn sharp (nearest) from
 //! 100 percent up and filtered below.
 //!
+//! Past the document's edge the display shows nothing, the source's pixels out to a larger region (a crop preview of
+//! layers past the canvas), or copies of the document around it (a pattern preview); see [`Extent`].
+//!
 //! The display takes no pointer and no keys and declares no parts: a press on it reaches the canvas's tool.
 
 mod detail;
@@ -33,6 +36,7 @@ use detail::{texel_extent, texel_origin};
 use egui::epaint::{Mesh, Vertex};
 use egui::{Color32, ColorImage, Context, Id, Pos2, Response, Shape, TextureFilter, TextureOptions, Vec2, pos2};
 use std::collections::HashMap;
+use std::ops::RangeInclusive;
 
 /// The style of a raster display: it has no look of its own.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
@@ -42,11 +46,100 @@ pub struct RasterStyle {
     metrics: Metrics,
 }
 
+/// How far a display's picture reaches past the document's edge.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Extent {
+    /// The document alone.
+    #[default]
+    Document,
+    /// The document and the pixels around it out to this region (Crop's preview of layers past the canvas). A source
+    /// picture reads the region from the source; a painted picture is expected to paint it. The checkerboard covers
+    /// the region; the edge stays at the document's edge.
+    Region(PixelRect),
+    /// Copies of the document a whole document size apart, filling the canvas around it (Pattern Preview), at most
+    /// 31 along each axis, centred on the view. A source picture draws its textures again for each copy; a painted picture is
+    /// called once per copy with the view shifted by the copy's offset. The checkerboard covers the copies; the edge
+    /// stays at the document's edge.
+    Tiled,
+}
+
+/// Most copies a tiled display draws along each axis, the document included. A tiny document zoomed far out would
+/// otherwise need thousands of copies per pass; past this the pattern stops, and the run is centred on the view.
+const MOST_COPIES: i32 = 31;
+
+/// The copies a tiled display draws, as columns and rows of whole document sizes from the document: copy `(i, j)` is
+/// the document moved by `i` widths and `j` heights. The document itself is drawn whether or not it is in the run.
+#[derive(Clone, Debug, PartialEq)]
+struct Tiles {
+    columns: RangeInclusive<i32>,
+    rows: RangeInclusive<i32>,
+}
+
+impl Tiles {
+    /// The document alone.
+    fn document() -> Self {
+        Tiles { columns: 0..=0, rows: 0..=0 }
+    }
+
+    /// The copies of a document of `size` that cover `visible`, the document area a view shows.
+    fn covering(visible: Rect64, size: PixelSize) -> Self {
+        match (tile_run(visible.x0, visible.x1, size.width), tile_run(visible.y0, visible.y1, size.height)) {
+            (Some(columns), Some(rows)) => Tiles { columns, rows },
+            _ => Self::document(),
+        }
+    }
+
+    /// The offset in document pixels of each copy to draw, the document's own first.
+    fn offsets(&self, size: PixelSize) -> impl Iterator<Item = Vec2> + '_ {
+        let (width, height) = (size.width as f32, size.height as f32);
+        let copies = self.rows.clone().flat_map(move |j| self.columns.clone().map(move |i| (i, j))).filter(|&copy| copy != (0, 0));
+        std::iter::once((0, 0)).chain(copies).map(move |(i, j)| Vec2::new(i as f32 * width, j as f32 * height))
+    }
+
+    /// The area the copies and the document cover, in document pixels.
+    fn cover(&self, size: PixelSize) -> Rect64 {
+        let (width, height) = (f64::from(size.width), f64::from(size.height));
+        let (columns, rows) = ((*self.columns.start()).min(0)..=(*self.columns.end()).max(0), (*self.rows.start()).min(0)..=(*self.rows.end()).max(0));
+        Rect64::new(
+            f64::from(*columns.start()) * width,
+            f64::from(*rows.start()) * height,
+            f64::from(*columns.end() + 1) * width,
+            f64::from(*rows.end() + 1) * height,
+        )
+    }
+}
+
+/// The tiles `len` pixels long along one axis that overlap `lo..hi`, at most [`MOST_COPIES`] of them, centred on the
+/// middle of `lo..hi` when more would fit; `None` for an empty or non-finite span.
+fn tile_run(lo: f64, hi: f64, len: u32) -> Option<RangeInclusive<i32>> {
+    if len == 0 || !lo.is_finite() || !hi.is_finite() || hi <= lo {
+        return None;
+    }
+    let n = f64::from(len);
+    // Far past any real view; keeps the ± MOST_COPIES arithmetic inside i32.
+    let index = |v: f64| v.clamp(-1e9, 1e9) as i32;
+    let (first, last) = (index((lo / n).floor()), index((hi / n).ceil()) - 1);
+    if last.saturating_sub(first) < MOST_COPIES {
+        return Some(first..=last);
+    }
+    let middle = index(((lo + hi) / 2.0 / n).floor());
+    let half = MOST_COPIES / 2;
+    Some(middle - half..=middle + half)
+}
+
+/// `view` looking `offset` document pixels back, so the document drawn through it lands `offset` along on screen.
+fn shifted(mut view: CanvasView, offset: Vec2) -> CanvasView {
+    view.center -= craft_behavior::kurbo::Vec2::new(f64::from(offset.x), f64::from(offset.y));
+    view
+}
+
 /// Which picture of a display a texture holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Level {
-    /// The whole document at one texel per `texture_factor` pixels.
-    Base,
+    /// What the picture covers (the document, or the region of [`Extent::Region`]) at one texel per `texture_factor`
+    /// pixels. A new region is a new key, so a texture never shows one region at another's place.
+    Base(PixelRect),
     /// The part in view at the screen's resolution. A new plan is a new key, so a texture is never partly of
     /// two plans.
     Detail(DetailPlan),
@@ -76,10 +169,14 @@ struct Textures {
     detail: Option<(CachedTexture, DetailPlan)>,
 }
 
-/// What `update` leaves for `paint` and `finish`: the view to draw through and, for a source picture, its textures.
+/// What `update` leaves for `paint` and `finish`: the view to draw through, what the picture covers and where its
+/// copies go, and, for a source picture, its textures.
 struct Shown {
     view: CanvasView,
     size: PixelSize,
+    /// The document, or the region of [`Extent::Region`] around it.
+    bounds: PixelRect,
+    tiles: Tiles,
     textures: Option<Textures>,
 }
 
@@ -121,6 +218,8 @@ impl Outcome for RasterDisplayOutput {
 /// - **Transparency.** [`checkerboard`](Self::checkerboard) draws a transparency grid under the document, holding
 ///   still while the document scrolls; the app's [`Checker`] sets its cells, and an empty one is the theme's.
 ///   Without it the document draws straight on the canvas (an opaque document, a video frame).
+/// - **Extent.** [`extent`](Self::extent) lets the picture reach past the document's edge: out to a larger region,
+///   or as copies around it ([`Extent`]).
 /// - **Edge.** [`outlined`](Self::outlined) draws the divider rule just outside the document's edge, so an image
 ///   reads apart from the surface around it; a mapped display draws none.
 /// - **Turned views.** A rotated or mirrored view draws each texture as one quad on the view's mapped corners.
@@ -138,6 +237,9 @@ pub struct RasterDisplay<'a> {
     /// The divider rule just outside the document's edge.
     #[prop(flag)]
     outlined: bool,
+    /// How far the picture reaches past the document's edge.
+    #[prop]
+    extent: Extent,
     read: PixelRect,
     shown: Option<Shown>,
     mapping: Option<Mapping>,
@@ -167,7 +269,7 @@ impl<'a> RasterDisplay<'a> {
     }
 
     fn of(label: impl Into<Label>, picture: Picture<'a>) -> Self {
-        RasterDisplay { common: Common::new(), picture, checkerboard: None, outlined: false, read: PixelRect::default(), shown: None, mapping: None }
+        RasterDisplay { common: Common::new(), picture, checkerboard: None, outlined: false, extent: Extent::Document, read: PixelRect::default(), shown: None, mapping: None }
             .label(label)
     }
 
@@ -175,7 +277,8 @@ impl<'a> RasterDisplay<'a> {
     /// perspective frame shows the image foreshortened. The image fills the unit square unless
     /// [`placed`](Self::placed) says otherwise; a cell whose centre lies outside the unit square is left out. A
     /// mapped display draws its whole-document texture alone: the detail texture of a flat display has no place on
-    /// a mesh. A source display only: a painted one draws through the view as the app paints it.
+    /// a mesh, and neither has the region or the copies of an [`Extent`]: a mapped display shows the document alone.
+    /// A source display only: a painted one draws through the view as the app paints it.
     #[must_use]
     pub fn mapped(mut self, frame: Homography, cells: u32) -> Self {
         let placed = self.mapping.map_or(Rect64::new(0.0, 0.0, 1.0, 1.0), |mapping| mapping.placed);
@@ -261,10 +364,10 @@ impl<'a> RasterDisplay<'a> {
         }
     }
 
-    /// Drops the detail textures of other plans than `plan`.
-    fn retain_plan(ctx: &Context, id: Id, held: &mut Held, plan: Option<DetailPlan>) {
+    /// Drops the textures of other regions than `bounds` and of other plans than `plan`.
+    fn retain(ctx: &Context, id: Id, held: &mut Held, bounds: PixelRect, plan: Option<DetailPlan>) {
         let kept = |level: &Level| match level {
-            Level::Base => true,
+            Level::Base(kept) => *kept == bounds,
             Level::Detail(kept) => Some(*kept) == plan,
         };
         for sharp in [true, false] {
@@ -301,32 +404,37 @@ impl Component for RasterDisplay<'_> {
         let Some(space) = canvas_space(&cx.env) else { return };
         let (ctx, id) = (cx.ctx.clone(), cx.id);
         let size = self.picture.size();
-        let bounds = PixelRect::of_size(size);
+        let document = PixelRect::of_size(size);
+        let (bounds, tiles) = match (self.mapping, self.extent) {
+            (Some(_), _) | (None, Extent::Document) => (document, Tiles::document()),
+            (None, Extent::Region(region)) => (region.union(&document), Tiles::document()),
+            (None, Extent::Tiled) => (document, Tiles::covering(space.view.visible(), size)),
+        };
         let mut held = std::mem::take(cx.keep::<Held>());
         let source = match &self.picture {
-            Picture::Source(source) if !bounds.is_empty() => *source,
+            Picture::Source(source) if !document.is_empty() => *source,
             // An empty document, or a picture the app paints: the display holds no textures.
             _ => {
                 Self::release(&ctx, id);
-                if !bounds.is_empty() {
-                    self.shown = Some(Shown { view: space.view, size, textures: None });
+                if !document.is_empty() {
+                    self.shown = Some(Shown { view: space.view, size, bounds, tiles, textures: None });
                 }
                 return;
             }
         };
         let side = texture_side(&ctx);
-        let factor = texture_factor(size, side);
-        let (base, base_read) = Self::bring_up_to_date(source, &ctx, id, &mut held, Level::Base, bounds, factor);
-        let plan = DetailPlan::in_view(&space.view, size, side, space.pixels_per_point).filter(|_| self.mapping.is_none());
+        let factor = texture_factor(bounds.size(), side);
+        let (base, base_read) = Self::bring_up_to_date(source, &ctx, id, &mut held, Level::Base(bounds), bounds, factor);
+        let plan = DetailPlan::in_view(&space.view, bounds, side, space.pixels_per_point).filter(|_| self.mapping.is_none());
         let detail = plan.map(|plan| {
             let (texture, read) = Self::bring_up_to_date(source, &ctx, id, &mut held, Level::Detail(plan), plan.region, plan.factor);
             self.read = self.read.union(&read);
             (texture, plan)
         });
-        Self::retain_plan(&ctx, id, &mut held, plan);
+        Self::retain(&ctx, id, &mut held, bounds, plan);
         *cx.keep::<Held>() = held;
         self.read = self.read.union(&base_read);
-        self.shown = Some(Shown { view: space.view, size, textures: Some(Textures { base: (base, factor), detail }) });
+        self.shown = Some(Shown { view: space.view, size, bounds, tiles, textures: Some(Textures { base: (base, factor), detail }) });
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
@@ -334,22 +442,28 @@ impl Component for RasterDisplay<'_> {
         let painter = ui.content_painter(cx);
         let corners = shown.view.quad(Rect64::new(0.0, 0.0, f64::from(shown.size.width), f64::from(shown.size.height)));
         if let Some(checker) = &self.checkerboard {
-            painter.painter.add(checker.shape(painter.painter.ctx(), &ui.env.tokens, CheckerArea::Quad(corners), shown.view.rect.min));
+            let bounds = shown.bounds;
+            let covered = Rect64::new(f64::from(bounds.x0), f64::from(bounds.y0), f64::from(bounds.x1), f64::from(bounds.y1)).union(shown.tiles.cover(shown.size));
+            painter.painter.add(checker.shape(painter.painter.ctx(), &ui.env.tokens, CheckerArea::Quad(shown.view.quad(covered)), shown.view.rect.min));
         }
-        match (&mut self.picture, &shown.textures) {
-            (Picture::Painted { paint, .. }, _) => paint.paint(&painter, shown.view),
-            (Picture::Source(_), Some(textures)) => {
-                let (texture, factor) = textures.base;
-                if let Some(mapping) = &self.mapping {
-                    painter.painter.add(mapped_mesh(&shown.view, texture, factor, shown.size, mapping));
-                    return;
+        if let (Picture::Source(_), Some(textures), Some(mapping)) = (&self.picture, &shown.textures, &self.mapping) {
+            let (texture, factor) = textures.base;
+            painter.painter.add(mapped_mesh(&shown.view, texture, factor, shown.size, mapping));
+            return;
+        }
+        for offset in shown.tiles.offsets(shown.size) {
+            let view = shifted(shown.view, offset);
+            match (&mut self.picture, &shown.textures) {
+                (Picture::Painted { paint, .. }, _) => paint.paint(&painter, view),
+                (Picture::Source(_), Some(textures)) => {
+                    let (texture, factor) = textures.base;
+                    painter.painter.add(textured_quad(&view, texture, factor, shown.bounds));
+                    if let Some((texture, plan)) = textures.detail {
+                        painter.painter.add(textured_quad(&view, texture, plan.factor, plan.region));
+                    }
                 }
-                painter.painter.add(textured_quad(&shown.view, texture, factor, PixelRect::of_size(shown.size)));
-                if let Some((texture, plan)) = textures.detail {
-                    painter.painter.add(textured_quad(&shown.view, texture, plan.factor, plan.region));
-                }
+                (Picture::Source(_), None) => {}
             }
-            (Picture::Source(_), None) => {}
         }
         if self.outlined {
             painter.with_draw(|draw| edge(draw, corners));
