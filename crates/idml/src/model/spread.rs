@@ -967,6 +967,19 @@ impl Graphic {
         self.values.num("FillTint")
     }
 
+    /// The MIME fallback when a linked graphic's bytes cannot be sniffed.
+    pub fn fallback_mime(&self) -> &'static str {
+        let format = self.link().and_then(Link::format).unwrap_or("");
+        match format {
+            value if value.contains("EPS") || self.kind == GraphicKind::EPS => "application/postscript",
+            value if value.contains("JPEG") => "image/jpeg",
+            value if value.contains("TIFF") => "image/tiff",
+            value if value.contains("PDF") || self.kind == GraphicKind::PDF => "application/pdf",
+            value if value.contains("GIF") => "image/gif",
+            _ => "image/png",
+        }
+    }
+
     pub fn layer_options(&self) -> Option<GraphicLayerOptions> {
         self.children
             .iter()
