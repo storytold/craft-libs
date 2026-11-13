@@ -9,6 +9,7 @@ rust-version.workspace = true
 
 [dependencies]
 craft-eps = { workspace = true }
+craft-svg = { workspace = true }
 
 [lints]
 workspace = true

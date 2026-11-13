@@ -14,6 +14,8 @@ pub enum Format {
     Illustrator,
     Dxf,
     Svg,
+    /// Gzip-compressed SVG. Kept distinct so writers do not place plain SVG under `.svgz`.
+    Svgz,
     Png,
     Jpeg,
     Bmp,
@@ -29,6 +31,13 @@ pub enum Format {
     Pdn,
     Raw,
     Pcraft,
+    Idml,
+    DesignCraft,
+    Docx,
+    Rtf,
+    Xlsx,
+    TaggedText,
+    Pptx,
     Gcode,
     Studio,
     StencilCraft,
@@ -63,16 +72,29 @@ pub fn detect(name: &str, bytes: &[u8]) -> Option<Format> {
     if bytes.starts_with(b"silhouette04;") || bytes.starts_with(b"silhouette05;") {
         return Some(Format::Studio);
     }
+    let tagged = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes).trim_ascii_start();
+    if tagged.starts_with(b"<ASCII-") || tagged.starts_with(b"<UNICODE-") || tagged.starts_with(b"<ANSI-") {
+        return Some(Format::TaggedText);
+    }
+    if bytes.trim_ascii_start().starts_with(b"{\\rtf") {
+        return Some(Format::Rtf);
+    }
+    if craft_svg::sniff::is_svgz(bytes) {
+        if let Ok(text) = craft_svg::svgz::text(bytes, 64 * 1024 * 1024)
+            && craft_svg::sniff::is_svg(text.as_bytes())
+        {
+            return Some(Format::Svgz);
+        }
+    }
+    if craft_svg::sniff::is_svg(bytes) {
+        return Some(Format::Svg);
+    }
     if let Some(ext) = extension(name) {
         if let Some(format) = from_extension(ext) {
             return Some(format);
         }
     }
     let head = bytes.get(..4096).unwrap_or(bytes);
-    let xml = head.trim_ascii_start();
-    if xml.starts_with(b"<svg") || (xml.starts_with(b"<?xml") && xml.windows(4).any(|w| w == b"<svg")) {
-        return Some(Format::Svg);
-    }
     if dxf_ascii_prefix(head) || head.starts_with(b"AutoCAD Binary DXF\r\n\x1a\0") {
         return Some(Format::Dxf);
     }
@@ -87,7 +109,8 @@ pub fn from_extension(ext: &str) -> Option<Format> {
         "ps" => Some(Format::PostScript),
         "ai" => Some(Format::Illustrator),
         "dxf" => Some(Format::Dxf),
-        "svg" | "svgz" => Some(Format::Svg),
+        "svg" => Some(Format::Svg),
+        "svgz" => Some(Format::Svgz),
         "png" => Some(Format::Png),
         "jpg" | "jpeg" => Some(Format::Jpeg),
         "bmp" => Some(Format::Bmp),
@@ -105,6 +128,12 @@ pub fn from_extension(ext: &str) -> Option<Format> {
         | "kdc" | "mdc" | "mef" | "mos" | "mrw" | "nef" | "nrw" | "obm" | "orf" | "pef" | "ptx" | "pxn" | "r3d" | "raf" | "raw" | "rwl" | "rw2"
         | "rwz" | "sr2" | "srf" | "sti" | "x3f" => Some(Format::Raw),
         "pcraft" => Some(Format::Pcraft),
+        "idml" => Some(Format::Idml),
+        "designcraft" | "dcdoc" => Some(Format::DesignCraft),
+        "docx" => Some(Format::Docx),
+        "rtf" => Some(Format::Rtf),
+        "xlsx" => Some(Format::Xlsx),
+        "pptx" => Some(Format::Pptx),
         "studio" | "studio3" => Some(Format::Studio),
         "stencilcraft" => Some(Format::StencilCraft),
         "gcode" | "nc" => Some(Format::Gcode),
