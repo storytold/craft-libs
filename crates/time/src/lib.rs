@@ -15,6 +15,10 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Rem, Sub, SubAssign};
 
+/// SoundCraft's sample-index, tempo-map, grid, and display-time API, retained verbatim for
+/// session-format compatibility while sharing the broader Craft time primitives above.
+pub mod soundcraft;
+
 /// Clock ticks per second: 254 016 000 000.
 pub const TICKS_PER_SECOND: i64 = 254_016_000_000;
 
