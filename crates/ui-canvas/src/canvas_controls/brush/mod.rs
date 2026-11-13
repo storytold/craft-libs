@@ -8,7 +8,7 @@
 //! - [`TipPose`]: the pen's tilt and rotation as the tip's axes in document space.
 //! - [`BrushCursor`]: the cursor for the tip under the user's [`BrushCursorOptions`] (Standard, Precise, Normal or
 //!   Full Size Brush Tip, Caps Lock, Show Only Crosshair While Painting), through zoom, rotation, flip and pixel
-//!   aspect. [`CursorBitmap`] rasterises the painted outline for a window's own cursor image.
+//!   aspect. The cursor service shows it as the window's cursor image where the window takes one.
 //! - [`TipCell`]: an aliased tip's pixel cell, a canvas control the tool shows beside the hidden pointer.
 //! - [`BrushResize`]: Photoshop's resize drag (Alt + right drag, or Control + Alt + drag): left and right set the
 //!   diameter, up and down the hardness ([`BrushLevel`]), reported as [`ResizeStep`]s.
@@ -26,7 +26,7 @@ mod resize;
 mod stories;
 mod tip;
 
-pub use cursor::{BrushCursor, BrushCursorOptions, CursorBitmap, CursorBitmapSpec, PaintingCursor, TipCell, TipCellStyle};
+pub use cursor::{BrushCursor, BrushCursorOptions, PaintingCursor, TipCell, TipCellStyle};
 pub use falloff::{FalloffPreview, FalloffPreviewStyle, TipFalloff};
 pub use resize::{BrushDimensions, BrushLevel, BrushResize, BrushResizeOptions, RESIZE_TRAVEL, ResizeStep};
 pub use tip::{BrushTip, BrushTipOutline, TipPose, TipRings};

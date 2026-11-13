@@ -1,10 +1,14 @@
 //! The ghost layer's content (8.4, 8.5): the running drag's preview beside the pointer, the mark of the drop target that
-//! would take the payload, and the painted pointer the cursor service settled on. They come from the drag session's
-//! data and the cursor record; the layer takes no input.
+//! would take the payload, and the painted pointer the cursor service settled on, which goes to the window as its
+//! cursor image instead where the window takes one. They come from the drag session's data and the cursor record; the
+//! layer takes no input.
 
+mod art;
 mod pointers;
 
-use crate::primitives::{Draw, DrawEnv, PaintRecord, PaintShape, RuleKind, TextRun, outline};
+pub(crate) use art::Art;
+
+use crate::primitives::{Draw, DrawEnv, IconSet, Mirror, PaintRecord, PaintShape, RuleKind, SvgIcon, TextRun, outline};
 use crate::runtime::drag::{self, DragPreview, DropMark};
 use crate::runtime::egui::areas;
 use crate::runtime::env::Env;
@@ -32,45 +36,70 @@ pub fn painter(ctx: &Context) -> egui::Painter {
     areas::ghost_painter(ctx)
 }
 
-/// The painted pointer the cursor service settled on. The hand shows its fist while the primary button is held.
+/// The painted pointer the cursor service settled on: the window's cursor image where the window takes one at its
+/// size, else painted at the pointer. A brush tip too large for an image hands its centre cross and badge to the
+/// window and paints only its ring, so the pointer itself still moves with the hardware.
 fn paint_pointer(ctx: &Context, env: &Env, painter: &egui::Painter) {
     use craft_behavior::{Cursor, PaintedCursor};
     let Some(at) = areas::pointer_pos(ctx) else { return };
     let Some(Cursor::Painted(cursor)) = cursor::current(ctx) else { return };
+    let closed = pointer::frame(ctx).buttons.contains(craft_behavior::Buttons::PRIMARY);
+    if let Some(target) = cursor::image_target(ctx) {
+        if cursor::show_image(ctx, &pointer_art(env, &cursor, closed, false), target) {
+            return;
+        }
+        if matches!(cursor, PaintedCursor::Circle { .. } | PaintedCursor::Outline { .. })
+            && cursor::show_image(ctx, &pointer_art(env, &cursor, closed, true), target)
+        {
+            pointer_art(env, &cursor.marked(false, None), closed, false).paint(painter, at);
+            return;
+        }
+    }
+    pointer_art(env, &cursor, closed, false).paint(painter, at);
+}
+
+/// The art of `cursor`: the hand as a fist while `closed`; with `marks_only`, a brush tip's centre cross and badge
+/// without its ring.
+fn pointer_art(env: &Env, cursor: &craft_behavior::PaintedCursor, closed: bool, marks_only: bool) -> Art {
+    use craft_behavior::PaintedCursor;
     let overlay = &env.tokens.color.overlay;
     let pen = pointers::Pen {
-        painter,
-        at,
+        art: RefCell::new(Art::default()),
         fill: crate::style::rgba_color(overlay.stroke),
         halo: crate::style::rgba_color(overlay.halo),
         thin: env.tokens.stroke.thin,
     };
     let ink = crate::style::ink_color(&env.tokens, Ink::OnDark);
     let edge = env.tokens.stroke.thin;
-    match &cursor {
+    match cursor {
         PaintedCursor::Outline { rings, centre, badge, .. } => {
-            pointers::outline(&pen, rings);
-            pointers::tip_marks(&pen, *centre, *badge, pen.thin, pen.fill);
+            if !marks_only {
+                pointers::outline(&pen, rings);
+            }
+            pointers::tip_marks(&pen, *centre || marks_only, *badge, pen.thin, pen.fill);
         }
         PaintedCursor::Circle { radius, centre, badge, .. } => {
-            pointers::circle(&pen, *radius, edge, ink);
-            pointers::tip_marks(&pen, *centre, *badge, edge, ink);
+            if !marks_only {
+                pointers::circle(&pen, *radius, edge, ink);
+            }
+            pointers::tip_marks(&pen, *centre || marks_only, *badge, edge, ink);
         }
         PaintedCursor::Crosshair => pointers::crosshair(&pen, env.tokens.size.icon.sm, edge, ink),
-        PaintedCursor::Hand => pointers::hand(&pen, pointer::frame(ctx).buttons.contains(craft_behavior::Buttons::PRIMARY)),
+        PaintedCursor::Hand => pointers::hand(&pen, closed),
         PaintedCursor::Zoom { out, .. } => pointers::zoom(&pen, *out),
         PaintedCursor::Tool { icon, hotspot, badge, .. } => {
-            let record = RefCell::new(PaintRecord::default());
-            let on_dark = Draw::new(painter, &record, DrawEnv { tokens: &env.tokens, direction: env.direction, ink: Ink::OnDark });
-            pointers::tool(&pen, &on_dark, icon, *hotspot, *badge, env.tokens.size.icon.md);
+            let side = env.tokens.size.icon.md;
+            let icon = SvgIcon::of(&env.tokens, env.direction, side, icon, IconSet::default(), Mirror::Auto);
+            pointers::tool(&pen, icon, *hotspot, *badge, side);
         }
         PaintedCursor::Badged { badge, .. } => pointers::badge_beside(&pen, *badge),
         PaintedCursor::Turn { toward, .. } => pointers::turn(&pen, *toward),
         PaintedCursor::Distort { dir, .. } => pointers::distort(&pen, *dir),
         PaintedCursor::Skew { dir, .. } => pointers::skew(&pen, *dir),
-        // `Hidden` paints nothing.
+        // `Hidden` has no marks.
         _ => {}
     }
+    pen.art.into_inner()
 }
 
 /// The drag preview and the drop mark of the running drag.

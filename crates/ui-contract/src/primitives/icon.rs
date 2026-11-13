@@ -216,28 +216,61 @@ pub(crate) fn paint(painter: &Painter, tokens: &UiTokens, direction: Direction, 
         }
         IconSource::Glyph(glyph) => glyph.paint(painter, tokens, square, color, rtl && glyph.directional() && spec.mirror == Mirror::Auto),
         IconSource::Svg(id) => {
-            let Some(index) = svg_set::find(id.name()) else {
-                log::error!("icon {:?} is not in the catalog", id.name());
-                return;
-            };
-            let mirrored = rtl && svg_set::directional(index) && spec.mirror == Mirror::Auto;
-            svg(painter, tokens, square, index, spec.set, mirrored, color);
+            if let Some(icon) = SvgIcon::of(tokens, direction, side, id, spec.set, spec.mirror) {
+                icon.paint(painter, square, color);
+            }
         }
     }
 }
 
-fn svg(painter: &Painter, tokens: &UiTokens, square: Rect, index: usize, set: IconSet, mirrored: bool, color: Color32) {
-    let ctx = painter.ctx();
-    let ppp = ctx.pixels_per_point();
-    let px = (square.width() * ppp).round().max(1.0) as u32;
-    // A document drawn with fills ignores the stroke, so all its requests share one entry.
-    let stroke_px = if svg_set::stroke_width(index, set).is_some() { (stroke(tokens, square.width()) * ppp * 64.0).round() as u32 } else { 0 };
-    let key = (index, set, px, stroke_px, mirrored);
-    let texture = TextureCache::texture(ctx, key, || svg_set::rasterise(index, set, px, stroke_px as f32 / 64.0, mirrored));
-    let side = px as f32 / ppp;
-    let min = (square.center() - vec2(side, side) / 2.0).round_to_pixels(ppp);
-    let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-    crate::runtime::egui::textures::paint(painter, texture, Rect::from_min_size(min, vec2(side, side)), uv, color, egui::CornerRadius::ZERO);
+/// A catalog icon as it is drawn: its entry and set, whether it is mirrored, and its stroke width in points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SvgIcon {
+    index: usize,
+    set: IconSet,
+    mirrored: bool,
+    stroke: f32,
+}
+
+impl SvgIcon {
+    /// The icon `id` of `set` at `side` points under `direction` and `mirror`; `None`, with a log line, for a name the
+    /// catalog lacks.
+    pub(crate) fn of(tokens: &UiTokens, direction: Direction, side: f32, id: &IconId, set: IconSet, mirror: Mirror) -> Option<SvgIcon> {
+        let Some(index) = svg_set::find(id.name()) else {
+            log::error!("icon {:?} is not in the catalog", id.name());
+            return None;
+        };
+        let mirrored = direction == Direction::Rtl && svg_set::directional(index) && mirror == Mirror::Auto;
+        Some(SvgIcon { index, set, mirrored, stroke: stroke(tokens, side) })
+    }
+
+    /// The image's side in pixels and its stroke in 64ths of a pixel for a square of `side` points at `ppp`: the
+    /// texture key, so requests that draw the same pixels share an entry. A document drawn with fills ignores the
+    /// stroke, so all its requests share one.
+    fn pixels(&self, side: f32, ppp: f32) -> (u32, u32) {
+        let px = (side * ppp).round().max(1.0) as u32;
+        let stroke_px = if svg_set::stroke_width(self.index, self.set).is_some() { (self.stroke * ppp * 64.0).round() as u32 } else { 0 };
+        (px, stroke_px)
+    }
+
+    /// The icon in white for a square of `side` points at `ppp`, its alpha from the drawing.
+    pub(crate) fn mask(&self, side: f32, ppp: f32) -> egui::ColorImage {
+        let (px, stroke_px) = self.pixels(side, ppp);
+        svg_set::rasterise(self.index, self.set, px, stroke_px as f32 / 64.0, self.mirrored)
+    }
+
+    /// Paints the icon in `color` centred in `square`, on whole pixels.
+    pub(crate) fn paint(&self, painter: &Painter, square: Rect, color: Color32) {
+        let ctx = painter.ctx();
+        let ppp = ctx.pixels_per_point();
+        let (px, stroke_px) = self.pixels(square.width(), ppp);
+        let key = (self.index, self.set, px, stroke_px, self.mirrored);
+        let texture = TextureCache::texture(ctx, key, || self.mask(square.width(), ppp));
+        let side = px as f32 / ppp;
+        let min = (square.center() - vec2(side, side) / 2.0).round_to_pixels(ppp);
+        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+        crate::runtime::egui::textures::paint(painter, texture, Rect::from_min_size(min, vec2(side, side)), uv, color, egui::CornerRadius::ZERO);
+    }
 }
 
 /// The stroke of a stroke-set icon `side` wide: `stroke.icon` of its side, so every glyph has the same weight.

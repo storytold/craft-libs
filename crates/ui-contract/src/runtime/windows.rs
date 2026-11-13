@@ -44,7 +44,8 @@ use placement::record_placement;
 pub use shell::os_of;
 #[doc(hidden)]
 pub use shell::shell_of;
-use shell::{base_shell, refresh, window_info};
+pub(crate) use shell::base_shell;
+use shell::{refresh, window_info};
 #[cfg(feature = "testing")]
 pub(crate) use shell::{set_chrome, set_os};
 use spec::chrome_of;

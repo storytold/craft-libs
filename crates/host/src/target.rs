@@ -308,6 +308,14 @@ impl ShellInfo {
         self.runtime == Runtime::Native && self.backend != Backend::Wayland
     }
 
+    /// Whether a window at `native_scale` device pixels per point shows an image the app hands it as the system cursor
+    /// at its true size: a native build, except on Wayland off scale 1, where some compositors ignore the viewport
+    /// winit sizes cursor surfaces with (Hyprland 0.56, Mutter before GNOME 48) and show the image one pixel per point,
+    /// too large and off the pointer.
+    pub fn cursor_images(&self, native_scale: f32) -> bool {
+        self.runtime == Runtime::Native && (self.backend != Backend::Wayland || native_scale == 1.0)
+    }
+
     /// The shell of the running build: the OS, runtime and capabilities this binary has.
     pub fn current() -> ShellInfo {
         let os = Os::current();

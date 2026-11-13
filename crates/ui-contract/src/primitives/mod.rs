@@ -33,6 +33,7 @@ pub use faces::FacesCx;
 pub use focus_ring::{FocusKind, FocusRing};
 pub use handle::{Handle, HandleShape};
 pub use icon::{Glyph, IconSet, IconSource, IconSpec, Mirror, has_icon, icon_names};
+pub(crate) use icon::SvgIcon;
 pub use ime_surface::ImeSurface;
 pub use kit::{
     Checker, CheckerArea, GridAxis, GridInk, GridLines, GridLook, GridStroke, MAX_LINES, Tick, TickEdge, TickRank, dashed, drop_mark, ellipse,

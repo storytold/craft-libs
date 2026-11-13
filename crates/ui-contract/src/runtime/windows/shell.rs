@@ -11,7 +11,7 @@ use craft_host::target::{Caps, EdgeInsets, Os, ShellInfo, WindowChrome, WindowIn
 use egui::{Context, ViewportId};
 use std::sync::Arc;
 
-pub(super) fn base_shell(ctx: &Context) -> ShellInfo {
+pub(crate) fn base_shell(ctx: &Context) -> ShellInfo {
     shared(ctx, |shared| shared.shell.clone()).unwrap_or_default()
 }
 

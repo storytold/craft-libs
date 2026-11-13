@@ -1,11 +1,18 @@
-//! What a pass asks the platform to do through `PlatformOutput`: the cursor icon and opening a URL.
+//! What a pass asks the platform to do through `PlatformOutput`: the cursor icon, the cursor image and opening a URL.
 
+use crate::runtime::cursor::CursorBitmap;
 use craft_behavior::CursorIcon;
 use egui::Context;
 
 /// Sets the system cursor of the running pass.
 pub(crate) fn set_cursor(ctx: &Context, icon: CursorIcon) {
     ctx.set_cursor_icon(egui_icon(icon));
+}
+
+/// Sets the cursor image of the running pass, which the integration shows instead of the system cursor; `None` clears
+/// it.
+pub(crate) fn set_cursor_image(ctx: &Context, image: Option<&CursorBitmap>) {
+    ctx.set_cursor_image(image.map(|image| egui::CustomCursorImage { rgba: image.rgba.clone(), size: image.size, hotspot: image.hotspot }));
 }
 
 /// Asks the platform to open `url`, in a new tab where the platform has tabs and `new_tab` is set.
