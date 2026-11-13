@@ -202,6 +202,19 @@ impl PageReference {
     pub fn limit(&self) -> Option<f64> {
         self.values.num("PageReferenceLimit")
     }
+
+    /// Writes a page-reference record from the shared index model's type and target.
+    pub fn to_el(self_id: &str, reference_type: &str, topic: &str, id: usize, limit: Option<u32>) -> El {
+        let mut el = El::new("PageReference")
+            .with_attr("Self", self_id)
+            .with_attr("PageReferenceType", reference_type)
+            .with_attr("ReferencedTopic", topic)
+            .with_attr("Id", id);
+        if let Some(limit) = limit {
+            el.set_attr("PageReferenceLimit", limit);
+        }
+        el
+    }
 }
 
 /// The elements read as [`TextNode::Container`].
