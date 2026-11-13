@@ -253,6 +253,29 @@ pub fn first_frame_decoded_pixels(bytes: &[u8]) -> Option<u64> {
     Some(pixels)
 }
 
+/// Counts compressed image-data bytes in the first frame's sub-blocks, excluding its LZW code-size
+/// byte and all later blocks. A truncated final sub-block contributes only the bytes present.
+pub fn first_frame_compressed_bytes(bytes: &[u8]) -> Option<usize> {
+    let parsed = scan(bytes, 1)?;
+    let frame = parsed.frames.first()?;
+    let packed = *bytes.get(frame.offset.checked_add(9)?)?;
+    let mut pos = frame.offset.checked_add(10)?.checked_add(table_len(packed))?.checked_add(1)?;
+    let mut total = 0usize;
+    loop {
+        let length = usize::from(*bytes.get(pos)?);
+        pos = pos.checked_add(1)?;
+        if length == 0 {
+            return Some(total);
+        }
+        let end = pos.checked_add(length)?;
+        total = total.checked_add(end.min(bytes.len()).saturating_sub(pos))?;
+        if end > bytes.len() {
+            return Some(total);
+        }
+        pos = end;
+    }
+}
+
 /// Whether a file of `file_len` bytes can plausibly hold `declared_bytes` of decoded picture: at
 /// most `max_ratio` decoded bytes for each file byte, plus 1 MiB. A decoder that sets up the whole
 /// logical screen before it reads a frame should be given only files that pass this.
