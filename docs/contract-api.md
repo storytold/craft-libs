@@ -331,6 +331,7 @@ Zoom rules as pure functions on a [`CanvasView`]: Photoshop's zoom range and Zoo
 - `craft_behavior::canvas::zoom::device`: `pub fn device(view: &CanvasView, pixels_per_point: f32) -> f64`. `view.zoom` as device zoom (1 = 100 %) at `pixels_per_point`.
 - `craft_behavior::canvas::zoom::fill`: `pub fn fill(view: &mut CanvasView, size: Size, pixels_per_point: f32)`. Fill Screen: centre the document and zoom until it covers `view.rect`; one axis may extend
 - `craft_behavior::canvas::zoom::fit`: `pub fn fit(view: &mut CanvasView, size: Size, pixels_per_point: f32, margin: f64)`. Fit on Screen: centre the document and zoom so all of it shows inside `view.rect` less `margin` points on
+- `craft_behavior::canvas::zoom::fit_rect`: `pub fn fit_rect(view: &mut CanvasView, rect: Rect, size: Size, pixels_per_point: f32, margin: Vec2)`. Fit a part of the document on screen (an artboard, the selected layers' bounds): centre `rect`, in document
 - `craft_behavior::canvas::zoom::fit_up_to`: `pub fn fit_up_to(view: &mut CanvasView, size: Size, pixels_per_point: f32, max_device: f64, margin: f64)`. [`fit`] with the device zoom allowed up to `max_device` (1 = 100 %) instead of 100 %: a small document is
 - `craft_behavior::canvas::zoom::step`: `pub fn step(view: &mut CanvasView, dir: i32, size: Size, pixels_per_point: f32) -> bool`. View › Zoom In (`dir` > 0) or Zoom Out (`dir` < 0): the next ladder rung
 - `craft_behavior::canvas::zoom::wheel_anchor`: `pub fn wheel_anchor(view: &CanvasView, screen: Pos2, size: Size) -> Pos2`. Where a wheel or pinch zoom anchors for a pointer at `screen`: the pointer over the document,
@@ -4244,7 +4245,7 @@ A fixed-rate frame driver over a context.
 
 ## `craft_ui::testing::index`
 
-The components index: every registered component type with its module and the purpose its derive recorded
+The components index: every registered component type, grouped by gallery level, with its module and the purpose its derive recorded
 
 - `craft_ui::testing::index::components_index`: `pub fn components_index(root: &Path, registered: &[&'static Registration]) -> String`. The text of `docs/components-index.md` for the workspace at `root` and the types of `registered`.
 - `craft_ui::testing::index::types_without_purpose`: `pub fn types_without_purpose(registered: &[&'static Registration]) -> Vec<String>`. The types of `registered` that have no purpose: their types lack a doc comment.
