@@ -27,8 +27,6 @@ craft_ui::words! {
         tip_angle: "brushSettings.tipAngle" = "Tip angle and roundness";
         /// The tip angle widget's value: "{angle}, {roundness}", each through the unit words.
         tip_angle_value: template "brushSettings.tipAngleValue" = "{angle}, {roundness}";
-        /// The restore button of the size field (sampled tips).
-        restore_size: "brushSettings.restoreSize" = "Restore original size";
         /// The dynamic control row's label.
         control: "brushSettings.control" = "Control:";
         /// The Fade steps field's name and tooltip.

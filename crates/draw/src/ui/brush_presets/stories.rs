@@ -9,6 +9,7 @@ use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
 use super::{BrushCardParts, BrushPickerState, BrushPickerValues, BrushPresetPicker, BrushRowPaint, brush_row};
+use crate::ui::brush_settings::TipAngle;
 
 const SOFT: u32 = 1;
 const HARD: u32 = 2;
@@ -42,6 +43,23 @@ fn picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     BrushPresetPicker::new("Brush Preset picker", Bind::bound(current), &rows, Bind::bound(state), values)
         .max_diameter(MAX_SIZE)
         .import()
+        .show(ui)
+        .into()
+}
+
+/// The open picker of a round brush tilted 30° and 60 % round, as the app opens it at a point: the angle widget, Size
+/// and Hardness in the head.
+#[story(BrushPresetPicker<'static, u32>, covers = [Open], drive = Drive::Never)]
+fn picker_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let env = Env::of(ui);
+    let at = ui.max_rect().min;
+    let (current, state, open) = data.value("open", (Some(SOFT), BrushPickerState::<u32>::new(), true));
+    let rows = rows(&env, state.parts);
+    let values = BrushPickerValues::new(SOFT_SIZE, Some(0.8)).with_tip(TipAngle::new(30.0, 0.6));
+    BrushPresetPicker::new("Brush Preset picker", Bind::bound(current), &rows, Bind::bound(state), values)
+        .max_diameter(MAX_SIZE)
+        .import()
+        .open_at(at, Bind::bound(open))
         .show(ui)
         .into()
 }

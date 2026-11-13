@@ -76,9 +76,10 @@ impl BrushCardParts {
     }
 }
 
-/// What the picker remembers across restarts: which parts show and the thumbnail scale. The app saves it in its
-/// settings (serde) when [`BrushPresetPickerOutput::settings`](super::BrushPresetPickerOutput::settings) is set and
-/// restores it with [`BrushPickerState::restore`]; the search, open groups and an open rename are not saved.
+/// What the picker remembers across restarts: which parts show, whether the search field shows and the thumbnail
+/// scale. The app saves it in its settings (serde) when
+/// [`BrushPresetPickerOutput::settings`](super::BrushPresetPickerOutput::settings) is set and restores it with
+/// [`BrushPickerState::restore`]; the search text, open groups and an open rename are not saved.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
@@ -87,11 +88,13 @@ pub struct BrushPickerSettings {
     pub parts: BrushCardParts,
     /// The thumbnail scale.
     pub scale: f32,
+    /// The gear's Show Search Bar: the search field in the row above the presets.
+    pub search: bool,
 }
 
 impl Default for BrushPickerSettings {
     fn default() -> Self {
-        Self { parts: BrushCardParts::ALL, scale: 1.0 }
+        Self { parts: BrushCardParts::ALL, scale: 1.0, search: true }
     }
 }
 
@@ -99,29 +102,30 @@ impl BrushPickerSettings {
     /// The footer slider's range: under 0.15 the thumbnails and rows stop making sense.
     pub const SCALE_RANGE: RangeInclusive<f32> = 0.15..=2.0;
 
-    /// The settings with the given parts and scale.
+    /// The settings with the given parts and scale, and the search field shown.
     pub const fn new(parts: BrushCardParts, scale: f32) -> Self {
-        Self { parts, scale }
+        Self { parts, scale, search: true }
     }
 
     /// The settings made safe to show: the scale clamped to [`SCALE_RANGE`](Self::SCALE_RANGE) (one that isn't a
     /// finite number gives 1), and every part on when none is.
     pub fn restored(self) -> Self {
         let scale = if self.scale.is_finite() { self.scale.clamp(*Self::SCALE_RANGE.start(), *Self::SCALE_RANGE.end()) } else { 1.0 };
-        Self { parts: self.parts.normalised(), scale }
+        Self { parts: self.parts.normalised(), scale, search: self.search }
     }
 }
 
 impl<K> BrushPickerState<K> {
     /// The part of this state that persists.
     pub fn settings(&self) -> BrushPickerSettings {
-        BrushPickerSettings { parts: self.parts, scale: self.browser.zoom as f32 }
+        BrushPickerSettings { parts: self.parts, scale: self.browser.zoom as f32, search: self.search }
     }
 
     /// Sets the parts and scale from `settings`, [`restored`](BrushPickerSettings::restored) first.
     pub fn restore(&mut self, settings: &BrushPickerSettings) {
-        let BrushPickerSettings { parts, scale } = settings.restored();
+        let BrushPickerSettings { parts, scale, search } = settings.restored();
         self.parts = parts;
+        self.search = search;
         self.browser.zoom = f64::from(scale);
     }
 }

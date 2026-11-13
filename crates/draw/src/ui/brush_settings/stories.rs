@@ -25,10 +25,6 @@ craft_ui::words! {
         size_jitter: "brushSettingsStory.sizeJitter" = "Size Jitter";
         /// A section the story has no sample settings for.
         no_body: "brushSettingsStory.noBody" = "This section has no sample settings.";
-        /// The caption over the size field with a restore button.
-        with_restore: "brushSettingsStory.withRestore" = "With restore";
-        /// The caption over the size field without one.
-        without_restore: "brushSettingsStory.withoutRestore" = "Without restore";
         /// The app shows its response curve editor.
         curve_open: "brushSettingsStory.curveOpen" = "Response curve open";
     }
@@ -262,8 +258,7 @@ fn tip_ellipse_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     StoryOutput::from(shown).readout(note)
 }
 
-/// Two control rows, on Fade with its steps and on Pen Pressure with its curve toggle, then the brush size field with
-/// and without its restore button, both on one diameter.
+/// Two control rows, on Fade with its steps and on Pen Pressure with its curve toggle, then the brush size field.
 #[story(DynamicControlRow<'static, u8>, covers = [Default], drive = Drive::Never)]
 fn dynamic_control_row(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let words = Env::of(ui).words::<BrushSettingsStoryWords>();
@@ -273,10 +268,7 @@ fn dynamic_control_row(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Stack::new().show(ui, |ui, _| {
         fade.show(ui, &controls);
         curve.show(ui, &controls);
-        Text::new(words.with_restore.clone()).shade(Shade::Muted).show(ui);
         let _ = BrushSizeField::new("Size", Bind::bound(&mut *size), MAX_SIZE).restore(ORIGINAL).show(ui);
-        Text::new(words.without_restore.clone()).shade(Shade::Muted).show(ui);
-        let _ = BrushSizeField::new("Size", Bind::bound(&mut *size), MAX_SIZE).show(ui);
     });
     let output = StoryOutput::default();
     if curve.curve_open { output.readout(words.curve_open.as_str().to_owned()) } else { output }

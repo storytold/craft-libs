@@ -16,7 +16,7 @@ mod settings;
 pub(crate) mod stories;
 mod words;
 
-pub use picker::{BrushPick, BrushPickerState, BrushPickerValues, BrushPresetPicker, BrushPresetPickerOutput};
+pub use picker::{BrushPick, BrushPickerState, BrushPickerValues, BrushPresetPicker, BrushPresetPickerOutput, GearRows, GearSection};
 pub use rows::{BrushRowPaint, brush_row, tip_thumb_scale};
 pub use settings::{BrushCardPart, BrushCardParts, BrushPickerSettings};
 pub use words::BrushPresetWords;

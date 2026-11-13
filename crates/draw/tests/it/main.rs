@@ -33,6 +33,7 @@ mod stroke_editor;
 
 // draw-brush-presets
 mod brush_presets;
+mod brush_size;
 
 // draw-transform-a
 mod transform_box;
