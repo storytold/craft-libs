@@ -2838,6 +2838,54 @@ mod tests {
         assert_eq!(crate::with_limits(limits, || try_unite_all_upright(&inputs, DEFAULT_PRECISION)), Err(PathOpsError::TooComplex));
     }
 
+    /// The outlines of a stroke region are held to one limit on sweep work between them, as the inputs of a union are (the same hole: eight
+    /// outlines that cancel make no contour, so the element limit never sees them, and each was held to the limit alone): the limit of the sum
+    /// admits them and one less refuses the last, by the work each counted, the sweeps stop at the outline that passes it, and the function
+    /// that leaves out what it cannot combine gives no region once the outlines before it have taken the limit, not one of the smaller outlines
+    /// after it. An outline that is too much for the limit alone is left out, as it was.
+    #[test]
+    fn the_outlines_of_a_stroke_region_are_held_to_one_limit_on_sweep_work_between_them() {
+        use crate::offset::{stroke_region_upright, try_stroke_region_upright};
+        let (plain, mirrored) = (cancelling_polygon(100, false), cancelling_polygon(100, true));
+        let square = crate::testutil::rect(0.0, 0.0, 10.0, 10.0);
+        let outlines: Vec<BezPath> = (0..8).map(|i| if i % 2 == 0 { plain.clone() } else { mirrored.clone() }).collect();
+        let one = |p: &BezPath| {
+            let (out, metered, nanos) = unite_metered(|| try_stroke_region_upright(std::slice::from_ref(p)));
+            assert_eq!((out.map(|b| b.elements().len()), metered), (Ok(0), 1), "an outline of 200 pieces is swept by one dry sweep and made nothing");
+            nanos
+        };
+        let (w, wm) = (one(&plain), one(&mirrored));
+        let total = 4 * (w + wm);
+        let unions: [(&str, &UnionOf<'_>); 2] = [
+            ("try_stroke_region_upright", &|| try_stroke_region_upright(&outlines).map(|b| b.elements().len())),
+            ("stroke_region_upright", &|| Ok(stroke_region_upright(&outlines).elements().len())),
+        ];
+        for (name, unite) in unions {
+            let refused = name.starts_with("try");
+            let (out, metered, nanos) = unite_metered(|| crate::with_limits(sweep_work(total), unite));
+            assert_eq!((out, metered, nanos), (Ok(0), 8, total), "{name}: the limit of the sum admits the eight");
+            let (out, metered, _) = unite_metered(|| crate::with_limits(sweep_work(total - 1), unite));
+            assert_eq!(out, if refused { Err(PathOpsError::TooComplex) } else { Ok(0) }, "{name}: one less refuses the last");
+            assert_eq!(metered, 8, "{name}: all eight are swept, the last is refused");
+            let (out, metered, nanos) = unite_metered(|| crate::with_limits(sweep_work(3 * (w + wm) / 2 + w / 2), unite));
+            assert_eq!(out, if refused { Err(PathOpsError::TooComplex) } else { Ok(0) }, "{name}: three and a half outlines");
+            assert_eq!(metered, 4, "{name}: stops at the outline that passes the limit");
+            assert!(nanos > 3 * (w + wm) / 2, "{name}: {nanos}: the three before it were counted, and the fourth up to the limit");
+        }
+        // Two outlines take 2w of 2.5w, the third is refused, and the square after it would fit in what is left: no region, not the square.
+        let after = [plain.clone(), plain.clone(), plain.clone(), square.clone()];
+        let limits = sweep_work(5 * w / 2);
+        assert_eq!(crate::with_limits(limits, || try_stroke_region_upright(&after)), Err(PathOpsError::TooComplex));
+        assert!(crate::with_limits(limits, || stroke_region_upright(&after)).elements().is_empty(), "no region");
+        assert!(crate::with_limits(limits, || crate::stroke_region(&after)).elements().is_empty(), "no region, by the public function");
+        // An outline that is too much for the limit alone is left out, and the square beside it is the region: nothing was spent before it.
+        let alone = [plain, square];
+        let limits = sweep_work(w - 1);
+        let region = crate::with_limits(limits, || stroke_region_upright(&alone));
+        assert_eq!(area(&region, FillRule::NonZero).round(), 100.0, "the square");
+        assert_eq!(crate::with_limits(limits, || try_stroke_region_upright(&alone)), Err(PathOpsError::TooComplex));
+    }
+
     /// A lone input whose own sweep split none of its segments is swept once, and the dry sweep is run for that sweep and no other: each
     /// sweep past the gate is held by one (VectorCraft 1090965). The result is what the two sweeps made, to the bit, by both functions.
     #[test]

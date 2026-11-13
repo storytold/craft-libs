@@ -12,7 +12,7 @@ use linesweeper::topology::{ContourIdx, Contours};
 
 use crate::boolean::{
     Arrangement, DEFAULT_PRECISION, Tidy, all_contours_to_path, append_contours, contours_to_path, ensure_size, eps_for, held_union,
-    normalize_bez_counted, normalize_bez_within, try_unite_all_with,
+    normalize_bez_charged, normalize_bez_counted, normalize_bez_within, try_unite_all_with,
 };
 use crate::budget::{NEAREST_STEPS, SearchBudget};
 use crate::edit::remove_redundant_points;
@@ -241,9 +241,11 @@ pub(crate) fn try_stroke_region_upright(outlines: &[BezPath]) -> Result<BezPath,
     }
     // Each outline is normalised on its own first, as in `stroke_region`.
     let mut all = BezPath::new();
+    // The sweep work of the outlines together is held to the limit once, as for the inputs of a union ([`crate::meter::Allowance`]).
+    let mut allowance = crate::meter::Allowance::new();
     for p in &parts {
         let left = crate::budget::limits().elements.saturating_sub(all.elements().len());
-        let Some(c) = normalize_bez_within(p, FillRule::NonZero, left)? else { return Err(PathOpsError::TooComplex) };
+        let Some(c) = normalize_bez_charged(p, FillRule::NonZero, left, &mut allowance)? else { return Err(PathOpsError::TooComplex) };
         append_contours(&mut all, &c, crate::budget::limits().elements)?;
     }
     if all.elements().is_empty() {
@@ -281,9 +283,11 @@ pub(crate) fn stroke_region_upright(outlines: &[BezPath]) -> BezPath {
     // Each outline is normalised on its own first: a hollow arrowhead may wind against the line
     // it overlaps, and the raw windings would cancel there under the non-zero rule.
     let mut all = BezPath::new();
+    // The sweep work of the outlines together is held to the limit once, as for the inputs of a union ([`crate::meter::Allowance`]).
+    let mut allowance = crate::meter::Allowance::new();
     for p in &parts {
         let left = crate::budget::limits().elements.saturating_sub(all.elements().len());
-        match normalize_bez_within(p, FillRule::NonZero, left) {
+        match normalize_bez_charged(p, FillRule::NonZero, left, &mut allowance) {
             Ok(Some(c)) => {
                 if append_contours(&mut all, &c, crate::budget::limits().elements).is_err() {
                     return BezPath::new();
@@ -291,6 +295,8 @@ pub(crate) fn stroke_region_upright(outlines: &[BezPath]) -> BezPath {
             }
             // Over what is left: the union would be refused as too complex.
             Ok(None) => return BezPath::new(),
+            // The outlines before it took the work the limit allows, and this one more than is left: no region, as `try_stroke_region` refuses it.
+            Err(_) if allowance.exhausted() => return BezPath::new(),
             Err(_) => {}
         }
     }
