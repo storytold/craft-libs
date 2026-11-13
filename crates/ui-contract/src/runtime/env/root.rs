@@ -6,7 +6,9 @@ use crate::runtime::egui::memory::Service;
 use craft_behavior::MotionMode;
 use craft_i18n::CalendarDate;
 use craft_i18n::Direction;
-use craft_theme::{AppSizes, Appearance, Contrast, ContrastChoice, Mode, ModeChoice, MotionChoice, Size, SystemAppearance, TextSize, ThemeId};
+use craft_theme::{
+    AppSizes, Appearance, Contrast, ContrastChoice, Mode, ModeChoice, MotionChoice, Size, SystemAppearance, TextSize, ThemeDef, ThemeId,
+};
 use egui::Context;
 use std::sync::Arc;
 
@@ -36,6 +38,8 @@ pub struct RootEnv {
     pub tab_toggles_chrome: bool,
     /// The theme the tokens resolve from; an id no built-in theme has resolves to the suite default.
     pub theme: ThemeId,
+    /// The definition of `theme` when it is a library theme: no built-in has its id, so the tokens resolve from this.
+    pub theme_def: Option<Arc<ThemeDef>>,
     /// Root app values.
     pub values: AppValues,
     /// Today's date in the host's time zone; the runtime reads no wall clock.
@@ -56,6 +60,7 @@ impl Default for RootEnv {
             tab_all_controls: true,
             tab_toggles_chrome: false,
             theme: ThemeId::suite_default(),
+            theme_def: None,
             values: AppValues::default(),
             today: None,
         }
@@ -106,6 +111,13 @@ impl RootEnv {
     /// Sets the theme.
     pub fn theme(mut self, theme: ThemeId) -> Self {
         self.theme = theme;
+        self
+    }
+
+    /// Sets a library theme: `def` is the theme and its id the root's theme.
+    pub fn library_theme(mut self, def: Arc<ThemeDef>) -> Self {
+        self.theme = def.id.clone();
+        self.theme_def = Some(def);
         self
     }
 
