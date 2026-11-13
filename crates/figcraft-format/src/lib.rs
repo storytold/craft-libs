@@ -210,6 +210,38 @@ pub fn read_document_json<D: serde::de::DeserializeOwned>(text: &str) -> Result<
     Ok((document, header))
 }
 
+/// The native document fields needed to render a recent-file preview.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct PreviewDocument {
+    #[serde(default)]
+    pub pages: Vec<u64>,
+    #[serde(default)]
+    pub nodes: std::collections::BTreeMap<String, PreviewNode>,
+    #[serde(default)]
+    pub kind: PreviewKind,
+}
+
+/// Preview-relevant fields from one native document node.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct PreviewNode {
+    #[serde(default)]
+    pub background: Option<Value>,
+}
+
+/// The supported native document kinds as stored on disk.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PreviewKind {
+    #[default]
+    Design,
+    Board,
+}
+
+/// Decode the preview-relevant subset of the native FigCraft document schema.
+pub fn read_preview_document(bytes: &[u8]) -> Result<PreviewDocument, serde_json::Error> {
+    serde_json::from_slice(bytes)
+}
+
 pub fn check_version(h: &Header) -> Result<(), NewerVersion> {
     if let Some(v) = h.version
         && v > u64::from(VERSION)
@@ -327,6 +359,16 @@ mod tests {
         assert_eq!(v["format"], FORMAT);
         assert_eq!(v["version"], VERSION);
         assert_eq!(v["name"], "example");
+    }
+
+    #[test]
+    fn preview_document_reads_native_page_background_and_kind() {
+        let doc = read_preview_document(br#"{"pages":[7],"nodes":{"7":{"background":{"r":0.1}}},"kind":"board","unrelated":true}"#).unwrap();
+        assert_eq!(doc.pages, vec![7]);
+        assert_eq!(doc.nodes["7"].background.as_ref().and_then(|v| v.get("r")).and_then(Value::as_f64), Some(0.1));
+        assert_eq!(doc.kind, PreviewKind::Board);
+        assert_eq!(read_preview_document(b"{}").unwrap(), PreviewDocument::default());
+        assert!(read_preview_document(br#"{"kind":"unknown"}"#).is_err());
     }
 }
 
