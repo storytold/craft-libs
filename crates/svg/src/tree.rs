@@ -269,8 +269,83 @@ pub fn height(xml: &roxmltree::Document<'_>, most: usize) -> Result<Option<usize
 struct Used {
     bytes: AtomicUsize,
     depth: AtomicUsize,
+    svg_count: AtomicUsize,
+    svg_depth: AtomicUsize,
     raster_pixels: AtomicU64,
     raster_data: Mutex<HashSet<usize>>,
+    invalid_raster: AtomicUsize,
+    raster_limit: AtomicUsize,
+    invalid_svg: AtomicUsize,
+    svg_limit: AtomicUsize,
+}
+
+/// What resolving one drawing's embedded images used or refused.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ImageUsage {
+    /// Unique decoded raster pixels reserved before decode.
+    pub raster_pixels: u64,
+    /// Unpacked SVG bytes consumed by embedded SVG data URLs.
+    pub embedded_svg_bytes: usize,
+    /// Embedded SVG images parsed, including nested images.
+    pub embedded_svg_count: usize,
+    /// Deepest embedded SVG chain.
+    pub embedded_svg_depth: usize,
+    /// Raster image data that could not be probed or decoded by the usvg resolver.
+    pub invalid_raster_images: usize,
+    /// Raster images refused by their per-image or aggregate pixel limit.
+    pub raster_limit_images: usize,
+    /// Embedded SVG data that was invalid.
+    pub invalid_svg_images: usize,
+    /// Embedded SVG data refused by byte or nesting limits.
+    pub svg_limit_images: usize,
+}
+
+/// A data-URL resolver and the accounting for the one drawing it serves.
+///
+/// Keep this value while parsing, then read [`usage`](Self::usage). Linked files are never read.
+pub struct ImageResolver {
+    limits: Limits,
+    used: Arc<Used>,
+}
+
+impl ImageResolver {
+    /// Create one resolver budget for one drawing import.
+    pub fn new(limits: Limits) -> Self {
+        ImageResolver {
+            limits,
+            used: Arc::new(Used {
+                bytes: AtomicUsize::new(0),
+                depth: AtomicUsize::new(0),
+                svg_count: AtomicUsize::new(0),
+                svg_depth: AtomicUsize::new(0),
+                raster_pixels: AtomicU64::new(0),
+                raster_data: Mutex::new(HashSet::new()),
+                invalid_raster: AtomicUsize::new(0),
+                raster_limit: AtomicUsize::new(0),
+                invalid_svg: AtomicUsize::new(0),
+                svg_limit: AtomicUsize::new(0),
+            }),
+        }
+    }
+
+    /// Resolver to put in `usvg::Options::image_href_resolver`.
+    pub fn resolver(&self) -> usvg::ImageHrefResolver<'static> {
+        image_resolver_for(self.limits, Arc::clone(&self.used))
+    }
+
+    /// Snapshot accounting after parsing has finished.
+    pub fn usage(&self) -> ImageUsage {
+        ImageUsage {
+            raster_pixels: self.used.raster_pixels.load(Ordering::Relaxed),
+            embedded_svg_bytes: self.used.bytes.load(Ordering::Relaxed),
+            embedded_svg_count: self.used.svg_count.load(Ordering::Relaxed),
+            embedded_svg_depth: self.used.svg_depth.load(Ordering::Relaxed),
+            invalid_raster_images: self.used.invalid_raster.load(Ordering::Relaxed),
+            raster_limit_images: self.used.raster_limit.load(Ordering::Relaxed),
+            invalid_svg_images: self.used.invalid_svg.load(Ordering::Relaxed),
+            svg_limit_images: self.used.svg_limit.load(Ordering::Relaxed),
+        }
+    }
 }
 
 fn raster_format(data: &[u8]) -> Option<craft_image_codecs::Format> {
@@ -284,15 +359,20 @@ fn raster_format(data: &[u8]) -> Option<craft_image_codecs::Format> {
 }
 
 fn raster_image(used: &Used, limits: &Limits, data: Arc<Vec<u8>>, format: craft_image_codecs::Format) -> Option<usvg::ImageKind> {
-    let (width, height) = craft_image_codecs::probe_allocation_size(&data).ok()?;
+    let Ok((width, height)) = craft_image_codecs::probe_allocation_size(&data) else {
+        used.invalid_raster.fetch_add(1, Ordering::Relaxed);
+        return None;
+    };
     if !matches!(
         format,
         craft_image_codecs::Format::Png | craft_image_codecs::Format::Jpeg | craft_image_codecs::Format::Gif | craft_image_codecs::Format::WebP
     ) {
+        used.invalid_raster.fetch_add(1, Ordering::Relaxed);
         return None;
     }
     let pixels = u64::from(width).checked_mul(u64::from(height))?;
     if pixels == 0 || pixels > limits.embedded_raster_pixels {
+        used.raster_limit.fetch_add(1, Ordering::Relaxed);
         return None;
     }
     let pointer = Arc::as_ptr(&data) as usize;
@@ -303,6 +383,7 @@ fn raster_image(used: &Used, limits: &Limits, data: Arc<Vec<u8>>, format: craft_
             let next = current.checked_add(pixels)?;
             if next > limits.embedded_raster_pixels {
                 seen.remove(&pointer);
+                used.raster_limit.fetch_add(1, Ordering::Relaxed);
                 return None;
             }
             match used.raster_pixels.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
@@ -324,6 +405,7 @@ fn raster_image(used: &Used, limits: &Limits, data: Arc<Vec<u8>>, format: craft_
 /// An embedded SVG document, if the budgets allow it.
 fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'_>) -> Option<usvg::ImageKind> {
     if used.depth.load(Ordering::Relaxed) >= limits.embedded_depth {
+        used.svg_limit.fetch_add(1, Ordering::Relaxed);
         return None;
     }
     let left = limits.embedded_bytes.saturating_sub(used.bytes.load(Ordering::Relaxed));
@@ -333,15 +415,32 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'
         // is left, so the next image can't repeat it.
         Err(_) => {
             used.bytes.fetch_add(left, Ordering::Relaxed);
+            used.svg_limit.fetch_add(1, Ordering::Relaxed);
             return None;
         }
     };
     used.bytes.fetch_add(text.len(), Ordering::Relaxed);
-    let xml = checked(&text, limits).ok()?;
-    used.depth.fetch_add(1, Ordering::Relaxed);
+    let xml = match checked(&text, limits) {
+        Ok(xml) => xml,
+        Err(_) => {
+            used.invalid_svg.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+    };
+    let depth = used.depth.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+    used.svg_depth.fetch_max(depth, Ordering::Relaxed);
     let tree = usvg::Tree::from_xmltree(&xml, options);
     used.depth.fetch_sub(1, Ordering::Relaxed);
-    tree.ok().map(usvg::ImageKind::SVG)
+    match tree {
+        Ok(tree) => {
+            used.svg_count.fetch_add(1, Ordering::Relaxed);
+            Some(usvg::ImageKind::SVG(tree))
+        }
+        Err(_) => {
+            used.invalid_svg.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+    }
 }
 
 /// An image resolver for `usvg::Options::image_href_resolver` that reads `<image>` data URLs
@@ -350,12 +449,10 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'
 /// [`Limits::embedded_depth`] inside one another. An image past a limit is left out. Linked
 /// files are never read. One resolver is one import's budget: make a new one for each [`parse`].
 pub fn image_resolver(limits: Limits) -> usvg::ImageHrefResolver<'static> {
-    let used = Arc::new(Used {
-        bytes: AtomicUsize::new(0),
-        depth: AtomicUsize::new(0),
-        raster_pixels: AtomicU64::new(0),
-        raster_data: Mutex::new(HashSet::new()),
-    });
+    ImageResolver::new(limits).resolver()
+}
+
+fn image_resolver_for(limits: Limits, used: Arc<Used>) -> usvg::ImageHrefResolver<'static> {
     usvg::ImageHrefResolver {
         resolve_data: Box::new(move |mime, data, options| {
             let detected = raster_format(&data);
@@ -369,6 +466,9 @@ pub fn image_resolver(limits: Limits) -> usvg::ImageHrefResolver<'static> {
             };
             if let Some(format) = format {
                 return raster_image(&used, &limits, data, format);
+            }
+            if matches!(mime, "image/jpg" | "image/jpeg" | "image/png" | "image/gif" | "image/webp") {
+                used.invalid_raster.fetch_add(1, Ordering::Relaxed);
             }
             match mime {
                 "image/svg+xml" => embedded(&used, &limits, &data, options),
