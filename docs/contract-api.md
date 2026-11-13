@@ -2656,8 +2656,8 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
 - `craft_ui::primitives::EditorPurpose`: `pub enum EditorPurpose { Text, Code, Number, Password }`. What an editor part edits.
 - `craft_ui::primitives::EditorRun`: `pub struct EditorRun<'a> { pub bytes: Range<usize>, pub rtl: bool, pub positions: &'a [f32], pub widths: &'a [f32] }`. One bidi run of a line: its bytes, direction, each character's start offset and advance.
   - `pub const fn new(bytes: Range<usize>, rtl: bool, positions: &'a [f32], widths: &'a [f32]) -> Self`. A run over `bytes`.
-- `craft_ui::primitives::EditorState`: `pub struct EditorState<'a> { pub caret: Rect, pub lines: &'a [EditorLine<'a>], pub caret_at: TextPos, pub selection: Option<(TextPos, TextPos)>, pub revision: u64, pub can_undo: bool, pub can_redo: bool }`. What an own-caret editor reports once per frame for the IME and AccessKit.
-  - `pub const fn new(caret: Rect, lines: &'a [EditorLine<'a>], caret_at: TextPos, revision: u64) -> Self`. A state with no selection and nothing to undo.
+- `craft_ui::primitives::EditorState`: `pub struct EditorState<'a> { pub caret: Rect, pub lines: &'a [EditorLine<'a>], pub caret_at: TextPos, pub selection: Option<(TextPos, TextPos)>, pub composing: bool, pub can_undo: bool, pub can_redo: bool }`. What an own-caret editor reports once per frame for the IME and AccessKit.
+  - `pub const fn new(caret: Rect, lines: &'a [EditorLine<'a>], caret_at: TextPos) -> Self`. A state with no selection, no marked text and nothing to undo.
 - `craft_ui::primitives::FacesCx`: `pub trait FacesCx`. Where a document face is asked for: a component's context, its measure or a content painter.
   - `fn document_face(&self, key: &str, load: impl FnOnce() -> Option<FaceBytes>) -> FaceState`. The face registered under `key` as a family of its own. `load` runs only for a new key within the frame's
 - `craft_ui::primitives::FakeThumbSource`: `pub struct FakeThumbSource<K>`. A [`ThumbSource`] for stories and tests in every crate: pictures made from the key and a revision the test sets,

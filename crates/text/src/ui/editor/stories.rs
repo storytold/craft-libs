@@ -27,7 +27,6 @@ const TEXT_SIZE: f32 = 16.0;
 /// wrap after the last space that fits `columns` cells; a wrapped row keeps the spaces it ends with.
 struct MonoHost {
     text: String,
-    revision: u64,
     columns: usize,
 }
 
@@ -100,15 +99,10 @@ impl TextEditorHost for MonoHost {
         &self.text
     }
 
-    fn revision(&self) -> u64 {
-        self.revision
-    }
-
     fn replace(&mut self, range: Range<usize>, text: &str, _: EditKind) -> bool {
         let byte = |chars: usize| self.text.char_indices().nth(chars).map_or(self.text.len(), |(at, _)| at);
         let (from, to) = (byte(range.start), byte(range.end));
         self.text.replace_range(from..to, text);
-        self.revision += 1;
         true
     }
 
@@ -249,7 +243,7 @@ const SAMPLE: &str = "The quick brown fox\njumps over the lazy dog";
 /// width, whose view puts document (0, 0) at its top left. The host's edits (typed, pasted and composed text) are
 /// written back to `text`, which the story keeps between passes.
 fn over_canvas(ui: &mut Ui, text: &mut String, mut bind: Bind<'_, TextSelection>) -> StoryOutput {
-    let mut host = MonoHost { text: std::mem::take(text), revision: 0, columns: 1 };
+    let mut host = MonoHost { text: std::mem::take(text), columns: 1 };
     let room = stage_fitting(ui, |width| {
         // One cell stays free at the end of a row for the caret after its last char.
         host.columns = ((f64::from(width) / CELL).floor() as usize).saturating_sub(1);

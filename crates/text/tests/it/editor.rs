@@ -16,7 +16,6 @@ use egui::{Event, ImeEvent, Key, Modifiers, Rect, pos2, vec2};
 #[derive(Default)]
 struct Host {
     text: String,
-    revision: u64,
     vertical: bool,
     /// The host applies formatting keys.
     formats: bool,
@@ -32,10 +31,6 @@ impl TextEditorHost for Host {
         &self.text
     }
 
-    fn revision(&self) -> u64 {
-        self.revision
-    }
-
     fn vertical(&self) -> bool {
         self.vertical
     }
@@ -44,7 +39,6 @@ impl TextEditorHost for Host {
         let byte = |chars: usize| self.text.char_indices().nth(chars).map_or(self.text.len(), |(at, _)| at);
         let (from, to) = (byte(range.start), byte(range.end));
         self.text.replace_range(from..to, text);
-        self.revision += 1;
         true
     }
 
@@ -169,6 +163,49 @@ fn a_primary_press_on_the_canvas_background_commits_the_session_with_its_marked_
     editor.fixture.click_at(away).settle();
     assert_eq!(editor.commits.get(), 1, "a primary press on the canvas background commits the session");
     assert_eq!(editor.text(), "abcdkzk", "the marked text stays as typed");
+}
+
+fn preedit(text: &str) -> Event {
+    Event::Ime(ImeEvent::Preedit { text: text.to_owned(), active_range_chars: None })
+}
+
+/// Composing on a canvas: the marked text is written at the caret, the IME opens at the editor's caret, and
+/// Command+Enter while composing commits nothing. A click in the text that arrives with its release and a late commit
+/// in one raw frame keeps the marked text as typed and interrupts the composition once: one press per pass holds the
+/// release and the commit for the next pass, where the commit is stale. Later events of the interrupted composition
+/// are dropped until the OS completes the reset; then a new composition starts at the clicked caret.
+#[trial]
+fn a_click_during_composition_keeps_the_marked_text_and_interrupts_the_composition_once() {
+    let mut editor = session("abc", None);
+    editor.focus();
+    editor.fixture.frame(vec![preedit("kzk")]).settle();
+    assert_eq!(editor.text(), "abckzk", "the marked text is written at the caret");
+    let ime = editor.fixture.ime().cloned().expect("the editor owns the IME");
+    assert!(!ime.interrupt);
+    assert!(
+        Rect::from_min_size(pos2(0.0, 0.0), vec2(200.0, 20.0)).expand(1.0).contains_rect(ime.caret),
+        "the IME opens at the caret: {:?}",
+        ime.caret
+    );
+    editor.fixture.key(Key::Enter, Modifiers::COMMAND).settle();
+    assert_eq!(editor.commits.get(), 0, "Enter while composing belongs to the input method");
+
+    let at = pos2(1.0, 10.0);
+    editor.fixture.frame(vec![pointer::moved(at)]);
+    editor.fixture.frame(vec![pointer::press(at), pointer::release(at), Event::Ime(ImeEvent::Commit("kzk".to_owned()))]);
+    let pressed = editor.fixture.ime().cloned().expect("the editor keeps the IME");
+    let reset = pressed.reset.filter(|_| pressed.interrupt).expect("the press pass interrupts the composition and asks for a reset");
+    for _ in 0..3 {
+        editor.fixture.frame(Vec::new());
+        assert!(!editor.fixture.ime().is_some_and(|ime| ime.interrupt), "the composition is interrupted once");
+    }
+    assert_eq!(editor.text(), "abckzk", "the marked text stays as typed and the late commit is dropped");
+    assert_eq!(*editor.selection.borrow(), TextSelection::caret_at(1), "the press placed the caret");
+    editor.fixture.frame(vec![preedit("q")]).settle();
+    assert_eq!(editor.text(), "abckzk", "a preedit before the reset completes belongs to the interrupted composition");
+    editor.fixture.frame(vec![Event::ImeResetCompleted { request_id: reset }, preedit("q")]).settle();
+    assert_eq!(editor.text(), "aqbckzk", "after the reset a new composition starts at the caret");
+    assert_eq!(editor.commits.get(), 0, "a press in the text keeps the session open");
 }
 
 /// In vertical text Alt+Down follows the flow and loosens the tracking; a host that applies no formatting leaves

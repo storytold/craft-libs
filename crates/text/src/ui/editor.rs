@@ -17,8 +17,9 @@
 //! The marked (preedit) text of an input method is written into the host's text with [`EditKind::Composing`] and
 //! replaced by every update, so it lays out, wraps and takes the character style exactly as typed text does. The
 //! editor remembers its range and underlines it, the converted segment thicker. A commit replaces the range with
-//! the result; a click keeps the marked text as typed. The host's [`revision`](TextEditorHost::revision) bumps on
-//! every change, so a change that follows no delivered edit resets the composition.
+//! the result; a click keeps the marked text as typed. Whenever the editor ends the composition itself (a press, a
+//! selection, an app edit over the marked text), it reports that it no longer composes and the input method's
+//! composition is interrupted.
 
 mod commands;
 mod edits;
@@ -207,9 +208,6 @@ impl HostLine {
 pub trait TextEditorHost {
     /// The whole text, including the marked text while composing.
     fn text(&self) -> &str;
-
-    /// Bumped on every change to the text, the editor's own and outside ones alike.
-    fn revision(&self) -> u64;
 
     /// Replace the chars `range` with `text`. The host applies its insertion style (the style the Character panel
     /// set at the caret), records history (one step per editing session) and lays the text out again. `false` when
@@ -663,7 +661,8 @@ impl Component for TextEditor<'_> {
                 EditorLine::new(&line.text, rect, rect.top() + (line.baseline - line.rect.top()) * zoom, runs)
             })
             .collect();
-        let mut state = EditorState::new(caret_rect, &lines, text_pos(&host_lines, caret_at), self.host.revision());
+        let mut state = EditorState::new(caret_rect, &lines, text_pos(&host_lines, caret_at));
+        state.composing = session.preedit.is_some();
         state.selection = (!range.is_empty()).then(|| (text_pos(&host_lines, selection.anchor.min(chars)), text_pos(&host_lines, caret_at)));
         cx.editor_state(state);
     }

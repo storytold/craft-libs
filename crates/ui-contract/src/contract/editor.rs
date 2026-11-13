@@ -26,8 +26,6 @@ pub(crate) struct EditorInfo {
     pub purpose: EditorPurpose,
     pub focused: bool,
     pub read_only: bool,
-    /// An input that changes text was delivered this pass.
-    pub edited: bool,
 }
 
 impl<C: Component> PartsCx<'_, C> {
@@ -84,8 +82,7 @@ pub(crate) fn run<C: Component>(cx: &mut Cx<'_, C>, ui: &mut Ui, step: &mut supe
             can
         });
     }
-    let edited = inputs.iter().any(|input| !input.is_read_only_safe());
-    cx.core.editor = Some(EditorInfo { widget, rect: decl.rect, purpose: decl.purpose, focused, read_only, edited });
+    cx.core.editor = Some(EditorInfo { widget, rect: decl.rect, purpose: decl.purpose, focused, read_only });
     cx.core.editor_inputs = inputs;
 }
 
@@ -107,7 +104,7 @@ impl<C: Component> Cx<'_, C> {
         if info.focused {
             ime::note_caret(ctx, info.widget, info.rect, state.caret, masked);
         }
-        ime::note_editor(ctx, info.widget, state.revision, info.edited, (state.can_undo, state.can_redo));
+        ime::note_editor(ctx, info.widget, state.composing, (state.can_undo, state.can_redo));
         if !text_access::exposed(ctx, info.widget) {
             return;
         }

@@ -27,7 +27,6 @@ pub(super) struct Draft {
     caret: usize,
     anchor: Option<usize>,
     preedit: Option<String>,
-    revision: u64,
 }
 
 fn previous(text: &str, at: usize) -> usize {
@@ -61,11 +60,11 @@ impl Draft {
         self.caret = self.text.len();
         self.anchor = None;
         self.preedit = None;
-        self.revision += 1;
     }
 
-    pub(super) fn revision(&self) -> u64 {
-        self.revision
+    /// The draft shows marked text of an input method.
+    pub(super) fn composing(&self) -> bool {
+        self.preedit.is_some()
     }
 
     pub(super) fn caret(&self) -> usize {
@@ -101,7 +100,6 @@ impl Draft {
         self.anchor = None;
         self.text.insert_str(self.caret, &text);
         self.caret += text.len();
-        self.revision += 1;
     }
 
     fn delete(&mut self, forward: bool, by: Granularity) {
@@ -109,7 +107,6 @@ impl Draft {
             self.text.replace_range(range.clone(), "");
             self.caret = range.start;
             self.anchor = None;
-            self.revision += 1;
             return;
         }
         let (from, to) = match (forward, by) {
@@ -124,7 +121,6 @@ impl Draft {
         if from < to {
             self.text.replace_range(from..to, "");
             self.caret = from;
-            self.revision += 1;
         }
     }
 
@@ -186,7 +182,6 @@ impl Draft {
         self.text.push_str(reference);
         self.caret = self.text.len();
         self.anchor = None;
-        self.revision += 1;
     }
 }
 

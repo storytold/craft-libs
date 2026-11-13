@@ -89,6 +89,8 @@ pub struct ImeSeen {
     pub owner: egui::Id,
     /// The OS composition is to be interrupted.
     pub interrupt: bool,
+    /// The reset the frame asked for; a trial answers it with `Event::ImeResetCompleted`.
+    pub reset: Option<egui::ImeResetId>,
     /// Where the candidate window opens.
     pub caret: Rect,
 }
@@ -230,6 +232,7 @@ pub(crate) fn run_frame(
         ime: output.platform_output.ime.as_ref().map(|ime| ImeSeen {
             owner: ime.owner,
             interrupt: ime.should_interrupt_composition,
+            reset: ime.reset_request,
             caret: ime.cursor_rect,
         }),
         textures: std::mem::take(&mut output.textures_delta),

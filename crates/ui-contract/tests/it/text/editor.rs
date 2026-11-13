@@ -7,10 +7,10 @@ use craft_ui::primitives::{EditorLine, EditorPurpose, EditorRun, EditorState};
 use craft_ui::runtime::focus::KeyUse;
 use craft_ui::style::StyleCx;
 use craft_ui::testing::input::key_press;
-use craft_ui::testing::pointer::click;
+use craft_ui::testing::pointer::{click, moved, press, release};
 use craft_ui::testing::{Frames, trial};
 use craft_ui_test_kit::contract::PlainStyle;
-use egui::{Event, Id, Key, Modifiers, Pos2, Rect, Response};
+use egui::{Event, Id, ImeEvent, Key, Modifiers, Pos2, Rect, Response};
 use std::cell::{Cell, RefCell};
 
 const AT: Rect = Rect { min: Pos2::new(10.0, 10.0), max: Pos2::new(210.0, 90.0) };
@@ -56,7 +56,7 @@ impl Component for Probe<'_> {
         let lines = [EditorLine::new(TEXT, line, line.bottom(), &runs)];
         let end = TextPos::new(0, TEXT.len());
         let caret = Rect::from_min_size(line.min + egui::vec2(TEXT.len() as f32 * 8.0, 0.0), egui::vec2(0.0, 16.0));
-        cx.editor_state(EditorState::new(caret, &lines, end, 0));
+        cx.editor_state(EditorState::new(caret, &lines, end));
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> Response {
@@ -94,6 +94,17 @@ impl Rig {
     fn take(&self) -> Vec<EditorInput> {
         self.log.take()
     }
+
+    /// A frame with `events`, and the reset request its IME output carries.
+    fn frame_reset(&mut self, events: Vec<Event>) -> Option<egui::ImeResetId> {
+        self.frame(events);
+        self.frames.ime().and_then(|ime| ime.reset)
+    }
+
+    /// Hover, press, release and an idle frame at `at`, and the reset requests they carry.
+    fn click_resets(&mut self, at: Pos2) -> Vec<egui::ImeResetId> {
+        [vec![moved(at)], vec![press(at)], vec![release(at)], Vec::new()].into_iter().filter_map(|events| self.frame_reset(events)).collect()
+    }
 }
 
 fn show(ui: &mut egui::Ui, log: &RefCell<Vec<EditorInput>>, id: &Cell<Id>, read_only: bool) {
@@ -125,4 +136,39 @@ fn editor_input_reaches_an_editor_part_and_read_only_filtering_drops_edits() {
     rig.frame(vec![key_press(Key::ArrowUp, Modifiers::NONE)]);
     let moves = rig.take();
     assert!(matches!(moves.as_slice(), [EditorInput::Move(..)]), "moves still arrive: {moves:?}");
+}
+
+fn preedit(text: &str) -> Event {
+    Event::Ime(ImeEvent::Preedit { text: text.to_owned(), active_range_chars: None })
+}
+
+/// A reset fences the interrupted composition until its own request completes. Focus leaving an editor while it
+/// composes asks for a reset; a pass with no IME output retires the request (the integration drops it with the
+/// IME), so focus coming back asks again. The retired request's completion is stale and lets nothing through; the
+/// new request's completion lets the composition that follows it in.
+#[trial]
+fn a_reset_ends_only_with_the_completion_of_its_own_request() {
+    let mut rig = Rig::new();
+    rig.focus();
+    rig.frame(vec![preedit("k")]);
+    assert!(matches!(rig.take().as_slice(), [EditorInput::Preedit { .. }]), "the editor composes");
+
+    let left = rig.click_resets(Pos2::new(400.0, 300.0));
+    let [first] = left.as_slice() else { panic!("focus leaving a composition asks for one reset: {left:?}") };
+    for _ in 0..2 {
+        assert_eq!(rig.frame_reset(Vec::new()), None, "no editor owns the IME, so no reset is asked for");
+    }
+    let back = rig.click_resets(AT.center());
+    let [second] = back.as_slice() else { panic!("focus coming back while the reset is pending asks again: {back:?}") };
+    assert_ne!(first, second);
+    rig.take();
+
+    rig.frame(vec![Event::ImeResetCompleted { request_id: *first }, preedit("x")]);
+    assert!(rig.take().is_empty(), "the retired request's completion is stale: the composition stays fenced");
+    rig.frame(vec![Event::ImeResetCompleted { request_id: *second }, preedit("y")]);
+    let inputs = rig.take();
+    assert!(
+        matches!(inputs.as_slice(), [EditorInput::Preedit { text, .. }] if &**text == "y"),
+        "the completion of the latest request ends the fence in its place in the stream: {inputs:?}"
+    );
 }

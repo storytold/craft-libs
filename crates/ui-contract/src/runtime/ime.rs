@@ -3,7 +3,7 @@
 //! the one writer of `PlatformOutput.ime`; otherwise both stay with egui and the app's own widgets.
 
 use crate::runtime::egui::ime as os;
-use crate::runtime::egui::pass;
+use crate::runtime::egui::{pass, viewports};
 use crate::runtime::frame::{PerViewport, Stored};
 use craft_behavior::EditorInput;
 use egui::{Context, Event, Id, Key, Rect, ViewportId};
@@ -19,8 +19,12 @@ struct Engine {
     generation: u64,
     composing: bool,
     guard: u8,
-    /// A reset was asked for; events of the old composition are dropped until the OS answers or the IME disables.
+    /// A reset was asked for; events of the old composition are dropped until its completion arrives.
     stale: bool,
+    /// The reset request `stale` waits for, as the pass that published it got it back. `None` before it is published,
+    /// and once the integration can no longer answer it: a pass with no IME output disallows the IME and an unfocused
+    /// window drops the pending reset, so the next pass with an owner asks again.
+    reset: Option<egui::ImeResetId>,
     /// Edits for `owner`, in arrival order, until its run of this pass takes them.
     edits: Vec<EditorInput>,
     /// `owner` took its edits this pass; an owner not shown for a pass never does, and its edits are dropped.
@@ -39,9 +43,20 @@ impl Stored for Engine {}
 #[derive(Clone, Copy)]
 struct EditorFacts {
     owner: Id,
-    revision: u64,
+    composing: bool,
     can_undo: bool,
     can_redo: bool,
+}
+
+impl Engine {
+    /// Ends the composition of `owner` here and has the end hook interrupt the OS composition; its late events are
+    /// dropped until the reset completes.
+    fn interrupt(&mut self, owner: Id) {
+        self.composing = false;
+        self.preedit.clear();
+        self.stale = true;
+        self.interrupt = Some(owner);
+    }
 }
 
 fn with<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(&mut Engine) -> R) -> R {
@@ -57,7 +72,7 @@ fn current<R>(ctx: &Context, f: impl FnOnce(&mut Engine) -> R) -> R {
 /// the keys that would end the composition.
 pub(crate) fn input_hook(ctx: &Context, events: &mut Vec<Event>, viewport: ViewportId) {
     with(ctx, viewport, |engine| {
-        if engine.owner.is_some() || engine.stale {
+        if engine.owner.is_some() || engine.reset.is_some() {
             engine.queue.extend(os::take_events(events));
         }
         let guarded = engine.composing || engine.guard > 0;
@@ -78,8 +93,7 @@ pub(crate) fn begin(ctx: &Context, owner: Option<Id>) {
                 && let Some(old) = engine.owner
             {
                 engine.leaving = Some((old, std::mem::take(&mut engine.preedit)));
-                engine.interrupt = Some(old);
-                engine.stale = true;
+                engine.interrupt(old);
             }
             engine.composing = false;
             engine.edits.clear();
@@ -88,7 +102,13 @@ pub(crate) fn begin(ctx: &Context, owner: Option<Id>) {
         }
         for raw in std::mem::take(&mut engine.queue) {
             match raw {
-                os::Raw::ResetCompleted => engine.stale = false,
+                // A completion of an earlier request is stale: the latest request still fences.
+                os::Raw::ResetCompleted(id) => {
+                    if engine.reset == Some(id) {
+                        engine.stale = false;
+                        engine.reset = None;
+                    }
+                }
                 _ if engine.stale || engine.owner.is_none() => {}
                 os::Raw::Preedit { text, cursor_chars } => {
                     engine.composing = !text.is_empty();
@@ -122,9 +142,7 @@ pub(crate) fn take(ctx: &Context, owner: Id, read_only: bool) -> Vec<EditorInput
         if read_only {
             engine.edits.clear();
             if engine.composing {
-                engine.composing = false;
-                engine.stale = true;
-                engine.interrupt = Some(owner);
+                engine.interrupt(owner);
             }
             engine.preedit.clear();
             return Vec::new();
@@ -133,19 +151,17 @@ pub(crate) fn take(ctx: &Context, owner: Id, read_only: bool) -> Vec<EditorInput
     })
 }
 
-/// What an editor that draws its own caret reports once per pass. A new `revision` that follows no edit the engine
-/// delivered (`edited`) is an app change: the composition context is stale, so the OS composition is interrupted
-/// and its late events are dropped.
-pub(crate) fn note_editor(ctx: &Context, owner: Id, revision: u64, edited: bool, history: (bool, bool)) {
+/// What an editor that draws its own caret reports once per pass. An editor that reported composing and now does
+/// not ended the composition itself (a press in its text, a selection, an app edit over the marked text): the OS
+/// composition is interrupted and its late events are dropped. An editor that shows no marked text reports `false`
+/// throughout and the OS composes for it until the commit.
+pub(crate) fn note_editor(ctx: &Context, owner: Id, composing: bool, history: (bool, bool)) {
     current(ctx, |engine| {
-        let changed = engine.editor.is_some_and(|last| last.owner == owner && last.revision != revision);
-        if changed && !edited && engine.owner == Some(owner) && engine.composing {
-            engine.composing = false;
-            engine.preedit.clear();
-            engine.stale = true;
-            engine.interrupt = Some(owner);
+        let ended = !composing && engine.editor.is_some_and(|last| last.owner == owner && last.composing);
+        if ended && engine.owner == Some(owner) && engine.composing {
+            engine.interrupt(owner);
         }
-        engine.editor = Some(EditorFacts { owner, revision, can_undo: history.0, can_redo: history.1 });
+        engine.editor = Some(EditorFacts { owner, composing, can_undo: history.0, can_redo: history.1 });
     });
 }
 
@@ -176,26 +192,45 @@ pub(crate) fn note_caret(ctx: &Context, owner: Id, field: Rect, caret: Rect, pas
 /// the output is egui's: an app's own `TextEdit` or IME reader writes it.
 pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
+    let focused = viewports::current(ctx).focused;
     let (owner, interrupt, caret, generation) = with(ctx, viewport, |engine| {
         if !std::mem::take(&mut engine.ran) {
             engine.edits.clear();
         }
+        if !focused {
+            engine.reset = None;
+        }
+        // The fence has no request the integration can answer: the owner's output asks again.
+        if engine.stale
+            && engine.reset.is_none()
+            && focused
+            && let Some(owner) = engine.owner
+        {
+            engine.interrupt.get_or_insert(owner);
+        }
         (engine.owner, engine.interrupt.take(), engine.caret.take(), engine.generation)
     });
-    if owner.is_none() && interrupt.is_none() {
-        return;
-    }
-    os::clear(ctx);
-    match (caret, interrupt, owner) {
-        (Some((id, field, caret, password)), interrupt, _) if Some(id) == owner => {
-            os::write(ctx, viewport, os::Output { owner: id, field, caret, interrupt: interrupt.is_some(), generation, password });
+    let written = if owner.is_none() && interrupt.is_none() {
+        None
+    } else {
+        os::clear(ctx);
+        match (caret, interrupt, owner) {
+            (Some((id, field, caret, password)), interrupt, _) if Some(id) == owner => {
+                Some(os::write(ctx, viewport, os::Output { owner: id, field, caret, interrupt: interrupt.is_some(), generation, password }))
+            }
+            // The old owner still gets an output in the pass it lost focus, or the OS never interrupts.
+            (_, Some(old), _) => Some(os::write(
+                ctx,
+                viewport,
+                os::Output { owner: old, field: Rect::NOTHING, caret: Rect::NOTHING, interrupt: true, generation, password: false },
+            )),
+            _ => None,
         }
-        // The old owner still gets an output in the pass it lost focus, or the OS never interrupts.
-        (_, Some(old), _) => os::write(
-            ctx,
-            viewport,
-            os::Output { owner: old, field: Rect::NOTHING, caret: Rect::NOTHING, interrupt: true, generation, password: false },
-        ),
-        _ => {}
-    }
+    };
+    with(ctx, viewport, |engine| match written {
+        Some(published) if interrupt.is_some() => engine.reset = published,
+        Some(_) => {}
+        // No IME output disallows the IME, and the integration drops the pending reset with it.
+        None => engine.reset = None,
+    });
 }

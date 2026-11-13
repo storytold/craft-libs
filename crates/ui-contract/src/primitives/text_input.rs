@@ -254,8 +254,10 @@ pub struct EditorState<'a> {
     pub caret_at: TextPos,
     /// The selection.
     pub selection: Option<(TextPos, TextPos)>,
-    /// Bumped on every document change; a change that follows no delivered edit resets the composition context.
-    pub revision: u64,
+    /// The editor shows marked text of an input method. An editor that ends the composition itself (a press in its
+    /// text, a selection, an app edit over the marked text) reports `false` and the OS composition is interrupted;
+    /// an editor that shows no marked text reports `false` throughout.
+    pub composing: bool,
     /// Whether undo and redo have something to do; false sends them to the app command (11.3).
     pub can_undo: bool,
     /// Whether redo has something to do.
@@ -263,9 +265,9 @@ pub struct EditorState<'a> {
 }
 
 impl<'a> EditorState<'a> {
-    /// A state with no selection and nothing to undo.
-    pub const fn new(caret: Rect, lines: &'a [EditorLine<'a>], caret_at: TextPos, revision: u64) -> Self {
-        EditorState { caret, lines, caret_at, selection: None, revision, can_undo: false, can_redo: false }
+    /// A state with no selection, no marked text and nothing to undo.
+    pub const fn new(caret: Rect, lines: &'a [EditorLine<'a>], caret_at: TextPos) -> Self {
+        EditorState { caret, lines, caret_at, selection: None, composing: false, can_undo: false, can_redo: false }
     }
 }
 

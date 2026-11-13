@@ -459,7 +459,7 @@ impl Component for NotesEditor<'_> {
             let text = editor_lines.get(line).map_or("", |l| l.0.as_str());
             TextPos::new(line, text.char_indices().nth(column).map_or(text.len(), |(b, _)| b))
         };
-        let mut state = EditorState::new(caret_rect, &lines, position(cursor.caret), revision(&plain));
+        let mut state = EditorState::new(caret_rect, &lines, position(cursor.caret));
         state.selection = (!selected.is_empty()).then(|| (position(cursor.anchor), position(cursor.caret)));
         cx.editor_state(state);
     }
@@ -533,14 +533,6 @@ fn paragraph_runs<'a>(paragraph: &'a NotesParagraph, font: &FontRef, size: f32, 
         })
         .collect();
     if runs.is_empty() { vec![DocRun::new("", font.clone(), size, ink)] } else { runs }
-}
-
-/// A number that changes with the notes' text, for the input method's revision.
-fn revision(plain: &str) -> u64 {
-    use std::hash::{Hash as _, Hasher as _};
-    let mut hasher = std::hash::DefaultHasher::new();
-    plain.hash(&mut hasher);
-    hasher.finish()
 }
 
 /// The selection of the chars `from..to` of a laid-out paragraph as one band per galley row it touches, in the

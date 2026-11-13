@@ -10,8 +10,8 @@ pub(crate) enum Raw {
         cursor_chars: Option<std::ops::Range<usize>>,
     },
     Commit(String),
-    /// The OS finished the reset the engine asked for.
-    ResetCompleted,
+    /// The OS finished the reset with this request id.
+    ResetCompleted(egui::ImeResetId),
 }
 
 /// Removes the IME events from `events` and returns them in order.
@@ -28,8 +28,8 @@ pub(crate) fn take_events(events: &mut Vec<Event>) -> Vec<Raw> {
             }
             false
         }
-        Event::ImeResetCompleted { .. } => {
-            taken.push(Raw::ResetCompleted);
+        Event::ImeResetCompleted { request_id } => {
+            taken.push(Raw::ResetCompleted(*request_id));
             false
         }
         _ => true,
@@ -49,8 +49,9 @@ pub(crate) struct Output {
     pub password: bool,
 }
 
-/// Writes the pass's IME output; egui reads it only when it is `Some` at the end of the pass.
-pub(crate) fn write(ctx: &Context, viewport: ViewportId, out: Output) {
+/// Writes the pass's IME output; egui reads it only when it is `Some` at the end of the pass. Returns the reset
+/// request an interrupt published: its completion is the one that matches (`None` when the ids ran out).
+pub(crate) fn write(ctx: &Context, viewport: ViewportId, out: Output) -> Option<egui::ImeResetId> {
     let reset = out.interrupt.then(|| ctx.request_ime_reset(viewport)).flatten();
     ctx.output_mut(|output| {
         let mut ime = egui::output::IMEOutput::new(
@@ -64,6 +65,7 @@ pub(crate) fn write(ctx: &Context, viewport: ViewportId, out: Output) {
         ime.reset_request = reset;
         output.ime = Some(ime);
     });
+    reset
 }
 
 /// Drops what `TextEdit` wrote in a pass whose IME output the engine writes.

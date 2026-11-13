@@ -373,7 +373,7 @@ impl CellGrid<'_> {
                 Some(cell) if open => self.paint_editor(&draw, cx, &editing, geometry.mirror_rect(geometry.cell_rect(cell))),
                 _ => {
                     let lead = selection.active().map_or(Rect::NOTHING, |cell| geometry.mirror_rect(geometry.cell_rect(*cell)));
-                    cx.editor_state(EditorState::new(Rect::from_min_size(lead.min, Vec2::new(0.0, lead.height())), &[], TextPos::new(0, 0), 0));
+                    cx.editor_state(EditorState::new(Rect::from_min_size(lead.min, Vec2::new(0.0, lead.height())), &[], TextPos::new(0, 0)));
                 }
             }
         }
@@ -504,8 +504,9 @@ impl CellGrid<'_> {
             draw.stroke(&PaintShape::Path(vec![top, top + Vec2::new(0.0, line.height())]), StrokeWidth::Medium, style.edit_edge);
         }
         let lines = [EditorLine::new(&text, line, line.top() + layout.first_baseline, &runs)];
-        let mut state = EditorState::new(Rect::from_min_size(top, Vec2::new(0.0, line.height())), &lines, at, editing.draft.revision());
+        let mut state = EditorState::new(Rect::from_min_size(top, Vec2::new(0.0, line.height())), &lines, at);
         state.selection = editing.draft.selection();
+        state.composing = editing.draft.composing();
         cx.editor_state(state);
     }
 
