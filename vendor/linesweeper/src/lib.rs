@@ -79,8 +79,9 @@ pub enum Error {
     InconsistentWindingNumbers,
     /// At least one of the inputs had a coordinate with a magnitude above [`MAX_COORDINATE`].
     TooLarge,
-    /// The sweep did more work (segment comparisons, position checks and linear searches of the
-    /// sweep line) than its work limit allows.
+    /// The sweep did more work (segment comparisons, position checks, linear searches of the
+    /// sweep line and visits of horizontal segments) than its work limit allows, or the
+    /// topology's output would pass its output limit.
     WorkLimitExceeded,
     /// The accuracy parameter was NaN, infinite, zero or negative.
     InvalidEps,
@@ -142,7 +143,7 @@ impl std::fmt::Display for Error {
             }
             Error::TooLarge => write!(f, "one of the inputs had a coordinate that was too large"),
             Error::WorkLimitExceeded => {
-                write!(f, "the sweep did more work than its work limit")
+                write!(f, "the sweep did more work or made more output than its limits allow")
             }
             Error::InvalidEps => {
                 write!(f, "the accuracy parameter was not a positive finite number")

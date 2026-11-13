@@ -2,7 +2,7 @@
 //!
 //! This algorithm is documented in `docs/sweep.typ`.
 
-use std::cell::{RefCell, RefMut};
+use std::cell::{Cell, RefCell, RefMut};
 
 #[cfg(feature = "slow-asserts")]
 use std::ops::DerefMut;
@@ -411,13 +411,17 @@ pub struct Sweeper<'a> {
     // do, and whether it stopped there. The work is the segment comparisons,
     // which the two caches count, plus `position_checks`: the segment positions
     // checked against horizontal segments and contour endpoints while finding
-    // the changed intervals. `segments_passed` counts the segments that linear
+    // the changed intervals, with n log2 n more for sorting a sweep line's n
+    // horizontal segments. `segments_passed` counts the segments that linear
     // searches of the sweep line step over without comparing them; each
     // `SEGMENTS_PASSED_PER_UNIT` of them counts as one unit of work.
+    // `range_horizontals` counts the horizontal segments that the steps of a
+    // `SweepLineRange` visit; a range borrows the sweeper, so it is a `Cell`.
     work_limit: Option<u64>,
     stopped_at_work_limit: bool,
     position_checks: u64,
     segments_passed: u64,
+    range_horizontals: Cell<u64>,
     // Craft patch (removal scan): how many positions `scan_for_removal` looked at.
     #[cfg(test)]
     removal_scan_steps: usize,
@@ -459,6 +463,7 @@ impl<'segs> Sweeper<'segs> {
             stopped_at_work_limit: false,
             position_checks: 0,
             segments_passed: 0,
+            range_horizontals: Cell::new(0),
             #[cfg(test)]
             removal_scan_steps: 0,
         }
@@ -474,8 +479,12 @@ impl<'segs> Sweeper<'segs> {
     ///
     /// The work is the number of segment comparisons plus the number of segment
     /// positions checked against horizontal segments and contour endpoints while
-    /// finding a sweep line's changed intervals, plus one unit for every 16 segments
-    /// that linear searches of the sweep line step over without comparing them.
+    /// finding a sweep line's changed intervals, plus n log2 n for sorting the n
+    /// horizontal segments of a sweep line, plus one unit for every 16 segments
+    /// that linear searches of the sweep line step over without comparing them,
+    /// plus the horizontal segments that each step of a [`SweepLineRange`]
+    /// visits. A caller stops processing a range once
+    /// [`SweepLineRange::work_limit_exceeded`] returns `true`.
     /// Once the sweep has done more than `limit`,
     /// [`Sweeper::next_line`] returns `None` and
     /// [`Sweeper::work_limit_exceeded`] returns `true`. The sweep checks the limit
@@ -503,13 +512,21 @@ impl<'segs> Sweeper<'segs> {
     }
 
     /// The work done so far: the segment comparisons, cached or not, the
-    /// position checks, and the segments that linear searches passed.
+    /// position checks, the segments that linear searches passed, and the
+    /// horizontal segments that range steps visited.
     fn work(&self) -> u64 {
         let calls = self.comparisons.borrow().calls;
         calls
             .saturating_add(self.conservative_comparisons.borrow().calls)
             .saturating_add(self.position_checks)
             .saturating_add(self.segments_passed / SEGMENTS_PASSED_PER_UNIT)
+            .saturating_add(self.range_horizontals.get())
+    }
+
+    /// Counts `n` horizontal segments visited by a step of a [`SweepLineRange`].
+    pub(crate) fn count_range_horizontals(&self, n: usize) {
+        let total = self.range_horizontals.get().saturating_add(n as u64);
+        self.range_horizontals.set(total);
     }
 
     /// Finds `seg_idx` on the sweep line, counting the segments the search passes.
@@ -1339,6 +1356,14 @@ impl<'segs> Sweeper<'segs> {
     /// Craft patch (work limit): returns `false`, leaving the changed intervals
     /// incomplete, if the sweep passes its work limit.
     fn compute_horizontal_changed_intervals(&mut self) -> bool {
+        // Sorting the n horizontal segments counts as n log2 n position checks,
+        // and the sweep stops before the sort once that passes the work limit.
+        let n = self.horizontals.len() as u64;
+        let sort_work = n.saturating_mul(n.checked_ilog2().map_or(0, u64::from));
+        self.position_checks = self.position_checks.saturating_add(sort_work);
+        if self.stop_at_work_limit() {
+            return false;
+        }
         self.horizontals
             .sort_by_key(|seg_idx| CheapOrderedFloat::from(self.segments[*seg_idx].start().x));
         let mut last_end = f64::NEG_INFINITY;
@@ -3520,6 +3545,32 @@ mod tests {
             (area.abs() - 1.125).abs() < 1e-4,
             "intersection area {area}"
         );
+    }
+
+    // Craft patch (work limit). Many horizontal segments at one height and no
+    // other segments: the sweep line stays empty, so finding the changed
+    // intervals checks no positions, but sorting the horizontals counts.
+    #[test]
+    fn work_limit_counts_sorting_the_horizontals() {
+        let count: u32 = 4096;
+        let mut segs = Segments::default();
+        for i in 0..count {
+            let x = 3.0 * f64::from(i);
+            segs.add_points([Point::new(x, 0.0), Point::new(x + 1.0, 0.0)]);
+        }
+
+        let mut bufs = SweepLineBuffers::default();
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        while sweep.next_line(&mut bufs).is_some() {}
+        assert!(!sweep.work_limit_exceeded());
+        let n = u64::from(count);
+        let total = sweep.work();
+        assert!(total >= n * u64::from(n.ilog2()), "{total} units of work");
+
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        sweep.set_work_limit(total / 2);
+        assert!(sweep.next_line(&mut bufs).is_none());
+        assert!(sweep.work_limit_exceeded());
     }
 
     proptest! {
