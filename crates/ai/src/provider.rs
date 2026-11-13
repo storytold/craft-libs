@@ -67,6 +67,22 @@ impl OpenAiCompat {
         format!("{}/{}", self.endpoint.trim_end_matches('/'), path)
     }
 
+    /// ureq sets no timeouts by default — an endpoint that accepts the
+    /// socket and never replies would block the caller forever, so every
+    /// request goes through an agent with finite deadlines. The response
+    /// budgets are generous: a non-streamed chat completion only sends
+    /// headers once generation is done, which can take minutes.
+    fn agent() -> ureq::Agent {
+        ureq::Agent::config_builder()
+            .timeout_connect(Some(std::time::Duration::from_secs(15)))
+            .timeout_send_request(Some(std::time::Duration::from_secs(30)))
+            .timeout_send_body(Some(std::time::Duration::from_secs(60)))
+            .timeout_recv_response(Some(std::time::Duration::from_secs(300)))
+            .timeout_recv_body(Some(std::time::Duration::from_secs(300)))
+            .build()
+            .into()
+    }
+
     fn auth(&self, req: ureq::RequestBuilder<ureq::typestate::WithBody>) -> ureq::RequestBuilder<ureq::typestate::WithBody> {
         match &self.token {
             Some(t) if !t.is_empty() => req.header("Authorization", format!("Bearer {t}")),
@@ -92,13 +108,21 @@ impl Provider for OpenAiCompat {
             "max_tokens": opts.max_tokens,
         });
         let mut resp =
-            self.auth(ureq::post(self.url("chat/completions"))).header("Content-Type", "application/json").send_json(body).map_err(|e| match e {
-                ureq::Error::StatusCode(401 | 403) => AiError::Rejected("authentication failed — check the API token".into()),
-                ureq::Error::StatusCode(404) => AiError::Rejected("model or endpoint not found — check both fields".into()),
-                ureq::Error::StatusCode(c) => AiError::Rejected(format!("HTTP {c}")),
-                other => AiError::Http(other.to_string()),
+            self.auth(Self::agent().post(self.url("chat/completions"))).header("Content-Type", "application/json").send_json(body).map_err(|e| {
+                match e {
+                    ureq::Error::StatusCode(401 | 403) => AiError::Rejected("authentication failed — check the API token".into()),
+                    ureq::Error::StatusCode(404) => AiError::Rejected("model or endpoint not found — check both fields".into()),
+                    ureq::Error::StatusCode(c) => AiError::Rejected(format!("HTTP {c}")),
+                    other => AiError::Http(other.to_string()),
+                }
             })?;
         let v: serde_json::Value = resp.body_mut().read_json().map_err(|e| AiError::BadResponse(e.to_string()))?;
+        // A completion cut off at max_tokens ("length") or aborted is not
+        // a translation — returning it would silently truncate the doc.
+        match v.pointer("/choices/0/finish_reason").and_then(serde_json::Value::as_str) {
+            Some("stop") | Some("tool_calls") | None => {}
+            Some(reason) => return Err(AiError::BadResponse(format!("incomplete completion (finish_reason={reason})"))),
+        }
         v.pointer("/choices/0/message/content")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
@@ -110,7 +134,7 @@ impl Provider for OpenAiCompat {
             return Err(AiError::NotConfigured);
         }
         // GET /v1/models — a handshake only, no user text leaves the app.
-        let mut req = ureq::get(self.url("models"));
+        let mut req = Self::agent().get(self.url("models"));
         if let Some(t) = &self.token
             && !t.is_empty()
         {
@@ -133,7 +157,40 @@ impl Provider for OpenAiCompat {
     fn is_local(&self) -> bool {
         // Local endpoints keep text on the machine; we can't verify a
         // remote URL's forwarding, so honesty means: loopback → local.
-        let host = self.endpoint.trim_start_matches("http://").trim_start_matches("https://");
-        host.starts_with("localhost") || host.starts_with("127.0.0.1") || host.starts_with("[::1]")
+        // Parse the authority properly — a prefix match would call
+        // `localhost.example.com` or `127.0.0.1.example.com` "local"
+        // while document text leaves the machine.
+        let e = self.endpoint.trim();
+        let after_scheme = e.split_once("://").map_or(e, |(_, rest)| rest);
+        let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+        let host_port = authority.rsplit('@').next().unwrap_or(""); // strip userinfo
+        let host = if let Some(rest) = host_port.strip_prefix('[') {
+            rest.split(']').next().unwrap_or("")
+        } else {
+            host_port.split(':').next().unwrap_or("")
+        };
+        host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_local_accepts_only_real_loopback() {
+        let local = |ep: &str| OpenAiCompat::new(ep, None, "m").is_local();
+        assert!(local("http://localhost:11434/v1"));
+        assert!(local("https://localhost/v1"));
+        assert!(local("http://127.0.0.1:8080/v1"));
+        assert!(local("http://127.99.0.1/v1")); // whole 127/8 is loopback
+        assert!(local("http://[::1]:11434/v1"));
+        // Lookalike hostnames must NOT report local — document text would
+        // leave the machine while the UI promises it stays.
+        assert!(!local("https://localhost.example.com/v1"));
+        assert!(!local("https://127.0.0.1.example.com/v1"));
+        assert!(!local("https://localhost.evil.io/v1"));
+        assert!(!local("https://api.openai.com/v1"));
+        assert!(!local("https://example.com/localhost/v1"));
     }
 }
