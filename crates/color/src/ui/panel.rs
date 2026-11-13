@@ -793,18 +793,23 @@ const WEB_STEP: f64 = 51.0;
 
 #[cfg(test)]
 mod tests {
+    use craft_ui::testing::trial;
+
     use super::*;
 
     /// The checks a host draws (`checked`) and the ones it publishes (`states`) agree: the view, the ramp and Make Ramp
     /// Web Safe are checked as the state says, the copy commands carry no check.
-    #[test]
+    #[trial]
     fn color_panel_menu_checks_follow_the_state() {
         let mut state = ColorPanelState::default();
         state.mode = ColorPanelMode::CmykSliders;
         state.ramp = ColorPanelRamp::GrayscaleRamp;
         state.web_safe_ramp = true;
-        let checked: Vec<ColorPanelCommand> =
-            ColorPanelMenu::states(&state).into_iter().map(|(command, _)| command).filter(|c| ColorPanelMenu::checked(&state, *c) == Some(true)).collect();
+        let checked: Vec<ColorPanelCommand> = ColorPanelMenu::states(&state)
+            .into_iter()
+            .map(|(command, _)| command)
+            .filter(|c| ColorPanelMenu::checked(&state, *c) == Some(true))
+            .collect();
         assert_eq!(checked, [ColorPanelCommand::CmykSliders, ColorPanelCommand::GrayscaleRamp, ColorPanelCommand::WebSafeRamp]);
         assert_eq!(ColorPanelMenu::checked(&state, ColorPanelCommand::CopyHex), None);
         for (command, published) in ColorPanelMenu::states(&state) {
