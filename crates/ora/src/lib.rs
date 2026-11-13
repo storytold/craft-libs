@@ -189,30 +189,43 @@ fn props(el: &El) -> Result<Props> {
     })
 }
 
-/// The elements of `stack`. Recursion is bounded by [`MAX_XML_DEPTH`].
+/// The elements of `stack`, converted without recursion up to [`MAX_XML_DEPTH`].
 fn stack(el: &El, count: &mut usize) -> Result<Vec<Node>> {
-    let mut out = Vec::new();
-    for child in el.elements() {
-        *count += 1;
-        if *count > MAX_NODES {
-            return Err(invalid(format!("more than {MAX_NODES} layers")));
-        }
-        out.push(match child.name.as_str() {
-            "layer" => Node::Layer(Layer {
-                props: props(child)?,
-                x: int(child, "x")?,
-                y: int(child, "y")?,
-                src: child.attr("src").map(|s| s.trim().to_string()),
-            }),
-            "stack" => Node::Stack(Stack {
-                props: props(child)?,
-                isolation: child.attr("isolation").map(|s| s.trim().to_string()),
-                children: stack(child, count)?,
-            }),
-            other => Node::Other { tag: other.to_string(), name: child.attr("name").map(str::to_string) },
-        });
+    enum Task<'a> {
+        Visit(&'a El),
+        FinishStack(&'a El, usize),
     }
-    Ok(out)
+    let mut tasks: Vec<_> = el.elements().collect::<Vec<_>>().into_iter().rev().map(Task::Visit).collect();
+    let mut built = Vec::new();
+    while let Some(task) = tasks.pop() {
+        match task {
+            Task::Visit(child) => {
+                *count += 1;
+                if *count > MAX_NODES {
+                    return Err(invalid(format!("more than {MAX_NODES} layers")));
+                }
+                match child.name.as_str() {
+                    "layer" => built.push(Node::Layer(Layer {
+                        props: props(child)?,
+                        x: int(child, "x")?,
+                        y: int(child, "y")?,
+                        src: child.attr("src").map(|s| s.trim().to_string()),
+                    })),
+                    "stack" => {
+                        let children = child.elements().collect::<Vec<_>>();
+                        tasks.push(Task::FinishStack(child, children.len()));
+                        tasks.extend(children.into_iter().rev().map(Task::Visit));
+                    }
+                    other => built.push(Node::Other { tag: other.to_string(), name: child.attr("name").map(str::to_string) }),
+                }
+            }
+            Task::FinishStack(child, child_count) => {
+                let children = built.split_off(built.len() - child_count);
+                built.push(Node::Stack(Stack { props: props(child)?, isolation: child.attr("isolation").map(|s| s.trim().to_string()), children }));
+            }
+        }
+    }
+    Ok(built)
 }
 
 impl Image {
