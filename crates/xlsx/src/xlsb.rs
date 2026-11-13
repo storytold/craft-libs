@@ -589,7 +589,7 @@ impl RangeFormulas {
     /// fit isn't decoded at all, so a long formula shared by a million cells stops costing once
     /// the allowance is spent. An array formula's other cells have none, as in `.xlsx`.
     fn follower(
-        &self,
+        &mut self,
         at: CellRef,
         first: CellRef,
         links: Option<&Links>,
@@ -598,7 +598,7 @@ impl RangeFormulas {
         warnings: &mut Warnings,
     ) -> Option<CellFormula> {
         if let Some(shared) = self.shared.get(&first) {
-            let sh = shared.as_ref()?;
+            let sh = shared.clone()?;
             if !sh.range.contains(at) {
                 kept(warnings, "malformed shared or array formula references");
                 return None;
@@ -607,7 +607,14 @@ impl RangeFormulas {
                 kept(warnings, "more formula text than the limits allow");
                 return None;
             }
-            let text = decode_formula(&sh.rgce, &sh.rgcb, Mode::Shared(at), links, limits, budget, warnings)?;
+            let Some(text) = decode_formula(&sh.rgce, &sh.rgcb, Mode::Shared(at), links, limits, budget, warnings) else {
+                // A copy that was decoded but kept as its value charged nothing: one past the
+                // allowance (it may be longer than the first cell's estimate) or one that can't be
+                // decoded. The group's later copies would fail the same way, so they keep their
+                // values without being decoded: a group costs at most one wasted decode.
+                self.shared.insert(first, None);
+                return None;
+            };
             return Some(CellFormula { kind: FormulaKind::Shared, text, shared_index: Some(sh.si), ..CellFormula::default() });
         }
         match self.arrays.get(&first) {

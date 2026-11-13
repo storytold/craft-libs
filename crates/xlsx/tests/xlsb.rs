@@ -871,3 +871,17 @@ fn shared_formula_copies_are_charged_before_they_are_made() {
     assert_eq!(got, [Some("1+1"), Some("1+1"), None]);
     assert!(warned(&wb, "more formula text than the limits allow"), "{:?}", wb.warnings);
 }
+
+#[test]
+fn a_shared_formula_stops_decoding_copies_once_one_is_kept_as_its_value() {
+    // A1:Z2 share `=` the cell to the right. A1 is `B1` (2 bytes), Z1's copy is `AA1` (3): it
+    // passes the estimate from the first cell but not the allowance, after being decoded. The
+    // group's later copies keep their values without being decoded, though B2's (`C2`) would fit.
+    let right = ref_n(0, 1 | REL);
+    let data = [row(0), part(0, (0, 0)), range_formula(427, (0, 0, 1, 25), &right), part(25, (0, 0)), row(1), part(1, (0, 0))].concat();
+    let limits = Limits { binary_formula_text: 4, ..Limits::default() };
+    let wb = read_with(&file(&worksheet(&data, &[])), &limits).unwrap();
+    let text = |a: &str| wb.sheets[0].formula(at(a));
+    assert_eq!((text("A1"), text("Z1"), text("B2")), (Some("B1"), None, None));
+    assert!(warned(&wb, "more formula text than the limits allow"), "{:?}", wb.warnings);
+}
