@@ -246,3 +246,6 @@ fn pin_unstyled_paragraphs(value: &mut Value, known_styles: &HashSet<String>, de
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests;
