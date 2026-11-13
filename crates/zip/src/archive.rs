@@ -67,10 +67,36 @@ impl<'a> Archive<'a> {
         self.zip.is_empty()
     }
 
+    /// The name at `index`, copied on demand so callers can process hostile directories without
+    /// retaining a second copy of every potentially large name.
+    pub fn entry_name(&mut self, index: usize) -> Result<Option<String>, Error> {
+        if index >= self.zip.len() {
+            return Ok(None);
+        }
+        let file = self.zip.by_index_raw(index).map_err(|error| Error::NotZip(error.to_string()))?;
+        let name = file.name().map_err(|error| Error::NotZip(error.to_string()))?;
+        Ok(Some(name.into_owned()))
+    }
+
+    /// Whether the entry at `index` is a directory according to ZIP filename conventions.
+    pub fn entry_is_dir(&mut self, index: usize) -> Result<Option<bool>, Error> {
+        if index >= self.zip.len() {
+            return Ok(None);
+        }
+        let file = self.zip.by_index_raw(index).map_err(|error| Error::NotZip(error.to_string()))?;
+        Ok(Some(file.is_dir()))
+    }
+
     /// Do two entries share a name? `zip` then keeps one of them, and which one a writer meant
     /// is not known: a format that must not guess refuses the archive.
     pub fn has_duplicate_names(&self) -> bool {
         self.duplicates
+    }
+
+    /// Do two entries' compressed data ranges overlap? A format that stores many files in one
+    /// archive can refuse aliases so one payload cannot be expanded and retained repeatedly.
+    pub fn has_overlapping_files(&mut self) -> Result<bool, Error> {
+        self.zip.has_overlapping_files().map_err(|e| Error::NotZip(e.to_string()))
     }
 
     /// The entry names in the archive's order, folders included. A name that is not text is
@@ -95,6 +121,13 @@ impl<'a> Archive<'a> {
     pub fn compressed_size(&mut self, name: &str) -> Option<u64> {
         let index = self.zip.index_for_name(name)?;
         self.zip.by_index_raw(index).ok().map(|f| f.compressed_size())
+    }
+
+    /// Is `name` stored without compression? The answer lets a format with in-memory source bytes
+    /// apply an output-size cap to compressed entries while bounding stored reads by source size.
+    pub fn is_stored(&mut self, name: &str) -> Option<bool> {
+        let index = self.zip.index_for_name(name)?;
+        self.zip.by_index_raw(index).ok().map(|f| f.compression() == zip::CompressionMethod::Stored)
     }
 
     /// The first `n` bytes of entry `name` (all of it when it is shorter), or `None` when there

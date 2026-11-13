@@ -1,6 +1,10 @@
 use super::*;
 use proptest::prelude::*;
 
+fn clamp_i64(value: i128) -> i64 {
+    value.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
+
 #[test]
 fn empty_time_ranges_never_overlap() {
     let clip = TimeRange::new(Tick(0), Tick(10));

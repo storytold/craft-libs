@@ -15,8 +15,8 @@
 //! LottieFiles format documentation); no player or exporter source was used.
 //!
 //! Which layer, shape, effect and text feature maps to what in an application's document is the
-//! application's work. dotLottie (`.lottie`) is a ZIP archive around the same JSON and is not
-//! read here.
+//! application's work. [`zip`] reads and writes the stored-entry ZIP container used by dotLottie;
+//! selecting its manifest and mapping it to this document model remains the application's work.
 
 // The test documents are large `json!` literals.
 #![cfg_attr(test, recursion_limit = "512")]
@@ -28,6 +28,7 @@ pub mod model;
 mod path;
 mod prop;
 mod value;
+pub mod zip;
 
 pub use gradient::Gradient;
 pub use model::{Animated, Animation, Layer, LayerContent, Limits, Shape, ShapeKind};
