@@ -324,6 +324,11 @@ fn text(nodes: &[TextNode], ace: &dyn Fn(Ace) -> Option<char>) -> String {
 }
 
 impl Range {
+    /// `ParagraphBreakType`, except `Anywhere` which means no forced break.
+    pub fn paragraph_break_type(&self) -> Option<&str> {
+        self.values.get("ParagraphBreakType").filter(|kind| *kind != "Anywhere")
+    }
+
     /// `AppliedParagraphStyle` of a paragraph range.
     pub fn paragraph_style(&self) -> Option<&str> {
         self.values.get("AppliedParagraphStyle")
