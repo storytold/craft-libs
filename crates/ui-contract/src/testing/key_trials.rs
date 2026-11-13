@@ -60,7 +60,7 @@ fn tab_in_a_window_with_a_canvas_toggles_that_window_only() {
     let mut show = with_canvas;
     let mut frames = shown(true, &mut show);
     let child = ViewportId::from_hash_of("child window");
-    frames.frame_in_viewport(child, without_canvas);
+    frames.frame_in_viewport(child, Vec::new(), without_canvas);
     take_output(&frames.ctx);
     assert_eq!(press(&mut frames, &mut show, Key::Tab, Modifiers::NONE), [(ViewportId::ROOT, ChromeToggle::Panels)], "nothing focused");
     assert_eq!(egui_focused(&frames.ctx), None, "the press moved no focus");

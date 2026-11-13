@@ -6,7 +6,7 @@ use craft_host::target::{Backend, Os, Runtime, ShellInfo};
 use craft_ui::runtime::cursor;
 use craft_ui::testing::pointer::moved;
 use craft_ui::testing::{Frames, install_spec, trial};
-use egui::{CustomCursorImage, Pos2, Vec2};
+use egui::{CustomCursorImage, Pos2, Vec2, ViewportId};
 use std::sync::Arc;
 
 const AT: Pos2 = Pos2::new(300.0, 300.0);
@@ -31,7 +31,12 @@ struct Seen {
 }
 
 fn frame(frames: &mut Frames, requests: &[(Cursor, CursorPriority)]) -> Seen {
-    frames.frame(vec![moved(AT)], |ui| {
+    frame_in(frames, ViewportId::ROOT, requests)
+}
+
+/// [`frame`] in the window `viewport`.
+fn frame_in(frames: &mut Frames, viewport: ViewportId, requests: &[(Cursor, CursorPriority)]) -> Seen {
+    frames.frame_in_viewport(viewport, vec![moved(AT)], |ui| {
         for (cursor, priority) in requests {
             cursor::request(ui.ctx(), cursor.clone(), *priority);
         }
@@ -96,6 +101,17 @@ fn a_painted_pointer_is_the_window_cursor_image_where_the_window_takes_one() {
     let mut frames_mac = frames(linux().os(Os::Mac), 1.0);
     let whole = painted(&mut frames_mac, PaintedCursor::circle(300.0));
     assert!(whole.image.expect("macOS takes large images").size[0] > 600 && whole.shapes == 0);
+
+    // Only the root window takes an image: the framework's other windows are egui's immediate viewports, which drop
+    // it, so a child window paints its pointer.
+    let mut frames_child = frames(linux(), 1.0);
+    painted(&mut frames_child, PaintedCursor::circle(20.0));
+    let child = frame_in(
+        &mut frames_child,
+        ViewportId::from_hash_of("child window"),
+        &[(Cursor::Painted(PaintedCursor::circle(20.0)), CursorPriority::Tool)],
+    );
+    assert!(child.image.is_none() && child.shapes > 0 && child.icon == egui::CursorIcon::None, "a child window paints its pointer");
 
     // Every pointer the overlay host draws has an image, apart from the badged system cursor (the OS draws its arrow)
     // and the hidden pointer.

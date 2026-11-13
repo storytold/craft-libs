@@ -913,9 +913,9 @@ note = "The canvas control that shows an aliased tip's pixel cell; replaces Brus
 [[type]]
 name = "CursorBitmap"
 old = ""
-new = "craft_ui::canvas_controls::brush::CursorBitmap"
+new = "craft_ui::runtime::cursor::CursorBitmap"
 status = "replaced"
-note = "The image of a painted circle, crosshair or outline for a window's own cursor, rendered from a CursorBitmapSpec; replaces the private cursor/bitmap.rs of the legacy cursor host."
+note = "The OS cursor image of a painted pointer: the cursor service rasterises the pointer's art and hands it to the root window where the window takes an image at its scale and size, and the pointer is painted otherwise. Request a Cursor::Painted; no app code builds the image. Replaces the private cursor/bitmap.rs of the legacy cursor host."
 
 [[setter]]
 type = "BrushTip"

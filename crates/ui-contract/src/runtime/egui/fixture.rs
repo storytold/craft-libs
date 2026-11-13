@@ -135,13 +135,14 @@ fn window_focus_facts(ctx: &Context, events: &[Event], native_pixels_per_point: 
 #[derive(Default)]
 struct WindowFocus(Option<bool>);
 
-/// Runs one frame at `time` seconds with `events` and `files`, on a window of `native_pixels_per_point` (egui's
-/// default when `None`).
+/// Runs one pass of `viewport` at `time` seconds with `events` and `files`, on a window of `native_pixels_per_point`
+/// (egui's default when `None`). A viewport other than the root is a child window of the root, which stays live.
 pub(crate) fn run_frame(
     ctx: &Context,
     time: f64,
     screen: Vec2,
     native_pixels_per_point: Option<f32>,
+    viewport: egui::ViewportId,
     events: Vec<Event>,
     files: OsFiles,
     ui: impl FnMut(&mut Ui),
@@ -149,8 +150,21 @@ pub(crate) fn run_frame(
     let screen = Rect::from_min_size(Pos2::ZERO, screen);
     let hovered_files = files.hovered.iter().map(|(name, mime)| egui::HoveredFile { path: Some(name.into()), mime: mime.clone() }).collect();
     let dropped_files = files.dropped.iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
-    let viewports = window_focus_facts(ctx, &events, native_pixels_per_point);
-    let input = RawInput { screen_rect: Some(screen), time: Some(time), events, hovered_files, dropped_files, viewports, ..RawInput::default() };
+    let mut viewports = window_focus_facts(ctx, &events, native_pixels_per_point);
+    if viewport != egui::ViewportId::ROOT {
+        viewports
+            .insert(viewport, egui::ViewportInfo { parent: Some(egui::ViewportId::ROOT), native_pixels_per_point, ..egui::ViewportInfo::default() });
+    }
+    let input = RawInput {
+        screen_rect: Some(screen),
+        time: Some(time),
+        viewport_id: viewport,
+        events,
+        hovered_files,
+        dropped_files,
+        viewports,
+        ..RawInput::default()
+    };
     let mut output = drive(|| ctx.run_ui(input, ui));
     let mut flat = Vec::new();
     for clipped in &output.shapes {
@@ -222,19 +236,6 @@ pub(crate) fn run_frame(
         shapes: output.shapes,
         pixels_per_point: output.pixels_per_point,
     }
-}
-
-/// Runs a pass of the viewport `viewport` (a child of the root) with no events, while the root stays live.
-pub(crate) fn run_viewport_pass(ctx: &Context, time: f64, screen: Vec2, viewport: egui::ViewportId, ui: impl FnMut(&mut Ui)) {
-    let screen = Rect::from_min_size(Pos2::ZERO, screen);
-    let mut input = RawInput { screen_rect: Some(screen), time: Some(time), viewport_id: viewport, ..RawInput::default() };
-    for id in [egui::ViewportId::ROOT, viewport] {
-        input.viewports.insert(
-            id,
-            egui::ViewportInfo { parent: (id != egui::ViewportId::ROOT).then_some(egui::ViewportId::ROOT), ..egui::ViewportInfo::default() },
-        );
-    }
-    let _ = ctx.run_ui(input, ui);
 }
 
 /// Whether a press of `key` is in this pass's input, that is, no component took it.

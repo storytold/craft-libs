@@ -140,10 +140,16 @@ impl Frames {
     }
 
     /// One frame with `events`; `ui` runs once per pass. Returns the number of passes.
-    pub fn frame(&mut self, events: Vec<Event>, mut ui: impl FnMut(&mut Ui)) -> usize {
+    pub fn frame(&mut self, events: Vec<Event>, ui: impl FnMut(&mut Ui)) -> usize {
+        self.frame_in_viewport(egui::ViewportId::ROOT, events, ui)
+    }
+
+    /// One frame of `viewport`, a child window of the root while the root stays live, with `events`; `ui` runs once
+    /// per pass. Returns the number of passes.
+    pub fn frame_in_viewport(&mut self, viewport: egui::ViewportId, events: Vec<Event>, mut ui: impl FnMut(&mut Ui)) -> usize {
         set_input(&self.ctx, self.input());
         let mut passes = 0;
-        self.run(events, |root| {
+        self.run(viewport, events, |root| {
             passes += 1;
             ui(root);
         });
@@ -153,14 +159,7 @@ impl Frames {
     /// One frame with no `set_input`, as an app that never calls it would drive it: the root values and the
     /// interface scale stay as they were. Returns whether the frame sent a close command.
     pub fn frame_without_input(&mut self, events: Vec<Event>, ui: impl FnMut(&mut Ui)) -> bool {
-        self.run(events, ui)
-    }
-
-    /// One pass with no events in `viewport`, a child window of the root, between two frames of the root.
-    pub fn frame_in_viewport(&mut self, viewport: egui::ViewportId, ui: impl FnMut(&mut Ui)) {
-        set_input(&self.ctx, self.input());
-        self.time += DT;
-        fixture::run_viewport_pass(&self.ctx, self.time, self.screen, viewport, ui);
+        self.run(egui::ViewportId::ROOT, events, ui)
     }
 
     /// One frame with no events; returns the shapes it painted, nested shapes flattened.
@@ -214,14 +213,14 @@ impl Frames {
         }
     }
 
-    fn run(&mut self, mut events: Vec<Event>, ui: impl FnMut(&mut Ui)) -> bool {
+    fn run(&mut self, viewport: egui::ViewportId, mut events: Vec<Event>, ui: impl FnMut(&mut Ui)) -> bool {
         self.time += DT;
         if self.told != self.modifiers {
             self.told = self.modifiers;
             events.insert(0, fixture::modifiers_changed(self.modifiers));
         }
         let files = fixture::OsFiles { hovered: self.files.hovered.clone(), dropped: std::mem::take(&mut self.files.dropped) };
-        let mut result = fixture::run_frame(&self.ctx, self.time, self.screen, self.pixels_per_point, events, files, ui);
+        let mut result = fixture::run_frame(&self.ctx, self.time, self.screen, self.pixels_per_point, viewport, events, files, ui);
         match &mut self.paint {
             Some(paint) => {
                 paint.textures_delta.append(std::mem::take(&mut result.textures));
