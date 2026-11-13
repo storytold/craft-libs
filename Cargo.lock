@@ -1287,6 +1287,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-designcraft-format"
+version = "0.1.0"
+dependencies = [
+ "craft-document-bundle",
+ "craft-eps",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-dialogs"
 version = "0.1.0"
 dependencies = [
