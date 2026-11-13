@@ -230,7 +230,11 @@ impl<D: StackDialog> AnyStackDialog for D {
 ///   it alone (PhotoCraft's `confirmationPending`).
 /// - Dialogs the app still shows itself share the stack: [`open_beside`](DialogHost::open_beside) and
 ///   [`close_beside`](DialogHost::close_beside), called where they open and close, give them their place in the
-///   one opening order, so the top dialog and the startup queue count them too.
+///   one opening order, so the top dialog and the startup queue count them too. Such an app shows every dialog in
+///   one walk of the stack instead of [`run`](DialogHost::run): [`walk`](DialogHost::walk), then
+///   [`next_beside`](DialogHost::next_beside) until it returns `None`, drawing each [`BesideStep`] it returns
+///   through [`BesideStep::at_place`] and [`show_beside_modal`](crate::contract::overlay::show_beside_modal). Each
+///   dialog then draws and takes input at its place on the stack.
 /// - Automation: [`get`](DialogHost::get) and [`get_mut`](DialogHost::get_mut) reach the open
 ///   dialog's value for code that knows its type. A script that doesn't goes by id:
 ///   [`open_dialogs`](DialogHost::open_dialogs) lists every open dialog with its
@@ -246,6 +250,32 @@ pub struct DialogHost {
     /// Dialogs another of their type replaced, waiting for the pass's `run` to run their
     /// [`StackDialog::cancelled`] (`open` has no `Context`).
     replaced: Vec<Box<dyn AnyStackDialog>>,
+    /// The app's dialogs that left the stack without a `Context`, waiting for the next walk to close the layers
+    /// opened from inside them.
+    left_beside: Vec<DialogId>,
+}
+
+/// One pass over the [`DialogHost`]'s stack, bottom first, from [`DialogHost::walk`].
+#[derive(Debug)]
+pub struct StackWalk {
+    ids: Vec<DialogId>,
+    at: usize,
+}
+
+/// A dialog the app shows itself, at its place in a [`StackWalk`].
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct BesideStep {
+    /// The dialog's id on the stack.
+    pub id: DialogId,
+    place: usize,
+}
+
+impl BesideStep {
+    /// Runs `show`, which draws the dialog, at the dialog's place on the stack: the layers it shows stack there.
+    pub fn at_place<R>(self, ctx: &Context, show: impl FnOnce() -> R) -> R {
+        crate::runtime::overlay::stack_place(ctx, self.place, show)
+    }
 }
 
 /// One open dialog as automation sees it ([`DialogHost::open_dialogs`]).
@@ -299,7 +329,7 @@ impl DialogHost {
     /// it: the host's among them close with `Cancel`.
     pub fn close_beside(&mut self, id: DialogId) {
         if self.stack.contains(id) {
-            self.stack.remove_tree(id);
+            self.remove_tree(id, None);
             self.cancel_orphans(None);
         }
     }
@@ -330,29 +360,66 @@ impl DialogHost {
         self.queued.insert(at, (stage, Box::new(dialog)));
     }
 
-    /// Runs every open dialog for this pass, oldest first; removes the ones that finished and stores their
-    /// results; opens the next queued startup modal when the stack is empty. Call once per pass, after the app's
-    /// own UI.
+    /// Runs every open dialog of the host for this pass in stack order, each at its place on the stack; removes the
+    /// ones that finished and stores their results; opens the next queued startup modal when the stack is empty.
+    /// Call once per pass, after the app's own UI. An app with dialogs of its own on the stack walks it instead
+    /// ([`walk`](DialogHost::walk)), so they show at their places too.
     pub fn run(&mut self, ui: &mut Ui) {
-        let ctx = ui.ctx().clone();
-        let ctx = &ctx;
+        let mut walk = self.walk(ui.ctx());
+        while self.next_beside(ui, &mut walk).is_some() {}
+    }
+
+    /// Starts this pass's walk of the stack, for an app that shows dialogs of its own beside the host's: runs the
+    /// closes that waited for a `Context` and opens the next queued startup modal when the stack is empty. Follow it
+    /// with [`next_beside`](DialogHost::next_beside) until it returns `None`. A dialog opened during the walk shows
+    /// from the next pass.
+    pub fn walk(&mut self, ctx: &Context) -> StackWalk {
         self.release_replaced(ctx);
-        self.open_next_queued();
-        let mut finished = Vec::new();
-        for dialog in &mut self.open {
-            if let Some(result) = dialog.show_erased(ui, &self.stack) {
-                finished.push((dialog.id(), result));
-            }
+        for id in std::mem::take(&mut self.left_beside) {
+            crate::contract::overlay::close_beside_modal(ctx, id);
         }
-        for (id, result) in finished {
-            let Some(at) = self.open.iter().position(|dialog| dialog.id() == id) else { continue };
+        self.open_next_queued();
+        StackWalk { ids: self.stack.ids().collect(), at: 0 }
+    }
+
+    /// Shows the host's dialogs of `walk` in stack order, each at its place on the stack, up to the next dialog the
+    /// app shows itself, which it returns for the app to show at its place. A dialog that finished leaves the stack
+    /// with the dialogs opened over it. `None` once the walk is done; the next queued startup modal opens then if the
+    /// stack is empty.
+    pub fn next_beside(&mut self, ui: &mut Ui, walk: &mut StackWalk) -> Option<BesideStep> {
+        let ctx = ui.ctx().clone();
+        while let Some(&id) = walk.ids.get(walk.at) {
+            let place = walk.at;
+            walk.at += 1;
+            if !self.stack.contains(id) {
+                continue;
+            }
+            let Some(at) = self.open.iter().position(|dialog| dialog.id() == id) else {
+                return Some(BesideStep { id, place });
+            };
+            let stack = &self.stack;
+            let dialog = &mut self.open[at];
+            let Some(result) = crate::runtime::overlay::stack_place(&ctx, place, || dialog.show_erased(ui, stack)) else { continue };
+            self.remove_tree(id, Some(&ctx));
             let dialog = self.open.remove(at);
             self.store_result(dialog.as_ref(), result);
-            self.stack.remove_tree(id);
-            self.cancel_orphans(Some(ctx));
+            self.cancel_orphans(Some(&ctx));
         }
         if self.open_next_queued() {
-            crate::runtime::frame::request_repaint(ctx);
+            crate::runtime::frame::request_repaint(&ctx);
+        }
+        None
+    }
+
+    /// Takes `id` and the dialogs opened over it off the stack, before the host's among them leave `open`. The app's
+    /// dialogs among them close the layers opened from inside them, now with a `Context`, else at the next walk.
+    fn remove_tree(&mut self, id: DialogId, ctx: Option<&Context>) {
+        let before: Vec<DialogId> = self.stack.ids().collect();
+        self.stack.remove_tree(id);
+        let left = before.into_iter().filter(|gone| !self.stack.contains(*gone) && !self.open.iter().any(|dialog| dialog.id() == *gone));
+        match ctx {
+            Some(ctx) => left.for_each(|gone| crate::contract::overlay::close_beside_modal(ctx, gone)),
+            None => self.left_beside.extend(left),
         }
     }
 
@@ -409,9 +476,9 @@ impl DialogHost {
     fn confirm_at(&mut self, ctx: &Context, at: usize) -> bool {
         let Some(result) = self.open[at].confirm_erased(ctx) else { return false };
         let id = self.open[at].id();
+        self.remove_tree(id, Some(ctx));
         let dialog = self.open.remove(at);
         self.store_result(dialog.as_ref(), result);
-        self.stack.remove_tree(id);
         self.cancel_orphans(Some(ctx));
         true
     }
@@ -435,10 +502,10 @@ impl DialogHost {
 
     fn cancel_at(&mut self, ctx: &Context, at: usize) -> bool {
         let id = self.open[at].id();
+        self.remove_tree(id, Some(ctx));
         let mut dialog = self.open.remove(at);
         dialog.release(ctx);
         self.store_result(dialog.as_ref(), dialog.cancelled());
-        self.stack.remove_tree(id);
         self.cancel_orphans(Some(ctx));
         true
     }
@@ -510,8 +577,8 @@ impl DialogHost {
         let (type_id, instance) = (dialog.result_type(), dialog.instance());
         self.results.retain(|stored| stored.type_id != type_id || stored.instance != instance);
         if let Some(at) = self.open.iter().position(|open| open.result_type() == type_id && open.instance() == instance) {
+            self.remove_tree(self.open[at].id(), None);
             let old = self.open.remove(at);
-            self.stack.remove_tree(old.id());
             self.store_result(old.as_ref(), old.cancelled());
             self.replaced.push(old);
             self.cancel_orphans(None);
