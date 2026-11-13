@@ -34,6 +34,8 @@ pub enum Format {
     Pcraft,
     Idml,
     DesignCraft,
+    /// Legacy DesignCraft documents serialized as one JSON object.
+    DesignCraftJson,
     Indd,
     Docx,
     /// Legacy OLE Compound File Word document; identified by its extension only.
@@ -51,6 +53,15 @@ pub enum Format {
 /// Resolve a name and file bytes to a format. Strong signatures take precedence over
 /// extension hints. Only format-specific bounded probes and extension tables live here.
 pub fn detect(name: &str, bytes: &[u8]) -> Option<Format> {
+    if craft_idml::is_idml(bytes) {
+        return Some(Format::Idml);
+    }
+    if craft_zip::stored_mimetype(bytes) == Some(b"application/vnd.designcraft+zip") || designcraft_zip_has_document(bytes) {
+        return Some(Format::DesignCraft);
+    }
+    if is_designcraft_json(bytes) {
+        return Some(Format::DesignCraftJson);
+    }
     if bytes.starts_with(&INDD_SIGNATURE) {
         return Some(Format::Indd);
     }
@@ -109,6 +120,61 @@ pub fn detect(name: &str, bytes: &[u8]) -> Option<Format> {
         return Some(Format::Dxf);
     }
     None
+}
+
+/// DesignCraft's older ZIPs predate their leading `mimetype`; they are identified by the
+/// `document.json` member. The directory is bounded before it is indexed and no entry is inflated.
+fn designcraft_zip_has_document(bytes: &[u8]) -> bool {
+    if !bytes.starts_with(b"PK") {
+        return false;
+    }
+    craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 100_000, max_total_bytes: 0 })
+        .is_ok_and(|archive| archive.contains("document.json"))
+}
+
+/// Read only a bounded prefix, stopping as soon as the model's required top-level keys have
+/// appeared. This distinguishes legacy DesignCraft JSON from arbitrary JSON without decoding the
+/// document or walking its arrays and assets.
+fn is_designcraft_json(bytes: &[u8]) -> bool {
+    const LIMIT: usize = 1 << 20;
+    const REQUIRED: u16 = (1 << 10) - 1;
+    const KEYS: [&str; 10] = ["title", "settings", "spreads", "parents", "layers", "stories", "styles", "swatches", "sections", "next_id"];
+
+    struct Probe;
+    impl<'de> serde::de::Visitor<'de> for Probe {
+        type Value = bool;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a DesignCraft document object")
+        }
+
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+            let mut found = 0u16;
+            while let Some(key) = map.next_key::<String>()? {
+                if let Some(index) = KEYS.iter().position(|candidate| *candidate == key) {
+                    found |= 1 << index;
+                }
+                map.next_value::<serde::de::IgnoredAny>()?;
+                if found == REQUIRED {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+    }
+
+    use serde::de::DeserializeSeed;
+    struct Seed;
+    impl<'de> DeserializeSeed<'de> for Seed {
+        type Value = bool;
+        fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+            deserializer.deserialize_map(Probe)
+        }
+    }
+
+    let prefix = bytes.get(..bytes.len().min(LIMIT)).unwrap_or(bytes);
+    let mut deserializer = serde_json::Deserializer::from_slice(prefix);
+    Seed.deserialize(&mut deserializer).unwrap_or(false)
 }
 
 /// Resolve a file extension to a family, case-insensitively.
