@@ -485,16 +485,18 @@ impl PocState {
                     let cycle_cnt = (abs_frame_num - 1) / n;
                     let in_cycle = (abs_frame_num - 1) % n;
                     let delta_cycle = sps.offset_for_ref_frame.iter().map(|&o| i64::from(o)).sum::<i64>();
-                    expected = cycle_cnt * delta_cycle;
+                    expected = cycle_cnt.saturating_mul(delta_cycle);
                     for &o in &sps.offset_for_ref_frame[..=in_cycle as usize] {
-                        expected += i64::from(o);
+                        expected = expected.saturating_add(i64::from(o));
                     }
                 }
                 if sh.nal_ref_idc == 0 {
-                    expected += i64::from(sps.offset_for_non_ref_pic);
+                    expected = expected.saturating_add(i64::from(sps.offset_for_non_ref_pic));
                 }
-                let top = (expected + i64::from(sh.delta_pic_order_cnt[0])).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
-                let bottom = (i64::from(top) + i64::from(sps.offset_for_top_to_bottom_field) + i64::from(sh.delta_pic_order_cnt[1]))
+                let top = expected.saturating_add(i64::from(sh.delta_pic_order_cnt[0])).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+                let bottom = i64::from(top)
+                    .saturating_add(i64::from(sps.offset_for_top_to_bottom_field))
+                    .saturating_add(i64::from(sh.delta_pic_order_cnt[1]))
                     .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
                 Poc { top, bottom, msb: 0, frame_num_offset }
             }
@@ -669,6 +671,16 @@ mod poc_tests {
         let sps = sps(1);
         let sh = header(0, 0, 0, [-i32::MAX, 0], 1);
         let state = PocState { prev_frame_num_offset: 2, ..PocState::default() };
+        let poc = state.compute(&sh, &sps);
+        assert_eq!(poc.top, i32::MAX);
+    }
+
+    #[test]
+    fn poc_type1_saturates_only_after_wide_cycle_arithmetic_exceeds_i64() {
+        let mut sps = sps(1);
+        sps.offset_for_ref_frame = vec![i32::MAX; 255];
+        let sh = header(u32::MAX, 0, 0, [0, 0], 1);
+        let state = PocState { prev_frame_num_offset: i32::MAX, ..PocState::default() };
         let poc = state.compute(&sh, &sps);
         assert_eq!(poc.top, i32::MAX);
     }
