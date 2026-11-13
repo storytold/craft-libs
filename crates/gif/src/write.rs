@@ -44,6 +44,7 @@ pub enum Error {
     Dimensions { width: u32, height: u32 },
     InvalidSpeed(i32),
     FrameLength { index: usize, actual: usize, expected: usize },
+    PreparedDimensions { actual_width: u16, actual_height: u16, expected_width: u16, expected_height: u16 },
     NoFrames,
     Encode(String),
 }
@@ -54,6 +55,9 @@ impl std::fmt::Display for Error {
             Self::Dimensions { width, height } => write!(f, "GIF dimensions {width}x{height} exceed the 65535 px limit"),
             Self::InvalidSpeed(speed) => write!(f, "GIF quantization speed {speed} is outside 1–30"),
             Self::FrameLength { index, actual, expected } => write!(f, "GIF frame {index} has {actual} bytes; expected {expected} RGBA bytes"),
+            Self::PreparedDimensions { actual_width, actual_height, expected_width, expected_height } => {
+                write!(f, "prepared GIF frame is {actual_width}x{actual_height}; expected {expected_width}x{expected_height}")
+            }
             Self::NoFrames => f.write_str("GIF animation has no frames"),
             Self::Encode(message) => write!(f, "GIF encode failed: {message}"),
         }
@@ -66,6 +70,40 @@ impl From<gif::EncodingError> for Error {
     fn from(error: gif::EncodingError) -> Self {
         Self::Encode(error.to_string())
     }
+}
+
+/// A palette-quantized GIF frame ready for a writer.
+///
+/// Prepare these inside a parallel render batch to keep only indexed frame data in the batch,
+/// rather than retaining every source RGBA buffer until the writer reaches it.
+pub struct PreparedFrame {
+    width: u16,
+    height: u16,
+    frame: gif::Frame<'static>,
+}
+
+/// Quantize one owned full-canvas RGBA8 frame using the GIF encoder's speed setting.
+pub fn prepare_frame(width: u32, height: u32, mut pixels: Vec<u8>, speed: i32) -> Result<PreparedFrame, Error> {
+    let (width, height) = dimensions(width, height)?;
+    if !(1..=30).contains(&speed) {
+        return Err(Error::InvalidSpeed(speed));
+    }
+    let expected = usize::from(width)
+        .checked_mul(usize::from(height))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or(Error::Dimensions { width: u32::from(width), height: u32::from(height) })?;
+    if pixels.len() != expected {
+        return Err(Error::FrameLength { index: 0, actual: pixels.len(), expected });
+    }
+    let frame = gif::Frame::from_rgba_speed(width, height, &mut pixels, speed);
+    Ok(PreparedFrame { width, height, frame })
+}
+
+fn dimensions(width: u32, height: u32) -> Result<(u16, u16), Error> {
+    if width == 0 || height == 0 || width > u32::from(u16::MAX) || height > u32::from(u16::MAX) {
+        return Err(Error::Dimensions { width, height });
+    }
+    Ok((width as u16, height as u16))
 }
 
 /// A writer that appends encoded frames to an output incrementally.
@@ -95,30 +133,36 @@ impl<W: Write> AnimationWriter<W> {
 
     /// Encode and append one full-canvas RGBA8 frame.
     pub fn write_frame(&mut self, frame: RgbaFrame<'_>) -> Result<(), Error> {
-        let expected = usize::from(self.width)
-            .checked_mul(usize::from(self.height))
-            .and_then(|pixels| pixels.checked_mul(4))
-            .ok_or(Error::Dimensions { width: u32::from(self.width), height: u32::from(self.height) })?;
-        if frame.pixels.len() != expected {
-            return Err(Error::FrameLength { index: self.frames_written, actual: frame.pixels.len(), expected });
+        let prepared =
+            prepare_frame(u32::from(self.width), u32::from(self.height), frame.pixels.to_vec(), self.options.speed).map_err(|error| match error {
+                Error::FrameLength { actual, expected, .. } => Error::FrameLength { index: self.frames_written, actual, expected },
+                error => error,
+            })?;
+        self.write_prepared_frame(prepared, frame.delay_cs)
+    }
+
+    /// Append a previously quantized frame without copying its pixel buffer.
+    pub fn write_prepared_frame(&mut self, mut prepared: PreparedFrame, delay_cs: u16) -> Result<(), Error> {
+        if prepared.width != self.width || prepared.height != self.height {
+            return Err(Error::PreparedDimensions {
+                actual_width: prepared.width,
+                actual_height: prepared.height,
+                expected_width: self.width,
+                expected_height: self.height,
+            });
         }
-        let mut pixels = frame.pixels.to_vec();
-        let mut encoded = gif::Frame::from_rgba_speed(self.width, self.height, &mut pixels, self.options.speed);
-        encoded.delay = frame.delay_cs;
-        encoded.dispose = match self.options.disposal {
+        prepared.frame.delay = delay_cs;
+        prepared.frame.dispose = match self.options.disposal {
             Disposal::Unspecified => gif::DisposalMethod::Any,
             Disposal::Background => gif::DisposalMethod::Background,
         };
-        self.encoder.write_frame(&encoded).map_err(Error::from)?;
+        self.encoder.write_frame(&prepared.frame).map_err(Error::from)?;
         self.frames_written = self.frames_written.saturating_add(1);
         Ok(())
     }
 
     /// Finish the GIF and return the underlying output.
     pub fn finish(self) -> Result<W, Error> {
-        if self.frames_written == 0 {
-            return Err(Error::NoFrames);
-        }
         self.encoder.into_inner().map_err(Error::from)
     }
 }
@@ -143,7 +187,7 @@ pub fn animation(width: u32, height: u32, frames: &[RgbaFrame<'_>], options: Opt
 mod tests {
     #![allow(clippy::unwrap_used)]
 
-    use super::{Disposal, Options, RgbaFrame, animation};
+    use super::{Disposal, Options, RgbaFrame, animation, prepare_frame};
 
     #[test]
     fn writes_repeat_delays_disposal_and_dimensions() {
@@ -176,10 +220,43 @@ mod tests {
             animation(1, 1, &[RgbaFrame { pixels: &[0; 4], delay_cs: 1 }, RgbaFrame { pixels: &[0; 3], delay_cs: 1 }], Options::default()),
             Err(super::Error::FrameLength { index: 1, .. })
         ));
-        assert!(matches!(
-            super::AnimationWriter::new(Vec::new(), 1, 1, Options::default()).and_then(|writer| writer.finish()),
-            Err(super::Error::NoFrames)
-        ));
+    }
+
+    #[test]
+    fn streaming_writer_preserves_empty_output_behavior() {
+        let bytes = super::AnimationWriter::new(Vec::new(), 1, 1, Options::default()).unwrap().finish().unwrap();
+        assert!(bytes.starts_with(b"GIF89a"));
+        assert_eq!(bytes.last(), Some(&b';'));
+    }
+
+    #[cfg(feature = "frames")]
+    #[test]
+    fn prepared_frames_stream_without_changing_decoded_pixels() {
+        let red = vec![255, 0, 0, 255];
+        let blue = vec![0, 0, 255, 255];
+        let mut writer = super::AnimationWriter::new(Vec::new(), 1, 1, Options::default()).unwrap();
+        writer.write_prepared_frame(prepare_frame(1, 1, red, 10).unwrap(), 3).unwrap();
+        writer.write_prepared_frame(prepare_frame(1, 1, blue, 10).unwrap(), 5).unwrap();
+        let bytes = writer.finish().unwrap();
+        let expected = animation(
+            1,
+            1,
+            &[RgbaFrame { pixels: &[255, 0, 0, 255], delay_cs: 3 }, RgbaFrame { pixels: &[0, 0, 255, 255], delay_cs: 5 }],
+            Options::default(),
+        )
+        .unwrap();
+        assert_eq!(bytes, expected);
+        let decoded = crate::frames::read_frames(&bytes, &crate::frames::FrameLimits::default()).unwrap();
+        assert_eq!(decoded.frames[0].rgba, [255, 0, 0, 255]);
+        assert_eq!(decoded.frames[1].rgba, [0, 0, 255, 255]);
+        assert_eq!(decoded.frames.iter().map(|frame| frame.delay_ms).collect::<Vec<_>>(), [30, 50]);
+    }
+
+    #[test]
+    fn rejects_prepared_frames_with_other_dimensions() {
+        let prepared = prepare_frame(2, 1, vec![0; 8], 10).unwrap();
+        let mut writer = super::AnimationWriter::new(Vec::new(), 1, 1, Options::default()).unwrap();
+        assert!(matches!(writer.write_prepared_frame(prepared, 1), Err(super::Error::PreparedDimensions { .. })));
     }
 
     #[cfg(feature = "frames")]

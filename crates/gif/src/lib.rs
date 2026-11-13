@@ -13,7 +13,9 @@
 //! With feature `frames`, [`frames::read_frames`] decodes every frame through the `image` crate's
 //! GIF decoder, after the checks [`scan`] makes possible, with bounded memory.
 //! [`write::animation`] writes full-canvas RGBA8 animation frames with GIF palette quantization,
-//! timing, loop and disposal metadata.
+//! timing, loop and disposal metadata. Parallel producers can quantize frames with
+//! [`write::prepare_frame`] and pass the compact results to
+//! [`write::AnimationWriter::write_prepared_frame`].
 //!
 //! Input is treated as hostile: every read is bounds-checked, and the number of frames recorded
 //! is capped by the caller.
