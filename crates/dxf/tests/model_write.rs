@@ -586,7 +586,6 @@ fn the_file_around_the_content() {
         ],
         raw_entities: raw,
         extents: [0.0, 0.0, 100.0, 50.0],
-        linear_units: Some(2),
         header: vec![
             ("$LTSCALE".into(), vec![Tag::f(40, 2.0)]),
             ("$INSUNITS".into(), vec![Tag::i(70, 6)]),
@@ -597,7 +596,8 @@ fn the_file_around_the_content() {
         raw_objects: vec![Tag::s(0, "DICTIONARY"), Tag::s(5, "901"), Tag::s(330, "A")],
         raw_classes: vec![Tag::s(0, "CLASS"), Tag::s(1, "IMAGEDEF")],
         ..Drawing::default()
-    };
+    }
+    .with_linear_units(2);
     let (tags, skipped) = drawing.tags();
     assert_eq!(skipped, 1, "the entity with no groups to write");
     assert_eq!(tags.last().map(|t| (t.code, t.str())), Some((0, "EOF".to_string())));

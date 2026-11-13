@@ -1414,8 +1414,6 @@ pub struct Drawing<'a> {
     pub insunits: i64,
     /// `$MEASUREMENT`: metric (R2000 and later).
     pub metric: bool,
-    /// `$LUNITS` (linear display format), when the caller needs a non-default value.
-    pub linear_units: Option<i64>,
     /// `[x0, y0, x1, y1]` of the content: `$EXTMIN`/`$EXTMAX`, and the view the file opens at.
     pub extents: [f64; 4],
     /// `$LIMMIN`/`$LIMMAX`.
@@ -1457,7 +1455,6 @@ impl Default for Drawing<'_> {
             code_page: String::new(),
             insunits: 0,
             metric: true,
-            linear_units: None,
             extents: [0.0, 0.0, 1.0, 1.0],
             limits: [0.0, 0.0, 420.0, 297.0],
             header: Vec::new(),
@@ -1481,6 +1478,13 @@ const MODEL: &str = "*Model_Space";
 const PAPER: &str = "*Paper_Space";
 
 impl Drawing<'_> {
+    /// Set `$LUNITS` without making callers construct low-level group tags.
+    pub fn with_linear_units(mut self, units: i64) -> Self {
+        self.header.retain(|(name, _)| !name.eq_ignore_ascii_case("$LUNITS"));
+        self.header.push(("$LUNITS".into(), vec![Tag::i(70, units)]));
+        self
+    }
+
     /// The whole file as tags, ending with `0 EOF`, and how many entities were left out
     /// ([`EntityKind::Other`], and a MULTILEADER before 2007 or an ACAD_TABLE before 2004, which it has no groups for: pass
     /// those in `raw_entities`).
@@ -1626,9 +1630,6 @@ impl Drawing<'_> {
         if v.r2000() {
             vars.push(("$INSUNITS", vec![Tag::i(70, self.insunits)]));
             vars.push(("$MEASUREMENT", vec![Tag::i(70, i64::from(self.metric))]));
-        }
-        if let Some(linear_units) = self.linear_units {
-            vars.push(("$LUNITS", vec![Tag::i(70, linear_units)]));
         }
         w.section("HEADER");
         let given = |name: &str| self.header.iter().any(|(n, _)| n.eq_ignore_ascii_case(name));
