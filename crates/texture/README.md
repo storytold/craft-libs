@@ -9,6 +9,9 @@ network I/O and has no `unsafe` code.
   against `Limits` (longest side, pixel count, bytes) before allocating and return an
   `ImageError`. `from_data` also checks that the buffer holds width × height × channels floats.
   `filled`, `generate`, `generate_uv` and `gray` clamp each side to `1..=MAX_SIDE` (8192).
+  A plane is never larger than `isize::MAX` bytes (2 GiB minus one byte on `wasm32`), even with
+  raised limits: the `try_` forms return `ImageError::TooLarge` for a larger one, and `map`,
+  `to_color` and `to_kind` clamp each side to `1..=MAX_SIDE` and map the top-left part instead.
   `try_map`, `try_to_kind`, `try_resize` and `try_to_rgba8_display` reserve their memory first
   and return `ImageError::OutOfMemory` when that fails. The forms without `try_` allocate like
   `Vec`, which ends the process when memory runs out.

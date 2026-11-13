@@ -14,11 +14,15 @@
 //! (<https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#textures-texel-filtering>).
 //!
 //! Sizes are bounded. [`Limits`] caps the side, the pixel count and the bytes, and the `try_`
-//! constructors return an [`ImageError`] before allocating anything over them. The constructors
-//! without `try_` clamp each side to `1..=MAX_SIDE`. Every operation that allocates has a `try_`
-//! form that reserves its memory first and returns [`ImageError::OutOfMemory`] when that fails; the
-//! forms without `try_` allocate like `Vec`, which ends the process when memory runs out. Rows are
-//! generated on several threads only with the `parallel` feature.
+//! constructors return an [`ImageError`] before allocating anything over them. A plane is also
+//! never larger than `isize::MAX` bytes, the most a `Vec` can hold on the target: `isize::MAX` is
+//! 2 GiB minus one byte on 32-bit targets such as `wasm32`. The `try_` forms return
+//! [`ImageError::TooLarge`] for a plane over that bound, also when the caller raised the limits
+//! past it. The constructors without `try_` clamp each side to `1..=MAX_SIDE`, and [`Image::map`]
+//! clamps the same way when its result would be over the bound. Every operation that allocates has
+//! a `try_` form that reserves its memory first and returns [`ImageError::OutOfMemory`] when that
+//! fails; the forms without `try_` allocate like `Vec`, which ends the process when memory runs
+//! out. Rows are generated on several threads only with the `parallel` feature.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -53,8 +57,9 @@ pub enum ImageError {
     /// A side is zero or longer than [`Limits::max_side`].
     #[error("image size {0}x{1} has a zero side or a side over the limit")]
     BadSize(u32, u32),
-    /// The pixel count or the byte count is over [`Limits`].
-    #[error("image size {0}x{1} needs more pixels or bytes than the limits allow")]
+    /// The pixel count or the byte count is over [`Limits`], or the byte count is over
+    /// `isize::MAX`, the largest allocation the target allows.
+    #[error("image size {0}x{1} needs more pixels or bytes than the limits or the target allow")]
     TooLarge(u32, u32),
     /// The float buffer does not hold width × height × channels values.
     #[error("image data holds {found} floats where {expected} are needed")]
@@ -83,10 +88,24 @@ impl Default for Limits {
     }
 }
 
+/// The largest allocation in bytes that a `Vec` can make on the target.
+const MAX_ALLOC_BYTES: u64 = isize::MAX as u64;
+
+/// Bytes of float data in a `w × h` image of `kind`, or `None` when the count overflows `u64`.
+fn checked_byte_len(w: u32, h: u32, kind: Kind) -> Option<u64> {
+    u64::from(w).checked_mul(u64::from(h))?.checked_mul(kind.channels() as u64)?.checked_mul(size_of::<f32>() as u64)
+}
+
 impl Limits {
     /// The number of floats a `w × h` image of `kind` holds, or the error the limits give for that
-    /// size. Nothing is allocated.
+    /// size. A size whose bytes are over `isize::MAX` is [`ImageError::TooLarge`] whatever the
+    /// limits are. Nothing is allocated.
     pub fn check(&self, w: u32, h: u32, kind: Kind) -> Result<usize, ImageError> {
+        self.check_within(w, h, kind, MAX_ALLOC_BYTES)
+    }
+
+    /// [`Limits::check`] with `max_alloc_bytes` as the largest allocation the target allows.
+    fn check_within(&self, w: u32, h: u32, kind: Kind, max_alloc_bytes: u64) -> Result<usize, ImageError> {
         if w == 0 || h == 0 || w > self.max_side || h > self.max_side {
             return Err(ImageError::BadSize(w, h));
         }
@@ -94,7 +113,7 @@ impl Limits {
         let pixels = u64::from(w).checked_mul(u64::from(h)).ok_or_else(|| too_large.clone())?;
         let floats = pixels.checked_mul(kind.channels() as u64).ok_or_else(|| too_large.clone())?;
         let bytes = floats.checked_mul(size_of::<f32>() as u64).ok_or_else(|| too_large.clone())?;
-        if pixels > self.max_pixels || bytes > self.max_bytes {
+        if pixels > self.max_pixels || bytes > self.max_bytes || bytes > max_alloc_bytes {
             return Err(too_large);
         }
         usize::try_from(floats).map_err(|_| too_large)
@@ -121,6 +140,24 @@ impl PartialEq for Image {
 /// Clamp a requested size into `1..=MAX_SIDE` on each side.
 pub fn clamp_size(w: u32, h: u32) -> (u32, u32) {
     (w.clamp(1, MAX_SIDE), h.clamp(1, MAX_SIDE))
+}
+
+/// The size and float count of an image of `kind` requested at `w × h` without a limit check:
+/// `w × h` when its bytes fit in `max_alloc_bytes`, otherwise each side clamped to
+/// `1..=MAX_SIDE`, and 1 × 1 when even the clamped size does not fit. Nothing is allocated.
+fn bounded_size(w: u32, h: u32, kind: Kind, max_alloc_bytes: u64) -> (u32, u32, usize) {
+    let floats = |w: u32, h: u32| {
+        let bytes = checked_byte_len(w, h, kind).filter(|&bytes| bytes <= max_alloc_bytes)?;
+        usize::try_from(bytes / size_of::<f32>() as u64).ok()
+    };
+    if let Some(len) = floats(w, h) {
+        return (w, h, len);
+    }
+    let (w, h) = clamp_size(w, h);
+    match floats(w, h) {
+        Some(len) => (w, h, len),
+        None => (1, 1, kind.channels()),
+    }
 }
 
 /// Integer texel index `i` on an axis of `n >= 1` texels: `i mod n` when repeating, otherwise
@@ -161,9 +198,10 @@ fn fill<F: Fn(u32, u32) -> [f32; 4] + Sync>(data: &mut [f32], w: u32, c: usize, 
 }
 
 impl Image {
-    /// An image of a size already inside `1..=MAX_SIDE` or taken from an existing image.
+    /// An image of `w × h`, or of the clamped size [`bounded_size`] gives when its bytes would be
+    /// over `isize::MAX`. `f` is called only for pixels inside the size that was made.
     fn build<F: Fn(u32, u32) -> [f32; 4] + Sync>(w: u32, h: u32, kind: Kind, f: F) -> Image {
-        let len = (w as usize).saturating_mul(h as usize).saturating_mul(kind.channels());
+        let (w, h, len) = bounded_size(w, h, kind, MAX_ALLOC_BYTES);
         let mut data = vec![0.0f32; len];
         fill(&mut data, w, kind.channels(), &f);
         Image { w, h, kind, data: Arc::new(data) }
@@ -216,6 +254,7 @@ impl Image {
         Image::try_build(w, h, kind, limits, |x, y| f((x as f32 + 0.5) * iw, (y as f32 + 0.5) * ih))
     }
 
+    /// A gray image generated with `f(x, y)`, each side clamped to `1..=MAX_SIDE`.
     pub fn gray(w: u32, h: u32, f: impl Fn(u32, u32) -> f32 + Sync) -> Image {
         Image::generate(w, h, Kind::Gray, |x, y| [f(x, y), 0.0, 0.0, 0.0])
     }
@@ -340,7 +379,10 @@ impl Image {
         self.get(x, y, tile)
     }
 
-    /// Map every pixel (as RGBA) to a new image of `kind`, same size.
+    /// Map every pixel (as RGBA) to a new image of `kind`, same size. When a result of that size
+    /// would be over `isize::MAX` bytes, which only an image allowed by raised [`Limits`] can
+    /// reach, each side is clamped to `1..=MAX_SIDE` and the result maps the top-left part of this
+    /// image. [`Image::try_map`] returns [`ImageError::TooLarge`] instead.
     pub fn map(&self, kind: Kind, f: impl Fn([f32; 4]) -> [f32; 4] + Sync) -> Image {
         Image::build(self.w, self.h, kind, |x, y| f(self.get(i64::from(x), i64::from(y), false)))
     }
@@ -361,7 +403,7 @@ impl Image {
         }
     }
 
-    /// This image as grayscale (luminance of a color image).
+    /// This image as grayscale (luminance of a color image), same size.
     pub fn to_gray(&self) -> Image {
         match self.kind {
             Kind::Gray => self.clone(),
@@ -369,7 +411,8 @@ impl Image {
         }
     }
 
-    /// This image as RGBA (gray copied to RGB, alpha 1).
+    /// This image as RGBA (gray copied to RGB, alpha 1). A gray image goes through
+    /// [`Image::map`], so a result over `isize::MAX` bytes is clamped as `map` describes.
     pub fn to_color(&self) -> Image {
         match self.kind {
             Kind::Color => self.clone(),
@@ -377,6 +420,7 @@ impl Image {
         }
     }
 
+    /// [`Image::to_gray`] or [`Image::to_color`].
     pub fn to_kind(&self, kind: Kind) -> Image {
         match kind {
             Kind::Gray => self.to_gray(),
@@ -434,7 +478,8 @@ impl Image {
     }
 
     /// 8-bit sRGB-encoded RGBA for display (gray shown as is; color through the sRGB curve).
-    /// Values are clamped to `0..=1` first; NaN becomes 0.
+    /// Values are clamped to `0..=1` first; NaN becomes 0. The result has 4 bytes per pixel, never
+    /// more than the float data's own bytes.
     pub fn to_rgba8_display(&self) -> Vec<u8> {
         let mut out = vec![0u8; self.display_len()];
         self.fill_display(&mut out);
@@ -749,6 +794,36 @@ mod tests {
         let open = Limits { max_side: u32::MAX, max_pixels: u64::MAX, max_bytes: u64::MAX };
         assert_eq!(open.check(u32::MAX, u32::MAX, Kind::Color), Err(ImageError::TooLarge(u32::MAX, u32::MAX)));
         assert_eq!(open.check(u32::MAX, u32::MAX, Kind::Gray), Err(ImageError::TooLarge(u32::MAX, u32::MAX)));
+    }
+
+    /// `isize::MAX` on a 32-bit target such as `wasm32`.
+    const BOUND_32: u64 = i32::MAX as u64;
+
+    #[test]
+    fn checked_sizes_respect_target_isize_bound() {
+        let open = Limits { max_side: u32::MAX, max_pixels: u64::MAX, max_bytes: u64::MAX };
+        // 16,385 × 8,192 gray is 512 MiB and 16 KiB; its color form is over 2 GiB.
+        assert_eq!(open.check_within(16_385, 8_192, Kind::Gray, BOUND_32), Ok(16_385 * 8_192));
+        assert_eq!(open.check_within(16_385, 8_192, Kind::Color, BOUND_32), Err(ImageError::TooLarge(16_385, 8_192)));
+        assert_eq!(open.check_within(MAX_SIDE, MAX_SIDE, Kind::Color, BOUND_32), Ok(1 << 28));
+    }
+
+    #[test]
+    fn infallible_expansion_clamps_at_target_bound() {
+        assert_eq!(bounded_size(16_385, 8_192, Kind::Gray, BOUND_32), (16_385, 8_192, 16_385 * 8_192));
+        assert_eq!(bounded_size(16_385, 8_192, Kind::Color, BOUND_32), (MAX_SIDE, MAX_SIDE, 1 << 28));
+        assert_eq!(bounded_size(MAX_SIDE, MAX_SIDE, Kind::Color, BOUND_32), (MAX_SIDE, MAX_SIDE, 1 << 28));
+        assert_eq!(bounded_size(3, 2, Kind::Color, BOUND_32), (3, 2, 24));
+        // A bound below even the clamped size gives one pixel.
+        assert_eq!(bounded_size(16_385, 8_192, Kind::Color, 64), (1, 1, 4));
+        assert_eq!(bounded_size(u32::MAX, u32::MAX, Kind::Gray, MAX_ALLOC_BYTES), (MAX_SIDE, MAX_SIDE, 1 << 26));
+    }
+
+    #[test]
+    fn checked_byte_len_rejects_arithmetic_overflow() {
+        assert_eq!(checked_byte_len(u32::MAX, u32::MAX, Kind::Color), None);
+        assert_eq!(checked_byte_len(u32::MAX, u32::MAX, Kind::Gray), None);
+        assert_eq!(checked_byte_len(MAX_SIDE, MAX_SIDE, Kind::Color), Some(1 << 30));
     }
 
     #[test]
