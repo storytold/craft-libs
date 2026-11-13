@@ -3261,6 +3261,7 @@ AccessKit node building, `register_accesskit_parent` and `set_accesskit_focus`: 
 
 Injected input: pointer moves, clicks, keys and text an automation client asks for, and the event builders
 
+- `craft_ui::runtime::egui::injected::Released`: `pub enum Released { Button(PointerButton), Key(Key), All }`. What a button or key release names: one button, one key, or everything held (the modifiers too).
 - `craft_ui::runtime::egui::injected::hook_without_pass`: `pub fn hook_without_pass(ctx: &Context, viewport: ViewportId) -> Vec<Event>`. The input of one hook call for `viewport` with no pass behind it: the events the hook appends. Stands in for
 - `craft_ui::runtime::egui::injected::move_focus_without_pass`: `pub fn move_focus_without_pass(ctx: &Context, viewport: ViewportId, id: Id)`. Moves the focus the end hook recorded for `viewport` to the component `id` with no pass, as the application does
 
@@ -3767,6 +3768,7 @@ The toast queues: one per window (`WindowKey`), filled from any code with a `Con
 - `craft_ui::runtime::windows::HitSink`: `pub struct HitSink`. The Windows hit test of one window: the window procedure asks [`HitSink::answer`] where the OS asks for a hit
   - `pub fn answer(&self, pixel: Pos2) -> Option<WindowHit>`. What lies at `pixel`, in physical pixels from the top left of the window's client area: the hit test's screen
 - `craft_ui::runtime::windows::KeyEquivalent`: `pub enum KeyEquivalent { Press(Chord), Tap(Chord), Copy, Cut }`. A key equivalent the platform's menu took from the window.
+- `craft_ui::runtime::windows::Released`: re-export of `craft_ui::runtime::egui::injected::Released`.
 - `craft_ui::runtime::windows::ResizeEdge`: `pub enum ResizeEdge { Top, Bottom, Left, Right, TopLeft, TopRight, BottomLeft, BottomRight }`. An edge or corner a window resize starts from.
 - `craft_ui::runtime::windows::ScreenshotError`: re-export of `craft_ui::runtime::egui::screenshot::ScreenshotError`.
 - `craft_ui::runtime::windows::ScreenshotFacts`: re-export of `craft_ui::runtime::egui::screenshot::ScreenshotFacts`.
@@ -3782,14 +3784,19 @@ The toast queues: one per window (`WindowKey`), filled from any code with a `Con
   - `pub fn positions_reported(&self) -> bool`. Whether the platform reports where windows are on the desktop and moves them there; false on Wayland.
   - `pub fn visible(&self) -> bool`. Whether the running viewport's window is drawn; a minimized or covered window runs no UI pass, so this reads
   - `pub fn screenshot_facts(&self) -> ScreenshotFacts`. What a screenshot of the running viewport measures this pass.
-  - `pub fn inject_move(&self, viewport: ViewportId, at: Pos2)`. Queues a pointer move to `at` in `viewport`, delivered on a pass of its own.
-  - `pub fn inject_click(&self, viewport: ViewportId, at: Pos2, button: PointerButton, count: u32)`. Queues a move to `at`, then `count` presses and releases of `button`, one pass each; a button egui has no
-  - `pub fn inject_key(&self, viewport: ViewportId, key: Key, mods: Mods)`. Queues `key` pressed and released with `mods` held, as the platform reports them.
+  - `pub fn inject_move(&self, viewport: ViewportId, at: Pos2, mods: Mods, rest: f64)`. Queues a pointer move to `at` in `viewport` with `mods` held, delivered on a pass of its own; the modifiers
+  - `pub fn inject_click(&self, viewport: ViewportId, at: Pos2, button: PointerButton, count: u32, mods: Mods, hold: bool)`. Queues a move to `at`, then `count` presses and releases of `button` with `mods` held, one pass each. With
+  - `pub fn inject_key(&self, viewport: ViewportId, key: Key, mods: Mods, hold: bool)`. Queues `key` pressed with `mods` held, as the platform reports them, and released unless `hold`.
+  - `pub fn inject_wheel(&self, viewport: ViewportId, at: Pos2, delta: Vec2, mods: Mods)`. Queues a move to `at`, then a wheel turn of `delta` points with `mods` held.
+  - `pub fn inject_release(&self, viewport: ViewportId, at: Option<Pos2>, released: Released)`. Queues the release of what `released` names, at `at` or where the injected pointer is.
+  - `pub fn set_caps_lock(&self, on: Option<bool>)`. Holds Caps Lock on or off in place of the platform's state; `None` returns to the platform's.
+  - `pub fn injected_caps_lock(&self) -> Option<bool>`. The Caps Lock state injected input holds, when it holds one.
+  - `pub fn injected_pass(&self) -> bool`. Whether the running pass's input carries injected input: what it triggers acts for an automation client.
   - `pub fn key_equivalent(&self, viewport: ViewportId, equivalent: KeyEquivalent)`. Adds `equivalent` to the next input of `viewport`: a key equivalent the platform's menu took from the window
   - `pub fn menu_open(&self, viewport: ViewportId, open: bool)`. Records whether the platform's menu of `viewport` is open. While it is, the window's next press or Escape is
   - `pub fn take_menu_close(&self, viewport: ViewportId) -> bool`. True once after a press or Escape reached `viewport`'s input: the platform's menu is to close.
   - `pub fn inject_text(&self, viewport: ViewportId, text: &str)`. Queues `text` as typed text.
-  - `pub fn withdraw_injected(&self, viewport: ViewportId)`. Drops the injected queue of `viewport` (the document changed); a pending queue counts as withdrawn
+  - `pub fn withdraw_injected(&self, viewport: ViewportId)`. Withdraws the injected input of `viewport` (the document changed) at its next input hook: a step whose pass
   - `pub fn cancel_injected(&self) -> bool`. Drops every injected queue and step in flight; true when anything was pending.
   - `pub fn injected_idle(&self) -> bool`. Whether no injected step is queued or awaits its pass: the application may answer its waiters.
   - `pub fn take_injected_withdrawn(&self) -> bool`. Whether an injected step was withdrawn since the last call.
