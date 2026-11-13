@@ -69,6 +69,12 @@ pub struct Shape<K> {
     /// The stroke colour as written (`currentColor` and paint-server fallbacks resolved), or
     /// `None` without a stroke.
     pub stroke: Option<String>,
+    /// Whether the computed style paints the path interior (`fill` defaults to black).
+    pub has_fill: bool,
+    /// Whether the computed style paints a stroke.
+    pub has_stroke: bool,
+    /// The computed `fill-rule`, defaulting to SVG's `nonzero` rule.
+    pub fill_rule: FillRule,
     /// The regions the shape is clipped by, as indices into [`Imported::clips`], outermost first.
     pub clips: Vec<usize>,
     /// The name of the innermost Inkscape layer the element is in: a `<g>` with
@@ -102,15 +108,25 @@ impl<K> Imported<K> {
     /// document model without reimplementing SVG fill rules or boolean clipping.
     pub fn clipped_path(&self, shape: &Shape<K>) -> Result<BezPath, Error> {
         let mut path = shape.path.clone();
+        let mut work_left = MAX_CLIP_WORK;
+        let mut output_left = MAX_CLIPPED_POINTS;
         for &clip_index in &shape.clips {
             let clip = self.clips.get(clip_index).ok_or_else(|| Error("SVG shape refers to a missing clip region".into()))?;
-            path = apply_clip(&path, clip)?;
+            path = apply_clip(&path, clip, shape.has_fill, shape.has_stroke, shape.fill_rule, &mut work_left, &mut output_left)?;
         }
         Ok(path)
     }
 }
 
-fn apply_clip(path: &BezPath, clip: &Clip) -> Result<BezPath, Error> {
+fn apply_clip(
+    path: &BezPath,
+    clip: &Clip,
+    has_fill: bool,
+    has_stroke: bool,
+    fill_rule: FillRule,
+    work_left: &mut usize,
+    output_left: &mut usize,
+) -> Result<BezPath, Error> {
     if clip.pieces.is_empty() {
         return Ok(BezPath::new());
     }
@@ -131,28 +147,29 @@ fn apply_clip(path: &BezPath, clip: &Clip) -> Result<BezPath, Error> {
     let region = vectorcraft_pathops::try_boolean_n(&inputs, |inside: &[bool]| inside.iter().any(|v| *v))
         .map_err(|e| Error(format!("SVG clip-path: {e}")))?
         .to_bezpath();
-    clip_path_to_region(path, &region).map_err(|e| Error(format!("SVG clip-path: {e}")))
+    clip_path_to_region(path, &region, has_fill, has_stroke, fill_rule, work_left, output_left).map_err(|e| Error(format!("SVG clip-path: {e}")))
 }
 
-fn clip_path_to_region(path: &BezPath, region: &BezPath) -> Result<BezPath, String> {
+fn clip_path_to_region(
+    path: &BezPath,
+    region: &BezPath,
+    has_fill: bool,
+    has_stroke: bool,
+    fill_rule: FillRule,
+    work_left: &mut usize,
+    output_left: &mut usize,
+) -> Result<BezPath, String> {
     if region.elements().is_empty() {
         return Ok(BezPath::new());
     }
-    let (mut closed, mut open) = (BezPath::new(), BezPath::new());
-    let mut contour = Vec::new();
-    for el in path.elements().iter().copied().chain([PathEl::MoveTo(Point::ZERO)]) {
-        if matches!(el, PathEl::MoveTo(_)) && !contour.is_empty() {
-            let target = if matches!(contour.last(), Some(PathEl::ClosePath)) { &mut closed } else { &mut open };
-            target.extend(contour.drain(..));
-        }
-        contour.push(el);
-    }
-
     let mut out = BezPath::new();
-    if !closed.elements().is_empty() {
+    if has_fill {
         let kept = vectorcraft_pathops::try_boolean(
-            &vectorcraft_geom::PathData::from_bezpath(&closed),
-            vectorcraft_geom::FillRule::EvenOdd,
+            &vectorcraft_geom::PathData::from_bezpath(path),
+            match fill_rule {
+                FillRule::EvenOdd => vectorcraft_geom::FillRule::EvenOdd,
+                FillRule::NonZero => vectorcraft_geom::FillRule::NonZero,
+            },
             &vectorcraft_geom::PathData::from_bezpath(region),
             vectorcraft_geom::FillRule::NonZero,
             vectorcraft_pathops::BoolOp::Intersect,
@@ -161,11 +178,18 @@ fn clip_path_to_region(path: &BezPath, region: &BezPath) -> Result<BezPath, Stri
         .map_err(|e| e.to_string())?;
         out.extend(kept.to_bezpath());
     }
-    if !open.elements().is_empty() {
+    if has_stroke {
         let polygons: Vec<Vec<Point>> =
             flatten_contours(region)?.into_iter().filter(|(points, closed)| *closed && points.len() >= 3).map(|(points, _)| points).collect();
-        for (points, _) in flatten_contours(&open)? {
-            for piece in clip_polyline(&points, &polygons) {
+        for (mut points, closed) in flatten_contours(path)? {
+            if closed
+                && points.len() > 1
+                && points.first().zip(points.last()).is_some_and(|(first, last)| first.distance(*last) > 1e-9)
+                && let Some(first) = points.first().copied()
+            {
+                points.push(first);
+            }
+            for piece in clip_polyline(&points, &polygons, work_left, output_left)? {
                 let Some((&first, rest)) = piece.split_first() else {
                     continue;
                 };
@@ -180,6 +204,7 @@ fn clip_path_to_region(path: &BezPath, region: &BezPath) -> Result<BezPath, Stri
 }
 
 const MAX_CLIPPED_POINTS: usize = 500_000;
+const MAX_CLIP_WORK: usize = 5_000_000;
 
 fn flatten_contours(path: &BezPath) -> Result<Vec<(Vec<Point>, bool)>, String> {
     flatten_contours_with_limits(path, MAX_SVG_SEGMENTS, MAX_CLIPPED_POINTS)
@@ -206,8 +231,19 @@ fn flatten_contours_with_limits(path: &BezPath, max_segments: usize, max_points:
                 }
             }
             PathEl::ClosePath => {
-                if let Some((_, closed)) = contours.last_mut() {
+                let start = if let Some((points, closed)) = contours.last_mut() {
+                    if let Some(first) = points.first().copied()
+                        && points.last().is_some_and(|last| last.distance(first) > 1e-9)
+                    {
+                        points.push(first);
+                    }
                     *closed = true;
+                    points.first().copied()
+                } else {
+                    None
+                };
+                if let Some(start) = start {
+                    contours.push((vec![start], false));
                 }
             }
             PathEl::QuadTo(..) | PathEl::CurveTo(..) => {}
@@ -218,15 +254,12 @@ fn flatten_contours_with_limits(path: &BezPath, max_segments: usize, max_points:
     }
     for (points, closed) in &mut contours {
         points.dedup_by(|a, b| a.distance(*b) < 1e-9);
-        if *closed && points.len() > 1 && points.first().zip(points.last()).is_some_and(|(first, last)| first.distance(*last) < 1e-9) {
-            points.pop();
-        }
     }
     contours.retain(|(points, _)| points.len() > 1);
     Ok(contours)
 }
 
-fn clip_polyline(points: &[Point], polygons: &[Vec<Point>]) -> Vec<Vec<Point>> {
+fn clip_polyline(points: &[Point], polygons: &[Vec<Point>], work_left: &mut usize, output_left: &mut usize) -> Result<Vec<Vec<Point>>, String> {
     let mut out: Vec<Vec<Point>> = Vec::new();
     let mut current: Vec<Point> = Vec::new();
     let mut ts = Vec::new();
@@ -234,7 +267,7 @@ fn clip_polyline(points: &[Point], polygons: &[Vec<Point>]) -> Vec<Vec<Point>> {
         let (a, b) = (segment[0], segment[1]);
         ts.clear();
         ts.push(0.0);
-        crossings(polygons, a, b, &mut ts);
+        crossings(polygons, a, b, &mut ts, work_left)?;
         ts.push(1.0);
         ts.sort_by(f64::total_cmp);
         for pair in ts.windows(2) {
@@ -242,16 +275,16 @@ fn clip_polyline(points: &[Point], polygons: &[Vec<Point>]) -> Vec<Vec<Point>> {
             if t1 - t0 < 1e-12 {
                 continue;
             }
-            if inside_even_odd(polygons, a.lerp(b, (t0 + t1) / 2.0)) {
+            if inside_even_odd(polygons, a.lerp(b, (t0 + t1) / 2.0), work_left)? {
                 let (p0, p1) = (a.lerp(b, t0), a.lerp(b, t1));
                 if current.last().is_none_or(|last| last.distance(p0) > 1e-9) {
                     if current.len() > 1 {
                         out.push(std::mem::take(&mut current));
                     }
                     current.clear();
-                    current.push(p0);
+                    push_clip_point(&mut current, p0, output_left)?;
                 }
-                current.push(p1);
+                push_clip_point(&mut current, p1, output_left)?;
             } else if current.len() > 1 {
                 out.push(std::mem::take(&mut current));
             } else {
@@ -262,13 +295,14 @@ fn clip_polyline(points: &[Point], polygons: &[Vec<Point>]) -> Vec<Vec<Point>> {
     if current.len() > 1 {
         out.push(current);
     }
-    out
+    Ok(out)
 }
 
-fn crossings(polygons: &[Vec<Point>], a: Point, b: Point, out: &mut Vec<f64>) {
+fn crossings(polygons: &[Vec<Point>], a: Point, b: Point, out: &mut Vec<f64>, work_left: &mut usize) -> Result<(), String> {
     let direction = b - a;
     for polygon in polygons {
         for index in 0..polygon.len() {
+            charge_clip_work(work_left)?;
             let (Some(p), Some(q)) = (polygon.get(index), polygon.get((index + 1) % polygon.len())) else {
                 continue;
             };
@@ -285,12 +319,14 @@ fn crossings(polygons: &[Vec<Point>], a: Point, b: Point, out: &mut Vec<f64>) {
             }
         }
     }
+    Ok(())
 }
 
-fn inside_even_odd(polygons: &[Vec<Point>], point: Point) -> bool {
+fn inside_even_odd(polygons: &[Vec<Point>], point: Point, work_left: &mut usize) -> Result<bool, String> {
     let mut odd = false;
     for polygon in polygons {
         for index in 0..polygon.len() {
+            charge_clip_work(work_left)?;
             let (Some(a), Some(b)) = (polygon.get(index), polygon.get((index + 1) % polygon.len())) else {
                 continue;
             };
@@ -299,7 +335,18 @@ fn inside_even_odd(polygons: &[Vec<Point>], point: Point) -> bool {
             }
         }
     }
-    odd
+    Ok(odd)
+}
+
+fn charge_clip_work(work_left: &mut usize) -> Result<(), String> {
+    *work_left = work_left.checked_sub(1).ok_or_else(|| "clip-path work limit exceeded".to_string())?;
+    Ok(())
+}
+
+fn push_clip_point(points: &mut Vec<Point>, point: Point, output_left: &mut usize) -> Result<(), String> {
+    *output_left = output_left.checked_sub(1).ok_or_else(|| "clip-path output point limit exceeded".to_string())?;
+    points.push(point);
+    Ok(())
 }
 
 pub const MAX_SVG_BYTES: usize = 16 * 1024 * 1024;
@@ -626,6 +673,9 @@ fn import_node<'a, 'input, K: Kind>(
             kind: state.kind.clone(),
             label: label(node),
             stroke: stroke_paint(&style),
+            has_fill: style.get("fill").is_none_or(|value| value != "none"),
+            has_stroke: style.get("stroke").is_some_and(|value| value != "none"),
+            fill_rule: if style.get("fill-rule").is_some_and(|value| value == "evenodd") { FillRule::EvenOdd } else { FillRule::NonZero },
             clips: state.clips.clone(),
             layer: state.layer.as_deref().map(str::to_string),
         });
@@ -1060,7 +1110,8 @@ fn ellipse_path(cx: f64, cy: f64, rx: f64, ry: f64) -> BezPath {
 pub const MAX_CSS_BYTES: usize = 1024 * 1024;
 const MAX_CSS_RULES: usize = 10_000;
 const MAX_CSS_PROPERTIES: usize = 32;
-const SUPPORTED_STYLE_PROPERTIES: &[&str] = &["display", "visibility", "fill", "stroke", "stroke-width", "color", "clip-path", "mask", "filter"];
+const SUPPORTED_STYLE_PROPERTIES: &[&str] =
+    &["display", "visibility", "fill", "fill-rule", "stroke", "stroke-width", "color", "clip-path", "mask", "filter"];
 
 /// Whether the cascade tracks `property`: the properties above and [`Kind::PROPERTIES`].
 fn supported(extra: &[&str], property: &str) -> bool {

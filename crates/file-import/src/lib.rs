@@ -297,7 +297,7 @@ fn import_dxf(bytes: &[u8], format: ImportFormat, limits: Limits) -> Result<Impo
         Some(bounds) => (
             (bounds.width() * imported.unit_to_mm).max(1.0),
             (bounds.height() * imported.unit_to_mm).max(1.0),
-            Affine::scale(imported.unit_to_mm) * Affine::translate(-bounds.origin().to_vec2()),
+            Affine::new([imported.unit_to_mm, 0.0, 0.0, -imported.unit_to_mm, -bounds.x0 * imported.unit_to_mm, bounds.y1 * imported.unit_to_mm]),
         ),
         None => (100.0, 150.0, Affine::IDENTITY),
     };
@@ -310,26 +310,22 @@ fn import_dxf(bytes: &[u8], format: ImportFormat, limits: Limits) -> Result<Impo
 }
 
 fn import_pdf(bytes: &[u8], format: ImportFormat, limits: Limits) -> Result<Imported, Error> {
-    let imported = craft_pdf::paths::import(
+    let imported = craft_pdf::paths::import_page(
         bytes,
+        0,
         craft_pdf::paths::Limits { max_input_bytes: limits.max_input_bytes, max_paths: limits.max_shapes, ..Default::default() },
     )
     .map_err(|error| Error::Decode(error.to_string()))?;
-    let page_count = imported.pages.len();
     let page = imported.pages.into_iter().next().ok_or_else(|| Error::Decode("PDF has no pages".into()))?;
     let bounds = page.crop_box;
-    let transform = Affine::scale(MM_PER_PT) * Affine::new([1.0, 0.0, 0.0, -1.0, -bounds.x0, bounds.y1]);
     let mut warnings = imported.warnings;
-    if page_count > 1 {
-        warnings.push("only the first PDF page was imported".into());
-    }
     if page.omitted_text > 0 || page.omitted_images > 0 {
         warnings.push(format!("PDF omitted {} text and {} image items", page.omitted_text, page.omitted_images));
     }
     let shapes = page
         .paths
         .into_iter()
-        .map(|path| SceneShape { path: transform * path, tag: None, class: None, stroke: None, stroke_rgb: None, layer: None })
+        .map(|path| SceneShape { path: Affine::scale(MM_PER_PT) * path, tag: None, class: None, stroke: None, stroke_rgb: None, layer: None })
         .collect();
     Ok(Imported::Vector(VectorScene {
         format,
@@ -348,7 +344,7 @@ fn import_eps(bytes: &[u8], format: ImportFormat, limits: Limits) -> Result<Impo
     )
     .map_err(|error| Error::Decode(error.to_string()))?;
     let bounds = imported.page_bounds;
-    let transform = Affine::scale(MM_PER_PT) * Affine::translate(-bounds.origin().to_vec2());
+    let transform = Affine::scale(MM_PER_PT);
     let mut warnings = imported.warnings;
     if imported.preview_fallback {
         warnings.push("embedded raster preview was not imported as paths".into());

@@ -102,6 +102,10 @@ pub fn write_raster(extension: &str, width: u32, height: u32, rgba: &[u8], jpeg_
 
 fn write_svg(scene: &OutputScene) -> Result<String, Error> {
     validate_scene(scene)?;
+    let view_scale = (scene.width_mm / scene.view_box[2]).min(scene.height_mm / scene.view_box[3]);
+    if !(view_scale.is_finite() && view_scale > 0.0) {
+        return Err(Error::InvalidGeometry);
+    }
     let elements = scene
         .layers
         .iter()
@@ -116,7 +120,7 @@ fn write_svg(scene: &OutputScene) -> Result<String, Error> {
                     let mut attributes = vec![
                         craft_svg::write::Attribute::text("fill", "none"),
                         craft_svg::write::Attribute::text("stroke", format!("#{:02x}{:02x}{:02x}", color[0], color[1], color[2])),
-                        craft_svg::write::Attribute::millimetres("stroke-width", path.stroke_width_mm),
+                        craft_svg::write::Attribute::text("stroke-width", format_float(path.stroke_width_mm / view_scale)),
                     ];
                     if let Some(class) = &path.class {
                         attributes.push(craft_svg::write::Attribute::text("class", class.clone()));
@@ -129,7 +133,7 @@ fn write_svg(scene: &OutputScene) -> Result<String, Error> {
                 .collect::<Vec<_>>();
             let mut attributes = vec![
                 craft_svg::write::Attribute::text("data-layer", layer.name.clone()),
-                craft_svg::write::Attribute::text("style", if layer.visible { "display:visible" } else { "display:hidden" }),
+                craft_svg::write::Attribute::text("style", if layer.visible { "display:inline" } else { "display:none" }),
             ];
             if let Some(class) = &layer.class {
                 attributes.push(craft_svg::write::Attribute::text("class", class.clone()));
@@ -160,6 +164,9 @@ fn write_pdf(scene: &OutputScene) -> Result<Vec<u8>, Error> {
             .ok_or_else(|| Error::Write("page dimensions are not finite or positive".into()))?;
         let mut page = writer.document_mut().start_page_with(page_settings);
         let mut surface = page.surface();
+        let view_scale = (scene.width_mm / scene.view_box[2]).min(scene.height_mm / scene.view_box[3]);
+        let offset_x = (scene.width_mm - scene.view_box[2] * view_scale) / 2.0;
+        let offset_y = (scene.height_mm - scene.view_box[3] * view_scale) / 2.0;
         for source in &scene.paths {
             if !scene.layers.get(source.layer).is_some_and(|layer| layer.visible) {
                 continue;
@@ -167,8 +174,8 @@ fn write_pdf(scene: &OutputScene) -> Result<Vec<u8>, Error> {
             let mut path = backend::geom::PathBuilder::new();
             for element in source.path.elements() {
                 let point = |p: Point| -> Result<(f32, f32), Error> {
-                    let x = p.x * PT_PER_MM;
-                    let y = p.y * PT_PER_MM;
+                    let x = ((p.x - scene.view_box[0]) * view_scale + offset_x) * PT_PER_MM;
+                    let y = ((p.y - scene.view_box[1]) * view_scale + offset_y) * PT_PER_MM;
                     if !(p.x.is_finite()
                         && p.y.is_finite()
                         && x.is_finite()
@@ -252,7 +259,19 @@ fn write_dxf(scene: &OutputScene) -> Result<String, Error> {
         let Some(layer) = scene.layers.get(output.layer) else {
             return Err(Error::InvalidGeometry);
         };
-        for (points, closed) in flatten(&output.path)? {
+        let view_scale = (scene.width_mm / scene.view_box[2]).min(scene.height_mm / scene.view_box[3]);
+        let offset_x = (scene.width_mm - scene.view_box[2] * view_scale) / 2.0;
+        let offset_y = (scene.height_mm - scene.view_box[3] * view_scale) / 2.0;
+        let mut page_path = output.path.clone();
+        page_path.apply_affine(kurbo::Affine::new([
+            view_scale,
+            0.0,
+            0.0,
+            view_scale,
+            offset_x - scene.view_box[0] * view_scale,
+            offset_y - scene.view_box[1] * view_scale,
+        ]));
+        for (points, closed) in flatten(&page_path)? {
             if points.len() < 2 {
                 continue;
             }
@@ -350,4 +369,8 @@ fn validate_scene(scene: &OutputScene) -> Result<(), Error> {
 
 fn point_is_finite(point: Point) -> bool {
     point.x.is_finite() && point.y.is_finite()
+}
+
+fn format_float(value: f64) -> String {
+    value.to_string()
 }
