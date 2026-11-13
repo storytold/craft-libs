@@ -33,6 +33,7 @@ pub enum Format {
     Pcraft,
     Idml,
     DesignCraft,
+    Indd,
     Docx,
     /// Legacy OLE Compound File Word document; identified by its extension only.
     LegacyDoc,
@@ -49,6 +50,9 @@ pub enum Format {
 /// Resolve a name and file bytes to a format. Strong signatures take precedence over
 /// extension hints. Only format-specific bounded probes and extension tables live here.
 pub fn detect(name: &str, bytes: &[u8]) -> Option<Format> {
+    if bytes.starts_with(&INDD_SIGNATURE) {
+        return Some(Format::Indd);
+    }
     if let Some(found) = craft_eps::sniff(bytes) {
         return Some(match (found.kind, found.illustrator) {
             (_, true) => Format::Illustrator,
@@ -133,6 +137,7 @@ pub fn from_extension(ext: &str) -> Option<Format> {
         "pcraft" => Some(Format::Pcraft),
         "idml" => Some(Format::Idml),
         "designcraft" | "dcdoc" => Some(Format::DesignCraft),
+        "indd" | "indt" => Some(Format::Indd),
         "docx" => Some(Format::Docx),
         "doc" => Some(Format::LegacyDoc),
         "rtf" => Some(Format::Rtf),
@@ -145,6 +150,8 @@ pub fn from_extension(ext: &str) -> Option<Format> {
         _ => None,
     }
 }
+
+const INDD_SIGNATURE: [u8; 16] = [0x06, 0x06, 0xED, 0xF5, 0xD8, 0x1D, 0x46, 0xE5, 0xBD, 0x31, 0xEF, 0xE7, 0xFE, 0x74, 0xB7, 0x1D];
 
 fn extension(name: &str) -> Option<&str> {
     Some(name.rsplit(['/', '\\']).next()?.rsplit_once('.')?.1)
