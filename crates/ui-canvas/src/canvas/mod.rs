@@ -184,6 +184,8 @@ pub struct Canvas<'a> {
     settled: Option<Settled>,
     /// The Menu key or Shift+F10 reached the focused canvas this pass.
     context_key: bool,
+    /// The ease the app asked for from the view it drew ([`ease_from`](Self::ease_from)).
+    ease: Option<Steer>,
 }
 
 /// A canvas's view in one pass.
@@ -215,6 +217,7 @@ impl<'a> Canvas<'a> {
             snap: None,
             settled: None,
             context_key: false,
+            ease: None,
         }
         .label(label)
         .ltr_axis()
@@ -242,6 +245,24 @@ impl<'a> Canvas<'a> {
     pub fn view(mut self, view: impl Into<Bind<'a, CanvasView>>) -> Self {
         self.view = Some(view.into());
         self.props.scroll_owner = true;
+        self
+    }
+
+    /// Eases from `from`, the view the app drew last, to the view given this pass, as the canvas eases its own zoom
+    /// commands: an app's zoom step made outside the canvas (a menu row, a Zoom tool click before the app's tools run
+    /// on the tool host). `anchor` keeps a document point under a screen point along the way. With Animated Zoom off,
+    /// or when the wheel or a pan moves the view in the same pass, the view jumps.
+    #[must_use]
+    pub fn ease_from(mut self, from: CanvasView, anchor: Option<(Point, Pos2)>) -> Self {
+        self.ease = Some(Steer::Ease { from, anchor });
+        self
+    }
+
+    /// The app moved the view itself since its last pass (a pan of its own): an ease running stops at the view given
+    /// this pass, as for a pan of the canvas's own.
+    #[must_use]
+    pub fn jumped(mut self) -> Self {
+        self.ease = Some(Steer::Stop);
         self
     }
 
@@ -335,6 +356,11 @@ impl<'a> Canvas<'a> {
         }
         // A pan or a scroll takes over from an ease, here or in a tool.
         let mut steer = motion.steer.take();
+        match self.ease {
+            Some(Steer::Ease { .. }) if !self.navigation.animated_zoom => steer = Some(Steer::Stop),
+            Some(ease) => steer = Some(ease),
+            None => {}
+        }
         if jumped {
             steer = Some(Steer::Stop);
         }
