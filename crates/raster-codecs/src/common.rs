@@ -24,8 +24,7 @@ pub struct DecodeLimits {
 
 impl Default for DecodeLimits {
     fn default() -> Self {
-        Self { max_file_bytes: 64 * 1024 * 1024, max_width: 10_000, max_height: 10_000,
-            max_pixels: 16_000_000, max_alloc_bytes: 256 * 1024 * 1024 }
+        Self { max_file_bytes: 64 * 1024 * 1024, max_width: 10_000, max_height: 10_000, max_pixels: 16_000_000, max_alloc_bytes: 256 * 1024 * 1024 }
     }
 }
 
@@ -38,8 +37,7 @@ pub fn decode_rgba(bytes: &[u8], limits: DecodeLimits) -> Result<RgbaImage, Code
         return Err(CodecError::unsupported("image", "HEIC/HEIF is not supported by the enabled codecs"));
     }
     let reader = || -> Result<ImageReader<Cursor<&[u8]>>, CodecError> {
-        let mut reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()
-            .map_err(|e| CodecError::malformed("image", e))?;
+        let mut reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format().map_err(|e| CodecError::malformed("image", e))?;
         if reader.format().is_none() {
             return Err(CodecError::unsupported("image", "unrecognised image format"));
         }
@@ -71,22 +69,18 @@ pub fn encode_jpeg(pixels: &RgbaImage, quality: u8) -> Result<Vec<u8>, CodecErro
     }
     let rgb = image::DynamicImage::ImageRgba8(pixels.clone()).to_rgb8();
     let mut out = Cursor::new(Vec::new());
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality)
-        .encode_image(&rgb).map_err(|e| CodecError::encode("JPEG", e))?;
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality).encode_image(&rgb).map_err(|e| CodecError::encode("JPEG", e))?;
     Ok(out.into_inner())
 }
 
 fn is_heif(bytes: &[u8]) -> bool {
-    bytes.get(4..8) == Some(b"ftyp")
-        && matches!(bytes.get(8..12), Some(b"heic" | b"heix" | b"hevc" | b"mif1" | b"msf1" | b"avif"))
+    bytes.get(4..8) == Some(b"ftyp") && matches!(bytes.get(8..12), Some(b"heic" | b"heix" | b"hevc" | b"mif1" | b"msf1" | b"avif"))
 }
 
 fn check_dimensions(width: u32, height: u32, limits: DecodeLimits) -> Result<(), CodecError> {
-    let pixels = u64::from(width).checked_mul(u64::from(height))
-        .ok_or_else(|| CodecError::LimitExceeded("image dimensions overflow".into()))?;
+    let pixels = u64::from(width).checked_mul(u64::from(height)).ok_or_else(|| CodecError::LimitExceeded("image dimensions overflow".into()))?;
     if width == 0 || height == 0 || width > limits.max_width || height > limits.max_height || pixels > limits.max_pixels {
         return Err(CodecError::LimitExceeded(format!("image dimensions {width}x{height} exceed configured limits")));
     }
     Ok(())
 }
-
