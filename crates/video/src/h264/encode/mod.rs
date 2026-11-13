@@ -418,7 +418,7 @@ impl<P: Pixel> Core<P> {
         )
     }
 
-    pub fn new(mut cfg: EncoderConfig) -> Result<Self, Error> {
+    fn new_with_extra_motion_search_starts(mut cfg: EncoderConfig, extra_motion_search_starts: bool) -> Result<Self, Error> {
         if cfg.width == 0
             || cfg.height == 0
             || !cfg.width.is_multiple_of(2)
@@ -468,6 +468,7 @@ impl<P: Pixel> Core<P> {
                 adaptive_t8: false,
                 always_intra: false,
                 cavlc_clamp: !cabac,
+                extra_motion_search_starts,
                 depth,
             },
             Preset::Balanced => EncParams {
@@ -487,6 +488,7 @@ impl<P: Pixel> Core<P> {
                 adaptive_t8: high,
                 always_intra: false,
                 cavlc_clamp: !cabac,
+                extra_motion_search_starts,
                 depth,
             },
             Preset::Quality => EncParams {
@@ -506,6 +508,7 @@ impl<P: Pixel> Core<P> {
                 adaptive_t8: high,
                 always_intra: true,
                 cavlc_clamp: !cabac,
+                extra_motion_search_starts,
                 depth,
             },
         };
@@ -1218,6 +1221,15 @@ pub struct Encoder {
     core: Cores,
 }
 
+/// Starting points considered by the integer motion search.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MotionSearchStarts {
+    /// Include skip, zero and co-located vectors for 16x16 searches.
+    Extended,
+    /// Use only the skip seed and neighboring partition vector, matching the earlier FilmCraft encoder.
+    SeedAndNeighbour,
+}
+
 enum Cores {
     Eight(Box<Core<u8>>),
     Deep(Box<Core<u16>>),
@@ -1234,7 +1246,18 @@ macro_rules! core {
 
 impl Encoder {
     pub fn new(cfg: EncoderConfig) -> Result<Self, Error> {
-        let core = if cfg.bit_depth > 8 { Cores::Deep(Box::new(Core::new(cfg)?)) } else { Cores::Eight(Box::new(Core::new(cfg)?)) };
+        Self::new_with_motion_search_starts(cfg, MotionSearchStarts::Extended)
+    }
+
+    /// Construct an encoder with an explicit motion-search start policy. Existing callers should
+    /// use [`Encoder::new`], which selects [`MotionSearchStarts::Extended`].
+    pub fn new_with_motion_search_starts(cfg: EncoderConfig, starts: MotionSearchStarts) -> Result<Self, Error> {
+        let extra = starts == MotionSearchStarts::Extended;
+        let core = if cfg.bit_depth > 8 {
+            Cores::Deep(Box::new(Core::new_with_extra_motion_search_starts(cfg, extra)?))
+        } else {
+            Cores::Eight(Box::new(Core::new_with_extra_motion_search_starts(cfg, extra)?))
+        };
         Ok(Encoder { core })
     }
 
@@ -1450,7 +1473,7 @@ mod tests {
     /// A recycled `MbInfo` buffer must come back as all-default entries, whatever the previous picture left in it.
     #[test]
     fn recycled_mb_buffers_are_cleared() {
-        let mut core = Core::<u8>::new(EncoderConfig::new(64, 48, 30, 1)).unwrap();
+        let mut core = Core::<u8>::new_with_extra_motion_search_starts(EncoderConfig::new(64, 48, 30, 1), true).unwrap();
         let n = core.params.mbw * core.params.mbh;
         let mut m = core.new_mbs();
         assert_eq!(m.len(), n);
