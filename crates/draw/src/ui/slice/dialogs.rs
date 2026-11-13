@@ -314,11 +314,10 @@ fn axis_rows(ui: &mut Ui, axis: &mut AxisState, caption: &craft_ui::runtime::env
     });
     Field::new(unit).enabled(axis.on).show(ui, |ui, _| {
         let max = axis.max();
-        let field = NumberField::new(words.divide_value.clone(), Bind::given(Some(f64::from(axis.value))))
-            .range(1.0..=f64::from(max))
-            .commit_decimals(0)
-            .unit_kind(UnitKind::Pixels)
-            .show(ui);
+        let field =
+            NumberField::new(words.divide_value.clone(), Bind::given(Some(f64::from(axis.value)))).range(1.0..=f64::from(max)).commit_decimals(0);
+        // A count has no unit; a size counts pixels.
+        let field = if axis.by_size { field.unit_kind(UnitKind::Pixels) } else { field }.show(ui);
         if let Some(Some(value)) = field.value().copied() {
             axis.value = value.round().clamp(1.0, f64::from(max)) as u32;
         }

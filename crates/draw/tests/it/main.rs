@@ -25,6 +25,7 @@ mod perspective_crop;
 
 // draw-bars
 mod measure;
+mod slice_divide;
 
 // draw-stroke
 mod stroke_button;
