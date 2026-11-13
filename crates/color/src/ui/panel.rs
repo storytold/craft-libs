@@ -2,7 +2,6 @@
 //! (two cubes, a wheel, five slider sets), the out-of-gamut and web-colour warnings, and the colour ramp under the
 //! sliders; the panel menu chooses the view and the ramp and copies the colour.
 
-use std::cell::RefCell;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use craft_behavior::{EditEvent, GesturePhase, IconId, Mixed};
@@ -541,23 +540,23 @@ impl Body<'_> {
         self.events.push((target, event));
     }
 
-    /// The cubes take the height the readout leaves them, as Photoshop's field fills its dock group; the slider modes and
-    /// the wheel scroll where the group is shorter than they are. The slider modes' ramp is the body's footer, outside the
-    /// scroll: it stays whole under the rows, as Photoshop's ramp does.
-    fn show(self, ui: &mut Ui) -> Self {
+    /// The cubes take the height the readout leaves them, as Photoshop's field fills its dock group. In the slider modes
+    /// the channel rows come first and the ramp under them takes the room they leave, at least a colour band thick, as
+    /// Photoshop's does; in a group shorter than both the ramp is cut at the bottom. The wheel scrolls where the group
+    /// is shorter than it.
+    fn show(mut self, ui: &mut Ui) -> Self {
         let mode = self.now.mode;
-        let cube = mode.is_cube();
-        // The body and the footer both draw into the panel's pass state.
-        let this = RefCell::new(self);
         let mut body = Stack::new().fill();
-        if !cube {
+        if mode == ColorPanelMode::ColorWheel {
             body = body.scroll(Scroll::vertical());
         }
-        if mode.is_sliders() {
-            body = body.footer(|ui, _| this.borrow_mut().ramp(ui));
-        }
-        body.show(ui, |ui, _| this.borrow_mut().content(ui));
-        this.into_inner()
+        body.show(ui, |ui, _| {
+            self.content(ui);
+            if mode.is_sliders() {
+                self.ramp(ui);
+            }
+        });
+        self
     }
 
     /// The wells with their warnings beside the view of the mode; under the cubes their readout, under the wheel its
@@ -799,6 +798,7 @@ impl Body<'_> {
             .gamut(gamut)
             .gamut_revision(hasher.finish())
             .web_safe(self.now.web_safe_ramp)
+            .sizing(Sizing::Fill)
             .show(ui);
         // Alt is on every event of a gesture that has a value; the others go where it went.
         for event in ramp.edit.events {

@@ -171,12 +171,6 @@ impl PaintUi<'_> {
         self.child_with(self.id.with(key), rect, child, None, None)
     }
 
-    /// Measures a child under the composite's resolved `enabled` and `size`, as [`child`](Self::child) with the same
-    /// key will show it: for a composite that places its children by their size.
-    pub fn measure<C: Show>(&self, key: impl Hash + Debug, child: &mut C, proposal: craft_behavior::Proposal) -> egui::Vec2 {
-        run::measure_under(child, &*self.ui, Some(self.id.with(key)), proposal, Some(&super::cx::Under::new(self.enabled, self.size)))
-    }
-
     /// Shows `child` as the owner's own control, such as a picker the owner draws its field with. The child's node
     /// folds into the owner's: the owner's node stands for the child's focus stop, carries the child's value text when
     /// the owner's `access` sets none, and takes the actions and requests aimed at it, which reach the child. The

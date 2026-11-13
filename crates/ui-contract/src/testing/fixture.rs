@@ -11,7 +11,7 @@ use crate::runtime::egui::sizing::HELD_UPDATE_RERUN;
 use crate::runtime::env::{Direction, Overrides, RootEnv, Scale, with_env};
 use craft_behavior::{MotionMode, PartRef};
 use craft_host::target::Os;
-use craft_theme::{Contrast, Mode, Size, TextSize};
+use craft_theme::{Contrast, Mode, Size, TextSize, ThemeId};
 use egui::{Event, Id, Key, Modifiers, Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
@@ -255,6 +255,11 @@ impl Fixture {
             root.mode = mode.into();
             root.contrast = contrast.into();
         })
+    }
+
+    /// The theme: one of the built-ins (`craft.adwaita`) or one a test registered.
+    pub fn theme_id(&mut self, theme: ThemeId) -> &mut Self {
+        self.set_root(|root| root.set_theme(theme))
     }
 
     /// The motion mode.

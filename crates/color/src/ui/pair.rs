@@ -1,6 +1,6 @@
 //! [`SwatchPair`]: two overlapping colour wells, foreground over background or fill over stroke.
 
-use craft_behavior::{EditEvents, Flow, HitLevel, HitPriority, Metrics, Mixed, NavShape, PartKey, PressPhase, Roving, Sense};
+use craft_behavior::{EditEvents, Flow, HitLevel, HitPriority, HitShape, Metrics, Mixed, NavShape, PartKey, PressPhase, Roving, Sense};
 use craft_theme::{Srgba, WellShape};
 use craft_ui::buttons::IconButton;
 use craft_ui::choice::{ChoiceWords, Swatch, SwatchMetrics, SwatchStyle};
@@ -102,6 +102,8 @@ pub struct SwatchPairStyle {
     step: f32,
     /// The corners of a well: the swatch's, or half the side where the theme's wells are round (`shape.wells`).
     radius: CornerRadius,
+    /// Whether the wells are round (`shape.wells`): they take the pointer inside their circle only.
+    round: bool,
     /// The gap in the panel's colour round the front well: `space.gap.tight`.
     gap: f32,
     /// The side of a button: the icon slot of a control.
@@ -280,12 +282,12 @@ impl<'a> SwatchPair<'a> {
         Vec2::splat(style.well + style.step + 2.0 * self.edge(style))
     }
 
-    /// The wells' rects in logical coordinates from the pair's start edge, primary first, inside their outlines.
     /// The well drawn in front, which takes the pointer where the wells overlap.
     fn front(&self, active: Well) -> Well {
         if self.frame_active { Well::Primary } else { active }
     }
 
+    /// The wells' rects in logical coordinates from the pair's start edge, primary first, inside their outlines.
     fn well_rects(&self, style: &SwatchPairStyle, size: Vec2) -> [Rect; 2] {
         // The buttons' squares hold their glyphs with room round them, so the wells follow without a gap.
         let edge = self.edge(style);
@@ -307,16 +309,15 @@ impl Component for SwatchPair<'_> {
     fn style(cx: &StyleCx<'_>, _: SwatchPairStyleKey) -> SwatchPairStyle {
         let colors = &cx.tokens.color;
         let well = cx.tokens.size.icon.lg;
-        let radius = match cx.tokens.shape.wells {
-            WellShape::Round => UiTokens::corner(well / 2.0),
-            _ => SwatchMetrics::of(cx).radius,
-        };
+        let round = cx.tokens.shape.wells == WellShape::Round;
+        let radius = if round { UiTokens::corner(well / 2.0) } else { SwatchMetrics::of(cx).radius };
         SwatchPairStyle {
             metrics: Metrics::new(),
             focus: cx.focus_look(),
             well,
             step: cx.tokens.size.icon.sm,
             radius,
+            round,
             gap: cx.tokens.space.gap.tight,
             buttons: cx.control().icon,
             edge: cx.color(colors.line.control_edge),
@@ -353,8 +354,9 @@ impl Component for SwatchPair<'_> {
             let mut flags = Flags::empty();
             flags.set(Flags::MIXED, self.wells[i].color.same().is_none());
             flags.set(Flags::CHECKED, well == active);
+            let shape = if cx.style.round { HitShape::circle(at.center(), at.width() / 2.0) } else { HitShape::Rect(at) };
             let part = cx
-                .part(WELL.at(i as u64), at)
+                .part(WELL.at(i as u64), shape)
                 .sense(Sense::CLICK | Sense::FOCUS)
                 .priority(HitPriority::new(HitLevel::Body, u8::from(front)))
                 .flags(flags)

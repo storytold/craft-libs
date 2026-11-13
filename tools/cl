@@ -5,7 +5,7 @@
     cl test <crate> [cargo args] [-- test args]   build the crate's tests (cargo test --no-run), then run each test binary
     cl build gallery [cargo args]                 the debug gallery binary (target/debug/craft-ui-gallery)
     cl build <crate> [cargo args]                 cargo build of the crate's lib and bins
-    cl render <crate|ui> <Component> [--card] [--story <name>] [--out <dir>] [--threads N]
+    cl render <crate|ui> <Component> [--card] [--story <name>] [--out <dir>] [--threads N] [--theme <id>] [--mode light|dark]
                                                   the component's stories (--card: its Overview cards) as PNGs through the story-render bin
     cl features <crate>                           print the --features value cl adds for <crate>
     cl doctor                                     check the manifests for drift from the one feature resolution
@@ -382,7 +382,7 @@ def main():
         run(top, with_features(["build"] + selected(pkg) + own_targets(packages[pkg]), features) + args)
     if command == "render":
         if len(rest) < 2:
-            fail("cl render <crate|ui> <Component> [--card] [--story <name>] [--out <dir>] [--threads N]")
+            fail("cl render <crate|ui> <Component> [--card] [--story <name>] [--out <dir>] [--threads N] [--theme <id>] [--mode light|dark]")
         crate, component, options = rest[0], rest[1], rest[2:]
         short = crate.removeprefix("craft-")
         features = []

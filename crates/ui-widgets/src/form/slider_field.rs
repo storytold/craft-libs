@@ -92,6 +92,8 @@ pub struct SliderField<'a> {
     /// row, the Color panel's channels) instead of the number cell, and the slider takes the room it leaves.
     #[prop]
     field_sizing: Option<Sizing>,
+    /// The number field's width from this pass's measure (its `Proposal::Ideal` call, which runs before `paint`).
+    field_width: f32,
 }
 
 impl<'a> SliderField<'a> {
@@ -111,6 +113,7 @@ impl<'a> SliderField<'a> {
             track_face: None,
             thumb: SliderThumb::Round,
             field_sizing: None,
+            field_width: 0.0,
         }
         .label(label)
     }
@@ -263,6 +266,9 @@ impl Component for SliderField<'_> {
         let look = self.look();
         let slider = cx.child("slider", &mut look.slider(&name, shown, None, None), Proposal::Ideal);
         let field = cx.child("field", &mut look.field(&name, shown, None), Proposal::Ideal);
+        if cx.proposal == Proposal::Ideal {
+            self.field_width = field.x;
+        }
         match self.layout {
             SliderFieldLayout::Inline => Vec2::new(slider.x + cx.style.inline_gap + field.x, slider.y.max(field.y)),
             SliderFieldLayout::Stacked => Vec2::new(slider.x.max(cx.style.width), cx.style.row.max(field.y) + cx.gap() + slider.y),
@@ -280,10 +286,7 @@ impl Component for SliderField<'_> {
         let (track, field) = match self.layout {
             // The field takes the width its own measure gives (a number cell, or its widest value when content-sized),
             // so every row of a column with the same range ends its slider at one place.
-            SliderFieldLayout::Inline => {
-                let width = ui.measure("field", &mut look.field(&name, shown, None), Proposal::Ideal).x;
-                arrange(cx.rect.size(), cx.style.inline_gap, width)
-            }
+            SliderFieldLayout::Inline => arrange(cx.rect.size(), cx.style.inline_gap, self.field_width),
             SliderFieldLayout::Stacked => stack(cx.rect.size(), cx.style.metrics.gap, cx.style.row),
         };
         let flow = Flow::new(cx.rect, cx.env.direction().is_rtl());

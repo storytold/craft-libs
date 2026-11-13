@@ -2217,7 +2217,6 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn clipped<R>(&mut self, rect: Rect, paint: impl FnOnce(&mut Self) -> R) -> R`. Runs `paint` with this `PaintUi` cut to `rect` (inside the clip already in force), as `Draw::clipped` does for a
   - `pub fn with_style<R>(&self, variant: Variant, f: impl FnOnce(&StyleCx<'_>) -> R) -> R`. Runs `f` with the style context of this component's env, so app hooks called from `paint` pick colours and
   - `pub fn child<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, child: C) -> C::Output`. Shows a child component at a physical rect, with id `cx.key(key)`. The child `Ui` is pinned left to
-  - `pub fn measure<C: Show>(&self, key: impl Hash + Debug, child: &mut C, proposal: craft_behavior::Proposal) -> egui::Vec2`. Measures a child under the composite's resolved `enabled` and `size`, as [`child`](Self::child) with the same key will show it: for a composite that places its children by their size.
   - `pub fn inner<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, child: C) -> C::Output`. Shows `child` as the owner's own control, such as a picker the owner draws its field with. The child's node
   - `pub fn child_with_tip<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, child: C, tip: impl FnOnce(&mut Ui)) -> C::Output`. Shows a child with rich tooltip content.
   - `pub fn labelled<C: Show>(&mut self, key: impl Hash + Debug, rect: Rect, label: Label, side: SideLabel, child: C) -> C::Output`. Runs the label step (B2) for one leaf child at `rect`: the label's placement beside or above the child, the
@@ -4124,6 +4123,7 @@ Text dumps for tests: ordered `key = value` lines compared exactly with a file, 
   - `pub fn in_room(&mut self, room: Room) -> &mut Self`. The room of a host kind: the same as [`Fixture::room`] with that kind's size.
   - `pub fn direction(&mut self, direction: Direction) -> &mut Self`. The layout direction.
   - `pub fn theme(&mut self, mode: Mode, contrast: Contrast) -> &mut Self`. Light or dark, and standard or high contrast.
+  - `pub fn theme_id(&mut self, theme: ThemeId) -> &mut Self`. The theme: one of the built-ins (`craft.adwaita`) or one a test registered.
   - `pub fn motion(&mut self, motion: MotionMode) -> &mut Self`. The motion mode.
   - `pub fn text_size(&mut self, text_size: TextSize) -> &mut Self`. The text-size step.
   - `pub fn density(&mut self, density: Size) -> &mut Self`. The density preset.

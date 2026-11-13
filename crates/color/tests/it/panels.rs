@@ -130,32 +130,35 @@ fn the_cubes_take_the_room_the_readout_and_the_strip_leave() {
 }
 
 /// The slider modes show each channel on one line: its slider and its number field side by side, every slider starting
-/// at one x past the channels' letters. The ramp is the footer under the rows: whole and in view
-/// in a short group too, where the rows scroll above it.
+/// at one x past the channels' letters. The rows come first and stay in view in a short group; the ramp under them
+/// takes the room they leave.
 #[trial]
 fn the_slider_modes_show_a_channel_on_one_line() {
-    for room in [COLOR_ROOM, Vec2::new(280.0, 96.0)] {
-        for (mode, channels) in [(ColorPanelMode::RgbSliders, 3), (ColorPanelMode::CmykSliders, 4), (ColorPanelMode::HsbSliders, 3)] {
-            let case = format!("{mode:?} in {room:?}");
-            let rig = PanelRig::in_room(mode, room);
-            let sliders = rig.fixture.by_role(Role::SLIDER);
-            let fields = rig.fixture.by_role(Role::SPIN_BUTTON);
-            assert_eq!((sliders.len(), fields.len()), (channels, channels), "{case}");
-            for (slider, field) in sliders.iter().zip(&fields) {
-                let line = slider.rect.y_range();
-                assert!(
-                    line.contains(field.rect.center().y) && slider.rect.right() <= field.rect.left(),
-                    "{case}: {slider:?} then {field:?} on one line"
-                );
-                assert!(
-                    (slider.rect.left() - sliders[0].rect.left()).abs() < 0.5,
-                    "{case}: the sliders start at one x ({slider:?}, {:?})",
-                    sliders[0]
-                );
-            }
-            let ramp = rig.fixture.by_label("Color Ramp").expect("the ramp");
-            assert!(ramp.rect.top() >= -0.5 && ramp.rect.bottom() <= room.y + 0.5, "{case}: the ramp whole and in view ({:?})", ramp.rect);
-            assert!(sliders[0].rect.top() < ramp.rect.top(), "{case}: the ramp under the rows ({:?}, {:?})", sliders[0].rect, ramp.rect);
+    let (rgb, cmyk, hsb) = ((ColorPanelMode::RgbSliders, 3), (ColorPanelMode::CmykSliders, 4), (ColorPanelMode::HsbSliders, 3));
+    // A Pro Color group's default height holds three rows and a band of the ramp.
+    let short = Vec2::new(280.0, 96.0);
+    for (room, (mode, channels)) in [(COLOR_ROOM, rgb), (COLOR_ROOM, cmyk), (COLOR_ROOM, hsb), (short, rgb), (short, hsb)] {
+        let case = format!("{mode:?} in {room:?}");
+        let rig = PanelRig::in_room(mode, room);
+        let sliders = rig.fixture.by_role(Role::SLIDER);
+        let fields = rig.fixture.by_role(Role::SPIN_BUTTON);
+        assert_eq!((sliders.len(), fields.len()), (channels, channels), "{case}");
+        for (slider, field) in sliders.iter().zip(&fields) {
+            let line = slider.rect.y_range();
+            assert!(line.contains(field.rect.center().y) && slider.rect.right() <= field.rect.left(), "{case}: {slider:?} then {field:?} on one line");
+            assert!(
+                (slider.rect.left() - sliders[0].rect.left()).abs() < 0.5,
+                "{case}: the sliders start at one x ({slider:?}, {:?})",
+                sliders[0]
+            );
+            assert!(field.rect.bottom() <= room.y + 0.5, "{case}: every row in view ({field:?})");
+        }
+        let last = fields.iter().map(|field| field.rect.bottom()).fold(0.0, f32::max);
+        let ramp = rig.fixture.by_label("Color Ramp").expect("the ramp").rect;
+        assert!(ramp.top() >= last && ramp.height() > 0.0, "{case}: the ramp under the rows ({last}, {ramp:?})");
+        assert!(ramp.bottom() <= room.y + 0.5, "{case}: the ramp in view ({ramp:?})");
+        if room == COLOR_ROOM {
+            assert!(ramp.bottom() > room.y - 40.0, "{case}: the ramp takes the room the rows leave ({ramp:?})");
         }
     }
 }
