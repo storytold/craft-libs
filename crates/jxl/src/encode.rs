@@ -1,6 +1,9 @@
+#[cfg(not(target_arch = "wasm32"))]
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use crate::{Error, ImageRef, Layout, Metadata, Result, Samples};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::Layout;
+use crate::{Error, ImageRef, Metadata, Result, Samples};
 
 /// Encoder search effort.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

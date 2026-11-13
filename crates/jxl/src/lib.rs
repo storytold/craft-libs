@@ -26,6 +26,19 @@ pub enum Layout {
     Rgba,
 }
 
+/// Color encoding requested for rendered pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OutputColor {
+    /// Use `jxl-oxide`'s default rendering target and report its rendered profile.
+    #[default]
+    DecoderDefault,
+    /// For files with enum color encoding, render linear Rec. 2020. XYB files render to linear
+    /// sRGB first and are converted to Rec. 2020 to avoid a `jxl-oxide` wide-gamut XYB issue.
+    /// Files with an embedded ICC profile remain rendered in that profile's space; the source
+    /// ICC is returned in [`Metadata::icc`] because this crate does not bundle an ICC CMS.
+    LinearRec2020,
+}
+
 impl Layout {
     /// Number of interleaved channels.
     pub const fn channels(self) -> usize {
@@ -151,7 +164,7 @@ impl Default for DecodeLimits {
 
 /// Decode the first image frame.
 #[cfg(feature = "decode")]
-pub use decode::decode;
+pub use decode::{decode, decode_with_color};
 /// Encode a JPEG XL image.
 #[cfg(feature = "encode")]
 pub use encode::{Effort, EncodeOptions, HDR_REFERENCE_WHITE_NITS, JxlColour, encode};

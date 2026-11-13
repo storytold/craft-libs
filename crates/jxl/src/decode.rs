@@ -1,8 +1,9 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+use jxl_oxide::color::{ColourSpace, EnumColourEncoding, Primaries, RenderingIntent, TransferFunction, WhitePoint};
 use jxl_oxide::{AllocTracker, AuxBoxData, InitializeResult, JxlImage};
 
-use crate::{DecodeLimits, Decoded, Error, Layout, Metadata, Result};
+use crate::{DecodeLimits, Decoded, Error, Layout, Metadata, OutputColor, Result};
 
 const INPUT_CHUNK: usize = 4096;
 const TRACKED_BYTES_PER_PIXEL: u64 = 4 * 4 * 8;
@@ -15,11 +16,16 @@ const MIN_TRACKED_BYTES: u64 = 64 << 20;
 /// caller. Header data is fed in small chunks so the dimensions are checked before the rest of
 /// the codestream is loaded.
 pub fn decode(bytes: &[u8], limits: DecodeLimits) -> Result<Decoded> {
-    catch_unwind(AssertUnwindSafe(|| decode_inner(bytes, limits)))
+    decode_with_color(bytes, limits, OutputColor::DecoderDefault)
+}
+
+/// Decode the first image frame using an explicit rendered-pixel color target.
+pub fn decode_with_color(bytes: &[u8], limits: DecodeLimits, output_color: OutputColor) -> Result<Decoded> {
+    catch_unwind(AssertUnwindSafe(|| decode_inner(bytes, limits, output_color)))
         .unwrap_or_else(|_| Err(Error::Malformed("decoder failed while reading this file".into())))
 }
 
-fn decode_inner(bytes: &[u8], limits: DecodeLimits) -> Result<Decoded> {
+fn decode_inner(bytes: &[u8], limits: DecodeLimits, output_color: OutputColor) -> Result<Decoded> {
     if bytes.len() > limits.max_input_bytes {
         return Err(Error::LimitExceeded(format!("{} input bytes exceed the {} byte input limit", bytes.len(), limits.max_input_bytes)));
     }
@@ -64,10 +70,27 @@ fn decode_inner(bytes: &[u8], limits: DecodeLimits) -> Result<Decoded> {
     }
     image.finalize().map_err(decode_error)?;
 
-    let header = image.image_header();
-    let bit_depth = header.metadata.bit_depth.bits_per_sample() as u8;
-    let float_samples = matches!(header.metadata.bit_depth, jxl_oxide::image::BitDepth::FloatSample { .. });
-    let grayscale = header.metadata.grayscale();
+    let (bit_depth, float_samples, grayscale, source_orientation, xyb_encoded) = {
+        let metadata = &image.image_header().metadata;
+        (
+            metadata.bit_depth.bits_per_sample() as u8,
+            matches!(metadata.bit_depth, jxl_oxide::image::BitDepth::FloatSample { .. }),
+            metadata.grayscale(),
+            metadata.orientation,
+            metadata.xyb_encoded,
+        )
+    };
+    let source_icc = image.original_icc().map(ToOwned::to_owned);
+    let via_srgb = output_color == OutputColor::LinearRec2020 && source_icc.is_none() && !grayscale && xyb_encoded;
+    if output_color == OutputColor::LinearRec2020 && source_icc.is_none() {
+        image.request_color_encoding(EnumColourEncoding {
+            colour_space: if grayscale { ColourSpace::Grey } else { ColourSpace::Rgb },
+            white_point: WhitePoint::D65,
+            primaries: if via_srgb { Primaries::Srgb } else { Primaries::Bt2100 },
+            tf: TransferFunction::Linear,
+            rendering_intent: RenderingIntent::Relative,
+        });
+    }
     let colors = if grayscale { 1 } else { 3 };
     let pixel_format = image.pixel_format();
     if pixel_format.has_black() {
@@ -87,7 +110,11 @@ fn decode_inner(bytes: &[u8], limits: DecodeLimits) -> Result<Decoded> {
     if channels < colors || (has_alpha && channels < keep) {
         return Err(Error::Malformed("decoded frame has too few channels".into()));
     }
-    let frame_pixels = (buffer.width() as u128) * (buffer.height() as u128);
+    let (rendered_width, rendered_height) = (
+        u32::try_from(buffer.width()).map_err(|_| Error::LimitExceeded("rendered width exceeds 32-bit dimensions".into()))?,
+        u32::try_from(buffer.height()).map_err(|_| Error::LimitExceeded("rendered height exceeds 32-bit dimensions".into()))?,
+    );
+    let frame_pixels = u128::from(rendered_width) * u128::from(rendered_height);
     if frame_pixels != u128::from(pixels) {
         return Err(Error::Malformed("decoded frame dimensions do not match the image header".into()));
     }
@@ -96,11 +123,18 @@ fn decode_inner(bytes: &[u8], limits: DecodeLimits) -> Result<Decoded> {
     let mut out = Vec::new();
     out.try_reserve_exact(sample_count).map_err(|e| Error::LimitExceeded(format!("cannot reserve decoded pixels: {e}")))?;
     for pixel in buffer.buf().chunks_exact(channels) {
+        let start = out.len();
         out.extend_from_slice(&pixel[..keep]);
+        if via_srgb {
+            let [r, g, b] = [out[start], out[start + 1], out[start + 2]];
+            out[start] = 0.627_403_9 * r + 0.329_283_04 * g + 0.043_313_067 * b;
+            out[start + 1] = 0.069_097_29 * r + 0.919_540_4 * g + 0.011_362_316 * b;
+            out[start + 2] = 0.016_391_44 * r + 0.088_013_31 * g + 0.895_595_25 * b;
+        }
     }
 
     let metadata = Metadata {
-        icc: image.original_icc().map(ToOwned::to_owned),
+        icc: source_icc,
         exif: match image.aux_boxes().first_exif() {
             Ok(AuxBoxData::Data(exif)) => Some(exif.payload().to_vec()),
             _ => None,
@@ -111,17 +145,17 @@ fn decode_inner(bytes: &[u8], limits: DecodeLimits) -> Result<Decoded> {
         },
     };
     Ok(Decoded {
-        width,
-        height,
+        width: rendered_width,
+        height: rendered_height,
         layout,
         bit_depth,
         float_samples,
         pixels: out,
         metadata,
-        source_orientation: header.metadata.orientation,
+        source_orientation,
         rendered_cicp: image.rendered_cicp(),
         rendered_icc: image.rendered_icc(),
-        xyb_encoded: header.metadata.xyb_encoded,
+        xyb_encoded,
     })
 }
 
