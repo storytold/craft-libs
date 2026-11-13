@@ -51,6 +51,14 @@ pub const DOM_VERSION: &str = "16.0";
 /// The namespace of the `idPkg` prefix.
 pub const PACKAGING_NS: &str = "http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging";
 
+/// Writes the bounded XMP metadata packet used by an IDML package. Dates are already normalized
+/// ISO-8601 values supplied by the caller; this function owns the XML vocabulary and envelope.
+pub fn xmp_metadata(create_date: &str, modify_date: &str) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n  <rdf:Description rdf:about=\"\" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\">\n   <xmp:CreateDate>{create_date}</xmp:CreateDate>\n   <xmp:ModifyDate>{modify_date}</xmp:ModifyDate>\n  </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>\n"
+    )
+}
+
 /// Why a package was not read or not written.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
