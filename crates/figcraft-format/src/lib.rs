@@ -1,6 +1,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 //! The neutral JSON header and version contract for FigCraft's native project format.
 //! App-specific document fields remain a generic flattened payload.
+pub mod library;
 use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
