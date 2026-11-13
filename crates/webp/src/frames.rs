@@ -100,7 +100,7 @@ pub fn read_frames(bytes: &[u8], limits: &FrameLimits) -> Result<Animation, Fram
         return Err(FrameError::LimitExceeded(format!("a {}x{} canvas is over {} bytes", info.width, info.height, limits.max_canvas_bytes)));
     }
     let malformed = |e: image::ImageError| FrameError::Malformed(e.to_string());
-    let mut decoder = WebPDecoder::new(Cursor::new(bytes)).map_err(malformed)?;
+    let decoder = WebPDecoder::new(Cursor::new(bytes)).map_err(malformed)?;
     let (width, height) = decoder.dimensions();
     if !decoder.has_animation() {
         let mut rgba = vec![0u8; usize::try_from(canvas).map_err(|_| FrameError::LimitExceeded("canvas".into()))?];
