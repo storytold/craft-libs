@@ -472,6 +472,12 @@ pub fn detect(name: &str, bytes: &[u8]) -> Option<Format> {
     if bytes.starts_with(b"\0\xffKA") {
         return Some(Format::Affinity);
     }
+    // The short `.af` alias is accepted only as an explicit Affinity filename. Treating it as
+    // a generic image based on unrelated pixel bytes makes misspelled native documents appear
+    // to open successfully as flat previews.
+    if extension(name).is_some_and(|ext| ext.eq_ignore_ascii_case("af")) {
+        return Some(Format::Affinity);
+    }
     if let Some(raster) = raster_signature(bytes) {
         return Some(raster);
     }
