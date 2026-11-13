@@ -67,6 +67,74 @@ pub struct ParagraphBoxValues {
     pub shading_corners: Option<[(String, f64); 4]>,
 }
 
+/// Paragraph alignment, spacing, drop cap, baseline grid and composer values after the caller
+/// maps application semantics to IDML enumerations.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ParagraphAlignmentValues {
+    pub justification: Option<String>,
+    pub direction: Option<String>,
+    pub kashidas: Option<String>,
+    pub paragraph_justification: Option<String>,
+    pub paragraph_kashida_width: Option<f64>,
+    pub left_indent: Option<f64>,
+    pub right_indent: Option<f64>,
+    pub first_line_indent: Option<f64>,
+    pub last_line_indent: Option<f64>,
+    pub space_before: Option<f64>,
+    pub space_after: Option<f64>,
+    pub same_para_style_spacing: Option<Option<f64>>,
+    pub drop_cap_lines: Option<f64>,
+    pub drop_cap_chars: Option<f64>,
+    pub dropcap_detail: Option<u32>,
+    pub grid_alignment: Option<String>,
+    pub grid_align_first_line_only: Option<bool>,
+    pub composer: Option<String>,
+}
+
+impl ParagraphAlignmentValues {
+    /// Writes the IDML attributes for paragraph alignment and spacing.
+    pub fn to_attrs(&self) -> Vec<(String, String)> {
+        let mut attrs = Vec::new();
+        for (key, value) in [
+            ("Justification", &self.justification),
+            ("ParagraphDirection", &self.direction),
+            ("Kashidas", &self.kashidas),
+            ("ParagraphJustification", &self.paragraph_justification),
+            ("GridAlignment", &self.grid_alignment),
+            ("Composer", &self.composer),
+        ] {
+            if let Some(value) = value {
+                attrs.push((key.to_string(), value.clone()));
+            }
+        }
+        for (key, value) in [
+            ("ParagraphKashidaWidth", self.paragraph_kashida_width),
+            ("LeftIndent", self.left_indent),
+            ("RightIndent", self.right_indent),
+            ("FirstLineIndent", self.first_line_indent),
+            ("LastLineIndent", self.last_line_indent),
+            ("SpaceBefore", self.space_before),
+            ("SpaceAfter", self.space_after),
+            ("DropCapLines", self.drop_cap_lines),
+            ("DropCapCharacters", self.drop_cap_chars),
+        ] {
+            if let Some(value) = value {
+                attrs.push((key.to_string(), crate::value::num(value)));
+            }
+        }
+        if let Some(value) = self.same_para_style_spacing {
+            attrs.push(("SameParaStyleSpacing".to_string(), value.map(crate::value::num).unwrap_or_else(|| "Nothing".to_string())));
+        }
+        if let Some(value) = self.dropcap_detail {
+            attrs.push(("DropcapDetail".to_string(), value.to_string()));
+        }
+        if let Some(value) = self.grid_align_first_line_only {
+            attrs.push(("GridAlignFirstLineOnly".to_string(), if value { "true" } else { "false" }.to_string()));
+        }
+        attrs
+    }
+}
+
 impl ParagraphBoxValues {
     /// Writes IDML attributes and properties for paragraph borders and shading.
     pub fn to_parts(&self) -> (Vec<(String, String)>, Vec<El>) {
