@@ -486,7 +486,10 @@ fn image_resolver_for(limits: Limits, used: Arc<Used>) -> usvg::ImageHrefResolve
             if let Some(format) = format {
                 return raster_image(&used, &limits, data, format);
             }
-            if matches!(mime, "image/jpg" | "image/jpeg" | "image/png" | "image/gif" | "image/webp") {
+            // usvg can decode only the raster variants above. Count every other declared
+            // image as an invalid raster so strict consumers can reject it instead of
+            // silently accepting a document after the image was omitted (for example BMP).
+            if mime.starts_with("image/") && mime != "image/svg+xml" {
                 used.invalid_raster.fetch_add(1, Ordering::Relaxed);
             }
             match mime {
