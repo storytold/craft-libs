@@ -37,8 +37,10 @@ pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
         let mut counts = vec![];
         let mut n = 0usize;
         let mut in_q = false;
+        let mut field_start = true;
         let mut blank = true;
-        for ch in text.chars().take(64 * 1024) {
+        let mut chars = text.chars().take(64 * 1024).peekable();
+        while let Some(ch) = chars.next() {
             if !in_q && ch == '\n' {
                 // Blank lines carry no delimiter evidence.
                 if !blank {
@@ -46,6 +48,7 @@ pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
                 }
                 n = 0;
                 blank = true;
+                field_start = true;
                 if counts.len() >= 20 {
                     break;
                 }
@@ -54,10 +57,22 @@ pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
             if ch != '\r' {
                 blank = false;
             }
-            if ch == quote {
-                in_q = !in_q;
-            } else if !in_q && ch == d {
+            if in_q {
+                if ch == quote {
+                    if chars.peek() == Some(&quote) {
+                        chars.next();
+                    } else {
+                        in_q = false;
+                    }
+                }
+            } else if ch == quote && field_start {
+                in_q = true;
+                field_start = false;
+            } else if ch == d {
                 n += 1;
+                field_start = true;
+            } else if ch != '\r' {
+                field_start = false;
             }
         }
         if !blank {
