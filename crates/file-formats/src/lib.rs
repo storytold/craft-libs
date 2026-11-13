@@ -202,7 +202,7 @@ impl Format {
             Self::Iff => &["iff", "lbm", "ilbm"],
             Self::Ase => &["ase"],
             Self::Psd => &["psd", "psb", "psdt"],
-            Self::Affinity => &["afdesign", "afphoto", "afpub"],
+            Self::Affinity => &["afdesign", "afphoto", "afpub", "af"],
             Self::Ora => &["ora"],
             Self::Kra => &["kra"],
             Self::Xcf => &["xcf"],
