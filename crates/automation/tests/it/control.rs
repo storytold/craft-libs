@@ -5,6 +5,7 @@ use std::net::TcpStream;
 use std::sync::mpsc::channel;
 use std::time::Duration;
 
+use craft_automation::client::ControlClient;
 use craft_automation::control::{ControlChannel, ControlRequest, Reply, expired_error, result_reply, timeout_error};
 use craft_automation::security::MAX_REQUEST_BYTES;
 use craft_automation::server;
@@ -118,4 +119,59 @@ fn an_over_long_request_is_refused_and_closes_the_connection() {
     assert!(reply["error"].as_str().expect("an error").starts_with("request exceeds"), "{reply}");
     assert!(read_json(&mut reader).is_none(), "the connection is closed");
     assert!(rx.try_recv().is_err());
+}
+
+/// Sends one state of a states file and saves its capture as `<label>-<id>.png`: the client sample of
+/// docs/porting.md, section 6.4.
+fn capture_state(client: &mut ControlClient, doc: &Value, state: &Value, label: &str) -> Result<Value, String> {
+    let set = |client: &mut ControlClient, method: &str, params: Value| client.call(method, params).map(|_| ());
+    set(client, "ui.resize", doc["size"].clone())?;
+    set(client, "ui.set", json!({"theme": doc["theme"]}))?;
+    for step in state["steps"].as_array().into_iter().flatten() {
+        client.call(step["method"].as_str().ok_or("a step needs a method")?, step["params"].clone())?;
+    }
+    let id = state["id"].as_str().ok_or("a state needs an id")?;
+    client.call("ui.screenshot", json!({"path": format!("{label}-{id}.png")}))
+}
+
+/// The documented states-file client sends the set-up requests and each step in order, then asks for the capture,
+/// against a server and a method table built as the guide shows.
+#[trial]
+fn the_documented_capture_client_sends_setup_steps_and_capture() {
+    let (requests, addr) = server::start(0, TOKEN.into(), host()).expect("started");
+    let doc = json!({
+        "size": {"width": 1280, "height": 800},
+        "theme": "pro",
+        "states": [{"id": "pencil", "title": "Pencil tool", "steps": [{"method": "ui.set", "params": {"tool": "Pencil"}}]}],
+    });
+    let client_doc = doc.clone();
+    let client = std::thread::spawn(move || {
+        let mut client = ControlClient::connect(addr, TOKEN).expect("connected");
+        capture_state(&mut client, &client_doc, &client_doc["states"][0], "new")
+    });
+    let mut channel = ControlChannel::new(requests);
+    let mut seen: Vec<String> = Vec::new();
+    let started = motion::now();
+    while seen.len() < 4 && started.elapsed() < Duration::from_secs(10) {
+        while let Some(req) = channel.next_request() {
+            seen.push(format!("{} {}", req.method, req.params));
+            let reply = match req.method.as_str() {
+                "ui.screenshot" => Reply::from_result(Ok(json!({"path": req.params["path"], "width": 1280, "height": 800}))),
+                _ => Reply::from_result(Ok(Value::Null)),
+            };
+            channel.settle(req, reply, None, 0.0);
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let reply = client.join().expect("client ran").expect("the capture replied");
+    assert_eq!(
+        seen,
+        [
+            r#"ui.resize {"height":800,"width":1280}"#,
+            r#"ui.set {"theme":"pro"}"#,
+            r#"ui.set {"tool":"Pencil"}"#,
+            r#"ui.screenshot {"path":"new-pencil.png"}"#,
+        ]
+    );
+    assert_eq!(reply, json!({"path": "new-pencil.png", "width": 1280, "height": 800}));
 }

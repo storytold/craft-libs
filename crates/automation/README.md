@@ -12,7 +12,7 @@ Drive a running Craft app from tests, agents and the CLI, and record and play ac
 | `control` | `ControlRequest`, `Reply`, `Dispatch` and `ControlChannel`: the UI-thread side that drains requests between frames, replies after injected input or a background job settles, and admits screenshots. The app supplies the method table. |
 | `synthetic` | `Click`, `KeyPress` and `move_from_params`: the validated parameters of `ui.click`, `ui.move` and `ui.key`, queued through `WindowHost::inject_*` one step per pass. |
 | `server` | `start`: the loopback TCP listener that authenticates each connection and forwards requests to the channel. |
-| `client` | `ControlClient`: connect, authenticate, call, screenshot; for integration tests and CLIs. |
+| `client` | `ControlClient`: connect, authenticate, call (a screenshot is `call("ui.screenshot", ..)`); for integration tests and CLIs. |
 | `screenshot` | `Captures`: the bounded, cancellable screenshot queue over `WindowHost::screenshot`, with settling, geometry epochs, retries and the PNG reply. |
 | `profiler` | `FrameStages` and `SlowFrames`: where a frame's time went, the slow ones kept for the control channel's `perf` output and one log line a second. |
 | `trace` | `FrameTrace`: every frame of a gesture (a brush stroke, a drag) as a row, a percentile summary per gesture, optional CSV. |

@@ -115,11 +115,136 @@ Before editing, the owner writes a short plan: the mechanism, the files, and how
 
 The old app is the visual reference, but not automatically right: judge each difference on its own (old better, new better, or both need work).
 
-- Script each state so it can be reproduced: a state is a reset, then steps sent through the app's control channel (`craft-automation`), such as opening a panel, setting a value, opening a dialog. Keep the states in a file per panel or dialog.
+- Script each state so it can be reproduced: a state is a reset, then steps sent through the app's control channel ([craft-automation](../crates/automation/README.md)), such as opening a panel, setting a value, opening a dialog. Keep the states in a file per panel or dialog.
 - Capture each state in the old app and in the port, side by side, at the same size and theme.
 - Shapes, colours, borders, glyphs and parts match; exact pixel values may differ. Nothing overlaps or cuts into a neighbour.
 - A difference from the old needs a reason: a standardized framework mechanism, or one way replacing an old inconsistency.
 - Repeat until the done-when states match.
+
+#### What the library gives and what the app adds
+
+`craft-automation` provides the transport, the authentication, the request queue, the screenshot queue and a few methods. The app provides the method table.
+
+| Part | Library (`craft_automation`) | App |
+|---|---|---|
+| Command-line values | `args::ControlOptions`, `EnvNames` | Parses its own flags and calls `ControlOptions::resolve` |
+| Transport | `server::start`, `ControlClient` | Calls `start`, owns the `ControlChannel` |
+| Request queue, replies | `ControlChannel`, `Reply`, `result_reply` | Runs each request and returns a `Reply` |
+| Input methods | `synthetic::Click`, `KeyPress`, `move_from_params`: the checked parameters of `ui.click`, `ui.key`, `ui.move` | Dispatches the method names to them |
+| Dialog methods | `dialogs`: `ui.dialog.set`, `ui.dialog.confirm`, `ui.dialog.cancel` and the dialog list | Dispatches them; may add `ui.dialog.open` for its own dialog kinds |
+| Screenshots | `Captures` (the bounded queue), `screenshot_reply`, PNG encoding | Allocates a token for `ui.screenshot`, drives the queue each frame, supplies the file writer |
+| View and window state | nothing | Methods such as `ui.set` (tool, panels, theme), `ui.resize`, `engine.execute` |
+
+Not provided yet, so the porter supplies each today:
+
+- a capture tool: a small client program (the sample below) that reads a states file, sends the steps and saves the PNGs;
+- a states-file format and its runner (the sample below defines one);
+- window-size, theme and reset methods: each app defines its own (PhotoCraft: `ui.resize`, `ui.set {theme}`);
+- a picture comparison: place the two PNGs side by side with any image tool.
+
+#### Expose the control channel in the app
+
+The app starts the server once and keeps the channel on its UI thread.
+
+```rust
+use craft_automation::args::{ControlOptions, EnvNames};
+use craft_automation::control::ControlChannel;
+use craft_automation::server;
+use craft_ui::runtime::windows::WindowHost;
+
+// At start: `flags` holds what the app's own parser read for --control, --control-token
+// and --control-token-file (a value of the right type, or None).
+let names = EnvNames::for_app("MYAPP"); // MYAPP_CONTROL_PORT, MYAPP_CONTROL_TOKEN, ...
+let options = ControlOptions::resolve(flags, &names)?;
+if let Some(port) = options.port {
+    let token = options.server_token()?;
+    eprintln!("myapp: {}", options.token_notice(&token));
+    // Port 0 lets the OS pick; the address is the one a client needs.
+    let (requests, addr) = server::start(port, token, WindowHost::of(&egui_ctx))?;
+    eprintln!("myapp: control server listening on {addr}");
+    app.control = Some(ControlChannel::new(requests));
+}
+```
+
+Each frame, in the logic phase, the app runs the queued requests. In the UI phase of a real pass it issues due screenshots; in the logic phase it collects finished ones (PhotoCraft's `crates/ui-egui/src/app/control.rs` on the `spike/framework-sample` branch is a complete example).
+
+```rust
+use craft_automation::control::{Reply, result_reply};
+use craft_automation::screenshot::{CaptureGeometry, settle_ms};
+use craft_ui::runtime::motion;
+
+// Logic phase.
+let Some(mut channel) = self.control.take() else { return };
+let document = self.document_identity(); // None when the app has no document identity
+channel.captures.note_geometry(CaptureGeometry::from_facts(WindowHost::of(ctx).screenshot_facts(), document));
+let observed = channel.captures.last_geometry();
+let finished = channel.captures.drain(motion::now(), observed, document);
+channel.finish_captures(finished, &mut |path, bytes| self.write_automation_file(path, bytes));
+let settle = settle_ms(ctx.global_style().animation_time);
+while let Some(req) = channel.next_request() {
+    let reply = match req.method.as_str() {
+        "ui.screenshot" => Reply::screenshot(self.next_capture_token(), path_param(&req.params)),
+        "ui.resize" => { /* send ViewportCommand::InnerSize */ Reply::from_result(Ok(json!(null))) }
+        "ui.set" => Reply::from_result(self.ui_set(&req.params)),
+        other => Reply::from_result(Err(format!("unknown method {other}"))),
+    };
+    channel.settle(req, reply, document, settle);
+}
+self.control = Some(channel);
+
+// UI phase of a real pass: count it for settling, record the geometry, then issue what is due.
+channel.captures.note_pass();
+let finished = channel.captures.issue(&WindowHost::of(ctx), motion::now(), document);
+```
+
+`write_automation_file` is the app's file authority: it must refuse paths outside the folder the app lets automation write to. A `ui.screenshot` without a `path` returns the PNG as base64 in the reply.
+
+#### States file
+
+A state is a title and steps. Each step is one request: a method and its parameters. The methods below are PhotoCraft's (`ui.set`, `ui.resize`, `ui.dialog.open`, `engine.execute`) and the library's (`ui.click`, `ui.key`, `ui.dialog.*`); use the ones the app registers.
+
+```json
+{
+  "size": { "width": 1280, "height": 800 },
+  "theme": "pro",
+  "states": [
+    { "id": "default", "title": "Default", "steps": [] },
+    { "id": "pencil", "title": "Pencil tool", "steps": [
+        { "method": "ui.set", "params": { "tool": "Pencil" } } ] },
+    { "id": "about", "title": "About dialog", "steps": [
+        { "method": "ui.dialog.open", "params": { "kind": "about" } } ] },
+    { "id": "click", "title": "Pointer at a canvas position", "steps": [
+        { "method": "ui.click", "params": { "x": 640, "y": 400 } } ] }
+  ]
+}
+```
+
+Before each state the client sends the same two set-up requests (`ui.resize`, then `ui.set {theme}`), so both apps render at one size and theme. A state that leaves a dialog open ends with its `ui.dialog.cancel` before the next one.
+
+#### Take the captures
+
+The client connects with `ControlClient`, sends each state's steps and asks for a capture with `ui.screenshot {path}`. The `path` is relative to the folder the app lets automation write to.
+
+```rust
+use craft_automation::client::ControlClient;
+use serde_json::{Value, json};
+
+/// Sends one state of the states file and saves its capture as `<label>-<id>.png`.
+fn capture_state(client: &mut ControlClient, doc: &Value, state: &Value, label: &str) -> Result<Value, String> {
+    let set = |client: &mut ControlClient, method: &str, params: Value| client.call(method, params).map(|_| ());
+    set(client, "ui.resize", doc["size"].clone())?;
+    set(client, "ui.set", json!({"theme": doc["theme"]}))?;
+    for step in state["steps"].as_array().into_iter().flatten() {
+        client.call(step["method"].as_str().ok_or("a step needs a method")?, step["params"].clone())?;
+    }
+    let id = state["id"].as_str().ok_or("a state needs an id")?;
+    client.call("ui.screenshot", json!({"path": format!("{label}-{id}.png")}))
+}
+```
+
+The reply is `{"path", "width", "height"}`. Run it once per app: start the old app and the port each with `--control 0` and a token file, read the address each prints (`control server listening on 127.0.0.1:<port>`), connect, and call `capture_state` for every state with the labels `old` and `new`. Check that both replies give the same `width` and `height`; a different size means the window did not reach the requested size, and the pair is not comparable.
+
+Send the steps with `ControlClient::call`: a call returns after the input it queued was processed, so the next step sees its result. After a state's steps, `ui.screenshot` waits until open and close animations settle before it captures.
 
 ### 6.5 Tests
 
@@ -178,13 +303,11 @@ At the end of a batch of tasks (a "wave"):
 
 ### State file
 
+The file format, the methods and the runner are in [6.4](#64-compare-old-and-new). One state:
+
 ```json
-[
-  { "id": "default", "title": "Default", "steps": [ { "method": "ui.panel.open", "params": { "panel": "brush-settings" } } ] },
-  { "id": "tip-open", "title": "Tip shape open", "steps": [
-      { "method": "ui.panel.open", "params": { "panel": "brush-settings" } },
-      { "method": "ui.click", "params": { "label": "Brush Tip Shape" } } ] }
-]
+{ "id": "tip-open", "title": "Tip shape open", "steps": [
+    { "method": "ui.set", "params": { "tool": "Brush" } } ] }
 ```
 
 The method names come from the app's control channel; use the ones it registers.
