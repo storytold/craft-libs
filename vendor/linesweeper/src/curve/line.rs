@@ -224,6 +224,17 @@ mod tests {
     }
 
     #[test]
+    fn subnormal_height() {
+        let h = 1e-310;
+        let l0 = Line::new((0.0, 0.0), (0.0, h));
+        let l1 = Line::new((1.0, 0.0), (1.0, h));
+        let order = intersect_lines(l0, l1, 1e-6);
+        assert_eq!(order.cmps.len(), 1);
+        assert_eq!(order.cmps[0].order, Order::Left);
+        assert_eq!(order.cmps[0].end, h);
+    }
+
+    #[test]
     fn close_near_endpoint() {
         let l0 = Line::new((0.0, 0.0), (0.0, 1.0));
         let l1 = Line::new((1e-7, 0.0), (-1.0, 1.0));

@@ -487,7 +487,8 @@ impl Segment {
                     p1.x
                 } else {
                     // On an axis where the segment is more than f64::MAX
-                    // long, work with half of each coordinate.
+                    // long, work with half of each height, and take the
+                    // weighted sum of the x coordinates.
                     let dy = p1.y - p0.y;
                     let t = if dy.is_finite() {
                         (y - p0.y) / dy
@@ -498,8 +499,7 @@ impl Segment {
                     if dx.is_finite() {
                         p0.x + t * dx
                     } else {
-                        let half_step = t * (p1.x * 0.5 - p0.x * 0.5);
-                        p0.x + half_step + half_step
+                        (1.0 - t) * p0.x + t * p1.x
                     }
                 }
             }
@@ -604,5 +604,16 @@ mod tests {
         let seg = Segment::straight(Point::new(-s, 0.0), Point::new(s, 3.0 * tiny));
         let x = seg.at_y(tiny);
         assert!((x + s / 3.0).abs() <= 1e-15 * s, "{x}");
+    }
+
+    #[test]
+    fn line_wider_than_f64_max_with_uneven_ends() {
+        let left = -(2.0f64.powi(1023));
+        let seg = Segment::straight(Point::new(left, 0.0), Point::new(f64::MAX, 1.0));
+        assert_eq!(seg.at_y(0.0), left);
+        assert_eq!(seg.at_y(1.0), f64::MAX);
+        let x = seg.at_y(0.5);
+        let expected = f64::MAX * 0.5 + left * 0.5;
+        assert!((x - expected).abs() <= 1e-15 * f64::MAX, "{x}");
     }
 }

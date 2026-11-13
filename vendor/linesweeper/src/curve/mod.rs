@@ -1307,32 +1307,58 @@ fn fit_quadratic(c: CubicBez) -> Quadratic {
     // the heights times the power of two `s` that brings the largest height to
     // between 2 and 4, and scale the coefficients back at the end. Multiplying
     // by a power of two is exact for normal numbers, and multiplying by 1
-    // changes nothing.
-    let max_y = [p0.y, p1.y, p2.y, p3.y]
-        .iter()
-        .fold(0.0f64, |m, y| m.max(y.abs()));
-    let s = if max_y > f64::from_bits((1023 + 500) << 52) && max_y.is_finite() {
-        // The biased exponent of max_y is in 1523..=2046, so s is 2^(1 - exponent).
-        let biased_exp = (max_y.to_bits() >> 52) & 0x7ff;
-        f64::from_bits((2047 - biased_exp) << 52)
-    } else {
-        1.0
-    };
-    let p = interpolate_quadratic(p0.y * s, p0.x, p1.y * s, p1.x, p2.y * s, p2.x);
+    // changes nothing. The interpolation divides each x coordinate by a product
+    // of two height differences, which overflows for x coordinates near f64::MAX
+    // once the heights are scaled down, so the x coordinates are scaled the same
+    // way when one of them is above 2^500.
+    let ys = [p0.y, p1.y, p2.y, p3.y];
+    let xs = [p0.x, p1.x, p2.x, p3.x];
+    let k_s = pow2_scale_exponent(&ys);
+    let k_r = pow2_scale_exponent(&xs);
+    let s = pow2(k_s);
+    let r = pow2(k_r);
+    let p = interpolate_quadratic(p0.y * s, p0.x * r, p1.y * s, p1.x * r, p2.y * s, p2.x * r);
     let q = interpolate_quadratic(p0.y * s, 1.0, p1.y * s, -1.0, p2.y * s, 1.0);
 
     // Note that the denominator won't be small (assuming that p0.y, p1.y, p2.y,
     // p3.y are ordered), because q(p2.y) is 1, and q has already had two sign
     // changes before p2.y, so it can't change sign again.
-    let e = (p.eval(p3.y * s) - p3.x) / (q.eval(p3.y * s) + 1.0);
+    let e = (p.eval(p3.y * s) - p3.x * r) / (q.eval(p3.y * s) + 1.0);
 
     let p = p.coeffs();
     let q = q.coeffs();
     Quadratic::new([
-        p[0] - q[0] * e,
-        (p[1] - q[1] * e) * s,
-        (p[2] - q[2] * e) * s * s,
+        mul_pow2(p[0] - q[0] * e, -k_r),
+        mul_pow2(p[1] - q[1] * e, k_s - k_r),
+        mul_pow2(p[2] - q[2] * e, 2 * k_s - k_r),
     ])
+}
+
+/// Returns the exponent `k` for which `2^k` times the largest absolute value in
+/// `vals` is between 2 and 4, if that value is finite and above 2^500, and 0
+/// otherwise. The result is in `-1022..=-500` or is 0.
+fn pow2_scale_exponent(vals: &[f64]) -> i32 {
+    let max = vals.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+    if max > f64::from_bits((1023 + 500) << 52) && max.is_finite() {
+        // The biased exponent of max is in 1523..=2046.
+        let biased_exp = ((max.to_bits() >> 52) & 0x7ff) as i32;
+        1024 - biased_exp
+    } else {
+        0
+    }
+}
+
+/// Returns 2^k for k in `-1022..=1023`.
+fn pow2(k: i32) -> f64 {
+    debug_assert!((-1022..=1023).contains(&k));
+    f64::from_bits(((k + 1023) as u64) << 52)
+}
+
+/// Returns `c` times 2^k for k in `-2044..=2046`, in two steps so that no
+/// intermediate value overflows or underflows unless the result does.
+fn mul_pow2(c: f64, k: i32) -> f64 {
+    let half = k / 2;
+    c * pow2(half) * pow2(k - half)
 }
 
 #[allow(dead_code)]
@@ -2295,6 +2321,29 @@ mod test {
                 "c = {c}: {:?}",
                 out.entries
             );
+        }
+    }
+
+    #[test]
+    fn fit_quadratic_with_huge_x() {
+        // A vertical curve at x with y(t) = h * t^3, which a quadratic in y fits
+        // with the constant x.
+        for x in [1e307, -1e307, 5e307] {
+            for h in [1.0, 2.0f64.powi(501), 1e300] {
+                let c = CubicBez::new((x, 0.0), (x, 0.0), (x, 0.0), (x, h));
+                let q = fit_quadratic(c);
+                assert!(
+                    q.coeffs().iter().all(|c| c.is_finite()),
+                    "x = {x}, h = {h}: {q:?}"
+                );
+                for y in [0.0, 0.25 * h, 0.5 * h, h] {
+                    let fx = q.eval(y);
+                    assert!(
+                        (fx - x).abs() <= 1e-9 * x.abs(),
+                        "x = {x}, h = {h}, y = {y}: {fx}"
+                    );
+                }
+            }
         }
     }
 
