@@ -23,6 +23,12 @@ pub fn inspect(host: &DialogHost) -> Value {
         .collect()
 }
 
+/// Whether `params.dialog` names an open dialog of `host`, so an app that lists dialogs of its own beside the host's
+/// knows which of them a `ui.dialog.*` request is for.
+pub fn names_open_dialog(host: &DialogHost, params: &Value) -> bool {
+    dialog(host, Params(params)).is_ok()
+}
+
 /// Runs a `ui.dialog.*` method on `host`; `None` when `method` is not one of them.
 ///
 /// - `ui.dialog.set {dialog, field, value}` sets one field ([`DialogHost::set_json_field`]).

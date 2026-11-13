@@ -1,6 +1,6 @@
 //! `ui.dialog.*` on typed dialogs through one generic path.
 
-use craft_automation::dialogs::{dialog_method, inspect};
+use craft_automation::dialogs::{dialog_method, inspect, names_open_dialog};
 use craft_ui::contract::{Bind, SaveKey};
 use craft_ui::dialog::{DialogHost, DialogResult, PromptChoice, PromptKind, StandardPrompt};
 use craft_ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind};
@@ -50,6 +50,9 @@ fn dialog_methods_read_set_and_answer_typed_dialogs() {
     // can't be applied, so the default answer is refused too. The id may also come as a number.
     host.open(StandardPrompt::confirm_delete(["Layer 1"], 1));
     let delete: u64 = inspect(&host)[0]["id"].as_str().and_then(|id| id.parse().ok()).expect("a decimal id");
+    // An app with dialogs of its own beside the host's learns which ones a request names.
+    assert!(names_open_dialog(&host, &json!({"dialog": delete})) && names_open_dialog(&host, &json!({"dialog": delete.to_string()})));
+    assert!(!names_open_dialog(&host, &json!({"dialog": 7})) && !names_open_dialog(&host, &json!({"dialog": "shell"})));
     assert!(call(&mut host, &ctx, "ui.dialog.set", json!({"dialog": delete, "field": "choice", "value": "alternate"})).is_err());
     assert!(host.cancel::<StandardPrompt>(&ctx));
     host.take::<StandardPrompt>();
