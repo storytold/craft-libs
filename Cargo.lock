@@ -2106,6 +2106,7 @@ dependencies = [
 name = "craft-raster-codecs"
 version = "0.1.0"
 dependencies = [
+ "image",
  "rayon",
  "thiserror 2.0.21",
 ]
@@ -2341,6 +2342,14 @@ version = "0.1.0"
 dependencies = [
  "craft-xml",
  "kurbo 0.13.1",
+]
+
+[[package]]
+name = "craft-versioned-json"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
