@@ -78,6 +78,15 @@ impl<'a> Archive<'a> {
         Ok(Some(name.into_owned()))
     }
 
+    /// Whether the entry at `index` is a directory according to ZIP filename conventions.
+    pub fn entry_is_dir(&mut self, index: usize) -> Result<Option<bool>, Error> {
+        if index >= self.zip.len() {
+            return Ok(None);
+        }
+        let file = self.zip.by_index_raw(index).map_err(|error| Error::NotZip(error.to_string()))?;
+        Ok(Some(file.is_dir()))
+    }
+
     /// Do two entries share a name? `zip` then keeps one of them, and which one a writer meant
     /// is not known: a format that must not guess refuses the archive.
     pub fn has_duplicate_names(&self) -> bool {

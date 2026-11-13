@@ -95,10 +95,11 @@ pub fn read_bundle(bytes: &[u8], limits: BundleLimits) -> Result<(String, HashMa
     let mut session = None;
     let mut files = HashMap::new();
     for index in 0..len {
-        let name = archive.entry_name(index).map_err(zip_error)?.ok_or_else(|| BundleError::Invalid("missing entry".into()))?;
-        if name.ends_with('/') {
+        let is_dir = archive.entry_is_dir(index).map_err(zip_error)?.ok_or_else(|| BundleError::Invalid("missing entry".into()))?;
+        if is_dir {
             continue;
         }
+        let name = archive.entry_name(index).map_err(zip_error)?.ok_or_else(|| BundleError::Invalid("missing entry".into()))?;
         let is_session = !name.contains('/') && Path::new(&name).extension().and_then(OsStr::to_str) == Some(SESSION_EXTENSION);
         let size = archive.declared_size(&name).ok_or_else(|| BundleError::Invalid(format!("{name}: missing entry")))?;
         if is_session && session.is_none() {

@@ -231,11 +231,14 @@ mod tests {
         zip.write_all(b"1").unwrap();
         zip.start_file("second", opts).unwrap();
         zip.write_all(b"2").unwrap();
+        zip.start_file("folder\\", opts).unwrap();
         let bytes = zip.finish().unwrap().into_inner();
 
-        let mut archive = Archive::open(&bytes, Limits { max_entries: 2, max_total_bytes: 10 }).unwrap();
+        let mut archive = Archive::open(&bytes, Limits { max_entries: 3, max_total_bytes: 10 }).unwrap();
         assert_eq!(archive.entry_name(0).unwrap().as_deref(), Some("first"));
         assert_eq!(archive.entry_name(1).unwrap().as_deref(), Some("second"));
-        assert_eq!(archive.entry_name(2).unwrap(), None);
+        assert_eq!(archive.entry_is_dir(2).unwrap(), Some(true));
+        assert_eq!(archive.entry_name(2).unwrap().as_deref(), Some("folder\\"));
+        assert_eq!(archive.entry_name(3).unwrap(), None);
     }
 }
