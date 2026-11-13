@@ -580,6 +580,49 @@ fn cross(a: crate::model::Point, b: crate::model::Point) -> crate::model::Point 
 mod spline_tests {
     use super::*;
     use crate::model::Spline;
+    use kurbo::ParamCurveNearest;
+
+    // The previous importer accepted cubic fits based on seven fixed probes, then bisected the
+    // parameter interval. Keep this test-only reference to compare real legacy output with the
+    // conservative fit used by craft-dxf.
+    fn prior_fit(path: &mut BezPath, bezier: &[Homogeneous], t0: f64, t1: f64, tolerance: f64, depth: u32) -> Option<()> {
+        let (p0, d0) = eval_spline_bezier(bezier, t0)?;
+        let (p3, d3) = eval_spline_bezier(bezier, t1)?;
+        let h = (t1 - t0) / 3.0;
+        let (c1, c2) = (p0 + d0 * h, p3 - d3 * h);
+        if ![c1, c2].iter().all(|point| point.x.is_finite() && point.y.is_finite()) {
+            path.line_to(p3);
+            return Some(());
+        }
+        let cubic = kurbo::CubicBez::new(p0, c1, c2, p3);
+        let close = (1..8).all(|i| {
+            let t = f64::from(i) / 8.0;
+            eval_spline_bezier(bezier, t0 + (t1 - t0) * t).is_some_and(|(point, _)| kurbo::ParamCurve::eval(&cubic, t).distance(point) <= tolerance)
+        });
+        if close || depth >= MAX_SPLINE_DEPTH || path.elements().len() >= MAX_SPLINE_ELEMENTS {
+            path.curve_to(c1, c2, p3);
+            return Some(());
+        }
+        let midpoint = (t0 + t1) / 2.0;
+        prior_fit(path, bezier, t0, midpoint, tolerance, depth + 1)?;
+        prior_fit(path, bezier, midpoint, t1, tolerance, depth + 1)
+    }
+
+    fn legacy_path(bezier: &[Homogeneous], tolerance: f64) -> BezPath {
+        let mut path = BezPath::new();
+        let start = eval_spline_bezier(bezier, 0.0).expect("legacy start point").0;
+        path.move_to(start);
+        prior_fit(&mut path, bezier, 0.0, 1.0, tolerance, 0).expect("legacy fit succeeds");
+        path
+    }
+
+    fn sampled_path_distance(from: &BezPath, to: &BezPath, tolerance: f64) -> f64 {
+        let target: Vec<_> = to.segments().collect();
+        from.segments()
+            .flat_map(|segment| (0..=32).map(move |i| kurbo::ParamCurve::eval(&segment, f64::from(i) / 32.0)))
+            .map(|point| target.iter().map(|segment| segment.nearest(point, tolerance / 100.0).distance_sq.sqrt()).fold(f64::INFINITY, f64::min))
+            .fold(0.0_f64, f64::max)
+    }
 
     fn cubic() -> Spline {
         Spline {
@@ -719,5 +762,35 @@ mod spline_tests {
             .map(|point| (point.distance(center) - 100.0).abs())
             .fold(0.0_f64, f64::max);
         assert!(max_radial_error < 0.01, "prior importer tolerance was 0.01; got {max_radial_error}");
+    }
+
+    #[test]
+    fn bounded_spline_fit_matches_prior_rational_and_high_degree_geometry() {
+        let weight = std::f64::consts::FRAC_1_SQRT_2;
+        let curves = [
+            vec![Homogeneous { x: 1.0, y: 0.0, w: 1.0 }, Homogeneous { x: weight, y: weight, w: weight }, Homogeneous { x: 0.0, y: 1.0, w: 1.0 }],
+            vec![
+                Homogeneous { x: 0.0, y: 0.0, w: 1.0 },
+                Homogeneous { x: 0.2, y: 2.0, w: 0.7 },
+                Homogeneous { x: 0.5, y: -2.0, w: 0.9 },
+                Homogeneous { x: 0.8, y: 2.0, w: 1.2 },
+                Homogeneous { x: 1.0, y: 0.0, w: 1.0 },
+            ],
+        ];
+        for bezier in curves {
+            let points: Vec<_> = bezier.iter().map(|point| point.point().expect("finite source point")).collect();
+            let (lo, hi) = points.iter().fold((points[0], points[0]), |(lo, hi), point| {
+                (Point::new(lo.x.min(point.x), lo.y.min(point.y)), Point::new(hi.x.max(point.x), hi.y.max(point.y)))
+            });
+            let tolerance = ((hi - lo).hypot() * SPLINE_TOLERANCE).max(1e-12);
+            let mut current = BezPath::new();
+            current.move_to(points[0]);
+            let mut limit_hit = false;
+            fit_spline(&mut current, &bezier, tolerance, 0, &mut limit_hit).expect("bounded fit succeeds");
+            assert!(!limit_hit);
+            let prior = legacy_path(&bezier, tolerance);
+            let difference = sampled_path_distance(&prior, &current, tolerance).max(sampled_path_distance(&current, &prior, tolerance));
+            assert!(difference <= 2.1 * tolerance, "legacy/new Hausdorff sample distance {difference} exceeds 2.1 × tolerance {tolerance}");
+        }
     }
 }
