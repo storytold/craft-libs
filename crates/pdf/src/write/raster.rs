@@ -54,6 +54,177 @@ pub struct Page {
     pub plates: Vec<SpotPlate>,
 }
 
+/// A device color used by neutral vector content.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DeviceColor {
+    Gray(f64),
+    Rgb([f64; 3]),
+    Cmyk([f64; 4]),
+}
+
+/// The fill rule for a neutral vector path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContentFillRule {
+    NonZero,
+    EvenOdd,
+}
+
+/// Path geometry independent of a drawing application's model.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PathElement {
+    MoveTo([f64; 2]),
+    LineTo([f64; 2]),
+    CubicTo([f64; 2], [f64; 2], [f64; 2]),
+    Close,
+}
+
+/// A centered, device-space stroke on a vector path.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContentStroke {
+    pub color: DeviceColor,
+    pub width: f64,
+    pub cap: u8,
+    pub join: u8,
+    pub miter_limit: f64,
+    pub dashes: Vec<f64>,
+    pub dash_offset: f64,
+}
+
+/// One path whose fill and stroke are emitted by the shared PDF writer.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ContentPath {
+    pub elements: Vec<PathElement>,
+    pub fill: Option<(DeviceColor, ContentFillRule)>,
+    pub stroke: Option<ContentStroke>,
+}
+
+/// Typed vector/text content. Callers provide model geometry and text spans; this crate alone
+/// turns the commands into PDF content-stream syntax.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ContentOp {
+    Save,
+    Restore,
+    Concat([f64; 6]),
+    Path(ContentPath),
+    BeginSelectionLine,
+    SelectionText { actual_text: String, encoded: String, matrix: [f64; 6] },
+    EndSelectionLine,
+}
+
+/// Vector and selectable-text commands layered over a raster page.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct VectorContent {
+    pub operations: Vec<ContentOp>,
+}
+
+/// Serialize typed vector content to a PDF content stream. `None` means a number or operator
+/// parameter was invalid; malformed commands are never written into the document.
+pub fn encode_vector_content(content: &VectorContent) -> Option<String> {
+    let mut out = String::new();
+    for operation in &content.operations {
+        match operation {
+            ContentOp::Save => out.push_str("q\n"),
+            ContentOp::Restore => out.push_str("Q\n"),
+            ContentOp::Concat(matrix) => {
+                finite(matrix)?;
+                writeln!(out, "{} {} {} {} {} {} cm", matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5]).ok()?;
+            }
+            ContentOp::Path(path) => write_content_path(&mut out, path)?,
+            ContentOp::BeginSelectionLine => out.push_str("BT\n3 Tr\n/FSelect 1 Tf\n"),
+            ContentOp::SelectionText { actual_text, encoded, matrix } => {
+                finite(matrix)?;
+                writeln!(out, "/Span << /ActualText <{}> >> BDC", actual_text_hex(actual_text)).ok()?;
+                writeln!(out, "{} {} {} {} {} {} Tm", matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5]).ok()?;
+                writeln!(out, "<{encoded}> Tj\nEMC").ok()?;
+            }
+            ContentOp::EndSelectionLine => out.push_str("ET\n"),
+        }
+    }
+    Some(out)
+}
+
+/// Serialize pages with typed vector content. Invalid vector commands return `None`.
+pub fn write_pages_with_vector_content(
+    pages: &[Page],
+    vectors: &[VectorContent],
+    selection_font: &SelectionFont,
+    xmp: Option<&str>,
+) -> Option<Vec<u8>> {
+    let encoded: Option<Vec<String>> = vectors.iter().map(encode_vector_content).collect();
+    encoded.map(|content| write_pages(pages, &content, selection_font, xmp))
+}
+
+fn finite(values: &[f64]) -> Option<()> {
+    values.iter().all(|value| value.is_finite()).then_some(())
+}
+
+fn write_content_path(out: &mut String, path: &ContentPath) -> Option<()> {
+    if let Some((color, _)) = path.fill {
+        write_device_color(out, color, false)?;
+    }
+    if let Some(stroke) = &path.stroke {
+        write_device_color(out, stroke.color, true)?;
+        finite(&[stroke.width, stroke.miter_limit, stroke.dash_offset])?;
+        finite(&stroke.dashes)?;
+        writeln!(out, "{} w {} J {} j {} M", stroke.width, stroke.cap, stroke.join, stroke.miter_limit).ok()?;
+        out.push('[');
+        for dash in &stroke.dashes {
+            write!(out, "{dash} ").ok()?;
+        }
+        writeln!(out, "] {} d", stroke.dash_offset).ok()?;
+    }
+    for element in &path.elements {
+        match element {
+            PathElement::MoveTo(point) => {
+                finite(point)?;
+                writeln!(out, "{} {} m", point[0], point[1]).ok()?;
+            }
+            PathElement::LineTo(point) => {
+                finite(point)?;
+                writeln!(out, "{} {} l", point[0], point[1]).ok()?;
+            }
+            PathElement::CubicTo(a, b, c) => {
+                finite(a)?;
+                finite(b)?;
+                finite(c)?;
+                writeln!(out, "{} {} {} {} {} {} c", a[0], a[1], b[0], b[1], c[0], c[1]).ok()?;
+            }
+            PathElement::Close => out.push_str("h\n"),
+        }
+    }
+    match (path.fill, path.stroke.is_some()) {
+        (Some((_, ContentFillRule::NonZero)), false) => out.push_str("f\n"),
+        (Some((_, ContentFillRule::EvenOdd)), false) => out.push_str("f*\n"),
+        (None, true) => out.push_str("S\n"),
+        (Some((_, ContentFillRule::NonZero)), true) => out.push_str("B\n"),
+        (Some((_, ContentFillRule::EvenOdd)), true) => out.push_str("B*\n"),
+        (None, false) => return None,
+    }
+    Some(())
+}
+
+fn write_device_color(out: &mut String, color: DeviceColor, stroke: bool) -> Option<()> {
+    let (values, operator): (&[f64], &str) = match color {
+        DeviceColor::Gray(value) => (&[value], if stroke { "G" } else { "g" }),
+        DeviceColor::Rgb(values) => (&values, if stroke { "RG" } else { "rg" }),
+        DeviceColor::Cmyk(values) => (&values, if stroke { "K" } else { "k" }),
+    };
+    finite(values)?;
+    for value in values {
+        write!(out, "{value} ").ok()?;
+    }
+    writeln!(out, "{operator}").ok()?;
+    Some(())
+}
+
+fn actual_text_hex(text: &str) -> String {
+    let mut hex = String::from("FEFF");
+    for code in text.encode_utf16() {
+        let _ = write!(hex, "{code:04X}");
+    }
+    hex
+}
+
 /// The RDF namespace used by PDF XMP packets.
 pub const RDF_NAMESPACE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 
