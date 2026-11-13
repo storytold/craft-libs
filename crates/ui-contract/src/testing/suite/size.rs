@@ -44,17 +44,20 @@ impl Shot {
         self.runs.iter().filter(|run| !run.elided && !run.text.trim().is_empty()).map(|run| (run.text.as_str(), run.rect)).collect()
     }
 
-    /// Whether `rect`, painted under `clip`, lies in what the story shows: its shown rect, or the open layer that clips
-    /// it. A run of the story's own area keeps the room's clip, so an open layer over it does not count.
+    /// Whether `rect`, painted under `clip`, lies whole inside its clip and in what the story shows: its shown rect, or
+    /// the open layer that clips it. A run of the story's own area keeps the room's clip, so an open layer over it does
+    /// not count.
     fn shows(&self, rect: Rect, clip: Rect) -> bool {
-        inside(rect, self.shown) || self.layers.iter().any(|layer| inside(clip, *layer) && inside(rect, *layer))
+        inside(rect, clip) && (inside(rect, self.shown) || self.layers.iter().any(|layer| inside(clip, *layer) && inside(rect, *layer)))
     }
 
     /// The text run at `run` stays in its part: it lies in what the story shows, or a scroll region's view cuts it. A
     /// run in a scroll region's content shows through the region's view, so it stays in its part when the whole run
-    /// lies in the content, which scrolls, and what the view shows of it in what the story shows.
+    /// lies in the content, which scrolls, and what the view shows of it in what the story shows. A run painted under
+    /// an empty clip is not shown at all (a bar member its view cuts moves to the overflow menu), so it cuts nothing.
     fn keeps(&self, run: Rect, clip: Rect) -> bool {
-        self.shows(run, clip)
+        !clip.is_positive()
+            || self.shows(run, clip)
             || self
                 .scrolls
                 .iter()
@@ -133,7 +136,7 @@ fn text_size_from(story: &Story, base: Shot) -> Result<(), String> {
         if !(grows_with(before.x - slack, size.x) && (moved || grows_with(before.y - slack, size.y))) {
             return Err(format!("{}: under {name} the size went from {before:?} to {size:?}", story.name));
         }
-        for run in base.runs.iter().filter(|run| !run.elided && !run.text.trim().is_empty() && inside(run.rect, base.shown)) {
+        for run in base.runs.iter().filter(|run| !run.elided && !run.text.trim().is_empty() && base.keeps(run.rect, run.clip)) {
             for same in grown.runs.iter().filter(|other| other.text == run.text) {
                 // A run the component painted elided is shortened by design and keeps its full text in the access name
                 // (the elision rule checks that), so it is not cut; it must still stay inside its part.

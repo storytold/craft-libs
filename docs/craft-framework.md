@@ -995,7 +995,7 @@ A theme with its own shape replaces the radii or adds an offset to control, surf
 | `size.thumb.sample.sm`, `size.thumb.sample.md`, `size.thumb.sample.lg` | The sample beside each thumbnail size choice in a panel's options dialog (Layers, Channels, Paths): larger than the panel's thumbnails, so the choices read apart (`PictureSize::Sample`) |
 | `space.gap.*`, `space.pad.*` | Gaps between and padding inside components |
 
-Both size sets (`crates/theme/sizes/compact.json` and `comfortable.json`) hold every role above. NumberField is at least `size.length.number` at its control size wide; apps set other widths per field.
+Both size sets (`crates/theme/sizes/compact.json` and `comfortable.json`) hold every role above. A field holds a number of characters, so `size.length.field`, `size.length.number` and `size.length.short` grow with the text size by the same factor as the type; `size.length.track` holds no text and keeps its length. NumberField is at least `size.length.number` at its control size wide; apps set other widths per field.
 
 ## Appendix B. Crate and module layout
 
