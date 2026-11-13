@@ -84,7 +84,7 @@ pub trait RasterSource {
     /// answer covers every change since then, including those of passes the display did not run in.
     fn damage(&self, since: Revision) -> Option<PixelRect>;
 
-    /// Writes the composite of `region` into `out` (sRGBA, unmultiplied), one texel per `factor` pixels each way
+    /// Writes the composite of `region` into `out` (sRGBA, premultiplied), one texel per `factor` pixels each way
     /// (`factor` is a power of two for a detail texture and `texture_factor` of `primitives::textures` for the base
     /// one; 1 is full resolution). `out` is already `region / factor` texels, rounded up. The region lies inside the
     /// document unless the display reaches past it ([`Extent::Region`](super::Extent::Region)): then it may start
