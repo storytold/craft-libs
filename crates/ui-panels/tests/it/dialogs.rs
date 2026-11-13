@@ -1,13 +1,17 @@
 //! The dialog host and stack.
 
+use craft_behavior::{Metrics, PartKey, Sense};
+use craft_host::target::WindowChrome;
 use craft_ui::contract::overlay::show_beside_modal;
-use craft_ui::contract::{Bind, ShowContainer as _};
+use craft_ui::contract::{Bind, Common, Component, Cx, MeasureCx, PartsCx, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::dialog::stories::hosted;
 use craft_ui::dialog::{Alert, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, PromptKind, StackDialog, StandardPrompt, dialog_id};
 use craft_ui::popover::Popover;
 use craft_ui::runtime::overlay::{family, is_top_modal};
+use craft_ui::runtime::windows::{WindowHit, WindowHost};
+use craft_ui::style::{ComponentStyle, StyleCx};
 use craft_ui::testing::{Fixture, Frames, Story, StoryData, StoryOutput, trial};
-use egui::{Context, Id, LayerId, Order, Ui, vec2};
+use egui::{Context, Id, LayerId, Order, Rect, Response, Ui, Vec2, ViewportId, vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -126,17 +130,59 @@ fn show_app_dialog(ctx: &Context, id: DialogId, app: &AppDialogs) {
     });
 }
 
-/// A fixture that shows every dialog of `host` in one walk, the app's through `show_app_dialog`.
+/// Shows every dialog of `host` in one walk, the app's through `show_app_dialog`.
+fn walk(ui: &mut Ui, host: &RefCell<DialogHost>, app: &AppDialogs) {
+    let mut walk = host.borrow_mut().walk(ui.ctx());
+    loop {
+        let step = host.borrow_mut().next_beside(ui, &mut walk);
+        let Some(step) = step else { break };
+        step.at_place(ui.ctx(), || show_app_dialog(ui.ctx(), step.id, app));
+    }
+}
+
+/// A fixture that shows every dialog of `host` in one walk.
 fn walking(host: &Rc<RefCell<DialogHost>>, app: &Rc<AppDialogs>) -> Fixture {
     let (host, app) = (Rc::clone(host), Rc::clone(app));
-    Fixture::new(move |ui| {
-        let mut walk = host.borrow_mut().walk(ui.ctx());
-        loop {
-            let step = host.borrow_mut().next_beside(ui, &mut walk);
-            let Some(step) = step else { break };
-            step.at_place(ui.ctx(), || show_app_dialog(ui.ctx(), step.id, &app));
-        }
-    })
+    Fixture::new(move |ui| walk(ui, &host, &app))
+}
+
+const BAND: PartKey = PartKey::new("band");
+
+/// A style with no look.
+#[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+struct PlainStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+}
+
+/// An app's own title bar: one drag area of the window.
+#[derive(craft_ui::contract::Component)]
+struct DragBar {
+    #[common]
+    common: Common,
+}
+
+impl Component for DragBar {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: DragBarStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        vec2(400.0, 32.0)
+    }
+
+    fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
+        cx.part(BAND, rect).sense(Sense::DRAG).exclusive(WindowHit::Move).pointer_only("the window command set moves the window");
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
 }
 
 /// A dialog the app draws itself stacks at its place on the host's stack: above the host's dialog it opened over,
@@ -179,6 +225,31 @@ fn app_dialogs_draw_and_take_input_at_their_stack_place() {
     fixture.idle(4);
     assert_eq!(host.borrow_mut().take::<HostedAlert>(), Some(DialogResult::Cancel), "the child closes with the app's dialog");
     assert!(host.borrow().is_open::<StandardPrompt>(), "the dialog under it stays");
+}
+
+/// A hosted modal over the window's title bar shows drag strips above itself, which lift its family into the modal
+/// chrome class; a dialog the app opens over it still stacks above it.
+#[trial]
+fn an_app_dialog_stacks_over_a_hosted_modal_with_drag_strips() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let app = Rc::new(AppDialogs::default());
+    let (shown, drawn) = (Rc::clone(&host), Rc::clone(&app));
+    let mut fixture = Fixture::new(move |ui| {
+        DragBar { common: Common::new() }.id_salt("bar").show(ui);
+        walk(ui, &shown, &drawn);
+    });
+    fixture.chrome(WindowChrome::Integrated);
+    let own = dialog_id(("app", 1));
+    host.borrow_mut().open(StandardPrompt::new(PromptKind::TrashMask));
+    fixture.idle(6);
+    let ctx = fixture.ctx().clone();
+    let moves = || WindowHost::of(&ctx).caption_regions(ViewportId::ROOT).map_or(0, |regions| regions.moves.len());
+    assert!(moves() > 1, "the hosted modal shows a drag strip over the bar");
+    host.borrow_mut().open_beside(own, None);
+    fixture.idle(6);
+    assert!(is_top_modal(&ctx, own), "the app's dialog opened over the hosted modal is the top modal");
+    let centre = ctx.content_rect().center();
+    assert_eq!(ctx.layer_id_at(centre), Some(LayerId::new(Order::Foreground, app_modal(own))), "the app's dialog draws on top");
 }
 
 /// One walk shows every open dialog once per pass, the host's and the app's alike.

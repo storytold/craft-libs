@@ -621,10 +621,11 @@ fn families(entries: &[OpenEntry], raised: &HashMap<Id, u64>) -> Vec<Vec<OpenEnt
     let class = |members: &Vec<OpenEntry>| members.iter().map(|member| member.rank.class()).max().unwrap_or(0);
     groups.sort_by_key(|(root, members)| (class(members), raised.get(root).copied().unwrap_or(0)));
     // The modal families on a dialog stack take the slots the raise order gave them in the stack's order: a press
-    // on a lower dialog or a dialog replaced in place never reorders the stack's dialogs.
+    // on a lower dialog or a dialog replaced in place never reorders the stack's dialogs. A family is modal by its
+    // root, so a dialog lifted by its modal chrome swaps slots with the dialogs above it.
     let place = |members: &Vec<OpenEntry>| members.iter().filter_map(|member| member.place).min();
-    let slots: Vec<usize> =
-        (0..groups.len()).filter(|&at| class(&groups[at].1) == Rank::modal(Backdrop::None).class() && place(&groups[at].1).is_some()).collect();
+    let modal_root = |members: &Vec<OpenEntry>| members.first().is_some_and(|root| root.rank.is_modal());
+    let slots: Vec<usize> = (0..groups.len()).filter(|&at| modal_root(&groups[at].1) && place(&groups[at].1).is_some()).collect();
     let mut stacked: Vec<Vec<OpenEntry>> = slots.iter().map(|&at| std::mem::take(&mut groups[at].1)).collect();
     stacked.sort_by_key(place);
     for (at, members) in slots.into_iter().zip(stacked) {
