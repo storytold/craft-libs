@@ -22,7 +22,7 @@ pub use new_guide::{HostedNewGuideDialog, NewGuideDialog, NewGuideOutput, NewGui
 use super::color_choice::{self, ColorChoice, ColorRowTexts, apply_color_answers};
 use crate::runtime::requests::HostAnswer;
 
-use super::{FormDialog, FormDialogWords, HostRequests};
+use super::{FormDialog, HostRequests};
 use crate::canvas_data::{Guide, GuideColor};
 
 use crate::choice::Checkbox;
@@ -212,14 +212,12 @@ pub struct GuideLayoutValues {
     pub options: GuideLayoutOptions,
     /// The guides' colour.
     pub color: GuideColor,
-    /// Whether the app draws the layout while the dialog is open.
-    pub preview: bool,
 }
 
 impl GuideLayoutValues {
-    /// The values for `options` and `color`, with Preview on.
+    /// The values for `options` and `color`.
     pub fn new(options: GuideLayoutOptions, color: GuideColor) -> Self {
-        GuideLayoutValues { options, color, preview: true }
+        GuideLayoutValues { options, color }
     }
 }
 
@@ -305,43 +303,45 @@ pub struct GuideLayoutDialog<'a> {
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
     open: Option<Bind<'a, bool>>,
+    /// Binds the Preview check box to `preview`; without it every open starts with Preview on.
+    #[prop]
+    preview: Option<Bind<'a, bool>>,
 }
 
 impl<'a> GuideLayoutDialog<'a> {
     /// A dialog over `values` for the `document` measured in `units`.
     pub fn new(units: GuideUnits, document: GuideRect, values: Bind<'a, GuideLayoutValues>) -> Self {
-        GuideLayoutDialog { units, document, values, artboards: Vec::new(), existing: Vec::new(), first_key: 0, answers: Vec::new(), open: None }
+        GuideLayoutDialog {
+            units,
+            document,
+            values,
+            artboards: Vec::new(),
+            existing: Vec::new(),
+            first_key: 0,
+            answers: Vec::new(),
+            open: None,
+            preview: None,
+        }
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> GuideLayoutOutput {
-        let GuideLayoutDialog { units, document, values, artboards, existing, first_key, answers, open } = self;
+        let GuideLayoutDialog { units, document, values, artboards, existing, first_key, answers, open, preview } = self;
         let env = Env::of(ui);
         let words = env.words::<GuideDialogWords>();
-        let preview_word = env.words::<FormDialogWords>().preview.clone();
         let number_units = env.units();
-        let mut dialog = FormDialog::new(words.layout_title.clone(), values)
-            .outer_gesture(true)
-            .answers(answers)
-            .shaped(|dialog| dialog.side_buttons(true))
-            .footer_value(move |ui, values| {
-                if let Some(on) = Checkbox::new(Bind::given(values.preview)).label(preview_word.clone()).show(ui).value().copied() {
-                    values.preview = on;
-                }
-            });
+        let mut dialog = FormDialog::new(words.layout_title.clone(), values).outer_gesture(true).answers(answers).preview(preview);
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }
         let valid = RefCell::new(None::<Vec<Guide>>);
         let last = RefCell::new(None::<Vec<Guide>>);
-        let previewing = Cell::new(false);
         let measure = Measure { words: &words, numbers: &number_units, units: &units, unparsed: Cell::new(false) };
         let rows = Form { document: &document, artboards: &artboards };
         let shown = dialog.show(ui, |ui, form, values| {
             apply_color_answers(form.take_answers(), GUIDE_LAYOUT_COLOR_KEY, &mut values.color);
             measure.unparsed.set(false);
             layout_rows(ui, &measure, &rows, values, form.requests());
-            previewing.set(values.preview);
             let rects = targets(&values.options, &document, &artboards);
             let made = values.options.lines(&rects, &existing, &units, first_key, Some(values.color.rgba()));
             let remembered = form.memory::<LastValid>();
@@ -364,7 +364,7 @@ impl<'a> GuideLayoutDialog<'a> {
         let result = shown.accepted.and_then(|values| {
             valid.borrow_mut().take().map(|guides| GuideLayoutResult { options: values.options, guides, color: values.color.rgba() })
         });
-        let preview = previewing.get().then(|| last.into_inner()).flatten();
+        let preview = shown.preview_on.then(|| last.into_inner()).flatten();
         GuideLayoutOutput { response: shown.response, closed: shown.closed, result, preview, requests: shown.requests }
     }
 }

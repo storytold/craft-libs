@@ -366,7 +366,7 @@ impl<'a> ParamDialog<'a> {
             form = form.opened(open);
         }
         if preview.is_some() {
-            form = form.preview(Bind::kept());
+            form = form.preview(None);
         }
         if let Some(FooterExtra(extra)) = footer_extra {
             form = form.footer_extra(extra);

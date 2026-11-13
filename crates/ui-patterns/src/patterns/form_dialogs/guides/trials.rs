@@ -10,28 +10,37 @@ use craft_theme::Rgba;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+/// The owner-less Preview box starts on at every open: turned off, it stays off while the dialog is open only.
 #[trial]
-fn the_preview_check_box_under_the_side_buttons_edits_the_bound_values() {
-    let values = Rc::new(RefCell::new(GuideLayoutValues::default()));
+fn the_preview_check_box_under_the_side_buttons_starts_on_at_every_open() {
+    let open = Rc::new(Cell::new(true));
     let previewing = Rc::new(Cell::new(false));
-    let (held, seen) = (Rc::clone(&values), Rc::clone(&previewing));
+    let (opened, seen) = (Rc::clone(&open), Rc::clone(&previewing));
     let mut fixture = Fixture::new(move |ui| {
         let units = GuideUnits::new(UnitKind::Pixels, 3000.0, 2000.0, 300.0);
         let document = GuideRect::new(0.0, 0.0, 3000.0, 2000.0);
-        let mut values = held.borrow_mut();
-        let shown = GuideLayoutDialog::new(units, document, Bind::bound(&mut *values)).opened(Bind::given(true)).show(ui);
+        let mut values = GuideLayoutValues::default();
+        let mut is_open = opened.get();
+        let shown = GuideLayoutDialog::new(units, document, Bind::bound(&mut values)).opened(Bind::bound(&mut is_open)).show(ui);
+        opened.set(is_open);
         seen.set(shown.preview.is_some());
     });
     fixture.settle();
-    assert!(values.borrow().preview && previewing.get(), "Preview starts on and the layout previews");
+    assert!(previewing.get(), "Preview starts on and the layout previews");
     let (Some(preview), Some(ok)) = (fixture.by_label("Preview"), fixture.by_label("OK")) else {
         panic!("the Preview check box and OK are shown");
     };
     assert!(preview.rect.min.y >= ok.rect.max.y && (preview.rect.min.x - ok.rect.min.x).abs() < 0.5, "Preview sits under the buttons");
     fixture.click(&preview);
     fixture.settle();
-    assert!(!values.borrow().preview, "the click reached the bound values");
     assert!(!previewing.get(), "with Preview off the dialog previews nothing");
+    fixture.key(egui::Key::Escape, egui::Modifiers::NONE).idle(4);
+    assert!(!open.get(), "Escape closes the dialog");
+    // A closed dialog's shown memory goes after 3 passes and 0.5 s.
+    fixture.advance(1.0).idle(4);
+    open.set(true);
+    fixture.settle();
+    assert!(previewing.get(), "the next open starts with Preview on");
 }
 
 /// With a custom colour chosen, a swatch of it follows the colour list and a click on it asks the host's picker again,

@@ -134,7 +134,7 @@ impl<V: Value + Default, E: Send + 'static> StackDialog for HostedAdjustDialog<V
         let (context, resizable, remember) = (*context, *resizable, remember.clone());
         let shown = FormDialog::new(title.clone(), Bind::bound(value))
             .opened(Bind::bound(open))
-            .preview(Bind::bound(&mut *preview))
+            .preview(Some(Bind::bound(&mut *preview)))
             .shaped(move |dialog| {
                 let dialog = dialog.resizable(resizable);
                 match remember {

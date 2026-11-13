@@ -229,7 +229,7 @@ impl StackDialog for HostedLayerStyle {
         // restores the draft keeps the restored Preview.
         let previewing = draft.preview;
         let mut preview = previewing;
-        let shown = FormDialog::new(label.clone(), Bind::bound(&mut *draft)).opened(Bind::bound(open)).preview(Bind::bound(&mut preview)).show(
+        let shown = FormDialog::new(label.clone(), Bind::bound(&mut *draft)).opened(Bind::bound(open)).preview(Some(Bind::bound(&mut preview))).show(
             ui,
             |ui, _, draft| {
                 let mut body = LayerStyleDialog::new(label.clone(), draft, channel_names.as_slice())

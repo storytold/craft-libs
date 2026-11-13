@@ -9,7 +9,6 @@ use crate::runtime::focus::Initial;
 use crate::sections::{DialogRole, FooterButton};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::Ui;
-use std::sync::{Arc, Mutex, PoisonError};
 
 /// What the story dialogs hold: two check boxes whose values the story keeps between passes.
 #[doc(hidden)]
@@ -19,17 +18,7 @@ pub fn body(ui: &mut Ui, checks: &mut [bool; 2]) {
     Checkbox::new(Bind::bound(rulers)).label("Show rulers").show(ui);
 }
 
-/// A story's dialog host: the runs of a story share it, and it equals only itself, so story values hold it.
-#[derive(Clone, Default)]
-struct StoryHost(Arc<Mutex<DialogHost>>);
-
-impl PartialEq for StoryHost {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-/// A story of a hosted dialog: `open()` on the story's [`DialogHost`], which runs every pass. The story's `open` value
+/// A story of a hosted dialog: `open()` on the story's [`DialogHost`] (a story note), which runs every pass. The story's `open` value
 /// is the dialog's open state, so the card holds the dialog behind its button as it holds any story dialog: the
 /// dialog opens while the value is on, and the value goes off when the dialog closes. `knobs` holds the story values
 /// `open` reads; when they change, `open()` replaces the open dialog, so a knob reaches the dialog on screen.
@@ -47,24 +36,27 @@ pub fn hosted_with<D: StackDialog, K: PartialEq + 'static>(
     open: impl FnOnce() -> D,
     pass: impl FnOnce(&mut DialogHost),
 ) -> StoryOutput {
-    let host = data.value("host", StoryHost::default()).clone();
-    let mut host = host.0.lock().unwrap_or_else(PoisonError::into_inner);
     let wanted = *data.value("open", true);
-    let shown = data.note::<Option<K>>("knobs", None);
-    let stale = shown.as_ref() != Some(&knobs);
-    match (wanted, host.is_open::<D>()) {
+    let stale = data.note::<Option<K>>("knobs", None).as_ref() != Some(&knobs);
+    let host = data.note("host", DialogHost::new());
+    let opened = match (wanted, host.is_open::<D>()) {
         (true, is_open) if stale || !is_open => {
             host.open(open());
-            *shown = Some(knobs);
+            true
         }
         (false, true) => {
             host.cancel::<D>(ui.ctx());
+            false
         }
-        _ => {}
-    }
-    pass(&mut host);
+        _ => false,
+    };
+    pass(host);
     host.run(ui);
-    *data.value("open", true) = host.is_open::<D>();
+    let is_open = host.is_open::<D>();
+    if opened {
+        *data.note::<Option<K>>("knobs", None) = Some(knobs);
+    }
+    *data.value("open", true) = is_open;
     StoryOutput::default()
 }
 

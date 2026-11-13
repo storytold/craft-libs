@@ -60,6 +60,10 @@ impl<V> Default for Opened<V> {
     }
 }
 
+/// What the footer of an owner-less Preview check box keeps while the dialog is open: the box is off.
+#[derive(Clone, Default)]
+struct PreviewOff(bool);
+
 /// What a form body sees: the dialog's body context, whether this is the pass the dialog opened in, the answers the
 /// host gave since the last pass and the requests the body files for the host.
 pub struct FormCx<'a, 'b> {
@@ -127,8 +131,6 @@ pub struct FormOutput<V> {
 
 type FooterExtraFn<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 
-type FooterValueFn<'a, V> = Box<dyn FnMut(&mut Ui, &mut V) + 'a>;
-
 type OnResetFn<'a> = Box<dyn FnMut(&mut BodyCx<'_>) + 'a>;
 
 type ResetWithFn<'a, V> = Box<dyn Fn(&V, &V) -> V + 'a>;
@@ -163,8 +165,8 @@ pub struct FormDialog<'a, V: Value + Default> {
     closable: bool,
     accept_stays_open: bool,
     footer_extra: Option<FooterExtraFn<'a>>,
-    footer_value: Option<FooterValueFn<'a, V>>,
-    preview: Option<Bind<'a, bool>>,
+    /// The Preview check box when shown, over its owner's bind or (`None`) the footer's memory.
+    preview: Option<Option<Bind<'a, bool>>>,
     extra_buttons: Vec<FooterButton>,
     shaped: Option<Box<dyn FnOnce(Dialog<'a>) -> Dialog<'a> + 'a>>,
     answers: Vec<HostAnswer>,
@@ -191,7 +193,6 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             closable: true,
             accept_stays_open: false,
             footer_extra: None,
-            footer_value: None,
             preview: None,
             extra_buttons: Vec::new(),
             shaped: None,
@@ -281,16 +282,11 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         self
     }
 
-    /// Controls in the footer that edit the value: they run after the body and before the footer extra, and what they change is written to the bind as the body's edits are.
-    pub fn footer_value(mut self, edit: impl FnMut(&mut Ui, &mut V) + 'a) -> Self {
-        self.footer_value = Some(Box::new(edit));
-        self
-    }
-
-    /// The Preview check box over `on`, first under the buttons, which stand beside the body: the host previews the
-    /// value while it is on, and the unfiltered picture while it is held ([`FormOutput::comparing`]). A kept bind
-    /// starts on.
-    pub fn preview(mut self, on: Bind<'a, bool>) -> Self {
+    /// The Preview check box, first under the buttons, which stand beside the body: the host previews the value while
+    /// it is on, and the unfiltered picture while it is held ([`FormOutput::comparing`]). With `on`, the box reads and
+    /// writes that bind (a kept bind starts on). Without it, every open starts with the box on, and the dialog keeps
+    /// it off while it stays open.
+    pub fn preview(mut self, on: Option<Bind<'a, bool>>) -> Self {
         self.preview = Some(on);
         self
     }
@@ -345,7 +341,6 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             closable,
             accept_stays_open,
             footer_extra,
-            footer_value,
             preview,
             extra_buttons,
             shaped,
@@ -390,42 +385,35 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         if collection_body {
             dialog = dialog.collection_body();
         }
-        let changed = Rc::new(RefCell::new(None::<V>));
+        let changed = RefCell::new(None::<V>);
         let (preview_on, comparing) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(false)));
         if preview.is_some() {
             dialog = dialog.side_buttons(true);
         }
-        if footer_extra.is_some() || footer_value.is_some() || preview.is_some() {
-            let (bind, changed, name) = (Rc::clone(&bind), Rc::clone(&changed), name.clone());
+        if footer_extra.is_some() || preview.is_some() {
             let (on, held, label) = (Rc::clone(&preview_on), Rc::clone(&comparing), env.words::<FormDialogWords>().preview.clone());
-            let (mut extra, mut edit, mut preview) = (footer_extra, footer_value, preview);
+            let (mut extra, mut preview) = (footer_extra, preview);
             dialog = dialog.footer(move |ui, footer| {
-                if let Some(preview) = preview.as_mut() {
+                if let Some(owner) = preview.as_mut() {
                     let cx = footer.bar();
-                    let before = match preview.reborrow().read(cx) {
-                        Some(Mixed::Same(value)) => value,
-                        _ => true,
+                    let before = match owner.as_mut().map(|bind| bind.reborrow().read(cx)) {
+                        Some(Some(Mixed::Same(value))) => value,
+                        Some(_) => true,
+                        None => !cx.memory::<PreviewOff>().0,
                     };
                     let mut value = before;
                     let shown = Checkbox::new(Bind::bound(&mut value)).label(label.clone()).show(ui);
                     if value != before {
-                        let _ = preview.reborrow().write(cx, &EditEvent::set(Mixed::Same(before), value, label.as_str().into(), None));
+                        match owner.as_mut() {
+                            Some(bind) => {
+                                let _ = bind.reborrow().write(cx, &EditEvent::set(Mixed::Same(before), value, label.as_str().into(), None));
+                            }
+                            None => cx.memory::<PreviewOff>().0 = !value,
+                        }
                     }
                     on.set(value);
                     // The box toggles at the release: while it is held it still shows its value.
                     held.set(value && pressed(&shown.response));
-                }
-                if let Some(edit) = edit.as_mut() {
-                    let cx = footer.dialog();
-                    let mut held = bind.borrow_mut();
-                    if let Some(Mixed::Same(before)) = held.reborrow().read(cx) {
-                        let mut values = before.clone();
-                        edit(ui, &mut values);
-                        if values != before {
-                            let _ = held.reborrow().write(cx, &EditEvent::set(Mixed::Same(before), values.clone(), name.clone(), None));
-                            *changed.borrow_mut() = Some(values);
-                        }
-                    }
                 }
                 if let Some(extra) = extra.as_mut() {
                     extra(ui);
