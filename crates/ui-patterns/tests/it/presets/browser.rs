@@ -60,10 +60,10 @@ fn a_preset_released_over_the_zone_reports_drop_at_and_nothing_else_does() {
     }
 }
 
-/// A browser over `presets` presets in a 400×300 room with a footer, `room_height` set when given, and where its New
-/// Group button and its last preset are.
+/// A browser over `presets` presets in a room as narrow as a docked panel and 300 high, with a footer and
+/// `room_height` set when given, and where its New Group button and its last preset are.
 fn footer_rig(presets: u32, room_height: Option<f32>) -> (Rect, Option<Rect>) {
-    const ROOM: Rect = Rect { min: Pos2::ZERO, max: Pos2::new(400.0, 300.0) };
+    const ROOM: Rect = Rect { min: Pos2::ZERO, max: Pos2::new(250.0, 300.0) };
     let mut rows = vec![PresetRow::group(GROUP, "Group", 0)];
     rows.extend((1..=presets).map(|key| PresetRow::item(key, format!("Preset {key}"), 1)));
     let mut state = PresetState::<u32>::new();
@@ -80,6 +80,8 @@ fn footer_rig(presets: u32, room_height: Option<f32>) -> (Rect, Option<Rect>) {
     });
     fixture.room(vec2(480.0, 320.0)).settle();
     let new_group = fixture.by_label("New Group").expect("the footer's New Group button shows").rect;
+    let delete = fixture.by_label("Delete").expect("the footer's Delete button shows").rect;
+    assert!(delete.right() <= ROOM.right(), "the footer's actions fit the panel's width: {delete:?}");
     let last = fixture.by_label(&format!("Preset {presets}")).map(|target| target.rect);
     (new_group, last)
 }

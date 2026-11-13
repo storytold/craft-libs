@@ -605,9 +605,6 @@ impl FooterBar {
     fn show_footer_with<R>(mut self, ui: &mut Ui, mut leading: Option<impl FnMut(&mut Ui) -> R>) -> (FooterOutput, Option<R>) {
         let content = std::mem::take(&mut self.content);
         let (enter, column, start) = (self.enter, self.column, self.start);
-        if leading.is_some() {
-            self.props = self.props.layout(BodyLayout::row().align(RowAlign::SpaceBetween));
-        }
         let mut led = None;
         let shown = self.show(ui, |ui, _| match &content {
             Content::Body => Shown::default(),
@@ -615,15 +612,16 @@ impl FooterBar {
                 let mut shown = Shown::default();
                 let start = start.min(actions.len());
                 let from_end = || (start..actions.len()).rev();
-                if start == 0 && leading.is_none() {
+                if let Some(leading) = leading.as_mut() {
+                    // The leading controls are units of the bar's row, so they narrow to leave the actions their
+                    // width; the end group fills the rest.
+                    led = Some(leading(ui));
+                    show_actions(ui, actions, 0..start, &mut shown);
+                    Row::new().fill_width().align(RowAlign::End).show(ui, |ui, _| show_actions(ui, actions, from_end(), &mut shown));
+                } else if start == 0 {
                     show_actions(ui, actions, from_end(), &mut shown);
                 } else {
-                    Row::new().show(ui, |ui, _| {
-                        if let Some(leading) = leading.as_mut() {
-                            led = Some(leading(ui));
-                        }
-                        show_actions(ui, actions, 0..start, &mut shown);
-                    });
+                    Row::new().show(ui, |ui, _| show_actions(ui, actions, 0..start, &mut shown));
                     Row::new().show(ui, |ui, _| show_actions(ui, actions, from_end(), &mut shown));
                 }
                 shown.responses.sort_by_key(|(at, _)| *at);
