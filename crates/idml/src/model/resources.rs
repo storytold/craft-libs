@@ -625,6 +625,104 @@ impl GraphicPart {
     }
 }
 
+/// A composite-font entry, including the applied font family stored in `Properties`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompositeFontEntryDefinition {
+    pub self_id: String,
+    pub name: String,
+    pub characters: String,
+    pub font_style: String,
+    pub relative_size: String,
+    pub horizontal_scale: String,
+    pub vertical_scale: String,
+    pub baseline_shift: String,
+    pub scale_option: bool,
+    pub applied_font: String,
+}
+
+/// A composite font in `Fonts.xml`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompositeFontDefinition {
+    pub self_id: String,
+    pub name: String,
+    pub entries: Vec<CompositeFontEntryDefinition>,
+}
+
+/// A font face in a family in `Fonts.xml`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FontDefinition {
+    pub self_id: String,
+    pub family: String,
+    pub name: String,
+    pub postscript_name: String,
+    pub style: String,
+}
+
+/// A family of font faces in `Fonts.xml`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FontFamilyDefinition {
+    pub self_id: String,
+    pub name: String,
+    pub fonts: Vec<FontDefinition>,
+}
+
+/// Neutral data for writing the complete `Fonts.xml` part.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FontsPart {
+    pub composites: Vec<CompositeFontDefinition>,
+    pub families: Vec<FontFamilyDefinition>,
+}
+
+impl FontsPart {
+    pub fn to_el(&self) -> El {
+        let mut root = crate::part_root("Fonts");
+        for composite in &self.composites {
+            let mut element = El::new("CompositeFont").with_attr("Self", &composite.self_id).with_attr("Name", &composite.name);
+            for entry in &composite.entries {
+                let mut node = El::new("CompositeFontEntry")
+                    .with_attr("Self", &entry.self_id)
+                    .with_attr("Name", &entry.name)
+                    .with_attr("CustomCharacters", &entry.characters)
+                    .with_attr("FontStyle", &entry.font_style)
+                    .with_attr("RelativeSize", &entry.relative_size)
+                    .with_attr("HorizontalScale", &entry.horizontal_scale)
+                    .with_attr("VerticalScale", &entry.vertical_scale)
+                    .with_attr("BaselineShift", &entry.baseline_shift)
+                    .with_attr("ScaleOption", entry.scale_option);
+                let mut properties = El::new("Properties");
+                properties.push(crate::prop("AppliedFont", "string", &entry.applied_font));
+                node.push(properties);
+                element.push(node);
+            }
+            root.push(element);
+        }
+        for family in &self.families {
+            let mut element = El::new("FontFamily").with_attr("Self", &family.self_id).with_attr("Name", &family.name);
+            for font in &family.fonts {
+                element.push(
+                    El::new("Font")
+                        .with_attr("Self", &font.self_id)
+                        .with_attr("FontFamily", &font.family)
+                        .with_attr("Name", &font.name)
+                        .with_attr("PostScriptName", &font.postscript_name)
+                        .with_attr("Status", "NotAvailable")
+                        .with_attr("FontStyleName", &font.style)
+                        .with_attr("FontType", "OpenTypeTT")
+                        .with_attr("WritingScript", "0")
+                        .with_attr("FullName", &font.name)
+                        .with_attr("FullNameNative", &font.name)
+                        .with_attr("FontStyleNameNative", &font.style)
+                        .with_attr("PlatformName", "$ID/")
+                        .with_attr("Version", "$ID/")
+                        .with_attr("TypekitID", "$ID/"),
+                );
+            }
+            root.push(element);
+        }
+        root
+    }
+}
+
 impl Ink {
     pub fn name(&self) -> Option<&str> {
         self.values.name()
