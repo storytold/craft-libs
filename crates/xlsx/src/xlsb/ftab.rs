@@ -487,8 +487,6 @@ const FTAB: &[(u16, &str, i8)] = &[
 
 /// The function a `PtgFunc` or `PtgFuncVar` calls: its name and fixed argument count (-1 when it
 /// takes a variable number). `None` for a number the table doesn't assign.
-// The formula decoder calls it.
-#[allow(dead_code)]
 pub(super) fn function(iftab: u16) -> Option<(&'static str, i8)> {
     FTAB.binary_search_by_key(&iftab, |(i, _, _)| *i).ok().and_then(|i| FTAB.get(i)).map(|(_, n, a)| (*n, *a))
 }

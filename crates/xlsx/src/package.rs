@@ -29,6 +29,9 @@ pub struct Package<'a> {
     binary: Option<ContentTypes>,
     workbook_rels: Option<Rels>,
     budget: xlsb::Budget,
+    /// What a binary workbook's formulas refer to, once its workbook part is read: `Some(None)`
+    /// when that couldn't be read (every formula keeps its saved result).
+    binary_links: Option<Option<xlsb::Links>>,
     /// Shared strings in a binary workbook, once counted: a cell's index is checked against it.
     binary_strings: Option<usize>,
 }
@@ -67,6 +70,7 @@ impl<'a> Package<'a> {
             binary,
             workbook_rels: None,
             budget: xlsb::Budget::default(),
+            binary_links: None,
             binary_strings: None,
         })
     }
@@ -145,7 +149,9 @@ impl<'a> Package<'a> {
         if self.binary.is_some() {
             let bytes = self.required(&self.workbook_part.clone())?;
             let rels = self.workbook_rels()?;
-            return xlsb::workbook(&bytes, &rels, &self.limits, &self.budget, &mut self.warnings);
+            let (wb, links) = xlsb::workbook(&bytes, &rels, &self.limits, &self.budget, &mut self.warnings)?;
+            self.binary_links = Some(links);
+            return Ok(wb);
         }
         let options = self.xml_options();
         let root = match self.opc.read_xml(&self.workbook_part, &options)? {
@@ -234,8 +240,13 @@ impl<'a> Package<'a> {
                 Some(n) => n,
                 None => self.shared_strings()?.len(),
             };
+            // Formulas name sheets and functions through the workbook part.
+            if self.binary_links.is_none() {
+                self.workbook()?;
+            }
             let bytes = self.required(&part)?;
-            let mut sheet = xlsb::worksheet(&bytes, strings, &self.limits, &self.budget, &mut self.warnings, &mut each)?;
+            let links = self.binary_links.as_ref().and_then(Option::as_ref);
+            let mut sheet = xlsb::worksheet(&bytes, strings, links, &self.limits, &self.budget, &mut self.warnings, &mut each)?;
             sheet.part = part;
             return Ok(sheet);
         }
