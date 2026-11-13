@@ -542,15 +542,10 @@ impl Body<'_> {
 
     /// The cubes take the height the readout leaves them, as Photoshop's field fills its dock group. In the slider modes
     /// the channel rows come first and the ramp under them takes the room they leave, at least a colour band thick, as
-    /// Photoshop's does; in a group shorter than both the ramp is cut at the bottom. The wheel scrolls where the group
-    /// is shorter than it.
+    /// Photoshop's does. In a group shorter than the content at its least the body scrolls.
     fn show(mut self, ui: &mut Ui) -> Self {
         let mode = self.now.mode;
-        let mut body = Stack::new().fill();
-        if mode == ColorPanelMode::ColorWheel {
-            body = body.scroll(Scroll::vertical());
-        }
-        body.show(ui, |ui, _| {
+        Stack::new().fill().scroll(Scroll::vertical()).show(ui, |ui, _| {
             self.content(ui);
             if mode.is_sliders() {
                 self.ramp(ui);

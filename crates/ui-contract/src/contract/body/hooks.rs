@@ -346,9 +346,11 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         // A container placed at an explicit rect, or mounted on a layer or in a window, is no flow child of that body:
         // it takes its own room, not a share.
         let flows = matches!(at.at, ShowAt::Flow) && self.in_flow(comp);
-        // Along an axis the flow does not bound it fills nothing (`sized`): it measures its content there.
+        // Along an axis the flow does not bound it fills nothing (`sized`): it measures its content there. In a `Stack`
+        // body that scrolls along y it shares what the view shows.
         let bounded = crate::layout::flow_room(at.ui);
-        let (fills_x, fills_y) = (self.given.0 && bounded.x.is_finite(), self.given.1 && bounded.y.is_finite());
+        let scrolled_y = !bounded.y.is_finite() && crate::layout::shares_y(at.ui) && crate::layout::view_room(at.ui, y).is_some();
+        let (fills_x, fills_y) = (self.given.0 && bounded.x.is_finite(), self.given.1 && (bounded.y.is_finite() || scrolled_y));
         if flows
             && at.ui.is_sizing_pass()
             && ((fills_x && crate::layout::counting_fills(at.ui, x)) || (fills_y && crate::layout::counting_fills(at.ui, y)))
@@ -358,12 +360,15 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         if let Some(share) = crate::layout::fill_share(at.ui, x).filter(|_| flows && self.given.0) {
             self.room.x = share;
         }
+        let mut scrolled_share = false;
         if let Some(share) = crate::layout::fill_share(at.ui, y).filter(|_| flows && self.given.1) {
             self.room.y = share;
+            scrolled_share = scrolled_y;
         }
         // A body that fills both axes its parent gives it takes the room, whatever its contents take: a parent's
-        // measuring run does not run them. It measures them in its own real run.
-        if at.ui.is_sizing_pass() && self.given == (true, true) && self.room.is_finite() {
+        // measuring run does not run them. It measures them in its own real run. A share of a scrolling view is the
+        // least of what it takes: its content may be taller.
+        if at.ui.is_sizing_pass() && self.given == (true, true) && self.room.is_finite() && !scrolled_share {
             return self.room;
         }
         let pad = Vec2::splat(2.0 * pad_of(at.scx.tokens, props.pad));
@@ -389,6 +394,16 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                     self.given.1 = true;
                 }
                 took
+            }
+            // A share of a scrolling view is laid out as given while the content fits it, so the children that fill
+            // share it; taller, the body takes its content height (the children that fill at their least) and the view
+            // scrolls.
+            None if scrolled_share => {
+                let fits = self.room.y + tolerance;
+                self.given.1 = false;
+                let (content, kept) = crate::contract::draft(&ctx, || self.measure_run(comp, at, cx, key.clone(), None), |took| took.y > fits);
+                self.given.1 = true;
+                if kept { content } else { self.measure_run(comp, at, cx, key, None) }
             }
             // A capped body takes its content height while that fits its room. Taller, the run is taken back and the body
             // is laid out as given the room, at the footer and header this run measured, so the children that fill share
@@ -470,13 +485,21 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 // content-sized layer offers its whole room before the footer is known) must not keep its remembered
                 // size once the room is less. Along an axis it is not given it takes its measured size. Along the main
                 // axis of the body it sits in it takes its share of what its siblings leave.
+                // In a `Stack` body that scrolls along y its share there is the least it takes: its content may be
+                // taller, and the view scrolls.
                 let axis = |room: f32, given: bool, along: craft_behavior::Axis, measured: f32| {
-                    if !(room.is_finite() && given) {
+                    let scrolled = along == craft_behavior::Axis::Y
+                        && !room.is_finite()
+                        && crate::layout::shares_y(ui)
+                        && crate::layout::view_room(ui, along).is_some();
+                    if !((room.is_finite() || scrolled) && given) {
                         return measured;
                     }
                     match crate::layout::main_fill(ui, id, along) {
                         crate::layout::MainFill::Measuring => 0.0,
+                        crate::layout::MainFill::Share(share) if scrolled => measured.max(share),
                         crate::layout::MainFill::Share(share) => share,
+                        crate::layout::MainFill::Room if scrolled => measured,
                         crate::layout::MainFill::Room => room,
                     }
                 };

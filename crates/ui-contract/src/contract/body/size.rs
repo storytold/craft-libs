@@ -268,7 +268,11 @@ impl<'b> BodyHooks<'b> {
                         Some(crate::layout::Shrink::Apply(row)) if !fills => crate::layout::shrink_cap(ui.ctx(), row, id).map(|cap| cap.width),
                         _ => None,
                     };
-                    Vec2::new(cap.map_or(room.x, |cap| room.x.min(cap)), props.room_height.unwrap_or(room.y))
+                    // A body that fills the height of a `Stack` body that scrolls along y takes a share of what the view
+                    // shows (`layout::view_room`): it runs in that room, bounded like a body in a room that does not scroll.
+                    let shares_view = !room.y.is_finite() && self.sizing(props) == Sizing::Fill && crate::layout::shares_y(ui);
+                    let y = shares_view.then(|| crate::layout::view_room(ui, craft_behavior::Axis::Y)).flatten().unwrap_or(room.y);
+                    Vec2::new(cap.map_or(room.x, |cap| room.x.min(cap)), props.room_height.unwrap_or(y))
                 }
             },
         }

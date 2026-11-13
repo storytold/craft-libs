@@ -131,7 +131,7 @@ fn the_cubes_take_the_room_the_readout_and_the_strip_leave() {
 
 /// The slider modes show each channel on one line: its slider and its number field side by side, every slider starting
 /// at one x past the channels' letters. The rows come first and stay in view in a short group; the ramp under them
-/// takes the room they leave.
+/// takes the room they leave. In a group shorter than the rows and the band the body scrolls.
 #[trial]
 fn the_slider_modes_show_a_channel_on_one_line() {
     let (rgb, cmyk, hsb) = ((ColorPanelMode::RgbSliders, 3), (ColorPanelMode::CmykSliders, 4), (ColorPanelMode::HsbSliders, 3));
@@ -160,6 +160,13 @@ fn the_slider_modes_show_a_channel_on_one_line() {
             assert!(ramp.bottom() > room.y - 40.0, "{case}: the ramp takes the room the rows leave ({ramp:?})");
         }
     }
+    // Four rows and the band do not fit the short group: the body scrolls, and the K row comes into view.
+    let mut rig = PanelRig::in_room(ColorPanelMode::CmykSliders, short);
+    let k = |rig: &PanelRig| rig.fixture.by_role(Role::SPIN_BUTTON).last().expect("the K field").rect;
+    assert!(k(&rig).bottom() > short.y + 0.5, "CMYK in {short:?}: the K row starts below the view ({:?})", k(&rig));
+    rig.fixture.frame(vec![moved(egui::pos2(short.x / 2.0, short.y / 2.0))]);
+    rig.fixture.frame(vec![craft_ui::testing::pointer::wheel(-200.0)]).settle();
+    assert!(k(&rig).bottom() <= short.y + 0.5 && k(&rig).top() >= 0.0, "CMYK in {short:?}: the K row scrolls into view ({:?})", k(&rig));
 }
 
 const SWATCHES: [(&str, [f32; 3]); 6] = [

@@ -148,7 +148,8 @@ pub struct Scoped {
     /// page and end moves a component leaves untaken go to it.
     pub(crate) scroll_owner: Option<ScrollOwner>,
     /// The axes (horizontal, vertical) the innermost scrolling body scrolls on: the room along them is unbounded, so
-    /// a child that fills there takes its content size.
+    /// a child that fills there takes its content size, except the children that fill the main axis of a body that
+    /// shares it: they share what the view shows, at least their content size (`layout::view_room`).
     pub(crate) unbounded: (bool, bool),
     /// The view of the innermost scroll area, for the children that run only in view (`contract::Lazy`).
     pub(crate) lazy: Option<crate::runtime::lazy::View>,

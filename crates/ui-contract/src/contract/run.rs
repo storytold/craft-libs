@@ -306,6 +306,7 @@ impl<C: Component> ShapeHooks<C> for LeafHooks {
         // measuring run, where the child measured at its own size.
         let env = Env::of(ui);
         let (content, line) = (env.content, env.row_line.and_then(|line| line.height));
+        let scrolls = |along: craft_behavior::Axis| if along == craft_behavior::Axis::X { env.unbounded.0 } else { env.unbounded.1 };
         let fill = |measured: f32, offered: f32, content: bool, along: craft_behavior::Axis| {
             if content {
                 return match (along, line) {
@@ -318,8 +319,8 @@ impl<C: Component> ShapeHooks<C> for LeafHooks {
             }
             match crate::layout::main_fill(ui, id, along) {
                 crate::layout::MainFill::Measuring => 0.0,
-                // In a body that scrolls along x its share never cuts its content: what is past the view scrolls.
-                crate::layout::MainFill::Share(share) if along == craft_behavior::Axis::X && env.unbounded.0 => measured.max(share),
+                // In a body that scrolls along the axis its share never cuts its content: what is past the view scrolls.
+                crate::layout::MainFill::Share(share) if scrolls(along) => measured.max(share),
                 crate::layout::MainFill::Share(share) => share,
                 crate::layout::MainFill::Room => measured.max(offered),
             }

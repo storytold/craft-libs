@@ -420,7 +420,7 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
     }
     let room = shrink_room(ui);
     let order = if Env::of(ui).values.get::<InBar>().0 { ShrinkOrder::FromEnd } else { ShrinkOrder::Even };
-    let (drops, gap) = (view_room(ui).is_none(), ui.spacing().item_spacing.x);
+    let (drops, gap) = (view_room(ui, Axis::X).is_none(), ui.spacing().item_spacing.x);
     // Records the width each unit gets, and returns whether one took another width in the first sweep.
     let settle = |leaves: &[Reported], fixed: f32| {
         let units: Vec<ShrinkUnit> = leaves.iter().map(|leaf| leaf.widths).collect();
@@ -480,18 +480,24 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
     }
 }
 
-/// In a body that scrolls along x, what its view shows from the start of the rest of `ui`'s layout: the width a row
-/// there shrinks to fit and a child that fills its width fills. `None` outside such a body.
-fn view_room(ui: &Ui) -> Option<f32> {
+/// In a body that scrolls along `axis`, what its view shows along it from the start of the rest of `ui`'s layout: along
+/// x the width a row there shrinks to fit and a child that fills its width fills, along y the height the children that
+/// fill a `Stack` there share. `None` outside such a body.
+pub(crate) fn view_room(ui: &Ui, axis: Axis) -> Option<f32> {
     let env = Env::of(ui);
-    env.lazy.filter(|view| env.unbounded.0 && view.axes.0).map(|view| (view.rect.width() - view.start_of(ui.available_rect_before_wrap()).x).max(0.0))
+    let scrolls = |view: &crate::runtime::lazy::View| if axis == Axis::X { env.unbounded.0 && view.axes.0 } else { env.unbounded.1 && view.axes.1 };
+    env.lazy.filter(scrolls).map(|view| {
+        let start = view.start_of(ui.available_rect_before_wrap());
+        let (length, at) = if axis == Axis::X { (view.rect.width(), start.x) } else { (view.rect.height(), start.y) };
+        (length - at).max(0.0)
+    })
 }
 
 /// The width the leaves of a row in `ui` shrink to fit: the row's flow room, except in a body that scrolls along x,
 /// where it is what the view shows from the row's start. There the leaves narrow to their least before the body
 /// scrolls, and when even their least does not fit they keep their natural widths and the body scrolls.
 fn shrink_room(ui: &Ui) -> f32 {
-    view_room(ui).unwrap_or_else(|| flow_room(ui).x)
+    view_room(ui, Axis::X).unwrap_or_else(|| flow_room(ui).x)
 }
 
 /// Runs `body` as the content of the `Stack` (along y) or unwrapped `Row` (along x) body `id` in `ui`, the block
@@ -509,11 +515,9 @@ fn run_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::Layo
     }
     let key = sub(id, "share");
     let along = |size: Vec2| if axis == Axis::Y { size.y } else { size.x };
-    // Along x in a body that scrolls along x, the children that fill share what the view shows.
-    let room_of = |ui: &Ui| match axis {
-        Axis::X => view_room(ui).unwrap_or_else(|| ui.available_rect_before_wrap().width()),
-        _ => along(ui.available_rect_before_wrap().size()),
-    };
+    // In a body that scrolls along the axis, the children that fill share what the view shows: shorter than the view,
+    // the content leaves them its rest; longer, they take their least and the body scrolls (`MainFill::Share`).
+    let room_of = |ui: &Ui| view_room(ui, axis).unwrap_or_else(|| along(ui.available_rect_before_wrap().size()));
     let sweep = |ui: &mut Ui, share: Option<f32>, body: &mut dyn FnMut(&mut Ui) -> R| {
         let installed = Env::install_for(
             ui,
@@ -787,14 +791,19 @@ pub(crate) fn flow_fill_room(ui: &Ui) -> Vec2 {
     cell.unwrap_or_else(|| open_room(ui))
 }
 
-/// `flow_fill_room` for a leaf that fills its width: along x in a body that scrolls along x it is what the view shows
-/// from the leaf's start, so the leaf fills the view and what is past it scrolls.
+/// `flow_fill_room` for a leaf that fills: along x in a body that scrolls along x it is what the view shows from the
+/// leaf's start, so the leaf fills the view and what is past it scrolls; along y the same in a `Stack` body that
+/// scrolls along y, whose children that fill share it.
 pub(crate) fn leaf_fill_room(ui: &Ui) -> Vec2 {
     let room = flow_fill_room(ui);
-    match view_room(ui).filter(|_| room.x.is_infinite()) {
-        Some(view) => Vec2::new(view, room.y),
-        None => room,
-    }
+    let x = view_room(ui, Axis::X).filter(|_| room.x.is_infinite());
+    let y = view_room(ui, Axis::Y).filter(|_| room.y.is_infinite() && shares_y(ui));
+    Vec2::new(x.unwrap_or(room.x), y.unwrap_or(room.y))
+}
+
+/// Whether the children in flow in `ui` are the children of a `Stack` body that shares its height among those that fill.
+pub(crate) fn shares_y(ui: &Ui) -> bool {
+    Env::of(ui).fill_body.is_some_and(|(_, along)| along == Axis::Y)
 }
 
 /// Whether the next child shown in flow in `ui` goes in a `Content` column of the `Grid` body that encloses `ui`
