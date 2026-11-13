@@ -8,7 +8,8 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek};
 
-use craft_document_bundle::{Asset, Spec};
+pub use craft_document_bundle::Asset;
+use craft_document_bundle::Spec;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
