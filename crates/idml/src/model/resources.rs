@@ -429,6 +429,202 @@ impl ColorDefinition {
     }
 }
 
+/// A neutral `Ink` definition in `Graphic.xml`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InkDefinition {
+    pub self_id: String,
+    pub name: String,
+    pub alias: Option<String>,
+    pub angle: String,
+    pub convert_to_process: bool,
+    pub frequency: String,
+    pub neutral_density: String,
+    pub trap_order: usize,
+    pub ink_type: String,
+}
+
+impl InkDefinition {
+    fn to_el(&self) -> El {
+        let mut el = El::new("Ink")
+            .with_attr("Self", &self.self_id)
+            .with_attr("Name", &self.name)
+            .with_attr("Angle", &self.angle)
+            .with_attr("ConvertToProcess", self.convert_to_process)
+            .with_attr("Frequency", &self.frequency)
+            .with_attr("NeutralDensity", &self.neutral_density)
+            .with_attr("PrintInk", "true")
+            .with_attr("TrapOrder", self.trap_order)
+            .with_attr("InkType", &self.ink_type);
+        if let Some(alias) = &self.alias {
+            el.set_attr("AliasInkName", alias);
+        }
+        el
+    }
+}
+
+/// A neutral `Tint` definition in `Graphic.xml`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TintDefinition {
+    pub self_id: String,
+    pub value: String,
+    pub base_color: String,
+    pub name: String,
+}
+
+impl TintDefinition {
+    fn to_el(&self) -> El {
+        El::new("Tint")
+            .with_attr("Self", &self.self_id)
+            .with_attr("TintValue", &self.value)
+            .with_attr("BaseColor", &self.base_color)
+            .with_attr("Name", &self.name)
+            .with_attr("ColorOverride", "Normal")
+            .with_attr("AlternateSpace", "NoAlternateColor")
+            .with_attr("AlternateColorValue", "")
+            .with_attr("ColorEditable", "true")
+            .with_attr("ColorRemovable", "true")
+            .with_attr("Visible", "true")
+            .with_attr("SwatchCreatorID", "7937")
+    }
+}
+
+/// A stop in a neutral `Gradient` definition.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GradientStopDefinition {
+    pub self_id: String,
+    pub color_id: String,
+    pub location: String,
+    pub midpoint: Option<String>,
+}
+
+/// A neutral `Gradient` definition in `Graphic.xml`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GradientDefinition {
+    pub self_id: String,
+    pub name: String,
+    pub radial: bool,
+    pub stops: Vec<GradientStopDefinition>,
+}
+
+impl GradientDefinition {
+    fn to_el(&self) -> El {
+        let mut el = El::new("Gradient")
+            .with_attr("Self", &self.self_id)
+            .with_attr("Type", if self.radial { "Radial" } else { "Linear" })
+            .with_attr("Name", &self.name)
+            .with_attr("ColorEditable", "true")
+            .with_attr("ColorRemovable", "true")
+            .with_attr("Visible", "true")
+            .with_attr("SwatchCreatorID", "7937");
+        for stop in &self.stops {
+            let mut child =
+                El::new("GradientStop").with_attr("Self", &stop.self_id).with_attr("StopColor", &stop.color_id).with_attr("Location", &stop.location);
+            if let Some(midpoint) = &stop.midpoint {
+                child.set_attr("Midpoint", midpoint);
+            }
+            el.push(child);
+        }
+        el
+    }
+}
+
+/// A member reference in a neutral `ColorGroup` definition.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ColorGroupMember {
+    pub self_id: String,
+    pub swatch_id: String,
+}
+
+/// A neutral `ColorGroup` definition in `Graphic.xml`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ColorGroupDefinition {
+    pub self_id: String,
+    pub name: String,
+    pub members: Vec<ColorGroupMember>,
+}
+
+impl ColorGroupDefinition {
+    fn to_el(&self) -> El {
+        let mut el = El::new("ColorGroup").with_attr("Self", &self.self_id).with_attr("Name", &self.name).with_attr("IsRootColorGroup", "false");
+        for member in &self.members {
+            el.push(El::new("ColorGroupSwatch").with_attr("Self", &member.self_id).with_attr("SwatchItemRef", &member.swatch_id));
+        }
+        el
+    }
+}
+
+/// A custom stroke style in `Graphic.xml`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StrokeDefinition {
+    Striped { self_id: String, name: String, array: String },
+    Dashed { self_id: String, name: String, array: String },
+    Dotted { self_id: String, name: String, array: String },
+    Named { self_id: String, name: String },
+}
+
+impl StrokeDefinition {
+    fn to_el(&self) -> El {
+        match self {
+            Self::Striped { self_id, name, array } => {
+                El::new("StripedStrokeStyle").with_attr("StripeArray", array).with_attr("Self", self_id).with_attr("Name", name)
+            }
+            Self::Dashed { self_id, name, array } => {
+                El::new("DashedStrokeStyle").with_attr("DashArray", array).with_attr("Self", self_id).with_attr("Name", name)
+            }
+            Self::Dotted { self_id, name, array } => {
+                El::new("DottedStrokeStyle").with_attr("DotArray", array).with_attr("Self", self_id).with_attr("Name", name)
+            }
+            Self::Named { self_id, name } => El::new("StrokeStyle").with_attr("Self", self_id).with_attr("Name", name),
+        }
+    }
+}
+
+/// Semantic values needed to write the `Graphic.xml` part. This type owns element names,
+/// attributes, child ordering and the required None swatch; callers supply their mapped values.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GraphicPart {
+    pub colors: Vec<ColorDefinition>,
+    pub inks: Vec<InkDefinition>,
+    pub tints: Vec<TintDefinition>,
+    pub gradients: Vec<GradientDefinition>,
+    pub color_groups: Vec<ColorGroupDefinition>,
+    pub stroke_styles: Vec<StrokeDefinition>,
+}
+
+impl GraphicPart {
+    pub fn to_el(&self) -> El {
+        let mut root = crate::part_root("Graphic");
+        for color in &self.colors {
+            root.push(color.to_el());
+        }
+        for ink in &self.inks {
+            root.push(ink.to_el());
+        }
+        for tint in &self.tints {
+            root.push(tint.to_el());
+        }
+        root.push(
+            El::new("Swatch")
+                .with_attr("Self", "Swatch/None")
+                .with_attr("Name", "None")
+                .with_attr("ColorEditable", "false")
+                .with_attr("ColorRemovable", "false")
+                .with_attr("Visible", "true")
+                .with_attr("SwatchCreatorID", "7937"),
+        );
+        for gradient in &self.gradients {
+            root.push(gradient.to_el());
+        }
+        for group in &self.color_groups {
+            root.push(group.to_el());
+        }
+        for style in &self.stroke_styles {
+            root.push(style.to_el());
+        }
+        root
+    }
+}
+
 impl Ink {
     pub fn name(&self) -> Option<&str> {
         self.values.name()
