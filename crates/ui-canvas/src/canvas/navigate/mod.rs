@@ -255,8 +255,9 @@ impl TouchpadGlide {
 /// Autoscroll while a tool drag runs past the canvas edge (marquee, lasso, brush, crop), or while a tool that
 /// autoscrolls on hover hovers in the band inside it (a Polygonal Lasso's rubber band): the view scrolls toward the
 /// pointer, faster the further past the edge, and stops at the image's edge (an image that fits is never scrolled
-/// into empty pasteboard). The app runs it from [`ToolHostResponse::past_edge`](crate::canvas::ToolHostResponse):
-/// `Autoscroll::scroll(view, Autoscroll::step(past, dt), size)`, and asks for the next pass while the view moves.
+/// into empty pasteboard). The tool host reports each pass's step in
+/// [`ToolHostResponse::scroll`](crate::canvas::ToolHostResponse); the app runs `Autoscroll::scroll(&mut view, step,
+/// size)` and asks for the next pass while the view moves.
 pub struct Autoscroll;
 
 impl Autoscroll {
@@ -266,20 +267,14 @@ impl Autoscroll {
     pub const MAX_SPEED: f32 = 2400.0;
     /// Extra speed per point the pointer is past the edge.
     pub const GAIN: f32 = 12.0;
-    /// The longest pass one step covers, seconds: a stalled frame does not jump the view.
-    pub const MAX_STEP_TIME: f32 = 0.05;
-    /// The band inside the canvas edge, points, in which a tool that autoscrolls on hover scrolls the view; at most
-    /// a quarter of the canvas's shorter side.
-    pub const HOVER_EDGE: f32 = 32.0;
 
-    /// The screen points to scroll in a pass of `dt` seconds with the pointer `past` the edge: each axis toward the
-    /// pointer, at [`MIN_SPEED`](Self::MIN_SPEED) plus [`GAIN`](Self::GAIN) per point past, up to
+    /// The screen points to scroll over a pass step of `dt` seconds ([`frame_step`]) with the pointer `past` the edge:
+    /// each axis toward the pointer, at [`MIN_SPEED`](Self::MIN_SPEED) plus [`GAIN`](Self::GAIN) per point past, up to
     /// [`MAX_SPEED`](Self::MAX_SPEED).
-    pub fn step(past: Vec2, dt: f32) -> Vec2 {
+    pub(crate) fn step(past: Vec2, dt: f32) -> Vec2 {
         if !past.is_finite() || !dt.is_finite() || dt <= 0.0 {
             return Vec2::ZERO;
         }
-        let dt = dt.min(Self::MAX_STEP_TIME);
         let axis = |d: f32| if d == 0.0 { 0.0 } else { d.signum() * (Self::MIN_SPEED + Self::GAIN * d.abs()).min(Self::MAX_SPEED) * dt };
         Vec2::new(axis(past.x), axis(past.y))
     }

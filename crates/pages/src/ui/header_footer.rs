@@ -317,7 +317,7 @@ impl Component for HeaderFooterZones<'_> {
         }
         let focused = cx.active_part().is_some_and(|part| part.key == ZONE);
         let escaped = focused && cx.intents().take(Intent::Cancel);
-        let elsewhere = canvas_space(&cx.env).is_some_and(|space| space.background().pressed);
+        let elsewhere = canvas_space(&cx.env).is_some_and(|space| space.background().pressed.is_some());
         self.end = self.editing.is_some() && (escaped || elsewhere);
     }
 

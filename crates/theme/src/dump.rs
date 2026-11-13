@@ -167,9 +167,10 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     out.line("size.handle.sm", len(*sm));
     out.line("size.handle.md", len(*md));
     out.line("size.handle.ring", len(*ring));
-    let HitSizes { slop, target } = hit;
+    let HitSizes { slop, target, edge } = hit;
     out.line("size.hit.slop", len(*slop));
     out.line("size.hit.target", len(*target));
+    out.line("size.hit.edge", len(*edge));
     out.line("size.checker", len(*checker));
     let PlotSizes { width, height } = plot;
     out.line("size.plot.width", len(*width));

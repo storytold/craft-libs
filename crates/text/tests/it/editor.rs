@@ -10,8 +10,8 @@ use craft_text::quotes::QuoteStyle;
 use craft_text::ui::editor::{CaretLine, EditKind, HostLine, StyleKey, TextEditor, TextEditorHost, TextSelection};
 use craft_ui::canvas::Canvas;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
-use craft_ui::testing::{Fixture, trial};
-use egui::{Key, Modifiers, Rect, pos2, vec2};
+use craft_ui::testing::{Fixture, pointer, trial};
+use egui::{Event, ImeEvent, Key, Modifiers, Rect, pos2, vec2};
 
 #[derive(Default)]
 struct Host {
@@ -145,16 +145,30 @@ fn command_enter_commits_one_session_and_a_session_without_edits_commits_nothing
     assert_eq!(editor.text(), "abcd");
 }
 
+/// A primary press on the canvas background commits and keeps the marked text as typed; a press on the text and a
+/// secondary press on the background (the canvas menu acts on the live edit) leave the session open.
 #[trial]
-fn a_press_on_the_canvas_background_commits_the_session_and_one_on_the_text_does_not() {
+fn a_primary_press_on_the_canvas_background_commits_the_session_with_its_marked_text() {
     let mut editor = session("abc", None);
     editor.focus();
     editor.fixture.type_text("d").settle();
     editor.fixture.click_at(pos2(40.0, 10.0)).settle();
     assert_eq!(editor.commits.get(), 0, "a press on the text is the editor's");
-    editor.fixture.click_at(pos2(300.0, 300.0)).settle();
-    assert_eq!(editor.commits.get(), 1, "a press on the canvas background commits the session");
-    assert_eq!(editor.text(), "abcd");
+    let away = pos2(300.0, 300.0);
+    editor
+        .fixture
+        .frame(vec![pointer::moved(away)])
+        .frame(vec![pointer::secondary(away, true)])
+        .frame(vec![pointer::secondary(away, false)])
+        .settle();
+    assert_eq!(editor.commits.get(), 0, "a secondary press on the background leaves the session open");
+
+    editor.focus();
+    editor.fixture.frame(vec![Event::Ime(ImeEvent::Preedit { text: "kzk".to_owned(), active_range_chars: None })]).settle();
+    assert_eq!(editor.text(), "abcdkzk", "the marked text is written into the text");
+    editor.fixture.click_at(away).settle();
+    assert_eq!(editor.commits.get(), 1, "a primary press on the canvas background commits the session");
+    assert_eq!(editor.text(), "abcdkzk", "the marked text stays as typed");
 }
 
 /// In vertical text Alt+Down follows the flow and loosens the tracking; a host that applies no formatting leaves

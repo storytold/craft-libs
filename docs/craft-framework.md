@@ -991,6 +991,7 @@ A theme with its own shape replaces the radii or adds an offset to control, surf
 | `size.dialog.least`, `size.dialog.wrap` | A dialog's content: the least width it opens at, and the line length its paragraphs wrap at (`LeastWidth::Dialog`, `WrapWidth::Dialog`); content that cannot wrap widens it past that |
 | `size.dialog.button`, `size.dialog.side_button` | Least width of a dialog's footer button and of a button in its column beside the body |
 | `size.story.height`, `size.story.width_min`, `size.story.width_max` | The stage a story of a canvas control draws its canvas on: its height and the range of its width; `width_min` is also the least width of a column of a story grid |
+| `size.hit.edge` | The band inside a canvas's edge in which a tool that autoscrolls on hover scrolls the view (a Polygonal Lasso's rubber band), at most a quarter of the canvas's shorter side |
 | `size.thumb.card` | The picture side of a tile card at zoom 1 (tile grids, preset browsers, the start screen) |
 | `size.thumb.sample.sm`, `size.thumb.sample.md`, `size.thumb.sample.lg` | The sample beside each thumbnail size choice in a panel's options dialog (Layers, Channels, Paths): larger than the panel's thumbnails, so the choices read apart (`PictureSize::Sample`) |
 | `space.gap.*`, `space.pad.*` | Gaps between and padding inside components |

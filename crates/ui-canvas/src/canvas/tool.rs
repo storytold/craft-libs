@@ -603,8 +603,8 @@ pub trait CanvasTool {
         true
     }
 
-    /// Whether, in its state at the start of the pass, the tool asks the app to scroll the view while the pointer
-    /// hovers near the canvas edge with no button down (a Polygonal Lasso with its outline open, whose rubber band
+    /// Whether, in its state after [`each_pass`](Self::each_pass), the tool asks the app to scroll the view while the
+    /// pointer hovers near the canvas edge with no button down (a Polygonal Lasso with its outline open, whose rubber band
     /// follows the pointer). While it does, the host calls `hover` in every pass the pointer stays in the edge band,
     /// since the view scrolls under it. Default: `false`.
     fn autoscrolls_on_hover(&self) -> bool {

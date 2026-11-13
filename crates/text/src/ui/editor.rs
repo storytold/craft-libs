@@ -7,9 +7,10 @@
 //! over the canvas. The text itself is painted by the app.
 //!
 //! The editor is its own root with one editor part over the rect it is shown at (the text's screen bounds): a press
-//! inside it is the editor's, a press outside it is not. A press on the canvas background (one no canvas control
-//! claims, [`CanvasSpace::background`](craft_ui::canvas::CanvasSpace::background)) commits the session (Photoshop);
-//! the press still reaches the canvas's tool.
+//! inside it is the editor's, a press outside it is not. A primary press on the canvas background (one no canvas
+//! control claims, [`CanvasSpace::background`](craft_ui::canvas::CanvasSpace::background)) commits the session
+//! (Photoshop); the press still reaches the canvas's tool. A secondary press leaves the session open for the canvas
+//! menu, which acts on the live edit.
 //!
 //! Offsets are chars of the host's text.
 //!
@@ -278,7 +279,7 @@ pub struct TextEditorOutput {
     /// The selection or caret moved.
     pub selection_changed: bool,
     /// The typing session as one gesture over the selection. The first text change gives `Begin`, later changes
-    /// `Update`. `Commit` is Cmd+Enter, a press on the canvas background, or Esc when Esc commits ([`TextEditor::esc_commits`], Photoshop's Use ESC
+    /// `Update`. `Commit` is Cmd+Enter, a primary press on the canvas background, or Esc when Esc commits ([`TextEditor::esc_commits`], Photoshop's Use ESC
     /// Key to Commit Text, on by default): the app ends the session, keeps the text and records one undo step.
     /// `Cancel` is Esc when it doesn't commit: the app ends the session and undoes it. A session with no text
     /// change gives no `Commit` or `Cancel`.
@@ -308,7 +309,7 @@ impl Outcome for TextEditorOutput {
 ///   thicker.
 /// - Clicks: one places the caret, Shift-click extends; quick clicks in one spot select more: two a word, three the
 ///   laid-out line, four the paragraph, five all text, the sixth starts over (Photoshop). Dragging extends by char,
-///   and by word or line after a double or triple click. A press on the canvas outside the text commits.
+///   and by word or line after a double or triple click. A primary press on the canvas outside the text commits.
 /// - Keys: Left and Right by char (a selection collapses to its edge), with Cmd or Alt by word, Up and Down by
 ///   line, Cmd+Up and Cmd+Down to the text's start or end, Home and End to the line's edges, Shift extends any of
 ///   them. Backspace and Delete by char, Alt by word, Cmd+Backspace to the line start. Cmd+A all, Cmd+C, Cmd+X and
@@ -537,8 +538,9 @@ impl Component for TextEditor<'_> {
         if let Some(range) = ending {
             edits.drop_marked(range);
         }
-        // A press elsewhere on the canvas keeps the marked text as typed, as a press on the text does.
-        if canvas_space(&cx.env).is_some_and(|space| space.background().pressed) {
+        // A primary press elsewhere on the canvas keeps the marked text as typed, as a press on the text does. A
+        // secondary press leaves the session open: the canvas menu it opens acts on the live edit.
+        if canvas_space(&cx.env).is_some_and(|space| space.background().pressed == Some(craft_behavior::PointerButton::Primary)) {
             edits.end_composition();
             edits.session.dragging = None;
             edits.done.commit = true;

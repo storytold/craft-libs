@@ -172,8 +172,8 @@ impl Default for CanvasRulers {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct BackgroundPress {
-    /// A button went down on the background in this pass: a control that keeps a selection clears it.
-    pub pressed: bool,
+    /// The button that went down on the background in this pass: a control that keeps a selection clears it.
+    pub pressed: Option<PointerButton>,
     /// Where the secondary button was released on the background without a drag: a control that offers a
     /// canvas menu opens it there.
     pub context: Option<Pos2>,
@@ -197,7 +197,11 @@ impl BackgroundPress {
     /// What `press`, the press on the background part after the middle button's pan is taken out, and the canvas's
     /// keyed menu request report.
     pub(super) fn of(press: &PressState, context_key: bool) -> Self {
-        Self { pressed: matches!(press.phase, PressPhase::Down { .. }), context: context_click(press), context_key }
+        let pressed = match press.phase {
+            PressPhase::Down { start, .. } => Some(start.button),
+            _ => None,
+        };
+        Self { pressed, context: context_click(press), context_key }
     }
 }
 

@@ -483,7 +483,7 @@ impl Component for Guides<'_> {
             self.run_pointer(cx, &space, &guides);
             self.run_keys(cx, &space, &guides);
             self.run_canvas_delete(cx, &space, &guides);
-            if space.background().pressed && self.selected.is_some() && self.report.select.is_none() {
+            if space.background().pressed.is_some() && self.selected.is_some() && self.report.select.is_none() {
                 self.report.select = Some(None);
             }
         }

@@ -157,8 +157,8 @@ impl CanvasTool for Band {
     }
 }
 
-/// The hover autoscroll as an app runs it: the canvas shows a document zoomed in past the room, and the app scrolls
-/// its view from the host's `past_edge`. Returns the fixture, the tool and the app's view.
+/// The hover autoscroll as an app runs it: the canvas shows a document zoomed in past the room, and the app moves its
+/// view by the host's `scroll`. Returns the fixture, the tool and the app's view.
 fn band_canvas(scrolls: bool) -> (Fixture, Rc<RefCell<Band>>, Rc<Cell<Option<CanvasView>>>) {
     const DOCUMENT: Size = Size::new(1200.0, 900.0);
     let tool = Rc::new(RefCell::new(Band { scrolls, hovers: 0 }));
@@ -170,8 +170,8 @@ fn band_canvas(scrolls: bool) -> (Fixture, Rc<RefCell<Band>>, Rc<Cell<Option<Can
         let shown = Canvas::new("Document").document(DOCUMENT).view(current).show(ui, |_, _| {});
         let reply = ToolHost::new().run(ui, &shown.output, &mut *shown_tool.borrow_mut());
         let mut next = reply.view.unwrap_or(current);
-        if let Some(past) = reply.past_edge
-            && Autoscroll::scroll(&mut next, Autoscroll::step(past, ui.input(|input| input.stable_dt)), DOCUMENT).is_some()
+        if let Some(step) = reply.scroll
+            && Autoscroll::scroll(&mut next, step, DOCUMENT).is_some()
         {
             ui.ctx().request_repaint();
         }

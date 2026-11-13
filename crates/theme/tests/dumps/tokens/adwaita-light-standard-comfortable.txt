@@ -157,6 +157,7 @@ size.handle.md = 8
 size.handle.ring = 18
 size.hit.slop = 3
 size.hit.target = 8
+size.hit.edge = 32
 size.checker = 4
 size.plot.width = 300
 size.plot.height = 180

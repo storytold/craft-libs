@@ -21,8 +21,8 @@
 //!    arrows toward and away from the reading end.
 //! 6. The tool paints over the canvas and requests its cursor at tool priority.
 //! 7. A drag past the canvas edge ([`CanvasTool::autoscrolls`]), and a hover in the band inside it
-//!    ([`CanvasTool::autoscrolls_on_hover`]), report [`ToolHostResponse::past_edge`]; the app scrolls with
-//!    [`Autoscroll`].
+//!    ([`CanvasTool::autoscrolls_on_hover`]), report [`ToolHostResponse::past_edge`] and the pass's
+//!    [`ToolHostResponse::scroll`]; the app moves its view by it with [`Autoscroll::scroll`].
 //!
 //! The host keeps its state under the canvas's id (`CanvasOutput::response.id`), so two canvases never share a
 //! gesture, and hands the tool the canvas's view from the output ([`ToolContext::space`]). A tool changes the view
@@ -54,6 +54,7 @@
 //! # }
 //! ```
 
+use super::frame_step;
 use super::momentary::{Momentary, MomentaryCommands};
 use super::navigate::Autoscroll;
 use super::readout::paint_readout;
@@ -176,9 +177,13 @@ pub struct ToolHostResponse {
     /// The key the tool took this pass.
     pub took_key: Option<ToolKey>,
     /// How far past the edge the pointer is, in screen points: past the canvas edge while a gesture of a tool that
-    /// autoscrolls runs, or into the band inside it ([`Autoscroll::HOVER_EDGE`]) while a tool that autoscrolls on hover
-    /// hovers there. The host moves no view: the app scrolls its view toward the pointer with [`Autoscroll`].
+    /// autoscrolls runs, or into the band inside the view's edge (`size.hit.edge`) while a tool that autoscrolls on
+    /// hover hovers there.
     pub past_edge: Option<Vec2>,
+    /// The autoscroll of this pass, in screen points: the [`Autoscroll`] speed for [`past_edge`](Self::past_edge) over
+    /// the pass's step of the runtime's pass clock. The host moves no view: the app moves its own with
+    /// `Autoscroll::scroll(&mut view, scroll, size)` and asks for the next pass while it moves.
+    pub scroll: Option<Vec2>,
     /// The cursor the tool asked for, after the host requested it.
     pub cursor: Option<Cursor>,
     /// The values the tool wants beside the pointer. The host has painted them already; this is the data for
@@ -216,6 +221,8 @@ struct HostState {
     space: Option<CanvasSpace>,
     /// The view a tool set while [`ToolHost::cancel`] ended its gesture outside a pass: the next pass reports it.
     cancelled_view: Option<CanvasView>,
+    /// The pass clock of the last pass that delivered input: an autoscroll moves by the time since.
+    time: Option<f64>,
 }
 
 fn state_id(canvas: Id) -> Id {
@@ -316,9 +323,11 @@ impl<'m> ToolHost<'m> {
             requests: ToolRequests::default(),
             cancelled: false,
             ending: None,
+            hover_scrolls: false,
         };
         if !measuring {
             run.call(None, |tool, cx| tool.each_pass(cx));
+            run.hover_scrolls = run.tool.autoscrolls_on_hover();
             if let Some(hand) = glide {
                 run.glide(hand);
             }
@@ -334,6 +343,13 @@ impl<'m> ToolHost<'m> {
             }
         }
         let Run { mut response, requests, .. } = run;
+        if !measuring {
+            if let Some(past) = response.past_edge {
+                let step = frame_step(input.time - state.time.unwrap_or(input.time));
+                response.scroll = Some(Autoscroll::step(past, step as f32));
+            }
+            state.time = Some(input.time);
+        }
         if response.view.is_none() {
             response.view = cancelled_view;
         }
@@ -589,6 +605,8 @@ struct Run<'a> {
     /// The gesture whose press, release or cancel is being delivered: the gesture is already out of the state, or not
     /// yet in it.
     ending: Option<GestureId>,
+    /// The tool autoscrolls on hover, in its state after `each_pass`.
+    hover_scrolls: bool,
 }
 
 impl<'a> Run<'a> {
@@ -710,14 +728,16 @@ impl<'a> Run<'a> {
         }
     }
 
-    /// How far into the band inside the canvas edge a hover at `pos` is, toward the edge, for a tool that
-    /// autoscrolls on hover.
+    /// How far into the band inside the view's edge (`size.hit.edge`, at most a quarter of the view's shorter side) a
+    /// hover at `pos` is, toward the edge, for a tool that autoscrolls on hover. The view's rect leaves out the
+    /// rulers; a canvas without a view measures from its own rect.
     fn hover_edge(&self, pos: Pos2) -> Option<Vec2> {
-        if !self.tool.autoscrolls_on_hover() || !self.rect.is_positive() {
+        let rect = self.space.map_or(self.rect, |space| space.view.rect);
+        if !self.hover_scrolls || !rect.is_positive() {
             return None;
         }
-        let band = Autoscroll::HOVER_EDGE.min(self.rect.width().min(self.rect.height()) / 4.0);
-        let past = pos - self.rect.shrink(band).clamp(pos);
+        let band = self.env.tokens.size.hit.edge.min(rect.width().min(rect.height()) / 4.0);
+        let past = pos - rect.shrink(band).clamp(pos);
         (past != Vec2::ZERO).then_some(past)
     }
 
@@ -731,8 +751,8 @@ impl<'a> Run<'a> {
             PressPhase::Idle => self.state.spent = false,
             PressPhase::Hover => {
                 self.state.spent = false;
-                // A pointer that stands still keeps the position an injected move gave the tool, unless it rests in
-                // the edge band: the view scrolls under it.
+                // A pointer that stands still keeps the position an injected move gave the tool. One that rests in
+                // the edge band gets a hover at its own position in every pass, since the view scrolls under it.
                 if let Some(pointer) = hover_pointer(frame, *press)
                     && (pointer::with_pass_pointer(self.ctx, |pass| pass.stirred) || self.hover_edge(pointer.pos).is_some())
                 {
