@@ -502,6 +502,58 @@ impl ParagraphAlignmentValues {
 }
 
 impl ParagraphBoxValues {
+    /// Reads paragraph border and shading values from IDML.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        let sides = |prefix: &str, suffix: &str| {
+            let values = ["Top", "Left", "Bottom", "Right"].map(|side| values.num(&format!("{prefix}{side}{suffix}")));
+            values.iter().any(Option::is_some).then(|| values.map(|value| value.unwrap_or(0.0)))
+        };
+        let corners = |prefix: &str| {
+            let names = ["TopLeft", "TopRight", "BottomRight", "BottomLeft"];
+            let shapes = names.map(|corner| values.prop(&format!("{prefix}{corner}CornerOption")));
+            let sizes = names.map(|corner| values.num(&format!("{prefix}{corner}CornerRadius")));
+            if shapes.iter().all(Option::is_none) && sizes.iter().all(Option::is_none) {
+                None
+            } else {
+                Some(std::array::from_fn(|index| {
+                    (shapes[index].clone().unwrap_or_else(|| "None".to_string()), sizes[index].map_or(12.0, |value| value.max(0.0)))
+                }))
+            }
+        };
+        Self {
+            shading_on: values.boolean("ParagraphShadingOn"),
+            shading_color: values.prop("ParagraphShadingColor"),
+            shading_tint: values.num("ParagraphShadingTint"),
+            shading_offsets: sides("ParagraphShading", "Offset"),
+            shading_overprint: values.boolean("ParagraphShadingOverprint"),
+            border_on: values.boolean("ParagraphBorderOn"),
+            border_color: values.prop("ParagraphBorderColor"),
+            border_tint: values.num("ParagraphBorderTint"),
+            border_weights: sides("ParagraphBorder", "LineWeight"),
+            border_offsets: sides("ParagraphBorder", "Offset"),
+            border_type: values.prop("ParagraphBorderType"),
+            border_cap: values.prop("ParagraphBorderStrokeEndCap"),
+            border_join: values.prop("ParagraphBorderStrokeEndJoin"),
+            border_corners: corners("ParagraphBorder"),
+            border_width: values.prop("ParagraphBorderWidth"),
+            border_top: values.prop("ParagraphBorderTopOrigin"),
+            border_bottom: values.prop("ParagraphBorderBottomOrigin"),
+            border_display_if_splits: values.boolean("ParagraphBorderDisplayIfSplits"),
+            border_merge: values.boolean("MergeConsecutiveParaBorders"),
+            border_gap_color: values.prop("ParagraphBorderGapColor"),
+            border_gap_tint: values.num("ParagraphBorderGapTint"),
+            border_overprint: values.boolean("ParagraphBorderOverprint"),
+            border_gap_overprint: values.boolean("ParagraphBorderGapOverprint"),
+            shading_width: values.prop("ParagraphShadingWidth"),
+            shading_top: values.prop("ParagraphShadingTopOrigin"),
+            shading_bottom: values.prop("ParagraphShadingBottomOrigin"),
+            shading_clip: values.boolean("ParagraphShadingClipToFrame"),
+            shading_nonprinting: values.boolean("ParagraphShadingSuppressPrinting"),
+            shading_corners: corners("ParagraphShading"),
+        }
+    }
+
     /// Writes IDML attributes and properties for paragraph borders and shading.
     pub fn to_parts(&self) -> (Vec<(String, String)>, Vec<El>) {
         use crate::value::num;
