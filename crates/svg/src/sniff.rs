@@ -23,6 +23,35 @@ pub fn is_svg(bytes: &[u8]) -> bool {
     (t.starts_with("<?") || t.starts_with("<!DOCTYPE") || t.starts_with("<!--")) && t.contains("<svg")
 }
 
+/// The dimensions of a viewBox when neither SVG root dimension is absolute; percentages count as
+/// unspecified. This is useful for applications that place a viewBox-only SVG at one unit per
+/// point. The XML parse is bounded to 16 MiB.
+pub fn viewbox_size(bytes: &[u8]) -> Option<(f64, f64)> {
+    if bytes.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'<') {
+        return None;
+    }
+    let mut options = craft_xml::Options::default();
+    options.limits.max_input = 16 << 20;
+    let root = options.parse(bytes).ok()?;
+    if root.local() != "svg" {
+        return None;
+    }
+    let attr = |name: &str| root.attr(name).map(ToString::to_string);
+    let absolute = |name: &str| attr(name).is_some_and(|value| !value.trim().ends_with('%'));
+    if absolute("width") || absolute("height") {
+        return None;
+    }
+    let values: Vec<f64> = attr("viewBox")?
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|value| !value.is_empty())
+        .filter_map(|value| value.parse().ok())
+        .collect();
+    match values.as_slice() {
+        [_, _, width, height] if width.is_finite() && height.is_finite() && *width > 0.0 && *height > 0.0 => Some((*width, *height)),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
