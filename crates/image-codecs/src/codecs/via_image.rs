@@ -83,7 +83,7 @@ pub(crate) fn encode_bmp_indexed(width: u32, height: u32, indices: &[u8], palett
 }
 
 /// The `image` decoder for `f` with our limits, its header read and its size checked.
-fn open<'a>(f: Format, bytes: &'a [u8], limits: &Limits) -> Result<impl ImageDecoder + 'a, CodecError> {
+pub(crate) fn open<'a>(f: Format, bytes: &'a [u8], limits: &Limits) -> Result<impl ImageDecoder + 'a, CodecError> {
     let fmt = image_format(f).ok_or_else(|| CodecError::unsupported(f, "not handled by image backend"))?;
     let mut reader = image::ImageReader::with_format(Cursor::new(bytes), fmt);
     let mut il = image::Limits::default();
