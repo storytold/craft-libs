@@ -47,6 +47,8 @@ pub enum Format {
     PlainText,
     Csv,
     Tsv,
+    /// Legacy binary Excel workbooks, identified by extension only.
+    LegacyExcel,
     Gcode,
     Studio,
     StencilCraft,
@@ -218,6 +220,7 @@ pub fn from_extension(ext: &str) -> Option<Format> {
         "txt" | "text" | "md" => Some(Format::PlainText),
         "csv" => Some(Format::Csv),
         "tsv" | "tab" => Some(Format::Tsv),
+        "xls" | "xlsm" => Some(Format::LegacyExcel),
         "studio" | "studio3" => Some(Format::Studio),
         "stencilcraft" => Some(Format::StencilCraft),
         "gcode" | "nc" => Some(Format::Gcode),
