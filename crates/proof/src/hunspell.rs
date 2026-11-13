@@ -752,6 +752,7 @@ mod tests {
 
     /// `$XDG_DATA_HOME` counts only as an absolute path; otherwise (unset, empty or relative) the
     /// spec's default `~/.local/share` applies, and with no home there is no folder.
+    #[cfg(unix)]
     #[test]
     fn xdg_data_home_follows_the_spec() {
         let home = Path::new("/home/a");
@@ -1010,7 +1011,13 @@ mod tests {
         assert!(load(&aff, &big).unwrap_err().contains("too large"));
         // A directory, and on Unix an endless device, are not dictionary files. (No clock: a
         // reader that read `/dev/zero` would never return, so the error itself is the proof.)
-        assert!(load(&aff, &dir).unwrap_err().contains("not a regular file"));
+        let directory_error = load(&aff, &dir).unwrap_err();
+        // Unix permits opening a directory as a file descriptor, so read_capped must reject it
+        // from metadata. Windows rejects the open itself, which is an equally valid refusal.
+        #[cfg(unix)]
+        assert!(directory_error.contains("not a regular file"));
+        #[cfg(not(unix))]
+        let _ = directory_error;
         #[cfg(unix)]
         assert!(load(&aff, Path::new("/dev/zero")).unwrap_err().contains("not a regular file"));
         // Turkish reads through the same reader.
