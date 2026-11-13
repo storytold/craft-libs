@@ -110,15 +110,33 @@ impl<'a, K> PresetPanelMenu<'a, K> {
         self.commands()
             .into_iter()
             .map(|command| {
-                let state = match command {
-                    PresetCommands::GridView => CommandState::new().checked(self.view == PresetView::Grid),
-                    PresetCommands::ListView => CommandState::new().checked(self.view == PresetView::List),
-                    PresetCommands::NewGroup => CommandState::new().enabled(self.new_group.unwrap_or(false)),
-                    other => CommandState::new().enabled(self.files.is_none_or(|files| files.enabled(other, self.selected))),
-                };
-                (command, state)
+                let state = CommandState::new().enabled(self.enabled(command));
+                (command, match self.checked(command) {
+                    Some(on) => state.checked(on),
+                    None => state,
+                })
             })
             .collect()
+    }
+
+    /// Whether the row of `command` is checked: `Some` for the two view rows, `None` for a row without a check. For a
+    /// host that draws the panel menu itself.
+    pub fn checked(&self, command: PresetCommands) -> Option<bool> {
+        match command {
+            PresetCommands::GridView => Some(self.view == PresetView::Grid),
+            PresetCommands::ListView => Some(self.view == PresetView::List),
+            _ => None,
+        }
+    }
+
+    /// Whether `command` is enabled: New Group… and Save… as asked, every other row always. For a host that draws the
+    /// panel menu itself.
+    pub fn enabled(&self, command: PresetCommands) -> bool {
+        match command {
+            PresetCommands::GridView | PresetCommands::ListView => true,
+            PresetCommands::NewGroup => self.new_group.unwrap_or(false),
+            other => self.files.is_none_or(|files| files.enabled(other, self.selected)),
+        }
     }
 
     /// Carries out a command of the menu: a view row names the view, New Group… reports `NewGroup` (nothing when it is
