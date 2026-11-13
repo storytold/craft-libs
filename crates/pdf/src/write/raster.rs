@@ -22,6 +22,12 @@ pub struct Image {
 pub struct SpotPlate {
     pub name: String,
     pub cmyk: [f32; 4],
+    /// CIE L*a*b* ink color for a caller's metadata packet.
+    pub lab: [f32; 3],
+    /// Encoded sRGB ink color for a caller's metadata packet.
+    pub srgb: [f32; 3],
+    /// Spot ink solidity in the inclusive range 0..=1.
+    pub solidity: f32,
     pub width: u32,
     pub height: u32,
     pub data: Vec<u8>,
