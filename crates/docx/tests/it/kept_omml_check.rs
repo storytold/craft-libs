@@ -50,6 +50,17 @@ fn well_formed_kept_omml_is_written_back_unchanged() {
 }
 
 #[test]
+fn xml_whitespace_after_the_element_name_is_kept() {
+    // XML allows any of space, tab, carriage return and line feed between a name and `>`.
+    for ws in [" ", "\t", "\r", "\n", "\r\n "] {
+        let kept = format!("<m:oMath{ws}><m:r><m:t>KEPT</m:t></m:r></m:oMath>");
+        let (xml, back) = save(&kept, false);
+        assert!(xml.contains(&kept), "{ws:?}: {xml}");
+        assert_eq!(texts(&back), vec!["KEPT".to_string()], "{ws:?}");
+    }
+}
+
+#[test]
 fn malformed_kept_omml_is_written_from_the_nodes() {
     for kept in [
         // Unclosed, mismatched, an undefined entity.

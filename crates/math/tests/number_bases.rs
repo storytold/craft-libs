@@ -92,3 +92,32 @@ fn a_comma_between_digits_in_brackets_joins_them() {
     assert_eq!(f.text, "f");
     assert_eq!(elems, &vec![vec![sup("1,2", "3")]]);
 }
+
+/// Linear text and back: the same tree.
+#[track_caller]
+fn prints_back(t: Vec<MNode>, want: &str) {
+    let lin = craft_math::math::to_linear(&t);
+    assert_eq!(lin, want);
+    assert_eq!(parse_linear(&lin), t, "{lin}");
+}
+
+#[test]
+fn a_number_base_prints_bare() {
+    // A number the parser reads as one item needs no brackets as a base, with a comma too.
+    for (base, want) in [("10", "10^2"), ("2.5", "2.5^2"), (".5", ".5^2"), ("1,000", "1,000^2")] {
+        prints_back(vec![sup(base, "2")], want);
+    }
+}
+
+#[test]
+fn a_comma_before_a_digit_after_a_script_stays_outside_it() {
+    // `x^2,3` would read `,3` into the number script, so a space ends the script first.
+    prints_back(vec![sup("x", "2"), r(",3")], "x^2 ,3");
+    prints_back(vec![sup("x", "a"), r(",3")], "x^a ,3");
+    // Also when the comma and the digit are separate runs (read back as one).
+    let lin = craft_math::math::to_linear(&[sup("x", "2"), r(","), r("3")]);
+    assert_eq!(lin, "x^2 ,3");
+    assert_eq!(parse_linear(&lin), vec![sup("x", "2"), r(",3")]);
+    // A comma before anything else ends the script on its own: no space is added.
+    assert_eq!(craft_math::math::to_linear(&[sup("x", "2"), r(", y")]), "x^2, y");
+}

@@ -72,7 +72,10 @@ fn parse_kept(xml: &str) -> Option<El> {
 /// document's root declares them): any other prefix is undeclared there. The element must be
 /// `m:oMath` by namespace, so an `m:` bound to another URI isn't one.
 fn is_well_formed(xml: &str) -> bool {
-    if !(xml.starts_with("<m:oMath>") || xml.starts_with("<m:oMath ")) || Options::default().strict().parse(xml.as_bytes()).is_err() {
+    // The name ends at `>` or XML whitespace (XML 1.0 §2.3 S), not at `/>` (an empty equation) or
+    // a longer name (`m:oMathPara`).
+    let named = xml.strip_prefix("<m:oMath").and_then(|r| r.chars().next()).is_some_and(|c| matches!(c, '>' | ' ' | '\t' | '\r' | '\n'));
+    if !named || Options::default().strict().parse(xml.as_bytes()).is_err() {
         return false;
     }
     let wrapped = format!("<x xmlns:m=\"{MATH_NS}\" xmlns:w=\"{W_NS}\" xmlns:mc=\"{MC_NS}\">{xml}</x>");

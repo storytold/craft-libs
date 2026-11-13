@@ -499,7 +499,12 @@ fn lin_arg(a: &[MNode], s: &mut String, depth: usize) {
         // A bare script or limit ends at a space: a letter, digit or period after it is its own item.
         if matches!(n, MNode::Script { kind, .. } if *kind != ScriptKind::Pre) || matches!(n, MNode::Lim { .. }) {
             let ends_bare = s.chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '.');
-            if ends_bare && a.get(i + 1).and_then(first_lin_char).is_some_and(|c| c.is_alphanumeric() || c == '.') {
+            // So does a `,` before a digit: a number script reads it as part of the number (`x^2,3`).
+            let comma_digit = || {
+                let mut cs = a[i + 1..].iter().map_while(|n| if let MNode::Run(r) = n { Some(r.text.chars()) } else { None }).flatten();
+                cs.next() == Some(',') && cs.next().is_some_and(|c| c.is_ascii_digit())
+            };
+            if ends_bare && (a.get(i + 1).and_then(first_lin_char).is_some_and(|c| c.is_alphanumeric() || c == '.') || comma_digit()) {
                 s.push(' ');
             }
         }
@@ -516,6 +521,16 @@ fn first_lin_char(n: &MNode) -> Option<char> {
         MNode::Frac { num, .. } => num.first().and_then(first_lin_char),
         _ => None,
     }
+}
+
+/// Whether `t` is one number as the linear-format parser reads it (`number_len`): digits, where a
+/// `.` or `,` continues it only before a digit (`2.5`, `1,000`), and a leading `.` before a digit
+/// starts one (`.5`). `2.` isn't one: the parser leaves the point out.
+fn is_number(t: &str) -> bool {
+    let c: Vec<char> = t.chars().collect();
+    let digit = |k: usize| c.get(k).is_some_and(|c| c.is_ascii_digit());
+    (digit(0) || (c.first() == Some(&'.') && digit(1)))
+        && c.iter().enumerate().all(|(k, &ch)| ch.is_ascii_digit() || (matches!(ch, '.' | ',') && digit(k + 1)))
 }
 
 /// Whether `a` is written bare as an operand: a single simple atom.
@@ -560,10 +575,11 @@ fn lin_base(a: &[MNode], s: &mut String, depth: usize) {
     lin_arg(a, &mut inner, depth);
     let invisible = matches!(a, [MNode::Delim { beg: None, end: None, elems, .. }] if elems.len() == 1);
     let operator = matches!(a, [MNode::Run(r)] if r.text.chars().all(crate::math_linear::is_boundary));
-    let number = |t: &str| t.chars().all(|c| c.is_ascii_digit() || c == '.');
     let name = |r: &MRun| r.sty == Some(MSty::Plain) && crate::math_linear::FUNCTION_NAMES.contains(&r.text.as_str());
-    let letters = matches!(a, [MNode::Run(r)] if r.text.chars().nth(1).is_some() && !number(&r.text) && !name(r));
-    if simple_operand(a) && !inner.is_empty() && !invisible && !operator && !letters {
+    // A number by the parser's rule (`1,000`, `2.5`, `.5`) is one item, so it stays bare too.
+    let number = matches!(a, [MNode::Run(r)] if is_number(&r.text));
+    let letters = matches!(a, [MNode::Run(r)] if r.text.chars().nth(1).is_some() && !number && !name(r));
+    if (simple_operand(a) || number) && !inner.is_empty() && !invisible && !operator && !letters {
         s.push_str(&inner);
     } else {
         s.push('〖');
