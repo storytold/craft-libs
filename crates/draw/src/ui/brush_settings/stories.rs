@@ -62,7 +62,7 @@ const NAMES: [&str; 13] = [
     "Protect Texture",
 ];
 
-/// Photoshop's list: Brush Tip Shape without a box, the seven panes with a box and a lock, the five switch rows.
+/// Photoshop's list: Brush Tip Shape without a box, the seven panes and the five switch rows, each with a box and a lock.
 /// With `on`, every pane but Texture is on and of the switches only Noise; without, every box is clear.
 fn sections(on: bool) -> Vec<BrushSection<u8>> {
     (0..)
@@ -70,7 +70,7 @@ fn sections(on: bool) -> Vec<BrushSection<u8>> {
         .map(|(key, name)| match key {
             TIP => BrushSection::pane(key, name),
             DYNAMICS..=7 => BrushSection::pane(key, name).enabled(on && key != TEXTURE).locked(false),
-            _ => BrushSection::switch(key, name, on && key == NOISE),
+            _ => BrushSection::switch(key, name, on && key == NOISE).locked(false),
         })
         .collect()
 }
