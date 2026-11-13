@@ -17,7 +17,7 @@
 //! [`draw`] bounds what drawing a tree with resvg allocates.
 //!
 //! Stack: usvg uses about 15 kB of stack for each level of nesting (measured natively by
-//! VectorCraft). [`Limits::depth`] levels, times one more than [`Limits::embedded_depth`], must
+//! VectorCraft). [`Limits::tree_depth`] levels, times one more than [`Limits::embedded_depth`], must
 //! fit the stack of the thread that calls [`parse`]: the default of 256 needs a thread with
 //! 16 MB or so, and a 1 MB stack takes a depth of about 34.
 
@@ -41,8 +41,12 @@ pub mod draw;
 pub struct Limits {
     /// Bytes of the document, unpacked if it is SVGZ.
     pub bytes: usize,
-    /// How deep elements may nest, references followed (the root alone is 1).
+    /// How deep the XML elements may nest (the root alone is 1).
     pub depth: usize,
+    /// Maximum depth usvg may create after following references such as `<use>`, patterns,
+    /// clip paths, masks and markers (the root alone is 1). Choose this for the stack available
+    /// to the parsing thread; usvg conversion recurses after this preflight.
+    pub tree_depth: usize,
     /// Bytes the document type's entity references may expand to in all.
     pub entity_bytes: usize,
     /// Refuse a document type that declares an entity holding markup, instead of counting what
@@ -70,6 +74,7 @@ impl Default for Limits {
         Limits {
             bytes: 64 << 20,
             depth: 256,
+            tree_depth: 256,
             entity_bytes: guard::MAX_ENTITY_EXPANSION,
             refuse_entity_markup: false,
             attributes: guard::MAX_ATTRIBUTES,
@@ -148,8 +153,8 @@ fn checked<'s>(svg: &'s str, limits: &Limits) -> Result<roxmltree::Document<'s>,
         crate::preflight::Error::TooWide(attributes) => Error::TooWide(attributes),
         crate::preflight::Error::Xml(msg) => Error::Xml(msg),
     })?;
-    if height(&xml, limits.depth)?.is_none() {
-        return Err(Error::TooDeep(limits.depth));
+    if height(&xml, limits.tree_depth)?.is_none() {
+        return Err(Error::TooDeep(limits.tree_depth));
     }
     Ok(xml)
 }
@@ -436,12 +441,12 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'
             return None;
         }
     };
-    let Some(xml_depth) = height(&xml, limits.depth).ok().flatten() else {
+    let Some(xml_depth) = height(&xml, limits.tree_depth).ok().flatten() else {
         used.svg_limit.fetch_add(1, Ordering::Relaxed);
         return None;
     };
     let total_depth = used.xml_depth.load(Ordering::Relaxed).checked_add(xml_depth);
-    let Some(total_depth) = total_depth.filter(|depth| *depth <= limits.depth) else {
+    let Some(total_depth) = total_depth.filter(|depth| *depth <= limits.tree_depth) else {
         used.svg_limit.fetch_add(1, Ordering::Relaxed);
         return None;
     };
