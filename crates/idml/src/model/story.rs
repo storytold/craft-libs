@@ -5,6 +5,49 @@ use craft_xml::{El, Local, Node};
 
 use super::{PageItem, Values, tidy};
 
+/// Resolved IDML anchored-object options from an item and its inherited style levels.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnchoredObjectValues {
+    pub position: String,
+    pub anchor_point: String,
+    pub horizontal_alignment: String,
+    pub horizontal_reference: String,
+    pub vertical_alignment: String,
+    pub vertical_reference: String,
+    pub pin_position: bool,
+    pub spine_relative: bool,
+    pub space_above: f64,
+    pub x_offset: f64,
+    pub y_offset: f64,
+}
+
+impl AnchoredObjectValues {
+    /// Resolves attributes item-first from `AnchoredObjectSetting` children.
+    pub fn from_elements(elements: &[&El]) -> Self {
+        let get = |key: &str, default: &str| {
+            elements
+                .iter()
+                .filter_map(|element| element.child(Local("AnchoredObjectSetting")))
+                .find_map(|setting| Values::of(setting).get(key).map(str::to_owned))
+                .unwrap_or_else(|| default.to_owned())
+        };
+        let number = |key: &str| get(key, "0").parse::<f64>().ok().filter(|value| value.is_finite()).unwrap_or(0.0);
+        Self {
+            position: get("AnchoredPosition", "InlinePosition"),
+            anchor_point: get("AnchorPoint", "BottomRightAnchor"),
+            horizontal_alignment: get("HorizontalAlignment", "LeftAlign"),
+            horizontal_reference: get("HorizontalReferencePoint", "TextFrame"),
+            vertical_alignment: get("VerticalAlignment", "BottomAlign"),
+            vertical_reference: get("VerticalReferencePoint", "LineBaseline"),
+            pin_position: get("PinPosition", "true") == "true",
+            spine_relative: get("SpineRelative", "false") == "true",
+            space_above: number("AnchorSpaceAbove"),
+            x_offset: number("AnchorXoffset"),
+            y_offset: number("AnchorYoffset"),
+        }
+    }
+}
+
 /// A `Story`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Story {

@@ -45,8 +45,9 @@ pub use spread::{
     TextWrapPreference, spreads,
 };
 pub use story::{
-    Ace, CONTAINERS, Cell, CellOptions, Container, ContainerKind, ContentPart, PageReference, Range, SavedCrossReference, SavedCrossReferencePart,
-    Story, StoryAnchor, StoryPreference, Table, TableChild, TableColumn, TableLayout, TableRow, TextNode, TrackedChangeKind, stories,
+    Ace, AnchoredObjectValues, CONTAINERS, Cell, CellOptions, Container, ContainerKind, ContentPart, PageReference, Range, SavedCrossReference,
+    SavedCrossReferencePart, Story, StoryAnchor, StoryPreference, Table, TableChild, TableColumn, TableLayout, TableRow, TextNode, TrackedChangeKind,
+    stories,
 };
 
 use crate::value::{matrix, nums};
