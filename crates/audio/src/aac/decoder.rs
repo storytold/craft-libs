@@ -6,6 +6,7 @@ use crate::aac::config::{AudioSpecificConfig, ElementType, ProgramConfig};
 use crate::aac::huffman::{self, INTENSITY_HCB, INTENSITY_HCB2, NOISE_HCB, ZERO_HCB};
 use crate::aac::ics::{IcsInfo, WindowSequence};
 use crate::aac::mdct::{MdctScratch, WindowShape, mdct_long, mdct_short, window};
+use crate::aac::sbr;
 use crate::aac::tables::{pow43, pow43_table, sf_gain};
 use crate::aac::tns::{self, TnsData};
 use crate::aac::{Error, Result};
@@ -63,7 +64,14 @@ impl Scratch {
     }
 }
 
-/// AAC-LC decoder.
+/// Where the SBR data of a channel element sits in its access unit: the bit range of the fill
+/// element's payload after its extension type, and whether a CRC leads it.
+type SbrRef = (usize, usize, bool);
+
+/// An access unit's core output, and the SBR data of each layout entry.
+type Decoded = (Vec<Vec<f32>>, Vec<Option<SbrRef>>);
+
+/// AAC-LC decoder, with the SBR tool of HE-AAC when [`Decoder::set_sbr`] turns it on.
 #[derive(Clone)]
 pub struct Decoder {
     asc: AudioSpecificConfig,
@@ -75,6 +83,11 @@ pub struct Decoder {
     scratch: Scratch,
     /// A fill element carried SBR data (implicitly signalled HE-AAC).
     sbr_seen: bool,
+    /// The SBR decoder of each layout entry, when output is at twice the core rate.
+    sbr_out: Option<Vec<sbr::Element>>,
+    /// The layout `sbr_out` was built for. Kept apart from `layout`, so that an access unit whose
+    /// new program config fails (and whose layout is put back) leaves the SBR history alone.
+    sbr_layout: Vec<(ElementType, u8)>,
 }
 
 impl Decoder {
@@ -110,6 +123,8 @@ impl Decoder {
             noise_state: NOISE_SEED,
             scratch: Scratch::new(),
             sbr_seen: false,
+            sbr_out: None,
+            sbr_layout: Vec::new(),
         };
         d.set_layout(layout);
         Ok(d)
@@ -131,15 +146,26 @@ impl Decoder {
     pub fn config(&self) -> &AudioSpecificConfig {
         &self.asc
     }
-    /// Output sampling rate in Hz: the AAC-LC core rate.
+    /// Output sampling rate in Hz: the AAC-LC core rate, or twice it with [`Self::set_sbr`] on.
     pub fn sample_rate(&self) -> u32 {
-        self.asc.sample_rate
+        if self.sbr_out.is_some() { self.asc.sample_rate.saturating_mul(2) } else { self.asc.sample_rate }
     }
     /// Whether the stream is HE-AAC: SBR signalled in the `AudioSpecificConfig` (explicit) or SBR
-    /// data seen in a fill element of a decoded access unit (implicit). Only the AAC-LC core is
-    /// decoded, at [`Self::sample_rate`]; the SBR high band is not reconstructed.
+    /// data seen in a fill element of a decoded access unit (implicit). Without [`Self::set_sbr`],
+    /// only the AAC-LC core is decoded.
     pub fn sbr(&self) -> bool {
         self.asc.sbr || self.sbr_seen
+    }
+    /// Decode HE-AAC at twice the core rate (`true`) or the AAC-LC core alone (`false`, the
+    /// default). With SBR on, [`Self::decode`] returns 2048 samples per channel: the core through
+    /// the SBR filter banks, delayed by [`SBR_DELAY`](crate::aac::SBR_DELAY) samples, with the high
+    /// band rebuilt from each frame's SBR data. Until the stream's first SBR header, and for a
+    /// frame whose SBR data is missing or damaged, the high band is empty. Parametric stereo
+    /// (HE-AAC v2) is not decoded: its mono core stays mono.
+    pub fn set_sbr(&mut self, on: bool) {
+        if on != self.sbr_out.is_some() {
+            self.sbr_out = on.then(Vec::new);
+        }
     }
     /// Output channels of the current element layout.
     pub fn channels(&self) -> usize {
@@ -158,30 +184,61 @@ impl Decoder {
             c.overlap.fill(0.0);
             c.prev_shape = WindowShape::Sine;
         }
+        for e in self.sbr_out.iter_mut().flatten() {
+            e.reset();
+        }
     }
 
     fn sf_index(&self) -> u8 {
         self.asc.sf_index
     }
 
-    /// Decode one access unit (one `raw_data_block`) into 1024 samples per channel. An access unit
-    /// that fails leaves the decoder as it was, but for [`Self::sbr`]: its damage, including a damaged
-    /// program config element, does not reach the access units after it.
+    /// Decode one access unit (one `raw_data_block`) into 1024 samples per channel (2048 with
+    /// [`Self::set_sbr`] on). An access unit that fails leaves the decoder as it was, but for
+    /// [`Self::sbr`]: its damage, including a damaged program config element, does not reach the
+    /// access units after it. Damaged SBR data alone does not fail it.
     pub fn decode(&mut self, au: &[u8]) -> Result<Vec<Vec<f32>>> {
         let before = (self.asc.pce.clone(), self.layout.clone(), self.offsets.clone(), self.channels.clone(), self.noise_state);
-        let decoded = self.decode_block(au, true);
-        if decoded.is_err() {
-            (self.asc.pce, self.layout, self.offsets, self.channels, self.noise_state) = before;
+        match self.decode_block(au, true) {
+            Ok((pcm, sbr_refs)) => Ok(self.apply_sbr(au, pcm, &sbr_refs)),
+            Err(e) => {
+                (self.asc.pce, self.layout, self.offsets, self.channels, self.noise_state) = before;
+                Err(e)
+            }
         }
-        decoded
     }
 
-    fn decode_block(&mut self, au: &[u8], allow_reconfig: bool) -> Result<Vec<Vec<f32>>> {
+    /// Run each layout entry's channels through its SBR decoder, when SBR is on.
+    fn apply_sbr(&mut self, au: &[u8], pcm: Vec<Vec<f32>>, refs: &[Option<SbrRef>]) -> Vec<Vec<f32>> {
+        let rate = self.sample_rate();
+        let Some(elements) = self.sbr_out.as_mut() else {
+            return pcm;
+        };
+        // a new layout (a program config element) starts the SBR decoders afresh: their history
+        // belongs to the old element order, even where the channel counts match
+        if elements.len() != self.layout.len() || self.sbr_layout != self.layout {
+            *elements = self.layout.iter().map(|l| sbr::Element::new(l.0.channels(), rate)).collect();
+            self.sbr_layout.clone_from(&self.layout);
+        }
+        let mut out = Vec::with_capacity(pcm.len());
+        for (i, e) in elements.iter_mut().enumerate() {
+            let first = self.offsets.get(i).copied().unwrap_or(0);
+            let core = pcm.get(first..first + e.channels()).unwrap_or_default();
+            let payload = refs.get(i).copied().flatten().map(|(start, end, crc)| sbr::Payload { data: au, start, end, crc });
+            out.extend(e.process(core, payload));
+        }
+        out
+    }
+
+    fn decode_block(&mut self, au: &[u8], allow_reconfig: bool) -> Result<Decoded> {
         let mut br = BitReader::new(au);
         let nch = self.channels.len();
         let mut saw_element = false;
         let mut out: Vec<Option<Vec<f32>>> = vec![None; nch];
         let mut used = vec![false; self.layout.len()];
+        // SBR data belongs to the single channel or pair element before its fill element
+        let mut sbr_refs: Vec<Option<SbrRef>> = vec![None; self.layout.len()];
+        let mut last_slot = None;
         loop {
             let id = br.read_bits(3)?;
             saw_element |= matches!(id, ID_SCE | ID_CPE | ID_LFE);
@@ -191,6 +248,7 @@ impl Decoder {
                     let ty = if id == ID_SCE { ElementType::Sce } else { ElementType::Lfe };
                     let slot = self.find_slot(ty, tag, &used)?;
                     used[slot] = true;
+                    last_slot = (id == ID_SCE).then_some(slot);
                     let mut ics = self.decode_ics(&mut br, None)?;
                     let ch = self.offsets[slot];
                     self.fill_noise(&mut ics, None);
@@ -200,6 +258,7 @@ impl Decoder {
                     let tag = br.read_bits(4)? as u8;
                     let slot = self.find_slot(ElementType::Cpe, tag, &used)?;
                     used[slot] = true;
+                    last_slot = Some(slot);
                     let ch = self.offsets[slot];
                     let [a, b] = self.decode_cpe(&mut br, ch)?;
                     out[ch] = Some(a);
@@ -237,8 +296,13 @@ impl Decoder {
                     }
                     if count > 0 {
                         let ext = br.read_bits(4)?;
-                        self.sbr_seen |= matches!(ext, EXT_SBR_DATA | EXT_SBR_DATA_CRC);
+                        let is_sbr = matches!(ext, EXT_SBR_DATA | EXT_SBR_DATA_CRC);
+                        self.sbr_seen |= is_sbr;
+                        let start = br.position();
                         br.skip(count * 8 - 4)?;
+                        if let (true, Some(slot)) = (is_sbr, last_slot.take()) {
+                            sbr_refs[slot] = Some((start, br.position(), ext == EXT_SBR_DATA_CRC));
+                        }
                     }
                 }
                 _ => break, // ID_END
@@ -251,7 +315,7 @@ impl Decoder {
         for o in out {
             res.push(o.ok_or(Error::Bitstream("access unit is missing a channel element"))?);
         }
-        Ok(res)
+        Ok((res, sbr_refs))
     }
 
     fn find_slot(&self, ty: ElementType, tag: u8, used: &[bool]) -> Result<usize> {
@@ -635,6 +699,85 @@ mod tests {
         let dec = Decoder::new(&[0x2B, 0x92, 0x08, 0x00]).unwrap();
         assert!(dec.sbr());
         assert_eq!(dec.sample_rate(), 22_050);
+    }
+
+    /// With SBR on, an access unit decodes to 2048 samples, and over a silent core the high band
+    /// its SBR fill element describes is there; with SBR off, the core alone (silence).
+    #[test]
+    fn sbr_fill_elements_rebuild_the_high_band() {
+        let au = sbr_au(0);
+        // AAC-LC, 22.05 kHz, mono
+        let asc = AudioSpecificConfig::lc(7, 1);
+        let mut dec = Decoder::from_config(asc.clone()).unwrap();
+        let core = dec.decode(&au).unwrap();
+        assert_eq!((core[0].len(), dec.sample_rate()), (1024, 22_050));
+        assert!(dec.sbr() && core[0].iter().all(|&s| s == 0.0));
+        let mut dec = Decoder::from_config(asc).unwrap();
+        dec.set_sbr(true);
+        assert_eq!(dec.sample_rate(), 44_100);
+        let mut out = Vec::new();
+        for _ in 0..4 {
+            out.extend(dec.decode(&au).unwrap().remove(0));
+        }
+        assert_eq!(out.len(), 4 * 2048);
+        let rms = (out[2048..].iter().map(|s| s * s).sum::<f32>() / (out.len() - 2048) as f32).sqrt();
+        assert!(rms > 1e-4, "{rms}");
+    }
+
+    /// A program config that changes the layout restarts the SBR decoders, even where the
+    /// channel counts match, and one in an access unit that fails leaves their history alone: the
+    /// access units after it decode as if it had not been there.
+    #[test]
+    fn a_new_layout_restarts_sbr_and_a_failed_one_keeps_it() {
+        let au = sbr_au(0);
+        let one = ProgramConfig { front: vec![(false, 0)], ..Default::default() };
+        let six = ProgramConfig { front: vec![(false, 0), (true, 0)], back: vec![(true, 1)], lfe: vec![0], ..Default::default() };
+        let decoder = || {
+            let mut d = Decoder::from_config(AudioSpecificConfig { pce: Some(one.clone()), ..AudioSpecificConfig::lc(7, 0) }).unwrap();
+            d.set_sbr(true);
+            d
+        };
+        let (mut kept, mut failed) = (decoder(), decoder());
+        for _ in 0..3 {
+            assert_eq!(kept.decode(&au).unwrap(), failed.decode(&au).unwrap());
+        }
+        // the new layout's elements are missing from this access unit
+        assert!(failed.decode(&silent_au(Some(&six), &[(ID_SCE, 0)])).is_err());
+        for _ in 0..2 {
+            assert_eq!(kept.decode(&au).unwrap(), failed.decode(&au).unwrap());
+        }
+        // the same channel count under another tag is a new layout: the SBR decoder starts over,
+        // as in a decoder that had that layout from the start
+        let tag1 = ProgramConfig { front: vec![(false, 1)], ..Default::default() };
+        let mut fresh = Decoder::from_config(AudioSpecificConfig { pce: Some(tag1.clone()), ..AudioSpecificConfig::lc(7, 0) }).unwrap();
+        fresh.set_sbr(true);
+        kept.set_layout(tag1.layout());
+        assert_eq!(kept.decode(&sbr_au(1)).unwrap(), fresh.decode(&sbr_au(1)).unwrap());
+    }
+
+    /// One access unit of SCE `tag` with an SBR fill element of [`sbr::test_payload`] (44.1 kHz
+    /// output).
+    fn sbr_au(tag: u32) -> Vec<u8> {
+        let payload = sbr::test_payload(44_100, |_| 40, |_| 0).unwrap();
+        let mut bw = BitWriter::new();
+        bw.write_bits(ID_SCE, 3);
+        bw.write_bits(tag, 4);
+        bw.write_bits(0, 8 + 11 + 3); // global_gain, ics_info (max_sfb 0), no pulse/TNS/gain control
+        bw.write_bits(ID_FIL, 3);
+        let count = (4 + 8 * payload.len()).div_ceil(8);
+        if count < 15 {
+            bw.write_bits(count as u32, 4);
+        } else {
+            bw.write_bits(15, 4);
+            bw.write_bits((count - 14) as u32, 8);
+        }
+        bw.write_bits(EXT_SBR_DATA, 4);
+        for &b in &payload {
+            bw.write_bits(u32::from(b), 8);
+        }
+        bw.write_bits(0, 4);
+        bw.write_bits(ID_END, 3);
+        bw.finish()
     }
 
     /// An access unit whose elements are all empty: `elements` are (id, tag), then ID_END.

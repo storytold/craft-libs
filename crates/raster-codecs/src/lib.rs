@@ -18,6 +18,8 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// Common bounded decoding and PNG/JPEG encoding for common image formats.
+pub mod common;
 pub mod dds;
 mod dds_bc;
 pub mod dicom;

@@ -309,7 +309,8 @@ match craft_audio::decode(&bytes, None) {
 | AIFF, AIFF-C | native | native |
 | FLAC | symphonia | native |
 | AAC-LC | native | native |
-| HE-AAC v1/v2 | native, core only (see [Limits](#limits)) | — |
+| HE-AAC v1 | native (SBR) | — |
+| HE-AAC v2 | native, without parametric stereo (see [Limits](#limits)) | — |
 | ALAC | native | native, packets (`alac::Encoder`; no file writer) |
 | MP1, MP2 (MPEG audio Layer I/II) | native | — |
 | MP3 (Layer III) | native | native, frames (`mp3::Encoder`; the frames in a row are an `.mp3` file) |
@@ -329,10 +330,10 @@ match craft_audio::decode(&bytes, None) {
 
 ## Limits
 
-- HE-AAC: the AAC-LC core is decoded. `decode`, `Decoder` and `TrackDecoder` upsample it 2×;
-  `aac::Decoder` alone outputs the core rate. SBR is not reconstructed, so there is no content
-  above the core's Nyquist frequency.
-- HE-AAC v2: parametric stereo is not reconstructed either, so the mono core decodes as mono.
+- HE-AAC: `decode`, `Decoder` and `TrackDecoder` decode SBR at twice the core rate.
+  `aac::Decoder` outputs the core rate unless `set_sbr(true)` is called. Downsampled SBR (an
+  output rate equal to the core rate) plays the core alone.
+- HE-AAC v2: parametric stereo is not reconstructed, so the mono core decodes as mono, with SBR.
 - AAC: Main, SSR and LTP profiles, coupling channels and 960-sample frames are unsupported.
 - Raw ADTS: frames with several raw data blocks are unsupported: a stream of them is refused, and
   one among other frames decodes as silence of its length and counts as damaged, as does a frame
@@ -413,7 +414,7 @@ Each codec module's rustdoc lists the coding tools it implements.
 |---|---|---|---|
 | WAV, AIFF | Microsoft RIFF, Apple AIFF/AIFF-C | read: integer 8–32-bit, float 32/64-bit, `WAVE_FORMAT_EXTENSIBLE` masks, RF64/BW64, BWF `bext`, truncated files; write: 16/24/32-bit integer and 32-bit float, RF64 above 4 GiB, any layout, TPDF dither | round trips; hostile-input tests |
 | FLAC encoder | RFC 9639 | 16, 24, 32 bits; 1–8 channels, layouts decoders would not assume for the count as a `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment; up to 655,350 Hz; LPC, stereo decorrelation, wasted bits, STREAMINFO MD5 | bit-exact through ffmpeg, STREAMINFO MD5 checked against ffmpeg |
-| AAC (`aac`) | ISO/IEC 14496-3 | AAC-LC decode and encode (CBR, VBR, ADTS), 1–8 channels; HE-AAC: see [Limits](#limits) | ffmpeg: ~135 dB SNR; PNS noise differs per sample at equal band energy |
+| AAC (`aac`) | ISO/IEC 14496-3; SBR tables from ETSI ES 201 980 Annex I | AAC-LC decode and encode (CBR, VBR, ADTS), 1–8 channels; HE-AAC (SBR) decode, see [Limits](#limits) | ffmpeg: ~135 dB SNR; PNS noise differs per sample at equal band energy. HE-AAC from AudioToolbox, 1–6 channels: same 962-sample delay as ffmpeg, ~54 dB SNR, high band level within 0.01 dB |
 | Opus (`opus`) | RFC 6716, 8251, 7845 | decoder: SILK, hybrid, CELT, all frame sizes, PLC and FEC, multistream (`Decoder`) and single stream (`StreamDecoder`), 8–48 kHz output | all 36 RFC 8251 conformance cases |
 | AC-3/E-AC-3 (`ac3`) | decoder: ATSC A/52:2012; encoder/programme API: ETSI TS 102 366 V1.4.1 | single-syncframe and complete-programme decoding; packet encoding through discrete 7.1 (see below) | decoder comparisons and encoder output through ffmpeg, CRC/channel/timing/bit-budget regressions; synthetic quality limitations below |
 | MP1/MP2 (`mpa`) | ISO/IEC 11172-3, 13818-3 | Layer I and II, MPEG-1/2/2.5, 8–48 kHz; also the Layer II rate/mode pairs the spec disallows (ffmpeg's default mono 384 kbit/s); no free format | ffmpeg-encoded streams, 73–84 dB SNR |

@@ -1,0 +1,15 @@
+[package]
+name = "craft-materialx"
+description = "MaterialX document parsing and writing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-xml = { workspace = true }
+thiserror = { workspace = true }
