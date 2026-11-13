@@ -58,6 +58,75 @@ pub struct TextVariableValues {
     pub kind: TextVariableKind,
 }
 
+/// A recognized IDML cross-reference format building block.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CrossReferenceBuildingBlock {
+    CustomText(String),
+    FullParagraph,
+    ParagraphText,
+    ParagraphNumber,
+    PageNumber,
+    BookmarkName,
+    ChapterNumber,
+    FileName,
+    PartialParagraph { delimiter: String, include_delimiter: bool },
+}
+
+/// Parsed IDML cross-reference format definition.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CrossReferenceFormatValues {
+    pub self_id: Option<String>,
+    pub name: String,
+    pub blocks: Vec<CrossReferenceBuildingBlock>,
+}
+
+impl CrossReferenceFormatValues {
+    /// Reads a `CrossReferenceFormat` and recognizes its building-block grammar.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        let mut result =
+            Self { self_id: values.self_id().map(str::to_owned), name: values.get("Name").unwrap_or("Format").to_owned(), blocks: Vec::new() };
+        for block in el.elements().filter(|child| child.local() == "BuildingBlock") {
+            let values = Values::of(block);
+            let text = |key: &str| values.get(key).filter(|value| *value != "$ID/").unwrap_or("").to_owned();
+            let parsed = match values.get("BlockType").unwrap_or("") {
+                "CustomStringBuildingBlock" => Some(CrossReferenceBuildingBlock::CustomText(text("CustomText"))),
+                "FullParagraphBuildingBlock" => Some(CrossReferenceBuildingBlock::FullParagraph),
+                "ParagraphTextBuildingBlock" => Some(CrossReferenceBuildingBlock::ParagraphText),
+                "ParagraphNumberBuildingBlock" => Some(CrossReferenceBuildingBlock::ParagraphNumber),
+                "PageNumberBuildingBlock" => Some(CrossReferenceBuildingBlock::PageNumber),
+                "BookmarkNameBuildingBlock" => Some(CrossReferenceBuildingBlock::BookmarkName),
+                "ChapterNumberBuildingBlock" => Some(CrossReferenceBuildingBlock::ChapterNumber),
+                "FileNameBuildingBlock" => Some(CrossReferenceBuildingBlock::FileName),
+                "PartialParagraphBuildingBlock" => Some(CrossReferenceBuildingBlock::PartialParagraph {
+                    delimiter: text("AppliedDelimiter"),
+                    include_delimiter: values.get("IncludeDelimiter") == Some("true"),
+                }),
+                _ => None,
+            };
+            if let Some(parsed) = parsed {
+                result.blocks.push(parsed);
+            }
+        }
+        result
+    }
+}
+
+/// Parsed EPUB document-splitting preference.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EpubSplitValues {
+    pub break_document: bool,
+    pub paragraph_style: Option<String>,
+}
+
+impl EpubSplitValues {
+    /// Reads an `EPubExportPreference` element.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        Self { break_document: values.boolean("BreakDocument") == Some(true), paragraph_style: values.get("ParagraphStyleName").map(str::to_owned) }
+    }
+}
+
 impl TextVariableValues {
     /// Reads a `TextVariable` and its preference record.
     pub fn from_el(el: &El) -> Self {
