@@ -114,6 +114,11 @@ pub struct ListRow<'a> {
     /// The row has `space.gap.row` of empty room above its content, to set a group off from the one before.
     #[prop]
     pub(super) space_above: bool,
+    /// The label stays in its label column: the toggle columns this row leaves empty before it stay empty, as Brush
+    /// Settings' Brush Tip Shape lines up with the names of the sections that have an enable box. Without it the
+    /// label band spans the empty toggle columns next to it, as Layer Style's Styles row starts at the row's start.
+    #[prop(flag)]
+    pub(super) in_label_column: bool,
     /// Whether the row is its own AccessKit node; a face inside another component's part turns it off.
     #[prop]
     pub(super) node: bool,
@@ -281,6 +286,7 @@ impl<'a> ListRow<'a> {
             strong: false,
             heading: false,
             space_above: false,
+            in_label_column: false,
             node: true,
             ink: RowInk::Normal,
             tone: Tone::Neutral,

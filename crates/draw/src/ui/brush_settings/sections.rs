@@ -324,11 +324,11 @@ impl<'a, K: Value + Eq + Hash> BrushSectionList<'a, K> {
                             let state = ToggleState::of(section.enabled == Some(true));
                             row = row.toggle(ToggleCell::check(CHECK, state, switch_name.clone()).row_press());
                         }
-                        BrushSectionKind::Pane => {
-                            if let Some(on) = section.enabled {
-                                row = row.toggle(ToggleCell::check(CHECK, ToggleState::of(on), enable_name.clone()).row_press());
-                            }
-                        }
+                        BrushSectionKind::Pane => match section.enabled {
+                            Some(on) => row = row.toggle(ToggleCell::check(CHECK, ToggleState::of(on), enable_name.clone()).row_press()),
+                            // A pane without an enable box (Brush Tip Shape) lines its name up with the others.
+                            None => row = row.in_label_column(),
+                        },
                     }
                     if let Some(locked) = section.locked {
                         let tip = if locked { words.unlock_tip.clone() } else { words.lock_tip.clone() };

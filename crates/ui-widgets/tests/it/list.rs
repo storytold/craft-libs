@@ -480,7 +480,8 @@ fn a_cell_field_stands_in_its_cell_takes_the_click_and_reports_its_edit() {
 
 /// A row's label band takes the toggle columns it leaves empty next to it, up to the nearest toggle it fills: a row
 /// without toggles starts its label at the row's start, a row with the first toggle only starts it inside the second
-/// column, and a row with both starts it past them.
+/// column, and a row with both starts it past them. A row without toggles that keeps its label in the label column
+/// starts it past them too.
 #[trial]
 fn a_rows_label_takes_the_empty_toggle_columns_next_to_it() {
     use craft_behavior::{ColumnKey, ColumnWidth};
@@ -490,13 +491,13 @@ fn a_rows_label_takes_the_empty_toggle_columns_next_to_it() {
     const INCLUDE: ColumnKey = ColumnKey::new("include");
     const DIALOG: ColumnKey = ColumnKey::new("dialog");
     const NAME: ColumnKey = ColumnKey::new("name");
-    const LABELS: [&str; 3] = ["Set", "Action", "Step"];
+    const LABELS: [&str; 4] = ["Set", "Action", "Step", "Tip"];
     let ends = Rc::new(Cell::new((0.0_f32, 0.0_f32)));
     let held = ends.clone();
     let mut fixture = Fixture::new(move |ui| {
         let toggle = |key| ColumnSpec::toggle(key, "", ToggleColumn::default());
         let columns = vec![toggle(INCLUDE), toggle(DIALOG), ColumnSpec::new(NAME, "", ColumnWidth::fill(1.0))];
-        let keys = [0_usize, 1, 2];
+        let keys = [0_usize, 1, 2, 3];
         let source = keyed(&keys, |key: &usize| *key);
         let _ = List::new("Actions").columns(columns).show_items(ui, &source, &mut |key, icx| {
             let end = |column| icx.cell(&column).map_or(0.0, |cell| cell.right());
@@ -506,7 +507,8 @@ fn a_rows_label_takes_the_empty_toggle_columns_next_to_it() {
             match key {
                 0 => row,
                 1 => row.toggle(check(INCLUDE)),
-                _ => row.toggle(check(INCLUDE)).toggle(check(DIALOG)),
+                2 => row.toggle(check(INCLUDE)).toggle(check(DIALOG)),
+                _ => row.in_label_column(),
             }
         });
     });
@@ -526,6 +528,7 @@ fn a_rows_label_takes_the_empty_toggle_columns_next_to_it() {
     assert!(start("Set") < include, "a row without toggles starts its label in the first toggle column");
     assert!(start("Action") > include && start("Action") < dialog, "a row with the first toggle starts its label in the second column");
     assert!(start("Step") > dialog, "a row with both toggles starts its label past them");
+    assert!(start("Tip") > dialog, "a row that keeps its label in the label column leaves the toggle columns empty");
 }
 
 /// In a list of toggle columns only, the label takes the room past the last column: it shows whole, as measure counts

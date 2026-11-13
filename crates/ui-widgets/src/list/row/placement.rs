@@ -313,7 +313,8 @@ impl ListRow<'_> {
 
     /// The positions in `cells_of` of the label column and of the first and last column the label band spans: its
     /// own and every toggle column between it and the nearest cell the row fills on each side. A row lays out only
-    /// the toggle columns it fills, as a heading row without toggles starts at the row's start.
+    /// the toggle columns it fills, as a heading row without toggles starts at the row's start; a row `in_label_column`
+    /// spans none before its label column.
     pub(super) fn label_span(&self, cells_of: &[(ColumnKey, Rect)]) -> Option<(usize, usize, usize)> {
         let label = self.label_column(cells_of)?;
         let at = cells_of.iter().position(|(key, _)| key == label)?;
@@ -321,7 +322,7 @@ impl ListRow<'_> {
             let key = &cells_of[*position].0;
             self.toggle_columns.contains(key) && !self.toggles.iter().any(|toggle| toggle.column == *key)
         };
-        let first = (0..at).rev().take_while(open).last().unwrap_or(at);
+        let first = if self.in_label_column { at } else { (0..at).rev().take_while(open).last().unwrap_or(at) };
         let last = (at + 1..cells_of.len()).take_while(open).last().unwrap_or(at);
         Some((at, first, last))
     }
