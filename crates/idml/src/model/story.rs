@@ -2,7 +2,7 @@
 //! anchored page items, hyperlink and change containers).
 
 use craft_xml::{El, Local, Node};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use super::{PageItem, Values, tidy};
 
@@ -204,6 +204,60 @@ pub struct IndexCrossReferenceValues {
     pub from: Vec<String>,
     pub reference_type: String,
     pub target: String,
+}
+
+/// A topic path and its sort keys, as they are saved on nested IDML `Topic` elements.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IndexTopicPath {
+    pub path: Vec<String>,
+    pub sort: Vec<String>,
+}
+
+/// An IDML index cross-reference as stored under an index topic.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IndexReference {
+    pub from: IndexTopicPath,
+    pub referenced_topic: Option<String>,
+    pub reference_type: Option<String>,
+}
+
+/// Parsed IDML index topics and cross-references.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IndexDocument {
+    pub topics: HashMap<String, IndexTopicPath>,
+    pub cross_references: Vec<IndexReference>,
+}
+
+impl IndexDocument {
+    pub fn from_el(element: &El) -> Self {
+        let mut result = Self::default();
+        let mut stack: Vec<(&El, IndexTopicPath)> =
+            element.elements().filter(|child| child.local() == "Topic").map(|topic| (topic, IndexTopicPath::default())).collect();
+        while let Some((topic, prefix)) = stack.pop() {
+            let name = topic.attr("Name").unwrap_or_default().to_string();
+            let mut current = prefix.clone();
+            current.path.push(name);
+            if let Some(key) = topic.attr("SortOrder").filter(|key| !key.is_empty()) {
+                current.sort.resize(prefix.path.len(), String::new());
+                current.sort.push(key.to_string());
+            }
+            if let Some(self_id) = topic.attr("Self") {
+                result.topics.insert(self_id.to_string(), current.clone());
+            }
+            for child in topic.elements() {
+                if child.local() == "CrossReference" {
+                    result.cross_references.push(IndexReference {
+                        from: current.clone(),
+                        referenced_topic: child.attr("ReferencedTopic").map(str::to_string),
+                        reference_type: child.attr("CrossReferenceType").map(str::to_string),
+                    });
+                } else if child.local() == "Topic" {
+                    stack.push((child, current.clone()));
+                }
+            }
+        }
+        result
+    }
 }
 
 impl IndexValues {

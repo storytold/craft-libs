@@ -46,8 +46,9 @@ pub use spread::{
 };
 pub use story::{
     Ace, AnchoredObjectSetting, AnchoredObjectValues, CONTAINERS, Cell, CellOptions, Container, ContainerKind, ContentPart,
-    IndexCrossReferenceValues, IndexValues, PageReference, Range, SavedCrossReference, SavedCrossReferencePart, Story, StoryAnchor, StoryPreference,
-    Table, TableChild, TableColumn, TableLayout, TableRow, TextNode, TrackedChangeKind, stories,
+    IndexCrossReferenceValues, IndexDocument, IndexReference, IndexTopicPath, IndexValues, PageReference, Range, SavedCrossReference,
+    SavedCrossReferencePart, Story, StoryAnchor, StoryPreference, Table, TableChild, TableColumn, TableLayout, TableRow, TextNode, TrackedChangeKind,
+    stories,
 };
 
 use crate::value::{matrix, nums};
