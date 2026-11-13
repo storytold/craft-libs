@@ -220,6 +220,37 @@ fn duplicate_names_are_refused() {
 }
 
 #[test]
+fn drive_prefix_after_normalized_dot_segments_is_refused() {
+    for name in ["./C:/LIBRARY/a.xml", "./C:\\LIBRARY\\a.xml"] {
+        assert!(matches!(Archive::open(&zip(&[(name, b"x", false)])).err(), Some(ZipError::Unsafe(_))));
+    }
+    assert!(Archive::open(&zip(&[("./LIBRARY/a.xml", b"x", false)])).is_ok());
+}
+
+#[test]
+fn invalid_eocd_comment_candidate_does_not_mask_archive_end() {
+    let mut z = zip(&[("a.xml", b"x", false)]);
+    let end = z.len() - 22;
+    z[end + 20..end + 22].copy_from_slice(&22u16.to_le_bytes());
+    let fake = z.len();
+    z.extend_from_slice(&END.to_le_bytes());
+    z.extend_from_slice(&[0; 16]);
+    z.extend_from_slice(&u16::MAX.to_le_bytes());
+    assert!(Archive::open(&z).is_ok());
+    assert_eq!(fake + 22, z.len());
+}
+
+#[test]
+fn central_directory_must_be_consumed_exactly() {
+    let mut z = zip(&[("a.xml", b"x", false)]);
+    let end = z.len() - 22;
+    let size = u32::from_le_bytes(z[end + 12..end + 16].try_into().unwrap());
+    z.insert(end, 0);
+    z[end + 12 + 1..end + 16 + 1].copy_from_slice(&(size + 1).to_le_bytes());
+    assert_eq!(Archive::open(&z).err(), Some(ZipError::Damaged("the central directory has trailing data")));
+}
+
+#[test]
 fn deeply_nested_folders_are_refused() {
     let ok = format!("{}a.xml", "f/".repeat(MAX_DEPTH));
     assert!(Archive::open(&zip(&[(&ok, b"x", false)])).is_ok());

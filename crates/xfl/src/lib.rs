@@ -203,12 +203,12 @@ fn clean_path(name: &str) -> Result<String, ZipError> {
         return Err(ZipError::Unsafe(shown()));
     }
     let mut parts = Vec::new();
-    for (i, part) in unix.split('/').enumerate() {
+    for part in unix.split('/') {
         match part {
             "" | "." => {}
             ".." => return Err(ZipError::Unsafe(shown())),
             // `C:`, `C:x`: a drive.
-            p if i == 0 && p.contains(':') => return Err(ZipError::Unsafe(shown())),
+            p if parts.is_empty() && p.contains(':') => return Err(ZipError::Unsafe(shown())),
             p => parts.push(p),
         }
     }
@@ -234,7 +234,13 @@ fn method_name(method: u16) -> &'static str {
 fn find_end(data: &[u8]) -> Result<(u64, u64, u64, usize), ZipError> {
     // The end record is in the last 22 + 65535 bytes (it may carry a comment).
     let lo = data.len().saturating_sub(22 + 65_535);
-    let eocd = (lo..data.len().saturating_sub(21)).rev().find(|&i| u32_at(data, i) == Some(END)).ok_or(ZipError::NotZip)?;
+    let eocd = (lo..data.len().saturating_sub(21))
+        .rev()
+        .find(|&i| {
+            u32_at(data, i) == Some(END)
+                && u16_at(data, i + 20).is_some_and(|comment| i.checked_add(22 + usize::from(comment)).is_some_and(|end| end <= data.len()))
+        })
+        .ok_or(ZipError::NotZip)?;
     let field16 = |o: usize| u16_at(data, eocd + o).ok_or(ZipError::Damaged("the end record is cut short"));
     let field32 = |o: usize| u32_at(data, eocd + o).ok_or(ZipError::Damaged("the end record is cut short"));
     let (disk, dir_disk, on_disk, count) = (field16(4)?, field16(6)?, field16(8)?, field16(10)?);
@@ -345,6 +351,9 @@ impl<'a> Archive<'a> {
             if entries.insert(path, Entry { method, flags, crc, comp, size, data: start }).is_some() {
                 return Err(ZipError::Duplicate(shown()));
             }
+        }
+        if i != dir.len() {
+            return Err(ZipError::Damaged("the central directory has trailing data"));
         }
         // No two entries may share bytes (the overlapping-entries zip bomb).
         spans.sort_unstable_by_key(|s| s.0);
