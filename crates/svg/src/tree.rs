@@ -32,6 +32,7 @@ pub use usvg;
 use crate::paths::{MAX_CSS_SELECTOR_CHECKS, StyleMap, computed_style, parse_stylesheets};
 use crate::{guard, svgz};
 
+pub mod document;
 pub mod draw;
 
 /// What one import may use. The defaults suit a desktop app that parses on a thread with a
