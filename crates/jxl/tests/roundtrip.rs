@@ -60,6 +60,63 @@ fn lossless_rgba_roundtrip_keeps_alpha_layout() {
 }
 
 #[test]
+fn exif_payload_starts_at_its_declared_tiff_header_offset() {
+    let image = ImageRef { width: 2, height: 1, layout: Layout::Rgb, samples: Samples::U8(&[10, 20, 30, 40, 50, 60]) };
+    let encoded = encode(&image, EncodeOptions { lossless: true, ..EncodeOptions::default() }, &Metadata::default());
+    assert!(encoded.is_ok(), "valid image should encode: {encoded:?}");
+    let Ok(encoded) = encoded else { return };
+    let raw = raw_codestream(&encoded);
+    let exif = b"II*\0\x08\0\0\0\0\0\0\0";
+
+    for offset in [0_u32, 6, 64] {
+        let mut exif_box = offset.to_be_bytes().to_vec();
+        exif_box.resize(4 + offset as usize, 0xab);
+        exif_box.extend_from_slice(exif);
+        let mut container = b"\0\0\0\x0cJXL \x0d\x0a\x87\x0a".to_vec();
+        box_bytes(&mut container, b"ftyp", b"jxl \0\0\0\0jxl ");
+        box_bytes(&mut container, b"jxlc", &raw);
+        box_bytes(&mut container, b"Exif", &exif_box);
+
+        let decoded = decode(&container, DecodeLimits::default());
+        assert!(decoded.is_ok(), "container with Exif offset {offset} should decode: {decoded:?}");
+        let Ok(decoded) = decoded else { return };
+        assert_eq!(decoded.metadata.exif.as_deref(), Some(exif.as_slice()), "TIFF header offset {offset}");
+    }
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn associated_alpha_is_unpremultiplied_before_color_conversion() {
+    let straight = [[200_u8, 100, 50, 128], [30, 180, 240, 192], [100, 80, 60, 255], [220, 110, 40, 160]];
+    let mut premultiplied = Vec::with_capacity(straight.len() * 4);
+    for pixel in &straight {
+        let alpha = f32::from(pixel[3]) / 255.0;
+        premultiplied.extend(pixel[..3].iter().map(|channel| (f32::from(*channel) * alpha).round() as u8));
+        premultiplied.push(pixel[3]);
+    }
+    let metadata = jixel::FlMeta { alpha_premultiplied: true, ..jixel::FlMeta::srgb() };
+    let encoded = jixel::encode_fast_lossless(&premultiplied, 2, 2, jixel::ColorSpace::Rgb, true, &metadata);
+    assert!(encoded.is_ok(), "associated-alpha image should encode: {encoded:?}");
+    let Ok(encoded) = encoded else { return };
+
+    let decoded = decode_with_color(&encoded, DecodeLimits::default(), OutputColor::LinearRec2020);
+    assert!(decoded.is_ok(), "associated-alpha image should decode: {decoded:?}");
+    let Ok(decoded) = decoded else { return };
+    assert_eq!(decoded.layout, Layout::Rgba);
+    assert!(!decoded.pixels_linear_rec2020, "the source encoding is needed for the caller's color transform");
+    assert!(!decoded.pixels_premultiplied, "associated color samples must be divided before nonlinear conversion");
+
+    for (i, source) in straight.iter().enumerate() {
+        let alpha = f32::from(source[3]) / 255.0;
+        assert!((decoded.pixels[i * 4 + 3] - alpha).abs() < 1e-6);
+        for (channel, &value) in source[..3].iter().enumerate() {
+            let expected = f32::from(value) / 255.0;
+            assert!((decoded.pixels[i * 4 + channel] - expected).abs() < 0.01, "pixel {i}, channel {channel}");
+        }
+    }
+}
+
+#[test]
 fn decoder_enforces_input_and_pixel_limits() {
     let samples = [10_u8, 20, 30];
     let image = ImageRef { width: 1, height: 1, layout: Layout::Rgb, samples: Samples::U8(&samples) };

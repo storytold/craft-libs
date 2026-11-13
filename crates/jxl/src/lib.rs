@@ -150,6 +150,12 @@ pub struct Decoded {
     pub rendered_icc: Vec<u8>,
     /// Whether the codestream uses XYB encoding.
     pub xyb_encoded: bool,
+    /// Whether `pixels` are linear Rec. 2020. This is false when associated alpha requires keeping
+    /// a modeled nonlinear source encoding so the caller can unpremultiply before its color transform.
+    pub pixels_linear_rec2020: bool,
+    /// Whether color samples in `pixels` remain associated with alpha. When true, divide them by
+    /// alpha after any necessary transfer conversion; at zero alpha the color values are undefined.
+    pub pixels_premultiplied: bool,
 }
 
 /// Options for bounded decoding.
