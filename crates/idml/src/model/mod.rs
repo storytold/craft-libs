@@ -25,7 +25,9 @@ pub use document::{
     CellStyleValues, ConditionValues, CrossReferenceBuildingBlock, CrossReferenceFormatValues, EpubSplitValues, ModelDocument, NumberingListValues,
     TableStyleValues, TextDateKind, TextVariableKind, TextVariableValues, TocStyleEntryValues, TocStyleValues, TopLevelKind, TopLevelNode,
 };
-pub use effects::{DirectionalFeatherValues, DropShadowValues, FeatherValues, GradientFeatherValues, OpacityStopValues, TransparencySetting};
+pub use effects::{
+    DirectionalFeatherValues, DropShadowValues, FeatherValues, GradientFeatherValues, ObjectStyleStack, OpacityStopValues, TransparencySetting,
+};
 pub use geometry::{MAX_PATH_POINTS, PathGeometry, PathGeometryError, PathPoint, SubPath};
 pub use preferences::{DocumentPreferences, FootnotePreferences, GridPreferences, TextFramePreferences};
 pub use resources::{

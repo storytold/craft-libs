@@ -1,6 +1,6 @@
 //! The IDML transparency/effect settings found on page items and object styles.
 
-use craft_xml::{El, Local};
+use craft_xml::{El, Local, Node};
 
 use super::Values;
 
@@ -119,6 +119,167 @@ impl TransparencySetting {
             feather,
             gradient_feather,
             directional_feather,
+        }
+    }
+}
+
+/// Resolved object-style chain used to inherit item-level IDML settings.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ObjectStyleStack {
+    chain: Vec<El>,
+}
+
+impl ObjectStyleStack {
+    /// Resolves a style reference and its `BasedOn` chain (nearest first, cycle-safe, max 16).
+    pub fn from_styles(styles: &[El], reference: Option<&str>, include_none: bool) -> Self {
+        let find = |reference: &str| {
+            styles.iter().find(|style| Values::of(style).self_id() == Some(reference)).or_else(|| {
+                let normalized = if reference.starts_with("ObjectStyle/") {
+                    reference.to_owned()
+                } else {
+                    format!("ObjectStyle/{}", crate::value::escape_id(reference.trim()))
+                };
+                styles.iter().find(|style| Values::of(style).self_id() == Some(normalized.as_str()))
+            })
+        };
+        let mut chain = Vec::new();
+        let mut next = reference.map(str::to_owned);
+        while let Some(id) = next {
+            let Some(style) = find(&id) else { break };
+            let self_id = Values::of(style).self_id().map(str::to_owned);
+            if chain.len() >= 16 || self_id.as_deref().is_some_and(|id| chain.iter().any(|entry: &El| Values::of(entry).self_id() == Some(id))) {
+                break;
+            }
+            chain.push(style.clone());
+            next = Values::of(style).prop("BasedOn").map(|base| {
+                let base = base.trim();
+                if base.starts_with("ObjectStyle/") { base.to_owned() } else { format!("ObjectStyle/{}", crate::value::escape_id(base)) }
+            });
+        }
+        if include_none
+            && !chain.iter().any(|style| Values::of(style).self_id() == Some("ObjectStyle/$ID/[None]"))
+            && let Some(none) = find("ObjectStyle/$ID/[None]")
+        {
+            chain.push(none.clone());
+        }
+        Self { chain }
+    }
+
+    /// The resolved style elements, nearest first.
+    pub fn styles(&self) -> &[El] {
+        &self.chain
+    }
+
+    /// Merges an item's child over the corresponding elements in the resolved style chain.
+    pub fn merged_child(&self, item: &El, name: &str) -> Option<El> {
+        let category = match name {
+            "TransparencySetting" => Some("ObjectStyleObjectEffectsCategorySettings"),
+            "StrokeTransparencySetting" => Some("ObjectStyleStrokeEffectsCategorySettings"),
+            "FillTransparencySetting" => Some("ObjectStyleFillEffectsCategorySettings"),
+            "ContentTransparencySetting" => Some("ObjectStyleContentEffectsCategorySettings"),
+            _ => None,
+        };
+        let enabled = |effect: &str| {
+            let (Some(category), Some(flag)) = (category, effect_flag(effect)) else { return true };
+            self.chain.iter().find_map(|style| style.child(Local(category)).and_then(|c| Values::of(c).get(flag).map(str::to_owned))).as_deref()
+                != Some("false")
+        };
+        let mut result = None;
+        for style in self.chain.iter().rev() {
+            let Some(child) = style.child(Local(name)) else { continue };
+            let mut child = child.clone();
+            child.children.retain(|node| !matches!(node, Node::El(element) if !enabled(element.local())));
+            match &mut result {
+                Some(current) => overlay(current, &child, 0),
+                None => result = Some(child),
+            }
+        }
+        if let Some(child) = item.child(Local(name)) {
+            match &mut result {
+                Some(current) => overlay(current, child, 0),
+                None => result = Some(child.clone()),
+            }
+        }
+        result
+    }
+
+    /// Returns the drop-shadow and feather records enabled by the style's effect category.
+    pub fn enabled_shadow_feather(&self) -> Option<El> {
+        let category = self.chain.iter().find_map(|style| style.child(Local("ObjectStyleObjectEffectsCategorySettings")));
+        let setting = |name: &str| self.chain.iter().find_map(|style| style.child(Local("TransparencySetting"))?.child(Local(name)).cloned());
+        let mut result = El::new("TransparencySetting");
+        let mut any = false;
+        for (name, flag) in [("DropShadowSetting", "EnableDropShadow"), ("FeatherSetting", "EnableFeather")] {
+            let element = setting(name);
+            let on = match category {
+                Some(category) => Values::of(category).get(flag) == Some("true"),
+                None => element.as_ref().and_then(|element| Values::of(element).get("Mode").map(str::to_owned)).is_some_and(|mode| mode != "None"),
+            };
+            any |= on;
+            if let (true, Some(element)) = (on, element) {
+                result.push(element);
+            }
+        }
+        any.then_some(result)
+    }
+}
+
+fn effect_flag(effect: &str) -> Option<&'static str> {
+    Some(match effect {
+        "BlendingSetting" => "EnableTransparency",
+        "DropShadowSetting" => "EnableDropShadow",
+        "FeatherSetting" => "EnableFeather",
+        "InnerShadowSetting" => "EnableInnerShadow",
+        "OuterGlowSetting" => "EnableOuterGlow",
+        "InnerGlowSetting" => "EnableInnerGlow",
+        "BevelAndEmbossSetting" => "EnableBevelEmboss",
+        "SatinSetting" => "EnableSatin",
+        "DirectionalFeatherSetting" => "EnableDirectionalFeather",
+        "GradientFeatherSetting" => "EnableGradientFeather",
+        _ => return None,
+    })
+}
+
+fn overlay(base: &mut El, top: &El, depth: usize) {
+    if depth > 32 {
+        *base = top.clone();
+        return;
+    }
+    for (key, value) in &top.attrs {
+        base.set_attr(key, value);
+        if let Some(Node::El(properties)) = base.children.iter_mut().find(|node| matches!(node, Node::El(el) if el.local() == "Properties")) {
+            properties.children.retain(|node| !matches!(node, Node::El(el) if el.local() == key));
+        }
+    }
+    if let Some(properties) = top.child(Local("Properties")) {
+        let names: Vec<&str> = properties.elements().map(El::local).collect();
+        base.attrs.retain(|(key, _)| !names.contains(&key.as_str()));
+    }
+    let has_text = top.children.iter().any(|node| matches!(node, Node::Text(text) | Node::CData(text) if !text.trim().is_empty()));
+    if has_text {
+        base.children.retain(|node| !matches!(node, Node::Text(_) | Node::CData(_)));
+    }
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for node in &top.children {
+        match node {
+            Node::El(child) => {
+                let index = seen.entry(child.local()).or_insert(0);
+                let slot = base
+                    .children
+                    .iter_mut()
+                    .filter_map(|node| match node {
+                        Node::El(el) if el.local() == child.local() => Some(el),
+                        _ => None,
+                    })
+                    .nth(*index);
+                *index += 1;
+                match slot {
+                    Some(slot) => overlay(slot, child, depth + 1),
+                    None => base.children.push(node.clone()),
+                }
+            }
+            Node::Text(_) | Node::CData(_) if has_text => base.children.push(node.clone()),
+            Node::Text(_) | Node::CData(_) | Node::Comment(_) | Node::Pi { .. } => {}
         }
     }
 }
