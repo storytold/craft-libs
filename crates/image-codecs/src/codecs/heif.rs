@@ -55,7 +55,14 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits, keep_orientation: bool) -> R
     if !keep_orientation && (info.coded_width, info.coded_height) != (w, h) {
         limits.check(info.coded_width, info.coded_height, layout, sample)?;
     }
-    let options = craft_heif::Options { max_pixels: limits.max_pixels, apply_transforms: !keep_orientation, ..Default::default() };
+    let options = craft_heif::Options {
+        max_pixels: limits.max_pixels,
+        apply_transforms: !keep_orientation,
+        // PhotoCraft's HEIF fixtures and export expectations match Apple's decoder. In
+        // particular, its left-sited bilinear chroma reconstruction differs at sharp edges
+        // from the libheif default, even though both produce the same RGB strip centres.
+        chroma: craft_heif::Chroma::Apple,
+    };
     let decoded = craft_heif::decode(bytes, &options).map_err(err)?;
     // The decoder re-reads the container; trust its output's shape, not the probe's.
     let layout = if decoded.has_alpha { ChannelLayout::Rgba } else { ChannelLayout::Rgb };
