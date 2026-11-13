@@ -36,17 +36,13 @@ pub enum TimeError {
     Meter(u32, u32),
 }
 
-/// Sample rates supported by sessions (Pro Tools offers 44.1 k – 192 k; we accept 8 k – 768 k).
+/// Session sample rate stored as the original wire value.
+///
+/// `new` validates values created by the application. Deserialization remains
+/// permissive so legacy or damaged sessions retain their original value and
+/// can be diagnosed by the application instead of failing before recovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(try_from = "u32")]
 pub struct SampleRate(u32);
-
-impl TryFrom<u32> for SampleRate {
-    type Error = TimeError;
-    fn try_from(hz: u32) -> Result<Self, Self::Error> {
-        Self::new(hz)
-    }
-}
 
 impl SampleRate {
     pub const HZ_44100: SampleRate = SampleRate(44_100);
@@ -58,6 +54,10 @@ impl SampleRate {
     }
     pub fn hz(self) -> u32 {
         self.0
+    }
+    /// Whether this wire value is supported for normal session operation.
+    pub fn is_supported(self) -> bool {
+        (8_000..=768_000).contains(&self.0)
     }
     pub fn as_f64(self) -> f64 {
         f64::from(self.0)
@@ -132,12 +132,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sample_rate_serde_validates_nonzero_bounds() {
-        assert!(serde_json::from_str::<SampleRate>("0").is_err());
-        assert!(serde_json::from_str::<SampleRate>("7999").is_err());
+    fn sample_rate_serde_preserves_unsupported_wire_values_for_recovery() {
+        for wire in [0, 7_999, 768_001, u32::MAX] {
+            let rate: SampleRate = serde_json::from_value(serde_json::json!(wire)).unwrap();
+            assert_eq!(rate.hz(), wire);
+            assert!(!rate.is_supported());
+            assert_eq!(serde_json::to_value(rate).unwrap(), serde_json::json!(wire));
+        }
         let rate = SampleRate::new(48_000).unwrap();
         assert_eq!(serde_json::to_string(&rate).unwrap(), "48000");
         assert_eq!(serde_json::from_str::<SampleRate>("48000").unwrap(), rate);
+        assert!(rate.is_supported());
     }
 
     #[test]
