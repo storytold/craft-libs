@@ -226,6 +226,26 @@ impl Story {
         })
     }
 
+    /// Whether `StoryDirection` selects right-to-left order.
+    pub fn right_to_left(&self) -> bool {
+        self.preference().and_then(|values| values.get("StoryDirection").map(str::to_string)).as_deref() == Some("RightToLeftDirection")
+    }
+
+    /// Whether `StoryOrientation` selects vertical composition.
+    pub fn vertical(&self) -> bool {
+        self.preference().and_then(|values| values.get("StoryOrientation").map(str::to_string)).as_deref() == Some("Vertical")
+    }
+
+    /// Whether optical margin alignment is enabled; false when absent.
+    pub fn optical_margin_enabled(&self) -> bool {
+        self.preference().and_then(|values| values.boolean("OpticalMarginAlignment")) == Some(true)
+    }
+
+    /// The `OpticalMarginSize`, if finite.
+    pub fn optical_margin_size(&self) -> Option<f64> {
+        self.preference().and_then(|values| values.num("OpticalMarginSize"))
+    }
+
     /// The story's paragraph ranges in reading order, those inside containers included, but not
     /// those of its tables, footnotes or notes (which are text of their own).
     pub fn paragraphs(&self) -> Vec<&Range> {
