@@ -119,6 +119,23 @@ pub enum BrushSectionEvent<K> {
     OpenLink,
 }
 
+impl<K> BrushSectionEvent<K> {
+    /// An enable box change of `key` to `on`.
+    pub fn enable(key: K, on: bool) -> Self {
+        Self::Enable { key, on }
+    }
+
+    /// A lock change of `key` to `on`.
+    pub fn lock(key: K, on: bool) -> Self {
+        Self::Lock { key, on }
+    }
+
+    /// A switch row change of `key` to `on`.
+    pub fn switch(key: K, on: bool) -> Self {
+        Self::Switch { key, on }
+    }
+}
+
 /// What [`BrushSectionList::show`] reports.
 #[derive(Debug)]
 #[non_exhaustive]
