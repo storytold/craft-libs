@@ -8,8 +8,10 @@ use std::io::Write;
 /// Disposal behavior to write for every frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Disposal {
-    /// Leave the encoded disposal method unspecified (`0`), as the encoder default does.
+    /// Leave the encoded disposal method unspecified (`0`).
     Unspecified,
+    /// Do not dispose of the current frame (`1`), matching `gif::Frame`'s default.
+    Keep,
     /// Restore the logical screen to the background after each frame.
     Background,
 }
@@ -27,7 +29,7 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Self { loop_forever: true, disposal: Disposal::Unspecified, speed: 10 }
+        Self { loop_forever: true, disposal: Disposal::Keep, speed: 10 }
     }
 }
 
@@ -154,6 +156,7 @@ impl<W: Write> AnimationWriter<W> {
         prepared.frame.delay = delay_cs;
         prepared.frame.dispose = match self.options.disposal {
             Disposal::Unspecified => gif::DisposalMethod::Any,
+            Disposal::Keep => gif::DisposalMethod::Keep,
             Disposal::Background => gif::DisposalMethod::Background,
         };
         self.encoder.write_frame(&prepared.frame).map_err(Error::from)?;
@@ -205,6 +208,13 @@ mod tests {
         assert_eq!(info.loop_count, None);
         assert_eq!(info.frames.iter().map(|f| f.delay_cs).collect::<Vec<_>>(), [4, 7]);
         assert!(info.frames.iter().all(|f| f.disposal == 2));
+    }
+
+    #[test]
+    fn default_disposal_matches_gif_frame_default() {
+        let bytes = animation(1, 1, &[RgbaFrame { pixels: &[1, 2, 3, 255], delay_cs: 1 }], Options::default()).unwrap();
+        let info = crate::scan(&bytes, 1).unwrap();
+        assert_eq!(info.frames[0].disposal, 1);
     }
 
     #[test]
