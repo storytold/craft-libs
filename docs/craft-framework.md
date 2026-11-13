@@ -701,9 +701,9 @@ Everything is built in `craft-libs` first: build each feature once, in one place
 - **PhotoCraft migrates first.** It has the most UI and features. Its port branch runs on the library while the library grows.
 - **VectorCraft migrates second.** It shares the Canvas shell and most of PhotoCraft's skeleton. If the two ports look alike, the library is general enough.
 - **Other apps follow**, each adopting the steps it needs.
-- **One branch per port.** The port adopts each step as it lands and deletes the code the step replaces. The app's main branch switches once, when the port merges.
+- **One branch per port.** The port adopts each step as the framework provides it and deletes the code the step replaces. The app keeps pinning `craft-libs` `main` until the port is done; the app's main branch then switches to the framework's pin once, when the port merges.
 - **A gap is library work.** A gap an app finds is fixed in the library first. The port then deletes its own code. No app workaround.
-- **Review in small PRs.** Keep hand-written architecture changes in small, independently buildable PRs. Treat generated dumps and icon assets as reviewable data.
+- **Review as data where it is data.** Treat generated dumps, icon assets and migration maps as reviewable data, not as hand-written architecture.
 
 ### 9.2 Acceptance checklist
 
@@ -808,7 +808,15 @@ Each step also adds its families to the library docs: a page per family with the
 
 ### 9.7 Landing strategy
 
-The size of the series, measured on 11 November 2026 as the difference between this branch (with the branches due to land on it) and its merge base with storytold `craft-libs` main (`a8b996d2`):
+The framework lands on one storytold branch, `next`, and reaches `main` in one pull request at the end.
+
+- **`next`.** Finished work goes to `storytold/craft-libs` branch `next` by fast-forward. CI runs on pushes to `next` (the Linux jobs, [development.md](development.md)).
+- **Apps pin `main`.** An app keeps its `craft-libs` pin on `main` until its port is done. It then moves its pin to a `next` commit, and to `main` after `next` merges.
+- **`main` flows into `next`.** `main` is merged into `next` regularly with merge commits. `next` is never rebased or force-pushed.
+- **egui.** The egui fork works the same way: `storytold/egui` branch `next` ([3.7](#37-one-egui-revision)).
+- **One PR at the end.** When the apps that need the framework are ported, `next` merges to `main` through one pull request. It merges only when every check has finished green.
+
+The size of the change, measured on 11 November 2026 as the difference between `next` (with the work due to land on it) and its merge base with storytold `craft-libs` `main` (`a8b996d2`):
 
 | Measure | Value |
 | --- | --- |
@@ -819,15 +827,15 @@ The size of the series, measured on 11 November 2026 as the difference between t
 | Generated token dumps (`crates/theme/tests/dumps`) | about 17,000 lines |
 | Docs and migration maps (`docs/`, `migration/`) | about 38,000 lines |
 | Icon set files | about 700 (four sets: Phosphor, Lucide, Tabler, Carbon) |
-| New crates | 28 |
+| New crates | 29 |
 
-The numbers change once the branch moves onto current main. A review reads dumps, icons and the migration maps as data.
+A review reads dumps, icons and the migration maps as data.
 
-It lands as a series of upstream pull requests, one at a time, bottom-up. Each PR builds and passes CI alone. Apps pin `craft-libs` by commit, so a merged PR changes nothing in an app until the app moves its pin.
+The layers reach `next` bottom-up, so each push builds and passes CI:
 
-| Order | PR | Contents |
+| Order | Layer | Contents |
 | --- | --- | --- |
-| 1 | egui patches | The fork's commits go to the storytold egui fork; craft-libs main moves its egui pin ([3.7](#37-one-egui-revision)). Everything else depends on this |
+| 1 | egui patches | The fork's commits go to `storytold/egui` branch `next`; `craft-libs` moves its egui pin to it ([3.7](#37-one-egui-revision)). Everything else depends on this |
 | 2 | Icon sets | Data only |
 | 3 | Token model and themes | `craft-theme`, `craft-theme-store`, `craft-color`. New crates; nothing depends on them yet |
 | 4 | Library core | `craft-behavior`, `craft-ui-macros`, `craft-ui-contract` (runtime, style, primitives, contract, test kit), `craft-ui-widgets` |
@@ -835,17 +843,17 @@ It lands as a series of upstream pull requests, one at a time, bottom-up. Each P
 | 6 | Host, facade and changes to existing crates | `craft-host`, `craft`, and changes in `craft-menu`, `craft-keymap`, `craft-window` and `craft-platform` |
 | 7 | Tooling | The gallery, the story renderer, `craft-design-lint` |
 
-PR 5 replaces upstream's `craft-ui` crate (egui controls and icon catalogs) with the facade; [9.8](#98-breaking-changes) covers what that breaks.
+Layer 5 replaces upstream's `craft-ui` crate (egui controls and icon catalogs) with the facade; [9.8](#98-breaking-changes) covers what that breaks.
 
-**Timing.** A layer lands once PhotoCraft's port has used it in earnest. Bottom layers land first. Landing early stops drift from upstream. A landed layer's API is shared, and changes to it need the same care as any breaking change.
+**Timing.** The first push to `next` carries every layer that is finished. Later work follows as it passes its checks. A layer's API is shared once it is on `next`, and changes to it need the same care as any breaking change.
 
 ### 9.8 Breaking changes
 
-The library replaces upstream's `craft-ui` crate, and changes public items in `craft-menu`, `craft-keymap`, `craft-window` and `craft-platform`. What exists for apps that move their pin:
+The library replaces upstream's `craft-ui` crate, and changes public items in `craft-menu`, `craft-keymap`, `craft-window` and `craft-platform`. An app meets these changes when it moves its pin from `main` to `next`. What exists for apps that move their pin:
 
 - **The facade.** `crates/ui` is the `craft-ui` package, a re-export facade over the six library crates, so an app keeps one dependency and `craft_ui::…` paths. Upstream `craft-ui`'s modules `capture`, `combo`, `direction`, `icons`, `ime`, `localized`, `panes`, `printing` and `theme` are gone; `buttons`, `docking`, `fonts`, `layout`, `tabs`, `testing` and `text` keep their names and hold the library's types.
 - **The API map.** `migration/api-map/*.toml`, one file per family, lists each public type and function an app calls today: its old path, its new path, setter renames, and a status (`same`, `moved`, `replaced` with a note, `removed`, or `pending`). About 2,900 entries; 19 are still `pending`. The facade's `api_map` trial checks the files' shape. `migration/check-crates.txt` lists the domain crates and features a compile check builds.
-- **No deprecated aliases.** No old path is kept as a `#[deprecated]` alias or shim: an app's pin bump past PR 5 needs the app's code moved to the new paths in the same change. Whether the PRs should add aliases is a question for the team (9.9).
+- **No deprecated aliases.** No old path is kept as a `#[deprecated]` alias or shim: an app's pin bump past layer 5 needs the app's code moved to the new paths in the same change.
 
 ### 9.9 Status and open questions
 
@@ -872,18 +880,16 @@ The library replaces upstream's `craft-ui` crate, and changes public items in `c
 1. The GPU canvas (`craft-gpu`).
 2. PhotoCraft's dialogs on the library, completing its port.
 3. VectorCraft's port, then the other apps.
-4. The upstream PR series, starting with the egui commits.
+4. The `next` pushes, starting with the egui commits.
 
 #### Questions for the team
 
 | Topic | Question |
 | --- | --- |
-| Landing order | Is the bottom-up order right, or should the token model and the library core land together? Should the apps' PRs follow each layer, or wait for the whole series? |
-| Deprecated aliases | No old path has a deprecated alias today; apps move with the API map in the pin bump that takes the library. Should the landing PRs add `#[deprecated]` aliases for the paths apps use (the icon-button and combo-box modules, the old rail and number-field types), and for how long: until every app has moved past them, or a fixed number of releases? |
+| Deprecated aliases | No old path has a deprecated alias; apps move with the API map in the pin bump that takes the library. Should `next` add `#[deprecated]` aliases for the paths apps use (the icon-button and combo-box modules, the old rail and number-field types), and for how long: until every app has moved past them, or a fixed number of releases? |
 | egui fork | The library builds against storytold egui `next` (28 commits over the fork's pin on `main`, [3.7](#37-one-egui-revision)). Which of them should go to upstream egui? |
 | Facade name | `craft` is the facade's name. If it clashes with an app crate, the alternative is `craft-kit` |
-| Crate granularity | The layout adds 28 crates to upstream's 42, seven of them the UI library and its facade. Is there a family that should merge, or a crate that should split? |
-| Review load | Is a series of about 508,000 added lines, much of it moved, generated or data, reviewable as laid out, or should it split further? |
+| Crate granularity | The layout adds 29 crates to the workspace. Is there a family that should merge, or a crate that should split? |
 
 ## Appendix A. Component tokens
 

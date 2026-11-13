@@ -1,6 +1,6 @@
 # Development workflow
 
-How to build, test and look at this workspace without waiting for it. Porting an app onto the framework is described in [porting.md](porting.md). The rules here exist because a cargo workspace of 62 crates, with a framework that every domain crate links, rebuilds far more than the change touched whenever two commands disagree about features or profiles.
+How to build, test and look at this workspace without waiting for it. Porting an app onto the framework is described in [porting.md](porting.md). The rules here exist because a cargo workspace of 157 crates, with a framework that every domain crate links, rebuilds far more than the change touched whenever two commands disagree about features or profiles.
 
 ## The commands
 
@@ -36,16 +36,19 @@ Four manifest facts keep this true, and `cl doctor` checks them: `feature-root` 
 
 - `--all-features`: enables `snapshot`, `system_fonts`, `color_fonts`, text's `all-languages` and more, a set no loop uses; it rebuilt 206 dependency crates and every framework crate once. CI runs it.
 - `--bins` on the gallery: three 1 GB executables nobody opens locally.
-- Workspace-wide builds and tests (`--workspace`, `cargo xtask ci`): 43 minutes for the test build alone. Locally, build the crate you changed and run its trials; the GitHub workflows cover the rest of what they cover.
+- Workspace-wide builds and tests (`--workspace`): 43 minutes for the test build alone. Locally, build the crate you changed and run its trials; `workspace.yml` runs the workspace-wide checks in CI.
 
-What CI covers today (.github/workflows):
+What CI covers (.github/workflows). Pushes to `main` and `next` and every pull request run the workflows whose paths changed; on `next` the Linux jobs run:
 
-- `ui.yml` is the framework's gate: clippy and tests of the seven ui crates (`craft-ui` and the six it re-exports) with and without `--all-features`, their docs, and a wasm check of the facade. It runs on changes under those crates, `craft-ui-macros` and `craft-i18n`. A change to `craft-behavior` or `craft-host` alone does not run it.
+- `workspace.yml` runs `cargo fmt --check`, clippy and tests for the whole workspace, with and without `--all-features`, on every push and pull request (Linux only on `next`; Linux, Windows and macOS elsewhere). This is the full gate.
+- `ui.yml` is the framework's fast gate: clippy and tests of the seven ui crates (`craft-ui` and the six it re-exports) with and without `--all-features`, their docs, and a wasm check of the facade. It runs on changes under those crates, `craft-ui-macros` and `craft-i18n`.
 - `theme.yml` covers craft-theme and craft-theme-store, and checks that craft-ui's library still builds.
-- `docs.yml` builds the documentation.
-- Some leaf crates have their own path-filtered workflow: ai-core, atomic, audio, crw, dialogs, doc, docpath, ecproj-format, font-store, i18n, jpeg, keymap, media, pcraft-format, pdf, print, proof, update, vectorcraft-format, web-api, web-host, window.
+- `docs.yml` builds the documentation of the workspace.
+- `formats.yml` covers the shared format crates; `video.yml` covers craft-video.
+- Leaf crates with their own path-filtered workflow: ai-core, atomic, audio, cms, crw, dialogs, doc, docpath, ecproj-format, font-store, i18n, jpeg, keymap, media, menu, pcraft-format, pdf, print, proof, update, vectorcraft-format, web-api, web-host, window.
+- `house-rules.yml` runs the organisation's shared house-rules check.
 
-No workflow runs the tests of: craft-behavior, craft-host and craft-ui-macros; the domain crates that use the framework (automation, browse, color, draw, font-manager, imaging, layers, menu, pages, review, table, text, timeline); cms, font-catalog, fonts-build, platform and quit; the gallery, the story renderer, the benchmark, the test kit, craft-design-lint, craft-win32 and the `craft` facade. Nothing runs the full workspace build or test. A change in one of those crates is checked by its own `cl test` only.
+A crate without its own workflow (craft-behavior, craft-host, the domain crates that use the framework, the gallery, the story renderer and the benchmark) is tested only by `workspace.yml` in CI. Locally, check it with its own `cl test`.
 
 ## Profiles
 
