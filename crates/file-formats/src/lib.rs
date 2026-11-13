@@ -15,6 +15,7 @@ pub enum Format {
     Dxf,
     Svg,
     Raster,
+    Gcode,
     Studio,
     StencilCraft,
 }
@@ -64,6 +65,7 @@ pub fn from_extension(ext: &str) -> Option<Format> {
         "png" | "jpg" | "jpeg" | "bmp" | "gif" | "tif" | "tiff" | "webp" | "heic" | "heif" => Some(Format::Raster),
         "studio" | "studio3" => Some(Format::Studio),
         "stencilcraft" => Some(Format::StencilCraft),
+        "gcode" | "nc" => Some(Format::Gcode),
         _ => None,
     }
 }
