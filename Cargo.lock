@@ -2189,6 +2189,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-stencilcraft-format"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-stream-codecs"
 version = "0.1.0"
 dependencies = [
