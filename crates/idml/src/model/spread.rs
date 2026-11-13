@@ -718,18 +718,23 @@ impl GraphicLayerOptions {
     /// Reads a `GraphicLayerOption` subtree while preserving layer order and hierarchy.
     pub fn from_el(option: &El) -> Self {
         let attributes = option.attrs.iter().filter(|(key, _)| key != "Self").cloned().collect();
-        let mut roots: Vec<_> = option.children("GraphicLayer").collect();
+        let mut roots: Vec<_> = option.elements().collect();
         roots.reverse();
-        let mut pending: Vec<_> = roots.into_iter().map(|layer| (layer, None)).collect();
+        let mut pending: Vec<_> = roots.into_iter().map(|element| (element, None)).collect();
         let mut layers = Vec::new();
         let mut parents = Vec::new();
-        while let Some((layer, parent)) = pending.pop() {
-            let index = layers.len();
-            layers.push(layer.attrs.iter().filter(|(key, _)| key != "Self").cloned().collect());
-            parents.push(parent);
-            let mut children: Vec<_> = layer.children("GraphicLayer").collect();
+        while let Some((element, parent)) = pending.pop() {
+            let layer_parent = if element.local() == "GraphicLayer" {
+                let index = layers.len();
+                layers.push(element.attrs.iter().filter(|(key, _)| key != "Self").cloned().collect());
+                parents.push(parent);
+                Some(index)
+            } else {
+                parent
+            };
+            let mut children: Vec<_> = element.elements().collect();
             children.reverse();
-            pending.extend(children.into_iter().map(|child| (child, Some(index))));
+            pending.extend(children.into_iter().map(|child| (child, layer_parent)));
         }
         Self { attributes, layers, parents }
     }
@@ -843,20 +848,31 @@ impl Graphic {
     }
 
     pub fn layer_options(&self) -> Option<GraphicLayerOptions> {
-        self.children.iter().find_map(|child| match child {
-            GraphicChild::Other(el) if el.local() == "GraphicLayerOption" => Some(GraphicLayerOptions::from_el(el)),
-            _ => None,
-        })
+        self.children
+            .iter()
+            .find_map(|child| match child {
+                GraphicChild::Other(el) if el.local() == "GraphicLayerOption" => Some(el),
+                GraphicChild::Other(el) => el.find("GraphicLayerOption"),
+                GraphicChild::Link(link) => {
+                    link.rest.iter().find_map(|el| if el.local() == "GraphicLayerOption" { Some(el) } else { el.find("GraphicLayerOption") })
+                }
+            })
+            .or_else(|| self.values.prop_el("GraphicLayerOption"))
+            .map(GraphicLayerOptions::from_el)
     }
 
     pub fn pdf_attribute(&self) -> Option<PdfAttribute> {
         self.children
             .iter()
             .find_map(|child| match child {
-                GraphicChild::Other(el) if el.local() == "PDFAttribute" => Some(PdfAttribute { values: Values::of(el) }),
-                _ => None,
+                GraphicChild::Other(el) if el.local() == "PDFAttribute" => Some(el),
+                GraphicChild::Other(el) => el.find("PDFAttribute"),
+                GraphicChild::Link(link) => {
+                    link.rest.iter().find_map(|el| if el.local() == "PDFAttribute" { Some(el) } else { el.find("PDFAttribute") })
+                }
             })
-            .or_else(|| self.values.prop_el("PDFAttribute").map(|el| PdfAttribute { values: Values::of(el) }))
+            .or_else(|| self.values.prop_el("PDFAttribute"))
+            .map(|el| PdfAttribute { values: Values::of(el) })
     }
 
     /// `Properties/GraphicBounds`: `top left bottom right` in the graphic's inner coordinates.
