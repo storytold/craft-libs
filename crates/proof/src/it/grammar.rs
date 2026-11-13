@@ -172,7 +172,7 @@ fn ends_sentence(gap: &str, prev: &str) -> bool {
         return false;
     }
     rest.starts_with(char::is_whitespace)
-        && rest.trim_start().chars().all(|c| c.is_whitespace() || matches!(c, '"' | '“' | '«' | '(' | '[' | '\'' | '—'))
+        && rest.trim_start().chars().all(|c| c.is_whitespace() || matches!(c, '"' | '“' | '‘' | '«' | '(' | '[' | '\'' | '—'))
 }
 
 fn repeated_words(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
@@ -402,6 +402,9 @@ mod tests {
         assert!(fixes("Vado a Roma. il cane dorme.").contains(&pair("il", "Il")));
         assert!(fixes("Vado a Roma? sì.").contains(&pair("sì", "Sì")));
         assert!(!fixes("Vado a Roma. Il cane dorme.").iter().any(|(_, b)| b == "Il"));
+        // A single opening quote can open the next sentence, as `“` and `«` do (wordcraft#3675).
+        assert!(fixes("Vado. ‘poi’ torno.").contains(&pair("poi", "Poi")), "{:?}", fixes("Vado. ‘poi’ torno."));
+        assert!(fixes("Vado. ‘Poi’ torno.").is_empty(), "{:?}", fixes("Vado. ‘Poi’ torno."));
         for t in ["Il sig. rossi arriva.", "Vedi pp. dieci e oltre.", "Nella tab. due.", "Il dr. bianchi arriva.", "Mele, pere ecc. sono frutti."] {
             assert!(
                 !fixes(t).iter().any(|(_, b)| b.starts_with(char::is_uppercase) && b != "Il" && b != "Vedi" && b != "Nella" && b != "Mele"),
