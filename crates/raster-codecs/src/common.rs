@@ -36,7 +36,6 @@ pub fn decode_rgba(bytes: &[u8], limits: DecodeLimits) -> Result<RgbaImage, Code
         max_height: limits.max_height,
         max_pixels: limits.max_pixels,
         max_alloc: limits.max_alloc_bytes,
-        ..Default::default()
     };
     let decoded = craft_image_codecs::decode_with(bytes, &craft_image_codecs::DecodeOptions { limits: decode_limits, ..Default::default() })
         .map_err(map_codec_error)?;
