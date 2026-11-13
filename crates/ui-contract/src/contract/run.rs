@@ -905,20 +905,15 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     // A control that draws only its mark senses over its own label too: indicator, gap and label are one target.
     let label = if facts.labelled_after && !inert { scope::claim(&ctx) } else { None };
     let hit = label.map_or(rect, |label| rect.union(label));
-    // A member of a bar's line, with the label it claims, that its view shows only in part is not shown until a
-    // scroll brings it in whole: it keeps its stop, so Tab reaches it and the reveal scrolls it in. Only a member in
-    // flow is judged: a part shown at a rect, and a control in a label scope, belong to the member around them.
+    // Only a member in flow is judged: a part shown at a rect, and a control in a label scope, belong to the member
+    // around them (a labelled control's pair is judged by the label step).
     let shown_clip = ui.clip_rect();
-    let line = if e.member() && matches!(at, ShowAt::Flow) && !scope::in_label(&ctx) { bar_line(env) } else { None };
-    let cut = line.is_some() && cut_by_bar_view(env, hit);
+    let judged = e.member() && matches!(at, ShowAt::Flow) && !scope::in_label(&ctx);
+    let cut = judged && bar_member(&ctx, env, hit, facts.rule);
     // Rules wait for their member only in the run that paints.
-    let line = line.filter(|_| !crate::runtime::measure::active(&ctx));
+    let line = bar_line(env).filter(|_| judged && !crate::runtime::measure::active(&ctx));
     if cut {
         ui.set_clip_rect(Rect::NOTHING);
-    }
-    // The rules before a member show with it, or are taken back with it.
-    if let Some(line) = line.filter(|_| !facts.rule) {
-        settle_rules(&ctx, line, cut);
     }
     let sensing::RootResult { mut response, parts: results, press, activation, activated_member, sense: root_sense } =
         sense_root(ui, member, RootSpec { id, rect: hit, own_sense: own, own: decls, enabled }, arena);
@@ -1179,6 +1174,19 @@ fn bar_line(env: &Env) -> Option<Id> {
         return None;
     }
     env.lazy.filter(|view| view.axes.0).map(|view| view.owner)
+}
+
+/// Judges a member of a bar's line whose hit target is `hit` (a control with the label it claims): whether its view
+/// shows it only in part. Such a member is not shown until a scroll brings it in whole; it keeps its stop, so Tab
+/// reaches it and the reveal scrolls it in. In the run that paints, the rules before a member that is not itself a
+/// `rule` show with it, or are taken back with it. Outside a bar's line nothing is cut.
+pub(crate) fn bar_member(ctx: &Context, env: &Env, hit: Rect, rule: bool) -> bool {
+    let Some(line) = bar_line(env) else { return false };
+    let cut = cut_by_bar_view(env, hit);
+    if !rule && !crate::runtime::measure::active(ctx) {
+        settle_rules(ctx, line, cut);
+    }
+    cut
 }
 
 /// The rules a bar line shows this pass that wait for the member after them: the shapes each painted, by line.

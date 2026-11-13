@@ -286,9 +286,10 @@ pub(crate) fn flow_leaf<C: Show>(
     }
     // The child runs under the inside label its measures saw.
     let installed = under.inside.clone().map(|inside| Env::install_for(ui, env.derive_local(|scoped| scoped.inside_label = Some(inside))));
-    // The control and its label are one member of a bar's line: hidden together, as the label step hid the label.
+    // The control and its label are one member of a bar's line: judged together, and hidden together, as the label
+    // step hid the label.
     let shown_clip = ui.clip_rect();
-    let cut = !ui.is_sizing_pass() && crate::contract::run::cut_by_bar_view(&env, placed.label.union(placed.control));
+    let cut = !ui.is_sizing_pass() && crate::contract::run::bar_member(ui.ctx(), &env, placed.label.union(placed.control), false);
     if cut {
         ui.set_clip_rect(Rect::NOTHING);
     }
