@@ -111,8 +111,7 @@ impl TextFramePreferences {
             .with_attr("ColumnRuleTopInset", num(self.column_rule_top_inset.unwrap_or(0.0)))
             .with_attr("ColumnRuleBottomInset", num(self.column_rule_bottom_inset.unwrap_or(0.0)))
             .with_attr("ColumnRuleInsetChainOverride", bool_text(self.column_rule_top_inset == self.column_rule_bottom_inset));
-        el.push(El::new("Properties").with_child(inset));
-        el
+        el.with_child(El::new("Properties").with_child(inset))
     }
 }
 
