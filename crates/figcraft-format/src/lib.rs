@@ -365,6 +365,12 @@ mod seek_archive_tests {
 
 /// Largest individual ZIP member read by the native format.
 pub const MAX_MEMBER: u64 = 512 * 1024 * 1024;
+/// The document expansion ratio that its compressed size may claim.
+pub const DOCUMENT_RATIO: u64 = 16;
+#[cfg(not(target_pointer_width = "32"))]
+pub const MAX_DOCUMENT: u64 = 4 * 1024 * 1024 * 1024;
+#[cfg(target_pointer_width = "32")]
+pub const MAX_DOCUMENT: u64 = 1024 * 1024 * 1024;
 /// Most version snapshots kept on save and read on open.
 pub const MAX_VERSIONS: usize = 100;
 /// Maximum version and branch name lengths, in Unicode scalar values.
