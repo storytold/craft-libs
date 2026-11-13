@@ -139,6 +139,14 @@ impl<'a> Archive<'a> {
         self.inner.contains(name)
     }
 
+    pub fn declared_size(&mut self, name: &str) -> Option<u64> {
+        self.inner.declared_size(name)
+    }
+
+    pub fn compressed_size(&mut self, name: &str) -> Option<u64> {
+        self.inner.compressed_size(name)
+    }
+
     pub fn read(&mut self, name: &str, max_bytes: u64) -> Result<Option<Vec<u8>>, craft_zip::Error> {
         self.inner.read(name, max_bytes)
     }
