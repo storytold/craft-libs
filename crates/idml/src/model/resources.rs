@@ -1368,6 +1368,44 @@ pub struct Style {
     pub rest: Vec<El>,
 }
 
+/// Parsed assignments on an IDML object style before application style-reference resolution.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ObjectStyleValues {
+    pub name: Option<String>,
+    pub based_on: Option<String>,
+    pub fill_enabled: bool,
+    pub fill_color: Option<String>,
+    pub fill_tint: Option<f64>,
+    pub stroke_enabled: bool,
+    pub paragraph_style_enabled: bool,
+    pub paragraph_style: Option<String>,
+    pub text_frame_general_options: bool,
+    pub text_frame_preference: Option<El>,
+}
+
+impl ObjectStyleValues {
+    /// Reads object-style enable flags and the values controlled by those flags.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        let enabled = |flag: &str, attribute: &str| match values.get(flag) {
+            Some(value) => value == "true",
+            None => values.get(attribute).is_some(),
+        };
+        Self {
+            name: values.name().map(str::to_owned),
+            based_on: values.prop("BasedOn"),
+            fill_enabled: enabled("EnableFill", "FillColor"),
+            fill_color: values.get("FillColor").map(str::to_owned),
+            fill_tint: values.num("FillTint"),
+            stroke_enabled: enabled("EnableStroke", "StrokeColor"),
+            paragraph_style_enabled: enabled("EnableParagraphStyle", "AppliedParagraphStyle"),
+            paragraph_style: values.get("AppliedParagraphStyle").map(str::to_owned),
+            text_frame_general_options: values.get("EnableTextFrameGeneralOptions") == Some("true"),
+            text_frame_preference: el.child(Local("TextFramePreference")).cloned(),
+        }
+    }
+}
+
 impl StyleGroup {
     /// The root group `el`; `None` when `el` is no root style group.
     pub fn from_el(el: &El) -> Option<StyleGroup> {
