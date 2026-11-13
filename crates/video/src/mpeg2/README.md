@@ -1,6 +1,7 @@
-# MPEG-2 and MPEG-1 video decoder (`craft_video::mpeg2`, feature `mpeg2`)
+# MPEG-2 and MPEG-1 video decoder, MPEG-2 encoder (`craft_video::mpeg2`, features `mpeg2-decode`, `mpeg2-encode`)
 
-Clean-room MPEG-2 video and MPEG-1 video decoder in pure Rust. Depends only on
+Clean-room MPEG-2 video and MPEG-1 video decoder, and the first step of an MPEG-2 video encoder
+(I and P pictures, see "Encoder"), in pure Rust. Depends only on
 `thiserror` and (optional, feature `threads`) `rayon`. Builds for
 `wasm32-unknown-unknown`; no `unsafe`. No GPL/LGPL code (FFmpeg, libmpeg2, libavcodec) was
 consulted; FFmpeg is used only as an external fixture generator and test oracle.
@@ -11,6 +12,8 @@ consulted; FFmpeg is used only as an external fixture generator and test oracle.
 |---|---|---|
 | ITU-T H.262 \| ISO/IEC 13818-2 | 02/2000 (second edition, with Amd. 1 and Cor. 1/2 as incorporated in the 2000 text) | sequence / GOP / picture headers and extensions, slices, macroblocks, VLC tables (Annex B), inverse quantisation and mismatch control (§7.4), IDCT (Annex A), motion vectors and prediction (§7.6) |
 | ISO/IEC 11172-2 | 1993 | MPEG-1 video: slices spanning rows, MPEG-1 escape codes, oddification, full-pel vectors, D pictures |
+| ITU-T H.262 \| ISO/IEC 13818-2 §8 | 02/2000 | profile and level limits the encoder chooses from (Tables 8-8 to 8-13) |
+| MPEG-2 Test Model 5 (ISO/IEC JTC1/SC29/WG11/N0400) | April 1993 | encoder: target bit allocation and adaptive quantisation by activity (§5.2) |
 | IEEE Std 1180 | 1990 | IDCT accuracy test procedure (run as a unit test) |
 | ISO/IEC TR 13818-5 (MPEG Software Simulation Group decoder behaviour) | 1997 | two decoder behaviours the normative text leaves open (see "Interpretations") |
 
@@ -72,6 +75,58 @@ the synthetic-stream tests confirmed against FFmpeg:
   formula only when the prediction is out of range: a field vector's doubled vertical
   component predicting a following frame vector.
 
+## Encoder (feature `mpeg2-encode`)
+
+The encoder is the first step of MPEG-2 encoding in this crate, tracked in
+storytold/craft-libs#1133. It writes valid MPEG-2 elementary streams, but not yet DVD or
+broadcast deliverables: those need the later steps listed below.
+
+```rust
+use craft_video::mpeg2::{Encoder, EncoderConfig, RateControl, YuvFrame};
+
+let mut cfg = EncoderConfig::new(720, 576, 25, 1);
+cfg.rate = RateControl::Abr { kbps: 6000 };   // or RateControl::Quantiser(1..=31)
+cfg.gop_size = 12;                            // one I picture, then P pictures
+let mut enc = Encoder::new(cfg)?;
+for (i, f) in frames.iter().enumerate() {
+    let frame = YuvFrame { y: &f.y, cb: &f.cb, cr: &f.cr, y_stride: 720, c_stride: 360 };
+    for p in enc.encode(&frame, i as i64)? { /* p.data, p.pts, p.dts, p.keyframe, p.picture_type */ }
+}
+for p in enc.flush() { /* none yet: no B pictures */ }
+es.extend_from_slice(enc.end_of_sequence());
+```
+
+What it does:
+
+- Main Profile (4:2:0) at Low, Main, High-1440 and High Level, and 4:2:2 Profile at Main and
+  High Level. The lowest level that holds the size, frame rate and (average) bitrate is chosen;
+  sizes beyond High Level are refused. Any even picture size; edges are padded by repetition.
+- Progressive frame pictures, I and P, in closed GOPs. Every GOP starts with a sequence header,
+  sequence extension and GOP header (with a time code), so every I picture is a random access
+  point. Packets come out in decoding order, which equals display order without B pictures.
+- Forward DCT on the transpose of the decoder's IDCT basis; intra quantisation with a small
+  dead zone, non-intra quantisation by truncation; default or custom quantiser matrices
+  (sequence header); linear or non-linear quantiser scale; intra DC precision 8-10 bits;
+  intra VLC table B.15.
+- P pictures: integer pattern search (steps 8, 4, 2, 1) from candidate vectors (left neighbour,
+  predictor, the previous picture's vectors), then half-sample refinement; cost SAD + λ·bits.
+  Each macroblock is coded intra, motion-compensated with or without residual, "no MC" with
+  residual, or skipped. The search range sets f_code (1-4).
+- Adaptive quantisation by macroblock activity (Test Model 5 §5.2.3).
+- Rate control: a constant quantiser, or single-pass average bitrate with Test Model 5's
+  target bit allocation at picture level. Streams are signalled as variable bitrate
+  (`vbv_delay` 0xFFFF, the level's maximum bitrate and VBV size in the sequence header); the VBV
+  buffer is not modelled.
+- The reconstruction uses the decoder's own dequantisation, mismatch control, IDCT and motion
+  compensation, so this crate's decoder outputs exactly the encoder's reconstruction.
+- Slices (one per macroblock row) are coded in parallel on rayon with `threads`; the stream is
+  identical either way.
+
+Later steps (#1133): B pictures and reordering; CBR and VBR with a VBV guarantee; DVD presets
+(sizes, aspect, GOP length, 9.8 Mb/s, 23.976 soft telecine); interlaced coding (field/frame DCT,
+field prediction, alternate scan) and 4:2:2 High Level CBR for XDCAM HD422. MPEG-2 essence in the
+MXF writer and a program stream muxer belong to `craft-media`.
+
 ## Accuracy (vs FFmpeg as an external oracle)
 
 MPEG-2's IDCT is not bit-exact by definition (any IEEE 1180-accurate IDCT conforms, and the
@@ -131,3 +186,14 @@ fell to 77–150 fps). These are lower bounds.
   3000 random mutations never panic.
 - `synth_tests.rs`, `tests/mpeg2/oracle.rs`: see above (single-threaded decode identical to the
   threaded one).
+- `encode/`: every encoder code decodes to its value with the decoder's tables; motion vector
+  deltas survive the decoder's wrap for f_code 1-4; forward/inverse DCT and quantiser round trips;
+  rate control converges on its target. `encode/tests.rs`: our decoder outputs exactly the
+  encoder's reconstruction (intra only, a 30-picture P GOP, 4:2:2, linear and non-linear
+  quantisers, quantisers 1 and 31, DC precision 8 and 10, custom matrices, odd macroblock counts,
+  average bitrate); quality and size follow the quantiser; repeated pictures skip; levels and
+  aspect in the sequence header; bad configurations and short or inconsistent planes are refused.
+- `tests/mpeg2/encode.rs`: FFmpeg decodes our streams of `testsrc2` (CIF and 576-line 4:2:2)
+  without errors and within the decoder suite's tolerance of our reconstruction, ffprobe reports
+  the profile, level, pixel format and I/P picture types, and average bitrate lands within 10 % of
+  800 and 2500 kbit/s targets.

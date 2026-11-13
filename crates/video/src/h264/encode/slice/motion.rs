@@ -296,10 +296,14 @@ impl<'a, 'b, P: Pixel> SliceEnc<'a, 'b, P> {
             skip_pred = Some((y, u, v));
         }
         // --- 16x16 search
-        let mut cands = vec![skip_mv, Mv::ZERO];
-        let colo = r.mbs[my * f.p.mbw + mx];
-        if colo.ref_idx[0][0] >= 0 {
-            cands.push(colo.mv[0][0]);
+        let mut cands = Vec::new();
+        if f.p.extra_motion_search_starts {
+            cands.push(skip_mv);
+            cands.push(Mv::ZERO);
+            let colo = r.mbs[my * f.p.mbw + mx];
+            if colo.ref_idx[0][0] >= 0 {
+                cands.push(colo.mv[0][0]);
+            }
         }
         let (mv16, mvp16, cost16) = {
             let (m, p, c) = self.search_part(r, &PartSearch { mx, my, part: Part::P16x16, list: 0, lam, seed: skip_mv }, src, &cands);

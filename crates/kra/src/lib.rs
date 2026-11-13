@@ -161,6 +161,16 @@ fn children<'a>(el: &'a El, container: &'static str, tag: &'static str) -> impl 
 }
 
 fn node(el: &El, is_mask: bool, count: &mut usize) -> Result<Node> {
+    let mut out = node_fields(el, is_mask)?;
+    if !is_mask {
+        out.layers = layers(el, count)?;
+        out.masks = children(el, "masks", "mask").map(|m| node(m, true, count)).collect::<Result<_>>()?;
+    }
+    Ok(out)
+}
+
+/// A node's own attributes, without its children.
+fn node_fields(el: &El, is_mask: bool) -> Result<Node> {
     let owned = |name: &str| attr(el, name).map(str::to_string);
     let node_type = attr(el, "nodetype").unwrap_or("").to_string();
     // Only the kinds whose pixels are read need sound numbers; a node an application will leave
@@ -168,7 +178,7 @@ fn node(el: &El, is_mask: bool, count: &mut usize) -> Result<Node> {
     let read = matches!(node_type.as_str(), "paintlayer" | "grouplayer" | "transparencymask");
     let lenient = |v: Result<f64>, default: f64| if read { v } else { Ok(v.unwrap_or(default)) };
     let (x, y) = if is_mask && !read { (offset(el, "x").unwrap_or(0), offset(el, "y").unwrap_or(0)) } else { (offset(el, "x")?, offset(el, "y")?) };
-    let mut out = Node {
+    let out = Node {
         node_type,
         name: owned("name"),
         visible: attr(el, "visible") != Some("0"),
@@ -187,22 +197,39 @@ fn node(el: &El, is_mask: bool, count: &mut usize) -> Result<Node> {
         layers: Vec::new(),
         masks: Vec::new(),
     };
-    if !is_mask {
-        out.layers = layers(el, count)?;
-        out.masks = children(el, "masks", "mask").map(|m| node(m, true, count)).collect::<Result<_>>()?;
-    }
     Ok(out)
 }
 
-/// The `<layers>` of `el`. Recursion is bounded by [`MAX_XML_DEPTH`].
+/// The `<layers>` of `el`, walked with an explicit stack: groups can nest up to [`MAX_XML_DEPTH`]
+/// deep, more than a small thread stack can recurse.
 fn layers(el: &El, count: &mut usize) -> Result<Vec<Node>> {
+    struct Frame<'a> {
+        node: Node,
+        rest: std::vec::IntoIter<&'a El>,
+    }
+    let mut root = children(el, "layers", "layer").collect::<Vec<_>>().into_iter();
+    let mut stack: Vec<Frame> = Vec::new();
     let mut out = Vec::new();
-    for child in children(el, "layers", "layer") {
+    loop {
+        let next = match stack.last_mut() {
+            Some(frame) => frame.rest.next(),
+            None => root.next(),
+        };
+        let Some(child) = next else {
+            let Some(frame) = stack.pop() else { break };
+            match stack.last_mut() {
+                Some(parent) => parent.node.layers.push(frame.node),
+                None => out.push(frame.node),
+            }
+            continue;
+        };
         *count += 1;
         if *count > MAX_NODES {
             return Err(invalid(format!("more than {MAX_NODES} layers")));
         }
-        out.push(node(child, false, count)?);
+        let mut built = node_fields(child, false)?;
+        built.masks = children(child, "masks", "mask").map(|m| node(m, true, count)).collect::<Result<_>>()?;
+        stack.push(Frame { node: built, rest: children(child, "layers", "layer").collect::<Vec<_>>().into_iter() });
     }
     Ok(out)
 }
