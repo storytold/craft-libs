@@ -1,4 +1,4 @@
-//! Prints the texture sets and layer tree of a project file: `cargo run -p texturecraft-import-reader --example layers -- <project file>`.
+//! Prints the texture sets and layer tree of a project file: `cargo run -p texturecraft-import-reader --features dev-tools --example layers -- <project file>`.
 
 use std::error::Error;
 use std::path::PathBuf;

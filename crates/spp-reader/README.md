@@ -25,7 +25,7 @@ contain.
 ## Example
 
 ```sh
-cargo run -p texturecraft-import-reader --example layers -- path/to/project-file
+cargo run -p texturecraft-import-reader --features dev-tools --example layers -- path/to/project-file
 ```
 
 ```rust

@@ -1,7 +1,7 @@
 //! Developer tool: looks inside a project file or a graph package, the way the importer sees it.
 //!
 //! ```text
-//! cargo run --release -p texturecraft-import-reader --example import_inspect -- <command> …
+//! cargo run --release -p texturecraft-import-reader --features dev-tools --example import_inspect -- <command> …
 //!
 //! tree <project>                               every group and dataset in the file
 //! doc <project> [dataset] [--full]             the document (or another object dataset) as indented text

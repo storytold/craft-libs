@@ -1,5 +1,5 @@
 //! Prints every polygon fill hit of a project file (layer name, granularity, shape, symmetry):
-//! `cargo run -p texturecraft-import-reader --example decals -- <project file>`.
+//! `cargo run -p texturecraft-import-reader --features dev-tools --example decals -- <project file>`.
 
 use std::error::Error;
 use std::path::PathBuf;

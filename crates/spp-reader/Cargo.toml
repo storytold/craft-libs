@@ -20,3 +20,20 @@ zune-core = "0.5"
 
 [lints]
 workspace = true
+
+[features]
+# Developer tools in examples/ that read local project files. Off by default, so `cargo test` (the CI gate) does
+# not build them; run one with `cargo run -p texturecraft-import-reader --features dev-tools --example <name> -- ...`.
+dev-tools = []
+
+[[example]]
+name = "decals"
+required-features = ["dev-tools"]
+
+[[example]]
+name = "import_inspect"
+required-features = ["dev-tools"]
+
+[[example]]
+name = "layers"
+required-features = ["dev-tools"]
