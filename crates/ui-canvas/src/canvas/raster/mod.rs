@@ -100,7 +100,8 @@ impl Tiles {
     /// The area the copies and the document cover, in document pixels.
     fn cover(&self, size: PixelSize) -> Rect64 {
         let (width, height) = (f64::from(size.width), f64::from(size.height));
-        let (columns, rows) = ((*self.columns.start()).min(0)..=(*self.columns.end()).max(0), (*self.rows.start()).min(0)..=(*self.rows.end()).max(0));
+        let (columns, rows) =
+            ((*self.columns.start()).min(0)..=(*self.columns.end()).max(0), (*self.rows.start()).min(0)..=(*self.rows.end()).max(0));
         Rect64::new(
             f64::from(*columns.start()) * width,
             f64::from(*rows.start()) * height,
@@ -269,8 +270,17 @@ impl<'a> RasterDisplay<'a> {
     }
 
     fn of(label: impl Into<Label>, picture: Picture<'a>) -> Self {
-        RasterDisplay { common: Common::new(), picture, checkerboard: None, outlined: false, extent: Extent::Document, read: PixelRect::default(), shown: None, mapping: None }
-            .label(label)
+        RasterDisplay {
+            common: Common::new(),
+            picture,
+            checkerboard: None,
+            outlined: false,
+            extent: Extent::Document,
+            read: PixelRect::default(),
+            shown: None,
+            mapping: None,
+        }
+        .label(label)
     }
 
     /// Draws the image through `frame` (the unit square onto the document) on a `cells` by `cells` mesh, so a
@@ -443,8 +453,14 @@ impl Component for RasterDisplay<'_> {
         let corners = shown.view.quad(Rect64::new(0.0, 0.0, f64::from(shown.size.width), f64::from(shown.size.height)));
         if let Some(checker) = &self.checkerboard {
             let bounds = shown.bounds;
-            let covered = Rect64::new(f64::from(bounds.x0), f64::from(bounds.y0), f64::from(bounds.x1), f64::from(bounds.y1)).union(shown.tiles.cover(shown.size));
-            painter.painter.add(checker.shape(painter.painter.ctx(), &ui.env.tokens, CheckerArea::Quad(shown.view.quad(covered)), shown.view.rect.min));
+            let covered = Rect64::new(f64::from(bounds.x0), f64::from(bounds.y0), f64::from(bounds.x1), f64::from(bounds.y1))
+                .union(shown.tiles.cover(shown.size));
+            painter.painter.add(checker.shape(
+                painter.painter.ctx(),
+                &ui.env.tokens,
+                CheckerArea::Quad(shown.view.quad(covered)),
+                shown.view.rect.min,
+            ));
         }
         if let (Picture::Source(_), Some(textures), Some(mapping)) = (&self.picture, &shown.textures, &self.mapping) {
             let (texture, factor) = textures.base;

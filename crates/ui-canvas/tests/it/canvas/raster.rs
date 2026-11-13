@@ -197,7 +197,14 @@ fn a_painted_display_paints_once_a_frame() {
 /// A canvas looking at `center` at `zoom` that shows a display of `document` with the checkerboard, the edge and
 /// `extent`: a source display, or, while `painted` is set, a painted one whose paint adds a GPU paint callback and
 /// records the view of each call in `paints`.
-fn extent_canvas(document: Rc<Document>, center: Point, zoom: f64, extent: Rc<Cell<Extent>>, painted: bool, paints: Rc<RefCell<Vec<CanvasView>>>) -> Fixture {
+fn extent_canvas(
+    document: Rc<Document>,
+    center: Point,
+    zoom: f64,
+    extent: Rc<Cell<Extent>>,
+    painted: bool,
+    paints: Rc<RefCell<Vec<CanvasView>>>,
+) -> Fixture {
     let view = CanvasView::new(Rect::from_min_size(Pos2::ZERO, CANVAS), center, zoom);
     let callback: Arc<dyn std::any::Any + Send + Sync> = Arc::new(());
     let mut fixture = Fixture::new(move |ui| {
@@ -264,7 +271,8 @@ fn tiled_copies_fill_the_canvas_a_document_apart() {
     let center = Point::new(50.0, 35.0);
     let view = CanvasView::new(Rect::from_min_size(Pos2::ZERO, CANVAS), center, 0.5);
     let canvas = view.rect;
-    let at = |i: i32, j: i32| doc_rect(&view, Rect64::new(f64::from(i) * 100.0, f64::from(j) * 70.0, f64::from(i + 1) * 100.0, f64::from(j + 1) * 70.0));
+    let at =
+        |i: i32, j: i32| doc_rect(&view, Rect64::new(f64::from(i) * 100.0, f64::from(j) * 70.0, f64::from(i + 1) * 100.0, f64::from(j + 1) * 70.0));
     let in_view: Vec<Rect> = (-40..40).flat_map(|j| (-40..40).map(move |i| (i, j))).map(|(i, j)| at(i, j)).filter(|r| r.intersects(canvas)).collect();
     for painted in [false, true] {
         let (placed, checker, edge) = pictures(&document, center, 0.5, Extent::Tiled, painted);
@@ -273,7 +281,10 @@ fn tiled_copies_fill_the_canvas_a_document_apart() {
         assert!(near(placed[0], at(0, 0)), "painted {painted}: the document draws first, in its place");
         let all = in_view.iter().fold(Rect::NOTHING, |all, r| all.union(*r));
         assert!(near(checker, all), "painted {painted}: the checkerboard lies under the copies: {checker:?} vs {all:?}");
-        assert!(edge.expand(-3.0).contains_rect(at(0, 0).expand(-6.0)) && at(0, 0).expand(3.0).contains_rect(edge), "painted {painted}: the edge stays on the document: {edge:?}");
+        assert!(
+            edge.expand(-3.0).contains_rect(at(0, 0).expand(-6.0)) && at(0, 0).expand(3.0).contains_rect(edge),
+            "painted {painted}: the edge stays on the document: {edge:?}"
+        );
 
         let (filled, _, _) = pictures(&document, center, 20.0, Extent::Tiled, painted);
         assert_eq!(filled.len(), 1, "painted {painted}: a document filling the canvas has no copies");
@@ -298,7 +309,10 @@ fn a_region_past_the_document_draws_out_to_the_region() {
         document.reads.borrow_mut().clear();
         let (placed, checker, edge) = pictures(&document, center, 2.0, Extent::Region(region), painted);
         assert!(near(checker, on_screen(region)), "painted {painted}: the checkerboard covers the region: {checker:?}");
-        assert!(edge.expand(-3.0).contains_rect(page.expand(-6.0)) && page.expand(3.0).contains_rect(edge), "painted {painted}: the edge stays on the document: {edge:?}");
+        assert!(
+            edge.expand(-3.0).contains_rect(page.expand(-6.0)) && page.expand(3.0).contains_rect(edge),
+            "painted {painted}: the edge stays on the document: {edge:?}"
+        );
         if painted {
             assert_eq!(placed.len(), 1, "the app paints once, through the view on screen");
             assert!(document.reads.borrow().is_empty(), "a painted display reads nothing");

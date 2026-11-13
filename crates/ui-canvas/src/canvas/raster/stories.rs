@@ -1,9 +1,9 @@
 //! Stories of the raster display.
 
-use super::RasterDisplay;
 use super::RasterDisplayOutput;
+use super::{Extent, RasterDisplay};
 use crate::canvas::testing::canvas_story::{StoryPicture, on_canvas_view, story_view};
-use crate::canvas::{AppPaint, PageFrame, Pasteboard};
+use crate::canvas::{AppPaint, PageFrame, Pasteboard, PixelRect};
 use crate::canvas_controls::PixelGrid;
 use crate::contract::Show as _;
 use crate::primitives::{Checker, ContentPainterCx};
@@ -132,5 +132,54 @@ fn painted(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .show_at(ui, at);
         let _ = PixelGrid::new("Pixel grid", &source).show_at(ui, at);
         output
+    })
+}
+
+/// Copies of the gradient around it, as Pattern Preview shows a seamless tile: zoomed out, the canvas fills with
+/// copies a whole document apart, the edge on the document alone.
+#[story(RasterDisplay<'static>, covers = [Default], drive = Drive::Never)]
+fn tiled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let view = view_values(data, 30.0, 0.0);
+    let checker = checker_of(data);
+    on_canvas_view(ui, view, None, |ui, at, _| {
+        let source = StoryPicture::new(DOCUMENT.width, DOCUMENT.height, gradient_pixel);
+        let display = RasterDisplay::new("Picture", &source).outlined().extent(Extent::Tiled);
+        match checker {
+            Some(checker) => display.checkerboard(checker),
+            None => display,
+        }
+        .show_at(ui, at)
+    })
+}
+
+/// Where the disc past the document's right edge lies, and its radius, in document pixels.
+const DISC: (Point, f64) = (Point::new(640.0, 300.0), 160.0);
+
+/// The gradient inside the document and a disc reaching past its right edge, as a layer moved past the canvas.
+fn beyond_pixel(p: Point) -> Color32 {
+    let inside = (0.0..f64::from(DOCUMENT.width)).contains(&p.x) && (0.0..f64::from(DOCUMENT.height)).contains(&p.y);
+    if inside {
+        gradient_pixel(p)
+    } else if (p - DISC.0).hypot() <= DISC.1 {
+        Color32::from_rgb(220, 120, 40)
+    } else {
+        Color32::TRANSPARENT
+    }
+}
+
+/// The document with the pixels past its edge out to a larger region, as Crop shows layers past the canvas while a
+/// frame is edited: the checkerboard reaches the region, the edge stays on the document.
+#[story(RasterDisplay<'static>, covers = [Default], drive = Drive::Never)]
+fn beyond(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let view = view_values(data, 60.0, 0.0);
+    let checker = checker_of(data);
+    on_canvas_view(ui, view, None, |ui, at, _| {
+        let source = StoryPicture::new(DOCUMENT.width, DOCUMENT.height, beyond_pixel);
+        let display = RasterDisplay::new("Picture", &source).outlined().extent(Extent::Region(PixelRect::new(-40, -40, 840, 480)));
+        match checker {
+            Some(checker) => display.checkerboard(checker),
+            None => display,
+        }
+        .show_at(ui, at)
     })
 }
