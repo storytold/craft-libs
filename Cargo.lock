@@ -2092,6 +2092,7 @@ dependencies = [
  "kurbo 0.13.1",
  "md-5 0.11.0",
  "proptest",
+ "roxmltree 0.21.2",
  "serde_json",
  "sha2 0.11.1",
  "stringprep",
