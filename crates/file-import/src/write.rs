@@ -47,6 +47,23 @@ pub struct OutputScene {
     pub paths: Vec<OutputPath>,
 }
 
+/// One page for the shared PDF path writer. Coordinates and stroke widths are millimetres.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PdfPage {
+    pub width_mm: f64,
+    pub height_mm: f64,
+    pub view_box: [f64; 4],
+    pub paths: Vec<PdfPath>,
+}
+
+/// A PDF path with either a fill or a stroke. `None` fills the path; `Some(width)` strokes it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PdfPath {
+    pub path: BezPath,
+    pub color_rgb: [u8; 3],
+    pub stroke_width_mm: Option<f64>,
+}
+
 /// Match a target extension to the centralized writer registry.
 pub fn writer_format_for_extension(extension: &str) -> Option<WriteFormat> {
     let family = writer_family_for_extension(extension)?;
@@ -148,84 +165,124 @@ fn write_svg(scene: &OutputScene) -> Result<String, Error> {
 }
 
 fn write_pdf(scene: &OutputScene) -> Result<Vec<u8>, Error> {
+    validate_scene(scene)?;
+    let paths = scene
+        .paths
+        .iter()
+        .filter(|path| scene.layers.get(path.layer).is_some_and(|layer| layer.visible))
+        .map(|path| PdfPath { path: path.path.clone(), color_rgb: path.color_rgb, stroke_width_mm: Some(path.stroke_width_mm) })
+        .collect();
+    write_pdf_pages(&[PdfPage { width_mm: scene.width_mm, height_mm: scene.height_mm, view_box: scene.view_box, paths }])
+}
+
+/// Encode a neutral list of laid-out pages with vector paths as PDF.
+pub fn write_pdf_pages(pages: &[PdfPage]) -> Result<Vec<u8>, Error> {
     use craft_pdf::write::{Metadata, Writer, backend};
     const PT_PER_MM: f64 = 72.0 / 25.4;
-    validate_scene(scene)?;
     craft_pdf::write::guard(|| {
         let settings = backend::SerializeSettings {
             configuration: craft_pdf::write::configuration(backend::configure::PdfVersion::Pdf14, None)?,
             ..Default::default()
         };
         let mut writer = Writer::new(settings, Metadata::default());
-        let width = scene.width_mm * PT_PER_MM;
-        let height = scene.height_mm * PT_PER_MM;
-        let page_settings = backend::page::PageSettings::from_wh(width as f32, height as f32)
-            .filter(|_| width.is_finite() && height.is_finite())
-            .ok_or_else(|| Error::Write("page dimensions are not finite or positive".into()))?;
-        let mut page = writer.document_mut().start_page_with(page_settings);
-        let mut surface = page.surface();
-        let view_scale = (scene.width_mm / scene.view_box[2]).min(scene.height_mm / scene.view_box[3]);
-        let offset_x = (scene.width_mm - scene.view_box[2] * view_scale) / 2.0;
-        let offset_y = (scene.height_mm - scene.view_box[3] * view_scale) / 2.0;
-        for source in &scene.paths {
-            if !scene.layers.get(source.layer).is_some_and(|layer| layer.visible) {
-                continue;
+        for source_page in pages {
+            let [view_x, view_y, view_width, view_height] = source_page.view_box;
+            if !(source_page.width_mm.is_finite()
+                && source_page.height_mm.is_finite()
+                && source_page.width_mm > 0.0
+                && source_page.height_mm > 0.0
+                && view_x.is_finite()
+                && view_y.is_finite()
+                && view_width.is_finite()
+                && view_height.is_finite()
+                && view_width > 0.0
+                && view_height > 0.0)
+            {
+                return Err(Error::InvalidGeometry);
             }
-            let mut path = backend::geom::PathBuilder::new();
-            for element in source.path.elements() {
-                let point = |p: Point| -> Result<(f32, f32), Error> {
-                    let x = ((p.x - scene.view_box[0]) * view_scale + offset_x) * PT_PER_MM;
-                    let y = ((p.y - scene.view_box[1]) * view_scale + offset_y) * PT_PER_MM;
-                    if !(p.x.is_finite()
-                        && p.y.is_finite()
-                        && x.is_finite()
-                        && y.is_finite()
-                        && x.abs() <= f64::from(f32::MAX)
-                        && y.abs() <= f64::from(f32::MAX))
-                    {
-                        return Err(Error::Write("path coordinate is outside the PDF range".into()));
+            let width = source_page.width_mm * PT_PER_MM;
+            let height = source_page.height_mm * PT_PER_MM;
+            if !(width.is_finite()
+                && height.is_finite()
+                && width > 0.0
+                && height > 0.0
+                && width <= f64::from(f32::MAX)
+                && height <= f64::from(f32::MAX))
+            {
+                return Err(Error::Write("page dimensions are outside the PDF range".into()));
+            }
+            let page_settings = backend::page::PageSettings::from_wh(width as f32, height as f32)
+                .ok_or_else(|| Error::Write("page dimensions are not finite or positive".into()))?;
+            let mut page = writer.document_mut().start_page_with(page_settings);
+            let mut surface = page.surface();
+            let view_scale = (source_page.width_mm / view_width).min(source_page.height_mm / view_height);
+            let offset_x = (source_page.width_mm - view_width * view_scale) / 2.0;
+            let offset_y = (source_page.height_mm - view_height * view_scale) / 2.0;
+            if !(view_scale.is_finite() && view_scale > 0.0 && offset_x.is_finite() && offset_y.is_finite()) {
+                return Err(Error::InvalidGeometry);
+            }
+            for source in &source_page.paths {
+                let mut path = backend::geom::PathBuilder::new();
+                for element in source.path.elements() {
+                    let point = |p: Point| -> Result<(f32, f32), Error> {
+                        let x = ((p.x - view_x) * view_scale + offset_x) * PT_PER_MM;
+                        let y = ((p.y - view_y) * view_scale + offset_y) * PT_PER_MM;
+                        if !(p.x.is_finite()
+                            && p.y.is_finite()
+                            && x.is_finite()
+                            && y.is_finite()
+                            && x.abs() <= f64::from(f32::MAX)
+                            && y.abs() <= f64::from(f32::MAX))
+                        {
+                            return Err(Error::Write("path coordinate is outside the PDF range".into()));
+                        }
+                        Ok((x as f32, y as f32))
+                    };
+                    match *element {
+                        PathEl::MoveTo(p) => {
+                            let (x, y) = point(p)?;
+                            path.move_to(x, y);
+                        }
+                        PathEl::LineTo(p) => {
+                            let (x, y) = point(p)?;
+                            path.line_to(x, y);
+                        }
+                        PathEl::QuadTo(a, b) => {
+                            let (x1, y1) = point(a)?;
+                            let (x, y) = point(b)?;
+                            path.quad_to(x1, y1, x, y);
+                        }
+                        PathEl::CurveTo(a, b, c) => {
+                            let (x1, y1) = point(a)?;
+                            let (x2, y2) = point(b)?;
+                            let (x, y) = point(c)?;
+                            path.cubic_to(x1, y1, x2, y2, x, y);
+                        }
+                        PathEl::ClosePath => path.close(),
                     }
-                    Ok((x as f32, y as f32))
-                };
-                match *element {
-                    PathEl::MoveTo(p) => {
-                        let (x, y) = point(p)?;
-                        path.move_to(x, y);
+                }
+                if let Some(path) = path.finish() {
+                    let color = backend::color::rgb::Color::new(source.color_rgb[0], source.color_rgb[1], source.color_rgb[2]);
+                    match source.stroke_width_mm {
+                        Some(width_mm) => {
+                            let width_pt = width_mm * PT_PER_MM;
+                            if !(width_mm.is_finite() && width_mm > 0.0 && width_pt.is_finite() && width_pt <= f64::from(f32::MAX)) {
+                                return Err(Error::Write("stroke width must be finite and positive".into()));
+                            }
+                            surface.set_fill(None);
+                            surface.set_stroke(Some(backend::paint::Stroke { paint: color.into(), width: width_pt as f32, ..Default::default() }));
+                        }
+                        None => {
+                            surface.set_stroke(None);
+                            surface.set_fill(Some(backend::paint::Fill { paint: color.into(), ..Default::default() }));
+                        }
                     }
-                    PathEl::LineTo(p) => {
-                        let (x, y) = point(p)?;
-                        path.line_to(x, y);
-                    }
-                    PathEl::QuadTo(a, b) => {
-                        let (x1, y1) = point(a)?;
-                        let (x, y) = point(b)?;
-                        path.quad_to(x1, y1, x, y);
-                    }
-                    PathEl::CurveTo(a, b, c) => {
-                        let (x1, y1) = point(a)?;
-                        let (x2, y2) = point(b)?;
-                        let (x, y) = point(c)?;
-                        path.cubic_to(x1, y1, x2, y2, x, y);
-                    }
-                    PathEl::ClosePath => path.close(),
+                    surface.draw_path(&path);
                 }
             }
-            if let Some(path) = path.finish() {
-                let color = backend::color::rgb::Color::new(source.color_rgb[0], source.color_rgb[1], source.color_rgb[2]);
-                if !(source.stroke_width_mm.is_finite() && source.stroke_width_mm > 0.0) {
-                    return Err(Error::Write("stroke width must be finite and positive".into()));
-                }
-                surface.set_fill(None);
-                surface.set_stroke(Some(backend::paint::Stroke {
-                    paint: color.into(),
-                    width: (source.stroke_width_mm * PT_PER_MM) as f32,
-                    ..Default::default()
-                }));
-                surface.draw_path(&path);
-            }
+            surface.finish();
+            page.finish();
         }
-        surface.finish();
-        page.finish();
         writer.finish().map_err(|error| Error::Write(error.to_string()))
     })
 }
