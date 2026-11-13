@@ -94,6 +94,12 @@ pub struct TableOptions {
     pub borders: [StrokeValues; 4],
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CornerValues {
+    pub option: Option<String>,
+    pub radius: Option<f64>,
+}
+
 impl Values {
     /// The attributes and `<Properties>` of `el`.
     pub fn of(el: &El) -> Values {
@@ -273,6 +279,13 @@ impl Values {
                 self.stroke_values("BottomBorder"),
                 self.stroke_values("RightBorder"),
             ],
+        }
+    }
+
+    pub fn corner_values(&self, corner: &str) -> CornerValues {
+        CornerValues {
+            option: self.value(&format!("{corner}CornerOption")).or_else(|| self.value("CornerOption")),
+            radius: self.num(&format!("{corner}CornerRadius")).or_else(|| self.num("CornerRadius")),
         }
     }
 }
