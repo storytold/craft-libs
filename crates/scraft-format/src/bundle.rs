@@ -69,8 +69,7 @@ pub fn write_bundle(session: &Session, limits: BundleLimits) -> Result<(Vec<u8>,
         source.format = FileFormat::Wav;
     }
 
-    let text = fresh.to_json().map_err(|e| BundleError::Session(e.to_string()))?;
-    check_session_size("the session", text.len() as u64, limits.session_bytes, true)?;
+    let text = crate::write_session(&fresh, limits.session_bytes)?;
     account(&mut count, &mut total, text.len(), limits)?;
     let session_name = format!("{}.{}", sanitize_name(&fresh.name), SESSION_EXTENSION);
     zip.add(&session_name, text.as_bytes(), Compression::Stored).map_err(|e| BundleError::Invalid(e.to_string()))?;
@@ -92,13 +91,11 @@ pub fn read_bundle(bytes: &[u8], limits: BundleLimits) -> Result<(String, HashMa
     if archive.has_overlapping_files().map_err(zip_error)? {
         return Err(BundleError::Invalid("files share data".into()));
     }
-    let names: Vec<String> = archive.names().map(|n| n.into_owned()).collect();
-    if names.len() != archive.len() {
-        return Err(BundleError::Invalid("an entry name is not text".into()));
-    }
+    let len = archive.len();
     let mut session = None;
     let mut files = HashMap::new();
-    for name in names {
+    for index in 0..len {
+        let name = archive.entry_name(index).map_err(zip_error)?.ok_or_else(|| BundleError::Invalid("missing entry".into()))?;
         if name.ends_with('/') {
             continue;
         }

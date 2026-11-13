@@ -67,6 +67,17 @@ impl<'a> Archive<'a> {
         self.zip.is_empty()
     }
 
+    /// The name at `index`, copied on demand so callers can process hostile directories without
+    /// retaining a second copy of every potentially large name.
+    pub fn entry_name(&mut self, index: usize) -> Result<Option<String>, Error> {
+        if index >= self.zip.len() {
+            return Ok(None);
+        }
+        let file = self.zip.by_index_raw(index).map_err(|error| Error::NotZip(error.to_string()))?;
+        let name = file.name().map_err(|error| Error::NotZip(error.to_string()))?;
+        Ok(Some(name.into_owned()))
+    }
+
     /// Do two entries share a name? `zip` then keeps one of them, and which one a writer meant
     /// is not known: a format that must not guess refuses the archive.
     pub fn has_duplicate_names(&self) -> bool {
