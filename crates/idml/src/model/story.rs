@@ -78,6 +78,61 @@ pub struct PageReference {
     pub values: Values,
 }
 
+/// Text saved inside an IDML `CrossReferenceSource` before the application regenerates it from
+/// the cross-reference format. Page-number variables are separate segments so callers can retain
+/// the last displayed page while mapping to their own text model.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SavedCrossReference {
+    pub self_id: Option<String>,
+    pub applied_format: Option<String>,
+    pub parts: Vec<SavedCrossReferencePart>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SavedCrossReferencePart {
+    Text(String),
+    PageNumber { result_text: Option<String> },
+}
+
+impl SavedCrossReference {
+    /// Reads the bounded saved-text grammar. `page_variables` contains IDs whose variable type is
+    /// the cross-reference page number; when the document omits variable definitions, InDesign's
+    /// conventional `TV XRefPageNumber` suffix is recognized.
+    pub fn from_el(el: &El, page_variables: &[String]) -> SavedCrossReference {
+        let mut parsed = SavedCrossReference {
+            self_id: el.attr("Self").map(str::to_string),
+            applied_format: el.attr("AppliedFormat").map(str::to_string),
+            parts: Vec::new(),
+        };
+        saved_xref_parts(el, page_variables, &mut parsed.parts, 0);
+        parsed
+    }
+}
+
+fn saved_xref_parts(el: &El, page_variables: &[String], parts: &mut Vec<SavedCrossReferencePart>, depth: usize) {
+    if depth > 16 {
+        return;
+    }
+    for child in el.elements() {
+        match child.local() {
+            "Content" => parts.push(SavedCrossReferencePart::Text(child.deep_text())),
+            "TextVariableInstance" => {
+                let id = child.attr("AssociatedTextVariable").unwrap_or_default();
+                let page_number =
+                    page_variables.iter().any(|variable| variable == id) || (page_variables.is_empty() && id.ends_with("TV XRefPageNumber"));
+                if page_number {
+                    parts.push(SavedCrossReferencePart::PageNumber { result_text: child.attr("ResultText").map(str::to_string) });
+                } else {
+                    parts.push(SavedCrossReferencePart::Text(child.attr("ResultText").unwrap_or_default().to_string()));
+                }
+            }
+            "Change" if child.attr("ChangeType") == Some("DeletedText") => {}
+            "CharacterStyleRange" | "Change" => saved_xref_parts(child, page_variables, parts, depth + 1),
+            _ => {}
+        }
+    }
+}
+
 impl PageReference {
     pub fn referenced_topic(&self) -> Option<&str> {
         self.values.get("ReferencedTopic")
