@@ -191,7 +191,7 @@ fn node(el: &El, is_mask: bool, count: &mut usize) -> Result<Node> {
             }
         }
     }
-    Ok(built.pop().expect("a node visit produces one node"))
+    built.pop().ok_or_else(|| invalid("a layer node could not be built"))
 }
 
 fn make_node(el: &El, is_mask: bool, layers: Vec<Node>, masks: Vec<Node>) -> Result<Node> {
