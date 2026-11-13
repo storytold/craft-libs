@@ -16,12 +16,53 @@ pub struct DropShadowValues {
     pub blend_mode: Option<String>,
 }
 
+impl DropShadowValues {
+    pub fn to_el(&self) -> El {
+        let mut element = El::new("DropShadowSetting");
+        if let Some(value) = &self.mode {
+            element.set_attr("Mode", value);
+        }
+        for (key, value) in
+            [("XOffset", self.x_offset), ("YOffset", self.y_offset), ("Size", self.size), ("Spread", self.spread), ("Opacity", self.opacity)]
+        {
+            if let Some(value) = value {
+                element.set_attr(key, crate::value::num(value));
+            }
+        }
+        if let Some(value) = &self.blend_mode {
+            element.set_attr("BlendMode", value);
+        }
+        if let Some(value) = &self.color {
+            element.set_attr("EffectColor", value);
+        }
+        element
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FeatherValues {
     pub mode: Option<String>,
     pub width: Option<f64>,
     pub choke_amount: Option<f64>,
     pub corner_type: Option<String>,
+}
+
+impl FeatherValues {
+    pub fn to_el(&self) -> El {
+        let mut element = El::new("FeatherSetting");
+        if let Some(value) = &self.mode {
+            element.set_attr("Mode", value);
+        }
+        for (key, value) in [("Width", self.width), ("ChokeAmount", self.choke_amount)] {
+            if let Some(value) = value {
+                element.set_attr(key, crate::value::num(value));
+            }
+        }
+        if let Some(value) = &self.corner_type {
+            element.set_attr("CornerType", value);
+        }
+        element
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
