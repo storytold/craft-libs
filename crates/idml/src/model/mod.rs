@@ -40,8 +40,9 @@ pub use resources::{
     TintDefinition, color_groups, inks, named, preference, stroke_styles, style_groups, swatches,
 };
 pub use spread::{
-    ClippingPathValues, Graphic, GraphicChild, GraphicKind, GraphicLayerOptions, Guide, ItemChild, ItemKind, Link, MarginPreference, Page, PageChild,
-    PageItem, PdfAttribute, Spread, SpreadChild, TextPath, TextWrapPreference, spreads,
+    BaselineFrameGridOption, BaselineFrameGridRelative, ClippingPathValues, FrameFittingOption, Graphic, GraphicChild, GraphicKind,
+    GraphicLayerOptions, Guide, ItemChild, ItemKind, Link, MarginPreference, Page, PageChild, PageItem, PdfAttribute, Spread, SpreadChild, TextPath,
+    TextWrapPreference, spreads,
 };
 pub use story::{
     Ace, CONTAINERS, Cell, CellOptions, Container, ContainerKind, ContentPart, PageReference, Range, SavedCrossReference, SavedCrossReferencePart,

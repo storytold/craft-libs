@@ -575,6 +575,66 @@ pub struct TextWrapPreference {
     offsets: Option<[f64; 4]>,
 }
 
+/// Parsed IDML frame fitting options.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FrameFittingOption {
+    pub crop: [Option<f64>; 4],
+    pub alignment: Option<String>,
+    pub auto_fit: bool,
+    pub fitting_on_empty_frame: Option<String>,
+}
+
+impl FrameFittingOption {
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        Self {
+            crop: [values.num("TopCrop"), values.num("LeftCrop"), values.num("BottomCrop"), values.num("RightCrop")],
+            alignment: values.get("FittingAlignment").map(str::to_owned),
+            auto_fit: values.boolean("AutoFit") == Some(true),
+            fitting_on_empty_frame: values.get("FittingOnEmptyFrame").map(str::to_owned),
+        }
+    }
+}
+
+/// IDML baseline-grid position relative to a page, frame, or inset.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BaselineFrameGridRelative {
+    TopMargin,
+    TopOfFrame,
+    TopInset,
+    #[default]
+    TopOfPage,
+}
+
+/// Parsed IDML custom baseline-grid options on an item or object style.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BaselineFrameGridOption {
+    pub use_custom: bool,
+    pub start: f64,
+    pub increment: f64,
+    pub relative_to: BaselineFrameGridRelative,
+}
+
+impl BaselineFrameGridOption {
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        let relative = values.get("BaselineFrameGridRelativeOption").unwrap_or("");
+        let relative = relative.strip_suffix("OfBaselineFrameGridRelativeOption").unwrap_or(relative);
+        let relative_to = match relative {
+            "TopOfMargin" | "TopMargin" => BaselineFrameGridRelative::TopMargin,
+            "TopOfFrame" => BaselineFrameGridRelative::TopOfFrame,
+            "TopOfInset" | "TopInset" => BaselineFrameGridRelative::TopInset,
+            _ => BaselineFrameGridRelative::TopOfPage,
+        };
+        Self {
+            use_custom: values.boolean("UseCustomBaselineFrameGrid") == Some(true),
+            start: values.num("StartingOffsetForBaselineFrameGrid").unwrap_or(0.0),
+            increment: values.num("BaselineFrameGridIncrement").unwrap_or(12.0),
+            relative_to,
+        }
+    }
+}
+
 impl TextWrapPreference {
     pub fn from_el(el: &El) -> Self {
         let contour_type = el.child(Local("ContourOption")).and_then(|c| Values::of(c).get("ContourType").map(str::to_string));
