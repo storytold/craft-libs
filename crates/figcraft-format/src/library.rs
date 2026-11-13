@@ -1,5 +1,6 @@
 //! Wire schema and member limits for published libraries embedded in a native project archive.
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const MANIFEST: &str = "library/manifest.json";
 pub const DOCUMENT: &str = "library/document.json";
@@ -80,6 +81,58 @@ pub fn clip_display(s: &str, max_chars: usize) -> String {
     s.chars().take(max_chars).collect()
 }
 
+/// Write the complete published-library member group into a native archive. The consumer maps
+/// its document to the neutral manifest and image index; path layout, compression, and shared
+/// image reuse stay here.
+pub fn write_members<'a, D: Serialize>(
+    writer: &mut super::ArchiveWriter,
+    manifest: &Manifest,
+    document: &D,
+    image_index: &[super::ImageIndexEntry],
+    already_written: &BTreeSet<String>,
+    images: impl IntoIterator<Item = (&'a str, &'a [u8])>,
+) -> Result<(), super::ArchiveWriteError> {
+    let manifest_bytes = serde_json::to_vec(manifest)?;
+    writer.add(MANIFEST, &manifest_bytes, super::Compression::Level(3))?;
+    writer.add_document_json(DOCUMENT, document, image_index)?;
+    for (hash, bytes) in images {
+        if already_written.contains(hash) || !valid_image_key(hash) {
+            continue;
+        }
+        writer.add(&format!("{IMAGES_PREFIX}{hash}"), bytes, super::Compression::Stored)?;
+    }
+    Ok(())
+}
+
+/// Read only published-library image resources selected by the consumer's document model.
+/// Missing and oversized images are omitted, leaving the consumer to render its established
+/// placeholder. The shared layer handles path choice, safe member names, and byte accounting.
+pub fn read_image_resources(
+    archive: &mut impl super::NativeArchive,
+    hashes: impl IntoIterator<Item = String>,
+    already_available: &BTreeSet<String>,
+    unpacked: &mut super::ReadBudget,
+) -> BTreeMap<String, Vec<u8>> {
+    let mut remaining = MAX_IMAGE_BYTES;
+    let mut images = BTreeMap::new();
+    for hash in hashes {
+        if already_available.contains(&hash) || !valid_image_key(&hash) {
+            continue;
+        }
+        let preferred = format!("{IMAGES_PREFIX}{hash}");
+        let fallback = format!("images/{hash}");
+        let Some(name) = [preferred, fallback].into_iter().find(|name| archive.contains(name)) else { continue };
+        let Ok(bytes) = unpacked.read(archive, &name, remaining.min(super::MAX_MEMBER)) else { continue };
+        remaining = remaining.saturating_sub(bytes.len() as u64);
+        images.insert(hash, bytes);
+    }
+    images
+}
+
+fn valid_image_key(key: &str) -> bool {
+    (1..=128).contains(&key.len()) && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,5 +156,38 @@ mod tests {
         assert!(!is_valid_id(&"a".repeat(MAX_ID_CHARS + 1)));
         assert!(!is_valid_id("../bad"));
         assert_eq!(clip_display("aé🙂b", 2), "aé");
+    }
+
+    #[test]
+    fn library_member_writer_and_reader_own_resource_layout_and_budgets() {
+        let mut writer = super::super::ArchiveWriter::new();
+        let manifest = Manifest { id: "library-1".into(), ..Manifest::default() };
+        let already_written = BTreeSet::from(["existing".to_string()]);
+        write_members(
+            &mut writer,
+            &manifest,
+            &serde_json::json!({"name":"library snapshot"}),
+            &[],
+            &already_written,
+            [("stored", &b"library bytes"[..]), ("existing", &b"duplicate"[..]), ("../bad", &b"hostile"[..])],
+        )
+        .unwrap();
+        writer.add("images/fallback", b"fallback bytes", super::super::Compression::Stored).unwrap();
+        let bytes = writer.finish().unwrap();
+        let mut archive = super::super::Archive::open(&bytes, super::super::ArchiveLimits { max_entries: 8, max_total_bytes: 1024 }).unwrap();
+        assert!(archive.contains(MANIFEST));
+        assert!(archive.contains(DOCUMENT));
+        assert!(archive.contains("library/images/stored"));
+        assert!(!archive.contains("library/images/existing"));
+        assert!(!archive.contains("library/images/../bad"));
+
+        let available = BTreeSet::from(["existing".to_string()]);
+        let mut budget = super::super::ReadBudget::new(1024);
+        let images =
+            read_image_resources(&mut archive, ["stored".into(), "existing".into(), "fallback".into(), "../bad".into()], &available, &mut budget);
+        assert_eq!(images["stored"], b"library bytes");
+        assert_eq!(images["fallback"], b"fallback bytes");
+        assert!(!images.contains_key("existing"));
+        assert!(!images.contains_key("../bad"));
     }
 }
