@@ -128,6 +128,11 @@ fn decoded_display_part_places_selected_channels_and_checks_total_budget() {
 
     let limits = Limits { max_bytes: 6 * 4 - 1, ..Limits::default() };
     assert!(matches!(decode_display_part(&bytes, 0, &all, &|_| 0.0, &limits), Err(Error::LimitExceeded(_))));
+
+    // One selected display plane fits exactly, but the EXR decoder must decompress both data
+    // channels in its input block before discarding the ignored one.
+    let block_limits = Limits { max_bytes: 6 * 4, ..Limits::default() };
+    assert!(matches!(decode_display_part(&bytes, 0, &|name| name == "R", &|_| 0.0, &block_limits), Err(Error::LimitExceeded(_))));
 }
 
 #[test]
@@ -137,6 +142,20 @@ fn decoded_display_part_clips_a_wide_data_window_to_the_small_display() {
     let part = decode_display_part(&bytes, 0, &all, &|_| 9.0, &Limits::default()).unwrap();
     assert_eq!(part.channels.len(), 1);
     assert_eq!(part.channels[0].samples, [0.0]);
+}
+
+#[test]
+fn decoded_display_part_rejects_kept_subsampled_channels() {
+    let mut bytes = file(vec![layer(None, 4, 1, &["R"], false, exr::prelude::Compression::Uncompressed)], (4, 1));
+    // exr's writer doesn't emit subsampling yet, so patch the standard chlist sampling field in a
+    // valid uncompressed file. The reader must reject it before looking at the block payload.
+    let tag = b"channels\0chlist\0";
+    let attr = bytes.windows(tag.len()).position(|window| window == tag).unwrap();
+    let payload = attr + tag.len() + 4;
+    let name_end = payload + bytes[payload..].iter().position(|byte| *byte == 0).unwrap();
+    let x_sampling = name_end + 1 + 4 + 1 + 3;
+    bytes[x_sampling..x_sampling + 4].copy_from_slice(&2u32.to_le_bytes());
+    assert!(matches!(decode_display_part(&bytes, 0, &|name| name == "R", &|_| 0.0, &Limits::default()), Err(Error::Unsupported(_))));
 }
 
 /// A 2x2 single-part file whose layer carries a 2x1 preview.

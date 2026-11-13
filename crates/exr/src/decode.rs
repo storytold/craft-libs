@@ -420,8 +420,9 @@ pub struct DisplayPart {
 /// Decodes the kept flat channels of one part and places them in its display window.
 ///
 /// Channels are decoded in their stored sample type, converted to `f32`, and clipped or padded
-/// according to their data and display windows. `fill` receives each stored channel name. Both
-/// the decoded data and display-window buffers are bounded by `limits` before allocation.
+/// according to their data and display windows. `keep` and `fill` receive the part-qualified name
+/// from [`part_channel_name`], which is also returned in [`DisplayChannel::name`]. Both decoded
+/// block data and display-window buffers are bounded by `limits` before allocation.
 pub fn decode_display_part(
     bytes: &[u8],
     index: usize,
@@ -456,8 +457,11 @@ pub fn decode_display_part(
     if bytes_needed > limits.max_bytes || usize::try_from(bytes_needed).is_err() {
         return Err(Error::LimitExceeded(format!("{bytes_needed} display-window bytes exceed {}", limits.max_bytes)));
     }
-    let select = DisplaySelect { index, keep, fill, limits, seen: std::cell::Cell::new(0) };
-    let image = ReadImage::new(ReadAllLayers { read_channels: select }, |_| {}).from_buffered(Cursor::new(bytes)).map_err(map_exr)?;
+    let block_limit = std::cell::Cell::new(None);
+    let select = DisplaySelect { index, keep, fill, limits, seen: std::cell::Cell::new(0), block_limit: &block_limit };
+    let image = ReadImage::new(ReadAllLayers { read_channels: select }, |_| {})
+        .from_buffered(Cursor::new(bytes))
+        .map_err(|error| block_limit.take().map(Error::LimitExceeded).unwrap_or_else(|| map_exr(error)))?;
     let channels = image
         .layer_data
         .into_iter()
@@ -478,6 +482,7 @@ struct DisplaySelect<'a> {
     fill: &'a dyn Fn(&str) -> f32,
     limits: &'a Limits,
     seen: std::cell::Cell<usize>,
+    block_limit: &'a std::cell::Cell<Option<String>>,
 }
 
 struct DisplaySelectReader {
@@ -510,6 +515,20 @@ impl<'s> ReadChannels<'s> for DisplaySelect<'_> {
                 u32s: vec![],
             });
         }
+        // The EXR crate decompresses each accepted block before `read_block` can discard ignored
+        // channels. Bound that all-channel input separately from the selected output planes.
+        let Some(block_bytes) = layer_w
+            .checked_mul(layer_h)
+            .and_then(|pixels| pixels.checked_mul(header.channels.list.len().max(1)))
+            .and_then(|samples| samples.checked_mul(std::mem::size_of::<f32>()))
+        else {
+            self.block_limit.set(Some(format!("data-window block size exceeds {}", self.limits.max_bytes)));
+            return Err(exr::error::Error::Invalid("data-window block size overflow".into()));
+        };
+        if u64::try_from(block_bytes).map_or(true, |bytes| bytes > self.limits.max_bytes) || block_bytes > isize::MAX as usize {
+            self.block_limit.set(Some(format!("{block_bytes} data-window bytes exceed {}", self.limits.max_bytes)));
+            return Err(exr::error::Error::Invalid("data-window blocks exceed limit".into()));
+        }
         let pixels = display_w.checked_mul(display_h).filter(|n| *n > 0).ok_or(exr::error::Error::Invalid("display window".into()))?;
         let prefix = header.own_attributes.layer_name.as_ref().map(|name| name.to_string()).filter(|name| !name.is_empty());
         let kept =
@@ -524,7 +543,14 @@ impl<'s> ReadChannels<'s> for DisplaySelect<'_> {
         let mut planes = Vec::with_capacity(header.channels.list.len());
         for channel in header.channels.list.iter() {
             let name = part_channel_name(prefix.as_deref(), &channel.name.to_string());
-            let plane = if (self.keep)(&name) { Some((name.clone(), vec![(self.fill)(&name); pixels])) } else { None };
+            let plane = if (self.keep)(&name) {
+                if channel.sampling.0 != 1 || channel.sampling.1 != 1 {
+                    return Err(exr::error::Error::NotSupported("subsampled channels".into()));
+                }
+                Some((name.clone(), vec![(self.fill)(&name); pixels]))
+            } else {
+                None
+            };
             planes.push(plane);
         }
         let position = header.own_attributes.layer_position;
