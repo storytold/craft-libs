@@ -96,3 +96,29 @@ pub fn parse_text_with_depth<'a>(svg: &'a str, limits: &Limits) -> Result<(roxml
     let xml = roxmltree::Document::parse_with_options(svg, options).map_err(|e| Error::Xml(e.to_string()))?;
     Ok((xml, prescan.depth, prescan.open_depth))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parsed_tree_reports_source_nesting_depth() -> Result<(), Error> {
+        let limits = Limits { depth: 4, ..Default::default() };
+        let (document, depth, open_depth) = parse_text_with_depth("<svg><g><path/></g></svg>", &limits)?;
+        assert!(document.root_element().has_tag_name("svg"));
+        assert_eq!(depth, 2);
+        assert_eq!(open_depth, 0);
+        let simple = parse_text("<svg/>", &limits)?;
+        assert!(simple.root_element().has_tag_name("svg"));
+        Ok(())
+    }
+
+    #[test]
+    fn source_depth_and_xml_errors_keep_their_specific_kind() {
+        let shallow = Limits { depth: 1, ..Default::default() };
+        assert!(matches!(parse_text_with_depth("<svg><g></g></svg>", &shallow), Err(Error::TooDeep(1))));
+
+        let normal = Limits::default();
+        assert!(matches!(parse_text_with_depth("<svg><g></svg>", &normal), Err(Error::Xml(_))));
+    }
+}

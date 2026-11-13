@@ -517,9 +517,13 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'
         Ok(text) => text,
         // What a refused document unpacked before it was refused was work too: it uses up what
         // is left, so the next image can't repeat it.
-        Err(_) => {
+        Err(svgz::Error::TooLarge(_)) => {
             used.bytes.fetch_add(left, Ordering::Relaxed);
             used.svg_limit.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        Err(_) => {
+            used.invalid_svg.fetch_add(1, Ordering::Relaxed);
             return None;
         }
     };
