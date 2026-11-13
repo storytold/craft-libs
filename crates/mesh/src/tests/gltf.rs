@@ -195,6 +195,30 @@ fn embedded_and_external_resources() {
 }
 
 #[test]
+fn texture_and_sampler_inventory_includes_unreferenced_entries() {
+    let doc = serde_json::to_vec(&json!({
+        "asset": {"version": "2.0"},
+        "images": [{"uri": "image.png"}],
+        "samplers": [{"wrapS": 33071, "wrapT": 33648}],
+        "textures": [
+            {"source": 0, "sampler": 0},
+            {"source": 0}
+        ]
+    }))
+    .unwrap();
+    let scene = read(&doc, &Limits::default(), &mut |_| Some(vec![])).unwrap();
+    assert_eq!(
+        scene.texture_variants,
+        [TextureRef { image: 0, uv_set: 0, wrap: [Wrap::Clamp, Wrap::Mirror] }, TextureRef { image: 0, uv_set: 0, wrap: [Wrap::Repeat; 2] },]
+    );
+    assert!(scene.validate().is_ok());
+
+    let mut invalid = scene;
+    invalid.texture_variants[0].image = invalid.images.len();
+    assert!(matches!(invalid.validate(), Err(Error::Malformed(_))));
+}
+
+#[test]
 fn base64_and_uri_decoding() {
     assert_eq!(base64_decode("aGVsbG8=").unwrap(), b"hello");
     assert_eq!(base64_decode("aGVs\nbG8").unwrap(), b"hello");
