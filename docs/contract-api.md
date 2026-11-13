@@ -227,6 +227,7 @@ Pure UI behaviours (layer 1): press lifecycle, `ValueDrag`, navigation, item lay
 - `craft_behavior::ViewPlace`: `pub struct ViewPlace<K> { pub key: K, pub center: Point, pub zoom: f64 }`. Where a view stood: what it showed (`key`: a page, an artboard, a document) and the view's
   - `pub const fn new(key: K, center: Point, zoom: f64) -> Self`. The view of `key` centred on `center` at `zoom`.
 - `craft_behavior::Wheel`: re-export of `craft_behavior::wheel::Wheel`.
+- `craft_behavior::WheelFocus`: re-export of `craft_behavior::wheel::WheelFocus`.
 - `craft_behavior::WheelNotch`: re-export of `craft_behavior::wheel::WheelNotch`.
 - `craft_behavior::WheelPhase`: re-export of `craft_behavior::wheel::WheelPhase`.
 - `craft_behavior::WheelRoom`: re-export of `craft_behavior::wheel::WheelRoom`.
@@ -1625,16 +1626,20 @@ Wheel gesture values, as craft-behavior's copy of egui's types so the wheel spli
   - `pub const fn new(scroll: Vec2, mods: Mods, unit: WheelUnit, phase: WheelPhase) -> Self`. A scroll of `scroll` points with no zoom.
   - `pub const fn zoom(mut self, zoom: f32) -> Self`. The same gesture with zoom factor `zoom`.
   - `pub const fn at(mut self, at: Pos2) -> Self`. The same gesture with the pointer at `at`.
+- `craft_behavior::wheel::WheelFocus`: `pub struct WheelFocus<O> { pub taker: Option<O>, pub app_field: bool }`. Who holds key focus, as the split reads it.
+  - `pub const fn new(taker: Option<O>) -> Self`. Focus on `taker`, or on nothing that takes the wheel.
+  - `pub const fn app_field(mut self, on: bool) -> Self`. The same focus, in a text field the app drew itself when `on`.
 - `craft_behavior::wheel::WheelNotch`: `pub enum WheelNotch { Points(f32), ViewShare(f32) }`. The distance one wheel line scrolls a taker.
   - `pub const DEFAULT: WheelNotch`. The distance of a taker that states none.
   - `pub fn points(self, extent: f32) -> f32`. The notch in points, for a taker whose view is `extent` points along the axis.
 - `craft_behavior::wheel::WheelPhase`: `pub enum WheelPhase { Start, Move, End, Cancel }`. A wheel gesture's phase.
 - `craft_behavior::wheel::WheelRoom`: `pub struct WheelRoom { pub positive: Vec2, pub negative: Vec2 }`. The scroll left in a region, in points of wheel scroll: `positive` is what a wheel with positive `scroll` can
   - `pub const fn new(positive: Vec2, negative: Vec2) -> Self`. A room of `positive` and `negative` points.
-- `craft_behavior::wheel::WheelTaker`: `pub struct WheelTaker<O> { pub owner: O, pub rect: Rect, pub horizontal: bool, pub vertical: bool, pub zoom: bool, pub gated: bool, pub scrolls: bool, pub notch: WheelNotch, pub room: Option<WheelRoom>, pub zooms_view: bool }`. A component that takes wheel input, as registered last pass.
+- `craft_behavior::wheel::WheelTaker`: `pub struct WheelTaker<O> { pub owner: O, pub rect: Rect, pub horizontal: bool, pub vertical: bool, pub zoom: bool, pub gated: bool, pub scrolls: bool, pub notch: WheelNotch, pub room: Option<WheelRoom>, pub zooms_view: bool, pub field: bool }`. A component that takes wheel input, as registered last pass.
   - `pub const fn new(owner: O, rect: Rect) -> Self`. A taker over `rect` that takes no axis yet.
   - `pub fn for_sense(owner: O, rect: Rect, sense: Sense) -> Option<Self>`. The taker a shape with `sense` registers, `None` when `sense` has no wheel bit: `WHEEL` takes both scroll
   - `pub const fn zooms_view(mut self, on: bool) -> Self`. Whether it is a zoom zone (`WheelTaker::zooms_view`).
+  - `pub const fn field(mut self, on: bool) -> Self`. Whether it is a value field (`WheelTaker::field`).
   - `pub const fn horizontal(mut self, on: bool) -> Self`. Whether it takes horizontal scroll.
   - `pub const fn vertical(mut self, on: bool) -> Self`. Whether it takes vertical scroll.
   - `pub const fn zoom(mut self, on: bool) -> Self`. Whether it takes zoom.
@@ -1644,7 +1649,7 @@ Wheel gesture values, as craft-behavior's copy of egui's types so the wheel spli
   - `pub const fn room(mut self, room: WheelRoom) -> Self`. The taker's scroll room: it passes a wheel on an axis it has no room left for to the next enclosing taker.
   - `pub fn points(&self, scroll: Vec2, unit: WheelUnit) -> Vec2`. `scroll`, given in `unit`s of the device, as points of this taker's view: a line is one notch, a page is
 - `craft_behavior::wheel::WheelUnit`: `pub enum WheelUnit { Point, Line, Page }`. How far one wheel event reaches.
-- `craft_behavior::wheel::split`: `pub fn split<O: Copy + PartialEq>(takers: &[WheelTaker<O>], at: Pos2, wheel: Wheel, focused: Option<O>, armed: Option<O>) -> Vec<(O, Wheel)>`. The split rule: each axis of `wheel` goes to the innermost taker under `at` that takes it; a share no taker
+- `craft_behavior::wheel::split`: `pub fn split<O: Copy + PartialEq>(takers: &[WheelTaker<O>], at: Pos2, wheel: Wheel, focus: WheelFocus<O>, armed: Option<O>) -> Vec<(O, Wheel)>`. The split rule. A focused field (a `WheelTaker::field` taker that holds `focus`, or an app's own text field) takes
 
 ## `craft_ui`
 
@@ -1713,6 +1718,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `fn fills(&self) -> Option<craft_behavior::Axis>`. The axis along which the component takes all the room the flow offers when that is more than it measured,
   - `fn cut_first(&self) -> bool`. Whether the content is made to be cut where it does not fit: an elided line or a path. In a row too short for
   - `fn sense(&self) -> Sense`. The root's sense; the shape's default unless a canvas control.
+  - `fn wheel_notch(&self) -> craft_behavior::WheelNotch`. The distance one wheel line scrolls the component when it senses the wheel itself: the service converts the
   - `fn parts(&mut self, _rect: Rect, _cx: &mut PartsCx<'_, Self>)`. Named sub-rects: thumbs, chevrons, handles, segments and the roving groups over them.
   - `fn bind(&mut self) -> Option<BindMut<'_, ValueOf<Self>>>`. Value components return their binding; the same binding on every call, with no side effects.
   - `fn same_value(&self, proposed: &ValueOf<Self>, host: &ValueOf<Self>) -> bool`. Whether `host`, a value the app wrote back, is the value `proposed` as the component holds values: a host that
@@ -2263,7 +2269,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `fn hit(&self) -> bool`. The pointer is over the component's own shapes.
   - `fn activation(&self) -> Option<Activation>`. Set only when the component's own shapes won the press and it was released as a click, or
   - `fn activated_member(&self) -> Option<Id>`. For an arena root, the member activated this pass.
-  - `fn take_wheel(&mut self) -> Option<Wheel>`. This pass's wheel share, once.
+  - `fn take_wheel(&mut self) -> Option<Wheel>`. This pass's wheel share, once, with the pointer it came at (`Wheel::at`) in this component's egui layer space (8.3).
   - `fn cursor(&mut self, cursor: impl Into<Cursor>, priority: CursorPriority)`. Requests `cursor` at `priority`; the highest priority of the pass wins.
   - `fn cancel_press(&mut self, reason: PressCancel)`. Ends every captured press of this viewport.
   - `fn start_drag<P: Clone + Send + Sync + 'static>(&mut self, payload: P, preview: DragPreview)`. Starts the drag session with `payload`; the context holds one session at a time, and a running one stays.
@@ -3535,7 +3541,7 @@ The frame plugin: the per-pass and per-frame steps, with the inputs the app sets
   - `pub fn new(root: RootEnv) -> Self`. A frame with `root` and no host.
   - `pub fn commands(mut self, commands: CommandInput) -> Self`. Sets the command input.
   - `pub fn host(mut self, host: Arc<Host>) -> Self`. Sets the host.
-- `craft_ui::runtime::frame::FrameOutput`: `pub struct FrameOutput { pub fired: Vec<Fired>, pub announcements: Vec<String>, pub chrome_toggles: Vec<(ViewportId, ChromeToggle)>, pub removed_gestures: Vec<GestureId>, pub outer_edits: Vec<OuterEdit> }`. What the runtime accumulated since the last `take_output`, across passes and discarded passes.
+- `craft_ui::runtime::frame::FrameOutput`: `pub struct FrameOutput { pub fired: Vec<Fired>, pub delivered: Vec<Fired>, pub announcements: Vec<String>, pub chrome_toggles: Vec<(ViewportId, ChromeToggle)>, pub removed_gestures: Vec<GestureId>, pub outer_edits: Vec<OuterEdit> }`. What the runtime accumulated since the last `take_output`, across passes and discarded passes.
 - `craft_ui::runtime::frame::OuterEdit`: `pub enum OuterEdit { Begin { id: GestureId, label: Arc<str>, doc_key: Option<DocKey> }, Commit { id: GestureId }, Cancel { id: GestureId } }`. A step of the outer gesture of a container whose `ContainerProps::outer_edit` is on: one undo step over the edits of
 - `craft_ui::runtime::frame::discard_pass`: `pub fn discard_pass(ctx: &Context, reason: &'static str)`. Discards the running pass, so nothing of it paints, and runs it again, when [`discardable`]: for a host that learns
 - `craft_ui::runtime::frame::discardable`: `pub fn discardable(ctx: &Context) -> bool`. Whether the running pass can still be discarded: egui runs a bounded number of passes a frame, and a discard asked
