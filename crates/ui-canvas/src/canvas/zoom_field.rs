@@ -1,6 +1,6 @@
 //! The zoom field of a canvas view: the Navigator's and the Zoom tool bar's percent field.
 
-use crate::contract::{Bind, Props as _, Show as _};
+use crate::contract::{Bind, Show as _};
 use crate::runtime::env::{Env, Label, UnitKind};
 use crate::text::NumberField;
 use craft_behavior::canvas::zoom;
