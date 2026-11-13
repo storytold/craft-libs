@@ -10,7 +10,7 @@ use crate::contract::{
 use crate::runtime::env::{Label, UnitKind};
 use crate::style::{ComponentStyle, StyleCx};
 use crate::text::NumberField;
-use crate::value_drag::{Slider, SliderScale, TrackFace};
+use crate::value_drag::{Slider, SliderScale, SliderThumb, TrackFace};
 use craft_behavior::{Flow, Metrics, Mixed, Proposal, Sense, decimals_for_step};
 use egui::{Rect, Vec2, pos2};
 use std::ops::RangeInclusive;
@@ -87,6 +87,9 @@ pub struct SliderField<'a> {
     /// The look of the track in place of the groove and the fill (a colour gradient).
     #[prop]
     track_face: Option<TrackFace<'a>>,
+    /// The shape of the slider's thumb: a knob, or the pointer under the track of a colour channel.
+    #[prop]
+    thumb: SliderThumb,
 }
 
 impl<'a> SliderField<'a> {
@@ -104,6 +107,7 @@ impl<'a> SliderField<'a> {
             unit: None,
             fill: true,
             track_face: None,
+            thumb: SliderThumb::Round,
         }
         .label(label)
     }
@@ -118,6 +122,7 @@ impl<'a> SliderField<'a> {
             unit_kind: self.unit_kind,
             unit: self.unit.clone(),
             fill: self.fill,
+            thumb: self.thumb,
             reset: self.value.reset_value().copied(),
         }
     }
@@ -132,6 +137,7 @@ struct Look {
     unit_kind: Option<UnitKind>,
     unit: Option<Label>,
     fill: bool,
+    thumb: SliderThumb,
     /// The reset value of the composite's own binding, which both children restore on a double click.
     reset: Option<f64>,
 }
@@ -159,7 +165,7 @@ impl Look {
         if let Some(check) = check {
             bind = bind.check(check);
         }
-        let slider = Slider::new(bind, self.range.clone()).scale(self.scale).fill(self.fill).label(name.clone());
+        let slider = Slider::new(bind, self.range.clone()).scale(self.scale).fill(self.fill).thumb(self.thumb).label(name.clone());
         let slider = match face {
             Some(face) => slider.track_face(face),
             None => slider,

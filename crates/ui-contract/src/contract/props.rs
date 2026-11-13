@@ -115,6 +115,8 @@ pub trait Props: Meta + Sized {
     /// A leaf with `Sizing::Content` is as wide as its content, without the ideal width its style asks for where the
     /// room allows (a field's `size.length.field`); a leaf otherwise keeps that width, and with `Sizing::FillWidth` it
     /// takes the room its row leaves after the other members, or the width its column offers (`Component::fills`).
+    /// A leaf with `Sizing::Fill` fills both axes: along an axis its body shares, its share of the room; across one,
+    /// the room offered there (a plot that takes the height its panel leaves).
     fn sizing(mut self, sizing: Sizing) -> Self {
         self.set_sizing(sizing, Internal::new());
         self

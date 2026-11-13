@@ -146,8 +146,13 @@ impl Component for ColorStrip<'_> {
         }
     }
 
+    /// As tall as the line of its row, the area beside it: a strip stands beside an area, in a picker or a panel.
+    fn fills(&self) -> Option<Axis> {
+        Some(Axis::Y)
+    }
+
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        Vec2::new(cx.tokens.size.icon.lg, cx.tokens.size.plot.height)
+        Vec2::new(cx.tokens.size.icon.lg, cx.tokens.size.hit.target)
     }
 
     fn sense(&self) -> Sense {

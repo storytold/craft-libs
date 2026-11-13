@@ -8,7 +8,10 @@ use craft_behavior::{EditEvent, GesturePhase, IconId, Mixed};
 use craft_cms::convert::CmykConverter;
 use craft_theme::{ColorModel, HsbModel, LabModel, ModelValues, RgbModel, Srgba};
 use craft_ui::buttons::IconButton;
-use craft_ui::contract::{Bind, CommandSet, Held, NoValue, Outcome, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{
+    Bind, CommandSet, Held, LabelScheme, NoValue, Outcome, Pattern, Props as _, Remember as _, Scroll, Show as _, ShowContainer as _, Sizing,
+    clicked,
+};
 use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::menu::{Menu, MenuItem, PanelRow};
@@ -18,7 +21,7 @@ use craft_ui::runtime::requests::ColorRequest;
 use egui::{Response, Ui};
 
 use super::channels::finite_values;
-use super::picker::{ChannelRow, ChannelRule, channel_name};
+use super::picker::{ChannelRow, ChannelRule, ChannelUnit, channel_name};
 use super::{
     AreaMode, ColorArea, ColorPickerDialogWords, ColorRamp, ColorReadout, ColorStrip, ColorWarning, ColorWarningChip, ColorWheel, PairWell,
     PickedColor, RampKind, SwatchPair, Well,
@@ -322,7 +325,7 @@ impl<'a> ColorPanel<'a> {
         let (words, dialog) = (env.words::<ColorPanelWords>(), env.words::<ColorPickerDialogWords>());
         let mut held = Held::new(state);
         let (mut edits, mut pick_color, mut add_to_swatches) = (Vec::new(), None, None);
-        let mut shown = Stack::new().label(words.title.clone()).show(ui, |ui, cx| {
+        let mut shown = Stack::new().label(words.title.clone()).fill().show(ui, |ui, cx| {
             let before = held.read(cx)?;
             let target = if before.background { PanelTarget::Background } else { PanelTarget::Foreground };
             let mut body = Body {
@@ -536,10 +539,15 @@ impl Body<'_> {
         self.events.push((target, event));
     }
 
+    /// The cubes take the height the readout leaves them, as Photoshop's field fills its dock group; the slider modes and
+    /// the wheel scroll where the group is shorter than they are.
     fn show(&mut self, ui: &mut Ui) {
         let mode = self.now.mode;
-        Stack::new().show(ui, |ui, _| {
-            Row::new().show(ui, |ui, _| {
+        let cube = mode.is_cube();
+        let body = if cube { Stack::new().fill() } else { Stack::new().fill().scroll(Scroll::vertical()) };
+        body.show(ui, |ui, _| {
+            let top = if cube { Row::new().fill() } else { Row::new() };
+            top.show(ui, |ui, _| {
                 Stack::new().show(ui, |ui, _| {
                     self.wells(ui);
                     // The cubes show the out-of-gamut chip only: the web-colour chip is for Web Color.
@@ -547,17 +555,20 @@ impl Body<'_> {
                         self.warnings(ui, mode == ColorPanelMode::WebColorSliders);
                     }
                 });
-                Stack::new().fill_width().show(ui, |ui, _| match mode {
+                match mode {
                     ColorPanelMode::HueCube => self.cube(ui, AreaMode::Hue),
                     ColorPanelMode::BrightnessCube => self.cube(ui, AreaMode::Brightness),
-                    ColorPanelMode::ColorWheel => self.rows(ui, &HsbModel, false),
-                    ColorPanelMode::GrayscaleSlider => self.rows(ui, &GrayModel, false),
-                    ColorPanelMode::RgbSliders => self.rows(ui, &RgbModel, false),
-                    ColorPanelMode::HsbSliders => self.rows(ui, &HsbModel, false),
-                    ColorPanelMode::CmykSliders => self.rows(ui, &CmykModel::new(self.converter.clone()), false),
-                    ColorPanelMode::LabSliders => self.rows(ui, &LabModel, false),
-                    ColorPanelMode::WebColorSliders => self.rows(ui, &RgbModel, true),
-                });
+                    _ => {
+                        Stack::new().fill_width().labels(LabelScheme::Inspector).show(ui, |ui, _| match mode {
+                            ColorPanelMode::GrayscaleSlider => self.rows(ui, &GrayModel, false),
+                            ColorPanelMode::RgbSliders => self.rows(ui, &RgbModel, false),
+                            ColorPanelMode::CmykSliders => self.rows(ui, &CmykModel::new(self.converter.clone()), false),
+                            ColorPanelMode::LabSliders => self.rows(ui, &LabModel, false),
+                            ColorPanelMode::WebColorSliders => self.rows(ui, &RgbModel, true),
+                            _ => self.rows(ui, &HsbModel, false),
+                        });
+                    }
+                }
             });
             match mode {
                 ColorPanelMode::HueCube | ColorPanelMode::BrightnessCube => self.readout(ui),
@@ -674,8 +685,8 @@ impl Body<'_> {
         );
     }
 
-    /// The channel rows of `model`: a label that scrubs the number field at the row's end, and the slider over the
-    /// channel's colours. Web Color has sliders that step by the web levels.
+    /// The channel rows of `model`, one line each: the channel's letter, which scrubs the value, the slider over the
+    /// channel's colours, and the number field with its unit. Web Color has sliders that step by the web levels.
     fn rows(&mut self, ui: &mut Ui, model: &dyn ColorModel, web: bool) {
         let current = self.values(model);
         // Dynamic Color Sliders off: the tracks keep the colours they had when a drag began.
@@ -698,14 +709,18 @@ impl Body<'_> {
                 track_values.values[2] = 100.0;
             }
             let track = model.track(i, &track_values);
-            let row = ChannelRow::new(channel_name(model, i, &[model]), Bind::given(f64::from(current.values[i])), rule).track(track).show(ui);
+            let row = ChannelRow::new(channel_name(model, i, &[model]), Bind::given(f64::from(current.values[i])), rule)
+                .short(ch.label)
+                .unit(ChannelUnit::of(ch.unit))
+                .track(track)
+                .show(ui);
             for event in row.into_iter().flat_map(|row| row.events) {
                 self.channel_event(model, current, i, event);
             }
         }
     }
 
-    /// Hue Cube or Brightness Cube: the area and the strip of `mode`.
+    /// Hue Cube or Brightness Cube: the area and the strip of `mode`, in the room the wells and the readout leave.
     fn cube(&mut self, ui: &mut Ui, mode: AreaMode) {
         let model = mode.model();
         let values = self.values(model);
@@ -713,8 +728,9 @@ impl Body<'_> {
         let names = [channel_name(model, across, &[model]), channel_name(model, down, &[model])];
         let (area_name, strip_name) = (Label::from(mode.name()), channel_name(model, mode.strip(), &[model]));
         let (area, strip) = Row::new()
+            .fill()
             .show(ui, |ui, _| {
-                let area = ColorArea::new(area_name.clone(), mode, Bind::given(values)).names(names.clone()).show(ui);
+                let area = ColorArea::new(area_name.clone(), mode, Bind::given(values)).names(names.clone()).sizing(Sizing::Fill).show(ui);
                 let strip = ColorStrip::new(strip_name.clone(), mode, Bind::given(values)).show(ui);
                 (area, strip)
             })

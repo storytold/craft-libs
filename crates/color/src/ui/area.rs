@@ -5,7 +5,8 @@ use crate::AreaMode;
 use craft_behavior::{Metrics, Mixed, Sense};
 use craft_theme::ModelValues;
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, MeasureCx, PaintUi, Props as _, Role, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, MeasureCx, PaintUi, Props as _, Role, Sizing,
+    WordSetCx as _,
 };
 use craft_ui::primitives::ContentPainterCx;
 use craft_ui::runtime::env::Label;
@@ -38,6 +39,9 @@ pub struct ColorAreaStyle {
 /// changed, so a host that keeps the values it was sent keeps the hue of a grey and the hue and saturation of black.
 /// The area keeps its axes right to left: across still grows to the right. Its value text names both components
 /// ("Saturation 40 %, Brightness 70 %", from [`names`](ColorArea::names)).
+///
+/// It is at least `size.plot` and fills the width its row leaves; with `Props::sizing(Sizing::Fill)` it takes the room
+/// on both axes, however small (the Color panel's field, as tall as its dock group leaves it).
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 pub struct ColorArea<'a> {
     #[common]
@@ -116,6 +120,10 @@ impl Component for ColorArea<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        // An area that fills its room (the Color panel's, as tall as its group leaves it) keeps no plot size of its own.
+        if cx.resolved.sizing() == Some(Sizing::Fill) {
+            return Vec2::splat(cx.tokens.size.hit.target);
+        }
         let mut picker = self.picker(cx.value(), false);
         cx.child("picker", &mut picker, cx.proposal)
     }

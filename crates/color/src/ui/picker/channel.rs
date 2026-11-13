@@ -1,16 +1,18 @@
-//! The channel row: a label that scrubs a slider whose track shows the channel's colours, and a number field after
-//! it. Shared with the panels that show channels.
+//! The channel row: on one line, a label that scrubs, a slider whose track shows the channel's colours, and a number
+//! field after it. Shared with the panels that show channels.
 
 use std::ops::RangeInclusive;
 
 use craft_behavior::{Axis, Sense};
 use craft_theme::{Channel, ColorModel, Srgba};
-use craft_ui::contract::{Bind, Common, Component, Cx, DisabledLook, EditResponse, MeasureCx, Role, Show as _};
-use craft_ui::form::SliderField;
+use craft_ui::contract::{
+    Bind, Common, Component, Cx, DisabledLook, EditResponse, GlyphLabel, LabelKind, MeasureCx, Role, Show as _, ShowContainer as _, SideLabel,
+};
+use craft_ui::form::{Field, SliderField, SliderFieldLayout};
 use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::env::{Label, UnitKind};
 use craft_ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx};
-use craft_ui::value_drag::TrackFace;
+use craft_ui::value_drag::{SliderThumb, TrackFace};
 use egui::{Color32, CornerRadius, Ui, Vec2};
 
 /// How a channel's value steps and settles: a channel's or the alpha's.
@@ -153,10 +155,14 @@ pub(crate) fn channel_slider<'a>(
     }
 }
 
-/// One channel: the word label and number field on a line over the slider across the channel's colours.
+/// One channel on one line, as Photoshop's Color panel draws it: the label at the start (the channel's short label
+/// where one is given, "C"), which scrubs the value, the slider over the channel's colours with the pointer under its
+/// track, and the number field with its unit at the end.
 #[derive(craft_ui::contract::Pattern)]
 pub(crate) struct ChannelRow<'a> {
     label: Label,
+    /// The text shown in place of the label: the channel's short label.
+    short: Option<&'static str>,
     value: Bind<'a, f64>,
     rule: ChannelRule,
     track: Option<Vec<Srgba>>,
@@ -167,7 +173,13 @@ pub(crate) struct ChannelRow<'a> {
 
 impl<'a> ChannelRow<'a> {
     pub(crate) fn new(label: impl Into<Label>, value: Bind<'a, f64>, rule: ChannelRule) -> Self {
-        ChannelRow { label: label.into(), value, rule, track: None, checker: false, unit: ChannelUnit::None }
+        ChannelRow { label: label.into(), short: None, value, rule, track: None, checker: false, unit: ChannelUnit::None }
+    }
+
+    /// Shows `short` at the line's start in place of the label, which stays the row's name.
+    pub(crate) fn short(mut self, short: &'static str) -> Self {
+        self.short = Some(short).filter(|short| !short.is_empty());
+        self
     }
 
     /// The colours of the track, from the channel's start to its end.
@@ -189,7 +201,19 @@ impl<'a> ChannelRow<'a> {
 
     /// Shows the row; the edit of the slider or the field, `None` when the row did not run.
     pub(crate) fn show(self, ui: &mut Ui) -> Option<EditResponse<f64>> {
-        let ChannelRow { label, mut value, rule, track, checker, unit } = self;
-        Some(channel_slider(label, value.reborrowed(), &rule, unit, track.map(|stops| (stops, checker))).show(ui))
+        let ChannelRow { label, short, mut value, rule, track, checker, unit } = self;
+        let side = match short {
+            Some(short) => SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(Label::from(short)))),
+            None => SideLabel::new(),
+        };
+        Field::new(label.clone())
+            .side(side.scrub(true))
+            .show(ui, |ui, _| {
+                channel_slider(label.clone(), value.reborrowed(), &rule, unit, track.clone().map(|stops| (stops, checker)))
+                    .layout(SliderFieldLayout::Inline)
+                    .thumb(SliderThumb::Triangle)
+                    .show(ui)
+            })
+            .inner
     }
 }

@@ -56,6 +56,7 @@ impl<'a> Body<'a> {
                         Bind::given(pass.shows(f64::from(values.values[i]))),
                         ChannelRule::of(channel),
                     )
+                    .short(channel.label)
                     .unit(ChannelUnit::of(channel.unit));
                     if self.dynamic_tracks {
                         row = row.track(model.track(i, &values));

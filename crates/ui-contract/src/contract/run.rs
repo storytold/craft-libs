@@ -326,7 +326,11 @@ impl<C: Component> ShapeHooks<C> for LeafHooks {
         };
         // The control beside an inspector's label fills the cell the label leaves, unless its caller sized it to its
         // content.
-        let in_cell = env.cell_fills && comp.common(super::Internal::new()).sizing != Some(super::Sizing::Content);
+        let sizing = comp.common(super::Internal::new()).sizing;
+        if sizing == Some(super::Sizing::Fill) {
+            return Vec2::new(fill(size.x, room.x, content.0, craft_behavior::Axis::X), fill(size.y, room.y, content.1, craft_behavior::Axis::Y));
+        }
+        let in_cell = env.cell_fills && sizing != Some(super::Sizing::Content);
         match comp.fills().or(in_cell.then_some(craft_behavior::Axis::X)) {
             Some(craft_behavior::Axis::X) => Vec2::new(fill(size.x, room.x, content.0, craft_behavior::Axis::X), size.y),
             Some(craft_behavior::Axis::Y) => Vec2::new(size.x, fill(size.y, room.y, content.1, craft_behavior::Axis::Y)),
