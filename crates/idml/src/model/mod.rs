@@ -25,7 +25,7 @@ pub use resources::{
 };
 pub use spread::{
     Graphic, GraphicChild, GraphicKind, Guide, ItemChild, ItemKind, Link, MarginPreference, Page, PageChild, PageItem, Spread, SpreadChild, TextPath,
-    spreads,
+    TextWrapPreference, spreads,
 };
 pub use story::{
     Ace, CONTAINERS, Cell, CellOptions, Container, ContainerKind, ContentPart, PageReference, Range, Story, StoryAnchor, StoryPreference, Table,

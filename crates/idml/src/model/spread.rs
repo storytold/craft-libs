@@ -460,6 +460,10 @@ impl PageItem {
         self.other("TextPath").map(|el| TextPath { values: Values::of(el) })
     }
 
+    pub fn text_wrap(&self) -> Option<TextWrapPreference> {
+        self.other("TextWrapPreference").map(TextWrapPreference::from_el)
+    }
+
     /// Replaces the outline.
     pub fn set_geometry(&mut self, g: &PathGeometry) {
         self.values.set_prop_el("PathGeometry", Some(g.to_el()));
@@ -506,6 +510,46 @@ impl PageItem {
     /// `OverriddenPageItem`: the `Self` of the parent item this item overrides.
     pub fn overridden_page_item(&self) -> Option<&str> {
         self.values.get("OverriddenPageItem").filter(|s| *s != "n")
+    }
+}
+
+/// Parsed IDML `TextWrapPreference` values, including the nested offset and contour elements.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TextWrapPreference {
+    values: Values,
+    contour_type: Option<String>,
+    offsets: Option<[f64; 4]>,
+}
+
+impl TextWrapPreference {
+    pub fn from_el(el: &El) -> Self {
+        let contour_type = el.child(Local("ContourOption")).and_then(|c| Values::of(c).get("ContourType").map(str::to_string));
+        let offsets = el.child(Local("Properties")).and_then(|p| p.child(Local("TextWrapOffset"))).map(|o| {
+            let values = Values::of(o);
+            [
+                values.num("Top").unwrap_or(0.0),
+                values.num("Left").unwrap_or(0.0),
+                values.num("Bottom").unwrap_or(0.0),
+                values.num("Right").unwrap_or(0.0),
+            ]
+        });
+        Self { values: Values::of(el), contour_type, offsets }
+    }
+
+    pub fn mode(&self) -> Option<&str> {
+        self.values.get("TextWrapMode")
+    }
+    pub fn inverse(&self) -> bool {
+        self.values.boolean("Inverse") == Some(true)
+    }
+    pub fn side(&self) -> Option<&str> {
+        self.values.get("TextWrapSide")
+    }
+    pub fn contour_type(&self) -> Option<&str> {
+        self.contour_type.as_deref()
+    }
+    pub fn offsets(&self) -> Option<[f64; 4]> {
+        self.offsets
     }
 }
 
