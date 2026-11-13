@@ -153,15 +153,18 @@ pub(crate) fn focus(cx: &StyleCx<'_>) -> FocusLook {
 
 /// The size of the face: its parts and the gaps between them.
 /// The label elides in the room the icons and gaps leave, so a squeezed face is as wide as its room; at its least
-/// the label is elided to the ellipsis.
+/// the label is at its readable least.
 pub(crate) fn measure<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) -> Vec2 {
     let icon = cx.icon();
     let fixed = icon * spec.icons() as f32 + cx.gap() * spec.gaps() as f32;
-    let band = match cx.proposal {
-        Proposal::Min => 0.0,
-        _ => cx.room.map_or(f32::INFINITY, |room| (room - fixed).max(0.0)),
+    let text = if spec.label.is_empty() {
+        Vec2::ZERO
+    } else if cx.proposal == Proposal::Min {
+        let run = spec.run();
+        Vec2::new(cx.least_width(&run), cx.layout_at(&run, f32::INFINITY).size().y)
+    } else {
+        cx.layout_at(&spec.run(), cx.room.map_or(f32::INFINITY, |room| (room - fixed).max(0.0))).size()
     };
-    let text = if spec.label.is_empty() { Vec2::ZERO } else { cx.layout_at(&spec.run(), band).size() };
     Vec2::new(text.x + fixed, text.y.max(icon))
 }
 

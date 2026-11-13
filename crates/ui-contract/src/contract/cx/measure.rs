@@ -109,13 +109,22 @@ impl<C: Component> MeasureCx<'_, C> {
 
     /// Lays `run` out `width` wide, for a text that paints in a band narrower than the room.
     pub fn layout_at(&self, run: &TextRun<'_>, width: f32) -> TextLayout {
-        let env = TextEnv {
+        run.layout(self.ui.ctx(), &self.text_env(), width)
+    }
+
+    /// The width of `run`, a run that elides, at its readable least ([`TextRun::READABLE_CHARACTERS`]): the least
+    /// width an elidable text reports at `Proposal::Min`.
+    pub fn least_width(&self, run: &TextRun<'_>) -> f32 {
+        run.least_width(self.ui.ctx(), &self.text_env())
+    }
+
+    fn text_env(&self) -> TextEnv<'_> {
+        TextEnv {
             tokens: self.tokens,
             direction: self.env.text_direction(),
             ink: crate::style::ink_color(self.tokens, self.ink),
             fonts: crate::fonts::stack_facts(self.ui.ctx()),
-        };
-        run.layout(self.ui.ctx(), &env, width)
+        }
     }
 
     /// The room an editable text in a control sized by its text needs for `run`: the laid-out text and the caret the

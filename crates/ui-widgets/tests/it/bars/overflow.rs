@@ -1,6 +1,7 @@
 //! A `Bar` too short for its members: it lays out under right-to-left as the mirror of left-to-right, and its end
 //! region shares the members' line; a member that fills takes the room the bar leaves; a select fits its widest entry
-//! up to a field length; a rule before a member the bar hides is not drawn, and a settled bar replays it so.
+//! up to a field length; a rule before a member the bar hides is not drawn, and a settled bar replays it so; a button
+//! label elides no further than its readable least.
 
 use craft_behavior::IconId;
 use craft_behavior::geometry::Constraint;
@@ -8,11 +9,13 @@ use craft_i18n::Direction;
 use craft_theme::ControlSize;
 use craft_ui::bars::{Bar, BarItem, BarItems, BarKind, ConstraintFields, ItemDisplay};
 use craft_ui::buttons::{Button, IconButton};
+use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, Entry, Lazy, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::display::{Divider, Text};
 use craft_ui::form::Field;
 use craft_ui::pickers::Select;
 use craft_ui::popover::Popover;
+use craft_ui::primitives::TextRun;
 use craft_ui::runtime::commands::EditCommands;
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Fixture, Frames, trial};
@@ -266,4 +269,80 @@ fn a_settled_bar_replays_the_rule_it_took_back() {
         assert_eq!(runs.get(), 0, "settled frame {frame} ran the region");
         assert!(!draws_rule(&shapes, wide), "settled frame {frame} replays the rule the run took back");
     }
+}
+
+/// A bar `width` wide holding an icon button, a rule, a labelled checkbox, a rule and a second icon button; `rects`
+/// gets the first button's and the checkbox's rects.
+fn labelled_rule_bar(ui: &mut Ui, width: f32, rects: &std::cell::Cell<(Rect, Rect)>) {
+    in_region(ui, Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 80.0)), |ui| {
+        Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+            let first = IconButton::new(IconId::new("plus")).label("First").show(ui).rect;
+            Divider::vertical().show(ui);
+            let checkbox = Checkbox::new(Bind::given(false)).label("Snap").show(ui).response.rect;
+            Divider::vertical().show(ui);
+            IconButton::new(IconId::new("minus")).label("Last").show(ui);
+            rects.set((first, checkbox));
+        });
+    });
+}
+
+/// The rule before a labelled control the bar shows is drawn, though a member after it is hidden.
+#[trial]
+fn a_rule_before_a_labelled_control_the_bar_shows_is_drawn() {
+    let shapes_at = |width: f32| {
+        let rects = std::cell::Cell::new((Rect::NOTHING, Rect::NOTHING));
+        let mut frames = Frames::new();
+        frames.idle(4, |ui| labelled_rule_bar(ui, width, &rects));
+        let shapes = frames.frame_shapes(|ui| labelled_rule_bar(ui, width, &rects));
+        (shapes, rects.get())
+    };
+    let (shown, rects) = shapes_at(900.0);
+    assert!(draws_rule(&shown, rects), "with every member whole the rule before the checkbox is drawn");
+    let mut wide = Fixture::new(|ui| labelled_rule_bar(ui, 900.0, &std::cell::Cell::new((Rect::NOTHING, Rect::NOTHING))));
+    wide.room(Vec2::new(900.0, 80.0)).settle();
+    let last = wide.by_label("Last").expect("the last button").rect;
+    let (cut, (_, checkbox)) = shapes_at(last.center().x);
+    assert!(checkbox.is_positive() && checkbox.max.x < last.min.x, "the checkbox shows at {checkbox:?}");
+    assert!(draws_rule(&cut, rects), "the rule before the shown checkbox is not drawn when the last button is hidden");
+}
+
+const VIEW_BUTTONS: &[&str] = &["Actual Pixels", "Fit Screen", "Fill Screen"];
+
+/// The characters each label a bar `width` wide of `VIEW_BUTTONS` shows once settled before its ellipsis, for each
+/// label shown cut, with the characters of the whole label.
+fn cut_labels(width: f32) -> Vec<(usize, usize)> {
+    let scene = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 80.0)), |ui| {
+            Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+                for label in VIEW_BUTTONS {
+                    Button::new(*label).show(ui);
+                }
+            });
+        });
+    };
+    let mut frames = Frames::new();
+    frames.idle(4, scene);
+    let mut cut = Vec::new();
+    for shape in frames.frame_shapes(scene) {
+        let Shape::Text(text) = shape else { continue };
+        let Some(kept) = text.galley.job.text.strip_suffix('…') else { continue };
+        if let Some(label) = VIEW_BUTTONS.iter().find(|label| label.starts_with(kept)) {
+            cut.push((kept.chars().count(), label.chars().count()));
+        }
+    }
+    cut
+}
+
+/// A bar too short for its buttons narrows their labels to their readable least, never to the ellipsis alone, and
+/// scrolls past that.
+#[trial]
+fn a_button_label_in_a_bar_elides_no_further_than_its_readable_least() {
+    let mut elided = 0;
+    for width in (80..=400).step_by(8) {
+        for (kept, characters) in cut_labels(width as f32) {
+            elided += 1;
+            assert!(kept >= TextRun::READABLE_CHARACTERS, "at {width}: a label of {characters} characters keeps {kept} before its ellipsis");
+        }
+    }
+    assert!(elided > 0, "no width elided a label");
 }

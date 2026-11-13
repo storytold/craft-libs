@@ -145,11 +145,12 @@ impl Component for SelectFace<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        // At its least the face elides its name to an ellipsis.
-        let ellipsis = || cx.layout(&TextRun::new("…").role(cx.style.text.role)).size().x;
+        // At its least the face elides its name to its readable least.
+        let run = TextRun::new(cx.resolved.label).role(cx.style.text.role).elide();
+        let least = || cx.least_width(&run);
         let mut text = match (self.name, cx.proposal) {
-            (true, Proposal::Min) => Vec2::new(ellipsis(), cx.layout(&TextRun::new(cx.resolved.label).role(cx.style.text.role)).size().y),
-            (true, _) => cx.layout(&TextRun::new(cx.resolved.label).role(cx.style.text.role)).size(),
+            (true, Proposal::Min) => Vec2::new(least(), cx.layout_at(&run, f32::INFINITY).size().y),
+            (true, _) => cx.layout_at(&run, f32::INFINITY).size(),
             (false, _) => Vec2::ZERO,
         };
         let caption = self.caption_run(&cx.style.caption).map_or(Vec2::ZERO, |run| cx.layout(&run).size());
@@ -160,10 +161,11 @@ impl Component for SelectFace<'_> {
         };
         let beside = self.lead(cx.style, caption.x) + reserve(&cx.style.field, &self.leading_glyphs(), &[Self::chevron()]);
         if self.fit && self.name {
-            // A fitted box is at most a field length, padding included; a longer text elides, down to its ellipsis.
+            // A fitted box is at most a field length, padding included; a longer text elides, down to its readable
+            // least.
             let field = cx.style.field.metrics();
             let room = field.ideal_width - cx.style.metrics.padding.start - cx.style.metrics.padding.end - beside;
-            text.x = text.x.min(room.max(ellipsis()));
+            text.x = text.x.min(room.max(least()));
         }
         Vec2::new(beside + text.x, text.y.max(picture))
     }

@@ -152,8 +152,9 @@ fn select_in(width: f32) -> (Rect, bool) {
 #[trial]
 fn a_select_in_a_short_bar_narrows_past_a_fields_own_least_and_elides() {
     let (wide, _) = select_in(900.0);
-    let (narrow, elided) = select_in(200.0);
-    assert!(narrow.width() < 96.0, "the select stayed {} wide", narrow.width());
+    // The widths at which the buttons after it, at their least, leave the select less than a field's own least.
+    let narrowed = (200..=400).step_by(10).map(|width| select_in(width as f32)).find(|(rect, _)| rect.width() < 96.0);
+    let Some((narrow, elided)) = narrowed else { panic!("the select stayed at least 96 wide at every width") };
     assert!(narrow.width() < wide.width() - SLACK && elided, "the select {narrow:?} did not elide its pick");
 }
 

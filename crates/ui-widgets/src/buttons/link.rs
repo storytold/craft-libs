@@ -85,9 +85,12 @@ impl Component for Link {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        // At its least a link that elides is the ellipsis.
-        let band = if cx.proposal == Proposal::Min && self.cut_first() { 0.0 } else { cx.room.unwrap_or(f32::INFINITY) };
-        let layout = cx.layout_at(&self.run(cx.resolved.label), band);
+        let run = self.run(cx.resolved.label);
+        // At its least a link that elides is at its readable least.
+        if cx.proposal == Proposal::Min && self.cut_first() {
+            return Vec2::new(cx.least_width(&run), painted_height(&cx.layout_at(&run, f32::INFINITY)));
+        }
+        let layout = cx.layout_at(&run, cx.room.unwrap_or(f32::INFINITY));
         Vec2::new(layout.size().x, painted_height(&layout))
     }
 

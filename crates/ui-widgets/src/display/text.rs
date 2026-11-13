@@ -161,8 +161,12 @@ impl Component for Text {
             let widest = widest();
             return Vec2::new(widest, cx.layout_at(&self.run(role, cx.resolved.label), widest).size().y);
         }
-        // At its least an elided line is the ellipsis.
-        let band = if cx.proposal == Proposal::Min { 0.0 } else { wrap.unwrap_or(f32::INFINITY) };
+        // At its least an elided line is at its readable least.
+        if cx.proposal == Proposal::Min {
+            let run = self.run(role, cx.resolved.label);
+            return Vec2::new(cx.least_width(&run), cx.layout_at(&run, f32::INFINITY).size().y);
+        }
+        let band = wrap.unwrap_or(f32::INFINITY);
         let mut layout = cx.layout_at(&self.run(role, cx.resolved.label), band);
         // In a row the room is what the earlier siblings left, which can be less than a word; the row's shrink step
         // then makes room for the word.
