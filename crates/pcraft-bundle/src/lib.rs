@@ -391,6 +391,11 @@ impl DirectoryBundle {
         self.read(craft_pcraft_format::MANIFEST, self.limits.max_manifest_bytes)
     }
 
+    /// Reads any canonical bundle entry.
+    pub fn entry(&self, path: &str, max_bytes: u64) -> Result<Option<Vec<u8>>> {
+        self.read_optional(path, max_bytes)
+    }
+
     /// Reads an optional preview entry.
     pub fn preview(&self, path: &str) -> Result<Option<Vec<u8>>> {
         if !matches!(path, craft_pcraft_format::THUMB | craft_pcraft_format::COMPOSITE | craft_pcraft_format::FULL_COMPOSITE) {
