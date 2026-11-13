@@ -242,6 +242,49 @@ pub fn read_preview_document(bytes: &[u8]) -> Result<PreviewDocument, serde_json
     serde_json::from_slice(bytes)
 }
 
+/// Largest `thumbnail.png` returned for a recent-file preview.
+pub const MAX_PREVIEW_THUMBNAIL_BYTES: u64 = 8 * 1024 * 1024;
+/// Largest `document.json` read to build a recent-file preview.
+pub const MAX_PREVIEW_DOCUMENT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Native `.figcraft` members needed by the recent-file preview.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PreviewArchive {
+    /// Whether the archive has a `document.json` entry, even if it is damaged or oversized.
+    /// Consumers use this to distinguish a malformed native archive from other ZIP formats.
+    pub has_document: bool,
+    /// The thumbnail bytes, absent when missing, damaged, or above [`MAX_PREVIEW_THUMBNAIL_BYTES`].
+    pub thumbnail_png: Option<Vec<u8>>,
+    /// The first-page fields, absent when `document.json` is missing, damaged, or oversized.
+    pub document: Option<PreviewDocument>,
+}
+
+/// Read only the thumbnail member for a native archive-list thumbnail.
+///
+/// This avoids unpacking the document when a caller needs only the image. Missing, damaged,
+/// and oversized entries return None; an unreadable archive is an error.
+pub fn read_preview_thumbnail<R: std::io::Read + std::io::Seek>(reader: R) -> Result<Option<Vec<u8>>, FormatError> {
+    let mut archive = SeekArchive::open(reader, u64::MAX).map_err(|error| FormatError::Corrupt(error.to_string()))?;
+    Ok(archive.read("thumbnail.png", MAX_PREVIEW_THUMBNAIL_BYTES).ok().flatten())
+}
+
+/// Read the bounded native preview members of a `.figcraft` archive.
+///
+/// An unreadable archive is an error; a missing, damaged, or oversized member is represented by
+/// `None`, so the caller can still show the other part of the preview. The thumbnail and document
+/// retain the separate limits used by the app's recent-file preview.
+pub fn read_preview_archive<R: std::io::Read + std::io::Seek>(reader: R) -> Result<PreviewArchive, FormatError> {
+    let mut archive = SeekArchive::open(reader, u64::MAX).map_err(|error| FormatError::Corrupt(error.to_string()))?;
+    let has_document = archive.contains("document.json");
+    let thumbnail_png = archive.read("thumbnail.png", MAX_PREVIEW_THUMBNAIL_BYTES).ok().flatten();
+    let document = if has_document {
+        archive.read("document.json", MAX_PREVIEW_DOCUMENT_BYTES).ok().flatten().and_then(|bytes| read_preview_document(&bytes).ok())
+    } else {
+        None
+    };
+    Ok(PreviewArchive { has_document, thumbnail_png, document })
+}
+
 pub fn check_version(h: &Header) -> Result<(), NewerVersion> {
     if let Some(v) = h.version
         && v > u64::from(VERSION)
@@ -274,6 +317,53 @@ pub fn write_document_json<D: Serialize, W: std::io::Write>(doc: &D, images: &[I
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_archive_reads_native_members_and_preserves_document_presence() {
+        let document = br#"{"pages":[7],"nodes":{"7":{"background":{"r":0.25}}},"kind":"board"}"#;
+        let bytes = write_archive([
+            Member { name: "thumbnail.png", bytes: b"png bytes", compression: Compression::Stored },
+            Member { name: "document.json", bytes: document, compression: Compression::Deflated },
+        ])
+        .unwrap();
+        assert_eq!(read_preview_thumbnail(std::io::Cursor::new(bytes.clone())).unwrap().as_deref(), Some(b"png bytes".as_slice()));
+        let preview = read_preview_archive(std::io::Cursor::new(bytes)).unwrap();
+        assert!(preview.has_document);
+        assert_eq!(preview.thumbnail_png.as_deref(), Some(b"png bytes".as_slice()));
+        let document = preview.document.unwrap();
+        assert_eq!(document.pages, [7]);
+        assert_eq!(document.kind, PreviewKind::Board);
+        assert_eq!(document.nodes["7"].background.as_ref().unwrap()["r"], 0.25);
+
+        // A malformed native document still identifies this as a FigCraft archive, allowing the
+        // app to retain its existing fallback instead of interpreting it as another ZIP format.
+        let bytes = write_archive([Member { name: "document.json", bytes: b"{", compression: Compression::Stored }]).unwrap();
+        let preview = read_preview_archive(std::io::Cursor::new(bytes)).unwrap();
+        assert!(preview.has_document);
+        assert!(preview.document.is_none());
+        assert!(preview.thumbnail_png.is_none());
+        assert!(read_preview_archive(std::io::Cursor::new(b"not a zip".as_slice())).is_err());
+    }
+
+    #[test]
+    fn preview_archive_keeps_thumbnail_and_document_size_limits_independent() {
+        let too_large_thumbnail = vec![0; MAX_PREVIEW_THUMBNAIL_BYTES as usize + 1];
+        let bytes = write_archive([
+            Member { name: "thumbnail.png", bytes: &too_large_thumbnail, compression: Compression::Deflated },
+            Member { name: "document.json", bytes: br#"{"pages":[3]}"#, compression: Compression::Stored },
+        ])
+        .unwrap();
+        let preview = read_preview_archive(std::io::Cursor::new(bytes)).unwrap();
+        assert!(preview.thumbnail_png.is_none());
+        assert_eq!(preview.document.unwrap().pages, [3]);
+
+        let too_large_document = vec![b' '; MAX_PREVIEW_DOCUMENT_BYTES as usize + 1];
+        let bytes = write_archive([Member { name: "document.json", bytes: &too_large_document, compression: Compression::Deflated }]).unwrap();
+        let preview = read_preview_archive(std::io::Cursor::new(bytes)).unwrap();
+        assert!(preview.has_document);
+        assert!(preview.document.is_none());
+    }
+
     #[test]
     fn header_skips_app_fields() {
         let h = read_header(r#"{"version":1,"imageIndex":[{"hash":"abc"}],"nested":{"unused":true}}"#).unwrap();
