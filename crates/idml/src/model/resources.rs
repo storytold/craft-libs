@@ -238,6 +238,14 @@ pub struct GradientStop {
     pub midpoint: f64,
 }
 
+/// A `GradientStop` in source order, including optional values as written.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GradientStopValue {
+    pub color: Option<String>,
+    pub location: Option<f64>,
+    pub midpoint: Option<f64>,
+}
+
 impl Swatch {
     pub fn to_el(&self) -> El {
         let mut el = self.values.element(self.kind.name());
@@ -293,6 +301,22 @@ impl Swatch {
                     location: v.num("Location")?,
                     midpoint: v.num("Midpoint").unwrap_or(50.0),
                 })
+            })
+            .collect()
+    }
+
+    /// Every gradient stop in source order, retaining absent or malformed optional values.
+    pub fn stops_in_order(&self) -> Vec<GradientStopValue> {
+        self.rest
+            .iter()
+            .filter(|e| e.local() == "GradientStop")
+            .map(|e| {
+                let values = Values::of(e);
+                GradientStopValue {
+                    color: values.get("StopColor").map(str::to_string),
+                    location: values.num("Location"),
+                    midpoint: values.num("Midpoint"),
+                }
             })
             .collect()
     }
