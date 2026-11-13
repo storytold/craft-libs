@@ -239,6 +239,46 @@ impl CellStyleValues {
     }
 }
 
+/// Parsed table-style assignments that are independent of DesignCraft's style resolution.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TableStyleValues {
+    pub name: Option<String>,
+    pub based_on: Option<String>,
+    pub header_cell_style: Option<String>,
+    pub body_cell_style: Option<String>,
+    pub footer_cell_style: Option<String>,
+    pub left_column_cell_style: Option<String>,
+    pub right_column_cell_style: Option<String>,
+    pub header_same_as_body: Option<bool>,
+    pub footer_same_as_body: Option<bool>,
+    pub left_column_same_as_body: Option<bool>,
+    pub right_column_same_as_body: Option<bool>,
+    pub space_before: Option<f64>,
+    pub space_after: Option<f64>,
+}
+
+impl TableStyleValues {
+    /// Reads table-style regions, inheritance, spacing, and region reuse values.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        Self {
+            name: values.name().map(str::to_owned),
+            based_on: values.prop("BasedOn"),
+            header_cell_style: values.get("HeaderRegionCellStyle").map(str::to_owned),
+            body_cell_style: values.get("BodyRegionCellStyle").map(str::to_owned),
+            footer_cell_style: values.get("FooterRegionCellStyle").map(str::to_owned),
+            left_column_cell_style: values.get("LeftColumnRegionCellStyle").map(str::to_owned),
+            right_column_cell_style: values.get("RightColumnRegionCellStyle").map(str::to_owned),
+            header_same_as_body: values.boolean("HeaderRegionSameAsBodyRegion"),
+            footer_same_as_body: values.boolean("FooterRegionSameAsBodyRegion"),
+            left_column_same_as_body: values.boolean("LeftColumnRegionSameAsBodyRegion"),
+            right_column_same_as_body: values.boolean("RightColumnRegionSameAsBodyRegion"),
+            space_before: values.num("SpaceBefore"),
+            space_after: values.num("SpaceAfter"),
+        }
+    }
+}
+
 impl NumberingListValues {
     /// Reads a `NumberingList` element.
     pub fn from_el(el: &El) -> Self {
