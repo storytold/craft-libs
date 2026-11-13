@@ -24,6 +24,7 @@ mod legacy_forms;
 mod ligatures;
 mod line_numbering;
 mod malformed;
+mod math_normal_text;
 mod missing_pictures;
 mod nested_block_controls;
 mod note_comments;
