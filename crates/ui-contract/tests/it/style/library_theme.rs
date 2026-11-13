@@ -25,4 +25,6 @@ fn a_library_theme_resolves_from_its_definition_and_an_unknown_id_from_the_defau
     assert_eq!(panel(dark(RootEnv::new().library_theme(Arc::new(mine.clone())))), expected, "the root's own definition");
     let unknown = panel(dark(RootEnv::new().theme(mine.id.clone())));
     assert_ne!(unknown, expected, "an id with no definition and no built-in shows the suite default");
+    let renamed = panel(dark(RootEnv::new().library_theme(Arc::new(mine.clone())).theme(mine.id.clone())));
+    assert_eq!(renamed, unknown, "naming a theme by id drops the earlier definition");
 }

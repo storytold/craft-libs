@@ -81,7 +81,7 @@ fn resolve_inputs(inputs: &TokenInputs) -> Arc<UiTokens> {
     let appearance =
         Appearance { mode: inputs.mode, contrast: inputs.contrast, size: inputs.density, text_size: inputs.text_size, reduced_motion: false };
     let themes = builtins();
-    if let Some(def) = inputs.theme_def.as_ref().filter(|def| def.id == inputs.theme) {
+    if let Some(def) = &inputs.theme_def {
         return Arc::new(UiTokens::new(Arc::new(resolve_sized(def, appearance, None, &inputs.sizes).tokens), inputs.contrast, inputs.density));
     }
     let theme: &ThemeDef =

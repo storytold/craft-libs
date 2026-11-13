@@ -398,7 +398,11 @@ fn tab_with_canvas(keys: Option<KeyUse>, focused: bool) -> (Vec<(ViewportId, Chr
         }
     };
     let mut frames = Frames::new();
-    frames.root(RootEnv { tab_toggles_chrome: true, ..RootEnv::default() });
+    frames.root({
+        let mut root = RootEnv::default();
+        root.tab_toggles_chrome = true;
+        root
+    });
     frames.frame(Vec::new(), &mut show);
     if focused {
         request(&frames.ctx, FocusTarget::Id(canvas));

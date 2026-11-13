@@ -38,7 +38,11 @@ fn without_canvas(ui: &mut Ui) {
 /// Frames with the app's switch `enabled`, past the first frame that registers the stops.
 fn shown(enabled: bool, show: &mut impl FnMut(&mut Ui)) -> Frames {
     let mut frames = Frames::new();
-    frames.root(RootEnv { tab_toggles_chrome: enabled, ..RootEnv::default() });
+    frames.root({
+        let mut root = RootEnv::default();
+        root.tab_toggles_chrome = enabled;
+        root
+    });
     frames.frame(Vec::new(), &mut *show);
     take_output(&frames.ctx);
     frames
@@ -106,7 +110,11 @@ fn a_rebound_command_fires_on_its_new_key_and_tab_then_moves_focus() {
     overrides.insert(ChromeCommand::TogglePanels.id(), vec!["F9".to_owned()]);
     let mut show = with_canvas;
     let mut frames = Frames::new();
-    frames.root(RootEnv { tab_toggles_chrome: true, ..RootEnv::default() });
+    frames.root({
+        let mut root = RootEnv::default();
+        root.tab_toggles_chrome = true;
+        root
+    });
     frames.commands(CommandInput::new().overrides(Arc::new(overrides)));
     frames.frame(Vec::new(), &mut show);
     take_output(&frames.ctx);

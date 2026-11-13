@@ -39,7 +39,8 @@ pub struct RootEnv {
     /// The theme the tokens resolve from; an id no built-in theme has resolves to the suite default.
     pub theme: ThemeId,
     /// The definition of `theme` when it is a library theme: no built-in has its id, so the tokens resolve from this.
-    pub theme_def: Option<Arc<ThemeDef>>,
+    /// Set only with `theme`, by `library_theme`; `theme(id)` clears it.
+    pub(super) theme_def: Option<Arc<ThemeDef>>,
     /// Root app values.
     pub values: AppValues,
     /// Today's date in the host's time zone; the runtime reads no wall clock.
@@ -111,6 +112,7 @@ impl RootEnv {
     /// Sets the theme.
     pub fn theme(mut self, theme: ThemeId) -> Self {
         self.theme = theme;
+        self.theme_def = None;
         self
     }
 
