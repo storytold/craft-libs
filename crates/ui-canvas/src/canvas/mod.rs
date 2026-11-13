@@ -78,7 +78,7 @@ pub use navigate::{
 };
 pub use rotate::{RotateView, RotateViewOutput, RotateViewStyle, ViewTurn};
 pub use tools::{HandTool, RotateViewTool, ViewCommands, ViewTarget, ZoomTool};
-pub use zoom_motion::{HoldZoom, ZoomAnimation, ZoomDrag};
+pub use zoom_motion::{HoldZoom, ZoomAnimation, ZoomDrag, easing_view};
 
 mod rulers;
 mod scrollbars;
@@ -420,9 +420,12 @@ impl<'a> Canvas<'a> {
             Some(settled) => (settled.shown, settled.target, settled.easing, settled.keys),
             None => (self.given?, self.given?, false, BodyKeys::default()),
         };
-        let shown = if self.follows_pointer { shown } else { space::pixel_aligned(shown, pixels_per_point) };
-        let space = CanvasSpace::new(shown, pixels_per_point).with_target(target).with_easing(easing).with_keys(keys);
-        Some(space.with_document(self.document_size()).with_rulers(self.rulers).with_background(background).with_canvas(id))
+        let mut space = CanvasSpace::new(target, pixels_per_point).with_follows_pointer(self.follows_pointer);
+        space.set_view(target);
+        if easing {
+            space.ease_through(shown);
+        }
+        Some(space.with_keys(keys).with_document(self.document_size()).with_rulers(self.rulers).with_background(background).with_canvas(id))
     }
 
     /// The press on the background part as the canvas reports it, and the pan of a middle-button drag: a middle press

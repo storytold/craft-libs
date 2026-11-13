@@ -147,4 +147,18 @@ fn at_a_whole_device_zoom_with_no_rotation_the_shown_view_puts_document_pixels_o
     assert_eq!(turned.view.center, turned.target().center, "a turned view is shown as it is");
     let following = space_at(2.0, 0.0, true);
     assert_eq!(following.view.center, following.target().center, "a view moving with the pointer is shown as it is");
+
+    // A view the tool host sets in the pass is the target, shown by the same rule.
+    let mut set = following;
+    let mut moved = following.target();
+    moved.center = Point::new(140.6, 90.2);
+    set.set_view(moved);
+    assert_eq!((set.view, set.target()), (moved, moved), "a view set while following the pointer is shown as it is");
+    let mut set = space_at(2.0, 0.0, false);
+    let mut moved = set.target();
+    moved.center = Point::new(140.6, 90.2);
+    set.set_view(moved);
+    assert_eq!(set.target(), moved, "the target follows the view set");
+    let p = set.view.to_screen(Point::new(17.0, 29.0)) * set.pixels_per_point;
+    assert!((p.x - p.x.round()).abs() < 1e-3 && (p.y - p.y.round()).abs() < 1e-3, "a view set at a whole zoom is shown aligned: {p:?}");
 }

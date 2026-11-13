@@ -101,6 +101,11 @@ impl ZoomAnimation {
         self.run.is_some()
     }
 
+    /// While a zoom eases, the view drawn last: the start of the ease until its first pass.
+    pub fn drawn(&self) -> Option<CanvasView> {
+        self.run.map(|run| run.shown)
+    }
+
     /// Stops easing: the next [`shown`](Self::shown) is the target (a pan or a scroll took over).
     pub fn stop(&mut self) {
         self.run = None;
@@ -145,6 +150,13 @@ impl ViewMotion {
             slot.steer = steer.or(slot.steer);
         });
     }
+}
+
+/// While the zoom of the canvas `canvas` (its id, `CanvasOutput::response.id`) eases, the view on screen: the one its
+/// ease drew in the canvas's latest pass. `None` while no zoom eases. For an app that maps through the canvas's view
+/// outside the canvas's pass (its tool input before the canvas shows, a panel), so it lands where the picture is.
+pub fn easing_view(ctx: &Context, canvas: Id) -> Option<CanvasView> {
+    with_session(ctx, ViewMotion::id(canvas), |motion: &mut ViewMotion| motion.animation.drawn())
 }
 
 /// Asks the canvas `canvas` (its id, `CanvasOutput::response.id`) to ease its next view or to stop easing: the

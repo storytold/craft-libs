@@ -367,7 +367,7 @@ impl<'a> ToolContext<'a> {
         self.requests.view = Some(view);
         self.requests.ease = None;
         if let Some(space) = self.space.as_mut() {
-            space.view = view;
+            space.set_view(view);
         }
     }
 

@@ -633,7 +633,7 @@ impl<'a> Run<'a> {
         self.requests.repaint |= asked.repaint;
         if let Some(view) = asked.view {
             if let Some(space) = self.space.as_mut() {
-                space.view = super::space::pixel_aligned(view, space.pixels_per_point);
+                space.set_view(view);
             }
             self.response.view = Some(view);
             self.requests.ease = asked.ease;

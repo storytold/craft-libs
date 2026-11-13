@@ -26,6 +26,7 @@ pub struct CanvasSpace {
     pub pixels_per_point: f32,
     target: CanvasView,
     easing: bool,
+    follows_pointer: bool,
     keys: BodyKeys,
     document: Option<Size>,
     rulers: Option<CanvasRulers>,
@@ -43,6 +44,7 @@ impl CanvasSpace {
             pixels_per_point,
             target: view,
             easing: false,
+            follows_pointer: false,
             keys: BodyKeys::default(),
             document: None,
             rulers: None,
@@ -51,18 +53,32 @@ impl CanvasSpace {
         }
     }
 
-    /// This space with `target`, the view the canvas settled on in the pass, which `view` eases toward.
+    /// This space for a pass in which the app's tool moves the view with the pointer
+    /// ([`Canvas::view_follows_pointer`](super::Canvas::view_follows_pointer)): [`set_view`](Self::set_view) then shows
+    /// a view as it is, not [`pixel_aligned`].
     #[must_use]
-    pub fn with_target(mut self, target: CanvasView) -> Self {
-        self.target = target;
+    pub fn with_follows_pointer(mut self, follows: bool) -> Self {
+        self.follows_pointer = follows;
         self
     }
 
-    /// This space with `view` part way to the target while a zoom eases (`easing`).
-    #[must_use]
-    pub fn with_easing(mut self, easing: bool) -> Self {
-        self.easing = easing;
-        self
+    /// Sets the view of this pass: [`target`](Self::target) is `view`, and the view on screen is `view`
+    /// [`pixel_aligned`], or `view` as it is while the pass follows the pointer. The canvas sets the view it settled
+    /// on, and the tool host each view a tool sets, so the calls after it start from what the canvas will show.
+    pub fn set_view(&mut self, view: CanvasView) {
+        self.target = view;
+        self.view = self.on_screen(view);
+        self.easing = false;
+    }
+
+    /// Shows `shown`, part way to the target while a zoom eases, by the same rule as [`set_view`](Self::set_view).
+    pub(crate) fn ease_through(&mut self, shown: CanvasView) {
+        self.view = self.on_screen(shown);
+        self.easing = true;
+    }
+
+    fn on_screen(&self, view: CanvasView) -> CanvasView {
+        if self.follows_pointer { view } else { pixel_aligned(view, self.pixels_per_point) }
     }
 
     /// This space with the keys the canvas left to its body in the pass.
