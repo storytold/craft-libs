@@ -15,7 +15,7 @@
 //! (`X1:… Y2:…`), and cues not separated by a blank line (a new cue starts at a timing line, or at
 //! an integer line directly followed by one). Writing renumbers from 1 and rounds to milliseconds.
 
-use crate::Tick;
+use crate::time::Tick;
 
 use crate::{Cue, Document, Error, Result, format_clock, parse_clock};
 

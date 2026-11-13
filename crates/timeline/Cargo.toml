@@ -30,6 +30,7 @@ otio = ["dep:serde_json"]
 [dependencies]
 craft-behavior = { workspace = true, optional = true }
 craft-keymap = { workspace = true, optional = true }
+craft-time = { workspace = true }
 craft-theme = { workspace = true, optional = true }
 craft-ui = { workspace = true, optional = true }
 craft-xml = { workspace = true, optional = true }

@@ -16,7 +16,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{FrameRate, TICKS_PER_SECOND, Tick};
+use crate::time::{FrameRate, TICKS_PER_SECOND, Tick};
 
 use craft_xml::{El, Limits, Node, Options, UnknownEntity};
 

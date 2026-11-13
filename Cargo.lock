@@ -2956,6 +2956,7 @@ dependencies = [
  "craft-behavior",
  "craft-keymap",
  "craft-theme",
+ "craft-time",
  "craft-ui",
  "craft-xml",
  "egui",

@@ -11,7 +11,7 @@
 //!   voices and STYLE/REGION/NOTE blocks are kept.
 //! - **Byte pairs:** [`cea608`] has the CEA-608 character sets and control codes;
 //!   [`scc::decode_pairs`] turns a timed stream of 608 byte pairs into cues.
-//! - **Time:** cue times are exact [`Tick`]s (`craft-timeline`'s). SRT/VTT milliseconds and SCC 29.97 fps
+//! - **Time:** cue times are exact [`Tick`]s ([`time`]). SRT/VTT milliseconds and SCC 29.97 fps
 //!   timecodes (drop-frame or not) convert exactly; [`Document::snap_to_frames`] snaps to a
 //!   frame grid.
 //! - **Limits:** input is at most [`MAX_INPUT`] bytes and a document holds at most [`MAX_CUES`]
@@ -38,12 +38,13 @@ pub mod scc;
 pub mod srt;
 pub mod stl;
 mod text;
+/// Exact time: `craft-timeline`'s ticks, frame rates and timecode fields.
+pub use craft_timeline::time;
 pub mod ttml;
 pub mod vtt;
 
-use craft_timeline::timecode::{TimecodeFields, fields_to_frames, frames_to_fields};
-pub use craft_timeline::{FrameRate, TICKS_PER_SECOND, Tick};
 pub use text::{decode_entities, entity_at, plain_text};
+pub use time::{FrameRate, TICKS_PER_SECOND, Tick};
 
 /// The creating program MCC and EBU STL files name when the caller gives none.
 pub const PROGRAM: &str = "craft-captions";
@@ -165,8 +166,7 @@ pub struct Document {
 /// 30 for 29.97). Negative frames read as zero.
 pub fn label_time(frame: i64, rate: FrameRate, drop_frame: bool) -> Tick {
     let base = rate.timecode_base();
-    let TimecodeFields { hours: h, minutes: m, seconds: s, frames: f, .. } =
-        frames_to_fields(frame.max(0), rate, drop_frame && rate.supports_drop_frame());
+    let (_, h, m, s, f) = crate::time::frames_to_fields(frame.max(0), rate, drop_frame && rate.supports_drop_frame());
     let seconds = h.saturating_mul(3600).saturating_add(m.saturating_mul(60)).saturating_add(s);
     Tick(TICKS_PER_SECOND.saturating_mul(seconds)) + FrameRate::new(base, 1).tick_of(f)
 }
@@ -176,7 +176,8 @@ pub fn label_time(frame: i64, rate: FrameRate, drop_frame: bool) -> Tick {
 pub fn label_frame(label: Tick, rate: FrameRate, drop_frame: bool) -> i64 {
     let nominal = FrameRate::new(rate.timecode_base(), 1);
     let n = nominal.frame_at(nominal.snap_nearest(label.max(Tick::ZERO)));
-    fields_to_frames(frames_to_fields(n, nominal, false), rate, drop_frame && rate.supports_drop_frame())
+    let (_, h, m, s, f) = crate::time::frames_to_fields(n, nominal, false);
+    crate::time::fields_to_frames(h, m, s, f, rate, drop_frame && rate.supports_drop_frame())
 }
 
 impl Document {
@@ -559,8 +560,8 @@ mod tests {
         assert_eq!(label_time(108_000, scc, false), secs(3600));
         // 01:00:02:00 at 25 fps is 01:00:02;00 drop-frame and 01:00:02:00 non-drop at 29.97
         let two = label_time(90_050, FrameRate::FPS_25, false);
-        assert_eq!(craft_timeline::timecode::format_timecode_frames(label_frame(two, scc, true), scc, true), "01;00;02;00");
-        assert_eq!(craft_timeline::timecode::format_timecode_frames(label_frame(two, scc, false), scc, false), "01:00:02:00");
+        assert_eq!(crate::time::format_timecode_frames(label_frame(two, scc, true), scc, true), "01;00;02;00");
+        assert_eq!(crate::time::format_timecode_frames(label_frame(two, scc, false), scc, false), "01:00:02:00");
         // a frame's share of a second goes to the nearest 29.97 label frame
         assert_eq!(label_frame(label_time(90_001, FrameRate::FPS_25, false), scc, false), 108_001);
         // drop-frame on a rate that has none counts non-drop

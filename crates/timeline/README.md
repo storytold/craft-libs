@@ -4,9 +4,9 @@ Timelines for Craft apps, from FilmCraft (Premiere Pro), EffectCraft (After Effe
 
 The core is egui-free:
 
-- `time`: `Tick` (254,016,000,000 per second, exact for every broadcast frame rate and common sample rate), `TimeRange`, and `TimeView` (the time-to-pixel map with zoom and scroll).
-- `rates`: `FrameRate` (rational), `SampleRate`, `PixelAspect` and their menu presets.
-- `timecode`: SMPTE timecode (drop and non-drop), frames, feet + frames, samples and seconds, formatted and parsed the way Premiere's fields do, as ticks (`parse_time`) or frame counts (`parse_frames`).
+- `time`: `TimeView` (the time-to-pixel map with zoom and scroll), and craft-time's `Tick` (254,016,000,000 per second, exact for every broadcast frame rate and common sample rate), `TimeRange` and timecode primitives, re-exported.
+- `rates`: craft-time's `FrameRate` (rational), `SampleRate`, `PixelAspect` and their menu presets.
+- `timecode`: `TimeFormat`, the timeline's time display: SMPTE timecode (drop and non-drop), frames, feet + frames, samples and seconds, formatted and parsed the way Premiere's fields do, as ticks (`parse_time`) or frame counts (`parse_frames`), on craft-time's conversions.
 - `clock`: `PlaybackClock` (play, stop, preroll, loop, stop point, an external audio clock) and `Follow` (the view follows the playhead while playing).
 - `cache` and `frames`: a byte-budgeted `FrameCache` that spares the frames a playing preview reaches next, and a `FrameServer` that renders frames on worker threads by priority with playback prefetch (on wasm, `pump` runs them on the UI thread).
 - `clips`: clip edges, trims and snapping rules; `markers`: timeline markers; `model`: the `TimelineModel` trait the app implements on its sequence.

@@ -33,8 +33,7 @@
 
 use std::collections::BTreeMap;
 
-use craft_timeline::FrameRate;
-use craft_timeline::timecode::{TimecodeFields, fields_to_frames, frames_to_fields};
+use crate::time::{FrameRate, fields_to_frames, frames_to_fields};
 
 use crate::cea608::with_parity;
 use crate::{Cue, Document, Error, Result, scc};
@@ -687,7 +686,7 @@ pub fn write_padded_to(
             f1: f1.next_if(|(frame, _)| *frame == f).map(|(_, pair)| pair),
             dtvcc: dtv.next_if(|(frame, _)| *frame == f).map(|(_, pairs)| pairs).unwrap_or_default(),
         };
-        let TimecodeFields { hours: hh, minutes: mm, seconds: ss, frames: ff, .. } = frames_to_fields(f.saturating_add(origin), RATE, drop_frame);
+        let (_, hh, mm, ss, ff) = frames_to_fields(f.saturating_add(origin), RATE, drop_frame);
         let sep = if drop_frame { ';' } else { ':' };
         writeln!(out, "{hh:02}:{mm:02}:{ss:02}{sep}{ff:02}\t{}", compress(&build_cdp(seq, &data)))?;
         seq = seq.wrapping_add(1);
@@ -742,7 +741,7 @@ pub fn parse(text: &str) -> Result<Document> {
         };
         let drop_frame = rate.1 || tc.contains(';');
         doc.labels.get_or_insert((rate.0, drop_frame));
-        let frame = fields_to_frames(TimecodeFields { negative: false, hours: *h, minutes: *m, seconds: *s, frames: *f }, rate.0, drop_frame);
+        let frame = fields_to_frames(*h, *m, *s, *f, rate.0, drop_frame);
         let Some(bytes) = expand(data) else {
             doc.warnings.push(format!("line {}: bad caption data", n + 1));
             continue;
@@ -917,7 +916,7 @@ mod tests {
     #[test]
     fn time_codes_count_from_the_start_timecode() {
         let doc = Document { cues: vec![cue(60, 120, "Caption")], ..Default::default() };
-        let hour = crate::Tick(3600 * crate::TICKS_PER_SECOND); // the label 01:00:00:00
+        let hour = crate::time::Tick(3600 * crate::time::TICKS_PER_SECOND); // the label 01:00:00:00
         let master = Document { start_timecode: hour, ..doc.clone() };
         let lines = |text: &str| -> Vec<(i64, String)> {
             text.lines().filter_map(|l| l.split_once('\t')).map(|(tc, data)| (scc::parse_timecode(tc).unwrap(), data.to_string())).collect()
@@ -934,9 +933,9 @@ mod tests {
             assert!(back.count_from(hour));
             assert_eq!(back.cues, parse(&write(&doc, drop_frame)).unwrap().cues, "read back from the start time code");
         }
-        let negative = Document { start_timecode: crate::Tick(-1), ..doc.clone() };
+        let negative = Document { start_timecode: crate::time::Tick(-1), ..doc.clone() };
         assert_eq!(lines(&write(&negative, true)), lines(&write(&doc, true)), "a negative start counts from zero");
-        assert!(write(&Document { start_timecode: crate::Tick(i64::MAX), ..doc }, true).contains('\t'));
+        assert!(write(&Document { start_timecode: crate::time::Tick(i64::MAX), ..doc }, true).contains('\t'));
     }
 
     /// Bound output for distant or long cues near the tick limit without changing their timing.
@@ -976,7 +975,7 @@ mod tests {
                 let lines: Vec<(&str, &str)> = text.lines().filter_map(|line| line.split_once('\t')).collect();
                 assert_eq!(lines.len(), 2_000);
                 for (f, (tc, data)) in lines.iter().enumerate() {
-                    let TimecodeFields { hours: hh, minutes: mm, seconds: ss, frames: ff, .. } = frames_to_fields(f as i64, RATE, drop_frame);
+                    let (_, hh, mm, ss, ff) = frames_to_fields(f as i64, RATE, drop_frame);
                     let sep = if drop_frame { ';' } else { ':' };
                     assert_eq!(*tc, format!("{hh:02}:{mm:02}:{ss:02}{sep}{ff:02}"));
                     let bytes = expand(data).unwrap();

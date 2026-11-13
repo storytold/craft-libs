@@ -21,8 +21,7 @@
 
 use std::collections::BTreeMap;
 
-use craft_timeline::timecode::{TimecodeFields, fields_to_frames, frames_to_fields};
-use craft_timeline::{FrameRate, Tick};
+use crate::time::{FrameRate, Tick, fields_to_frames, frames_to_fields};
 
 use crate::cea608::{self, Encoded, misc};
 use crate::{Cue, Document, Error, Result};
@@ -42,11 +41,11 @@ pub fn parse_timecode(s: &str) -> Option<i64> {
     if m >= 60 || sec >= 60 || f >= 30 {
         return None;
     }
-    Some(fields_to_frames(TimecodeFields { negative: false, hours: h, minutes: m, seconds: sec, frames: f }, RATE, df))
+    Some(fields_to_frames(h, m, sec, f, RATE, df))
 }
 
 pub fn format_timecode(frame: i64, drop_frame: bool) -> String {
-    let TimecodeFields { hours: h, minutes: m, seconds: s, frames: f, .. } = frames_to_fields(frame.max(0), RATE, drop_frame);
+    let (_, h, m, s, f) = frames_to_fields(frame.max(0), RATE, drop_frame);
     format!("{h:02}:{m:02}:{s:02}{}{f:02}", if drop_frame { ';' } else { ':' })
 }
 
@@ -270,7 +269,7 @@ pub fn decode_pairs(pairs: impl IntoIterator<Item = (i64, u8, u8)>, rate: FrameR
         dec.pair(f, b1, b2);
         last_frame = last_frame.max(f + 1);
     }
-    let one_second = rate.frame_at(Tick(crate::TICKS_PER_SECOND)).max(1);
+    let one_second = rate.frame_at(Tick(crate::time::TICKS_PER_SECOND)).max(1);
     if let Some((s, text)) = dec.open.take() {
         let end = last_frame.max(s + 1) + one_second;
         dec.cues.push((s, end, text));
@@ -580,7 +579,7 @@ mod tests {
     #[test]
     fn time_codes_count_from_the_start_timecode() {
         let doc = Document { cues: vec![cue(60, 120, "Hello")], ..Default::default() };
-        let hour = Tick(3600 * crate::TICKS_PER_SECOND); // the label 01:00:00:00
+        let hour = Tick(3600 * crate::time::TICKS_PER_SECOND); // the label 01:00:00:00
         let master = Document { start_timecode: hour, ..doc.clone() };
         let lines = |text: &str| -> Vec<(i64, String)> {
             text.lines().filter_map(|l| l.split_once('\t')).map(|(tc, words)| (parse_timecode(tc).unwrap(), words.to_string())).collect()

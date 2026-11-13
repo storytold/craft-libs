@@ -784,7 +784,7 @@ impl Exp<'_, '_> {
         let id = self.rid();
         self.res_out.push(format!(
             "    <format id=\"{id}\" name=\"FFVideoFormat{h}p{}\" frameDuration=\"{}/{}s\" width=\"{w}\" height=\"{h}\"/>\n",
-            rate.to_string().replace('.', ""),
+            rate.label().replace('.', ""),
             rate.den,
             rate.num
         ));

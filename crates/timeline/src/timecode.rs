@@ -7,60 +7,7 @@
 use crate::rates::{FrameRate, SampleRate};
 use crate::time::{TICKS_PER_SECOND, Tick};
 
-/// How time is shown (Premiere: Timecode, Feet + Frames 16 mm / 35 mm, Frames, Audio Samples;
-/// After Effects' frame numbers; seconds for scripts).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum TimeDisplay {
-    /// `HH:MM:SS:FF`, `HH;MM;SS;FF` for drop-frame; three frame digits from 100 fps.
-    #[default]
-    Timecode,
-    /// The frame number, counted from [`TimeFormat::frame_offset`] (After Effects' Start
-    /// Numbering Frames At).
-    Frames,
-    /// `feet+frames` at 40 frames a foot.
-    Feet16,
-    /// `feet+frames` at 16 frames a foot.
-    Feet35,
-    /// `HH:MM:SS:sssss`, the samples past the second.
-    AudioSamples,
-    /// Seconds with three decimals.
-    Seconds,
-}
-
-impl TimeDisplay {
-    /// The order of Premiere's Time Display menu.
-    pub const ALL: [TimeDisplay; 6] =
-        [TimeDisplay::Timecode, TimeDisplay::Feet35, TimeDisplay::Feet16, TimeDisplay::Frames, TimeDisplay::AudioSamples, TimeDisplay::Seconds];
-
-    /// The display's stable id for commands, settings and scripts: `timecode`, `frames`, `feet16`,
-    /// `feet35`, `samples`, `seconds`.
-    // filmcraft: crates/time/src/lib.rs:376.
-    pub fn id(self) -> &'static str {
-        match self {
-            TimeDisplay::Timecode => "timecode",
-            TimeDisplay::Frames => "frames",
-            TimeDisplay::Feet16 => "feet16",
-            TimeDisplay::Feet35 => "feet35",
-            TimeDisplay::AudioSamples => "samples",
-            TimeDisplay::Seconds => "seconds",
-        }
-    }
-
-    /// The display with this [`id`](Self::id), ignoring ASCII case.
-    pub fn from_id(id: &str) -> Option<TimeDisplay> {
-        TimeDisplay::ALL.into_iter().find(|d| d.id().eq_ignore_ascii_case(id))
-    }
-
-    /// Frames in a foot of film for the feet + frames displays: 16 for 35 mm 4-perf, 40 for 16 mm.
-    // filmcraft: crates/time/src/lib.rs:393.
-    pub fn frames_per_foot(self) -> Option<i64> {
-        match self {
-            TimeDisplay::Feet35 => Some(16),
-            TimeDisplay::Feet16 => Some(40),
-            _ => None,
-        }
-    }
-}
+pub use craft_time::{TimeDisplay, format_timecode_frames};
 
 /// Everything a time display needs: the rate, drop-frame, the display, the sample rate (for
 /// [`TimeDisplay::AudioSamples`]) and the first frame's number.
@@ -97,21 +44,6 @@ impl TimeFormat {
     }
 }
 
-/// SMPTE fields of a frame count.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct TimecodeFields {
-    /// Whether the time is before zero.
-    pub negative: bool,
-    /// Hours, from zero.
-    pub hours: i64,
-    /// Minutes, 0 to 59.
-    pub minutes: i64,
-    /// Seconds, 0 to 59.
-    pub seconds: i64,
-    /// Frames within the second, below the nominal frame rate.
-    pub frames: i64,
-}
-
 /// Why typed time was refused. The UI shows it as a notice through its own words.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TimecodeError {
@@ -132,81 +64,20 @@ impl std::fmt::Display for TimecodeError {
 
 impl std::error::Error for TimecodeError {}
 
-/// The SMPTE fields of `frame` at `rate`. Drop-frame (when asked and the rate supports it) skips
-/// `base / 15` labels at the start of each minute except every tenth: 2 at 29.97, 4 at 59.94.
-// filmcraft: crates/time/src/lib.rs:363 `frames_to_fields` (and `df_params` above it).
-pub fn frames_to_fields(frame: i64, rate: FrameRate, drop_frame: bool) -> TimecodeFields {
-    let negative = frame < 0;
-    let mut n = i128::from(frame).abs();
-    let (drop, base) = df_params(rate);
-    if drop_frame && rate.supports_drop_frame() {
-        let per_min = base * 60 - drop;
-        let per_10 = per_min * 10 + drop;
-        let d = n / per_10;
-        let m = n % per_10;
-        n = n.saturating_add(drop * 9 * d);
-        if m > drop {
-            n = n.saturating_add(drop * ((m - drop) / per_min));
-        }
-    }
-    TimecodeFields {
-        negative,
-        hours: clamp_i64(n / (base * 3600)),
-        minutes: clamp_i64((n / (base * 60)) % 60),
-        seconds: clamp_i64((n / base) % 60),
-        frames: clamp_i64(n % base),
-    }
-}
-
-/// The frame count of SMPTE fields; the inverse of [`frames_to_fields`], in i128 so nominal
-/// drop-frame labels past `i64` still give a frame that fits.
-// filmcraft: crates/time/src/lib.rs:386 `fields_to_frames`.
-pub fn fields_to_frames(fields: TimecodeFields, rate: FrameRate, drop_frame: bool) -> i64 {
-    let (drop, base) = df_params(rate);
-    let seconds = i128::from(fields.hours) * 3600 + i128::from(fields.minutes) * 60 + i128::from(fields.seconds);
-    let mut n = seconds.saturating_mul(base).saturating_add(i128::from(fields.frames));
-    if drop_frame && rate.supports_drop_frame() {
-        let total_min = i128::from(fields.hours) * 60 + i128::from(fields.minutes);
-        n = n.saturating_sub(drop * (total_min - total_min / 10));
-    }
-    clamp_i64(n)
-}
-
 /// `t` as text in `format`: timecode `00:00:10:00` (as [`format_timecode_frames`]); frames `250`
 /// (plus the offset); feet + frames `15+10` (as [`format_feet_frames`]); samples `00:00:10:00000`
 /// (five digits of samples past the second); seconds `10.000` (`-0.000` shown as `0.000`).
 // filmcraft: crates/time/src/lib.rs:462 `format_time`.
 pub fn format_time(t: Tick, format: &TimeFormat) -> String {
     let rate = format.rate;
-    let frame = rate.frame_at(t);
     match format.display {
-        TimeDisplay::Timecode => format_timecode_frames(frame, rate, format.drop_frame),
-        TimeDisplay::Frames => frame.saturating_add(format.frame_offset).to_string(),
-        TimeDisplay::Feet35 | TimeDisplay::Feet16 => format_feet_frames(frame, format.display.frames_per_foot().unwrap_or(16)),
-        TimeDisplay::AudioSamples => {
-            let a = t.0.unsigned_abs();
-            let tps = TICKS_PER_SECOND.unsigned_abs();
-            let secs = a / tps;
-            let samples = Tick((a % tps) as i64).to_units_floor(i64::from(format.sample_rate.hz()));
-            format!("{}{:02}:{:02}:{:02}:{samples:05}", sign(t.0 < 0), secs / 3600, (secs / 60) % 60, secs % 60)
-        }
-        TimeDisplay::Seconds => {
-            let s = format!("{:.3}", t.seconds());
-            if s == "-0.000" { "0.000".to_string() } else { s }
+        TimeDisplay::Timecode => format_timecode_frames(rate.frame_at(t), rate, format.drop_frame),
+        TimeDisplay::Frames => rate.frame_at(t).saturating_add(format.frame_offset).to_string(),
+        TimeDisplay::Feet35 | TimeDisplay::Feet16 => format_feet_frames(rate.frame_at(t), format.display.frames_per_foot().unwrap_or(16)),
+        TimeDisplay::AudioSamples | TimeDisplay::Seconds => {
+            craft_time::format_time(t, rate, format.drop_frame, format.display, i64::from(format.sample_rate.hz()))
         }
     }
-}
-
-/// Frame `frame` at `rate` as SMPTE timecode: `HH:MM:SS:FF`, `HH;MM;SS;FF` when `drop_frame` is
-/// asked and the rate supports it, three frame digits from a 100 fps base, a leading `-` before
-/// zero.
-// filmcraft: crates/time/src/lib.rs:453.
-pub fn format_timecode_frames(frame: i64, rate: FrameRate, drop_frame: bool) -> String {
-    let drop = drop_frame && rate.supports_drop_frame();
-    let f = frames_to_fields(frame, rate, drop);
-    let sep = if drop { ';' } else { ':' };
-    let width = if rate.timecode_base() >= 100 { 3 } else { 2 };
-    format!("{}{:02}{sep}{:02}{sep}{:02}{sep}{:0width$}", sign(f.negative), f.hours, f.minutes, f.seconds, f.frames)
 }
 
 /// A frame count as film feet + frames, `ft+ff` (`2+08`; `-2+08` before zero). A
@@ -215,7 +86,7 @@ pub fn format_timecode_frames(frame: i64, rate: FrameRate, drop_frame: bool) -> 
 pub fn format_feet_frames(frame: i64, frames_per_foot: i64) -> String {
     let per_foot = frames_per_foot.max(1).unsigned_abs();
     let a = frame.unsigned_abs();
-    format!("{}{}+{:02}", sign(frame < 0), a / per_foot, a % per_foot)
+    format!("{}{}+{:02}", if frame < 0 { "-" } else { "" }, a / per_foot, a % per_foot)
 }
 
 /// Typed time in `format` as a tick, the way Premiere's fields read it:
@@ -225,8 +96,8 @@ pub fn format_feet_frames(frame: i64, frames_per_foot: i64) -> String {
 ///   second earlier);
 /// - in [`TimeDisplay::Frames`] a bare number is a frame number (less the offset); in
 ///   [`TimeDisplay::Seconds`] a decimal number of seconds; feet + frames reads `ft+ff` (any of
-///   `+:;.,` separates; frames past the foot roll over, `1+20` at 35 mm is 36 frames; `-ft+ff`
-///   is before zero, as [`format_feet_frames`] writes it) and a bare number as frames.
+///   `+:;.,` separates; frames past the foot roll over, `1+20` at 35 mm is 36 frames; a leading
+///   sign counts from `current` as in the other displays) and a bare number as frames.
 ///
 /// The result is the first tick of the frame; [`TimeDisplay::AudioSamples`] gives the sample's
 /// tick.
@@ -274,52 +145,22 @@ pub fn parse_time(input: &str, format: &TimeFormat, current: Tick) -> Result<Tic
 // filmcraft: crates/time/src/lib.rs:499 `parse_timecode`, `:575` `parse_time_display`.
 pub fn parse_frames(input: &str, format: &TimeFormat, current: i64) -> Result<i64, TimecodeError> {
     let rate = format.rate;
-    let (relative, body) = split_sign(input)?;
-    let bad = || TimecodeError::NotATime(input.to_string());
-    let from_current = |n: i64, sign: i64| current.saturating_add(n.saturating_mul(sign));
+    let (relative, _) = split_sign(input)?;
     match format.display {
-        TimeDisplay::Timecode => parse_timecode_frames(body, relative, format, current).ok_or_else(bad),
-        TimeDisplay::Frames => {
-            let n = parse_digits(body).ok_or_else(bad)?;
-            Ok(relative.map_or_else(|| n.saturating_sub(format.frame_offset), |sign| from_current(n, sign)))
-        }
-        TimeDisplay::Feet16 | TimeDisplay::Feet35 => {
-            let per_foot = format.display.frames_per_foot().unwrap_or(16);
-            match body.split(['+', ':', ';', '.', ',']).collect::<Vec<_>>()[..] {
-                [n] => {
-                    let n = parse_digits(n).ok_or_else(bad)?;
-                    Ok(relative.map_or(n, |sign| from_current(n, sign)))
-                }
-                [feet, frames] => {
-                    let total = parse_digits(feet.trim())
-                        .zip(parse_digits(frames.trim()))
-                        .map(|(ft, fr)| ft.saturating_mul(per_foot).saturating_add(fr))
-                        .ok_or_else(bad)?;
-                    Ok(match relative {
-                        Some(1) => current.saturating_add(total),
-                        Some(_) => total.saturating_neg(),
-                        None => total,
-                    })
-                }
-                _ => Err(bad()),
-            }
+        TimeDisplay::Timecode | TimeDisplay::Frames | TimeDisplay::Feet16 | TimeDisplay::Feet35 => {
+            let frames = craft_time::parse_time_display_relative(input, rate, format.drop_frame, format.display, current)
+                .map_err(|_| TimecodeError::NotATime(input.to_string()))?;
+            Ok(match (format.display, relative) {
+                (TimeDisplay::Frames, None) => frames.saturating_sub(format.frame_offset),
+                _ => frames,
+            })
         }
         TimeDisplay::AudioSamples | TimeDisplay::Seconds => parse_time(input, format, rate.tick_of(current)).map(|t| rate.frame_at(t)),
     }
 }
 
-/// Drop-frame parameters: labels dropped per minute and the nominal base (30 gives 2, 60 gives 4).
-fn df_params(rate: FrameRate) -> (i128, i128) {
-    let base = rate.timecode_base();
-    (i128::from(base / 15), i128::from(base))
-}
-
 fn clamp_i64(value: i128) -> i64 {
     value.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
-}
-
-fn sign(negative: bool) -> &'static str {
-    if negative { "-" } else { "" }
 }
 
 /// The trimmed input as its leading sign (`+` is 1, `-` is -1: relative to the current time) and
@@ -344,55 +185,4 @@ fn parse_digits(s: &str) -> Option<i64> {
         return None;
     }
     s.parse().ok()
-}
-
-/// Typed timecode as a frame count: separated fields, or bare digits read right-aligned in pairs
-/// (a relative bare number is a frame count). Fields may overflow their unit (90 frames).
-fn parse_timecode_frames(body: &str, relative: Option<i64>, format: &TimeFormat, current: i64) -> Option<i64> {
-    let rate = format.rate;
-    let parts: Vec<&str> = body.split([':', ';', '.', ',']).collect();
-    let nums: Vec<i64> = if parts.len() == 1 {
-        let digits = parts[0];
-        if relative.is_some() {
-            vec![parse_digits(digits)?]
-        } else {
-            if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-                return None;
-            }
-            let mut v = Vec::new();
-            let mut end = digits.len();
-            while end > 0 {
-                let start = end.saturating_sub(2);
-                v.push(digits[start..end].parse::<i64>().unwrap_or(0));
-                end = start;
-            }
-            v.reverse();
-            v
-        }
-    } else {
-        parts.iter().map(|p| if p.is_empty() { Some(0) } else { parse_digits(p) }).collect::<Option<_>>()?
-    };
-    if nums.len() > 4 {
-        return None;
-    }
-    let mut fields = [0i64; 4];
-    fields[4 - nums.len()..].copy_from_slice(&nums);
-    let [h, m, s, f] = fields;
-    let base = rate.timecode_base();
-    let frames = if nums.len() == 1 && relative.is_some() {
-        f
-    } else if format.drop_frame && rate.supports_drop_frame() {
-        // Fields past their range carry into the next one first, then drop-frame counting applies:
-        // 01;00;00;30 is the frame 01;00;01;00 names.
-        let (s, f) = (s.saturating_add(f / base), f % base);
-        let (m, s) = (m.saturating_add(s / 60), s % 60);
-        let (h, m) = (h.saturating_add(m / 60), m % 60);
-        fields_to_frames(TimecodeFields { negative: false, hours: h, minutes: m, seconds: s, frames: f }, rate, true)
-    } else {
-        h.saturating_mul(3600).saturating_add(m.saturating_mul(60)).saturating_add(s).saturating_mul(base).saturating_add(f)
-    };
-    Some(match relative {
-        Some(sign) => current.saturating_add(frames.saturating_mul(sign)),
-        None => frames,
-    })
 }

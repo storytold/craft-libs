@@ -2,205 +2,20 @@
 //! menus offer (Premiere's sequence settings, After Effects' composition settings, Pro Tools'
 //! session rates).
 
-use crate::time::{TICKS_PER_SECOND, Tick};
+use crate::time::Tick;
 
-/// A frame rate as an exact rational, `num / den` frames a second. Rates come from files, so
-/// every frame computation goes through [`sane`](Self::sane) and a zero or negative rate counts
-/// as the default (23.976, as FilmCraft).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[non_exhaustive]
-pub struct FrameRate {
-    /// The numerator: frames in `den` seconds.
-    pub num: i64,
-    /// The denominator: seconds that `num` frames take.
-    pub den: i64,
-}
+pub use craft_time::FrameRate;
 
-impl Default for FrameRate {
-    fn default() -> Self {
-        Self::FPS_23_976
+/// A frame rate's menu label without the unit: `24`, `23.976`, `29.97` (up to three decimals, in
+/// the locale's digits and decimal mark). The unit ("fps") is the menu's word;
+/// [`FrameRate::label`] is the ASCII form documents write.
+// filmcraft: crates/time/src/lib.rs:282.
+#[cfg(feature = "ui")]
+pub fn frame_rate_label(rate: FrameRate, numbers: &craft_ui::runtime::env::Units) -> String {
+    if rate.den == 1 {
+        return numbers.number(rate.num as f64, 0..=0);
     }
-}
-
-impl FrameRate {
-    /// 23.976 frames a second (24000/1001).
-    pub const FPS_23_976: FrameRate = FrameRate::new(24000, 1001);
-    #[allow(missing_docs)]
-    pub const FPS_24: FrameRate = FrameRate::new(24, 1);
-    #[allow(missing_docs)]
-    pub const FPS_25: FrameRate = FrameRate::new(25, 1);
-    /// 29.97 frames a second (30000/1001).
-    pub const FPS_29_97: FrameRate = FrameRate::new(30000, 1001);
-    #[allow(missing_docs)]
-    pub const FPS_30: FrameRate = FrameRate::new(30, 1);
-    #[allow(missing_docs)]
-    pub const FPS_48: FrameRate = FrameRate::new(48, 1);
-    #[allow(missing_docs)]
-    pub const FPS_50: FrameRate = FrameRate::new(50, 1);
-    /// 59.94 frames a second (60000/1001).
-    pub const FPS_59_94: FrameRate = FrameRate::new(60000, 1001);
-    #[allow(missing_docs)]
-    pub const FPS_60: FrameRate = FrameRate::new(60, 1);
-    /// 119.88 frames a second (120000/1001).
-    pub const FPS_119_88: FrameRate = FrameRate::new(120000, 1001);
-    #[allow(missing_docs)]
-    pub const FPS_120: FrameRate = FrameRate::new(120, 1);
-
-    /// The rates a frame-rate menu offers, in Premiere's order.
-    pub const COMMON: [FrameRate; 11] = [
-        Self::FPS_23_976,
-        Self::FPS_24,
-        Self::FPS_25,
-        Self::FPS_29_97,
-        Self::FPS_30,
-        Self::FPS_48,
-        Self::FPS_50,
-        Self::FPS_59_94,
-        Self::FPS_60,
-        Self::FPS_119_88,
-        Self::FPS_120,
-    ];
-
-    /// `num / den` reduced by their greatest common divisor.
-    // filmcraft: crates/time/src/lib.rs:198 (i128 division by the gcd, at least 1).
-    pub const fn new(num: i64, den: i64) -> Self {
-        let mut g = gcd(num.unsigned_abs(), den.unsigned_abs()) as i128;
-        if g < 1 {
-            g = 1;
-        }
-        FrameRate { num: (num as i128 / g) as i64, den: (den as i128 / g) as i64 }
-    }
-
-    /// The [`COMMON`](Self::COMMON) rate within 0.005 fps of `fps` (a container's average rate),
-    /// else `round(fps × 1000) / 1000`.
-    // filmcraft: crates/time/src/lib.rs:204.
-    pub fn from_f64(fps: f64) -> Self {
-        if let Some(r) = Self::COMMON.into_iter().find(|r| (r.as_f64() - fps).abs() < 0.005) {
-            return r;
-        }
-        FrameRate::new((fps * 1000.0).round() as i64, 1000)
-    }
-
-    /// The [`COMMON`](Self::COMMON) rate nearest `fps` when it is within `tolerance` of it, as a
-    /// fraction of the rate (`0.005` is half a percent), else [`from_f64`](Self::from_f64). A
-    /// container that reports its rate from timestamps rounded to a coarse unit lands slightly off
-    /// a standard rate: at 90 kHz, whole milliseconds leave a 30 fps clip's average at 30.02 or
-    /// 29.95.
-    // filmcraft: crates/time/src/lib.rs:217 (#1700).
-    pub fn from_f64_within(fps: f64, tolerance: f64) -> Self {
-        let mut best: Option<(f64, FrameRate)> = None;
-        for r in Self::COMMON {
-            let off = (r.as_f64() - fps).abs();
-            if off <= tolerance * r.as_f64() && best.is_none_or(|(closest, _)| off < closest) {
-                best = Some((off, r));
-            }
-        }
-        best.map_or_else(|| Self::from_f64(fps), |(_, r)| r)
-    }
-
-    /// This rate when both parts are positive, else the default.
-    pub fn sane(self) -> FrameRate {
-        if self.num > 0 && self.den > 0 { self } else { FrameRate::default() }
-    }
-
-    /// The rate in frames a second.
-    pub fn as_f64(self) -> f64 {
-        self.num as f64 / self.den as f64
-    }
-
-    /// One frame's exact duration (floored only for exotic rates); saturates at the tick range.
-    // filmcraft: crates/time/src/lib.rs:225 (`TICKS_PER_SECOND * den / num` in i128).
-    pub fn frame_duration(self) -> Tick {
-        let r = self.sane();
-        Tick(clamp_i64(i128::from(TICKS_PER_SECOND) * i128::from(r.den) / i128::from(r.num)))
-    }
-
-    /// The index of the frame holding `t` (floor), saturated to the frame range.
-    // filmcraft: crates/time/src/lib.rs:231 (`frame_index`: `t * num / (TICKS_PER_SECOND * den)`
-    // with `div_euclid` in i128).
-    pub fn frame_at(self, t: Tick) -> i64 {
-        clamp_i64(frame_index(self.sane(), t))
-    }
-
-    /// Frames from `start` to `end`, counted between their frame indices. `frame_at(end - start)`
-    /// can read one short when a frame is not a whole number of ticks: the ticks between two
-    /// boundaries can be one fewer than the exact length of those frames.
-    pub fn frames_between(self, start: Tick, end: Tick) -> i64 {
-        self.frame_at(end).saturating_sub(self.frame_at(start))
-    }
-
-    /// The first tick of frame `f`, by ceiling division, so `frame_at(tick_of(f)) == f` holds
-    /// for every rate with at least one tick per frame (37.516 fps included: flooring drifts each
-    /// boundary back a tick and frame stepping stalls).
-    // filmcraft: crates/time/src/lib.rs:244 (`frame_boundary`).
-    pub fn tick_of(self, f: i64) -> Tick {
-        Tick(clamp_i64(frame_boundary(self.sane(), i128::from(f))))
-    }
-
-    /// `t` moved down to its frame's first tick.
-    // filmcraft: crates/time/src/lib.rs:249.
-    pub fn snap(self, t: Tick) -> Tick {
-        let r = self.sane();
-        Tick(clamp_i64(frame_boundary(r, frame_index(r, t))))
-    }
-
-    /// `t` moved to the nearest frame boundary (the earlier one at the exact middle); both
-    /// boundaries are compared in i128 before saturating.
-    // filmcraft: crates/time/src/lib.rs:255.
-    pub fn snap_nearest(self, t: Tick) -> Tick {
-        let r = self.sane();
-        // Both boundaries stay wide until compared: saturating an unrepresentable upper one first
-        // would make it look closer than it is.
-        let f = frame_index(r, t);
-        let a = frame_boundary(r, f);
-        let b = frame_boundary(r, f.saturating_add(1));
-        let t = i128::from(t.0);
-        Tick(clamp_i64(if t - a <= b - t { a } else { b }))
-    }
-
-    /// Frames counted per timecode second: 30 for 29.97, 24 for 23.976 (`num / den` rounded up,
-    /// at least 1).
-    // filmcraft: crates/time/src/lib.rs:267.
-    pub fn timecode_base(self) -> i64 {
-        let r = self.sane();
-        (r.num / r.den).saturating_add(i64::from(r.num % r.den != 0)).max(1)
-    }
-
-    /// An NTSC (x/1001) rate.
-    pub fn is_ntsc(self) -> bool {
-        self.den == 1001
-    }
-
-    /// Whether drop-frame counting applies: NTSC rates with a base that is a multiple of 30
-    /// (29.97, 59.94, 119.88).
-    // filmcraft: crates/time/src/lib.rs:278.
-    pub fn supports_drop_frame(self) -> bool {
-        self.is_ntsc() && self.timecode_base() % 30 == 0
-    }
-
-    /// The menu label without the unit: `24`, `23.976`, `29.97` (up to three decimals, in the
-    /// locale's digits and decimal mark). The unit ("fps") is the menu's word.
-    // filmcraft: crates/time/src/lib.rs:282.
-    #[cfg(feature = "ui")]
-    pub fn label(self, numbers: &craft_ui::runtime::env::Units) -> String {
-        if self.den == 1 {
-            return numbers.number(self.num as f64, 0..=0);
-        }
-        numbers.number(self.as_f64(), 0..=3)
-    }
-}
-
-/// The rate as documents and diagnostics write it: `24`, `23.976`, `29.97` (ASCII digits, up to
-/// three decimals, no unit). Text a person reads in the UI comes from `label`, in the locale's
-/// digits, with the unit as the UI's word.
-impl std::fmt::Display for FrameRate {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.den == 1 {
-            return write!(f, "{}", self.num);
-        }
-        let s = format!("{:.3}", self.as_f64());
-        f.write_str(s.trim_end_matches('0').trim_end_matches('.'))
-    }
+    numbers.number(rate.as_f64(), 0..=3)
 }
 
 /// An audio sample rate in hertz.
@@ -298,31 +113,4 @@ impl PixelAspect {
         }
         numbers.number(self.as_f64(), 4..=4)
     }
-}
-
-/// Narrows after applying the storage bounds, never by a wrapping cast.
-fn clamp_i64(value: i128) -> i64 {
-    value.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
-}
-
-/// The frame holding `t`, for a positive rate.
-fn frame_index(rate: FrameRate, t: Tick) -> i128 {
-    (i128::from(t.0) * i128::from(rate.num)).div_euclid(i128::from(TICKS_PER_SECOND) * i128::from(rate.den))
-}
-
-/// The ceiling of a frame's rational start. An overflowing numerator over an `i64` rate cannot
-/// fit a tick, so saturating it keeps the public result.
-fn frame_boundary(rate: FrameRate, frame: i128) -> i128 {
-    let Some(n) = frame.checked_mul(i128::from(TICKS_PER_SECOND)).and_then(|n| n.checked_mul(i128::from(rate.den))) else {
-        return if frame < 0 { i128::MIN } else { i128::MAX };
-    };
-    let d = i128::from(rate.num);
-    n.div_euclid(d) + i128::from(n.rem_euclid(d) != 0)
-}
-
-const fn gcd(mut a: u64, mut b: u64) -> u64 {
-    while b != 0 {
-        (a, b) = (b, a % b);
-    }
-    a
 }

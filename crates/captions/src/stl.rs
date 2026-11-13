@@ -16,8 +16,7 @@
 //! - Long subtitles continue in extension blocks; user-data (`EBN 0xFE`) and comment blocks are
 //!   skipped.
 
-use craft_timeline::timecode::{TimecodeFields, fields_to_frames, frames_to_fields};
-use craft_timeline::{FrameRate, Tick};
+use crate::time::{FrameRate, Tick, fields_to_frames, frames_to_fields};
 
 use crate::{Cue, Document, Error, Result};
 
@@ -305,11 +304,7 @@ fn tc_frames(b: &[u8], rate: FrameRate) -> Option<i64> {
     if *minutes >= 60 || *seconds >= 60 || i64::from(*frames) >= max_frames {
         return None;
     }
-    Some(fields_to_frames(
-        TimecodeFields { negative: false, hours: *hours as i64, minutes: *minutes as i64, seconds: *seconds as i64, frames: *frames as i64 },
-        rate,
-        false,
-    ))
+    Some(fields_to_frames(*hours as i64, *minutes as i64, *seconds as i64, *frames as i64, rate, false))
 }
 
 /// A subtitle being assembled from its TTI blocks: number, in and out frames, text, and whether
@@ -328,7 +323,7 @@ pub fn parse(bytes: &[u8]) -> Result<Document> {
     let tcp = ascii_field(&gsi[256..264]);
     let start = if tcp.len() == 8 && tcp.bytes().all(|b| b.is_ascii_digit()) {
         let n = |i: usize| tcp[i..i + 2].parse::<i64>().unwrap_or(0);
-        fields_to_frames(TimecodeFields { negative: false, hours: n(0), minutes: n(2), seconds: n(4), frames: n(6) }, rate, false)
+        fields_to_frames(n(0), n(2), n(4), n(6), rate, false)
     } else {
         0
     };
@@ -410,7 +405,7 @@ fn file_rate(rate: Option<FrameRate>) -> (FrameRate, &'static str) {
 /// The time code [`write`] gives a caption starting at `t` in a programme at `rate`.
 pub fn timecode(t: Tick, rate: Option<FrameRate>) -> String {
     let (rate, _) = file_rate(rate);
-    let TimecodeFields { hours: h, minutes: m, seconds: s, frames: f, .. } = frames_to_fields(rate.frame_at(rate.snap_nearest(t)), rate, false);
+    let (_, h, m, s, f) = frames_to_fields(rate.frame_at(rate.snap_nearest(t)), rate, false);
     format!("{h:02}:{m:02}:{s:02}:{f:02}")
 }
 
@@ -438,7 +433,7 @@ pub fn write(doc: &Document, rate: Option<FrameRate>, program: &str) -> Vec<u8> 
             b[3] = if k + 1 == chunks.len() { 0xff } else { k.min(0xfd) as u8 };
             b[4] = 0;
             for (at, f) in [(5, tin), (9, tout)] {
-                let TimecodeFields { hours: h, minutes: m, seconds: s, frames: fr, .. } = frames_to_fields(f, rate, false);
+                let (_, h, m, s, fr) = frames_to_fields(f, rate, false);
                 b[at..at + 4].copy_from_slice(&[h.min(255) as u8, m as u8, s as u8, fr as u8]);
             }
             b[13] = (22 - 2 * (lines - 1)) as u8;
@@ -467,7 +462,7 @@ pub fn write(doc: &Document, rate: Option<FrameRate>, program: &str) -> Vec<u8> 
     put(&mut gsi, 253, 2, "23");
     put(&mut gsi, 255, 1, "1");
     put(&mut gsi, 256, 8, "00000000");
-    let TimecodeFields { hours: h, minutes: m, seconds: s, frames: f, .. } = frames_to_fields(first_in.unwrap_or(0), rate, false);
+    let (_, h, m, s, f) = frames_to_fields(first_in.unwrap_or(0), rate, false);
     put(&mut gsi, 264, 8, &format!("{h:02}{m:02}{s:02}{f:02}"));
     put(&mut gsi, 272, 1, "1");
     put(&mut gsi, 273, 1, "1");
