@@ -20,6 +20,9 @@
 //!    A tool that claims the nudges has AccessKit Increment and Decrement on its node, and they reach `key` as the
 //!    arrows toward and away from the reading end.
 //! 6. The tool paints over the canvas and requests its cursor at tool priority.
+//! 7. A drag past the canvas edge ([`CanvasTool::autoscrolls`]), and a hover in the band inside it
+//!    ([`CanvasTool::autoscrolls_on_hover`]), report [`ToolHostResponse::past_edge`]; the app scrolls with
+//!    [`Autoscroll`].
 //!
 //! The host keeps its state under the canvas's id (`CanvasOutput::response.id`), so two canvases never share a
 //! gesture, and hands the tool the canvas's view from the output ([`ToolContext::space`]). A tool changes the view
@@ -52,6 +55,7 @@
 //! ```
 
 use super::momentary::{Momentary, MomentaryCommands};
+use super::navigate::Autoscroll;
 use super::readout::paint_readout;
 use super::tool::{CanvasTool, March, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPointer, ToolRequests};
 use super::tools::HandTool;
@@ -171,8 +175,9 @@ pub struct ToolHostResponse {
     pub ignored_press: Option<ToolPointer>,
     /// The key the tool took this pass.
     pub took_key: Option<ToolKey>,
-    /// How far past the canvas edge the pointer is, in screen points, while a gesture of a tool that autoscrolls
-    /// runs. The host moves no view: the app scrolls its view toward the pointer.
+    /// How far past the edge the pointer is, in screen points: past the canvas edge while a gesture of a tool that
+    /// autoscrolls runs, or into the band inside it ([`Autoscroll::HOVER_EDGE`]) while a tool that autoscrolls on hover
+    /// hovers there. The host moves no view: the app scrolls its view toward the pointer with [`Autoscroll`].
     pub past_edge: Option<Vec2>,
     /// The cursor the tool asked for, after the host requested it.
     pub cursor: Option<Cursor>,
@@ -700,6 +705,20 @@ impl<'a> Run<'a> {
 
     fn hover(&mut self, pointer: ToolPointer) {
         self.call(Some(pointer), |tool, cx| tool.hover(&pointer, cx));
+        if let Some(past) = self.hover_edge(pointer.pos) {
+            self.response.past_edge = Some(past);
+        }
+    }
+
+    /// How far into the band inside the canvas edge a hover at `pos` is, toward the edge, for a tool that
+    /// autoscrolls on hover.
+    fn hover_edge(&self, pos: Pos2) -> Option<Vec2> {
+        if !self.tool.autoscrolls_on_hover() || !self.rect.is_positive() {
+            return None;
+        }
+        let band = Autoscroll::HOVER_EDGE.min(self.rect.width().min(self.rect.height()) / 4.0);
+        let past = pos - self.rect.shrink(band).clamp(pos);
+        (past != Vec2::ZERO).then_some(past)
     }
 
     /// The canvas background's press phase of this pass. A pass carries one phase, so a press that moved or
@@ -712,9 +731,10 @@ impl<'a> Run<'a> {
             PressPhase::Idle => self.state.spent = false,
             PressPhase::Hover => {
                 self.state.spent = false;
-                // A pointer that stands still keeps the position an injected move gave the tool.
-                if pointer::with_pass_pointer(self.ctx, |pass| pass.stirred)
-                    && let Some(pointer) = hover_pointer(frame, *press)
+                // A pointer that stands still keeps the position an injected move gave the tool, unless it rests in
+                // the edge band: the view scrolls under it.
+                if let Some(pointer) = hover_pointer(frame, *press)
+                    && (pointer::with_pass_pointer(self.ctx, |pass| pass.stirred) || self.hover_edge(pointer.pos).is_some())
                 {
                     self.hover(pointer);
                 }

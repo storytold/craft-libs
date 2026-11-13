@@ -1,14 +1,16 @@
 //! `CanvasTool`, `ToolHost` and `tool_pick` (8.3): a drag is one `Begin`...`Commit`, Escape cancels it once, a press
 //! on a canvas control never reaches the tool, and a group's letter picks and cycles its tools.
 
-use craft_behavior::{CancelReason, GesturePhase, PointerButton};
+use craft_behavior::kurbo::{Point, Size};
+use craft_behavior::{CancelReason, CanvasView, GesturePhase, PointerButton};
 use craft_keymap::Mods;
-use craft_ui::canvas::{CanvasTool, CropOverlay, ToolAction, ToolClaims, ToolContext, ToolHost, ToolKey, ToolPath, ToolPointer};
-use craft_ui::contract::{Bind, Show as _};
+use craft_ui::canvas::{Autoscroll, Canvas, CanvasTool, CropOverlay, ToolAction, ToolClaims, ToolContext, ToolHost, ToolKey, ToolPath, ToolPointer};
+use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::primitives::Draw;
-use craft_ui::testing::{ToolFixture, trial};
-use egui::{Rect, Vec2};
-use std::cell::RefCell;
+use craft_ui::runtime::access::Role;
+use craft_ui::testing::{Fixture, ToolFixture, pointer, trial};
+use egui::{Pos2, Rect, Vec2};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -121,4 +123,85 @@ fn a_gesture_cancelled_by_the_app_starts_no_new_one_while_the_button_stays_down(
 
     fixture.press_at(from).release_at(from);
     assert_eq!(fixture.tool().count(Call::Press), 2, "the next press starts a gesture again: {:?}", fixture.tool().calls);
+}
+
+/// A tool with a rubber band that follows the hovering pointer, which asks for the hover autoscroll when `scrolls`.
+struct Band {
+    scrolls: bool,
+    hovers: usize,
+}
+
+impl CanvasTool for Band {
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        ToolAction::Ignored
+    }
+
+    fn drag(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn hover(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {
+        self.hovers += 1;
+    }
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn autoscrolls_on_hover(&self) -> bool {
+        self.scrolls
+    }
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Freehand("the band only follows the pointer")
+    }
+}
+
+/// The hover autoscroll as an app runs it: the canvas shows a document zoomed in past the room, and the app scrolls
+/// its view from the host's `past_edge`. Returns the fixture, the tool and the app's view.
+fn band_canvas(scrolls: bool) -> (Fixture, Rc<RefCell<Band>>, Rc<Cell<Option<CanvasView>>>) {
+    const DOCUMENT: Size = Size::new(1200.0, 900.0);
+    let tool = Rc::new(RefCell::new(Band { scrolls, hovers: 0 }));
+    let view = Rc::new(Cell::new(None::<CanvasView>));
+    let (shown_tool, shown_view) = (Rc::clone(&tool), Rc::clone(&view));
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let current = shown_view.get().unwrap_or_else(|| CanvasView::new(room, Point::new(600.0, 450.0), 4.0));
+        let shown = Canvas::new("Document").document(DOCUMENT).view(current).show(ui, |_, _| {});
+        let reply = ToolHost::new().run(ui, &shown.output, &mut *shown_tool.borrow_mut());
+        let mut next = reply.view.unwrap_or(current);
+        if let Some(past) = reply.past_edge
+            && Autoscroll::scroll(&mut next, Autoscroll::step(past, ui.input(|input| input.stable_dt)), DOCUMENT).is_some()
+        {
+            ui.ctx().request_repaint();
+        }
+        shown_view.set(Some(next));
+    });
+    fixture.settle();
+    (fixture, tool, view)
+}
+
+#[trial]
+fn a_tool_hovering_near_the_canvas_edge_scrolls_the_view_while_the_pointer_rests() {
+    let (mut fixture, tool, view) = band_canvas(true);
+    let canvas = fixture.by_role(Role::CANVAS)[0].rect;
+    let centre = |view: &Rc<Cell<Option<CanvasView>>>| view.get().expect("the canvas ran").center;
+
+    let before = centre(&view);
+    fixture.frame(vec![pointer::moved(canvas.center())]).idle(3);
+    assert_eq!(centre(&view), before, "a hover away from the edge scrolls nothing");
+
+    fixture.frame(vec![pointer::moved(Pos2::new(canvas.right() - 4.0, canvas.center().y))]);
+    let (entered, hovers) = (centre(&view), tool.borrow().hovers);
+    fixture.idle(3);
+    let rested = centre(&view);
+    assert!(rested.x > entered.x, "resting at the right edge scrolls the view right: {entered:?} -> {rested:?}");
+    assert_eq!(rested.y, entered.y, "a scroll toward the right edge keeps the height");
+    assert!(tool.borrow().hovers >= hovers + 3, "the tool follows the view as it scrolls under the resting pointer");
+
+    let (mut fixture, _, view) = band_canvas(false);
+    fixture.frame(vec![pointer::moved(Pos2::new(canvas.right() - 4.0, canvas.center().y))]);
+    let entered = centre(&view);
+    fixture.idle(3);
+    assert_eq!(centre(&view), entered, "a tool that does not autoscroll on hover leaves the view");
 }

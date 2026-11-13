@@ -603,6 +603,14 @@ pub trait CanvasTool {
         true
     }
 
+    /// Whether, in its state at the start of the pass, the tool asks the app to scroll the view while the pointer
+    /// hovers near the canvas edge with no button down (a Polygonal Lasso with its outline open, whose rubber band
+    /// follows the pointer). While it does, the host calls `hover` in every pass the pointer stays in the edge band,
+    /// since the view scrolls under it. Default: `false`.
+    fn autoscrolls_on_hover(&self) -> bool {
+        false
+    }
+
     /// What the tool is to assistive technology this pass: its drawing as one object with its anchors (a rectangle
     /// being dragged: `Rectangle 120 x 80 px`), or `None` for a tool with nothing to describe. The host emits it
     /// after [`paint`](Self::paint), with the same context. Default: `None`.

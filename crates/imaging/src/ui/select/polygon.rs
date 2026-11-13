@@ -19,7 +19,8 @@ use super::{Place, Report, SelectEvent, SelectPhase, SelectToolPass, SelectionPr
 /// vertex (3 or more), on a click at the last, on Enter or a double-click. Backspace, Delete or a secondary click
 /// retract the last vertex (the last one cancels): the tool takes the secondary button while an outline is open, so
 /// the app calls nothing and shows no context menu then. Escape cancels, between clicks and during a press alike; a
-/// document change or [`reset`](Self::reset) drops it.
+/// document change or [`reset`](Self::reset) drops it. While an outline is open, hovering near the canvas edge
+/// scrolls the view toward it (`CanvasTool::autoscrolls_on_hover`).
 ///
 /// Click-driven: a plain press inside the selection places a vertex. Only Cmd drags the selection (pixels; module
 /// docs), and not while an outline is open. A Cmd press outside the selection is `ToolAction::Ignored`.
@@ -106,6 +107,11 @@ impl CanvasTool for SelectToolPass<'_, PolygonLassoTool> {
 
     fn claims(&self) -> ToolClaims {
         if self.tool.draft.takes_retract() { ToolClaims::NONE.keyboard().deletes() } else { ToolClaims::NONE }
+    }
+
+    /// The rubber band of an open outline reaches past the view: hovering near the canvas edge scrolls toward it.
+    fn autoscrolls_on_hover(&self) -> bool {
+        self.tool.draft.is_open()
     }
 
     /// The primary button always, the secondary while an outline is open (it retracts the last vertex).
