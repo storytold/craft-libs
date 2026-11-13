@@ -109,10 +109,12 @@ impl DocumentPreferences {
         }
         if let Some(value) = self.primary_text_frame {
             attrs.push(("CreatePrimaryTextFrame".into(), bool_string(value)));
-            attrs.push(("MasterTextFrame".into(), bool_string(value)));
         }
         if let Some(value) = self.column_guides_locked {
             attrs.push(("ColumnGuideLocked".into(), bool_string(value)));
+        }
+        if let Some(value) = self.primary_text_frame {
+            attrs.push(("MasterTextFrame".into(), bool_string(value)));
         }
         attrs.push(("SnippetImportUsesOriginalLocation".into(), "false".into()));
         attrs
