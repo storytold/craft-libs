@@ -785,6 +785,11 @@ pub struct Cfa {
     pub height: usize,
     /// `width × height` colour indices, row-major, anchored at image pixel (0, 0).
     pub pattern: Vec<u8>,
+    /// The sensor-space coordinate where this periodic pattern is anchored.
+    #[serde(default)]
+    pub origin_x: usize,
+    #[serde(default)]
+    pub origin_y: usize,
 }
 
 impl Cfa {
@@ -801,13 +806,13 @@ impl Cfa {
                 })
             })
             .collect::<Option<_>>()?;
-        (p.len() == 4).then_some(Cfa { width: 2, height: 2, pattern: p })
+        (p.len() == 4).then_some(Cfa { width: 2, height: 2, pattern: p, origin_x: 0, origin_y: 0 })
     }
     /// A 2×2 Bayer layout named in code (`"RGGB"`, `"BGGR"`, `"GRBG"`, `"GBRG"`). Only for literal
     /// names (tested below); anything else falls back to RGGB instead of failing.
     #[cfg_attr(not(feature = "crw"), allow(dead_code))]
     pub(crate) fn bayer_static(s: &'static str) -> Cfa {
-        Cfa::bayer(s).unwrap_or(Cfa { width: 2, height: 2, pattern: vec![0, 1, 1, 2] })
+        Cfa::bayer(s).unwrap_or(Cfa { width: 2, height: 2, pattern: vec![0, 1, 1, 2], origin_x: 0, origin_y: 0 })
     }
     /// The Fujifilm X-Trans 6×6 layout (as commonly documented), anchored at (0, 0).
     pub fn xtrans() -> Cfa {
@@ -822,16 +827,20 @@ impl Cfa {
                 })
             })
             .collect();
-        Cfa { width: 6, height: 6, pattern }
+        Cfa { width: 6, height: 6, pattern, origin_x: 0, origin_y: 0 }
     }
     #[inline]
     pub fn color_at(&self, x: usize, y: usize) -> u8 {
-        self.pattern[(y % self.height) * self.width + (x % self.width)]
+        let relative = |v: usize, origin: usize, period: usize| {
+            let (v, origin) = (v % period, origin % period);
+            if v >= origin { v - origin } else { period - (origin - v) }
+        };
+        self.pattern[relative(y, self.origin_y, self.height) * self.width + relative(x, self.origin_x, self.width)]
     }
     /// The same pattern anchored at `(dx, dy)` of the current anchor (e.g. after cropping to an active area).
     pub fn shifted(&self, dx: usize, dy: usize) -> Cfa {
         let pattern = (0..self.height).flat_map(|y| (0..self.width).map(move |x| (x, y))).map(|(x, y)| self.color_at(x + dx, y + dy)).collect();
-        Cfa { width: self.width, height: self.height, pattern }
+        Cfa { width: self.width, height: self.height, pattern, origin_x: 0, origin_y: 0 }
     }
     pub fn is_bayer(&self) -> bool {
         if self.width != 2 || self.height != 2 {

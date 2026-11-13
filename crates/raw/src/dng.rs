@@ -410,9 +410,13 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
         // sensor origin (the crop to the active area shifts it back), so move the anchor out by the area's offset
         // (DNGs that LightCraft wrote before its writer followed the spec carry the sensor-origin pattern; they are marked
         // by a bare "LightCraft" Software tag and keep their original reading)
-        let at_origin = Cfa { width: cols, height: rows, pattern };
+        let mut at_origin = Cfa { width: cols, height: rows, pattern, origin_x: 0, origin_y: 0 };
         let legacy_writer = [raw, ifd0].iter().any(|i| i.string(t::SOFTWARE).as_deref().map(str::trim) == Some("LightCraft"));
-        Some(if legacy_writer { at_origin } else { at_origin.shifted(cols - active_area.x % cols, rows - active_area.y % rows) })
+        if !legacy_writer {
+            at_origin.origin_x = active_area.x;
+            at_origin.origin_y = active_area.y;
+        }
+        Some(at_origin)
     } else {
         None
     };
