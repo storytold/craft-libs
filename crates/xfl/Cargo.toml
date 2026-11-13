@@ -1,6 +1,6 @@
 [package]
 name = "craft-xfl"
-description = "Bounded reader for the ZIP package used by Animate XFL/FLA documents."
+description = "Bounded XFL/FLA package reader and native shape-edge parser."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
