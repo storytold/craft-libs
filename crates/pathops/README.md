@@ -789,13 +789,15 @@ or so, measured once in a release build:
   cubics gives 471 subpaths, 163 of them holes, against 311 with none. The area covered is the same (every one of the 163 holes is uncovered in both
   results; 15464.7196 against 15464.7183 square units).
 
-An operation within the limits that takes longer than the seconds above, or more than a gigabyte, is not
-known; the inputs above were found by testing and by independent review, and review has found more after each
+An operation within the limits that takes longer than the seconds above, or holds more memory than the worst measured above (about
+2.7 GB: bowed pies at the edge of the cache term 2.55 to 2.68 GB, the planar map of a star of 705 points 2.6 GB, a refusal by the dry sweep
+up to about 2.7 GB; a limit on address space, as `ulimit -v`, must be higher: 4,500 pies of 20 slices ran under about 2.8 GB of it), is not known; the inputs above were found by testing and by independent review, and review has found more after each
 round, so there may be others.
 
 ## Costs
 
-Within the limits an operation can still take seconds and about a gigabyte, so run the heavy ones off a UI
+Within the limits an operation can still take seconds and gigabytes (the rows below that are made take up to 1.6 GB, and the worst inputs found, under
+"Known limits", about 2.7 GB), so run the heavy ones off a UI
 thread and ask first with the `try_` forms. Measured on one machine, in a release build, **before the metered sweep**: for an input of more
 than 192 monotone pieces the meter now runs a dry sweep first, so that with it on (the default) an operation takes 1.1 to 2.2 times the time
 below (1.2 to 2.0 over 15 of these rows, re-measured with it on and off back to back: a circle of 100,000 cubics 0.45 and 0.58 s, the star of 1,291

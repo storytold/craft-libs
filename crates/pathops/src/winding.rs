@@ -198,9 +198,21 @@ pub(crate) fn y_pieces(c: &CubicBez) -> Pieces {
 /// that range: the side of the height the piece's lower end is on is kept at one end and the other at the other, for
 /// [`MAX_BISECTIONS`] halvings at most (a range halved to where it can no longer be is done). Each step is one
 /// evaluation of the height, at most [`NEWTON_STEPS`] and [`MAX_BISECTIONS`] of them in all, and never the cubic
-/// formula, so the rounding of coefficients that is the fault of that formula does not come into it.
+/// formula, so the rounding of coefficients that is the fault of that formula does not come into it. A height that is
+/// one of the piece's own ends is crossed at that end, and the search is not made (see the body).
 pub(crate) fn crossing_x(c: &CubicBez, piece: &Piece, y: f64) -> f64 {
     let (xs, ys) = coordinates(c);
+    // The heights of a piece's ends are what [`bernstein`] finds at its ends (the curve's own ends exactly, and a turn is
+    // cut by it), so a height that is one of them is crossed at that end, to the bit. The search cannot say so: the guess is
+    // then an end of the range, which it leaves for the middle, and it closes in on that end from one side, within 2^-64
+    // of it and not on it, so that a point on the curve at the end of a piece could be told from the crossing by a hair and
+    // counted on the wrong side of it (a rising straight cubic wound 0 where the line it lies on winds -1).
+    if y == piece.y_lo {
+        return bernstein(xs, piece.lo);
+    }
+    if y == piece.y_hi {
+        return bernstein(xs, piece.hi);
+    }
     let [y0, y1, y2, y3] = ys;
     let (a, b, d) = (y1 - y0, y2 - y1, y3 - y2);
     let at_or_below = piece.y_lo <= y;
@@ -253,6 +265,14 @@ fn quadratic_roots(a: f64, b: f64, c: f64) -> [Option<f64>; 2] {
     if a == 0.0 {
         return if b == 0.0 { [None, None] } else { [Some(-c / b), None] };
     }
+    // The roots are those of the equation multiplied by any number, so the coefficients are brought to where `b b` and `4 a c`
+    // can neither overflow nor underflow: at 1e155 both are infinite and their difference is not a number, at 1e-165 both are
+    // nothing and the quadratic has a double root, and the turns of the curve were lost, or found where they are not. The
+    // number is the power of two below the greatest coefficient (a subnormal one is lifted to the least normal), which scales
+    // exactly: where the formula worked the roots are the same to the bit.
+    const EXPONENT: u64 = 0x7ff0_0000_0000_0000;
+    let scale = f64::from_bits(a.abs().max(b.abs()).max(c.abs()).to_bits() & EXPONENT).max(f64::MIN_POSITIVE);
+    let (a, b, c) = (a / scale, b / scale, c / scale);
     let disc = b * b - 4.0 * a * c;
     if disc < 0.0 || !disc.is_finite() {
         return [None, None];
@@ -474,12 +494,19 @@ mod tests {
                 if (p - Point::new(4.0, 4.0)).hypot() == 4.0 {
                     on_the_circle += 1;
                 }
-                assert_eq!(winding(&circle, p), circle.winding(p), "{p:?}");
+                // The left vertex is on the circle, at the lower end of the arc that falls into it, and the crossing there is at
+                // the point's own `x`, which is to its left: it winds as a point on the left edge of a square does (+1, the
+                // same in `kurbo`). `kurbo`'s solver puts the root a hair right of the vertex and winds 0, and so did this
+                // crate before a height that is a piece's own end was crossed at that end exactly.
+                let want = if p == Point::new(0.0, 4.0) { 1 } else { circle.winding(p) };
+                assert_eq!(winding(&circle, p), want, "{p:?}");
             }
         }
+        let (square, left_edge) = (rect(0.0, 0.0, 8.0, 8.0), Point::new(0.0, 4.0));
+        assert_eq!((winding(&square, left_edge), square.winding(left_edge)), (1, 1), "a point on the left edge of a square");
         assert_eq!(on_the_circle, 4, "the four vertices are among the points");
-        // The heights of the turns: inside and outside, at the top and bottom of the circle exactly.
-        for p in [(4.0, 0.0), (4.0, 8.0), (3.0, 0.0), (3.0, 8.0), (0.0, 4.0), (8.0, 4.0), (4.0, 4.0)] {
+        // The heights of the turns: inside and outside, at the top and bottom of the circle exactly (the left vertex is above).
+        for p in [(4.0, 0.0), (4.0, 8.0), (3.0, 0.0), (3.0, 8.0), (8.0, 4.0), (4.0, 4.0)] {
             let p = Point::from(p);
             assert_eq!(winding(&circle, p), circle.winding(p), "{p:?}");
         }
@@ -510,6 +537,167 @@ mod tests {
         assert_eq!(winding(&open, Point::new(5.0, 5.0)), 0);
         assert_eq!(winding(&open, Point::new(11.0, 5.0)), -1);
         assert_eq!(winding(&BezPath::new(), Point::new(1.0, 1.0)), 0);
+    }
+
+    /// A cubic whose control points lie on a line, as that line is wound (`line_winding`), at the heights of its ends and between them, to
+    /// the left of the line, on it, and to the right.
+    fn assert_wound_as_its_line(c: CubicBez) {
+        let line = kurbo::Line::new(c.p0, c.p3);
+        for y in [0.0, 1.5, 3.0, -1.0, 4.0] {
+            for x in [-1.0, 0.0, 0.5, 1.5, 2.0, 3.0, 4.0] {
+                let at = Point::new(x, y);
+                assert_eq!(segment_winding(PathSeg::Cubic(c), at), segment_winding(PathSeg::Line(line), at), "{c:?} at {at:?}");
+            }
+        }
+    }
+
+    /// A point at the height of the lower end of a rising piece, on the curve there, is wound as it is on the straight line the control
+    /// points lie on: the crossing is at the end, exactly (`(0, 0)`, `(1, 1)`, `(2, 2)`, `(3, 3)` at `(0, 0)` was 0 for -1, for the guess
+    /// of the crossing is the end itself, which the search leaves for the middle and then closes in on from above).
+    #[test]
+    fn a_point_at_the_lower_end_of_a_rising_cubic_is_wound_as_its_line() {
+        let straight = CubicBez::new((0.0, 0.0), (1.0, 1.0), (2.0, 2.0), (3.0, 3.0));
+        assert_eq!(segment_winding(PathSeg::Cubic(straight), Point::new(0.0, 0.0)), -1);
+        assert_wound_as_its_line(straight);
+    }
+
+    /// The same for a falling piece, whose lower end is its last point: the guess is the upper end of the range, and the search closes in on
+    /// it from below.
+    #[test]
+    fn a_point_at_the_lower_end_of_a_falling_cubic_is_wound_as_its_line() {
+        let straight = CubicBez::new((3.0, 3.0), (2.0, 2.0), (1.0, 1.0), (0.0, 0.0));
+        assert_eq!(segment_winding(PathSeg::Cubic(straight), Point::new(0.0, 0.0)), 1);
+        assert_wound_as_its_line(straight);
+    }
+
+    /// The crossing of a piece at the height of its lower end is the `x` of that end, to the bit, for every piece of a cut cubic (the heights at
+    /// a cut are found by the same arithmetic as the crossing's): a point on the curve at its vertex is wound by that, and not by a crossing
+    /// that the search has closed in on to within 2^-64 of the end.
+    #[test]
+    fn the_crossing_at_a_pieces_own_end_is_the_x_of_that_end() {
+        let curves = [
+            CubicBez::new((0.0, 0.0), (100.0 / 3.0, 10.05), (200.0 / 3.0, 10.05), (100.0, 0.0)),
+            CubicBez::new((0.0, 0.0), (10.0, 10.0), (20.0, -10.0), (30.0, 0.0)),
+            CubicBez::new((0.0, 0.0), (1.0, 1.0), (2.0, 2.0), (3.0, 3.0)),
+            CubicBez::new((3.0, 3.0), (2.0, 2.0), (1.0, 1.0), (0.0, 0.0)),
+            CubicBez::new((1.0, -2.0), (30.5, 10.25), (66.0, 3.5), (100.0, 0.125)),
+            CubicBez::new((1.0, 1.0), (7.0, 9.0), (-3.0, 4.0), (5.0, -6.0)),
+        ];
+        let mut pieces = 0;
+        for c in curves {
+            let (xs, _) = coordinates(&c);
+            for piece in y_pieces(&c).iter() {
+                // The end the piece takes is its lower, in height: the first of a rising piece and the last of a falling one.
+                let (end, y) = if piece.y_hi > piece.y_lo { (piece.lo, piece.y_lo) } else { (piece.hi, piece.y_hi) };
+                assert_eq!(crossing_x(&c, &piece, y).to_bits(), bernstein(xs, end).to_bits(), "{c:?}, {piece:?}");
+                pieces += 1;
+            }
+        }
+        assert!(pieces >= 10, "{pieces}");
+    }
+
+    /// The S of `(0, 0)`, `(s, s)`, `(2 s, -s)`, `(3 s, 0)` closed by its chord, which is level: the curve winds +1 round the points of its
+    /// lower lobe and -1 round those of its upper, at every scale `s`.
+    fn s_curve(s: f64) -> BezPath {
+        let mut p = BezPath::new();
+        p.move_to((0.0, 0.0));
+        p.curve_to((s, s), (2.0 * s, -s), (3.0 * s, 0.0));
+        p.close_path();
+        p
+    }
+
+    /// `2^k` exactly, for `k` from -1022 to 1023.
+    fn power_of_two(k: i32) -> f64 {
+        f64::from_bits(u64::try_from(k + 1023).expect("an exponent of a normal number") << 52)
+    }
+
+    /// The windings of the S at its own scale on a grid, away from the curve: the lower lobe is +1, the upper -1, the rest 0.
+    fn s_windings() -> Vec<(Point, i32)> {
+        let path = s_curve(1.0);
+        let flat = Flattened::new(&path, 1e-9);
+        let mut grid = Vec::new();
+        for i in 0..=16 {
+            for j in 0..12 {
+                let p = Point::new(f64::from(i) * 0.25 - 0.5, (f64::from(j) + 0.5) * 0.1 - 0.6);
+                if distance_to_path(&path, p) < 1e-3 {
+                    continue;
+                }
+                let w = winding(&path, p);
+                assert_eq!(w, flat.winding(p), "{p:?}");
+                grid.push((p, w));
+            }
+        }
+        grid
+    }
+
+    /// The point of the finding: a cubic at a scale where the discriminant of the quadratic that finds its turns overflows (`s = 1e155`,
+    /// the products `b b` and `4 a c` of its coefficients, 36 s^2 and 24 s^2, are infinite and their difference is not a number) was cut
+    /// nowhere: one piece whose ends are level, and the lower lobe wound 0 where it winds +1.
+    #[test]
+    fn a_cubic_of_huge_coordinates_keeps_its_turns() {
+        let s = 1e155;
+        let lobe = Point::new(2.25 * s, -0.1 * s);
+        assert_eq!(winding(&s_curve(1.0), Point::new(2.25, -0.1)), 1, "the lower lobe, at unit scale");
+        assert_eq!(winding(&s_curve(s), lobe), 1, "the lower lobe, at {s}");
+        assert_eq!(winding(&s_curve(s), Point::new(0.75 * s, 0.1 * s)), -1, "the upper lobe");
+        assert_eq!(winding(&s_curve(s), Point::new(3.5 * s, -0.1 * s)), 0, "right of the whole");
+        let c = CubicBez::new((0.0, 0.0), (s, s), (2.0 * s, -s), (3.0 * s, 0.0));
+        assert_eq!(y_pieces(&c).iter().count(), 3, "two turns, three pieces");
+    }
+
+    /// The other end of the range: at 2^-560 (1e-169) the products are under the smallest number there is, and the discriminant is nothing,
+    /// so the quadratic had a double root where it has two (the cuts were at 1/2 and 1/3 and not at 0.2113 and 0.7887), and the lower lobe
+    /// wound nothing; at 1e-165 the same.
+    #[test]
+    fn a_cubic_of_tiny_coordinates_keeps_its_turns() {
+        for s in [power_of_two(-560), 1e-165, 3e-200] {
+            let c = CubicBez::new((0.0, 0.0), (s, s), (2.0 * s, -s), (3.0 * s, 0.0));
+            let turns: Vec<f64> = y_pieces(&c).iter().map(|p| p.hi).collect();
+            assert_eq!(turns.len(), 3, "{s}: {turns:?}");
+            assert!((turns[0] - 0.211_324_865_405_187).abs() < 1e-12 && (turns[1] - 0.788_675_134_594_813).abs() < 1e-12, "{s}: {turns:?}");
+            assert_eq!(winding(&s_curve(s), Point::new(2.25 * s, -0.1 * s)), 1, "{s}");
+        }
+    }
+
+    /// A path and its points scaled by a power of two wind as at unit scale to the last (the arithmetic scales exactly), from 2^-560 to 2^515,
+    /// and by scales that are not powers of two (the points are away from the curve) from 1e-165 to 1e155.
+    #[test]
+    fn the_winding_of_a_cubic_does_not_depend_on_its_scale() {
+        let grid = s_windings();
+        assert!(grid.iter().any(|&(_, w)| w == 1) && grid.iter().any(|&(_, w)| w == -1) && grid.len() > 150, "{} points", grid.len());
+        for s in [
+            power_of_two(-560),
+            power_of_two(-300),
+            power_of_two(-60),
+            power_of_two(60),
+            power_of_two(300),
+            power_of_two(515),
+            1e-165,
+            1e-100,
+            1e100,
+            1e155,
+        ] {
+            let path = s_curve(s);
+            for &(p, w) in &grid {
+                assert_eq!(winding(&path, Point::new(p.x * s, p.y * s)), w, "scale {s}, {p:?}");
+            }
+        }
+    }
+
+    /// The roots of the quadratic are the same at every scale of its coefficients, to the bit, wherever the scaled coefficients are numbers
+    /// (a root does not change when the equation is multiplied by a number, and a power of two multiplies exactly).
+    #[test]
+    fn quadratic_roots_do_not_depend_on_the_scale_of_the_coefficients() {
+        for (a, b, c) in [(6.0, -6.0, 1.0), (1.0, -3.0, 2.0), (1e-20, 2.0, -1.0), (3.0, 1.0, -1.0), (-0.75, 5.0, 0.25)] {
+            let unit = quadratic_roots(a, b, c);
+            assert!(unit.iter().flatten().count() > 0, "{a} {b} {c}");
+            for k in (-900..=900).step_by(25) {
+                let m = power_of_two(k);
+                let scaled = quadratic_roots(a * m, b * m, c * m);
+                let bits = |r: [Option<f64>; 2]| r.map(|t| t.map(f64::to_bits));
+                assert_eq!(bits(scaled), bits(unit), "({a}, {b}, {c}) times 2^{k}");
+            }
+        }
     }
 
     /// A segment that is a point, or a line, or a cubic that is no more than one, adds no crossing it should not.
