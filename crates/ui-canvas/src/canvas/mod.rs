@@ -339,7 +339,9 @@ impl<'a> Canvas<'a> {
         if let Some(wheel) = cx.take_wheel()
             && let Some(action) = motion.wheel.read(&wheel, WheelNavigation::LINE, cx.env.shell().os, &self.navigation)
         {
-            let at = cx.response.hover_pos().unwrap_or_else(|| view.rect.center());
+            // The pointer the wheel came at: the canvas's own widget is not hovered where an app widget in its body
+            // covers it.
+            let at = wheel.at.unwrap_or_else(|| view.rect.center());
             jumped |= WheelNavigation::apply(&mut view, action, at, size, pixels_per_point);
         }
         if let Some(delta) = Self::background_press(cx).1 {

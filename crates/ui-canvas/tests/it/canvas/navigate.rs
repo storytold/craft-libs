@@ -275,3 +275,33 @@ fn the_view_commands_a_canvas_runs_are_in_the_frame_output_whatever_fired_them()
         [(CommandRef::from(ViewCommands::FitOnScreen), FireSource::Key), (CommandRef::from(ViewCommands::ZoomIn), FireSource::Menu)]
     );
 }
+
+#[trial]
+fn a_wheel_zoom_keeps_the_point_under_the_pointer_where_an_app_widget_covers_the_body() {
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+    let shown = Rc::clone(&view);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).view(given).show(ui, |ui, body| {
+            // An app's own tool widget over the whole body, as an app that runs its tools itself places one.
+            ui.interact(body.rect, egui::Id::new("app tools"), egui::Sense::click_and_drag());
+        });
+        shown.set(canvas.output.view.unwrap_or(given));
+    });
+    fixture.settle();
+    let before = view.get();
+    let at = before.rect.center() + Vec2::new(-120.0, 80.0);
+    let under = before.to_doc(at);
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.frame(vec![egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: Vec2::new(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::ALT,
+        source: egui::MouseWheelSource::Wheel,
+    }]);
+    let after = view.get();
+    assert!(after.zoom > before.zoom, "Alt + wheel zooms");
+    assert!(after.to_screen(under).distance(at) < 0.5, "the document point stays under the pointer: {before:?} -> {after:?}");
+}

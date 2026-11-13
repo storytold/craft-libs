@@ -46,7 +46,8 @@ pub struct Wheel {
     pub unit: WheelUnit,
     /// The gesture phase.
     pub phase: WheelPhase,
-    /// Where the pointer was, in screen points; a zoom is about this point.
+    /// Where the pointer was; a zoom is about this point. In screen points as the wheel service splits the wheel; a
+    /// component's `take_wheel` hands it in the component's layer space.
     pub at: Option<Pos2>,
     /// The vertical scroll came from over a zoom zone (`Sense::WHEEL_ZOOMS_VIEW`): the taker zooms its view by it,
     /// about `at`, instead of scrolling.

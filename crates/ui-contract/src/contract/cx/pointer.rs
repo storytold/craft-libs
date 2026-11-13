@@ -33,7 +33,7 @@ pub trait Pointer {
     fn activation(&self) -> Option<Activation>;
     /// For an arena root, the member activated this pass.
     fn activated_member(&self) -> Option<Id>;
-    /// This pass's wheel share, once.
+    /// This pass's wheel share, once, with the pointer it came at (`Wheel::at`) in this component's egui layer space (8.3).
     fn take_wheel(&mut self) -> Option<Wheel>;
     /// Requests `cursor` at `priority`; the highest priority of the pass wins.
     fn cursor(&mut self, cursor: impl Into<Cursor>, priority: CursorPriority);
@@ -100,7 +100,11 @@ impl Pointer for CxCore<'_> {
     }
 
     fn take_wheel(&mut self) -> Option<Wheel> {
-        wheel::take(&self.ctx, self.id)
+        let mut wheel = wheel::take(&self.ctx, self.id)?;
+        if let (Some(at), Some(map)) = (wheel.at, areas::layer_map(&self.ctx, self.response.layer_id)) {
+            wheel.at = Some(map.to_layer(at));
+        }
+        Some(wheel)
     }
 
     fn cursor(&mut self, cursor: impl Into<Cursor>, priority: CursorPriority) {
