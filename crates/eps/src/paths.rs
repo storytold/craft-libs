@@ -47,7 +47,7 @@ pub fn import(bytes: &[u8], limits: Limits) -> Result<Imported, Error> {
     let source = vectorcraft_eps::import(bytes).map_err(Error::Parse)?;
     let section = crate::sections(bytes).map_err(|e| Error::Parse(e.to_string()))?;
     let source_box = crate::Comments::read(section.postscript).page_box().unwrap_or([0.0, 0.0, 612.0, 792.0]);
-    let [llx, _lly, urx, ury] = source_box;
+    let [llx, lly, urx, ury] = source_box;
     let page_bounds = Rect::new(llx, lly, urx, ury);
     let mut paths = Vec::new();
     let mut total_elements = 0usize;
