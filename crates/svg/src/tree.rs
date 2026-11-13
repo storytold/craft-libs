@@ -22,10 +22,10 @@
 //! 16 MB or so, and a 1 MB stack takes a depth of about 34.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 pub use usvg;
 
@@ -58,6 +58,10 @@ pub struct Limits {
     pub embedded_bytes: usize,
     /// SVG documents embedded inside one another, for [`image_resolver`].
     pub embedded_depth: usize,
+    /// Decoded RGBA pixels retained across the raster images embedded in one drawing. Dimensions
+    /// are probed before usvg hands the bytes to a decoder; repeated references to the same data
+    /// URL share one charge.
+    pub embedded_raster_pixels: u64,
 }
 
 impl Default for Limits {
@@ -72,6 +76,7 @@ impl Default for Limits {
             xml_nodes: 4_000_000,
             embedded_bytes: 32 << 20,
             embedded_depth: 4,
+            embedded_raster_pixels: 24_000_000,
         }
     }
 }
@@ -264,13 +269,56 @@ pub fn height(xml: &roxmltree::Document<'_>, most: usize) -> Result<Option<usize
 struct Used {
     bytes: AtomicUsize,
     depth: AtomicUsize,
+    raster_pixels: AtomicU64,
+    raster_data: Mutex<HashSet<usize>>,
 }
 
-fn raster(data: &[u8]) -> bool {
-    data.starts_with(b"\x89PNG")
-        || data.starts_with(&[0xff, 0xd8, 0xff])
-        || data.starts_with(b"GIF8")
-        || (data.len() > 12 && data.get(8..12) == Some(b"WEBP"))
+fn raster_format(data: &[u8]) -> Option<craft_image_codecs::Format> {
+    match craft_image_codecs::detect(data)? {
+        format @ (craft_image_codecs::Format::Png
+        | craft_image_codecs::Format::Jpeg
+        | craft_image_codecs::Format::Gif
+        | craft_image_codecs::Format::WebP) => Some(format),
+        _ => None,
+    }
+}
+
+fn raster_image(used: &Used, limits: &Limits, data: Arc<Vec<u8>>, format: craft_image_codecs::Format) -> Option<usvg::ImageKind> {
+    let (width, height) = craft_image_codecs::probe_allocation_size(&data).ok()?;
+    if !matches!(
+        format,
+        craft_image_codecs::Format::Png | craft_image_codecs::Format::Jpeg | craft_image_codecs::Format::Gif | craft_image_codecs::Format::WebP
+    ) {
+        return None;
+    }
+    let pixels = u64::from(width).checked_mul(u64::from(height))?;
+    if pixels == 0 || pixels > limits.embedded_raster_pixels {
+        return None;
+    }
+    let pointer = Arc::as_ptr(&data) as usize;
+    let mut seen = used.raster_data.lock().unwrap_or_else(PoisonError::into_inner);
+    if seen.insert(pointer) {
+        let mut current = used.raster_pixels.load(Ordering::Relaxed);
+        loop {
+            let next = current.checked_add(pixels)?;
+            if next > limits.embedded_raster_pixels {
+                seen.remove(&pointer);
+                return None;
+            }
+            match used.raster_pixels.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+    drop(seen);
+    Some(match format {
+        craft_image_codecs::Format::Png => usvg::ImageKind::PNG(data),
+        craft_image_codecs::Format::Jpeg => usvg::ImageKind::JPEG(data),
+        craft_image_codecs::Format::Gif => usvg::ImageKind::GIF(data),
+        craft_image_codecs::Format::WebP => usvg::ImageKind::WEBP(data),
+        _ => return None,
+    })
 }
 
 /// An embedded SVG document, if the budgets allow it.
@@ -302,22 +350,31 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'
 /// [`Limits::embedded_depth`] inside one another. An image past a limit is left out. Linked
 /// files are never read. One resolver is one import's budget: make a new one for each [`parse`].
 pub fn image_resolver(limits: Limits) -> usvg::ImageHrefResolver<'static> {
-    let used = Arc::new(Used { bytes: AtomicUsize::new(0), depth: AtomicUsize::new(0) });
+    let used = Arc::new(Used {
+        bytes: AtomicUsize::new(0),
+        depth: AtomicUsize::new(0),
+        raster_pixels: AtomicU64::new(0),
+        raster_data: Mutex::new(HashSet::new()),
+    });
     usvg::ImageHrefResolver {
-        resolve_data: Box::new(move |mime, data, options| match mime {
-            "image/jpg" | "image/jpeg" => Some(usvg::ImageKind::JPEG(data)),
-            "image/png" => Some(usvg::ImageKind::PNG(data)),
-            "image/gif" => Some(usvg::ImageKind::GIF(data)),
-            "image/webp" => Some(usvg::ImageKind::WEBP(data)),
-            "image/svg+xml" => embedded(&used, &limits, &data, options),
-            "text/plain" if raster(&data) => match data.first() {
-                Some(0x89) => Some(usvg::ImageKind::PNG(data)),
-                Some(0xff) => Some(usvg::ImageKind::JPEG(data)),
-                Some(b'G') => Some(usvg::ImageKind::GIF(data)),
-                _ => Some(usvg::ImageKind::WEBP(data)),
-            },
-            "text/plain" => embedded(&used, &limits, &data, options),
-            _ => None,
+        resolve_data: Box::new(move |mime, data, options| {
+            let detected = raster_format(&data);
+            let format = match mime {
+                "image/jpg" | "image/jpeg" => (detected == Some(craft_image_codecs::Format::Jpeg)).then_some(craft_image_codecs::Format::Jpeg),
+                "image/png" => (detected == Some(craft_image_codecs::Format::Png)).then_some(craft_image_codecs::Format::Png),
+                "image/gif" => (detected == Some(craft_image_codecs::Format::Gif)).then_some(craft_image_codecs::Format::Gif),
+                "image/webp" => (detected == Some(craft_image_codecs::Format::WebP)).then_some(craft_image_codecs::Format::WebP),
+                "text/plain" => detected,
+                _ => None,
+            };
+            if let Some(format) = format {
+                return raster_image(&used, &limits, data, format);
+            }
+            match mime {
+                "image/svg+xml" => embedded(&used, &limits, &data, options),
+                "text/plain" => embedded(&used, &limits, &data, options),
+                _ => None,
+            }
         }),
         resolve_string: Box::new(|_, _| None),
     }
