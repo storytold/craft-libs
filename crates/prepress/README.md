@@ -132,6 +132,7 @@ toggles: inks past its end count, so `&[]` counts every ink. Values are percent 
 | `tac(enabled)` | TAC per pixel, row-major |
 | `stats(enabled)` | `Stats`: per ink `InkStats { max, mean, area }`; the page's highest TAC, where, and its mean |
 | `above(limit, enabled)` | `Above`: a mask of the pixels over `limit` and their `count`; `regions()` lists connected regions with bounding boxes, largest first (at most `MAX_REGIONS`); `paint(rgb, color)` marks them on a preview |
+| `rich_black(black_start, enabled)` | `Above`: the rich-black pixels, where Black is at or above `black_start` with any Cyan, Magenta or Yellow under it (spot inks don't count; a 0 start still needs some Black) |
 
 ## Composite preview
 
@@ -245,7 +246,8 @@ if let Some(color) = to_pdf_color(&printed, &inks, &cms) {
   in memory, `plates(pdf, 0, dpi, &Options::default())` at the zoom's resolution, then
   `composite(enabled, &cms)` for the canvas. The panel lists `p.inks` with a toggle per row
   feeding `enabled`, each row's percentage from `coverage_at` under the pointer
-  (`pixel_at`), and the TAC mode from `above(limit, enabled)` with `paint`. Single-plate view
+  (`pixel_at`), and the TAC and rich-black modes from `above(limit, enabled)` and
+  `rich_black(black_start, enabled)` with `paint`. Single-plate view
   shows `p.plane(id)` as gray film. It would replace VectorCraft's `proof.rs`, which
   recolors the document and draws overprint as Darken.
 - **Ink Manager** (DesignCraft's `InkManager` aliases and convert-to-process, VectorCraft's
