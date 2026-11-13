@@ -252,7 +252,7 @@ fn flatten_contours_with_limits(path: &BezPath, max_segments: usize, max_points:
     if total > max_points {
         return Err(format!("path is too detailed (over {max_points} points)"));
     }
-    for (points, closed) in &mut contours {
+    for (points, _) in &mut contours {
         points.dedup_by(|a, b| a.distance(*b) < 1e-9);
     }
     contours.retain(|(points, _)| points.len() > 1);
