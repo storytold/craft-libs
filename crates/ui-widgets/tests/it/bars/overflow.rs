@@ -11,7 +11,7 @@ use craft_ui::bars::{Bar, BarItem, BarItems, BarKind, ConstraintFields, ItemDisp
 use craft_ui::buttons::{Button, IconButton};
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, Entry, Lazy, Props as _, Show as _, ShowContainer as _, Sizing};
-use craft_ui::display::{Divider, Text};
+use craft_ui::display::{Divider, Elide, Text};
 use craft_ui::form::Field;
 use craft_ui::pickers::Select;
 use craft_ui::popover::Popover;
@@ -308,9 +308,9 @@ fn a_rule_before_a_labelled_control_the_bar_shows_is_drawn() {
 
 const VIEW_BUTTONS: &[&str] = &["Actual Pixels", "Fit Screen", "Fill Screen"];
 
-/// The characters each label a bar `width` wide of `VIEW_BUTTONS` shows once settled before its ellipsis, for each
-/// label shown cut, with the characters of the whole label.
-fn cut_labels(width: f32) -> Vec<(usize, usize)> {
+/// The text each label of `VIEW_BUTTONS` in a bar `width` wide shows once settled before its ellipsis, for each label
+/// shown cut, with the whole label.
+fn cut_labels(width: f32) -> Vec<(String, &'static str)> {
     let scene = |ui: &mut Ui| {
         in_region(ui, Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 80.0)), |ui| {
             Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
@@ -327,7 +327,7 @@ fn cut_labels(width: f32) -> Vec<(usize, usize)> {
         let Shape::Text(text) = shape else { continue };
         let Some(kept) = text.galley.job.text.strip_suffix('…') else { continue };
         if let Some(label) = VIEW_BUTTONS.iter().find(|label| label.starts_with(kept)) {
-            cut.push((kept.chars().count(), label.chars().count()));
+            cut.push((kept.to_owned(), *label));
         }
     }
     cut
@@ -339,10 +339,46 @@ fn cut_labels(width: f32) -> Vec<(usize, usize)> {
 fn a_button_label_in_a_bar_elides_no_further_than_its_readable_least() {
     let mut elided = 0;
     for width in (80..=400).step_by(8) {
-        for (kept, characters) in cut_labels(width as f32) {
+        for (kept, label) in cut_labels(width as f32) {
             elided += 1;
-            assert!(kept >= TextRun::READABLE_CHARACTERS, "at {width}: a label of {characters} characters keeps {kept} before its ellipsis");
+            let readable: String = label.chars().take(TextRun::READABLE_CHARACTERS).collect();
+            assert!(kept.starts_with(readable.trim_end()), "at {width}: {label:?} keeps {kept:?} before its ellipsis");
         }
     }
     assert!(elided > 0, "no width elided a label");
+}
+
+const PATH: &str = "/~/WWMM_2024.psd";
+
+/// What the path of a bar `width` wide shows once settled, when it shows cut.
+fn cut_path(width: f32) -> Option<String> {
+    let scene = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 80.0)), |ui| {
+            Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+                Button::new("Open").show(ui);
+                Text::new(PATH).elide(Elide::Path).show(ui);
+            });
+        });
+    };
+    let mut frames = Frames::new();
+    frames.idle(4, scene);
+    frames.frame_shapes(scene).into_iter().find_map(|shape| match shape {
+        Shape::Text(text) if text.galley.job.text.contains('…') => Some(text.galley.job.text.clone()),
+        _ => None,
+    })
+}
+
+/// A path whose folders are narrow and whose name is wide narrows to its readable least too: it keeps the name whole
+/// after the ellipsis, or the first characters of the name before it, never fewer.
+#[trial]
+fn a_path_in_a_bar_elides_no_further_than_its_readable_least() {
+    let name = PATH.rsplit('/').next().unwrap_or_default();
+    let readable: String = name.chars().take(TextRun::READABLE_CHARACTERS).collect();
+    let mut elided = 0;
+    for width in (60..=300).step_by(4) {
+        let Some(cut) = cut_path(width as f32) else { continue };
+        elided += 1;
+        assert!(cut.ends_with(name) || cut.starts_with(&readable), "at {width}: the path shows {cut:?}");
+    }
+    assert!(elided > 0, "no width elided the path");
 }

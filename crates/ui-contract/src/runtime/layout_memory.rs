@@ -98,6 +98,8 @@ pub(crate) type TakeBack = Box<dyn FnOnce(&Context) + Send + Sync>;
 #[derive(Clone, Debug, PartialEq)]
 enum Recorded {
     Measured(Measured),
+    /// The width a row's shrink step gave a unit, as a measure, and whether the unit dropped out of the row.
+    Shrink(Measured, bool),
     Text(Option<Arc<str>>),
 }
 
@@ -474,6 +476,12 @@ pub(crate) fn emit_record(ctx: &Context, id: Id, measured: Measured) {
     emit(ctx, id, Recorded::Measured(measured));
 }
 
+/// Hands forward what a row's shrink step gave a unit under `id`: its width as `measured` and whether it `dropped`
+/// out of the row. It serves as [`emit_record`]'s measure does.
+pub(crate) fn emit_shrink(ctx: &Context, id: Id, measured: Measured, dropped: bool) {
+    emit(ctx, id, Recorded::Shrink(measured, dropped));
+}
+
 /// Hands forward a text a run found under `id` that content outside the body it runs in shows, as [`emit_record`]
 /// hands forward a measure: it serves the rest of this pass, and a later pass that takes the kept measurement of a body
 /// it ran in gets it with that measurement, where the content that found it does not run. A real run emits it too: a
@@ -498,7 +506,7 @@ fn emit(ctx: &Context, id: Id, mut recorded: Recorded) {
     let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(ctx));
     with(ctx, &moment, |memory| {
         // A measure keys on what it read: the room, and the inputs the innermost open body read so far.
-        if let Recorded::Measured(measured) = &mut recorded {
+        if let Recorded::Measured(measured) | Recorded::Shrink(measured, _) = &mut recorded {
             measured.inputs = memory
                 .measuring
                 .iter()
@@ -524,10 +532,14 @@ fn emit(ctx: &Context, id: Id, mut recorded: Recorded) {
 /// something else (`now`): that transcript changed.
 fn kept_differs(last: &Found, now: &Recorded, pass: u64, tolerance: f32) -> Option<Id> {
     let Found { pass: at, recorded: was, kept: Some(from) } = last else { return None };
+    let measures = |was: &Measured, now: &Measured, others_differ: bool| {
+        was.inputs == now.inputs
+            && (was.room - now.room).abs().max_elem() <= tolerance
+            && ((was.took - now.took).abs().max_elem() > tolerance || others_differ)
+    };
     let differs = match (was, now) {
-        (Recorded::Measured(was), Recorded::Measured(now)) => {
-            was.inputs == now.inputs && (was.room - now.room).abs().max_elem() <= tolerance && (was.took - now.took).abs().max_elem() > tolerance
-        }
+        (Recorded::Measured(was), Recorded::Measured(now)) => measures(was, now, false),
+        (Recorded::Shrink(was, was_dropped), Recorded::Shrink(now, now_dropped)) => measures(was, now, was_dropped != now_dropped),
         (was, now) => was != now,
     };
     if *at != pass || !differs {
@@ -833,6 +845,17 @@ pub(crate) fn measured(ctx: &Context, id: Id) -> Option<Measured> {
     let pass = ctx.cumulative_pass_nr();
     with(ctx, &moment, |memory| match memory.measured.get(&id).filter(|found| found.pass == pass && !memory.probing()) {
         Some(Found { recorded: Recorded::Measured(measured), .. }) => Some(*measured),
+        _ => None,
+    })
+}
+
+/// What a row's shrink step of this pass gave the unit under `id` ([`emit_shrink`]): its width as a measure and
+/// whether it dropped out of the row.
+pub(crate) fn shrink(ctx: &Context, id: Id) -> Option<(Measured, bool)> {
+    let moment = Moment::of(ctx);
+    let pass = ctx.cumulative_pass_nr();
+    with(ctx, &moment, |memory| match memory.measured.get(&id).filter(|found| found.pass == pass && !memory.probing()) {
+        Some(Found { recorded: Recorded::Shrink(measured, dropped), .. }) => Some((*measured, *dropped)),
         _ => None,
     })
 }

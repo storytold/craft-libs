@@ -239,10 +239,18 @@ pub(crate) fn report_least(ctx: &egui::Context, row: Id, body: Id, least: f32) {
     });
 }
 
-/// The width the shrink step of the row `row` gave its leaf `leaf` in this pass's measuring run. A leaf given no
-/// width has dropped out of the row (`shrink_or_drop`): it shows nothing and takes no place.
-pub(crate) fn shrink_cap(ctx: &egui::Context, row: Id, leaf: Id) -> Option<f32> {
-    layout_memory::measured(ctx, shrink_key(row, leaf)).map(|found| found.took.x)
+/// What the shrink step of a row gave one of its units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ShrinkCap {
+    /// The width the unit shows at most.
+    pub width: f32,
+    /// The unit dropped out of the row (`shrink_or_drop`): it shows nothing and takes no place.
+    pub dropped: bool,
+}
+
+/// What the shrink step of the row `row` gave its unit `leaf` in this pass's measuring run.
+pub(crate) fn shrink_cap(ctx: &egui::Context, row: Id, leaf: Id) -> Option<ShrinkCap> {
+    layout_memory::shrink(ctx, shrink_key(row, leaf)).map(|(found, dropped)| ShrinkCap { width: found.took.x, dropped })
 }
 
 fn shrink_key(row: Id, leaf: Id) -> Id {
@@ -330,7 +338,7 @@ fn shrink_or_drop(
     room: f32,
     order: ShrinkOrder,
     drops: bool,
-) -> Vec<f32> {
+) -> Vec<ShrinkCap> {
     let mut kept = vec![true; units.len()];
     let mut fixed = fixed;
     // Half a point: less than a pixel shows at any scale the box runs.
@@ -345,7 +353,12 @@ fn shrink_or_drop(
     let shown: Vec<ShrinkUnit> = units.iter().zip(&kept).filter(|(_, kept)| **kept).map(|(unit, _)| *unit).collect();
     let shown_first: Vec<bool> = first.iter().zip(&kept).filter(|(_, kept)| **kept).map(|(first, _)| *first).collect();
     let mut widths = shrink_in_turns(&shown, &pick(whole), &shown_first, fixed, room, order).into_iter();
-    kept.iter().map(|kept| if *kept { widths.next().unwrap_or_default() } else { 0.0 }).collect()
+    kept.iter()
+        .map(|kept| match kept {
+            true => ShrinkCap { width: widths.next().unwrap_or_default(), dropped: false },
+            false => ShrinkCap { width: 0.0, dropped: true },
+        })
+        .collect()
 }
 
 /// `shrink_widths` in two turns: the units whose content is made to be cut (`first`) give what they can of the
@@ -416,13 +429,14 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         let widths = if room.is_finite() {
             shrink_or_drop(&units, &whole, &first, (fixed, gap), room, order, drops)
         } else {
-            units.iter().map(|unit| unit.ideal).collect()
+            units.iter().map(|unit| ShrinkCap { width: unit.ideal, dropped: false }).collect()
         };
         let mut again = false;
-        for (leaf, width) in leaves.iter().zip(widths) {
-            layout_memory::emit_record(&ctx, shrink_key(id, leaf.leaf), layout_memory::Measured::new(Vec2::new(room, 0.0), Vec2::new(width, 0.0)));
+        for (leaf, cap) in leaves.iter().zip(widths) {
+            let measured = layout_memory::Measured::new(Vec2::new(room, 0.0), Vec2::new(cap.width, 0.0));
+            layout_memory::emit_shrink(&ctx, shrink_key(id, leaf.leaf), measured, cap.dropped);
             // Half a point: less than a pixel shows at any scale the box runs.
-            again |= (leaf.took - width).abs() >= 0.5;
+            again |= (leaf.took - cap.width).abs() >= 0.5;
         }
         again
     };

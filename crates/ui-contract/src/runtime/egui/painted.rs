@@ -10,10 +10,10 @@ use std::sync::Arc;
 
 /// The full text of each elided run painted in the current pass, by galley identity and paint order. Runs cut to the
 /// same text share egui's cached galley (the narrow cards of a grid cut to the same few characters), so one galley can
-/// stand for several runs with different full texts; they are kept in the order they were painted. A galley that egui cut (`Wrap::Elide`)
-/// keeps the full text in its job and one cut by `Wrap::ElidePath` or the other cuts shows only the cut text, so neither the job's text nor
-/// the galley's own flag tells a painted cut run from a whole one that shares its text (a tooltip under the elided
-/// title). The log holds the galley, so its address names it for the whole pass.
+/// stand for several runs with different full texts; they are kept in the order they were painted. A cut galley holds
+/// only its cut text (`TextRun::layout_cut`), so neither its job's text nor its own flag tells a painted cut run from a
+/// whole one that shares its text (a tooltip under the elided title). The log holds the galley, so its address names
+/// it for the whole pass.
 #[cfg(feature = "testing")]
 #[derive(Default)]
 pub(crate) struct Elisions {

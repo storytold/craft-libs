@@ -165,7 +165,8 @@ pub struct TextRun<'a> {
 
 impl<'a> TextRun<'a> {
     /// The characters a run that elides keeps before its ellipsis at its least, its readable least: a row narrows
-    /// such a run no further, and scrolls or drops it instead. A run of one character more or fewer never elides.
+    /// such a run no further, and scrolls or drops it instead. A run of no more than one character beyond them (5 or
+    /// fewer) never elides. White space before the ellipsis is cut with it.
     pub const READABLE_CHARACTERS: usize = 4;
 
     /// A one-span run in the label role.
@@ -319,9 +320,23 @@ impl TextRun<'_> {
             return whole;
         }
         let rtl_text = !self.is_rtl(env) && craft_i18n::base_direction(&full) == Some(Direction::Rtl);
-        let wrap = if self.wrap == Wrap::ElidePath { Wrap::Elide } else { self.wrap };
-        let pieces = cut_pieces(&ends, 0..full.len(), wrap, Self::READABLE_CHARACTERS);
-        text_layout::layout(ctx, self.job_cut(env, &full, &pieces, rtl_text)).size().x.min(whole)
+        let width = |pieces: &[Piece]| text_layout::layout(ctx, self.job_cut(env, &full, pieces, rtl_text)).size().x;
+        // The least is measured on the cut `layout_cut` shows at that width: for a path, its last name cut, or the
+        // name whole after the ellipsis when the name is too short to cut.
+        let least = if self.wrap == Wrap::ElidePath {
+            let (name, separator) = path_name(&full);
+            let name_ends: Vec<usize> = full[name.clone()].char_indices().map(|(at, _)| name.start + at).chain([name.end]).collect();
+            match separator {
+                _ if name_ends.len() - 1 > Self::READABLE_CHARACTERS + 1 => {
+                    width(&cut_pieces(&full, &name_ends, name, Wrap::Elide, Self::READABLE_CHARACTERS))
+                }
+                Some(at) => width(&[Piece::Ellipsis, Piece::Keep(at..full.len())]),
+                None => whole,
+            }
+        } else {
+            width(&cut_pieces(&full, &ends, 0..full.len(), self.wrap, Self::READABLE_CHARACTERS))
+        };
+        least.min(whole)
     }
 
     /// Whether the paragraph runs right to left: the env's direction, unless the run is fixed left to right.
@@ -374,15 +389,14 @@ impl TextRun<'_> {
         let rtl_text = !self.is_rtl(env) && craft_i18n::base_direction(full) == Some(Direction::Rtl);
         let layout = |pieces: &[Piece]| text_layout::layout(ctx, self.job_cut(env, full, pieces, rtl_text));
         if self.wrap == Wrap::ElidePath {
-            // Leading folders go first, up to the separator before the last name; a trailing separator starts no name.
-            let end = full.trim_end_matches(['/', '\\']).len();
-            for (at, _) in full.match_indices(['/', '\\']).filter(|(at, _)| *at > 0 && at + 1 < end) {
+            // Leading folders go first, up to the separator before the last name, then the name itself is cut.
+            let (name, separator) = path_name(full);
+            for (at, _) in full.match_indices(['/', '\\']).filter(|(at, _)| *at > 0 && separator.is_some_and(|last| *at <= last)) {
                 let galley = layout(&[Piece::Ellipsis, Piece::Keep(at..full.len())]);
                 if galley.size().x <= max_width {
                     return galley;
                 }
             }
-            let name = full.get(..end).and_then(|text| text.rfind(['/', '\\'])).map_or(0, |at| at + 1)..end;
             return Self::fit(&layout, full, name, Wrap::Elide, max_width);
         }
         Self::fit(&layout, full, 0..full.len(), self.wrap, max_width)
@@ -394,7 +408,7 @@ impl TextRun<'_> {
         let text = full.get(kept.clone()).unwrap_or_default();
         let ends: Vec<usize> = text.char_indices().map(|(at, _)| kept.start + at).chain([kept.end]).collect();
         let total = ends.len() - 1;
-        let cut = |count: usize| cut_pieces(&ends, kept.clone(), wrap, count);
+        let cut = |count: usize| cut_pieces(full, &ends, kept.clone(), wrap, count);
         let (mut lo, mut hi) = (0, total.saturating_sub(1));
         while lo < hi {
             let mid = (lo + hi).div_ceil(2);
@@ -451,16 +465,25 @@ enum Piece {
     Ellipsis,
 }
 
-/// The pieces of `kept` (bytes of the full text; `ends` holds where each of its characters starts, then its end) cut
-/// at `wrap`'s place to keep `count` characters and one ellipsis.
-fn cut_pieces(ends: &[usize], kept: Range<usize>, wrap: Wrap, count: usize) -> Vec<Piece> {
+/// The last name of the path `full` (bytes, trailing separators excluded, since a trailing separator starts no name)
+/// and the separator before it, if any: where `Wrap::ElidePath` cuts last.
+fn path_name(full: &str) -> (Range<usize>, Option<usize>) {
+    let end = full.trim_end_matches(['/', '\\']).len();
+    let separator = full.get(..end).and_then(|text| text.rfind(['/', '\\']));
+    (separator.map_or(0, |at| at + 1)..end, separator)
+}
+
+/// The pieces of `kept` (bytes of `full`; `ends` holds where each of its characters starts, then its end) cut at
+/// `wrap`'s place to keep `count` characters and one ellipsis, less the white space before the ellipsis.
+fn cut_pieces(full: &str, ends: &[usize], kept: Range<usize>, wrap: Wrap, count: usize) -> Vec<Piece> {
     let total = ends.len() - 1;
     let (head, tail) = match wrap {
         Wrap::ElideStart => (0, count),
         Wrap::ElideMiddle => (count - count / 4, count / 4),
         _ => (count, 0),
     };
-    let mut pieces = vec![Piece::Keep(kept.start..ends[head]), Piece::Ellipsis, Piece::Keep(ends[total - tail]..kept.end)];
+    let head_end = kept.start + full.get(kept.start..ends[head]).unwrap_or_default().trim_end().len();
+    let mut pieces = vec![Piece::Keep(kept.start..head_end), Piece::Ellipsis, Piece::Keep(ends[total - tail]..kept.end)];
     pieces.retain(|piece| !matches!(piece, Piece::Keep(range) if range.is_empty()));
     pieces
 }

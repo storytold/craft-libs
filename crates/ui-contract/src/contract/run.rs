@@ -1317,11 +1317,12 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
     let in_flow = matches!(at, ShowAt::Flow) && t.fills().is_none();
     let fill_body = shape == ShapeKind::Body && in_flow && t.in_flow() && t.fills_width() && crate::layout::flow_room(ui).x.is_finite();
     let shrink = env.shrink.filter(|_| in_flow && (shape == ShapeKind::Leaf || (shape == ShapeKind::Body && t.in_flow() && !fill_body)));
-    let cap = match shrink {
+    let given = match shrink {
         Some(crate::layout::Shrink::Apply(row)) if shape == ShapeKind::Leaf => crate::layout::shrink_cap(&ctx, row, id),
         _ => None,
     };
-    let dropped = cap == Some(0.0);
+    let dropped = given.is_some_and(|given| given.dropped);
+    let cap = given.map(|given| given.width);
     let room = match cap {
         Some(cap) => Some(room.map_or(cap, |room| room.min(cap))),
         None => room,
