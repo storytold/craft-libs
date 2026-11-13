@@ -980,6 +980,7 @@ impl OpenTypeFeatureValues {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CjkCharacterValues {
     pub kenten_kind: Option<String>,
+    pub kenten_custom_character: Option<String>,
     pub kenten_font: Option<String>,
     pub kenten_font_style: Option<String>,
     pub kenten_size: Option<f64>,
@@ -1007,6 +1008,7 @@ impl CjkCharacterValues {
         let values = Values::of(el);
         Self {
             kenten_kind: values.get("KentenKind").map(str::to_owned),
+            kenten_custom_character: values.prop("KentenCustomCharacter"),
             kenten_font: values.prop("KentenFont"),
             kenten_font_style: values.prop("KentenFontStyle"),
             kenten_size: values.num("KentenFontSize"),
