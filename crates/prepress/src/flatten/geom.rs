@@ -30,9 +30,7 @@ const MAX_SWEEP_WORK: u64 = 100_000_000;
 /// The most output the sweep's topology may hold before the shapes count as too degenerate to
 /// sweep, in units: each output segment takes one unit plus one for each entry of its two winding
 /// numbers (at least one each), so 2,000,000 segments with single-entry windings fill it.
-/// Overlapping horizontal edges are split at every position of the others, so n of them can make
-/// about n^2 output segments, and each segment's windings can hold an entry for every shape that
-/// covers it.
+/// Each segment's windings can hold an entry for every shape that covers it.
 const MAX_TOPOLOGY_UNITS: usize = 6_000_000;
 
 /// How a path's winding number decides what is inside it.
@@ -1139,11 +1137,11 @@ mod tests {
         assert_eq!(regions(&shapes, &[]).unwrap().len(), 1);
     }
 
-    // 1,100 overlapping shapes made only of horizontal edges at one height take little sweep work,
-    // but each edge is split at every position of the others, which makes more than 2,000,000
-    // output segments, past MAX_TOPOLOGY_UNITS.
+    // 1,100 overlapping shapes made only of horizontal edges at one height. The sweep makes one
+    // output segment for each run of coincident horizontal pieces and none for a run whose winding
+    // numbers cancel, as every run does here, so the topology stays under MAX_TOPOLOGY_UNITS.
     #[test]
-    fn sweep_past_its_output_limit_is_degenerate() {
+    fn coincident_horizontal_edges_stay_under_the_output_limit() {
         let n = 1_100;
         let shapes: Vec<Shape> = (0..n)
             .map(|i| {
@@ -1155,22 +1153,23 @@ mod tests {
                 fill(path)
             })
             .collect();
-        assert_eq!(regions(&shapes, &[]).err(), Some(GeomError::Degenerate));
+        assert_eq!(regions(&shapes, &[]), Ok(vec![]));
     }
 
-    // 200 staggered rectangles of one height make about 120,000 output segments along their top
-    // and bottom edges, fewer than 2,000,000, but the winding numbers of those segments hold an
-    // entry for each rectangle that covers them, which passes MAX_TOPOLOGY_UNITS.
+    // 200 squares, each one unit down and right of the one before, cross each other's edges and
+    // make fewer than 2,000,000 output segments, but the winding numbers of those segments hold an
+    // entry for each square that covers them, which passes MAX_TOPOLOGY_UNITS. The sweep has no
+    // work limit here, so the output limit stops it.
     #[test]
     fn winding_entries_count_toward_the_output_limit() {
         let k = 200;
         let shapes: Vec<Shape> = (0..k)
             .map(|i| {
                 let i = f64::from(i);
-                fill(rect(i, 0.0, 2.0 * f64::from(k) + i, 10.0))
+                fill(rect(i, i, f64::from(k) + i, f64::from(k) + i))
             })
             .collect();
-        assert_eq!(regions(&shapes, &[]).err(), Some(GeomError::Degenerate));
+        assert_eq!(Arrangement::new(&shapes, &[], DEFAULT_SLIVER, u64::MAX).err(), Some(GeomError::Degenerate));
     }
 
     #[test]

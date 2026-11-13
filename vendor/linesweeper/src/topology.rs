@@ -747,8 +747,7 @@ impl<W: WindingNumber> Topology<W> {
     ///
     /// Each output segment counts as one unit plus the
     /// [`WindingNumber::storage_units`] of its two winding numbers, so this limit bounds the
-    /// memory the topology uses. Overlapping horizontal segments are split at every position of
-    /// the others, so n of them can make about n^2 output segments.
+    /// memory the topology uses.
     pub fn from_paths_with_limits<'a, Iter>(
         paths: Iter,
         eps: f64,
@@ -4082,9 +4081,10 @@ mod tests {
     }
 
     // Craft patch (work limit). Closed paths made only of horizontal segments
-    // at one height take little sweep work, but every overlapping horizontal
-    // segment is split at every x position of the others, so the topology
-    // visits about n^2 of them. Those visits count toward the limit.
+    // at one height take little sweep work, but each step of a sweep line
+    // range visits every active horizontal segment, so the topology visits
+    // about n^2 of them. Those visits count toward the limit. Every run of
+    // these coincident segments cancels, so they make no output segments.
     #[test]
     fn work_limit_counts_the_horizontal_splits() {
         let n = 300;
@@ -4106,22 +4106,22 @@ mod tests {
         let expected = Topology::<i32>::from_paths(tagged(), 1e-6).unwrap();
         let actual = Topology::<i32>::from_paths_with_work_limit(tagged(), 1e-6, u64::MAX).unwrap();
         assert_eq!(actual.winding.inner.len(), expected.winding.inner.len());
-        assert!(actual.winding.inner.len() > 100_000, "{} output segments", actual.winding.inner.len());
     }
 
-    // Craft patch (work limit). The same paths make more than 100,000 output
+    // Craft patch (work limit). 1,200 separate squares make 4,800 output
     // segments, each holding points, neighbors and winding numbers. The output
     // limit stops the topology before it allocates them all. An `i32` winding
     // number takes one storage unit, so each output segment takes three.
     #[test]
     fn output_limit() {
-        let n = 300;
-        let paths: Vec<BezPath> = (0..n)
+        let paths: Vec<BezPath> = (0..1200)
             .map(|i| {
-                let i = f64::from(i);
+                let x = 3.0 * f64::from(i);
                 let mut path = BezPath::new();
-                path.move_to((i, 0.0));
-                path.line_to((2.0 * f64::from(n) + i, 0.0));
+                path.move_to((x, 0.0));
+                path.line_to((x + 1.0, 0.0));
+                path.line_to((x + 1.0, 1.0));
+                path.line_to((x, 1.0));
                 path.close_path();
                 path
             })
