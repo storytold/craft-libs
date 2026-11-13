@@ -862,7 +862,7 @@ impl Cfa {
     }
     /// Pattern name like `"RGGB"` for 2×2 patterns.
     pub fn name(&self) -> String {
-        self.pattern.iter().map(|&c| ['R', 'G', 'B', '?'][c.min(3) as usize]).collect()
+        self.shifted(0, 0).pattern.iter().map(|&c| ['R', 'G', 'B', '?'][c.min(3) as usize]).collect()
     }
     fn valid(&self) -> bool {
         self.width > 0 && self.height > 0 && self.width <= 16 && self.height <= 16 && self.pattern.len() == self.width * self.height
