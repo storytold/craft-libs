@@ -1,6 +1,6 @@
 //! The effect list on the dialog's left.
 
-use craft_behavior::{ColumnKey, DisplayOrder, IconId, ItemSource, Selection, SelectionChange};
+use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, Selection, SelectionChange};
 use craft_ui::contract::{
     ActivateOn, Bind, BodyCx, CollectionEvent, ColumnSpec, CommandSet, Commands as _, Props as _, Remember as _, SelectMode, ShowCollection as _,
     Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn,
@@ -67,6 +67,8 @@ impl EffectRow {
 struct Lead(Option<EffectRow>);
 
 const CHECK: ColumnKey = ColumnKey::new("check");
+/// The column of the effect names, which the list takes its width from.
+const NAME: ColumnKey = ColumnKey::new("name");
 const ADD: TrailingPart = TrailingPart::new(0);
 const REMOVE: TrailingPart = TrailingPart::new(1);
 
@@ -143,7 +145,7 @@ pub(super) fn effect_list(
     let shown = rows.iter().find(|row| row.page() == Some(draft.page)).cloned();
     let selection = shown.clone().map_or_else(Selection::default, Selection::single);
     let source = Rows { rows: &rows, draft };
-    let columns = vec![ColumnSpec::toggle(CHECK, Label::Empty, ToggleColumn::default())];
+    let columns = vec![ColumnSpec::toggle(CHECK, Label::Empty, ToggleColumn::default()), ColumnSpec::new(NAME, Label::Empty, ColumnWidth::Content)];
 
     let out = List::<EffectRow>::new(words.effects.clone())
         .select(SelectMode::Single)
