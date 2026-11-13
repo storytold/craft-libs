@@ -111,20 +111,33 @@ impl Snapshot {
     /// [`resolve_selection`](craft_theme::resolve_selection)'s `lookup`. Other library
     /// themes give `None` until the app names them with [`Op::AppTheme`].
     pub fn theme(&self, id: &ThemeId) -> Option<ThemeDef> {
-        if let Some(theme) = builtin(id) {
-            return Some(theme.clone());
-        }
-        self.active.iter().chain(&self.app_theme).find(|r| r.theme.id == *id).map(|r| r.theme.clone())
+        self.loaded(id).cloned()
+    }
+
+    /// Whether [`theme`](Self::theme) has `id`, without copying it.
+    pub fn has_theme(&self, id: &ThemeId) -> bool {
+        self.loaded(id).is_some()
     }
 
     /// Any theme the suite knows, for a preview card: a built-in, an active or app theme, or a
     /// library theme in [`index`](Self::index), with no file read or [`Op::Export`].
     pub fn preview(&self, id: &ThemeId) -> Option<ThemeDef> {
-        self.theme(id).or_else(|| {
-            // The index is sorted by file name, and a library file's name is its id.
-            let at = self.index.binary_search_by(|e| e.id.as_str().cmp(id.as_str())).ok()?;
-            self.index.get(at).map(|e| e.theme.clone())
-        })
+        self.loaded(id).or_else(|| self.indexed(id)).cloned()
+    }
+
+    /// Whether `id` is a library theme in [`index`](Self::index).
+    pub fn in_library(&self, id: &ThemeId) -> bool {
+        self.indexed(id).is_some()
+    }
+
+    fn loaded(&self, id: &ThemeId) -> Option<&ThemeDef> {
+        builtin(id).or_else(|| self.active.iter().chain(&self.app_theme).find(|r| r.theme.id == *id).map(|r| &r.theme))
+    }
+
+    fn indexed(&self, id: &ThemeId) -> Option<&ThemeDef> {
+        // The index is sorted by file name, and a library file's name is its id.
+        let at = self.index.binary_search_by(|e| e.id.as_str().cmp(id.as_str())).ok()?;
+        self.index.get(at).map(|e| &e.theme)
     }
 }
 

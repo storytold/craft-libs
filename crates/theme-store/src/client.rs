@@ -160,16 +160,26 @@ impl SuiteClient {
         self.snapshot.theme(id)
     }
 
+    /// Whether [`theme`](Self::theme) has `id`, without copying it.
+    pub fn has_theme(&self, id: &ThemeId) -> bool {
+        self.snapshot.has_theme(id)
+    }
+
     /// Any built-in or library theme, for a preview card ([`Snapshot::preview`]).
     pub fn preview(&self, id: &ThemeId) -> Option<ThemeDef> {
         self.snapshot.preview(id)
+    }
+
+    /// Whether `id` is a library theme in the suite's library, loaded or not.
+    pub fn in_library(&self, id: &ThemeId) -> bool {
+        self.snapshot.in_library(id)
     }
 
     /// True while `id` is a library theme the snapshot hasn't loaded yet: one just picked for the
     /// suite or named with [`set_app_theme`](Self::set_app_theme), with no problem reported for
     /// it. An app showing its own theme keeps its current look while this is true.
     pub fn is_loading(&self, id: &ThemeId) -> bool {
-        !id.is_builtin() && self.snapshot.theme(id).is_none() && self.is_requested(id) && !self.has_problem(id)
+        !id.is_builtin() && !self.snapshot.has_theme(id) && self.is_requested(id) && !self.has_problem(id)
     }
 
     fn is_requested(&self, id: &ThemeId) -> bool {

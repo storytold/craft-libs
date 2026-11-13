@@ -99,6 +99,8 @@ fn a_library_theme_on_its_way_never_shows_the_app_default() {
     client.change(theme("craft.graphite"));
     settle(&mut client);
     let sample = id(SAMPLE_THEME_ID);
+    // In the library, but nothing picked it, so the suite hasn't loaded it.
+    assert!(client.in_library(&sample) && !client.has_theme(&sample) && !client.is_loading(&sample));
 
     // Picked for the dark slot: the previous theme stays there until the record is there, and
     // the light slot is untouched.
@@ -108,7 +110,7 @@ fn a_library_theme_on_its_way_never_shows_the_app_default() {
     assert_eq!((client.shown().theme_light, client.shown().theme_dark), (Some(id("craft.graphite")), Some(id("craft.graphite"))));
     settle(&mut client);
     assert_eq!((client.shown().theme_light, client.shown().theme_dark), (Some(id("craft.graphite")), Some(sample.clone())));
-    assert!(client.theme(&sample).is_some());
+    assert!(client.theme(&sample).is_some() && client.has_theme(&sample));
     assert!(!client.is_loading(&sample));
 
     // Picked for the app alone: loading until the snapshot has it.
