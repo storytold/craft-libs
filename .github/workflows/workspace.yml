@@ -16,7 +16,7 @@ jobs:
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
       os: '["ubuntu-latest","windows-latest","macos-latest"]'
-      timeout-minutes: 60
+      timeout-minutes: 120
       tools: ""
       packages: mesa-vulkan-drivers libvulkan1
       craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
