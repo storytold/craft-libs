@@ -132,6 +132,38 @@ impl StrokeValues {
     }
 }
 
+/// Raw fill properties before a caller resolves swatch names to its own colour model.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FillValues {
+    pub color: Option<String>,
+    pub tint: Option<f64>,
+    pub overprint: Option<bool>,
+}
+
+impl FillValues {
+    /// Reads fill attributes in precedence order (item first, then nearer styles).
+    pub fn from_elements(elements: &[&El]) -> FillValues {
+        let mut result = FillValues::default();
+        for el in elements {
+            let values = Values::of(el);
+            if result.color.is_none() {
+                result.color = values.get("FillColor").map(str::to_owned);
+            }
+            if result.tint.is_none() {
+                result.tint = values.get("FillTint").and_then(|value| value.parse::<f64>().ok());
+            }
+            if result.overprint.is_none() {
+                result.overprint = match values.get("OverprintFill") {
+                    Some("true") => Some(true),
+                    Some("false") => Some(false),
+                    _ => None,
+                };
+            }
+        }
+        result
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AlternatingFillValues {
     pub first_count: Option<f64>,
