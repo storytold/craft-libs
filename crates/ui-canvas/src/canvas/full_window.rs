@@ -17,6 +17,9 @@ use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::{Metrics, Sense};
 use egui::Ui;
 
+pub use hosted::{FullWindowWorkspace, HostedWorkspace, WorkspacePass};
+
+mod hosted;
 #[cfg(feature = "testing")]
 mod stories;
 #[cfg(feature = "testing")]
@@ -46,6 +49,8 @@ type SettleFn<'a> = Box<dyn FnMut(&mut BodyCx<'_>, &mut [FooterButton]) + 'a>;
 ///   Enter activates the first enabled `Accept` button while the dialog's Enter rule is `EnterRule::Submit`, and
 ///   `close_guard` and `settle_buttons` see every pick.
 /// - Open state: bound with [`opened`](FullWindowDialog::opened), else a session slot that starts open.
+/// - Hosting: a workspace the app's `DialogHost` owns implements [`FullWindowWorkspace`] and opens as a
+///   [`HostedWorkspace`], which binds the open state to its own field.
 /// - View commands: the dialog is an instance of the [`ViewCommands`] scope, so the zoom chords act on the view the
 ///   dialog's zoom bar is bound to, not on a canvas behind it.
 /// - Focus: the dialog trap, with nothing focused at first unless [`initial_focus`](FullWindowDialog::initial_focus)

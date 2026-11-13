@@ -30,7 +30,7 @@ pub mod canvas_controls;
 
 /// Dialog shells and prompts, with the full-window dialog family that shows a canvas.
 pub mod dialog {
-    pub use crate::canvas::full_window::{FullWindowDialog, FullWindowDialogStyle};
+    pub use crate::canvas::full_window::{FullWindowDialog, FullWindowDialogStyle, FullWindowWorkspace, HostedWorkspace, WorkspacePass};
     pub use crate::canvas::full_window_parts::{
         FullWindowCanvas, FullWindowCanvasOutput, FullWindowSide, FullWindowSideOutput, FullWindowSideStyle, FullWindowStatus,
         FullWindowStatusOutput, FullWindowTitle, FullWindowTitleOutput, FullWindowView, FullWindowZoomBar, FullWindowZoomBarOutput, RasterOverlay,
