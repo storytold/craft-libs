@@ -199,6 +199,46 @@ pub struct NumberingListValues {
     pub continue_across_stories: bool,
 }
 
+/// Parsed cell-style assignments that are independent of DesignCraft's style resolution.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CellStyleValues {
+    pub self_id: Option<String>,
+    pub name: Option<String>,
+    pub based_on: Option<String>,
+    pub fill: Option<String>,
+    pub fill_tint: Option<f64>,
+    pub insets: [Option<f64>; 4],
+    pub vertical_justification: Option<String>,
+    pub first_baseline: Option<String>,
+    pub first_baseline_min: Option<f64>,
+    pub paragraph_style: Option<String>,
+}
+
+impl CellStyleValues {
+    /// Reads the cell-style value assignments and supports the older inset property names.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        let inset = |modern, legacy| values.num(modern).or_else(|| values.num(legacy)).map(|v| v.max(0.0));
+        Self {
+            self_id: values.self_id().map(str::to_owned),
+            name: values.name().map(str::to_owned),
+            based_on: values.prop("BasedOn"),
+            fill: values.prop("FillColor"),
+            fill_tint: values.num("FillTint"),
+            insets: [
+                inset("TextTopInset", "TopInset"),
+                inset("TextLeftInset", "LeftInset"),
+                inset("TextBottomInset", "BottomInset"),
+                inset("TextRightInset", "RightInset"),
+            ],
+            vertical_justification: values.get("VerticalJustification").map(str::to_owned),
+            first_baseline: values.get("FirstBaselineOffset").map(str::to_owned),
+            first_baseline_min: values.num("MinimumFirstBaselineOffset").filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 8640.0)),
+            paragraph_style: values.get("AppliedParagraphStyle").map(str::to_owned),
+        }
+    }
+}
+
 impl NumberingListValues {
     /// Reads a `NumberingList` element.
     pub fn from_el(el: &El) -> Self {
