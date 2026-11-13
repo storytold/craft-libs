@@ -225,10 +225,9 @@ impl Homogeneous {
 // spans through cubic degree, tolerance-bounded rational/high-degree spans, invalid-weight
 // fallback, and fit-point fallback when control data is malformed.
 fn spline_path(spline: &crate::model::Spline) -> Result<Option<BezPath>, Error> {
-    let points: Vec<Point> = spline.control.iter().map(|p| Point::new(p[0], p[1])).collect();
-    let weights = (spline.flags & 4 != 0 && spline.weights.len() == points.len()).then_some(spline.weights.as_slice());
+    let weights = (spline.flags & 4 != 0 && spline.weights.len() == spline.control.len()).then_some(spline.weights.as_slice());
     let mut limit_hit = false;
-    let converted = usize::try_from(spline.degree).ok().and_then(|degree| nurbs(degree, &spline.knots, &points, weights, &mut limit_hit));
+    let converted = usize::try_from(spline.degree).ok().and_then(|degree| nurbs(degree, &spline.knots, &spline.control, weights, &mut limit_hit));
     let path = converted
         .map(|mut path| {
             if spline.flags & 1 != 0 {
@@ -254,13 +253,13 @@ fn spline_path(spline: &crate::model::Spline) -> Result<Option<BezPath>, Error> 
     Ok(path)
 }
 
-fn nurbs(degree: usize, knots: &[f64], control: &[Point], weights: Option<&[f64]>, limit_hit: &mut bool) -> Option<BezPath> {
+fn nurbs(degree: usize, knots: &[f64], control: &[[f64; 3]], weights: Option<&[f64]>, limit_hit: &mut bool) -> Option<BezPath> {
     let n = control.len();
     if !(1..=MAX_SPLINE_DEGREE).contains(&degree)
         || n <= degree
         || knots.len() != n + degree + 1
         || knots.windows(2).any(|w| w[1] < w[0])
-        || control.iter().any(|p| !p.x.is_finite() || !p.y.is_finite())
+        || control.iter().any(|p| !p[0].is_finite() || !p[1].is_finite())
         || knots.iter().any(|k| !k.is_finite())
     {
         return None;
@@ -271,10 +270,9 @@ fn nurbs(degree: usize, knots: &[f64], control: &[Point], weights: Option<&[f64]
         return None;
     }
     let weight = |i: usize| (raw(i) / max_w).max(MIN_RELATIVE_WEIGHT);
-    let homogeneous: Vec<_> = control.iter().enumerate().map(|(i, p)| Homogeneous { x: p.x * weight(i), y: p.y * weight(i), w: weight(i) }).collect();
     let rational = (0..n).any(|i| (weight(i) - weight(0)).abs() > 1e-12);
     let (lo, hi) = control.iter().fold((Point::new(f64::MAX, f64::MAX), Point::new(f64::MIN, f64::MIN)), |(lo, hi), p| {
-        (Point::new(lo.x.min(p.x), lo.y.min(p.y)), Point::new(hi.x.max(p.x), hi.y.max(p.y)))
+        (Point::new(lo.x.min(p[0]), lo.y.min(p[1])), Point::new(hi.x.max(p[0]), hi.y.max(p[1])))
     });
     let tolerance = ((hi - lo).hypot() * SPLINE_TOLERANCE).max(1e-12);
     let mut path = BezPath::new();
@@ -286,7 +284,7 @@ fn nurbs(degree: usize, knots: &[f64], control: &[Point], weights: Option<&[f64]
         let bezier: Vec<Homogeneous> = (0..=degree)
             .map(|j| {
                 let args: Vec<_> = (0..degree).map(|k| if k < degree - j { t0 } else { t1 }).collect();
-                blossom(degree, knots, &homogeneous, span, &args)
+                blossom(degree, knots, control, span, &args, &weight)
             })
             .collect::<Option<_>>()?;
         let start = bezier.first()?.point()?;
@@ -294,7 +292,9 @@ fn nurbs(degree: usize, knots: &[f64], control: &[Point], weights: Option<&[f64]
         if needs_new_subpath {
             path.move_to(start);
         }
-        let polynomial: Option<Vec<Point>> = if rational { None } else { bezier.iter().map(|p| p.point()).collect() };
+        // A rational degree-one span changes its parameterization with its weights, but its locus
+        // is still the straight segment between its endpoints. Preserve that exact geometry.
+        let polynomial: Option<Vec<Point>> = if rational && degree > 1 { None } else { bezier.iter().map(|p| p.point()).collect() };
         match polynomial.as_deref() {
             Some([_, p]) => path.line_to(*p),
             Some([_, q, p]) => path.quad_to(*q, *p),
@@ -318,8 +318,19 @@ fn path_endpoint(path: &BezPath) -> Option<Point> {
     }
 }
 
-fn blossom(degree: usize, knots: &[f64], control: &[Homogeneous], span: usize, args: &[f64]) -> Option<Homogeneous> {
-    let mut points = control.get(span - degree..=span)?.to_vec();
+fn blossom(degree: usize, knots: &[f64], control: &[[f64; 3]], span: usize, args: &[f64], weight: &impl Fn(usize) -> f64) -> Option<Homogeneous> {
+    // Only the active degree+1 control points are needed for one span. Convert this small window
+    // here instead of making a second vector proportional to an untrusted entity's full controls.
+    let first = span.checked_sub(degree)?;
+    let mut points: Vec<_> = control
+        .get(first..=span)?
+        .iter()
+        .enumerate()
+        .map(|(offset, p)| {
+            let w = weight(first + offset);
+            Homogeneous { x: p[0] * w, y: p[1] * w, w }
+        })
+        .collect();
     for r in 1..=degree {
         let u = *args.get(r - 1)?;
         for j in (r..=degree).rev() {
@@ -650,6 +661,10 @@ mod spline_tests {
         }
     }
 
+    fn xyz(points: &[Point]) -> Vec<[f64; 3]> {
+        points.iter().map(|point| [point.x, point.y, 0.0]).collect()
+    }
+
     #[test]
     fn spline_path_follows_clamped_control_curve_and_bounds_work() {
         let path = spline_path(&cubic()).unwrap().expect("valid cubic spline");
@@ -662,6 +677,22 @@ mod spline_tests {
 
     #[test]
     fn rational_closed_periodic_and_fit_point_splines_keep_compatibility() {
+        let mut rational_line = Spline {
+            degree: 1,
+            flags: 4,
+            knots: vec![0.0, 0.0, 1.0, 1.0],
+            control: vec![[2.0, 3.0, 0.0], [5.0, 7.0, 0.0]],
+            weights: vec![1.0, 100.0],
+            fit: Vec::new(),
+            start_tangent: None,
+            end_tangent: None,
+            fit_tolerance: 0.0,
+        };
+        rational_line.flags |= 8;
+        let line = spline_path(&rational_line).unwrap().expect("rational degree-one spline");
+        assert!(matches!(line.elements(), [kurbo::PathEl::MoveTo(a), kurbo::PathEl::LineTo(b)]
+            if *a == Point::new(2.0, 3.0) && *b == Point::new(5.0, 7.0)));
+
         let mut rational = cubic();
         rational.flags |= 4;
         rational.weights = vec![1.0, 0.5, 0.5, 1.0];
@@ -716,7 +747,7 @@ mod spline_tests {
         let path = nurbs(
             1,
             &[0.0, 0.0, 0.5, 0.5, 1.0, 1.0],
-            &[Point::new(0.0, 0.0), Point::new(1.0, 0.0), Point::new(5.0, 5.0), Point::new(6.0, 5.0)],
+            &xyz(&[Point::new(0.0, 0.0), Point::new(1.0, 0.0), Point::new(5.0, 5.0), Point::new(6.0, 5.0)]),
             None,
             &mut limit_hit,
         )
@@ -731,7 +762,7 @@ mod spline_tests {
         let start = 1.0e12;
         let delta = 1.0e-3;
         let mut limit_hit = false;
-        let path = nurbs(1, &[start, start, start + delta, start + delta], &[Point::new(2.0, 3.0), Point::new(5.0, 7.0)], None, &mut limit_hit)
+        let path = nurbs(1, &[start, start, start + delta, start + delta], &xyz(&[Point::new(2.0, 3.0), Point::new(5.0, 7.0)]), None, &mut limit_hit)
             .expect("positive-width span");
         assert!(!limit_hit);
         assert!(matches!(path.elements(), [kurbo::PathEl::MoveTo(a), kurbo::PathEl::LineTo(b)]
@@ -780,8 +811,8 @@ mod spline_tests {
     #[test]
     fn rational_quadratic_circle_matches_the_prior_importer_tolerance() {
         let weight = std::f64::consts::FRAC_1_SQRT_2;
-        let control = [(1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (-1.0, 1.0), (-1.0, 0.0), (-1.0, -1.0), (0.0, -1.0), (1.0, -1.0), (1.0, 0.0)]
-            .map(|(x, y)| Point::new(200.0 + x * 100.0, 200.0 + y * 100.0));
+        let control = xyz(&[(1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (-1.0, 1.0), (-1.0, 0.0), (-1.0, -1.0), (0.0, -1.0), (1.0, -1.0), (1.0, 0.0)]
+            .map(|(x, y)| Point::new(200.0 + x * 100.0, 200.0 + y * 100.0)));
         let knots = [0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 4.0];
         let weights = [1.0, weight, 1.0, weight, 1.0, weight, 1.0, weight, 1.0];
         let mut limit_hit = false;
