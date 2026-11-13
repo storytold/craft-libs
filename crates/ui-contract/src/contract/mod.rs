@@ -83,8 +83,6 @@ pub use items::{ColumnCommands, SweepApply, SweepStep, item_part_open, request_r
 pub use label::colon_of;
 pub use label::{CellWidth, FieldLabelRole, FieldLayout, GlyphLabel, InsideLabel, LabelKind, LabelScheme, Scrub, SideLabel};
 pub use lazy::Lazy;
-#[cfg(feature = "testing")]
-pub(crate) use level::kit_module;
 #[doc(hidden)]
 #[cfg(feature = "testing")]
 pub use level::{Catalog, CatalogEntry, Level, StoryLayout, Surface, catalog, stale_table_rows, story_title};

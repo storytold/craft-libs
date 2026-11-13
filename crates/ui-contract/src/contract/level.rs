@@ -256,7 +256,7 @@ impl Catalog {
 const KIT_MODULES: [&str; 1] = ["testing::layout"];
 
 /// Whether `module` is one of the [`KIT_MODULES`].
-pub(crate) fn kit_module(module: &str) -> bool {
+fn kit_module(module: &str) -> bool {
     library_path(module).is_some_and(|inside| KIT_MODULES.contains(&inside))
 }
 
