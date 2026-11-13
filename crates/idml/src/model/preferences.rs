@@ -46,6 +46,77 @@ impl DocumentPreferences {
             column_guides_locked: values.boolean("ColumnGuideLocked"),
         }
     }
+
+    /// Full canonical attributes for an exported IDML `DocumentPreference`.
+    pub fn to_export_attrs(&self) -> Vec<(String, String)> {
+        let mut attrs = Vec::new();
+        for (key, value) in [("PageHeight", self.page_height), ("PageWidth", self.page_width)] {
+            if let Some(value) = value {
+                attrs.push((key.into(), crate::value::num(value)));
+            }
+        }
+        attrs.push(("PagesPerDocument".into(), "1".into()));
+        for (key, value) in [("FacingPages", self.facing_pages)] {
+            if let Some(value) = value {
+                attrs.push((key.into(), if value { "true" } else { "false" }.into()));
+            }
+        }
+        for (key, value) in [
+            ("DocumentBleedTopOffset", self.bleed[0]),
+            ("DocumentBleedBottomOffset", self.bleed[1]),
+            ("DocumentBleedInsideOrLeftOffset", self.bleed[2]),
+            ("DocumentBleedOutsideOrRightOffset", self.bleed[3]),
+        ] {
+            if let Some(value) = value {
+                attrs.push((key.into(), crate::value::num(value)));
+            }
+        }
+        if self.bleed.iter().all(Option::is_some) {
+            attrs.push((
+                "DocumentBleedUniformSize".into(),
+                bool_string(self.bleed.iter().flatten().all(|value| *value == self.bleed[0].unwrap_or_default())),
+            ));
+        }
+        for (key, value) in [
+            ("SlugTopOffset", self.slug[0]),
+            ("SlugBottomOffset", self.slug[1]),
+            ("SlugInsideOrLeftOffset", self.slug[2]),
+            ("SlugRightOrOutsideOffset", self.slug[3]),
+        ] {
+            if let Some(value) = value {
+                attrs.push((key.into(), crate::value::num(value)));
+            }
+        }
+        if self.slug.iter().all(Option::is_some) {
+            attrs.push((
+                "DocumentSlugUniformSize".into(),
+                bool_string(self.slug.iter().flatten().all(|value| *value == self.slug[0].unwrap_or_default())),
+            ));
+        }
+        attrs.push(("PreserveLayoutWhenShuffling".into(), "true".into()));
+        attrs.push(("AllowPageShuffle".into(), "true".into()));
+        if let Some(value) = self.overprint_black {
+            attrs.push(("OverprintBlack".into(), bool_string(value)));
+        }
+        if let Some(value) = &self.page_binding {
+            attrs.push(("PageBinding".into(), value.clone()));
+        }
+        attrs.push(("ColumnDirection".into(), "Horizontal".into()));
+        for (key, value) in [("Intent", &self.intent)] {
+            if let Some(value) = value {
+                attrs.push((key.into(), value.clone()));
+            }
+        }
+        if let Some(value) = self.primary_text_frame {
+            attrs.push(("CreatePrimaryTextFrame".into(), bool_string(value)));
+            attrs.push(("MasterTextFrame".into(), bool_string(value)));
+        }
+        if let Some(value) = self.column_guides_locked {
+            attrs.push(("ColumnGuideLocked".into(), bool_string(value)));
+        }
+        attrs.push(("SnippetImportUsesOriginalLocation".into(), "false".into()));
+        attrs
+    }
 }
 
 /// Parsed document and baseline-grid preference values.
@@ -58,6 +129,7 @@ pub struct GridPreferences {
     pub horizontal_division: Option<f64>,
     pub vertical_division: Option<f64>,
     pub horizontal_subdivision: Option<f64>,
+    pub vertical_subdivision: Option<f64>,
     pub grids_in_back: Option<bool>,
 }
 
@@ -73,9 +145,45 @@ impl GridPreferences {
             horizontal_division: values.num("HorizontalGridlineDivision"),
             vertical_division: values.num("VerticalGridlineDivision"),
             horizontal_subdivision: values.num("HorizontalGridSubdivision"),
+            vertical_subdivision: values.num("VerticalGridSubdivision"),
             grids_in_back: values.boolean("GridsInBack"),
         }
     }
+
+    /// IDML attributes represented by this grid preference record.
+    pub fn to_attrs(&self) -> Vec<(String, String)> {
+        let mut attrs = Vec::new();
+        for (key, value) in [
+            ("HorizontalGridlineDivision", self.horizontal_division),
+            ("VerticalGridlineDivision", self.vertical_division),
+            ("HorizontalGridSubdivision", self.horizontal_subdivision),
+            ("VerticalGridSubdivision", self.vertical_subdivision),
+        ] {
+            if let Some(value) = value {
+                attrs.push((key.into(), crate::value::num(value)));
+            }
+        }
+        if let Some(value) = self.grids_in_back {
+            attrs.push(("GridsInBack".into(), if value { "true" } else { "false" }.into()));
+        }
+        for (key, value) in [
+            ("BaselineStart", self.baseline_start),
+            ("BaselineDivision", self.baseline_division),
+            ("BaselineViewThreshold", self.baseline_view_threshold),
+        ] {
+            if let Some(value) = value {
+                attrs.push((key.into(), crate::value::num(value)));
+            }
+        }
+        if let Some(value) = self.baseline_relative_option.as_deref() {
+            attrs.push(("BaselineGridRelativeOption".into(), value.into()));
+        }
+        attrs
+    }
+}
+
+fn bool_string(value: bool) -> String {
+    if value { "true" } else { "false" }.into()
 }
 
 /// Parsed `TextFramePreference` values in nearest-to-farthest precedence order.
