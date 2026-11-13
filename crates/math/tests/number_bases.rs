@@ -121,3 +121,16 @@ fn a_comma_before_a_digit_after_a_script_stays_outside_it() {
     // A comma before anything else ends the script on its own: no space is added.
     assert_eq!(craft_math::math::to_linear(&[sup("x", "2"), r(", y")]), "x^2, y");
 }
+
+#[test]
+fn a_number_base_after_a_number_keeps_its_brackets() {
+    // Bare, the base would continue the number before it: `1` then `23^4` would read `123^4`.
+    for (before, base, want) in
+        [("1", "23", "1〖23〗^4"), ("1", "2", "1〖2〗^4"), ("x.", "5", "x.〖5〗^4"), ("1,", "5", "1,〖5〗^4"), ("1", ".5", "1〖.5〗^4")]
+    {
+        prints_back(vec![r(before), sup(base, "4")], want);
+    }
+    // After a letter or an operator it can't, so it stays bare.
+    prints_back(vec![r("a"), sup("2", "4")], "a2^4");
+    prints_back(vec![r("1+"), sup("2", "4")], "1+2^4");
+}

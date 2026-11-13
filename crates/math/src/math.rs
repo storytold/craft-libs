@@ -527,10 +527,11 @@ fn first_lin_char(n: &MNode) -> Option<char> {
 /// `.` or `,` continues it only before a digit (`2.5`, `1,000`), and a leading `.` before a digit
 /// starts one (`.5`). `2.` isn't one: the parser leaves the point out.
 fn is_number(t: &str) -> bool {
-    let c: Vec<char> = t.chars().collect();
-    let digit = |k: usize| c.get(k).is_some_and(|c| c.is_ascii_digit());
-    (digit(0) || (c.first() == Some(&'.') && digit(1)))
-        && c.iter().enumerate().all(|(k, &ch)| ch.is_ascii_digit() || (matches!(ch, '.' | ',') && digit(k + 1)))
+    // Every character of a number is ASCII, so the bytes do.
+    let b = t.as_bytes();
+    let digit = |k: usize| b.get(k).is_some_and(u8::is_ascii_digit);
+    (digit(0) || (b.first() == Some(&b'.') && digit(1)))
+        && b.iter().enumerate().all(|(k, &c)| c.is_ascii_digit() || (matches!(c, b'.' | b',') && digit(k + 1)))
 }
 
 /// Whether `a` is written bare as an operand: a single simple atom.
@@ -579,7 +580,11 @@ fn lin_base(a: &[MNode], s: &mut String, depth: usize) {
     // A number by the parser's rule (`1,000`, `2.5`, `.5`) is one item, so it stays bare too.
     let number = matches!(a, [MNode::Run(r)] if is_number(&r.text));
     let letters = matches!(a, [MNode::Run(r)] if r.text.chars().nth(1).is_some() && !number && !name(r));
-    if (simple_operand(a) || number) && !inner.is_empty() && !invisible && !operator && !letters {
+    // A base starting with a digit or `.` right after a digit, `.` or `,` would continue the number
+    // before it (`1` then `23^4` is `123^4`), so it keeps its brackets: `1〖23〗^4`.
+    let joins = s.chars().next_back().is_some_and(|c| c.is_ascii_digit() || matches!(c, '.' | ','))
+        && inner.chars().next().is_some_and(|c| c.is_ascii_digit() || c == '.');
+    if (simple_operand(a) || number) && !inner.is_empty() && !invisible && !operator && !letters && !joins {
         s.push_str(&inner);
     } else {
         s.push('〖');

@@ -75,11 +75,17 @@ fn is_well_formed(xml: &str) -> bool {
     // The name ends at `>` or XML whitespace (XML 1.0 §2.3 S), not at `/>` (an empty equation) or
     // a longer name (`m:oMathPara`).
     let named = xml.strip_prefix("<m:oMath").and_then(|r| r.chars().next()).is_some_and(|c| matches!(c, '>' | ' ' | '\t' | '\r' | '\n'));
-    if !named || Options::default().strict().parse(xml.as_bytes()).is_err() {
+    // Both parses are capped as the reader caps what it keeps ([`parse`]): kept OMML can come from
+    // a hostile JSON document, and a larger one is written from its nodes.
+    let limits = craft_xml::Limits { max_nodes: MAX_ELEMENTS.saturating_mul(2), ..craft_xml::Limits::DEFAULT };
+    if !named || Options::default().strict().with_limits(limits).parse(xml.as_bytes()).is_err() {
         return false;
     }
     let wrapped = format!("<x xmlns:m=\"{MATH_NS}\" xmlns:w=\"{W_NS}\" xmlns:mc=\"{MC_NS}\">{xml}</x>");
-    let Ok(doc) = roxmltree::Document::parse(&wrapped) else { return false };
+    // The wrapper and the document root are two more nodes.
+    let nodes_limit = u32::try_from(limits.max_nodes.saturating_add(2)).unwrap_or(u32::MAX);
+    let options = roxmltree::ParsingOptions { nodes_limit, ..roxmltree::ParsingOptions::default() };
+    let Ok(doc) = roxmltree::Document::parse_with_options(&wrapped, options) else { return false };
     let mut nodes = doc.root_element().children();
     matches!((nodes.next(), nodes.next()), (Some(e), None) if e.tag_name().namespace() == Some(MATH_NS) && e.tag_name().name() == "oMath")
 }

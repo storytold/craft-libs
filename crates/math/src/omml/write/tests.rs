@@ -258,6 +258,18 @@ fn kept_xml_that_is_not_an_omath_is_rewritten_from_the_nodes() {
 }
 
 #[test]
+fn kept_omml_larger_than_the_reader_keeps_is_rewritten_from_the_nodes() {
+    // The same cap as the reader's: one more element than it reads is written from the nodes,
+    // one fewer is kept.
+    let cap = crate::omml::MAX_ELEMENTS * 2;
+    let kept = |runs: usize| format!("<m:oMath>{}</m:oMath>", "<m:r/>".repeat(runs));
+    let over = Math { nodes: a("NODES"), omml: kept(cap + 1), ..Default::default() };
+    assert_eq!(read(&write(&over, "linear", false, None)).nodes, a("NODES"));
+    let under = Math { nodes: a("NODES"), omml: kept(cap - 10), ..Default::default() };
+    assert!(write(&under, "linear", false, None).contains(&under.omml));
+}
+
+#[test]
 fn without_nodes_the_linear_text_is_written() {
     let out = write(&Math::default(), "a/b", false, None);
     assert_eq!(read(&out).nodes, parse_linear("a/b"));
