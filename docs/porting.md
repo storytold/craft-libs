@@ -95,15 +95,15 @@ Turn the map into tasks:
 
 ## 6. Porting one task
 
-A task keeps one owner from start to finish: review fixes and later follow-ups go back to the same person or agent.
+A task keeps one assignee from start to finish: review fixes and later follow-ups go back to the same person or agent.
 
 ### 6.1 Brief
 
-The brief is complete before work starts: the map sections, the app files, the framework components with their files, the test verdicts, the states to compare, the done-when, and any decisions already made. If the brief leaves a design question open, the owner stops and asks rather than guessing.
+The brief is complete before work starts: the map sections, the app files, the framework components with their files, the test verdicts, the states to compare, the done-when, and any decisions already made. If the brief leaves a design question open, the assignee stops and asks rather than guessing.
 
 ### 6.2 Plan checkpoint
 
-Before editing, the owner writes a short plan: the mechanism, the files, and how the result will be checked. A reviewer (the lead, or a second agent) checks it against the map and the rules below. A plan that adds a framework mechanism, or departs from the map, needs the lead's answer before code is written.
+Before editing, the assignee writes a short plan: the mechanism, the files, and how the result will be checked. A reviewer (the lead, or a second agent) checks it against the map and the rules below. A plan that adds a framework mechanism, or departs from the map, needs the lead's answer before code is written.
 
 ### 6.3 Write and prune
 
@@ -254,7 +254,7 @@ Send the steps with `ControlClient::call`: a call returns after the input it que
 
 ### 6.6 Review and merge
 
-- A reviewer reads the diff and the last old/new comparison, then passes the task or lists fixes. Fixes go back to the same owner; a fix that restructures gets reviewed again.
+- A reviewer reads the diff and the last old/new comparison, then passes the task or lists fixes. Fixes go back to the same assignee; a fix that restructures gets reviewed again.
 - Merge the framework branch to `next` first, then the app branch onto the port branch.
 
 ### 6.7 Rules the review checks
@@ -270,7 +270,7 @@ Send the steps with `ControlClient::call`: a call returns after the input it que
 At the end of a batch of tasks (a "wave"):
 
 1. Repin the port branch to the `next` head that holds the batch's framework merges, and run a compile check.
-2. Run the app's whole test suite once, and sort each failure to the task that caused it; it goes back to that task's owner.
+2. Run the app's whole test suite once, and sort each failure to the task that caused it; it goes back to that task's assignee.
 3. Build and run the app on each platform it ships on, and check what the batch changed by eye. Platform-only behaviour (GPU drawing, cursors, window chrome) is checked here.
 4. Record what the batch cost (time, tool calls, review rounds) and change the process where it went wrong.
 

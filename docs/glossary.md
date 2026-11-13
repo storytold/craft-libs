@@ -299,7 +299,7 @@ One row per name in the author table (Overview) and per `pub` item a component a
 | `WheelUnit`, `WheelPhase` | A wheel event's unit and phase, craft-behavior copies of egui's | craft-behavior | 8.6 |
 | `WindowChrome` | How a window's frame is drawn (OS, custom, none), part of `WindowInfo` | craft-host (`target`) | 21.1 |
 | `WindowInfo` | A window's kind, chrome, state, insets and `active` (OS focus), refreshed in `set_input` | craft-host (`target`) | 21.1 |
-| `WordSet` | The trait a `words!` block writes | the word core (owner question 13) | 19.2 |
+| `WordSet` | The trait a `words!` block writes | the word core (open question 13) | 19.2 |
 | `WordSetCx` | The trait on every context with `label()` and `words::<L>()` | `craft_ui::contract` | 19.2 |
 | `words::<L>()` | The `WordSetCx` method that returns the word set `L` | `WordSetCx` method | 19.2 |
 

@@ -1109,6 +1109,13 @@ Control channel, screenshot queue, profiler and recorded actions for tests and s
 | --- | --- | --- |
 | `actions`, `ui::actions` | Recorded actions and the actions list | exists |
 | `control` | Automation control channel | exists |
+| `args` | Command-line values and environment fallbacks of the control channel | exists |
+| `protocol` | JSON-lines wire format and parameter validators | exists |
+| `security` | Tokens, the `auth` handshake and transport limits | exists |
+| `server` | Loopback JSON-lines TCP transport (native) | exists |
+| `client` | JSON-lines client for tests and command-line tools (native) | exists |
+| `synthetic` | Synthetic pointer and keyboard input: `ui.click`, `ui.move`, `ui.key`, `ui.type` | exists |
+| `dialogs` | `ui.dialog.set`, `ui.dialog.confirm` and `ui.dialog.cancel` over a `DialogHost` | exists |
 | `profiler` | Frame profiler | exists |
 | `screenshot` | Screenshot request queue | exists |
 | `trace` | Frame timing trace | exists |
