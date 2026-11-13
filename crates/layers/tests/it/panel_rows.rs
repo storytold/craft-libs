@@ -253,7 +253,8 @@ fn picked_parts(events: &[LayersEvent<u32>]) -> Vec<Option<LayerPart>> {
 
 /// A double click on the picture thumbnail of a fill layer with a mask, under the active layer, selects the layer on its
 /// picture and activates the picture: no selection names no part, which would target the mask. The same holds when the
-/// app has not taken the first click's selection by the second click, so the second click selects again.
+/// app has not taken the first click's selection by the second click, so the second click selects again, and for a
+/// third click.
 #[trial]
 fn a_double_click_on_a_fill_thumbnail_selects_its_picture() {
     let mut tree = FakeLayers::default();
@@ -282,6 +283,15 @@ fn a_double_click_on_a_fill_thumbnail_selects_its_picture() {
     let events = take(&app);
     assert_eq!(picked_parts(&events), [Some(LayerPart::Pixels); 2], "each click selects the picture: {events:?}");
     assert_eq!(thumb_activations(&events), [(LayerRowKey::Layer(id), LayerPart::Pixels)], "and the double click activates it: {events:?}");
+
+    app.borrow_mut().tree.selection = LayerSelection::new(vec![1], Some(1), LayerPart::Pixels);
+    fixture.click_at(thumb).settle();
+    let events = take(&app);
+    assert_eq!(picked_parts(&events), [Some(LayerPart::Pixels)], "a third click selects the picture once: {events:?}");
+    assert!(
+        !events.iter().any(|event| matches!(event, LayersEvent::ThumbClick { .. } | LayersEvent::Activate { .. })),
+        "and does nothing else: {events:?}"
+    );
 }
 
 /// A Smart Filter row dragged onto another smart object's row moves the filter there, with the active layer changing to

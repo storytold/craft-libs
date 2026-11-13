@@ -168,9 +168,9 @@ pub(super) fn map_events<T: LayerTree>(
             _ => {}
         }
     }
-    // A thumbnail's double click activates it; a single click that selected nothing new still acts.
+    // A thumbnail's double click activates it; any other click that selected nothing new still acts.
     for (i, (row, target, mods, count)) in clicks.iter().enumerate() {
-        if *count < 2 && (used[i] || activated.contains(row)) {
+        if (used[i] && *count != 2) || (*count < 2 && activated.contains(row)) {
             continue;
         }
         let info = tree.info(row.layer());

@@ -101,7 +101,8 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     let column = if Self::selects_cells(comp) { layout.column_at(local(start.origin), offset) } else { None };
                     // A plain press on a selected row of a multiple selection leaves the selection whole, so a drag
                     // carries all of it; the release as a click narrows it to the row. In a single selection that
-                    // allows an empty one, the release as a click empties it.
+                    // allows an empty one, the release as a click empties it. A later click of a multi-click on a
+                    // held row keeps the selection the earlier click left (`keeps_pick`).
                     let holds = match Self::select_mode(comp) {
                         SelectMode::Multi => true,
                         SelectMode::Single => props.allow_empty,

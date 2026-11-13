@@ -926,3 +926,54 @@ fn a_thumbnails_frame_is_square_and_lies_outside_its_picture() {
     assert!(inner.contains_rect(picture) && picture.contains_rect(inner.shrink(0.01)), "the picture fills the frame's inside: {frame:?} {picture:?}");
     assert!(row.contains_rect(frame.rect), "the row holds the frame: {row:?} {frame:?}");
 }
+
+/// What a double click on the second row of a list with `select` and `allow_empty`, nothing selected, reports, and the
+/// selection it leaves with a host that keeps every selection the list reports.
+fn double_clicked(
+    select: craft_ui::contract::SelectMode,
+    allow_empty: bool,
+) -> (Vec<CollectionEvent<usize, RowEvent>>, craft_behavior::Selection<usize>) {
+    use craft_behavior::{Selection, SelectionModel as _};
+    use craft_ui::contract::Bind;
+    let state = Rc::new(RefCell::new((Vec::new(), Selection::default())));
+    let held = state.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key).with_text(|key| std::borrow::Cow::Borrowed(NAMES[*key]));
+        let given = held.borrow().1.clone();
+        let list = List::new("Artboards").select(select).allow_empty(allow_empty).selection(Bind::given(given));
+        let out = list.show_items(ui, &source, &mut |key, _| ListRow::new(NAMES[*key]));
+        let (events, selection) = &mut *held.borrow_mut();
+        for event in &out.events {
+            if let CollectionEvent::Selection(change) = event {
+                selection.apply(change.clone());
+            }
+        }
+        events.extend(out.events);
+    });
+    fixture.room(Vec2::new(300.0, 200.0));
+    fixture.settle();
+    state.borrow_mut().0.clear();
+    let row = fixture.by_label(NAMES[1]).expect("the second row");
+    fixture.click(&row).settle();
+    fixture.click(&row).settle();
+    state.take()
+}
+
+/// A double click on an unselected row selects it and activates it once, with no selection change after the
+/// activation: the second click keeps what the first selected. In a single selection that may be empty the row stays
+/// selected; the second click does not deselect it.
+#[trial]
+fn a_double_click_selects_the_row_activates_it_once_and_changes_nothing_after() {
+    use craft_ui::contract::SelectMode;
+    for (select, allow_empty) in [(SelectMode::Multi, false), (SelectMode::Single, true)] {
+        let (events, selection) = double_clicked(select, allow_empty);
+        let selected: Vec<usize> = (0..NAMES.len()).filter(|key| selection.contains(key)).collect();
+        assert_eq!(selected, [1], "{select:?}: the row is selected: {events:?}");
+        let activations: Vec<usize> =
+            events.iter().enumerate().filter_map(|(at, event)| matches!(event, CollectionEvent::Activate(1)).then_some(at)).collect();
+        assert_eq!(activations.len(), 1, "{select:?}: one activation: {events:?}");
+        let last_change = events.iter().rposition(|event| matches!(event, CollectionEvent::Selection(_)));
+        assert!(last_change.is_some_and(|at| at < activations[0]), "{select:?}: selected before the activation, not after: {events:?}");
+    }
+}
