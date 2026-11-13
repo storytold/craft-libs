@@ -29,7 +29,7 @@ pub use resources::{
     ColorDefinition, ColorGroup, ColorGroupDefinition, ColorGroupMember, ColorSpace, CompositeFontDefinition, CompositeFontEntryDefinition,
     EpubExportTagMap, FontDefinition, FontFamilyDefinition, FontsPart, GradientDefinition, GradientStop, GradientStopDefinition, GradientStopValue,
     GraphicPart, Ink, InkDefinition, StrokeDefinition, StrokeStyle, StrokeStyleKind, Style, StyleGroup, StyleGroupWriter, StyleKind, StyleNode,
-    Swatch, SwatchKind, TintDefinition, color_groups, inks, named, preference, stroke_styles, style_groups, swatches,
+    Swatch, SwatchKind, TabStopValues, TintDefinition, color_groups, inks, named, preference, stroke_styles, style_groups, swatches,
 };
 pub use spread::{
     Graphic, GraphicChild, GraphicKind, Guide, ItemChild, ItemKind, Link, MarginPreference, Page, PageChild, PageItem, Spread, SpreadChild, TextPath,

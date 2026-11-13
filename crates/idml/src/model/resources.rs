@@ -11,6 +11,33 @@ fn others(el: &El) -> impl Iterator<Item = &El> {
     el.elements().filter(|e| !e.is(Local("Properties")))
 }
 
+/// One IDML tab stop, before the caller maps alignment names into its text model.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TabStopValues {
+    pub position: f64,
+    pub alignment: String,
+    pub leader: String,
+    pub alignment_character: String,
+}
+
+impl TabStopValues {
+    /// Reads `ListItem` records in a `TabList` property. Invalid or non-finite positions use 0,
+    /// matching IDML import fallback behavior; semantic sanitization belongs to the caller.
+    pub fn from_list(list: &El) -> Vec<Self> {
+        list.children("ListItem")
+            .map(|item| {
+                let text = |name: &str| item.child_text(name).map(|value| value.into_owned());
+                Self {
+                    position: text("Position").and_then(|value| value.trim().parse::<f64>().ok()).filter(|value| value.is_finite()).unwrap_or(0.0),
+                    alignment: text("Alignment").unwrap_or_default(),
+                    leader: text("Leader").unwrap_or_default(),
+                    alignment_character: text("AlignmentCharacter").unwrap_or_default(),
+                }
+            })
+            .collect()
+    }
+}
+
 /// What a style styles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StyleKind {
