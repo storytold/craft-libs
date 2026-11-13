@@ -15,6 +15,7 @@ use craft_behavior::{Buttons, CancelReason, Cursor, CursorIcon, CursorPriority, 
 use craft_keymap::Mods;
 use egui::{Context, Id, Pos2, Rect, Vec2, ViewportId};
 use std::any::{Any, TypeId};
+use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -127,6 +128,27 @@ pub trait WindowDropTarget<P> {
 
     /// Where `drop` would land, a value the ghost layer paints.
     fn mark(&self, drop: &Self::Drop) -> DropMark;
+}
+
+/// Where a drop target lies: a rect on an egui layer, in that layer's space. A component's own target lies over its
+/// visible rect on its layer; a component that takes drops over an area it does not draw (a preset browser's canvas)
+/// names the area with [`DropZone::new`] and registers with [`zone_target`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DropZone {
+    layer: Layer,
+    rect: Rect,
+}
+
+impl DropZone {
+    /// The zone `rect` on `layer` (the `layer_id` of the `Ui` that draws the area), in that layer's space.
+    pub const fn new(layer: egui::LayerId, rect: Rect) -> Self {
+        DropZone { layer, rect }
+    }
+
+    /// The zone's rect, in its layer's space.
+    pub const fn rect(&self) -> Rect {
+        self.rect
+    }
 }
 
 /// What a drag moves along with the pointer when its source is a container: the container's layer, and its window
@@ -490,6 +512,60 @@ pub(crate) fn take_drop(ctx: &Context, owner: Id, ordinal: u32, op: DropOperatio
         board.ended = Some(Ended { source: session.source, payload, op, frame });
         true
     })
+}
+
+/// `target` of `owner` over `zone`, for the payload whose type is `payload_type`: it accepts only where the pointer
+/// lies in the zone and no layer lies over the zone's layer there (the layer a dragged container moves is not over
+/// anything), and returns the drop in the pass of the release when it won the pass before.
+pub(crate) fn target_of<T: DropTarget<dyn Any + Send + Sync>>(
+    ctx: &Context,
+    owner: Id,
+    zone: DropZone,
+    payload_type: TypeId,
+    target: &T,
+) -> Option<T::Drop> {
+    let (payload, screen) = dragging_of(ctx, payload_type)?;
+    let at = areas::layer_map(ctx, zone.layer).map_or(screen, |map| map.to_layer(screen));
+    let top = match moving_layer(ctx) {
+        Some(moving) => areas::layer_at_without(ctx, screen, moving),
+        None => areas::layer_at(ctx, screen),
+    };
+    if moves_viewport(ctx) || !zone.rect.contains(at) || top != Some(zone.layer) {
+        return None;
+    }
+    let op = current_operation(ctx);
+    let drop = target.accept(&*payload, at, op)?;
+    let ordinal = next_ordinal(ctx, owner);
+    register(ctx, owner, zone.layer, target.mark(&drop), false);
+    take_drop(ctx, owner, ordinal, op, payload_type).then_some(drop)
+}
+
+/// `Pointer::drop_target` over a zone the caller names instead of its own visible rect: the drop of a payload of type
+/// `P` released over `zone`, with the same layer order, operation and mark as a component's own target. `owner` is the
+/// caller's stable id; it registers in every pass a drag may reach the zone.
+pub fn zone_target<P: Send + Sync + 'static, T: DropTarget<P>>(ctx: &Context, owner: Id, zone: DropZone, target: &T) -> Option<T::Drop> {
+    target_of(ctx, owner, zone, TypeId::of::<P>(), &Typed::new(target))
+}
+
+/// A target of payload type `P` seen through the payload's erased type.
+pub(crate) struct Typed<'t, P, T>(&'t T, PhantomData<fn(&P)>);
+
+impl<'t, P, T> Typed<'t, P, T> {
+    pub(crate) fn new(target: &'t T) -> Self {
+        Typed(target, PhantomData)
+    }
+}
+
+impl<P: 'static, T: DropTarget<P>> DropTarget<dyn Any + Send + Sync> for Typed<'_, P, T> {
+    type Drop = T::Drop;
+
+    fn accept(&self, payload: &(dyn Any + Send + Sync), at: Pos2, op: DropOperation) -> Option<T::Drop> {
+        self.0.accept(payload.downcast_ref::<P>()?, at, op)
+    }
+
+    fn mark(&self, drop: &T::Drop) -> DropMark {
+        self.0.mark(drop)
+    }
 }
 
 /// The operation of the drop of `source`'s payload of type `P` that the previous frame took.

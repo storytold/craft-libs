@@ -51,13 +51,13 @@ pub enum PresetEvent<K> {
     },
     /// A drag to reorder, or a Cmd/Ctrl+] or [ move, as one edit gesture.
     Reorder(EditEvent<ReorderMove<K>>),
-    /// A preset was dragged from the browser and released inside its drop zone (a canvas, a timeline, a layer list):
-    /// the host applies `key` at `at`. Items only: a group dropped on the zone reports nothing.
+    /// A preset was dragged from the browser and released inside its drop zone (`PresetBrowser::drop_zone`: a canvas,
+    /// a timeline): the host applies `key` at `at`. Items only: a group dropped on the zone reports nothing.
     #[non_exhaustive]
     DropAt {
         /// The preset.
         key: K,
-        /// The pointer at the release, in points.
+        /// The pointer at the release, in the zone's layer space.
         at: Pos2,
         /// The modifiers held at the release.
         mods: Mods,

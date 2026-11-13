@@ -20,8 +20,8 @@ use super::words::PresetWords;
 use crate::bars::{Bar, BarKind};
 use crate::choice::Segmented;
 use crate::contract::{
-    Bind, BodyCx, CollectionEvent, Entry, LeadSource, ListDrag, OpenChange, Pattern, Props, Rename, ReorderMove, ReorderRule, SelectMode, Show as _,
-    ShowCollection as _, ShowContainer as _, request_rename,
+    Bind, BodyCx, CollectionEvent, DropMark, DropTarget, DropZone, Entry, LeadSource, ListDrag, OpenChange, Pattern, Props, Rename, ReorderMove,
+    ReorderRule, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, request_rename,
 };
 use crate::display::Divider;
 use crate::layout_components::Stack;
@@ -29,14 +29,15 @@ use crate::list::{List, ListRow, RowInk, RowTest, ThumbSize};
 use crate::menu::{Menu, MenuItem};
 use crate::notices::{Notice, NoticeLayout};
 use crate::primitives::{ContentPainterCx, IconSpec};
+use crate::runtime::drag;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::memory::Remember as _;
 use crate::text::TextField;
 use crate::tile_grid::{CaptionPlace, GridEvent, TailRow, Tile, TileGrid, TileGroup, TileZoom};
-use craft_behavior::{DisplayOrder, EditEvent, GesturePhase, IconId, ItemSource, Mixed, Selection, SelectionChange};
+use craft_behavior::{DisplayOrder, DropOperation, EditEvent, GesturePhase, IconId, ItemSource, Mixed, Selection, SelectionChange};
 use craft_i18n::matcher::Matcher;
 use craft_theme::variant::Tone;
-use egui::{Id, Rect, Ui};
+use egui::{Id, Pos2, Rect, Ui};
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -87,6 +88,26 @@ impl<K> BrowserKey<K> {
 fn app_drag<K: Clone>(drag: &ListDrag<BrowserKey<K>>) -> Option<ListDrag<K>> {
     let grabbed = drag.grabbed.preset()?.clone();
     Some(ListDrag::new(drag.list, drag.keys.iter().filter_map(BrowserKey::preset).cloned().collect(), grabbed))
+}
+
+/// The drop zone's target: a preset row (not a group) dragged from this browser's collection, dropped at the pointer.
+struct ZoneDrop<'r, K> {
+    source: Id,
+    rows: &'r [PresetRow<K>],
+    zone: DropZone,
+}
+
+impl<K: Clone + PartialEq> DropTarget<ListDrag<BrowserKey<K>>> for ZoneDrop<'_, K> {
+    type Drop = (K, Pos2);
+
+    fn accept(&self, drag: &ListDrag<BrowserKey<K>>, at: Pos2, _: DropOperation) -> Option<(K, Pos2)> {
+        let key = drag.grabbed.preset().filter(|_| drag.list == self.source)?;
+        self.rows.iter().any(|row| row.key == *key && !row.is_group()).then(|| (key.clone(), at))
+    }
+
+    fn mark(&self, _: &(K, Pos2)) -> DropMark {
+        DropMark::Into(self.zone.rect())
+    }
 }
 
 /// The app's move of a move the browser's collection reports. Only presets and groups drag, and only they take a drop
@@ -210,6 +231,11 @@ pub struct PresetBrowser<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// Presets (and groups) drag and move by these rules.
     #[prop]
     reorder: Option<PresetReorder<'a, K>>,
+    /// An area outside the browser (a canvas, a timeline) where a dragged preset drops: a release there reports
+    /// `PresetEvent::DropAt` with the pointer in the zone's layer space. Groups dropped there report nothing. Without
+    /// `reorder` presets still drag, to the zone and to the host's own drop targets only.
+    #[prop]
+    drop_zone: Option<DropZone>,
     extra_items: Vec<Entry<String>>,
     actions: Vec<Label>,
     /// A footer under the presets, made from these options with the browser's zoom bound to its slider and the count
@@ -244,6 +270,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
             can_move: None,
             thumb: None,
             reorder: None,
+            drop_zone: None,
             extra_items: Vec::new(),
             actions: Vec::new(),
             footer: None,
@@ -522,6 +549,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             can_move,
             thumb,
             reorder,
+            drop_zone,
             extra_items,
             actions,
             footer,
@@ -640,7 +668,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                     .can_drag(can_drag)
                     .accepts(accepts);
                 if reorder.is_some() {
-                    grid = grid.reorder(ReorderRule::new()).drag_payload(app_drag::<K>);
+                    grid = grid.reorder(ReorderRule::new());
+                }
+                if reorder.is_some() || drop_zone.is_some() {
+                    grid = grid.drag_payload(app_drag::<K>);
                 }
                 if let Some(rows) = max_rows {
                     grid = grid.max_rows(rows);
@@ -682,7 +713,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                     .can_drag(can_drag)
                     .accepts(list_accepts);
                 if reorder.is_some() {
-                    list = list.reorder(ReorderRule::new().into_groups()).drag_payload(app_drag::<K>);
+                    list = list.reorder(ReorderRule::new().into_groups());
+                }
+                if reorder.is_some() || drop_zone.is_some() {
+                    list = list.drag_payload(app_drag::<K>);
                 }
                 if let Some(rows) = max_rows {
                     list = list.max_rows(rows);
@@ -730,6 +764,12 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
 
             let mods = crate::runtime::pointer::frame(ui.ctx()).mods;
             let row_of = |key: &K| rows.iter().position(|row| row.key == *key);
+            if let Some(zone) = drop_zone {
+                let target = ZoneDrop { source: response.id, rows, zone };
+                if let Some((key, at)) = drag::zone_target(ui.ctx(), list_id.with("drop zone"), zone, &target) {
+                    events.push(PresetEvent::DropAt { key, at, mods });
+                }
+            }
             let toggle = |local: &mut PresetState<K>, events: &mut Vec<PresetEvent<K>>, at: usize, open: Option<bool>| {
                 let open = open.unwrap_or_else(|| !local.is_open(rows, at, default_open));
                 let change = OpenChange::new(rows[at].key.clone(), open);
