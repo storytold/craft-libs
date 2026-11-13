@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use craft_zip::{Archive, Compression, Writer};
 
@@ -327,12 +327,18 @@ pub struct DirectoryStats {
 }
 
 /// Incremental directory-bundle persistence with bounded rolling object verification.
-#[derive(Default)]
 pub struct DirectoryBundleWriter {
     root: Option<PathBuf>,
     generation: u64,
     reverify_budget: u64,
+    lock_wait: Duration,
     verified: HashMap<String, CachedFile>,
+}
+
+impl Default for DirectoryBundleWriter {
+    fn default() -> Self {
+        Self { root: None, generation: 0, reverify_budget: 16 << 20, lock_wait: Duration::from_secs(10), verified: HashMap::new() }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -354,6 +360,11 @@ impl DirectoryBundleWriter {
     /// `0` trusts unchanged signatures; `u64::MAX` rechecks all referenced objects.
     pub fn set_reverify_budget(&mut self, bytes: u64) {
         self.reverify_budget = bytes;
+    }
+
+    /// How long to wait for another writer to release the bundle lock.
+    pub fn set_lock_wait(&mut self, wait: Duration) {
+        self.lock_wait = wait;
     }
 
     /// Saves an entry set incrementally. Existing objects are reused only after a hash check;
@@ -379,7 +390,17 @@ impl DirectoryBundleWriter {
         let lock_path = root.join(craft_pcraft_format::SAVE_LOCK);
         refuse_symlink(&lock_path)?;
         let lock = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&lock_path).map_err(io_error)?;
-        lock.lock().map_err(io_error)?;
+        let start = Instant::now();
+        let _lock = loop {
+            match lock.try_lock() {
+                Ok(()) => break Some(lock),
+                Err(std::fs::TryLockError::WouldBlock) if start.elapsed() < self.lock_wait => std::thread::sleep(Duration::from_millis(20)),
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    return Err(Error::Io("another save of this bundle is in progress".into()));
+                }
+                Err(std::fs::TryLockError::Error(_)) => break None,
+            }
+        };
         self.generation = self.generation.saturating_add(1);
         let generation = self.generation;
         let recheck = self.rolling_recheck(&bundle.entries);
