@@ -246,6 +246,10 @@ pub struct PresetBrowser<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// body that scrolls (a dialog page) keeps its own scroll this way.
     #[prop]
     max_rows: Option<u16>,
+    /// The browser takes the presets' height, up to `room_height` (then they scroll), instead of the available
+    /// height: for a host that sizes to its content, such as a floating panel.
+    #[prop]
+    room_height: Option<f32>,
 }
 
 impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
@@ -275,6 +279,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
             actions: Vec::new(),
             footer: None,
             max_rows: None,
+            room_height: None,
         }
     }
 
@@ -554,6 +559,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             actions,
             footer,
             max_rows,
+            room_height,
         } = self;
         let env = Env::of(ui);
         let words = env.words::<PresetWords>();
@@ -939,7 +945,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             commit(cx, &state, rows, &name);
         };
 
-        let stack = Stack::new().fill();
+        let stack = room_height.map_or_else(|| Stack::new().fill(), |height| Stack::new().fill_width().room_height(height));
         let stack = if has_footer { stack.footer(footer_region) } else { stack };
         let shown = stack.show(ui, body);
         let (response, hovered, mut events) = shown.inner.unwrap_or_else(|| (shown.output.clone(), None, Vec::new()));

@@ -1,10 +1,8 @@
 //! `PresetFooter`: the actions, the thumbnail size slider and the count of a preset panel's footer.
 
 use super::words::PresetWords;
-use crate::contract::{Bind, EditResponse, ListDrag, NoValue, Outcome, Show as _, ShowContainer as _};
-use crate::display::Text;
-use crate::layout::RowAlign;
-use crate::layout_components::Row;
+use crate::contract::{Bind, EditResponse, ListDrag, NoValue, Outcome, Show as _};
+use crate::display::{Elide, Text};
 use crate::runtime::env::Env;
 use crate::sections::{FooterAction, FooterBar};
 use crate::tile_grid::{ThumbnailSlider, TileZoom};
@@ -206,19 +204,18 @@ impl<K: Clone + Send + Sync + 'static> PresetFooter<'_, K> {
             slots.push(Slot::Custom(index));
         }
 
-        let row = Row::new().fill().align(RowAlign::End).show(ui, |ui, _| {
+        let (footer, zoom_edit) = FooterBar::actions(shown).show_footer_leading(ui, |ui| {
             if let Some(add) = &leading {
                 add(ui);
             }
             let edit = slider.then(|| ThumbnailSlider::new(words.thumb_size.clone(), zoom.reborrowed(), range).show(ui));
             if let Some(n) = count {
-                Text::new(words.count.text(n as u64, &env.format().integer(n as u64))).show(ui);
+                Text::new(words.count.text(n as u64, &env.format().integer(n as u64))).elide(Elide::End).show(ui);
             }
-            (edit, FooterBar::actions(shown.clone()).show_footer(ui))
+            edit
         });
-        let (zoom_edit, footer) = row.inner.unzip();
         let mut events = Vec::new();
-        if let Some(footer) = footer {
+        {
             if let Some(drop) = &footer.dropped {
                 let keys = drop.payload::<ListDrag<K>>().map(|drag| drag.keys.clone()).unwrap_or_default();
                 if let Some(Slot::Custom(index)) = slots.get(drop.index) {
@@ -233,6 +230,6 @@ impl<K: Clone + Send + Sync + 'static> PresetFooter<'_, K> {
                 });
             }
         }
-        PresetFooterOutput { response: row.output, events, zoom: zoom_edit.flatten() }
+        PresetFooterOutput { response: footer.response, events, zoom: zoom_edit.flatten() }
     }
 }

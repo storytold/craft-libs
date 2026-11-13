@@ -59,3 +59,38 @@ fn a_preset_released_over_the_zone_reports_drop_at_and_nothing_else_does() {
         assert_eq!(marked, expected.is_some(), "{row} over {at:?} shows the zone's mark only where it drops");
     }
 }
+
+/// A browser over `presets` presets in a 400×300 room with a footer, `room_height` set when given, and where its New
+/// Group button and its last preset are.
+fn footer_rig(presets: u32, room_height: Option<f32>) -> (Rect, Option<Rect>) {
+    const ROOM: Rect = Rect { min: Pos2::ZERO, max: Pos2::new(400.0, 300.0) };
+    let mut rows = vec![PresetRow::group(GROUP, "Group", 0)];
+    rows.extend((1..=presets).map(|key| PresetRow::item(key, format!("Preset {key}"), 1)));
+    let mut state = PresetState::<u32>::new();
+    let mut fixture = Fixture::new(move |ui| {
+        ui.scope_builder(UiBuilder::new().max_rect(ROOM), |ui| {
+            let mut browser = PresetBrowser::new("Patterns", Bind::bound(&mut state), &rows)
+                .view_lock(PresetView::List)
+                .footer(craft_ui::patterns::presets::PresetFooterOptions::new().new_group(true));
+            if let Some(height) = room_height {
+                browser = browser.room_height(height);
+            }
+            let _ = browser.show(ui);
+        });
+    });
+    fixture.room(vec2(480.0, 320.0)).settle();
+    let new_group = fixture.by_label("New Group").expect("the footer's New Group button shows").rect;
+    let last = fixture.by_label(&format!("Preset {presets}")).map(|target| target.rect);
+    (new_group, last)
+}
+
+#[trial]
+fn the_footer_stays_in_the_room_and_a_room_height_sizes_the_browser_to_its_presets() {
+    let (footer, _) = footer_rig(40, None);
+    assert!(footer.bottom() <= 300.0, "a long library scrolls above the footer: {footer:?}");
+    let (footer, last) = footer_rig(2, Some(200.0));
+    let last = last.expect("both presets show");
+    assert!(footer.top() >= last.bottom() && footer.top() - last.bottom() < 40.0, "the footer follows two presets: {footer:?} {last:?}");
+    let (footer, _) = footer_rig(40, Some(200.0));
+    assert!(footer.bottom() <= 240.0, "a long library scrolls within the room height: {footer:?}");
+}

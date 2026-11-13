@@ -591,19 +591,39 @@ impl FooterBar {
     }
 
     /// Shows the bar with the actions or buttons it was made with and reports what happened to them.
-    pub fn show_footer(mut self, ui: &mut Ui) -> FooterOutput {
+    pub fn show_footer(self, ui: &mut Ui) -> FooterOutput {
+        self.show_footer_with(ui, None::<fn(&mut Ui)>).0
+    }
+
+    /// Shows a bar of actions with the host's `leading` controls at its start edge, before the actions placed there by
+    /// [`at_start`](FooterBar::at_start), under the same rule: a preset panel's size slider. Returns what `leading`
+    /// returned on its last run.
+    pub fn show_footer_leading<R>(self, ui: &mut Ui, leading: impl FnMut(&mut Ui) -> R) -> (FooterOutput, Option<R>) {
+        self.show_footer_with(ui, Some(leading))
+    }
+
+    fn show_footer_with<R>(mut self, ui: &mut Ui, mut leading: Option<impl FnMut(&mut Ui) -> R>) -> (FooterOutput, Option<R>) {
         let content = std::mem::take(&mut self.content);
         let (enter, column, start) = (self.enter, self.column, self.start);
+        if leading.is_some() {
+            self.props = self.props.layout(BodyLayout::row().align(RowAlign::SpaceBetween));
+        }
+        let mut led = None;
         let shown = self.show(ui, |ui, _| match &content {
             Content::Body => Shown::default(),
             Content::Actions(actions) => {
                 let mut shown = Shown::default();
                 let start = start.min(actions.len());
                 let from_end = || (start..actions.len()).rev();
-                if start == 0 {
+                if start == 0 && leading.is_none() {
                     show_actions(ui, actions, from_end(), &mut shown);
                 } else {
-                    Row::new().show(ui, |ui, _| show_actions(ui, actions, 0..start, &mut shown));
+                    Row::new().show(ui, |ui, _| {
+                        if let Some(leading) = leading.as_mut() {
+                            led = Some(leading(ui));
+                        }
+                        show_actions(ui, actions, 0..start, &mut shown);
+                    });
                     Row::new().show(ui, |ui, _| show_actions(ui, actions, from_end(), &mut shown));
                 }
                 shown.responses.sort_by_key(|(at, _)| *at);
@@ -664,14 +684,15 @@ impl FooterBar {
         });
         let inner = shown.inner.unwrap_or_default();
         let mods = if inner.picked.is_some() { crate::runtime::pointer::frame(ui.ctx()).mods } else { craft_keymap::Mods::NONE };
-        FooterOutput {
+        let output = FooterOutput {
             response: shown.output,
             picked: inner.picked,
             dropped: inner.dropped,
             drop_hint: inner.drop_hint,
             responses: inner.responses.into_iter().map(|(_, response)| response).collect(),
             mods,
-        }
+        };
+        (output, led)
     }
 }
 
