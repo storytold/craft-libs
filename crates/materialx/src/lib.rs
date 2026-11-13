@@ -72,7 +72,7 @@ pub struct Material {
     pub name: String,
     /// Shader dialect represented by the material.
     pub shader: Shader,
-    /// Resolved inputs in the shader's document order.
+    /// Resolved inputs in the supported shader table's deterministic order.
     pub inputs: Vec<(String, Value)>,
     /// Resolved displacement input, if present.
     pub displacement: Option<Value>,
