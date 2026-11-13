@@ -134,6 +134,24 @@ pub fn parse_text(svg: &str, limits: &Limits, options: &usvg::Options<'_>) -> Re
     usvg::Tree::from_xmltree(&xml, options).map_err(|e| Error::Parse(e.to_string()))
 }
 
+/// Read the root SVG's unitless width and height without constructing a rendering tree.
+///
+/// Lengths with units, percentages, missing dimensions, and non-SVG roots return `Ok(None)`;
+/// malformed or over-limit XML returns the same bounded parsing error as [`parse_text`].
+pub fn root_unitless_size(svg: &str, limits: &Limits) -> Result<Option<(f64, f64)>, Error> {
+    let xml = checked(svg, limits)?;
+    let root = xml.root_element();
+    if root.tag_name().name() != "svg" {
+        return Ok(None);
+    }
+    let Some((width, height)) =
+        root.attribute("width").and_then(|value| value.parse::<f64>().ok()).zip(root.attribute("height").and_then(|value| value.parse::<f64>().ok()))
+    else {
+        return Ok(None);
+    };
+    Ok(Some((width, height)))
+}
+
 /// Every check on SVG text, cheapest first; the XML it parses to on the way.
 fn checked<'s>(svg: &'s str, limits: &Limits) -> Result<roxmltree::Document<'s>, Error> {
     let preflight_limits = crate::preflight::Limits {
