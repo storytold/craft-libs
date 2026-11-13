@@ -133,11 +133,7 @@ fn find_eexec(ps: &[u8], from: usize) -> Option<usize> {
                 pos += 1;
             }
             while pos < ps.len() && !is_white(ps[pos]) && !is_delimiter(ps[pos]) {
-                if ps[pos] == b'\\' {
-                    pos = pos.saturating_add(2).min(ps.len());
-                } else {
-                    pos += 1;
-                }
+                pos += 1;
             }
             continue;
         }
@@ -261,5 +257,13 @@ mod tests {
             source.extend_from_slice(b"ignored");
             assert_eq!(super::name_after(&source, b"/FontName").as_deref(), Some("Test"));
         }
+    }
+
+    #[test]
+    fn literal_name_backslash_does_not_escape_a_comment_delimiter() {
+        let ps = b"%!PS-AdobeFont-1.0: Test\n/FontName /Test def\n/unused\\%(\npop\ncurrentfile eexec\n0000\ncleartomark\n";
+        let fonts = embedded_font_programs(ps);
+        assert_eq!(fonts.len(), 1);
+        assert_eq!(fonts[0].name.as_deref(), Some("Test"));
     }
 }
