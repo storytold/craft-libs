@@ -563,6 +563,19 @@ fn materials(j: &Value, limits: &Limits, scene: &mut Scene) -> Result<()> {
         _ => Wrap::Repeat,
     };
     let images = scene.images.len();
+    let texture_list = arr(j, "textures");
+    if texture_list.len() > limits.max_materials {
+        return Err(too_large(KIND, format!("more than {} textures", limits.max_materials)));
+    }
+    scene.texture_variants = texture_list
+        .iter()
+        .filter_map(|texture| {
+            let sampler = idx(texture, "sampler").and_then(|s| arr(j, "samplers").get(s));
+            let webp = || texture.get("extensions").and_then(|e| e.get("EXT_texture_webp")).and_then(|e| idx(e, "source"));
+            let image = idx(texture, "source").or_else(webp).filter(|i| *i < images)?;
+            Some(TextureRef { image, uv_set: 0, wrap: [wrap(sampler, "wrapS"), wrap(sampler, "wrapT")] })
+        })
+        .collect();
     let tref = |v: Option<&Value>| -> Option<TextureRef> {
         let v = v?;
         let texture = arr(j, "textures").get(idx(v, "index")?)?;

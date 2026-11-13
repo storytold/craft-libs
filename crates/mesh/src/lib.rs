@@ -621,6 +621,9 @@ pub struct Scene {
     pub meshes: Vec<Mesh>,
     pub materials: Vec<Material>,
     pub images: Vec<Image>,
+    /// Texture and sampler entries in the file, including ones no material uses. Their image
+    /// index and wrap modes are format properties; UV sets belong to each material slot.
+    pub texture_variants: Vec<TextureRef>,
     /// Every format fills this: a format without a hierarchy gets one root node per mesh.
     pub nodes: Vec<Node>,
     /// The top-level nodes.
@@ -683,6 +686,9 @@ impl Scene {
             if slots.iter().flatten().any(|t| t.image >= self.images.len()) {
                 return bad(format!("material `{}` names an image that does not exist", m.name));
             }
+        }
+        if self.texture_variants.iter().any(|t| t.image >= self.images.len()) {
+            return bad("a texture names an image that does not exist".into());
         }
         let n = self.nodes.len();
         for node in &self.nodes {

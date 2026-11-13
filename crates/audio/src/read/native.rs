@@ -413,7 +413,7 @@ impl<'a> Native<'a> {
             let Some(next) = self.packets.next() else {
                 // A track that declares no frames (an empty WAV or AIFF) is empty, not broken.
                 let empty = self.frames_known && self.info.frames == 0 && self.errors == 0;
-                if !self.decoded && !empty && !(self.seeked && self.errors == 0) {
+                if !(self.decoded || empty || self.seeked && self.errors == 0) {
                     return Err(self.no_audio("stream contains no audio"));
                 }
                 return Ok(None);

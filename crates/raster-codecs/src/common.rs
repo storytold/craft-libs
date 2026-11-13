@@ -1,14 +1,14 @@
 //! Bounded decoding and PNG encoding for common photographic and web image formats.
 //!
-//! This facade is for applications that need a single RGBA pixel buffer regardless of whether
-//! the source was PNG, JPEG, BMP, GIF, TIFF, or WebP. Format sniffing and codec dispatch stay
-//! inside this crate. Callers choose their own stricter file and image limits.
+//! This facade decodes supported images into a bounded straight-alpha RGBA buffer. Format
+//! detection and codec dispatch stay inside `craft-image-codecs`; callers choose stricter limits.
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::RgbaImage;
 
 use crate::CodecError;
 
-pub use image::RgbaImage as Pixels;
+pub use image::{Rgba as Pixel, RgbaImage as Pixels};
 
 /// Limits applied before allocating the decoded image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +52,24 @@ pub fn encode_png(pixels: &RgbaImage) -> Result<Vec<u8>, CodecError> {
     encode(pixels, craft_image_codecs::Format::Png, craft_image_codecs::EncodeOptions::default())
 }
 
+/// Encode RGBA pixels as standard Base64 containing PNG bytes, for an inline document image.
+pub fn encode_png_base64(pixels: &RgbaImage) -> Result<String, CodecError> {
+    encode_png(pixels).map(|bytes| STANDARD.encode(bytes))
+}
+
+/// Decode standard Base64 containing one PNG into straight-alpha RGBA pixels.
+pub fn decode_png_base64(text: &str, limits: DecodeLimits) -> Result<RgbaImage, CodecError> {
+    let max_encoded_bytes = limits.max_file_bytes.div_ceil(3).saturating_mul(4);
+    if text.len() > max_encoded_bytes {
+        return Err(CodecError::LimitExceeded(format!("{} Base64 characters exceed max {max_encoded_bytes}", text.len())));
+    }
+    let bytes = STANDARD.decode(text).map_err(|e| CodecError::malformed("PNG Base64", e))?;
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err(CodecError::malformed("PNG Base64", "decoded data has no PNG signature"));
+    }
+    decode_rgba(&bytes, limits)
+}
+
 /// Encode RGBA pixels as JPEG at the requested quality (1–100).
 pub fn encode_jpeg(pixels: &RgbaImage, quality: u8) -> Result<Vec<u8>, CodecError> {
     if !(1..=100).contains(&quality) {
@@ -66,12 +84,18 @@ fn encode(pixels: &RgbaImage, format: craft_image_codecs::Format, options: craft
     craft_image_codecs::encode(&image, format, &options).map_err(map_codec_error)
 }
 
-/// Encode pixels according to a destination filename's extension (`png`, `jpg`, or `jpeg`).
+/// Encode pixels according to a destination filename's extension.
 pub fn encode_for_path(path: impl AsRef<std::path::Path>, pixels: &RgbaImage) -> Result<Vec<u8>, CodecError> {
-    let extension = path.as_ref().extension().and_then(std::ffi::OsStr::to_str).unwrap_or_default();
-    match craft_image_codecs::from_extension(extension) {
+    let extension = path.as_ref().extension().and_then(std::ffi::OsStr::to_str).unwrap_or_default().to_ascii_lowercase();
+    match craft_image_codecs::from_extension(&extension) {
         Some(craft_image_codecs::Format::Png) => encode_png(pixels),
         Some(craft_image_codecs::Format::Jpeg) => encode_jpeg(pixels, 90),
+        Some(
+            format @ (craft_image_codecs::Format::Bmp
+            | craft_image_codecs::Format::Gif
+            | craft_image_codecs::Format::Tiff
+            | craft_image_codecs::Format::WebP),
+        ) => encode(pixels, format, craft_image_codecs::EncodeOptions::default()),
         _ => Err(CodecError::unsupported("image", format!("cannot encode files with the .{extension} extension"))),
     }
 }
