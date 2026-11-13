@@ -127,6 +127,55 @@ impl NestedStyleValues {
         });
         Self { nested, lines, grep }
     }
+
+    /// Writes the nested style property lists. The caller resolves semantic style references and
+    /// delimiter enums into the IDML values held in this model.
+    pub fn to_els(&self) -> Vec<El> {
+        let mut properties = Vec::new();
+        if let Some(entries) = &self.nested {
+            let mut list = El::new("AllNestedStyles").with_attr("type", "list");
+            for entry in entries {
+                list.push(
+                    El::new("ListItem")
+                        .with_attr("type", "record")
+                        .with_child(property("AppliedCharacterStyle", "object", entry.character_style.clone()))
+                        .with_child(property("Delimiter", &entry.delimiter_type, entry.delimiter.clone()))
+                        .with_child(property("Repetition", "long", entry.repetition.to_string()))
+                        .with_child(property("Inclusive", "boolean", if entry.inclusive { "true" } else { "false" })),
+                );
+            }
+            properties.push(list);
+        }
+        if let Some(entries) = &self.lines {
+            let mut list = El::new("AllNestedLineStyles").with_attr("type", "list");
+            for entry in entries {
+                list.push(
+                    El::new("ListItem")
+                        .with_attr("type", "record")
+                        .with_child(property("AppliedCharacterStyle", "object", entry.character_style.clone()))
+                        .with_child(property("LineCount", "long", entry.line_count.to_string())),
+                );
+            }
+            properties.push(list);
+        }
+        if let Some(entries) = &self.grep {
+            let mut list = El::new("AllGREPStyles").with_attr("type", "list");
+            for entry in entries {
+                list.push(
+                    El::new("ListItem")
+                        .with_attr("type", "record")
+                        .with_child(property("AppliedCharacterStyle", "object", entry.character_style.clone()))
+                        .with_child(property("GrepExpression", "string", entry.expression.clone())),
+                );
+            }
+            properties.push(list);
+        }
+        properties
+    }
+}
+
+fn property(name: &str, kind: &str, value: impl Into<String>) -> El {
+    El::new(name).with_attr("type", kind).with_text(value)
 }
 
 /// OpenType feature tags represented by IDML character attributes.
