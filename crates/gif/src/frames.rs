@@ -22,9 +22,9 @@ pub struct FrameLimits {
     pub max_bytes: u64,
     /// Largest canvas (logical screen) in bytes at 4 bytes a pixel. Default 512 MiB.
     pub max_canvas_bytes: u64,
-    /// Largest single decoder allocation. `None` uses twice `max_canvas_bytes`, matching the
-    /// decoder's working-buffer allowance. Set this when an application has a tighter allocator
-    /// budget. Default `None`.
+    /// Combined decoder working-allocation budget. The decoder reserves its persistent canvas
+    /// before the frame buffer, so both count against this limit. `None` uses twice
+    /// `max_canvas_bytes`, matching the decoder's working-buffer allowance. Default `None`.
     pub max_decode_bytes: Option<u64>,
     /// Merge a frame identical to the one before into it (its delay added). Default off.
     pub merge_identical: bool,
@@ -244,6 +244,11 @@ mod tests {
         assert_eq!((a.frames.len(), a.stop), (2, Stop::ByteLimit));
         assert!(matches!(read_frames(&bytes, &FrameLimits { max_canvas_bytes: 23, ..FrameLimits::default() }), Err(FrameError::LimitExceeded(_))));
         assert!(read_frames(&bytes, &FrameLimits { max_canvas_bytes: 24, ..FrameLimits::default() }).is_ok());
+        // Canvas and frame buffer each need 24 bytes; decoder allocations share this budget.
+        assert!(matches!(
+            read_frames(&bytes, &FrameLimits { max_decode_bytes: Some(24), ..FrameLimits::default() }),
+            Err(FrameError::LimitExceeded(_))
+        ));
         assert!(read_frames(&bytes, &FrameLimits { max_decode_bytes: Some(1), ..FrameLimits::default() }).is_err());
     }
 
