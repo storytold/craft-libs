@@ -119,6 +119,53 @@ pub struct EpubSplitValues {
     pub paragraph_style: Option<String>,
 }
 
+/// Parsed IDML condition metadata.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConditionValues {
+    pub self_id: Option<String>,
+    pub name: Option<String>,
+    pub indicator_rgb: Option<[u8; 3]>,
+    pub visible: bool,
+}
+
+impl ConditionValues {
+    /// Reads condition fields and its optional three-channel indicator color.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        let rgb: Vec<u8> = values
+            .get("IndicatorColor")
+            .unwrap_or("")
+            .split_whitespace()
+            .filter_map(|value| value.parse::<f64>().ok())
+            .map(|value| value.clamp(0.0, 255.0) as u8)
+            .collect();
+        Self {
+            self_id: values.self_id().map(str::to_owned),
+            name: values.get("Name").map(str::to_owned),
+            indicator_rgb: (rgb.len() == 3).then(|| [rgb[0], rgb[1], rgb[2]]),
+            visible: values.get("Visible") != Some("false"),
+        }
+    }
+}
+
+/// Parsed IDML numbering-list metadata.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NumberingListValues {
+    pub name: String,
+    pub continue_across_stories: bool,
+}
+
+impl NumberingListValues {
+    /// Reads a `NumberingList` element.
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        Self {
+            name: values.get("Name").unwrap_or("").to_owned(),
+            continue_across_stories: values.boolean("ContinueNumbersAcrossStories") == Some(true),
+        }
+    }
+}
+
 impl EpubSplitValues {
     /// Reads an `EPubExportPreference` element.
     pub fn from_el(el: &El) -> Self {

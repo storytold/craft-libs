@@ -22,8 +22,8 @@ mod story;
 
 use craft_xml::{El, Local, Node};
 pub use document::{
-    CrossReferenceBuildingBlock, CrossReferenceFormatValues, EpubSplitValues, ModelDocument, TextDateKind, TextVariableKind, TextVariableValues,
-    TocStyleEntryValues, TocStyleValues, TopLevelKind, TopLevelNode,
+    ConditionValues, CrossReferenceBuildingBlock, CrossReferenceFormatValues, EpubSplitValues, ModelDocument, NumberingListValues, TextDateKind,
+    TextVariableKind, TextVariableValues, TocStyleEntryValues, TocStyleValues, TopLevelKind, TopLevelNode,
 };
 pub use effects::{DirectionalFeatherValues, DropShadowValues, FeatherValues, GradientFeatherValues, OpacityStopValues, TransparencySetting};
 pub use geometry::{MAX_PATH_POINTS, PathGeometry, PathGeometryError, PathPoint, SubPath};
