@@ -165,6 +165,14 @@ impl<'a> ZipBundle<'a> {
         self.read(craft_pcraft_format::MANIFEST, self.limits.max_manifest_bytes)
     }
 
+    /// Reads any canonical bundle entry, including the stored zstd bytes of an object.
+    pub fn entry(&mut self, path: &str, max_bytes: u64) -> Result<Option<Vec<u8>>> {
+        if !valid_entry_path(path) {
+            return Err(Error::InvalidPath(path.to_owned()));
+        }
+        self.archive.read(path, max_bytes).map_err(Into::into)
+    }
+
     /// Reads an optional preview entry.
     pub fn preview(&mut self, path: &str) -> Result<Option<Vec<u8>>> {
         if !matches!(path, craft_pcraft_format::THUMB | craft_pcraft_format::COMPOSITE | craft_pcraft_format::FULL_COMPOSITE) {
