@@ -34,6 +34,8 @@ pub enum Format {
     Idml,
     DesignCraft,
     Docx,
+    /// Legacy OLE Compound File Word document; identified by its extension only.
+    LegacyDoc,
     Rtf,
     Xlsx,
     TaggedText,
@@ -132,6 +134,7 @@ pub fn from_extension(ext: &str) -> Option<Format> {
         "idml" => Some(Format::Idml),
         "designcraft" | "dcdoc" => Some(Format::DesignCraft),
         "docx" => Some(Format::Docx),
+        "doc" => Some(Format::LegacyDoc),
         "rtf" => Some(Format::Rtf),
         "xlsx" => Some(Format::Xlsx),
         "pptx" => Some(Format::Pptx),
