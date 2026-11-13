@@ -11,6 +11,61 @@ fn others(el: &El) -> impl Iterator<Item = &El> {
     el.elements().filter(|e| !e.is(Local("Properties")))
 }
 
+/// Raw character-level Japanese composition and emphasis properties from an IDML text range.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CjkCharacterValues {
+    pub kenten_kind: Option<String>,
+    pub kenten_font: Option<String>,
+    pub kenten_font_style: Option<String>,
+    pub kenten_size: Option<f64>,
+    pub kenten_x_scale: Option<f64>,
+    pub kenten_y_scale: Option<f64>,
+    pub kenten_distance: Option<f64>,
+    pub kenten_position: Option<String>,
+    pub kenten_alignment: Option<String>,
+    pub kenten_character_set: Option<String>,
+    pub kenten_fill_color: Option<String>,
+    pub kenten_stroke_color: Option<String>,
+    pub kenten_fill_tint: Option<f64>,
+    pub kenten_stroke_tint: Option<f64>,
+    pub kenten_stroke_weight: Option<f64>,
+    pub kenten_overprint_fill: Option<String>,
+    pub kenten_overprint_stroke: Option<String>,
+    pub shatai_magnification: Option<f64>,
+    pub shatai_angle: Option<f64>,
+    pub shatai_adjust_rotation: Option<bool>,
+    pub shatai_adjust_tsume: Option<bool>,
+}
+
+impl CjkCharacterValues {
+    pub fn from_el(el: &El) -> Self {
+        let values = Values::of(el);
+        Self {
+            kenten_kind: values.get("KentenKind").map(str::to_owned),
+            kenten_font: values.prop("KentenFont"),
+            kenten_font_style: values.prop("KentenFontStyle"),
+            kenten_size: values.num("KentenFontSize"),
+            kenten_x_scale: values.num("KentenXScale"),
+            kenten_y_scale: values.num("KentenYScale"),
+            kenten_distance: values.num("KentenPlacement"),
+            kenten_position: values.prop("KentenPosition"),
+            kenten_alignment: values.prop("KentenAlignment"),
+            kenten_character_set: values.prop("KentenCharacterSet"),
+            kenten_fill_color: values.prop("KentenFillColor"),
+            kenten_stroke_color: values.prop("KentenStrokeColor"),
+            kenten_fill_tint: values.num("KentenTint"),
+            kenten_stroke_tint: values.num("KentenStrokeTint"),
+            kenten_stroke_weight: values.num("KentenWeight"),
+            kenten_overprint_fill: values.prop("KentenOverprintFill"),
+            kenten_overprint_stroke: values.prop("KentenOverprintStroke"),
+            shatai_magnification: values.num("ShataiMagnification"),
+            shatai_angle: values.num("ShataiDegreeAngle"),
+            shatai_adjust_rotation: values.boolean("ShataiAdjustRotation"),
+            shatai_adjust_tsume: values.boolean("ShataiAdjustTsume"),
+        }
+    }
+}
+
 /// Numeric and boolean values in an IDML `MojikumiTable` row.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MojikumiRow {
