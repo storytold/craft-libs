@@ -293,6 +293,14 @@ pub fn setup(setup: &Setup, op: &Operation, first: bool) -> Vec<Command> {
 
 /// Registration-mark commands: mark geometry, then the search (or manual positioning) request.
 /// The device answers `    0\x03` (see [`parse_status`]) once it has the marks.
+///
+/// The full registration sequence (TB99 through TB55, plus TB123/TB124 for search and
+/// TB23 for manual positioning) is documented in the community driver [py_silhouette]
+/// (`zero_on_registration_mark()`), which reverse-engineered the protocol from public
+/// behaviour — not from any proprietary binary. The `TB54,0,0` sub-command sets the
+/// registration-mark offset to zero (the mark is at its expected position).
+///
+/// [py_silhouette]: https://github.com/mossblaser/py_silhouette/blob/main/py_silhouette/device.py
 pub fn registration(reg: &Registration) -> Vec<Command> {
     let raw = |s: &str| Command::Raw(s.to_string());
     let mut c = vec![
@@ -302,6 +310,7 @@ pub fn registration(reg: &Registration) -> Vec<Command> {
         raw("TB52,2"),
         raw("TB51,400"),
         raw("TB53,10"),
+        raw("TB54,0,0"),
         raw("TB55,1"),
     ];
     let (h, w) = (su(reg.length_mm), su(reg.width_mm));
