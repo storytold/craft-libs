@@ -211,6 +211,11 @@ fn texture_and_sampler_inventory_includes_unreferenced_entries() {
         scene.texture_variants,
         [TextureRef { image: 0, uv_set: 0, wrap: [Wrap::Clamp, Wrap::Mirror] }, TextureRef { image: 0, uv_set: 0, wrap: [Wrap::Repeat; 2] },]
     );
+    assert!(scene.validate().is_ok());
+
+    let mut invalid = scene;
+    invalid.texture_variants[0].image = invalid.images.len();
+    assert!(matches!(invalid.validate(), Err(Error::Malformed(_))));
 }
 
 #[test]
