@@ -55,7 +55,11 @@ pub fn import(bytes: &[u8]) -> Result<Imported, Error> {
         if estimated_elements(&entity.kind) > remaining {
             return Err(Error::TooManySegments);
         }
-        let converted = entity_paths(&entity.kind, entity.common.extrusion);
+        let converted = if let crate::model::EntityKind::Spline(spline) = &entity.kind {
+            spline_path(spline)?.into_iter().collect()
+        } else {
+            entity_paths(&entity.kind, entity.common.extrusion)
+        };
         if converted.iter().flat_map(|path| path.elements()).any(|element| {
             let finite = |p: Point| p.x.is_finite() && p.y.is_finite();
             match *element {
@@ -190,7 +194,6 @@ fn entity_paths(kind: &crate::model::EntityKind, normal: crate::model::Point) ->
         E::Ellipse { center, major, ratio, start, end } if ratio.is_finite() && *ratio > 0.0 => {
             vec![ellipse(*center, *major, normal, *ratio, *start, *end)]
         }
-        E::Spline(spline) => spline_path(spline).into_iter().collect(),
         _ => Vec::new(),
     }
 }
@@ -221,21 +224,25 @@ impl Homogeneous {
 // Keep the NURBS conversion semantics of the previous importer: exact polynomial Bezier
 // spans through cubic degree, tolerance-bounded rational/high-degree spans, invalid-weight
 // fallback, and fit-point fallback when control data is malformed.
-fn spline_path(spline: &crate::model::Spline) -> Option<BezPath> {
-    let degree = usize::try_from(spline.degree).ok()?;
+fn spline_path(spline: &crate::model::Spline) -> Result<Option<BezPath>, Error> {
     let points: Vec<Point> = spline.control.iter().map(|p| Point::new(p[0], p[1])).collect();
     let weights = (spline.flags & 4 != 0 && spline.weights.len() == points.len()).then_some(spline.weights.as_slice());
-    nurbs(degree, &spline.knots, &points, weights)
+    let mut limit_hit = false;
+    let converted = usize::try_from(spline.degree).ok().and_then(|degree| nurbs(degree, &spline.knots, &points, weights, &mut limit_hit));
+    if limit_hit {
+        return Err(Error::TooManySegments);
+    }
+    Ok(converted
         .map(|mut path| {
             if spline.flags & 1 != 0 {
                 path.close_path();
             }
             path
         })
-        .or_else(|| through(&spline.fit.iter().map(|p| Point::new(p[0], p[1])).collect::<Vec<_>>(), spline.flags & 1 != 0))
+        .or_else(|| through(&spline.fit.iter().map(|p| Point::new(p[0], p[1])).collect::<Vec<_>>(), spline.flags & 1 != 0)))
 }
 
-fn nurbs(degree: usize, knots: &[f64], control: &[Point], weights: Option<&[f64]>) -> Option<BezPath> {
+fn nurbs(degree: usize, knots: &[f64], control: &[Point], weights: Option<&[f64]>, limit_hit: &mut bool) -> Option<BezPath> {
     let n = control.len();
     if !(1..=MAX_SPLINE_DEGREE).contains(&degree)
         || n <= degree
@@ -270,21 +277,33 @@ fn nurbs(degree: usize, knots: &[f64], control: &[Point], weights: Option<&[f64]
                 blossom(degree, knots, &homogeneous, span, &args)
             })
             .collect::<Option<_>>()?;
-        if path.elements().is_empty() {
-            path.move_to(bezier.first()?.point()?);
+        let start = bezier.first()?.point()?;
+        let needs_new_subpath = path_endpoint(&path).is_none_or(|end| end.distance(start) > 1e-12 * (1.0 + start.to_vec2().hypot()));
+        if needs_new_subpath {
+            path.move_to(start);
         }
         let polynomial: Option<Vec<Point>> = if rational { None } else { bezier.iter().map(|p| p.point()).collect() };
         match polynomial.as_deref() {
             Some([_, p]) => path.line_to(*p),
             Some([_, q, p]) => path.quad_to(*q, *p),
             Some([_, a, b, p]) => path.curve_to(*a, *b, *p),
-            _ => fit_spline(&mut path, &bezier, 0.0, 1.0, tolerance, 0)?,
+            _ => fit_spline(&mut path, &bezier, tolerance, 0, limit_hit)?,
         }
         if path.elements().len() > MAX_SPLINE_ELEMENTS {
+            *limit_hit = true;
             return None;
         }
     }
     (path.elements().len() > 1).then_some(path)
+}
+
+fn path_endpoint(path: &BezPath) -> Option<Point> {
+    match path.elements().last()? {
+        kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => Some(*p),
+        kurbo::PathEl::QuadTo(_, p) => Some(*p),
+        kurbo::PathEl::CurveTo(_, _, p) => Some(*p),
+        kurbo::PathEl::ClosePath => None,
+    }
 }
 
 fn blossom(degree: usize, knots: &[f64], control: &[Homogeneous], span: usize, args: &[f64]) -> Option<Homogeneous> {
@@ -325,27 +344,83 @@ fn eval_spline_bezier(bezier: &[Homogeneous], t: f64) -> Option<(Point, kurbo::V
     Some((points.first()?.point()?, kurbo::Vec2::ZERO))
 }
 
-fn fit_spline(path: &mut BezPath, bezier: &[Homogeneous], t0: f64, t1: f64, tolerance: f64, depth: u32) -> Option<()> {
-    let (p0, d0) = eval_spline_bezier(bezier, t0)?;
-    let (p3, d3) = eval_spline_bezier(bezier, t1)?;
-    let h = (t1 - t0) / 3.0;
-    let (c1, c2) = (p0 + d0 * h, p3 - d3 * h);
+fn fit_spline(path: &mut BezPath, bezier: &[Homogeneous], tolerance: f64, depth: u32, limit_hit: &mut bool) -> Option<()> {
+    let (p0, d0) = eval_spline_bezier(bezier, 0.0)?;
+    let (p3, d3) = eval_spline_bezier(bezier, 1.0)?;
+    let (c1, c2) = (p0 + d0 / 3.0, p3 - d3 / 3.0);
     if ![c1, c2].iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
         path.line_to(p3);
         return Some(());
     }
-    let cubic = kurbo::CubicBez::new(p0, c1, c2, p3);
-    let close = (1..8).all(|i| {
-        let s = f64::from(i) / 8.0;
-        eval_spline_bezier(bezier, t0 + (t1 - t0) * s).is_some_and(|(p, _)| kurbo::ParamCurve::eval(&cubic, s).distance(p) <= tolerance)
-    });
-    if close || depth >= MAX_SPLINE_DEPTH || path.elements().len() >= MAX_SPLINE_ELEMENTS {
+    let candidate = [p0, c1, c2, p3];
+    if cubic_error_bound(bezier, &candidate).is_some_and(|error| error <= tolerance) {
+        if path.elements().len() >= MAX_SPLINE_ELEMENTS {
+            *limit_hit = true;
+            return None;
+        }
         path.curve_to(c1, c2, p3);
         return Some(());
     }
-    let mid = (t0 + t1) / 2.0;
-    fit_spline(path, bezier, t0, mid, tolerance, depth + 1)?;
-    fit_spline(path, bezier, mid, t1, tolerance, depth + 1)
+    if depth >= MAX_SPLINE_DEPTH || path.elements().len() >= MAX_SPLINE_ELEMENTS {
+        *limit_hit = true;
+        return None;
+    }
+    let (left, right) = split_homogeneous_bezier(bezier)?;
+    fit_spline(path, &left, tolerance, depth + 1, limit_hit)?;
+    fit_spline(path, &right, tolerance, depth + 1, limit_hit)
+}
+
+fn split_homogeneous_bezier(bezier: &[Homogeneous]) -> Option<(Vec<Homogeneous>, Vec<Homogeneous>)> {
+    let count = bezier.len();
+    if count < 2 {
+        return None;
+    }
+    let mut row = bezier.to_vec();
+    let mut left = vec![*bezier.first()?; count];
+    let mut right = vec![*bezier.last()?; count];
+    left[0] = row[0];
+    right[count - 1] = row[count - 1];
+    for level in 1..count {
+        for index in 0..count - level {
+            row[index] = row[index].lerp(row[index + 1], 0.5);
+        }
+        left[level] = row[0];
+        right[count - 1 - level] = row[count - 1 - level];
+    }
+    Some((left, right))
+}
+
+// Bound the rational curve/cubic difference over the whole parameter interval. In Bernstein
+// form, X(t)-W(t)C(t) has degree p+3, so its norm is bounded by the largest coefficient norm;
+// W(t) is a convex combination of positive weights and is at least their minimum.
+fn cubic_error_bound(bezier: &[Homogeneous], cubic: &[Point; 4]) -> Option<f64> {
+    let degree = bezier.len().checked_sub(1)?;
+    let total = degree.checked_add(3)?;
+    let min_weight = bezier.iter().map(|point| point.w).fold(f64::INFINITY, f64::min);
+    if !(min_weight > 0.0 && min_weight.is_finite()) {
+        return None;
+    }
+    let mut max_error_numerator: f64 = 0.0;
+    for k in 0..=total {
+        let mut x = 0.0;
+        let mut y = 0.0;
+        for (i, point) in bezier.iter().enumerate() {
+            let Some(j) = k.checked_sub(i).filter(|j| *j < 4) else { continue };
+            let factor = binomial(degree, i) * binomial(3, j) / binomial(total, k);
+            x += (point.x - point.w * cubic[j].x) * factor;
+            y += (point.y - point.w * cubic[j].y) * factor;
+        }
+        max_error_numerator = max_error_numerator.max(x.hypot(y));
+    }
+    Some(max_error_numerator / min_weight)
+}
+
+fn binomial(n: usize, k: usize) -> f64 {
+    if k > n {
+        return 0.0;
+    }
+    let k = k.min(n - k);
+    (1..=k).fold(1.0, |value, i| value * (n + 1 - i) as f64 / i as f64)
 }
 
 fn through(points: &[Point], closed: bool) -> Option<BezPath> {
@@ -522,7 +597,7 @@ mod spline_tests {
 
     #[test]
     fn spline_path_follows_clamped_control_curve_and_bounds_work() {
-        let path = spline_path(&cubic()).expect("valid cubic spline");
+        let path = spline_path(&cubic()).unwrap().expect("valid cubic spline");
         assert_eq!(path.elements().len(), 2);
         assert!(matches!(path.elements()[0], kurbo::PathEl::MoveTo(p) if p == Point::new(0.0, 0.0)));
         assert!(matches!(path.elements()[1], kurbo::PathEl::CurveTo(a, b, p)
@@ -535,33 +610,38 @@ mod spline_tests {
         let mut rational = cubic();
         rational.flags |= 4;
         rational.weights = vec![1.0, 0.5, 0.5, 1.0];
-        let rational_path = spline_path(&rational).expect("rational spline");
+        let rational_path = spline_path(&rational).unwrap().expect("rational spline");
         assert!(rational_path.elements().iter().any(|el| matches!(el, kurbo::PathEl::CurveTo(..))));
 
         let mut closed = cubic();
         closed.flags |= 1;
-        assert!(matches!(spline_path(&closed).unwrap().elements().last(), Some(kurbo::PathEl::ClosePath)));
+        assert!(matches!(spline_path(&closed).unwrap().unwrap().elements().last(), Some(kurbo::PathEl::ClosePath)));
         let mut periodic = cubic();
         periodic.flags |= 2;
-        assert!(!matches!(spline_path(&periodic).unwrap().elements().last(), Some(kurbo::PathEl::ClosePath)));
+        assert!(!matches!(spline_path(&periodic).unwrap().unwrap().elements().last(), Some(kurbo::PathEl::ClosePath)));
 
         let mut fit = cubic();
         fit.knots.clear();
         fit.fit = vec![[0.0, 0.0, 0.0], [1.0, 2.0, 0.0], [3.0, 0.0, 0.0]];
-        let path = spline_path(&fit).expect("fit-point fallback");
+        let path = spline_path(&fit).unwrap().expect("fit-point fallback");
         assert!(matches!(path.elements()[0], kurbo::PathEl::MoveTo(p) if p == Point::new(0.0,0.0)));
         assert!(matches!(path.elements().last(), Some(kurbo::PathEl::CurveTo(_, _, p)) if *p == Point::new(3.0,0.0)));
+
+        let mut negative = cubic();
+        negative.degree = -1;
+        negative.fit = fit.fit;
+        assert!(spline_path(&negative).unwrap().is_some(), "invalid degree reaches the prior fit-point fallback");
     }
 
     #[test]
     fn spline_path_rejects_malformed_knots_and_defaults_invalid_weights() {
         let mut spline = cubic();
         spline.knots[4] = f64::NAN;
-        assert!(spline_path(&spline).is_none());
+        assert!(spline_path(&spline).unwrap().is_none());
         let mut spline = cubic();
         spline.flags |= 4;
         spline.weights = vec![1.0, 0.0, 1.0, 1.0];
-        assert!(spline_path(&spline).is_some(), "invalid weights historically fall back to unit weights");
+        assert!(spline_path(&spline).unwrap().is_some(), "invalid weights historically fall back to unit weights");
     }
 
     #[test]
@@ -573,5 +653,71 @@ mod spline_tests {
         let bounds = imported.bounds.expect("spline bounds");
         assert!((bounds.x0 - 0.0).abs() < 1e-12 && (bounds.x1 - 3.0).abs() < 1e-12);
         assert!((bounds.y0 - 0.0).abs() < 1e-12 && (bounds.y1 - 1.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn discontinuous_nurbs_spans_remain_separate_subpaths() {
+        let mut limit_hit = false;
+        let path = nurbs(
+            1,
+            &[0.0, 0.0, 0.5, 0.5, 1.0, 1.0],
+            &[Point::new(0.0, 0.0), Point::new(1.0, 0.0), Point::new(5.0, 5.0), Point::new(6.0, 5.0)],
+            None,
+            &mut limit_hit,
+        )
+        .expect("piecewise linear spline");
+        assert!(!limit_hit);
+        assert!(matches!(path.elements(), [kurbo::PathEl::MoveTo(a), kurbo::PathEl::LineTo(b), kurbo::PathEl::MoveTo(c), kurbo::PathEl::LineTo(d)]
+            if *a == Point::new(0.0,0.0) && *b == Point::new(1.0,0.0) && *c == Point::new(5.0,5.0) && *d == Point::new(6.0,5.0)));
+    }
+
+    #[test]
+    fn bernstein_error_bound_covers_rational_and_high_degree_deviations() {
+        for control in [
+            vec![Homogeneous { x: 0.0, y: 0.0, w: 1.0 }, Homogeneous { x: 0.2, y: 2.0, w: 0.5 }, Homogeneous { x: 1.0, y: 0.0, w: 1.0 }],
+            vec![
+                Homogeneous { x: 0.0, y: 0.0, w: 1.0 },
+                Homogeneous { x: 0.2, y: 2.0, w: 0.7 },
+                Homogeneous { x: 0.5, y: -2.0, w: 0.9 },
+                Homogeneous { x: 0.8, y: 2.0, w: 1.2 },
+                Homogeneous { x: 1.0, y: 0.0, w: 1.0 },
+            ],
+        ] {
+            let degree = control.len() - 1;
+            let bezier = [Point::new(0.0, 0.0), Point::new(0.25, 1.0), Point::new(0.75, 1.0), Point::new(1.0, 0.0)];
+            let bound = cubic_error_bound(&control, &bezier).unwrap();
+            let cubic = kurbo::CubicBez::new(bezier[0], bezier[1], bezier[2], bezier[3]);
+            for sample in 0..=1024 {
+                let t = sample as f64 / 1024.0;
+                let mut points = control.clone();
+                for level in (1..=degree).rev() {
+                    for i in 0..level {
+                        points[i] = points[i].lerp(points[i + 1], t);
+                    }
+                }
+                let source = points[0].point().unwrap();
+                let approximation = kurbo::ParamCurve::eval(&cubic, t);
+                assert!(source.distance(approximation) <= bound * (1.0 + 1e-12), "sample {t}: bound {bound}");
+            }
+        }
+    }
+
+    #[test]
+    fn rational_quadratic_circle_matches_the_prior_importer_tolerance() {
+        let weight = std::f64::consts::FRAC_1_SQRT_2;
+        let control = [(1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (-1.0, 1.0), (-1.0, 0.0), (-1.0, -1.0), (0.0, -1.0), (1.0, -1.0), (1.0, 0.0)]
+            .map(|(x, y)| Point::new(200.0 + x * 100.0, 200.0 + y * 100.0));
+        let knots = [0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 4.0];
+        let weights = [1.0, weight, 1.0, weight, 1.0, weight, 1.0, weight, 1.0];
+        let mut limit_hit = false;
+        let path = nurbs(2, &knots, &control, Some(&weights), &mut limit_hit).expect("circle NURBS");
+        assert!(!limit_hit);
+        let center = Point::new(200.0, 200.0);
+        let max_radial_error = path
+            .segments()
+            .flat_map(|segment| (0..=32).map(move |i| kurbo::ParamCurve::eval(&segment, i as f64 / 32.0)))
+            .map(|point| (point.distance(center) - 100.0).abs())
+            .fold(0.0_f64, f64::max);
+        assert!(max_radial_error < 0.01, "prior importer tolerance was 0.01; got {max_radial_error}");
     }
 }
