@@ -1,5 +1,5 @@
 use super::reader::find;
-use super::state::{Credentials, Slot};
+use super::state::{Credential, Credentials, Slot, same_encryption};
 use super::xref::XrefIndex;
 use super::{Arc, BTreeMap, CosError, Dict, Document, HashSet, ObjRef, Object};
 
@@ -64,6 +64,17 @@ impl Document {
     /// tries the empty password). Fails with `NeedsPassword` / `WrongPassword` as appropriate.
     pub fn open_with_password(data: Arc<Vec<u8>>, password: Option<&str>) -> Result<Self, CosError> {
         Self::open_with_stream_limit(data, password, crate::cos::object::MAX_DECODED)
+    }
+
+    /// Open with a password or, for public-key security (§7.6.5), with the seed and
+    /// permissions one of the document's envelopes gave up. A public-key document opened with
+    /// a password fails with [`CosError::NeedsCertificate`], which carries the envelopes.
+    pub fn open_with_credential(data: Arc<Vec<u8>>, credential: &Credential<'_>) -> Result<Self, CosError> {
+        let credentials = match credential {
+            Credential::Password(password) => Credentials::Password(*password),
+            Credential::Certificate { seed, permissions } => Credentials::Certificate { seed: *seed, permissions: *permissions },
+        };
+        Self::open_as(data, credentials, crate::cos::object::MAX_DECODED)
     }
 
     /// Open with a tighter decompression bound for object and cross-reference streams.
@@ -230,19 +241,28 @@ impl Document {
         // Read here, while nothing is decrypted yet.
         let members = self.encryption_members(enc);
         let handler = match credentials {
-            Credentials::Password(password) => match crate::crypt::SecurityHandler::open(params.clone(), &id0, *password) {
-                Ok(handler) => Arc::new(handler),
-                // No password, or the empty one: what only the embedded files need isn't asked.
-                Err(crate::crypt::CryptError::WrongPassword) => match self.without_password(&dict, params) {
-                    Some(handler) if password.is_none_or(str::is_empty) => Arc::new(handler),
-                    _ if password.is_none() => return Err(CosError::NeedsPassword),
-                    _ => return Err(CosError::WrongPassword),
-                },
-                Err(other) => return Err(CosError::Security(other.to_string())),
-            },
+            Credentials::Password(password) => {
+                // Public-key security opens only with what one of its envelopes gave up.
+                if params.filter == crate::crypt::PUBSEC_FILTER {
+                    return Err(CosError::NeedsCertificate(params.recipients));
+                }
+                match crate::crypt::SecurityHandler::open(params.clone(), &id0, *password) {
+                    Ok(handler) => Arc::new(handler),
+                    // No password, or the empty one: what only the embedded files need isn't asked.
+                    Err(crate::crypt::CryptError::WrongPassword) => match self.without_password(&dict, params) {
+                        Some(handler) if password.is_none_or(str::is_empty) => Arc::new(handler),
+                        _ if password.is_none() => return Err(CosError::NeedsPassword),
+                        _ => return Err(CosError::WrongPassword),
+                    },
+                    Err(other) => return Err(CosError::Security(other.to_string())),
+                }
+            }
+            Credentials::Certificate { seed, permissions } => {
+                Arc::new(crate::crypt::SecurityHandler::open_public_key(params, seed, *permissions).map_err(|e| CosError::Security(e.to_string()))?)
+            }
             // The same encryption as the document whose key this is: that key opens it. A handler
             // without the key opens only what it would open by itself.
-            Credentials::Handler { handler, id0: known } if *handler.dict() == params && *known == id0 => {
+            Credentials::Handler { handler, id0: known } if *handler.dict() == same_encryption(handler, params.clone()) && *known == id0 => {
                 if !handler.has_key() && !crate::cos::security::efopen_only(self, &dict) {
                     return Err(CosError::NeedsPassword);
                 }
@@ -464,6 +484,45 @@ impl Document {
         let r = self.add(e);
         self.trailer.set(b"Encrypt".to_vec(), Object::Ref(r));
         // Objects are still read with the original handler; saves use the new one.
+        self.out_security = Some(Arc::new(h));
+        self.out_encrypt_num = Some(r.num);
+        self.encryption_changed = true;
+        Ok(())
+    }
+
+    /// Protect the document for the holders of certificates (§7.6.5): the envelopes in
+    /// `params` were made for them by the caller (CMS EnvelopedData). Takes effect on the next save, a full
+    /// rewrite; this document stays readable (authenticated as owner).
+    pub fn set_public_key_encryption(&mut self, params: &crate::crypt::PublicKeyEncryption) -> Result<(), CosError> {
+        let h = crate::crypt::create_public_key(params).map_err(|e| CosError::Security(e.to_string()))?;
+        let d = h.dict();
+        let hex = |b: &[u8]| Object::String(crate::cos::PdfString { bytes: b.to_vec(), hex: true });
+        let mut cf = Dict::new();
+        let mut filter = Dict::new();
+        filter.set(b"Type".to_vec(), Object::name("CryptFilter"));
+        filter.set(b"CFM".to_vec(), Object::name(if d.v >= 5 { "AESV3" } else { "AESV2" }));
+        filter.set(b"AuthEvent".to_vec(), Object::name("DocOpen"));
+        // Public-key handlers give a crypt filter's /Length in bits: 128 for AESV2, 256 for
+        // AESV3 (ISO 32000-2, Table 25).
+        filter.set(b"Length".to_vec(), Object::Int(if d.v >= 5 { 256 } else { 128 }));
+        filter.set(b"Recipients".to_vec(), Object::Array(d.recipients.iter().map(|r| hex(r)).collect()));
+        if !d.encrypt_metadata {
+            filter.set(b"EncryptMetadata".to_vec(), Object::Bool(false));
+        }
+        cf.set(crate::crypt::PUBSEC_CF.to_vec(), Object::Dict(filter));
+        let mut e = Dict::new();
+        e.set(b"Filter".to_vec(), Object::Name(d.filter.clone()));
+        e.set(b"SubFilter".to_vec(), Object::Name(d.sub_filter.clone()));
+        e.set(b"V".to_vec(), Object::Int(d.v));
+        e.set(b"Length".to_vec(), Object::Int(d.length_bits));
+        e.set(b"CF".to_vec(), Object::Dict(cf));
+        e.set(b"StmF".to_vec(), Object::Name(d.stm_f.clone()));
+        e.set(b"StrF".to_vec(), Object::Name(d.str_f.clone()));
+        if let Some(Object::Ref(old)) = self.trailer.get(b"Encrypt").cloned() {
+            self.free(old);
+        }
+        let r = self.add(e);
+        self.trailer.set(b"Encrypt".to_vec(), Object::Ref(r));
         self.out_security = Some(Arc::new(h));
         self.out_encrypt_num = Some(r.num);
         self.encryption_changed = true;
