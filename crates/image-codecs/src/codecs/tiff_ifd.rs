@@ -41,6 +41,7 @@ pub(crate) const TAG_TILE_WIDTH: u16 = 322;
 pub(crate) const TAG_TILE_LENGTH: u16 = 323;
 pub(crate) const TAG_TILE_OFFSETS: u16 = 324;
 pub(crate) const TAG_SUB_IFDS: u16 = 330;
+pub(crate) const TAG_INK_SET: u16 = 332;
 pub(crate) const TAG_EXTRA_SAMPLES: u16 = 338;
 pub(crate) const TAG_SAMPLE_FORMAT: u16 = 339;
 
@@ -349,6 +350,12 @@ pub struct TiffPage {
     pub tiled: bool,
     /// `PlanarConfiguration` 2: each sample in its own plane.
     pub planar: bool,
+    /// TIFF `InkSet` (tag 332), when present: 1 is CMYK, 2 is another ink set (named in
+    /// `InkNames`). Only meaningful for photometric 5 (Separated).
+    pub ink_set: Option<u16>,
+    /// TIFF `ExtraSamples` (tag 338), one value per extra sample: 0 unspecified, 1 associated
+    /// (premultiplied) alpha, 2 unassociated alpha. Empty when the tag is absent or unreadable.
+    pub extra_samples: Vec<u16>,
 }
 
 /// The directory structure of a TIFF file: its byte order, BigTIFF or not, and every image
@@ -405,6 +412,14 @@ fn describe(f: &File<'_>, ifd: &Ifd, parent: Option<usize>) -> TiffPage {
         compression: u16_of(TAG_COMPRESSION, 1),
         tiled: ifd.get(TAG_TILE_OFFSETS).is_some(),
         planar: f.tag_uint(ifd, TAG_PLANAR) == Some(2),
+        ink_set: f.tag_uint(ifd, TAG_INK_SET).and_then(|v| u16::try_from(v).ok()),
+        // Capped at the sample count: a file cannot have more extra samples than samples.
+        extra_samples: f
+            .tag_uints(ifd, TAG_EXTRA_SAMPLES, u64::from(u16_of(TAG_SAMPLES, 1)))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|v| u16::try_from(v).unwrap_or(u16::MAX))
+            .collect(),
     }
 }
 
