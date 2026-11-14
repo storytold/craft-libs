@@ -190,8 +190,8 @@ impl Document {
             .find(|element| Local("flash_profile").matches(&element.name) && boolean(element, "current") == Some(true))
             .or_else(|| self.root.elements().find(|element| Local("flash_profile").matches(&element.name)))
             .unwrap_or(&self.root);
-        let properties = profile.child("PublishFlashProperties").unwrap_or(profile);
-        let value = |name: &str| properties.child(name).and_then(trimmed_text);
+        let properties = profile.child(Local("PublishFlashProperties")).unwrap_or(profile);
+        let value = |name: &str| properties.child(Local(name)).and_then(trimmed_text);
         PublishSettings { action_script_version: value("ActionScriptVersion"), document_class: value("DocumentClass") }
     }
 
@@ -297,7 +297,12 @@ impl<'a> Layer<'a> {
 
     /// Frames in native order. Non-`DOMFrame` extension nodes are skipped.
     pub fn frames(self) -> impl Iterator<Item = Frame<'a>> {
-        self.element.child("frames").into_iter().flat_map(El::elements).filter(|element| element.name == "DOMFrame").map(|element| Frame { element })
+        self.element
+            .child(Local("frames"))
+            .into_iter()
+            .flat_map(El::elements)
+            .filter(|element| Local("DOMFrame").matches(&element.name))
+            .map(|element| Frame { element })
     }
 
     fn into_model(self) -> LayerModel {
@@ -457,14 +462,36 @@ mod tests {
     #[test]
     fn recognizes_prefixed_xfl_timeline_elements_by_local_name() {
         let document = Document::parse(
-            b"<x:DOMDocument xmlns:x='urn:adobe:xfl'><x:timelines><x:DOMTimeline><x:layers><x:DOMLayer/></x:layers></x:DOMTimeline></x:timelines></x:DOMDocument>",
+            b"<x:DOMDocument xmlns:x='urn:adobe:xfl'><x:timelines><x:DOMTimeline><x:layers><x:DOMLayer><x:frames><x:DOMFrame index='4' duration='2'/></x:frames></x:DOMLayer></x:layers></x:DOMTimeline></x:timelines></x:DOMDocument>",
         )
         .unwrap();
-        assert_eq!(document.timelines().next().unwrap().layers().count(), 1);
+        {
+            let mut timelines = document.timelines();
+            let timeline = timelines.next().unwrap();
+            assert!(timelines.next().is_none());
+            let mut layers = timeline.layers();
+            let layer = layers.next().unwrap();
+            assert!(layers.next().is_none());
+            let frame = layer.frames().next().unwrap();
+            assert_eq!((frame.index(), frame.duration()), (Some(4), Some(2)));
+        }
+        let (model, _) = document.into_parts(ModelLimits { max_timelines: 1, max_layers_per_timeline: 1 });
+        assert_eq!(model.timelines[0].layers[0].frames[0].index, Some(4));
 
         let symbol =
             Document::parse(b"<x:DOMSymbolItem xmlns:x='urn:adobe:xfl'><x:timeline><x:DOMTimeline/></x:timeline></x:DOMSymbolItem>").unwrap();
         assert!(symbol.symbol_timeline().is_some());
+    }
+
+    #[test]
+    fn reads_prefixed_publish_settings_children_by_local_name() {
+        let document = Document::parse(
+            b"<x:PublishSettings xmlns:x='urn:adobe:xfl'><x:flash_profile current='true'><x:PublishFlashProperties><x:ActionScriptVersion>3</x:ActionScriptVersion><x:DocumentClass>com.example.Main</x:DocumentClass></x:PublishFlashProperties></x:flash_profile></x:PublishSettings>",
+        )
+        .unwrap();
+        let settings = document.publish_settings();
+        assert_eq!(settings.action_script_version.as_deref(), Some("3"));
+        assert_eq!(settings.document_class.as_deref(), Some("com.example.Main"));
     }
 
     #[test]
