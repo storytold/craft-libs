@@ -36,8 +36,8 @@ impl Reader {
             self.skip_chars -= 1;
             return;
         }
-        // `\'3b` in a font name is a `;` in every code page, and part of the name (see `ch`).
-        if b == b';' && self.st.dest == Dest::FontTbl {
+        // `\'3b` in a font or style name is a `;` in every code page, and part of the name (see `ch`).
+        if b == b';' && matches!(self.st.dest, Dest::FontTbl | Dest::StyleSheet) {
             self.ch(';');
             return;
         }
@@ -318,11 +318,20 @@ impl Reader {
             return;
         }
         self.finish_multibyte();
-        // Only a literal `;` ends a font name: an escaped one (`\'3b`, `\u59?`) belongs to it.
-        if c == ';' && self.st.dest == Dest::FontTbl {
-            // Held to the limit as other characters are; one past it drops the name.
-            if self.font_name.len() <= model::MAX_FONT_NAME {
-                self.font_name.push(c);
+        // Only a literal `;` ends a font or style name: an escaped one (`\'3b`, `\u59?`) belongs
+        // to it.
+        if c == ';' && matches!(self.st.dest, Dest::FontTbl | Dest::StyleSheet) {
+            if self.st.dest == Dest::FontTbl {
+                // Held to the limit as other characters are; one past it drops the name.
+                if self.font_name.len() <= model::MAX_FONT_NAME {
+                    self.font_name.push(c);
+                }
+                return;
+            }
+            if self.style_name.len() < model::MAX_FONT_NAME {
+                self.style_name.push(c);
+            } else {
+                model::dropped(model::Dropped::StyleName);
             }
             return;
         }

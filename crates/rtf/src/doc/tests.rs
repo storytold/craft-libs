@@ -63,6 +63,28 @@ fn stylesheet_names_honour_the_uc_fallback_count() {
 }
 
 #[test]
+fn stylesheet_names_consume_a_control_word_fallback() {
+    // \uc1: one fallback byte follows \uN? — and that byte may start a control word. `\b` here
+    // is the fallback of \u116 (t), not bold: reading it as formatting would leave the pending
+    // skip to swallow the decoded i and the name would come out "ttle".
+    let rtf = br"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s2 \uc1\u116\b\u105?\u116?\u108?\u101?;}}\pard\s2 T\par}";
+    let f = parse(rtf).unwrap();
+    assert_eq!(texts(&f)[0], "Title:T");
+}
+
+#[test]
+fn an_escaped_semicolon_stays_in_the_style_name() {
+    // Only a literal `;` ends a style name: a decoded one (`\u59?` = `;`) belongs to it, as in
+    // a font name. `{\s2 Title\u59? variant;}` names one style "Title; variant" — a custom
+    // style, so the paragraph's kind is Normal. Committing at the escape would name style 2
+    // "Title" (whose built-in kind is Title) and put the rest in style 0, so the paragraph
+    // would come out Title.
+    let rtf = br"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s2 Title\u59? variant;}}\pard\s2 T\par}";
+    let f = parse(rtf).unwrap();
+    assert_eq!(texts(&f)[0], "Normal:T");
+}
+
+#[test]
 fn a_malformed_hex_escape_leaves_no_stray_text() {
     // A `\'` that is not followed by two hex digits is malformed: the escape itself goes, any
     // hex digits of a truncated pair go with it, and everything else — non-hex bytes, `}` —
