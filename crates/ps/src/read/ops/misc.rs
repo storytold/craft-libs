@@ -126,16 +126,18 @@ pub fn closefile(ip: &mut Interp) -> R {
     {
         // Some embedded programs leave `/CharStrings dict` on the operand stack instead of
         // installing it with `ND` before closing eexec. Attach that completed table to its font.
-        if font.get_name(b"CharStrings").is_none()
-            && let Some(chars) = ip.o.windows(2).rev().find_map(|pair| match pair {
+        if font.get_name(b"CharStrings").is_none() {
+            ip.charge(ip.o.len() as u64)?;
+            if let Some(chars) = ip.o.windows(2).rev().find_map(|pair| match pair {
                 [Obj::Name(key, _), Obj::Dict(chars)] if key.as_ref() == b"CharStrings" => Some(chars.clone()),
                 _ => None,
-            })
-        {
-            font.put_name(b"CharStrings", Obj::Dict(chars));
+            }) {
+                font.put_name(b"CharStrings", Obj::Dict(chars));
+            }
         }
         // Embedded Type 1 programs conventionally leave their completed font dictionary in
         // the current dictionary stack; closefile marks the end of eexec, so make it findable.
+        crate::read::font::add_fid(ip, &font);
         ip.fontdir.put(name, Obj::Dict(font));
     }
     Ok(())
@@ -210,7 +212,13 @@ pub fn eexec(ip: &mut Interp) -> R {
     // A number of embedded Type 1 programs omit the usual `currentdict end` before eexec;
     // their encrypted prolog starts with `dup /Private ...` and expects its font dictionary.
     // Supply it only when the caller has not already left an operand on the stack.
+    let font_prolog = ip.d.last().is_some_and(|font| {
+        font.get_name(b"FontName").is_some()
+            && font.get_name(b"FontType").and_then(|value| value.num()) == Some(1.0)
+            && font.get_name(b"FontMatrix").is_some()
+    });
     if ip.o.is_empty()
+        && font_prolog
         && let Some(font) = ip.d.last()
     {
         ip.push(Obj::Dict(font.clone()))?;
@@ -550,7 +558,7 @@ pub fn findresource(ip: &mut Interp) -> R {
     let cat = ip.pop_name()?;
     let key = ip.pop()?;
     if cat == b"Font" {
-        let f = crate::read::font::find_font(ip, &key);
+        let f = crate::read::font::find_font(ip, &key)?;
         return ip.push(Obj::Dict(f));
     }
     if cat == b"Category" {

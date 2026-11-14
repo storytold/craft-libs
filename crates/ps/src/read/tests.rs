@@ -161,6 +161,25 @@ fn eexec_sections_run() {
 }
 
 #[test]
+fn completed_embedded_type1_fonts_get_a_fid_when_registered() {
+    let plain = b"pop currentfile closefile\n";
+    let mut r: u16 = 55665;
+    let mut hex = String::new();
+    for &p in [1u8, 2, 3, 4].iter().chain(plain.iter()) {
+        let c = p ^ (r >> 8) as u8;
+        r = (u16::from(c).wrapping_add(r)).wrapping_mul(52845).wrapping_add(22719);
+        hex.push_str(&format!("{c:02x}"));
+    }
+    let body = format!(
+        "/T 6 dict dup begin /FontName /T def /FontType 1 def /FontMatrix [0.001 0 0 0.001 0 0] def /Private 1 dict def end def
+         T begin currentfile eexec\n{hex}\nT end
+         T /FID known {{ 1 0 0 setrgbcolor 10 20 5 5 rectfill }} if"
+    );
+    let (content, _) = run(&body);
+    assert!(content.contains("1 0 0 rg"), "the recovered font has a FID: {content}");
+}
+
+#[test]
 fn hostile_programs_end_with_an_error_not_a_hang_or_panic() {
     let limits = Limits {
         steps: 200_000,
@@ -311,6 +330,54 @@ fn tiny_ttf() -> Vec<u8> {
     out
 }
 
+fn fallback_tiny_ttf(_: &[u8]) -> Option<&'static [u8]> {
+    static FONT: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    Some(FONT.get_or_init(tiny_ttf).as_slice())
+}
+
+#[test]
+fn fallback_font_bytes_are_charged_before_copying() {
+    let limits = Limits { memory: 32, fallback_font: Some(fallback_tiny_ttf), ..Limits::default() };
+    let error = eps_to_pdf(&eps("/Missing findfont pop 0 0 1 1 rectfill"), limits).unwrap_err();
+    assert_eq!(error, "out of memory");
+}
+
+#[test]
+fn actual_text_uses_the_selected_encoding_and_omits_unknown_names() {
+    let (content, _) = run("/F /Helvetica findfont def F /Encoding get 65 /B put F 10 scalefont setfont 10 20 moveto (A) show");
+    assert!(content.contains("/ActualText (B)"), "{content}");
+
+    let (content, _) = run("/F /Helvetica findfont def F /Encoding get 65 /customGlyph put F 10 scalefont setfont 10 20 moveto (A) show");
+    assert!(!content.contains("/ActualText"), "{content}");
+}
+
+#[test]
+fn text_paint_keeps_completed_glyphs_when_a_later_glyph_hits_the_work_limit() {
+    let ttf = tiny_ttf();
+    let sfnts: String = ttf.chunks(64).map(|c| format!("<{}>\n", c.iter().map(|b| format!("{b:02x}")).collect::<String>())).collect();
+    let body = format!(
+        "/T42 11 dict dup begin /FontType 42 def /FontMatrix [1 0 0 1 0 0] def /PaintType 0 def /FontBBox [0 0 1 1] def
+         /Encoding 256 array def 0 1 255 {{ Encoding exch /.notdef put }} for Encoding 65 /A put
+         /CharStrings 2 dict dup /.notdef 0 put dup /A 1 put def /sfnts [ {sfnts} ] def end definefont
+         20 scalefont setfont 10 20 moveto (AA) show"
+    );
+    let bytes = eps(&body);
+    let complete = eps_to_pdf(&bytes, Limits::default()).unwrap();
+    let mut found_prefix = false;
+    for steps in (complete.steps.saturating_sub(100))..complete.steps {
+        let limits = Limits { steps, keep_unpainted: true, ..Limits::default() };
+        let Ok(converted) = eps_to_pdf(&bytes, limits) else { continue };
+        if converted.warnings.iter().any(|warning| warning == "the program runs too long") {
+            let content = content(&converted.pdf);
+            if content.lines().filter(|line| *line == "f").count() == 1 {
+                found_prefix = true;
+                break;
+            }
+        }
+    }
+    assert!(found_prefix, "no partial PDF retained the first completed glyph");
+}
+
 #[test]
 fn type42_fonts_draw_their_truetype_glyphs() {
     let ttf = tiny_ttf();
@@ -322,8 +389,8 @@ fn type42_fonts_draw_their_truetype_glyphs() {
          /CharStrings 2 dict dup /.notdef 0 put dup /A 1 put def /sfnts [ {sfnts} ] def end definefont
          20 scalefont setfont 10 20 moveto (AA) show"
     ));
-    // One fill contains both boxes; 1 point (50 units at 20 pt) in, the second 12 points on.
-    assert_eq!(c.lines().filter(|l| *l == "f").count(), 1, "{c}");
+    // Each glyph is filled independently; 1 point (50 units at 20 pt) in, the second 12 points on.
+    assert_eq!(c.lines().filter(|l| *l == "f").count(), 2, "{c}");
     assert_eq!(c.lines().filter(|l| *l == "EMC").count(), 1, "{c}");
     assert!(c.contains("11 20 m") && c.contains("23 20 m"), "{c}");
 }
@@ -429,7 +496,7 @@ fn cff_fonts_from_startdata_draw_their_glyphs() {
     let c = content(
         &eps_to_pdf(&startdata_eps(&tiny_cff(false), "/T findfont 10 scalefont setfont 10 20 moveto (AA) show"), Limits::default()).unwrap().pdf,
     );
-    assert_eq!(c.lines().filter(|l| *l == "f").count(), 1, "{c}");
+    assert_eq!(c.lines().filter(|l| *l == "f").count(), 2, "{c}");
     assert_eq!(c.lines().filter(|l| *l == "EMC").count(), 1, "{c}");
     // The box starts 0.5 points (50 units) in; the second glyph 6 points (600 units) on.
     assert!(c.contains("10.5 20 m") && c.contains("16.5 20 m"), "{c}");
@@ -443,8 +510,8 @@ fn cid_fonts_draw_through_cmaps() {
                 endcmap CMapName currentdict /CMap defineresource pop end end
                 /U /One-H [/T] composefont pop /U findfont 10 scalefont setfont 10 40 moveto (AA) show";
     let c = content(&eps_to_pdf(&startdata_eps(&tiny_cff(true), body), Limits::default()).unwrap().pdf);
-    assert_eq!(c.lines().filter(|l| *l == "f").count(), 2, "{c}");
-    assert_eq!(c.lines().filter(|l| *l == "EMC").count(), 2, "{c}");
+    assert_eq!(c.lines().filter(|l| *l == "f").count(), 4, "{c}");
+    assert_eq!(c.lines().filter(|l| *l == "EMC").count(), 0, "{c}");
     assert!(c.contains("16.5 20 m") && c.contains("16.5 40 m"), "{c}");
     // Broken font data is a warning, not a failure.
     let r = eps_to_pdf(&startdata_eps(b"\x01\x00\x04\x04\xff\xff\xff", "0 0 1 1 rectfill"), Limits::default()).unwrap();

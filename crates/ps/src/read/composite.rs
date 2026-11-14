@@ -358,7 +358,7 @@ fn compose(ip: &mut Interp, n: &Obj, cmap: &Obj, descendants: Vec<Obj>) -> R<PDi
             Obj::Dict(d) => Obj::Dict(d),
             k => match category(ip, b"CIDFont").get(&k.key()) {
                 Some(d @ Obj::Dict(_)) => d,
-                _ => Obj::Dict(crate::read::font::find_font(ip, &k)),
+                _ => Obj::Dict(crate::read::font::find_font(ip, &k)?),
             },
         });
     }

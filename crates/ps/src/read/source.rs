@@ -420,13 +420,15 @@ impl Sources {
                         continue;
                     }
                     if c == b'<' && first {
-                        // A leading `<~`.
-                        if self.read_depth(up, depth + 1) == Some(b'~') {
+                        // A leading `<~` is optional; `<` is itself a valid ASCII85 digit.
+                        let next = self.read_depth(up, depth + 1);
+                        if next == Some(b'~') {
                             first = false;
                             continue;
                         }
-                        more = false;
-                        break;
+                        if next.is_some() {
+                            self.unread(up);
+                        }
                     }
                     first = false;
                     if c == b'~' {
@@ -517,6 +519,12 @@ impl Sources {
                                 break;
                             }
                             count -= 1;
+                            if count == 0 {
+                                // Positive EODCount includes the Nth terminating occurrence.
+                                produced.extend(window.drain(..));
+                                more = false;
+                                break;
+                            }
                         }
                         while window.len() > eod.len() {
                             if let Some(b) = window.pop_front() {
@@ -827,6 +835,11 @@ mod tests {
         let f = s.filter(id, b"ASCII85Decode", &FilterParams::default()).unwrap();
         assert_eq!(all(&mut s, f), b"Hello World!");
         assert_eq!(all(&mut s, id), b"rest");
+        let id = s.add(Source::bytes(b"<!!!!~>rest".to_vec()));
+        let f = s.filter(id, b"ASCII85Decode", &FilterParams::default()).unwrap();
+        let value = 27u32 * 85u32.pow(4);
+        assert_eq!(all(&mut s, f), value.to_be_bytes());
+        assert_eq!(all(&mut s, id), b"rest");
         let id = s.add(Source::bytes(vec![2, b'a', b'b', b'c', 254, b'x', 128, b'!']));
         let f = s.filter(id, b"RunLengthDecode", &FilterParams::default()).unwrap();
         assert_eq!(all(&mut s, f), b"abcxxx");
@@ -836,6 +849,11 @@ mod tests {
         let f = s.filter(id, b"SubFileDecode", &p).unwrap();
         assert_eq!(all(&mut s, f), b"data");
         assert_eq!(all(&mut s, id), b" tail");
+        let id = s.add(Source::bytes(b"aENDtailENDrest".to_vec()));
+        let p = FilterParams { eod_count: 1, eod_string: b"END".to_vec(), ..Default::default() };
+        let f = s.filter(id, b"SubFileDecode", &p).unwrap();
+        assert_eq!(all(&mut s, f), b"aEND");
+        assert_eq!(all(&mut s, id), b"tailENDrest");
     }
 
     fn ascii85(data: &[u8]) -> String {

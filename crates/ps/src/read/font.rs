@@ -14,12 +14,12 @@ fn font_matrix(d: &PDict) -> M {
 }
 
 /// A stand-in for a font the file doesn't carry: a Type 1 shell with StandardEncoding.
-fn substitute(ip: &mut Interp, font_name: &[u8]) -> PDict {
+fn substitute(ip: &mut Interp, font_name: &[u8]) -> R<PDict> {
     if let Some(bytes) = ip.limits.fallback_font.and_then(|provider| provider(font_name))
-        && let Some(d) = substitute_type42(ip, font_name, bytes)
+        && let Some(d) = substitute_type42(ip, font_name, bytes)?
     {
         add_fid(ip, &d);
-        return d;
+        return Ok(d);
     }
     let d = PDict::new(12);
     d.put_name(b"FontName", Obj::lit(font_name));
@@ -34,13 +34,13 @@ fn substitute(ip: &mut Interp, font_name: &[u8]) -> PDict {
     d.put_name(b"Private", Obj::Dict(PDict::new(1)));
     d.put_name(b"CraftPsSubstitute", Obj::Bool(true));
     add_fid(ip, &d);
-    d
+    Ok(d)
 }
 
-fn substitute_type42(ip: &Interp, font_name: &[u8], bytes: &[u8]) -> Option<PDict> {
+fn substitute_type42(ip: &mut Interp, font_name: &[u8], bytes: &[u8]) -> R<Option<PDict>> {
     use skrifa::MetadataProvider;
 
-    let font = skrifa::FontRef::new(bytes).ok()?;
+    let Ok(font) = skrifa::FontRef::new(bytes) else { return Ok(None) };
     let cmap = font.charmap();
     let charstrings = PDict::new(256);
     for glyph_name in crate::read::encodings::standard() {
@@ -48,6 +48,7 @@ fn substitute_type42(ip: &Interp, font_name: &[u8], bytes: &[u8]) -> Option<PDic
         let Some(gid) = cmap.map(ch) else { continue };
         charstrings.put(Obj::lit(glyph_name.as_bytes()), Obj::Int(i64::from(gid.to_u32())));
     }
+    ip.alloc(bytes.len().saturating_add(bytes.len() % 2))?;
     let mut sfnt = bytes.to_vec();
     if sfnt.len() % 2 == 1 {
         sfnt.push(0);
@@ -65,7 +66,7 @@ fn substitute_type42(ip: &Interp, font_name: &[u8], bytes: &[u8]) -> Option<PDic
     }
     d.put_name(b"CharStrings", Obj::Dict(charstrings));
     d.put_name(b"sfnts", Obj::Array(PArr::new(vec![Obj::Str(PStr::new(sfnt), false)]), false));
-    Some(d)
+    Ok(Some(d))
 }
 
 fn standard_glyph_char(name: &[u8]) -> Option<char> {
@@ -116,25 +117,79 @@ fn standard_glyph_char(name: &[u8]) -> Option<char> {
         b"seven" => '7',
         b"eight" => '8',
         b"nine" => '9',
+        b"exclamdown" => '¡',
+        b"cent" => '¢',
+        b"sterling" => '£',
+        b"fraction" => '⁄',
+        b"yen" => '¥',
+        b"florin" => 'ƒ',
+        b"section" => '§',
+        b"currency" => '¤',
+        b"quotesingle" => '\'',
+        b"quotedblleft" => '“',
+        b"guillemotleft" => '«',
+        b"guilsinglleft" => '‹',
+        b"guilsinglright" => '›',
+        b"fi" => '\u{fb01}',
+        b"fl" => '\u{fb02}',
+        b"endash" => '–',
+        b"dagger" => '†',
+        b"daggerdbl" => '‡',
+        b"periodcentered" => '·',
+        b"paragraph" => '¶',
+        b"bullet" => '•',
+        b"quotesinglbase" => '‚',
+        b"quotedblbase" => '„',
+        b"quotedblright" => '”',
+        b"guillemotright" => '»',
+        b"ellipsis" => '…',
+        b"perthousand" => '‰',
+        b"questiondown" => '¿',
+        b"grave" => '`',
+        b"acute" => '´',
+        b"circumflex" => 'ˆ',
+        b"tilde" => '˜',
+        b"macron" => '¯',
+        b"breve" => '˘',
+        b"dotaccent" => '˙',
+        b"dieresis" => '¨',
+        b"ring" => '˚',
+        b"cedilla" => '¸',
+        b"hungarumlaut" => '˝',
+        b"ogonek" => '˛',
+        b"caron" => 'ˇ',
+        b"emdash" => '—',
+        b"AE" => 'Æ',
+        b"ordfeminine" => 'ª',
+        b"Lslash" => 'Ł',
+        b"Oslash" => 'Ø',
+        b"OE" => 'Œ',
+        b"ordmasculine" => 'º',
+        b"ae" => 'æ',
+        b"dotlessi" => 'ı',
+        b"lslash" => 'ł',
+        b"oslash" => 'ø',
+        b"oe" => 'œ',
+        b"germandbls" => 'ß',
         _ => return None,
     })
 }
 
-fn add_fid(ip: &mut Interp, d: &PDict) {
+pub(crate) fn add_fid(ip: &mut Interp, d: &PDict) {
     if !d.known(&Key::Name(name(b"FID"))) {
         d.put_name(b"FID", Obj::FontId(ip.next_fid));
         ip.next_fid += 1;
     }
 }
 
-pub fn find_font(ip: &mut Interp, key: &Obj) -> PDict {
+pub fn find_font(ip: &mut Interp, key: &Obj) -> R<PDict> {
     if let Some(Obj::Dict(d)) = ip.fontdir.get(&key.key()) {
-        return d;
+        return Ok(d);
     }
     if let Some(Obj::Dict(fonts)) = ip.resources.get_name(b"Font")
         && let Some(Obj::Dict(d)) = fonts.get(&key.key())
     {
-        return d;
+        return Ok(d);
     }
     // An embedded Type 1 program can leave its FontName dictionary active after eexec without
     // issuing definefont. Resolve that in-scope font before substituting a stand-in.
@@ -145,20 +200,20 @@ pub fn find_font(ip: &mut Interp, key: &Obj) -> PDict {
             .cloned();
     if let Some(d) = active {
         add_fid(ip, &d);
-        return d;
+        return Ok(d);
     }
     let n = crate::read::ops::basic::text_of(key);
     if let Some(d) = crate::read::composite::compose_by_name(ip, &n) {
-        return d;
+        return Ok(d);
     }
-    let d = substitute(ip, &n);
+    let d = substitute(ip, &n)?;
     ip.fontdir.put(key.clone(), Obj::Dict(d.clone()));
-    d
+    Ok(d)
 }
 
 pub fn findfont(ip: &mut Interp) -> R {
     let k = ip.pop()?;
-    let d = find_font(ip, &k);
+    let d = find_font(ip, &k)?;
     ip.push(Obj::Dict(d))
 }
 
@@ -211,7 +266,7 @@ pub fn setfont(ip: &mut Interp) -> R {
 pub fn currentfont(ip: &mut Interp) -> R {
     let f = match ip.gs.font.clone() {
         Some(f) => f,
-        None => find_font(ip, &Obj::lit(b"Courier")),
+        None => find_font(ip, &Obj::lit(b"Courier"))?,
     };
     ip.push(Obj::Dict(f))
 }
@@ -227,7 +282,7 @@ pub fn selectfont(ip: &mut Interp) -> R {
     let k = ip.pop()?;
     let d = match k {
         Obj::Dict(d) => d,
-        k => find_font(ip, &k),
+        k => find_font(ip, &k)?,
     };
     let f = transformed(ip, &d, &m);
     ip.gs.font = Some(f);
@@ -243,6 +298,12 @@ fn glyph_name(font: &PDict, code: u8) -> Vec<u8> {
         },
         _ => b".notdef".to_vec(),
     }
+}
+
+/// Unicode text represented by the simple font's selected glyph names. Unknown names have no
+/// honest replacement text, so callers must omit ActualText rather than infer from input bytes.
+fn actual_text(font: &PDict, bytes: &[u8]) -> Option<String> {
+    bytes.iter().map(|code| standard_glyph_char(&glyph_name(font, *code)).map(|c| c.to_string())).collect()
 }
 
 /// A glyph's advance from the font's Metrics or CharStrings-free estimate, in glyph space.
@@ -383,89 +444,107 @@ fn show_glyphs(ip: &mut Interp, s: &[u8], draw: bool, replace: bool, per_char: &
         s.iter().map(|c| (u32::from(*c), font.clone(), fm, crate::read::composite::Key2::Code(*c))).collect()
     };
     let mut total = (0.0, 0.0);
-    let mut text_path = Vec::new();
-    for (i, (code, leaf, fm, key)) in jobs.into_iter().enumerate() {
-        let type3 = leaf.get_name(b"FontType").and_then(|o| o.num()) == Some(3.0);
-        let w = match key {
-            crate::read::composite::Key2::Code(c) if type3 => {
-                ip.charge(GLYPH_STEPS)?;
-                if draw && ip.gs.cur.is_some() {
-                    type3_glyph(ip, &leaf, c)?
-                } else {
-                    let saved = ip.gs.nulldev;
-                    ip.gs.nulldev = true;
-                    if ip.gs.cur.is_none() {
-                        ip.gs.cur = Some((0.0, 0.0));
+    let mut text_paths: Vec<(Vec<crate::read::gstate::Seg>, crate::read::gstate::DevColor)> = Vec::new();
+    let mut text_segments = 0usize;
+    let result = (|| -> R<(f64, f64)> {
+        for (i, (code, leaf, fm, key)) in jobs.into_iter().enumerate() {
+            let type3 = leaf.get_name(b"FontType").and_then(|o| o.num()) == Some(3.0);
+            let w = match key {
+                crate::read::composite::Key2::Code(c) if type3 => {
+                    ip.charge(GLYPH_STEPS)?;
+                    if draw && ip.gs.cur.is_some() {
+                        type3_glyph(ip, &leaf, c)?
+                    } else {
+                        let saved = ip.gs.nulldev;
+                        ip.gs.nulldev = true;
+                        if ip.gs.cur.is_none() {
+                            ip.gs.cur = Some((0.0, 0.0));
+                        }
+                        let w = type3_glyph(ip, &leaf, c);
+                        ip.gs.nulldev = saved;
+                        w?
                     }
-                    let w = type3_glyph(ip, &leaf, c);
-                    ip.gs.nulldev = saved;
-                    w?
                 }
-            }
-            key => {
-                let cid = match key {
-                    crate::read::composite::Key2::Cid(cid) => Some(cid),
-                    crate::read::composite::Key2::Code(_) => None,
-                };
-                let g = match key {
-                    crate::read::composite::Key2::Code(c) => outline(ip, &leaf, c),
-                    crate::read::composite::Key2::Cid(cid) => cid_outline(ip, &leaf, cid),
-                };
-                // Empty outlines (usually spaces) still advance but need little work; their
-                // outline cache/decoder has already charged what it actually did.
-                ip.charge(if g.as_ref().is_some_and(|g| g.path.is_empty()) { 1 } else { GLYPH_STEPS })?;
-                // Vertical writing: the glyph hangs from its vertical origin and advances down.
-                let em = 1.0 / font_matrix(&leaf).0[3].abs().max(1e-9);
-                let vmetrics = match (vertical, &g) {
-                    (true, Some(g)) => Some(crate::read::composite::vertical_metrics(&leaf, cid.unwrap_or(0), g.width.0, em)),
-                    (true, None) => Some(crate::read::composite::vertical_metrics(&leaf, cid.unwrap_or(0), em, em)),
-                    _ => None,
-                };
-                let origin = vmetrics.map_or((0.0, 0.0), |(_, v)| v);
-                match g {
-                    Some(g) => {
-                        if draw && !g.path.is_empty() && ip.gs.cur.is_some() {
-                            ip.charge_path(g.path.len())?;
-                            let m = glyph_to_device(ip, &fm, origin)?;
-                            let path: Vec<crate::read::gstate::Seg> = g.path.iter().map(|s| s.map(&m)).collect();
-                            if ip.charpath {
-                                if ip.gs.path.len().saturating_add(path.len()) > crate::read::gstate::MAX_PATH {
-                                    return Err(PsErr::Fatal("PostScript (path limit)".into()));
+                key => {
+                    let cid = match key {
+                        crate::read::composite::Key2::Cid(cid) => Some(cid),
+                        crate::read::composite::Key2::Code(_) => None,
+                    };
+                    let g = match key {
+                        crate::read::composite::Key2::Code(c) => outline(ip, &leaf, c),
+                        crate::read::composite::Key2::Cid(cid) => cid_outline(ip, &leaf, cid),
+                    };
+                    // Empty outlines (usually spaces) still advance but need little work; their
+                    // outline cache/decoder has already charged what it actually did.
+                    ip.charge(if g.as_ref().is_some_and(|g| g.path.is_empty()) { 1 } else { GLYPH_STEPS })?;
+                    // Vertical writing: the glyph hangs from its vertical origin and advances down.
+                    let em = 1.0 / font_matrix(&leaf).0[3].abs().max(1e-9);
+                    let vmetrics = match (vertical, &g) {
+                        (true, Some(g)) => Some(crate::read::composite::vertical_metrics(&leaf, cid.unwrap_or(0), g.width.0, em)),
+                        (true, None) => Some(crate::read::composite::vertical_metrics(&leaf, cid.unwrap_or(0), em, em)),
+                        _ => None,
+                    };
+                    let origin = vmetrics.map_or((0.0, 0.0), |(_, v)| v);
+                    match g {
+                        Some(g) => {
+                            if draw && !g.path.is_empty() && ip.gs.cur.is_some() {
+                                ip.charge_path(g.path.len())?;
+                                let m = glyph_to_device(ip, &fm, origin)?;
+                                let path: Vec<crate::read::gstate::Seg> = g.path.iter().map(|s| s.map(&m)).collect();
+                                if ip.charpath {
+                                    if ip.gs.path.len().saturating_add(path.len()) > crate::read::gstate::MAX_PATH {
+                                        return Err(PsErr::Fatal("PostScript (path limit)".into()));
+                                    }
+                                    ip.gs.path.extend(path);
+                                } else {
+                                    if text_segments.saturating_add(path.len()) > crate::read::gstate::MAX_PATH {
+                                        return Err(PsErr::Fatal("PostScript (path limit)".into()));
+                                    }
+                                    text_segments += path.len();
+                                    if matches!(ip.gs.space, crate::read::gstate::Space::Pattern) {
+                                        // Pattern fills execute a cell program. Keep them on the normal
+                                        // path until their deferred representation is prepared.
+                                        crate::read::ops::gfx::fill_path(ip, &path, false)?;
+                                    } else {
+                                        let color = crate::read::ops::gfx::current_color(ip)?;
+                                        // Charge the fill work before staging it so completed glyphs
+                                        // can still be committed if a later glyph hits the budget.
+                                        ip.charge(path.len() as u64 / 4 + 1)?;
+                                        text_paths.push((path, color));
+                                    }
                                 }
-                                ip.gs.path.extend(path);
-                            } else {
-                                if text_path.len().saturating_add(path.len()) > crate::read::gstate::MAX_PATH {
-                                    return Err(PsErr::Fatal("PostScript (path limit)".into()));
-                                }
-                                text_path.extend(path);
+                            }
+                            match (vmetrics, leaf.get_name(b"Metrics"), key_code(code)) {
+                                (Some((w1, _)), _, _) => w1,
+                                (None, Some(_), Some(c)) => estimated_width(&leaf, c),
+                                _ => g.width,
                             }
                         }
-                        match (vmetrics, leaf.get_name(b"Metrics"), key_code(code)) {
-                            (Some((w1, _)), _, _) => w1,
-                            (None, Some(_), Some(c)) => estimated_width(&leaf, c),
-                            _ => g.width,
-                        }
+                        None => match vmetrics {
+                            Some((w1, _)) => w1,
+                            None => estimated_width(&leaf, key_code(code).unwrap_or(0)),
+                        },
                     }
-                    None => match vmetrics {
-                        Some((w1, _)) => w1,
-                        None => estimated_width(&leaf, key_code(code).unwrap_or(0)),
-                    },
                 }
+            };
+            let (wx, wy) = fm.delta(w.0, w.1);
+            let (ex, ey) = per_char(ip, code, i)?;
+            let (dx, dy) = if replace { (ex, ey) } else { (wx + ex, wy + ey) };
+            total = (total.0 + dx, total.1 + dy);
+            if draw && let Some((cx, cy)) = ip.gs.cur {
+                let (ddx, ddy) = ip.gs.ctm.delta(dx, dy);
+                ip.gs.cur = Some((cx + ddx, cy + ddy));
             }
-        };
-        let (wx, wy) = fm.delta(w.0, w.1);
-        let (ex, ey) = per_char(ip, code, i)?;
-        let (dx, dy) = if replace { (ex, ey) } else { (wx + ex, wy + ey) };
-        total = (total.0 + dx, total.1 + dy);
-        if draw && let Some((cx, cy)) = ip.gs.cur {
-            let (ddx, ddy) = ip.gs.ctm.delta(dx, dy);
-            ip.gs.cur = Some((cx + ddx, cy + ddy));
+        }
+        Ok(total)
+    })();
+    let path_limit = matches!(&result, Err(PsErr::Fatal(message)) if message == "PostScript (path limit)");
+    if result.is_ok() || !path_limit {
+        for (path, color) in text_paths {
+            ip.out.fill(&ip.gs.clip, &path, false, color).map_err(PsErr::Fatal)?;
         }
     }
-    if draw && !ip.charpath && !text_path.is_empty() {
-        crate::read::ops::gfx::fill_path(ip, &text_path, false)?;
-    }
-    Ok(total)
+    result
 }
 
 /// What showing one glyph costs, in steps (it takes about ten times a plain operator), and the
@@ -480,8 +559,11 @@ fn key_code(code: u32) -> Option<u8> {
 fn show_string(ip: &mut Interp, s: &[u8], draw: bool, per_char: &mut PerGlyph<'_>) -> R<(f64, f64)> {
     // Whitespace-only shows advance the text position but emit no painted glyphs; avoid bloating
     // the content stream with an empty semantic marked-content wrapper for them.
-    if draw && !ip.charpath && s.iter().any(|b| !b.is_ascii_whitespace()) {
-        let text: String = s.iter().map(|b| char::from(*b)).collect();
+    let text = ip.gs.font.as_ref().and_then(|font| actual_text(font, s));
+    if draw
+        && !ip.charpath
+        && let Some(text) = text.filter(|text| text.chars().any(|c| !c.is_whitespace()))
+    {
         ip.out.begin_actual_text(&text);
         let result = show_glyphs(ip, s, draw, false, per_char);
         ip.out.end_actual_text();
@@ -643,4 +725,17 @@ pub fn setcachedevice2(ip: &mut Interp) -> R {
         ip.pop_num()?;
     }
     setcharwidth(ip)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standard_encoding_glyph_names_have_unicode_text() {
+        assert_eq!(standard_glyph_char(b"emdash"), Some('—'));
+        assert_eq!(standard_glyph_char(b"fi"), Some('\u{fb01}'));
+        assert_eq!(standard_glyph_char(b"sterling"), Some('£'));
+        assert_eq!(standard_glyph_char(b"unmapped.custom"), None);
+    }
 }
