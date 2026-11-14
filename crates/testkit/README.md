@@ -199,6 +199,8 @@ Changes from `craft-media-testkit`'s `hammer`:
 - The caller names the multiplier variable. Before, it was always `CRAFT_MEDIA_HOSTILE_MULT`, and a
   value that was not a number counted as 1.
 - An empty seed runs once. Before, it ran once more for each round.
+- A mutation's label joins its edits with single spaces. Before, every edit ended with a space, so
+  each label ended with one.
 - `parse` is owned and shared between threads. A closure that borrows from the test needs its data
   moved or shared with an `Arc`.
 
