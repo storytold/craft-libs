@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 craft-tiff = { workspace = true }
 serde = { workspace = true }
-quick-xml = "0.41"
+quick-xml = "0.42"
 chrono = { workspace = true }
 # JPEG XL `brob` metadata boxes
 brotli-decompressor = { version = "6", default-features = false, features = ["std"] }
