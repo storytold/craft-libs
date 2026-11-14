@@ -10,7 +10,7 @@ use crate::hevc::decode::error::{Error, Result, ensure, invalid, unsupported};
 use crate::hevc::decode::params::{Layout, Pps, Sps, Vps};
 use crate::hevc::decode::picture::{Frame, FrameRef, Sample, stores_u8};
 use crate::hevc::decode::slice::{NalHeader, SliceHeader, nal_type};
-use crate::hevc::decode::slicedec::{Blk, F_INTRA, F_SKIP, PicState, SliceDecoder, SliceJob};
+use crate::hevc::decode::slicedec::{Blk, F_INTRA, F_SKIP, PicState, SliceDecoder, SliceJob, prepare_slices};
 use crate::hevc::decode::{ChromaFormat, ColorInfo, Picture};
 use craft_media::bitstream::{annexb_nals, length_prefixed_nals, unescape_rbsp};
 use std::collections::VecDeque;
@@ -64,12 +64,80 @@ pub struct DecodeStats {
     pub missing_refs: u64,
     /// Pictures decoded in draft mode without in-loop filters ([`Decoder::set_draft`]).
     pub draft_pictures: u64,
+    /// Pictures whose wavefront rows or tiles were decoded by several threads.
+    pub parallel_pictures: u64,
 }
 
+/// State shared by the decoder and its decoding jobs.
 #[derive(Default)]
-struct Shared {
+pub(crate) struct Shared {
     error: Mutex<Option<Error>>,
     stats: Mutex<DecodeStats>,
+    /// Window buffers ([`crate::hevc::decode::slicedec::WinBufs`] of either sample type) of finished pictures,
+    /// for the next ones, at most `max_bufs`.
+    bufs: Mutex<Vec<Box<dyn std::any::Any + Send>>>,
+    max_bufs: usize,
+    /// Picture jobs dispatched but not yet reported; [`Shared::wait_reports`] waits for zero.
+    jobs: Mutex<usize>,
+    reported: std::sync::Condvar,
+}
+
+impl Shared {
+    /// Window buffers of sample type `S` to re-use, if any.
+    #[cfg_attr(not(feature = "threads"), allow(dead_code))]
+    pub(crate) fn take_bufs<S: Sample>(&self) -> Option<crate::hevc::decode::slicedec::WinBufs<S>> {
+        let b = self.bufs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop()?;
+        b.downcast().ok().map(|b| *b)
+    }
+
+    /// Keep window buffers for later pictures.
+    #[cfg_attr(not(feature = "threads"), allow(dead_code))]
+    pub(crate) fn put_bufs<S: Sample>(&self, b: crate::hevc::decode::slicedec::WinBufs<S>) {
+        let mut bufs = self.bufs.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if bufs.len() < self.max_bufs {
+            bufs.push(Box::new(b));
+        }
+    }
+
+    /// A picture job is about to be dispatched; its [`Shared::report`] is expected.
+    fn job_started(&self) {
+        *self.jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
+    }
+
+    /// Block until every dispatched job has reported (rows are published before the report, so
+    /// waiting for the rows alone can read the statistics and the error too early).
+    fn wait_reports(&self) {
+        let mut n = self.jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        while *n > 0 {
+            n = self.reported.wait(n).unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+
+    /// A picture is done: count it and its blocks, keep the first error.
+    pub(crate) fn report<S: Sample>(&self, pic: Option<&PicState<S>>, err: Option<Error>, parallel: bool) {
+        {
+            let mut s = self.stats.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            s.pictures += 1;
+            s.parallel_pictures += parallel as u64;
+            let [intra, skip, inter] = pic.map_or([0; 3], |pic| block_counts(&pic.blk));
+            s.intra_4x4_blocks += intra;
+            s.skip_4x4_blocks += skip;
+            s.inter_4x4_blocks += inter;
+        }
+        if let Some(e) = err {
+            self.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_or_insert(e);
+        }
+        self.job_reported();
+    }
+
+    /// One dispatched job has reported (after its statistics and error are stored).
+    fn job_reported(&self) {
+        let mut n = self.jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        *n = n.saturating_sub(1);
+        if *n == 0 {
+            self.reported.notify_all();
+        }
+    }
 }
 
 /// H.265 / HEVC decoder.
@@ -100,6 +168,10 @@ pub struct Decoder {
     max_in_flight: usize,
     /// Bytes the picture store may take ([`crate::budget`]).
     memory_budget: u64,
+    /// Threads a picture may use beyond its own job (0 without a pool).
+    helpers: usize,
+    /// Decode inside pictures on several threads: None = with 4 threads or more.
+    intra_parallel: Option<bool>,
     draft: bool,
 }
 
@@ -108,6 +180,10 @@ impl Default for Decoder {
         Self::new()
     }
 }
+
+/// Pool threads beyond a picture's own job from which pictures are also decoded in parallel
+/// inside (wavefront rows, tiles, in-loop filters next to parsing) by default.
+const MIN_INTRA_HELPERS: usize = 3;
 
 fn default_threads() -> usize {
     #[cfg(all(feature = "threads", not(target_arch = "wasm32")))]
@@ -134,6 +210,10 @@ impl Decoder {
         } else {
             None
         };
+        #[cfg(feature = "threads")]
+        let helpers = if pool.is_some() { threads - 1 } else { 0 };
+        #[cfg(not(feature = "threads"))]
+        let helpers = 0;
         Decoder {
             vpss: vec![None; 16],
             spss: vec![None; 16],
@@ -151,12 +231,14 @@ impl Decoder {
             skip_rasl: false,
             layout_cache: Vec::new(),
             out_queue: VecDeque::new(),
-            shared: Arc::new(Shared::default()),
+            shared: Arc::new(Shared { max_bufs: 2 * threads.min(64), ..Shared::default() }),
             #[cfg(feature = "threads")]
             pool,
             in_flight: VecDeque::new(),
             max_in_flight: threads.max(1) + 2,
             memory_budget: crate::budget::DECODE_MEMORY_BUDGET,
+            helpers,
+            intra_parallel: None,
             draft: false,
         }
     }
@@ -270,6 +352,7 @@ impl Decoder {
         while let Some(f) = self.in_flight.pop_front() {
             f.wait_complete();
         }
+        self.shared.wait_reports();
         self.first_picture = true;
         self.gray_reference = None;
         pics
@@ -277,7 +360,7 @@ impl Decoder {
 
     /// Statistics accumulated so far.
     pub fn stats(&self) -> DecodeStats {
-        self.shared.stats.lock().map(|s| s.clone()).unwrap_or_default()
+        self.shared.stats.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 
     fn stat(&self, f: impl FnOnce(&mut DecodeStats)) {
@@ -288,6 +371,10 @@ impl Decoder {
 
     /// First error reported by a decoding job since the last call (also returned by
     /// [`Decoder::decode`]); useful after [`Decoder::flush`].
+    pub fn take_error(&mut self) -> Option<Error> {
+        self.shared.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+    }
+
     /// Draft mode for reduced-resolution playback (off by default): sub-layer non-reference
     /// pictures of the highest temporal sub-layer (pictures nothing predicts from) skip
     /// deblocking and SAO and come out flagged [`Picture::draft`]; every other picture is
@@ -296,8 +383,12 @@ impl Decoder {
         self.draft = on;
     }
 
-    pub fn take_error(&mut self) -> Option<Error> {
-        self.shared.error.lock().ok().and_then(|mut e| e.take())
+    /// Force decoding inside pictures (wavefront rows, tiles, filters next to parsing) on or off;
+    /// None (the default) decides per picture. Has no effect without a thread pool. For tests and
+    /// benchmarks.
+    #[doc(hidden)]
+    pub fn set_intra_picture_parallel(&mut self, on: Option<bool>) {
+        self.intra_parallel = on;
     }
 
     fn handle_nal(&mut self, nal: &[u8], pts: i64) -> Result<()> {
@@ -365,7 +456,7 @@ impl Decoder {
     }
 
     fn handle_slice(&mut self, nal: &[u8], hdr: NalHeader, pts: i64) -> Result<()> {
-        let rbsp = unescape_rbsp(&nal[2..]);
+        let (rbsp, epb) = unescape_with_positions(&nal[2..]);
         // a first_slice_segment_in_pic_flag of 1 starts a new picture
         let first = rbsp.first().is_some_and(|b| b & 0x80 != 0);
         if first {
@@ -410,7 +501,7 @@ impl Decoder {
         }
         let (st, dependent, weighted, tmvp, sao, dbk_off, lt) =
             (sh.slice_type, sh.dependent, sh.pwt.is_some(), sh.temporal_mvp, sh.sao_luma || sh.sao_chroma, sh.deblocking_disabled, !sh.lt.is_empty());
-        pending.slices.push(SliceJob { sh, pps, sps, rbsp, refs });
+        pending.slices.push(SliceJob { sh, pps, sps, rbsp, epb, refs });
         self.stat(|s| {
             match st {
                 crate::hevc::decode::slice::SliceType::I => s.slices_i += 1,
@@ -592,7 +683,11 @@ impl Decoder {
         let PendingPic { frame, sps, pps, layout, first_sh, poc, output, meta, slices, .. } = p;
         let scaling =
             self.layout_cache.iter().find(|(pp, ss, _, _)| Arc::ptr_eq(pp, &pps) && Arc::ptr_eq(ss, &sps)).and_then(|(_, _, _, s)| s.clone());
-        self.dispatch(PicJob { frame: frame.clone(), sps, pps, layout, scaling, slices, draft: meta.draft });
+        // With 2 or 3 threads, decoding pictures concurrently keeps the threads busy and the
+        // intra-picture split only adds its copies (measured: up to 11 % slower at 2 threads).
+        let on = self.intra_parallel.unwrap_or(self.helpers >= MIN_INTRA_HELPERS);
+        let helpers = if on { self.helpers } else { 0 };
+        self.dispatch(PicJob { frame: frame.clone(), sps, pps, layout, scaling, slices, draft: meta.draft, helpers });
         self.poc_state.update(&first_sh, poc);
         let mut outs = Vec::new();
         self.dpb.insert(frame, poc, output, meta, &mut outs);
@@ -601,6 +696,7 @@ impl Decoder {
 
     fn dispatch(&mut self, job: PicJob) {
         let shared = self.shared.clone();
+        shared.job_started();
         #[cfg(feature = "threads")]
         if let Some(pool) = &self.pool {
             self.in_flight.retain(|f| !f.is_complete());
@@ -613,8 +709,26 @@ impl Decoder {
             pool.spawn_fifo(move || run_job(job, &shared));
             return;
         }
-        run_job(job, &shared);
+        run_job(PicJob { helpers: 0, ..job }, &shared);
     }
+}
+
+/// Unescape a NAL unit payload (7.4.2), also returning for each removed emulation prevention
+/// byte the number of payload bytes before it.
+fn unescape_with_positions(data: &[u8]) -> (Vec<u8>, Vec<u32>) {
+    let mut out = Vec::with_capacity(data.len());
+    let mut removed = Vec::new();
+    let mut zeros = 0;
+    for &b in data {
+        if zeros >= 2 && b == 3 {
+            zeros = 0;
+            removed.push(out.len() as u32);
+            continue;
+        }
+        out.push(b);
+        zeros = if b == 0 { zeros + 1 } else { 0 };
+    }
+    (out, removed)
 }
 
 /// Everything needed to decode one picture on a worker.
@@ -626,46 +740,53 @@ struct PicJob {
     scaling: Option<Arc<Vec<Vec<u8>>>>,
     slices: Vec<SliceJob>,
     draft: bool,
+    /// Helper threads for the intra-picture split (0 = decode the picture on this thread).
+    helpers: usize,
 }
 
 /// Decode all slices of one picture and publish its rows, in the picture's sample type.
-fn run_job(job: PicJob, shared: &Shared) {
+fn run_job(job: PicJob, shared: &Arc<Shared>) {
     if stores_u8(job.frame.bit_depth, job.frame.bit_depth_c) { run_job_as::<u8>(job, shared) } else { run_job_as::<u16>(job, shared) }
 }
 
-fn run_job_as<S: Sample>(job: PicJob, shared: &Shared) {
-    let PicJob { frame, sps, pps, layout, scaling, slices, draft } = job;
+fn run_job_as<S: Sample>(job: PicJob, shared: &Arc<Shared>) {
+    let PicJob { frame, sps, pps, layout, scaling, slices, draft, helpers } = job;
     // The picture state is set up inside the guard too: a panic there must not escape the job.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut pic = PicState::<S>::new(frame.clone(), sps, pps, layout, scaling);
         pic.draft = draft;
+        let metas = prepare_slices(&mut pic, &slices);
+        // wavefront rows / tiles on several threads; the job reports itself
+        #[cfg(feature = "threads")]
+        if helpers > 0 {
+            let (wpp, tiles) = (pic.pps.entropy_coding_sync, pic.pps.tiles_enabled);
+            let plan = crate::hevc::decode::parallel::Plan::new(&pic.layout, wpp, tiles, &slices)
+                .or_else(|| crate::hevc::decode::parallel::Plan::serial(&pic.layout, tiles));
+            if let Some(plan) = plan {
+                crate::hevc::decode::parallel::Job::run(pic, slices, metas, plan, helpers, shared.clone());
+                return None;
+            }
+        }
+        let _ = helpers;
         let mut first_err = None;
-        for s in &slices {
-            if let Err(e) = SliceDecoder::decode(&mut pic, s) {
+        for (s, &meta) in slices.iter().zip(&metas) {
+            if let Err(e) = SliceDecoder::decode(&mut pic, s, meta) {
                 first_err.get_or_insert(e);
             }
         }
         crate::hevc::decode::filter::finish(&mut pic);
-        (pic, first_err)
+        Some((pic, first_err))
     }));
     let (pic, err) = match result {
-        Ok((pic, err)) => (Some(pic), err),
+        Ok(None) => return,
+        Ok(Some((pic, err))) => (Some(pic), err),
         Err(_) => {
             // make sure readers never block on this frame
             frame.publish_gray();
             (None, Some(Error::Invalid("internal error while decoding a picture".into())))
         }
     };
-    if let Ok(mut s) = shared.stats.lock() {
-        s.pictures += 1;
-        let [intra, skip, inter] = pic.as_ref().map_or([0; 3], |pic| block_counts(&pic.blk));
-        s.intra_4x4_blocks += intra;
-        s.skip_4x4_blocks += skip;
-        s.inter_4x4_blocks += inter;
-    }
-    if let (Some(e), Ok(mut slot)) = (err, shared.error.lock()) {
-        slot.get_or_insert(e);
-    }
+    shared.report(pic.as_ref(), err, false);
 }
 
 /// Intra, skipped and other inter 4x4 blocks of a picture, branch-free (one pass over every
@@ -849,6 +970,43 @@ mod tests {
         } else {
             frame.row::<u16>(0).unwrap().y.as_ptr() as usize
         }
+    }
+
+    /// `flush` returns only after every dispatched picture job has reported its statistics and
+    /// error, not just once its rows are published (the report comes after the last row). The job
+    /// is held back by a channel, not by a sleep: while it has not reported, `flush` must not return.
+    #[test]
+    fn flush_waits_for_every_dispatched_job_to_report() {
+        use std::sync::mpsc::{RecvTimeoutError, channel};
+        use std::time::Duration;
+        let mut decoder = Decoder::with_threads(1);
+        let (go_tx, go_rx) = channel::<()>();
+        let (returned_tx, returned_rx) = channel::<(usize, bool)>();
+        decoder.shared.job_started();
+        let shared = decoder.shared.clone();
+        let job = std::thread::spawn(move || {
+            go_rx.recv().ok();
+            // the statistics and the error are stored before the job counts as reported
+            shared.report::<u8>(None, Some(Error::Invalid("report held back".into())), false);
+        });
+        let flusher = std::thread::spawn(move || {
+            decoder.flush();
+            returned_tx.send((decoder.stats().pictures as usize, decoder.take_error().is_some())).ok();
+        });
+        // a flush that does not wait for the report returns within microseconds
+        assert_eq!(
+            returned_rx.recv_timeout(Duration::from_millis(200)),
+            Err(RecvTimeoutError::Timeout),
+            "flush returned before the dispatched job reported"
+        );
+        go_tx.send(()).unwrap();
+        let (pictures, error) = returned_rx.recv().unwrap();
+        assert_eq!(pictures, 1, "the picture's statistics were not stored when flush returned");
+        assert!(error, "the picture's error was not stored when flush returned");
+        job.join().unwrap();
+        flusher.join().unwrap();
+        // with nothing in flight it does not wait
+        Decoder::with_threads(1).flush();
     }
 
     #[test]

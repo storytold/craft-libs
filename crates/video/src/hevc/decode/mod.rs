@@ -3,8 +3,10 @@
 //! Supported: Main, Main 10 and Main 4:2:2 10 profiles (4:2:0 and 4:2:2, 8/10-bit; up to 12-bit
 //! without range-extension tools), all coding tools of those profiles: CABAC, coding / transform quadtrees, AMP, PCM,
 //! transform skip, scaling lists, sign data hiding, 35 intra modes with strong intra smoothing,
-//! merge / AMVP / TMVP, weighted prediction, deblocking, SAO, tiles, wavefront parallel processing
-//! (parsing), dependent slice segments, short- and long-term reference picture sets.
+//! merge / AMVP / TMVP, weighted prediction, deblocking, SAO, tiles, wavefront parallel processing,
+//! dependent slice segments, short- and long-term reference picture sets. With the `threads`
+//! feature, pictures decode concurrently and are also split inside: wavefront rows and tiles on
+//! several threads, in-loop filters next to the parsing thread otherwise.
 //!
 //! ```no_run
 //! let mut dec = craft_video::hevc::decode::Decoder::new();
@@ -27,6 +29,8 @@ mod filter;
 mod inter;
 mod intra;
 mod mvpred;
+#[cfg(feature = "threads")]
+mod parallel;
 pub mod params;
 mod picture;
 pub mod slice;
