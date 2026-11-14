@@ -21,6 +21,7 @@ mod dsc;
 mod embedded;
 #[cfg(feature = "paths")]
 pub mod paths;
+pub mod postscript;
 mod preview;
 mod rectangles;
 
