@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use craft_wordmodel::{Block, Blocks, Document};
+use craft_wordmodel::{Block, Blocks, CharProps, Document, StyleKind};
 
 use super::story::StoryCtx;
 use super::{Reader, part_of};
@@ -27,6 +27,31 @@ pub struct AltChunk<'a> {
     /// doesn't.
     pub part: &'a str,
     pub bytes: &'a [u8],
+}
+
+/// A paragraph style a Word chunk names but doesn't have as a paragraph style is its Normal, as in
+/// any document Word opens. So such a paragraph is read as being in none before the chunk's
+/// styles are adopted, where the id could otherwise land on a style of ours (a character style of
+/// that id, say).
+fn forget_missing_para_styles(styles: &craft_wordmodel::StyleSheet, blocks: &mut Blocks) {
+    for b in blocks.iter_mut() {
+        let missing = |id: &str| styles.get(id).is_none_or(|s| s.kind != StyleKind::Paragraph);
+        match &**b {
+            Block::Para(p) if p.props.style.as_deref().is_some_and(missing) => {
+                if let Block::Para(p) = Arc::make_mut(b) {
+                    p.props.style = None;
+                }
+            }
+            Block::Table(_) => {
+                if let Block::Table(t) = Arc::make_mut(b) {
+                    for cell in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                        forget_missing_para_styles(styles, &mut cell.blocks);
+                    }
+                }
+            }
+            Block::Para(_) => {}
+        }
+    }
 }
 
 /// Turns a chunk the docx reader can't read itself into a document whose body takes the chunk's
@@ -77,6 +102,9 @@ impl Reader<'_> {
                 p.section = None;
             }
         }
+        if is_docx {
+            forget_missing_para_styles(&doc.styles, &mut doc.body);
+        }
         // `w:matchSrc`: a Word document's content keeps its own styles (other formats' formatting
         // is their own already).
         let keep = is_docx && e.child("w:altChunkPr").and_then(|p| p.child("w:matchSrc")).is_some_and(crate::units::on_off);
@@ -95,10 +123,56 @@ impl Reader<'_> {
         let unlisted = nested.total.saturating_sub(list_len);
         self.doc.missing_pictures.add_unlisted(&part, unlisted);
         self.doc.missing_pictures.truncated |= nested.truncated;
+        let last_style = if keep { self.keep_last_look(&mut doc) } else { None };
         let mut blocks = self.doc.adopt_blocks(doc, keep, &mut self.next_perm);
+        if let Some(style) = last_style
+            && let Some(Block::Para(p)) = blocks.last_mut()
+        {
+            p.props.style = style;
+        }
         // Bookmarks and comment marks read before the chunk stay before it.
         self.flush_pending_before(sc, out, &mut blocks);
         out.extend(blocks.into_iter().map(Arc::new));
+    }
+
+    /// A `w:matchSrc` chunk's last paragraph, as Word brings it in (measured): like a file Word
+    /// inserts, its paragraph mark is the one of the paragraph it lands in, so when we have a
+    /// paragraph style of its style's id it stands on ours, with only its own paragraph
+    /// formatting, while its text keeps the look the chunk's style gave it (as direct
+    /// formatting). The chunk's other paragraphs, and a last one in a style we don't have, keep
+    /// the chunk's styles. Sets the runs of `doc`'s last paragraph; the style (`None`: our Normal)
+    /// to give it once adopted, or `None` to leave it.
+    fn keep_last_look(&self, doc: &mut Document) -> Option<Option<String>> {
+        let Some(Block::Para(p)) = doc.body.last().map(|b| &**b) else { return None };
+        let id = p.props.style.clone().unwrap_or_else(|| "Normal".into());
+        self.doc.styles.get(&id).filter(|s| s.kind == StyleKind::Paragraph)?;
+        let (_, theirs) = doc.styles.para_style_props(&id);
+        let (_, ours) = self.doc.styles.para_style_props(&id);
+        let look = theirs.against(&ours);
+        let styles = Arc::clone(&doc.styles);
+        // A run's character style still beats what its paragraph's style gave it.
+        let over = |c: &CharProps| {
+            let mut by_style = CharProps::default();
+            for s in c.style.as_deref().map(|cs| styles.chain(cs)).unwrap_or_default() {
+                if matches!(s.kind, StyleKind::Character | StyleKind::Paragraph) {
+                    by_style.overlay(&s.chr);
+                }
+            }
+            let mut out = look.clone();
+            out.overlay(&by_style);
+            let mut out = out.minus(&by_style);
+            if by_style.text_effects.is_some() {
+                out.text_effects = None;
+            }
+            out.overlay(c);
+            out
+        };
+        let Some(Block::Para(p)) = doc.body.last_mut().map(Arc::make_mut) else { return None };
+        for r in &mut p.runs {
+            r.props = over(&r.props);
+        }
+        p.mark = over(&p.mark);
+        Some((id != "Normal").then_some(id))
     }
 
     /// A WordprocessingML chunk: its document, read with the same importer and what is left of
