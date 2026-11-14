@@ -1,11 +1,13 @@
 //! Binary workbooks ([MS-XLSB]): the workbook part, shared strings and worksheet cells, from
 //! their records. Cell formulas are decoded from their tokens ([`formula`]) into the text an
 //! `.xlsx` file holds; one that can't be keeps only its saved result, with a warning saying why.
-//! Styles are not read. A record that does not parse fails the read.
+//! Table parts are read in `table`. Styles are not read. A record that does not parse fails
+//! the read.
 
 mod expr;
 mod formula;
 mod ftab;
+mod table;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,6 +21,7 @@ use crate::workbook::{SheetEntry, SheetKind, Workbook};
 use crate::{Error, Limits, Warnings};
 pub(crate) use formula::Links;
 use formula::{Book, Mode, Name, Xti};
+pub(crate) use table::{TABLE, index_table, table};
 
 pub(crate) const MAIN: &str = "application/vnd.ms-excel.main";
 const BINARY_MAIN: &str = "application/vnd.ms-excel.sheet.binary.macroEnabled.main";
@@ -28,6 +31,8 @@ pub(crate) const STRINGS: &str = "application/vnd.ms-excel.sharedStrings";
 const MAX_SHEETS: usize = 1024;
 /// Most merged ranges in one worksheet.
 const MAX_MERGES: usize = 100_000;
+/// Table parts one worksheet lists at most.
+const MAX_TABLE_PARTS: usize = 65_536;
 /// Defined names (Excel's hidden ones for newer functions included) read at most; past it, the
 /// workbook's formulas keep their saved results.
 const MAX_NAMES: usize = 65_536;
@@ -172,11 +177,13 @@ struct Records<'a, 'l> {
     limits: &'l Limits,
     budget: &'l Budget,
     blocks: Vec<u16>,
+    /// Future-record and alternate-content blocks skipped so far.
+    skipped: usize,
 }
 
 impl<'a, 'l> Records<'a, 'l> {
     fn new(bytes: &'a [u8], limits: &'l Limits, budget: &'l Budget) -> Self {
-        Self { bytes: Bytes::new(bytes), limits, budget, blocks: vec![] }
+        Self { bytes: Bytes::new(bytes), limits, budget, blocks: vec![], skipped: 0 }
     }
 
     fn next(&mut self, warnings: &mut Warnings) -> Result<Option<(u16, &'a [u8])>, Error> {
@@ -219,6 +226,7 @@ impl<'a, 'l> Records<'a, 'l> {
                         return Err(invalid("extension blocks nested too deeply"));
                     }
                     self.blocks.push(id + 1);
+                    self.skipped += 1;
                     warnings.warn("unsupported XLSB future-record and alternate-content blocks were skipped");
                 }
                 // BrtFRTEnd, BrtACEnd.
@@ -885,6 +893,18 @@ pub(crate) fn worksheet(
                     ..Cell::default()
                 });
                 col = Some(c);
+            }
+            // BrtListPart: one of the sheet's tables, by relationship id.
+            661 => {
+                if data {
+                    return Err(invalid("table part inside worksheet data"));
+                }
+                let rel = b.text(255)?;
+                b.finish()?;
+                if sheet.features.table_parts.len() >= MAX_TABLE_PARTS {
+                    return Err(Error::TooLarge(format!("XLSB exceeds {MAX_TABLE_PARTS} tables on a sheet")));
+                }
+                sheet.features.table_parts.push(rel);
             }
             176 => {
                 if data {
