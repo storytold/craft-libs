@@ -11,6 +11,7 @@ fn numbering_level_index(value: Option<&str>) -> Option<usize> {
         None => Some(0),
         Some(value) => int(value).filter(|level| (0..=8).contains(level)).map(|level| level as usize),
     }
+}
 
 fn style_is_default(style: &El) -> bool {
     style.attr("w:default").is_some_and(|value| !matches!(value.trim(), "0" | "false" | "off" | "False" | "FALSE"))
