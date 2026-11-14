@@ -152,6 +152,12 @@ pub struct Windows {
     root_info: RefCell<ViewportInfo>,
 }
 
+impl Default for Windows {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Windows {
     /// The running build's shell and a scripted system.
     pub fn new() -> Self {

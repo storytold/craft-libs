@@ -139,6 +139,12 @@ pub struct Panel<'a> {
     seen: Option<&'a RefCell<Seen>>,
 }
 
+impl Default for Panel<'_> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'a> Panel<'a> {
     /// A panel with an empty body that senses nothing.
     pub fn new() -> Self {
