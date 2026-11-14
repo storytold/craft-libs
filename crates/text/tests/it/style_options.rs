@@ -33,7 +33,7 @@ fn a_row_left_out_of_the_style_takes_no_input_and_its_check_includes_it() {
     fixture.idle(4);
     assert!(changes(&edits).is_empty(), "a row that is not included takes no input: {:?}", changes(&edits));
 
-    let include = fixture.by_label("Include").expect("the include check is shown");
+    let include = fixture.by_label("Include Font size").expect("the include check is shown");
     fixture.click(&include).idle(4);
     assert_eq!(
         changes(&edits),

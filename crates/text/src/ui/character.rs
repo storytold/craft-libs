@@ -42,8 +42,8 @@ pub use paragraph_dialog::{
     SpacingKind, SpecialIndent,
 };
 use rows::{
-    LengthRow, Lengths, PlainRow, Toggle, family_field, hidden_side, leading_menu, leading_row, mark, mixed, number_change, number_presets,
-    picked_event, plain, select_row, size_menu, string_entries, toggle_row,
+    LengthRow, Lengths, PlainRow, Toggle, agree, family_field, hidden_side, leading_menu, leading_row, mark, mixed, number_change, number_presets,
+    plain, select_row, size_menu, string_entries, toggle_row,
 };
 pub use style_options::{
     STYLE_COLOR_KEY, StyleAttribute, StyleOptionValues, StyleOptionsChange, TextStyleOptions, TextStyleOptionsOutput, TextStyleOptionsWords,
@@ -345,10 +345,28 @@ pub struct CharacterValues {
 impl CharacterValues {
     /// The values of two selections together: each field stays where both are equal and becomes `None` where they
     /// differ.
-    // P3(panels-w13): tools-w24 decision, `CharacterValues::mixed_with`
     pub fn mixed_with(&self, other: &Self) -> Self {
-        let _ = other;
-        todo!("panels-w13")
+        CharacterValues {
+            family: agree(&self.family, &other.family),
+            style: agree(&self.style, &other.style),
+            size: agree(&self.size, &other.size),
+            leading: agree(&self.leading, &other.leading),
+            kerning: agree(&self.kerning, &other.kerning),
+            tracking: agree(&self.tracking, &other.tracking),
+            vertical_scale: agree(&self.vertical_scale, &other.vertical_scale),
+            horizontal_scale: agree(&self.horizontal_scale, &other.horizontal_scale),
+            baseline_shift: agree(&self.baseline_shift, &other.baseline_shift),
+            color: agree(&self.color, &other.color),
+            faux_bold: agree(&self.faux_bold, &other.faux_bold),
+            faux_italic: agree(&self.faux_italic, &other.faux_italic),
+            caps: agree(&self.caps, &other.caps),
+            position: agree(&self.position, &other.position),
+            underline: agree(&self.underline, &other.underline),
+            strikethrough: agree(&self.strikethrough, &other.strikethrough),
+            opentype: self.opentype.iter().copied().filter(|tag| other.opentype.contains(tag)).collect(),
+            language: agree(&self.language, &other.language),
+            axes: agree(&self.axes, &other.axes),
+        }
     }
 }
 
@@ -531,7 +549,6 @@ impl<'a> CharacterControls<'a> {
         .chain(KERNING_PRESETS.iter().map(|&p| Entry::new(NumberPick::Number(f64::from(p)), units.number(f64::from(p), 0..=PRESET_DECIMALS))))
         .collect();
 
-        let family_entries = string_entries(families.iter().map(|name| (name.clone(), name.clone())));
         let style_entries = string_entries(styles.iter().map(|name| (name.clone(), name.clone())));
         let language_entries = languages.map(|languages| string_entries(languages.iter().cloned()));
 
@@ -548,15 +565,12 @@ impl<'a> CharacterControls<'a> {
 
         let shown = Stack::new().label(self.label).show(ui, |ui, _| {
             #[cfg(feature = "font-picker")]
-            let family = family_field(ui, &words.family, mixed(values.family.clone()), &family_entries, picker.as_mut());
+            let family = family_field(ui, &words, values, families, picker.as_mut());
             #[cfg(not(feature = "font-picker"))]
-            let family = family_field(ui, &words.family, mixed(values.family.clone()), &family_entries);
+            let family = family_field(ui, &words, values, families);
             preview_family = family.preview;
             rested_family = family.rested;
-            edits.extend(family.edits.into_iter().map(|event| event.map(CharacterChange::Family)));
-            if let Some(style) = family.picked_style {
-                edits.push(picked_event(CharacterChange::Style(style), words.style.as_str()));
-            }
+            edits.extend(family.edits);
             edits.extend(select_row(ui, &words.style, hidden_side(), mixed(values.style.clone()), &style_entries, CharacterChange::Style));
             #[cfg(feature = "font-picker")]
             if let Some(axes) = axes {

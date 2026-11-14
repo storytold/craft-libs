@@ -11,7 +11,7 @@ use craft_ui::runtime::env::{Env, Label};
 use egui::{Response, Ui};
 
 use super::TWO_COLUMNS;
-use super::rows::{LengthRow, Lengths, Toggle, mark, mixed, number_change, toggle_row};
+use super::rows::{LengthRow, Lengths, Toggle, agree, mark, mixed, number_change, toggle_row};
 
 craft_ui::words! {
     /// The Paragraph controls' words, English by default (PhotoCraft's tooltips).
@@ -114,10 +114,17 @@ pub struct ParagraphValues {
 impl ParagraphValues {
     /// The values of two selections together: each field stays where both are equal and becomes `None` where they
     /// differ.
-    // P3(panels-w13): tools-w24 decision, `ParagraphValues::mixed_with`
     pub fn mixed_with(&self, other: &Self) -> Self {
-        let _ = other;
-        todo!("panels-w13")
+        ParagraphValues {
+            align: agree(&self.align, &other.align),
+            direction: agree(&self.direction, &other.direction),
+            start_indent: agree(&self.start_indent, &other.start_indent),
+            end_indent: agree(&self.end_indent, &other.end_indent),
+            first_line_indent: agree(&self.first_line_indent, &other.first_line_indent),
+            space_before: agree(&self.space_before, &other.space_before),
+            space_after: agree(&self.space_after, &other.space_after),
+            hyphenate: agree(&self.hyphenate, &other.hyphenate),
+        }
     }
 }
 

@@ -19,7 +19,8 @@ use egui::Ui;
 #[cfg(feature = "font-picker")]
 use super::FontPickerSource;
 use super::{
-    AUTO_LEADING, AUTO_ROW, CharacterChange, CharacterWords, KerningName, LEADING_RANGE, Leading, PRESET_DECIMALS, SIZE_PRESETS, TRACKING_RANGE,
+    AUTO_LEADING, AUTO_ROW, CharacterChange, CharacterValues, CharacterWords, KerningName, LEADING_RANGE, Leading, PRESET_DECIMALS, SIZE_PRESETS,
+    TRACKING_RANGE,
 };
 #[cfg(feature = "font-picker")]
 use craft_font_manager::picker::FontPicker;
@@ -211,55 +212,6 @@ pub(crate) fn select_row<C>(
     shown.inner.unwrap_or_default().map(&change)
 }
 
-/// What the family field did this pass.
-#[derive(Default)]
-pub(crate) struct FamilyOutput {
-    /// The family edits: a pick commits; a hovered row is not one.
-    pub(crate) edits: Vec<EditEvent<String>>,
-    /// The style picked in an expanded family's rows of the font picker.
-    pub(crate) picked_style: Option<String>,
-    /// The family under the pointer or keyboard row in the open list.
-    pub(crate) preview: Option<String>,
-    /// The family the pointer or keyboard rested on in the open list.
-    pub(crate) rested: Option<String>,
-}
-
-/// The family as a select over `entries`.
-fn family_select(ui: &mut Ui, label: &Label, value: Mixed<String>, entries: &[Entry<String>]) -> FamilyOutput {
-    FamilyOutput { edits: select_row(ui, label, hidden_side(), value, entries, |name| name).into_iter().collect(), ..FamilyOutput::default() }
-}
-
-/// The family field: the font picker over `picker`, or a select over `entries` when there is none.
-#[cfg(feature = "font-picker")]
-pub(crate) fn family_field(
-    ui: &mut Ui,
-    label: &Label,
-    value: Mixed<String>,
-    entries: &[Entry<String>],
-    picker: Option<&mut FontPickerSource<'_>>,
-) -> FamilyOutput {
-    let Some(source) = picker else { return family_select(ui, label, value, entries) };
-    let shown = Field::new(label.clone()).side(hidden_side()).show(ui, |ui, _| {
-        let mut field = FontPicker::new(label.clone(), Bind::given(value.clone()), source.catalog)
-            .settings(source.settings.reborrowed())
-            .filters(source.filters.reborrowed())
-            .served(source.served);
-        if let Some(text) = source.preview_text {
-            field = field.preview_text(text);
-        }
-        field.show(ui)
-    });
-    let Some(out) = shown.inner else { return FamilyOutput::default() };
-    let edits = out.edit.events.into_iter().filter(|event| matches!(event, EditEvent::Commit { .. } | EditEvent::Set { .. })).collect();
-    FamilyOutput { edits, picked_style: out.picked_style, preview: out.preview, rested: out.rested }
-}
-
-/// The family field: a select over `entries`.
-#[cfg(not(feature = "font-picker"))]
-pub(crate) fn family_field(ui: &mut Ui, label: &Label, value: Mixed<String>, entries: &[Entry<String>]) -> FamilyOutput {
-    family_select(ui, label, value, entries)
-}
-
 /// One toggle button of a row: its name, icon, state (`None` while the selection mixes) and the change it makes.
 pub(crate) struct Toggle<C> {
     pub(crate) name: Label,
@@ -305,27 +257,57 @@ pub(crate) fn toggle_row<C>(ui: &mut Ui, label: Option<&Label>, toggles: &[Toggl
 }
 
 /// What [`family_field`] reports: the family edits, and the family the picker previews and rests on.
-// P3(panels-w13): tools-w5 decision, `FamilyField`
-#[allow(dead_code)] // P3(panels-w13): FamilyField
+#[derive(Default)]
 pub(crate) struct FamilyField {
-    pub edits: Vec<EditEvent<super::CharacterChange>>,
+    /// The family edit, and the style edit of a style picked in an expanded family's rows; a hovered row is not one.
+    pub edits: Vec<EditEvent<CharacterChange>>,
+    /// The family under the pointer or keyboard row in the open list.
     pub preview: Option<String>,
+    /// The family the pointer or keyboard rested on in the open list.
     pub rested: Option<String>,
 }
 
-/// The family field of the character controls and the type bar: the font picker in a hidden-label field when a
-/// `picker` source is given, else a select over `families`.
-// P3(panels-w13): tools-w5 decision, `family_field`
-#[allow(dead_code)] // P3(panels-w13): family_field
+/// The family field of the character controls, the style options and the type bar: the font picker in a
+/// hidden-label field when a `picker` source is given, else a select over `families`.
 pub(crate) fn family_field(
     ui: &mut Ui,
-    words: &super::CharacterWords,
-    values: &super::CharacterValues,
+    words: &CharacterWords,
+    values: &CharacterValues,
     families: &[String],
-    #[cfg(feature = "font-picker")] picker: Option<&mut super::FontPickerSource<'_>>,
+    #[cfg(feature = "font-picker")] picker: Option<&mut FontPickerSource<'_>>,
 ) -> FamilyField {
-    let _ = (ui, words, values, families);
+    let value = mixed(values.family.clone());
     #[cfg(feature = "font-picker")]
-    let _ = picker;
-    todo!("panels-w13")
+    if let Some(source) = picker {
+        let shown = Field::new(words.family.clone()).side(hidden_side()).show(ui, |ui, _| {
+            let mut field = FontPicker::new(words.family.clone(), Bind::given(value.clone()), source.catalog)
+                .settings(source.settings.reborrowed())
+                .filters(source.filters.reborrowed())
+                .served(source.served);
+            if let Some(text) = source.preview_text {
+                field = field.preview_text(text);
+            }
+            field.show(ui)
+        });
+        let Some(out) = shown.inner else { return FamilyField::default() };
+        let mut edits: Vec<EditEvent<CharacterChange>> = out
+            .edit
+            .events
+            .into_iter()
+            .filter(|event| matches!(event, EditEvent::Commit { .. } | EditEvent::Set { .. }))
+            .map(|event| event.map(CharacterChange::Family))
+            .collect();
+        if let Some(style) = out.picked_style {
+            edits.push(picked_event(CharacterChange::Style(style), words.style.as_str()));
+        }
+        return FamilyField { edits, preview: out.preview, rested: out.rested };
+    }
+    let entries = string_entries(families.iter().map(|name| (name.clone(), name.clone())));
+    let edits = select_row(ui, &words.family, hidden_side(), value, &entries, CharacterChange::Family).into_iter().collect();
+    FamilyField { edits, ..FamilyField::default() }
+}
+
+/// Where two selections' optional values agree: that value, else `None` (mixed).
+pub(crate) fn agree<T: Clone + PartialEq>(a: &Option<T>, b: &Option<T>) -> Option<T> {
+    if a == b { a.clone() } else { None }
 }

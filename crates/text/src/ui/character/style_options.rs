@@ -12,14 +12,14 @@ use craft_ui::display::Text;
 use craft_ui::form::Field;
 use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::patterns::form_dialogs::HostRequests;
-use craft_ui::runtime::env::{Env, Label};
+use craft_ui::runtime::env::{Env, Label, WordTemplate};
 use craft_ui::text::{NumberPick, TextField};
 use egui::{Response, Ui};
 
 use super::paragraph::{INDENT_RANGE, SPACE_RANGE};
 use super::rows::{
     LengthRow, Lengths, PlainRow, Toggle, family_field, hidden_side, leading_menu, leading_row, mark, mixed, number_change, number_presets,
-    picked_event, plain, select_row, size_menu, string_entries, toggle_row,
+    plain, select_row, size_menu, string_entries, toggle_row,
 };
 use super::{
     CharacterChange, CharacterValues, CharacterWords, ParagraphChange, ParagraphValues, ParagraphWords, SHIFT_RANGE, SIZE_RANGE, TRACKING_PRESETS,
@@ -34,16 +34,16 @@ use super::FontPickerSource;
 mod stories;
 
 craft_ui::words! {
-    /// The words of the style options editor, English by default: the three short alignment names its rows show, the
-    /// name field, the include checks and the close button. The other labels come from the Character and Paragraph words.
+    /// The words of the style options editor, English by default: the three short alignment names its rows show. The
+    /// name field, the include checks and the close button are words the contract row does not list but the editor
+    /// needs. The other labels come from the Character and Paragraph words.
     #[non_exhaustive]
     pub struct TextStyleOptionsWords {
         left: "styleOptions.left" = "Left";
         center: "styleOptions.center" = "Center";
         right: "styleOptions.right" = "Right";
-        // PLAN: the sheet lists these three words (note 3); the contract row names only the alignment names
         name: "styleOptions.name" = "Style name";
-        include: "styleOptions.include" = "Include";
+        include: template "styleOptions.include" = "Include {attribute}";
         close: "styleOptions.close" = "Close";
     }
 }
@@ -262,7 +262,7 @@ impl<'a> TextStyleOptions<'a> {
         let size_presets = size_menu(&units, unit);
         let leading_presets = leading_menu(&cw, values.character.leading, &size_presets);
         let tracking_presets = number_presets(&units, TRACKING_PRESETS.iter().copied());
-        let family_entries = string_entries(families.iter().map(|name| (name.clone(), name.clone())));
+
         let style_entries = string_entries(styles.iter().map(|name| (name.clone(), name.clone())));
         let align_entries: Vec<Entry<String>> = ALIGNS
             .iter()
@@ -305,13 +305,10 @@ impl<'a> TextStyleOptions<'a> {
                 let found = match attribute {
                     StyleAttribute::Font => include_row(ui, &words.include, attribute, on, |ui| {
                         #[cfg(feature = "font-picker")]
-                        let family = family_field(ui, &cw.family, mixed(c.family.clone()), &family_entries, picker.as_mut());
+                        let family = family_field(ui, &cw, c, families, picker.as_mut());
                         #[cfg(not(feature = "font-picker"))]
-                        let family = family_field(ui, &cw.family, mixed(c.family.clone()), &family_entries);
-                        let mut found = character(family.edits.into_iter().map(|event| event.map(CharacterChange::Family)));
-                        if let Some(style) = family.picked_style {
-                            found.extend(character([picked_event(CharacterChange::Style(style), cw.style.as_str())]));
-                        }
+                        let family = family_field(ui, &cw, c, families);
+                        let mut found = character(family.edits);
                         found.extend(character(select_row(
                             ui,
                             &cw.style,
@@ -456,15 +453,41 @@ fn text_side(label: &Label) -> SideLabel {
     mark(GlyphLabel::text(label.clone()), None, FieldLayout::Beside)
 }
 
-/// One row: the include check, then the row's `field`. A row that is not included shows the inherited value and takes
-/// no input; its check still does.
+/// The name of the row of `attribute`, which the include check's accessible name carries.
+fn attribute_name(attribute: StyleAttribute, cw: &CharacterWords, pw: &ParagraphWords) -> Label {
+    match attribute {
+        StyleAttribute::Font => cw.family.clone(),
+        StyleAttribute::Size => cw.size.clone(),
+        StyleAttribute::Leading => cw.leading.clone(),
+        StyleAttribute::Tracking => cw.tracking.clone(),
+        StyleAttribute::BaselineShift => cw.baseline_shift.clone(),
+        StyleAttribute::Color => cw.text_color.clone(),
+        StyleAttribute::FauxBold => cw.faux_bold.clone(),
+        StyleAttribute::FauxItalic => cw.faux_italic.clone(),
+        StyleAttribute::Underline => cw.underline.clone(),
+        StyleAttribute::Strikethrough => cw.strikethrough.clone(),
+        StyleAttribute::Align => pw.alignment.clone(),
+        StyleAttribute::FirstLineIndent => pw.first_line_indent.clone(),
+        StyleAttribute::StartIndent => pw.start_indent.clone(),
+        StyleAttribute::EndIndent => pw.end_indent.clone(),
+        StyleAttribute::SpaceBefore => pw.space_before.clone(),
+        StyleAttribute::SpaceAfter => pw.space_after.clone(),
+        StyleAttribute::Hyphenate => pw.hyphenate.clone(),
+    }
+}
+
+/// One row: the include check, named by the `include` template filled with the row's name, then the row's `field`. A
+/// row that is not included shows the inherited value and takes no input; its check still does.
 fn include_row(
     ui: &mut Ui,
-    include: &Label,
+    include: &WordTemplate,
     attribute: StyleAttribute,
     on: bool,
     field: impl FnOnce(&mut Ui) -> Vec<EditEvent<StyleOptionsChange>>,
 ) -> Vec<EditEvent<StyleOptionsChange>> {
+    let env = Env::of(ui);
+    let name = attribute_name(attribute, &env.words::<CharacterWords>(), &env.words::<ParagraphWords>());
+    let include = Label::from(include.fill(&[("attribute", name.as_str())]));
     let mut found = Vec::new();
     Grid::new(&TWO_COLUMNS).fill_width().show(ui, |ui, _| {
         let check = Field::new(include.clone()).side(hidden_side()).show(ui, |ui, _| Checkbox::new(Bind::given(Mixed::Same(on))).show(ui).events);
