@@ -228,6 +228,27 @@ fn a_default_part_left_out_is_words_own() {
     assert_eq!(read(named, false), (s("Georgia"), 10.0, 10.0, 0.0));
 }
 
+/// A theme's font names are bounded as the run fonts are: an over-long `a:latin` or `a:cs`
+/// typeface is left out, so it doesn't become the document's theme font or, where the run
+/// defaults are left out, every run's complex-script font.
+#[test]
+fn over_long_theme_font_names_are_left_out() {
+    let long = "F".repeat(300);
+    let theme = format!(
+        r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements><a:fontScheme name="F"><a:majorFont><a:latin typeface="{long}"/><a:cs typeface="{long}"/></a:majorFont><a:minorFont><a:latin typeface="{long}"/><a:cs typeface="{long}"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#
+    );
+    let styles =
+        format!(r#"<w:styles {W_NS}><w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#);
+    let rels = [("rId1", "styles", "styles.xml"), ("rId2", "theme", "theme/theme1.xml")];
+    let parts = [("word/styles.xml", styles.as_str()), ("word/theme/theme1.xml", theme.as_str())];
+    let d = craft_docx::read(&docx("<w:p><w:r><w:rPr><w:cs/></w:rPr><w:t>x</w:t></w:r></w:p>", &rels, &parts)).unwrap();
+    assert_ne!(d.settings.major_font, long);
+    assert_ne!(d.settings.minor_font, long);
+    // As a theme with no complex-script font: Angsana New.
+    assert_eq!(d.styles.resolve_char(None, &Default::default()).complex().font, "Angsana New");
+    assert_ne!(d.styles.default_chr.font.as_deref(), Some(long.as_str()));
+}
+
 /// The complex-script font of the run defaults Word gives a file without `w:rPrDefault`: its
 /// template's `w:cstheme="minorBidi"` (Word for Windows, Thai text in a `w:cs` run, read from the
 /// fonts of the PDF Word saves). The theme's minor font for the script of `w:themeFontLang/@w:bidi`,
