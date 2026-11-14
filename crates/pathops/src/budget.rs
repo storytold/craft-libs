@@ -1117,9 +1117,12 @@ fn straight_hull(s: &PathSeg, tol: f64) -> Option<Line> {
 /// `m`², so a point where `c` lines cross costs about `c`³, the sweep's cost for it; lines that lie on one line and overlap, which
 /// cross anywhere along them, count all together. A curve that is a line to the sweep's tolerance is one of them. The other curves
 /// count where one runs along another (they are told by [`crate::crossings::coincide`], for each curve among a few of those whose
-/// tangents may run along its own), as many as it runs along, squared, and weighted by [`CURVE_COINCIDENCE_WEIGHT`]. The crossings
-/// are found only when all `pairs` of line bounds that overlap, were they at one point, could cost more than the limit, or the
-/// curves may.
+/// tangents may run along its own), as many as it runs along, squared, and weighted by [`CURVE_COINCIDENCE_WEIGHT`]. The limit is on
+/// the sum of the two. The crossings are found only when all `pairs` of line bounds that overlap, were they at one point, and the
+/// pairs of curve bounds, were they curves that run along one another, could together cost more than the limit (an estimate, which
+/// a few lines that many others cross at one place can pass: it is the work of a crowd of lines and not of a crowd round one), the
+/// lines' with the most the work of lines moved a few tolerances apart is counted at ([`LOOSE_WORK`]); and then the kind with the
+/// more is walked first, and the other unless it could not take the sum past the limit.
 fn crossing_work_within(seg: &Segments, pairs: usize, eps: f64, cap: usize) -> bool {
     let limit = limits().crossing_work as u64;
     let slack = 2.0 * eps;
@@ -1152,15 +1155,16 @@ fn crossing_work_within(seg: &Segments, pairs: usize, eps: f64, cap: usize) -> b
     let bent_rects: Vec<Rect> = bent.iter().filter_map(|&i| seg.curves.get(i).copied()).collect();
     let bent_pairs = if bent.len() > 1 { overlap_pairs(&bent_rects, cap) } else { Some(0) };
     let Some(bent_pairs) = bent_pairs else { return false };
-    // Lines through one point: c(c - 1) / 2 pairs, and c (c - 1)² of work; curves that run along one another, the same weighted.
+    // Lines through one point: c(c - 1) / 2 pairs, and c (c - 1)² of work, and the most of that where the crossings are a few
+    // tolerances apart; curves that run along one another, the same weighted. Of a kind with no pairs it is nothing.
     let (c, c_bent) = (clique(line_pairs), clique(bent_pairs));
-    let lines_may = c * (c - 1.0) * (c - 1.0) > limit as f64;
-    let curves_may = CURVE_COINCIDENCE_WEIGHT * CURVE_COINCIDENCE_WEIGHT * c_bent * (c_bent - 1.0) * (c_bent - 1.0) > limit as f64;
-    if !lines_may && !curves_may {
+    let lines_most = c * (c - 1.0) * (c - 1.0) * (LOOSE_WORK as f64 / 10.0);
+    let curves_most = CURVE_COINCIDENCE_WEIGHT * CURVE_COINCIDENCE_WEIGHT * c_bent * (c_bent - 1.0) * (c_bent - 1.0);
+    if lines_most + curves_most <= limit as f64 {
         return true;
     }
-    let mut total = 0u64;
-    if lines_may {
+    // What the walk of each kind adds to the work counted so far: false when that passes the limit, or the pairs are past `cap`.
+    let line_work = |total: &mut u64| -> bool {
         // For each line, where it is crossed (and to what the position is known), and by how many lines it is not known where.
         let mut at: Vec<Vec<(f64, f64)>> = vec![Vec::new(); lines.len()];
         let mut anywhere: Vec<u64> = vec![0; lines.len()];
@@ -1194,7 +1198,7 @@ fn crossing_work_within(seg: &Segments, pairs: usize, eps: f64, cap: usize) -> b
             if unknown > 0 {
                 // Where they cross is not known: all of them, and the rest, may be at one point.
                 let m = unknown.saturating_add(list.len() as u64);
-                total = total.saturating_add(m.saturating_mul(m));
+                *total = total.saturating_add(m.saturating_mul(m));
             } else {
                 list.sort_by(|x, y| x.0.total_cmp(&y.0));
                 // Crossings at one point lie within the reach and the uncertainty of each of one another: the position is
@@ -1212,18 +1216,19 @@ fn crossing_work_within(seg: &Segments, pairs: usize, eps: f64, cap: usize) -> b
                         // more memory than ones at a point do: 256 lines moved sideways by 2 tolerances 2.7 GB.
                         let spread = s - first;
                         let loose = spread > slack + err && spread <= LOOSE_SPREAD * eps;
-                        total = total.saturating_add(if loose { run * run * LOOSE_WORK / 10 } else { run * run });
+                        *total = total.saturating_add(if loose { run * run * LOOSE_WORK / 10 } else { run * run });
                     }
                     run = 1;
                     first = next.map_or(0.0, |n| n.0);
                 }
             }
-            if total > limit {
+            if *total > limit {
                 return false;
             }
         }
-    }
-    if curves_may {
+        true
+    };
+    let curve_work = |total: &mut u64| -> bool {
         let curves: Vec<Curve> = bent
             .iter()
             .filter_map(|&i| seg.curve_segs.get(i))
@@ -1265,11 +1270,22 @@ fn crossing_work_within(seg: &Segments, pairs: usize, eps: f64, cap: usize) -> b
             if found > 0 {
                 // As many of its partners as the ones tried were, at the most.
                 let m = (found * list.len()).div_ceil(tests) as f64 * CURVE_COINCIDENCE_WEIGHT;
-                total = total.saturating_add((m * m) as u64);
-                if total > limit {
+                *total = total.saturating_add((m * m) as u64);
+                if *total > limit {
                     return false;
                 }
             }
+        }
+        true
+    };
+    // The kind with the more to come first (the curves of a fan of pieces of an arc, which the lines that close them follow, are
+    // refused before the lines are walked), and the other unless it could not take the sum past the limit.
+    let mut total = 0u64;
+    let curves_first = curves_most > lines_most;
+    for curves_now in [curves_first, !curves_first] {
+        let most = if curves_now { curves_most } else { lines_most };
+        if most > 0.0 && total as f64 + most > limit as f64 && !(if curves_now { curve_work(&mut total) } else { line_work(&mut total) }) {
+            return false;
         }
     }
     true
@@ -3016,6 +3032,100 @@ mod tests {
             let path = jittered_pencil(n, 100.0, jitter);
             assert_eq!(sweep_fits([&path]), !refused, "{n} lines moved up to {jitter}");
         }
+    }
+
+    /// `k` lines through the origin as [`star_of_lines`] has them, each moved sideways by up to `jitter` (so that the crossings of
+    /// one line lie a few tolerances apart along it, not at one point), every line a subpath of its own: no connecting segments,
+    /// so that the pairs of bounds are the `k (k - 1) / 2` of the lines and no more.
+    fn moved_star(k: usize, jitter: f64) -> BezPath {
+        let mut p = BezPath::new();
+        for i in 0..k {
+            let a = std::f64::consts::PI * (i as f64 + 0.5) / k as f64;
+            let v = kurbo::Vec2::new(a.cos(), a.sin()) * 100.0;
+            let side = kurbo::Vec2::new(-a.sin(), a.cos()) * ((crate::testutil::hash01(i as u64, 3) - 0.5) * jitter);
+            p.move_to(Point::ORIGIN + side - v);
+            p.line_to(Point::ORIGIN + side + v);
+        }
+        p
+    }
+
+    /// The work of lines through a point moved a few tolerances is counted 1.7 times ([`LOOSE_WORK`]), and so is the most the pairs of
+    /// bounds could come to before the crossings are found: a bound that took the lines for exact ones passed 216 to 256 of them with no
+    /// look, for 1.7 times 256 x 255² is more than the limit (28.3 million), and 256 such lines are what took 2.7 GB. The most admitted
+    /// is 215, as the documents say; 256 exactly through a point (16.6 million) are walked now and admitted, and the walk is of every
+    /// pair once.
+    #[test]
+    fn the_bound_that_spares_the_walk_counts_lines_a_few_tolerances_apart_as_the_walk_does() {
+        let pairs = |k: usize| k * (k - 1) / 2;
+        let at = |path: &BezPath| {
+            work::reset();
+            let fits = sweep_fits([path]);
+            (fits, work::take(Work::CrossingPairs))
+        };
+        // Moved by 0.4 tolerances, the crossings of a line are one run, spread over more than the rounding: loose.
+        let (fits, walked) = at(&moved_star(256, 4e-7));
+        assert!(!fits, "256 lines moved a few tolerances");
+        assert_eq!(walked, pairs(256), "the pairs are walked, once each");
+        let (fits, walked) = at(&moved_star(240, 4e-7));
+        assert!(!fits && walked == pairs(240), "240 x 239² x 1.7 is 23.3 million: {fits} {walked}");
+        // 215 are 16.74 million at that, under the limit, and the bound says so: no walk.
+        assert_eq!(215 * 214 * 214 * 17 / 10, 16_738_438);
+        let (fits, walked) = at(&moved_star(215, 4e-7));
+        assert!(fits && walked == 0, "215: {fits} {walked}");
+        // Exactly through a point they are 16.6 million at 256, which the walk finds and admits.
+        let (fits, walked) = at(&star_of_lines(256));
+        assert!(fits && walked == pairs(256), "256 exact: {fits} {walked}");
+        // Nothing but the work refuses the moved ones.
+        let lifted = Limits { crossing_work: usize::MAX, ..Limits::default() };
+        assert!(with_limits(lifted, || sweep_fits([&moved_star(256, 4e-7)])), "nothing else refuses them");
+    }
+
+    /// The limit is on the work of lines and of curves together ([`Limits::crossing_work`]): ten lines through a point are 810 and seven
+    /// pieces of one arc from its start (the pairs of curves that run along one another, squared and 2.25 times) 567, and each fits a
+    /// limit of 1,000 and the two together, 1,377, do not. The crossings are found when the most the two could come to is past the limit,
+    /// and the second kind is walked unless it could not bring the sum past it.
+    #[test]
+    fn the_work_of_lines_and_the_work_of_curves_are_held_to_the_limit_together() {
+        use kurbo::ParamCurve;
+        let arc = kurbo::CubicBez::new((0.0, 0.0), (100.0, 150.0), (300.0, 150.0), (400.0, 0.0));
+        // The pieces are open subpaths, so there are no closing lines among them, and they lie 5,000 from the star.
+        let pieces = {
+            let mut p = BezPath::new();
+            let by = kurbo::Vec2::new(5000.0, 0.0);
+            for k in 1..=7 {
+                let s = arc.subsegment(0.0..k as f64 / 7.0);
+                p.move_to(s.p0 + by);
+                p.curve_to(s.p1 + by, s.p2 + by, s.p3 + by);
+            }
+            p
+        };
+        let lines = star_of_lines(10);
+        let both = {
+            let mut b = lines.clone();
+            b.extend(pieces.iter());
+            b
+        };
+        let fits = |path: &BezPath, limit: usize| with_limits(Limits { crossing_work: limit, ..Limits::default() }, || sweep_fits([path]));
+        // The work of each alone is what it is: 10 x 9² and 2.25 x 7 x 6².
+        assert!(!fits(&lines, 809) && fits(&lines, 810));
+        assert!(!fits(&pieces, 566) && fits(&pieces, 567));
+        // Together, the sum: refused under it, though each alone fits (and the bounds of each, 810 and 567, are under 1,000).
+        for limit in [1000, 1300, 1376] {
+            assert!(fits(&lines, limit) && fits(&pieces, limit), "alone, at {limit}");
+            assert!(!fits(&both, limit), "together, at {limit}");
+        }
+        assert!(fits(&both, 1377));
+        assert!(fits(&both, usize::MAX));
+        // Both are walked where they could pass the limit together, each pair of bounds once (45 of the lines' and 21 of the curves').
+        let tight = Limits { crossing_work: 1376, ..Limits::default() };
+        work::reset();
+        assert!(!with_limits(tight, || sweep_fits([&both])));
+        assert_eq!(work::take(Work::CrossingPairs), 45 + 21);
+        // Where the two could not come to the limit together there is no walk.
+        let roomy = Limits { crossing_work: 2000, ..Limits::default() };
+        work::reset();
+        assert!(with_limits(roomy, || sweep_fits([&both])));
+        assert_eq!(work::take(Work::CrossingPairs), 0);
     }
 
     /// Ends a few tolerances apart are priced as a cluster: a pie of 256 slices whose apexes are each moved by up to 10

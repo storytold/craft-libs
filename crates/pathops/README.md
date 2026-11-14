@@ -258,7 +258,9 @@ work of each operation is bounded before it starts, in counts the tests assert o
   that crosses `m` others at one point counts `m`², so `c` lines through a point count `c` (`c` - 1)², and
   `MAX_CROSSING_WORK` (2^24) is at 256 lines through a point, which take about a second (257 are `TooComplex`
   in a few milliseconds). The crossings are computed, for the lines whose bounds overlap, only when that
-  many pairs could reach the limit if they were at one point, and then once for each pair (in O(pairs log
+  many pairs could reach the limit if they were at one point (at 1.7 times the work, the most it is counted at where the crossings are a few
+  tolerances apart, so that the most admitted of such lines is 215, and with the work of curves that run along one another added, the
+  limit being on the sum), and then once for each pair (in O(pairs log
   n), the pairs being held to `MAX_SEGMENT_PAIRS` already). Lines that end at the point are ends, above. Where two
   lines cross is known to the rounding of the arithmetic over the sine of their angle (a crossing of lines 1e10
   long at 1e-13 radians is placed to within about 360 of their length), and crossings are taken as one point when they lie within
