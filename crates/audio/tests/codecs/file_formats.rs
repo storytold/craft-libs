@@ -268,8 +268,16 @@ fn the_bit_rate_is_followed() {
     );
     assert!((7000..10_000).contains(&low) && (15_000..18_500).contains(&default) && (30_000..35_000).contains(&high), "{low} {default} {high}");
     // A rate no stream can carry is moved into range, not refused.
-    encode(&buf, &EncodeOptions::new(EncodeFormat::Aac).with_bitrate(1)).unwrap();
     encode(&buf, &EncodeOptions::new(EncodeFormat::Aac).with_bitrate(u32::MAX)).unwrap();
+    // The lowest rate still codes the audio: the encoder accepts rates that leave only silence
+    // (128 for 128 kbit/s is one), and the writer does not go that low.
+    for (sample_rate, channels) in [(8000, 1), (16_000, 2), (44_100, 2), (48_000, 6), (96_000, 2)] {
+        let buf = tones(sample_rate, channels, sample_rate as usize);
+        let (_, out) = decode(&encode(&buf, &EncodeOptions::new(EncodeFormat::Aac).with_bitrate(128)).unwrap(), Some("m4a")).unwrap();
+        let rms = |x: &[f32]| (x.iter().map(|&s| f64::from(s).powi(2)).sum::<f64>() / x.len() as f64).sqrt();
+        let level = rms(&out.channels[0]) / rms(&buf.channels[0]);
+        assert!(level > 0.5, "{sample_rate} Hz, {channels} channels: {level} of the level");
+    }
     // Quality is AAC's; ALAC has no rate to control.
     let (small, large) =
         (size(&EncodeOptions::new(EncodeFormat::Aac).with_quality(0.0)), size(&EncodeOptions::new(EncodeFormat::Aac).with_quality(1.0)));

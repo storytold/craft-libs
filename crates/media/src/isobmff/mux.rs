@@ -640,12 +640,15 @@ impl<W: Write + Seek> Mp4Writer<W> {
         let start = w.stream_position()?;
         let mut b = BoxBuf::new();
         write_ftyp(&mut b, opts.brand);
-        let pad_pos = start + b.len() as u64;
+        let pad = b.len() as u64;
         b.leaf(if opts.brand == Brand::Mov { b"wide" } else { b"free" }, &[]);
-        let mdat_pos = start + b.len() as u64;
+        let mdat = b.len() as u64;
         b.leaf(b"mdat", &[]);
+        // A writer positioned at the very end of what a position can count has no room for the
+        // header; the positions below are sums that would overflow.
+        let pos = start.checked_add(b.len() as u64).ok_or_else(|| Error::Mux("the writer's position leaves no room for a file".into()))?;
+        let (pad_pos, mdat_pos) = (start + pad, start + mdat);
         w.write_all(&b.buf)?;
-        let pos = start + b.len() as u64;
         Ok(Mp4Writer { w, opts, tracks: Vec::new(), start, pad_pos, mdat_pos, pos, last_track: None, chapters: Vec::new() })
     }
 
@@ -1399,6 +1402,17 @@ mod tests {
         let sbgp = [&28u32.to_be_bytes()[..], b"sbgp", &[0, 0, 0, 0], b"roll", &[0, 0, 0, 1, 0, 0, 0, 5, 0, 0, 0, 1]].concat();
         let both = [sgpd, sbgp].concat();
         assert!(out.windows(both.len()).any(|w| w == both));
+    }
+
+    /// A writer positioned where the header's end would pass `u64::MAX` is refused, not overflowed.
+    #[test]
+    fn a_writer_at_the_end_of_the_position_range_is_refused() {
+        for back in [0, 1, 10, 27] {
+            let mut bytes = [0u8; 8];
+            let mut sink = Cursor::new(&mut bytes[..]);
+            sink.set_position(u64::MAX - back);
+            assert!(matches!(Mp4Writer::new(sink, WriterOptions::new(Brand::Mp4)), Err(Error::Mux(_))), "{back} before the end");
+        }
     }
 
     /// A file begun in the middle of a writer is a file from there: its chunk offsets count from

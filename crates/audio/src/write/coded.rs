@@ -104,12 +104,21 @@ fn aac_order(channels: usize) -> Option<&'static [usize]> {
     if channels == 8 { Some(&[2, 6, 7, 0, 1, 4, 5, 3]) } else { crate::aac::aac_order(channels) }
 }
 
+/// The lowest AAC bit rate the writer uses, per channel: 6 kbit/s, and a quarter of the sample
+/// rate (256 bits a frame). The encoder accepts less, but then has too few bits for anything but
+/// silence, and a file of silence is no answer to a low bit rate (or to kbit/s given as bit/s).
+#[cfg(feature = "aac-encode")]
+fn aac_floor_per_channel(sample_rate: u32) -> u32 {
+    (sample_rate / 4).max(6000)
+}
+
 /// The AAC rate control for `rate`: a bit rate is kept within what the stream can carry, a
 /// quality of 0–1 spans the encoder's VBR range.
 #[cfg(feature = "aac-encode")]
 fn aac_mode(rate: Option<RateControl>, sample_rate: u32, channels: usize) -> crate::aac::BitrateMode {
     use crate::aac::BitrateMode;
     let (lo, hi) = crate::aac::cbr_range(sample_rate, channels);
+    let lo = lo.max(aac_floor_per_channel(sample_rate).saturating_mul(channels as u32)).min(hi.max(lo));
     // An empty range (a rate or channel count the encoder refuses anyway) leaves the rate alone.
     let fit = |bps: u32| if lo <= hi { bps.clamp(lo, hi) } else { bps };
     match rate {

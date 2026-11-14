@@ -239,7 +239,7 @@ let alac = encode(&buf, &EncodeOptions::new(EncodeFormat::Alac).with_bit_depth(B
 
 `EncodeOptions::default()` is 24-bit WAV. `with_bwf` adds a BWF `bext` chunk and
 `with_force_rf64` writes RF64 below 4 GiB; both apply to WAV only. `encode_format_for("aiff")`
-maps an extension to an `EncodeFormat`, and `ENCODE_EXTENSIONS` lists the extensions the enabled
+maps an extension to an `EncodeFormat` (`"m4a"` to AAC; `"alac"` names ALAC), and `ENCODE_EXTENSIONS` lists the extensions the enabled
 features can write. `EncodeFormat::ALL` lists the formats and `is_built()` says whether this build
 writes one; `extension()` is the extension a new file gets and `mime_type()` its media type.
 `write` refuses a block without one slice per channel, or with a slice shorter than `frames`, and
@@ -256,7 +256,8 @@ writes nothing. After a write fails for another reason, every later
 
 `with_bitrate(bits_per_second)` sets a constant bit rate for all channels together. A rate the
 stream cannot carry is moved to the nearest one it can: MP3 and AC-3 use the highest rate of their
-tables not above it, AAC and E-AC-3 keep it inside their range. `with_quality(0.0..=1.0)` is AAC's
+tables not above it, AAC and E-AC-3 keep it inside their range (AAC from 6 kbit/s or a quarter of
+the sample rate per channel, whichever is more: below that the encoder has bits for silence only). `with_quality(0.0..=1.0)` is AAC's
 constant quality (VBR); the other lossy formats return `Unsupported` for it. Without either, AAC
 is written at 64 kbit/s per channel, MP3 at 96 kbit/s per channel, and AC-3 and E-AC-3 at
 96 kbit/s per full-bandwidth channel (the LFE not counted).
@@ -274,6 +275,13 @@ rather than written to the wrong ones:
   7.1 with backs and sides).
 - A surround pair is a surround pair: side and back surrounds are interchangeable where the format
   has one pair.
+
+The layout `decode` reports (`AudioInfo::layout`) can be passed to `with_layout` as it is. When a
+coded format refuses it (2.1 or quad into AAC, a single channel tagged as left, channels with no
+speaker assignment), the choices are another format, or audio rearranged into one of the layouts
+above with that layout set; leaving `layout` unset declares the usual layout for the count. This
+crate's decoder returns 7- and 8-channel AAC without a speaker assignment, in AAC order, so such a
+file needs that step before it is written again.
 
 An M4A's edit list skips the AAC encoder's priming (1024 frames) and ends at the last frame
 written, so the file decodes to the length that went in. An MP3, AC-3 or E-AC-3 stream has no

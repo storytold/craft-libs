@@ -366,7 +366,8 @@ impl EncodeFormat {
 pub enum RateControl {
     /// A constant bit rate in bits per second, for all channels together. A format with a fixed
     /// set of rates (MP3, AC-3) uses the highest one not above it; a rate outside what the
-    /// stream can carry is moved to the nearest one inside.
+    /// stream can carry is moved to the nearest one inside. AAC is written at 6 kbit/s or a
+    /// quarter of the sample rate per channel at least, where its encoder starts to code audio.
     Bitrate(u32),
     /// A constant quality from 0.0 (smallest) to 1.0 (best), at whatever bit rate each frame
     /// needs. AAC only; values outside the range are clamped, and NaN is an error.
