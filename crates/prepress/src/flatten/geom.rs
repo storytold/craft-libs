@@ -25,13 +25,13 @@ pub const DEFAULT_SLIVER: f64 = 0.01;
 /// horizontal segments each step of a sweep line visits,
 /// before the shapes count as too degenerate to sweep. Stacked copies of a shape can need billions
 /// of comparisons; a release build makes about 17 million a second.
-const MAX_SWEEP_WORK: u64 = 100_000_000;
+pub(super) const MAX_SWEEP_WORK: u64 = 100_000_000;
 
 /// The most output the sweep's topology may hold before the shapes count as too degenerate to
 /// sweep, in units: each output segment takes one unit plus one for each entry of its two winding
 /// numbers (at least one each), so 2,000,000 segments with single-entry windings fill it.
 /// Each segment's windings can hold an entry for every shape that covers it.
-const MAX_TOPOLOGY_UNITS: usize = 6_000_000;
+pub(super) const MAX_TOPOLOGY_UNITS: usize = 6_000_000;
 
 /// How a path's winding number decides what is inside it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

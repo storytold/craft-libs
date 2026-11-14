@@ -43,6 +43,7 @@ use craft_pdf::{OpenError, open_slice};
 use kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape, Stroke, StrokeOpts};
 
 use super::font::FontCache;
+use super::geom;
 use super::shade::{self, Canvas, StopInks};
 use super::{
     BlendMode, DisplayList, FillItem, FillRule, GradientGeometry, GroupItem, ImageItem, ImageSpace, Item, Mask, MaskKind, Paint, PlacedGlyph,
@@ -1288,17 +1289,24 @@ fn dash_pattern(path: &BezPath, dashes: &[f32]) -> Option<Vec<f64>> {
 }
 
 /// `path` filled by `rule`, as a path filled nonzero. An even-odd path is rebuilt from its
-/// boundary; if that fails or panics it is kept as it is. A subpath too small for the tolerance
-/// that the path's largest coordinate needs is rebuilt at that tolerance, and may be dropped.
+/// boundary; if that fails, panics, or passes the flattener's sweep work or output limit
+/// ([`geom::MAX_SWEEP_WORK`], [`geom::MAX_TOPOLOGY_UNITS`]), it is kept as it is. A subpath too
+/// small for the tolerance that the path's largest coordinate needs is rebuilt at that tolerance,
+/// and may be dropped.
 fn nonzero(path: &BezPath, rule: FillRule) -> BezPath {
+    nonzero_within(path, rule, geom::MAX_SWEEP_WORK, geom::MAX_TOPOLOGY_UNITS)
+}
+
+/// [`nonzero`], with the sweep stopped after `work_limit` units of work or before its topology
+/// holds more than `output_limit` units.
+fn nonzero_within(path: &BezPath, rule: FillRule, work_limit: u64, output_limit: usize) -> BezPath {
     if rule == FillRule::NonZero {
         return path.clone();
     }
     let closed = closed(path);
-    let (empty, even_odd, union) = (BezPath::new(), linesweeper::FillRule::EvenOdd, linesweeper::BinaryOp::Union);
-    let op = catch_unwind(AssertUnwindSafe(|| match linesweeper::binary_op(&closed, &empty, even_odd, union) {
-        Err(linesweeper::Error::FeatureBelowTolerance { eps }) => linesweeper::binary_op_with_eps(&closed, &empty, even_odd, union, eps),
-        other => other,
+    let op = catch_unwind(AssertUnwindSafe(|| {
+        let top = linesweeper::topology::Topology::<i32>::from_paths_with_limits([(&closed, ())], sweep_eps(&closed), work_limit, output_limit)?;
+        top.try_contours(|winding| winding % 2 != 0)
     }));
     match op {
         Ok(Ok(contours)) => {
@@ -1310,6 +1318,15 @@ fn nonzero(path: &BezPath, rule: FillRule) -> BezPath {
         }
         Ok(Err(_)) | Err(_) => closed,
     }
+}
+
+/// The sweep tolerance [`linesweeper::binary_op`] picks for `path`: 64 times `f64::EPSILON`
+/// times its largest coordinate magnitude, and at least [`linesweeper::MIN_AUTO_EPS`].
+fn sweep_eps(path: &BezPath) -> f64 {
+    let largest = kurbo::segments(path.iter().skip_while(|el| matches!(el, PathEl::ClosePath)))
+        .map(|seg| kurbo::ParamCurveExtrema::bounding_box(&seg))
+        .fold(0.0_f64, |m, r| m.max(r.x0.abs()).max(r.y0.abs()).max(r.x1.abs()).max(r.y1.abs()));
+    (largest * f64::EPSILON * 64.0).max(linesweeper::MIN_AUTO_EPS)
 }
 
 /// `path` with every subpath closed, as a fill closes them.
@@ -1380,6 +1397,30 @@ mod tests {
         let out = nonzero(&path, FillRule::EvenOdd);
         assert_ne!(out.winding((10.0, 10.0).into()), 0);
         assert_eq!(out.winding((50.0, 50.0).into()), 0);
+    }
+
+    #[test]
+    fn even_odd_path_past_the_sweep_work_limit_is_kept() {
+        // 21 stacked copies of one circle: the sweep compares their segments many times over.
+        let circle = kurbo::Circle::new((50.0, 50.0), 40.0).to_path(0.01);
+        let mut path = BezPath::new();
+        for _ in 0..21 {
+            path.extend(circle.iter());
+        }
+        let kept = nonzero_within(&path, FillRule::EvenOdd, 1_000, geom::MAX_TOPOLOGY_UNITS);
+        assert_eq!(kept.elements(), closed(&path).elements());
+        assert_ne!(nonzero(&path, FillRule::EvenOdd).elements(), closed(&path).elements());
+    }
+
+    #[test]
+    fn even_odd_path_past_the_sweep_output_limit_is_kept() {
+        // A square with a hole drawn in the same direction makes 8 output segments.
+        let mut path = Rect::new(0.0, 0.0, 100.0, 100.0).to_path(0.0);
+        path.extend(Rect::new(25.0, 25.0, 75.0, 75.0).to_path(0.0).iter());
+        let kept = nonzero_within(&path, FillRule::EvenOdd, geom::MAX_SWEEP_WORK, 4);
+        assert_eq!(kept.elements(), closed(&path).elements());
+        assert_ne!(kept.winding((50.0, 50.0).into()), 0);
+        assert_eq!(nonzero(&path, FillRule::EvenOdd).winding((50.0, 50.0).into()), 0);
     }
 
     #[test]
