@@ -36,7 +36,8 @@ fn rig() -> (Fixture, Rc<RefCell<Vec<PresetEvent<u32>>>>) {
 #[trial]
 fn a_preset_released_over_the_zone_reports_drop_at_and_nothing_else_does() {
     // (row grabbed, release point, the drop reported)
-    let cases: [(&str, Pos2, Option<(u32, Pos2)>); 4] = [
+    type Case = (&'static str, Pos2, Option<(u32, Pos2)>);
+    let cases: [Case; 4] = [
         ("Alpha", pos2(360.0, 100.0), Some((ALPHA, pos2(360.0, 100.0)))),
         ("Alpha", pos2(360.0, 240.0), None),
         ("Alpha", pos2(230.0, 100.0), None),

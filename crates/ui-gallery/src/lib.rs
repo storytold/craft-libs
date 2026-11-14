@@ -22,8 +22,8 @@ pub const WINDOW: [f32; 2] = [1280.0, 800.0];
 /// the story registrations in them, which a release build for the web would otherwise drop.
 type Registered = fn() -> Vec<&'static craft_ui::testing::Registration>;
 
+#[allow(unused_mut, clippy::vec_init_then_push)]
 fn crates() -> Vec<(&'static str, Registered)> {
-    #[allow(unused_mut, clippy::vec_init_then_push)]
     let mut crates: Vec<(&'static str, Registered)> = Vec::new();
     #[cfg(feature = "automation")]
     crates.push(("craft-automation", craft_automation::testing::registered));

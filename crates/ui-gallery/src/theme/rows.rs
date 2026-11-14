@@ -69,7 +69,7 @@ impl Filters {
 
     /// Whether a colour token passes.
     fn keeps_token(&self, explained: &Explained, token: ColorToken, pinned: bool, moved: bool) -> bool {
-        self.matches_path(&token.path())
+        self.matches_path(token.path())
             && (!self.pinned || pinned)
             && (!self.moved || moved)
             && (!self.failing || explained.pairs_of(token).any(|pair| !pair.pair.passes()))

@@ -28,13 +28,15 @@ enum TrialCommand {
     Zoom,
 }
 
+type PaletteRig = (Fixture, Rc<Cell<bool>>, Rc<RefCell<Option<CommandRef>>>);
+
 /// A palette open over `entries`, inside a modal dialog when `in_dialog`; `picked` holds the last pick.
-fn palette(entries: Vec<HelpEntry>, in_dialog: bool) -> (Fixture, Rc<Cell<bool>>, Rc<RefCell<Option<CommandRef>>>) {
+fn palette(entries: Vec<HelpEntry>, in_dialog: bool) -> PaletteRig {
     let open = Rc::new(Cell::new(true));
     let picked = Rc::new(RefCell::new(None::<CommandRef>));
     let (shown_open, shown_picked) = (open.clone(), picked.clone());
     let fixture = Fixture::new(move |ui| {
-        let mut show = |ui: &mut Ui| {
+        let show = |ui: &mut Ui| {
             let mut is_open = shown_open.get();
             let output = CommandPalette::new("Commands", &entries, Bind::bound(&mut is_open)).show(ui);
             shown_open.set(is_open);

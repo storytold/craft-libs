@@ -22,7 +22,7 @@ fn about() -> HostedAbout {
 }
 
 fn canvas_size() -> HostedCanvasSize {
-    HostedCanvasSize::new(CanvasSizeValues::new(PICTURE), |values| CanvasSize::new(values))
+    HostedCanvasSize::new(CanvasSizeValues::new(PICTURE), CanvasSize::new)
 }
 
 /// A fixture that runs `host` every pass, in a room large enough for every form.
