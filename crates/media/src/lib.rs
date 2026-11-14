@@ -17,7 +17,6 @@
 //!
 //! `bitstream` and `isobmff` are on by default; `matroska`, `ogg`, `avi`, `mxf` and `mpegts` are opt-in. A crate that needs
 //! only bit I/O uses `default-features = false, features = ["bitstream"]`.
-#![warn(missing_docs)]
 
 #[cfg(feature = "avi")]
 pub mod avi;

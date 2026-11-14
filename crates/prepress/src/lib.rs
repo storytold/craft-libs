@@ -3,7 +3,6 @@
 //! Prepress for the Craft apps: an ink model and ink manager shared by the writers,
 //! plates rendered from a PDF, coverage and a color preview read from the plates, and process
 //! color conversion through craft-cms. See the README.
-#![warn(missing_docs)]
 
 pub mod cms;
 pub mod composite;
