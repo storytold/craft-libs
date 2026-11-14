@@ -23,6 +23,7 @@ use std::time::{Duration, SystemTime};
 use craft_font_catalog::{Catalog, FontEnv, font_store_dir};
 use serde::{Deserialize, Serialize};
 
+use crate::UserSource;
 use crate::http::{Cancel, Client, FetchError};
 use crate::index::{Face, Family, FontFile, GOOGLE_FONTS, Index, IndexError, MAX_INDEX_BYTES, MAX_LICENSE_BYTES, SourceProblem, Unavailable};
 use crate::pin::IndexPin;
@@ -181,19 +182,6 @@ struct Manifest {
 
 fn google_fonts() -> String {
     GOOGLE_FONTS.into()
-}
-
-/// A source the user added: an index file at an https URL, never curated.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UserSource {
-    /// The index file (format 1.x, JSON or gzipped JSON).
-    pub url: String,
-    /// When it was added, in seconds since 1970.
-    pub added_at: u64,
-    /// The sha256 of the file first fetched from it. A different file later shows as
-    /// [`crate::FontSource::changed`].
-    #[serde(default)]
-    pub last_sha256: Option<String>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]

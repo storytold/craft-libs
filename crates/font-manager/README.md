@@ -10,12 +10,12 @@ Fonts tab; the standalone app
 | `filter` | always | Search over the index: family names ignoring case and accents, category, language (English name, autonym or id) and script |
 | `index` | always | The pinned built-in indexes (Google Fonts and Noto) compiled into [`craft-font-store`](../font-store/README.md) (`bundled`), each family's source (`source_label`: its name and whether it is curated), and the categories |
 | `installed` | always | The installed fonts [`craft-font-catalog`](../font-catalog/README.md) sees, grouped by family and source |
-| `store` | always | `Installer`, what the interface needs from the font store: the download consent, install, remove, downloads for a preview, the indexes (`indexes`, `fetch_indexes`) and the sources the user added (`user_sources`, `add_user_source`, `remove_user_source`). `SuiteStore` is craft-font-store's store, `FakeStore` a stand-in for tests, `NoStore` one for when the store folder is unknown |
+| `store` | always | `Installer`, what the interface needs from the font store: the download consent, install, remove, downloads for a preview, the indexes (`indexes`, `fetch_indexes`) and the sources the user added (`user_sources`, `add_user_source`, `remove_user_source`). `SuiteStore` is craft-font-store's store (native only), `FakeStore` a stand-in for tests, `NoStore` one for when the store folder is unknown |
 | `FontsPanel` | `ui` | The whole interface as one egui panel |
-| `glyphs` | `ui` | `GlyphsPanel`: the character grid of a face with categories, zoom and Recently Used; the app supplies the glyphs through `GlyphSource`. Sizes are the `glyphs.*` tokens |
+| `glyphs` | `ui` | `GlyphsPanel`: the character grid of a face with categories, zoom and Recently Used; the app supplies the glyphs through `GlyphSource`, which also reports when it is ready and when its faces change. Sizes are the `glyphs.*` tokens |
 | `missing` | `ui` | `document_fonts`, `missing_font_warnings` and `MissingFontsDialog`: which fonts a document names are not installed, and a replacement for each |
 | `axes` | `ui` | `read_axes`, `read_named_instances` and `AxisSliders`: a variable face's axes as sliders with a Style list of its named instances |
-| `picker` | `ui` | `FontPicker`: the family field with its list (stars, recents, class and feature filters, similar fonts, previews) |
+| `picker` | `ui` | `FontPicker`: the family field with its list (stars, recents, class and feature filters, similar fonts, previews, style rows, the served families and the banner) |
 
 The stories (`patterns/font-picker/*`, `patterns/glyphs-panel/panel`, `patterns/missing-fonts-dialog/dialog`, `composites/axis-sliders/sliders`) use the two faces egui ships.
 
@@ -53,6 +53,8 @@ The panel follows the `craft_host::Host` installed in the egui context (`Host::b
 its strings and numbers are in `host.lang()` each frame (English without a Host, or when the panel
 has no catalog for the language), its settings section is `fonts_panel`, and installs, removals and
 previews run through `host.jobs()`, one at a time in request order (without a Host, on craft-host's default job service: a thread per runner, inline on wasm32).
+
+Native code (`SuiteStore` is not built for wasm32):
 
 ```rust
 let catalog = Arc::clone(Catalog::global());

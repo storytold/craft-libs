@@ -1,9 +1,7 @@
-//! [`AdjustmentKind`] and the Adjustments panel: a grid of icon buttons, one per adjustment.
+//! [`AdjustmentKind`]: the adjustments the Adjustments panel offers, with their command key, icon and title.
 
 use craft_behavior::IconId;
-use craft_ui::contract::{NoValue, Outcome, Pattern};
 use craft_ui::runtime::env::Label;
-use egui::{Response, Ui};
 
 use super::AdjustWords;
 
@@ -66,69 +64,69 @@ impl AdjustmentKind {
         AdjustmentKind::ColorLookup,
     ];
 
-    /// The kind's key (`"brightnessContrast"`).
+    /// The kind's key (`"brightnessContrast"`): the suffix of the app's `layer.newAdjustmentLayer.{key}` command.
     pub fn key(self) -> &'static str {
-        let _ = self;
-        todo!("pn.C44")
+        match self {
+            AdjustmentKind::BrightnessContrast => "brightnessContrast",
+            AdjustmentKind::Levels => "levels",
+            AdjustmentKind::Curves => "curves",
+            AdjustmentKind::Exposure => "exposure",
+            AdjustmentKind::Vibrance => "vibrance",
+            AdjustmentKind::HueSaturation => "hueSaturation",
+            AdjustmentKind::ColorBalance => "colorBalance",
+            AdjustmentKind::BlackWhite => "blackWhite",
+            AdjustmentKind::PhotoFilter => "photoFilter",
+            AdjustmentKind::ChannelMixer => "channelMixer",
+            AdjustmentKind::Invert => "invert",
+            AdjustmentKind::Posterize => "posterize",
+            AdjustmentKind::Threshold => "threshold",
+            AdjustmentKind::GradientMap => "gradientMap",
+            AdjustmentKind::SelectiveColor => "selectiveColor",
+            AdjustmentKind::ColorLookup => "colorLookup",
+        }
     }
 
     /// The kind's icon from the catalog.
     pub fn icon(self) -> IconId {
-        let _ = self;
-        todo!("pn.C44")
+        IconId::new(match self {
+            AdjustmentKind::BrightnessContrast => "sun",
+            AdjustmentKind::Levels => "gauge",
+            AdjustmentKind::Curves => "pen_tool",
+            AdjustmentKind::Exposure => "scan",
+            AdjustmentKind::Vibrance => "sparkles",
+            AdjustmentKind::HueSaturation => "droplet",
+            AdjustmentKind::ColorBalance => "blend",
+            AdjustmentKind::BlackWhite => "contrast",
+            AdjustmentKind::PhotoFilter => "target",
+            AdjustmentKind::ChannelMixer => "adjustments",
+            AdjustmentKind::Invert => "squares_subtract",
+            AdjustmentKind::Posterize => "layers",
+            AdjustmentKind::Threshold => "square",
+            AdjustmentKind::GradientMap => "palette",
+            AdjustmentKind::SelectiveColor => "swatch_book",
+            AdjustmentKind::ColorLookup => "grid",
+        })
     }
 
-    /// The kind's title.
+    /// The kind's title, from `words`.
     pub fn label(self, words: &AdjustWords) -> Label {
-        let _ = (self, words);
-        todo!("pn.C44")
-    }
-}
-
-/// What the Adjustments panel reports.
-#[derive(Debug)]
-#[non_exhaustive]
-pub struct AdjustmentsPanelOutput {
-    /// The panel's response.
-    pub response: Response,
-    /// The kind the user picked this pass.
-    pub picked: Option<AdjustmentKind>,
-}
-
-impl Outcome for AdjustmentsPanelOutput {
-    type Value = NoValue;
-
-    fn response(&self) -> &Response {
-        &self.response
-    }
-}
-
-/// A grid of icon buttons in one roving group; the app picks which kinds it offers (default all).
-#[must_use = "show the panel with `show`"]
-#[derive(Pattern)]
-#[allow(dead_code)] // P3(panels-w11): pn.C44
-pub struct AdjustmentsPanel<'a> {
-    label: Label,
-    kinds: &'a [AdjustmentKind],
-}
-
-impl<'a> AdjustmentsPanel<'a> {
-    /// A panel named `label` offering every kind.
-    pub fn new(label: impl Into<Label>) -> Self {
-        let _ = label.into();
-        todo!("pn.C44")
-    }
-
-    /// Offers only `kinds`.
-    #[must_use]
-    pub fn kinds(mut self, kinds: &'a [AdjustmentKind]) -> Self {
-        let _ = (&mut self, kinds);
-        todo!("pn.C44")
-    }
-
-    /// Draws the grid and reports the picked kind.
-    pub fn show(self, ui: &mut Ui) -> AdjustmentsPanelOutput {
-        let _ = (self, ui);
-        todo!("pn.C44")
+        match self {
+            AdjustmentKind::BrightnessContrast => words.brightness_contrast.clone(),
+            AdjustmentKind::Levels => words.levels.clone(),
+            AdjustmentKind::Curves => words.curves.clone(),
+            AdjustmentKind::Exposure => words.exposure.clone(),
+            AdjustmentKind::Vibrance => words.vibrance.clone(),
+            AdjustmentKind::HueSaturation => words.hue_saturation.clone(),
+            AdjustmentKind::ColorBalance => words.color_balance.clone(),
+            AdjustmentKind::BlackWhite => words.black_white.clone(),
+            AdjustmentKind::PhotoFilter => words.photo_filter.clone(),
+            AdjustmentKind::ChannelMixer => words.channel_mixer.clone(),
+            AdjustmentKind::Invert => words.invert.clone(),
+            AdjustmentKind::Posterize => words.posterize.clone(),
+            AdjustmentKind::Threshold => words.threshold.clone(),
+            AdjustmentKind::GradientMap => words.gradient_map.clone(),
+            AdjustmentKind::SelectiveColor => words.selective_color.clone(),
+            AdjustmentKind::ColorLookup => words.color_lookup.clone(),
+        }
     }
 }

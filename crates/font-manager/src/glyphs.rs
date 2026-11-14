@@ -1,6 +1,6 @@
 //! [`GlyphsPanel`]: Photoshop's Glyphs panel. A family and style picker, a category list (Entire Font, Punctuation,
 //! Currency, ...), a grid of glyph cells drawn by the app's text engine, a zoom slider, and the recently used
-//! glyphs in a row at the top. Double-click or Enter inserts the glyph into the text being edited.
+//! glyphs in a row at the top. Double-click or Enter inserts the glyph where the app can insert.
 
 #[cfg(feature = "screen-testing")]
 mod stories;
@@ -13,7 +13,7 @@ use craft_ui::contract::{
     ActivateOn, Bind, CollectionEvent, Entry, NoValue, Outcome, Pad, Pattern, Props, Remember as _, SelectMode, Show as _, ShowCollection as _,
     ShowContainer as _,
 };
-use craft_ui::display::Text;
+use craft_ui::display::{Shade, Spinner, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::ThumbAspect;
 use craft_ui::list::ThumbSize;
@@ -26,6 +26,7 @@ use craft_ui::tile_grid::{CaptionPlace, ThumbnailSlider, Tile, TileGrid, TileZoo
 use egui::{ColorImage, Rect, Response, Ui};
 use serde::{Deserialize, Serialize};
 
+use crate::panel::browse::SCAN_POLL_SECONDS;
 use crate::picker::{read_bind, write_bind};
 
 craft_ui::words! {
@@ -152,7 +153,7 @@ impl Section for GlyphsPanelSettings {
 pub struct GlyphsPanelOutput {
     /// The panel's response.
     pub response: Response,
-    /// A glyph to insert at the caret (double-click, Enter on the focused cell); only while text is edited.
+    /// A glyph to insert at the caret (double-click, Enter on the focused cell); only where the app can insert.
     pub insert: Option<String>,
     /// The family or style changed in the panel's own pickers.
     pub font_changed: bool,
@@ -262,7 +263,8 @@ impl craft_behavior::ItemSource<usize> for Chars<'_> {}
 ///   Enter inserts. Hovering a cell shows its character and code point as a tooltip.
 /// - A cell is drawn from [`GlyphSource::glyph`] at the zoom size, cached per face and character. The grid shows
 ///   only the current category; a cell the source returns no image for stays empty.
-/// - Without text being edited the cells still show, Enter and double-click do nothing and the footer says so.
+/// - Where the app cannot insert, the cells still show, Enter and double-click do nothing and the footer says so.
+/// - While the source is not [ready](GlyphSource::ready) the panel shows a spinner and "Loading fonts…" only.
 /// - The font and style lists come from the app ([`families`](GlyphsPanel::families),
 ///   [`styles`](GlyphsPanel::styles)); without a list the name is shown as text.
 #[must_use = "show the panel with `show`"]
@@ -301,6 +303,16 @@ impl<'a> GlyphsPanel<'a> {
         let GlyphsPanel { label, source, mut family, mut style, mut settings, families, styles, can_insert } = self;
         let env = Env::of(ui);
         let words = env.words::<GlyphsWords>();
+        if !source.ready() {
+            let shown = Stack::new().label(label).show(ui, |ui, _| {
+                Row::new().show(ui, |ui, _| {
+                    Spinner::new().label(words.loading.clone()).show(ui);
+                    Text::new(words.loading.clone()).shade(Shade::Muted).show(ui);
+                });
+            });
+            craft_ui::runtime::frame::request_repaint_after(ui.ctx(), SCAN_POLL_SECONDS);
+            return GlyphsPanelOutput { response: shown.output, insert: None, font_changed: false };
+        }
         let thumbs = Thumbnails::<GlyphKey>::in_context(ui.ctx(), "craft-font-manager-glyphs", ThumbnailOptions::new());
         let pictures = GlyphPictures(source);
         let mut insert: Option<String> = None;
