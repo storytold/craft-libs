@@ -90,15 +90,19 @@ pub fn prepare_frame(width: u32, height: u32, mut pixels: Vec<u8>, speed: i32) -
     if !(1..=30).contains(&speed) {
         return Err(Error::InvalidSpeed(speed));
     }
-    let expected = usize::from(width)
-        .checked_mul(usize::from(height))
-        .and_then(|pixels| pixels.checked_mul(4))
-        .ok_or(Error::Dimensions { width: u32::from(width), height: u32::from(height) })?;
+    let expected = rgba_len(width, height)?;
     if pixels.len() != expected {
         return Err(Error::FrameLength { index: 0, actual: pixels.len(), expected });
     }
     let frame = gif::Frame::from_rgba_speed(width, height, &mut pixels, speed);
     Ok(PreparedFrame { width, height, frame })
+}
+
+fn rgba_len(width: u16, height: u16) -> Result<usize, Error> {
+    usize::from(width)
+        .checked_mul(usize::from(height))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or(Error::Dimensions { width: u32::from(width), height: u32::from(height) })
 }
 
 fn dimensions(width: u32, height: u32) -> Result<(u16, u16), Error> {
@@ -135,6 +139,10 @@ impl<W: Write> AnimationWriter<W> {
 
     /// Encode and append one full-canvas RGBA8 frame.
     pub fn write_frame(&mut self, frame: RgbaFrame<'_>) -> Result<(), Error> {
+        let expected = rgba_len(self.width, self.height)?;
+        if frame.pixels.len() != expected {
+            return Err(Error::FrameLength { index: self.frames_written, actual: frame.pixels.len(), expected });
+        }
         let prepared =
             prepare_frame(u32::from(self.width), u32::from(self.height), frame.pixels.to_vec(), self.options.speed).map_err(|error| match error {
                 Error::FrameLength { actual, expected, .. } => Error::FrameLength { index: self.frames_written, actual, expected },
