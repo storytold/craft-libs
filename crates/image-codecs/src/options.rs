@@ -326,7 +326,10 @@ pub struct EncodeOptions {
     pub dds: DdsOptions,
     /// Embed the ICC profile when the format supports it.
     pub embed_icc: bool,
-    /// Embed EXIF/XMP/DPI/text when the format supports it.
+    /// Embed EXIF, XMP and text when the format supports it. The resolution
+    /// ([`Metadata::dpi`](crate::Metadata::dpi)) is written whenever it is `Some` and the format
+    /// has a field for it (JPEG, PNG, TIFF), whatever this says: clear `meta.dpi` to leave it out.
+    /// WebP, which only holds it in EXIF, follows this flag.
     pub embed_metadata: bool,
 }
 

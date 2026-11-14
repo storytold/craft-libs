@@ -591,7 +591,8 @@ fn encode_ready(img: &Image, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError
         icc: if opts.embed_icc { img.icc.as_deref() } else { None },
         exif: if opts.embed_metadata { img.meta.exif.as_deref().and_then(|e| tiff_exif::read(crate::orientation::tiff_body(e))) } else { None },
         xmp: xmp.as_deref().map(str::as_bytes),
-        dpi: if opts.embed_metadata { img.meta.dpi.filter(|d| d.0 > 0.0 && d.1 > 0.0) } else { None },
+        // Image geometry, not metadata: written whenever known.
+        dpi: img.meta.dpi.filter(|d| d.0 > 0.0 && d.1 > 0.0),
         text,
         extra_samples: &kinds,
         // Document content, not metadata: written whenever present.
