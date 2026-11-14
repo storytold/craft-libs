@@ -19,7 +19,8 @@ use ::wasmi_core::LimiterError;
 use craft_plugin_abi::PolicyReport;
 
 use super::{
-    BoxFuture, Budget, Caps, Clock, CompileOptions, Engine, EngineId, Export, HostDispatch, Instance, LoadError, Module, Trap, checked_range,
+    BoxFuture, Budget, Caps, Clock, CompileOptions, Engine, EngineId, Export, HostDispatch, Instance, LoadError, Module, Trap, check_held_memory,
+    checked_range,
     hostcall::{RawCall, run_host_call},
     require_accepted, require_deadline_enforcement,
 };
@@ -319,6 +320,7 @@ impl Instance for WasmiInstance {
         if budget.stack_bytes != self.stack_bytes {
             return Err(Trap::BudgetMismatch);
         }
+        check_held_memory(self.mem_len(), budget)?;
         let func = self.funcs[export as usize].ok_or(Trap::NoSuchExport(export))?;
         let mut inputs = [const { Val::I32(0) }; 5];
         for (slot, arg) in inputs.iter_mut().zip(args) {

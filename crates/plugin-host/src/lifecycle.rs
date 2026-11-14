@@ -37,7 +37,7 @@ use crate::dispatch::DispatchConfig;
 use crate::engine::{CompileOptions, Engine, LoadError, Trust, load_package};
 use crate::invoke::{Backend, CallError, Generation, Router, Shared, poll_ready};
 use crate::services::Services;
-use crate::store::{Decider, PackageStore, Source, StateStore, StoreError, StoredGrant, StoredPlugin};
+use crate::store::{Decider, PackageStore, Source, StateStore, StoreError, StoredGrant, StoredPlugin, package_sha256};
 
 /// Where an installed plugin stands. Rejected and Removed are not states: a rejected package is an
 /// `Err` from `install`, and a removed plugin is absent.
@@ -297,9 +297,22 @@ fn unsupported_kinds(m: &Manifest) -> Vec<String> {
     dedup_sorted(m.unsupported_contributions().map(|c| c.kind.name().to_owned()))
 }
 
-fn parse_grants(stored: &StoredPlugin) -> Vec<Permission> {
-    // A grant string that no longer parses is dropped, which can only remove access.
-    stored.grants.iter().filter_map(|g| g.permission.parse().ok()).collect()
+/// The stored grants that were given to this package: the plugin id and the publisher in its
+/// manifest, and the SHA-256 of its bytes. A store that pairs one package's code with another's
+/// grants (a torn write, an edited file) gets none of them, and the user decides again.
+fn own_grants(stored: &StoredPlugin, manifest: &Manifest) -> Vec<StoredGrant> {
+    let digest = package_sha256(&stored.bytes);
+    stored
+        .grants
+        .iter()
+        .filter(|g| g.plugin_id == manifest.id && g.publisher == manifest.author && g.package_sha256.as_deref() == Some(digest.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// The permissions of [`own_grants`]. A grant string that no longer parses is dropped. Both only remove access.
+fn parse_grants(stored: &StoredPlugin, manifest: &Manifest) -> Vec<Permission> {
+    own_grants(stored, manifest).iter().filter_map(|g| g.permission.parse().ok()).collect()
 }
 
 impl<S: 'static, E: From<CallError> + 'static> PluginManager<S, E> {
@@ -511,11 +524,13 @@ impl<S: 'static, E: From<CallError> + 'static> PluginManager<S, E> {
 
     fn stored_grants(&self, p: &Prepared, grants: &[Permission]) -> Vec<StoredGrant> {
         let now = self.shared.services.unix_millis();
+        let digest = package_sha256(&p.bytes);
         grants
             .iter()
             .map(|g| StoredGrant {
                 plugin_id: p.manifest.id.clone(),
                 publisher: p.manifest.author.clone(),
+                package_sha256: Some(digest.clone()),
                 permission: g.to_string(),
                 granted_at_ms: now,
                 decided_by: Decider::User,
@@ -538,7 +553,7 @@ impl<S: 'static, E: From<CallError> + 'static> PluginManager<S, E> {
         let risk = inner.plugins.get(&id).map_or(UpdateRisk::None, |e| update_risk(e, &prepared));
         // A risky update inherits nothing: the user answers for every required permission again.
         let previous: Option<HashSet<Permission>> =
-            inner.plugins.get(&id).map(|e| if risk.is_risky() { HashSet::new() } else { parse_grants(&e.stored).into_iter().collect() });
+            inner.plugins.get(&id).map(|e| if risk.is_risky() { HashSet::new() } else { parse_grants(&e.stored, &e.manifest).into_iter().collect() });
         let new_required: Vec<Permission> = match &previous {
             Some(granted) => prepared.required.iter().filter(|p| !granted.contains(*p)).cloned().collect(),
             None => prepared.required.clone(),
@@ -799,8 +814,7 @@ impl<S: 'static, E: From<CallError> + 'static> PluginManager<S, E> {
         if matches!(entry.state, PluginState::Active { .. }) {
             return Ok(InstallOutcome::Loaded { generation: entry.state_generation(), replaced: None });
         }
-        let stored = StoredPlugin { enabled: true, ..entry.stored.clone() };
-        let grants = parse_grants(&stored);
+        let mut stored = StoredPlugin { enabled: true, ..entry.stored.clone() };
         let prepared = match self.prepare(&stored.bytes, stored.source) {
             Ok(p) => p,
             Err(e) => {
@@ -810,6 +824,8 @@ impl<S: 'static, E: From<CallError> + 'static> PluginManager<S, E> {
                 return Err(e);
             }
         };
+        stored.grants = own_grants(&stored, &prepared.manifest);
+        let grants = parse_grants(&stored, &prepared.manifest);
         self.load_fresh(&mut inner, prepared, stored, grants)
     }
 
@@ -834,8 +850,9 @@ impl<S: 'static, E: From<CallError> + 'static> PluginManager<S, E> {
         let entry = inner.plugins.get(id).ok_or_else(|| LifecycleError::NoSuchPlugin(id.to_owned()))?;
         let mut stored = entry.stored.clone();
         stored.grants.retain(|g| g.permission != permission.to_string());
-        let grants = parse_grants(&stored);
         let prepared = self.prepare(&stored.bytes, stored.source)?;
+        stored.grants = own_grants(&stored, &prepared.manifest);
+        let grants = parse_grants(&stored, &prepared.manifest);
         match self.router.current(id) {
             Some(old) => self.reload(&mut inner, &old, prepared, stored, grants).map(|_| ()),
             None => {
@@ -879,7 +896,7 @@ impl<S: 'static, E: From<CallError> + 'static> PluginManager<S, E> {
             out.push((skipped.name, PluginState::Faulted { reason: skipped.reason }));
         }
         let mut seen: HashMap<String, String> = HashMap::new();
-        for s in loaded.plugins {
+        for mut s in loaded.plugins {
             let id = s.id.clone();
             if let Some(first) = seen.insert(id.to_ascii_lowercase(), id.clone()) {
                 let reason = format!("plugin id differs from {first:?} only by letter case; not loaded");
@@ -887,7 +904,6 @@ impl<S: 'static, E: From<CallError> + 'static> PluginManager<S, E> {
                 out.push((id, PluginState::Faulted { reason }));
                 continue;
             }
-            let grants = parse_grants(&s);
             if !s.enabled {
                 let (manifest, legacy) = match self.prepare(&s.bytes, s.source) {
                     Ok(p) => (p.manifest, p.legacy),
@@ -900,6 +916,7 @@ impl<S: 'static, E: From<CallError> + 'static> PluginManager<S, E> {
                         continue;
                     }
                 };
+                s.grants = own_grants(&s, &manifest);
                 inner.plugins.insert(id.clone(), Entry::idle(s, manifest, PluginState::Disabled, legacy, Vec::new()));
                 out.push((id, PluginState::Disabled));
                 continue;
@@ -912,7 +929,11 @@ impl<S: 'static, E: From<CallError> + 'static> PluginManager<S, E> {
                     continue;
                 }
             };
-            // A failure here leaves a `Faulted` entry, which the returned state reports.
+            // Grants that do not belong to this package are dropped here, so the app never lists
+            // them, and `load_fresh` writes the record back without them. A failure leaves a
+            // `Faulted` entry, which the returned state reports.
+            s.grants = own_grants(&s, &prepared.manifest);
+            let grants = parse_grants(&s, &prepared.manifest);
             let _ = self.load_fresh(&mut inner, prepared, s, grants);
             let state = inner.plugins.get(&id).map_or(PluginState::Disabled, |e| e.state.clone());
             out.push((id, state));

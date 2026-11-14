@@ -206,30 +206,30 @@ pub(crate) fn clean_row(dst: &mut [u8], src: &[u8], f: &ImageFormat) {
                     *b = (u32::from(*b)).min(max) as u8;
                 }
             } else {
-                for pair in dst.chunks_exact_mut(2) {
-                    let v = u32::from(u16::from_le_bytes([pair[0], pair[1]])).min(max) as u16;
-                    pair.copy_from_slice(&v.to_le_bytes());
+                for pair in dst.as_chunks_mut::<2>().0 {
+                    let v = u32::from(u16::from_le_bytes(*pair)).min(max) as u16;
+                    *pair = v.to_le_bytes();
                 }
             }
         }
         Sample::F32 => {
-            for (k, (d, s)) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)).enumerate() {
-                let mut v = f32::from_le_bytes([d[0], d[1], d[2], d[3]]);
+            for (k, (d, s)) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0).enumerate() {
+                let mut v = f32::from_le_bytes(*d);
                 if !v.is_finite() {
-                    d.copy_from_slice(s);
-                    v = f32::from_le_bytes([s[0], s[1], s[2], s[3]]);
+                    *d = *s;
+                    v = f32::from_le_bytes(*s);
                 }
                 if clamp_this(k) && v.is_finite() {
-                    d.copy_from_slice(&v.clamp(0.0, 1.0).to_le_bytes());
+                    *d = v.clamp(0.0, 1.0).to_le_bytes();
                 }
             }
         }
         Sample::F16 => {
-            for (k, (d, s)) in dst.chunks_exact_mut(2).zip(src.chunks_exact(2)).enumerate() {
-                let mut bits = u16::from_le_bytes([d[0], d[1]]);
+            for (k, (d, s)) in dst.as_chunks_mut::<2>().0.iter_mut().zip(src.as_chunks::<2>().0).enumerate() {
+                let mut bits = u16::from_le_bytes(*d);
                 if bits & 0x7C00 == 0x7C00 {
-                    d.copy_from_slice(s);
-                    bits = u16::from_le_bytes([s[0], s[1]]);
+                    *d = *s;
+                    bits = u16::from_le_bytes(*s);
                 }
                 if clamp_this(k) && bits & 0x7C00 != 0x7C00 {
                     // Sign bit set: below zero. At or above 0x3C00 (1.0): above one. Both land on a bound.
@@ -240,7 +240,7 @@ pub(crate) fn clean_row(dst: &mut [u8], src: &[u8], f: &ImageFormat) {
                     } else {
                         bits
                     };
-                    d.copy_from_slice(&fixed.to_le_bytes());
+                    *d = fixed.to_le_bytes();
                 }
             }
         }
@@ -518,12 +518,12 @@ mod legacy {
     }
 
     fn floats(bytes: &[u8]) -> Vec<f32> {
-        bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect()
+        bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect()
     }
 
     fn store(bytes: &mut [u8], values: impl Iterator<Item = f32>) {
-        for (chunk, v) in bytes.chunks_exact_mut(4).zip(values) {
-            chunk.copy_from_slice(&v.to_le_bytes());
+        for (chunk, v) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(values) {
+            *chunk = v.to_le_bytes();
         }
     }
 
@@ -563,7 +563,7 @@ mod legacy {
                 Ok(())
             }
             (LegacyPlugin::Effectcraft(p), Plan::Effectcraft(flat)) => {
-                let mut pixels: Vec<[f32; 4]> = floats(job.data).chunks_exact(4).map(|q| [q[0], q[1], q[2], q[3]]).collect();
+                let mut pixels: Vec<[f32; 4]> = floats(job.data).as_chunks::<4>().0.to_vec();
                 p.render(&mut pixels, f.width, f.height, flat, job.time, job.scale).map_err(error)?;
                 store(job.data, pixels.into_iter().flatten());
                 Ok(())
@@ -647,7 +647,7 @@ mod tests {
         let src: Vec<u8> = [0x3400u16; 5].iter().flat_map(|v| v.to_le_bytes()).collect();
         let mut dst: Vec<u8> = [0x7E00u16, 0x7C00, 0xBC00, 0x4000, 0x3800].iter().flat_map(|v| v.to_le_bytes()).collect();
         clean_row(&mut dst, &src, &f);
-        let got: Vec<u16> = dst.chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
+        let got: Vec<u16> = dst.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes(*b)).collect();
         assert_eq!(got, vec![0x3400, 0x3400, 0x0000, 0x3C00, 0x3800]);
     }
 
@@ -656,7 +656,7 @@ mod tests {
         let f = fmt(Sample::U16, 10, Alpha::None, 1);
         let mut dst: Vec<u8> = [1023u16, 1024].iter().flat_map(|v| v.to_le_bytes()).collect();
         clean_row(&mut dst, &[0u8; 4], &f);
-        let got: Vec<u16> = dst.chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
+        let got: Vec<u16> = dst.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes(*b)).collect();
         assert_eq!(got, vec![1023, 1023]);
         // A full width sample is left alone.
         let f = fmt(Sample::U8, 8, Alpha::None, 1);

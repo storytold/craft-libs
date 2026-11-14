@@ -38,6 +38,8 @@ craft-command.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 bitflags = "2"
+# SHA-256 of a package, to tie each stored grant to the code it was given to. Same major as craft-ipc.
+sha2 = { version = "0.10", default-features = false }
 wasmi = { version = "=2.0.0", default-features = false, features = ["std", "validate", "portable-dispatch"], optional = true }
 # wasmi does not re-export LimiterError, which ResourceLimiter needs. Same version as wasmi.
 wasmi_core = { version = "=2.0.0", default-features = false, optional = true }
