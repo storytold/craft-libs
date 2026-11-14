@@ -210,6 +210,7 @@ const QUARTER_TURNED: [Point; 4] = {
 fn rotated(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let view = view_values(data, 60.0, 0.0);
     let checker = checker_of(data);
+    #[expect(clippy::expect_used, reason = "QUARTER_TURNED is a constant rectangle, which always has a homography")]
     let frame = Homography::unit_to_quad(QUARTER_TURNED).expect("the turned area is a rectangle");
     on_canvas_view(ui, view, None, |ui, at, _| {
         let paint = AppPaint::new(|painter: &ContentPainterCx<'_>, view| paint_gradient_moved(painter, view, turned_a_quarter));

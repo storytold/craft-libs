@@ -61,7 +61,6 @@ impl ViewportWindow {
 
     /// Makes the app's other windows ignore input while this one is open, with `backdrop` over them where the window is
     /// a layer (`Backdrop::Scrim` dims them, `Backdrop::None` leaves them as they are).
-    #[must_use]
     pub fn app_modal(mut self, backdrop: Backdrop) -> Self {
         self.modal = Some(backdrop);
         self

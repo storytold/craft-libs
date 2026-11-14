@@ -34,6 +34,7 @@ impl Outcome for NavigateBarOutput {
 }
 
 /// The members of one tool's bar.
+#[expect(clippy::large_enum_variant, reason = "built once per frame and matched at once; boxing the Zoom variant would allocate every frame")]
 enum Members<'a> {
     Zoom { view: Bind<'a, CanvasView>, target: ViewTarget, options: &'a mut NavigationOptions, out: Bind<'a, bool> },
     RotateView { view: Bind<'a, CanvasView> },

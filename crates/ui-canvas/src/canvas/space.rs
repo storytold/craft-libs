@@ -168,7 +168,7 @@ impl CanvasSpace {
 /// canvas's pass maps through this one, to land where the canvas will draw.
 pub fn pixel_aligned(view: CanvasView, pixels_per_point: f32) -> CanvasView {
     let ppp = f64::from(pixels_per_point);
-    if !(ppp.is_finite() && ppp > 0.0 && view.zoom.is_finite() && view.zoom > 0.0) || !(view.rotation.abs() < 1e-8) {
+    if !(ppp.is_finite() && ppp > 0.0 && view.zoom.is_finite() && view.zoom > 0.0) || view.rotation.abs().is_nan() || view.rotation.abs() >= 1e-8 {
         return view;
     }
     let whole = |scale: f64| scale.is_finite() && scale.round() >= 1.0 && (scale - scale.round()).abs() <= 1e-5;

@@ -1,4 +1,5 @@
 //! Trials of the guide dialogs.
+#![allow(clippy::panic, clippy::expect_used, reason = "trials assert by panicking")]
 
 use super::{GUIDE_LAYOUT_COLOR_KEY, GuideLayoutDialog, GuideLayoutValues, GuideRect, GuideUnits};
 use crate::canvas_data::GuideColor;

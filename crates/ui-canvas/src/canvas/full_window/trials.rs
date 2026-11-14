@@ -1,4 +1,5 @@
 //! Trials of the full-window dialog shell's keys.
+#![allow(clippy::panic, clippy::expect_used, reason = "trials assert by panicking")]
 
 use super::FullWindowDialog;
 use crate::choice::Checkbox;

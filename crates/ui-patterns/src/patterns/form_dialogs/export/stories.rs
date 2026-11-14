@@ -61,8 +61,7 @@ fn export_dialog(ui: &mut Ui, data: &mut StoryData, preview_ready: bool) -> Stor
     let texture = picture(ui);
     let knobs = (format.clone(), exact);
     let open = || {
-        let mut options = ExportOptions::default();
-        options.format = format;
+        let options = ExportOptions { format, ..ExportOptions::default() };
         HostedExportAs::new("Poster", DOCUMENT, options)
     };
     hosted_with(ui, data, knobs, open, |host| {
