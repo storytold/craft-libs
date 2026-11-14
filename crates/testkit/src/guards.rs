@@ -380,6 +380,8 @@ fn parse_use_tree(toks: &[Token], pos: &mut usize, prefix: &mut Vec<String>, sta
     if toks.get(*pos).is_some_and(|t| t.is_punct(':')) && toks.get(*pos + 1).is_some_and(|t| t.is_punct(':')) {
         *pos += 2;
     }
+    // A leaf is reported on the line where its path starts in this tree, not where its last name is.
+    let line = toks.get(*pos).map_or(0, |t| t.line);
     while let Some(tok) = toks.get(*pos) {
         match &tok.kind {
             Kind::Ident(name) => {
@@ -401,12 +403,12 @@ fn parse_use_tree(toks: &[Token], pos: &mut usize, prefix: &mut Vec<String>, sta
                     *pos += 2;
                 }
                 if let Some(bound) = bound.filter(|b| b != "_") {
-                    out.push(UseLeaf { path, name: Some(bound), line: tok.line, start });
+                    out.push(UseLeaf { path, name: Some(bound), line, start });
                 }
                 break;
             }
             Kind::Punct('*') => {
-                out.push(UseLeaf { path: prefix.clone(), name: None, line: tok.line, start });
+                out.push(UseLeaf { path: prefix.clone(), name: None, line, start });
                 *pos += 1;
                 break;
             }
@@ -536,35 +538,63 @@ fn matching_close(toks: &[Token], open: usize) -> usize {
 const BLOCK_KEYWORDS: &[&str] =
     &["fn", "mod", "impl", "trait", "struct", "enum", "union", "extern", "macro_rules", "if", "match", "loop", "while", "for", "unsafe"];
 
+/// Keywords that start a statement whose value follows them, so a block keyword after them is part of
+/// that value.
+const VALUE_KEYWORDS: &[&str] = &["let", "return", "break", "yield", "become"];
+
+/// Whether a block expression starts at `j`: `{`, a labeled block (`'label: {`) or a `const` block.
+fn starts_block(toks: &[Token], j: usize) -> bool {
+    let punct = |k: usize, c: char| toks.get(k).is_some_and(|t| t.is_punct(c));
+    match toks.get(j).map(|t| &t.kind) {
+        Some(Kind::Punct('{')) => true,
+        Some(Kind::Other) => punct(j + 1, ':') && punct(j + 2, '{'),
+        Some(Kind::Ident(k)) => k == "const" && punct(j + 1, '{'),
+        _ => false,
+    }
+}
+
 /// The index after the item, statement, field or match arm that starts at `start`, or with `inner`, the
 /// index of the bracket that closes the enclosing scope.
 ///
-/// It ends after a `;` or a `,` outside brackets, after the closing brace of a block item (one that
-/// starts with `{` or a keyword in [`BLOCK_KEYWORDS`], or is a macro call with braces) or of a match
-/// arm's block, or before a closing bracket of the enclosing scope. When a `.` or `?` follows the
-/// closing brace of a block item, the item runs on to its `;` or `,`. A `,` inside the angle brackets
-/// of a field's or a `let`'s type ends the item early, which leaves the rest of it checked.
+/// It ends after a `;` or a `,` outside brackets, after the closing brace of a block item, or before a
+/// closing bracket of the enclosing scope. A block item starts with `{`, a labeled block, a `const`
+/// block, a keyword in [`BLOCK_KEYWORDS`] or a macro call with braces, at the head of the item or of a
+/// match arm's body (after its `=>`). An `async` block is not a block item: it runs on to its `;`. A
+/// block keyword or macro brace after a `=`, a binary operator or a keyword in [`VALUE_KEYWORDS`]
+/// outside brackets is part of an expression, which runs on to its `;` or `,`. When a `.` or `?`
+/// follows the closing brace of a block item, the item runs on to its `;` or `,`. A `,` inside the angle
+/// brackets of a field's or a `let`'s type ends the item early, which leaves the rest of it checked.
 fn item_end(toks: &[Token], start: usize, inner: bool) -> usize {
     let mut depth = 0usize;
     let mut block_item = false;
     let mut arm = false;
+    let mut head = true;
     let mut j = start;
     while j < toks.len() {
         let at_top = depth == 0 && !inner;
-        if j == start && at_top && toks[j].is_punct('{') {
+        if j == start && at_top && starts_block(toks, j) {
             block_item = true;
         }
         match &toks[j].kind {
-            Kind::Ident(k) if at_top && BLOCK_KEYWORDS.contains(&k.as_str()) => block_item = true,
-            Kind::Punct('!') if at_top && toks.get(j + 1).is_some_and(|t| t.is_punct('{')) => block_item = true,
-            Kind::Punct('=') if at_top && toks.get(j + 1).is_some_and(|t| t.is_punct('>')) => arm = true,
+            Kind::Ident(k) if at_top && head && (BLOCK_KEYWORDS.contains(&k.as_str()) || starts_block(toks, j)) => block_item = true,
+            Kind::Ident(k) if at_top && VALUE_KEYWORDS.contains(&k.as_str()) => head = false,
+            Kind::Punct('!') if at_top && head && toks.get(j + 1).is_some_and(|t| t.is_punct('{')) => block_item = true,
+            Kind::Punct('=') if at_top && toks.get(j + 1).is_some_and(|t| t.is_punct('>')) => {
+                // A match arm's body has a head of its own: a block or block keyword there ends the arm.
+                arm = true;
+                head = true;
+                block_item = starts_block(toks, j + 2);
+                j += 2;
+                continue;
+            }
+            Kind::Punct('=' | '+' | '-' | '*' | '/' | '%' | '^' | '|' | '&' | '<' | '>' | '!') if at_top && !block_item => head = false,
             Kind::Punct('(' | '[' | '{') => depth += 1,
             Kind::Punct(c @ (')' | ']' | '}')) => {
                 if depth == 0 {
                     return j;
                 }
                 depth -= 1;
-                if depth == 0 && *c == '}' && (block_item || arm) && !inner {
+                if depth == 0 && *c == '}' && block_item && !inner {
                     if toks.get(j + 1).is_some_and(|t| t.is_ident("else")) {
                         j += 1;
                         continue;
@@ -572,6 +602,7 @@ fn item_end(toks: &[Token], start: usize, inner: bool) -> usize {
                     if toks.get(j + 1).is_some_and(|t| t.is_punct('.') || t.is_punct('?')) {
                         // A method call, field or `?` after the block continues the expression to its `;` or `,`.
                         block_item = false;
+                        head = false;
                         j += 1;
                         continue;
                     }
@@ -964,13 +995,16 @@ where
 /// * **What is reported**: the paths `std::time::Instant` and `::std::time::Instant`; `<m>::Instant` where a
 ///   `use` outside a native-only item binds `m` to `std::time` (`use std::time;`, `use std::time as t;`,
 ///   `use std::time::{self as t}`);
-///   and every `use` that imports `std::time::Instant` or `std::time::*`, under any name. Each finding names
-///   the line where the path starts, once per line, in line order.
+///   and every `use` that imports `std::time::Instant` or `std::time::*`, under any name. Whitespace, comments
+///   and line breaks may separate the parts of a path. Each finding names the line where the path starts (in a
+///   `use` group, the line where the name's part of the group starts), once per line, in line order.
 /// * **What is skipped**: comments, string and character literals, other crates' `Instant` (`web_time::Instant`,
 ///   a `time` module that is not `std::time`), and items whose `cfg` attribute is false on `wasm32-unknown-unknown`
 ///   (for example `#[cfg(not(target_arch = "wasm32"))]`, `#[cfg(all(unix, ...))]`, `#[cfg(target_os = "macos")]`,
-///   or `#![cfg(...)]` for the rest of a module). A predicate that depends on a feature or on `test` is not
-///   known from the source, so the item is checked.
+///   or `#![cfg(...)]` for the rest of a module). Such an attribute covers only its item: code before the
+///   attribute or after the item on the same line is checked. A statement whose value holds a block, such as
+///   `let n = match x { ... } as u64 + ...;`, is covered up to its `;`. A predicate that depends on a feature
+///   or on `test` is not known from the source, so the item is checked.
 /// * **Module files**: a `mod name;` inside such an item makes the module's file native-only, and so are the
 ///   files of the modules declared in it, when they are among `files`, unless a chain of declarations outside
 ///   such items also reaches the file from a crate root (a file that no declaration names). The module's file is `name.rs` or

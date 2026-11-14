@@ -502,6 +502,160 @@ fn run(x: Option<u64>) -> Option<u64> {
 }
 
 #[test]
+fn std_instant_skips_an_operator_after_a_block_inside_a_native_cfg_expression() {
+    let source = r#"
+fn run(flag: bool) -> u64 {
+    #[cfg(unix)]
+    let _ = if flag { 1 } else { 2 } + std::time::Instant::now().elapsed().as_secs();
+    #[cfg(unix)]
+    return if flag { 1 } else { 2 } * std::time::Instant::now().elapsed().as_secs();
+    let t = std::time::Instant::now();
+    0
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![7]);
+}
+
+#[test]
+fn std_instant_skips_a_cast_after_a_match_inside_a_native_cfg_expression() {
+    let source = r#"
+fn run(x: Option<u32>) -> u64 {
+    #[cfg(unix)]
+    let n = match x { Some(v) => v, None => 0 } as u64 + std::time::Instant::now().elapsed().as_secs();
+    let t = std::time::Instant::now();
+    0
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![5]);
+}
+
+#[test]
+fn std_instant_runs_a_native_cfg_match_arm_to_its_comma_when_a_block_is_inside_its_value() {
+    let source = r#"
+fn run(x: Option<u32>, y: bool) -> u64 {
+    match x {
+        #[cfg(unix)]
+        Some(v) => v as u64 + match y { true => 1, false => 0 } + std::time::Instant::now().elapsed().as_secs(),
+        #[cfg(unix)]
+        None => if y { 1 } else { 0 },
+        #[cfg(unix)] Some(0) => { 0 } _ => std::time::Instant::now().elapsed().as_secs(),
+    }
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![8]);
+}
+
+#[test]
+fn std_instant_ends_a_native_cfg_const_or_labeled_block_at_its_closing_brace() {
+    let source = r#"
+fn run(x: Option<u32>) -> u64 {
+    #[cfg(unix)]
+    const { assert!(true) }
+    let a = std::time::Instant::now();
+    #[cfg(unix)]
+    'done: { let _ = std::time::Instant::now(); break 'done; }
+    let b = std::time::Instant::now();
+    match x {
+        #[cfg(unix)]
+        Some(_) => 'arm: { let _ = std::time::Instant::now(); break 'arm; }
+        _ => { let c = std::time::Instant::now(); }
+    }
+    0
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![5, 8, 12]);
+}
+
+#[test]
+fn std_instant_runs_a_native_cfg_async_block_statement_to_its_semicolon() {
+    let source = r#"
+async fn run() {
+    #[cfg(unix)]
+    async { std::time::Instant::now() }
+        .await;
+    #[cfg(unix)]
+    async move { std::time::Instant::now() };
+    let a = std::time::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![8]);
+}
+
+#[test]
+fn std_instant_checks_code_before_and_after_a_native_cfg_item_on_the_same_line() {
+    let source = "fn run() {
+    let a = std::time::Instant::now(); #[cfg(unix)] let b = std::time::Instant::now(); let c = std::time::Instant::now();
+    let d = 1; #[cfg(unix)] let e = std::time::Instant::now();
+    #[cfg(unix)] let f = std::time::Instant::now(); let g = std::time::Instant::now();
+}
+";
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![2, 4]);
+}
+
+#[test]
+fn std_instant_reads_paths_split_over_lines_and_comments_with_crlf() {
+    let source = "use std::time::\r\n    Instant;\r\nfn run() {\r\n    let t = std::time\r\n        ::Instant::now();\r\n    let u = std /* a */ :: time // b\r\n        :: Instant::now();\r\n}\r\n";
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![1, 4, 6]);
+}
+
+#[test]
+fn std_instant_reports_a_use_on_the_line_where_its_path_starts() {
+    let source = "use std::time::\n    Instant as Clock;\nuse std::time::{\n    Duration,\n    Instant,\n};\nuse std::\n    time::*;\n";
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![1, 5, 7]);
+}
+
+#[test]
+fn std_instant_ignores_other_time_modules_longer_names_and_a_renamed_duration() {
+    let source = r#"
+use tokio::time::Instant;
+use std::time::{Duration as Instant};
+fn run() {
+    let a = my_time::Instant::now();
+    let b = runtime::Instant::now();
+    let c = crate::time::Instant::now();
+    let d = tokio::time::Instant::now();
+    let e = core::time::Instant::now();
+    let f = std::time::InstantLike::now();
+    let g = mystd::time::Instant::now();
+    let h = std::time::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![12]);
+}
+
+#[test]
+fn std_instant_ignores_paths_in_literals_and_comments_and_reads_labels_as_code() {
+    let source = r##"
+fn run<'a>(s: &'a str) -> char {
+    let _x = "std::time::Instant"; let _r = r#"std::time::Instant"#; let _b = b"std::time::Instant"; let _c = c"std::time::Instant";
+    // std::time::Instant
+    /* std::time::Instant */
+    'outer: loop { break 'outer; }
+    let q = '"'; let t = std::time::Instant::now();
+    'x'
+}
+"##;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![7]);
+}
+
+#[test]
+fn std_instant_scans_a_large_source_once() {
+    let mut source = String::from("fn run() {\n");
+    for i in 0..20_000 {
+        if i % 2 == 0 {
+            source.push_str("    #[cfg(unix)] let a = std::time::Instant::now();\n");
+        } else {
+            source.push_str("    let b = std::time::Instant::now();\n");
+        }
+    }
+    source.push_str("}\n");
+    let found = lines(&std_instant([("src/run.rs", source.as_str())]));
+    assert_eq!(found.len(), 10_000);
+    assert_eq!(found.first(), Some(&3));
+    assert_eq!(found.last(), Some(&20_001));
+}
+
+#[test]
 fn std_instant_inner_cfg_covers_the_whole_file() {
     let source = r#"
 #![cfg(not(target_arch = "wasm32"))]
