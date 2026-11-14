@@ -1,5 +1,5 @@
 //! Stories of `GlyphsPanel`: the panel over Ubuntu Light and Hack with three recent glyphs, while text is edited and
-//! while it is not. The glyph source draws the shipped faces' outlines with skrifa.
+//! while it is not, and while the source is not ready. The glyph source draws the shipped faces' outlines with skrifa.
 
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};

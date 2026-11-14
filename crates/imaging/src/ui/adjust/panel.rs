@@ -15,6 +15,9 @@ use egui::{Response, Ui};
 
 use super::{AdjustWords, AdjustmentKind};
 
+/// The gap between the buttons, in the grid's layout and in the column count.
+const BUTTON_GAP: Gap = Gap::Tight;
+
 /// What the Adjustments panel reports.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -63,9 +66,14 @@ impl<'a> AdjustmentsPanel<'a> {
     /// Draws the grid and reports the picked kind.
     pub fn show(self, ui: &mut Ui) -> AdjustmentsPanelOutput {
         let AdjustmentsPanel { label, kinds } = self;
-        let words = Env::of(ui).words::<AdjustWords>();
+        let env = Env::of(ui);
+        let words = env.words::<AdjustWords>();
+        // An icon button is square at the control height; the grid steps by the columns that fit the width given.
+        let side = env.tokens.tokens().size.control.md;
+        let gap = BUTTON_GAP.points(ui);
+        let columns = (((ui.available_width() + gap) / (side + gap)).floor() as usize).clamp(1, kinds.len().max(1));
         let mut picked = None;
-        let shown = ButtonGrid::new(label).show(ui, |ui, _| {
+        let shown = ButtonGrid::new(label, columns).show(ui, |ui, _| {
             for &kind in kinds {
                 let name = kind.label(&words);
                 let button = IconButton::new(kind.icon()).id_salt(kind.key()).label(name.clone()).tooltip(name).show(ui);
@@ -86,8 +94,8 @@ struct ButtonGridStyle {
     metrics: Metrics,
 }
 
-/// The wrapping row of buttons, one roving group. The column count follows the width the host gives, so the group
-/// steps by the buttons' positions (`RaggedGrid`) and not by a fixed column count.
+/// The wrapping row of buttons, one roving group. A container's group steps over its members, which carry no row
+/// lengths, so the group is a wrapped grid of the column count the caller works out from the width it gives.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(container)]
 struct ButtonGrid {
@@ -98,13 +106,13 @@ struct ButtonGrid {
 }
 
 impl ButtonGrid {
-    fn new(label: Label) -> Self {
+    fn new(label: Label, columns: usize) -> Self {
         let props = ContainerProps::new()
             .pad(Pad::None)
             .sizing(Sizing::FillWidth)
             .layout(BodyLayout::row().wrap(true))
-            .body_gap(Gap::Tight)
-            .roving(Roving::new(NavShape::RaggedGrid));
+            .body_gap(BUTTON_GAP)
+            .roving(Roving::new(NavShape::wrapped_grid(columns)));
         ButtonGrid { common: Common::new(), props }.label(label)
     }
 }
