@@ -6,12 +6,12 @@ use std::rc::Rc;
 
 use craft_behavior::{EditEvent, Selection};
 use craft_color::palette::{SwatchColor, SwatchGroup};
+// PLAN: dialogs-w15 moves `SwatchTable` to `craft_ui::choice` (dl.K43); `craft_ui::choice` has no such item until then, so it is imported from `craft_color::ui`.
 use craft_color::ui::{
-    ColorPanel, ColorPanelMode, ColorPanelState, PanelTarget, PickedColor, SwatchEdit, SwatchKey, SwatchPalette, SwatchesCommand, SwatchesMenu,
-    SwatchesPanel, SwatchesState,
+    ColorPanel, ColorPanelMode, ColorPanelState, PanelTarget, PickedColor, SwatchEdit, SwatchKey, SwatchPalette, SwatchTable, SwatchesCommand,
+    SwatchesMenu, SwatchesPanel, SwatchesState,
 };
 use craft_theme::Srgba;
-use craft_ui::choice::SwatchTable;
 use craft_ui::contract::Role;
 use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{Bind, Show as _};
