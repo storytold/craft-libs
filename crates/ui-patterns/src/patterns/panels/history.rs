@@ -2,7 +2,7 @@
 
 use super::words::PanelWords;
 use crate::contract::{
-    Bind, CollectionEvent, ColumnSpec, ListDrag, NoValue, Outcome, Pattern, Props as _, SelectMode, ShowCollection as _, ShowContainer as _, Sizing,
+    Bind, CollectionEvent, ColumnSpec, ListDrag, NoValue, Outcome, Pattern, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
     ToggleColumn, request_rename,
 };
 use crate::layout_components::Stack;
@@ -11,6 +11,7 @@ use crate::menu::{Menu, MenuItem};
 use crate::primitives::IconSpec;
 use crate::primitives::textures::{Priority, ThumbPaint, ThumbRequest, ThumbSource, Thumbnails};
 use crate::runtime::env::{Env, Label};
+use crate::runtime::memory::Remember as _;
 use crate::sections::{FooterAction, FooterBar};
 use craft_behavior::{ColumnKey, ColumnWidth, GesturePhase, IconId, Selection, SelectionChange, keyed};
 use craft_keymap::Mods;
@@ -247,7 +248,7 @@ impl<'a> HistoryPanel<'a> {
             let mut hasher = DefaultHasher::new();
             for row in rows {
                 row.key.hash(&mut hasher);
-                env.resolve(&row.label).as_str().hash(&mut hasher);
+                row.label.as_str().hash(&mut hasher);
                 row.redo.hash(&mut hasher);
                 row.icon.hash(&mut hasher);
             }
@@ -381,7 +382,7 @@ impl<'a> HistoryPanel<'a> {
                             && let HistoryKey::Snapshot(snapshot) = rename.key
                         {
                             let text = rename.name.trim();
-                            let changed = rows.iter().find(|row| row.key == rename.key).is_some_and(|row| env.resolve(&row.label).as_str() != text);
+                            let changed = rows.iter().find(|row| row.key == rename.key).is_some_and(|row| row.label.as_str() != text);
                             if changed && !text.is_empty() {
                                 picked.push(HistoryEvent::Rename { snapshot, text: text.to_owned() });
                             }
