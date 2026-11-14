@@ -270,7 +270,12 @@ pub fn read_swatches(bytes: &[u8], file_name: &str) -> Result<(Vec<SwatchGroup>,
             groups.push(SwatchGroup { name: stem, entries });
         }
         SwatchFormat::Act => {
-            let (used, transparent) = act_used(bytes).map_err(|e| malformed(format, e))?;
+            let used = act_used(bytes).map_err(|e| malformed(format, e))?;
+            // The trailer (count, then transparent index) names the transparent colour; 0xFFFF means none.
+            let transparent = bytes
+                .get(ACT_PALETTE_LEN + 2..ACT_PALETTE_LEN + ACT_TRAILER_LEN)
+                .map(|t| usize::from(u16::from_be_bytes([t[0], t[1]])))
+                .filter(|&index| index < used.len());
             if let Some(index) = transparent {
                 report.notes.push(SwatchNote::TransparentKept(index + 1));
             }
