@@ -257,7 +257,10 @@ work of each operation is bounded before it starts, in counts the tests assert o
   1.7 s, 450 8 s, and about a thousand passed every other limit and would take a minute and a half). A line
   that crosses `m` others at one point counts `m`², so `c` lines through a point count `c` (`c` - 1)², and
   `MAX_CROSSING_WORK` (2^24) is at 256 lines through a point, which take about a second (257 are `TooComplex`
-  in a few milliseconds). The crossings are computed, for the lines whose bounds overlap, only when that
+  in a few milliseconds). The crossings are computed, for the lines whose bounds overlap or come within four of the sweep's tolerances of it
+  (parallel lines that close are lines on one line: 500 vertical lines across one, spread over 40 tolerances, took 1.1 s in
+  `try_area` and 8.7 s in an Outline with the meter off, and 1,000 took 6 s and 53 s, which nothing counted; 500 are admitted now,
+  at those times, and 600 and more are refused at once), only when that
   many pairs could reach the limit if they were at one point (at 1.7 times the work, the most it is counted at where the crossings are a few
   tolerances apart, so that the most admitted of such lines is 215, and with the work of curves that run along one another added, the
   limit being on the sum), and then once for each pair (in O(pairs log

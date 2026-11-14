@@ -2196,11 +2196,14 @@ mod tests {
         assert!(counted(&star(1_501)).work() > budget);
     }
 
-    /// The new holes were not seen by the pricing: it admits them (220 small squares, each a unit in the last place from the last, took 6.2
-    /// s; 240 such triangles about 6 s; 220 moved by tenths of a tolerance 7.7 s), and the meter refuses them. (The pricing is
-    /// `sweep_fits_within`, the first filter; the meter is `within`.)
+    /// The new holes were not seen by the pricing: it admitted them (220 small squares, each a unit in the last place from the last, took 6.2
+    /// s; 240 such triangles about 6 s; 220 moved by tenths of a tolerance 7.7 s), and the meter refused them. (The pricing is
+    /// `sweep_fits_within`, the first filter; the meter is `within`.) Their sides are lines within the sweep's tolerance of one another,
+    /// which the pricing counts as lines on one line now (the bounds of copies a unit in the last place apart overlap, and the lines are
+    /// apart to the rounding only), so that it refuses them too, from 170 squares and 180 triangles, and the meter from 180 of each: there
+    /// is no fixture of these that the pricing admits and the meter refuses; both admit 160.
     #[test]
-    fn the_pricing_admits_what_the_meter_refuses() {
+    fn the_pricing_refuses_the_copies_a_unit_in_the_last_place_apart_the_meter_refuses_too() {
         let cap = crate::budget::MAX_SEGMENT_PAIRS;
         let eps = |p: &BezPath| eps_for([p]).expect("finite");
         for (name, path) in [
@@ -2209,10 +2212,21 @@ mod tests {
             ("220 small squares moved by a few tenths of a tolerance", polygons_a_few_tolerances_apart(4, 220, 0.15, 1e-4)),
         ] {
             let path = closed(&path);
-            assert!(crate::budget::sweep_fits_within([&path], cap), "{name}: the pricing refuses it");
+            assert!(!crate::budget::sweep_fits_within([&path], cap), "{name}: the pricing admits it");
             assert_eq!(within([&path], eps(&path)), Err(PathOpsError::TooComplex), "{name}: the meter admits it");
         }
+        // Fewer are admitted by both (the pricing counts 4 x 160³ of work for 160 squares: under 2^24).
+        for (name, path) in [
+            ("160 small squares a unit in the last place apart", polygons_an_ulp_apart(4, 160, 1e-4)),
+            ("160 small triangles a unit in the last place apart", polygons_an_ulp_apart(3, 160, 1e-4)),
+            ("160 small squares moved by a few tenths of a tolerance", polygons_a_few_tolerances_apart(4, 160, 0.15, 1e-4)),
+        ] {
+            let path = closed(&path);
+            assert!(crate::budget::sweep_fits_within([&path], cap), "{name}: the pricing refuses it");
+            assert!(within([&path], eps(&path)).is_ok(), "{name}: the meter refuses it");
+        }
     }
+
     /// The memory a piece is worth makes the budget 2.3 million pieces, the 0.9 to 1.6 GB the topology of them holds.
     #[test]
     fn the_budget_admits_two_point_three_million_pieces_of_memory() {

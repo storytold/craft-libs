@@ -988,6 +988,28 @@ fn cross_of(a: &Line, b: &Line, slack: f64) -> Cross {
     if s > slack - err && s < la - slack + err && r > slack - err && r < lb - slack + err { Cross::At { s, r, err } } else { Cross::No }
 }
 
+/// Are the lines `a` and `b` parallel and no more than `slack` apart, along more than `slack` of their length? [`cross_of`] takes lines
+/// apart for lines that cross nowhere, and they are, to the rounding; to the sweep, which cannot tell the order of lines within its
+/// tolerance of one another, they are lines on one line: 500 vertical lines a hair apart across a line took 1.1 s in `try_area` and
+/// 8.8 s in an Outline, as lines on one line do. Copies of a line, level lines and lines that only touch end to end are not these.
+fn within_slack_along(a: &Line, b: &Line, slack: f64) -> bool {
+    if (a.p0 == b.p0 && a.p1 == b.p1) || (a.p0 == b.p1 && a.p1 == b.p0) || (a.p0.y == a.p1.y && b.p0.y == b.p1.y) {
+        return false;
+    }
+    let (d, e, w) = (a.p1 - a.p0, b.p1 - b.p0, b.p0 - a.p0);
+    let (la, lb) = (d.hypot(), e.hypot());
+    let den = d.cross(e);
+    if !(la > 2.0 * slack && lb > 2.0 * slack && den.is_finite() && parallel(den, la, lb)) {
+        return false;
+    }
+    let (a0, a1) = (d.cross(b.p0 - a.p0) / la, d.cross(b.p1 - a.p0) / la);
+    if !(a0.abs() <= slack && a1.abs() <= slack) {
+        return false;
+    }
+    let (t0, t1) = (w.dot(d) / la, (w + e).dot(d) / la);
+    t0.max(t1).min(la) - t0.min(t1).max(0.0) > slack
+}
+
 /// Are two lines of lengths `la` and `lb`, whose directions cross to `den`, parallel (to within the
 /// noise of the arithmetic: a crossing found of lines nearly on one line is anywhere along it)?
 fn parallel(den: f64, la: f64, lb: f64) -> bool {
@@ -1118,12 +1140,12 @@ fn straight_hull(s: &PathSeg, tol: f64) -> Option<Line> {
 /// cross anywhere along them, count all together. A curve that is a line to the sweep's tolerance is one of them. The other curves
 /// count where one runs along another (they are told by [`crate::crossings::coincide`], for each curve among a few of those whose
 /// tangents may run along its own), as many as it runs along, squared, and weighted by [`CURVE_COINCIDENCE_WEIGHT`]. The limit is on
-/// the sum of the two. The crossings are found only when all `pairs` of line bounds that overlap, were they at one point, and the
-/// pairs of curve bounds, were they curves that run along one another, could together cost more than the limit (an estimate, which
+/// the sum of the two. The crossings are found only when all the pairs of line bounds that come within the slack of overlapping, were
+/// they at one point, and the pairs of curve bounds that overlap, were they curves that run along one another, could together cost more than the limit (an estimate, which
 /// a few lines that many others cross at one place can pass: it is the work of a crowd of lines and not of a crowd round one), the
 /// lines' with the most the work of lines moved a few tolerances apart is counted at ([`LOOSE_WORK`]); and then the kind with the
 /// more is walked first, and the other unless it could not take the sum past the limit.
-fn crossing_work_within(seg: &Segments, pairs: usize, eps: f64, cap: usize) -> bool {
+fn crossing_work_within(seg: &Segments, eps: f64, cap: usize) -> bool {
     let limit = limits().crossing_work as u64;
     let slack = 2.0 * eps;
     // The lines, and the curves that are lines: their bounds, and the lines (the lines as they are where no curve is one).
@@ -1146,12 +1168,14 @@ fn crossing_work_within(seg: &Segments, pairs: usize, eps: f64, cap: usize) -> b
         }
         (Cow::Owned(rects), Cow::Owned(lines))
     };
+    // Lines are candidates for crossing, or running along one another, when they come within the slack of each other ([`cross_of`]),
+    // which their bounds need not overlap to do: 500 vertical lines a hair apart have bounds with no width, and are as many
+    // pairs as there are lines across them, and 500 lines through a point to the sweep.
+    let rects: Vec<Rect> = rects.iter().map(|r| r.inflate(slack, slack)).collect();
     let clique = |pairs: usize| ((1.0 + (1.0 + 8.0 * pairs as f64).sqrt()) / 2.0).ceil();
-    let mut line_pairs = pairs;
-    if !hulls.is_empty() {
-        let Some(all) = overlap_pairs(&rects, cap) else { return false };
-        line_pairs = all.saturating_sub(seg.touching_lines);
-    }
+    let Some(all) = overlap_pairs(&rects, cap) else { return false };
+    // Segments that follow one another in a path touch at the end they share, and cross nowhere.
+    let line_pairs = all.saturating_sub(seg.touching_lines);
     let bent_rects: Vec<Rect> = bent.iter().filter_map(|&i| seg.curves.get(i).copied()).collect();
     let bent_pairs = if bent.len() > 1 { overlap_pairs(&bent_rects, cap) } else { Some(0) };
     let Some(bent_pairs) = bent_pairs else { return false };
@@ -1171,7 +1195,11 @@ fn crossing_work_within(seg: &Segments, pairs: usize, eps: f64, cap: usize) -> b
         let within = each_overlap(&rects, cap, |i, j| {
             work::add(Work::CrossingPairs, 1);
             let (Some(a), Some(b)) = (lines.get(i), lines.get(j)) else { return };
-            match cross_of(a, b, slack) {
+            let cross = match cross_of(a, b, slack) {
+                Cross::No if within_slack_along(a, b, slack) => Cross::Somewhere,
+                other => other,
+            };
+            match cross {
                 Cross::No => {}
                 Cross::At { s, r, err } => {
                     if let Some(list) = at.get_mut(i) {
@@ -1477,8 +1505,7 @@ pub(crate) fn sweep_fits_within<'a>(paths: impl IntoIterator<Item = &'a BezPath>
             return false;
         }
     }
-    // Segments that follow one another in a path touch at the end they share, and cross nowhere.
-    if !crossing_work_within(&seg, line_pairs.saturating_sub(seg.touching_lines), crate::boolean::sweep_tolerance(seg.extent), cap) {
+    if !crossing_work_within(&seg, crate::boolean::sweep_tolerance(seg.extent), cap) {
         return false;
     }
     coverage_entries_within(&seg, pairs)
@@ -2680,8 +2707,11 @@ mod tests {
             let path = nearly_parallel_lines(450, l, dfac, false, true);
             work::reset();
             assert!(!sweep_fits([&path]), "{l:e} long, {dfac} tolerances apart");
-            // The check walks each pair of the segments' bounds that overlap once, and makes no sweep.
-            assert_eq!(work::take(Work::CrossingPairs), 101_927, "{l:e} long, {dfac} tolerances apart: the pairs walked");
+            // The check walks each pair of the segments' bounds that overlap (or come within the slack of it) once, and makes no sweep.
+            // (Lines whose bounds are a tolerance and a half apart are pairs too, as the lines are told to cross when they come within the
+            // slack of 2: 898 more of the 101,927 of bounds that overlap.)
+            let pairs = if dfac < 2.0 { 102_825 } else { 101_927 };
+            assert_eq!(work::take(Work::CrossingPairs), pairs, "{l:e} long, {dfac} tolerances apart: the pairs walked");
             // Only the work of the lines through a point refuses them.
             assert!(with_limits(lifted, || sweep_fits([&path])), "{l:e} long, {dfac} tolerances apart: nothing else refuses it");
         }
@@ -3126,6 +3156,60 @@ mod tests {
         work::reset();
         assert!(with_limits(roomy, || sweep_fits([&both])));
         assert_eq!(work::take(Work::CrossingPairs), 0);
+    }
+
+    /// A line of 1,000 across `m` vertical lines that do not cross one another, whose places along it all lie within `spread` tolerances
+    /// (the sweep's) of one another: each is a hair to the side of the next, and each is longer than the last, so that their ends are apart.
+    /// The bounds of two of them (no width) do not overlap, and the sweep takes them for lines through a point all the same, as the pairs
+    /// of a clique that is within its tolerance. Moved `at` along each axis, and turned about the vertical axis if `mirror`.
+    fn comb_across_a_line(m: usize, spread: f64, at: f64, mirror: bool) -> BezPath {
+        let slope = 0.3703;
+        let eps = crate::boolean::sweep_tolerance(at + 1000.0);
+        let mut p = BezPath::new();
+        p.move_to((at, at));
+        p.line_to((at + 1000.0, at + 1000.0 * slope));
+        for i in 0..m {
+            let x = at + 500.0 + spread * eps * i as f64 / m as f64;
+            let y = at + slope * (x - at);
+            let h = 1.0 + 1e-3 * i as f64;
+            p.move_to((x, y - h));
+            p.line_to((x, y + 1.5 * h));
+        }
+        if mirror { kurbo::Affine::FLIP_X * p } else { p }
+    }
+
+    /// Lines whose bounds do not touch can lie within the sweep's tolerance of one another all the same, and cost it as lines on one line
+    /// do. 500 vertical lines across a line, each a hair (a thirteenth of a tolerance) from the next, whose bounds have no width and so
+    /// overlap none but the line's, took 1.1 s in `try_area` and 8.7 s in an Outline with the meter off (6 s and 53 s for 1,000, and 45 s
+    /// and 5 GB for 2,000 in `try_area`: the cube of their number), and the work counted none of it: the pairs were the 500 with the
+    /// line across them, a bound of 50,000, and they were taken for lines apart. The pairs are of bounds within the slack of one another,
+    /// as the lines are told to cross ([`cross_of`]), and parallel lines within it are lines on one line ([`within_slack_along`]): the most
+    /// admitted is the 256 of a clique, 255 and the line across them (500 take as long as they did, and 600 are refused). The fixture
+    /// lacks lines that are not parallel, that part by more than the slack, though they lie within it at one end (counted as they
+    /// cross, if they do), and curves (whose bounds are not widened).
+    #[test]
+    fn lines_within_the_tolerance_of_one_another_count_as_one_place_though_their_bounds_are_apart() {
+        for (at, mirror) in [(0.0, false), (0.0, true), (1e3, false), (1e6, true)] {
+            let label = format!("moved {at:e}, mirrored {mirror}");
+            let fits = |path: &BezPath| {
+                work::reset();
+                let fits = sweep_fits([path]);
+                (fits, work::take(Work::CrossingPairs))
+            };
+            // The 255 and the line across them are the 256 of the limit: walked, once each pair (the lines a tolerance apart are
+            // pairs, and the line across them with each), and admitted; 257 are refused after the same.
+            let (fits_255, walked) = fits(&comb_across_a_line(255, 0.5, at, mirror));
+            assert!(fits_255 && walked == 255 * 254 / 2 + 255, "{label}: 255: {fits_255} {walked}");
+            let (fits_257, walked) = fits(&comb_across_a_line(257, 0.5, at, mirror));
+            assert!(!fits_257 && walked == 257 * 256 / 2 + 257, "{label}: 257: {fits_257} {walked}");
+            assert!(!fits(&comb_across_a_line(500, 0.5, at, mirror)).0, "{label}: 500");
+            let lifted = Limits { crossing_work: usize::MAX, ..Limits::default() };
+            assert!(with_limits(lifted, || sweep_fits([&comb_across_a_line(500, 0.5, at, mirror)])), "{label}: nothing else refuses them");
+            // Spaced 10 tolerances apart (a thousand tolerances across) they are no clique: only the line across them has a pair
+            // with each, its crossings are one run along it, and 500 of them are 500² times 1.7 of work.
+            let (fits_apart, walked) = fits(&comb_across_a_line(500, 5000.0, at, mirror));
+            assert!(fits_apart && walked == 0, "{label}: far apart: {fits_apart} {walked}");
+        }
     }
 
     /// Ends a few tolerances apart are priced as a cluster: a pie of 256 slices whose apexes are each moved by up to 10
