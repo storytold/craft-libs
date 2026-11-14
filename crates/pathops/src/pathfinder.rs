@@ -948,46 +948,72 @@ fn outline_edges(junctions: Vec<Point>, shapes: &[Shape], validate: bool) -> Opt
         chains.extend(cut_walk(walk, real.as_ref(), reach));
     }
     // De-duplicate coincident chains, keeping the front-most key (later shapes overwrite). A
-    // match has its midpoint within `near` of this one's, so only the chains in the grid cells
+    // match has its midpoint within `d` of this one's, so only the chains in the grid cells
     // around it are candidates; the first of them in `out` order is the one a scan would find.
     let mut out: Vec<(Vec<Seg>, u64)> = Vec::new();
-    let mut sigs: Vec<(Point, Point, [Point; CHAIN_SAMPLES])> = Vec::new();
-    let sig = |c: &[Seg]| -> (Point, Point, [Point; CHAIN_SAMPLES]) {
+    let mut sigs: Vec<ChainSig> = Vec::new();
+    let sig = |c: &[Seg]| -> ChainSig {
         let a = c[0].c.p0;
         let b = c[c.len() - 1].c.p3;
-        (a, b, chain_points(c))
+        let samples = chain_points(c);
+        let (lo, hi) = samples
+            .iter()
+            .chain([&a, &b])
+            .fold((a, a), |(lo, hi), p| (Point::new(lo.x.min(p.x), lo.y.min(p.y)), Point::new(hi.x.max(p.x), hi.y.max(p.y))));
+        ChainSig { a, b, samples, size: (hi.x - lo.x).max(hi.y - lo.y) }
     };
+    // The grid is of the distance the whole drawing allows, which finds every chain that any pair of chains could be near
+    // enough on; the pair is held to the distance its own size allows ([`chains_near`]).
     let d = reach * 10.0;
-    let near = |p: Point, q: Point| p.distance(q) <= d;
     let cell = |p: Point| ((p.x / d).floor() as i64, (p.y / d).floor() as i64);
     let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
     for (chain, key) in chains {
-        let (a, b, samples) = sig(&chain);
-        let m = samples[CHAIN_SAMPLES / 2];
-        let (cx, cy) = cell(m);
+        let this = sig(&chain);
+        let (cx, cy) = cell(this.samples[CHAIN_SAMPLES / 2]);
         // The chains in the cells round it, each compared with this one: charged before it is, as chains
         // with distinct ends and one midpoint (a fan of long ones) all lie in one cell.
-        let candidates: Vec<usize> =
+        let mut candidates: Vec<usize> =
             (cx - 1..=cx + 1).flat_map(|x| (cy - 1..=cy + 1).map(move |y| (x, y))).filter_map(|k| grid.get(&k)).flatten().copied().collect();
         if !budget.charge(candidates.len().saturating_mul(CHAIN_COMPARE_STEPS)) {
             return None;
         }
         work::add(Work::ChainCompares, candidates.len());
-        let found = candidates
-            .into_iter()
-            .filter(|&i| {
-                // The ends and the midpoint only pick the candidates: two chains with the same ends and middles can part
-                // between them, so the points along the whole of each are compared too, from the same end or from the other.
-                let (a2, b2, s2) = &sigs[i];
-                let same = |rev: bool| samples.iter().enumerate().all(|(k, p)| near(*p, s2[if rev { CHAIN_SAMPLES - 1 - k } else { k }]));
-                (near(a, *a2) && near(b, *b2) && same(false)) || (near(a, *b2) && near(b, *a2) && same(true))
-            })
-            .min();
+        // The first in `out` order that coincides is the one found.
+        candidates.sort_unstable();
+        let mut found = None;
+        for i in candidates {
+            let (Some(other), Some((kept, _))) = (sigs.get(i), out.get(i)) else { continue };
+            let near = (10.0 * (1e-7 * this.size.max(other.size)).max(1e-6)).min(d);
+            // The ends and the nine points only pick the candidates: two chains with the same ends and the same points can part
+            // between them, so what is between them is walked too, from the same end or from the other.
+            for reversed in [false, true] {
+                if !chains_near(&this, other, reversed, near) {
+                    continue;
+                }
+                // Charged before it is walked, for every point it may take.
+                let units = walk_units(&chain) + walk_units(kept);
+                if !budget.charge(units.saturating_mul(CHAIN_SAMPLE_STEPS)) {
+                    return None;
+                }
+                work::add(Work::ChainSamples, units);
+                if chains_run_together(&chain, kept, reversed, near) {
+                    found = Some(i);
+                    break;
+                }
+            }
+            if found.is_some() {
+                break;
+            }
+        }
         match found {
-            Some(i) => out[i].1 = key,
+            Some(i) => {
+                if let Some(slot) = out.get_mut(i) {
+                    slot.1 = key;
+                }
+            }
             None => {
                 grid.entry((cx, cy)).or_default().push(out.len());
-                sigs.push((a, b, samples));
+                sigs.push(this);
                 out.push((chain, key));
             }
         }
@@ -1007,6 +1033,102 @@ fn outline_edges(junctions: Vec<Point>, shapes: &[Shape], validate: bool) -> Opt
 /// [`crate::MAX_SEARCH_WORK`]: the distances between their points ([`CHAIN_SAMPLES`] and the two ends) and a few comparisons.
 const CHAIN_COMPARE_STEPS: usize = 12;
 
+/// What a chain of an Outline looks like from its ends and nine places along it: what is compared first, to tell whether it coincides with
+/// another.
+struct ChainSig {
+    a: Point,
+    b: Point,
+    samples: [Point; CHAIN_SAMPLES],
+    /// The width or the height of the box of the ends and the samples, the greater: how big the chain is, whatever the drawing it is in.
+    size: f64,
+}
+
+/// Are the chains whose ends and samples are `this` and `other` within `near` of one another at every one of them, from the same end
+/// or (`reversed`) from the other?
+fn chains_near(this: &ChainSig, other: &ChainSig, reversed: bool, near: f64) -> bool {
+    let close = |p: Point, q: Point| p.distance(q) <= near;
+    let (from, to) = if reversed { (other.b, other.a) } else { (other.a, other.b) };
+    close(this.a, from)
+        && close(this.b, to)
+        && this
+            .samples
+            .iter()
+            .enumerate()
+            .all(|(k, p)| other.samples.get(if reversed { CHAIN_SAMPLES - 1 - k } else { k }).is_some_and(|q| close(*p, *q)))
+}
+
+/// The points a walk of a chain along another takes: one at the end of each segment and two inside each that is not a line, which is
+/// what [`chains_run_together`] is charged for, before it is made ([`CHAIN_SAMPLE_STEPS`] each).
+fn walk_units(c: &[Seg]) -> usize {
+    c.iter().map(|s| if s.line { 1 } else { 3 }).sum()
+}
+
+/// What taking one point of a walk costs, in the steps of [`crate::MAX_SEARCH_WORK`] (about 5 ns each): the point of each chain at a length
+/// along it is a search for where the length runs out in a segment, and each cubic's length is measured as well. Measured, in an optimized
+/// build, along chains of 2,000 cubics of about 10 units each (the same chain twice): 1.3 microseconds a point, so 256 steps; and along 2,000
+/// lines, 0.1 microseconds, which is charged as a cubic is (12 times over). Not measured: segments that are long, or turn more than the
+/// fixture's, whose lengths take more to measure, or a build that is not optimized.
+const CHAIN_SAMPLE_STEPS: usize = 256;
+
+/// The accuracy a segment's length is measured to: a millionth, or a billionth of its control polygon where that is coarser (see
+/// [`chain_points`]).
+fn arclen_accuracy(s: &CubicBez) -> f64 {
+    (1e-9 * (s.p0.distance(s.p1) + s.p1.distance(s.p2) + s.p2.distance(s.p3))).max(1e-6)
+}
+
+/// How far along the chain `c` each segment ends (the lengths added up), by each segment's own length.
+fn chain_ends(c: &[Seg]) -> Vec<f64> {
+    let mut sum = 0.0;
+    c.iter()
+        .map(|s| {
+            sum += kurbo::ParamCurveArclen::arclen(&s.c, arclen_accuracy(&s.c));
+            sum
+        })
+        .collect()
+}
+
+/// The point of the chain `c` (whose segments end at `ends`, [`chain_ends`]) at the length `target` along it. A line is taken by
+/// its ends: the cubic that stands for it is not even in its parameter.
+fn chain_point_at(c: &[Seg], ends: &[f64], target: f64) -> Point {
+    let k = ends.partition_point(|&e| e < target).min(c.len().saturating_sub(1));
+    let (Some(s), Some(&end)) = (c.get(k), ends.get(k)) else { return Point::ZERO };
+    let before = k.checked_sub(1).and_then(|j| ends.get(j)).copied().unwrap_or(0.0);
+    let len = end - before;
+    if len.is_nan() || len <= 0.0 {
+        return s.c.p0;
+    }
+    let along = (target - before).clamp(0.0, len);
+    if s.line { s.c.p0.lerp(s.c.p3, along / len) } else { s.c.eval(kurbo::ParamCurveArclen::inv_arclen(&s.c, along, arclen_accuracy(&s.c))) }
+}
+
+/// Do the chains `a` and `b`, which agree at their ends and at nine places along them, agree everywhere between: is the point of each at
+/// every end of a segment of either, and at two places inside each that is a curve, within `near` of the point of the other at the same
+/// part of its length (`b` read from its far end if `reversed`)? Between two such places two lines are straight, and their distance is the
+/// greatest at one of them, so for chains of lines this is exact; for curves it is the places inside as well. What it takes is
+/// [`walk_units`] of the two, and is charged for before it is made.
+fn chains_run_together(a: &[Seg], b: &[Seg], reversed: bool, near: f64) -> bool {
+    let (ends_a, ends_b) = (chain_ends(a), chain_ends(b));
+    let (total_a, total_b) = (ends_a.last().copied().unwrap_or(0.0), ends_b.last().copied().unwrap_or(0.0));
+    // A chain with no length, or none that can be told, is what its ends and places said.
+    let usable = |t: f64| t > 0.0 && t.is_finite();
+    if !usable(total_a) || !usable(total_b) {
+        return true;
+    }
+    let agree = |part: f64| {
+        let part_b = if reversed { 1.0 - part } else { part };
+        chain_point_at(a, &ends_a, part * total_a).distance(chain_point_at(b, &ends_b, part_b * total_b)) <= near
+    };
+    [(a, &ends_a, total_a, false), (b, &ends_b, total_b, reversed)].into_iter().all(|(c, ends, total, flip)| {
+        let mut from = 0.0;
+        c.iter().zip(ends).all(|(s, &end)| {
+            let (lo, hi) = (from / total, end / total);
+            from = end;
+            let inside: &[f64] = if s.line { &[] } else { &[1.0 / 3.0, 2.0 / 3.0] };
+            inside.iter().map(|w| lo + (hi - lo) * w).chain([hi]).all(|part| agree(if flip { 1.0 - part } else { part }))
+        })
+    })
+}
+
 /// The points of a chain of an Outline that are compared with another's to tell whether they coincide: at a tenth of its length, two tenths and
 /// so on (the middle one is the fifth). An odd number, so that one is the midpoint.
 pub(crate) const CHAIN_SAMPLES: usize = 9;
@@ -1020,7 +1142,7 @@ pub(crate) const CHAIN_SAMPLES: usize = 9;
 /// arithmetic is checked), and a relative accuracy keeps them to about thirty at any size, and the
 /// measuring of each segment to a few levels (the same 1e-6 for a segment up to a thousand long).
 pub(crate) fn chain_points(c: &[Seg]) -> [Point; CHAIN_SAMPLES] {
-    let accuracy = |s: &CubicBez| (1e-9 * (s.p0.distance(s.p1) + s.p1.distance(s.p2) + s.p2.distance(s.p3))).max(1e-6);
+    let accuracy = arclen_accuracy;
     let lens: Vec<f64> = c.iter().map(|s| kurbo::ParamCurveArclen::arclen(&s.c, accuracy(&s.c))).collect();
     let total: f64 = lens.iter().sum();
     let start = c.first().map_or(Point::ZERO, |s| s.c.p0);
@@ -1935,24 +2057,37 @@ mod tests {
             let l = crate::Limits { search_work: limit, ..crate::Limits::default() };
             work::reset();
             let r = crate::with_limits(l, || try_pathfinder(PathfinderOp::Outline, &shapes));
-            (r, work::take(Work::SearchSteps), work::take(Work::Nearest), work::take(Work::JunctionSteps), work::take(Work::ChainCompares))
+            (
+                r,
+                work::take(Work::SearchSteps),
+                work::take(Work::Nearest),
+                work::take(Work::JunctionSteps),
+                work::take(Work::ChainCompares),
+                work::take(Work::ChainSamples),
+            )
         };
-        let (done, charged, nearest, steps, compares) = measured(usize::MAX);
+        let (done, charged, nearest, steps, compares, walked) = measured(usize::MAX);
         let done = done.expect("within the limits");
         assert!(done.len() > 2 * g, "the lines cut at their junctions, and the arches");
         // Each arch's bounds hold every junction of the grid: a search apiece, besides those on the lines.
         assert!(nearest >= arches * g * g, "{nearest} searches");
         assert!(compares > 0, "the chains of the copy are compared with those they coincide with");
+        // They are walked, each lone line a point for each (two chains of one line apiece), as the pairs are charged for.
+        assert!(walked >= compares && walked % 2 == 0, "{walked} points of the walks of {compares} chains");
         // Every step charged was made, and every step made was charged: the junctions and blocks looked at, the
-        // searches, and the chains compared.
-        assert_eq!(charged, crate::budget::NEAREST_STEPS * nearest + steps + CHAIN_COMPARE_STEPS * compares, "{nearest} searches, {steps} steps");
+        // searches, the chains compared and the points of the walks that compared them.
+        assert_eq!(
+            charged,
+            crate::budget::NEAREST_STEPS * nearest + steps + CHAIN_COMPARE_STEPS * compares + CHAIN_SAMPLE_STEPS * walked,
+            "{nearest} searches, {steps} steps"
+        );
         // Short of the work, the error, and everything done was charged first: no more than the limit.
         for limit in [charged - 1, charged / 2, charged / 100, 1, 0] {
-            let (r, c, n, s, k) = measured(limit);
+            let (r, c, n, s, k, w) = measured(limit);
             assert_eq!(r, Err(crate::PathOpsError::TooComplex), "{limit}");
             assert!(
-                c <= limit && crate::budget::NEAREST_STEPS * n + s + CHAIN_COMPARE_STEPS * k <= c,
-                "{limit}: {c} charged, {n} searches, {s} steps and {k} chains compared made"
+                c <= limit && crate::budget::NEAREST_STEPS * n + s + CHAIN_COMPARE_STEPS * k + CHAIN_SAMPLE_STEPS * w <= c,
+                "{limit}: {c} charged, {n} searches, {s} steps, {k} chains compared and {w} points walked made"
             );
         }
         // At the work it needs, the same edges; and the forms with no error give none past it.
@@ -2086,5 +2221,152 @@ mod tests {
         assert!(real(&[walk_with(false, square(), vec![(0, 0.5), (2, 0.5)])]));
         // The same hits on an open path of those segments are two places: its ends.
         assert!(real(&[walk_with(true, square(), vec![(0, 0.0), (3, 1.0)])]));
+    }
+
+    /// The Outline of `shapes` as `(key, elements)` of each edge it keeps, and the points its walks of coincident chains were charged for.
+    fn edges_and_walks(shapes: &[Shape]) -> (Vec<(u64, usize)>, usize) {
+        work::reset();
+        let edges = try_pathfinder(PathfinderOp::Outline, shapes).expect("within the limits");
+        (edges.iter().map(|e| (e.key, e.path.elements().len())).collect(), work::take(Work::ChainSamples))
+    }
+
+    fn outline_shape(points: &[(f64, f64)], key: u64) -> Shape {
+        Shape::new(polyline(points, false), FillRule::NonZero, key)
+    }
+
+    /// Two chains with the same ends and the same points at tenths of their lengths can part between them: a path out to a spike of 100
+    /// and back to a level 0.001 off, and its reflection, are two edges that agree everywhere they are compared (0.002 apart where they
+    /// are level, with a tolerance of 0.1 for a drawing 1e5 wide) and 200 apart at the spike. They are two, from the same end or from the
+    /// other; the walk between the places is of the ends of every segment of both (the places inside a curve are taken too: below).
+    #[test]
+    fn chains_that_agree_where_they_are_compared_and_part_between_are_two_edges() {
+        let zig = |sign: f64| [(0.0, 0.0), (1.0, 100.0 * sign), (2.0, 0.001 * sign), (100_000.0, 0.001 * sign), (100_001.0, 0.0)];
+        let backwards = |sign: f64| zig(sign).into_iter().rev().collect::<Vec<_>>();
+        for (name, other) in [("from the same end", zig(-1.0).to_vec()), ("from the other", backwards(-1.0))] {
+            let (edges, walked) = edges_and_walks(&[outline_shape(&zig(1.0), 1), outline_shape(&other, 2)]);
+            assert_eq!(edges, vec![(1, 5), (2, 5)], "{name}");
+            assert_eq!(walked, 8, "{name}: a point for each of the four lines of each");
+        }
+        // Chains that are the same, whichever end they are read from, are one: the later key, the first one's way round.
+        for (name, other) in [("from the same end", zig(1.0).to_vec()), ("from the other", backwards(1.0))] {
+            let (edges, walked) = edges_and_walks(&[outline_shape(&zig(1.0), 1), outline_shape(&other, 2)]);
+            assert_eq!(edges, vec![(2, 5)], "{name}");
+            assert_eq!(walked, 8, "{name}");
+        }
+    }
+
+    /// What a walk takes is charged in proportion to the segments of the two chains it goes along, before it is made, and a chain that is
+    /// the same is walked once for each of its copies: ten copies of a path of 60 lines are the 120 points that one copy of it is, nine
+    /// times, and the limit of the searches holds the walks to what they were charged.
+    #[test]
+    fn the_walks_of_coincident_chains_are_charged_by_the_segments_they_go_along() {
+        let path = |n: usize| -> Vec<(f64, f64)> { (0..=n).map(|i| (i as f64 * 100.0, if i % 2 == 0 { 0.0 } else { 7.0 })).collect() };
+        let copies = |n: usize, k: usize| -> Vec<Shape> { (0..k).map(|i| outline_shape(&path(n), i as u64 + 1)).collect() };
+        let (edges, walked) = edges_and_walks(&copies(60, 2));
+        assert_eq!((edges, walked), (vec![(2, 61)], 120));
+        let (edges, walked) = edges_and_walks(&copies(120, 2));
+        assert_eq!((edges, walked), (vec![(2, 121)], 240), "twice the segments, twice the points");
+        let (edges, walked) = edges_and_walks(&copies(60, 10));
+        assert_eq!((edges, walked), (vec![(10, 61)], 9 * 120), "nine copies each walked once against the first");
+        // The steps are charged as the points are, and a limit under them refuses the Outline, before the walk it could not pay for.
+        let shapes = copies(60, 10);
+        let measured = |limit: usize| {
+            work::reset();
+            let r = crate::with_limits(crate::Limits { search_work: limit, ..crate::Limits::default() }, || {
+                try_pathfinder(PathfinderOp::Outline, &shapes)
+            });
+            (r.map(|v| v.len()), work::take(Work::SearchSteps), work::take(Work::ChainSamples), work::take(Work::ChainCompares))
+        };
+        let (done, charged, walked, compares) = measured(usize::MAX);
+        assert_eq!((done, walked, compares), (Ok(1), 9 * 120, 9));
+        assert!(charged >= CHAIN_SAMPLE_STEPS * walked + CHAIN_COMPARE_STEPS * compares, "{charged}");
+        for limit in [charged - 1, charged - CHAIN_SAMPLE_STEPS * 120, CHAIN_SAMPLE_STEPS * 120] {
+            let (r, c, w, _) = measured(limit);
+            assert_eq!(r, Err(crate::PathOpsError::TooComplex), "{limit}");
+            assert!(c <= limit && CHAIN_SAMPLE_STEPS * w <= c, "{limit}: {c} charged, {w} points counted");
+        }
+        assert_eq!(measured(charged).0, Ok(1));
+    }
+
+    /// Two chains whose walk fails are two edges, and the walk that fails is charged as the one that does not: for the whole of it. Many
+    /// pairs of paths that part between the places compared (each a spike and its reflection, at a level of its own so that the pairs are not
+    /// compared with each other) are charged for a walk of 8 points each, and refused under the steps they come to.
+    #[test]
+    fn walks_that_find_the_chains_apart_are_charged_for_all_of_their_points() {
+        let pairs = 40usize;
+        let level = |k: usize, sign: f64| {
+            let y = k as f64 * 1e3;
+            [(0.0, y), (1.0, y + 100.0 * sign), (2.0, y + 0.001 * sign), (100_000.0, y + 0.001 * sign), (100_001.0, y)]
+        };
+        let shapes: Vec<Shape> =
+            (0..pairs).flat_map(|k| [outline_shape(&level(k, 1.0), 2 * k as u64), outline_shape(&level(k, -1.0), 2 * k as u64 + 1)]).collect();
+        let (edges, walked) = edges_and_walks(&shapes);
+        assert_eq!(edges.len(), 2 * pairs, "every path is kept");
+        assert_eq!(walked, 8 * pairs, "the walk of each pair, four lines of each, charged though it finds them apart at the first spike");
+        let measured = |limit: usize| {
+            work::reset();
+            let r = crate::with_limits(crate::Limits { search_work: limit, ..crate::Limits::default() }, || {
+                try_pathfinder(PathfinderOp::Outline, &shapes)
+            });
+            (r.map(|v| v.len()), work::take(Work::SearchSteps), work::take(Work::ChainSamples))
+        };
+        let (_, charged, _) = measured(usize::MAX);
+        assert!(charged >= CHAIN_SAMPLE_STEPS * walked, "{charged}");
+        let (r, c, w) = measured(charged - 1);
+        assert_eq!(r, Err(crate::PathOpsError::TooComplex));
+        assert!(c < charged && CHAIN_SAMPLE_STEPS * w <= c);
+    }
+
+    /// The places inside a curve are walked too: a straight chain and a curve with the same ends that bows between them are apart at the
+    /// two places inside the curve (one third and two thirds of its length), where its ends and the straight chain's alone agree.
+    #[test]
+    fn a_walk_takes_two_points_inside_each_curve_as_well_as_the_ends() {
+        let straight = vec![Seg::line(Point::new(0.0, 0.0), Point::new(300.0, 0.0))];
+        let back = vec![Seg::line(Point::new(300.0, 0.0), Point::new(0.0, 0.0))];
+        let bowed = |rise: f64| vec![Seg { c: CubicBez::new((0.0, 0.0), (100.0, rise), (200.0, rise), (300.0, 0.0)), line: false }];
+        let flat = vec![Seg { c: CubicBez::new((0.0, 0.0), (100.0, 0.0), (200.0, 0.0), (300.0, 0.0)), line: false }];
+        assert_eq!((walk_units(&straight), walk_units(&bowed(9.0))), (1, 3), "a point at the end of each line, and three of each curve");
+        // A line has no point inside it to take: the ends of two lines that agree are all there is.
+        assert!(chains_run_together(&straight, &straight, false, 0.1));
+        assert!(chains_run_together(&straight, &flat, false, 0.1) && chains_run_together(&flat, &back, true, 0.1));
+        assert!(!chains_run_together(&flat, &straight, true, 0.1), "read from the wrong end they are not the same");
+        // A curve that bows a few units is out at both points inside it, from either end of the other.
+        assert!(!chains_run_together(&straight, &bowed(9.0), false, 0.1) && !chains_run_together(&bowed(9.0), &back, true, 0.1));
+        assert!(chains_run_together(&straight, &bowed(0.001), false, 0.1), "a bow of a thousandth is within the tolerance");
+        // A curve is the same walked from either end.
+        let s_curve = vec![Seg { c: CubicBez::new((0.0, 0.0), (100.0, 60.0), (200.0, -60.0), (300.0, 0.0)), line: false }];
+        let c = s_curve[0].c;
+        let backwards = vec![Seg { c: CubicBez::new(c.p3, c.p2, c.p1, c.p0), line: false }];
+        assert!(chains_run_together(&s_curve, &backwards, true, 1e-6) && !chains_run_together(&s_curve, &backwards, false, 0.1));
+        // Chains of lines are walked at every vertex of both, in the length of each: the vertex of a spike meets the other's level.
+        let spike = |h: f64| vec![Seg::line(Point::new(0.0, 0.0), Point::new(150.0, h)), Seg::line(Point::new(150.0, h), Point::new(300.0, 0.0))];
+        let level = vec![Seg::line(Point::new(0.0, 0.0), Point::new(150.0, 0.0)), Seg::line(Point::new(150.0, 0.0), Point::new(300.0, 0.0))];
+        assert!(!chains_run_together(&spike(1.0), &level, false, 0.1) && chains_run_together(&spike(0.05), &level, false, 0.1));
+        // Two chains of lines cut at different places are the same chain, and are told so.
+        let cut_at = |x: f64| vec![Seg::line(Point::new(0.0, 0.0), Point::new(x, 0.0)), Seg::line(Point::new(x, 0.0), Point::new(300.0, 0.0))];
+        let cut_back_at = |x: f64| vec![Seg::line(Point::new(300.0, 0.0), Point::new(x, 0.0)), Seg::line(Point::new(x, 0.0), Point::new(0.0, 0.0))];
+        assert!(
+            chains_run_together(&cut_at(100.0), &cut_at(210.0), false, 1e-9) && chains_run_together(&cut_at(100.0), &cut_back_at(210.0), true, 1e-9)
+        );
+    }
+
+    /// A large drawing does not make small outlines that are far apart one: the tolerance of two chains is that of their own size (a
+    /// ten-millionth of it, and no less than a millionth), and not of the drawing they are in (a line 1e9 long makes it 1,000 for them).
+    /// Two short lines 100 apart are two edges beside it, at every offset; copies of one are one; and two chains as big as the drawing,
+    /// 0.05 apart where the tolerance of it is 100, are still one.
+    #[test]
+    fn a_large_drawing_does_not_widen_the_tolerance_of_the_small_chains_in_it() {
+        let far = || outline_shape(&[(0.0, -1e6), (1e9, -1e6)], 1);
+        for offset in [0.0, 1e6, 1e8, 1e11] {
+            let at = |y: f64| [(offset, offset + y), (offset + 10.0, offset + y)];
+            let (edges, _) = edges_and_walks(&[far(), outline_shape(&at(0.0), 2), outline_shape(&at(100.0), 3)]);
+            assert_eq!(edges, vec![(1, 2), (2, 2), (3, 2)], "100 apart, at {offset}");
+            let (edges, _) = edges_and_walks(&[far(), outline_shape(&at(0.0), 2), outline_shape(&at(0.0), 3), outline_shape(&at(100.0), 4)]);
+            assert_eq!(edges, vec![(1, 2), (3, 2), (4, 2)], "a copy, at {offset}");
+        }
+        // Chains as big as the drawing keep the tolerance of the drawing: 1e5 long, within 0.05 of one another, with 0.1 to spare.
+        let big = |dy: f64| [(0.0, dy), (1e5, dy)];
+        assert_eq!(edges_and_walks(&[outline_shape(&big(0.0), 1), outline_shape(&big(0.05), 2)]).0, vec![(2, 2)]);
+        assert_eq!(edges_and_walks(&[outline_shape(&big(0.0), 1), outline_shape(&big(0.5), 2)]).0, vec![(1, 2), (2, 2)]);
     }
 }

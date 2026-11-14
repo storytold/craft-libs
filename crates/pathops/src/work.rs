@@ -96,6 +96,9 @@ pub(crate) enum Work {
     JunctionSteps,
     /// Chains of an Outline that were compared with a chain found beside them, for edges that coincide.
     ChainCompares,
+    /// Points a walk of an Outline's chain along one it coincides with, to tell that they agree between the places compared first, was charged for
+    /// (counted before it is made).
+    ChainSamples,
     /// Segments of the pieces of a planar map that were measured to take the points along them, which a piece is compared at with another
     /// that has its ends and its midpoint (counted before they are, and once for a piece however many it is compared with).
     TwinSamples,
