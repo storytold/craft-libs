@@ -4,6 +4,15 @@ craft_ui::words! {
     /// The words of the panel patterns; each id is `<type>.<name>`.
     pub struct PanelWords {
         inspector_empty: "inspector.empty" = "No properties";
+        history_list: "history.list" = "History";
+        history_empty: "history.empty" = "No history";
+        history_delete_tip: "history.deleteTip" = "Delete Current State";
+        history_new_snapshot: "history.newSnapshot" = "Create New Snapshot";
+        history_new_document: "history.newDocument" = "Create New Document from Current State";
+        history_rename: "history.rename" = "Rename…";
+        history_delete: "history.delete" = "Delete";
+        history_source: "history.source" = "History Brush Source";
+        history_source_cell: "history.sourceCell" = "Set {row} as History Brush Source";
         palette_search: "commandPalette.search" = "Search commands";
         palette_placeholder: "commandPalette.placeholder" = "Search commands, tools and panels…";
         palette_list: "commandPalette.list" = "Commands";
