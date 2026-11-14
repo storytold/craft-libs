@@ -205,3 +205,64 @@ fn deserialize_enforces_validation() {
     let bad = json!({"type": "column", "id": "a", "children": [{"type": "label", "id": "a", "text": "x"}]});
     assert!(serde_json::from_value::<WidgetTree>(bad).is_err());
 }
+
+/// Every plugin string a `param_form` draws obeys the same size and character rules as the
+/// ordinary widgets: label, group, each option, text defaults and text current values.
+#[test]
+fn param_form_text_obeys_the_widget_text_rules() {
+    let big = "x".repeat(MAX_TEXT_LEN + 1);
+    let form = |schema: serde_json::Value, values: serde_json::Value| {
+        from_value(json!({"type": "param_form", "id": "f", "schema": schema, "values": values}))
+    };
+    let too_long = |r: Result<WidgetTree, TreeError>, field: &'static str| {
+        assert!(matches!(&r, Err(TreeError::TooLong { field: f, max, .. }) if *f == field && *max == MAX_TEXT_LEN), "{field}: {r:?}");
+    };
+    let bad_text = |r: Result<WidgetTree, TreeError>, field: &'static str| {
+        assert!(matches!(&r, Err(TreeError::BadText { field: f, .. }) if *f == field), "{field}: {r:?}");
+    };
+
+    too_long(form(json!({"g": {"type": "bool", "label": big}}), json!({})), "label");
+    too_long(form(json!({"g": {"type": "bool", "group": big}}), json!({})), "group");
+    too_long(form(json!({"g": {"type": "choice", "options": [big]}}), json!({})), "options");
+    too_long(form(json!({"g": {"type": "text", "default": big}}), json!({})), "default");
+    too_long(form(json!({"g": {"type": "text"}}), json!({"g": big})), "value");
+
+    for evil in ["\u{202E}fdp.exe", "a\u{1b}[31m", "a\u{200B}b", "a\r\nb"] {
+        bad_text(form(json!({"g": {"type": "bool", "label": evil}}), json!({})), "label");
+        bad_text(form(json!({"g": {"type": "bool", "group": evil}}), json!({})), "group");
+        bad_text(form(json!({"g": {"type": "choice", "options": ["ok", evil]}}), json!({})), "options");
+        bad_text(form(json!({"g": {"type": "text", "default": evil}}), json!({})), "default");
+        bad_text(form(json!({"g": {"type": "text"}}), json!({"g": evil})), "value");
+    }
+
+    // Multi-line text with a tab stays allowed, as in a `text` widget.
+    assert!(form(json!({"g": {"type": "text", "label": "Name", "group": "Main", "default": "a\nb\tc"}}), json!({"g": "x\ny"})).is_ok());
+}
+
+/// The read-only display of a point, layer, file or json parameter draws the value with
+/// `to_string`, so a string inside it is plugin text too.
+#[test]
+fn param_form_read_only_values_obey_the_widget_text_rules() {
+    let big = "x".repeat(MAX_TEXT_LEN + 1);
+    let form = |kind: &str, value: serde_json::Value| {
+        from_value(json!({"type": "param_form", "id": "f", "schema": {"g": {"type": kind}}, "values": {"g": value}}))
+    };
+    for kind in ["file", "layer", "json", "point2", "point3"] {
+        assert!(matches!(form(kind, json!("\u{202E}fdp.exe")), Err(TreeError::BadText { .. })), "{kind}");
+        assert!(matches!(form(kind, json!({"k": ["ok", "a\u{1b}b"]})), Err(TreeError::BadText { .. })), "{kind}");
+        assert!(matches!(form(kind, json!({"a\u{202E}": 1})), Err(TreeError::BadText { .. })), "{kind}");
+        assert!(matches!(form(kind, json!([big.clone()])), Err(TreeError::TooLong { .. })), "{kind}");
+        assert!(form(kind, json!({"k": ["fine", 1, null, true]})).is_ok(), "{kind}");
+    }
+    // Many short strings still stay under one text budget.
+    let many: Vec<_> = (0..MAX_TEXT_LEN).map(|_| json!("ab")).collect();
+    assert!(matches!(form("json", json!(many)), Err(TreeError::TooLong { .. })));
+}
+
+/// Ids reach assistive tools as accessible names, so they follow the single-line text rule.
+#[test]
+fn widget_ids_reject_unsafe_characters() {
+    for bad in ["a\nb", "\u{202E}x", "a\u{1b}"] {
+        assert!(matches!(expect_err(label(bad)), TreeError::BadText { field: "id", .. }), "{bad:?}");
+    }
+}

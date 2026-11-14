@@ -364,6 +364,10 @@ fn claim_id(seen: &mut HashSet<String>, id: &str) -> Result<(), TreeError> {
     if id.len() > MAX_ID_LEN {
         return Err(TreeError::IdTooLong { max: MAX_ID_LEN });
     }
+    // The renderer gives the id to assistive tools as an accessible name, so it follows the single-line text rule.
+    if craft_plugin_abi::text::has_unsafe(id) {
+        return Err(TreeError::BadText { id: id.to_owned(), field: "id" });
+    }
     if !seen.insert(id.to_owned()) {
         return Err(TreeError::DuplicateId(id.to_owned()));
     }
@@ -501,19 +505,28 @@ fn check_param_form(
         claim_id(seen, &param_event_id(id, name))?;
         check_def(id, name, def)?;
         if let Some(v) = &def.default {
-            check_value(id, name, def, v)?;
+            check_value(id, name, "default", def, v)?;
         }
     }
     for (name, v) in values {
         let Some(def) = schema.get(name) else {
             return Err(bad(id, name, "value has no schema entry"));
         };
-        check_value(id, name, def, v)?;
+        check_value(id, name, "value", def, v)?;
     }
     Ok(())
 }
 
+/// Check a `param_form` parameter. Its text errors name the id the renderer reports for the
+/// parameter (`<form>.<param>`), and go through the same limits as the ordinary widgets.
 fn check_def(id: &str, name: &str, def: &ParamDef) -> Result<(), TreeError> {
+    let pid = param_event_id(id, name);
+    for (field, text) in [("label", &def.label), ("group", &def.group)] {
+        if let Some(s) = text {
+            text_len(&pid, field, s)?;
+        }
+    }
+    items_len(&pid, "options", &def.options)?;
     for v in [def.min, def.max].into_iter().flatten() {
         if !v.is_finite() {
             return Err(bad(id, name, "min or max is not finite"));
@@ -524,17 +537,14 @@ fn check_def(id: &str, name: &str, def: &ParamDef) -> Result<(), TreeError> {
     {
         return Err(bad(id, name, "min is above max"));
     }
-    if def.options.len() > MAX_ITEMS || def.options.iter().any(|o| o.len() > MAX_TEXT_LEN) {
-        return Err(bad(id, name, "options are too long"));
-    }
     if def.kind == ParamType::Choice && def.options.is_empty() {
         return Err(bad(id, name, "choice needs at least one option"));
     }
     Ok(())
 }
 
-/// Check a default or current value against its definition.
-fn check_value(id: &str, name: &str, def: &ParamDef, v: &Value) -> Result<(), TreeError> {
+/// Check a default or current value against its definition. `field` says which one it is.
+fn check_value(id: &str, name: &str, field: &'static str, def: &ParamDef, v: &Value) -> Result<(), TreeError> {
     match def.kind {
         ParamType::Number | ParamType::Angle | ParamType::Int => {
             let Some(n) = v.as_f64().filter(|n| n.is_finite()) else {
@@ -550,8 +560,7 @@ fn check_value(id: &str, name: &str, def: &ParamDef, v: &Value) -> Result<(), Tr
         }
         ParamType::Bool => v.is_boolean().then_some(()).ok_or_else(|| bad(id, name, "value must be a boolean")),
         ParamType::Text => match v.as_str() {
-            Some(s) if s.len() <= MAX_TEXT_LEN => Ok(()),
-            Some(_) => Err(bad(id, name, "text is too long")),
+            Some(s) => text_len(&param_event_id(id, name), field, s),
             None => Err(bad(id, name, "value must be a string")),
         },
         ParamType::Choice => match v.as_str() {
@@ -562,6 +571,44 @@ fn check_value(id: &str, name: &str, def: &ParamDef, v: &Value) -> Result<(), Tr
             let ok = v.as_array().is_some_and(|a| a.len() == 4 && a.iter().all(|c| c.as_f64().is_some_and(|c| (0.0..=1.0).contains(&c))));
             ok.then_some(()).ok_or_else(|| bad(id, name, "color must be [r, g, b, a] in 0 to 1"))
         }
-        ParamType::Point2 | ParamType::Point3 | ParamType::Layer | ParamType::File | ParamType::Json => Ok(()),
+        // The form shows these read-only, as the value's JSON text, so every string in it is plugin text.
+        ParamType::Point2 | ParamType::Point3 | ParamType::Layer | ParamType::File | ParamType::Json => {
+            json_text(&param_event_id(id, name), field, v)
+        }
     }
+}
+
+/// Apply the text rules to every string and object key inside `v`. The walk spends one byte of a
+/// `MAX_TEXT_LEN` budget per node plus the length of each string, so the JSON text the renderer
+/// draws stays under the same cap as any other text prop. The stack is explicit, so deep input
+/// cannot overflow the call stack.
+fn json_text(id: &str, field: &'static str, v: &Value) -> Result<(), TreeError> {
+    let mut budget = MAX_TEXT_LEN;
+    let mut spend = |bytes: usize| {
+        budget = budget.checked_sub(bytes.saturating_add(1)).ok_or_else(|| TreeError::TooLong { id: id.to_owned(), field, max: MAX_TEXT_LEN })?;
+        Ok::<(), TreeError>(())
+    };
+    let mut stack = vec![v];
+    while let Some(node) = stack.pop() {
+        match node {
+            Value::String(s) => {
+                spend(s.len())?;
+                text_len(id, field, s)?;
+            }
+            Value::Array(items) => {
+                spend(0)?;
+                stack.extend(items);
+            }
+            Value::Object(map) => {
+                spend(0)?;
+                for (k, child) in map {
+                    spend(k.len())?;
+                    text_len(id, field, k)?;
+                    stack.push(child);
+                }
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) => spend(0)?,
+        }
+    }
+    Ok(())
 }
