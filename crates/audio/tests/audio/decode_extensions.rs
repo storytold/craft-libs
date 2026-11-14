@@ -66,7 +66,9 @@ fn every_encode_format_has_an_extension_it_is_written_and_read_under() {
         // A format whose feature is off has no name.
         match craft_audio::encode_format_for(ext) {
             Some(named) => {
-                assert!(named == format || (named, format) == (EncodeFormat::Aac, EncodeFormat::Alac), "{ext}");
+                let shares_m4a = |f| matches!(f, EncodeFormat::Aac | EncodeFormat::Alac);
+                assert!(named == format || (shares_m4a(named) && shares_m4a(format)), "{ext}");
+                assert!(named.is_built(), "{ext}");
                 assert!(craft_audio::ENCODE_EXTENSIONS.contains(&ext), "{ext}");
             }
             None => assert!(!matches!(format, EncodeFormat::Wav | EncodeFormat::Aiff | EncodeFormat::Flac), "{ext}"),

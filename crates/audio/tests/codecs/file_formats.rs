@@ -418,8 +418,8 @@ fn ffmpeg_decode(ff: &std::path::Path, file: &[u8], name: &str, channels: usize)
     planar
 }
 
-/// ffmpeg reads every format: the M4A files at the length written (it applies the edit list),
-/// ALAC exactly, the raw streams behind their delay.
+/// ffmpeg reads every format: the M4A files without their priming (it applies the edit list) and,
+/// from ffmpeg 9, at the length written; ALAC exactly; the raw streams behind their delay.
 #[test]
 fn ffmpeg_reads_the_files() {
     let ff = require_ffmpeg!();
@@ -428,7 +428,9 @@ fn ffmpeg_reads_the_files() {
         let mut opts = EncodeOptions::new(EncodeFormat::Aac);
         opts.layout = layout;
         let out = ffmpeg_decode(&ff, &encode(&buf, &opts).unwrap(), &format!("aac_{channels}.m4a"), channels);
-        assert_eq!(out[0].len(), 20_000, "AAC, {channels} channels");
+        // The priming is skipped by every ffmpeg (the channels below line up). The padding of the
+        // last packet is cut by ffmpeg 9; ffmpeg 8 plays it, to the end of the 20th packet.
+        assert!([20_000, 20_480].contains(&out[0].len()), "AAC, {channels} channels: {} frames", out[0].len());
         if channels <= 6 {
             // ffmpeg also returns 5.1 in WAV order.
             for (c, (want, got)) in buf.channels.iter().zip(&out).enumerate() {

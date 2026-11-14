@@ -468,6 +468,9 @@ match craft_audio::decode(&bytes, None) {
   the length: the file decodes with 1057 (MP3) or 256 (AC-3, E-AC-3) frames of delay in front and
   padded to whole frames at the end. MP3 gets no Xing / Info frame. `EncodeFormat::Aac` and `Alac`
   (M4A) decode to the length written.
+- An AAC M4A's length is in the edit list and the last packet's duration. This crate, Apple's
+  decoders and ffmpeg 9 end the audio there; ffmpeg 8 skips the priming but plays the last
+  packet's padding (under 1024 frames of near silence).
 - `EncodeFormat::Aac` and `Alac` write the `moov` box after the audio (no fast start), and no
   metadata. Raw ADTS AAC is not a file format of `encode`; `aac::EncoderConfig::with_adts` gives
   the frames.
