@@ -4,7 +4,7 @@ use craft_ui::contract::{Bind, DropZone};
 use craft_ui::patterns::presets::{PresetBrowser, PresetEvent, PresetRow, PresetState, PresetView};
 use craft_ui::runtime::drag;
 use craft_ui::testing::{Fixture, trial};
-use egui::{Id, Pos2, Rect, Sense, UiBuilder, pos2, vec2};
+use egui::{Id, Key, Modifiers, Pos2, Rect, Sense, UiBuilder, pos2, vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -96,4 +96,32 @@ fn the_footer_stays_in_the_room_and_a_room_height_sizes_the_browser_to_its_prese
     assert!(footer.top() >= last.bottom() && footer.top() - last.bottom() < 40.0, "the footer follows two presets: {footer:?} {last:?}");
     let (footer, _) = footer_rig(40, Some(200.0));
     assert!(footer.bottom() <= 240.0, "a long library scrolls within the room height: {footer:?}");
+}
+
+/// Delete and Backspace on the selected preset report the same `Delete` the row menu and the footer give, in both views.
+#[trial]
+fn delete_and_backspace_on_a_selected_preset_report_delete() {
+    for view in [PresetView::List, PresetView::Grid] {
+        for key in [Key::Delete, Key::Backspace] {
+            let events = Rc::new(RefCell::new(Vec::new()));
+            let seen = events.clone();
+            let rows = vec![PresetRow::item(ALPHA, "Alpha", 0), PresetRow::item(2, "Beta", 0)];
+            let mut state = PresetState::<u32>::new();
+            let mut fixture = Fixture::new(move |ui| {
+                ui.scope_builder(UiBuilder::new().max_rect(BROWSER), |ui| {
+                    let out = PresetBrowser::new("Patterns", Bind::bound(&mut state), &rows).view_lock(view).show(ui);
+                    seen.borrow_mut().extend(out.events);
+                });
+            });
+            fixture.room(vec2(480.0, 320.0)).settle();
+            let row = fixture.by_label("Beta").expect("the browser shows Beta");
+            fixture.click(&row);
+            fixture.idle(2);
+            events.borrow_mut().clear();
+            fixture.key(key, Modifiers::NONE);
+            fixture.idle(2);
+            let deletes: Vec<_> = events.borrow().iter().filter(|event| matches!(event, PresetEvent::Delete(_))).cloned().collect();
+            assert_eq!(deletes, vec![PresetEvent::Delete(2)], "{key:?} in {view:?} deletes the selected preset");
+        }
+    }
 }
