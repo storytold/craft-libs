@@ -380,8 +380,8 @@ struct PendingName {
     rgce: Vec<u8>,
     rgcb: Vec<u8>,
     comment: Option<String>,
-    menu: Option<String>,
     description: Option<String>,
+    help: Option<String>,
 }
 
 /// The workbook's defined names, as `.xlsx` has them in `definedNames`: every `BrtName` but the
@@ -435,11 +435,11 @@ fn defined_names(
         let mut attrs = vec![];
         let mut put = |k: &str, v: String| attrs.push((k.to_string(), v));
         // In `CT_DefinedName`'s order.
-        if let Some(m) = p.menu {
-            put("customMenu", m);
-        }
         if let Some(d) = p.description {
             put("description", d);
+        }
+        if let Some(h) = p.help {
+            put("help", h);
         }
         let (func, vba, proc) = (p.flags & 0x02 != 0, p.flags & 0x04 != 0, p.flags & 0x08 != 0);
         if func {
@@ -520,14 +520,17 @@ fn link_record(id: u16, payload: &[u8], links: &mut Links, pending: &mut Vec<Pen
             let cb = b.u32()? as usize;
             let rgcb = b.take(cb)?.to_vec();
             let comment = b.string(255, true)?;
-            // A macro's name (fProc) has four more strings: one unused, its custom menu, its
-            // description and another unused.
-            let (menu, description) = if flags & 0x08 != 0 {
+            // A macro's name (fProc) has four more strings: one unused, its description, its help
+            // topic and another unused. ([MS-XLSB] calls the second the custom menu and the third
+            // the description; Excel writes them as `.xlsx`'s `description` and `help`.) Excel
+            // leaves them out of a VBA function's name (fOB), which ends after its comment.
+            let vba_without_strings = flags & 0x04 != 0 && b.rest.is_empty();
+            let (description, help) = if flags & 0x08 != 0 && !vba_without_strings {
                 b.string(32767, true)?;
-                let menu = b.string(32767, true)?;
                 let description = b.string(32767, true)?;
+                let help = b.string(32767, true)?;
                 b.string(32767, true)?;
-                (menu, description)
+                (description, help)
             } else {
                 (None, None)
             };
@@ -536,7 +539,7 @@ fn link_record(id: u16, payload: &[u8], links: &mut Links, pending: &mut Vec<Pen
             // A built-in name (fBuiltin) is stored bare; `.xlsx` spells it `_xlnm.Print_Area`, in
             // `definedNames` and in formulas alike.
             let text = if flags & 0x20 != 0 { format!("_xlnm.{text}") } else { text };
-            pending.push(PendingName { index: links.names.len(), flags, key, rgce, rgcb, comment, menu, description });
+            pending.push(PendingName { index: links.names.len(), flags, key, rgce, rgcb, comment, description, help });
             links.names.push(Name { text, future: flags & (1 << 17) != 0, scope, read: false });
         }
     }

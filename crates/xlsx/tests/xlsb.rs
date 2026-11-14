@@ -1208,3 +1208,48 @@ fn references_to_macro_sheets_and_spans_over_chart_sheets_are_named() {
     assert_eq!(got, [Some("Macro1!$A$1"), Some("Data:Hidden!$A$1"), None]);
     assert!(warned(&wb, "references to sheets with no cells"), "{:?}", wb.warnings);
 }
+
+#[test]
+fn vba_function_names_without_macro_strings_are_read() {
+    // Excel writes a VBA function a cell calls as a BrtName with fFunc, fOB and
+    // fProc, no formula, and none of the four strings fProc names otherwise carry. `.xlsm` lists
+    // no such name; a cell calling the function spells it.
+    let vba = |text: &str| {
+        let data = [
+            &0x0Eu32.to_le_bytes()[..],
+            &[0],
+            &u32::MAX.to_le_bytes(),
+            &wide(text),
+            &0u32.to_le_bytes(),
+            &0u32.to_le_bytes(),
+            &u32::MAX.to_le_bytes(),
+        ]
+        .concat();
+        record(39, &data)
+    };
+    let mut list = names();
+    list.push(vba("Twice"));
+    let twice = [&[0x23u8, 14, 0, 0, 0][..], &[0x1E, 4, 0], &[0x42, 2, 0xFF, 0]].concat();
+    let data = [row(0), formula_cell(1, &twice, &[]), formula_cell(2, &[0x23, 9, 0, 0, 0], &[])].concat();
+    let bytes = package(&book_with_names(&list), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES);
+    let wb = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap();
+    assert_eq!(wb.defined_names, xml_names(NAMES_XML));
+    let book = read(&bytes).unwrap();
+    assert_eq!([1, 2].map(|c| book.sheets[0].formula(CellRef::new(0, c))), [Some("Twice(4)"), Some("Rate")]);
+}
+
+#[test]
+fn a_macro_names_description_and_help_topic_are_read_as_excel_writes_them() {
+    // An XLM function in category 3 with the strings Excel writes after its comment: unused, the
+    // description, the help topic, unused. [MS-XLSB] labels the middle two the custom menu and the
+    // description; Excel's `.xlsm` has them as `description` and `help`.
+    let flags: u32 = 0x02 | 0x08 | (3 << 6);
+    let mut data = [&flags.to_le_bytes()[..], &[0], &u32::MAX.to_le_bytes(), &wide("FnA")].concat();
+    let rgce = ref3d_name(0, 0, 0);
+    data.extend([&(rgce.len() as u32).to_le_bytes()[..], &rgce, &0u32.to_le_bytes(), &u32::MAX.to_le_bytes()].concat());
+    data.extend([u32::MAX.to_le_bytes().to_vec(), wide("Function A"), wide("!0"), u32::MAX.to_le_bytes().to_vec()].concat());
+    let bytes = package(&book_with_names(&[record(39, &data)]), &worksheet(&row(0), &[]), &sst(), ROOT, RELS, TYPES);
+    let wb = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap();
+    let xml = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><definedNames><definedName name="FnA" description="Function A" help="!0" function="1" xlm="1" functionGroupId="3">Data!$A$1</definedName></definedNames></workbook>"#;
+    assert_eq!(wb.defined_names, xml_names(xml));
+}
