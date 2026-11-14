@@ -31,8 +31,8 @@ use craft_plugin_abi::PolicyReport;
 
 use super::hostcall::{RawCall, run_host_call};
 use super::{
-    BoxFuture, Budget, Caps, Clock, CompileOptions, Engine, EngineId, Export, HostDispatch, Instance, LoadError, Module, Trap, checked_range,
-    require_deadline_enforcement,
+    BoxFuture, Budget, Caps, Clock, CompileOptions, Engine, EngineId, Export, HostDispatch, Instance, LoadError, Module, Trap, check_held_memory,
+    checked_range, require_deadline_enforcement,
 };
 
 /// Epoch tick length. A deadline or cancel is noticed within one tick.
@@ -437,6 +437,7 @@ impl Instance for WasmtimeInstance {
         if budget.stack_bytes != self.stack_bytes {
             return Err(Trap::BudgetMismatch);
         }
+        check_held_memory(self.mem_len(), budget)?;
         let func = self.funcs[export as usize].ok_or(Trap::NoSuchExport(export))?;
         let mut inputs = [const { Val::I32(0) }; 5];
         for (slot, arg) in inputs.iter_mut().zip(args) {

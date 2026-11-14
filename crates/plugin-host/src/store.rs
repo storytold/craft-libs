@@ -51,17 +51,35 @@ pub enum Source {
     DevFolder,
 }
 
-/// `{plugin_id, publisher?, permission, scope?, granted_at, decided_by: user}`.
+/// `{plugin_id, publisher?, package_sha256, permission, scope?, granted_at, decided_by: user}`.
 /// The scope lives inside the permission string, such as `commands.run:effect.*`.
+///
+/// A grant belongs to the package the user decided on. The manager counts it only beside a
+/// package with the same plugin id, the same publisher and the same [`package_sha256()`], and drops
+/// it otherwise, so code that a store pairs with another package's grants runs without them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredGrant {
     pub plugin_id: String,
     /// The manifest `author`. Unverified in v1 because `craft.sig` is reserved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publisher: Option<String>,
+    /// [`package_sha256()`] of the package the grant was given to. `None` matches no package.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_sha256: Option<String>,
     pub permission: String,
     pub granted_at_ms: u64,
     pub decided_by: Decider,
+}
+
+/// The SHA-256 of a package, as 64 lowercase hex digits.
+pub fn package_sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+    let mut hex = String::with_capacity(64);
+    for b in Sha256::digest(bytes) {
+        let _ = write!(hex, "{b:02x}");
+    }
+    hex
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,6 +214,7 @@ pub use dir::DirStore;
 #[cfg(not(target_arch = "wasm32"))]
 mod dir {
     use std::fs;
+    use std::io::{Read, Write};
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
 
@@ -216,11 +235,32 @@ mod dir {
         grants: Vec<StoredGrant>,
     }
 
+    /// The file in a plugin directory that names its live generation.
+    const CURRENT: &str = "current";
+    const PACKAGE: &str = "package.wasm";
+    const META: &str = "meta.json";
+    /// `g` and the 20 digits of the largest `u64`. A longer `current` is corrupt, so a read stops there.
+    const MAX_POINTER_LEN: u64 = 21;
+
     /// Files under the app settings directory:
-    /// `plugins/<id>/package.wasm`, `plugins/<id>/meta.json`, `state/<id>/state.json`.
+    ///
+    /// ```text
+    /// plugins/<id>/current            names the live generation, such as `g7`
+    /// plugins/<id>/g<n>/package.wasm  the code of generation n
+    /// plugins/<id>/g<n>/meta.json     the record of generation n, with the grants given to that code
+    /// state/<id>/state.json
+    /// ```
+    ///
+    /// A generation is written once and never changed. `save` writes a new generation in full,
+    /// then replaces `current` with a rename. That rename is the commit: a reader sees the old
+    /// code with the old grants, or the new code with the new grants, never the code of one beside
+    /// the grants of the other. A plugin directory without `current` holds no committed record (a
+    /// first save that stopped before its commit, or a `remove` that stopped part way) and is not
+    /// listed. A generation that `current` does not name is a leftover. The next save of that id
+    /// deletes it after its own commit.
     pub struct DirStore {
         root: PathBuf,
-        // One lock for state read-modify-write. Package writes are rare.
+        // One lock for every read-modify-write. Package writes are rare.
         io: Mutex<()>,
     }
 
@@ -236,13 +276,60 @@ mod dir {
         Ok(id)
     }
 
-    /// Write through a temp file and a rename, so a crash leaves the old file whole.
+    fn generation_name(n: u64) -> String {
+        format!("g{n}")
+    }
+
+    /// The number in a generation name: `g` and decimal digits without a leading zero. Anything
+    /// else is `None`, so the text of `current` never becomes a path of its own.
+    fn parse_generation(name: &str) -> Option<u64> {
+        let digits = name.strip_prefix('g')?;
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) || (digits.len() > 1 && digits.starts_with('0')) {
+            return None;
+        }
+        digits.parse().ok()
+    }
+
+    /// Make the entries of `dir` durable. Best effort, as in `craft-atomic`: some file systems
+    /// refuse to sync a directory, and only Unix can open one.
+    fn sync_dir(dir: &Path) {
+        #[cfg(unix)]
+        if let Ok(d) = fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+        #[cfg(not(unix))]
+        let _ = dir;
+    }
+
+    /// Write `bytes` to `path` and flush them to disk. `create_new` refuses a file that exists.
+    fn write_synced(path: &Path, bytes: &[u8], create_new: bool) -> Result<(), StoreError> {
+        let mut options = fs::OpenOptions::new();
+        options.write(true);
+        if create_new {
+            options.create_new(true);
+        } else {
+            options.create(true).truncate(true);
+        }
+        let mut file = options.open(path).map_err(|e| io_err(path, e))?;
+        file.write_all(bytes).map_err(|e| io_err(path, e))?;
+        file.sync_all().map_err(|e| io_err(path, e))
+    }
+
+    /// Write through a flushed temp file and a rename, so a crash leaves the old file whole.
     fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
         let dir = path.parent().ok_or_else(|| StoreError::Io(format!("{} has no parent", path.display())))?;
         fs::create_dir_all(dir).map_err(|e| io_err(dir, e))?;
         let tmp = path.with_extension("tmp");
-        fs::write(&tmp, bytes).map_err(|e| io_err(&tmp, e))?;
-        fs::rename(&tmp, path).map_err(|e| io_err(path, e))
+        if let Err(e) = write_synced(&tmp, bytes, false) {
+            let _ = fs::remove_file(&tmp);
+            return Err(e);
+        }
+        if let Err(e) = fs::rename(&tmp, path) {
+            let _ = fs::remove_file(&tmp);
+            return Err(io_err(path, e));
+        }
+        sync_dir(dir);
+        Ok(())
     }
 
     impl DirStore {
@@ -254,17 +341,60 @@ mod dir {
             Ok(self.root.join("plugins").join(checked_id(id)?))
         }
 
-        /// Read one plugin directory. The directory name must equal the id in `meta.json`.
-        fn read_entry(dir: &Path) -> Result<StoredPlugin, StoreError> {
-            let meta_path = dir.join("meta.json");
+        /// The generation `current` names. `None` when there is no `current`: nothing was committed.
+        fn live_generation(dir: &Path) -> Result<Option<u64>, StoreError> {
+            let path = dir.join(CURRENT);
+            let file = match fs::File::open(&path) {
+                Ok(f) => f,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(e) => return Err(io_err(&path, e)),
+            };
+            let mut text = Vec::new();
+            file.take(MAX_POINTER_LEN + 1).read_to_end(&mut text).map_err(|e| io_err(&path, e))?;
+            let n = std::str::from_utf8(&text).ok().and_then(parse_generation);
+            n.map(Some).ok_or_else(|| StoreError::Corrupt(format!("{} names no generation", path.display())))
+        }
+
+        /// A generation number above every generation directory in `dir`, so a save never writes
+        /// into a leftover.
+        fn next_generation(dir: &Path) -> Result<u64, StoreError> {
+            let mut last = 0u64;
+            for entry in fs::read_dir(dir).map_err(|e| io_err(dir, e))? {
+                let entry = entry.map_err(|e| io_err(dir, e))?;
+                if let Some(n) = entry.file_name().to_str().and_then(parse_generation) {
+                    last = last.max(n);
+                }
+            }
+            last.checked_add(1).ok_or_else(|| StoreError::Corrupt(format!("{} has no generation number left", dir.display())))
+        }
+
+        /// Delete every generation in `dir` except `keep`. It runs after the commit, so it never
+        /// deletes the live one, and a stop part way leaves leftovers for the next save.
+        fn sweep(dir: &Path, keep: u64) {
+            let Ok(entries) = fs::read_dir(dir) else { return };
+            for entry in entries.flatten() {
+                if entry.file_name().to_str().and_then(parse_generation).is_some_and(|n| n != keep) {
+                    let _ = fs::remove_dir_all(entry.path());
+                }
+            }
+        }
+
+        /// Read the live generation of one plugin directory. The directory name must equal the id
+        /// in `meta.json`. `None` when the directory holds no committed record.
+        fn read_entry(dir: &Path) -> Result<Option<StoredPlugin>, StoreError> {
+            let Some(n) = Self::live_generation(dir)? else {
+                return Ok(None);
+            };
+            let generation = dir.join(generation_name(n));
+            let meta_path = generation.join(META);
             let meta: Meta = serde_json::from_slice(&fs::read(&meta_path).map_err(|e| io_err(&meta_path, e))?)
                 .map_err(|e| StoreError::Corrupt(format!("{}: {e}", meta_path.display())))?;
-            let wasm_path = dir.join("package.wasm");
+            let wasm_path = generation.join(PACKAGE);
             let bytes = fs::read(&wasm_path).map_err(|e| io_err(&wasm_path, e))?;
             if dir.file_name().and_then(|n| n.to_str()) != Some(meta.id.as_str()) {
                 return Err(StoreError::Corrupt(format!("{} holds plugin {}", dir.display(), meta.id)));
             }
-            Ok(StoredPlugin {
+            Ok(Some(StoredPlugin {
                 id: meta.id,
                 version: meta.version,
                 bytes,
@@ -272,7 +402,7 @@ mod dir {
                 installed_at_ms: meta.installed_at_ms,
                 source: meta.source,
                 grants: meta.grants,
-            })
+            }))
         }
 
         /// Read every plugin directory. An unreadable directory goes to `skipped`. A failure to
@@ -297,7 +427,8 @@ mod dir {
                     continue;
                 }
                 match Self::read_entry(&dir) {
-                    Ok(plugin) => out.plugins.push(plugin),
+                    Ok(Some(plugin)) => out.plugins.push(plugin),
+                    Ok(None) => {}
                     Err(e) => {
                         let name = dir.file_name().map_or_else(|| dir.display().to_string(), |n| n.to_string_lossy().into_owned());
                         out.skipped.push(SkippedPackage { name, reason: e.to_string() });
@@ -336,10 +467,23 @@ mod dir {
             };
             let meta_bytes = serde_json::to_vec_pretty(&meta).map_err(|e| StoreError::Corrupt(e.to_string()))?;
             let _io = lock(&self.io);
-            // Package first. A crash between the two writes can leave new bytes beside old meta.
-            // The loader re-gates the bytes, and the next install rewrites both.
-            write_atomic(&dir.join("package.wasm"), &plugin.bytes)?;
-            write_atomic(&dir.join("meta.json"), &meta_bytes)
+            fs::create_dir_all(&dir).map_err(|e| io_err(&dir, e))?;
+            let n = Self::next_generation(&dir)?;
+            let name = generation_name(n);
+            let staged = dir.join(&name);
+            fs::create_dir(&staged).map_err(|e| io_err(&staged, e))?;
+            let written = write_synced(&staged.join(PACKAGE), &plugin.bytes, true).and_then(|()| write_synced(&staged.join(META), &meta_bytes, true));
+            if let Err(e) = written {
+                let _ = fs::remove_dir_all(&staged);
+                return Err(e);
+            }
+            sync_dir(&staged);
+            sync_dir(&dir);
+            // The commit. If it fails, `current` still names the old generation, and the next
+            // save deletes the staged one.
+            write_atomic(&dir.join(CURRENT), name.as_bytes())?;
+            Self::sweep(&dir, n);
+            Ok(())
         }
 
         fn load_all(&self) -> Result<Vec<StoredPlugin>, StoreError> {
@@ -357,6 +501,14 @@ mod dir {
         fn remove(&self, id: &str) -> Result<(), StoreError> {
             let dir = self.plugin_dir(id)?;
             let _io = lock(&self.io);
+            // `current` goes first, so a stop part way leaves a directory with no record, never a
+            // record that has lost some of its files.
+            let current = dir.join(CURRENT);
+            match fs::remove_file(&current) {
+                Ok(()) => sync_dir(&dir),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(io_err(&current, e)),
+            }
             match fs::remove_dir_all(&dir) {
                 Ok(()) => Ok(()),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),

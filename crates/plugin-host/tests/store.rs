@@ -19,6 +19,7 @@ fn plugin(id: &str, version: &str, bytes: &[u8]) -> StoredPlugin {
         grants: vec![StoredGrant {
             plugin_id: id.into(),
             publisher: Some("Ada".into()),
+            package_sha256: Some(package_sha256(bytes)),
             permission: "commands.run:app.*".into(),
             granted_at_ms: 99,
             decided_by: Decider::User,
@@ -128,7 +129,55 @@ mod dir {
         let mut files = Vec::new();
         walk(&t.0, &mut files);
         assert!(files.iter().all(|f| !f.ends_with(".tmp")), "{files:?}");
-        assert_eq!(files.len(), 3, "package, meta, state: {files:?}");
+        assert_eq!(files.len(), 4, "current, package, meta, state: {files:?}");
+    }
+
+    fn entries(dir: &std::path::Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn dir_store_save_that_fails_at_its_commit_leaves_the_old_record_whole() {
+        let t = Tmp::new();
+        let a = plugin("org.a", "1.0.0", b"old code");
+        let a2 = StoredPlugin { version: "2.0.0".into(), bytes: b"new code".to_vec(), grants: vec![], ..a.clone() };
+        let dir = t.0.join("plugins/org.a");
+        DirStore::new(&t.0).save(&a).unwrap();
+        // A directory where the temp file of `current` goes: the commit rename cannot happen.
+        std::fs::create_dir(dir.join("current.tmp")).unwrap();
+        assert!(matches!(DirStore::new(&t.0).save(&a2), Err(StoreError::Io(_))));
+        assert_eq!(DirStore::new(&t.0).load_all().unwrap(), vec![a.clone()], "the old code with the old grants");
+        std::fs::remove_dir(dir.join("current.tmp")).unwrap();
+        DirStore::new(&t.0).save(&a2).unwrap();
+        assert_eq!(DirStore::new(&t.0).load_all().unwrap(), vec![a2]);
+        assert_eq!(entries(&dir), ["current", "g3"], "the failed generation and the superseded one are gone");
+    }
+
+    #[test]
+    fn dir_store_ignores_what_a_stopped_save_or_remove_leaves() {
+        let t = Tmp::new();
+        let a = plugin("org.a", "1.0.0", b"old code");
+        let s = DirStore::new(&t.0);
+        s.save(&a).unwrap();
+        // A save that stopped before its commit: a whole generation that `current` does not name.
+        let dir = t.0.join("plugins/org.a");
+        std::fs::create_dir(dir.join("g7")).unwrap();
+        std::fs::write(dir.join("g7/package.wasm"), b"new code").unwrap();
+        std::fs::copy(dir.join("g1/meta.json"), dir.join("g7/meta.json")).unwrap();
+        assert_eq!(DirStore::new(&t.0).load_all().unwrap(), vec![a.clone()]);
+        // A first save or a remove that stopped part way: no `current`, so no record.
+        std::fs::create_dir_all(t.0.join("plugins/org.b/g1")).unwrap();
+        std::fs::write(t.0.join("plugins/org.b/g1/package.wasm"), b"x").unwrap();
+        assert_eq!(DirStore::new(&t.0).load_all().unwrap(), vec![a]);
+        // `current` that names no generation, or a path, is corrupt, not followed.
+        for bad in ["g01", "../org.a/g1", "g1/..", "", "g99999999999999999999999"] {
+            std::fs::write(t.0.join("plugins/org.b/current"), bad).unwrap();
+            assert!(matches!(DirStore::new(&t.0).load_all(), Err(StoreError::Corrupt(_))), "{bad:?}");
+        }
+        s.remove("org.b").unwrap();
+        assert!(!t.0.join("plugins/org.b").exists());
     }
 
     #[test]
@@ -155,14 +204,11 @@ mod dir {
         std::fs::write(t.0.join("state/org.a/state.json"), b"{not json").unwrap();
         assert!(matches!(s.get("org.a", "k"), Err(StoreError::Corrupt(_))));
         assert!(matches!(s.put("org.a", "k", &json!(1), 100), Err(StoreError::Corrupt(_))), "a write does not overwrite what it cannot read");
-        std::fs::write(t.0.join("plugins/org.a/meta.json"), b"[]").unwrap();
+        let meta = t.0.join("plugins/org.a/g1/meta.json");
+        std::fs::write(&meta, b"[]").unwrap();
         assert!(matches!(s.load_all(), Err(StoreError::Corrupt(_))));
         // A directory whose meta names another plugin is refused too.
-        std::fs::write(
-            t.0.join("plugins/org.a/meta.json"),
-            br#"{"id":"org.other","version":"1","enabled":true,"installed_at_ms":0,"source":"file","grants":[]}"#,
-        )
-        .unwrap();
+        std::fs::write(&meta, br#"{"id":"org.other","version":"1","enabled":true,"installed_at_ms":0,"source":"file","grants":[]}"#).unwrap();
         assert!(matches!(s.load_all(), Err(StoreError::Corrupt(m)) if m.contains("org.other")));
     }
 }
