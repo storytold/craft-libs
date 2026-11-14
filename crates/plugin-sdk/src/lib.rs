@@ -25,7 +25,8 @@
 //! - [`testing`] (native only) installs a fake host so handlers run in a plain `cargo test`.
 //!
 //! Plugin code needs no `unsafe`. The glue that does is in [`backend`] and [`rt`], each behind an
-//! explicit `#[allow(unsafe_code)]`.
+//! explicit `#[allow(unsafe_code)]`. Every runtime function that takes a host address is an
+//! `unsafe fn`, so safe plugin code cannot reach one.
 
 pub mod backend;
 pub mod entry;

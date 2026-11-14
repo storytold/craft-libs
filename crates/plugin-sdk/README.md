@@ -15,12 +15,14 @@ The attribute `#[craft_plugin(manifest = "craft.toml")]` comes from [`craft-plug
 
 ## Unsafe code
 
-The workspace sets `unsafe_code = "forbid"`. This crate sets `deny` in its own manifest, because guest glue needs `unsafe` in two places. Each place is a module with an explicit `#[allow(unsafe_code)]`:
+The workspace sets `unsafe_code = "forbid"`. This crate is the exception that the repository `AGENTS.md` names. It sets `deny` in its own manifest, because guest glue needs `unsafe` in two places. Each place is a module with an explicit `#[allow(unsafe_code)]`:
 
 - `backend::imp` on wasm32: the `craft_host.call` import and its one call.
 - `rt::wasm` on wasm32: reading and writing linear memory by address, and `alloc` and `free` for the exports.
 
-Plugin code written against the SDK needs no `unsafe`. Every `unsafe` block has a `SAFETY` comment. Do not add a third module.
+A bounds check shows that an address is inside linear memory, not that the host owns the bytes there. So `rt::free`, `rt::invoke` and `rt::process` are `unsafe fn`, each with a `# Safety` section from ABI.md. The `craft_free`, `craft_invoke` and `craft_process` exports that `#[craft_plugin]` generates are `unsafe extern "C" fn` too. Only the host calls them. `rt::alloc` and `craft_alloc` stay safe, because they take no address.
+
+Plugin code written against the SDK needs no `unsafe`, and safe plugin code cannot call any function that takes an address (`tests/wasm_plugin.rs` checks this with a wasm32 build that must fail with E0133). The manifest denies `unsafe_op_in_unsafe_fn`, `clippy::undocumented_unsafe_blocks` and `clippy::missing_safety_doc`. Do not add a third module.
 
 ## Tests
 

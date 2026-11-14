@@ -58,6 +58,15 @@ Shared Rust libraries for the Craft Apps.
 - **New crates** go in `crates/<name>`, named `craft-<name>`, inherit the workspace package fields
   and lints, and are listed in `[workspace.dependencies]`. A new crate's `Cargo.toml` includes
   `[lints] workspace = true`.
+- **Unsafe code exception (proposed in RFC #414, question 4).** Only `craft-plugin-sdk` and
+  `craft-plugin-sdk-macros` may use `unsafe`, and only for wasm32 guest glue: the `craft_host.call`
+  import and the `craft_*` exports the host calls with raw addresses into linear memory.
+  `craft-plugin-sdk` does not inherit `[workspace.lints]`, because `forbid` cannot be lowered. It
+  copies them with `unsafe_code = "deny"`, denies `unsafe_op_in_unsafe_fn`,
+  `clippy::undocumented_unsafe_blocks` and `clippy::missing_safety_doc`, and allows `unsafe` only
+  in the modules its README lists. `craft-plugin-sdk-macros` inherits the workspace lints. It emits
+  the exports into the plugin crate with `#[allow(unsafe_code)]` on that one module. Any function
+  that takes a host address is an `unsafe fn` with a `# Safety` section. No other crate gets this.
 - **No app code.** A crate here must be useful to more than one app and must not depend on any app.
 - **Before merging:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace`.

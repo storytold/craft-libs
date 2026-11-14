@@ -3,6 +3,11 @@
 //! The functions without a target gate are plain safe Rust over slices, and the unit tests run
 //! them natively. The wasm32 module turns the raw `i32` pointers of the ABI into those slices.
 //! That is the only code in the SDK that reads guest memory by address.
+//!
+//! A bounds check proves that an address is inside linear memory. It does not prove that the bytes
+//! there belong to the host, or that no Rust reference points at them. So every wasm32 function that
+//! takes an address, other than `alloc`, is an `unsafe fn` whose `# Safety` section states the
+//! ABI.md contract. Only the `craft_*` exports that `#[craft_plugin]` generates call them.
 
 use craft_plugin_abi::{ProcessDescriptor, Status};
 use serde_json::Value;
@@ -144,23 +149,33 @@ mod wasm {
         a.start < b.end && b.start < a.end
     }
 
-    fn slice<'a>(ptr: u32, len: usize) -> Option<&'a [u8]> {
+    /// The bytes at `ptr..ptr+len`, or `None` when the range is outside linear memory.
+    ///
+    /// # Safety
+    ///
+    /// For lifetime `'a`, the range must not be written, and no `&mut` reference may cover any of it.
+    unsafe fn slice<'a>(ptr: u32, len: usize) -> Option<&'a [u8]> {
         if len == 0 {
             return Some(&[]);
         }
         let r = range(ptr, len)?;
-        // SAFETY: the range is inside linear memory. The host owns these bytes for the duration of
-        // the call and does not write them while guest code runs (ABI.md sections 3 and 7).
+        // SAFETY: `range` checked that the bytes are inside linear memory and that `ptr` is not null.
+        // The caller promises that nothing writes them or holds them mutably for `'a`.
         Some(unsafe { std::slice::from_raw_parts(r.start as *const u8, len) })
     }
 
-    fn slice_mut<'a>(ptr: u32, len: usize) -> Option<&'a mut [u8]> {
+    /// The bytes at `ptr..ptr+len` for writing, or `None` when the range is outside linear memory.
+    ///
+    /// # Safety
+    ///
+    /// For lifetime `'a`, nothing else may read or write the range, through a reference or otherwise.
+    unsafe fn slice_mut<'a>(ptr: u32, len: usize) -> Option<&'a mut [u8]> {
         if len == 0 {
             return Some(&mut []);
         }
         let r = range(ptr, len)?;
-        // SAFETY: as `slice`, and the caller checked that this range does not overlap any other
-        // slice it holds from the same call.
+        // SAFETY: `range` checked that the bytes are inside linear memory and that `ptr` is not null.
+        // The caller promises exclusive access for `'a`.
         Some(unsafe { std::slice::from_raw_parts_mut(r.start as *mut u8, len) })
     }
 
@@ -174,6 +189,8 @@ mod wasm {
     }
 
     /// `craft_alloc`. 0 on failure. A zero length returns a non-null dangling address.
+    ///
+    /// Safe: it takes only a size and an alignment, and an unfreed block is a leak, not undefined behaviour.
     pub fn alloc(len: u32, align: u32) -> u32 {
         if len == 0 {
             return align.max(1);
@@ -186,24 +203,39 @@ mod wasm {
         ptr as usize as u32
     }
 
-    /// `craft_free`. The host passes the pointer, length and alignment of a block from `craft_alloc`
-    /// or of a response this plugin returned (alignment 1).
-    pub fn free(ptr: u32, len: u32, align: u32) {
+    /// `craft_free`. A zero length is a no-op, and so is a length and alignment that make no `Layout`.
+    ///
+    /// # Safety
+    ///
+    /// ABI.md section 3. When `len` is not 0, `ptr`, `len` and `align` must describe a live block:
+    /// either one that [`alloc`] returned for this `len` and `align`, or a response that [`invoke`]
+    /// returned, with `align` 1. The block must not be freed twice, and nothing may use it afterwards.
+    pub unsafe fn free(ptr: u32, len: u32, align: u32) {
         if len == 0 {
             return;
         }
         let Ok(layout) = Layout::from_size_align(len as usize, align as usize) else {
             return;
         };
-        // SAFETY: ABI.md section 3: `craft_free` gets a block that `craft_alloc` returned, with the
-        // same length and alignment, or a response buffer this module returned from `craft_invoke`.
+        // SAFETY: the caller promises that `ptr` came from the global allocator with this layout
+        // (`alloc`, or the boxed slice `invoke` leaked) and is still live.
         unsafe { std::alloc::dealloc(ptr as usize as *mut u8, layout) }
     }
 
-    /// `craft_invoke`.
-    pub fn invoke(table: &[Option<ControlFn>], entry: i32, req_ptr: u32, req_len: u32, blob_ptr: u32, blob_len: u32) -> i64 {
+    /// `craft_invoke`. A range outside linear memory returns `E_BAD_ARG`.
+    ///
+    /// # Safety
+    ///
+    /// ABI.md section 3. Each non-empty range, `req_ptr..req_ptr+req_len` and
+    /// `blob_ptr..blob_ptr+blob_len`, must lie inside a live block that [`alloc`] returned to the
+    /// host, so no guest value lives there and no guest reference points there. Nothing may write
+    /// either range until this call returns.
+    pub unsafe fn invoke(table: &[Option<ControlFn>], entry: i32, req_ptr: u32, req_len: u32, blob_ptr: u32, blob_len: u32) -> i64 {
         install_panic_hook();
-        let (Some(req), Some(blob)) = (slice(req_ptr, req_len as usize), slice(blob_ptr, blob_len as usize)) else {
+        // SAFETY: the caller promises that both ranges are host blocks that nothing writes until we
+        // return. Neither slice outlives this call.
+        let (req, blob) = unsafe { (slice(req_ptr, req_len as usize), slice(blob_ptr, blob_len as usize)) };
+        let (Some(req), Some(blob)) = (req, blob) else {
             return status(Status::BadArg);
         };
         match invoke_bytes(table, entry, req, blob) {
@@ -220,10 +252,20 @@ mod wasm {
         }
     }
 
-    /// `craft_process`.
-    pub fn process(table: &[Option<DataFn>], desc_ptr: u32, desc_len: u32) -> i32 {
+    /// `craft_process`. A range outside linear memory, or an output that overlaps the descriptor,
+    /// the input or the params, returns [`process_status::BAD_POINTER`].
+    ///
+    /// # Safety
+    ///
+    /// ABI.md section 7. The descriptor at `desc_ptr..desc_ptr+desc_len`, and each non-empty input,
+    /// output and params range it names, must lie inside a live block that [`alloc`] returned to the
+    /// host, so no guest value lives there and no guest reference points there. Until this call
+    /// returns, nothing else may write the descriptor, the input or the params, and nothing else
+    /// may read or write the output.
+    pub unsafe fn process(table: &[Option<DataFn>], desc_ptr: u32, desc_len: u32) -> i32 {
         install_panic_hook();
-        let Some(raw) = slice(desc_ptr, desc_len as usize) else {
+        // SAFETY: the caller promises that the descriptor is a host block that nothing writes until we return.
+        let Some(raw) = (unsafe { slice(desc_ptr, desc_len as usize) }) else {
             return process_status::BAD_POINTER;
         };
         let Ok(desc) = ProcessDescriptor::decode(raw) else {
@@ -242,9 +284,12 @@ mod wasm {
         if overlaps(&out_r, &in_r) || overlaps(&out_r, &par_r) || overlaps(&out_r, &desc_range) {
             return process_status::BAD_POINTER;
         }
-        let (Some(input), Some(params), Some(output)) =
-            (slice(desc.in_ptr, len), slice(desc.params_ptr, desc.params_len as usize), slice_mut(desc.out_ptr, len))
-        else {
+        // SAFETY: the caller promises that the three ranges are host blocks with the access rules
+        // above. The checks above show that the one mutable slice overlaps neither the other two nor
+        // the descriptor. No slice outlives this call.
+        let (input, params, output) =
+            unsafe { (slice(desc.in_ptr, len), slice(desc.params_ptr, desc.params_len as usize), slice_mut(desc.out_ptr, len)) };
+        let (Some(input), Some(params), Some(output)) = (input, params, output) else {
             return process_status::BAD_POINTER;
         };
         process_slices(table, &desc, input, output, params)

@@ -101,10 +101,11 @@ fn fixture_manifest() -> String {
     )
 }
 
-fn build_fixture(dir: &Path) -> PathBuf {
+/// Write a fixture crate with `lib_rs` as its source and run `cargo <args> --target wasm32-unknown-unknown` in it.
+fn cargo_on_fixture(dir: &Path, lib_rs: &str, args: &[&str]) -> std::process::Output {
     write(&dir.join("Cargo.toml"), &fixture_manifest());
     write(&dir.join("craft.toml"), CRAFT_TOML);
-    write(&dir.join("src/lib.rs"), LIB_RS);
+    write(&dir.join("src/lib.rs"), lib_rs);
     write(&dir.join(".cargo/config.toml"), CARGO_CONFIG);
     // Start from the workspace lock file so the fixture resolves to the versions the tests use.
     let lock = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock");
@@ -112,15 +113,20 @@ fn build_fixture(dir: &Path) -> PathBuf {
         write(&dir.join("Cargo.lock"), &text);
     }
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
-    let status = Command::new(cargo)
+    Command::new(cargo)
         .current_dir(dir)
-        .args(["build", "--release", "--target", TARGET])
+        .args(args)
+        .args(["--target", TARGET])
         .env("CARGO_TARGET_DIR", dir.join("target"))
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
-        .status()
-        .expect("cargo starts");
-    assert!(status.success(), "the fixture plugin must build for {TARGET}");
+        .output()
+        .expect("cargo starts")
+}
+
+fn build_fixture(dir: &Path) -> PathBuf {
+    let out = cargo_on_fixture(dir, LIB_RS, &["build", "--release"]);
+    assert!(out.status.success(), "the fixture plugin must build for {TARGET}: {}", String::from_utf8_lossy(&out.stderr));
     dir.join("target").join(TARGET).join("release").join("wasm_fixture.wasm")
 }
 
@@ -294,6 +300,58 @@ fn craft_process_runs_a_band_and_refuses_bad_pointers() {
     assert_eq!(guest.process(&band(2, 4, (input, 0))), 3, "address 0 is not a valid output");
     assert_eq!(guest.process(&band(2, 4, (input, u32::MAX - 1))), 3, "a range past the end of memory is refused");
     assert_eq!(guest.process(&band(0, 4, (input, output))), 4, "a command is not a craft_process entry");
+}
+
+/// Plugin code that hands raw addresses to the runtime and to the generated exports without `unsafe`.
+const MISUSE_RS: &str = r#"use craft_plugin_sdk::prelude::*;
+
+#[craft_plugin(manifest = "craft.toml")]
+mod plugin {
+    use craft_plugin_sdk::prelude::*;
+
+    fn say(_call: CommandCall) -> Result<Value, String> {
+        craft_plugin_sdk::rt::free(0, 1, 1);
+        let _ = craft_plugin_sdk::rt::invoke(&[], 0, 8, 1, 0, 0);
+        let _ = craft_plugin_sdk::rt::process(&[], 8, 104);
+        __craft_exports::craft_free(0, 1, 1);
+        let _ = __craft_exports::craft_invoke(0, 8, 1, 0, 0);
+        let _ = __craft_exports::craft_process(8, 104);
+        Ok(Value::Null)
+    }
+
+    fn watch(_hook: HookCall) -> HookVerdict {
+        HookVerdict::Pass
+    }
+
+    fn invert(_band: &mut Band) -> Result<(), String> {
+        Ok(())
+    }
+}
+"#;
+
+/// Safe Rust must not reach a function that turns a host address into a reference or frees it:
+/// `rt::free(0, 1, 1)` would hand `dealloc` a block it never allocated. Each such function is
+/// `unsafe fn`, so every call above is error E0133. `rt::alloc` and `craft_alloc` stay safe, because
+/// they take only a size and an alignment.
+#[test]
+fn raw_pointer_entry_points_are_unsafe_to_call_from_plugin_code() {
+    if !target_installed() {
+        eprintln!("skipped: the {TARGET} target is not installed (rustup target add {TARGET})");
+        return;
+    }
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("wasm-misuse");
+    let out = cargo_on_fixture(&dir, MISUSE_RS, &["check", "--message-format", "short"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "safe plugin code called a raw pointer entry point and compiled");
+    // rustc names the callee by its shortest path, so match on the source line of each call.
+    let calls: Vec<usize> =
+        MISUSE_RS.lines().enumerate().filter(|(_, l)| l.contains("rt::") || l.contains("__craft_exports::")).map(|(i, _)| i + 1).collect();
+    assert_eq!(calls.len(), 6, "the fixture makes six raw pointer calls");
+    for line in calls {
+        let at = format!("src/lib.rs:{line}:");
+        let hit = stderr.lines().any(|l| l.starts_with(&at) && l.contains("error[E0133]: call to unsafe function"));
+        assert!(hit, "no E0133 for the call on line {line}:\n{stderr}");
+    }
 }
 
 #[test]

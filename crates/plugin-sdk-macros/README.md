@@ -24,6 +24,8 @@ mod plugin {
 
 `#[unsafe(no_mangle)]` and `#[unsafe(link_section)]` need `unsafe`. The generated code carries `#[allow(unsafe_code)]` on those items, and they exist on wasm32 only. A crate that sets `forbid(unsafe_code)` cannot use the macro (E0453). Plugin crates set `deny` or nothing.
 
+`craft_free`, `craft_invoke` and `craft_process` take raw addresses from the host, so they are `unsafe extern "C" fn`. Plugin code in the same module cannot call them without writing `unsafe`. Each one calls the matching `unsafe fn` in `craft_plugin_sdk::rt` and passes its `# Safety` contract to the host. The module denies `unsafe_op_in_unsafe_fn`. This is the exception that the repository `AGENTS.md` names.
+
 ## Tests
 
 The unit tests in `src/lib.rs` call `expand` on token streams with the manifests in `tests/fixtures/`. One test reads the SDK fixture `../plugin-sdk/tests/fixtures/plugin.toml`.

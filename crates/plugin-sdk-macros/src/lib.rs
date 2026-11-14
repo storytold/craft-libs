@@ -225,9 +225,13 @@ fn expand(args: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
 
     let control_export = if has_control {
         quote! {
+            /// # Safety
+            ///
+            /// Only the host calls this, under the contract of `craft_plugin_sdk::rt::invoke`.
             #[unsafe(no_mangle)]
-            pub extern "C" fn craft_invoke(entry: i32, req_ptr: i32, req_len: i32, blob_ptr: i32, blob_len: i32) -> i64 {
-                #sdk::rt::invoke(&super::__CRAFT_CONTROL, entry, req_ptr as u32, req_len as u32, blob_ptr as u32, blob_len as u32)
+            pub unsafe extern "C" fn craft_invoke(entry: i32, req_ptr: i32, req_len: i32, blob_ptr: i32, blob_len: i32) -> i64 {
+                // SAFETY: the caller of this export takes on the contract of `rt::invoke`.
+                unsafe { #sdk::rt::invoke(&super::__CRAFT_CONTROL, entry, req_ptr as u32, req_len as u32, blob_ptr as u32, blob_len as u32) }
             }
         }
     } else {
@@ -235,9 +239,13 @@ fn expand(args: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
     };
     let data_export = if has_data {
         quote! {
+            /// # Safety
+            ///
+            /// Only the host calls this, under the contract of `craft_plugin_sdk::rt::process`.
             #[unsafe(no_mangle)]
-            pub extern "C" fn craft_process(desc_ptr: i32, desc_len: i32) -> i32 {
-                #sdk::rt::process(&super::__CRAFT_DATA, desc_ptr as u32, desc_len as u32)
+            pub unsafe extern "C" fn craft_process(desc_ptr: i32, desc_len: i32) -> i32 {
+                // SAFETY: the caller of this export takes on the contract of `rt::process`.
+                unsafe { #sdk::rt::process(&super::__CRAFT_DATA, desc_ptr as u32, desc_len as u32) }
             }
         }
     } else {
@@ -260,8 +268,11 @@ fn expand(args: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
         #[used]
         static __CRAFT_MANIFEST: [u8; #len] = *#byte_lit;
 
+        // The host calls these with raw addresses. Each export that takes one is an `unsafe fn`, so
+        // plugin code in this module cannot call it without writing `unsafe` itself.
         #[cfg(target_arch = "wasm32")]
         #[allow(unsafe_code)]
+        #[deny(unsafe_op_in_unsafe_fn)]
         mod __craft_exports {
             #[unsafe(no_mangle)]
             pub extern "C" fn craft_abi() -> i32 {
@@ -271,9 +282,13 @@ fn expand(args: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
             pub extern "C" fn craft_alloc(len: i32, align: i32) -> i32 {
                 #sdk::rt::alloc(len as u32, align as u32) as i32
             }
+            /// # Safety
+            ///
+            /// Only the host calls this, under the contract of `craft_plugin_sdk::rt::free`.
             #[unsafe(no_mangle)]
-            pub extern "C" fn craft_free(ptr: i32, len: i32, align: i32) {
-                #sdk::rt::free(ptr as u32, len as u32, align as u32)
+            pub unsafe extern "C" fn craft_free(ptr: i32, len: i32, align: i32) {
+                // SAFETY: the caller of this export takes on the contract of `rt::free`.
+                unsafe { #sdk::rt::free(ptr as u32, len as u32, align as u32) }
             }
             #control_export
             #data_export
@@ -353,6 +368,21 @@ mod tests {
         let module = "mod m { fn echo(_c: CommandCall)->R{} fn fail(_c: CommandCall)->R{} fn gate(_h: HookCall)->V{} fn watcher(_h: HookCall)->V{} fn side(_e: PanelEvent)->O{} fn halve(_b:&mut Band)->R{} }";
         let out = expand(args, module.parse().unwrap()).unwrap().to_string();
         assert!(out.contains("fn craft_process") && out.contains("fn craft_invoke"));
+    }
+
+    #[test]
+    fn exports_that_take_a_host_address_are_unsafe_fns() {
+        let args: TokenStream2 = "manifest = \"../plugin-sdk/tests/fixtures/plugin.toml\"".parse().unwrap();
+        let module = "mod m { fn echo(_c: CommandCall)->R{} fn fail(_c: CommandCall)->R{} fn gate(_h: HookCall)->V{} fn watcher(_h: HookCall)->V{} fn side(_e: PanelEvent)->O{} fn halve(_b:&mut Band)->R{} }";
+        let out = expand(args, module.parse().unwrap()).unwrap().to_string();
+        for name in ["craft_free", "craft_invoke", "craft_process"] {
+            assert!(out.contains(&format!("pub unsafe extern \"C\" fn {name}")), "{name} must be an unsafe fn: {out}");
+        }
+        // These take no address, so safe code may call them.
+        for name in ["craft_abi", "craft_alloc"] {
+            assert!(out.contains(&format!("pub extern \"C\" fn {name}")), "{name} stays safe: {out}");
+        }
+        assert!(out.contains("deny (unsafe_op_in_unsafe_fn)"), "{out}");
     }
 
     #[test]
