@@ -32,8 +32,9 @@ impl CurveOrderEntry {
 /// depth by y-interval.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Metrics {
+    // Craft patch (inline metrics): a `SmallVec` replaces the package's `Vec`.
     /// Each interval records a single recursion depth measurement.
-    pub entries: Vec<MetricsEntry>,
+    pub entries: SmallVec<[MetricsEntry; 2]>,
 }
 
 /// A single observability entry.
@@ -137,6 +138,14 @@ impl CurveOrder {
             cmps: SmallVec::new(),
             metrics: Metrics::default(),
         }
+    }
+
+    // Craft patch (far-apart comparison).
+    /// A curve order with the same order at all heights between `start` and `end`.
+    pub(crate) fn constant(start: f64, end: f64, order: Order) -> Self {
+        let mut ret = CurveOrder::new(start);
+        ret.push(end, order, MetricsStatus::default());
+        ret
     }
 
     fn push(&mut self, end: f64, order: Order, status: MetricsStatus) {
