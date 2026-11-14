@@ -2,7 +2,7 @@
 //! focus on press, focus after removal and programmatic focus (spec 8.3, 9.4, 9.5).
 //!
 //! egui's focus sits on an arena root. The focused member or part is runtime data keyed by that root, and
-//! every focus read of component code goes through [`is_focused`].
+//! every focus read of component code goes through `is_focused`.
 
 mod nav;
 mod policy;

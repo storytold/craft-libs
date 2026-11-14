@@ -260,7 +260,7 @@ fn kit_module(module: &str) -> bool {
     library_path(module).is_some_and(|inside| KIT_MODULES.contains(&inside))
 }
 
-/// The catalog of `registrations`, without the kit stand-ins of [`KIT_MODULES`].
+/// The catalog of `registrations`, without the kit stand-ins of `KIT_MODULES`.
 ///
 /// The display name is the type's name without module path or type arguments. Two registered types that share it
 /// each take the last module segments of their paths in front of it (`DockButton`, then `DockGroupButton`)

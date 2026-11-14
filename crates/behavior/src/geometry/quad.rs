@@ -259,7 +259,7 @@ impl BoxRules {
     }
 
     /// What a drag of `part` with `mods` held (as the host has them, before
-    /// [`drag_modifiers`](Self::drag_modifiers)) does to the box, or `None` where the rules
+    /// `drag_modifiers`) does to the box, or `None` where the rules
     /// refuse the part ([`allows`](Self::allows)). [`drag`] acts on this kind.
     pub fn drag_kind(&self, part: BoxPart, mods: Mods) -> Option<BoxDrag> {
         self.allows(part).then(|| resolve_kind(self.effective_mode(), part, self.drag_modifiers(part, mods)))

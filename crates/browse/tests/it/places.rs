@@ -121,7 +121,8 @@ fn a_dragged_row_drops_onto_a_folder_the_host_accepts() {
     let jobs = Arc::new(ManualJobs::new());
     let cache = FolderCache::new(Arc::new(fake()), jobs.clone(), Wake::new(|| {}));
     let state = Rc::new(RefCell::new(Rig { places: home(), cache, jobs, current: Some(path("/home/u/Photos/2024/Trip")) }));
-    let dropped: Rc<RefCell<Vec<(PathBuf, Option<Vec<u32>>)>>> = Rc::default();
+    type Drops = Rc<RefCell<Vec<(PathBuf, Option<Vec<u32>>)>>>;
+    let dropped: Drops = Rc::default();
     let (shown, seen) = (state.clone(), dropped.clone());
     let mut fixture = Fixture::new(move |ui| {
         let photos = [7u32];

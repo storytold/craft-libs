@@ -2,7 +2,7 @@
 //!
 //! `Fixture` shows a closure or a story over [`Frames`]; `suite` runs the shared cases over every registered type.
 //!
-//! The registration half of the kit: `#[trial]` functions list themselves in [`TRIALS`], and [`run`],
+//! The registration half of the kit: `#[trial]` functions list themselves in `TRIALS`, and [`run`],
 //! every test executable's runner, collects them. The fixture half drives frames ([`Frames`]) and reaches the runtime's
 //! crate-private services the trials check.
 

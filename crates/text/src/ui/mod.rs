@@ -18,7 +18,7 @@
 //! - [`character`] also has the Paragraph dialog (N3.15):
 //!   [`ParagraphDialog`](character::ParagraphDialog).
 //! - [`style_panel`] also has multi-row highlight and the style chip (N3.04):
-//!   [`StyleChip`](style_panel::StyleChip).
+//!   `StyleChip`.
 //! - [`notes`] (N3.18): [`NotesEditor`](notes::NotesEditor), read-only as the presenter's view.
 //! - [`columns`] (N3.27): [`TextColumnsDialog`](columns::TextColumnsDialog) and the Columns menu.
 //! - [`hyperlink`] (N3.28): [`HyperlinkDialog`](hyperlink::HyperlinkDialog).

@@ -507,7 +507,7 @@ impl<'a> Draw<'a> {
     }
 
     /// Strokes the open path `path` as dashes (copy marks, drag previews, reference lines), with the width and colour
-    /// [`Self::stroke`] takes. [`kit::dashed`] is the one implementation; the kit painter's `dashed` calls it too.
+    /// [`Self::stroke`] takes. `kit::dashed` is the one implementation; the kit painter's `dashed` calls it too.
     pub fn dashed(&self, path: &[Pos2], pattern: Dashes, width: impl Into<DataStrokeWidth>, color: impl Into<StrokeColor>) {
         let line = self.line(width.into(), color.into());
         self.painter.extend(super::kit::dashed(path, pattern, line.width, line.color));

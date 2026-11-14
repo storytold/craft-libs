@@ -51,7 +51,7 @@ impl Outcome for SwatchesPanelOutput {
 /// - The footer's + is New Swatch: the foreground colour into the selected swatch's group, named "Color Swatch N", then
 ///   renamed in place.
 /// - Tooltips name the swatch and its value; AccessKit as the preset browser's grid, each swatch named.
-/// - The files of Import, Replace and Export go out as [`PresetFileRequest`]s from the panel menu; the host answers
+/// - The files of Import, Replace and Export go out as `PresetFileRequest`s from the panel menu; the host answers
 ///   them with [`SwatchesPanel::apply_file`].
 #[must_use = "show the panel with `show`"]
 #[derive(Pattern)]

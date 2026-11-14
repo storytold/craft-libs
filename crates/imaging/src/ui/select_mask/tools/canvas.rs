@@ -238,7 +238,7 @@ fn build(tool: SelectMaskTool, options: &SelectMaskToolOptions, add: bool, point
 ///   `BrushLevel::Hardness` for the Brush; the size only for the others, `max_diameter` 5000).
 /// - Paint: the stroke as discs while the gesture is open, the outline and rectangle as marching ants, the polygon
 ///   with its rubber band; the brush outline is the pointer (`BrushCursor`). The resize preview is a canvas control
-///   the workspace shows from [`SelectMaskCanvas::resize`].
+///   the workspace shows from `SelectMaskCanvas::resize`.
 pub struct SelectMaskCanvasTool<'a> {
     canvas: &'a mut SelectMaskCanvas,
     tool: SelectMaskTool,

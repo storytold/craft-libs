@@ -25,7 +25,7 @@ pub enum PresetFooterEvent<K> {
     NewGroup,
     /// The Delete button.
     Delete,
-    /// A host action added with [`PresetFooter::action`] was pressed; `index` counts the host actions in the order
+    /// A host action added with `PresetFooter::action` was pressed; `index` counts the host actions in the order
     /// given.
     #[non_exhaustive]
     Custom {

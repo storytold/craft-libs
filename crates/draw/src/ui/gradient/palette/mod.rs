@@ -88,8 +88,8 @@ impl GradientRef {
 /// # });
 /// ```
 ///
-/// - A click, Space or Enter on a cell or row is one [`Set`](craft_ui::edit::EditEvent::Set) of its
-///   [`GradientRef`], also when it is the selected one. The palette keeps no pick state; [`selected`](Self::selected) only draws a
+/// - A click, Space or Enter on a cell or row is one `Set` of its
+///   [`GradientRef`], also when it is the selected one. The palette keeps no pick state; `selected` only draws a
 ///   ring (Grid) or the chosen fill (List).
 /// - The name is the tooltip and the accessible name. Recent entries are named "{label} N" and
 ///   have no tooltip.
@@ -98,7 +98,7 @@ impl GradientRef {
 ///   left; the gradients are not), Up and Down to the nearest cell in the row above or below
 ///   across group labels, Home and End to the first and last. In List, Up, Down, Home and End
 ///   move and Left and Right do nothing. A focus move scrolls the cell into view.
-/// - The area scrolls past [`max_height`](Self::max_height).
+/// - The area scrolls past `max_height`.
 /// - AccessKit: Grid is a `Group` named `label` with `Button` cells; List is a `ListBox` of
 ///   `ListBoxOption`s with `selected` on the chosen one. Cells carry their place and the set's
 ///   size. A screen reader's Focus action on a cell moves the palette's stop to it.

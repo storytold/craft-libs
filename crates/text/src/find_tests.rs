@@ -1,4 +1,6 @@
 //! Find patterns, replacements and the matches across pages.
+// Unwrapping, expecting and panicking on failure is fine in tests, unlike in shipped code.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use crate::find::{FindError, FindOptions, FindPattern, PARAGRAPH_MARK};
 use craft_ui::testing::trial;

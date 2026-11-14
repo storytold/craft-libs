@@ -131,7 +131,7 @@ pub fn reading_viewport(full: Rect, column: f32, gap: f32, scale: f32) -> Rect {
 }
 
 /// The turns a wheel scroll of `scroll` points makes, keeping the part of a turn not yet made in `carry`: one notch is
-/// one column, a touchpad's small steps add up; at most [`MOST_TURNS`] either way. Scrolling down turns forward.
+/// one column, a touchpad's small steps add up; at most `MOST_TURNS` either way. Scrolling down turns forward.
 pub fn wheel_turns(scroll: Vec2, carry: &mut f32) -> i32 {
     let along = scroll.x + scroll.y;
     if !along.is_finite() {
@@ -144,7 +144,7 @@ pub fn wheel_turns(scroll: Vec2, carry: &mut f32) -> i32 {
 }
 
 /// The columns a swipe from `start` to `end` turns (positive: forward), if it ran along the columns for
-/// [`SWIPE_SHARE`] of a column. `forward` is 1 (columns run to the right) or -1 (right to left): a swipe against the
+/// `SWIPE_SHARE` of a column. `forward` is 1 (columns run to the right) or -1 (right to left): a swipe against the
 /// columns' direction turns forward.
 pub fn swipe_turn(start: Pos2, end: Pos2, column: f32, forward: f32) -> i32 {
     let across = end.x - start.x;

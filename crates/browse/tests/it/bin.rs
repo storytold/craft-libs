@@ -63,8 +63,7 @@ impl BinModel<u32> for Project {
 fn dropped(view: BinView, down: f32) -> Option<Option<u32>> {
     let seen: Rc<RefCell<Vec<BinEvent<u32>>>> = Rc::default();
     let events = seen.clone();
-    let mut state = BinState::<u32>::default();
-    state.shown = Some(1);
+    let mut state = BinState::<u32> { shown: Some(1), ..Default::default() };
     state.settings.view = view;
     let mut fixture = Fixture::new(move |ui| {
         let other = [20u32];
@@ -79,11 +78,10 @@ fn dropped(view: BinView, down: f32) -> Option<Option<u32>> {
     let from = fixture.by_label("Old beach.mov").expect("the other list's row").center();
     let to = fixture.by_label("Beach.mov").expect("the bin's item").center() + vec2(0.0, down);
     fixture.drag_at(from, to - from).settle();
-    let found = seen.borrow().iter().find_map(|event| match event {
+    seen.borrow().iter().find_map(|event| match event {
         BinEvent::Drop { items, into } if items == &[20] => Some(*into),
         _ => None,
-    });
-    found
+    })
 }
 
 /// A drag from another list dropped on an item or on the empty background of the List and Icon views goes into the

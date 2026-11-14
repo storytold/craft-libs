@@ -60,7 +60,7 @@ pub enum Error {
     Woff2(#[from] woff2::Woff2Error),
 }
 
-/// Subsets `font` to `codepoints` (already through [`closure`]) at
+/// Subsets `font` to `codepoints` (already through [`closure`](fn@closure)) at
 /// `instance`, renames it for its licence and encodes it as WOFF2.
 pub fn subset(font: &[u8], codepoints: &BTreeSet<u32>, instance: &Instance, naming: &Naming, quality: Quality) -> Result<Vec<u8>, Error> {
     encode_woff2(&subset_renamed(font, codepoints, instance, naming)?, quality)

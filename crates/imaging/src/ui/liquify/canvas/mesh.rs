@@ -2,7 +2,7 @@
 
 use craft_behavior::kurbo::Point;
 
-/// The displaced mesh Show Mesh draws, from [`LiquifySource::mesh`](super::LiquifySource::mesh):
+/// The displaced mesh Show Mesh draws, from `LiquifySource::mesh`:
 /// `columns × rows` nodes in row order, in document pixels.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]

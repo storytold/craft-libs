@@ -72,7 +72,7 @@ pub trait GridModel {
 pub struct GridState {
     /// The selected cells.
     pub selection: CellSelection<u32>,
-    /// The zoom, within [`SHEET_ZOOM`]; 1.0 for a new sheet.
+    /// The zoom, within `SHEET_ZOOM`; 1.0 for a new sheet.
     pub zoom: f32,
     /// How far the cells are scrolled, in points at the zoom; a pinch keeps the cell under the pointer by moving it.
     pub scroll: ScrollPos,
@@ -114,7 +114,7 @@ impl CellEdit {
 #[non_exhaustive]
 pub enum GridEdit {
     /// A cell was opened for editing: typing replaced its content (`typed`), or F2 or a double click edits in place
-    /// (`None`). The app may show the draft in its formula bar from [`GridOutput::draft`].
+    /// (`None`). The app may show the draft in its formula bar from `GridOutput::draft`.
     #[non_exhaustive]
     BeginEdit {
         /// Replacement text typed on the grid; `None` edits in place.
@@ -168,7 +168,7 @@ pub enum GridEdit {
     },
     /// The fill handle dragged: the range the current selection grows to (the source plus the filled cells), as one
     /// gesture. `Update`s show the preview, `Commit` carries the range, `Cancel` (Esc) drops it. Cmd/Ctrl at the
-    /// commit swaps copying and extending a series ([`GridOutput::fill_swapped`]).
+    /// commit swaps copying and extending a series (`GridOutput::fill_swapped`).
     #[non_exhaustive]
     Fill {
         /// The range the selection grows to.
@@ -190,9 +190,9 @@ pub enum GridEdit {
         /// The pointer position in screen points.
         anchor: Pos2,
     },
-    /// Esc while [`CellGrid::copy_mark`] shows the marching ants: the app ends copy mode.
+    /// Esc while `CellGrid::copy_mark` shows the marching ants: the app ends copy mode.
     ClearCopyMark,
-    /// Enter while [`CellGrid::copy_mark`] shows the marching ants: paste what was copied at the active cell and end
+    /// Enter while `CellGrid::copy_mark` shows the marching ants: paste what was copied at the active cell and end
     /// copy mode.
     PasteAtActive,
     /// Copy the selection.

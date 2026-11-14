@@ -47,7 +47,7 @@ pub const CLIP_END: PartKey = PartKey::new("clipEnd");
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum TimelineTool {
-    /// Select, move, and trim at edges ([`selection_trim`](crate::clips::selection_trim)).
+    /// Select, move, and trim at edges ([`selection_trim`]).
     #[default]
     Selection,
     /// Ripple Edit: trims move later clips along.

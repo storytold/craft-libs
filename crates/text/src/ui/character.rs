@@ -348,7 +348,7 @@ impl Outcome for CharacterControlsOutput {
 ///   leading menu starts with an Auto row ([`Leading::Auto`]); while leading is Auto the field shows the font size
 ///   × 120 %. The kerning menu starts with Metrics and Optical; while either is the kerning the field shows its name,
 ///   and the name typed sets it.
-/// - Family: craft-font-manager's `FontPicker` with `font-picker` and [`font_picker`](Self::font_picker), else a
+/// - Family: craft-font-manager's `FontPicker` with `font-picker` and `font_picker`, else a
 ///   `Select` of `families`.
 /// - Toggles are toggle buttons in one row, pressed while on; Tab reaches each.
 /// - A mixed value shows an empty field or an unpressed toggle; typing or pressing sets it for the whole selection.

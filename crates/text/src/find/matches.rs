@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-/// One page's matches, as [`FindPattern::find_page`] finds them.
+/// One page's matches, as `FindPattern::find_page` finds them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PageMatches {
     /// The char ranges, in order, at most the search's limit.
@@ -76,7 +76,7 @@ impl FindMatches {
     }
 
     /// Replace page `page`'s matches with `found` (ranges sorted by start; a plain `Vec` of ranges
-    /// has not reached the limit, [`FindPattern::find_page`] says). The current match stays on
+    /// has not reached the limit, `FindPattern::find_page` says). The current match stays on
     /// the same page and range when it is still there; while following, the current match becomes
     /// the first at or after the search's start page. Returns whether the current match changed,
     /// so the app scrolls to it (only while following: a match the user already moved away from

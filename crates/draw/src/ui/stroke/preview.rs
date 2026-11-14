@@ -25,7 +25,7 @@ const MARGIN_SHARE: f32 = 0.15;
 /// [`shapes`](Self::shapes) in the text ink of the painter's surface.
 ///
 /// A style that fails [`StrokeStyle::validate`] draws nothing. The style's opacity applies to the
-/// ink ([`ink`](Self::ink)).
+/// ink (`ink`).
 pub struct StrokePreview<'a> {
     value: &'a StrokeStyle,
     width: f32,

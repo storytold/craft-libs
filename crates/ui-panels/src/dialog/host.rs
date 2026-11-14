@@ -626,7 +626,7 @@ impl DialogHost {
     }
 
     /// Whether any dialog is open or a startup modal waits: the app's shortcuts and canvas input
-    /// are blocked meanwhile ([`any_modal`](super::any_modal) answers for the frame).
+    /// are blocked meanwhile (`any_modal` answers for the frame).
     pub fn is_empty(&self) -> bool {
         self.open.is_empty() && self.queued.is_empty()
     }

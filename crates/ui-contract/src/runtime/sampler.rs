@@ -9,9 +9,9 @@
 //! up), for the root frame it is made in and the next, and only while the modal layer that made it is the top modal: a
 //! modal opened over it blocks the canvas again.
 //!
-//! One test answers a pointer input ([`Hole::answers`]): the point lies in the canvas and no layer lies over the
+//! One test answers a pointer input (`Hole::answers`): the point lies in the canvas and no layer lies over the
 //! canvas's own layer there (the dialog, a popup above it, a floating panel). The input hook keeps the events the
-//! reach admits ([`Hole::admits`]), `areas::layer_at` answers the canvas's layer where the test holds, the wheel and
+//! reach admits (`Hole::admits`), `areas::layer_at` answers the canvas's layer where the test holds, the wheel and
 //! sensing read it, and the scrim leaves the canvas clear and unabsorbed.
 
 use crate::runtime::egui::areas::{self, Layer};

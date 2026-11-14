@@ -1,11 +1,11 @@
 //! Injected input: pointer moves, clicks, keys and text an automation client asks for, and the event builders
 //! injected input and the trials' fixture share.
 //!
-//! A request appends frames of events to its viewport's queue. Each pass's input hook ([`input_hook`]) appends
+//! A request appends frames of events to its viewport's queue. Each pass's input hook (`input_hook`) appends
 //! the next frame, so a move, a press, a release and a key's down and up land on separate passes as real input
 //! does, and pass through the same input stages. A step stays in flight until a pass of its viewport has run. A
 //! step whose pass has not run is withdrawn when the focus changed since it was injected, and when the application
-//! withdraws the viewport's input because its document changed ([`withdraw`]). Screen points are egui points.
+//! withdraws the viewport's input because its document changed (`withdraw`). Screen points are egui points.
 
 use std::collections::{HashMap, VecDeque};
 

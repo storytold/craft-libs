@@ -14,7 +14,7 @@ pub enum ReplacePiece {
     /// match).
     Group(usize),
     /// `${name}` / `$name` with an expression; resolve it with [`resolve_group_names`] and
-    /// [`FindPattern::group_index`]; unresolved it expands to nothing.
+    /// `FindPattern::group_index`; unresolved it expands to nothing.
     Named(String),
     /// `^c`: the clipboard.
     Clipboard,

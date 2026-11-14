@@ -153,7 +153,7 @@ impl Patterns {
     }
 
     /// The number of patterns.
-    #[cfg(any(test, feature = "generator"))]
+    #[cfg(feature = "generator")]
     pub fn len(&self) -> usize {
         self.map.len()
     }
@@ -189,7 +189,7 @@ impl Patterns {
     }
 
     /// The patterns in TeX notation (sorted by letters), e.g. for writing a pattern file.
-    #[cfg(any(test, feature = "generator"))]
+    #[cfg(feature = "generator")]
     pub fn to_tex(&self) -> Vec<String> {
         let mut rev: Vec<(u8, char)> =
             (0u8..128).filter(|&c| self.alpha.ascii[c as usize] != 0).map(|c| (self.alpha.ascii[c as usize], c as char)).collect();

@@ -7,10 +7,10 @@
 //! The panel layout of a dock ([`Layout`]) is the persisted model: docked tree, floating windows, the actions that
 //! edit it and the rules that validate it.
 //!
-//! The query surface a renderer reads: [`Layout::place`] and [`Layout::places`] (where each panel sits),
+//! The query surface a renderer reads: [`Layout::place`] and `Layout::places` (where each panel sits),
 //! [`Layout::node_of`], [`Layout::column`] and [`Layout::group`] (the container at a place), [`Layout::dock_path`],
 //! [`Layout::edge_path`], [`Layout::edge_narrows`] and [`Layout::edge_anchor`] (the outer-edge frames),
-//! [`Layout::shape`] and [`Layout::same_arrangement`] (the structure without sizes), and the tree functions
+//! `Layout::shape` and [`Layout::same_arrangement`] (the structure without sizes), and the tree functions
 //! [`node_at`], [`first_active`] and [`tree_panels`]. Everything else in the editing files is private to the model.
 
 use crate::flow::Axis;

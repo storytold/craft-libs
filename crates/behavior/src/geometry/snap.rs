@@ -183,7 +183,7 @@ impl SnapTargets {
 
     /// Guides as full-height targets, grid lines of `spacing` from `origin` over `bounds`, the
     /// document bounds and centre: what every app has. Layers and the selection are added by
-    /// the app with [`add_rect`](Self::add_rect).
+    /// the app with `add_rect`.
     pub fn with_document(
         self,
         options: &SnapOptions,

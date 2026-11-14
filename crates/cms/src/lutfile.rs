@@ -283,7 +283,7 @@ pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
 /// `Mesh` line declares the cube edge (2^inBits + 1) and the output code range (up to
 /// 2^outBits − 1), and Photoshop honours both (#9073, #9078); without it the edge is the cube
 /// root of the row count and the range is inferred from the largest value (#9121). A shaper that
-/// isn't the even ramp is applied before the table, as Photoshop does (#8982): see [`apply_shaper`].
+/// isn't the even ramp is applied before the table, as Photoshop does (#8982): see `apply_shaper`.
 pub fn parse_3dl(text: &str) -> Result<LutFile, LutError> {
     let mut mesh: Option<(u32, u32)> = None;
     let mut rows: Vec<[f64; 3]> = Vec::new();

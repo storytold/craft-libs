@@ -26,7 +26,7 @@ pub enum ScopeView {
 pub struct ScopeSettings {
     /// The view.
     pub view: ScopeView,
-    /// The Channel key ([`ScopeChannel::key`] or [`COLORS_CHANNEL`]); empty or a key the mode
+    /// The Channel key (`ScopeChannel::key` or `COLORS_CHANNEL`); empty or a key the mode
     /// lacks shows the composite. Kept across views.
     pub channel: String,
     /// Show Channels in Color: single channels in Expanded and All Channels View in their colour
@@ -34,9 +34,9 @@ pub struct ScopeSettings {
     pub show_channels_in_color: bool,
     /// Show Statistics (on by default).
     pub show_statistics: bool,
-    /// The Source key ([`ScopeSource::key`]); empty is the first source.
+    /// The Source key (`ScopeSource::key`); empty is the first source.
     pub source: String,
-    /// Show Lab Color Readouts: the host passes [`ScopeReadout::Lab`].
+    /// Show Lab Color Readouts: the host passes `ScopeReadout::Lab`.
     pub lab_readouts: bool,
     /// Show Vectorscope.
     pub vectorscope: bool,

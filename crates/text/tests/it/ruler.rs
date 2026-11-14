@@ -18,8 +18,7 @@ fn focused<'a>(fixture: &Fixture, labels: &[&'a str]) -> Option<&'a str> {
 
 #[trial]
 fn the_ruler_is_one_tab_stop_whose_page_keys_pick_and_arrows_move() {
-    let mut start = RulerValues::default();
-    start.stops = vec![TabStop::new(72.0, TabAlign::Left, TabLeader::None)];
+    let start = RulerValues { stops: vec![TabStop::new(72.0, TabAlign::Left, TabLeader::None)], ..Default::default() };
     let values = Rc::new(RefCell::new(start));
     let shown = values.clone();
     let mut fixture = Fixture::new(move |ui| {

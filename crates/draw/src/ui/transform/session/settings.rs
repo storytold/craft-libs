@@ -83,16 +83,16 @@ impl Interpolation {
     }
 }
 
-/// A pick in the box's right-click menu ([`TransformSession::menu`]).
+/// A pick in the box's right-click menu (`TransformSession::menu`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum TransformChoice {
     /// Free Transform, Scale (as Free), Rotate, Skew, Distort, Perspective: apply as
-    /// [`TransformEdit::Mode`].
+    /// `TransformEdit::Mode`.
     Mode(TransformMode),
-    /// Warp: apply as [`TransformEdit::WarpRequested`].
+    /// Warp: apply as `TransformEdit::WarpRequested`.
     Warp,
-    /// Apply as [`TransformEdit::Preset`].
+    /// Apply as `TransformEdit::Preset`.
     Preset(TransformPreset),
 }
 
@@ -148,7 +148,7 @@ impl TransformSettings {
 }
 
 craft_ui::words! {
-    /// The words of the box's right-click menu ([`TransformSession::menu`]), Photoshop's and
+    /// The words of the box's right-click menu (`TransformSession::menu`), Photoshop's and
     /// PhotoCraft's order (`canvas_tool_menu.rs:75`).
     pub struct TransformMenuWords {
         free_transform: "transformMenu.freeTransform" = "Free Transform";

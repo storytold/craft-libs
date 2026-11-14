@@ -69,7 +69,7 @@ pub struct Manifest {
 impl Manifest {
     /// Reads a manifest. Elements are found by namespace, whatever prefix the file uses. What
     /// can't be read is left out: damaged XML gives the entries before the damage, and entries
-    /// past [`MAX_ENTRIES`] are dropped.
+    /// past `MAX_ENTRIES` are dropped.
     pub fn parse(xml: &[u8]) -> Manifest {
         let canonical = Canonical::new(&[("manifest", MANIFEST_NS)]);
         let (root, _) = Options::canonical(&canonical).parse_streaming_partial(xml, &[], |_| Ok::<(), craft_xml::Error>(()));
@@ -81,7 +81,7 @@ impl Manifest {
     /// Reads a manifest, refusing one a lenient read would repair: malformed or unbalanced
     /// XML, a document type declaration (of any kind), an undefined entity, text or a second
     /// element outside the root, a root that is not `manifest` in the manifest namespace, a
-    /// `file-entry` without a `full-path`, or more than [`MAX_ENTRIES`] entries. For a reader
+    /// `file-entry` without a `full-path`, or more than `MAX_ENTRIES` entries. For a reader
     /// that refuses a damaged package rather than open what it can.
     pub fn parse_strict(xml: &[u8]) -> Result<Manifest, Error> {
         let bad = |why: String| Error::Manifest(why);

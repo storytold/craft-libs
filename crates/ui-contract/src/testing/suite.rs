@@ -4,7 +4,7 @@
 //! A crate's integration binary calls [`trials`] once with its package name and `testing::registered()`, and hands
 //! the result to `libtest-mimic` beside its own `#[trial]` functions.
 //!
-//! The cases live in modules by family. A module exports `CASES`, its list of [`Case`]s; [`GROUPS`] puts the modules
+//! The cases live in modules by family. A module exports `CASES`, its list of `Case`s; `GROUPS` puts the modules
 //! in named groups, each a trial of its own, so a type's cases spread over the test threads. A new family of cases adds
 //! a module and puts it in a group.
 
@@ -196,7 +196,7 @@ fn run_group(probe: &'static Probe, group: &'static Group, check_exemptions: boo
 
 /// The trials of one package: a trial per registered type and group of cases, `suite::<type>::<group>`; the same for
 /// each type another linked package registers and this package has stories of, over those stories and without the
-/// cases about the type as a whole ([`Subject::home`]); and one per story naming a type that is not linked.
+/// cases about the type as a whole (`Subject::home`); and one per story naming a type that is not linked.
 pub fn trials(package: &'static str, registered: &[&'static Registration]) -> Vec<Trial> {
     let library = package.replace('-', "_");
     let own: Vec<_> = stories().into_iter().filter(|entry| entry.crate_name == package && entry.crate_target == library).collect();

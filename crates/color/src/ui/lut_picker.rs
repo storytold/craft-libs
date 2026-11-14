@@ -250,7 +250,7 @@ impl Component for LutPicker<'_> {
     }
 
     /// Moves the scan and Load 3D LUT… along: a finished scan replaces the list, a new scan starts at most every
-    /// [`RESCAN`] seconds, the picker's answer starts the read and a finished read is reported.
+    /// `RESCAN` seconds, the picker's answer starts the read and a finished read is reported.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let host = cx.env.host().cloned();
         let mut state = cx.memory::<LutState>().clone();

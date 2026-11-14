@@ -147,7 +147,7 @@ impl LiquifyBrush {
     }
 }
 
-/// Turns a press, drags and a release into one [`LiquifyStroke`] with its [`EditEvent`]s. Ui-free:
+/// Turns a press, drags and a release into one [`LiquifyStroke`] with its `EditEvent`s. Ui-free:
 /// the canvas tool feeds it document points.
 ///
 /// - [`begin`](Self::begin) starts a stroke of `tool` (its [`alternate`](LiquifyTool::alternate)

@@ -830,10 +830,8 @@ mod tests {
     /// Web Safe are checked as the state says, the copy commands carry no check.
     #[trial]
     fn color_panel_menu_checks_follow_the_state() {
-        let mut state = ColorPanelState::default();
-        state.mode = ColorPanelMode::CmykSliders;
-        state.ramp = ColorPanelRamp::GrayscaleRamp;
-        state.web_safe_ramp = true;
+        let state =
+            ColorPanelState { mode: ColorPanelMode::CmykSliders, ramp: ColorPanelRamp::GrayscaleRamp, web_safe_ramp: true, ..Default::default() };
         let checked: Vec<ColorPanelCommand> = ColorPanelMenu::states(&state)
             .into_iter()
             .map(|(command, _)| command)

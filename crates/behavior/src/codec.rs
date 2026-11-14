@@ -169,7 +169,7 @@ impl PartialEq for NumberCodec {
 }
 
 /// The decimal places a step needs to be written exactly: 2 for 0.25, 3 for 0.001, 0 for a whole step. A step with
-/// no finite decimal form within [`MAX_STEP_DECIMALS`] places gets that many.
+/// no finite decimal form within `MAX_STEP_DECIMALS` places gets that many.
 pub fn decimals_for_step(step: f64) -> usize {
     let step = step.abs();
     if !step.is_finite() || step == 0.0 {

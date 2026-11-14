@@ -11,6 +11,7 @@ use craft_timeline::{ExportOptions, Format, Imported, Report, detect_text};
 use craft_timeline::{FrameRate, Tick};
 use craft_ui::testing::trial;
 use proptest::prelude::*;
+#[allow(clippy::wildcard_imports, reason = "tests use most of the module under test and its helpers")]
 use support::*;
 
 const RATE: &str = "<rate><timebase>24</timebase><ntsc>TRUE</ntsc></rate>";

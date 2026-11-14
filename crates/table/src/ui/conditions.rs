@@ -200,7 +200,7 @@ impl craft_ui::contract::Outcome for ConditionBuilderOutput {
     }
 }
 
-/// The rules editor: "Match [all] of the following rules:", then a row per rule: field menu, operator menu, the value
+/// The rules editor: "Match `all` of the following rules:", then a row per rule: field menu, operator menu, the value
 /// editor for the field's kind ("and" between two values of a range), − (remove) and + (add a rule after it;
 /// Alt-click: a group). Nested groups indent with their own Match row and −, up to depth 3; "+ Rule" and "+ Group"
 /// at the bottom. Changing a field resets the operator and the value to the defaults. The builder reads `group` and

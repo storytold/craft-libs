@@ -1,5 +1,6 @@
 //! Version history rows.
 
+#[allow(clippy::wildcard_imports, reason = "tests use most of the module under test and its helpers")]
 use crate::versions::*;
 use craft_ui::testing::trial;
 

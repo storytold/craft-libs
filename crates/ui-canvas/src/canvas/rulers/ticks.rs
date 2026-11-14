@@ -64,7 +64,7 @@ impl StepLadder {
     }
 }
 
-/// Which tick table [`ticks`] follows.
+/// Which tick table `ticks` follows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum TickRule<'a> {
@@ -79,7 +79,7 @@ pub enum TickRule<'a> {
     Steps(StepLadder),
 }
 
-/// One tick of [`ticks`].
+/// One tick of `ticks`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct RulerTick {

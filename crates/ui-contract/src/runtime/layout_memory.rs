@@ -482,7 +482,7 @@ pub(crate) fn emit_shrink(ctx: &Context, id: Id, measured: Measured, dropped: bo
     emit(ctx, id, Recorded::Shrink(measured, dropped));
 }
 
-/// Hands forward a text a run found under `id` that content outside the body it runs in shows, as [`emit_record`]
+/// Hands forward a text a run found under `id` that content outside the body it runs in shows, as `emit_record`
 /// hands forward a measure: it serves the rest of this pass, and a later pass that takes the kept measurement of a body
 /// it ran in gets it with that measurement, where the content that found it does not run. A real run emits it too: a
 /// text other than the one a kept transcript gave the pass shows that transcript changed.

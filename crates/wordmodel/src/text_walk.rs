@@ -47,7 +47,7 @@ pub fn count_chars_no_spaces(s: &str) -> usize {
     s.chars().filter(|c| !c.is_whitespace()).count()
 }
 
-/// How deep in nested tables [`Document::para_paths`] goes: cells below this are skipped.
+/// How deep in nested tables `Document::para_paths` goes: cells below this are skipped.
 pub const PARA_WALK_DEPTH: usize = 16;
 
 /// The note and text box stories an object shows, for `Document::reachable`.
@@ -83,7 +83,7 @@ pub fn walk(bl: &Blocks, prefix: &mut Vec<u32>, out: &mut Vec<Path>, depth: usiz
     }
 }
 
-/// [`walk`] for the paragraphs from path `a` to `b` inclusive, skipping the blocks outside.
+/// `walk` for the paragraphs from path `a` to `b` inclusive, skipping the blocks outside.
 pub fn walk_between(bl: &Blocks, prefix: &mut Vec<u32>, out: &mut Vec<Path>, depth: usize, (a, b): (&[u32], &[u32])) {
     use std::cmp::Ordering::{Greater, Less};
     if depth > PARA_WALK_DEPTH {

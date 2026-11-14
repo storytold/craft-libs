@@ -219,7 +219,7 @@ pub const DEFAULT_GRID: f32 = 9.0;
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PagePicture {
-    /// Key into [`Document::media`].
+    /// Key into `Document::media`.
     pub media: String,
     /// `v:fill/@type` (`tile`, `frame`, `tile`...); tiled when `tile`, stretched to the page otherwise.
     pub fill_type: String,

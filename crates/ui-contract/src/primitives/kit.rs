@@ -842,7 +842,7 @@ impl ContentPainterCx<'_> {
         self.painter.extend(outline(self.tokens, shape));
     }
 
-    /// Paints the halo-and-line outline of `shapes` with the line in `line`; see [`outline_in`].
+    /// Paints the halo-and-line outline of `shapes` with the line in `line`; see `outline_in`.
     pub fn outline_in(&self, shapes: &[PaintShape], line: Color32) {
         self.painter.extend(outline_in(self.tokens, shapes, line));
     }

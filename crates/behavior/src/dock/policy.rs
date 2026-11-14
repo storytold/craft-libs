@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-/// What may happen to a panel. [`Layout::apply_with_permissions`] enforces these for every
+/// What may happen to a panel. `Layout::apply_with_permissions` enforces these for every
 /// action, whoever issues it. They also decide which gestures and menu items the renderer
 /// offers; a renderer hides the built-in close controls of a panel that stays closable by command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,7 +17,7 @@ pub struct Permissions {
     /// Other panels may join this panel's group as tabs.
     pub accepts_tabs: bool,
     /// Other panels may split this panel's frame (`DockPlacement::Split` with a side zone).
-    /// Outer-edge frames ([`DockPlacement::Edge`]) are not splits of the anchor.
+    /// Outer-edge frames (`DockPlacement::Edge`) are not splits of the anchor.
     pub accepts_splits: bool,
 }
 
@@ -84,7 +84,7 @@ impl Permissions {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DockError {
-    /// The layout is deeper or larger than [`MAX_DEPTH`] or [`MAX_PANELS`] allow.
+    /// The layout is deeper or larger than `MAX_DEPTH` or `MAX_PANELS` allow.
     LimitExceeded,
     /// A panel occurs in more than one place.
     DuplicatePanel,

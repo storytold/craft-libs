@@ -4,11 +4,11 @@
 //! admission budgets. This module correlates one screenshot command with one slot, checks the retained image
 //! against a per-image byte bound, and wakes the owning viewport.
 //!
-//! [`issue`] creates the slot, sends the screenshot command to the viewport and asks for a pass while the window
+//! `issue` creates the slot, sends the screenshot command to the viewport and asks for a pass while the window
 //! is hidden. The command's callback holds only a weak reference to the slot, so dropping or cancelling the
 //! request releases its image and makes late results inert.
 //!
-//! Every retry is a new [`issue`] call; a callback is one-shot, and a slot ignores completions after its result
+//! Every retry is a new `issue` call; a callback is one-shot, and a slot ignores completions after its result
 //! was taken, cancelled or dropped. The slot does not track whether a request is still open: the application's
 //! request record keeps that pending/closed distinction.
 //!

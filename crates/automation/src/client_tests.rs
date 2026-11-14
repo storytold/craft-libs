@@ -1,4 +1,6 @@
 //! Behaviour tests of `client`.
+// Unwrapping, expecting and panicking on failure is fine in tests, unlike in shipped code.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use craft_ui::testing::trial;
 use serde_json::json;

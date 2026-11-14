@@ -11,6 +11,7 @@ use craft_timeline::{ExportOptions, FcpxmlVersion, Format, Report, detect_text a
 use craft_timeline::{FrameRate, TICKS_PER_SECOND, Tick};
 use craft_ui::testing::trial;
 use proptest::prelude::*;
+#[allow(clippy::wildcard_imports, reason = "tests use most of the module under test and its helpers")]
 use support::*;
 
 /// Frame `n` at 23.976 as an FCPXML time, offset by `base` frames.

@@ -278,7 +278,7 @@ impl FindPattern {
         self.find_plain(text, limit)
     }
 
-    /// One page's matches for [`FindMatches::set_page`]: [`find_all`](Self::find_all) with
+    /// One page's matches for `FindMatches::set_page`: [`find_all`](Self::find_all) with
     /// `limit`, and whether the page had more than `limit` matches (the bar then counts "12+").
     pub fn find_page(&self, text: &str, limit: usize) -> PageMatches {
         let mut ranges = self.find_all(text, limit.saturating_add(1));
@@ -288,7 +288,7 @@ impl FindPattern {
     }
 
     /// The names of the pattern's named groups with their group numbers, in group order. Plain
-    /// patterns have none. [`resolve_group_names`] takes [`group_index`](Self::group_index).
+    /// patterns have none. `resolve_group_names` takes [`group_index`](Self::group_index).
     pub fn group_names(&self) -> Vec<(usize, &str)> {
         let Some(regex) = &self.regex else { return Vec::new() };
         regex.capture_names().enumerate().filter_map(|(index, name)| name.map(|name| (index, name))).collect()

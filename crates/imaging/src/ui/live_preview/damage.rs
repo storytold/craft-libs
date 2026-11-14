@@ -8,7 +8,7 @@ use super::session::LivePreview;
 
 impl LivePreview {
     /// The area to recomposite when the canvas switches from showing `from` to showing `to`, with
-    /// `visible` the document pixels the view shows ([`PixelRect::visible`]).
+    /// `visible` the document pixels the view shows (`PixelRect::visible`).
     ///
     /// - Both keys [`owns`](Self::owns) and not both [`PreviewKey::NONE`]: to a preview, the
     ///   region's visible part (remembered as covered for `to`, so [`uncovered`](Self::uncovered)

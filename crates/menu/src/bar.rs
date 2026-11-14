@@ -6,7 +6,7 @@
 //! mnemonic letter, Left and Right between menus), overflow into "…" or one "Menu", and AccessKit. Each item is a
 //! command row ([`crate::context::rows`]): its enabled state, check mark and chord follow the command, and a
 //! choice reaches the app as a fired command with [`craft_ui::runtime::commands::FireSource::Menu`].
-//! [`Builtin::Quit`] and [`Builtin::Minimize`] act on the root window through the runtime.
+//! `Builtin::Quit` and `Builtin::Minimize` act on the root window through the runtime.
 
 #[cfg(feature = "screen-testing")]
 mod stories;

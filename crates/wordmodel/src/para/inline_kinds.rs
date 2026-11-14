@@ -42,7 +42,7 @@ pub enum NoteKind {
     Endnote,
 }
 
-/// Where a positional tab ([`InlineObject::PositionalTab`]) lands on its line, and how the text
+/// Where a positional tab (`InlineObject::PositionalTab`) lands on its line, and how the text
 /// after it lines up there (ECMA-376 `ST_PTabAlignment`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

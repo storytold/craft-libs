@@ -16,7 +16,7 @@ use crate::palette::{SwatchColor, SwatchFormat, SwatchReport};
 /// The purpose of the swatch file pickers: their folder is remembered under it.
 const PICK_PURPOSE: &str = "swatches";
 
-/// What [`SwatchesPanel::apply_file`] did.
+/// What `SwatchesPanel::apply_file` did.
 #[derive(Debug)]
 #[non_exhaustive]
 #[must_use = "the host saves a changed library and shows the status message"]
@@ -77,7 +77,7 @@ impl SwatchesCommand {
 pub struct SwatchesMenuOutput {
     /// The library changed: the app saves it.
     pub changed: bool,
-    /// The file dialog the command asks the host for; the host answers with [`SwatchesPanel::apply_file`].
+    /// The file dialog the command asks the host for; the host answers with `SwatchesPanel::apply_file`.
     pub file: Option<PresetFileRequest>,
     /// The status message for a command that failed before it asked for a file.
     pub status: Option<StatusMessage>,

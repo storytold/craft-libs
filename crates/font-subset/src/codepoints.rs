@@ -60,7 +60,7 @@ pub fn canonical(text: &str) -> String {
 }
 
 /// Parses a canonical codepoint string. Anything that would not round-trip
-/// through [`format`] unchanged is rejected, so one set has one spelling.
+/// through [`format`](fn@format) unchanged is rejected, so one set has one spelling.
 pub fn parse(s: &str) -> Result<Vec<u32>, ParseError> {
     if s.is_empty() {
         return Ok(Vec::new());

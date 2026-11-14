@@ -266,7 +266,7 @@ pub struct CaptionColors {
     pub pressed: Rgba,
 }
 
-/// Bevel colours, used when `shape.edge` is [`Edge::Bevel`].
+/// Bevel colours, used when `shape.edge` is `Edge::Bevel`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct EdgeColors {
     /// The lit edge (top and left of a raised surface).

@@ -185,7 +185,7 @@ impl GuideUnits {
 pub struct GuideGroup {
     /// The group's check box.
     pub enabled: bool,
-    /// 1 to [`MAX_COUNT`].
+    /// 1 to `MAX_COUNT`.
     pub number: u32,
     /// Width of a column or height of a row; `None` shares the room out evenly.
     pub size: Option<GuideLength>,

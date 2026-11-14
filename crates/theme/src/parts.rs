@@ -316,7 +316,7 @@ impl Dimmed {
     }
 }
 
-/// The colours of a field's edge, per [`BorderState`].
+/// The colours of a field's edge, per `BorderState`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BorderColors {
     /// Idle.

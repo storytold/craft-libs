@@ -583,7 +583,7 @@ impl Updater {
     }
 
     /// Picks up a finished check or installation. Call once per frame, before [`Self::run`]. It
-    /// asks for the next pass every [`POLL_SECONDS`] while either is running.
+    /// asks for the next pass every `POLL_SECONDS` while either is running.
     pub fn tick(&mut self, ctx: &egui::Context) {
         if let Some(rx) = &self.check {
             match rx.try_recv() {

@@ -8,7 +8,7 @@
 //! - [`paths`]: the geometry of a document as Bézier paths in millimetres, for cutters, plotters
 //!   and CAD import.
 //! - [`color`]: CSS colours.
-//! - [`write`]: a writer for SVG documents, their path data and numbers.
+//! - [`write`](mod@write): a writer for SVG documents, their path data and numbers.
 //! - `tree` (feature `tree`): the full parser. usvg at the one version the Craft apps share,
 //!   re-exported, behind an entry point that runs the checks above before it parses.
 //!

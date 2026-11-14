@@ -106,7 +106,7 @@ fn is_cp1256_arabic(b: u8) -> bool {
 }
 
 /// Decodes the bytes of a text file with BOM-aware UTF-8 and UTF-16 handling. Without a BOM, valid UTF-8 is kept.
-/// Other bytes decode as Windows-1256 when they read as Arabic (see [`Cp1256Evidence`]), else as
+/// Other bytes decode as Windows-1256 when they read as Arabic (see `Cp1256Evidence`), else as
 /// Windows-1252.
 pub fn decode_text(bytes: &[u8]) -> String {
     if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {

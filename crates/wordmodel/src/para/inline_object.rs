@@ -376,7 +376,7 @@ impl InlineObject {
             _ => "",
         }
     }
-    /// Set a drawing's description (capped at [`MAX_ALT_TEXT`] characters); `false` if this is no drawing.
+    /// Set a drawing's description (capped at `MAX_ALT_TEXT` characters); `false` if this is no drawing.
     pub fn set_alt_text(&mut self, text: &str) -> bool {
         let text = cap_alt(text);
         match self {

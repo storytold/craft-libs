@@ -31,7 +31,7 @@ pub struct PopoverOutput {
     /// fade, while the closed popover's body still runs.
     pub open: bool,
     /// A press landed outside the popover, its opener and the popups opened from it while an
-    /// [`Outside::Keep`] rule kept it open: the caller decides whether that closes it.
+    /// `Outside::Keep` rule kept it open: the caller decides whether that closes it.
     pub pressed_outside: bool,
 }
 

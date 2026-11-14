@@ -527,7 +527,7 @@ pub enum WarpSplit {
 }
 
 /// A warp drag or nudge, in document units. A drag's `by` is the whole move from its press, which
-/// the host applies to the mesh it had at the press; a nudge's (a [`Set`](EditEvent::Set)) is
+/// the host applies to the mesh it had at the press; a nudge's (a `Set`) is
 /// one step from the mesh it has.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -551,7 +551,7 @@ pub enum WarpEdit {
         by: Vec2,
     },
     /// Insert lines of anchors: the host's mesh becomes [`WarpMesh::split`] of itself with these
-    /// arguments. Always a [`Set`](EditEvent::Set).
+    /// arguments. Always a `Set`.
     ///
     /// `thirds` is set when the cut is of a one-patch mesh that PhotoCraft's custom warp first
     /// divides at its thirds ([`WarpMesh::commit_thirds`]): the host applies that to its mesh

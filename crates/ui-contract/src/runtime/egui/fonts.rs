@@ -1,7 +1,7 @@
 //! The egui font calls only; the top-level `fonts` module owns the definitions, the providers and the coverage policy.
 //!
 //! One fonts plugin is registered per context, on first need. Its begin-pass hook runs the steps added with
-//! [`on_begin_pass`]; its output hook runs the on-demand scan. The plugin holds no state: the provider list, the steps
+//! `on_begin_pass`; its output hook runs the on-demand scan. The plugin holds no state: the provider list, the steps
 //! and the loader live in the runtime store.
 
 use std::sync::Arc;

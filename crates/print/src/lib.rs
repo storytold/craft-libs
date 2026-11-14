@@ -608,7 +608,7 @@ const DISCOVERY_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The printers the system knows (empty when there are none or no spooler): its queues, then the
 /// driverless destinations CUPS can print to without one. On CUPS neither question may take more
-/// than [`QUEUES_LIMIT`] and [`DISCOVERY_LIMIT`]: a scheduler that doesn't answer gives an empty
+/// than `QUEUES_LIMIT` and `DISCOVERY_LIMIT`: a scheduler that doesn't answer gives an empty
 /// list rather than a Print dialog that waits forever.
 pub fn printers() -> Vec<Printer> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]

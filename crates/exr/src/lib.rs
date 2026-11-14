@@ -12,11 +12,11 @@
 //!
 //! Those take names and attribute text and depend on no decoder. With the `decode` feature:
 //!
-//! - [`decode`]: bounded part listing, flat decoding (scan lines and tiles, every compression the
+//! - `decode`: bounded part listing, flat decoding (scan lines and tiles, every compression the
 //!   `exr` crate reads) and writing, on top of the `exr` crate.
-//! - [`deep`]: deep scan lines and tiles (NONE, RLE, ZIPS) and their flattening.
-//! - [`stream`]: one flat scan-line part read block by block, for pictures larger than memory.
-//! - [`cryptomatte_samples`]: a file's Cryptomatte layers and their per-pixel (ID, coverage) ranks.
+//! - `deep`: deep scan lines and tiles (NONE, RLE, ZIPS) and their flattening.
+//! - `stream`: one flat scan-line part read block by block, for pictures larger than memory.
+//! - `cryptomatte_samples`: a file's Cryptomatte layers and their per-pixel (ID, coverage) ranks.
 
 pub mod channels;
 pub mod cryptomatte;

@@ -11,7 +11,7 @@ pub const MAX_RANGE_TEXT: usize = 16_384;
 pub const MAX_EXPANDED: usize = 1_000_000;
 
 /// Why a range text can't be read. `Display` gives PdfCraft's English sentence; the field shows
-/// its translation ([`crate::ui::range::PageRangeLabels`]).
+/// its translation (`crate::ui::range::PageRangeLabels`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PageRangeError {
     /// `"{page}" is not a page number or label` (the token as typed).

@@ -297,7 +297,7 @@ impl Fixture {
     }
 
     /// Who draws the root window's frame. A native shell puts its menu bar in the window when the app draws the frame
-    /// ([`WindowChrome::Integrated`]), as the app's shell does.
+    /// (`WindowChrome::Integrated`), as the app's shell does.
     pub fn chrome(&mut self, chrome: craft_host::target::WindowChrome) -> &mut Self {
         crate::runtime::windows::set_chrome(&self.frames.ctx, chrome);
         self

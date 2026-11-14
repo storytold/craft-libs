@@ -14,7 +14,7 @@
 //!    [`DialogState::is_open`] turns false.
 //!
 //! Apps that import other applications' sets read each file into a
-//! [`ForeignSet`](craft_keymap::ForeignSet) and call [`ShortcutsDialog::review_import`].
+//! [`ForeignSet`] and call [`ShortcutsDialog::review_import`].
 //!
 //! ```rust,ignore
 //! use craft_menu::shortcuts::{DialogState, Options, Outcome, ShortcutsDialog};

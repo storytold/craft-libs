@@ -206,7 +206,7 @@ struct Settled {
 
 impl<'a> Canvas<'a> {
     /// A canvas named `label`. The keyboard path of its tool is the tool's own
-    /// ([`CanvasTool::command_form`](CanvasTool::command_form)).
+    /// ([`CanvasTool::command_form`]).
     pub fn new(label: impl Into<Label>) -> Self {
         let props = ContainerProps::new().surface(SurfaceKind::Canvas).arena(true).sizing(Sizing::Fill).command_scope(ViewCommands::SCOPE);
         Canvas {

@@ -123,7 +123,7 @@ pub enum WebView {
     /// Original beside the current settings' encode.
     #[default]
     TwoUp,
-    /// Original, the current settings and two cheaper variants ([`four_up_variants`]).
+    /// Original, the current settings and two cheaper variants (`four_up_variants`).
     FourUp,
 }
 
@@ -252,7 +252,7 @@ impl WebPreset {
 pub struct WebVariant {
     /// Which pane: 0 is the current settings, 1 and 2 the 4-Up variants.
     pub index: usize,
-    /// The revision [`WantedVariant::revision`] gave; older answers are dropped.
+    /// The revision `WantedVariant::revision` gave; older answers are dropped.
     pub revision: u64,
     /// The encoded picture, drawn at `size` in document pixels (a reduced proxy texture is drawn at the full size),
     /// or why the encode failed.

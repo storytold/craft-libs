@@ -39,7 +39,7 @@ pub enum PartKind {
 /// (ECMA-376 §17.11: the `w:footnote`/`w:endnote` entries of type `separator`,
 /// `continuationSeparator` and `continuationNotice`). `None` = the default: a short line above
 /// the notes, a line across the column above notes continued from the page before, no notice.
-/// The lines themselves are [`InlineObject::note_separator`] objects in the paragraphs.
+/// The lines themselves are `InlineObject::note_separator` objects in the paragraphs.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct NoteSeparators {
@@ -77,7 +77,7 @@ pub struct TextBody {
     pub anchor: props::VAlign,
     /// Create Link: the text box (another `TextBox` part, shown by its own shape) the text
     /// continues in when it doesn't fit this one. The linked box shows the rest of this box's
-    /// story; its own blocks are unused. See [`Document::text_box_chains`].
+    /// story; its own blocks are unused. See `Document::text_box_chains`.
     pub next: Option<u32>,
     /// Internal margins (left, top, right, bottom), EMU, when the file gives its own
     /// (`wps:bodyPr` `lIns`… ECMA-376 Part 1 §21.1.2.1.1, or VML `v:textbox` `inset`);
@@ -113,7 +113,7 @@ impl TextBody {
 /// Most boxes one chain of linked text boxes runs through (hostile files).
 pub const MAX_LINKED_BOXES: usize = 256;
 
-/// A range that stays editable while the document is protected; see [`Document::perm_ranges`].
+/// A range that stays editable while the document is protected; see `Document::perm_ranges`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PermRange {
     pub id: u32,

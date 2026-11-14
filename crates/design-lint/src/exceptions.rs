@@ -58,7 +58,7 @@ const MILESTONES_FILE: &str = "milestones.toml";
 pub struct Entry {
     /// Unique name.
     pub name: String,
-    /// One of [`KINDS`].
+    /// One of `KINDS`.
     pub kind: String,
     /// Rule id, family or `*`.
     pub rule: String,

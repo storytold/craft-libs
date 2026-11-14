@@ -634,7 +634,7 @@ pub fn chartex_xml(c: &Chart) -> Option<Vec<u8>> {
     chartex_part(c).map(|(x, _)| x)
 }
 
-/// [`chartex_xml`], and whether it is the original part (so its kept relationships still apply).
+/// `chartex_xml`, and whether it is the original part (so its kept relationships still apply).
 pub fn chartex_part(c: &Chart) -> Option<(Vec<u8>, bool)> {
     kept_chartex(c).map(|x| (x, true)).or_else(|| c.kind.is_chartex().then(|| (build_chartex(c), false)))
 }

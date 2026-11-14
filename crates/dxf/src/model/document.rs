@@ -227,7 +227,7 @@ pub struct Layout {
     pub name: String,
     /// Group 71: the tab's place (0 for model space).
     pub tab_order: i64,
-    /// The BLOCK_RECORD that holds the layout's entities ([`Document::block_name`]).
+    /// The BLOCK_RECORD that holds the layout's entities (`Document::block_name`).
     pub block_record: Option<u64>,
     /// Groups 10/20 and 11/21: the limits, when both corners are given.
     pub limits: Option<([f64; 2], [f64; 2])>,

@@ -5,7 +5,7 @@ use crate::ui::scopes::clipping::ClippingFrame;
 use crate::ui::scopes::vectorscope::VectorscopeFrame;
 
 /// The Channel key of [`HistogramSet::colors`]'s overlay entry, kept in
-/// [`ScopeSettings::channel`].
+/// `ScopeSettings::channel`.
 pub const COLORS_CHANNEL: &str = "colors";
 
 /// One channel's counted histogram, as the host counted it (colour management and the count are
@@ -13,7 +13,7 @@ pub const COLORS_CHANNEL: &str = "colors";
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ScopeChannel<'a> {
-    /// A stable key ("rgb", "red", "cyan", "luminosity" …), kept in [`ScopeSettings::channel`].
+    /// A stable key ("rgb", "red", "cyan", "luminosity" …), kept in `ScopeSettings::channel`.
     /// The first channel of a [`HistogramSet`] is the composite.
     pub key: &'a str,
     /// The name in the Channel list and the value text, translated by the host ("Red",
@@ -108,7 +108,7 @@ impl<'a> HistogramSet<'a> {
 }
 
 /// A sample under the pointer, for the hover readout badge, in the form
-/// [`ScopeSettings::lab_readouts`] asks for (the host does the colour management).
+/// `ScopeSettings::lab_readouts` asks for (the host does the colour management).
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum ScopeReadout {
@@ -135,7 +135,7 @@ impl<'a> ScopeFrame<'a> {
         Self { histogram, vectorscope: None, clipping: None, readout: None }
     }
 
-    /// The vectorscope's counts; shown under the plot while [`ScopeSettings::vectorscope`] is on.
+    /// The vectorscope's counts; shown under the plot while `ScopeSettings::vectorscope` is on.
     pub fn vectorscope(mut self, vectorscope: VectorscopeFrame<'a>) -> Self {
         self.vectorscope = Some(vectorscope);
         self
@@ -158,7 +158,7 @@ impl<'a> ScopeFrame<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ScopeSource<'a> {
-    /// A stable key, kept in [`ScopeSettings::source`].
+    /// A stable key, kept in `ScopeSettings::source`.
     pub key: &'a str,
     /// The name, translated by the host.
     pub label: &'a str,

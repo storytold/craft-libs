@@ -2,7 +2,7 @@
 //! its accessibility node. A container describes each divider as a [`Divider`] in reading order and applies the
 //! coordinate the drag or the keys ask for; this module owns everything that is the same for all of them, including
 //! the mirroring for right-to-left. A component that draws its own dividers (a column bar, a margin handle) calls
-//! [`declare`] in its parts, [`pointer`] and [`keys`] in its update, and [`describe`] in its access, and declares `KeyUse::SPLITTER` for the arrow keys.
+//! [`declare`] in its parts, `pointer` and [`keys`] in its update, and [`describe`] in its access, and declares `KeyUse::SPLITTER` for the arrow keys.
 
 use crate::contract::{Access, Component, Cx, Focus as _, Name, Numeric, PartsCx, Pointer as _, Role};
 use craft_behavior::dock::DockEdge;

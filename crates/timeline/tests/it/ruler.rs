@@ -60,9 +60,7 @@ fn split_edit_marks_sit_under_the_tick_labels_video_above_audio() {
     let mut fixture = Fixture::new(|ui| {
         let mut view = TimeView::new(Tick::ZERO, POINTS_PER_SECOND);
         let mut playhead = Tick::ZERO;
-        let mut marks = SplitMarks::default();
-        marks.video_in = Some(Tick::from_seconds_f64(2.0));
-        marks.audio_in = Some(Tick::from_seconds_f64(2.0));
+        let marks = SplitMarks { video_in: Some(Tick::from_seconds_f64(2.0)), audio_in: Some(Tick::from_seconds_f64(2.0)), ..Default::default() };
         let format = TimeFormat::timecode(FrameRate::FPS_30);
         TimelineView::new("Time", Bind::bound(&mut view), format, Tick::from_seconds_f64(60.0)).strip().show(ui, |ui, _| {
             TimelineRuler::new("Time ruler", Bind::bound(&mut playhead)).split_marks(marks).show(ui);

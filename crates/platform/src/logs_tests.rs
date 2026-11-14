@@ -1,4 +1,7 @@
 //! Behaviour tests of `logs`.
+// Unwrapping, expecting and panicking on failure is fine in tests, unlike in shipped code.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use super::*;
 
 const NAMES: LogNames = LogNames::new("photocraft");

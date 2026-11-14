@@ -6,15 +6,15 @@
 //! - [`access`]: the AccessKit description of the text on the pages.
 //! - [`setup`]: [`PageSetupDialog`] and [`PageLayoutMenus`].
 //! - [`margins`]: [`MarginHandles`] on the rulers.
-//! - [`header_footer`](self::header_footer): [`HeaderFooterZones`].
+//! - [`header_footer`]: [`HeaderFooterZones`].
 //! - [`range`]: [`PageRangeField`] and [`PageRangeOptions`].
 //! - [`text_selection`]: [`TextSelectTool`], a canvas tool over the app's [`PageTexts`].
-//! - [`preview`](self::preview): [`PagePreview`].
+//! - [`preview`]: [`PagePreview`].
 //! - [`marks`]: [`TextFrameMarks`], hidden characters and frame extras.
-//! - [`column_bar`](self::column_bar): [`ColumnBar`].
-//! - [`reading`](self::reading): [`ReadingView`].
+//! - [`column_bar`]: [`ColumnBar`].
+//! - [`reading`]: [`ReadingView`].
 //! - [`list`]: [`PageList`], pages and artboards.
-//! - [`sync_views`](self::sync_views): [`SyncedViews`].
+//! - [`sync_views`]: [`SyncedViews`].
 //! - [`grid`]: [`PageGrids`], margins, columns and baseline grid.
 //! - [`table`]: [`EdgePicker`], [`TableProperties`], [`TableSizePicker`], [`CellSelectionOverlay`].
 

@@ -10,6 +10,7 @@ use craft_timeline::{ExportOptions, Format, detect_text as detect};
 use craft_timeline::{FrameRate, TICKS_PER_SECOND, Tick};
 use craft_ui::testing::trial;
 use proptest::prelude::*;
+#[allow(clippy::wildcard_imports, reason = "tests use most of the module under test and its helpers")]
 use support::*;
 
 fn rt(v: f64, rate: f64) -> String {

@@ -180,7 +180,7 @@ struct Hold {
     frame: Option<Arc<egui::ColorImage>>,
 }
 
-/// The state of the screen picker. The app keeps one, and ticks and [`show`](Self::show)s it once per pass after its UI.
+/// The state of the screen picker. The app keeps one, and ticks and `show`s it once per pass after its UI.
 ///
 /// - One pick runs at a time, owned by the key that asked: only the owner [`take`](Self::take)s its colour, even
 ///   after the popover that asked has closed.

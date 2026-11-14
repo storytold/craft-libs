@@ -42,7 +42,7 @@ pub enum DockPlacement<P> {
     },
     /// A new group above or below the anchor's group in a dock column. On an anchor in a
     /// floating window, a split of the anchor's group above or below.
-    /// `height` is the inserted group's preferred height ([`Group::height`]); `None`
+    /// `height` is the inserted group's preferred height (`Group::height`); `None`
     /// keeps a moved group's own height, or shares the free height for a new group.
     #[non_exhaustive]
     Group {
@@ -61,7 +61,7 @@ pub enum DockPlacement<P> {
     /// A new frame along one edge of the docked layout, a quarter of its width or height: the
     /// root is split, or in a layout with docks, the part between them. The anchor names any
     /// docked panel. A protected anchor ([`Permissions::is_protected`], applied through
-    /// [`Layout::apply_with_permissions`]) narrows the part to the canvas column: where neither
+    /// `Layout::apply_with_permissions`) narrows the part to the canvas column: where neither
     /// side of a side-by-side split is a dock and only one holds a protected panel, that side;
     /// for `Top` (`Bottom`), also the first (last) row of a split of rows when only that row
     /// holds one. `Center` is invalid.
@@ -209,8 +209,8 @@ pub enum Action<P> {
     },
     /// Move the dock group containing `panel` one place up or down its column, past the
     /// neighbouring group. Fails for a group that is not docked in a column
-    /// ([`DockError::InvalidPlacement`]), at the column's end ([`DockError::MissingTarget`]), or
-    /// beside a group that cannot move ([`DockError::NotAllowed`]; a canvas is never stepped past).
+    /// (`DockError::InvalidPlacement`), at the column's end (`DockError::MissingTarget`), or
+    /// beside a group that cannot move (`DockError::NotAllowed`; a canvas is never stepped past).
     #[non_exhaustive]
     StepGroup {
         /// The panel the action applies to.

@@ -117,7 +117,7 @@ fn unescape_in(text: &str, attr: bool) -> String {
 }
 
 /// The character a reference names and the bytes it takes, given the text after its `&`
-/// (`attr`: inside an attribute value, see [`unescape_attr`]). At most [`MAX_NAME`] bytes are
+/// (`attr`: inside an attribute value, see [`unescape_attr`]). At most `MAX_NAME` bytes are
 /// looked at for a name, so a text of stray `&`s is read in linear time.
 pub fn reference(s: &str, attr: bool) -> Option<(char, usize)> {
     if let Some(num) = s.strip_prefix('#') {

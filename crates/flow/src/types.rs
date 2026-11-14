@@ -58,7 +58,7 @@ pub enum Dropped {
     Font,
     /// A link target over [`MAX_LINK`].
     Link,
-    /// Runs' links and fonts past [`MAX_RUN_STRINGS`].
+    /// Runs' links and fonts past `MAX_RUN_STRINGS`.
     RunStrings,
     /// A style name cut to [`MAX_FONT_NAME`].
     StyleName,
@@ -130,10 +130,10 @@ pub struct Fmt {
     pub background: Option<Rgb>,
     /// Tracked insertion of this text (formats that keep revisions: RTF).
     pub ins: Option<RevMark>,
-    /// Tracked deletion of this text. Only [`from_doc_tracked`] keeps deleted text in a flow.
+    /// Tracked deletion of this text. Only `from_doc_tracked` keeps deleted text in a flow.
     pub del: Option<RevMark>,
     /// Tracked formatting change of this text: who made it and the formatting before it (only
-    /// [`from_doc_tracked`] and formats that keep revisions set it).
+    /// `from_doc_tracked` and formats that keep revisions set it).
     pub fmt_change: Option<Box<FmtChange<Fmt>>>,
     /// Formatting beyond the fields above, for formats that keep it (ODT): underline style and
     /// colour, double strike, caps, small caps, hidden, spacing, scale, position, outline,
@@ -155,7 +155,7 @@ pub struct RevMark {
     pub author: String,
     pub date: String,
     /// The source's identity of the change, when it has one (an ODT changed region; the
-    /// revision index in [`from_doc_tracked`]): marks with different ids stay separate
+    /// revision index in `from_doc_tracked`): marks with different ids stay separate
     /// revisions. `None` (RTF) = one revision per kind, author and date.
     pub id: Option<u32>,
 }
@@ -687,7 +687,7 @@ pub struct Para {
     pub section: Option<Box<craft_wordmodel::SectionProps>>,
     /// Tracked insertion of the paragraph mark.
     pub mark_ins: Option<Box<RevMark>>,
-    /// Tracked deletion of the paragraph mark (only [`from_doc_tracked`] and formats that keep
+    /// Tracked deletion of the paragraph mark (only `from_doc_tracked` and formats that keep
     /// revisions set it).
     pub mark_del: Option<Box<RevMark>>,
     /// Tracked formatting change of the paragraph: the paragraph's formatting before it (kind,
@@ -957,7 +957,7 @@ pub struct TableExtra {
     /// Its own space above and below, points (ODT's table margins).
     pub space: [Option<f32>; 2],
     /// How many rows at its top repeat at the top of each page (Word's Repeat as header row;
-    /// ODT's `table:table-header-rows`). Its header cells ([`FCell::header`]) may be more: a
+    /// ODT's `table:table-header-rows`). Its header cells (`FCell::header`) may be more: a
     /// table style's header row is one too.
     pub header_rows: usize,
 }

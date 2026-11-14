@@ -3,7 +3,7 @@
 //! - [`gradient`]: the gradient stop bar ([`GradientEditor`]), its palette and swatch, the stop
 //!   rules ([`gradient::stops`]), the on-canvas [`GradientOverlay`] with the geometry of its
 //!   line ([`gradient::gradient_line`]) and the [`GradientMapEditor`].
-//! - [`pen`]: the [`PenDraft`] of the Pen tool and the [`BezierOverlay`] that edits paths, with the
+//! - [`pen`]: the `PenDraft` of the Pen tool and the [`BezierOverlay`] that edits paths, with the
 //!   path model they share ([`EditPath`]), and the [`PathOptionsPopover`].
 //! - [`stroke`]: the [`StrokeEditor`], the [`StrokeButton`] that opens it and the [`StrokePreview`].
 //! - [`corner`]: the [`CornerWidgets`] for corner radii.
@@ -18,9 +18,9 @@
 //! - [`mod@slice`]: the [`SliceTool`], its [`SliceOverlay`], [`SliceBar`] and dialogs.
 //! - [`artboard`] and [`add_beside`]: the [`ArtboardTool`], its [`ArtboardBar`] and
 //!   [`ArtboardProperties`]; the add-beside buttons ([`AddBesideHandles`], a canvas control).
-//! - [`connector`]: the [`ConnectorTool`], its [`ConnectorOverlay`] and [`ConnectorBar`].
+//! - [`connector`]: the [`ConnectorTool`], its `ConnectorOverlay` and [`ConnectorBar`].
 //! - [`pattern`] and [`picture_fill`]: the [`PatternFillEditor`] and [`PictureFillEditor`].
-//! - [`brush_presets`] and [`brush_settings`]: the [`BrushPresetPicker`], [`BrushPresetChip`] and
+//! - [`brush_presets`] and [`brush_settings`]: the [`BrushPresetPicker`], `BrushPresetChip` and
 //!   [`BrushSettingsPanel`].
 //!
 //! The main types of each module are also re-exported here.

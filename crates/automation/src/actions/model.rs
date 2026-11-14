@@ -91,7 +91,7 @@ impl ActionColor {
     }
 
     /// The [`LabelColor`] this colour is, for the shared colour words
-    /// ([`LabelColorLabels::name`](craft_ui::localized::LabelColorLabels::name)); `None` for no
+    /// (`LabelColorLabels::name`); `None` for no
     /// colour.
     pub const fn label_color(self) -> Option<LabelColor> {
         match self {

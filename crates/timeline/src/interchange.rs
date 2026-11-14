@@ -976,7 +976,7 @@ impl Format {
     }
 }
 
-/// Error from an importer or exporter. Unsupported *features* never error; they go in the [`Report`].
+/// Error from an importer or exporter. Unsupported *features* never error; they go in the `Report`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// The document cannot be read as its format.

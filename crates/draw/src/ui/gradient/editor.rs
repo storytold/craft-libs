@@ -65,8 +65,8 @@ impl<P> Outcome for GradientEditorOutput<P> {
 
 /// Edits a gradient's stops: `GradientEditor::new("Gradient", Bind::bound(&mut stops)).show(ui)`.
 ///
-/// The bar fills the width offered. [`StopRows::Split`] rows, top to bottom: opacity markers (their midpoints just
-/// above the ramp), the ramp, the colour midpoints, colour markers; [`StopRows::Combined`]: the midpoints, the ramp,
+/// The bar fills the width offered. `StopRows::Split` rows, top to bottom: opacity markers (their midpoints just
+/// above the ramp), the ramp, the colour midpoints, colour markers; `StopRows::Combined`: the midpoints, the ramp,
 /// colour markers. The bar keeps its geometry right to left: the ramp is the gradient, not reading order.
 ///
 /// Pointer: a press on a marker or diamond selects and grabs it without a jump; a drag moves it (stops pass their

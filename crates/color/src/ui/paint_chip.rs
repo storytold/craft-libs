@@ -232,7 +232,7 @@ impl Outcome for PaintChipOutput {
 ///   from bottom start to top end; a pattern tiles its texture at 1:1; a picture is stretched.
 /// - Click, Enter or Space opens a popover under the chip: a segmented No Color / Solid / Gradient / Pattern /
 ///   Picture switch (No Color unless [`none_allowed`](Self::none_allowed) is off; Gradient, Pattern and Picture only
-///   when the host gave their editor), then the Compact [`ColorPicker`] (Solid, with the screen eyedropper) or the
+///   when the host gave their editor), then the Compact `ColorPicker` (Solid, with the screen eyedropper) or the
 ///   host's editor. Switching to Solid starts from the last solid colour (or the fallback), to Gradient, Pattern
 ///   or Picture from the host's default.
 /// - Edits: a switch is a `Set`; picker gestures report as the picker does. A screen sample keeps alpha.

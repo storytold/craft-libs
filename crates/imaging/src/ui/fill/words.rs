@@ -54,7 +54,7 @@ craft_ui::words! {
         stroke_limit: count "fill.limitStrokes" = "at most {n} sampling stroke: undo some, or reset the sampling area" | "at most {n} sampling strokes: undo some, or reset the sampling area";
         /// The lasso edit limit's sentence ([`FillLimit::LassoEdits`](super::FillLimit::LassoEdits)).
         lasso_edit_limit: count "fill.limitLassoEdits" = "at most {n} lasso edit: undo some, or reset the fill area" | "at most {n} lasso edits: undo some, or reset the fill area";
-        /// The points limit's sentence ([`FillLimit::Vertices`](super::FillLimit::Points)).
+        /// The points limit's sentence (`FillLimit::Vertices`).
         point_limit: count "fill.limitPoints" = "at most {n} point in all sampling strokes and lasso edits: undo some, or reset" | "at most {n} points in all sampling strokes and lasso edits: undo some, or reset";
     }
 }

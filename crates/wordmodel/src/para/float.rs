@@ -171,7 +171,7 @@ pub struct Float {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wrap_polygon: Option<std::sync::Arc<crate::wrap::WrapPolygon>>,
     /// What the drawing is, for screen readers and exports (`wp:docPr` `@descr`, `@title` and the
-    /// decorative mark). See [`InlineObject::alt_text`].
+    /// decorative mark). See `InlineObject::alt_text`.
     #[serde(skip_serializing_if = "AltText::is_empty")]
     pub alt: AltText,
     /// Hidden (`wp:docPr/@hidden`, VML `visibility:hidden`): kept and saved, but neither drawn nor
@@ -206,7 +206,7 @@ pub const MAX_ALT_TEXT: usize = 10_000;
 #[serde(default, rename_all = "camelCase")]
 pub struct AltText {
     /// The description of a shape, text box or group. Pictures and charts keep theirs in their
-    /// own `alt`; read it with [`InlineObject::alt_text`], which knows where it is.
+    /// own `alt`; read it with `InlineObject::alt_text`, which knows where it is.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub text: String,
     /// The short title (`wp:docPr/@title`).

@@ -24,7 +24,7 @@ pub struct MaskViewControlsOutput {
 /// key), the current view's Opacity in percent (0 to 100, only for the four views that have one), the Show Edge and
 /// Show Original check boxes, and the hint line in the caption role.
 ///
-/// Remember Settings and the Refine Edge Brush controls are the workspace's. The keys are [`MaskViewKeys`]
+/// Remember Settings and the Refine Edge Brush controls are the workspace's. The keys are `MaskViewKeys`
 /// (super::MaskViewKeys), which the workspace forwards to [`MaskViewState::run`].
 #[must_use = "show the controls with `show`"]
 #[derive(Pattern)]

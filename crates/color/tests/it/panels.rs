@@ -38,8 +38,7 @@ impl PanelRig {
     }
 
     fn in_room(mode: ColorPanelMode, room: Vec2) -> Self {
-        let mut start = ColorPanelState::default();
-        start.mode = mode;
+        let start = ColorPanelState { mode, ..Default::default() };
         let state = Rc::new(RefCell::new(start));
         let colors = Rc::new(Cell::new([RED, BLUE]));
         type Shared = (Edits, Rc<RefCell<Vec<ColorRequest>>>, Rc<RefCell<Vec<PanelTarget>>>);
