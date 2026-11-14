@@ -3082,3 +3082,58 @@ fn formatting_runs_break_where_the_chpx_changes() {
     // (the run from the field to CP 20), "d(ee" italic.
     assert_eq!(shape, [(4, Some(true), None), (7, None, None), (3, Some(true), None), (4, None, Some(true))], "{shape:?}");
 }
+
+/// Measured in Word for Windows on .doc files Word saved: Thai text takes the complex-script font
+/// and size only in a run that is complex script or right to left by its own properties
+/// (sprmCFComplexScripts, sprmCFBiDi) or its paragraph style; a character style saying so
+/// doesn't count, and a run saying it isn't overrides its paragraph style. Elsewhere the text
+/// takes the run's other font and size, as in a DOCX.
+#[test]
+fn thai_text_takes_the_complex_script_formatting_only_in_a_complex_script_run() {
+    let on = &[0x01u8][..];
+    let off = &[0x00u8][..];
+    // Normal: 10 pt, complex script 20 pt (sprmCHps, sprmCHpsBi); fonts Angsana New and Tahoma.
+    let normal = |extra: &[(u16, &[u8])]| {
+        let mut prls: Vec<(u16, &[u8])> = vec![(0x4A43, &[20, 0]), (0x4A61, &[40, 0])];
+        prls.extend_from_slice(extra);
+        grpprl(&prls)
+    };
+    let read_case = |normal_extra: &[(u16, &[u8])], run: &[(u16, &[u8])]| {
+        let spec = RichSpec {
+            text: "\u{e17}\u{e14}\u{e2a}\u{e2d}\u{e1a}\r",
+            styles: vec![(1, 0x0FFF, "Normal", Vec::new(), normal(normal_extra)), (2, 0x0FFF, "CsChar", Vec::new(), grpprl(&[(0x0882, on)]))],
+            fonts: vec!["Angsana New", "Tahoma"],
+            chpx_runs: vec![(0, grpprl(run))],
+            papx_entries: vec![(0, 0, Vec::new())],
+        };
+        let doc = read(&rich_doc_with(&spec, &RichExtra { standard_fonts: Some([0, 0, 0, 1]), ..Default::default() })).expect("opens");
+        let p = para0(&doc);
+        let rc = doc.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+        let complex = rc.uses_complex('\u{e17}');
+        let (font, size) = if complex { (rc.font_cs.clone(), rc.size_cs) } else { (rc.font.clone(), rc.size) };
+        (font, size)
+    };
+    let plain = (String::from("Angsana New"), 10.0);
+    let cs = (String::from("Tahoma"), 20.0);
+    let istd_cs_char: &[u8] = &[1, 0];
+    for (what, normal_extra, run, want) in [
+        ("plain", vec![], vec![], &plain),
+        ("the run's sprmCFComplexScripts", vec![], vec![(0x0882u16, on)], &cs),
+        ("the run's sprmCFBiDi", vec![], vec![(0x085A, on)], &cs),
+        ("Normal's sprmCFComplexScripts", vec![(0x0882u16, on)], vec![], &cs),
+        ("a character style's sprmCFComplexScripts", vec![], vec![(0x4A30, istd_cs_char)], &plain),
+        ("Normal complex script, the run not", vec![(0x0882, on)], vec![(0x0882, off)], &plain),
+    ] {
+        assert_eq!(&read_case(&normal_extra, &run), want, "{what}");
+    }
+    // The complex-script bold and italic are read too.
+    let spec = RichSpec {
+        text: "\u{e17}\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
+        fonts: vec!["Angsana New"],
+        chpx_runs: vec![(0, grpprl(&[(0x0882, on), (0x085C, on), (0x085D, on)]))],
+        papx_entries: vec![(0, 0, Vec::new())],
+    };
+    let run = &para0(&read(&rich_doc(&spec)).expect("opens")).runs[0].props;
+    assert_eq!((run.cs, run.bold_cs, run.italic_cs), (Some(true), Some(true), Some(true)));
+}

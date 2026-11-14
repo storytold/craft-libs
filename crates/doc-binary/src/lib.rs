@@ -792,6 +792,11 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
             row: None,
         });
     }
+    // Word draws a run's text with the complex-script formatting only when the run is complex
+    // script by its own properties, its paragraph style or the defaults, in a .doc as in a DOCX.
+    for p in &mut out {
+        ctx.sheet.mark_runs_as_word_draws_them(&mut p.para, None);
+    }
     out
 }
 
