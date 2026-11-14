@@ -3,7 +3,7 @@
 //! This layer recognizes the document, stage, scene, layer and keyframe fields defined by XFL.
 //! It does not construct a consumer's animation model. More detailed payloads remain available
 //! through [`Document::root`] for the application adapter.
-use craft_xml::{Doctype, El, Error as XmlError, Limits, Options, UnknownEntity};
+use craft_xml::{Doctype, El, Error as XmlError, Limits, Local, Options, Pat, UnknownEntity};
 use std::borrow::Cow;
 
 /// Maximum bytes of XML in one XFL document or library item.
@@ -187,8 +187,8 @@ impl Document {
         let profile = self
             .root
             .elements()
-            .find(|element| element.name == "flash_profile" && boolean(element, "current") == Some(true))
-            .or_else(|| self.root.elements().find(|element| element.name == "flash_profile"))
+            .find(|element| Local("flash_profile").matches(&element.name) && boolean(element, "current") == Some(true))
+            .or_else(|| self.root.elements().find(|element| Local("flash_profile").matches(&element.name)))
             .unwrap_or(&self.root);
         let properties = profile.child("PublishFlashProperties").unwrap_or(profile);
         let value = |name: &str| properties.child(name).and_then(trimmed_text);
@@ -209,16 +209,16 @@ impl Document {
     /// Timelines in document order. Non-`DOMTimeline` extension nodes are skipped.
     pub fn timelines(&self) -> impl Iterator<Item = Timeline<'_>> {
         self.root
-            .child("timelines")
+            .child(Local("timelines"))
             .into_iter()
             .flat_map(El::elements)
-            .filter(|element| element.name == "DOMTimeline")
+            .filter(|element| Local("DOMTimeline").matches(&element.name))
             .map(|element| Timeline { element })
     }
 
     /// The timeline nested under `DOMSymbolItem/timeline`, if this is library symbol XML.
     pub fn symbol_timeline(&self) -> Option<Timeline<'_>> {
-        self.root.child("timeline")?.child("DOMTimeline").map(|element| Timeline { element })
+        self.root.child(Local("timeline"))?.child(Local("DOMTimeline")).map(|element| Timeline { element })
     }
 
     /// Projects bounded schema metadata and returns the XML tree by ownership. Consumers can
@@ -249,7 +249,7 @@ impl<'a> Timeline<'a> {
 
     /// Layers in native order. Non-`DOMLayer` extension nodes are skipped.
     pub fn layers(self) -> impl Iterator<Item = Layer<'a>> {
-        self.element.child("layers").into_iter().flat_map(El::elements).filter(|element| element.name == "DOMLayer").map(|element| Layer { element })
+        self.element.child(Local("layers")).into_iter().flat_map(El::elements).filter(|element| Local("DOMLayer").matches(&element.name)).map(|element| Layer { element })
     }
 
     fn into_model(self, max_layers: usize) -> TimelineModel {
@@ -447,6 +447,21 @@ mod tests {
         let (model, _) = document.into_parts(ModelLimits { max_timelines: 10, max_layers_per_timeline: 10 });
         assert!(model.timelines.is_empty());
         assert_eq!(model.symbol_timeline.unwrap().layers[0].frames[0].index, Some(1));
+    }
+
+    #[test]
+    fn recognizes_prefixed_xfl_timeline_elements_by_local_name() {
+        let document = Document::parse(
+            b"<x:DOMDocument xmlns:x='urn:adobe:xfl'><x:timelines><x:DOMTimeline><x:layers><x:DOMLayer/></x:layers></x:DOMTimeline></x:timelines></x:DOMDocument>",
+        )
+        .unwrap();
+        assert_eq!(document.timelines().next().unwrap().layers().count(), 1);
+
+        let symbol = Document::parse(
+            b"<x:DOMSymbolItem xmlns:x='urn:adobe:xfl'><x:timeline><x:DOMTimeline/></x:timeline></x:DOMSymbolItem>",
+        )
+        .unwrap();
+        assert!(symbol.symbol_timeline().is_some());
     }
 
     #[test]
