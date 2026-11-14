@@ -33,8 +33,8 @@ const TWO: &[u8] = &[0x00, 0x91, 62, 100, 0x60, 0x81, 62, 0];
 #[test]
 fn a_sound_file_reads_the_same_either_way_without_warnings() {
     let good = file(1, 96, &[ONE, TWO]);
-    let LenientRead { smf, warnings, end, .. } = read_smf_lenient(&good).unwrap();
-    assert_eq!((keys(&smf), warnings.len()), (vec![vec![60], vec![62]], 0));
+    let LenientRead { smf, warnings, end, over_limit, .. } = read_smf_lenient(&good).unwrap();
+    assert_eq!((keys(&smf), warnings.len(), over_limit), (vec![vec![60], vec![62]], 0, false));
     assert_eq!(smf, read_smf(&good).unwrap());
     assert_eq!(end, 960, "the End of Track tick, at 960 ticks a quarter");
 }
@@ -122,15 +122,34 @@ fn a_file_of_any_size_is_read_into_a_bounded_number_of_events_and_warnings() {
     // Three bytes a note-on under running status: more events than are read.
     let mut body = vec![0x00, 0x90, 60, 100];
     body.extend((0..MAX_EVENTS + 1000).flat_map(|i| [0x00, (i % 128) as u8, 1]));
-    let LenientRead { smf, warnings, .. } = read_smf_lenient(&file(1, 96, &[&body])).unwrap();
+    let LenientRead { smf, warnings, over_limit, .. } = read_smf_lenient(&file(1, 96, &[&body])).unwrap();
     assert_eq!(smf.tracks[0].sequence.notes.len(), MAX_EVENTS);
     assert!(warnings.iter().any(|w| w.contains("more events")), "{warnings:?}");
+    assert!(over_limit, "the event limit left events out");
     // Tracks of nothing, by the thousand: the count stops the reading.
-    let LenientRead { smf, warnings, .. } = read_smf_lenient(&file(1, 96, &vec![&[][..]; MAX_TRACKS + 5])).unwrap();
+    let LenientRead { smf, warnings, over_limit, .. } = read_smf_lenient(&file(1, 96, &vec![&[][..]; MAX_TRACKS + 5])).unwrap();
     assert!(smf.tracks.len() < MAX_TRACKS && warnings.iter().any(|w| w.contains("tracks")));
-    // Every track damaged: never more than MAX_WARNINGS words.
-    let LenientRead { warnings, .. } = read_smf_lenient(&file(1, 96, &vec![&[0x00, 60][..]; 100])).unwrap();
+    assert!(over_limit, "the track limit left tracks out");
+    // Every track damaged: never more than MAX_WARNINGS words, and no limit was reached.
+    let LenientRead { warnings, over_limit, .. } = read_smf_lenient(&file(1, 96, &vec![&[0x00, 60][..]; 100])).unwrap();
     assert_eq!(warnings.len(), MAX_WARNINGS);
+    assert!(!over_limit);
+}
+
+#[test]
+fn a_limit_reached_after_the_warnings_are_full_is_still_reported() {
+    // MAX_WARNINGS damaged tracks fill the warnings; the track after them holds more events than are
+    // read, so its warning is dropped, and over_limit is what says the file was cut.
+    let mut body = vec![0x00, 0x90, 60, 100];
+    body.extend((0..MAX_EVENTS + 1000).flat_map(|i| [0x00, (i % 128) as u8, 1]));
+    let mut tracks = vec![&[0x00, 60][..]; MAX_WARNINGS];
+    tracks.push(&body);
+    let LenientRead { warnings, over_limit, .. } = read_smf_lenient(&file(1, 96, &tracks)).unwrap();
+    assert_eq!(warnings.len(), MAX_WARNINGS);
+    assert!(!warnings.iter().any(|w| w.contains("more events")), "the test needs the limit's warning dropped: {warnings:?}");
+    assert!(over_limit);
+    // The strict reader stops at the first damaged track, before the limit.
+    assert!(!matches!(read_smf(&file(1, 96, &tracks)), Err(MidiError::TooManyEvents(_)) | Ok(_)));
 }
 
 #[test]
