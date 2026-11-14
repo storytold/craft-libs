@@ -51,6 +51,8 @@
 //!   Italian, German), Bulgarian syllable rules, Russian word-division rules, heuristic.
 //!
 //! [`check_text`] checks a paragraph whose runs are in different languages.
+//! A paragraph tagged English that is written in German, or tagged German and written in English,
+//! is checked in the language of its words ([`Options::detect_language`]).
 //!
 //! **Language data** (the SCOWL English dictionaries, the Moby word list, the pattern files, our
 //! word supplements) is embedded at build time from craft-i18n's `language-data/`
@@ -69,6 +71,7 @@ mod data {
 }
 pub mod bg;
 pub mod cs;
+mod detect;
 pub mod dict;
 pub mod en_variants;
 mod english;
@@ -105,11 +108,15 @@ pub struct Options {
     pub ignore_numbers: bool,
     /// Web and email addresses and file paths (`https://…`, `a@b.org`, `www.…`) are skipped.
     pub ignore_internet: bool,
+    /// A paragraph tagged English whose words are German, or tagged German whose words are
+    /// English, is checked in the language it is written in ([`check_text_with`]; Language ›
+    /// Detect language automatically). Needs the other language's dictionary.
+    pub detect_language: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { ignore_uppercase: true, ignore_numbers: true, ignore_internet: true }
+        Options { ignore_uppercase: true, ignore_numbers: true, ignore_internet: true, detect_language: true }
     }
 }
 
@@ -997,6 +1004,10 @@ pub fn check_text(text: &str, spans: &[(Range<usize>, ProofLang)]) -> Vec<Issue>
 ///
 /// `list_item` marks a list paragraph: items are often fragments, so the English rule asking for
 /// a capital on the paragraph's first word is off for it (later sentences are still checked).
+///
+/// With [`Options::detect_language`], English runs of a paragraph written in German are checked
+/// in German, and German runs written in English in English, when that dictionary is installed
+/// (the `detect` module); the issues carry the language they were checked in.
 pub fn check_text_with(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &Options, grammar: bool, list_item: bool) -> Vec<Issue> {
     // A paragraph in many pack languages loads each dictionary once.
     pack_lang::in_one_check(|| check_text_once(text, spans, opts, grammar, list_item))
@@ -1016,7 +1027,7 @@ fn check_text_once(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &Optio
     }
     // A paragraph typed in Vietnamese under the default English language is Vietnamese, which
     // has no proofing tools: no marks (Word detects the language the same way).
-    let default = if vi::looks_vietnamese(text) {
+    let mut default = if vi::looks_vietnamese(text) {
         for (_, l) in merged.iter_mut().filter(|(_, l)| l.is_english()) {
             *l = ProofLang::Other;
         }
@@ -1024,6 +1035,12 @@ fn check_text_once(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &Optio
     } else {
         ProofLang::En
     };
+    // A paragraph tagged English that is written in German (or the other way round) is checked
+    // in the language of its words.
+    if opts.detect_language {
+        detect::relabel(text, &mut merged, &mut default, opts);
+    }
+    let default = default;
     let lang_at = |i: usize| -> ProofLang {
         let k = merged.partition_point(|(r, _)| r.end <= i);
         merged.get(k).filter(|(r, _)| r.start <= i).map_or(default, |s| s.1)
@@ -1749,6 +1766,59 @@ mod tests {
         let text = "Пушкин huiss";
         let issues = check_text(text, &[(0..text.len(), nl)]);
         assert_eq!(issues.iter().map(|i| &text[i.start..i.end]).collect::<Vec<_>>(), ["huiss"], "{issues:?}");
+        packs::set_packs_dir(None);
+        set_dictionaries_folder(Some(shared_test_folder()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A paragraph tagged English but written in German (pasted text, a .docx with `en-US` on
+    /// every run) is checked in German when a German dictionary is installed, and German text
+    /// tagged English in English; a German word quoted in English text changes nothing, and
+    /// [`Options::detect_language`] off keeps the tags.
+    #[test]
+    fn english_and_german_paragraphs_are_checked_in_their_own_language() {
+        crate::hold_dictionary_tests();
+        set_dictionaries_folder(Some(shared_test_folder()));
+        let root = std::env::temp_dir().join(format!("wc-proof-detect-de-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let de = ProofLang::De;
+        let marked = |text: &str, lang: ProofLang, opts: &Options| -> Vec<String> {
+            check_text_with(text, &[(0..text.len(), lang)], opts, false, false).iter().map(|i| text[i.start..i.end].to_string()).collect()
+        };
+        let german = "Sehr geehrte Damen und Herren, wir freuen uns sehr über Ihre Nachricht und melden uns morgen.";
+        let english = "Thank you for your message, we will get back to you tomorrow.";
+        let opts = Options::default();
+        // Without a German dictionary nothing can be told apart: German words are English misspellings.
+        packs::set_packs_dir(None);
+        assert!(marked(german, ProofLang::En, &opts).contains(&"geehrte".to_string()));
+        let dic = "16\nsehr\ngeehrte\nDamen\nund\nHerren\nwir\nfreuen\nuns\nüber\nIhre\nNachricht\nmelden\nmorgen\ndie\nHaus\nHerr\n";
+        write_pack(&root, "de", &[("spelling.aff", b"SET UTF-8\n"), ("spelling.dic", dic.as_bytes())]);
+        packs::set_packs_dir(Some(root.clone()));
+        assert!(marked(german, ProofLang::En, &opts).is_empty(), "German text tagged English: {:?}", marked(german, ProofLang::En, &opts));
+        assert!(marked(german, ProofLang::EnGb, &opts).is_empty(), "any English");
+        let typo = "Sehr geehrte Damen und Herren, wir freuen uns sehr übr";
+        let issues = check_text_with(typo, &[(0..typo.len(), ProofLang::En)], &opts, false, false);
+        assert_eq!(
+            issues.iter().map(|i| (i.lang, i.message.as_str())).collect::<Vec<_>>(),
+            [(de, "Möglicher Rechtschreibfehler")],
+            "a German misspelling is still found, in German"
+        );
+        // Text outside every span (the document default) is detected too.
+        assert!(check_text_with(german, &[], &opts, false, false).is_empty());
+        // English text tagged German is checked in English.
+        assert!(marked(english, de, &opts).is_empty(), "{:?}", marked(english, de, &opts));
+        assert_eq!(marked("Thank you for your mesage, we will get back to you tomorrow.", de, &opts), ["mesage"]);
+        // English text quoting a German word stays English, and German stays German.
+        assert!(marked("He said Herr Schmidt was at the Haus yesterday, then left.", ProofLang::En, &opts).contains(&"Haus".to_string()));
+        assert!(marked(german, de, &opts).is_empty());
+        // Detection off: the tags are kept.
+        let off = Options { detect_language: false, ..Options::default() };
+        assert!(marked(german, ProofLang::En, &off).contains(&"geehrte".to_string()));
+        assert!(!marked(english, de, &off).is_empty());
+        // Only the English part of a paragraph with a Polish run is relabelled.
+        let mixed = format!("{german} kot");
+        let issues = check_text_with(&mixed, &[(0..german.len(), ProofLang::En), (german.len()..mixed.len(), ProofLang::Pl)], &opts, false, false);
+        assert!(issues.is_empty(), "{issues:?}");
         packs::set_packs_dir(None);
         set_dictionaries_folder(Some(shared_test_folder()));
         let _ = std::fs::remove_dir_all(&root);
@@ -3123,7 +3193,7 @@ mod tests {
         let t = "SENTENSE helo2 www.exampel.org";
         let bad = |o: Options| check_spelling_with(t, &o).iter().map(|i| t[i.start..i.end].to_string()).collect::<Vec<_>>();
         assert!(bad(Options::default()).is_empty(), "Word's defaults skip all three");
-        let all = Options { ignore_uppercase: false, ignore_numbers: false, ignore_internet: false };
+        let all = Options { ignore_uppercase: false, ignore_numbers: false, ignore_internet: false, detect_language: true };
         assert_eq!(bad(all), ["SENTENSE", "helo2", "www", "exampel"]);
         assert_eq!(bad(Options { ignore_uppercase: false, ..Options::default() }), ["SENTENSE"]);
         assert!(is_correct_with("NASA", &all), "capitals that are a word stay correct");

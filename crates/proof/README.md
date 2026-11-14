@@ -41,6 +41,12 @@ application data (`%LOCALAPPDATA%\WordCraft\dictionaries` and `%APPDATA%\WordCra
 `~/Library/Application Support/WordCraft/dictionaries`, `$XDG_DATA_HOME/wordcraft/dictionaries`),
 then the usual Hunspell and LibreOffice locations. None on the web.
 
+`check_text_with` checks a paragraph tagged English whose words are German (pasted text, a .docx
+with `en-US` on every run) in German, and one tagged German whose words are English in English,
+when the other language's dictionary is installed: of the words only one of the two dictionaries
+knows, at least two must be the other language's and outnumber the tagged language's more than two
+to one, so a quoted word changes nothing. `Options::detect_language` (on by default) turns it off.
+
 State is process-wide: `add_word`, `ignore_word`, `set_dictionaries_folder`,
 `load_user_dictionary`/`save_user_dictionary`. The crate reads no document model; callers pass
 plain text and language spans.
