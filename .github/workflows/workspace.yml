@@ -38,15 +38,15 @@ jobs:
         printf 'CRAFT_PDF_TEST_FONT_DIR=%s\n' "$RUNNER_TEMP/craft-pdf-test-fonts" >> "$GITHUB_ENV"
       command: |
         cargo fmt --check
-        cargo clippy --workspace --all-targets --locked -- -D warnings
-        cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+        cargo clippy --workspace --all-targets --locked --keep-going -- -D warnings
+        cargo clippy --workspace --all-targets --all-features --locked --keep-going -- -D warnings
         cargo test --workspace --locked
         cargo test --workspace --all-features --locked
       windows-command: |
         powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'
         cargo fmt --check
-        cargo clippy --workspace --all-targets --locked -- -D warnings
-        cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+        cargo clippy --workspace --all-targets --locked --keep-going -- -D warnings
+        cargo clippy --workspace --all-targets --all-features --locked --keep-going -- -D warnings
         cargo test --workspace --locked
         cargo test --workspace --all-features --locked
 
