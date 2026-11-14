@@ -25,12 +25,17 @@ fn pq_encode(nits: f32) -> f32 {
 
 #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
 fn hlg_signal(rgb: [f32; 3]) -> [f32; 3] {
+    const K: [f32; 3] = [0.2627, 0.6780, 0.0593];
+    const GAMMA: f32 = 1.2;
     const A: f32 = 0.17883277;
     const B: f32 = 0.28466892;
     const C: f32 = 0.559_910_7;
-    rgb.map(|v| {
-        let s = if v.is_finite() { v.clamp(0.0, 12.0) / 12.0 } else { 0.0 };
-        if s <= 1.0 / 12.0 { (3.0 * s).sqrt() } else { A * (12.0 * s - B).ln() + C }
+    let display = rgb.map(|v| (if v.is_finite() { v.max(0.0) } else { 0.0 }) * (HDR_REFERENCE_WHITE_NITS / crate::cicp::HLG_PEAK_NITS));
+    let y = K[0] * display[0] + K[1] * display[1] + K[2] * display[2];
+    let inverse_ootf = if y > 0.0 { y.powf((1.0 - GAMMA) / GAMMA) } else { 0.0 };
+    display.map(|v| {
+        let scene = (v * inverse_ootf).clamp(0.0, 1.0);
+        if scene <= 1.0 / 12.0 { (3.0 * scene).sqrt() } else { A * (12.0 * scene - B).ln() + C }
     })
 }
 
@@ -41,6 +46,9 @@ pub fn encode_avif_with_speed(img: &Image, quality: u8, speed: u8) -> Result<Vec
     {
         let mut enc =
             ravif::Encoder::new().with_quality(f32::from(quality.clamp(1, 100))).with_speed(speed.clamp(1, 10)).with_bit_depth(ravif::BitDepth::Ten);
+        if let Some(exif) = img.meta.exif.as_deref() {
+            enc = enc.with_exif(exif);
+        }
         let alpha_mode = if img.layout().has_alpha() { ravif::AlphaColorMode::UnassociatedClean } else { ravif::AlphaColorMode::UnassociatedDirty };
         enc = enc.with_alpha_color_mode(alpha_mode);
         let w = img.width() as usize;
@@ -81,6 +89,37 @@ pub fn encode_avif_with_speed(img: &Image, quality: u8, speed: u8) -> Result<Vec
     {
         let _ = (img, quality, speed);
         Err(CodecError::unsupported(Format::Avif, "AVIF encoding is not available in this build"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn sdr_avif_keeps_exif_metadata() {
+        use crate::{ChannelLayout, Image};
+
+        let exif = b"II*\0shared-avif-exif".to_vec();
+        let mut image = Image::from_u8(2, 1, ChannelLayout::Rgb, vec![20, 40, 60, 80, 100, 120]).unwrap();
+        image.meta.exif = Some(exif.clone());
+
+        let avif = encode_avif_with_speed(&image, 80, 8).unwrap();
+        assert!(avif.windows(exif.len()).any(|window| window == exif.as_slice()));
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn hlg_encode_matches_the_reference_display_mapping() {
+        let white = hlg_signal([1.0; 3]);
+        assert!(white.iter().all(|&value| (value - 0.75).abs() < 0.005), "{white:?}");
+
+        let peak = hlg_signal([crate::cicp::HLG_PEAK_NITS / HDR_REFERENCE_WHITE_NITS; 3]);
+        assert!(peak.iter().all(|&value| (value - 1.0).abs() < 0.005), "{peak:?}");
+
+        let invalid = hlg_signal([f32::NAN, -1.0, f32::INFINITY]);
+        assert_eq!(invalid, [0.0; 3]);
     }
 }
 
