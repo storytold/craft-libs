@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::props::{
-    Align, Border, BorderStyle, Borders, CharProps, LineSpacing, ParaProps, Rgb, TabAlign, TabLeader, TabStop, TableLook, TextColor, Underline,
-    VAlign,
+    Align, Border, BorderStyle, Borders, CharProps, LineSpacing, ParaProps, PropChange, Rgb, TabAlign, TabLeader, TabStop, TableLook, TextColor,
+    Underline, VAlign,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -52,6 +52,12 @@ pub struct Style {
     pub default: bool,
     /// Table style: conditional formatting for header row, banding etc.
     pub table: Option<TableStyleParts>,
+    /// Tracked change to the style's paragraph properties (`w:pPrChange`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub para_change: Option<Box<PropChange<ParaProps>>>,
+    /// Tracked change to the style's run properties (`w:rPrChange`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chr_change: Option<Box<PropChange<CharProps>>>,
 }
 
 /// Table style conditional formats (shading + character formatting per region).
