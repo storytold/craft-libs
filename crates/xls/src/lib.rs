@@ -46,6 +46,7 @@ mod notes;
 mod read;
 mod records;
 mod styles;
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub mod testing;
 
