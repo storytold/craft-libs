@@ -599,7 +599,7 @@ pub fn write(scene: &Scene, mtllib: Option<&str>, limits: &Limits) -> Result<Str
     Ok(text)
 }
 
-/// The scene's materials as an MTL library, named as [`write`] names them: `Kd`, `d`, `Ke`,
+/// The scene's materials as an MTL library, named as [`fn@write`] names them: `Kd`, `d`, `Ke`,
 /// `Ns` (for readers without the PBR extension) with `Pr` and `Pm`, and `map_Kd`, `map_Ke`
 /// and `norm` for images that have a [`Image::uri`].
 pub fn write_mtl(scene: &Scene) -> String {

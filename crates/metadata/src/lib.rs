@@ -356,7 +356,7 @@ pub fn from_embedded(e: &Embedded) -> Metadata {
 }
 
 /// The XMP of `e` read as one packet: the standard packet, with the Extended XMP it links to
-/// (`xmpNote:HasExtendedXMP`) merged in (see [`xmp::parse_xmp_pair`]). An error when the standard
+/// (`xmpNote:HasExtendedXMP`) merged in (see `xmp::parse_xmp_pair`). An error when the standard
 /// packet is not XMP, when its link is malformed, when the linked extension is missing or
 /// unreadable ([`Embedded::xmp_extended_error`]), or when there is an extension nothing links to:
 /// a caller that must see all of a file's metadata (to prove it carries no location, say) refuses

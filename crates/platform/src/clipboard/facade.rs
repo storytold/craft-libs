@@ -54,7 +54,7 @@ impl Clipboard {
         self.synthetic = synthetic;
     }
 
-    /// Puts `text` on the clipboard as a plain-text flavor; see [`write`](Self::write).
+    /// Puts `text` on the clipboard as a plain-text flavor; see [`fn@write`](Self::write).
     pub fn write_text(&mut self, text: &str) -> Result<Written, ClipboardError> {
         self.write(&[Flavor::text(text)])
     }

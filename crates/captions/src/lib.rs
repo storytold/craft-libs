@@ -300,7 +300,7 @@ fn parse_unbounded(bytes: &[u8], format: Format) -> Result<Document> {
     }
 }
 
-/// Options for [`write`].
+/// Options for [`fn@write`].
 #[derive(Clone, Copy, Debug)]
 pub struct WriteOptions {
     /// SCC / MCC: drop-frame timecode (the usual choice for 29.97 fps).
@@ -456,7 +456,7 @@ fn lossy_chars(
     }
 }
 
-/// [`write`] into `out`. MCC goes out line by line, so a long `every_frame_until` export is never
+/// [`fn@write`] into `out`. MCC goes out line by line, so a long `every_frame_until` export is never
 /// held in memory; the other formats are small and written whole.
 pub fn write_to(out: &mut dyn std::io::Write, doc: &Document, format: Format, opts: WriteOptions) -> std::io::Result<()> {
     match format {

@@ -5,7 +5,7 @@
 //! naming the package document (OPF), which lists every resource in its manifest and the reading
 //! order in its spine, and (EPUB 3) a navigation document.
 //!
-//! - [`write`] turns a [`Book`] (metadata, resources, spine, navigation) into an EPUB 3 package,
+//! - [`fn@write`] turns a [`Book`] (metadata, resources, spine, navigation) into an EPUB 3 package,
 //!   reflowable or fixed layout. The content documents are the caller's: this crate packages
 //!   them, it does not make XHTML out of a document model ([`xhtml`] is only the shell).
 //! - [`Epub::open`] reads an EPUB 2 or 3 package: container, metadata, manifest and spine, with
@@ -46,7 +46,7 @@ pub enum Error {
     /// The archive has more entries than [`Limits::max_entries`].
     #[error("the EPUB package has {found} entries (at most {limit})")]
     TooManyEntries { found: usize, limit: usize },
-    /// The book given to [`write`] cannot be a valid package.
+    /// The book given to [`fn@write`] cannot be a valid package.
     #[error("invalid EPUB book: {0}")]
     Invalid(String),
 }

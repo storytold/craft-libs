@@ -8,7 +8,7 @@
 //!   sample type, over the part's data window. Every compression the `exr` crate reads is read,
 //!   scan lines and tiles alike (the largest resolution level). Other parts' chunks are skipped
 //!   unread, and channels the filter drops are never allocated.
-//! - [`write`] writes one scan-line part.
+//! - [`fn@write`] writes one scan-line part.
 //!
 //! The `exr` crate sizes buffers from headers before it reads pixels, so everything that reaches
 //! it is checked first: preview attributes against their own size, each part's samples against
@@ -44,7 +44,7 @@ pub enum Error {
     /// The file declares more than [`Limits`] allow.
     #[error("OpenEXR exceeds a limit: {0}")]
     LimitExceeded(String),
-    /// The picture handed to [`write`] cannot be stored.
+    /// The picture handed to [`fn@write`] cannot be stored.
     #[error("OpenEXR: cannot write: {0}")]
     Encode(String),
 }
@@ -747,7 +747,7 @@ pub fn decode_part(bytes: &[u8], index: usize, keep: &dyn Fn(&str) -> bool, limi
     Ok(Part { info, channels })
 }
 
-/// Compression for [`write`].
+/// Compression for [`fn@write`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Compression {
     None,

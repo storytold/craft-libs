@@ -52,7 +52,7 @@ pub struct Spec<'a> {
     pub legacy_assets_field: Option<&'a str>,
 }
 
-/// An embedded asset passed to [`write`].
+/// An embedded asset passed to [`fn@write`].
 #[derive(Clone, Copy, Debug)]
 pub struct Asset<'a> {
     /// Decimal asset id used in the archive entry path.

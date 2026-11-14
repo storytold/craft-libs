@@ -9,7 +9,7 @@
 //! [`parse`] gives the list as written ([`Edl`]: events of lines with their timecode fields); what
 //! an event means on a timeline (which media a reel is, how a dissolve overlaps) is the caller's
 //! mapping. A list carries no frame rate: [`guess_rate`] guesses one, and [`Timecode::frames`]
-//! counts at the rate the caller settles on. [`write`] lays out events the caller built.
+//! counts at the rate the caller settles on. [`fn@write`] lays out events the caller built.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::collections::BTreeSet;

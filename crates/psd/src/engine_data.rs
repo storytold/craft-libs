@@ -4,7 +4,7 @@
 //! arrays `[ … ]`, strings `( … )` holding UTF-16BE with a `FE FF` byte-order mark and `\`
 //! escapes, numbers (`12`, `-1.5`, `.5`), `true`/`false`, and `/Name` values.
 //!
-//! [`parse`] and [`write`] keep the document as a tree of [`Value`]s; what was parsed is written
+//! [`parse`] and [`fn@write`] keep the document as a tree of [`Value`]s; what was parsed is written
 //! back in Photoshop's layout, and strings stored as plain bytes stay plain bytes.
 //! [`first_style`] is a typed view of the first style run, for readers that show a type layer
 //! without editing it; [`parse_lossy`] reads what it can of a damaged document for them.

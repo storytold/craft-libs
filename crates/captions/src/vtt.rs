@@ -46,7 +46,7 @@ pub fn split_voice(text: &str) -> (Option<String>, String) {
     (None, text.to_string())
 }
 
-/// Undo [`write`]'s cue-text escape, so `A --> B` comes back as `A --> B` and not `A --&gt; B`.
+/// Undo [`fn@write`]'s cue-text escape, so `A --> B` comes back as `A --> B` and not `A --&gt; B`.
 ///
 /// Only the one substitution the writer makes is reversed: a literal `-->` in cue text would read
 /// as a timing line to anything scanning the block, so it is written `--&gt;`. Other entities
@@ -55,7 +55,7 @@ fn unescape_text(text: &str) -> String {
     rewrite_arrows(text, false)
 }
 
-/// Apply [`write`]'s cue-text escape. `-->` becomes `--&gt;`, and a literal `--&gt;` (or the same
+/// Apply [`fn@write`]'s cue-text escape. `-->` becomes `--&gt;`, and a literal `--&gt;` (or the same
 /// with more `&amp;` in front of `gt;`) gains one `&amp;`, so the escape is reversible.
 fn escape_text(text: &str) -> String {
     rewrite_arrows(text, true)

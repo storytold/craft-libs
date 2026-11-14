@@ -142,7 +142,7 @@ fn jobs(options: &Options) -> Vec<Job> {
     let catalog = Catalog::linked();
     let mut jobs = Vec::new();
     for component in &catalog.components {
-        if options.only.as_ref().is_some_and(|only| !only.iter().any(|name| *name == component.name)) {
+        if options.only.as_ref().is_some_and(|only| !only.contains(&component.name)) {
             continue;
         }
         let Some(entry) = entry_of(component.type_name) else { continue };

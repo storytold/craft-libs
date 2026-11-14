@@ -215,7 +215,7 @@ fn encode_text(text: &str) -> Vec<u8> {
     encode_text_noting(text, &mut Vec::new())
 }
 
-/// The characters of `text` that ISO/IEC 6937 has no code for, in order: [`write`] sends each
+/// The characters of `text` that ISO/IEC 6937 has no code for, in order: [`fn@write`] sends each
 /// as `?`.
 pub fn unencodable(text: &str) -> Vec<char> {
     let mut lost = Vec::new();
@@ -393,7 +393,7 @@ fn put(buf: &mut [u8], at: usize, len: usize, s: &str) {
     }
 }
 
-/// The frame rate and disk format code [`write`] uses for a programme at `rate`: 29.97 fps
+/// The frame rate and disk format code [`fn@write`] uses for a programme at `rate`: 29.97 fps
 /// (`STL30.01`) for 29.97 and 30, else 25 fps (`STL25.01`).
 fn file_rate(rate: Option<FrameRate>) -> (FrameRate, &'static str) {
     match rate {
@@ -402,7 +402,7 @@ fn file_rate(rate: Option<FrameRate>) -> (FrameRate, &'static str) {
     }
 }
 
-/// The time code [`write`] gives a caption starting at `t` in a programme at `rate`.
+/// The time code [`fn@write`] gives a caption starting at `t` in a programme at `rate`.
 pub fn timecode(t: Tick, rate: Option<FrameRate>) -> String {
     let (rate, _) = file_rate(rate);
     let (_, h, m, s, f) = frames_to_fields(rate.frame_at(rate.snap_nearest(t)), rate, false);
@@ -488,7 +488,7 @@ fn split_tf(text: &[u8]) -> Vec<&[u8]> {
     out
 }
 
-/// Frame of `t` on the STL grid of `rate` (see [`write`]).
+/// Frame of `t` on the STL grid of `rate` (see [`fn@write`]).
 pub fn frame_of(t: Tick, rate: FrameRate) -> i64 {
     rate.frame_at(rate.snap_nearest(t))
 }
