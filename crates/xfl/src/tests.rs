@@ -1,7 +1,7 @@
 //! The zip reader against the layouts writers produce and the archives an attacker would
 //! (ADR 0054). Archives are made by the independent writer in `tests/support/fla.rs`.
 
-use super::pack::{self, Raw, write};
+use super::pack::{self, Raw, write, write_at};
 use super::*;
 
 fn zip(files: &[(&str, &[u8], bool)]) -> Vec<u8> {
@@ -317,6 +317,34 @@ fn zip64_archives_open_and_their_damage_is_named() {
     let dir_at = u32_at(&t, t.len() - 6).unwrap() as usize;
     t[dir_at + 24..dir_at + 28].copy_from_slice(&u32::MAX.to_le_bytes());
     assert_eq!(Archive::open(&t).err(), Some(ZipError::DamagedEntry("a.xml".into(), "has no ZIP64 sizes")));
+}
+
+#[test]
+fn self_extracting_archives_support_relative_and_adjusted_offsets() {
+    let entries = [Raw::new("DOMDocument.xml", b"<DOMDocument/>", true), Raw::new("LIBRARY/a.xml", b"<DOMSymbolItem/>", false)];
+    let stub = b"MZ\x90\0 self-extracting program with no ZIP signatures ".repeat(31);
+    for zip64 in [false, true] {
+        for adjusted in [false, true] {
+            let base = if adjusted { stub.len() as u64 } else { 0 };
+            let mut bytes = stub.clone();
+            bytes.extend_from_slice(&write_at(&entries, zip64, base));
+            let archive = Archive::open(&bytes).unwrap_or_else(|error| panic!("ZIP64 {zip64}, adjusted {adjusted}: {error}"));
+            assert_eq!(archive.read("DOMDocument.xml").unwrap().unwrap(), b"<DOMDocument/>");
+            assert_eq!(archive.read("LIBRARY/a.xml").unwrap().unwrap(), b"<DOMSymbolItem/>");
+            if !zip64 && !adjusted {
+                let eocd = bytes.len() - 22;
+                let stated = u32::from_le_bytes(bytes[eocd + 16..eocd + 20].try_into().unwrap()) as usize;
+                assert_eq!(&bytes[stated + stub.len()..stated + stub.len() + 4], b"PK\x01\x02");
+            }
+        }
+    }
+
+    // A gap between the directory and end record cannot be guessed as a prefix shift.
+    let mut bytes = stub;
+    bytes.extend_from_slice(&write_at(&entries, false, 0));
+    let eocd = bytes.len() - 22;
+    bytes.splice(eocd..eocd, *b"junk");
+    assert!(Archive::open(&bytes).is_err());
 }
 
 #[test]
