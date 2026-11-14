@@ -1132,7 +1132,6 @@ pub fn encode_pq(src: &Image, opts: &EncodeOptions) -> Result<Vec<u8>, CodecErro
     if src.data().len() != samples.checked_mul(4).ok_or_else(|| CodecError::encode(F, "image is too large"))? {
         return Err(CodecError::encode(F, "RGB buffer length does not match the image dimensions"));
     }
-    const LUMA: [f32; 3] = [0.2627, 0.6780, 0.0593];
     let mut output = Vec::new();
     output.try_reserve_exact(bytes).map_err(|_| CodecError::encode(F, "not enough memory for PQ samples"))?;
     let mut max_nits = 0.0f32;
@@ -1146,7 +1145,8 @@ pub fn encode_pq(src: &Image, opts: &EncodeOptions) -> Result<Vec<u8>, CodecErro
         let values = [read(0)?, read(4)?, read(8)?];
         let nits = values.map(|v| if v.is_finite() { (v.max(0.0) * crate::cicp::REFERENCE_WHITE_NITS).min(crate::cicp::PQ_PEAK_NITS) } else { 0.0 });
         max_nits = max_nits.max(nits[0]).max(nits[1]).max(nits[2]);
-        sum_luma += f64::from(LUMA[0] * nits[0] + LUMA[1] * nits[1] + LUMA[2] * nits[2]);
+        // CTA-861.3-A defines MaxFALL as the average of each pixel's maximum linear RGB channel.
+        sum_luma += f64::from(nits[0].max(nits[1]).max(nits[2]));
         for value in nits {
             let encoded = crate::cicp::linear_to_pq(value / crate::cicp::REFERENCE_WHITE_NITS);
             output.extend_from_slice(&((encoded * 65535.0).round().clamp(0.0, 65535.0) as u16).to_be_bytes());
@@ -1253,14 +1253,12 @@ fn start<W: Write>(
         }
     }
     let mut writer = encoder.write_header().map_err(|e| CodecError::encode(F, e))?;
-    if !(opts.embed_icc && icc.is_some())
-        && let Some(cicp) = cicp
-    {
+    if let Some(cicp) = cicp {
         let point = |value: u16, name: &str| {
             u8::try_from(value).map_err(|_| CodecError::encode(F, format!("CICP {name} value {value} does not fit in a byte")))
         };
-        let cicp_bytes =
-            [point(cicp.primaries, "primaries")?, point(cicp.transfer, "transfer")?, point(cicp.matrix, "matrix")?, u8::from(cicp.full_range)];
+        // PNG stores RGB samples, so cICP's matrix coefficients byte is always zero.
+        let cicp_bytes = [point(cicp.primaries, "primaries")?, point(cicp.transfer, "transfer")?, 0, u8::from(cicp.full_range)];
         writer.write_chunk(png::chunk::cICP, &cicp_bytes).map_err(|e| CodecError::encode(F, e))?;
     }
     if opts.embed_metadata
@@ -1723,14 +1721,39 @@ mod hdr_tests {
     #[test]
     fn generic_png_roundtrip_keeps_cicp_and_content_light_level() {
         let mut image = Image::from_raw(1, 1, ChannelLayout::Rgb, SampleType::U16, vec![0, 0, 0, 0, 0, 0]).unwrap();
-        image.cicp = Some(crate::cicp::Cicp { primaries: 9, transfer: 16, matrix: 0, full_range: true });
+        image.cicp = Some(crate::cicp::Cicp { primaries: 9, transfer: 16, matrix: 9, full_range: true });
         image.meta.content_light_level =
             Some(crate::cicp::ContentLightLevel { max_content_light_level: 2_030_000, max_frame_average_light_level: 1_250_000 });
 
         let encoded = encode(&image, Plan { layout: ChannelLayout::Rgb, sample: SampleType::U16 }, &EncodeOptions::default()).unwrap();
         let decoded = decode(&encoded, &Limits::default()).unwrap();
-        assert_eq!(decoded.cicp, image.cicp);
+        assert_eq!(decoded.cicp, Some(crate::cicp::Cicp { matrix: 0, ..image.cicp.unwrap() }));
         assert_eq!(decoded.meta.content_light_level, image.meta.content_light_level);
+    }
+
+    #[test]
+    fn generic_png_keeps_cicp_alongside_icc() {
+        let mut image = Image::from_raw(1, 1, ChannelLayout::Rgb, SampleType::U16, vec![0, 0, 0, 0, 0, 0]).unwrap();
+        image.cicp = Some(crate::cicp::Cicp { primaries: 9, transfer: 16, matrix: 0, full_range: true });
+        image.icc = Some(b"synthetic ICC profile".to_vec());
+
+        let encoded = encode(&image, Plan { layout: ChannelLayout::Rgb, sample: SampleType::U16 }, &EncodeOptions::default()).unwrap();
+        let decoded = decode(&encoded, &Limits::default()).unwrap();
+        assert_eq!(decoded.cicp, image.cicp);
+        assert_eq!(decoded.icc, image.icc);
+    }
+
+    #[test]
+    fn linearized_pq_pixels_are_tagged_as_linear_in_generic_png() {
+        let cicp = crate::cicp::Cicp { primaries: 9, transfer: crate::cicp::Cicp::TRANSFER_PQ, matrix: 0, full_range: true };
+        let encoded_white = (0.5807f32 * 65535.0).round() as u16;
+        let mut image = Image::from_u16(1, 1, ChannelLayout::Rgb, &[encoded_white; 3]).unwrap();
+        image.cicp = Some(cicp);
+        let linear = crate::cicp::linearize(image, cicp).unwrap();
+        let png = encode(&linear, Plan { layout: ChannelLayout::Rgb, sample: SampleType::U16 }, &EncodeOptions::default()).unwrap();
+        let decoded = decode(&png, &Limits::default()).unwrap();
+        assert_eq!(decoded.cicp.unwrap().transfer, crate::cicp::Cicp::TRANSFER_LINEAR);
+        assert!(decoded.to_normalized().iter().all(|&v| (v - 1.0).abs() < 0.001));
     }
 
     #[test]
@@ -1750,6 +1773,15 @@ mod hdr_tests {
         for sample in rgb {
             assert!((f32::from(sample) / 65535.0 - 0.5807).abs() < 0.001);
         }
+    }
+
+    #[test]
+    fn pq_png_maxfall_uses_highest_channel_for_saturated_pixels() {
+        let image = Image::from_f32(2, 1, ChannelLayout::Rgb, &[1.0, 0.0, 0.0, 0.0, 0.0, 1.0]).unwrap();
+        let encoded = encode_pq(&image, &EncodeOptions::default()).unwrap();
+        let reader = png::Decoder::new(Cursor::new(encoded)).read_info().unwrap();
+        let light = reader.info().content_light_level.unwrap();
+        assert_eq!((light.max_content_light_level, light.max_frame_average_light_level), (2_030_000, 2_030_000));
     }
 
     #[test]

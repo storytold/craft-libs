@@ -27,6 +27,8 @@ impl Cicp {
     pub const TRANSFER_PQ: u16 = 16;
     /// ARIB STD-B67 / BT.2100 hybrid log-gamma.
     pub const TRANSFER_HLG: u16 = 18;
+    /// Linear light.
+    pub const TRANSFER_LINEAR: u16 = 8;
 
     /// PQ or HLG: samples that [`linearize`] decodes to linear light.
     pub fn is_hdr(self) -> bool {
@@ -125,7 +127,8 @@ pub fn linearize(img: Image, cicp: Cicp) -> Result<Image, CodecError> {
     let mut out = Image::from_raw(w, h, layout, SampleType::F32, v.iter().flat_map(|x| x.to_ne_bytes()).collect())?;
     out.meta = img.meta;
     out.warnings = img.warnings;
-    out.cicp = Some(cicp);
+    // CICP describes the samples, not their source encoding. These samples are now linear.
+    out.cicp = Some(Cicp { transfer: Cicp::TRANSFER_LINEAR, matrix: 0, full_range: true, ..cicp });
     Ok(out)
 }
 
@@ -191,7 +194,15 @@ mod tests {
             .unwrap()
             .with_icc(Some(b"encoded-profile".to_vec()));
         let out = linearize(img, hlg).unwrap();
-        assert_eq!((out.sample_type(), out.layout(), out.icc.as_deref(), out.cicp), (SampleType::F32, ChannelLayout::Rgba, None, Some(hlg)));
+        assert_eq!(
+            (out.sample_type(), out.layout(), out.icc.as_deref(), out.cicp),
+            (
+                SampleType::F32,
+                ChannelLayout::Rgba,
+                None,
+                Some(Cicp { primaries: hlg.primaries, transfer: Cicp::TRANSFER_LINEAR, matrix: 0, full_range: true })
+            )
+        );
         let v = out.to_normalized();
         assert!(v[..3].iter().all(|&x| close(x, 1.0, 0.005)), "{v:?}");
         assert!(close(v[3], 1.0, 1e-6) && v[4..7] == [0.0; 3] && close(v[7], 0.5, 1e-3), "{v:?}");
