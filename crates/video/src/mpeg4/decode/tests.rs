@@ -67,6 +67,11 @@ fn direct_mode_scaling_of_extreme_distances_does_not_overflow() {
 /// A version 1 VOL of 32×32 with B-VOPs (`low_delay` 0), no fixed VOP rate and
 /// `vop_time_increment_resolution` 25, data partitioned (which is unsupported) or not.
 fn variable_rate_vol(data_partitioned: bool) -> Vec<u8> {
+    vol_with(data_partitioned, None)
+}
+
+/// [`variable_rate_vol`], with a fixed VOP time increment when `fixed` is given.
+fn vol_with(data_partitioned: bool, fixed: Option<u32>) -> Vec<u8> {
     use craft_media::bitstream::BitWriter;
     let mut w = BitWriter::new();
     w.write_bits(0x120, 32);
@@ -82,7 +87,10 @@ fn variable_rate_vol(data_partitioned: bool) -> Vec<u8> {
     w.write_bit(true);
     w.write_bits(25, 16);
     w.write_bit(true);
-    w.write_bit(false); // fixed_vop_rate
+    w.write_bit(fixed.is_some()); // fixed_vop_rate
+    if let Some(inc) = fixed {
+        w.write_bits(inc, 5);
+    }
     w.write_bit(true);
     w.write_bits(32, 13);
     w.write_bit(true);
@@ -124,6 +132,70 @@ fn b_vop() -> Vec<u8> {
     w.write_bits(1, 3); // vop_fcode_backward
     w.write_bits(0, 16);
     w.finish()
+}
+
+/// An uncoded VOP (`vop_coded` 0) of [`variable_rate_vol`], of `kind` (0 I, 1 P, 2 B) with
+/// `modulo` seconds of `modulo_time_base`.
+fn uncoded_vop(kind: u32, modulo: u32) -> Vec<u8> {
+    use craft_media::bitstream::BitWriter;
+    let mut w = BitWriter::new();
+    w.write_bits(0x1B6, 32);
+    w.write_bits(kind, 2);
+    for _ in 0..modulo {
+        w.write_bit(true);
+    }
+    w.write_bit(false);
+    w.write_bit(true);
+    w.write_bits(1, 5); // vop_time_increment
+    w.write_bit(true);
+    w.write_bit(false); // vop_coded
+    while !w.is_byte_aligned() {
+        w.write_bit(true);
+    }
+    w.finish()
+}
+
+/// The frame period that field direct mode uses is estimated from the layer's timing, so a VOL
+/// with a different VOP rate must replace the estimate; a repeated VOL keeps it.
+#[test]
+fn a_new_layer_timing_replaces_the_frame_period() {
+    let mut d = Decoder::new();
+    d.decode(&vol_with(false, Some(1)), 0).expect("a layer");
+    let vol = d.vol.clone().expect("the layer");
+    d.times(3, &vol);
+    assert_eq!(d.t_frame, 1);
+    d.decode(&vol_with(false, Some(1)), 1).expect("the same layer again");
+    assert_eq!(d.t_frame, 1);
+    d.decode(&vol_with(false, Some(2)), 2).expect("a layer at half the rate");
+    let vol = d.vol.clone().expect("the new layer");
+    d.times(3, &vol);
+    assert_eq!(d.t_frame, 2);
+}
+
+/// A VOP skipped at the per-call limit still carries its seconds of `modulo_time_base`, as an
+/// uncoded VOP does, so the times after it do not depend on where the limit fell.
+#[test]
+fn a_vop_skipped_at_the_limit_keeps_its_seconds() {
+    let mut d = Decoder::new();
+    d.decode(&variable_rate_vol(false), 0).expect("a layer");
+    d.layer_budget = 0;
+    assert!(d.decode(&uncoded_vop(1, 1), 1).is_err(), "the P-VOP does not fit");
+    assert_eq!(d.time_base, 1);
+    // A B-VOP's seconds are relative to the previous reference and carry nothing on.
+    assert!(d.decode(&uncoded_vop(2, 1), 2).is_err(), "the B-VOP does not fit");
+    assert_eq!(d.time_base, 1);
+}
+
+/// A short video header (H.263 baseline) picture has no MPEG-4 start codes; it must be refused
+/// as documented, not decoded to nothing without an error.
+#[test]
+fn a_short_video_header_is_refused() {
+    let mut d = Decoder::new();
+    let picture = [0x00, 0x00, 0x82, 0x02, 0x10, 0x00, 0x00, 0x00];
+    assert!(matches!(d.decode(&picture, 0), Err(DecodeError::Unsupported(_))));
+    assert_eq!(d.errors(), 1);
+    // Bytes that are not a short header are still ignored.
+    assert!(d.decode(&[0x12, 0x34, 0x56, 0x78], 1).is_ok_and(|p| p.is_empty()));
 }
 
 /// A B-VOP without references (an open GOP's at the start of decoding) is dropped and must not set
