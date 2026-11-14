@@ -105,7 +105,7 @@ where
             type Value = Envelope<D::Document>;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("an AniCraft native project envelope")
+                formatter.write_str("an .anicraft envelope object")
             }
 
             fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
@@ -238,6 +238,14 @@ mod tests {
         let result = read::<String, _>(json, &mut decoder);
         assert!(result.is_err());
         assert_eq!(decoder.calls, 1);
+    }
+
+    #[test]
+    fn malformed_top_level_keeps_the_native_envelope_diagnostic() {
+        let mut decoder = CaptureDocument::default();
+        let error = read::<String, _>("[]", &mut decoder).unwrap_err();
+        assert!(error.to_string().contains("expected an .anicraft envelope object"));
+        assert_eq!(decoder.calls, 0);
     }
 
     #[test]
