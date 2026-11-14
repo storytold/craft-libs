@@ -370,7 +370,10 @@ impl Sources {
             if row > max_owned {
                 return Err("out of memory".into());
             }
-            s.predictor = Some(Predictor { kind: p.predictor, bpp: (colors * bpc).div_ceil(8).max(1), row, prev: vec![0; row], cur: Vec::new() });
+            let mut prev = Vec::new();
+            prev.try_reserve_exact(row).map_err(|_| "out of memory")?;
+            prev.resize(row, 0);
+            s.predictor = Some(Predictor { kind: p.predictor, bpp: (colors * bpc).div_ceil(8).max(1), row, prev, cur: Vec::new() });
             return Ok((s, row));
         }
         Ok((s, 0))
