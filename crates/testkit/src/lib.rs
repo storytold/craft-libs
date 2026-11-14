@@ -14,6 +14,10 @@
 //!   where `std::time::Instant::now()` panics on `wasm32`.
 //! * [`guards::rust_sources`]: directory crawler collecting `.rs` sources while excluding tests.
 //!
+//! With the `log` feature, on targets other than `wasm32`, `log::warnings` and `log::records`
+//! capture the records the calling thread logs while a closure runs, and `log::capture_global`
+//! captures the records every thread logs. One test binary uses one of the two modes.
+//!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
 //! Source-level guards provide deterministic syntactic evidence about codebase structure.
@@ -25,6 +29,8 @@
 //! rather than replace, platform integration tests and CI execution.
 
 pub mod guards;
+#[cfg(all(feature = "log", not(target_arch = "wasm32")))]
+pub mod log;
 
 pub use guards::{Finding, predefined_quit, std_instant, wgsl_float_literals, wgsl_float_literals_in};
 
