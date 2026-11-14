@@ -397,16 +397,16 @@ impl<'a> TextStylesPanel<'a> {
                 None => list,
             };
             let shown_rows = list.show_items(ui, &source, &mut |id, _| {
-                    let Some(row) = rows.iter().find(|row| row.id == *id) else { return ListRow::new(Label::Empty) };
-                    let is_current = target && current == Some(*id);
-                    let marked = is_current && overridden;
-                    let none = *id == 0 && !paragraph;
-                    let name = if marked { words.overridden_name.fill(&[("name", row.name.as_str())]) } else { row.name.clone() };
-                    let spoken = if marked { words.overridden_spoken.fill(&[("name", row.name.as_str())]) } else { row.name.clone() };
-                    let description = if none { words.no_character_style.as_str().to_owned() } else { tip.clone() };
-                    let styled = ListRow::new(name).accessible_name(spoken).description(description).highlight(is_current);
-                    if none { styled.ink(RowInk::Dimmed) } else { styled }
-                });
+                let Some(row) = rows.iter().find(|row| row.id == *id) else { return ListRow::new(Label::Empty) };
+                let is_current = target && current == Some(*id);
+                let marked = is_current && overridden;
+                let none = *id == 0 && !paragraph;
+                let name = if marked { words.overridden_name.fill(&[("name", row.name.as_str())]) } else { row.name.clone() };
+                let spoken = if marked { words.overridden_spoken.fill(&[("name", row.name.as_str())]) } else { row.name.clone() };
+                let description = if none { words.no_character_style.as_str().to_owned() } else { tip.clone() };
+                let styled = ListRow::new(name).accessible_name(spoken).description(description).highlight(is_current);
+                if none { styled.ink(RowInk::Dimmed) } else { styled }
+            });
             let (events, second) = (shown_rows.events, shown_rows.activation_clicks >= 2);
 
             let pointer = craft_ui::runtime::pointer::frame(ui.ctx());

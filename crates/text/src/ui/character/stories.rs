@@ -1,11 +1,11 @@
 //! Stories of the Character and Paragraph controls, the Paragraph dialog and its preview.
 
+#[cfg(feature = "font-picker")]
+use super::FaceAxes;
 use super::{
     BaselinePosition, Caps, CharacterControls, CharacterValues, Kerning, Leading, LineSpacing, ParagraphAlign, ParagraphControls, ParagraphDialog,
     ParagraphFormat, ParagraphPreview, ParagraphValues, SpacingKind, SpecialIndent, TextAlign,
 };
-#[cfg(feature = "font-picker")]
-use super::FaceAxes;
 use craft_theme::Rgba;
 use craft_ui::contract::Show as _;
 use craft_ui::dialog::{DialogStack, StackDialog as _};

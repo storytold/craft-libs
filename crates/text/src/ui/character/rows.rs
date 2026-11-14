@@ -56,7 +56,8 @@ impl Lengths<'_> {
         let LengthRow { label, side, value, range, presets } = spec;
         let points = value.map_or(Mixed::Mixed, |value| Mixed::Same(Some(f64::from(value))));
         let field = Field::new(label.clone()).side(side).show(ui, |ui, _| {
-            let out = length_field(self.unit, label.clone(), points, range.clone()).presets(presets).scrub_by_label().sizing(Sizing::FillWidth).show(ui);
+            let out =
+                length_field(self.unit, label.clone(), points, range.clone()).presets(presets).scrub_by_label().sizing(Sizing::FillWidth).show(ui);
             (out.edit.events, out.preset)
         });
         field.inner.unwrap_or_default()

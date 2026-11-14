@@ -323,7 +323,8 @@ impl<'a> TextStyleOptions<'a> {
                         found
                     }),
                     StyleAttribute::Size => include_row(ui, &words.include, attribute, on, |ui| {
-                        let row = LengthRow { label: cw.size.clone(), side: text_side(&cw.size), value: c.size, range: SIZE_RANGE, presets: &size_presets };
+                        let row =
+                            LengthRow { label: cw.size.clone(), side: text_side(&cw.size), value: c.size, range: SIZE_RANGE, presets: &size_presets };
                         let (event, _) = lengths.row(ui, row);
                         character(number_change(event, CharacterChange::Size))
                     }),
@@ -363,9 +364,9 @@ impl<'a> TextStyleOptions<'a> {
                         }
                         Vec::new()
                     }),
-                    StyleAttribute::FauxBold => {
-                        include_row(ui, &words.include, attribute, on, |ui| toggle_field(ui, &cw.faux_bold, "text_bold", c.faux_bold, CharacterChange::FauxBold))
-                    }
+                    StyleAttribute::FauxBold => include_row(ui, &words.include, attribute, on, |ui| {
+                        toggle_field(ui, &cw.faux_bold, "text_bold", c.faux_bold, CharacterChange::FauxBold)
+                    }),
                     StyleAttribute::FauxItalic => include_row(ui, &words.include, attribute, on, |ui| {
                         toggle_field(ui, &cw.faux_italic, "text_italic", c.faux_italic, CharacterChange::FauxItalic)
                     }),

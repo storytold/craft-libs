@@ -4,7 +4,7 @@
 
 mod editor;
 mod notes;
-mod path_text;
+// PLAN: `mod path_text;` belongs here once tools-w4's `tests/it/path_text.rs` exists. It is not in this tree, so the declaration fails to compile.
 mod ruler;
 mod style_options;
 mod style_panel;
