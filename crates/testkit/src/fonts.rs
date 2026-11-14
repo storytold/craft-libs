@@ -10,6 +10,7 @@
 //! The module reads no file and no environment variable, prints nothing, and builds for
 //! `wasm32-unknown-unknown`.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::ops::Range;
 
@@ -47,7 +48,7 @@ pub enum FontError {
     MalformedFont,
     /// A matching Macintosh Roman record would need a name that is not ASCII.
     UnsupportedEncoding,
-    /// A string the rename changes shares bytes with a string it keeps, or with a different replacement.
+    /// Bytes the rename changes are shared with a string it keeps, or with a different replacement.
     ConflictingNameStorage,
     /// [`collection`] was given no faces.
     EmptyCollection,
@@ -66,7 +67,7 @@ impl fmt::Display for FontError {
             Self::MissingNameTable => "the font has no name table",
             Self::MalformedFont => "the font's table directory or name table is truncated or out of range",
             Self::UnsupportedEncoding => "a Macintosh Roman name record can only take an ASCII name",
-            Self::ConflictingNameStorage => "a renamed string shares its bytes with a string that must not change",
+            Self::ConflictingNameStorage => "the bytes of a renamed family name are shared with a string that must not change",
             Self::EmptyCollection => "a collection needs at least one face",
             Self::UnsupportedFace => "the input is not a standalone TrueType or CFF face",
             Self::OutputTooLarge => "the output is too large",
@@ -91,7 +92,7 @@ impl std::error::Error for FontError {}
 /// [`FontError::InvalidName`] when a name is empty, [`FontError::UnequalLength`] when the names have
 /// different UTF-16 lengths, [`FontError::NameNotFound`] when no family record holds `from`,
 /// [`FontError::UnsupportedEncoding`] when a matching Macintosh Roman record would need non-ASCII
-/// bytes, [`FontError::ConflictingNameStorage`] when a changed string shares bytes with a kept one,
+/// bytes, [`FontError::ConflictingNameStorage`] when changed bytes are shared with a kept string,
 /// [`FontError::MissingNameTable`], [`FontError::UnsupportedFace`] for a collection, and
 /// [`FontError::MalformedFont`] when the directory, the `name` table or the `head` table is out of
 /// range or of an unknown version, or when the `name` or `head` table shares bytes with the directory
@@ -244,7 +245,7 @@ fn write_face(out: &mut Vec<u8>, face: &[u8], tables: &[Table]) -> Result<(), Fo
 }
 
 /// How the bytes of a name record are encoded, as far as renaming reads them.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Encoding {
     Utf16,
     MacRoman,
@@ -314,28 +315,42 @@ fn name_strings(face: &[u8], table: &Table) -> Result<NameStrings, FontError> {
     Ok(NameStrings { names, lang_tags })
 }
 
-/// A string the rename writes: its range in the face and its new bytes.
+/// Bytes the rename writes: the range of the family name at the start of a string, and the new name.
+/// The rest of the string keeps its bytes.
 struct Edit {
     range: Range<usize>,
     bytes: Vec<u8>,
 }
 
-/// Works out the strings to rewrite and the ranges of the strings that must keep their bytes.
+/// Works out the family names to rewrite and the ranges of the strings that must keep their bytes.
 /// Refuses with [`FontError::NameNotFound`] when no family record (IDs 1, 16 and 21) holds `from`.
+/// Records that point at the same string are read once.
 fn plan_edits(face: &[u8], strings: &NameStrings, from: &str, to: &str) -> Result<(Vec<Edit>, Vec<Range<usize>>), FontError> {
     let mut edits = Vec::new();
     let mut kept = strings.lang_tags.clone();
     let mut family_found = false;
+    let mut read: HashMap<(usize, usize, Encoding, bool), bool> = HashMap::new();
     for string in &strings.names {
         let family = FAMILY_IDS.contains(&string.name_id);
-        let bytes = face.get(string.range.clone()).ok_or(FontError::MalformedFont)?;
-        let new = if family || string.name_id == FULL_NAME_ID { renamed(string, bytes, from, to)? } else { None };
-        match new {
-            Some(new) => {
-                family_found |= family;
-                edits.push(Edit { range: string.range.clone(), bytes: new });
+        if !family && string.name_id != FULL_NAME_ID {
+            kept.push(string.range.clone());
+            continue;
+        }
+        let key = (string.range.start, string.range.end, string.encoding, family);
+        let edited = match read.get(&key) {
+            Some(&edited) => edited,
+            None => {
+                let edit = renamed(string, face, from, to)?;
+                let edited = edit.is_some();
+                edits.extend(edit);
+                read.insert(key, edited);
+                edited
             }
-            None => kept.push(string.range.clone()),
+        };
+        if edited {
+            family_found |= family;
+        } else {
+            kept.push(string.range.clone());
         }
     }
     if !family_found {
@@ -344,66 +359,98 @@ fn plan_edits(face: &[u8], strings: &NameStrings, from: &str, to: &str) -> Resul
     Ok((edits, kept))
 }
 
-/// The new bytes of a family or full-name string, or `None` when it does not hold `from`.
-fn renamed(string: &NameString, bytes: &[u8], from: &str, to: &str) -> Result<Option<Vec<u8>>, FontError> {
+/// The edit of a family or full-name string, or `None` when it does not hold `from`.
+fn renamed(string: &NameString, face: &[u8], from: &str, to: &str) -> Result<Option<Edit>, FontError> {
     let family = FAMILY_IDS.contains(&string.name_id);
-    let encoded = match string.encoding {
+    let bytes = face.get(string.range.clone()).ok_or(FontError::MalformedFont)?;
+    let renamed = match string.encoding {
         Encoding::Utf16 => renamed_utf16(family, bytes, from, to)?,
         Encoding::MacRoman => renamed_mac_roman(family, bytes, from, to)?,
         Encoding::Other => None,
     };
-    if encoded.as_ref().is_some_and(|encoded| encoded.len() != bytes.len()) {
+    let Some((old_length, new)) = renamed else {
+        return Ok(None);
+    };
+    if new.len() != old_length {
         return Err(FontError::UnequalLength);
     }
-    Ok(encoded)
+    let start = string.range.start;
+    Ok(Some(Edit { range: start..start + old_length, bytes: new }))
 }
 
-/// Renames a UTF-16BE family string whose value is `from`, or a full name that starts with `from` and a space.
-fn renamed_utf16(family: bool, bytes: &[u8], from: &str, to: &str) -> Result<Option<Vec<u8>>, FontError> {
-    let value = utf16_value(bytes)?;
-    let new = if family {
-        (value == from).then(|| to.to_owned())
-    } else {
-        value.strip_prefix(from).filter(|rest| rest.is_empty() || rest.starts_with(' ')).map(|rest| format!("{to}{rest}"))
-    };
-    Ok(new.map(|new| new.encode_utf16().flat_map(u16::to_be_bytes).collect()))
-}
-
-/// Renames a Macintosh Roman string the way [`renamed_utf16`] does, byte by byte; only ASCII names are written.
-fn renamed_mac_roman(family: bool, bytes: &[u8], from: &str, to: &str) -> Result<Option<Vec<u8>>, FontError> {
-    if !from.is_ascii() {
-        return if mac_roman_may_hold(family, bytes, from) { Err(FontError::UnsupportedEncoding) } else { Ok(None) };
-    }
-    let Some(rest) = bytes.strip_prefix(from.as_bytes()) else {
-        return Ok(None);
-    };
-    if !(rest.is_empty() || (!family && rest.first() == Some(&b' '))) {
-        return Ok(None);
-    }
-    if !to.is_ascii() {
-        return Err(FontError::UnsupportedEncoding);
-    }
-    Ok(Some([to.as_bytes(), rest].concat()))
-}
-
-/// Whether a Macintosh Roman string could hold a non-ASCII `from`. The encoding has one byte per
-/// character and shares its ASCII range with Unicode, so a string that differs from `from` in length
-/// or in an ASCII position cannot hold it.
-fn mac_roman_may_hold(family: bool, bytes: &[u8], from: &str) -> bool {
-    let count = from.chars().count();
-    let fits = bytes.len() == count || (!family && bytes.get(count) == Some(&b' '));
-    fits && bytes.iter().zip(from.chars()).all(|(&byte, c)| !(byte.is_ascii() || c.is_ascii()) || char::from(byte) == c)
-}
-
-/// Decodes a UTF-16BE string, refusing an odd length or an unpaired surrogate.
-fn utf16_value(bytes: &[u8]) -> Result<String, FontError> {
+/// Renames a UTF-16BE family string whose value is `from`, or a full name that starts with `from` and
+/// a space. Returns the byte length of `from` in the string and the bytes of `to`.
+fn renamed_utf16(family: bool, bytes: &[u8], from: &str, to: &str) -> Result<Option<(usize, Vec<u8>)>, FontError> {
     let (pairs, rest) = bytes.as_chunks::<2>();
     if !rest.is_empty() {
         return Err(FontError::MalformedFont);
     }
     let units = pairs.iter().map(|&pair| u16::from_be_bytes(pair));
-    char::decode_utf16(units).collect::<Result<String, _>>().map_err(|_| FontError::MalformedFont)
+    if char::decode_utf16(units.clone()).any(|c| c.is_err()) {
+        return Err(FontError::MalformedFont);
+    }
+    let count = from.encode_utf16().count();
+    if !units.clone().take(count).eq(from.encode_utf16()) {
+        return Ok(None);
+    }
+    match units.clone().nth(count) {
+        None => {}
+        Some(unit) if !family && unit == u16::from(b' ') => {}
+        Some(_) => return Ok(None),
+    }
+    Ok(Some((count * 2, to.encode_utf16().flat_map(u16::to_be_bytes).collect())))
 }
+
+/// Renames a Macintosh Roman string the way [`renamed_utf16`] does, comparing its decoded characters
+/// with `from`. Only ASCII names are written.
+fn renamed_mac_roman(family: bool, bytes: &[u8], from: &str, to: &str) -> Result<Option<(usize, Vec<u8>)>, FontError> {
+    let count = from.chars().count();
+    let Some(name) = bytes.get(..count) else {
+        return Ok(None);
+    };
+    if !name.iter().map(|&byte| mac_roman_char(byte)).eq(from.chars()) {
+        return Ok(None);
+    }
+    match bytes.get(count) {
+        None => {}
+        Some(b' ') if !family => {}
+        Some(_) => return Ok(None),
+    }
+    if !from.is_ascii() || !to.is_ascii() {
+        return Err(FontError::UnsupportedEncoding);
+    }
+    Ok(Some((count, to.as_bytes().to_vec())))
+}
+
+/// The character a Macintosh Roman byte stands for. Bytes below 0x80 are ASCII; the others follow
+/// the mapping at <https://www.unicode.org/Public/MAPPINGS/VENDORS/APPLE/ROMAN.TXT>.
+fn mac_roman_char(byte: u8) -> char {
+    match byte.checked_sub(0x80) {
+        None => char::from(byte),
+        Some(high) => MAC_ROMAN_HIGH.get(usize::from(high)).copied().unwrap_or(char::REPLACEMENT_CHARACTER),
+    }
+}
+
+/// The characters of Macintosh Roman bytes 0x80 to 0xFF.
+#[rustfmt::skip]
+const MAC_ROMAN_HIGH: [char; 128] = [
+    '\u{00C4}', '\u{00C5}', '\u{00C7}', '\u{00C9}', '\u{00D1}', '\u{00D6}', '\u{00DC}', '\u{00E1}',
+    '\u{00E0}', '\u{00E2}', '\u{00E4}', '\u{00E3}', '\u{00E5}', '\u{00E7}', '\u{00E9}', '\u{00E8}',
+    '\u{00EA}', '\u{00EB}', '\u{00ED}', '\u{00EC}', '\u{00EE}', '\u{00EF}', '\u{00F1}', '\u{00F3}',
+    '\u{00F2}', '\u{00F4}', '\u{00F6}', '\u{00F5}', '\u{00FA}', '\u{00F9}', '\u{00FB}', '\u{00FC}',
+    '\u{2020}', '\u{00B0}', '\u{00A2}', '\u{00A3}', '\u{00A7}', '\u{2022}', '\u{00B6}', '\u{00DF}',
+    '\u{00AE}', '\u{00A9}', '\u{2122}', '\u{00B4}', '\u{00A8}', '\u{2260}', '\u{00C6}', '\u{00D8}',
+    '\u{221E}', '\u{00B1}', '\u{2264}', '\u{2265}', '\u{00A5}', '\u{00B5}', '\u{2202}', '\u{2211}',
+    '\u{220F}', '\u{03C0}', '\u{222B}', '\u{00AA}', '\u{00BA}', '\u{03A9}', '\u{00E6}', '\u{00F8}',
+    '\u{00BF}', '\u{00A1}', '\u{00AC}', '\u{221A}', '\u{0192}', '\u{2248}', '\u{2206}', '\u{00AB}',
+    '\u{00BB}', '\u{2026}', '\u{00A0}', '\u{00C0}', '\u{00C3}', '\u{00D5}', '\u{0152}', '\u{0153}',
+    '\u{2013}', '\u{2014}', '\u{201C}', '\u{201D}', '\u{2018}', '\u{2019}', '\u{00F7}', '\u{25CA}',
+    '\u{00FF}', '\u{0178}', '\u{2044}', '\u{20AC}', '\u{2039}', '\u{203A}', '\u{FB01}', '\u{FB02}',
+    '\u{2021}', '\u{00B7}', '\u{201A}', '\u{201E}', '\u{2030}', '\u{00C2}', '\u{00CA}', '\u{00C1}',
+    '\u{00CB}', '\u{00C8}', '\u{00CD}', '\u{00CE}', '\u{00CF}', '\u{00CC}', '\u{00D3}', '\u{00D4}',
+    '\u{F8FF}', '\u{00D2}', '\u{00DA}', '\u{00DB}', '\u{00D9}', '\u{0131}', '\u{02C6}', '\u{02DC}',
+    '\u{00AF}', '\u{02D8}', '\u{02D9}', '\u{02DA}', '\u{00B8}', '\u{02DD}', '\u{02DB}', '\u{02C7}',
+];
 
 /// Refuses a rename whose strings overlap a string that keeps its bytes.
 fn check_kept(edits: &[Edit], mut kept: Vec<Range<usize>>) -> Result<(), FontError> {

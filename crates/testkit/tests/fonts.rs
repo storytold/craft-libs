@@ -206,6 +206,16 @@ fn rename_rejects_non_ascii_mac_roman() {
     // "Café Sans 3" in Mac Roman, where é is 0x8E.
     let font = family_face(&[win(1, "Café Sans 3"), mac(1, b"Caf\x8E Sans 3")]);
     assert_eq!(rename_family(&font, "Café Sans 3", "Cafe Sans 3"), Err(FontError::UnsupportedEncoding));
+    let font = family_face(&[win(1, "Café Sans 3"), mac(4, b"Caf\x8E Sans 3 Bold")]);
+    assert_eq!(rename_family(&font, "Café Sans 3", "Cafe Sans 3"), Err(FontError::UnsupportedEncoding));
+}
+
+#[test]
+fn rename_keeps_mac_roman_names_with_other_letters() {
+    // Mac Roman 0x80 is "Ä" and 0x8F is "è", so neither Mac record holds "Café Sans 3".
+    let list = [win(1, "Café Sans 3"), mac(1, b"Caf\x80 Sans 3"), mac(4, b"Caf\x8F Sans 3 Bold")];
+    let out = rename_family(&family_face(&list), "Café Sans 3", "Cafe Sans 3").unwrap();
+    assert_eq!(strings(&out), vec![win(1, "Cafe Sans 3"), list[1].clone(), list[2].clone()]);
 }
 
 #[test]
@@ -272,6 +282,20 @@ fn rename_rejects_shared_nonfamily_storage() {
         [Rec { platform: 3, encoding: 1, name_id: 1, offset: 0, length: 26 }, Rec { platform: 3, encoding: 1, name_id: 6, offset: 2, length: 10 }];
     let font = face(&[(b"head", head()), (b"name", name_table(0, &records, &[], &utf16(FROM)))]);
     assert_eq!(rename_family(&font, FROM, TO), Err(FontError::ConflictingNameStorage));
+}
+
+#[test]
+fn rename_keeps_a_style_sharing_the_full_name_suffix() {
+    // The style name (ID 2) "Bold" is the last 8 bytes of the full name, which the rename does not change.
+    let storage = [utf16(FROM), utf16("Source Sans 3 Bold")].concat();
+    let records = [
+        Rec { platform: 3, encoding: 1, name_id: 1, offset: 0, length: 26 },
+        Rec { platform: 3, encoding: 1, name_id: 2, offset: 54, length: 8 },
+        Rec { platform: 3, encoding: 1, name_id: 4, offset: 26, length: 36 },
+    ];
+    let font = face(&[(b"head", head()), (b"name", name_table(0, &records, &[], &storage))]);
+    let out = rename_family(&font, FROM, TO).unwrap();
+    assert_eq!(strings(&out), vec![win(1, TO), win(2, "Bold"), win(4, "Sysfont Sans3 Bold")]);
 }
 
 #[test]
