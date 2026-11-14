@@ -320,11 +320,10 @@ pub fn surface_at(mesh: &Mesh, t: u32, b1: f32, b2: f32) -> Option<Surface> {
     // `unit` divides by the largest component first, so a long finite vector keeps its direction.
     let nrm = unit(p(&mesh.normals)?).unwrap_or(Vec3::Y);
     let (pa, pb, pc) = (*mesh.positions.get(a)?, *mesh.positions.get(b)?, *mesh.positions.get(c)?);
-    // The edges are divided by their largest component before the cross product, which can
-    // overflow where the edges themselves do not.
-    let (e1, e2) = (pb - pa, pc - pa);
-    let largest = e1.abs().max(e2.abs()).max_element();
-    let geo_nrm = (largest > 0.0).then(|| unit((e1 / largest).cross(e2 / largest))).flatten().unwrap_or(nrm);
+    // In `f64` the edges between any two finite `f32` positions and their cross product neither
+    // overflow nor round to zero.
+    let (pa, pb, pc) = (pa.as_dvec3(), pb.as_dvec3(), pc.as_dvec3());
+    let geo_nrm = (pb - pa).cross(pc - pa).try_normalize().map_or(nrm, |n| n.as_vec3());
     let tan = *mesh.tangents.get(a)? * b0 + *mesh.tangents.get(b)? * b1 + *mesh.tangents.get(c)? * b2;
     let uv = *mesh.uvs.get(a)? * b0 + *mesh.uvs.get(b)? * b1 + *mesh.uvs.get(c)? * b2;
     let tdir = unit(tan.truncate()).unwrap_or_else(|| nrm.any_orthonormal_vector());
@@ -396,6 +395,29 @@ mod tests {
         let surface = surface_at(&m, 0, 0.25, 0.25).unwrap();
         assert!((surface.nrm - Vec3::X).length() < 1e-6, "{}", surface.nrm);
         assert!((surface.tangent - Vec4::new(0.0, 1.0, 0.0, -1.0)).length() < 1e-6, "{}", surface.tangent);
+        assert!((surface.geo_nrm - Vec3::Z).length() < 1e-6, "{}", surface.geo_nrm);
+    }
+
+    #[test]
+    fn face_normal_of_a_triangle_wider_than_the_f32_range() {
+        // Its x extent of 6e38 is past f32::MAX, while every corner is finite. The shading
+        // normals point along +X, away from the face.
+        let m = Mesh {
+            positions: vec![Vec3::new(-3e38, 0.0, 0.0), Vec3::new(3e38, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0)],
+            normals: vec![Vec3::X; 3],
+            tangents: vec![Vec4::new(0.0, 1.0, 0.0, 1.0); 3],
+            uvs: vec![Vec2::ZERO, Vec2::X, Vec2::Y],
+            indices: vec![0, 1, 2],
+            ..Mesh::default()
+        };
+        m.validate().unwrap();
+        let surface = surface_at(&m, 0, 0.25, 0.25).unwrap();
+        assert!((surface.nrm - Vec3::X).length() < 1e-6, "{}", surface.nrm);
+        assert!((surface.geo_nrm - Vec3::Z).length() < 1e-6, "{}", surface.geo_nrm);
+        // A triangle a few subnormal steps wide keeps its face normal too.
+        let tiny = f32::from_bits(1);
+        let m = Mesh { positions: vec![Vec3::ZERO, Vec3::X * tiny, Vec3::Y * tiny], ..m };
+        let surface = surface_at(&m, 0, 0.25, 0.25).unwrap();
         assert!((surface.geo_nrm - Vec3::Z).length() < 1e-6, "{}", surface.geo_nrm);
     }
 

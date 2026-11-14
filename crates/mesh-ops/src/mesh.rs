@@ -706,8 +706,7 @@ impl Mesh {
     }
 
     /// Append `other`, offsetting indices; its submeshes keep their material indices shifted by
-    /// this mesh's material count. Leaves this mesh unchanged when [`Mesh::try_append`] fails on
-    /// a bad index or an overflow.
+    /// this mesh's material count. Leaves this mesh unchanged when [`Mesh::try_append`] fails.
     pub fn append(&mut self, other: &Mesh) {
         let _ = self.try_append(other);
     }
@@ -717,8 +716,8 @@ impl Mesh {
     /// tangents for every vertex, the other side gets them (computed normals and tangents, zero
     /// UVs), so the attribute arrays stay as long as the positions; computing tangents can split
     /// vertices ([`Mesh::compute_tangents`]). A side with submeshes and no material list gets
-    /// one unnamed material. After `OutOfMemory` this mesh's normals, UVs or tangents can be
-    /// changed; the other errors leave it unchanged.
+    /// one unnamed material. A reservation that fails is `OutOfMemory`. Every error leaves this
+    /// mesh unchanged.
     pub fn try_append(&mut self, other: &Mesh) -> Result<()> {
         if let Some(bad) = other.indices.iter().find(|&&i| i as usize >= other.positions.len()) {
             return Err(MeshOpsError::Invalid(format!("index {bad} out of range ({} vertices)", other.positions.len())));
@@ -751,7 +750,7 @@ impl Mesh {
         let unnamed = |m: &Mesh| m.materials.is_empty() && !m.submeshes.is_empty();
         let (self_unnamed, other_unnamed) = (unnamed(self), unnamed(other));
         let mbase = self.materials.len() + usize::from(self_unnamed);
-        let mut submeshes = Vec::with_capacity(other.submeshes.len());
+        let mut submeshes = try_vec(other.submeshes.len(), "submeshes")?;
         for s in &other.submeshes {
             let start = s.start.checked_add(ibase).ok_or(too_large("submeshes"))?;
             start.checked_add(s.count).ok_or(too_large("submeshes"))?;
@@ -759,7 +758,6 @@ impl Mesh {
             submeshes.push(SubMesh { name: s.name.clone(), material, start, count: s.count });
         }
 
-        let mut other = other.clone();
         let complete = |m: &Mesh| {
             (
                 per_vertex(m.normals.len(), m.positions.len()),
@@ -767,44 +765,90 @@ impl Mesh {
                 per_vertex(m.tangents.len(), m.positions.len()),
             )
         };
-        let ((sn, su, st), (on, ou, ot)) = (complete(self), complete(&other));
+        let ((sn, su, st), (on, ou, ot)) = (complete(self), complete(other));
         let need_tangents = st || ot;
         let (need_normals, need_uvs) = (sn || on || need_tangents, su || ou || need_tangents);
-        // `other` first: it is a copy, so an error there leaves this mesh unchanged.
-        for (mesh, (has_normals, has_uvs, has_tangents)) in [(&mut other, (on, ou, ot)), (&mut *self, (sn, su, st))] {
-            if !need_normals {
-                mesh.normals.clear();
-            } else if !has_normals {
-                mesh.try_compute_normals()?;
+        // A side that lacks an attribute the result needs is filled in on a copy of its vertex
+        // arrays, so an error leaves both meshes unchanged.
+        let filled = |m: &Mesh, (has_normals, has_uvs, has_tangents): (bool, bool, bool)| -> Result<Option<Mesh>> {
+            if (has_normals || !need_normals) && (has_uvs || !need_uvs) && (has_tangents || !need_tangents) {
+                return Ok(None);
             }
-            if !need_uvs {
-                mesh.uvs.clear();
-            } else if !has_uvs {
-                mesh.uvs = try_filled(mesh.positions.len(), Vec2::ZERO, "UVs")?;
+            let mut w = m.vertex_copy()?;
+            if need_normals && !has_normals {
+                w.try_compute_normals()?;
             }
-            if !need_tangents {
-                mesh.tangents.clear();
-            } else if !has_tangents {
-                mesh.try_compute_tangents()?;
+            if need_uvs && !has_uvs {
+                w.uvs = try_filled(w.positions.len(), Vec2::ZERO, "UVs")?;
             }
-        }
+            if need_tangents && !has_tangents {
+                w.try_compute_tangents()?;
+            }
+            Ok(Some(w))
+        };
+        let other_filled = filled(other, (on, ou, ot))?;
+        let mut self_filled = filled(self, (sn, su, st))?;
+        let o = other_filled.as_ref().unwrap_or(other);
         // Computing tangents can split vertices, so the base is taken now (checked to fit above).
-        let base = self.positions.len() as u32;
+        let base = self_filled.as_ref().map_or(self.positions.len(), |w| w.positions.len());
+        let has_colors = !(self.colors.is_empty() && other.colors.is_empty());
+        let has_diagonals = !(self.diagonals.is_empty() && other.diagonals.is_empty());
 
-        self.positions.extend_from_slice(&other.positions);
-        self.normals.extend_from_slice(&other.normals);
-        self.tangents.extend_from_slice(&other.tangents);
-        self.uvs.extend_from_slice(&other.uvs);
-        if !(self.colors.is_empty() && other.colors.is_empty()) {
+        // Reserve every array before changing any of them: reserving leaves their contents as
+        // they are.
+        let wanted = |on: bool, len: usize| if on { len } else { 0 };
+        let diagonals = wanted(has_diagonals, (ibase as usize / 3 + other.triangle_count()).saturating_sub(self.diagonals.len()));
+        reserved(self.diagonals.try_reserve(diagonals), "diagonals")?;
+        let materials = other.materials.len() + usize::from(self_unnamed) + usize::from(other_unnamed);
+        reserved(self.materials.try_reserve(materials), "materials")?;
+        reserved(self.submeshes.try_reserve(submeshes.len()), "submeshes")?;
+        let target: &mut Mesh = match self_filled.as_mut() {
+            Some(w) => w,
+            None => self,
+        };
+        reserved(target.positions.try_reserve(o.positions.len()), "positions")?;
+        reserved(target.normals.try_reserve(wanted(need_normals, o.normals.len())), "normals")?;
+        reserved(target.tangents.try_reserve(wanted(need_tangents, o.tangents.len())), "tangents")?;
+        reserved(target.uvs.try_reserve(wanted(need_uvs, o.uvs.len())), "UVs")?;
+        let colors = wanted(has_colors, (base + o.positions.len()).saturating_sub(target.colors.len()));
+        reserved(target.colors.try_reserve(colors), "colors")?;
+        reserved(target.indices.try_reserve(o.indices.len()), "indices")?;
+
+        if let Some(w) = self_filled {
+            self.positions = w.positions;
+            self.normals = w.normals;
+            self.tangents = w.tangents;
+            self.uvs = w.uvs;
+            self.colors = w.colors;
+            self.indices = w.indices;
+        }
+        let base = base as u32;
+        self.positions.extend_from_slice(&o.positions);
+        if need_normals {
+            self.normals.extend_from_slice(&o.normals);
+        } else {
+            self.normals.clear();
+        }
+        if need_tangents {
+            self.tangents.extend_from_slice(&o.tangents);
+        } else {
+            self.tangents.clear();
+        }
+        if need_uvs {
+            self.uvs.extend_from_slice(&o.uvs);
+        } else {
+            self.uvs.clear();
+        }
+        if has_colors {
             // Vertices of the side without colors become white.
             self.colors.resize(base as usize, Vec4::ONE);
-            self.colors.extend(other.colors.iter().copied().chain(std::iter::repeat(Vec4::ONE)).take(other.positions.len()));
+            self.colors.extend(o.colors.iter().copied().chain(std::iter::repeat(Vec4::ONE)).take(o.positions.len()));
         }
-        if !(self.diagonals.is_empty() && other.diagonals.is_empty()) {
+        if has_diagonals {
             self.diagonals.resize(ibase as usize / 3, 0);
             self.diagonals.extend(other.diagonals.iter().copied().chain(std::iter::repeat(0)).take(other.triangle_count()));
         }
-        self.indices.extend(other.indices.iter().map(|i| i + base));
+        self.indices.extend(o.indices.iter().map(|i| i + base));
         if self_unnamed {
             self.materials.push(String::new());
         }
@@ -814,6 +858,20 @@ impl Mesh {
         }
         self.submeshes.extend(submeshes);
         Ok(())
+    }
+
+    /// A mesh holding reserved copies of this mesh's vertex attributes and indices, and nothing
+    /// else, or `OutOfMemory`.
+    fn vertex_copy(&self) -> Result<Mesh> {
+        Ok(Mesh {
+            positions: try_copy(&self.positions, "positions")?,
+            normals: try_copy(&self.normals, "normals")?,
+            tangents: try_copy(&self.tangents, "tangents")?,
+            uvs: try_copy(&self.uvs, "UVs")?,
+            colors: try_copy(&self.colors, "colors")?,
+            indices: try_copy(&self.indices, "indices")?,
+            ..Mesh::default()
+        })
     }
 
     /// Uniformly scale and translate so the mesh is centered with the given bounding radius. A
@@ -1649,6 +1707,29 @@ mod tests {
         let mut broken = quad();
         broken.indices[0] = 4;
         assert!(quad().try_append(&broken).is_err());
+    }
+
+    #[test]
+    fn append_fills_in_this_mesh_when_its_tangents_split_vertices() {
+        // UVs mirrored across the diagonal: computing this mesh's tangents splits the shared
+        // vertices, and the copies keep their colors.
+        let mut a = quad();
+        a.normals.clear();
+        a.tangents.clear();
+        a.uvs[3] = Vec2::new(1.0, 1.0);
+        a.colors = vec![Vec4::new(1.0, 0.0, 0.0, 1.0); 4];
+        a.diagonals = vec![0b100, 0];
+        let other = quad();
+        a.try_append(&other).unwrap();
+        a.validate().unwrap();
+        let n = a.positions.len();
+        assert!(n > 8, "{n} vertices");
+        assert_eq!((a.normals.len(), a.uvs.len(), a.tangents.len(), a.colors.len()), (n, n, n, n));
+        assert!(a.colors[..n - 4].iter().all(|&c| c == Vec4::new(1.0, 0.0, 0.0, 1.0)), "{:?}", a.colors);
+        assert_eq!(a.colors[n - 4..], [Vec4::ONE; 4]);
+        assert_eq!(a.diagonals, vec![0b100, 0, 0, 0]);
+        let base = (n - 4) as u32;
+        assert_eq!(a.indices[6..], other.indices.iter().map(|i| i + base).collect::<Vec<_>>()[..]);
     }
 
     #[test]
