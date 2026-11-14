@@ -8,12 +8,12 @@ use std::collections::VecDeque;
 use kurbo::{BezPath, ParamCurve, Rect, Shape};
 
 use crate::{
-    FillRule,
+    Error, FillRule,
     curve::{Order, solve_t_for_y, y_subsegment},
     geom::Point,
     order::ComparisonCache,
     position::PositionedOutputSeg,
-    segments::{NonClosedPath, SegIdx, SegVec, Segments},
+    segments::{SegIdx, SegVec, Segments},
     sweep::{
         Correctness, SegmentsConnectedAtX, SweepLineBuffers, SweepLineRange, SweepLineRangeBuffers,
         Sweeper,
@@ -502,7 +502,10 @@ impl<W: WindingNumber> Topology<W> {
     /// Construct a new topology from a collection of paths and tags.
     ///
     /// See [`WindingNumber`] about the tags are for.
-    pub fn from_paths<'a, Iter>(paths: Iter, eps: f64) -> Result<Self, NonClosedPath>
+    ///
+    /// Returns an error if a path is not closed, or if a coordinate is not finite or has a
+    /// magnitude above [`crate::MAX_COORDINATE`].
+    pub fn from_paths<'a, Iter>(paths: Iter, eps: f64) -> Result<Self, Error>
     where
         Iter: IntoIterator<Item = (&'a BezPath, W::Tag)>,
     {
@@ -512,13 +515,17 @@ impl<W: WindingNumber> Topology<W> {
     /// Construct a new topology from a collection of paths and tags.
     ///
     /// See [`WindingNumber`] about the tags are for.
-    pub fn from_paths_with_correctness<'a, Iter>(paths: Iter, eps: f64, correctness: Correctness) -> Result<Self, NonClosedPath>
+    ///
+    /// Returns an error if a path is not closed, or if a coordinate is not finite or has a
+    /// magnitude above [`crate::MAX_COORDINATE`].
+    pub fn from_paths_with_correctness<'a, Iter>(paths: Iter, eps: f64, correctness: Correctness) -> Result<Self, Error>
     where
         Iter: IntoIterator<Item = (&'a BezPath, W::Tag)>,
     {
         let mut segments = Segments::default();
         let mut tag = Vec::new();
         for (p, t) in paths {
+            crate::check_coordinates(p)?;
             segments.add_path_without_updating_enter_exit(p, true)?;
             tag.resize(segments.len(), t);
         }
@@ -1814,7 +1821,7 @@ impl<W: WindingNumber> Topology<W> {
 
 impl Topology<i32> {
     /// Construct a new topology from a single path.
-    pub fn from_path(path: &BezPath, eps: f64) -> Result<Self, NonClosedPath> {
+    pub fn from_path(path: &BezPath, eps: f64) -> Result<Self, Error> {
         Self::from_paths(std::iter::once((path, ())), eps)
     }
 }
@@ -1847,11 +1854,7 @@ impl Topology<BinaryWindingNumber> {
     /// Creates a new `Topology` from two Bézier paths.
     ///
     /// The two Bézier paths represent two different sets for the purpose of boolean set operations.
-    pub fn from_paths_binary(
-        set_a: &BezPath,
-        set_b: &BezPath,
-        eps: f64,
-    ) -> Result<Self, NonClosedPath> {
+    pub fn from_paths_binary(set_a: &BezPath, set_b: &BezPath, eps: f64) -> Result<Self, Error> {
         Self::from_paths([(set_a, OneOfTwo::A), (set_b, OneOfTwo::B)], eps)
     }
 
