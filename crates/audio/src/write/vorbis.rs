@@ -9,8 +9,10 @@ pub const OGG_BITRATES: (u32, u32) = (64, 500);
 
 /// The block size the encoder processes at a time: small enough that memory stays bounded
 /// regardless of file length.
+#[cfg(not(target_arch = "wasm32"))]
 const BLOCK: usize = 4096;
 
+#[cfg(not(target_arch = "wasm32"))]
 fn encode_error(e: vorbis_rs::VorbisError) -> AudioError {
     AudioError::Encode(e.to_string())
 }
@@ -22,7 +24,13 @@ fn encode_error(e: vorbis_rs::VorbisError) -> AudioError {
 pub fn encode(buf: &AudioBuffer, kbps: u32) -> Result<Vec<u8>> {
     use std::num::{NonZeroU8, NonZeroU32};
 
-    let channels = buf.channels.len().clamp(1, 2);
+    let channels = buf.channels.len();
+    if !(1..=2).contains(&channels) {
+        return Err(AudioError::Unsupported("Ogg Vorbis export requires mono or stereo audio".into()));
+    }
+    if buf.channels.iter().any(|c| c.len() != buf.frames() || c.iter().any(|s| !s.is_finite())) {
+        return Err(AudioError::Encode("Vorbis samples must be finite and channels equally long".into()));
+    }
     let (Some(rate), Some(count)) = (NonZeroU32::new(buf.sample_rate), NonZeroU8::new(channels as u8)) else {
         return Err(AudioError::Encode("there is no audio to encode".into()));
     };
@@ -44,7 +52,7 @@ pub fn encode(buf: &AudioBuffer, kbps: u32) -> Result<Vec<u8>> {
         encoder.finish().map_err(encode_error)
     };
 
-    // The library is C: whatever it does wrong ends here as an error, never as a crash of the app.
+    // Convert Rust unwinds to an error. This does not catch native crashes or aborts.
     let attempt = |strategy| {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| encode(strategy)))
             .unwrap_or_else(|_| Err(AudioError::Encode("the Vorbis encoder failed".into())))
@@ -58,5 +66,41 @@ pub fn encode(buf: &AudioBuffer, kbps: u32) -> Result<Vec<u8>> {
 
 #[cfg(target_arch = "wasm32")]
 pub fn encode(_buf: &AudioBuffer, _kbps: u32) -> Result<Vec<u8>> {
-    Err("Ogg Vorbis files are exported by the desktop app".into())
+    Err(AudioError::Unsupported("Ogg Vorbis files are exported by the desktop app".into()))
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_unsupported_or_malformed_channels_without_dropping_audio() {
+        for channels in [0, 3, 6] {
+            assert!(matches!(encode(&AudioBuffer::new(48_000, channels, 16), 192), Err(AudioError::Unsupported(_))));
+        }
+        let ragged = AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.0; 16], vec![0.0; 15]] };
+        assert!(encode(&ragged, 192).is_err());
+        assert!(encode(&AudioBuffer::new(0, 1, 16), 192).is_err());
+        let invalid = AudioBuffer { sample_rate: 48_000, channels: vec![vec![f32::NAN]] };
+        assert!(encode(&invalid, 192).is_err());
+    }
+
+    #[test]
+    fn generic_and_direct_encoders_write_mono_and_stereo_ogg() {
+        for channels in [1, 2] {
+            let audio = AudioBuffer::new(48_000, channels, 512);
+            let opts = crate::EncodeOptions::new(crate::EncodeFormat::Ogg);
+            let direct = encode(&audio, 192).unwrap();
+            let generic = crate::encode(&audio, &opts).unwrap();
+            assert!(direct.starts_with(b"OggS"));
+            assert_eq!(direct, generic);
+            #[cfg(feature = "decode")]
+            {
+                let (info, decoded) = crate::decode(&generic, Some("ogg")).unwrap();
+                assert_eq!(info.channels, channels);
+                assert_eq!(decoded.num_channels(), channels);
+                assert_eq!(decoded.frames(), audio.frames());
+            }
+        }
+    }
 }

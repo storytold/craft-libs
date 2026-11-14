@@ -348,6 +348,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each).
+- [`craft-texture`](crates/texture/README.md): linear float image planes, gray or RGBA, with
+  nearest and bilinear sampling that repeats or clamps, resizing and display conversion. Sizes are
+  bounded by `Limits`. From MaterialCraft.
 - [`craft-ui`](crates/ui/README.md): SVG catalogs, icon buttons, tabs, pane controls, transactional docking, print settings and theme helpers for egui frontends;
   assets, themes, localization and command handling stay in each app. Requires Rust 1.95 or later.
 - [`craft-vcard`](crates/vcard/README.md): vCard contacts, from MailCraft: vCard 2.1, 3.0 and 4.0 read
