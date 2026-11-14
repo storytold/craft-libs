@@ -99,6 +99,13 @@ fn per_vertex(len: usize, n: usize) -> bool {
     len == n
 }
 
+/// A copy of `from` in a reserved array, or `OutOfMemory` naming `what`.
+fn try_copy<T: Clone>(from: &[T], what: &'static str) -> Result<Vec<T>> {
+    let mut v = try_vec(from.len(), what)?;
+    v.extend_from_slice(from);
+    Ok(v)
+}
+
 impl Mesh {
     pub fn triangle_count(&self) -> usize {
         self.indices.len() / 3
@@ -702,7 +709,18 @@ impl Mesh {
             return Err(MeshOpsError::Invalid("the subdivided mesh does not fit in u32 indices".into()));
         }
 
-        let mut m = Mesh { indices: try_vec(out_indices, "indices")?, ..self.clone() };
+        // Diagonals stay empty here and are built below when the input has them.
+        let mut m = Mesh {
+            positions: try_copy(&self.positions, "positions")?,
+            normals: try_copy(&self.normals, "normals")?,
+            tangents: try_copy(&self.tangents, "tangents")?,
+            uvs: try_copy(&self.uvs, "UVs")?,
+            colors: try_copy(&self.colors, "colors")?,
+            indices: try_vec(out_indices, "indices")?,
+            submeshes: try_copy(&self.submeshes, "submeshes")?,
+            materials: try_copy(&self.materials, "materials")?,
+            diagonals: Vec::new(),
+        };
         let has = |len: usize| len == n;
         let (has_n, has_t, has_uv, has_c) = (has(self.normals.len()), has(self.tangents.len()), has(self.uvs.len()), has(self.colors.len()));
         let mut mids: std::collections::HashMap<(u32, u32), u32> = std::collections::HashMap::new();
@@ -1174,6 +1192,24 @@ mod tests {
         assert!(s.positions.iter().all(|p| p.is_finite()), "{:?}", s.positions);
         assert!(s.uvs.iter().all(|p| p.is_finite()), "{:?}", s.uvs);
         assert!(s.positions.contains(&Vec3::new(3e38, 1.5e38, 0.0)));
+    }
+
+    #[test]
+    fn subdivision_keeps_the_input_vertices_and_materials() {
+        let mut m = quad();
+        m.colors = vec![Vec4::X, Vec4::Y, Vec4::Z, Vec4::W];
+        let s = m.try_subdivided(&Limits::default()).unwrap();
+        let n = m.positions.len();
+        assert_eq!(s.positions[..n], m.positions[..]);
+        assert_eq!(s.normals[..n], m.normals[..]);
+        assert_eq!(s.tangents[..n], m.tangents[..]);
+        assert_eq!(s.uvs[..n], m.uvs[..]);
+        assert_eq!(s.colors[..n], m.colors[..]);
+        assert_eq!(s.colors.len(), s.positions.len());
+        assert_eq!(s.materials, m.materials);
+        assert_eq!(s.submeshes.iter().map(|s| (&s.name, s.material)).collect::<Vec<_>>(), vec![(&m.submeshes[0].name, 0)]);
+        // An input with no diagonals gives a result with none.
+        assert!(m.diagonals.is_empty() && s.diagonals.is_empty());
     }
 
     #[test]
