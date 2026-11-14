@@ -145,6 +145,7 @@ impl Iterator for Scan<'_> {
                 Gathered::NotPlaced => continue,
                 Gathered::Unreadable => Err(Unreadable::Placement),
                 Gathered::TooLarge => Err(Unreadable::TooLarge),
+                Gathered::Protected => Err(Unreadable::Protected),
             };
             return Some(Item { id, kind, data });
         }
@@ -184,6 +185,9 @@ pub enum Unreadable {
     Placement,
     /// More than [`MAX_ITEM`] bytes, or more than [`scan`] has left of [`MAX_SCANNED_BYTES`].
     TooLarge,
+    /// The item is protected (encrypted): its `infe` entry names a protection scheme, so its
+    /// stored bytes are not the metadata in the clear.
+    Protected,
 }
 
 /// The TIFF stream of an `Exif` item: past its 4-byte offset field and the bytes that offset
@@ -214,6 +218,8 @@ struct Candidate {
     describes: bool,
     /// Tied to the primary image or an image it is made from.
     describes_primary: bool,
+    /// Protected (encrypted): there, but not readable.
+    protected: bool,
 }
 
 impl Candidate {
@@ -308,6 +314,9 @@ impl<'a> Container<'a> {
 
     /// The bytes of `items[i]`, at most `limit` of them.
     fn gather(&self, i: usize, limit: usize) -> Gathered {
+        if self.items.get(i).is_some_and(|c| c.protected) {
+            return Gathered::Protected;
+        }
         match (&self.iloc, self.places.get(i)) {
             (Some(iloc), Some(Some(place))) => iloc.gather(self.file, self.idat, place, limit),
             _ if self.iloc_complete => Gathered::NotPlaced,
@@ -326,6 +335,8 @@ enum Gathered {
     Unreadable,
     /// More than the limit.
     TooLarge,
+    /// A protected (encrypted) item.
+    Protected,
 }
 
 /// A full box's version: the first byte of its own payload (`None` for an empty box).
@@ -370,14 +381,14 @@ fn item_infos(bytes: &[u8], iinf: &BoxRef, cap: usize, budget: &mut usize) -> It
     catalog.complete = entries.last().map_or(first, |b| b.end) == iinf.end && u32::try_from(entries.len()).ok() == Some(count);
     for b in &entries {
         let info = bytes.get(b.body..b.end).filter(|_| &b.kind == b"infe").and_then(item_info);
-        let Some((id, kind)) = info else {
+        let Some((id, kind, protected)) = info else {
             catalog.complete = false;
             continue;
         };
         catalog.ids.push(id);
         match kind {
             Some(_) if catalog.items.len() >= cap => catalog.more = true,
-            Some(kind) => catalog.items.push(Candidate { id, kind, describes: false, describes_primary: false }),
+            Some(kind) => catalog.items.push(Candidate { id, kind, describes: false, describes_primary: false, protected }),
             None => {}
         }
     }
@@ -386,9 +397,11 @@ fn item_infos(bytes: &[u8], iinf: &BoxRef, cap: usize, budget: &mut usize) -> It
     catalog
 }
 
-/// An `infe` entry's item id, and its kind when it is an unprotected `Exif` or XMP item (`mime`,
-/// `application/rdf+xml`). `None` when the entry can't be read to its last field.
-fn item_info(infe: &[u8]) -> Option<(u32, Option<Kind>)> {
+/// An `infe` entry's item id, its kind when it is an `Exif` or XMP item (`mime`,
+/// `application/rdf+xml`), and whether it is protected (encrypted). A protected entry still names
+/// its type in the clear, so protected metadata is found too. `None` when the entry can't be read
+/// to its last field.
+fn item_info(infe: &[u8]) -> Option<(u32, Option<Kind>, bool)> {
     let version = *infe.first()?;
     // version and flags, the item id (32 bits in version 3), the protection index
     let (id, at) = match version {
@@ -396,9 +409,7 @@ fn item_info(infe: &[u8]) -> Option<(u32, Option<Kind>)> {
         3 => (be32(infe, 4)?, 8usize),
         _ => return None,
     };
-    if be16(infe, at)? != 0 {
-        return Some((id, None)); // protected (encrypted)
-    }
+    let protected = be16(infe, at)? != 0;
     let at = at.checked_add(2)?;
     // versions 0 and 1 have no item type and describe MIME items; 2 and 3 name the type
     let (kind, at) = if version >= 2 { (infe.get(at..at.checked_add(4)?)?, at.checked_add(4)?) } else { (b"mime".as_slice(), at) };
@@ -421,7 +432,7 @@ fn item_info(infe: &[u8]) -> Option<(u32, Option<Kind>)> {
         }
         _ => None,
     };
-    Some((id, kind))
+    Some((id, kind, protected))
 }
 
 /// The NUL-terminated string at `at` and where the next field starts.

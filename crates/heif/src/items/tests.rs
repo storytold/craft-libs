@@ -707,14 +707,15 @@ fn malformed_bounds_are_refused() {
     let mut iref = vec![0, 0, 0, 0];
     iref.extend(bx(b"cdsc", &[0, 2, 0xff, 0xff]));
     let iref = bx(b"iref", &iref);
-    let mut items = vec![Candidate { id: 2, kind: Kind::Exif, describes: false, describes_primary: false }];
+    let mut items = vec![Candidate { id: 2, kind: Kind::Exif, describes: false, describes_primary: false, protected: false }];
     let mut budget = MAX_BOXES;
     let b = boxes(&iref, 0, iref.len(), &mut budget);
     link(&iref, &b[0], Some(1), &mut items, &mut budget);
     assert!(!items[0].describes);
     assert_eq!(item_info(&[2, 0, 0, 0, 0, 2, 0, 0, b'E', b'x']), None, "cut short: the item type is unknown");
     assert_eq!(item_info(&[4, 0, 0, 0, 0, 2, 0, 0, b'E', b'x', b'i', b'f', 0]), None, "unknown infe version");
-    assert_eq!(item_info(&[2, 0, 0, 0, 0, 2, 0, 1, b'E', b'x', b'i', b'f', 0]), Some((2, None)), "protected");
+    assert_eq!(item_info(&[2, 0, 0, 0, 0, 2, 0, 1, b'E', b'x', b'i', b'f', 0]), Some((2, Some(Kind::Exif), true)), "protected");
+    assert_eq!(item_info(&[2, 0, 0, 0, 0, 2, 0, 1, b'E', b'x']), None, "protected and cut short");
     // a full box's version is its own first byte, never the next box's
     let two = [bx(b"iref", &[]), bx(b"free", &[1, 2, 3])].concat();
     let mut budget = MAX_BOXES;
@@ -946,7 +947,7 @@ fn item_catalog_uncertainty_keeps_readable_exif() {
     }
 }
 
-/// Catalogs without metadata items, and protected items, leave a complete, empty scan.
+/// Catalogs without metadata items leave a complete, empty scan.
 #[test]
 fn item_catalog_benign_entries_and_empty_tables_are_complete() {
     let h = Heif::new();
@@ -965,13 +966,33 @@ fn item_catalog_benign_entries_and_empty_tables_are_complete() {
             assert_eq!(sure(&with_iinf(&h, Some(&catalog(table_version, 1, &bx(b"infe", &entry))))), Some(Vec::new()));
         }
     }
-    // A protected (encrypted) item is not a metadata item this reader can read.
-    let mut entry = catalog_entry(2, 2, b"Exif", b"\0");
+    // A protected (encrypted) image item is no metadata item.
+    let mut entry = catalog_entry(2, 1, b"hvc1", b"\0");
     entry[7] = 1;
-    let h = h.item(2, b"Exif", exif_item(&[], &tiff_with("Located")), Store::Idat, 1);
     assert_eq!(sure(&with_iinf(&h, Some(&catalog(0, 1, &bx(b"infe", &entry))))), Some(Vec::new()));
     // Complete top-level files without an item meta box have no item catalog to inspect.
     assert_eq!(sure(&bx(b"ftyp", b"msf1\0\0\0\0msf1")), Some(Vec::new()));
+}
+
+/// A protected (encrypted) `Exif` or XMP item is in the scan, as unreadable: the file holds
+/// metadata that can't be checked. [`read`] leaves it out.
+#[test]
+fn protected_metadata_is_unreadable_not_absent() {
+    let h = Heif::new().item(2, b"Exif", exif_item(&[], &tiff_with("Located")), Store::Idat, 1);
+    for (kind, fields, expected) in [(b"Exif", b"\0".as_slice(), Kind::Exif), (b"mime", b"name\0application/rdf+xml\0", Kind::Xmp)] {
+        for version in [2, 3] {
+            let mut entry = catalog_entry(version, 2, kind, fields);
+            let protection_at = if version == 3 { 9 } else { 7 };
+            entry[protection_at] = 1;
+            let f = with_iinf(&h, Some(&catalog(0, 1, &bx(b"infe", &entry))));
+            let s = scan(&f).unwrap();
+            assert!(s.complete(), "{kind:?} v{version}");
+            let found: Vec<Item> = s.collect();
+            assert_eq!(found, [Item { id: 2, kind: expected, data: Err(Unreadable::Protected) }], "{kind:?} v{version}");
+            assert_eq!(sure(&f), None, "{kind:?} v{version}");
+            assert_eq!(read(&f).unwrap(), (None, None), "{kind:?} v{version}");
+        }
+    }
 }
 
 /// Running out of box budget, or a walk that stops before the end of its box, never makes a
