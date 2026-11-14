@@ -8,12 +8,18 @@ use super::shell::{base_shell, os_of, window_info};
 use super::spec::WindowLevel;
 use super::{HandOff, Record, SEARCH_EVERY, shared};
 use crate::runtime::egui::{pass, viewports};
-use crate::runtime::frame::PerViewport;
+use crate::runtime::frame::{PerViewport, Stored};
 use craft_host::target::{Caps, DoubleClick, WindowState};
 use craft_window::native::NativeWindow;
 use craft_window::policy::Frame;
 use egui::{Context, Pos2, Rect, Vec2, ViewportId};
 use std::sync::Arc;
+
+/// The last title the host set for a viewport.
+#[derive(Default)]
+struct SentTitle(Option<String>);
+
+impl Stored for SentTitle {}
 
 /// A window command `act` sends.
 #[derive(Clone, Debug, PartialEq)]
@@ -137,7 +143,19 @@ pub fn act(ctx: &Context, viewport: ViewportId, action: WindowAction) -> bool {
                 viewports::command(ctx, viewport, egui::ViewportCommand::WindowLevel(level.for_egui(active, os_of(ctx))));
             }
         }
-        WindowAction::SetTitle(title) => viewports::command(ctx, viewport, egui::ViewportCommand::Title(title)),
+        WindowAction::SetTitle(title) => {
+            // `ViewportInfo::title` is empty on X11 and Wayland, so the host remembers what it set itself.
+            let fresh = PerViewport::<SentTitle>::with(ctx, viewport, |sent| {
+                let fresh = sent.0.as_deref() != Some(title.as_str());
+                if fresh {
+                    sent.0 = Some(title.clone());
+                }
+                fresh
+            });
+            if fresh {
+                viewports::command(ctx, viewport, egui::ViewportCommand::Title(title));
+            }
+        }
         WindowAction::SetOpacity(_) => {}
     }
     true

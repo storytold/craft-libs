@@ -135,7 +135,6 @@ fn a_click_command_cycles_and_a_hold_lists_the_tools_without_firing_it() {
     clicked.fixture.click(&target);
     clicked.fixture.idle(3);
     assert_eq!(fired(&clicked), 1, "a click fires the click command");
-    clicked.fixture.key(Key::Tab, Modifiers::NONE);
     clicked.fixture.key(Key::Enter, Modifiers::NONE);
     assert_eq!(fired(&clicked), 1, "Enter fires it");
     clicked.fixture.key(Key::Space, Modifiers::NONE);

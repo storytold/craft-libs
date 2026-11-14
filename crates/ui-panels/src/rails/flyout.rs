@@ -283,7 +283,8 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
         self.open = open;
         self.double = cx.press().double_pressed() && cx.press().mods.is_none();
         if alt {
-            if let Some(at) = stepped {
+            // The release that ends a hold or a drag away fires nothing, with Alt held or not.
+            if let Some(at) = stepped.filter(|_| !held) {
                 let tool = &self.tools[at];
                 cx.fire(tool.command.clone(), FireSource::Pointer);
                 self.picked = Some(tool.id.clone());

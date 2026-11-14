@@ -282,8 +282,8 @@ pub struct AppShell<'a, S> {
     /// The host's flag for the document tabs, read back through `ShellCx::tabs_visible`.
     #[prop]
     document_tabs: bool,
-    /// The window's title: the shell sends `WindowAction::SetTitle` when it differs from the title the viewport
-    /// reports. Not in an embedded shell.
+    /// The window's title: the shell sends `WindowAction::SetTitle` every pass and the window host drops a title equal
+    /// to the last one it set. Not in an embedded shell.
     #[prop(into)]
     window_title: Option<String>,
     /// The name of the body region; the translated "Document" without it.
@@ -433,10 +433,9 @@ impl<'a, S> AppShell<'a, S> {
             && !embedded
             && !ui.is_sizing_pass()
         {
+            // The window host skips a title equal to the one it last set for the viewport.
             let ctx = ui.ctx();
-            if ctx.input(|input| input.viewport().title.clone()).as_deref() != Some(title.as_str()) {
-                WindowHost::of(ctx).act(pass::current_viewport(ctx), WindowAction::SetTitle(title));
-            }
+            WindowHost::of(ctx).act(pass::current_viewport(ctx), WindowAction::SetTitle(title));
         }
         let env = Env::of(ui);
         let outer = env.get::<ShellEntry>().0;
