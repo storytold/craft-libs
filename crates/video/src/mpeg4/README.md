@@ -1,20 +1,147 @@
-# MPEG-4 Part 2 video encoder (`craft_video::mpeg4`, feature `mpeg4`)
+# MPEG-4 Part 2 video (`craft_video::mpeg4`, features `mpeg4-decode` and `mpeg4-encode`)
 
-Clean-room MPEG-4 Visual (ISO/IEC 14496-2) encoder in pure Rust: the format Xvid and DivX write.
-It writes Simple profile streams. Depends on `craft-media` (`bitstream`, `CodecParams`) and
-`thiserror`. No `unsafe`, no panics. No Xvid, DivX, FFmpeg or other MPEG-4 implementation was
-read. ffmpeg and ffprobe are used only as external decoders in the tests.
+Clean-room MPEG-4 Visual (ISO/IEC 14496-2) decoder and encoder in pure Rust: the format Xvid and
+DivX write. The decoder reads the Simple and Advanced Simple profiles; the encoder writes Simple
+profile streams. Feature `mpeg4` turns on both. Depends on `craft-media` (`bitstream`,
+`CodecParams`) and `thiserror`. No `unsafe`, no panics. Both were written from the standard; no
+Xvid, DivX, FFmpeg or other MPEG-4 source was read. ffmpeg is used only in the tests, as a
+writer of test streams and as an external reference decoder.
 
-There is no MPEG-4 Part 2 decoder in this crate. `craft-media` names the stream (`CodecId::Mpeg4Video`)
-in MP4, Matroska, AVI and MXF.
+`craft-media` names the stream (`CodecId::Mpeg4Video`) in MP4, Matroska, AVI and MXF.
+
+The decoder and encoder share the Annex B code tables (`tables.rs`) and the IDCT (`dct.rs`).
 
 ## Specifications
 
 | Document | Used for |
 |---|---|
-| ISO/IEC 14496-2 | visual object sequence, visual object, VOL and VOP headers (§6.2), macroblock and block syntax, the VLC tables of Annex B, intra DC prediction (§7.4.3), the second inverse quantisation method (§7.4.2), the IDCT (Annex A) and its saturation, motion vector coding and prediction (§7.6), the intra refresh rule (§7.4.5) |
+| ISO/IEC 14496-2 | visual object sequence, visual object, VOL, group of VOP and VOP headers (§6.2), video packets (§6.2.5), macroblock and block syntax, the VLC tables of Annex B, intra DC and AC prediction (§7.4.3), both inverse quantisation methods with mismatch control (§7.4.2), the IDCT (Annex A) and its saturation, motion vector coding and prediction (§7.6), half- and quarter-sample interpolation (§7.6.2), interlaced prediction and direct mode (§7.6.9), global motion compensation (§7.8), the intra refresh rule (§7.4.5) |
 
-## API
+## Decoder
+
+### API
+
+```rust
+use craft_video::mpeg4::Decoder;
+
+let mut dec = Decoder::new();
+dec.decode_headers(&extradata)?;              // MP4 esds / Matroska CodecPrivate, if any
+for (chunk, pts) in packets {                   // container frames, in decode order
+    for pic in dec.decode(&chunk, pts)? {       // display order
+        // pic.y, pic.u, pic.v: tight 4:2:0 planes, pic.width × pic.height
+        // pic.vop_type, pic.pts, pic.time (VOP time stamp), pic.quant, pic.info
+    }
+}
+let rest = dec.flush();                         // the last reference picture
+let info = craft_video::mpeg4::probe(&headers); // StreamInfo without decoding
+```
+
+- `decode` takes any chunk holding whole VOPs: a container frame (which may pack a P-VOP and a
+  B-VOP, as DivX and Xvid store them in AVI), or several frames of a raw `.m4v` stream. It returns
+  at most 16 pictures a call, fewer when the memory budget holds fewer beside the references
+  (queued pictures count at their own size). Past that limit the chunk's VOPs are skipped but its
+  configuration headers are still read, so a new VOL takes effect and its VOPs are decoded as far
+  as they fit; a held-back picture that such a VOL would release is dropped. Skipped VOPs and a
+  dropped picture count as one error in `errors()`.
+- Pictures come out in display order. With `low_delay` (no B-VOPs) each picture comes out as soon
+  as it is decoded; otherwise a reference picture is held until the next one.
+- An uncoded VOP (`vop_coded` 0: the placeholder after packed B-VOPs, or a dropped frame)
+  produces no picture.
+- A damaged VOP is still output. The damaged part is copied from the previous picture and
+  decoding resumes at the next video packet. `errors()` counts such VOPs.
+- `reset()` forgets the reference pictures and the time base, and keeps the configuration
+  headers.
+- A VOL that changes the picture size or turns on `low_delay` first outputs the picture held
+  back for reordering. A VOL that is refused (`Unsupported`, `TooLarge`) ends the old layer: VOPs
+  fail with the same error until a decodable VOL arrives.
+- `set_memory_budget()` bounds the picture store (`craft_video::budget`); a larger VOL is
+  refused with `DecodeError::TooLarge`.
+
+### Coding tools
+
+- I-, P-, B- and S-VOPs. Rectangular, 8-bit, 4:2:0.
+- Intra DC and AC prediction, with the alternate scans.
+- H.263 quantisation, and MPEG quantisation with the default or loaded matrices.
+- One or four vectors a macroblock, half- or quarter-sample, `fcode` 1–7.
+- B-VOPs: forward, backward, interpolated and direct macroblocks; skipped macroblocks where the
+  future reference skipped them.
+- Global motion compensation in S-VOPs with zero to three warping points at every accuracy,
+  `mcsel` macroblocks, and the mean warped vector of a GMC macroblock as a neighbour's predictor.
+- Interlace: field DCT, field prediction in P- and B-VOPs, field direct mode, the alternate
+  vertical scan.
+- Video packets (resync markers), with or without a header extension.
+- Group of VOP headers, and the DivX and Xvid user data strings (named in `StreamInfo::encoder`).
+
+### Interpretations
+
+Where the text leaves room, the decoder does what Xvid and FFmpeg do, checked against ffmpeg's
+output:
+
+- A reference picture is padded from the edge of its whole macroblocks, not from the VOP's width
+  and height. This differs only for pictures that are not a multiple of 16.
+- A reference field is a view of the padded frame: a field line past the bottom of the picture
+  repeats the frame's last line, which belongs to the bottom field.
+- With quarter-sample field vectors, the chrominance vector divides the horizontal component by
+  2 rounding towards zero and the vertical one rounding down.
+- An uncoded VOP advances the time base but is not a reference for the temporal distances of
+  direct mode.
+
+Two cases where the decoder follows the standard and ffmpeg does not:
+
+- Field direct mode scales the co-located macroblock's field vectors (§7.6.9.5). ffmpeg's decoder
+  predicts these macroblocks from the vector difference alone. On ffmpeg's own interlaced
+  streams with B-VOPs this decoder's B pictures are closer to the source, by up to 2.4 dB.
+- The mean vector of a GMC macroblock is rounded to the nearest integer. With one warping point
+  at half-sample accuracy, ffmpeg rounds a negative mean one lower.
+
+### Not supported
+
+Refused with `DecodeError::Unsupported`. Xvid and DivX write none of these.
+
+- Data partitioning and reversible VLCs.
+- Shapes, static sprites, sprite brightness change, scalability.
+- NEWPRED, reduced resolution VOPs, complexity estimation headers, OBMC.
+- Samples other than 8 bits, chroma formats other than 4:2:0.
+- The short video header (H.263 baseline streams).
+
+Workarounds for streams written by early Xvid and DivX builds with known bugs are not
+implemented.
+
+### Performance
+
+One thread, no explicit SIMD; the interpolation loops are written so the compiler vectorises
+them. On 1280×720 streams from ffmpeg's `mpeg4` encoder at 3 Mbit/s, the decoder takes about 2.5
+times as long as ffmpeg's decoder on one thread for a Simple profile stream, and about 1.8 times
+as long for an Advanced Simple one (B-VOPs, quarter sample, four vectors, MPEG quantisation).
+The largest remaining cost is the shared `f64` IDCT, which is kept so that the decoder and the
+encoder reconstruct the same samples.
+
+`examples/mpeg4_m4vdec.rs` decodes a raw `.m4v` stream; `MPEG4_BENCH_ITERS=n` times it.
+
+### Tests
+
+- Unit tests: every VLC decodes to its table entry, the escape modes, the scans are
+  permutations, the DC scaler, vector wrapping, the field and GMC interpolation on known input,
+  header field widths, user data strings, and garbage input.
+- Integration tests (`tests/mpeg4_decode`) encode streams with ffmpeg's `mpeg4` encoder and
+  compare every picture with ffmpeg's decode (45 dB floor; IDCT mismatch between decoders
+  accumulates over a GOP, a decoding error costs far more):
+  - I/P at quantisers 1, 4 and 31, partial macroblocks (98×66, 50×38);
+  - B-VOPs, four vectors, AC prediction, quarter sample and their combination;
+  - MPEG quantisation with default and custom matrices;
+  - video packets, large vectors (352×288, `me_range` 60);
+  - clean content with skipped and uncoded macroblocks;
+  - interlaced P-VOPs; interlaced B-VOPs are checked against the source instead (see above).
+- GMC: hand-built S-VOPs with one, two and three points at each accuracy, with and without
+  quarter sample, after an I-VOP of this crate's encoder, against ffmpeg.
+- Packed B-VOPs with uncoded VOPs give the same pictures as the plain stream.
+- The decoder reproduces this crate's encoder's reconstruction exactly.
+- Corrupted streams (truncations, bit flips, overwrites) never panic; a garbled video packet is
+  concealed.
+
+## Encoder
+
+### API
 
 ```rust
 use craft_video::mpeg4::{Encoder, EncoderConfig, RateControl, YuvFrame};
@@ -39,7 +166,7 @@ for frame in frames {
 - `reconstruction()` returns the picture a decoder reconstructs from the last packet.
 - `request_keyframe()` codes the next picture as an I-VOP.
 
-## Coding
+### Coding
 
 - Headers:
   - Simple Object Type.
@@ -84,7 +211,7 @@ for frame in frames {
     kept separately for I and P, aiming at the frame budget minus 1/25 of the running overshoot.
     I-VOPs aim at 4 frame budgets. The quantiser changes by at most 4 between VOPs of a type.
 
-## Not supported
+### Not supported
 
 - B-VOPs, quarter-sample motion, global motion compensation (Advanced Simple profile).
 - AC prediction, 4MV, `dquant` within a VOP.
@@ -92,7 +219,7 @@ for frame in frames {
 - Interlace, shapes, sprites, scalability.
 - Resync markers, data partitioning, reversible VLCs.
 
-## Tests
+### Tests
 
 - Unit tests:
   - The coefficient tables are prefix codes and the intra and inter tables use the same codes.
