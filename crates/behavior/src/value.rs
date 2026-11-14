@@ -362,6 +362,14 @@ impl<T> Default for EditEvents<T> {
 }
 
 impl<T> EditEvents<T> {
+    /// The value of the last `Commit` or `Set` in the events; `None` if there is none.
+    pub fn committed(&self) -> Option<&T> {
+        self.0.iter().rev().find_map(|event| match event {
+            EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => Some(after),
+            _ => None,
+        })
+    }
+
     /// No events.
     pub fn new() -> Self {
         Self::default()
@@ -525,6 +533,9 @@ pub struct Gesture<V> {
     /// The runtime's removal watch holds this gesture's id.
     #[doc(hidden)]
     pub watched: bool,
+    /// The running gesture is a wheel run (`Cx::wheel_run`); cleared when the gesture ends.
+    #[doc(hidden)]
+    pub wheel: bool,
 }
 
 impl<V> Default for Gesture<V> {
@@ -539,6 +550,7 @@ impl<V> Default for Gesture<V> {
             dead: false,
             cancel_seen: 0,
             watched: false,
+            wheel: false,
         }
     }
 }
