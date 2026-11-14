@@ -56,8 +56,12 @@ pub fn measure(s: &str, per_pt: f32) -> Option<f32> {
         "emu" => v / 12_700.0,
         _ => return None,
     };
-    let pt = pt as f32;
-    pt.is_finite().then_some(pt.clamp(-MAX_LEN_PT, MAX_LEN_PT))
+    // Clamp while still in f64: a large but finite OOXML measurement can overflow f32 before
+    // the output limit is applied, even though its bounded point value is representable.
+    if pt.is_nan() {
+        return None;
+    }
+    Some(pt.clamp(-f64::from(MAX_LEN_PT), f64::from(MAX_LEN_PT)) as f32)
 }
 
 /// `w:line` under `lineRule="auto"`: the multiple of single line spacing, in 240ths (240 =
@@ -196,6 +200,8 @@ mod tests {
         assert_eq!(measure("nan", 20.0), None);
         assert_eq!(measure("1e400", 20.0), None);
         assert_eq!(measure("99999999999999", 20.0), Some(MAX_LEN_PT));
+        assert_eq!(measure("1e300pt", 20.0), Some(MAX_LEN_PT));
+        assert_eq!(measure("-1e300pt", 20.0), Some(-MAX_LEN_PT));
         assert_eq!(measure("x", 20.0), None);
         // `w:line` auto: the multiple in 240ths without a unit, through twips with one (#2329).
         assert_eq!(line_multiple("240"), Some(1.0));
