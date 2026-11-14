@@ -310,7 +310,6 @@ impl<'a> HistoryPanel<'a> {
                 .can_rename(|key: &HistoryKey| matches!(key, HistoryKey::Snapshot(_)))
                 .empty(words.history_empty.clone())
                 .selection(Bind::bound(&mut held))
-
                 .sizing(Sizing::Fill)
                 .enabled(enabled)
                 .drag_payload(move |drag: &ListDrag<HistoryKey>| set.contains(&drag.grabbed).then(|| drag.clone()));
@@ -327,7 +326,7 @@ impl<'a> HistoryPanel<'a> {
             let out = list.show_items(ui, &items, &mut |_, icx| {
                 let row = &rows[icx.at];
                 let mut item = ListRow::new(row.label.clone()).cells(icx.cells()).state(icx.row.clone());
-                if let Some(icon) = row.icon {
+                if let Some(icon) = row.icon.clone() {
                     item = item.icon(IconSpec::svg(icon));
                 }
                 if row.redo {
