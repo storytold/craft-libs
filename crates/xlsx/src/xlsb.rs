@@ -1,5 +1,5 @@
-//! Binary workbooks ([MS-XLSB]): the workbook part, shared strings and worksheet cells, from
-//! their records. Cell formulas are decoded from their tokens ([`formula`]) into the text an
+//! Binary workbooks ([MS-XLSB]): the workbook part with its defined names, shared strings and
+//! worksheet cells, from their records. Cell formulas are decoded from their tokens ([`formula`]) into the text an
 //! `.xlsx` file holds; one that can't be keeps only its saved result, with a warning saying why.
 //! Styles are not read. A record that does not parse fails the read.
 
@@ -15,7 +15,7 @@ use craft_sheet::{CellError, CellRef, MAX_COLS, MAX_ROWS, Range, Visibility};
 
 use crate::sheet::{Cell, CellFormula, CellValue, FormulaKind, Row, SheetPart};
 use crate::strings::StringItem;
-use crate::workbook::{SheetEntry, SheetKind, Workbook};
+use crate::workbook::{DefinedName, SheetEntry, SheetKind, Workbook};
 use crate::{Error, Limits, Warnings};
 pub(crate) use formula::Links;
 use formula::{Book, Mode, Name, Xti};
@@ -266,6 +266,9 @@ pub(crate) fn workbook(
     records.first(131, warnings)?;
     let mut wb = Workbook::default();
     let mut links = Some(Links::default());
+    let mut pending = vec![];
+    // Each BrtBundleSh's place in `wb.sheets`, `None` for a skipped one.
+    let mut bundle_sheets: Vec<Option<u32>> = vec![];
     let mut bundle = false;
     let mut bundle_seen = false;
     while let Some((id, payload)) = records.next(warnings)? {
@@ -279,14 +282,15 @@ pub(crate) fn workbook(
                 if wb.sheets.is_empty() {
                     return Err(invalid("no supported worksheets"));
                 }
-                if links.is_none() {
-                    warnings.warn("XLSB: the workbook's sheet links or names could not be read; formulas keep their saved results");
+                match links.as_mut() {
+                    Some(l) => wb.defined_names = defined_names(pending, &bundle_sheets, l, limits, budget, warnings),
+                    None => warnings.warn("XLSB: the workbook's sheet links or names could not be read; formulas keep their saved results"),
                 }
                 return Ok((wb, links));
             }
             39 | 355 | 357 | 358 | 362 | 667 => {
                 if let Some(l) = links.as_mut()
-                    && link_record(id, payload, l).is_err()
+                    && link_record(id, payload, l, &mut pending).is_err()
                 {
                     links = None;
                 }
@@ -341,6 +345,7 @@ pub(crate) fn workbook(
                     if let Some(l) = links.as_mut() {
                         l.sheets.push(None);
                     }
+                    bundle_sheets.push(None);
                     continue;
                 };
                 let rel = rels.by_id(&rel_id).ok_or_else(|| invalid("worksheet relationship is missing"))?;
@@ -355,6 +360,7 @@ pub(crate) fn workbook(
                 if let Some(l) = links.as_mut() {
                     l.sheets.push((kind == SheetKind::Worksheet).then(|| name.clone()));
                 }
+                bundle_sheets.push(u32::try_from(wb.sheets.len()).ok());
                 wb.sheets.push(SheetEntry { name, sheet_id, visibility, rel_id, kind, part: Some(rel.target.clone()) });
             }
             _ => {}
@@ -363,9 +369,110 @@ pub(crate) fn workbook(
     Err(invalid("missing workbook end record"))
 }
 
+/// A `BrtName`'s parts that only its [`DefinedName`] needs, until the workbook part is read.
+struct PendingName {
+    /// Its place in [`Links`]'s names.
+    index: usize,
+    flags: u32,
+    /// `chKey`: a macro's shortcut key.
+    key: u8,
+    rgce: Vec<u8>,
+    rgcb: Vec<u8>,
+    comment: Option<String>,
+    menu: Option<String>,
+    description: Option<String>,
+}
+
+/// The workbook's defined names, as `.xlsx` has them in `definedNames`: every `BrtName` but the
+/// hidden ones for newer functions and LET parameters, which Excel doesn't write there. `sheets`
+/// maps a name's `itab` (its sheet's place in `BrtBundleSh` order) to [`Workbook::sheets`].
+/// A name whose formula can't be read, or that belongs to a sheet the reader skips, is left out
+/// with a warning, and a cell formula using it keeps its saved result.
+fn defined_names(
+    pending: Vec<PendingName>,
+    sheets: &[Option<u32>],
+    links: &mut Links,
+    limits: &Limits,
+    budget: &Budget,
+    warnings: &mut Warnings,
+) -> Vec<DefinedName> {
+    let mut out = vec![];
+    for p in pending {
+        let Some(name) = links.names.get(p.index) else { continue };
+        if name.future || formula::is_param(&name.text) {
+            continue;
+        }
+        let local_sheet_id = match name.scope {
+            None => None,
+            Some(itab) => match usize::try_from(itab).ok().and_then(|i| sheets.get(i)) {
+                Some(Some(i)) => Some(*i),
+                _ => {
+                    warnings.warn("XLSB: some defined names were left out (names of sheets the reader skips)");
+                    continue;
+                }
+            },
+        };
+        let formula = match formula::decode(&p.rgce, &p.rgcb, links, Mode::Name) {
+            Ok(e) => expr::print(&e),
+            Err(formula::Unsupported(why)) => {
+                warnings.warn(format!("XLSB: some defined names were left out ({why})"));
+                continue;
+            }
+        };
+        if !budget.try_formula_text(formula.len(), limits) {
+            warnings.warn("XLSB: some defined names were left out (more formula text than the limits allow)");
+            continue;
+        }
+        let mut attrs = vec![];
+        let mut put = |k: &str, v: String| attrs.push((k.to_string(), v));
+        // In `CT_DefinedName`'s order.
+        if let Some(m) = p.menu {
+            put("customMenu", m);
+        }
+        if let Some(d) = p.description {
+            put("description", d);
+        }
+        let (func, vba, proc) = (p.flags & 0x02 != 0, p.flags & 0x04 != 0, p.flags & 0x08 != 0);
+        if func {
+            put("function", "1".into());
+        }
+        if vba {
+            put("vbProcedure", "1".into());
+        } else if proc {
+            put("xlm", "1".into());
+        }
+        let group = (p.flags >> 6) & 0x1FF;
+        if proc && group != 0 {
+            put("functionGroupId", group.to_string());
+        }
+        if p.key != 0 {
+            put("shortcutKey", char::from(p.key).to_string());
+        }
+        if p.flags & (1 << 15) != 0 {
+            put("publishToServer", "1".into());
+        }
+        if p.flags & (1 << 16) != 0 {
+            put("workbookParameter", "1".into());
+        }
+        out.push(DefinedName {
+            name: name.text.clone(),
+            local_sheet_id,
+            formula,
+            comment: p.comment.unwrap_or_default(),
+            hidden: p.flags & 1 != 0,
+            attrs,
+        });
+        if let Some(n) = links.names.get_mut(p.index) {
+            n.read = true;
+        }
+    }
+    out
+}
+
 /// A supporting link (`BrtSupSelf`, `BrtSupSame`, `BrtSupAddin`, `BrtSupBookSrc`), the sheet links
-/// (`BrtExternSheet`) or a defined name (`BrtName`), added to `links`.
-fn link_record(id: u16, payload: &[u8], links: &mut Links) -> Result<(), Error> {
+/// (`BrtExternSheet`) or a defined name (`BrtName`), added to `links`; a name's other parts go to
+/// `pending`.
+fn link_record(id: u16, payload: &[u8], links: &mut Links, pending: &mut Vec<PendingName>) -> Result<(), Error> {
     let mut b = Bytes::new(payload);
     match id {
         357 | 358 | 667 => {
@@ -391,15 +498,37 @@ fn link_record(id: u16, payload: &[u8], links: &mut Links) -> Result<(), Error> 
             b.finish()?;
         }
         _ => {
-            // BrtName ([MS-XLSB] 2.4.718): flags, chKey, itab, then the name; the formula and the
-            // rest aren't needed to call a function or tell a name from one.
+            // BrtName ([MS-XLSB] 2.4.718). Its formula is decoded once the workbook part is read.
             if links.names.len() >= MAX_NAMES {
                 return Err(invalid("too many defined names"));
             }
             let flags = b.u32()?;
-            b.take(5)?;
+            let key = b.u8()?;
+            let itab = b.u32()?;
             let text = b.text(255)?;
-            links.names.push(Name { text, future: flags & (1 << 17) != 0 });
+            let cce = b.u32()? as usize;
+            let rgce = b.take(cce)?.to_vec();
+            let cb = b.u32()? as usize;
+            let rgcb = b.take(cb)?.to_vec();
+            let comment = b.string(255, true)?;
+            // A macro's name (fProc) has four more strings: one unused, its custom menu, its
+            // description and another unused.
+            let (menu, description) = if flags & 0x08 != 0 {
+                b.string(32767, true)?;
+                let menu = b.string(32767, true)?;
+                let description = b.string(32767, true)?;
+                b.string(32767, true)?;
+                (menu, description)
+            } else {
+                (None, None)
+            };
+            b.finish()?;
+            let scope = (itab != u32::MAX).then_some(itab);
+            // A built-in name (fBuiltin) is stored bare; `.xlsx` spells it `_xlnm.Print_Area`, in
+            // `definedNames` and in formulas alike.
+            let text = if flags & 0x20 != 0 { format!("_xlnm.{text}") } else { text };
+            pending.push(PendingName { index: links.names.len(), flags, key, rgce, rgcb, comment, menu, description });
+            links.names.push(Name { text, future: flags & (1 << 17) != 0, scope, read: false });
         }
     }
     Ok(())

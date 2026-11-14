@@ -24,6 +24,8 @@ pub(crate) enum RefKind {
     Rows(u32, bool, u32, bool),
     /// Whole columns `A:C`.
     Cols(u32, bool, u32, bool),
+    /// A deleted cell or range on a named sheet: `Sheet2!#REF!`.
+    Deleted,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -173,6 +175,7 @@ fn push_reference(s: &mut String, r: &Reference) {
             s.push_str(dollar(*a1));
             push_col(s, *c1);
         }
+        RefKind::Deleted => s.push_str(CellError::Ref.as_str()),
     }
 }
 

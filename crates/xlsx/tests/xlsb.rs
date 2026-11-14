@@ -5,7 +5,7 @@ mod common;
 
 use common::{read, read_with};
 use craft_xlsx::testing::zip;
-use craft_xlsx::{CellError, CellRef, Error, FormulaKind, Limits, Range, SheetKind, Value, Visibility, is_xlsb};
+use craft_xlsx::{CellError, CellRef, Error, FormulaKind, Limits, Package, Range, SheetKind, Value, Visibility, is_xlsb};
 
 const ROOT: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="book" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="records/book.bin"/></Relationships>"#;
 const RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="one" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/one.bin"/><Relationship Id="two" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/two.bin"/><Relationship Id="strings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="../text/strings.bin"/></Relationships>"#;
@@ -463,6 +463,9 @@ fn name(flags: u32, text: &str) -> Vec<u8> {
     data.extend(wide(text));
     data.extend([2, 0, 0, 0, 0x1c, 0x1d, 0, 0, 0, 0]); // Formula `#NAME?`, no extra data.
     data.extend(u32::MAX.to_le_bytes()); // No comment.
+    if flags & 0x08 != 0 {
+        data.extend(u32::MAX.to_le_bytes().repeat(4)); // A macro's four strings, all null.
+    }
     record(39, &data)
 }
 
@@ -543,8 +546,8 @@ fn cell_formulas_are_read_in_their_xlsx_spelling() {
         ),
         (9, ref3d(3, 0, 0), vec![]),
         (10, [&[0x25u8][..], &0u32.to_le_bytes(), &1u32.to_le_bytes(), &REL.to_le_bytes(), &REL.to_le_bytes(), &[0x41, 20, 0]].concat(), vec![]),
-        // Kept as their saved results:
         (11, vec![0x43, 4, 0, 0, 0, 0x1E, 2, 0, 0x05], vec![]),
+        // Kept as their saved results:
         (12, ref3d(4, 0, REL), vec![]),
         (13, vec![0x01, 0, 0, 0, 0], vec![0, 0, 0, 0]), // Part of a shared formula at A1 that isn't one.
     ];
@@ -572,7 +575,7 @@ fn cell_formulas_are_read_in_their_xlsx_spelling() {
         Some("_xlfn.LET(_xlpm.x,1,_xlpm.x+1)"),
         Some("#REF!"),
         Some("SQRT(A1:A2)"),
-        None,
+        Some("Rate*2"),
         None,
         None,
         // A BrtCellMeta before a cell gives it cell metadata, as `cm` does in .xlsx.
@@ -584,7 +587,7 @@ fn cell_formulas_are_read_in_their_xlsx_spelling() {
     assert_eq!(sheet.cell_metadata.iter().collect::<Vec<_>>(), [(&CellRef::new(0, 14), &1)]);
     // Every formula cell keeps its saved result as its value.
     assert!((1..=15).all(|c| sheet.value(CellRef::new(0, c)) == Value::Number(0.0)));
-    for why in ["defined names", "other workbooks", "missing from the file", "structured table references"] {
+    for why in ["other workbooks", "missing from the file", "structured table references"] {
         assert!(warned(&wb, why), "{why}: {:?}", wb.warnings);
     }
 }
@@ -929,4 +932,128 @@ fn a_dynamic_array_kept_as_its_value_has_no_cell_metadata() {
     }
     assert_eq!(sheet.cell_metadata.iter().collect::<Vec<_>>(), [(&at("C1"), &1)]);
     assert!(warned(&wb, "missing from the file"), "{:?}", wb.warnings);
+}
+
+// Defined names ([MS-XLSB] 2.4.718): `BrtName` records, and the `definedNames` Excel writes for
+// the same names when it saves the workbook as `.xlsx`.
+
+/// `BrtName`. A macro's name (`fProc`, 0x08) has four more strings, null here.
+fn brt_name(flags: u32, key: u8, itab: u32, text: &str, rgce: &[u8], comment: Option<&str>) -> Vec<u8> {
+    let mut data = flags.to_le_bytes().to_vec();
+    data.push(key);
+    data.extend(itab.to_le_bytes());
+    data.extend(wide(text));
+    data.extend((rgce.len() as u32).to_le_bytes());
+    data.extend(rgce);
+    data.extend(0u32.to_le_bytes());
+    data.extend(comment.map_or_else(|| u32::MAX.to_le_bytes().to_vec(), wide));
+    if flags & 0x08 != 0 {
+        data.extend(u32::MAX.to_le_bytes().repeat(4));
+    }
+    record(39, &data)
+}
+fn ref3d_name(ixti: u16, row: u32, col: u16) -> Vec<u8> {
+    [&[0x3Au8][..], &ixti.to_le_bytes(), &loc(row, col)].concat()
+}
+const WORKBOOK: u32 = u32::MAX;
+
+/// `book(false)` with the supporting links of `book_with_links` (sheet links Data, Hidden,
+/// Data:Hidden, a deleted sheet, the other workbook, and this workbook as a whole, which
+/// `PtgNameX` uses), and `names`.
+fn book_with_names(names: &[Vec<u8>]) -> Vec<u8> {
+    let plain = book(false);
+    let end = record(132, &[]);
+    let mut xti = 6u32.to_le_bytes().to_vec();
+    for (book, first, last) in [(0u32, 0i32, 0i32), (0, 1, 1), (0, 0, 1), (0, -1, -1), (1, 0, 0), (0, -2, -2)] {
+        xti.extend([book.to_le_bytes(), first.to_le_bytes(), last.to_le_bytes()].concat());
+    }
+    let links = [record(353, &[]), record(357, &[]), record(355, &wide("rId9")), record(362, &xti), record(354, &[])];
+    [&plain[..plain.len() - end.len()], &links.concat(), &names.concat(), &end].concat()
+}
+
+/// The names below, in record order, as `PtgName` numbers them from 1.
+fn names() -> Vec<Vec<u8>> {
+    vec![
+        // 1: a newer function's hidden name: not a defined name in `.xlsx`.
+        brt_name(0x0002_000b, 0, WORKBOOK, "_xlfn.CONCAT", &[0x1C, 0x1D], None),
+        // 2: built-in and hidden, on Data.
+        brt_name(0x21, 0, 0, "_FilterDatabase", &[&[0x3Bu8, 0, 0][..], &0u32.to_le_bytes(), &9u32.to_le_bytes(), &[0, 0, 2, 0]].concat(), None),
+        // 3: refers to another workbook: left out.
+        brt_name(0, 0, WORKBOOK, "External", &ref3d_name(4, 0, 0), None),
+        // 4: a deleted cell.
+        brt_name(0, 0, WORKBOOK, "Gone", &[0x3C, 0, 0, 0, 0, 0, 0, 0, 0], None),
+        brt_name(1, 0, WORKBOOK, "Hid", &[0x1E, 42, 0], None),
+        // 6, 7: the same name on two sheets.
+        brt_name(0, 0, 0, "Local", &ref3d_name(0, 1, 1), None),
+        brt_name(0, 0, 1, "Local", &ref3d_name(1, 0, 1), None),
+        // 8: an XLM macro with a shortcut key, in the "User Defined" group (14).
+        brt_name(0x388, b'k', WORKBOOK, "MacroName", &ref3d_name(0, 0, 0), None),
+        // 9
+        brt_name(0, 0, WORKBOOK, "Rate", &[&[0x1Fu8][..], &0.05f64.to_le_bytes()].concat(), Some("a note")),
+        // 10, 11: relative references are offsets from A1, wrapping around the grid.
+        brt_name(0, 0, WORKBOOK, "Rel", &ref3d_name(0, 0, 0xFFFF), None),
+        brt_name(0, 0, WORKBOOK, "RelN", &[&[0x2Cu8][..], &loc(u32::MAX, REL)].concat(), None),
+        // 12: on a sheet the workbook doesn't have: left out.
+        brt_name(0, 0, 5, "Skipped", &[0x1E, 1, 0], None),
+        // 13: a name of a name.
+        brt_name(0, 0, WORKBOOK, "Twice", &[0x23, 9, 0, 0, 0, 0x1E, 2, 0, 0x05], None),
+    ]
+}
+
+const NAMES_XML: &str = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><definedNames><definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">Data!$A$1:$C$10</definedName><definedName name="Gone">Data!#REF!</definedName><definedName name="Hid" hidden="1">42</definedName><definedName name="Local" localSheetId="0">Data!$B$2</definedName><definedName name="Local" localSheetId="1">Hidden!$B$1</definedName><definedName name="MacroName" xlm="1" functionGroupId="14" shortcutKey="k">Data!$A$1</definedName><definedName name="Rate" comment="a note">0.05</definedName><definedName name="Rel">Data!XFD1</definedName><definedName name="RelN">A1048576</definedName><definedName name="Twice">Rate*2</definedName></definedNames></workbook>"#;
+
+fn xml_names(xml: &str) -> Vec<craft_xlsx::DefinedName> {
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>"#;
+    let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="r" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
+    let bytes = zip(&[("[Content_Types].xml", types.as_bytes()), ("_rels/.rels", root.as_bytes()), ("xl/workbook.xml", xml.as_bytes())]);
+    Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap().defined_names
+}
+
+#[test]
+fn defined_names_are_read_as_their_xlsx_spelling() {
+    let cells: Vec<Vec<u8>> = vec![
+        vec![0x23, 9, 0, 0, 0, 0x1E, 100, 0, 0x05],
+        vec![0x23, 6, 0, 0, 0],
+        // PtgNameX through this workbook's own link: a sheet-scoped name used from another sheet.
+        vec![0x39, 5, 0, 7, 0, 0, 0],
+        vec![0x23, 2, 0, 0, 0],
+        vec![0x3C, 1, 0, 0, 0, 0, 0, 0, 0],
+        // Kept as their saved results: a name left out, a name in another workbook, and a
+        // workbook name through PtgNameX.
+        vec![0x23, 3, 0, 0, 0],
+        vec![0x39, 4, 0, 9, 0, 0, 0],
+        vec![0x39, 5, 0, 9, 0, 0, 0],
+    ];
+    let mut data = row(0);
+    for (i, rgce) in cells.iter().enumerate() {
+        data.extend(formula_cell(i as u32 + 1, rgce, &[]));
+    }
+    let bytes = package(&book_with_names(&names()), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES);
+    let wb = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap();
+    assert_eq!(wb.defined_names, xml_names(NAMES_XML));
+    let book = read(&bytes).unwrap();
+    let got: Vec<_> = (1..=8).map(|c| book.sheets[0].formula(CellRef::new(0, c))).collect();
+    let want = [Some("Rate*100"), Some("Local"), Some("Hidden!Local"), Some("_xlnm._FilterDatabase"), Some("Hidden!#REF!"), None, None, None];
+    assert_eq!(got, want);
+    for why in ["defined names whose formula could not be read", "other workbooks", "names in other workbooks or on other sheets"] {
+        assert!(warned(&book, why), "{why}: {:?}", book.warnings);
+    }
+    for why in ["(references to other workbooks (external links))", "(names of sheets the reader skips)"] {
+        assert!(book.warnings.iter().any(|w| w.contains("defined names were left out") && w.contains(why)), "{why}: {:?}", book.warnings);
+    }
+}
+
+#[test]
+fn a_damaged_name_leaves_names_and_formulas_as_values() {
+    // A truncated BrtName: the workbook opens with no names, and every formula keeps its value.
+    let mut list = names();
+    let full = brt_name(0, 0, WORKBOOK, "Rate", &[0x1E, 1, 0], None);
+    list[8] = record(39, &full[2..full.len() - 2]); // The payload without its record header and last two bytes.
+    let data = [row(0), formula_cell(1, &[0x1E, 1, 0], &[])].concat();
+    let bytes = package(&book_with_names(&list), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES);
+    let wb = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap();
+    assert!(wb.defined_names.is_empty());
+    let book = read(&bytes).unwrap();
+    assert_eq!(book.sheets[0].formula(CellRef::new(0, 1)), None);
+    assert!(book.warnings.iter().any(|w| w.contains("names could not be read")), "{:?}", book.warnings);
 }
