@@ -205,9 +205,16 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
         cx.face(self.face(&laid, cx.resolved.selected == Some(true), cx.style.glyphs))
     }
 
-    /// A button that is edited is dragged; one with a flyout senses a drag away from it, which opens the flyout.
+    /// A button that is edited is dragged; one with a flyout senses a drag away from it and a right click, which open
+    /// the flyout. Without `CONTEXT_CLICK` the press machine never takes a secondary press, so `Trigger::Context` has
+    /// nothing to fire on.
     fn sense(&self) -> Sense {
-        if self.edit.is_some() || self.has_flyout() { Sense::CLICK | Sense::FOCUS | Sense::DRAG } else { Sense::CLICK | Sense::FOCUS }
+        let base = Sense::CLICK | Sense::FOCUS;
+        match (self.edit.is_some(), self.has_flyout()) {
+            (_, true) => base | Sense::DRAG | Sense::CONTEXT_CLICK,
+            (true, false) => base | Sense::DRAG,
+            (false, false) => base,
+        }
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
