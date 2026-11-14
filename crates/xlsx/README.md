@@ -104,8 +104,9 @@ other workbooks, Python code stored outside the cell, data tables. The XLSB func
   (40 million records, 4 million cells and as many shared strings, 256 MiB of text, as
   `craft-xls` allows). `binary_formula_text`: decoded formula text over the workbook (128 MiB);
   past it, formulas keep their saved results. A formula's tokens are bounded at 16 KB, its
-  nesting at 256 levels and an array constant at 65,536 values. Fixed caps: 1024 sheets, 100,000 merged ranges per sheet, 64 nested
-  extension blocks.
+  nesting at 256 levels and its array constants at 65,536 values in all, each charged before
+  it is held; once the formula text allowance is spent, no formula is decoded. Fixed caps: 1024
+  sheets, 100,000 merged ranges per sheet, 64 nested extension blocks.
 - Cells and rows outside the 1,048,576 × 16,384 grid are dropped and counted.
 
 SpreadsheetML is read leniently: a damaged optional part is a warning, a damaged worksheet keeps

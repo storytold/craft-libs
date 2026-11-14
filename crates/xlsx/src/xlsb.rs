@@ -523,6 +523,11 @@ fn decode_formula(
     warnings: &mut Warnings,
 ) -> Option<String> {
     let links = links?;
+    // Once the allowance is spent no formula fits it, so none is decoded only to be dropped.
+    if !budget.formula_text_fits(1, limits) {
+        kept(warnings, "more formula text than the limits allow");
+        return None;
+    }
     let text = match formula::decode(rgce, rgcb, links, mode) {
         Ok(e) => expr::print(&e),
         Err(formula::Unsupported(why)) => {
