@@ -40,8 +40,11 @@ pub mod testing {
 
     crate::testing_registered!();
 
+    /// A crate's `registered`.
+    type Registered = fn() -> Vec<&'static Registration>;
+
     /// The crates of the library, each with its `registered`.
-    const LIBRARY: [(&str, fn() -> Vec<&'static Registration>); 7] = [
+    const LIBRARY: [(&str, Registered); 7] = [
         ("craft-ui", registered),
         ("craft-ui-contract", craft_ui_contract::testing::registered),
         ("craft-ui-widgets", craft_ui_widgets::testing::registered),
