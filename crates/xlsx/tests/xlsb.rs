@@ -1349,3 +1349,21 @@ fn differential_format_strings_are_charged_to_the_text_allowance() {
     assert!(open(&dxf("Arial")).is_ok_and(|s| s.is_some_and(|s| s.dxfs.len() == 1)));
     assert!(matches!(open(&dxf(&"x".repeat(200))), Err(Error::TooLarge(_))));
 }
+
+#[test]
+fn module_sheets_and_supporting_links_are_bounded() {
+    // 1,025 very hidden module sheets (no relationship) before the worksheets: each keeps a place
+    // in the sheet links, so together they are past the 1,024-sheet cap.
+    let plain = book(false);
+    let at = plain.windows(3).position(|w| w == record(143, &[]).as_slice()).unwrap() + 3;
+    let module = record(156, &[&2u32.to_le_bytes()[..], &9u32.to_le_bytes(), &u32::MAX.to_le_bytes(), &wide("Module")].concat());
+    let modules = [&plain[..at], &module.repeat(1025), &plain[at..]].concat();
+    assert!(matches!(read(&package(&modules, &worksheet(&[], &[]), &sst(), ROOT, RELS, TYPES)), Err(Error::TooLarge(_))));
+    // 65,537 supporting links: past the cap the links aren't read, and formulas keep their values.
+    let end = record(132, &[]);
+    let selves = [&plain[..plain.len() - end.len()], &record(353, &[]), &record(357, &[]).repeat(65_537), &record(354, &[]), &end].concat();
+    let data = [row(0), formula_cell(0, &[0x1E, 1, 0], &[])].concat();
+    let wb = read(&package(&selves, &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES)).unwrap();
+    assert_eq!(wb.sheets[0].formula(CellRef::new(0, 0)), None);
+    assert!(wb.warnings.iter().any(|w| w.contains("sheet links or names could not be read")), "{:?}", wb.warnings);
+}
