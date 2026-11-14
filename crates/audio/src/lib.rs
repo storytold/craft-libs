@@ -363,10 +363,12 @@ impl EncodeFormat {
         }
     }
 
-    /// The most channels a file of this format holds.
+    /// The most channels a file of this format holds. A WAV's frame size is a 16-bit field, so it
+    /// holds 65535 / bytes per sample: 32767 at 16 bits (the count given here), 21845 at 24 and
+    /// 16383 at 32; [`EncodeOptions::check`] answers for the depth chosen.
     pub fn max_channels(self) -> u16 {
         match self {
-            EncodeFormat::Wav | EncodeFormat::Aiff => u16::MAX,
+            EncodeFormat::Wav | EncodeFormat::Aiff => 32_767,
             EncodeFormat::Flac | EncodeFormat::Aac | EncodeFormat::Alac | EncodeFormat::Eac3 => 8,
             EncodeFormat::Ac3 => 6,
             EncodeFormat::Mp3 => 2,

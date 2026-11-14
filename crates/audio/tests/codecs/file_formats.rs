@@ -484,7 +484,11 @@ fn apple_reads_the_aac_priming_and_length() {
 /// can be begun exactly when the sample rate, the channel count and the layout are listed.
 #[test]
 fn the_format_queries_agree_with_the_writer() {
-    let rates = [7350, 8000, 16_000, 22_050, 32_000, 44_000, 44_100, 48_000, 88_200, 96_000, 192_000];
+    // Every rate a format lists, each with its neighbours, and some that none lists.
+    let mut rates: Vec<u32> = EncodeFormat::ALL.iter().filter_map(|f| f.sample_rates()).flatten().flat_map(|&r| [r - 1, r, r + 1]).collect();
+    rates.extend([44_000, 176_400, 192_000]);
+    rates.sort_unstable();
+    rates.dedup();
     let masks = [
         0x4, 0x1, 0x3, 0xC, 0x600, 0x7, 0xB, 0x103, 0x33, 0x107, 0x603, 0xF, 0x10B, 0x37, 0x607, 0x10F, 0x60B, 0x3F, 0x60F, 0x13F, 0x70F, 0x63F, 0xFF,
     ];
@@ -493,7 +497,7 @@ fn the_format_queries_agree_with_the_writer() {
         for &format in EncodeFormat::ALL {
             // 24 bits is a depth every format has.
             let opts = EncodeOptions::new(format).with_layout(layout);
-            for sample_rate in rates {
+            for &sample_rate in &rates {
                 let listed = format.sample_rates().is_none_or(|r| r.contains(&sample_rate))
                     && layout.channels() <= format.max_channels()
                     && format.supports_layout(&layout);
@@ -512,6 +516,21 @@ fn the_format_queries_agree_with_the_writer() {
         assert!(!format.supports_layout(&ChannelLayout::unordered(0)));
         assert_eq!(format.supports_quality(), EncodeOptions::new(format).with_quality(0.5).check(48_000, 2).is_ok() && format.is_lossy());
         assert_eq!(format.fixed_layouts(2).is_none(), matches!(format, EncodeFormat::Wav | EncodeFormat::Aiff | EncodeFormat::Flac));
+    }
+    // The most channels is the most: one more is refused, by the layouts of a format that has
+    // a fixed set and by the writer of one that has not.
+    let most: Vec<u16> = EncodeFormat::ALL.iter().map(|f| f.max_channels()).collect();
+    assert_eq!(most, [32_767, 32_767, 8, 8, 8, 2, 6, 8]);
+    for &format in EncodeFormat::ALL {
+        let most = format.max_channels();
+        match format.fixed_layouts(most) {
+            Some(layouts) => assert!(!layouts.is_empty() && format.fixed_layouts(most + 1).unwrap().is_empty(), "{format:?}"),
+            None => {
+                let opts = EncodeOptions::new(format).with_bit_depth(BitDepth::Int16);
+                assert!(opts.check(48_000, most).is_ok() && opts.check(48_000, most + 1).is_err(), "{format:?}");
+                assert!(format.supports_layout(&ChannelLayout::unordered(most)) && !format.supports_layout(&ChannelLayout::unordered(most + 1)));
+            }
+        }
     }
     assert_eq!(EncodeFormat::Ac3.fixed_layouts(3).unwrap().len(), 3);
     assert!(EncodeFormat::Aac.fixed_layouts(9).unwrap().is_empty());

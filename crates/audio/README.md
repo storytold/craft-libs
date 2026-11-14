@@ -291,8 +291,9 @@ EncodeFormat::Ac3.supports_layout(&info.layout);  // one of those, sides and bac
 EncodeFormat::Ac3.supports_quality();             // false: AAC only
 ```
 
-`FileEncoder::bitrate()` gives the rate of a file being written. These answer for a format whose
-feature is off too, except `check` and `EncodeOptions::bitrate`, which return its `Unsupported`.
+`FileEncoder::bitrate()` gives the rate of a file being written. The `EncodeFormat` queries answer
+for a format whose feature is off too; `check` and `EncodeOptions::bitrate` (there with any
+encoder feature) return `Unsupported` for it.
 
 The layout `decode` reports (`AudioInfo::layout`) can be passed to `with_layout` as it is. When a
 coded format refuses it (2.1 or quad into AAC, a single channel tagged as left, channels with no

@@ -223,8 +223,8 @@ impl<W: Write + Seek> FileEncoder<W> {
     }
 
     /// The constant bit rate the file is written at, in bits per second for all channels
-    /// together: the rate asked for ([`RateControl::Bitrate`](crate::RateControl::Bitrate)) or the
-    /// format's default, moved to the nearest one the stream can carry. `None` for the lossless
+    /// together: the rate asked for or the format's default, moved to one the stream
+    /// can carry as [`RateControl::Bitrate`](crate::RateControl::Bitrate) describes. `None` for the lossless
     /// formats and for AAC at a constant quality.
     pub fn bitrate(&self) -> Option<u32> {
         match &self.writer {

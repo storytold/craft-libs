@@ -38,6 +38,14 @@ fn every_aac_channel_count_has_a_layout_and_an_order() {
         assert_eq!(order, (0..channels).collect::<Vec<_>>());
     }
     assert!(EncodeFormat::Aac.layout_masks(9).is_empty() && EncodeFormat::Aac.layout_masks(0).is_empty());
+    // The layouts this crate's decoder reports for what the encoder writes (`track::aac_layout`),
+    // and configuration 7's speakers for 8 channels.
+    let masks: Vec<u32> = (1..=8).map(|channels| EncodeFormat::Aac.layout_masks(channels)[0]).collect();
+    assert_eq!(masks, [0x4, 0x3, 0x7, 0x107, 0x607, 0x60F, 0x70F, 0xFF]);
+    assert_eq!(
+        (EncodeFormat::Mp3.layout_masks(1), EncodeFormat::Mp3.layout_masks(2), EncodeFormat::Mp3.layout_masks(3)),
+        (&[0x4][..], &[0x3][..], &[][..])
+    );
     // Configuration 7: C, Lc Rc, L R, Ls Rs, LFE.
     let wide: Vec<Speaker> = ChannelLayout::from_mask(0xFF).speakers();
     let named: Vec<Speaker> = aac_order(8).unwrap().iter().map(|&c| wide[c]).collect();
