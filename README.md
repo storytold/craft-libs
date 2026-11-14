@@ -205,6 +205,10 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   CCITT Group 3 and 4 decoding and Group 4 encoding, JBIG2 decoding and lossless encoding. Every
   decoder is bounded and returns its partial output on damage. From PdfCraft; a PDF filter chain
   is built on it in `craft-pdf`.
+- [`craft-testkit`](crates/testkit/README.md): test support shared by the apps and the crates here:
+  `with_deadline` runs a test body on its own thread and fails the test with its label when the body
+  runs past its limit, and `wait_until` polls a condition up to a limit. Each limit can be replaced by
+  a variable the caller names. Test support only; used as a dev-dependency.
 - [`craft-timeline`](crates/timeline/README.md): editorial timeline interchange: exact media time and SMPTE timecode, import/export reports, media path and `file://` URL handling, Avid Log Exchange (ALE) and CMX 3600 EDL documents, format detection. From FilmCraft.
 - [`craft-time`](crates/time/README.md): exact rational ticks and SMPTE time across media, with a `soundcraft` compatibility module retaining SoundCraft's sample-index timebase, tempo maps, grids and session serialization semantics.
 - [`craft-scraft-format`](crates/scraft-format/README.md): SoundCraft's typed `.scraft` session schema, versioned reader/writer, hostile-input validation, and `.scraftz` bundle reader/writer. Engine and UI mapping stays in SoundCraft.
