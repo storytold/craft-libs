@@ -516,10 +516,13 @@ fn exports_drop_the_source_exif_thumbnail() {
             assert!(out.windows(6).any(|w| w == b"NIKON\0"), "the rest of the EXIF is kept");
             near(exif_resolution(&out), ppi.map_or(300.0, |p| p.0));
         }
-        // Only the pointer changes.
+        // Only the IFD1 pointer and thumbnail payload change: the pointer is unlinked and the
+        // stale JPEG bytes are blanked by the shared metadata editor.
         let out = export_exif(&exif, None);
+        let thumb_len = b"\xFF\xD8stale thumbnail\xFF\xD9".len();
         let differing: Vec<usize> = (0..exif.len()).filter(|&i| exif[i] != out[i]).collect();
-        assert!(differing.iter().all(|&i| (8 + 2 + 4 * 12..8 + 2 + 4 * 12 + 4).contains(&i)), "{differing:?}");
+        assert!(differing.iter().all(|&i| (8 + 2 + 4 * 12..8 + 2 + 4 * 12 + 4).contains(&i) || i >= exif.len() - thumb_len), "{differing:?}");
+        assert!(!out.windows(5).any(|w| w == b"stale"));
         // With a JPEG-style prefix too.
         let prefixed = [b"Exif\0\0".as_slice(), &exif].concat();
         assert_eq!(next_ifd(e, &export_exif(&prefixed, None)[6..]), 0);

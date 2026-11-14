@@ -30,6 +30,161 @@ use kurbo::{BezPath, PathEl, Point};
 /// The SVG namespace.
 pub const SVG_NS: &str = "http://www.w3.org/2000/svg";
 
+/// A structured SVG scene. Applications provide geometry, styles and attributes; this module
+/// owns the SVG element tree and serializes it with XML escaping.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Scene {
+    pub width_mm: f64,
+    pub height_mm: f64,
+    pub view_box: [f64; 4],
+    pub elements: Vec<Element>,
+}
+
+/// Structured SVG elements supported by the path-document writer.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Element {
+    Group { attributes: Vec<Attribute>, children: Vec<Element> },
+    Path { attributes: Vec<Attribute>, path: BezPath },
+    Rect { attributes: Vec<Attribute>, x: f64, y: f64, width: f64, height: f64 },
+    Text { attributes: Vec<Attribute>, x: f64, y: f64, text: String },
+    Title(String),
+    Style(String),
+    NestedSvg { attributes: Vec<Attribute>, children: Vec<Element> },
+}
+
+/// An escaped SVG attribute. Element names and attribute names are API constants and must be
+/// valid XML names; values are always escaped by the shared writer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Attribute {
+    pub name: String,
+    pub value: Value,
+}
+
+/// Attribute values written by the shared serializer.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Value {
+    Text(String),
+    Number(f64),
+    Millimetres(f64),
+    ViewBox([f64; 4]),
+    TranslateScale { x: f64, y: f64, scale_x: f64, scale_y: f64 },
+}
+
+impl Attribute {
+    pub fn text(name: impl Into<String>, value: impl Into<String>) -> Self {
+        Self { name: name.into(), value: Value::Text(value.into()) }
+    }
+    pub fn number(name: impl Into<String>, value: f64) -> Self {
+        Self { name: name.into(), value: Value::Number(value) }
+    }
+    pub fn millimetres(name: impl Into<String>, value: f64) -> Self {
+        Self { name: name.into(), value: Value::Millimetres(value) }
+    }
+    pub fn view_box(bounds: [f64; 4]) -> Self {
+        Self { name: "viewBox".into(), value: Value::ViewBox(bounds) }
+    }
+    pub fn translate_scale(x: f64, y: f64, scale_x: f64, scale_y: f64) -> Self {
+        Self { name: "transform".into(), value: Value::TranslateScale { x, y, scale_x, scale_y } }
+    }
+}
+
+impl Scene {
+    /// Serialize the scene as an SVG 1.1 document.
+    pub fn write(&self) -> String {
+        let mut writer = SvgWriter::new();
+        writer
+            .root()
+            .attr("version", "1.1")
+            .attr("width", format!("{}mm", num(self.width_mm, 3)))
+            .attr("height", format!("{}mm", num(self.height_mm, 3)))
+            .attr("viewBox", view_box_data(self.view_box))
+            .open();
+        write_elements(&mut writer, &self.elements, 1);
+        writer.line(0);
+        writer.close();
+        writer.finish()
+    }
+}
+
+fn write_attributes<'a>(mut tag: craft_xml::Tag<'a>, attributes: &'a [Attribute]) -> craft_xml::Tag<'a> {
+    // SVG consumers disagree about duplicate attributes; make the last supplied value win.
+    for (index, attribute) in attributes.iter().enumerate() {
+        if attributes[index + 1..].iter().any(|later| later.name == attribute.name) {
+            continue;
+        }
+        tag = match &attribute.value {
+            Value::Text(value) => tag.attr(&attribute.name, value),
+            Value::Number(value) => tag.attr(&attribute.name, num(*value, 3)),
+            Value::Millimetres(value) => tag.attr(&attribute.name, format!("{}mm", num(*value, 3))),
+            Value::ViewBox(bounds) => tag.attr(&attribute.name, view_box_data(*bounds)),
+            Value::TranslateScale { x, y, scale_x, scale_y } => {
+                tag.attr(&attribute.name, format!("translate({} {}) scale({} {})", num(*x, 3), num(*y, 3), shortest(*scale_x), shortest(*scale_y)))
+            }
+        };
+    }
+    tag
+}
+
+fn shortest(value: f64) -> String {
+    if value.is_finite() { value.to_string() } else { "0".into() }
+}
+
+fn write_elements(writer: &mut SvgWriter, elements: &[Element], depth: usize) {
+    for element in elements {
+        writer.line(depth);
+        match element {
+            Element::Group { attributes, children } => {
+                write_attributes(writer.tag("g"), attributes).open();
+                write_elements(writer, children, depth + 1);
+                writer.line(depth);
+                writer.close();
+            }
+            Element::Path { attributes, path } => {
+                let mut attrs = vec![Attribute::text("d", path_data(path))];
+                attrs.extend(attributes.iter().cloned());
+                write_attributes(writer.tag("path"), &attrs).empty();
+            }
+            Element::Rect { attributes, x, y, width, height } => {
+                let mut attrs = vec![
+                    Attribute::number("x", *x),
+                    Attribute::number("y", *y),
+                    Attribute::number("width", *width),
+                    Attribute::number("height", *height),
+                ];
+                attrs.extend(attributes.iter().cloned());
+                write_attributes(writer.tag("rect"), &attrs).empty();
+            }
+            Element::Text { attributes, x, y, text } => {
+                let mut attrs = vec![Attribute::number("x", *x), Attribute::number("y", *y)];
+                attrs.extend(attributes.iter().cloned());
+                write_attributes(writer.tag("text"), &attrs).open();
+                writer.text(text);
+                writer.close();
+            }
+            Element::Title(text) => {
+                writer.tag("title").open();
+                writer.text(text);
+                writer.close();
+            }
+            Element::Style(css) => {
+                writer.tag("style").open();
+                writer.text(css);
+                writer.close();
+            }
+            Element::NestedSvg { attributes, children } => {
+                write_attributes(writer.tag("svg"), attributes).open();
+                write_elements(writer, children, depth + 1);
+                writer.line(depth);
+                writer.close();
+            }
+        }
+    }
+}
+
+fn view_box_data(bounds: [f64; 4]) -> String {
+    format!("{} {} {} {}", shortest(bounds[0]), shortest(bounds[1]), shortest(bounds[2]), shortest(bounds[3]))
+}
+
 /// A number written with a fixed count of decimals. A value that is not finite is written as
 /// zero, because SVG has no spelling for it.
 #[derive(Debug, Clone, Copy, PartialEq)]

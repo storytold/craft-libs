@@ -245,9 +245,8 @@ fn without_extended_xmp(b: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Whether `craft-jpeg` (rather than `zune-jpeg`) decodes the file: arithmetic coding
-/// (SOF9–SOF11) or a DCT frame whose precision isn't 8 bits (#4934, #5003). Lossless (SOF3) and
-/// 12-bit progressive Huffman (SOF2) go there too: craft-jpeg reports them unsupported, where
-/// zune-jpeg's failure would read as a damaged file.
+/// (SOF9–SOF11), lossless (SOF3), or a DCT frame whose precision isn't 8 bits (#4934, #5003).
+/// This includes 12-bit progressive Huffman (SOF2), which `craft-jpeg` supports.
 fn uses_craft_jpeg(bytes: &[u8]) -> bool {
     match craft_jpeg::frame(bytes) {
         Some(f) if (0xC9..=0xCB).contains(&f.marker) || f.marker == 0xC3 => true,
@@ -800,6 +799,24 @@ mod tests {
         gray_block(0xC1, 12, Some(&dht), &word.to_be_bytes())
     }
 
+    /// A valid 12-bit progressive DC-first scan with a one-bit zero-DC Huffman code.
+    fn twelve_bit_progressive_dc_block() -> Vec<u8> {
+        let mut s = vec![0xFF, 0xD8];
+        let mut dqt = vec![0u8];
+        dqt.extend([1u8; 64]);
+        segment(&mut s, 0xDB, &dqt);
+        segment(&mut s, 0xC2, &[12, 0, 8, 0, 8, 1, 1, 0x11, 0]);
+        let mut dht = vec![0x00, 1];
+        dht.extend([0u8; 15]);
+        dht.push(0);
+        segment(&mut s, 0xC4, &dht);
+        // One component, DC table 0, DC coefficients only, first approximation.
+        segment(&mut s, 0xDA, &[1, 1, 0, 0, 0, 0]);
+        s.push(0x7F); // DC category 0 followed by one padding bits.
+        s.extend([0xFF, 0xD9]);
+        s
+    }
+
     fn twelve_bit(v: f32) -> u16 {
         (v * 65535.0 / 4095.0).round() as u16
     }
@@ -818,13 +835,26 @@ mod tests {
     }
 
     #[test]
-    fn lossless_and_twelve_bit_progressive_are_unsupported_not_damaged() {
-        for marker in [0xC3, 0xC2] {
-            let mut bytes = vec![0xFF, 0xD8, 0xFF, marker, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0];
-            bytes.extend_from_slice(&[0xFF, 0xDA, 0, 8, 1, 1, 0, 0, 0x3F, 0, 0x12, 0x34, 0xFF, 0xD9]);
-            let e = crate::decode(&bytes).unwrap_err();
-            assert!(matches!(e, CodecError::Unsupported { .. }), "{marker:#x}: {e:?}");
-        }
+    fn lossless_is_unsupported_not_damaged() {
+        let bytes = gray_block(0xC3, 12, None, &[0x12, 0x34]);
+        let e = crate::decode(&bytes).unwrap_err();
+        assert!(matches!(e, CodecError::Unsupported { .. }), "{e:?}");
+    }
+
+    #[test]
+    fn twelve_bit_progressive_dc_scan_decodes() {
+        let img = crate::decode(&twelve_bit_progressive_dc_block()).unwrap();
+        assert_eq!((img.dimensions(), img.sample_type(), img.layout()), ((8, 8), SampleType::U16, ChannelLayout::Gray));
+        assert!(img.warnings.is_empty());
+    }
+
+    #[test]
+    fn malformed_twelve_bit_progressive_scan_is_malformed_not_damaged() {
+        // A DC-first progressive scan must have Se=0, not the sequential scan's Se=63.
+        let mut bytes = vec![0xFF, 0xD8, 0xFF, 0xC2, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0];
+        bytes.extend_from_slice(&[0xFF, 0xDA, 0, 8, 1, 1, 0, 0, 0x3F, 0, 0x12, 0x34, 0xFF, 0xD9]);
+        let e = crate::decode(&bytes).unwrap_err();
+        assert!(matches!(e, CodecError::Malformed { .. }), "{e:?}");
     }
 
     #[test]

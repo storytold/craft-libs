@@ -760,6 +760,52 @@ fn extended_huffman_matches_zune_on_baseline_data() {
 }
 
 #[test]
+fn progressive_huffman_matches_zune() {
+    let bytes = include_bytes!("../tests/data/testorig-huffman-progressive.jpg");
+    let (reference, (w, h)) = zune_decode(bytes);
+    let ours = decode_default(bytes).unwrap();
+    assert_eq!((ours.width, ours.height, ours.components), (w, h, 3));
+    assert!(!ours.damaged);
+    let Samples::U8(samples) = ours.samples else { panic!("8-bit fixture decoded with another precision") };
+    let mad = samples.iter().zip(&reference).map(|(&a, &b)| f32::from(a.abs_diff(b))).sum::<f32>() / samples.len() as f32;
+    assert!(mad < 2.0, "mean absolute difference {mad}");
+}
+
+#[test]
+fn avi1_default_huffman_tables_restore_a_missing_dht() {
+    let fixture = include_bytes!("../tests/data/testorig.jpg");
+    let mut without = fixture[..2].to_vec();
+    let mut at = 2;
+    while at + 1 < fixture.len() {
+        if fixture[at] != 0xFF {
+            break;
+        }
+        let marker = fixture[at + 1];
+        if marker == 0xDA {
+            without.extend_from_slice(&fixture[at..]);
+            break;
+        }
+        if marker == 0xC4 {
+            let len = usize::from(u16::from_be_bytes([fixture[at + 2], fixture[at + 3]]));
+            at += 2 + len;
+        } else if (0xD0..=0xD9).contains(&marker) || marker == 0x01 {
+            without.extend_from_slice(&fixture[at..at + 2]);
+            at += 2;
+        } else {
+            let len = usize::from(u16::from_be_bytes([fixture[at + 2], fixture[at + 3]]));
+            without.extend_from_slice(&fixture[at..at + 2 + len]);
+            at += 2 + len;
+        }
+    }
+    assert!(matches!(with_avi1_default_huffman(&without), std::borrow::Cow::Owned(_)));
+    let restored = with_avi1_default_huffman(&without);
+    let decoded = decode_default(&restored).unwrap();
+    let expected = decode_default(fixture).unwrap();
+    assert_eq!(decoded, expected);
+    assert!(matches!(with_avi1_default_huffman(fixture), std::borrow::Cow::Borrowed(_)));
+}
+
+#[test]
 fn malformed_streams_return_errors_not_panics() {
     let blocks = coefficients(6, 5, 500);
     let mut streams = vec![

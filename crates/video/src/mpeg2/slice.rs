@@ -519,8 +519,7 @@ pub(crate) fn wrap_vector(pred: i32, delta: i32, f: i32) -> i32 {
 #[inline(always)]
 fn dequant(p: &PicParams, level: i32, qs: i32, w: i32, intra: bool) -> i32 {
     if p.mpeg2 {
-        let k = if intra { 0 } else { level.signum() };
-        ((2 * level + k) * w * qs / 32).clamp(-2048, 2047)
+        dequant_mpeg2(level, qs, w, intra)
     } else {
         let mut v = if intra { 2 * level * qs * w / 16 } else { (2 * level + level.signum()) * qs * w / 16 };
         if v & 1 == 0 {
@@ -528,6 +527,14 @@ fn dequant(p: &PicParams, level: i32, qs: i32, w: i32, intra: bool) -> i32 {
         }
         v.clamp(-2048, 2047)
     }
+}
+
+/// MPEG-2 inverse quantisation of one AC (or non-intra) coefficient (§7.4.2.3), saturated
+/// (§7.4.3). Shared with the encoder, whose reconstruction must match the decoder exactly.
+#[inline(always)]
+pub(crate) fn dequant_mpeg2(level: i32, qs: i32, w: i32, intra: bool) -> i32 {
+    let k = if intra { 0 } else { level.signum() };
+    ((2 * level + k) * w * qs / 32).clamp(-2048, 2047)
 }
 
 /// The reference field (or frame) for direction `s` and field `sel` (field prediction).

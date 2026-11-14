@@ -24,6 +24,9 @@ use std::collections::HashMap;
 
 use usvg::Transform;
 
+#[cfg(feature = "tree-render")]
+pub use resvg::tiny_skia;
+
 /// Filter primitives per filter. A result of every primitive is kept; real filters have 1 to 12
 /// (Inkscape's drop shadow has 5), and 64 leaves headroom for generated ones.
 const MAX_PRIMITIVES: usize = 64;
@@ -36,7 +39,7 @@ const MAX_PATTERN_DEPTH: usize = 8;
 /// Embedded SVG images inside embedded SVG images. Each draws on a pixmap of the enclosing
 /// layer, which the live-bytes check charges, so deep chains of small images are harmless and
 /// chains of big ones stop at the budget long before this.
-const MAX_IMAGE_DEPTH: usize = 32;
+const MAX_IMAGE_DEPTH: usize = 24;
 /// Nested isolated groups, patterns, embedded images and filter images followed. It keeps this
 /// walk, and resvg's own recursion, far from a stack overflow; real drawings stay under a few dozen.
 const MAX_DEPTH: usize = 200;
@@ -155,6 +158,118 @@ pub fn check(nodes: &[usvg::Node], ts: Transform, width: u32, height: u32, held:
     let cx = Cx { live: held as f64 + target * 4.0, layer: target, cap: 25.0 * target, depth: 0, patterns: 0, images: 0, nest: 0 };
     let mut walk = Walk { budget: budget as f64, visited: 0, shared: HashMap::new(), clips: HashMap::new(), masks: HashMap::new() };
     walk.nodes(nodes, ts, cx).map(|_| ())
+}
+
+/// Draws a complete tree onto a transparent pixmap after checking the peak RGBA allocation.
+/// `held` is caller-owned RGBA storage that remains live during the draw; the target itself is
+/// charged by this function.
+#[cfg(feature = "tree-render")]
+pub fn render(tree: &usvg::Tree, ts: Transform, width: u32, height: u32, held: u64, budget: u64) -> Result<tiny_skia::Pixmap, Refusal> {
+    check_filter_cost(tree, ts, 2_000_000_000, 10_000_000, 200)?;
+    // Even an empty tree allocates the target. `check` only walks buffers added by nodes, so
+    // enforce the target allocation here before `Pixmap::new` (whose OOM handler aborts).
+    let target = u64::from(width).saturating_mul(u64::from(height)).saturating_mul(4).saturating_add(held);
+    if target > budget {
+        return Err(memory("the target pixmap", target as f64, budget as f64));
+    }
+    check(tree.root().children(), ts, width, height, held, budget)?;
+    let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or_else(|| Refusal {
+        complex: false,
+        memory: true,
+        message: format!("the {width}×{height} px target pixmap could not be allocated"),
+    })?;
+    resvg::render(tree, ts, &mut pixmap.as_mut());
+    Ok(pixmap)
+}
+
+/// Draws one node onto `target` after checking the peak RGBA allocation. The node remains in its
+/// parent's coordinate space, matching `resvg::render_node`.
+#[cfg(feature = "tree-render")]
+pub fn render_node(node: &usvg::Node, ts: Transform, target: &mut tiny_skia::Pixmap, held: u64, budget: u64) -> Result<bool, Refusal> {
+    check(std::slice::from_ref(node), ts, target.width(), target.height(), held, budget)?;
+    Ok(resvg::render_node(node, ts, &mut target.as_mut()).is_some())
+}
+
+/// Refuse a tree whose filters would exceed `max_work` pixel reads, or whose referenced roots
+/// exceed `max_visits` and `max_depth`.
+pub fn check_filter_cost(tree: &usvg::Tree, ts: Transform, max_work: u64, max_visits: usize, max_depth: usize) -> Result<(), Refusal> {
+    let mut visits = max_visits;
+    let cost = filter_cost(tree.root(), ts, 0, &mut visits, max_depth);
+    if cost > max_work {
+        Err(Refusal {
+            complex: visits == 0,
+            memory: false,
+            message: "the drawing's filters are too costly to render (a large morphology radius, convolution kernel or turbulence octave count, or patterns nested too deep)".into(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn filter_cost(root: &usvg::Group, base: Transform, rec: usize, visits: &mut usize, max_depth: usize) -> u64 {
+    use usvg::filter::Kind;
+    let mut cost = 0u64;
+    let mut stack: Vec<&usvg::Group> = vec![root];
+    while let Some(group) = stack.pop() {
+        let ts = base.pre_concat(group.abs_transform());
+        let (sx, sy) = ts.get_scale();
+        for filter in group.filters() {
+            let Some(rect) = filter.rect().transform(ts) else { continue };
+            let (width, height) = (rect.width().ceil() as u64, rect.height().ceil() as u64);
+            let window = |radius: f32, scale: f32, side: u64| ((radius * scale).ceil() as u64).saturating_mul(2).min(side);
+            for primitive in filter.primitives() {
+                let reads = match primitive.kind() {
+                    Kind::ConvolveMatrix(conv) => u64::from(conv.matrix().columns()) * u64::from(conv.matrix().rows()),
+                    Kind::Morphology(morphology) => {
+                        window(morphology.radius_x().get(), sx, width).saturating_mul(window(morphology.radius_y().get(), sy, height))
+                    }
+                    Kind::Turbulence(turbulence) => u64::from(turbulence.num_octaves()).saturating_mul(16),
+                    _ => 0,
+                };
+                cost = cost.saturating_add(width.saturating_mul(height).saturating_mul(reads.saturating_sub(256)));
+            }
+        }
+        for node in group.children() {
+            *visits = visits.saturating_sub(1);
+            if *visits == 0 {
+                return u64::MAX;
+            }
+            if let usvg::Node::Group(child) = node {
+                stack.push(child);
+            }
+            if rec >= max_depth {
+                let mut skipped = false;
+                match node {
+                    usvg::Node::Path(path) => {
+                        skipped = [path.fill().map(|fill| fill.paint()), path.stroke().map(|stroke| stroke.paint())]
+                            .into_iter()
+                            .flatten()
+                            .any(|paint| matches!(paint, usvg::Paint::Pattern(_)));
+                    }
+                    _ => node.subroots(|_| skipped = true),
+                }
+                if skipped {
+                    return u64::MAX;
+                }
+                continue;
+            }
+            let world = base.pre_concat(node.abs_transform());
+            let mut sub =
+                |root: &usvg::Group, transform: Transform| cost = cost.saturating_add(filter_cost(root, transform, rec + 1, visits, max_depth));
+            match node {
+                usvg::Node::Path(path) => {
+                    for paint in [path.fill().map(|fill| fill.paint()), path.stroke().map(|stroke| stroke.paint())].into_iter().flatten() {
+                        if let usvg::Paint::Pattern(pattern) = paint {
+                            let (sx, sy) = world.pre_concat(pattern.transform()).get_scale();
+                            sub(pattern.root(), Transform::from_scale(sx, sy));
+                        }
+                    }
+                }
+                _ => node.subroots(|root| sub(root, world)),
+            }
+        }
+    }
+    cost
 }
 
 impl Walk {

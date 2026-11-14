@@ -1,10 +1,7 @@
 //! Predecode bounds for raster containers whose frames may exceed their declared canvas.
 
-use crate::codecs::webp;
 use crate::error::CodecError;
 use crate::format::Format;
-use crate::image::{ChannelLayout, SampleType};
-use crate::options::Limits;
 
 /// The largest width and height any decoded frame can declare, without allocating pixel data.
 /// Animated GIF and WebP frames are inspected individually, including frames larger than the
@@ -12,12 +9,10 @@ use crate::options::Limits;
 pub fn probe_allocation_size(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
     let format = crate::detect(bytes).ok_or(CodecError::UnknownFormat)?;
     let (width, height) = match format {
+        Format::Png => png_bounds(bytes)?,
+        Format::Jpeg => jpeg_bounds(bytes)?,
         Format::Gif => gif_bounds(bytes)?,
-        Format::WebP => {
-            let (width, height, _) = webp::probe(bytes, &Limits::default())?;
-            let (frame_width, frame_height) = webp_bounds(bytes)?;
-            (width.max(frame_width), height.max(frame_height))
-        }
+        Format::WebP => webp_bounds(bytes)?,
         _ => {
             if let Some(info) = crate::inspect_raster(bytes)? {
                 (info.width, info.height)
@@ -26,12 +21,65 @@ pub fn probe_allocation_size(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
             }
         }
     };
-    Limits::default().check(width, height, ChannelLayout::Rgba, SampleType::U8)?;
+    // This is an allocation-size probe, not a decode policy. Callers need the coded extents even
+    // when they exceed this crate's default decode limits so they can report/refuse against their
+    // own budgets before passing the bytes to a decoder.
     Ok((width, height))
 }
 
 fn malformed(format: Format, message: &'static str) -> CodecError {
     CodecError::malformed(format, message)
+}
+
+fn png_bounds(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
+    let bad = || malformed(Format::Png, "truncated or malformed PNG header");
+    if bytes.get(..8) != Some(b"\x89PNG\r\n\x1a\n") || bytes.get(8..16) != Some(b"\0\0\0\rIHDR") {
+        return Err(bad());
+    }
+    let width = u32::from_be_bytes(bytes.get(16..20).ok_or_else(bad)?.try_into().map_err(|_| bad())?);
+    let height = u32::from_be_bytes(bytes.get(20..24).ok_or_else(bad)?.try_into().map_err(|_| bad())?);
+    if width == 0 || height == 0 {
+        return Err(bad());
+    }
+    Ok((width, height))
+}
+
+fn jpeg_bounds(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
+    let bad = || malformed(Format::Jpeg, "truncated or malformed JPEG frame header");
+    if bytes.get(..2) != Some(&[0xff, 0xd8]) {
+        return Err(bad());
+    }
+    let mut at = 2usize;
+    while at < bytes.len() {
+        while bytes.get(at) == Some(&0xff) {
+            at += 1;
+        }
+        let marker = *bytes.get(at).ok_or_else(bad)?;
+        at += 1;
+        if matches!(marker, 0xd8 | 0xd9 | 0x01 | 0xd0..=0xd7) {
+            continue;
+        }
+        let length =
+            usize::from(u16::from_be_bytes(bytes.get(at..at.checked_add(2).ok_or_else(bad)?).ok_or_else(bad)?.try_into().map_err(|_| bad())?));
+        if length < 2 {
+            return Err(bad());
+        }
+        let end = at.checked_add(length).ok_or_else(bad)?;
+        let segment = bytes.get(at..end).ok_or_else(bad)?;
+        if matches!(marker, 0xc0..=0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf) {
+            if segment.len() < 7 {
+                return Err(bad());
+            }
+            let height = u32::from(u16::from_be_bytes([segment[3], segment[4]]));
+            let width = u32::from(u16::from_be_bytes([segment[5], segment[6]]));
+            if width == 0 || height == 0 {
+                return Err(bad());
+            }
+            return Ok((width, height));
+        }
+        at = end;
+    }
+    Err(bad())
 }
 
 fn u16_le(bytes: &[u8], at: usize) -> Option<u16> {
@@ -76,20 +124,28 @@ fn gif_bounds(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
                 let frame_height = u32::from(u16_le(bytes, at + 7).ok_or_else(bad)?);
                 let descriptor = bytes.get(at..at.checked_add(10).ok_or_else(bad)?).ok_or_else(bad)?;
                 let flags = descriptor[9];
+                // The frame rectangle determines its decoded allocation even when the later
+                // compressed payload is truncated. Report known dimensions so callers can
+                // refuse an oversized frame before asking a decoder to inspect its pixels.
+                width = width.max(left.saturating_add(frame_width));
+                height = height.max(top.saturating_add(frame_height));
                 let mut body = at.checked_add(10).ok_or_else(bad)?;
                 if flags & 0x80 != 0 {
                     let table = 3usize.checked_mul(1usize.checked_shl(u32::from((flags & 7) + 1)).ok_or_else(bad)?).ok_or_else(bad)?;
                     body = body.checked_add(table).ok_or_else(bad)?;
                 }
                 body = body.checked_add(1).ok_or_else(bad)?; // LZW minimum code size.
-                if bytes.get(..body).is_none() || frame_width == 0 || frame_height == 0 {
+                if frame_width == 0 || frame_height == 0 {
                     return Err(bad());
                 }
-                width = width.max(left.saturating_add(frame_width));
-                height = height.max(top.saturating_add(frame_height));
+                if bytes.get(..body).is_none() {
+                    return Ok((width, height));
+                }
                 at = body;
+                frames = frames.saturating_add(1);
                 loop {
-                    let length = usize::from(*bytes.get(at).ok_or_else(bad)?);
+                    let Some(&length) = bytes.get(at) else { return Ok((width, height)) };
+                    let length = usize::from(length);
                     at = at.checked_add(1).ok_or_else(bad)?;
                     if length == 0 {
                         break;
@@ -99,7 +155,6 @@ fn gif_bounds(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
                         return Err(bad());
                     }
                 }
-                frames = frames.saturating_add(1);
             }
             _ => return Err(bad()),
         }

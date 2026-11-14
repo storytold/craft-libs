@@ -19,6 +19,16 @@ const CP1256: [u32; 128] = [
     0x200F, 0x06D2,
 ];
 
+/// Decode strictly as UTF-8, stripping a leading UTF-8 BOM when present.
+///
+/// Unlike [`decode_text`], this does not guess a legacy encoding or accept UTF-16. It is useful
+/// when a format or application contract requires UTF-8 and malformed bytes must be rejected.
+pub fn decode_utf8(bytes: &[u8]) -> Result<String, std::str::Utf8Error> {
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    let text = std::str::from_utf8(bytes)?;
+    Ok(text.strip_prefix('\u{FEFF}').unwrap_or(text).to_string())
+}
+
 /// Evidence that bytes which aren't UTF-8 are Windows-1256 Arabic rather than Windows-1252.
 #[derive(Default)]
 struct Cp1256Evidence {
@@ -163,6 +173,16 @@ mod tests {
         // Bytes that are no text at all still decode.
         assert_eq!(decode_text(&[0xFF; 1000]).chars().count(), 1000);
         assert_eq!(decode_text(&[0xFF, 0xFE, 0x00, 0xD8]), "\u{FFFD}", "a lone surrogate");
+    }
+
+    #[test]
+    fn strict_utf8_strips_bom_and_rejects_legacy_or_malformed_bytes() {
+        assert_eq!(decode_utf8(b"\xEF\xBB\xBFName,City\nAda,Town\n").unwrap(), "Name,City\nAda,Town\n");
+        assert_eq!(decode_utf8("café".as_bytes()).unwrap(), "café");
+        assert!(decode_utf8(&[0xFF, 0xFE, 0x00]).is_err());
+        assert!(decode_utf8(b"\xEF\xBB\xBF\xFF").is_err());
+        // The permissive text decoder still accepts legacy encodings for callers that want it.
+        assert_eq!(decode_text(&[0x80, b'a', 0xE9]), "€aé");
     }
 
     #[test]
