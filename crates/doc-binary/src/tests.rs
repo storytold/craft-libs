@@ -10,6 +10,7 @@ use super::read;
 mod drawing;
 mod encrypted;
 mod metadata;
+mod rtl;
 mod word6;
 
 /// Offset in the WordDocument stream where test text pieces are placed (past the FIB).

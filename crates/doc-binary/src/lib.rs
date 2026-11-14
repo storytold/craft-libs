@@ -305,6 +305,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     let work = Work::new(MAX_WORK);
     let paragraphs = ParaBudget { left: std::cell::Cell::new(max_paragraphs), exceeded: std::cell::Cell::new(false) };
 
+    let style_rtl = style_directions(&raw_styles, &sheet);
     let ctx = WalkCtx {
         word: &word,
         data: &data,
@@ -314,6 +315,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
         fonts: &fonts,
         raw_styles: &raw_styles,
         sheet: &sheet,
+        style_rtl: &style_rtl,
         notes: &[],
         marks: &[],
         drawn: &[],
@@ -460,6 +462,7 @@ fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: u
     let work = Work::new(MAX_WORK);
     let paragraphs = ParaBudget { left: std::cell::Cell::new(max_paragraphs), exceeded: std::cell::Cell::new(false) };
     let mut pics = media::Pictures::for_input(word.len());
+    let style_rtl = style_directions(&content.styles, &sheet);
     let ctx = WalkCtx {
         word,
         data: &[],
@@ -469,6 +472,7 @@ fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: u
         fonts: &content.fonts,
         raw_styles: &content.styles,
         sheet: &sheet,
+        style_rtl: &style_rtl,
         notes: &[],
         marks: &[],
         drawn: &[],
@@ -547,6 +551,13 @@ fn story(base: u32, len: u32, (a, b): (u32, u32)) -> Option<(u32, u32)> {
     Some((base.checked_add(a)?, base.checked_add(b)?))
 }
 
+/// Each style's resolved direction by istd, looked up once rather than per paragraph: a style
+/// lookup by id scans the sheet, and both counts are only capped (WordCraft #6384).
+fn style_directions(raw: &[stsh::RawStyle], sheet: &StyleSheet) -> Vec<bool> {
+    let by_id: std::collections::HashMap<&str, bool> = sheet.styles.iter().map(|s| (s.id.as_str(), s.para.bidi == Some(true))).collect();
+    raw.iter().map(|st| !st.name.is_empty() && by_id.get(fmt::style_id(&st.name).as_str()).copied().unwrap_or(false)).collect()
+}
+
 /// Everything the walker needs besides its CP range.
 struct WalkCtx<'a> {
     word: &'a [u8],
@@ -557,6 +568,8 @@ struct WalkCtx<'a> {
     fonts: &'a [String],
     raw_styles: &'a [stsh::RawStyle],
     sheet: &'a StyleSheet,
+    /// Whether each style (by istd) reads right to left, through its base chain.
+    style_rtl: &'a [bool],
     /// (reference CP in the main document, kind, part id) for notes.
     notes: &'a [(u32, NoteKind, u32)],
     /// Bookmark boundaries (main-document CPs), sorted for a sequential walk.
@@ -728,6 +741,10 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 let row = row.is_table().then(|| Box::new(row));
                 let mut ilvl = 0u8;
                 let mut ilfo = 0i32;
+                // Physical indents and alignment turn by the direction, which the paragraph
+                // may take from its style (#6384).
+                let style_rtl = ctx.style_rtl.get(istd as usize).copied().unwrap_or(false);
+                let sides = fmt::ParaSides::of(papx, style_rtl);
                 for prl in sprm::iter(papx) {
                     if prl.op == P_ILVL {
                         ilvl = prl.operand.first().copied().unwrap_or(0).min(8);
@@ -741,7 +758,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                         continue;
                     }
                     if prl.sgc() == 1 {
-                        fmt::apply_para(&mut pb.props, &prl);
+                        fmt::apply_para(&mut pb.props, &prl, &sides);
                     }
                 }
                 if let Some(num) = num_of(ilfo) {
