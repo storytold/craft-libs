@@ -15,6 +15,9 @@
 //! * [`guards::rust_sources`]: directory crawler collecting `.rs` sources while excluding tests, with
 //!   size limits ([`guards::rust_sources_with_limits`]). It is not built for `wasm32`.
 //!
+//! [`rng`] holds two seeded generators for repeatable test input, [`rng::XorShift64`] and
+//! [`rng::XorShift64Star`], each with `next`, `below`, `byte` and `fill`.
+//!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
 //! Source-level guards provide deterministic syntactic evidence about codebase structure.
@@ -26,6 +29,7 @@
 //! rather than replace, platform integration tests and CI execution.
 
 pub mod guards;
+pub mod rng;
 
 pub use guards::{AsFileSource, Finding, predefined_quit, std_instant, wgsl_float_literals, wgsl_float_literals_in};
 
