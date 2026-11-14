@@ -1,6 +1,5 @@
 //! Tests for the i18n facade.
 
-use super::bidi::{PDF, PDI};
 use super::*;
 use unicode_bidi::{BidiClass, bidi_class};
 

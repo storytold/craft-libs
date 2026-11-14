@@ -1,7 +1,7 @@
 //! Form generation: every word a stem accepts, within a work budget.
 
 use super::parse::non_empty;
-use super::{AffixDict, MAX_FORMS, MAX_FORMS_WORK, Rule, has};
+use super::{AffixDict, INNER_CHAIN, MAX_FORMS, MAX_FORMS_WORK, Rule, has};
 
 impl AffixDict {
     /// Every form of the stem `stem` (itself included), unsorted, possibly with repeats; at most

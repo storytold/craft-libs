@@ -44,7 +44,8 @@
 //! [`MAX_PARTS`] parts, each part's analyses computed once, and at most [`MAX_WORK`] steps (rules
 //! tried and splits followed) per word; past that the word is no compound.
 
-use super::{AffixDict, Excluded, FlagKey, FlagMode, Rule, has};
+use super::flags::Excluded;
+use super::{AffixDict, FlagKey, FlagMode, Rule, has};
 
 mod analysis;
 mod near;

@@ -1,5 +1,5 @@
 use super::object::{Lexer, Obj, get};
-use super::xref::Budget;
+use super::xref::{Budget, decode};
 use super::*;
 use craft_ui::testing::trial;
 

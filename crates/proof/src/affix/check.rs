@@ -1,7 +1,7 @@
 //! Word lookup: stem and flag-set probes, affix rule application, compounds and case variants.
 
 use super::build::intersects;
-use super::flags::{Excluded, FlagProbe, Steps};
+use super::flags::{Excluded, FlagProbe, SUGGEST_STEPS, Steps};
 use super::parse::Repeat;
 use super::{
     AffixDict, Casing, EMPTY, FxMap, GROUP_STEPS, INNER_CHAIN, MAX_COMPOUND_BYTES, MAX_HOMONYMS, MAX_INPUT_BYTES, MAX_SHARPS, MAX_SIMPLE_WORK,

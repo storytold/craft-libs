@@ -1,5 +1,7 @@
 //! Starting the launcher again after this process exits, including through the host Flatpak.
 
+#[cfg(target_os = "linux")]
+use super::PRETEND_VAR;
 use super::detect::clear_pretend_version;
 #[cfg(target_os = "linux")]
 use super::detect::pretend_var;
