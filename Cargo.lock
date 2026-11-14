@@ -2591,6 +2591,7 @@ dependencies = [
 name = "craft-texture"
 version = "0.1.0"
 dependencies = [
+ "half",
  "rayon",
  "thiserror 2.0.21",
 ]

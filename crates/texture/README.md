@@ -31,9 +31,31 @@ network I/O and has no `unsafe` code.
   `to_rgba8_display` encodes 8-bit sRGB RGBA. `linear_to_srgb`, `srgb_to_linear` and `luminance`
   (Rec. 709) are scalar helpers. `resource_key` and `split_resource_key` tag a bitmap name with
   its color space.
+- **Height to normal and ORM packing.** Both read a `ScalarSource`: a plane of linear scalar
+  samples that gives its size and one row at a time, so an adapter can decode a tiled or encoded
+  surface in place. Besides the output, each worker keeps at most three rows for the normal map
+  and one row for each given plane for ORM packing, never a full `f32` copy of the input. Both
+  check the output size against `Limits` before reading. An `Image` is a
+  `ScalarSource` of its gray value, or its Rec. 709 luminance for a color image.
+  - `normal::try_height_to_normal` returns an RGBA tangent-space normal map. It takes the 3×3
+    Sobel gradient of the height, scales it by `strength` and normalizes `(-gx × s, gy × s, 1)`,
+    then stores `0.5 × n + 0.5` with alpha 1, as glTF 2.0 encodes normal textures. OpenGL
+    normals have green up the image; `NormalConvention::DirectX` negates green. Neighbors clamp
+    to the image, or with `BoundaryMode::ClampToBlock` to the `block × block` UV tile of the
+    center sample. A neighbor that `ScalarSource::covered` reports as not covered takes the
+    center height. `HeightNormalOptions::uv_tiles(height_strength, tile_res, block_scale)` gives
+    the strength `height_strength × tile_res × block_scale / 16` and clamps to UV tiles of
+    `tile_res`. A strength of 0 gives flat normals `[0.5, 0.5, 1]`.
+  - `packing::try_pack_orm` returns RGBA `[occlusion, roughness, metallic, 1]`, the channels
+    glTF 2.0 reads occlusion from (red) and metallic-roughness from (green and blue). A plane
+    that is not given takes 1, 0.5 or 0. `occlusion_multiplier` multiplies a second occlusion
+    plane, such as baked occlusion, into red. Every plane must have the same size, and `size`
+    gives it when no plane is given.
+  - Values are linear data with no transfer curve. A NaN or infinite strength, sample or block
+    scale, a block of 0, an occlusion product that overflows `f32`, mismatched sizes and a
+    failed row read return a `TextureOpError`.
 
-Mirrored repeat, mip chains, height to normal, channel packing, decoding and texture-set
-recognition are not in the crate yet.
+Mirrored repeat, mip chains, decoding and texture-set recognition are not in the crate yet.
 
 ## Cargo features
 
@@ -41,7 +63,7 @@ No default features.
 
 | Feature | Provides | Pulls in |
 |---|---|---|
-| `parallel` | generated images and display conversion fill rows on several threads; the results are the same | `rayon` |
+| `parallel` | generated images, display conversion, height to normal and ORM packing fill rows on several threads; the results are the same | `rayon` |
 
 Without `parallel` the crate builds for `wasm32-unknown-unknown`.
 
@@ -49,7 +71,7 @@ Without `parallel` the crate builds for `wasm32-unknown-unknown`.
 
 | Field | Default | Checked by |
 |---|---|---|
-| `max_side` | 8192 | every `try_` constructor and `from_data` |
+| `max_side` | 8192 | every `try_` constructor, `from_data`, `try_height_to_normal` and `try_pack_orm` |
 | `max_pixels` | 2^26 (8192 × 8192) | the same |
 | `max_bytes` | 1 GiB (an 8192 × 8192 RGBA plane) | the same |
 
@@ -59,6 +81,8 @@ Without `parallel` the crate builds for `wasm32-unknown-unknown`.
 |---|---|
 | `Image`, `Kind`, sampling, resizing, conversions, sRGB helpers, resource keys and the six tests `sample_survives_huge_coordinates`, `resource_keys_round_trip`, `sample_wraps_and_clamps`, `resize_box_and_bilinear`, `hostile_sizes_are_clamped`, `conversions` | MaterialCraft `crates/image/src/lib.rs` at [3133062](https://github.com/storytold/materialcraft/commit/3133062968b8a1566eda12a357cb06062db16687) |
 | `Limits`, the `try_` constructors, `from_data`, private fields with getters, the `parallel` feature | written here |
+| The Sobel normal, its strength scale, UV-tile clamp and uncovered-neighbor rule, the ORM channels and defaults, and the tests `gltf_png_matches_the_composite`, `directx_flips_green`, `height_becomes_normal_detail`, `ao_mixes_baked_and_channel`, `converted_maps_invert_and_derive_normals` and `uv_tiles_export_one_file_per_tile_without_padding_across`, with assertions on the new functions | TextureCraft `crates/formats/src/export/mod.rs`, `presets.rs` and `tests.rs` and `crates/core/src/channel.rs` at [b89badc](https://github.com/storytold/texturecraft/commit/b89badcd6f883751f79960f93c554fb77f063885) |
+| `ScalarSource`, row-at-a-time reading, the limit and non-finite checks, and the tiled-input tests | written here |
 
 ## Migration
 
@@ -66,6 +90,7 @@ Without `parallel` the crate builds for `wasm32-unknown-unknown`.
 |---|---|
 | MaterialCraft | `materialcraft-image` is the source. The app switches to this crate in its own pull request. |
 | EffectCraft | Its texture sampling moves into this crate later, with mirrored repeat. |
+| TextureCraft | Its export's height normal and ORM packing are the source of `normal` and `packing`. The app switches to them in its own pull request. |
 
 For MaterialCraft:
 

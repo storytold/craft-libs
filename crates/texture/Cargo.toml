@@ -17,3 +17,6 @@ workspace = true
 [dependencies]
 rayon = { workspace = true, optional = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+half = "2"
