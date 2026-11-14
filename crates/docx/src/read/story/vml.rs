@@ -151,14 +151,23 @@ impl Reader<'_> {
         let type_id = shape.attr("type").map(|t| t.trim().trim_start_matches('#'));
         let shapetype = type_id.and_then(|id| pict.els().find(|e| e.name == "v:shapetype" && e.attr("id") == Some(id)));
         let attr = |name: &str| shape.attr(name).or_else(|| shapetype.and_then(|t| t.attr(name)));
-        let on = |name: &str| {
-            attr(name).is_none_or(|v| {
-                let t = v.trim();
-                !t.eq_ignore_ascii_case("f") && !t.eq_ignore_ascii_case("false") && t != "0"
-            })
+        // Whether the line is on: a `v:stroke` child's `on` says so before the `stroked`
+        // attribute beside it, and what the shape says, either way, before what its shapetype
+        // says (measured in Word for Windows with 19 shapes: `<v:stroke on="f"/>` in a shape
+        // with `stroked="t"` turns the line off, and `stroked="t"` on a shape whose shapetype
+        // has `<v:stroke on="f"/>` keeps it on).
+        let flag = |v: &str| {
+            let t = v.trim();
+            !t.eq_ignore_ascii_case("f") && !t.eq_ignore_ascii_case("false") && t != "0"
         };
-        let stroke = on("stroked").then(|| attr("strokecolor").map_or(Some(Rgb::BLACK), vml_color)).flatten();
-        let stroke_width = attr("strokeweight").and_then(|v| measure(v, 1.0)).unwrap_or(0.75).clamp(0.0, 100.0);
+        let line_on = |e: &El| e.child("v:stroke").and_then(|s| s.attr("on")).or_else(|| e.attr("stroked")).map(flag);
+        let stroked = line_on(shape).or_else(|| shapetype.and_then(line_on)).unwrap_or(true);
+        let stroke = stroked.then(|| attr("strokecolor").map_or(Some(Rgb::BLACK), vml_color)).flatten();
+        // A line that is off has no width: the model's width is the room an outline takes from
+        // the shape's text, and Word gives a VML shape's line none while it is off, whatever its
+        // `strokeweight` (measured in Word for Windows: text in a 3 pt `stroked="f"` box starts
+        // where it does without a line, in a stroked one 1.5 pt further in).
+        let stroke_width = if stroked { attr("strokeweight").and_then(|v| measure(v, 1.0)).unwrap_or(0.75).clamp(0.0, 100.0) } else { 0.0 };
         let fill = vml_fill(shape, shapetype);
         let endcap = shape
             .child("v:stroke")
@@ -218,7 +227,7 @@ impl Reader<'_> {
                 h,
                 fill: None,
                 stroke: None,
-                stroke_width,
+                stroke_width: 0.0,
                 float,
                 story: Some(id),
                 freeform: None,
