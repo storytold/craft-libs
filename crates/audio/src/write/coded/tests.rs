@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::Speaker;
+
 fn map(mask: u32, order: Option<&[usize]>, layout: u32) -> Option<Vec<usize>> {
     channel_map(mask, order, &ChannelLayout::from_mask(layout))
 }
@@ -29,13 +31,13 @@ fn channels_are_mapped_by_speaker() {
 #[test]
 fn every_aac_channel_count_has_a_layout_and_an_order() {
     for channels in 1..=8 {
-        let mask = aac_mask(channels);
+        let mask = EncodeFormat::Aac.layout_masks(channels as u16)[0];
         assert_eq!(mask.count_ones() as usize, channels);
         let mut order = map(mask, aac_order(channels), mask).unwrap();
         order.sort_unstable();
         assert_eq!(order, (0..channels).collect::<Vec<_>>());
     }
-    assert_eq!(aac_mask(9), 0);
+    assert!(EncodeFormat::Aac.layout_masks(9).is_empty() && EncodeFormat::Aac.layout_masks(0).is_empty());
     // Configuration 7: C, Lc Rc, L R, Ls Rs, LFE.
     let wide: Vec<Speaker> = ChannelLayout::from_mask(0xFF).speakers();
     let named: Vec<Speaker> = aac_order(8).unwrap().iter().map(|&c| wide[c]).collect();
@@ -112,4 +114,46 @@ fn ac3_settings_follow_the_layout_and_validate() {
     assert_eq!(rate(Codec::Eac3, 0x3, Some(RateControl::Bitrate(200_500))), 200);
     assert!(matches!(ac3_config(Codec::Ac3, 48_000, &ChannelLayout::STEREO, Some(RateControl::Quality(0.5))), Err(AudioError::Unsupported(_))));
     assert!(matches!(ac3_config(Codec::Ac3, 48_000, &ChannelLayout::unordered(2), None), Err(AudioError::Unsupported(_))));
+}
+
+/// The layouts `EncodeFormat` lists are the encoders' own: ALAC's layout per channel count, and
+/// the speakers of every AC-3 and E-AC-3 coding mode the encoder has.
+#[cfg(all(feature = "alac-encode", feature = "ac3-encode", feature = "eac3-encode"))]
+#[test]
+fn the_listed_layouts_are_the_encoders() {
+    use crate::ac3::encoder::{Codec, CodingMode::*, Config};
+    for channels in 0..=10u16 {
+        let alac = crate::alac::channel_mask(channels as u8);
+        assert_eq!(EncodeFormat::Alac.layout_masks(channels), if alac == 0 { &[][..] } else { std::slice::from_ref(&alac) }, "ALAC, {channels}");
+        for (format, codec) in [(EncodeFormat::Ac3, Codec::Ac3), (EncodeFormat::Eac3, Codec::Eac3)] {
+            let modes = [Mono, Stereo, ThreeFront, StereoSurround, ThreeFrontSurround, StereoTwoSurround, ThreeFrontTwoSurround, Surround71];
+            let mut encoder: Vec<u32> = modes
+                .iter()
+                .flat_map(|&mode| [false, true].map(|lfe| Config { codec, sample_rate: 48_000, bitrate_kbps: 640, mode, lfe }))
+                .filter(|config| config.validate().is_ok() && config.channels() == usize::from(channels))
+                .filter_map(|config| config.channel_layout().mask())
+                .collect();
+            let mut listed = format.layout_masks(channels).to_vec();
+            encoder.sort_unstable();
+            listed.sort_unstable();
+            assert_eq!(listed, encoder, "{format:?}, {channels} channels");
+            for &mask in &listed {
+                let layout = ChannelLayout::from_mask(mask);
+                assert_eq!(ac3_config(codec, 48_000, &layout, None).unwrap().0.channel_layout(), layout);
+            }
+        }
+    }
+}
+
+/// The sample rates `EncodeFormat` lists are the encoders'.
+#[cfg(all(feature = "aac-encode", feature = "mp3-encode"))]
+#[test]
+fn the_listed_sample_rates_are_the_encoders() {
+    let sorted = |rates: &[u32]| {
+        let mut rates = rates.to_vec();
+        rates.sort_unstable();
+        rates
+    };
+    assert_eq!(EncodeFormat::Aac.sample_rates().unwrap(), sorted(&crate::aac::SAMPLE_RATES));
+    assert_eq!(EncodeFormat::Mp3.sample_rates().unwrap(), sorted(&crate::mp3::SAMPLE_RATES));
 }

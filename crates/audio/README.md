@@ -277,6 +277,23 @@ rather than written to the wrong ones:
 - A surround pair is a surround pair: side and back surrounds are interchangeable where the format
   has one pair.
 
+Before a file is created, the options and the format say what will happen:
+
+```rust
+let opts = EncodeOptions::new(EncodeFormat::Ac3).with_layout(info.layout).with_bitrate(200_000);
+opts.check(info.sample_rate, info.channels)?;                // the error FileEncoder::new would return, nothing written
+let bps = opts.bitrate(info.sample_rate, info.channels)?;    // Some(192_000): the rate actually used; None when lossless or by quality
+
+EncodeFormat::Ac3.sample_rates();                 // Some(&[32_000, 44_100, 48_000]); None when any rate will do
+EncodeFormat::Ac3.max_channels();                 // 6
+EncodeFormat::Ac3.fixed_layouts(3);               // L R C, L R Cb, L R LFE; None for WAV, AIFF and FLAC (any layout)
+EncodeFormat::Ac3.supports_layout(&info.layout);  // one of those, sides and backs standing for each other
+EncodeFormat::Ac3.supports_quality();             // false: AAC only
+```
+
+`FileEncoder::bitrate()` gives the rate of a file being written. These answer for a format whose
+feature is off too, except `check` and `EncodeOptions::bitrate`, which return its `Unsupported`.
+
 The layout `decode` reports (`AudioInfo::layout`) can be passed to `with_layout` as it is. When a
 coded format refuses it (2.1 or quad into AAC, a single channel tagged as left, channels with no
 speaker assignment), the choices are another format, or audio rearranged into one of the layouts

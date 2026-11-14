@@ -12,7 +12,8 @@
 
 use super::failed_write_error;
 use super::pcm::validate_layout;
-use crate::{AudioBuffer, AudioError, ChannelLayout, EncodeFormat, EncodeOptions, RateControl, Result, Speaker};
+use crate::layout::channel_map;
+use crate::{AudioBuffer, AudioError, ChannelLayout, EncodeFormat, EncodeOptions, RateControl, Result};
 use std::io::{Cursor, Seek, Write};
 
 /// Frames handed to the encoder at a time, so its buffers and the packets waiting to be written
@@ -25,50 +26,17 @@ const AAC_DEFAULT_BPS_PER_CHANNEL: u32 = 64_000;
 /// full-bandwidth channel).
 const DEFAULT_KBPS_PER_CHANNEL: u32 = 96;
 
-/// The surround speaker a layout may name in place of `speaker`: formats with one surround pair
-/// do not tell side from back, so a pair of either kind feeds it.
-fn twin(speaker: Speaker) -> Option<Speaker> {
-    Some(match speaker {
-        Speaker::SideLeft => Speaker::BackLeft,
-        Speaker::SideRight => Speaker::BackRight,
-        Speaker::BackLeft => Speaker::SideLeft,
-        Speaker::BackRight => Speaker::SideRight,
-        _ => return None,
-    })
-}
-
 /// The speakers of `mask` as labels: `"L R C LFE Ls Rs"`.
 fn labels(mask: u32) -> String {
     ChannelLayout::from_mask(mask).speakers().iter().map(|s| s.label()).collect::<Vec<_>>().join(" ")
 }
 
-/// For each channel the encoder takes, the channel of the caller's audio that feeds it. `mask` is
-/// the layout the format has for the channel count, and `order` the encoder's channel order over
-/// it (for each encoder channel, the WAV-order channel of `mask`; `None` when the encoder takes
-/// WAV order). `layout` names the speakers of the caller's channels. `None` when `layout` is not
-/// the format's layout: it is unordered, or has a speaker the format has not.
-fn channel_map(mask: u32, order: Option<&[usize]>, layout: &ChannelLayout) -> Option<Vec<usize>> {
-    let speakers = ChannelLayout::from_mask(mask).speakers();
-    if speakers.len() != usize::from(layout.channels()) {
-        return None;
-    }
-    let mut map = Vec::with_capacity(speakers.len());
-    for j in 0..speakers.len() {
-        let speaker = *speakers.get(order.and_then(|o| o.get(j).copied()).unwrap_or(j))?;
-        let at = layout.index_of(speaker).or_else(|| twin(speaker).and_then(|t| layout.index_of(t)))?;
-        if map.contains(&at) {
-            return None;
-        }
-        map.push(at);
-    }
-    Some(map)
-}
-
-/// [`channel_map`] for a format with one layout per channel count, or why the audio does not fit.
-fn fixed_map(name: &str, mask: u32, order: Option<&[usize]>, layout: &ChannelLayout) -> Result<Vec<usize>> {
-    if mask == 0 {
+/// [`channel_map`] for a format with one layout per channel count ([`EncodeFormat::layout_masks`]),
+/// or why the audio does not fit.
+fn fixed_map(format: EncodeFormat, name: &str, order: Option<&[usize]>, layout: &ChannelLayout) -> Result<Vec<usize>> {
+    let Some(&mask) = format.layout_masks(layout.channels()).first() else {
         return Err(AudioError::Unsupported(format!("{name} cannot hold {} channels", layout.channels())));
-    }
+    };
     channel_map(mask, order, layout).ok_or_else(|| {
         AudioError::Unsupported(format!("{name} holds {} channels as {}; the audio is {}", layout.channels(), labels(mask), given(layout)))
     })
@@ -79,25 +47,7 @@ fn given(layout: &ChannelLayout) -> String {
     layout.mask().map_or_else(|| "without speaker assignment".into(), labels)
 }
 
-/// The WAV mask of the speakers an AAC stream of `channels` channels has, as this crate's encoder
-/// writes it and its decoder reports it: channel configurations 1–6, the 6.1 program config
-/// element for 7, and configuration 7 (7.1 with a front pair left and right of centre) for 8.
-#[cfg(feature = "aac-encode")]
-fn aac_mask(channels: usize) -> u32 {
-    match channels {
-        1 => 0x4,
-        2 => 0x3,
-        3 => 0x7,
-        4 => 0x107,
-        5 => 0x607,
-        6 => 0x60F,
-        7 => 0x70F,
-        8 => 0xFF,
-        _ => 0,
-    }
-}
-
-/// The encoder's channel order over [`aac_mask`]: [`crate::aac::aac_order`], and for 8 channels
+/// The encoder's channel order over AAC's layout for the count: [`crate::aac::aac_order`], and for 8 channels
 /// configuration 7's C, Lc Rc, L R, Ls Rs, LFE over the WAV order L R C LFE Ls Rs Lc Rc.
 #[cfg(feature = "aac-encode")]
 fn aac_order(channels: usize) -> Option<&'static [usize]> {
@@ -428,6 +378,9 @@ pub(crate) struct Writer<W: Write + Seek> {
     sink: Sink<W>,
     /// For each encoder channel, the caller's channel that feeds it.
     map: Vec<usize>,
+    /// The constant bit rate the encoder was set to, bits per second; `None` for ALAC and for
+    /// AAC at a constant quality.
+    bitrate: Option<u32>,
     frames: u64,
     packets: Vec<Packet>,
     /// Set when a write has failed: the encoder and the sink no longer agree, so the writer
@@ -439,20 +392,22 @@ impl<W: Write + Seek> Writer<W> {
     pub(crate) fn new(out: W, opts: &EncodeOptions, sample_rate: u32, channels: usize) -> Result<Self> {
         validate_layout(channels, sample_rate)?;
         let layout = opts.layout.unwrap_or_else(|| ChannelLayout::default_for(channels as u16));
-        let (codec, map) = match opts.format {
+        let (codec, map, bitrate) = match opts.format {
             #[cfg(feature = "aac-encode")]
             EncodeFormat::Aac => {
-                let map = fixed_map("AAC", aac_mask(channels), aac_order(channels), &layout)?;
-                let config = crate::aac::EncoderConfig {
-                    mode: aac_mode(opts.rate_control, sample_rate, channels),
-                    ..crate::aac::EncoderConfig::cbr(sample_rate, channels, 0)
+                let map = fixed_map(EncodeFormat::Aac, "AAC", aac_order(channels), &layout)?;
+                let mode = aac_mode(opts.rate_control, sample_rate, channels);
+                let config = crate::aac::EncoderConfig { mode, ..crate::aac::EncoderConfig::cbr(sample_rate, channels, 0) };
+                let bitrate = match mode {
+                    crate::aac::BitrateMode::Cbr(bps) => Some(bps),
+                    crate::aac::BitrateMode::Vbr(_) => None,
                 };
-                (Codec::Aac(Box::new(crate::aac::Encoder::new(config)?)), map)
+                (Codec::Aac(Box::new(crate::aac::Encoder::new(config)?)), map, bitrate)
             }
             #[cfg(feature = "alac-encode")]
             EncodeFormat::Alac => {
                 let count = u8::try_from(channels).unwrap_or(u8::MAX);
-                let map = fixed_map("ALAC", crate::alac::channel_mask(count), crate::alac::alac_order(count), &layout)?;
+                let map = fixed_map(EncodeFormat::Alac, "ALAC", crate::alac::alac_order(count), &layout)?;
                 let bits = match opts.bit_depth {
                     crate::BitDepth::Int16 => 16,
                     crate::BitDepth::Int24 => 24,
@@ -461,26 +416,23 @@ impl<W: Write + Seek> Writer<W> {
                 };
                 let enc = crate::alac::Encoder::new(crate::alac::EncoderConfig::new(sample_rate, count, bits).with_frame_length(CHUNK as u32))?;
                 let quantizers = super::pcm::Quantizer::per_channel(u32::from(bits), opts.dither, channels);
-                (Codec::Alac { enc: Box::new(enc), quantizers, pending: vec![Vec::new(); channels] }, map)
+                (Codec::Alac { enc: Box::new(enc), quantizers, pending: vec![Vec::new(); channels] }, map, None)
             }
             #[cfg(feature = "mp3-encode")]
             EncodeFormat::Mp3 => {
-                let mask = match channels {
-                    1 => 0x4,
-                    2 => 0x3,
-                    _ => 0,
-                };
-                let map = fixed_map("MP3", mask, None, &layout)?;
+                let map = fixed_map(EncodeFormat::Mp3, "MP3", None, &layout)?;
                 let want = constant_kbps("MP3", opts.rate_control, DEFAULT_KBPS_PER_CHANNEL * channels as u32)?;
                 // A sample rate MP3 has not is the encoder's to refuse.
                 let kbps = crate::mp3::nearest_bitrate(sample_rate, want).unwrap_or(want);
-                (Codec::Mp3(Box::new(crate::mp3::Encoder::new(crate::mp3::Config::cbr(sample_rate, channels, kbps))?)), map)
+                let enc = crate::mp3::Encoder::new(crate::mp3::Config::cbr(sample_rate, channels, kbps))?;
+                (Codec::Mp3(Box::new(enc)), map, Some(kbps.saturating_mul(1000)))
             }
             #[cfg(any(feature = "ac3-encode", feature = "eac3-encode"))]
             EncodeFormat::Ac3 | EncodeFormat::Eac3 => {
                 let codec = if opts.format == EncodeFormat::Ac3 { crate::ac3::encoder::Codec::Ac3 } else { crate::ac3::encoder::Codec::Eac3 };
                 let (config, map) = ac3_config(codec, sample_rate, &layout, opts.rate_control)?;
-                (Codec::Ac3 { enc: Box::new(crate::ac3::encoder::Encoder::new(config)?), planes: vec![Vec::new(); channels] }, map)
+                let enc = crate::ac3::encoder::Encoder::new(config)?;
+                (Codec::Ac3 { enc: Box::new(enc), planes: vec![Vec::new(); channels] }, map, Some(config.bitrate_kbps.saturating_mul(1000)))
             }
             #[allow(unreachable_patterns)]
             f => return Err(AudioError::Unsupported(format!("writing {f:?}"))),
@@ -490,7 +442,11 @@ impl<W: Write + Seek> Writer<W> {
             EncodeFormat::Aac | EncodeFormat::Alac => Sink::M4a(Box::new(M4a::new(out, &codec, sample_rate, channels as u32)?)),
             _ => Sink::Raw(out),
         };
-        Ok(Writer { codec, sink, map, frames: 0, packets: Vec::new(), failed: false })
+        Ok(Writer { codec, sink, map, bitrate, frames: 0, packets: Vec::new(), failed: false })
+    }
+
+    pub(crate) fn bitrate(&self) -> Option<u32> {
+        self.bitrate
     }
 
     /// Hands the packets waiting to the sink.

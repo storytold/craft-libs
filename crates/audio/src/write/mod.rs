@@ -222,6 +222,19 @@ impl<W: Write + Seek> FileEncoder<W> {
         Ok(FileEncoder { writer, format: opts.format, channels })
     }
 
+    /// The constant bit rate the file is written at, in bits per second for all channels
+    /// together: the rate asked for ([`RateControl::Bitrate`](crate::RateControl::Bitrate)) or the
+    /// format's default, moved to the nearest one the stream can carry. `None` for the lossless
+    /// formats and for AAC at a constant quality.
+    pub fn bitrate(&self) -> Option<u32> {
+        match &self.writer {
+            #[cfg(any(feature = "aac-encode", feature = "alac-encode", feature = "mp3-encode", feature = "ac3-encode", feature = "eac3-encode"))]
+            Writer::Coded(w) => w.bitrate(),
+            #[allow(unreachable_patterns)]
+            _ => None,
+        }
+    }
+
     /// Fails, without writing anything, when `frames` more frames would not fit the format (an
     /// AIFF holds 4 GiB, a FLAC 2^36 - 1 frames). The coded formats have no limit a file reaches.
     pub fn check_room(&self, frames: u64) -> Result<()> {
@@ -278,6 +291,35 @@ impl<W: Write + Seek> FileEncoder<W> {
             #[cfg(any(feature = "aac-encode", feature = "alac-encode", feature = "mp3-encode", feature = "ac3-encode", feature = "eac3-encode"))]
             Writer::Coded(w) => w.finish(),
         }
+    }
+}
+
+impl EncodeOptions {
+    /// Whether a file of `channels` channels at `sample_rate` can be written with these options:
+    /// `Ok`, or the error [`FileEncoder::new`] and [`encode`] would return, with nothing written.
+    /// For choosing a format before a file is created; [`EncodeFormat::sample_rates`],
+    /// [`EncodeFormat::max_channels`] and [`EncodeFormat::supports_layout`] say what a format takes.
+    ///
+    /// ```
+    /// # #[cfg(feature = "mp3-encode")] {
+    /// use craft_audio::{EncodeFormat, EncodeOptions};
+    ///
+    /// let mp3 = EncodeOptions::new(EncodeFormat::Mp3).with_bitrate(200_000);
+    /// assert!(mp3.check(48_000, 2).is_ok());
+    /// assert!(mp3.check(96_000, 2).is_err()); // not an MP3 sample rate
+    /// assert_eq!(mp3.bitrate(48_000, 2).unwrap(), Some(192_000)); // the table rate below 200 kbit/s
+    /// # }
+    /// ```
+    pub fn check(&self, sample_rate: u32, channels: u16) -> Result<()> {
+        self.bitrate(sample_rate, channels).map(drop)
+    }
+
+    /// The constant bit rate such a file would be written at ([`FileEncoder::bitrate`]), or the
+    /// error [`EncodeOptions::check`] returns.
+    pub fn bitrate(&self, sample_rate: u32, channels: u16) -> Result<Option<u32>> {
+        // The encoder a file would get, on a sink that is thrown away: what it accepts and the
+        // rate it settles on are then the writer's by construction.
+        Ok(FileEncoder::new(std::io::Cursor::new(Vec::new()), self, sample_rate, channels)?.bitrate())
     }
 }
 

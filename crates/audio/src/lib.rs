@@ -352,6 +352,85 @@ impl EncodeFormat {
         }
     }
 
+    /// The sample rates the format takes, ascending, or `None` when it has no fixed list (WAV,
+    /// AIFF, FLAC and ALAC take any rate their headers can hold).
+    pub fn sample_rates(self) -> Option<&'static [u32]> {
+        match self {
+            EncodeFormat::Aac => Some(&[7350, 8000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 64_000, 88_200, 96_000]),
+            EncodeFormat::Mp3 => Some(&[16_000, 22_050, 24_000, 32_000, 44_100, 48_000]),
+            EncodeFormat::Ac3 | EncodeFormat::Eac3 => Some(&[32_000, 44_100, 48_000]),
+            EncodeFormat::Wav | EncodeFormat::Aiff | EncodeFormat::Flac | EncodeFormat::Alac => None,
+        }
+    }
+
+    /// The most channels a file of this format holds.
+    pub fn max_channels(self) -> u16 {
+        match self {
+            EncodeFormat::Wav | EncodeFormat::Aiff => u16::MAX,
+            EncodeFormat::Flac | EncodeFormat::Aac | EncodeFormat::Alac | EncodeFormat::Eac3 => 8,
+            EncodeFormat::Ac3 => 6,
+            EncodeFormat::Mp3 => 2,
+        }
+    }
+
+    /// The speaker layouts of a format that has a fixed set of them, as WAV masks, for a channel
+    /// count: one each for AAC, ALAC and MP3, one per coding mode for AC-3 and E-AC-3. Empty for a
+    /// count the format has not, and for WAV, AIFF and FLAC, which have no such set.
+    pub(crate) fn layout_masks(self, channels: u16) -> &'static [u32] {
+        let per_count: &[&[u32]] = match self {
+            // Channel configurations 1–6, the 6.1 program config element, and configuration 7
+            // (7.1 with a front pair left and right of centre).
+            EncodeFormat::Aac => &[&[0x4], &[0x3], &[0x7], &[0x107], &[0x607], &[0x60F], &[0x70F], &[0xFF]],
+            // Apple's layout tags for 1–8 channels, surrounds as back speakers.
+            EncodeFormat::Alac => &[&[0x4], &[0x3], &[0x7], &[0x107], &[0x37], &[0x3F], &[0x13F], &[0xFF]],
+            EncodeFormat::Mp3 => &[&[0x4], &[0x3]],
+            // The coding modes 1/0 to 3/2 with and without an LFE, by channel count.
+            EncodeFormat::Ac3 => &[&[0x4], &[0x3, 0xC], &[0x7, 0x103, 0xB], &[0x107, 0x603, 0xF, 0x10B], &[0x607, 0x10F, 0x60B], &[0x60F]],
+            // The same, and 7.1 with backs and sides.
+            EncodeFormat::Eac3 => {
+                &[&[0x4], &[0x3, 0xC], &[0x7, 0x103, 0xB], &[0x107, 0x603, 0xF, 0x10B], &[0x607, 0x10F, 0x60B], &[0x60F], &[], &[0x63F]]
+            }
+            EncodeFormat::Wav | EncodeFormat::Aiff | EncodeFormat::Flac => &[],
+        };
+        usize::from(channels).checked_sub(1).and_then(|i| per_count.get(i)).copied().unwrap_or_default()
+    }
+
+    /// The speaker layouts a format with a fixed set of them has for `channels` channels: one for
+    /// AAC, ALAC and MP3, one per coding mode for AC-3 and E-AC-3; empty when the format cannot
+    /// hold that many channels. `None` for WAV, AIFF and FLAC, which take any layout. Audio in
+    /// another layout has to be rearranged into one of these before it is written.
+    ///
+    /// ```
+    /// use craft_audio::{ChannelLayout, EncodeFormat};
+    ///
+    /// assert_eq!(EncodeFormat::Aac.fixed_layouts(6), Some(vec![ChannelLayout::SURROUND_5_1_SIDE]));
+    /// assert_eq!(EncodeFormat::Mp3.fixed_layouts(6), Some(vec![]));
+    /// assert_eq!(EncodeFormat::Wav.fixed_layouts(6), None);
+    /// ```
+    pub fn fixed_layouts(self, channels: u16) -> Option<Vec<ChannelLayout>> {
+        match self {
+            EncodeFormat::Wav | EncodeFormat::Aiff | EncodeFormat::Flac => None,
+            _ => Some(self.layout_masks(channels).iter().map(|&mask| ChannelLayout::from_mask(mask)).collect()),
+        }
+    }
+
+    /// Whether the format holds audio with `layout`: for WAV, AIFF and FLAC any layout of up to
+    /// [`max_channels`](Self::max_channels) channels, for the others one of
+    /// [`fixed_layouts`](Self::fixed_layouts), where side and back surrounds stand for each other
+    /// in a layout with one surround pair.
+    pub fn supports_layout(self, layout: &ChannelLayout) -> bool {
+        match self {
+            EncodeFormat::Wav | EncodeFormat::Aiff | EncodeFormat::Flac => (1..=self.max_channels()).contains(&layout.channels()),
+            _ => self.layout_masks(layout.channels()).iter().any(|&mask| layout::channel_map(mask, None, layout).is_some()),
+        }
+    }
+
+    /// Whether the format takes [`RateControl::Quality`]: AAC. The other lossy formats are
+    /// written at a constant bit rate only.
+    pub fn supports_quality(self) -> bool {
+        self == EncodeFormat::Aac
+    }
+
     /// Whether the format loses audio: AAC, MP3, AC-3 and E-AC-3. These take
     /// [`EncodeOptions::rate_control`] and ignore the bit depth and dither.
     pub fn is_lossy(self) -> bool {

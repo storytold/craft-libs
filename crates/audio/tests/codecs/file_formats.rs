@@ -479,3 +479,74 @@ fn apple_reads_the_aac_priming_and_length() {
         assert!(text.contains(&format!("{frames} valid frames + 1024 priming + {remainder} remainder")), "{frames} frames: {text}");
     }
 }
+
+/// What `EncodeFormat` says a format takes is what the writer accepts: for every format, a file
+/// can be begun exactly when the sample rate, the channel count and the layout are listed.
+#[test]
+fn the_format_queries_agree_with_the_writer() {
+    let rates = [7350, 8000, 16_000, 22_050, 32_000, 44_000, 44_100, 48_000, 88_200, 96_000, 192_000];
+    let masks = [
+        0x4, 0x1, 0x3, 0xC, 0x600, 0x7, 0xB, 0x103, 0x33, 0x107, 0x603, 0xF, 0x10B, 0x37, 0x607, 0x10F, 0x60B, 0x3F, 0x60F, 0x13F, 0x70F, 0x63F, 0xFF,
+    ];
+    let layouts = masks.iter().map(|&mask| ChannelLayout::from_mask(mask)).chain((1..=9).map(ChannelLayout::unordered));
+    for layout in layouts {
+        for &format in EncodeFormat::ALL {
+            // 24 bits is a depth every format has.
+            let opts = EncodeOptions::new(format).with_layout(layout);
+            for sample_rate in rates {
+                let listed = format.sample_rates().is_none_or(|r| r.contains(&sample_rate))
+                    && layout.channels() <= format.max_channels()
+                    && format.supports_layout(&layout);
+                let checked = opts.check(sample_rate, layout.channels());
+                assert_eq!(checked.is_ok(), listed, "{format:?}, {sample_rate} Hz, {layout:?}: {checked:?}");
+                let begun = FileEncoder::new(Cursor::new(Vec::new()), &opts, sample_rate, layout.channels());
+                assert_eq!(begun.is_ok(), listed, "{format:?}, {sample_rate} Hz, {layout:?}");
+            }
+            if let Some(fixed) = format.fixed_layouts(layout.channels()) {
+                assert!(fixed.iter().all(|l| format.supports_layout(l) && l.channels() == layout.channels()));
+                assert_eq!(format.supports_layout(&layout), fixed.iter().any(|l| same_speakers(l, &layout)), "{format:?}, {layout:?}");
+            }
+        }
+    }
+    for &format in EncodeFormat::ALL {
+        assert!(!format.supports_layout(&ChannelLayout::unordered(0)));
+        assert_eq!(format.supports_quality(), EncodeOptions::new(format).with_quality(0.5).check(48_000, 2).is_ok() && format.is_lossy());
+        assert_eq!(format.fixed_layouts(2).is_none(), matches!(format, EncodeFormat::Wav | EncodeFormat::Aiff | EncodeFormat::Flac));
+    }
+    assert_eq!(EncodeFormat::Ac3.fixed_layouts(3).unwrap().len(), 3);
+    assert!(EncodeFormat::Aac.fixed_layouts(9).unwrap().is_empty());
+}
+
+/// Whether two layouts name the same speakers, a surround pair being either sides or backs.
+fn same_speakers(a: &ChannelLayout, b: &ChannelLayout) -> bool {
+    let one_pair = |mask: u32| if mask & 0x630 == 0x30 { mask & !0x30 | 0x600 } else { mask };
+    matches!((a.mask(), b.mask()), (Some(a), Some(b)) if one_pair(a) == one_pair(b))
+}
+
+/// `bitrate` is the rate the file is written at, for the options and for the encoder they give.
+#[test]
+fn the_bit_rate_used_can_be_asked_for() {
+    let rate = |opts: EncodeOptions, sample_rate, channels| {
+        let asked = opts.bitrate(sample_rate, channels).unwrap();
+        assert_eq!(FileEncoder::new(Cursor::new(Vec::new()), &opts, sample_rate, channels).unwrap().bitrate(), asked);
+        asked
+    };
+    assert_eq!(rate(EncodeOptions::new(EncodeFormat::Mp3), 48_000, 2), Some(192_000));
+    assert_eq!(rate(EncodeOptions::new(EncodeFormat::Mp3).with_bitrate(130_000), 48_000, 2), Some(128_000));
+    assert_eq!(rate(EncodeOptions::new(EncodeFormat::Mp3).with_bitrate(u32::MAX), 22_050, 1), Some(160_000));
+    assert_eq!(rate(EncodeOptions::new(EncodeFormat::Ac3).with_bitrate(191_999), 48_000, 2), Some(160_000));
+    assert_eq!(rate(EncodeOptions::new(EncodeFormat::Ac3), 48_000, 6), Some(448_000));
+    assert_eq!(rate(EncodeOptions::new(EncodeFormat::Eac3).with_bitrate(100_999), 48_000, 2), Some(100_000));
+    assert_eq!(rate(EncodeOptions::new(EncodeFormat::Aac), 48_000, 2), Some(128_000));
+    assert_eq!(rate(EncodeOptions::new(EncodeFormat::Aac).with_bitrate(128), 48_000, 2), Some(24_000));
+    assert_eq!(rate(EncodeOptions::new(EncodeFormat::Aac).with_bitrate(u32::MAX), 8000, 1), Some(48_000));
+    assert_eq!(rate(EncodeOptions::new(EncodeFormat::Aac).with_quality(0.5), 48_000, 2), None);
+    for format in [EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac, EncodeFormat::Alac] {
+        assert_eq!(rate(EncodeOptions::new(format).with_bitrate(96_000), 48_000, 2), None, "{format:?}");
+    }
+    // The size of a second of MP3 is the rate reported.
+    let buf = tones(48_000, 2, 48_000);
+    let opts = EncodeOptions::new(EncodeFormat::Mp3).with_bitrate(130_000);
+    assert_eq!(encode(&buf, &opts).unwrap().len() as u32, 43 * 1152 / 8 * opts.bitrate(48_000, 2).unwrap().unwrap() / 48_000);
+    assert!(is_unsupported(EncodeOptions::new(EncodeFormat::Mp3).bitrate(48_000, 6)));
+}
