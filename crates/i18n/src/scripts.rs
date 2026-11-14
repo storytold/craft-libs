@@ -146,7 +146,7 @@ pub fn scripts(tag: &str) -> &'static [Script] {
         "th" => &[Thai],
         "lo" => &[Laoo],
         "km" => &[Khmr],
-        "my" => &[Mymr],
+        "my" | "mnw" => &[Mymr],
         "am" | "ti" => &[Ethi],
         "bo" | "dz" => &[Tibt],
         _ => &[Latn],
@@ -357,6 +357,17 @@ mod tests {
     }
 
     #[test]
+    fn mon_uses_myanmar_script_left_to_right() {
+        for tag in ["mnw", "mnw-MM", "mnw-TH", "mnw_MM.UTF-8", "MNW", "mnw-Mymr-MM"] {
+            assert_eq!(scripts(tag), &[Mymr], "{tag}");
+            assert_eq!(direction(tag), Direction::Ltr, "{tag}");
+            assert_eq!(han(tag), None, "{tag}");
+        }
+        assert_eq!(scripts("mnw-Latn"), &[Latn], "an explicit script wins");
+        assert_eq!(scripts("mn"), &[Cyrl], "Mon is not Mongolian");
+    }
+
+    #[test]
     fn regional_han() {
         for (tag, want) in [
             ("zh-TW", Han::Traditional),
@@ -447,7 +458,7 @@ mod tests {
     /// The usual scripts tag matching relies on agree with the table.
     #[test]
     fn agrees_with_usual_script() {
-        for language in ["be", "kk", "ky", "mn", "sr", "tg", "zh", "az", "bs", "ha", "ku", "ms", "uz", "ks", "sd", "ug", "pa"] {
+        for language in ["be", "kk", "ky", "mn", "sr", "tg", "zh", "az", "bs", "ha", "ku", "ms", "uz", "ks", "sd", "ug", "pa", "mnw"] {
             let usual = crate::usual_script(language).and_then(subtag_scripts);
             assert_eq!(usual, Some(scripts(language)), "{language}");
         }
