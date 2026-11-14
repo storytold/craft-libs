@@ -162,7 +162,8 @@ pub struct Updater {
     /// An update is ready and waits for the app to exit; nothing starts a second one.
     installed: bool,
     /// [`Self::show_if`] returns [`Action::Close`] at its next frame that may close: once when an
-    /// installation finishes, and again for each [`Self::restart_to_update`].
+    /// installation finishes, and again for each [`Self::restart_to_update`]. Later on the prompt
+    /// clears it.
     close_wanted: bool,
     /// The folders that hold the outcome records ([`self_update::take_outcome`]) in place of the
     /// app's own (tests).
@@ -620,8 +621,10 @@ impl Updater {
                 action
             }
             StartupPromptResponse::Later => {
-                // An installation carries on and reports through `tick`.
+                // An installation carries on and reports through `tick`. A ready update drops the
+                // close it asked for: it installs at the exit, or Restart to Update asks again.
                 self.prompt = None;
+                self.close_wanted = false;
                 Action::None
             }
         }
@@ -1453,6 +1456,22 @@ mod tests {
         assert!(!saving(&u), "a close the user cancels leaves no spinner");
         assert_eq!(frame_saving(&mut u, &ctx, true, false, Vec::new()).0, Action::None);
         assert!(u.install.is_none());
+    }
+
+    /// Later on a finished install drops the close it asked for: saving the work afterwards does
+    /// not close the app. The update stays ready, and Restart to Update asks for the close again.
+    #[test]
+    fn later_on_a_finished_install_does_not_close_the_app_after_a_save() {
+        let ctx = egui::Context::default();
+        let mut u = installed(&ctx);
+        assert_eq!(frame(&mut u, &ctx, false), Action::None, "unsaved work holds the close back");
+        let escape = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        assert_eq!(frame_saving(&mut u, &ctx, false, false, vec![escape]).0, Action::None);
+        assert!(!u.prompt_open());
+        assert_eq!(frame(&mut u, &ctx, true), Action::None, "the work is saved, and the user chose Later");
+        assert!(u.restart.is_some(), "the update still waits for the exit");
+        u.restart_to_update();
+        assert_eq!(frame(&mut u, &ctx, true), Action::Close);
     }
 
     /// A stopped save on a finished install keeps saying the update is ready.
