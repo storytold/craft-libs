@@ -128,7 +128,7 @@ impl Reader<'_> {
                 // doesn't nominate another style. Keep that fact for an explicitly declared
                 // Normal; the gallery later synthesizes a visually identical Normal when the
                 // file did not declare one, and that synthetic style is not source provenance.
-                normal_is_default = Some(s.attr("w:default").is_none_or(|value| !matches!(value.trim(), "0" | "false" | "off" | "False" | "FALSE")));
+                normal_is_default = Some(s.attr("w:default").is_none());
             }
             let name = s.child_val("w:name").map(ui_style_name).unwrap_or_else(|| id.clone());
             let r = |n: &str| s.child_val(n).filter(|v| !v.is_empty()).map(|v| self.pc.style_id(v));
