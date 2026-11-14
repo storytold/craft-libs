@@ -1,0 +1,26 @@
+[package]
+name = "craft-mesh-ops"
+description = "Triangle mesh operations: smooth normals, MikkTSpace tangents, welding, UV unwrapping, a UV-space G-buffer, primitives with UVs and a BVH, bounded on hostile input"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+bvh = []
+parallel = ["dep:rayon"]
+serde = ["dep:serde", "glam/serde"]
+
+[dependencies]
+glam = "0.30"
+# MIT OR Apache-2.0; its src/generated.rs also carries the zlib-style notice of the C original,
+# reproduced in ATTRIBUTION.md.
+mikktspace = { version = "0.3", default-features = false, features = ["glam"] }
+rayon = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+thiserror = { workspace = true }
