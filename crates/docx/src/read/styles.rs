@@ -13,6 +13,10 @@ fn numbering_level_index(value: Option<&str>) -> Option<usize> {
     }
 }
 
+fn style_is_default(style: &El) -> bool {
+    style.attr("w:default").is_some_and(|value| !matches!(value.trim(), "0" | "false" | "off" | "False" | "FALSE"))
+}
+
 /// Built-in style names Word stores in lower case, and how the UI shows them.
 pub(crate) const LOWER_NAMES: &[(&str, &str)] = &[
     ("caption", "Caption"),
@@ -67,9 +71,7 @@ impl Reader<'_> {
         // The default paragraph style must be called `Normal` in our model.
         let has_normal = root.children("w:style").any(|s| s.attr("w:styleId") == Some("Normal"));
         if !has_normal
-            && let Some(def) = root
-                .children("w:style")
-                .find(|s| s.attr("w:type") == Some("paragraph") && s.attr("w:default").is_some_and(|v| v == "1" || v == "true"))
+            && let Some(def) = root.children("w:style").find(|s| s.attr("w:type") == Some("paragraph") && style_is_default(s))
             && let Some(id) = def.attr("w:styleId")
         {
             self.pc.alias.insert(id.to_string(), "Normal".into());
@@ -93,6 +95,7 @@ impl Reader<'_> {
             }
         }
         let mut sheet = StyleSheet::empty();
+        let mut normal_is_default = None;
         sheet.default_para_present = root.child("w:docDefaults").and_then(|dd| dd.child("w:pPrDefault")).is_some();
         if let Some(dd) = root.child("w:docDefaults") {
             if let Some(r) = dd.child("w:rPrDefault").and_then(|d| d.child("w:rPr")) {
@@ -120,6 +123,13 @@ impl Reader<'_> {
                 "numbering" => StyleKind::Numbering,
                 _ => StyleKind::Paragraph,
             };
+            if kind == StyleKind::Paragraph && id == "Normal" {
+                // Word treats the built-in Normal style as the paragraph default when the file
+                // doesn't nominate another style. Keep that fact for an explicitly declared
+                // Normal; the gallery later synthesizes a visually identical Normal when the
+                // file did not declare one, and that synthetic style is not source provenance.
+                normal_is_default = Some(s.attr("w:default").is_none());
+            }
             let name = s.child_val("w:name").map(ui_style_name).unwrap_or_else(|| id.clone());
             let r = |n: &str| s.child_val(n).filter(|v| !v.is_empty()).map(|v| self.pc.style_id(v));
             let mut st = Style {
@@ -135,7 +145,7 @@ impl Reader<'_> {
                 builtin: !s.attr("w:customStyle").is_some_and(|v| matches!(v.trim(), "1" | "true" | "on")),
                 locked: flag(s, "w:locked").unwrap_or(false),
                 // Only where the writer couldn't tell from the id (it flags the English ids).
-                default: s.attr("w:default").is_some_and(|v| v == "1" || v == "true")
+                default: style_is_default(s)
                     && !matches!(
                         (kind, id.as_str()),
                         (StyleKind::Paragraph, "Normal")
@@ -212,6 +222,12 @@ impl Reader<'_> {
             .collect();
         for (s, n) in sheet.styles.iter_mut().zip(fixed) {
             s.para.numbering = n;
+        }
+        if !sheet.styles.iter().any(|style| style.kind == StyleKind::Paragraph && style.default)
+            && normal_is_default == Some(true)
+            && let Some(normal) = sheet.styles.iter_mut().find(|style| style.kind == StyleKind::Paragraph && style.id == "Normal")
+        {
+            normal.default = true;
         }
         let old_fixed: Vec<Option<Option<craft_wordmodel::props::NumRef>>> = sheet
             .styles
