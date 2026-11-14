@@ -10,7 +10,7 @@ use craft_ui::testing::Frames;
 use craft_ui::testing::access::{AccessTree, tree_of};
 use craft_ui::testing::windows::FakeSystem;
 use craft_ui::testing::windows::{FullOutput, RawInput};
-use egui::{Context, DroppedFile, Event, HoveredFile, Pos2, Rect, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportId, ViewportInfo};
+use egui::{Context, Event, HoveredFile, Pos2, Rect, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportId, ViewportInfo};
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
@@ -21,7 +21,7 @@ thread_local! {
     /// The events the next child pass receives (the renderer runs on the trial's thread).
     static CHILD_EVENTS: RefCell<Vec<Event>> = const { RefCell::new(Vec::new()) };
     /// The files hovering over and dropped on the child's window in the next child pass.
-    static CHILD_FILES: RefCell<(Vec<HoveredFile>, Vec<DroppedFile>)> = const { RefCell::new((Vec::new(), Vec::new())) };
+    static CHILD_FILES: RefCell<(Vec<HoveredFile>, Vec<String>)> = const { RefCell::new((Vec::new(), Vec::new())) };
     /// The window facts every child pass reports.
     static CHILD_INFO: RefCell<ViewportInfo> = RefCell::new(ViewportInfo::default());
     /// The window facts the root reports.
@@ -107,11 +107,32 @@ fn patch_window(id: ViewportId, builder: ViewportBuilder) {
     });
 }
 
-fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
+/// A dropped file that exists only as a path.
+#[derive(Debug)]
+struct DroppedPath(std::path::PathBuf);
+
+impl egui::DroppedFile for DroppedPath {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|error| error.to_string())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn bytes_async(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + '_>> {
+        Box::pin(std::future::ready(Err("there is no file system on the web".to_owned())))
+    }
+}
+
+fn render_child(ctx: &Context, viewport: egui::ViewportViewportPlaceholder) {
     patch_window(viewport.ids.this, viewport.builder);
     let mut callback = viewport.viewport_ui_cb;
     let events = CHILD_EVENTS.with(|events| std::mem::take(&mut *events.borrow_mut()));
-    let (hovered_files, dropped_files) = CHILD_FILES.with(|files| std::mem::take(&mut *files.borrow_mut()));
+    let (hovered_files, dropped) = CHILD_FILES.with(|files| std::mem::take(&mut *files.borrow_mut()));
+    let dropped_files = dropped.into_iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
     let mut info = CHILD_INFO.with(|info| info.borrow().clone());
     info.parent = Some(viewport.ids.parent);
     let mut input = RawInput {
@@ -212,7 +233,7 @@ impl Windows {
         root: Vec<Event>,
         child: Vec<Event>,
         hovered: Vec<HoveredFile>,
-        dropped: Vec<DroppedFile>,
+        dropped: Vec<String>,
         ui: impl FnMut(&mut Ui),
     ) -> Out {
         CHILD_EVENTS.with(|events| *events.borrow_mut() = child);

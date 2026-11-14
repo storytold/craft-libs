@@ -4,7 +4,7 @@
 use craft_behavior::dock::{Action, Floating, Layout, Node, Permissions, Workspace};
 use craft_behavior::placement::Placement;
 use craft_host::target::{Backend, Caps, Os, ShellInfo};
-use craft_ui::contract::{Bind, BodyCx, Show as _};
+use craft_ui::contract::{Bind, BodyCx, Show as _, ShowContainer as _};
 use craft_ui::docking::{DockConfig, DockPanels, PanelSpec};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::popover::DropVeil;
@@ -15,7 +15,7 @@ use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::trial;
 use craft_ui::testing::windows::FakeSystem;
 use craft_ui_test_kit::windows::Windows;
-use egui::{DroppedFile, Event, HoveredFile, Key, Modifiers, Pos2, Rect, Ui, Vec2, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
+use egui::{Event, HoveredFile, Key, Modifiers, Pos2, Rect, Ui, Vec2, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
 use std::sync::Arc;
 
 /// The root window and the palette overlap; the palette is the larger.
@@ -372,7 +372,7 @@ fn a_file_dropped_on_a_native_float_reaches_window_files_once() {
         windows.root_info(info(true, ROOT_AT));
         windows.child_info(info(true, PALETTE_AT));
         let mut workspace = Workspace::new(Layout::new(None, vec![float()]));
-        let mut frame = |hovered: Vec<HoveredFile>, dropped: Vec<DroppedFile>| {
+        let mut frame = |hovered: Vec<HoveredFile>, dropped: Vec<String>| {
             let mut files = 0;
             windows.frame_with_files(vec![], vec![], hovered, dropped, |ui| {
                 let config = DockConfig::default();
@@ -389,7 +389,7 @@ fn a_file_dropped_on_a_native_float_reaches_window_files_once() {
             frame(vec![], vec![]);
         }
         let mut total = frame(vec![HoveredFile::default()], vec![]);
-        total += frame(vec![], vec![DroppedFile { name: "a.png".into(), ..DroppedFile::default() }]);
+        total += frame(vec![], vec!["a.png".to_owned()]);
         for _ in 0..2 {
             total += frame(vec![], vec![]);
         }
