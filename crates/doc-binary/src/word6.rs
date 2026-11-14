@@ -7,8 +7,9 @@
 //!
 //! What is read: the main text, its paragraphs and fields, the code page of each run, the
 //! character and paragraph formatting listed below, table rows, the paragraph styles (with
-//! their formatting), the sections, the headers and footers, and the footnotes and endnotes.
-//! Character styles, comments, pictures, borders, shading and tabs are not read yet.
+//! their formatting), the sections, the headers and footers, the footnotes and endnotes (with
+//! their separators and options), and the comments. Character styles, pictures, borders, shading
+//! and tabs are not read yet.
 //!
 //! The layout as observed:
 //!
@@ -256,19 +257,25 @@ impl Fib6 {
         })
     }
 
+    /// The Dop's bytes (pair 31), empty when the file has none.
+    pub(crate) fn dop<'w>(&self, word: &'w [u8]) -> &'w [u8] {
+        self.pair(PAIR_DOP).and_then(|(fc, lcb)| word.get(fc as usize..(fc as usize).saturating_add(lcb as usize))).unwrap_or_default()
+    }
+
     /// The characters of every story together.
     fn ccp_all(&self) -> u32 {
         [self.ccp_ftn, self.ccp_hdd, self.ccp_mcr, self.ccp_atn, self.ccp_edn].iter().fold(self.ccp_text, |t, &c| t.saturating_add(c))
     }
 
-    /// A Word 97 FIB holding the pairs whose structures have the Word 97 shape here, the sections'
-    /// and the notes' (all in the WordDocument stream, which takes the Table stream's place), so
+    /// A Word 97 FIB holding the pairs whose structures have the Word 97 shape here or that
+    /// [`crate::comments`] reads in their Word 6 shape: the sections', the notes' and the comments'
+    /// (4, 5 and the authors' 36), all in the WordDocument stream, which takes the Table stream's place), so
     /// the Word 97 readers of those read them. The rest are left out: the header table has another
     /// shape ([`header_stories`]), and the bookmarks' names are 8-bit.
     pub(crate) fn as_word97(&self) -> crate::fib::Fib {
         use crate::fib::pair;
         let mut pairs = vec![0; PAIRS * 2];
-        for i in [pair::PLCF_FND_REF, pair::PLCF_FND_TXT, pair::PLCF_SED, pair::PLCF_END_REF, pair::PLCF_END_TXT] {
+        for i in [pair::PLCF_FND_REF, pair::PLCF_FND_TXT, 4, 5, pair::PLCF_SED, 36, pair::PLCF_END_REF, pair::PLCF_END_TXT] {
             if let (Some(&(fc, lcb)), Some(slot)) = (self.pairs.get(i), pairs.get_mut(i * 2..i * 2 + 2)) {
                 slot.copy_from_slice(&[fc, lcb]);
             }

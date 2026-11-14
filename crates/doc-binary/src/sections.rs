@@ -25,6 +25,15 @@ const S_DXA_RIGHT: u16 = 0xB022;
 const S_DYA_TOP: u16 = 0x9023;
 const S_DYA_BOTTOM: u16 = 0x9024;
 const S_DXA_GUTTER: u16 = 0xB025;
+// Footnote and endnote options a section states (Word 2002 and later write them; Word 2016's
+// `.doc` reads back as the section's `w:footnotePr`/`w:endnotePr`).
+const S_FPC: u16 = 0x303B; // sprmSFpc: 2 beneath the text
+const S_RNC_FTN: u16 = 0x303C; // sprmSRncFtn
+const S_RNC_EDN: u16 = 0x303E; // sprmSRncEdn
+const S_N_FTN: u16 = 0x503F; // sprmSNFtn
+const S_NFC_FTN_REF: u16 = 0x5040; // sprmSNfcFtnRef
+const S_N_EDN: u16 = 0x5041; // sprmSNEdn
+const S_NFC_EDN_REF: u16 = 0x5042; // sprmSNfcEdnRef
 /// Which header and footer stories a Word 6.0/95 section has (see
 /// [`crate::word6::header_stories`]): its sprm 0x99, translated to the Word 97 form it would have
 /// (index 0x14, a 1-byte operand). [MS-DOC] lists no sprm at index 0x14, since a Word 97 header
@@ -184,6 +193,27 @@ fn apply_section(s: &mut SectionProps, prl: &Prl) {
         S_DXA_GUTTER => {
             if let Some(v) = s16(prl) {
                 s.gutter = tw(v as i32);
+            }
+        }
+        S_FPC => {
+            if prl.operand.first() == Some(&2) {
+                s.footnote_pr.pos = Some(craft_wordmodel::section::NotePos::BeneathText);
+            }
+        }
+        S_RNC_FTN | S_RNC_EDN => {
+            let pr = if prl.op == S_RNC_FTN { &mut s.footnote_pr } else { &mut s.endnote_pr };
+            pr.num_restart = prl.operand.first().and_then(|&v| crate::dop::restart(u16::from(v)));
+        }
+        S_N_FTN | S_N_EDN => {
+            if let [a, b, ..] = prl.operand {
+                let pr = if prl.op == S_N_FTN { &mut s.footnote_pr } else { &mut s.endnote_pr };
+                pr.num_start = Some(u32::from(u16::from_le_bytes([*a, *b])).clamp(1, craft_wordmodel::section::MAX_NOTE_START));
+            }
+        }
+        S_NFC_FTN_REF | S_NFC_EDN_REF => {
+            if let [a, b, ..] = prl.operand {
+                let pr = if prl.op == S_NFC_FTN_REF { &mut s.footnote_pr } else { &mut s.endnote_pr };
+                pr.num_fmt = Some(crate::list::num_format(u16::from_le_bytes([*a, *b]).min(0xFF) as u8));
             }
         }
         _ => {}

@@ -4,6 +4,14 @@
 /// Cap on notes and bookmarks per document.
 const MAX: usize = 10_000;
 
+/// One note: its reference CP, its story's range within the note subdocument, and whether its
+/// mark is the author's own (FRD 0, [MS-DOC] §2.9.95: `*`, `†`…) rather than a number.
+pub(crate) struct Note {
+    pub(crate) cp: u32,
+    pub(crate) story: (u32, u32),
+    pub(crate) custom: bool,
+}
+
 /// Parse the note reference/story PLCs. `ref_pair`/`txt_pair` are the FIB pair indices
 /// (`(2, 3)` for footnotes, `(46, 47)` for endnotes); story ranges are relative to the
 /// note subdocument.
@@ -12,8 +20,11 @@ const MAX: usize = 10_000;
 /// that steps back would make many notes read the same text again (each one materialised
 /// as its own part), so a story starting before the end of the last one kept is dropped:
 /// every subdocument CP becomes at most one note.
-pub(crate) fn parse_notes(table: &[u8], fib: &crate::fib::Fib, ref_pair: usize, txt_pair: usize) -> Vec<(u32, (u32, u32))> {
+pub(crate) fn parse_notes(table: &[u8], fib: &crate::fib::Fib, ref_pair: usize, txt_pair: usize) -> Vec<Note> {
     let refs = fib.pair(ref_pair).and_then(|(fc, lcb)| plc_of(table, fc, lcb, 2)).unwrap_or_default();
+    // The FRDs follow the reference CPs: an i16 each, 0 for a custom mark.
+    let frds_at = fib.pair(ref_pair).map_or(0, |(fc, _)| (fc as usize).saturating_add(refs.len() * 4));
+    let custom = |i: usize| table.get(frds_at + 2 * i..frds_at + 2 * i + 2).is_some_and(|b| b == [0, 0]);
     let txts = fib.pair(txt_pair).and_then(|(fc, lcb)| plc_of(table, fc, lcb, 0)).unwrap_or_default();
     if txts.len() < 2 {
         return Vec::new();
@@ -26,7 +37,7 @@ pub(crate) fn parse_notes(table: &[u8], fib: &crate::fib::Fib, ref_pair: usize, 
             && b > a
             && a >= kept_to
         {
-            out.push((cp, (a, b)));
+            out.push(Note { cp, story: (a, b), custom: custom(i) });
             kept_to = b;
         }
     }
@@ -62,6 +73,15 @@ fn plc_of(table: &[u8], fc: u32, lcb: u32, data_size: usize) -> Option<Vec<u32>>
 pub(crate) enum Mark {
     Start(String),
     End(String),
+    /// A comment's range ([`crate::comments`]), by its id in `Document::comments`.
+    CommentStart(u32),
+    CommentEnd(u32),
+}
+
+/// Sort marks for a sequential walk: by CP, a start before an end at the same CP (so an empty
+/// range opens before it closes).
+pub(crate) fn sort_marks(marks: &mut [(u32, Mark)]) {
+    marks.sort_by_key(|(cp, m)| (*cp, matches!(m, Mark::End(_) | Mark::CommentEnd(_))));
 }
 
 /// Parse `SttbfBkmk` + `Plcfbkf` + `Plcfbkl` into (cp, event) pairs sorted for a sequential
@@ -85,7 +105,7 @@ pub(crate) fn parse_bookmarks(table: &[u8], fib: &crate::fib::Fib) -> Vec<(u32, 
             out.push((b, Mark::End(name.clone())));
         }
     }
-    out.sort_by_key(|(cp, m)| (*cp, matches!(m, Mark::End(_))));
+    sort_marks(&mut out);
     out
 }
 

@@ -17,7 +17,9 @@
 #[doc = include_str!("../README.md")]
 struct ReadmeExamples;
 
+mod comments;
 mod crypt;
+mod dop;
 mod drawing;
 mod fib;
 mod fkp;
@@ -280,6 +282,9 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     // Word opens Word 97-2003 files in compatibility mode 11 (Word 2003); the model's default
     // 15 would apply Word 2013+ justification and line-breaking rules to them.
     doc.settings.compat_mode = 11;
+    if let Some((f, l)) = fib.pair(fib::pair::DOP) {
+        dop::read(table.get(f as usize..(f as usize).saturating_add(l as usize)).unwrap_or_default(), false, &mut doc.settings);
+    }
     if let Some(core) = metadata::read(&comp) {
         doc.core = core;
     }
@@ -351,17 +356,21 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     let ctx = WalkCtx { drawn: &drawn, ..ctx };
 
     let hf_ids = header_parts(&ctx, &mut doc, sects.len(), &stories, (hdd_base, fib.ccp.hdd), &mut pics, max_paragraphs)?;
+    note_separators(&ctx, &mut doc, &stories, (hdd_base, fib.ccp.hdd), &mut pics, max_paragraphs)?;
 
     // Footnote and endnote stories: each text range becomes a part; the reference CPs then
     // link to the part ids during the main walk.
-    let mut note_links: Vec<(u32, NoteKind, u32)> = Vec::new();
+    let mut note_links: Vec<NoteLink> = Vec::new();
     let footnotes = notes::parse_notes(&table, &fib, fib::pair::PLCF_FND_REF, fib::pair::PLCF_FND_TXT);
     note_parts(&ctx, &mut doc, &footnotes, (ftn_base, fib.ccp.ftn), NoteKind::Footnote, &mut note_links, &mut pics, max_paragraphs)?;
     let endnotes = notes::parse_notes(&table, &fib, fib::pair::PLCF_END_REF, fib::pair::PLCF_END_TXT);
     note_parts(&ctx, &mut doc, &endnotes, (edn_base, fib.ccp.edn), NoteKind::Endnote, &mut note_links, &mut pics, max_paragraphs)?;
     // Sorted so the main walk finds each reference by binary search.
-    note_links.sort_by_key(|(cp, _, _)| *cp);
-    let marks = notes::parse_bookmarks(&table, &fib);
+    note_links.sort_by_key(|l| l.cp);
+    let mut marks = notes::parse_bookmarks(&table, &fib);
+    let atn_base = hdd_base.saturating_add(fib.ccp.hdd);
+    let comments = comments::parse(&table, &fib, comments::Layout::Word97);
+    comment_parts(&ctx, &mut doc, comments, (atn_base, fib.ccp.atn), &mut marks, &mut pics, max_paragraphs)?;
     let mut sect_ends: Vec<u32> = sects.iter().map(|s| s.end_cp).collect();
     sect_ends.sort_unstable();
     let ctx = WalkCtx { notes: &note_links, marks: &marks, sect_ends: &sect_ends, ..ctx };
@@ -381,15 +390,16 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
 
 /// Read a Word 6.0/95 file ([`word6`]): its text, with its character and paragraph formatting and
 /// table rows translated to Word 97 sprms, through the same walk as a Word 97 file. Its paragraph
-/// styles, sections, headers and footers, footnotes and endnotes are read as a Word 97 file's,
-/// from the structures [`word6`] puts in the Word 97 shape; character styles and comments are not
-/// yet.
+/// styles, sections, headers and footers, notes and comments are read as a Word 97 file's, from
+/// the structures [`word6`] puts in the Word 97 shape (and [`comments`] reads in their Word 6
+/// shape); character styles are not yet.
 fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: usize) -> Result<Document, DocbinError> {
     let fib = word6::Fib6::parse(word)?;
     let content = word6::content(word, &fib)?;
     let mut doc = Document::new();
     // Word opens these files in compatibility mode 11 too.
     doc.settings.compat_mode = 11;
+    dop::read(fib.dop(word), true, &mut doc.settings);
     if let Some(core) = metadata::read(comp) {
         doc.core = core;
     }
@@ -433,15 +443,20 @@ fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: u
     });
     let stories = word6::header_stories(word, &fib, sects.iter().map(|s| s.grpf_ihdt));
     let hf_ids = header_parts(&ctx, &mut doc, sects.len(), &stories, (hdd_base, fib.ccp_hdd), &mut pics, max_paragraphs)?;
-    let mut note_links: Vec<(u32, NoteKind, u32)> = Vec::new();
+    note_separators(&ctx, &mut doc, &stories, (hdd_base, fib.ccp_hdd), &mut pics, max_paragraphs)?;
+    let mut note_links: Vec<NoteLink> = Vec::new();
     let footnotes = notes::parse_notes(word, &fib97, fib::pair::PLCF_FND_REF, fib::pair::PLCF_FND_TXT);
     note_parts(&ctx, &mut doc, &footnotes, (ftn_base, fib.ccp_ftn), NoteKind::Footnote, &mut note_links, &mut pics, max_paragraphs)?;
     let endnotes = notes::parse_notes(word, &fib97, fib::pair::PLCF_END_REF, fib::pair::PLCF_END_TXT);
     note_parts(&ctx, &mut doc, &endnotes, (edn_base, fib.ccp_edn), NoteKind::Endnote, &mut note_links, &mut pics, max_paragraphs)?;
-    note_links.sort_by_key(|(cp, _, _)| *cp);
+    note_links.sort_by_key(|l| l.cp);
+    let mut marks = Vec::new();
+    let atn_base = hdd_base.saturating_add(fib.ccp_hdd).saturating_add(fib.ccp_mcr);
+    let comments = comments::parse(word, &fib97, comments::Layout::Word6(content.pieces.default_code_page()));
+    comment_parts(&ctx, &mut doc, comments, (atn_base, fib.ccp_atn), &mut marks, &mut pics, max_paragraphs)?;
     let mut sect_ends: Vec<u32> = sects.iter().map(|s| s.end_cp).collect();
     sect_ends.sort_unstable();
-    let ctx = WalkCtx { notes: &note_links, sect_ends: &sect_ends, ..ctx };
+    let ctx = WalkCtx { notes: &note_links, marks: &marks, sect_ends: &sect_ends, ..ctx };
     let mut paras = walk(&ctx, 0, fib.ccp_text, &mut pics);
     attach_sections(&mut doc, &mut paras, &sects, &hf_ids, fib.ccp_text);
     if paragraphs.exceeded.get() {
@@ -489,16 +504,106 @@ fn header_parts(
     Ok(hf_ids)
 }
 
-/// A part for each footnote or endnote story of `notes` (reference CP, story range within the
-/// subdocument at `base` of `len` CPs), each linked from its reference CP in `links`.
+/// A comment part and a `Document::comments` entry for each comment, and its range as marks the
+/// main walk turns into [`InlineObject::CommentStart`] and [`InlineObject::CommentEnd`]; a
+/// comment without a range covers its reference character's place, as Word shows it.
+fn comment_parts(
+    ctx: &WalkCtx<'_>,
+    doc: &mut Document,
+    comments: Vec<comments::RawComment>,
+    (base, len): (u32, u32),
+    marks: &mut Vec<(u32, notes::Mark)>,
+    pics: &mut media::Pictures,
+    max_paragraphs: usize,
+) -> Result<(), DocbinError> {
+    for c in comments {
+        let Some((a, b)) = story(base, len, c.story) else { continue };
+        let blocks = story_blocks(ctx, a, b, pics, max_paragraphs)?;
+        if doc.parts.len() >= MAX_PARTS {
+            continue;
+        }
+        let part = doc.add_part(PartKind::Comment, blocks);
+        let id = doc.comments.len() as u32;
+        doc.comments.insert(id, craft_wordmodel::Comment { author: c.author, initials: c.initials, date: c.date, part, ..Default::default() });
+        let (start, end) = c.range.unwrap_or((c.cp, c.cp));
+        marks.push((start, notes::Mark::CommentStart(id)));
+        marks.push((end, notes::Mark::CommentEnd(id)));
+    }
+    notes::sort_marks(marks);
+    Ok(())
+}
+
+/// The document's footnote and endnote separators: the header table's first six stories are the
+/// footnotes' separator, continuation separator and continuation notice, then the endnotes'
+/// ([MS-DOC] §2.9.155). Word writes its default lines as stories too (a 0x03 or 0x04 character),
+/// and the `.docx` reader keeps those as well; an empty story is the default.
+fn note_separators(
+    ctx: &WalkCtx<'_>,
+    doc: &mut Document,
+    stories: &[(u32, u32)],
+    (hdd_base, ccp_hdd): (u32, u32),
+    pics: &mut media::Pictures,
+    max_paragraphs: usize,
+) -> Result<(), DocbinError> {
+    for (k, &ab) in stories.iter().take(6).enumerate() {
+        let Some((a, b)) = story(hdd_base, ccp_hdd, ab) else { continue };
+        let blocks = header_story_blocks(ctx, a, b, pics, max_paragraphs)?;
+        if blocks.is_empty() {
+            continue;
+        }
+        let seps = if k < 3 { &mut doc.footnote_separators } else { &mut doc.endnote_separators };
+        let slot = match k % 3 {
+            0 => &mut seps.separator,
+            1 => &mut seps.continuation_separator,
+            _ => &mut seps.continuation_notice,
+        };
+        *slot = Some(blocks);
+    }
+    Ok(())
+}
+
+/// A note reference the main walk turns into an [`InlineObject::NoteRef`]: at `cp`, the note part
+/// `id`, and for a custom mark its text and the CP after it (the mark's characters are the
+/// reference, not body text).
+struct NoteLink {
+    cp: u32,
+    kind: NoteKind,
+    id: u32,
+    custom: Option<(String, u32)>,
+}
+
+/// Most characters a custom note mark is read for (Word takes no more than 10).
+const MAX_MARK: usize = 10;
+
+/// A custom note mark at `cp`: its characters up to the end of their character run, as Word reads
+/// a mark (`ab` reads as one mark, the space after it, formatted apart, as text), and the CP
+/// after them.
+fn custom_mark(ctx: &WalkCtx<'_>, cp: u32) -> Option<(String, u32)> {
+    let fc_of = |cp: u32| ctx.pieces.fc_of_cp(cp);
+    let run = ctx.chpx_bins.chpx_run(ctx.word, fc_of(cp)?);
+    let mut mark = String::new();
+    let mut at = cp;
+    while mark.chars().count() < MAX_MARK && fc_of(at).is_some_and(|fc| run.contains(fc)) {
+        let Ok((c, units)) = ctx.pieces.char_at(ctx.word, at) else { break };
+        if (c as u32) < 0x20 {
+            break;
+        }
+        mark.push(c);
+        at = at.saturating_add(units.max(1));
+    }
+    (!mark.is_empty()).then_some((mark, at))
+}
+
+/// A part for each footnote or endnote story of `notes` (story ranges within the subdocument at
+/// `base` of `len` CPs), each linked from its reference CP in `links`.
 #[allow(clippy::too_many_arguments)]
 fn note_parts(
     ctx: &WalkCtx<'_>,
     doc: &mut Document,
-    notes: &[(u32, (u32, u32))],
+    notes: &[notes::Note],
     (base, len): (u32, u32),
     kind: NoteKind,
-    links: &mut Vec<(u32, NoteKind, u32)>,
+    links: &mut Vec<NoteLink>,
     pics: &mut media::Pictures,
     max_paragraphs: usize,
 ) -> Result<(), DocbinError> {
@@ -506,12 +611,13 @@ fn note_parts(
         NoteKind::Footnote => PartKind::Footnote,
         NoteKind::Endnote => PartKind::Endnote,
     };
-    for &(cp, ab) in notes {
-        let Some((a, b)) = story(base, len, ab) else { continue };
+    for note in notes {
+        let Some((a, b)) = story(base, len, note.story) else { continue };
         let blocks = story_blocks(ctx, a, b, pics, max_paragraphs)?;
         if !blocks.is_empty() && doc.parts.len() < MAX_PARTS {
             let id = doc.add_part(part, blocks);
-            links.push((cp, kind, id));
+            let custom = if note.custom { custom_mark(ctx, note.cp) } else { None };
+            links.push(NoteLink { cp: note.cp, kind, id, custom });
         }
     }
     Ok(())
@@ -617,7 +723,7 @@ struct WalkCtx<'a> {
     raw_styles: &'a [stsh::RawStyle],
     sheet: &'a StyleSheet,
     /// (reference CP in the main document, kind, part id) for notes.
-    notes: &'a [(u32, NoteKind, u32)],
+    notes: &'a [NoteLink],
     /// Bookmark boundaries (main-document CPs), sorted for a sequential walk.
     marks: &'a [(u32, notes::Mark)],
     /// Floating shapes and pictures by anchor CP (absolute), sorted.
@@ -734,6 +840,8 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 let obj = match m {
                     notes::Mark::Start(name) => InlineObject::BookmarkStart { name: name.clone() },
                     notes::Mark::End(name) => InlineObject::BookmarkEnd { name: name.clone() },
+                    notes::Mark::CommentStart(id) => InlineObject::CommentStart { id: *id },
+                    notes::Mark::CommentEnd(id) => InlineObject::CommentEnd { id: *id },
                 };
                 pb.push('\u{FFFC}', CharProps::default());
                 pb.objects.push(obj);
@@ -752,6 +860,15 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
             break;
         }
         ctx.budget.set(ctx.budget.get() - 1);
+        // A note with a custom mark: the mark's characters are its reference.
+        if let Some(link) = ctx.notes.get(ctx.notes.partition_point(|l| l.cp < cp)).filter(|l| l.cp == cp)
+            && let Some((mark, after)) = &link.custom
+        {
+            pb.push('\u{FFFC}', CharProps::default());
+            pb.objects.push(InlineObject::NoteRef { kind: link.kind, id: link.id, custom: mark.clone() });
+            cp = (*after).max(cp.saturating_add(1));
+            continue;
+        }
         // A section mark (0x0C) at a section's end is that section's last paragraph mark.
         let section_mark = c == '\u{C}' && ctx.sect_ends.binary_search(&cp.saturating_add(1)).is_ok();
         match c {
@@ -894,11 +1011,16 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
             }
             '\u{2}' => {
                 // Footnote or endnote reference; custom symbols share the same character.
-                let at = ctx.notes.partition_point(|(c, _, _)| *c < cp);
-                if let Some((_, kind, id)) = ctx.notes.get(at).filter(|(c, _, _)| *c == cp) {
+                let at = ctx.notes.partition_point(|l| l.cp < cp);
+                if let Some(link) = ctx.notes.get(at).filter(|l| l.cp == cp) {
                     pb.push('\u{FFFC}', CharProps::default());
-                    pb.objects.push(InlineObject::NoteRef { kind: *kind, id: *id, custom: String::new() });
+                    pb.objects.push(InlineObject::NoteRef { kind: link.kind, id: link.id, custom: String::new() });
                 }
+            }
+            // A note separator's line (0x03) and the continuation separator's (0x04).
+            '\u{3}' | '\u{4}' => {
+                pb.push('\u{FFFC}', CharProps::default());
+                pb.objects.push(InlineObject::note_separator(c == '\u{4}'));
             }
             '\t' => push_formatted(&mut pb, cp, '\t', ctx, field.as_mut(), &mut fmt),
             '\u{B}' => push_formatted(&mut pb, cp, '\n', ctx, field.as_mut(), &mut fmt),

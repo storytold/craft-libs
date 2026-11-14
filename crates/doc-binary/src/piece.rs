@@ -219,6 +219,11 @@ impl PieceTable {
     /// ([MS-DOC] §2.9.215) holds a 7-bit `isprm` in bits 1-7 and its one-byte operand in
     /// bits 8-15; a Prm1 (§2.9.216) holds a zero-based index into the Clx's Prcs in bits
     /// 1-15.
+    /// The code page of 8-bit text no piece or run gives one for (Word 6.0/95; 1252 otherwise).
+    pub(crate) fn default_code_page(&self) -> u16 {
+        self.default_code_page
+    }
+
     pub(crate) fn piece_prm(&self, cp: u32) -> PrmRef<'_> {
         let Some(p) = self.piece_of(cp) else { return PrmRef::None };
         if p.prm & 1 == 0 {

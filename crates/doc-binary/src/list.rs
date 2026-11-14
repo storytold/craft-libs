@@ -51,7 +51,7 @@ fn bullet_char(c: u16) -> char {
 /// 0x00 to 0x27 run in the order of ST_NumberFormat (decimal, upperRoman … 0x16 decimalZero, 0x17
 /// bullet … 0x25 chineseCounting, 0x26 chineseLegalSimplified, 0x27 chineseCountingThousand);
 /// later codes are drawn as decimal.
-fn num_format(nfc: u8) -> NumFormat {
+pub(crate) fn num_format(nfc: u8) -> NumFormat {
     match nfc {
         0xFF => NumFormat::None,
         0x00..=0x27 => NumFormat::ALL.get(nfc as usize).copied().unwrap_or(NumFormat::Decimal),

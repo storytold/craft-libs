@@ -32,6 +32,7 @@ pub(crate) mod pair {
     pub(crate) const STTBF_BKMK: usize = 21;
     pub(crate) const PLCF_BKF: usize = 22;
     pub(crate) const PLCF_BKL: usize = 23;
+    pub(crate) const DOP: usize = 31;
     pub(crate) const CLX: usize = 33;
     /// `fcPlcSpaMom` / `fcPlcSpaHdr`: floating shape anchors of the main document / headers.
     pub(crate) const PLC_SPA_MOM: usize = 40;

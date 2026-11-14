@@ -107,6 +107,11 @@ struct Doc6<'a> {
     /// Footnotes and endnotes: (reference CPs, story CPs within their subdocument).
     footnotes: (&'a [u32], &'a [u32]),
     endnotes: (&'a [u32], &'a [u32]),
+    /// The footnotes' FRDs as stored, when not 1, 2, ... (0: a custom mark).
+    footnote_frds: Option<&'a [u8]>,
+    /// Comments: (reference CPs, story CPs, the 20-byte ATRDs), and the authors' list (pair 36).
+    comments: (&'a [u32], &'a [u32], &'a [u8]),
+    owners: &'a [u8],
 }
 
 fn put16(v: &mut [u8], at: usize, x: u16) {
@@ -211,10 +216,16 @@ fn word_stream(d: &Doc6) -> Vec<u8> {
     plc(&mut w, 31, &[], &[]);
     // References: CPs, then a 2-byte FRD (1, 2, ...: auto-numbered) each but the limit's.
     let frds = |n: usize| (1..n as u16).flat_map(|i| i.to_le_bytes()).collect::<Vec<u8>>();
-    plc(&mut w, 2, d.footnotes.0, &frds(d.footnotes.0.len()));
+    plc(&mut w, 2, d.footnotes.0, &d.footnote_frds.map_or_else(|| frds(d.footnotes.0.len()), <[u8]>::to_vec));
+    plc(&mut w, 4, d.comments.0, d.comments.2);
+    plc(&mut w, 5, d.comments.1, &[]);
     plc(&mut w, 3, d.footnotes.1, &[]);
     plc(&mut w, 46, d.endnotes.0, &frds(d.endnotes.0.len()));
     plc(&mut w, 47, d.endnotes.1, &[]);
+    if !d.owners.is_empty() {
+        pairs.push((36, w.len() as u32, d.owners.len() as u32));
+        w.extend_from_slice(d.owners);
+    }
     if !d.dop.is_empty() {
         pairs.push((31, w.len() as u32, d.dop.len() as u32));
         w.extend_from_slice(d.dop);
@@ -781,6 +792,9 @@ fn full_stream() -> Vec<u8> {
         sections: &[(19, &[0x8E, 0x00, 0x99, 0x02])],
         hdd: &[0, 3, 4],
         footnotes: (&[10, 12], &[0, 3, 4]),
+        // A custom-mark FRD (its reference is 0x02, so it stays a numbered one) and a Dop.
+        footnote_frds: Some(&[0, 0]),
+        dop: &[0x43, 0x00, 0x0E, 0x00],
         ..Default::default()
     })
 }
@@ -889,6 +903,9 @@ fn separator_stories_come_first() {
     let d = Doc6 { text, stories: [0, 11, 0, 0, 0], sections: &[(16, &[0x99, 0x02])], hdd, dop: &[0x02, 0x01, 0x04, 0x00], ..Default::default() };
     let doc = read(&word6_file(&d)).expect("opens");
     assert_eq!(part_text(&doc, doc.last_section.headers.default), Some("HDR".into()));
+    // ... and it is the document's footnote separator.
+    let sep = doc.footnote_separators.separator.as_ref().and_then(|b| b.first()).and_then(|b| b.as_para()).map(|p| p.text.clone());
+    assert_eq!(sep.as_deref(), Some("SEP"));
 }
 
 #[test]
@@ -939,4 +956,79 @@ fn footnotes_and_endnotes_are_read() {
     // A note story's own reference mark links to nothing, so only the space after it is kept.
     let want = [(NoteKind::Footnote, " F1"), (NoteKind::Endnote, " E2"), (NoteKind::Footnote, " F3")].map(|(k, t)| (k, t.to_string()));
     assert_eq!(notes_of(&doc), want);
+}
+
+#[test]
+fn comments_are_read_and_anchored_at_their_references() {
+    // As Word 95 writes two comments (`atn2`): 0x05 at each reference, the stories after the main
+    // text in the comment subdocument (0x44), 20-byte ATRDs and 8-bit authors. Word reads Bob
+    // Brown/BB and Ann Able/AA, no date, each covering its reference's place.
+    use craft_wordmodel::para::InlineObject;
+    let atrd = |initials: &[u8], ibst: u8| {
+        let mut v = vec![0u8; 20];
+        v[0] = initials.len() as u8;
+        v[1..1 + initials.len()].copy_from_slice(initials);
+        v[10] = ibst;
+        v[16..20].copy_from_slice(&[0xFF; 4]);
+        v
+    };
+    let atrds = [atrd(b"BB", 0), atrd(b"AA", 1)].concat();
+    let text = b"Alpha\x05 beta\x05\r\x05 C-BOB\r\x05 C-ANN\r\r";
+    let d = Doc6 {
+        text,
+        stories: [0, 0, 0, 17, 0],
+        comments: (&[5, 11, 13], &[0, 8, 16, 17], &atrds),
+        owners: b"\x09Bob Brown\x08Ann Able",
+        ..Default::default()
+    };
+    let doc = read(&word6_file(&d)).expect("opens");
+    let p = first_para(&doc);
+    assert_eq!(p.text, "Alpha\u{FFFC}\u{FFFC} beta\u{FFFC}\u{FFFC}");
+    let anchors: Vec<_> = p
+        .objects
+        .iter()
+        .map(|o| match o {
+            InlineObject::CommentStart { id } => format!("<{id}"),
+            InlineObject::CommentEnd { id } => format!("{id}>"),
+            other => format!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(anchors, ["<0", "0>", "<1", "1>"]);
+    let comments: Vec<_> =
+        doc.comments.values().map(|c| (c.author.as_str(), c.initials.as_str(), c.date.as_str(), part_text(&doc, Some(c.part)))).collect();
+    assert_eq!(comments, [("Bob Brown", "BB", "", Some(" C-BOB".into())), ("Ann Able", "AA", "", Some(" C-ANN".into()))]);
+}
+
+#[test]
+fn a_custom_note_mark_is_read_as_the_mark() {
+    // As Word 95 writes a footnote marked "*" (`fn`): FRD 0, the "*" at the reference in its own
+    // run, and again at the start of the note's text. Word reads a custom mark "*".
+    let text = b"Alpha* end\r* FN\r\r";
+    let runs: &[(u32, u32, &[u8])] = &[(0, 5, &[]), (5, 6, &[0x55, 0x01]), (6, 17, &[])];
+    let d = Doc6 { text, runs, stories: [6, 0, 0, 0, 0], footnotes: (&[5, 12], &[0, 5, 6]), footnote_frds: Some(&[0, 0]), ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    let p = first_para(&doc);
+    assert_eq!(p.text, "Alpha\u{FFFC} end");
+    let craft_wordmodel::para::InlineObject::NoteRef { custom, id, .. } = p.objects.first().expect("a note") else { panic!("not a note") };
+    assert_eq!((custom.as_str(), part_text(&doc, Some(*id))), ("*", Some("* FN".into())));
+}
+
+#[test]
+fn note_options_and_facing_pages_come_from_the_dop() {
+    // As Word 95 writes them (`noteopts`, `hf3`): Dop byte 0 0x43 (facing pages, fpc 2), rncFtn 2
+    // and nFtn 3 at 2, nEdn 2 at 0x34, and at 0x36 epc 0 with nfcFtnRef 2 and nfcEdnRef 3 (0x00C8).
+    // Word reads footnotes beneath the text, i ii iii from iii restarting each page, endnotes at
+    // the end of each section, A B C from B, and different odd and even pages.
+    use craft_wordmodel::section::{NotePos, NoteRestart, NumFormat};
+    let mut dop = vec![0u8; 0x58];
+    dop[0] = 0x43;
+    dop[2..4].copy_from_slice(&0x000Eu16.to_le_bytes());
+    dop[0x34..0x36].copy_from_slice(&0x0008u16.to_le_bytes());
+    dop[0x36..0x38].copy_from_slice(&0x00C8u16.to_le_bytes());
+    let d = Doc6 { text: b"Text\r", dop: &dop, ..Default::default() };
+    let st = read(&word6_file(&d)).expect("opens").settings;
+    assert!(st.even_odd_headers);
+    let ftn = (st.footnote_pr.pos, st.footnote_pr.num_start, st.footnote_pr.num_restart, st.footnote_format);
+    assert_eq!(ftn, (Some(NotePos::BeneathText), Some(3), Some(NoteRestart::EachPage), NumFormat::LowerRoman));
+    assert_eq!((st.endnote_pr.pos, st.endnote_pr.num_start, st.endnote_format), (Some(NotePos::SectEnd), Some(2), NumFormat::UpperLetter));
 }

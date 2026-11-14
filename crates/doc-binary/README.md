@@ -16,7 +16,7 @@ assert!(!craft_doc_binary::is_encrypted(b"not a .doc"));
   OfficeArt shapes, document properties.
 - XOR obfuscation, RC4 and RC4 CryptoAPI password protection.
 - Word 6.0 and Word 95 files: text, character and paragraph formatting, tables, paragraph
-  styles, sections, headers and footers, footnotes and endnotes. Their layout is not publicly
+  styles, sections, headers and footers, footnotes and endnotes, comments. Their layout is not publicly
   specified; `src/word6.rs` describes what was observed.
 
 There is no writer.

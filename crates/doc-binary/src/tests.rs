@@ -1604,6 +1604,107 @@ fn footnote_reference_links_story_part() {
 }
 
 #[test]
+fn a_custom_note_mark_is_the_references_run() {
+    // As Word 2016 writes a footnote marked "ab": FRD 0, and the mark's characters stand at the
+    // reference CP in their own run (Word reads <w:footnoteReference w:customMarkFollows="1"/>
+    // <w:t>ab</w:t>, then " here" as text). The note's own text keeps the mark as text.
+    let text = "See ab here\r";
+    let ccp = text.chars().count() as u32;
+    let sup = grpprl(&[(0x2A48, &[1])]);
+    let spec = StructSpec {
+        text,
+        chpx_runs: vec![(0, Vec::new()), (4, sup), (6, Vec::new())],
+        note_stories: vec!["ab Note\r"],
+        extra_pairs: vec![(2, plc(&[4, ccp], &0u16.to_le_bytes())), (3, plc(&[0, 8], &[]))],
+        ..structured_spec(text, ccp)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = para0(&doc);
+    assert_eq!(p0.text, "See \u{FFFC} here");
+    let craft_wordmodel::para::InlineObject::NoteRef { kind, id, custom } = p0.objects.first().expect("a note reference") else {
+        panic!("not a note")
+    };
+    assert_eq!((*kind, custom.as_str()), (craft_wordmodel::para::NoteKind::Footnote, "ab"));
+    let part = doc.parts.get(id).expect("note part");
+    assert_eq!(part.blocks.first().and_then(|b| b.as_para()).map(|p| p.text.as_str()), Some("ab Note"));
+}
+
+#[test]
+fn note_separators_come_from_the_first_header_stories() {
+    // [MS-DOC] Plcfhdd: stories 0-2 are the footnotes' separator, continuation separator and
+    // continuation notice, 3-5 the endnotes'. Word writes its default separator as a story holding
+    // 0x03 (0x04 for the continuation one); `.docx` has <w:separator/> there.
+    let text = "Body\r";
+    let ccp = text.chars().count() as u32;
+    let mut spec = StructSpec { header_stories: vec!["\u{3}\r\r", "NOTICE\r\r"], ..structured_spec(text, ccp) };
+    // Slot 0 [0, 3), slot 1 empty, slot 2 [3, 11), the endnotes' empty.
+    spec.extra_pairs.push((11, plc(&[0, 3, 3, 11, 11, 11, 11], &[])));
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let seps = &doc.footnote_separators;
+    let line = seps.separator.as_ref().and_then(|b| b.first()).and_then(|b| b.as_para()).expect("the separator's paragraph");
+    assert_eq!(line.objects.first().and_then(|o| o.as_note_separator()), Some(false));
+    assert!(seps.continuation_separator.is_none());
+    let notice = seps.continuation_notice.as_ref().and_then(|b| b.first()).and_then(|b| b.as_para()).map(|p| p.text.as_str());
+    assert_eq!(notice, Some("NOTICE"));
+    assert!(doc.endnote_separators.is_empty());
+}
+
+#[test]
+fn note_options_and_facing_pages_come_from_the_dop_and_the_section() {
+    // As Word 2016 writes "footnotes beneath the text, i ii iii, restarting each page; endnotes at
+    // the end of each section, A B C from B; different odd and even pages": the Dop's byte 0 0x43
+    // (facing pages, fpc 2), rncFtn 2 at 2, nEdn 2 at 0x34, epc 0 at 0x36, Dop97 nfcFtnRef 2 and
+    // nfcEdnRef 3 at 0x1EC; and the section's sprmSFpc, sprmSRncFtn, sprmSNfcFtnRef, sprmSNEdn and
+    // sprmSNfcEdnRef. Word reads both as the settings' and the section's footnotePr/endnotePr.
+    use craft_wordmodel::section::{NotePos, NoteRestart, NumFormat};
+    let mut dop = vec![0u8; 0x1F0];
+    dop[0] = 0x43;
+    dop[2..4].copy_from_slice(&0x0006u16.to_le_bytes());
+    dop[0x34..0x36].copy_from_slice(&0x0008u16.to_le_bytes());
+    dop[0x36..0x38].copy_from_slice(&0x9000u16.to_le_bytes());
+    dop[0x1EC..0x1EE].copy_from_slice(&2u16.to_le_bytes());
+    dop[0x1EE..0x1F0].copy_from_slice(&3u16.to_le_bytes());
+    let two = 2u16.to_le_bytes();
+    let three = 3u16.to_le_bytes();
+    let sepx = grpprl(&[(0x303B, &[2]), (0x303C, &[2]), (0x5040, &two), (0x5041, &two), (0x5042, &three)]);
+    let mut spec = one_section("Text\r", sepx, vec![(0, 0, Vec::new())]);
+    spec.extra_pairs.push((31, dop));
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let st = &doc.settings;
+    assert!(st.even_odd_headers);
+    assert_eq!(
+        (st.footnote_pr.pos, st.footnote_pr.num_restart, st.footnote_format),
+        (Some(NotePos::BeneathText), Some(NoteRestart::EachPage), NumFormat::LowerRoman)
+    );
+    assert_eq!((st.endnote_pr.pos, st.endnote_pr.num_start, st.endnote_format), (Some(NotePos::SectEnd), Some(2), NumFormat::UpperLetter));
+    let s = &doc.last_section;
+    assert_eq!(
+        (s.footnote_pr.pos, s.footnote_pr.num_restart, s.footnote_pr.num_fmt),
+        (Some(NotePos::BeneathText), Some(NoteRestart::EachPage), Some(NumFormat::LowerRoman))
+    );
+    assert_eq!((s.endnote_pr.num_start, s.endnote_pr.num_fmt), (Some(2), Some(NumFormat::UpperLetter)));
+}
+
+#[test]
+fn a_document_without_note_options_keeps_words_defaults() {
+    // Word 2016's untouched document: Dop byte 0 0x22 (fpc 1), nFtn 1, epc 3, nfcEdnRef 2.
+    use craft_wordmodel::section::NumFormat;
+    let mut dop = vec![0u8; 0x1F0];
+    dop[0] = 0x22;
+    dop[2..4].copy_from_slice(&0x0004u16.to_le_bytes());
+    dop[0x34..0x36].copy_from_slice(&0x0004u16.to_le_bytes());
+    dop[0x36..0x38].copy_from_slice(&0x9003u16.to_le_bytes());
+    dop[0x1EE..0x1F0].copy_from_slice(&2u16.to_le_bytes());
+    let mut spec = one_section("Text\r", Vec::new(), vec![(0, 0, Vec::new())]);
+    spec.extra_pairs.push((31, dop));
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let st = &doc.settings;
+    assert!(!st.even_odd_headers);
+    assert!(st.footnote_pr.is_empty() && st.endnote_pr.is_empty());
+    assert_eq!((st.footnote_format, st.endnote_format), (NumFormat::Decimal, NumFormat::LowerRoman));
+}
+
+#[test]
 fn endnote_reference_links_story_part() {
     let text = "Ref\u{2}\r";
     let ccp = text.chars().count() as u32;
