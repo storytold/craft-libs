@@ -1196,6 +1196,79 @@ fn max_distance(c0: CubicBez, c1: CubicBez) -> f64 {
         .max(l_infty_distance(c0.p3, c1.p3))
 }
 
+// Craft patch (control point order): two y-subsegments that stay more than
+// `ish_tolerance` apart get one order from their control points without
+// recursing. At parameter t the gap `x1(t) - x0(t)` lies between the smallest
+// and largest control point x gaps, and `|y1(t) - y0(t)|` is at most the
+// largest control point y gap `dy`. At one height y = y0(t0) = y1(t1), the gap
+// `x1(t1) - x0(t0)` differs from `x1(t1) - x0(t1)` by at most `slope * dy`,
+// where `slope` bounds `|dx/dy|` on c0 (and symmetrically for c1). When `dy`
+// is zero both curves reach each height at the same t, so no slope is needed.
+fn order_from_control_points(c0: CubicBez, c1: CubicBez, ish_tolerance: f64) -> Option<Order> {
+    let gaps = [
+        c1.p0.x - c0.p0.x,
+        c1.p1.x - c0.p1.x,
+        c1.p2.x - c0.p2.x,
+        c1.p3.x - c0.p3.x,
+    ];
+    if !gaps.iter().all(|g| g.is_finite()) {
+        return None;
+    }
+    let min_gap = gaps.iter().copied().fold(f64::INFINITY, f64::min);
+    let max_gap = gaps.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let dy = (c1.p0.y - c0.p0.y)
+        .abs()
+        .max((c1.p1.y - c0.p1.y).abs())
+        .max((c1.p2.y - c0.p2.y).abs())
+        .max((c1.p3.y - c0.p3.y).abs());
+    let slack = if dy == 0.0 {
+        0.0
+    } else {
+        dy * max_slope(c0).min(max_slope(c1))
+    };
+    if !slack.is_finite() {
+        return None;
+    }
+    if min_gap - slack > ish_tolerance {
+        Some(Order::Left)
+    } else if max_gap + slack < -ish_tolerance {
+        Some(Order::Right)
+    } else {
+        None
+    }
+}
+
+// Craft patch (control point order): an upper bound on `|dx/dy|` along `c`,
+// or infinity unless every leg of the control polygon rises in y. The
+// derivative is a positive combination of the legs, so the largest leg ratio
+// bounds it.
+fn max_slope(c: CubicBez) -> f64 {
+    let mut ret = 0.0f64;
+    for (a, b) in [(c.p0, c.p1), (c.p1, c.p2), (c.p2, c.p3)] {
+        let dy = b.y - a.y;
+        if dy.is_nan() || dy <= 0.0 {
+            return f64::INFINITY;
+        }
+        ret = ret.max((b.x - a.x).abs() / dy);
+    }
+    ret
+}
+
+#[cfg(test)]
+thread_local! {
+    static SKIP_CONTROL_POINT_ORDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(not(test))]
+fn control_point_order_enabled() -> bool {
+    true
+}
+
+#[cfg(test)]
+fn control_point_order_enabled() -> bool {
+    !SKIP_CONTROL_POINT_ORDER.with(std::cell::Cell::get)
+}
+
 #[derive(Clone, Debug)]
 struct CubicParams {
     c: CubicBez,
@@ -1238,6 +1311,12 @@ fn intersect_cubics_rec(
         } else {
             Order::Ish
         };
+        out.push(y1, order, status);
+        return;
+    }
+    if control_point_order_enabled()
+        && let Some(order) = order_from_control_points(c0, c1, ish_tolerance)
+    {
         out.push(y1, order, status);
         return;
     }
@@ -1745,6 +1824,230 @@ mod test {
         let b = CubicBez::new((0.3, 0.0), (0.3, 1.0 / 3.0), (0.3, 2.0 / 3.0), (0.3, 1.0));
         let cmp = intersect_cubics(a, b, sure_tol, ish_tol);
         assert_eq!(cmp.iter().count(), 3);
+    }
+
+    fn shifted(c: CubicBez, dx: f64, dy: f64) -> CubicBez {
+        let v = Vec2::new(dx, dy);
+        CubicBez::new(c.p0 + v, c.p1 + v, c.p2 + v, c.p3 + v)
+    }
+
+    fn without_control_point_order<T>(f: impl FnOnce() -> T) -> T {
+        SKIP_CONTROL_POINT_ORDER.with(|s| s.set(true));
+        let ret = f();
+        SKIP_CONTROL_POINT_ORDER.with(|s| s.set(false));
+        ret
+    }
+
+    // Craft patch (control point order) test: a tall S-shaped cubic and a copy
+    // moved 10 * ish_tolerance sideways are ordered in one step. Without the
+    // patch the recursion splits the range into thousands of pieces.
+    #[test]
+    fn near_parallel_cubics_are_ordered_without_recursing() {
+        let s = 1e6;
+        let ish = 1e-6;
+        let c0 = CubicBez::new((0.0, 0.0), (s, s / 3.0), (-s, 2.0 * s / 3.0), (0.0, s));
+        for (dx, dy, order) in [
+            (10.0 * ish, 0.0, Order::Left),
+            (10.0 * ish, 0.5 * ish, Order::Left),
+            (-10.0 * ish, 0.0, Order::Right),
+            (-10.0 * ish, 0.5 * ish, Order::Right),
+        ] {
+            let c1 = shifted(c0, dx, dy);
+            let cmp = intersect_cubics(c0, c1, ish / 2.0, ish);
+            let y0 = c1.p0.y;
+            assert_eq!(cmp.iter().collect::<Vec<_>>(), vec![(y0, s, order)]);
+            assert!(
+                cmp.metrics.entries.len() <= 4,
+                "{} entries for ({dx}, {dy})",
+                cmp.metrics.entries.len()
+            );
+        }
+    }
+
+    // Craft patch (control point order) test: whenever the control points of
+    // two y-subsegments give an order, the subsegments are more than
+    // `sure_tolerance` apart in that order at sample heights, and a curve and
+    // a copy moved 10 * ish_tolerance or more sideways get the same
+    // `CurveOrder` as without the patch.
+    #[test]
+    fn control_point_order_is_sound() {
+        // Returns how many subsegment pairs the control points ordered.
+        fn check(c0: CubicBez, c1: CubicBez, sure: f64, ish: f64) -> usize {
+            let y0 = c0.p0.y.max(c1.p0.y);
+            let y1 = c0.p3.y.min(c1.p3.y);
+            let mut ordered = 0;
+            for parts in [1u32, 3, 16] {
+                for j in 0..parts {
+                    let a = y0 + (y1 - y0) * f64::from(j) / f64::from(parts);
+                    let b = if j + 1 == parts {
+                        y1
+                    } else {
+                        y0 + (y1 - y0) * f64::from(j + 1) / f64::from(parts)
+                    };
+                    if a >= b {
+                        continue;
+                    }
+                    let s0 = y_subsegment(c0, a, b);
+                    let s1 = y_subsegment(c1, a, b);
+                    let Some(order) = order_from_control_points(s0, s1, ish) else {
+                        continue;
+                    };
+                    ordered += 1;
+                    for i in 0..=8 {
+                        let y = (a + (b - a) * f64::from(i) / 8.0).min(b);
+                        let gap = solve_x_for_y(s1, y) - solve_x_for_y(s0, y);
+                        match order {
+                            Order::Left => assert!(gap > sure, "{s0:?} {s1:?} {y} {gap}"),
+                            Order::Right => assert!(gap < -sure, "{s0:?} {s1:?} {y} {gap}"),
+                            Order::Ish => panic!("control points gave Ish for {s0:?} {s1:?}"),
+                        }
+                    }
+                }
+            }
+            ordered
+        }
+
+        let sure = 1e-4;
+        let ish = 1e-3;
+        let curves = [
+            CubicBez::new((0.0, 0.0), (1.0, 0.3), (-1.0, 0.7), (0.0, 1.0)),
+            CubicBez::new((-1.0, 0.0), (0.5, 0.6), (0.5, 0.4), (-1.0, 1.0)),
+            CubicBez::new((0.0, 0.0), (30.0, 0.01), (60.0, 0.02), (90.0, 1.0)),
+            CubicBez::new((90.0, 0.0), (60.0, 0.98), (30.0, 0.99), (0.0, 1.0)),
+            CubicBez::new((0.0, 0.0), (0.0, 1.0 / 3.0), (0.0, 2.0 / 3.0), (0.0, 1.0)),
+        ];
+        let mut ordered = 0;
+        for (i0, c0) in curves.into_iter().enumerate() {
+            for (i1, c1) in curves.into_iter().enumerate() {
+                for k in [-1000.0, -10.0, -2.0, -1.0, 0.0, 1.0, 2.0, 10.0, 1000.0] {
+                    for dy in [0.0, 0.25 * ish, 0.25] {
+                        let c1 = shifted(c1, k * ish, dy);
+                        ordered += check(c0, c1, sure, ish);
+                        if i0 != i1 || k.abs() < 10.0 || dy >= ish {
+                            continue;
+                        }
+                        let with = intersect_cubics(c0, c1, sure, ish)
+                            .iter()
+                            .collect::<Vec<_>>();
+                        if i0 == 2 || i0 == 3 {
+                            // Almost horizontal: the recursion can report Ish
+                            // near an end, and a sideways copy is now ordered
+                            // over the whole range.
+                            if dy == 0.0 {
+                                let order = if k > 0.0 { Order::Left } else { Order::Right };
+                                assert_eq!(with, vec![(0.0, 1.0, order)], "{c0:?} {c1:?}");
+                            }
+                        } else {
+                            let without = without_control_point_order(|| {
+                                intersect_cubics(c0, c1, sure, ish)
+                                    .iter()
+                                    .collect::<Vec<_>>()
+                            });
+                            assert_eq!(with, without, "{c0:?} {c1:?}");
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            ordered > 100,
+            "{ordered} hand-built subsegment pairs ordered"
+        );
+
+        // Generated pairs, from a fixed sequence of bytes: a curve and either
+        // another curve or a copy of it moved sideways and up.
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut bytes = vec![0u8; 256];
+        let mut compared = 0;
+        let mut ordered = 0;
+        for n in 0..2000 {
+            for b in &mut bytes {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                *b = state as u8;
+            }
+            let mut u = arbitrary::Unstructured::new(&bytes);
+            let Ok(c0) = crate::arbitrary::monotonic_bezier(&mut u) else {
+                continue;
+            };
+            for (sure, ish) in [(1e-3, 1e-2), (0.25, 1.0), (100.0, 1000.0)] {
+                let c1 = if n % 2 == 0 {
+                    let Ok(c1) = crate::arbitrary::another_monotonic_bezier(&mut u, &c0) else {
+                        continue;
+                    };
+                    c1
+                } else {
+                    let k = f64::from(u.int_in_range(-40..=40).unwrap_or(20));
+                    let dy = f64::from(u.int_in_range(0..=8).unwrap_or(0)) * 0.125 * ish;
+                    shifted(c0, k * ish, dy)
+                };
+                if c1.p0.y >= c1.p3.y || c0.p0.y.max(c1.p0.y) >= c0.p3.y.min(c1.p3.y) {
+                    continue;
+                }
+                ordered += check(c0, c1, sure, ish);
+                compared += 1;
+            }
+        }
+        assert!(compared > 3000, "{compared} generated comparisons");
+        assert!(
+            ordered > 1000,
+            "{ordered} generated subsegment pairs ordered"
+        );
+    }
+
+    // Craft patch (control point order) test: the contours of a tall wavy band
+    // and a copy moved 10 * eps sideways are the same with and without the
+    // patch.
+    #[test]
+    fn control_point_order_keeps_band_contours() {
+        let (n, l) = (50, 1e6);
+        let eps = 1e-6;
+        let amp = l * 0.05;
+        let lam = l / 3.0;
+        let width = l * 0.1;
+        let x = |y: f64| amp * (std::f64::consts::TAU * y / lam).sin();
+        let dx =
+            |y: f64| amp * std::f64::consts::TAU / lam * (std::f64::consts::TAU * y / lam).cos();
+        let h = l / f64::from(n);
+        let mut band = kurbo::BezPath::new();
+        band.move_to((x(0.0), 0.0));
+        for i in 0..n {
+            let (y0, y1) = (f64::from(i) * h, f64::from(i + 1) * h);
+            band.curve_to(
+                (x(y0) + dx(y0) * h / 3.0, y0 + h / 3.0),
+                (x(y1) - dx(y1) * h / 3.0, y1 - h / 3.0),
+                (x(y1), y1),
+            );
+        }
+        band.line_to((x(l) + width, l));
+        for i in (0..n).rev() {
+            let (y0, y1) = (f64::from(i) * h, f64::from(i + 1) * h);
+            band.curve_to(
+                (x(y1) + width - dx(y1) * h / 3.0, y1 - h / 3.0),
+                (x(y0) + width + dx(y0) * h / 3.0, y0 + h / 3.0),
+                (x(y0) + width, y0),
+            );
+        }
+        band.close_path();
+
+        for (kx, ky) in [(10.0, 0.0), (10.0, 1.0), (-10.0, 0.3)] {
+            let mut both = band.clone();
+            let mut copy = band.clone();
+            copy.apply_affine(kurbo::Affine::translate((kx * eps, ky * eps)));
+            both.extend(copy.iter());
+            let contours = || {
+                let top = crate::topology::Topology::<i32>::from_path(&both, eps).unwrap();
+                top.contours(|w| *w != 0)
+                    .contours()
+                    .map(|c| c.path.clone())
+                    .collect::<Vec<_>>()
+            };
+            let with = contours();
+            let without = without_control_point_order(contours);
+            assert!(!with.is_empty());
+            assert_eq!(with, without, "copy moved by ({kx}, {ky}) * eps");
+        }
     }
 
     #[test]
