@@ -242,19 +242,24 @@ impl Document {
         let members = self.encryption_members(enc);
         let handler = match credentials {
             Credentials::Password(password) => {
-                // Public-key security opens only with what one of its envelopes gave up.
+                // Public-key security opens with what one of its envelopes gave up, or, with no
+                // password or the empty one, without a key when only the embedded files need one.
                 if params.filter == crate::crypt::PUBSEC_FILTER {
-                    return Err(CosError::NeedsCertificate(params.recipients));
-                }
-                match crate::crypt::SecurityHandler::open(params.clone(), &id0, *password) {
-                    Ok(handler) => Arc::new(handler),
-                    // No password, or the empty one: what only the embedded files need isn't asked.
-                    Err(crate::crypt::CryptError::WrongPassword) => match self.without_password(&dict, params) {
+                    match self.without_password(&dict, params.clone()) {
                         Some(handler) if password.is_none_or(str::is_empty) => Arc::new(handler),
-                        _ if password.is_none() => return Err(CosError::NeedsPassword),
-                        _ => return Err(CosError::WrongPassword),
-                    },
-                    Err(other) => return Err(CosError::Security(other.to_string())),
+                        _ => return Err(CosError::NeedsCertificate(params.recipients)),
+                    }
+                } else {
+                    match crate::crypt::SecurityHandler::open(params.clone(), &id0, *password) {
+                        Ok(handler) => Arc::new(handler),
+                        // No password, or the empty one: what only the embedded files need isn't asked.
+                        Err(crate::crypt::CryptError::WrongPassword) => match self.without_password(&dict, params) {
+                            Some(handler) if password.is_none_or(str::is_empty) => Arc::new(handler),
+                            _ if password.is_none() => return Err(CosError::NeedsPassword),
+                            _ => return Err(CosError::WrongPassword),
+                        },
+                        Err(other) => return Err(CosError::Security(other.to_string())),
+                    }
                 }
             }
             Credentials::Certificate { seed, permissions } => {
@@ -495,6 +500,11 @@ impl Document {
     /// rewrite; this document stays readable (authenticated as owner).
     pub fn set_public_key_encryption(&mut self, params: &crate::crypt::PublicKeyEncryption) -> Result<(), CosError> {
         let h = crate::crypt::create_public_key(params).map_err(|e| CosError::Security(e.to_string()))?;
+        // An encrypted file needs `/ID` (§14.4), and a full save with an output handler doesn't
+        // make one: keep the file's own, or give it one now.
+        if !matches!(self.trailer.get(b"ID").map(|id| self.resolve(id)).as_deref(), Some(Object::Array(a)) if a.len() == 2) {
+            self.trailer.set(b"ID".to_vec(), crate::cos::new_file_id(self.bytes(), 0));
+        }
         let d = h.dict();
         let hex = |b: &[u8]| Object::String(crate::cos::PdfString { bytes: b.to_vec(), hex: true });
         let mut cf = Dict::new();

@@ -259,6 +259,23 @@ fn public_key_security_derives_the_file_key_from_seed_and_envelopes() {
 }
 
 #[test]
+fn public_key_key_comes_from_the_filter_that_encrypts() {
+    let params =
+        PublicKeyEncryption { algorithm: Algorithm::Aes256, recipients: vec![vec![0x30, 1]], seed: [7; 20], permissions: -1, encrypt_metadata: true };
+    let mut d = create_public_key(&params).unwrap().dict().clone();
+    // Only the embedded files encrypted, with AESV3: the key is AES-256's, all 32 bytes of it.
+    d.stm_f = b"Identity".to_vec();
+    d.str_f = b"Identity".to_vec();
+    d.ef_f = PUBSEC_CF.to_vec();
+    assert_eq!(SecurityHandler::open_public_key(d.clone(), &[7; 20], -1).unwrap().file_key().len(), 32);
+    // Strings with AESV2 beside streams with AESV3 would need two keys from one seed.
+    d.crypt_filters.push((b"Strings".to_vec(), Method::Aes128));
+    d.stm_f = PUBSEC_CF.to_vec();
+    d.str_f = b"Strings".to_vec();
+    assert!(matches!(SecurityHandler::open_public_key(d, &[7; 20], -1), Err(CryptError::Unsupported(_))));
+}
+
+#[test]
 fn public_key_permissions_read_as_revision_3_and_bit_2_allows_everything() {
     let seed = [7u8; 20];
     let params = PublicKeyEncryption { algorithm: Algorithm::Aes256, recipients: vec![vec![1, 2, 3]], seed, permissions: -1, encrypt_metadata: true };

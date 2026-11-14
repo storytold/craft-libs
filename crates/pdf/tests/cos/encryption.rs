@@ -482,6 +482,8 @@ fn public_key_security_round_trips_through_a_file() {
     // With the seed (what an envelope gives up) the document reads.
     let opened = Document::open_with_credential(Arc::new(bytes.clone()), &Credential::Certificate { seed, permissions: -1 }).unwrap();
     assert_eq!(opened.security().map(|s| s.auth()), Some(Auth::Owner));
+    // An encrypted file has an `/ID` (§14.4), though the fixture had none.
+    assert!(matches!(opened.trailer().get(b"ID").map(|id| opened.resolve(id)).as_deref(), Some(Object::Array(a)) if a.len() == 2));
     assert_eq!(page_content(&opened).as_deref(), Some(SECRET.as_bytes()));
     // A crypt filter's /Length is in bits for public-key handlers (Table 25): 256 for AESV3.
     assert_eq!(crypt_filter_length(&opened), Some(256));
@@ -503,6 +505,84 @@ fn public_key_security_round_trips_through_a_file() {
     assert!(!opened.security().unwrap().encrypts_metadata());
     assert_eq!(page_content(&opened).as_deref(), Some(SECRET.as_bytes()));
     assert_eq!(crypt_filter_length(&opened), Some(128), "AESV2: 128 bits");
+}
+
+/// The fixture's page in the clear, with `encrypt` as its `/Encrypt` dictionary: what another
+/// program's public-key file says about itself, read before anything is decrypted.
+fn with_encrypt(encrypt: &str) -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 200] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{SECRET}\nendstream", SECRET.len()),
+        encrypt.to_string(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    let id = "00112233445566778899AABBCCDDEEFF";
+    out.extend_from_slice(
+        format!("trailer\n<< /Size {} /Root 1 0 R /Encrypt 5 0 R /ID [<{id}> <{id}>] >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes(),
+    );
+    out
+}
+
+fn needs_certificate(bytes: Vec<u8>) -> Vec<Vec<u8>> {
+    match Document::open(Arc::new(bytes)) {
+        Err(CosError::NeedsCertificate(found)) => found,
+        other => panic!("expected NeedsCertificate, got {:?}", other.map(|_| ())),
+    }
+}
+
+#[test]
+fn public_key_envelopes_come_from_the_filter_that_encrypts_the_streams() {
+    // Another filter, listed first, has envelopes of its own for the embedded files.
+    let file = with_encrypt(
+        "<< /Filter /Adobe.PubSec /SubFilter /adbe.pkcs7.s5 /V 4 /Length 128 /StmF /DefaultCryptFilter /StrF /DefaultCryptFilter \
+         /EFF /AEmbedded /CF << /AEmbedded << /CFM /AESV2 /Length 128 /Recipients [<AA>] >> \
+         /DefaultCryptFilter << /CFM /AESV2 /Length 128 /Recipients [<BB> <CC>] >> >> >>",
+    );
+    assert_eq!(needs_certificate(file), vec![vec![0xBB], vec![0xCC]]);
+}
+
+#[test]
+fn a_crypt_filters_recipients_may_be_one_byte_string() {
+    // ISO 32000-2, Table 27: one byte string when a stream's `/Crypt` filter names the filter.
+    let file = with_encrypt(
+        "<< /Filter /Adobe.PubSec /SubFilter /adbe.pkcs7.s5 /V 4 /StmF /DefaultCryptFilter /StrF /DefaultCryptFilter \
+         /CF << /DefaultCryptFilter << /CFM /AESV2 /Length 128 /Recipients <BB> >> >> >>",
+    );
+    assert_eq!(needs_certificate(file), vec![vec![0xBB]]);
+}
+
+#[test]
+fn a_public_key_rc4_filter_keeps_its_40_bit_length() {
+    // A public-key filter gives /Length in bits, and there is no /StdCF to read it from.
+    let file = with_encrypt(
+        "<< /Filter /Adobe.PubSec /SubFilter /adbe.pkcs7.s4 /V 4 /StmF /DefaultCryptFilter /StrF /DefaultCryptFilter \
+         /CF << /DefaultCryptFilter << /CFM /V2 /Length 40 /Recipients [<BB>] >> >> >>",
+    );
+    let doc = Document::open_with_credential(Arc::new(file), &Credential::Certificate { seed: [3; 20], permissions: -1 }).unwrap();
+    let handler = doc.security().unwrap();
+    assert_eq!((handler.dict().length_bits, handler.file_key().len()), (40, 5));
+}
+
+#[test]
+fn a_public_key_file_with_only_its_embedded_files_encrypted_opens_without_a_certificate() {
+    let file = with_encrypt(
+        "<< /Filter /Adobe.PubSec /SubFilter /adbe.pkcs7.s5 /V 4 /StmF /Identity /StrF /Identity /EFF /EmbeddedFiles \
+         /CF << /EmbeddedFiles << /CFM /AESV2 /AuthEvent /EFOpen /Length 128 /Recipients [<BB>] >> >> >>",
+    );
+    let doc = Document::open(Arc::new(file)).unwrap();
+    assert_eq!(page_content(&doc).as_deref(), Some(SECRET.as_bytes()));
 }
 
 /// The `/Length` of the public-key crypt filter in the `/Encrypt` dictionary.

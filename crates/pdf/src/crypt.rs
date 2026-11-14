@@ -364,7 +364,18 @@ impl SecurityHandler {
         }
         let method = match dict.v {
             1..=3 => Method::Rc4,
-            _ => dict.crypt_filters.iter().find(|(n, _)| *n == dict.stm_f).map(|(_, m)| *m).unwrap_or(Method::Identity),
+            // The key is the encrypting filters' (streams, strings or only embedded files): one
+            // key serves all of them, so filters that would need keys of different lengths are refused.
+            _ => {
+                let of = |n: &[u8]| dict.crypt_filters.iter().find(|(f, _)| f == n).map_or(Method::Identity, |(_, m)| *m);
+                let ef = if dict.ef_f.is_empty() { &dict.stm_f } else { &dict.ef_f };
+                let mut used = [of(&dict.stm_f), of(&dict.str_f), of(ef)].into_iter().filter(|m| *m != Method::Identity);
+                let first = used.next().unwrap_or(Method::Identity);
+                if used.any(|m| m != first) {
+                    return Err(CryptError::Unsupported("public-key crypt filters with different methods".into()));
+                }
+                first
+            }
         };
         let key = Zeroizing::new(public_key_file_key(seed, &dict.recipients, dict.encrypt_metadata, method, dict.length_bits));
         dict.p = permissions;
