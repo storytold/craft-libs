@@ -23,8 +23,8 @@ use std::ffi::OsString;
 use std::fmt;
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-use std::sync::Arc;
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -125,8 +125,9 @@ pub fn with_deadline<'a, T: Send + 'static>(limit: impl Into<DeadlineLimit<'a>>,
 ///
 /// `cond` is called at once, and then after pauses that grow from 1 ms to 50 ms, but not again once
 /// the limit has passed. The failure names `what`, the limit and the variable that sets it. A `true`
-/// that `cond` returns after the limit has passed also fails the test. A panic in `cond` reaches the caller unchanged. `cond` runs on
-/// the calling thread and is not interrupted, so it must return promptly.
+/// that `cond` returns after the limit has passed also fails the test. A panic in `cond` reaches the
+/// caller unchanged. `cond` runs on the calling thread and is not interrupted, so it must return
+/// promptly.
 ///
 /// ```
 /// use std::sync::atomic::{AtomicBool, Ordering};
@@ -249,10 +250,19 @@ fn read_variable(name: &str) -> Option<OsString> {
 /// A body boxed for the worker thread.
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
-/// Starts `job` on a named thread and detaches it.
-fn spawn_worker(job: Job) -> io::Result<()> {
-    thread::Builder::new().name(WORKER_NAME.to_owned()).spawn(job).map(drop)
+/// Starts `job` on a named thread and detaches it. The thread sends on `done` after `job` returns.
+fn spawn_worker(job: Job, done: Sender<()>) -> io::Result<()> {
+    thread::Builder::new()
+        .name(WORKER_NAME.to_owned())
+        .spawn(move || {
+            job();
+            let _ = done.send(());
+        })
+        .map(drop)
 }
+
+/// The body's result and the clock reading when it finished, filled in by the worker.
+type Slot<T> = Arc<Mutex<Option<(thread::Result<T>, Duration)>>>;
 
 /// How a [`with_deadline`] call failed.
 enum Failure {
@@ -271,36 +281,47 @@ fn panic_text(payload: &(dyn Any + Send)) -> Option<&str> {
 }
 
 /// [`with_deadline`] with the variable lookup, the thread start and the clock passed in. Starting
-/// the worker counts against the limit, and the worker reads the clock when the body finishes.
+/// the worker counts against the limit. The worker stores the body's result with the clock reading
+/// when it finished, under a lock, and then sends on the channel `spawn` receives. When the wait
+/// times out, the stored result is still used if it is there, so a body that finished in time passes
+/// even when its thread sends late.
 fn run_with_deadline<T: Send + 'static>(
     limit: DeadlineLimit<'_>,
     label: &str,
     f: impl FnOnce() -> T + Send + 'static,
     lookup: impl FnOnce(&str) -> Option<OsString>,
-    spawn: impl FnOnce(Job) -> io::Result<()>,
+    spawn: impl FnOnce(Job, Sender<()>) -> io::Result<()>,
     clock: Clock,
 ) -> Result<T, Failure> {
     let resolved = resolve(&limit, lookup, Instant::now()).map_err(|error| Failure::Message(format!("{label}: {error}")))?;
     let (tx, rx) = mpsc::channel();
+    let slot: Slot<T> = Arc::new(Mutex::new(None));
+    let worker_slot = Arc::clone(&slot);
     let worker_clock = Arc::clone(&clock);
     let job: Job = Box::new(move || {
         let result = catch_unwind(AssertUnwindSafe(f));
-        // The receiver is gone when the call has already timed out; the result is then dropped here.
-        let _ = tx.send((result, worker_clock()));
+        // The clock is read under the lock: once the caller finds the slot empty after its limit,
+        // any later reading is past the limit too.
+        let mut stored = worker_slot.lock().unwrap_or_else(PoisonError::into_inner);
+        *stored = Some((result, worker_clock()));
     });
-    spawn(job).map_err(|error| Failure::Message(format!("{label}: could not start the worker thread: {error}")))?;
-    match rx.recv_timeout(resolved.limit.saturating_sub(clock())) {
-        Ok((result, finished)) if finished > resolved.limit => {
+    spawn(job, tx).map_err(|error| Failure::Message(format!("{label}: could not start the worker thread: {error}")))?;
+    let waited = rx.recv_timeout(resolved.limit.saturating_sub(clock()));
+    let stored = slot.lock().unwrap_or_else(PoisonError::into_inner).take();
+    match (stored, waited) {
+        (Some((result, finished)), _) if finished > resolved.limit => {
             let panicked = match &result {
                 Ok(_) => String::new(),
                 Err(payload) => format!(" (it panicked: {})", panic_text(payload.as_ref()).unwrap_or("a payload that is not a message")),
             };
             Err(Failure::Message(format!("{label} finished only after its limit of {resolved}{panicked}")))
         }
-        Ok((Ok(value), _)) => Ok(value),
-        Ok((Err(payload), _)) => Err(Failure::Panic(payload)),
-        Err(RecvTimeoutError::Timeout) => Err(Failure::Message(format!("{label} did not finish within {resolved}; its thread is left running"))),
-        Err(RecvTimeoutError::Disconnected) => Err(Failure::Message(format!("{label}: the worker thread stopped without a result"))),
+        (Some((Ok(value), _)), _) => Ok(value),
+        (Some((Err(payload), _)), _) => Err(Failure::Panic(payload)),
+        (None, Err(RecvTimeoutError::Timeout)) => {
+            Err(Failure::Message(format!("{label} did not finish within {resolved}; its thread is left running")))
+        }
+        (None, _) => Err(Failure::Message(format!("{label}: the worker thread stopped without a result"))),
     }
 }
 
@@ -504,7 +525,7 @@ mod tests {
     #[test]
     fn spawn_failure_reports_cause() {
         let ran = AtomicBool::new(false);
-        let spawn = |_job: Job| {
+        let spawn = |_job: Job, _done: Sender<()>| {
             ran.store(true, Ordering::SeqCst);
             Err(io::Error::other("no threads left"))
         };
@@ -550,7 +571,7 @@ mod tests {
     fn huge_limit_fails_cleanly() {
         let huge = DeadlineLimit::new(Duration::MAX).with_variable(UNSET);
         let ran = AtomicBool::new(false);
-        let spawn = |_job: Job| {
+        let spawn = |_job: Job, _done: Sender<()>| {
             ran.store(true, Ordering::SeqCst);
             Ok(())
         };
@@ -695,15 +716,28 @@ mod tests {
 
     /// Runs `run_with_deadline` with a 5 s limit on a fake clock. The worker runs on the calling
     /// thread: the clock reads `start_secs` while the body runs and `received_secs` when the result
-    /// is received.
-    fn on_fake_clock<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static, start_secs: u64, received_secs: u64) -> Result<T, Failure> {
+    /// is received. When `sends` is false, the worker stores its result but does not send, as if its
+    /// thread stopped running between the two.
+    fn on_fake_clock<T: Send + 'static>(
+        f: impl FnOnce() -> T + Send + 'static,
+        start_secs: u64,
+        received_secs: u64,
+        sends: bool,
+    ) -> Result<T, Failure> {
         let now = Arc::new(AtomicU64::new(0));
         let clock_now = Arc::clone(&now);
         let clock: Clock = Arc::new(move || Duration::from_secs(clock_now.load(Ordering::SeqCst)));
-        let spawn = |job: Job| {
+        let unsent = std::cell::RefCell::new(None);
+        let spawn = |job: Job, done: Sender<()>| {
             now.store(start_secs, Ordering::SeqCst);
             job();
             now.store(received_secs, Ordering::SeqCst);
+            if sends {
+                let _ = done.send(());
+            } else {
+                // Kept alive so that the wait times out instead of seeing a closed channel.
+                *unsent.borrow_mut() = Some(done);
+            }
             Ok(())
         };
         let limit = DeadlineLimit::new(Duration::from_secs(5)).with_variable(UNSET);
@@ -712,18 +746,33 @@ mod tests {
 
     #[test]
     fn a_value_returned_after_the_limit_fails() {
-        let text = failure_message(on_fake_clock(|| 1, 6, 6));
+        let text = failure_message(on_fake_clock(|| 1, 6, 6, true));
         assert!(text.contains("fake clock finished only after its limit of 5s"), "{text}");
     }
 
     #[test]
     fn a_value_finished_in_time_but_received_late_passes() {
-        assert!(matches!(on_fake_clock(|| 1, 1, 6), Ok(1)));
+        assert!(matches!(on_fake_clock(|| 1, 1, 6, true), Ok(1)));
+    }
+
+    #[test]
+    fn a_value_finished_in_time_but_sent_late_passes() {
+        assert!(matches!(on_fake_clock(|| 1, 1, 6, false), Ok(1)));
+    }
+
+    #[test]
+    fn a_panic_finished_in_time_but_sent_late_keeps_its_payload() {
+        let payload = match on_fake_clock(|| -> u8 { panic!("early boom") }, 1, 6, false) {
+            Err(Failure::Panic(payload)) => payload,
+            Ok(_) => panic!("the call did not fail"),
+            Err(Failure::Message(text)) => panic!("the payload was replaced: {text}"),
+        };
+        assert_eq!(message(payload), "early boom");
     }
 
     #[test]
     fn a_panic_after_the_limit_names_the_limit_and_the_panic() {
-        let text = failure_message(on_fake_clock(|| -> u8 { panic!("late boom") }, 6, 6));
+        let text = failure_message(on_fake_clock(|| -> u8 { panic!("late boom") }, 6, 6, true));
         assert!(text.contains("fake clock finished only after its limit of 5s") && text.ends_with("(it panicked: late boom)"), "{text}");
     }
 }

@@ -91,9 +91,8 @@ one.
 
 `wait_until(limit, what, cond)` calls `cond` on the test's thread until it returns `true`. It calls
 `cond` at once, then after pauses that start at 1 ms and double up to 50 ms, and does not call it
-again once the limit has passed. When the limit passes
-first, or `cond` returns `true` only after the limit has passed, the test fails with a message that
-names `what`.
+again once the limit has passed. When the limit passes first, or `cond` returns `true` only after the
+limit has passed, the test fails with a message that names `what`.
 
 ```rust
 use std::time::Duration;
@@ -118,7 +117,8 @@ The variable is read on every call; neither function sets or caches it.
 |---|---|
 | Not set | The default limit applies. |
 | Decimal digits above zero, such as `30` or `007` | That many seconds replace the default. |
-| Empty, signed (`+5`, `-5`), fractional (`1.5`), with spaces or units (`5s`), zero, larger than a `u64`, or not Unicode | The test fails with the variable's name and value, before `f` runs or `cond` is called. |
+| Empty, signed (`+5`, `-5`), fractional (`1.5`), with spaces or units (`5s`), zero, or larger than a `u64` | The test fails with the variable's name and value, before `f` runs or `cond` is called. |
+| Not Unicode | The test fails with the variable's name, before `f` runs or `cond` is called. |
 
 A zero default, a variable name that is empty or holds `=` or a NUL character, and a limit that ends past
 the latest time the platform's clock can represent also fail the test before any work starts.
@@ -184,7 +184,8 @@ The rounds are the config's iterations times the multiplier variable, `CRAFT_HOS
 |---|---|
 | Not set | The multiplier is 1. |
 | Decimal digits above zero, such as `10` | The rounds are multiplied by that number. |
-| Empty, signed, fractional, with spaces, zero, larger than a `usize`, or not Unicode | The test fails with the variable's name and value before `parse` is called. |
+| Empty, signed, fractional, with spaces, zero, or larger than a `usize` | The test fails with the variable's name and value before `parse` is called. |
+| Not Unicode | The test fails with the variable's name before `parse` is called. |
 
 A product of the iterations and the multiplier that does not fit in a `usize`, and a call that would
 run more than `MAX_CASES` (10,000,000) cases in all, also fail the test before `parse` is called.
