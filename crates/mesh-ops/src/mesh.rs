@@ -618,11 +618,14 @@ impl Mesh {
     /// place a vertex on a tile border with its own triangle's tile.
     ///
     /// The triangles the material's submeshes list (a triangle counts again for each submesh that
-    /// lists it) over [`Limits::max_triangles`] are `TooLarge`, and a triangle that a submesh of
-    /// another material also lists is `Invalid`. Either leaves the mesh unchanged and does not
-    /// call `f`.
+    /// lists it) over [`Limits::max_triangles`] are `TooLarge`, as are the mesh's vertices and
+    /// the copies of its shared ones over [`Limits::max_vertices`]. A triangle that a submesh of
+    /// another material also lists is `Invalid`, and a reservation that fails is `OutOfMemory`.
+    /// Every error leaves the mesh unchanged and does not call `f`.
     pub fn map_material_uvs_with(&mut self, m: usize, f: impl Fn(Vec2, Vec2) -> Vec2, limits: &Limits) -> Result<()> {
         let listed = self.listed_of(m, limits)?;
+        let n = self.positions.len();
+        check_limit("vertex count", n, limits.max_vertices)?;
         if self.listed_by_other(m)? {
             return Err(MeshOpsError::Invalid("triangle belongs to more than one material".into()));
         }
@@ -638,19 +641,52 @@ impl Mesh {
         // (vertex, centroid of its first triangle), each vertex once. Reserved before the mesh
         // changes.
         let mut vertices = try_vec(listed.saturating_mul(3), "material vertices")?;
-        let mut shared = try_filled(self.positions.len(), false, "material vertices")?;
+        // Per vertex: NOT_SHARED, SHARED with a triangle outside the material, or COPIED when it
+        // is shared and a triangle of the material uses it, so it gets one copy.
+        const NOT_SHARED: u8 = 0;
+        const SHARED: u8 = 1;
+        const COPIED: u8 = 2;
+        let what = "material vertices";
+        let mut shared = try_filled(n, NOT_SHARED, what)?;
         for (_, tri) in self.indices.as_chunks::<3>().0.iter().enumerate().filter(|(t, _)| !in_material.get(*t).copied().unwrap_or(false)) {
             for v in tri {
                 if let Some(s) = shared.get_mut(*v as usize) {
-                    *s = true;
+                    *s = SHARED;
                 }
             }
         }
+        let mut copied = 0usize;
+        for k in material_triangles.iter().flat_map(|t| t * 3..t * 3 + 3) {
+            if let Some(s) = self.indices.get(k).and_then(|v| shared.get_mut(*v as usize))
+                && *s == SHARED
+            {
+                *s = COPIED;
+                copied += 1;
+            }
+        }
 
+        // The vertices with their copies over `max_vertices` are `TooLarge`. The copies' storage
+        // is reserved before the mesh changes; only the copies whose index fits in u32 are made.
+        check_limit("vertex count", n.saturating_add(copied), limits.max_vertices)?;
+        let copies = copied.min(usize::try_from(u64::from(u32::MAX) + 1).unwrap_or(usize::MAX).saturating_sub(n));
+        reserved(self.positions.try_reserve(copies), what)?;
+        if self.normals.len() == n {
+            reserved(self.normals.try_reserve(copies), what)?;
+        }
+        if self.tangents.len() == n {
+            reserved(self.tangents.try_reserve(copies), what)?;
+        }
+        if self.uvs.len() == n {
+            reserved(self.uvs.try_reserve(copies), what)?;
+        }
+        if self.colors.len() == n {
+            reserved(self.colors.try_reserve(copies), what)?;
+        }
         let mut duplicates = std::collections::HashMap::new();
+        reserved(duplicates.try_reserve(copies), what)?;
         for k in material_triangles.iter().flat_map(|t| t * 3..t * 3 + 3) {
             let Some(&v) = self.indices.get(k) else { continue };
-            let v = if shared.get(v as usize).copied().unwrap_or(false) {
+            let v = if shared.get(v as usize) == Some(&COPIED) {
                 match duplicates.get(&v) {
                     Some(&copy) => copy,
                     // A vertex past u32::MAX cannot be indexed: the triangle keeps the shared one.
@@ -1437,6 +1473,38 @@ mod tests {
         let m = listed_triangle(5);
         assert_eq!(m.uv_tiles(0, &at_most(4)), Err(too_many(5, 4)));
         assert_eq!(m.uv_tiles(0, &at_most(5)).unwrap().into_iter().collect::<Vec<_>>(), vec![(0, 0)]);
+    }
+
+    #[test]
+    fn material_mapping_bounds_split_vertices() {
+        // quad(): the second triangle in its own material shares two vertices with the first.
+        let mut m = quad();
+        m.materials = vec!["a".into(), "b".into()];
+        m.submeshes =
+            vec![SubMesh { name: "a".into(), material: 0, start: 0, count: 3 }, SubMesh { name: "b".into(), material: 1, start: 3, count: 3 }];
+        let before = m.clone();
+        let calls = std::cell::Cell::new(0);
+        let f = |uv: Vec2| {
+            calls.set(calls.get() + 1);
+            uv + Vec2::X
+        };
+        let vertices = |max_vertices| Limits { max_vertices, ..Limits::default() };
+        for limit in [4, 5] {
+            let too_large = MeshOpsError::TooLarge { what: "vertex count", got: 6, limit: limit as u64 };
+            assert_eq!(m.map_material_uvs(1, f, &vertices(limit)), Err(too_large));
+            assert_eq!((calls.get(), &m), (0, &before), "nothing is mapped or changed");
+        }
+        m.map_material_uvs(1, f, &vertices(6)).unwrap();
+        assert_eq!((calls.get(), m.vertex_count()), (3, 6));
+        m.validate().unwrap();
+
+        // A mesh over the limit without any shared vertex.
+        let mut one = listed_triangle(1);
+        let before = one.clone();
+        assert_eq!(one.map_material_uvs(0, f, &vertices(2)), Err(MeshOpsError::TooLarge { what: "vertex count", got: 3, limit: 2 }));
+        assert_eq!((calls.get(), &one), (3, &before));
+        one.map_material_uvs(0, f, &vertices(3)).unwrap();
+        assert_eq!((calls.get(), one.vertex_count()), (6, 3));
     }
 
     #[test]
