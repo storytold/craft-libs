@@ -85,6 +85,16 @@ fn an_escaped_semicolon_stays_in_the_style_name() {
 }
 
 #[test]
+fn a_trailing_escaped_semicolon_stays_too() {
+    // `{\s2 Title\u59?;}` names style 2 "Title;" — a custom name, not the built-in Title kind.
+    // commit_style used to trim trailing semicolons from the stored name, which undid the fix
+    // above for a name that ends in an escaped one.
+    let rtf = br"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s2 Title\u59?;}}\pard\s2 T\par}";
+    let f = parse(rtf).unwrap();
+    assert_eq!(texts(&f)[0], "Normal:T");
+}
+
+#[test]
 fn a_malformed_hex_escape_leaves_no_stray_text() {
     // A `\'` that is not followed by two hex digits is malformed: the escape itself goes, any
     // hex digits of a truncated pair go with it, and everything else — non-hex bytes, `}` —
