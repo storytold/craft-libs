@@ -15,13 +15,13 @@
 //!
 //! The program found is run once with its version argument. [`Oracle::version`] is the first
 //! non-blank line of its standard output, or of its standard error when standard output is blank.
-//! The exit status
-//! is not checked. The run is bounded by [`ProbeLimits`]: each output stream may hold at most
-//! `max_output_bytes`, and the child is killed and reaped when it passes `timeout` or the byte
-//! limit. On Unix the child runs in its own process group, and the whole group is killed, so a
-//! process it started that holds the output pipes ends too. A successful lookup is cached for the process under every input it read (the program,
-//! the version argument, the explicit variable and its value, `PATH`, `PATHEXT`, the current
-//! directory, the install folders and the limits). A failed lookup is not cached.
+//! The exit status is not checked. The run is bounded by [`ProbeLimits`]: each output stream may
+//! hold at most `max_output_bytes`, and the child is killed and reaped when it passes `timeout` or
+//! the byte limit. On Unix the child runs in its own process group, and the whole group is killed,
+//! so a process it started that holds the output pipes ends too. A successful lookup is cached for
+//! the process under every input it read (the program, the version argument, the explicit variable
+//! and its value, `PATH`, `PATHEXT`, the current directory, the install folders and the limits). A
+//! failed lookup is not cached.
 //!
 //! No function here panics. [`require_oracle!`](crate::require_oracle), [`require_ffmpeg!`](crate::require_ffmpeg)
 //! and [`require_ffprobe!`](crate::require_ffprobe) expand in the calling test: a missing program
