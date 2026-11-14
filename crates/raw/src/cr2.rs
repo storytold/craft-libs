@@ -486,7 +486,11 @@ pub(crate) mod tests {
         let (cfa, assumed) = fallback_cfa(&gradient, 192, Rect::new(0, 0, 192, 96), 0.0, 4000.0, None);
         assert_eq!(cfa.name(), "RGGB");
         assert!(assumed);
-        let bytes = synthetic_cr2_of(&gradient, 192, 96, None, None);
+        let mut bytes = synthetic_cr2_of(&gradient, 192, 96, None, None);
+        let marker = [0xe0, 0xc5, 4, 0, 1, 0, 0, 0];
+        let at = bytes.windows(marker.len()).position(|b| b == marker).unwrap();
+        // Exercise the decoder's missing-tag fallback, not the fixture's default CFA tag.
+        bytes[at..at + 2].copy_from_slice(&0xc5dfu16.to_le_bytes());
         let decoded = crate::decode(&bytes).unwrap();
         assert_eq!(decoded.cfa.as_ref().unwrap().name(), "RGGB");
         assert!(decoded.notices.assumed_cfa);
