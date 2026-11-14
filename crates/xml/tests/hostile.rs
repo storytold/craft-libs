@@ -31,6 +31,18 @@ fn the_defaults_are_the_documented_ones() {
 }
 
 #[test]
+fn strict_end_tags_keep_first_root_and_entity_compatibility() {
+    let opts = Options { strict_end_tags: true, unknown_entity: UnknownEntity::Literal, doctype: Doctype::Ignore, ..Options::default() };
+    let root = opts.parse(b"<!DOCTYPE a [<!ENTITY ignored 'x'>]><a>&unknown;<b/></a><tail/>").unwrap();
+    assert_eq!(root.name, "a");
+    assert_eq!(root.text().as_ref(), "&unknown;");
+
+    for malformed in [b"<a><b></a>".as_slice(), b"<a><b/>".as_slice(), b"</a><b/>".as_slice()] {
+        assert!(opts.parse(malformed).is_err(), "{}", String::from_utf8_lossy(malformed));
+    }
+}
+
+#[test]
 fn a_depth_bomb_is_refused_at_the_limit() {
     let limits = Limits { max_depth: 8, ..Limits::DEFAULT };
     let nested = |n: usize| format!("{}{}", "<a>".repeat(n), "</a>".repeat(n));

@@ -174,6 +174,11 @@ pub struct Options<'a> {
     /// malformed attribute is skipped, and bytes that are not UTF-8 become U+FFFD. Strict: each
     /// of those is an error, as are a second root element and text outside the root.
     pub strict: bool,
+    /// Require closing tags to match their opening tags, and reject unclosed elements at EOF,
+    /// while keeping the other lenient behaviors (including stopping after the first root).
+    /// This is useful when a format historically accepted a single-root prefix but rejected
+    /// malformed nesting.
+    pub strict_end_tags: bool,
     pub unknown_entity: UnknownEntity,
     pub doctype: Doctype,
     /// Keep CDATA sections as [`Node::CData`] instead of joining them to the text around them.
@@ -197,6 +202,7 @@ impl Default for Options<'_> {
             names: Names::AsWritten,
             ns_decls: true,
             strict: false,
+            strict_end_tags: false,
             unknown_entity: UnknownEntity::Drop,
             doctype: Doctype::Ignore,
             cdata: false,
@@ -443,9 +449,9 @@ impl<'o, 'i> Events<'o, 'i> {
             }
             Q::End(e) => {
                 let Some(top) = self.open.last() else {
-                    return if self.opts.strict { self.syntax("an end tag has no start tag") } else { Ok(None) };
+                    return if self.opts.strict || self.opts.strict_end_tags { self.syntax("an end tag has no start tag") } else { Ok(None) };
                 };
-                if self.opts.strict && top.raw != e.name().as_ref() {
+                if (self.opts.strict || self.opts.strict_end_tags) && top.raw != e.name().as_ref() {
                     return self.syntax(format!("the end tag `{}` does not match its start tag", String::from_utf8_lossy(e.name().as_ref())));
                 }
                 self.end()
@@ -485,7 +491,11 @@ impl<'o, 'i> Events<'o, 'i> {
             }
             Q::Decl(_) => return Ok(None),
             Q::Eof => {
-                return if self.opts.strict && !self.open.is_empty() { self.syntax("an element is not closed") } else { Ok(Some(None)) };
+                return if (self.opts.strict || self.opts.strict_end_tags) && !self.open.is_empty() {
+                    self.syntax("an element is not closed")
+                } else {
+                    Ok(Some(None))
+                };
             }
         };
         Ok(Some(Some(event)))
@@ -614,7 +624,7 @@ impl<'o, 'i> Events<'o, 'i> {
         let keep_name = self.end_names || canonical.is_some_and(|c| c.element.is_some());
         self.open.push(Open {
             scope,
-            raw: if self.opts.strict { raw.as_ref().to_vec() } else { Vec::new() },
+            raw: if self.opts.strict || self.opts.strict_end_tags { raw.as_ref().to_vec() } else { Vec::new() },
             name: if keep_name { name.clone() } else { String::new() },
         });
         Ok(Event::Start { name, attrs: out })
