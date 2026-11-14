@@ -6,6 +6,10 @@ use crate::units::tw_i16;
 use craft_wordmodel::props::PropChange;
 use std::sync::Arc;
 
+fn style_is_default(style: &El) -> bool {
+    style.attr("w:default").is_some_and(|value| !matches!(value.trim(), "0" | "false" | "off" | "False" | "FALSE"))
+}
+
 /// Built-in style names Word stores in lower case, and how the UI shows them.
 pub(crate) const LOWER_NAMES: &[(&str, &str)] = &[
     ("caption", "Caption"),
@@ -60,9 +64,7 @@ impl Reader<'_> {
         // The default paragraph style must be called `Normal` in our model.
         let has_normal = root.children("w:style").any(|s| s.attr("w:styleId") == Some("Normal"));
         if !has_normal
-            && let Some(def) = root
-                .children("w:style")
-                .find(|s| s.attr("w:type") == Some("paragraph") && s.attr("w:default").is_some_and(|v| v == "1" || v == "true"))
+            && let Some(def) = root.children("w:style").find(|s| s.attr("w:type") == Some("paragraph") && style_is_default(s))
             && let Some(id) = def.attr("w:styleId")
         {
             self.pc.alias.insert(id.to_string(), "Normal".into());
@@ -136,7 +138,7 @@ impl Reader<'_> {
                 builtin: !s.attr("w:customStyle").is_some_and(|v| matches!(v.trim(), "1" | "true" | "on")),
                 locked: flag(s, "w:locked").unwrap_or(false),
                 // Only where the writer couldn't tell from the id (it flags the English ids).
-                default: s.attr("w:default").is_some_and(|v| v == "1" || v == "true")
+                default: style_is_default(s)
                     && !matches!(
                         (kind, id.as_str()),
                         (StyleKind::Paragraph, "Normal")
