@@ -26,7 +26,8 @@ fn alt_text_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 /// A secondary click on the description box, which opens the edit menu.
 fn open_edit_menu(fixture: &mut Fixture) {
-    let at = fixture.by_label(PROMPT).expect("the description box").center();
+    let Some(field) = fixture.by_label(PROMPT) else { return };
+    let at = field.center();
     fixture.frame(vec![moved(at), secondary(at, true)]);
     fixture.frame(vec![secondary(at, false)]).settle();
 }

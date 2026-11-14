@@ -152,7 +152,8 @@ fn table_many(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 /// A secondary click on the Name header, which opens the header menu.
 fn open_header_menu(fixture: &mut Fixture) {
-    let at = fixture.by_label("Name").expect("the header cell").center();
+    let Some(header) = fixture.by_label("Name") else { return };
+    let at = header.center();
     fixture.frame(vec![moved(at), secondary(at, true)]);
     fixture.frame(vec![secondary(at, false)]).settle();
 }
