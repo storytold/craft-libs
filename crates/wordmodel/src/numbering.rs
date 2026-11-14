@@ -48,6 +48,11 @@ pub struct Level {
     pub legal: bool,
     /// Paragraph style linked to this level (e.g. Heading 1 for outline numbering).
     pub style: Option<String>,
+    /// Word 2010 custom number format (`w:numFmt` `w:val="custom" w:format="0001, 0002, 0003, ..."`),
+    /// kept as read; `format` is the format the file gives as its fallback. The `[0001]` paragraph
+    /// numbering of patent specifications is one of these; label rendering is the application's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_format: Option<String>,
 }
 
 impl Default for Level {
@@ -66,6 +71,7 @@ impl Default for Level {
             tab: None,
             legal: false,
             style: None,
+            custom_format: None,
         }
     }
 }
@@ -480,6 +486,9 @@ fn render_label(numbering: &Numbering, num: u32, def: &Level, vals: &[u32; 9], s
 const MAX_LEVEL_TEXT: usize = 64;
 /// Labels stop growing once they pass this many bytes.
 const MAX_LABEL_BYTES: usize = 256;
+/// The longest custom number format (`w:format`) kept, in characters. Longer patterns are
+/// dropped whole (never truncated into a modified original).
+pub const MAX_CUSTOM_FORMAT: usize = 1024;
 
 #[cfg(test)]
 mod tests {

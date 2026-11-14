@@ -2069,6 +2069,25 @@ fn list_level_overrides_round_trip() {
     assert_eq!(c.next_label(&back.numbering, restart, 1).unwrap().0, "1.01");
 }
 
+/// A Word 2010 custom number format (the `[0001]` paragraph numbering of patent specifications)
+/// is written as the Choice/Fallback pair Word uses and read back whole; the file's fallback
+/// numFmt stays the level's base format. Label rendering of the pattern is the application's.
+#[test]
+fn word_custom_number_formats_round_trip() {
+    use craft_wordmodel::numbering::Level;
+    let mut d = Document::new();
+    let num = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
+    let lvl = Level { text: "[%1]".into(), custom_format: Some("0001, 0002, 0003, ...".into()), ..Level::default() };
+    if let Some(n) = Arc::make_mut(&mut d.numbering).nums.iter_mut().find(|n| n.id == num) {
+        n.level_overrides = vec![(0, lvl)];
+    }
+    let bytes = craft_docx::write(&d).unwrap();
+    let back = craft_docx::read(&bytes).unwrap();
+    let n = back.numbering.num(num).unwrap();
+    let (_, got) = &n.level_overrides[0];
+    assert_eq!((got.format, got.text.as_str(), got.custom_format.as_deref()), (NumFormat::Decimal, "[%1]", Some("0001, 0002, 0003, ...")));
+}
+
 /// Ink strokes and freeform shapes are written as DrawingML custom geometry (`a:custGeom`,
 /// `a:moveTo`/`a:lnTo`) in floating drawings and read back with their points, pen, opacity and
 /// drawing order.
