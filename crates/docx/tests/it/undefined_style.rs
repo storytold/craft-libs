@@ -81,15 +81,25 @@ fn conventional_styles_and_numbering_parts_without_relationships_are_read() {
     let numbering = format!(
         r#"<w:numbering xmlns:w="{W}"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum><w:num w:numId="7"><w:abstractNumId w:val="0"/></w:num></w:numbering>"#
     );
-    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    for (name, body) in [("word/document.xml", doc.as_str()), ("word/styles.xml", styles.as_str()), ("word/numbering.xml", numbering.as_str())] {
-        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-        zw.write_all(body.as_bytes()).unwrap();
+    for main_path in ["word/document.xml", "WORD/DOCUMENT.XML"] {
+        let root = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="{main_path}"/></Relationships>"#
+        );
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, body) in [
+            ("_rels/.rels", root.as_str()),
+            (main_path, doc.as_str()),
+            ("word/styles.xml", styles.as_str()),
+            ("word/numbering.xml", numbering.as_str()),
+        ] {
+            zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            zw.write_all(body.as_bytes()).unwrap();
+        }
+        let d = craft_docx::read(&zw.finish().unwrap().into_inner()).unwrap();
+        assert!(d.styles.styles.iter().any(|style| style.id == "Body"));
+        let Some(Block::Para(p)) = d.body.first().map(|b| &**b) else { panic!("a body paragraph") };
+        assert_eq!(p.props.style.as_deref(), Some("Body"));
+        assert_eq!(p.props.numbering.map(|n| (n.num, n.level)), Some((7, 0)));
+        assert!(d.numbering.level(7, 0).is_some());
     }
-    let d = craft_docx::read(&zw.finish().unwrap().into_inner()).unwrap();
-    assert!(d.styles.styles.iter().any(|style| style.id == "Body"));
-    let Some(Block::Para(p)) = d.body.first().map(|b| &**b) else { panic!("a body paragraph") };
-    assert_eq!(p.props.style.as_deref(), Some("Body"));
-    assert_eq!(p.props.numbering.map(|n| (n.num, n.level)), Some((7, 0)));
-    assert!(d.numbering.level(7, 0).is_some());
 }

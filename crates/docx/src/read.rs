@@ -204,7 +204,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
             // those files when a producer omitted the document relationship; the bounded package
             // reader still applies the same entry and XML limits. An explicit usable relationship
             // always wins, including when it points outside the conventional `word/` paths.
-            if main != "word/document.xml" {
+            if !main.eq_ignore_ascii_case("word/document.xml") {
                 return None;
             }
             let fallback = match t {
