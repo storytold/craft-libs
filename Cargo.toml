@@ -33,6 +33,7 @@ craft-aaf = { path = "crates/aaf" }
 craft-atomic = { path = "crates/atomic" }
 craft-captions = { path = "crates/captions" }
 craft-cfb = { path = "crates/cfb" }
+craft-cloud = { path = "crates/cloud" }
 craft-codepage = { path = "crates/codepage" }
 craft-cms = { path = "crates/cms" }
 craft-crs = { path = "crates/crs" }
@@ -58,6 +59,7 @@ craft-docpath = { path = "crates/docpath" }
 craft-dpx = { path = "crates/dpx" }
 craft-dwg = { path = "crates/dwg" }
 craft-ecproj-format = { path = "crates/ecproj-format" }
+craft-esign = { path = "crates/esign" }
 craft-figma-rest = { path = "crates/figma-rest" }
 craft-exr = { path = "crates/exr" }
 craft-flags = { path = "crates/flags" }
