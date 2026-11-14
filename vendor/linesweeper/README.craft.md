@@ -1,21 +1,26 @@
 # Local linesweeper 0.5.0 copy
 
 This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and the
-local patch listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
+changes listed under Local changes. `.cargo_vcs_info.json` names the commit it was packaged from,
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
-Every file here except this one, `SOURCE.json` and the patched file below is byte for byte the file
-in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
+Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
+file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
 hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
-holds `upstream_revision`. `local_patches` describes the local patch.
+holds `upstream_revision`. `local_patches` describes each local change.
 
-## Local patches
+## Local changes
 
-| File | Change |
-|---|---|
-| `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
+The patched files are `src/sweep/sweep_line.rs`, `src/curve/mod.rs` and `Cargo.toml`.
+
+| Change | Code comment label | Touches | Tests |
+|---|---|---|---|
+| The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out | `Craft patch (exited slots)` | `src/sweep/sweep_line.rs` | none (doc comment only) |
+| `CurveOrder` records `Metrics` entries only with the new `metrics` feature, which is off by default; without it `metrics.entries` stays empty. The `curve_metrics` example requires the feature | `Craft patch (metrics opt-in)` | `src/curve/mod.rs`, `Cargo.toml` | `curve::test::crossing_cubics_metrics_follow_the_feature`, `curve::test::crossing_cubics_order_does_not_depend_on_metrics`, `curve::test::crossing_cubics_metrics_record_the_recursion_depth`, `curve::test::curve_order_no_overlap` |
+
+Every change here updates this table and `SOURCE.json` in the same commit.
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
