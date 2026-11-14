@@ -91,18 +91,18 @@ relative references as the cell they reach from A1, macro names with their `func
 newer functions and LET parameters are left out, as in `.xlsx`, and so is the formula-less
 workbook-level built-in Excel writes beside a sheet's (`Database`), which formulas still spell
 `_xlnm.Database`, and the formula-less name of a VBA function a cell calls (`.xlsm` lists none; the
-cell spells it); a name whose formula can't be read is left out with a warning. A reference may name
-an XLM macro sheet (`Macro1!$A$1`, where macro names point), and a 3-D span is spelled by its ends
-whatever chart sheets lie between them. Its cell formulas are decoded from their tokens into the
-text an `.xlsx` file holds (`_xlfn.` and `_xlpm.` names as written, apart from the four ISO/IEC
-29500 functions `.xlsx` names bare, no implicit `@`, the spaces and line breaks typed in the
-formula, numbers as Excel spells them), with `FormulaKind::Shared` or `FormulaKind::Array` and their
-ranges, and `BrtCellMeta` as the cell metadata index. Every cell of a shared formula gets its own
-text, decoded at the cell, since the file keeps the tokens once. A formula whose decoding needs
-something the reader does not read keeps only its saved result, with a warning saying why: a defined
-name left out, table references, other workbooks, Python code stored outside the cell, data tables.
-The XLSB function table (`xlsb/ftab.rs`) and the expression printer are this crate's own, apart from
-`craft-xls`'s.
+cell spells it); a name whose formula can't be read is left out with a warning, and so is every name
+whose formula uses a left-out name. A reference may name an XLM macro sheet (`Macro1!$A$1`, where
+macro names point), and a 3-D span is spelled by its ends whatever chart sheets lie between them.
+Its cell formulas are decoded from their tokens into the text an `.xlsx` file holds (`_xlfn.` and
+`_xlpm.` names as written, apart from the four ISO/IEC 29500 functions `.xlsx` names bare, no
+implicit `@`, the spaces and line breaks typed in the formula, numbers as Excel spells them), with
+`FormulaKind::Shared` or `FormulaKind::Array` and their ranges, and `BrtCellMeta` as the cell
+metadata index. Every cell of a shared formula gets its own text, decoded at the cell, since the
+file keeps the tokens once. A formula whose decoding needs something the reader does not read keeps
+only its saved result, with a warning saying why: a defined name left out, table references, other
+workbooks, Python code stored outside the cell, data tables. The XLSB function table
+(`xlsb/ftab.rs`) and the expression printer are this crate's own, apart from `craft-xls`'s.
 
 ## Hostile input
 

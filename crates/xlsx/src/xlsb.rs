@@ -397,7 +397,10 @@ fn defined_names(
     budget: &Budget,
     warnings: &mut Warnings,
 ) -> Vec<DefinedName> {
-    let mut out = vec![];
+    // Each name's formula, and the names it uses. A name whose formula uses a name that is left
+    // out is left out too, whatever their order, so a cell using it keeps its saved result.
+    let mut omitted = vec![false; links.names.len()];
+    let mut kept = vec![];
     for p in pending {
         let Some(name) = links.names.get(p.index) else { continue };
         if name.future || formula::is_param(&name.text) {
@@ -409,6 +412,7 @@ fn defined_names(
                 Some(Some(i)) => Some(*i),
                 _ => {
                     warnings.warn("XLSB: some defined names were left out (names of sheets the reader skips)");
+                    omit(&mut omitted, p.index);
                     continue;
                 }
             },
@@ -421,17 +425,46 @@ fn defined_names(
             }
             continue;
         }
-        let formula = match formula::decode(&p.rgce, &p.rgcb, links, Mode::Name) {
+        let mut used = vec![];
+        let formula = match formula::decode_using(&p.rgce, &p.rgcb, links, Mode::Name, &mut used) {
             Ok(e) => expr::print(&e),
             Err(formula::Unsupported(why)) => {
                 warnings.warn(format!("XLSB: some defined names were left out ({why})"));
+                omit(&mut omitted, p.index);
                 continue;
             }
         };
         if !budget.try_formula_text(formula.len(), limits) {
             warnings.warn("XLSB: some defined names were left out (more formula text than the limits allow)");
+            omit(&mut omitted, p.index);
             continue;
         }
+        kept.push((p, local_sheet_id, formula, used));
+    }
+    // Who uses each name, then every name reached from a left-out one: once each, so a chain
+    // of any length costs what its uses do.
+    let mut users: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (k, (.., used)) in kept.iter().enumerate() {
+        for &u in used {
+            users.entry(u).or_default().push(k);
+        }
+    }
+    let mut queue: Vec<usize> = (0..omitted.len()).filter(|&i| omitted[i]).collect();
+    while let Some(i) = queue.pop() {
+        for &k in users.get(&i).map_or(&[][..], Vec::as_slice) {
+            let Some((p, ..)) = kept.get(k) else { continue };
+            if omit(&mut omitted, p.index) {
+                warnings.warn("XLSB: some defined names were left out (names using a name that was left out)");
+                queue.push(p.index);
+            }
+        }
+    }
+    let mut out = vec![];
+    for (p, local_sheet_id, formula, _) in kept {
+        if omitted.get(p.index).copied().unwrap_or(true) {
+            continue;
+        }
+        let Some(name) = links.names.get(p.index) else { continue };
         let mut attrs = vec![];
         let mut put = |k: &str, v: String| attrs.push((k.to_string(), v));
         // In `CT_DefinedName`'s order.
@@ -476,6 +509,11 @@ fn defined_names(
         }
     }
     out
+}
+
+/// Marks name `i` left out; whether it wasn't already.
+fn omit(omitted: &mut [bool], i: usize) -> bool {
+    omitted.get_mut(i).is_some_and(|o| !std::mem::replace(o, true))
 }
 
 /// A supporting link (`BrtSupSelf`, `BrtSupSame`, `BrtSupAddin`, `BrtSupBookSrc`), the sheet links

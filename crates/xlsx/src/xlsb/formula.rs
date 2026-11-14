@@ -338,6 +338,11 @@ fn reference(sheet: Option<SheetSel>, kind: RefKind) -> Expr {
 /// represented. A shared formula's tokens are decoded once for each of its cells
 /// (`Mode::Shared` with that cell), whose relative references are offsets from it.
 pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode) -> Result<Expr, Unsupported> {
+    decode_using(rgce, rgcb, links, mode, &mut Vec::new())
+}
+
+/// [`decode`], adding to `used` the 0-based index of every defined name the formula uses.
+pub(super) fn decode_using(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode, used: &mut Vec<usize>) -> Result<Expr, Unsupported> {
     if rgce.len() > MAX_RGCE {
         return Err(Unsupported("formula too long"));
     }
@@ -512,7 +517,9 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode) -> Res
             }
             0x23 => {
                 // PtgName: a 1-based index into every BrtName, hidden ones included.
-                let name = links.name(t.u32()?, mode)?;
+                let index = t.u32()?;
+                let name = links.name(index, mode)?;
+                used.extend(usize::try_from(index).ok().and_then(|i| i.checked_sub(1)));
                 push(&mut stack, kids, Expr::Name(name.text.clone()))?;
             }
             0x24 => {
@@ -553,6 +560,7 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode) -> Res
                 let index = t.u32()?;
                 links.this_book(ixti)?;
                 let name = links.name(index, mode)?;
+                used.extend(usize::try_from(index).ok().and_then(|i| i.checked_sub(1)));
                 let sheet = name.scope.and_then(|s| links.sheets.get(usize::try_from(s).ok()?).cloned().flatten());
                 let sheet = sheet.ok_or(Unsupported("names in other workbooks or on other sheets"))?;
                 push(&mut stack, kids, Expr::Name(format!("{sheet}!{}", name.text)))?;

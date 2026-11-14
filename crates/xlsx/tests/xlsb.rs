@@ -1280,3 +1280,25 @@ fn a_spent_formula_allowance_skips_decoding() {
     assert!(warned(&wb, "more formula text than the limits allow"), "{:?}", wb.warnings);
     assert!(!warned(&wb, "unknown formula token"), "{:?}", wb.warnings);
 }
+
+#[test]
+fn a_name_using_a_left_out_name_is_left_out_too() {
+    // 14 Early = Later (a later name), 15 Alias = External (left out: another workbook),
+    // 16 Later = Alias, 17 Fine = Rate. Early, Alias and Later are left out whatever their order,
+    // and cells using them keep their saved results; Fine is read.
+    let mut list = names();
+    for (text, index) in [("Early", 16u32), ("Alias", 3), ("Later", 15), ("Fine", 9)] {
+        list.push(brt_name(0, 0, WORKBOOK, text, &[&[0x23u8][..], &index.to_le_bytes()].concat(), None));
+    }
+    let cell = |i: u32| [&[0x23u8][..], &i.to_le_bytes()].concat();
+    let data =
+        [row(0), formula_cell(1, &cell(14), &[]), formula_cell(2, &cell(15), &[]), formula_cell(3, &cell(16), &[]), formula_cell(4, &cell(17), &[])]
+            .concat();
+    let bytes = package(&book_with_names(&list), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES);
+    let wb = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap();
+    let xml = NAMES_XML.replace("</definedNames>", r#"<definedName name="Fine">Rate</definedName></definedNames>"#);
+    assert_eq!(wb.defined_names, xml_names(&xml));
+    let book = read(&bytes).unwrap();
+    assert_eq!((1..=4).map(|c| book.sheets[0].formula(CellRef::new(0, c))).collect::<Vec<_>>(), [None, None, None, Some("Fine")]);
+    assert!(book.warnings.iter().any(|w| w.contains("names using a name that was left out")), "{:?}", book.warnings);
+}

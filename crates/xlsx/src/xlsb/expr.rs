@@ -283,6 +283,20 @@ fn write_args(s: &mut String, args: &[Expr], sep: char) {
     }
 }
 
+/// A function's name; a sheet-scoped one (`My Sheet!Fn`) is quoted as a sheet-qualified name is.
+/// Kept out of [`write_expr`], whose frame every nesting level of a formula repeats.
+#[inline(never)]
+fn push_function_name(s: &mut String, name: &str) {
+    match sheet_split(name) {
+        Some((sheet, name)) => {
+            s.push_str(&quote_sheet(sheet));
+            s.push('!');
+            s.push_str(name);
+        }
+        None => s.push_str(name),
+    }
+}
+
 fn write_expr(s: &mut String, e: &Expr) {
     match e {
         Expr::Number(n) => s.push_str(&number(*n)),
@@ -331,7 +345,7 @@ fn write_expr(s: &mut String, e: &Expr) {
             write_expr(s, b);
         }
         Expr::Call(name, args) => {
-            s.push_str(name);
+            push_function_name(s, name);
             s.push('(');
             write_args(s, args, ',');
             s.push(')');
@@ -376,5 +390,13 @@ mod tests {
         assert_eq!(number_to_text(1234567890.12345), "1234567890.12345");
         assert_eq!(number_to_text(1e100), "1E+100");
         assert!(number(f64::MAX).parse::<f64>().is_ok_and(f64::is_finite));
+    }
+
+    #[test]
+    fn a_sheet_scoped_function_name_is_quoted() {
+        let call = |name: &str| print(&Expr::Call(name.into(), vec![Expr::Number(1.0)]));
+        assert_eq!(call("My Sheet!Fn"), "'My Sheet'!Fn(1)");
+        assert_eq!(call("Data!Fn"), "Data!Fn(1)");
+        assert_eq!(call("SUM"), "SUM(1)");
     }
 }
