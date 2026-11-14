@@ -413,6 +413,21 @@ fn menu() {
 }
 
 #[test]
+fn predefined_quit_reports_a_qualified_path() {
+    let source = r#"
+use muda::PredefinedMenuItem as Item;
+fn menu() {
+    let a = <muda::PredefinedMenuItem>::quit(None);
+    let b = < PredefinedMenuItem >::quit(None);
+    let c = <Item>::quit(None);
+    let d = Vec::<PredefinedMenuItem>::quit(None);
+    let e = Wrapper<PredefinedMenuItem>::quit(None);
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/menu.rs", source)])), vec![4, 5, 6]);
+}
+
+#[test]
 fn std_instant_ignores_an_alias_that_only_a_native_cfg_imports() {
     let source = r#"
 #[cfg(not(target_arch = "wasm32"))]
@@ -471,6 +486,76 @@ fn unknown_os() { let t = std::time::Instant::now(); }
 use std::time::Instant as MacInstant;
 "#;
     assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![4, 13, 16, 19]);
+}
+
+#[test]
+fn std_instant_decodes_escapes_in_cfg_values() {
+    let source = r#"
+#[cfg(target_arch = "\x77asm32")]
+fn web() { let t = std::time::Instant::now(); }
+#[cfg(target_arch = "w\u{61}sm32")]
+fn web_two() { let t = std::time::Instant::now(); }
+#[cfg(target_arch = r"\x77asm32")]
+fn native() { let t = std::time::Instant::now(); }
+#[cfg(not(target_arch = "\q"))]
+fn unknown() { let t = std::time::Instant::now(); }
+#[cfg(target_os = "lin\
+    ux")]
+fn native_two() { let t = std::time::Instant::now(); }
+fn after() { let t = std::time::Instant::now(); }
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![3, 5, 9, 13]);
+}
+
+#[test]
+fn std_instant_reads_cfg_true_and_false() {
+    let source = r#"
+#[cfg(false)]
+fn disabled() { let t = std::time::Instant::now(); }
+#[cfg(true)]
+fn enabled() { let t = std::time::Instant::now(); }
+#[cfg(not(true))]
+fn never() { let t = std::time::Instant::now(); }
+#[cfg(r#false)]
+fn named_option() { let t = std::time::Instant::now(); }
+#[cfg(not(r#true))]
+fn other_option() { let t = std::time::Instant::now(); }
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![5, 9, 11]);
+}
+
+#[test]
+fn std_instant_checks_an_item_whose_cfg_is_nested_past_the_limit() {
+    let source = format!(
+        "#[cfg({}target_arch = \"wasm32\"{})]\nfn web() {{ let t = std::time::Instant::now(); }}\n#[cfg({}unix{})]\nfn native() {{ let t = std::time::Instant::now(); }}\n",
+        "any(".repeat(65),
+        ")".repeat(65),
+        "all(".repeat(10),
+        ")".repeat(10),
+    );
+    assert_eq!(lines(&std_instant([("src/clock.rs", source.as_str())])), vec![2]);
+}
+
+#[test]
+fn std_instant_checks_the_fields_after_a_native_cfg_function_pointer_field() {
+    let source = r#"
+struct S {
+    #[cfg(unix)]
+    callback: fn(),
+    clock: std::time::Instant,
+    #[cfg(unix)]
+    native: fn() -> std::time::Instant,
+    #[cfg(unix)]
+    pub(crate) boxed: Box<dyn Fn()>,
+    other: std::time::Instant,
+}
+fn run() {
+    #[cfg(unix)]
+    'outer: loop { let _a = std::time::Instant::now(); }
+    let t = std::time::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![5, 10, 15]);
 }
 
 #[test]
@@ -721,6 +806,12 @@ use std::time::{
 }
 
 #[test]
+fn std_instant_reads_a_use_after_a_precise_capturing_bound() {
+    let source = "fn clock() -> impl Fn() + use<> {\n    use std::{time::Instant};\n    || { let _ = Instant::now(); }\n}\n";
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![2]);
+}
+
+#[test]
 fn std_instant_does_not_count_brace_character_literals_as_braces() {
     let source = r#"
 #[cfg(unix)]
@@ -753,6 +844,23 @@ fn deeply_nested_use_groups_and_cfg_predicates_do_not_exhaust_the_stack() {
 
     let shallow = "use std::time::{{{Instant}}};\n";
     assert_eq!(lines(&std_instant([("src/shallow.rs", shallow)])), vec![1]);
+}
+
+#[test]
+fn a_long_use_path_shared_by_many_names_is_read_without_copying_it_to_each() {
+    // 10,000 path segments shared by 10,000 names, followed by a `use` the guard reports.
+    let names: Vec<String> = (0..10_000).map(|n| format!("x{n}")).collect();
+    let source = format!("use {}{{{}}};\nuse std::time::Instant;\n", "a::".repeat(10_000), names.join(", "));
+    assert_eq!(lines(&std_instant([("src/wide.rs", source.as_str())])), vec![2]);
+    assert!(predefined_quit([("src/wide.rs", source.as_str())]).is_empty());
+}
+
+#[test]
+fn a_long_name_shared_by_many_use_leaves_is_read_without_copying_it_to_each() {
+    // A 40,000-byte name shared by 10,000 leaves, followed by a `use` the guard reports.
+    let source = format!("use {}::{{{}}};\nuse std::time::Instant;\n", "n".repeat(40_000), ["self"; 10_000].join(", "));
+    assert_eq!(lines(&std_instant([("src/wide.rs", source.as_str())])), vec![2]);
+    assert!(predefined_quit([("src/wide.rs", source.as_str())]).is_empty());
 }
 
 fn finding_paths(findings: &[Finding]) -> Vec<&str> {
@@ -888,6 +996,39 @@ mod platform {
 }
 
 #[test]
+fn std_instant_finds_the_modules_of_a_path_attribute_file_next_to_it() {
+    let lib = r#"
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "platform/native.rs"]
+mod native;
+"#;
+    let clock = "use std::time::Instant;\n";
+    let files = [("src/lib.rs", lib), ("src/platform/native.rs", "mod clock;\n"), ("src/platform/clock.rs", clock), ("src/web.rs", clock)];
+    assert_eq!(finding_paths(&std_instant(files)), vec!["src/web.rs"]);
+}
+
+#[test]
+fn std_instant_resolves_a_file_loaded_both_plainly_and_by_path_attribute_once_for_each() {
+    // `platform.rs` is a web module, and a native-only `#[path]` declaration loads it again. Its
+    // `mod clock;` is `src/platform/clock.rs` for the first and `src/clock.rs` for the second.
+    let lib = "mod platform;\n#[cfg(unix)]\n#[path = \"platform.rs\"]\nmod native;\n";
+    let clock = "use std::time::Instant;\n";
+    let files = [("src/lib.rs", lib), ("src/platform.rs", "mod clock;\n"), ("src/platform/clock.rs", clock), ("src/clock.rs", clock)];
+    assert_eq!(finding_paths(&std_instant(files)), vec!["src/platform/clock.rs"]);
+}
+
+#[test]
+fn std_instant_checks_a_file_that_a_path_attribute_module_names_for_the_web_build() {
+    // The web module `entry.rs`, loaded through `#[path]`, names `src/clock.rs`, which a native-only
+    // module also names through `#[path]`.
+    let lib = "#[path = \"entry.rs\"]\nmod web;\n#[cfg(unix)]\nmod native;\n";
+    let clock = "use std::time::Instant;\n";
+    let files =
+        [("src/lib.rs", lib), ("src/entry.rs", "mod clock;\n"), ("src/native.rs", "#[path = \"clock.rs\"]\nmod clock;\n"), ("src/clock.rs", clock)];
+    assert_eq!(finding_paths(&std_instant(files)), vec!["src/clock.rs"]);
+}
+
+#[test]
 fn std_instant_checks_module_files_declared_deeper_than_its_nesting_limit() {
     let lib = format!("{}#[cfg(unix)]\nmod deep;\n{}", "mod m {\n".repeat(70), "}\n".repeat(70));
     let shallow_lib = format!("{}#[cfg(unix)]\nmod deep;\n{}", "mod m {\n".repeat(3), "}\n".repeat(3));
@@ -959,6 +1100,22 @@ fn wgsl_half_floats_use_the_f16_range() {
     let findings = wgsl_float_literals(shader);
     assert_eq!(lines(&findings), vec![2]);
     assert_eq!(findings[0].text, "70000.0");
+}
+
+#[test]
+fn wgsl_line_comments_end_and_lines_count_at_every_line_break() {
+    let shader = "// note\rconst A: f32 = 4e38;\r\nconst B: f32 = 5e38;\n// x\u{2028}const C: f32 = 6e38;\u{2029}const D: f32 = 7e38;\u{000B}// y\u{0085}const E: f32 = 8e38;\u{000C}const F: f32 = 9e38;";
+    let findings = wgsl_float_literals(shader);
+    assert_eq!(lines(&findings), vec![2, 3, 5, 6, 8, 9]);
+    assert_eq!(findings[0].text, "4e38");
+}
+
+#[test]
+fn wgsl_digits_inside_unicode_identifiers_are_not_literals() {
+    let shader = "const π1e39 = 1.0;\nconst é2e40: f32 = 2.0;\nconst A: f32 =\u{200E}1e39;\n";
+    let findings = wgsl_float_literals(shader);
+    assert_eq!(lines(&findings), vec![3]);
+    assert_eq!(findings[0].text, "1e39");
 }
 
 #[cfg(not(target_arch = "wasm32"))]
