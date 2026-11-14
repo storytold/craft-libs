@@ -18,9 +18,9 @@
 //! capture filters by its own level.
 //!
 //! A capture keeps at most [`MAX_RECORDS`] records and [`MAX_BYTES`] bytes of message and target
-//! text. Formatting a message stops once it passes [`MAX_BYTES`]. A record over either limit is
-//! dropped and counted, and the capture then returns [`CaptureError::Overflow`] with the number
-//! dropped instead of a partial list.
+//! text. Formatting a message stops at the first write that would take it past [`MAX_BYTES`]. A
+//! record over either limit is dropped and counted, and the capture then returns
+//! [`CaptureError::Overflow`] with the number dropped instead of a partial list.
 
 use std::cell::RefCell;
 use std::fmt;

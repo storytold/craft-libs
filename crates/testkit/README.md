@@ -32,7 +32,7 @@ The `log` feature adds `craft_testkit::log` and the `log` dependency. The module
 
 A capture raises `log::max_level()` to the level it asks for and never lowers it. When the closure panics, the capture on that thread ends and the panic continues. Records from other threads do not appear in a per-thread capture.
 
-A capture keeps at most `MAX_RECORDS` (4,096) records and `MAX_BYTES` (1 MiB) of message and target text. Formatting a message stops once it passes `MAX_BYTES`. A record over either limit is dropped and counted, and the capture returns `CaptureError::Overflow { dropped }` instead of a partial list. For `drain`, the limits apply to each interval between drains.
+A capture keeps at most `MAX_RECORDS` (4,096) records and `MAX_BYTES` (1 MiB) of message and target text. Formatting a message stops at the first write that would take it past `MAX_BYTES`. A record over either limit is dropped and counted, and the capture returns `CaptureError::Overflow { dropped }` instead of a partial list. For `drain`, the limits apply to each interval between drains.
 
 Run process-wide captures in a binary of their own, for example a `[[test]]` with `harness = false`:
 
