@@ -5,6 +5,11 @@ use super::{
 use crate::units::tw_i16;
 use std::sync::Arc;
 
+/// The longest custom number format kept, in characters. Longer patterns are dropped whole
+/// (never truncated into a modified original) — one policy shared by the DOCX reader and the
+/// `list.define` API.
+const MAX_CUSTOM_FORMAT: usize = craft_wordmodel::numbering::MAX_CUSTOM_FORMAT;
+
 /// Built-in style names Word stores in lower case, and how the UI shows them.
 pub(crate) const LOWER_NAMES: &[(&str, &str)] = &[
     ("caption", "Caption"),
@@ -310,8 +315,46 @@ impl Reader<'_> {
         if let Some(s) = l.child_val("w:start").and_then(u32_of) {
             lv.start = s;
         }
-        if let Some(f) = l.child_val("w:numFmt") {
-            lv.format = NumFormat::from_ooxml(f);
+        if let Some(nf) = l.child("w:numFmt") {
+            if let Some(f) = nf.attr("w:val") {
+                lv.format = NumFormat::from_ooxml(f);
+            }
+            // MS-OI29500 17.9.17: a custom pattern may ride directly on w:numFmt without the
+            // w14 AlternateContent wrapper (some generators write it that way; Word accepts it).
+            // An oversized pattern is dropped whole rather than truncated into a fake original.
+            if nf.attr("w:val") == Some("custom")
+                && let Some(p) = nf.attr("w:format").filter(|p| p.chars().count() <= MAX_CUSTOM_FORMAT)
+            {
+                lv.custom_format = Some(p.to_string());
+            }
+        }
+        // Word 2010 numbering extensions: the level's w:numFmt may live inside a markup-
+        // compatibility pair, where w:format rides on the w14 Choice's w:numFmt (MS-OI29500
+        // 17.9.17: it is ignored unless val="custom") and the Fallback's numFmt is what pre-2010
+        // readers show. The pair can sit in ANY AlternateContent block - other properties keep
+        // their own blocks ahead of it, so every block is examined. A Choice declaring a
+        // standard val is the ACTIVE format (Word honors it over the Fallback); we keep the
+        // Fallback as the degradation format for patterns we cannot render
+        // (doc numbering::custom_format_label). Saving flattens a standard-Choice pair to that
+        // active format, which still beats the pre-2010 fallback the old reader kept.
+        for ac in l.children("mc:AlternateContent") {
+            let choice = super::story::children_of_choice(ac).and_then(|b| b.child("w:numFmt"));
+            match choice.and_then(|f| f.attr("w:val")) {
+                Some("custom") => {
+                    if let Some(p) = choice.and_then(|f| f.attr("w:format")).filter(|p| p.chars().count() <= MAX_CUSTOM_FORMAT) {
+                        lv.custom_format = Some(p.to_string());
+                    }
+                    if let Some(fb) = ac.child("mc:Fallback").and_then(|x| x.child_val("w:numFmt")) {
+                        lv.format = NumFormat::from_ooxml(fb);
+                    }
+                }
+                Some(val) => lv.format = NumFormat::from_ooxml(val),
+                None => {
+                    if let Some(fb) = ac.child("mc:Fallback").and_then(|x| x.child_val("w:numFmt")) {
+                        lv.format = NumFormat::from_ooxml(fb);
+                    }
+                }
+            }
         }
         lv.text = l.child_val("w:lvlText").map(|t| t.chars().take(64).collect()).unwrap_or_default();
         if let Some(j) = l.child_val("w:lvlJc") {
