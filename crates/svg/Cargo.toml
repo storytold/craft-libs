@@ -22,10 +22,10 @@ vectorcraft-geom = { workspace = true }
 vectorcraft-pathops = { workspace = true }
 # The full SVG parser (Apache-2.0 OR MIT). The one version every Craft app uses: apps depend on
 # craft-svg's `tree` feature and take usvg from its re-export, never directly.
-usvg = { version = "=0.48.1", default-features = false, optional = true }
+usvg = { version = "=0.49.0", default-features = false, optional = true }
 # Rendering the parsed tree uses the matching renderer version. Keep it behind an opt-in feature
 # so callers that only need bounded SVG text/tree parsing do not pull in raster backends.
-resvg = { version = "=0.48.1", default-features = false, features = ["text", "raster-images"], optional = true }
+resvg = { version = "=0.49.0", default-features = false, features = ["text", "raster-images"], optional = true }
 
 [features]
 # `craft_svg::tree`: usvg behind the bounded entry point.
