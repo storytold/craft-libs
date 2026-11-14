@@ -2570,6 +2570,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-testkit"
+version = "0.1.0"
+
+[[package]]
 name = "craft-text"
 version = "0.1.0"
 dependencies = [

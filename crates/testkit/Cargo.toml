@@ -1,0 +1,12 @@
+[package]
+name = "craft-testkit"
+description = "Test support shared by the Craft apps and the craft-libs crates: deadlines for test bodies and waits. Test support only."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
