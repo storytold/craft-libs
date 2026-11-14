@@ -286,7 +286,8 @@ pub fn decode_wbmp(bytes: &[u8]) -> Result<(u32, u32, Vec<bool>), CodecError> {
 
 /// JPEG from 8-bit RGB (`rgb.len() == 3·w·h`): quality 1..=100, optional progressive scans and
 /// optimised Huffman tables (Save for Web's "Optimized"), optional ICC profile, density, EXIF and
-/// XMP. EXIF that doesn't fit in one segment is left out (see [`jpeg_exif_fits`]).
+/// XMP. EXIF that doesn't fit in one segment is left out (see [`jpeg_exif_fits`]); XMP that
+/// doesn't fit loses its layered-document properties, else is left out too (see [`jpeg_xmp_fits`]).
 #[allow(clippy::too_many_arguments)]
 pub fn encode_jpeg_rgb8(
     width: u32,
@@ -326,11 +327,10 @@ pub fn encode_jpeg_rgb8(
     if let Some(seg) = exif.and_then(|x| crate::codecs::jpeg::exif_segment(x, ppi)) {
         enc.add_app_segment(1, &seg).map_err(e)?;
     }
-    if let Some(x) = xmp {
-        // Its `tiff:` resolution, if any, says what the JFIF density says (#1691).
-        let x = crate::resolution::export_xmp(x, ppi);
-        let mut seg = b"http://ns.adobe.com/xap/1.0/\0".to_vec();
-        seg.extend_from_slice(x.as_bytes());
+    // Its `tiff:` resolution, if any, says what the JFIF density says. A packet past one segment
+    // loses its layered-document properties, else is left out, as the other JPEG paths do; see
+    // [`jpeg_xmp_fits`].
+    if let Some(seg) = xmp.and_then(|x| crate::codecs::jpeg::xmp_segment(x, ppi)) {
         enc.add_app_segment(1, &seg).map_err(e)?;
     }
     if let Some(icc) = icc {
@@ -345,6 +345,12 @@ pub fn jpeg_exif_fits(exif: &[u8], dpi: Option<f32>) -> bool {
     crate::codecs::jpeg::exif_segment(exif, dpi.filter(|d| *d >= 1.0).map(|d| (d, d))).is_some()
 }
 
+/// Whether [`encode_jpeg_rgb8`] writes `xmp` at `dpi`: it must fit in one APP1 segment, if need
+/// be without its layered-document properties.
+pub fn jpeg_xmp_fits(xmp: &str, dpi: Option<f32>) -> bool {
+    crate::codecs::jpeg::xmp_segment(xmp, dpi.filter(|d| *d >= 1.0).map(|d| (d, d))).is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,6 +359,27 @@ mod tests {
         let img = crate::decode(bytes).unwrap();
         let (w, h) = img.dimensions();
         (w, h, img.convert(crate::ChannelLayout::Rgba, crate::SampleType::U8).data().to_vec())
+    }
+
+    /// XMP past one APP1 segment loses its layered-document properties, and a packet still too
+    /// large is left out; the JPEG is written either way.
+    #[test]
+    fn web_jpeg_oversized_xmp_is_trimmed_or_left_out() {
+        let rgb = vec![100u8; 8 * 8 * 3];
+        let ancestors = format!(
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:Description dc:title=\"kept\"><photoshop:DocumentAncestors>{}</photoshop:DocumentAncestors></rdf:Description></x:xmpmeta>",
+            "<rdf:li>id</rdf:li>".repeat(5_000)
+        );
+        assert!(ancestors.len() > 70_000);
+        assert!(jpeg_xmp_fits(&ancestors, Some(72.0)), "trimmed, it fits");
+        let out = encode_jpeg_rgb8(8, 8, &rgb, 80, false, false, None, Some(72.0), None, Some(&ancestors)).unwrap();
+        let xmp = crate::decode(&out).unwrap().meta.xmp.unwrap_or_default();
+        assert!(xmp.contains("dc:title=\"kept\"") && !xmp.contains("DocumentAncestors"), "{xmp}");
+        let big = format!("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><!-- {} --></x:xmpmeta>", "x".repeat(70_000));
+        assert!(!jpeg_xmp_fits(&big, Some(72.0)));
+        let out = encode_jpeg_rgb8(8, 8, &rgb, 80, false, false, None, Some(72.0), None, Some(&big)).unwrap();
+        let img = crate::decode(&out).unwrap();
+        assert_eq!((img.dimensions(), img.meta.xmp), ((8, 8), None), "written without the XMP");
     }
 
     fn pattern(w: usize, h: usize, n: usize) -> Vec<u8> {
