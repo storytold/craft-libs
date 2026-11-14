@@ -1128,6 +1128,63 @@ fn iloc_resolved_extents_still_obey_bounds_and_budget() {
     }
 }
 
+/// A file whose MAX_SCANNED `Exif` items each name one 64 KiB region 257 times: every item is
+/// too large, and finding that out copies nothing, for [`scan`] (all 1,024 gathers) and for
+/// [`read`] (its MAX_CANDIDATES). Before, each gather copied MAX_ITEM bytes before giving up,
+/// about 16 GiB for the scan of a 2 MiB file.
+#[test]
+fn too_large_items_are_refused_before_copying() {
+    const REGION: u32 = 64 << 10;
+    const REPEATS: u16 = 257;
+    let count = MAX_SCANNED as u16;
+    let mut iinf = count.to_be_bytes().to_vec();
+    for id in 1..=count {
+        let mut e = vec![2u8, 0, 0, 0];
+        e.extend_from_slice(&id.to_be_bytes());
+        e.extend_from_slice(&[0, 0]);
+        e.extend_from_slice(b"Exif\0");
+        iinf.extend(bx(b"infe", &e));
+    }
+    let iloc = |region_at: u32| {
+        let mut l = vec![0x44, 0x00];
+        l.extend_from_slice(&count.to_be_bytes());
+        for id in 1..=count {
+            l.extend_from_slice(&id.to_be_bytes());
+            l.extend_from_slice(&[0, 0, 0, 0]); // method 0, this file
+            l.extend_from_slice(&REPEATS.to_be_bytes());
+            for _ in 0..REPEATS {
+                l.extend_from_slice(&region_at.to_be_bytes());
+                l.extend_from_slice(&REGION.to_be_bytes());
+            }
+        }
+        full_box(b"iloc", 1, &l)
+    };
+    let ftyp = bx(b"ftyp", b"heic\0\0\0\0mif1heic");
+    let meta = |region_at| full_box(b"meta", 0, &[full_box(b"iinf", 0, &iinf), iloc(region_at)].concat());
+    let region_at = (ftyp.len() + meta(0).len() + 8) as u32;
+    let f = [ftyp, meta(region_at), bx(b"mdat", &vec![0; REGION as usize])].concat();
+
+    COPIED.with(|c| c.set(0));
+    let s = scan(&f).unwrap();
+    assert!(s.complete());
+    let found: Vec<Item> = s.collect();
+    assert_eq!(found.len(), MAX_SCANNED);
+    assert!(found.iter().all(|it| it.data == Err(Unreadable::TooLarge)));
+    assert_eq!(COPIED.with(std::cell::Cell::get), 0, "scan copied bytes of items it refused");
+
+    COPIED.with(|c| c.set(0));
+    assert_eq!(read(&f).unwrap(), (None, None));
+    assert_eq!(COPIED.with(std::cell::Cell::get), 0, "read copied bytes of items it refused");
+
+    // an item that fits is copied once, extent by extent
+    let mut h = Heif::new().item(2, b"Exif", exif_item(&[], &SWEEP_TIFF), Store::Idat, 3);
+    h.iloc = (1, [4, 4, 4, 0]);
+    let f = h.build();
+    COPIED.with(|c| c.set(0));
+    assert_eq!(sure(&f), Some(vec![(2, Kind::Exif, exif_item(&[], &SWEEP_TIFF))]));
+    assert_eq!(COPIED.with(std::cell::Cell::get), SWEEP_TIFF.len() + 4);
+}
+
 /// `iloc` is walked once, however many metadata items there are to place (one walk per item
 /// took over a second on a 48 MB `iloc` with 64 items).
 #[test]

@@ -589,7 +589,9 @@ impl<'a> Iloc<'a> {
     }
 
     /// An item's bytes, its extents in order from the file (construction method 0) or from the
-    /// `meta` box's `idat` (method 1), at most `limit` of them.
+    /// `meta` box's `idat` (method 1), at most `limit` of them. Every extent is checked and the
+    /// lengths summed before anything is copied, so an item that is too large (say, the same
+    /// region named by thousands of extents) costs no copying.
     fn gather(&self, file: &[u8], idat: Option<&[u8]>, place: &Place, limit: usize) -> Gathered {
         // data reference 0 is this file
         let source = match (place.data_reference, place.method, idat) {
@@ -597,14 +599,25 @@ impl<'a> Iloc<'a> {
             (0, 1, Some(idat)) => idat,
             _ => return Gathered::Unreadable,
         };
-        let mut out = Vec::new();
-        let mut at = place.extents_at;
-        for _ in 0..place.extents {
-            let Some((piece, next)) = self.extent(source, place.base, at) else { return Gathered::Unreadable };
-            at = next;
-            if out.len().saturating_add(piece.len()) > limit {
+        let pieces = || {
+            let mut at = place.extents_at;
+            (0..place.extents).map(move |_| {
+                let (piece, next) = self.extent(source, place.base, at)?;
+                at = next;
+                Some(piece)
+            })
+        };
+        let mut total = 0usize;
+        for piece in pieces() {
+            let Some(piece) = piece else { return Gathered::Unreadable };
+            total = total.saturating_add(piece.len());
+            if total > limit {
                 return Gathered::TooLarge;
             }
+        }
+        let mut out = Vec::with_capacity(total);
+        for piece in pieces().flatten() {
+            bytes_copied(piece.len());
             out.extend_from_slice(piece);
         }
         Gathered::Bytes(out)
@@ -633,6 +646,18 @@ thread_local! {
 fn iloc_entry_visited() {
     #[cfg(test)]
     ILOC_ENTRIES.with(|n| n.set(n.get().saturating_add(1)));
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Item bytes copied on this thread, for the tests that bound the work.
+    static COPIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg_attr(not(test), allow(unused_variables))]
+fn bytes_copied(n: usize) {
+    #[cfg(test)]
+    COPIED.with(|c| c.set(c.get().saturating_add(n)));
 }
 
 /// A big-endian unsigned field of `size` bytes (0 reads as 0).
