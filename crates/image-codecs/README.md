@@ -304,6 +304,8 @@ also passed to the underlying decoders. A violation returns `CodecError::LimitEx
 defaults are 262144 px per side, 2^30 pixels and 8 GiB (2 GiB on 32-bit targets such as wasm).
 PNG also bounds the aggregate decoded text and XMP (UTF-8 keywords and values) by `max_alloc`,
 including chunks after IDAT. This budget is separate from pixels, not a total process-memory cap.
+PNG `cICP` and `cLLI` values are retained as image color metadata. `encode_png_pq` writes linear-light
+Rec. 2020 RGB as 16-bit BT.2100 PQ, with measured content-light levels and the required chunks.
 
 ## Tests
 

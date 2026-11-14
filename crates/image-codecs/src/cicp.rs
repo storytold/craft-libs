@@ -27,6 +27,8 @@ impl Cicp {
     pub const TRANSFER_PQ: u16 = 16;
     /// ARIB STD-B67 / BT.2100 hybrid log-gamma.
     pub const TRANSFER_HLG: u16 = 18;
+    /// Linear light.
+    pub const TRANSFER_LINEAR: u16 = 8;
 
     /// PQ or HLG: samples that [`linearize`] decodes to linear light.
     pub fn is_hdr(self) -> bool {
@@ -40,6 +42,15 @@ pub const REFERENCE_WHITE_NITS: f32 = 203.0;
 pub const HLG_PEAK_NITS: f32 = 1000.0;
 /// PQ's absolute peak.
 pub const PQ_PEAK_NITS: f32 = 10_000.0;
+
+/// HDR content light levels in the units used by PNG `cLLI` (0.0001 cd/m² per unit).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContentLightLevel {
+    /// Maximum content light level in 0.0001 cd/m² units.
+    pub max_content_light_level: u32,
+    /// Maximum frame-average light level in 0.0001 cd/m² units.
+    pub max_frame_average_light_level: u32,
+}
 
 /// BT.2100 HLG inverse OETF: non-linear signal `E'` (0..1) to normalised scene light `E` (0..1).
 pub fn hlg_inverse_oetf(e: f32) -> f32 {
@@ -74,6 +85,18 @@ pub fn pq_to_linear(e: f32) -> f32 {
     y * PQ_PEAK_NITS / REFERENCE_WHITE_NITS
 }
 
+/// BT.2100 PQ signal for linear light relative to [`REFERENCE_WHITE_NITS`].
+pub fn linear_to_pq(linear: f32) -> f32 {
+    const M1: f32 = 2610.0 / 16384.0;
+    const M2: f32 = 2523.0 / 4096.0 * 128.0;
+    const C1: f32 = 3424.0 / 4096.0;
+    const C2: f32 = 2413.0 / 4096.0 * 32.0;
+    const C3: f32 = 2392.0 / 4096.0 * 32.0;
+    let nits = if linear.is_finite() { linear.max(0.0) * REFERENCE_WHITE_NITS } else { 0.0 };
+    let y = (nits / PQ_PEAK_NITS).clamp(0.0, 1.0).powf(M1);
+    ((C1 + C2 * y) / (1.0 + C3 * y)).powf(M2)
+}
+
 /// Relative luminance weights of the RGB primaries `code` (BT.2020's for anything else, the
 /// space BT.2100 defines HLG in).
 fn luma_weights(code: u16) -> [f32; 3] {
@@ -104,7 +127,8 @@ pub fn linearize(img: Image, cicp: Cicp) -> Result<Image, CodecError> {
     let mut out = Image::from_raw(w, h, layout, SampleType::F32, v.iter().flat_map(|x| x.to_ne_bytes()).collect())?;
     out.meta = img.meta;
     out.warnings = img.warnings;
-    out.cicp = Some(cicp);
+    // CICP describes the samples, not their source encoding. These samples are now linear.
+    out.cicp = Some(Cicp { transfer: Cicp::TRANSFER_LINEAR, matrix: 0, full_range: true, ..cicp });
     Ok(out)
 }
 
@@ -156,7 +180,10 @@ mod tests {
         assert!(close(pq_to_linear(1.0), 10_000.0 / 203.0, 0.05));
         // 203 cd/m² is PQ signal ≈ 0.5807 (BT.2408).
         assert!(close(pq_to_linear(0.5807), 1.0, 0.005), "{}", pq_to_linear(0.5807));
+        assert!(close(linear_to_pq(1.0), 0.5807, 0.0001));
+        assert!(close(pq_to_linear(linear_to_pq(4.0)), 4.0, 0.001));
         assert!(pq_to_linear(f32::NAN).is_finite());
+        assert!(linear_to_pq(f32::NAN).is_finite());
     }
 
     #[test]
@@ -167,7 +194,15 @@ mod tests {
             .unwrap()
             .with_icc(Some(b"encoded-profile".to_vec()));
         let out = linearize(img, hlg).unwrap();
-        assert_eq!((out.sample_type(), out.layout(), out.icc.as_deref(), out.cicp), (SampleType::F32, ChannelLayout::Rgba, None, Some(hlg)));
+        assert_eq!(
+            (out.sample_type(), out.layout(), out.icc.as_deref(), out.cicp),
+            (
+                SampleType::F32,
+                ChannelLayout::Rgba,
+                None,
+                Some(Cicp { primaries: hlg.primaries, transfer: Cicp::TRANSFER_LINEAR, matrix: 0, full_range: true })
+            )
+        );
         let v = out.to_normalized();
         assert!(v[..3].iter().all(|&x| close(x, 1.0, 0.005)), "{v:?}");
         assert!(close(v[3], 1.0, 1e-6) && v[4..7] == [0.0; 3] && close(v[7], 0.5, 1e-3), "{v:?}");

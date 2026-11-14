@@ -32,11 +32,12 @@ pub mod source_settings;
 pub mod web;
 pub use crate::allocation::probe_allocation_size;
 pub use crate::cicp::Cicp;
+pub use crate::cicp::ContentLightLevel;
 pub use crate::codecs::exr_cryptomatte::{cryptomatte_id, cryptomatte_key, cryptomatte_preview_color};
 pub use crate::codecs::gif_frames::{AnimationFrame, MAX_GIF_FRAMES};
 pub use crate::codecs::png::{
-    PngDecodeRows, PngExtras, PngHeader, PngPalette, PngRowSink, PngRows, SharedBytes, encode_indexed as encode_png_indexed, palette as png_palette,
-    stereo as png_stereo,
+    PngDecodeRows, PngExtras, PngHeader, PngPalette, PngRowSink, PngRows, SharedBytes, encode_indexed as encode_png_indexed,
+    encode_pq as encode_png_pq, palette as png_palette, stereo as png_stereo,
 };
 pub use crate::codecs::tiff::{
     PhotoshopTags as TiffPhotoshopTags, TiffBands, photoshop_tags as tiff_photoshop_tags, writes_little_endian as tiff_writes_little_endian,
