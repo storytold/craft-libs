@@ -1,6 +1,6 @@
 //! The internal triangle mesh.
 
-use glam::{Vec2, Vec3, Vec4};
+use glam::{DVec3, Vec2, Vec3, Vec4};
 
 use crate::{Limits, MeshOpsError, Result, check_limit, reserved, try_filled, try_vec};
 
@@ -285,24 +285,24 @@ impl Mesh {
         Ok(())
     }
 
-    /// The normals [`Mesh::compute_normals`] stores.
+    /// The normals [`Mesh::compute_normals`] stores. The face products are summed in `f64`, where
+    /// the cross product of any two `f32` edges neither overflows nor rounds to zero, so a small
+    /// face far from the origin keeps its normal.
     pub(crate) fn smooth_normals(&self) -> Result<Vec<Vec3>> {
-        let scale = safe_divisor(largest_abs(self.positions.iter().flat_map(|p| p.to_array())));
-        let mut normals = try_filled(self.positions.len(), Vec3::ZERO, "normals")?;
+        let mut sums = try_filled(self.positions.len(), DVec3::ZERO, "normals")?;
         for &[a, b, c] in self.indices.as_chunks::<3>().0 {
             let (a, b, c) = (a as usize, b as usize, c as usize);
             let (Some(pa), Some(pb), Some(pc)) = (self.positions.get(a), self.positions.get(b), self.positions.get(c)) else { continue };
-            let (pa, pb, pc) = (*pa / scale, *pb / scale, *pc / scale);
+            let (pa, pb, pc) = (pa.as_dvec3(), pb.as_dvec3(), pc.as_dvec3());
             let face = (pb - pa).cross(pc - pa);
             for v in [a, b, c] {
-                if let Some(x) = normals.get_mut(v) {
+                if let Some(x) = sums.get_mut(v) {
                     *x += face;
                 }
             }
         }
-        for v in &mut normals {
-            *v = unit(*v).unwrap_or(Vec3::Y);
-        }
+        let mut normals = try_vec(sums.len(), "normals")?;
+        normals.extend(sums.into_iter().map(|v| v.try_normalize().map_or(Vec3::Y, |n| n.as_vec3())));
         Ok(normals)
     }
 
@@ -1500,6 +1500,22 @@ mod tests {
             for t in &t {
                 assert!((Vec4::from_array(*t) - expected).length() < 1e-3, "{length} {size}: {t:?}");
             }
+        }
+    }
+
+    #[test]
+    fn a_small_triangle_far_from_the_origin_keeps_its_normal_and_tangent() {
+        // Unit edges along y and z at x = 1e24: divided by 1e24, their cross product underflows.
+        let positions = [[1e24, 0.0, 0.0], [1e24, 1.0, 0.0], [1e24, 0.0, 1.0]];
+        let l = Limits::default();
+        for n in crate::smooth_normals(&positions, &[0, 1, 2], &l).unwrap() {
+            assert_eq!(n, [1.0, 0.0, 0.0]);
+        }
+        // u grows along +y and v along +z: the bitangent points up the image, along -z, and
+        // cross(+x, +y) = +z, so w is -1.
+        let uvs = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+        for t in crate::tangents(&positions, &[[1.0, 0.0, 0.0]; 3], &uvs, &[0, 1, 2], &l).unwrap() {
+            assert!((Vec4::from_array(t) - Vec4::new(0.0, 1.0, 0.0, -1.0)).length() < 1e-5, "{t:?}");
         }
     }
 

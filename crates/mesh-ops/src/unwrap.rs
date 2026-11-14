@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use glam::{DVec2, Vec2, Vec3};
+use glam::{DVec2, DVec3, Vec2, Vec3};
 
 use crate::{Mesh, MeshOpsError, Result, reserved, try_filled, try_vec};
 
@@ -66,9 +66,12 @@ pub fn all_triangles_degenerate(mesh: &Mesh) -> bool {
 
 struct Chart {
     material: usize,
+    /// The seed face's first corner: projections are taken relative to it, in `f64`, so they
+    /// keep the chart's own detail wherever the chart lies.
+    origin: DVec3,
     /// Projection basis (right-handed with the seed normal).
-    t: Vec3,
-    b: Vec3,
+    t: DVec3,
+    b: DVec3,
     /// Rotation to the chart's principal axes (cos, sin).
     rot: Vec2,
     lo: Vec2,
@@ -79,7 +82,8 @@ struct Chart {
 
 impl Chart {
     fn local(&self, p: Vec3) -> Vec2 {
-        let q = Vec2::new(p.dot(self.t), p.dot(self.b));
+        let d = p.as_dvec3() - self.origin;
+        let q = Vec2::new(d.dot(self.t) as f32, d.dot(self.b) as f32);
         Vec2::new(q.x * self.rot.x - q.y * self.rot.y, q.x * self.rot.y + q.y * self.rot.x)
     }
     fn size(&self) -> Vec2 {
@@ -119,14 +123,14 @@ impl Overlap {
     fn new(n: usize, corners: impl Fn(usize) -> [Vec3; 3]) -> Result<Overlap> {
         let mut longest = try_vec(n, "UV charts")?;
         for t in 0..n {
-            let [a, b, c] = corners(t);
+            let [a, b, c] = corners(t).map(|p| p.as_dvec3());
             let l = (b - a).length().max((c - b).length()).max((a - c).length());
             if l > 0.0 && l.is_finite() {
                 longest.push(l);
             }
         }
         let middle = longest.len() / 2;
-        let cell = if longest.is_empty() { 1.0 } else { f64::from(*longest.select_nth_unstable_by(middle, f32::total_cmp).1) };
+        let cell = if longest.is_empty() { 1.0 } else { *longest.select_nth_unstable_by(middle, f64::total_cmp).1 };
         Ok(Overlap {
             cell,
             grid: HashMap::new(),
@@ -301,14 +305,16 @@ pub(crate) fn unwrap_core(mesh: &mut Mesh, padding_texels: f32, resolution: u32,
     let pos = |v: usize| original(v) / divisor;
     let wid = |v: usize| weld.get(v).copied().unwrap_or(u32::MAX);
 
-    // Face normals (None for degenerate faces) and materials.
+    // Face normals (None for degenerate faces) and materials. The cross products are taken in
+    // `f64` from the positions as given, where they neither overflow nor round to zero, so a
+    // small face far from the origin keeps its plane.
     let mut normal: Vec<Option<Vec3>> = try_vec(n, "UV charts")?;
     let mut area = try_vec(n, "UV charts")?;
     for t in 0..n {
-        let [a, b, c] = mesh.tri(t).unwrap_or([0; 3]);
-        let cr = (pos(b) - pos(a)).cross(pos(c) - pos(a));
+        let [a, b, c] = mesh.tri(t).unwrap_or([0; 3]).map(|v| original(v).as_dvec3());
+        let cr = (b - a).cross(c - a);
         area.push(cr.length() * 0.5);
-        normal.push(cr.try_normalize());
+        normal.push(cr.try_normalize().map(|n| n.as_vec3()));
     }
     let mut material = try_filled(n, 0usize, "UV charts")?;
     for s in &mesh.submeshes {
@@ -358,9 +364,11 @@ pub(crate) fn unwrap_core(mesh: &mut Mesh, padding_texels: f32, resolution: u32,
             if let (Some(ch), Some(acc)) = (charts.get(c), cov.get_mut(c)) {
                 let q = ch.local(pos(v));
                 acc.0 += q;
-                acc.1[0] += (q.x * q.x) as f64;
-                acc.1[1] += (q.y * q.y) as f64;
-                acc.1[2] += (q.x * q.y) as f64;
+                // Products in f64: in f32 those of a very small chart round to zero.
+                let (x, y) = (f64::from(q.x), f64::from(q.y));
+                acc.1[0] += x * x;
+                acc.1[1] += y * y;
+                acc.1[2] += x * y;
                 acc.2 += 1;
             }
         }
@@ -461,7 +469,7 @@ pub(crate) fn unwrap_core(mesh: &mut Mesh, padding_texels: f32, resolution: u32,
 /// material, and the faces on each manifold edge (edge → face, face, count).
 struct Faces<'a> {
     normal: &'a [Option<Vec3>],
-    area: &'a [f32],
+    area: &'a [f64],
     material: &'a [usize],
     edges: &'a HashMap<(u32, u32), (u32, u32, u8)>,
 }
@@ -488,15 +496,15 @@ fn grow_charts(faces: &Faces, tri_edges: impl Fn(usize) -> [(u32, u32); 3], corn
         let t = sn.any_orthonormal_vector();
         let b = sn.cross(t);
         let material = faces.material[seed];
+        // Relative to the seed's first corner, so the rounding of a projection follows the
+        // chart's size rather than its distance from the origin.
+        let (origin, t, b) = (corners(seed)[0].as_dvec3(), t.as_dvec3(), b.as_dvec3());
         reserved(charts.try_reserve(1), "UV charts")?;
-        charts.push(Chart { material, t, b, rot: Vec2::X, lo: Vec2::ZERO, hi: Vec2::ZERO, offset: Vec2::ZERO });
+        charts.push(Chart { material, origin, t, b, rot: Vec2::X, lo: Vec2::ZERO, hi: Vec2::ZERO, offset: Vec2::ZERO });
         // A face joins only when its projection onto the chart's plane does not overlap the
         // faces already in it: a surface that winds around past a full turn stays within the
         // normal cone and would otherwise cover the same texels twice.
-        // Relative to the seed's first corner, so the rounding of a projection follows the
-        // chart's size rather than its distance from the origin.
-        let (origin, td, bd) = (corners(seed)[0].as_dvec3(), t.as_dvec3(), b.as_dvec3());
-        let project = |f: usize| corners(f).map(|p| DVec2::new((p.as_dvec3() - origin).dot(td), (p.as_dvec3() - origin).dot(bd)));
+        let project = |f: usize| corners(f).map(|p| DVec2::new((p.as_dvec3() - origin).dot(t), (p.as_dvec3() - origin).dot(b)));
         overlap.start_chart();
         overlap.add(seed, project(seed))?;
         chart_of[seed] = id;
@@ -843,6 +851,16 @@ mod tests {
         // 2 × 64 × 64 triangles of a flat grid touch along edges and at corners only.
         let mut plane = primitives::plane(1.0, 64);
         assert_eq!(auto_unwrap(&mut plane, 4.0, 1024).unwrap(), 1);
+    }
+
+    #[test]
+    fn a_small_triangle_far_from_the_origin_unwraps_in_its_own_plane() {
+        // Unit edges along y and z at x = 1e24: divided by 1e24, their cross product underflows.
+        let out =
+            crate::unwrap_uvs(&[[1e24, 0.0, 0.0], [1e24, 1.0, 0.0], [1e24, 0.0, 1.0]], &[0, 1, 2], 4.0, 256, &crate::Limits::default()).unwrap();
+        let [a, b, c] = [0, 1, 2].map(|k| Vec2::from_array(out.uvs[out.indices[k] as usize]));
+        let area = (b - a).perp_dot(c - a).abs() * 0.5;
+        assert!(area > 0.1, "UV area {area}: {:?}", out.uvs);
     }
 
     #[test]
