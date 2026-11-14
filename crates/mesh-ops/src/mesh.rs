@@ -107,9 +107,10 @@ fn submesh_range(s: &SubMesh, len: usize) -> Option<std::ops::Range<usize>> {
     (s.start.is_multiple_of(3) && s.count.is_multiple_of(3) && end <= len as u64).then_some(s.start as usize..end as usize)
 }
 
-/// Whether an array of `len` entries has one per vertex of a mesh with `n` vertices.
+/// Whether an array of `len` entries has one per vertex of a mesh with `n` vertices. A mesh
+/// without vertices has no attributes to pass on to a mesh it is appended to.
 fn per_vertex(len: usize, n: usize) -> bool {
-    len == n
+    n > 0 && len == n
 }
 
 /// A copy of `from` in a reserved array, or `OutOfMemory` naming `what`.
@@ -1384,6 +1385,16 @@ mod tests {
         c.tangents.clear();
         c.append(&bare);
         assert_eq!((c.positions.len(), c.normals.len(), c.uvs.len(), c.tangents.len()), (8, 8, 8, 0));
+        // An empty mesh has no attributes to pass on: appending it to a mesh without tangents
+        // leaves the mesh as it was, and the other way round the result has no tangents either.
+        let mut d = quad();
+        d.tangents.clear();
+        let before = d.clone();
+        d.append(&Mesh::default());
+        assert_eq!(d, before);
+        let mut e = Mesh::default();
+        e.append(&before);
+        assert_eq!((e.positions.len(), e.normals.len(), e.uvs.len(), e.tangents.len()), (4, 4, 4, 0));
         // An index past the other mesh's vertices would point into this one after rebasing.
         let mut broken = quad();
         broken.indices[0] = 4;
