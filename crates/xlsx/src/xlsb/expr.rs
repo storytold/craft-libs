@@ -120,6 +120,9 @@ pub(crate) enum Expr {
     Ref(Reference),
     /// A defined name.
     Name(String),
+    /// Spaces and line breaks typed before and after an expression (`PtgAttrSpace`), which
+    /// `.xlsx` formula text keeps.
+    Spaced(String, Box<Expr>, String),
     Unary(UnOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Call(String, Vec<Expr>),
@@ -195,23 +198,33 @@ fn sci_text(n: f64, sig: usize) -> String {
     format!("{}E{}{:02}", mant, if e < 0 { '-' } else { '+' }, e.abs())
 }
 
-/// A number as a formula spells it: up to 15 significant digits, scientific for very large or
-/// very small magnitudes.
+/// A number as Excel spells it in a formula: rounded to 15 significant digits, written out in
+/// full (`100000000000000000000`, `0.0000000000000000001`) when that takes at most 21 characters
+/// without the sign, and scientific (`1E+21`, `1.5E-19`, `1.23456789012345E-06`) when it would
+/// take more.
 pub(crate) fn number_to_text(n: f64) -> String {
     if n == 0.0 || !n.is_finite() {
         return "0".into();
     }
-    let a = n.abs();
-    if !(1e-9..1e15).contains(&a) && a.round() != a || a >= 1e15 {
+    let s = format!("{:.14e}", n.abs());
+    let Some((mant, exp)) = s.split_once('e') else { return s };
+    let Ok(e) = exp.parse::<i32>() else { return s };
+    let digits: String = mant.chars().filter(char::is_ascii_digit).collect();
+    let digits = digits.trim_end_matches('0');
+    let digits = if digits.is_empty() { "0" } else { digits };
+    let k = digits.len() as i32;
+    let plain_len = if e >= 0 { (e + 1).max(k + i32::from(k > e + 1)) } else { 1 - e + k };
+    if plain_len > 21 {
         return sci_text(n, 15);
     }
-    // A value just below 1e15 can round up to 1e15 at 15 significant digits.
-    if format!("{a:.14e}").parse::<f64>().is_ok_and(|r| r >= 1e15) {
-        return sci_text(n, 15);
-    }
-    let mag = a.log10().floor() as i32;
-    let decimals = (14 - mag).clamp(0, 30) as usize;
-    trim_decimal(&format!("{n:.decimals$}"))
+    let sign = if n < 0.0 { "-" } else { "" };
+    let plain = if e >= 0 {
+        let int = (e + 1) as usize;
+        if digits.len() <= int { format!("{digits}{}", "0".repeat(int - digits.len())) } else { format!("{}.{}", &digits[..int], &digits[int..]) }
+    } else {
+        format!("0.{}{digits}", "0".repeat((-e - 1) as usize))
+    };
+    format!("{sign}{plain}")
 }
 
 fn number(n: f64) -> String {
@@ -248,11 +261,14 @@ fn sheet_split(n: &str) -> Option<(&str, &str)> {
     at.and_then(|i| Some((n.get(..i)?, n.get(i + 1..)?)))
 }
 
-/// Prints an expression in A1 notation.
+/// Prints an expression in A1 notation, trimmed as the `.xlsx` reader trims formula text.
 pub(crate) fn print(e: &Expr) -> String {
     let mut s = String::new();
     write_expr(&mut s, e);
-    s
+    match s.trim() {
+        t if t.len() == s.len() => s,
+        t => t.to_string(),
+    }
 }
 
 fn write_args(s: &mut String, args: &[Expr], sep: char) {
@@ -323,6 +339,11 @@ fn write_expr(s: &mut String, e: &Expr) {
             write_expr(s, x);
             s.push(')');
         }
+        Expr::Spaced(before, x, after) => {
+            s.push_str(before);
+            write_expr(s, x);
+            s.push_str(after);
+        }
     }
 }
 
@@ -336,10 +357,21 @@ mod tests {
         assert_eq!(number_to_text(-2.5), "-2.5");
         assert_eq!(number_to_text(0.1 + 0.2), "0.3");
         assert_eq!(number_to_text(123456789012345.0), "123456789012345");
-        assert_eq!(number_to_text(1e15), "1E+15");
-        assert_eq!(number_to_text(1234567890123456.0), "1.23456789012346E+15");
+        // Written out in full up to 21 characters, as Excel writes them in .xlsx.
+        assert_eq!(number_to_text(1e15), "1000000000000000");
+        assert_eq!(number_to_text(1234567890123456.0), "1234567890123460");
+        assert_eq!(number_to_text(-1e20), "-100000000000000000000");
+        assert_eq!(number_to_text(1e21), "1E+21");
+        assert_eq!(number_to_text(1.5e21), "1.5E+21");
         assert_eq!(number_to_text(0.0001), "0.0001");
-        assert_eq!(number_to_text(1e-10), "1E-10");
+        assert_eq!(number_to_text(1e-10), "0.0000000001");
+        assert_eq!(number_to_text(1e-19), "0.0000000000000000001");
+        assert_eq!(number_to_text(1e-20), "1E-20");
+        assert_eq!(number_to_text(1.5e-19), "1.5E-19");
+        assert_eq!(number_to_text(1.23456789012345e-5), "0.0000123456789012345");
+        assert_eq!(number_to_text(1.23456789012345e-6), "1.23456789012345E-06");
+        assert_eq!(number_to_text(1234567890.12345), "1234567890.12345");
+        assert_eq!(number_to_text(1e100), "1E+100");
         assert!(number(f64::MAX).parse::<f64>().is_ok_and(f64::is_finite));
     }
 }

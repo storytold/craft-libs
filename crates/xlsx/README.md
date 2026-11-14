@@ -85,7 +85,9 @@ they were. A binary workbook is not written.
 
 A binary workbook gives the same `Workbook`, strings, rows and merged cells. Its styles are not
 read (each cell keeps its format index). Its cell formulas are decoded from their tokens into the
-text an `.xlsx` file holds (`_xlfn.` and `_xlpm.` names as written, no implicit `@`), with
+text an `.xlsx` file holds (`_xlfn.` and `_xlpm.` names as written, apart from the four
+ISO/IEC 29500 functions `.xlsx` names bare, no implicit `@`, the spaces and line breaks typed in
+the formula, numbers as Excel spells them), with
 `FormulaKind::Shared` or `FormulaKind::Array` and their ranges, and `BrtCellMeta` as the cell
 metadata index. Every cell of a shared formula gets its own text, decoded at the cell, since the
 file keeps the tokens once. A formula whose decoding needs something the reader does not read

@@ -46,14 +46,57 @@ fn pop_n(stack: &mut Stack, n: usize, kids: &mut usize) -> Result<Vec<Expr>, Uns
     Ok(popped.into_iter().map(|(e, _)| e).collect())
 }
 
-/// Pushes the result of a token one level above the operands it consumed.
+/// Pushes the result of a token one level above the operands it consumed (two for one with the
+/// spacing typed around it, which prints as a level of its own).
 fn push(stack: &mut Stack, kids: usize, e: Expr) -> Result<(), Unsupported> {
-    let depth = kids.saturating_add(1);
+    let depth = kids.saturating_add(1).saturating_add(usize::from(matches!(e, Expr::Spaced(..))));
     if depth > MAX_DEPTH {
         return Err(Unsupported("formula nested too deeply"));
     }
     stack.push((e, depth));
     Ok(())
+}
+
+/// Spaces and line breaks typed in the formula (`PtgAttrSpace`, [MS-XLSB] 2.5.98.32), waiting
+/// for the token they belong to. Excel writes the attribute just before that token: spaces
+/// before an operand, an operator's symbol or a function call go in `before`; those before a
+/// parenthesis's `(`, or before the `)` of a parenthesis or a call, in `open` and `close`.
+#[derive(Default)]
+struct Spacing {
+    before: String,
+    open: String,
+    close: String,
+}
+
+/// `e` with `ws` typed before it.
+fn spaced_before(e: Expr, ws: String) -> Expr {
+    match e {
+        _ if ws.is_empty() => e,
+        Expr::Spaced(b, x, a) => Expr::Spaced(ws + &b, x, a),
+        e => Expr::Spaced(ws, Box::new(e), String::new()),
+    }
+}
+
+/// `e` with `ws` typed after it.
+fn spaced_after(e: Expr, ws: String) -> Expr {
+    match e {
+        _ if ws.is_empty() => e,
+        Expr::Spaced(b, x, a) => Expr::Spaced(b, x, a + &ws),
+        e => Expr::Spaced(String::new(), Box::new(e), ws),
+    }
+}
+
+/// A call's arguments with the spacing typed before its `)`: after the last argument, or alone
+/// between the parentheses (`PI( )`).
+fn close_args(mut args: Vec<Expr>, ws: String) -> Vec<Expr> {
+    if ws.is_empty() {
+        return args;
+    }
+    match args.pop() {
+        Some(last) => args.push(spaced_after(last, ws)),
+        None => args.push(Expr::Spaced(String::new(), Box::new(Expr::Missing), ws)),
+    }
+    args
 }
 
 /// An error constant's code ([MS-XLSB] 2.5.98.21, `BErr`).
@@ -261,11 +304,16 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode) -> Res
     let mut t = Bytes { b: rgce, pos: 0 };
     let mut extra = Bytes { b: rgcb, pos: 0 };
     let mut stack: Stack = Vec::new();
+    let mut ws = Spacing::default();
     while t.pos < rgce.len() {
         let ptg = t.u8()?;
         let mut kids = 0usize;
         // Operand classes (reference / value / array) share one token number.
         let id = if ptg & 0x60 != 0 { 0x20 | (ptg & 0x1F) } else { ptg };
+        // An operand (a constant, reference or name) takes the spacing typed before it; operators,
+        // calls and parentheses place theirs below, and attribute and cache tokens take none.
+        let operand = !matches!(id, 0x03..=0x15 | 0x19 | 0x21 | 0x22 | 0x26..=0x29);
+        let height = stack.len();
         match id {
             0x03..=0x11 => {
                 let op = match id {
@@ -287,6 +335,10 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode) -> Res
                 };
                 let b = pop(&mut stack, &mut kids)?;
                 let a = pop(&mut stack, &mut kids)?;
+                // Spacing before the operator's symbol follows the left operand.
+                let before = std::mem::take(&mut ws.before);
+                kids = kids.saturating_add(usize::from(!before.is_empty()));
+                let a = spaced_after(a, before);
                 push(&mut stack, kids, Expr::Binary(op, Box::new(a), Box::new(b)))?;
             }
             0x12..=0x14 => {
@@ -296,11 +348,23 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode) -> Res
                     _ => UnOp::Percent,
                 };
                 let x = pop(&mut stack, &mut kids)?;
-                push(&mut stack, kids, Expr::Unary(op, Box::new(x)))?;
+                // A sign's spacing comes before it; `%`'s before its symbol, after the operand.
+                let before = std::mem::take(&mut ws.before);
+                let e = if op == UnOp::Percent {
+                    kids = kids.saturating_add(usize::from(!before.is_empty()));
+                    Expr::Unary(op, Box::new(spaced_after(x, before)))
+                } else {
+                    spaced_before(Expr::Unary(op, Box::new(x)), before)
+                };
+                push(&mut stack, kids, e)?;
             }
             0x15 => {
                 let x = pop(&mut stack, &mut kids)?;
-                push(&mut stack, kids, Expr::Paren(Box::new(x)))?;
+                let close = std::mem::take(&mut ws.close);
+                kids = kids.saturating_add(usize::from(!close.is_empty()));
+                let x = spaced_after(x, close);
+                let before = std::mem::take(&mut ws.open) + &std::mem::take(&mut ws.before);
+                push(&mut stack, kids, spaced_before(Expr::Paren(Box::new(x)), before))?;
             }
             0x16 => push(&mut stack, kids, Expr::Missing)?,
             // PtgStr: cch (u16, at most 255) and always UTF-16, unlike BIFF8.
@@ -318,14 +382,27 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode) -> Res
                     let n = usize::from(t.u16()?) + 1;
                     t.take(n * 2)?;
                 } else {
-                    t.take(2)?;
+                    let data = t.take(2)?;
+                    if kind & 0x40 != 0 {
+                        // PtgAttrSpace / PtgAttrSpaceSemi: PtgAttrSpaceType's `type` and `cch`.
+                        let (kind, n) = (data.first().copied().unwrap_or(0), data.get(1).copied().unwrap_or(0));
+                        let text = if matches!(kind, 1 | 3 | 5) { "\n" } else { " " }.repeat(usize::from(n));
+                        match kind {
+                            0 | 1 | 6 => ws.before.push_str(&text),
+                            2 | 3 => ws.open.push_str(&text),
+                            4 | 5 => ws.close.push_str(&text),
+                            _ => return Err(Unsupported("unknown spacing in a formula")),
+                        }
+                    }
                 }
                 if kind & 0x10 != 0 {
                     // PtgAttrSum: SUM of the single operand.
                     let x = pop(&mut stack, &mut kids)?;
-                    push(&mut stack, kids, Expr::Call("SUM".into(), vec![x]))?;
+                    let args = close_args(vec![x], std::mem::take(&mut ws.close));
+                    let call = spaced_before(Expr::Call("SUM".into(), args), std::mem::take(&mut ws.before));
+                    push(&mut stack, kids.saturating_add(1), call)?;
                 }
-                // Semi (volatile), If, Goto, Space, Baxcel: no effect on the expression.
+                // Semi (volatile), If, Goto, Baxcel: no effect on the expression.
             }
             0x1C => {
                 let e = t.u8()?;
@@ -346,8 +423,9 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode) -> Res
                 let iftab = t.u16()?;
                 let (name, args) = function(iftab).ok_or(Unsupported("unknown function"))?;
                 let n = usize::try_from(args).map_err(|_| Unsupported("unknown function argument count"))?;
-                let args = pop_n(&mut stack, n, &mut kids)?;
-                push(&mut stack, kids, Expr::Call(name.to_string(), args))?;
+                let args = close_args(pop_n(&mut stack, n, &mut kids)?, std::mem::take(&mut ws.close));
+                let call = spaced_before(Expr::Call(name.to_string(), args), std::mem::take(&mut ws.before));
+                push(&mut stack, kids.saturating_add(1), call)?;
             }
             0x22 => {
                 let n = usize::from(t.u8()?);
@@ -362,20 +440,33 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode) -> Res
                     if args.is_empty() {
                         return Err(Unsupported("malformed function call"));
                     }
-                    let name = match args.remove(0) {
+                    // Spacing typed after the `(` comes before the name's token: it belongs to the
+                    // first argument.
+                    let (lead, first) = match args.remove(0) {
+                        Expr::Spaced(before, x, _) => (before, *x),
+                        e => (String::new(), e),
+                    };
+                    let name = match first {
                         Expr::Name(n) => n,
                         _ => return Err(Unsupported("function call through an expression")),
                     };
+                    if let Some(a) = args.first_mut() {
+                        *a = spaced_before(std::mem::replace(a, Expr::Missing), lead);
+                    }
                     // `PY(index, …)` runs a script stored elsewhere in the package, which this
                     // import doesn't read. `PY("code", …)` carries its code and becomes a Python cell.
                     let py = name.rsplit('.').next().is_some_and(|n| n.eq_ignore_ascii_case("PY"));
                     if py && !args.first().is_some_and(literal_text) {
                         return Err(Unsupported("Python code stored outside the cell"));
                     }
-                    push(&mut stack, kids, Expr::Call(name, args))?;
+                    let args = close_args(args, std::mem::take(&mut ws.close));
+                    let call = spaced_before(Expr::Call(bare_function(name), args), std::mem::take(&mut ws.before));
+                    push(&mut stack, kids.saturating_add(1), call)?;
                 } else {
                     let (name, _) = function(tab & 0x7FFF).ok_or(Unsupported("unknown function"))?;
-                    push(&mut stack, kids, Expr::Call(name.to_string(), args))?;
+                    let args = close_args(args, std::mem::take(&mut ws.close));
+                    let call = spaced_before(Expr::Call(name.to_string(), args), std::mem::take(&mut ws.before));
+                    push(&mut stack, kids.saturating_add(1), call)?;
                 }
             }
             0x23 => {
@@ -456,6 +547,10 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode) -> Res
             }
             _ => return Err(Unsupported("unknown formula token")),
         }
+        if operand && !ws.before.is_empty() && stack.len() == height + 1 {
+            let (e, depth) = stack.pop().ok_or(Unsupported("malformed formula (operand missing)"))?;
+            push(&mut stack, depth, spaced_before(e, std::mem::take(&mut ws.before)))?;
+        }
         if stack.len() > MAX_RGCE {
             return Err(Unsupported("formula too complex"));
         }
@@ -467,11 +562,23 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode) -> Res
     Ok(grouped(e, false))
 }
 
+/// The name a function called through a hidden name is written with in `.xlsx`: that name
+/// (`_xlfn.CONCAT`), except for the four ISO/IEC 29500 functions, which `.xlsx` names without the
+/// prefix though `.xlsb` calls them as it calls newer functions.
+fn bare_function(name: String) -> String {
+    const ISO: [&str; 4] = ["ISO.CEILING", "ECMA.CEILING", "NETWORKDAYS.INTL", "WORKDAY.INTL"];
+    match name.get(..6).filter(|p| p.eq_ignore_ascii_case("_xlfn.")).and(name.get(6..)) {
+        Some(bare) if ISO.iter().any(|f| f.eq_ignore_ascii_case(bare)) => bare.to_string(),
+        _ => name,
+    }
+}
+
 /// Text written out in the formula: a string, or strings joined with `&` (how Python code
 /// longer than a string constant is written).
 fn literal_text(e: &Expr) -> bool {
     match e {
         Expr::Text(_) => true,
+        Expr::Spaced(_, x, _) => literal_text(x),
         Expr::Binary(BinOp::Concat, a, b) => literal_text(a) && literal_text(b),
         _ => false,
     }
@@ -494,6 +601,7 @@ fn binding(e: &Expr) -> u8 {
         Expr::Binary(op, ..) => op.precedence(),
         Expr::Unary(UnOp::Neg | UnOp::Plus, _) => 60,
         Expr::Unary(UnOp::Percent, _) => 70,
+        Expr::Spaced(_, x, _) => binding(x),
         _ => u8::MAX,
     }
 }
@@ -550,6 +658,7 @@ fn grouped(e: Expr, in_args: bool) -> Expr {
             Expr::Unary(op, Box::new(if needs { paren(x) } else { x }))
         }
         Expr::Paren(x) => paren(grouped(*x, false)),
+        Expr::Spaced(before, x, after) => Expr::Spaced(before, Box::new(grouped(*x, in_args)), after),
         Expr::Call(name, args) => Expr::Call(name, args.into_iter().map(|a| grouped(a, true)).collect()),
         other => other,
     }
