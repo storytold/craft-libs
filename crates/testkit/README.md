@@ -24,24 +24,6 @@ std::fs::write(dir.file("out.png")?, &png)?;
 |---|---|
 | `temp` | VectorCraft, PdfCraft, CADCraft, `craft-media-testkit` |
 
-### Origin
-
-| Module | Source | Path | SHA |
-|---|---|---|---|
-| `temp` | storytold/vectorcraft | `crates/testkit/src/lib.rs` (`temp_dir`, `TempDir`) | `bada8e17` |
-| `temp` | storytold/pdfcraft#6124 | `crates/testkit/src/scratch.rs` (`ScratchDir`) | `92e20711` |
-| `temp` | storytold/craft-libs | `crates/media-testkit/src/lib.rs` (`private_dir`) | `75a654f4` |
-| `temp` | storytold/cadcraft | `crates/engine/tests/support/temp_dir.rs`, `crates/ui-egui/tests/support/temp_dir.rs` | `8e698902` |
-
-### Migration
-
-| Consumer | State |
-|---|---|
-| VectorCraft | Not switched. `temp_dir(tag)` shares one folder per tag in a process; its test of that is not moved. |
-| PdfCraft | Not switched. `ScratchFile` has no counterpart; `TempDir::file` returns a path in a `TempDir`. |
-| CADCraft | Not switched. Its `TempDir` empties a leftover folder of the same name; `temp` makes a new one. |
-| `craft-media-testkit` | Not switched. `private_dir()` is unchanged. |
-
 ## Epistemic Scope: Syntactic Guards vs Runtime Validation
 
 Source-level guards provide deterministic syntactic evidence about codebase structure:
@@ -114,10 +96,18 @@ fn no_std_instant_in_code_the_web_build_runs() {
 | Module | Source | Path | Commit |
 |---|---|---|---|
 | `guards` | storytold/craft-libs#163 (zachshallbetter), with the rules of PhotoCraft's shader float test and FilmCraft's web clock test | `crates/testkit/src/guards.rs` | `e92825e427` |
+| `temp` | storytold/vectorcraft | `crates/testkit/src/lib.rs` (`temp_dir`, `TempDir`) | `bada8e1710` |
+| `temp` | storytold/pdfcraft#6124 | `crates/testkit/src/scratch.rs` (`ScratchDir`) | `92e2071199` |
+| `temp` | storytold/craft-libs | `crates/media-testkit/src/lib.rs` (`private_dir`) | `75a654f4f8` |
+| `temp` | storytold/cadcraft | `crates/engine/tests/support/temp_dir.rs`, `crates/ui-egui/tests/support/temp_dir.rs` | `8e69890223` |
 
 ## Migration
 
-| Consumer | Guard | Replaces | State |
+| Consumer | Module | Replaces | State |
 |---|---|---|---|
 | PhotoCraft | `wgsl_float_literals` | `crates/gpu/src/tests.rs` scanner | Not started |
 | FilmCraft | `std_instant` | `crates/engine/src/wasm_clock_tests.rs` search | Not started |
+| VectorCraft | `temp` | `temp_dir` and `TempDir` in `crates/testkit/src/lib.rs` | Not started. `temp_dir(tag)` shares one folder per tag in a process; its test of that is not moved. |
+| PdfCraft | `temp` | `ScratchDir` in `crates/testkit/src/scratch.rs` (#6124) | Not started. `ScratchFile` has no counterpart; `TempDir::file` returns a path in a `TempDir`. |
+| CADCraft | `temp` | `crates/engine/tests/support/temp_dir.rs`, `crates/ui-egui/tests/support/temp_dir.rs` | Not started. Its `TempDir` empties a leftover folder of the same name; `temp` makes a new one. |
+| `craft-media-testkit` | `temp` | `private_dir()` in `crates/media-testkit/src/lib.rs` | Not started. `private_dir()` is unchanged. |
