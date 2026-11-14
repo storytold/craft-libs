@@ -383,6 +383,21 @@ fn associated_alpha_is_made_straight() {
 }
 
 #[test]
+fn ink_set_and_extra_samples_are_listed() {
+    let px = [10u8, 20, 30, 40, 17, 128];
+    let d = strips(1, 1, 8, 6, 5, 1, &px).tag(332, SHORT, &[2]).tag(338, SHORT, &[0, 1]);
+    let info = tiff_info(&build(true, false, &[d], &[0]).bytes).unwrap();
+    use ExtraSampleKind::*;
+    assert_eq!((info.pages[0].ink_set, &info.pages[0].extra_samples[..]), (Some(InkSet::InkNames), &[Unspecified, AssociatedAlpha][..]));
+    let d = strips(1, 1, 8, 6, 5, 1, &px).tag(332, SHORT, &[7]).tag(338, SHORT, &[2, 5]);
+    let info = tiff_info(&build(true, false, &[d], &[0]).bytes).unwrap();
+    assert_eq!((info.pages[0].ink_set, &info.pages[0].extra_samples[..]), (Some(InkSet::Invalid(7)), &[UnassociatedAlpha, Invalid(5)][..]));
+    let d = strips(1, 1, 8, 4, 5, 1, &px[..4]);
+    let info = tiff_info(&build(true, false, &[d], &[0]).bytes).unwrap();
+    assert_eq!((info.pages[0].ink_set, &info.pages[0].extra_samples[..]), (None, &[][..]));
+}
+
+#[test]
 fn white_is_zero_opens_with_the_right_tones() {
     // #691: 00 FF 00 in a WhiteIsZero file is white, black, white.
     let b = build(true, false, &[strips(3, 1, 8, 1, 0, 1, &[0x00, 0xff, 0x00])], &[0]);

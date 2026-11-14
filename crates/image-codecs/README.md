@@ -250,8 +250,9 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
     the image: when the image fits but its extra samples don't, it opens without them and carries
     `DecodeWarning::ExtraSamplesDropped`.
   * Every directory is reachable: `tiff_info` lists the main IFD chain and its SubIFDs (tag 330)
-    with each page's size, kind (page, reduced-resolution copy, mask) and storage, walked with a
-    seen-set, a depth limit and a 10 000-directory cap; `decode_tiff_page` opens any of them.
+    with each page's size, kind (page, reduced-resolution copy, mask), storage, InkSet and
+    ExtraSamples, walked with a seen-set, a depth limit and a 10 000-directory cap;
+    `decode_tiff_page` opens any of them.
     `decode` opens the first full-resolution page, like Photoshop (thumbnails are skipped).
   * Banded decoding: the image is allocated once at its final size and each strip or row of
     tiles is decoded straight into it, in parallel on native targets, with at most one
