@@ -559,7 +559,7 @@ impl Keymap {
     }
 
     /// Whether both commands of `conflict` have its chord among their defaults, so they share it by
-    /// design and [`Keymap::clashing`] leaves them out.
+    /// design and `Keymap::clashing` leaves them out.
     pub fn twins_in(&self, conflict: &Conflict) -> bool {
         let (Some(i), Some(j)) = (self.find(&conflict.a.0), self.find(&conflict.b.0)) else { return false };
         self.twins(i, j, conflict.chord)

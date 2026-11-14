@@ -83,7 +83,7 @@ const PC_EDITING: &[Chord] = &[
 
 /// The chords with modifiers that edit text on `platform`, as effective chords: undo, redo,
 /// select all, the clipboard, and moving and deleting by word, line and text. While typing they go to the text
-/// field under every [`TypingRule`]; only a binding in an active context takes one. Plain keys
+/// field under every [`TypingRule`](crate::TypingRule); only a binding in an active context takes one. Plain keys
 /// (arrows, Home, End, Backspace, Delete, with or without Shift) are not listed, since every rule
 /// holds them already.
 pub fn text_editing_chords(platform: Platform) -> &'static [Chord] {

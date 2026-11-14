@@ -170,7 +170,8 @@ fn a_settled_leaf_that_read_an_input_besides_its_room_runs_one_pass() {
             },
         );
     };
-    let shows: [(&str, &dyn Fn(&mut Ui)); 2] = [("menu", &menu), ("title bar", &bar)];
+    type Show<'a> = (&'a str, &'a dyn Fn(&mut Ui));
+    let shows: [Show; 2] = [("menu", &menu), ("title bar", &bar)];
     for (name, show) in shows {
         let mut frames = Frames::new();
         frames.idle(4, show);

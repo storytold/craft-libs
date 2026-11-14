@@ -114,11 +114,12 @@ impl Outcome for ColorPickerOutput {
 
     #[cfg(feature = "screen-testing")]
     fn story_facts(&self) -> craft_ui::testing::StoryOutput {
-        let mut facts = craft_ui::testing::StoryOutput::default();
-        facts.id = Some(self.response.id);
-        facts.clicked = craft_ui::contract::clicked(&self.response);
-        facts.edits = self.events.iter().filter_map(craft_ui::testing::EditKind::of).collect();
-        facts
+        craft_ui::testing::StoryOutput {
+            id: Some(self.response.id),
+            clicked: craft_ui::contract::clicked(&self.response),
+            edits: self.events.iter().filter_map(craft_ui::testing::EditKind::of).collect(),
+            ..Default::default()
+        }
     }
 }
 

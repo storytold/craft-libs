@@ -84,15 +84,16 @@ impl Outcome for ColorReadoutOutput {
 
     #[cfg(feature = "screen-testing")]
     fn story_facts(&self) -> craft_ui::testing::StoryOutput {
-        let mut facts = craft_ui::testing::StoryOutput::default();
-        facts.id = Some(self.response.id);
-        facts.edits = self
-            .events
-            .iter()
-            .filter_map(craft_ui::testing::EditKind::of)
-            .chain(self.channel.iter().filter_map(|edit| craft_ui::testing::EditKind::of(&edit.event)))
-            .collect();
-        facts
+        craft_ui::testing::StoryOutput {
+            id: Some(self.response.id),
+            edits: self
+                .events
+                .iter()
+                .filter_map(craft_ui::testing::EditKind::of)
+                .chain(self.channel.iter().filter_map(|edit| craft_ui::testing::EditKind::of(&edit.event)))
+                .collect(),
+            ..Default::default()
+        }
     }
 }
 

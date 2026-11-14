@@ -105,7 +105,7 @@ impl<'a> PathField<'a> {
                     };
                     Some((after, event))
                 })
-                .last();
+                .next_back();
             let landed = typed.or_else(|| {
                 answered.map(|path| {
                     let event = EditEvent::set(Mixed::Same(before.clone()), path.clone(), label.as_str().into(), None);
