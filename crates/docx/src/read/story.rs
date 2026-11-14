@@ -158,6 +158,21 @@ fn clean_text(s: &str) -> String {
         .collect()
 }
 
+/// The text of a `w:t` or `w:delText` as Word reads it. Unless the element says
+/// `xml:space="preserve"`, the spaces, tabs and line ends at its start and at its end are not
+/// part of the text (XML's default white space handling); those between words stay, and so do
+/// no-break and ideographic spaces, which are not XML white space. Measured in Word for Windows
+/// 16.0.20625: between "A" and "B", an element of one or three spaces, of spaces written as
+/// `&#32;`, or of spaces around a tab or a line feed adds nothing, " x " adds "x", and "x  y"
+/// keeps both its spaces; with `xml:space="preserve"` every space is there.
+fn text_of(t: &El) -> String {
+    let text = t.text();
+    if t.attr("xml:space") == Some("preserve") {
+        return clean_text(&text);
+    }
+    clean_text(text.trim_matches(|c| matches!(c, ' ' | '\t' | '\r' | '\n')))
+}
+
 fn children_of_choice(ac: &El) -> Option<&El> {
     // Prefer a Choice whose requirements we understand; else the Fallback; else any Choice.
     // `m`: Office Math (a producer may guard an equation with a picture fallback, #1273).
