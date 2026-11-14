@@ -148,6 +148,9 @@ fn write_compatibility_settings(w: &mut W, doc: &Document) {
     if doc.settings.allow_space_of_same_style_in_table {
         w.empty("w:allowSpaceOfSameStyleInTable", &[]);
     }
+    if doc.settings.do_not_suppress_indentation {
+        w.empty("w:doNotSuppressIndentation", &[]);
+    }
     let mode = doc.settings.compat_mode.clamp(11, 15).to_string();
     w.empty("w:compatSetting", &[("w:name", "compatibilityMode"), ("w:uri", "http://schemas.microsoft.com/office/word"), ("w:val", &mode)]);
     w.close("w:compat");
