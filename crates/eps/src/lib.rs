@@ -25,8 +25,8 @@ pub mod postscript;
 mod preview;
 mod rectangles;
 
-pub use container::{DOS_HEADER, DOS_MAGIC, Sections, sections, wrap};
-pub use dsc::{Comments, MAX_HEADER, MAX_TRAILER};
+pub use container::{DOS_HEADER, DOS_MAGIC, Sections, postscript_section, sections, wrap};
+pub use dsc::{Comments, MAX_EXTENDED_HEADER, MAX_HEADER, MAX_TRAILER};
 pub use embedded::{EmbeddedFontProgram, embedded_font_programs};
 pub use preview::{Bitmap, MAX_EPSI, epsi};
 pub use rectangles::{MAX_SIMPLE_RECTANGLE_SAVE_DEPTH, MAX_SIMPLE_RECTANGLE_TOKENS, MAX_SIMPLE_RECTANGLES, Rectangle, simple_rectangles};

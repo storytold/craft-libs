@@ -30,6 +30,24 @@ fn sections_of_plain_and_binary_files() {
 }
 
 #[test]
+fn postscript_section_survives_a_damaged_preview_range() {
+    let ps = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 10 10\n";
+    let mut bytes = wrap(ps, Some(b"tiff"), None).unwrap();
+    bytes[20..24].copy_from_slice(&u32::MAX.to_le_bytes());
+    bytes[24..28].copy_from_slice(&1u32.to_le_bytes());
+    assert_eq!(postscript_section(&bytes), Ok(ps.as_slice()));
+    assert_eq!(sections(&bytes), Err(Error::OutsideFile));
+}
+
+#[test]
+fn extended_comment_scan_keeps_its_upper_bound() {
+    let mut ps = b"%!PS-Adobe-3.0 EPSF-3.0\n".to_vec();
+    ps.resize(ps.len() + MAX_EXTENDED_HEADER + 1, b' ');
+    ps.extend_from_slice(b"\n%%BoundingBox: 0 0 20 10\n%%EndComments\n");
+    assert_eq!(Comments::read_with_header_limit(&ps, usize::MAX).page_box(), None);
+}
+
+#[test]
 fn a_header_that_points_outside_the_file_is_refused() {
     let file = dos(EPS, b"WMF", b"TIFF");
     // Cut anywhere, the header or a section it names is missing.
