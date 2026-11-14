@@ -160,7 +160,7 @@ pub struct Source {
     pub key: String,
     /// The name.
     pub name: String,
-    /// Whether the track carries picture or sound.
+    /// Whether the essence is picture or sound.
     pub kind: CKind,
     /// The file the essence lives in; `None` for embedded data.
     pub path: Option<String>,
@@ -191,7 +191,7 @@ pub struct Source {
     pub tc_rate: FrameRate,
     /// Essence data stored in the file itself.
     pub embedded: Option<Vec<u8>>,
-    /// The markers, at times in the composition.
+    /// Markers on the source, at times in the essence.
     pub markers: Vec<CMarker>,
     /// Not media but a nested composition: its index in [`Document::nested`]. `start` of a clip
     /// that uses it is a time in that composition.

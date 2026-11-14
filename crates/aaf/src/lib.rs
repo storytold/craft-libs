@@ -37,13 +37,12 @@ pub use craft_timeline::report::Report;
 pub enum Error {
     /// The bytes are not a readable document of the format.
     #[error("{format} parse error: {message}")]
-    /// Parse {
+    Parse {
         /// The format that failed to parse.
         format: &'static str,
         /// What was wrong.
         message: String,
     },
-    Parse { format: &'static str, message: String },
     /// The document has no composition.
     #[error("the document contains no timeline")]
     Empty,
