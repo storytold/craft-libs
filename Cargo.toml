@@ -11,7 +11,7 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
-acadrust = "=0.6.6"
+acadrust = "=0.6.8"
 log = "0.4"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
 craft-platform = { path = "crates/platform" }

@@ -24,7 +24,7 @@ thiserror = { workspace = true }
 [dev-dependencies]
 # Test files are written with an independent compound-file writer, so craft-cfb's reader is
 # checked against another implementation's output.
-cfb = "0.15"
+cfb = "0.16"
 craft-wordmodel = { workspace = true, features = ["test-support"] }
 proptest = { workspace = true }
 serde_json = "1"
