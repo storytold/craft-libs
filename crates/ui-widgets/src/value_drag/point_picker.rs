@@ -280,7 +280,7 @@ impl<'a> PointPicker<'a> {
     }
 
     /// The image fitted in `well`, else the well.
-    fn plot(&self, well: Rect) -> Rect {
+    pub fn plot(&self, well: Rect) -> Rect {
         match self.aspect.filter(|aspect| aspect.is_finite() && *aspect > 0.0) {
             Some(aspect) => {
                 let width = well.width().min(well.height() * aspect);

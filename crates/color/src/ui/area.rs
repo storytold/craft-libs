@@ -86,7 +86,8 @@ impl<'a> ColorArea<'a> {
     /// Where `values` stands in `rect`: the picker's own value-to-point mapping.
     pub(crate) fn point_in(&self, rect: Rect, values: &ModelValues) -> Pos2 {
         let [across, down] = self.channels();
-        self.picker(Some(values), false).position([values.values[across], values.values[down]].map(f64::from), rect)
+        let picker = self.picker(Some(values), false);
+        picker.position([values.values[across], values.values[down]].map(f64::from), picker.plot(rect))
     }
 
     /// Writes the area's two components from `point` (an axis that is `None` stays) onto `mine`, settled on the

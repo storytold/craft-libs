@@ -5,7 +5,8 @@ use craft_theme::Srgba;
 use craft_theme::variant::Tone;
 use craft_ui::contract::{Outcome as _, Pattern, Props as _, Show as _, ShowContainer as _};
 use craft_ui::display::Text;
-use craft_ui::layout_components::{Row, Stack};
+use craft_behavior::ColumnWidth;
+use craft_ui::layout_components::{Grid, Stack};
 use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::runtime::env::{Env, Label};
 use egui::{Response, Ui};
@@ -17,6 +18,10 @@ mod stories;
 
 /// What a missing value shows.
 const DASH: &str = "–";
+
+/// The grid's columns: a name and its value, twice, so that the two readouts of a line stand side by side and each
+/// column lines up down the grid.
+static COLUMNS: [ColumnWidth; 4] = [ColumnWidth::Content, ColumnWidth::Content, ColumnWidth::Content, ColumnWidth::Content];
 
 craft_ui::words! {
     /// The words of the Info panel, in the installed language unless set.
@@ -132,14 +137,38 @@ fn number(value: Option<impl ToString>) -> Option<Label> {
     value.map(|value| Label::from(value.to_string()))
 }
 
-/// One line of name and value pairs.
-fn line(ui: &mut Ui, cells: Vec<Cell>) {
-    Row::new().show(ui, |ui, _| {
-        for (name, value) in cells {
+/// A name and its value in two grid cells, or two empty cells.
+fn pair(ui: &mut Ui, cell: Option<Cell>) {
+    match cell {
+        Some((name, value)) => {
             Text::new(name).show(ui);
             Text::new(value.unwrap_or_else(|| Label::from(DASH))).show(ui);
         }
+        None => {
+            Text::new(Label::from("")).show(ui);
+            Text::new(Label::from("")).show(ui);
+        }
+    }
+}
+
+/// A grid of lines, each two name and value pairs.
+fn table(ui: &mut Ui, lines: Vec<[Option<Cell>; 2]>) {
+    let _ = Grid::new(&COLUMNS).show(ui, |ui, _| {
+        for [left, right] in lines {
+            pair(ui, left);
+            pair(ui, right);
+        }
     });
+}
+
+/// `cells` two to a line.
+fn in_pairs(cells: Vec<Cell>) -> Vec<[Option<Cell>; 2]> {
+    let mut cells = cells.into_iter();
+    let mut lines = Vec::new();
+    while let Some(left) = cells.next() {
+        lines.push([Some(left), cells.next()]);
+    }
+    lines
 }
 
 impl<'a> InfoPanel<'a> {
@@ -161,26 +190,28 @@ impl<'a> InfoPanel<'a> {
         Stack::new()
             .label(label)
             .show(ui, |ui, _| {
+                let mut lines = Vec::new();
                 for (at, cmyk_name) in cmyk_names.iter().enumerate() {
-                    let mut cells = Vec::new();
-                    if let Some(rgb_name) = rgb_names.get(at) {
-                        cells.push((rgb_name.clone(), number(readings.color.map(|color| color.rgb[at]))));
-                    }
-                    cells.push((cmyk_name.clone(), number(readings.color.map(|color| color.cmyk[at]))));
-                    line(ui, cells);
+                    let rgb = rgb_names.get(at).map(|rgb_name| (rgb_name.clone(), number(readings.color.map(|color| color.rgb[at]))));
+                    lines.push([rgb, Some((cmyk_name.clone(), number(readings.color.map(|color| color.cmyk[at]))))]);
                 }
                 let (position, extent) = (readings.position.as_ref(), readings.extent.as_ref());
                 let axes = [(name(&words.x), name(&words.w)), (name(&words.pos_y), name(&words.h))];
                 for (axis, (position_name, extent_name)) in axes.into_iter().enumerate() {
-                    line(ui, vec![(position_name, position.map(|at| at[axis].clone())), (extent_name, extent.map(|size| size[axis].clone()))]);
+                    lines.push([
+                        Some((position_name, position.map(|at| at[axis].clone()))),
+                        Some((extent_name, extent.map(|size| size[axis].clone()))),
+                    ]);
                 }
+                table(ui, lines);
                 let size = words.document.fill(&[("width", &width.to_string()), ("height", &height.to_string())]);
                 Text::new(Label::from(size)).show(ui);
                 for (readout, position) in readings.samplers {
                     Text::new(Label::from(format!("#{}", readout.number))).show(ui);
-                    line(ui, vec![(name(&words.x), Some(position[0].clone())), (name(&words.pos_y), Some(position[1].clone()))]);
-                    line(ui, rgb_names.iter().zip(readout.rgb).map(|(name, value)| (name.clone(), number(Some(value)))).collect());
-                    line(ui, cmyk_names.iter().zip(readout.cmyk).map(|(name, value)| (name.clone(), number(Some(value)))).collect());
+                    let mut lines = vec![[Some((name(&words.x), Some(position[0].clone()))), Some((name(&words.pos_y), Some(position[1].clone())))]];
+                    lines.extend(in_pairs(rgb_names.iter().zip(readout.rgb).map(|(name, value)| (name.clone(), number(Some(value)))).collect()));
+                    lines.extend(in_pairs(cmyk_names.iter().zip(readout.cmyk).map(|(name, value)| (name.clone(), number(Some(value)))).collect()));
+                    table(ui, lines);
                 }
             })
             .output

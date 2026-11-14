@@ -1,6 +1,6 @@
 //! Stories of `ColorHud`: open with a start colour, and with the pointer moved onto the strip.
 
-use super::{ColorHud, Placement};
+use super::{ColorHud, strip_center};
 use craft_theme::Srgba;
 use craft_ui::contract::Bind;
 use craft_ui::runtime::env::Env;
@@ -17,7 +17,6 @@ fn color_hud(ui: &mut Ui, _data: &mut StoryData) -> StoryOutput {
 #[story(ColorHud<'static>, covers = [], drive = Drive::Never)]
 fn color_hud_pointer_on_the_strip(ui: &mut Ui, _data: &mut StoryData) -> StoryOutput {
     let at = pos2(260.0, 200.0);
-    let placement = Placement::of(&Env::of(ui).tokens, at, Some(START));
-    let pointer = placement.geometry.strip(placement.content).center();
+    let pointer = strip_center(&Env::of(ui).tokens, at, Some(START));
     ColorHud::new("Color HUD", at, Bind::given(START)).start(START).pointer(Some(pointer)).show(ui).into()
 }

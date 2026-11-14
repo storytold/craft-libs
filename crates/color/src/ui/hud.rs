@@ -3,14 +3,15 @@
 use super::strip;
 use super::{ColorArea, ColorStrip};
 use crate::AreaMode;
-use craft_behavior::{EditEvents, Metrics, Sense};
+use craft_behavior::{EditEvent, EditEvents, Metrics, PartKey, Sense};
 use craft_theme::Srgba;
 use craft_ui::contract::{
-    Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, EscapeEdit, MeasureCx, Outcome, PaintUi, Pattern, Props as _, Role,
-    Show as _, ShowContainer as _,
+    Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, EscapeEdit, MeasureCx, Outcome, POPUP_PAD, PaintUi, PartsCx, Pattern,
+    Props as _, Role, Show as _, ShowContainer as _, pad_of,
 };
 use craft_ui::popover::Popover;
 use craft_ui::runtime::env::{Env, Label};
+use craft_ui::runtime::focus::Initial;
 use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::style::{ComponentStyle, StyleCx, UiTokens};
 use egui::{Pos2, Rect, Response, Ui, Vec2, pos2, vec2};
@@ -20,6 +21,12 @@ mod stories;
 
 /// The model the HUD picks in: saturation and brightness across and down, hue in the strip.
 const MODE: AreaMode = AreaMode::Hue;
+
+/// The area's part of the HUD's content: painted as the look of `ColorArea`, which senses nothing.
+const AREA: PartKey = PartKey::new("area");
+
+/// The strip's part of the HUD's content: painted as the look of `ColorStrip`.
+const STRIP: PartKey = PartKey::new("strip");
 
 /// The colour of a HUD whose binding shows none.
 const BLACK: Srgba = Srgba::rgb(0.0, 0.0, 0.0);
@@ -54,30 +61,31 @@ impl Geometry {
     }
 }
 
-/// Where the popover hangs so that the start colour's point in the area sits at `at`.
-struct Placement {
-    /// The popover's top left.
-    origin: Pos2,
-    /// The top left of its content.
-    content: Pos2,
-    geometry: Geometry,
+/// Where the start colour's point stands in the area, relative to the content's top left.
+fn start_point(geometry: Geometry, start: Option<Srgba>) -> Pos2 {
+    let area = geometry.area(Pos2::ZERO);
+    match start {
+        Some(color) => {
+            let values = MODE.model().from_srgb(color);
+            ColorArea::new("", MODE, Bind::given(values)).point_in(area, &values)
+        }
+        None => area.center(),
+    }
 }
 
-impl Placement {
-    fn of(tokens: &UiTokens, at: Pos2, start: Option<Srgba>) -> Self {
-        let geometry = Geometry::of(tokens);
-        let area = geometry.area(Pos2::ZERO);
-        let point = match start {
-            Some(color) => {
-                let values = MODE.model().from_srgb(color);
-                ColorArea::new("", MODE, Bind::given(values)).point_in(area, &values)
-            }
-            None => area.center(),
-        };
-        // The popover's padding is the popup padding (`POPUP_PAD`, the control pad).
-        let pad = tokens.space.pad.control;
-        Placement { origin: pos2(at.x - pad - point.x, at.y - pad - point.y), content: pos2(at.x - point.x, at.y - point.y), geometry }
-    }
+/// The popover's top left, so that the start colour's point in the area sits at `at`.
+fn origin(tokens: &UiTokens, at: Pos2, start: Option<Srgba>) -> Pos2 {
+    let point = start_point(Geometry::of(tokens), start);
+    let pad = pad_of(tokens, POPUP_PAD);
+    pos2(at.x - pad - point.x, at.y - pad - point.y)
+}
+
+/// The centre of the strip when the start colour sits at `at`: where a story puts the pointer.
+#[cfg(feature = "screen-testing")]
+fn strip_center(tokens: &UiTokens, at: Pos2, start: Option<Srgba>) -> Pos2 {
+    let geometry = Geometry::of(tokens);
+    let point = start_point(geometry, start);
+    geometry.strip(pos2(at.x - point.x, at.y - point.y)).center()
 }
 
 /// The area and hue strip in a popover at `at`, with the start colour under it, driven by the host's press: the pick
@@ -127,14 +135,19 @@ impl<'a> ColorHud<'a> {
     /// Draws the HUD.
     pub fn show(self, ui: &mut Ui) -> ColorHudOutput {
         let ColorHud { label, at, mut color, start, pointer, held } = self;
-        let placement = Placement::of(&Env::of(ui).tokens, at, start);
-        let shown = Popover::new(label.clone(), Bind::given(true)).at_point(placement.origin).show(ui, |ui, body| {
+        let origin = origin(&Env::of(ui).tokens, at, start);
+        let shown = Popover::new(label.clone(), Bind::given(true)).at_point(origin).initial_focus(Initial::First).show(ui, |ui, body| {
             // A released press closes the HUD; the pick below commits in this same pass.
             if !held {
                 body.request_close();
             }
             let live = held && body.is_open();
-            HudPick::new(label.clone(), color.reborrowed(), at, pointer, live).show(ui)
+            let edit = HudPick::new(label.clone(), color.reborrowed(), at, pointer, live).show(ui);
+            // A commit while the press is held is Escape's: the picked colour stays and the popover closes.
+            if held && (&edit.events).into_iter().any(|event| matches!(event, EditEvent::Commit { .. })) {
+                body.request_close_as(CloseReason::Escape);
+            }
+            edit
         });
         let events = match shown.inner {
             Some(edit) => edit.events,
@@ -188,7 +201,8 @@ impl HudPickStyle {
 /// The HUD's value component: it shows the area and the strip and owns the colour's gesture. The gesture slot belongs
 /// to a value component, which drives it from its props (the host's pointer and press) instead of a press of its own:
 /// the first pick begins it, later picks update it, and the host's release or the popover's close commits it. Escape
-/// commits too, so the colour stays.
+/// commits too, so the colour stays. It is the popover's one focus stop, so Escape reaches it; the area and strip are
+/// the looks of its two parts and take no input.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 struct HudPick<'a> {
     #[common]
@@ -211,8 +225,6 @@ impl Component for HudPick<'_> {
     const ROLE: Role = Role::GROUP;
     const DISABLED: DisabledLook = DisabledLook::Faded;
     const ESCAPE: EscapeEdit = EscapeEdit::Commit;
-    const PARTS: bool = false;
-    const STOPS: bool = false;
     const OVERLAYS: bool = false;
     type Style = HudPickStyle;
     type Output = EditResponse<Srgba>;
@@ -223,7 +235,13 @@ impl Component for HudPick<'_> {
     }
 
     fn sense(&self) -> Sense {
-        Sense::empty()
+        Sense::FOCUS
+    }
+
+    fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
+        let geometry = cx.style.geometry();
+        cx.part(AREA, geometry.area(rect.min));
+        cx.part(STRIP, geometry.strip(rect.min));
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
@@ -264,13 +282,10 @@ impl Component for HudPick<'_> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let geometry = cx.style.geometry();
         let model = MODE.model();
         let values = model.from_srgb(cx.value().copied().unwrap_or(BLACK));
-        let area = ColorArea::new(Label::from(MODE.name()), MODE, Bind::given(values));
-        let _ = ui.inner("area", geometry.area(cx.rect.min), area);
-        let strip = ColorStrip::new(Label::from(model.channels()[MODE.strip()].name.to_owned()), MODE, Bind::given(values));
-        let _ = ui.inner("strip", geometry.strip(cx.rect.min), strip);
+        ui.face(AREA, ColorArea::new(Label::from(MODE.name()), MODE, Bind::given(values)));
+        ui.face(STRIP, ColorStrip::new(Label::from(model.channels()[MODE.strip()].name.to_owned()), MODE, Bind::given(values)));
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> EditResponse<Srgba> {

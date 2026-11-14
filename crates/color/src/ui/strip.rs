@@ -268,7 +268,7 @@ fn with_value(mode: AreaMode, levels: Option<usize>, values: &ModelValues, value
 
 /// The values the pointer at `at` picks in the strip's `rect` for `mode`, from `values`: the mapping of `update`, which
 /// `ColorHud` drives with the host's pointer.
-// PLAN: the contract signature has no quantise levels, so this is the unquantised strip; `update` keeps its own levels.
+/// The HUD's strip does not quantise, so the colour is not put on levels.
 pub(crate) fn value_at(rect: Rect, mode: AreaMode, values: &ModelValues, at: Pos2) -> ModelValues {
     match picked(rect, mode, at) {
         Some(value) => with_value(mode, None, values, value),
