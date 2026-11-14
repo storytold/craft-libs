@@ -1,0 +1,46 @@
+{
+  "id": "M1",
+  "title": "M100 under a luminosity mask whose content is a black hole, /BC white",
+  "source": "new",
+  "page": [360, 216],
+  "settings": {"group_cs": "cmyk"},
+  "objects": [
+    {"type": "rect", "rect": [20, 20, 320, 176], "fill": {"cmyk": [100, 0, 0, 0]}},
+    {
+      "type": "rect",
+      "rect": [60, 40, 240, 136],
+      "fill": {"cmyk": [0, 100, 0, 0]},
+      "mask": {
+        "kind": "luminosity",
+        "backdrop": {"gray": 0},
+        "content": [{"type": "rect", "rect": [140, 70, 80, 76], "fill": {"gray": 100}}]
+      }
+    }
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black"],
+    "points": [
+      {
+        "at": [80, 60],
+        "inks": {"Magenta": 100},
+        "tol": 2,
+        "note": "outside the mask content: /BC white shows the object"
+      },
+      {
+        "at": [180, 108],
+        "inks": {"Cyan": 100},
+        "tol": 2,
+        "note": "inside the black hole: masked out"
+      },
+      {"at": [30, 30], "inks": {"Cyan": 100}, "tol": 2, "note": "cyan only"}
+    ]
+  },
+  "structure": {
+    "page_group": "DeviceCMYK",
+    "smask": true,
+    "ext_g_states": [{"SMask": "Luminosity", "BC": true}],
+    "color_spaces_include": ["DeviceCMYK"],
+    "device_rgb": false,
+    "output_intents": []
+  }
+}

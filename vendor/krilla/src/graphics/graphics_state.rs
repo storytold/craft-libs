@@ -1,7 +1,7 @@
 use std::hash::Hash;
 use std::sync::Arc;
 
-use pdf_writer::types::BlendMode;
+use pdf_writer::types::{BlendMode, OverprintMode};
 use pdf_writer::{Finish, Name, Ref};
 
 use crate::chunk_container::ChunkContainer;
@@ -24,6 +24,12 @@ struct Repr {
     blend_mode: Option<BlendMode>,
     /// An active mask.
     mask: Option<Ref>,
+    /// Fill overprint (`/op`).
+    overprint_fill: Option<bool>,
+    /// Stroke overprint (`/OP`).
+    overprint_stroke: Option<bool>,
+    /// Overprint mode (`/OPM`).
+    overprint_mode: Option<OverprintMode>,
 }
 
 /// A graphics state containing information about
@@ -31,6 +37,7 @@ struct Repr {
 /// - The current non-stroking alpha.
 /// - The current blend mode.
 /// - The current mask.
+/// - The current overprint settings.
 ///
 /// This struct provides exposes a builder pattern for setting the various properties
 /// individually.
@@ -66,6 +73,16 @@ impl ExtGState {
         self
     }
 
+    /// Create a new graphics state with fill and stroke overprint and an overprint mode.
+    #[must_use]
+    pub(crate) fn overprint(mut self, fill: bool, stroke: bool, mode: OverprintMode) -> Self {
+        let repr = Arc::make_mut(&mut self.0);
+        repr.overprint_fill = Some(fill);
+        repr.overprint_stroke = Some(stroke);
+        repr.overprint_mode = Some(mode);
+        self
+    }
+
     /// Create a new graphics state with a mask.
     #[must_use]
     pub(crate) fn mask(
@@ -85,6 +102,9 @@ impl ExtGState {
             && self.0.stroking_alpha.is_none()
             && self.0.non_stroking_alpha.is_none()
             && self.0.blend_mode.is_none()
+            && self.0.overprint_fill.is_none()
+            && self.0.overprint_stroke.is_none()
+            && self.0.overprint_mode.is_none()
     }
 
     /// Integrate another graphics state into the current one. This is done by replacing
@@ -106,6 +126,18 @@ impl ExtGState {
         if let Some(mask) = other.0.mask {
             Arc::make_mut(&mut self.0).mask = Some(mask);
         }
+
+        if let Some(fill) = other.0.overprint_fill {
+            Arc::make_mut(&mut self.0).overprint_fill = Some(fill);
+        }
+
+        if let Some(stroke) = other.0.overprint_stroke {
+            Arc::make_mut(&mut self.0).overprint_stroke = Some(stroke);
+        }
+
+        if let Some(mode) = other.0.overprint_mode {
+            Arc::make_mut(&mut self.0).overprint_mode = Some(mode);
+        }
     }
 }
 
@@ -122,6 +154,7 @@ impl Cacheable for ExtGState {
         if let Some(nsa) = self.0.non_stroking_alpha {
             if nsa != NormalizedF32::ONE {
                 sc.register_validation_error(ValidationError::Transparency(sc.location));
+                sc.mark_transparent(root_ref);
             }
 
             ext_st.non_stroking_alpha(nsa.get());
@@ -130,6 +163,7 @@ impl Cacheable for ExtGState {
         if let Some(sa) = self.0.stroking_alpha {
             if sa != NormalizedF32::ONE {
                 sc.register_validation_error(ValidationError::Transparency(sc.location));
+                sc.mark_transparent(root_ref);
             }
 
             ext_st.stroking_alpha(sa.get());
@@ -138,6 +172,7 @@ impl Cacheable for ExtGState {
         if let Some(bm) = self.0.blend_mode {
             if bm != BlendMode::Normal {
                 sc.register_validation_error(ValidationError::Transparency(sc.location));
+                sc.mark_transparent(root_ref);
             }
 
             ext_st.blend_mode(bm);
@@ -145,8 +180,33 @@ impl Cacheable for ExtGState {
 
         if let Some(mask_ref) = self.0.mask {
             sc.register_validation_error(ValidationError::Transparency(sc.location));
+            sc.mark_transparent(root_ref);
 
             ext_st.pair(Name(b"SMask"), mask_ref);
+        }
+
+        if let Some(fill) = self.0.overprint_fill {
+            ext_st.overprint_fill(fill);
+        }
+
+        if let Some(stroke) = self.0.overprint_stroke {
+            ext_st.overprint(stroke);
+        }
+
+        if let Some(mode) = self.0.overprint_mode {
+            // Under `no_device_cs` all CMYK is ICCBased, which PDF/A-2 and later forbid with
+            // OPM 1 when that side overprints. The colors painted under this state aren't
+            // known here, so any overprinting side counts.
+            let overprints =
+                self.0.overprint_fill == Some(true) || self.0.overprint_stroke == Some(true);
+            if mode == OverprintMode::IgnoreZeroChannel
+                && overprints
+                && sc.serialize_settings().no_device_cs
+            {
+                sc.register_validation_error(ValidationError::OverprintModeIccCmyk(sc.location));
+            }
+
+            ext_st.overprint_mode(mode);
         }
 
         ext_st.finish();

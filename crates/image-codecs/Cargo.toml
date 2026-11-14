@@ -1,0 +1,46 @@
+[package]
+name = "craft-image-codecs"
+description = "Bounded, depth- and metadata-preserving codecs for flat raster image formats"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+corpus = []
+default = []
+avif = ["image/avif"]
+heif = ["dep:craft-heif"]
+
+[dependencies]
+thiserror = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "gif", "bmp", "tga", "ico", "qoi", "hdr"] }
+png = "0.18"
+tiff = { version = "0.11", default-features = false, features = ["deflate", "fax", "jpeg", "lzw"] }
+exr = { version = "1.73", default-features = false }
+half = "2"
+serde_json = { workspace = true }
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }
+image-webp = "0.2"
+zune-jpeg = "0.5"
+zune-core = "0.5"
+jpeg-encoder = "0.6"
+craft-jpeg = { workspace = true }
+craft-metadata = { workspace = true }
+zune-jpegxl = { version = "=0.5.2", default-features = false, features = ["std"] }
+craft-heif = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }
+exr = { version = "1.73", default-features = false, features = ["rayon"] }
+
+[dev-dependencies]
+proptest = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+jxl-oxide = { version = "=0.12.6", default-features = false, features = ["rayon"] }

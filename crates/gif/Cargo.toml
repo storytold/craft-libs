@@ -1,0 +1,22 @@
+[package]
+name = "craft-gif"
+description = "GIF block reader, bounded frame decoder and animation writer."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Decoding every frame through the `image` crate's GIF decoder, with bounded memory.
+frames = ["dep:image"]
+
+[dependencies]
+gif = "0.14"
+image = { version = "0.25", default-features = false, features = ["gif"], optional = true }
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["gif"] }

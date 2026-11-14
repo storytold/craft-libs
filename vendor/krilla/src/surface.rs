@@ -16,7 +16,7 @@ use crate::geom::Path;
 use crate::geom::Size;
 use crate::geom::{Point, Transform};
 use crate::graphic::Graphic;
-use crate::graphics::blend::BlendMode;
+use crate::graphics::blend::{BlendMode, GroupOptions, Overprint};
 use crate::graphics::graphics_state::ExtGState;
 #[cfg(feature = "raster-images")]
 use crate::graphics::image::Image;
@@ -98,6 +98,11 @@ impl<'a> Surface<'a> {
             push_instructions: vec![],
             finish_fn,
         }
+    }
+
+    /// The content stream being drawn and the serialization context, borrowed together.
+    pub(crate) fn content_and_context(&mut self) -> (&mut ContentBuilder, &mut SerializeContext) {
+        (self.bd.get_mut(), self.sc)
     }
 
     /// Return a `StreamBuilder` to allow drawing on a sub-context.
@@ -422,6 +427,16 @@ impl<'a> Surface<'a> {
         self.bd.get_mut().set_blend_mode(blend_mode.to_pdf());
     }
 
+    /// Push overprint settings. Paths, text and images drawn until the matching
+    /// [`Surface::pop`] carry them, and so do groups pushed inside. The `/op`, `/OP` and
+    /// `/OPM` entries are always written, so `Overprint::default()` turns overprint off
+    /// inside an outer `push_overprint`.
+    pub fn push_overprint(&mut self, overprint: Overprint) {
+        self.push_instructions.push(PushInstruction::Overprint);
+        self.bd.get_mut().save_graphics_state();
+        self.bd.get_mut().set_overprint(overprint);
+    }
+
     /// Push a new clip path.
     pub fn push_clip_path(&mut self, path: &Path, clip_rule: &FillRule) {
         self.push_instructions.push(PushInstruction::ClipPath);
@@ -484,9 +499,19 @@ impl<'a> Surface<'a> {
         }
     }
 
-    /// Push a new isolated layer.
+    /// Push a new isolated layer. Shorthand for [`Surface::push_group`] with only
+    /// `isolated` set.
     pub fn push_isolated(&mut self) {
-        self.push_instructions.push(PushInstruction::Isolated);
+        self.push_group(GroupOptions {
+            isolated: true,
+            knockout: false,
+        });
+    }
+
+    /// Push a new transparency group with the given attributes. Everything drawn until
+    /// the matching [`Surface::pop`] goes into the group.
+    pub fn push_group(&mut self, options: GroupOptions) {
+        self.push_instructions.push(PushInstruction::Group(options));
         self.bd
             .sub_builders
             .push(ContentBuilder::new(Transform::identity(), true, self.sc));
@@ -509,17 +534,18 @@ impl<'a> Surface<'a> {
             }
             PushInstruction::ClipPath => self.bd.get_mut().pop_clip_path(),
             PushInstruction::BlendMode => self.bd.get_mut().restore_graphics_state(),
+            PushInstruction::Overprint => self.bd.get_mut().restore_graphics_state(),
             PushInstruction::Mask(mask) => {
                 let stream = self.bd.sub_builders.pop().unwrap().finish(self.sc);
                 self.bd
                     .get_mut()
                     .draw_masked(self.sc, self.chunk_container, *mask, stream)
             }
-            PushInstruction::Isolated => {
+            PushInstruction::Group(options) => {
                 let stream = self.bd.sub_builders.pop().unwrap().finish(self.sc);
                 self.bd
                     .get_mut()
-                    .draw_isolated(self.sc, self.chunk_container, stream);
+                    .draw_group(self.sc, self.chunk_container, options, stream);
             }
         }
     }
@@ -594,6 +620,10 @@ impl<'a> Surface<'a> {
                 r.stops.iter().any(|s| s.opacity != NormalizedF32::ONE)
             }
             InnerPaint::SweepGradient(r) => r.stops.iter().any(|s| s.opacity != NormalizedF32::ONE),
+            InnerPaint::MeshGradient(m) => m
+                .patches
+                .iter()
+                .any(|p| p.opacities.iter().any(|o| *o != NormalizedF32::ONE)),
             InnerPaint::Pattern(_) => false,
         };
 
@@ -670,6 +700,7 @@ pub(crate) enum PushInstruction {
     Opacity(NormalizedF32),
     ClipPath,
     BlendMode,
+    Overprint,
     Mask(Box<Mask>),
-    Isolated,
+    Group(GroupOptions),
 }

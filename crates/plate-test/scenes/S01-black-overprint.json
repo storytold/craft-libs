@@ -1,0 +1,50 @@
+{
+  "id": "S01",
+  "title": "[Black] rect and text over C100, overprint on",
+  "source": "research S1, DesignCraft DC06",
+  "page": [360, 216],
+  "objects": [
+    {"type": "rect", "rect": [20, 20, 300, 176], "fill": {"cmyk": [100, 0, 0, 0]}},
+    {
+      "type": "rect",
+      "rect": [40, 40, 100, 60],
+      "fill": {"cmyk": [0, 0, 0, 100]},
+      "overprint": {"fill": true}
+    },
+    {
+      "type": "text",
+      "at": [40, 160],
+      "size": 60,
+      "text": "HHH",
+      "fill": {"cmyk": [0, 0, 0, 100]},
+      "overprint": {"fill": true}
+    }
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black"],
+    "points": [
+      {"at": [90, 70], "inks": {"Cyan": 100, "Black": 100}, "tol": 2, "note": "K rect"},
+      {
+        "at": [110, 140],
+        "kind": "text",
+        "region": [40, 116.2, 133.2, 43.8],
+        "inks": {"Cyan": 100, "Black": 100},
+        "tol": 2,
+        "note": "K text"
+      },
+      {"at": [250, 70], "inks": {"Cyan": 100}, "tol": 2, "note": "cyan only"},
+      {"at": [340, 108], "inks": {}, "tol": 2, "note": "paper"}
+    ]
+  },
+  "structure": {
+    "page_group": "none",
+    "group_cs": [],
+    "overprint": true,
+    "smask": false,
+    "blend_modes": [],
+    "color_spaces": ["DeviceCMYK"],
+    "ext_g_states": [{"op": true}],
+    "device_rgb": false,
+    "output_intents": []
+  }
+}
