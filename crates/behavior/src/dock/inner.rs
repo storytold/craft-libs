@@ -46,7 +46,8 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                 }
                 // A window's only panel keeps the window's id.
                 let lone = self.floating.iter().find(|w| w.contains(&panel)).filter(|w| w.panels().count() == 1).map(|w| w.id);
-                let entry = self.take(&panel).ok_or(DockError::MissingPanel)?;
+                // A panel the layout does not hold opens in the new window.
+                let entry = self.take(&panel).unwrap_or(StackEntry { panel: panel.clone(), open: true, height: None });
                 let window = Floating::single(vec![entry.panel], 0, rect);
                 self.floating.push(Floating { id: lone.unwrap_or(window.id), ..window });
                 Ok(())

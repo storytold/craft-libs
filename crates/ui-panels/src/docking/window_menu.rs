@@ -10,7 +10,8 @@ use std::hash::Hash;
 /// One check row per panel in the order the app gives, for a Window menu. A row is checked while its panel is in the
 /// layout (closed panels are not), and its label and icon come from [`DockPanels::spec`]. A pick returns the action
 /// that shows the panel (open a closed one, bring a panel behind another tab to the front) or closes it (a panel
-/// showing); the app applies it through the same path as the actions of a `DockArea`.
+/// showing); the app applies it through the same path as the actions of a `DockArea`. A Hidden pick's `Action::open`
+/// restores the panel's last place through `Workspace::apply_all`.
 #[derive(crate::contract::Pattern)]
 #[pattern(probe(WindowMenuRows<'static, u32>))]
 pub struct WindowMenuRows<'a, P> {

@@ -349,6 +349,30 @@ fn an_app_change_of_a_native_floats_place_moves_its_window_once() {
     assert_eq!(placing, [&ViewportCommand::OuterPosition(to.min), &ViewportCommand::InnerSize(to.size())], "one move and one size");
 }
 
+/// OS files reach `DockAreaOutput::window_files` only from a drop on a native float's own window: with the float's
+/// OS window open and nothing dropped, the dock reports no files.
+// PLAN: the drop itself cannot be driven yet: the `Windows` kit (`crates/ui-test-kit/src/windows.rs`, outside this
+// set) gives a child pass only `Event`s, never `RawInput::dropped_files`. Once the kit lets a frame give the child
+// files, this trial drops one file no target takes and one a target takes, and asserts that only the first arrives.
+#[trial]
+fn a_file_dropped_on_a_native_float_reaches_window_files_once() {
+    let windows = Windows::new();
+    windows.root_info(info(true, ROOT_AT));
+    windows.child_info(info(true, PALETTE_AT));
+    let mut workspace = Workspace::new(Layout::new(None, vec![float()]));
+    let mut opened = false;
+    let mut files = 0;
+    for _ in 0..4 {
+        let out = windows.frame(vec![], vec![], |ui| {
+            let shown = DockArea::new("Native dock", Bind::bound(&mut workspace), &mut Palettes(Permissions::ALL), DockConfig::default()).show(ui);
+            files += shown.window_files.len();
+        });
+        opened |= out.builders.iter().any(|(viewport, _)| *viewport != ViewportId::ROOT);
+    }
+    assert!(opened, "the float has its own OS window");
+    assert_eq!(files, 0, "no drop, no files");
+}
+
 /// A palette float made in the app window.
 fn float() -> Floating<u32> {
     Floating::single(vec![1], 0, Rect::from_min_size(Pos2::new(40.0, 40.0), Vec2::new(300.0, 200.0)))

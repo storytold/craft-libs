@@ -168,3 +168,38 @@ fn only_a_replacement_changes_the_live_revision() {
     let loaded: Workspace<u32> = serde_json::from_str(&serde_json::to_string(&live).unwrap()).unwrap();
     assert_eq!(loaded, live, "the revision is not saved and not part of equality");
 }
+
+/// Open of a hidden panel follows its record: a floating panel returns to its window; a record whose anchor is gone
+/// falls back to the anchor Open names.
+#[test]
+fn opening_a_closed_floating_panel_restores_its_window_place() {
+    let mut workspace = Workspace::new(docked());
+    workspace.apply(Action::close(8), false, allow).unwrap();
+    assert!(workspace.layout.place(&8).is_none());
+    workspace.apply(Action::open(8, Some(11)), false, allow).unwrap();
+    assert!(matches!(workspace.layout.place(&8), Some(PanelPlace::Floating { .. })), "back in its window");
+    assert!(workspace.hidden.is_empty());
+
+    let mut stray = workspace.layout.location(&5).unwrap();
+    stray.anchor = Some(99);
+    workspace.hidden.push((50, stray));
+    workspace.apply(Action::open(50, Some(11)), false, allow).unwrap();
+    assert_eq!(group_members(&workspace.layout, 11), [11, 12, 50]);
+}
+
+/// A panel that floats keeps its docked place until it docks or closes; floating again from the float keeps the first.
+#[test]
+fn a_floated_panel_keeps_where_it_was_docked_until_it_docks_or_closes() {
+    let mut workspace = Workspace::new(docked());
+    let docked_at = workspace.layout.location(&2).unwrap();
+    workspace.apply(Action::float(2, rect(10.0, 10.0, 200.0, 200.0)), false, allow).unwrap();
+    assert_eq!(workspace.floated, [(2, docked_at.clone())]);
+    workspace.apply(Action::float(2, rect(30.0, 30.0, 200.0, 200.0)), false, allow).unwrap();
+    assert_eq!(workspace.floated, [(2, docked_at)], "floating again from the float keeps the first record");
+    workspace.apply(Action::move_beside(2, 11, DockPlacement::tab(None)), false, allow).unwrap();
+    assert!(workspace.floated.is_empty(), "docking drops the record");
+    workspace.apply(Action::float(3, rect(10.0, 10.0, 200.0, 200.0)), false, allow).unwrap();
+    assert_eq!(workspace.floated.len(), 1);
+    workspace.apply(Action::close(3), false, allow).unwrap();
+    assert!(workspace.floated.is_empty(), "closing drops the record");
+}

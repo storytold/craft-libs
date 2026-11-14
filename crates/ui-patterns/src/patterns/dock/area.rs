@@ -10,8 +10,8 @@ use crate::docking::tree::FrameRules;
 use crate::docking::{Arrangement, cross_window, end_replaced_drags, float_drop, native};
 use crate::docking::{
     DockColumn, DockCommands, DockConfig, DockDropTarget, DockDropped, DockEvent, DockGroup, DockPanels, DockRoot, DockScene, DockSizes, DockSpot,
-    DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, GroupAt, GroupDrag, HidePanels, IconicColumn, PanelDrag, PanelKey,
-    PanelSpec, PanelTitle, SplitArea, actions, dock_states, fit_widths, frame, move_actions,
+    DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt, GroupDrag, HidePanels, IconicColumn, PanelDrag,
+    PanelKey, PanelSpec, PanelTitle, SplitArea, actions, dock_states, fit_widths, frame, move_actions,
 };
 use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
 use crate::runtime::commands::{CommandRef, CommandSet as _, Commands as _, focus_within};
@@ -20,7 +20,7 @@ use crate::runtime::env::{Env, Label, RevealEdge, ShellCx, ShellEntry};
 use crate::runtime::memory::Remember as _;
 use crate::runtime::windows::WindowHost;
 use crate::sections::HeaderAction;
-use craft_behavior::dock::{Action, Column, DockEdge, DockError, Group, Layout, Node, PanelPlace, Permissions, Workspace, node_at};
+use craft_behavior::dock::{Action, Column, DockEdge, DockError, Group, Layout, Location, Node, PanelPlace, Permissions, Workspace, node_at};
 use craft_behavior::{CancelReason, DockSide, EditEvent, EditEvents, Flow, GestureId, GesturePhase, Mixed, Proposal};
 use egui::{Context, Id, Pos2, Rect, Response, Ui, Vec2};
 use std::cell::{Cell, RefCell};
@@ -200,6 +200,8 @@ struct Report<P> {
     picked: Option<P>,
     flyout: Vec<EditEvent<Option<P>>>,
     placed: Vec<(P, Rect)>,
+    /// The files dropped on the floating windows that no target there took.
+    files: Vec<drag::OsFile>,
 }
 
 /// What every part of one pass reads.
@@ -215,6 +217,8 @@ struct Scene<'s, P> {
     bounds: Rect,
     auto_collapse: bool,
     rtl: bool,
+    /// The docked places floating panels left, for Dock Panel.
+    floated: &'s [(P, Location<P>)],
 }
 
 impl<P: Clone + Eq + Hash> Scene<'_, P> {
@@ -240,6 +244,7 @@ struct Passed<P> {
     edit: EditEvents<Workspace<P>>,
     space: Option<FloatSpace<P>>,
     columns: Vec<(P, Rect)>,
+    files: Vec<drag::OsFile>,
 }
 
 /// How a group is shown: minimized, and whether it is an accordion section (with its open state).
@@ -265,6 +270,8 @@ struct ColumnWork<P> {
     resized: Vec<(P, f32)>,
     /// The expanded width the user gave an expanded column, or the iconic width of an iconic one.
     width: Option<f32>,
+    /// The size the user gave an iconic column's open flyout.
+    flyout: Option<FlyoutResize<P>>,
 }
 
 /// The parts of one pass with the host's panels and what they reported.
@@ -346,7 +353,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             }
             passed = Some(result);
         });
-        let Passed { actions, events, focused, picked, edit, space, columns } = passed.unwrap_or_else(|| Passed {
+        let Passed { actions, events, focused, picked, edit, space, columns, files } = passed.unwrap_or_else(|| Passed {
             actions: Vec::new(),
             events: Vec::new(),
             focused: None,
@@ -354,6 +361,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             edit: EditEvents::new(),
             space: None,
             columns: Vec::new(),
+            files: Vec::new(),
         });
         if shown.output.dropped.is_some() {
             cross_window::accept_cross_window(&ctx);
@@ -367,9 +375,9 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             edit,
             float_space: space,
             columns,
-            window_files: Vec::new(),
+            window_files: files,
             response: shown.output.response,
-        } // P3(panels-w1): pn.C7
+        }
     }
 }
 
@@ -456,12 +464,33 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     let layout: &Layout<P> = &view.layout;
     let bounds = shell.as_ref().map_or(body.rect, ShellCx::float_bounds);
     let space = float_space(bounds, &sizes, config, specs);
-    let scene = Scene { dock: id, sizes, config, layout, specs, permissions: rights, keys: &keys, space: &space, bounds, auto_collapse, rtl };
+    let scene = Scene {
+        dock: id,
+        sizes,
+        config,
+        layout,
+        specs,
+        permissions: rights,
+        keys: &keys,
+        space: &space,
+        bounds,
+        auto_collapse,
+        rtl,
+        floated: &current.floated,
+    };
     let open = open_of(&mut flyout, body, &memory);
     let mut pass = Pass {
         scene: &scene,
         panels,
-        report: Report { actions: Vec::new(), events: Vec::new(), focused: None, picked: None, flyout: Vec::new(), placed: Vec::new() },
+        report: Report {
+            actions: Vec::new(),
+            events: Vec::new(),
+            focused: None,
+            picked: None,
+            flyout: Vec::new(),
+            placed: Vec::new(),
+            files: Vec::new(),
+        },
         dock: id,
     };
 
@@ -529,6 +558,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         edit,
         space: Some(space),
         columns: report.placed,
+        files: report.files,
     }
 }
 
@@ -610,7 +640,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let scene = self.scene;
         let config = scene.config;
         let command = |command: DockCommands| PanelRow::Command(CommandRef::from(command));
+        let floating = matches!(scene.layout.place(panel), Some(PanelPlace::Floating { .. }));
         let mut group = vec![command(DockCommands::FloatPanel)];
+        if floating {
+            group.push(command(DockCommands::DockPanel));
+        }
         let targets = scene.layout.move_targets(panel, |other| scene.permissions(other));
         if scene.permissions(panel).movable && !targets.is_empty() {
             let rows = targets.iter().enumerate().map(|(at, target)| PanelRow::Item(Entry::new(GroupItem::MoveTo(at), scene.spec(target).label)));
@@ -619,6 +653,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         }
         if config.close_menu_items {
             group.extend([command(DockCommands::ClosePanel), command(DockCommands::CloseGroup)]);
+        }
+        if config.group_order_items && matches!(scene.layout.place(panel), Some(PanelPlace::Dock { .. })) {
+            group.extend([command(DockCommands::ToggleMinimized), command(DockCommands::StepGroupUp), command(DockCommands::StepGroupDown)]);
         }
         group.push(command(DockCommands::FloatGroup));
         if config.close_others_item {
@@ -642,7 +679,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let scene = self.scene;
         let permissions = |panel: &P| scene.permissions(panel);
         // The area's permissions are narrowed for a locked workspace already.
-        let mut commands = DockScene::new(scene.layout, scene.space, false, &permissions);
+        let mut commands = DockScene::new(scene.layout, scene.space, false, &permissions).floated(scene.floated);
         if let Some(size) = source {
             commands = commands.source(size);
         }
@@ -661,7 +698,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let scene = self.scene;
         let permissions = |panel: &P| scene.permissions(panel);
         let Some(target) = scene.layout.move_targets(panel, permissions).get(at).map(|target| (*target).clone()) else { return };
-        let commands = DockScene::new(scene.layout, scene.space, false, &permissions);
+        let commands = DockScene::new(scene.layout, scene.space, false, &permissions).floated(scene.floated);
         if let Ok(planned) = move_actions(&commands, &DragUnit::Panel(panel.clone()), DockTo::tabs(target, None)) {
             self.report.actions.extend(planned);
         }
@@ -692,7 +729,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let shown = &members[active];
         let (menu, hosted) = self.menu_rows(body, shown);
         let permissions = |panel: &P| scene.permissions(panel);
-        let states = dock_states(&DockScene::new(scene.layout, scene.space, false, &permissions), shown);
+        let states = dock_states(&DockScene::new(scene.layout, scene.space, false, &permissions).floated(scene.floated), shown);
         let panels = RefCell::new(&mut *self.panels);
         // The group with `members[at]` shown: as it shows, or as it is measured.
         let make = |at: usize, minimized: bool| {
@@ -806,7 +843,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     .auto_collapse(scene.auto_collapse)
                     .show_flyouts_at(ui, cell, |group, at, ui, body| self.group_of(ui, body, group, at));
                 self.report.flyout.extend(output.edit.events);
-                let work = ColumnWork { iconic: output.iconic, picked: output.picked, resized: Vec::new(), width: output.width };
+                let work =
+                    ColumnWork { iconic: output.iconic, picked: output.picked, resized: Vec::new(), width: output.width, flyout: output.flyout };
                 self.column_work(column, work);
             } else {
                 let output = DockColumn::new(name.clone(), scene.dock, column, &spec)
@@ -816,7 +854,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     .show_groups_at(ui, cell, |group, rect, ui, body| {
                         self.group_of(ui, body, group, GroupAt::Show(rect));
                     });
-                let work = ColumnWork { iconic: output.iconic, picked: output.picked, resized: output.resized, width: output.width };
+                let work = ColumnWork { iconic: output.iconic, picked: output.picked, resized: output.resized, width: output.width, flyout: None };
                 self.column_work(column, work);
             }
         }
@@ -840,6 +878,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             } else {
                 Action::resize_column(first.clone(), width)
             });
+        }
+        if let Some(resize) = work.flyout {
+            let panel = resize.panel;
+            self.report.actions.push(Action::resize_flyout_width(panel.clone(), Some(resize.width)));
+            self.report.actions.push(Action::resize_group(panel.clone(), Some(resize.height)));
+            if resize.offset.is_some() {
+                self.report.actions.push(Action::move_flyout_top(panel, resize.offset));
+            }
         }
     }
 
@@ -880,7 +926,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             target.title_bar_docks = scene.config.title_bar_docks;
             // The window is an instance of the group scope: its menu's command rows reach it, and run on its active
             // panel through the same path as a docked group's.
-            let states = dock_states(&DockScene::new(scene.layout, scene.space, false, &policy), &active);
+            let states = dock_states(&DockScene::new(scene.layout, scene.space, false, &policy).floated(scene.floated), &active);
             let mut commands = Vec::new();
             let spec = scene.spec(&active);
             let mut group = FloatingGroup::new(spec.label, opening.rect)
@@ -930,6 +976,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 self.report.actions.extend(split_resizes(&anchor, &window.root, edited));
             }
             let output = shown.output;
+            self.report.files.extend(output.files);
             if let Some(dropped) = dropped.into_inner() {
                 cross_window::accept_cross_window(&ctx);
                 self.report.actions.push(dropped.action);
@@ -950,7 +997,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     self.report.actions.push(Action::close_window(anchor.clone()));
                 }
                 Some(HeaderAction::Float) => {
-                    let commands = DockScene::new(scene.layout, scene.space, false, &policy);
+                    let commands = DockScene::new(scene.layout, scene.space, false, &policy).floated(scene.floated);
                     if let Ok(docked) = move_actions(&commands, &DragUnit::Window(anchor.clone()), DockTo::Docked) {
                         self.report.actions.extend(docked);
                     }

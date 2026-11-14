@@ -50,7 +50,10 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                     return Err(DockError::NotAllowed);
                 }
             }
-            Action::Float { panel, .. } if !permissions(panel).floatable || !permissions(panel).movable => return Err(DockError::NotAllowed),
+            // Floating an absent panel opens it and moves nothing, so it works in a locked workspace too.
+            Action::Float { panel, .. } if self.contains(panel) && (!permissions(panel).floatable || !permissions(panel).movable) => {
+                return Err(DockError::NotAllowed);
+            }
             Action::Close { panel } if !permissions(panel).closable => return Err(DockError::NotAllowed),
             // The rectangle belongs to the whole floating window, so every panel in it must allow it.
             Action::MoveFloating { panel, .. }

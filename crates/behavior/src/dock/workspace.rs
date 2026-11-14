@@ -9,6 +9,7 @@ use std::{collections::HashSet, hash::Hash};
 use super::{
     DockSide,
     action::{Action, DockPlacement, Location},
+    groups::PanelPlace,
     layout::Layout,
     limits::MAX_PANELS,
     policy::{DockError, Permissions},
@@ -129,17 +130,26 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
         for action in actions {
             let closed = proposed.layout.closed_by(&action)?;
             let locations = close_locations(&proposed.layout, &closed);
-            // SetNative records where the window system has a floating window, so a lock
-            // does not refuse it.
-            if matches!(action, Action::SetNative { .. }) {
-                proposed.layout.apply_with_permissions(action, &permissions)?;
-            } else {
-                proposed.layout.apply_with_permissions(action, policy)?;
+            let before = proposed.layout.clone();
+            // Opening a hidden panel puts it back where it was.
+            let reopened = match &action {
+                Action::Open { panel, .. } if proposed.hidden.iter().any(|(p, _)| p == panel) => proposed.reopen(panel)?,
+                _ => false,
+            };
+            if !reopened {
+                // SetNative records where the window system has a floating window, so a lock
+                // does not refuse it.
+                if matches!(action, Action::SetNative { .. }) {
+                    proposed.layout.apply_with_permissions(action, &permissions)?;
+                } else {
+                    proposed.layout.apply_with_permissions(action, policy)?;
+                }
             }
             for (panel, location) in locations {
                 proposed.hidden.retain(|(p, _)| p != &panel);
                 proposed.hidden.push((panel, location));
             }
+            proposed.track_floated(&before);
             all_closed.extend(closed);
         }
         let visible: HashSet<P> = proposed.layout.panels().into_iter().cloned().collect();
@@ -176,15 +186,35 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
         if self.layout.contains(&panel) {
             return self.apply(Action::Activate { panel }, false, |_| Permissions::default()).map(drop);
         }
+        let open = Action::Open { panel: panel.clone(), anchor: fallback };
+        self.apply_all([open, Action::Activate { panel }], locked, permissions).map(drop)
+    }
+
+    /// Restore a hidden `panel` to its recorded place and make it the active tab. `Ok(false)` when the record
+    /// cannot be restored, which leaves the workspace as it was.
+    fn reopen(&mut self, panel: &P) -> Result<bool, DockError> {
         let mut layout = self.layout.clone();
-        if self.restore_from_hidden(&mut layout, &panel).is_err() {
-            layout = self.layout.clone();
-            layout.apply_with_permissions(Action::Open { panel: panel.clone(), anchor: fallback }, &permissions)?;
+        if self.restore_from_hidden(&mut layout, panel).is_err() {
+            return Ok(false);
         }
         layout.apply(Action::Activate { panel: panel.clone() })?;
         self.layout = layout;
-        self.hidden.retain(|(p, _)| p != &panel);
-        Ok(())
+        self.hidden.retain(|(p, _)| p != panel);
+        Ok(true)
+    }
+
+    /// Update the floated records after an action that turned `before` into the current layout: drop the records of
+    /// panels that no longer float, and record the docked place of each panel that floats now and did not before.
+    fn track_floated(&mut self, before: &Layout<P>) {
+        let layout = &self.layout;
+        self.floated.retain(|(p, _)| floats(layout, p));
+        let fresh: Vec<(P, Location<P>)> = layout
+            .panels()
+            .into_iter()
+            .filter(|p| floats(layout, p) && before.contains(p) && !floats(before, p) && !self.floated.iter().any(|(q, _)| q == *p))
+            .filter_map(|p| before.location(p).ok().map(|location| (p.clone(), location)))
+            .collect();
+        self.floated.extend(fresh);
     }
 
     /// Restore `panel` where the chain of hidden anchors from its location ends, else at the
@@ -243,6 +273,7 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
             self.layout.take(panel);
         }
         self.hidden.extend(locations);
+        self.floated.retain(|(p, _)| registered(p));
         let known: HashSet<P> = self.layout.panels().into_iter().chain(self.hidden.iter().map(|(p, _)| p)).cloned().collect();
         let mut missing: Vec<(P, Location<P>)> = Vec::new();
         for panel in default.layout.panels() {
@@ -286,6 +317,11 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
         });
         self.hidden.truncate(MAX_PANELS);
     }
+}
+
+/// Whether `panel` is in a floating window of `layout`.
+fn floats<P: Clone + Eq + Hash>(layout: &Layout<P>, panel: &P) -> bool {
+    matches!(layout.place(panel), Some(PanelPlace::Floating { .. }))
 }
 
 /// Where each of `closed` goes back, captured as if they closed last to first. Reopening them

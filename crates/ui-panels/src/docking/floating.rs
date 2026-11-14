@@ -11,8 +11,8 @@ use crate::contract::BodyCx;
 use crate::contract::SizeLimits;
 use crate::contract::overlay::{PlacementChange, PlacementKind, Popup};
 use crate::contract::{
-    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Inner, Mount, NoValue, Outcome, Overlay, Pad,
-    Pointer as _, Props as _, Role, Show as _, ShowContainer as _, Sizing, WordSetCx as _,
+    Bind, BindMut, Common, Component, Container, ContainerProps, Cx, DragBand, DropMark, DropOperation, HeaderRegion, Inner, Mount, NoValue, OsFiles,
+    Outcome, Overlay, Pad, Pointer as _, Props as _, Role, Show as _, ShowContainer as _, Sizing, WindowDropTarget, WordSetCx as _,
 };
 use crate::runtime::drag::OsFile;
 use crate::runtime::env::{Env, Label};
@@ -30,6 +30,23 @@ mod stories;
 
 /// The actions a floating group's title row shows unless `actions` says otherwise.
 const ACTIONS: [HeaderAction; 3] = [HeaderAction::Menu, HeaderAction::Float, HeaderAction::Close];
+
+/// The whole window of a native floating group as a target for files from the OS.
+struct OsWindowFiles {
+    rect: Rect,
+}
+
+impl WindowDropTarget<OsFiles> for OsWindowFiles {
+    type Drop = OsFiles;
+
+    fn accept(&self, payload: &OsFiles, _op: DropOperation) -> Option<OsFiles> {
+        (!payload.files.is_empty()).then(|| payload.clone())
+    }
+
+    fn mark(&self, _drop: &OsFiles) -> DropMark {
+        DropMark::Into(self.rect)
+    }
+}
 
 /// The style of a floating group: the surface and padding come from the container.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
@@ -124,6 +141,8 @@ pub struct FloatingGroup<'a> {
     take_drop: Option<TakeDrop<'a>>,
     /// A move by the title began this pass.
     moving: bool,
+    /// The files dropped on the group's OS window that no target there took.
+    files: Vec<OsFile>,
 }
 
 type StartDrag<'a> = Box<dyn for<'b, 'c> FnOnce(&'b mut Cx<'c, FloatingGroup<'a>>) + 'a>;
@@ -158,6 +177,7 @@ impl<'a> FloatingGroup<'a> {
             start_drag: None,
             take_drop: None,
             moving: false,
+            files: Vec::new(),
         }
         .label(title)
     }
@@ -254,6 +274,13 @@ impl Component for FloatingGroup<'_> {
             take(cx);
             self.take_drop = Some(take);
         }
+        // A layer float lies in the app window, whose own targets take those drops.
+        if self.native.is_some() {
+            let target = OsWindowFiles { rect: cx.rect };
+            if let Some(dropped) = cx.window_drop_target::<OsFiles, _>(&target) {
+                self.files = dropped.files;
+            }
+        }
     }
 
     fn finish(mut self, mut cx: Cx<'_, Self>) -> FloatingGroupOutput {
@@ -273,8 +300,8 @@ impl Component for FloatingGroup<'_> {
             placed: self.placed,
             action: self.taken,
             minimized_toggled: self.toggled,
-            files: Vec::new(),
-        }; // P3(panels-w1): pn.C8
+            files: self.files,
+        };
         native::raise(&cx.core.ctx, &output);
         native::fade(&cx.core.ctx, &output);
         output

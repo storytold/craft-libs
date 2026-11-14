@@ -4,7 +4,7 @@ use crate::docking::drop::{beside, members, moving_panels, to_target};
 use crate::docking::{DockEvent, DragUnit, FloatSpace};
 use crate::runtime::commands::CommandState;
 use craft_behavior::DockSide;
-use craft_behavior::dock::{Action, DockEdge, DockError, DockPlacement, Layout, Node, PanelPlace, Permissions, Target, node_at};
+use craft_behavior::dock::{Action, DockEdge, DockError, DockPlacement, Layout, Location, Node, PanelPlace, Permissions, Target, node_at};
 use egui::{Rect, Vec2};
 use std::hash::Hash;
 
@@ -20,6 +20,9 @@ pub enum DockCommands {
     /// Float the panel's tab group into its own frame.
     #[command(label = "Float Tab Group")]
     FloatGroup,
+    /// Dock the floating panel: back where it was docked, else as a tab of the first docked panel.
+    #[command(label = "Dock Panel")]
+    DockPanel,
     /// Ask for a group to move the panel to; the host lists [`Layout::move_targets`] and calls [`move_actions`].
     #[command(label = "Move Panel To…")]
     MovePanelTo,
@@ -89,13 +92,21 @@ pub struct DockScene<'a, P> {
     source: Option<Vec2>,
     locked: bool,
     permissions: &'a dyn Fn(&P) -> Permissions,
+    floated: &'a [(P, Location<P>)],
 }
 
 impl<'a, P> DockScene<'a, P> {
     /// A scene over `layout`. `locked` is `WorkspaceSet::locked`; `permissions` is what the host passes to
     /// `Workspace::apply_all`.
     pub fn new(layout: &'a Layout<P>, space: &'a FloatSpace<P>, locked: bool, permissions: &'a dyn Fn(&P) -> Permissions) -> Self {
-        DockScene { layout, space, source: None, locked, permissions }
+        DockScene { layout, space, source: None, locked, permissions, floated: &[] }
+    }
+
+    /// The docked places floating panels left (`Workspace::floated`), which Dock Panel returns them to.
+    #[must_use]
+    pub fn floated(mut self, records: &'a [(P, Location<P>)]) -> Self {
+        self.floated = records;
+        self
     }
 
     /// The size of the group or window the command runs from, which a float of it takes.
@@ -170,23 +181,26 @@ pub fn actions<P: Clone + Eq + Hash>(scene: &DockScene<'_, P>, command: DockComm
             shown()?;
             Ok(float_actions(scene, &DragUnit::Group(panel.clone())))
         }
+        DockCommands::DockPanel => {
+            shown()?;
+            let back = scene.floated.iter().find(|(p, _)| p == panel).and_then(|(_, location)| {
+                let anchor = location.anchor.clone()?;
+                let docked = layout.place(&anchor).is_some_and(|place| !matches!(place, PanelPlace::Floating { .. }));
+                docked.then(|| Action::move_beside(panel.clone(), anchor, location.placement.clone()))
+            });
+            match back {
+                Some(action) => one(action),
+                None => move_actions(scene, &DragUnit::Panel(panel.clone()), DockTo::Docked),
+            }
+        }
         DockCommands::ClosePanel => one(Action::close(panel.clone())),
         DockCommands::CloseOthers => one(Action::close_others(panel.clone())),
         DockCommands::CloseGroup => one(Action::close_group(panel.clone())),
         DockCommands::StepGroupUp => one(Action::step_group(panel.clone(), true)),
         DockCommands::StepGroupDown => one(Action::step_group(panel.clone(), false)),
         DockCommands::ToggleMinimized => {
-            let place = layout.place(panel).ok_or(DockError::MissingPanel)?;
-            // An accordion entry is minimized while it is closed.
-            let current = match &place {
-                PanelPlace::Node(_) => match layout.node_of(&place) {
-                    Some(Node::Stack { entries, .. }) => entries.iter().any(|entry| &entry.panel == panel && !entry.open),
-                    _ => false,
-                },
-                PanelPlace::Floating { window, .. } => layout.floating.get(*window).is_some_and(|window| window.minimized),
-                _ => layout.group(&place).is_some_and(|group| group.minimized),
-            };
-            one(Action::set_minimized(panel.clone(), !current))
+            shown()?;
+            one(Action::set_minimized(panel.clone(), !crate::docking::rail::minimized(layout, panel)))
         }
         DockCommands::CollapseToIcons => {
             let place = layout.place(panel).ok_or(DockError::MissingPanel)?;
@@ -268,6 +282,12 @@ pub fn dock_states<P: Clone + Eq + Hash>(scene: &DockScene<'_, P>, panel: &P) ->
     vec![
         (DockCommands::FloatPanel, enabled(floatable)),
         (DockCommands::FloatGroup, enabled(floatable)),
+        (
+            DockCommands::DockPanel,
+            enabled(
+                floating && allowed.movable && layout.panels().into_iter().any(|p| !matches!(layout.place(p), Some(PanelPlace::Floating { .. }))),
+            ),
+        ),
         (DockCommands::MovePanelTo, enabled(movable)),
         (DockCommands::MoveGroupTo, enabled(movable)),
         (DockCommands::ClosePanel, enabled(shown && allowed.closable)),
