@@ -37,6 +37,8 @@ pub(crate) struct JpegMeta {
     pub dpi: Option<(f32, f32)>,
     /// The APP13 Photoshop image resource blocks (`8BIM` ...), segments joined, without the header.
     pub photoshop: Option<Vec<u8>>,
+    /// Whether an Adobe APP14 marker identifies the four-component samples as inverted CMYK.
+    pub adobe_marker: bool,
     pub adobe_transform: Option<u8>,
     /// (width, height, components) from the first SOFn.
     pub frame: Option<(u32, u32, u8)>,
@@ -148,8 +150,11 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
                 m.frame = Some((w, h, seg[5]));
                 sof = Some((marker, seg));
             }
-            0xEE if seg.len() >= 12 && seg.starts_with(b"Adobe") => {
-                m.adobe_transform = Some(seg[11]);
+            0xEE if seg.starts_with(b"Adobe") => {
+                m.adobe_marker = true;
+                if seg.len() >= 12 {
+                    m.adobe_transform = Some(seg[11]);
+                }
             }
             _ => {}
         }
@@ -398,8 +403,9 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
     }
     px.truncate(expected);
     match input {
-        // Adobe-style CMYK is stored inverted (255 = no ink).
-        ColorSpace::CMYK => px.iter_mut().for_each(|v| *v = 255 - *v),
+        // Adobe-style CMYK is stored inverted (255 = no ink). Four-component JPEGs without
+        // APP14 are also encountered with their CMYK samples stored as ink values directly.
+        ColorSpace::CMYK if meta.adobe_marker => px.iter_mut().for_each(|v| *v = 255 - *v),
         ColorSpace::YCCK => {
             for p in px.as_chunks_mut::<4>().0 {
                 let (y, cb, cr) = (p[0] as f32, p[1] as f32 - 128.0, p[2] as f32 - 128.0);
