@@ -241,8 +241,8 @@ impl Opened {
 /// - **Presets.** The browser, with the scale slider (0.15 to 2.0) in its footer. The tip alone is a grid with the
 ///   size as each caption; the name or the stroke is a list, with the stroke band while the stroke shows. A click
 ///   picks and keeps the picker open; a double click or Enter picks and closes it.
-/// - **Compact form.** [`compact`](Self::compact) draws the head inline and leaves out the field, the popover, the search
-///   row, the gear and the browser; [`rows`](Self::rows) draws the app's rows under it.
+/// - **Compact form.** [`compact`](Self::compact) leaves out the search row, the gear and the browser and keeps the
+///   field, the popover with its head, the revert and the chip; [`rows`](Self::rows) draws the app's rows under the head.
 /// - **Opening.** The closed field, or the app at a point with [`open_at`](Self::open_at) (a right-click on the
 ///   canvas), without the field. With [`resizable`](Self::resizable) the popover's grips resize it and the size is
 ///   saved.
@@ -300,8 +300,8 @@ impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
         }
     }
 
-    /// The compact form: the head (Size, Hardness for round tips, the tip widget) drawn inline, without the field, the
-    /// popover, the search row, the gear or the browser.
+    /// The compact form: the popover shows only the head (Size, Hardness for round tips, the tip widget), without the
+    /// search row, the gear or the browser.
     pub fn compact(mut self, on: bool) -> Self {
         self.compact = on;
         self
@@ -458,25 +458,12 @@ impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
                     });
                 });
             };
-            if compact {
-                head(ui, cx);
-                return BrushPresetPickerOutput {
-                    response: ui.response(),
-                    edit: None,
-                    diameter,
-                    hardness,
-                    tip,
-                    reverted: None,
-                    open: false,
-                    picks: tool_picks.take(),
-                    settings: None,
-                };
-            }
             let mut picker = PresetPicker::new(words.picker.clone(), current.reborrowed(), rows, Bind::bound(&mut browser))
                 .field(PickerField::Thumbnail)
                 .caption(env.units().number(values.diameter.round(), 0..=0))
                 .cell_shape(CellShape::Square)
                 .view(if parts.tip_only() { PresetView::Grid } else { PresetView::List })
+                .browser(!compact)
                 .toolbar(true)
                 .search(before.search)
                 .keep_open()
