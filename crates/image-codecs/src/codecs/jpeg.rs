@@ -1055,6 +1055,30 @@ mod tests {
     }
 
     #[test]
+    fn twelve_bit_cmyk_without_app14_keeps_direct_ink_polarity_on_craft_backend() {
+        let image = Image::from_u8(16, 16, ChannelLayout::Cmyk, [10u8, 100, 200, 50].repeat(256)).unwrap();
+        let mut marked = crate::encode(&image, Format::Jpeg, &EncodeOptions { jpeg_quality: 95, ..Default::default() }).unwrap();
+        let sof = marked.windows(2).position(|pair| pair == [0xFF, 0xC0]).expect("baseline SOF0");
+        marked[sof + 1] = 0xC1;
+        marked[sof + 4] = 12;
+        assert!(uses_craft_jpeg(&marked), "12-bit SOF1 routes through craft-jpeg");
+
+        let app14 = b"\xFF\xEE\x00\x0EAdobe";
+        let start = marked.windows(app14.len()).position(|part| part == app14).expect("Adobe APP14 marker");
+        let mut unmarked = Vec::with_capacity(marked.len() - 16);
+        unmarked.extend_from_slice(&marked[..start]);
+        unmarked.extend_from_slice(&marked[start + 16..]);
+        assert!(uses_craft_jpeg(&unmarked));
+
+        let adobe = crate::decode(&marked).unwrap().to_u16_samples().unwrap();
+        let direct_inks = crate::decode(&unmarked).unwrap().to_u16_samples().unwrap();
+        assert_eq!(adobe.len(), direct_inks.len());
+        for (&stored_adobe, &ink) in adobe.iter().zip(&direct_inks) {
+            assert_eq!(ink, 65535 - stored_adobe, "unmarked samples remain direct inks");
+        }
+    }
+
+    #[test]
     fn twelve_bit_jpeg_keeps_its_photoshop_resources() {
         // An APP13 `8BIM` block (paths, Photoshop settings) right after SOI, as on the zune-jpeg path.
         let resources = b"8BIM\x04\x04\0\0\0\0\0\0".to_vec();
