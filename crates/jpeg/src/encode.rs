@@ -659,6 +659,16 @@ mod tests {
         assert!(matches!(encode_baseline(&[0; 192], 8, 8, 3, 90, ChromaSubsampling::S444, &too_large_app), Err(EncodeError::InvalidInput(_))));
     }
 
+    #[test]
+    fn requested_chroma_subsampling_is_written_in_the_frame_header() {
+        let src = test_rgb(19, 9);
+        for (sub, expected) in [(ChromaSubsampling::S444, 0x11), (ChromaSubsampling::S422, 0x21), (ChromaSubsampling::S420, 0x22)] {
+            let jpeg = encode(&src, 19, 9, 3, 90, sub, &[]);
+            let sof = jpeg.windows(2).position(|w| w == [0xFF, 0xC0]).expect("SOF0 marker");
+            assert_eq!(jpeg.get(sof + 11), Some(&expected), "{sub:?}");
+        }
+    }
+
     fn test_rgb(w: usize, h: usize) -> Vec<u8> {
         let mut v = Vec::with_capacity(w * h * 3);
         for y in 0..h {
