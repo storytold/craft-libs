@@ -11,7 +11,7 @@ use std::f32::consts::{PI, TAU};
 use glam::{Vec2, Vec3};
 
 use crate::mesh::{Mesh, SubMesh, unit};
-use crate::{Limits, MeshOpsError, Result};
+use crate::{Limits, MeshOpsError, Result, check_limit};
 
 /// A UV-space rectangle: origin and size.
 #[derive(Clone, Copy, Debug)]
@@ -108,8 +108,11 @@ impl Builder {
 
     /// The mesh of one material, with tangents.
     fn finish(self, material: &str) -> Result<Mesh> {
+        let limits = self.limits;
         let mut m = self.into_mesh(material)?;
         m.try_compute_tangents()?;
+        // The tangents copy a vertex whose corners get different frames.
+        check_limit("vertex count", m.positions.len(), limits.max_vertices)?;
         Ok(m)
     }
 
@@ -795,5 +798,26 @@ mod tests {
         // The builders without `try_` clamp to the limit.
         assert_eq!(clamped(usize::MAX), l.max_segments);
         assert_eq!(clamped(7), 7);
+    }
+
+    #[test]
+    fn vertex_copies_from_tangents_count_against_the_vertex_limit() {
+        // A quad whose second triangle has mirrored UVs: the two shared vertices get one frame
+        // per triangle, so the tangents copy them.
+        let quad = |max_vertices: usize| {
+            let mut b = Builder::new(&Limits { max_vertices, ..Limits::default() });
+            assert!(b.room(Some(4), Some(2)));
+            for (p, uv) in [(Vec3::ZERO, Vec2::ZERO), (Vec3::X, Vec2::X), (Vec3::Y, Vec2::Y), (Vec3::new(1.0, 1.0, 0.0), Vec2::ZERO)] {
+                b.vert(p, Vec3::Z, uv);
+            }
+            b.idx.extend_from_slice(&[0, 1, 2, 1, 3, 2]);
+            b.diag.extend_from_slice(&[0, 0]);
+            b.finish("Quad")
+        };
+        let m = quad(usize::MAX).unwrap();
+        let copies = m.positions.len() - 4;
+        assert!(copies > 0, "the mirrored triangle's corners get their own vertices");
+        assert!(matches!(quad(4), Err(MeshOpsError::TooLarge { what: "vertex count", got, limit: 4 }) if got == m.positions.len() as u64));
+        assert_eq!(quad(m.positions.len()).unwrap().positions.len(), m.positions.len());
     }
 }

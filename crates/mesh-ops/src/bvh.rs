@@ -326,7 +326,9 @@ impl Bvh {
         let open = t0.is_nan_mask() | t1.is_nan_mask();
         let tn = Vec3A::select(open, Vec3A::NEG_INFINITY, t0.min(t1)).max_element().max(0.0);
         let tf = Vec3A::select(open, Vec3A::INFINITY, t0.max(t1)).min_element().min(tmax);
-        (tn <= tf).then_some(tn)
+        // A box whose entry distance is +∞ (where 1/d overflows) is not reached, even when `tmax`
+        // is unbounded; no triangle can be hit at that distance.
+        (tn <= tf && tn.is_finite()).then_some(tn)
     }
 
     /// Möller–Trumbore, double sided.
@@ -560,6 +562,24 @@ fn closest_on_triangle_f64(p: DVec3, [a, b, c]: [DVec3; 3]) -> (DVec3, f64, f64)
 mod tests {
     use super::*;
     use crate::primitives;
+
+    #[test]
+    fn a_box_first_reached_at_infinity_is_missed() {
+        let (lo, hi) = (Vec3A::ZERO, Vec3A::ONE);
+        // 1/d overflows on every axis: x, where the direction is subnormal, as well as y and z.
+        for d in [Vec3A::new(1e-39, 0.0, 0.0), Vec3A::new(1e-39, -0.0, -0.0)] {
+            let inv = Vec3A::ONE / d;
+            for o in [Vec3A::new(0.5, -1.0, 0.5), Vec3A::new(0.5, 2.0, 0.5), Vec3A::new(-1.0, 0.5, 0.5)] {
+                assert_eq!(Bvh::slab(lo, hi, o, inv, f32::INFINITY), None, "d {d}, origin {o}");
+            }
+            assert_eq!(Bvh::slab(lo, hi, Vec3A::splat(0.5), inv, f32::INFINITY), Some(0.0), "d {d}, inside");
+        }
+        // A ray parallel to a slab outside it, with a finite exit on another axis.
+        let inv = Vec3A::ONE / Vec3A::new(1.0, 0.0, 0.0);
+        assert_eq!(Bvh::slab(lo, hi, Vec3A::new(0.5, -1.0, 0.5), inv, f32::INFINITY), None);
+        assert_eq!(Bvh::slab(lo, hi, Vec3A::new(-1.0, 0.5, 0.5), inv, f32::INFINITY), Some(1.0));
+        assert_eq!(Bvh::slab(lo, hi, Vec3A::new(0.5, 0.0, 0.5), inv, f32::INFINITY), Some(0.0), "in the plane");
+    }
 
     #[test]
     fn nearest_point_matches_brute_force() {
