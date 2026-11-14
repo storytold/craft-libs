@@ -1,0 +1,19 @@
+[package]
+name = "craft-pathops"
+description = "Path operations on kurbo::BezPath: curve-preserving booleans, the Pathfinder set, planar regions, offset path, outline stroke, simplify and join. Carved from VectorCraft."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+kurbo = { workspace = true }
+linesweeper = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
