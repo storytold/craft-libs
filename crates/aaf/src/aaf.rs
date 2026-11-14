@@ -1,7 +1,7 @@
 //! AAF (Advanced Authoring Format) import and export, following the AAF Edit Protocol.
 //!
 //! Written from the public AMWA specifications: *AAF Object Specification v1.1*, *AAF Low-Level
-//! Container Specification v1.0.1* (structured storage mapping, see [`store`]) and *AAF Edit
+//! Container Specification v1.0.1* (structured storage mapping) and *AAF Edit
 //! Protocol v1.0*; the container is Microsoft's Compound File Binary format ([`craft_cfb`]).
 //!
 //! A written file holds one top-level **CompositionMob** (Edit Protocol usage code
@@ -47,6 +47,7 @@ use crate::{Identity, Report, Result};
 /// How to write an AAF file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WriteOptions<'a> {
+    /// Who the file says made it.
     pub identity: Identity<'a>,
     /// Write 512-byte sectors (compound file version 3) instead of 4096-byte sectors.
     pub small_sectors: bool,

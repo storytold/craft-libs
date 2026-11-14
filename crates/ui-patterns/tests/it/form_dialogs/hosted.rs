@@ -21,8 +21,9 @@ fn about() -> HostedAbout {
     HostedAbout::new(info, Credits::new(Vec::new(), Vec::new(), 0))
 }
 
+#[allow(clippy::redundant_closure, reason = "the builder must be generic over the bind's lifetime, which the bare path is not")]
 fn canvas_size() -> HostedCanvasSize {
-    HostedCanvasSize::new(CanvasSizeValues::new(PICTURE), CanvasSize::new)
+    HostedCanvasSize::new(CanvasSizeValues::new(PICTURE), |values| CanvasSize::new(values))
 }
 
 /// A fixture that runs `host` every pass, in a room large enough for every form.

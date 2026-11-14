@@ -37,6 +37,12 @@ pub use craft_timeline::report::Report;
 pub enum Error {
     /// The bytes are not a readable document of the format.
     #[error("{format} parse error: {message}")]
+    /// Parse {
+        /// The format that failed to parse.
+        format: &'static str,
+        /// What was wrong.
+        message: String,
+    },
     Parse { format: &'static str, message: String },
     /// The document has no composition.
     #[error("the document contains no timeline")]
@@ -46,15 +52,19 @@ pub enum Error {
     Other(String),
 }
 
+/// `Result` with this crate's [`Error`].
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Who a written file says made it (the AAF `Identification` object, the OMF `IDNT` object).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Identity<'a> {
+    /// The company that made the product.
     pub company: &'a str,
+    /// The product name.
     pub product: &'a str,
     /// The product's version, as text.
     pub version: &'a str,
+    /// The platform the product ran on.
     pub platform: &'a str,
     /// AAF `ProductID`: an AUID naming the product.
     pub product_id: [u8; 16],
