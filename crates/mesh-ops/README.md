@@ -15,7 +15,9 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
   (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html>): `w` holds the bitangent sign, and
   UVs have `(0, 0)` at the upper-left corner with `v` increasing downward. A mesh MikkTSpace
   cannot handle (every triangle degenerate, no UV area, more than
-  `mesh::MAX_MIKKTSPACE_VALENCE` (2,048) triangles around one vertex) gets per-vertex tangents.
+  `mesh::MAX_MIKKTSPACE_VALENCE` (2,048) triangles around one vertex, or so many corners at one
+  position that welding them would take more than `mesh::MAX_MIKKTSPACE_WELD_WORK` (2^27)
+  comparisons) gets per-vertex tangents, with `w` set as MikkTSpace sets it.
   MikkTSpace gives each triangle corner its own frame: `Mesh::compute_tangents` splits a vertex
   whose corners get different frames (UVs mirrored across it), and `tangents` returns an
   `Invalid` error for such a vertex, since it returns one tangent per input vertex. When the
@@ -26,13 +28,17 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
 - **UV unwrapping.** `unwrap_uvs` and `unwrap::auto_unwrap` make a non-overlapping layout per
   material, splitting vertices where charts meet. A face joins a chart only when its projection
   onto the chart's plane does not overlap the chart's other faces, and every chart is packed at
-  a scale above zero. The layout is the same at every scale: outside
-  1e-6 to 1e6 the charts are made from the positions divided by the largest coordinate. `weld`
+  a scale above zero. The charts are projected, measured and packed in `f64` from the positions
+  as given, so a small chart far from the origin keeps its shape. A mesh whose submeshes put one
+  triangle in two materials is an `Invalid` error. `weld`
   gives vertices at the same position (on a grid of 1e-6 of the bounding diagonal) the same id,
   numbered in order of first appearance.
 - **UV G-buffer.** `UvGBuffer` records, for each texel of one material's UV space, the triangle
   and barycentrics under the texel center; `surface_at` turns them into a position, normal and
   tangent frame. A triangle with a corner more than 1e18 texels from the UV origin is skipped.
+  A texel center counts as inside a triangle when it is no more than 1e-6 texel outside each
+  edge, plus the `f64` rounding of the edge function at the triangle's coordinates, and at most
+  1e-3 of the triangle's smallest height.
 - **Primitives.** `sphere`, `rounded_box`, `cube`, `cylinder`, `torus` and `plane`, and the
   built-in scenes in `primitives::BUILTINS`, all with UVs and tangents. The `try_` forms return an
   error for a non-finite or non-positive size, a size so large that a coordinate overflows `f32`,
@@ -51,7 +57,8 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
   and polygon-diagonal flags, with `validate`, `append` and `try_append`, `subdivided` and
   `try_subdivided`, wireframe and UV-seam edges, and UV-tile helpers. `OrbitCamera` and `Ray`
   give an orbit view and picking rays; `OrbitCamera::frame` ignores a box whose center or framing
-  distance is not finite.
+  distance is not finite, and `OrbitCamera::zoom` ignores a distance at which the eye rounds to
+  the target. `OrbitCamera::ray` unprojects in `f64`.
 
 Triangulation with holes, extrusion of 2D outlines and conversion from `craft_mesh::Mesh` are not
 in the crate yet.
@@ -72,7 +79,7 @@ Without `parallel` the crate builds for `wasm32-unknown-unknown`.
 
 | Field | Default | Checked by |
 |---|---|---|
-| `max_vertices` | 20,000,000 | every slice function, `try_subdivided`, the `try_` primitives, `UvGBuffer::try_new`, `unwrap::auto_unwrap` (input and output), `Mesh::map_material_uvs` (the mesh's vertices and the copies of the vertices it shares with other materials) |
+| `max_vertices` | 20,000,000 | every slice function, `try_subdivided`, the `try_` primitives (also after their tangents split vertices), `UvGBuffer::try_new`, `unwrap::auto_unwrap` (input and output), `Mesh::map_material_uvs` (the mesh's vertices and the copies of the vertices it shares with other materials) |
 | `max_triangles` | 20,000,000 | the same except `auto_unwrap`, and `Bvh::from_slices`; the UV G-buffer also counts a triangle again each time another submesh of the material lists it; `Mesh::wire_edges`, `Mesh::uv_seam_edges`, `Mesh::uv_tiles` and `Mesh::map_material_uvs` count the triangles the submeshes list in the same way |
 | `max_segments` | 2,048 | the `try_` primitives (segments, rings or subdivisions along one direction, after a count under the primitive's minimum is raised to it; a box face has 12, or 22 with a bevel) |
 | `max_gbuffer_side` | 8,192 | `UvGBuffer::try_new`, `UvGBuffer::from_slices`; `UvGBuffer::new` clamps each side to `1..=8192` |
@@ -138,6 +145,9 @@ For both apps:
 | `OrbitCamera::project` in orthographic mode returns points behind the camera | it returns `None` for them |
 | The orthographic projection and `pan` use the field of view as it is | they clamp it to 5° to 150°, as the perspective projection does |
 | `Mesh::compute_tangents` keeps the last corner's frame at a shared vertex | the vertex is split where its corners' frames differ |
+| The per-vertex tangent fallback always sets `w` to +1 | `w` is -1 where the UVs are mirrored, as MikkTSpace sets it |
+| `auto_unwrap` packs a triangle that submeshes of two materials list with only the last one | an `Invalid` error, with the mesh unchanged |
+| `OrbitCamera::zoom` close to a target far from the origin gives a view that is not finite | the camera is unchanged |
 | `Bvh::nearest` misses points inside very thin triangles and near a triangle with a zero-length edge | the nearest point is found |
 | `Bvh::nodes` with no triangles lists one node | it lists none |
 | `surface_at` and the rounded box replace a vector whose squared length overflows `f32` with a fallback direction | they keep its direction |

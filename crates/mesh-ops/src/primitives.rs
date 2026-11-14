@@ -8,7 +8,7 @@
 
 use std::f32::consts::{PI, TAU};
 
-use glam::{Vec2, Vec3};
+use glam::{DVec2, Vec2, Vec3};
 
 use crate::mesh::{Mesh, SubMesh, unit};
 use crate::{Limits, MeshOpsError, Result, check_limit};
@@ -106,13 +106,13 @@ impl Builder {
         }
     }
 
-    /// The mesh of one material, with tangents.
+    /// The mesh of one material, with tangents. Computing them can split vertices, so the vertex
+    /// count is checked against the limit again afterwards.
     fn finish(self, material: &str) -> Result<Mesh> {
-        let limits = self.limits;
+        let max_vertices = self.limits.max_vertices;
         let mut m = self.into_mesh(material)?;
         m.try_compute_tangents()?;
-        // The tangents copy a vertex whose corners get different frames.
-        check_limit("vertex count", m.positions.len(), limits.max_vertices)?;
+        check_limit("vertex count", m.vertex_count(), max_vertices)?;
         Ok(m)
     }
 
@@ -282,31 +282,30 @@ fn lathe_into(b: &mut Builder, center: Vec3, profile: &[(f32, f32)], segs: usize
     if profile.len() < 2 {
         return;
     }
-    // Arc lengths of the profile divided by its largest coordinate: the UVs of a uniformly scaled
-    // profile stay the same, and the squared steps neither overflow nor round to zero.
-    let largest = profile.iter().map(|(r, y)| r.abs().max(y.abs())).fold(0.0f32, f32::max);
-    let divisor = if largest > 0.0 && largest.is_finite() { largest } else { 1.0 };
-    let mut len = vec![0.0f32];
+    // Arc lengths and profile directions in `f64`, where the steps between finite `f32` points
+    // and their squares neither overflow nor round to zero, whatever the radius and height.
+    let point = |(r, y): (f32, f32)| DVec2::new(f64::from(r), f64::from(y));
+    let mut len = vec![0.0f64];
     for w in profile.windows(2) {
-        let d = (Vec2::new(w[1].0, w[1].1) / divisor - Vec2::new(w[0].0, w[0].1) / divisor).length();
+        let d = (point(w[1]) - point(w[0])).length();
         len.push(len.last().copied().unwrap_or(0.0) + d);
     }
     // A profile of zero length maps every row to the top of `r`.
-    let total = len.last().copied().filter(|t| *t > 0.0).unwrap_or(1.0);
+    let total = len.last().copied().filter(|t| *t > 0.0 && t.is_finite()).unwrap_or(1.0);
     let rows = profile.len() - 1;
     b.grid(rows, segs, |i, j| {
         let (rad, y) = profile[i];
         // Profile tangent (downwards) → outward normal in the (r, y) plane.
         let prev = profile[i.saturating_sub(1)];
         let next = profile[(i + 1).min(rows)];
-        let t = (Vec2::new(next.0, next.1) / divisor - Vec2::new(prev.0, prev.1) / divisor).try_normalize().unwrap_or(Vec2::NEG_Y);
+        let t = (point(next) - point(prev)).try_normalize().map_or(Vec2::NEG_Y, |t| t.as_vec2());
         let n2 = Vec2::new(-t.y, t.x);
         let u = j as f32 / segs as f32;
         let phi = u * TAU + PI * 1.5;
         let dir = Vec3::new(phi.cos(), 0.0, -phi.sin());
         let p = center + dir * rad + Vec3::Y * y;
         let n = dir * n2.x + Vec3::Y * n2.y;
-        (p, n, r.map(u, len[i] / total))
+        (p, n, r.map(u, (len[i] / total) as f32))
     });
 }
 
@@ -819,5 +818,42 @@ mod tests {
         assert!(copies > 0, "the mirrored triangle's corners get their own vertices");
         assert!(matches!(quad(4), Err(MeshOpsError::TooLarge { what: "vertex count", got, limit: 4 }) if got == m.positions.len() as u64));
         assert_eq!(quad(m.positions.len()).unwrap().positions.len(), m.positions.len());
+    }
+
+    #[test]
+    fn primitives_count_the_vertices_tangents_split() {
+        type Build = fn(&Limits) -> Result<Mesh>;
+        // A torus whose minor radius is larger than its major radius folds through its axis.
+        let builds: [(&str, Build); 6] = [
+            ("folded torus", |l| try_torus(0.5, 2.0, 16, 8, l)),
+            ("torus", |l| try_torus(1.0, 0.3, 16, 8, l)),
+            ("sphere", |l| try_sphere(1.0, 16, 8, l)),
+            ("cylinder", |l| try_cylinder(1.0, 2.0, 16, l)),
+            ("rounded box", |l| try_rounded_box(Vec3::ONE, 0.2, l)),
+            ("plane", |l| try_plane(1.0, 4, l)),
+        ];
+        let l = Limits::default();
+        for (name, build) in builds {
+            let full = build(&l).unwrap().vertex_count();
+            let under = Limits { max_vertices: full - 1, ..l };
+            match build(&under) {
+                Ok(m) => panic!("{name}: {} vertices with a limit of {}", m.vertex_count(), full - 1),
+                Err(e) => assert!(matches!(e, MeshOpsError::TooLarge { what: "vertex count", .. }), "{name}: {e:?}"),
+            }
+            assert_eq!(build(&Limits { max_vertices: full, ..l }).unwrap().vertex_count(), full, "{name}");
+        }
+    }
+
+    #[test]
+    fn lathe_uvs_span_the_rectangle_at_any_radius_and_height() {
+        // With the radius 1e30 times the height, the profile step divided by the radius squares to
+        // zero in f32.
+        for (radius, height) in [(1e30f32, 1.0f32), (1.0, 1e30), (1e-30, 1.0)] {
+            let m = try_cylinder(radius, height, 16, &Limits::default()).unwrap();
+            // The side is the first grid: 17 vertices on the top row, 17 on the bottom one.
+            let (top, bottom) = (&m.uvs[..17], &m.uvs[17..34]);
+            assert!(top.iter().all(|uv| (uv.y - 0.01).abs() < 1e-6), "{radius} {height}: {top:?}");
+            assert!(bottom.iter().all(|uv| (uv.y - 0.49).abs() < 1e-6), "{radius} {height}: {bottom:?}");
+        }
     }
 }

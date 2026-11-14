@@ -1,6 +1,6 @@
 //! Orbit camera (texture painting navigation) and picking rays.
 
-use glam::{Mat4, Vec2, Vec3, Vec4};
+use glam::{DVec4, Mat4, Vec2, Vec3};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -101,20 +101,31 @@ impl OrbitCamera {
         self.target += (-right * dx + up * dy) * scale;
     }
 
-    /// Dolly by a factor exponent (positive zooms in).
+    /// Dolly by a factor exponent (positive zooms in). A distance whose view-projection at aspect 1
+    /// is not finite (an eye that rounds to a target far from the origin) leaves the camera
+    /// unchanged.
     pub fn zoom(&mut self, amount: f32) {
         let r = self.scene_radius.max(1e-3);
-        self.distance = (self.distance * (-amount).exp()).clamp(r * 0.05, r * 200.0);
+        let distance = (self.distance * (-amount).exp()).clamp(r * 0.05, r * 200.0);
+        let zoomed = OrbitCamera { distance, ..*self };
+        if zoomed.eye() != zoomed.target && zoomed.view_proj(1.0).is_finite() {
+            *self = zoomed;
+        }
     }
 
     /// Ray through a viewport point given in normalized device coordinates (-1..1, y up). It
-    /// starts on the near plane: [`OrbitCamera::proj`] has a depth range of 0 to 1.
+    /// starts on the near plane: [`OrbitCamera::proj`] has a depth range of 0 to 1. The
+    /// view-projection is inverted and the points unprojected in `f64`, where the determinant of
+    /// a large scene's matrix and the squared length of the ray do not leave the range.
     pub fn ray(&self, ndc: Vec2, aspect: f32) -> Ray {
-        let inv = self.view_proj(aspect).inverse();
-        let a = inv * Vec4::new(ndc.x, ndc.y, 0.0, 1.0);
-        let b = inv * Vec4::new(ndc.x, ndc.y, 1.0, 1.0);
+        let inv = self.view_proj(aspect).as_dmat4().inverse();
+        let (x, y) = (f64::from(ndc.x), f64::from(ndc.y));
+        let a = inv * DVec4::new(x, y, 0.0, 1.0);
+        let b = inv * DVec4::new(x, y, 1.0, 1.0);
         let (a, b) = (a.truncate() / a.w, b.truncate() / b.w);
-        Ray { origin: a, dir: (b - a).try_normalize().unwrap_or(self.forward()) }
+        let origin = a.as_vec3();
+        let dir = (b - a).try_normalize().map(|d| d.as_vec3()).filter(|d| d.is_finite()).unwrap_or(self.forward());
+        Ray { origin, dir }
     }
 
     /// Project a world point to NDC (x, y in -1..1, y up; z depth). None behind the camera, in
@@ -220,5 +231,49 @@ mod tests {
             assert_eq!(c, framed, "{lo} {hi}");
             assert!(c.view_proj(1.0).is_finite(), "{lo} {hi}");
         }
+    }
+
+    #[test]
+    fn zoom_keeps_the_view_finite_near_a_far_target() {
+        // At the closest zoom the eye is 0.69 from the target, where coordinates of 1e8 are 8 apart.
+        let mut c = OrbitCamera::default();
+        c.frame(Vec3::splat(1e8 - 8.0), Vec3::splat(1e8 + 8.0));
+        assert!(c.view().is_finite());
+        c.zoom(10.0);
+        assert!(c.view().is_finite(), "distance {}", c.distance);
+        assert_ne!(c.eye(), c.target);
+        // Zooming out from there works as before.
+        let before = c.distance;
+        c.zoom(-1.0);
+        assert!(c.distance > before);
+    }
+
+    #[test]
+    fn orthographic_rays_of_a_large_scene_are_finite() {
+        // The view-projection of this scene has a determinant that underflows f32.
+        let mut c = OrbitCamera { ortho: true, ..OrbitCamera::default() };
+        c.frame(Vec3::splat(-1e15), Vec3::splat(1e15));
+        let r = c.ray(Vec2::ZERO, 1.0);
+        assert!(r.origin.is_finite() && r.dir.is_finite(), "{r:?}");
+        assert!((r.dir - c.forward()).length() < 1e-4, "{r:?}");
+        let p = Vec3::new(3e14, -2e14, 1e14);
+        let ndc = c.project(p, 1.0).unwrap();
+        let r = c.ray(ndc.truncate(), 1.0);
+        // The ray passes the point within a millionth of the scene's size.
+        let to_p = p - r.origin;
+        assert!((to_p - r.dir * to_p.dot(r.dir)).length() < 1e9, "{r:?}");
+    }
+
+    #[test]
+    fn off_center_rays_of_a_large_scene_leave_the_center() {
+        // The near and far points are finite, while the square of their distance overflows f32.
+        let mut c = OrbitCamera { pitch: 0.0, ..OrbitCamera::default() };
+        c.frame(Vec3::splat(-1e18), Vec3::splat(1e18));
+        let r = c.ray(Vec2::new(0.5, 0.0), 1.0);
+        assert!(r.origin.is_finite() && r.dir.is_finite(), "{r:?}");
+        assert!((r.dir.length() - 1.0).abs() < 1e-5, "{r:?}");
+        assert!(r.dir.dot(c.forward()) < 0.999, "{r:?}");
+        let ndc = c.project(r.origin + r.dir * c.distance, 1.0).unwrap();
+        assert!((ndc.x - 0.5).abs() < 1e-3 && ndc.y.abs() < 1e-3, "{ndc}");
     }
 }
