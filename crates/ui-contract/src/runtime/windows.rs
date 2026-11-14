@@ -277,11 +277,12 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
 /// a modal in another viewport blocks it (the modal's window then comes forward with the window the user clicked).
 pub(crate) fn begin(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
-    let was_focused = PerViewport::<Record>::with(ctx, viewport, |record| record.facts.is_some_and(|facts| facts.focused));
+    // A viewport's first pass has no previous facts and is not a focus gain.
+    let had_focus_before = PerViewport::<Record>::with(ctx, viewport, |record| record.facts.map(|facts| facts.focused));
     let facts = viewports::current(ctx);
     refresh(ctx, viewport, facts);
     reshow_cursor(ctx, viewport);
-    let gained_focus = facts.focused && !was_focused;
+    let gained_focus = facts.focused && had_focus_before == Some(false);
     if (overlay::take_dropped_press(ctx, viewport) || gained_focus)
         && let Some(modal) = blocking_modal(ctx)
     {
