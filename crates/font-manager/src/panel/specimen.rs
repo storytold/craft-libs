@@ -3,7 +3,7 @@
 use craft_behavior::Sense;
 use craft_ui::contract::{Common, Component, Cx, DisabledLook, MeasureCx, PaintUi, Props as _, Role};
 use craft_ui::fonts::FontRef;
-use craft_ui::primitives::{DocRun, DocText};
+use craft_ui::primitives::DocRun;
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, DataColor, Metrics, StyleColor, StyleCx};
 use egui::{Color32, Vec2};
@@ -50,7 +50,8 @@ impl SampleFace<'_> {
 /// (data, as `DocRun::size`), not a UI size. The label names the sample for a screen reader (the family and the
 /// sample text).
 ///
-/// Its measure is the sample laid out in the face at `points` (`MeasureCx::layout_doc`).
+/// Its measure is the sample laid out in the face at `points` on one row, cut with an ellipsis where the room does
+/// not fit it (`faces::sample_text`, the layout `paint` draws).
 #[derive(craft_ui::contract::Component)]
 #[component(content_painter)]
 pub(crate) struct FontSample<'a> {
@@ -93,7 +94,7 @@ impl Component for FontSample<'_> {
             _ => FontRef::proportional(),
         };
         let runs = [DocRun::new(self.text, font, self.points, DataColor::new(Color32::PLACEHOLDER))];
-        cx.layout_doc(&DocText::new(&runs)).size()
+        cx.layout_doc(&faces::sample_text(&runs, cx.room)).size()
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
