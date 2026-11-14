@@ -658,14 +658,22 @@ fn key_r6(d: &EncryptDict, pw: &[u8], owner: bool) -> Result<Option<Zeroizing<Ve
 /// Which encryption to create.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Algorithm {
-    /// R2, 40-bit RC4 (legacy; for tests and compatibility only).
+    /// R2, 40-bit RC4 (legacy: [`create`] refuses it, [`create_legacy`] writes it).
     Rc4_40,
-    /// R3, 128-bit RC4.
+    /// R3, 128-bit RC4 (legacy: [`create`] refuses it, [`create_legacy`] writes it).
     Rc4_128,
     /// R4, AES-128 crypt filters.
     Aes128,
     /// R6, AES-256 (PDF 2.0; the default for new documents).
     Aes256,
+}
+
+impl Algorithm {
+    /// Whether this is one of the broken legacy ciphers: read for compatibility, and refused for
+    /// new encryption by [`create`].
+    pub fn is_legacy(self) -> bool {
+        matches!(self, Algorithm::Rc4_40 | Algorithm::Rc4_128)
+    }
 }
 
 /// A password as [`create`] prepares it: for R2–R4 its PDFDocEncoding (characters it lacks
@@ -732,7 +740,23 @@ pub fn file_id(seed: &[u8; 32]) -> Vec<u8> {
 }
 
 /// Build the `/Encrypt` values and an authenticated (owner) handler for a new encryption.
+///
+/// The legacy RC4 schemes are refused, because RC4 is broken (`RFC 7465`) and a file written with
+/// it protects nothing: [`create_legacy`] is the explicit way to write them.
 pub fn create(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, CryptError> {
+    if params.algorithm.is_legacy() {
+        return Err(CryptError::Unsupported("RC4 encryption is legacy (RFC 7465); use create_legacy for a file an old reader must open".into()));
+    }
+    create_any(params, id0)
+}
+
+/// [`create`] without the RC4 gate: writes RC4-40 and RC4-128 too. For a file that must stay
+/// readable by a reader without AES, and for tests that read and write every algorithm.
+pub fn create_legacy(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, CryptError> {
+    create_any(params, id0)
+}
+
+fn create_any(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, CryptError> {
     // R2 reserves bits 7-32; later revisions reserve bits 7-8 and 13-32.
     // Reserved bits must be 1, and bits 1-2 must be 0 (§7.6.4.2).
     let reserved = if params.algorithm == Algorithm::Rc4_40 { !0x3F } else { !0xFFF | 0xC0 };
