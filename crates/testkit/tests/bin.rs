@@ -281,9 +281,21 @@ fn non_utf8_candidate_is_preserved() {
     let mut name = dir.as_os_str().to_owned().into_vec();
     name.extend_from_slice(b"/bin-\xff");
     let path = OsString::from_vec(name);
-    std::fs::write(&path, b"").unwrap();
-    let found = resolve_binary_in("my-program", None, lookup(&[("NEXTEST_BIN_EXE_my_program", &path)])).unwrap();
-    assert_eq!(found.as_os_str().as_bytes(), path.as_bytes());
+    match std::fs::write(&path, b"") {
+        Ok(()) => {
+            let found = resolve_binary_in("my-program", None, lookup(&[("NEXTEST_BIN_EXE_my_program", &path)])).unwrap();
+            assert_eq!(found.as_os_str().as_bytes(), path.as_bytes());
+        }
+        // APFS refuses names that are not UTF-8 with EILSEQ (92 on macOS), so the
+        // file cannot exist there. The rejected candidate still carries the bytes unchanged.
+        Err(error) if cfg!(target_os = "macos") && error.raw_os_error() == Some(92) => {
+            let error = resolve_binary_in("my-program", None, lookup(&[("NEXTEST_BIN_EXE_my_program", &path)])).unwrap_err();
+            let BinPathError::NotFound { candidates, .. } = error else { panic!("expected NotFound, got {error:?}") };
+            let value = candidates[0].value.as_ref().map(|value| value.as_bytes());
+            assert_eq!(value, Some(path.as_bytes()));
+        }
+        Err(error) => panic!("could not create {path:?}: {error}"),
+    }
 }
 
 #[test]
