@@ -318,6 +318,12 @@ pub fn embedded_jpeg_preview(bytes: &[u8]) -> Option<Vec<u8>> {
     preview_covering(bytes, None, true)
 }
 
+/// Width and height from the frame header of [`embedded_jpeg_preview`], when that is a DCT JPEG.
+#[cfg(feature = "nef")]
+pub(crate) fn embedded_preview_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    embedded_jpeg_preview(bytes).and_then(|j| jpeg_frame(&j)).map(|(w, h, _)| (w, h))
+}
+
 /// Smallest embedded JPEG of the largest preview's shape whose long edge covers `min_edge`, or the largest JPEG.
 pub fn embedded_jpeg_preview_covering(bytes: &[u8], min_edge: u32) -> Option<Vec<u8>> {
     preview_covering(bytes, Some(min_edge), true)
@@ -390,8 +396,8 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>, jpeg_only: bool) -> Opt
         let make = tiff.find(t::MAKE).and_then(|e| e.value.as_str()).unwrap_or_default();
         if let Some(mn) = makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make) {
             candidates(bytes, &mn.ifd, mn.base, &mut found, &mut budget);
-            if let Some(off) = mn.ifd.u64(0x0011)
-                && let Ok((pifd, _)) = craft_tiff::parse_ifd_at(bytes, mn.base + off, mn.order, mn.base, false, &Default::default())
+            if let Some(at) = mn.ifd.u64(0x0011).and_then(|off| mn.base.checked_add(off))
+                && let Ok((pifd, _)) = craft_tiff::parse_ifd_at(bytes, at, mn.order, mn.base, false, &Default::default())
             {
                 candidates(bytes, &pifd, mn.base, &mut found, &mut budget);
             }

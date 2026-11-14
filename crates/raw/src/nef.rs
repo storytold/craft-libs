@@ -193,13 +193,22 @@ fn measured_body(model: &str, w: usize, h: usize, bits: u32) -> Option<&'static 
 }
 
 /// Pixel height over width from the raw IFD's resolution tags: the D1X and D1H write 600 x 300 per inch for a
-/// 4028 x 1324 frame, rows twice as tall as the columns are wide. Only ratios from 1.5 to 4 count (a frame
+/// 4028 x 1324 frame, rows twice as tall as the columns are wide. When the tags give no such ratio (a D1X on firmware
+/// Ver.1.01 writes 600 x 600), any `frame` over twice as wide as it is tall, which no square-pixel body has, falls back
+/// to its shape over the embedded preview's (within 0.1 of a whole number). Only ratios from 1.5 to 4 count (a frame
 /// squashed 3:1 or 2:1), the rest is rounding or a stray tag.
-pub(crate) fn pixel_aspect_of(raw: &Ifd) -> f32 {
-    match (raw.f64(t::X_RESOLUTION), raw.f64(t::Y_RESOLUTION)) {
-        (Some(x), Some(y)) if x > 0.0 && y > 0.0 && (1.5..=4.0).contains(&(x / y)) => (x / y).round() as f32,
-        _ => 1.0,
-    }
+pub(crate) fn pixel_aspect_of(raw: &Ifd, bytes: &[u8], frame: Rect) -> f32 {
+    let tall = |r: f64| (1.5..=4.0).contains(&r).then(|| r.round());
+    let tagged = match (raw.f64(t::X_RESOLUTION), raw.f64(t::Y_RESOLUTION)) {
+        (Some(x), Some(y)) if x > 0.0 && y > 0.0 => tall(x / y),
+        _ => None,
+    };
+    let previewed = || {
+        let (pw, ph) = crate::preview::embedded_preview_size(bytes).filter(|&(pw, ph)| pw > 0 && ph > 0)?;
+        let r = (frame.width as f64 * f64::from(ph)) / (frame.height as f64 * f64::from(pw));
+        tall(r).filter(|n| (r - n).abs() <= 0.1)
+    };
+    tagged.or_else(|| (frame.width > frame.height.saturating_mul(2)).then(previewed).flatten()).unwrap_or(1.0) as f32
 }
 
 fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
@@ -300,7 +309,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         Some(&MeasuredBody { crop: (x, y, cw, ch), .. }) if x + cw <= active_w && y + ch <= h => Rect::new(x, y, cw, ch),
         _ => default_crop(mn.as_ref(), active_w, h),
     };
-    let pixel_aspect = pixel_aspect_of(raw);
+    let pixel_aspect = pixel_aspect_of(raw, bytes, crop);
     let img = RawImage {
         format: RawFormat::Nef,
         width: w,
@@ -701,16 +710,7 @@ mod tests {
         rps: u32,
         note: Option<IfdBuilder>,
     ) -> Vec<u8> {
-        let mut raw = IfdBuilder::new();
-        raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
-        raw.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
-        raw.set(t::IMAGE_LENGTH, Value::Long(vec![h]));
-        raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![bits]));
-        raw.set(t::COMPRESSION, Value::Short(vec![compression]));
-        raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::CFA]));
-        raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
-        raw.set(t::CFA_PATTERN_EP, Value::Byte(vec![2, 1, 1, 0]));
-        raw.set_image(ImageData::Strips { rows_per_strip: rps, strips });
+        let raw = cfa_ifd(compression, bits, strips, w, h, rps);
         let mut ifd0 = IfdBuilder::new();
         ifd0.set(t::MAKE, Value::Ascii("NIKON CORPORATION".into()));
         ifd0.set(t::MODEL, Value::Ascii(model.into()));
@@ -723,6 +723,48 @@ mod tests {
         }
         ifd0.add_sub_ifd(raw);
         TiffWriter::new(order, false).write(&[ifd0]).unwrap()
+    }
+
+    /// The raw CFA SubIFD that [`nef_model_in`] writes.
+    fn cfa_ifd(compression: u16, bits: u16, strips: Vec<Vec<u8>>, w: u32, h: u32, rps: u32) -> IfdBuilder {
+        let mut raw = IfdBuilder::new();
+        raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
+        raw.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
+        raw.set(t::IMAGE_LENGTH, Value::Long(vec![h]));
+        raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![bits]));
+        raw.set(t::COMPRESSION, Value::Short(vec![compression]));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::CFA]));
+        raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
+        raw.set(t::CFA_PATTERN_EP, Value::Byte(vec![2, 1, 1, 0]));
+        raw.set_image(ImageData::Strips { rows_per_strip: rps, strips });
+        raw
+    }
+
+    /// A D1X NEF with a `w` x `h` raw at `resolution` (X, Y per inch) and, when given, a JPEG preview of that size.
+    fn d1x((w, h): (usize, usize), resolution: (u32, u32), preview: Option<(u16, u16)>) -> Vec<u8> {
+        let mut raw = cfa_ifd(1, 14, vec![vec![0x10; w * h * 2]], w as u32, h as u32, h as u32);
+        raw.set(t::X_RESOLUTION, Value::Rational(vec![(resolution.0, 1)]));
+        raw.set(t::Y_RESOLUTION, Value::Rational(vec![(resolution.1, 1)]));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii("NIKON CORPORATION".into()));
+        ifd0.set(t::MODEL, Value::Ascii("NIKON D1X".into()));
+        if let Some((pw, ph)) = preview {
+            let mut jpeg = Vec::new();
+            let px = vec![128; usize::from(pw) * usize::from(ph) * 3];
+            jpeg_encoder::Encoder::new(&mut jpeg, 90).encode(&px, pw, ph, jpeg_encoder::ColorType::Rgb).unwrap();
+            let mut p = IfdBuilder::new();
+            p.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![1]));
+            p.set(t::IMAGE_WIDTH, Value::Long(vec![u32::from(pw)]));
+            p.set(t::IMAGE_LENGTH, Value::Long(vec![u32::from(ph)]));
+            p.set(t::BITS_PER_SAMPLE, Value::Short(vec![8, 8, 8]));
+            p.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![3]));
+            p.set(t::COMPRESSION, Value::Short(vec![7]));
+            p.set(t::PHOTOMETRIC, Value::Short(vec![photometric::RGB]));
+            p.set_image(ImageData::Strips { rows_per_strip: u32::from(ph), strips: vec![jpeg] });
+            ifd0.add_sub_ifd(p);
+        }
+        ifd0.add_sub_ifd(raw);
+        TiffWriter::new(ByteOrder::Big, false).write(&[ifd0]).unwrap()
     }
 
     /// A small uncompressed NEF with a real NikonNEFInfo TIFF block, without binary fixtures.
@@ -1525,6 +1567,32 @@ mod tests {
             for mode in [Mode::Header, Mode::Full] {
                 assert!(matches!(decode(&short, mode, &Limits::default()), Err(RawError::Corrupt(_))));
             }
+        }
+    }
+
+    /// lightcraft#1274: a D1X on firmware Ver.1.01 writes 600 / 600 for its 2:1 pixels.
+    #[test]
+    fn d1x_square_resolution_tags_take_the_pixel_shape_from_the_preview() {
+        let aspect = |frame, res, preview| decode(&d1x(frame, res, preview), Mode::Header, &Limits::default()).unwrap().pixel_aspect;
+        assert_eq!(aspect((96, 32), (600, 300), None), 2.0);
+        assert_eq!(aspect((96, 32), (600, 600), Some((48, 32))), 2.0);
+        assert_eq!(aspect((96, 32), (600, 600), Some((96, 32))), 1.0);
+        assert_eq!(aspect((96, 32), (600, 600), Some((64, 48))), 1.0);
+        assert_eq!(aspect((96, 32), (600, 600), None), 1.0);
+        assert_eq!(aspect((64, 32), (600, 600), Some((32, 32))), 1.0);
+        let full = decode(&d1x((96, 32), (600, 600), Some((48, 32))), Mode::Full, &Limits::default()).unwrap();
+        assert_eq!(full.info().developed_size(), (96, 64));
+    }
+
+    /// A Nikon PreviewIFD offset that overflows the note's base counts as no preview.
+    #[test]
+    fn wide_frame_with_an_overflowing_preview_ifd_pointer_does_not_panic() {
+        let mut mn = IfdBuilder::new();
+        mn.set(0x0011, Value::Long8(vec![u64::MAX]));
+        let bytes = nef_model_in(ByteOrder::Big, "NIKON D1X", 1, 14, vec![vec![0x10; 96 * 32 * 2]], 96, 32, 32, Some(mn));
+        assert_eq!(crate::embedded_preview(&bytes), None);
+        for mode in [Mode::Header, Mode::Full] {
+            assert_eq!(decode(&bytes, mode, &Limits::default()).unwrap().pixel_aspect, 1.0);
         }
     }
 }
