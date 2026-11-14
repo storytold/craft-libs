@@ -24,7 +24,14 @@
 //! They do **not** establish runtime correctness, protocol concurrency safety, or platform behavior
 //! under foreign host environments. They are lightweight syntactic regression gates designed to complement,
 //! rather than replace, platform integration tests and CI execution.
+//!
+//! ### Test fonts
+//!
+//! The [`fonts`] module makes test fonts from font bytes the caller supplies:
+//! [`fonts::rename_family`] gives a face a family name of the same length, and
+//! [`fonts::collection`] builds a TrueType collection from standalone faces.
 
+pub mod fonts;
 pub mod guards;
 
 pub use guards::{AsFileSource, Finding, predefined_quit, std_instant, wgsl_float_literals, wgsl_float_literals_in};
