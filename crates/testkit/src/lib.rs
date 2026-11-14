@@ -15,6 +15,10 @@
 //! * [`guards::rust_sources`]: directory crawler collecting `.rs` sources while excluding tests, with
 //!   size limits ([`guards::rust_sources_with_limits`]). It is not built for `wasm32`.
 //!
+//! With the `mcp` feature, on targets other than `wasm32`, `mcp::McpChild` runs an MCP server as a
+//! child process and talks to it over stdin and stdout, with a deadline on every wait and a length
+//! limit on every line it reads.
+//!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
 //! Source-level guards provide deterministic syntactic evidence about codebase structure.
@@ -26,6 +30,8 @@
 //! rather than replace, platform integration tests and CI execution.
 
 pub mod guards;
+#[cfg(all(feature = "mcp", not(target_arch = "wasm32")))]
+pub mod mcp;
 
 pub use guards::{AsFileSource, Finding, predefined_quit, std_instant, wgsl_float_literals, wgsl_float_literals_in};
 

@@ -11,6 +11,68 @@ Source-level platform regression guards and verification utilities for the Craft
 3. **`std_instant`**: Flags `std::time::Instant` outside comments and strings: the full path, `<m>::Instant` where a `use` binds `m` to `std::time`, and each `use` that imports `std::time::Instant` or `std::time::*`, under any name. The parts of a path may be split by whitespace, comments or line breaks. Other crates' `Instant` (such as `web_time::Instant` or `tokio::time::Instant`) is not flagged, and neither is an item whose `cfg` attribute is false on `wasm32-unknown-unknown`; code before that attribute or after its item on the same line is still checked. A `mod name;` inside such an item also skips the module's file (`name.rs` or `name/mod.rs`, or the file a `#[path]` attribute names) and the files of the modules declared in it, when they are among the files passed in and no declaration outside such items also reaches them. On that target, `std::time::Instant::now()` panics at runtime with `"time not implemented on this platform"`. Code targeting the web must use `web_time::Instant`.
 4. **`rust_sources`**: Recursively discovers a crate's `.rs` source files while excluding integration tests (`tests/`), test modules (`tests.rs`, `tests_*.rs`, `*_tests.rs`, `*_test.rs`), build artifacts (`target/`, any folder holding a `CACHEDIR.TAG` file that starts with the line `Signature: 8a477f597d28d172789f06886806bc55`, `.git/` and other folders whose name starts with `.`) and symbolic links, which it does not follow. A file over 8 MiB, more than 256 MiB in all or more than 50,000 files returns an error; `rust_sources_with_limits` takes other limits. It is not built for `wasm32`.
 
+## MCP test client: `mcp`
+
+The `mcp` feature adds `craft_testkit::mcp` and the `serde_json` dependency. The module is built on every target except `wasm32`, and it opens no network connection.
+
+`McpChild::spawn(path, args, env)` starts an MCP server program with its stdin and stdout piped. The variables in `env` are set for the child only; the test process's environment is not changed. `McpChild::connect(reader, writer, limits)` talks to a server that runs in the test process. Each message is one line of JSON-RPC 2.0, as the [MCP stdio transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports) describes.
+
+| Call | What it does |
+|---|---|
+| `initialize(version)` | Sends `initialize` with `version` (`mcp::PROTOCOL_VERSION` is `2025-06-18`), waits for the reply, then sends `notifications/initialized`. A reply with another version returns `UnsupportedVersion` and closes the connection. |
+| `request(method, params)`, `request_within(.., timeout)` | Sends a request with a new numeric id and returns the `result` of the reply with that id. Replies with other ids are skipped. An error reply returns `Rpc` with its code, message and data, and the connection stays usable. |
+| `call_tool(name, args)`, `call_tool_within(.., timeout)` | Sends `tools/call` and returns the tool result unchanged, `content` and `isError` included. |
+| `list_tools()` | Reads `tools/list` pages through `nextCursor` and returns the tools as sent. More than `max_pages` pages returns `TooManyPages`, and tools that add up to more than `max_line_bytes` of JSON return `ToolListTooLarge`. |
+| `notify(method, params)` | Sends a notification, which has no id and gets no reply. |
+| `take_notifications()` | Returns the notifications kept so far without waiting. |
+| `close()` | Closes the child's stdin, waits for it to exit, stops it after the grace period, and returns its exit status, whether it was stopped, and the stderr kept. |
+
+While a call waits, the client answers the child's `ping` with an empty result and its other requests with error -32601. A line on stdout that is not a JSON-RPC 2.0 message, a reply with neither or both of `result` and `error`, a line over the length limit, a missed deadline and the end of stdout each return an error, close the connection and stop the child; later calls return `Closed`. Dropping an `McpChild` stops and reaps a child that is still running. Setup returns a `Result` and nothing in the module panics.
+
+`McpLimits` holds the limits. These defaults are the crate's own values:
+
+| Field | Default | Range |
+|---|---|---|
+| `max_line_bytes` | 64 MiB, for one stdout line and for the whole `list_tools` result | at least 1 |
+| `request_timeout` | 30 s | more than zero, at most 1 hour |
+| `initialize_timeout` | 60 s | more than zero, at most 1 hour |
+| `close_grace` | 2 s | at most 1 hour |
+| `max_pages` | 64 | at least 1 |
+| `max_notifications` | 0 (notifications are not kept); the oldest is dropped when the queue is full | at most 4096 |
+| `stderr_tail_bytes` | 0 (stderr goes to the null device); otherwise the last bytes written are kept | at most 16 MiB |
+
+`McpLimits::timeouts_from_var(name)` sets both deadlines from a variable that holds a whole number of seconds from 1 to 3600; `mcp::TIMEOUT_VAR` (`CRAFT_TEST_MCP_TIMEOUT_SECS`) is the default name. Any other value returns an error.
+
+```rust
+use craft_testkit::mcp::{McpChild, PROTOCOL_VERSION};
+
+let mut mcp = McpChild::spawn(env!("CARGO_BIN_EXE_my-cli"), ["mcp"], [("MYCRAFT_CONFIG_DIR", dir.path())])?;
+mcp.initialize(PROTOCOL_VERSION)?;
+let result = mcp.call_tool("doc.new", serde_json::json!({}))?;
+assert_eq!(result["isError"], false);
+assert!(mcp.close()?.status.is_some_and(|s| s.success()));
+```
+
+The tests that start a real child are in `tests/mcp_child.rs`, a target with `harness = false`: the child is that test program, and the standard harness writes its own lines on stdout. Both test targets build to nothing on `wasm32`.
+
+### Origin
+
+| Module | Source repository | Path | Revision |
+|---|---|---|---|
+| `mcp` | storytold/craft-ai-integrations | `crates/ai-mcp/src/apps/child.rs` (`Conn`, `request`, `call_tool`, `MAX_LINE`, deadlines) and the 14 tests of `child_tests.rs`, written again here | `e8b31cb0` |
+| `mcp` | storytold/vectorcraft | `apps/vectorcraft-cli/tests/it/mcp_e2e.rs` | `460d2119` |
+| `mcp` | storytold/photocraft | `apps/photocraft-cli/tests/it/cli.rs` (`mcp_recv`) | `58d11d91` |
+
+### Migration
+
+| Consumer | Helper | State |
+|---|---|---|
+| VectorCraft | `apps/vectorcraft-cli/tests/it/mcp_e2e.rs` | Not switched |
+| PhotoCraft | `apps/photocraft-cli/tests/it/cli.rs` | Not switched |
+| CADCraft, DeckCraft, DesignCraft, EffectCraft | the MCP helpers in their CLI tests | Not switched |
+| FigCraft, FilmCraft, GridCraft, LightCraft, PdfCraft, SoundCraft | the MCP helpers in their CLI tests | Not switched |
+| craft-ai-integrations | `crates/ai-mcp/src/apps/child.rs`, production code | Kept as it is |
+
 ## Epistemic Scope: Syntactic Guards vs Runtime Validation
 
 Source-level guards provide deterministic syntactic evidence about codebase structure:
