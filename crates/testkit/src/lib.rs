@@ -15,6 +15,10 @@
 //! * [`guards::rust_sources`]: directory crawler collecting `.rs` sources while excluding tests, with
 //!   size limits ([`guards::rust_sources_with_limits`]). It is not built for `wasm32`.
 //!
+//! With the `corpus` feature, `corpus` (native only) parses pinned-corpus manifests and checks a
+//! corpus folder against them: `corpus::Manifest`, `corpus::verify` and the test gate
+//! `corpus::pinned`.
+//!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
 //! Source-level guards provide deterministic syntactic evidence about codebase structure.
@@ -25,6 +29,8 @@
 //! under foreign host environments. They are lightweight syntactic regression gates designed to complement,
 //! rather than replace, platform integration tests and CI execution.
 
+#[cfg(all(feature = "corpus", not(target_arch = "wasm32")))]
+pub mod corpus;
 pub mod guards;
 
 pub use guards::{AsFileSource, Finding, predefined_quit, std_instant, wgsl_float_literals, wgsl_float_literals_in};

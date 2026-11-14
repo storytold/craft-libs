@@ -8,7 +8,12 @@ repository.workspace = true
 description = "Source-level platform regression guards and verification utilities for the Craft application suite"
 publish = false
 
+[features]
+# Pinned-corpus manifests and the `corpus::pinned` test gate (native only).
+corpus = ["dep:sha2"]
+
 [dependencies]
+sha2 = { version = "0.10", default-features = false, features = ["std"], optional = true }
 
 [lints]
 workspace = true

@@ -11,6 +11,36 @@ Source-level platform regression guards and verification utilities for the Craft
 3. **`std_instant`**: Flags `std::time::Instant` outside comments and strings: the full path, `<m>::Instant` where a `use` binds `m` to `std::time`, and each `use` that imports `std::time::Instant` or `std::time::*`. Other crates' `Instant` (such as `web_time::Instant`) is not flagged, and neither is an item whose `cfg` attribute is false on `wasm32-unknown-unknown`. A `mod name;` inside such an item also skips the module's file (`name.rs` or `name/mod.rs`, or the file a `#[path]` attribute names) and the files of the modules declared in it, when they are among the files passed in and no declaration outside such items also reaches them. On that target, `std::time::Instant::now()` panics at runtime with `"time not implemented on this platform"`. Code targeting the web must use `web_time::Instant`.
 4. **`rust_sources`**: Recursively discovers a crate's `.rs` source files while excluding integration tests (`tests/`), test modules (`tests.rs`, `tests_*.rs`, `*_tests.rs`, `*_test.rs`), build artifacts (`target/`, any folder holding a `CACHEDIR.TAG` file that starts with the line `Signature: 8a477f597d28d172789f06886806bc55`, `.git/` and other folders whose name starts with `.`) and symbolic links, which it does not follow. A file over 8 MiB, more than 256 MiB in all or more than 50,000 files returns an error; `rust_sources_with_limits` takes other limits. It is not built for `wasm32`.
 
+## Pinned corpora: `corpus`
+
+`craft_testkit::corpus` is behind the `corpus` feature and is native only. It parses a corpus manifest and checks a folder of files against it.
+
+A manifest has one row per file, with tab-separated columns: the SHA-256 as 64 hexadecimal digits in either case, the path relative to the corpus folder with `/` between its parts, and optional license and URL columns. Blank lines and lines whose first character other than a space or a tab is `#` are skipped. LF and CRLF line endings are both read.
+
+- `Manifest::parse(text)` returns a `ManifestError` naming the line for a row with fewer than 2 or more than 4 columns, a digest that is not 64 hexadecimal digits, a path that is empty, starts with `/`, has an empty, `.` or `..` part, or holds a `\`, a `:` or a NUL character, and a path listed twice. An empty optional column is `None`.
+- `Manifest::read(path, &limits)` reads a manifest file, stopping one byte past the size limit. A path that is not a regular file, such as a folder or a named pipe, returns `ManifestError::NotAFile` without being opened.
+- `verify(dir, &manifest)` checks that each listed file resolves inside `dir` after symbolic links are followed, is a regular file within the size limit, and has the listed SHA-256. It returns a `VerifyError` naming the path. A manifest with no rows is an error.
+- `pinned(var, manifest)` is the gate a test calls. `var` names the folder variable, and `None` reads `CRAFT_CORPUS`. The corpus is required when the variable of the same name plus `_REQUIRED` (by default `CRAFT_CORPUS_REQUIRED`) is exactly `1`. With the folder variable unset and the corpus optional, it prints `SKIPPED: corpus not given: set <var> to its folder` to stderr and returns `None`. With the folder variable unset and the corpus required, or set to an empty value, a manifest that does not parse or a folder that does not match, it fails the test. Otherwise it returns the folder.
+
+`Limits` sets the size limits: by default a manifest of at most 1 MiB and 10,000 rows, and files of at most 8 GiB each, read 64 KiB at a time. No function downloads a file or changes the process environment.
+
+### Origin
+
+| Module | Source repository | Path | Revision |
+|---|---|---|---|
+| `corpus` | storytold/craft-libs | `crates/affinity/tests/support/corpus.rs:18-35` | `75a654f4` |
+
+### Migration
+
+| Consumer | Today | State |
+|---|---|---|
+| craft-libs `affinity` | `tests/support/corpus.rs` reads `corpus.tsv` (already tab-separated) from `AFFINITY_CORPUS` | Pending: a separate pull request switches it |
+| craft-libs `raw` | `docs/raf-corpus.sha256` separates digest and path with two spaces | Pending: the list is converted to tabs in a separate pull request |
+| LightCraft | `crates/raw/tests/it/corpus.rs` checks the RAF list | Pending: a separate pull request switches it |
+| PhotoCraft | `crates/io/tests/it/corpus.rs` and `xtask/*-corpus.sha256` (two-space lists) | Pending: the lists are converted to tabs in a separate pull request |
+| CADCraft | `crates/io/src/roundtrip/tests.rs` scans `CADCRAFT_CORPUS_DIR` without a checksum list | Pending: needs a pinned list first |
+| VectorCraft | `crates/affinity/tests/support/corpus.rs` reads a two-space list | Pending: the list is converted to tabs in a separate pull request |
+
 ## Epistemic Scope: Syntactic Guards vs Runtime Validation
 
 Source-level guards provide deterministic syntactic evidence about codebase structure:
