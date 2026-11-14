@@ -42,6 +42,8 @@ pub enum Format {
     Dicom,
     /// Amiga IFF/ILBM (`FORM ... ILBM`): planar bitplanes with a palette or 24-bit RGB.
     Iff,
+    /// JPEG 2000 (JP2 container or raw J2K codestream): read-only; see [`ASYMMETRIC_EXCEPTIONS`].
+    Jp2,
 }
 
 /// What a format can hold **and** what this crate reads/writes for it.
@@ -98,6 +100,7 @@ pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[
          writing needs an HEVC encoder, and the mature ones (x265, libheif) are C, so write stays \
          unsupported. Without the feature HEIF is detected but neither read nor written.",
     ),
+    (Format::Jp2, "JPEG 2000 decode uses hayro-jpeg2000 (pure Rust); writing JPEG 2000 is not provided."),
 ];
 
 use ChannelLayout as L;
@@ -110,9 +113,10 @@ const TIFF_LAYOUTS: &[ChannelLayout] = &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::
 
 impl Format {
     /// Every format known to the crate (enabled or not).
-    pub const ALL: [Format; 23] = [
+    pub const ALL: [Format; 24] = [
         Format::Png,
         Format::Jpeg,
+        Format::Jp2,
         Format::Jxl,
         Format::Tiff,
         Format::WebP,
@@ -171,6 +175,7 @@ impl Format {
             Format::Cineon => "Cineon",
             Format::Dicom => "DICOM",
             Format::Iff => "Amiga IFF",
+            Format::Jp2 => "JPEG 2000",
         }
     }
 
@@ -201,6 +206,7 @@ impl Format {
             Format::Cineon => &["cin"],
             Format::Dicom => &["dcm", "dicom", "dc3"],
             Format::Iff => &["iff", "lbm", "ilbm"],
+            Format::Jp2 => &["jp2", "j2k", "j2c", "jpf", "jpx"],
         }
     }
 
@@ -229,6 +235,7 @@ impl Format {
             Format::Cineon => "image/x-cin",
             Format::Dicom => "application/dicom",
             Format::Iff => "image/x-iff",
+            Format::Jp2 => "image/jp2",
         }
     }
 
@@ -303,6 +310,7 @@ pub fn caps(format: Format) -> FormatCaps {
         Format::Cineon => FormatCaps { depths: &[S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Dicom => FormatCaps { read: true, write: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Iff => FormatCaps { depths: &[S::U8], layouts: &[L::Rgb, L::Rgba], alpha: true, ..base },
+        Format::Jp2 => FormatCaps { read: true, write: false, layouts: &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::Cmyk, L::CmykA], icc: true, ..base },
     }
 }
 
@@ -319,6 +327,10 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     // JPEG XL bare codestream and ISO/IEC 18181-2 container signature box.
     if b.starts_with(&[0xFF, 0x0A]) || b.starts_with(b"\0\0\0\x0cJXL \r\n\x87\n") {
         return Some(Format::Jxl);
+    }
+    // JPEG 2000 container signature box or raw J2K codestream (SOC + SIZ).
+    if b.starts_with(b"\0\0\0\x0cjP  \r\n\x87\n") || b.starts_with(b"\xff\x4f\xff\x51") {
+        return Some(Format::Jp2);
     }
     if b.starts_with(b"II*\0") || b.starts_with(b"MM\0*") || b.starts_with(b"II+\0") || b.starts_with(b"MM\0+") {
         return Some(Format::Tiff);
