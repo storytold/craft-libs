@@ -229,6 +229,7 @@ impl<'bufs, 'state, 'segs> SweepLineRange<'bufs, 'state, 'segs> {
     /// receive non-overlapping batches of output events.
     pub fn events(&mut self) -> Option<Vec<OutputEvent>> {
         let next_x = self.x()?;
+        self.count_active_horizontals();
 
         let mut ret = Vec::new();
         for h in &self.bufs.active_horizontals {
@@ -287,12 +288,14 @@ impl<'bufs, 'state, 'segs> SweepLineRange<'bufs, 'state, 'segs> {
             .active_horizontals
             .sort_by_key(|a| CheapOrderedFloat::from(a.end));
         self.last_x = Some(next_x);
+        self.count_active_horizontals();
         Some(ret)
     }
 
     /// Move along to the next horizontal position.
     pub fn increase_x(&mut self) {
         if let Some(x) = self.x() {
+            self.count_active_horizontals();
             self.drain_active_horizontals(x);
 
             while let Some(ev) = self.output_events.first() {
@@ -309,6 +312,25 @@ impl<'bufs, 'state, 'segs> SweepLineRange<'bufs, 'state, 'segs> {
         self.bufs
             .active_horizontals
             .sort_by_key(|a| CheapOrderedFloat::from(a.end));
+        self.count_active_horizontals();
+    }
+
+    // Craft patch (work limit): every step visits the active horizontal
+    // segments before and after it moves, and a caller visits them again at
+    // each position, so each step counts them toward the sweep's work limit.
+    // Overlapping horizontal segments are split at every position of the
+    // others, which makes about n^2 visits for n of them.
+    fn count_active_horizontals(&self) {
+        self.line.state.count_range_horizontals(self.bufs.active_horizontals.len());
+    }
+
+    /// Returns `true` once the sweep has done more work than the limit given to
+    /// [`Sweeper::set_work_limit`](crate::sweep::Sweeper::set_work_limit), counting
+    /// the horizontal segments that the steps of this range visit.
+    ///
+    /// The caller should then stop processing this range and the sweep.
+    pub fn work_limit_exceeded(&self) -> bool {
+        self.line.state.work_limit_exceeded()
     }
 
     fn drain_active_horizontals(&mut self, x: f64) {

@@ -20,6 +20,21 @@ use linesweeper::topology::{ContourIdx, Contours, Topology, WindingNumber};
 /// numerical debris, such as the lens between two nearly coincident curves.
 pub const DEFAULT_SLIVER: f64 = 0.01;
 
+/// The most work the sweep may do, counted as segment comparisons plus segment position checks
+/// plus one unit for every 16 segments a linear search of the sweep line passes plus the
+/// horizontal segments each step of a sweep line visits,
+/// before the shapes count as too degenerate to sweep. Stacked copies of a shape can need billions
+/// of comparisons; a release build makes about 17 million a second.
+const MAX_SWEEP_WORK: u64 = 100_000_000;
+
+/// The most output the sweep's topology may hold before the shapes count as too degenerate to
+/// sweep, in units: each output segment takes one unit plus one for each entry of its two winding
+/// numbers (at least one each), so 2,000,000 segments with single-entry windings fill it.
+/// Overlapping horizontal edges are split at every position of the others, so n of them can make
+/// about n^2 output segments, and each segment's windings can hold an entry for every shape that
+/// covers it.
+const MAX_TOPOLOGY_UNITS: usize = 6_000_000;
+
 /// How a path's winding number decides what is inside it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum FillRule {
@@ -110,7 +125,7 @@ pub fn regions_with(shapes: &[Shape], clips: &[ClipPath], sliver: f64) -> Result
     if shapes.is_empty() {
         return Ok(Vec::new());
     }
-    Ok(Arrangement::new(shapes, clips, sliver)?.regions())
+    Ok(Arrangement::new(shapes, clips, sliver, MAX_SWEEP_WORK)?.regions())
 }
 
 /// The finiteness check [`regions_with`] makes: every point of every shape path and of every clip
@@ -242,6 +257,9 @@ impl WindingNumber for Multi {
         let w = self.get(tag);
         Multi(if w == 0 { vec![] } else { vec![(tag, w)] })
     }
+    fn storage_units(&self) -> usize {
+        self.0.len().max(1)
+    }
 }
 
 /// The sweep of shapes and clips. Tags `0..n` are shapes, `n + c` is clip `c`.
@@ -255,7 +273,7 @@ struct Arrangement {
 }
 
 impl Arrangement {
-    fn new(shapes: &[Shape], clips: &[ClipPath], sliver: f64) -> Result<Self, GeomError> {
+    fn new(shapes: &[Shape], clips: &[ClipPath], sliver: f64, work_limit: u64) -> Result<Self, GeomError> {
         let n = shapes.len();
         let mut used = vec![false; clips.len()];
         let mut shape_clips = Vec::with_capacity(n);
@@ -278,8 +296,11 @@ impl Arrangement {
         let eps = eps_for(paths.iter().map(|p| &p.0))?;
         snap_horizontals(&mut paths.iter_mut().map(|p| &mut p.0).collect::<Vec<_>>(), eps);
         // The sweep can panic on rare near-degenerate input; the flattener then rasterizes.
-        let sweep = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Topology::<Multi>::from_paths(paths.iter().map(|(p, t)| (p, *t)), eps)));
-        // Every subpath is closed, so a path error is a degenerate input too.
+        let sweep = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Topology::<Multi>::from_paths_with_limits(paths.iter().map(|(p, t)| (p, *t)), eps, work_limit, MAX_TOPOLOGY_UNITS)
+        }));
+        // Every subpath is closed, so a path error or a sweep past its work or output limit is a
+        // degenerate input too.
         let top = sweep.map_err(|_| GeomError::Degenerate)?.map_err(|_| GeomError::Degenerate)?;
         let rules = shapes.iter().map(|s| s.rule).chain(clips.iter().map(|c| c.rule)).collect();
         let tidy = Tidy::keeping(sliver, paths.iter().map(|p| &p.0));
@@ -1087,6 +1108,47 @@ mod tests {
         assert_eq!(summary(&regions(&[fill(open)], &[]).unwrap()), vec![(vec![0], 50.0)]);
         assert_eq!(regions(&[fill(rect(0.0, 0.0, f64::NAN, 1.0))], &[]), Err(GeomError::NonFinite));
         assert_eq!(regions(&[], &[]), Ok(vec![]));
+    }
+
+    #[test]
+    fn sweep_past_its_work_limit_is_degenerate() {
+        let shapes = vec![fill(Circle::new((50.0, 50.0), 40.0).to_path(0.01)); 20];
+        assert_eq!(Arrangement::new(&shapes, &[], DEFAULT_SLIVER, 1_000).err(), Some(GeomError::Degenerate));
+        assert_eq!(regions(&shapes, &[]).unwrap().len(), 1);
+    }
+
+    // 1,100 overlapping shapes made only of horizontal edges at one height take little sweep work,
+    // but each edge is split at every position of the others, which makes more than 2,000,000
+    // output segments, past MAX_TOPOLOGY_UNITS.
+    #[test]
+    fn sweep_past_its_output_limit_is_degenerate() {
+        let n = 1_100;
+        let shapes: Vec<Shape> = (0..n)
+            .map(|i| {
+                let i = f64::from(i);
+                let mut path = BezPath::new();
+                path.move_to((i, 0.0));
+                path.line_to((2.0 * f64::from(n) + i, 0.0));
+                path.close_path();
+                fill(path)
+            })
+            .collect();
+        assert_eq!(regions(&shapes, &[]).err(), Some(GeomError::Degenerate));
+    }
+
+    // 200 staggered rectangles of one height make about 120,000 output segments along their top
+    // and bottom edges, fewer than 2,000,000, but the winding numbers of those segments hold an
+    // entry for each rectangle that covers them, which passes MAX_TOPOLOGY_UNITS.
+    #[test]
+    fn winding_entries_count_toward_the_output_limit() {
+        let k = 200;
+        let shapes: Vec<Shape> = (0..k)
+            .map(|i| {
+                let i = f64::from(i);
+                fill(rect(i, 0.0, 2.0 * f64::from(k) + i, 10.0))
+            })
+            .collect();
+        assert_eq!(regions(&shapes, &[]).err(), Some(GeomError::Degenerate));
     }
 
     #[test]

@@ -13,6 +13,9 @@ pub struct ComparisonCache {
     inner: FxHashMap<(SegIdx, SegIdx), (CurveOrder, CurveOrder)>,
     accuracy: f64,
     tolerance: f64,
+    // Craft patch (work limit): the number of calls to `compare_segments`,
+    // cached or not, which `Sweeper` checks against its work limit.
+    pub(crate) calls: u64,
 }
 
 impl ComparisonCache {
@@ -29,6 +32,7 @@ impl ComparisonCache {
             inner: FxHashMap::default(),
             accuracy,
             tolerance,
+            calls: 0,
         }
     }
 
@@ -45,6 +49,7 @@ impl ComparisonCache {
             inner: FxHashMap::default(),
             accuracy,
             tolerance,
+            calls: 0,
         }
     }
 
@@ -57,6 +62,7 @@ impl ComparisonCache {
     ) -> &mut CurveOrder {
         use std::collections::hash_map::Entry;
 
+        self.calls = self.calls.saturating_add(1);
         let (i, j, flipped) = if i.0 < j.0 {
             (i, j, false)
         } else {

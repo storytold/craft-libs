@@ -1,21 +1,22 @@
 # Local linesweeper 0.5.0 copy
 
 This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and the
-local patch listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
-Every file here except this one, `SOURCE.json` and the patched file below is byte for byte the file
+Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
 hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
-holds `upstream_revision`. `local_patches` describes the local patch.
+holds `upstream_revision`. `local_patches` describes each local patch.
 
 ## Local patches
 
 | File | Change |
 |---|---|
 | `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
+| `src/lib.rs`, `src/order.rs`, `src/sweep/range.rs`, `src/sweep/sweep_line.rs`, `src/topology.rs` | `ComparisonCache` counts its calls, so `Sweeper` counts its segment comparisons, and `Sweeper` also counts the segment positions it checks against horizontal segments and contour endpoints while finding a sweep line's changed intervals, n log2 n units for sorting a sweep line's n horizontal segments, one unit for every 16 segments that linear searches of the sweep line step over, and the active horizontal segments that each step of a `SweepLineRange` visits. `SweepLineRange::work_limit_exceeded` reports the limit to the code that processes a range, and the topology stops there. `Sweeper::set_work_limit` sets the most work it may do; past it, `Sweeper::next_line` returns `None`, also between the enter, exit and intersection events of one sweep line and between the comparisons and position checks that find its changed intervals, never returns a sweep line past the limit, and keeps returning `None` if the limit is raised; `Sweeper::work_limit_exceeded` returns `true`. `Topology::from_paths_with_work_limit` returns the new `Error::WorkLimitExceeded` when its sweep passes the limit. `Topology::from_paths_with_limits` also returns it before the topology's output passes its `output_limit`, counting one unit per output segment plus the new `WindingNumber::storage_units` of its two winding numbers (1 by default), which bounds the memory the topology uses. The sweep had no limit: the union of 400 identical circles made 1.36 billion comparisons in 19 sweep lines and took 66 to 83 s and 1.3 GB in a release build. `Topology::from_paths` and the other constructors set no limit. The `work_limit` and `work_limit_stops_within_a_sweep_line` tests sweep 20 stacked circles with a limit of 1,000 comparisons, and `work_limit_returns_no_line_past_the_limit` sweeps 3 stacked circles with every limit below the sweep's total. `work_limit_counts_the_horizontal_scans` sweeps 150 bars crossed by the top and bottom edges of 30 wide rectangles, where the sweep makes 1,462 comparisons but checks at least 18,000 positions, and stops it at half its total work. `work_limit_counts_linear_searches` sweeps 2,000 disjoint rectangles sharing their top and bottom heights, where each exit searches the whole sweep line, and stops it at half its total work. `work_limit_counts_sorting_the_horizontals` sweeps 4,096 horizontal segments at one height with an empty sweep line, and stops it before the sort at half its total work. `work_limit_counts_the_horizontal_splits` builds the topology of 300 closed paths made only of overlapping horizontal segments at one height, which take little sweep work but make more than 100,000 output segments, and returns `Error::WorkLimitExceeded` at a limit of 100,000. `output_limit` builds the same paths with an output limit of 10,000 units, of one unit less than three per output segment, and of exactly three per output segment. `unlimited_constructors_ignore_storage_units` builds a square with a winding number whose `storage_units` is `usize::MAX` through `Topology::from_paths` and `Topology::from_paths_with_work_limit`, which count no output units. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
