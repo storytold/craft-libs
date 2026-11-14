@@ -310,6 +310,18 @@ pub enum DisabledLook {
     Faded,
 }
 
+/// What Escape does to a value component's running gesture (step 9).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum EscapeEdit {
+    /// Escape ends the gesture with `Cancel { Escape }`: the value goes back to where the gesture began.
+    #[default]
+    Cancel,
+    /// Escape ends the gesture with `Commit`: the value keeps what the gesture picked. A transient picker that the
+    /// host drives (a HUD over the canvas) closes on Escape and keeps the pick.
+    Commit,
+}
+
 /// The core trait: every UI type is a `Component`.
 pub trait Component: Meta + Sized {
     /// The AccessKit role.
@@ -318,6 +330,8 @@ pub trait Component: Meta + Sized {
     const ALT_ROLES: &'static [Role] = &[];
     /// How input reaches the component.
     const INPUT: Input = Input::Pointer;
+    /// What Escape does to the running gesture.
+    const ESCAPE: EscapeEdit = EscapeEdit::Cancel;
     /// Whether the component hosts popups: `false` skips the overlay bookkeeping of steps 9, 10, 12, 15 and 16.
     const OVERLAYS: bool = true;
     /// Whether the component declares parts, a text part or an editor part: `false` skips the parts step (the parts

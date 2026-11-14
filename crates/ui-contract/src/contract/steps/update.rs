@@ -44,8 +44,8 @@ pub(crate) fn gesture_gate<C: Component>(comp: &C, cx: &mut Cx<'_, C>) {
     }
 }
 
-/// Step 9, the edit intents the library takes before `C::update`: Escape or a cancelled press ends a running gesture,
-/// and a reset becomes a `Set` of the binding's reset value.
+/// Step 9, the edit intents the library takes before `C::update`: Escape or a cancelled press ends a running gesture
+/// (Escape as `C::ESCAPE` says), and a reset becomes a `Set` of the binding's reset value.
 pub(crate) fn edit_intents<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) {
     use crate::contract::cx::Edit as _;
     if cx.gesture().is_some_and(|phase| matches!(phase, GesturePhase::Begin | GesturePhase::Update)) {
@@ -58,8 +58,10 @@ pub(crate) fn edit_intents<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) {
                 _ => CancelReason::Blur,
             })
         };
-        if let Some(reason) = reason {
-            cx.cancel(reason);
+        match reason {
+            Some(CancelReason::Escape) if C::ESCAPE == crate::contract::EscapeEdit::Commit => cx.commit(),
+            Some(reason) => cx.cancel(reason),
+            None => {}
         }
     }
     let reset = cx.core.intents.take_reset();
