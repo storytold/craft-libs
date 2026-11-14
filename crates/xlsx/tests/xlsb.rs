@@ -1057,3 +1057,49 @@ fn a_damaged_name_leaves_names_and_formulas_as_values() {
     assert_eq!(book.sheets[0].formula(CellRef::new(0, 1)), None);
     assert!(book.warnings.iter().any(|w| w.contains("names could not be read")), "{:?}", book.warnings);
 }
+
+#[test]
+fn names_on_macro_sheets_spans_over_chart_sheets_and_empty_built_ins() {
+    // Sheets Data, a chart sheet, an XLM macro sheet, Hidden; sheet links Macro1, Data:Hidden
+    // (over both) and Data.
+    let mut book = record(131, &[]);
+    book.extend(record(153, &[[0u8; 8].as_slice(), &wide("")].concat()));
+    book.extend(record(143, &[]));
+    for (id, rel, name) in [(1u32, "one", "Data"), (3, "c", "Chart1"), (4, "m", "Macro1"), (2, "two", "Hidden")] {
+        book.extend(record(156, &[&0u32.to_le_bytes()[..], &id.to_le_bytes(), &wide(rel), &wide(name)].concat()));
+    }
+    book.extend(record(144, &[]));
+    let mut xti = 3u32.to_le_bytes().to_vec();
+    for (first, last) in [(2i32, 2i32), (0, 3), (0, 0)] {
+        xti.extend([0u32.to_le_bytes(), first.to_le_bytes(), last.to_le_bytes()].concat());
+    }
+    book.extend([record(353, &[]), record(357, &[]), record(362, &xti), record(354, &[])].concat());
+    let area = [&[0x3Bu8][..], &2u16.to_le_bytes(), &0u32.to_le_bytes(), &1u32.to_le_bytes(), &0u16.to_le_bytes(), &1u16.to_le_bytes()].concat();
+    // A sheet's built-in Database, then the workbook-level one Excel writes with no formula.
+    book.extend(brt_name(0x20, 0, 0, "Database", &area, None));
+    book.extend(brt_name(0x20, 0, WORKBOOK, "Database", &[], None));
+    book.extend(brt_name(0x388, b'k', WORKBOOK, "Cmd", &ref3d_name(0, 0, 0), None));
+    book.extend(brt_name(0, 0, WORKBOOK, "Span", &ref3d_name(1, 0, 0), None));
+    book.extend(record(132, &[]));
+    let rels = RELS.replace(
+        "</Relationships>",
+        r#"<Relationship Id="c" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" Target="../data/c.bin"/><Relationship Id="m" Type="http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet" Target="../data/m.bin"/></Relationships>"#,
+    );
+    let ref3d_cell = |ixti: u16| [&[0x5Au8][..], &ixti.to_le_bytes(), &loc(0, 0)].concat();
+    let data = [
+        row(0),
+        formula_cell(1, &[0x23, 2, 0, 0, 0], &[]),
+        formula_cell(2, &[0x23, 4, 0, 0, 0], &[]),
+        formula_cell(3, &ref3d_cell(0), &[]),
+        formula_cell(4, &ref3d_cell(1), &[]),
+    ]
+    .concat();
+    let bytes = package(&book, &worksheet(&data, &[]), &sst(), ROOT, &rels, TYPES);
+    let wb = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap();
+    let xml = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><definedNames><definedName name="_xlnm.Database" localSheetId="0">Data!$A$1:$B$2</definedName><definedName name="Cmd" xlm="1" functionGroupId="14" shortcutKey="k">Macro1!$A$1</definedName><definedName name="Span">Data:Hidden!$A$1</definedName></definedNames></workbook>"#;
+    assert_eq!(wb.defined_names, xml_names(xml));
+    let read = read(&bytes).unwrap();
+    let got: Vec<_> = (1..=4).map(|c| read.sheets[0].formula(CellRef::new(0, c))).collect();
+    assert_eq!(got, [Some("_xlnm.Database"), Some("Span"), Some("Macro1!$A$1"), Some("Data:Hidden!$A$1")]);
+    assert!(read.warnings.iter().all(|w| !w.contains("left out") && !w.contains("saved results")), "{:?}", read.warnings);
+}

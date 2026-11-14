@@ -88,8 +88,11 @@ read (each cell keeps its format index). Its defined names are those of `defined
 `.xlsx` Excel writes: built-in names as `_xlnm.Print_Area`, sheet-scoped names with their
 `localSheetId`, relative references as the cell they reach from A1, macro names with their
 `function`, `xlm`, `functionGroupId` and `shortcutKey`. Excel's hidden names for newer functions
-and LET parameters are left out, as in `.xlsx`; so is a name whose formula can't be read, with a
-warning. Its cell formulas are decoded from their tokens into the
+and LET parameters are left out, as in `.xlsx`, and so is the formula-less workbook-level built-in
+Excel writes beside a sheet's (`Database`), which formulas still spell `_xlnm.Database`; a name
+whose formula can't be read is left out with a warning. A reference may name an XLM macro sheet
+(`Macro1!$A$1`, where macro names point), and a 3-D span is spelled by its ends whatever chart
+sheets lie between them. Its cell formulas are decoded from their tokens into the
 text an `.xlsx` file holds (`_xlfn.` and `_xlpm.` names as written, no implicit `@`), with
 `FormulaKind::Shared` or `FormulaKind::Array` and their ranges, and `BrtCellMeta` as the cell
 metadata index. Every cell of a shared formula gets its own text, decoded at the cell, since the
