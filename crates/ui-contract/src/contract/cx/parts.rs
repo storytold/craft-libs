@@ -40,9 +40,10 @@ pub(crate) struct Decls {
 
 impl Decls {
     fn push(&mut self, decl: PartDecl) -> (&mut PartDecl, &mut PartExtras) {
+        let at = self.parts.len();
         self.parts.push(decl);
         self.extras.push(PartExtras::default());
-        (self.parts.last_mut().expect("just pushed"), self.extras.last_mut().expect("just pushed"))
+        (&mut self.parts[at], &mut self.extras[at])
     }
 
     /// The sensing core's declarations, in declaration order.

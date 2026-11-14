@@ -96,8 +96,7 @@ fn excessive_window_and_size_less_expansion_are_limits() {
     let z = frame(&payload);
     // Producer frames omit their content size; output admission must work without that hint.
     assert_eq!(z[4] & 0xc0, 0);
-    let mut limits = Limits::default();
-    limits.max_entry = 1024;
+    let limits = Limits { max_entry: 1024, ..Limits::default() };
     assert!(matches!(pcraft_icc_profile(&zip(&[store("manifest.json", m.as_bytes()), store(&path, &z)]), &limits), Err(Error::LimitExceeded(_))));
     let mut large_window = z.clone();
     assert_eq!(large_window[4] & 0x20, 0);

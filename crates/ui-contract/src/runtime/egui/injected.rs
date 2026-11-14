@@ -159,8 +159,9 @@ impl Request {
         let announce = (self.held.mods != mods).then(|| modifiers_changed(mods));
         let events: Frame = announce.into_iter().chain(events).collect();
         self.held.apply(&events);
+        let at = self.steps.len();
         self.steps.push(events.into());
-        self.steps.last_mut().expect("just pushed")
+        &mut self.steps[at]
     }
 
     /// A move to `at` unless the pointer is there, with `mods` announced.
@@ -339,7 +340,6 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut egui::RawInput) -> bool {
             let held = injected.held.entry(viewport).or_default();
             let before = held.clone();
             held.apply(&step.events);
-            let lane = injected.lanes.get_mut(&viewport).expect("the lane of the popped step");
             lane.flight = Some(Flight { step, pass: pass_nr, focus: focused, until, before });
             return !lane.queue.is_empty();
         }

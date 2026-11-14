@@ -16,7 +16,7 @@ pub(super) const RLM: char = '\u{200F}';
 pub(super) const ALM: char = '\u{061C}';
 
 /// `value` as a first-strong isolate (FSI…PDI): it takes the direction of its first strong
-/// letter and can't reorder the text around it. What [`fmt`] does to each value in text with a
+/// letter and can't reorder the text around it. What [`crate::fmt`] does to each value in text with a
 /// right-to-left letter.
 pub fn isolate(value: &str) -> String {
     wrap(FSI, value)
@@ -24,13 +24,13 @@ pub fn isolate(value: &str) -> String {
 
 /// `value` as a left-to-right isolate (LRI…PDI), for numbers, paths, file sizes, timecodes and
 /// codes, which read left to right in every language. In an RTL first-strong isolate, the
-/// segments of `/home/مستخدم/file.txt` would run right to left. [`fmt`] takes the isolate off
+/// segments of `/home/مستخدم/file.txt` would run right to left. [`crate::fmt`] takes the isolate off
 /// again in text with no right-to-left letter.
 pub fn ltr(value: &str) -> String {
     wrap(LRI, value)
 }
 
-/// `text` without isolate marks (LRI, RLI, FSI, PDI): a [`fmt`] or [`I18n::trn`] result made fit
+/// `text` without isolate marks (LRI, RLI, FSI, PDI): a [`crate::fmt`] or [`crate::I18n::trn`] result made fit
 /// for a file name, a log or a comparison.
 pub fn strip_isolates(text: &str) -> String {
     text.chars().filter(|c| !matches!(*c, LRI | RLI | FSI | PDI)).collect()

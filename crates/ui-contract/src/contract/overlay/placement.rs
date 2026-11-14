@@ -134,6 +134,10 @@ fn resolved_anchor(ctx: &Context, overlay: &Overlay, resolved: Rect, bounds: Rec
 /// The room a layer's body is measured in before the layer is placed: `content_room` for the anchor as the host
 /// resolves it in this pass, inside the screen rect the layer opened in `env` keeps inside.
 /// `id` is the layer, whose memory holds the pointer where it opened. `own` and `own_to_screen` are the owner's rect and its layer's map to screen space.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the measuring room reads the pass facts the caller holds as separate values; a struct would only restate them"
+)]
 pub(crate) fn measuring_room(
     ctx: &Context,
     env: &Env,

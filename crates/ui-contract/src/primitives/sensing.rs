@@ -608,6 +608,7 @@ pub(crate) struct MemberResult {
     pub activated: bool,
 }
 
+#[expect(clippy::unreachable, reason = "`sense_members` returns one result per spec")]
 pub(crate) fn sense_member(ui: &Ui, arena: ArenaId, spec: MemberSpec<'_>) -> MemberResult {
     let mut results = sense_members(ui, arena, std::slice::from_ref(&spec));
     results.pop().unwrap_or_else(|| unreachable!("one result per member"))

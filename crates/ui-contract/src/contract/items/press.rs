@@ -42,6 +42,10 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     }
 
     /// A press on a row selects it; a double press activates it; a right press asks for its menu.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "one match over the press kinds (select, activate, menu), each arm short; splitting it only moves the match"
+    )]
     pub(super) fn press_step(&mut self, comp: &C, cx: &mut Cx<'_, C>, props: &CollectionProps, layout: &C::ItemLayout, at: Placement) {
         let Placement { rect, offset, rtl } = at;
         let ctx = cx.core.ctx.clone();

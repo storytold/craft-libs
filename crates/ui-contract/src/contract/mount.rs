@@ -71,10 +71,11 @@ pub(super) fn host(props: &ContainerProps, at: &HostCx<'_>, open: bool, title: &
             }
         }
     };
-    if (open || mounted.exiting) && opens_dialog(&props.mount) {
-        if let Some(shell) = at.env.get::<ShellEntry>().0 {
-            shell.note_dialog();
-        }
+    if (open || mounted.exiting)
+        && opens_dialog(&props.mount)
+        && let Some(shell) = at.env.get::<ShellEntry>().0
+    {
+        shell.note_dialog();
     }
     mounted
 }

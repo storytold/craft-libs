@@ -322,10 +322,10 @@ fn snake(name: &str) -> Vec<String> {
         let starts = c.is_uppercase()
             && index > 0
             && (chars[index - 1].is_lowercase() || chars[index - 1].is_ascii_digit() || chars.get(index + 1).is_some_and(|next| next.is_lowercase()));
-        if starts || words.is_empty() {
-            words.push(String::new());
+        match words.last_mut() {
+            Some(word) if !starts => word.extend(c.to_lowercase()),
+            _ => words.push(c.to_lowercase().collect()),
         }
-        words.last_mut().expect("a word").extend(c.to_lowercase());
     }
     words
 }

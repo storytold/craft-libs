@@ -29,7 +29,9 @@ mod bidi;
 mod negotiation;
 
 use bidi::{FSI, has_bidi_control, has_rtl, is_one_isolate, unwrap_isolate, wrap};
-use negotiation::{bare, candidates, is_region, marked, plural_rules, posix_env_tags};
+#[cfg(all(unix, not(any(target_vendor = "apple", target_os = "android"))))]
+use negotiation::posix_env_tags;
+use negotiation::{bare, candidates, is_region, marked, plural_rules};
 
 pub use bidi::{isolate, ltr, strip_isolates};
 

@@ -38,7 +38,7 @@ impl Renderer {
     /// # Errors
     /// When wgpu fails to render or read back the image.
     pub fn render(&mut self, ctx: &Context, mut paint: FullOutput) -> Result<RgbaImage, String> {
-        self.textures.extend(paint.textures_delta.set.iter().map(|(id, _)| *id));
+        self.textures.extend(paint.textures_delta.set.keys().copied());
         for id in &paint.textures_delta.free {
             self.textures.remove(id);
         }

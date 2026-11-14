@@ -82,6 +82,9 @@ pub struct SweepApply {
     show_only: bool,
 }
 
+/// A move of a collection's own items as they stand before the drop, and as the drop leaves them.
+type MovePair<K> = (ReorderMove<K>, ReorderMove<K>);
+
 impl SweepApply {
     /// A plain column: Alt is ignored.
     pub fn new() -> Self {
@@ -472,7 +475,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
 
     /// The move a drop of the collection's own `payload` at `landed` makes, before and after; `None` when it would
     /// leave every item where it is.
-    fn own_move(&self, payload: &ListDrag<C::Key>, landed: Landed, groups: bool) -> Option<(ReorderMove<C::Key>, ReorderMove<C::Key>)> {
+    fn own_move(&self, payload: &ListDrag<C::Key>, landed: Landed, groups: bool) -> Option<MovePair<C::Key>> {
         // The moved items in display order, as they stand in the source now.
         let at: Vec<usize> =
             payload.keys.iter().filter_map(|key| self.index_of(key)).collect::<std::collections::BTreeSet<_>>().into_iter().collect();

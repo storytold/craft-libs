@@ -845,6 +845,10 @@ fn create_node(ctx: &Context, ui: &Ui, id: Id, member: bool, role: Role) -> bool
 }
 
 /// Steps 6 to 16 of the pass, run in the `Ui` the host gives.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "steps 6 to 16 in their fixed order; each step is already its own function and the rest is the order"
+)]
 fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, host_env: Option<&Env>) {
     let ctx = p.p.core_ref().ctx.clone();
     let (id, rtl) = (p.resolved.id, p.env.direction.is_rtl());
@@ -1274,6 +1278,10 @@ fn measured(t: &mut dyn Erased, input: &MeasureIn<'_>, style: &dyn StyleView, re
 }
 
 /// The pipeline: steps 1 to 17 for one component, whatever its type and shape.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "steps 1 to 17 in their fixed order; each step is already its own function and the rest is the order"
+)]
 pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<TipFn<'_>>) {
     let ctx = ui.ctx().clone();
     let facts = t.facts();

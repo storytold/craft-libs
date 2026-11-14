@@ -167,13 +167,13 @@ pub fn fill_polygon(points: &[Pos2], color: Color32, feather: f32) -> Mesh {
         // An opaque inner and a clear outer vertex per point, half the feather each side of the edge (egui's
         // `fill_closed_path`), with the normals of egui's `Path::add_line_loop`.
         let edge_normal = |i: usize| (ring[(i + 1) % n] - ring[i]).normalized().rot90();
-        for i in 0..n {
+        for (i, &point) in ring.iter().enumerate() {
             let (before, after) = (edge_normal((i + n - 1) % n), edge_normal(i));
             let normal = (before + after) * 0.5;
             let length_sq = normal.length_sq();
             let normal = if length_sq > f32::EPSILON { normal / length_sq } else { after };
-            mesh.colored_vertex(ring[i] - normal * (0.5 * feather), color);
-            mesh.colored_vertex(ring[i] + normal * (0.5 * feather), Color32::TRANSPARENT);
+            mesh.colored_vertex(point - normal * (0.5 * feather), color);
+            mesh.colored_vertex(point + normal * (0.5 * feather), Color32::TRANSPARENT);
         }
         for i in 0..n as u32 {
             let before = (i + n as u32 - 1) % n as u32;

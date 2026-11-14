@@ -19,7 +19,7 @@ pub fn entry(tail: &[u8], [offset, len]: [u64; 2]) -> Option<&[u8]> {
 /// once. Entries whose different ranges overlap copy the shared bytes once each, and are refused
 /// once their copies pass that size, as VectorCraft's reader refuses them. Unlike
 /// [`Image::bytes`], `Entries` puts no limit on one entry: VectorCraft opens an uncompressed file
-/// whose entry is larger than [`MAX_ENTRY`].
+/// whose entry is larger than [`crate::MAX_ENTRY`].
 #[derive(Debug, Clone)]
 pub struct Entries<'a> {
     tail: &'a [u8],
@@ -240,7 +240,7 @@ pub struct Tail<'a> {
 }
 
 impl<'a> Tail<'a> {
-    /// An empty tail for a file of `version`, which is the file's own `version`; [`File::tail`]
+    /// An empty tail for a file of `version`, which is the file's own `version`; [`crate::File::tail`]
     /// takes it from the file.
     pub fn new(version: u32) -> Self {
         Self { parts: vec![], len: 0, after: version >= TAIL_SINCE }

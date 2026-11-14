@@ -168,7 +168,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             Mount::Viewport { .. } if viewports::available(&ctx) => true,
             Mount::Layer(_) | Mount::Viewport { .. } => {
                 let placement = overlay_of(props).map_or_else(Placement::default, |overlay| {
-                    let screen = crate::contract::overlay::screen_for(&ctx, &env, overlay);
+                    let screen = crate::contract::overlay::screen_for(&ctx, env, overlay);
                     shown_placement(&ctx, id, save.as_ref(), overlay, screen, env.tokens.space.inset.screen)
                 });
                 // A layer the user sized takes that size, at its saved position or where its anchor places it.
@@ -674,6 +674,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         }
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "the body step of the pass: its sub-steps share locals and run in one order, so a split would pass them all through"
+    )]
     fn content(&mut self, comp: &mut C, ui: &mut Ui, env: &Env, cx: &mut Cx<'_, C>, values: &AppValues) {
         let props = Arc::clone(&self.props);
         let (id, ctx, rect) = (cx.core.id, cx.core.ctx.clone(), cx.core.rect);

@@ -316,7 +316,7 @@ impl Document {
     }
 
     /// Follow a reference if `o` is one; otherwise return `o` itself. An object can be nothing but
-    /// a reference to another, which is followed too, up to [`MAX_REFERENCE_HOPS`] of them.
+    /// a reference to another, which is followed too, up to 32 of them.
     pub fn resolve(&self, o: &Object) -> Arc<Object> {
         let Object::Ref(r) = o else { return Arc::new(o.clone()) };
         let mut held = self.get(*r);

@@ -62,11 +62,14 @@ fn field_label(env: &Env, input: &LabelIn<'_>, id: Id, rect: Rect) -> FieldLabel
     if described.is_empty() { label } else { label.detail(described.join(". ")) }
 }
 
+/// Draws trailing content in the rect the label step gives it.
+pub(crate) type ShowTrailing<'a> = Box<dyn FnOnce(&mut Ui, Rect) + 'a>;
+
 /// Content the leaf label step shows after the label's text, inside the label (`BodyCx::labelled_with`): its size
 /// and how to show it in the rect the step gives it.
 pub(crate) struct Trailing<'a> {
     pub size: Vec2,
-    pub show: Box<dyn FnOnce(&mut Ui, Rect) + 'a>,
+    pub show: ShowTrailing<'a>,
 }
 
 /// What the label step needs of one leaf child it labels (`PaintUi::labelled`, `BodyCx::labelled`).

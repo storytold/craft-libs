@@ -12,6 +12,9 @@ use crate::style::Flags;
 use craft_behavior::Sense;
 use egui::{Context, Id, Rect, Ui};
 
+/// A member with its id, whether it is enabled, its sense and what its run prepared.
+type Prepared<K, I> = (Member<K, ()>, Id, bool, Sense, run::MemberPrep<I>);
+
 /// A visible item of a members collection, built by the row loop and shown once every member has joined the arena.
 pub(super) struct Member<K, I> {
     pub at: usize,
@@ -45,7 +48,7 @@ impl<'r, C: Collection> ItemsHooks<'_, 'r, C> {
         let enabled = cx.core.resolved.enabled;
         let parent = access::fold::owner_of(ctx, id).unwrap_or(id);
         let hover = sensing::read_outcome(ctx, ArenaId::new(id)).hover.map(|hit| hit.owner);
-        let mut prepared: Vec<(Member<C::Key, ()>, Id, bool, Sense, run::MemberPrep<C::Item<'r>>)> = members
+        let mut prepared: Vec<Prepared<C::Key, C::Item<'r>>> = members
             .into_iter()
             .map(|member| {
                 let Member { at, key, mut item, row, clip, flags, position, renaming, openers, shown } = member;

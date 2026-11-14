@@ -31,7 +31,14 @@ enum Held<'c, C> {
     Lent(&'c mut C),
 }
 
+/// The style step 2 stored for the later steps of the run.
+#[expect(clippy::expect_used, reason = "step 2 stores the style before any step that reads it")]
+fn step_style<S>(style: &Option<Arc<S>>) -> &S {
+    style.as_deref().expect("step 2 ran")
+}
+
 impl<C> Held<'_, C> {
+    #[expect(clippy::expect_used, reason = "`Owned` holds the component from `new` until `finish`, the only call that empties it")]
     fn get(&mut self) -> &mut C {
         match self {
             Held::Owned(comp) => comp.as_mut().expect("the component is held until `finish`"),
@@ -39,6 +46,7 @@ impl<C> Held<'_, C> {
         }
     }
 
+    #[expect(clippy::expect_used, reason = "`Owned` holds the component from `new` until `finish`, the only call that empties it")]
     fn get_ref(&self) -> &C {
         match self {
             Held::Owned(comp) => comp.as_ref().expect("the component is held until `finish`"),
@@ -46,6 +54,7 @@ impl<C> Held<'_, C> {
         }
     }
 
+    #[expect(clippy::expect_used, clippy::unreachable, reason = "`finish` runs once per show, and only on the component a show owns")]
     fn take(&mut self) -> C {
         match self {
             Held::Owned(comp) => comp.take().expect("`finish` runs once"),
@@ -123,22 +132,23 @@ impl<C: Component> Erased for Typed<'_, '_, C> {
     }
 
     fn measure_content(&mut self, input: &MeasureIn<'_>, resolved: &Resolved<'_>) -> (Vec2, Inputs) {
-        let style = self.style.as_deref().expect("step 2 ran");
+        let style = step_style(&self.style);
         steps::measure_content(self.comp.get(), input, style, resolved, self.shown.as_deref())
     }
 
     fn measured_extent(&mut self, at: &Measuring<'_, '_>, stage: &mut MemoryStage) -> Vec2 {
-        let style = self.style.as_deref().expect("step 2 ran");
+        let style = step_style(&self.style);
         let (extent, shown) = measured_extent(self.comp.get(), &mut *self.hooks, at, stage, style, self.shown.take());
         self.shown = shown;
         extent
     }
 
     fn pass_extent(&mut self, at: &Measuring<'_, '_>) -> Vec2 {
-        let style = self.style.as_deref().expect("step 2 ran");
+        let style = step_style(&self.style);
         self.hooks.pass_extent(self.comp.get(), at, style, self.shown.clone())
     }
 
+    #[expect(clippy::expect_used, reason = "`Erased::style` produced the style this pipeline now hands back, so its type is `C::Style`")]
     fn with_cx<'a>(&mut self, core: CxCore<'a>, style: &'a dyn StyleView, rest: &mut dyn FnMut(&mut dyn ErasedPass<'a>) -> bool) {
         let style = style.as_any().downcast_ref::<C::Style>().expect("the pipeline holds the style `Erased::style` gave");
         let events = std::mem::take(&mut self.cancelled);
@@ -459,6 +469,7 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
     }
 }
 
+#[expect(clippy::expect_used, reason = "`super::run` runs every step, and the last one sets the output")]
 fn run<C: Component>(comp: C, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>, hooks: &mut dyn ShapeHooks<C>) -> C::Output {
     let mut typed = Typed::new(Held::Owned(Some(comp)), hooks);
     super::run(&mut typed, ui, at, tip);
@@ -533,7 +544,7 @@ fn unshown<C: Container>(comp: &mut C, ui: &Ui) -> Option<C::Output> {
     }
     let props = props.clone();
     let facts = TypeFacts::of::<C>();
-    let source = comp.common(Internal::new()).id.clone();
+    let source = comp.common(Internal::new()).id;
     let id = steps::id(ui, &source, false, false, facts.style_key, facts.name);
     let output = <C::Output as crate::contract::Outcome>::unshown(steps::inert_response(ui, id))?;
     let sizing = ui.is_sizing_pass();
@@ -606,8 +617,8 @@ pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSo
     let ctx = ui.ctx().clone();
     let common = std::mem::take(face.common_mut(Internal::new()));
     debug_assert!(common.tooltip.is_none(), "a face instance carries no tooltip; use `PartBuilder::tooltip`");
-    let step1 = steps::env(&ctx, &env, &common, steps::variants::<C>(common.variant));
-    let scx = steps::style_cx(&ctx, &env, &step1);
+    let step1 = steps::env(&ctx, env, &common, steps::variants::<C>(common.variant));
+    let scx = steps::style_cx(&ctx, env, &step1);
     let scx = source.ink.map_or(scx, |ink| scx.hosted(ink, source.muted));
     let style = steps::style::<C>(&ctx, &scx, face.style_key());
     let id = face_id(source.id, part);
@@ -639,12 +650,12 @@ pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSo
     cx.core.state = state;
     cx.core.stated = true;
     cx.core.ink = steps::surface_ink(StyleView::surface(&*style), &state, env.ink);
-    steps::paint_surface(ui, &env, &cx.core, &*style);
+    steps::paint_surface(ui, env, &cx.core, &*style);
     {
         let results = HashMap::new();
         let mut pui = PaintUi {
             ui: &mut *ui,
-            env: &env,
+            env: env,
             ink: cx.core.ink,
             // A face of an inactive part paints its data as `draw_part` does for the host.
             data: if source.result.inactive { crate::primitives::DataMode::Inactive } else { crate::primitives::DataMode::of(&state) },

@@ -611,12 +611,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                         Some((row_ui, installed))
                     }
                 };
-                {
-                    let measure_ui = match (&row_ui, &members_ui) {
-                        (Some((row_ui, _)), _) => row_ui,
-                        (None, Some((members_ui, _))) => members_ui,
-                        (None, None) => unreachable!("a row is a run or a member"),
-                    };
+                // A row is a run or a member, so one of the two is there.
+                if let Some((measure_ui, _)) = row_ui.as_ref().or(members_ui.as_ref()) {
                     if layout.is_auto(at) && !self.measured_for_reveal.contains(&at) {
                         let measured = item.measure_in(measure_ui, Proposal::Width(row.width())).y;
                         #[cfg(feature = "testing")]
@@ -842,7 +838,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         self.renaming.draft = draft;
         if let Some(editor) = editor {
             if !self.renaming.focused {
-                focus::request_now(&ctx, focus::FocusTarget::Id(editor.response.id));
+                focus::request_now(ctx, focus::FocusTarget::Id(editor.response.id));
                 self.renaming.focused = true;
             }
             let gesture = self.renaming.gesture;
@@ -851,15 +847,15 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             let end = editor.events.iter().rev().find(|event| matches!(event, EditEvent::Commit { .. } | EditEvent::Cancel { .. })).cloned();
             let edited = !editor.events.is_empty();
             if end.is_some() {
-                self.refocus = focus::is_focused(&ctx, editor.response.id);
+                self.refocus = focus::is_focused(ctx, editor.response.id);
             }
             // The editor claims Escape for the whole rename, as a text part with a draft does: Escape does not leave the
             // row. One the editor leaves untaken (it holds no draft yet) cancels the rename.
-            keys::hold_escape(&ctx, editor.response.id);
-            let escaped = !edited && focus::is_focused(&ctx, editor.response.id) && {
-                let mut intents = keys::intents_of(&ctx, Some(editor.response.id), rtl);
+            keys::hold_escape(ctx, editor.response.id);
+            let escaped = !edited && focus::is_focused(ctx, editor.response.id) && {
+                let mut intents = keys::intents_of(ctx, Some(editor.response.id), rtl);
                 let left = intents.take(Intent::Cancel);
-                keys::settle(&ctx, Some(editor.response.id), &intents);
+                keys::settle(ctx, Some(editor.response.id), &intents);
                 left
             };
             match end {
@@ -896,7 +892,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 let next = if forward { (at + 1..len).find(renamable) } else { (0..at).rev().find(renamable) };
                 self.refocus = next.is_none();
                 if let Some(next) = next {
-                    request::request_rename(&ctx, id, &self.source.key(next));
+                    request::request_rename(ctx, id, &self.source.key(next));
                 }
             }
         }

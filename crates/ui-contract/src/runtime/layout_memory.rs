@@ -1261,6 +1261,7 @@ pub(crate) mod guard {
 
     /// A service of type `S` is touched.
     #[cfg(feature = "testing")]
+    #[expect(clippy::panic, reason = "the guard exists to stop a measuring run that reads a service outside the recorded paths")]
     pub(crate) fn touch<S>() {
         if !crate::runtime::egui::fixture::driving() || MEASURING.with(std::cell::Cell::get) == 0 || EMITTING.with(std::cell::Cell::get) > 0 {
             return;

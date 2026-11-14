@@ -183,6 +183,7 @@ pub(crate) fn with<S: PassLocal, R>(ctx: &Context, f: impl FnOnce(&mut S) -> R) 
             let _release = Release(ctx);
             HELD.with(|held| {
                 let held = held.borrow();
+                #[expect(clippy::expect_used, reason = "`hold` has just moved the context's state into this thread")]
                 let held = held.iter().find(|held| held.ctx == *ctx).expect("the state was just taken");
                 f(&mut S::cell(&held.state).borrow_mut())
             })

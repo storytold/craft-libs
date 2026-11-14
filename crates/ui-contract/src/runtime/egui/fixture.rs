@@ -188,6 +188,7 @@ impl ImeResets {
 
 /// Runs one pass of `viewport` at `time` seconds with `events` and `files`, on a window of `native_pixels_per_point`
 /// (egui's default when `None`). A viewport other than the root is a child window of the root, which stays live.
+#[expect(clippy::too_many_arguments, reason = "the arguments are the facts of one frame, and every caller passes them all")]
 pub(crate) fn run_frame(
     ctx: &Context,
     time: f64,

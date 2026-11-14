@@ -2,8 +2,8 @@
 //!
 //! `heic-rs`, a pure-Rust HEIF container and HEVC still-picture decoder, reads the container and
 //! reconstructs the coded pictures (bit-exact against libde265 on iPhone photos); this crate turns
-//! them into RGB itself ([`ycc`]) so the colours match libheif: it honours the HEVC VUI's range
-//! and matrix ([`vui`]) where heic-rs assumes BT.709 limited range, and upsamples chroma like
+//! them into RGB itself (`ycc`) so the colours match libheif: it honours the HEVC VUI's range
+//! and matrix (`vui`) where heic-rs assumes BT.709 limited range, and upsamples chroma like
 //! libheif. Single pictures and grid-tiled photos, 8- to 16-bit, monochrome, alpha auxiliary
 //! images, ICC, EXIF and XMP. The API is plain data ([`Info`], [`Decoded`], [`Error`]) so the
 //! crate knows nothing about any app; each app's codec layer adapts it behind its own optional

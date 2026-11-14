@@ -266,8 +266,10 @@ fn tab_from_nothing(before: Before, shift: bool) -> (Option<Id>, bool) {
     };
     let mut frames = Frames::new();
     frames.idle(2, &mut show);
-    if matches!(before, Before::FocusedUnstopped) {
-        fixture::host_focus(&frames.ctx, unstopped.get().expect("the widget was shown"));
+    if matches!(before, Before::FocusedUnstopped)
+        && let Some(id) = unstopped.get()
+    {
+        fixture::host_focus(&frames.ctx, id);
         frames.idle(2, &mut show);
     }
     assert_eq!(egui_focused(&frames.ctx), unstopped.get().filter(|_| matches!(before, Before::FocusedUnstopped)));

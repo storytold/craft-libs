@@ -50,8 +50,8 @@ fn run(case: &Case, rate: u32) -> (f64, f64, Vec<Mode>) {
     let layout = match case.channels {
         1 => "mono",
         2 => "stereo",
-        6 => "5.1",
-        _ => unreachable!(),
+        // The cases have 1, 2 or 6 channels.
+        _ => "5.1",
     };
     let mut cmd = Command::new(&ff);
     cmd.args(["-hide_banner", "-loglevel", "error", "-y", "-f", "f32le", "-ar", "48000", "-ch_layout", layout, "-i"]).arg(&raw);

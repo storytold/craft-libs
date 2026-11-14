@@ -429,6 +429,6 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     state.focused = shown.focused || input.held;
     let full = display;
     let layout = TextLayout::new(shown.galley, false, full);
-    let baseline = (!layout.full.is_empty()).then(|| shown.galley_pos.y + layout.first_baseline);
+    let baseline = (!layout.full.is_empty()).then_some(shown.galley_pos.y + layout.first_baseline);
     AdapterOut { layout, focused: shown.focused, baseline }
 }

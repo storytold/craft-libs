@@ -585,7 +585,6 @@ mod alpha_decode_tests {
     use crate::prores::encode::encode_alpha;
 
     #[test]
-    #[test]
     fn custom_limits_preserve_large_4444_geometry_before_allocating() {
         let hdr = FrameHeader {
             header_size: 20,
@@ -622,6 +621,8 @@ mod alpha_decode_tests {
         let too_few_pixels = DecodeLimits { max_pixels: 8192 * 8192 - 1, ..soundcraft };
         assert!(matches!(decode_frame_with_limits(&data, &DecodeOptions::default(), &too_few_pixels), Err(Error::Unsupported("frame size"))));
     }
+
+    #[test]
     fn alpha_decoder_requires_complete_bounded_runs() {
         let mut out = [0u16; 1];
         assert!(decode_alpha(&[], AlphaType::Bits16, &mut out).is_err());

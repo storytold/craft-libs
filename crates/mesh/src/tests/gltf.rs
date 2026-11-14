@@ -217,6 +217,8 @@ fn texture_and_sampler_inventory_includes_unreferenced_entries() {
     invalid.texture_variants[0].image = invalid.images.len();
     assert!(matches!(invalid.validate(), Err(Error::Malformed(_))));
 }
+
+#[test]
 fn glb_container_checks() {
     let glb = quad();
     let (json, bin) = split_glb(&glb).unwrap();
