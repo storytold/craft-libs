@@ -5,9 +5,9 @@ use kurbo::Line;
 use crate::curve::{CurveOrder, MetricsStatus, Order};
 
 fn line_at_ys(line: Line, y0: f64, y1: f64) -> (f64, f64) {
-    let dy_recip = (line.p1.y - line.p0.y).recip();
-    let t0 = (y0 - line.p0.y) * dy_recip;
-    let t1 = (y1 - line.p0.y) * dy_recip;
+    let dy = line.p1.y - line.p0.y;
+    let t0 = (y0 - line.p0.y) / dy;
+    let t1 = (y1 - line.p0.y) / dy;
     (
         (1.0 - t0) * line.p0.x + t0 * line.p1.x,
         (1.0 - t1) * line.p0.x + t1 * line.p1.x,
@@ -155,5 +155,16 @@ mod tests {
         assert_eq!(order.cmps[0].order, Order::Right);
         assert_eq!(order.cmps[1].order, Order::Ish);
         assert!((order.cmps[0].end - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn subnormal_span() {
+        let l0 = Line::new((-1.0, 0.0), (-1.0, 1e-310));
+        let l1 = Line::new((1.0, 0.0), (1.0, 1e-310));
+
+        let order = intersect_lines(l0, l1, 1e-6);
+        assert_eq!(order.cmps.len(), 1);
+        assert_eq!(order.cmps[0].order, Order::Left);
+        assert_eq!(order.cmps[0].end, 1e-310);
     }
 }
