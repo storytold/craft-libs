@@ -50,7 +50,7 @@ fn bytes(v: &[f32]) -> Vec<u8> {
 }
 
 fn floats(b: &[u8]) -> Vec<f32> {
-    b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    b.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
 }
 
 fn process(sink: &RecordingSink, id: &str, format: ImageFormat, data: &mut [u8], params: &Value) -> Result<usize, CallError> {
