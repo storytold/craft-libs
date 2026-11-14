@@ -13,6 +13,10 @@ fn package(normal_id: &str) -> Vec<u8> {
 }
 
 fn package_with_default(normal_id: &str, is_default: bool) -> Vec<u8> {
+    package_with_body_default(normal_id, is_default, false)
+}
+
+fn package_with_body_default(normal_id: &str, is_default: bool, has_body_default: bool) -> Vec<u8> {
     let root = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
     let doc = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W}" xmlns:r="{R}"><w:body><w:p><w:pPr><w:pStyle w:val="Footer"/></w:pPr><w:r><w:t>body</w:t></w:r></w:p><w:p><w:r><w:t>normal</w:t></w:r></w:p><w:sectPr><w:footerReference w:type="default" r:id="rId2"/></w:sectPr></w:body></w:document>"#
@@ -21,8 +25,10 @@ fn package_with_default(normal_id: &str, is_default: bool) -> Vec<u8> {
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr xmlns:w="{W}"><w:p><w:pPr><w:pStyle w:val="Footer"/><w:jc w:val="center"/></w:pPr><w:r><w:t>1</w:t></w:r></w:p></w:ftr>"#
     );
     let default_attr = if is_default { r#" w:default="1""# } else { "" };
+    let body_style =
+        if has_body_default { r#"<w:style w:type="paragraph" w:default="on" w:styleId="Body"><w:name w:val="Body"/></w:style>"# } else { "" };
     let styles = format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="{W}"><w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="200"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph"{default_attr} w:styleId="{normal_id}"><w:name w:val="Normal"/><w:pPr><w:spacing w:before="20" w:after="40" w:line="259" w:lineRule="auto"/></w:pPr><w:rPr><w:sz w:val="26"/></w:rPr></w:style></w:styles>"#
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="{W}"><w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="200"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph"{default_attr} w:styleId="{normal_id}"><w:name w:val="Normal"/><w:pPr><w:spacing w:before="20" w:after="40" w:line="259" w:lineRule="auto"/></w:pPr><w:rPr><w:sz w:val="26"/></w:rPr></w:style>{body_style}</w:styles>"#
     );
     let rels = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/></Relationships>"#;
     let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -44,6 +50,13 @@ fn an_explicit_normal_style_is_the_default_even_without_w_default() {
     let doc = craft_docx::read(&package_with_default("Normal", false)).unwrap();
     let normal = doc.styles.get("Normal").expect("the explicit Normal style");
     assert!(normal.default, "Word treats the explicitly declared built-in Normal style as the default");
+}
+
+#[test]
+fn an_explicit_body_default_on_prevents_normal_inference() {
+    let doc = craft_docx::read(&package_with_body_default("Normal", false, true)).unwrap();
+    assert!(doc.styles.styles.iter().any(|style| style.id == "Body" && style.default));
+    assert!(!doc.styles.styles.iter().any(|style| style.id == "Normal" && style.default));
 }
 
 fn footer_para(d: &Document) -> &craft_wordmodel::Paragraph {
