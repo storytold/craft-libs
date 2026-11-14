@@ -33,6 +33,7 @@ craft-jpeg = { workspace = true }
 craft-metadata = { workspace = true }
 zune-jpegxl = { version = "=0.5.2", default-features = false, features = ["std"] }
 craft-heif = { workspace = true, optional = true }
+hayro-jpeg2000 = { version = "=0.3.5", default-features = false, features = ["std", "simd"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
