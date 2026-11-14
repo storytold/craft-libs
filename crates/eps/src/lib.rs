@@ -19,6 +19,7 @@ pub mod ascii85;
 mod container;
 mod dsc;
 mod embedded;
+pub mod postscript;
 #[cfg(feature = "paths")]
 pub mod paths;
 mod preview;
