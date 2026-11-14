@@ -211,6 +211,7 @@ impl ActionsPanelCommands {
                 panel.settings.button_mode = !panel.settings.button_mode;
                 return Some(ActionsMenuAction::SettingsChanged);
             }
+            ActionsPanelCommands::Duplicate if recording => return None,
             ActionsPanelCommands::Duplicate => ActionsEvent::Duplicate(selected?.clone()),
             ActionsPanelCommands::RecordAgain => {
                 let &ActionSelection::Step(action, step) = selected? else { return None };

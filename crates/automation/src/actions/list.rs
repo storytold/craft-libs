@@ -121,7 +121,7 @@ impl ActionList {
 
     /// `base` if no action of `set` has it, else `base 2`, `base 3` … the first free one. With an
     /// empty `base`, PhotoCraft's `Action n` from the list's length + 1 up.
-    // PLAN: `ActionList::begin_recording` (recording.rs:32) still calls `unique_name("")`; it must pass `set.as_deref()`.
+
     pub fn unique_name(&self, base: &str, set: Option<&str>) -> String {
         if base.is_empty() {
             let mut n = self.actions.len() + 1;
