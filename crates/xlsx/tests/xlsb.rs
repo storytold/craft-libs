@@ -1046,6 +1046,9 @@ fn damaged_sizes_are_skipped_or_refused() {
     // More column records than columns are refused.
     let many = [&record(390, &[])[..], &col_info(0, 0, 2321, 0, 0).repeat(16_385), &record(391, &[])].concat();
     assert!(matches!(sizes_of(&file(&sized_sheet(&many, &[]))), Err(Error::TooLarge(_))));
+    // Skipped (reversed) column records count toward that cap too.
+    let reversed = [&record(390, &[])[..], &col_info(5, 4, 2321, 0, 0).repeat(16_385), &record(391, &[])].concat();
+    assert!(matches!(sizes_of(&file(&sized_sheet(&reversed, &[]))), Err(Error::TooLarge(_))));
     // A sheet format or column after the data, or a record of the wrong size, fails the read.
     for (why, sheet) in [
         ("format after data", worksheet(&[], &ws_fmt_info(u32::MAX, 8, 285, 0, [0, 0]))),

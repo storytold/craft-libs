@@ -840,6 +840,8 @@ pub(crate) fn worksheet(
     let mut sheet = SheetPart::default();
     let mut data = false;
     let mut data_seen = false;
+    // Every BrtColInfo counts toward the cap, a skipped one too.
+    let mut column_records = 0usize;
     let mut row: Option<Row> = None;
     let mut col = None;
     // The default row height in twips: a row of another height has `ht` even when it was not set
@@ -992,15 +994,16 @@ pub(crate) fn worksheet(
                 if data_seen {
                     return Err(invalid("column after worksheet data"));
                 }
+                if column_records >= MAX_COLUMNS {
+                    return Err(Error::TooLarge(format!("XLSB exceeds {MAX_COLUMNS} column records")));
+                }
+                column_records += 1;
                 let column = column(&mut b)?;
                 b.finish()?;
                 let Some(column) = column else {
                     warnings.warn("invalid XLSB column ranges were skipped");
                     continue;
                 };
-                if sheet.columns.len() >= MAX_COLUMNS {
-                    return Err(Error::TooLarge(format!("XLSB exceeds {MAX_COLUMNS} column records")));
-                }
                 sheet.columns.push(column);
             }
             176 => {
