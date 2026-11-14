@@ -75,9 +75,14 @@ fn style_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style, flagged: &[StyleKind]) 
             | (StyleKind::Table, "TableNormal")
             | (StyleKind::Numbering, "NoList")
     );
-    let is_default = st.default || (english_default && !flagged.contains(&st.kind));
+    let normal_is_explicitly_off = st.kind == StyleKind::Paragraph && st.id == "Normal" && !st.default;
+    let is_default = st.default || (english_default && !flagged.contains(&st.kind) && !normal_is_explicitly_off);
     let mut a = vec![("w:type", ty), ("w:styleId", st.id.as_str())];
-    if is_default {
+    if normal_is_explicitly_off {
+        // Preserve a model where Normal is explicitly not default. Without this, the fallback
+        // `english_default` marker makes the reader infer a change on round trip.
+        a.push(("w:default", "0"));
+    } else if is_default {
         a.push(("w:default", "1"));
     }
     if !st.builtin {
