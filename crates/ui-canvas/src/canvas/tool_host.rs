@@ -537,6 +537,12 @@ impl<'m> ToolHost<'m> {
     pub fn in_gesture(ctx: &Context, canvas: Id) -> bool {
         with_session(ctx, state_id(canvas), |state: &mut HostState| state.gesture.is_some())
     }
+
+    /// The canvas space the host of `canvas` used in its last pass, `None` before its first.
+    pub fn shown_space(ctx: &Context, canvas: Id) -> Option<CanvasSpace> {
+        let _ = (ctx, canvas);
+        todo!("canvas-widgets-w1")
+    }
 }
 
 /// The part of the node that describes the tool's drawing, below the canvas's node.
