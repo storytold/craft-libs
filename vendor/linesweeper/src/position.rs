@@ -384,6 +384,8 @@ pub(crate) fn compute_positions(
             continue;
         }
         out[idx].path.move_to(p);
+        // Craft patch (start height): a segment that starts at y < 0 is not skipped.
+        last_y[idx] = p.y;
         queue.push(HeapEntry { y: p.y.into(), idx });
     }
 
@@ -504,9 +506,9 @@ pub(crate) fn compute_positions(
 
 #[cfg(test)]
 mod tests {
-    use kurbo::{BezPath, CubicBez, Line, PathSeg};
+    use kurbo::{BezPath, CubicBez, Line, PathEl, PathSeg};
 
-    use crate::Segments;
+    use crate::{Segments, sweep::Correctness, topology::Topology};
 
     use super::horizontal_error_weight;
 
@@ -557,5 +559,55 @@ mod tests {
         let y1 = 90.03646087646484;
         let next_y0 = super::approximate(90.03645987646233, y1, &[s0, s1], &segs, 2.5e-7, &mut out);
         assert_eq!(next_y0, y1);
+    }
+
+    // Counts the path elements of each kind in the correct positions of two
+    // lenses that run close together, moved down by `dy`.
+    fn close_lens_elements(dy: f64) -> [usize; 4] {
+        fn lens(dx: f64, dy: f64) -> BezPath {
+            let mut p = BezPath::new();
+            p.move_to((dx, dy));
+            p.curve_to(
+                (10.0 + dx, 3.0 + dy),
+                (10.0 + dx, 7.0 + dy),
+                (dx, 10.0 + dy),
+            );
+            p.curve_to((-10.0 + dx, 7.0 + dy), (-10.0 + dx, 3.0 + dy), (dx, dy));
+            p.close_path();
+            p
+        }
+        let a = lens(0.0, dy);
+        let b = lens(0.001, dy);
+        let top = Topology::<i32>::from_paths_with_correctness(
+            [(&a, ()), (&b, ())],
+            0.01,
+            Correctness::ReallyCorrect,
+        )
+        .unwrap();
+        let positions = top.compute_positions();
+        let mut counts = [0; 4];
+        for idx in positions.indices() {
+            for el in positions[idx].path.elements() {
+                match el {
+                    PathEl::MoveTo(_) => counts[0] += 1,
+                    PathEl::LineTo(_) => counts[1] += 1,
+                    PathEl::QuadTo(..) => counts[2] += 1,
+                    PathEl::CurveTo(..) => counts[3] += 1,
+                    PathEl::ClosePath => {}
+                }
+            }
+        }
+        counts
+    }
+
+    // Craft patch (start height): moving the input up or down must not change
+    // how the close segments are positioned, including when the segments start
+    // at y < 0.
+    #[test]
+    fn correct_positions_at_negative_y() {
+        let below = close_lens_elements(100.0);
+        let above = close_lens_elements(-100.0);
+        assert!(below[2] > 0, "{below:?}");
+        assert_eq!(below, above);
     }
 }
