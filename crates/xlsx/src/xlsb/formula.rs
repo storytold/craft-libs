@@ -19,7 +19,8 @@ use super::ftab::function;
 
 /// Formula token bytes decoded at most (a cell formula holds at most 16,384).
 pub(super) const MAX_RGCE: usize = 16 * 1024;
-/// Values in one array constant at most.
+/// Values in one formula's array constants at most, all of them together: each array is charged
+/// before its values are held, so a formula of many arrays can't hold more than this.
 const MAX_ARRAY: usize = 65_536;
 
 /// Why a formula could not be turned back into text.
@@ -343,6 +344,7 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode) -> Res
     let mut t = Bytes { b: rgce, pos: 0 };
     let mut extra = Bytes { b: rgcb, pos: 0 };
     let mut stack: Stack = Vec::new();
+    let mut array_values = MAX_ARRAY;
     let mut ws = Spacing::default();
     while t.pos < rgce.len() {
         let ptg = t.u8()?;
@@ -456,7 +458,7 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode) -> Res
             0x20 => {
                 // PtgArray: 14 unused bytes (Excel leaves junk in them); the values are in rgcb.
                 t.take(14)?;
-                push(&mut stack, kids, array_constant(&mut extra)?)?;
+                push(&mut stack, kids, array_constant(&mut extra, &mut array_values)?)?;
             }
             0x21 => {
                 let iftab = t.u16()?;
@@ -714,12 +716,15 @@ fn grouped(e: Expr, in_args: bool) -> Expr {
 
 /// PtgExtraArray ([MS-XLSB] 2.5.98.41): row and column counts, then `SerAr` values in row-major
 /// order. The type codes are not BIFF8's: 0x00 is a number here, not a missing value.
-fn array_constant(b: &mut Bytes<'_>) -> Result<Expr, Unsupported> {
+fn array_constant(b: &mut Bytes<'_>, left: &mut usize) -> Result<Expr, Unsupported> {
     let rows = usize::try_from(b.u32()?).map_err(|_| TRUNC)?;
     let cols = usize::try_from(b.u32()?).map_err(|_| TRUNC)?;
-    if rows == 0 || cols == 0 || rows.saturating_mul(cols) > MAX_ARRAY {
-        return Err(Unsupported("array constant too large or empty"));
+    let values = rows.saturating_mul(cols);
+    if values == 0 {
+        return Err(Unsupported("empty array constant"));
     }
+    // Charged before the rows are allocated, against what the formula's arrays may hold in all.
+    *left = left.checked_sub(values).ok_or(Unsupported("array constants too large"))?;
     let mut out = Vec::with_capacity(rows);
     for _ in 0..rows {
         let mut row = Vec::with_capacity(cols);
