@@ -12,6 +12,7 @@ use craft_wordmodel::section::{
     Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, NotePos, NoteProps, NoteRestart, NumFormat,
     PageVAlign, SectionProps, SectionStart,
 };
+use craft_wordmodel::styles::FillOff;
 
 use super::MAX_FONT_NAME;
 use super::drawing_color::adjust_lum;
@@ -229,6 +230,16 @@ impl PropCtx {
             c = adjust_lum(c, |l| l * s);
         }
         Some(c)
+    }
+
+    /// How a `w:shd` states no colour, if it does, given its colour as [`PropCtx::shd_fill`]
+    /// reads it (so a theme colour isn't worked out twice).
+    pub fn shd_off(e: &El, fill: Option<Rgb>) -> Option<FillOff> {
+        match e.attr("w:val") {
+            Some("nil") => Some(FillOff::Nil),
+            Some("clear") if fill.is_none() => Some(FillOff::Auto),
+            _ => None,
+        }
     }
 
     /// `w:shd`: its fill colour (a theme fill first), or a solid pattern's colour.
@@ -688,7 +699,10 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
             "w:hMerge" => hcont = k.attr("w:val") != Some("restart"),
             "w:vMerge" => c.vmerge = if k.attr("w:val") == Some("restart") { VMerge::Restart } else { VMerge::Continue },
             "w:tcBorders" => c.borders = Some(pc.borders(k)),
-            "w:shd" => c.shading = pc.shd_fill(k),
+            "w:shd" => {
+                c.shading = pc.shd_fill(k);
+                c.shading_auto = PropCtx::shd_off(k, c.shading) == Some(FillOff::Auto);
+            }
             "w:noWrap" => c.no_wrap = on_off(k),
             "w:hideMark" => c.hide_mark = on_off(k),
             "w:tcMar" => {
