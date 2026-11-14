@@ -1,6 +1,6 @@
 [package]
 name = "craft-video"
-description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8, ProRes, H.264, HEVC, VP9, AV1, MPEG-4 Part 2."
+description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8, ProRes, H.264, HEVC, VP9, AV1, MPEG-4 Part 2, Smacker."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -52,6 +52,8 @@ vp9-encode = ["craft-media/isobmff"]
 av1 = ["av1-decode", "av1-encode"]
 av1-decode = []
 av1-encode = ["craft-media/isobmff"]
+# Smacker video (the 8-bit paletted game video format): decoder.
+smacker = ["craft-media/smacker"]
 # Decode and encode across worker threads (rayon) in the codecs that support it.
 threads = ["dep:rayon"]
 
@@ -68,6 +70,10 @@ craft-media = { workspace = true, features = ["avi"] }
 [[test]]
 name = "dnx"
 required-features = ["dnx"]
+
+[[test]]
+name = "smacker"
+required-features = ["smacker"]
 
 [[test]]
 name = "apv"
