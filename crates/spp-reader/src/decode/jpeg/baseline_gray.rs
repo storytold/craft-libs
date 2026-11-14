@@ -93,6 +93,10 @@ impl Bits<'_> {
         if k == 0 {
             return Some(0);
         }
+        // a coefficient takes at most 16 bits; a larger size is a damaged stream (and would overflow the shifts)
+        if k > 16 {
+            return None;
+        }
         let v = self.take(k)?;
         Some(if v < 1 << (k - 1) { v - (1 << k) + 1 } else { v })
     }
@@ -207,8 +211,8 @@ pub fn decode(jpeg: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
         }
         let mut c = [0f64; 64];
         let s = u32::from(bits.symbol(dc)?);
-        pred += bits.signed(s)?;
-        c[0] = f64::from(pred * q[0]);
+        pred = pred.checked_add(bits.signed(s)?)?;
+        c[0] = f64::from(pred.checked_mul(q[0])?);
         let mut k = 1;
         let mut flat = true;
         while k < 64 {
@@ -225,7 +229,7 @@ pub fn decode(jpeg: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
             if k > 63 {
                 return None;
             }
-            let value = f64::from(bits.signed(size)? * q.get(k)?);
+            let value = f64::from(bits.signed(size)?.checked_mul(*q.get(k)?)?);
             *c.get_mut(*ZIGZAG.get(k)?)? = value;
             flat = false;
             k += 1;
