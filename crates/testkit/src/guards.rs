@@ -540,9 +540,10 @@ const BLOCK_KEYWORDS: &[&str] =
 /// index of the bracket that closes the enclosing scope.
 ///
 /// It ends after a `;` or a `,` outside brackets, after the closing brace of a block item (one that
-/// starts with a keyword in [`BLOCK_KEYWORDS`] or is a macro call with braces) or of a match arm's
-/// block, or before a closing bracket of the enclosing scope. A `,` inside the angle brackets of a
-/// field's or a `let`'s type ends the item early, which leaves the rest of it checked.
+/// starts with `{` or a keyword in [`BLOCK_KEYWORDS`], or is a macro call with braces) or of a match
+/// arm's block, or before a closing bracket of the enclosing scope. When a `.` or `?` follows the
+/// closing brace of a block item, the item runs on to its `;` or `,`. A `,` inside the angle brackets
+/// of a field's or a `let`'s type ends the item early, which leaves the rest of it checked.
 fn item_end(toks: &[Token], start: usize, inner: bool) -> usize {
     let mut depth = 0usize;
     let mut block_item = false;
@@ -550,6 +551,9 @@ fn item_end(toks: &[Token], start: usize, inner: bool) -> usize {
     let mut j = start;
     while j < toks.len() {
         let at_top = depth == 0 && !inner;
+        if j == start && at_top && toks[j].is_punct('{') {
+            block_item = true;
+        }
         match &toks[j].kind {
             Kind::Ident(k) if at_top && BLOCK_KEYWORDS.contains(&k.as_str()) => block_item = true,
             Kind::Punct('!') if at_top && toks.get(j + 1).is_some_and(|t| t.is_punct('{')) => block_item = true,
@@ -562,6 +566,12 @@ fn item_end(toks: &[Token], start: usize, inner: bool) -> usize {
                 depth -= 1;
                 if depth == 0 && *c == '}' && (block_item || arm) && !inner {
                     if toks.get(j + 1).is_some_and(|t| t.is_ident("else")) {
+                        j += 1;
+                        continue;
+                    }
+                    if toks.get(j + 1).is_some_and(|t| t.is_punct('.') || t.is_punct('?')) {
+                        // A method call, field or `?` after the block continues the expression to its `;` or `,`.
+                        block_item = false;
                         j += 1;
                         continue;
                     }
@@ -1160,14 +1170,16 @@ fn scan_wgsl_hex(code: &[u8], start: usize) -> (usize, usize, bool) {
 /// Guard: scans a single WGSL shader string and detects float literals outside their type's finite range.
 ///
 /// WebGPU compilers in browsers reject a float literal above `f32::MAX` (e.g. `3.40282347e38`) with a
-/// pipeline build error, which turns off GPU rendering. Exact values equal to `f32::MAX` can be written
-/// as `3.4028234663852886e38` or as the hex float `0x1.fffffep+127f`.
+/// pipeline build error, which turns off GPU rendering. `f32::MAX` can be written as the hex float
+/// `0x1.fffffep+127f`, which equals it, or as the decimal `3.4028234663852886e38`, which rounds to it.
 ///
 /// ### Policy and Limitations
 ///
 /// * **Conservative mathematical bound**: The guard compares the literal's value, rounded to `f64`,
 ///   with `f64::from(f32::MAX)`, or with 65504 (the largest finite `f16`) for an `h` suffix. Any literal
-///   above it is reported, even one that a compiler would round down to the maximum.
+///   above it is reported, even one that a compiler would round down to the maximum. A literal that exceeds
+///   the maximum by less than `f64` precision (such as `0x1.fffffe000000001p+127f`) rounds to the maximum and
+///   is not reported.
 /// * **Which literals**: decimal floats (with a `.`, an exponent or an `f`/`h` suffix) and hexadecimal floats
 ///   (`0x` with a `.` or a `p` exponent). Integer literals (`123`, `123u`, `0xFFi`, `0x1f`) are not floats and
 ///   are not reported. A `-` in front is not part of the literal, so `-1e39` is reported as `1e39`.
@@ -1304,7 +1316,8 @@ fn is_cache_dir(dir: &Path) -> bool {
 /// * `*_test.rs`
 /// * `test.rs`
 /// * Any file below `dir` within a directory named `tests`, `benches`, `examples` or `target`, or whose
-///   name starts with `.`, or that holds a `CACHEDIR.TAG` file (a build output folder with another name).
+///   name starts with `.`, or that holds a `CACHEDIR.TAG` file starting with the signature line
+///   `Signature: 8a477f597d28d172789f06886806bc55` (a build output folder with another name).
 /// * Symbolic links (and, on Windows, junctions) to files or folders, which are not followed.
 ///
 /// Results are sorted lexicographically by file path for deterministic behavior across platforms.
