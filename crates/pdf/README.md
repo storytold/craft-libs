@@ -10,6 +10,7 @@ No feature is enabled by default.
 | `interpret` | `read` plus an app-owned Device interpreter, fonts and CMaps |
 | `raster` | `interpret` plus premultiplied RGBA8 rendering |
 | `write` | Guarded Krilla authoring; no shared reader dependency |
+| `write-svg` | `write` plus bounded SVG-to-PDF vector drawing |
 | `write-pdf` | `write` plus Krilla's embedded-PDF support |
 | `write-simple-text` | `write` plus Krilla's optional text shaper and `draw_text` |
 | `filters` | The `/Filter` chain for editing and writing PDF files: decode and encode, with limits and accounting. No reader or writer dependency |
@@ -201,9 +202,12 @@ PDF files. The reader decrypts on its own and does not use it. It covers revisio
   block is ignored and bad padding is left in.
 - `permissions()` gives the `/P` flags; for R5/R6 a permission counts only when `/Perms` grants
   it too. Owners have every permission.
-- `create(&NewEncryption, id0)` builds the `/Encrypt` values for RC4-40, RC4-128, AES-128 or
-  AES-256. The caller supplies 32 bytes of entropy (`seed`), so the module needs no OS access
-  and builds for the web. `file_id` derives a file identifier from the same seed.
+- `create(&NewEncryption, id0)` builds the `/Encrypt` values for AES-128 or AES-256. It refuses
+  the legacy RC4-40 and RC4-128 schemes, because RC4 is broken (RFC 7465); `create_legacy`
+  writes those, for a file that must stay readable by an old reader. `Document::set_encryption`
+  refuses them too, with `set_encryption_legacy` as the explicit way in. The caller supplies 32
+  bytes of entropy (`seed`), so the module needs no OS access and builds for the web. `file_id`
+  derives a file identifier from the same seed.
 - `EncryptDict` holds the dictionary's values. The caller reads them from, and writes them to,
   its own object model; the module does not parse PDF syntax. Keys and prepared passwords are
   zeroized when dropped.
@@ -240,6 +244,9 @@ serialization uses the same backend version as before extraction. It provides:
   refuses it. Apps build URI links with it instead of `backend::action::LinkAction`, so a
   link target from someone else's document becomes a PDF link only when it is an `http`/`https`
   URL with a host or a `mailto` address. A refused target writes no link annotation.
+- `write::svg` (feature `write-svg`): bounded SVG/SVGZ text preflight, data-only image
+  resolution, and vector drawing through krilla-svg. Callers provide font and fallback options;
+  the adapter enforces input, nesting, embedded-image, destination-area and filter budgets.
 - `safe_url` (crate root, any feature): the same rule, for apps that open links themselves,
   such as a slide show.
 

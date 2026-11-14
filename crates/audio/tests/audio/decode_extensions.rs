@@ -62,11 +62,21 @@ fn every_decode_extension_probes_and_decodes() {
 fn every_encode_format_has_an_extension_it_is_written_and_read_under() {
     for &format in EncodeFormat::ALL {
         let ext = format.extension();
-        assert_eq!(craft_audio::encode_format_for(ext), Some(format), "{ext}");
-        assert!(craft_audio::ENCODE_EXTENSIONS.contains(&ext), "{ext}");
+        // The extension names the format, or for `m4a`, which two formats share, AAC before ALAC.
+        // A format whose feature is off has no name.
+        match craft_audio::encode_format_for(ext) {
+            Some(named) => {
+                let shares_m4a = |f| matches!(f, EncodeFormat::Aac | EncodeFormat::Alac);
+                assert!(named == format || (shares_m4a(named) && shares_m4a(format)), "{ext}");
+                assert!(named.is_built(), "{ext}");
+                assert!(craft_audio::ENCODE_EXTENSIONS.contains(&ext), "{ext}");
+            }
+            None => assert!(!matches!(format, EncodeFormat::Wav | EncodeFormat::Aiff | EncodeFormat::Flac), "{ext}"),
+        }
         assert!(DECODE_EXTENSIONS.contains(&ext), "{ext}: what is written reads back");
         assert!(format.mime_type().starts_with("audio/"), "{format:?}");
     }
-    assert_eq!(EncodeFormat::ALL.iter().map(|f| f.extension()).collect::<Vec<_>>(), ["wav", "aif", "flac"]);
+    let extensions: Vec<_> = EncodeFormat::ALL.iter().map(|f| f.extension()).collect();
+    assert_eq!(extensions, ["wav", "aif", "flac", "m4a", "m4a", "mp3", "ac3", "eac3"]);
     assert_eq!(EncodeFormat::Aiff.mime_type(), "audio/aiff");
 }
