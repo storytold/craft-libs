@@ -173,8 +173,8 @@ impl Reader {
             "qd" => self.st.align = Some(Align::Distribute),
             // `\rtldir`/`\ltrdir` are not paragraph words (they set a table's or section's
             // direction in RTF); some writers used them for paragraphs, so they are read too.
-            "rtlpar" | "rtldir" => self.st.rtldir = true,
-            "ltrpar" | "ltrdir" => self.st.rtldir = false,
+            "rtlpar" | "rtldir" => self.st.rtldir = Some(true),
+            "ltrpar" | "ltrdir" => self.st.rtldir = Some(false),
             "s" => self.st.style = pv,
             "outlinelevel" => self.st.outline = Some(pv.clamp(0, 9) as u8),
             "pagebb" => self.st.pagebb = on,
@@ -421,6 +421,8 @@ impl Reader {
                     "i" => def.italic = Some(on),
                     "fs" => def.size = (value > 0).then(|| (value as f32 / 2.0).clamp(1.0, 1638.0)),
                     "f" => def.font = Some(value),
+                    "rtlpar" | "rtldir" => def.rtl = Some(true),
+                    "ltrpar" | "ltrdir" => def.rtl = Some(false),
                     _ => {}
                 }
                 true

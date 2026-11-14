@@ -69,6 +69,18 @@ fn rtl_paragraphs_read_and_write_their_direction() {
 }
 
 #[test]
+fn rtl_paragraph_styles_carry_their_direction() {
+    // Word often writes the direction in the style: `{\s1\rtlpar RTL;}` then `\pard\s1`.
+    let rtf = br#"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s1\rtlpar RTL;}{\s2\sbasedon1 Child;}{\s3\sbasedon1\ltrpar Back;}}
+\pard\s1 A\par\pard\s2 B\par\pard\s3 C\par\pard\s1\ltrpar D\par\pard\s0\rtlpar E\par\pard F\par}"#;
+    let flow = parse(rtf).unwrap();
+    let rtl: Vec<bool> = flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.rtl) } else { None }).collect();
+    // A: style. B: inherited from the base style. C: the style overrides its base. D: direct
+    // \ltrpar beats the style. E: direct \rtlpar on Normal. F: \pard drops direct formatting.
+    assert_eq!(rtl, [true, true, false, false, true, false]);
+}
+
+#[test]
 fn stylesheet_names_take_unicode_escapes() {
     // \u116?=t \u105?=i \u116?=t \u108?=l \u101?=e — how Word writes a non-Latin style name.
     let rtf = br"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s2 \u116?\u105?\u116?\u108?\u101?;}}\pard\s2 T\par}";
