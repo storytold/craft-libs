@@ -142,6 +142,9 @@ pub struct Metadata {
     pub dpi: Option<(f32, f32)>,
     /// Free-form key/value text (PNG tEXt/iTXt, TIFF ASCII tags).
     pub text: Vec<(String, String)>,
+    /// HDR content light levels carried by formats such as PNG `cLLI`, in units of
+    /// 0.0001 cd/m² per value. A zero value means that level is unknown.
+    pub content_light_level: Option<crate::cicp::ContentLightLevel>,
     /// Photoshop image resources (`8BIM` resource blocks): TIFF tag 34377. Kept opaque here;
     /// `photocraft-io` reads and writes them through `photocraft-psd`.
     pub photoshop_resources: Option<Vec<u8>>,
@@ -174,6 +177,7 @@ impl Metadata {
             && self.xmp.is_none()
             && self.dpi.is_none()
             && self.text.is_empty()
+            && self.content_light_level.is_none()
             && self.photoshop_resources.is_none()
             && self.photoshop_layers.is_none()
             && self.extra_samples.is_empty()

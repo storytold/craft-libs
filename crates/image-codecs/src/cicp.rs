@@ -41,6 +41,15 @@ pub const HLG_PEAK_NITS: f32 = 1000.0;
 /// PQ's absolute peak.
 pub const PQ_PEAK_NITS: f32 = 10_000.0;
 
+/// HDR content light levels in the units used by PNG `cLLI` (0.0001 cd/m² per unit).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContentLightLevel {
+    /// Maximum content light level in 0.0001 cd/m² units.
+    pub max_content_light_level: u32,
+    /// Maximum frame-average light level in 0.0001 cd/m² units.
+    pub max_frame_average_light_level: u32,
+}
+
 /// BT.2100 HLG inverse OETF: non-linear signal `E'` (0..1) to normalised scene light `E` (0..1).
 pub fn hlg_inverse_oetf(e: f32) -> f32 {
     const A: f32 = 0.178_832_77;
@@ -72,6 +81,18 @@ pub fn pq_to_linear(e: f32) -> f32 {
     let p = e.powf(1.0 / M2);
     let y = ((p - C1).max(0.0) / (C2 - C3 * p)).powf(1.0 / M1);
     y * PQ_PEAK_NITS / REFERENCE_WHITE_NITS
+}
+
+/// BT.2100 PQ signal for linear light relative to [`REFERENCE_WHITE_NITS`].
+pub fn linear_to_pq(linear: f32) -> f32 {
+    const M1: f32 = 2610.0 / 16384.0;
+    const M2: f32 = 2523.0 / 4096.0 * 128.0;
+    const C1: f32 = 3424.0 / 4096.0;
+    const C2: f32 = 2413.0 / 4096.0 * 32.0;
+    const C3: f32 = 2392.0 / 4096.0 * 32.0;
+    let nits = if linear.is_finite() { linear.max(0.0) * REFERENCE_WHITE_NITS } else { 0.0 };
+    let y = (nits / PQ_PEAK_NITS).clamp(0.0, 1.0).powf(M1);
+    ((C1 + C2 * y) / (1.0 + C3 * y)).powf(M2)
 }
 
 /// Relative luminance weights of the RGB primaries `code` (BT.2020's for anything else, the
@@ -156,7 +177,10 @@ mod tests {
         assert!(close(pq_to_linear(1.0), 10_000.0 / 203.0, 0.05));
         // 203 cd/m² is PQ signal ≈ 0.5807 (BT.2408).
         assert!(close(pq_to_linear(0.5807), 1.0, 0.005), "{}", pq_to_linear(0.5807));
+        assert!(close(linear_to_pq(1.0), 0.5807, 0.0001));
+        assert!(close(pq_to_linear(linear_to_pq(4.0)), 4.0, 0.001));
         assert!(pq_to_linear(f32::NAN).is_finite());
+        assert!(linear_to_pq(f32::NAN).is_finite());
     }
 
     #[test]
