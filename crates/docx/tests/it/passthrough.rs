@@ -321,6 +321,31 @@ fn list_identities_survive_and_a_copied_definition_gets_none() {
 }
 
 #[test]
+fn malformed_numbering_levels_are_skipped_instead_of_becoming_level_zero() {
+    let numbering = r#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl><w:lvl w:ilvl="-1"><w:numFmt w:val="bullet"/><w:lvlText w:val="bad"/></w:lvl><w:lvl w:ilvl="9"><w:numFmt w:val="bullet"/><w:lvlText w:val="bad"/></w:lvl><w:lvl w:ilvl="999999999999999999999"><w:numFmt w:val="bullet"/><w:lvlText w:val="bad"/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/><w:lvlOverride w:ilvl="-1"><w:startOverride w:val="42"/></w:lvlOverride><w:lvlOverride w:ilvl="9"><w:startOverride w:val="43"/></w:lvlOverride><w:lvlOverride><w:startOverride w:val="44"/></w:lvlOverride></w:num></w:numbering>"#;
+    let body = r#"<w:p><w:pPr><w:numPr><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>default level</w:t></w:r></w:p><w:p><w:pPr><w:numPr><w:ilvl w:val="2"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>valid level</w:t></w:r></w:p><w:p><w:pPr><w:numPr><w:ilvl w:val="-1"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>negative level</w:t></w:r></w:p><w:p><w:pPr><w:numPr><w:ilvl w:val="9"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>out of range</w:t></w:r></w:p><w:p><w:pPr><w:numPr><w:ilvl w:val="999999999999999999999"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>overflow</w:t></w:r></w:p>"#;
+    let bytes = package(body, &[("rId1", &format!("{REL}/numbering"), "numbering.xml")], &[], &[("word/numbering.xml", numbering)]);
+    let doc = craft_docx::read(&bytes).unwrap();
+    let paragraphs: Vec<_> = doc
+        .body
+        .iter()
+        .filter_map(|block| match &**block {
+            craft_wordmodel::Block::Para(p) => Some(p),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(paragraphs.len(), 5);
+    assert_eq!(paragraphs[0].props.numbering.map(|n| (n.num, n.level)), Some((1, 0)), "an omitted level defaults to zero");
+    assert_eq!(paragraphs[1].props.numbering.map(|n| (n.num, n.level)), Some((1, 2)), "a valid level is preserved");
+    for p in &paragraphs[2..] {
+        assert_eq!(p.props.numbering, None, "malformed explicit level is not treated as a real list: {}", p.text);
+    }
+    let level_zero = doc.numbering.level(1, 0).expect("the valid level zero");
+    assert_eq!(level_zero.format, craft_wordmodel::section::NumFormat::Decimal);
+    assert_eq!(level_zero.start, 1, "invalid level overrides do not affect level zero");
+}
+
+#[test]
 fn extended_properties_are_kept_without_words_counts_and_personal_ones_follow_the_privacy_setting() {
     let app = r#"<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Template>Normal.dotm</Template><TotalTime>42</TotalTime><Pages>107</Pages><Words>40000</Words><Characters>250000</Characters><Application>Microsoft Office Word</Application><DocSecurity>0</DocSecurity><Lines>2000</Lines><Paragraphs>1700</Paragraphs><ScaleCrop>false</ScaleCrop><Manager>M</Manager><Company>Firma</Company><LinksUpToDate>false</LinksUpToDate><CharactersWithSpaces>290000</CharactersWithSpaces><SharedDoc>false</SharedDoc><HyperlinkBase>https://example.com/</HyperlinkBase><HyperlinksChanged>false</HyperlinksChanged><AppVersion>16.0000</AppVersion></Properties>"#;
     let make = |settings: &str| {
