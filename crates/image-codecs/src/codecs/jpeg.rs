@@ -533,14 +533,15 @@ impl<'a> JpegBands<'a> {
     }
 
     /// What decoding holds beside the caller's storage: two of the largest groups (one being
-    /// decoded while the caller takes the other) and a reader's buffers per worker, plus one.
+    /// decoded while the caller takes the other), a reader's buffers per worker, plus one, and the
+    /// sampling maps the readers share.
     pub fn working_bytes(&self) -> u64 {
         let group = (self.bands_per_group() * self.bands.band_bytes()) as u64;
         #[cfg(not(target_arch = "wasm32"))]
         let workers = rayon::current_num_threads() as u64;
         #[cfg(target_arch = "wasm32")]
         let workers = 1;
-        group.saturating_mul(2).saturating_add(self.bands.reader_bytes().saturating_mul(workers + 1))
+        group.saturating_mul(2).saturating_add(self.bands.reader_bytes().saturating_mul(workers + 1)).saturating_add(self.bands.map_bytes())
     }
 
     /// The groups [`JpegBands::decode`] hands over, in order: whole stretches between seek points
@@ -1084,6 +1085,27 @@ mod tests {
                 })
                 .unwrap();
             assert!(got == want, "run {run} group {group}");
+        }
+    }
+
+    /// The working set counts the sampling maps the readers share: none at 4:4:4, and at 4:2:0
+    /// a column and a row map for each chroma component.
+    #[test]
+    fn working_bytes_count_the_sampling_maps() {
+        let (w, h) = (97u16, 203u16);
+        let px = vec![128u8; usize::from(w) * usize::from(h) * 3];
+        let entry = std::mem::size_of::<(usize, usize, f32)>() as u64;
+        for (sampling, maps) in
+            [(jpeg_encoder::SamplingFactor::R_4_4_4, 0), (jpeg_encoder::SamplingFactor::R_4_2_0, 2 * (u64::from(w) + u64::from(h)) * entry)]
+        {
+            let mut bytes = Vec::new();
+            let mut enc = jpeg_encoder::Encoder::new(&mut bytes, 90);
+            enc.set_sampling_factor(sampling);
+            enc.encode(&px, w, h, jpeg_encoder::ColorType::Rgb).unwrap();
+            let bands = JpegBands::open(&bytes, &Limits::default()).unwrap().expect("bands");
+            let groups_and_readers = 2 * (bands.bands_per_group() * bands.bands.band_bytes()) as u64
+                + bands.bands.reader_bytes() * (rayon::current_num_threads() as u64 + 1);
+            assert_eq!(bands.working_bytes(), groups_and_readers + maps, "{sampling:?}");
         }
     }
 
