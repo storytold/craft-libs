@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use craft_video::mpeg2::{ChromaFormat, Encoder, EncoderConfig, RateControl, ReconFrame, YuvFrame};
+use craft_video::mpeg2::{ChromaFormat, Encoder, EncoderConfig, Packet, RateControl, ReconFrame, YuvFrame};
 
 use crate::common::{Stats, fixture_dir, pix_fmt_of};
 use crate::oracle::{MAX_DIFFERING, MIN_PSNR, TOL_MAX};
@@ -39,24 +39,22 @@ fn sizes(cfg: &EncoderConfig) -> (usize, usize, usize) {
     (w * h, w / 2 * ch, w / 2)
 }
 
-/// Encode `raw` frames; returns the elementary stream and the reconstruction.
-fn encode(cfg: &EncoderConfig, raw: &[u8]) -> (Vec<u8>, Vec<ReconFrame>) {
+/// Encode `raw` frames; returns the elementary stream, the reconstruction (display order) and
+/// the packets (decoding order).
+fn encode(cfg: &EncoderConfig, raw: &[u8]) -> (Vec<u8>, Vec<ReconFrame>, Vec<Packet>) {
     let (ys, cs, cw) = sizes(cfg);
     let fsize = ys + 2 * cs;
     let mut enc = Encoder::new(cfg.clone()).expect("config");
     enc.set_recon_capture(true);
-    let mut es = Vec::new();
+    let mut packets = Vec::new();
     for (i, f) in raw.chunks_exact(fsize).enumerate() {
         let frame = YuvFrame { y: &f[..ys], cb: &f[ys..ys + cs], cr: &f[ys + cs..], y_stride: cfg.width as usize, c_stride: cw };
-        for p in enc.encode(&frame, i as i64).expect("encode") {
-            es.extend_from_slice(&p.data);
-        }
+        packets.extend(enc.encode(&frame, i as i64).expect("encode"));
     }
-    for p in enc.flush() {
-        es.extend_from_slice(&p.data);
-    }
+    packets.extend(enc.flush());
+    let mut es: Vec<u8> = packets.iter().flat_map(|p| p.data.iter().copied()).collect();
     es.extend_from_slice(enc.end_of_sequence());
-    (es, enc.take_recon())
+    (es, enc.take_recon(), packets)
 }
 
 /// ffmpeg's decode of `file`, failing on any decoding error.
@@ -121,7 +119,7 @@ fn check(ff: &Path, c: &Case) -> (Vec<u8>, f64) {
     let raw = source(ff, c.cfg.width, c.cfg.height, c.frames, pix_fmt);
     let (ys, cs, _) = sizes(&c.cfg);
     let fsize = ys + 2 * cs;
-    let (es, recon) = encode(&c.cfg, &raw);
+    let (es, recon, packets) = encode(&c.cfg, &raw);
     let path = write(c.name, &es);
     let decoded = ffmpeg_decode(ff, &path, pix_fmt);
     assert_eq!(decoded.len(), c.frames * fsize, "{}: ffmpeg's frame count", c.name);
@@ -139,15 +137,21 @@ fn check(ff: &Path, c: &Case) -> (Vec<u8>, f64) {
     assert!(quality >= c.min_psnr, "{}: luma PSNR {quality:.2} dB against the source", c.name);
     if let Some((stream, types)) = ffprobe(&path) {
         assert_eq!(stream, c.probe, "{}: ffprobe", c.name);
-        let gop = c.cfg.gop_size as usize;
-        let want: Vec<&str> = (0..c.frames).map(|i| if i % gop == 0 { "I" } else { "P" }).collect();
+        // ffprobe lists the pictures in display order
+        let mut shown: Vec<&Packet> = packets.iter().collect();
+        shown.sort_by_key(|p| p.pts);
+        let want: Vec<String> = shown.iter().map(|p| format!("{:?}", p.picture_type)).collect();
         assert_eq!(types, want, "{}: picture types", c.name);
     }
+    let count = |t: &str| packets.iter().filter(|p| format!("{:?}", p.picture_type) == t).count();
     let kbps = es.len() as f64 * 8.0 * 25.0 / c.frames as f64 / 1000.0;
     println!(
-        "{}: {} frames, {kbps:.0} kbit/s, luma PSNR {quality:.2} dB, max diff to ffmpeg {}, {:.3}% differ",
+        "{}: {} frames ({} I, {} P, {} B), {kbps:.0} kbit/s, luma PSNR {quality:.2} dB, max diff to ffmpeg {}, {:.3}% differ",
         c.name,
         c.frames,
+        count("I"),
+        count("P"),
+        count("B"),
         all.max,
         100.0 * all.diff as f64 / all.n as f64
     );
@@ -160,6 +164,21 @@ fn ffmpeg_decodes_our_streams() {
     let cif = EncoderConfig { gop_size: 12, ..EncoderConfig::new(352, 288, 25, 1) };
     let cases = [
         Case { name: "cif_q4", cfg: cif.clone(), frames: 25, probe: "mpeg2video,Main,10,yuv420p", min_psnr: 36.0 },
+        Case { name: "cif_ip", cfg: EncoderConfig { b_pictures: 0, ..cif.clone() }, frames: 25, probe: "mpeg2video,Main,10,yuv420p", min_psnr: 36.0 },
+        Case {
+            name: "cif_open_gop",
+            cfg: EncoderConfig { closed_gop: false, gop_size: 15, ..cif.clone() },
+            frames: 31,
+            probe: "mpeg2video,Main,10,yuv420p",
+            min_psnr: 35.0,
+        },
+        Case {
+            name: "cif_b4",
+            cfg: EncoderConfig { b_pictures: 4, gop_size: 10, ..cif.clone() },
+            frames: 23,
+            probe: "mpeg2video,Main,10,yuv420p",
+            min_psnr: 34.0,
+        },
         Case {
             name: "cif_intra",
             cfg: EncoderConfig { gop_size: 1, rate: RateControl::Quantiser(8), ..cif.clone() },
@@ -191,10 +210,14 @@ fn ffmpeg_decodes_our_streams() {
 #[test]
 fn average_bitrate_reaches_its_target() {
     let Some(ff) = craft_media_testkit::ffmpeg_or_skip("mpeg2 encoder bitrate") else { return };
-    for kbps in [800u32, 2500] {
+    for (kbps, b) in [(800u32, 2), (2500, 2), (800, 0)] {
         let c = Case {
-            name: if kbps == 800 { "cif_abr_800" } else { "cif_abr_2500" },
-            cfg: EncoderConfig { rate: RateControl::Abr { kbps }, gop_size: 12, ..EncoderConfig::new(352, 288, 25, 1) },
+            name: match (kbps, b) {
+                (800, 0) => "cif_abr_800_ip",
+                (800, _) => "cif_abr_800",
+                _ => "cif_abr_2500",
+            },
+            cfg: EncoderConfig { rate: RateControl::Abr { kbps }, gop_size: 12, b_pictures: b, ..EncoderConfig::new(352, 288, 25, 1) },
             frames: 72,
             probe: "mpeg2video,Main,10,yuv420p",
             min_psnr: 26.0,
