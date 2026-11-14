@@ -74,6 +74,9 @@ pub enum Error {
     NaN,
     /// One of the inputs had a non-closed path.
     NonClosedPath(NonClosedPath),
+    /// The sweep gave winding numbers that disagree around a point, so the
+    /// contours of the output set could not be walked.
+    InconsistentWindingNumbers,
 }
 
 impl From<NonClosedPath> for Error {
@@ -88,6 +91,9 @@ impl std::fmt::Display for Error {
             Error::Infinity => write!(f, "one of the inputs was infinite"),
             Error::NaN => write!(f, "one of the inputs had a NaN"),
             Error::NonClosedPath(_) => write!(f, "one of the inputs had a non-closed path"),
+            Error::InconsistentWindingNumbers => {
+                write!(f, "the winding numbers disagree around a point")
+            }
         }
     }
 }
@@ -170,7 +176,7 @@ pub fn binary_op_with_eps(
         }
     };
 
-    Ok(top.contours(inside))
+    top.try_contours(inside)
 }
 
 #[cfg(test)]
@@ -277,6 +283,15 @@ mod tests {
         )
         .unwrap();
         assert!(contours.contours().next().is_none());
+    }
+
+    #[test]
+    fn inconsistent_winding_numbers_are_an_error() {
+        // The sweep gives this path winding numbers that disagree around a
+        // point.
+        let path = BezPath::from_svg("M4,-1 C8,1 -7,-2 5,8 L-4,-8 L2,1 L1,1 Z").unwrap();
+        let result = binary_op(&path, &BezPath::new(), FillRule::EvenOdd, BinaryOp::Union);
+        assert_eq!(result.err(), Some(Error::InconsistentWindingNumbers));
     }
 
     #[test]
