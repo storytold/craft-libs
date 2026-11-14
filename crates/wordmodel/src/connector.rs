@@ -390,6 +390,7 @@ pub fn end_direction(kind: ShapeKind, w: f32, h: f32, at_end: bool) -> (f32, f32
                 (0.0, 1.0)
             }
         }
+        // A straight connector or a line: corner to corner.
         _ => (w, h),
     };
     let len = (dx * dx + dy * dy).sqrt();
