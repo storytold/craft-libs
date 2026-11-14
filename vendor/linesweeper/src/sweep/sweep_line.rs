@@ -2119,11 +2119,44 @@ mod tests {
         segs.add_bez_path(&circles).unwrap();
         let mut sweep = Sweeper::new(&segs, 1e-6);
         let mut bufs = SweepLineBuffers::default();
-        let mut lines = 0;
-        while sweep.next_line(&mut bufs).is_some() {
-            lines += 1;
+        let mut seen = FxHashSet::default();
+        while let Some(line) = sweep.next_line(&mut bufs) {
+            let y = line.y();
+            let mut idx = 0;
+            while let Some(seg) = line.line_segment(idx) {
+                let s = &segs[seg];
+                assert!(
+                    s.start().y <= y && y <= s.end().y,
+                    "segment {seg:?} is in the sweep line at y={y}"
+                );
+                seen.insert(seg);
+                idx += 1;
+            }
         }
-        assert!(lines > 0);
+        for seg in segs.indices() {
+            assert!(
+                segs[seg].is_horizontal() || seen.contains(&seg),
+                "segment {seg:?} never entered the sweep line"
+            );
+        }
+
+        // The five circles overlap almost entirely: their union has one
+        // boundary, the area all five cover is not empty, and no region is
+        // wound negatively or more than five times.
+        let top = crate::topology::Topology::from_path(&circles, 1e-6).unwrap();
+        for idx in top.segment_indices() {
+            let half = idx.first_half();
+            for w in [top.winding_clockwise(half), top.winding_counter_clockwise(half)] {
+                assert!((0..=5).contains(w), "winding number {w} on {idx:?}");
+            }
+        }
+        assert_eq!(top.contours(|w| *w != 0).contours().count(), 1);
+        assert!(top.contours(|w| *w == 5).contours().count() > 0);
+        let bbox = top.bounding_box();
+        let corners = [(bbox.x0, 450.0), (bbox.y0, 450.0), (bbox.x1, 550.0), (bbox.y1, 550.0)];
+        for (got, want) in corners {
+            assert!((got - want).abs() < 1e-3, "{bbox:?}");
+        }
     }
 
     #[test]
