@@ -632,6 +632,30 @@ impl<const CAP: usize> ApproxComparison<CAP> {
     }
 }
 
+/// Craft patch (quadratic scale): when `b * b` or `a * c` would underflow or
+/// overflow, multiplies `c`, `b` and `a` by one power of two so that the larger
+/// of the two is near 1, keeping every coefficient below `2^1021`. Otherwise it
+/// returns them unchanged. Multiplying all three by the same power of two does
+/// not move the roots.
+fn balance_quadratic(c: f64, b: f64, a: f64) -> (f64, f64, f64) {
+    if !(c.is_finite() && b.is_finite() && a.is_finite()) {
+        return (c, b, a);
+    }
+    let exp = |x: f64| (x != 0.0).then(|| x.abs().log2().floor() as i32);
+    let (ec, eb, ea) = (exp(c), exp(b), exp(a));
+    let square = eb.map(|e| 2 * e);
+    let product = ea.zip(ec).map(|(ea, ec)| ea + ec);
+    let (Some(e), Some(max)) = (square.max(product), ec.max(eb).max(ea)) else {
+        return (c, b, a);
+    };
+    if (-1000..=1000).contains(&e) {
+        return (c, b, a);
+    }
+    let k = (-e.div_euclid(2)).min(1020 - max);
+    let (s1, s2) = (2f64.powi(k / 2), 2f64.powi(k - k / 2));
+    (c * s1 * s2, b * s1 * s2, a * s1 * s2)
+}
+
 /// Partitions the real line according to the sign of `q`. The return value is
 /// `(initially_positive, r0, r1)`, where `r0 < r1`. If `initially_positive`,
 /// the quadratic is positive up to `r0`, then negative up to `r1`, and then
@@ -643,6 +667,7 @@ impl<const CAP: usize> ApproxComparison<CAP> {
 /// and then negative from there until `r1`.
 pub(crate) fn quadratic_signs(q: Quadratic) -> (bool, f64, f64) {
     let &[c, b, a] = q.coeffs();
+    let (c, b, a) = balance_quadratic(c, b, a);
     let disc = b * b - 4.0 * a * c;
     // The handling of b here is a little confusing, and it has to do with how
     // the "roots" come out in the linear case. If a is zero, and b is not we
@@ -2028,5 +2053,30 @@ mod test {
 
         let c0 = CubicBez::new((0.0, 0.0), (2000.0, 0.0), (-1000.0, 30.0), (1000.0, 30.0));
         dbg!(AlmostHorizontalDecomposition::from_monotone_cubic(c0));
+    }
+
+    // Craft patch (quadratic scale) test: the cubic with y = [0, -s, -2s, s]
+    // turns at t = 0.5 for every scale s.
+    #[test]
+    fn quadratic_signs_at_extreme_scales() {
+        for s in [1e-200, 1.0, 1e160] {
+            let q = Quadratic::new([-s, 0.0, 4.0 * s]);
+            assert_eq!(quadratic_signs(q), (true, -0.5, 0.5), "scale {s}");
+
+            let c = CubicBez::new((0.0, 0.0), (1.0, -s), (2.0, -2.0 * s), (3.0, s));
+            let ends: Vec<f64> = crate::geom::monotonic_cubic_pieces(c)
+                .iter()
+                .map(|p| p.end_t)
+                .collect();
+            assert_eq!(ends, [0.5, 1.0], "scale {s}");
+        }
+
+        // Coefficients far apart in size whose products are in range keep
+        // their roots, +-2^-1021.5 (about 3.147e-308).
+        let q = Quadratic::new([-(2f64.powi(-1022)), 0.0, 2f64.powi(1021)]);
+        let (initially_positive, r0, r1) = quadratic_signs(q);
+        assert!(initially_positive);
+        assert!((r0 + r1).abs() <= 1e-15 * r1, "{r0} {r1}");
+        assert!(r1 > 3.14e-308 && r1 < 3.15e-308, "{r1}");
     }
 }
