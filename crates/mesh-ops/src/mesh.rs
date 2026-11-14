@@ -164,10 +164,39 @@ fn per_vertex(len: usize, n: usize) -> bool {
     n > 0 && len == n
 }
 
-/// A copy of `from` in a reserved array, or `OutOfMemory` naming `what`.
-fn try_copy<T: Clone>(from: &[T], what: &'static str) -> Result<Vec<T>> {
+/// A copy of `from` in a reserved array, or `OutOfMemory` naming `what`. Copying a `Copy` element
+/// does not allocate; [`try_names`] and [`try_submeshes`] copy elements that own a string.
+fn try_copy<T: Copy>(from: &[T], what: &'static str) -> Result<Vec<T>> {
     let mut v = try_vec(from.len(), what)?;
     v.extend_from_slice(from);
+    Ok(v)
+}
+
+/// A copy of `name` in a reserved string, or `OutOfMemory` naming `what`.
+fn try_name(name: &str, what: &'static str) -> Result<String> {
+    let mut s = String::new();
+    reserved(s.try_reserve_exact(name.len()), what)?;
+    #[cfg(test)]
+    tests::name_copy(what)?;
+    s.push_str(name);
+    Ok(s)
+}
+
+/// Copies of `names`, each in a reserved string, or `OutOfMemory` naming `what`.
+fn try_names(names: &[String], what: &'static str) -> Result<Vec<String>> {
+    let mut v = try_vec(names.len(), what)?;
+    for name in names {
+        v.push(try_name(name, what)?);
+    }
+    Ok(v)
+}
+
+/// Copies of `submeshes` with their names in reserved strings, or `OutOfMemory` naming `what`.
+fn try_submeshes(submeshes: &[SubMesh], what: &'static str) -> Result<Vec<SubMesh>> {
+    let mut v = try_vec(submeshes.len(), what)?;
+    for s in submeshes {
+        v.push(SubMesh { name: try_name(&s.name, what)?, material: s.material, start: s.start, count: s.count });
+    }
     Ok(v)
 }
 
@@ -646,8 +675,8 @@ impl Mesh {
             }
         }
 
-        // (vertex, centroid of its first triangle), each vertex once. Reserved before the mesh
-        // changes.
+        // (vertex, place of its triangle's first corner, centroid of its triangle), three per
+        // triangle. Reserved before the mesh changes, and sorted in place without allocating.
         let mut vertices = try_vec(listed.saturating_mul(3), "material vertices")?;
         // Per vertex: NOT_SHARED, SHARED with a triangle outside the material, or COPIED when it
         // is shared and a triangle of the material uses it, so it gets one copy.
@@ -714,12 +743,14 @@ impl Mesh {
         for t in &material_triangles {
             let Some(tri) = self.tri(*t) else { continue };
             let centroid = tri.iter().map(|v| self.uvs.get(*v).copied().unwrap_or_default()).sum::<Vec2>() / 3.0;
-            vertices.extend(tri.map(|v| (v, centroid)));
+            let place = vertices.len();
+            vertices.extend(tri.map(|v| (v, place, centroid)));
         }
 
-        vertices.sort_by_key(|(v, _)| *v);
-        vertices.dedup_by_key(|(v, _)| *v);
-        for (v, centroid) in vertices {
+        // Each vertex once, with the centroid of the first triangle using it.
+        vertices.sort_unstable_by_key(|&(v, place, _)| (v, place));
+        vertices.dedup_by_key(|(v, _, _)| *v);
+        for (v, _, centroid) in vertices {
             if let Some(uv) = self.uvs.get_mut(v) {
                 *uv = f(centroid, *uv);
             }
@@ -799,8 +830,9 @@ impl Mesh {
             let start = s.start.checked_add(ibase).ok_or(too_large("submeshes"))?;
             start.checked_add(s.count).ok_or(too_large("submeshes"))?;
             let material = s.material.checked_add(mbase).ok_or(too_large("submeshes"))?;
-            submeshes.push(SubMesh { name: s.name.clone(), material, start, count: s.count });
+            submeshes.push(SubMesh { name: try_name(&s.name, "submeshes")?, material, start, count: s.count });
         }
+        let names = try_names(&other.materials, "materials")?;
 
         let complete = |m: &Mesh| {
             (
@@ -896,7 +928,7 @@ impl Mesh {
         if self_unnamed {
             self.materials.push(String::new());
         }
-        self.materials.extend(other.materials.iter().cloned());
+        self.materials.extend(names);
         if other_unnamed {
             self.materials.push(String::new());
         }
@@ -1103,8 +1135,8 @@ impl Mesh {
             uvs: try_copy(&self.uvs, "UVs")?,
             colors: try_copy(&self.colors, "colors")?,
             indices: try_vec(out_indices, "indices")?,
-            submeshes: try_copy(&self.submeshes, "submeshes")?,
-            materials: try_copy(&self.materials, "materials")?,
+            submeshes: try_submeshes(&self.submeshes, "submeshes")?,
+            materials: try_names(&self.materials, "materials")?,
             diagonals: Vec::new(),
         };
         let has = |len: usize| len == n;
@@ -1328,6 +1360,32 @@ impl mikktspace::Geometry for Mikk<'_> {
 mod tests {
     use super::*;
 
+    thread_local! {
+        /// Name copies that succeed before the next one fails as out of memory; `None` lets every
+        /// copy succeed.
+        static NAME_COPIES_LEFT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    }
+
+    /// Let `copies` name copies on this thread succeed and fail the next one, or none with `None`.
+    fn fail_name_copy_after(copies: Option<usize>) {
+        NAME_COPIES_LEFT.with(|left| left.set(copies));
+    }
+
+    /// `OutOfMemory` naming `what` when [`fail_name_copy_after`] says this name copy fails.
+    pub(super) fn name_copy(what: &'static str) -> Result<()> {
+        NAME_COPIES_LEFT.with(|left| match left.get() {
+            Some(0) => {
+                left.set(None);
+                Err(MeshOpsError::OutOfMemory(what))
+            }
+            Some(k) => {
+                left.set(Some(k - 1));
+                Ok(())
+            }
+            None => Ok(()),
+        })
+    }
+
     fn quad() -> Mesh {
         Mesh::from_parts(
             vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), Vec3::new(1.0, 1.0, 0.0), Vec3::new(0.0, 1.0, 0.0)],
@@ -1490,6 +1548,23 @@ mod tests {
         }
         assert_eq!(m.uv_tiles(1, &l).unwrap().into_iter().collect::<Vec<_>>(), vec![(1, 0)]);
         assert_eq!(m.uv_tiles(0, &l).unwrap().into_iter().collect::<Vec<_>>(), vec![(0, 0)]);
+    }
+
+    #[test]
+    fn material_uvs_pass_each_vertex_the_centroid_of_its_first_triangle() {
+        // A fan of triangles t = (0, t + 1, t + 2): vertex 0 is in every triangle, and vertex
+        // v >= 2 is first in triangle v - 2.
+        let fan = 40u32;
+        let positions = (0..=fan + 1).map(|i| Vec3::new(i as f32, (i * i) as f32, 0.0)).collect();
+        let uvs: Vec<Vec2> = (0..=fan + 1).map(|i| Vec2::new(i as f32, 0.5 * i as f32 + 0.25)).collect();
+        let indices = (0..fan).flat_map(|t| [0, t + 1, t + 2]).collect();
+        let mut m = Mesh::from_parts(positions, None, uvs.clone(), indices, "a").unwrap();
+        let centroid = |t: u32| (uvs[0] + uvs[t as usize + 1] + uvs[t as usize + 2]) / 3.0;
+        m.map_material_uvs_with(0, |c, _| c, &Limits::default()).unwrap();
+        assert_eq!((m.uvs[0], m.uvs[1]), (centroid(0), centroid(0)));
+        for v in 2..=fan + 1 {
+            assert_eq!(m.uvs[v as usize], centroid(v - 2), "vertex {v}");
+        }
     }
 
     /// One triangle in UV tile (0, 0) that `listings` submeshes of material 0 all list.
@@ -1892,6 +1967,56 @@ mod tests {
         b.validate().unwrap();
         assert_eq!(b.materials, vec!["Default".to_string(), String::new()]);
         assert_eq!((b.submeshes[0].material, b.submeshes[1].material), (0, 1));
+    }
+
+    /// A quad whose two triangles are submeshes named `c` and `d`, with materials `a` and `b`.
+    fn named_quad(a: String, b: String, c: String, d: String) -> Mesh {
+        let mut m = quad();
+        m.materials = vec![a, b];
+        m.submeshes = vec![SubMesh { name: c, material: 1, start: 0, count: 3 }, SubMesh { name: d, material: 0, start: 3, count: 3 }];
+        m
+    }
+
+    #[test]
+    fn append_copies_long_names_in_order() {
+        let long = |c: char| c.to_string().repeat(4096);
+        let other = named_quad(long('a'), long('b'), long('c'), long('d'));
+        let mut m = quad();
+        m.materials.clear();
+        m.try_append(&other).unwrap();
+        m.validate().unwrap();
+        assert_eq!(m.materials, vec![String::new(), long('a'), long('b')]);
+        let submeshes = m.submeshes.iter().map(|s| (s.name.clone(), s.material, s.start, s.count)).collect::<Vec<_>>();
+        assert_eq!(submeshes[1..], [(long('c'), 2, 6, 3), (long('d'), 1, 9, 3)]);
+    }
+
+    #[test]
+    fn append_leaves_the_mesh_unchanged_when_a_name_copy_fails() {
+        let other = named_quad("a".into(), "b".into(), "c".into(), "d".into());
+        let mut m = quad();
+        let before = m.clone();
+        // The two submesh names are copied first, then the two material names.
+        for (copies, what) in [(0, "submeshes"), (1, "submeshes"), (2, "materials"), (3, "materials")] {
+            fail_name_copy_after(Some(copies));
+            assert_eq!(m.try_append(&other), Err(MeshOpsError::OutOfMemory(what)), "after {copies} copies");
+            assert_eq!(m, before, "after {copies} copies");
+        }
+        fail_name_copy_after(None);
+        m.try_append(&other).unwrap();
+        assert_eq!(m.materials, ["Default", "a", "b"]);
+    }
+
+    #[test]
+    fn subdivision_reports_a_failed_name_copy() {
+        let m = named_quad("a".into(), "b".into(), "c".into(), "d".into());
+        // Both submesh names are copied before the material names.
+        for (copies, what) in [(0, "submeshes"), (1, "submeshes"), (2, "materials"), (3, "materials")] {
+            fail_name_copy_after(Some(copies));
+            assert_eq!(m.try_subdivided(&Limits::default()), Err(MeshOpsError::OutOfMemory(what)), "after {copies} copies");
+        }
+        fail_name_copy_after(None);
+        let s = m.try_subdivided(&Limits::default()).unwrap();
+        assert_eq!((s.materials, s.submeshes.iter().map(|s| s.name.as_str()).collect::<Vec<_>>()), (m.materials, vec!["c", "d"]));
     }
 
     #[test]
