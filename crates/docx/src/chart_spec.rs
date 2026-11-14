@@ -282,13 +282,14 @@ fn series_props(w: &mut W, s: &ChartSeries) {
     }
     w.open("c:spPr", &[]);
     if fill_set {
+        // "No fill" wins over a stored colour, so the pair reads back as it was written.
         match &s.fill {
-            Some(c) => {
+            Some(c) if !s.no_fill => {
                 w.open("a:solidFill", &[]);
                 w.empty("a:srgbClr", &[("val", &c.hex())]);
                 w.close("a:solidFill");
             }
-            None => w.empty("a:noFill", &[]),
+            _ => w.empty("a:noFill", &[]),
         }
     }
     if ln_set {
@@ -675,6 +676,18 @@ mod tests {
         }
         let plain = ChartSpec { legend: None, ..ChartSpec::sample(ChartType::Line) };
         assert_eq!(spec_of(&parse(&plain)), Some(plain));
+    }
+
+    #[test]
+    fn no_fill_wins_over_a_stored_colour() {
+        let mut spec = ChartSpec::sample(ChartType::Column);
+        spec.series[0].fill = Some(Rgb(255, 0, 0));
+        spec.series[0].no_fill = true;
+        let x = chart_xml(&spec);
+        assert!(!x.contains("FF0000"), "colour written next to no_fill");
+        let back = spec_of(&parse(&spec)).expect("stays editable");
+        assert!(back.series[0].no_fill);
+        assert_eq!(back.series[0].fill, None);
     }
 
     #[test]
