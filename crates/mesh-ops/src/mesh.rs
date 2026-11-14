@@ -1092,11 +1092,11 @@ impl Mesh {
                 let half = |x: Vec3, y: Vec3| x * 0.5 + y * 0.5;
                 m.positions.push(half(self.positions[i], self.positions[j]));
                 if has_n {
-                    m.normals.push((self.normals[i] + self.normals[j]).normalize_or_zero());
+                    m.normals.push(unit(half(self.normals[i], self.normals[j])).unwrap_or(Vec3::ZERO));
                 }
                 if has_t {
                     let (ti, tj) = (self.tangents[i], self.tangents[j]);
-                    m.tangents.push((ti.truncate() + tj.truncate()).normalize_or_zero().extend(ti.w));
+                    m.tangents.push(unit(half(ti.truncate(), tj.truncate())).unwrap_or(Vec3::ZERO).extend(ti.w));
                 }
                 if has_uv {
                     m.uvs.push(self.uvs[i] * 0.5 + self.uvs[j] * 0.5);
@@ -1827,6 +1827,22 @@ mod tests {
         assert!(s.positions.iter().all(|p| p.is_finite()), "{:?}", s.positions);
         assert!(s.uvs.iter().all(|p| p.is_finite()), "{:?}", s.uvs);
         assert!(s.positions.contains(&Vec3::new(3e38, 1.5e38, 0.0)));
+    }
+
+    #[test]
+    fn subdivision_keeps_midpoint_normals_and_tangents_of_long_vectors() {
+        let mut m = quad();
+        // Edge 0-1: the sum's squared length overflows; edge 2-3: the sum itself overflows.
+        m.normals = vec![Vec3::new(1e20, 0.0, 0.0), Vec3::new(1e20, 0.0, 0.0), Vec3::new(3e38, 0.0, 0.0), Vec3::new(3e38, 0.0, 0.0)];
+        m.tangents = vec![Vec4::new(1e20, 0.0, 0.0, 1.0); 4];
+        let s = m.try_subdivided(&Limits::default()).unwrap();
+        assert_eq!(s.positions.len(), 9);
+        for n in &s.normals[4..] {
+            assert!((*n - Vec3::X).length() < 1e-6, "{:?}", s.normals);
+        }
+        for t in &s.tangents[4..] {
+            assert!((*t - Vec4::new(1.0, 0.0, 0.0, 1.0)).length() < 1e-6, "{:?}", s.tangents);
+        }
     }
 
     #[test]
