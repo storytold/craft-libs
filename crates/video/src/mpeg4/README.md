@@ -94,7 +94,8 @@ output:
   reconstruction a little more with each P-VOP. On a 352×576 Xvid stream at quantiser 2,
   the exactly rounded IDCT's pictures were 66 dB from Xvid's own decoder's at the I-VOP and
   44.6 dB after 119 P-VOPs. With Xvid's IDCT the pictures are the same as those of Xvid's x86
-  decoder (SSE2), and of ffmpeg's C code, sample for sample.
+  decoder (SSE2), and of ffmpeg's C code, sample for sample. The user data holds until the next
+  visual object sequence header; Xvid and FFmpeg repeat it after every one.
 
   The transform is derived from the DCT definition: a row pass that multiplies by
   `round(2^15 · cos(kπ/16) · C(u) · cos((2n+1)uπ/16))` (each row pre-scaled by the factor the

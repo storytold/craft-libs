@@ -332,7 +332,13 @@ impl Decoder {
     /// Handle a non-VOP start code.
     fn header(&mut self, code: u8, payload: &[u8]) -> Result<()> {
         match code {
-            0xB0 => self.profile = payload.first().copied(),
+            0xB0 => {
+                self.profile = payload.first().copied();
+                // A new visual object sequence: user data of an earlier one (which selects the
+                // Xvid IDCT) does not describe it. Xvid and FFmpeg repeat the user data after
+                // every sequence header, so a repeated header keeps it.
+                self.user = UserData::default();
+            }
             0xB2 => headers::parse_user_data(payload, &mut self.user),
             0xB3 => {
                 let t = headers::parse_gov(payload)? as i64;

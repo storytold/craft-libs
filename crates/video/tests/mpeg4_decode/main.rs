@@ -300,6 +300,26 @@ fn xvid_streams_decode_bit_exact() {
     }
 }
 
+/// A sequence without Xvid user data that follows an Xvid one in the same decoder is decoded
+/// with the exact IDCT, as a fresh decoder decodes it.
+#[test]
+fn xvid_user_data_ends_with_its_sequence() {
+    let Some(ff) = ffmpeg() else { return };
+    let plain = encode(&ff, "xvidseq", "352x288", 10, &["-qscale:v", "2", "-g", "300", "-bf", "0"]);
+    assert!(plain.starts_with(&[0, 0, 1, 0xB0]), "a visual object sequence header");
+    let at = plain.windows(4).position(|w| w == [0, 0, 1, 0xB6]).expect("a VOP");
+    let tagged = [&plain[..at], b"\x00\x00\x01\xb2XviD0064", &plain[at..]].concat();
+    let (want, _) = decode_all(&chunks(&plain));
+    let both = [&tagged[..], &plain[..]].concat();
+    let (pics, dec) = decode_all(&chunks(&both));
+    assert_eq!(dec.errors(), 0, "{:?}", dec.last_error());
+    assert_eq!(dec.info().map(|i| i.encoder.clone()), Some(None));
+    assert_eq!(pics.len(), 2 * want.len());
+    for (i, (p, w)) in pics[want.len()..].iter().zip(&want).enumerate() {
+        assert!(planes(p) == planes(w), "picture {i} of the second sequence differs");
+    }
+}
+
 #[test]
 fn odd_dimensions_crop_to_the_coded_size() {
     let Some(c) = oracle("odd", "50x38", 6, &["-qscale:v", "5", "-bf", "1"], FLOOR, false) else { return };
