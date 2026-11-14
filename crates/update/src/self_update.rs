@@ -103,6 +103,7 @@ use replace::unmark_unless_scheduled;
 use replace::{after_install, keep_download, mark_installed};
 
 pub use detect::{DEV_VAR, PRETEND_VAR, current, current_version, is_self_updating, just_updated_to, release_installs};
+#[cfg(feature = "ui")]
 pub(crate) use helper::record_failure;
 pub use helper::{FINISH_FLAG, Outcome, finish, take_failure, take_outcome};
 
