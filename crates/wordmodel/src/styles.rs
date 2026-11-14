@@ -837,16 +837,17 @@ impl StyleSheet {
     /// complex-script formatting unless the run says it is not complex script, and counts a character
     /// style's `w:cs`; so a run it would draw otherwise says on itself whether it is complex script
     /// (`w:cs`, which Word reads the same way). A reader calls this on each paragraph it has read. `table` is the run formatting the table style gives
-    /// the paragraph's cell. Runs with right-to-left text are left as they are: they are written
-    /// right to left.
+    /// the paragraph's cell. Hebrew and Arabic text follows the same rule (measured: such text in a run
+    /// that says neither is drawn in the run's other font, size and bold, in a paragraph of either
+    /// direction); it is still ordered right to left, and written `w:rtl` with those values.
     pub fn mark_runs_as_word_draws_them(&self, para: &mut crate::para::Paragraph, table: Option<&CharProps>) {
-        use crate::bidi::{is_complex_script, is_rtl_script};
+        use crate::bidi::is_complex_script;
         let style = para.props.style.as_deref();
         let mut at = 0;
         for run in &mut para.runs {
             let text = para.text.get(at..at + run.len).unwrap_or("");
             at += run.len;
-            if text.is_empty() || text.chars().any(is_rtl_script) {
+            if text.is_empty() {
                 continue;
             }
             let word = self.resolve_char_in(style, table, &CharProps { style: None, ..run.props.clone() });

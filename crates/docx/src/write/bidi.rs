@@ -71,7 +71,8 @@ pub(super) fn over_styles(styles: &StyleSheet, para: &CharProps, c: &CharProps) 
 /// Add `rtl` and, when given, the bidi language `lang` to `c` where it doesn't say them. Where
 /// `m` (what `c`'s styles and own formatting give it) has no complex-script font, size, bold or
 /// italic, the ordinary one WordCraft drew it with is written as the complex-script value, since
-/// Word draws a `w:rtl` run with those alone. A run already marked complex script (`w:cs`) is
+/// Word draws a `w:rtl` run with those alone; so is every one of a run that says it isn't complex
+/// script. A run already marked complex script (`w:cs`) is
 /// drawn by Word with its complex-script values already, so `w:rtl` changes nothing there and
 /// none is added.
 fn direct(c: &mut CharProps, lang: Option<&String>, m: &CharProps) {
@@ -84,11 +85,31 @@ fn direct(c: &mut CharProps, lang: Option<&String>, m: &CharProps) {
     if m.cs == Some(true) {
         return;
     }
-    if m.font_cs.is_none() {
-        c.font_cs = m.font.clone();
+    // A run that says it isn't complex script (`w:cs w:val="0"`) was drawn in its ordinary
+    // formatting whatever its complex-script values say: those are written as the ordinary ones.
+    let off = m.cs == Some(false);
+    if (off || m.font_cs.is_none())
+        && let Some(f) = &m.font
+    {
+        c.font_cs = Some(f.clone());
     }
-    if m.size_cs.is_none() {
+    if off || m.size_cs.is_none() {
         c.size_cs = Some(m.size.unwrap_or(craft_wordmodel::props::DEFAULT_FONT_SIZE));
+    }
+    if off {
+        // Bold and italic only where Word would otherwise draw them differently.
+        let side = |plain: Option<bool>, cs: Option<bool>| match (plain, cs) {
+            (Some(true), _) => Some(true),
+            (_, Some(true)) => Some(false),
+            _ => None,
+        };
+        if let Some(b) = side(m.bold, m.bold_cs) {
+            c.bold_cs = Some(b);
+        }
+        if let Some(i) = side(m.italic, m.italic_cs) {
+            c.italic_cs = Some(i);
+        }
+        return;
     }
     if m.bold_cs.is_none() && m.bold == Some(true) {
         c.bold_cs = Some(true);

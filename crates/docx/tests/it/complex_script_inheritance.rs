@@ -86,7 +86,9 @@ fn separate_hebrew_font_size_language_and_flags_survive() {
 #[test]
 fn latin_direct_properties_leave_complex_script_defaults_inherited() {
     let defaults = r#"<w:szCs w:val="36"/><w:bCs/><w:iCs/>"#;
-    let run = r#"<w:sz w:val="20"/><w:b w:val="0"/><w:i w:val="0"/>"#;
+    // The run is right to left, so Word draws its Hebrew with the complex-script values (in a run
+    // that says neither `w:rtl` nor `w:cs`, Word draws Hebrew in the ordinary ones).
+    let run = r#"<w:sz w:val="20"/><w:b w:val="0"/><w:i w:val="0"/><w:rtl/>"#;
     check_generations(&package(run, defaults, "", ""), |d| {
         let p = paragraph(d);
         let c = &p.runs[0].props;
@@ -104,7 +106,8 @@ fn latin_style_properties_leave_complex_script_style_chain_inherited() {
 <w:style w:type="paragraph" w:styleId="HebrewBase"><w:name w:val="HebrewBase"/><w:rPr><w:rFonts w:cs="Arial Hebrew"/><w:szCs w:val="36"/><w:bCs/><w:iCs/><w:lang w:bidi="he-IL"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="MixedChild"><w:name w:val="MixedChild"/><w:basedOn w:val="HebrewBase"/><w:rPr><w:sz w:val="24"/><w:b w:val="0"/><w:i w:val="0"/></w:rPr></w:style>
 <w:style w:type="character" w:styleId="LatinOnly"><w:name w:val="LatinOnly"/><w:rPr><w:sz w:val="20"/><w:b w:val="0"/><w:i w:val="0"/></w:rPr></w:style>"#;
-    let run = r#"<w:rStyle w:val="LatinOnly"/><w:rFonts w:ascii="Source Serif 4" w:hAnsi="Source Serif 4"/>"#;
+    // Right to left: Word draws the Hebrew with the complex-script values.
+    let run = r#"<w:rStyle w:val="LatinOnly"/><w:rFonts w:ascii="Source Serif 4" w:hAnsi="Source Serif 4"/><w:rtl/>"#;
     check_generations(&package(run, "", styles, r#"<w:pStyle w:val="MixedChild"/>"#), |d| {
         let p = paragraph(d);
         let c = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
@@ -147,7 +150,8 @@ fn complex_script_direct_properties_leave_latin_defaults_inherited() {
 #[test]
 fn tracked_formatting_keeps_independent_complex_script_values() {
     let defaults = r#"<w:szCs w:val="36"/><w:bCs/><w:iCs/>"#;
-    let run = r#"<w:sz w:val="24"/><w:b w:val="0"/><w:i w:val="0"/><w:rPrChange w:id="7" w:author="Synthetic Author" w:date="2026-10-11T00:00:00Z"><w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/><w:b w:val="0"/><w:bCs w:val="0"/><w:i w:val="0"/><w:iCs w:val="0"/></w:rPr></w:rPrChange>"#;
+    // Right to left: Word draws the Hebrew with the complex-script values.
+    let run = r#"<w:sz w:val="24"/><w:b w:val="0"/><w:i w:val="0"/><w:rtl/><w:rPrChange w:id="7" w:author="Synthetic Author" w:date="2026-10-11T00:00:00Z"><w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/><w:b w:val="0"/><w:bCs w:val="0"/><w:i w:val="0"/><w:iCs w:val="0"/></w:rPr></w:rPrChange>"#;
     check_generations(&package(run, defaults, "", ""), |d| {
         let p = paragraph(d);
         let c = &p.runs[0].props;

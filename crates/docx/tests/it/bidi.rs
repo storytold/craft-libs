@@ -263,12 +263,12 @@ fn thai_text_takes_the_complex_script_formatting_only_in_a_complex_script_run() 
         let again = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
         check(&again, name, *want, "after a save");
     }
-    // Latin text and right-to-left text are left as they were.
+    // Latin text is left as it was; Arabic text in a run that says neither `w:rtl` nor `w:cs`
+    // follows the Thai rule (see `hebrew_and_arabic_text_outside_a_complex_script_run_takes_its_own_formatting`).
     let body = r#"<w:p><w:r><w:t>Latin only</w:t></w:r></w:p><w:p><w:r><w:t>سلام</w:t></w:r></w:p>"#;
     let d = craft_docx::read(&docx_with_styles(body, &defaults(""))).unwrap();
-    for p in paras(&d) {
-        assert_eq!(p.runs[0].props.cs, None, "{}", p.text);
-    }
+    let marks: Vec<_> = paras(&d).iter().map(|p| p.runs[0].props.cs).collect();
+    assert_eq!(marks, [None, Some(false)]);
     // Latin text follows the same rule (measured): a character style's `w:cs` or `w:rtl` leaves it in the
     // run's own formatting, a character style's `w:cs w:val="0"` under a paragraph style's
     // `w:cs` in the complex-script formatting.
@@ -288,5 +288,47 @@ fn thai_text_takes_the_complex_script_formatting_only_in_a_complex_script_run() 
             })
             .collect();
         assert_eq!(drawn, [("Angsana New".to_string(), 22.0), ("Tahoma".to_string(), 11.0), ("Angsana New".to_string(), 22.0)], "{when}");
+    }
+}
+
+/// Measured in Word for Windows: Hebrew and Arabic text in a run that says neither `w:rtl` nor
+/// `w:cs` is drawn in the run's other font, size and bold, in a paragraph of either direction, as
+/// Thai is; `w:rtl` or `w:cs` on the run draws it in the complex-script ones. It reads that way, and
+/// after a save (where its pieces are written `w:rtl`) it still draws the same.
+#[test]
+fn hebrew_and_arabic_text_outside_a_complex_script_run_takes_its_own_formatting() {
+    let styles = r#"<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New" w:cs="Tahoma"/><w:sz w:val="20"/><w:szCs w:val="40"/></w:rPr></w:rPrDefault></w:docDefaults>
+<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>"#;
+    let drawn = |d: &Document| {
+        let p = paras(d)[0];
+        let ch = p.text.chars().next().unwrap();
+        let rc = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+        if rc.uses_complex(ch) { (rc.font_cs.clone(), rc.size_cs, rc.bold_cs) } else { (rc.font.clone(), rc.size, rc.bold) }
+    };
+    let ordinary = |bold| (String::from("Courier New"), 10.0, bold);
+    let complex = (String::from("Tahoma"), 20.0, false);
+    for (script, text) in [("Hebrew", "שלום עולם"), ("Arabic", "مرحبا بالعالم")] {
+        for (dir, ppr) in [("left to right", ""), ("right to left", "<w:pPr><w:bidi/></w:pPr>")] {
+            for (what, rpr, want) in [
+                ("nothing", "", ordinary(false)),
+                ("bold", "<w:b/>", ordinary(true)),
+                ("w:rtl", "<w:rtl/>", complex.clone()),
+                ("w:cs", "<w:cs/>", complex.clone()),
+            ] {
+                let case = format!("{script}, {dir} paragraph, a run with {what}");
+                let body = format!(r#"<w:p>{ppr}<w:r><w:rPr>{rpr}</w:rPr><w:t xml:space="preserve">{text}</w:t></w:r></w:p>"#);
+                let d = craft_docx::read(&docx_with_styles(&body, styles)).unwrap();
+                assert_eq!(drawn(&d), want, "{case}: read");
+                let saved = craft_docx::write(&d).unwrap();
+                assert_eq!(drawn(&craft_docx::read(&saved).unwrap()), want, "{case}: saved and read back");
+                if what == "nothing" {
+                    let xml = document_xml(&saved);
+                    assert!(
+                        xml.contains("<w:rtl/>") && xml.contains(r#"w:cs="Courier New""#) && xml.contains(r#"<w:szCs w:val="20"/>"#),
+                        "{case}: {xml}"
+                    );
+                }
+            }
+        }
     }
 }
