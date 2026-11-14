@@ -292,11 +292,14 @@ fn a_pinch_zooms_about_the_pointer() {
     assert_eq!(rig.cell_under(at), before, "the cell under the pointer stays under it");
 }
 
+/// The cells a sheet painted, with the rect of each.
+type Painted = Rc<RefCell<Vec<(CellAt<u32>, Rect)>>>;
+
 /// The test sheet with cells B3:C4 merged and the first row and column frozen, recording each cell it paints.
 struct Merged {
     sheet: Sheet,
     merges: [CellRange<u32>; 1],
-    painted: Rc<RefCell<Vec<(CellAt<u32>, Rect)>>>,
+    painted: Painted,
 }
 
 impl GridModel for Merged {
