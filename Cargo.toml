@@ -36,6 +36,7 @@ kurbo = "0.13"
 thiserror = "2"
 craft-aaf = { path = "crates/aaf" }
 craft-atomic = { path = "crates/atomic" }
+craft-xtask = { path = "crates/xtask" }
 craft-captions = { path = "crates/captions" }
 craft-cfb = { path = "crates/cfb" }
 craft-codepage = { path = "crates/codepage" }
