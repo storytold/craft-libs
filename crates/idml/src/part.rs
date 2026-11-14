@@ -4,8 +4,14 @@ use craft_xml::{DECL_STANDALONE, El, Local, Node, Options};
 
 use crate::{DOM_VERSION, PACKAGING_NS};
 
-pub(crate) const XML_LIMITS: craft_xml::Limits =
-    craft_xml::Limits { max_input: 512 << 20, max_depth: 256, max_nodes: 8_000_000, max_attrs: 1024, max_attrs_total: 32_000_000 };
+pub(crate) const XML_LIMITS: craft_xml::Limits = craft_xml::Limits {
+    max_input: 512 << 20,
+    max_depth: 256,
+    max_nodes: 8_000_000,
+    max_elements: 8_000_000,
+    max_attrs: 1024,
+    max_attrs_total: 32_000_000,
+};
 
 /// The XML limits a part is read with: 512 MiB of input, 256 levels of nesting (InDesign's
 /// packages stay under a few dozen), 8,000,000 nodes and 32,000,000 attributes in one part.
