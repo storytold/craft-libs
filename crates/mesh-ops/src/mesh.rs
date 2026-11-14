@@ -686,7 +686,7 @@ impl Mesh {
             return Err(MeshOpsError::Invalid(format!("index {bad} out of range ({n} vertices)")));
         }
         for s in &self.submeshes {
-            if submesh_range(s, self.indices.len()).is_none() {
+            if submesh_range(s, self.indices.len()).is_none() || s.material >= self.materials.len().max(1) {
                 return Err(MeshOpsError::Invalid(format!("submesh {} is out of range", s.name)));
             }
         }
@@ -705,9 +705,9 @@ impl Mesh {
         let mut m = Mesh { indices: try_vec(out_indices, "indices")?, ..self.clone() };
         let has = |len: usize| len == n;
         let (has_n, has_t, has_uv, has_c) = (has(self.normals.len()), has(self.tangents.len()), has(self.uvs.len()), has(self.colors.len()));
-        let mut mids = std::collections::HashMap::new();
+        let mut mids: std::collections::HashMap<(u32, u32), u32> = std::collections::HashMap::new();
         // Half-sums: (a + b) * 0.5 overflows for coordinates near f32::MAX.
-        let mut mid = |m: &mut Mesh, a: u32, b: u32| -> u32 {
+        let mid = |m: &mut Mesh, mids: &mut std::collections::HashMap<(u32, u32), u32>, a: u32, b: u32| -> u32 {
             *mids.entry((a.min(b), a.max(b))).or_insert_with(|| {
                 let (i, j) = (a as usize, b as usize);
                 let half = |x: Vec3, y: Vec3| x * 0.5 + y * 0.5;
@@ -729,8 +729,24 @@ impl Mesh {
                 (m.positions.len() - 1) as u32
             })
         };
+        let oom = |_| MeshOpsError::OutOfMemory("subdivided vertices");
         for &[a, b, c] in self.indices.as_chunks::<3>().0 {
-            let (ab, bc, ca) = (mid(&mut m, a, b), mid(&mut m, b, c), mid(&mut m, c, a));
+            // A triangle adds at most three midpoints.
+            mids.try_reserve(3).map_err(oom)?;
+            m.positions.try_reserve(3).map_err(oom)?;
+            if has_n {
+                m.normals.try_reserve(3).map_err(oom)?;
+            }
+            if has_t {
+                m.tangents.try_reserve(3).map_err(oom)?;
+            }
+            if has_uv {
+                m.uvs.try_reserve(3).map_err(oom)?;
+            }
+            if has_c {
+                m.colors.try_reserve(3).map_err(oom)?;
+            }
+            let (ab, bc, ca) = (mid(&mut m, &mut mids, a, b), mid(&mut m, &mut mids, b, c), mid(&mut m, &mut mids, c, a));
             // Checked per triangle, so the result stops growing at most three vertices past the limit.
             check_limit("vertex count", m.positions.len(), limits.max_vertices)?;
             m.indices.extend_from_slice(&[a, ab, ca, ab, b, bc, ca, bc, c, ab, bc, ca]);
@@ -738,7 +754,7 @@ impl Mesh {
         // Children 0 to 2 keep the halves of the parent's edges; child 3 and the edges between
         // children are new, real edges.
         if !self.diagonals.is_empty() {
-            m.diagonals = Vec::with_capacity(out_triangles);
+            m.diagonals = try_vec(out_triangles, "diagonals")?;
             for t in 0..triangles {
                 let d = self.diagonals.get(t).copied().unwrap_or(0);
                 m.diagonals.extend_from_slice(&[d & 0b101, d & 0b011, d & 0b110, 0]);
@@ -1192,6 +1208,12 @@ mod tests {
         let mut bad = quad();
         bad.indices[1] = 9;
         assert!(bad.try_subdivided(&Limits::default()).is_err());
+        // A submesh naming a material the mesh lacks fails, as it fails validate.
+        let mut bad = quad();
+        bad.submeshes[0].material = bad.materials.len().max(1);
+        assert!(bad.validate().is_err());
+        assert!(matches!(bad.try_subdivided(&Limits::default()), Err(MeshOpsError::Invalid(_))));
+        assert_eq!(bad.subdivided(), bad);
         let small = Limits { max_triangles: 7, ..Limits::default() };
         assert!(quad().try_subdivided(&small).is_err());
         // The quad's two triangles share one of their six midpoints: 9 vertices, not 10.

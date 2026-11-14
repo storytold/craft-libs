@@ -162,7 +162,7 @@ pub fn weld(positions: &[[f32; 3]], limits: &Limits) -> Result<Vec<u32>> {
         }
         p.push(q);
     }
-    Ok(unwrap::weld_ids(&p))
+    unwrap::weld_ids(&p)
 }
 
 /// An automatic non-overlapping UV layout for one material, as [`unwrap::auto_unwrap`] makes it.

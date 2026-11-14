@@ -6,11 +6,11 @@
 //! and shelf-packed per material into 0..1 with one uniform scale, so texel density is the same
 //! everywhere within a material.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 use glam::{Vec2, Vec3};
 
-use crate::{Limits, Mesh, MeshOpsError, Result, check_limit};
+use crate::{Limits, Mesh, MeshOpsError, Result, check_limit, try_vec};
 
 /// Faces of a chart stay within this angle of the seed face normal (cos 60°).
 const CHART_COS: f32 = 0.5;
@@ -24,8 +24,9 @@ const PLAIN_WELD_DIAGONAL: f32 = 1e-6;
 
 /// Welded vertex id per vertex: vertices at the same position (snapped to a grid of 1e-6 of
 /// the bounding diagonal) share an id. Ids are dense, in order of first appearance. The grid
-/// comes from the finite positions only.
-pub fn weld_ids(positions: &[Vec3]) -> Vec<u32> {
+/// comes from the finite positions only. The id list and the lookup table are reserved up front,
+/// and a reservation that fails is [`MeshOpsError::OutOfMemory`].
+pub fn weld_ids(positions: &[Vec3]) -> Result<Vec<u32>> {
     let (lo, hi) = positions
         .iter()
         .filter(|p| p.is_finite())
@@ -34,22 +35,22 @@ pub fn weld_ids(positions: &[Vec3]) -> Vec<u32> {
     let plain = lo.abs().max(hi.abs()).max_element() <= PLAIN_WELD_MAGNITUDE && (lo == hi || (hi - lo).length() >= PLAIN_WELD_DIAGONAL);
     let cell = ((hi - lo).length() * 1e-6).max(1e-12);
     let (wide_lo, wide_cell) = (lo.as_dvec3(), (hi.as_dvec3() - lo.as_dvec3()).length() * 1e-6);
-    let mut map: HashMap<[i64; 3], u32> = HashMap::with_capacity(positions.len());
-    positions
-        .iter()
-        .map(|p| {
-            let key = if plain {
-                let q = ((*p - lo) / cell).round();
-                [q.x as i64, q.y as i64, q.z as i64]
-            } else {
-                // A zero cell (every finite position the same) divides 0 by 0; NaN casts to 0.
-                let q = ((p.as_dvec3() - wide_lo) / wide_cell).round();
-                [q.x as i64, q.y as i64, q.z as i64]
-            };
-            let next = map.len() as u32;
-            *map.entry(key).or_insert(next)
-        })
-        .collect()
+    let mut map: HashMap<[i64; 3], u32> = HashMap::new();
+    map.try_reserve(positions.len()).map_err(|_| MeshOpsError::OutOfMemory("welded vertex table"))?;
+    let mut ids = try_vec(positions.len(), "welded vertex ids")?;
+    ids.extend(positions.iter().map(|p| {
+        let key = if plain {
+            let q = ((*p - lo) / cell).round();
+            [q.x as i64, q.y as i64, q.z as i64]
+        } else {
+            // A zero cell (every finite position the same) divides 0 by 0; NaN casts to 0.
+            let q = ((p.as_dvec3() - wide_lo) / wide_cell).round();
+            [q.x as i64, q.y as i64, q.z as i64]
+        };
+        let next = map.len() as u32;
+        *map.entry(key).or_insert(next)
+    }));
+    Ok(ids)
 }
 
 /// True when the mesh has triangles and every one of them has two corners at the same position.
@@ -125,7 +126,7 @@ pub(crate) fn unwrap_core(mesh: &mut Mesh, padding_texels: f32, resolution: u32,
     let computed_normals = (mesh.normals.len() != mesh.positions.len()).then(|| mesh.smooth_normals());
     let old_normals = computed_normals.as_deref().unwrap_or(&mesh.normals);
     let n = mesh.triangle_count();
-    let weld = weld_ids(&mesh.positions);
+    let weld = weld_ids(&mesh.positions)?;
     // The layout depends on the shape only, so the charts are made from positions divided into
     // the range where face normals, areas and projections neither overflow nor round to zero.
     let divisor = crate::mesh::safe_divisor(crate::mesh::largest_abs(mesh.positions.iter().flat_map(|p| p.to_array())));
@@ -134,15 +135,16 @@ pub(crate) fn unwrap_core(mesh: &mut Mesh, padding_texels: f32, resolution: u32,
     let wid = |v: usize| weld.get(v).copied().unwrap_or(u32::MAX);
 
     // Face normals (None for degenerate faces) and materials.
-    let mut normal: Vec<Option<Vec3>> = Vec::with_capacity(n);
-    let mut area = Vec::with_capacity(n);
+    let mut normal: Vec<Option<Vec3>> = try_vec(n, "unwrap faces")?;
+    let mut area = try_vec(n, "unwrap faces")?;
     for t in 0..n {
         let [a, b, c] = mesh.tri(t).unwrap_or([0; 3]);
         let cr = (pos(b) - pos(a)).cross(pos(c) - pos(a));
         area.push(cr.length() * 0.5);
         normal.push(cr.try_normalize());
     }
-    let mut material = vec![0usize; n];
+    let mut material = try_vec(n, "unwrap faces")?;
+    material.resize(n, 0usize);
     for s in &mesh.submeshes {
         // Checked by validate_indices: whole triangles inside the index buffer.
         let end = (u64::from(s.start) + u64::from(s.count)) / 3;
@@ -154,7 +156,8 @@ pub(crate) fn unwrap_core(mesh: &mut Mesh, padding_texels: f32, resolution: u32,
     }
 
     // Manifold edge adjacency over welded vertices: edge → (face, face, count).
-    let mut edges: HashMap<(u32, u32), (u32, u32, u8)> = HashMap::with_capacity(n.saturating_mul(2));
+    let mut edges: HashMap<(u32, u32), (u32, u32, u8)> = HashMap::new();
+    edges.try_reserve(n.saturating_mul(2)).map_err(|_| MeshOpsError::OutOfMemory("unwrap edges"))?;
     let tri_edges = |t: usize| -> [(u32, u32); 3] {
         let [a, b, c] = mesh.tri(t).unwrap_or([0; 3]);
         let key = |x: usize, y: usize| {
@@ -164,6 +167,7 @@ pub(crate) fn unwrap_core(mesh: &mut Mesh, padding_texels: f32, resolution: u32,
         [key(a, b), key(b, c), key(c, a)]
     };
     for t in 0..n {
+        edges.try_reserve(3).map_err(|_| MeshOpsError::OutOfMemory("unwrap edges"))?;
         for e in tri_edges(t) {
             if e.0 == e.1 {
                 continue;
@@ -177,15 +181,20 @@ pub(crate) fn unwrap_core(mesh: &mut Mesh, padding_texels: f32, resolution: u32,
     }
 
     // Grow charts from the largest unassigned faces.
-    let mut order: Vec<usize> = (0..n).collect();
+    let mut order: Vec<usize> = try_vec(n, "unwrap faces")?;
+    order.extend(0..n);
     order.sort_by(|a, b| area[*b].total_cmp(&area[*a]));
-    let mut chart_of = vec![u32::MAX; n];
+    let mut chart_of = try_vec(n, "unwrap faces")?;
+    chart_of.resize(n, u32::MAX);
     let mut charts: Vec<Chart> = Vec::new();
+    // Each face is queued once, when it joins a chart.
     let mut queue = VecDeque::new();
+    queue.try_reserve(n).map_err(|_| MeshOpsError::OutOfMemory("unwrap faces"))?;
     for &seed in &order {
         if chart_of[seed] != u32::MAX {
             continue;
         }
+        charts.try_reserve(1).map_err(|_| MeshOpsError::OutOfMemory("unwrap charts"))?;
         let id = charts.len() as u32;
         let sn = normal[seed].unwrap_or(Vec3::Z);
         let t = sn.any_orthonormal_vector();
@@ -206,7 +215,8 @@ pub(crate) fn unwrap_core(mesh: &mut Mesh, padding_texels: f32, resolution: u32,
     }
 
     // Principal axes and bounds of every chart.
-    let mut cov = vec![(Vec2::ZERO, [0.0f64; 3], 0usize); charts.len()];
+    let mut cov = try_vec(charts.len(), "unwrap charts")?;
+    cov.resize(charts.len(), (Vec2::ZERO, [0.0f64; 3], 0usize));
     for (t, &c) in chart_of.iter().enumerate() {
         let c = c as usize;
         for v in mesh.tri(t).unwrap_or([0; 3]) {
@@ -253,22 +263,38 @@ pub(crate) fn unwrap_core(mesh: &mut Mesh, padding_texels: f32, resolution: u32,
     // Pack each material's charts into its own 0..1 square.
     let pad = padding_texels.max(1.0);
     let mut scale = HashMap::new();
-    for (m, ids) in charts_by_material(&charts) {
-        let sizes: Vec<Vec2> = ids.iter().map(|i| charts[*i].size()).collect();
+    let by_material = charts_by_material(&charts)?;
+    for group in by_material.chunk_by(|a, b| a.0 == b.0) {
+        let m = group[0].0;
+        let mut sizes: Vec<Vec2> = try_vec(group.len(), "unwrap charts")?;
+        sizes.extend(group.iter().map(|&(_, i)| charts[i].size()));
         let (s, res, offsets) = pack(&sizes, resolution.max(16) as f32, pad)?;
-        for (i, o) in ids.iter().zip(offsets) {
-            charts[*i].offset = o;
+        for (&(_, i), o) in group.iter().zip(offsets) {
+            charts[i].offset = o;
         }
+        scale.try_reserve(1).map_err(|_| MeshOpsError::OutOfMemory("unwrap charts"))?;
         scale.insert(m, (s, res));
     }
 
     // Rebuild vertices: one per (vertex, chart).
-    let mut remap: HashMap<(u32, u32), u32> = HashMap::with_capacity(mesh.positions.len().saturating_mul(2));
+    let mut remap: HashMap<(u32, u32), u32> = HashMap::new();
+    remap.try_reserve(mesh.positions.len().saturating_mul(2)).map_err(|_| MeshOpsError::OutOfMemory("unwrap vertices"))?;
     let (mut positions, mut normals, mut uvs, mut colors, mut source) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    let mut indices = Vec::with_capacity(mesh.indices.len());
+    let mut indices = try_vec(mesh.indices.len(), "indices")?;
+    let has_colors = !mesh.colors.is_empty();
     for (t, &c) in chart_of.iter().enumerate() {
         let Some(ch) = charts.get(c as usize) else { continue };
         let (s, res) = scale.get(&ch.material).copied().unwrap_or((0.0, 1.0));
+        // A triangle adds at most three vertices.
+        let oom = |_| MeshOpsError::OutOfMemory("unwrap vertices");
+        remap.try_reserve(3).map_err(oom)?;
+        positions.try_reserve(3).map_err(oom)?;
+        normals.try_reserve(3).map_err(oom)?;
+        uvs.try_reserve(3).map_err(oom)?;
+        source.try_reserve(3).map_err(oom)?;
+        if has_colors {
+            colors.try_reserve(3).map_err(oom)?;
+        }
         for v in mesh.tri(t).unwrap_or([0; 3]) {
             let idx = *remap.entry((v as u32, c)).or_insert_with(|| {
                 let q = ch.local(pos(v));
@@ -295,14 +321,13 @@ pub(crate) fn unwrap_core(mesh: &mut Mesh, padding_texels: f32, resolution: u32,
     Ok((charts.len(), source))
 }
 
-/// The ids of `charts` grouped by material, in material order and in chart order within each,
-/// from one pass over the charts.
-fn charts_by_material(charts: &[Chart]) -> BTreeMap<usize, Vec<usize>> {
-    let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-    for (id, chart) in charts.iter().enumerate() {
-        groups.entry(chart.material).or_default().push(id);
-    }
-    groups
+/// (material, chart id) for every chart, sorted by material and in chart order within each
+/// material, so each material's charts are one run.
+fn charts_by_material(charts: &[Chart]) -> Result<Vec<(usize, usize)>> {
+    let mut ids = try_vec(charts.len(), "unwrap charts")?;
+    ids.extend(charts.iter().enumerate().map(|(id, chart)| (chart.material, id)));
+    ids.sort_by_key(|&(material, _)| material);
+    Ok(ids)
 }
 
 /// Shelf-pack rectangles of world `sizes` (each grown by `pad` texels per side) into a square of
@@ -310,15 +335,18 @@ fn charts_by_material(charts: &[Chart]) -> BTreeMap<usize, Vec<usize>> {
 /// resolution used, texel offset per rectangle). The resolution doubles when the padding alone
 /// cannot fit (very many charts), so the result always fits in 0..1.
 fn pack(sizes: &[Vec2], mut res: f32, pad: f32) -> Result<(f32, f32, Vec<Vec2>)> {
-    let mut order: Vec<usize> = (0..sizes.len()).collect();
+    let mut order: Vec<usize> = try_vec(sizes.len(), "unwrap charts")?;
+    order.extend(0..sizes.len());
     order.sort_by(|a, b| sizes[*b].y.total_cmp(&sizes[*a].y));
-    let place = |s: f32, res: f32| -> Option<Vec<Vec2>> {
-        let mut out = vec![Vec2::ZERO; sizes.len()];
+    let mut out = try_vec(sizes.len(), "unwrap charts")?;
+    out.resize(sizes.len(), Vec2::ZERO);
+    // Writes every offset into `out` and returns true when all rectangles fit.
+    let place = |out: &mut [Vec2], s: f32, res: f32| -> bool {
         let (mut x, mut y, mut shelf) = (0.0f32, 0.0f32, 0.0f32);
         for &i in &order {
             let r = sizes[i] * s + Vec2::splat(2.0 * pad);
             if r.x > res {
-                return None;
+                return false;
             }
             if x + r.x > res {
                 y += shelf;
@@ -326,15 +354,15 @@ fn pack(sizes: &[Vec2], mut res: f32, pad: f32) -> Result<(f32, f32, Vec<Vec2>)>
                 shelf = 0.0;
             }
             if y + r.y > res {
-                return None;
+                return false;
             }
             out[i] = Vec2::new(x, y);
             x += r.x;
             shelf = shelf.max(r.y);
         }
-        Some(out)
+        true
     };
-    while place(0.0, res).is_none() {
+    while !place(&mut out, 0.0, res) {
         res *= 2.0;
         if res > MAX_PACK_RES {
             return Err(MeshOpsError::Invalid("too many UV charts to pack".into()));
@@ -342,10 +370,11 @@ fn pack(sizes: &[Vec2], mut res: f32, pad: f32) -> Result<(f32, f32, Vec<Vec2>)>
     }
     let largest = sizes.iter().map(|s| s.max_element()).fold(0.0f32, f32::max);
     if largest <= 0.0 {
-        return Ok((0.0, res, place(0.0, res).unwrap_or_default()));
+        let fits = place(&mut out, 0.0, res);
+        return Ok((0.0, res, if fits { out } else { Vec::new() }));
     }
     let (mut lo, mut hi) = (0.0f32, (res - 2.0 * pad).max(0.0) / largest);
-    if place(hi, res).is_some() {
+    if place(&mut out, hi, res) {
         lo = hi;
     }
     for _ in 0..40 {
@@ -353,9 +382,10 @@ fn pack(sizes: &[Vec2], mut res: f32, pad: f32) -> Result<(f32, f32, Vec<Vec2>)>
             break;
         }
         let mid = 0.5 * (lo + hi);
-        if place(mid, res).is_some() { lo = mid } else { hi = mid }
+        if place(&mut out, mid, res) { lo = mid } else { hi = mid }
     }
-    Ok((lo, res, place(lo, res).unwrap_or_default()))
+    let fits = place(&mut out, lo, res);
+    Ok((lo, res, if fits { out } else { Vec::new() }))
 }
 
 impl Mesh {
@@ -580,8 +610,7 @@ mod tests {
     fn unwrap_many_materials_groups_charts_once() {
         let chart = |material| Chart { material, t: Vec3::X, b: Vec3::Y, rot: Vec2::X, lo: Vec2::ZERO, hi: Vec2::ONE, offset: Vec2::ZERO };
         let charts: Vec<Chart> = [3, 0, 3, 1, 0, 3].into_iter().map(chart).collect();
-        let groups: Vec<(usize, Vec<usize>)> = charts_by_material(&charts).into_iter().collect();
-        assert_eq!(groups, vec![(0, vec![1, 4]), (1, vec![3]), (3, vec![0, 2, 5])]);
+        assert_eq!(charts_by_material(&charts).unwrap(), vec![(0, 1), (0, 4), (1, 3), (3, 0), (3, 2), (3, 5)]);
         // Many single-chart materials: every chart lands in its own material's 0..1 square.
         let mut p = Vec::new();
         let mut idx = Vec::new();
@@ -603,17 +632,18 @@ mod tests {
     #[test]
     fn weld_ids_survive_extreme_and_non_finite_positions() {
         let p = [Vec3::new(-3e38, 0.0, 0.0), Vec3::new(3e38, 0.0, 0.0), Vec3::new(3e38, 0.0, 0.0), Vec3::new(0.0, 0.0, 0.0)];
-        assert_eq!(weld_ids(&p), vec![0, 1, 1, 2], "far-apart points stay apart and equal points weld");
+        assert_eq!(weld_ids(&p).unwrap(), vec![0, 1, 1, 2], "far-apart points stay apart and equal points weld");
         let q = [Vec3::ZERO, Vec3::X, Vec3::new(f32::NAN, 0.0, 0.0), Vec3::X];
-        let ids = weld_ids(&q);
+        let ids = weld_ids(&q).unwrap();
         assert_eq!((ids[0], ids[1], ids[3]), (0, 1, 1));
         assert!(crate::weld(&[[0.0, 0.0, 0.0], [f32::NAN, 0.0, 0.0]], &crate::Limits::default()).is_err());
         // The grid follows a diagonal far below 1e-6, and a far-away point welds with its copy.
         for s in [1e-20f32, 1e-30, 1e-40] {
             let tiny = [Vec3::ZERO, Vec3::new(s, 0.0, 0.0), Vec3::new(s, 0.0, 0.0), Vec3::new(2.0 * s, 0.0, 0.0)];
-            assert_eq!(weld_ids(&tiny), vec![0, 1, 1, 2], "scale {s}");
+            assert_eq!(weld_ids(&tiny).unwrap(), vec![0, 1, 1, 2], "scale {s}");
         }
-        assert_eq!(weld_ids(&[Vec3::splat(3e38); 2]), vec![0, 0]);
+        assert_eq!(weld_ids(&[Vec3::splat(3e38); 2]).unwrap(), vec![0, 0]);
+        assert_eq!(weld_ids(&[]).unwrap(), Vec::<u32>::new());
     }
 
     #[test]

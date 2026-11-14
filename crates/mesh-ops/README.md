@@ -82,8 +82,11 @@ their memory before using it, and the other slice functions reserve the arrays t
 returns `MeshOpsError::OutOfMemory` when that fails. The UV G-buffer checks its work and band
 entries in a first pass over the triangles and reserves its band lists in one piece before the
 second. `Bvh::new` then returns an empty tree and `UvGBuffer::new` a 1 × 1 uncovered buffer.
-`UvGBuffer::new` also returns that buffer when the input is over a default limit. The working memory of normals, tangents (MikkTSpace)
-and unwrapping is a fixed multiple of the input the limits allow and is not reserved that way.
+`UvGBuffer::new` also returns that buffer when the input is over a default limit. `weld`,
+`unwrap::weld_ids`, the unwrap functions and `Mesh::try_subdivided` reserve the arrays and tables
+they build and return `OutOfMemory` when a reservation fails. The working memory of
+normals and tangents (MikkTSpace) is a fixed multiple of the input the limits allow and is not
+reserved that way.
 
 ## Origin
 
