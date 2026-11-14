@@ -299,7 +299,8 @@ fn settle_end(c: CubicBez, t: f64, target: kurbo::Point, lo: f64, hi: f64) -> f6
 }
 
 /// The parameters of the points of `c` nearest `p0` and `p3`, searching from `t0` and
-/// `t3`, or `None` when they are not in order.
+/// `t3`, or `None` when they are not in order. Both ends may settle past `t3`, as when
+/// both end points are moved along a flat start.
 fn settled_range(
     c: CubicBez,
     t0: f64,
@@ -307,8 +308,8 @@ fn settled_range(
     p0: kurbo::Point,
     p3: kurbo::Point,
 ) -> Option<(f64, f64)> {
-    let s0 = settle_end(c, t0, p0, 0.0, t3);
-    let s3 = settle_end(c, t3, p3, s0, 1.0);
+    let s0 = settle_end(c, t0, p0, 0.0, 1.0);
+    let s3 = settle_end(c, t3.max(s0), p3, s0, 1.0);
     (s0 < s3).then_some((s0, s3))
 }
 
@@ -810,6 +811,30 @@ mod tests {
         let c = CubicBez::new(origin, top_left, Point::new(300.0, 1000.0), top_right);
         let end = Point::new(999.99999674, 999.9999999534);
         assert_placed_near(PathSeg::Cubic(c), origin, end, 1e-6);
+    }
+
+    // Craft patch (flat-end shear): when both end points are moved along a flat
+    // start, past the parameter of the end's height, the piece is cut at the
+    // points nearest both ends and runs left to right, as the curve does there.
+    #[test]
+    fn flat_start_piece_past_the_end_height_does_not_turn_back() {
+        let origin = Point::new(0.0, 0.0);
+        let (corner, top_right) = (Point::new(1000.0, 0.0), Point::new(1000.0, 1000.0));
+        let c = CubicBez::new(origin, Point::new(700.0, 0.0), corner, top_right);
+        let q = QuadBez::new(origin, corner, top_right);
+        let (p0, p1) = (Point::new(10.0, 0.0), Point::new(11.0, 1e-6));
+        for seg in [PathSeg::Cubic(c), PathSeg::Quad(q)] {
+            assert_placed_near(seg, p0, p1, 0.05);
+            let out = PositionedOutputSeg::from_seg(seg, p0, p1);
+            for piece in out.path.segments() {
+                let mut last = piece.start().x;
+                for k in 1..=200 {
+                    let x = piece.eval(k as f64 / 200.0).x;
+                    assert!(x >= last && x <= p1.x, "{seg:?}: {x} after {last}");
+                    last = x;
+                }
+            }
+        }
     }
 
     // Craft patch (flat-end shear): a piece placed between end points off its
