@@ -7,6 +7,8 @@
 
 use egui::{Id, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
+mod presence;
+pub use presence::{TabPresence, TabPresenceFrame};
 mod dialog;
 pub use dialog::DialogTabStyle;
 
