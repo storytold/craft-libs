@@ -262,9 +262,10 @@ fn find_end(data: &[u8]) -> Result<(u64, u64, u64, usize), ZipError> {
         // consistent candidate is found. This preserves useful damaged-ZIP diagnostics.
         fallback = Some(candidate);
 
+        let count = u16_at(data, candidate + 10).unwrap_or(u16::MAX);
         let size = u32_at(data, candidate + 12).unwrap_or(u32::MAX);
         let offset = u32_at(data, candidate + 16).unwrap_or(u32::MAX);
-        if size == u32::MAX || offset == u32::MAX {
+        if count == u16::MAX || size == u32::MAX || offset == u32::MAX {
             let locator = candidate.checked_sub(20).filter(|&at| u32_at(data, at) == Some(LOCATOR64));
             let valid = locator.and_then(|locator| find_zip64_end(data, locator)).and_then(|at| {
                 let count = u64_at(data, at + 32)?;
@@ -280,8 +281,7 @@ fn find_end(data: &[u8]) -> Result<(u64, u64, u64, usize), ZipError> {
                 continue;
             }
         } else {
-            let count = u16_at(data, candidate + 10).map(u64::from).unwrap_or(u64::MAX);
-            let Some((_, shift)) = locate_directory(data, count, size.into(), offset.into(), candidate) else {
+            let Some((_, shift)) = locate_directory(data, count.into(), size.into(), offset.into(), candidate) else {
                 continue;
             };
             if count == 0 && shift > 0 {

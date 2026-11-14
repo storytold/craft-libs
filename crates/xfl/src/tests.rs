@@ -320,6 +320,26 @@ fn zip64_archives_open_and_their_damage_is_named() {
 }
 
 #[test]
+fn zip64_count_sentinel_keeps_a_comment_eocd_from_masking_the_archive() {
+    let mut bytes = write(&[Raw::new("a.xml", b"x", false)], true);
+    let end = bytes.len() - 22;
+    let locator = end - 20;
+    let zip64_end = locator - 56;
+    let directory_size = u64_at(&bytes, zip64_end + 40).unwrap() as u32;
+    let directory_offset = u64_at(&bytes, zip64_end + 48).unwrap() as u32;
+    // Count requires ZIP64, while directory size and offset still fit in the classic fields.
+    bytes[end + 12..end + 16].copy_from_slice(&directory_size.to_le_bytes());
+    bytes[end + 16..end + 20].copy_from_slice(&directory_offset.to_le_bytes());
+    bytes[end + 20..end + 22].copy_from_slice(&22u16.to_le_bytes());
+    // This valid empty EOCD-shaped signature is inside the real end record's comment.
+    bytes.extend_from_slice(&END.to_le_bytes());
+    bytes.extend_from_slice(&[0; 18]);
+
+    let archive = Archive::open(&bytes).unwrap();
+    assert_eq!(archive.read("a.xml").unwrap().unwrap(), b"x");
+}
+
+#[test]
 fn self_extracting_archives_support_relative_and_adjusted_offsets() {
     let entries = [Raw::new("DOMDocument.xml", b"<DOMDocument/>", true), Raw::new("LIBRARY/a.xml", b"<DOMSymbolItem/>", false)];
     let stub = b"MZ\x90\0 self-extracting program with no ZIP signatures ".repeat(31);
