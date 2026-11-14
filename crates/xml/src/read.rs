@@ -25,6 +25,10 @@ pub struct Limits {
     /// 2,000,000: a tree node costs about 72 bytes before its strings, and text lies between
     /// elements at most, so this is about a million elements of an indented document.
     pub max_nodes: usize,
+    /// Most elements kept in a tree at once, independent of text nodes. Elements handed to a
+    /// streaming callback leave the count with everything inside them. Default unlimited; the
+    /// node limit already bounds element count for callers using default limits.
+    pub max_elements: usize,
     /// Most attributes on one start tag, namespace declarations and malformed ones included.
     /// With [`Names::Canonical`] it is also the most namespace declarations in scope at once.
     /// Default 1024.
@@ -38,8 +42,14 @@ pub struct Limits {
 }
 
 impl Limits {
-    pub const DEFAULT: Limits =
-        Limits { max_input: 256 * 1024 * 1024, max_depth: 256, max_nodes: 2_000_000, max_attrs: 1024, max_attrs_total: 4_000_000 };
+    pub const DEFAULT: Limits = Limits {
+        max_input: 256 * 1024 * 1024,
+        max_depth: 256,
+        max_nodes: 2_000_000,
+        max_elements: usize::MAX,
+        max_attrs: 1024,
+        max_attrs_total: 4_000_000,
+    };
 }
 
 impl Default for Limits {
@@ -277,7 +287,7 @@ impl<'a> Options<'a> {
         }
         let text = to_utf8(bytes);
         let mut events = Events::new(*self, &text, false);
-        let mut tree = Builder { opts: self, split, stack: Vec::new(), marks: Vec::new(), kept: 0, attrs: 0, root: None, at: 0 };
+        let mut tree = Builder { opts: self, split, stack: Vec::new(), marks: Vec::new(), kept: 0, elements: 0, attrs: 0, root: None, at: 0 };
         let mut err = tree.run(&mut events, &mut each).err();
         // What was open when the read stopped goes into its parent as it is.
         while let Some(el) = tree.stack.pop() {
@@ -636,8 +646,9 @@ struct Builder<'b, 'o> {
     split: &'b [&'b str],
     stack: Vec<El>,
     /// The node and attribute counts when each open element started.
-    marks: Vec<(usize, usize)>,
+    marks: Vec<(usize, usize, usize)>,
     kept: usize,
+    elements: usize,
     /// Attributes in the elements built so far and not handed out.
     attrs: usize,
     root: Option<El>,
@@ -696,7 +707,11 @@ impl Builder<'_, '_> {
                 if self.root.is_some() {
                     return Err(Error::Syntax { at: self.at, msg: "more than one root element".into() }.into());
                 }
-                self.marks.push((self.kept, self.attrs));
+                self.marks.push((self.kept, self.attrs, self.elements));
+                self.elements = self.elements.saturating_add(1);
+                if self.elements > self.opts.limits.max_elements {
+                    return Err(Error::TooManyElements(self.opts.limits.max_elements).into());
+                }
                 self.attrs = self.attrs.saturating_add(attrs.len());
                 if self.attrs > self.opts.limits.max_attrs_total {
                     return Err(Error::TooManyAttrsTotal(self.opts.limits.max_attrs_total).into());
@@ -720,7 +735,7 @@ impl Builder<'_, '_> {
 
     /// Attaches a complete element to its parent, hands it out, or makes it the root.
     fn finish<E: From<Error>>(&mut self, mut el: El, each: &mut impl FnMut(El) -> Result<(), E>) -> Result<(), E> {
-        let (mark, attrs_mark) = self.marks.pop().unwrap_or((0, 0));
+        let (mark, attrs_mark, elements_mark) = self.marks.pop().unwrap_or((0, 0, 0));
         if self.opts.drop_blank_text && el.children.iter().any(|n| matches!(n, Node::El(_))) {
             let is_text = |n: &Node| matches!(n, Node::Text(_));
             if el.children.iter().all(|n| !is_text(n) || matches!(n, Node::Text(t) if t.trim().is_empty())) {
@@ -737,6 +752,7 @@ impl Builder<'_, '_> {
             each(el)?;
             // The element and everything inside it have left the tree.
             self.kept = mark;
+            self.elements = elements_mark;
             self.attrs = attrs_mark;
         } else {
             self.push(Node::El(el))?;
