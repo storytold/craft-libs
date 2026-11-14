@@ -85,9 +85,12 @@ fn val<'a>(pr: Option<&'a El>, name: &str) -> Option<&'a str> {
     pr.and_then(|p| p.child(name)).and_then(|c| c.attr_or_plain("m:val"))
 }
 
-/// The argument held by child `name` of `e`.
+/// The argument held by child `name` of `e`, at `depth` (its structure's own depth plus one, as
+/// [`node`] counts it). It adds nothing of its own: a structure costs one depth unit, as
+/// [`write_equation`] spends one per level, so [`MAX_DEPTH`] means the same nesting in both and a
+/// round trip keeps what it read (wordcraft#6071).
 fn sub_arg(e: &El, name: &str, depth: usize) -> Arg {
-    e.child(name).map(|c| arg(c, depth + 1)).unwrap_or_default()
+    e.child(name).map(|c| arg(c, depth)).unwrap_or_default()
 }
 
 /// Read the math content of an element (`m:oMath`, `m:e`, `m:num`…).
@@ -103,6 +106,8 @@ fn arg(e: &El, depth: usize) -> Arg {
 }
 
 fn node(k: &El, depth: usize, out: &mut Arg) {
+    // The one depth unit this node costs: the depth of its arguments, and of the content of a
+    // transparent wrapper (`w:ins`, `mc:AlternateContent`…), which is what bounds that recursion.
     let d = depth + 1;
     match k.name.as_str() {
         "m:r" => {

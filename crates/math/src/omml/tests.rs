@@ -126,6 +126,50 @@ fn symbols_and_deletions_in_math() {
     assert_eq!(font, Some(None), "mapped symbol text takes the text font");
 }
 
+/// How many fractions deep the tree's first node goes (iterative: these chains are deeper than a
+/// test helper should recurse).
+fn frac_depth(a: &[MNode]) -> usize {
+    let (mut d, mut cur) = (0, a);
+    while let Some(MNode::Frac { num, .. }) = cur.first() {
+        d += 1;
+        cur = num;
+    }
+    d
+}
+
+/// A chain of `n` fractions, `inner` in the innermost numerator.
+fn frac_chain(n: usize, inner: &str) -> String {
+    let mut s = inner.to_string();
+    for i in (1..=n).rev() {
+        s = format!("<m:f><m:num>{s}</m:num><m:den>{}</m:den></m:f>", t(&format!("d{i}")));
+    }
+    s
+}
+
+/// wordcraft#6071: a structure costs one depth unit, as the writer spends one per level, so the
+/// reader keeps the nesting the writer is willing to write. It used to spend two (`node` added one
+/// and `sub_arg` another), so it gave up after `MAX_DEPTH / 2` structures and a round trip lost the
+/// innermost content.
+#[test]
+fn deep_fraction_chain_keeps_its_innermost_text() {
+    let mut m = read_omath(&omath(&frac_chain(MAX_DEPTH, &t("innermost"))), MathJc::CenterGroup);
+    assert_eq!(frac_depth(&m.nodes), MAX_DEPTH);
+    assert!(texts(&mut m).contains(&"innermost".to_string()), "{:?}", texts(&mut m));
+}
+
+/// wordcraft#6071: the limit still bounds what it bounded, one structure past `MAX_DEPTH`: the
+/// argument isn't read, and a chain far deeper than the limit stops there all the same.
+#[test]
+fn fraction_chain_past_the_limit_stops_there() {
+    let mut m = read_omath(&omath(&frac_chain(MAX_DEPTH + 1, &t("innermost"))), MathJc::CenterGroup);
+    assert_eq!(frac_depth(&m.nodes), MAX_DEPTH + 1);
+    assert!(!texts(&mut m).contains(&"innermost".to_string()), "past the limit: {:?}", texts(&mut m));
+    // Well past it (within the XML reader's own depth limit): bounded, and no panic.
+    let mut m = read_omath(&omath(&frac_chain(100, &t("innermost"))), MathJc::CenterGroup);
+    assert_eq!(frac_depth(&m.nodes), MAX_DEPTH + 1);
+    assert!(!texts(&mut m).contains(&"innermost".to_string()));
+}
+
 /// Hostile nesting through the wrappers is bounded (no stack overflow, no panic).
 #[test]
 fn deeply_nested_wrappers_are_bounded() {
