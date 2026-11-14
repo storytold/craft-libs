@@ -367,15 +367,6 @@ impl<W: Write + Seek> FileEncoder<W> {
     }
 }
 
-#[cfg(any(
-    feature = "pcm-encode",
-    feature = "flac-encode",
-    feature = "aac-encode",
-    feature = "alac-encode",
-    feature = "mp3-encode",
-    feature = "ac3-encode",
-    feature = "eac3-encode"
-))]
 impl EncodeOptions {
     /// Whether a file of `channels` channels at `sample_rate` can be written with these options:
     /// `Ok`, or the error [`FileEncoder::new`] and [`encode`] would return, with nothing written.
@@ -407,7 +398,31 @@ impl EncodeOptions {
         }
         // The encoder a file would get, on a sink that is thrown away: what it accepts and the
         // rate it settles on are then the writer's by construction.
-        Ok(FileEncoder::new(std::io::Cursor::new(Vec::new()), self, sample_rate, channels)?.bitrate())
+        #[cfg(any(
+            feature = "pcm-encode",
+            feature = "flac-encode",
+            feature = "aac-encode",
+            feature = "alac-encode",
+            feature = "mp3-encode",
+            feature = "ac3-encode",
+            feature = "eac3-encode"
+        ))]
+        {
+            Ok(FileEncoder::new(std::io::Cursor::new(Vec::new()), self, sample_rate, channels)?.bitrate())
+        }
+        #[cfg(not(any(
+            feature = "pcm-encode",
+            feature = "flac-encode",
+            feature = "aac-encode",
+            feature = "alac-encode",
+            feature = "mp3-encode",
+            feature = "ac3-encode",
+            feature = "eac3-encode"
+        )))]
+        {
+            let _ = (sample_rate, channels);
+            Err(AudioError::Unsupported("streaming encoders are not built".into()))
+        }
     }
 }
 

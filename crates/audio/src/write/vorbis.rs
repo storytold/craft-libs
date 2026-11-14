@@ -64,6 +64,7 @@ pub fn encode(buf: &AudioBuffer, kbps: u32) -> Result<Vec<u8>> {
     }
 }
 
+/// Ogg Vorbis encoding is unavailable on WASM; returns an unsupported-format error.
 #[cfg(target_arch = "wasm32")]
 pub fn encode(_buf: &AudioBuffer, _kbps: u32) -> Result<Vec<u8>> {
     Err(AudioError::Unsupported("Ogg Vorbis files are exported by the desktop app".into()))
@@ -91,6 +92,8 @@ mod tests {
         for channels in [1, 2] {
             let audio = AudioBuffer::new(48_000, channels, 512);
             let opts = crate::EncodeOptions::new(crate::EncodeFormat::Ogg);
+            assert!(opts.check(48_000, channels).is_ok());
+            assert_eq!(opts.bitrate(48_000, channels).unwrap(), None);
             let direct = encode(&audio, 192).unwrap();
             let generic = crate::encode(&audio, &opts).unwrap();
             assert!(direct.starts_with(b"OggS"));

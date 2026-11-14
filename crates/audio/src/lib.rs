@@ -472,7 +472,8 @@ pub enum RateControl {
     /// set of rates (MP3, AC-3) uses the highest one not above it; a rate outside what the
     /// stream can carry is moved to the nearest one inside. AAC is written at 6 kbit/s or a
     /// quarter of the sample rate per channel at least: from about half of that down its encoder
-    /// codes silence.
+    /// codes silence. Vorbis treats this as a VBR target (64–500 kbit/s), falling back to
+    /// a quality preset when that target is unsupported; it does not promise a constant bitrate.
     Bitrate(u32),
     /// A constant quality from 0.0 (smallest) to 1.0 (best), at whatever bit rate each frame
     /// needs. AAC only; values outside the range are clamped, and NaN is an error.
