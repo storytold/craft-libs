@@ -972,7 +972,8 @@ impl<'segs> Sweeper<'segs> {
                             y_int,
                             self.y,
                             self.events.intersection,
-                            &self.line,
+                            // Craft patch (clippy lints): the format arguments are taken by reference already.
+                            self.line,
                         );
                     }
                 }
