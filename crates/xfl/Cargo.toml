@@ -13,4 +13,3 @@ workspace = true
 [dependencies]
 miniz_oxide = "0.8"
 thiserror = { workspace = true }
-

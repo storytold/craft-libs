@@ -1294,11 +1294,16 @@ fn fit_quadratic(c: CubicBez) -> Quadratic {
     if p1.y - p0.y < 1e-12 || p2.y - p1.y < 1e-12 {
         // p0.x * (y - p3.y) / (p0.y - p3.y)
         // + p3.x * (y - p0.y) / (p3.y - p0.y)
-        return Quadratic::new([
-            (p0.x * p3.y - p3.x * p0.y) / (p3.y - p0.y),
-            (p3.x - p0.x) / (p3.y - p0.y),
-            0.0,
-        ]);
+        let c1 = (p3.x - p0.x) / (p3.y - p0.y);
+        let mut c0 = (p0.x * p3.y - p3.x * p0.y) / (p3.y - p0.y);
+        if !c0.is_finite() {
+            // Craft patch (huge chord): the product of an x coordinate and a
+            // height overflows when the two together pass f64::MAX, for example
+            // x near 1e305 with heights near 1e4, and the difference of the two
+            // products is then NaN. Take the line through p0 with slope c1.
+            c0 = p0.x - c1 * p0.y;
+        }
+        return Quadratic::new([c0, c1, 0.0]);
     }
 
     // The interpolation multiplies two heights together, which overflows once a
@@ -2771,6 +2776,25 @@ mod test {
         assert!((ep.q.eval(1.0) - 1.0).abs() < 1e-9);
         assert!(ep.dmin.abs() < 1e-9);
         assert!(ep.dmax.abs() < 1e-9);
+    }
+
+    #[test]
+    fn short_curve_chord_with_huge_x() {
+        // A vertical curve one ulp tall at y = 1e4, so `fit_quadratic` takes a
+        // chord. The product of an x coordinate and a height is above f64::MAX.
+        let y0 = 1e4f64;
+        let y3 = f64::from_bits(y0.to_bits() + 1);
+        for x in [1e305, -1e305, 5e307] {
+            let c = CubicBez::new((x, y0), (x, y0), (x, y3), (x, y3));
+            let q = fit_quadratic(c);
+            assert!(q.coeffs().iter().all(|c| c.is_finite()), "x = {x:e}: {q:?}");
+            assert_eq!(q.eval(y0), x, "x = {x:e}");
+            assert_eq!(q.eval(y3), x, "x = {x:e}");
+
+            let approx = QuadraticApprox::from_cubic(c, None);
+            assert_eq!(approx.dmin, 0.0, "x = {x:e}");
+            assert_eq!(approx.dmax, 0.0, "x = {x:e}");
+        }
     }
 
     // At some point, this test case looped infinitely.

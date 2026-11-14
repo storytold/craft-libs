@@ -27,3 +27,6 @@ pub mod paths;
 pub mod raster;
 #[cfg(feature = "write")]
 pub mod write;
+#[cfg(feature = "write-raster")]
+#[path = "write/raster.rs"]
+pub mod write_raster;
