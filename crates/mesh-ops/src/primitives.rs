@@ -10,8 +10,8 @@ use std::f32::consts::{PI, TAU};
 
 use glam::{DVec2, Vec2, Vec3};
 
-use crate::mesh::{Mesh, SubMesh, unit};
-use crate::{Limits, MeshOpsError, Result, check_limit};
+use crate::mesh::{Mesh, Split, SubMesh, unit};
+use crate::{Limits, MeshOpsError, Result};
 
 /// A UV-space rectangle: origin and size.
 #[derive(Clone, Copy, Debug)]
@@ -106,13 +106,12 @@ impl Builder {
         }
     }
 
-    /// The mesh of one material, with tangents. Computing them can split vertices, so the vertex
-    /// count is checked against the limit again afterwards.
+    /// The mesh of one material, with tangents. Computing them can split vertices; a copy that
+    /// would take the vertex count over the limit is `TooLarge` before it is made.
     fn finish(self, material: &str) -> Result<Mesh> {
         let max_vertices = self.limits.max_vertices;
         let mut m = self.into_mesh(material)?;
-        m.try_compute_tangents()?;
-        check_limit("vertex count", m.vertex_count(), max_vertices)?;
+        m.try_compute_tangents_splitting(Split::UpTo(max_vertices))?;
         Ok(m)
     }
 
@@ -816,7 +815,12 @@ mod tests {
         let m = quad(usize::MAX).unwrap();
         let copies = m.positions.len() - 4;
         assert!(copies > 0, "the mirrored triangle's corners get their own vertices");
-        assert!(matches!(quad(4), Err(MeshOpsError::TooLarge { what: "vertex count", got, limit: 4 }) if got == m.positions.len() as u64));
+        // The error comes at the first copy past the limit, before any later copy is made.
+        assert!(matches!(quad(4), Err(MeshOpsError::TooLarge { what: "vertex count", got: 5, limit: 4 })));
+        let under = m.positions.len() - 1;
+        assert!(
+            matches!(quad(under), Err(MeshOpsError::TooLarge { what: "vertex count", got, limit }) if got == m.positions.len() as u64 && limit == under as u64)
+        );
         assert_eq!(quad(m.positions.len()).unwrap().positions.len(), m.positions.len());
     }
 

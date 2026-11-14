@@ -67,6 +67,16 @@ pub const MAX_MIKKTSPACE_VALENCE: usize = 2_048;
 /// a sphere with 2,048 segments take about 3.8e7.
 pub const MAX_MIKKTSPACE_WELD_WORK: u64 = 1 << 27;
 
+/// The vertex copies [`Mesh::try_compute_tangents_splitting`] may make for different tangent
+/// frames.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Split {
+    /// Copies while the vertex count stays within this; a copy past it is `TooLarge`.
+    UpTo(usize),
+    /// No copies: a vertex that needs one is an `Invalid` error naming it.
+    Refuse,
+}
+
 /// `v` at unit length, also when its squared length overflows or rounds to zero. `None` for a
 /// zero or non-finite vector.
 pub(crate) fn unit(v: Vec3) -> Option<Vec3> {
@@ -509,6 +519,13 @@ impl Mesh {
     /// [`Mesh::compute_tangents`], or `OutOfMemory` with the mesh unchanged. MikkTSpace's own
     /// working memory is not reserved this way.
     pub fn try_compute_tangents(&mut self) -> Result<()> {
+        self.try_compute_tangents_splitting(Split::UpTo(usize::MAX))
+    }
+
+    /// [`Mesh::try_compute_tangents`] with `split` deciding what happens at the first copy a
+    /// split would make that `split` does not allow. The error comes before that copy is
+    /// reserved, with the mesh unchanged.
+    pub(crate) fn try_compute_tangents_splitting(&mut self, split: Split) -> Result<()> {
         let n = self.positions.len();
         let computed_normals = if self.normals.len() != n { Some(self.smooth_normals()?) } else { None };
         let zero_uvs = if self.uvs.len() != n { Some(try_filled(n, Vec2::ZERO, "UVs")?) } else { None };
@@ -564,6 +581,12 @@ impl Mesh {
                     Some(&copy) => copy,
                     None => match u32::try_from(n + copies.len()) {
                         Ok(copy) => {
+                            match split {
+                                Split::UpTo(max_vertices) => check_limit("vertex count", (copy as usize).saturating_add(1), max_vertices)?,
+                                Split::Refuse => {
+                                    return Err(MeshOpsError::Invalid(format!("vertex {v} is shared by triangles with different tangent frames")));
+                                }
+                            }
                             reserved(copies.try_reserve(1), "tangents")?;
                             reserved(copy_of.try_reserve(1), "tangents")?;
                             copies.push((v, t));
@@ -2249,6 +2272,23 @@ mod tests {
         }
         // The slice form returns one tangent per input vertex, which cannot hold both frames.
         assert!(matches!(crate::tangents(&positions, &normals, &uvs, &indices, &Limits::default()), Err(MeshOpsError::Invalid(_))));
+    }
+
+    #[test]
+    fn tangent_splits_stop_at_the_first_copy_they_may_not_make() {
+        let (positions, normals, uvs, indices) = opposite_handedness();
+        // The second triangle's first corner, vertex 1, is the first to need a copy.
+        let e = crate::tangents(&positions, &normals, &uvs, &indices, &Limits::default()).unwrap_err();
+        assert_eq!(e.to_string(), "invalid mesh: vertex 1 is shared by triangles with different tangent frames");
+        let mesh = Mesh::from_slices(&positions, Some(&normals), Some(&uvs), &indices, &Limits::default()).unwrap();
+        // Room for one of the two copies: the second is `TooLarge` and the mesh stays as it was.
+        let mut m = mesh.clone();
+        let r = m.try_compute_tangents_splitting(Split::UpTo(5));
+        assert!(matches!(r, Err(MeshOpsError::TooLarge { what: "vertex count", got: 6, limit: 5 })), "{r:?}");
+        assert_eq!(m, mesh);
+        let mut m = mesh.clone();
+        m.try_compute_tangents_splitting(Split::UpTo(6)).unwrap();
+        assert_eq!(m.positions.len(), 6);
     }
 
     #[test]

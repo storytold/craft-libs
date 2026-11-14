@@ -164,11 +164,7 @@ pub fn smooth_normals(positions: &[[f32; 3]], indices: &[u32], limits: &Limits) 
 /// such vertices instead.
 pub fn tangents(positions: &[[f32; 3]], normals: &[[f32; 3]], uvs: &[[f32; 2]], indices: &[u32], limits: &Limits) -> Result<Vec<[f32; 4]>> {
     let mut mesh = Mesh::from_slices(positions, Some(normals), Some(uvs), indices, limits)?;
-    mesh.try_compute_tangents()?;
-    if let Some(k) = mesh.indices.iter().position(|&v| v as usize >= positions.len()) {
-        let vertex = indices.get(k).copied().unwrap_or_default();
-        return Err(MeshOpsError::Invalid(format!("vertex {vertex} is shared by triangles with different tangent frames")));
-    }
+    mesh.try_compute_tangents_splitting(mesh::Split::Refuse)?;
     let mut out = try_vec(mesh.tangents.len(), "tangents")?;
     out.extend(mesh.tangents.iter().map(|t| t.to_array()));
     Ok(out)
