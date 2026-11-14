@@ -439,8 +439,9 @@ filter (an input they refuse is refused in milliseconds, without sweeping); the 
 - **The dry sweep.** `src/meter.rs` builds the segments the topology is built from (the monotone pieces of every path, all the paths of
   an operation in one arena, by the same call of `linesweeper`) and runs `linesweeper`'s `Sweeper` over them, at the same tolerance, through
   its public interface, in the loop `Topology::from_paths` runs: each sweep line, each range of it, each position of the range, the pieces
-  that go down from it and the horizontal fragments that start there. It builds nothing from what it sees, and counts. Nothing in
-  `vendor/linesweeper` is patched, so an app that takes `linesweeper` 0.5 from the registry gets the same sweep. It is the same sweep, and tests
+  that go down from it and the horizontal fragments that start there. It builds nothing from what it sees, and counts. The
+  dry sweep asks nothing of `linesweeper` that the registry's 0.5 lacks, so an app that takes it from there gets the same sweep (the copy in `vendor/linesweeper`
+  adds one bound, on a loop that does not end: Known limits). It is the same sweep, and tests
   show it: for 21 inputs (the fixtures of the suites, quadratics, a path that starts with no move, several paths) the segments, their
   entrances and exits, and the number of pieces the dry sweep counts are those of the topology, whose `compute_positions` has an entry for every
   output segment made (the coincident ones that are merged out afterwards too).
@@ -523,7 +524,7 @@ filter (an input they refuse is refused in milliseconds, without sweeping); the 
   index modulo 7 (a tenth, a thousandth, a ten-thousandth), stroked 6 wide. Its first window is 256 segments, 1,025 elements with miters or bevels and 1,280 with round joins: 14 stacks
   of 18 copies of a line (a point and the one 14 on are the same), and the stacks cross one another all along their length. Beside the star of 1,291 points (9.2 s, counting 3.8,
   in the same run; a release build under a load of 8 to 12) the sweep of the window took 0.62, 0.78 and 0.77 s with miters and 0.94, 2.6 and 4.5 s with round joins, and the dry
-  sweep counted 0.06, 0.07 and 0.10, and 0.08, 0.40 and 0.63. Time over work, taking the star's as 1: 4.3, 4.8 and 3.3, and 4.8, 2.7 and 3.0 (against 0.4 to 1.4 for the kinds measured below).
+  sweep counted 0.06, 0.07 and 0.10, and 0.08, 0.40 and 0.63. Time over work, taking the star's as 1: 4.3, 4.8 and 3.3, and 4.8, 2.7 and 3.0 (the kinds measured below are 0.4 to 1.4).
   The time is in `linesweeper`'s scan of the neighbours of each segment it puts in its line and of the events that scan pushes (an instrumented copy of the sweep, which is not kept: 6.2
   million neighbours looked at and 1.2 million events for the miter window, 9.1 million and 1.6 million for the round one, a thousandth of jitter) and, with round joins, 1.6 to 3 million steps of the comparison of two
   cubics at the two finer jitters. The dry sweep sees the ranges and pieces that the sweep returns, and not those.
@@ -532,7 +533,7 @@ filter (an input they refuse is refused in milliseconds, without sweeping); the 
   (a bound: nine places for two arcs that cross twice) 1. Counting them is a pass of every pair of bounds that overlap, a quarter to the whole of the sweep of rings, strokes or a circle of
   100,000 cubics, so it is made once, when the sweep first reaches a crowd (a tangle of 4 million; the windows reach it at 150 segments, whose places are 0.09 s), and not for inputs
   that never do. It is not made from the density of the input, which other shapes in it would dilute (25,000 squares around the window leave its price as it was). Time over work is now 0.97, 1.22 and 1.22 with miters and 0.36, 0.98
-  and 1.70 with round joins: the price of the round windows is a bound that does not move with the jitter, 2.8 times too high at a tenth and 1.7 times too low at a ten-thousandth, where the steps of
+  and 1.70 with round joins (the band of this fixture is 0.36 to 1.70, wider than the 0.4 to 1.4 of the kinds measured below, at both ends for round joins): the price of the round windows is a bound that does not move with the jitter, 2.8 times too high at a tenth and 1.7 times too low at a ten-thousandth, where the steps of
   the comparisons of the arcs (which grow as the gap falls) are not in it. A stroke of 18,000 segments of the fixture is refused at its 16th window, not at its 62nd (110 s of sweeps). Twenty other fixtures
   of the suites (stars, hatches, fans, stacks, pies, arcs, rings, meshes, strokes), run to the end, and the star of 1,291 points are priced as they were, for their places are less than their terms count (the star at 0.76 of them, the hatch of 400 and
   400 strokes at 0.73), and they are what the weight of a place is held to. The fixture lacks what it was not made with: its copies are exact (a spine whose points are moved by a hash of their index has no two
@@ -560,7 +561,7 @@ filter (an input they refuse is refused in milliseconds, without sweeping); the 
   operation sweeps (2,000 pies of 30 slices hold 2.4 GB in it, which the cache's term bounds). Every input a review found, and the two classes the scan named, are refused by the meter alone, with the other limits lifted (tests in `tests/it/meter.rs`;
   the table of costs gives the times).
 
-What it does not bound is in Known limits: a step of the sweep is not interrupted, the weights are a fit (near the budget the time is 0.4 to 1.4 of the work, 0.4 to 1.7 for the windows of a stroke that goes back and forth over one line ("The crossings"), and far under
+What it does not bound is in Known limits: a step of the sweep is not interrupted, the weights are a fit (near the budget the time is 0.4 to 1.4 of the work, 0.36 to 1.70 for the windows of a stroke that goes back and forth over one line ("The crossings": 0.97 to 1.22 with miters, 0.36 to 1.70 with round joins), and far under
 it for the kinds the memory and the stacks of copies are tuned to refuse), the steps of comparisons are an estimate from the curves (0.4 of the work for smooth shapes moved in a random
 direction, 1 for circles and ellipses, up to 2.2 for crossing waves, which the counts before the sweep refuse in numbers), and the stages after the sweep.
 
@@ -655,13 +656,20 @@ or so, measured once in a release build:
   lifted (`real_crossings`, `crossed_work` and the rest), 600 closed loops of two cubics through one point exactly (1,200 cubics, `scurves`) are
   refused by the meter only after 33 s and 1.0 GB, and 800 (1,600 cubics) after 77 s and 1.9 GB (400 take 7.2 s and 0.5 GB, 300 3.8 s): the step in which they cross is
   made before it is counted. By default the counts of crossings refuse them, in 1 to 20 ms.
-- A step of the sweep can fail to end, and the pricing and the meter do not see it. The spine of 40 segments that goes back and forth between (0, 0) and (100, 20), every point moved
-  up by 6e-5 times a hash of its index (`hash01(i, 77)` in `testutil.rs`; the fixture of "The crossings" with its copies broken up), stroked 6 wide with round joins, did not come back from
-  `try_outline_stroke` in 150 s (a release build); at 20 and 30 segments it takes 0.05 and 0.12 s, and at 40 with miters 0.03 s. An instrumented copy of the sweep (not kept) pushed 10 million
-  events a second for 24 s with the pairs of segments it had compared and the steps of their comparison no more at 24 s than at 2 s, in the scans of `Sweeper::next_line`, which is where the
-  meter is not (it counts what a step has made when it returns). Every limit of the pricing is at 16% or less for the window (the limit on crossings at 2%), and its places are too few
-  for the price of "The crossings" to be anything. It is not bounded here: it wants a bound inside the sweep (the copy in `vendor/linesweeper`) or the refusal of round joins whose arcs
-  lie a few tolerances from one another, which this crate has no count for.
+- A step of the sweep can fail to end, which no price sees. The spine of "The crossings" with its copies broken up (`hash_jittered_spine` in `testutil.rs`: `n` segments between
+  (0, 0) and (100, 20), every point moved up by six times a jitter times a hash of its index), stroked 6 wide with round joins, did not come back from `try_outline_stroke` for 40 segments and
+  a jitter of 1e-5, nor for 80 and 1e-3 (a hundred seconds and more; an instrumented copy of the sweep, not kept, handled 2 million events at one height, and the next line was not reached in the hundred seconds),
+  with every limit of the pricing at 16% or less of its value (the crossings at 2%). The loop is `Sweeper::next_line`'s, over the intersection events at one height: where many curves lie within
+  the tolerance of one another and cross (here the arcs of the round joins, 20 to 60 at each end of the spine), the order the sweep gives them is not transitive, and swapping a pair makes events
+  for its neighbours at that height that swap them back. It is not a cost, and the meter, which counts what a step has made when it returns, never sees the end of a step. The copy of `linesweeper` in
+  `vendor/linesweeper` bounds the loop (its README: after 4,096 events at one height it keeps the pairs they are of, and stops, with a panic, when the events since are more than 8 for each pair;
+  21 inputs of the tests handled each pair 1.5 times at the most), the dry sweep takes that panic for a refusal (`TooComplex`, with no sweep built, 0.12 to 1.2 s for the inputs below) and the
+  sweep without the meter (under the gate, or with the meter off) reports `Degenerate`. **A `linesweeper` taken from the registry has no such bound** and does not return, so an app that takes it
+  from there needs the same `[patch.crates-io]` entry as the vendored copy. Measured (a release build, the spine at 40, 80 and 120 segments; refused, in seconds / admitted, in seconds):
+  round joins at a jitter of 1e-6 admitted at 20 to 120 segments (0.05 to 5.3 s); at 1e-5 refused at 40, 80 and 120 (0.12, 0.51 and 1.2 s), admitted at 20; at 1e-4 refused at 120 (0.53 s), admitted at 20 to 80 (to 1.1 s);
+  at 1e-3 refused at 80 and 120 (0.17 and 0.33 s), admitted at 20 and 40; at 1e-2 admitted at 20 to 120 (to 0.68 s). Other hashes of the same spine, 80 segments at 1e-5 and 1e-3, are refused in 0.16 to 0.5 s, and
+  so are the spine mirrored left to right (0.2 and 0.5 s); miter and bevel joins at 80 and 120 segments are admitted at both jitters (0.09 to 0.8 s). Which arrangements of arcs make the loop was not found, only that the
+  bound catches those measured, and an input the bound refuses that would have ended is an input whose events at one height repeated each pair eight times, which none measured did.
 - A debug build is slower than the weights say, and the meter holds it to release nanoseconds. The stroke of "The crossings" with round joins took 18.6, 88 and 178 s in a build with
   debug assertions (1.9, 5.2 and 9.1 s in a release build; a load of 8 to 12) at the three jitters, most of it in `polycool`, which `linesweeper` calls for the roots of the comparison of two
   cubics and a debug build compiles unoptimised: the workspace builds it at opt-level 3 now, as it does `linesweeper`, and the strokes take 5.0, 12.0 and 20.2 s (with miters 2.6 and 3.2 s, against

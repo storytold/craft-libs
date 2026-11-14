@@ -1520,6 +1520,52 @@ mod tests {
         assert!((14..=17).contains(&swept), "{swept} of {} windows were swept", parts.len());
     }
 
+    /// The stroke of a spine that goes back and forth over one line, its points moved by a hash of their index (no two segments alike), swept
+    /// for ever where its round joins' arcs lay a few tolerances to a few thousand from one another: the intersection events at one height
+    /// swapped pairs back and forth and made events for the pairs beside them at that height again (80 segments, a thousandth of jitter, 20
+    /// million events and not past the height, and every pricing limit under 16% of its value). `linesweeper`'s copy here bounds the events at
+    /// one height (its README), the dry sweep takes the panic for what it is, and the stroke is refused before the sweep that does the same.
+    /// Miter and bevel joins have no such arcs, and are made, as are strokes with fewer arcs or arcs further apart. A stroke that goes on for
+    /// ever is run in a thread that is waited for, so that a sweep that does not end fails this test and does not hang it.
+    #[test]
+    fn a_stroke_whose_round_joins_swap_back_and_forth_for_ever_is_refused_before_its_sweep() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let wait = if cfg!(debug_assertions) { Duration::from_secs(240) } else { Duration::from_secs(60) };
+        let mirror = |p: BezPath| kurbo::Affine::scale_non_uniform(-1.0, 1.0) * p;
+        // The segments, the jitter, the join, whether it is mirrored; whether the stroke is refused.
+        let cases = [
+            (40, 1e-5, Join::Round, false, true),
+            (80, 1e-5, Join::Round, false, true),
+            (80, 1e-3, Join::Round, false, true),
+            (80, 1e-3, Join::Round, true, true),
+            (120, 1e-3, Join::Round, false, true),
+            (20, 1e-5, Join::Round, false, false),
+            (40, 1e-3, Join::Round, false, false),
+            (80, 1e-2, Join::Round, false, false),
+            (80, 1e-3, Join::Miter, false, false),
+            (80, 1e-5, Join::Bevel, false, false),
+        ];
+        for (n, jitter, join, mirrored, refused) in cases {
+            let name = format!("{n} segments, jitter {jitter:e}, {join:?} joins, mirrored {mirrored}");
+            let spine = crate::testutil::hash_jittered_spine(n, jitter);
+            let spine = if mirrored { mirror(spine) } else { spine };
+            let (sent, received) = mpsc::channel();
+            std::thread::spawn(move || {
+                work::reset();
+                let made = try_outline_stroke(&spine, 6.0, Cap::Butt, join, 4.0).map(|b| b.elements().len());
+                sent.send((made, work::take(Work::Sweeps), work::take(Work::MeteredSweeps))).ok();
+            });
+            let (made, swept, metered) = received.recv_timeout(wait).unwrap_or_else(|_| panic!("{name}: the sweep did not end in {wait:?}"));
+            if refused {
+                assert_eq!(made, Err(PathOpsError::TooComplex), "{name}");
+                assert_eq!((swept, metered), (0, 1), "{name}: refused by the dry sweep, before any sweep was built");
+            } else {
+                assert!(made.is_ok(), "{name}: {made:?}");
+            }
+        }
+    }
+
     /// A subpath stroked in windows covers what the stroker covers in one piece, open or closed,
     /// for caps and joins of every kind. (Not to the last digit: where the stroker's inner joins
     /// loop, the one outline and the windows' outlines lose a different sliver, a millionth of the area.)

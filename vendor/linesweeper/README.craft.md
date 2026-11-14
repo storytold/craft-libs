@@ -16,6 +16,7 @@ holds `upstream_revision`. `local_patches` describes the local patch.
 | File | Change |
 |---|---|
 | `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
+| `src/sweep/sweep_line.rs` | `Sweeper::next_line` bounds the loop over the intersection events at one height. Where many curves lie within the tolerance of one another and cross, the order the sweep gives them is not transitive and swapping a pair makes events for its neighbours at that height that swap them back, for ever (a stroke of 80 segments that goes back and forth over one line, with round joins and points moved by a hash of their index, was still at one height after 2 million events, and after a hundred seconds). After 4,096 events at one height the pairs they are of are kept, and the sweep panics with `linesweeper (craft patch): the intersection events at one height did not end` once the events since are more than 8 for each pair kept; 21 inputs of the craft-pathops tests (stacks of copies, pencils of lines, fans, windows of strokes, meshes, stars) handled each pair 1.5 times at the most. A caller that wraps the sweep in `catch_unwind` (craft-pathops does) gets an error and not a hang. Code comments label the change `Craft patch (event loop bound)`. A `linesweeper` taken from the registry has no such bound. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 

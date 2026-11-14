@@ -21,7 +21,7 @@ use crate::common::{
 
 const NZ: FillRule = FillRule::NonZero;
 
-/// The dry sweeps that run to the budget hold up to a gigabyte, and the test binary runs tests together: those that run one take turns.
+/// The dry sweeps that run to the budget hold up to about 2.7 GB (the README, "Known limits"), and the test binary runs tests together: those that run one take turns.
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
 /// Every limit that prices a sweep before it is made is lifted, and the meter is as it is by default: it alone can say no.

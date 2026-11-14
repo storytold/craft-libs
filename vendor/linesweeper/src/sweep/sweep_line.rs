@@ -2,6 +2,7 @@
 //!
 //! This algorithm is documented in `docs/sweep.typ`.
 
+use rustc_hash::FxHashSet;
 use std::cell::{RefCell, RefMut};
 
 #[cfg(feature = "slow-asserts")]
@@ -352,6 +353,16 @@ pub struct Sweeper<'a> {
     conservative_comparisons: RefCell<ComparisonCache>,
 }
 
+/// The intersection events handled at one `y` before the pairs they are of are kept to see whether it goes on for ever (Craft patch, event loop bound).
+const EVENT_LOOP_FLOOR: usize = 4096;
+
+/// The events handled at one `y` for each pair that they have been of, past which it goes on for ever (Craft patch, event loop bound). The 21
+/// inputs measured (stacks of copies, pencils of lines, fans, windows of strokes, meshes, stars) handled each pair 1.5 times at the most.
+const EVENT_LOOP_REPEATS: usize = 8;
+
+/// What [`Sweeper::next_line`] panics with when the events at one `y` go on for ever (Craft patch, event loop bound).
+const EVENT_LOOP_MESSAGE: &str = "linesweeper (craft patch): the intersection events at one height did not end";
+
 impl<'segs> Sweeper<'segs> {
     /// Creates a new sweeper for a collection of segments, and with a
     /// given tolerance.
@@ -433,7 +444,22 @@ impl<'segs> Sweeper<'segs> {
         }
 
         // Process all the intersection events at this y.
+        //
+        // Craft patch (event loop bound): where many curves lie within the tolerance of one another and cross, the comparisons are not
+        // transitive (a is left of b and b of c, and a and c are close), and swapping a pair makes events for its neighbours at this same
+        // y that swap them back: the loop does not end, though nothing changes (a back and forth stroke of 80 segments with round joins
+        // was still on one y after 2 million events, and after a hundred seconds). What goes on for ever handles the same pairs again and again, so after
+        // `EVENT_LOOP_FLOOR` events the pairs are kept, and the sweep stops, with a panic that a caller wrapping the sweep catches, once the events
+        // handled since are more than `EVENT_LOOP_REPEATS` for each pair that has been handled.
+        let mut events_handled = 0usize;
+        let mut pairs_handled: Option<FxHashSet<(SegIdx, SegIdx)>> = None;
         while let Some(intersection) = self.events.next_intersection_at_y(y) {
+            events_handled += 1;
+            if events_handled > EVENT_LOOP_FLOOR {
+                let pairs = pairs_handled.get_or_insert_with(FxHashSet::default);
+                pairs.insert((intersection.left, intersection.right));
+                assert!(events_handled - EVENT_LOOP_FLOOR <= EVENT_LOOP_REPEATS * pairs.len(), "{}", EVENT_LOOP_MESSAGE);
+            }
             self.handle_intersection(intersection.left, intersection.right);
             self.check_invariants();
         }

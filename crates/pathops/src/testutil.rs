@@ -779,3 +779,19 @@ pub(crate) fn stroke_window(spine: &BezPath, segments: usize, join: kurbo::Join)
     }
     outline
 }
+
+/// The spine of [`back_and_forth_spine`] with its copies broken up: `n` segments between (0, 0) and (100, 20), every point moved up by `jitter` times six
+/// times a hash of its index (no two segments alike).
+pub(crate) fn hash_jittered_spine(n: usize, jitter: f64) -> BezPath {
+    let mut spine = BezPath::new();
+    for i in 0..=n {
+        let end = (i % 2) as f64;
+        let p = (100.0 * end, 20.0 * end + jitter * 6.0 * hash01(i as u64, 77));
+        if i == 0 {
+            spine.move_to(p);
+        } else {
+            spine.line_to(p);
+        }
+    }
+    spine
+}

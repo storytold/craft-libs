@@ -26,7 +26,7 @@
 //! The unit is the nanosecond of sweep that a count is worth on the machine the weights were measured on (a release build, one thread),
 //! so that the budget reads as a time. The work is the greater of two counts, the time the sweep will take and the memory the topology
 //! will hold (also in nanoseconds: a piece of the topology costs [`PIECE_MEMORY`], 1.8 microseconds, which makes the budget 2.3 million pieces, 0.9 to 1.6 GB
-//! of them). The time is a sum of terms, each priced for the kind of input that makes it large:
+//! of them: the topology's share, and the pairs the cache holds are more; the worst operation measured holds about 2.7 GB, the README's "Known limits"). The time is a sum of terms, each priced for the kind of input that makes it large:
 //!
 //! - **Output pieces** ([`PIECE_WORK`] each, and [`CURVED_WORK`] more for a piece of a curve): every piece of a segment between two of the
 //!   points the sweep makes, and every horizontal fragment. These are the entries of the topology.
@@ -81,7 +81,7 @@ pub(crate) const PIECE_WORK: u64 = 600;
 
 /// What an output piece is worth in memory, in the nanoseconds the budget is counted in: the topology holds 400 to 700 bytes for each, so
 /// that the pieces a budget admits, at 1.8 microseconds each, 2.3 million, are 0.9 to 1.6 gigabytes (the star holds 1.96 million, 0.9 GB; 50
-/// stars stacked 2.3 million, 1.6 GB).
+/// stars stacked 2.3 million, 1.6 GB): the topology's share of an operation, which holds up to about 2.7 GB (the README's "Known limits").
 pub(crate) const PIECE_MEMORY: u64 = 1_800;
 
 /// What a pair of segments that start or end together is worth in memory, in the nanoseconds the budget is counted in, added to the
@@ -902,13 +902,29 @@ fn crossing_price(paths: &[&BezPath]) -> u64 {
     places.lines.saturating_mul(LINE_PLACE_WORK).saturating_add(places.curves.saturating_mul(CURVE_PLACE_WORK))
 }
 
+/// What the copy of `linesweeper` in `vendor/` panics with where the intersection events at one height do not end (its README says why: curves
+/// that lie within the tolerance of one another in numbers swap back and forth for ever). A `linesweeper` taken from the registry has no such bound,
+/// and its sweep of such an input does not return.
+const SWEEP_DID_NOT_END: &str = "the intersection events at one height did not end";
+
+/// Is `payload`, what a panic of the sweep carried, that of the bound on the events at one height?
+fn sweep_did_not_end(payload: &(dyn std::any::Any + Send)) -> bool {
+    let message = payload.downcast_ref::<String>().map(String::as_str).or_else(|| payload.downcast_ref::<&str>().copied());
+    message.is_some_and(|m| m.contains(SWEEP_DID_NOT_END))
+}
+
 /// The dry sweep of `segments` held to `budget`: the work it counted (`Ok`), or `Err(TooComplex)` when the count passes the budget. A sweep that
 /// panics counts nothing and is `Ok`: the topology reports the panic. `crossings` prices the places where the segments cross
 /// ([`crossing_price`]), when the sweep asks.
 fn dry_counted(segments: &Segments, eps: f64, budget: u64, crossings: &mut dyn FnMut() -> u64) -> Result<u64, PathOpsError> {
     work::add(Work::MeteredSweeps, 1);
     // The sweep panics on a few degenerate inputs, as the topology's does, and the topology reports it.
-    let Ok(verdict) = catch_unwind(AssertUnwindSafe(|| dry_sweep_over(segments, eps, budget, &mut *crossings))) else { return Ok(0) };
+    let verdict = match catch_unwind(AssertUnwindSafe(|| dry_sweep_over(segments, eps, budget, &mut *crossings))) {
+        Ok(verdict) => verdict,
+        // The sweep that does not end is refused here, before the sweep that follows (which does the same) is made.
+        Err(payload) if sweep_did_not_end(payload.as_ref()) => return Err(PathOpsError::TooComplex),
+        Err(_) => return Ok(0),
+    };
     match verdict {
         Ok(counts) => {
             work::add(Work::MeterNanos, usize::try_from(counts.work()).unwrap_or(usize::MAX));
@@ -2266,6 +2282,18 @@ mod tests {
             fan.close_path();
         }
         assert_eq!(static_counts(&segments_of([&fan]).expect("segments"), 1e-6), (0, 0, 0));
+    }
+
+    /// The panic of the bound on the events at one height (`vendor/linesweeper`) is told from the other panics of the sweep, whichever way it
+    /// carries its message.
+    #[test]
+    fn the_panic_of_the_bound_on_the_events_at_one_height_is_told_from_the_others() {
+        let message = "linesweeper (craft patch): the intersection events at one height did not end";
+        assert!(sweep_did_not_end(&message));
+        assert!(sweep_did_not_end(&String::from(message)));
+        assert!(!sweep_did_not_end(&"index out of bounds"));
+        assert!(!sweep_did_not_end(&String::from("the events did not end")));
+        assert!(!sweep_did_not_end(&42u32));
     }
 
     /// The first window of the stroke 6 wide of a spine that goes back and forth over one line (300 segments, 256 to a window), as the
