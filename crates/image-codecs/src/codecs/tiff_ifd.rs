@@ -362,18 +362,18 @@ pub struct TiffPage {
 pub enum InkSet {
     /// 1: the samples are cyan, magenta, yellow and black.
     Cmyk,
-    /// 2: the samples are other inks, named in `InkNames`.
-    NotCmyk,
-    /// A value the TIFF 6.0 specification does not define.
-    Other(u16),
+    /// 2: the samples are the inks listed in the `InkNames` tag.
+    InkNames,
+    /// Any other value; TIFF 6.0 defines only 1 and 2.
+    Invalid(u16),
 }
 
 impl InkSet {
     fn from_tag(value: u16) -> Self {
         match value {
             1 => Self::Cmyk,
-            2 => Self::NotCmyk,
-            v => Self::Other(v),
+            2 => Self::InkNames,
+            v => Self::Invalid(v),
         }
     }
 }
@@ -387,8 +387,8 @@ pub enum ExtraSampleKind {
     AssociatedAlpha,
     /// 2: unassociated (straight) alpha.
     UnassociatedAlpha,
-    /// A value the TIFF 6.0 specification does not define.
-    Other(u16),
+    /// Any other value; TIFF 6.0 defines only 0, 1 and 2.
+    Invalid(u16),
 }
 
 impl ExtraSampleKind {
@@ -397,7 +397,7 @@ impl ExtraSampleKind {
             0 => Self::Unspecified,
             1 => Self::AssociatedAlpha,
             2 => Self::UnassociatedAlpha,
-            v => Self::Other(v),
+            v => Self::Invalid(v),
         }
     }
 }
