@@ -107,4 +107,24 @@ mod tests {
             }
         }
     }
+    #[cfg(feature = "decode")]
+    #[test]
+    fn distinct_signals_survive_full_and_partial_blocks() {
+        for frames in [4096, 4097, 8193] {
+            let channels: Vec<Vec<f32>> = [440.0f32, 880.0]
+                .into_iter()
+                .map(|hz| (0..frames).map(|i| (std::f32::consts::TAU * hz * i as f32 / 48_000.0).sin() * 0.4).collect())
+                .collect();
+            let audio = AudioBuffer { sample_rate: 48_000, channels };
+            let bytes = encode(&audio, 192).unwrap();
+            let (_, decoded) = crate::decode(&bytes, Some("ogg")).unwrap();
+            assert_eq!(decoded.frames(), frames);
+            assert_eq!(decoded.channels.len(), 2);
+            for (expected, actual) in audio.channels.iter().zip(&decoded.channels) {
+                let mse = expected.iter().zip(actual).map(|(a, b)| (a - b).powi(2)).sum::<f32>() / frames as f32;
+                // Vorbis is lossy; this tolerates codec error but rejects silence or swapped channels.
+                assert!(mse.sqrt() < 0.08, "{frames} frames: RMS error {}", mse.sqrt());
+            }
+        }
+    }
 }
