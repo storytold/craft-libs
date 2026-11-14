@@ -18,8 +18,8 @@ use egui::{Response, Ui};
 
 use super::paragraph::{INDENT_RANGE, SPACE_RANGE};
 use super::rows::{
-    LengthRow, Lengths, PlainRow, Toggle, family_field, hidden_side, leading_menu, leading_row, mark, mixed, number_change, number_presets,
-    plain, select_row, size_menu, string_entries, toggle_row,
+    LengthRow, Lengths, PlainRow, Toggle, family_field, hidden_side, leading_menu, leading_row, mark, mixed, number_change, number_presets, plain,
+    select_row, size_menu, string_entries, toggle_row,
 };
 use super::{
     CharacterChange, CharacterValues, CharacterWords, ParagraphChange, ParagraphValues, ParagraphWords, SHIFT_RANGE, SIZE_RANGE, TRACKING_PRESETS,
@@ -483,7 +483,7 @@ fn include_row(
     include: &WordTemplate,
     attribute: StyleAttribute,
     on: bool,
-    field: impl FnOnce(&mut Ui) -> Vec<EditEvent<StyleOptionsChange>>,
+    mut field: impl FnMut(&mut Ui) -> Vec<EditEvent<StyleOptionsChange>>,
 ) -> Vec<EditEvent<StyleOptionsChange>> {
     let env = Env::of(ui);
     let name = attribute_name(attribute, &env.words::<CharacterWords>(), &env.words::<ParagraphWords>());
