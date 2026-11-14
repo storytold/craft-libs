@@ -1207,3 +1207,108 @@ fn damaged_styles_are_a_warning_and_the_workbook_opens() {
     assert!(styles.is_some());
     assert!(warnings.iter().any(|w| w.contains("table styles")), "{warnings:?}");
 }
+
+/// `PtgAttrSpace` ([MS-XLSB] 2.5.98.31): its type (0 spaces before the next token, 1 line breaks
+/// before it, 2 spaces before a `(`, 4 spaces before a `)`) and count.
+fn space(kind: u8, n: u8) -> Vec<u8> {
+    vec![0x19, 0x40, kind, n]
+}
+
+#[test]
+fn typed_spacing_numbers_and_iso_functions_read_as_in_xlsx() {
+    let a1 = || [&[0x24u8][..], &loc(0, REL)].concat();
+    let b1 = || [&[0x24u8][..], &loc(0, 1 | REL)].concat();
+    let num = |n: f64| [&[0x1Fu8][..], &n.to_le_bytes()].concat();
+    let area = |c: u16| [&[0x25u8][..], &0u32.to_le_bytes(), &1u32.to_le_bytes(), &(c | REL).to_le_bytes(), &(c | REL).to_le_bytes()].concat();
+    let goto = [0x19u8, 0x08, 0, 0];
+    let cells: Vec<Vec<u8>> = vec![
+        // Spacing goes before the next token: an operand, or an operator's symbol.
+        [&[0x1Eu8, 1, 0][..], &space(0, 2), &[0x1E, 2, 0], &space(0, 1), &[0x03]].concat(),
+        // ... or a call's `)`, and inside a call's parentheses.
+        [space(0, 1), a1(), space(0, 1), b1(), space(4, 1), vec![0x42, 2, 4, 0]].concat(),
+        // Line breaks.
+        [
+            a1(),
+            vec![0x1E, 0, 0, 0x0D, 0x19, 0x02, 0, 0],
+            space(1, 1),
+            space(0, 2),
+            vec![0x1E, 1, 0],
+            goto.to_vec(),
+            space(1, 1),
+            space(0, 2),
+            vec![0x1E, 2, 0],
+            goto.to_vec(),
+            vec![0x42, 3, 1, 0],
+        ]
+        .concat(),
+        // Inside and before parentheses.
+        [space(0, 1), vec![0x1E, 1, 0], space(0, 1), vec![0x1E, 2, 0], space(0, 1), vec![0x03], space(4, 1), vec![0x15]].concat(),
+        [vec![0x1E, 1, 0, 0x1E, 2, 0], space(2, 1), vec![0x15, 0x03]].concat(),
+        // A call with no arguments, and one through PtgAttrSum.
+        [space(4, 1), vec![0x41, 19, 0]].concat(),
+        [area(0), area(1), space(0, 1), vec![0x0F, 0x19, 0x10, 0, 0]].concat(),
+        // A sign, `%`, and leading spacing (trimmed, as `.xlsx` text is read).
+        [space(0, 1), vec![0x1E, 1, 0, 0x13], space(0, 1), vec![0x14]].concat(),
+        [space(0, 3), a1()].concat(),
+        // A newer function: spacing before its name's token is the first argument's.
+        [vec![0x1E, 1, 0], space(0, 1), vec![0x23, 5, 0, 0, 0], num(1.5), space(0, 1), vec![0x42, 2, 0xFF, 0, 0x03]].concat(),
+        vec![0x23, 1, 0, 0, 0, 0x17, 1, 0, b'a', 0, 0x42, 2, 0xFF, 0],
+        // Numbers written out up to 21 characters, scientific past them.
+        [num(1e20), num(1e21), vec![0x03], num(1e-19), vec![0x03], num(1.5e-19), vec![0x03], num(1234567890123456.0), vec![0x03]].concat(),
+    ];
+    let mut data = row(0);
+    for (i, rgce) in cells.iter().enumerate() {
+        data.extend(formula_cell(i as u32 + 1, rgce, &[]));
+    }
+    // Name 5: the hidden name ISO.CEILING is called through, as Excel writes it.
+    let mut book = book_with_links(&xti());
+    let end = record(132, &[]);
+    book.truncate(book.len() - end.len());
+    book.extend(name(0x0002_000b, "_xlfn.ISO.CEILING"));
+    book.extend(end);
+    let wb = read(&package(&book, &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES)).unwrap();
+    let got: Vec<_> = (1..=cells.len() as u32).map(|c| wb.sheets[0].formula(CellRef::new(0, c))).collect();
+    let want = [
+        "1 +  2",
+        "SUM( A1, B1 )",
+        "IF(A1>0,\n  1,\n  2)",
+        "( 1 + 2 )",
+        "1+ (2)",
+        "PI( )",
+        "SUM(A1:A2  B1:B2)",
+        "- 1 %",
+        "A1",
+        "1+ ISO.CEILING( 1.5)",
+        "_xlfn.CONCAT(\"a\")",
+        "100000000000000000000+1E+21+0.0000000000000000001+1.5E-19+1234567890123460",
+    ];
+    assert_eq!(got, want.map(Some));
+}
+
+#[test]
+fn references_to_macro_sheets_and_spans_over_chart_sheets_are_named() {
+    // Sheets Data, a chart sheet, an XLM macro sheet, Hidden; sheet links Macro1, Data:Hidden
+    // (over the chart sheet) and Chart1 (no cells).
+    let mut book = record(131, &[]);
+    book.extend(record(153, &[[0u8; 8].as_slice(), &wide("")].concat()));
+    book.extend(record(143, &[]));
+    for (id, rel, name) in [(1u32, "one", "Data"), (3, "c", "Chart1"), (4, "m", "Macro1"), (2, "two", "Hidden")] {
+        book.extend(record(156, &[&0u32.to_le_bytes()[..], &id.to_le_bytes(), &wide(rel), &wide(name)].concat()));
+    }
+    book.extend(record(144, &[]));
+    let mut xti = 3u32.to_le_bytes().to_vec();
+    for (first, last) in [(2i32, 2i32), (0, 3), (1, 1)] {
+        xti.extend([0u32.to_le_bytes(), first.to_le_bytes(), last.to_le_bytes()].concat());
+    }
+    book.extend([record(353, &[]), record(357, &[]), record(362, &xti), record(354, &[]), record(132, &[])].concat());
+    let rels = RELS.replace(
+        "</Relationships>",
+        r#"<Relationship Id="c" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" Target="../data/c.bin"/><Relationship Id="m" Type="http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet" Target="../data/m.bin"/></Relationships>"#,
+    );
+    let ref3d = |ixti: u16| [&[0x5Au8][..], &ixti.to_le_bytes(), &loc(0, 0)].concat();
+    let data = [row(0), formula_cell(1, &ref3d(0), &[]), formula_cell(2, &ref3d(1), &[]), formula_cell(3, &ref3d(2), &[])].concat();
+    let wb = read(&package(&book, &worksheet(&data, &[]), &sst(), ROOT, &rels, TYPES)).unwrap();
+    let got: Vec<_> = (1..=3).map(|c| wb.sheets[0].formula(CellRef::new(0, c))).collect();
+    assert_eq!(got, [Some("Macro1!$A$1"), Some("Data:Hidden!$A$1"), None]);
+    assert!(warned(&wb, "references to sheets with no cells"), "{:?}", wb.warnings);
+}

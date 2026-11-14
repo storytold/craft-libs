@@ -88,8 +88,10 @@ A binary workbook gives the same `Workbook`, strings, rows and merged cells, and
 differential formats and the indexed colours, as Excel writes them in `styles.xml` (default fill
 colours and empty settings left out, a cell style format's `apply*="0"`, a number format with a
 newer locale tag in its Excel 2007 spelling, as `formatCode` has it). Custom table styles and
-recent colours are not read; a damaged styles part is a warning and no styles. Its cell formulas are decoded from their tokens into the
-text an `.xlsx` file holds (`_xlfn.` and `_xlpm.` names as written, no implicit `@`), with
+recent colours are not read; a damaged styles part is a warning and no styles. Its cell formulas
+are decoded from their tokens into the text an `.xlsx` file holds (`_xlfn.` and `_xlpm.` names as
+written, apart from the four ISO/IEC 29500 functions `.xlsx` names bare, no implicit `@`, the
+spaces and line breaks typed in the formula, numbers as Excel spells them), with
 `FormulaKind::Shared` or `FormulaKind::Array` and their ranges, and `BrtCellMeta` as the cell
 metadata index. Every cell of a shared formula gets its own text, decoded at the cell, since the
 file keeps the tokens once. A formula whose decoding needs something the reader does not read
