@@ -579,7 +579,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
         let state = RefCell::new(state);
         let footer_events: RefCell<Vec<PresetFooterEvent<K>>> = RefCell::new(Vec::new());
 
-        #[expect(clippy::cognitive_complexity, reason = "the browser body shows the search, list and footer from one set of shared locals, so a split would pass them all through")]
+        #[expect(
+            clippy::cognitive_complexity,
+            reason = "the browser body shows the search, list and footer from one set of shared locals, so a split would pass them all through"
+        )]
         let body = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
             let before = match state.borrow_mut().reborrow().read(cx) {
                 Some(Mixed::Same(held)) => held,
