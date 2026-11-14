@@ -124,7 +124,7 @@ fn tip_of(tip: StoryTip, dimensions: BrushDimensions, pointer: Option<Point>) ->
     let normal = (edge.core() + edge.reach()) / 2.0;
     match tip {
         StoryTip::Round => (BrushTip::round(dimensions.diameter, normal), TipPose::upright()),
-        StoryTip::ThinEllipse => (BrushTip::round(dimensions.diameter, normal), TipPose::new(Vec2::new(1.0, 0.0), Vec2::new(0.0, THIN))),
+        StoryTip::ThinEllipse => (BrushTip::round(dimensions.diameter, normal), TipPose::new(Vec2::from((1.0, 0.0)), Vec2::from((0.0, THIN)))),
         StoryTip::Star => {
             let share = (normal / full.max(f64::EPSILON)) as f32;
             let scaled =

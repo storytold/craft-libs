@@ -324,7 +324,7 @@ impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
             let next_search = Cell::new(before.search);
             let tool_picks: RefCell<Vec<BrushPick<K>>> = RefCell::new(Vec::new());
             let (mut diameter, mut hardness, mut tip) = (EditEvents::new(), EditEvents::new(), EditEvents::new());
-            let browser_id = ui.make_persistent_id("browser");
+            let browser_id = ui.scope_id().with("browser");
             let has_app_rows = gear_rows.is_some();
             let head = |ui: &mut Ui, _: &mut BodyCx<'_>| {
                 Row::new().show(ui, |ui, _| {

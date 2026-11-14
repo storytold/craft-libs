@@ -10,6 +10,7 @@ use crate::layout_components::Row;
 use crate::runtime::overlay::CloseReason;
 use crate::sections::{DialogRole, FooterButton};
 use crate::testing::input::key_press;
+use crate::testing::relations::{apart_above, grows_with, inside, off_foot, same_column};
 use crate::testing::{Fixture, Frames, trial};
 use crate::text::TextField;
 use egui::{Key, Modifiers, Rect, Ui};
@@ -171,9 +172,9 @@ fn a_dialogs_body_stands_apart_from_its_header_and_its_footer() {
     else {
         panic!("every part is shown");
     };
-    assert!(body.min.y > title.max.y + 1.0, "a space separates the body from the title row's rule: {title:?} {body:?}");
-    assert!(ok.min.y > body.max.y + 1.0, "a space separates the body from the footer: {body:?} {ok:?}");
-    assert!(ok.max.y < dialog.max.y - 1.0, "the buttons stay off the dialog's foot: {ok:?} {dialog:?}");
+    assert!(apart_above(title, body), "a space separates the body from the title row's rule: {title:?} {body:?}");
+    assert!(apart_above(body, ok), "a space separates the body from the footer: {body:?} {ok:?}");
+    assert!(inside(ok, dialog) && off_foot(ok, dialog), "the buttons stay off the dialog's foot: {ok:?} {dialog:?}");
 }
 
 #[trial]
@@ -215,10 +216,10 @@ fn side_buttons_stand_in_one_column_beside_the_body() {
     };
     assert!(ok.max.y <= cancel.min.y && cancel.max.y <= other.min.y, "OK, Cancel, then the other button, top to bottom");
     for button in [cancel, other] {
-        assert!((button.min.x - ok.min.x).abs() < 0.5 && (button.width() - ok.width()).abs() < 0.5, "one column, one width: {ok:?} {button:?}");
+        assert!(same_column(ok, button), "one column, one width: {ok:?} {button:?}");
     }
     assert!(ok.min.x >= body.max.x, "the column stands past the body's end edge");
-    assert!((ok.min.y - body.min.y).abs() < 4.0, "the column starts at the body's top: {ok:?} {body:?}");
+    assert!(grows_with(body.min.y, ok.min.y) && ok.min.y <= body.center().y, "the column starts at the body's top: {ok:?} {body:?}");
     assert!(preview.min.y >= other.max.y, "the footer content sits under the buttons");
 }
 

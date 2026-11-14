@@ -394,7 +394,7 @@ pub(crate) fn child_env(env: &Env, under: &Under) -> Env {
     env.derive_local(|scoped| {
         scoped.enabled &= under.enabled;
         scoped.size = under.size;
-        scoped.inside_label.clone_from(&under.inside);
+        scoped.inside_label = under.inside.clone().map(|inside| inside as crate::runtime::env::Held);
         scoped.cell_fills = false;
     })
 }

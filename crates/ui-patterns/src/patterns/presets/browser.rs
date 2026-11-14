@@ -252,7 +252,7 @@ pub struct PresetBrowser<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     max_rows: Option<u16>,
     /// The browser takes the presets' height, up to `room_height` (then they scroll), instead of the available
     /// height: for a host that sizes to its content, such as a floating panel.
-    #[prop]
+    #[prop(quantity = "room the host's panel offers, in points")]
     room_height: Option<f32>,
     /// The columns of tiles the grid asks for where it takes its width from its content (a popover): its width holds
     /// this many tiles. 0 asks for none.

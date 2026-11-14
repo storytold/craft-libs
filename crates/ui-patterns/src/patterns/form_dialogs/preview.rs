@@ -242,7 +242,7 @@ pub struct PreviewPane<'a> {
     click_centres: bool,
     /// The well's width over its height: the pane is as tall as its width over this. Without one, the height is the
     /// one its container gives, at least the plot height.
-    #[prop]
+    #[prop(quantity = "aspect ratio")]
     aspect: Option<f32>,
     /// The view after this pass, when the user changed it.
     moved: Option<PreviewView>,

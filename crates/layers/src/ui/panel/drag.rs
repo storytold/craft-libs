@@ -208,11 +208,11 @@ pub(super) fn clip_cursor<T: LayerTree>(tree: &T, above: &LayerRowKey<T::Id>, be
         return None;
     }
     let icon = if tree.info(upper).clipped { "clip_release" } else { "clip_below" };
-    Some(Cursor::Painted(PaintedCursor::tool(IconId::new(icon), CLIP_HOTSPOT, None)))
+    Some(Cursor::Painted(PaintedCursor::tool(IconId::new(icon), egui::Vec2::from(CLIP_HOTSPOT), None)))
 }
 
 /// The tip of the clip cursors' arrow in their 24-unit icon box.
-const CLIP_HOTSPOT: egui::Vec2 = egui::Vec2::new(15.0, 16.0);
+const CLIP_HOTSPOT: [f32; 2] = [15.0, 16.0];
 
 /// The reorder event of the list as the panel reports it: one `Set` per drop.
 pub(super) fn drop_event<K: Clone + PartialEq>(

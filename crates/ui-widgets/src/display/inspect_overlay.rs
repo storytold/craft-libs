@@ -56,15 +56,24 @@ pub struct InspectOverlayStyle {
 /// ```ignore
 /// let (_, recorded) = inspect::record(ui, key, |ui| story(ui));
 /// if let Some(recorded) = recorded {
-///     InspectOverlay::new(recorded).pointed(inspect::pointed(ui.ctx(), key)).show_at(ui, rect);
+///     let overlay = InspectOverlay::new(recorded);
+///     match inspect::pointed(ui.ctx(), key) {
+///         Some(index) => overlay.pointed(index),
+///         None => overlay,
+///     }
+///     .show_at(ui, rect);
 /// }
 /// ```
-#[derive(crate::contract::Component)]
+#[derive(crate::contract::Component, crate::contract::Props)]
 pub struct InspectOverlay {
     #[common]
     common: Common,
     recorded: Arc<Recorded>,
+    /// The layers shown.
+    #[prop]
     layers: InspectLayers,
+    /// Marks the element at this index of the record, the one the inspector's list points at.
+    #[prop]
     pointed: Option<usize>,
 }
 
@@ -72,18 +81,6 @@ impl InspectOverlay {
     /// The drawing of `recorded`, every layer on.
     pub fn new(recorded: Arc<Recorded>) -> Self {
         InspectOverlay { common: Common::new(), recorded, layers: InspectLayers::default(), pointed: None }
-    }
-
-    /// The layers shown.
-    pub fn layers(mut self, layers: InspectLayers) -> Self {
-        self.layers = layers;
-        self
-    }
-
-    /// Marks the element at this index of the record, the one the inspector's list points at.
-    pub fn pointed(mut self, pointed: Option<usize>) -> Self {
-        self.pointed = pointed;
-        self
     }
 }
 
@@ -189,22 +186,5 @@ impl InspectOverlay {
                 draw.galley(centre - layout.size() / 2.0, &layout);
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::band_parts;
-    use egui::{Rect, pos2, vec2};
-
-    #[test]
-    fn the_padding_band_is_the_outer_rect_less_the_content() {
-        let outer = Rect::from_min_max(pos2(0.0, 0.0), pos2(20.0, 10.0));
-        let content = outer.shrink2(vec2(4.0, 2.0));
-        let parts: Vec<Rect> = band_parts(outer, content).collect();
-        let area: f32 = parts.iter().map(|part| part.area()).sum();
-        assert_eq!(area, outer.area() - content.area());
-        assert!(parts.iter().all(|part| !part.intersects(content.shrink(0.1))));
-        assert_eq!(band_parts(outer, outer).count(), 0);
     }
 }

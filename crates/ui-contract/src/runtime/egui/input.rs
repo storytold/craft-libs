@@ -443,3 +443,18 @@ pub(crate) fn take_separator(ctx: &Context, commit_on: &[char]) -> bool {
         true
     })
 }
+
+/// The widget egui holds a drag on.
+pub(crate) fn dragged(ctx: &Context) -> Option<Id> {
+    ctx.dragged_id()
+}
+
+/// Where the press that is held down began, while a button is down.
+pub(crate) fn held_press_origin(ctx: &Context) -> Option<Pos2> {
+    ctx.input(|input| if input.pointer.any_down() { input.pointer.press_origin() } else { None })
+}
+
+/// A plain Left or Right arrow press reached egui this pass, with no modifier held.
+pub(crate) fn plain_horizontal_arrow_pressed(ctx: &Context) -> bool {
+    ctx.input(|input| input.modifiers.is_none() && (input.key_pressed(Key::ArrowLeft) || input.key_pressed(Key::ArrowRight)))
+}

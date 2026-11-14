@@ -179,6 +179,7 @@ pub struct LayersPanel<'a, T: LayerTree> {
 
 /// What a reveal ([`LayersPanel::reveal`]) does with the closed groups that hold the layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Groups {
     /// They open ([`LayersEvent::Open`]) and the layer's own row scrolls into view.
     Open,

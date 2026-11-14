@@ -187,7 +187,11 @@ pub struct Canvas<'a> {
     context_key: bool,
     /// The ease the app asked for from the view it drew ([`ease_from`](Self::ease_from)).
     ease: Option<Steer>,
-    /// The app's tool moves the view with the pointer this pass ([`view_follows_pointer`](Self::view_follows_pointer)).
+    /// The app's tool moves the view with the pointer this pass (an image-moving crop slides the view by fractional
+    /// pointer distances under a frame that stays put): the shown view stays as given, not [`pixel_aligned`], so the
+    /// picture and the frame do not jitter by part of a pixel as the pointer moves. P-15: the tool host passes the
+    /// framework `CropTool`'s image mode.
+    #[prop(name = "view_follows_pointer")]
     follows_pointer: bool,
 }
 
@@ -269,16 +273,6 @@ impl<'a> Canvas<'a> {
     #[must_use]
     pub fn jumped(mut self) -> Self {
         self.ease = Some(Steer::Stop);
-        self
-    }
-
-    /// The app's tool moves the view with the pointer this pass (an image-moving crop slides the view by fractional
-    /// pointer distances under a frame that stays put): the shown view stays as given, not [`pixel_aligned`], so the
-    /// picture and the frame do not jitter by part of a pixel as the pointer moves. P-15: the tool host passes the
-    /// framework `CropTool`'s image mode.
-    #[must_use]
-    pub fn view_follows_pointer(mut self, follows: bool) -> Self {
-        self.follows_pointer = follows;
         self
     }
 

@@ -833,7 +833,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let body_env = line_env.derive_local(|scoped| {
             let label_width = label_extra.x;
             self.scope_body(scoped, &props, id, BodyScope { room, real, sizing, content_column, scroll, label_width, beside: regions.beside });
-            scoped.inside_label = inside;
+            scoped.inside_label = inside.map(|inside| inside as crate::runtime::env::Held);
             scoped.cell_fills = cell_fills;
             // A scrolling body shows its first child wherever the view is: the container has no first line there.
             scoped.first_line = (!real && scroll.is_none()).then_some(first_body);

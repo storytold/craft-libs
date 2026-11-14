@@ -1,5 +1,6 @@
 //! A collection's columns: kinds, specs, alignment, toggle columns and the sort.
 
+pub use crate::runtime::env::ColumnAlign;
 use crate::runtime::env::Label;
 use craft_behavior::{ColumnKey, ColumnWidth};
 use craft_keymap::Chord;
@@ -82,16 +83,6 @@ pub struct ColumnSpec {
     pub max_share: Option<f32>,
     /// The header menu has a check for the column, so the user can hide it. A column that can't be hidden always shows.
     pub hideable: bool,
-}
-
-/// Where a column's content sits.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ColumnAlign {
-    /// At the start edge.
-    #[default]
-    Start,
-    /// At the end edge.
-    End,
 }
 
 impl ColumnSpec {

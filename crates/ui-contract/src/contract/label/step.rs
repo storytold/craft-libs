@@ -288,7 +288,10 @@ pub(crate) fn flow_leaf<C: Show>(
         report_after_reach(ui.ctx(), &env, &side, (avail, control), extent);
     }
     // The child runs under the inside label its measures saw.
-    let installed = under.inside.clone().map(|inside| Env::install_for(ui, env.derive_local(|scoped| scoped.inside_label = Some(inside))));
+    let installed = under
+        .inside
+        .clone()
+        .map(|inside| Env::install_for(ui, env.derive_local(|scoped| scoped.inside_label = Some(inside as crate::runtime::env::Held))));
     // The control and its label are one member of a bar's line: judged together, and hidden together, as the label
     // step hid the label.
     let shown_clip = ui.clip_rect();

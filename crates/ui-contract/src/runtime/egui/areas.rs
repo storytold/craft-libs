@@ -390,3 +390,26 @@ pub(crate) fn widest_layer(ctx: &Context) -> f32 {
             .fold(0.0, f32::max)
     })
 }
+
+/// Whether an egui popup of the running viewport is open: an app's own popup or menu, which reads its keys from egui.
+pub(crate) fn popup_open(ctx: &Context) -> bool {
+    egui::Popup::is_any_open(ctx)
+}
+
+/// A host's own egui popup `id` at `at`, shown while egui's memory holds it open.
+#[cfg(feature = "testing")]
+pub(crate) fn host_popup(ui: &Ui, id: egui::Id, at: Pos2) {
+    egui::Popup::new(id, ui.ctx().clone(), at, ui.layer_id()).open_memory(None).show(|ui| ui.allocate_space(ui.spacing().interact_size));
+}
+
+/// Opens the host's egui popup `id`.
+#[cfg(feature = "testing")]
+pub(crate) fn open_host_popup(ctx: &Context, id: egui::Id) {
+    egui::Popup::open_id(ctx, id);
+}
+
+/// Whether the host's egui popup `id` is open.
+#[cfg(feature = "testing")]
+pub(crate) fn host_popup_open(ctx: &Context, id: egui::Id) -> bool {
+    egui::Popup::is_id_open(ctx, id)
+}

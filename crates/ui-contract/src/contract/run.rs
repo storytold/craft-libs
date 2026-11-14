@@ -1214,7 +1214,7 @@ pub(crate) struct BarRules(HashMap<Id, Vec<HeldRule>>);
 
 /// A rule's paint: `shapes` of the paint list of `layer`, in the pass `pass`.
 struct HeldRule {
-    layer: egui::LayerId,
+    layer: crate::runtime::egui::areas::Layer,
     shapes: std::ops::Range<usize>,
     pass: u64,
 }

@@ -27,7 +27,7 @@ fn at_stage<'a>(
 ) -> IconicColumnOutput<u8> {
     let room = stage(ui);
     let env = Env::of(ui);
-    let width = env.tokens.tokens().size.rail.width;
+    let width = env.tokens.tokens().size.rail.width; // design: allow[style/token-read](a story sizes its stage from the rail token)
     let cell = if env.direction.is_rtl() {
         Rect::from_min_max(room.min, egui::pos2(room.left() + width, room.bottom()))
     } else {

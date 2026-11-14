@@ -3,6 +3,7 @@
 use super::columns::{ColumnSort, ColumnSpec};
 use super::events::ListDrag;
 use crate::contract::Notch;
+pub use crate::runtime::env::RowPressed;
 use crate::runtime::env::{Counted, Label};
 use crate::style::StyleCx;
 use craft_behavior::{Axis, ColumnKey};
@@ -581,22 +582,6 @@ impl CollectionProps {
         self.empty = Some(text.into());
         self
     }
-}
-
-/// Where the collection holds a primary press on a row, within slop, or the press a part of the row holds.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum RowPressed {
-    /// On the row's own area.
-    Row,
-    /// On the cell of this toggle column, which the press flips.
-    Cell(ColumnKey),
-    /// On a part of the item that took the press itself (a row's trailing button).
-    #[non_exhaustive]
-    Part {
-        /// The row held the lead when the press began: a press on a part moves the lead to its row.
-        was_lead: bool,
-    },
 }
 
 /// What an item reads of its place in the collection; the item step joins it to the item's flags at step 12.

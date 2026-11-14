@@ -443,21 +443,6 @@ pub(crate) fn host_label(ui: &mut Ui, text: &str) -> Rect {
     ui.add(egui::Label::new(text).selectable(true)).rect
 }
 
-/// A host's own egui popup `id` at `at`, shown while egui's memory holds it open.
-pub(crate) fn host_popup(ui: &Ui, id: egui::Id, at: Pos2) {
-    egui::Popup::new(id, ui.ctx().clone(), at, ui.layer_id()).open_memory(None).show(|ui| ui.allocate_space(ui.spacing().interact_size));
-}
-
-/// Opens the host's egui popup `id`.
-pub(crate) fn open_host_popup(ctx: &Context, id: egui::Id) {
-    egui::Popup::open_id(ctx, id);
-}
-
-/// Whether the host's egui popup `id` is open.
-pub(crate) fn host_popup_open(ctx: &Context, id: egui::Id) -> bool {
-    egui::Popup::is_id_open(ctx, id)
-}
-
 /// The egui layer `ui` paints on.
 pub(crate) fn layer_of(ui: &Ui) -> egui::LayerId {
     ui.layer_id()

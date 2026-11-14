@@ -370,8 +370,8 @@ pub(crate) fn part_bounds(ctx: &Context, owner: Id, part: craft_behavior::PartRe
 
 /// [`part_bounds`] of the owner whose AccessKit node is `node`, for a test that holds the node it found, not the id.
 #[cfg(feature = "testing")]
-pub(crate) fn node_part_bounds(ctx: &Context, node: accesskit::NodeId, part: craft_behavior::PartRef) -> Option<egui::Rect> {
-    owned_part_bounds(ctx, |shape_owner| shape_owner.accesskit_id() == node, part)
+pub(crate) fn node_part_bounds(ctx: &Context, node: crate::runtime::egui::access::NodeId, part: craft_behavior::PartRef) -> Option<egui::Rect> {
+    owned_part_bounds(ctx, |shape_owner| crate::runtime::egui::access::node_id(shape_owner) == node, part)
 }
 
 fn owned_part_bounds(ctx: &Context, owner: impl Fn(Id) -> bool, part: craft_behavior::PartRef) -> Option<egui::Rect> {

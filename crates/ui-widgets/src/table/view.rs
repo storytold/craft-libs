@@ -42,7 +42,7 @@ pub struct TableStyle {
 /// for the app to save. A table of groups and their children is a tree: the label column is
 /// indented by depth and groups open and close as in a `List`.
 #[derive(crate::contract::Component, crate::contract::Props)]
-#[component(collection, probe(Table<'static, usize>))]
+#[component(collection, overlay, probe(Table<'static, usize>))]
 pub struct Table<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     #[common]
     common: Common,

@@ -29,6 +29,9 @@ use egui::{Context, Id, Ui, ViewportId};
 use std::ops::Deref;
 use std::sync::Arc;
 
+/// A value a higher layer defines and the env only carries: the layer that defines it reads it back by its type.
+pub(crate) type Held = Arc<dyn std::any::Any + Send + Sync>;
+
 mod app_values;
 mod host_words;
 mod overrides;
@@ -48,7 +51,7 @@ pub(crate) use tokens::TokenInputs;
 #[cfg(feature = "testing")]
 pub(crate) use tokens::root_token_resolves;
 use tokens::tokens_for;
-pub use values::{ArenaId, MotionPolicy, Scale};
+pub use values::{ArenaId, ColumnAlign, InBar, MotionPolicy, PaneEdge, RowPressed, Scale};
 pub use view::EnvView;
 
 /// The inherited context of a `Ui`: one `Arc` clone per read.
@@ -154,7 +157,7 @@ pub struct Scoped {
     /// The view of the innermost scroll area, for the children that run only in view (`contract::Lazy`).
     pub(crate) lazy: Option<crate::runtime::lazy::View>,
     /// The window edge of the innermost edge pane that encloses the scope (`Mount::Pane`).
-    pub(crate) pane_edge: Option<crate::contract::PaneEdge>,
+    pub(crate) pane_edge: Option<PaneEdge>,
     /// The id of the collection item the scope shows: its root is not a Tab stop (17.3).
     pub(crate) item: Option<Id>,
     /// The roving group of the collection row the scope shows: the stops of its components and parts join it, so
@@ -164,7 +167,7 @@ pub struct Scoped {
     pub(crate) item_facts: Option<Arc<ItemFacts>>,
     /// The inside label of the side label whose control the scope shows (`FieldLayout::Inside`). Only that control
     /// sees it: a component's children and a container's regions start without one.
-    pub(crate) inside_label: Option<Arc<crate::contract::InsideLabel>>,
+    pub(crate) inside_label: Option<Held>,
     /// The scope is the body of a beside label in an inspector (`LabelScheme::Inspector`): the control shown there
     /// fills the width the label leaves. Only that control sees it, as with `inside_label`.
     pub(crate) cell_fills: bool,
@@ -274,10 +277,10 @@ pub struct ItemFacts {
     /// Each column's alignment and whether its figures are tabular, from its `ColumnSpec`: a row places its cells'
     /// text by them.
     #[doc(hidden)]
-    pub aligns: Vec<(craft_behavior::ColumnKey, crate::contract::ColumnAlign, bool)>,
+    pub aligns: Vec<(craft_behavior::ColumnKey, ColumnAlign, bool)>,
     /// Where the collection holds a press on the row (`RowState::pressed`).
     #[doc(hidden)]
-    pub pressed: Option<crate::contract::RowPressed>,
+    pub pressed: Option<RowPressed>,
     /// The row's menu is open (`RowState::menu_open`).
     #[doc(hidden)]
     pub menu_open: bool,
@@ -330,7 +333,7 @@ impl Scoped {
         self.item_facts = None;
         self.ink = Ink::default();
         self.surface = SurfaceKind::Background;
-        self.inherited_mut().values.set(crate::contract::InBar(false));
+        self.inherited_mut().values.set(InBar(false));
     }
 
     /// Ends the layout room of the enclosing body: its flow grid and content column.
@@ -543,7 +546,7 @@ impl Env {
             scoped.lazy = None;
             scoped.measure = None;
             // A pane opened from a bar is not the bar's line.
-            scoped.inherited_mut().values.set(crate::contract::InBar(false));
+            scoped.inherited_mut().values.set(InBar(false));
         })
     }
 

@@ -15,7 +15,8 @@ use craft_theme::ControlSize;
 use craft_theme::variant::Tone;
 use egui::Rect;
 
-pub use crate::runtime::env::ThemeScope;
+pub use crate::runtime::env::{InBar, PaneEdge, ThemeScope};
+pub use crate::style::BandFill;
 
 /// Where a container lives.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -63,23 +64,6 @@ impl Mount {
     pub fn viewport_with(fallback: Overlay, spec: WindowSpec) -> Mount {
         Mount::Viewport { fallback, spec: Some(spec) }
     }
-}
-
-/// Where a shell pane sits.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum PaneEdge {
-    /// What the edge panes leave.
-    #[default]
-    Center,
-    /// The start edge: left in reading order, right under right-to-left.
-    Start,
-    /// The end edge.
-    End,
-    /// The top edge.
-    Top,
-    /// The bottom edge.
-    Bottom,
 }
 
 /// One of `AppShell`'s panes.
@@ -259,21 +243,12 @@ impl HeaderParts {
 
 /// An edge of a header's line, where a container's own header parts sit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum HeaderEdge {
     /// The start edge: the parts there come before the header's children, in Tab order too.
     Start,
     /// The end edge: the parts there come after the header's children, in Tab order too.
     End,
-}
-
-/// What the band behind a header paints.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum BandFill {
-    /// A surface's fill.
-    Surface(SurfaceKind),
-    /// A tone's tinted fill (`Tone::soft_fill`).
-    Tone(Tone),
 }
 
 /// A header region, filled by `Container::header`.
@@ -668,20 +643,6 @@ pub enum Gap {
     CardRow,
     /// `space.gap.inline`: between groups of tools in a rail.
     Inline,
-}
-
-/// Set by a bar for its body: its fields put `space.gap.item` between a caption and the control, a vertical divider
-/// takes a box wider than its line, a select fits its widest entry up to a field length, a rule shows only with the
-/// member after it, and a row too long for its room narrows its last units first. A layer or pane opened from the bar
-/// starts without it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[doc(hidden)]
-pub struct InBar(pub bool);
-
-impl EnvValue for InBar {
-    fn root() -> Self {
-        InBar(false)
-    }
 }
 
 /// Set by a menu for its body: a horizontal divider takes `space.gap.inline` above and below its line, since the rows

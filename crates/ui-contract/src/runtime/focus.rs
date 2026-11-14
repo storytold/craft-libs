@@ -720,7 +720,7 @@ pub(crate) fn end(ctx: &Context) {
     // Escape over a captured framework press or drag cancels it (`frame::begin_pass`), whatever egui has focused.
     let captured = crate::runtime::pointer::press_captured(ctx) || crate::runtime::drag::running(ctx);
     let host_focus = !captured && with(ctx, |state| state.focus_now).is_some_and(app_widget);
-    let foreign = host_focus || (!captured && egui_focus::popup_open(ctx));
+    let foreign = host_focus || (!captured && crate::runtime::egui::areas::popup_open(ctx));
     let label_selection = egui_focus::label_selection(ctx);
     with(ctx, |state| {
         state.record.foreign = foreign;

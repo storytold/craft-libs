@@ -13,12 +13,13 @@
 //! that run to the pass again in place of running, in view or not, inside a scroll area or not. It is settled when
 //! nothing the framework tracks has changed for it since that run (`settled`).
 
-use crate::runtime::egui::pass;
+use crate::runtime::egui::areas::Layer;
+use crate::runtime::egui::{focus as focus_state, input as input_state, pass};
 use crate::runtime::focus::{self, Transcript};
 use crate::runtime::frame::{self, PerViewport};
 use crate::runtime::reads::BindKey;
 use crate::runtime::replay::{self, Record};
-use egui::{Context, Id, LayerId, Layout, Rect, Vec2};
+use egui::{Context, Id, Layout, Rect, Vec2};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -124,7 +125,7 @@ pub(crate) struct Place {
     /// The region its parent offered it.
     pub(crate) room: Rect,
     pub(crate) clip: Rect,
-    pub(crate) layer: LayerId,
+    pub(crate) layer: Layer,
     pub(crate) layout: Layout,
     pub(crate) pixels_per_point: f32,
 }
@@ -261,7 +262,7 @@ pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, pl
     });
     let targets = focus::targets(ctx);
     let now = frame::clock(ctx);
-    let held = (ctx.dragged_id(), ctx.memory(|memory| memory.focused()));
+    let held = (input_state::dragged(ctx), focus_state::focused(ctx));
     let settled = with(ctx, |store, pass_nr, frame| {
         if store.changes.scanned != pass_nr {
             store.changes.scanned = pass_nr;
@@ -318,8 +319,7 @@ pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, pl
 fn engaged(ctx: &Context, settled: &Settled) -> bool {
     let rect = settled.rect.intersect(settled.place.clip);
     let screen = ctx.layer_transform_to_global(settled.place.layer).map_or(rect, |transform| transform * rect);
-    ctx.rect_contains_pointer(settled.place.layer, rect)
-        || ctx.input(|input| input.pointer.any_down() && input.pointer.press_origin().is_some_and(|origin| screen.contains(origin)))
+    ctx.rect_contains_pointer(settled.place.layer, rect) || input_state::held_press_origin(ctx).is_some_and(|origin| screen.contains(origin))
 }
 
 /// Adds the last real run of the settling child `id` to the running pass, in place of running it.

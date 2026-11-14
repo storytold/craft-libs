@@ -119,6 +119,7 @@ impl Checker {
 
 /// Where a [`Checker`] paints.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum CheckerArea {
     /// A rect with these corners.
     Rect(Rect, CornerRadius),

@@ -25,6 +25,16 @@ pub(crate) use text::{
 #[cfg(feature = "testing")]
 pub use tree::{AccessTree, Declared, NodeKey};
 
+/// The AccessKit id of a node, as a host test holds it.
+#[cfg(feature = "testing")]
+pub type NodeId = accesskit::NodeId;
+
+/// The AccessKit id of the node of `id`.
+#[cfg(feature = "testing")]
+pub(crate) fn node_id(id: Id) -> NodeId {
+    id.accesskit_id()
+}
+
 /// The AccessKit role of a node.
 pub(crate) type NodeRole = accesskit::Role;
 

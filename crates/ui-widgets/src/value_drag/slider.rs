@@ -152,11 +152,11 @@ impl<'a> Slider<'a> {
         self
     }
 
-    /// The kept part of the range, from `start` to `end`: a trimmed clip's In and Out on a seek track. Each end is a
+    /// The kept part of the range, `kept`: a trimmed clip's In and Out on a seek track. Each end is a
     /// line across the track, a thumb high, in the warning colour; the thumb does not snap to them. An end outside
     /// the range is not drawn.
-    pub fn trim(mut self, start: f64, end: f64) -> Self {
-        self.trim = Some((start, end));
+    pub fn trim(mut self, kept: std::ops::RangeInclusive<f64>) -> Self {
+        self.trim = Some((*kept.start(), *kept.end()));
         self
     }
 

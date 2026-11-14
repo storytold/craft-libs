@@ -105,7 +105,7 @@ pub struct IconicColumnStyle {
     /// The ink of a panel's name in a wide column.
     name: StyleColor,
     /// The ink of the name of the panel whose flyout is open.
-    name_selected: StyleColor,
+    name_open: StyleColor,
     /// The room between an icon and its name.
     name_gap: f32,
 }
@@ -311,7 +311,7 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
             metrics: Metrics::new(),
             sizes: IconicSizes::style(cx),
             name: cx.color(colors.text.normal),
-            name_selected: cx.color(colors.accent.text),
+            name_open: cx.color(colors.accent.text),
             name_gap: cx.tokens.space.gap.item,
         }
     }
@@ -445,7 +445,7 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
             if let Some(name) = self.laid.as_ref().and_then(|plan| plan.names.get(at)) {
                 let style = &cx.style;
                 let room = if cx.flow.is_rtl() { name.with_max_x(name.max.x - style.name_gap) } else { name.with_min_x(name.min.x + style.name_gap) };
-                let ink = if selected { style.name_selected } else { style.name };
+                let ink = if selected { style.name_open } else { style.name };
                 let _ = ui.draw().text(room, &TextRun::new(spec.label.as_str().to_owned()).color(ink).elide());
             }
             ui.face(CELL.at(at as u64), IconButton::new(icon).label(spec.label).selected(selected));
@@ -554,10 +554,7 @@ impl<P: Value + Hash + 'static> Container for IconicColumn<'_, P> {
     /// The chevron's square at the bar's outer end.
     fn header_parts(&self, cx: &MeasureCx<'_, Self>) -> HeaderParts {
         let side = cx.style.sizes.column.bar;
-        match chevron_edge(self.edge) {
-            HeaderEdge::Start => HeaderParts::NONE.start(side),
-            HeaderEdge::End => HeaderParts::NONE.end(side),
-        }
+        if chevron_edge(self.edge) == HeaderEdge::End { HeaderParts::NONE.end(side) } else { HeaderParts::NONE.start(side) }
     }
 
     /// The column bar, over the icons. What the user did on it is read in `finish`.

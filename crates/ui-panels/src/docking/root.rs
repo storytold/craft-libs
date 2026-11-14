@@ -67,6 +67,9 @@ pub struct DockRoot<'a, T: 'static> {
     props: ContainerProps,
     take_drop: TakeDrop<'a, T>,
     dropped: Option<T>,
+    /// The arrangement the pattern shows, which the drags started in the body record.
+    #[doc(hidden)]
+    #[prop]
     shows: Option<Arrangement>,
 }
 
@@ -81,13 +84,6 @@ impl<'a, T: 'static> DockRoot<'a, T> {
             dropped: None,
             shows: None,
         }
-    }
-
-    /// The arrangement the pattern shows, which the drags started in the body record.
-    #[doc(hidden)]
-    pub fn shows(mut self, arrangement: Arrangement) -> Self {
-        self.shows = Some(arrangement);
-        self
     }
 }
 

@@ -298,7 +298,7 @@ pub(crate) fn select(ctx: &Context, id: Id, anchor: usize, caret: usize) {
 /// `TextOptions::arrows_from_end`: before the widget reads a plain Left or Right, a selection of the whole text
 /// collapses to its end.
 fn arrows_from_end(ctx: &Context, widget: Id, len: usize) {
-    let arrow = ctx.input(|input| input.modifiers.is_none() && (input.key_pressed(egui::Key::ArrowLeft) || input.key_pressed(egui::Key::ArrowRight)));
+    let arrow = egui_input::plain_horizontal_arrow_pressed(ctx);
     let whole = selection(ctx, widget).is_some_and(|(caret, anchor)| caret.min(anchor) == 0 && caret.max(anchor) == len);
     if arrow && len > 0 && whole {
         select(ctx, widget, len, len);
@@ -431,4 +431,66 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     let layout = TextLayout::new(shown.galley, false, full);
     let baseline = (!layout.full.is_empty()).then_some(shown.galley_pos.y + layout.first_baseline);
     AdapterOut { layout, focused: shown.focused, baseline }
+}
+
+/// What [`show_selectable`] shows: the read-only text of a selection part.
+pub(crate) struct Selectable<'a> {
+    /// The id of the selection widget.
+    pub widget: Id,
+    /// The component the widget's access node folds into.
+    pub owner: Id,
+    /// The room the text is painted in; a line wider than it is cut at its edge.
+    pub rect: Rect,
+    /// The laid-out text and the point it was placed at.
+    pub layout: &'a TextLayout,
+    pub at: Pos2,
+    pub run: &'a crate::primitives::TextRun<'a>,
+    pub enabled: bool,
+    /// The text colour.
+    pub ink: egui::Color32,
+}
+
+/// Shows `text` as a read-only selectable widget over its painted lines: the selection behind the characters, the copy
+/// command and the pointer's selecting, without a caret.
+pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
+    let Selectable { widget, owner, rect, layout, at, run, enabled, ink } = text;
+    let ctx = ui.ctx().clone();
+    let multiline = run.wrap == crate::primitives::Wrap::Wrap;
+    let keep = if multiline { KeepKeys::BlockArrows } else { KeepKeys::InlineArrows };
+    let mut shown = layout.full.clone();
+    // A line longer than its room is cut at the room's edge, as a field's is.
+    let mut cut = (layout.size().x > rect.width()).then(|| {
+        let mut cut = crate::runtime::egui::alloc::child(ui, egui::UiBuilder::new().max_rect(rect));
+        cut.set_clip_rect(rect.intersect(cut.clip_rect()));
+        cut
+    });
+    text_edit::show(
+        cut.as_mut().unwrap_or(&mut *ui),
+        text_edit::Edit {
+            id: widget,
+            rect: layout.galley.rect.translate(at.to_vec2()),
+            text: &mut shown,
+            read_only: true,
+            enabled,
+            focusable: enabled,
+            pointer: true,
+            multiline,
+            password: false,
+            hint: None,
+            mono: false,
+            role: run.role,
+            ink,
+            filter: egui_focus::event_filter(keep, false),
+            char_limit: None,
+            preedit: None,
+            rtl: false,
+            centred: false,
+            caret_visible: false,
+            underline: 0.0,
+            galley: Some(layout.galley.clone()),
+        },
+    );
+    if crate::runtime::egui::access::enabled(&ctx, widget) {
+        crate::runtime::egui::access::fold_widget(&ctx, widget, owner);
+    }
 }

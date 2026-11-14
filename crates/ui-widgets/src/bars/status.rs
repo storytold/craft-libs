@@ -93,7 +93,7 @@ impl StatusProgress {
             let percent = Env::of(ui).format().percent(f64::from(Progress::clamped(fraction)), 0);
             Text::new(percent).role(TypeRole::Mono).shade(Shade::Muted).show(ui);
         }
-        let cancelled = self.cancel.is_some_and(|label| IconButton::new(IconId::new("close")).label(label).show(ui).clicked());
+        let cancelled = self.cancel.is_some_and(|label| crate::contract::clicked(&IconButton::new(IconId::new("close")).label(label).show(ui)));
         StatusProgressOutput { response, cancelled }
     }
 }

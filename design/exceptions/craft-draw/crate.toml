@@ -1,1 +1,9 @@
 config_version = 1
+
+[[exception]]
+name = "artboard-story-backgrounds"
+kind = "marker"
+rule = "raw-colour/const"
+path = "crates/draw/src/ui/artboard/stories.rs"
+reason = "The artboard background is document data in a story, not a UI colour."
+count = 2

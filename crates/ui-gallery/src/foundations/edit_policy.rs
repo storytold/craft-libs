@@ -3,7 +3,7 @@
 
 use craft_behavior::{CancelReason, EditEvent, EditEvents, EditPolicy as Policy, GestureId};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, Gap, Pad, Pattern, Props, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Gap, Pad, Pattern, Props, Show as _, ShowContainer as _, clicked};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::edit::cancel_all;
@@ -160,10 +160,10 @@ impl EditPolicy {
                 state.events("field", &label, Before::Label);
             });
             Row::new().gap(Gap::Item).show(ui, |ui, _| {
-                if Button::new("Undo during gesture").show(ui).clicked() {
+                if clicked(&Button::new("Undo during gesture").show(ui)) {
                     state.undo(ui);
                 }
-                if Button::new("Switch document").show(ui).clicked() {
+                if clicked(&Button::new("Switch document").show(ui)) {
                     state.switch(ui);
                 }
             });

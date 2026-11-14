@@ -127,8 +127,8 @@ impl Boards {
         let page = |(index, item): (usize, &ArtboardItem)| {
             let page = PageFrame::new(item.rect.abs()).name(item.name.clone()).active(self.selected.contains(&index));
             match item.background {
-                ArtboardBackground::White => page.fill(DataColor(Color32::WHITE)),
-                ArtboardBackground::Black => page.fill(DataColor(Color32::BLACK)),
+                ArtboardBackground::White => page.fill(DataColor(Color32::WHITE)), // design: allow[raw-colour/const](the artboard background is document data)
+                ArtboardBackground::Black => page.fill(DataColor(Color32::BLACK)), // design: allow[raw-colour/const](the artboard background is document data)
                 ArtboardBackground::Custom(color) => page.fill(DataColor(Color32::from(color))),
                 _ => page,
             }

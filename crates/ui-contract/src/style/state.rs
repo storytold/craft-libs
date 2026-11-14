@@ -21,6 +21,11 @@ impl StateSet {
         StateSet { state, flags, t }
     }
 
+    /// The component is disabled.
+    pub fn is_disabled(&self) -> bool {
+        self.state == State::Disabled
+    }
+
     /// The value of `look` in this state.
     pub fn resolve<T: Mix>(&self, look: &Stateful<T>) -> T {
         look.resolve(self.state, self.flags, self.t)

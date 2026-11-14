@@ -378,7 +378,7 @@ impl MediaControls {
             let mut slider =
                 Slider::new(Bind::given(position), range).step(NUDGE).sizing(Sizing::FillWidth).enabled(playable).label(words.seek.clone());
             if let Some((start, end)) = trim.filter(|_| playable) {
-                slider = slider.trim(start, end);
+                slider = slider.trim(start..=end);
             }
             let edit = slider.show(ui);
             seek = edit.events;

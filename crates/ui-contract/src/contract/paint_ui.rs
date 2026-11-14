@@ -6,11 +6,11 @@ use super::run::{self, FaceSource, ShowAt};
 use super::{ContentPainter, Cx, Show, TipFn};
 use super::{InsideLabel, SideLabel};
 use crate::primitives::sensing::PartResults;
-use crate::primitives::{ContentPainterCx, DataMode, Draw, DrawEnv, PaintRecord, TextRun, Wrap};
+use crate::primitives::text_adapter;
+use crate::primitives::{ContentPainterCx, DataMode, Draw, DrawEnv, PaintRecord, TextRun};
 use crate::runtime::access;
-use crate::runtime::egui::{alloc, child, focus as egui_focus, text_edit};
+use crate::runtime::egui::{alloc, child};
 use crate::runtime::env::{Env, Label};
-use crate::runtime::focus::KeepKeys;
 use crate::runtime::layout_memory;
 use crate::runtime::memory::sub;
 use crate::style::{Flags, Ink, Stateful, StyleColor, StyleCx};
@@ -75,46 +75,12 @@ impl PaintUi<'_> {
         }
         let (layout, at) = self.draw().place_text(rect, run);
         self.record.borrow_mut().baseline.get_or_insert(at.y + layout.first_baseline);
-        let ctx = self.ui.ctx().clone();
         let widget = super::text::selection_id(self.id, part);
-        let multiline = run.wrap == Wrap::Wrap;
-        let keep = if multiline { KeepKeys::BlockArrows } else { KeepKeys::InlineArrows };
-        let mut shown = layout.full.clone();
-        // A line longer than its room is cut at the room's edge, as a field's is.
-        let mut cut = (layout.size().x > rect.width()).then(|| {
-            let mut cut = alloc::child(self.ui, egui::UiBuilder::new().max_rect(rect));
-            cut.set_clip_rect(rect.intersect(cut.clip_rect()));
-            cut
-        });
-        text_edit::show(
-            cut.as_mut().unwrap_or(&mut *self.ui),
-            text_edit::Edit {
-                id: widget,
-                rect: layout.galley.rect.translate(at.to_vec2()),
-                text: &mut shown,
-                read_only: true,
-                enabled: self.enabled,
-                focusable: self.enabled,
-                pointer: true,
-                multiline,
-                password: false,
-                hint: None,
-                mono: false,
-                role: run.role,
-                ink: crate::style::ink_color(&self.env.tokens, self.ink),
-                filter: egui_focus::event_filter(keep, false),
-                char_limit: None,
-                preedit: None,
-                rtl: false,
-                centred: false,
-                caret_visible: false,
-                underline: 0.0,
-                galley: Some(layout.galley.clone()),
-            },
+        let ink = crate::style::ink_color(&self.env.tokens, self.ink);
+        text_adapter::show_selectable(
+            self.ui,
+            text_adapter::Selectable { widget, owner: self.id, rect, layout: &layout, at, run, enabled: self.enabled, ink },
         );
-        if crate::runtime::egui::access::enabled(&ctx, widget) {
-            crate::runtime::egui::access::fold_widget(&ctx, widget, self.id);
-        }
     }
 
     /// The content-paint API for painting `part`: as [`draw`](Self::draw), and when the part was declared

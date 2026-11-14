@@ -206,11 +206,19 @@ struct Reported {
 
 /// The widths of a unit of a row that shrinks to fit: the width it asks for and the least it narrows to.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ShrinkUnit {
     /// The width the unit takes where the row has room.
     pub ideal: f32,
     /// The least width the unit narrows to.
     pub least: f32,
+}
+
+impl ShrinkUnit {
+    /// A unit that asks for `ideal` and narrows to `least`.
+    pub const fn new(ideal: f32, least: f32) -> Self {
+        ShrinkUnit { ideal, least }
+    }
 }
 
 /// The units each `Row` body counting this pass reported, in order, by body id.

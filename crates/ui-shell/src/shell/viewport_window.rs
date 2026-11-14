@@ -44,7 +44,10 @@ impl Outcome for ViewportWindowOutput {
 #[derive(Pattern, Props)]
 pub struct ViewportWindow {
     title: Label,
-    /// What lies over the app's other windows while this one is open and blocks them; `None` blocks nothing.
+    /// Makes the app's other windows ignore input while this one is open, with `backdrop` over them where the window is
+    /// a layer (`Backdrop::Scrim` dims them, `Backdrop::None` leaves them as they are). Without it the window blocks
+    /// nothing.
+    #[prop(name = "app_modal")]
     modal: Option<Backdrop>,
     /// Changes the layer the window has where windows are unavailable, whose limits and place its OS window takes.
     overlay: Option<Box<dyn FnOnce(Overlay) -> Overlay>>,
@@ -57,13 +60,6 @@ impl ViewportWindow {
     /// A window titled `title` that blocks nothing.
     pub fn new(title: impl Into<Label>) -> Self {
         ViewportWindow { title: title.into(), modal: None, overlay: None, remember: None }
-    }
-
-    /// Makes the app's other windows ignore input while this one is open, with `backdrop` over them where the window is
-    /// a layer (`Backdrop::Scrim` dims them, `Backdrop::None` leaves them as they are).
-    pub fn app_modal(mut self, backdrop: Backdrop) -> Self {
-        self.modal = Some(backdrop);
-        self
     }
 
     /// Changes the layer the window falls back to, which starts as the resizable dialog layer: the smallest and

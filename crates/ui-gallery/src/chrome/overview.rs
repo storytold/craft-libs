@@ -31,6 +31,7 @@ const ONE: &[ColumnWidth] = &[ColumnWidth::fill(1.0)];
 const TWO: &[ColumnWidth] = &[ColumnWidth::fill(1.0); 2];
 
 /// One story of a card to show.
+#[non_exhaustive]
 pub struct SpecStory {
     /// The index of the story in the catalog.
     pub index: usize,
@@ -49,6 +50,7 @@ impl SpecStory {
 }
 
 /// The card of one component to show, before it is laid out.
+#[non_exhaustive]
 pub struct Spec {
     /// The id scope of the card.
     pub key: String,
