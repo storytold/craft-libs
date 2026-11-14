@@ -15,6 +15,11 @@
 //! * [`guards::rust_sources`]: directory crawler collecting `.rs` sources while excluding tests, with
 //!   size limits ([`guards::rust_sources_with_limits`]). It is not built for `wasm32`.
 //!
+//! `oracle` finds external oracle programs such as ffmpeg and qpdf, probes their version under a
+//! byte limit and a timeout, and caches the result for the process. Its `require_oracle!`,
+//! `require_ffmpeg!` and `require_ffprobe!` macros skip or fail the calling test when a program is
+//! missing. It is not built for `wasm32`.
+//!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
 //! Source-level guards provide deterministic syntactic evidence about codebase structure.
@@ -26,6 +31,8 @@
 //! rather than replace, platform integration tests and CI execution.
 
 pub mod guards;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod oracle;
 
 pub use guards::{AsFileSource, Finding, predefined_quit, std_instant, wgsl_float_literals, wgsl_float_literals_in};
 
