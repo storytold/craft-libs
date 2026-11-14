@@ -44,6 +44,9 @@ pub struct BarBeat {
 pub struct TempoMap {
     tempos: Vec<TempoEvent>,
     meters: Vec<MeterEvent>,
+    /// The bar number shown for the session's first bar (default 1). Renumber Bars sets it so a
+    /// lead-in bar can show as 0 or -1 while the musical grid stays put.
+    first_bar: i64,
     /// For each tempo event, the elapsed time at its tick in quarter-note minutes (ticks / bpm,
     /// summed over the earlier segments). Lets tick/sample conversions binary-search the segment
     /// instead of walking every earlier tempo change, so converting many positions against a large
@@ -57,11 +60,20 @@ pub struct TempoMap {
 struct TempoMapData {
     tempos: Vec<TempoEvent>,
     meters: Vec<MeterEvent>,
+    /// Sessions written before bar renumbering carry no field: bars started at 1.
+    #[serde(default = "default_first_bar")]
+    first_bar: i64,
+}
+
+fn default_first_bar() -> i64 {
+    1
 }
 
 impl From<TempoMapData> for TempoMap {
     fn from(d: TempoMapData) -> Self {
-        TempoMap::from_parts(d.tempos, d.meters)
+        let mut m = TempoMap::from_parts(d.tempos, d.meters);
+        m.first_bar = d.first_bar;
+        m
     }
 }
 
@@ -81,9 +93,20 @@ fn valid_meter(numerator: u32, denominator: u32) -> bool {
 
 impl TempoMap {
     fn from_parts(tempos: Vec<TempoEvent>, meters: Vec<MeterEvent>) -> Self {
-        let mut m = TempoMap { tempos, meters, elapsed: Vec::new() };
+        let mut m = TempoMap { tempos, meters, first_bar: 1, elapsed: Vec::new() };
         m.reindex();
         m
+    }
+
+    /// The bar number shown for the session's first bar (1 unless Renumber Bars moved it).
+    pub fn first_bar(&self) -> i64 {
+        self.first_bar
+    }
+
+    /// Renumber Bars: `n` is what the session's first bar is called (0 or negative for a lead-in).
+    /// Only the numbering moves; the meter grid and every stored position stay where they were.
+    pub fn set_first_bar(&mut self, n: i64) {
+        self.first_bar = n;
     }
 
     /// Rebuild `elapsed` from `tempos`. The first segment runs from tick 0 at the first tempo.
@@ -213,9 +236,9 @@ impl TempoMap {
         }
     }
 
-    /// Remove the meters after `tick`, returning each with the bar it starts: the bar
-    /// [`Self::bar_beat_at_tick`] gives its tick, counted in one pass over the map rather than one
-    /// walk per meter, so a session with many meter changes edits in linear time.
+    /// Remove the meters after `tick`, returning each with the physical bar it starts (counting
+    /// the session's first bar as 1, ignoring `first_bar`), counted in one pass over the map
+    /// rather than one walk per meter, so a session with many meter changes edits in linear time.
     fn take_meters_after(&mut self, tick: i64) -> Vec<(i64, MeterEvent)> {
         let mut later = Vec::new();
         let (mut bar, mut seg_tick) = (1i64, 0i64);
@@ -233,7 +256,8 @@ impl TempoMap {
         later
     }
 
-    /// The bar and tick of the last meter's segment, where [`Self::bar_start_tick`]'s walk ends.
+    /// The physical bar and tick of the last meter's segment, where `physical_bar_start_tick`'s
+    /// walk ends.
     fn last_segment(&self) -> (i64, i64) {
         let (mut cur_bar, mut cur_tick) = (1i64, 0i64);
         for (i, m) in self.meters.iter().enumerate() {
@@ -255,7 +279,7 @@ impl TempoMap {
                 let tpb = self.meters.last().map_or(MeterEvent { tick: 0, numerator: 4, denominator: 4 }, |m| *m).ticks_per_bar();
                 cur_tick.saturating_add(bar.saturating_sub(cur_bar).saturating_mul(tpb))
             } else {
-                self.bar_start_tick(bar)
+                self.physical_bar_start_tick(bar)
             };
             self.put_meter(MeterEvent { tick, ..ev });
             (cur_bar, cur_tick) = if bar >= cur_bar { (bar, tick) } else { self.last_segment() };
@@ -318,8 +342,15 @@ impl TempoMap {
         to_samples(self.samples_to_ticks_f(s, sr))
     }
 
-    /// Tick of the first beat of `bar` (1-based; bars before 1 extend the first meter backwards).
+    /// Tick of the first beat of `bar`, a displayed bar number: `first_bar` names the session's
+    /// first bar, and bars before it extend the first meter backwards (a lead-in shows as 0/-1).
     pub fn bar_start_tick(&self, bar: i64) -> i64 {
+        self.physical_bar_start_tick(bar.saturating_sub(self.first_bar).saturating_add(1))
+    }
+
+    /// Tick of the first beat of the `bar`-th bar counting the session's first bar as 1,
+    /// ignoring `first_bar` renumbering. Meter edits walk physical bars; display uses the public one.
+    fn physical_bar_start_tick(&self, bar: i64) -> i64 {
         let mut cur_bar = 1i64;
         let mut cur_tick = 0i64;
         let first = self.meter_at_tick(0);
@@ -353,7 +384,7 @@ impl TempoMap {
             // Offset of `tick` inside its bar, without negating `i64::MIN`.
             let within = ((tpb_u - abs % tpb_u) % tpb_u) as i64;
             let beat_t = first.ticks_per_beat();
-            return BarBeat { bar: 1 - bars_back, beat: within / beat_t + 1, tick: within % beat_t };
+            return BarBeat { bar: self.first_bar.saturating_sub(bars_back), beat: within / beat_t + 1, tick: within % beat_t };
         }
         let mut bar = 1i64;
         let mut seg_tick = 0i64;
@@ -370,9 +401,13 @@ impl TempoMap {
             let bars = rel / tpb;
             let within = rel % tpb;
             let beat_t = m.ticks_per_beat();
-            return BarBeat { bar: bar + bars, beat: within / beat_t + 1, tick: within % beat_t };
+            return BarBeat {
+                bar: bar.saturating_add(bars).saturating_add(self.first_bar.saturating_sub(1)),
+                beat: within / beat_t + 1,
+                tick: within % beat_t,
+            };
         }
-        BarBeat { bar, beat: 1, tick: 0 }
+        BarBeat { bar: bar.saturating_add(self.first_bar.saturating_sub(1)), beat: 1, tick: 0 }
     }
 
     /// Bar|beat|tick → tick.
@@ -473,6 +508,54 @@ mod tests {
         assert_eq!(m.bar_start_tick(4), TICKS_PER_QUARTER * 11);
         let bb = BarBeat { bar: 4, beat: 2, tick: 10 };
         assert_eq!(m.bar_beat_at_tick(m.tick_at_bar_beat(bb)), bb);
+    }
+
+    #[test]
+    fn renumber_bars_shifts_only_the_numbering() {
+        let mut m = TempoMap::default();
+        assert_eq!(m.first_bar(), 1);
+        // Renumber Bars with bar 2 as 1: the first bar becomes a lead-in bar 0.
+        m.set_first_bar(0);
+        assert_eq!(m.bar_beat_at_tick(0).bar, 0);
+        assert_eq!(m.bar_beat_at_tick(TICKS_PER_QUARTER * 4).bar, 1);
+        assert_eq!(m.bar_beat_at_tick(-TICKS_PER_QUARTER * 4).bar, -1);
+        // The inverse accepts the displayed numbers.
+        assert_eq!(m.tick_at_bar_beat(BarBeat { bar: 0, beat: 1, tick: 0 }), 0);
+        assert_eq!(m.tick_at_bar_beat(BarBeat { bar: 1, beat: 1, tick: 0 }), TICKS_PER_QUARTER * 4);
+        assert_eq!(m.bar_start_tick(-1), -TICKS_PER_QUARTER * 4);
+        // Ticks and samples never moved: a position keeps its exact tick under renumbering.
+        assert_eq!(m.samples_at_bar_beat(BarBeat { bar: 1, beat: 1, tick: 0 }, SampleRate::HZ_48000), 96_000);
+    }
+
+    #[test]
+    fn renumber_bars_keeps_meter_changes_on_their_bars() {
+        let mut m = TempoMap::default();
+        // 2 bars of 4/4 then 3/4 at physical bar 3; renumber so the session's first bar is -1.
+        m.set_meter(TICKS_PER_QUARTER * 8, 3, 4).unwrap();
+        m.set_first_bar(-1);
+        assert_eq!(m.bar_beat_at_tick(0).bar, -1);
+        assert_eq!(m.bar_beat_at_tick(TICKS_PER_QUARTER * 8), BarBeat { bar: 1, beat: 1, tick: 0 });
+        assert_eq!(m.bar_beat_at_tick(TICKS_PER_QUARTER * 11), BarBeat { bar: 2, beat: 1, tick: 0 });
+        // A later meter edit still snaps to the displayed bar it was drawn at.
+        m.set_meter(TICKS_PER_QUARTER * 14, 7, 8).unwrap();
+        assert_eq!(m.meters[2].tick, TICKS_PER_QUARTER * 14);
+        // Round-trip through the renumbered positions.
+        let bb = BarBeat { bar: 2, beat: 2, tick: 10 };
+        assert_eq!(m.bar_beat_at_tick(m.tick_at_bar_beat(bb)), bb);
+    }
+
+    #[test]
+    fn renumber_bars_round_trips_through_serde() {
+        let mut m = TempoMap::default();
+        m.set_first_bar(0);
+        let v = serde_json::to_value(&m).unwrap();
+        assert_eq!(v["first_bar"], 0);
+        let back: TempoMap = serde_json::from_value(v).unwrap();
+        assert_eq!(back, m);
+        // Sessions written before renumbering carry no field: they load with bars from 1.
+        let old = serde_json::json!({"tempos": [{"tick": 0, "bpm": 120.0}], "meters": [{"tick": 0, "numerator": 4, "denominator": 4}]});
+        let back: TempoMap = serde_json::from_value(old).unwrap();
+        assert_eq!(back.first_bar(), 1);
     }
 
     #[test]
