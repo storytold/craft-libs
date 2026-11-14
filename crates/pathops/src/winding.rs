@@ -94,6 +94,21 @@ fn line_winding(start: Point, end: Point, p: Point) -> i32 {
     // The line `a x + b y = c`: which side of it the point is on.
     let a = end.y - start.y;
     let b = start.x - end.x;
+    if !(a.is_finite() && b.is_finite()) {
+        // A line spanning more than a double holds (from -1e308 to 1e308): the same line and point at half the size, which is exact.
+        // (A coordinate that is itself infinite is no line, and stays out of the loop.)
+        let half = |q: Point| Point::new(q.x * 0.5, q.y * 0.5);
+        let finite = [start, end, p].iter().all(|q| q.x.is_finite() && q.y.is_finite());
+        return if finite { line_winding(half(start), half(end), half(p)) } else { 0 };
+    }
+    // The line is the same, and the side the point is on, when the equation is multiplied by a number, so `a` and `b` are brought to
+    // where `a x` and `b y` can neither overflow (the line's `c` is a product with the start's coordinate: at 1e155 it is infinite, and
+    // the difference with the point's side is not a number, so a sloped line wound its point 0 or the wrong way) nor underflow (at
+    // 1e-165 every product is nothing, and every point is on the line). The number is the power of two below the greater of them
+    // (a subnormal one is lifted to the least normal), which scales exactly: where the arithmetic worked the side is the same.
+    const EXPONENT: u64 = 0x7ff0_0000_0000_0000;
+    let scale = f64::from_bits(a.abs().max(b.abs()).to_bits() & EXPONENT).max(f64::MIN_POSITIVE);
+    let (a, b) = (a / scale, b / scale);
     let c = a * start.x + b * start.y;
     if (a * p.x + b * p.y - c) * f64::from(sign) <= 0.0 { sign } else { 0 }
 }
@@ -698,6 +713,56 @@ mod tests {
                 assert_eq!(bits(scaled), bits(unit), "({a}, {b}, {c}) times 2^{k}");
             }
         }
+    }
+
+    /// A line and its points scaled by a power of two wind as at unit scale to the last (the arithmetic scales exactly): from 2^-560, where
+    /// every product of the line's equation is nothing and every point is on it, to 2^515, where the product of its slope and the start's
+    /// coordinate is infinite and the side of the point is not a number, and at 2^1022, where the line is wider than a double holds.
+    #[test]
+    fn the_winding_of_a_line_does_not_depend_on_its_scale() {
+        let line = |s: f64, a: (f64, f64), b: (f64, f64)| PathSeg::Line(kurbo::Line::new((a.0 * s, a.1 * s), (b.0 * s, b.1 * s)));
+        // The points a half apart, on the line (3, 5) among them, from outside it on either side to inside.
+        let grid: Vec<(f64, f64)> = (-4..=20).flat_map(|i| (-4..=24).map(move |j| (f64::from(i) * 0.5, f64::from(j) * 0.5))).collect();
+        for (a, b) in [((1.0, 1.0), (5.0, 9.0)), ((5.0, 9.0), (1.0, 1.0)), ((1.0, 9.0), (5.0, 1.0)), ((2.0, 1.0), (3.0, 11.0))] {
+            let unit = line(1.0, a, b);
+            let want: Vec<i32> = grid.iter().map(|&p| segment_winding(unit, Point::from(p))).collect();
+            assert!(want.iter().any(|&w| w != 0) && want.contains(&0), "{a:?} to {b:?}");
+            for k in [-560, -300, -60, 60, 300, 515] {
+                let s = power_of_two(k);
+                let scaled = line(s, a, b);
+                for (&p, &w) in grid.iter().zip(&want) {
+                    assert_eq!(segment_winding(scaled, Point::new(p.0 * s, p.1 * s)), w, "{a:?} to {b:?} at 2^{k}, {p:?}");
+                }
+            }
+            // Not a power of two, the points away from the line (a thousandth of its length at the least): the same.
+            for s in [1e-165, 1e-100, 1e100, 1e155] {
+                let scaled = line(s, a, b);
+                for (&p, &w) in grid.iter().zip(&want) {
+                    let (d, e) = ((b.0 - a.0, b.1 - a.1), (p.0 - a.0, p.1 - a.1));
+                    if (d.0 * e.1 - d.1 * e.0).abs() > 1e-3 * d.0.hypot(d.1) {
+                        assert_eq!(segment_winding(scaled, Point::new(p.0 * s, p.1 * s)), w, "{a:?} to {b:?} at {s}, {p:?}");
+                    }
+                }
+            }
+        }
+        // A line wider than a double: -3 to 3 across and -2 to 2 up, times 2^1022, is 2^1024 up and more across.
+        let s = power_of_two(1022);
+        let wide = line(s, (-3.0, -2.0), (3.0, 2.0));
+        let unit = line(1.0, (-3.0, -2.0), (3.0, 2.0));
+        let mut seen = [0usize; 3];
+        for i in -6..=6 {
+            for j in -6..=6 {
+                let p = (f64::from(i) * 0.5, f64::from(j) * 0.5);
+                let w = segment_winding(unit, Point::from(p));
+                assert_eq!(segment_winding(wide, Point::new(p.0 * s, p.1 * s)), w, "{p:?}");
+                seen[(w + 1) as usize] += 1;
+            }
+        }
+        // The line rises, so a point to its right and under it winds -1, and the rest 0.
+        assert!(seen[0] > 0 && seen[1] > 0 && seen[2] == 0, "{seen:?}");
+        // An infinite coordinate is no line, and no loop.
+        let endless = PathSeg::Line(kurbo::Line::new((f64::NEG_INFINITY, 0.0), (f64::INFINITY, 5.0)));
+        assert_eq!(segment_winding(endless, Point::new(0.0, 1.0)), 0);
     }
 
     /// A segment that is a point, or a line, or a cubic that is no more than one, adds no crossing it should not.
