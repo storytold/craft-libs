@@ -1314,6 +1314,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-anicraft-format"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-assuan"
 version = "0.1.0"
 dependencies = [
@@ -1840,6 +1848,7 @@ version = "0.1.0"
 dependencies = [
  "craft-heif",
  "craft-jpeg",
+ "craft-metadata",
  "exr",
  "flate2",
  "half",
