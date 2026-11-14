@@ -538,7 +538,7 @@ impl StyleSheet {
             latent_styles: None,
         };
         let mut add = |st: Style| s.styles.push(st);
-        add(Style { id: "Normal".into(), name: "Normal".into(), priority: Some(0), quick: true, default: true, ..p_style() });
+        add(Style { id: "Normal".into(), name: "Normal".into(), priority: Some(0), quick: true, ..p_style() });
         add(Style {
             id: "DefaultParagraphFont".into(),
             name: "Default Paragraph Font".into(),
