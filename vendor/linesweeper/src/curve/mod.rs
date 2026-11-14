@@ -1196,6 +1196,30 @@ fn max_distance(c0: CubicBez, c1: CubicBez) -> f64 {
         .max(l_infty_distance(c0.p3, c1.p3))
 }
 
+/// The largest absolute value of any control point's x coordinate.
+fn max_abs_x(c: CubicBez) -> f64 {
+    [c.p0, c.p1, c.p2, c.p3]
+        .iter()
+        .fold(0.0, |m: f64, p| m.max(p.x.abs()))
+}
+
+/// The spacing of the smallest floats, which is also the spacing of all
+/// subnormal floats.
+const MIN_SPACING: f64 = f64::from_bits(1);
+
+/// The smallest tolerance that tells apart coordinates of magnitude up to
+/// `max_coord`: `64 * f64::EPSILON * max_coord`, the scale [`crate::binary_op`]
+/// uses, and never below 64 times the spacing of subnormal floats.
+pub(crate) fn resolution_floor(max_coord: f64) -> f64 {
+    (max_coord * (f64::EPSILON * 64.0)).max(MIN_SPACING * 64.0)
+}
+
+/// `f64::EPSILON * max_coord`, between one and two ulps of `max_coord`, and
+/// never below the spacing of subnormal floats.
+fn float_spacing(max_coord: f64) -> f64 {
+    (max_coord * f64::EPSILON).max(MIN_SPACING)
+}
+
 #[derive(Clone, Debug)]
 struct CubicParams {
     c: CubicBez,
@@ -1337,7 +1361,14 @@ fn intersect_cubics_rec(
             // "ish" interval that's just an artifact. In this case, new_y0 and new_y1
             // will be very close, but we'll recurse one more time to get a better
             // quadratic approximation.
+            //
+            // When `mid` rounds to one of the ends, the interval is one float
+            // wide and cannot be split, so splitting it would repeat the same
+            // call until the stack overflows. That happens when `ish_tolerance`
+            // is below the spacing of floats at this height.
             if y1 - y0 <= ish_tolerance
+                || mid <= new_y0
+                || mid >= new_y1
                 || (ep0.dmax + ep1.dmax <= 2.0 * ish_tolerance
                     && ep0.dmin + ep1.dmin >= -2.0 * ish_tolerance)
             {
@@ -1538,6 +1569,12 @@ impl AlmostHorizontalDecomposition {
 /// The `ish_tolerance` parameter tells us when we're allowed to say that
 /// the two curves are close: if they're definitely within `ish_tolerance`
 /// of one another, we can say that they're close.
+///
+/// A positive `ish_tolerance` below `4 * f64::EPSILON` times the largest
+/// x coordinate magnitude of the two curves (two to four ulps of it, and at
+/// least four times the spacing of subnormal floats) is raised to that value,
+/// and a positive `sure_tolerance` below half of it is raised to half of it.
+/// Below that, rounding in the comparison can report the wrong order.
 pub fn intersect_cubics(
     c0: CubicBez,
     c1: CubicBez,
@@ -1559,6 +1596,8 @@ pub fn intersect_cubics(
 ///
 /// Pre-computing the almost-horizontal decomposition can be much faster, because
 /// then you can do it per-curve instead of per-comparison.
+///
+/// The tolerances are raised as in [intersect_cubics].
 pub fn intersect_cubics_with_precomputed_decomp(
     c0: CubicBez,
     c0_div: &AlmostHorizontalDecomposition,
@@ -1567,6 +1606,18 @@ pub fn intersect_cubics_with_precomputed_decomp(
     sure_tolerance: f64,
     ish_tolerance: f64,
 ) -> CurveOrder {
+    let floor = 4.0 * float_spacing(max_abs_x(c0).max(max_abs_x(c1)));
+    let ish_tolerance = if ish_tolerance > 0.0 && ish_tolerance < floor {
+        floor
+    } else {
+        ish_tolerance
+    };
+    let sure_tolerance = if sure_tolerance > 0.0 && sure_tolerance < floor / 2.0 {
+        floor / 2.0
+    } else {
+        sure_tolerance
+    };
+
     let y0 = c0.p0.y.max(c1.p0.y);
     let y1 = c0.p3.y.min(c1.p3.y);
 
@@ -1972,6 +2023,70 @@ mod test {
         );
 
         dbg!(intersect_cubics(c0, c1, sure_tol, ish_tol));
+    }
+
+    // At a height of 1.5e8 one ulp is about 3e-8, more than `ish_tolerance`.
+    // Splitting the close interval around a crossing used to repeat the same
+    // one-ulp interval until the stack overflowed.
+    #[test]
+    fn ish_tolerance_below_float_spacing() {
+        let offset = 1.5e8;
+        let mut segs = crate::Segments::default();
+        segs.add_bez_path(&kurbo::Circle::new((offset, offset), 1.0).to_path(1e-9))
+            .unwrap();
+        segs.add_bez_path(&kurbo::Circle::new((offset + 1.0, offset), 1.0).to_path(1e-9))
+            .unwrap();
+        let cubics: Vec<_> = segs.segments().map(|s| s.to_kurbo_cubic()).collect();
+        let mut compared = 0;
+        for c0 in &cubics {
+            for c1 in &cubics {
+                let y1 = c0.p3.y.min(c1.p3.y);
+                if c0.p0.y.max(c1.p0.y) >= y1 {
+                    continue;
+                }
+                let order = intersect_cubics(*c0, *c1, 5e-11, 1e-10);
+                order.check_invariants();
+                assert_eq!(order.iter().last().map(|(_, end, _)| end), Some(y1));
+                compared += 1;
+            }
+        }
+        assert!(compared > 0);
+    }
+
+    // Raising tiny tolerances must not merge curves that are a few ulps
+    // apart: at 1e15 one ulp is 0.125, and these lines are 1.0 apart.
+    #[test]
+    fn raised_tolerance_keeps_far_curves_apart() {
+        let x = 1e15;
+        let c0 = PathSeg::Line(Line::new((x, 0.0), (x, 1.0))).to_cubic();
+        let c1 = PathSeg::Line(Line::new((x + 1.0, 0.0), (x + 1.0, 1.0))).to_cubic();
+        let order = intersect_cubics(c0, c1, 1e-12, 1e-11);
+        let entries: Vec<_> = order.iter().collect();
+        assert_eq!(entries, vec![(0.0, 1.0, Order::Left)]);
+    }
+
+    // The floor depends on the x coordinates only: large y coordinates do
+    // not make lines 1.0 apart close.
+    #[test]
+    fn raised_tolerance_ignores_large_y() {
+        let y = 2e15;
+        let c0 = PathSeg::Line(Line::new((0.0, y), (0.0, y + 1.0))).to_cubic();
+        let c1 = PathSeg::Line(Line::new((1.0, y), (1.0, y + 1.0))).to_cubic();
+        let order = intersect_cubics(c0, c1, 1e-12, 1e-11);
+        let entries: Vec<_> = order.iter().collect();
+        assert_eq!(entries, vec![(y, y + 1.0, Order::Left)]);
+    }
+
+    // Subnormal coordinates keep their order: the floor goes down to the
+    // spacing of subnormal floats, not to `f64::MIN_POSITIVE`.
+    #[test]
+    fn raised_tolerance_keeps_subnormal_curves_apart() {
+        let x = 1e-310;
+        let c0 = PathSeg::Line(Line::new((x, 0.0), (x, 1.0))).to_cubic();
+        let c1 = PathSeg::Line(Line::new((2.0 * x, 0.0), (2.0 * x, 1.0))).to_cubic();
+        let order = intersect_cubics(c0, c1, 1e-320, 2e-320);
+        let entries: Vec<_> = order.iter().collect();
+        assert_eq!(entries, vec![(0.0, 1.0, Order::Left)]);
     }
 
     #[test]
