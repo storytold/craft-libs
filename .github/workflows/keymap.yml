@@ -50,9 +50,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt -p craft-keymap --check
       - run: cargo clippy -p craft-keymap --all-targets --no-default-features --locked -- -D warnings
-      # `screen-testing` covers `ui` and compiles the dialog screenshots, which need a GPU
-      # to run, so the test steps leave them out.
-      - run: cargo clippy -p craft-keymap --all-targets --features screen-testing --locked -- -D warnings
+      - run: cargo clippy -p craft-keymap --all-targets --features egui --locked -- -D warnings
       - name: Docs (links and missing docs)
         run: cargo doc -p craft-keymap --no-deps --locked
         env:
@@ -60,8 +58,8 @@ jobs:
       # Doctests run once, in the `ui` step.
       - name: Test core
         run: cargo test -p craft-keymap --no-default-features --lib --tests --locked
-      - name: Test egui dispatch and the shortcuts dialog
-        run: cargo test -p craft-keymap --features ui --locked
+      - name: Test egui dispatch
+        run: cargo test -p craft-keymap --features egui --locked
   native:
     # Pushes to next run Linux only.
     if: github.ref != 'refs/heads/next' || github.event_name == 'workflow_dispatch'
@@ -97,7 +95,7 @@ jobs:
         with:
           key: craft-keymap-${{ matrix.os }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo test -p craft-keymap --features ui --locked
+      - run: cargo test -p craft-keymap --features egui --locked
   wasm:
     timeout-minutes: 10
     name: Keymap WASM
@@ -118,4 +116,4 @@ jobs:
         with:
           key: craft-keymap-wasm
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo check -p craft-keymap --features ui --locked --target wasm32-unknown-unknown
+      - run: cargo check -p craft-keymap --features egui --locked --target wasm32-unknown-unknown
