@@ -3,8 +3,10 @@
 Small raster image formats for the Craft apps, from PhotoCraft's `photocraft-codecs`: one module
 per format, one implementation of each. Decoders take untrusted bytes and `Limits`, check the
 declared size before allocating, and never panic. No `unsafe`; it builds for
-`wasm32-unknown-unknown`. Dependencies: `thiserror`, and `rayon` on native targets (the DDS
-encoder compresses rows of blocks in parallel).
+`wasm32-unknown-unknown`. The `common` RGBA image facade delegates PNG/JPEG/BMP/GIF/TIFF/WebP
+decoding and PNG/JPEG encoding to [`craft-image-codecs`](../image-codecs/README.md), the shared
+depth- and metadata-preserving codec implementation. Other dependencies are `thiserror`, and
+`rayon` on native targets (the DDS encoder compresses rows of blocks in parallel).
 
 ```toml
 craft-raster-codecs = { git = "https://github.com/storytold/craft-libs", rev = "<commit>" }

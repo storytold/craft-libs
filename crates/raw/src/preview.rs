@@ -12,6 +12,73 @@ use craft_tiff::{Ifd, Tiff, makernote};
 pub enum PreviewColorSpace {
     Srgb,
     AdobeRgb,
+    ProPhoto,
+}
+
+/// A decoded DNG JPEG XL preview. Pixel samples use the declared bit depth and colour space.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DecodedPreview {
+    pub width: u32,
+    pub height: u32,
+    pub bits: u32,
+    pub rgb: Vec<u16>,
+    pub color_space: Option<PreviewColorSpace>,
+}
+
+/// Decode the largest usable rendered JPEG XL preview in a DNG, within `limits`.
+#[cfg(feature = "jxl")]
+pub fn embedded_jxl_preview(bytes: &[u8], limits: &crate::Limits) -> Option<DecodedPreview> {
+    use craft_tiff::image::chunk_bytes;
+    use craft_tiff::tags as t;
+    let tiff = Tiff::parse(bytes).ok()?;
+    let ifd0 = tiff.ifds.first()?;
+    if !ifd0.contains(t::DNG_VERSION) {
+        return None;
+    }
+    let mut candidates: Vec<_> = tiff
+        .all_ifds()
+        .into_iter()
+        .filter_map(|ifd| {
+            if ifd.u32(t::NEW_SUBFILE_TYPE)? & 1 == 0
+                || ifd.u16(t::COMPRESSION)? != t::compression::JPEG_XL
+                || ifd.u16(t::SAMPLES_PER_PIXEL)? != 3
+                || !matches!(ifd.u16(t::PHOTOMETRIC), Some(t::photometric::RGB | t::photometric::YCBCR))
+            {
+                return None;
+            }
+            let info = ifd.image().ok()?;
+            let chunk = info.single_chunk(bytes.len() as u64)?;
+            chunk_bytes(bytes, &chunk)?;
+            Some((u64::from(info.width) * u64::from(info.height), ifd, info))
+        })
+        .collect();
+    candidates.sort_by_key(|(area, _, _)| std::cmp::Reverse(*area));
+    for (_, ifd, info) in candidates {
+        let samples = usize::from(info.samples_per_pixel);
+        let pixels = usize::try_from(info.width).ok()?.checked_mul(usize::try_from(info.height).ok()?)?;
+        if pixels.checked_mul(samples)? > limits.samples() {
+            continue;
+        }
+        let Ok(crate::RawData::U16(rgb)) = crate::tiffraw::read_image(bytes, &info, tiff.order, crate::tiffraw::Packing::Msb, limits) else {
+            continue;
+        };
+        if rgb.len() != pixels.checked_mul(3)? {
+            continue;
+        }
+        let color_space = match ifd.u16(50970).or_else(|| ifd0.u16(50970)) {
+            Some(2) => Some(PreviewColorSpace::Srgb),
+            Some(3) => Some(PreviewColorSpace::AdobeRgb),
+            Some(4) => Some(PreviewColorSpace::ProPhoto),
+            _ => None,
+        };
+        return Some(DecodedPreview { width: info.width, height: info.height, bits: u32::from(info.bits()), rgb, color_space });
+    }
+    None
+}
+
+#[cfg(not(feature = "jxl"))]
+pub fn embedded_jxl_preview(_: &[u8], _: &crate::Limits) -> Option<DecodedPreview> {
+    None
 }
 
 /// The colour space the raw says its embedded JPEG is in, for a JPEG that declares none itself (no ICC profile,
@@ -243,7 +310,17 @@ fn candidates<'a>(data: &'a [u8], ifd: &Ifd, base: u64, out: &mut Vec<&'a [u8]>,
 /// The largest embedded preview, if any: a JPEG, or (DNG 1.7) a JPEG XL file, or for a Hasselblad 3FR / FFF, which
 /// has no JPEG, its uncompressed RGB preview wrapped as a baseline TIFF.
 pub fn embedded_preview(bytes: &[u8]) -> Option<Vec<u8>> {
-    preview_covering(bytes, None)
+    preview_covering(bytes, None, false)
+}
+
+/// Largest embedded JPEG preview, excluding DNG JPEG XL previews.
+pub fn embedded_jpeg_preview(bytes: &[u8]) -> Option<Vec<u8>> {
+    preview_covering(bytes, None, true)
+}
+
+/// Smallest embedded JPEG of the largest preview's shape whose long edge covers `min_edge`, or the largest JPEG.
+pub fn embedded_jpeg_preview_covering(bytes: &[u8], min_edge: u32) -> Option<Vec<u8>> {
+    preview_covering(bytes, Some(min_edge), true)
 }
 
 /// The smallest embedded JPEG whose long edge is at least `min_edge` and that looks like a copy of the largest preview
@@ -251,7 +328,7 @@ pub fn embedded_preview(bytes: &[u8]) -> Option<Vec<u8>> {
 /// grey mask or depth map), else [`embedded_preview`]. Only TIFF-based raws keep several: an A7R VI's 1616 × 1080
 /// preview is 0.3 MB beside its 9984 × 6656 one (5.6 MB), so a stand-in up to 1616 px decodes about a twentieth of the data.
 pub fn embedded_preview_covering(bytes: &[u8], min_edge: u32) -> Option<Vec<u8>> {
-    preview_covering(bytes, Some(min_edge))
+    preview_covering(bytes, Some(min_edge), false)
 }
 
 /// Of the DCT JPEGs in `found`, the one with the shortest long edge of at least `min_edge` with `largest`'s aspect
@@ -273,7 +350,7 @@ fn smallest_covering<'a>(found: &[&'a [u8]], largest: &[u8], min_edge: u32) -> O
         .map(|(s, _)| s)
 }
 
-fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
+fn preview_covering(bytes: &[u8], min_edge: Option<u32>, jpeg_only: bool) -> Option<Vec<u8>> {
     if bytes.starts_with(b"FUJIFILMCCD-RAW") {
         return raf_jpeg(bytes).filter(|j| is_dct_jpeg(j)).map(|j| trim_eoi(j).to_vec());
     }
@@ -326,7 +403,7 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
         found.push(p);
     }
     bound_candidates(&mut found, bytes.len());
-    let largest = found.iter().copied().filter(|s| is_dct_jpeg(s) || is_jxl(s)).max_by_key(|s| s.len());
+    let largest = found.iter().copied().filter(|s| is_dct_jpeg(s) || (!jpeg_only && is_jxl(s))).max_by_key(|s| s.len());
     let best = min_edge
         .zip(largest)
         .and_then(|(min, big)| smallest_covering(&found, big, min))

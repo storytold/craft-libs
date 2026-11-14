@@ -1,6 +1,6 @@
 [package]
 name = "craft-jpeg"
-description = "Clean-room JPEG decoder (ITU-T T.81): 12-bit and arithmetic-coded frames, and baseline frames a band of rows at a time."
+description = "Clean-room JPEG decoder and 8-bit optimized baseline encoder (ITU-T T.81)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,8 +12,14 @@ workspace = true
 
 [dependencies]
 thiserror = { workspace = true }
+rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Reference encoder and baseline decoder for the comparison tests.
 jpeg-encoder = "0.6"
 zune-jpeg = "0.5"
+jpeg-decoder = "0.3"
+
+[features]
+default = []
+parallel = ["dep:rayon"]

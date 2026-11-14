@@ -406,13 +406,14 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
         if cpp != 1 {
             return Err(RawError::Unsupported("CFA data with several samples per pixel".into()));
         }
-        // the tag is anchored at the top-left of the ActiveArea (DNG spec); `RawImage::cfa` is anchored at the
-        // sensor origin (the crop to the active area shifts it back), so move the anchor out by the area's offset
-        // (DNGs that LightCraft wrote before its writer followed the spec carry the sensor-origin pattern; they are marked
-        // by a bare "LightCraft" Software tag and keep their original reading)
-        let at_origin = Cfa { width: cols, height: rows, pattern };
+        // DNG's CFAPattern is anchored at ActiveArea. Store one canonical CFA anchored at the
+        // sensor origin instead: invert the ActiveArea phase before building RawImage::cfa.
+        // Older LightCraft files wrote the pattern at the sensor origin and are identified by
+        // their bare Software tag, so those keep the bytes as written.
+        let at_area = Cfa { width: cols, height: rows, pattern, origin_x: 0, origin_y: 0 };
         let legacy_writer = [raw, ifd0].iter().any(|i| i.string(t::SOFTWARE).as_deref().map(str::trim) == Some("LightCraft"));
-        Some(if legacy_writer { at_origin } else { at_origin.shifted(cols - active_area.x % cols, rows - active_area.y % rows) })
+        let cfa = if legacy_writer { at_area } else { at_area.shifted((cols - active_area.x % cols) % cols, (rows - active_area.y % rows) % rows) };
+        Some(cfa)
     } else {
         None
     };

@@ -11,7 +11,10 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+base64 = "0.23"
+craft-image-codecs = { workspace = true }
 thiserror = { workspace = true }
+image = { version = "0.25", default-features = false }
 
 # The DDS encoder compresses rows of blocks in parallel on native; wasm stays single-threaded.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

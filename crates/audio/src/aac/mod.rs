@@ -5,13 +5,13 @@
 //!   model, window switching, M/S, TNS, bit reservoir, CBR/VBR, 1–8 channels.
 //! - [`Decoder`] (feature `aac-decode`): `AudioSpecificConfig` + raw access units → planar f32.
 //!   Supports M/S, intensity stereo, PNS, TNS, pulse data, both window shapes and every window
-//!   sequence.
+//!   sequence, and the SBR tool of HE-AAC ([`Decoder::set_sbr`]).
 //! - [`latm_config`] / [`latm_split`] (feature `aac-decode`): the configuration and payload of
 //!   LOAS / LATM frames (AAC in MPEG transport streams), for the decoder.
 //!
-//! HE-AAC (SBR/PS), Main/SSR/LTP profiles, coupling channels and 960-sample frames are not
-//! supported; for HE-AAC only the AAC-LC core is decoded (at the core rate; [`Decoder::sbr`] says
-//! when).
+//! Parametric stereo (HE-AAC v2), Main/SSR/LTP profiles, coupling channels and 960-sample frames
+//! are not supported. HE-AAC decodes at twice the core rate with [`Decoder::set_sbr`] on
+//! ([`Decoder::sbr`] says when a stream uses SBR), and as its AAC-LC core otherwise.
 //!
 //! From FilmCraft's `filmcraft-aac` (storytold/filmcraft@8fda2f2). Public items keep their names,
 //! so FilmCraft can re-export this module.
@@ -53,6 +53,8 @@ mod ics;
 #[cfg(feature = "aac-decode")]
 mod latm;
 mod mdct;
+#[cfg(feature = "aac-decode")]
+mod sbr;
 mod tables;
 mod tns;
 
@@ -62,11 +64,19 @@ pub use config::{AdtsHeader, AudioSpecificConfig, ElementType, ProgramConfig, co
 #[cfg(feature = "aac-decode")]
 pub use decoder::Decoder;
 #[cfg(feature = "aac-encode")]
+pub(crate) use encoder::cbr_range;
+#[cfg(feature = "aac-encode")]
 pub use encoder::{BitrateMode, Encoder, EncoderConfig, EncoderStats};
 #[cfg(feature = "aac-decode")]
 pub use latm::{LatmConfig, latm_config, latm_split};
 pub use mdct::WindowShape;
 pub use tables::{SAMPLE_RATES, sample_rate_index};
+
+/// Output samples by which [`Decoder`] with [`Decoder::set_sbr`] on delays the core: the SBR filter
+/// banks and the SBR frame's lag behind the core frame. HE-AAC encoders count it in the priming the
+/// container signals.
+#[cfg(feature = "aac-decode")]
+pub const SBR_DELAY: usize = sbr::DELAY;
 
 /// Samples per AAC-LC frame (per channel).
 pub const FRAME_LEN: usize = 1024;
@@ -197,9 +207,9 @@ const UPSAMPLE_DELAY: usize = 481;
 #[cfg(feature = "aac-decode")]
 const UPSAMPLE_HISTORY: usize = UPSAMPLE_DELAY + UPSAMPLE_HALF;
 
-/// 2× upsampler for HE-AAC. The decoder reconstructs the AAC-LC core at half the output rate and
-/// not yet the SBR high band, so the core is interpolated to the output rate: timing and pitch are
-/// right and the band above the core's Nyquist stays empty. Even outputs are the input samples,
+/// 2× upsampler: interpolates an AAC-LC core to twice its rate, leaving the band above the core's
+/// Nyquist empty. [`Decoder::set_sbr`] decodes HE-AAC with its high band instead; this stays for
+/// callers that want the core alone at the output rate. Even outputs are the input samples,
 /// odd ones a Blackman-windowed sinc half-band interpolation over 2 × `UPSAMPLE_HALF` inputs.
 /// The output is delayed by `UPSAMPLE_DELAY` input samples, as an SBR decoder's is; the state
 /// carries across packets, so a seek primed with the preceding packet gives the same samples as

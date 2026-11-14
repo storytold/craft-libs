@@ -189,13 +189,14 @@ pub const MAX_WARNINGS: usize = 32;
 ///   short is not believed when the track's End of Track says otherwise: the next chunk is looked
 ///   for where the track's events ended;
 /// - bytes that are no chunk are skipped up to the next `MTrk`, and trailing bytes are ignored;
-/// - past [`MAX_TRACKS`] tracks the rest is left out;
+/// - past [`MAX_TRACKS`] tracks the rest is left out; this and the event limit set
+///   [`LenientRead::over_limit`];
 /// - lyrics are counted in a warning (they are not kept); a format-2 file gets a warning that its
 ///   tracks are read side by side.
 pub fn read_smf_lenient(bytes: &[u8]) -> Result<LenientRead, MidiError> {
     let mut warnings = Vec::new();
     let (smf, extra) = read(bytes, Some(&mut warnings))?;
-    Ok(LenientRead { smf, warnings, instruments: extra.instruments, end: extra.end })
+    Ok(LenientRead { smf, warnings, instruments: extra.instruments, end: extra.end, over_limit: extra.over_limit })
 }
 
 /// What [`read_smf_lenient`] makes of a file.
@@ -209,12 +210,18 @@ pub struct LenientRead {
     pub instruments: Vec<String>,
     /// The last tick any track reaches: its End of Track, or where its events stop.
     pub end: i64,
+    /// Whether the file goes past [`MAX_EVENTS`] events or [`MAX_TRACKS`] tracks, so what lies past
+    /// the limit was left out. It is set even when the warnings are already full, so a caller that
+    /// refuses such files (as [`read_smf`] does) can tell without reading the warnings.
+    pub over_limit: bool,
 }
 
-/// What the reader finds beyond [`Smf`]: instrument names per kept track, and the end tick.
+/// What the reader finds beyond [`Smf`]: instrument names per kept track, the end tick, and
+/// whether a limit left part of the file out.
 struct Extra {
     instruments: Vec<String>,
     end: i64,
+    over_limit: bool,
 }
 
 fn warn(warnings: &mut Option<&mut Vec<String>>, what: String) {
@@ -262,6 +269,7 @@ fn read(bytes: &[u8], mut warnings: Option<&mut Vec<String>>) -> Result<(Smf, Ex
     let (mut tracks, mut instruments) = (Vec::new(), Vec::new());
     let mut event_budget = MAX_EVENTS;
     let (mut end, mut seen, mut lyrics) = (0i64, 0usize, 0usize);
+    let mut over_limit = false;
 
     while !cur.is_empty() {
         let chunk_at = cur.at();
@@ -306,6 +314,7 @@ fn read(bytes: &[u8], mut warnings: Option<&mut Vec<String>>) -> Result<(Smf, Ex
                 return Err(MidiError::TooManyTracks(MAX_TRACKS));
             }
             warn(&mut warnings, format!("more than {MAX_TRACKS} tracks: the rest was left out"));
+            over_limit = true;
             break;
         }
         let (body_at, body_start) = (cur.at(), cur.pos);
@@ -319,7 +328,10 @@ fn read(bytes: &[u8], mut warnings: Option<&mut Vec<String>>) -> Result<(Smf, Ex
         end = end.max(read.end);
         match read.stop {
             Some(e) if !lenient => return Err(e),
-            Some(e) => warn(&mut warnings, format!("track {seen} {}: what came before is kept", stop_reason(&e))),
+            Some(e) => {
+                over_limit |= matches!(e, MidiError::TooManyEvents(_));
+                warn(&mut warnings, format!("track {seen} {}: what came before is kept", stop_reason(&e)));
+            }
             None if !read.ended && lenient => warn(&mut warnings, format!("track {seen} has no End of Track: what came before is kept")),
             None => {}
         }
@@ -363,7 +375,7 @@ fn read(bytes: &[u8], mut warnings: Option<&mut Vec<String>>) -> Result<(Smf, Ex
 
     Ok((
         Smf { format, tracks, tempos: globals.tempos, meters: globals.meters, markers: globals.markers, key_sigs: globals.key_sigs },
-        Extra { instruments, end },
+        Extra { instruments, end, over_limit },
     ))
 }
 
