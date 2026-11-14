@@ -139,8 +139,15 @@ pub fn targeted_row<K>(rows: &[ChannelRow<K>]) -> Option<&ChannelRow<K>> {
 #[non_exhaustive]
 pub enum ChannelsEvent<K> {
     /// A click on a row (not with Cmd/Ctrl), or ↑ ↓ to a row: the app targets the channel
-    /// (PhotoCraft: Quick Mask targets the composite).
-    Target(K),
+    /// (PhotoCraft: Quick Mask targets the composite) and sends `channel.target {channel, extend}`. `key` is the last
+    /// key of the list's new selection; `extend` is true when that selection holds other keys too (Shift-click).
+    #[non_exhaustive]
+    Target {
+        /// The channel to target.
+        key: K,
+        /// Whether the selection extends beyond `key`.
+        extend: bool,
+    },
     /// An eye click or a sweep over several eyes, as the step to apply: `Flip` sets the eye to the step's value as
     /// the pointer crosses it; Esc and focus loss give `Restore` for every eye flipped, with the value from before.
     /// Alt is ignored. The app groups a sweep as one undo step.
