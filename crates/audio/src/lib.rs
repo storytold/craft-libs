@@ -54,8 +54,12 @@ mod read;
 mod track;
 #[cfg(any(feature = "decode-native", feature = "pcm-encode"))]
 mod wav;
-#[cfg(any(feature = "pcm-encode", feature = "flac-encode"))]
+#[cfg(any(feature = "pcm-encode", feature = "flac-encode", feature = "vorbis-encode"))]
 mod write;
+#[cfg(feature = "vorbis-encode")]
+pub use write::encode_ogg;
+#[cfg(feature = "vorbis-encode")]
+pub use write::OGG_BITRATES;
 
 /// The FLAC packet encoder (RFC 9639), for a caller that muxes FLAC itself (into MP4, Matroska or
 /// its own `.flac` writer): planar integer samples in, frames out, and the STREAMINFO to patch in
@@ -219,12 +223,20 @@ pub enum EncodeFormat {
     Aiff,
     /// FLAC (integer depths).
     Flac,
+    /// Ogg Vorbis (variable bitrate). Whole-buffer only: use [`encode_ogg`] directly.
+    #[cfg(feature = "vorbis-encode")]
+    Ogg,
 }
 
 impl EncodeFormat {
     /// Every format, in the order menus list them. Whether [`encode`] writes one depends on its
     /// feature.
+    #[cfg(not(feature = "vorbis-encode"))]
     pub const ALL: &[EncodeFormat] = &[EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac];
+    /// Every format, in the order menus list them. Whether [`encode`] writes one depends on its
+    /// feature.
+    #[cfg(feature = "vorbis-encode")]
+    pub const ALL: &[EncodeFormat] = &[EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac, EncodeFormat::Ogg];
 
     /// The extension a new file of this format gets, lower case and without the dot: `"wav"`,
     /// `"aif"`, `"flac"`. [`encode_format_for`] maps it back.
@@ -233,6 +245,8 @@ impl EncodeFormat {
             EncodeFormat::Wav => "wav",
             EncodeFormat::Aiff => "aif",
             EncodeFormat::Flac => "flac",
+            #[cfg(feature = "vorbis-encode")]
+            EncodeFormat::Ogg => "ogg",
         }
     }
 
@@ -242,6 +256,8 @@ impl EncodeFormat {
             EncodeFormat::Wav => "audio/wav",
             EncodeFormat::Aiff => "audio/aiff",
             EncodeFormat::Flac => "audio/flac",
+            #[cfg(feature = "vorbis-encode")]
+            EncodeFormat::Ogg => "audio/ogg",
         }
     }
 
@@ -251,6 +267,8 @@ impl EncodeFormat {
             EncodeFormat::Wav => Container::Wav,
             EncodeFormat::Aiff => Container::Aiff,
             EncodeFormat::Flac => Container::Flac,
+            #[cfg(feature = "vorbis-encode")]
+            EncodeFormat::Ogg => Container::Ogg,
         }
     }
 }

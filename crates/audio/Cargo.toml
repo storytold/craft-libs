@@ -30,6 +30,8 @@ lossless-encode = ["pcm-encode", "flac-encode"]
 pcm-encode = []
 # Encode FLAC files.
 flac-encode = ["craft-media/bitstream"]
+# Encode Ogg Vorbis files (desktop only: builds the reference libvorbis from its C sources).
+vorbis-encode = ["dep:vorbis_rs"]
 # Codec modules on their own, for packet-level use.
 aac-decode = ["craft-media/bitstream"]
 aac-encode = ["craft-media/bitstream"]
@@ -58,6 +60,7 @@ thiserror = { workspace = true }
 serde = { workspace = true, optional = true }
 log = { version = "0.4", optional = true }
 rayon = { workspace = true, optional = true }
+vorbis_rs = { version = "0.5", optional = true }
 # symphonia keeps its AAC decoder for AAC in CAF, a container craft-media does not read.
 symphonia = { version = "0.6.1", optional = true, default-features = false, features = ["mp3", "flac", "vorbis", "ogg", "wav", "pcm", "aiff", "isomp4", "aac", "alac", "adpcm", "caf", "mkv"] }
 

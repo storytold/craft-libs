@@ -10,6 +10,10 @@ mod pcm;
 mod raw;
 #[cfg(feature = "pcm-encode")]
 mod wav;
+#[cfg(feature = "vorbis-encode")]
+pub(crate) mod vorbis;
+#[cfg(feature = "vorbis-encode")]
+pub use vorbis::OGG_BITRATES;
 
 use crate::{AudioBuffer, AudioError, ChannelLayout, EncodeFormat, EncodeOptions, Result};
 #[cfg(feature = "pcm-encode")]
@@ -47,20 +51,54 @@ pub fn encode(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
 
 /// Refuses a format whose writer is not built, before anything else about the request is checked.
 fn check_built(format: EncodeFormat) -> Result<()> {
-    let (built, feature) =
-        if format == EncodeFormat::Flac { (cfg!(feature = "flac-encode"), "flac-encode") } else { (cfg!(feature = "pcm-encode"), "pcm-encode") };
+    let (built, feature) = match format {
+        EncodeFormat::Flac => (cfg!(feature = "flac-encode"), "flac-encode"),
+        #[cfg(feature = "vorbis-encode")]
+        EncodeFormat::Ogg => (cfg!(feature = "vorbis-encode"), "vorbis-encode"),
+        _ => (cfg!(feature = "pcm-encode"), "pcm-encode"),
+    };
     if built { Ok(()) } else { Err(AudioError::Unsupported(format!("writing {format:?} needs the `{feature}` feature"))) }
 }
 
 /// The file extensions of the formats [`encode`] can write (those whose features are on).
-#[cfg(all(feature = "pcm-encode", feature = "flac-encode"))]
+#[cfg(all(feature = "pcm-encode", feature = "flac-encode", feature = "vorbis-encode"))]
+pub const ENCODE_EXTENSIONS: &[&str] = &["wav", "wave", "bwf", "aif", "aiff", "aifc", "flac", "ogg"];
+/// The file extensions of the formats [`encode`] can write (those whose features are on).
+#[cfg(all(feature = "pcm-encode", feature = "flac-encode", not(feature = "vorbis-encode")))]
 pub const ENCODE_EXTENSIONS: &[&str] = &["wav", "wave", "bwf", "aif", "aiff", "aifc", "flac"];
 /// The file extensions of the formats [`encode`] can write (those whose features are on).
-#[cfg(all(feature = "pcm-encode", not(feature = "flac-encode")))]
+#[cfg(all(feature = "pcm-encode", feature = "vorbis-encode", not(feature = "flac-encode")))]
+pub const ENCODE_EXTENSIONS: &[&str] = &["wav", "wave", "bwf", "aif", "aiff", "aifc", "ogg"];
+/// The file extensions of the formats [`encode`] can write (those whose features are on).
+#[cfg(all(feature = "pcm-encode", not(feature = "flac-encode"), not(feature = "vorbis-encode")))]
 pub const ENCODE_EXTENSIONS: &[&str] = &["wav", "wave", "bwf", "aif", "aiff", "aifc"];
 /// The file extensions of the formats [`encode`] can write (those whose features are on).
-#[cfg(all(feature = "flac-encode", not(feature = "pcm-encode")))]
+#[cfg(all(feature = "flac-encode", feature = "vorbis-encode", not(feature = "pcm-encode")))]
+pub const ENCODE_EXTENSIONS: &[&str] = &["flac", "ogg"];
+/// The file extensions of the formats [`encode`] can write (those whose features are on).
+#[cfg(all(feature = "flac-encode", not(feature = "pcm-encode"), not(feature = "vorbis-encode")))]
 pub const ENCODE_EXTENSIONS: &[&str] = &["flac"];
+/// The file extensions of the formats [`encode`] can write (those whose features are on).
+#[cfg(all(feature = "vorbis-encode", not(feature = "pcm-encode"), not(feature = "flac-encode")))]
+pub const ENCODE_EXTENSIONS: &[&str] = &["ogg"];
+
+/// Encode `buf` as an Ogg Vorbis stream at about `kbps` (variable, as Vorbis is): stereo, or mono
+/// for a mono buffer. A bitrate the encoder has no setup for at that rate and channel count falls
+/// back to a quality that suits it. Whole-buffer only: no streaming encoder is provided for Vorbis.
+///
+/// ```
+/// # #[cfg(feature = "vorbis-encode")] {
+/// use craft_audio::{AudioBuffer, encode_ogg};
+///
+/// let buf = AudioBuffer::new(48_000, 2, 48_000); // one second of stereo silence
+/// let ogg = encode_ogg(&buf, 192).unwrap();
+/// assert_eq!(&ogg[..4], b"OggS");
+/// # }
+/// ```
+#[cfg(feature = "vorbis-encode")]
+pub fn encode_ogg(buf: &AudioBuffer, kbps: u32) -> Result<Vec<u8>> {
+    vorbis::encode(buf, kbps)
+}
 
 /// The format [`encode`] writes for a file extension or format name (`wav`, `aiff`, `flac`,
 /// case-insensitive, with or without the dot), or `None` when it cannot write it. `aifc` is
@@ -82,6 +120,8 @@ pub fn encode_format_for(name: &str) -> Option<EncodeFormat> {
         "aif" | "aiff" | "aifc" => Some(EncodeFormat::Aiff),
         #[cfg(feature = "flac-encode")]
         "flac" => Some(EncodeFormat::Flac),
+        #[cfg(feature = "vorbis-encode")]
+        "ogg" => Some(EncodeFormat::Ogg),
         _ => None,
     }
 }
@@ -123,11 +163,13 @@ fn failed_write_error() -> AudioError {
 /// assert_eq!(&flac[..4], b"fLaC");
 /// # }
 /// ```
+#[cfg(any(feature = "pcm-encode", feature = "flac-encode"))]
 pub struct FileEncoder<W: Write + Seek> {
     writer: Writer<W>,
     channels: usize,
 }
 
+#[cfg(any(feature = "pcm-encode", feature = "flac-encode"))]
 impl<W: Write + Seek> std::fmt::Debug for FileEncoder<W> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let format = match &self.writer {
@@ -142,6 +184,7 @@ impl<W: Write + Seek> std::fmt::Debug for FileEncoder<W> {
     }
 }
 
+#[cfg(any(feature = "pcm-encode", feature = "flac-encode"))]
 enum Writer<W> {
     #[cfg(feature = "pcm-encode")]
     Wav(wav::Writer<W>),
@@ -151,6 +194,7 @@ enum Writer<W> {
     Flac(flac::Writer<W>),
 }
 
+#[cfg(any(feature = "pcm-encode", feature = "flac-encode"))]
 impl<W: Write + Seek> FileEncoder<W> {
     /// Starts a file of `channels` channels at `sample_rate` at the current position of `out`.
     /// `opts.layout`, when set, must have `channels` channels.
@@ -252,7 +296,7 @@ pub fn wav_float_header(sample_rate: u32, channels: u16, frames: u64) -> Result<
 
 // With only one of `pcm-encode` and `flac-encode`, the other's formats are refused, not silently
 // written as something else.
-#[cfg(all(test, not(all(feature = "pcm-encode", feature = "flac-encode"))))]
+#[cfg(all(test, any(feature = "pcm-encode", feature = "flac-encode"), not(all(feature = "pcm-encode", feature = "flac-encode"))))]
 mod tests {
     use super::*;
 
