@@ -1886,7 +1886,9 @@ dependencies = [
 name = "craft-jpeg"
 version = "0.1.0"
 dependencies = [
+ "jpeg-decoder",
  "jpeg-encoder 0.6.1",
+ "rayon",
  "thiserror 2.0.21",
  "zune-jpeg",
 ]
@@ -2358,6 +2360,18 @@ dependencies = [
  "proptest",
  "toml",
  "unicode-normalization",
+]
+
+[[package]]
+name = "craft-ps"
+version = "0.1.0"
+dependencies = [
+ "craft-eps",
+ "kurbo 0.13.1",
+ "miniz_oxide 0.8.9",
+ "pdf-writer",
+ "skrifa 0.47.0",
+ "weezl 0.1.12",
 ]
 
 [[package]]
@@ -5325,6 +5339,15 @@ checksum = "1c00acbd29eabad4a2392fa0e921c874934dbbf4194312ad20f04a0ed67a3cb3"
 dependencies = [
  "getrandom 0.4.3",
  "libc",
+]
+
+[[package]]
+name = "jpeg-decoder"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
+dependencies = [
+ "rayon",
 ]
 
 [[package]]

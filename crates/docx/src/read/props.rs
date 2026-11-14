@@ -419,15 +419,22 @@ impl PropCtx {
                 }
                 "w:numPr" => {
                     let num = k.child_val("w:numId").and_then(u32_of);
-                    let ilvl = k.child_val("w:ilvl").and_then(u32_of);
-                    let level = ilvl.unwrap_or(0).min(8) as u8;
-                    match (num, ilvl) {
-                        (Some(num), _) => p.numbering = Some(NumRef { num, level }),
-                        // A level without a list: the list comes from the based-on style, as in
-                        // a Heading 3 that only says "level 3" of Heading 2's list. Resolved once
-                        // the styles are read (`resolve_list_levels`).
-                        (None, Some(_)) => p.numbering = Some(NumRef { num: LEVEL_ONLY, level }),
-                        (None, None) => {}
+                    let ilvl_node = k.child("w:ilvl");
+                    let ilvl =
+                        ilvl_node.and_then(|node| node.attr("w:val")).and_then(int).filter(|level| (0..=8).contains(level)).map(|level| level as u32);
+                    // A missing level means level zero. A present but malformed/out-of-range
+                    // level invalidates this numbering reference instead of silently becoming
+                    // level zero; the latter can turn hostile input into a real list.
+                    if ilvl_node.is_none() || ilvl.is_some() {
+                        let level = ilvl.unwrap_or(0) as u8;
+                        match (num, ilvl) {
+                            (Some(num), _) => p.numbering = Some(NumRef { num, level }),
+                            // A level without a list: the list comes from the based-on style, as in
+                            // a Heading 3 that only says "level 3" of Heading 2's list. Resolved once
+                            // the styles are read (`resolve_list_levels`).
+                            (None, Some(_)) => p.numbering = Some(NumRef { num: LEVEL_ONLY, level }),
+                            (None, None) => {}
+                        }
                     }
                 }
                 "w:pBdr" => p.borders = Some(self.borders(k)),

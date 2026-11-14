@@ -231,9 +231,10 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   sockets: session, requests of method calls with back-references, responses, ids, address
   templates, credentials and the judgement of HTTP answers, over any HTTP implementation. Bounded
   on hostile answers; what a program asks and makes of the answers stays in it.
-- [`craft-jpeg`](crates/jpeg/README.md): clean-room decoder for 12-bit and arithmetic-coded
-  JPEG (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), from PhotoCraft, and a frame probe for routing.
-  Metadata stays in each app.
+- [`craft-jpeg`](crates/jpeg/README.md): clean-room JPEG decoder for 12-bit and arithmetic-coded
+  frames (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), band decoding, and an optimized 8-bit baseline
+  encoder, from PhotoCraft; includes a frame probe for routing. Metadata interpretation stays in
+  each app.
 - [`craft-raster-codecs`](crates/raster-codecs/README.md): small raster formats, one module each,
   from PhotoCraft: DDS (BC1 to BC3, read and write), DICOM, FITS (read and write), IFF/ILBM (read
   and write), PCX, PNM/PAM/PFM (read and write) and XPM, into one flat image type. Bounded and

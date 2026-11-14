@@ -16,6 +16,13 @@ const APP_RPR_DEFAULT: &str = r#"<w:rPr xmlns:w="http://schemas.openxmlformats.o
 /// The font of run defaults that name none (Word, measured: every slot).
 const SPEC_DEFAULT_FONT: &str = "Times New Roman";
 
+fn numbering_level_index(value: Option<&str>) -> Option<usize> {
+    match value {
+        None => Some(0),
+        Some(value) => int(value).filter(|level| (0..=8).contains(level)).map(|level| level as usize),
+    }
+}
+
 /// Built-in style names Word stores in lower case, and how the UI shows them.
 pub(crate) const LOWER_NAMES: &[(&str, &str)] = &[
     ("caption", "Caption"),
@@ -327,10 +334,8 @@ impl Reader<'_> {
             let Some(id) = a.attr("w:abstractNumId").and_then(u32_of) else { continue };
             let mut levels: Vec<Level> = (0..9).map(default_level).collect();
             for l in a.children("w:lvl") {
-                let i = l.attr("w:ilvl").and_then(u32_of).unwrap_or(0) as usize;
-                if let Some(slot) = levels.get_mut(i) {
-                    *slot = self.level(l, i);
-                }
+                let Some(i) = numbering_level_index(l.attr("w:ilvl")) else { continue };
+                levels[i] = self.level(l, i);
             }
             if let Some(link) = a.child_val("w:numStyleLink") {
                 links.push((id, link.to_string()));
@@ -354,7 +359,9 @@ impl Reader<'_> {
             let (Some(id), Some(abs)) = (n.attr("w:numId").and_then(u32_of), n.child_val("w:abstractNumId").and_then(u32_of)) else { continue };
             let (mut start_overrides, mut level_overrides) = (Vec::new(), Vec::new());
             for o in n.children("w:lvlOverride").take(9) {
-                let lvl = o.attr("w:ilvl").and_then(u32_of).unwrap_or(0).min(8) as u8;
+                let Some(raw_level) = o.attr("w:ilvl") else { continue };
+                let Some(lvl) = numbering_level_index(Some(raw_level)) else { continue };
+                let lvl = lvl as u8;
                 if let Some(s) = o.child_val("w:startOverride").and_then(u32_of) {
                     start_overrides.push((lvl, s));
                 } else if let Some(s) = o.child("w:lvl").and_then(|l| l.child_val("w:start")).and_then(u32_of) {

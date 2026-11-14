@@ -51,6 +51,10 @@ impl Underline {
     }
     pub fn from_ooxml(s: &str) -> Underline {
         Underline::ALL.iter().copied().find(|u| u.ooxml() == s).unwrap_or(match s {
+            // Some Word producers serialize the generic on/off values here, although the
+            // underline simple type normally uses `none`. Honor an explicit disable rather
+            // than treating an unrecognized value as the default single underline.
+            "off" | "false" | "0" => Underline::None,
             "thickDash" | "dashLong" | "dashedHeavy" | "dashLongHeavy" => Underline::Dash,
             "dottedHeavy" => Underline::Dotted,
             "wavyHeavy" => Underline::Wave,
