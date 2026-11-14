@@ -11,6 +11,37 @@ Source-level platform regression guards and verification utilities for the Craft
 3. **`std_instant`**: Flags `std::time::Instant` outside comments and strings: the full path, `<m>::Instant` where a `use` binds `m` to `std::time`, and each `use` that imports `std::time::Instant` or `std::time::*`. Other crates' `Instant` (such as `web_time::Instant`) is not flagged, and neither is an item whose `cfg` attribute is false on `wasm32-unknown-unknown`. A `mod name;` inside such an item also skips the module's file (`name.rs` or `name/mod.rs`, or the file a `#[path]` attribute names) and the files of the modules declared in it, when they are among the files passed in and no declaration outside such items also reaches them. On that target, `std::time::Instant::now()` panics at runtime with `"time not implemented on this platform"`. Code targeting the web must use `web_time::Instant`.
 4. **`rust_sources`**: Recursively discovers a crate's `.rs` source files while excluding integration tests (`tests/`), test modules (`tests.rs`, `tests_*.rs`, `*_tests.rs`, `*_test.rs`), build artifacts (`target/`, any folder holding a `CACHEDIR.TAG` file that starts with the line `Signature: 8a477f597d28d172789f06886806bc55`, `.git/` and other folders whose name starts with `.`) and symbolic links, which it does not follow. A file over 8 MiB, more than 256 MiB in all or more than 50,000 files returns an error; `rust_sources_with_limits` takes other limits. It is not built for `wasm32`.
 
+## Test folders: `temp`
+
+`TempDir::new(tag)` makes a new, empty folder `craft-testkit-<tag>-<random characters>` in the system temporary directory and returns an error instead of panicking. Dropping it removes the folder with its contents, also when the test panics; `close()` removes it and returns the error. A folder with a name that is already taken is skipped and left as it is. On Unix the folder has mode 0o700, and `new` returns an error when the folder it made is a link, is open to other users or is owned by another user. `path()` returns the canonical path (`/private/var/...` on macOS, `\\?\...` on Windows). `file(name)` returns the path of `name` in the folder and returns `InvalidInput` for an empty name, `.`, `..`, or a name with `/`, `\`, `:` or NUL. The module is not built for `wasm32`.
+
+```rust
+let dir = craft_testkit::TempDir::new("export")?;
+std::fs::write(dir.file("out.png")?, &png)?;
+```
+
+| Module | Consumers |
+|---|---|
+| `temp` | VectorCraft, PdfCraft, CADCraft, `craft-media-testkit` |
+
+### Origin
+
+| Module | Source | Path | SHA |
+|---|---|---|---|
+| `temp` | storytold/vectorcraft | `crates/testkit/src/lib.rs` (`temp_dir`, `TempDir`) | `bada8e17` |
+| `temp` | storytold/pdfcraft#6124 | `crates/testkit/src/scratch.rs` (`ScratchDir`) | `92e20711` |
+| `temp` | storytold/craft-libs | `crates/media-testkit/src/lib.rs` (`private_dir`) | `75a654f4` |
+| `temp` | storytold/cadcraft | `crates/engine/tests/support/temp_dir.rs`, `crates/ui-egui/tests/support/temp_dir.rs` | `8e698902` |
+
+### Migration
+
+| Consumer | State |
+|---|---|
+| VectorCraft | Not switched. `temp_dir(tag)` shares one folder per tag in a process; its test of that is not moved. |
+| PdfCraft | Not switched. `ScratchFile` has no counterpart; `TempDir::file` returns a path in a `TempDir`. |
+| CADCraft | Not switched. Its `TempDir` empties a leftover folder of the same name; `temp` makes a new one. |
+| `craft-media-testkit` | Not switched. `private_dir()` is unchanged. |
+
 ## Epistemic Scope: Syntactic Guards vs Runtime Validation
 
 Source-level guards provide deterministic syntactic evidence about codebase structure:
