@@ -267,3 +267,78 @@ fn cleanup_does_not_traverse_windows_directory_junctions() {
     assert!(root.join("blobs").exists());
     assert!(root.join("composite").exists());
 }
+
+#[cfg(any(unix, windows))]
+#[test]
+fn manifest_symlink_is_refused_before_writing_any_objects_or_previews() {
+    let temp = Temporary::new();
+    let root = temp.bundle();
+    let mut writer = DirectoryBundleWriter::default();
+    writer.save_directory(&root, entries(OLD)).unwrap();
+    assert_manifest(&root, OLD); // Ordinary publication remains supported.
+    let external = temp.0.join("external-manifest.json");
+    fs::write(&external, b"unchanged external manifest").unwrap();
+    fs::remove_file(root.join(MANIFEST)).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&external, root.join(MANIFEST)).unwrap();
+    #[cfg(windows)]
+    if let Err(error) = std::os::windows::fs::symlink_file(&external, root.join(MANIFEST)) {
+        if error.raw_os_error() == Some(1314) || error.kind() == std::io::ErrorKind::Unsupported {
+            eprintln!("SKIP manifest symlink fixture: {error}");
+            return;
+        }
+        panic!("create manifest symlink fixture: {error}");
+    }
+    let mut changed = entries(NEW);
+    changed.add_object(ObjectKind::Tile, b"must not write tile").unwrap();
+    changed.add_object(ObjectKind::Blob, b"must not write blob").unwrap();
+    changed.set_preview(THUMB, b"must not write thumbnail".to_vec()).unwrap();
+    changed.set_preview(FULL_COMPOSITE, b"must not write composite".to_vec()).unwrap();
+    assert!(writer.save_directory(&root, changed).is_err());
+    assert_eq!(fs::read(&external).unwrap(), b"unchanged external manifest");
+    assert!(fs::symlink_metadata(root.join(MANIFEST)).unwrap().file_type().is_symlink());
+    for unwritten in ["tiles", "blobs", THUMB, "composite"] {
+        assert!(!root.join(unwritten).exists(), "manifest refusal must precede {unwritten} publication");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn chosen_root_symlink_cleanup_works_with_search_only_root_and_composite_permissions() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    struct Restore(PathBuf, fs::Permissions);
+    impl Restore {
+        fn restrict(path: &Path) -> Self {
+            let old = fs::metadata(path).unwrap().permissions();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o300)).unwrap();
+            Self(path.to_path_buf(), old)
+        }
+    }
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, self.1.clone());
+        }
+    }
+    let temp = Temporary::new();
+    let root = temp.bundle();
+    let mut writer = DirectoryBundleWriter::default();
+    let mut first = entries(OLD);
+    let stale = first.add_object(ObjectKind::Blob, b"stale blob").unwrap();
+    first.set_preview(THUMB, b"stale thumbnail".to_vec()).unwrap();
+    first.set_preview(COMPOSITE, b"stale preview".to_vec()).unwrap();
+    writer.save_directory(&root, first).unwrap();
+    let chosen = temp.0.join("chosen.pcraft");
+    symlink(&root, &chosen).unwrap();
+    let composite_mode = Restore::restrict(&root.join("composite"));
+    let root_mode = Restore::restrict(&root);
+    let result = writer.save_directory(&chosen, entries(NEW));
+    drop(root_mode);
+    drop(composite_mode);
+    let stats = result.expect("chosen root resolves before cleanup; traversal does not require directory read permission");
+    assert_manifest(&root, NEW);
+    assert_eq!(stats.removed, 1);
+    assert!(!root.join(stale).exists());
+    assert!(!root.join(THUMB).exists());
+    assert!(!root.join(COMPOSITE).exists());
+    assert!(fs::symlink_metadata(chosen).unwrap().file_type().is_symlink());
+}

@@ -207,6 +207,19 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     let info = ifd0.image()?;
     let (w, h) = (info.width as usize, info.height as usize);
     let n = w.checked_mul(h).filter(|n| *n > 0 && *n <= limits.samples()).ok_or(RawError::Limit("image too large"))?;
+    // A partial TIFF directory is damage, not evidence of an unsupported compressed layout.
+    // Do not infer packing from an absent strip table or from clipped sensor bytes.
+    if info.compression == 1
+        && (info.offsets.is_empty()
+            || info.offsets.len() != info.byte_counts.len()
+            || info
+                .offsets
+                .iter()
+                .zip(&info.byte_counts)
+                .any(|(&at, &len)| len == 0 || at.checked_add(len).is_none_or(|end| end > bytes.len() as u64)))
+    {
+        return Err(RawError::Corrupt("ORF strip table is missing or outside file".into()));
+    }
     let chunks = info.chunks(bytes.len() as u64);
     let total = chunks.iter().fold(0u64, |a, c| a.saturating_add(c.len));
     let stated = cfa_from_exif(&tiff);
@@ -348,6 +361,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         camera: tiff.ifds.first().map(Camera::from_ifd0).unwrap_or_default(),
         cinema: Default::default(),
         lens_metadata: Default::default(),
+        notices: Default::default(),
         level_sources: crate::LevelSources { black: black_source, white: white_source },
     };
     img.validate_for(mode)?;
@@ -414,6 +428,34 @@ mod tests {
             assert!(matches!(crate::decode(&bytes), Err(RawError::Unsupported(why)) if why == "Olympus compressed ORF"));
             assert!(matches!(crate::probe_info(&bytes), Err(RawError::Unsupported(why)) if why == "Olympus compressed ORF"));
         }
+    }
+
+    #[test]
+    fn truncated_uncompressed_directory_and_strip_are_corrupt_not_compressed() {
+        let mut bytes = orf_with(4, 4, 16, vec![0; 32], Some(&[2, 0, 2, 0, 0, 1, 1, 2]));
+        // TiffWriter puts image chunks before its directory/metadata, so EOF is not a
+        // required sensor byte. Relocate the declared strip to EOF without changing it.
+        let directory = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+        let count = u16::from_le_bytes(bytes[directory..directory + 2].try_into().unwrap()) as usize;
+        let entry = (0..count)
+            .map(|i| directory + 2 + i * 12)
+            .find(|&at| u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap()) == t::STRIP_OFFSETS)
+            .unwrap();
+        let old_offset = u32::from_le_bytes(bytes[entry + 8..entry + 12].try_into().unwrap()) as usize;
+        let pixels = bytes[old_offset..old_offset + 32].to_vec();
+        let offset = bytes.len();
+        bytes.extend(pixels);
+        bytes[entry + 8..entry + 12].copy_from_slice(&(offset as u32).to_le_bytes());
+        assert!(crate::decode(&bytes).is_ok());
+        for cut in 0..bytes.len() {
+            for result in [crate::decode(&bytes[..cut]).map(|_| ()), crate::probe_info(&bytes[..cut]).map(|_| ())] {
+                assert!(!matches!(result, Err(RawError::Unsupported(ref why)) if why.contains("compressed")), "cut {cut}: {result:?}");
+            }
+        }
+        let result = crate::decode(&bytes[..bytes.len() - 1]);
+        assert!(matches!(result, Err(RawError::Corrupt(_))), "required final strip byte missing: {result:?}");
+        let result = crate::probe_info(&bytes[..bytes.len() - 1]);
+        assert!(matches!(result, Err(RawError::Corrupt(_))), "required final strip byte missing during probe: {result:?}");
     }
 
     /// Strip byte counts that add up past `u64::MAX` (LONG8 `[u64::MAX, 1]`) are an error or a picture, not an overflow.

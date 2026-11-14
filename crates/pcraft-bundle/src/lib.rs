@@ -402,6 +402,10 @@ impl DirectoryBundleWriter {
                 Err(std::fs::TryLockError::Error(_)) => break None,
             }
         };
+        // A known unsafe manifest cannot be published. Refuse it before writing objects or
+        // previews, and still recheck immediately before publication below.
+        let manifest_path = root.join(craft_pcraft_format::MANIFEST);
+        refuse_symlink(&manifest_path)?;
         self.generation = self.generation.saturating_add(1);
         let generation = self.generation;
         let recheck = self.rolling_recheck(&bundle.entries);
@@ -450,7 +454,6 @@ impl DirectoryBundleWriter {
         }
 
         let manifest = bundle.entries.get(craft_pcraft_format::MANIFEST).ok_or_else(|| Error::InvalidBundle("manifest not set".into()))?;
-        let manifest_path = root.join(craft_pcraft_format::MANIFEST);
         refuse_symlink(&manifest_path)?;
         craft_atomic::atomic_write(&manifest_path, manifest).map_err(io_error)?;
         stats.written = stats.written.saturating_add(1);

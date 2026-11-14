@@ -593,6 +593,36 @@ fn cr3_prefers_the_full_size_jpeg_track() {
 }
 
 #[cfg(feature = "cr3")]
+#[test]
+fn cr3_skips_bad_preview_tracks_but_never_uses_sensor_tracks_as_jpeg() {
+    let bx = |kind: &[u8; 4], body: &[u8]| -> Vec<u8> { [&((body.len() + 8) as u32).to_be_bytes()[..], kind, body].concat() };
+    let full = |kind: &[u8; 4], body: &[u8]| bx(kind, &[&[0u8; 4][..], body].concat());
+    let track = |jpeg: bool, at: u64, len: u32| {
+        let mut entry = vec![0u8; 82];
+        if jpeg {
+            entry.extend(bx(b"JPEG", &[0; 4]));
+        }
+        let stsd = full(b"stsd", &[&1u32.to_be_bytes()[..], &bx(b"CRAW", &entry)].concat());
+        let stsz = full(b"stsz", &[len.to_be_bytes(), 1u32.to_be_bytes()].concat());
+        let co64 = full(b"co64", &[&1u32.to_be_bytes()[..], &at.to_be_bytes()].concat());
+        bx(b"trak", &bx(b"mdia", &bx(b"minf", &bx(b"stbl", &[stsd, stsz, co64].concat()))))
+    };
+    let good = fake_jpeg(100);
+    for first in [track(true, u64::MAX, 32), track(true, 4096, 32)] {
+        let mut bytes = bx(b"ftyp", b"crx \0\0\0\x01crx isom");
+        bytes.extend(bx(b"moov", &[first, track(true, 4128, good.len() as u32)].concat()));
+        bytes.resize(4128, 0);
+        bytes.extend(&good);
+        assert_eq!(embedded_preview(&bytes).as_deref(), Some(good.as_slice()));
+    }
+    let mut bytes = bx(b"ftyp", b"crx \0\0\0\x01crx isom");
+    bytes.extend(bx(b"moov", &track(false, 4096, good.len() as u32)));
+    bytes.resize(4096, 0);
+    bytes.extend(&good);
+    assert_eq!(embedded_preview(&bytes), None, "a sensor sample is not a rendered preview even if its bytes look like JPEG");
+}
+
+#[cfg(feature = "cr3")]
 /// A CR3 whose `PRVW` box holds `prvw` and whose JPEG track holds `big`.
 fn cr3_with(prvw_jpeg: &[u8], big: &[u8]) -> Vec<u8> {
     let bx = |kind: &[u8; 4], body: &[u8]| -> Vec<u8> { [&((body.len() + 8) as u32).to_be_bytes()[..], kind, body].concat() };

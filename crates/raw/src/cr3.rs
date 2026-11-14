@@ -274,6 +274,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         camera: ifd0.map(Camera::from_ifd0).unwrap_or_default(),
         cinema: Default::default(),
         lens_metadata: Default::default(),
+        notices: Default::default(),
         level_sources: Default::default(),
     };
     // Canon's stated white level can sit below the sensor's true saturation (EOS RP: 14558
@@ -712,6 +713,7 @@ mod tests {
             camera: Camera::default(),
             cinema: Default::default(),
             lens_metadata: Default::default(),
+            notices: Default::default(),
             level_sources: Default::default(),
         }
     }

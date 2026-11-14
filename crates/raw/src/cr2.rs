@@ -10,8 +10,11 @@
 //! - Colour filter layout: IFD#3 tag `0xc5e0` (`CR2CFAPattern` in the ExifTool EXIF tag-name docs): 1 = RGGB,
 //!   2 = BGGR, 3 = GBRG, 4 = GRBG, anchored at the top-left of the full decoded sensor (masked borders included).
 //!   It differs by model (e.g. 3 on the 50D/60D/7D/550D/5D Mark II, 1 on the 40D/5D Mark III/6D/5DS R), so it is
-//!   read per file (no model table); files without the tag fall back to RGGB (storytold/lightcraft#85). The parity of the
+//!   read per file first. Without a known tag, the two green sites' similarity determines row phase when
+//!   conclusive, then observed model IDs provide the fallback. The parity of the
 //!   `SensorInfo` borders does *not* predict it (RGGB files come with both even and odd top borders).
+//!   Header-only probes do not decode pixels for this fallback: without the tag their reported CFA
+//!   is assumed and can refine on full decode, as indicated by `RawNotices::assumed_cfa`.
 //! - `SensorInfo` (maker note `0x00e0`): sensor width/height and the left/top/right/bottom borders of the image
 //!   area. Light already reaches some columns left of that border (EOS 6D: masked columns 0–70, border 84; 10–36
 //!   such columns on every corpus body), so the masked columns that give the black level are measured from the
@@ -38,6 +41,7 @@ const SRAW_TYPE: u16 = 0xc6c5;
 /// `SRAW_TYPE` value of the YCbCr frames of sRAW / mRAW (IFD2's preview image carries 3).
 const SRAW_YCC: u32 = 4;
 const CR2_CFA_PATTERN: u16 = 0xc5e0;
+const CANON_MODEL_ID: u16 = 0x0010;
 const SENSOR_INFO: u16 = 0x00e0;
 const COLOR_BALANCE: u16 = 0x4001;
 /// ShotInfo, whose value 7 is the white-balance setting.
@@ -59,6 +63,57 @@ fn cfa_from_tag(v: Option<u64>) -> Option<Cfa> {
         _ => return None,
     };
     Some(Cfa::bayer_static(name))
+}
+
+/// Fallback for files without CR2CFAPattern: Canon red sites are in even sensor columns,
+/// but the row phase varies. The green diagonal must agree on both local differences and
+/// relative block means; black, clipped, tiny and ambiguous frames remain inconclusive.
+fn measured_red_row(data: &[u16], width: usize, area: Rect, black: f32, white: f32) -> Option<usize> {
+    let mut diff = [0f64; 2];
+    let mut upper = [0f64; 2];
+    let mut lower = [0f64; 2];
+    let mut n = [0u64; 2];
+    let (lo, hi) = (black + 1.0, black + (white - black) * 0.98);
+    let x_end = area.x.saturating_add(area.width).min(width).saturating_sub(1);
+    let y_end = area.y.saturating_add(area.height).saturating_sub(1);
+    let row = |y: usize| data.get(y.checked_mul(width)?..y.checked_add(1)?.checked_mul(width)?);
+    let mut y = area.y.saturating_add(area.y & 1);
+    while y < y_end {
+        let (Some(r0), Some(r1)) = (row(y), y.checked_add(1).and_then(row)) else { break };
+        for x in area.x..x_end {
+            let (Some(&a), Some(&b)) = (r0.get(x), r1.get(x + 1)) else { break };
+            let (a, b) = (f32::from(a), f32::from(b));
+            if a < lo || b < lo || a > hi || b > hi {
+                continue;
+            }
+            let p = x & 1;
+            diff[p] += f64::from((a - b).abs());
+            upper[p] += f64::from(a - black);
+            lower[p] += f64::from(b - black);
+            n[p] += 1;
+        }
+        y = y.saturating_add(4);
+    }
+    if n.iter().any(|&k| k < 256) {
+        return None;
+    }
+    let d = [diff[0] / n[0] as f64, diff[1] / n[1] as f64];
+    let rel = [0, 1].map(|p| (upper[p] - lower[p]).abs() / (upper[p] + lower[p]).max(1.0));
+    if d[0] < 0.8 * d[1] && rel[0] < rel[1] {
+        Some(1)
+    } else if d[1] < 0.8 * d[0] && rel[1] < rel[0] {
+        Some(0)
+    } else {
+        None
+    }
+}
+
+fn fallback_cfa(data: &[u16], width: usize, area: Rect, black: f32, white: f32, model: Option<u64>) -> (Cfa, bool) {
+    // Observed CC0 raw.pixls.us captures: 5D II, 7D, 550D, 600D and 1200D.
+    let green_first = [0x8000_0218, 0x8000_0250, 0x8000_0270, 0x8000_0286, 0x8000_0327].into_iter().any(|id| model == Some(id));
+    let measured = measured_red_row(data, width, area, black, white);
+    let row = measured.unwrap_or(usize::from(green_first));
+    (Cfa::bayer_static(if row == 1 { "GBRG" } else { "RGGB" }), measured.is_none() && !green_first)
 }
 
 /// The 16-bit words of a maker-note array. Canon writes `ColorData` as SHORT in most models, but as UNDEFINED
@@ -198,6 +253,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     let chunk = craft_tiff::image::Chunk { index: 0, x: 0, y: 0, width: 0, height: 0, plane: 0, offset: off, len };
     let src = chunk_bytes(bytes, &chunk).ok_or_else(|| RawError::Corrupt("raw strip outside file".into()))?;
     let (fw, fh, nc, prec) = ljpeg::frame_info(src)?;
+    let tagged_cfa = cfa_from_tag(raw.u64(CR2_CFA_PATTERN));
     let frame = match mode {
         Mode::Full => {
             let total = (fw as u64)
@@ -270,11 +326,18 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     let color_data = mn.as_ref().and_then(|m| m.ifd.value(COLOR_BALANCE).map(|v| words(v, m.order)));
     let kelvin_presets = color_data.as_deref().and_then(kelvin_presets_from_color_data);
     let wb = color_data.as_deref().and_then(wb_from_color_balance).or_else(|| wb_from_wb_info(mn.as_ref()?));
-    let cfa = cfa_from_tag(raw.u64(CR2_CFA_PATTERN)).unwrap_or_else(|| Cfa::bayer_static("RGGB"));
     let (white, white_source) = white_from_data_sourced(&active_rows(&data, width, active), prec as u32);
     let (black, black_source) = match masked_columns(&data, width, active, white) {
         cols if cols.len() >= 2 => black_from_columns_sourced(&data, width, cols, active.y..active.y + active.height, active),
         _ => (BlackLevel::uniform(0.0), crate::LevelSource::Fallback),
+    };
+    let model = mn.as_ref().and_then(|m| m.ifd.u64(CANON_MODEL_ID));
+    let (cfa, assumed_cfa) = match tagged_cfa {
+        Some(cfa) => (cfa, false),
+        None => {
+            let (cfa, guessed) = fallback_cfa(&data, width, active, black.mean(), white, model);
+            (cfa, guessed || mode == Mode::Header)
+        }
     };
     let img = RawImage {
         format: RawFormat::Cr2,
@@ -298,6 +361,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         cinema: Default::default(),
         lens_metadata: Default::default(),
         level_sources: crate::LevelSources { black: black_source, white: white_source },
+        notices: crate::RawNotices { assumed_cfa, ..Default::default() },
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -395,6 +459,62 @@ pub(crate) mod tests {
         assert_eq!(name(Some(0)), None);
         assert_eq!(name(Some(7)), None);
         assert_eq!(name(None), None);
+    }
+
+    #[test]
+    fn absent_cfa_tag_measures_sensor_phase_without_shifting_for_crop_parity() {
+        let (w, h) = (192usize, 96usize);
+        for red_row in [0usize, 1] {
+            let samples: Vec<u16> = (0..w * h)
+                .map(|i| {
+                    let (x, y) = (i % w, i / w);
+                    let texture = ((x / 2 + y / 2) % 17) as u16;
+                    if i % 97 == 0 {
+                        return 13000;
+                    }
+                    100 + if (y & 1) == red_row {
+                        if x & 1 == 0 { 500 + texture } else { 1000 + texture }
+                    } else if x & 1 == 0 {
+                        1000 + texture
+                    } else {
+                        667 + texture
+                    }
+                })
+                .collect();
+            let expected = if red_row == 0 { "RGGB" } else { "GBRG" };
+            for (left, top) in [(16, 4), (17, 4), (16, 5), (17, 5)] {
+                let area = Rect::new(left, top, w - left, h - top);
+                assert_eq!(fallback_cfa(&samples, w, area, 100.0, 4000.0, None).0.name(), expected);
+            }
+            let mut bytes = synthetic_cr2_of(&samples, w, h, None, None);
+            let marker = [0xe0, 0xc5, 4, 0, 1, 0, 0, 0];
+            let at = bytes.windows(marker.len()).position(|b| b == marker).unwrap();
+            // The explicit tag remains authoritative even when the observed sensor phase disagrees.
+            bytes[at + 8..at + 12].copy_from_slice(&4u32.to_le_bytes());
+            let explicit = crate::decode(&bytes).unwrap();
+            assert_eq!(explicit.cfa.as_ref().unwrap().name(), "GRBG");
+            assert_eq!(explicit.info(), crate::probe_info(&bytes).unwrap());
+            assert!(!explicit.notices.assumed_cfa);
+            bytes[at..at + 2].copy_from_slice(&0xc5dfu16.to_le_bytes());
+            let full = crate::decode(&bytes).unwrap();
+            assert_eq!(full.cfa.as_ref().unwrap().name(), expected);
+            assert!(!full.notices.assumed_cfa);
+            let header = decode(&bytes, Mode::Header, &Limits::default()).unwrap();
+            assert!(header.notices.assumed_cfa);
+            assert!(matches!(header.data, RawData::U16(ref v) if v.is_empty()));
+            assert_eq!(full.data, RawData::U16(samples));
+        }
+    }
+
+    #[test]
+    fn inconclusive_cfa_measurement_keeps_observed_model_fallback_and_safe_geometry() {
+        let data = vec![512; 64 * 32];
+        let area = Rect::new(0, 0, 64, 32);
+        assert_eq!(fallback_cfa(&data, 64, area, 512.0, 16000.0, Some(0x8000_0250)).0.name(), "GBRG");
+        assert_eq!(fallback_cfa(&data, 64, area, 512.0, 16000.0, None).0.name(), "RGGB");
+        for (width, area) in [(0, area), (64, Rect::new(usize::MAX, usize::MAX, 3, 3)), (64, Rect::new(63, 31, 1, 1))] {
+            assert_eq!(measured_red_row(&data, width, area, 512.0, 16000.0), None);
+        }
     }
 
     #[test]

@@ -280,11 +280,11 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         .and_then(|m| m.ifd.f64s(WB_RB_LEVELS))
         .filter(|v| v.len() >= 2 && v[0] > 0.1 && v[1] > 0.1 && v[0] < 10.0 && v[1] < 10.0)
         .map(|v| [v[0] as f32, 1.0, v[1] as f32]);
-    let cfa = match (raw.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), raw.bytes(t::CFA_PATTERN_EP)) {
+    let (cfa, assumed_cfa) = match (raw.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), raw.bytes(t::CFA_PATTERN_EP)) {
         (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => {
-            Cfa { width: 2, height: 2, pattern: p.to_vec(), origin_x: 0, origin_y: 0 }
+            (Cfa { width: 2, height: 2, pattern: p.to_vec(), origin_x: 0, origin_y: 0 }, false)
         }
-        _ => Cfa::bayer_static("RGGB"),
+        _ => (Cfa::bayer_static("RGGB"), true),
     };
     let model = ifd0.string(t::MODEL).unwrap_or_default();
     let body = measured_body(&model, w, h, bits);
@@ -330,6 +330,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         cinema: Default::default(),
         lens_metadata: Default::default(),
         level_sources: Default::default(),
+        notices: crate::RawNotices { assumed_cfa, ..Default::default() },
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -378,8 +379,8 @@ fn uncompressed(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PackedLayout {
     /// LSB-first bit stream of `bits` per sample (12: 3 bytes per 2 samples, 14: 7 bytes per 4), rows byte aligned.
-    /// 12-bit rows are `3w/2` bytes (older bodies) or padded to 16 bytes (Z 6, D6); 14-bit rows are `7w/4` bytes
-    /// padded to 16 bytes.
+    /// Rows use `ceil(bits * width / 8)` bytes, optionally padded to 16 bytes. Without an explicit packed maker
+    /// mode, recognition requires complete sample groups and 14-bit rows padded to 16 bytes.
     Lsb { stride: usize },
     /// D100: 16-byte chunks of fifteen data bytes holding ten MSB-first 12-bit samples, plus one zero pad byte. The
     /// rows carry more samples than the IFD width (3040 against 3034); the extra columns are not image.
@@ -399,7 +400,11 @@ fn packed_layout(w: usize, h: usize, bits: u32, strip: u64, stated: bool) -> Opt
     }
     let stride = strip / h;
     let tight = w.checked_mul(bits as usize)?.div_ceil(8);
-    let tight = if bits == 12 && w.is_multiple_of(2) || bits == 14 && w.is_multiple_of(4) { tight } else { return None };
+    // Unmarked data must still match a measured complete-group layout: do not guess a packing for compressed
+    // data. An explicit packed maker mode permits a final partial group, byte-aligned independently on each row.
+    if !stated && !(bits == 12 && w.is_multiple_of(2) || bits == 14 && w.is_multiple_of(4)) {
+        return None;
+    }
     let padded = tight.checked_next_multiple_of(16)?;
     let lsb_ok = match bits {
         12 => stride == tight || stride == padded,
@@ -524,7 +529,7 @@ fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>,
 }
 
 /// A "compressed" strip of packed samples: the strip size must match a measured layout exactly. `stated` is set
-/// when the maker note names the packed mode, which also allows 14-bit rows without padding.
+/// when the maker note names the packed mode, which also allows partial groups and 14-bit rows without padding.
 fn packed(bytes: &[u8], info: &ImageInfo, rows: usize, stated: bool, limits: &Limits) -> Result<RawData> {
     let (w, h) = (info.width as usize, info.height as usize);
     let bits = info.bits() as u32;
@@ -663,6 +668,7 @@ fn small_raw(bytes: &[u8], tiff: &Tiff, info: &ImageInfo, strip: craft_tiff::ima
         cinema: Default::default(),
         lens_metadata: Default::default(),
         level_sources: Default::default(),
+        notices: Default::default(),
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -1510,6 +1516,97 @@ mod tests {
             let short = truncated_tail_strip(bytes.clone(), keep);
             for mode in [Mode::Header, Mode::Full] {
                 assert!(matches!(decode(&short, mode, &Limits::default()), Err(RawError::Corrupt(_))));
+            }
+        }
+    }
+
+    mod partial_row_tests {
+        use super::*;
+
+        // Independent wire oracle: place each sample bit directly, leaving nonzero tail bits and padding.
+        fn image(data: &[u16], w: usize, bits: u32, padded: bool) -> Vec<u8> {
+            let tight = (w * bits as usize).div_ceil(8);
+            let stride = if padded { tight.next_multiple_of(16) } else { tight };
+            let mut bytes = vec![0xA5; stride * (data.len() / w)];
+            for (i, &sample) in data.iter().enumerate() {
+                for bit in 0..bits as usize {
+                    let at = (i % w) * bits as usize + bit;
+                    let byte = &mut bytes[(i / w) * stride + at / 8];
+                    *byte = (*byte & !(1 << (at % 8))) | (((sample >> bit) as u8 & 1) << (at % 8));
+                }
+            }
+            bytes
+        }
+
+        fn note(order: ByteOrder, modern: bool, mode: u16) -> IfdBuilder {
+            let mut n = IfdBuilder::new();
+            if modern {
+                let mut record = b"01000400\0\0".to_vec();
+                record.extend(if order == ByteOrder::Big { mode.to_be_bytes() } else { mode.to_le_bytes() });
+                n.set(NEF_COMPRESSION_RECORD, Value::Undefined(record));
+            } else {
+                n.set(NEF_COMPRESSION, Value::Short(vec![mode]));
+            }
+            n
+        }
+
+        #[test]
+        fn declared_packed_partial_rows_preserve_every_sample() {
+            let h = 5;
+            for (bits, mode) in [(12u32, 6), (14, 10)] {
+                for w in [1, 3, 5, 22, 23] {
+                    let data = samples(w * h, bits);
+                    for padded in [false, true] {
+                        let wire = image(&data, w, bits, padded);
+                        if w == 22 && bits == 14 {
+                            assert_eq!(wire.len() / h, if padded { 48 } else { 39 });
+                        }
+                        for order in [ByteOrder::Big, ByteOrder::Little] {
+                            for modern in [false, true] {
+                                let file = nef_in(
+                                    order,
+                                    34713,
+                                    bits as u16,
+                                    vec![wire.clone()],
+                                    w as u32,
+                                    h as u32,
+                                    h as u32,
+                                    Some(note(order, modern, mode)),
+                                );
+                                let raw = crate::decode(&file).unwrap();
+                                assert_eq!((raw.width, raw.height, raw.cpp), (w, h, 1));
+                                assert!(!raw.notices.assumed_cfa, "valid CFA tag is retained");
+                                let RawData::U16(got) = raw.data else { panic!("integer samples") };
+                                assert_eq!(got, data, "{bits}-bit width {w}, padded {padded}, {order:?}, modern {modern}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn partial_rows_keep_mode_depth_and_strip_guards() {
+            let (w, h) = (22, 5);
+            let data = samples(w * h, 14);
+            for padded in [false, true] {
+                let wire = image(&data, w, 14, padded);
+                let file = |bytes, mode: Option<u16>| {
+                    nef_with_note(34713, 14, vec![bytes], w as u32, h as u32, h as u32, mode.map(|m| note(ByteOrder::Big, false, m)))
+                };
+                for mode in [None, Some(0), Some(6), Some(13), Some(14)] {
+                    assert!(matches!(crate::decode(&file(wire.clone(), mode)), Err(RawError::Unsupported(_))), "mode {mode:?}");
+                }
+                let good = file(wire.clone(), Some(10));
+                assert!(crate::decode(&good).is_ok());
+                let short = truncated_tail_strip(good, wire.len() - 1);
+                assert!(matches!(crate::decode(&short), Err(RawError::Corrupt(_))));
+                for len in [wire.len() - 1, wire.len() + 1] {
+                    assert!(matches!(crate::decode(&file(vec![0; len], Some(10))), Err(RawError::Unsupported(_))));
+                }
+            }
+            for (w, h, bits) in [(0, 5, 14), (22, 0, 14), (22, 5, 13), (usize::MAX, 5, 14)] {
+                assert!(packed_layout(w, h, bits, u64::MAX, true).is_none());
             }
         }
     }
