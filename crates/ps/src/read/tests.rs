@@ -84,8 +84,14 @@ fn integer_division_overflow_returns_zero() {
 
 #[test]
 fn copy_past_operand_limit_is_a_noop() {
-    let (c, _) = run("10 20 5 5 rectfill 1 40 { count copy } repeat clear 20 20 5 5 rectfill");
-    assert_eq!(c.lines().filter(|line| *line == "f").count(), 2, "{c}");
+    let body = format!("10 20 5 5 rectfill {} 60000 copy 20 20 5 5 rectfill", "0 ".repeat(60_000));
+    let compatible = eps_to_pdf(&eps(&body), Limits { stack_overflow_noop: true, ..Limits::default() }).unwrap();
+    let compatible_content = content(&compatible.pdf);
+    assert_eq!(compatible_content.lines().filter(|line| *line == "f").count(), 2, "{compatible_content}");
+
+    let strict = eps_to_pdf(&eps(&body), Limits { keep_unpainted: true, ..Limits::default() }).unwrap();
+    assert!(strict.warnings.iter().any(|warning| warning.contains("stackoverflow")), "{:?}", strict.warnings);
+    assert_eq!(content(&strict.pdf).lines().filter(|line| *line == "f").count(), 1);
 }
 
 #[test]
@@ -95,6 +101,14 @@ fn transforms_curves_and_clips() {
     assert!(c.contains("W") && c.contains("q") && c.contains("Q"), "clip in its own q: {c}");
     // The circle is centred at (60, 45) with radius 20 in device space.
     assert!(c.contains("80 45 m"), "{c}");
+}
+
+#[test]
+fn huge_arc_checks_temporary_and_retained_memory_before_building_curves() {
+    let limits = Limits { memory: 4096, keep_unpainted: true, ..Limits::default() };
+    let converted = eps_to_pdf(&eps("10 20 5 5 rectfill newpath 0 0 1e16 0 360 arc"), limits).unwrap();
+    assert!(converted.warnings.iter().any(|warning| warning == "out of memory"), "{:?}", converted.warnings);
+    assert_eq!(content(&converted.pdf).lines().filter(|line| *line == "f").count(), 1);
 }
 
 #[test]
@@ -155,6 +169,22 @@ fn type3_glyph_paints_after_prior_outline_glyphs() {
 }
 
 #[test]
+fn type3_measurement_suppresses_nested_outline_painting() {
+    let ttf = tiny_ttf();
+    let sfnts: String = ttf.chunks(64).map(|c| format!("<{}>\n", c.iter().map(|b| format!("{b:02x}")).collect::<String>())).collect();
+    let (c, _) = run(&format!(
+        "/T42 11 dict dup begin /FontType 42 def /FontMatrix [0.001 0 0 0.001 0 0] def /PaintType 0 def /FontBBox [0 0 1 1] def
+         /Encoding 256 array def 0 1 255 {{ Encoding exch /.notdef put }} for Encoding 65 /A put
+         /CharStrings 2 dict dup /.notdef 0 put dup /A 1 put def /sfnts [ {sfnts} ] def end /T42 exch definefont pop
+         /T3 8 dict dup begin /FontType 3 def /FontMatrix [0.001 0 0 0.001 0 0] def /FontBBox [0 0 1000 700] def
+         /Encoding 256 array def 0 1 255 {{ Encoding exch /.notdef put }} for Encoding 65 /A put
+         /BuildChar {{ pop pop 1000 0 0 0 1000 700 setcachedevice /T42 findfont 20 scalefont setfont 10 10 moveto (A) show }} def end /T3 exch definefont pop
+         /T3 findfont 20 scalefont setfont (A) stringwidth pop pop 0 0 10 10 rectfill"
+    ));
+    assert_eq!(c.lines().filter(|line| *line == "f").count(), 1, "measurement painted nested outline text: {c}");
+}
+
+#[test]
 fn a_string_made_a_file_runs_as_a_program() {
     // Adobe's idiom: `(code) 0 () /SubFileDecode filter cvx exec`.
     let (c, _) = run("(0.5 setgray 10 20 5 5 rectfill) 0 () /SubFileDecode filter cvx exec");
@@ -162,15 +192,31 @@ fn a_string_made_a_file_runs_as_a_program() {
 }
 
 #[test]
-fn subfiledecode_materialization_respects_the_memory_budget() {
+fn subfiledecode_exec_reads_the_following_program_lazily() {
+    let (c, converted) = run("currentfile 0 () /SubFileDecode filter exec\n0 0 10 10 rectfill");
+    assert!(converted.warnings.is_empty(), "{:?}", converted.warnings);
+    assert_eq!(c.lines().filter(|line| *line == "f").count(), 1, "{c}");
+}
+
+#[test]
+fn discarded_subfiledecode_skips_payload_without_materializing_it() {
     let payload = "x".repeat(8192);
     let bytes = eps(&format!("0 0 10 10 rectfill currentfile 0 (END) /SubFileDecode filter pop\n{payload}END"));
     let limits = Limits { memory: 4096, ..Limits::default() };
     let converted = eps_to_pdf(&bytes, limits).unwrap();
-    assert!(converted.warnings.iter().any(|warning| warning == "out of memory"), "{:?}", converted.warnings);
-    assert!(converted.memory <= limits.memory + 1, "{} bytes", converted.memory);
+    assert!(!converted.warnings.iter().any(|warning| warning == "out of memory"), "{:?}", converted.warnings);
+    assert!(converted.memory <= limits.memory, "{} bytes", converted.memory);
     let c = content(&converted.pdf);
     assert!(c.contains("0 0 m") && c.contains("10 10 l"), "{c}");
+}
+
+#[test]
+fn empty_filter_source_records_are_charged_to_the_memory_limit() {
+    let limits = Limits { memory: 4096, keep_unpainted: true, ..Limits::default() };
+    let converted = eps_to_pdf(&eps("10 20 1 1 rectfill 100000 { () 0 () /SubFileDecode filter pop } repeat"), limits).unwrap();
+    assert!(converted.warnings.iter().any(|warning| warning == "out of memory"), "{:?}", converted.warnings);
+    assert!(converted.memory > limits.memory, "{} bytes", converted.memory);
+    assert!(converted.steps < limits.steps, "the test hit the work limit first: {} steps", converted.steps);
 }
 
 #[test]
@@ -388,8 +434,8 @@ fn fallback_tiny_ttf(_: &[u8]) -> Option<&'static [u8]> {
 
 #[test]
 fn fallback_font_bytes_are_charged_before_copying() {
-    let limits = Limits { memory: 32, fallback_font: Some(fallback_tiny_ttf), ..Limits::default() };
-    let error = eps_to_pdf(&eps("/Missing findfont pop 0 0 1 1 rectfill"), limits).unwrap_err();
+    let limits = Limits { memory: 256, fallback_font: Some(fallback_tiny_ttf), ..Limits::default() };
+    let error = eps_to_pdf(&eps("/Missing findfont pop"), limits).unwrap_err();
     assert_eq!(error, "out of memory");
 }
 

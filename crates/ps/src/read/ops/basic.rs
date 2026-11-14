@@ -6,7 +6,10 @@ use crate::read::obj::{Key, Obj, PArr, PDict, PStr, name};
 // ----- stack -----
 
 pub fn pop(ip: &mut Interp) -> R {
-    ip.pop().map(|_| ())
+    match ip.pop()? {
+        Obj::File(id) => ip.discard_subfile(id),
+        _ => Ok(()),
+    }
 }
 
 pub fn exch(ip: &mut Interp) -> R {
@@ -26,11 +29,10 @@ pub fn copy(ip: &mut Interp) -> R {
         Obj::Int(n) => {
             let n = usize::try_from(n).map_err(|_| PsErr::Ps("rangecheck"))?;
             ip.need(n)?;
-            // EPS readers conventionally treat a copy that would exceed the operand limit as a
-            // no-op. Check before cloning or charging so a hostile count cannot partially mutate
-            // the stack or allocate a large temporary.
+            // Check before cloning or charging so a hostile count cannot partially mutate the
+            // stack or allocate a large temporary; strict hosts still report stackoverflow.
             if !ip.has_operand_room(n) {
-                return Ok(());
+                return if ip.limits.stack_overflow_noop { Ok(()) } else { err("stackoverflow") };
             }
             let start = ip.o.len() - n;
             ip.charge((n / 8) as u64)?;
@@ -1039,8 +1041,7 @@ pub fn anchorsearch(ip: &mut Interp) -> R {
 pub fn token(ip: &mut Interp) -> R {
     match ip.pop()? {
         Obj::Str(s, _) => {
-            ip.alloc(crate::read::interp::SOURCE_BYTES)?;
-            let id = ip.srcs.add(crate::read::source::Source::string(&s));
+            let id = ip.add_source(crate::read::source::Source::string(&s))?;
             let d = &ip.d;
             let mut resolve = |n: &[u8]| d.iter().rev().find_map(|dict| dict.get(&Key::Name(name(n))));
             match crate::read::scan::next(&mut ip.srcs, id, &mut resolve) {

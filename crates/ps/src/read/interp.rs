@@ -228,7 +228,7 @@ impl Interp {
             out: Out::new(origin),
             limits,
             steps: 0,
-            memory: 0,
+            memory: SOURCE_BYTES,
             read_charged: 0,
             written_charged: 0,
             depth: 0,
@@ -360,6 +360,29 @@ impl Interp {
         if self.memory > self.limits.memory { Err(PsErr::Fatal("out of memory".into())) } else { Ok(()) }
     }
 
+    /// Register a retained file source against the memory bound.
+    pub fn add_source(&mut self, source: Source) -> R<usize> {
+        self.alloc(SOURCE_BYTES)?;
+        Ok(self.srcs.add(source))
+    }
+
+    /// Consume a SubFileDecode stream whose file object is explicitly discarded with `pop`.
+    pub fn discard_subfile(&mut self, id: usize) -> R {
+        if !self.srcs.is_subfile_filter(id) {
+            return Ok(());
+        }
+        let mut chunk = 0u64;
+        while self.srcs.read(id).is_some() {
+            chunk += 1;
+            if chunk == BYTES_PER_STEP {
+                self.read_charged = self.read_charged.saturating_add(chunk);
+                self.charge(1)?;
+                chunk = 0;
+            }
+        }
+        if self.srcs.exhausted { Err(PsErr::Fatal("the program reads too much data".into())) } else { Ok(()) }
+    }
+
     // ----- dictionaries -----
 
     pub fn lookup(&self, k: &Key) -> Option<Obj> {
@@ -420,8 +443,7 @@ impl Interp {
             Obj::Op(op) => self.call_op(op),
             Obj::Str(s, true) => {
                 // A string runs as a file reading it in place.
-                self.alloc(SOURCE_BYTES)?;
-                let id = self.srcs.add(Source::string(&s));
+                let id = self.add_source(Source::string(&s))?;
                 self.push_frame(Frame::File { id })
             }
             Obj::File(id) => self.push_frame(Frame::File { id }),

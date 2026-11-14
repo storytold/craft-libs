@@ -104,24 +104,33 @@ pub fn bounded_arc_sweep(a0: f64, a1: f64, negative: bool) -> (f64, bool) {
     (sign * (max - 720.0 + remainder), true)
 }
 
-/// Bézier segments for an arc of the circle at (cx, cy) with radius r, from angle a0 to a1
-/// (degrees), in user space: the first point and the curves.
-pub fn arc_curves(cx: f64, cy: f64, r: f64, a0: f64, a1: f64, max_segments: usize) -> ((f64, f64), Vec<[f64; 6]>, bool) {
-    let (a0, a1) = (a0.to_radians(), a1.to_radians());
-    let start = (cx + r * a0.cos(), cy + r * a0.sin());
-    let sweep = a1 - a0;
+/// How many Bézier segments an arc needs, or `None` if it exceeds `max_segments`.
+pub fn arc_curve_count(r: f64, a0: f64, a1: f64, max_segments: usize) -> Option<usize> {
+    let sweep = a1.to_radians() - a0.to_radians();
     if !sweep.is_finite() || sweep == 0.0 {
-        return (start, Vec::new(), false);
+        return Some(0);
     }
     // The established EPS reader uses a 0.1-unit curve tolerance. A quarter-circle cubic has
     // about 0.00027253*r maximum radial error; subdivision error falls with the sixth power of
     // the segment angle. Estimate before allocation so huge radii stop at the path bound.
     let subdivisions = (r.abs() * 0.00027253 / 0.1).max(1.0).powf(1.0 / 6.0).ceil();
     let required = (sweep.abs() / std::f64::consts::FRAC_PI_2 * subdivisions).ceil().max(1.0);
-    if !required.is_finite() || required > max_segments as f64 {
+    (required.is_finite() && required <= max_segments as f64).then_some(required as usize)
+}
+
+/// Bézier segments for an arc of the circle at (cx, cy) with radius r, from angle a0 to a1
+/// (degrees), in user space: the first point and the curves.
+pub fn arc_curves(cx: f64, cy: f64, r: f64, a0: f64, a1: f64, max_segments: usize) -> ((f64, f64), Vec<[f64; 6]>, bool) {
+    let count = arc_curve_count(r, a0, a1, max_segments);
+    let (a0, a1) = (a0.to_radians(), a1.to_radians());
+    let start = (cx + r * a0.cos(), cy + r * a0.sin());
+    let Some(n) = count else {
         return (start, Vec::new(), true);
+    };
+    let sweep = a1 - a0;
+    if n == 0 || !sweep.is_finite() {
+        return (start, Vec::new(), false);
     }
-    let n = required as usize;
     let step = sweep / n as f64;
     let k = 4.0 / 3.0 * (step / 4.0).tan();
     let mut out = Vec::with_capacity(n);

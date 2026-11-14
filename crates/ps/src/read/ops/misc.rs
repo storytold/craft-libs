@@ -187,7 +187,7 @@ pub fn file(ip: &mut Interp) -> R {
         b"%stdin" => ip.push(Obj::File(ip.main)),
         // Output files swallow what is written.
         b"%stdout" | b"%stderr" | b"%lineedit" | b"%statementedit" => {
-            let id = ip.srcs.add(Source::bytes(Vec::new()));
+            let id = ip.add_source(Source::bytes(Vec::new()))?;
             ip.push(Obj::File(id))
         }
         // An EPS can't reach the disk.
@@ -205,10 +205,13 @@ pub fn write_ops(ip: &mut Interp) -> R {
 pub fn eexec(ip: &mut Interp) -> R {
     let up = match ip.pop()? {
         Obj::File(id) => id,
-        Obj::Str(s, _) => ip.srcs.add(Source::bytes(s.bytes())),
+        Obj::Str(s, _) => {
+            ip.alloc(s.len)?;
+            ip.add_source(Source::bytes(s.bytes()))?
+        }
         _ => return err("typecheck"),
     };
-    let id = ip.srcs.add(Source::eexec(up));
+    let id = ip.add_source(Source::eexec(up))?;
     // A number of embedded Type 1 programs omit the usual `currentdict end` before eexec;
     // their encrypted prolog starts with `dup /Private ...` and expects its font dictionary.
     // Supply it only when the caller has not already left an operand on the stack.
@@ -257,7 +260,10 @@ pub fn filter(ip: &mut Interp) -> R {
     let src = ip.pop()?;
     let up = match src {
         Obj::File(id) => id,
-        Obj::Str(s, _) => ip.srcs.add(Source::bytes(s.bytes())),
+        Obj::Str(s, _) => {
+            ip.alloc(s.len)?;
+            ip.add_source(Source::bytes(s.bytes()))?
+        }
         p @ Obj::Array(_, true) => {
             // A procedure source: call it until it gives an empty string.
             let mut data = Vec::new();
@@ -270,31 +276,18 @@ pub fn filter(ip: &mut Interp) -> R {
                 data.extend_from_slice(&s);
                 ip.alloc(s.len())?;
             }
-            ip.srcs.add(Source::bytes(data))
+            ip.add_source(Source::bytes(data))?
         }
         _ => return err("typecheck"),
     };
     if fname.ends_with(b"Encode") && fname != b"NullEncode" {
         // Encoding filters write; an EPS has nowhere to write to.
-        let id = ip.srcs.add(Source::bytes(Vec::new()));
+        let id = ip.add_source(Source::bytes(Vec::new()))?;
         return ip.push(Obj::File(id));
     }
     match ip.srcs.filter(up, &fname, &params) {
-        Ok(mut id) => {
-            if fname == b"SubFileDecode" {
-                // EPS prologs commonly use `currentfile ... SubFileDecode filter pop` to skip
-                // inline data. Materialize the bounded filter so the interpreter resumes after
-                // its end marker rather than treating the payload as PostScript source.
-                let mut data = Vec::new();
-                while let Some(c) = ip.srcs.read(id) {
-                    if data.len() == data.capacity() {
-                        data.try_reserve_exact(4096).map_err(|_| PsErr::Fatal("out of memory".into()))?;
-                    }
-                    ip.alloc(1)?;
-                    data.push(c);
-                }
-                id = ip.srcs.add(Source::bytes(data));
-            }
+        Ok(source) => {
+            let id = ip.add_source(source)?;
             ip.push(Obj::File(id))
         }
         Err(e) => {

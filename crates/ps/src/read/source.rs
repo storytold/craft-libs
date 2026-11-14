@@ -35,6 +35,7 @@ pub enum Dec {
         eod: Vec<u8>,
         count: usize,
         left: Option<usize>,
+        skip_on_pop: bool,
         window: VecDeque<u8>,
     },
     /// JPEG data: only images take it (whole, as it is).
@@ -155,6 +156,10 @@ impl Sources {
     pub fn add(&mut self, s: Source) -> usize {
         self.list.push(s);
         self.list.len() - 1
+    }
+
+    pub fn is_subfile_filter(&self, id: usize) -> bool {
+        self.list.get(id).is_some_and(|source| matches!(&source.kind, Kind::Filter { dec: Dec::SubFile { skip_on_pop: true, .. }, .. }))
     }
 
     pub fn read(&mut self, id: usize) -> Option<u8> {
@@ -307,8 +312,9 @@ impl Sources {
         Some(c)
     }
 
-    /// A decoding filter over `up`. Unsupported filters give `Err`.
-    pub fn filter(&mut self, up: usize, name: &[u8], p: &FilterParams) -> Result<usize, String> {
+    /// Build a decoding source without retaining it, so the interpreter can charge its memory
+    /// budget before registering the source.
+    pub fn filter(&mut self, up: usize, name: &[u8], p: &FilterParams) -> Result<Source, String> {
         let dec = match name {
             b"ASCIIHexDecode" | b"AHx" => Dec::Hex { hi: None },
             b"ASCII85Decode" | b"A85" => Dec::A85 { group: [0; 5], n: 0, first: true },
@@ -330,9 +336,10 @@ impl Sources {
                 count: p.eod_count,
                 // A byte count; with no count and no end string, everything passes through.
                 left: (p.eod_string.is_empty() && p.eod_count > 0).then_some(p.eod_count),
+                skip_on_pop: true,
                 window: VecDeque::new(),
             },
-            b"NullEncode" => Dec::SubFile { eod: Vec::new(), count: 0, left: None, window: VecDeque::new() },
+            b"NullEncode" => Dec::SubFile { eod: Vec::new(), count: 0, left: None, skip_on_pop: false, window: VecDeque::new() },
             b"ReusableStreamDecode" => {
                 // Reads its data when made, and can be read again (`resetfile`, positions).
                 let mut data = Vec::new();
@@ -342,7 +349,7 @@ impl Sources {
                         return Err("reusable stream too large".into());
                     }
                 }
-                return Ok(self.add(Source::bytes(data)));
+                return Ok(Source::bytes(data));
             }
             _ => return Err(format!("unsupported filter {}", String::from_utf8_lossy(name))),
         };
@@ -354,7 +361,7 @@ impl Sources {
             let row = (colors * bpc * columns).div_ceil(8);
             s.predictor = Some(Predictor { kind: p.predictor, bpp: (colors * bpc).div_ceil(8).max(1), row, prev: vec![0; row], cur: Vec::new() });
         }
-        Ok(self.add(s))
+        Ok(s)
     }
 
     fn read_filter(&mut self, id: usize, depth: usize) -> Option<u8> {
@@ -486,7 +493,7 @@ impl Sources {
                     None => more = false,
                 },
             },
-            Dec::SubFile { eod, count, left, window } => {
+            Dec::SubFile { eod, count, left, window, .. } => {
                 let (eod, mut count, mut left, mut window) = (eod.clone(), *count, *left, window.clone());
                 if let Some(n) = left.as_mut() {
                     if *n == 0 {
@@ -824,34 +831,39 @@ mod tests {
         out
     }
 
+    fn add_filter(s: &mut Sources, up: usize, name: &[u8], params: &FilterParams) -> usize {
+        let source = s.filter(up, name, params).unwrap();
+        s.add(source)
+    }
+
     #[test]
     fn filters_stop_at_their_end_markers() {
         let mut s = Sources::default();
         let id = s.add(Source::bytes(b"48656c6c6f>rest".to_vec()));
-        let f = s.filter(id, b"ASCIIHexDecode", &FilterParams::default()).unwrap();
+        let f = add_filter(&mut s, id, b"ASCIIHexDecode", &FilterParams::default());
         assert_eq!(all(&mut s, f), b"Hello");
         assert_eq!(all(&mut s, id), b"rest");
         let id = s.add(Source::bytes(b"87cURD]i,\"Ebo80~>rest".to_vec()));
-        let f = s.filter(id, b"ASCII85Decode", &FilterParams::default()).unwrap();
+        let f = add_filter(&mut s, id, b"ASCII85Decode", &FilterParams::default());
         assert_eq!(all(&mut s, f), b"Hello World!");
         assert_eq!(all(&mut s, id), b"rest");
         let id = s.add(Source::bytes(b"<!!!!~>rest".to_vec()));
-        let f = s.filter(id, b"ASCII85Decode", &FilterParams::default()).unwrap();
+        let f = add_filter(&mut s, id, b"ASCII85Decode", &FilterParams::default());
         let value = 27u32 * 85u32.pow(4);
         assert_eq!(all(&mut s, f), value.to_be_bytes());
         assert_eq!(all(&mut s, id), b"rest");
         let id = s.add(Source::bytes(vec![2, b'a', b'b', b'c', 254, b'x', 128, b'!']));
-        let f = s.filter(id, b"RunLengthDecode", &FilterParams::default()).unwrap();
+        let f = add_filter(&mut s, id, b"RunLengthDecode", &FilterParams::default());
         assert_eq!(all(&mut s, f), b"abcxxx");
         assert_eq!(all(&mut s, id), b"!");
         let id = s.add(Source::bytes(b"data%%EndBinary tail".to_vec()));
         let p = FilterParams { eod_string: b"%%EndBinary".to_vec(), ..Default::default() };
-        let f = s.filter(id, b"SubFileDecode", &p).unwrap();
+        let f = add_filter(&mut s, id, b"SubFileDecode", &p);
         assert_eq!(all(&mut s, f), b"data");
         assert_eq!(all(&mut s, id), b" tail");
         let id = s.add(Source::bytes(b"aENDtailENDrest".to_vec()));
         let p = FilterParams { eod_count: 1, eod_string: b"END".to_vec(), ..Default::default() };
-        let f = s.filter(id, b"SubFileDecode", &p).unwrap();
+        let f = add_filter(&mut s, id, b"SubFileDecode", &p);
         assert_eq!(all(&mut s, f), b"aEND");
         assert_eq!(all(&mut s, id), b"tailENDrest");
     }
@@ -878,15 +890,15 @@ mod tests {
         z.extend_from_slice(b"tail");
         let mut s = Sources::default();
         let id = s.add(Source::bytes(z));
-        let f = s.filter(id, b"FlateDecode", &FilterParams::default()).unwrap();
+        let f = add_filter(&mut s, id, b"FlateDecode", &FilterParams::default());
         assert_eq!(all(&mut s, f), b"abcabcabc".repeat(2000));
         assert_eq!(all(&mut s, id), b"tail");
         // Flate over ASCII85 over the program: bytes pushed back return to the filter beneath.
         let z = miniz_oxide::deflate::compress_to_vec_zlib(b"xyz", 6);
         let mut s = Sources::default();
         let id = s.add(Source::bytes(format!("{}~> after", ascii85(&z)).into_bytes()));
-        let a = s.filter(id, b"ASCII85Decode", &FilterParams::default()).unwrap();
-        let f = s.filter(a, b"FlateDecode", &FilterParams::default()).unwrap();
+        let a = add_filter(&mut s, id, b"ASCII85Decode", &FilterParams::default());
+        let f = add_filter(&mut s, a, b"FlateDecode", &FilterParams::default());
         assert_eq!(all(&mut s, f), b"xyz");
         assert_eq!(all(&mut s, id), b" after");
         let mut enc = weezl::encode::Encoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8);
@@ -894,7 +906,7 @@ mod tests {
         l.extend_from_slice(b"!");
         let mut s = Sources::default();
         let id = s.add(Source::bytes(l));
-        let f = s.filter(id, b"LZWDecode", &FilterParams { early_change: true, ..Default::default() }).unwrap();
+        let f = add_filter(&mut s, id, b"LZWDecode", &FilterParams { early_change: true, ..Default::default() });
         assert_eq!(all(&mut s, f), b"lzw lzw lzw");
         assert_eq!(all(&mut s, id), b"!");
     }
@@ -934,12 +946,12 @@ mod tests {
         ] {
             let mut s = Sources::default();
             let id = s.add(Source::bytes(data.to_vec()));
-            let f = s.filter(id, name, &FilterParams::default()).unwrap();
+            let f = add_filter(&mut s, id, name, &FilterParams::default());
             let _ = all(&mut s, f);
         }
         let mut s = Sources::default();
         let id = s.add(Source::bytes(b"\xff\xd8\xff".to_vec()));
-        let f = s.filter(id, b"DCTDecode", &FilterParams::default()).unwrap();
+        let f = add_filter(&mut s, id, b"DCTDecode", &FilterParams::default());
         assert!(s.dct(f).is_some());
     }
 }

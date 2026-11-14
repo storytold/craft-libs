@@ -2,8 +2,8 @@
 
 use std::rc::Rc;
 
-use crate::read::gstate::{Clip, DevColor, GState, M, MAX_PATH, Seg, Space, arc_curves, bbox, bounded_arc_sweep, flatten};
-use crate::read::interp::{Interp, PsErr, R, err, matrix_obj};
+use crate::read::gstate::{Clip, DevColor, GState, M, MAX_PATH, Seg, Space, arc_curve_count, arc_curves, bbox, bounded_arc_sweep, flatten};
+use crate::read::interp::{Interp, PsErr, R, SEG_BYTES, err, matrix_obj};
 use crate::read::obj::{Obj, PArr, PDict};
 use crate::read::pdf::StrokeParams;
 
@@ -447,6 +447,13 @@ fn arc_common(ip: &mut Interp, negative: bool) -> R {
     }
     let start_angle = a0 % 360.0;
     let available = MAX_PATH.saturating_sub(ip.gs.path.len());
+    let max_curves = available.saturating_sub(1);
+    let connector = 1 + usize::from(ip.gs.cur.is_some() && matches!(ip.gs.path.last(), Some(Seg::Close)));
+    ip.alloc(connector.min(available).saturating_mul(SEG_BYTES))?;
+    if let Some(curves) = arc_curve_count(r, start_angle, start_angle + sweep, max_curves) {
+        ip.charge(curves as u64)?;
+        ip.alloc(curves.saturating_mul(std::mem::size_of::<[f64; 6]>()).saturating_add(curves.saturating_mul(SEG_BYTES)))?;
+    }
     let (start, curves, truncated) = arc_curves(cx, cy, r, start_angle, start_angle + sweep, available.saturating_sub(1));
     let m = ip.gs.ctm;
     let s = m.apply(start.0, start.1);
@@ -455,7 +462,6 @@ fn arc_common(ip: &mut Interp, negative: bool) -> R {
     } else {
         move_dev(ip, s)?
     }
-    ip.charge(curves.len() as u64)?;
     for c in curves {
         curve_dev(ip, m.apply(c[0], c[1]), m.apply(c[2], c[3]), m.apply(c[4], c[5]))?;
     }

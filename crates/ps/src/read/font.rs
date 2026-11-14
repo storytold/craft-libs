@@ -81,7 +81,7 @@ fn standard_glyph_char(name: &[u8]) -> Option<char> {
         b"dollar" => '$',
         b"percent" => '%',
         b"ampersand" => '&',
-        b"quoteright" => '\'',
+        b"quoteright" => '’',
         b"parenleft" => '(',
         b"parenright" => ')',
         b"asterisk" => '*',
@@ -102,7 +102,7 @@ fn standard_glyph_char(name: &[u8]) -> Option<char> {
         b"bracketright" => ']',
         b"asciicircum" => '^',
         b"underscore" => '_',
-        b"quoteleft" => '`',
+        b"quoteleft" => '‘',
         b"braceleft" => '{',
         b"bar" => '|',
         b"braceright" => '}',
@@ -453,8 +453,11 @@ fn show_glyphs(ip: &mut Interp, s: &[u8], draw: bool, replace: bool, per_char: &
                 crate::read::composite::Key2::Code(c) if type3 => {
                     // Type 3 glyph procedures paint immediately. Commit any earlier staged
                     // outlines first so their paint order remains the same as the input string.
-                    for (path, color) in std::mem::take(&mut text_paths) {
-                        ip.out.fill(&ip.gs.clip, &path, false, color).map_err(PsErr::Fatal)?;
+                    let pending = std::mem::take(&mut text_paths);
+                    if !ip.gs.nulldev {
+                        for (path, color) in pending {
+                            ip.out.fill(&ip.gs.clip, &path, false, color).map_err(PsErr::Fatal)?;
+                        }
                     }
                     ip.charge(GLYPH_STEPS)?;
                     if draw && ip.gs.cur.is_some() {
@@ -544,7 +547,7 @@ fn show_glyphs(ip: &mut Interp, s: &[u8], draw: bool, replace: bool, per_char: &
         Ok(total)
     })();
     let path_limit = matches!(&result, Err(PsErr::Fatal(message)) if message == "PostScript (path limit)");
-    if result.is_ok() || !path_limit {
+    if (result.is_ok() || !path_limit) && !ip.gs.nulldev {
         for (path, color) in text_paths {
             ip.out.fill(&ip.gs.clip, &path, false, color).map_err(PsErr::Fatal)?;
         }
@@ -741,6 +744,8 @@ mod tests {
         assert_eq!(standard_glyph_char(b"emdash"), Some('—'));
         assert_eq!(standard_glyph_char(b"fi"), Some('\u{fb01}'));
         assert_eq!(standard_glyph_char(b"sterling"), Some('£'));
+        assert_eq!(standard_glyph_char(b"quoteleft"), Some('‘'));
+        assert_eq!(standard_glyph_char(b"quoteright"), Some('’'));
         assert_eq!(standard_glyph_char(b"unmapped.custom"), None);
     }
 }
