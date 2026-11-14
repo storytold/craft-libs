@@ -251,6 +251,9 @@ fn find_end(data: &[u8]) -> Result<(u64, u64, u64, usize), ZipError> {
     // last resort while searching for an older, structurally stronger candidate.
     let mut empty_sfx = None;
     let mut fallback = None;
+    // Fake EOCD records in a comment can all describe the same large directory. Cache binary
+    // directory jumps so checking each candidate does not rescan every entry.
+    let mut directory_jumps = HashMap::new();
     for candidate in (lo..data.len().saturating_sub(21)).rev() {
         if u32_at(data, candidate) != Some(END)
             || !u16_at(data, candidate + 20)
@@ -272,7 +275,7 @@ fn find_end(data: &[u8]) -> Result<(u64, u64, u64, usize), ZipError> {
                 let dir_size = u64_at(data, at + 40)?;
                 let dir_offset = u64_at(data, at + 48)?;
                 locate_directory(data, count, dir_size, dir_offset, at)
-                    .filter(|&(dir, _)| directory_is_exact(data, dir, dir_size, count))
+                    .filter(|&(dir, _)| directory_is_exact(data, dir, dir_size, count, &mut directory_jumps))
                     .map(|(_, shift)| (at, count == 0 && shift > 0))
             });
             let Some((_, shifted_empty)) = valid else {
@@ -284,7 +287,7 @@ fn find_end(data: &[u8]) -> Result<(u64, u64, u64, usize), ZipError> {
             }
         } else {
             let Some((_, shift)) = locate_directory(data, count.into(), size.into(), offset.into(), candidate)
-                .filter(|&(dir, _)| directory_is_exact(data, dir, size.into(), count.into()))
+                .filter(|&(dir, _)| directory_is_exact(data, dir, size.into(), count.into(), &mut directory_jumps))
             else {
                 continue;
             };
@@ -371,9 +374,35 @@ fn locate_directory(data: &[u8], count: u64, size: u64, stated: u64, limit: usiz
     None
 }
 
+fn central_entry_end(data: &[u8], cursor: usize) -> Option<usize> {
+    if u32_at(data, cursor) != Some(CENTRAL) {
+        return None;
+    }
+    let header_end = cursor.checked_add(46).filter(|&at| at <= data.len())?;
+    let name_len = usize::from(u16_at(data, header_end - 18)?);
+    let extra_len = usize::from(u16_at(data, header_end - 16)?);
+    let comment_len = usize::from(u16_at(data, header_end - 14)?);
+    header_end.checked_add(name_len)?.checked_add(extra_len)?.checked_add(comment_len).filter(|&end| end <= data.len())
+}
+
+/// Return the offset after `2^power` contiguous central-directory records, memoizing offsets
+/// shared by competing EOCD candidates in untrusted comments.
+fn central_directory_jump(data: &[u8], start: usize, power: u8, jumps: &mut HashMap<(usize, u8), Option<usize>>) -> Option<usize> {
+    if let Some(&cached) = jumps.get(&(start, power)) {
+        return cached;
+    }
+    let end = if power == 0 {
+        central_entry_end(data, start)
+    } else {
+        central_directory_jump(data, start, power - 1, jumps).and_then(|middle| central_directory_jump(data, middle, power - 1, jumps))
+    };
+    jumps.insert((start, power), end);
+    end
+}
+
 /// Checks that the declared central-directory entries consume the entire directory. This is
-/// used while choosing among EOCD-shaped signatures, where a comment may resemble an end record.
-fn directory_is_exact(data: &[u8], start: usize, size: u64, count: u64) -> bool {
+/// used while choosing among EOCD-shaped signatures, where comments may contain many fake records.
+fn directory_is_exact(data: &[u8], start: usize, size: u64, count: u64, jumps: &mut HashMap<(usize, u8), Option<usize>>) -> bool {
     let Ok(size) = usize::try_from(size) else { return false };
     let Some(end) = start.checked_add(size).filter(|&end| end <= data.len()) else { return false };
     // Preserve the existing TooMany diagnostic in `Archive::open` without walking attacker-sized
@@ -382,25 +411,17 @@ fn directory_is_exact(data: &[u8], start: usize, size: u64, count: u64) -> bool 
         return true;
     }
     let mut cursor = start;
-    for _ in 0..count {
-        let Some(header_end) = cursor.checked_add(46).filter(|&at| at <= end) else {
-            return false;
-        };
-        if u32_at(data, cursor) != Some(CENTRAL) {
-            return false;
+    let mut remaining = count;
+    let mut power = 0;
+    while remaining != 0 {
+        if remaining & 1 != 0 {
+            let Some(next) = central_directory_jump(data, cursor, power, jumps) else {
+                return false;
+            };
+            cursor = next;
         }
-        let Some(name_len) = u16_at(data, header_end - 18).map(usize::from) else { return false };
-        let Some(extra_len) = u16_at(data, header_end - 16).map(usize::from) else { return false };
-        let Some(comment_len) = u16_at(data, header_end - 14).map(usize::from) else { return false };
-        let Some(entry_end) = header_end
-            .checked_add(name_len)
-            .and_then(|at| at.checked_add(extra_len))
-            .and_then(|at| at.checked_add(comment_len))
-            .filter(|&at| at <= end)
-        else {
-            return false;
-        };
-        cursor = entry_end;
+        remaining >>= 1;
+        power += 1;
     }
     cursor == end
 }

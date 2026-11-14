@@ -281,6 +281,28 @@ fn nonempty_comment_eocd_candidate_does_not_mask_valid_archive() {
 }
 
 #[test]
+fn repeated_eocd_directory_candidates_reuse_entry_validation() {
+    let entries = (0..1024).map(|index| Raw::new(&format!("entry-{index:04}.xml"), b"", false)).collect::<Vec<_>>();
+    let mut bytes = write(&entries, false);
+    let eocd = bytes.len() - 22;
+    bytes[eocd + 20..eocd + 22].copy_from_slice(&1000u16.to_le_bytes());
+    bytes.extend_from_slice(&vec![0; 1000]);
+    let directory_start = u32_at(&bytes, eocd + 16).unwrap() as usize;
+    let directory_size = u64::from(u32_at(&bytes, eocd + 12).unwrap());
+    let count = u64::from(u16_at(&bytes, eocd + 10).unwrap());
+    let mut jumps = std::collections::HashMap::new();
+
+    assert!(directory_is_exact(&bytes, directory_start, directory_size, count, &mut jumps));
+    let indexed_records = jumps.len();
+    // Each size models a fake shifted EOCD in the archive comment that starts at the same
+    // central-directory record but claims additional bytes through the real EOCD.
+    for extra in 1..=1000 {
+        assert!(!directory_is_exact(&bytes, directory_start, directory_size + extra, count, &mut jumps));
+    }
+    assert_eq!(jumps.len(), indexed_records, "repeated candidates must reuse the indexed entry jumps");
+}
+
+#[test]
 fn deeply_nested_folders_are_refused() {
     let ok = format!("{}a.xml", "f/".repeat(MAX_DEPTH));
     assert!(Archive::open(&zip(&[(&ok, b"x", false)])).is_ok());
