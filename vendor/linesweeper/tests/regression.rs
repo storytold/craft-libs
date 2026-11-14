@@ -12,15 +12,19 @@ fn main() {
 
 fn regression_tests() -> Vec<Trial> {
     let ws = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let paths = glob::glob(&format!("{ws}/tests/regression/**/*.txt")).unwrap();
-    paths
-        .into_iter()
+    // Craft patch (regression glob): a checkout path can hold glob
+    // metacharacters such as `[`, and a run that finds no inputs is a failure.
+    let pattern = format!("{}/tests/regression/**/*.txt", glob::Pattern::escape(&ws));
+    let trials: Vec<Trial> = glob::glob(&pattern)
+        .unwrap()
         .map(|p| {
             let p = p.unwrap();
             let name = input_path_base(&p).display().to_string();
             Trial::test(name, || generate_regression_test(p))
         })
-        .collect()
+        .collect();
+    assert!(!trials.is_empty(), "no regression inputs under {ws}");
+    trials
 }
 
 fn input_path_base(input_path: &Path) -> &Path {
