@@ -2394,6 +2394,7 @@ dependencies = [
 name = "craft-pst"
 version = "0.1.0"
 dependencies = [
+ "craft-pst",
  "proptest",
 ]
 
