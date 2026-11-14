@@ -346,11 +346,12 @@ impl TextVariableValues {
                 settings: preference.map(|child| child.attrs.clone()).unwrap_or_default(),
             },
         };
+        let text = |key: &str| preference.and_then(|child| child.attr(key)).or_else(|| values.get(key)).unwrap_or("").to_owned();
         Self {
             self_id: values.self_id().map(str::to_owned),
             name: values.get("Name").unwrap_or("").to_owned(),
-            before: values.get("TextBefore").unwrap_or("").to_owned(),
-            after: values.get("TextAfter").unwrap_or("").to_owned(),
+            before: text("TextBefore"),
+            after: text("TextAfter"),
             kind,
         }
     }
