@@ -1,6 +1,9 @@
 //! The font store's on-disk transaction: the lock, the manifest, staging and committing files.
 
-use super::*;
+use super::{
+    AtomicU64, Error, Family, File, FontFile, FontStore, Index, InstalledFamily, InstalledFile, LOCK, MANIFEST, MAX_MANIFEST_BYTES, Manifest,
+    Ordering, Path, PathBuf, STAGING, STALE, SystemTime, Write, io, read_limited, safe_dir, safe_file_name,
+};
 use crate::language_packs::PackRemovalRoot;
 
 impl FontStore {

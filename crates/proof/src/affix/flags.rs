@@ -1,6 +1,7 @@
 //! Flag syntax (`FLAG` modes), exclusion sets for probes, and step counters for the simple-word checks.
 
-use super::*;
+use super::build::intersects;
+use super::{FLAGS_PER_STEP, MAX_FLAGS_PER_ENTRY, MAX_SUGGEST_STEPS, Rule, has};
 
 /// U+FE0F VARIATION SELECTOR-16 asks for the emoji form of the character before it. A dictionary
 /// that uses an emoji as a flag may write it after the flag (RLA-ES Spanish: `PFX ☎️`, `banco/S☎️`),

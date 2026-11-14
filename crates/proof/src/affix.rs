@@ -51,12 +51,11 @@ mod parse;
 #[cfg(test)]
 mod tests;
 
-use build::*;
 pub(crate) use compound::{MAX_SUGGEST_COMPOUND_WORK, Pieces};
+use flags::FlagKey;
 pub use flags::FlagMode;
 pub(crate) use flags::SuggestSteps;
-use flags::*;
-use parse::*;
+use parse::{Cond, Conv, Repeat};
 
 const MAGIC: &str = "WCAFF2";
 /// Most bytes the compact format inflates to, written or read.

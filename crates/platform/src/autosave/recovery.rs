@@ -10,7 +10,7 @@ use std::time::Duration;
 use std::time::SystemTime;
 
 #[cfg(not(target_arch = "wasm32"))]
-use super::*;
+use super::migrate;
 
 /// The recovery folder's name.
 pub const RECOVERY_DIR: &str = "Recovery";

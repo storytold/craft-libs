@@ -1,6 +1,6 @@
 //! Locale candidate negotiation from tags and the environment, and plural rules.
 
-use super::*;
+use super::{Cow, IcuLocale, Locale, OnceLock, PluralCategory, PluralRules, data, scripts};
 
 /// Codes to try for a locale tag, most specific first: `zh_TW.UTF-8` → `zh-tw`, `zh-hant`, `zh`.
 /// Chinese without a script picks one by region; Portuguese falls back to `pt-br` last, when

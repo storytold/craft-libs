@@ -1,6 +1,9 @@
 //! Sample entry serialization: `esds` and the visual and audio entry boxes.
 
-use super::*;
+use super::{
+    AacConfig, ApvConfig, AudioParams, Av1Config, AvcConfig, BitRate, BoxBuf, CleanAperture, CodecConfig, ColorInfo, Error, FlacConfig, FourCc,
+    HevcConfig, PcmConfig, Result, SampleEntry, VideoParams, valid_log_identifier,
+};
 
 fn put_descriptor(b: &mut BoxBuf, tag: u8, body: &[u8]) {
     b.u8(tag);

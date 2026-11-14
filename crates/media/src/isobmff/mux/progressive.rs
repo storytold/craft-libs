@@ -1,7 +1,11 @@
 //! The progressive writer: [`Mp4Writer`], with optional faststart.
 
 use super::boxes::{movie_duration, write_ftyp, write_mvhd, write_trak, write_udta};
-use super::*;
+use super::{
+    BoxBuf, Brand, Chapter, CodecConfig, Edit, Error, Handler, Read, Result, SampleEntry, Seek, SeekFrom, Tables, TimecodeConfig, TrackConfig,
+    WTrack, Write, WriteSample, WriterOptions, handler_of, normalize_chapters, pcm_chunk_frames, rescale, same_codec, text_sample,
+    text_sample_entry_payload, too_many_samples, validate_track,
+};
 
 /// Progressive MP4/MOV writer: `ftyp`, then one `mdat` streamed to `W`, then `moov` at [`finish`](Self::finish)
 /// (or moved in front of `mdat` by [`finish_faststart`](Self::finish_faststart)).

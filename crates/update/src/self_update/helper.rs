@@ -6,7 +6,7 @@ use super::detect::{clear_pretend_version, exe_after_msi, msi_step, restarts};
 use super::replace::is_plain_file;
 #[cfg(windows)]
 use super::replace::{mark_installed, unmark_unless_scheduled};
-use super::*;
+use super::{App, Install, Installed, OsString, Path, PathBuf, Paths, Release, Restart, Version, detect, install, process, update, version};
 
 /// The first argument of the Windows update helper: a copy of this program that finishes an
 /// update once the launcher has exited (see [`finish`]).

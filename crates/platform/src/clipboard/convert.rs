@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use super::*;
+use super::types::{ClipboardImage, Flavor, RGBA8};
 
 /// `image` as an [`RGBA8`] flavor.
 pub(crate) fn rgba8_flavor(image: &ClipboardImage) -> Flavor {

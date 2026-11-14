@@ -1,6 +1,6 @@
 //! The resource budget of one call and counted, depth-checked deserialization.
 
-use super::*;
+use super::{Error, Limits, MAX_DEPTH, cancel, malformed};
 
 use std::cell::Cell;
 use std::collections::BTreeMap;

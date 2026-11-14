@@ -1,6 +1,6 @@
 //! The ICC binary parser: header, tag table, curves, lookup tables and text.
 
-use super::*;
+use super::{Clut, CmsError, ColorSpace, Curve, Intent, Lut, LutKind, Pcs, Profile, ProfileClass, Stage, math};
 
 // ---------------------------------------------------------------- reader
 

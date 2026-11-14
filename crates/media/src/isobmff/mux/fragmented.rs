@@ -1,7 +1,9 @@
 //! The fragmented writer: [`FragmentedWriter`].
 
 use super::boxes::{write_ftyp, write_mvhd, write_trak, write_udta};
-use super::*;
+use super::{
+    BoxBuf, Brand, Error, Result, Tables, TrackConfig, WTrack, Write, WriteSample, WriterOptions, handler_of, normalize_chapters, validate_track,
+};
 
 /// Buffered fragment sample: (data, duration, composition offset, sync).
 type PendingSample = (Vec<u8>, u32, i32, bool);

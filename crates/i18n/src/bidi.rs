@@ -1,6 +1,6 @@
 //! Bidirectional isolates: wrapping, detecting and stripping the marks around inserted values.
 
-use super::*;
+use unicode_bidi::{BidiClass, bidi_class};
 
 pub(super) const LRI: char = '\u{2066}';
 pub(super) const RLI: char = '\u{2067}';

@@ -1,5 +1,6 @@
 //! Tests for the swatch file codecs.
 
+use super::reader::ASE_COLOR;
 use super::*;
 use craft_ui::testing::trial;
 

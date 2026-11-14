@@ -1,3 +1,5 @@
+use super::object::{Lexer, Obj, get};
+use super::xref::Budget;
 use super::*;
 use craft_ui::testing::trial;
 

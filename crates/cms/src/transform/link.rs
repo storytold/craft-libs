@@ -1,6 +1,6 @@
 //! Linking two profiles through the PCS: stage chains, PCS adjustment and black point.
 
-use super::*;
+use super::{CmsError, ColorSpace, Intent, PERCEPTUAL_BLACK, Pcs, Pipeline, Profile, ProfileClass, Stage, math};
 
 // ------------------------------------------------------------ linking
 

@@ -1,6 +1,8 @@
 //! The table of languages proofed against Hunspell dictionaries, and the dictionary-folder and load-error API.
 
-use super::*;
+use super::{
+    DICTIONARY_GENERATION, EnglishSource, Issue, Options, Ordering, ProofLang, cs, english, es, hr, hunspell, id, it, pack_lang, pl, pt, ru, slot, tr,
+};
 
 /// A language proofed against an installed Hunspell dictionary: all the functions below need to
 /// know about it, so a language joins with one row in [`LANGUAGES`].

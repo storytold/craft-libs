@@ -1,6 +1,6 @@
 //! The fit plan: which sheets change, and how, to match the paper.
 
-use super::*;
+use super::{Error, SAME, Sheet};
 
 /// How sheets of another size than the paper are printed.
 #[derive(Clone, Copy, Debug, PartialEq)]

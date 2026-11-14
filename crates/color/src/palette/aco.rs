@@ -1,7 +1,7 @@
 //! Photoshop `.aco` swatches and `.act` colour tables.
 
-use super::reader::*;
-use super::*;
+use super::reader::{ACT_COLORS, ACT_PALETTE_LEN, ACT_TRAILER_LEN, MAX_NAME_UNITS, Reader, finite, unit, utf16_units};
+use super::{Hsb, Lab, SwatchColor};
 
 // ---------------------------------------------------------------- .aco
 

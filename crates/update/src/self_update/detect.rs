@@ -2,7 +2,7 @@
 
 #[cfg(windows)]
 use super::helper::is_own_executable;
-use super::*;
+use super::{App, Install, PackageKind, Path, PathBuf, Paths, Platform, Release, Version, pick_asset, process, version};
 
 /// Makes an installed copy believe it's this version, to try the self-update against the current
 /// release. The restart helper drops it, so it lasts one run.

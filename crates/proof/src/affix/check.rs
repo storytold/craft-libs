@@ -1,6 +1,12 @@
 //! Word lookup: stem and flag-set probes, affix rule application, compounds and case variants.
 
-use super::*;
+use super::build::intersects;
+use super::flags::{Excluded, FlagProbe, Steps};
+use super::parse::Repeat;
+use super::{
+    AffixDict, Casing, EMPTY, FxMap, GROUP_STEPS, INNER_CHAIN, MAX_COMPOUND_BYTES, MAX_HOMONYMS, MAX_INPUT_BYTES, MAX_SHARPS, MAX_SIMPLE_WORK,
+    MAX_SUGGEST_SIMPLE_WORK, MAX_WORD_BYTES, Rule, capitalize, casing, compound, decapitalize, has, hash_str,
+};
 
 /// Does a compound rule's token list match a split of the word into two or more parts? `part(a,
 /// b)` is the flags of the stem between char cuts `a` and `b` (`None`: not a stem). States are

@@ -1,6 +1,11 @@
 //! Building an [`AffixDict`] from `.aff` and `.dic` text: stem and flag-set interning and the lookup index.
 
-use super::*;
+use super::flags::{EMOJI_SELECTOR, FlagKey};
+use super::parse::{Conv, RawRule, Rules, parse_aff, parse_compound_rule, parse_cond};
+use super::{
+    AffixDict, Casing, EMPTY, FLAG_TEXT_PER_FLAG, FxMap, MAX_DISTINCT_FLAGS, MAX_FLAGS_PER_ENTRY, MAX_FLAGS_PER_STEM, MAX_HOMONYMS, MAX_SET_DATA,
+    MAX_STEM_FLAGS, MAX_WORD_BYTES, Rule, SfxGroup, casing, has, hash_str,
+};
 
 /// A dictionary's stems as `(word, start, end, is a word)` ranges of one buffer of flag keys.
 type StemFlags = (Vec<(String, usize, usize, bool)>, Vec<FlagKey>);

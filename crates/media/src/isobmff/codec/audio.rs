@@ -1,6 +1,6 @@
 //! Audio sample entry parameters and the audio codec configuration records.
 
-use super::*;
+use super::{BitReader, BoxBuf, Cur, Result};
 
 /// Fields of audio sample entries (ISO v0 plus QuickTime sound description v1/v2 extensions).
 #[derive(Clone, Debug, PartialEq, Default)]

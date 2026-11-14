@@ -8,6 +8,7 @@
 //! [`Region`] does ([`I18n::format`]): grouped (`1.234`, `12,34,567`) and in the region's digits
 //! (`١٬٢٣٤`). Text that goes into documents or file names should use [`I18n::trn_plain`], which
 //! writes `0`–`9` without grouping.
+#![warn(missing_docs)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod age;
@@ -27,8 +28,8 @@ mod words;
 mod bidi;
 mod negotiation;
 
-use bidi::*;
-use negotiation::*;
+use bidi::{FSI, has_bidi_control, has_rtl, is_one_isolate, unwrap_isolate, wrap};
+use negotiation::{bare, candidates, is_region, marked, plural_rules, posix_env_tags};
 
 pub use bidi::{isolate, ltr, strip_isolates};
 
@@ -72,7 +73,6 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
 
 use icu_locale_core::Locale as IcuLocale;
 use icu_plurals::{PluralCategory, PluralOperands, PluralRules};
-use unicode_bidi::{BidiClass, bidi_class};
 
 pub use age::{AGE_SHOWN_AS_DATE, AgeStyle, relative_age};
 #[cfg(feature = "collate")]

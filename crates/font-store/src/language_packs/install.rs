@@ -1,7 +1,16 @@
 //! Installing and listing Language packs, fetching the pack index, and the record of installed
 //! packs.
 
-use super::*;
+use std::io::Read;
+
+#[cfg(test)]
+use super::tests;
+use super::{
+    Cancel, Client, Error, FontStore, INDEX_CACHE, INDEX_CACHE_NAME, INSTALLED, IndexError, IndexSource, Installed, InstalledLanguagePack,
+    LANGUAGE_PACKS, MAX_PACK_ARCHIVE_BYTES, MAX_PACK_INDEX_BYTES, MAX_PACK_TOML_BYTES, MAX_PACKS, PackEntry, PackIndex, PackIndexPin,
+    PackRemovalRoot, PathBuf, Progress, Stage, Timeouts, VerifyError, io, is_locale, is_sha256, language_pack_index_overridden, local_source,
+    plain_text, read_limited, sha256_hex, unpack,
+};
 
 impl FontStore {
     /// The folder of installed Language packs (`<store>/language-packs`): give it to

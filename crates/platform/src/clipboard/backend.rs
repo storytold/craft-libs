@@ -4,7 +4,8 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
 
-use super::*;
+use super::convert::{rgba8_flavor, rgba8_image, trim_cr, uri_list};
+use super::types::{BITMAP, ClipboardError, ClipboardImage, Flavor, HTML, PNG, RGBA8, TEXT, URI_LIST};
 
 /// What a write did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

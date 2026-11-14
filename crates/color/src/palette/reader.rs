@@ -1,6 +1,7 @@
 //! Byte reader, name and count helpers and limits shared by the swatch codecs.
 
-use super::*;
+use super::text::rgb8;
+use super::{CmykConverter, SwatchColor, SwatchError, SwatchFormat, SwatchGroup, SwatchKind, SwatchNote, SwatchReport};
 
 // ---------------------------------------------------------------- file helpers
 

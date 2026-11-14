@@ -1,6 +1,6 @@
 //! Movie fragments: `moof` parsing into samples.
 
-use super::*;
+use super::{Cur, Error, HashMap, Result, Sample, SampleBudget, Track, Trex, boxes};
 
 pub(super) fn parse_moof(
     moof_off: u64,

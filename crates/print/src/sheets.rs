@@ -49,9 +49,6 @@ pub(crate) use read::{Sheet, Sheets, read};
 #[cfg(windows)]
 pub(crate) use update::Repeat;
 
-use object::*;
-use xref::*;
-
 #[cfg(test)]
 #[path = "tests/pdf_bounds.rs"]
 mod tests;

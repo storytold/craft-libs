@@ -1,6 +1,6 @@
 //! The English grammar rules.
 
-use super::*;
+use super::{Issue, IssueKind, ProofLang, space_runs, words};
 
 /// Grammar issues in a paragraph of English text.
 pub fn check_grammar(text: &str) -> Vec<Issue> {

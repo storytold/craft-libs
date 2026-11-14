@@ -1,8 +1,8 @@
 //! Huffman entropy decoding: code tables, the bit reader and the Huffman scan decoder.
 
 use super::arith::ArithMode;
-use super::scan::*;
-use super::*;
+use super::scan::{ScanDecoder, next_byte, skip_restart};
+use super::{Error, err};
 
 /// A Huffman table in the decoding form of F.2.2.3 (`MAXCODE`, `VALPTR`, `MINCODE`).
 #[derive(Clone)]

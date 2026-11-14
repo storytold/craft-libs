@@ -1,7 +1,7 @@
 //! Arithmetic entropy decoding: the probability table, the QM decoder and the arithmetic scan decoder.
 
-use super::scan::*;
-use super::*;
+use super::scan::{ScanDecoder, next_byte, skip_restart};
+use super::{Error, err};
 
 /// Qe, next index after LPS, next index after MPS, MPS switch (Table D.2).
 #[rustfmt::skip]

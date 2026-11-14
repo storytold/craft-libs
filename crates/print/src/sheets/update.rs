@@ -1,6 +1,7 @@
 //! The incremental-update writer that appends the changed pages.
 
-use super::*;
+use super::object::{Dict, Obj, get, num_obj, number, write_dict, write_obj};
+use super::{Edit, Error, MAX_PAGES, MAX_REPEATED, Sheets};
 
 use std::collections::HashMap;
 use std::sync::Arc;

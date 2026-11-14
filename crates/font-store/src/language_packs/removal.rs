@@ -2,7 +2,9 @@
 //! `language-packs/.removing/`, the record commits the removal with a receipt for that stage, and
 //! the stage is deleted then or by a later locked sweep. A failed record write restores the pack.
 
-use super::*;
+#[cfg(test)]
+use super::tests;
+use super::{Error, FontStore, LANGUAGE_PACKS, Path, PathBuf, Stage, io, is_locale};
 
 impl FontStore {
     /// Removes the pack for `locale`: its folder disappears at once (one rename) and is deleted

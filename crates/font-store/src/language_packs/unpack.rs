@@ -1,6 +1,6 @@
 //! Reading a Language pack archive with the checks a hostile archive needs.
 
-use super::*;
+use super::{Component, MAX_PACK_ENTRIES, MAX_PACK_FILE_BYTES, MAX_PACK_UNPACKED_BYTES, PackEntry, Path, PathBuf, Read, windows_reserved};
 
 /// The zstd frames of `archive` one after another, as one stream (`zstd` writes one frame, but
 /// a concatenation of frames is a valid `.zst` too, and must not stop after the first).

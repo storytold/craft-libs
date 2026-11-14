@@ -1,7 +1,7 @@
 //! Reconstruction: inverse DCT, upsampling and colour conversion to pixels.
 
-use super::parse::*;
-use super::*;
+use super::parse::{Component, Frame, Tables};
+use super::{Error, Samples, ZIGZAG, err};
 
 /// One dimension of the inverse DCT (A.3.3): `t[x][u] = C(u)/2 · cos((2x+1)uπ/16)`, and its
 /// transpose.

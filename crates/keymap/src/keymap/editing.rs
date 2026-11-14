@@ -1,6 +1,6 @@
 //! The chords each platform reserves for text editing.
 
-use super::*;
+use super::{Chord, Key, Mods, Platform};
 
 const CMD: Mods = Mods::CMD;
 const CMD_SHIFT: Mods = Mods { shift: true, ..Mods::CMD };

@@ -1,6 +1,7 @@
 //! The PDF object model, its lexer and its serializer.
 
-use super::*;
+use super::xref::Budget;
+use super::{MAX_DEPTH, MAX_NODES, MAX_OBJECT_NODES, MAX_OBJECT_TOKENS, MAX_TOKENS};
 
 use std::collections::HashMap;
 

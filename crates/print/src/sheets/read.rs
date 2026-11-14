@@ -1,6 +1,8 @@
 //! The sheets of a document: the page tree and each page's boxes and rotation.
 
-use super::*;
+use super::object::{Dict, Obj, get};
+use super::xref::{Budget, Entry, Reader, startxref, xref_section};
+use super::{DEFAULT_MEDIA, Error, MAX_DEPTH, MAX_PAGES, MAX_SECTIONS, unreadable};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

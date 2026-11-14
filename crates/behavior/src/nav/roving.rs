@@ -2,7 +2,7 @@
 
 use crate::intent::{Granularity, MoveMods, NavMove};
 
-use super::*;
+use super::step::{NavShape, NavState};
 
 /// Whether a roving group matches typed letters to entries.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

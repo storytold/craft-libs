@@ -1,8 +1,8 @@
 //! Marker segment parsing: quantisation, Huffman and arithmetic tables and the frame header.
 
-use super::huffman::*;
+use super::huffman::Huffman;
 use super::idct::UpsampleStep;
-use super::*;
+use super::{Error, Limits, err, unsupported};
 
 pub(super) struct Tables {
     /// Quantization tables in zigzag order.

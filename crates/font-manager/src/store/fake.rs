@@ -1,6 +1,9 @@
 //! The in-memory font store used by tests.
 
-use super::*;
+use super::{
+    AtomicBool, Condvar, Downloaded, Family, HashMap, Index, Installer, Mutex, Ordering, Path, PathBuf, Progress, RemoveRequest, StoreError,
+    UserSource, err,
+};
 
 /// What a [`FakeStore`] was asked to do.
 #[derive(Clone, Debug, PartialEq, Eq)]

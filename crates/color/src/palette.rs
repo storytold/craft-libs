@@ -486,7 +486,10 @@ mod reader;
 mod tests;
 mod text;
 
-use aco::*;
-use ase::*;
-use reader::*;
-use text::*;
+use aco::{AcoColor, act_used, from_aco, parse_aco, to_aco, write_aco};
+use ase::{AseItem, AseSwatch, from_ase, hsb_to_rgb, parse_ase, put_ase_block, put_ase_color, put_ase_name, to_ase};
+use reader::{
+    ACO_MAX_SWATCHES, ACT_COLORS, ACT_PALETTE_LEN, ACT_TRAILER_LEN, ASE_GROUP_END, ASE_GROUP_START, ASE_MAX_GROUPS, ASE_MAX_SWATCHES, ASE_SIGNATURE,
+    clip_name, count_swatches, entry_name, finite, malformed, names_cut, profile_to_srgb, push_note, rgb_colors, stem_of, unit, working_transforms,
+};
+use text::{is_gpl, read_gpl, write_css, write_gpl};

@@ -1,6 +1,6 @@
 //! Visual sample entry parameters and the video codec configuration records.
 
-use super::*;
+use super::{BoxBuf, Cur, Error, FourCc, Result};
 
 /// Fields common to all visual sample entries plus the optional descriptive boxes.
 #[derive(Clone, Debug, PartialEq, Default)]

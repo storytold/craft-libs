@@ -1,6 +1,10 @@
 //! Sample entry parsing: `stsd` entry payloads, `esds`, `colr` and `btrt`.
 
-use super::*;
+use super::{
+    AacConfig, ApvConfig, AudioParams, Av1Config, AvcConfig, BitRate, CleanAperture, CodecConfig, ColorInfo, Cur, Error, FieldInfo, FlacConfig,
+    FourCc, HevcConfig, MasteringDisplay, OpusConfig, PcmConfig, Result, SampleEntry, TimecodeConfig, VideoParams, VpcConfig, boxes,
+    valid_log_identifier,
+};
 
 // ---------------------------------------------------------------------------------------------
 // Parsing

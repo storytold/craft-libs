@@ -1,6 +1,10 @@
 //! The font store's consent setting, user-added sources and the cached and fetched indexes.
 
-use super::*;
+use super::{
+    Caller, Cancel, Error, FontStore, INDEX_CACHE, Index, IndexError, IndexPin, MAX_INDEX_BYTES, MAX_SETTINGS_BYTES, MAX_SOURCES_BYTES,
+    MAX_USER_SOURCES, Network, PathBuf, SETTINGS, SOURCES_CACHE, Settings, SourceEntry, SourceProblem, SourcesFile, SystemTime, UserSource,
+    VerifyError, io, is_source_url, read_limited, sha256_hex, slug,
+};
 
 impl FontStore {
     // ----- consent

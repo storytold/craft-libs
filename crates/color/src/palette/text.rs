@@ -1,7 +1,7 @@
 //! GIMP `.gpl` palettes and CSS custom properties.
 
-use super::reader::*;
-use super::*;
+use super::reader::{GPL_GROUP, GPL_HEADER, RgbSwatch, clip_name, entry_name, stem_of, unit};
+use super::{SwatchColor, SwatchEntry, SwatchGroup};
 
 // ---------------------------------------------------------------- .gpl and .css
 

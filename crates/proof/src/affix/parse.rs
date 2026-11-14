@@ -1,6 +1,10 @@
 //! Reading a Hunspell `.aff` into [`Rules`]: conditions, compound-rule patterns, conversion tables, and the directive loop.
 
-use super::*;
+use super::flags::{EMOJI_SELECTOR, FlagKey};
+use super::{
+    FlagMode, FxMap, HashMap, MAX_ALIAS_BYTES, MAX_ALIASES, MAX_COMPOUND_BYTES, MAX_COMPOUND_RULES, MAX_COMPOUND_TOKENS, MAX_CONV_BYTES,
+    MAX_CONV_PAIRS, MAX_WORD_BYTES, UNSUPPORTED, compound,
+};
 
 /// How often a `COMPOUNDRULE` token's flag may repeat.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

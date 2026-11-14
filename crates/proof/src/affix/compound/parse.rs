@@ -1,6 +1,6 @@
 //! Reading the compounding directives of an `.aff` or compact-format line, and writing them back.
 
-use super::*;
+use super::{FlagKey, FlagMode, MAX_PARTS};
 
 /// Most `CHECKCOMPOUNDPATTERN` lines (the Dutch dictionary has 52).
 const MAX_PATTERNS: usize = 512;

@@ -1,6 +1,7 @@
 //! The lenient reader: cross-reference sections and streams, object streams, Flate and PNG predictors, and the decoding budget.
 
-use super::*;
+use super::object::{Dict, Lexer, Obj, get};
+use super::{MAX_DECODED, MAX_NODES, MAX_RECORDS, MAX_STREAM, MAX_TOKENS};
 
 use std::borrow::Cow;
 use std::collections::HashMap;

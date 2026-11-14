@@ -1,9 +1,9 @@
 //! Scan decoding: entropy segment bounds, the scan walk over the MCU grid and the coefficient pass loop.
 
-use super::arith::*;
-use super::huffman::*;
-use super::parse::*;
-use super::*;
+use super::arith::{Arith, ArithMode, ArithScan};
+use super::huffman::{Bits, HuffmanScan, ProgressiveHuffmanScan};
+use super::parse::{Frame, Tables, be16, byte, parse_dac, parse_dht, parse_dqt, parse_frame};
+use super::{Error, Limits, err, unsupported};
 
 /// Where the entropy-coded data starting at `start` ends: the first marker that isn't a
 /// stuffed `FF 00`, a fill byte or a restart marker.

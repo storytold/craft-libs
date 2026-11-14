@@ -1,6 +1,7 @@
 //! Near-miss compound suggestions: a word of three or more parts that one slip turns into a word.
 
-use super::*;
+use super::analysis::Search;
+use super::{AffixDict, MAX_WORK};
 
 /// Most `MAP` variants, `TRY` letters and `KEY` row letters the three-part check tries.
 const MAX_MAP_VARIANTS: usize = 256;

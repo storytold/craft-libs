@@ -1,6 +1,6 @@
 //! The compound search: analyses of the pieces of a word and the checks on the parts chosen.
 
-use super::*;
+use super::{AffixDict, Compounding, Excluded, MAX_PARTS, MAX_SUGGEST_WORK, MAX_WORK, Rule, has};
 
 /// Most ways one piece of a word may be a part (distinct flags and places).
 const MAX_INFOS: usize = 256;

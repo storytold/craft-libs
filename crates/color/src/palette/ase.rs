@@ -1,7 +1,9 @@
 //! Adobe swatch exchange (`.ase`) files.
 
-use super::reader::*;
-use super::*;
+use super::reader::{
+    ASE_COLOR, ASE_GROUP_END, ASE_GROUP_START, ASE_MAX_GROUPS, ASE_MAX_SWATCHES, ASE_SIGNATURE, MAX_NAME_UNITS, Reader, finite, unit, utf16_units,
+};
+use super::{Hsb, Lab, Srgba, SwatchColor, SwatchKind};
 
 // ---------------------------------------------------------------- .ase
 

@@ -2,7 +2,9 @@
 
 use std::path::PathBuf;
 
-use super::*;
+use super::backend::ClipboardBackend;
+use super::convert::{parse_uri_list, rgba8_image};
+use super::types::{BITMAP, ClipboardError, ClipboardImage, Flavor, RGBA8, URI_LIST};
 
 /// A clipboard fed by the app from paste events: the browser's (its Paste event carries text,
 /// pictures and files; a page can't read the clipboard on its own) and any host that delivers

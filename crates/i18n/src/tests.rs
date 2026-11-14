@@ -1,6 +1,8 @@
 //! Tests for the i18n facade.
 
+use super::bidi::{PDF, PDI};
 use super::*;
+use unicode_bidi::{BidiClass, bidi_class};
 
 impl I18n {
     /// The embedded locales parsed so far, by code.

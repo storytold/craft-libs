@@ -3,7 +3,7 @@
 use super::detect::clear_pretend_version;
 #[cfg(target_os = "linux")]
 use super::detect::pretend_var;
-use super::*;
+use super::{App, Restart, process};
 
 /// A [`Restart`] that starts `sh`, which waits for `pid` to exit and then runs `command`.
 /// Detached, so it outlives us. Nothing starts before the app's exit is certain: a close the user

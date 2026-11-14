@@ -4,7 +4,7 @@ use super::detect::marker;
 #[cfg(unix)]
 use super::detect::prefix_with_share;
 use super::helper::{done_file, failure_file, read_record};
-use super::*;
+use super::{App, Path, PathBuf, Paths, Release, install};
 
 /// Records `release` as just installed, so it isn't offered again for [`super::detect::JUST_UPDATED_FOR`]: its
 /// tag, the time, and the version it installs. The outcome records of an earlier update are

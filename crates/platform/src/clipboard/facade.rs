@@ -3,7 +3,9 @@
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
-use super::*;
+use super::backend::{ClipboardBackend, Written};
+use super::convert::rgba8_flavor;
+use super::types::{ClipboardError, ClipboardImage, ClipboardLimits, Flavor, SVG, TEXT};
 
 /// The app's clipboard: one per window, on the UI thread.
 ///

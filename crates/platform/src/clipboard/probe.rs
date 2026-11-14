@@ -4,7 +4,7 @@ use craft_host::Wake;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
-use super::*;
+use super::backend::ClipboardBackend;
 
 /// How often the probe's worker looks at the clipboard while the UI wants to know: 250 ms.
 pub const PROBE_INTERVAL: Duration = Duration::from_millis(250);

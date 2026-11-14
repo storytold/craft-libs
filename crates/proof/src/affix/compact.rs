@@ -1,6 +1,10 @@
 //! WordCraft's compact byte format: `to_bytes` and `from_bytes`.
 
-use super::*;
+use super::build::FlagText;
+use super::parse::{RawRule, Rules, cap_try, push_rep, split_fields, zero_empty};
+use super::{
+    AffixDict, FlagMode, MAGIC, MAX_COMPOUND_BYTES, MAX_COMPOUND_RULES, MAX_FLAGS_PER_STEM, MAX_INFLATED, MAX_STEM_FLAGS, MAX_WORD_BYTES, compound,
+};
 
 impl AffixDict {
     /// Serialize to WordCraft's compact format: raw-deflate of `WCAFF2`, a `FLAG` line when flags

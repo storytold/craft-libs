@@ -1,6 +1,6 @@
 //! `udta` and `meta` text metadata, bounded by a byte budget.
 
-use super::*;
+use super::{Cur, METADATA_ENTRY_COST, Metadata, boxes, find};
 
 /// Takes an entry of `key_len` and `value_len` bytes from `left`; false once it would not fit.
 fn charge_metadata(left: &mut usize, key_len: usize, value_len: usize) -> bool {

@@ -4,7 +4,7 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::*;
+use super::{MAX_BINDING_TEXT, ParseError, Scope, Trigger};
 
 /// A trigger in a scope. `scope: None` is the command's home scope.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

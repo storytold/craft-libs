@@ -1,6 +1,6 @@
 //! A command definition: its kind, modal and typing rules.
 
-use super::*;
+use super::{Binding, Chord, CommandRef, Deserialize, Platform, Scope, Serialize, text_editing_chords};
 
 /// What a binding does when pressed.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
