@@ -89,6 +89,19 @@ pub struct Archive<'a> {
     budget: Cell<u64>,
 }
 
+/// The package root selected from an XFL archive's `DOMDocument.xml` paths.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum XflPackageRoot<'a> {
+    /// A document XML file is directly at the archive root.
+    Document,
+    /// The sole eligible top-level folder containing a document.
+    Folder(&'a str),
+    /// No document path was found.
+    Missing,
+    /// More than one eligible top-level folder contains a document, sorted by name.
+    Multiple(Vec<&'a str>),
+}
+
 const END: u32 = 0x0605_4b50;
 const END64: u32 = 0x0606_4b50;
 const LOCATOR64: u32 = 0x0706_4b50;
@@ -527,6 +540,25 @@ impl<'a> Archive<'a> {
     /// The files' paths (`/`-separated, folders left out).
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.entries.keys().map(String::as_str)
+    }
+
+    /// Selects the package root from XFL document paths. A root-level document takes precedence;
+    /// otherwise only a single-level folder is eligible, with macOS metadata excluded.
+    pub fn xfl_package_root(&self) -> XflPackageRoot<'_> {
+        if self.entries.contains_key("DOMDocument.xml") {
+            return XflPackageRoot::Document;
+        }
+        let mut folders: Vec<&str> = self
+            .names()
+            .filter_map(|name| name.strip_suffix("/DOMDocument.xml"))
+            .filter(|folder| !folder.contains('/') && *folder != "__MACOSX")
+            .collect();
+        folders.sort_unstable();
+        match folders.as_slice() {
+            [] => XflPackageRoot::Missing,
+            [folder] => XflPackageRoot::Folder(folder),
+            _ => XflPackageRoot::Multiple(folders),
+        }
     }
 
     /// How many files and folder entries the archive lists.
