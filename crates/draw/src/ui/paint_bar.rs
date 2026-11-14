@@ -350,31 +350,38 @@ impl<M: Value> Pass<'_, M> {
     /// The Size row.
     fn size(&mut self, ui: &mut Ui, caption: &Label, max: f64, enabled: bool) {
         let current = self.values.size;
-        let mut events = EditEvents::new();
-        // The size field draws its own caption, so the wrapper only carries the enabled state.
-        Field::new(caption.clone()).side(SideLabel::new().kind(LabelKind::Hidden)).id_salt("size").sizing(Sizing::Content).enabled(enabled).show(
-            ui,
-            |ui, _| {
-                events = BrushSizeField::new(caption.clone(), Bind::given(current), max).show(ui).edit.events.clone();
-            },
-        );
+        // The size field draws its own caption, so the wrapper only carries the enabled state. The body's result is the
+        // field's events: the framework keeps it across the passes the body may run.
+        let events = Field::new(caption.clone())
+            .side(SideLabel::new().kind(LabelKind::Hidden))
+            .id_salt("size")
+            .sizing(Sizing::Content)
+            .enabled(enabled)
+            .show(ui, |ui, _| BrushSizeField::new(caption.clone(), Bind::given(current), max).show(ui).edit.events.clone())
+            .inner
+            .unwrap_or_default();
         self.emit(events, |v, size| v.size = size);
     }
 
     /// A percent field over a fraction 0..1.
     fn percent(&mut self, ui: &mut Ui, salt: &'static str, caption: &Label, enabled: bool, current: f64, set: fn(&mut PaintValues<M>, f64)) {
-        let mut events = EditEvents::new();
-        let mut alert = None;
-        Field::new(caption.clone()).side(SideLabel::new().scrub(true)).id_salt(salt).sizing(Sizing::Content).enabled(enabled).show(ui, |ui, _| {
-            let field = NumberField::new(caption.clone(), Bind::given(Some(current * 100.0)))
-                .unit_kind(UnitKind::Percent)
-                .range(0.0..=100.0)
-                .commit_decimals(0)
-                .scrub_by_label()
-                .show(ui);
-            events = field.edit.events.clone();
-            alert = field.out_of_range;
-        });
+        // The body's result is the field's events and alert: the framework keeps it across the passes the body may run.
+        let (events, alert) = Field::new(caption.clone())
+            .side(SideLabel::new().scrub(true))
+            .id_salt(salt)
+            .sizing(Sizing::Content)
+            .enabled(enabled)
+            .show(ui, |ui, _| {
+                let field = NumberField::new(caption.clone(), Bind::given(Some(current * 100.0)))
+                    .unit_kind(UnitKind::Percent)
+                    .range(0.0..=100.0)
+                    .commit_decimals(0)
+                    .scrub_by_label()
+                    .show(ui);
+                (field.edit.events.clone(), field.out_of_range)
+            })
+            .inner
+            .unwrap_or_default();
         if alert.is_some() {
             self.out_of_range = alert;
         }
@@ -399,10 +406,12 @@ impl<M: Value> Pass<'_, M> {
     /// The Mode list over the host's entries.
     fn mode(&mut self, ui: &mut Ui, caption: &Label, entries: &[Entry<M>]) {
         let current = self.values.mode.clone();
-        let mut pick = None;
-        Field::new(caption.clone()).id_salt("mode").sizing(Sizing::Content).show(ui, |ui, _| {
-            pick = Select::new(caption.clone(), Bind::given(current.clone()), entries).show(ui).value().cloned();
-        });
+        let pick = Field::new(caption.clone())
+            .id_salt("mode")
+            .sizing(Sizing::Content)
+            .show(ui, |ui, _| Select::new(caption.clone(), Bind::given(current.clone()), entries).show(ui).value().cloned())
+            .inner
+            .flatten();
         if let Some(mode) = pick {
             self.set_with(caption, |v| v.mode = mode);
         }
@@ -417,10 +426,12 @@ impl<M: Value> Pass<'_, M> {
             Entry::new(EraserMode::Block, words.eraser_block.clone()),
         ];
         let current = *mode;
-        let mut pick = None;
-        Field::new(words.mode.clone()).id_salt("mode").sizing(Sizing::Content).show(ui, |ui, _| {
-            pick = Select::new(words.mode.clone(), Bind::given(current), &entries).show(ui).value().copied();
-        });
+        let pick = Field::new(words.mode.clone())
+            .id_salt("mode")
+            .sizing(Sizing::Content)
+            .show(ui, |ui, _| Select::new(words.mode.clone(), Bind::given(current), &entries).show(ui).value().copied())
+            .inner
+            .flatten();
         if let Some(next) = pick.filter(|next| *next != current) {
             *mode = next;
             self.eraser_edit = Some(EditEvent::set(Mixed::Same(current), next, Arc::from(words.mode.as_str()), None));
@@ -476,14 +487,13 @@ impl<M: Value> Pass<'_, M> {
             entries.push(Entry::new(index, name.clone()));
         }
         let shown = self.values.mixer.combination.min(MIXER_COMBINATIONS.len() - 1);
-        let mut pick = None;
-        Field::new(words.combination.clone())
+        let pick = Field::new(words.combination.clone())
             .side(SideLabel::new().kind(LabelKind::Hidden))
             .id_salt("mixer-combination")
             .sizing(Sizing::Content)
-            .show(ui, |ui, _| {
-                pick = Select::new(words.combination.clone(), Bind::given(shown), &entries).show(ui).value().copied();
-            });
+            .show(ui, |ui, _| Select::new(words.combination.clone(), Bind::given(shown), &entries).show(ui).value().copied())
+            .inner
+            .flatten();
         if let Some(index) = pick {
             self.set_with(&words.combination, |v| {
                 v.mixer.combination = index;
