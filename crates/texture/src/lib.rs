@@ -19,10 +19,13 @@
 //! 2 GiB minus one byte on 32-bit targets such as `wasm32`. The `try_` forms return
 //! [`ImageError::TooLarge`] for a plane over that bound, also when the caller raised the limits
 //! past it. The constructors without `try_` clamp each side to `1..=MAX_SIDE`, and [`Image::map`]
-//! clamps the same way when its result would be over the bound. Every operation that allocates has
-//! a `try_` form that reserves its memory first and returns [`ImageError::OutOfMemory`] when that
-//! fails; the forms without `try_` allocate like `Vec`, which ends the process when memory runs
-//! out. Rows are generated on several threads only with the `parallel` feature.
+//! clamps the same way when its result would be over the bound. Every operation that allocates a
+//! pixel buffer has a `try_` form that reserves that buffer first and returns
+//! [`ImageError::OutOfMemory`] when the reservation fails. The `try_` forms still make small
+//! allocations that are not fallible: the `Arc` that holds a new image's buffer, and the boxed
+//! resampler of [`Image::try_resize`]. The forms without `try_` allocate like `Vec`. A failed
+//! infallible allocation ends the process. Rows are generated on several threads only with the
+//! `parallel` feature.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -343,17 +346,20 @@ impl Image {
         let (tx, ty) = (fx - x0, fy - y0);
         let (x0, y0) = (x0 as i64, y0 as i64);
         let taps = [((1.0 - tx) * (1.0 - ty), x0, y0), (tx * (1.0 - ty), x0 + 1, y0), ((1.0 - tx) * ty, x0, y0 + 1), (tx * ty, x0 + 1, y0 + 1)];
-        let mut o = [0.0; 4];
+        // Summed in f64: the rounded weights can add up to slightly more than 1, which would
+        // overflow a finite HDR value near `f32::MAX` in f32. A finite sum is clamped to the f32
+        // range; an infinite texel still gives an infinite or NaN sample.
+        let mut o = [0.0f64; 4];
         for (weight, x, y) in taps {
             if weight == 0.0 {
                 continue;
             }
             let p = self.get(x, y, tile);
             for (o, p) in o.iter_mut().zip(p) {
-                *o += weight * p;
+                *o += f64::from(weight) * f64::from(p);
             }
         }
-        o
+        o.map(|v| if v.is_finite() { v.clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32 } else { v as f32 })
     }
 
     #[inline]
@@ -724,6 +730,13 @@ mod tests {
         assert_eq!(img.sample(0.25, 0.5, false)[0], 1.0);
         let Ok(hdr) = Image::from_data(2, 1, Kind::Gray, vec![f32::MAX, -f32::MAX], &l) else { panic!("valid 2 x 1 image") };
         assert_eq!(hdr.sample(0.5, 0.5, false)[0], 0.0);
+        // Rounded weights can sum past 1; a constant image of the largest float stays finite.
+        let max = Image::filled(2, 2, Kind::Gray, [f32::MAX; 4]);
+        let t = 0.5 + 2.0_f32.powi(-24);
+        for tile in [false, true] {
+            assert!(max.sample(0.250_012_5, t, tile)[0].is_finite(), "tile = {tile}");
+            assert_eq!(max.sample(t, t, tile)[0], f32::MAX, "tile = {tile}");
+        }
     }
 
     #[test]

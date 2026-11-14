@@ -12,9 +12,11 @@ network I/O and has no `unsafe` code.
   A plane is never larger than `isize::MAX` bytes (2 GiB minus one byte on `wasm32`), even with
   raised limits: the `try_` forms return `ImageError::TooLarge` for a larger one, and `map`,
   `to_color` and `to_kind` clamp each side to `1..=MAX_SIDE` and map the top-left part instead.
-  `try_map`, `try_to_kind`, `try_resize` and `try_to_rgba8_display` reserve their memory first
-  and return `ImageError::OutOfMemory` when that fails. The forms without `try_` allocate like
-  `Vec`, which ends the process when memory runs out.
+  `try_map`, `try_to_kind`, `try_resize` and `try_to_rgba8_display` reserve their pixel buffer
+  first and return `ImageError::OutOfMemory` when that reservation fails. They still make small
+  allocations that are not fallible: the `Arc` around a new image's buffer, and the boxed
+  resampler of `try_resize`. The forms without `try_` allocate like `Vec`. A failed infallible
+  allocation ends the process.
 - **Sampling.** `sample` (bilinear) and `sample_nearest` take normalized `(u, v)` with `(0, 0)` at
   the upper-left corner and `v` increasing downward, as glTF 2.0 section 3.8.3 defines them
   (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html>). `tile` picks repeat (glTF
@@ -22,7 +24,8 @@ network I/O and has no `unsafe` code.
   and the bilinear weights follow the Vulkan specification, sections 20.4.1, 20.6.1 and 20.6.3
   (<https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#textures-texel-filtering>).
   Repeat keeps its period at any finite coordinate. A NaN or infinite coordinate gives
-  `[0, 0, 0, 1]`.
+  `[0, 0, 0, 1]`. Bilinear sums are taken in `f64` and clamped to the `f32` range, so finite
+  texels give a finite sample.
 - **Other operations.** `get` reads one texel, `map`, `to_gray`, `to_color` and `to_kind` convert,
   `resize` box-averages whole-factor shrinks and samples bilinearly otherwise, and
   `to_rgba8_display` encodes 8-bit sRGB RGBA. `linear_to_srgb`, `srgb_to_linear` and `luminance`
