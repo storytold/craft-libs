@@ -243,6 +243,10 @@ let bytes = w.finish_faststart()?.into_inner(); // or finish() for moov-at-end
   `ipcm`/`fpcm` + `pcmC` in MP4. A PCM `write_sample` call can hold any whole number of frames, and the
   track timescale must equal the sample rate.
 - Edit lists: set `TrackConfig::edits` explicitly, or use `media_start` to get a single edit.
+- Audio pre-roll: `TrackConfig::roll_distance` puts every sample in a `roll` sample group (`sgpd` +
+  `sbgp`). Set -1 for AAC with `media_start` at the priming: Apple's decoders apply that edit only
+  when the track has the group.
+- A file starts at the writer's position: chunk offsets count from there.
 - Timecode: `add_timecode_track(video, TimecodeConfig, start_frame)` adds a `tmcd` track (with `gmhd`)
   and a `tref/tmcd` link from the video track.
 - `WriterOptions::metadata` writes `©xxx` text atoms to `udta`.

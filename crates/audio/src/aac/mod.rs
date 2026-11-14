@@ -64,6 +64,8 @@ pub use config::{AdtsHeader, AudioSpecificConfig, ElementType, ProgramConfig, co
 #[cfg(feature = "aac-decode")]
 pub use decoder::Decoder;
 #[cfg(feature = "aac-encode")]
+pub(crate) use encoder::cbr_range;
+#[cfg(feature = "aac-encode")]
 pub use encoder::{BitrateMode, Encoder, EncoderConfig, EncoderStats};
 #[cfg(feature = "aac-decode")]
 pub use latm::{LatmConfig, latm_config, latm_split};
