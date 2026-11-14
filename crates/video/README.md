@@ -28,4 +28,43 @@ No codec feature is on by default.
 | `hevc` | [`hevc`](src/hevc/decode/README.md) | ITU-T H.265 / HEVC: decoder (`hevc-decode` alone) and encoder (`hevc-encode` alone) |
 | `vp9` | [`vp9`](src/vp9/decode/README.md) | VP9: decoder (`vp9-decode` alone) and encoder (`vp9-encode` alone) |
 | `av1` | [`av1`](src/av1/decode/README.md) | AV1 (AOMedia Video 1): decoder (`av1-decode` alone) and clean-room encoder (`av1-encode`); tiled rav1e fallback for large frames (`av1-large-encode`) |
+| `smacker` | `smacker` | Smacker video (8-bit paletted, `SMK2` and `SMK4`): decoder |
 | `threads` | — | Multi-threaded slice/row parallelism via `rayon` |
+
+## Smacker
+
+`smacker::Decoder` decodes Smacker video, the 8-bit paletted format of 1990s game cutscenes.
+Smacker has no published specification: the decoder is written from the public community
+description of the format (the MultimediaWiki "Smacker" page), with ffmpeg as an external
+oracle. No FFmpeg or other Smacker implementation was read.
+
+```rust
+use craft_media::smacker::{open, split_frame};
+use craft_video::smacker::Decoder;
+
+let bytes = std::fs::read("intro.smk")?;
+let file = open(&bytes)?;
+let mut dec = Decoder::new(&file.video_params())?;
+for frame in &file.frames {
+    let data = file.read(&bytes, frame)?;
+    let parts = split_frame(&data, frame)?;
+    dec.decode(parts.palette, parts.video)?;
+    let (indexes, palette) = (dec.pixels(), dec.palette()); // or dec.to_rgba()
+}
+```
+
+- Output: one palette index a pixel and a 256-entry RGB palette, or RGBA through `to_rgba`.
+  The decoder keeps the picture and the palette between frames, so frames are decoded in order
+  from the first.
+- Block types: mono, full, void and solid, with runs; the `SMK4` double and half full-block
+  modes; palette chunks (set, keep and copy records).
+- The header's row doubling and interlacing flags (`Header::Y_DOUBLED`, `Header::Y_INTERLACED`
+  in `craft_media::smacker`) describe how to show the picture and are left to the caller.
+- Bounds: the picture is checked against the decoder memory budget, the trees against their
+  declared sizes and the tree data, and a frame that ends early is an error that keeps the
+  blocks decoded before it.
+- Verified: `tests/smacker` compares every picture with ffmpeg on a directory of real files
+  (`CRAFT_SMACKER_SAMPLES`; skipped when it is not set, since real files come from commercial
+  games and are not in the repository). 67 `SMK2` files from four games match on every frame.
+  No `SMK4` file was available: its two extra full-block modes are tested only against
+  streams built from the format description.
