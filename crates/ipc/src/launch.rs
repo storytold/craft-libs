@@ -61,8 +61,10 @@ pub fn launch_at(
     on_phase: &mut dyn FnMut(Phase),
 ) -> Result<InstanceRecord, LinkError> {
     // `resolve` already checked `bin`. The caller may pass any path, and time has passed.
-    trust::check_executable(bin)?;
-    let mut cmd = Command::new(bin);
+    // Run the real path that passed the check, not `bin`. A symlink in `bin` could change
+    // between the check and the spawn. Every directory above the real path is private.
+    let verified = trust::verified_executable(bin)?;
+    let mut cmd = Command::new(&verified);
     cmd.args(args);
     for (key, value) in extra_env {
         cmd.env(key, value);
@@ -73,6 +75,8 @@ pub fn launch_at(
     {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
+        // The program sees the path the caller chose, as it would through the link.
+        cmd.arg0(bin);
     }
     let mut child = cmd.spawn().map_err(LinkError::io)?;
     let pid = child.id();

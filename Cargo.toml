@@ -11,6 +11,8 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+acadrust = "=0.6.6"
+log = "0.4"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
 craft-platform = { path = "crates/platform" }
 craft-aep = { path = "crates/aep" }
@@ -55,6 +57,7 @@ vectorcraft-pathops = { git = "https://github.com/storytold/vectorcraft.git", re
 craft-doc = { path = "crates/doc" }
 craft-docpath = { path = "crates/docpath" }
 craft-dpx = { path = "crates/dpx" }
+craft-dwg = { path = "crates/dwg" }
 craft-ecproj-format = { path = "crates/ecproj-format" }
 craft-figma-rest = { path = "crates/figma-rest" }
 craft-exr = { path = "crates/exr" }
@@ -79,6 +82,7 @@ craft-jmap = { path = "crates/jmap" }
 craft-ical = { path = "crates/ical" }
 craft-ipc = { path = "crates/ipc" }
 craft-jpeg = { path = "crates/jpeg" }
+craft-jxl = { path = "crates/jxl" }
 craft-kiwi = { path = "crates/kiwi" }
 craft-keymap = { path = "crates/keymap" }
 craft-assuan = { path = "crates/assuan" }
@@ -160,6 +164,8 @@ craft-web-host = { path = "crates/web-host" }
 craft-webp = { path = "crates/webp" }
 egui = { version = "0.37", default-features = false }
 md5 = { package = "md-5", version = "0.10", default-features = false }
+jxl-oxide = { version = "0.12", default-features = false }
+jixel = "=0.3.4"
 rayon = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
