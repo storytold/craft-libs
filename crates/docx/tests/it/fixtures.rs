@@ -1953,6 +1953,69 @@ fn ole_object_round_trips() {
     assert!(matches!(paras(&back)[0].objects.first(), Some(InlineObject::Image { w: 144.0, ole: Some(_), .. })));
 }
 
+/// An OLE object read from `bytes` is kept with no picture, `size` points large. Resized to twice
+/// that, saving writes it back at its new size with its embedded data `ole`, again with no
+/// picture. Returns the saved document part.
+fn ole_object_kept_without_picture(bytes: &[u8], ole: &str, size: (f32, f32)) -> String {
+    let mut d = craft_docx::read(bytes).unwrap();
+    let Some(InlineObject::Image { media, w, h, ole: Some(_), .. }) = paras(&d)[0].objects.first() else { panic!("{:?}", paras(&d)[0].objects) };
+    assert!(!d.media.contains_key(media), "no picture");
+    assert_eq!((*w, *h), size);
+    assert_eq!(paras(&d)[0].text, "Before \u{fffc} after");
+
+    let resized = (size.0 * 2.0, size.1 * 2.0);
+    if let Some(craft_wordmodel::Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut)
+        && let Some(InlineObject::Image { w, h, .. }) = p.objects.first_mut()
+    {
+        (*w, *h) = resized;
+    }
+    let out = craft_docx::write(&d).unwrap();
+    let files = unzip(&out);
+    let body = text(&files, "word/document.xml");
+    let rels = text(&files, "word/_rels/document.xml.rels");
+    let [ole_id] = attr_values(&body, "o:OLEObject", "r:id").try_into().unwrap();
+    let (kind, target) = rel(&rels, &ole_id);
+    assert!(kind.ends_with("/oleObject"), "{kind}");
+    assert_eq!(files.get(&part_at("word", &target)).map(Vec::as_slice), Some(ole.as_bytes()));
+    assert!(!body.contains("v:imagedata") && !body.contains("<w:drawing>"), "{body}");
+
+    let back = craft_docx::read(&out).unwrap();
+    let Some(InlineObject::Image { w, h, ole: Some(_), .. }) = paras(&back)[0].objects.first() else { panic!("{:?}", paras(&back)[0].objects) };
+    assert_eq!((*w, *h), resized);
+    body
+}
+
+/// An OLE object's picture is optional, and some producers leave it out: the object used to be
+/// dropped on opening, its embedded data with it (wordcraft#6480). It is kept, as an empty box the
+/// size its VML shape gives it, or else its original size, and saving writes it back.
+#[test]
+fn an_ole_object_without_a_picture_round_trips() {
+    let ole_object = r#"<o:OLEObject Type="Embed" ProgID="Package" ShapeID="_x0000_i1025" DrawAspect="Content" ObjectID="_1000000001" r:id="rId9"/>"#;
+    let ole = "\u{d0}\u{cf} opaque OLE storage";
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="bin" ContentType="application/vnd.openxmlformats-officedocument.oleObject"/></Types>"#;
+    let shape = r##"<v:shape id="_x0000_i1025" type="#_x0000_t75" style="width:100pt;height:50pt" o:ole="" alt="Data"></v:shape>"##;
+    let unstyled = r##"<v:shape id="_x0000_i1025" type="#_x0000_t75" o:ole=""/>"##;
+    // No VML shape, or one with no style: the original size, 2880 × 1440 twips, where a new size
+    // is saved too. A shape without a picture: its size, saved in its style.
+    for (vml, size) in [("", (144.0, 72.0)), (unstyled, (144.0, 72.0)), (shape, (100.0, 50.0))] {
+        let body = format!(
+            r#"<w:p><w:r><w:t xml:space="preserve">Before </w:t></w:r><w:r><w:object w:dxaOrig="2880" w:dyaOrig="1440">{vml}{ole_object}</w:object></w:r><w:r><w:t xml:space="preserve"> after</w:t></w:r></w:p>"#
+        );
+        let bytes = docx(
+            &body,
+            &[("rId9", "oleObject", "embeddings/oleObject1.bin")],
+            &[("[Content_Types].xml", types), ("word/embeddings/oleObject1.bin", ole)],
+        );
+        let saved = ole_object_kept_without_picture(&bytes, ole, size);
+        if vml != shape {
+            assert_eq!(attr_values(&saved, "w:object", "w:dxaOrig"), ["5760"]);
+        } else {
+            assert_eq!(attr_values(&saved, "v:shape", "style"), ["width:200pt;height:100pt"]);
+            assert_eq!(attr_values(&saved, "v:shape", "alt"), ["Data"]);
+        }
+    }
+}
+
 #[test]
 fn an_unqualified_relationship_attribute_round_trips() {
     // A producer that left the relationship prefix out: the VML picture names its image with an
