@@ -27,6 +27,7 @@
 //!
 //! Language features (`spanish`, `german`, …, `all-languages`) add data for that language and
 //! turn on the modules that use it.
+#![warn(missing_docs)]
 
 #[cfg(feature = "bidi")]
 pub mod bidi;

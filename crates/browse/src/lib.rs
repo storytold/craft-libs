@@ -8,6 +8,7 @@
 //!
 //! Every listing, status check, search and decode runs as a job on the host's queue; nothing
 //! here spawns a thread.
+#![warn(missing_docs)]
 
 pub mod links;
 pub mod places;

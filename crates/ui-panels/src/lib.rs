@@ -4,6 +4,7 @@
 //! patterns read without the canvas.
 //!
 //! The root re-exports craft-ui-widgets' modules and the ones it re-exports.
+#![warn(missing_docs)]
 
 // The derives' output names the crate as `craft_ui`, here as in every other crate.
 extern crate self as craft_ui;

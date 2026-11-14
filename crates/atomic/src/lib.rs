@@ -45,6 +45,7 @@
 //! - **Web / WASM**: On `wasm32`, returns standard unsupported `io::Error` rather than panicking.
 //! - **Failure Injection**: [`atomic_write_custom`] accepts an [`AtomicFs`] implementation so
 //!   callers and test suites can inject disk-full, lock-contention, or permission errors at each stage.
+#![warn(missing_docs)]
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};

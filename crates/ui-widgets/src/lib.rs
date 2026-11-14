@@ -5,6 +5,7 @@
 //!
 //! The root re-exports craft-ui-contract's modules, so components name them as `crate::runtime::…` and derive output
 //! as `craft_ui::…`.
+#![warn(missing_docs)]
 
 // The derives' output names the crate as `craft_ui`, here as in every other crate.
 extern crate self as craft_ui;

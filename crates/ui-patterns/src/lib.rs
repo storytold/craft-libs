@@ -3,6 +3,7 @@
 //! The patterns of the craft UI library: ready-made dialogs, presets, preferences, dock areas and panels (layer 6).
 //!
 //! The root re-exports craft-ui-panels' modules and the ones it re-exports.
+#![warn(missing_docs)]
 
 // The derives' output names the crate as `craft_ui`, here as in every other crate.
 extern crate self as craft_ui;

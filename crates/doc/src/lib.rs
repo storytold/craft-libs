@@ -28,6 +28,7 @@
 //! assert_eq!(info.version, 4);
 //! assert!(info.supported);
 //! ```
+#![warn(missing_docs)]
 
 mod budget;
 mod cancel;

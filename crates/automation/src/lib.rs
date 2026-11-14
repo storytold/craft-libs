@@ -14,6 +14,7 @@
 //!
 //! The crate never names a document: what `engine.execute`, `ui.inspect` or `ui.set` mean is the
 //! app's, through its method table. Everything a method table does not want to own is here.
+#![warn(missing_docs)]
 
 pub mod actions;
 #[cfg(feature = "ui")]

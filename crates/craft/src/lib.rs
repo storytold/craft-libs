@@ -1,5 +1,6 @@
 //! The craft libraries in one dependency. Turn on one feature per crate and `ui` for their
 //! egui side; import through `craft::<crate>`.
+#![warn(missing_docs)]
 
 pub mod egui_fork;
 

@@ -13,6 +13,7 @@
 //! [`quit`] is that quit. With the `ui` feature, [`on_menu_event`] turns a native Quit menu item
 //! into a close request of the root window, and [`intercept_close`] holds a close while documents
 //! are unsaved.
+#![warn(missing_docs)]
 
 mod close;
 #[cfg(target_os = "macos")]

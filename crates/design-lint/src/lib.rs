@@ -8,6 +8,7 @@
 //! The syntax half is [`check`]: it parses the configured directories and reports
 //! literal sizes, named colour constants, style mutation and crate-wide clippy allows as a [`Report`].
 //! A [`Baseline`] records the findings of an existing code base so a check fails only on new ones.
+#![warn(missing_docs)]
 
 mod baseline;
 mod clippy;

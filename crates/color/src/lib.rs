@@ -5,6 +5,7 @@
 //! [`CmykModel`], web-safe colours ([`web_safe`], [`not_web_safe`]), swatch files ([`palette`]), the display transform ([`display`]) and colour
 //! harmonies ([`harmony`]).
 //! [`AreaMode`] (and `ui::RampKind`) serialize as their [`key`](AreaMode::key); the swatch and harmony settings types serialize too.
+#![warn(missing_docs)]
 
 mod cmyk;
 pub mod display;

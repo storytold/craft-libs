@@ -4,6 +4,7 @@
 //!
 //! Review data is the app's document data: every widget reads it and reports edits; nothing here
 //! owns or stores it.
+#![warn(missing_docs)]
 
 pub mod annotate;
 pub mod comments;

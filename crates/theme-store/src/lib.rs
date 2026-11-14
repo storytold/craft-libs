@@ -34,6 +34,7 @@
 //! let selection = accepted.suite.with_defaults(&defaults);
 //! assert_eq!((selection.theme.light, selection.mode), (graphite.id, ModeChoice::Dark));
 //! ```
+#![warn(missing_docs)]
 
 mod backend;
 mod client;

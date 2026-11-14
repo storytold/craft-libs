@@ -50,6 +50,7 @@
 //! Web builds can serve the faces beside the wasm instead: [`Embed::serve`] copies the selected
 //! files into a directory and writes a table of [`ServedFace`]s, which carry a URL in place of the
 //! bytes, for the app to fetch the faces it needs at run time.
+#![warn(missing_docs)]
 
 mod cmap;
 pub mod coverage;

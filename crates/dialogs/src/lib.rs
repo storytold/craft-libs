@@ -17,6 +17,7 @@
 //! On macOS, Open and Folder show as a free-standing panel that doesn't block the window, as
 //! native apps do; Save and message boxes show as a sheet on the parent window. Elsewhere every
 //! dialog is a modal owned by the parent window.
+#![warn(missing_docs)]
 
 mod filter;
 mod native;

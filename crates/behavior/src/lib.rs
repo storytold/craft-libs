@@ -3,6 +3,7 @@
 //!
 //! The crate depends on no egui crate: it uses `emath`, `kurbo` (geometry), `serde` (saved data) and the `accesskit`
 //! data crate only.
+#![warn(missing_docs)]
 
 pub mod anchor;
 

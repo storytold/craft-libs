@@ -131,6 +131,7 @@
 //! assert_eq!((report.unmatched[0].item.as_str(), report.unmatched[0].line), ("File > Frobnicate", Some(13)));
 //! assert_eq!(keymap.bindings(&"file.save".into()), [Binding::parse("Cmd+Alt+S").unwrap()]);
 //! ```
+#![warn(missing_docs)]
 
 pub mod chord;
 pub mod command;

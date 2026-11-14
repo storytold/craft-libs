@@ -5,7 +5,7 @@
 //! with the options as a PrintTicket, all in this process (`windows.rs`): no PowerShell or other
 //! program is started, so printing works where scripts are locked down. Other platforms report
 //! that printing isn't available yet; the print-ready PDF can still be saved.
-
+#![warn(missing_docs)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(any(test, windows))]

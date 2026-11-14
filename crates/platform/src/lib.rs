@@ -1,5 +1,6 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 //! Shared lifecycle mechanics; application state, theme choices and file policy stay in hosts.
+#![warn(missing_docs)]
 #[cfg(feature = "appearance")]
 pub mod appearance;
 pub mod autosave;

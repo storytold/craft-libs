@@ -1,4 +1,5 @@
 //! The craft-ui story viewer: the registered stories of the linked crates, shown under a chosen appearance.
+#![warn(missing_docs)]
 
 pub mod chrome;
 pub mod viewer;

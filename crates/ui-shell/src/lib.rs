@@ -3,6 +3,7 @@
 //! The shell of the craft UI library: `AppShell`, the title bar and the eframe entry point (layer 7).
 //!
 //! The root re-exports craft-ui-panels' modules and the ones it re-exports.
+#![warn(missing_docs)]
 
 // The derives' output names the crate as `craft_ui`, here as in every other crate.
 extern crate self as craft_ui;

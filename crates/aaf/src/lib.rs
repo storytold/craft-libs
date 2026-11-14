@@ -19,6 +19,7 @@
 //!
 //! Input is untrusted: a damaged or crafted file gives an [`Error`] or a [`Report`] entry, never
 //! a panic, a hang or an allocation sized by a count in the file.
+#![warn(missing_docs)]
 
 pub mod aaf;
 pub mod model;

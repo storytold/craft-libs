@@ -5,6 +5,7 @@
 //!
 //! The crates above it re-export these modules at their roots, so `crate::runtime::…` and `craft_ui::contract::…`
 //! name the same items in every crate of the library.
+#![warn(missing_docs)]
 
 // The derives' output names the crate as `craft_ui`, here as in every other crate.
 extern crate self as craft_ui;

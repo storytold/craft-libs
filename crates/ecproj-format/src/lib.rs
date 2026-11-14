@@ -52,6 +52,7 @@
 //!
 //! An `.ecprojx` file holds the same object encoded as XML. This crate reads and writes the JSON
 //! form only.
+#![warn(missing_docs)]
 
 use std::borrow::Cow;
 use std::fmt;

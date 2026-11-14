@@ -12,6 +12,7 @@
 //!
 //! Also on `ui`: [`glyphs::GlyphsPanel`], [`missing::MissingFontsDialog`], [`axes::AxisSliders`] and
 //! [`picker::FontPicker`], the font family field for text tools and panels.
+#![warn(missing_docs)]
 
 pub mod filter;
 pub mod index;

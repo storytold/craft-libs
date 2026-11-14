@@ -28,7 +28,7 @@
 //! | [`spec`] | a provider described as data: types, checker and substitutions (task u2) |
 //! | [`provider`] | the [`Provider`] trait |
 //! | [`mock`], [`conformance`] | scripted provider and reusable behaviour checks |
-
+#![warn(missing_docs)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod capability;

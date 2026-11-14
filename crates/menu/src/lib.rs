@@ -82,6 +82,7 @@
 //! (or [`NativeMenu::sync`], which compares a layout built every frame).
 //! The input filter also keeps a click or Escape that closes an open native menu away
 //! from egui.
+#![warn(missing_docs)]
 
 pub mod bar;
 pub mod context;

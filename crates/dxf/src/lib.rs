@@ -5,6 +5,7 @@
 //! reads the tags as a drawing (header variables, tables, blocks, entities, objects); mapping
 //! that onto an application's own document is left to the caller. Written from Autodesk's
 //! published DXF Reference; depends on no other Craft crate. Moved from CADCraft's `cadcraft-dxf`.
+#![warn(missing_docs)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 

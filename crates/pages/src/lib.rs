@@ -18,6 +18,7 @@
 //! tables.
 //!
 //! Lengths are PDF points (1/72 inch) throughout; screen lengths are egui points.
+#![warn(missing_docs)]
 
 pub mod layout;
 #[cfg(test)]

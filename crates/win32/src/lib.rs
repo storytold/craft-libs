@@ -3,6 +3,7 @@
 //!
 //! This is the only crate (besides the benchmark's allocator) that allows `unsafe`; the design-lint rule
 //! `contract/unsafe-allow` names it. Every block says why it is sound.
+#![warn(missing_docs)]
 #![cfg(windows)]
 #![allow(unsafe_code)]
 

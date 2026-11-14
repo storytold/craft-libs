@@ -3,6 +3,7 @@
 //! The app implements `ui::tree::LayerTree`, a read-only view of its layers, and shows it with
 //! `ui::panel::LayersPanel`, which reports what the user did as events in the order they
 //! happened. The app applies them with its own commands and undo.
+#![warn(missing_docs)]
 
 pub mod ui;
 

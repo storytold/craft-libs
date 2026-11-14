@@ -32,6 +32,7 @@
 //!
 //! The crate takes and returns bytes. It does not open files or decompress past the first bytes
 //! [`sniff`] reads: a reader of a compressed file decompresses it with its own limits first.
+#![warn(missing_docs)]
 
 pub mod base64;
 mod container;

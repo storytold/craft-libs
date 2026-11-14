@@ -34,6 +34,7 @@
 //! store.update(|p| p.appearance.theme = "dark".into());
 //! // Call `store.tick(Instant::now())` every frame and `store.flush()` on exit.
 //! ```
+#![warn(missing_docs)]
 
 pub mod document;
 pub mod error;

@@ -45,6 +45,7 @@
 //! allocations are checked against the [`Limits`] first.
 //! Damaged entropy-coded data stops that scan; what was decoded is kept and the caller is told
 //! through [`Decoded::damaged`].
+#![warn(missing_docs)]
 
 /// Why a stream could not be decoded.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

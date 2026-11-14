@@ -34,6 +34,7 @@
 //! let page = Rc::new(PageApi::new("vectorcraft", Methods::default(), request));
 //! page.install()?; // window.vectorcraft
 //! ```
+#![warn(missing_docs)]
 
 pub mod methods;
 pub mod reply;

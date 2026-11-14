@@ -9,6 +9,7 @@
 //! On developer machines, [`report`] separates each scene's PDF into plates with Ghostscript
 //! ([`gs`], an external program; [`tiff`] reads the plates) and [`judge`]s the ink at the
 //! scene's sample points.
+#![warn(missing_docs)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod gs;

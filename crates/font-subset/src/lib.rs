@@ -10,6 +10,7 @@
 //! - [`embed_permission`]: what a font's OS/2 `fsType` allows an exported document (PDF) to embed.
 //!
 //! Synchronous and free of I/O.
+#![warn(missing_docs)]
 
 mod cff;
 pub mod closure;

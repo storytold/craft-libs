@@ -29,6 +29,7 @@
 //!
 //! Colour (camera matrices, profiles) is out of scope: the file carries none, and the app owns
 //! its colour model.
+#![warn(missing_docs)]
 
 mod tables;
 #[cfg(test)]

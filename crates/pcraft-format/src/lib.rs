@@ -31,6 +31,7 @@
 //! assert_eq!(manifest.document["name"], "Untitled");
 //! assert_eq!(manifest.thumbnail, None);
 //! ```
+#![warn(missing_docs)]
 
 mod limits;
 mod migrate;

@@ -77,6 +77,7 @@
 //! assert_eq!(resolve(r"\\other\share\logo.png", Some(doc)), Err(Refused::Network));
 //! assert_eq!(resolve_absolute("img/logo.png", None), Err(Refused::Invalid));
 //! ```
+#![warn(missing_docs)]
 
 pub mod links;
 pub mod names;

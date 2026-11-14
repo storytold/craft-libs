@@ -3,6 +3,7 @@
 //! The scenario list, the measurement and the report are shared. A library supplies a
 //! [`Library`]: the foundation binary runs [`run_all`] over it and writes `baseline/foundation.json`. It reads
 //! `baseline/legacy.json`, the recorded baseline of the old library, as its speed gate.
+#![warn(missing_docs)]
 
 mod alloc;
 mod harness;

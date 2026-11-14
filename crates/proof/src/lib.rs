@@ -59,6 +59,7 @@
 //! installed on the system, then the whole Moby word list built into the crate (see
 //! [`english_source`]). Hyphenation that needs the data is off without it; grammar and the
 //! rule-based hyphenation (Bulgarian, Turkish, Russian) are code and still work.
+#![warn(missing_docs)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod affix;

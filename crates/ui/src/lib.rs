@@ -7,6 +7,7 @@
 //! craft-ui-widgets, craft-ui-panels, then craft-ui-canvas, craft-ui-patterns and craft-ui-shell side by side. This
 //! crate re-exports all of them under one root, so every `craft_ui::…` path names the same item as in the crate that
 //! defines it.
+#![warn(missing_docs)]
 
 pub use craft_ui_canvas::{canvas, canvas_controls, dialog};
 #[cfg(feature = "testing")]

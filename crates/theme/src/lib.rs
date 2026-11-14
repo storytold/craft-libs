@@ -20,6 +20,7 @@
 //! let resolved = resolve(&theme, appearance, None);
 //! assert!(resolved.warnings.is_empty());
 //! ```
+#![warn(missing_docs)]
 
 mod app_sizes;
 mod builtins;

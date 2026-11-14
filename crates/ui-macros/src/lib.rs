@@ -1,5 +1,6 @@
 //! Macros of craft-ui: `#[derive(Component, Pattern, Props, ComponentStyle, TokenGroup, CommandSet, EnvValue)]`,
 //! `words!`, `#[story]`, `#[craft_ui::testing::trial]` and `register_contract!`.
+#![warn(missing_docs)]
 
 mod command_set;
 mod component;
