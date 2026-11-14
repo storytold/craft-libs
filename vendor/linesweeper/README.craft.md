@@ -1,21 +1,27 @@
 # Local linesweeper 0.5.0 copy
 
 This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and the
-local patch listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
+changes listed under Local changes. `.cargo_vcs_info.json` names the commit it was packaged from,
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
+The two patched files are `src/sweep/sweep_line.rs` and `tests/paperjs.rs`.
 
-Every file here except this one, `SOURCE.json` and the patched file below is byte for byte the file
-in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
+Every file here except this one, `SOURCE.json` and the files under Local changes is byte for byte the
+file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
 hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
-holds `upstream_revision`. `local_patches` describes the local patch.
+holds `upstream_revision`. `local_patches` describes each local change.
 
-## Local patches
+## Local changes
 
-| File | Change |
-|---|---|
-| `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
+| Change | Code comment label | Touches | Tests |
+|---|---|---|---|
+| The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out | `Craft patch (exited slots)` | `src/sweep/sweep_line.rs` | none |
+| The `paperjs` test's image comparison counts a difference in alpha | `Craft patch (image distance alpha)` | `tests/paperjs.rs` | `pixmap_distance_counts_coverage` |
+
+Every change here updates this table and `SOURCE.json` in the same commit. To take a new linesweeper
+release, unpack the crates.io package, carry these changes over, regenerate `SOURCE.json`, and run the
+tests below.
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
@@ -42,18 +48,20 @@ linesweeper = { git = "https://github.com/storytold/craft-libs", rev = "<rev>" }
 
 ## Tests
 
-`scripts/test-pdf-backends.sh` runs the package's unit, regression and doc tests. The `craft-prepress`
+`scripts/test-pdf-backends.sh` runs the package's unit, regression, `paperjs` and doc tests. The `craft-prepress`
 tests with the `flatten` feature run against this copy. `pdf.yml`'s path filter does not list this
 directory, so a pull request that changes only files here does not start `pdf.yml`. Run the tests from
 this directory:
 
 ```sh
-cargo test --locked --lib --test regression
+cargo test --locked --lib --test regression --test paperjs
 cargo test --locked --doc
 ```
 
 `Cargo.toml` leaves out the `kompari`, `linesweeper_util` and `path-bool` dev-dependencies, which
 `Cargo.toml.orig` gives as git or path dependencies. The `fonts` and `snapshots` tests, the
-`winding-numbers` and `boolean_op` examples and the `linebender_logo` bench do not compile here.
+`winding-numbers` and `boolean_op` examples and the `linebender_logo` bench do not compile here. The
+package does not include the `boolean-test/data/` files that the `paperjs` test reads, and the test
+skips a file it cannot read, so here it runs only `pixmap_distance_counts_coverage`.
 
 Cargo writes to `target/` in this directory, which the root `.gitignore` excludes.
