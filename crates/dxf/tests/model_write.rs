@@ -596,7 +596,8 @@ fn the_file_around_the_content() {
         raw_objects: vec![Tag::s(0, "DICTIONARY"), Tag::s(5, "901"), Tag::s(330, "A")],
         raw_classes: vec![Tag::s(0, "CLASS"), Tag::s(1, "IMAGEDEF")],
         ..Drawing::default()
-    };
+    }
+    .with_linear_units(2);
     let (tags, skipped) = drawing.tags();
     assert_eq!(skipped, 1, "the entity with no groups to write");
     assert_eq!(tags.last().map(|t| (t.code, t.str())), Some((0, "EOF".to_string())));
@@ -617,6 +618,7 @@ fn the_file_around_the_content() {
     assert_eq!((d.header.acadver().as_deref(), d.header.ltscale(), d.header.insunits()), (Some("AC1032"), 2.0, 6));
     assert_eq!(d.header.vars.iter().filter(|(n, _)| *n == "$INSUNITS" || *n == "$ACADVER" || *n == "$HANDSEED").count(), 3);
     assert_eq!(d.header.point("$EXTMAX"), Some([100.0, 50.0, 0.0]));
+    assert_eq!(d.header.vars.iter().find(|(name, _)| *name == "$LUNITS").map(|(_, tags)| tags[0].i64()), Some(2));
     // Blocks, their records and the layouts that name them.
     let names = d.block_names();
     let block = d.block("DOOR").expect("the block");

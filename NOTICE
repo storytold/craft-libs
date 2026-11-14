@@ -5,6 +5,17 @@ Licensed under the MIT License or the Apache License, Version 2.0, at your optio
 
 Third-party material
 
+Optional DWG bridge
+
+`craft-dwg` uses `acadrust` 0.6.6 unmodified as a separate dependency for DWG reading and writing.
+It is licensed under the Mozilla Public License 2.0. The license text and upstream third-party
+notices are retained in `licenses/dwg/`; the crate is available from crates.io and
+https://github.com/hakanaktt/acadrust.
+
+The byte-level bridge source was moved from CADCraft `crates/dwg` at revision
+`664837df8925f932e90a7ae37c58d2f54e7a1320`. The bridge itself is MIT OR Apache-2.0; its only
+MPL-2.0 component is the unmodified `acadrust` dependency.
+
 This product bundles third-party material under its own licenses, listed below. The per-file
 list (author, source, license) is in ATTRIBUTION.md.
 
@@ -88,6 +99,14 @@ Hyphenation patterns for other languages, embedded through the hypher crate only
 The optional PDF writer bundles four CC0 ICC profiles by Clinton Ingram. See ATTRIBUTION.md for per-file sources and hashes.
 
 Source provenance
+
+crates/image-codecs (craft-image-codecs) is moved from PhotoCraft's standalone `photocraft-codecs`
+crate, including its bounded decoders, encoders, format registry, image model, metadata handling,
+orientation, fidelity warnings, and tests, from revision 5000240c6:
+https://github.com/storytold/photocraft
+Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors. The format implementations are
+clean-room work based on their public specifications; dependency licences and X.Org's `rgb.txt`
+attribution are listed in ATTRIBUTION.md.
 
 crates/raw (craft-raw) is moved from LightCraft, with behaviour ported from two other readers:
 - LightCraft, crates/raw (src/lib.rs, dng.rs, dngwrite.rs, tiffraw.rs, unpack.rs, ljpeg.rs, jxl.rs,

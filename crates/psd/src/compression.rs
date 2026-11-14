@@ -10,6 +10,43 @@ use crate::error::{PsdError, Result};
 use crate::header::{Version, row_bytes};
 use crate::io::Reader;
 
+/// An incremental zlib encoder for PSD/PSB channel streams.
+///
+/// PhotoCraft can encode very large channels a band at a time without keeping the compressed
+/// stream's full input or output beside the pixels. `take_output` drains bytes produced so far;
+/// call [`finish`](Self::finish) once all channel data has been written.
+pub struct ZlibEncoder {
+    inner: flate2::write::ZlibEncoder<Vec<u8>>,
+}
+
+impl ZlibEncoder {
+    /// Starts a zlib stream using the PSD writer's default compression level.
+    pub fn new() -> ZlibEncoder {
+        ZlibEncoder { inner: flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default()) }
+    }
+
+    /// Adds decoded or predicted channel bytes to the stream.
+    pub fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
+        self.inner.write_all(bytes).map_err(|error| PsdError::Invalid(format!("zlib: {error}")))
+    }
+
+    /// Takes the compressed bytes produced so far, leaving the stream ready for more input.
+    pub fn take_output(&mut self) -> Vec<u8> {
+        std::mem::take(self.inner.get_mut())
+    }
+
+    /// Finishes the zlib stream and returns its remaining compressed bytes.
+    pub fn finish(self) -> Result<Vec<u8>> {
+        self.inner.finish().map_err(|error| PsdError::Invalid(format!("zlib: {error}")))
+    }
+}
+
+impl Default for ZlibEncoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Maximum number of decoded bytes a single decode call may produce: 8 GiB on
 /// 64-bit targets, 2 GiB elsewhere.
 ///

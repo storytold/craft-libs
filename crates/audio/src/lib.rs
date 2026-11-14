@@ -24,9 +24,9 @@
 //!   file bit for bit, and minimal files around such PCM, for essence embedded in other containers.
 //! - [`peaks`] (feature `peaks`): min/max/RMS pyramid for waveform drawing.
 //! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`,
-//!   `aac-encode`), [`alac`] (`alac-decode`, `alac-encode`), [`opus`] (`opus-decode`), [`ac3`]
-//!   (`ac3-decode`), [`mpa`] (`mpa-decode`), [`mp3`] (`mp3-decode`, `mp3-encode`),
-//!   [`flac`] (`flac-encode`: the packet encoder).
+//!   `aac-encode`), [`alac`] (`alac-decode`, `alac-encode`), [`opus`] (`opus-decode`, and
+//!   [`opus::encoder`] with `opus-encode`), [`ac3`] (`ac3-decode`), [`mpa`] (`mpa-decode`), [`mp3`]
+//!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-encode`: the packet encoder).
 //!
 //! The shared types below build with no features.
 
@@ -42,7 +42,7 @@ mod layout;
 pub mod mp3;
 #[cfg(feature = "mpa-decode")]
 pub mod mpa;
-#[cfg(feature = "opus-decode")]
+#[cfg(any(feature = "opus-decode", feature = "opus-encode"))]
 pub mod opus;
 #[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 mod pcm;
@@ -204,6 +204,13 @@ impl From<alac::Error> for AudioError {
             alac::Error::InvalidInput(_) => AudioError::Encode(e.to_string()),
             _ => AudioError::Malformed(e.to_string()),
         }
+    }
+}
+
+#[cfg(feature = "opus-encode")]
+impl From<opus::encoder::Error> for AudioError {
+    fn from(e: opus::encoder::Error) -> Self {
+        AudioError::Encode(e.to_string())
     }
 }
 

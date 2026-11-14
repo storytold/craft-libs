@@ -93,6 +93,16 @@ mod tests {
         }
     }
 
+    #[test]
+    fn explicit_off_values_disable_underline() {
+        for value in ["off", "false", "0"] {
+            assert_eq!(Underline::from_ooxml(value), Underline::None, "{value}");
+        }
+        assert_eq!(Underline::from_ooxml("none"), Underline::None);
+        assert_eq!(Underline::from_ooxml("single"), Underline::Single);
+        assert_eq!(Underline::from_ooxml("unknown"), Underline::Single);
+    }
+
     /// The 16 `w14:ligatures` values of [MS-DOCX], each to its flags and back.
     #[test]
     fn ligature_names() {

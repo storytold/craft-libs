@@ -195,7 +195,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         None => dark_trimmed(samples, w, hgt, black_point.as_deref().map(|v| v.iter().sum::<f64>() / 4.0), white),
     };
     let cfa = match (ifd0.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), ifd0.bytes(t::CFA_PATTERN_EP)) {
-        (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => Cfa { width: 2, height: 2, pattern: p.to_vec() },
+        (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => {
+            Cfa { width: 2, height: 2, pattern: p.to_vec(), origin_x: 0, origin_y: 0 }
+        }
         // Every body states its layout in the Exif `CFAPattern`, read from the first sample of the stored array, not
         // of the image area: the *ist D (origin 19, 11) and the 645D (80, 59) only fit unshifted. The 12-bit 10 MP
         // bodies and everything from the K-3 on say RGGB; the K-7 / K-5 / 645D generation says BGGR. Files without the

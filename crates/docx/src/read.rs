@@ -197,7 +197,26 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     r.doc.missing_pictures.main = main.clone();
     r.pc.major_font = r.doc.settings.major_font.clone();
     r.pc.minor_font = r.doc.settings.minor_font.clone();
-    let part = |t: &str| rels.by_type(t).filter(|x| !x.external).map(|x| x.target.clone());
+    let part = |t: &str| {
+        let related = rels.by_type(t).filter(|x| !x.external).map(|x| x.target.clone()).filter(|p| pkg.get(p).is_some());
+        related.or_else(|| {
+            // Older DesignCraft imports read these two conventional parts directly. Keep opening
+            // those files when a producer omitted the document relationship; the bounded package
+            // reader still applies the same entry and XML limits. An explicit usable relationship
+            // always wins, including when it points outside the conventional `word/` paths.
+            if !main.eq_ignore_ascii_case("word/document.xml") {
+                return None;
+            }
+            let fallback = match t {
+                rt::STYLES => "word/styles.xml",
+                rt::NUMBERING => "word/numbering.xml",
+                rt::FOOTNOTES => "word/footnotes.xml",
+                rt::ENDNOTES => "word/endnotes.xml",
+                _ => return None,
+            };
+            pkg.get(fallback).map(|_| fallback.to_string())
+        })
+    };
 
     // The font table and the fonts embedded through it ride along as opaque parts.
     if let Some(p) = part(rt::FONT_TABLE) {

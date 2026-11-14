@@ -389,15 +389,22 @@ impl PropCtx {
                 }
                 "w:numPr" => {
                     let num = k.child_val("w:numId").and_then(u32_of);
-                    let ilvl = k.child_val("w:ilvl").and_then(u32_of);
-                    let level = ilvl.unwrap_or(0).min(8) as u8;
-                    match (num, ilvl) {
-                        (Some(num), _) => p.numbering = Some(NumRef { num, level }),
-                        // A level without a list: the list comes from the based-on style, as in
-                        // a Heading 3 that only says "level 3" of Heading 2's list. Resolved once
-                        // the styles are read (`resolve_list_levels`).
-                        (None, Some(_)) => p.numbering = Some(NumRef { num: LEVEL_ONLY, level }),
-                        (None, None) => {}
+                    let ilvl_node = k.child("w:ilvl");
+                    let ilvl =
+                        ilvl_node.and_then(|node| node.attr("w:val")).and_then(int).filter(|level| (0..=8).contains(level)).map(|level| level as u32);
+                    // A missing level means level zero. A present but malformed/out-of-range
+                    // level invalidates this numbering reference instead of silently becoming
+                    // level zero; the latter can turn hostile input into a real list.
+                    if ilvl_node.is_none() || ilvl.is_some() {
+                        let level = ilvl.unwrap_or(0) as u8;
+                        match (num, ilvl) {
+                            (Some(num), _) => p.numbering = Some(NumRef { num, level }),
+                            // A level without a list: the list comes from the based-on style, as in
+                            // a Heading 3 that only says "level 3" of Heading 2's list. Resolved once
+                            // the styles are read (`resolve_list_levels`).
+                            (None, Some(_)) => p.numbering = Some(NumRef { num: LEVEL_ONLY, level }),
+                            (None, None) => {}
+                        }
                     }
                 }
                 "w:pBdr" => p.borders = Some(self.borders(k)),
@@ -817,20 +824,21 @@ pub fn sectpr(pc: &PropCtx, e: &El) -> (SectionProps, Vec<HfRef>) {
                 s.footnote_columns = k.attr("w:val").and_then(u32_of).filter(|v| (1..=45).contains(v));
             }
             "w:lnNumType" => {
-                let mut l = LineNumbering::default();
-                if let Some(v) = k.attr("w:countBy").and_then(u32_of) {
-                    l.count_by = v.clamp(1, 100);
+                // Word leaves line numbering off unless `w:countBy` gives an interval above 0,
+                // whatever `w:start`, `w:distance` and `w:restart` say (#6209, observed in Word).
+                if let Some(count_by) = k.attr("w:countBy").and_then(u32_of).filter(|&v| v > 0) {
+                    let mut l = LineNumbering { count_by: count_by.clamp(1, 100), ..LineNumbering::default() };
+                    if let Some(v) = k.attr("w:start").and_then(int) {
+                        l.start = (v.clamp(0, 32_767) + 1) as u32;
+                    }
+                    l.distance = tw(k, "w:distance").unwrap_or(0.0).max(0.0);
+                    l.restart = match k.attr("w:restart") {
+                        Some("newSection") => LineNumberRestart::Section,
+                        Some("continuous") => LineNumberRestart::Continuous,
+                        _ => LineNumberRestart::Page,
+                    };
+                    s.line_numbers = Some(l);
                 }
-                if let Some(v) = k.attr("w:start").and_then(int) {
-                    l.start = (v.clamp(0, 32_767) + 1) as u32;
-                }
-                l.distance = tw(k, "w:distance").unwrap_or(0.0).max(0.0);
-                l.restart = match k.attr("w:restart") {
-                    Some("newSection") => LineNumberRestart::Section,
-                    Some("continuous") => LineNumberRestart::Continuous,
-                    _ => LineNumberRestart::Page,
-                };
-                s.line_numbers = Some(l);
             }
             "w:vAlign" => {
                 s.valign = match k.attr("w:val") {

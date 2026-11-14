@@ -1,9 +1,17 @@
 use super::{
-    AbstractNum, DocxError, El, Level, LevelSuffix, Num, NumFormat, PartFormat, Reader, Style, StyleKind, StyleSheet, TablePart, TableStyleParts,
-    VAlign, flag, int, props, tw, u32_of,
+    AbstractNum, DocxError, El, Level, LevelSuffix, Num, NumFormat, PartFormat, Reader, RevisionKind, Style, StyleKind, StyleSheet, TablePart,
+    TableStyleParts, VAlign, flag, int, props, tw, u32_of,
 };
 use crate::units::tw_i16;
+use craft_wordmodel::props::PropChange;
 use std::sync::Arc;
+
+fn numbering_level_index(value: Option<&str>) -> Option<usize> {
+    match value {
+        None => Some(0),
+        Some(value) => int(value).filter(|level| (0..=8).contains(level)).map(|level| level as usize),
+    }
+}
 
 /// Built-in style names Word stores in lower case, and how the UI shows them.
 pub(crate) const LOWER_NAMES: &[(&str, &str)] = &[
@@ -137,25 +145,49 @@ impl Reader<'_> {
                     ),
                 ..Default::default()
             };
+            let mut old_para = None;
+            let mut old_chr = None;
             if let Some(p) = s.child("w:pPr") {
                 st.para = self.pc.ppr(p).0;
+                if let Some(ch) = p.child("w:pPrChange") {
+                    let old = ch.child("w:pPr").map(|o| self.pc.ppr(o).0.formatting()).unwrap_or_default();
+                    old_para = Some((self.revision(RevisionKind::Format, ch), old));
+                }
             }
             // Word gives its built-in heading styles their outline level whether or not the file
             // writes `w:outlineLvl` (some producers leave it out): "heading 2" is level 2 in the
             // Navigation pane and the table of contents, whatever its id (#4696).
             if kind == StyleKind::Paragraph
                 && st.builtin
-                && st.para.outline_level.is_none()
                 && let Some(level) = s.child_val("w:name").and_then(builtin_heading_level)
             {
-                st.para.outline_level = Some(level);
+                if st.para.outline_level.is_none() {
+                    st.para.outline_level = Some(level);
+                }
+                if let Some((_, old)) = &mut old_para
+                    && old.outline_level.is_none()
+                {
+                    old.outline_level = Some(level);
+                }
             }
             if let Some(rp) = s.child("w:rPr") {
                 st.chr = self.pc.rpr(rp);
+                if let Some(ch) = rp.child("w:rPrChange") {
+                    let old = ch.child("w:rPr").map(|o| self.pc.rpr(o).formatting()).unwrap_or_default();
+                    old_chr = Some((self.revision(RevisionKind::Format, ch), old));
+                }
             }
             if kind == StyleKind::Table {
                 let parts = self.table_style_parts(s, &mut st);
                 st.table = (parts != TableStyleParts::default()).then_some(parts);
+            }
+            // CT_Style has no `stylePrChange`. Keep its two valid revision carriers separate: a
+            // foreign document may attribute paragraph and run changes to different authors.
+            if let Some((rev, old)) = old_para {
+                st.para_change = PropChange::boxed(rev, old);
+            }
+            if let Some((rev, old)) = old_chr {
+                st.chr_change = PropChange::boxed(rev, old);
             }
             // A style defined twice (some generators write their own Heading 1 after a
             // placeholder one) is the last definition, whole: Word drops the earlier one rather
@@ -180,6 +212,24 @@ impl Reader<'_> {
             .collect();
         for (s, n) in sheet.styles.iter_mut().zip(fixed) {
             s.para.numbering = n;
+        }
+        let old_fixed: Vec<Option<Option<craft_wordmodel::props::NumRef>>> = sheet
+            .styles
+            .iter()
+            .map(|s| {
+                s.para_change.as_ref().map(|ch| match ch.old.numbering {
+                    Some(n) if n.num == props::LEVEL_ONLY => {
+                        let base = s.based_on.as_deref().and_then(|b| props::chain_list(&sheet, b));
+                        base.map(|num| craft_wordmodel::props::NumRef { num, level: n.level })
+                    }
+                    other => other,
+                })
+            })
+            .collect();
+        for (s, n) in sheet.styles.iter_mut().zip(old_fixed) {
+            if let (Some(ch), Some(n)) = (&mut s.para_change, n) {
+                ch.old.numbering = n;
+            }
         }
         if sheet.default_para.numbering.is_some_and(|n| n.num == props::LEVEL_ONLY) {
             sheet.default_para.numbering = None;
@@ -251,10 +301,8 @@ impl Reader<'_> {
             let Some(id) = a.attr("w:abstractNumId").and_then(u32_of) else { continue };
             let mut levels: Vec<Level> = (0..9).map(default_level).collect();
             for l in a.children("w:lvl") {
-                let i = l.attr("w:ilvl").and_then(u32_of).unwrap_or(0) as usize;
-                if let Some(slot) = levels.get_mut(i) {
-                    *slot = self.level(l, i);
-                }
+                let Some(i) = numbering_level_index(l.attr("w:ilvl")) else { continue };
+                levels[i] = self.level(l, i);
             }
             if let Some(link) = a.child_val("w:numStyleLink") {
                 links.push((id, link.to_string()));
@@ -278,7 +326,9 @@ impl Reader<'_> {
             let (Some(id), Some(abs)) = (n.attr("w:numId").and_then(u32_of), n.child_val("w:abstractNumId").and_then(u32_of)) else { continue };
             let (mut start_overrides, mut level_overrides) = (Vec::new(), Vec::new());
             for o in n.children("w:lvlOverride").take(9) {
-                let lvl = o.attr("w:ilvl").and_then(u32_of).unwrap_or(0).min(8) as u8;
+                let Some(raw_level) = o.attr("w:ilvl") else { continue };
+                let Some(lvl) = numbering_level_index(Some(raw_level)) else { continue };
+                let lvl = lvl as u8;
                 if let Some(s) = o.child_val("w:startOverride").and_then(u32_of) {
                     start_overrides.push((lvl, s));
                 } else if let Some(s) = o.child("w:lvl").and_then(|l| l.child_val("w:start")).and_then(u32_of) {
