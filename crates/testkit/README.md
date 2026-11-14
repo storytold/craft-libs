@@ -31,13 +31,13 @@ Source guards serve as fast, zero-dependency regression gates in application tes
 
 `craft_testkit::oracle` finds the external programs that tests compare against, such as ffmpeg, ffprobe, qpdf, `pdftoppm` and `pdftotext`. It is not built for `wasm32`.
 
-`find(program, version_arg)` looks in this order:
+`find(program, version_arg)` takes a bare file name: a name that is empty, `.` or `..`, or contains `/`, `\`, `:` or NUL returns `OracleError::InvalidName`. It looks in this order:
 
 1. The file that `CRAFT_<PROGRAM>` names, for example `CRAFT_FFMPEG`. `find_with` takes the variable name from the caller, such as `FILMCRAFT_FFMPEG` or `CRAFT_MEDIA_FFMPEG`. An empty value counts as unset. When the value is not a file, the lookup returns `OracleError::InvalidExplicitPath` and does not search further.
 2. Each directory on `PATH`, in order. Empty entries are skipped, and a relative entry is resolved against the current directory at the time of the lookup. On Windows the search tries `<name>.exe`, then each `.com`, `.bat` or `.cmd` suffix that `PATHEXT` lists, then the bare name. Elsewhere it tries the bare name, then `<name>.exe`.
 3. The install folders `known_dirs()` returns: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/opt/local/bin` and `/snap/bin`, or on Windows `C:\ffmpeg\bin`, `C:\Program Files\ffmpeg\bin` and `C:\ProgramData\chocolatey\bin`.
 
-The program found is run once with `version_arg` and standard input closed. `Oracle::version()` is the first non-blank line of its standard output, or of its standard error when standard output is blank. `ProbeLimits` bounds the run: each output stream may hold at most `max_output_bytes`, and the child is killed and reaped when it passes `timeout` or the byte limit. On Unix the child runs in its own process group, and the whole group is killed. On Windows only the child is killed. `ProbeLimits::VERSION` (the default) allows 64 KiB per stream and 5 seconds, and `ProbeLimits::LISTING` allows 1 MiB per stream and 5 seconds. These values are this crate's own defaults. A successful lookup is cached for the process under every input it read; a failed lookup is not cached, so the next call searches again.
+The program found is run once with `version_arg` and standard input closed. `Oracle::version()` is the first non-blank line of its standard output, or of its standard error when standard output is blank. `ProbeLimits` bounds the run: each output stream may hold at most `max_output_bytes`, and the child is killed and reaped when it passes `timeout` or the byte limit. On Unix the child runs in its own process group, and the whole group is killed. On Windows only the child is killed. `ProbeLimits::VERSION` (the default) allows 64 KiB per stream and 5 seconds, and `ProbeLimits::LISTING` allows 1 MiB per stream and 5 seconds. These values are this crate's own defaults. A timeout too long to set a deadline, such as `Duration::MAX`, returns `OracleError::InvalidTimeout` without starting the program. A successful lookup is cached for the process under every input it read; a failed lookup is not cached, so the next call searches again.
 
 `find_in` takes the explicit path, the `PATH` list and the install folders as arguments, so a test can search folders it made without changing the process environment.
 
@@ -51,28 +51,6 @@ let ff = craft_testkit::require_ffmpeg!("FILMCRAFT_FFMPEG", "FILMCRAFT_REQUIRE_O
 ```
 
 A missing program prints a `SKIPPED (oracle)` line and returns from the test. When the required variable (`CRAFT_REQUIRE_ORACLES` by default) is exactly `1`, a missing program fails the test instead. Other values, such as `true`, `yes` or `0`, do not count. Every other error, such as a wrong explicit path, a timeout or output over the limit, fails the test.
-
-### Origin
-
-| Module | Source repository | Path | Revision |
-|---|---|---|---|
-| `oracle` (search order, `find_in`, format and version parsing, `require_ffmpeg!`, `require_ffprobe!`) | storytold/filmcraft | `crates/testkit/src/oracle.rs`, `crates/testkit/src/lib.rs` | `e4ab3c6a` |
-| `oracle` (`Oracle`, version probe, install hints, `or_skip!`) | storytold/pdfcraft | `crates/oracle/src/lib.rs` | `eead4541` |
-| `oracle` (the same probe, with `CRAFT_PDF_ORACLES_REQUIRED`) | storytold/craft-libs | `crates/pdf/tests/cos/oracle.rs` | `75a654f4` |
-| `oracle` (search order and install folders) | storytold/craft-libs | `crates/media-testkit/src/lib.rs` | `75a654f4` |
-
-### Migration
-
-| Consumer | Code | State |
-|---|---|---|
-| craft-libs `media-testkit` | `tool`, `ffmpeg`, `ffprobe`, `oracles_required` | Pending: a separate pull request switches it |
-| craft-libs `pdf` | `tests/cos/oracle.rs` | Pending: a separate pull request switches it |
-| FilmCraft | `filmcraft-testkit` `oracle` | Pending: a separate pull request switches it |
-| PdfCraft | `pdfcraft-oracle` | Pending: a separate pull request switches it |
-| EffectCraft | `crates/opusenc/tests/it/ffmpeg.rs` and the tests that call ffmpeg or ffprobe | Pending: a separate pull request switches it |
-| SoundCraft | `crates/video/src/tests.rs` | Pending: a separate pull request switches it |
-
-Each switch keeps the variable names the repository uses today. A repository whose required variable accepts other values than `1` today changes that reading in its own pull request.
 
 ## Consumer Adoption Examples
 
@@ -130,6 +108,10 @@ fn no_std_instant_in_code_the_web_build_runs() {
 | Module | Source | Path | Commit |
 |---|---|---|---|
 | `guards` | storytold/craft-libs#163 (zachshallbetter), with the rules of PhotoCraft's shader float test and FilmCraft's web clock test | `crates/testkit/src/guards.rs` | `e92825e427` |
+| `oracle` (search order, `find_in`, format and version parsing, `require_ffmpeg!`, `require_ffprobe!`) | storytold/filmcraft | `crates/testkit/src/oracle.rs`, `crates/testkit/src/lib.rs` | `e4ab3c6a` |
+| `oracle` (`Oracle`, version probe, install hints, `or_skip!`) | storytold/pdfcraft | `crates/oracle/src/lib.rs` | `eead4541` |
+| `oracle` (the same probe, with `CRAFT_PDF_ORACLES_REQUIRED`) | storytold/craft-libs | `crates/pdf/tests/cos/oracle.rs` | `75a654f4` |
+| `oracle` (search order and install folders) | storytold/craft-libs | `crates/media-testkit/src/lib.rs` | `75a654f4` |
 
 ## Migration
 
@@ -137,3 +119,11 @@ fn no_std_instant_in_code_the_web_build_runs() {
 |---|---|---|---|
 | PhotoCraft | `wgsl_float_literals` | `crates/gpu/src/tests.rs` scanner | Not started |
 | FilmCraft | `std_instant` | `crates/engine/src/wasm_clock_tests.rs` search | Not started |
+| craft-libs `media-testkit` | `oracle` | `tool`, `ffmpeg`, `ffprobe`, `oracles_required` | Not started |
+| craft-libs `pdf` | `oracle` | `tests/cos/oracle.rs` | Not started |
+| FilmCraft | `oracle` | `filmcraft-testkit` `oracle` | Not started |
+| PdfCraft | `oracle` | `pdfcraft-oracle` | Not started |
+| EffectCraft | `oracle` | `crates/opusenc/tests/it/ffmpeg.rs` and the tests that call ffmpeg or ffprobe | Not started |
+| SoundCraft | `oracle` | `crates/video/src/tests.rs` | Not started |
+
+Each `oracle` switch keeps the variable names the repository uses today. A repository whose required variable accepts other values than `1` today changes that reading in its own pull request.

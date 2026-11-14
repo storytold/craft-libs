@@ -54,7 +54,8 @@ const WINDOWS_SUFFIXES: &[&str] = &[".com", ".exe", ".bat", ".cmd"];
 pub struct ProbeLimits {
     /// The most bytes the child may write to standard output, and separately to standard error.
     pub max_output_bytes: usize,
-    /// How long the child may run before it is killed.
+    /// How long the child may run before it is killed. A timeout too long to add to the current
+    /// time, such as `Duration::MAX`, returns [`OracleError::InvalidTimeout`].
     pub timeout: Duration,
 }
 
@@ -106,8 +107,10 @@ impl Oracle {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum OracleError {
-    /// The program name is empty, contains a path separator or NUL, or is `.` or `..`.
+    /// The program name is empty, contains a path separator, `:` or NUL, or is `.` or `..`.
     InvalidName { program: String },
+    /// The probe's timeout is too long to set a deadline from the current time.
+    InvalidTimeout { timeout: Duration },
     /// The variable name is empty or contains `=` or NUL, so the environment cannot be read for it.
     InvalidVariable { variable: String },
     /// No file with the program's name was found. The `require_*` macros skip on this error.
@@ -137,6 +140,7 @@ impl fmt::Display for OracleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidName { program } => write!(f, "{program:?} is not a program name"),
+            Self::InvalidTimeout { timeout } => write!(f, "a probe timeout of {timeout:?} is too long to set a deadline"),
             Self::InvalidVariable { variable } => write!(f, "{variable:?} is not an environment variable name"),
             Self::Missing { program } => {
                 write!(f, "`{program}` was not found on PATH or in the known install folders ({})", install_hint(program))
@@ -454,8 +458,10 @@ fn valid_var(name: &str) -> bool {
     !name.is_empty() && !name.contains(['=', '\0'])
 }
 
+/// Whether `program` is a bare file name. `:` is refused because on Windows `C:name` joined to a
+/// folder is a path on drive `C:` instead of a file in that folder.
 fn valid_name(program: &str) -> bool {
-    !program.is_empty() && program != "." && program != ".." && !program.contains(['/', '\\', '\0'])
+    !program.is_empty() && program != "." && program != ".." && !program.contains(['/', '\\', ':', '\0'])
 }
 
 /// `dir` as an absolute path: a relative one is joined to `cwd`, or dropped without a `cwd`.
@@ -621,13 +627,23 @@ fn spawn(cmd: &mut Command) -> io::Result<Child> {
 
 /// Run `cmd` with standard input closed and both outputs read under `limits`. On a timeout, an
 /// output over the limit or a read error, the child is killed and reaped before the error returns.
+/// A timeout too long to set a deadline returns [`OracleError::InvalidTimeout`] without starting
+/// the program.
 fn run_bounded(mut cmd: Command, path: &Path, limits: ProbeLimits, seen: &mut Observed) -> Result<Captured, OracleError> {
+    let invalid_timeout = || OracleError::InvalidTimeout { timeout: limits.timeout };
+    if Instant::now().checked_add(limits.timeout).is_none() {
+        return Err(invalid_timeout());
+    }
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     let mut child = spawn(&mut cmd).map_err(|source| OracleError::Start { path: path.to_path_buf(), source })?;
     seen.pid = Some(child.id());
-    let deadline = Instant::now().checked_add(limits.timeout);
+    // The timeout counts from the start of the child, not from the start of `spawn`'s retries.
+    let Some(deadline) = Instant::now().checked_add(limits.timeout) else {
+        kill_and_reap(&mut child);
+        return Err(invalid_timeout());
+    };
     let (tx, rx) = mpsc::channel();
     let read_error = |source| OracleError::Read { path: path.to_path_buf(), source };
     if let Err(source) = spawn_reader(child.stdout.take(), true, limits.max_output_bytes, tx.clone()) {
@@ -640,10 +656,7 @@ fn run_bounded(mut cmd: Command, path: &Path, limits: ProbeLimits, seen: &mut Ob
     let (mut stdout, mut stderr) = (None, None);
     let mut pending = 2;
     while pending > 0 {
-        let received = match deadline {
-            Some(d) => rx.recv_timeout(d.saturating_duration_since(Instant::now())),
-            None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
-        };
+        let received = rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
         if received.is_ok() {
             pending -= 1;
         }
@@ -670,7 +683,7 @@ fn run_bounded(mut cmd: Command, path: &Path, limits: ProbeLimits, seen: &mut Ob
 
 /// Wait for a child whose pipes have closed. Past `deadline` it is killed and reaped, and the
 /// error is `None`; a failed wait kills and reaps it too and returns the error.
-fn wait_for_exit(child: &mut Child, deadline: Option<Instant>) -> Result<ExitStatus, Option<io::Error>> {
+fn wait_for_exit(child: &mut Child, deadline: Instant) -> Result<ExitStatus, Option<io::Error>> {
     let mut pause = Duration::from_millis(1);
     loop {
         match child.try_wait() {
@@ -681,12 +694,12 @@ fn wait_for_exit(child: &mut Child, deadline: Option<Instant>) -> Result<ExitSta
                 return Err(Some(e));
             }
         }
-        let left = deadline.map(|d| d.saturating_duration_since(Instant::now()));
-        if left == Some(Duration::ZERO) {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left == Duration::ZERO {
             kill_and_reap(child);
             return Err(None);
         }
-        std::thread::sleep(left.map_or(pause, |l| l.min(pause)));
+        std::thread::sleep(left.min(pause));
         pause = (pause * 2).min(Duration::from_millis(50));
     }
 }
@@ -844,7 +857,7 @@ mod tests {
 
     #[test]
     fn hostile_program_names_are_absent_not_a_panic() {
-        for name in ["", ".", "..", "\0bad", "../../etc/passwd", r"..\..\windows\system32\cmd.exe"] {
+        for name in ["", ".", "..", "\0bad", "../../etc/passwd", r"..\..\windows\system32\cmd.exe", "C:ffmpeg", "ffmpeg:stream"] {
             assert!(matches!(find(name, "--version"), Err(OracleError::InvalidName { .. })), "{name:?}");
         }
         for name in [" ", &"x".repeat(4096)] {
@@ -1040,11 +1053,24 @@ mod tests {
         let d = Scratch::new("hang");
         let tool = script(d.path(), "tool", "exec sleep 1000");
         let mut seen = Observed::default();
-        let limits = ProbeLimits { max_output_bytes: 1024, timeout: Duration::from_millis(1) };
+        // The child writes nothing and a zero timeout has passed when the wait starts, so the result
+        // does not depend on timing.
+        let limits = ProbeLimits { max_output_bytes: 1024, timeout: Duration::ZERO };
         let got = run_bounded(Command::new(&tool), &tool, limits, &mut seen);
         assert!(matches!(got, Err(OracleError::Timeout { .. })), "the child must time out");
         let pid = seen.pid.unwrap();
         assert!(!process_exists(pid), "child {pid} was left running or unreaped");
+    }
+
+    #[test]
+    fn timeout_without_a_deadline_is_an_error() {
+        let d = Scratch::new("no-deadline");
+        let tool = d.path().join("craft-testkit-no-such-oracle-binary");
+        let mut seen = Observed::default();
+        let limits = ProbeLimits { max_output_bytes: 1024, timeout: Duration::MAX };
+        let got = run_bounded(Command::new(&tool), &tool, limits, &mut seen);
+        assert!(matches!(got, Err(OracleError::InvalidTimeout { .. })), "{got:?}");
+        assert_eq!(seen.pid, None, "the program must not start");
     }
 
     #[cfg(unix)]
