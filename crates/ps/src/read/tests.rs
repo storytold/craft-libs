@@ -211,6 +211,29 @@ fn discarded_subfiledecode_skips_payload_without_materializing_it() {
 }
 
 #[test]
+fn pop_does_not_drain_a_subfiledecode_stream_with_another_reference() {
+    let (c, converted) = run("currentfile 0 () /SubFileDecode filter 1 copy pop exec\n1 0 0 setrgbcolor 0 0 10 10 rectfill");
+    assert!(converted.warnings.is_empty(), "{:?}", converted.warnings);
+    assert!(c.contains("1 0 0 rg") && c.contains("0 0 m") && c.contains("10 10 l"), "{c}");
+}
+
+#[test]
+fn predictor_and_reusable_stream_buffers_are_charged_before_retention() {
+    let limits = Limits { memory: 4096, keep_unpainted: true, ..Limits::default() };
+    let predictor = eps_to_pdf(
+        &eps("10 20 1 1 rectfill () << /Predictor 12 /Colors 32 /BitsPerComponent 16 /Columns 1048576 >> /FlateDecode filter pop"),
+        limits,
+    )
+    .unwrap();
+    assert!(predictor.warnings.iter().any(|warning| warning == "out of memory"), "{:?}", predictor.warnings);
+    assert!(predictor.memory <= limits.memory, "{} bytes", predictor.memory);
+
+    let payload = "x".repeat(2500);
+    let reusable = eps_to_pdf(&eps(&format!("10 20 1 1 rectfill ({payload}) /ReusableStreamDecode filter pop")), limits).unwrap();
+    assert!(reusable.warnings.iter().any(|warning| warning == "out of memory"), "{:?}", reusable.warnings);
+}
+
+#[test]
 fn empty_filter_source_records_are_charged_to_the_memory_limit() {
     let limits = Limits { memory: 4096, keep_unpainted: true, ..Limits::default() };
     let converted = eps_to_pdf(&eps("10 20 1 1 rectfill 100000 { () 0 () /SubFileDecode filter pop } repeat"), limits).unwrap();

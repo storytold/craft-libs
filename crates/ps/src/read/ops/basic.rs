@@ -7,7 +7,7 @@ use crate::read::obj::{Key, Obj, PArr, PDict, PStr, name};
 
 pub fn pop(ip: &mut Interp) -> R {
     match ip.pop()? {
-        Obj::File(id) => ip.discard_subfile(id),
+        Obj::File(id) if !ip.file_is_live(id) => ip.discard_subfile(id),
         _ => Ok(()),
     }
 }

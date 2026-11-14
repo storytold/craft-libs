@@ -285,9 +285,14 @@ pub fn filter(ip: &mut Interp) -> R {
         let id = ip.add_source(Source::bytes(Vec::new()))?;
         return ip.push(Obj::File(id));
     }
-    match ip.srcs.filter(up, &fname, &params) {
-        Ok(source) => {
-            let id = ip.add_source(source)?;
+    // Reserve the retained source record before constructing any filter-owned buffers. The
+    // filter separately checks its predictor/reusable-stream storage against the remaining cap.
+    ip.alloc(crate::read::interp::SOURCE_BYTES)?;
+    let max_owned = ip.limits.memory.saturating_sub(ip.memory);
+    match ip.srcs.filter(up, &fname, &params, max_owned) {
+        Ok((source, owned_bytes)) => {
+            ip.alloc(owned_bytes)?;
+            let id = ip.srcs.add(source);
             ip.push(Obj::File(id))
         }
         Err(e) => {

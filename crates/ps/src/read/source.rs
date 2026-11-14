@@ -314,7 +314,7 @@ impl Sources {
 
     /// Build a decoding source without retaining it, so the interpreter can charge its memory
     /// budget before registering the source.
-    pub fn filter(&mut self, up: usize, name: &[u8], p: &FilterParams) -> Result<Source, String> {
+    pub fn filter(&mut self, up: usize, name: &[u8], p: &FilterParams, max_owned: usize) -> Result<(Source, usize), String> {
         let dec = match name {
             b"ASCIIHexDecode" | b"AHx" => Dec::Hex { hi: None },
             b"ASCII85Decode" | b"A85" => Dec::A85 { group: [0; 5], n: 0, first: true },
@@ -344,12 +344,20 @@ impl Sources {
                 // Reads its data when made, and can be read again (`resetfile`, positions).
                 let mut data = Vec::new();
                 while let Some(c) = self.read(up) {
-                    data.push(c);
-                    if data.len() > MAX_DECODED {
-                        return Err("reusable stream too large".into());
+                    let next = data.len().saturating_add(1);
+                    if next > MAX_DECODED || next > max_owned {
+                        return Err("out of memory".into());
                     }
+                    if next > data.capacity() {
+                        let target = next.saturating_add(4095).min(max_owned).min(MAX_DECODED);
+                        data.try_reserve_exact(target.saturating_sub(data.len())).map_err(|_| "out of memory")?;
+                    }
+                    data.push(c);
                 }
-                return Ok(Source::bytes(data));
+                // The capacity is retained by the reusable byte source, so charge it rather
+                // than only the initialized bytes.
+                let bytes = data.capacity();
+                return Ok((Source::bytes(data), bytes));
             }
             _ => return Err(format!("unsupported filter {}", String::from_utf8_lossy(name))),
         };
@@ -359,9 +367,13 @@ impl Sources {
             let bpc = usize::try_from(p.bpc.clamp(1, 16)).unwrap_or(8);
             let columns = usize::try_from(p.columns.clamp(1, 1 << 20)).unwrap_or(1);
             let row = (colors * bpc * columns).div_ceil(8);
+            if row > max_owned {
+                return Err("out of memory".into());
+            }
             s.predictor = Some(Predictor { kind: p.predictor, bpp: (colors * bpc).div_ceil(8).max(1), row, prev: vec![0; row], cur: Vec::new() });
+            return Ok((s, row));
         }
-        Ok(s)
+        Ok((s, 0))
     }
 
     fn read_filter(&mut self, id: usize, depth: usize) -> Option<u8> {
@@ -832,8 +844,22 @@ mod tests {
     }
 
     fn add_filter(s: &mut Sources, up: usize, name: &[u8], params: &FilterParams) -> usize {
-        let source = s.filter(up, name, params).unwrap();
+        let (source, _) = s.filter(up, name, params, usize::MAX).unwrap();
         s.add(source)
+    }
+
+    #[test]
+    fn filter_owned_buffers_are_preflighted_against_memory_budget() {
+        let mut sources = Sources::default();
+        let id = sources.add(Source::bytes(Vec::new()));
+        let predictor = FilterParams { predictor: 12, colors: 32, bpc: 16, columns: 1 << 20, ..Default::default() };
+        assert!(matches!(sources.filter(id, b"FlateDecode", &predictor, 4096), Err(e) if e == "out of memory"));
+
+        let id = sources.add(Source::bytes(vec![b'x'; 10]));
+        assert!(matches!(sources.filter(id, b"ReusableStreamDecode", &FilterParams::default(), 9), Err(e) if e == "out of memory"));
+        let id = sources.add(Source::bytes(vec![b'x'; 10]));
+        let (_, owned) = sources.filter(id, b"ReusableStreamDecode", &FilterParams::default(), 10).unwrap();
+        assert_eq!(owned, 10);
     }
 
     #[test]

@@ -366,6 +366,12 @@ impl Interp {
         Ok(self.srcs.add(source))
     }
 
+    /// Whether a file ID is still held by an operand or execution frame.
+    pub fn file_is_live(&self, id: usize) -> bool {
+        self.o.iter().any(|o| matches!(o, Obj::File(file) if *file == id))
+            || self.e.iter().any(|frame| matches!(frame, Frame::File { id: file } if *file == id))
+    }
+
     /// Consume a SubFileDecode stream whose file object is explicitly discarded with `pop`.
     pub fn discard_subfile(&mut self, id: usize) -> R {
         if !self.srcs.is_subfile_filter(id) {
