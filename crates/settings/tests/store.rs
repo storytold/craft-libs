@@ -289,4 +289,8 @@ fn backup_follows_a_mode_the_user_chose_for_the_config() {
     store.update(|p| p.general.language = "fr".into());
     store.flush().unwrap();
     assert_eq!(mode(&tmp.path().join("config.toml.bak")), 0o640);
+    // The group bits authorize the config's group, which the backup is in.
+    use std::os::unix::fs::MetadataExt;
+    let gid = |p: &std::path::Path| std::fs::metadata(p).unwrap().gid();
+    assert_eq!(gid(&tmp.path().join("config.toml.bak")), gid(&config_path(tmp.path())));
 }
