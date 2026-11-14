@@ -665,6 +665,8 @@ fn avi1_default_huffman_tables_restore_a_missing_dht() {
     assert_eq!(decoded, expected);
     assert!(matches!(with_avi1_default_huffman(fixture), std::borrow::Cow::Borrowed(_)));
 }
+
+#[test]
 fn limits_are_checked_before_allocating() {
     let mut s = vec![0xFF, 0xD8];
     segment(&mut s, 0xC9, &[8, 0xFF, 0xFF, 0xFF, 0xFF, 3, 1, 0x44, 0, 2, 0x11, 0, 3, 0x11, 0]);

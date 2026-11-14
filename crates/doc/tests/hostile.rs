@@ -7,11 +7,7 @@ use common::*;
 use craft_doc::{Error, Limits, info, outline, renditions, sniff};
 
 fn small() -> Limits {
-    let mut l = Limits::default();
-    l.max_json = 64 << 10;
-    l.max_entry = 64 << 10;
-    l.max_total = 256 << 10;
-    l
+    Limits { max_json: 64 << 10, max_entry: 64 << 10, max_total: 256 << 10, ..Limits::default() }
 }
 
 fn limit_exceeded<T: std::fmt::Debug>(r: Result<T, Error>) -> bool {

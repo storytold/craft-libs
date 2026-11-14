@@ -26,10 +26,7 @@ fn nested(depth: usize) -> Vec<u8> {
 }
 
 fn small(max_depth: usize, max_items: usize) -> Limits {
-    let mut limits = Limits::default();
-    limits.max_depth = max_depth;
-    limits.max_items = max_items;
-    limits
+    Limits { max_depth, max_items, ..Limits::default() }
 }
 
 #[test]

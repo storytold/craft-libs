@@ -185,7 +185,7 @@ fn samples_resolve_and_derived_tokens_meet_every_minimum() {
 #[test]
 fn a_later_pull_never_breaks_an_earlier_pair() {
     let focus = hex("#0a246a");
-    let fails = |r: &Resolved, fg: T, bg: T| r.warnings.iter().any(|w| w.fg == fg.into() && w.bg == bg.into());
+    let fails = |r: &Resolved, fg: T, bg: T| r.warnings.iter().any(|w| w.fg == fg && w.bg == bg);
     let mut def = grey_blue();
     def.id = ThemeId::parse("test.dark-focus").unwrap();
     def.pins.dark = Pins::from_iter([(T::SurfacePanel, hex("#747474")), (T::LineFocus, focus), (T::TextNormal, Rgba::WHITE)]);

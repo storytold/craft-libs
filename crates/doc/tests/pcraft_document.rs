@@ -62,9 +62,7 @@ fn skips_oversized_and_unreadable_unrequested_entries() {
         bytes[at + 10..at + 12].copy_from_slice(&99u16.to_le_bytes());
         bytes[at + 24..at + 28].copy_from_slice(&(u32::MAX - 1).to_le_bytes());
     }
-    let mut limits = Limits::default();
-    limits.max_entry = json.len() as u64;
-    limits.max_total = json.len() as u64;
+    let limits = Limits { max_entry: json.len() as u64, max_total: json.len() as u64, ..Limits::default() };
     assert_eq!(pcraft_document::<Head>(&bytes, &limits).unwrap().layers.len(), 1);
     assert!(matches!(craft_doc::renditions(&bytes, &limits), Err(Error::Malformed(_))), "the declared thumbnail is absent");
 }
@@ -114,7 +112,7 @@ fn checks_byte_depth_and_item_limits_before_the_document_is_deserialized() {
                 "total" => limits.max_total = json.len() as u64 - 1,
                 "depth" => limits.max_depth = 2,
                 "items" => limits.max_items = 1,
-                _ => unreachable!(),
+                other => panic!("unknown limit {other}"),
             }
             assert!(matches!(pcraft_document::<Never>(&bytes, &limits), Err(Error::LimitExceeded(_))), "{limits:?}");
         }

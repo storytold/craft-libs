@@ -33,10 +33,7 @@ fn pdf() -> Vec<u8> {
 
 /// A PNG entry at `[offset, length]` in the data after the JSON.
 fn blob(at: [u64; 2]) -> Image {
-    let mut image = Image::default();
-    image.mime = "image/png".into();
-    image.blob = Some(at);
-    image
+    Image { mime: "image/png".into(), blob: Some(at), ..Image::default() }
 }
 
 fn gzip(bytes: &[u8]) -> Vec<u8> {

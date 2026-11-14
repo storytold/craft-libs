@@ -89,7 +89,7 @@ impl ComponentInfo {
     }
 
     /// Whether the name, one of the story titles or one of the group names contains the filter, ignoring case;
-    /// `folded` is the filter as [`fold_filter`] gives it. An empty filter matches.
+    /// `folded` is the filter as `fold_filter` gives it. An empty filter matches.
     pub fn matches(&self, folded: &str) -> bool {
         folded.is_empty() || self.folded.iter().any(|text| text.contains(folded))
     }
