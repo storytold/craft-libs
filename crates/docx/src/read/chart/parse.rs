@@ -311,7 +311,7 @@ pub(super) fn axis(a: Option<&El>) -> Axis {
             .child("c:numFmt")
             .filter(|f| f.attr("sourceLinked") != Some("1"))
             .and_then(|f| f.attr("formatCode"))
-            .filter(|f| f.len() <= MAX_FORMAT_CODE)
+            .filter(|f| f.chars().count() <= craft_wordmodel::chart::MAX_FMT)
             .map(str::to_string),
         title: a.child("c:title").and_then(title_text),
         labels: a.child("c:tickLblPos").and_then(|p| p.attr("val")) != Some("none"),

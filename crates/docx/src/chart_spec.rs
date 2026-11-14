@@ -678,6 +678,21 @@ mod tests {
     }
 
     #[test]
+    fn an_axis_format_is_limited_in_characters_not_bytes() {
+        use craft_wordmodel::chart::MAX_FMT;
+        let cjk = format!("0\"{}\"", "\u{5143}".repeat(90));
+        let ascii = format!("0\"{}\"", "x".repeat(90));
+        for fmt in [cjk, ascii] {
+            assert!(fmt.chars().count() <= MAX_FMT);
+            let mut spec = ChartSpec::sample(ChartType::Column);
+            spec.val_axis.fmt = Some(fmt.clone());
+            let spec = spec.sanitized();
+            assert_eq!(spec.val_axis.fmt.as_deref(), Some(fmt.as_str()));
+            assert_eq!(spec_of(&parse(&spec)).as_ref(), Some(&spec), "{} chars", fmt.chars().count());
+        }
+    }
+
+    #[test]
     fn a_chart_with_more_than_the_model_stays_read_only() {
         let spec = ChartSpec::sample(ChartType::Column);
         let x = chart_xml(&spec).replace("<c:roundedCorners val=\"0\"/>", "<c:roundedCorners val=\"0\"/><c:style val=\"2\"/>");

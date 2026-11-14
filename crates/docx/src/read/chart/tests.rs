@@ -386,9 +386,13 @@ fn axis_format_code_length_is_capped() {
         let x = format!(r#"<c:valAx {NS}><c:numFmt formatCode="{code}" sourceLinked="0"/></c:valAx>"#);
         axis(Some(&crate::xml::parse(x.as_bytes()).unwrap())).fmt
     };
-    let ok = format!("{}0", "x".repeat(254));
+    use craft_wordmodel::chart::MAX_FMT;
+    // The limit is the model's, counted in characters (a CJK character is one).
+    let ok = format!("{}0", "x".repeat(MAX_FMT - 1));
     assert_eq!(fmt(&ok), Some(ok.clone()));
-    assert_eq!(fmt(&format!("{}0", "x".repeat(300))), None);
+    let cjk = format!("{}0", "\u{5143}".repeat(MAX_FMT - 1));
+    assert_eq!(fmt(&cjk), Some(cjk.clone()));
+    assert_eq!(fmt(&format!("{}0", "x".repeat(MAX_FMT))), None);
 }
 
 #[test]
