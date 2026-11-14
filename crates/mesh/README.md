@@ -127,27 +127,17 @@ mutations of every byte of good files.
 | `max_vertices` | 20 000 000 | entries per attribute pool (OBJ: each of `v`, `vt`, `vn`, counting unused ones; glTF: vertices over all meshes; 3MF: vertices, colours and texture coordinates of the file together) |
 | `max_triangles` | 20 000 000 | triangles after fanning polygons, strips and fans |
 | `max_face_corners` | 4096 | corners of one face; PLY list lengths |
-| `max_meshes` | 100 000 | OBJ objects, glTF meshes, 3MF objects |
-| `max_parts` | 100 000 | groups, material runs, glTF primitives |
+| `max_meshes` | 100 000 | OBJ objects, glTF meshes, 3MF objects, FBX meshes |
+| `max_parts` | 100 000 | groups, material runs, glTF primitives, material slots of an FBX mesh |
 | `max_materials` | 100 000 | materials; images; OBJ material libraries; 3MF base materials and textures together |
 | `max_nodes` | 100 000 | nodes, and node visits when the hierarchy is walked (ends cycles); 3MF placed objects, build items and components |
 | `max_depth` | 64 | node nesting; 3MF component nesting (ends cycles) |
-| `max_data_bytes` | 1 GiB | buffers and material libraries taken from the resolver; embedded image bytes; skin and animation values; the binary chunk `write_glb` builds; what a 3MF package inflates to, and its textures |
+| `max_data_bytes` | 1 GiB | buffers and material libraries taken from the resolver; embedded image bytes; skin and animation values; the binary chunk `write_glb` builds; what a 3MF package inflates to, and its textures; everything an FBX file keeps (parsed values at 8 bytes per array element, meshes, image bytes) |
 | `max_extras` | 10 000 | skins, animations, cameras, lights, buffers (each); channels of one animation |
 
 Fixed bounds: a PLY header of 1 MiB, 64 elements and 256 properties per element; 2^24 components
-for glTF accessors without a buffer view, over the whole file; 10 000 parts in a 3MF package.
-| `max_meshes` | 100 000 | OBJ objects, glTF meshes, FBX meshes |
-| `max_parts` | 100 000 | groups, material runs, glTF primitives, material slots of an FBX mesh |
-| `max_materials` | 100 000 | materials; images; OBJ material libraries |
-| `max_nodes` | 100 000 | nodes, and node visits when the hierarchy is walked (ends cycles) |
-| `max_depth` | 64 | node nesting |
-| `max_data_bytes` | 1 GiB | buffers and material libraries taken from the resolver; embedded image bytes; skin and animation values; the binary chunk `write_glb` builds; everything an FBX file keeps (parsed values at 8 bytes per array element, meshes, image bytes) |
-| `max_extras` | 10 000 | skins, animations, cameras, lights, buffers (each); channels of one animation |
-
-Fixed bounds: a PLY header of 1 MiB, 64 elements and 256 properties per element; 2^24 components
-for glTF accessors without a buffer view, over the whole file; FBX records nested 64 deep and
-arrays of 1 GiB.
+for glTF accessors without a buffer view, over the whole file; 10 000 parts in a 3MF package; FBX
+records nested 64 deep and arrays of 1 GiB.
 
 **External files.** No reader opens a file. A reader that needs another file to parse (an OBJ
 material library, a glTF buffer) asks the caller's `Resolver` for it by the name the file writes;
