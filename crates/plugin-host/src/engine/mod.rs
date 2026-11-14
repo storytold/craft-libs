@@ -168,7 +168,9 @@ pub struct Budget {
     pub work: Option<u64>,
     /// Wall time for one call, measured by the host [`Clock`]. `None` means no deadline.
     pub deadline: Option<Duration>,
-    /// Hard memory cap in bytes, including the initial memory.
+    /// Hard memory cap in bytes, including the initial memory. A call whose instance already holds
+    /// more memory than this fails with `Trap::OutOfMemory` before any guest code runs. An
+    /// instance never shrinks, so lower the cap only for an instance that holds less.
     pub memory_bytes: u64,
     /// Guest call stack budget in bytes. An instance runs with the value its module was compiled for.
     pub stack_bytes: u32,
@@ -192,7 +194,8 @@ pub enum Trap {
     Deadline,
     /// `Budget::cancel` was set.
     Cancelled,
-    /// `memory.grow` went past `Budget::memory_bytes`.
+    /// `memory.grow` went past `Budget::memory_bytes`, or the instance already held more memory than
+    /// the call budget allows.
     OutOfMemory,
     /// The guest call stack went past its budget.
     StackOverflow,
@@ -392,6 +395,13 @@ pub trait Instance: MaybeSend {
     fn write(&mut self, ptr: u32, src: &[u8]) -> Result<(), Trap>;
     /// Copy guest memory at `ptr` into `dst`. `Trap::BadPointer` if the range is outside memory.
     fn read(&self, ptr: u32, dst: &mut [u8]) -> Result<(), Trap>;
+}
+
+/// Refuse a call whose budget is smaller than the memory the instance already holds. Growth is
+/// capped by the limiter, so this covers the memory that exists before the call starts.
+#[cfg(any(feature = "wasmi", all(feature = "wasmtime", not(target_arch = "wasm32"))))]
+pub(crate) fn check_held_memory(held_bytes: usize, budget: &Budget) -> Result<(), Trap> {
+    if u64::try_from(held_bytes).is_ok_and(|held| held <= budget.memory_bytes) { Ok(()) } else { Err(Trap::OutOfMemory) }
 }
 
 /// The range `ptr..ptr + len` inside a memory of `mem_len` bytes, or `Trap::BadPointer`.

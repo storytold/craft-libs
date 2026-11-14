@@ -143,7 +143,9 @@ fn posterize_native(img: &Image, levels: u32) -> Vec<u8> {
     let lut: Vec<u8> = (0..256u32).map(|v| (((v * levels) >> 8) * 255 / (levels - 1)) as u8).collect();
     let row_bytes = img.w as usize * 4;
     for (src, dst) in img.pixels.chunks(img.stride as usize).zip(out.chunks_mut(img.stride as usize)) {
-        for (s, d) in src[..row_bytes].as_chunks::<4>().0.iter().zip(dst[..row_bytes].as_chunks_mut::<4>().0) {
+        let (src_px, _) = src[..row_bytes].as_chunks::<4>();
+        let (dst_px, _) = dst[..row_bytes].as_chunks_mut::<4>();
+        for (s, d) in src_px.iter().zip(dst_px) {
             d[0] = lut[s[0] as usize];
             d[1] = lut[s[1] as usize];
             d[2] = lut[s[2] as usize];
