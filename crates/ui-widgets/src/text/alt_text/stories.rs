@@ -3,6 +3,7 @@
 use super::{AltText, AltTextField};
 use crate::contract::{Bind, Show as _, Validity};
 use crate::runtime::env::Message;
+use crate::testing::pointer::{moved, secondary};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::Mixed;
 use egui::{Key, Modifiers, Ui};
@@ -21,6 +22,18 @@ fn type_and_leave(fixture: &mut Fixture) {
 #[story(AltTextField<'static>, covers = [Default], drive = Drive::Custom(type_and_leave))]
 fn alt_text_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     AltTextField::new(PROMPT, Bind::bound(data.value("alt", AltText::new("A red kite")))).show(ui).into()
+}
+
+/// A secondary click on the description box, which opens the edit menu.
+fn open_edit_menu(fixture: &mut Fixture) {
+    let at = fixture.by_label(PROMPT).expect("the description box").center();
+    fixture.frame(vec![moved(at), secondary(at, true)]);
+    fixture.frame(vec![secondary(at, false)]).settle();
+}
+
+#[story(AltTextField<'static>, covers = [Open], drive = Drive::Custom(open_edit_menu))]
+fn alt_text_field_edit_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    AltTextField::new(PROMPT, Bind::bound(data.value("menu", AltText::new("A red kite")))).show(ui).into()
 }
 
 #[story(AltTextField<'static>, covers = [LongText], drive = Drive::Never)]

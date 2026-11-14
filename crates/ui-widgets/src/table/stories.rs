@@ -3,7 +3,8 @@
 use super::{Table, sort_rows};
 use crate::contract::{Bind, CollectionEvent, ColumnEvent, ColumnKind, ColumnSort, ColumnSpec, ShowCollection as _, ToggleColumn};
 use crate::list::{ListRow, ToggleCell};
-use crate::testing::{Drive, StoryData, StoryOutput, story};
+use crate::testing::pointer::{moved, secondary};
+use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, ItemSource, Selection};
 use craft_i18n::{AgeStyle, FileSize, SizeUnit};
 use egui::Ui;
@@ -147,6 +148,18 @@ fn table(
 #[story(Table<'static, usize>, covers = [Default, Many], drive = Drive::Never)]
 fn table_many(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     table(ui, data, files(40), Some(ColumnSort::ascending(NAME)), false, true, Selection::single(0))
+}
+
+/// A secondary click on the Name header, which opens the header menu.
+fn open_header_menu(fixture: &mut Fixture) {
+    let at = fixture.by_label("Name").expect("the header cell").center();
+    fixture.frame(vec![moved(at), secondary(at, true)]);
+    fixture.frame(vec![secondary(at, false)]).settle();
+}
+
+#[story(Table<'static, usize>, covers = [Open], drive = Drive::Custom(open_header_menu))]
+fn table_header_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    table(ui, data, files(12), Some(ColumnSort::ascending(NAME)), true, false, Selection::default())
 }
 
 #[story(Table<'static, usize>, covers = [One], drive = Drive::Never)]
