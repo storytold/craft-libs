@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use crate::read::gstate::{Clip, DevColor, GState, M, MAX_PATH, Seg, Space, arc_curves, bbox, flatten};
+use crate::read::gstate::{Clip, DevColor, GState, M, MAX_PATH, Seg, Space, arc_curves, bbox, bounded_arc_sweep, flatten};
 use crate::read::interp::{Interp, PsErr, R, err, matrix_obj};
 use crate::read::obj::{Obj, PArr, PDict};
 use crate::read::pdf::StrokeParams;
@@ -434,21 +434,17 @@ pub fn closepath(ip: &mut Interp) -> R {
 }
 
 fn arc_common(ip: &mut Interp, negative: bool) -> R {
-    let mut a1 = ip.pop_num()?;
+    let a1 = ip.pop_num()?;
     let a0 = ip.pop_num()?;
     let r = ip.pop_num()?;
     let cy = ip.pop_num()?;
     let cx = ip.pop_num()?;
-    if negative {
-        while a1 > a0 {
-            a1 -= 360.0;
-        }
-    } else {
-        while a1 < a0 {
-            a1 += 360.0;
-        }
+    let (sweep, shortened) = bounded_arc_sweep(a0, a1, negative);
+    if shortened {
+        ip.warnings.push("arc (too many turns)".into());
     }
-    let (start, curves) = arc_curves(cx, cy, r, a0, a1);
+    let start_angle = a0 % 360.0;
+    let (start, curves) = arc_curves(cx, cy, r, start_angle, start_angle + sweep);
     let m = ip.gs.ctm;
     let s = m.apply(start.0, start.1);
     if ip.gs.cur.is_some() {

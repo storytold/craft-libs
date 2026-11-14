@@ -77,6 +77,35 @@ impl Seg {
 /// The most segments one path may hold.
 pub const MAX_PATH: usize = 4_000_000;
 
+/// Maximum number of complete turns an `arc`/`arcn` adds to the path before preserving parity.
+pub const MAX_ARC_TURNS: f64 = 1024.0;
+/// One quarter-circle cubic per turn keeps every retained sweep geometrically accurate.
+const MAX_ARC_SEGMENTS: usize = 4096;
+
+/// The sweep PostScript's `arc` or `arcn` operator selects without iterating over whole turns.
+///
+/// The modulo form matters for hostile angles: repeatedly adding or subtracting 360 can take
+/// effectively forever for a finite `f64` with a huge magnitude.
+pub fn bounded_arc_sweep(a0: f64, a1: f64, negative: bool) -> (f64, bool) {
+    let sweep = if !negative && a1 < a0 {
+        (a1 % 360.0 - a0 % 360.0).rem_euclid(360.0)
+    } else if negative && a1 > a0 {
+        -(a0 % 360.0 - a1 % 360.0).rem_euclid(360.0)
+    } else {
+        a1 - a0
+    };
+    let max = MAX_ARC_TURNS * 360.0;
+    if !sweep.is_finite() {
+        return (0.0, true);
+    }
+    if sweep.abs() <= max {
+        return (sweep, false);
+    }
+    let sign = sweep.signum();
+    let remainder = (sign * (a1 % 720.0 - a0 % 720.0)).rem_euclid(720.0);
+    (sign * (max - 720.0 + remainder), true)
+}
+
 /// Bézier segments for an arc of the circle at (cx, cy) with radius r, from angle a0 to a1
 /// (degrees), in user space: the first point and the curves.
 pub fn arc_curves(cx: f64, cy: f64, r: f64, a0: f64, a1: f64) -> ((f64, f64), Vec<[f64; 6]>) {
@@ -86,7 +115,7 @@ pub fn arc_curves(cx: f64, cy: f64, r: f64, a0: f64, a1: f64) -> ((f64, f64), Ve
     if !sweep.is_finite() || sweep == 0.0 {
         return (start, Vec::new());
     }
-    let n = ((sweep.abs() / std::f64::consts::FRAC_PI_2).ceil() as usize).clamp(1, 64);
+    let n = ((sweep.abs() / std::f64::consts::FRAC_PI_2).ceil() as usize).clamp(1, MAX_ARC_SEGMENTS);
     let step = sweep / n as f64;
     let k = 4.0 / 3.0 * (step / 4.0).tan();
     let mut out = Vec::with_capacity(n);
@@ -338,5 +367,16 @@ mod tests {
         let last = curves.last().unwrap();
         assert!((last[4] - 10.0).abs() < 1e-9 && last[5].abs() < 1e-9);
         assert!(arc_curves(0.0, 0.0, 1.0, 0.0, f64::INFINITY).1.is_empty());
+        assert_eq!(arc_curves(0.0, 0.0, 1.0, 0.0, MAX_ARC_TURNS * 360.0).1.len(), MAX_ARC_SEGMENTS);
+    }
+
+    #[test]
+    fn huge_arc_angles_are_reduced_without_unbounded_turn_loops() {
+        assert_eq!(bounded_arc_sweep(1e18, 0.0, false), (80.0, false));
+        assert_eq!(bounded_arc_sweep(0.0, 1e18, true), (-80.0, false));
+        let (sweep, skipped) = bounded_arc_sweep(0.0, 5e18, false);
+        assert!(skipped);
+        assert!(sweep.abs() <= MAX_ARC_TURNS * 360.0);
+        assert_eq!(bounded_arc_sweep(0.0, f64::INFINITY, false), (0.0, true));
     }
 }
