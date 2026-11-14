@@ -828,6 +828,42 @@ impl StyleSheet {
         out.chr.style = None;
         Some(out)
     }
+    /// The run formatting `t`'s table style gives the text of each of its cells, by row and then
+    /// cell: each of a cell's parts' over the last, lowest precedence first (ECMA-376 §17.7.6), as
+    /// layout applies it between document defaults and the paragraph's style. `None` when the
+    /// table has no style. The style and the table's size are worked out once for the whole table,
+    /// and each set of parts is put together once.
+    pub fn table_cells_chr(&self, t: &crate::table::Table) -> Option<Vec<Vec<CharProps>>> {
+        let st = self.table_style(t.props.style.as_deref()?)?;
+        let sizes = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
+        let ncols = t.cols().clamp(1, crate::table::MAX_COLS);
+        let nrows = t.rows.len();
+        let mut made: Vec<(PartSet, CharProps)> = Vec::new();
+        let mut out = Vec::with_capacity(nrows);
+        for (r, row) in t.rows.iter().enumerate() {
+            let mut g = row.first_grid();
+            let mut cells = Vec::with_capacity(row.cells.len());
+            for cell in &row.cells {
+                let span = cell.span();
+                let parts = PartSet::of_cell(&t.props.look, sizes, (r, nrows), (g, span, ncols));
+                g = g.saturating_add(span);
+                let chr = match made.iter().find(|(p, _)| *p == parts) {
+                    Some((_, chr)) => chr.clone(),
+                    None => {
+                        let mut chr = CharProps::default();
+                        for part in parts.iter() {
+                            chr.overlay(&st.part(part).chr);
+                        }
+                        made.push((parts, chr.clone()));
+                        chr
+                    }
+                };
+                cells.push(chr);
+            }
+            out.push(cells);
+        }
+        Some(out)
+    }
     /// Add or replace a style.
     pub fn upsert(&mut self, st: Style) {
         match self.styles.iter_mut().find(|s| s.id == st.id) {
