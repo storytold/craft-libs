@@ -822,8 +822,14 @@ impl Canvas {
         if self.arc_clockwise { (e, s) } else { (s, e) }
     }
 
-    /// SCALEVIEWPORTEXTEX and SCALEWINDOWEXTEX: the extent times `num / den` on each axis. A zero
-    /// denominator leaves the extent alone.
+    /// OFFSETWINDOWORG and OFFSETVIEWPORTORG (WMF): the window or viewport origin moved by `d`.
+    pub fn offset_org(&mut self, window: bool, d: P) {
+        let o = if window { &mut self.map.wo } else { &mut self.map.vo };
+        *o = (o.0 + d.0, o.1 + d.1);
+    }
+
+    /// SCALEVIEWPORTEXTEX and SCALEWINDOWEXTEX (and WMF's SCALEVIEWPORTEXT and SCALEWINDOWEXT): the
+    /// extent times `num / den` on each axis. A zero denominator leaves the extent alone.
     pub fn scale_ext(&mut self, window: bool, x: (f64, f64), y: (f64, f64)) {
         if x.1 == 0.0 || y.1 == 0.0 {
             return;
