@@ -1077,11 +1077,12 @@ impl<W: WindingNumber> Topology<W> {
         let mut ret = BezPath::default();
         let mut unfinished: Option<f64> = None;
 
-        // Find a segment that can't be merged into the previous one.
+        // Find a segment that can't be merged into the previous one. If every segment can be
+        // merged, start at the first one.
         let start_idx = segs
             .iter()
             .position(|s| self.can_merge(s.other_half(), positions).is_none())
-            .unwrap();
+            .unwrap_or(0);
         ret.move_to(self.point(segs[start_idx].other_half()).to_kurbo());
         for seg in segs[start_idx..].iter().chain(&segs[..start_idx]) {
             let path = &positions[seg.idx];
@@ -1256,7 +1257,16 @@ impl<W: WindingNumber> Topology<W> {
                 None
             }
         };
-        if self.is_simple_point(seg) {
+        // The neighbor must be the adjacent piece of the same input element. After coincident
+        // segments are deleted, pieces of two different input elements can meet at a simple
+        // point, and their parameters cannot be combined.
+        let nbr = self.point_neighbors[seg].clockwise;
+        let expected = if has_orig_orientation {
+            self.segments.contour_prev(orig_idx)
+        } else {
+            self.segments.contour_next(orig_idx)
+        };
+        if self.is_simple_point(seg) && nbr != seg && Some(self.orig_seg[nbr.idx]) == expected {
             can_merge
         } else {
             None
@@ -2479,6 +2489,37 @@ mod tests {
 
         dbg!(&top.segments.split_from_predecessor);
         insta::assert_ron_snapshot!((top, contours));
+    }
+
+    fn contour_area_sum(path: &str, eps: f64) -> f64 {
+        use kurbo::Shape as _;
+
+        let bez = BezPath::from_svg(path).unwrap();
+        let top = Topology::from_path(&bez, eps).unwrap();
+        let contours = top.contours(|w| *w != 0);
+        contours.contours().map(|c| c.path.area().abs()).sum()
+    }
+
+    #[test]
+    fn merge_only_pieces_of_one_input_curve() {
+        // Two arches whose right legs agree to within about 1e-6. The legs are deleted as
+        // coincident, and the left end of one arch meets a piece of the other at a simple point.
+        // The shape's area is about 0.000962; merging across the two curves gave a contour
+        // of area 900.
+        let path = "M0,100 C20,0 80,0 100,100 \
+                    C79.99999708333333,0 20.000011666666666,0 -0.000026249999999999998,100 Z";
+        let area = contour_area_sum(path, 1e-6);
+        assert!(area < 0.002, "area {area}");
+    }
+
+    #[test]
+    fn path_followed_by_its_reverse() {
+        // Every vertex of this contour used to look mergeable, which panicked in segs_to_path.
+        let path = "M0,6 Q3,4 3,4 Q5,4 3,4 C4,2 0,6 0,1 Z M0,1 C0,6 4,2 3,4 Q5,4 3,4 Q3,4 0,6 Z";
+        for eps in [1e-3, 1e-6] {
+            let area = contour_area_sum(path, eps);
+            assert!(area < 1e-6, "eps {eps}: area {area}");
+        }
     }
 
     #[test]
