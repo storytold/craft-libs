@@ -20,6 +20,9 @@
 //!   (`aac-encode`, `alac-encode`) and MP3, AC-3 and E-AC-3 streams (`mp3-encode`, `ac3-encode`,
 //!   `eac3-encode`), whole-buffer or incremental into any `Write + Seek`. Feature
 //!   `lossless-encode` turns on WAV, AIFF and FLAC; feature `encode` turns on every format and encoder.
+//! - [`PacketEncoder`] (any of `aac-encode`, `alac-encode`, `mp3-encode`, `ac3-encode`,
+//!   `eac3-encode`, `opus-encode`): planar `f32` in WAV channel order to packets of AAC-LC, ALAC,
+//!   MP3, AC-3, E-AC-3 or Opus, with their timing and codec configuration, for an app's own muxer.
 //! - [`wav_pcm`], [`aiff_pcm`] (feature `decode-native`) and [`pcm_wav_file`], [`pcm_wav_header`],
 //!   [`pcm_aiff_file`], [`pcm_aiff_header`] (feature `pcm-encode`): the integer PCM of a WAV or AIFF
 //!   file bit for bit, and minimal files around such PCM, for essence embedded in other containers.
@@ -45,6 +48,15 @@ pub mod mp3;
 pub mod mpa;
 #[cfg(any(feature = "opus-decode", feature = "opus-encode"))]
 pub mod opus;
+#[cfg(any(
+    feature = "aac-encode",
+    feature = "alac-encode",
+    feature = "mp3-encode",
+    feature = "ac3-encode",
+    feature = "eac3-encode",
+    feature = "opus-encode"
+))]
+mod packet;
 #[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 mod pcm;
 #[cfg(feature = "peaks")]
@@ -96,6 +108,15 @@ pub use buffer::AudioBuffer;
 pub use craft_media;
 pub use craft_media::{ByteSource, CodecId, CodecParams, Container, PcmFormat, ReadSeekSource};
 pub use layout::{ChannelLayout, Speaker};
+#[cfg(any(
+    feature = "aac-encode",
+    feature = "alac-encode",
+    feature = "mp3-encode",
+    feature = "ac3-encode",
+    feature = "eac3-encode",
+    feature = "opus-encode"
+))]
+pub use packet::{EncodedPacket, PacketEncoder};
 #[cfg(feature = "decode-native")]
 pub use read::SharedSource;
 #[cfg(feature = "decode-native")]
