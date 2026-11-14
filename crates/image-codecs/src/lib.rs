@@ -33,6 +33,7 @@ pub mod web;
 pub use crate::allocation::probe_allocation_size;
 pub use crate::cicp::Cicp;
 pub use crate::cicp::ContentLightLevel;
+pub use crate::codecs::avif::{HDR_REFERENCE_WHITE_NITS, HdrTransfer, encode_avif_hdr, encode_avif_with_speed};
 pub use crate::codecs::exr_cryptomatte::{cryptomatte_id, cryptomatte_key, cryptomatte_preview_color};
 pub use crate::codecs::gif_frames::{AnimationFrame, MAX_GIF_FRAMES};
 pub use crate::codecs::png::{
