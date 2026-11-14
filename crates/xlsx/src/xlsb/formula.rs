@@ -668,10 +668,13 @@ fn literal_text(e: &Expr) -> bool {
     }
 }
 
-/// How many strings a [`literal_text`] chain joins, or `None` for anything else.
+/// How many strings a [`literal_text`] chain joins, or `None` for anything else. It accepts
+/// what [`literal_text`] does, typed spacing included, so a chain the Python check accepts is
+/// one that is written flat.
 fn literal_texts(e: &Expr) -> Option<usize> {
     match e {
         Expr::Text(_) => Some(1),
+        Expr::Spaced(_, x, _) => literal_texts(x),
         Expr::Binary(BinOp::Concat, a, b) => literal_texts(a)?.checked_add(literal_texts(b)?),
         _ => None,
     }
@@ -690,12 +693,23 @@ fn binding(e: &Expr) -> u8 {
     }
 }
 
-/// The strings of a [`literal_text`] chain, left to right.
+/// The strings of a [`literal_text`] chain, left to right. Spacing typed around a part of the
+/// chain stays with that part's first and last strings, where it is written.
 fn flatten_texts(e: Expr, out: &mut Vec<Expr>) {
     match e {
         Expr::Binary(BinOp::Concat, a, b) => {
             flatten_texts(*a, out);
             flatten_texts(*b, out);
+        }
+        Expr::Spaced(before, x, after) if matches!(*x, Expr::Binary(BinOp::Concat, ..)) => {
+            let start = out.len();
+            flatten_texts(*x, out);
+            if let Some(first) = out.get_mut(start) {
+                *first = spaced_before(std::mem::replace(first, Expr::Missing), before);
+            }
+            if let Some(last) = out.last_mut() {
+                *last = spaced_after(std::mem::replace(last, Expr::Missing), after);
+            }
         }
         text => out.push(text),
     }
@@ -799,6 +813,18 @@ mod tests {
             balanced_strings(n - n / 2, out);
             out.push(0x08);
         }
+    }
+
+    #[test]
+    fn a_spaced_part_of_a_string_chain_is_written_flat() {
+        // `"x"`, then `"="` typed with a space before it joined to `"1"`, then joined: the tokens
+        // nest to the right, and the space is on the inner chain. Written flat, as Python code
+        // must be, with the space where it was typed.
+        let s = |c: u8| [0x17, 1, 0, c, 0];
+        let rgce = [&s(b'x')[..], &[0x19, 0x40, 0, 1], &s(b'=')[..], &s(b'1')[..], &[0x08, 0x08]].concat();
+        let e = decode(&rgce, &[], &Links::default(), Mode::Cell).unwrap();
+        assert_eq!(super::super::expr::print(&e), "\"x\"& \"=\"&\"1\"");
+        assert!(literal_text(&e) && literal_texts(&e) == Some(3));
     }
 
     #[test]
