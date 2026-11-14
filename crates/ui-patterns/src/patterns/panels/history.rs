@@ -18,7 +18,6 @@ use craft_keymap::Mods;
 use egui::{Response, Ui};
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 #[cfg(feature = "testing")]
@@ -240,21 +239,10 @@ impl<'a> HistoryPanel<'a> {
         let words = env.words::<PanelWords>();
         let list_id = ui.scope_id().with("history-rows");
         let pixels_per_point = ui.ctx().pixels_per_point();
-        // PLAN: the drag path needs a `'static` rule, so the host's borrowed `can_delete` is evaluated once per pass
+        // The drag path needs a `'static` rule, so the host's borrowed `can_delete` is evaluated once per pass
         // into this set; the drag payload, the drop acceptance, the Delete key and the menu all read the set.
         let deletable: Arc<HashSet<HistoryKey>> =
             Arc::new(rows.iter().map(|row| row.key).filter(|key| can_delete.as_ref().is_none_or(|can| can(key))).collect());
-        let stamp = {
-            let mut hasher = DefaultHasher::new();
-            for row in rows {
-                row.key.hash(&mut hasher);
-                row.label.as_str().hash(&mut hasher);
-                row.redo.hash(&mut hasher);
-                row.icon.hash(&mut hasher);
-            }
-            source.hash(&mut hasher);
-            hasher.finish()
-        };
         let events: RefCell<Vec<HistoryEvent>> = RefCell::new(Vec::new());
 
         if let Some(snapshot) = rename {
@@ -322,7 +310,7 @@ impl<'a> HistoryPanel<'a> {
                 .can_rename(|key: &HistoryKey| matches!(key, HistoryKey::Snapshot(_)))
                 .empty(words.history_empty.clone())
                 .selection(Bind::bound(&mut held))
-                .rows_stamp(stamp)
+
                 .sizing(Sizing::Fill)
                 .enabled(enabled)
                 .drag_payload(move |drag: &ListDrag<HistoryKey>| set.contains(&drag.grabbed).then(|| drag.clone()));
