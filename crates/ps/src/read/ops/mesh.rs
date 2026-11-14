@@ -78,6 +78,7 @@ impl Reader {
     }
 }
 
+#[allow(clippy::cognitive_complexity, reason = "one stateful reader handles the PostScript mesh record layouts")]
 pub fn build(ip: &mut Interp, d: &PDict, kind: i64, space: &Space, func: Option<&Func>) -> R<Option<Shading>> {
     let num = |k: &[u8]| d.get_name(k).and_then(|o| o.num()).unwrap_or(0.0);
     let ncomp = if func.is_some() { 1 } else { space.comps() };

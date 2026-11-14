@@ -377,6 +377,7 @@ impl Sources {
     }
 
     /// Decode some more of filter `id`; false once its data has ended.
+    #[allow(clippy::cognitive_complexity, reason = "one streaming decoder state machine preserves filter read-ahead and predictor ordering")]
     fn fill(&mut self, id: usize, depth: usize) -> bool {
         let Some(Source { kind: Kind::Filter { up, dec, .. }, .. }) = self.list.get(id) else { return false };
         let up = *up;
