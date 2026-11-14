@@ -19,7 +19,7 @@
 //!   gives [`wav_float_header`]), FLAC (feature `flac-encode`), AAC-LC and ALAC in M4A
 //!   (`aac-encode`, `alac-encode`) and MP3, AC-3 and E-AC-3 streams (`mp3-encode`, `ac3-encode`,
 //!   `eac3-encode`), whole-buffer or incremental into any `Write + Seek`. Feature
-//!   `lossless-encode` turns on WAV, AIFF and FLAC; feature `encode` turns on every format.
+//!   `lossless-encode` turns on WAV, AIFF and FLAC; feature `encode` turns on every format and encoder.
 //! - [`wav_pcm`], [`aiff_pcm`] (feature `decode-native`) and [`pcm_wav_file`], [`pcm_wav_header`],
 //!   [`pcm_aiff_file`], [`pcm_aiff_header`] (feature `pcm-encode`): the integer PCM of a WAV or AIFF
 //!   file bit for bit, and minimal files around such PCM, for essence embedded in other containers.
@@ -367,7 +367,8 @@ pub enum RateControl {
     /// A constant bit rate in bits per second, for all channels together. A format with a fixed
     /// set of rates (MP3, AC-3) uses the highest one not above it; a rate outside what the
     /// stream can carry is moved to the nearest one inside. AAC is written at 6 kbit/s or a
-    /// quarter of the sample rate per channel at least, where its encoder starts to code audio.
+    /// quarter of the sample rate per channel at least: from about half of that down its encoder
+    /// codes silence.
     Bitrate(u32),
     /// A constant quality from 0.0 (smallest) to 1.0 (best), at whatever bit rate each frame
     /// needs. AAC only; values outside the range are clamped, and NaN is an error.

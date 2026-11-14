@@ -105,8 +105,8 @@ fn aac_order(channels: usize) -> Option<&'static [usize]> {
 }
 
 /// The lowest AAC bit rate the writer uses, per channel: 6 kbit/s, and a quarter of the sample
-/// rate (256 bits a frame). The encoder accepts less, but then has too few bits for anything but
-/// silence, and a file of silence is no answer to a low bit rate (or to kbit/s given as bit/s).
+/// rate (256 bits a frame). The encoder accepts less, and from about half of this down codes
+/// silence; a file of silence is no answer to a low bit rate (or to kbit/s given as bit/s).
 #[cfg(feature = "aac-encode")]
 fn aac_floor_per_channel(sample_rate: u32) -> u32 {
     (sample_rate / 4).max(6000)

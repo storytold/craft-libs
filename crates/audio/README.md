@@ -257,7 +257,8 @@ writes nothing. After a write fails for another reason, every later
 `with_bitrate(bits_per_second)` sets a constant bit rate for all channels together. A rate the
 stream cannot carry is moved to the nearest one it can: MP3 and AC-3 use the highest rate of their
 tables not above it, AAC and E-AC-3 keep it inside their range (AAC from 6 kbit/s or a quarter of
-the sample rate per channel, whichever is more: below that the encoder has bits for silence only). `with_quality(0.0..=1.0)` is AAC's
+the sample rate per channel, whichever is more: from about half of that down the encoder codes
+silence). `with_quality(0.0..=1.0)` is AAC's
 constant quality (VBR); the other lossy formats return `Unsupported` for it. Without either, AAC
 is written at 64 kbit/s per channel, MP3 at 96 kbit/s per channel, and AC-3 and E-AC-3 at
 96 kbit/s per full-bandwidth channel (the LFE not counted).

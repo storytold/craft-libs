@@ -615,6 +615,12 @@ fn validate_track(entry: &SampleEntry, timescale: u32) -> Result<Option<u32>> {
     Ok(None)
 }
 
+/// The position after `bytes` more. A writer that takes bytes past the last position a file can
+/// have is an error here, not an overflow.
+fn advance(pos: u64, bytes: usize) -> Result<u64> {
+    pos.checked_add(bytes as u64).ok_or_else(|| Error::Mux("the file would end past the last position".into()))
+}
+
 /// Progressive MP4/MOV writer: `ftyp`, then one `mdat` streamed to `W`, then `moov` at [`finish`](Self::finish)
 /// (or moved in front of `mdat` by [`finish_faststart`](Self::finish_faststart)).
 pub struct Mp4Writer<W: Write + Seek> {
@@ -739,7 +745,7 @@ impl<W: Write + Seek> Mp4Writer<W> {
         }
         self.w.write_all(s.data)?;
         let offset = self.pos - self.start;
-        self.pos += s.data.len() as u64;
+        self.pos = advance(self.pos, s.data.len())?;
         let contiguous = self.last_track == Some(track);
         self.last_track = Some(track);
         let tr = &mut self.tracks[track];
@@ -780,7 +786,7 @@ impl<W: Write + Seek> Mp4Writer<W> {
             let d = rescale(vd, vts, tts).max(tc_dur as u64).min(u32::MAX as u64) as u32;
             self.w.write_all(&start.to_be_bytes())?;
             let off = self.pos - self.start;
-            self.pos += 4;
+            self.pos = advance(self.pos, 4)?;
             self.last_track = None;
             let t = &mut self.tracks[i].t;
             t.stts.push((1, d));
@@ -843,7 +849,7 @@ impl<W: Write + Seek> Mp4Writer<W> {
             let d = u32::try_from(end.saturating_sub(c.start)).map_err(|_| Error::Mux("chapter longer than 2^32 movie ticks".into()))?;
             let data = text_sample(&c.title);
             self.w.write_all(&data)?;
-            self.pos += data.len() as u64;
+            self.pos = advance(self.pos, data.len())?;
             Tables::push_run(&mut t.stts, 1, d);
             Tables::push_run(&mut t.ctts, 1, 0);
             t.sizes.push(data.len() as u32);
@@ -1413,6 +1419,31 @@ mod tests {
             sink.set_position(u64::MAX - back);
             assert!(matches!(Mp4Writer::new(sink, WriterOptions::new(Brand::Mp4)), Err(Error::Mux(_))), "{back} before the end");
         }
+    }
+
+    /// A writer that keeps taking bytes where positions end makes writing fail, not overflow.
+    #[test]
+    fn samples_past_the_last_position_are_refused() {
+        struct Endless(u64);
+        impl Write for Endless {
+            fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+                self.0 = self.0.wrapping_add(data.len() as u64);
+                Ok(data.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl Seek for Endless {
+            fn seek(&mut self, _: SeekFrom) -> std::io::Result<u64> {
+                Ok(self.0)
+            }
+        }
+        let mut w = Mp4Writer::new(Endless(u64::MAX - 100), WriterOptions::new(Brand::Mp4)).unwrap();
+        let v = w.add_track(TrackConfig::new(avc_entry(), 1000)).unwrap();
+        let sample = WriteSample { data: &[0; 40], duration: 40, composition_offset: 0, is_sync: true };
+        w.write_sample(v, sample).unwrap();
+        assert!(matches!(w.write_sample(v, sample), Err(Error::Mux(_))));
     }
 
     /// A file begun in the middle of a writer is a file from there: its chunk offsets count from
