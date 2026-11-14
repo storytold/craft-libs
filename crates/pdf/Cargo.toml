@@ -22,7 +22,7 @@ write-raster = ["dep:flate2", "dep:roxmltree"]
 write-simple-text = ["write", "krilla/simple-text"]
 filters = ["dep:craft-stream-codecs", "dep:flate2", "dep:thiserror"]
 cos = ["crypt", "filters", "dep:chrono", "dep:js-sys", "dep:wasm-bindgen"]
-crypt = ["dep:aes", "dep:md-5", "dep:sha2", "dep:stringprep", "dep:zeroize", "dep:thiserror"]
+crypt = ["dep:aes", "dep:md-5", "dep:sha1", "dep:sha2", "dep:stringprep", "dep:zeroize", "dep:thiserror"]
 
 [dependencies]
 hayro-syntax = { workspace = true, optional = true }
@@ -39,6 +39,8 @@ craft-stream-codecs = { workspace = true, optional = true }
 aes = { version = "0.9", optional = true }
 md-5 = { version = "0.11", optional = true }
 sha2 = { version = "0.11", optional = true }
+# Public-key security derives the AESV2 / RC4 file key with SHA-1 (ISO 32000-2 §7.6.5.3).
+sha1 = { version = "0.11", optional = true }
 stringprep = { version = "0.1", optional = true }
 zeroize = { version = "1", optional = true }
 # PDF date strings in the object layer (`cos`).

@@ -79,7 +79,42 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
     let int = |k: &[u8], default: i64| d.get(k).map(|v| doc.resolve(v)).and_then(|v| v.as_int()).unwrap_or(default);
     let name = |d: &Dict, k: &[u8]| d.get(k).and_then(|v| doc.resolve(v).as_name().map(<[u8]>::to_vec));
     let mut crypt_filters = Vec::new();
-    if let Some(cf) = d.get(b"CF").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned()) {
+    let filter = name(d, b"Filter").unwrap_or_default();
+    let public_key = filter == crate::crypt::PUBSEC_FILTER;
+    let stm_f = name(d, b"StmF").unwrap_or_else(|| b"Identity".to_vec());
+    let str_f = name(d, b"StrF").unwrap_or_else(|| b"Identity".to_vec());
+    let ef_f = name(d, b"EFF").unwrap_or_default();
+    let cf = d.get(b"CF").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned());
+    // Public-key security: the envelopes sit in a crypt filter (V 4+) or at the top level. A
+    // filter's `/Recipients` is an array, or one byte string when a `/Crypt` filter on a stream
+    // names it (ISO 32000-2, Table 27).
+    let envelopes = |o: &Object| -> Vec<Vec<u8>> {
+        let o = doc.resolve(o);
+        match (o.as_array(), o.as_string()) {
+            (Some(a), _) => a.iter().filter_map(|s| doc.resolve(s).as_string().map(|s| s.bytes.clone())).collect(),
+            (None, Some(s)) => vec![s.bytes.clone()],
+            (None, None) => Vec::new(),
+        }
+    };
+    // The filter whose envelopes the file key is made from: the one that encrypts the streams,
+    // else the strings, else only the embedded files; failing those, the first that has any.
+    let with_envelopes = |n: &[u8]| cf.as_ref()?.get(n).and_then(|f| doc.resolve(f).as_dict().cloned()).filter(|f| f.get(b"Recipients").is_some());
+    let envelope_filter = [&stm_f, &str_f, &ef_f]
+        .into_iter()
+        .filter(|n| !n.is_empty() && n.as_slice() != b"Identity")
+        .find_map(|n| with_envelopes(n))
+        .or_else(|| cf.as_ref()?.iter().filter_map(|(_, f)| doc.resolve(f).as_dict().cloned()).find(|f| f.get(b"Recipients").is_some()));
+    let mut recipients = d.get(b"Recipients").map(envelopes).unwrap_or_default();
+    let mut cf_encrypt_metadata = None;
+    if let Some(f) = &envelope_filter {
+        if recipients.is_empty() {
+            recipients = f.get(b"Recipients").map(envelopes).unwrap_or_default();
+        }
+        if let Some(Object::Bool(b)) = f.get(b"EncryptMetadata").map(|v| doc.resolve(v)).as_deref() {
+            cf_encrypt_metadata = Some(*b);
+        }
+    }
+    if let Some(cf) = &cf {
         for (k, v) in cf.iter() {
             let Some(f) = doc.resolve(v).as_dict().cloned() else { continue };
             let method = match name(&f, b"CFM").as_deref() {
@@ -92,16 +127,13 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
         }
     }
     let v = int(b"V", 0);
-    // V4: the key length comes from the standard crypt filter's /Length (bytes, or bits in
-    // some files); /Length on the dictionary is often a stale 40. A length that isn't
+    // V4: the key length comes from the crypt filter's /Length (bytes, or bits in some files):
+    // the standard filter's, or for public-key security the filter with the envelopes, whose
+    // /Length is in bits; /Length on the dictionary is often a stale 40. A length that isn't
     // positive means nothing and reads as if absent.
-    let cf_len = d
-        .get(b"CF")
-        .map(|c| doc.resolve(c))
-        .and_then(|c| c.as_dict().and_then(|c| c.get(b"StdCF").map(|f| doc.resolve(f))))
-        .and_then(|f| f.as_dict().and_then(|f| f.get(b"Length").map(|n| doc.resolve(n))))
-        .and_then(|n| n.as_int())
-        .filter(|n| *n > 0);
+    let length_filter =
+        if public_key { envelope_filter.clone() } else { cf.as_ref().and_then(|c| c.get(b"StdCF")).and_then(|f| doc.resolve(f).as_dict().cloned()) };
+    let cf_len = length_filter.and_then(|f| f.get(b"Length").map(|n| doc.resolve(n)).and_then(|n| n.as_int())).filter(|n| *n > 0);
     let length_bits = match (v, cf_len) {
         (5.., _) => 256,
         (4, Some(n)) if n <= 32 => n * 8,
@@ -110,7 +142,7 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
         _ => int(b"Length", 40),
     };
     EncryptDict {
-        filter: name(d, b"Filter").unwrap_or_default(),
+        filter,
         v,
         r: int(b"R", 0),
         length_bits,
@@ -120,11 +152,14 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
         ue: bytes_of(doc, d, b"UE"),
         perms: bytes_of(doc, d, b"Perms"),
         p: int(b"P", -1) as i32,
-        encrypt_metadata: !matches!(d.get(b"EncryptMetadata").map(|v| doc.resolve(v)).as_deref(), Some(Object::Bool(false))),
+        encrypt_metadata: cf_encrypt_metadata
+            .unwrap_or(!matches!(d.get(b"EncryptMetadata").map(|v| doc.resolve(v)).as_deref(), Some(Object::Bool(false)))),
+        sub_filter: name(d, b"SubFilter").unwrap_or_default(),
+        recipients,
         crypt_filters,
-        stm_f: name(d, b"StmF").unwrap_or_else(|| b"Identity".to_vec()),
-        str_f: name(d, b"StrF").unwrap_or_else(|| b"Identity".to_vec()),
-        ef_f: name(d, b"EFF").unwrap_or_default(),
+        stm_f,
+        str_f,
+        ef_f,
     }
 }
 
