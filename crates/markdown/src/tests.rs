@@ -36,6 +36,28 @@ fn links_code_escapes() {
     assert!(text.contains("*lit* & "), "{text}");
 }
 
+#[test]
+fn numeric_references_respect_commonmark_digit_limits() {
+    for (input, expected) in [
+        ("&#4294967296;", "&#4294967296;"),
+        ("&#x100000000;", "&#x100000000;"),
+        ("&#87654321;", "&#87654321;"),
+        ("&#xabcdef0;", "&#xabcdef0;"),
+        ("&#X0000041;", "&#X0000041;"),
+        ("&#00000065;", "&#00000065;"),
+        ("&#0000065;", "A"),
+        ("&#x000041;", "A"),
+        ("&#X000041;", "A"),
+        ("&#9999999;", "\u{FFFD}"),
+        ("&#x10FFFF;", "\u{10FFFF}"),
+        ("&#0;", "\u{FFFD}"),
+        ("&#xD800;", "\u{FFFD}"),
+        ("&amp;", "&"),
+    ] {
+        assert_eq!(spans(input), vec![(expected.into(), false, false)], "{input}");
+    }
+}
+
 /// Reference links: `[text][label]`, `[text][]` and `[text]` take their destination from a
 /// definition line, and the definition itself leaves the document. Before, none of the three
 /// was a link and the definition stayed as a paragraph of its own (#3238).
