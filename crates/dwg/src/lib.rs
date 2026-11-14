@@ -131,16 +131,24 @@ mod native {
             mtext_contents(&doc, &mut out)
         }))
         .map_err(|_| "the DWG→DXF conversion failed on this file".to_string())?;
-        if out.exceeded {
-            return Err(format!(
+        let too_big = || {
+            format!(
                 "DWG: converting this {} file produced more than {} of drawing data (the limit); \
                  the file is probably damaged, or uses objects the DWG reader misreads",
                 mb(bytes.len() as u64),
                 mb(limits.max_dxf_bytes as u64)
-            ));
+            )
+        };
+        if out.exceeded {
+            return Err(too_big());
         }
         written.map_err(|e| format!("DWG→DXF: {e}"))?;
-        Ok((add_header_vars(out.buf, &doc.header), notes))
+        // The header variables added after the capped write count toward the limit too.
+        let dxf = add_header_vars(out.buf, &doc.header);
+        if dxf.len() > limits.max_dxf_bytes {
+            return Err(too_big());
+        }
+        Ok((dxf, notes))
     }
 
     /// acadrust 0.6.6's ASCII writer treats a caret followed by a literal space as already
@@ -810,7 +818,7 @@ mod native {
 
     /// Header variables the DWG reader fills in but acadrust's DXF writer (0.6.3) leaves out of
     /// the HEADER section: (name, group code, value).
-    fn unwritten_header_vars(h: &acadrust::document::HeaderVariables) -> [(&'static str, i32, String); 7] {
+    fn unwritten_header_vars(h: &acadrust::document::HeaderVariables) -> [(&'static str, i32, String); 17] {
         [
             // DWG holds radians; `$ANGBASE` is in degrees.
             ("$ANGBASE", 50, h.angle_base.to_degrees().to_string()),
@@ -820,6 +828,16 @@ mod native {
             ("$CHAMFERB", 40, h.chamfer_distance_b.to_string()),
             ("$ELEVATION", 40, h.elevation.to_string()),
             ("$THICKNESS", 40, h.thickness.to_string()),
+            ("$USERI1", 70, h.user_int1.to_string()),
+            ("$USERI2", 70, h.user_int2.to_string()),
+            ("$USERI3", 70, h.user_int3.to_string()),
+            ("$USERI4", 70, h.user_int4.to_string()),
+            ("$USERI5", 70, h.user_int5.to_string()),
+            ("$USERR1", 40, h.user_real1.to_string()),
+            ("$USERR2", 40, h.user_real2.to_string()),
+            ("$USERR3", 40, h.user_real3.to_string()),
+            ("$USERR4", 40, h.user_real4.to_string()),
+            ("$USERR5", 40, h.user_real5.to_string()),
         ]
     }
 
@@ -1658,6 +1676,51 @@ mod tests {
         let _panic = PanicIn::at("post_process");
         let err = dwg_to_dxf(&dwg).unwrap_err();
         assert!(err.contains("the DWG post-processing failed on this file"), "{err}");
+    }
+
+    /// The header variables added after the capped DXF write still count toward
+    /// `max_dxf_bytes`: a limit one byte under the full output is an error, not a longer result.
+    #[cfg(not(no_dwg_bridge))]
+    #[test]
+    fn the_dxf_size_limit_counts_the_added_header_variables() {
+        let dwg = dxf_to_dwg(MINIMAL_DXF.as_bytes()).unwrap();
+        let (full, _) = dwg_to_dxf_noted(&dwg, Limits::DEFAULT).unwrap();
+        let limits = Limits { max_dxf_bytes: full.len() - 1, ..Limits::DEFAULT };
+        assert!(dwg_to_dxf_noted(&dwg, limits).is_err());
+    }
+
+    /// USERI1-5 and USERR1-5 (values a drawing keeps for scripts and LISP) come back from a DWG:
+    /// the decoder reads them, and the DXF text now carries them in the HEADER section
+    /// (storytold/cadcraft#2989). Includes both ends of the 16-bit USERI range.
+    #[cfg(not(no_dwg_bridge))]
+    #[test]
+    fn user_header_variables_come_back_from_a_dwg() {
+        let ints = [42i32, -7, 0, i32::from(i16::MAX), i32::from(i16::MIN)];
+        let reals = [1.5f64, -0.25, 0.0, 1234.5678, 1e-3];
+        let mut dxf = String::from("  0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\nAC1032\n");
+        for (i, v) in ints.iter().enumerate() {
+            dxf += &format!("  9\n$USERI{}\n 70\n{v}\n", i + 1);
+        }
+        for (i, v) in reals.iter().enumerate() {
+            dxf += &format!("  9\n$USERR{}\n 40\n{v}\n", i + 1);
+        }
+        dxf += "  0\nENDSEC\n  0\nEOF\n";
+        let dwg = dxf_to_dwg(dxf.as_bytes()).unwrap();
+        let back = dwg_to_dxf(&dwg).unwrap();
+        let value = |name: &str| {
+            native::header_value(&back, name.as_bytes())
+                .and_then(|(_, v)| std::str::from_utf8(v).ok().map(str::to_string))
+                .unwrap_or_else(|| panic!("{name} is not in the DXF header"))
+        };
+        for (i, want) in ints.iter().enumerate() {
+            let got = value(&format!("$USERI{}", i + 1));
+            assert_eq!(got.trim().parse::<i32>().ok(), Some(*want), "$USERI{}: {got}", i + 1);
+        }
+        for (i, want) in reals.iter().enumerate() {
+            let got = value(&format!("$USERR{}", i + 1));
+            let got: f64 = got.trim().parse().unwrap_or(f64::NAN);
+            assert!((got - want).abs() < 1e-9, "$USERR{}: {got}, not {want}", i + 1);
+        }
     }
 
     /// The DXF to DWG conversion reports a panic in its fix-ups as an error, not a crash (#2402).
