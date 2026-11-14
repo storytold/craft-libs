@@ -285,6 +285,44 @@ fn initial_memory_over_the_cap_does_not_instantiate() {
     assert_eq!(out, Err(LoadError::MemoryOverBudget));
 }
 
+#[test]
+fn a_call_under_a_budget_smaller_than_the_memory_already_held_is_rejected() {
+    // Grow to 21 pages under a 64 page budget, then call under a 4 page budget. The instance
+    // still holds 21 pages, so the call must not run. Without the check, grow(0) succeeds.
+    let out = on_all(|e| {
+        let mut big = budget();
+        big.memory_bytes = 64 * PAGE;
+        let mut inst = loaded(e, "oom", "command", &big);
+        let grown = invoke(inst.as_mut(), 0, 20, &big);
+        let mut small = budget();
+        small.memory_bytes = 4 * PAGE;
+        let rejected = invoke(inst.as_mut(), 0, 0, &small);
+        (grown, rejected, inst.mem_len())
+    });
+    assert_eq!(out, (Ok(1), Err(Trap::OutOfMemory), 21 * PAGE as usize));
+}
+
+#[test]
+fn a_rejected_memory_budget_does_not_poison_the_instance() {
+    // Control for the test above: the budget that fits the held memory still works afterwards,
+    // and a budget equal to the held memory is allowed.
+    let out = on_all(|e| {
+        let mut big = budget();
+        big.memory_bytes = 64 * PAGE;
+        let mut inst = loaded(e, "oom", "command", &big);
+        let grown = invoke(inst.as_mut(), 0, 20, &big);
+        let mut small = budget();
+        small.memory_bytes = 4 * PAGE;
+        let rejected = invoke(inst.as_mut(), 0, 0, &small);
+        let mut exact = budget();
+        exact.memory_bytes = 21 * PAGE;
+        let at_the_edge = invoke(inst.as_mut(), 0, 0, &exact);
+        let after = invoke(inst.as_mut(), 0, 0, &big);
+        (grown, rejected, at_the_edge, after)
+    });
+    assert_eq!(out, (Ok(1), Err(Trap::OutOfMemory), Ok(21), Ok(21)));
+}
+
 // ---- traps and stack --------------------------------------------------------------------
 
 #[test]
