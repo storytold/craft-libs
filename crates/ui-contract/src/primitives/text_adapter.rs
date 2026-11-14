@@ -422,7 +422,8 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         && !input.options.multiline()
         && state.preedit.is_none()
         && state.draft.is_some()
-        && ctx.input(|i| [egui::Key::ArrowUp, egui::Key::ArrowDown, egui::Key::PageUp, egui::Key::PageDown].into_iter().any(|key| i.key_pressed(key)));
+        && ctx
+            .input(|i| [egui::Key::ArrowUp, egui::Key::ArrowDown, egui::Key::PageUp, egui::Key::PageDown].into_iter().any(|key| i.key_pressed(key)));
     let submitted =
         (shown.entered && shown.focused).then(|| held_mods(ctx)).filter(|mods| !input.options.multiline() || (input.options.submits && mods.cmd));
     if let Some(mods) = submitted {
