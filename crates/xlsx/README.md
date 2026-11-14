@@ -9,7 +9,7 @@ This is the part layer. `Package::open` opens the container through `craft-opc` 
 | Call | Gives |
 |---|---|
 | `workbook()` | `Workbook`: sheets in tab order (name, id, visibility, kind, part), the 1904 date flag, defined names, the active tab, the external references, and the whole part as a tree |
-| `external_links(workbook)` | each `ExternalLink` in `externalReferences` order, so a formula's `[n]` is entry `n - 1`: another workbook's target, sheet names, defined names (`refersTo`, `sheetId`) and cached cells; a DDE or OLE link as `Other` |
+| `external_links(workbook)` | each `ExternalLink` in `externalReferences` order, so a formula's `[n]` is entry `n - 1` (a reference without an id keeps its place, empty); a binary workbook's are read once, with its workbook part: another workbook's target, sheet names, defined names (`refersTo`, `sheetId`) and cached cells; a DDE or OLE link as `Other` |
 | `shared_strings()` | `StringItem`s: text, formatted runs, phonetic readings |
 | `styles()` | `Styles`: number formats, fonts, fills, borders, cell and cell-style formats, named styles, differential formats, the indexed palette, as indexed tables |
 | `sheet(entry, each)` | each `Row` of `Cell`s to a callback, then a `SheetPart`: the rest of the worksheet as a tree, its relationships, columns and merged cells |

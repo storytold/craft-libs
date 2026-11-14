@@ -1173,6 +1173,11 @@ fn book_with_external_links() -> Vec<u8> {
 
 /// A binary package with the two links (`one` as `link`, `two` as the DDE link).
 fn external_package(data: &[u8], link: &[u8]) -> Vec<u8> {
+    external_package_with(&book_with_external_links(), data, link)
+}
+
+/// [`external_package`] with another workbook part.
+fn external_package_with(book: &[u8], data: &[u8], link: &[u8]) -> Vec<u8> {
     let rels = RELS.replace(
         "</Relationships>",
         &format!(r#"<Relationship Id="x1" Type="{LINK_TYPE}" Target="../links/one.bin"/><Relationship Id="x2" Type="{LINK_TYPE}" Target="../links/two.bin"/></Relationships>"#),
@@ -1181,12 +1186,11 @@ fn external_package(data: &[u8], link: &[u8]) -> Vec<u8> {
         "</Types>",
         r#"<Override PartName="/links/one.bin" ContentType="application/vnd.ms-excel.externalLink"/><Override PartName="/links/two.bin" ContentType="application/vnd.ms-excel.externalLink"/></Types>"#,
     );
-    let (book, one, two, strings, link_rels, dde) =
-        (book_with_external_links(), worksheet(data, &[]), worksheet(&[], &[]), sst(), link_rels(), dde_link());
+    let (one, two, strings, link_rels, dde) = (worksheet(data, &[]), worksheet(&[], &[]), sst(), link_rels(), dde_link());
     zip(&[
         ("[Content_Types].xml", types.as_bytes()),
         ("_rels/.rels", ROOT.as_bytes()),
-        ("records/book.bin", &book),
+        ("records/book.bin", book),
         ("records/_rels/book.bin.rels", rels.as_bytes()),
         ("data/one.bin", &one),
         ("data/two.bin", &two),
@@ -1216,9 +1220,11 @@ fn external_links_are_read_as_their_xlsx_spelling() {
         name_x(4, 1),
         name_x(4, 2),
         name_x(5, 1),
-        // Kept as their saved results: a deleted sheet of the other workbook, a name it doesn't have.
+        // Kept as their saved results: a deleted sheet of the other workbook, a name it doesn't
+        // have, a name through a deleted sheet.
         ref3d(6, 0),
         name_x(4, 9),
+        name_x(6, 1),
     ];
     let mut data = row(0);
     for (i, rgce) in cells.iter().enumerate() {
@@ -1228,7 +1234,7 @@ fn external_links_are_read_as_their_xlsx_spelling() {
     let (links, _) = binary_links(&bytes);
     assert_eq!(links, xml_links());
     let wb = read(&bytes).unwrap();
-    let got: Vec<_> = (1..=8).map(|c| wb.sheets[0].formula(CellRef::new(0, c))).collect();
+    let got: Vec<_> = (1..=9).map(|c| wb.sheets[0].formula(CellRef::new(0, c))).collect();
     let want = [
         Some("[1]Data!$A$1"),
         Some("'[1]Other Sheet'!A1"),
@@ -1238,9 +1244,10 @@ fn external_links_are_read_as_their_xlsx_spelling() {
         Some("[2]!'R1C1'"),
         None,
         None,
+        None,
     ];
     assert_eq!(got, want);
-    for why in ["missing sheets of other workbooks", "missing name in another workbook"] {
+    for why in ["missing sheets of other workbooks", "missing name in another workbook", "deleted sheets of other workbooks"] {
         assert!(warned(&wb, why), "{why}: {:?}", wb.warnings);
     }
 }
@@ -1279,4 +1286,42 @@ fn module_sheets_and_supporting_links_are_bounded() {
     let wb = read(&package(&selves, &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES)).unwrap();
     assert_eq!(wb.sheets[0].formula(CellRef::new(0, 0)), None);
     assert!(wb.warnings.iter().any(|w| w.contains("sheet links or names could not be read")), "{:?}", wb.warnings);
+}
+
+#[test]
+fn external_links_are_read_once_and_keep_their_numbers() {
+    // The link's five cached cells fit a five-cell allowance: read once with the workbook part,
+    // not charged again when the links are asked for.
+    let bytes = external_package(&row(0), &workbook_link());
+    let limits = Limits { binary_cells: 5, ..Limits::default() };
+    let mut p = Package::open(&bytes, &limits).unwrap();
+    let wb = p.workbook().unwrap();
+    let links = p.external_links(&wb).unwrap();
+    assert!(matches!(&links[0].1, Some(craft_xlsx::ExternalLink::Book(b)) if b.sheet_data[0].cells.len() == 5));
+    // A first link whose relationship id can't be read keeps its place, empty: the DDE link is
+    // still `[2]`.
+    let book = book_with_external_links();
+    let at = book.windows(record(355, &wide("x1")).len()).position(|w| w == record(355, &wide("x1"))).unwrap();
+    let book = [&book[..at], &record(355, &[1, 0])[..], &book[at + record(355, &wide("x1")).len()..]].concat();
+    let data = [row(0), formula_cell(1, &[0x39, 5, 0, 1, 0, 0, 0], &[])].concat();
+    let bytes = external_package_with(&book, &data, &workbook_link());
+    let mut p = Package::open(&bytes, &Limits::default()).unwrap();
+    let wb = p.workbook().unwrap();
+    assert_eq!(wb.external_references, ["", "x2"]);
+    assert_eq!(p.external_links(&wb).unwrap().into_iter().map(|(_, l)| l).collect::<Vec<_>>(), [None, Some(craft_xlsx::ExternalLink::Other)]);
+    let read = read(&bytes).unwrap();
+    assert_eq!(read.sheets[0].formula(CellRef::new(0, 1)), Some("[2]!'R1C1'"));
+}
+
+#[test]
+fn an_external_reference_without_an_id_keeps_its_place() {
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>"#;
+    let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="r" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
+    let book = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><externalReferences><externalReference/><externalReference r:id="x2"/></externalReferences></workbook>"#;
+    let bytes = zip(&[("[Content_Types].xml", types.as_bytes()), ("_rels/.rels", root.as_bytes()), ("xl/workbook.xml", book.as_bytes())]);
+    let wb = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap();
+    assert_eq!(wb.external_references, ["", "x2"]);
+    let written = wb.to_el();
+    let refs: Vec<_> = written.child("externalReferences").unwrap().children("externalReference").map(|r| r.attr("r:id")).collect();
+    assert_eq!(refs, [None, Some("x2")]);
 }

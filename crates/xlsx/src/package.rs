@@ -35,6 +35,9 @@ pub struct Package<'a> {
     binary_links: Option<Option<xlsb::Links>>,
     /// Shared strings in a binary workbook, once counted: a cell's index is checked against it.
     binary_strings: Option<usize>,
+    /// A binary workbook's external links, read once with its workbook part, for the formulas'
+    /// index and for [`Package::external_links`].
+    binary_external: Option<Vec<(String, Option<ExternalLink>)>>,
 }
 
 /// Is this a binary workbook (`.xlsb`): a package whose one workbook relationship points at a
@@ -73,6 +76,7 @@ impl<'a> Package<'a> {
             budget: xlsb::Budget::default(),
             binary_links: None,
             binary_strings: None,
+            binary_external: None,
         })
     }
 
@@ -152,7 +156,19 @@ impl<'a> Package<'a> {
             let rels = self.workbook_rels()?;
             let (wb, mut links) = xlsb::workbook(&bytes, &rels, &self.limits, &self.budget, &mut self.warnings)?;
             if let Some(links) = links.as_mut() {
-                self.index_external_links(&wb, links)?;
+                let read = self.read_binary_external_links(&wb)?;
+                // A reference that could not be read keeps its place, so these match unless
+                // the cap was reached.
+                if read.len() == links.external_count() {
+                    for (k, (_, info)) in read.iter().enumerate() {
+                        if let Some(info) = info {
+                            links.set_external(k, info.clone());
+                        }
+                    }
+                } else {
+                    self.warn("XLSB: the external links could not be matched to their parts; formulas through them keep their saved results");
+                }
+                self.binary_external = Some(read.into_iter().map(|((part, link), _)| (part, link)).collect());
             }
             self.binary_links = Some(links);
             return Ok(wb);
@@ -399,7 +415,11 @@ impl<'a> Package<'a> {
     /// The workbook's external links, one entry per [`Workbook::external_references`], so a
     /// formula's `[n]` is entry `n - 1`: the part's name and its link, `None` (with a warning)
     /// for a part that is missing or does not read.
+    /// For a binary workbook these are the links read with its workbook part.
     pub fn external_links(&mut self, workbook: &Workbook) -> Result<Vec<(String, Option<ExternalLink>)>, Error> {
+        if let Some(read) = self.binary_external.as_ref().filter(|r| r.len() == workbook.external_references.len()) {
+            return Ok(read.clone());
+        }
         let rels = self.workbook_rels()?;
         let mut out = Vec::with_capacity(workbook.external_references.len());
         for id in &workbook.external_references {
@@ -433,18 +453,19 @@ impl<'a> Package<'a> {
         Ok(self.optional_xml(part)?.map(|root| ExternalLink::read(&root, &rels)))
     }
 
-    /// Reads a binary workbook's external link parts into `links`, so formulas can spell
-    /// `[1]Sheet!A1`. A part that does not read is left out with a warning: formulas through it
-    /// keep their saved results.
-    fn index_external_links(&mut self, wb: &Workbook, links: &mut xlsb::Links) -> Result<(), Error> {
-        // A reference that could not be read would shift every later link's number.
-        if wb.external_references.len() != links.external_count() {
-            self.warn("XLSB: the external links could not be matched to their parts; formulas through them keep their saved results");
-            return Ok(());
-        }
+    /// Reads each of a binary workbook's external link parts once: the link, and what formulas
+    /// need of it. A part that is missing or does not read is `None`, with a warning: formulas
+    /// through it keep their saved results.
+    #[allow(clippy::type_complexity)]
+    fn read_binary_external_links(&mut self, wb: &Workbook) -> Result<Vec<((String, Option<ExternalLink>), Option<xlsb::ExternalInfo>)>, Error> {
         let rels = self.workbook_rels()?;
-        for (k, id) in wb.external_references.iter().enumerate() {
-            let Some(rel) = rels.by_id(id).filter(|r| !r.external) else { continue };
+        let mut out = Vec::with_capacity(wb.external_references.len());
+        for id in &wb.external_references {
+            let Some(rel) = rels.by_id(id).filter(|r| !r.external) else {
+                self.warn(format!("external link {id}: the relationship is missing"));
+                out.push(((String::new(), None), None));
+                continue;
+            };
             let part = rel.target.clone();
             let read = (|| {
                 if let Some(types) = &self.binary {
@@ -452,15 +473,18 @@ impl<'a> Package<'a> {
                 }
                 let bytes = self.required(&part)?;
                 let part_rels = self.opc.rels(&part)?;
-                xlsb::external_link(&bytes, &part_rels, &self.limits, &self.budget, &mut Warnings::default())
+                xlsb::external_link(&bytes, &part_rels, &self.limits, &self.budget, &mut self.warnings)
             })();
             match read {
-                Ok((_, info)) => links.set_external(k, info),
+                Ok((link, info)) => out.push(((part, Some(link)), Some(info))),
                 Err(Error::TooLarge(m)) => return Err(Error::TooLarge(m)),
-                Err(e) => self.warn(format!("XLSB: {part} could not be read ({e}); formulas through it keep their saved results")),
+                Err(e) => {
+                    self.warn(format!("skipped {part}: {e}; formulas through it keep their saved results"));
+                    out.push(((part, None), None));
+                }
             }
         }
-        Ok(())
+        Ok(out)
     }
 
     fn required(&mut self, part: &str) -> Result<Vec<u8>, Error> {

@@ -219,6 +219,10 @@ impl Links {
         let link = self.external(k)?;
         let n = usize::try_from(index).ok().and_then(|i| i.checked_sub(1)).and_then(|i| link.names.get(i));
         let n = n.ok_or(Unsupported("reference to a missing name in another workbook"))?;
+        // -1: a deleted sheet of the other workbook, unlike -2, the whole workbook.
+        if x.first == -1 || x.last == -1 {
+            return Err(Unsupported("references to deleted sheets of other workbooks"));
+        }
         if link.dde {
             return Ok(format!("[{}]!{}", k + 1, quote_sheet(&n.name)));
         }

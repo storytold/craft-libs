@@ -108,7 +108,8 @@ pub struct Workbook {
     /// `pivotCaches`, in order.
     pub pivot_caches: Vec<PivotCacheEntry>,
     /// `externalReferences`: the relationship ids of the external link parts, in order. A
-    /// formula's `[1]` is the first ([`crate::Package::external_links`] reads them).
+    /// formula's `[1]` is the first ([`crate::Package::external_links`] reads them). A reference
+    /// without one is an empty id, so the ones after it keep their numbers.
     pub external_references: Vec<String>,
     /// The whole part, for everything not lifted out above (calculation settings, views,
     /// protection). Empty for a binary workbook.
@@ -156,7 +157,7 @@ impl Workbook {
                 .collect();
         }
         if let Some(refs) = root.child("externalReferences") {
-            wb.external_references = refs.children("externalReference").filter_map(|r| r.attr_or_plain("r:id")).map(str::to_string).collect();
+            wb.external_references = refs.children("externalReference").map(|r| r.attr_or_plain("r:id").unwrap_or_default().to_string()).collect();
         }
         if let Some(views) = root.child("bookViews") {
             let view = views
@@ -232,7 +233,10 @@ impl Workbook {
                 "externalReferences",
                 (!self.external_references.is_empty()).then(|| {
                     let mut e = El::new("externalReferences");
-                    self.external_references.iter().for_each(|id| e.push(El::new("externalReference").with_attr("r:id", id)));
+                    for id in &self.external_references {
+                        let r = El::new("externalReference");
+                        e.push(if id.is_empty() { r } else { r.with_attr("r:id", id) });
+                    }
                     e
                 }),
             ),

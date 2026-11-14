@@ -19,8 +19,8 @@ use crate::strings::StringItem;
 use crate::workbook::{SheetEntry, SheetKind, Workbook};
 use crate::{Error, Limits, Warnings};
 pub(crate) use external::{EXTERNAL_LINK, external_link};
-pub(crate) use formula::Links;
 use formula::{Book, Mode, Name, Xti};
+pub(crate) use formula::{ExternalInfo, Links};
 
 pub(crate) const MAIN: &str = "application/vnd.ms-excel.main";
 const BINARY_MAIN: &str = "application/vnd.ms-excel.sheet.binary.macroEnabled.main";
@@ -297,11 +297,15 @@ pub(crate) fn workbook(
             39 | 355 | 357 | 358 | 362 | 667 => {
                 // BrtSupBookSrc: an external link part, by its relationship id, in the order a
                 // formula's `[1]` counts.
-                if id == 355 {
+                // One that can't be read keeps its place, empty, so later links keep their numbers.
+                if id == 355 && wb.external_references.len() < MAX_EXTERNAL_LINKS {
                     let mut b = Bytes::new(payload);
                     match b.text(255).and_then(|rel| b.finish().map(|()| rel)) {
-                        Ok(rel) if wb.external_references.len() < MAX_EXTERNAL_LINKS => wb.external_references.push(rel),
-                        _ => warnings.warn("XLSB: an external link reference could not be read"),
+                        Ok(rel) => wb.external_references.push(rel),
+                        Err(_) => {
+                            warnings.warn("XLSB: an external link reference could not be read");
+                            wb.external_references.push(String::new());
+                        }
                     }
                 }
                 if let Some(l) = links.as_mut()
