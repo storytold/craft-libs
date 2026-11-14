@@ -127,7 +127,7 @@ impl egui::DroppedFile for DroppedPath {
     }
 }
 
-fn render_child(ctx: &Context, viewport: egui::ViewportViewportPlaceholder) {
+fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
     patch_window(viewport.ids.this, viewport.builder);
     let mut callback = viewport.viewport_ui_cb;
     let events = CHILD_EVENTS.with(|events| std::mem::take(&mut *events.borrow_mut()));
