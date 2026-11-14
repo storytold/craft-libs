@@ -489,6 +489,76 @@ use std::time::Instant as MacInstant;
 }
 
 #[test]
+fn std_instant_decodes_escapes_in_cfg_values() {
+    let source = r#"
+#[cfg(target_arch = "\x77asm32")]
+fn web() { let t = std::time::Instant::now(); }
+#[cfg(target_arch = "w\u{61}sm32")]
+fn web_two() { let t = std::time::Instant::now(); }
+#[cfg(target_arch = r"\x77asm32")]
+fn native() { let t = std::time::Instant::now(); }
+#[cfg(not(target_arch = "\q"))]
+fn unknown() { let t = std::time::Instant::now(); }
+#[cfg(target_os = "lin\
+    ux")]
+fn native_two() { let t = std::time::Instant::now(); }
+fn after() { let t = std::time::Instant::now(); }
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![3, 5, 9, 13]);
+}
+
+#[test]
+fn std_instant_reads_cfg_true_and_false() {
+    let source = r#"
+#[cfg(false)]
+fn disabled() { let t = std::time::Instant::now(); }
+#[cfg(true)]
+fn enabled() { let t = std::time::Instant::now(); }
+#[cfg(not(true))]
+fn never() { let t = std::time::Instant::now(); }
+#[cfg(r#false)]
+fn named_option() { let t = std::time::Instant::now(); }
+#[cfg(not(r#true))]
+fn other_option() { let t = std::time::Instant::now(); }
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![5, 9, 11]);
+}
+
+#[test]
+fn std_instant_checks_an_item_whose_cfg_is_nested_past_the_limit() {
+    let source = format!(
+        "#[cfg({}target_arch = \"wasm32\"{})]\nfn web() {{ let t = std::time::Instant::now(); }}\n#[cfg({}unix{})]\nfn native() {{ let t = std::time::Instant::now(); }}\n",
+        "any(".repeat(65),
+        ")".repeat(65),
+        "all(".repeat(10),
+        ")".repeat(10),
+    );
+    assert_eq!(lines(&std_instant([("src/clock.rs", source.as_str())])), vec![2]);
+}
+
+#[test]
+fn std_instant_checks_the_fields_after_a_native_cfg_function_pointer_field() {
+    let source = r#"
+struct S {
+    #[cfg(unix)]
+    callback: fn(),
+    clock: std::time::Instant,
+    #[cfg(unix)]
+    native: fn() -> std::time::Instant,
+    #[cfg(unix)]
+    pub(crate) boxed: Box<dyn Fn()>,
+    other: std::time::Instant,
+}
+fn run() {
+    #[cfg(unix)]
+    'outer: loop { let _a = std::time::Instant::now(); }
+    let t = std::time::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![5, 10, 15]);
+}
+
+#[test]
 fn std_instant_ends_a_native_cfg_block_statement_at_its_closing_brace() {
     let source = r#"
 fn run() {
@@ -514,6 +584,160 @@ fn run(x: Option<u64>) -> Option<u64> {
 }
 "#;
     assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![7]);
+}
+
+#[test]
+fn std_instant_skips_an_operator_after_a_block_inside_a_native_cfg_expression() {
+    let source = r#"
+fn run(flag: bool) -> u64 {
+    #[cfg(unix)]
+    let _ = if flag { 1 } else { 2 } + std::time::Instant::now().elapsed().as_secs();
+    #[cfg(unix)]
+    return if flag { 1 } else { 2 } * std::time::Instant::now().elapsed().as_secs();
+    let t = std::time::Instant::now();
+    0
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![7]);
+}
+
+#[test]
+fn std_instant_skips_a_cast_after_a_match_inside_a_native_cfg_expression() {
+    let source = r#"
+fn run(x: Option<u32>) -> u64 {
+    #[cfg(unix)]
+    let n = match x { Some(v) => v, None => 0 } as u64 + std::time::Instant::now().elapsed().as_secs();
+    let t = std::time::Instant::now();
+    0
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![5]);
+}
+
+#[test]
+fn std_instant_runs_a_native_cfg_match_arm_to_its_comma_when_a_block_is_inside_its_value() {
+    let source = r#"
+fn run(x: Option<u32>, y: bool) -> u64 {
+    match x {
+        #[cfg(unix)]
+        Some(v) => v as u64 + match y { true => 1, false => 0 } + std::time::Instant::now().elapsed().as_secs(),
+        #[cfg(unix)]
+        None => if y { 1 } else { 0 },
+        #[cfg(unix)] Some(0) => { 0 } _ => std::time::Instant::now().elapsed().as_secs(),
+    }
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![8]);
+}
+
+#[test]
+fn std_instant_ends_a_native_cfg_const_or_labeled_block_at_its_closing_brace() {
+    let source = r#"
+fn run(x: Option<u32>) -> u64 {
+    #[cfg(unix)]
+    const { assert!(true) }
+    let a = std::time::Instant::now();
+    #[cfg(unix)]
+    'done: { let _ = std::time::Instant::now(); break 'done; }
+    let b = std::time::Instant::now();
+    match x {
+        #[cfg(unix)]
+        Some(_) => 'arm: { let _ = std::time::Instant::now(); break 'arm; }
+        _ => { let c = std::time::Instant::now(); }
+    }
+    0
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![5, 8, 12]);
+}
+
+#[test]
+fn std_instant_runs_a_native_cfg_async_block_statement_to_its_semicolon() {
+    let source = r#"
+async fn run() {
+    #[cfg(unix)]
+    async { std::time::Instant::now() }
+        .await;
+    #[cfg(unix)]
+    async move { std::time::Instant::now() };
+    let a = std::time::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![8]);
+}
+
+#[test]
+fn std_instant_checks_code_before_and_after_a_native_cfg_item_on_the_same_line() {
+    let source = "fn run() {
+    let a = std::time::Instant::now(); #[cfg(unix)] let b = std::time::Instant::now(); let c = std::time::Instant::now();
+    let d = 1; #[cfg(unix)] let e = std::time::Instant::now();
+    #[cfg(unix)] let f = std::time::Instant::now(); let g = std::time::Instant::now();
+}
+";
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![2, 4]);
+}
+
+#[test]
+fn std_instant_reads_paths_split_over_lines_and_comments_with_crlf() {
+    let source = "use std::time::\r\n    Instant;\r\nfn run() {\r\n    let t = std::time\r\n        ::Instant::now();\r\n    let u = std /* a */ :: time // b\r\n        :: Instant::now();\r\n}\r\n";
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![1, 4, 6]);
+}
+
+#[test]
+fn std_instant_reports_a_use_on_the_line_where_its_path_starts() {
+    let source = "use std::time::\n    Instant as Clock;\nuse std::time::{\n    Duration,\n    Instant,\n};\nuse std::\n    time::*;\n";
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![1, 5, 7]);
+}
+
+#[test]
+fn std_instant_ignores_other_time_modules_longer_names_and_a_renamed_duration() {
+    let source = r#"
+use tokio::time::Instant;
+use std::time::{Duration as Instant};
+fn run() {
+    let a = my_time::Instant::now();
+    let b = runtime::Instant::now();
+    let c = crate::time::Instant::now();
+    let d = tokio::time::Instant::now();
+    let e = core::time::Instant::now();
+    let f = std::time::InstantLike::now();
+    let g = mystd::time::Instant::now();
+    let h = std::time::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![12]);
+}
+
+#[test]
+fn std_instant_ignores_paths_in_literals_and_comments_and_reads_labels_as_code() {
+    let source = r##"
+fn run<'a>(s: &'a str) -> char {
+    let _x = "std::time::Instant"; let _r = r#"std::time::Instant"#; let _b = b"std::time::Instant"; let _c = c"std::time::Instant";
+    // std::time::Instant
+    /* std::time::Instant */
+    'outer: loop { break 'outer; }
+    let q = '"'; let t = std::time::Instant::now();
+    'x'
+}
+"##;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![7]);
+}
+
+#[test]
+fn std_instant_scans_a_large_source_once() {
+    let mut source = String::from("fn run() {\n");
+    for i in 0..20_000 {
+        if i % 2 == 0 {
+            source.push_str("    #[cfg(unix)] let a = std::time::Instant::now();\n");
+        } else {
+            source.push_str("    let b = std::time::Instant::now();\n");
+        }
+    }
+    source.push_str("}\n");
+    let found = lines(&std_instant([("src/run.rs", source.as_str())]));
+    assert_eq!(found.len(), 10_000);
+    assert_eq!(found.first(), Some(&3));
+    assert_eq!(found.last(), Some(&20_001));
 }
 
 #[test]
@@ -627,6 +851,14 @@ fn a_long_use_path_shared_by_many_names_is_read_without_copying_it_to_each() {
     // 10,000 path segments shared by 10,000 names, followed by a `use` the guard reports.
     let names: Vec<String> = (0..10_000).map(|n| format!("x{n}")).collect();
     let source = format!("use {}{{{}}};\nuse std::time::Instant;\n", "a::".repeat(10_000), names.join(", "));
+    assert_eq!(lines(&std_instant([("src/wide.rs", source.as_str())])), vec![2]);
+    assert!(predefined_quit([("src/wide.rs", source.as_str())]).is_empty());
+}
+
+#[test]
+fn a_long_name_shared_by_many_use_leaves_is_read_without_copying_it_to_each() {
+    // A 40,000-byte name shared by 10,000 leaves, followed by a `use` the guard reports.
+    let source = format!("use {}::{{{}}};\nuse std::time::Instant;\n", "n".repeat(40_000), ["self"; 10_000].join(", "));
     assert_eq!(lines(&std_instant([("src/wide.rs", source.as_str())])), vec![2]);
     assert!(predefined_quit([("src/wide.rs", source.as_str())]).is_empty());
 }
@@ -783,6 +1015,17 @@ fn std_instant_resolves_a_file_loaded_both_plainly_and_by_path_attribute_once_fo
     let clock = "use std::time::Instant;\n";
     let files = [("src/lib.rs", lib), ("src/platform.rs", "mod clock;\n"), ("src/platform/clock.rs", clock), ("src/clock.rs", clock)];
     assert_eq!(finding_paths(&std_instant(files)), vec!["src/platform/clock.rs"]);
+}
+
+#[test]
+fn std_instant_checks_a_file_that_a_path_attribute_module_names_for_the_web_build() {
+    // The web module `entry.rs`, loaded through `#[path]`, names `src/clock.rs`, which a native-only
+    // module also names through `#[path]`.
+    let lib = "#[path = \"entry.rs\"]\nmod web;\n#[cfg(unix)]\nmod native;\n";
+    let clock = "use std::time::Instant;\n";
+    let files =
+        [("src/lib.rs", lib), ("src/entry.rs", "mod clock;\n"), ("src/native.rs", "#[path = \"clock.rs\"]\nmod clock;\n"), ("src/clock.rs", clock)];
+    assert_eq!(finding_paths(&std_instant(files)), vec!["src/clock.rs"]);
 }
 
 #[test]
