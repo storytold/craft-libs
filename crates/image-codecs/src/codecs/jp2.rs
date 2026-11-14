@@ -196,7 +196,7 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
         ColorSpace::Gray => (1u8, None),
         ColorSpace::RGB => (3u8, None),
         ColorSpace::CMYK => (4u8, None),
-        ColorSpace::Icc { num_channels: ch @ (1 | 3 | 4), profile } if profile.len() <= MAX_PROFILE => (ch, Some(profile.to_vec())),
+        ColorSpace::Icc { num_channels: ch @ (1 | 3 | 4), profile } if profile.len() <= MAX_PROFILE => (*ch, Some(profile.to_vec())),
         _ => return Err(CodecError::unsupported(F, "unsupported JPEG 2000 color space")),
     };
     let has_alpha = image.has_alpha();
