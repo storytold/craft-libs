@@ -183,6 +183,19 @@ fn layer_header_is_none_when_ldta_is_too_short() {
     assert!(LayerHeader::parse(&[0; 140]).is_some());
 }
 
+/// Preserve Underlying Transparency: bit `0x01` of byte 103 (no corpus case; the layout of a
+/// project saved by After Effects 2026), off when the byte is clear or not there.
+#[test]
+fn preserve_transparency_is_bit_0_of_byte_103() {
+    let mut ldta = [0u8; 164];
+    assert!(!LayerHeader::parse(&ldta).is_some_and(|h| h.preserve_transparency));
+    ldta[103] = 0x01;
+    assert!(LayerHeader::parse(&ldta).is_some_and(|h| h.preserve_transparency));
+    // Another bit of the byte is not the switch.
+    ldta[103] = 0x02;
+    assert!(!LayerHeader::parse(&ldta).is_some_and(|h| h.preserve_transparency));
+}
+
 #[test]
 fn rational_is_exact() {
     assert_eq!(Rational::new(12800, 25600), Some(Rational { num: 1, den: 2 }));

@@ -5,7 +5,8 @@ read-only view of what it holds. Bytes in, a neutral model out, and the tree bac
 Mapping the view onto an application's document (which effect becomes which, units, what is
 reported as lost) stays in the application.
 
-No file access: callers pass bytes, so the crate builds for wasm32. No dependencies.
+No file access: callers pass bytes, so the crate builds for wasm32. One dependency: `encoding_rs`,
+for names a Japanese-language After Effects writes in Shift_JIS.
 
 | Form | Read | Write |
 |---|---|---|
