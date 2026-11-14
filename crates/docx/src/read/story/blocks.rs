@@ -4,45 +4,6 @@ use super::{
     placeholder_of, sectpr, tcpr, trpr,
 };
 
-/// Word draws a run's text with the complex-script font, size, bold and italic only when the run
-/// is complex script or right to left (`w:cs`, `w:rtl`) by its own properties, its paragraph
-/// style, its table style or the run defaults; a character style saying so, or saying not,
-/// doesn't count (nor does its `w:rtl` change the order of the text). Anywhere else the text takes the run's other font and `w:sz`, Thai included,
-/// whatever its language or `w:hint` (measured in Word for Windows: Thai text at `w:sz` 22 pt,
-/// `w:szCs` 11 pt is drawn at 22 pt). WordCraft draws Thai, Lao and Indic characters with the
-/// complex-script formatting unless the run says it is not complex script, and counts a character
-/// style's `w:cs`; so a run it would draw otherwise says on itself whether it is complex script
-/// (`w:cs`, which Word reads the same way). `table` is the run formatting the table style gives
-/// the paragraph's cell. Runs with right-to-left text are left as they are: they are written
-/// right to left.
-fn mark_runs_as_word_draws_them(styles: &craft_wordmodel::StyleSheet, para: &mut Paragraph, table: Option<&CharProps>) {
-    use craft_wordmodel::bidi::{is_complex_script, is_rtl_script};
-    let style = para.props.style.as_deref();
-    let mut at = 0;
-    for run in &mut para.runs {
-        let text = para.text.get(at..at + run.len).unwrap_or("");
-        at += run.len;
-        if text.is_empty() || text.chars().any(is_rtl_script) {
-            continue;
-        }
-        let word = styles.resolve_char_in(style, table, &CharProps { style: None, ..run.props.clone() });
-        let mut ours = styles.resolve_char_in(style, table, &run.props);
-        // Right to left only by its character style: Word draws and orders the run as it does
-        // one that says nothing (measured, Latin and Thai text).
-        if ours.rtl && !word.rtl {
-            run.props.rtl = Some(false);
-            ours = styles.resolve_char_in(style, table, &run.props);
-        }
-        if word.cs || word.rtl {
-            if !ours.cs && !ours.rtl {
-                run.props.cs = Some(true);
-            }
-        } else if !ours.rtl && (ours.cs || (!ours.cs_off && text.chars().any(is_complex_script))) {
-            run.props.cs = Some(false);
-        }
-    }
-}
-
 impl Reader<'_> {
     /// Read a story's blocks from a container element (`w:body`, `w:hdr`, `w:tc`, `w:txbxContent`…).
     pub fn read_blocks(&mut self, sc: &mut StoryCtx, parent: &El, rels: &Rels, out: &mut Blocks, depth: usize) {
@@ -317,7 +278,7 @@ impl Reader<'_> {
         }
         // A cell's paragraphs are marked once their table is read: its style counts.
         if !sc.in_cell {
-            mark_runs_as_word_draws_them(&self.doc.styles, &mut para, None);
+            self.doc.styles.mark_runs_as_word_draws_them(&mut para, None);
         }
         para.normalize();
         para
@@ -423,7 +384,7 @@ impl Reader<'_> {
                 let chr = chrs.as_ref().and_then(|c| c.get(ri)?.get(ci));
                 for b in &mut cell.blocks {
                     if let Block::Para(p) = Arc::make_mut(b) {
-                        mark_runs_as_word_draws_them(&self.doc.styles, p, chr);
+                        self.doc.styles.mark_runs_as_word_draws_them(p, chr);
                         p.normalize();
                     }
                 }
