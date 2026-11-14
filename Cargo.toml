@@ -219,6 +219,11 @@ overflow-checks = false
 [profile.dev.package.linesweeper]
 opt-level = 3
 
+# polycool finds the roots that linesweeper's comparison of two cubics needs, and in a debug build (unoptimised, as a dependency is by default) was
+# most of the time of a sweep of curves: a stroke of round joins that goes back and forth over one line (the fixture of craft-pathops' README, "The crossings") took 88 s unoptimised and 12 s at opt-level 3.
+[profile.dev.package.polycool]
+opt-level = 3
+
 # Codec hot loops: the oracle and conformance tests of a debug build take minutes below opt-level 3.
 [profile.dev.package.craft-video]
 opt-level = 3

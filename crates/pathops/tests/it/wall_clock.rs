@@ -108,3 +108,45 @@ fn the_worst_inputs_admitted_are_made_in_seconds() {
         assert!(area.is_ok(), "{label}: {area:?}");
     }
 }
+
+/// The spine of "The crossings" in the README: `n` segments that go back and forth between (0, 0) and (100, 20), every point moved up by
+/// `jitter` times its index modulo 7.
+fn back_and_forth(n: usize, jitter: f64) -> BezPath {
+    let mut spine = BezPath::new();
+    for i in 0..=n {
+        let end = (i % 2) as f64;
+        let p = (100.0 * end, 20.0 * end + jitter * (i % 7) as f64);
+        if i == 0 {
+            spine.move_to(p);
+        } else {
+            spine.line_to(p);
+        }
+    }
+    spine
+}
+
+/// The stroke of a spine that goes back and forth over one line is made in seconds, and a long one is refused after a few windows, and not
+/// after the dozens that its sweeps were priced at a fifth of (a window took 0.07 of the meter's 4.2 and 0.8 s: 62 of 71 were swept, in
+/// 110 s). The stroke of 300 segments took 2.1, 5.4 and 9.5 s with round joins (a tenth, a thousandth and a ten-thousandth of jitter),
+/// 1.4 and 1.8 with miters, and the stroke of 18,000 segments 25 s to be refused, in a release build at a load of 8 to 12. In a build with
+/// debug assertions it took 5.4, 12, 19 s and 2.6 and 3.0, and 47 s (`polycool` being optimised, as the workspace builds it now: it was 18, 88 and 178 s).
+/// The bounds are several times that, for a quiet machine in a release build and for a loaded one in a debug build.
+#[test]
+#[ignore = "wall-clock: run with cargo test --release -- --include-ignored (or without --release, for the bounds of a debug build)"]
+fn a_stroke_that_goes_back_and_forth_is_made_in_seconds_and_a_long_one_refused_in_a_few_windows() {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let (each, long) = if cfg!(debug_assertions) {
+        (Duration::from_secs(240), Duration::from_secs(300))
+    } else {
+        (Duration::from_secs(60), Duration::from_secs(90))
+    };
+    for (join, jitter) in [(Join::Round, 0.1), (Join::Round, 1e-3), (Join::Round, 1e-4), (Join::Miter, 0.1), (Join::Miter, 1e-3), (Join::Bevel, 1e-3)]
+    {
+        let label = format!("300 segments, {join:?} joins, jitter {jitter:e}");
+        let made = timed(&label, each, || try_outline_stroke(&back_and_forth(300, jitter), 6.0, Cap::Butt, join, 4.0));
+        assert!(made.is_ok(), "{label}: {made:?}");
+    }
+    let label = "18,000 segments, miter joins, jitter 1e-3";
+    let refused = timed(label, long, || try_outline_stroke(&back_and_forth(18_000, 1e-3), 6.0, Cap::Butt, Join::Miter, 4.0));
+    assert_eq!(refused, Err(PathOpsError::TooComplex), "{label}");
+}

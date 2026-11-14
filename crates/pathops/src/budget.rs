@@ -1002,6 +1002,20 @@ fn parallel(den: f64, la: f64, lb: f64) -> bool {
 /// Each place where a curve is one of the two counts for two, for the sweep takes about twice as long over it. `None`
 /// when there are more pairs than `cap`.
 fn real_crossings(seg: &Segments, slack: f64, cap: usize) -> Option<u64> {
+    crossings_by_kind(seg, slack, cap).map(|c| c.lines.saturating_add(c.curves))
+}
+
+/// The places [`real_crossings`] counts, told apart by what crosses: `lines` where two lines cross (each at most once, and
+/// counted exactly), `curves` where a curve is one of the two (as the pricing counts them, at the most: a pair of arcs that
+/// cross twice counts for as many as nine places, each twice).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Crossings {
+    pub(crate) lines: u64,
+    pub(crate) curves: u64,
+}
+
+/// [`real_crossings`] by kind.
+fn crossings_by_kind(seg: &Segments, slack: f64, cap: usize) -> Option<Crossings> {
     let curves: Vec<Curve> = seg
         .curve_segs
         .iter()
@@ -1013,26 +1027,42 @@ fn real_crossings(seg: &Segments, slack: f64, cap: usize) -> Option<u64> {
             })
         })
         .collect();
-    let mut crossed: u64 = 2 * curves.iter().filter(|c| c.may_loop()).count() as u64;
+    let mut crossed = Crossings { lines: 0, curves: 2 * curves.iter().filter(|c| c.may_loop()).count() as u64 };
     let within = each_overlap(&seg.boxes, cap, |i, j| {
         work::add(Work::CrossingPairs, 1);
         let (Some(&ka), Some(&kb)) = (seg.kind.get(i), seg.kind.get(j)) else { return };
-        crossed += match (ka, kb) {
-            (Kind::Line(x), Kind::Line(y)) => match (seg.line_segs.get(x), seg.line_segs.get(y)) {
-                (Some(a), Some(b)) => u64::from(!matches!(cross_of(a, b, slack), Cross::No)),
-                _ => 0,
-            },
-            (Kind::Line(x), Kind::Curve(y)) | (Kind::Curve(y), Kind::Line(x)) => match (seg.line_segs.get(x), curves.get(y)) {
-                (Some(l), Some(c)) => 2 * line_cubic_cross_at_most(l, c),
-                _ => 0,
-            },
-            (Kind::Curve(x), Kind::Curve(y)) => match (curves.get(x), curves.get(y)) {
-                (Some(a), Some(b)) => 2 * cubics_cross_at_most(a, b, slack),
-                _ => 0,
-            },
-        };
+        match (ka, kb) {
+            (Kind::Line(x), Kind::Line(y)) => {
+                if let (Some(a), Some(b)) = (seg.line_segs.get(x), seg.line_segs.get(y)) {
+                    crossed.lines += u64::from(!matches!(cross_of(a, b, slack), Cross::No));
+                }
+            }
+            (Kind::Line(x), Kind::Curve(y)) | (Kind::Curve(y), Kind::Line(x)) => {
+                if let (Some(l), Some(c)) = (seg.line_segs.get(x), curves.get(y)) {
+                    crossed.curves += 2 * line_cubic_cross_at_most(l, c);
+                }
+            }
+            (Kind::Curve(x), Kind::Curve(y)) => {
+                if let (Some(a), Some(b)) = (curves.get(x), curves.get(y)) {
+                    crossed.curves += 2 * cubics_cross_at_most(a, b, slack);
+                }
+            }
+        }
     });
     within.then_some(crossed)
+}
+
+/// The places the segments of `paths` cross one another, as the pricing counts them ([`MAX_REAL_CROSSINGS`]), for the meter
+/// ([`crate::meter`]) to price: `lines` and `curves` as [`Crossings`] says. Every pair of bounds that overlap is tested, which costs a
+/// quarter to the whole of the sweep of an input whose bounds overlap only a little (rings, strokes, a circle of 100,000 cubics), so the
+/// meter asks for it only of an input that crowds segments within a few tolerances of one another. The pairs are counted with no cap: the
+/// pricing has refused an input with more of them than its limit before the meter is asked.
+pub(crate) fn crossing_places<'a>(paths: impl IntoIterator<Item = &'a BezPath>) -> Crossings {
+    let mut seg = Segments::default();
+    for p in paths {
+        seg.add_path(p);
+    }
+    crossings_by_kind(&seg, crate::boolean::sweep_tolerance(seg.extent), usize::MAX).unwrap_or_default()
 }
 
 /// How wide, in sweep tolerances, a point is to the work of lines that cross: crossings along one line within this (and the
@@ -2462,6 +2492,42 @@ mod tests {
         // bound on the crossings of a star of cubics is about a third over, counted twice).
         assert!(sweep_fits([&star(1291)]) && !sweep_fits([&star(1293)]));
         assert!(sweep_fits([&bowed_star(851, 3.0, 0.0, 0.0)]) && !sweep_fits([&bowed_star(891, 3.0, 0.0, 0.0)]));
+    }
+
+    /// The places counted for the meter are those the limit counts, told apart: lines cross lines in `lines`, and every place with a curve
+    /// in it is in `curves`, so that the two add up to what the limit counts, for lines, for arcs and for both together.
+    #[test]
+    fn the_places_for_the_meter_are_the_places_of_the_limit_told_apart() {
+        use crate::testutil::star;
+        let sum = |paths: &[BezPath]| {
+            let mut seg = Segments::default();
+            for p in paths {
+                seg.add_path(p);
+            }
+            real_crossings(&seg, crate::boolean::sweep_tolerance(seg.extent), usize::MAX).unwrap_or(u64::MAX)
+        };
+        let arch = |top: f64| {
+            let mut bp = BezPath::new();
+            bp.move_to((0.0, 0.0));
+            bp.curve_to((10.0, top), (20.0, top), (30.0, 0.0));
+            bp.close_path();
+            bp
+        };
+        let cases: [(&str, Vec<BezPath>); 3] = [
+            ("a star of lines", vec![star(21)]),
+            ("two arches", vec![arch(30.0), arch(-30.0)]),
+            ("a star and an arch through it", vec![star(21), arch(8.0)]),
+        ];
+        let (lines, arches, both) = (&cases[0].1, &cases[1].1, &cases[2].1);
+        let by_kind = |paths: &[BezPath]| crossing_places(paths.iter());
+        let (l, a, b) = (by_kind(lines), by_kind(arches), by_kind(both));
+        assert!(l.lines > 0 && l.curves == 0, "{l:?}");
+        assert!(a.lines == 0 && a.curves > 0, "{a:?}");
+        assert!(b.lines > 0 && b.curves > l.curves, "{b:?}");
+        for (name, paths) in &cases {
+            let places = by_kind(paths);
+            assert_eq!(places.lines + places.curves, sum(paths), "{name}");
+        }
     }
 
     /// Two arches, one rising to 3 and one from 2 falling to -1, cross twice (where their chords, the levels 0 and 2, never

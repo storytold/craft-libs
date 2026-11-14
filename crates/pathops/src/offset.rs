@@ -1502,6 +1502,24 @@ mod tests {
         }
     }
 
+    /// The windows of the stroke of a spine that goes back and forth over one line, which a long spine makes in the dozens (70 for 18,000
+    /// segments), are each a bundle of lines that cross all along their length, and the sweeps of them are held to one limit between them
+    /// at the price of the places they cross at. They were held to what the dry sweep counted for the pieces, a fifth of what it took
+    /// (0.07 of a second of 4.2 for a window that took 0.8 of a second): 62 of the 71 windows were swept, in 110 seconds. Now
+    /// the 16th is refused. Seconds: in a release build only.
+    #[cfg_attr(debug_assertions, ignore = "seconds: run with cargo test --release")]
+    #[test]
+    fn a_long_stroke_that_goes_back_and_forth_over_one_line_is_refused_after_a_few_windows() {
+        let spine = crate::testutil::back_and_forth_spine(18_000, 1e-3);
+        let parts = stroke_parts(&spine, 6.0, Cap::Butt, Join::Miter, 4.0, usize::MAX).expect("the outlines are made");
+        assert!(parts.len() >= 60, "{} windows", parts.len());
+        work::reset();
+        assert_eq!(try_stroke_region(&parts), Err(PathOpsError::TooComplex));
+        let swept = work::take(Work::MeteredSweeps);
+        // Each window is priced at 0.27 of a second of the 4.2 the limit holds the windows to: the 16th passes it.
+        assert!((14..=17).contains(&swept), "{swept} of {} windows were swept", parts.len());
+    }
+
     /// A subpath stroked in windows covers what the stroker covers in one piece, open or closed,
     /// for caps and joins of every kind. (Not to the last digit: where the stroker's inner joins
     /// loop, the one outline and the windows' outlines lose a different sliver, a millionth of the area.)
