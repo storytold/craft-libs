@@ -61,7 +61,7 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Data rate in kb/s by frmsizecod / 2 (Table 5.18).
-const BITRATES: [u32; 19] = [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 576, 640];
+pub(crate) const BITRATES: [u32; 19] = [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 576, 640];
 
 /// Full-bandwidth channels per acmod (Table 5.8).
 const NFCHANS: [usize; 8] = [2, 1, 2, 3, 3, 4, 4, 5];

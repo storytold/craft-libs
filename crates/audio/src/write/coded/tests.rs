@@ -1,0 +1,115 @@
+use super::*;
+
+fn map(mask: u32, order: Option<&[usize]>, layout: u32) -> Option<Vec<usize>> {
+    channel_map(mask, order, &ChannelLayout::from_mask(layout))
+}
+
+/// Channels are matched by speaker, not by position: a layout that lists the same speakers in
+/// another WAV order is reordered, and one with other speakers is refused.
+#[test]
+fn channels_are_mapped_by_speaker() {
+    // L R C LFE Ls Rs onto itself, and onto an encoder order C L R Ls Rs LFE.
+    assert_eq!(map(0x60F, None, 0x60F), Some(vec![0, 1, 2, 3, 4, 5]));
+    assert_eq!(map(0x60F, Some(&[2, 0, 1, 4, 5, 3]), 0x60F), Some(vec![2, 0, 1, 4, 5, 3]));
+    // Back surrounds feed a format that has one surround pair, and the other way round.
+    assert_eq!(map(0x60F, None, 0x3F), Some(vec![0, 1, 2, 3, 4, 5]));
+    assert_eq!(map(0x3F, None, 0x60F), Some(vec![0, 1, 2, 3, 4, 5]));
+    // 6.1 with the back centre after the pair (L R C LFE Lb Rb Cb) onto L R C LFE Cb Ls Rs.
+    assert_eq!(map(0x70F, None, 0x13F), Some(vec![0, 1, 2, 3, 6, 4, 5]));
+    // Quad has no centre; 7.1 with sides and backs has no front pair left and right of centre.
+    assert_eq!(map(0x107, None, 0x33), None);
+    assert_eq!(map(0xFF, None, 0x63F), None);
+    // With both pairs in the format, one pair cannot feed both.
+    assert_eq!(map(0x63F, None, 0xFF), None);
+    assert_eq!(channel_map(0x3, None, &ChannelLayout::unordered(2)), None);
+    assert_eq!(map(0x3, None, 0x7), None);
+}
+
+#[cfg(feature = "aac-encode")]
+#[test]
+fn every_aac_channel_count_has_a_layout_and_an_order() {
+    for channels in 1..=8 {
+        let mask = aac_mask(channels);
+        assert_eq!(mask.count_ones() as usize, channels);
+        let mut order = map(mask, aac_order(channels), mask).unwrap();
+        order.sort_unstable();
+        assert_eq!(order, (0..channels).collect::<Vec<_>>());
+    }
+    assert_eq!(aac_mask(9), 0);
+    // Configuration 7: C, Lc Rc, L R, Ls Rs, LFE.
+    let wide: Vec<Speaker> = ChannelLayout::from_mask(0xFF).speakers();
+    let named: Vec<Speaker> = aac_order(8).unwrap().iter().map(|&c| wide[c]).collect();
+    use Speaker::*;
+    assert_eq!(named, [FrontCenter, FrontLeftOfCenter, FrontRightOfCenter, FrontLeft, FrontRight, BackLeft, BackRight, Lfe]);
+}
+
+/// The range the writer keeps a bit rate in is the one the encoder accepts.
+#[cfg(feature = "aac-encode")]
+#[test]
+fn the_aac_bit_rate_range_is_the_encoders() {
+    use crate::aac::{Encoder, EncoderConfig, SAMPLE_RATES};
+    for &rate in &SAMPLE_RATES {
+        for channels in 1..=8 {
+            let (lo, hi) = crate::aac::cbr_range(rate, channels);
+            assert!(lo <= hi, "{rate} Hz, {channels} channels");
+            let accepts = |bps| Encoder::new(EncoderConfig::cbr(rate, channels, bps)).is_ok();
+            assert!(accepts(lo) && accepts(hi), "{rate} Hz, {channels} channels: {lo}..={hi}");
+            assert!(!accepts(lo - 1) && !accepts(hi + 1), "{rate} Hz, {channels} channels: {lo}..={hi}");
+            for want in [None, Some(RateControl::Bitrate(0)), Some(RateControl::Bitrate(u32::MAX))] {
+                let mode = aac_mode(want, rate, channels);
+                assert!(
+                    Encoder::new(EncoderConfig { mode, ..EncoderConfig::cbr(rate, channels, 0) }).is_ok(),
+                    "{rate} Hz, {channels} channels, {want:?}"
+                );
+            }
+        }
+    }
+}
+
+/// Every layout the AC-3 encoders have is found from its speakers, at a bit rate the encoder
+/// accepts whatever rate was asked for.
+#[cfg(all(feature = "ac3-encode", feature = "eac3-encode"))]
+#[test]
+fn ac3_settings_follow_the_layout_and_validate() {
+    use crate::ac3::encoder::{Codec, CodingMode};
+    let layouts = [
+        (0x4, CodingMode::Mono, false),
+        (0x3, CodingMode::Stereo, false),
+        (0xB, CodingMode::Stereo, true),
+        (0x7, CodingMode::ThreeFront, false),
+        (0x103, CodingMode::StereoSurround, false),
+        (0x107, CodingMode::ThreeFrontSurround, false),
+        (0x33, CodingMode::StereoTwoSurround, false),
+        (0x603, CodingMode::StereoTwoSurround, false),
+        (0x37, CodingMode::ThreeFrontTwoSurround, false),
+        (0x3F, CodingMode::ThreeFrontTwoSurround, true),
+        (0x60F, CodingMode::ThreeFrontTwoSurround, true),
+    ];
+    for codec in [Codec::Ac3, Codec::Eac3] {
+        for sample_rate in [32_000, 44_100, 48_000] {
+            for (mask, mode, lfe) in layouts {
+                for want in [None, Some(RateControl::Bitrate(0)), Some(RateControl::Bitrate(200_000)), Some(RateControl::Bitrate(u32::MAX))] {
+                    let layout = ChannelLayout::from_mask(mask);
+                    let (config, map) = ac3_config(codec, sample_rate, &layout, want).unwrap();
+                    assert_eq!((config.mode, config.lfe), (mode, lfe), "{mask:#x}");
+                    assert_eq!(map, (0..usize::from(layout.channels())).collect::<Vec<_>>());
+                    assert_eq!(config.validate(), Ok(()), "{codec:?} {sample_rate} {mask:#x} {want:?}: {} kbit/s", config.bitrate_kbps);
+                }
+            }
+            let seven_one = ac3_config(codec, sample_rate, &ChannelLayout::SURROUND_7_1, Some(RateControl::Bitrate(u32::MAX)));
+            match codec {
+                Codec::Ac3 => assert!(matches!(seven_one, Err(AudioError::Unsupported(_)))),
+                Codec::Eac3 => assert_eq!(seven_one.unwrap().0.validate(), Ok(())),
+            }
+        }
+    }
+    // The highest table rate not above the one asked for; the default is 96 kbit/s per channel.
+    let rate = |codec, mask, want| ac3_config(codec, 48_000, &ChannelLayout::from_mask(mask), want).unwrap().0.bitrate_kbps;
+    assert_eq!(rate(Codec::Ac3, 0x3, Some(RateControl::Bitrate(200_000))), 192);
+    assert_eq!(rate(Codec::Ac3, 0x3, None), 192);
+    assert_eq!(rate(Codec::Ac3, 0x60F, None), 448);
+    assert_eq!(rate(Codec::Ac3, 0x60F, Some(RateControl::Bitrate(1))), 160);
+    assert_eq!(rate(Codec::Eac3, 0x3, Some(RateControl::Bitrate(200_500))), 200);
+    assert!(matches!(ac3_config(Codec::Ac3, 48_000, &ChannelLayout::STEREO, Some(RateControl::Quality(0.5))), Err(AudioError::Unsupported(_))));
+    assert!(matches!(ac3_config(Codec::Ac3, 48_000, &ChannelLayout::unordered(2), None), Err(AudioError::Unsupported(_))));
+}

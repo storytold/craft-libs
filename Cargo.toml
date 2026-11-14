@@ -85,7 +85,7 @@ craft-keymap = { path = "crates/keymap" }
 craft-assuan = { path = "crates/assuan" }
 craft-kra = { path = "crates/kra" }
 craft-audio = { path = "crates/audio" }
-# No default features, so craft-audio's `encode` builds craft-media without `isobmff`.
+# No default features: craft-audio turns on the craft-media modules each of its features needs.
 craft-latex = { path = "crates/latex" }
 craft-markdown = { path = "crates/markdown" }
 craft-math = { path = "crates/math" }

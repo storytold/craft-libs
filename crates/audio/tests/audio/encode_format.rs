@@ -14,7 +14,7 @@ fn only_formats_the_encoder_writes_are_named() {
     for name in craft_audio::ENCODE_EXTENSIONS {
         assert!(encode_format_for(name).is_some(), "{name}");
     }
-    for other in ["mp3", "ogg", "m4a", "xyz", ""] {
+    for other in ["ogg", "opus", "aac", "mp4", "xyz", ""] {
         assert_eq!(encode_format_for(other), None, "{other}");
     }
 }

@@ -162,6 +162,16 @@ const HISTORY: usize = 2048;
 /// Bits per channel in a silent frame, rounded up: the smallest frame the encoder writes.
 const MIN_FRAME_BITS_PER_CHANNEL: u64 = 48;
 
+/// The lowest and highest constant bit rate (bits per second) [`Encoder::new`] accepts for a
+/// stream without ADTS headers: at least 1 kbit/s per channel and a silent frame, at most the
+/// 6144 bits per channel and frame of the decoder buffer.
+pub(crate) fn cbr_range(sample_rate: u32, channels: usize) -> (u32, u32) {
+    let (rate, channels) = (u64::from(sample_rate), channels as u64);
+    let silent = (MIN_FRAME_BITS_PER_CHANNEL * channels * rate).div_ceil(FRAME_LEN as u64);
+    let most = 6144 * channels * rate / FRAME_LEN as u64;
+    (u32::try_from(silent.max(1000 * channels)).unwrap_or(u32::MAX), u32::try_from(most).unwrap_or(u32::MAX))
+}
+
 /// AAC-LC encoder.
 pub struct Encoder {
     cfg: EncoderConfig,

@@ -16,9 +16,10 @@
 //! - [`TrackDecoder`] (any decoder feature): one track's packets from any demuxer to planar
 //!   `f32` in WAV channel order.
 //! - [`encode`], [`FileEncoder`]: WAV/BWF/RF64 and AIFF/AIFF-C (feature `pcm-encode`, which also
-//!   gives [`wav_float_header`]) and FLAC (feature `flac-encode`), whole-buffer or incremental into
-//!   any `Write + Seek`. Feature `lossless-encode` turns on both; feature `encode` turns on
-//!   `lossless-encode` and every codec's encoder.
+//!   gives [`wav_float_header`]), FLAC (feature `flac-encode`), AAC-LC and ALAC in M4A
+//!   (`aac-encode`, `alac-encode`) and MP3, AC-3 and E-AC-3 streams (`mp3-encode`, `ac3-encode`,
+//!   `eac3-encode`), whole-buffer or incremental into any `Write + Seek`. Feature
+//!   `lossless-encode` turns on WAV, AIFF and FLAC; feature `encode` turns on every format.
 //! - [`wav_pcm`], [`aiff_pcm`] (feature `decode-native`) and [`pcm_wav_file`], [`pcm_wav_header`],
 //!   [`pcm_aiff_file`], [`pcm_aiff_header`] (feature `pcm-encode`): the integer PCM of a WAV or AIFF
 //!   file bit for bit, and minimal files around such PCM, for essence embedded in other containers.
@@ -54,7 +55,15 @@ mod read;
 mod track;
 #[cfg(any(feature = "decode-native", feature = "pcm-encode"))]
 mod wav;
-#[cfg(any(feature = "pcm-encode", feature = "flac-encode"))]
+#[cfg(any(
+    feature = "pcm-encode",
+    feature = "flac-encode",
+    feature = "aac-encode",
+    feature = "alac-encode",
+    feature = "mp3-encode",
+    feature = "ac3-encode",
+    feature = "eac3-encode"
+))]
 mod write;
 
 /// The FLAC packet encoder (RFC 9639), for a caller that muxes FLAC itself (into MP4, Matroska or
@@ -100,7 +109,15 @@ pub use read::{RawPcm, aiff_pcm, wav_pcm};
 pub use track::{LOOKAHEAD_PACKETS, TrackDecoder};
 #[cfg(feature = "pcm-encode")]
 pub use write::wav_float_header;
-#[cfg(any(feature = "pcm-encode", feature = "flac-encode"))]
+#[cfg(any(
+    feature = "pcm-encode",
+    feature = "flac-encode",
+    feature = "aac-encode",
+    feature = "alac-encode",
+    feature = "mp3-encode",
+    feature = "ac3-encode",
+    feature = "eac3-encode"
+))]
 pub use write::{ENCODE_EXTENSIONS, FileEncoder, encode, encode_format_for};
 #[cfg(feature = "pcm-encode")]
 pub use write::{pcm_aiff_file, pcm_aiff_header, pcm_wav_file, pcm_wav_header};
@@ -215,7 +232,8 @@ impl From<opus::encoder::Error> for AudioError {
 }
 
 /// The file formats [`encode`] writes. Each needs its feature: WAV and AIFF `pcm-encode`, FLAC
-/// `flac-encode`; asking for one that is not built returns [`AudioError::Unsupported`].
+/// `flac-encode`, AAC `aac-encode`, ALAC `alac-encode`, MP3 `mp3-encode`, AC-3 `ac3-encode` and
+/// E-AC-3 `eac3-encode`; asking for one that is not built returns [`AudioError::Unsupported`].
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -226,20 +244,46 @@ pub enum EncodeFormat {
     Aiff,
     /// FLAC (integer depths).
     Flac,
+    /// AAC-LC in an M4A (MP4) file, 1–8 channels at one of the 13 AAC sample rates. The edit list
+    /// skips the encoder's priming and ends at the last frame, so the file decodes to the length
+    /// that was written.
+    Aac,
+    /// Apple Lossless in an M4A (MP4) file (integer depths), 1–8 channels.
+    Alac,
+    /// An MP3 stream: mono or stereo at 32, 44.1 or 48 kHz, or 16, 22.05 or 24 kHz.
+    Mp3,
+    /// An AC-3 stream: up to 5.1 at 32, 44.1 or 48 kHz.
+    Ac3,
+    /// An E-AC-3 stream: up to 7.1 at 32, 44.1 or 48 kHz.
+    Eac3,
 }
 
 impl EncodeFormat {
     /// Every format, in the order menus list them. Whether [`encode`] writes one depends on its
     /// feature.
-    pub const ALL: &[EncodeFormat] = &[EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac];
+    pub const ALL: &[EncodeFormat] = &[
+        EncodeFormat::Wav,
+        EncodeFormat::Aiff,
+        EncodeFormat::Flac,
+        EncodeFormat::Alac,
+        EncodeFormat::Aac,
+        EncodeFormat::Mp3,
+        EncodeFormat::Ac3,
+        EncodeFormat::Eac3,
+    ];
 
     /// The extension a new file of this format gets, lower case and without the dot: `"wav"`,
-    /// `"aif"`, `"flac"`. [`encode_format_for`] maps it back.
+    /// `"aif"`, `"flac"`, `"m4a"` (AAC and ALAC), `"mp3"`, `"ac3"`, `"eac3"`.
+    /// [`encode_format_for`] maps it back, `"m4a"` to AAC.
     pub fn extension(self) -> &'static str {
         match self {
             EncodeFormat::Wav => "wav",
             EncodeFormat::Aiff => "aif",
             EncodeFormat::Flac => "flac",
+            EncodeFormat::Aac | EncodeFormat::Alac => "m4a",
+            EncodeFormat::Mp3 => "mp3",
+            EncodeFormat::Ac3 => "ac3",
+            EncodeFormat::Eac3 => "eac3",
         }
     }
 
@@ -249,6 +293,10 @@ impl EncodeFormat {
             EncodeFormat::Wav => "audio/wav",
             EncodeFormat::Aiff => "audio/aiff",
             EncodeFormat::Flac => "audio/flac",
+            EncodeFormat::Aac | EncodeFormat::Alac => "audio/mp4",
+            EncodeFormat::Mp3 => "audio/mpeg",
+            EncodeFormat::Ac3 => "audio/ac3",
+            EncodeFormat::Eac3 => "audio/eac3",
         }
     }
 
@@ -258,8 +306,44 @@ impl EncodeFormat {
             EncodeFormat::Wav => Container::Wav,
             EncodeFormat::Aiff => Container::Aiff,
             EncodeFormat::Flac => Container::Flac,
+            EncodeFormat::Aac | EncodeFormat::Alac => Container::Mp4,
+            EncodeFormat::Mp3 => Container::MpegAudio,
+            EncodeFormat::Ac3 | EncodeFormat::Eac3 => Container::Ac3,
         }
     }
+
+    /// The codec of the audio this format writes.
+    pub fn codec(self) -> CodecId {
+        match self {
+            EncodeFormat::Wav | EncodeFormat::Aiff => CodecId::Pcm,
+            EncodeFormat::Flac => CodecId::Flac,
+            EncodeFormat::Aac => CodecId::Aac,
+            EncodeFormat::Alac => CodecId::Alac,
+            EncodeFormat::Mp3 => CodecId::Mp3,
+            EncodeFormat::Ac3 => CodecId::Ac3,
+            EncodeFormat::Eac3 => CodecId::Eac3,
+        }
+    }
+
+    /// Whether the format loses audio: AAC, MP3, AC-3 and E-AC-3. These take
+    /// [`EncodeOptions::rate_control`] and ignore the bit depth and dither.
+    pub fn is_lossy(self) -> bool {
+        matches!(self, EncodeFormat::Aac | EncodeFormat::Mp3 | EncodeFormat::Ac3 | EncodeFormat::Eac3)
+    }
+}
+
+/// How a lossy format spends bits ([`EncodeOptions::rate_control`]).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum RateControl {
+    /// A constant bit rate in bits per second, for all channels together. A format with a fixed
+    /// set of rates (MP3, AC-3) uses the highest one not above it; a rate outside what the
+    /// stream can carry is moved to the nearest one inside.
+    Bitrate(u32),
+    /// A constant quality from 0.0 (smallest) to 1.0 (best), at whatever bit rate each frame
+    /// needs. AAC only; values outside the range are clamped, and NaN is an error.
+    Quality(f32),
 }
 
 /// Stored sample representation.
@@ -418,9 +502,9 @@ pub enum BitDepth {
 pub struct EncodeOptions {
     /// Output file format.
     pub format: EncodeFormat,
-    /// Sample depth to write.
+    /// Sample depth to write (ignored by the lossy formats).
     pub bit_depth: BitDepth,
-    /// Add TPDF dither when quantizing to an integer depth.
+    /// Add TPDF dither when quantizing to an integer depth (ignored by the lossy formats).
     pub dither: bool,
     /// Write a BWF `bext` chunk (WAV only; ignored for other formats).
     pub bwf: Option<BwfInfo>,
@@ -431,15 +515,27 @@ pub struct EncodeOptions {
     /// the count (they read 5 and 6 channels with side surrounds and 7 as 6.1 with sides, so the
     /// usual layouts for those counts get one; see the README's limits); AIFF has a fixed channel
     /// order and ignores it. It must have as many channels as the audio.
+    ///
+    /// AAC, ALAC, MP3, AC-3 and E-AC-3 store channels in their own order, so here the layout says
+    /// which speaker each channel of the audio (in WAV order) is, and the channels are reordered
+    /// to match. Each of these formats has a fixed set of layouts (AAC and ALAC one per channel
+    /// count, AC-3 one per coding mode); a layout outside it is [`AudioError::Unsupported`]. Side
+    /// and back surrounds are taken as the same pair where the format has only one.
     pub layout: Option<ChannelLayout>,
     /// Write WAV in the RF64 layout even below 4 GiB (WAV only; ignored for other formats).
     pub force_rf64: bool,
+    /// The bit rate or quality of a lossy format (ignored by the others). `None` is a constant
+    /// 64 kbit/s per channel for AAC, 96 kbit/s per channel for MP3, and 96 kbit/s per
+    /// full-bandwidth channel (the LFE not counted) for AC-3 and E-AC-3, moved to the nearest rate
+    /// the stream can carry.
+    pub rate_control: Option<RateControl>,
 }
 
 impl EncodeOptions {
-    /// Options for `format`: 24-bit, no dither, no BWF chunk, the usual layout.
+    /// Options for `format`: 24-bit, no dither, no BWF chunk, the usual layout, the format's
+    /// default bit rate.
     pub fn new(format: EncodeFormat) -> Self {
-        Self { format, bit_depth: BitDepth::Int24, dither: false, bwf: None, layout: None, force_rf64: false }
+        Self { format, bit_depth: BitDepth::Int24, dither: false, bwf: None, layout: None, force_rf64: false, rate_control: None }
     }
 
     /// Sets `format`.
@@ -475,6 +571,18 @@ impl EncodeOptions {
     /// Sets `force_rf64`.
     pub fn with_force_rf64(mut self, force_rf64: bool) -> Self {
         self.force_rf64 = force_rf64;
+        self
+    }
+
+    /// Sets `rate_control` to a constant bit rate in bits per second ([`RateControl::Bitrate`]).
+    pub fn with_bitrate(mut self, bits_per_second: u32) -> Self {
+        self.rate_control = Some(RateControl::Bitrate(bits_per_second));
+        self
+    }
+
+    /// Sets `rate_control` to a constant quality from 0.0 to 1.0 ([`RateControl::Quality`]).
+    pub fn with_quality(mut self, quality: f32) -> Self {
+        self.rate_control = Some(RateControl::Quality(quality));
         self
     }
 }
