@@ -598,3 +598,73 @@ fn a_footer_that_hits_the_remeasure_cap_recovers_once_it_holds_still() {
     let now = h.state().2;
     assert!((now - bottom).abs() < 1.0, "the footer ends at {now}, was {bottom}");
 }
+
+/// [`long_menu`] in a window `screen` tall at `window` on the desktop, on a 1920 × 1080 monitor.
+fn long_menu_on_monitor(window: egui::Pos2, top: f32, screen: f32, height: f32, maximized: bool) -> Harness<'static, Long> {
+    let mut h = long_menu(top, screen, height, 100);
+    let info = h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default();
+    info.inner_rect = Some(egui::Rect::from_min_size(window, egui::vec2(400.0, screen)));
+    info.monitor_size = Some(egui::vec2(1920.0, 1080.0));
+    info.maximized = Some(maximized);
+    h.run();
+    h.get_by_role_and_label(egui::Role::ComboBox, "Long").click();
+    h.run();
+    h
+}
+
+#[test]
+fn a_menu_stops_at_the_foot_of_the_monitor_and_scrolls_to_its_last_row() {
+    // The window fits the monitor but sits low: 300 points of it run off the foot.
+    let mut h = long_menu_on_monitor(egui::pos2(100.0, 580.0), 0.0, 800.0, 700.0, false);
+    let foot = 1080.0 - super::MONITOR_FOOT - 580.0;
+    let menu = menu_rect(&h);
+    assert!(menu.top() >= h.state().button.bottom() - 0.5, "stays below its field, with room there: {menu:?}");
+    assert!(menu.bottom() <= foot + 0.5, "the menu ends on the monitor, above {foot}: {menu:?}");
+    h.state_mut().to_end = true;
+    h.run();
+    let last = h.state().last_row;
+    let menu = menu_rect(&h);
+    assert!(last.bottom() <= menu.bottom() && last.top() >= menu.top(), "the last row {last:?} scrolls into the menu {menu:?}");
+}
+
+#[test]
+fn a_menu_with_no_room_above_the_foot_of_the_monitor_opens_above_its_field() {
+    // The 300 point list fits below in the window (about 360) but not above the monitor's foot (about 12).
+    let h = long_menu_on_monitor(egui::pos2(100.0, 580.0), 420.0, 800.0, 300.0, false);
+    let menu = menu_rect(&h);
+    assert!(menu.bottom() <= h.state().button.top() + 0.5, "opens above: {menu:?}");
+    assert!(menu.top() >= -0.5, "keeping to the room there: {menu:?}");
+}
+
+#[test]
+fn a_maximized_window_keeps_the_whole_window_for_a_menu() {
+    let h = long_menu_on_monitor(egui::Pos2::ZERO, 0.0, 1080.0, f32::INFINITY, true);
+    let menu = menu_rect(&h);
+    assert!(menu.bottom() > 1080.0 - super::MONITOR_FOOT, "no foot kept: {menu:?}");
+    assert!(menu.bottom() <= 1080.0 + 0.5, "on screen: {menu:?}");
+}
+
+#[test]
+fn a_window_on_another_monitor_keeps_to_the_window() {
+    // Where that monitor is isn't known, so the main monitor's foot says nothing about it.
+    let h = long_menu_on_monitor(egui::pos2(2200.0, 580.0), 0.0, 800.0, 700.0, false);
+    let menu = menu_rect(&h);
+    assert!(menu.bottom() > 1080.0 - super::MONITOR_FOOT - 580.0, "not cut at the main monitor's foot: {menu:?}");
+}
+
+#[test]
+fn the_visible_area_is_total() {
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 800.0));
+    let at = |y: f32| egui::Rect::from_min_size(egui::pos2(100.0, y), screen.size());
+    let monitor = egui::vec2(1920.0, 1080.0);
+    assert_eq!(super::above_monitor_foot(screen, at(0.0), monitor), screen, "fits: untouched");
+    assert_eq!(super::above_monitor_foot(screen, at(580.0), monitor).bottom(), 452.0, "runs off: cut");
+    // Its top past the foot, but still on this monitor: nothing below the top is left.
+    let low = super::above_monitor_foot(screen, at(1050.0), monitor);
+    assert_eq!(low.bottom(), screen.top(), "never upside down");
+    assert_eq!(super::above_monitor_foot(screen, at(1080.0), monitor), screen, "below the main monitor: not known");
+    for broken in [egui::Vec2::ZERO, egui::vec2(f32::NAN, f32::NAN), egui::vec2(f32::INFINITY, f32::INFINITY)] {
+        let area = super::above_monitor_foot(screen, at(580.0), broken);
+        assert!(area.bottom() >= screen.top() && area.bottom() <= screen.bottom(), "{broken:?} gives {area:?}");
+    }
+}
