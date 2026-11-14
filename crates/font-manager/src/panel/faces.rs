@@ -50,11 +50,17 @@ pub(crate) fn shown(at: &impl FacesCx, catalog: &Catalog, owner: Owner, face: &F
     at.document_face(&key(owner, face), || load(catalog, face))
 }
 
+/// The layout of a sample's `runs`: one row, cut with an ellipsis where `room` does not fit it. Measure and paint both
+/// lay the sample out with this, so the measured size is the painted size.
+pub(crate) fn sample_text<'a>(runs: &'a [DocRun<'a>], room: Option<f32>) -> DocText<'a> {
+    DocText { wrap: room, ..DocText::new(runs) }.elide()
+}
+
 /// `text` on one line in `font` at `points`, at the reading start of `rect` and centred between its top and bottom,
 /// clipped to `rect`. The sample keeps its own direction whatever the interface's.
 pub(crate) fn paint_sample(painter: &ContentPainterCx<'_>, rect: Rect, font: &FontRef, text: &str, points: f32, color: DataColor) {
     let runs = [DocRun::new(text, font.clone(), points, color)];
-    let layout = painter.layout(&DocText::new(&runs));
+    let layout = painter.layout(&sample_text(&runs, Some(rect.width())));
     let size = layout.size();
     let x = match base_direction(text) {
         Some(Direction::Rtl) => rect.right() - size.x,
