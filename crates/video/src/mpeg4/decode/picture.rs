@@ -4,7 +4,7 @@
 
 use craft_media::bitstream::BitReader;
 
-use super::super::dct::idct;
+use super::super::dct::{idct, idct_xvid};
 use super::super::tables::ZIGZAG;
 use super::headers::{self, Vol, Vop, VopKind};
 use super::mc::{self, Dst, Gmc, Plane, div_round};
@@ -146,6 +146,8 @@ pub(super) struct Refs<'a> {
     pub times: Times,
     /// Picture copied where a VOP is damaged.
     pub conceal: Option<&'a Frame>,
+    /// Inverse transform with Xvid's rounding (the stream names Xvid as its encoder).
+    pub xvid_idct: bool,
 }
 
 /// The motion of one macroblock from one reference.
@@ -571,8 +573,13 @@ impl Dec<'_> {
         let mut f = self.dequant(&qf, true, qp, scaler);
         self.pred[comp][y * w + x] =
             PredBlk { mb: idx as u32 + 1, dc: f[0], row: std::array::from_fn(|k| qf[k + 1]), col: std::array::from_fn(|k| qf[(k + 1) * 8]), qp };
-        idct(&mut f);
+        self.transform(&mut f);
         Ok(f)
+    }
+
+    /// The inverse DCT the encoder reconstructed with, where it is known.
+    fn transform(&self, f: &mut [i32; 64]) {
+        if self.refs.xvid_idct { idct_xvid(f) } else { idct(f) }
     }
 
     /// Inverse quantisation (§7.4.2) and saturation; the MPEG method's mismatch control.
@@ -614,7 +621,7 @@ impl Dec<'_> {
         let mut qf = [0i32; 64];
         read_coeffs(r, vlc::tcoef_inter(), scan, 0, &mut qf)?;
         let mut f = self.dequant(&qf, false, self.qp, 8);
-        idct(&mut f);
+        self.transform(&mut f);
         Ok(f)
     }
 

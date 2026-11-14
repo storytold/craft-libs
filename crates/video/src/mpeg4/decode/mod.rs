@@ -11,6 +11,8 @@
 //!   next one.
 //! - Packed B-VOPs (several VOPs in one container frame, as DivX and Xvid write in AVI) and
 //!   uncoded placeholder VOPs.
+//! - Streams that name Xvid as their encoder are decoded with Xvid's IDCT rounding, so the
+//!   pictures match Xvid's decoder exactly instead of drifting from it over a GOP.
 //!
 //! Not supported: data partitioning and reversible VLCs, shapes, static sprites, scalability,
 //! reduced resolution and NEWPRED (none of which Xvid or DivX write), and the short video header
@@ -617,7 +619,8 @@ impl Decoder {
         }
         let mut frame = take_frame(&mut self.spare, &vol);
         let reference = self.last.as_ref().map(|r| &r.frame);
-        let refs = Refs { past: reference, future: None, colocated: &[], times: Times::default(), conceal: reference };
+        let xvid_idct = self.user.xvid_build.is_some();
+        let refs = Refs { past: reference, future: None, colocated: &[], times: Times::default(), conceal: reference, xvid_idct };
         let (mbs, err) = picture::decode_vop(payload, &vol, &vop, &refs, &mut frame);
         if vol.low_delay {
             let p = self.picture(&frame, meta);
@@ -644,7 +647,14 @@ impl Decoder {
             return Ok(());
         };
         let mut frame = take_frame(&mut self.spare, vol);
-        let refs = Refs { past: Some(&past.frame), future: Some(&future.frame), colocated: &future.mbs, times, conceal: Some(&past.frame) };
+        let refs = Refs {
+            past: Some(&past.frame),
+            future: Some(&future.frame),
+            colocated: &future.mbs,
+            times,
+            conceal: Some(&past.frame),
+            xvid_idct: self.user.xvid_build.is_some(),
+        };
         let (_, err) = picture::decode_vop(payload, vol, vop, &refs, &mut frame);
         let p = self.picture(&frame, meta);
         self.out.push(p);

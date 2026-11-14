@@ -5,11 +5,14 @@ DivX write. The decoder reads the Simple and Advanced Simple profiles; the encod
 profile streams. Feature `mpeg4` turns on both. Depends on `craft-media` (`bitstream`,
 `CodecParams`) and `thiserror`. No `unsafe`, no panics. Both were written from the standard; no
 Xvid, DivX, FFmpeg or other MPEG-4 source was read. ffmpeg is used only in the tests, as a
-writer of test streams and as an external reference decoder.
+writer of test streams and as an external reference decoder. The rounding of the Xvid IDCT (see
+[Interpretations](#interpretations)) was measured against Xvid's library, called through its
+exported functions as a black box.
 
 `craft-media` names the stream (`CodecId::Mpeg4Video`) in MP4, Matroska, AVI and MXF.
 
 The decoder and encoder share the Annex B code tables (`tables.rs`) and the IDCT (`dct.rs`).
+`dct.rs` also holds the fixed-point IDCT that the decoder uses for Xvid streams.
 
 ## Specifications
 
@@ -85,6 +88,23 @@ output:
   2 rounding towards zero and the vertical one rounding down.
 - An uncoded VOP advances the time base but is not a reference for the temporal distances of
   direct mode.
+- A stream whose user data names Xvid (`XviD` and a build number) is decoded with Xvid's IDCT
+  instead of the exactly rounded one of Annex A. Both meet IEEE 1180, but they round
+  differently, and a decoder that rounds differently from the encoder drifts from its
+  reconstruction a little more with each P-VOP. On a 352×576 Xvid stream at quantiser 2,
+  the exactly rounded IDCT's pictures were 66 dB from Xvid's own decoder's at the I-VOP and
+  44.6 dB after 119 P-VOPs. With Xvid's IDCT the pictures are the same as those of Xvid's x86
+  decoder (SSE2), and of ffmpeg's C code, sample for sample.
+
+  The transform is derived from the DCT definition: a row pass that multiplies by
+  `round(2^15 · cos(kπ/16) · C(u) · cos((2n+1)uπ/16))` (each row pre-scaled by the factor the
+  column pass leaves out), keeps 16 bits after a shift by 11, and a column pass of rotations by
+  `tan(π/16)`, `tan(π/8)` and `tan(3π/16)` in 16-bit high-half products, with the `cos(π/4)`
+  products taken at half scale and doubled, then a shift by 6. Every sum saturates to 16 bits.
+  The per-row rounding constants were measured. The model agrees with Xvid's SSE2 IDCT on
+  every one of 862,144 test blocks, including each single coefficient at every value from
+  -2048 to 2047 and dense blocks of extreme coefficients. Xvid's older MMX IDCT differs from
+  its SSE2 one only on such extreme blocks.
 
 Two cases where the decoder follows the standard and ffmpeg does not:
 
@@ -114,7 +134,7 @@ them. On 1280×720 streams from ffmpeg's `mpeg4` encoder at 3 Mbit/s, the decode
 times as long as ffmpeg's decoder on one thread for a Simple profile stream, and about 1.8 times
 as long for an Advanced Simple one (B-VOPs, quarter sample, four vectors, MPEG quantisation).
 The largest remaining cost is the shared `f64` IDCT, which is kept so that the decoder and the
-encoder reconstruct the same samples.
+encoder reconstruct the same samples. The fixed-point Xvid IDCT is somewhat faster.
 
 `examples/mpeg4_m4vdec.rs` decodes a raw `.m4v` stream; `MPEG4_BENCH_ITERS=n` times it.
 
@@ -136,6 +156,9 @@ encoder reconstruct the same samples.
   quarter sample, after an I-VOP of this crate's encoder, against ffmpeg.
 - Packed B-VOPs with uncoded VOPs give the same pictures as the plain stream.
 - The decoder reproduces this crate's encoder's reconstruction exactly.
+- Xvid streams: a 60-picture GOP from ffmpeg's encoder, with Xvid user data added, with and
+  without B-VOPs, matches ffmpeg's decode (its C code) bit for bit. Unit tests check the Xvid
+  IDCT's constants against their formulas, two blocks against Xvid's output, and saturation.
 - Corrupted streams (truncations, bit flips, overwrites) never panic; a garbled video packet is
   concealed.
 

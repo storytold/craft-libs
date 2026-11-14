@@ -278,6 +278,28 @@ fn interlaced_clean_content() {
     oracle("interlacedclean", "352x288c", 20, &["-qscale:v", "4", "-bf", "2", "-flags", "+ildct+ilme", "-g", "10"], FLOOR, true);
 }
 
+/// A stream whose user data names Xvid as its encoder is decoded with Xvid's IDCT, as Xvid's own
+/// decoder and ffmpeg do. The pictures then match ffmpeg's bit for bit over a long GOP, instead
+/// of drifting by the IDCT mismatch that `FLOOR` allows.
+#[test]
+fn xvid_streams_decode_bit_exact() {
+    let Some(ff) = ffmpeg() else { return };
+    for (name, b_frames) in [("xvidp", "0"), ("xvidb", "2")] {
+        let plain = encode(&ff, name, "352x288", 60, &["-qscale:v", "2", "-g", "300", "-bf", b_frames]);
+        let at = plain.windows(4).position(|w| w == [0, 0, 1, 0xB6]).expect("a VOP");
+        let stream = [&plain[..at], b"\x00\x00\x01\xb2XviD0064", &plain[at..]].concat();
+        // ffmpeg's x86 SIMD code differs from Xvid's own decoder on these streams (ffmpeg 6.1 on
+        // x86-64); its C code agrees with it.
+        let reference = reference_with(&ff, &stream, name, &["-cpuflags", "0"]);
+        let (pics, dec) = decode_all(&chunks(&stream));
+        assert_eq!(dec.errors(), 0, "{name}: {:?}", dec.last_error());
+        assert_eq!(pics.len(), 60, "{name}");
+        for (i, p) in pics.iter().enumerate() {
+            assert!(planes(p) == frame(p, &reference, i), "{name}: picture {i} ({:?}) differs from ffmpeg's", p.vop_type);
+        }
+    }
+}
+
 #[test]
 fn odd_dimensions_crop_to_the_coded_size() {
     let Some(c) = oracle("odd", "50x38", 6, &["-qscale:v", "5", "-bf", "1"], FLOOR, false) else { return };
