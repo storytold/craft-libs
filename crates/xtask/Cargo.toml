@@ -16,10 +16,17 @@ default = []
 lock = []
 # The per-step JSON report, replaced atomically.
 report = ["dep:serde_json", "dep:craft-atomic"]
+# Downloads named in a pinned list, checked against SHA-256, and bounded tar extraction.
+fetch = ["dep:craft-atomic", "dep:flate2", "dep:sha2", "dep:tar"]
 
 [dependencies]
 craft-atomic = { workspace = true, optional = true }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"], optional = true }
 serde_json = { workspace = true, optional = true }
+sha2 = { version = "0.10", default-features = false, features = ["std"], optional = true }
+tar = { version = "0.4", default-features = false, optional = true }
 
 [dev-dependencies]
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+tar = { version = "0.4", default-features = false }
 tempfile = "3"
