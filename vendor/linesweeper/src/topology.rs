@@ -4042,9 +4042,10 @@ mod tests {
             w.shape_a != 0
         });
         assert_eq!(contours.contours().count(), 1);
-        // The walk calls `inside` once per edge, plus three more per edge for the debug
-        // assertions. `contour_positions` tests each edge for the boundary with two more.
-        let per_seg = if cfg!(debug_assertions) { 6 } else { 3 };
+        // The walk calls `inside` four times per edge: once to find the next boundary edge
+        // and three times to check the winding numbers, which it does in release builds too.
+        // `contour_positions` tests each edge for the boundary with two more.
+        let per_seg = 6;
         assert!(
             calls.get() <= per_seg * segs + 16,
             "{} calls to inside for {segs} segments",
