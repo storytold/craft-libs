@@ -73,7 +73,7 @@ impl<K: Clone> ItemSource<K> for Order<'_, K> {
 /// let out = ChannelsPanel::new(&rows).thumbnails(&thumbs, &DocChannelThumbs { doc }).show(ui);
 /// for event in out.events {
 ///     match event {
-///         ChannelsEvent::Target(key) => app.run("channel.target", key),
+///         ChannelsEvent::Target { key, extend, .. } => app.run("channel.target", (key, extend)),
 ///         ChannelsEvent::LoadSelection { key, operation } => app.load_selection(key, operation.name()),
 ///         _ => {}
 ///     }
@@ -245,7 +245,7 @@ fn map_events<K: Clone + PartialEq>(
         match event {
             CollectionEvent::Selection(SelectionChange::Set(keys)) => {
                 if let Some(key) = keys.last() {
-                    events.push(ChannelsEvent::Target(key.clone()));
+                    events.push(ChannelsEvent::Target { key: key.clone(), extend: keys.len() > 1 });
                 }
             }
             CollectionEvent::CommandClick { key, mods, .. } => {
