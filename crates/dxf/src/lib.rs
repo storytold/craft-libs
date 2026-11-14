@@ -11,6 +11,7 @@
 use std::io::Write as _;
 
 pub mod model;
+pub mod paths;
 mod version;
 pub use version::Version;
 

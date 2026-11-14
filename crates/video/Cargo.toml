@@ -25,8 +25,12 @@ apv-encode = ["craft-media/bitstream"]
 vp8 = ["vp8-decode", "vp8-encode"]
 vp8-decode = []
 vp8-encode = []
-# MPEG-2 video (ITU-T H.262) and MPEG-1 video (ISO/IEC 11172-2): decoder.
-mpeg2 = []
+# MPEG-2 video (ITU-T H.262) and MPEG-1 video (ISO/IEC 11172-2): decoder (`mpeg2-decode`) and
+# MPEG-2 encoder (`mpeg2-encode`). The encoder reuses the decoder's code tables, IDCT and motion
+# compensation, so it turns on the decoder too.
+mpeg2 = ["mpeg2-decode", "mpeg2-encode"]
+mpeg2-decode = []
+mpeg2-encode = ["mpeg2-decode"]
 # MPEG-4 Part 2 video (ISO/IEC 14496-2, the Xvid/DivX format): Simple profile encoder.
 mpeg4 = ["mpeg4-encode"]
 mpeg4-encode = ["craft-media/bitstream"]
@@ -58,6 +62,8 @@ rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
 craft-media-testkit = { workspace = true }
+# The AVI muxer, for the MPEG-4 Part 2 encoder's end-to-end test.
+craft-media = { workspace = true, features = ["avi"] }
 
 [[test]]
 name = "dnx"
@@ -130,7 +136,7 @@ required-features = ["mpeg4-encode"]
 
 [[test]]
 name = "mpeg2"
-required-features = ["mpeg2"]
+required-features = ["mpeg2-decode"]
 
 [[test]]
 name = "prores"

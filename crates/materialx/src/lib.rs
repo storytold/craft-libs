@@ -183,7 +183,14 @@ const OPENPBR_WRITABLE: &[(&str, InputKind)] = &[
 impl Document {
     /// Parses a MaterialX document while enforcing size, nesting and node-count limits.
     pub fn parse(bytes: &[u8]) -> Result<Self, Error> {
-        let limits = Limits { max_input: MAX_BYTES, max_depth: MAX_DEPTH, max_nodes: MAX_NODES, max_attrs: 256, max_attrs_total: 400_000 };
+        let limits = Limits {
+            max_input: MAX_BYTES,
+            max_depth: MAX_DEPTH,
+            max_nodes: MAX_NODES,
+            max_elements: MAX_NODES,
+            max_attrs: 256,
+            max_attrs_total: 400_000,
+        };
         let options = Options {
             doctype: Doctype::Reject,
             unknown_entity: UnknownEntity::Error,

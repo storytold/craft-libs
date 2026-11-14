@@ -1,0 +1,86 @@
+{
+  "board": {
+    "height_mm": 150.0,
+    "width_mm": 120.0
+  },
+  "kerf": {
+    "apply_to_exports": true,
+    "width_mm": 0.2
+  },
+  "layers": [
+    {
+      "kind": "cut",
+      "name": "cut",
+      "shapes": [
+        {
+          "id": 1,
+          "path": [
+            {
+              "MoveTo": {
+                "x": 0.0,
+                "y": 0.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 100.0,
+                "y": 0.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 100.0,
+                "y": 100.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 0.0,
+                "y": 100.0
+              }
+            },
+            "ClosePath"
+          ],
+          "style": "cut"
+        },
+        {
+          "id": 2,
+          "path": [
+            {
+              "MoveTo": {
+                "x": 30.0,
+                "y": 30.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 70.0,
+                "y": 30.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 70.0,
+                "y": 70.0
+              }
+            },
+            {
+              "LineTo": {
+                "x": 30.0,
+                "y": 70.0
+              }
+            },
+            "ClosePath"
+          ],
+          "style": "cut"
+        }
+      ],
+      "visible": true
+    }
+  ],
+  "next-shape-id": 3,
+  "stencilcraft": {
+    "name": "stencilcraft",
+    "version": 1
+  }
+}

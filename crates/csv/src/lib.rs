@@ -3,6 +3,7 @@
 //!
 //! - [`decode_text`] turns a file's bytes into a string: byte order marks, UTF-8, else
 //!   Windows-1256 when the bytes read as Arabic and Windows-1252 otherwise.
+//! - [`decode_utf8`] requires valid UTF-8 and strips a leading UTF-8 byte order mark.
 //! - [`sniff_delimiter`] picks comma, semicolon or tab.
 //! - [`parse_records`] splits text into records of fields (RFC 4180 with the usual leniency),
 //!   handing each record to a callback, with a cap on the fields kept per record. [`records`]
@@ -27,46 +28,98 @@
 mod decode;
 pub mod sylk;
 
-pub use decode::decode_text;
+pub use decode::{decode_text, decode_utf8};
 
-/// Picks comma, semicolon or tab: the candidate with the most consistent count per line
-/// (outside quotes) over the first non-blank lines. A candidate must appear on every such line, otherwise comma wins.
+/// Picks comma, semicolon or tab by consistent field counts in the first non-blank records.
+/// Quotes start only at a candidate field boundary; candidates with incoherent quoted fields
+/// are discarded when another coherent candidate separates the records. Ties prefer tab,
+/// then comma, then semicolon. Comma is the fallback when no candidate separates the text.
 pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
-    let mut best = (b',', 0usize, 0usize);
-    for d in [',', ';', '\t'] {
-        let mut counts = vec![];
-        let mut n = 0usize;
-        let mut in_q = false;
-        let mut blank = true;
-        for ch in text.chars().take(64 * 1024) {
-            if !in_q && ch == '\n' {
-                // Blank lines carry no delimiter evidence.
-                if !blank {
-                    counts.push(n);
-                }
-                n = 0;
-                blank = true;
-                if counts.len() >= 20 {
-                    break;
+    let mut candidates = [(b'\t', 0usize, 0usize, true), (b',', 0, 0, true), (b';', 0, 0, true)];
+    const SAMPLE_BYTES: usize = 64 * 1024;
+    let mut sample_end = text.len().min(SAMPLE_BYTES);
+    while !text.is_char_boundary(sample_end) {
+        sample_end -= 1;
+    }
+    let sample = &text[..sample_end];
+    let truncated = sample_end < text.len();
+    for (delimiter, min_count, total, coherent) in &mut candidates {
+        let mut counts = Vec::new();
+        let mut count = 0usize;
+        let mut quoted = false;
+        let mut after_quote = false;
+        let mut field_start = true;
+        let mut record_has_content = false;
+        let mut record_coherent = true;
+        let mut candidate_coherent = true;
+        let mut reached_record_limit = false;
+        let mut chars = sample.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if quoted {
+                if ch == quote {
+                    if chars.peek() == Some(&quote) {
+                        chars.next();
+                        record_has_content = true;
+                    } else {
+                        quoted = false;
+                        after_quote = true;
+                    }
+                } else if !ch.is_whitespace() {
+                    record_has_content = true;
                 }
                 continue;
             }
-            if ch != '\r' {
-                blank = false;
+            if ch == '\r' || ch == '\n' {
+                if ch == '\r' && chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                if record_has_content {
+                    counts.push(count);
+                    candidate_coherent &= record_coherent;
+                    if counts.len() >= 20 {
+                        reached_record_limit = true;
+                        break;
+                    }
+                }
+                count = 0;
+                quoted = false;
+                after_quote = false;
+                field_start = true;
+                record_has_content = false;
+                record_coherent = true;
+                continue;
             }
-            if ch == quote {
-                in_q = !in_q;
-            } else if !in_q && ch == d {
-                n += 1;
+            if ch == quote && field_start {
+                quoted = true;
+                field_start = false;
+                record_has_content = true;
+            } else if ch == char::from(*delimiter) {
+                count += 1;
+                field_start = true;
+                after_quote = false;
+            } else {
+                record_coherent &= !after_quote || ch.is_whitespace();
+                record_has_content |= !ch.is_whitespace();
+                field_start = false;
             }
         }
-        if !blank {
-            counts.push(n);
+        if !reached_record_limit && !truncated {
+            if quoted {
+                candidate_coherent = false;
+            } else if record_has_content {
+                candidate_coherent &= record_coherent;
+                counts.push(count);
+            }
         }
-        let min = counts.iter().copied().min().unwrap_or(0);
-        let total: usize = counts.iter().sum();
-        if min > 0 && (min, total) > (best.1, best.2) {
-            best = (d as u8, min, total);
+        *coherent &= candidate_coherent;
+        *min_count = counts.iter().copied().min().unwrap_or(0);
+        *total = counts.iter().sum();
+    }
+    let prefer_coherent = candidates.iter().any(|(_, min, _, coherent)| *min > 0 && *coherent);
+    let mut best = (b',', 0usize, 0usize);
+    for (delimiter, min, total, coherent) in candidates {
+        if min > 0 && (!prefer_coherent || coherent) && (min, total) > (best.1, best.2) {
+            best = (delimiter, min, total);
         }
     }
     best.0
@@ -204,11 +257,56 @@ mod tests {
         assert_eq!(sniff_delimiter("a\tb\n1\t2\n", '"'), b'\t');
         assert_eq!(sniff_delimiter("a,b\n\"x;y;z\",2\n", '"'), b',');
         assert_eq!(sniff_delimiter("single", '"'), b',');
+        assert_eq!(sniff_delimiter("a,b\tc\n1,2\td\n", '"'), b'\t');
+        assert_eq!(sniff_delimiter("a,b;c\n1,2;c\n", '"'), b',');
+        assert_eq!(sniff_delimiter("a;b\tc\n1;2\td\n", '"'), b'\t');
         // A delimiter missing from some lines is text, not a separator (single-column export round trip).
         assert_eq!(sniff_delimiter("alpha;beta\r\ngamma\r\n", '"'), b',');
         assert_eq!(sniff_delimiter("alpha\tbeta\r\ngamma\r\n", '"'), b',');
         assert_eq!(sniff_delimiter("a;b\r\n\r\nc;d\r\n", '"'), b';');
         assert_eq!(sniff_delimiter("x;y\n1,5;2", '"'), b';');
+    }
+
+    #[test]
+    fn delimiter_sniffing_preserves_candidate_quote_boundaries() {
+        for ending in ["\n", "\r\n", "\r"] {
+            for (text, expected) in [
+                (format!("Name,\"preferred\tCity\"{ending}Ada\tLondon{ending}"), b'\t'),
+                (format!("\"Last, First\";City{ending}Ada;London{ending}"), b';'),
+                (format!("\"Name\";\"Last, First\"{ending}\"Ada\";\"Lovelace, Countess\"{ending}\"Grace\";\"Hopper, Admiral\"{ending}"), b';'),
+                (format!("\"Name\"suffix,Title\tCity{ending}\"Ada\"suffix,Analyst\tLondon\tignored{ending}"), b'\t'),
+                (format!("\r\n \r\n\"Name\";City{ending}Ada;London{ending}"), b';'),
+            ] {
+                assert_eq!(sniff_delimiter(&text, '"'), expected, "{text:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn delimiter_sniffing_counts_empty_quoted_fields_and_ignores_whitespace_records() {
+        assert_eq!(sniff_delimiter("\"\";name\n\"\";Ada\n", '"'), b';');
+
+        let blank_rows = "\t \t\n".repeat(25);
+        assert_eq!(sniff_delimiter(&format!("{blank_rows}a;b\nc;d\n"), '"'), b';');
+    }
+
+    #[test]
+    fn delimiter_sniffing_does_not_count_the_twentieth_record_twice() {
+        let mut text = "a;b\tc\td\n".repeat(19);
+        text.push('a');
+        text.push_str(&";".repeat(19));
+        text.push_str("\tc\n");
+        assert_eq!(sniff_delimiter(&text, '"'), b'\t');
+    }
+
+    #[test]
+    fn delimiter_sniffing_discards_an_incomplete_record_at_the_sample_boundary() {
+        let complete = "a\tb\tc\n1\t2\t3\n";
+        let remaining = 64 * 1024 - complete.len();
+        let partial = format!("{}x\t\"unfinished", "z".repeat(remaining - 4));
+        assert!(partial.len() >= remaining);
+        let text = format!("{complete}{partial}\"\n");
+        assert_eq!(sniff_delimiter(&text, '"'), b'\t');
     }
 
     #[test]
