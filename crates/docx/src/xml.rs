@@ -373,6 +373,7 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
         max_depth: MAX_DEPTH + 1,
         // Text stretches count as nodes too: two for each element.
         max_nodes: 2 * MAX_ELEMENTS,
+        max_elements: MAX_ELEMENTS,
         max_attrs: MAX_ATTRS,
         max_attrs_total: 2 * MAX_ELEMENTS,
     };
