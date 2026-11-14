@@ -520,14 +520,22 @@ impl Mesh {
     }
 
     /// Append a copy of vertex `v`; returns its index, or `None` when the new index would not
-    /// fit in `u32`.
+    /// fit in `u32`. Normals, tangents, UVs and colors are copied where the mesh has one per
+    /// vertex; an array without one per vertex is left as it is.
     fn duplicate_vertex(&mut self, v: usize) -> Option<u32> {
-        let i = u32::try_from(self.positions.len()).ok()?;
+        let n = self.positions.len();
+        let i = u32::try_from(n).ok()?;
         self.positions.push(self.positions.get(v).copied().unwrap_or_default());
-        self.normals.push(self.normals.get(v).copied().unwrap_or(Vec3::Y));
-        self.tangents.push(self.tangents.get(v).copied().unwrap_or(Vec4::new(1.0, 0.0, 0.0, 1.0)));
-        self.uvs.push(self.uvs.get(v).copied().unwrap_or_default());
-        if !self.colors.is_empty() {
+        if self.normals.len() == n {
+            self.normals.push(self.normals.get(v).copied().unwrap_or(Vec3::Y));
+        }
+        if self.tangents.len() == n {
+            self.tangents.push(self.tangents.get(v).copied().unwrap_or(Vec4::new(1.0, 0.0, 0.0, 1.0)));
+        }
+        if self.uvs.len() == n {
+            self.uvs.push(self.uvs.get(v).copied().unwrap_or_default());
+        }
+        if self.colors.len() == n {
             self.colors.push(self.colors.get(v).copied().unwrap_or(Vec4::ONE));
         }
         Some(i)
@@ -1095,6 +1103,21 @@ mod tests {
         assert_eq!(mesh.uv_seam_edges(), vec![vec![(0, 2)], vec![(2, 4)]]);
         mesh.uvs[4] = mesh.uvs[0];
         assert_eq!(mesh.uv_seam_edges(), vec![Vec::<(u32, u32)>::new(); 2], "a material boundary alone is not a UV seam");
+    }
+
+    #[test]
+    fn material_uvs_leave_absent_attributes_absent() {
+        // UVs only, two materials sharing the diagonal's vertices 0 and 2.
+        let uvs = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+        let positions = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]];
+        let mut m = Mesh::from_slices(&positions, None, Some(&uvs), &[0, 1, 2, 0, 2, 3], &Limits::default()).unwrap();
+        m.materials = vec!["a".into(), "b".into()];
+        m.submeshes =
+            vec![SubMesh { name: "a".into(), material: 0, start: 0, count: 3 }, SubMesh { name: "b".into(), material: 1, start: 3, count: 3 }];
+        m.map_material_uvs(1, |uv| uv * 0.5);
+        assert_eq!(m.positions.len(), 6, "vertices 0 and 2 are copied for material 1");
+        assert_eq!(m.uvs.len(), 6);
+        assert!(m.normals.is_empty() && m.tangents.is_empty() && m.colors.is_empty(), "{m:?}");
     }
 
     #[test]

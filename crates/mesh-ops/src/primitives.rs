@@ -48,8 +48,8 @@ impl Builder {
         Builder { limits: *limits, ..Builder::default() }
     }
 
-    /// Whether `vertices` and `triangles` more fit the limits and `u32` indices; records the
-    /// error when they do not.
+    /// Whether `vertices` and `triangles` more fit the limits and `u32` indices, with the memory
+    /// for them reserved; records the error when they do not.
     fn room(&mut self, vertices: Option<usize>, triangles: Option<usize>) -> bool {
         if self.error.is_some() {
             return false;
@@ -61,7 +61,14 @@ impl Builder {
         } else if total_triangles > self.limits.max_triangles || total_triangles.checked_mul(3).and_then(|i| u32::try_from(i).ok()).is_none() {
             Some(MeshOpsError::TooLarge { what: "triangle count", got: total_triangles as u64, limit: self.limits.max_triangles as u64 })
         } else {
-            None
+            // Both counts fit the limits, so they and three times the triangles are finite.
+            let (v, t) = (vertices.unwrap_or(0), triangles.unwrap_or(0));
+            let reserved = self.p.try_reserve(v).is_ok()
+                && self.n.try_reserve(v).is_ok()
+                && self.uv.try_reserve(v).is_ok()
+                && self.idx.try_reserve(t * 3).is_ok()
+                && self.diag.try_reserve(t).is_ok();
+            (!reserved).then_some(MeshOpsError::OutOfMemory("primitive"))
         };
         self.error = error;
         self.error.is_none()

@@ -83,8 +83,8 @@ A BVH holds at most `bvh::MAX_BVH_TRIANGLES` (2^31 − 1) triangles.
 
 `Bvh::from_slices`, `Bvh::try_new`, `UvGBuffer::try_new` and `UvGBuffer::from_slices` reserve all
 their memory before using it. The slice functions, `Mesh::try_compute_normals`,
-`Mesh::try_compute_tangents`, `Mesh::try_subdivided`, `unwrap::weld_ids` and
-`unwrap::auto_unwrap` reserve their working memory and their results as they grow. Each returns
+`Mesh::try_compute_tangents`, `Mesh::try_subdivided`, the `try_` primitives, `unwrap::weld_ids`
+and `unwrap::auto_unwrap` reserve their working memory and their results as they grow. Each returns
 `MeshOpsError::OutOfMemory` when a reservation fails. `Bvh::new` then returns an empty tree,
 `UvGBuffer::new` a 1 × 1 uncovered buffer, and `compute_normals` and `compute_tangents` leave
 the mesh unchanged. The working memory of the `mikktspace` crate is allocated inside it and is
