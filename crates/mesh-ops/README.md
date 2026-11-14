@@ -79,10 +79,11 @@ A BVH holds at most `bvh::MAX_BVH_TRIANGLES` (2^31 − 1) triangles.
 
 `Bvh::from_slices`, `Bvh::try_new`, `UvGBuffer::try_new` and `UvGBuffer::from_slices` reserve all
 their memory before using it, and the other slice functions reserve the arrays they return; each
-returns `MeshOpsError::OutOfMemory` when that fails. The UV G-buffer checks its work and band
-entries in a first pass over the triangles and reserves its band lists in one piece before the
-second. `Bvh::new` then returns an empty tree and `UvGBuffer::new` a 1 × 1 uncovered buffer.
-`UvGBuffer::new` also returns that buffer when the input is over a default limit. `weld`,
+returns `MeshOpsError::OutOfMemory` when that fails. `Bvh::new` then returns an empty tree and
+`UvGBuffer::new` a 1 × 1 uncovered buffer. `UvGBuffer::new` also returns that buffer when the
+input is over a default limit. The UV G-buffer checks its work and band entries in a first pass
+over the triangles, before it reserves its band lists (in one piece) or its texel buffers, so a
+request over those limits returns `MeshOpsError::TooLarge`. `weld`,
 `unwrap::weld_ids`, the unwrap functions and `Mesh::try_subdivided` reserve the arrays and tables
 they build and return `OutOfMemory` when a reservation fails. The working memory of
 normals and tangents (MikkTSpace) is a fixed multiple of the input the limits allow and is not

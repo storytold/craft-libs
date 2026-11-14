@@ -66,17 +66,19 @@ impl OrbitCamera {
     }
 
     /// Frame a bounding box, keeping the current angles. A box whose center or framing distance
-    /// is not finite leaves the camera unchanged.
+    /// is not finite, or whose framed view-projection at aspect 1 is not finite (an eye that
+    /// rounds to the target, or terms past the `f32` range), leaves the camera unchanged.
     pub fn frame(&mut self, lo: Vec3, hi: Vec3) {
-        let target = (lo + hi) * 0.5;
+        let target = lo * 0.5 + hi * 0.5;
         let r = ((hi - lo).length() * 0.5).max(1e-3);
         let distance = r / (self.fov.clamp(5.0, 150.0).to_radians() * 0.5).sin() * 1.1;
         if !(target.is_finite() && distance.is_finite()) {
             return;
         }
-        self.target = target;
-        self.scene_radius = r;
-        self.distance = distance;
+        let framed = OrbitCamera { target, scene_radius: r, distance, ..*self };
+        if framed.view_proj(1.0).is_finite() {
+            *self = framed;
+        }
     }
 
     pub fn orbit(&mut self, dx: f32, dy: f32) {
@@ -158,6 +160,28 @@ mod tests {
         ] {
             c.frame(lo, hi);
             assert_eq!(c, framed, "{lo} {hi}");
+        }
+    }
+
+    #[test]
+    fn frame_keeps_the_view_finite() {
+        let mut c = OrbitCamera::default();
+        c.frame(Vec3::splat(-1e15), Vec3::splat(1e15));
+        assert!(c.view_proj(1.0).is_finite());
+        assert!((c.scene_radius / (1e15 * 3f32.sqrt()) - 1.0).abs() < 1e-4, "{}", c.scene_radius);
+        let framed = c;
+        for (lo, hi) in [
+            // A finite center and distance, with an eye whose distance from the target squares
+            // past the f32 range.
+            (Vec3::splat(-5e18), Vec3::splat(5e18)),
+            // An eye that rounds to a target this far out.
+            (Vec3::splat(1e30), Vec3::splat(1e30)),
+            // Corners whose sum overflows f32.
+            (Vec3::new(1.7e38, -1.0, -1.0), Vec3::new(1.8e38, 1.0, 1.0)),
+        ] {
+            c.frame(lo, hi);
+            assert_eq!(c, framed, "{lo} {hi}");
+            assert!(c.view_proj(1.0).is_finite(), "{lo} {hi}");
         }
     }
 }
