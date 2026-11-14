@@ -65,7 +65,7 @@ pub use paint_chip::{
     PaintListOptions, PaintListOutput, PaintRow, PaintWords,
 };
 pub use pair::{PairWell, SwatchPair, SwatchPairOutput, Well};
-pub use palette::{SwatchPalette, SwatchPaletteOutput};
+pub use palette::{SwatchPalette, SwatchPaletteOutput, SwatchRows, SwatchTable, SwatchTableOutput, SwatchTableStyle}; // integration: until dialogs-w15 moves SwatchTable
 pub use panel::{
     ColorPanel, ColorPanelCommand, ColorPanelMenu, ColorPanelMode, ColorPanelOutput, ColorPanelRamp, ColorPanelState, ColorPanelWords, PanelTarget,
 };

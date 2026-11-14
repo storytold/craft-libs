@@ -160,7 +160,7 @@ pub fn install(ctx: &Context, spec: InstallSpec) -> Result<(), InstallError> {
     looks.store(ctx);
     input::clear_shortcuts(ctx);
     system::install(ctx, spec.system);
-    windows::install(ctx, spec.shell_info, spec.window_system, spec.placement, spec.frame);
+    windows::install(ctx, spec.shell_info, spec.window_system, spec.placement, spec.frame, spec.app_id.clone());
     frame::set_frame_layers(ctx, spec.frame_layers);
     frame::seed_hooked_passes(ctx);
     plugin::register(ctx);
