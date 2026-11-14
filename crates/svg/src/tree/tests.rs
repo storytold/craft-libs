@@ -269,6 +269,93 @@ mod resource_limit_usage {
         (found, resolver.usage())
     }
 
+    fn expanding_encoded_children() -> Vec<(&'static str, Vec<u8>)> {
+        let latin =
+            format!("<?xml version='1.0' encoding='ISO-8859-1'?>{}", svg(&format!("<title>{}</title><rect width='1' height='1'/>", "é".repeat(100))));
+        let latin = latin.chars().map(|c| u8::try_from(u32::from(c)).unwrap()).collect();
+        let wide = svg(&format!("<title>{}</title><rect width='1' height='1'/>", "ࠀ".repeat(400)));
+        let mut little = vec![0xff, 0xfe];
+        little.extend(wide.encode_utf16().flat_map(u16::to_le_bytes));
+        let mut big = vec![0xfe, 0xff];
+        big.extend(wide.encode_utf16().flat_map(u16::to_be_bytes));
+        vec![("Latin-1", latin), ("UTF-16LE", little), ("UTF-16BE", big)]
+    }
+
+    #[test]
+    fn decoded_text_expansion_is_a_resource_refusal_for_plain_and_gzip_children() {
+        for (encoding, raw) in expanding_encoded_children() {
+            let decoded = svgz::decode(&raw).unwrap();
+            let cap = raw.len();
+            assert!(decoded.len() > cap, "{encoding} fixture must expand after inflation");
+            for gzip in [false, true] {
+                let data = if gzip { svgz::compress(&raw) } else { raw.clone() };
+                assert_eq!(svgz::inflate(&data, cap).unwrap().len(), cap, "raw bytes fit exactly");
+                assert_eq!(svgz::text(&data, cap).unwrap().len(), decoded.len(), "decoding itself succeeds");
+                let limits = Limits { bytes: cap, embedded_bytes: decoded.len(), ..shallow() };
+                assert!(matches!(checked(&decoded, &limits), Err(Error::Text(svgz::Error::TooLarge(n))) if n == cap));
+                let image = data_image(&data);
+                let (found, usage) = resolved(&svg(&image), limits, 1);
+                assert!(found.is_empty(), "{encoding}, gzip {gzip}");
+                assert_eq!((usage.svg_limit_images, usage.svg_resource_limit_images, usage.invalid_svg_images), (1, 1, 0));
+                assert_eq!(usage.embedded_svg_bytes, decoded.len(), "spent decoded work remains charged");
+                let (found, usage) = resolved(&svg(&format!("{image}{image}")), limits, 1);
+                assert!(found.is_empty());
+                assert_eq!((usage.svg_limit_images, usage.svg_resource_limit_images, usage.invalid_svg_images), (2, 2, 0));
+                assert_eq!(usage.embedded_svg_bytes, decoded.len(), "a refused sibling cannot repeat exhausted work");
+            }
+        }
+    }
+
+    #[test]
+    fn decoded_text_expansion_respects_aggregate_bytes_even_when_each_child_fits() {
+        for (encoding, raw) in expanding_encoded_children() {
+            let decoded = svgz::decode(&raw).unwrap();
+            let limits = Limits { bytes: decoded.len(), embedded_bytes: raw.len(), ..shallow() };
+            assert!(decoded.len() > limits.embedded_bytes);
+            checked(&decoded, &limits).unwrap(); // The independent per-image cap allows this complete XML.
+            for gzip in [false, true] {
+                let data = if gzip { svgz::compress(&raw) } else { raw.clone() };
+                assert_eq!(svgz::inflate(&data, limits.embedded_bytes).unwrap().len(), raw.len());
+                let image = data_image(&data);
+                let (found, usage) = resolved(&svg(&image), limits, 1);
+                assert!(found.is_empty(), "{encoding}, gzip {gzip}");
+                assert_eq!((usage.svg_limit_images, usage.svg_resource_limit_images, usage.invalid_svg_images), (1, 1, 0));
+                assert_eq!(usage.embedded_svg_bytes, limits.embedded_bytes, "refusal consumes exactly the remaining allowance");
+                let (found, usage) = resolved(&svg(&format!("{image}{image}")), limits, 1);
+                assert!(found.is_empty());
+                assert_eq!((usage.svg_limit_images, usage.svg_resource_limit_images, usage.invalid_svg_images), (2, 2, 0));
+                assert_eq!(usage.embedded_svg_bytes, limits.embedded_bytes, "a later child cannot repeat exhausted work");
+                let (found, usage) = resolved(&svg(&image), Limits { embedded_bytes: decoded.len(), ..limits }, 1);
+                assert_eq!(found, [true]);
+                assert_eq!((usage.svg_limit_images, usage.svg_resource_limit_images, usage.invalid_svg_images), (0, 0, 0));
+                assert_eq!(usage.embedded_svg_bytes, decoded.len());
+            }
+        }
+    }
+
+    #[test]
+    fn decoded_text_expansion_at_the_cap_is_valid_and_malformed_xml_stays_invalid() {
+        for (encoding, raw) in expanding_encoded_children() {
+            let decoded = svgz::decode(&raw).unwrap();
+            for gzip in [false, true] {
+                let data = if gzip { svgz::compress(&raw) } else { raw.clone() };
+                let limits = Limits { bytes: decoded.len(), embedded_bytes: decoded.len(), ..shallow() };
+                let (found, usage) = resolved(&svg(&data_image(&data)), limits, 1);
+                assert_eq!(found, [true], "{encoding}, gzip {gzip}");
+                assert_eq!((usage.svg_limit_images, usage.svg_resource_limit_images, usage.invalid_svg_images), (0, 0, 0));
+                assert_eq!(usage.embedded_svg_bytes, decoded.len());
+                // Preserve the declared/BOM encoding when making the XML malformed;
+                // re-encoding Latin-1 text as UTF-8 would test a second expansion instead.
+                let closing_bytes = if encoding == "Latin-1" { 6 } else { 12 };
+                let malformed = &raw[..raw.len() - closing_bytes];
+                let data = if gzip { svgz::compress(malformed) } else { malformed.to_vec() };
+                let (found, usage) = resolved(&svg(&data_image(&data)), limits, 1);
+                assert!(found.is_empty());
+                assert_eq!((usage.svg_limit_images, usage.svg_resource_limit_images, usage.invalid_svg_images), (0, 0, 1));
+            }
+        }
+    }
+
     #[test]
     fn embedded_chain_caps_are_explicit_resource_refusals_for_plain_and_gzip_children() {
         for gzip in [false, true] {

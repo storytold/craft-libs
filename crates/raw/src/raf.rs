@@ -136,7 +136,9 @@ fn cfa(h: &Header) -> Result<Cfa> {
     }
     let Some(l) = record(h, 0x0130) else { return Ok(Cfa::bayer_static("RGGB")) };
     let cfa = Cfa { width: 2, height: 2, pattern: l.iter().rev().map(|&c| if c & 3 == 3 { 1 } else { c & 3 }).collect(), origin_x: 0, origin_y: 0 };
-    if l.len() != 4 || !cfa.is_bayer() {
+    // Colour counts alone also accept adjacent green sites; the two greens
+    // must occupy opposite corners of the 2x2 Bayer repeat.
+    if l.len() != 4 || !matches!(cfa.pattern.as_slice(), [0, 1, 1, 2] | [2, 1, 1, 0] | [1, 0, 2, 1] | [1, 2, 0, 1]) {
         return Err(RawError::Unsupported("Fujifilm RAF with an unknown Bayer layout".into()));
     }
     Ok(cfa)
@@ -612,9 +614,45 @@ pub(super) mod tests {
 
     #[test]
     fn invalid_declared_cfa_layouts_are_not_silently_replaced() {
-        for (tag, data) in [(0x0130, vec![8, 8, 10, 10]), (0x0131, vec![3; 36])] {
+        for (tag, data) in [(0x0130, vec![8, 8, 10, 10]), (0x0130, vec![1, 2, 1, 0]), (0x0131, vec![3; 36])] {
             let header = Header { jpeg: None, records: vec![(tag, data.as_slice())], raw: None };
             assert!(matches!(cfa(&header), Err(RawError::Unsupported(_))));
+        }
+    }
+
+    fn with_bayer_record(mut bytes: Vec<u8>, pattern: [u8; 4]) -> Vec<u8> {
+        let (dir_at, raw_at) = (be32(&bytes, 92).unwrap(), be32(&bytes, 100).unwrap());
+        let mut records = bytes[dir_at..raw_at].to_vec();
+        let count = u32::from_be_bytes(records[..4].try_into().unwrap()) + 1;
+        records[..4].copy_from_slice(&count.to_be_bytes());
+        records.extend_from_slice(&[0x01, 0x30, 0, 4]);
+        records.extend_from_slice(&pattern);
+        bytes.splice(dir_at..raw_at, records.clone());
+        bytes[96..100].copy_from_slice(&(records.len() as u32).to_be_bytes());
+        bytes[100..104].copy_from_slice(&((raw_at + 8) as u32).to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn non_bayer_geometry_is_rejected_in_header_and_full_modes() {
+        // Reversal gives RGBG: correct colour counts, but both greens in one column.
+        let bytes = with_bayer_record(raf(6, 4, 16, pack(&[1000; 24], 16), None, &[]), [1, 2, 1, 0]);
+        for mode in [Mode::Header, Mode::Full] {
+            assert!(matches!(decode(&bytes, mode, &Limits::default()), Err(RawError::Unsupported(why)) if why.contains("Bayer layout")));
+        }
+    }
+
+    #[test]
+    fn all_four_bayer_geometries_preserve_the_stored_samples() {
+        let pixels: Vec<u16> = (0..24).map(|i| 123 + i * 977).collect();
+        for (stored, expected) in [([2, 1, 1, 0], "RGGB"), ([0, 1, 1, 2], "BGGR"), ([1, 2, 0, 1], "GRBG"), ([1, 0, 2, 1], "GBRG")] {
+            let bytes = with_bayer_record(raf(6, 4, 16, pack(&pixels, 16), None, &[]), stored);
+            for mode in [Mode::Header, Mode::Full] {
+                let image = decode(&bytes, mode, &Limits::default()).unwrap();
+                assert_eq!((image.width, image.height), (6, 4));
+                assert_eq!(image.cfa.as_ref().unwrap().name(), expected);
+                assert_eq!(image.data, RawData::U16(if mode == Mode::Full { pixels.clone() } else { Vec::new() }));
+            }
         }
     }
 

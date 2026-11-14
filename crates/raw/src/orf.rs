@@ -315,6 +315,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         }
         _ => Rect::new(0, 0, w, h),
     };
+    let assumed_cfa = stated.is_none();
     let cfa = stated.unwrap_or_else(|| cfa_from_data(samples, w, active));
     let (black, black_source) = match ip.as_ref().and_then(|i| i.f64s(BLACK)).as_deref() {
         Some(v @ [_, _, _, _]) => {
@@ -361,7 +362,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         camera: tiff.ifds.first().map(Camera::from_ifd0).unwrap_or_default(),
         cinema: Default::default(),
         lens_metadata: Default::default(),
-        notices: Default::default(),
+        notices: crate::RawNotices { assumed_cfa, ..Default::default() },
         level_sources: crate::LevelSources { black: black_source, white: white_source },
     };
     img.validate_for(mode)?;
@@ -665,6 +666,28 @@ mod tests {
             assert_eq!(layout(&orf(w as u32, h as u32, 16, px.clone())), name);
             for tag in unusable {
                 assert_eq!(layout(&orf_with(w as u32, h as u32, 16, px.clone(), Some(tag))), name, "{tag:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn cfa_notice_distinguishes_missing_and_unusable_exif_from_stated_patterns() {
+        let (w, h) = (160usize, 144usize);
+        let strip = mosaic(w, h, |cx, cy| [600, 1000, 1000, 300].map(|value| value + shade(cx, cy)));
+        let expected: Vec<u16> = strip.as_chunks::<2>().0.iter().map(|word| u16::from_le_bytes(*word)).collect();
+        for (tag, assumed, pattern) in [
+            (None, true, "RGGB"),
+            (Some(&[2, 0, 2, 0, 0, 1][..]), true, "RGGB"),
+            (Some(&[2, 0, 2, 0, 0, 1, 1, 3][..]), true, "RGGB"),
+            (Some(BGGR), false, "BGGR"),
+            (Some(GRBG), false, "GRBG"),
+        ] {
+            let bytes = orf_with(w as u32, h as u32, 16, strip.clone(), tag);
+            for mode in [Mode::Header, Mode::Full] {
+                let image = decode(&bytes, mode, &Limits::default()).unwrap();
+                assert_eq!(image.cfa, Some(Cfa::bayer_static(pattern)));
+                assert_eq!(image.data, RawData::U16(expected.clone()), "word16 samples remain unchanged");
+                assert_eq!(image.notices, crate::RawNotices { assumed_cfa: assumed, ..Default::default() });
             }
         }
     }

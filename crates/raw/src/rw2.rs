@@ -622,7 +622,11 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         fill_defects(&mut data, w, active);
     }
 
-    let cfa = cfa(ifd0.u16(CFA_PATTERN).unwrap_or(1));
+    let cfa_code = ifd0.u16(CFA_PATTERN);
+    // RGGB is still usable when metadata is absent or unknown, but callers
+    // must be able to distinguish that fallback from a recorded sensor phase.
+    let assumed_cfa = !matches!(cfa_code, Some(1..=4));
+    let cfa = cfa(cfa_code.unwrap_or(1));
     let read = BLACK_RGB.map(|tag| ifd0.f64(tag).filter(|v| v.is_finite() && *v >= 0.0));
     let tags = read.map(|v| v.unwrap_or(0.0) as f32);
     let offset = match encoding {
@@ -674,7 +678,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         cinema: Default::default(),
         lens_metadata: Default::default(),
         level_sources: crate::LevelSources { black: black_source, white: white_source },
-        notices: crate::RawNotices::default(),
+        notices: crate::RawNotices { assumed_cfa, ..Default::default() },
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -1070,6 +1074,35 @@ mod tests {
             assert_eq!(samples(&r), px);
             assert_eq!(r.black.mean(), DEFAULT_BLACK);
             assert_eq!(r.white_at(0), ((1 << bits) - 1) as f32, "no saturation plateau: the full range");
+        }
+    }
+
+    #[test]
+    fn cfa_fallback_provenance_preserves_pixels_in_header_and_full_modes() {
+        let pixels: Vec<u16> = (0..72).map(|i| 17 + i * 113).collect();
+        let payload = pack(&pixels, 14);
+        for (code, expected, assumed) in [
+            (None, "RGGB", true),
+            (Some(0), "RGGB", true),
+            (Some(5), "RGGB", true),
+            (Some(u16::MAX), "RGGB", true),
+            (Some(1), "RGGB", false),
+            (Some(2), "GRBG", false),
+            (Some(3), "GBRG", false),
+            (Some(4), "BGGR", false),
+        ] {
+            let mut tags = vec![short(BITS, 14), short(RAW_FORMAT, 7)];
+            if let Some(code) = code {
+                tags.push(short(CFA_PATTERN, code));
+            }
+            let bytes = file(18, 4, &tags, &payload, &|off| vec![(RAW_OFFSET, Value::Long(vec![off]))]);
+            for mode in [Mode::Header, Mode::Full] {
+                let image = decode(&bytes, mode, &Limits::default()).unwrap();
+                assert_eq!((image.width, image.height), (18, 4));
+                assert_eq!(image.cfa.as_ref().unwrap().name(), expected, "code {code:?}");
+                assert_eq!(image.notices, crate::RawNotices { assumed_cfa: assumed, ..Default::default() }, "code {code:?}, {mode:?}");
+                assert_eq!(samples(&image), if mode == Mode::Full { pixels.as_slice() } else { &[] });
+            }
         }
     }
 

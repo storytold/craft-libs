@@ -113,7 +113,7 @@ fn fallback_cfa(data: &[u16], width: usize, area: Rect, black: f32, white: f32, 
     let green_first = [0x8000_0218, 0x8000_0250, 0x8000_0270, 0x8000_0286, 0x8000_0327].into_iter().any(|id| model == Some(id));
     let measured = measured_red_row(data, width, area, black, white);
     let row = measured.unwrap_or(usize::from(green_first));
-    (Cfa::bayer_static(if row == 1 { "GBRG" } else { "RGGB" }), measured.is_none() && !green_first)
+    (Cfa::bayer_static(if row == 1 { "GBRG" } else { "RGGB" }), measured.is_none())
 }
 
 /// The 16-bit words of a maker-note array. Canon writes `ColorData` as SHORT in most models, but as UNDEFINED
@@ -511,10 +511,39 @@ pub(crate) mod tests {
         let data = vec![512; 64 * 32];
         let area = Rect::new(0, 0, 64, 32);
         assert_eq!(fallback_cfa(&data, 64, area, 512.0, 16000.0, Some(0x8000_0250)).0.name(), "GBRG");
+        assert!(fallback_cfa(&data, 64, area, 512.0, 16000.0, Some(0x8000_0250)).1);
         assert_eq!(fallback_cfa(&data, 64, area, 512.0, 16000.0, None).0.name(), "RGGB");
+        assert!(fallback_cfa(&data, 64, area, 512.0, 16000.0, None).1);
         for (width, area) in [(0, area), (64, Rect::new(usize::MAX, usize::MAX, 3, 3)), (64, Rect::new(63, 31, 1, 1))] {
             assert_eq!(measured_red_row(&data, width, area, 512.0, 16000.0), None);
         }
+    }
+
+    #[test]
+    fn model_cfa_fallback_is_disclosed_in_header_and_full_decodes() {
+        // A single inline LONG maker-note entry needs no external offsets.
+        let mut note = Vec::new();
+        note.extend_from_slice(&1u16.to_le_bytes());
+        note.extend_from_slice(&CANON_MODEL_ID.to_le_bytes());
+        note.extend_from_slice(&4u16.to_le_bytes());
+        note.extend_from_slice(&1u32.to_le_bytes());
+        note.extend_from_slice(&0x8000_0250u32.to_le_bytes());
+        note.extend_from_slice(&0u32.to_le_bytes());
+        let samples = vec![512u16; 64 * 32];
+        let mut bytes = synthetic_cr2_of(&samples, 64, 32, None, Some(note));
+        let marker = [0xe0, 0xc5, 4, 0, 1, 0, 0, 0];
+        let at = bytes.windows(marker.len()).position(|b| b == marker).unwrap();
+        // Remove only the CFA tag; the model ID and encoded samples stay intact.
+        bytes[at..at + 2].copy_from_slice(&0xc5dfu16.to_le_bytes());
+        let header = decode(&bytes, Mode::Header, &Limits::default()).unwrap();
+        let full = decode(&bytes, Mode::Full, &Limits::default()).unwrap();
+        for image in [&header, &full] {
+            assert_eq!(image.cfa.as_ref().unwrap().name(), "GBRG");
+            assert!(image.notices.assumed_cfa);
+        }
+        assert_eq!(header.info(), full.info());
+        assert_eq!(full.data, RawData::U16(samples));
+        assert!(header.data.is_empty());
     }
 
     #[test]

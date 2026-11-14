@@ -734,11 +734,11 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     // agree too. Genuinely packed 12-bit strips retain their 12-bit scale.
     let scale_bits = if info.compression == 1 && out_bits < 14 && strip_len >= (w * h * 2) as u64 { 14 } else { out_bits };
 
-    let cfa = match (raw.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), raw.bytes(t::CFA_PATTERN_EP)) {
+    let (cfa, assumed_cfa) = match (raw.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), raw.bytes(t::CFA_PATTERN_EP)) {
         (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => {
-            Cfa { width: 2, height: 2, pattern: p.to_vec(), origin_x: 0, origin_y: 0 }
+            (Cfa { width: 2, height: 2, pattern: p.to_vec(), origin_x: 0, origin_y: 0 }, false)
         }
-        _ => Cfa::bayer_static("RGGB"),
+        _ => (Cfa::bayer_static("RGGB"), true),
     };
     let curve_black = (info.compression == 32767 && one_byte_per_sample)
         .then(|| declared_curve.as_ref().and_then(|curve| code_curve(curve).get(256).copied()).map(f32::from))
@@ -859,7 +859,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         cinema: Default::default(),
         lens_metadata: LensMetadata { sony: sony_lens },
         level_sources: crate::LevelSources { black: black_source, white: white_source },
-        notices: crate::RawNotices::default(),
+        notices: crate::RawNotices { assumed_cfa: assumed_cfa && !linear_rgb, ..Default::default() },
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -891,6 +891,8 @@ mod tests {
         assert_eq!(header.info(), full.info());
         assert_eq!((full.width, full.height, full.cpp), (4, 4, 3));
         assert!(full.cfa.is_none());
+        assert!(!header.notices.assumed_cfa);
+        assert!(!full.notices.assumed_cfa);
         assert_eq!(full.data.len(), 48);
         assert_eq!(full.wb_multipliers, Some([1.0; 3]));
         // the YCbCr data sit 512 above the recorded sensor black level; white moves with it
@@ -929,6 +931,10 @@ mod tests {
 
     /// A 32767-compressed ARW whose single strip is `strip` bytes for a 32 x 4 image.
     fn arw_with_strip(strip: usize) -> Vec<u8> {
+        arw_with_strip_and_cfa(strip, None)
+    }
+
+    fn arw_with_strip_and_cfa(strip: usize, cfa: Option<(Vec<u16>, Vec<u8>)>) -> Vec<u8> {
         use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
         let mut raw = IfdBuilder::new();
         raw.set(t::MAKE, Value::Ascii("SONY".into()));
@@ -939,9 +945,35 @@ mod tests {
         raw.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![1]));
         raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::CFA]));
         raw.set(t::COMPRESSION, Value::Short(vec![32767]));
+        if let Some((dimensions, pattern)) = cfa {
+            raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(dimensions));
+            raw.set(t::CFA_PATTERN_EP, Value::Byte(pattern));
+        }
         raw.set(TONE_CURVE, Value::Short(vec![8000, 10400, 12900, 14100]));
         raw.set_image(ImageData::Strips { rows_per_strip: 4, strips: vec![vec![0u8; strip]] });
         TiffWriter::default().write(&[raw]).unwrap()
+    }
+
+    #[test]
+    fn cfa_fallback_notices_follow_missing_malformed_and_valid_source_tags() {
+        for (tags, expected, assumed) in [
+            (None, "RGGB", true),
+            (Some((vec![1, 4], vec![0, 1, 1, 2])), "RGGB", true),
+            (Some((vec![2, 2], vec![0, 1, 3, 2])), "RGGB", true),
+            (Some((vec![2, 2], vec![0, 1, 2])), "RGGB", true),
+            (Some((vec![2, 2], vec![1, 0, 2, 1])), "GRBG", false),
+        ] {
+            let file = arw_with_strip_and_cfa(32 * 4, tags);
+            let header = decode(&file, Mode::Header, &Limits::default()).unwrap();
+            let full = decode(&file, Mode::Full, &Limits::default()).unwrap();
+            assert_eq!(header.info(), full.info());
+            for image in [&header, &full] {
+                assert_eq!(image.cfa.as_ref().unwrap().name(), expected);
+                assert_eq!(image.notices.assumed_cfa, assumed);
+            }
+            assert!(header.data.is_empty());
+            assert_eq!(full.data.len(), 32 * 4);
+        }
     }
 
     /// Strip byte counts that add up past `u64::MAX` (LONG8 `[u64::MAX, 1]`) are an error or a picture, not an overflow.

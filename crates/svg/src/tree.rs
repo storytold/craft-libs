@@ -462,9 +462,24 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'
             return None;
         }
     };
+    // The raw/inflated bytes can fit while UTF-16/Latin-1 decoding expands
+    // beyond the aggregate allowance. A refusal consumes the remaining work.
+    if text.len() > left {
+        used.bytes.fetch_add(left, Ordering::Relaxed);
+        used.svg_limit.fetch_add(1, Ordering::Relaxed);
+        used.svg_resource_limit.fetch_add(1, Ordering::Relaxed);
+        return None;
+    }
     used.bytes.fetch_add(text.len(), Ordering::Relaxed);
     let xml = match checked(&text, limits) {
         Ok(xml) => xml,
+        // Decoding UTF-16 or Latin-1 can exceed the text cap after the
+        // raw/inflated bytes fitted. This is a resource refusal, not invalid XML.
+        Err(Error::Text(svgz::Error::TooLarge(_))) => {
+            used.svg_limit.fetch_add(1, Ordering::Relaxed);
+            used.svg_resource_limit.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
         Err(_) => {
             used.invalid_svg.fetch_add(1, Ordering::Relaxed);
             return None;
