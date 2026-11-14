@@ -4,7 +4,8 @@ use super::context::{Cx, CxCore};
 use crate::contract::{Component, EditResponse, Pointer as _, Validity, ValueOf};
 use crate::primitives::Adopted;
 use craft_behavior::{
-    CancelReason, EditEvent, Gesture, GesturePhase, Mixed, PartRef, PointerButton, PressCancel, PressPhase, Sense, Value, WheelPhase,
+    CancelReason, EditEvent, Gesture, GestureId, GesturePhase, Mixed, PartRef, PointerButton, PressCancel, PressPhase, Sense, Value,
+    WheelPhase,
 };
 use egui::{Id, Pos2};
 use std::sync::Arc;
@@ -75,6 +76,12 @@ pub trait Edit {
 /// The key of the gesture slot under a component's base id.
 pub(crate) fn gesture_key(id: Id) -> Id {
     crate::runtime::memory::sub(id, "edit")
+}
+
+/// The key of the slot naming the gesture a wheel began. It holds a gesture id, not a flag, so a run that ended
+/// some other way (a host change, a removal) and a later gesture of another kind never read as a wheel run.
+fn wheel_run_key(id: Id) -> Id {
+    crate::runtime::memory::sub(id, "wheel-run")
 }
 
 impl<C: Component> Cx<'_, C> {
@@ -349,7 +356,8 @@ impl<C: Component> Cx<'_, C> {
             let slot = self.gesture_slot();
             // Only a run the wheel began is a wheel run: a notch inside a press-carried gesture joins that gesture.
             if !running && slot.is_running() {
-                slot.wheel = true;
+                let began = slot.id;
+                *self.core.memory.shown::<Option<GestureId>>(wheel_run_key(self.core.id)) = Some(began);
             }
         }
         if phase == WheelPhase::End && self.in_wheel_run() {
@@ -360,6 +368,6 @@ impl<C: Component> Cx<'_, C> {
     /// Whether the running gesture is a wheel run.
     pub fn in_wheel_run(&self) -> bool {
         let slot = self.core.memory.recall::<Gesture<ValueOf<C>>>(gesture_key(self.core.id));
-        slot.is_running() && slot.wheel
+        slot.is_running() && self.core.memory.recall::<Option<GestureId>>(wheel_run_key(self.core.id)) == Some(slot.id)
     }
 }
