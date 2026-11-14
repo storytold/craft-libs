@@ -7,6 +7,7 @@ use craft_drawingml::chart::Chart;
 use craft_drawingml::theme::Theme;
 
 use crate::drawing::Drawing;
+use crate::external::ExternalLink;
 use crate::features::{Comments, NoteShape, Table};
 use crate::pivot::{CacheRecord, PivotCacheDefinition, PivotTableDefinition, read_record};
 use crate::sheet::{Row, RowReader, SheetPart};
@@ -149,7 +150,10 @@ impl<'a> Package<'a> {
         if self.binary.is_some() {
             let bytes = self.required(&self.workbook_part.clone())?;
             let rels = self.workbook_rels()?;
-            let (wb, links) = xlsb::workbook(&bytes, &rels, &self.limits, &self.budget, &mut self.warnings)?;
+            let (wb, mut links) = xlsb::workbook(&bytes, &rels, &self.limits, &self.budget, &mut self.warnings)?;
+            if let Some(links) = links.as_mut() {
+                self.index_external_links(&wb, links)?;
+            }
             self.binary_links = Some(links);
             return Ok(wb);
         }
@@ -390,6 +394,73 @@ impl<'a> Package<'a> {
         let Some(rel) = rels.first("theme").filter(|r| !r.external) else { return Ok(None) };
         let root = self.optional_xml(&rel.target.clone())?;
         Ok(root.map(|r| craft_drawingml::theme::read_theme(&mut craft_drawingml::part::NoSource, &r)))
+    }
+
+    /// The workbook's external links, one entry per [`Workbook::external_references`], so a
+    /// formula's `[n]` is entry `n - 1`: the part's name and its link, `None` (with a warning)
+    /// for a part that is missing or does not read.
+    pub fn external_links(&mut self, workbook: &Workbook) -> Result<Vec<(String, Option<ExternalLink>)>, Error> {
+        let rels = self.workbook_rels()?;
+        let mut out = Vec::with_capacity(workbook.external_references.len());
+        for id in &workbook.external_references {
+            let Some(rel) = rels.by_id(id).filter(|r| !r.external) else {
+                self.warn(format!("external link {id}: the relationship is missing"));
+                out.push((String::new(), None));
+                continue;
+            };
+            let part = rel.target.clone();
+            let link = match self.external_link(&part) {
+                Ok(link) => link,
+                Err(Error::TooLarge(m)) => return Err(Error::TooLarge(m)),
+                Err(e) => {
+                    self.warn(format!("skipped {part}: {e}"));
+                    None
+                }
+            };
+            out.push((part, link));
+        }
+        Ok(out)
+    }
+
+    /// One external link part, `None` when it is missing.
+    fn external_link(&mut self, part: &str) -> Result<Option<ExternalLink>, Error> {
+        let rels = self.opc.rels(part)?;
+        if let Some(types) = &self.binary {
+            xlsb::check_type(types, part, xlsb::EXTERNAL_LINK)?;
+            let Some(bytes) = self.opc.read(part)? else { return Ok(None) };
+            return Ok(Some(xlsb::external_link(&bytes, &rels, &self.limits, &self.budget, &mut self.warnings)?.0));
+        }
+        Ok(self.optional_xml(part)?.map(|root| ExternalLink::read(&root, &rels)))
+    }
+
+    /// Reads a binary workbook's external link parts into `links`, so formulas can spell
+    /// `[1]Sheet!A1`. A part that does not read is left out with a warning: formulas through it
+    /// keep their saved results.
+    fn index_external_links(&mut self, wb: &Workbook, links: &mut xlsb::Links) -> Result<(), Error> {
+        // A reference that could not be read would shift every later link's number.
+        if wb.external_references.len() != links.external_count() {
+            self.warn("XLSB: the external links could not be matched to their parts; formulas through them keep their saved results");
+            return Ok(());
+        }
+        let rels = self.workbook_rels()?;
+        for (k, id) in wb.external_references.iter().enumerate() {
+            let Some(rel) = rels.by_id(id).filter(|r| !r.external) else { continue };
+            let part = rel.target.clone();
+            let read = (|| {
+                if let Some(types) = &self.binary {
+                    xlsb::check_type(types, &part, xlsb::EXTERNAL_LINK)?;
+                }
+                let bytes = self.required(&part)?;
+                let part_rels = self.opc.rels(&part)?;
+                xlsb::external_link(&bytes, &part_rels, &self.limits, &self.budget, &mut Warnings::default())
+            })();
+            match read {
+                Ok((_, info)) => links.set_external(k, info),
+                Err(Error::TooLarge(m)) => return Err(Error::TooLarge(m)),
+                Err(e) => self.warn(format!("XLSB: {part} could not be read ({e}); formulas through it keep their saved results")),
+            }
+        }
+        Ok(())
     }
 
     fn required(&mut self, part: &str) -> Result<Vec<u8>, Error> {

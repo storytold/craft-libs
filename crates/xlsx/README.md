@@ -8,7 +8,8 @@ This is the part layer. `Package::open` opens the container through `craft-opc` 
 
 | Call | Gives |
 |---|---|
-| `workbook()` | `Workbook`: sheets in tab order (name, id, visibility, kind, part), the 1904 date flag, defined names, the active tab, and the whole part as a tree |
+| `workbook()` | `Workbook`: sheets in tab order (name, id, visibility, kind, part), the 1904 date flag, defined names, the active tab, the external references, and the whole part as a tree |
+| `external_links(workbook)` | each `ExternalLink` in `externalReferences` order, so a formula's `[n]` is entry `n - 1`: another workbook's target, sheet names, defined names (`refersTo`, `sheetId`) and cached cells; a DDE or OLE link as `Other` |
 | `shared_strings()` | `StringItem`s: text, formatted runs, phonetic readings |
 | `styles()` | `Styles`: number formats, fonts, fills, borders, cell and cell-style formats, named styles, differential formats, the indexed palette, as indexed tables |
 | `sheet(entry, each)` | each `Row` of `Cell`s to a callback, then a `SheetPart`: the rest of the worksheet as a tree, its relationships, columns and merged cells |
@@ -83,17 +84,23 @@ for new pictures (`vm = i + 1`) and the `XLDAPR` dynamic-array metadata (`cm = 1
 The parts this crate writes use the transitional namespaces; a strict file's kept parts stay as
 they were. A binary workbook is not written.
 
-A binary workbook gives the same `Workbook`, strings, rows and merged cells. Its styles are not
-read (each cell keeps its format index). Its cell formulas are decoded from their tokens into the
-text an `.xlsx` file holds (`_xlfn.` and `_xlpm.` names as written, apart from the four
-ISO/IEC 29500 functions `.xlsx` names bare, no implicit `@`, the spaces and line breaks typed in
-the formula, numbers as Excel spells them), with
-`FormulaKind::Shared` or `FormulaKind::Array` and their ranges, and `BrtCellMeta` as the cell
-metadata index. Every cell of a shared formula gets its own text, decoded at the cell, since the
-file keeps the tokens once. A formula whose decoding needs something the reader does not read
-keeps only its saved result, with a warning saying why: user defined names, table references,
-other workbooks, Python code stored outside the cell, data tables. The XLSB function table
-(`xlsb/ftab.rs`) and the expression printer are this crate's own, apart from `craft-xls`'s.
+A binary workbook gives the same `Workbook`, strings, rows and merged cells. Its styles are not read
+(each cell keeps its format index). Its cell formulas are decoded from their tokens into the text an
+`.xlsx` file holds (`_xlfn.` and `_xlpm.` names as written, apart from the four ISO/IEC 29500
+functions `.xlsx` names bare, no implicit `@`, the spaces and line breaks typed in the formula,
+numbers as Excel spells them), with `FormulaKind::Shared` or `FormulaKind::Array` and their ranges,
+and `BrtCellMeta` as the cell metadata index. Every cell of a shared formula gets its own text,
+decoded at the cell, since the file keeps the tokens once. A formula whose decoding needs something
+the reader does not read keeps only its saved result, with a warning saying why: user defined names,
+table references, Python code stored outside the cell, data tables. The XLSB function table
+(`xlsb/ftab.rs`) and the expression printer are this crate's own, apart from `craft-xls`'s. A
+reference to another workbook is spelled as `.xlsx` has it (`[1]Data!$A$1`, `'[1]Other Sheet'!A1`,
+`'[1]A:C'!A1`, `[1]!ExtName`, a DDE item `[2]!'R1C1'`), numbered by its `BrtSupBookSrc`, from the
+sheet and name lists of its `externalLinkN.bin`, read when the workbook part is; Excel quotes such a
+sheet only for a leading digit or a character outside letters, digits, `_` and `.`. Excel's binary
+file may record a sheet-scoped name of the other workbook as workbook-level (`iSheet` 0); such a
+name reads as Excel itself reads it back, `[1]!Local`. A reference to a link that can't be read, a
+deleted sheet of it or a name it lacks keeps the cell's saved result.
 
 ## Hostile input
 

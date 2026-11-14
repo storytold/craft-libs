@@ -4,6 +4,7 @@
 //! Styles are not read. A record that does not parse fails the read.
 
 mod expr;
+mod external;
 mod formula;
 mod ftab;
 
@@ -17,6 +18,7 @@ use crate::sheet::{Cell, CellFormula, CellValue, FormulaKind, Row, SheetPart};
 use crate::strings::StringItem;
 use crate::workbook::{SheetEntry, SheetKind, Workbook};
 use crate::{Error, Limits, Warnings};
+pub(crate) use external::{EXTERNAL_LINK, external_link};
 pub(crate) use formula::Links;
 use formula::{Book, Mode, Name, Xti};
 
@@ -28,6 +30,8 @@ pub(crate) const STRINGS: &str = "application/vnd.ms-excel.sharedStrings";
 const MAX_SHEETS: usize = 1024;
 /// Most merged ranges in one worksheet.
 const MAX_MERGES: usize = 100_000;
+/// External link references read at most.
+const MAX_EXTERNAL_LINKS: usize = 65_536;
 /// Defined names (Excel's hidden ones for newer functions included) read at most; past it, the
 /// workbook's formulas keep their saved results.
 const MAX_NAMES: usize = 65_536;
@@ -285,6 +289,15 @@ pub(crate) fn workbook(
                 return Ok((wb, links));
             }
             39 | 355 | 357 | 358 | 362 | 667 => {
+                // BrtSupBookSrc: an external link part, by its relationship id, in the order a
+                // formula's `[1]` counts.
+                if id == 355 {
+                    let mut b = Bytes::new(payload);
+                    match b.text(255).and_then(|rel| b.finish().map(|()| rel)) {
+                        Ok(rel) if wb.external_references.len() < MAX_EXTERNAL_LINKS => wb.external_references.push(rel),
+                        _ => warnings.warn("XLSB: an external link reference could not be read"),
+                    }
+                }
                 if let Some(l) = links.as_mut()
                     && link_record(id, payload, l).is_err()
                 {
@@ -377,7 +390,10 @@ fn link_record(id: u16, payload: &[u8], links: &mut Links) -> Result<(), Error> 
                 _ => Book::Addin,
             });
         }
-        355 => links.books.push(Book::External),
+        355 => {
+            links.books.push(Book::External(links.external.len()));
+            links.external.push(None);
+        }
         362 => {
             // [MS-XLSB] 2.4.672: cXti "MUST be less than 65536" (PtgRef3d's ixti is 16 bits).
             let count = b.u32()?;

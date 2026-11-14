@@ -11,9 +11,9 @@
 
 use std::sync::Arc;
 
-use craft_sheet::{CellError, CellRef, MAX_COLS, MAX_ROWS};
+use craft_sheet::{CellError, CellRef, MAX_COLS, MAX_ROWS, quote_sheet};
 
-use super::expr::{Anchor, BinOp, Expr, RefKind, Reference, SheetSel, UnOp};
+use super::expr::{Anchor, BinOp, Expr, RefKind, Reference, SheetSel, UnOp, external_sheet};
 use super::ftab::function;
 
 /// Formula token bytes decoded at most (a cell formula holds at most 16,384).
@@ -124,8 +124,26 @@ pub(super) enum Book {
     Same,
     /// `BrtSupAddin`: add-in functions.
     Addin,
-    /// `BrtSupBookSrc`: another workbook, DDE or OLE. Never followed.
-    External,
+    /// `BrtSupBookSrc`: another workbook, DDE or OLE, by its place among them: `.xlsx`'s `[1]`
+    /// is the first.
+    External(usize),
+}
+
+/// What formulas need of an external link part: the other workbook's sheets, and its names
+/// (or DDE and OLE items) in record order, which `PtgNameX` indexes from 1.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ExternalInfo {
+    pub sheets: Vec<String>,
+    pub names: Vec<ExternalNameInfo>,
+    /// A DDE or OLE link: its names are items (`[2]!'R1C1'`).
+    pub dde: bool,
+}
+
+/// A name in another workbook, and the sheet it is scoped to.
+#[derive(Clone, Debug)]
+pub(crate) struct ExternalNameInfo {
+    pub name: String,
+    pub sheet: Option<usize>,
 }
 
 /// Xti ([MS-XLSB] 2.5.173): a supporting link and a range of its sheets.
@@ -155,6 +173,9 @@ pub(crate) struct Links {
     pub(super) names: Vec<Name>,
     pub(super) books: Vec<Book>,
     pub(super) xti: Vec<Xti>,
+    /// Each external link part, by its place among the `BrtSupBookSrc`s: `None` when it could
+    /// not be read, and formulas through it keep their saved results.
+    pub(super) external: Vec<Option<ExternalInfo>>,
 }
 
 /// Whether a name stands for a LET parameter (`_xlpm.x`), which only the formula itself defines.
@@ -163,12 +184,60 @@ fn is_param(name: &str) -> bool {
 }
 
 impl Links {
+    /// How many `BrtSupBookSrc`s the workbook has.
+    pub(crate) fn external_count(&self) -> usize {
+        self.external.len()
+    }
+
+    /// Sets what formulas need of external link `k`, the `k`-th `BrtSupBookSrc`.
+    pub(crate) fn set_external(&mut self, k: usize, info: ExternalInfo) {
+        if let Some(slot) = self.external.get_mut(k) {
+            *slot = Some(info);
+        }
+    }
+
+    /// External link `k` as formulas read it.
+    fn external(&self, k: usize) -> Result<&ExternalInfo, Unsupported> {
+        self.external.get(k).and_then(Option::as_ref).ok_or(Unsupported("references to other workbooks whose link could not be read"))
+    }
+
+    /// The sheets of external link `k` a 3-D reference names: `[1]Data`, `'[1]A:C'`.
+    fn external_sheets(&self, k: usize, x: &Xti) -> Result<SheetSel, Unsupported> {
+        let link = self.external(k)?;
+        if link.dde {
+            return Err(Unsupported("references through DDE or OLE links"));
+        }
+        let sheet =
+            |i: i32| usize::try_from(i).ok().and_then(|i| link.sheets.get(i)).ok_or(Unsupported("references to missing sheets of other workbooks"));
+        let (a, b) = (sheet(x.first)?, sheet(x.last)?);
+        Ok(SheetSel::External(k + 1, a.clone(), (x.first != x.last).then(|| b.clone())))
+    }
+
+    /// `PtgNameX` through external link `k`: `[1]!ExtName`, `[1]Data!Local` for a name scoped to a
+    /// sheet, `[2]!'R1C1'` for a DDE item.
+    fn external_name(&self, k: usize, x: &Xti, index: u32) -> Result<String, Unsupported> {
+        let link = self.external(k)?;
+        let n = usize::try_from(index).ok().and_then(|i| i.checked_sub(1)).and_then(|i| link.names.get(i));
+        let n = n.ok_or(Unsupported("reference to a missing name in another workbook"))?;
+        if link.dde {
+            return Ok(format!("[{}]!{}", k + 1, quote_sheet(&n.name)));
+        }
+        let sheet = usize::try_from(x.first)
+            .ok()
+            .or(n.sheet)
+            .map(|i| link.sheets.get(i).ok_or(Unsupported("references to missing sheets of other workbooks")));
+        Ok(match sheet {
+            Some(s) => format!("{}!{}", external_sheet(k + 1, s?, None), n.name),
+            None => format!("[{}]!{}", k + 1, n.name),
+        })
+    }
+
     /// The sheets a 3-D reference names, or `None` for a deleted sheet (the reference is `#REF!`).
     fn sheet_sel(&self, ixti: u16) -> Result<Option<SheetSel>, Unsupported> {
         let x = self.xti.get(usize::from(ixti)).ok_or(Unsupported("reference to a missing sheet link"))?;
         match usize::try_from(x.book).ok().and_then(|b| self.books.get(b)) {
             Some(Book::This) => {}
-            Some(Book::External) => return Err(Unsupported("references to other workbooks (external links)")),
+            Some(Book::External(k)) => return self.external_sheets(*k, x).map(Some),
             Some(_) => return Err(Unsupported("references through add-in or same-sheet links")),
             None => return Err(Unsupported("reference to a missing workbook link")),
         }
@@ -289,6 +358,11 @@ fn reference(sheet: Option<SheetSel>, kind: RefKind) -> Expr {
         Some(sheet) => Expr::Ref(Reference { sheet, kind }),
         None => Expr::Error(CellError::Ref),
     }
+}
+
+/// Sheet link `ixti`.
+fn xti(links: &Links, ixti: u16) -> Result<&Xti, Unsupported> {
+    links.xti.get(usize::from(ixti)).ok_or(Unsupported("reference to a missing sheet link"))
 }
 
 /// Decodes a formula's `rgce` (tokens) with its `rgcb` (extra data for array constants and
@@ -510,7 +584,18 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode) -> Res
                 t.take(12)?;
                 push(&mut stack, kids, Expr::Error(CellError::Ref))?;
             }
-            0x39 => return Err(Unsupported("names in other workbooks or on other sheets")),
+            0x39 => {
+                // PtgNameX: a name through a supporting link; one in another workbook is spelled
+                // with the link's number, as `.xlsx` has it.
+                let ixti = t.u16()?;
+                let index = t.u32()?;
+                let x = xti(links, ixti)?;
+                let text = match usize::try_from(x.book).ok().and_then(|b| links.books.get(b)) {
+                    Some(Book::External(k)) => links.external_name(*k, x, index)?,
+                    _ => return Err(Unsupported("names in other workbooks or on other sheets")),
+                };
+                push(&mut stack, kids, Expr::Verbatim(text))?;
+            }
             0x3A => {
                 let ixti = t.u16()?;
                 let (r, c) = (t.u32()?, t.u16()?);
