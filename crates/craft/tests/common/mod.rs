@@ -16,6 +16,14 @@ pub const NOT_IN_FACADE: &[(&str, &str)] = &[
     ("ui-bench", "a tool: the release-mode benchmark of the UI library"),
     ("ui-gallery", "a tool: the story gallery application"),
     ("ui-macros", "a proc-macro crate that craft-ui re-exports"),
+    ("svg-paths", "the former name of craft-svg's geometry reader; re-exports it"),
+    ("ui-canvas", "part of craft-ui, which the facade exposes as `ui`"),
+    ("ui-contract", "part of craft-ui, which the facade exposes as `ui`"),
+    ("ui-panels", "part of craft-ui, which the facade exposes as `ui`"),
+    ("ui-patterns", "part of craft-ui, which the facade exposes as `ui`"),
+    ("ui-shell", "part of craft-ui, which the facade exposes as `ui`"),
+    ("ui-test-kit", "test support shared by craft-ui's integration binaries"),
+    ("ui-widgets", "part of craft-ui, which the facade exposes as `ui`"),
     ("win32", "the `unsafe` Win32 calls behind a safe API, used by craft-window"),
 ];
 

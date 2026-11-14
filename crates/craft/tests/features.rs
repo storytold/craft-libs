@@ -1,5 +1,6 @@
 //! The facade's `[features]` table is written from the member crates' manifests.
-//! `UPDATE_FACADE=1 cargo test -p craft -- integration::features` rewrites the checked-in table.
+//! `UPDATE_FACADE=1 cargo test -p craft -- integration::features` rewrites the checked-in table, and
+//! first adds the optional dependency line and the `pub use` line of every member the facade lacks.
 
 use super::common;
 
@@ -115,6 +116,46 @@ fn checked_in(manifest: &str) -> (usize, usize) {
     (start, end)
 }
 
+/// Adds `craft-x = { workspace = true, optional = true }` to the facade manifest's `[dependencies]` and
+/// `pub use craft_x as x;` to `src/lib.rs` for every member that has neither, leaving the hand-written lines alone.
+fn add_missing_members(members: &[Member], manifest_path: &std::path::Path) {
+    let manifest = std::fs::read_to_string(manifest_path).unwrap();
+    let have: toml::Table = manifest.parse().unwrap();
+    let deps = have["dependencies"].as_table().unwrap();
+    let missing: Vec<&Member> = members.iter().filter(|m| !deps.contains_key(&format!("craft-{}", m.dir))).collect();
+    if !missing.is_empty() {
+        let at = manifest.find("\n[features]").expect("[features] section");
+        let head = manifest[..at].trim_end();
+        let mut text = head.to_owned();
+        for m in &missing {
+            text += &format!("\ncraft-{} = {{ workspace = true, optional = true }}", m.dir);
+        }
+        text += "\n";
+        text += &manifest[at..];
+        std::fs::write(manifest_path, text).unwrap();
+    }
+
+    let lib_path = manifest_path.with_file_name("src/lib.rs");
+    let lib = std::fs::read_to_string(&lib_path).unwrap();
+    let mut lines: Vec<String> = lib.lines().map(str::to_owned).collect();
+    for m in members.iter().filter(|m| !m.always_on() && m.dir != "ui") {
+        let ident = m.dir.replace('-', "_");
+        if lines.iter().any(|l| l.starts_with(&format!("pub use craft_{ident} as "))) {
+            continue;
+        }
+        let name_of = |l: &String| l.strip_prefix("pub use craft_").and_then(|r| r.split(' ').next()).map(str::to_owned);
+        let at = lines
+            .iter()
+            .position(|l| name_of(l).is_some_and(|n| n > ident))
+            .or_else(|| lines.iter().position(|l| l == "pub use egui;"))
+            .expect("re-export block");
+        let at = if lines[at - 1].starts_with("#[cfg(") { at - 1 } else { at };
+        lines.insert(at, format!("pub use craft_{ident} as {ident};"));
+        lines.insert(at, format!("#[cfg(feature = \"{}\")]", m.dir));
+    }
+    std::fs::write(&lib_path, lines.join("\n") + "\n").unwrap();
+}
+
 #[test]
 fn features_table_matches_member_manifests() {
     let members = members();
@@ -123,6 +164,9 @@ fn features_table_matches_member_manifests() {
     let manifest = std::fs::read_to_string(&path).unwrap();
     let (start, end) = checked_in(&manifest);
     if std::env::var_os("UPDATE_FACADE").is_some() {
+        add_missing_members(&members, &path);
+        let manifest = std::fs::read_to_string(&path).unwrap();
+        let (start, end) = checked_in(&manifest);
         let mut text = manifest[..start].to_owned();
         text += &want;
         text += &manifest[end..];
