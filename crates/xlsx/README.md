@@ -88,8 +88,9 @@ A binary workbook gives the same `Workbook`, strings, rows (with their heights, 
 hidden flags and styles), columns, default sizes and merged cells. Its styles are not read (each
 cell keeps its format index). The descent Excel records for rows and the sheet
 (`x14ac:dyDescent`) is in alternate-content blocks, which are skipped. Its cell formulas are
-decoded from their tokens into the
-text an `.xlsx` file holds (`_xlfn.` and `_xlpm.` names as written, no implicit `@`), with
+decoded from their tokens into the text an `.xlsx` file holds (`_xlfn.` and `_xlpm.` names as
+written, apart from the four ISO/IEC 29500 functions `.xlsx` names bare, no implicit `@`, the
+spaces and line breaks typed in the formula, numbers as Excel spells them), with
 `FormulaKind::Shared` or `FormulaKind::Array` and their ranges, and `BrtCellMeta` as the cell
 metadata index. Every cell of a shared formula gets its own text, decoded at the cell, since the
 file keeps the tokens once. A formula whose decoding needs something the reader does not read
