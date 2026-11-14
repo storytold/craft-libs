@@ -2640,7 +2640,6 @@ dependencies = [
  "egui_kittest",
  "epaint_default_fonts",
  "flate2",
- "getrandom 0.3.4",
  "image",
  "log",
  "plist",

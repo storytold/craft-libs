@@ -12,7 +12,7 @@ workspace = true
 
 [dependencies]
 craft-xml = { workspace = true }
-craft-image-codecs = { workspace = true }
+craft-image-codecs = { workspace = true, optional = true }
 # SVGZ (gzip), pure-Rust backend.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 kurbo = { workspace = true }
@@ -29,7 +29,7 @@ resvg = { version = "=0.48.1", default-features = false, features = ["text", "ra
 
 [features]
 # `craft_svg::tree`: usvg behind the bounded entry point.
-tree = ["dep:usvg"]
+tree = ["dep:usvg", "dep:craft-image-codecs"]
 # Text converted to paths (needs a font database in the options).
 tree-text = ["tree", "usvg/text"]
 # The system's fonts in `usvg::fontdb`.
