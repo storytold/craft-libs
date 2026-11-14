@@ -26,7 +26,7 @@ use craft_tiff::{Ifd, Tiff};
 
 const SENSOR_INFO: u16 = 0x00e0;
 const COLOR_DATA: u16 = 0x4001;
-const ASPECT_INFO: u16 = 0x009a;
+pub(crate) const ASPECT_INFO: u16 = 0x009a;
 
 /// Pick the first largest raw track. Equal-sized later tracks can be the Dual Pixel delta, which
 /// must never replace the main sensor image. An invalid full-size descriptor is reported, not
@@ -94,8 +94,9 @@ fn sensor_crop(maker: Option<&Ifd>, width: usize, height: usize) -> Option<Rect>
 }
 
 /// The shot's aspect-ratio rectangle from `AspectInfo`, placed inside `image` (the recommended crop). `None`
-/// when the tag is absent or malformed, or its rectangle doesn't fit inside `image`.
-fn aspect_crop(maker: Option<&Ifd>, image: Rect) -> Option<Rect> {
+/// when the tag is absent or malformed, or its rectangle doesn't fit inside `image`. A CR2 carries the same tag
+/// ([`crate::cr2`]).
+pub(crate) fn aspect_crop(maker: Option<&Ifd>, image: Rect) -> Option<Rect> {
     let data = maker?.u64s(ASPECT_INFO)?;
     let [width, height, left, top] = [1usize, 2, 3, 4].map(|i| data.get(i).and_then(|&v| usize::try_from(v).ok()));
     let (width, height, left, top) = (width?, height?, left?, top?);
