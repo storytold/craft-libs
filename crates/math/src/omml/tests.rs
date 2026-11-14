@@ -147,13 +147,17 @@ fn tracked_changes_inside_runs_and_objects() {
 /// deletion's range is the arguments' text.
 #[test]
 fn a_deleted_control_leaves_out_its_undeleted_arguments_too() {
-    let ctrl = r#"<m:ctrlPr><w:del w:id="1" w:author="a"><w:rPr/></w:del></m:ctrlPr>"#;
-    let e = omath(&format!(
-        r#"<m:r><m:t>a</m:t></m:r><m:f><m:fPr>{ctrl}</m:fPr><m:num><m:r><m:t>b</m:t></m:r></m:num><m:den><m:r><m:t>c</m:t></m:r></m:den></m:f><m:sSup><m:sSupPr>{ctrl}</m:sSupPr><m:e><m:r><m:t>x</m:t></m:r></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup><m:r><m:t>d</m:t></m:r>"#
-    ));
-    let m = read_omath(&e, MathJc::CenterGroup);
-    // Word shows `ad`, as the runs either side join here.
-    assert_eq!(m.nodes, vec![MNode::Run(MRun::new("ad"))]);
+    // `w:del` in the control, and a control a file says was inserted and then deleted.
+    let del = r#"<m:ctrlPr><w:del w:id="1" w:author="a"><w:rPr/></w:del></m:ctrlPr>"#;
+    let ins_del = r#"<m:ctrlPr><w:ins w:id="2" w:author="a"><w:del w:id="3" w:author="a"><w:rPr/></w:del></w:ins></m:ctrlPr>"#;
+    for ctrl in [del, ins_del] {
+        let e = omath(&format!(
+            r#"<m:r><m:t>a</m:t></m:r><m:f><m:fPr>{ctrl}</m:fPr><m:num><m:r><m:t>b</m:t></m:r></m:num><m:den><m:r><m:t>c</m:t></m:r></m:den></m:f><m:sSup><m:sSupPr>{ctrl}</m:sSupPr><m:e><m:r><m:t>x</m:t></m:r></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup><m:r><m:t>d</m:t></m:r>"#
+        ));
+        let m = read_omath(&e, MathJc::CenterGroup);
+        // Word shows `ad`, as the runs either side join here.
+        assert_eq!(m.nodes, vec![MNode::Run(MRun::new("ad"))], "{ctrl}");
+    }
 }
 
 /// Hostile nesting through the wrappers is bounded (no stack overflow, no panic).

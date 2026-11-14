@@ -107,7 +107,15 @@ fn arg(e: &El, depth: usize) -> Arg {
 /// equation once the deletion is accepted, as deleted runs do: arguments and all, also those
 /// not marked deleted themselves (an object can't stay without its control character).
 fn deleted_object(k: &El) -> bool {
-    k.elements().any(|p| p.name.starts_with("m:") && p.name.ends_with("Pr") && p.child("m:ctrlPr").is_some_and(|c| c.child("w:del").is_some()))
+    k.elements().any(|p| p.name.starts_with("m:") && p.name.ends_with("Pr") && p.child("m:ctrlPr").is_some_and(deleted_ctrl))
+}
+
+/// Is this `m:ctrlPr` marked deleted? `w:del` in it, or inside its `w:ins`: the control character
+/// a file says was inserted and then deleted is deleted, the way a run that carries both is. A
+/// valid `m:ctrlPr/w:ins` holds nothing but `w:rPr`, so nothing in a well-formed file reads
+/// differently for this.
+fn deleted_ctrl(c: &El) -> bool {
+    c.child("w:del").is_some() || c.child("w:ins").is_some_and(|i| i.child("w:del").is_some())
 }
 
 fn node(k: &El, depth: usize, out: &mut Arg) {
