@@ -75,7 +75,7 @@ fn style_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style, flagged: &[StyleKind]) 
             | (StyleKind::Table, "TableNormal")
             | (StyleKind::Numbering, "NoList")
     );
-    let normal_is_explicitly_off = st.kind == StyleKind::Paragraph && st.id == "Normal" && !st.default;
+    let normal_is_explicitly_off = st.kind == StyleKind::Paragraph && st.id == "Normal" && !st.default && flagged.contains(&StyleKind::Paragraph);
     let is_default = st.default || (english_default && !flagged.contains(&st.kind) && !normal_is_explicitly_off);
     let mut a = vec![("w:type", ty), ("w:styleId", st.id.as_str())];
     if normal_is_explicitly_off {
