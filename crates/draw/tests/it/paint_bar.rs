@@ -7,7 +7,7 @@ use craft_behavior::EditEvent;
 use craft_draw::ui::{EraserMode, MIXER_COMBINATIONS, PaintBar, PaintTool, PaintValues};
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::contract::{Entry, Show as _, ShowContainer as _};
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::testing::{Fixture, Room, trial};
 use egui::{Key, Modifiers};
 
 struct Host {
@@ -33,7 +33,9 @@ fn harness(tool: PaintTool, eraser: EraserMode, prepare: impl FnOnce(&mut PaintV
             edits.extend(bar.show(ui).edits);
         });
     });
-    fixture.settle();
+    // The options bar spans an application window; in a narrower room its later members scroll out of view, where a
+    // click cannot reach them.
+    fixture.in_room(Room::Window).settle();
     (fixture, host)
 }
 
