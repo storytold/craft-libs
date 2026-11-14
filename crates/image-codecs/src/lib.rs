@@ -42,7 +42,7 @@ pub use crate::codecs::png::{
 pub use crate::codecs::tiff::{
     PhotoshopTags as TiffPhotoshopTags, TiffBands, photoshop_tags as tiff_photoshop_tags, writes_little_endian as tiff_writes_little_endian,
 };
-pub use crate::codecs::tiff_ifd::{TiffInfo, TiffPage, TiffPageKind};
+pub use crate::codecs::tiff_ifd::{ExtraSampleKind, InkSet, TiffInfo, TiffPage, TiffPageKind};
 pub use crate::error::CodecError;
 pub use crate::exif_color::{EXIF_COLOR_SPACE_SRGB, exif_color_space};
 pub use crate::fidelity::{FidelityWarning, fidelity_warnings, fidelity_warnings_with};
