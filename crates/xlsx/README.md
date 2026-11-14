@@ -92,8 +92,10 @@ and LET parameters are left out, as in `.xlsx`, and so is the formula-less workb
 Excel writes beside a sheet's (`Database`), which formulas still spell `_xlnm.Database`; a name
 whose formula can't be read is left out with a warning. A reference may name an XLM macro sheet
 (`Macro1!$A$1`, where macro names point), and a 3-D span is spelled by its ends whatever chart
-sheets lie between them. Its cell formulas are decoded from their tokens into the
-text an `.xlsx` file holds (`_xlfn.` and `_xlpm.` names as written, no implicit `@`), with
+sheets lie between them. Its cell formulas are decoded from their tokens into the text an `.xlsx`
+file holds (`_xlfn.` and `_xlpm.` names as written, apart from the four ISO/IEC 29500 functions
+`.xlsx` names bare, no implicit `@`, the spaces and line breaks typed in the formula, numbers as
+Excel spells them), with
 `FormulaKind::Shared` or `FormulaKind::Array` and their ranges, and `BrtCellMeta` as the cell
 metadata index. Every cell of a shared formula gets its own text, decoded at the cell, since the
 file keeps the tokens once. A formula whose decoding needs something the reader does not read
