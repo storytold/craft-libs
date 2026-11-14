@@ -1,6 +1,6 @@
 [package]
 name = "craft-video"
-description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8, ProRes, H.264, HEVC, VP9, AV1, MPEG-4 Part 2."
+description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8, ProRes, H.264, HEVC, VP9, AV1, MPEG-4 Part 2, Sierra VMD."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -52,6 +52,8 @@ vp9-encode = ["craft-media/isobmff"]
 av1 = ["av1-decode", "av1-encode"]
 av1-decode = []
 av1-encode = ["craft-media/isobmff"]
+# Sierra VMD video (8-bit paletted): decoder.
+vmd = []
 # Decode and encode across worker threads (rayon) in the codecs that support it.
 threads = ["dep:rayon"]
 
@@ -62,8 +64,12 @@ rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
 craft-media-testkit = { workspace = true }
-# The AVI muxer, for the MPEG-4 Part 2 encoder's end-to-end test.
-craft-media = { workspace = true, features = ["avi"] }
+# The AVI muxer, for the MPEG-4 Part 2 encoder's end-to-end test, and the VMD demuxer for the VMD decoder's.
+craft-media = { workspace = true, features = ["avi", "vmd"] }
+
+[[test]]
+name = "vmd"
+required-features = ["vmd"]
 
 [[test]]
 name = "dnx"

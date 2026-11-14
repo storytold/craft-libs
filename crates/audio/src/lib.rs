@@ -27,7 +27,8 @@
 //! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`,
 //!   `aac-encode`), [`alac`] (`alac-decode`, `alac-encode`), [`opus`] (`opus-decode`, and
 //!   [`opus::encoder`] with `opus-encode`), [`ac3`] (`ac3-decode`), [`mpa`] (`mpa-decode`), [`mp3`]
-//!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-encode`: the packet encoder).
+//!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-encode`: the packet encoder), [`vmd`]
+//!   (`vmd-decode`: Sierra VMD sound).
 //!
 //! The shared types below build with no features.
 
@@ -53,6 +54,8 @@ pub mod peaks;
 mod read;
 #[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 mod track;
+#[cfg(feature = "vmd-decode")]
+pub mod vmd;
 #[cfg(any(feature = "decode-native", feature = "pcm-encode"))]
 mod wav;
 #[cfg(any(
@@ -219,6 +222,16 @@ impl From<alac::Error> for AudioError {
         match e {
             alac::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
             alac::Error::InvalidInput(_) => AudioError::Encode(e.to_string()),
+            _ => AudioError::Malformed(e.to_string()),
+        }
+    }
+}
+
+#[cfg(feature = "vmd-decode")]
+impl From<vmd::Error> for AudioError {
+    fn from(e: vmd::Error) -> Self {
+        match e {
+            vmd::Error::Unsupported(_) => AudioError::Unsupported(e.to_string()),
             _ => AudioError::Malformed(e.to_string()),
         }
     }
