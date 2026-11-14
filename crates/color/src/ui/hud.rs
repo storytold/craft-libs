@@ -6,8 +6,8 @@ use crate::AreaMode;
 use craft_behavior::{EditEvent, EditEvents, Metrics, PartKey, Sense};
 use craft_theme::Srgba;
 use craft_ui::contract::{
-    Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, EscapeEdit, MeasureCx, Outcome, POPUP_PAD, PaintUi, PartsCx, Pattern,
-    Props as _, Role, Show as _, ShowContainer as _, pad_of,
+    Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, EscapeEdit, MeasureCx, Outcome, POPUP_PAD, PaintUi, PartsCx,
+    Pattern, Props as _, Role, Show as _, ShowContainer as _, pad_of,
 };
 use craft_ui::popover::Popover;
 use craft_ui::runtime::env::{Env, Label};

@@ -1,11 +1,11 @@
 //! [`InfoPanel`]: a read-only readout grid of the colour, position and size under the pointer.
 
+use craft_behavior::ColumnWidth;
 use craft_cms::convert::CmykConverter;
 use craft_theme::Srgba;
 use craft_theme::variant::Tone;
 use craft_ui::contract::{Outcome as _, Pattern, Props as _, Show as _, ShowContainer as _};
 use craft_ui::display::Text;
-use craft_behavior::ColumnWidth;
 use craft_ui::layout_components::{Grid, Stack};
 use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::runtime::env::{Env, Label};
@@ -154,7 +154,7 @@ fn pair(ui: &mut Ui, cell: Option<Cell>) {
 /// A grid of lines, each two name and value pairs.
 fn table(ui: &mut Ui, lines: Vec<[Option<Cell>; 2]>) {
     let _ = Grid::new(&COLUMNS).show(ui, |ui, _| {
-        for [left, right] in lines {
+        for [left, right] in lines.iter().cloned() {
             pair(ui, left);
             pair(ui, right);
         }

@@ -6,7 +6,7 @@ use craft_ui::runtime::env::Label;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
-fn pair(x: &str, y: &str) -> [Label; 2] {
+fn pair(x: &'static str, y: &'static str) -> [Label; 2] {
     [Label::from(x), Label::from(y)]
 }
 
