@@ -29,7 +29,8 @@ fn view_commands_run_with_their_facts_and_are_disabled_without() {
         [rect.origin(), Point::new(rect.x1, rect.y1)].iter().all(|corner| view.rect.expand(0.5).contains(view.to_screen(*corner)))
     };
     // What each command owes the view it changed.
-    let rows: [(ViewCommands, &dyn Fn(&CanvasView) -> bool); 4] = [
+    type Owed<'a> = &'a dyn Fn(&CanvasView) -> bool;
+    let rows: [(ViewCommands, Owed<'_>); 4] = [
         (ViewCommands::TwoHundredPercent, &|view| (device(view) - 2.0).abs() < 1e-9 && view.center == start.center),
         // Print Size: the screen's 72 ppi over the document's 300.
         (ViewCommands::PrintSize, &|view| (device(view) - 72.0 / 300.0).abs() < 1e-9 && view.center == start.center),

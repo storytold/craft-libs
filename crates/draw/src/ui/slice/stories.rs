@@ -243,9 +243,7 @@ fn slice_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         let _ = run.host.run(&mut kept.tool);
         let mut events = run.shown.unwrap_or_default();
         events.extend(kept.tool.take_events());
-        let mut output = StoryOutput::default();
-        output.edits = events.iter().filter_map(edit_kind).collect();
-        output.clicked = run.pressed.is_some();
+        let output = StoryOutput { edits: events.iter().filter_map(edit_kind).collect(), clicked: run.pressed.is_some(), ..StoryOutput::default() };
         if run.pressed == Some(HIDE_AUTO) {
             settings.hide_auto = !settings.hide_auto;
         } else if let Some((_, command)) = run.pressed.and_then(|label| COMMANDS.iter().find(|(name, _)| *name == label)) {

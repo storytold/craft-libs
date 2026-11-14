@@ -356,6 +356,7 @@ pub(crate) fn give_back(ctx: &Context, to: Id, lent: Lent) {
 
 /// How many lent keys session members have taken so far in the current viewport: a check of keyboard parity reads
 /// it before and after its input, since a lent key is the session control's, not the focused component's.
+#[cfg(feature = "testing")]
 pub(crate) fn lent_taken(ctx: &Context) -> u64 {
     current(ctx, |stage| stage.lent_taken)
 }

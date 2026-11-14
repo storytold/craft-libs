@@ -25,6 +25,7 @@ pub(crate) fn pointer_moved(pos: Pos2) -> Event {
 }
 
 /// `button` going down or up at `pos` with `modifiers`.
+#[cfg(feature = "testing")]
 pub(crate) fn button(pos: Pos2, button: egui::PointerButton, pressed: bool, modifiers: Modifiers) -> Event {
     Event::PointerButton { pos, button, pressed, modifiers }
 }
@@ -57,17 +58,20 @@ pub(crate) fn text_event(text: &str) -> Event {
 }
 
 /// The announcement of `modifiers`, none when no modifier is held.
+#[cfg(feature = "testing")]
 fn announced(modifiers: Modifiers) -> Option<Event> {
     (modifiers != Modifiers::NONE).then(|| modifiers_changed(modifiers))
 }
 
 /// The frame that clears `modifiers`, none when none was held.
+#[cfg(feature = "testing")]
 fn cleared(modifiers: Modifiers) -> Option<Frame> {
     announced(modifiers).map(|_| vec![modifiers_changed(Modifiers::NONE)])
 }
 
 /// A move to `pos` (with `modifiers` announced first), then `count` times a press and a release of `button`, one
 /// frame each; `modifiers` are cleared in a last frame when they were set.
+#[cfg(feature = "testing")]
 pub(crate) fn click_frames(pos: Pos2, pressed_button: egui::PointerButton, count: u32, modifiers: Modifiers) -> Vec<Frame> {
     let mut frames = vec![announced(modifiers).into_iter().chain([pointer_moved(pos)]).collect()];
     for _ in 0..count {

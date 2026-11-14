@@ -157,9 +157,11 @@ impl CanvasTool for Band {
     }
 }
 
+type BandCanvas = (Fixture, Rc<RefCell<Band>>, Rc<Cell<Option<CanvasView>>>);
+
 /// The hover autoscroll as an app runs it: the canvas shows a document zoomed in past the room, and the app moves its
 /// view by the host's `scroll`. Returns the fixture, the tool and the app's view.
-fn band_canvas(scrolls: bool) -> (Fixture, Rc<RefCell<Band>>, Rc<Cell<Option<CanvasView>>>) {
+fn band_canvas(scrolls: bool) -> BandCanvas {
     const DOCUMENT: Size = Size::new(1200.0, 900.0);
     let tool = Rc::new(RefCell::new(Band { scrolls, hovers: 0 }));
     let view = Rc::new(Cell::new(None::<CanvasView>));

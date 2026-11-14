@@ -71,9 +71,7 @@ fn two_artboards(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         named
     });
     // A board's name is a button: its click is a click of the story.
-    let mut output = StoryOutput::default();
-    output.clicked = shown.inner.unwrap_or_default();
-    output
+    StoryOutput { clicked: shown.inner.unwrap_or_default(), ..StoryOutput::default() }
 }
 
 /// The bar for one board, whose size the story keeps: a preset, Make Portrait or Landscape, or W and H resize it.

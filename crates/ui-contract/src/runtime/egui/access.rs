@@ -10,6 +10,7 @@ mod text;
 mod tree;
 
 use crate::runtime::pass_state;
+#[cfg(feature = "testing")]
 use egui::FullOutput;
 use egui::{Context, Id, ViewportId};
 use std::collections::{HashMap, HashSet};

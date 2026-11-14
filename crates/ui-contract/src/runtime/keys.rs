@@ -32,14 +32,15 @@ pub(crate) use input::{input_hook, queue_nav, take_menu_keys, take_nav};
 pub use intents::Intents;
 #[doc(hidden)]
 pub use intents::intents_of;
+#[cfg(feature = "testing")]
+pub(crate) use intents::lent_taken;
 #[doc(hidden)]
 pub use intents::settle;
 #[doc(hidden)]
 pub use intents::take_submit;
 pub use intents::with_window_intents;
 pub(crate) use intents::{
-    Lent, context_part, context_request, give_back, lend, lent_taken, request_context, route_whole_reset, scope_escape, take_cancel,
-    take_window_cancel,
+    Lent, context_part, context_request, give_back, lend, request_context, route_whole_reset, scope_escape, take_cancel, take_window_cancel,
 };
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
 pub use route::focus_holds;

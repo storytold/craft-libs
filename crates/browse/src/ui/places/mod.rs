@@ -197,7 +197,6 @@ impl<'a> PlacesTree<'a> {
 
     /// A drag carrying a `P` drops onto a folder row where `accepts` passes for the folder and the payload: the row is
     /// outlined while the drag is over it, and the release reports [`PlacesEvent::Dropped`].
-    #[must_use]
     pub fn accepts<P: Send + Sync + 'static>(mut self, accepts: impl Fn(&Path, &P) -> bool + 'a) -> Self {
         let onto = move |payload: &P, at: &DropAt<RowKey>| matches!(at, DropAt::Onto(RowKey::Folder(folder)) if accepts(&folder.path, payload));
         self.drop = Some(DropKind::new(DropPlace::Onto, onto));

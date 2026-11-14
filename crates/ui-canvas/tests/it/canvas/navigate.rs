@@ -167,9 +167,11 @@ fn at_a_whole_device_zoom_with_no_rotation_the_shown_view_puts_document_pixels_o
     assert!((p.x - p.x.round()).abs() < 1e-3 && (p.y - p.y.round()).abs() < 1e-3, "a view set at a whole zoom is shown aligned: {p:?}");
 }
 
+type WheelRig = (Fixture, Rc<Cell<CanvasView>>, Rc<Cell<Option<f64>>>, Rc<Cell<egui::Rect>>);
+
 /// A canvas over a large document at zoom 1 below a framework number field and an app's own text field, on `os`: the
 /// fixture, the view it shows, the number and where the app's field is.
-fn wheel_rig(os: Platform) -> (Fixture, Rc<Cell<CanvasView>>, Rc<Cell<Option<f64>>>, Rc<Cell<egui::Rect>>) {
+fn wheel_rig(os: Platform) -> WheelRig {
     let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
     let number = Rc::new(Cell::new(Some(10.0)));
     let app_field = Rc::new(Cell::new(egui::Rect::NOTHING));
@@ -312,7 +314,7 @@ fn a_wheel_zoom_keeps_the_point_under_the_pointer_where_an_app_widget_covers_the
         given.rect = ui.available_rect_before_wrap();
         let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).view(given).show(ui, |ui, body| {
             // An app's own tool widget over the whole body, as an app that runs its tools itself places one.
-            ui.interact(body.rect, egui::Id::new("app tools"), egui::Sense::click_and_drag());
+            ui.interact(body.rect, egui::Id::unique("app tools"), egui::Sense::click_and_drag());
         });
         shown.set(canvas.output.view.unwrap_or(given));
     });

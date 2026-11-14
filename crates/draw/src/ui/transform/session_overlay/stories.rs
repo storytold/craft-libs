@@ -108,16 +108,18 @@ fn transform_phase(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 None => (Vec::new(), false, false),
             };
             let edits: Vec<TransformEdit<()>> = edits.into_iter().chain(bar.edits).collect();
-            let mut output = StoryOutput::default();
-            output.edits = edits
-                .iter()
-                .filter_map(|edit| match edit {
-                    TransformEdit::Box(event) => EditKind::of(event),
-                    TransformEdit::Fields(event) => EditKind::of(event),
-                    _ => None,
-                })
-                .collect();
-            output.clicked = bar.apply || bar.discard;
+            let output = StoryOutput {
+                edits: edits
+                    .iter()
+                    .filter_map(|edit| match edit {
+                        TransformEdit::Box(event) => EditKind::of(event),
+                        TransformEdit::Fields(event) => EditKind::of(event),
+                        _ => None,
+                    })
+                    .collect(),
+                clicked: bar.apply || bar.discard,
+                ..StoryOutput::default()
+            };
             let mut requests: Vec<TransformRequest<()>> = edits.into_iter().filter_map(|edit| kept.session.apply(edit, frame.time)).collect();
             if apply || bar.apply || key_apply {
                 requests.push(kept.session.commit());

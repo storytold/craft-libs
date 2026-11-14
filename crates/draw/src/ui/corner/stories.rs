@@ -148,7 +148,7 @@ fn edit(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     }
     let output = on_canvas(ui, targets, |ui, at, targets| {
         let shown = CornerWidgets::new("Corner radius", Bind::bound(&mut *targets)).kinds(kinds).hide_above(hide_above).show_at(ui, at);
-        let kind = shown.edit.events.iter().filter_map(EditKind::of).last().and_then(|kind| match kind {
+        let kind = shown.edit.events.iter().filter_map(EditKind::of).next_back().and_then(|kind| match kind {
             EditKind::Begin => Some(&words.began),
             EditKind::Update => Some(&words.updated),
             EditKind::Commit => Some(&words.committed),

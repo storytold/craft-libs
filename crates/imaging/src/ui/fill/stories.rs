@@ -207,9 +207,7 @@ fn preview_pane(ui: &mut Ui, data: &mut StoryData, status: &Pending<PreviewDone,
     let window = StorySource::new(image, Preview::Loading).window;
     let state = data.value("pane", PaneState { view: FullWindowView::new(), framing: PreviewFraming::default() });
     let shown = FillPreviewPane::new(&mut state.view, &mut state.framing, status, &image).frame(Some(window)).show(ui);
-    let mut output = StoryOutput::default();
-    output.id = Some(shown.id);
-    output
+    StoryOutput { id: Some(shown.id), ..StoryOutput::default() }
 }
 
 #[story(FillPreviewPane<'static>, covers = [Default], drive = Drive::Never)]

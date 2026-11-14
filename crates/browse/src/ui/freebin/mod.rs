@@ -70,6 +70,9 @@ struct Slot<K> {
     stack: Option<u32>,
 }
 
+/// The test for whether a card takes a drop.
+type Takes<'a, K> = Rc<dyn Fn(&K) -> bool + 'a>;
+
 /// The sizes of a card and the space between cards.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
@@ -137,7 +140,7 @@ pub struct FreeBin<'a, K: TextureKey + 'static> {
     #[prop]
     moving: Option<FreeBinMove<K>>,
     /// Which cards take a drop of a foreign drag.
-    drop_into: Option<Rc<dyn Fn(&K) -> bool + 'a>>,
+    drop_into: Option<Takes<'a, K>>,
     /// The drop onto the cards `drop_into` takes.
     drops: Vec<DropKind<'a, K>>,
     cards: &'a [FreeformCard<K>],
@@ -177,7 +180,7 @@ impl<'a, K: TextureKey> FreeBin<'a, K> {
     /// background.
     #[must_use]
     pub fn drop_into(mut self, takes: impl Fn(&K) -> bool + 'a) -> Self {
-        let takes: Rc<dyn Fn(&K) -> bool + 'a> = Rc::new(takes);
+        let takes: Takes<'a, K> = Rc::new(takes);
         let onto = Rc::clone(&takes);
         self.drops = vec![DropKind::new(DropPlace::Onto, move |_: &ListDrag<K>, at: &DropAt<K>| matches!(at, DropAt::Onto(card) if onto(card)))];
         self.drop_into = Some(takes);

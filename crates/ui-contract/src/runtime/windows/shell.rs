@@ -6,8 +6,8 @@ use super::{Record, shared};
 use crate::runtime::egui::viewports;
 use crate::runtime::frame::PerViewport;
 #[cfg(feature = "testing")]
-use craft_host::target::Runtime;
-use craft_host::target::{Caps, EdgeInsets, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind, WindowState};
+use craft_host::target::{Caps, Runtime};
+use craft_host::target::{EdgeInsets, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind, WindowState};
 use egui::{Context, ViewportId};
 use std::sync::Arc;
 

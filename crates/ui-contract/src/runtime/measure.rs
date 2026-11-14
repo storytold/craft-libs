@@ -4,7 +4,9 @@
 
 use super::egui::memory as store;
 use super::pass_state;
-use egui::{Context, Id};
+use egui::Context;
+#[cfg(feature = "testing")]
+use egui::Id;
 
 /// The widths per column the items measured inside `cell_widths` report, innermost call last.
 #[derive(Default)]

@@ -13,7 +13,7 @@
 // Only Linux probes; the types and helpers stay testable on every platform.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
-use std::sync::{Once, OnceLock};
+use std::sync::OnceLock;
 
 /// What the probe found. `None` means it couldn't tell, which counts as present.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +57,7 @@ fn on_path(program: &str, path: &std::ffi::OsStr) -> bool {
 pub(crate) fn start() {
     #[cfg(target_os = "linux")]
     {
+        use std::sync::Once;
         static STARTED: Once = Once::new();
         STARTED.call_once(|| {
             let spawned = std::thread::Builder::new().name("file dialog probe".into()).spawn(|| {

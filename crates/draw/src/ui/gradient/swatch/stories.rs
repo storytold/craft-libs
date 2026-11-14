@@ -56,9 +56,7 @@ fn gradient_swatch(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     if clicked {
         *clicks += 1;
     }
-    let mut output = StoryOutput::default();
-    output.clicked = clicked;
-    output.readout(craft_i18n::fmt(words.clicked.as_str(), &[("count", clicks.to_string().as_str())]))
+    StoryOutput { clicked, ..StoryOutput::default() }.readout(craft_i18n::fmt(words.clicked.as_str(), &[("count", clicks.to_string().as_str())]))
 }
 
 /// A gradient fading in, enabled and disabled, each with its name.

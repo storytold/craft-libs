@@ -21,8 +21,10 @@ pub(crate) use crate::runtime::env::Shrink;
 
 #[doc(hidden)]
 pub use body::place_in_flow;
+#[cfg(feature = "testing")]
+pub(crate) use body::run_body;
 pub(crate) use body::{
     InFlow, MainFill, close_first_line, counting_fills, fill_share, flow_fill_room, flow_region, flow_room, in_grid_content_column, leaf_fill_room,
-    main_fill, open_first_lines, place_in_cell, report_least, report_shrink, row_alone_room, run_body, run_body_measured, shares_y, shrink_cap,
-    take_in_flow, view_room,
+    main_fill, open_first_lines, place_in_cell, report_least, report_shrink, row_alone_room, run_body_measured, shares_y, shrink_cap, take_in_flow,
+    view_room,
 };

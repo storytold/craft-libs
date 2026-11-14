@@ -123,10 +123,7 @@ impl Outcome for AddBesideOutput {
 
     #[cfg(feature = "screen-testing")]
     fn story_facts(&self) -> craft_ui::testing::StoryOutput {
-        let mut facts = craft_ui::testing::StoryOutput::default();
-        facts.id = Some(self.response.id);
-        facts.clicked = self.added.is_some();
-        facts
+        craft_ui::testing::StoryOutput { id: Some(self.response.id), clicked: self.added.is_some(), ..craft_ui::testing::StoryOutput::default() }
     }
 }
 

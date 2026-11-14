@@ -1019,6 +1019,7 @@ fn found(ctx: &egui::Context, sizing: bool, id: Id, room: Vec2, took: Vec2) {
 /// run found, `SpaceBetween` shares the room its children left there between them, and `Grid` places its cells from
 /// the widest child per column and tallest per row there. Without a measuring run they place as `Start`, spread at
 /// the gap and size columns from the cells as they come.
+#[cfg(feature = "testing")]
 pub(crate) fn run_body<R>(ui: &mut Ui, env: &Env, id: Id, layout: &BodyLayout, gap: Vec2, body: impl FnMut(&mut Ui) -> R) -> R {
     run_body_measured(ui, env, id, layout, gap, None, body).0
 }
