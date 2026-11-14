@@ -1,8 +1,9 @@
 //! The members of a status `Bar` beside `StatusReadout`: the status message and a background task's progress.
 
-use crate::buttons::IconButton;
-use crate::contract::{Props as _, Show as _};
+use crate::buttons::{IconButton, Link};
+use crate::contract::{Outcome as _, Props as _, Show as _, TooltipSpec};
 use crate::display::{Divider, Elide, Progress, Shade, Text};
+use crate::primitives::Wrap;
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::{Env, Label};
 use crate::style::TypeRole;
@@ -59,10 +60,24 @@ impl StatusMessage {
         if self.text.as_str().is_empty() {
             return None;
         }
-        let _ = (&self.command, &self.tooltip); // P3(panels-w2): pn.C12 draws a `Link` with the command and tooltip
         Divider::vertical().show(ui);
+        if let Some(command) = &self.command {
+            // The underline keeps colour from being the only cue that the message is a link.
+            let mut link = Link::new(self.text.clone()).wrap(Wrap::Elide).command(command.clone());
+            if self.tone != Tone::Neutral {
+                link = link.tone(self.tone);
+            }
+            if let Some(tooltip) = &self.tooltip {
+                link = link.tooltip(TooltipSpec::new(tooltip.clone()));
+            }
+            return Some(link.show(ui).response().clone());
+        }
         let text = Text::new(self.text.clone()).elide(Elide::End);
         let text = if self.tone == Tone::Neutral { text.shade(Shade::Faint) } else { text.tone(self.tone) };
+        let text = match &self.tooltip {
+            Some(tooltip) => text.tooltip(TooltipSpec::new(tooltip.clone())),
+            None => text,
+        };
         Some(text.show(ui))
     }
 }
@@ -121,8 +136,16 @@ impl StatusProgress {
             let percent = Env::of(ui).format().percent(f64::from(Progress::clamped(fraction)), 0);
             Text::new(percent).role(TypeRole::Mono).shade(Shade::Muted).show(ui);
         }
-        let _ = &self.refused; // P3(panels-w2): tp.R1 disables the cancel button with `TooltipSpec::disabled_text`
-        let cancelled = self.cancel.is_some_and(|label| IconButton::new(IconId::new("close")).label(label).show(ui).clicked());
+        let (cancel, refused) = (self.cancel, self.refused);
+        let cancelled = cancel.is_some_and(|label| {
+            let button = IconButton::new(IconId::new("close")).label(label.clone());
+            // A disabled button with a reason stays focusable, so the reason is reachable without a pointer.
+            let button = match refused {
+                Some(reason) => button.tooltip(TooltipSpec::new(label).disabled_text(reason)).enabled(false),
+                None => button,
+            };
+            button.show(ui).clicked()
+        });
         StatusProgressOutput { response, cancelled }
     }
 }

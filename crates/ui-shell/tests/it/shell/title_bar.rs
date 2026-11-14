@@ -10,7 +10,7 @@ use craft_ui::testing::trial;
 use craft_ui::testing::windows::NoWindows;
 use craft_ui_test_kit::windows::Windows;
 use craft_window::policy::{Decision, Desktop, DesktopKind};
-use egui::{Event, Pos2, Rect, Ui, ViewportCommand, ViewportId, vec2};
+use egui::{Event, Pos2, Rect, Ui, ViewportCommand, ViewportId, ViewportInfo, vec2};
 use std::cell::Cell;
 use std::sync::Arc;
 
@@ -90,4 +90,41 @@ fn a_title_bar_in_an_embedded_shell_acts_on_no_window() {
     let (commands, clicked) = sent(false);
     assert_eq!(clicked, Some(Caption::Maximize), "the window's bar reports the caption");
     assert!(!commands.is_empty(), "the window's bar acts on the window");
+}
+
+/// The shell sends the window title once after a change and not again while the viewport reports it; an embedded shell
+/// sends none.
+#[trial]
+fn the_window_title_is_sent_once_per_change() {
+    let titles = |out: &craft_ui_test_kit::windows::Out| -> Vec<String> {
+        out.commands
+            .iter()
+            .filter_map(|(viewport, command)| match command {
+                ViewportCommand::Title(title) if *viewport == ViewportId::ROOT => Some(title.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let windows = Windows::new();
+    let frame = |title: &str, embedded: bool| {
+        let key = WindowKey::new("titled");
+        windows.frame(vec![], vec![], |ui| {
+            let shell = if embedded { AppShell::embedded(key.clone()) } else { AppShell::new(key.clone()) };
+            let _ = shell.window_title(title).show(ui, &mut ());
+        })
+    };
+    let reported = |title: &str| windows.root_info(ViewportInfo { title: Some(title.to_owned()), ..ViewportInfo::default() });
+
+    assert_eq!(titles(&frame("A", false)), ["A"], "a new title is sent");
+    reported("A");
+    assert!(titles(&frame("A", false)).is_empty(), "a title the viewport reports is not sent again");
+    assert_eq!(titles(&frame("B", false)), ["B"], "a changed title is sent");
+    reported("B");
+    assert!(titles(&frame("B", false)).is_empty(), "the changed title is sent once");
+
+    let embedded = Windows::new();
+    let out = embedded.frame(vec![], vec![], |ui| {
+        let _ = AppShell::embedded(WindowKey::new("preview")).window_title("C").show(ui, &mut ());
+    });
+    assert!(titles(&out).is_empty(), "an embedded shell sends no title");
 }

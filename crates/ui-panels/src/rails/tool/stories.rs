@@ -51,6 +51,7 @@ fn tool_rail(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .columns(NonZeroU8::new(columns.max(1)).unwrap_or(NonZeroU8::MIN))
         .hidden(&hidden)
         .column_toggle("Toolbar")
+        .side_toggle("Move Toolbar to the Other Side")
         .edit_toolbar("Edit Toolbar")
         .show_rail(ui, |_, _| {});
     let note = data.note("note", "Nothing yet".to_owned());
@@ -60,6 +61,8 @@ fn tool_rail(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         *note = format!("double clicked {tool}");
     } else if out.toggle_columns {
         *note = "toggle columns".to_owned();
+    } else if out.toggle_side {
+        *note = "toggle side".to_owned();
     } else if out.edit_toolbar.as_ref().is_some_and(crate::contract::clicked) {
         *note = "edit toolbar".to_owned();
     }

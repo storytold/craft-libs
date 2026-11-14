@@ -1,7 +1,12 @@
 //! `ScreenModeButton`: the status bar's screen mode button, a flyout of the three modes.
 
-use super::screen_mode::ScreenMode;
+use super::screen_mode::{ScreenMode, ScreenModeCommands};
+use crate::contract::{NoValue, Outcome, Props as _, Show as _};
+use crate::rails::{FlyoutButton, RailTool};
 use egui::{Response, Ui};
+
+#[cfg(feature = "testing")]
+mod stories;
 
 /// A flyout button over the three screen modes, with `mode` marked: a click, Enter or Space cycles; a hold, a drag away
 /// or a right click lists the three modes without cycling. The face is the Cycle command's icon and tooltip; disabled
@@ -9,7 +14,6 @@ use egui::{Response, Ui};
 #[must_use = "show the button with `show`"]
 #[derive(crate::contract::Pattern)]
 pub struct ScreenModeButton {
-    #[allow(dead_code)] // P3(panels-w2): pn.C16
     mode: ScreenMode,
 }
 
@@ -20,15 +24,26 @@ pub struct ScreenModeButtonOutput {
     pub response: Response,
 }
 
+impl Outcome for ScreenModeButtonOutput {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
+    }
+}
+
 impl ScreenModeButton {
     /// A button showing `mode` as the current one.
     pub fn new(mode: ScreenMode) -> Self {
         ScreenModeButton { mode }
     }
 
-    /// Shows the button in `ui`.
+    /// Shows the button in `ui`. The rows are the radio commands of the three modes, so their marks and states come
+    /// from the shell; the shell applies whichever command runs.
     pub fn show(self, ui: &mut Ui) -> ScreenModeButtonOutput {
-        let _ = ui;
-        todo!("pn.C16")
+        let modes = [ScreenMode::Standard, ScreenMode::FullScreenWithMenuBar, ScreenMode::FullScreen];
+        let tools: Vec<RailTool<ScreenMode>> = modes.iter().map(|mode| RailTool::new(*mode, ScreenModeCommands::of(*mode))).collect();
+        let out = FlyoutButton::new(&tools, &self.mode).hold_selects(false).click(ScreenModeCommands::Cycle).show(ui);
+        ScreenModeButtonOutput { response: out.response }
     }
 }

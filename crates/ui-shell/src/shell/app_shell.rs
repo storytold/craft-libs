@@ -25,6 +25,7 @@ use crate::runtime::focus::FocusPolicy;
 use crate::runtime::frame::{note_shell, take_chrome_toggles};
 use crate::runtime::overlay::{OpenFilter, any_open};
 use crate::runtime::pointer;
+use crate::runtime::windows::{WindowAction, WindowHost};
 use crate::shell::Slot;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind, UiTokens};
 use craft_behavior::{Metrics, Sense};
@@ -284,7 +285,6 @@ pub struct AppShell<'a, S> {
     /// The window's title: the shell sends `WindowAction::SetTitle` when it differs from the title the viewport
     /// reports. Not in an embedded shell.
     #[prop(into)]
-    #[allow(dead_code)] // P3(panels-w2): pn.C10
     window_title: Option<String>,
     /// The name of the body region; the translated "Document" without it.
     #[prop(into)]
@@ -423,12 +423,21 @@ impl<'a, S> AppShell<'a, S> {
             allow_reveal,
             edge_reveal,
             document_tabs,
-            window_title: _, // P3(panels-w2): pn.C10
+            window_title,
             body_label,
             title,
             slots,
             mut body,
         } = self;
+        if let Some(title) = window_title
+            && !embedded
+            && !ui.is_sizing_pass()
+        {
+            let ctx = ui.ctx();
+            if ctx.input(|input| input.viewport().title.clone()).as_deref() != Some(title.as_str()) {
+                WindowHost::of(ctx).act(pass::current_viewport(ctx), WindowAction::SetTitle(title));
+            }
+        }
         let env = Env::of(ui);
         let outer = env.get::<ShellEntry>().0;
         let words = env.words::<ShellWords>();

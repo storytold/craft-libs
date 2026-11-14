@@ -23,6 +23,7 @@ mod opening;
 mod reveal;
 mod screen_mode;
 mod screen_mode_button;
+mod screen_mode_button;
 
 pub use app_shell::{AppShell, AppShellOutput, ShellDialogsCx, ShellRegion, ShellRegionOutput, WindowDialogs};
 pub use canvas_shell::{CanvasPanel, CanvasPanelOutput, slots};

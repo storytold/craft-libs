@@ -91,6 +91,8 @@ struct Held(bool);
 /// What the parts step resolved for the tools this pass.
 struct Laid {
     resolved: Vec<Option<ResolvedCommand>>,
+    /// The click command as resolved, when the button has one.
+    click: Option<ResolvedCommand>,
     shown: usize,
 }
 
@@ -98,7 +100,9 @@ struct Laid {
 /// when there is a flyout. A click, Enter or Space selects the shown tool and runs its command; holding the press,
 /// dragging it away from the button, a right click or the Menu key opens the flyout; a press on the corner mark opens it
 /// at once; after a press that opened it, releasing over a row picks it. Rows are the tools' commands, the shown tool with the radio mark. A hold selects the shown tool
-/// unless `hold_selects` is off, as for a command button.
+/// unless `hold_selects` is off, as for a command button. An Alt-click selects the next enabled tool of the slot,
+/// wrapping, and opens no flyout. With a `click` command, a click fires that command and selects nothing, and the
+/// release that ends a hold fires nothing. A modified press is never a double click.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(overlay, probe(FlyoutButton<'static, u8>))]
 pub struct FlyoutButton<'a, T: Value + 'static> {
@@ -118,7 +122,6 @@ pub struct FlyoutButton<'a, T: Value + 'static> {
     /// A click, Enter or Space fires this command in place of selecting the shown tool; the flyout opens by a hold, a
     /// drag away, a right click or the Menu key.
     #[prop(into)]
-    #[allow(dead_code)] // P3(panels-w2): pn.N2
     click: Option<CommandRef>,
     laid: Option<Laid>,
     picked: Option<T>,
@@ -159,10 +162,10 @@ impl<'a, T: Value + 'static> FlyoutButton<'a, T> {
     /// enabled state, marked dot).
     /// The button itself runs the command, so the face only wears it, and the button's selected state with it.
     fn face(&self, laid: &Laid, selected: bool, glyphs: GlyphRole) -> IconButton<'static> {
-        let resolved = laid.resolved.get(laid.shown).and_then(Option::as_ref);
-        let icon = resolved.and_then(|resolved| resolved.icon.clone()).map_or_else(|| IconId::new("more"), IconId::from);
-        let face = match self.tools.get(laid.shown) {
-            Some(tool) => IconButton::command(icon, tool.command.clone()),
+        let icon = self.lead(laid).and_then(|resolved| resolved.icon.clone()).map_or_else(|| IconId::new("more"), IconId::from);
+        let command = self.click.clone().or_else(|| self.tools.get(laid.shown).map(|tool| tool.command.clone()));
+        let face = match command {
+            Some(command) => IconButton::command(icon, command),
             None => IconButton::new(icon),
         };
         let mut face = face.selected(selected).glyphs(glyphs);
@@ -173,7 +176,16 @@ impl<'a, T: Value + 'static> FlyoutButton<'a, T> {
     }
 
     fn resolve(&self, cx: &MeasureCx<'_, Self>) -> Laid {
-        Laid { resolved: self.tools.iter().map(|tool| cx.resolve_command(tool.command.clone())).collect(), shown: self.shown_at() }
+        Laid {
+            resolved: self.tools.iter().map(|tool| cx.resolve_command(tool.command.clone())).collect(),
+            click: self.click.clone().and_then(|command| cx.resolve_command(command)),
+            shown: self.shown_at(),
+        }
+    }
+
+    /// The command the face stands for: the click command when there is one, else the shown tool's.
+    fn lead<'l>(&self, laid: &'l Laid) -> Option<&'l ResolvedCommand> {
+        if self.click.is_some() { laid.click.as_ref() } else { laid.resolved.get(laid.shown).and_then(Option::as_ref) }
     }
 }
 
@@ -202,7 +214,7 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
         let laid = self.resolve(cx);
         let os = cx.env.shell().os;
         let face = cx.part(FACE, rect).priority(HitPriority::new(HitLevel::Body, 0));
-        if let Some(resolved) = laid.resolved.get(laid.shown).and_then(Option::as_ref) {
+        if let Some(resolved) = self.lead(&laid) {
             face.tooltip(match &resolved.chord {
                 Some(chord) => Label::from(format!("{} ({})", resolved.label, chord.display(os))),
                 None => Label::Shared(resolved.label.clone()),
@@ -228,7 +240,17 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         cx.join_roving();
         let Some(laid) = &self.laid else { return };
-        let (shown_at, enabled) = (laid.shown, laid.resolved.get(laid.shown).and_then(Option::as_ref).is_some_and(|resolved| resolved.enabled));
+        let shown_at = laid.shown;
+        let enabled = self.lead(laid).is_some_and(|resolved| resolved.enabled);
+        let alt = self.has_flyout() && cx.activation().is_some_and(|activation| !activation.by_key && activation.mods.alt);
+        let stepped = if alt {
+            let len = self.tools.len();
+            (1..len)
+                .map(|step| (shown_at + step) % len)
+                .find(|at| laid.resolved.get(*at).and_then(Option::as_ref).is_some_and(|resolved| resolved.enabled))
+        } else {
+            None
+        };
         let mut open = false;
         if self.has_flyout() {
             let menu = cx.popup("menu");
@@ -259,11 +281,21 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
             held
         };
         self.open = open;
-        self.double = cx.press().double_pressed();
-        if activated && enabled && !(held && !self.hold_selects) {
-            let tool = &self.tools[shown_at];
-            cx.fire(tool.command.clone(), FireSource::Pointer);
-            self.picked = Some(tool.id.clone());
+        self.double = cx.press().double_pressed() && cx.press().mods.is_none();
+        if alt {
+            if let Some(at) = stepped {
+                let tool = &self.tools[at];
+                cx.fire(tool.command.clone(), FireSource::Pointer);
+                self.picked = Some(tool.id.clone());
+            }
+        } else if activated && enabled && !(held && (!self.hold_selects || self.click.is_some())) {
+            if let Some(click) = &self.click {
+                cx.fire(click.clone(), FireSource::Pointer);
+            } else {
+                let tool = &self.tools[shown_at];
+                cx.fire(tool.command.clone(), FireSource::Pointer);
+                self.picked = Some(tool.id.clone());
+            }
         }
         if let Some(edit) = self.edit {
             if matches!(cx.press().phase, PressPhase::DragStart { .. }) {
@@ -307,7 +339,7 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
     }
 
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
-        let resolved = self.laid.as_ref().and_then(|laid| laid.resolved.get(laid.shown)).and_then(Option::as_ref);
+        let resolved = self.laid.as_ref().and_then(|laid| self.lead(laid));
         let name = resolved.map(|resolved| resolved.label.as_ref().to_owned());
         if let Some(resolved) = resolved {
             access.name(Name::Text(resolved.label.as_ref().to_owned()));

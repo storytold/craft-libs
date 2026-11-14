@@ -121,6 +121,13 @@ fn status_message_error(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     status_bar(ui, data, StatusMessage::new("Couldn't save: the disk is full").tone(Tone::Bad), STATUS_WIDTH)
 }
 
+/// A message with a command shows as a link with a tooltip.
+#[story(StatusMessage, covers = [], drive = Drive::Never)]
+fn status_message_link(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let message = StatusMessage::new("Rendering on the CPU").tone(Tone::Warn).command(EditCommands::Undo).tooltip("Open the rendering settings");
+    status_bar(ui, data, message, STATUS_WIDTH)
+}
+
 /// The message gives way in a narrow bar; the trailing group keeps its width.
 #[story(StatusMessage, covers = [], drive = Drive::Never)]
 fn status_message_narrow(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
@@ -135,6 +142,21 @@ fn status_progress(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         Bar::new("Status", BarKind::Status)
             .trailing(|ui, _| {
                 StatusProgress::new("Blur", Some(0.45)).cancel("Cancel").show(ui);
+            })
+            .show(ui, |_, _| {})
+            .output
+    })
+    .into()
+}
+
+/// A job that cannot be cancelled: the button is disabled and its tooltip says why.
+#[story(StatusProgress, covers = [], drive = Drive::Never)]
+fn status_progress_refused(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    crate::testing::memory::scoped(ui, |ui| {
+        ui.set_max_width(STATUS_WIDTH.min(ui.available_width()));
+        Bar::new("Status", BarKind::Status)
+            .trailing(|ui, _| {
+                StatusProgress::new("Saving", Some(0.8)).cancel("Cancel").cancel_refused("Saving cannot be cancelled once it has begun").show(ui);
             })
             .show(ui, |_, _| {})
             .output

@@ -157,7 +157,6 @@ struct Inputs<'a> {
 /// out integrated.
 fn decide_with(inputs: &Inputs<'_>, layout: &dyn Fn(DesktopKind) -> Layout) -> Decision {
     let Inputs { os, runtime, backend, desktop, kind, pref, env, caption_style, caption_layout } = *inputs;
-    let _ = (caption_style, caption_layout); // P3(panels-w2): pn.C11
     let overridden = crate::parse_override(env);
     if kind == WindowKind::Tool {
         return Decision { frame: tool_frame(os, runtime), overridden, desktop: desktop.clone() };
@@ -166,11 +165,21 @@ fn decide_with(inputs: &Inputs<'_>, layout: &dyn Fn(DesktopKind) -> Layout) -> D
         (Some(app), _) => app,
         (None, pref) => pref == TitleBarPref::Integrated,
     };
-    let frame = if integrated && runtime == Runtime::Native {
+    let mut frame = if integrated && runtime == Runtime::Native {
         integrated_frame(os, backend, desktop, overridden.is_some(), INTEGRATED_ON_SSD_DESKTOPS, layout)
     } else {
         Frame::Native
     };
+    // The overrides pick the look and order of the app's own caption buttons; an unknown family and a layout with no
+    // usable button leave what the platform decided.
+    if let Frame::Integrated(captions) = &mut frame {
+        if let Some(family) = caption_style.and_then(CaptionFamily::parse) {
+            captions.family = family;
+        }
+        if let Some(parsed) = caption_layout.map(Layout::parse).filter(Layout::is_usable) {
+            captions.layout = parsed;
+        }
+    }
     Decision { frame, overridden, desktop: desktop.clone() }
 }
 
@@ -235,10 +244,24 @@ pub fn decide_for(prefix: Prefix, backend: Backend, pref: TitleBarPref) -> Decis
 pub fn decide_for_kind(prefix: Prefix, backend: Backend, kind: WindowKind, pref: TitleBarPref) -> Decision {
     let os = Os::current();
     let runtime = Runtime::current();
-    let env = std::env::var(prefix.var_name()).or_else(|_| std::env::var(Prefix::default().var_name())).ok();
+    let read = |own: String, shared: String| std::env::var(own).or_else(|_| std::env::var(shared)).ok();
+    let shared = Prefix::default();
+    let env = read(prefix.var_name(), shared.var_name());
+    let caption_style = read(prefix.caption_style_var(), shared.caption_style_var());
+    let caption_layout = read(prefix.caption_layout_var(), shared.caption_layout_var());
     let desktop =
         if os == Os::Linux { Desktop::detect(backend) } else { Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None } };
-    let inputs = Inputs { os, runtime, backend, desktop: &desktop, kind, pref, env: env.as_deref(), caption_style: None, caption_layout: None }; // P3(panels-w2): pn.C11
+    let inputs = Inputs {
+        os,
+        runtime,
+        backend,
+        desktop: &desktop,
+        kind,
+        pref,
+        env: env.as_deref(),
+        caption_style: caption_style.as_deref(),
+        caption_layout: caption_layout.as_deref(),
+    };
     decide_with(&inputs, &|kind| desktop_layout(os, kind))
 }
 
@@ -261,6 +284,53 @@ pub fn apply(builder: egui::ViewportBuilder, frame: &Frame) -> egui::ViewportBui
         Frame::Native => builder.with_decorations(true),
         Frame::Inset(_) => builder.with_decorations(true).with_fullsize_content_view(true).with_title_shown(false).with_titlebar_shown(false),
         Frame::Integrated(_) => builder.with_decorations(false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn decided(pref: TitleBarPref, style: Option<&str>, layout: Option<&str>) -> Frame {
+        let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+        let inputs = Inputs {
+            os: Os::Windows,
+            runtime: Runtime::Native,
+            backend: Backend::Wayland,
+            desktop: &desktop,
+            kind: WindowKind::Main,
+            pref,
+            env: None,
+            caption_style: style,
+            caption_layout: layout,
+        };
+        decide_with(&inputs, &layout::default_layout).frame
+    }
+
+    fn captions(frame: Frame) -> Captions {
+        match frame {
+            Frame::Integrated(captions) => captions,
+            other => panic!("an integrated frame was expected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_caption_override_replaces_an_integrated_frames_family_and_usable_layout() {
+        let base = captions(decided(TitleBarPref::Integrated, None, None));
+        assert_eq!(base.family, CaptionFamily::Windows);
+
+        let styled = captions(decided(TitleBarPref::Integrated, Some("Breeze"), None));
+        assert_eq!(styled.family, CaptionFamily::Breeze, "the family variable picks the family");
+        assert_eq!(styled.layout, base.layout, "the layout stays as decided");
+
+        let unknown = captions(decided(TitleBarPref::Integrated, Some("bogus"), Some("appmenu:")));
+        assert_eq!(unknown, base, "an unknown family and an unusable layout change nothing");
+
+        let laid = captions(decided(TitleBarPref::Integrated, None, Some("close:")));
+        assert_eq!(laid.layout, Layout::parse("close:"), "a usable layout replaces the decided one");
+        assert_ne!(laid.layout, base.layout);
+
+        assert_eq!(decided(TitleBarPref::System, Some("breeze"), Some("close:")), Frame::Native, "a native frame has no captions to change");
     }
 }
 

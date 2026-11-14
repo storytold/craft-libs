@@ -74,7 +74,7 @@ pub enum ScreenModeCommands {
     #[command(label = "Full Screen Mode", kind = "radio", group = "screen_mode", alias = "screenMode.fullScreen")]
     FullScreen,
     /// The next mode.
-    #[command(label = "Cycle Screen Mode", default = "F")]
+    #[command(label = "Cycle Screen Mode", default = "F", icon = "app_window")]
     Cycle,
     /// The previous mode.
     #[command(label = "Cycle Screen Mode Backwards", default = "Shift+F")]

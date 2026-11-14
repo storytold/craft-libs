@@ -132,7 +132,6 @@ pub struct ToolRail<'a, T: Value + 'static> {
     /// Shows a button beside the column toggle, named by the label, that asks the host to move the rail to the other
     /// edge.
     #[prop(into)]
-    #[allow(dead_code)] // P3(panels-w2): pn.C15
     side_toggle: Option<Label>,
     /// Shows the Edit Toolbar button after the last slot, named by the label.
     #[prop(into)]
@@ -145,6 +144,7 @@ pub struct ToolRail<'a, T: Value + 'static> {
     hidden: &'a [T],
     footer: Option<FooterFn<'a>>,
     toggled: bool,
+    side_toggled: bool,
 }
 
 impl<'a, T: Value + 'static> ToolRail<'a, T> {
@@ -176,6 +176,7 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
             hidden: &[],
             footer: None,
             toggled: false,
+            side_toggled: false,
         }
         .label(label)
     }
@@ -201,7 +202,7 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
     pub fn show_rail(mut self, ui: &mut Ui, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> ToolRailOutput<T> {
         let columns = self.column_count();
         self.props = self.props.roving(Roving::new(NavShape::wrapped_grid(columns)));
-        if self.column_toggle.is_some() {
+        if self.column_toggle.is_some() || self.side_toggle.is_some() {
             self.props = self.props.header(HeaderRegion::new());
         }
         self.footer = Some(Box::new(footer));
@@ -302,7 +303,7 @@ impl<T: Value + 'static> Component for ToolRail<'_, T> {
             select: None,
             double_clicked: None,
             toggle_columns: self.toggled,
-            toggle_side: false, // P3(panels-w2): pn.C15
+            toggle_side: self.side_toggled,
             edit_toolbar: None,
             flyout: None,
             dropped: None,
@@ -312,13 +313,21 @@ impl<T: Value + 'static> Component for ToolRail<'_, T> {
 }
 
 impl<T: Value + 'static> Container for ToolRail<'_, T> {
-    /// The column toggle.
+    /// The column toggle and the side toggle.
     fn header(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
-        let Some(label) = self.column_toggle.clone() else { return };
         let (columns, rtl) = (self.column_count(), Env::of(ui).direction.is_rtl());
-        let icon = crate::collapse::chevrons(column_toggle_points_right(columns, !self.at_end() != rtl));
-        let toggle = IconButton::new(icon).id_salt("column-toggle").label(label).show(ui);
-        self.toggled |= clicked(&toggle);
+        let at_left = !self.at_end() != rtl;
+        if let Some(label) = self.column_toggle.clone() {
+            let icon = crate::collapse::chevrons(column_toggle_points_right(columns, at_left));
+            let toggle = IconButton::new(icon).id_salt("column-toggle").label(label).show(ui);
+            self.toggled |= clicked(&toggle);
+        }
+        if let Some(label) = self.side_toggle.clone() {
+            // The icon shows the edge the rail moves to.
+            let icon = IconId::new(if at_left { "panel_right" } else { "panel_left" });
+            let toggle = IconButton::new(icon).id_salt("side-toggle").label(label).show(ui);
+            self.side_toggled |= clicked(&toggle);
+        }
     }
 
     /// The host's footer.
