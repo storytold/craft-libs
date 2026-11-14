@@ -6,15 +6,17 @@
 //! bounded reads and extraction of legacy base64 asset maps. Entry names and MIME type are
 //! supplied by the format using the bundle.
 
-use std::io::{Read, Seek};
+use std::io::{Cursor, Read, Seek, Write};
 
-use craft_zip::{Archive, Compression, Limits, Writer};
+use craft_zip::{Archive, Limits};
 use serde_json::Value;
 
 const MAX_ENTRIES: u64 = 100_000;
 const JSON_LIMIT: u64 = 256 << 20;
 const ASSET_LIMIT: u64 = 1 << 30;
 const EXPANSION_LIMIT: u64 = 4 << 30;
+/// Largest proxy preview read from a bundle; larger entries are skipped.
+pub const PROXY_LIMIT: u64 = 1 << 20;
 
 /// Per-entry and total-expansion limits for an untrusted document bundle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +48,8 @@ pub struct Spec<'a> {
     pub preview_entry: &'a str,
     /// Directory prefix for embedded assets, without a trailing slash.
     pub assets_directory: &'a str,
+    /// Directory prefix for proxy previews of linked assets, without a trailing slash.
+    pub proxies_directory: &'a str,
     /// Metadata value written in the `format` field.
     pub format_name: &'a str,
     /// Old single-file JSON field containing base64 assets keyed by decimal id.
@@ -72,6 +76,8 @@ pub struct Package {
     pub version: u64,
     /// Embedded asset bytes keyed by decimal asset id.
     pub assets: Vec<(String, Vec<u8>)>,
+    /// Proxy preview bytes (JPEG or PNG) keyed by decimal asset id, for ids the document lists.
+    pub proxies: Vec<(String, Vec<u8>)>,
 }
 
 /// Why a document bundle could not be read or written.
@@ -116,24 +122,67 @@ pub fn starts_with_mimetype(prefix: &[u8], spec: Spec<'_>) -> bool {
     craft_zip::stored_mimetype(prefix).is_some_and(|mime| mime == spec.mimetype.as_bytes())
 }
 
-/// Write a ZIP document bundle containing the serialized document, metadata, preview and assets.
-pub fn write(document: &[u8], version: u32, generator: &str, preview: Option<&[u8]>, assets: &[Asset<'_>], spec: Spec<'_>) -> Result<Vec<u8>, Error> {
-    let mut writer = Writer::new();
-    writer.add(spec.mimetype_entry, spec.mimetype.as_bytes(), Compression::Stored).map_err(|e| Error::Write(e.to_string()))?;
+fn write_err(e: impl std::fmt::Display) -> Error {
+    Error::Write(e.to_string())
+}
+
+/// Write a ZIP document bundle containing the serialized document, metadata, preview, assets and
+/// proxy previews.
+pub fn write(
+    document: &[u8],
+    version: u32,
+    generator: &str,
+    preview: Option<&[u8]>,
+    assets: &[Asset<'_>],
+    proxies: &[Asset<'_>],
+    spec: Spec<'_>,
+) -> Result<Vec<u8>, Error> {
+    let mut out = Cursor::new(Vec::new());
+    write_to(&mut out, document, version, generator, preview, assets, proxies, spec)?;
+    Ok(out.into_inner())
+}
+
+/// Like [`write`], streaming the archive into `out`. A writer that fails (for example to cancel
+/// a long save) stops the write at the next member or buffer and the error is returned.
+#[allow(clippy::too_many_arguments)]
+pub fn write_to<W: Write + Seek>(
+    out: W,
+    document: &[u8],
+    version: u32,
+    generator: &str,
+    preview: Option<&[u8]>,
+    assets: &[Asset<'_>],
+    proxies: &[Asset<'_>],
+    spec: Spec<'_>,
+) -> Result<(), Error> {
+    use zip::CompressionMethod::{Deflated, Stored};
+    let mut zip = zip::ZipWriter::new(out);
+    let mut add = |name: &str, data: &[u8], method: zip::CompressionMethod| -> Result<(), Error> {
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(method)
+            .compression_level(if method == Deflated { Some(6) } else { None })
+            .last_modified_time(zip::DateTime::default())
+            .large_file(u64::try_from(data.len()).unwrap_or(u64::MAX) >= u64::from(u32::MAX) / 2);
+        zip.start_file(name, options).map_err(|e| Error::Write(format!("{name}: {e}")))?;
+        zip.write_all(data).map_err(|e| Error::Write(format!("{name}: {e}")))
+    };
+    add(spec.mimetype_entry, spec.mimetype.as_bytes(), Stored)?;
     let metadata = serde_json::json!({"format":spec.format_name, "version":version, "generator":generator});
-    let metadata = serde_json::to_vec(&metadata).map_err(|e| Error::Write(e.to_string()))?;
-    writer.add(spec.metadata_entry, &metadata, Compression::Deflated).map_err(|e| Error::Write(e.to_string()))?;
+    add(spec.metadata_entry, &serde_json::to_vec(&metadata).map_err(write_err)?, Deflated)?;
     if let Some(preview) = preview {
-        writer.add(spec.preview_entry, preview, Compression::Stored).map_err(|e| Error::Write(e.to_string()))?;
+        add(spec.preview_entry, preview, Stored)?;
     }
-    writer.add(spec.document_entry, document, Compression::Deflated).map_err(|e| Error::Write(e.to_string()))?;
+    add(spec.document_entry, document, Deflated)?;
     for asset in assets.iter().filter(|asset| !asset.data.is_empty()) {
         let path = format!("{}/{}.{}", spec.assets_directory, asset.id, extension(asset.mime));
-        let compression =
-            if matches!(asset.mime, "image/png" | "image/jpeg" | "image/gif" | "image/webp") { Compression::Stored } else { Compression::Deflated };
-        writer.add(&path, asset.data, compression).map_err(|e| Error::Write(e.to_string()))?;
+        let method = if matches!(asset.mime, "image/png" | "image/jpeg" | "image/gif" | "image/webp") { Stored } else { Deflated };
+        add(&path, asset.data, method)?;
     }
-    writer.finish().map_err(|e| Error::Write(e.to_string()))
+    for proxy in proxies.iter().filter(|proxy| !proxy.data.is_empty()) {
+        let ext = if proxy.mime == "image/jpeg" { "jpg" } else { "png" };
+        add(&format!("{}/{}.{ext}", spec.proxies_directory, proxy.id), proxy.data, Stored)?;
+    }
+    zip.finish().map(drop).map_err(write_err)
 }
 
 /// Read a ZIP bundle or legacy JSON document within bounded member sizes.
@@ -186,7 +235,29 @@ pub fn read_with_limits(bytes: &[u8], supported_version: u32, spec: Spec<'_>, li
             embedded.push((id.to_owned(), data));
         }
     }
-    Ok(Package { document, version, assets: embedded })
+    let proxies = read_proxies(&mut archive, &wanted, spec);
+    Ok(Package { document, version, assets: embedded, proxies })
+}
+
+/// Proxy previews for known asset ids. Only `<proxies>/<id>.jpg|png` is accepted; entries over
+/// [`PROXY_LIMIT`] or that fail to read are skipped.
+fn read_proxies(archive: &mut Archive<'_>, wanted: &std::collections::HashSet<String>, spec: Spec<'_>) -> Vec<(String, Vec<u8>)> {
+    let prefix = format!("{}/", spec.proxies_directory);
+    let mut proxies = Vec::new();
+    for path in archive.names().map(|name| name.into_owned()).collect::<Vec<_>>() {
+        let Some(member) = path.strip_prefix(&prefix) else { continue };
+        let Some((id, ext)) = member.split_once('.') else { continue };
+        if !matches!(ext, "jpg" | "png") || !wanted.contains(id) || id.parse::<u64>().is_err() {
+            continue;
+        }
+        if archive.declared_size(&path).is_none_or(|size| size > PROXY_LIMIT) {
+            continue;
+        }
+        if let Ok(Some(data)) = archive.read(&path, PROXY_LIMIT) {
+            proxies.push((id.to_owned(), data));
+        }
+    }
+    proxies
 }
 
 /// Read a preview with a fixed maximum size without decompressing the full bundle.
@@ -235,7 +306,7 @@ fn read_legacy(bytes: &[u8], spec: Spec<'_>) -> Result<Package, Error> {
             object.remove(field);
         }
     }
-    Ok(Package { document, version: 1, assets })
+    Ok(Package { document, version: 1, assets, proxies: Vec::new() })
 }
 
 fn decode_base64(input: &str) -> Vec<u8> {
@@ -271,6 +342,7 @@ mod tests {
         document_entry: "document.json",
         preview_entry: "preview.png",
         assets_directory: "assets",
+        proxies_directory: "proxies",
         format_name: "test",
         legacy_assets_field: Some("assetData"),
     };
@@ -278,8 +350,8 @@ mod tests {
     #[test]
     fn writes_and_reads_bundle_members() {
         let payload = [1u8, 2, 3];
-        let bytes =
-            write(br#"{"assets":{"7":{}}}"#, 4, "Test 0.1", Some(b"png"), &[Asset { id: "7", mime: "image/png", data: &payload }], SPEC).unwrap();
+        let bytes = write(br#"{"assets":{"7":{}}}"#, 4, "Test 0.1", Some(b"png"), &[Asset { id: "7", mime: "image/png", data: &payload }], &[], SPEC)
+            .unwrap();
         assert!(has_document(&bytes, SPEC));
         assert!(starts_with_mimetype(&bytes, SPEC));
         let loaded = read(&bytes, 4, SPEC).unwrap();
@@ -298,7 +370,7 @@ mod tests {
 
     #[test]
     fn refuses_newer_versions() {
-        let bytes = write(b"{}", 9, "future", None, &[], SPEC).unwrap();
+        let bytes = write(b"{}", 9, "future", None, &[], &[], SPEC).unwrap();
         assert_eq!(read(&bytes, 4, SPEC), Err(Error::TooNew(9)));
     }
 
@@ -307,11 +379,11 @@ mod tests {
         let bytes = vec![7u8; 128];
         let document = br#"{"assets":{"7":{}}}"#;
         let limits = ReadLimits { json_bytes: 1 << 20, compressed_asset_bytes: 8, expansion_bytes: 1 << 20 };
-        let stored = write(document, 4, "test", None, &[Asset { id: "7", mime: "image/png", data: &bytes }], SPEC).unwrap();
+        let stored = write(document, 4, "test", None, &[Asset { id: "7", mime: "image/png", data: &bytes }], &[], SPEC).unwrap();
         let package = read_with_limits(&stored, 4, SPEC, limits).unwrap();
         assert_eq!(package.assets, [("7".to_owned(), bytes.clone())]);
 
-        let compressed = write(document, 4, "test", None, &[Asset { id: "7", mime: "application/octet-stream", data: &bytes }], SPEC).unwrap();
+        let compressed = write(document, 4, "test", None, &[Asset { id: "7", mime: "application/octet-stream", data: &bytes }], &[], SPEC).unwrap();
         assert!(read_with_limits(&compressed, 4, SPEC, limits).is_err());
     }
 }
