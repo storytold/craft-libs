@@ -1312,3 +1312,30 @@ fn references_to_macro_sheets_and_spans_over_chart_sheets_are_named() {
     assert_eq!(got, [Some("Macro1!$A$1"), Some("Data:Hidden!$A$1"), None]);
     assert!(warned(&wb, "references to sheets with no cells"), "{:?}", wb.warnings);
 }
+
+#[test]
+fn a_formulas_array_constants_share_one_allowance() {
+    // Two arrays of 40,000 Boolean values, each within what one array may hold, added together:
+    // charged before their values are held, together they pass what a formula's arrays may hold
+    // (65,536 values), so the cell keeps its saved result. One of them alone decodes.
+    let array = |n: u32| [&n.to_le_bytes()[..], &1u32.to_le_bytes(), &[2u8, 1].repeat(n as usize)].concat();
+    let ptg = [&[0x60u8][..], &[0; 14]].concat();
+    let two = [&ptg[..], &ptg, &[0x03]].concat();
+    let data = [row(0), formula_cell(0, &two, &[array(40_000), array(40_000)].concat()), formula_cell(1, &ptg, &array(40_000))].concat();
+    let wb = read(&package(&book_with_links(&xti()), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES)).unwrap();
+    assert_eq!(wb.sheets[0].formula(CellRef::new(0, 0)), None);
+    assert_eq!(wb.sheets[0].value(CellRef::new(0, 0)), Value::Number(0.0));
+    assert!(wb.sheets[0].formula(CellRef::new(0, 1)).is_some_and(|f| f.starts_with("{TRUE;TRUE")));
+    assert!(warned(&wb, "array constants too large"), "{:?}", wb.warnings);
+}
+
+#[test]
+fn a_spent_formula_allowance_skips_decoding() {
+    // With no allowance, a formula is not decoded at all: an unknown token is never reached.
+    let data = [row(0), formula_cell(0, &[0xFF], &[])].concat();
+    let limits = Limits { binary_formula_text: 0, ..Limits::default() };
+    let wb = read_with(&package(&book_with_links(&xti()), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES), &limits).unwrap();
+    assert_eq!(wb.sheets[0].formula(CellRef::new(0, 0)), None);
+    assert!(warned(&wb, "more formula text than the limits allow"), "{:?}", wb.warnings);
+    assert!(!warned(&wb, "unknown formula token"), "{:?}", wb.warnings);
+}
