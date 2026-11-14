@@ -77,6 +77,17 @@ colorants paint through their alternate space (`Plate::spots_as_process`) and no
 overprints. Masks in other color spaces are unchanged. A test in
 `crates/pdf/tests/plates.rs` checks process, spot, RGB and backdrop colors.
 
+A craft-libs patch, labeled `Craft patch (DeviceN attributes)` in code comments, reads a
+DeviceN space's attributes dictionary (ISO 32000-2 §8.6.6.5, Tables 71 and 72) in `color.rs`.
+When `/Process` names DeviceCMYK or a four-component ICCBased space, the colorants its
+`/Components` lists are the process inks in order, so they separate onto the cyan, magenta,
+yellow and black plates rather than onto spot plates of their own; a name that would repeat an
+ink already in the space keeps its own plate. A spot colorant whose `/Colorants` entry is a
+Separation space for the same colorant takes that space's look in `ColorSpace::report_spots`
+and its alternate in `ColorSpace::spot_alternate`, instead of one computed through the
+DeviceN tint transform with the other colorants at 0. Tests in `crates/pdf/tests/plates.rs`
+and `crates/prepress/tests/flatten_pdf.rs` cover both.
+
 The output-intent conversion of patch 36 goes through a `color::CmykConversion` trait, so
 that callers can convert with their own color management. `CmykSimulation::new` keeps
 #2770's moxcms conversion as the default, and `CmykSimulation::with_conversion` takes a

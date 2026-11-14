@@ -1147,6 +1147,10 @@ pub(crate) struct DeviceN {
     is_none: bool,
     /// PdfCraft patch (35): the colorant of each component, for separations.
     colorants: Vec<Colorant>,
+    /// Craft patch (DeviceN attributes): per component, the `Separation` space the
+    /// `/Colorants` attribute gives for a spot colorant (ISO 32000-2 §8.6.6.5, Table 71). Empty
+    /// when no component has one.
+    separations: Vec<Option<ColorSpace>>,
 }
 
 impl DeviceN {
@@ -1170,13 +1174,18 @@ impl DeviceN {
 
         // `All` names every colorant only in a Separation (ISO 32000-2 §8.6.6.5), so a DeviceN
         // component named `All` paints nothing in particular.
-        let colorants = names
+        let mut colorants: Vec<Colorant> = names
             .iter()
             .map(|n| match Colorant::from_name(n.deref()) {
                 Colorant::All => Colorant::None,
                 c => c,
             })
             .collect();
+        let mut separations = Vec::new();
+        if let Some(attributes) = iter.next::<Dict<'_>>() {
+            map_process_names(&attributes, cache, depth, &mut colorants);
+            separations = colorant_separations(&attributes, cache, depth, &colorants);
+        }
 
         Some(Self {
             alternate_space,
@@ -1184,7 +1193,78 @@ impl DeviceN {
             tint_transform,
             is_none: all_none,
             colorants,
+            separations,
         })
+    }
+}
+
+/// Craft patch (DeviceN attributes): rename the components that the `/Process` attribute maps
+/// onto a CMYK process space to the process inks, so they separate onto the process plates
+/// instead of plates of their own (ISO 32000-2 §8.6.6.5, Table 72: `Components` correspond in
+/// order to the process space's components, and their names may be arbitrary). Only
+/// `DeviceCMYK` and a four-component `ICCBased` space map onto the process inks; another process
+/// space is left as authored. A rename that would give two components the same ink is skipped.
+fn map_process_names(attributes: &Dict<'_>, cache: &Cache, depth: u8, colorants: &mut [Colorant]) {
+    let Some(process) = attributes.get::<Dict<'_>>(PROCESS) else {
+        return;
+    };
+    let Some(components) = process.get::<Array<'_>>(COMPONENTS) else {
+        return;
+    };
+    let Some(space) = process
+        .get::<Object<'_>>(COLORSPACE)
+        .and_then(|o| ColorSpace::new_nested(o, cache, depth + 1))
+    else {
+        return;
+    };
+    let cmyk = match space.0.as_ref() {
+        ColorSpaceType::DeviceCmyk => true,
+        ColorSpaceType::ICCBased(icc) => icc.0.number_components == 4,
+        _ => false,
+    };
+    if !cmyk {
+        return;
+    }
+    for (authored, ink) in components.iter::<Name<'_>>().zip(Ink::PROCESS) {
+        let authored = Colorant::from_name(authored.deref());
+        let process = Colorant::Ink(ink);
+        if !matches!(authored, Colorant::Ink(Ink::Spot(_))) || colorants.contains(&process) {
+            continue;
+        }
+        for colorant in colorants.iter_mut().filter(|c| **c == authored) {
+            *colorant = process.clone();
+        }
+    }
+}
+
+/// Craft patch (DeviceN attributes): per component, the `Separation` space the `/Colorants`
+/// attribute gives for a spot colorant: the appearance of that colorant alone (ISO 32000-2
+/// §8.6.6.5, Table 71). An entry is used only when it is a `Separation` naming the same
+/// colorant. Empty when no component has one.
+fn colorant_separations(
+    attributes: &Dict<'_>,
+    cache: &Cache,
+    depth: u8,
+    colorants: &[Colorant],
+) -> Vec<Option<ColorSpace>> {
+    let Some(entries) = attributes.get::<Dict<'_>>(COLORANTS) else {
+        return Vec::new();
+    };
+    let separations: Vec<Option<ColorSpace>> = colorants
+        .iter()
+        .map(|colorant| {
+            let Colorant::Ink(Ink::Spot(name)) = colorant else {
+                return None;
+            };
+            let space = ColorSpace::new_nested(entries.get::<Object<'_>>(name.as_bytes())?, cache, depth + 1)?;
+            matches!(space.0.as_ref(), ColorSpaceType::Separation(s) if s.colorant == *colorant)
+                .then_some(space)
+        })
+        .collect();
+    if separations.iter().all(Option::is_none) {
+        Vec::new()
+    } else {
+        separations
     }
 }
 
@@ -2294,6 +2374,11 @@ impl ColorSpace {
             ColorSpaceType::DeviceN(d) => {
                 for (k, colorant) in d.colorants.iter().enumerate() {
                     if let Colorant::Ink(ink @ Ink::Spot(_)) = colorant {
+                        // Craft patch (DeviceN attributes): the spot's own `Separation`.
+                        if let Some(Some(separation)) = d.separations.get(k) {
+                            sink(ink, &|tint| separation.appearance(&[tint]));
+                            continue;
+                        }
                         sink(ink, &|tint| {
                             let mut components: ColorComponents = smallvec![0.0; d.colorants.len()];
                             if let Some(c) = components.get_mut(k) {
@@ -2666,6 +2751,10 @@ impl ColorSpace {
                     .colorants
                     .iter()
                     .position(|c| matches!(c, Colorant::Ink(i) if i == ink))?;
+                // Craft patch (DeviceN attributes): the spot's own `Separation`.
+                if let Some(Some(separation)) = d.separations.get(k) {
+                    return separation.spot_alternate(ink);
+                }
                 let mut components: ColorComponents = smallvec![0.0; d.colorants.len()];
                 *components.get_mut(k)? = 1.0;
                 (&d.alternate_space, &d.tint_transform, components)
